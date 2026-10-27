@@ -11,8 +11,8 @@ import { join } from "node:path";
 import { MANAGER_ALLOWED_VERBS } from "../lib/gateway-protocol";
 import { createAuthActionServer } from "../cli/auth-action";
 import {
-  activeManagerJob, createJob, type CreateJobOptions, latestManagerJob, parseManagerFlags, pruneManagerJobs, readManagerJob,
-  runManagerJob, type ManagerOps,
+  activeManagerJob, createJob, type CreateJobOptions, latestManagerJob, markNewsSeen, parseManagerFlags, pruneManagerJobs,
+  readManagerJob, readNewsSeen, runManagerJob, type ManagerOps,
 } from "../cli/manager-action";
 import { installedInjections } from "../cli/reconcile";
 import { handleManagerRoute } from "../manager/index";
@@ -66,7 +66,7 @@ const NOOP_OPS: ManagerOps = { enable: () => {}, disable: () => {}, update: asyn
 
 describe("the gateway's manager namespace", () => {
   test("offers exactly the verbs a page may ask for", () => {
-    expect([...MANAGER_ALLOWED_VERBS].sort()).toEqual(["disable", "enable", "job", "reconcile", "update", "watch-job"]);
+    expect([...MANAGER_ALLOWED_VERBS].sort()).toEqual(["disable", "enable", "job", "mark-news-seen", "news-seen", "reconcile", "update", "watch-job"]);
   });
 
   // The runner is started by the transient unit the create path launches, and
@@ -297,6 +297,38 @@ describe("the panel's Addons entry", () => {
   });
 });
 
+describe("opened badges", () => {
+  test("are recorded once per addon and release line, and only for an addon that has one", () => {
+    const dir = mkdtempSync(join(tmpdir(), "clp-news-"));
+    const file = join(dir, "news-seen.json");
+    try {
+      expect(readNewsSeen(file, "2.0.3")).toEqual([]);
+      expect(markNewsSeen("dns", file, "2.0.3")).toEqual(["dns@2.0"]);
+      expect(markNewsSeen("dns", file, "2.0.4")).toEqual(["dns@2.0"]);
+      expect(markNewsSeen("stager", file, "2.0.3")).toEqual(["dns@2.0", "stager@2.0"]);
+      expect(readNewsSeen(file, "2.0.9")).toEqual(["dns@2.0", "stager@2.0"]);
+      // Nothing is marked in 2.1, so there is nothing to read.
+      expect(markNewsSeen("dns", file, "2.1.0")).toEqual([]);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  test("from an older line, an unknown addon or a hand-edited file are dropped", () => {
+    const dir = mkdtempSync(join(tmpdir(), "clp-news-"));
+    const file = join(dir, "news-seen.json");
+    try {
+      writeFileSync(file, JSON.stringify(["dns@2.0", "nope@2.0", 7, "dns@1.5"]));
+      expect(readNewsSeen(file, "2.0.0")).toEqual(["dns@2.0"]);
+      expect(readNewsSeen(file, "2.1.0")).toEqual([]);
+      writeFileSync(file, "{not json");
+      expect(readNewsSeen(file, "2.0.0")).toEqual([]);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+});
+
 describe("the manager index", () => {
   async function render(...args: Parameters<typeof indexPage>): Promise<string> {
     return indexPage(...args).text();
@@ -316,7 +348,15 @@ describe("the manager index", () => {
     const html = await render([], null, { available: ["dns", "stager"], version: "2.0.3" });
     expect(html.match(/>New</g)).toHaveLength(1);
     expect(html).toMatch(/DNS <span class="badge state-queued">New<\/span>/);
+    // The release line keys it, so opening the addon reads it for that line only.
+    expect(html).toContain('data-news="dns@2.0"');
     expect(await render([], null, { available: ["dns"], version: "2.1.0" })).not.toContain(">New<");
+  });
+
+  test("leaves out a badge an administrator has opened", async () => {
+    const html = await render([], null, { available: ["dns"], version: "2.0.3", seen: ["dns@2.0"] });
+    expect(html).not.toContain(">New<");
+    expect(html).not.toContain("data-news=");
   });
 
   test("shows no Available section when every addon is on", async () => {

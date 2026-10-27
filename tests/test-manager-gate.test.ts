@@ -99,6 +99,8 @@ test("a non-administrator reaches only the named self-scoped routes", () => {
     { path: "/addons/panel-tweaks/api/panel" },
     { path: "/addons/dns/api/session" },
     { path: "/addons/dns/api/provision", method: "POST" },
+    { path: "/addons/dns/api/site" },
+    { path: "/addons/dns/api/site", method: "POST" },
     { path: "/addons/dns/" },
     { path: "/addons/dns/api/check", method: "POST" },
     { path: "/addons/dns/api/provision", method: "GET" },
@@ -114,6 +116,7 @@ test("a non-administrator reaches only the named self-scoped routes", () => {
     "GET /addons/panel-tweaks/api/panel",
     "GET /addons/dns/api/session",
     "POST /addons/dns/api/provision",
+    "GET /addons/dns/api/site",
   ]);
   for (const result of results) {
     // Nothing else the manager does runs for this session, dispatched or not.

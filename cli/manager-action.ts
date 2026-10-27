@@ -19,9 +19,9 @@
 // that outlives the restart, and returns a job id. The browser follows that id
 // and reconnects once the manager is back.
 
-import { existsSync, mkdirSync, rmSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, rmSync } from "node:fs";
 import { join } from "node:path";
-import { withFileLock } from "./action-common";
+import { withFileLock, withFileLockSync } from "./action-common";
 import {
   createJobDir, createJobLog, findOlderThan, jobCommonFields, jobDir, jobGet, jobSet,
   jobTimestamp, jobUnitIsActive, listJobIds, newJobId, pruneJobs, readJobLog, startJobUnit,
@@ -29,12 +29,15 @@ import {
   type PruneJobsResult,
 } from "./job-store";
 import { CLI_BIN, LOCK_DIR, STATE_DIR } from "./paths";
-import { ADDONS, ADDON_NAMES } from "./addon-catalog";
-import { Fatal, requireRoot } from "./util";
+import { ADDONS, ADDON_NAMES, addonNews } from "./addon-catalog";
+import { CLI_VERSION } from "./release";
+import { Fatal, requireRoot, writeAtomic } from "./util";
 
 /** Where the manager's own job records live, beside each addon's state. */
 export const MANAGER_STATE_DIR = `${STATE_DIR}/manager`;
 export const MANAGER_JOBS_DIR = `${MANAGER_STATE_DIR}/jobs`;
+/** The New and Changed badges somebody has opened, shared by every administrator. */
+export const NEWS_SEEN_FILE = `${MANAGER_STATE_DIR}/news-seen.json`;
 
 /** Long enough to look at the failure in the UI, short enough not to pile up. */
 const JOB_RETENTION_DAYS = 7;
@@ -107,6 +110,32 @@ function reply(body: unknown, emit = true): number {
 function failReply(error: string, data?: unknown, emit = true): number {
   if (emit) process.stdout.write(`${JSON.stringify({ ok: false, error, ...(data !== undefined ? { data } : {}) })}\n`);
   return 1;
+}
+
+/**
+ * The badges already opened that still mean something: a key whose line is no
+ * longer the installed one, or a name no longer in the catalog, is dropped,
+ * so the file never outgrows the catalog.
+ */
+export function readNewsSeen(file = NEWS_SEEN_FILE, version = CLI_VERSION): string[] {
+  let stored: unknown = [];
+  try { stored = JSON.parse(readFileSync(file, "utf-8")); } catch { /* none yet */ }
+  if (!Array.isArray(stored)) return [];
+  return stored.filter((key): key is string =>
+    typeof key === "string" && addonNews(key.split("@")[0]!, version)?.key === key);
+}
+
+/** Records the addon's current badge as read; an addon with none records nothing. */
+export function markNewsSeen(addon: string, file = NEWS_SEEN_FILE, version = CLI_VERSION): string[] {
+  // Locked so two administrators opening different addons both keep their key.
+  return withFileLockSync(`${file}.lock`, 5, "another addon is being marked as read", () => {
+    const seen = readNewsSeen(file, version);
+    const key = addonNews(addon, version)?.key;
+    if (!key || seen.includes(key)) return seen;
+    seen.push(key);
+    writeAtomic(file, `${JSON.stringify(seen)}\n`, 0o644);
+    return seen;
+  });
 }
 
 function message(error: unknown): string {
@@ -206,6 +235,8 @@ function describe(kind: ManagerJobKind, addon: string): string {
  */
 export interface CreateJobOptions {
   jobsDir?: string;
+  newsFile?: string;
+  version?: string;
   stateDir?: string;
   lockDir?: string;
   startUnit?: typeof startJobUnit;
@@ -373,6 +404,12 @@ export async function runManagerAction(
           ? reply({ ok: true, data: found }, options.emitReply !== false)
           : failReply(`no such job '${wanted}'`, undefined, options.emitReply !== false);
       }
+      case "news-seen":
+        return reply({ ok: true, data: readNewsSeen(options.newsFile, options.version) }, options.emitReply !== false);
+      case "mark-news-seen":
+        if (!addon) return failReply("'mark-news-seen' needs --addon", undefined, options.emitReply !== false);
+        if (!ADDONS[addon]) return failReply(`unknown addon '${addon}'`, undefined, options.emitReply !== false);
+        return reply({ ok: true, data: markNewsSeen(addon, options.newsFile, options.version) }, options.emitReply !== false);
       case "watch-job": {
         const jobsDir = options.jobsDir ?? MANAGER_JOBS_DIR;
         const wanted = id || latestManagerJob(jobsDir);

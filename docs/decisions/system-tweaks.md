@@ -16,10 +16,25 @@ repositories and each PHP-FPM's upload-progress value fold into a summary that
 opens, and the summary says when something needs a look.
 
 Three states would otherwise do nothing visible, so the page calls them out:
-updates that run but leave CloudPanel's PHP uncovered, usually an outside
-setup with only the distro's security pocket; a reboot required for over a
-week with automatic reboot off; and a panel still on PHP 8.1 when a newer
-PHP-FPM is installed.
+updates that run but leave CloudPanel's PHP uncovered; a reboot required for
+over a week with automatic reboot off; and a panel still on PHP 8.1 when a newer
+PHP-FPM is installed. The uncovered PHP is usually an outside setup with only
+the distro's security pocket, which is working as configured, so the page
+suggests the switch in a plain hint rather than a warning; under System Tweaks'
+own file it is a fault and gets one. A required reboot with automatic reboot on
+says when the box restarts by itself: unattended-upgrades checks for the flag
+at the end of every run, even one that installs nothing, so the next run reboots
+right away, after the set minutes, or at the set time. System Tweaks' file leaves
+`Automatic-Reboot-WithUsers` alone, so when another file turns it off the page
+adds that the reboot is skipped while anyone is logged in.
+
+The page makes one change at a time. Every change answers with the whole page
+as it stands, so a second change running beside it would be repainted over by
+the first reply, its controls put back as if it had stopped. While a change
+runs, every control on the page is disabled, the row it belongs to says what is
+running, and a change slower than a moment also says so over the page, naming
+it and that the other settings wait. Descriptions stop short of the switch
+column, and a long one takes a line per thought.
 
 Failed runs show a short summary with expandable log details, including the
 failed package URL when unattended-upgrades logs one.
@@ -91,7 +106,9 @@ Reboot timing uses unattended-upgrades’ own scheduling on both Debian and
 Ubuntu; no separate timer or direct shutdown command is added. The HTTP
 boundary, root action and drop-in generator validate the time before writing
 it. The control, shown while the reboot switch is on, offers right after the
-run or a clock time, and saves on every change. Server timezone comes from the
+run or a clock time. Right after the run saves at once; a time field reports
+every digit typed as a change, so a time is saved when the field is left or
+after a short pause, with the value it had then. Server timezone comes from the
 root process’s system timezone (`Intl.DateTimeFormat`); effective timing comes
 from `apt-config dump`. Later apt files remain authoritative, and a different
 effective time, `+15` included, is reported under the control. Settings changes

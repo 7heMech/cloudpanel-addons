@@ -48,3 +48,15 @@
   .tweak-heading:has(select) { flex-wrap: wrap; }
   .tweak-heading select { flex: 1 1 100%; }
 }
+
+/* A change in progress, on the row that started it. */
+.st-working .badge { animation: st-pulse 1.2s ease-in-out infinite; }
+@keyframes st-pulse { 50% { opacity: .45; } }
+.st-option > .st-working { margin-top: 8px !important; font-size: 13px; }
+.st-suggest { margin-top: 10px !important; }
+/* The wording stops short of the switch column instead of running under it. */
+@media (min-width: 761px) {
+  .tweak-body > .tweak-note { padding-right: 72px; }
+}
+.tweak-note p + p { margin-top: 2px; }
+#clp-content select:disabled { opacity: .6; cursor: progress; }

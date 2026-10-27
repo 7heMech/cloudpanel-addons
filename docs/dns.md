@@ -13,27 +13,38 @@ checklist.
    token in Cloudflare** opens Cloudflare's token form. Check the permissions
    listed beside the link are there. Pick the accounts and zones there (All zones
    also covers zones you add later), limit it to the server addresses shown
-   under Client IP Address Filtering, create the token, and paste it back. DNS
+   under Client IP Address Filtering (the clipboard icon copies them
+   space-separated, as that field takes them), create the token, and paste it back. DNS
    finds the accounts and zones it reaches by itself. Add more connections for
    other Cloudflare logins.
-2. **Mailcow, if you use it.** Under **Settings**, set Mailcow's
-   address, a read-write API key (limit it to this server's IP in Mailcow), the
-   mail hostname, how new domains get a DKIM key, and optionally a shared
-   mailbox, such as the one SMTP Relay sends through.
+2. **Mailcow, if you use it.** Under **Settings**, set Mailcow's hostname,
+   such as `mail.example.com` (it is also the MX target), a read-write API key
+   (limit it to this server's IP in Mailcow), how new domains get a DKIM key, and
+   optionally a shared mailbox. If SMTP Relay already sends through Mailcow,
+   **Fill from SMTP Relay** takes its hostname and mailbox; with one SMTP Relay
+   profile and Mailcow not yet set up, they are filled in already. **Remove**
+   deletes the API key from this server; sites whose profile sets up Mailcow
+   then wait until it is set up again, and nothing in Cloudflare or Mailcow is
+   deleted.
 3. **Profiles.** Edit **Web** or **Web and Mailcow**, or create your own from the
    presets. Each row is a record every site in the profile gets; **TTL and apex
    only** shows the less common columns, and **Cloudflare zone** opens the
    zone-wide settings.
-4. **Assign sites** in the table, in bulk if you like. Profiles start in
-   **Report only**: **Check now** shows what differs and changes nothing.
-5. **Enforce.** Turn on Enforce for a profile, read the plan, and confirm it.
-   From then on its records are kept as they are, and conflicting records at the
-   names it writes are deleted. Other names are never touched.
-6. **New sites.** Choose the profile under **New sites join**. If it is Report
-   only, the page warns that new sites get no records.
+4. **Assign sites** in the table, in bulk if you like. DNS starts in **Ask
+   first**: **Check now** shows what differs and changes nothing.
+5. **Turn on Automatic.** Choose **Review and turn on Automatic**, read the
+   plan, and confirm it. From then on every site's records are kept to its
+   profile, conflicting records at the names a profile writes are deleted, and a
+   site whose domain is not in Cloudflare gets a new zone. Other names are never
+   touched. **Ask first instead** stops all writing again.
+6. **New sites.** Choose the profile under **New sites join**. Until DNS is
+   Automatic, new sites get no records.
 
-If you later turn on a feature that needs another permission, such as creating
-zones or skipping the firewall, edit the token in Cloudflare to add it.
+A new zone goes into the only Cloudflare account your connections reach. With
+more than one, choose it under **Settings**, **New zones**.
+
+If you later turn on a feature that needs another permission, such as skipping
+the firewall, edit the token in Cloudflare to add it.
 
 ## Everyday use
 
@@ -41,10 +52,15 @@ With Panel Tweaks' automatic SSL on, create a site as usual. DNS writes its
 records within seconds, and the certificate is requested once they are in
 place. If the zone is new, the page says which nameservers to set at the
 registrar; the certificate is requested automatically once the zone is active.
+Until then the site's **SSL/TLS** tab shows the nameservers too, to anyone who
+can open the site, site managers and the site's own users included. The
+clipboard icon after each nameserver, there or in the site's **Details**,
+copies that one.
 
 **Details** on a site shows its zone and every pending change. Drift is
-corrected every 15 minutes, or at once with **Check now**. When a site is
-deleted from CloudPanel while a profile enforces it, its records stay in
+corrected every 15 minutes, or at once with **Check now**. **Change log** lists
+every record, zone and Mailcow change DNS made, newest first, and what made it.
+When a site is deleted from CloudPanel while DNS manages it, its records stay in
 Cloudflare until you choose **Remove records** or **Keep**. A Mailcow domain is never deleted.
 
 ## Leaving Terraform
@@ -57,6 +73,6 @@ the old tooling without letting it destroy anything:
    `tofu state rm` (or `terraform state rm`) or `removed` blocks with
    `lifecycle { destroy = false }`, and delete their declarations. Never run
    `destroy`, and check that the plan deletes nothing remotely.
-3. Assign the sites in Report only and check. Records it should not manage,
-   such as redirects or one-off records at other names, stay untouched.
-4. Turn on Enforce once the plans look right.
+3. Assign the sites while DNS asks first, and check. Records it should not
+   manage, such as redirects or one-off records at other names, stay untouched.
+4. Turn on Automatic once the plans look right.

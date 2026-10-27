@@ -21,6 +21,7 @@ test("the WordPress page refuses every form, so its header does not grow with th
     varnishError: "",
     mainwp: mainwpView(emptyMainwpState()),
     mainwpError: "",
+    jobs: { varnish: null, mainwp: null },
   } });
   const response = await handle(new Request("https://panel.example.com/addons/wp-tools/"), "/");
   expect(response.status).toBe(200);
@@ -61,5 +62,44 @@ test("basic-auth consent preserves the authenticated role and takes the IP from 
     const response = await handle(req, "/api/sign-in", undefined, undefined, { user: "shopkeeper", roles });
     expect(response.status).toBe(200);
     expect(calls.at(-1)).toEqual({ domain: "shop.example.com", asUser: roles[0] === "ROLE_ADMIN" ? undefined : "shopkeeper", clientIp: "203.0.113.9", addBypass: true, allowBasicAuth: true });
+  }
+});
+
+test("checks, installs, connections and cleanup start background jobs, and only an administrator follows them", async () => {
+  const originalStart = wpToolsService.startJob;
+  const originalGet = wpToolsService.getJob;
+  const calls: unknown[][] = [];
+  wpToolsService.startJob = async (...args) => { calls.push(args); return { ok: true, data: { job: { id: "20261027T120000Z-abcdef" } as never } }; };
+  wpToolsService.getJob = async () => ({ ok: true, data: { job: { id: "20261027T120000Z-abcdef", state: "running", step: "" } as never, log: "" } });
+  const csrf = "a".repeat(64);
+  const post = (path: string, body: unknown, roles = ["ROLE_ADMIN"]) => handle(new Request(`https://panel.example.com/addons/wp-tools${path}`, {
+    method: "POST",
+    headers: { Host: "panel.example.com", Origin: "https://panel.example.com", Cookie: `clp_addons_csrf=${csrf}`, "X-CLP-Addons-CSRF": csrf, "Content-Type": "application/json" },
+    body: JSON.stringify(body),
+  }), path, undefined, undefined, { user: "admin", roles });
+  try {
+    expect((await post("/api/varnish-sync", {})).status).toBe(200);
+    expect((await post("/api/varnish-install", { domain: "Shop.Example.com" })).status).toBe(200);
+    expect((await post("/api/mainwp-sync", {})).status).toBe(200);
+    expect((await post("/api/mainwp-connect", { domains: ["a.example.com", "b.example.com"], confirm: true })).status).toBe(200);
+    expect((await post("/api/mainwp-cleanup", { confirm: true })).status).toBe(200);
+    expect(calls).toEqual([
+      ["varnish-check"], ["varnish-install", ["shop.example.com"]], ["mainwp-check"],
+      ["mainwp-connect", ["a.example.com", "b.example.com"], "connect"], ["mainwp-cleanup", [], "mainwp"],
+    ]);
+    for (const body of [{ domains: ["a.example.com"] }, { domains: [], confirm: true }, { domains: ["bad name"], confirm: true }, { domain: "a.example.com", confirm: true }]) {
+      expect((await post("/api/mainwp-connect", body)).status).toBe(400);
+    }
+    expect((await post("/api/mainwp-sync", {}, ["ROLE_SITE_MANAGER"])).status).toBe(404);
+    expect(calls).toHaveLength(5);
+
+    const get = (path: string, roles: string[]) => handle(new Request(`https://panel.example.com/addons/wp-tools${path}`, { headers: { Host: "panel.example.com" } }),
+      path, undefined, undefined, { user: "someone", roles });
+    expect((await get("/api/jobs/20261027T120000Z-abcdef", ["ROLE_ADMIN"])).status).toBe(200);
+    expect((await get("/api/jobs/20261027T120000Z-abcdef", ["ROLE_SITE_MANAGER"])).status).toBe(404);
+    expect((await get("/api/jobs/not-a-job", ["ROLE_ADMIN"])).status).toBe(400);
+  } finally {
+    wpToolsService.startJob = originalStart;
+    wpToolsService.getJob = originalGet;
   }
 });

@@ -1,5 +1,5 @@
-// The manager's own API: update status, enable, disable, update, and
-// following the job each mutation starts.
+// The manager's own API: update status, enable, disable, update, the badges
+// an administrator has opened, and following the job each mutation starts.
 import { guardMutation, jsonResponse, safeDecodePathSegment } from "../lib/app-http";
 import { streamGatewayAction } from "../lib/gateway-client";
 import { jobEventStream, type JobWatcher } from "../lib/job-stream";
@@ -43,6 +43,16 @@ export async function handleManagerRoute(
     if (!name) return managerJson({ ok: false, error: "invalid addon name" }, 400);
     if (!ADDON_NAMES.includes(name)) return managerJson({ ok: false, error: "unknown addon" }, 404);
     const result = await managerAction(addonRoute[2]!, [`--addon=${name}`]);
+    return managerJson(result, result.ok ? 200 : 400);
+  }
+
+  const newsRoute = path.match(/^\/api\/addons\/([^/]+)\/news-seen$/);
+  if (newsRoute && req.method === "POST") {
+    const denied = guardMutation(req);
+    if (denied) return denied;
+    const name = safeDecodePathSegment(newsRoute[1]!);
+    if (!name || !ADDON_NAMES.includes(name)) return managerJson({ ok: false, error: "unknown addon" }, 404);
+    const result = await managerAction("mark-news-seen", [`--addon=${name}`]);
     return managerJson(result, result.ok ? 200 : 400);
   }
 

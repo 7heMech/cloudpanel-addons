@@ -85,6 +85,12 @@ describe("Cloudflare", () => {
     await expect(api.zones()).rejects.toThrow("Authentication error (10000)");
   });
 
+  test("a zone create the token may not make names the permission the token form shows", async () => {
+    const refusal = JSON.stringify({ success: false, errors: [{ code: 0, message: 'Requires permission "com.cloudflare.api.account.zone.create" to create zones for the selected account' }] });
+    const api = new CloudflareApi(USER_TOKEN, async () => new Response(refusal, { status: 403, headers: { "Content-Type": "application/json" } }));
+    await expect(api.createZone("a".repeat(32), "example.com")).rejects.toThrow("the token lacks Zone: Edit for this account");
+  });
+
   test("records are read across pages, TXT unquoted and SRV from its data", async () => {
     const { fake, agency } = cloudflare();
     const zone = fake.zone("example.com", agency);

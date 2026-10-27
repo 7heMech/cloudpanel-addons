@@ -63,7 +63,7 @@ export const PRESETS: Preset[] = [
 ];
 
 export const EMPTY_ZONE_OPTIONS: ZoneOptions = {
-  ssl: null, alwaysHttps: null, acmeFullSsl: false, webmailFullSsl: false, skipFirewallIps: [], createIn: null,
+  ssl: null, alwaysHttps: null, acmeFullSsl: false, webmailFullSsl: false, skipFirewallIps: [],
 };
 
 /** A profile built from presets, as a new install offers them. */
@@ -72,7 +72,6 @@ function seeded(id: string, name: string, presetIds: string[]): Profile {
   return {
     id,
     name,
-    mode: "report",
     records: chosen.flatMap((preset) => preset.records.map((record) => ({ ...record }))),
     mailcow: chosen.some((preset) => preset.mailcow),
     zone: Object.assign({ ...EMPTY_ZONE_OPTIONS }, ...chosen.map((preset) => preset.zone ?? {})),
@@ -83,6 +82,8 @@ function seeded(id: string, name: string, presetIds: string[]): Profile {
 export function seededPolicy(): Policy {
   return {
     version: 1,
+    automatic: false,
+    createIn: null,
     profiles: [seeded("web", "Web", ["web"]), seeded("web-mailcow", "Web and Mailcow", ["web", "mailcow"])],
     defaultProfileId: null,
     assignments: {},

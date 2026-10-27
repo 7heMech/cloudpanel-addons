@@ -1,7 +1,7 @@
 /**
  * One pass over Cloudflare and Mailcow: find what every connection can reach,
  * read the zones the fleet's sites live in, work out each site's plan, and --
- * for sites whose profile enforces -- carry it out.
+ * once DNS is Automatic -- carry it out.
  *
  * Planning is synchronous over what was read, so the same pass can plan,
  * write, and plan again for its report without reading everything twice.
@@ -61,9 +61,22 @@ export interface Change {
   waits?: true;
 }
 
+/** One write DNS made, for the page's change log. */
+export interface LogEntry {
+  at: string;
+  /** The sites the write was for; empty for a zone-wide one. */
+  sites: string[];
+  zone: string;
+  action: "create" | "update" | "delete";
+  subject: string;
+  detail: string;
+  before?: string;
+}
+
 export interface SitePlan {
   domain: string;
   profileId: string | null;
+  /** Whether DNS writes this plan: Automatic, or a review being confirmed. */
   mode: "report" | "enforce";
   zone: ZoneView | null;
   changes: Change[];
@@ -109,7 +122,7 @@ interface MailState {
 
 type Resolution =
   | { kind: "zone"; ref: ZoneRef }
-  | { kind: "missing"; name: string; createIn: AccountRef | null }
+  | { kind: "missing"; name: string; createIn: AccountRef | null; accounts: number }
   | { kind: "choose"; candidates: ZoneRef[]; name: string; lost?: boolean }
   | { kind: "unreachable"; reason: string };
 
@@ -122,6 +135,8 @@ function reason(error: unknown): string {
 
 export class DnsRun {
   readonly connections: ConnectionReport[] = [];
+  /** What this run wrote, in the order it was written. */
+  readonly log: LogEntry[] = [];
   private readonly zoneRefs: ZoneRef[] = [];
   private readonly zones = new Map<string, ZoneState>();
   private readonly mail = new Map<string, MailState | { error: string }>();
@@ -188,7 +203,7 @@ export class DnsRun {
   }
 
   /** The longest zone, across every connection, that the domain is in or under. */
-  private resolve(domain: string, profile: Profile): Resolution {
+  private resolve(domain: string): Resolution {
     const matches = this.zoneRefs.filter(({ zone }) => !INACTIVE_ZONES.has(zone.status) && (domain === zone.name || domain.endsWith(`.${zone.name}`)));
     if (!matches.length) {
       const failed = this.connections.filter((connection) => !connection.active);
@@ -196,7 +211,9 @@ export class DnsRun {
       // A zone only a failed connection reaches would look missing, and be created again elsewhere.
       if (failed.length) return { kind: "unreachable", reason: `Cloudflare could not be read: ${failed.map((c) => c.error).join("; ")}` };
       const name = getDomain(domain, { allowPrivateDomains: false }) ?? domain;
-      return { kind: "missing", name, createIn: profile.zone.createIn };
+      const accounts = this.connections.flatMap((connection) => connection.accounts.map((account) => ({ connectionId: connection.id, accountId: account.id })));
+      const unique = new Set(accounts.map((account) => account.accountId));
+      return { kind: "missing", name, createIn: this.context.policy.createIn ?? (unique.size === 1 ? accounts[0]! : null), accounts: unique.size };
     }
     const longest = Math.max(...matches.map(({ zone }) => zone.name.length));
     const candidates = matches.filter(({ zone }) => zone.name.length === longest);
@@ -226,7 +243,7 @@ export class DnsRun {
     for (const site of this.context.sites) {
       const profile = this.profileOf(site.domain);
       if (!profile || (!withHeld && this.held.has(site.domain))) continue;
-      const resolved = this.resolve(site.domain, profile);
+      const resolved = this.resolve(site.domain);
       if (resolved.kind !== "zone") continue;
       const list = byZone.get(resolved.ref.zone.id) ?? [];
       list.push(profile);
@@ -308,7 +325,7 @@ export class DnsRun {
     for (const domain of domains) {
       const profile = this.profileOf(domain);
       if (!profile) continue;
-      const resolved = this.resolve(domain, profile);
+      const resolved = this.resolve(domain);
       if (resolved.kind === "zone") refs.set(resolved.ref.zone.id, resolved.ref);
       if (profile.mailcow) mailDomains.push(domain);
     }
@@ -347,7 +364,7 @@ export class DnsRun {
   private mailChanges(domain: string, profile: Profile, plan: SitePlan): void {
     const settings = this.context.policy.mailcow;
     if (!this.mailcow || !settings.host) {
-      plan.problems.push("This profile sets up Mailcow; add Mailcow's address, API key and mail hostname first");
+      plan.problems.push("This profile sets up Mailcow; set up Mailcow's hostname and API key first");
       return;
     }
     const mail = this.mail.get(domain);
@@ -397,14 +414,14 @@ export class DnsRun {
   planSite(site: PanelSite): SitePlan {
     const profile = this.profileOf(site.domain);
     const plan: SitePlan = {
-      domain: site.domain, profileId: profile?.id ?? null, mode: profile?.mode ?? "report", zone: null,
+      domain: site.domain, profileId: profile?.id ?? null, mode: this.context.policy.automatic ? "enforce" : "report", zone: null,
       changes: [], problems: [], zoneChoices: [], certificateNames: [],
     };
     this.diffs.delete(site.domain);
     if (!profile) return plan;
     if (this.held.has(site.domain)) plan.held = true;
 
-    const resolved = this.resolve(site.domain, profile);
+    const resolved = this.resolve(site.domain);
     if (resolved.kind === "unreachable") {
       plan.problems.push(resolved.reason);
       return plan;
@@ -429,8 +446,11 @@ export class DnsRun {
     if (resolved.kind === "missing") {
       const { createIn } = resolved;
       const account = createIn && this.connections.find((c) => c.id === createIn.connectionId)?.accounts.find((a) => a.id === createIn.accountId);
-      if (!createIn) plan.problems.push(`No Cloudflare connection reaches a zone for ${site.domain}; add ${resolved.name} to Cloudflare, or let the profile create it`);
-      else if (!account) plan.problems.push("The account this profile creates zones in is not reachable; choose another in the profile");
+      if (!createIn) {
+        plan.problems.push(resolved.accounts
+          ? `${resolved.name} is not in Cloudflare; choose the account for new zones under Settings`
+          : `${resolved.name} is not in Cloudflare, and no connection reaches an account to create it in`);
+      } else if (!account) plan.problems.push("The account for new zones is not reachable; choose another under Settings");
       else {
         plan.changes.push({ action: "create", subject: "Cloudflare zone", detail: `${resolved.name} in ${account.name || account.id}; then set its nameservers at the registrar` });
         // A new zone is empty, so everything the profile wants is a record to create.
@@ -450,10 +470,8 @@ export class DnsRun {
     }
     if (state.error) plan.problems.push(state.error);
 
-    // A profile that disagrees with what is enforced in its zone is stopped; Report only profiles never write, so
-    // they do not stop anyone else. What the plan shows is what this site's own profile asks.
-    const enforcing = (this.zoneProfiles().get(resolved.ref.zone.id) ?? []).filter((candidate) => candidate.mode === "enforce");
-    plan.problems.push(...zoneWants([profile, ...enforcing]).problems);
+    // A profile that disagrees with another in its zone is stopped. What the plan shows is what this site's own profile asks.
+    plan.problems.push(...zoneWants([profile, ...this.zoneProfiles().get(resolved.ref.zone.id) ?? []]).problems);
     this.zoneChanges(state, zoneWants([profile]).wants, plan);
 
     const rendered = renderProfile(profile, this.vars(site.domain, resolved.ref.zone.name, profile));
@@ -547,7 +565,7 @@ export class DnsRun {
     });
   }
 
-  /** Makes the given sites match their enforcing profiles. Sites with problems are left alone. */
+  /** Makes the given sites match their profiles once DNS is Automatic. Sites with problems are left alone. */
   async enforce(sites: PanelSite[]): Promise<void> {
     const ready = () => this.planAll(this.context.sites)
       .filter((plan) => plan.mode === "enforce" && !plan.problems.length && sites.some((site) => site.domain === plan.domain));
@@ -574,7 +592,7 @@ export class DnsRun {
           const fresh = this.planSite(this.context.sites.find((site) => site.domain === plan.domain)!);
           if (fresh.problems.length) continue;
           const ops = this.diffs.get(plan.domain)!.ops;
-          await this.applyRecords(state, fresh.held ? ops.filter((op) => pointsOwnName(plan.domain, op)) : ops);
+          await this.applyRecords(state, fresh.held ? ops.filter((op) => pointsOwnName(plan.domain, op)) : ops, plan.domain);
         } catch (error) {
           this.fail(plan.domain, error);
         }
@@ -584,9 +602,9 @@ export class DnsRun {
 
   private async createZones(plans: SitePlan[]): Promise<void> {
     const wanted = new Map<string, { createIn: AccountRef; domains: string[] }>();
+    const accountName = (ref: AccountRef) => this.connections.find((c) => c.id === ref.connectionId)?.accounts.find((a) => a.id === ref.accountId)?.name || ref.accountId;
     for (const plan of plans) {
-      const profile = this.profileOf(plan.domain)!;
-      const resolved = this.resolve(plan.domain, profile);
+      const resolved = this.resolve(plan.domain);
       if (resolved.kind !== "missing" || !resolved.createIn) continue;
       const entry = wanted.get(resolved.name) ?? { createIn: resolved.createIn, domains: [] };
       entry.domains.push(plan.domain);
@@ -595,6 +613,8 @@ export class DnsRun {
     await Promise.all([...wanted].map(async ([name, { createIn, domains }]) => {
       try {
         const zone = await this.cloudflare.get(createIn.connectionId)!.createZone(createIn.accountId, name);
+        this.logged(domains, name, "create", "Cloudflare zone",
+          `In ${accountName(createIn)}${zone.nameServers.length ? `; nameservers ${zone.nameServers.join(", ")}` : ""}`);
         const ref = { zone, connectionId: createIn.connectionId };
         this.zoneRefs.push(ref);
         this.profilesByZone = null;
@@ -610,15 +630,17 @@ export class DnsRun {
   private async enforceZone(state: ZoneState, profiles: Profile[], reviewed: Profile[], domains: string[]): Promise<void> {
     const api = this.cloudflare.get(state.ref.connectionId)!;
     const zoneId = state.ref.zone.id;
-    // A Report only profile in the same zone is never a reason to write.
-    const enforcing = (list: Profile[]) => list.filter((profile) => profile.mode === "enforce");
-    const { wants, problems } = zoneWants(enforcing(profiles));
+    const { wants, problems } = zoneWants(profiles);
     if (problems.length) return;
+    const zone = state.ref.zone.name;
     try {
-      for (const wanted of wantedSettings(zoneWants(enforcing(reviewed)).wants)) {
-        if (state.settings.get(wanted.setting) === wanted.value) continue;
+      for (const wanted of wantedSettings(zoneWants(reviewed).wants)) {
+        const current = state.settings.get(wanted.setting);
+        if (current === wanted.value) continue;
         await api.setSetting(zoneId, wanted.setting, wanted.value);
         state.settings.set(wanted.setting, wanted.value);
+        const before = current === undefined ? undefined : wanted.setting === "ssl" ? SSL_LABELS[current as keyof typeof SSL_LABELS] ?? current : current;
+        this.logged([], zone, "update", "Zone setting, whole zone", wanted.label, before);
       }
       // Rules before records, so a proxied record never exists without the rule its certificate needs.
       for (const spec of wantedRules(wants)) {
@@ -630,6 +652,7 @@ export class DnsRun {
         else if (found.state === "update") updated = await api.updateRule(zoneId, spec.phase, ruleset.id, found.ruleId, spec.rule);
         else updated = await api.addRule(zoneId, spec.phase, ruleset.id, spec.rule);
         state.rulesets.set(spec.phase, updated);
+        this.logged([], zone, found.state === "update" ? "update" : "create", "Cloudflare rule, whole zone", spec.label);
       }
     } catch (error) {
       for (const domain of domains) this.fail(domain, error);
@@ -649,12 +672,15 @@ export class DnsRun {
           await api.addDomain(domain);
           state.exists = await api.hasDomain(domain);
           if (!state.exists) throw new ProviderError("Mailcow", `did not keep the domain ${domain}`);
+          this.logged([domain], "", "create", "Mailcow domain", domain);
         }
         if (!state.dkim) {
           if (settings.dkimSource) await api.duplicateDkim(settings.dkimSource, domain);
           else await api.generateDkim(domain, settings.dkimSelector, settings.dkimBits);
           state.dkim = await api.dkim(domain);
           if (!state.dkim) throw new ProviderError("Mailcow", `did not return the DKIM key it made for ${domain}`);
+          this.logged([domain], "", "create", "Mailcow DKIM key",
+            settings.dkimSource ? `Shared with ${settings.dkimSource}` : `${settings.dkimBits}-bit, selector ${settings.dkimSelector}`);
         }
         ok.push(domain);
       } catch (error) {
@@ -670,6 +696,7 @@ export class DnsRun {
       const missing = ok.filter((domain) => !aclAllows(acl, domain));
       if (!missing.length) return;
       await api.setSenderAcl(mailbox, [...acl, ...missing.map((domain) => `@${domain}`)]);
+      this.logged(missing, "", "update", "Mailcow sender list", `${mailbox} may send as ${missing.map((domain) => `@${domain}`).join(", ")}`);
       const after = await api.senderAcl(mailbox);
       this.acl.set(mailbox, after);
       const refused = missing.filter((domain) => !after || !aclAllows(after, domain));
@@ -679,7 +706,7 @@ export class DnsRun {
     }
   }
 
-  private async applyRecords(state: ZoneState, ops: RecordOp[]): Promise<void> {
+  private async applyRecords(state: ZoneState, ops: RecordOp[], domain: string): Promise<void> {
     const api = this.cloudflare.get(state.ref.connectionId)!;
     const zoneId = state.ref.zone.id;
     for (const op of ops) {
@@ -693,7 +720,13 @@ export class DnsRun {
         const record = await api.createRecord(zoneId, op.record, RECORD_COMMENT);
         state.records = [...state.records!, record];
       }
+      const change = this.recordChange(op);
+      this.logged([domain], state.ref.zone.name, op.action, change.subject, change.detail, change.before);
     }
+  }
+
+  private logged(sites: string[], zone: string, action: LogEntry["action"], subject: string, detail: string, before?: string): void {
+    this.log.push({ at: new Date().toISOString(), sites, zone, action, subject, detail, ...before !== undefined && { before } });
   }
 
   // -------------------------------------------------------------------------
@@ -705,7 +738,7 @@ export class DnsRun {
     const result: Record<string, ManagedRecords> = {};
     for (const plan of plans) {
       const diff = this.diffs.get(plan.domain);
-      if (plan.mode !== "enforce" || !plan.zone || !diff || !diff.matched.length) continue;
+      if (!this.context.policy.automatic || !plan.zone || !diff || !diff.matched.length) continue;
       const state = this.zones.get(plan.zone.id)!;
       result[plan.domain] = {
         zoneId: plan.zone.id,
@@ -735,9 +768,13 @@ export class DnsRun {
     return api.records(zoneId);
   }
 
-  async deleteRecords(connectionId: string, zoneId: string, ids: string[]): Promise<void> {
-    const api = this.cloudflare.get(connectionId)!;
-    for (const id of ids) await api.deleteRecord(zoneId, id);
+  async deleteRecords(domain: string, entry: ManagedRecords, ids: string[]): Promise<void> {
+    const api = this.cloudflare.get(entry.connectionId)!;
+    for (const id of ids) {
+      await api.deleteRecord(entry.zoneId, id);
+      const record = entry.records.find((tracked) => tracked.id === id)!;
+      this.logged([domain], entry.zoneName, "delete", `${record.type} ${record.name}`, describeRecord(record));
+    }
   }
 }
 
@@ -752,7 +789,7 @@ function pointsOwnName(domain: string, op: RecordOp): boolean {
 
 export function readiness(plan: SitePlan | undefined): { ready: boolean; reason: string } {
   if (!plan?.profileId) return { ready: false, reason: "No DNS profile is assigned to this site" };
-  if (plan.mode !== "enforce") return { ready: false, reason: "Its DNS profile is Report only" };
+  if (plan.mode !== "enforce") return { ready: false, reason: "DNS is set to Ask first" };
   if (plan.problems.length) return { ready: false, reason: plan.problems.join("; ") };
   if (!plan.zone) return { ready: false, reason: "Its Cloudflare zone is being created" };
   if (plan.zone.status !== "active") {

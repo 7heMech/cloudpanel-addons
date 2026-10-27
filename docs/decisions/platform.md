@@ -32,7 +32,13 @@ one of its words, and hides a list it empties. An
 addon's `added` release line (`2.0`) marks it New for as long as that line is
 the one installed. An existing addon's `changed` line marks it Changed for the
 same time, with one line saying what changed; the rest is the changelog's, which
-the update page links.
+the update page links. Opening the addon from its row clears both for that
+release line, for every administrator and device: the box usually has one
+person who updates it, and a per-user record would need a panel identity for
+nothing. The page asks the manager's `mark-news-seen` verb, which takes only the
+addon name and works out the key (`dns@2.0`) itself, and keeps only keys for the
+installed line in `manager/news-seen.json` under the state directory. A later
+line that marks the addon again shows it again.
 
 ## One catalog, compiled in
 
@@ -227,6 +233,16 @@ helper returns no result for a path it does not own -- including a non-GET on a
 path it does -- so the addon's own router still decides what that is, and the
 HTML `/jobs/:id` page stays with each addon, because what a job looks like
 differs and how it is watched does not.
+
+A job that works through sites -- WordPress Tools' checks and connections,
+Panel Tweaks' size measurement -- records its progress the same way, through
+`runSiteJob` in `cli/job-store.ts`: how many sites are done of how many, the
+one it is on, and a step such as `Measuring 12 of 40: site`, then its result.
+The page draws that as `jobProgressHtml` from `lib/app-ui.ts`, and the client
+half, `followJobProgress`, follows every bar on the page through the routes
+above until the job ends. A page drawn while a job runs follows it again, so a
+reload picks it up. The addon keeps only what the job means: its title, what it
+disables meanwhile, and what it says when it ends.
 
 A job id is defined once, in `lib/job-id.ts`, which `cli/job-store.ts`
 re-exports. The app services needed the syntax without the CLI's job

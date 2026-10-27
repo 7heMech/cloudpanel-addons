@@ -1,5 +1,7 @@
 import { esc } from "../../../lib/app-http";
-import { TWEAK_ROW_JS, TWEAK_ROW_STYLE, renderLayout, sinceText } from "../../../lib/app-ui";
+import {
+  JOB_PROGRESS_JS, JOB_PROGRESS_STYLE, TWEAK_ROW_JS, TWEAK_ROW_STYLE, jobProgressHtml, renderLayout, sinceText,
+} from "../../../lib/app-ui";
 import { mountPath } from "../../../lib/mount";
 import type { PanelTweaks, PanelTweaksState } from "../action";
 
@@ -20,8 +22,8 @@ export function layout(
     brand: "Panel Tweaks",
     base: BASE,
     nav: [],
-    css: TWEAK_ROW_STYLE + STYLE,
-    script: TWEAK_ROW_JS + SCRIPT,
+    css: TWEAK_ROW_STYLE + JOB_PROGRESS_STYLE + STYLE,
+    script: TWEAK_ROW_JS + JOB_PROGRESS_JS + SCRIPT,
     updateNotice,
   });
 }
@@ -76,7 +78,7 @@ const COPY: TweakCopy[] = [
     key: "panelMobile",
     category: "Panel",
     title: "CloudPanel mobile layout",
-    description: "Fits CloudPanel's header, Dashboard charts, new-site pages and Admin Area to phone screens.",
+    description: "Fits CloudPanel's header, Dashboard charts, new-site pages, site tabs' tables and Admin Area to phone screens.",
   },
   {
     key: "deviceTheme",
@@ -109,13 +111,23 @@ function switchRow(copy: TweakCopy, tweaks: PanelTweaks, extra = ""): string {
       </div>`;
 }
 
+/** Nothing measuring yet: the bar the page fills in when it starts one. */
+const NO_MEASUREMENT = { id: "", state: "queued", step: "", completed: 0, total: 0, site: "" };
+
+/**
+ * The latest measurement and the button that asks for another. While one runs
+ * its progress takes the summary's place, and the page follows it until it
+ * ends, after a reload too.
+ */
 function scanControls(state: PanelTweaksState): string {
   const measured = state.sites.filter((site) => site.disk).length;
   const summary = measured === 0
     ? "Nothing measured yet."
     : `${measured} of ${state.sites.length} site${state.sites.length === 1 ? "" : "s"} measured, ${esc(sinceText(state.diskMeasuredAt))}.`;
-  return `<div class="tweak-scan"><span>${summary}</span>
-    <button class="btn" type="button" onclick="measureNow(this)">Measure now</button></div>`;
+  const job = state.measuring;
+  return `<div class="tweak-scan"><span class="tweak-scan-summary"${job ? " hidden" : ""}>${summary}</span>
+    ${jobProgressHtml(job ?? NO_MEASUREMENT, "Measuring", !job)}
+    <button class="btn" type="button" onclick="measureNow(this)"${job ? " disabled" : ""}>${job ? "Measuring…" : "Measure now"}</button></div>`;
 }
 
 function tweakList(state: PanelTweaksState, category: TweakCopy["category"]): string {

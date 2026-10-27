@@ -6,7 +6,8 @@ const CHANGES: Record<string, string> = {
   "/api/check": "check",
   "/api/profiles": "save-profile",
   "/api/profiles/delete": "delete-profile",
-  "/api/mode": "set-mode",
+  "/api/automatic": "set-automatic",
+  "/api/zone-account": "zone-account",
   "/api/assign": "assign",
   "/api/default": "set-default",
   "/api/confirm": "confirm",
@@ -14,15 +15,17 @@ const CHANGES: Record<string, string> = {
   "/api/connections": "save-connection",
   "/api/connections/remove": "remove-connection",
   "/api/mailcow": "save-mailcow",
+  "/api/mailcow/remove": "remove-mailcow",
   "/api/server": "save-server",
   "/api/records/remove": "remove-records",
   "/api/records/forget": "forget-records",
 };
 
 /**
- * `/api/session` and `/api/provision` are the two routes a non-administrator
- * reaches, from CloudPanel's own page for a site they just created. The action
- * checks that the site is theirs and answers with readiness only.
+ * `/api/session` and `/api/provision` are routes a non-administrator reaches,
+ * from CloudPanel's own page for a site they just created; `/api/site` is the
+ * third, from the site's SSL/TLS page. The action checks that the site is
+ * theirs and answers with readiness, or the zone and its nameservers, only.
  */
 async function provision(req: Request, auth: { user: string; roles: string[] } | null | undefined): Promise<Response> {
   const denied = guardMutation(req);
@@ -52,6 +55,13 @@ export async function handle(
 ): Promise<Response> {
   if (req.method === "GET" && path === "/api/session") return jsonResponse({ ok: true }, { csrf: newCsrfToken() });
   if (req.method === "POST" && path === "/api/provision") return provision(req, auth);
+  if (req.method === "GET" && path === "/api/site") {
+    const domain = validateDomain(new URL(req.url).searchParams.get("domain"));
+    if (!domain) return jsonResponse({ ok: false, error: "invalid domain" }, { status: 400 });
+    if (!auth?.user) return jsonResponse({ ok: false, error: "not found" }, { status: 404 });
+    const result = await dnsService.siteStatus(domain, auth.roles.includes("ROLE_ADMIN") ? undefined : auth.user);
+    return jsonResponse(result, { status: result.ok ? 200 : 400 });
+  }
   if (req.method === "GET" && path === "/") {
     const csrf = newCsrfToken();
     const result = await dnsService.state();

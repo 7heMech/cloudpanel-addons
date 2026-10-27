@@ -178,13 +178,13 @@ describe("the Cloudflare token template", () => {
     expect(url.searchParams.get("accountId")).toBe("*");
     expect(url.searchParams.get("zoneId")).toBe("all");
     expect(JSON.parse(url.searchParams.get("permissionGroupKeys")!)).toEqual([
-      { key: "account_settings", type: "read" }, { key: "zone", type: "read" }, { key: "dns", type: "edit" },
+      { key: "account_settings", type: "read" }, { key: "zone", type: "edit" }, { key: "dns", type: "edit" },
       { key: "zone_settings", type: "edit" }, { key: "config_settings", type: "edit" },
     ]);
     expect(template.permissions).toContain("Config Rules: Edit");
   });
 
-  test("asks for zone edit only to create zones, and WAF only for a firewall skip", () => {
+  test("asks for WAF only for a firewall skip", () => {
     const [web] = seededPolicy().profiles;
     const creating = { ...web!, zone: { ...web!.zone, createIn: { connectionId: "cf-1", accountId: "a".repeat(32) }, skipFirewallIps: ["203.0.113.7"] } };
     const template = tokenTemplate([creating]);
@@ -192,7 +192,6 @@ describe("the Cloudflare token template", () => {
     expect(keys).toContainEqual({ key: "zone", type: "edit" });
     expect(keys).toContainEqual({ key: "zone_waf", type: "edit" });
     expect(template.permissions).toContain("Zone WAF: Edit");
-    expect(keys).not.toContainEqual({ key: "zone", type: "read" });
   });
 });
 

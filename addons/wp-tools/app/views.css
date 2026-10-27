@@ -2,6 +2,8 @@
 .wp-status { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 10px; }
 .wp-status .btn { min-height: 32px; padding: 4px 12px; font-size: 13px; white-space: nowrap; }
 .wp-note { color: var(--muted); font-size: 13px; }
+.wp-note { white-space: nowrap; }
+.wp-short { display: none; }
 .wp-error { margin-top: 6px; color: var(--bad); font-size: 12px; white-space: normal; overflow-wrap: anywhere; }
 /* A wide screen keeps a status to one line, so a row is as tall as its tallest status. */
 @media (min-width: 941px) {
@@ -27,6 +29,10 @@
 .wp-section .mainwp-note { margin-top: 14px; color: var(--muted); font-size: 14px; }
 @media (max-width: 940px) {
   .wp-site-table td.site-cell { flex-basis: 100%; }
+  .wp-long { display: none; }
+  .wp-short { display: inline; }
+  /* The card each row becomes is its own selection control. */
+  .fleet-table.wp-site-table td.site-select { display: none; }
   .wp-site-table td.action-cell .btn { width: 100%; }
   .wp-section .split-card > .switch { flex-basis: auto; margin-left: auto; }
   .wp-helper { margin: -10px 0 24px; }
@@ -34,3 +40,8 @@
   .mainwp-picker select { max-width: none; flex-basis: 100%; }
   .mainwp-controls .btn { flex: 1 1 auto; }
 }
+.wp-jobs { display: grid; gap: 12px; padding: 18px 32px; }
+.wp-jobs + .fleet-filter { padding-top: 0; }
+.wp-jobs > .hint { margin: 0; }
+@media (max-width: 940px) { .wp-jobs { padding: 16px 20px; } }
+.wp-status.is-working .badge::after { content: " · working…"; }

@@ -5,11 +5,12 @@ import { FLEET_FOOTER_HTML, FLEET_ROW_SELECTION_JS, fleetFilterHtml, fleetRowSel
 import { mountPath } from "../../../lib/mount";
 import type { DnsState, SiteView } from "../action";
 import type { Profile } from "../model";
+import { CLIPBOARD } from "../clipboard";
 import { SSL_LABELS } from "../zone";
 
 const BASE = mountPath("dns");
 const STYLE = CSS.split("/* fleet-row-selection */").join(fleetRowSelectionStyle("dns-site-table"));
-const CLIENT = `${FLEET_ROW_SELECTION_JS}\n${CLIENT_BODY}`;
+const CLIENT = `${FLEET_ROW_SELECTION_JS}\nconst DNS_CLIPBOARD = ${JSON.stringify(CLIPBOARD)};\n${CLIENT_BODY}`;
 const NO_PROFILE = "Not managed";
 
 export function layout(title: string, content: string, notice?: { current: string; latest: string } | null): string {
@@ -47,19 +48,15 @@ function zoneSummary(profile: Profile): string {
   if (profile.zone.ssl) parts.push(SSL_LABELS[profile.zone.ssl]);
   if (profile.zone.alwaysHttps !== null) parts.push(`Always HTTPS ${profile.zone.alwaysHttps ? "on" : "off"}`);
   const rules = [profile.zone.acmeFullSsl && "Let's Encrypt", profile.zone.webmailFullSsl && "webmail", profile.zone.skipFirewallIps.length && "firewall skip"].filter(Boolean);
-  const extras = [profile.mailcow && "Mailcow", profile.zone.createIn && "creates zones"].filter(Boolean);
+  const extras = [profile.mailcow && "Mailcow"].filter(Boolean);
   return `${esc(parts.join(" · ") || "Zone settings unchanged")}${rules.length || extras.length ? `<span class="hint">${esc([rules.length ? `Rules: ${rules.join(", ")}` : "", ...extras].filter(Boolean).join(" · "))}</span>` : ""}`;
 }
 
 function profileRow(profile: DnsState["profiles"][number]): string {
-  const enforcing = profile.mode === "enforce";
   return `<tr data-profile="${esc(profile.id)}">
     <td class="site-cell"><strong>${esc(profile.name)}</strong><span class="dns-card-sites"> · ${plural(profile.sites, "site")}</span></td>
     <td data-label="Records">${recordSummary(profile)}</td>
     <td data-label="Zone" class="wide-cell">${zoneSummary(profile)}</td>
-    <td data-label="Enforce" class="dns-enforce-cell">
-      <label class="switch-field"><span class="switch"><input type="checkbox" aria-label="Enforce ${esc(profile.name)}"${enforcing ? " checked" : ""} onchange="dnsSetMode(this, '${esc(profile.id)}')"><span></span></span><span class="switch-state">${enforcing ? "On" : "Report only"}</span></label>
-    </td>
     <td data-label="Sites" class="numeric dns-sites-cell">${profile.sites}</td>
     <td data-label="Actions" class="action-cell"><div class="actions">
       <button class="btn" type="button" onclick="dnsEditProfile('${esc(profile.id)}')">Edit</button>
@@ -69,7 +66,7 @@ function profileRow(profile: DnsState["profiles"][number]): string {
 }
 
 /** What one site's DNS amounts to, in a word and a line. */
-export function siteStatus(site: SiteView, mode: "report" | "enforce" | null): { label: string; tone: string; hint: string } {
+export function siteStatus(site: SiteView, automatic: boolean): { label: string; tone: string; hint: string } {
   const plan = site.plan;
   if (!site.profileId) return { label: "—", tone: "muted", hint: "" };
   if (!plan) return { label: "Not checked yet", tone: "muted", hint: "" };
@@ -80,13 +77,12 @@ export function siteStatus(site: SiteView, mode: "report" | "enforce" | null): {
   const pending = plan.changes.filter((change) => change.action !== "note").length;
   if (plan.zone && plan.zone.status !== "active") return { label: `Zone ${plan.zone.status}`, tone: "warn", hint: "Set its nameservers at the registrar" };
   if (!plan.zone && pending) return { label: "Zone to create", tone: "warn", hint: "" };
-  if (pending) return { label: mode === "enforce" ? `${plural(pending, "change")} to make` : plural(pending, "difference"), tone: "warn", hint: zone };
+  if (pending) return { label: automatic ? `${plural(pending, "change")} to make` : plural(pending, "difference"), tone: "warn", hint: zone };
   return { label: "In sync", tone: "ok", hint: zone };
 }
 
 function siteRow(site: SiteView, state: DnsState): string {
-  const profile = state.profiles.find((candidate) => candidate.id === site.profileId);
-  const status = siteStatus(site, profile?.mode ?? null);
+  const status = siteStatus(site, state.automatic);
   return `<tr data-domain="${esc(site.domain)}" data-profile-id="${esc(site.profileId ?? "")}"${site.plan?.held ? " data-held" : ""} tabindex="0" aria-selected="false" onclick="toggleSiteSelection(event, this)" onkeydown="toggleSiteSelection(event, this)">
     <td class="site-select"><input class="site-checkbox" type="checkbox" onchange="paintFleetSelection()" aria-label="Select ${esc(site.domain)}"></td>
     <td class="site-cell"><strong>${esc(site.domain)}</strong></td>
@@ -117,6 +113,21 @@ function address(value: string, detected: string | null, placeholder: string): s
   return `${name} <span class="tone-warn">${detected === null ? "not detected" : "none"}</span>`;
 }
 
+/** Where a site's missing zone is created: the only account the connections reach, or the one chosen. */
+function newZonesRow(state: DnsState): string {
+  const chosen = state.createIn && state.accounts.find((account) => account.connectionId === state.createIn!.connectionId && account.accountId === state.createIn!.accountId);
+  const value = state.accounts.length > 1 || (state.createIn && !chosen)
+    ? `<select id="dns-zone-account" aria-label="Account for new zones" onchange="dnsSetZoneAccount(this)">
+        <option value=""${chosen ? "" : " selected"}>${chosen ? "Not chosen" : "Choose an account"}</option>${state.accounts.map((account) => {
+          const key = `${account.connectionId}/${account.accountId}`;
+          return `<option value="${esc(key)}"${chosen === account ? " selected" : ""}>${esc(account.label)}</option>`;
+        }).join("")}</select>`
+    : state.accounts.length ? esc(state.accounts[0]!.label) : '<span class="hint">No connection reaches an account yet.</span>';
+  return `<tr><td class="site-cell"><strong>New zones</strong><span class="hint">For sites not in Cloudflare</span></td>
+        <td class="wide-cell">${value}<span class="hint">Created in this account; its nameservers are shown to set at the registrar.</span></td>
+        <td data-label="Actions" class="action-cell"></td></tr>`;
+}
+
 /** What DNS connects to and what the placeholders stand for: set once, rarely touched. */
 function settingsCard(state: DnsState): string {
   const { mailcow, server } = state;
@@ -132,12 +143,16 @@ function settingsCard(state: DnsState): string {
       ${state.connections.length ? '<button class="btn" type="button" onclick="dnsEditConnection(\'\')">Add Cloudflare connection</button>' : ""}</div>
     <div class="table-scroll"><table class="fleet-table dns-settings-table"><tbody>
       ${connections}
+      ${state.connections.length ? newZonesRow(state) : ""}
       <tr><td class="site-cell"><strong>Server addresses</strong></td>
         <td class="wide-cell">${address(server.ipv4, server.detected.ipv4, "{ipv4}")}<br>${address(server.ipv6, server.detected.ipv6, "{ipv6}")}</td>
         <td data-label="Actions" class="action-cell"><button class="btn" type="button" onclick="dnsEditServer()">Edit</button></td></tr>
       <tr><td class="site-cell"><strong>Mailcow</strong>${mailcow.url ? `<span class="hint">${esc(new URL(mailcow.url).host)}</span>` : ""}</td>
         <td class="wide-cell">${mailcowValue}</td>
-        <td data-label="Actions" class="action-cell"><button class="btn" type="button" onclick="dnsEditMailcow()">${mailcow.url ? "Edit" : "Set up"}</button></td></tr>
+        <td data-label="Actions" class="action-cell"><div class="actions">
+          <button class="btn" type="button" onclick="dnsEditMailcow()">${mailcow.url ? "Edit" : "Set up"}</button>
+          ${mailcow.url || mailcow.hasKey ? '<button class="btn btn-danger" type="button" onclick="dnsRemoveMailcow()">Remove</button>' : ""}
+        </div></td></tr>
     </tbody></table></div></div>`;
 }
 
@@ -152,9 +167,38 @@ function setupCard(state: DnsState): string {
       '<button class="btn btn-primary" type="button" onclick="dnsEditConnection(\'\')">Connect Cloudflare</button>')}
     ${step(Boolean(fallback), "Choose the profile for new sites", "A new site joins it seconds after CloudPanel creates it. Existing sites are never moved.",
       `<select id="dns-setup-default" aria-label="Profile for new sites" onchange="dnsSetDefault(this)">${profileOptions(state.profiles, state.defaultProfileId, "No profile")}</select>`)}
-    ${step(fallback?.mode === "enforce", `Turn on Enforce${fallback ? ` for ${esc(fallback.name)}` : ""}`, "Report only shows what differs and writes nothing, so new sites would get no records.",
-      fallback?.mode === "enforce" ? '<span class="tone-ok">On</span>' : '<span class="hint">After connecting</span>')}
+    ${step(state.automatic, "Turn on Automatic", "Until then DNS asks first: it shows what differs and writes nothing, so new sites get no records.",
+      state.automatic ? '<span class="tone-ok">On</span>' : '<span class="hint">After connecting</span>')}
   </ol></div>`;
+}
+
+/** Ask first until the operator says yes once; then Automatic, with the way back. */
+function modeBar(state: DnsState): string {
+  if (!state.connections.length) return "";
+  if (state.automatic) {
+    return `<div class="notice dns-mode-bar dns-mode-on"><span><strong>Automatic.</strong> DNS keeps every site's records to its profile, and creates a zone a site is missing.</span>
+      <button class="btn" type="button" onclick="dnsSetAutomatic(false)">Ask first instead</button></div>`;
+  }
+  const plans = state.sites.flatMap((site) => site.plan ? [site.plan] : []);
+  const changes = plans.flatMap((plan) => plan.changes.filter((change) => change.action !== "note"));
+  const zones = new Set(changes.filter((change) => change.subject === "Cloudflare zone").map((change) => change.detail.split(" ")[0])).size;
+  const busy = plans.filter((plan) => plan.changes.some((change) => change.action !== "note")).length;
+  const waiting = changes.length
+    ? ` ${plural(changes.length - zones, "change")}${zones ? ` and ${plural(zones, "new zone")}` : ""} across ${plural(busy, "site")} are waiting.`
+    : "";
+  return `<div class="notice dns-mode-bar"><span><strong>Ask first.</strong> DNS shows what differs and writes nothing, so new sites get no records.${waiting}</span>
+    <button class="btn btn-primary" type="button" onclick="dnsSetAutomatic(true)">Review and turn on Automatic</button></div>`;
+}
+
+const LOG_LABELS: Record<string, string> = { create: "Create", update: "Update", delete: "Delete" };
+
+function logRow(line: DnsState["log"][number]): string {
+  const when = line.at.slice(0, 16).replace("T", " ");
+  const where = [line.sites.join(", "), line.zone && !line.sites.includes(line.zone) ? line.zone : ""].filter(Boolean).join(" · ");
+  return `<tr><td class="dns-log-when"><span class="mono">${esc(when)}</span><span class="hint">${esc(line.cause)}</span></td>
+    <td><span class="badge dns-${esc(line.action)}">${LOG_LABELS[line.action] ?? esc(line.action)}</span></td>
+    <td class="wide-cell"><strong>${esc(line.subject)}</strong>${where ? `<span class="hint">${esc(where)}</span>` : ""}</td>
+    <td class="wide-cell dns-change-detail">${esc(line.detail)}${line.before ? `<span class="hint">Was: ${esc(line.before)}</span>` : ""}</td></tr>`;
 }
 
 export function dashboardView(state: DnsState): string {
@@ -177,15 +221,17 @@ export function dashboardContent(state: DnsState, now = Date.now()): string {
           <button class="btn btn-danger" type="button" onclick="dnsRemoveRecords('${esc(orphan.domain)}')">Remove records</button>
         </div></td></tr>`).join("")}</tbody></table></div></div>` : "";
 
-  const fallback = state.profiles.find((profile) => profile.id === state.defaultProfileId);
-  const reportOnly = state.connections.length && fallback && fallback.mode !== "enforce"
-    ? `<div class="notice dns-report-warning"><span>New sites join <strong>${esc(fallback.name)}</strong>, which is Report only: DNS writes none of their records, so their certificate cannot be issued.</span>
-        <button class="btn" type="button" onclick="dnsEnforce('${esc(fallback.id)}')">Turn on Enforce</button></div>` : "";
+  const log = state.log.length ? `<div class="card card-table"><div class="card-header"><div><h2>Change log</h2>
+      <p class="hint">Every record, zone and Mailcow change DNS made, newest first.</p></div></div>
+      <div class="table-scroll"><table class="fleet-table dns-log-table"><tbody>${state.log.slice(0, 10).map(logRow).join("")}</tbody></table></div>
+      ${state.log.length > 10 ? `<details class="dns-log-more"><summary>Show ${plural(state.log.length - 10, "earlier change")}</summary>
+        <div class="table-scroll"><table class="fleet-table dns-log-table"><tbody>${state.log.slice(10).map(logRow).join("")}</tbody></table></div></details>` : ""}
+    </div>` : "";
 
   return `<script type="application/json" id="dns-state">${data}</script>
     <div class="page-heading"><div><h1>DNS</h1>
-      <p>Keep each site's Cloudflare DNS to its profile's records. Report only shows what differs; Enforce makes it so and keeps it so.</p></div></div>
-    ${waiting}${setupCard(state)}${reportOnly}
+      <p>Keep each site's Cloudflare DNS to its profile's records.</p></div></div>
+    ${waiting}${setupCard(state)}${modeBar(state)}
     <div class="card card-table">
     ${state.sites.length ? `<div class="card-header toolbar">
         <h2>Sites</h2>
@@ -207,14 +253,15 @@ export function dashboardContent(state: DnsState, now = Date.now()): string {
     </div>
     ${orphans}
     <div class="card card-table"><div class="card-header"><div><h2>Profiles</h2>
-      <p class="hint">A profile is the records each of its sites should have. Enforce deletes records that conflict with them, at the names the profile writes and nowhere else.</p></div>
+      <p class="hint">A profile is the records each of its sites should have. Records that conflict with them are deleted, at the names the profile writes and nowhere else.</p></div>
       <div class="dns-profile-tools">
         <div class="dns-default-field"><label class="hint" for="dns-default">New sites join</label>
           <select id="dns-default" onchange="dnsSetDefault(this)">${profileOptions(state.profiles, state.defaultProfileId, "No profile")}</select></div>
         <button class="btn btn-primary" type="button" onclick="dnsEditProfile('')">New profile</button></div></div>
-      ${profiles ? `<div class="table-scroll"><table class="fleet-table dns-profile-table"><thead><tr><th>Profile</th><th>Records</th><th>Zone</th><th>Enforce</th><th class="numeric">Sites</th><th class="action-cell">Actions</th></tr></thead><tbody>${profiles}</tbody></table></div>`
+      ${profiles ? `<div class="table-scroll"><table class="fleet-table dns-profile-table"><thead><tr><th>Profile</th><th>Records</th><th>Zone</th><th class="numeric">Sites</th><th class="action-cell">Actions</th></tr></thead><tbody>${profiles}</tbody></table></div>`
         : '<div class="empty">No profiles yet. Create one from the Web and Mailcow presets.</div>'}
     </div>
+    ${log}
     ${settingsCard(state)}`;
 }
 
@@ -260,7 +307,6 @@ const DIALOGS = `
     ${switchField("webmailFullSsl", "Full SSL for webmail hosts", "For proxied webmail records, whose origin is the mail server.")}
     <div class="form-grid dns-zone-grid">
       ${field("dns-skip", "Skip the firewall for", '<textarea id="dns-skip" name="skipFirewallIps" rows="2" placeholder="203.0.113.7"></textarea>', "Optional. One IP per line, such as a MainWP Dashboard's. Skips Super Bot Fight Mode and managed rules; Cloudflare cannot skip the free Bot Fight Mode.")}
-      ${field("dns-create-in", "Missing zones", '<select id="dns-create-in" name="createIn"></select>', "Creating a zone shows its nameservers; changing them at the registrar is up to you.")}
     </div></details>
     ${actions("Save profile")}
   </form></dialog>
@@ -281,7 +327,8 @@ const DIALOGS = `
     <ol class="dns-steps">
       <li id="dns-token-step"><strong>Create a token in Cloudflare</strong>
         <p class="hint">Check these permissions: <span id="dns-token-permissions"></span>. Choose the accounts and zones there; All zones also covers zones you add later.</p>
-        <p class="hint" id="dns-token-ips-hint">Under Client IP Address Filtering, allow only this server: <code id="dns-token-ips"></code>.</p>
+        <div id="dns-token-ips-hint"><p class="hint">Under Client IP Address Filtering, allow only this server:</p>
+          <div class="dns-copy"><code id="dns-token-ips"></code><button class="dns-clip" type="button" title="Copy" aria-label="Copy the addresses" onclick="dnsCopyIps()">${CLIPBOARD}</button></div></div>
         <a class="btn" id="dns-token-link" target="_blank" rel="noopener noreferrer" referrerpolicy="no-referrer">Create token in Cloudflare ↗</a></li>
       <li><strong>Paste it here</strong>
         <div class="form-grid dns-token-grid">
@@ -294,9 +341,11 @@ const DIALOGS = `
   <dialog id="dns-mailcow-dialog" aria-labelledby="dns-mailcow-heading"><form id="dns-mailcow-form" onsubmit="dnsSaveMailcow(event)">
     <div class="dialog-header"><h2 id="dns-mailcow-heading">Mailcow</h2></div>
     <div class="form-grid">
-      ${field("dns-mailcow-url", "Address", '<input id="dns-mailcow-url" name="url" type="url" required placeholder="https://mail.example.com" autocomplete="off">')}
+      <div class="form-field" id="dns-mailcow-relay-field" hidden><label for="dns-mailcow-relay">Fill from SMTP Relay</label>
+        <select id="dns-mailcow-relay" onchange="dnsFillFromRelay()"></select>
+        <div class="hint">Takes the hostname and mailbox of an SMTP Relay profile.</div></div>
+      ${field("dns-mailcow-url", "Hostname", '<input id="dns-mailcow-url" name="url" required placeholder="mail.example.com" autocomplete="off" spellcheck="false">', "Mailcow's web address, and what <code>{mailcow.host}</code> is: the MX and autodiscover target.")}
       ${field("dns-mailcow-key", "API key", '<input id="dns-mailcow-key" name="key" type="password" autocomplete="new-password" spellcheck="false">', "A read-write key. Limit it to this server's IP in Mailcow.")}
-      ${field("dns-mailcow-host", "Mail hostname", '<input id="dns-mailcow-host" name="host" autocomplete="off" placeholder="mail.example.com">', "What <code>{mailcow.host}</code> is: the MX and autodiscover target.")}
       ${field("dns-mailcow-mailbox", "Shared mailbox", '<input id="dns-mailcow-mailbox" name="sharedMailbox" type="email" autocomplete="off" placeholder="relay@example.com">', "Optional. An existing mailbox allowed to send as every domain, such as SMTP Relay's.")}
       ${field("dns-mailcow-dkim", "DKIM key", '<select id="dns-mailcow-dkim" name="dkimMode" onchange="dnsSyncDkim()"><option value="generate">A new key for each domain</option><option value="share">The key of another domain</option></select>')}
       <div class="form-field" id="dns-dkim-generate"><label for="dns-mailcow-selector">Selector and size</label>

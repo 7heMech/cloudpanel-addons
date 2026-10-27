@@ -102,6 +102,7 @@ async function change(path, body, describe) {
   }
   busy(false);
   if (html) repaintView(CLP_ROOT.getElementById('wp-dashboard'), html);
+  followJobs();
   if (failure) {
     notify(failure, 'error');
     return false;
@@ -127,22 +128,79 @@ function syncSummary(data) {
   return { text: text, kind: data.failed.length || data.pending ? 'warn' : 'ok' };
 }
 
+// Checks, installations, connections and cleanup run as background jobs, whose
+// bars the shared job progress script follows; the site being worked on also
+// says so in its own row.
+function followJobs() {
+  followJobProgress(jobFinished, markWorkingSite);
+}
+
+function markWorkingSite(job) {
+  CLP_ROOT.querySelectorAll('.wp-status[data-policy="' + job.policy + '"].is-working').forEach(function (cell) {
+    cell.classList.remove('is-working');
+  });
+  const row = job.site && CLP_ROOT.querySelector('tr[data-domain="' + CSS.escape(job.site) + '"]');
+  const cell = row && row.querySelector('.wp-status[data-policy="' + job.policy + '"]');
+  if (cell) cell.classList.add('is-working');
+}
+
+const JOB_SUMMARIES = {
+  'varnish-check': syncSummary,
+  'varnish-install': function (data, job) {
+    const domain = job.domains[0];
+    if (data.installed) return { text: 'CLP Varnish Cache is active on ' + domain + '.' };
+    return { text: data.failed.length ? data.failed[0] : 'Nothing was installed on ' + domain + '; see its status below.', kind: 'warn' };
+  },
+  'mainwp-check': mainwpSummary,
+  'mainwp-cleanup': mainwpSummary,
+  'mainwp-connect': function (data, job) {
+    if (job.domains.length === 1) {
+      const domain = job.domains[0];
+      if (data.installed) return { text: 'MainWP Child is active on ' + domain + '. Add the site in your MainWP Dashboard now.' };
+      if (data.connected) return { text: domain + ' is connected to MainWP.' };
+      return { text: data.failed.length ? data.failed[0] : domain + ' is not connected yet; see its status below.', kind: 'warn' };
+    }
+    let text = plural(data.connected, 'site') + ' connected to MainWP of ' + job.domains.length + ' chosen.';
+    if (data.pending) text += ' ' + data.pending + ' not reached; connect them again to continue.';
+    if (data.failed.length) text += ' ' + data.failed.length + ' failed; see the sites below.';
+    return { text: text, kind: data.failed.length || data.pending ? 'warn' : 'ok' };
+  },
+};
+
+async function jobFinished(job) {
+  let stale = '';
+  try {
+    repaintView(CLP_ROOT.getElementById('wp-dashboard'), (await call('/api/dashboard')).data.html);
+  } catch (error) {
+    stale = error.message;
+  }
+  followJobs();
+  if (job.state !== 'done') {
+    notify('The job failed: ' + (job.error || job.step), 'error');
+    return;
+  }
+  const done = JOB_SUMMARIES[job.task](job.result || { checked: 0, installed: 0, connected: 0, removed: 0, pending: 0, failed: [] }, job);
+  notify(stale ? done.text + ' The page may be out of date: ' + stale : done.text, stale ? 'warn' : done.kind || 'ok');
+}
+
+function jobStarted() {
+  return { text: 'Started. It runs in the background, so you can keep using the page or reload it.' };
+}
+
 function checkSites() {
-  change('/api/varnish-sync', {}, syncSummary);
+  change('/api/varnish-sync', {}, jobStarted);
 }
 
 async function installPlugin(button) {
   const domain = button.dataset.domain;
   const agreed = await confirmAction({
     title: button.textContent + ' CLP Varnish Cache on ' + domain + '?',
-    text: 'CLP Varnish Cache is installed from WordPress.org if it is missing, then activated, as the site\'s own user.',
+    text: 'CLP Varnish Cache is installed from WordPress.org if it is missing, then activated, as the site\'s own user.' +
+      (button.hasAttribute('data-network') ? ' This site is a multisite network, so the plugin is network-activated for every site in it.' : ''),
     confirmLabel: button.textContent,
   });
   if (!agreed) return;
-  change('/api/varnish-install', { domain: domain }, function (data) {
-    if (data.installed) return { text: 'CLP Varnish Cache is active on ' + domain + '.' };
-    return { text: data.failed.length ? data.failed[0] : 'Nothing was installed on ' + domain + '; see its status below.', kind: 'warn' };
-  });
+  change('/api/varnish-install', { domain: domain }, jobStarted);
 }
 
 async function removeHelpers() {
@@ -190,7 +248,7 @@ function mainwpSummary(data) {
 }
 
 function checkMainwp() {
-  change('/api/mainwp-sync', {}, mainwpSummary);
+  change('/api/mainwp-sync', {}, jobStarted);
 }
 
 async function connectMainwp(button) {
@@ -206,11 +264,28 @@ async function connectMainwp(button) {
     confirmLabel: button.textContent,
   });
   if (!agreed) return;
-  change('/api/mainwp-connect', { domain: domain, confirm: true }, function (data) {
-    if (remote && data.installed) return { text: 'MainWP Child is active on ' + domain + '. Add the site in your MainWP Dashboard now.' };
-    if (data.connected) return { text: domain + ' is connected to MainWP.' };
-    return { text: data.failed.length ? data.failed[0] : domain + ' is not connected yet; see its status below.', kind: 'warn' };
+  change('/api/mainwp-connect', { domains: [domain], confirm: true }, jobStarted);
+}
+
+async function connectMainwpSites(domains) {
+  const agreed = await confirmAction({
+    title: 'Connect ' + plural(domains.length, 'site') + ' to MainWP?',
+    text: 'On each site, MainWP Child is installed from WordPress.org if it is missing, activated, and connected as the site\'s first administrator. Sites already connected are left as they are. The Dashboard can then manage them.',
+    confirmLabel: 'Connect',
   });
+  if (!agreed) return;
+  change('/api/mainwp-connect', { domains: domains, confirm: true }, jobStarted);
+}
+
+function connectMainwpSelected() {
+  connectMainwpSites(selectedRows().map(function (row) { return row.dataset.domain; }));
+}
+
+function connectMainwpAll() {
+  connectMainwpSites(siteRows().filter(function (row) {
+    const box = row.querySelector('.site-checkbox');
+    return box && !box.disabled;
+  }).map(function (row) { return row.dataset.domain; }));
 }
 
 async function cleanupMainwp() {
@@ -221,5 +296,7 @@ async function cleanupMainwp() {
     danger: true,
   });
   if (!agreed) return;
-  change('/api/mainwp-cleanup', { confirm: true }, mainwpSummary);
+  change('/api/mainwp-cleanup', { confirm: true }, jobStarted);
 }
+
+followJobs();

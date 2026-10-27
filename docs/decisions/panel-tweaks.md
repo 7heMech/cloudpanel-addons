@@ -118,6 +118,19 @@ the shared class names do not alter frontend pages.
 All changes are CSS present before the content is parsed; navigation and forms
 keep CloudPanel's own markup and behavior, and desktop retains its sidebar.
 
+The frontend header carries the same switch's rules for the tables on a site's
+own tabs -- certificates, databases, users, cron jobs and security -- whose
+fixed column widths cut off the last columns and the action menu on a phone.
+Below 760px each row is a card: the first cell its title, the action cell at
+its top right, and every other cell under its column's heading. The layout is
+keyed on CloudPanel's own `site-content` and `table` classes, so it is in force
+from the first paint; the headings are copied onto the cells by a script in the
+same block that names rows while the page is parsed, not once it is ready, so
+the labels are there when the cards are painted. A translated panel gets its
+own headings. The table's own heading row is hidden only visually, so a screen
+reader keeps the headings for the cells. The Sites table is left to its own
+cards.
+
 ## SSL after native site creation
 
 `autoSsl` is off by default. It adds a checked, unnamed checkbox to the
@@ -382,8 +395,10 @@ the switch starts the first measurement immediately, and the operator can
 request another at any time. The latest measurement and that action stay
 visible beneath the switch title; only the longer explanation is in the
 disclosure, so a phone does not hide live progress behind another tap.
-Completion updates that status in place. It refreshes the Sites preview frame
-when the Sites enhancement is on, but never reloads the addon page.
+While a measurement runs its progress takes the status's place in that row, and
+completion puts the status back, updated, in place. It refreshes the Sites
+preview frame when the Sites enhancement is on, but never reloads the addon
+page.
 Every minimized row keeps its title and switch in one center-aligned heading;
 descriptions and live status sit below without moving the switch off that line.
 The nested measurement row's branch terminates just above that heading's
@@ -402,13 +417,34 @@ not owned by it, is skipped rather than guessed at.
 A measurement holds a lock file of its own rather than the switches' lock, so
 moving a switch during a long sweep is not refused.
 
-The operator-pressed sweep is the same work with a four-minute budget. A box
-large enough to exceed it gets its sizes from the unattended sweep instead,
-which has no deadline. The pressed sweep streams compact progress events through
-the root gateway and SSE response: the site being measured, the completed and
-total counts, and the measured/skipped counts. It never streams `du` output or
-filesystem paths. A single large site may stay quiet for longer than ten
-seconds, because the manager runs without Bun's idle timeout (see
-[Platform integration](platform.md)); the gateway's four-minute deadline remains
-the bound on the operation, and a disconnected browser closes the gateway stream
-and its action process.
+## Measure now is a background job
+
+The operator's measurement is the same work as the timer's, but it runs as a
+background job rather than inside the page's request: a sweep takes minutes on
+a large box, and the gateway ends an action whose request has gone, so a sweep
+tied to the page would end with a refresh. The job store is the shared one
+(see [Platform integration](platform.md)). `measure` records the job and hands
+it to a transient systemd unit, `clp-addons action panel-tweaks run --job <id>`,
+with a three-hour `RuntimeMaxSec`. The gateway allows `measure`, `job` and
+`watch-job`; `run` is absent, so only that unit runs a job, and `scan`, the
+timer's sweep, is absent too. None of them takes a path or a site.
+
+There is one measurement at a time. `measure` takes a lock of its own and, when
+one is queued or running, answers with that job instead of a second, so a
+second click, another tab or a stale page follows the measurement already
+running rather than failing on the disk lock. The runner takes the disk lock
+the timer's sweep holds, waiting up to an hour for a sweep already running and
+saying so in its step. When that sweep wrote its result while the job waited,
+that result is the job's: the disk was walked moments ago. The timer leaves the
+disk alone while a measurement is queued or running.
+
+The runner records the site it is on and how many of how many before each one,
+through the shared per-site progress the WordPress Tools jobs use. `state`
+returns the running measurement to an administrator, so the page draws its bar
+in the Measured sizes row on every load and follows it through the shared job
+event stream, polling where the stream drops: a reload or a return to the page
+picks it up again. A narrowed reader of the injected script's state is not given
+it, because the site it names may not be theirs. The bar shows only the site
+name and the counts, never `du` output or paths. A job record is kept for seven
+days; the repair hook prunes older ones and marks failed a job whose unit is
+gone, before it decides whether a sweep is due.

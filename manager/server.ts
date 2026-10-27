@@ -15,7 +15,7 @@ import { checkCliUpdate } from "../lib/update-check";
 import { GIT_HOOK_PREFIX, handleGitHook } from "../addons/git/app/hook";
 import { SIGN_IN_PREFIX, handleSignIn } from "../addons/security-keys/app/sign-in";
 import { handleManagerRoute } from "./index";
-import { latestManagerJobView } from "./service";
+import { latestManagerJobView, seenNews } from "./service";
 import { indexPage, updatePage } from "./views";
 
 function internalPath(path: string): string {
@@ -60,8 +60,9 @@ function mountedAddons(): string[] {
  * because the page it enhances is CloudPanel's own Sites page, which every
  * panel user sees; the action narrows the reply to the rows that page would
  * already have drawn for the caller. DNS's provision route is called from the
- * page a new site lands on, by whoever created it; the action refuses a site
- * that is not the caller's and answers with readiness only. Security Keys'
+ * page a new site lands on, by whoever created it, and its site route from the
+ * site's SSL/TLS page; the action refuses a site that is not the caller's and
+ * answers with readiness, or the zone and the nameservers it waits for, only. Security Keys'
  * routes are the caller's own keys, managed from CloudPanel's Security page;
  * the gateway reads whose they are from the session itself.
  */
@@ -71,6 +72,7 @@ const SELF_SCOPED_ROUTES = new Set([
   "GET /panel-tweaks/api/panel",
   "GET /dns/api/session",
   "POST /dns/api/provision",
+  "GET /dns/api/site",
   "GET /security-keys/api/keys",
   "POST /security-keys/api/register-options",
   "POST /security-keys/api/register",
@@ -151,9 +153,11 @@ export async function handleRequest(req: Request, server: Server<unknown>): Prom
     // process, and a page that still denied the addon existed would be
     // wrong for exactly as long as anybody was likely to look at it.
     const enabled = ADDON_NAMES.filter((name) => existsSync(ADDONS[name]!.configFile));
+    const [job, seen] = await Promise.all([latestManagerJobView(), seenNews()]);
     return indexPage(enabled, notice, {
       available: ADDON_NAMES.filter((name) => !enabled.includes(name)),
-      job: await latestManagerJobView(),
+      job,
+      seen,
       csrf: newCsrfToken(),
     });
   }

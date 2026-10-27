@@ -85,11 +85,17 @@ export const PHP_RESOURCES_ALLOWED_VERBS = new Set([
   "set-default",
 ]);
 
+/**
+ * A size measurement is `measure`d as a background job, which `job` and
+ * `watch-job` follow. `scan` and `run` are absent: the sweep is the repair
+ * timer's, and only the unit `measure` launched may run a job.
+ */
 export const PANEL_TWEAKS_ALLOWED_VERBS = new Set([
   "state",
   "set-tweaks",
-  "scan",
-  "scan-stream",
+  "measure",
+  "job",
+  "watch-job",
 ]);
 
 /**
@@ -106,21 +112,21 @@ export const SYSTEM_TWEAKS_ALLOWED_VERBS = new Set([
 ]);
 
 /**
- * Sign-in credentials, helper removal, optional Varnish installation and MainWP
- * enrollment each have fixed verbs; none accepts paths, plugin names or
- * arbitrary commands.
+ * Sign-in credentials, helper removal and the two policies' settings each have
+ * fixed verbs; checks, installations, MainWP connections and cleanup are
+ * `start`ed as background jobs of a fixed task list. None accepts paths,
+ * plugin names or arbitrary commands. `run` is absent for the reason the
+ * manager's is: only the unit `start` launched may run a job.
  */
 export const WP_TOOLS_ALLOWED_VERBS = new Set([
   "sites",
   "sign-in",
   "remove",
   "varnish-settings",
-  "varnish-install",
-  "varnish-sync",
   "mainwp-settings",
-  "mainwp-sync",
-  "mainwp-connect",
-  "mainwp-cleanup",
+  "start",
+  "job",
+  "watch-job",
 ]);
 
 export const CLOUDFLARE_IPS_ALLOWED_VERBS = new Set([
@@ -134,13 +140,14 @@ export const SMTP_ALLOWED_VERBS = new Set([
 ]);
 
 /**
- * `provision` admits ordinary panel users as well as site managers, and
- * carries `--as-user` so the action holds it to that account's own sites.
+ * `provision` and `site-status` admit ordinary panel users as well as site
+ * managers, and carry `--as-user` so the action holds them to that account's
+ * own sites.
  */
 export const DNS_ALLOWED_VERBS = new Set([
-  "list", "check", "save-profile", "delete-profile", "set-mode", "assign", "set-default", "confirm",
-  "save-connection", "remove-connection", "choose-zone", "save-mailcow", "save-server", "remove-records", "forget-records",
-  "provision",
+  "list", "check", "save-profile", "delete-profile", "set-automatic", "zone-account", "assign", "set-default", "confirm",
+  "save-connection", "remove-connection", "choose-zone", "save-mailcow", "remove-mailcow", "save-server", "remove-records", "forget-records",
+  "provision", "site-status",
 ]);
 
 /**
@@ -158,6 +165,10 @@ export const MANAGER_ALLOWED_VERBS = new Set([
   "update",
   "job",
   "watch-job",
+  // Which New and Changed badges an administrator has opened. The key is
+  // computed here from the addon name, so the page cannot record anything else.
+  "news-seen",
+  "mark-news-seen",
   // Rendering the panel's templates again. It belongs to the manager rather
   // than to an addon because one pass regenerates every addon's block in a
   // shared file; an addon that reconciled only its own would strip the others.
@@ -199,7 +210,7 @@ export const OWN_ACCOUNT_VERBS = new Set([
   "security-keys:remove",
 ]);
 
-export const STREAM_ALLOWED_VERBS = new Set(["watch-job", "scan-stream", "session"]);
+export const STREAM_ALLOWED_VERBS = new Set(["watch-job", "session"]);
 
 /**
  * The `addon:verb` pairs whose socket carries bytes both ways. Only these

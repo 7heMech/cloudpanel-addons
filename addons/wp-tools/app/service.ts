@@ -1,10 +1,13 @@
-import { callGatewayAction, type ActionResult } from "../../../lib/gateway-client";
+import { callGatewayAction, type ActionResult, type GatewayStream } from "../../../lib/gateway-client";
+import { watchGatewayJob, type JobWatcher } from "../../../lib/job-stream";
 import type { WpLoginResult, WpMaintenanceReply, WpBasicAuthReply, WpRemoveResult, WpSiteView } from "../action";
+import type { WpJobs, WpJobTask, WpJobView } from "../jobs";
 import { validateDomain } from "../../../lib/app-http";
-import type { MainwpView, MainwpResult } from "../mainwp";
-import type { WpVarnishState, VarnishSyncResult } from "../varnish";
+import type { MainwpView } from "../mainwp";
+import type { WpVarnishState } from "../varnish";
 
 export { validateDomain };
+export { validateJobId } from "../../../lib/job-id";
 
 /** `varnishError` is set when the Varnish settings cannot be read; sign-in still works. */
 export interface WpDashboard {
@@ -13,6 +16,8 @@ export interface WpDashboard {
   varnishError: string;
   mainwp: MainwpView;
   mainwpError: string;
+  /** The background job each policy is running, which the page follows. */
+  jobs: WpJobs;
 }
 
 function call<T>(verb: string, args: string[] = [], timeout?: number): Promise<ActionResult<T>> {
@@ -21,10 +26,8 @@ function call<T>(verb: string, args: string[] = [], timeout?: number): Promise<A
 
 /** Finding the WordPress sites means a stat of every site root on the box. */
 const LIST_TIMEOUT_MS = 60_000;
-/** A pass has a 90-second budget, after the lock and site discovery. */
-const PASS_TIMEOUT_MS = 120_000;
-/** A MainWP pass can end in an enrollment's own minute and the restore after it. */
-const MAINWP_TIMEOUT_MS = 210_000;
+/** Choosing a Dashboard on this server asks it once, for up to 30 seconds. */
+const SETTINGS_TIMEOUT_MS = 60_000;
 
 export const wpToolsService = {
   sites(): Promise<ActionResult<WpDashboard>> {
@@ -52,24 +55,23 @@ export const wpToolsService = {
 
   mainwpSettings(enabled: boolean, dashboard?: string, remote?: boolean): Promise<ActionResult<{ mainwp: MainwpView }>> {
     const choice = [...(dashboard === undefined ? [] : [`--dashboard=${dashboard}`]), ...(remote ? ["--remote=true"] : [])];
-    return call("mainwp-settings", [`--enabled=${enabled}`, ...choice], PASS_TIMEOUT_MS);
-  },
-  mainwpConnect(domain: string): Promise<ActionResult<MainwpResult>> {
-    return call("mainwp-connect", [`--domain=${domain}`, `--confirm=${domain}`], MAINWP_TIMEOUT_MS);
-  },
-  mainwpSync(): Promise<ActionResult<MainwpResult>> {
-    return call("mainwp-sync", [], MAINWP_TIMEOUT_MS);
-  },
-  mainwpCleanup(): Promise<ActionResult<MainwpResult>> {
-    return call("mainwp-cleanup", ["--confirm=mainwp"], MAINWP_TIMEOUT_MS);
+    return call("mainwp-settings", [`--enabled=${enabled}`, ...choice], SETTINGS_TIMEOUT_MS);
   },
   varnishSettings(enabled: boolean): Promise<ActionResult<{ varnish: WpVarnishState }>> {
     return call("varnish-settings", [`--enabled=${enabled}`]);
   },
-  varnishInstall(domain: string): Promise<ActionResult<VarnishSyncResult>> {
-    return call("varnish-install", [`--domain=${domain}`], PASS_TIMEOUT_MS);
+
+  // Checks, installations, connections and cleanup are background jobs; the
+  // reply is the recorded job, which the page then follows.
+  startJob(task: WpJobTask, domains: string[] = [], confirm?: string): Promise<ActionResult<{ job: WpJobView }>> {
+    return call("start", [
+      `--task=${task}`, ...(domains.length ? [`--domains=${domains.join(",")}`] : []), ...(confirm ? [`--confirm=${confirm}`] : []),
+    ]);
   },
-  varnishSync(): Promise<ActionResult<VarnishSyncResult>> {
-    return call("varnish-sync", [], PASS_TIMEOUT_MS);
+  getJob(id: string): Promise<ActionResult<{ job: WpJobView; log: string }>> {
+    return call("job", [`--job=${id}`]);
+  },
+  watchJob(id: string, handlers: Parameters<JobWatcher<WpJobView>>[1]): GatewayStream {
+    return watchGatewayJob<WpJobView>("wp-tools", id, handlers);
   },
 };
