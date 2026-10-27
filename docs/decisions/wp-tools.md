@@ -202,6 +202,26 @@ turned away after the bypass, as it would be after adding the address by hand.
 Maintenance's handling of forwarded addresses is described in
 [Maintenance Mode](maintenance.md).
 
+### On CloudPanel v3
+
+CloudPanel v3 has maintenance of its own: a site's status is Online,
+Maintenance or Offline, and its Maintenance section keeps an IP whitelist, each
+address with a description, beside the maintenance page's HTML. That replaces
+the Maintenance Mode addon, so on v3 the sign-in has to ask the panel's
+maintenance rather than the addon's. Everything above stays as it is: whether
+the browser's address would be turned away, the administrator's second click,
+minting before the address is added, and `--add-bypass` refused with
+`--as-user`. Only the source changes: the panel's status and whitelist in place
+of `maintenance.conf`, the flag files and `addBypass` from
+`addons/maintenance/action.ts`, and the address goes into the panel's whitelist
+with a description naming WordPress Tools, so the operator can tell it from one
+they added. The basic-auth check's list of includes it accepts in a vhost names
+`/etc/nginx/clp-addons-maintenance.conf` for the same reason, and takes whatever
+v3 includes for its own maintenance instead. Where v3 stores the status and the
+whitelist, and how it applies them in Nginx, has to be read from the released
+panel: the public preview at `dummy.cloudpanel.io` shows the page but not what
+the page writes.
+
 ## A site protected by basic authentication
 
 CloudPanel links `site.basic_auth_id` to `basic_auth`. Its `is_active` and
