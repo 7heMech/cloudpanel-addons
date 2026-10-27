@@ -8,8 +8,7 @@
  */
 import { Database } from "bun:sqlite";
 import { randomBytes } from "node:crypto";
-import { runCommand } from "../../cli/action-common";
-import { availableSiteUser } from "../../cli/action-common";
+import { availableSiteUser, runCommand } from "../../cli/action-common";
 import { replaceSiteVhost, type SiteVhostPaths } from "../../cli/site-vhost";
 import type { StandIn, StandIns } from "./engine";
 import type { Redirect } from "./model";

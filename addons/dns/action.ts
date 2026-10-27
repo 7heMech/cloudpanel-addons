@@ -30,7 +30,7 @@ import {
 } from "./model";
 import { PRESETS, seededPolicy, type Preset } from "./presets";
 import { describeRecord, renderProfile, sameRecord } from "./records";
-import { foundRedirect, REDIRECT_PHASE, type FoundRedirect } from "./redirects";
+import type { FoundRedirect } from "./redirects";
 import { clpctlStandIns, readStandIns, retryStandInCertificates, type StandInPaths } from "./stand-in";
 import { clpctlIssue, NEW_SITE_WINDOW, requestSsl, retryCertificates, type Issue, type SslRequest } from "./ssl";
 import { readState, writeState } from "./store";
