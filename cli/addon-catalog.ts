@@ -129,6 +129,23 @@ export const ADDONS: Record<string, AddonSpec> = Object.fromEntries(
 export const ADDON_NAMES: string[] = DEFINITIONS.map((definition) => definition.name);
 
 /** The addon's manager handler, or undefined when it mounts no routes. */
+/** What the Addons page says is new about an addon in the installed release line, keyed by that line. */
+export interface AddonNews {
+  kind: "new" | "changed";
+  /** `dns@2.0`: the operator who opens the addon has read it until a later line marks it again. */
+  key: string;
+  note?: string;
+}
+
+export function addonNews(name: string, version: string): AddonNews | null {
+  const spec = ADDONS[name];
+  if (!spec) return null;
+  const line = version.split(".").slice(0, 2).join(".");
+  if (spec.added === line) return { kind: "new", key: `${name}@${line}` };
+  if (spec.changed?.in === line) return { kind: "changed", key: `${name}@${line}`, note: spec.changed.note };
+  return null;
+}
+
 export function addonHandler(name: string): AddonHandler | undefined {
   return ADDONS[name]?.handler;
 }

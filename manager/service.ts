@@ -14,3 +14,9 @@ export async function latestManagerJobView(): Promise<ManagerJobView | null> {
   const result = await managerAction<{ job: ManagerJobView; log: string } | null>("job");
   return result.ok && result.data ? result.data.job : null;
 }
+
+/** The badges an administrator has opened; none when the gateway cannot say, so a badge shows rather than hides. */
+export async function seenNews(): Promise<string[]> {
+  const result = await managerAction<string[]>("news-seen");
+  return result.ok && Array.isArray(result.data) ? result.data : [];
+}

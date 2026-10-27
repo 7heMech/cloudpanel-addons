@@ -15,7 +15,7 @@ import { checkCliUpdate } from "../lib/update-check";
 import { GIT_HOOK_PREFIX, handleGitHook } from "../addons/git/app/hook";
 import { SIGN_IN_PREFIX, handleSignIn } from "../addons/security-keys/app/sign-in";
 import { handleManagerRoute } from "./index";
-import { latestManagerJobView } from "./service";
+import { latestManagerJobView, seenNews } from "./service";
 import { indexPage, updatePage } from "./views";
 
 function internalPath(path: string): string {
@@ -151,9 +151,11 @@ export async function handleRequest(req: Request, server: Server<unknown>): Prom
     // process, and a page that still denied the addon existed would be
     // wrong for exactly as long as anybody was likely to look at it.
     const enabled = ADDON_NAMES.filter((name) => existsSync(ADDONS[name]!.configFile));
+    const [job, seen] = await Promise.all([latestManagerJobView(), seenNews()]);
     return indexPage(enabled, notice, {
       available: ADDON_NAMES.filter((name) => !enabled.includes(name)),
-      job: await latestManagerJobView(),
+      job,
+      seen,
       csrf: newCsrfToken(),
     });
   }
