@@ -29,22 +29,25 @@ The Addons page is two lists, Enabled and Available, one row per addon with its
 one-line description and its buttons, so the whole catalog fits on a screen. A
 search above them keeps only the rows whose name and description contain every
 one of its words, and hides a list it empties. An
-addon's `added` version (`2.0.0-rc.1`, for example) marks it New only in that
-exact installed release. An existing addon's `changed.in` version marks it
-Changed on the same terms, with one line saying what changed; the rest is the
-changelog's, which the update page links. Release candidates and patch releases
-are distinct: updating drops older notices, even ones nobody opened. Only
-notices declared for the installed release appear. Opening the addon from its
-row clears its badge and note for that release, for every administrator and
-device: the box usually has one person who updates it, and a per-user record
-would need a panel identity for nothing. The page asks the manager's
-`mark-news-seen` verb, which takes only the
-addon name and works out the key (`dns@2.0.0-rc.1`) itself. It reads only keys
-for current notices from `manager/news-seen.json` under the state directory,
-discarding other keys when it records a new read. A later release that marks
-the addon again shows its new notice. The version comes from the running
-binary, so replacing it changes which notices are eligible without the updater
-deleting read state. Reinstalling the same version keeps read notices cleared.
+addon's `added` version (`2.0.0-rc.1`, for example) marks it New on a box
+whose previous release was older than that and whose installed release is not.
+An existing addon's `changed.in` version marks it Changed on the same terms,
+with one line saying what changed; the rest is the changelog's, which the update
+page links. So a box updated from 1.5.2 to 2.0.0 sees what every 2.0.0 release
+candidate declared, and one that already ran 2.0.0-rc.1 sees none of it. The
+previous release is `manager/news-since` under the state directory: an update
+writes the release it replaced, and `install --local` writes the one its
+artifact manifest named, or the installed release itself on a fresh install,
+where nothing is new to whoever installed it. A box without the file was updated
+from a release that kept none, so it sees every notice up to the installed one.
+Opening the addon from its row clears its badge and note, for every
+administrator and device: the box usually has one person who updates it, and a
+per-user record would need a panel identity for nothing. The page asks the
+manager's `mark-news-seen` verb, which takes only the addon name and works out
+the key (`dns@2.0.0-rc.1`, the release that declared the notice) itself. It
+reads only keys for notices still shown from `manager/news-seen.json`,
+discarding other keys when it records a new read. Reinstalling the same version
+changes neither file.
 
 ## One catalog, compiled in
 
