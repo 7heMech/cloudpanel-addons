@@ -149,13 +149,19 @@ export function storedVhost(panelDb: string, domain: string): string {
 
 const sqlLiteral = (value: string): string => `'${value.replaceAll("'", "''")}'`;
 
-/** Writes `body` as the site's vhost, in the panel and on disk; nginx rejecting it, or failing to reload, puts the old one back. */
-export function replaceSiteVhost(paths: SiteVhostPaths, domain: string, body: string): void {
+/**
+ * Writes `body` as the site's vhost, in the panel and on disk; nginx rejecting
+ * it, or failing to reload, puts the old one back. `rootDirectory`, relative to
+ * the site's `htdocs`, moves the site's root with it.
+ */
+export function replaceSiteVhost(paths: SiteVhostPaths, domain: string, body: string, rootDirectory?: string): void {
   const conf = join(paths.nginxVhostDir, `${domain}.conf`);
   const stored = storedVhost(paths.panelDb, domain);
   const previous = readFileSync(conf, "utf8");
   const learned = learnVhostMapContent(stored, previous);
   if (!learned.map) throw new Error(`the vhost of ${domain} could not be read: ${learned.reason}`);
+  const root = learned.map.get("root");
+  if (rootDirectory !== undefined && root) learned.map.set("root", root.replace(/\/htdocs\/[^;\s]*;/, `/htdocs/${rootDirectory};`));
   const rendered = renderVhostBodyResult(body, learned.map);
   if (rendered.value === null) throw new Error(`the vhost for ${domain} could not be written: ${rendered.reason}`);
 
@@ -167,7 +173,7 @@ export function replaceSiteVhost(paths: SiteVhostPaths, domain: string, body: st
     throw new Error(`nginx refused the vhost for ${domain}: ${checked.stderr.trim().split("\n").pop() ?? ""}`);
   }
   try {
-    writePanelVhost(paths, domain, body, stored);
+    writePanelVhost(paths, domain, body, stored, rootDirectory);
   } catch (error) {
     restore();
     throw error;
@@ -181,7 +187,7 @@ export function replaceSiteVhost(paths: SiteVhostPaths, domain: string, body: st
 }
 
 /** Through the panel's own user, so a journal left by a crash stays the panel's to recover; read back before it counts. */
-function writePanelVhost(paths: SiteVhostPaths, domain: string, body: string, expected: string): void {
+function writePanelVhost(paths: SiteVhostPaths, domain: string, body: string, expected: string, rootDirectory?: string): void {
   const stage = mkdtempSync(join(paths.tempDir, "clp-addons-vhost."));
   try {
     if (!runCommand("chown", ["root:clp", stage]).ok) throw new Error("the vhost could not be staged for the panel");
@@ -189,7 +195,8 @@ function writePanelVhost(paths: SiteVhostPaths, domain: string, body: string, ex
     const file = join(stage, "body");
     writeFileSync(file, body, { mode: 0o640 });
     if (!runCommand("chown", ["root:clp", file]).ok) throw new Error("the vhost could not be staged for the panel");
-    const statement = `PRAGMA busy_timeout=5000; UPDATE site SET vhost_template = CAST(readfile(${sqlLiteral(file)}) AS TEXT), updated_at = datetime('now')`
+    const root = rootDirectory === undefined ? "" : `, root_directory = ${sqlLiteral(rootDirectory)}`;
+    const statement = `PRAGMA busy_timeout=5000; UPDATE site SET vhost_template = CAST(readfile(${sqlLiteral(file)}) AS TEXT)${root}, updated_at = datetime('now')`
       + ` WHERE domain_name = ${sqlLiteral(domain)} AND vhost_template = CAST(X'${Buffer.from(expected).toString("hex")}' AS TEXT);`;
     const updated = runCommand("runuser", ["-u", "clp", "--", paths.sqlite3, paths.panelDb, statement]);
     if (!updated.ok || storedVhost(paths.panelDb, domain) !== body) throw new Error(`CloudPanel did not keep the vhost for ${domain}`);

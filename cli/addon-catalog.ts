@@ -27,6 +27,7 @@ import { STAGER_ADDON } from "../addons/stager/addon";
 import { SMTP_ADDON } from "../addons/smtp/addon";
 import { TERMINAL_ADDON } from "../addons/terminal/addon";
 import { SECURITY_KEYS_ADDON } from "../addons/security-keys/addon";
+import { ARCHIVE_ADDON } from "../addons/archive/addon";
 
 export type { AddonTarget };
 
@@ -113,6 +114,7 @@ const DEFINITIONS: AddonDefinition[] = [
   SMTP_ADDON,
   TERMINAL_ADDON,
   SECURITY_KEYS_ADDON,
+  ARCHIVE_ADDON,
 ];
 
 function specOf(definition: AddonDefinition): AddonSpec {

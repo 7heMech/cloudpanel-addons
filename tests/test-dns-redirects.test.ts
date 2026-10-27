@@ -285,7 +285,7 @@ describe("a site Archive Sites deleted", () => {
 
     env.sites.splice(0);
     expect((await env.act("list")).orphans).toEqual([expect.objectContaining({ domain: "awakeningcentre.bg" })]);
-    const result = await env.act<{ applied: boolean }>("archive-redirect", found("awakeningcentre.bg", "https://renaissance.bg"));
+    const result = await env.act<{ redirect: string; applied: boolean; reason: string }>("archive-redirect", found("awakeningcentre.bg", "https://renaissance.bg"));
     expect(result).toEqual({ redirect: "awakeningcentre.bg", applied: true, reason: "" });
     const state = await env.act("list");
     expect(state.orphans).toEqual([]);
