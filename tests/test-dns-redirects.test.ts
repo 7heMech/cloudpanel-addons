@@ -1,5 +1,6 @@
 import { afterEach, describe, expect, test } from "bun:test";
-import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { Database } from "bun:sqlite";
+import { chmodSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { executeDnsAction, type DnsReply } from "../addons/dns/action";
@@ -7,7 +8,8 @@ import type { PanelSite, StandIn, StandIns } from "../addons/dns/engine";
 import { seededPolicy } from "../addons/dns/presets";
 import { renderRedirect, type SiteVars } from "../addons/dns/records";
 import { foundRedirect, redirectRef, redirectRuleState, wholeHostHosts } from "../addons/dns/redirects";
-import { standInBody } from "../addons/dns/stand-in";
+import { clpctlStandIns, readStandIns, standInBody, type StandInPaths } from "../addons/dns/stand-in";
+import { isStandInSite, ownsStandInSite } from "../cli/stand-ins";
 import type { CfRule } from "../addons/dns/cloudflare";
 import type { Redirect } from "../addons/dns/model";
 import { FakeCloudflare, FakeMailcow, hexId, MAILCOW_KEY, routed } from "./fixtures/dns-api";
@@ -272,29 +274,6 @@ describe("taking over the redirects Terraform left", () => {
   });
 });
 
-describe("a site Archive Sites deleted", () => {
-  test("becomes a redirect at once with the profile it had, and its records are not offered for removal", async () => {
-    const env = setup();
-    terraformZone(env.cf, env.account, "awakeningcentre.bg", "https://renaissance.bg");
-    env.cf.rulesets.clear();
-    env.sites.push({ id: 7, domain: "awakeningcentre.bg", type: "php", createdAt: 0, selfSigned: false, cloudflareOnly: false });
-    await env.act("save-connection", { token: TOKEN });
-    await env.act("assign", { domains: ["awakeningcentre.bg"], profileId: "web" });
-    await env.automatic();
-    expect((await env.act("list")).orphans).toEqual([]);
-
-    env.sites.splice(0);
-    expect((await env.act("list")).orphans).toEqual([expect.objectContaining({ domain: "awakeningcentre.bg" })]);
-    const result = await env.act<{ redirect: string; applied: boolean; reason: string }>("archive-redirect", found("awakeningcentre.bg", "https://renaissance.bg"));
-    expect(result).toEqual({ redirect: "awakeningcentre.bg", applied: true, reason: "" });
-    const state = await env.act("list");
-    expect(state.orphans).toEqual([]);
-    expect(state.sites).toEqual([expect.objectContaining({ domain: "awakeningcentre.bg", profileId: "web", plan: expect.objectContaining({ changes: [] }) })]);
-    expect(env.redirectRules("awakeningcentre.bg")).toHaveLength(1);
-    expect(state.log[0]).toMatchObject({ cause: "Archived site" });
-  });
-});
-
 describe("reading rules", () => {
   test("whole-host expressions are read with or without Let's Encrypt's path, and nothing else is", () => {
     expect(wholeHostHosts(`${apexHosts("newyou.bg")}${ACME}`)).toEqual(["newyou.bg", "www.newyou.bg"]);
@@ -427,9 +406,65 @@ describe("stand-in sites on this server", () => {
     expect(body(true, false)).not.toContain("$uri\"");
     expect(body(false, true)).toContain('return 301 "https://maksimasenov.com$is_args$args";');
     expect(body(false, false)).toContain('return 301 "https://maksimasenov.com";');
+    expect(standInBody("old.example", { target: "https://shop.example/?ref=old", status: 301, keepPath: false, keepQuery: true }))
+      .toContain('return 301 "https://shop.example/?ref=old&$args";');
     expect(body(true, true)).toContain("server_name thepastormax.com www.thepastormax.com;");
     expect(body(true, true)).toContain("location ^~ /.well-known/acme-challenge/ {");
     expect(standInBody("tv.ren.ss", { target: "https://tv.renaissancechurch.com", status: 302, keepPath: true, keepQuery: true }))
       .toContain("server_name tv.ren.ss;");
   });
 });
+
+describe("stand-in sites in CloudPanel", () => {
+  function setup(sites: Record<string, { id: number; user: string }>, clpctlExit = 0) {
+    const dir = mkdtempSync(join(tmpdir(), "dns-stand-ins-"));
+    dirs.push(dir);
+    const clpctl = join(dir, "clpctl");
+    writeFileSync(clpctl, `#!/bin/sh\necho "$1" >> ${join(dir, "calls")}\nexit ${clpctlExit}\n`);
+    chmodSync(clpctl, 0o755);
+    const paths: StandInPaths = {
+      file: join(dir, "standins.json"), clpctl, rootUid: process.getuid!(),
+      vhost: { panelDb: join(dir, "db.sq3"), sqlite3: "sqlite3", nginxVhostDir: dir, tempDir: dir },
+    };
+    const db = new Database(paths.vhost.panelDb);
+    db.run("CREATE TABLE site (user TEXT)");
+    db.close();
+    const record = (siteUser: string, siteId: number) => ({
+      target: "https://hazon.bg", status: 301, keepPath: true, keepQuery: true, siteUser, siteId, createdAt: 0,
+      certificate: { attempts: 0, nextAt: 0, done: false },
+    });
+    writeFileSync(paths.file, JSON.stringify({ "hazon.uk": record("hazon", 7), "old.example": record("old", 8) }), { mode: 0o600 });
+    const standIns = clpctlStandIns(paths, (domain) => sites[domain], () => 0);
+    const calls = () => { try { return readFileSync(join(dir, "calls"), "utf8"); } catch { return ""; } };
+    return { paths, standIns, calls };
+  }
+  const redirect = (source: string): Redirect => ({ source, target: "https://hazon.bg", status: 301, keepPath: true, keepQuery: true, profileId: null });
+
+  test("a site later added at a stand-in's domain is not the stand-in, and is never deleted or overwritten", async () => {
+    const { paths, standIns, calls } = setup({ "hazon.uk": { id: 7, user: "hazon" }, "old.example": { id: 12, user: "old" } });
+    expect(Object.keys(standIns.current)).toEqual(["hazon.uk"]);
+    await expect(standIns.create(redirect("old.example"))).rejects.toThrow("CloudPanel already has a site old.example");
+    await expect(standIns.update(redirect("old.example"))).rejects.toThrow("no longer DNS's stand-in site");
+    await standIns.remove("old.example");
+    expect(calls()).toBe("");
+    expect(Object.keys(readStandIns(paths))).toEqual(["hazon.uk"]);
+  });
+
+  test("a creation CloudPanel refuses deletes nothing, since someone else may have taken the domain meanwhile", async () => {
+    const { paths, standIns, calls } = setup({}, 1);
+    await expect(standIns.create(redirect("new.example"))).rejects.toThrow("CloudPanel did not create new.example");
+    expect(calls()).toBe("site:add:static\n");
+    expect(readStandIns(paths)["new.example"]).toBeUndefined();
+  });
+
+  test("a record without a site id hides its site only while it is being created, and never lets DNS delete it", () => {
+    const mark = { siteUser: "hazon", createdAt: 1_000_000 };
+    const site = { id: 7, user: "hazon" };
+    expect(isStandInSite(mark, site, 1_000_000 + 60_000)).toBe(true);
+    expect(isStandInSite(mark, site, 1_000_000 + 60 * 60_000)).toBe(false);
+    expect(ownsStandInSite(mark, site)).toBe(false);
+    expect(ownsStandInSite({ ...mark, siteId: 7 }, site)).toBe(true);
+    expect(ownsStandInSite({ ...mark, siteId: 7 }, { id: 8, user: "hazon" })).toBe(false);
+  });
+});
+

@@ -141,6 +141,22 @@ export function recordNewsSince(previous: string | null, file = NEWS_SINCE_FILE,
   }
 }
 
+/** Puts the record back as it was now, for an update that rolls back. */
+export function keepNewsSince(file = NEWS_SINCE_FILE): () => void {
+  let kept: string | null = null;
+  try {
+    kept = readFileSync(file, "utf-8");
+  } catch { /* none yet */ }
+  return () => {
+    try {
+      if (kept === null) rmSync(file, { force: true });
+      else writeAtomic(file, kept, 0o644);
+    } catch (error) {
+      log.warn(`could not restore the release the Addons page badges start after: ${message(error)}`);
+    }
+  };
+}
+
 /**
  * The badges already opened that still mean something: a key for a notice no
  * longer shown, or a name no longer in the catalog, is dropped, so the file

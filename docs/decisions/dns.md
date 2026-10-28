@@ -180,7 +180,8 @@ deletes its rule; its records stay, for a site's profile to replace.
 With no Cloudflare connection, nothing in Cloudflare is DNS's, so a redirect is
 served from this server: a CloudPanel static site whose vhost returns the
 redirect for the source and, for a registrable domain, its `www`, and serves
-`/.well-known/acme-challenge/` from the site's root. The body is written to the
+`/.well-known/acme-challenge/` from the site's root; a target with a query
+string gets the request's after `&`. The body is written to the
 panel database as well as nginx (`cli/site-vhost.ts`), since CloudPanel renders
 the file again from it, as it does when a certificate is installed. Each
 reconcile pass asks Let's Encrypt, through `clpctl`, for a stand-in still on
@@ -190,8 +191,15 @@ since the domain may be pointed here at any time. A stand-in is a write
 like any other: it waits for Automatic, is logged, and a profile assigned to it
 waits for a connection.
 
-`standins.json` records each one before CloudPanel creates it, so the
-new-site work of every addon already sees it. DNS, Stager, Maintenance, SMTP
+`standins.json` records each one with its site user before CloudPanel creates
+it, so the new-site work of every addon already sees it, and adds CloudPanel's
+site id once the site exists. A record counts only while the panel site at its
+domain has that user and id, or that user for the few minutes it is being
+created (`cli/stand-ins.ts`): a site added there after the stand-in was deleted
+in CloudPanel is an ordinary site. DNS changes or deletes only a site whose id
+it recorded, even when creating one fails, and makes no stand-in where a site
+already exists.
+DNS, Stager, Maintenance, SMTP
 Relay and Cloudflare IP Access leave stand-ins out of their site lists, PHP
 Resources and WordPress Tools never list a static site, and Panel Tweaks shows
 "Redirect" as its runtime on the Sites page. Global maintenance mode reaches a
@@ -202,15 +210,6 @@ last one holds every redirect: its whole plan waits until it is reviewed, like
 a held new site, so a move between Cloudflare and this server is seen first. Once its rule and records are in and its zone is active, the
 stand-in site is deleted. Deleting a redirect domain deletes its stand-in at
 once.
-
-### Archived sites
-
-Archive Sites calls the `archive-redirect` verb after deleting a site. The
-redirect takes the profile the site had, and its records stop being the
-deleted site's, so neither Remove records nor Keep is offered for them. Like a
-new site, a plan that only changes the domain's own names -- the rule, its
-placeholders, a stand-in -- is applied at once when DNS is Automatic; one that
-reaches further is held for a review.
 
 ## Cloudflare connections
 
@@ -376,8 +375,8 @@ created, a record created, updated or deleted, a zone setting or rule, a
 redirect rule, a Mailcow domain, DKIM key or sender list, a stand-in site -- is
 logged once it succeeds, with the time, the sites it was
 for, the zone, what it was before where that is known, and what made it: a
-scheduled check, Check now, a new site, a confirmed review, Remove records, a
-deleted redirect or an archived site.
+scheduled check, Check now, a new site, a confirmed review, Remove records or a
+deleted redirect.
 Each run collects its writes and they are saved before the page's reply and
 again when the action ends, so writes made before a failure are kept. The log
 is the newest thousand writes; the page shows the newest ten and the rest of

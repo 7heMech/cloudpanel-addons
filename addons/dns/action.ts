@@ -31,6 +31,7 @@ import {
 import { PRESETS, seededPolicy, type Preset } from "./presets";
 import { describeRecord, renderProfile, sameRecord } from "./records";
 import type { FoundRedirect } from "./redirects";
+import { isStandInSite } from "../../cli/stand-ins";
 import { clpctlStandIns, readStandIns, retryStandInCertificates, type StandInPaths } from "./stand-in";
 import { clpctlIssue, NEW_SITE_WINDOW, requestSsl, retryCertificates, type Issue, type SslRequest } from "./ssl";
 import { readState, writeState } from "./store";
@@ -38,11 +39,11 @@ import { tokenTemplate, type TokenTemplate } from "./token";
 
 export type DnsVerb = "list" | "check" | "save-profile" | "delete-profile" | "set-automatic" | "zone-account" | "assign" | "set-default" | "confirm"
   | "save-connection" | "remove-connection" | "choose-zone" | "save-mailcow" | "remove-mailcow" | "save-server" | "remove-records" | "forget-records"
-  | "save-redirect" | "delete-redirect" | "find-redirects" | "take-over" | "archive-redirect" | "provision" | "site-status" | "reconcile" | "sync-sites";
+  | "save-redirect" | "delete-redirect" | "find-redirects" | "take-over" | "provision" | "site-status" | "reconcile" | "sync-sites";
 
 const VERBS: DnsVerb[] = ["list", "check", "save-profile", "delete-profile", "set-automatic", "zone-account", "assign", "set-default", "confirm",
   "save-connection", "remove-connection", "choose-zone", "save-mailcow", "remove-mailcow", "save-server", "remove-records", "forget-records",
-  "save-redirect", "delete-redirect", "find-redirects", "take-over", "archive-redirect", "provision", "site-status", "reconcile", "sync-sites"];
+  "save-redirect", "delete-redirect", "find-redirects", "take-over", "provision", "site-status", "reconcile", "sync-sites"];
 const NO_BODY: DnsVerb[] = ["list", "check", "find-redirects", "provision", "site-status", "reconcile", "sync-sites"];
 const MAX_BODY = 256 * 1024;
 const REVIEW_LIFETIME = 15 * 60_000;
@@ -292,8 +293,8 @@ export function panelSites(panelDb: string): PanelSite[] {
     db.exec("PRAGMA busy_timeout = 5000");
     const site = columns(db, "site");
     const certificate = site.has("certificate_id") && columns(db, "certificate").has("type");
-    const rows = db.query<{ id: number; domain_name: string; type: string; created_at: string | null; cf: number | null; cert: string | null }, []>(
-      `SELECT s.id, s.domain_name, s.type,
+    const rows = db.query<{ id: number; domain_name: string; type: string; created_at: string | null; cf: number | null; cert: string | null; user: string | null }, []>(
+      `SELECT s.id, s.domain_name, s.type, ${site.has("user") ? "s.user" : "NULL"} AS user,
               ${site.has("created_at") ? "s.created_at" : "NULL"} AS created_at,
               ${site.has("allow_traffic_from_cloudflare_only") ? "s.allow_traffic_from_cloudflare_only" : "0"} AS cf,
               ${certificate ? "c.type" : "NULL"} AS cert
@@ -309,7 +310,7 @@ export function panelSites(panelDb: string): PanelSite[] {
         continue;
       }
       sites.push({
-        id: Number(row.id), domain, type: String(row.type), createdAt: panelTime(row.created_at),
+        id: Number(row.id), domain, type: String(row.type), ...(row.user ? { user: row.user } : {}), createdAt: panelTime(row.created_at),
         selfSigned: String(row.cert) === SELF_SIGNED, cloudflareOnly: Boolean(row.cf),
       });
     }
@@ -347,8 +348,9 @@ class Action {
 
   /** CloudPanel's sites, without the stand-ins that serve redirects. */
   sites(fresh = false): PanelSite[] {
-    const standIns = new Set([...Object.keys(readStandIns(this.standInPaths())), ...Object.keys(this.standIns().current)]);
-    return this.panelSites(fresh).filter((site) => !standIns.has(site.domain));
+    const records = readStandIns(this.standInPaths());
+    const current = this.standIns().current;
+    return this.panelSites(fresh).filter((site) => !current[site.domain] && !isStandInSite(records[site.domain], site, this.now));
   }
 
   standInPaths(): StandInPaths {
@@ -358,7 +360,7 @@ class Action {
 
   standIns(): StandIns {
     this.cachedStandIns ??= this.options.standIns?.()
-      ?? clpctlStandIns(this.standInPaths(), (domain) => this.panelSites(true).some((site) => site.domain === domain), () => Date.now());
+      ?? clpctlStandIns(this.standInPaths(), (domain) => this.panelSites(true).find((site) => site.domain === domain), () => Date.now());
     return this.cachedStandIns;
   }
 
@@ -665,7 +667,8 @@ class Action {
   /** Run in the periodic pass only: a certificate request can take minutes. */
   async retryStandInCertificates(): Promise<void> {
     if (this.options.standIns) return;
-    const selfSigned = (domain: string) => this.panelSites(true).find((site) => site.domain === domain)?.selfSigned ?? null;
+    const current = this.standIns().current;
+    const selfSigned = (domain: string) => (current[domain] ? this.panelSites(true).find((site) => site.domain === domain)?.selfSigned ?? null : null);
     await retryStandInCertificates(this.standInPaths(), selfSigned, this.options.issue ?? clpctlIssue(this.paths.clpctl), Date.now());
   }
 
@@ -962,7 +965,7 @@ class Action {
   // -------------------------------------------------------------------------
 
   private refuseSite(source: string): void {
-    if (this.sites().some((site) => site.domain === source)) failAction(`${source} is a CloudPanel site; archive or delete the site first`);
+    if (this.sites().some((site) => site.domain === source)) failAction(`${source} is a CloudPanel site; delete the site first`);
   }
 
   async saveRedirect(body: Record<string, unknown>): Promise<DnsReply> {
@@ -1057,52 +1060,6 @@ class Action {
     const found = await run.findRedirects();
     const taken = new Set([...policy.redirects.map((redirect) => redirect.source), ...this.sites().map((site) => site.domain)]);
     return this.reply({ found: { redirects: found.redirects.filter((redirect) => !taken.has(redirect.source)), notes: found.notes } });
-  }
-
-  /**
-   * A site Archive Sites just deleted, made a redirect with the profile it had.
-   * Like a new site, what it changes at its own names -- the rule, the
-   * placeholders, a stand-in -- is written at once once DNS is Automatic; a
-   * plan that reaches further waits for a review.
-   */
-  async archiveRedirect(body: Record<string, unknown>): Promise<{ redirect: string; applied: boolean; reason: string }> {
-    const policy = this.files.policy();
-    const ids = new Set(policy.profiles.map((profile) => profile.id));
-    const source = hostname(body.source, "The redirect's domain");
-    const redirect = parseRedirect({ ...body, profileId: policy.assignments[source] ?? null }, ids);
-    this.refuseSite(redirect.source);
-    const next = structuredClone(policy);
-    next.redirects = parseRedirects([...next.redirects.filter((candidate) => candidate.source !== source), redirect], ids);
-    delete next.assignments[source];
-    if (!next.automatic) {
-      this.savePolicy(next);
-      await this.tryRefresh([source]);
-      return { redirect: source, applied: false, reason: "DNS asks first, so nothing is written until it is Automatic" };
-    }
-    next.held = [...new Set([...next.held, source])];
-    this.savePolicy(next);
-    const run = this.run(next);
-    await run.discover();
-    await run.load([source]);
-    const plan = run.planAll().find((candidate) => candidate.domain === source)!;
-    const own = new Set([source, `www.${source}`]);
-    const ownName = (change: SitePlan["changes"][number]) => change.action === "note" || ["Cloudflare redirect rule", "Stand-in site"].includes(change.subject)
-      || (/^(A|AAAA|CNAME) /.test(change.subject) && own.has(change.subject.split(" ")[1]!));
-    if (plan.problems.length || !plan.changes.every(ownName)) {
-      this.record(run, run.planAll(), [source]);
-      return { redirect: source, applied: false, reason: plan.problems[0] ?? "Its plan changes more than its own names; review it on the DNS page" };
-    }
-    next.held = next.held.filter((domain) => domain !== source);
-    this.savePolicy(next);
-    this.cause = "Archived site";
-    const write = this.run(next);
-    await write.discover();
-    await write.load([source]);
-    await write.enforce([source]);
-    const after = write.planAll();
-    this.record(write, after, [source]);
-    const problems = after.find((candidate) => candidate.domain === source)?.problems ?? [];
-    return { redirect: source, applied: !problems.length, reason: problems[0] ?? "" };
   }
 
   /** Adds several redirect domains at once, such as the rules another tool left in Cloudflare. */
@@ -1272,7 +1229,7 @@ export async function executeDnsAction(argv: string[], options: DnsActionOptions
 
   mkdirSync(dirname(paths.lockFile), { recursive: true, mode: 0o700 });
   // Long enough for a check of the whole fleet; a page action waits less and says so.
-  const wait = verb === "reconcile" || verb === "sync-sites" || verb === "provision" || verb === "archive-redirect" ? 240 : 30;
+  const wait = verb === "reconcile" || verb === "sync-sites" || verb === "provision" ? 240 : 30;
   return withFileLock(paths.lockFile, wait, "DNS is busy checking Cloudflare; try again in a moment", async () => {
     if ((verb === "reconcile" || verb === "sync-sites") && !existsSync(paths.configFile)) return { checked: 0, joined: [] };
     let failed = false;
@@ -1337,8 +1294,6 @@ async function perform(
       return action.findRedirects();
     case "take-over":
       return action.takeOver(body);
-    case "archive-redirect":
-      return action.archiveRedirect(body);
     case "forget-records": {
       const domain = hostname(body.domain, "the site");
       const managed = action.files.managed();

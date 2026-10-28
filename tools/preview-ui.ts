@@ -12,8 +12,6 @@ import { dashboardView as phpResourcesDashboardView, layout as phpResourcesLayou
 import { dashboardView as smtpDashboardView, layout as smtpLayout } from "../addons/smtp/app/views";
 import type { SmtpState } from "../addons/smtp/action";
 import { dashboardView as dnsDashboardView, layout as dnsLayout } from "../addons/dns/app/views";
-import { dashboardView as archiveDashboardView, layout as archiveLayout } from "../addons/archive/app/views";
-import type { ArchiveState } from "../addons/archive/action";
 import type { DnsState, Review as DnsReview } from "../addons/dns/action";
 import type { SitePlan as DnsSitePlan } from "../addons/dns/engine";
 import type { Redirect as DnsRedirect } from "../addons/dns/model";
@@ -177,38 +175,6 @@ const DNS_PREVIEW_FOUND = {
     dnsFoundRule("examplebooks.net", "https://example.com/books")],
   notes: ["3 zones could not be read: Cloudflare: the token lacks Single Redirect: Edit for this zone; add it to the token in Cloudflare (Authentication error (10000))"],
 };
-
-function archivePreviewState(url: URL): ArchiveState {
-  const archived = (domain: string, days: number, extra: Partial<ArchiveState["archives"][number]> = {}): ArchiveState["archives"][number] => {
-    const at = new Date(Date.now() - days * 86_400_000).toISOString();
-    return {
-      version: 1, id: `${domain}--${at.replace(/[-:]/g, "").replace(/\.\d+Z$/, "Z")}`, domain, archivedAt: at, type: "php", application: "WordPress",
-      siteUser: domain.split(".")[0]!, rootDirectory: domain, phpVersion: "8.3", nodejsVersion: "", pythonVersion: "", appPort: null, reverseProxyUrl: "",
-      databases: [`${domain.split(".")[0]}_wp`], sshUsers: [], ftpUsers: [], cronJobs: [], bytes: 412 * 1024 * 1024, redirect: null, ...extra,
-    };
-  };
-  return {
-    sites: [
-      { domain: "example.com", type: "php", application: "WordPress", databases: 1, blocked: "" },
-      { domain: "shop.example.com", type: "php", application: "WooCommerce", databases: 1, blocked: "" },
-      { domain: "docs.example.com", type: "static", application: "Static", databases: 0, blocked: "" },
-      { domain: "pages.example.com", type: "reverse-proxy", application: "ReverseProxy", databases: 0, blocked: "Instatic keeps its own final archive when it deletes a site; delete it there" },
-      { domain: "api.example.com", type: "nodejs", application: "Node.js", databases: 0, blocked: "" },
-    ],
-    archives: [
-      archived("spring-campaign.example.org", 3, { redirect: { target: "https://example.org/campaigns", applied: true, reason: "" } }),
-      archived("old-brand.example.net", 41, { type: "static", application: "Static", databases: [], bytes: 18 * 1024 * 1024, restoredAt: new Date(Date.now() - 12 * 86_400_000).toISOString() }),
-    ],
-    dns: true,
-    job: url.searchParams.has("job")
-      ? { id: "20261027T101500Z-ab12cd", task: "archive", targets: ["example.com", "shop.example.com"], state: "running", step: "Packing the site's files", error: "", completed: 0, total: 2, site: "example.com", result: null }
-      : null,
-    lastJob: url.searchParams.has("job") ? null : {
-      id: "20261024T101500Z-ab12cd", task: "archive", targets: ["spring-campaign.example.org"], state: "done", step: "Finished", error: "", completed: 1, total: 1, site: "",
-      result: { done: ["spring-campaign.example.org"], failed: [], notes: [] },
-    },
-  };
-}
 
 function dnsPreviewReview(state: DnsState): DnsReview {
   const sites = state.sites.filter((site) => site.plan).map((site) => ({ ...site.plan!, problems: [], zoneChoices: [] }));
@@ -1632,7 +1598,7 @@ const server = Bun.serve({
           }
         : null;
       const page = indexPage(enabled, notice, {
-        available: ["cloudflare-ips", "dns", "instatic", "stager", "maintenance", "php-resources", "git", "panel-tweaks", "system-tweaks", "wp-tools", "smtp", "terminal", "security-keys", "archive"].filter((name) => !enabled.includes(name)),
+        available: ["cloudflare-ips", "dns", "instatic", "stager", "maintenance", "php-resources", "git", "panel-tweaks", "system-tweaks", "wp-tools", "smtp", "terminal", "security-keys"].filter((name) => !enabled.includes(name)),
         job: previewJob,
         csrf: "preview-csrf-token",
         version: "2.0.0",
@@ -1744,12 +1710,6 @@ const server = Bun.serve({
         : url.searchParams.has("test") ? `smtpOpenTest(${arg("test")})` : "";
       html = smtpLayout("SMTP Relay", smtpDashboardView(smtpPreviewState(url)), notice)
         .replace("</body>", () => opener ? `<script>addEventListener("DOMContentLoaded",function(){${opener}})</script></body>` : "</body>");
-    } else if (path === "/addons/archive/" || path === "/addons/archive") {
-      // ?job shows an archive running, ?dialog the archive dialog for two selected sites.
-      html = archiveLayout("Archive Sites", archiveDashboardView(archivePreviewState(url)), notice)
-        .replace("</body>", () => url.searchParams.has("dialog")
-          ? `<script>addEventListener("DOMContentLoaded",function(){document.querySelectorAll(".site-checkbox:not(:disabled)").forEach(function(box,i){if(i<2)box.checked=true});paintFleetSelection();archiveOpen()})</script></body>`
-          : "</body>");
     } else if (path === "/addons/security-keys/" || path === "/addons/security-keys") {
       // ?hardware-only turns synced passkeys off; ?admins-only leaves one role on and ?no-roles none.
       html = securityKeysLayout("Security Keys", securityKeysDashboardView({

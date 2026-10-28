@@ -25,6 +25,8 @@ export interface PanelSite {
   id: number;
   domain: string;
   type: string;
+  /** Its site user; absent for a redirect domain. */
+  user?: string;
   /** When CloudPanel created it, in milliseconds. */
   createdAt: number;
   /** Still on the self-signed certificate CloudPanel creates a site with. */

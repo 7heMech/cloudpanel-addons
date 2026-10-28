@@ -16,4 +16,3 @@
 - [WordPress Tools](decisions/wp-tools.md)
 - [Terminal](decisions/terminal.md)
 - [Security Keys](decisions/security-keys.md)
-- [Archive Sites](decisions/archive.md)

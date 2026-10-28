@@ -39,7 +39,6 @@ When it finishes, open the new **Addons** tab in CloudPanel.
 | [WordPress Tools](docs/wordpress-tools.md) | One-click WordPress sign-in, optional CLP Varnish Cache installation and MainWP Child enrollment. |
 | Terminal | A shell as a site's own user, in its own window, for administrators. |
 | Security Keys | Sign in with a passkey or a hardware key such as a YubiKey instead of a password and two-factor code, for the roles an administrator allows. Needs the panel on a hostname with a valid certificate. |
-| Archive Sites | A final backup of a site, then the site deleted, restorable from the archive; optionally its domain becomes a redirect. |
 
 Only CloudPanel administrators see the Addons tab. Site managers can also use
 Git Deploy and create and manage Instatic sites. Other panel users get Panel
@@ -60,8 +59,8 @@ security keys under Account → Security, in the roles an administrator allows.
 | `clp-addons uninstall <addon> --yes` | Remove an addon and keep its data. |
 
 Addon names are `cloudflare-ips`, `dns`, `instatic`, `stager`, `maintenance`,
-`php-resources`, `git`, `panel-tweaks`, `system-tweaks`, `wp-tools`, `smtp`, `terminal`,
-`security-keys`, and `archive`. Run
+`php-resources`, `git`, `panel-tweaks`, `system-tweaks`, `wp-tools`, `smtp`, `terminal`
+and `security-keys`. Run
 `clp-addons --help` for version selection and data removal options.
 
 See [Instatic backup and restore](docs/instatic-backups.md) for CloudPanel Remote
