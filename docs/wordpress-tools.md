@@ -56,38 +56,43 @@ which plugins were removed on purpose.
 
 Under **Automation**, choose a **MainWP Dashboard**, a WordPress site on this
 server with MainWP active. The table then gets a MainWP column. Turn on
-**Install and connect MainWP Child automatically** to connect new sites. For a
-Dashboard on another server, see below.
+**Keep every site connected to MainWP** to connect every WordPress site to it
+and keep it connected. For a Dashboard on another server, see below.
 
-Every 15 minutes the repair timer queues a background pass to install,
-activate and connect MainWP Child on new WordPress sites as each site's first
-administrator. No user is created and no password is changed. A site the
-Dashboard cannot reach over HTTPS with a valid certificate shows **Waiting for
-HTTPS** and is tried again on the next pass. A firewall, Cloudflare-only rule or
-maintenance page blocks it too; allow the server's own address. **Check now**
-refreshes every site and, with automation on, connects new ones at once.
+Every 15 minutes the repair timer queues a background pass that installs,
+activates and connects MainWP Child on each WordPress site as its first
+administrator. No user is created and no password is changed. A Child connected
+to another Dashboard is moved to this one, and one deactivated, disconnected or
+deleted is put back; a site the Dashboard already lists keeps its record, groups
+and notes. A must-use plugin, `clp-addons-mainwp.php`, hides MainWP Child from
+the site's Plugins list and stops its administrators deactivating or
+disconnecting it. A site the Dashboard cannot reach over HTTPS with a valid
+certificate shows **Waiting for HTTPS** and is tried again on the next pass. A
+firewall, Cloudflare-only rule or maintenance page blocks it too; allow the
+server's own address. **Check now** refreshes every site and, with automation
+on, connects them at once.
 
-A site that already has MainWP Child shows **Connect** instead; nothing connects
-it automatically, since that Child may be meant for another Dashboard. To
-connect several sites at once, tick them and choose **Connect selected to
-MainWP**, or choose **Connect all unconnected**. Sites already connected are
-left as they are. A Child connected to another Dashboard must be disconnected in
-MainWP first. A Child removed after a check is never installed again
-automatically; **Connect** puts it back. **Retry** repeats a failed connection.
-The Dashboard's own site and multisite networks are left alone.
+With automation off, a site is connected only when you choose it: **Connect** on
+its row, or tick several and choose **Connect selected to MainWP**, or **Connect
+all unconnected**. These also move a Child from another Dashboard. Sites already
+connected are left as they are. **Retry** repeats a failed connection. The
+Dashboard's own site and multisite networks are left alone.
 
-Turning automation off leaves every connection in place. **Turn off and clean
-up…** removes what WordPress Tools added: the Dashboard records it created, with
-their keys and cookies; MainWP Child where it installed it, with its settings,
-tables, scheduled events and an otherwise empty uploads folder; and, on a Child
-you had installed, the connection, Security ID and activation it changed. That
-plugin and its other settings stay. Connections you made, or anyone made since,
-are left alone. **Cleanup pending** means a site or the Dashboard needs
-attention; fix it and retry. Cleanup does not undo work done through MainWP or
-end WordPress sessions it opened.
+Turning automation off leaves every connection in place, and the next passes
+take the must-use plugin out. **Turn off and clean up…** removes what WordPress
+Tools added: the Dashboard records it created, with their keys and cookies;
+MainWP Child where it installed it, with its settings, tables, scheduled events
+and an otherwise empty uploads folder; and, on a Child you had installed, the
+connection, Security ID and activation it changed. That plugin and its other
+settings stay; a Child taken from another Dashboard is left disconnected, not
+handed back. Connections you made, including Dashboard records it reconnected,
+or anyone made since, are left alone, though a Child it installed for one is
+removed. **Cleanup pending** means a site or the
+Dashboard needs attention; fix it and retry. Cleanup does not undo work done
+through MainWP or end WordPress sessions it opened.
 
-Disabling or uninstalling WordPress Tools leaves MainWP connections in place;
-clean up first to remove them. Both refuse while an interrupted connection's
+Disabling or uninstalling WordPress Tools leaves MainWP connections in place and
+removes the must-use plugin; clean up first to remove the connections. Both refuse while an interrupted connection's
 temporary authentication setting needs recovery. Run `clp-addons repair wp-tools`
 and let its background pass finish before retrying. If the page reports that
 `/var/lib/clp-addons/wp-tools/mainwp.json` cannot be read, sign-in and Varnish

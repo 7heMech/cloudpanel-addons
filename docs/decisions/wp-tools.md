@@ -117,11 +117,12 @@ each cell. A site that has not been checked shows Not checked and no button:
 until a check says the plugin is missing or inactive, Install is a guess, and
 the same holds for MainWP's Connect. With a Dashboard on this server the table
 also gets a selection column and **Connect selected to MainWP** and **Connect
-all unconnected** above it, for sites checked or not; see Background jobs. The two automation policies are set once, so they share one card
-below the table. A row has no automation switch of its own: automation acts
-only on a site it has never seen, so a listed site has normally been handled by
-a pass already, and removing the plugin in WordPress keeps a site out, since a
-removed plugin is never put back. The
+all unconnected** above it, for sites checked or not; see Background jobs. On a
+phone the heading's selection count sits under it, with Select all beside both,
+and the two batch buttons share the next line under shorter labels. The two automation policies are set once, so they share one card
+below the table. A row has no automation switch of its own: Varnish automation
+acts only on a site it has never seen, so a listed site has normally been
+handled by a pass already, and MainWP automation acts on every site. The
 page draws only controls that do something: the MainWP column and switch
 appear once a Dashboard is chosen, here or on another server; until then the
 card holds only the picker, plus cleanup while Child plugins the addon
@@ -361,6 +362,11 @@ Interrupted children are recovered first, within the pass budget and before
 querying the Dashboard. A successful recovery is journaled as `restored`, so an
 unavailable Dashboard cannot prevent disable or uninstall once authentication
 is safe.
+A site the Dashboard already has a record for is reconnected through MainWP's
+own reconnect rather than removed and added again, so the record keeps its id,
+groups, tags and client. The adapter gives the record the new Security ID and
+the child's administrator first, which is all the Child checks while that
+administrator's password requirement is off.
 MainWP stores "use the global setting" for a new record's certificate check, so
 the adapter sets it to verify. It also cuts MainWP's request timeout to 20
 seconds, so registration fails inside the addon's deadline instead of being
@@ -380,22 +386,42 @@ before each step that changes the site. The page gets a projection without
 snapshots, IDs or keys. Connected means the child's and the Dashboard's
 public-key fingerprints match; with no claim, that connection is the operator's.
 
-Automation installs only a Child that is absent and never seen, and with a
-Dashboard on this server that automation also connects it: installing and
-connecting are one step, since a Child installed for this Dashboard and left
-unconnected would only switch itself off. It does not extend to a site that
-already has a Child, connected or not. That Child is someone's: it may be
-waiting for a Dashboard elsewhere, or have been disconnected on purpose, and
-connecting it would take it over. So an installed Child is marked seen and
-needs Connect, as does a site whose existing connection or Dashboard record
-needs the operator; batch connection is how to choose many at once. An attempt whose readback
-shows nothing changed and no Dashboard record gives up its claim and is retried
-on the next pass, like a failed Varnish download. Otherwise the claim stays and
-Retry resumes it, undoing first its own registration the Dashboard never
-recorded. A phase left by a crash is reported as interrupted, after its setting
-is restored.
+With a Dashboard on this server, automation is enforcement: every pass keeps
+every site connected to that Dashboard, whatever happened to its Child since.
+The server's sites are the operator's fleet, and a site that drifts out of the
+Dashboard unnoticed is the failure this exists to prevent. Installing and
+connecting are one step, since a Child left unconnected would only switch
+itself off. A Child connected to another Dashboard, or holding a key no
+Dashboard has any more, is disconnected the way the Child's own Disconnect does
+and connected here; so is one the operator chooses with Connect while automation
+is off. A takeover whose registration does not land gives the Child back the
+connection it had. Turning automation on, or choosing a Dashboard with it on, asks first,
+since it takes sites from any other Dashboard. An attempt whose readback shows
+nothing changed and no Dashboard record gives up its claim and is retried on
+the next pass, like a failed Varnish download. Otherwise the claim stays, and
+the next pass or Retry resumes it, undoing first its own registration the
+Dashboard never recorded. With automation off, a phase left by a crash is
+reported as interrupted, after its setting is restored.
 
-Cleanup acts on a child only if its key is the recorded one, comes from the
+A connected site gets a guard, `clp-addons-mainwp.php` in `mu-plugins`, written
+and removed as the site's user through the adapter. It hides MainWP Child from
+the Plugins list, refuses `deactivate_plugin` for it, removes the Child's
+settings page and drops its Disconnect post, so a site administrator cannot
+undo the connection between passes. A site whose `wp-config.php` moves the
+must-use folder reports that instead, since the guard would not load. WP-CLI and the Dashboard's own requests are
+unaffected, so checks see the site as it is. The guard is beside the Child, not
+the Child itself as a must-use plugin: the Child sets itself up in an activation
+hook and finds its own path in the plugins directory, and WordPress does not
+update must-use plugins, so the Dashboard could no longer update it. Deletion
+over SSH or SFTP is not something WordPress can stop; the next pass puts the
+Child back. Once nothing enforces the connection -- automation paused, cleanup,
+a Dashboard elsewhere or none usable -- the next passes remove each guard. Withdrawing the
+addon removes them without WordPress, as it removes the sign-in helper.
+
+A connection the addon takes over is never in its snapshot, so cleanup leaves
+that Child disconnected rather than handing it back to the other Dashboard. A
+Dashboard record it reconnected was the operator's and stays theirs, so cleanup
+leaves it; only a Child the addon installed for it is removed, as anywhere else. Cleanup acts on a child only if its key is the recorded one, comes from the
 addon's Security ID, or is gone. A Child someone has connected since is left as
 it is and only forgotten. Where the addon installed the plugin, cleanup deletes
 it and restores every MainWP option (`mainwp_`, `wp_mainwp_` and their
@@ -436,9 +462,10 @@ since. Moving to a Dashboard elsewhere requires cleaning up the connections the
 addon made; moving back does not, since an installed Child belongs to no
 Dashboard.
 
-MainWP has its own lock, separate from Varnish and sign-in. The queued pass
-looks only at unseen sites, unfinished phases, pending cleanup and retired
-records, and starts sites for 25 seconds; Check now, connections and cleanup
+MainWP has its own lock, separate from Varnish and sign-in. While enforcing,
+the queued pass looks at every site, least recently checked first; otherwise
+only at unseen sites, unfinished phases, guards to remove, pending cleanup and
+retired records. It starts sites for 25 seconds; Check now, connections and cleanup
 run as background jobs. An enrollment that has started gets up to a minute, so
 the budget never stops registration part-way. A pass asks the Dashboard about
 at most 64 sites, least recently checked first; a job plans every due site up
@@ -449,16 +476,16 @@ cleanup then finishes on the children.
 
 Connecting several sites is one job over the chosen domains, or over every
 site the page counts as unconnected: not the Dashboard, not connected, not a
-multisite network. A site that turns out to be connected already is recorded
-and left alone. Each site is still its own enrollment with its own claim and
+multisite network. A site that turns out to be connected to this Dashboard
+already is recorded and left alone. Each site is still its own enrollment with its own claim and
 recovery, so one failure does not stop the rest. Batch connection is offered
 only for a Dashboard on this server: one elsewhere has to add each site itself
 within the Child's connection timeout, so activating many at once would only
 start their timers together.
 
 The switch only pauses automation. Disabling or uninstalling leaves the
-connections, as it leaves the Varnish plugin, and refuses only while an
-enrollment stopped before its temporary setting was restored. `--purge`
+connections, as it leaves the Varnish plugin, removes the guards, and refuses
+only while an enrollment stopped before its temporary setting was restored. `--purge`
 forgets which connections the addon made.
 
 ## Background jobs

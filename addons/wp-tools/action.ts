@@ -37,7 +37,7 @@ import {
   type VarnishRun, type VarnishSiteRecord, type VarnishOptions, type VarnishSyncResult, type WpVarnishState,
 } from "./varnish";
 import {
-  emptyMainwpState, mainwpAction, mainwpNeedsRepair, mainwpView, readMainwpState, syncMainwp, syncMainwpAll, type MainwpResult, type MainwpRun,
+  MAINWP_GUARD_FILE, emptyMainwpState, mainwpAction, mainwpNeedsRepair, mainwpView, readMainwpState, syncMainwp, syncMainwpAll, type MainwpResult, type MainwpRun,
 } from "./mainwp";
 import {
   JOB_BUDGET_MS, MAX_JOB_DOMAINS, WP_JOB_TASKS, activeWpJobs, policyOf, runWpJob, startWpJob, wpJobView,
@@ -582,6 +582,27 @@ export function removeWpLogin(paths: WpToolsActionPaths = DEFAULT_WP_TOOLS_PATHS
       removed++;
     } catch (error) {
       failed.push(`${site.row.domain_name}: ${error instanceof Error ? error.message : String(error)}`);
+    }
+  }
+  return { removed, failed };
+}
+
+/**
+ * Take the MainWP guard out of every site that has it. Withdrawing the addon
+ * runs this: nothing would enforce the connection any more, and a Child no one
+ * can deactivate or see would be left behind.
+ */
+export function removeMainwpGuards(paths: WpToolsActionPaths = DEFAULT_WP_TOOLS_PATHS): WpRemoveResult {
+  let removed = 0;
+  const failed: string[] = [];
+  for (const site of resolvedSites(paths)) {
+    const guard = join(site.root, MAINWP_GUARD_FILE);
+    if (!existsSync(guard)) continue;
+    try {
+      runAsSite(paths, site.account, ["rm", "-f", "--", guard]);
+      removed++;
+    } catch (error) {
+      failed.push(`${site.row.domain_name}: ${reason(error)}`);
     }
   }
   return { removed, failed };

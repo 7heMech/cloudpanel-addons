@@ -218,20 +218,41 @@ async function removeHelpers() {
   });
 }
 
+function confirmEnforcement(dashboard) {
+  return confirmAction({
+    title: 'Keep every site connected to MainWP?',
+    text: 'Every WordPress site on this server is connected to ' + dashboard + ', including sites connected to another Dashboard, and kept that way. Site administrators can no longer see, deactivate or disconnect MainWP Child.',
+    confirmLabel: 'Turn on',
+  });
+}
+
 async function setMainwpAutomatic(input) {
   const enabled = input.checked;
+  const picker = CLP_ROOT.getElementById('mainwp-dashboard');
+  const local = picker && picker.value !== '@remote';
+  if (enabled && local && !await confirmEnforcement(picker.value)) {
+    input.checked = false;
+    return;
+  }
   if (!await change('/api/mainwp-settings', { enabled: enabled }, function () {
     return { text: enabled
       ? 'MainWP automation is on. Sites are checked every 15 minutes, or now with Check now.'
-      : 'MainWP automation is off. Connected sites stay connected.' };
+      : local
+        ? 'MainWP automation is off. Connected sites stay connected, and MainWP Child shows in their Plugins again after the next check.'
+        : 'MainWP automation is off. Connected sites stay connected.' };
   })) input.checked = !enabled;
 }
 
-function setMainwpDashboard(select) {
+async function setMainwpDashboard(select) {
   if (!select.value) return;
   const automatic = CLP_ROOT.getElementById('mainwp-automatic');
   const enabled = Boolean(automatic && automatic.checked);
   const remote = select.value === '@remote';
+  if (enabled && !remote && !await confirmEnforcement(select.value)) {
+    const current = select.querySelector('option[selected]');
+    select.value = current ? current.value : '';
+    return;
+  }
   change('/api/mainwp-settings', remote ? { enabled: enabled, remote: true } : { enabled: enabled, dashboard: select.value }, function () {
     return { text: remote
       ? 'MainWP Child will be installed for a Dashboard on another server. Use Check now to see each site\'s MainWP Child.'
@@ -260,7 +281,7 @@ async function connectMainwp(button) {
     confirmLabel: button.textContent,
   } : {
     title: button.textContent + ' ' + domain + ' to MainWP?',
-    text: 'MainWP Child is installed from WordPress.org if it is missing, activated, and connected as the site\'s first administrator. The Dashboard can then manage the site.',
+    text: 'MainWP Child is installed from WordPress.org if it is missing, activated, and connected as the site\'s first administrator, replacing any connection to another Dashboard. The Dashboard can then manage the site.',
     confirmLabel: button.textContent,
   });
   if (!agreed) return;
@@ -270,7 +291,7 @@ async function connectMainwp(button) {
 async function connectMainwpSites(domains) {
   const agreed = await confirmAction({
     title: 'Connect ' + plural(domains.length, 'site') + ' to MainWP?',
-    text: 'On each site, MainWP Child is installed from WordPress.org if it is missing, activated, and connected as the site\'s first administrator. Sites already connected are left as they are. The Dashboard can then manage them.',
+    text: 'On each site, MainWP Child is installed from WordPress.org if it is missing, activated, and connected as the site\'s first administrator, replacing any connection to another Dashboard. Sites already connected here are left as they are.',
     confirmLabel: 'Connect',
   });
   if (!agreed) return;

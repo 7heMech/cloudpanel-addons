@@ -299,7 +299,9 @@ source authentication.
 
 Enrollment deliberately gives one administrator-chosen Dashboard administrative
 control of each connected site: a compromised Dashboard can run PHP as every
-connected site's user. A child receives only its own Security ID and the
+connected site's user. With automation on that is every site on the server,
+including one a site owner had connected to another Dashboard, and the guard
+stops site administrators undoing it; the page asks before turning it on. A child receives only its own Security ID and the
 Dashboard's public key. Child and Dashboard code run as their own site users
 through the shared WP-CLI runner, and root only validates their marked replies.
 A child's administrator login reaches the Dashboard only if it matches
