@@ -172,8 +172,10 @@ keep path and keep query string, and a selection is added in one change, which
 once Automatic is one review.
 
 Deleting a redirect domain while DNS asks first stops managing it. Once
-Automatic, a redirect Cloudflare serves is deleted through a review that
-deletes its rule; its records stay, for a site's profile to replace.
+Automatic, a connected Cloudflare is checked for a rule even while a stand-in
+still serves the domain. A rule is deleted through a review; its records stay,
+for a site's profile to replace. A stand-in stays until that deletion is
+confirmed, and a rule conflict blocks both deletions.
 
 ### Stand-in sites
 
@@ -198,7 +200,9 @@ domain has that user and id, or that user for the few minutes it is being
 created (`cli/stand-ins.ts`): a site added there after the stand-in was deleted
 in CloudPanel is an ordinary site. DNS changes or deletes only a site whose id
 it recorded, even when creating one fails, and makes no stand-in where a site
-already exists.
+already exists. If creation fails and CloudPanel also refuses to delete the
+site, DNS keeps its ownership record so a later deletion can still identify
+the site, and reports both failures.
 DNS, Stager, Maintenance, SMTP
 Relay and Cloudflare IP Access leave stand-ins out of their site lists, PHP
 Resources and WordPress Tools never list a static site, and Panel Tweaks shows
@@ -209,7 +213,8 @@ Adding a connection holds every redirect a stand-in serves, and removing the
 last one holds every redirect: its whole plan waits until it is reviewed, like
 a held new site, so a move between Cloudflare and this server is seen first. Once its rule and records are in and its zone is active, the
 stand-in site is deleted. Deleting a redirect domain deletes its stand-in at
-once.
+once unless a Cloudflare rule needs a review first; then confirming the review
+deletes both.
 
 ## Cloudflare connections
 

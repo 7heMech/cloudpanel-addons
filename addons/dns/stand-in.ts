@@ -136,7 +136,12 @@ export function clpctlStandIns(
         replaceSiteVhost(paths.vhost, redirect.source, standInBody(redirect.source, redirect));
       } catch (error) {
         if (siteId !== null && panelSite(redirect.source)?.id === siteId) {
-          runCommand(paths.clpctl, ["site:delete", `--domainName=${redirect.source}`, "--force"], 300_000);
+          try {
+            clpctl(paths, ["site:delete", `--domainName=${redirect.source}`, "--force"],
+              `CloudPanel did not clean up ${redirect.source}; its stand-in record was kept`);
+          } catch (cleanupError) {
+            throw new Error(`${error instanceof Error ? error.message : String(error)}; ${cleanupError instanceof Error ? cleanupError.message : String(cleanupError)}`);
+          }
         }
         const after = readStandIns(paths);
         delete after[redirect.source];

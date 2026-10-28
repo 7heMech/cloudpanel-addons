@@ -996,16 +996,16 @@ class Action {
   }
 
   /**
-   * Once DNS is Automatic, a redirect Cloudflare serves is deleted with its
-   * rule, through a review; its records stay, for a site's profile to replace.
-   * Otherwise at once: Ask first writes nothing, and a stand-in serves nothing else.
+   * Once DNS is Automatic, check Cloudflare for a rule even while a stand-in
+   * serves the redirect. A rule is deleted through a review, with the stand-in;
+   * its records stay, for a site's profile to replace.
    */
   async deleteRedirect(source: string): Promise<DnsReply> {
     const policy = this.files.policy();
     if (!policy.redirects.some((redirect) => redirect.source === source)) failAction("That redirect no longer exists");
     const standIns = this.standIns();
     const standIn = standIns.current[source];
-    if (!standIn && policy.automatic && policy.connections.length) {
+    if (policy.automatic && policy.connections.length) {
       const { plans } = await this.redirectDeletion(source);
       if (plans[0]!.changes.length || plans[0]!.problems.length) {
         const token = plans[0]!.problems.length ? "" : randomBytes(24).toString("hex");
@@ -1013,7 +1013,7 @@ class Action {
         return this.reply({
           review: {
             token, title: `Delete the redirect for ${source}`,
-            text: token ? `Its rule is deleted from Cloudflare, so ${source} stops redirecting. Its records stay until a site's profile replaces them.`
+            text: token ? `Its rule is deleted from Cloudflare, so ${source} stops redirecting. ${standIn ? "Its stand-in site is deleted too. " : ""}Its records stay until a site's profile replaces them.`
               : "This cannot be deleted while its rule cannot be read. Fix the problem, or delete the rule in Cloudflare.",
             sites: plans, blocked: !token, confirmLabel: "Delete redirect", danger: true,
           },

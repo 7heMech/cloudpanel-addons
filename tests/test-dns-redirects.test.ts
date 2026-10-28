@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, test } from "bun:test";
 import { Database } from "bun:sqlite";
-import { chmodSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { chmodSync, existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { executeDnsAction, type DnsReply } from "../addons/dns/action";
@@ -398,6 +398,45 @@ describe("stand-in sites on this server", () => {
     expect(reply.sites).toEqual([]);
   });
 
+  test("deleting a held stand-in reviews its existing Cloudflare rule before removing either", async () => {
+    const env = setup();
+    await env.automatic();
+    await env.confirmed(await env.act("save-redirect", found("hazon.uk", "https://hazon.bg")));
+    terraformZone(env.cf, env.account, "hazon.uk", "https://hazon.bg");
+    await env.act("save-connection", { token: TOKEN });
+
+    const reply = await env.act("delete-redirect", { source: "hazon.uk" });
+    expect(reply.review).toMatchObject({ blocked: false, confirmLabel: "Delete redirect" });
+    expect(reply.review!.text).toContain("Its stand-in site is deleted too.");
+    expect(reply.review!.sites[0]!.changes).toContainEqual(expect.objectContaining({ action: "delete", subject: "Cloudflare redirect rule" }));
+    expect(env.standIns.calls).toEqual(["create hazon.uk"]);
+    expect(env.redirectRules("hazon.uk")).toHaveLength(1);
+    expect((await env.act("list")).sites[0]).toMatchObject({ domain: "hazon.uk", redirect: { standIn: true } });
+
+    const deleted = await env.act("confirm", { token: reply.review!.token });
+    expect(env.redirectRules("hazon.uk")).toEqual([]);
+    expect(env.standIns.calls).toEqual(["create hazon.uk", "remove hazon.uk"]);
+    expect(env.sites).toEqual([]);
+    expect(deleted.sites).toEqual([]);
+    expect(deleted.log.slice(0, 2).map((entry) => entry.subject).sort()).toEqual(["Cloudflare redirect rule", "Stand-in site"]);
+  });
+
+  test("a Cloudflare rule conflict also blocks deleting the stand-in and its policy", async () => {
+    const env = setup();
+    await env.automatic();
+    await env.confirmed(await env.act("save-redirect", found("hazon.uk", "https://hazon.bg")));
+    terraformZone(env.cf, env.account, "hazon.uk", "https://hazon.bg");
+    env.redirectRules("hazon.uk").push(terraformRule(apexHosts("hazon.uk"), "https://other.example"));
+    await env.act("save-connection", { token: TOKEN });
+
+    const reply = await env.act("delete-redirect", { source: "hazon.uk" });
+    expect(reply.review).toMatchObject({ blocked: true, token: "" });
+    expect(reply.review!.sites[0]!.problems.join(" ")).toContain("2 redirect rules");
+    expect(env.standIns.calls).toEqual(["create hazon.uk"]);
+    expect(env.redirectRules("hazon.uk")).toHaveLength(2);
+    expect((await env.act("list")).sites[0]).toMatchObject({ domain: "hazon.uk", redirect: { standIn: true } });
+  });
+
   test("answer the redirect and Let's Encrypt, for the source and its www", () => {
     const body = (keepPath: boolean, keepQuery: boolean) =>
       standInBody("thepastormax.com", { target: "https://maksimasenov.com", status: 301, keepPath, keepQuery });
@@ -427,7 +466,7 @@ describe("stand-in sites in CloudPanel", () => {
       vhost: { panelDb: join(dir, "db.sq3"), sqlite3: "sqlite3", nginxVhostDir: dir, tempDir: dir },
     };
     const db = new Database(paths.vhost.panelDb);
-    db.run("CREATE TABLE site (user TEXT)");
+    db.run("CREATE TABLE site (user TEXT, domain_name TEXT, vhost_template TEXT)");
     db.close();
     const record = (siteUser: string, siteId: number) => ({
       target: "https://hazon.bg", status: 301, keepPath: true, keepQuery: true, siteUser, siteId, createdAt: 0,
@@ -454,6 +493,40 @@ describe("stand-in sites in CloudPanel", () => {
     const { paths, standIns, calls } = setup({}, 1);
     await expect(standIns.create(redirect("new.example"))).rejects.toThrow("CloudPanel did not create new.example");
     expect(calls()).toBe("site:add:static\n");
+    expect(readStandIns(paths)["new.example"]).toBeUndefined();
+  });
+
+  test("failed creation cleanup retains ownership until the site can be deleted on a later run", async () => {
+    const { paths, calls } = setup({});
+    const created = join(paths.vhost.tempDir, "created-user");
+    const refuseDelete = join(paths.vhost.tempDir, "refuse-delete");
+    writeFileSync(refuseDelete, "");
+    writeFileSync(paths.clpctl, `#!/bin/sh
+echo "$1" >> ${join(paths.vhost.tempDir, "calls")}
+case "$1" in
+  site:add:static)
+    for arg in "$@"; do
+      case "$arg" in --siteUser=*) printf '%s' "\${arg#--siteUser=}" > ${created} ;; esac
+    done ;;
+  site:delete)
+    if [ -e ${refuseDelete} ]; then echo 'fixture deletion failure' >&2; exit 1; fi
+    rm -f ${created} ;;
+esac
+`);
+    const panelSite = (domain: string) => domain === "new.example" && existsSync(created)
+      ? { id: 9, user: readFileSync(created, "utf8") } : undefined;
+    const standIns = clpctlStandIns(paths, panelSite, () => 0);
+    await expect(standIns.create(redirect("new.example"))).rejects.toThrow(/CloudPanel has no vhost stored for new.example;.*fixture deletion failure/);
+    expect(calls()).toBe("site:add:static\nsite:delete\n");
+    expect(readStandIns(paths)["new.example"]).toMatchObject({ siteId: 9, siteUser: panelSite("new.example")!.user });
+
+    const retry = clpctlStandIns(paths, panelSite, () => 0);
+    expect(retry.current["new.example"]).toBeDefined();
+    await expect(retry.remove("new.example")).rejects.toThrow("fixture deletion failure");
+    expect(readStandIns(paths)["new.example"]?.siteId).toBe(9);
+    rmSync(refuseDelete);
+    await retry.remove("new.example");
+    expect(panelSite("new.example")).toBeUndefined();
     expect(readStandIns(paths)["new.example"]).toBeUndefined();
   });
 

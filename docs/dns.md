@@ -84,8 +84,10 @@ mail, and confirm the review. Each rule is updated in place; DNS never adds a
 second one beside it.
 
 Deleting a redirect domain once DNS is Automatic deletes its rule after a
-review; its records stay until a site's profile replaces them. To turn a site
-into a redirect, delete it in CloudPanel first.
+review; its records stay until a site's profile replaces them. If it also has
+a stand-in site on this server, that site stays until you confirm the review,
+then is deleted too. To turn a site into a redirect, delete it in CloudPanel
+first.
 
 ## Leaving Terraform
 
