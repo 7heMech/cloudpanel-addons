@@ -42,7 +42,7 @@ When it finishes, open the new **Addons** tab in CloudPanel.
 
 Only CloudPanel administrators see the Addons tab. Site managers can also use
 Git Deploy and create and manage Instatic sites. Other panel users get Panel
-Tweaks' site search, columns and CSV download and the WP Login links on the
+Tweaks' site search, columns and CSV download and WordPress sign-in from the
 Sites page and site pages, for their own sites. Panel users add their own
 security keys under Account → Security, in the roles an administrator allows.
 

@@ -382,7 +382,7 @@ test("Varnish routes remain administrator-only", async () => {
 });
 
 test("the WordPress Tools page emits a valid script with sign-in and Varnish actions", () => {
-  const html = layout("WordPress Tools", dashboardView({ sites: [], varnish: { enabled: false, sites: {} }, varnishError: "", mainwp: mainwpView(emptyMainwpState()), mainwpError: "", jobs: { varnish: null, mainwp: null } }));
+  const html = layout("WordPress Tools", dashboardView({ sites: [], varnish: { enabled: false, sites: {} }, varnishError: "", mainwp: mainwpView(emptyMainwpState()), mainwpError: "", domainLink: { signIn: true }, domainLinkError: "", jobs: { varnish: null, mainwp: null } }));
   for (const source of html.matchAll(/<script[^>]*>([\s\S]*?)<\/script>/g)) expect(() => new Function(source[1]!)).not.toThrow();
   expect(html).toContain("/api/sign-in");
   expect(html).toContain("/api/varnish-settings");

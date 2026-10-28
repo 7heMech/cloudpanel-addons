@@ -8,7 +8,7 @@ import {
   type WpBasicAuthReply, type WpToolsActionOptions, type WpLoginResult, type WpMaintenanceReply, type WpRemoveResult, type WpSiteView,
 } from "../addons/wp-tools/action";
 import { DEFAULT_MAINTENANCE_ACTION_PATHS } from "../addons/maintenance/action";
-import { WP_TOOLS_TARGETS } from "../addons/wp-tools/inject/targets";
+import { WP_TOOLS_TARGETS, siteInfoSnippet } from "../addons/wp-tools/inject/targets";
 import { ROW_ACTION_CLASS } from "../lib/row-actions";
 
 const scriptTarget = WP_TOOLS_TARGETS.find((target) => target.slug === "sites-script")!;
@@ -61,17 +61,34 @@ const SITE_INFO = `<div class="site-info-container">
 test("the site pages' link sits after the Domain link, with its own script", () => {
   const anchor = siteInfoTarget.anchorAfter!;
   expect(SITE_INFO.split(anchor).length).toBe(2);
-  // Inside the Domain box, after the panel's own link, which keeps opening the site.
+  // Inside the Domain box, after the panel's own link.
   const at = SITE_INFO.indexOf(anchor) + anchor.length;
   expect(SITE_INFO.slice(0, at)).toContain('class="view-site-link"');
   expect(SITE_INFO.slice(at)).toMatch(/^\n    <\/div>/);
 
-  const block = siteInfoTarget.snippet("/addons/wp-tools");
-  expect(block).not.toContain("is_granted");
-  expect(block).toContain('data-clp-domain="{{ site.domainName }}"');
-  for (const application of WORDPRESS_APPLICATIONS) expect(block).toContain(`'${application}'`);
-  // The partial is rendered once per page, so the script rides with the link.
-  expect(block).toContain("/addons/wp-tools/api/sign-in");
+  for (const signIn of [true, false]) {
+    const block = siteInfoSnippet("/addons/wp-tools", signIn);
+    expect(block).not.toContain("is_granted");
+    expect(block).toContain('data-clp-domain="{{ site.domainName }}"');
+    for (const application of WORDPRESS_APPLICATIONS) expect(block).toContain(`'${application}'`);
+    // The partial is rendered once per page, so the script rides with the link.
+    expect(block).toContain("/addons/wp-tools/api/sign-in");
+  }
+});
+
+test("the domain signs in by default, keeping the site's address for a modified click", () => {
+  const domain = siteInfoSnippet("/addons/wp-tools", true);
+  // The panel's own link is hidden by a rule, never rewritten.
+  expect(domain).toContain(".site-info-value > a.view-site-link:not(.clp-wp-tools) { display: none; }");
+  expect(domain).toContain('<a href="https://{{ site.domainName }}" class="clp-wp-tools clp-wp-tools-domain view-site-link"');
+  expect(domain).not.toContain("WP Login");
+  expect(domain).toContain("event.ctrlKey || event.metaKey");
+
+  // Off, the panel's link stays and WP Login goes beside it.
+  const beside = siteInfoSnippet("/addons/wp-tools", false);
+  expect(beside).not.toContain("display: none");
+  expect(beside).toContain('<a href="#" class="clp-wp-tools view-site-link"');
+  expect(beside).toContain("WP Login");
 });
 
 // No block may stop an install: the addon's own page signs in to the same
@@ -114,6 +131,7 @@ function options(extra: Partial<WpToolsActionOptions> = {}): WpToolsActionOption
       },
       varnishState: join(root, "varnish.json"),
       varnishLockFile: join(root, "wp-varnish.lock"),
+      domainLinkState: join(root, "domain-link.json"),
     },
     ...extra,
   };
@@ -207,6 +225,23 @@ test("the site list is what is on disk, not what the panel's application column 
   const { sites } = await act<{ sites: WpSiteView[] }>(["sites"]);
   expect(sites.map((site) => site.domain)).toEqual(["blog.example.com", "shop.example.com"]);
   expect(sites.every((site) => site.helper === false)).toBe(true);
+});
+
+test("the domain link signs in until it is switched off, and only while the addon is enabled", async () => {
+  expect((await act<{ domainLink: { signIn: boolean } }>(["sites"])).domainLink).toEqual({ signIn: true });
+  expect(await act<unknown>(["domain-link-settings", "--enabled=false"])).toEqual({ domainLink: { signIn: false } });
+  expect(await act<{ domainLink: { signIn: boolean }; domainLinkError: string }>(["sites"]))
+    .toMatchObject({ domainLink: { signIn: false }, domainLinkError: "" });
+  await expect(act(["domain-link-settings"])).rejects.toThrow("invalid --enabled");
+  await expect(act(["domain-link-settings", "--enabled=true", "--domain=shop.example.com"])).rejects.toThrow("takes no --domain");
+
+  // Unreadable, the page says so and shows the default rather than failing.
+  writeFileSync(join(root, "domain-link.json"), "{}");
+  expect(await act<{ domainLink: { signIn: boolean }; domainLinkError: string }>(["sites"]))
+    .toMatchObject({ domainLink: { signIn: true }, domainLinkError: expect.stringContaining("is invalid") });
+
+  rmSync(join(root, "wp-tools.conf"));
+  await expect(act(["domain-link-settings", "--enabled=true"])).rejects.toThrow("must be enabled");
 });
 
 // A non-administrator's request names itself, and the action holds it to the

@@ -107,7 +107,7 @@ export async function handle(
     return json(result, result.ok ? 200 : 400);
   }
 
-  if (path.startsWith("/api/mainwp-") || path.startsWith("/api/varnish-")) {
+  if (path.startsWith("/api/mainwp-") || path.startsWith("/api/varnish-") || path === "/api/domain-link") {
     // Only sign-in and its CSRF bootstrap are exceptions to the manager's
     // administrator gate. Keep that boundary explicit here as well.
     if (!auth?.roles.includes("ROLE_ADMIN")) return json({ ok: false, error: "not found" }, 404);
@@ -125,6 +125,15 @@ export async function handle(
     } else if (path === "/api/varnish-settings") {
       if (typeof body.enabled !== "boolean") return json({ ok: false, error: "enabled must be true or false" }, 400);
       result = await wpToolsService.varnishSettings(body.enabled);
+    } else if (path === "/api/domain-link") {
+      if (typeof body.signIn !== "boolean") return json({ ok: false, error: "signIn must be true or false" }, 400);
+      result = await wpToolsService.domainLinkSettings(body.signIn);
+      if (!result.ok) return json(result, 400);
+      // The setting is saved either way; say so if the panel still shows the old link.
+      const rendered = await wpToolsService.renderPanelTemplates();
+      if (!rendered.ok) {
+        return json({ ok: false, error: rendered.error ?? "the CloudPanel templates could not be updated", data: result.data }, 500);
+      }
     } else if (path === "/api/varnish-sync") result = await wpToolsService.startJob("varnish-check");
     else if (path === "/api/mainwp-sync") result = await wpToolsService.startJob("mainwp-check");
     else if (path === "/api/varnish-install") {

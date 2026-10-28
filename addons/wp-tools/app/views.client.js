@@ -121,6 +121,15 @@ async function setAutomatic(input) {
   })) input.checked = !enabled;
 }
 
+async function setDomainLink(input) {
+  const signIn = input.checked;
+  if (!await change('/api/domain-link', { signIn: signIn }, function () {
+    return { text: signIn
+      ? 'The domain on a WordPress site\'s pages now signs in to WordPress.'
+      : 'The domain on a WordPress site\'s pages opens the site again, with WP Login beside it.' };
+  })) input.checked = !signIn;
+}
+
 function syncSummary(data) {
   let text = 'Checked ' + plural(data.checked, 'site') + '; ' + data.installed + ' installed or activated.';
   if (data.pending) text += ' ' + data.pending + ' still to check; check again to continue.';

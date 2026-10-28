@@ -36,6 +36,7 @@ import {
   pruneVarnishState, readVarnishState, saveVarnishState, syncVarnish,
   type VarnishRun, type VarnishSiteRecord, type VarnishOptions, type VarnishSyncResult, type WpVarnishState,
 } from "./varnish";
+import { DEFAULT_DOMAIN_LINK, readDomainLink, saveDomainLink, type WpDomainLink } from "./domain-link";
 import {
   MAINWP_GUARD_FILE, emptyMainwpState, mainwpAction, mainwpNeedsRepair, mainwpView, readMainwpState, syncMainwp, syncMainwpAll, type MainwpResult, type MainwpRun,
 } from "./mainwp";
@@ -46,7 +47,8 @@ import {
 
 import { basicAuthBlocks, basicAuthRewritable, withBasicAuthBypass, type reloadNginx } from "./basic-auth";
 
-export type WpToolsVerb = "sites" | "sign-in" | "remove" | "sync" | "varnish-settings" | "varnish-install" | "varnish-sync";
+export type WpToolsVerb =
+  "sites" | "sign-in" | "remove" | "sync" | "varnish-settings" | "varnish-install" | "varnish-sync" | "domain-link-settings";
 export type { WpJobs, WpJobView } from "./jobs";
 
 /** How long a job's runner waits for a pass the timer started to finish. */
@@ -147,6 +149,7 @@ export interface WpToolsActionPaths {
   vhostUid: number;
   varnishState: string;
   varnishLockFile: string;
+  domainLinkState: string;
   mainwpState: string;
   mainwpLockFile: string;
   jobsDir: string;
@@ -183,6 +186,7 @@ export const DEFAULT_WP_TOOLS_PATHS: WpToolsActionPaths = {
   vhostUid: 0,
   varnishState: `${STATE_DIR}/wp-tools/varnish.json`,
   varnishLockFile: "/run/lock/clp-addons/wp-varnish.lock",
+  domainLinkState: `${STATE_DIR}/wp-tools/domain-link.json`,
   mainwpState: `${STATE_DIR}/wp-tools/mainwp.json`,
   mainwpLockFile: "/run/lock/clp-addons/wp-mainwp.lock",
   jobsDir: `${STATE_DIR}/wp-tools/jobs`,
@@ -625,7 +629,9 @@ interface ParsedAction {
 
 function parseAction(argv: string[], options: WpToolsActionOptions): ParsedAction {
   const [rawVerb, ...rest] = argv;
-  const verbs: WpToolsVerb[] = ["sites", "sign-in", "remove", "sync", "varnish-settings", "varnish-install", "varnish-sync"];
+  const verbs: WpToolsVerb[] = [
+    "sites", "sign-in", "remove", "sync", "varnish-settings", "varnish-install", "varnish-sync", "domain-link-settings",
+  ];
   const verb = verbs.find((known) => known === rawVerb);
   if (!verb) failAction(`unknown WordPress Tools verb '${rawVerb ?? ""}'`);
 
@@ -669,7 +675,7 @@ function parseAction(argv: string[], options: WpToolsActionOptions): ParsedActio
   // Only an administrator may lift either Nginx gate for their request address.
   if ((addBypass || allowBasicAuth) && (asUser || !clientIp)) failAction("only an administrator's sign-in can add its address as a bypass");
   if (asUser && !PANEL_USER_NAME_RE.test(asUser)) failAction("that is not a valid panel user name");
-  if (verb === "varnish-settings" ? enabled === undefined : enabled !== undefined) failAction(`'${verb}' has invalid --enabled`);
+  if (verb === "varnish-settings" || verb === "domain-link-settings" ? enabled === undefined : enabled !== undefined) failAction(`'${verb}' has invalid --enabled`);
   if (verb === "sign-in" || verb === "varnish-install") {
     // The panel's own hostname is refused here as it is everywhere else: the
     // panel is not a site, and nothing of ours writes into it.
@@ -794,7 +800,22 @@ export async function executeWpToolsAction(
     } catch {
       // A job the page cannot see still finishes; the page only loses its progress.
     }
-    return { sites: wordpressSites(paths, varnish), varnish, varnishError, mainwp, mainwpError, jobs };
+    let domainLink: WpDomainLink = { ...DEFAULT_DOMAIN_LINK };
+    let domainLinkError = "";
+    try {
+      domainLink = readDomainLink(paths.domainLinkState);
+    } catch (error) {
+      domainLinkError = `${paths.domainLinkState} cannot be read: ${reason(error)}`;
+    }
+    return { sites: wordpressSites(paths, varnish), varnish, varnishError, mainwp, mainwpError, domainLink, domainLinkError, jobs };
+  }
+  // The manager renders the templates again once this is saved; nothing here
+  // touches them.
+  if (verb === "domain-link-settings") {
+    if (!existsSync(paths.configFile)) failAction("WordPress Tools must be enabled before changing the domain link");
+    const domainLink = { signIn: enabled! };
+    saveDomainLink(paths.domainLinkState, domainLink);
+    return { domainLink };
   }
   if (verb === "varnish-sync") return reconcileWpVarnish(options);
   if (verb === "varnish-settings" || verb === "varnish-install") {

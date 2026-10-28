@@ -5,9 +5,12 @@ Enable **WordPress Tools** in Addons. Its command-line name is `wp-tools`.
 ## Sign in
 
 Click **Sign in** beside a WordPress site to open its first administrator's
-account in a new tab. Allow pop-ups for CloudPanel. The **WP Login** shortcut
-on CloudPanel's Sites page and beside the domain at the top of each site's pages
-is also available to panel users for their own sites.
+account in a new tab. Allow pop-ups for CloudPanel. On CloudPanel's Sites page
+a **WP Login** shortcut does the same, and on each WordPress site's own pages
+the domain at the top signs in; Ctrl-click it to open the site instead. Panel
+users get both for their own sites. To keep the domain opening the site, turn
+off **Sign in from the domain** under **Site pages**; a WP Login link then sits
+beside it.
 To clean up helpers, choose **Remove** in the **Sign-in helper on N sites** line
 under the table. The next sign-in installs the helper again.
 

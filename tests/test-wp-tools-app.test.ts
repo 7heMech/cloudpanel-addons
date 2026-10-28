@@ -21,6 +21,8 @@ test("the WordPress page refuses every form, so its header does not grow with th
     varnishError: "",
     mainwp: mainwpView(emptyMainwpState()),
     mainwpError: "",
+    domainLink: { signIn: true },
+    domainLinkError: "",
     jobs: { varnish: null, mainwp: null },
   } });
   const response = await handle(new Request("https://panel.example.com/addons/wp-tools/"), "/");
@@ -101,5 +103,36 @@ test("checks, installs, connections and cleanup start background jobs, and only 
   } finally {
     wpToolsService.startJob = originalStart;
     wpToolsService.getJob = originalGet;
+  }
+});
+
+test("the domain link setting is administrator-only and renders the panel's templates again", async () => {
+  const originalSettings = wpToolsService.domainLinkSettings;
+  const originalRender = wpToolsService.renderPanelTemplates;
+  const saved: boolean[] = [];
+  let renders = 0;
+  let rendered = true;
+  wpToolsService.domainLinkSettings = async (signIn) => { saved.push(signIn); return { ok: true, data: { domainLink: { signIn } } }; };
+  wpToolsService.renderPanelTemplates = async () => { renders++; return rendered ? { ok: true } : { ok: false, error: "templates failed" }; };
+  const csrf = "a".repeat(64);
+  const post = (body: unknown, roles = ["ROLE_ADMIN"]) => handle(new Request("https://panel.example.com/addons/wp-tools/api/domain-link", {
+    method: "POST",
+    headers: { Host: "panel.example.com", Origin: "https://panel.example.com", Cookie: `clp_addons_csrf=${csrf}`, "X-CLP-Addons-CSRF": csrf, "Content-Type": "application/json" },
+    body: JSON.stringify(body),
+  }), "/api/domain-link", undefined, undefined, { user: "admin", roles });
+  try {
+    expect((await post({ signIn: false })).status).toBe(200);
+    expect((await post({ signIn: "no" })).status).toBe(400);
+    expect((await post({ signIn: true }, ["ROLE_USER"])).status).toBe(404);
+    expect(saved).toEqual([false]);
+    expect(renders).toBe(1);
+    // Saved, but the panel still shows the old link: say so, with what was saved.
+    rendered = false;
+    const failed = await post({ signIn: true });
+    expect(failed.status).toBe(500);
+    expect(await failed.json()).toEqual({ ok: false, error: "templates failed", data: { domainLink: { signIn: true } } });
+  } finally {
+    wpToolsService.domainLinkSettings = originalSettings;
+    wpToolsService.renderPanelTemplates = originalRender;
   }
 });

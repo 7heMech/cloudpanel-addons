@@ -26,7 +26,7 @@ import { MENU_ONLY_CLASS } from "../lib/row-actions";
 
 /** The `site.type` values Stager's own Twig condition offers a Clone for. */
 const CLONABLE_TYPES = ["php", "static", "reverse-proxy"];
-import { WP_TOOLS_TARGETS } from "../addons/wp-tools/inject/targets";
+import { WP_TOOLS_TARGETS, siteInfoSnippet as wpToolsSiteInfo } from "../addons/wp-tools/inject/targets";
 import { dashboardBody as wpToolsDashboardBody, dashboardView as wpToolsDashboardView, layout as wpToolsLayout } from "../addons/wp-tools/app/views";
 import type { MainwpSiteView, MainwpView } from "../addons/wp-tools/mainwp";
 import { WORDPRESS_APPLICATIONS, type WpJobView, type WpSiteView } from "../addons/wp-tools/action";
@@ -745,7 +745,7 @@ function panelSiteStub(site: SiteContext, activeSlug: string, wordpress: boolean
   <div class="container-fluid container-limited-width">
     <div class="site-container">
       <div class="site-info-container">
-        <div class="site-info-box"><h3>Domain</h3><div class="site-info-value"><a class="view-site-link" target="_blank" href="https://${site.domain}">${site.domain} ${PANEL_EXTERNAL_ICON}</a>${wordpress ? twigForSite(WP_TOOLS_SITE_INFO.snippet("/addons/wp-tools").replace(/\{% if site\.application[^%]*%\}/, ""), site.domain) : ""}</div></div>
+        <div class="site-info-box"><h3>Domain</h3><div class="site-info-value"><a class="view-site-link" target="_blank" href="https://${site.domain}">${site.domain} ${PANEL_EXTERNAL_ICON}</a>${wordpress ? twigForSite(wpToolsSiteInfo("/addons/wp-tools", wpDomainSignIn).replace(/\{% if site\.application[^%]*%\}/, ""), site.domain) : ""}</div></div>
         <div class="site-info-box"><h3>Site User</h3><div class="site-info-value">${site.user}</div></div>
         <div class="site-info-box"><h3>IP Address</h3><div class="site-info-value">${PREVIEW_PUBLIC_IP}</div></div>
       </div>
@@ -849,7 +849,6 @@ function panelSecurityStub(dark: boolean): string {
  * panel's own from assets/css/style.css and assets/css/frontend/sites.css.
  */
 const WP_TOOLS_SITES_SCRIPT = WP_TOOLS_TARGETS.find((target) => target.slug === "sites-script")!;
-const WP_TOOLS_SITE_INFO = WP_TOOLS_TARGETS.find((target) => target.slug === "site-info-link")!;
 const PANEL_EXTERNAL_ICON = '<svg width="12" height="12" aria-hidden="true" viewBox="0 0 512 512"><path d="M440,256H424a8,8,0,0,0-8,8V464a16,16,0,0,1-16,16H48a16,16,0,0,1-16-16V112A16,16,0,0,1,48,96H248a8,8,0,0,0,8-8V72a8,8,0,0,0-8-8H48A48,48,0,0,0,0,112V464a48,48,0,0,0,48,48H400a48,48,0,0,0,48-48V264A8,8,0,0,0,440,256ZM500,0,364,.34a12,12,0,0,0-12,12v10a12,12,0,0,0,12,12L454,34l.7.71L131.51,357.86a12,12,0,0,0,0,17l5.66,5.66a12,12,0,0,0,17,0L477.29,57.34l.71.7-.34,90a12,12,0,0,0,12,12h10a12,12,0,0,0,12-12L512,12A12,12,0,0,0,500,0Z"></path></svg>';
 const TERMINAL_SITES_SCRIPT = TERMINAL_TARGETS.find((target) => target.slug === "sites-script")!;
 const TERMINAL_SITES_ACTION = TERMINAL_TARGETS.find((target) => target.slug === "sites-action")!;
@@ -1081,6 +1080,8 @@ function mainwpPreview(url: URL): MainwpView {
     },
   };
 }
+/** Outlives a visit to the WP Tools page, so its switch shows on the site pages. */
+let wpDomainSignIn = true;
 let wpToolsPreview = { sites: [] as WpSiteView[], automatic: false, error: "", mainwp: mainwpPreview(new URL("http://localhost")), mainwpError: "" };
 // A job advances one site a second from when it was started; ?wpjob=varnish or
 // ?wpjob=mainwp draws the page with one part-way through.
@@ -1115,6 +1116,7 @@ const wpToolsPreviewData = () => {
     varnish: { enabled: wpToolsPreview.automatic, sites: {} },
     varnishError: wpToolsPreview.error,
     mainwp: wpToolsPreview.mainwp, mainwpError: wpToolsPreview.mainwpError,
+    domainLink: { signIn: wpDomainSignIn }, domainLinkError: "",
     jobs: { varnish: wpToolsJobs.varnish, mainwp: wpToolsJobs.mainwp },
   };
 };
@@ -1162,6 +1164,9 @@ async function wpToolsPreviewApi(req: Request, path: string): Promise<Response |
     case "varnish-settings":
       wpToolsPreview.automatic = body.enabled === true;
       return ok({});
+    case "domain-link":
+      wpDomainSignIn = body.signIn === true;
+      return ok({ domainLink: { signIn: wpDomainSignIn } });
     case "varnish-install":
       return started(wpToolsPreviewJob("varnish-install", site ? [site.domain] : [], () => { if (site) site.varnishPlugin = active(); }));
     case "varnish-sync": {

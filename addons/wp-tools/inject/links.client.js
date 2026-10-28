@@ -121,6 +121,8 @@
   function start(event) {
     var link = event.target.closest ? event.target.closest("a.clp-wp-tools") : null;
     if (!link) return;
+    // The domain keeps the site's address, which a modified click opens.
+    if (link.getAttribute("href") !== "#" && (event.ctrlKey || event.metaKey || event.shiftKey || event.altKey)) return;
     event.preventDefault();
     if (link.dataset.busy === "1") return;
     link.dataset.busy = "1";

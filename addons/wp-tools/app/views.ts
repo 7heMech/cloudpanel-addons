@@ -257,6 +257,27 @@ function mainwpSection(sites: WpSiteView[], state: MainwpView, error: string, jo
       </div>`;
 }
 
+function domainLinkCard(signIn: boolean, error: string): string {
+  const title = "Sign in from the domain";
+  const body = error
+    ? `<div class="wp-section"><h3>${title}</h3><div class="alert" role="alert">${esc(error)}</div></div>`
+    : `
+      <div class="wp-section">
+        <div class="split-card">
+          <div>
+            <h3>${title}</h3>
+            <p class="hint">On a WordPress site's pages in CloudPanel, the domain at the top signs in to WordPress instead of opening the site; Ctrl-click still opens it. Off, a WP Login link sits beside the domain instead.</p>
+          </div>
+          <label class="switch"><input id="domain-link" type="checkbox" aria-label="${title}" ${signIn ? "checked" : ""} onchange="setDomainLink(this)"><span></span></label>
+        </div>
+      </div>`;
+  return `
+    <div class="card">
+      <div class="card-header"><h2>Site pages</h2></div>
+      ${body}
+    </div>`;
+}
+
 function automationCard(data: WpDashboard): string {
   return `
     <div class="card">
@@ -268,7 +289,7 @@ function automationCard(data: WpDashboard): string {
 
 /** Everything below the heading; the page repaints it from `/api/dashboard` after a change. */
 export function dashboardBody(data: WpDashboard): string {
-  return `${sitesCard(data)}${automationCard(data)}`;
+  return `${sitesCard(data)}${automationCard(data)}${domainLinkCard(data.domainLink.signIn, data.domainLinkError)}`;
 }
 
 export function dashboardView(data: WpDashboard): string {

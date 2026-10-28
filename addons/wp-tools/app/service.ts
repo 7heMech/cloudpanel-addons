@@ -5,6 +5,7 @@ import type { WpJobs, WpJobTask, WpJobView } from "../jobs";
 import { validateDomain } from "../../../lib/app-http";
 import type { MainwpView } from "../mainwp";
 import type { WpVarnishState } from "../varnish";
+import type { WpDomainLink } from "../domain-link";
 
 export { validateDomain };
 export { validateJobId } from "../../../lib/job-id";
@@ -16,6 +17,9 @@ export interface WpDashboard {
   varnishError: string;
   mainwp: MainwpView;
   mainwpError: string;
+  domainLink: WpDomainLink;
+  /** Set when the domain link setting cannot be read; the default is shown. */
+  domainLinkError: string;
   /** The background job each policy is running, which the page follows. */
   jobs: WpJobs;
 }
@@ -59,6 +63,14 @@ export const wpToolsService = {
   },
   varnishSettings(enabled: boolean): Promise<ActionResult<{ varnish: WpVarnishState }>> {
     return call("varnish-settings", [`--enabled=${enabled}`]);
+  },
+  domainLinkSettings(signIn: boolean): Promise<ActionResult<{ domainLink: WpDomainLink }>> {
+    return call("domain-link-settings", [`--enabled=${signIn}`]);
+  },
+  // The domain link is markup in CloudPanel's own template, and rendering the
+  // templates is the manager's work: one pass from the pristine copies.
+  renderPanelTemplates(): Promise<ActionResult<unknown>> {
+    return callGatewayAction("manager", "reconcile", [], undefined, { timeout: 60_000 });
   },
 
   // Checks, installations, connections and cleanup are background jobs; the

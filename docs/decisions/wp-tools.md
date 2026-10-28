@@ -329,10 +329,26 @@ every WordPress row. The menu Panel Tweaks can build reads the other way and
 restores the order, so the link carries `clp-addons-row-action` from
 `lib/row-actions.ts` for it to sort on.
 
-On a site's own pages the link goes in the Domain box, after the panel's own
-link to the site, which keeps opening the site. That box is
-`Frontend/Site/Partial/site-info.html.twig`, rendered once per page on every
-site tab, so one injection carries the link, the script and its rule.
+On a site's own pages the domain itself signs in. The panel's link to the site
+there repeats what the Sites page and the address bar already give, while a way
+into wp-admin is what an operator on a site's pages is usually after. The block
+goes in the Domain box, after the panel's own link, and puts a link of its own
+there with a rule hiding the panel's: CloudPanel's markup is matched, never
+rewritten. Ours keeps the site's address, and the script leaves a Ctrl-, Cmd-,
+Shift- or Alt-click to the browser, so the site still opens from it in a new
+tab. That box is `Frontend/Site/Partial/site-info.html.twig`, rendered once per
+page on every site tab, so one injection carries the link, the script and its
+rules. Addon pages in a site's tab strip draw their own copy of the box, which
+still opens the site.
+
+The **Sign in from the domain** switch, on by default, turns that off; the
+panel's link then stays and a WP Login link goes beside it. It is markup, so
+the setting is read when the templates are rendered:
+`/var/lib/clp-addons/wp-tools/domain-link.json`, root-owned, written
+atomically with mode `0600`, absent meaning on. Saving it asks the manager to
+render the templates again. The setting is saved even when that fails, and the
+page says the panel still shows the old link. An unreadable file renders as the
+default and the page reports it.
 
 None is `required`, so a CloudPanel release that renames the sites card, the
 Manage link or the Domain link costs the shortcut rather than stopping the addon from being

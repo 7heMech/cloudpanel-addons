@@ -374,7 +374,7 @@ test("MainWP routes require administrator, CSRF, and confirmation before reachin
 test("the UI has a pause switch and explicit cleanup, and no secrets or batch connection while cleanup is pending", () => {
   const state = emptyMainwpState(); state.dashboard = "dashboard.test"; state.cleanup = true;
   state.sites["new.test"] = { status: "waiting-https", seen: false, checkedAt: "", error: "", ownedPlugin: false, ownedConnection: false };
-  const html = dashboardView({ sites: run.sites.map((s) => ({ domain: s.domain, user: s.user, helper: false, varnishCache: false, varnishPlugin: null })), varnish: { enabled: false, sites: {} }, varnishError: "", mainwp: mainwpView(state), mainwpError: "", jobs: { varnish: null, mainwp: null } });
+  const html = dashboardView({ sites: run.sites.map((s) => ({ domain: s.domain, user: s.user, helper: false, varnishCache: false, varnishPlugin: null })), varnish: { enabled: false, sites: {} }, varnishError: "", mainwp: mainwpView(state), mainwpError: "", domainLink: { signIn: true }, domainLinkError: "", jobs: { varnish: null, mainwp: null } });
   expect(html).toContain("Waiting for HTTPS"); expect(html).toContain("Cleanup pending"); expect(html).toContain("mainwp-automatic"); expect(html).not.toContain("Select all");
 });
 
@@ -382,7 +382,7 @@ test("the page puts sites first and draws only the controls that do something", 
   const site = (domain: string, varnishCache = false, helper = false) =>
     ({ domain, user: domain.split(".")[0]!, helper, varnishCache, varnishPlugin: null });
   const page = (sites: ReturnType<typeof site>[], mainwp: ReturnType<typeof emptyMainwpState>, varnish = false) => dashboardView({
-    sites, varnish: { enabled: varnish, sites: {} }, varnishError: "", mainwp: mainwpView(mainwp), mainwpError: "", jobs: { varnish: null, mainwp: null },
+    sites, varnish: { enabled: varnish, sites: {} }, varnishError: "", mainwp: mainwpView(mainwp), mainwpError: "", domainLink: { signIn: true }, domainLinkError: "", jobs: { varnish: null, mainwp: null },
   });
   const sites = [site("dashboard.test"), site("new.test", true, true), site("manual.test")];
 
@@ -416,11 +416,11 @@ test("the page puts sites first and draws only the controls that do something", 
   expect(checked).toMatch(/data-domain="new.test" onclick="connectMainwp\(this\)">Connect</);
   expect(checked).toContain("Connect all unconnected (1)");
   expect(checked).toContain('aria-label="Select manual.test" disabled>');
-  // With both policies on, the only switches are theirs, and every row keeps its action.
+  // With both policies on, the only switches are theirs and the domain link's, and every row keeps its action.
   chosen.enabled = true;
   const on = page(sites, chosen, true);
   expect([...on.matchAll(/<th scope="col"[^>]*>([^<]*)<\/th>/g)].map((match) => match[1])).toEqual(heads);
-  expect(on.match(/class="switch"/g)).toHaveLength(2);
+  expect(on.match(/class="switch"/g)).toHaveLength(3);
   expect(on).toMatch(/data-domain="new.test" onclick="connectMainwp\(this\)">Connect</);
   // Varnish's Install, too, waits for a check to say the plugin is missing.
   expect(on).not.toContain("installPlugin(this)");
@@ -761,7 +761,7 @@ test("the page offers a Dashboard on another server and Install or Activate per 
   state.sites["new.test"] = { status: "inactive", seen: true, checkedAt: "", error: "", ownedPlugin: true, ownedConnection: false };
   state.sites["connected.test"] = { status: "connected", seen: true, checkedAt: "", error: "", ownedPlugin: false, ownedConnection: false };
   const page = dashboardView({ sites: run.sites.map((site) => ({ domain: site.domain, user: site.user, helper: false, varnishCache: false, varnishPlugin: null })),
-    varnish: { enabled: false, sites: {} }, varnishError: "", mainwp: mainwpView(state), mainwpError: "", jobs: { varnish: null, mainwp: null } });
+    varnish: { enabled: false, sites: {} }, varnishError: "", mainwp: mainwpView(state), mainwpError: "", domainLink: { signIn: true }, domainLinkError: "", jobs: { varnish: null, mainwp: null } });
   expect(page).toContain('<option value="@remote" selected>On another server</option>');
   expect(page).not.toContain("Choose a site");
   expect(page).toContain('<th scope="col">MainWP Child</th>');
@@ -777,7 +777,7 @@ test("the page offers a Dashboard on another server and Install or Activate per 
   // With the Dashboard elsewhere, a site named dashboard.test is just another site.
   state.sites["dashboard.test"] = { status: "missing", seen: false, checkedAt: "", error: "", ownedPlugin: false, ownedConnection: false };
   const checked = dashboardView({ sites: run.sites.map((site) => ({ domain: site.domain, user: site.user, helper: false, varnishCache: false, varnishPlugin: null })),
-    varnish: { enabled: false, sites: {} }, varnishError: "", mainwp: mainwpView(state), mainwpError: "", jobs: { varnish: null, mainwp: null } });
+    varnish: { enabled: false, sites: {} }, varnishError: "", mainwp: mainwpView(state), mainwpError: "", domainLink: { signIn: true }, domainLinkError: "", jobs: { varnish: null, mainwp: null } });
   expect(checked).toMatch(/data-domain="dashboard.test" data-remote onclick="connectMainwp\(this\)">Install</);
 });
 
