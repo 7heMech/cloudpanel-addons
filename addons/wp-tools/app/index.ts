@@ -129,10 +129,12 @@ export async function handle(
       if (typeof body.signIn !== "boolean") return json({ ok: false, error: "signIn must be true or false" }, 400);
       result = await wpToolsService.domainLinkSettings(body.signIn);
       if (!result.ok) return json(result, 400);
-      // The setting is saved either way; say so if the panel still shows the old link.
+      // The setting is saved either way, and the page repaints with it; the
+      // error says the panel's pages still show the old link.
       const rendered = await wpToolsService.renderPanelTemplates();
       if (!rendered.ok) {
-        return json({ ok: false, error: rendered.error ?? "the CloudPanel templates could not be updated", data: result.data }, 500);
+        const why = rendered.error ?? "the CloudPanel templates could not be updated";
+        return json({ ok: false, error: `Saved, but CloudPanel's site pages still show the old link: ${why}`, data: result.data }, 500);
       }
     } else if (path === "/api/varnish-sync") result = await wpToolsService.startJob("varnish-check");
     else if (path === "/api/mainwp-sync") result = await wpToolsService.startJob("mainwp-check");

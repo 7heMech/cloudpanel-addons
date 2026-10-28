@@ -175,7 +175,9 @@ Deleting a redirect domain while DNS asks first stops managing it. Once
 Automatic, a connected Cloudflare is checked for a rule even while a stand-in
 still serves the domain. A rule is deleted through a review; its records stay,
 for a site's profile to replace. A stand-in stays until that deletion is
-confirmed, and a rule conflict blocks both deletions.
+confirmed. A rule conflict blocks both deletions, and so does a rule that
+cannot be looked for: a connection that fails, or a zone reached through more
+than one connection with none chosen, could hide one.
 
 ### Stand-in sites
 
@@ -202,7 +204,9 @@ in CloudPanel is an ordinary site. DNS changes or deletes only a site whose id
 it recorded, even when creating one fails, and makes no stand-in where a site
 already exists. If creation fails and CloudPanel also refuses to delete the
 site, DNS keeps its ownership record so a later deletion can still identify
-the site, and reports both failures.
+the site, and reports both failures. The record stays marked incomplete until
+the vhost is written, so a later pass writes it rather than taking a static
+site that does not redirect for a working stand-in.
 DNS, Stager, Maintenance, SMTP
 Relay and Cloudflare IP Access leave stand-ins out of their site lists, PHP
 Resources and WordPress Tools never list a static site, and Panel Tweaks shows

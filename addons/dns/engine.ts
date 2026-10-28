@@ -37,7 +37,10 @@ export interface PanelSite {
 }
 
 /** What a stand-in site on this server redirects to now. */
-export type StandIn = Pick<Redirect, "target" | "status" | "keepPath" | "keepQuery">;
+export type StandIn = Pick<Redirect, "target" | "status" | "keepPath" | "keepQuery"> & {
+  /** The site exists but its vhost was never written, so it does not redirect yet. */
+  incomplete?: boolean;
+};
 
 /** The CloudPanel sites that serve redirects while no Cloudflare connection is set up. */
 export interface StandIns {
@@ -149,6 +152,8 @@ type Resolution =
   | { kind: "unreachable"; reason: string };
 
 const INACTIVE_ZONES = new Set(["moved", "deleted", "deactivated"]);
+/** What a stand-in whose vhost was never written serves. */
+const NOT_REDIRECTING = "A static site that does not redirect yet";
 const MAILCOW_PLACEHOLDER = /\{mailcow\./;
 
 function reason(error: unknown): string {
@@ -577,8 +582,11 @@ export class DnsRun {
         action: "create", subject: "Stand-in site",
         detail: `A static site on this server for ${standInHosts(redirect.source).join(" and ")}: ${describeRedirect(redirect)}`,
       });
-    } else if (describeRedirect(current) !== describeRedirect(redirect)) {
-      plan.changes.push({ action: "update", subject: "Stand-in site", detail: describeRedirect(redirect), before: describeRedirect(current) });
+    } else if (current.incomplete || describeRedirect(current) !== describeRedirect(redirect)) {
+      plan.changes.push({
+        action: "update", subject: "Stand-in site", detail: describeRedirect(redirect),
+        before: current.incomplete ? NOT_REDIRECTING : describeRedirect(current),
+      });
     }
     if (profile) plan.changes.push({ action: "note", subject: "Profile", detail: "Its records apply once a Cloudflare connection reaches this domain" });
     return plan;
@@ -839,10 +847,11 @@ export class DnsRun {
       const current = standIns.current[plan.domain];
       try {
         if (!current) await standIns.create(redirect);
-        else if (describeRedirect(current) !== describeRedirect(redirect)) await standIns.update(redirect);
+        else if (current.incomplete || describeRedirect(current) !== describeRedirect(redirect)) await standIns.update(redirect);
         else continue;
         standIns.current[plan.domain] = { target: redirect.target, status: redirect.status, keepPath: redirect.keepPath, keepQuery: redirect.keepQuery };
-        this.logged([plan.domain], "", current ? "update" : "create", "Stand-in site", describeRedirect(redirect), current ? describeRedirect(current) : undefined);
+        const before = !current ? undefined : current.incomplete ? NOT_REDIRECTING : describeRedirect(current);
+        this.logged([plan.domain], "", current ? "update" : "create", "Stand-in site", describeRedirect(redirect), before);
       } catch (error) {
         this.fail(plan.domain, error);
       }
@@ -923,11 +932,18 @@ export class DnsRun {
   // What the run leaves behind
   // -------------------------------------------------------------------------
 
-  /** The rule a redirect domain's deletion would delete, from what `load` read; null when there is none to delete. */
+  /**
+   * The rule a redirect domain's deletion would delete, from what `load` read;
+   * null only when Cloudflare was read and has none. A zone a failed connection
+   * or an unmade choice hides could still hold one.
+   */
   redirectRuleOf(source: string): { zone: ZoneView; rulesetId: string; rule: CfRuleset["rules"][number] } | { problem: string } | null {
     const redirect = this.redirects.get(source);
+    if (!redirect) return null;
     const resolved = this.resolve(source);
-    if (!redirect || resolved.kind !== "zone") return null;
+    if (resolved.kind === "unreachable") return { problem: resolved.reason };
+    if (resolved.kind === "choose") return { problem: `${resolved.name} is reachable through more than one connection; choose which one manages it` };
+    if (resolved.kind !== "zone") return null;
     const state = this.zones.get(resolved.ref.zone.id);
     if (!state?.records || state.error) return { problem: state?.error ?? `${resolved.ref.zone.name} could not be read` };
     const ruleset = state.rulesets.get(REDIRECT_PHASE);

@@ -346,8 +346,8 @@ panel's link then stays and a WP Login link goes beside it. It is markup, so
 the setting is read when the templates are rendered:
 `/var/lib/clp-addons/wp-tools/domain-link.json`, root-owned, written
 atomically with mode `0600`, absent meaning on. Saving it asks the manager to
-render the templates again. The setting is saved even when that fails, and the
-page says the panel still shows the old link. An unreadable file renders as the
+render the templates again. The setting is saved even when that fails; the page
+repaints with it and says CloudPanel's site pages still show the old link. An unreadable file renders as the
 default and the page reports it.
 
 None is `required`, so a CloudPanel release that renames the sites card, the

@@ -130,7 +130,7 @@ test("the domain link setting is administrator-only and renders the panel's temp
     rendered = false;
     const failed = await post({ signIn: true });
     expect(failed.status).toBe(500);
-    expect(await failed.json()).toEqual({ ok: false, error: "templates failed", data: { domainLink: { signIn: true } } });
+    expect(await failed.json()).toEqual({ ok: false, error: "Saved, but CloudPanel's site pages still show the old link: templates failed", data: { domainLink: { signIn: true } } });
   } finally {
     wpToolsService.domainLinkSettings = originalSettings;
     wpToolsService.renderPanelTemplates = originalRender;

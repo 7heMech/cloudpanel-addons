@@ -388,6 +388,17 @@ describe("stand-in sites on this server", () => {
     expect(env.standIns.calls).toEqual(["create newyou.bg"]);
   });
 
+  test("a stand-in whose vhost was never written is written on the next pass", async () => {
+    const env = setup();
+    await env.automatic();
+    await env.confirmed(await env.act("save-redirect", found("hazon.uk", "https://hazon.bg")));
+    env.standIns.current["hazon.uk"] = { ...env.standIns.current["hazon.uk"]!, incomplete: true };
+    const checked = await env.act("check");
+    expect(env.standIns.calls).toEqual(["create hazon.uk", "update hazon.uk https://hazon.bg"]);
+    expect(checked.log[0]).toMatchObject({ action: "update", subject: "Stand-in site", before: "A static site that does not redirect yet" });
+    expect(env.standIns.current["hazon.uk"]?.incomplete).toBeUndefined();
+  });
+
   test("a deleted redirect takes its stand-in site with it", async () => {
     const env = setup();
     await env.automatic();
@@ -419,6 +430,21 @@ describe("stand-in sites on this server", () => {
     expect(env.sites).toEqual([]);
     expect(deleted.sites).toEqual([]);
     expect(deleted.log.slice(0, 2).map((entry) => entry.subject).sort()).toEqual(["Cloudflare redirect rule", "Stand-in site"]);
+  });
+
+  test("a connection that cannot be read blocks deleting the stand-in, since its rule might be there", async () => {
+    const env = setup();
+    await env.automatic();
+    await env.confirmed(await env.act("save-redirect", found("hazon.uk", "https://hazon.bg")));
+    terraformZone(env.cf, env.account, "hazon.uk", "https://hazon.bg");
+    await env.act("save-connection", { token: TOKEN });
+    env.cf.tokens.get(TOKEN)!.status = "disabled";
+
+    const reply = await env.act("delete-redirect", { source: "hazon.uk" });
+    expect(reply.review).toMatchObject({ blocked: true, token: "" });
+    expect(reply.review!.sites[0]!.problems.join(" ")).toContain("Cloudflare could not be read");
+    expect(env.standIns.calls).toEqual(["create hazon.uk"]);
+    expect(env.redirectRules("hazon.uk")).toHaveLength(1);
   });
 
   test("a Cloudflare rule conflict also blocks deleting the stand-in and its policy", async () => {
@@ -520,8 +546,10 @@ esac
     expect(calls()).toBe("site:add:static\nsite:delete\n");
     expect(readStandIns(paths)["new.example"]).toMatchObject({ siteId: 9, siteUser: panelSite("new.example")!.user });
 
+    // Kept, but not taken for a stand-in that redirects: a later pass writes its vhost.
+    expect(readStandIns(paths)["new.example"]?.incomplete).toBe(true);
     const retry = clpctlStandIns(paths, panelSite, () => 0);
-    expect(retry.current["new.example"]).toBeDefined();
+    expect(retry.current["new.example"]).toMatchObject({ incomplete: true });
     await expect(retry.remove("new.example")).rejects.toThrow("fixture deletion failure");
     expect(readStandIns(paths)["new.example"]?.siteId).toBe(9);
     rmSync(refuseDelete);

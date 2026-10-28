@@ -110,7 +110,9 @@ export function clpctlStandIns(
   };
   const current: Record<string, StandIn> = {};
   for (const [domain, record] of Object.entries(records)) {
-    if (ours(domain, record)) current[domain] = { target: record.target, status: record.status, keepPath: record.keepPath, keepQuery: record.keepQuery };
+    if (ours(domain, record)) {
+      current[domain] = { target: record.target, status: record.status, keepPath: record.keepPath, keepQuery: record.keepQuery, ...record.incomplete && { incomplete: true } };
+    }
   }
   const spec = (redirect: Redirect): StandIn => ({ target: redirect.target, status: redirect.status, keepPath: redirect.keepPath, keepQuery: redirect.keepQuery });
   return {
@@ -120,7 +122,9 @@ export function clpctlStandIns(
       const taken = panelUsers(paths.vhost.panelDb);
       const siteUser = availableSiteUser(redirect.source, (user) => taken.has(user) || runCommand("id", ["-u", user]).ok);
       const saved = readStandIns(paths);
-      saved[redirect.source] = { ...spec(redirect), siteUser, createdAt: now(), certificate: { attempts: 0, nextAt: now(), done: false } };
+      // Incomplete until the vhost redirects: a site whose cleanup fails is kept,
+      // and a later pass has to write its vhost rather than take it as done.
+      saved[redirect.source] = { ...spec(redirect), incomplete: true, siteUser, createdAt: now(), certificate: { attempts: 0, nextAt: now(), done: false } };
       saveStandIns(paths, saved);
       // Only a site known to be this one is deleted on failure: another may have taken the domain meanwhile.
       let siteId: number | null = null;
@@ -134,6 +138,9 @@ export function clpctlStandIns(
         created[redirect.source] = { ...created[redirect.source]!, siteId };
         saveStandIns(paths, created);
         replaceSiteVhost(paths.vhost, redirect.source, standInBody(redirect.source, redirect));
+        const done = readStandIns(paths);
+        delete done[redirect.source]!.incomplete;
+        saveStandIns(paths, done);
       } catch (error) {
         if (siteId !== null && panelSite(redirect.source)?.id === siteId) {
           try {
@@ -153,7 +160,10 @@ export function clpctlStandIns(
       if (!ours(redirect.source)) throw new Error(`${redirect.source} is no longer DNS's stand-in site`);
       replaceSiteVhost(paths.vhost, redirect.source, standInBody(redirect.source, redirect));
       const saved = readStandIns(paths);
-      if (saved[redirect.source]) saved[redirect.source] = { ...saved[redirect.source]!, ...spec(redirect) };
+      if (saved[redirect.source]) {
+        saved[redirect.source] = { ...saved[redirect.source]!, ...spec(redirect) };
+        delete saved[redirect.source]!.incomplete;
+      }
       saveStandIns(paths, saved);
     },
     async remove(source) {
