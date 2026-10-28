@@ -136,3 +136,19 @@ test("the domain link setting is administrator-only and renders the panel's temp
     wpToolsService.renderPanelTemplates = originalRender;
   }
 });
+
+test("a site page asks whether its site is a WordPress, held to the caller's own sites", async () => {
+  const original = wpToolsService.siteKind;
+  const calls: [string, string | undefined][] = [];
+  wpToolsService.siteKind = async (domain, asUser) => { calls.push([domain, asUser]); return { ok: true, data: { wordpress: true } }; };
+  const get = (query: string, roles: string[]) => handle(new Request(`https://panel.example.com/addons/wp-tools/api/site-kind${query}`, { headers: { Host: "panel.example.com" } }),
+    "/api/site-kind", undefined, undefined, { user: "shopkeeper", roles });
+  try {
+    expect((await get("?domain=Shop.Example.com", ["ROLE_ADMIN"])).status).toBe(200);
+    expect((await get("?domain=shop.example.com", ["ROLE_USER"])).status).toBe(200);
+    expect((await get("?domain=bad%20name", ["ROLE_USER"])).status).toBe(400);
+    expect(calls).toEqual([["shop.example.com", undefined], ["shop.example.com", "shopkeeper"]]);
+  } finally {
+    wpToolsService.siteKind = original;
+  }
+});

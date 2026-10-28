@@ -11,7 +11,9 @@
 // The site pages' Domain box is a partial rendered once per page, so its link
 // carries the script and rule with it. Which link it is depends on a setting,
 // read when the templates are rendered; the addon's page renders them again
-// when it changes.
+// when it changes. Those pages give Twig a site without its application, so the
+// link is drawn hidden on every PHP site and the script shows it once the addon
+// says the site is a WordPress.
 //
 // No block asks for ROLE_ADMIN. CloudPanel lists and opens for a `ROLE_USER`
 // only the sites `user_sites` maps to their account, so the sites a
@@ -51,17 +53,17 @@ const TITLE = "Sign in to WordPress as its first administrator";
  * The Domain box's addition.
  *
  * Signing in from the domain puts a link of our own in place of the panel's,
- * which a rule hides: the panel's markup is matched, never rewritten. Ours
- * keeps the site's address, so a Ctrl-, Cmd- or middle-click -- which the
+ * which a rule hides once the script has shown ours: the panel's markup is
+ * matched, never rewritten. The two look the same, so the swap does not show.
+ * Ours keeps the site's address, so a Ctrl-, Cmd- or middle-click -- which the
  * script leaves to the browser -- still opens the site in a new tab.
  */
 export function siteInfoSnippet(url: string, signIn: boolean): string {
   const link = signIn
-    ? `<a href="https://{{ site.domainName }}" class="clp-wp-tools clp-wp-tools-domain view-site-link" data-clp-domain="{{ site.domainName }}" title="${TITLE}. Ctrl-click opens the site.">{{ site.domainName }} ${EXTERNAL_ICON}</a>
-          <style>.site-info-value > a.view-site-link:not(.clp-wp-tools) { display: none; }</style>`
-    : `<a href="#" class="clp-wp-tools view-site-link" data-clp-domain="{{ site.domainName }}" title="${TITLE}">WP Login ${EXTERNAL_ICON}</a>`;
+    ? `<a href="https://{{ site.domainName }}" hidden class="clp-wp-tools clp-wp-tools-domain view-site-link" data-clp-domain="{{ site.domainName }}" data-clp-site-kind title="${TITLE}. Ctrl-click opens the site.">{{ site.domainName }} ${EXTERNAL_ICON}</a>`
+    : `<a href="#" hidden class="clp-wp-tools view-site-link" data-clp-domain="{{ site.domainName }}" data-clp-site-kind title="${TITLE}">WP Login ${EXTERNAL_ICON}</a>`;
   return `
-        ${WORDPRESS}
+        {% if site.type == 'php' %}
           ${link}${script(url)}
         {% endif %}`;
 }

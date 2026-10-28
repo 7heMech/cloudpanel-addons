@@ -48,7 +48,7 @@ import {
 import { basicAuthBlocks, basicAuthRewritable, withBasicAuthBypass, type reloadNginx } from "./basic-auth";
 
 export type WpToolsVerb =
-  "sites" | "sign-in" | "remove" | "sync" | "varnish-settings" | "varnish-install" | "varnish-sync" | "domain-link-settings";
+  "sites" | "sign-in" | "site-kind" | "remove" | "sync" | "varnish-settings" | "varnish-install" | "varnish-sync" | "domain-link-settings";
 export type { WpJobs, WpJobView } from "./jobs";
 
 /** How long a job's runner waits for a pass the timer started to finish. */
@@ -630,7 +630,7 @@ interface ParsedAction {
 function parseAction(argv: string[], options: WpToolsActionOptions): ParsedAction {
   const [rawVerb, ...rest] = argv;
   const verbs: WpToolsVerb[] = [
-    "sites", "sign-in", "remove", "sync", "varnish-settings", "varnish-install", "varnish-sync", "domain-link-settings",
+    "sites", "sign-in", "site-kind", "remove", "sync", "varnish-settings", "varnish-install", "varnish-sync", "domain-link-settings",
   ];
   const verb = verbs.find((known) => known === rawVerb);
   if (!verb) failAction(`unknown WordPress Tools verb '${rawVerb ?? ""}'`);
@@ -671,12 +671,15 @@ function parseAction(argv: string[], options: WpToolsActionOptions): ParsedActio
     if (/^--enabled=(true|false)$/.test(argument)) { enabled = argument.endsWith("=true"); continue; }
     failAction(`unexpected argument '${argument}'`);
   }
-  if (verb !== "sign-in" && (asUser || clientIp || addBypass || allowBasicAuth)) failAction(`'${verb}' takes no --as-user, --client-ip, --add-bypass or --allow-basic-auth`);
+  if (verb === "site-kind" && (clientIp || addBypass || allowBasicAuth)) failAction("'site-kind' takes no --client-ip, --add-bypass or --allow-basic-auth");
+  if (verb !== "sign-in" && verb !== "site-kind" && (asUser || clientIp || addBypass || allowBasicAuth)) {
+    failAction(`'${verb}' takes no --as-user, --client-ip, --add-bypass or --allow-basic-auth`);
+  }
   // Only an administrator may lift either Nginx gate for their request address.
   if ((addBypass || allowBasicAuth) && (asUser || !clientIp)) failAction("only an administrator's sign-in can add its address as a bypass");
   if (asUser && !PANEL_USER_NAME_RE.test(asUser)) failAction("that is not a valid panel user name");
   if (verb === "varnish-settings" || verb === "domain-link-settings" ? enabled === undefined : enabled !== undefined) failAction(`'${verb}' has invalid --enabled`);
-  if (verb === "sign-in" || verb === "varnish-install") {
+  if (verb === "sign-in" || verb === "site-kind" || verb === "varnish-install") {
     // The panel's own hostname is refused here as it is everywhere else: the
     // panel is not a site, and nothing of ours writes into it.
     domain = (options.domainValidator ?? ((value: string) => validateDomain(value)))(domain);
@@ -828,6 +831,15 @@ export async function executeWpToolsAction(
       saveVarnishState(paths.varnishState, state);
       return { varnish: state };
     });
+  }
+  // Whether a site's pages should offer the sign-in. CloudPanel's site pages
+  // have no application to go on, so they ask; the answer is the same disk
+  // check a sign-in makes, for a site the caller could sign in to.
+  if (verb === "site-kind") {
+    if (!existsSync(paths.configFile)) failAction("WordPress Tools is not enabled");
+    if (asUser && !mayManageSite(paths, asUser, domain)) failAction("that site is not yours to sign in to");
+    const site = resolvedSites(paths).find((candidate) => candidate.row.domain_name === domain);
+    return { wordpress: Boolean(site && isWordPress(site.root)) };
   }
   // Both writing paths take the lock: a sign-in that ran while the addon was
   // being withdrawn would put a loader back into a site it had just left.

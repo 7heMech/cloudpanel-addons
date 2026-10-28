@@ -55,7 +55,8 @@ function mountedAddons(): string[] {
  * sign-in is one because the panel user it signs in for is one CloudPanel
  * already gave the site's file manager and database to, so the shortcut adds
  * no authority; the root action holds it to the sites `user_sites` maps to
- * that account. The session route hands out the CSRF pair those callers cannot
+ * that account. Its site-kind route answers only whether such a site is a
+ * WordPress, which its site pages need to know to offer the sign-in. The session route hands out the CSRF pair those callers cannot
  * get from an addon page, and reads nothing. Panel Tweaks' state route is one
  * because the page it enhances is CloudPanel's own Sites page, which every
  * panel user sees; the action narrows the reply to the rows that page would
@@ -69,6 +70,7 @@ function mountedAddons(): string[] {
 const SELF_SCOPED_ROUTES = new Set([
   "POST /wp-tools/api/sign-in",
   "GET /wp-tools/api/session",
+  "GET /wp-tools/api/site-kind",
   "GET /panel-tweaks/api/panel",
   "GET /dns/api/session",
   "POST /dns/api/provision",

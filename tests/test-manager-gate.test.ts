@@ -93,6 +93,8 @@ test("a non-administrator reaches only the named self-scoped routes", () => {
   const results = probe({ user: "someone", roles: ["ROLE_USER"] }, [
     { path: "/addons/wp-tools/api/sign-in", method: "POST" },
     { path: "/addons/wp-tools/api/session" },
+    { path: "/addons/wp-tools/api/site-kind" },
+    { path: "/addons/wp-tools/api/site-kind", method: "POST" },
     { path: "/addons/wp-tools/", method: "GET" },
     { path: "/addons/wp-tools/api/remove", method: "POST" },
     { path: "/addons/wp-tools/api/sign-in", method: "GET" },
@@ -113,6 +115,7 @@ test("a non-administrator reaches only the named self-scoped routes", () => {
   expect(dispatched.map((result) => `${result.method} ${result.path}`)).toEqual([
     "POST /addons/wp-tools/api/sign-in",
     "GET /addons/wp-tools/api/session",
+    "GET /addons/wp-tools/api/site-kind",
     "GET /addons/panel-tweaks/api/panel",
     "GET /addons/dns/api/session",
     "POST /addons/dns/api/provision",

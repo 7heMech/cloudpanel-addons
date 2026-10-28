@@ -341,6 +341,13 @@ page on every site tab, so one injection carries the link, the script and its
 rules. Addon pages in a site's tab strip draw their own copy of the box, which
 still opens the site.
 
+CloudPanel's site pages hand Twig a site without its id or application, so the
+block cannot test for WordPress as the Sites page does. It draws the link hidden
+on every PHP site, and the script asks `GET /api/site-kind` whether to show it.
+The action answers with the same disk check a sign-in makes, held as the
+sign-in is to a site the caller's account has. The panel's link is hidden only
+once ours is shown; the two look alike, so the swap does not show.
+
 The **Sign in from the domain** switch, on by default, turns that off; the
 panel's link then stays and a WP Login link goes beside it. It is markup, so
 the setting is read when the templates are rendered:

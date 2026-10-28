@@ -42,6 +42,18 @@ export async function handle(
     return signInWindow(domain);
   }
 
+  // The site pages' Domain box asks this, for every role that can open a site:
+  // CloudPanel gives those pages no application to decide by. Held, as the
+  // sign-in is, to the sites the caller's account has.
+  if (method === "GET" && path === "/api/site-kind") {
+    const domain = validateDomain(new URL(req.url).searchParams.get("domain"));
+    if (!domain) return json({ ok: false, error: "that is not a valid hostname" }, 400);
+    const admin = auth?.roles.includes("ROLE_ADMIN") ?? false;
+    if (!admin && !auth?.user) return json({ ok: false, error: "not found" }, 404);
+    const result = await wpToolsService.siteKind(domain, admin ? undefined : auth!.user);
+    return json(result, result.ok ? 200 : 400);
+  }
+
   if (method === "GET" && path === "/") {
     const csrf = newCsrfToken();
     try {

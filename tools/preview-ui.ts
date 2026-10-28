@@ -745,7 +745,7 @@ function panelSiteStub(site: SiteContext, activeSlug: string, wordpress: boolean
   <div class="container-fluid container-limited-width">
     <div class="site-container">
       <div class="site-info-container">
-        <div class="site-info-box"><h3>Domain</h3><div class="site-info-value"><a class="view-site-link" target="_blank" href="https://${site.domain}">${site.domain} ${PANEL_EXTERNAL_ICON}</a>${wordpress ? twigForSite(wpToolsSiteInfo("/addons/wp-tools", wpDomainSignIn).replace(/\{% if site\.application[^%]*%\}/, ""), site.domain) : ""}</div></div>
+        <div class="site-info-box"><h3>Domain</h3><div class="site-info-value"><a class="view-site-link" target="_blank" href="https://${site.domain}">${site.domain} ${PANEL_EXTERNAL_ICON}</a>${wordpress ? twigForSite(wpToolsSiteInfo("/addons/wp-tools", wpDomainSignIn).replace("{% if site.type == 'php' %}", ""), site.domain) : ""}</div></div>
         <div class="site-info-box"><h3>Site User</h3><div class="site-info-value">${site.user}</div></div>
         <div class="site-info-box"><h3>IP Address</h3><div class="site-info-value">${PREVIEW_PUBLIC_IP}</div></div>
       </div>
@@ -1135,6 +1135,10 @@ async function wpToolsPreviewApi(req: Request, path: string): Promise<Response |
   }
   const started = (job: PreviewJob) => ok({ job });
   const mainwpTargets = () => wpToolsPreview.sites.map((entry) => entry.domain).filter((domain) => domain !== wpToolsPreview.mainwp.dashboard);
+  if (path === "/addons/wp-tools/api/site-kind") {
+    const domain = new URL(req.url).searchParams.get("domain");
+    return ok({ wordpress: wpToolsPreview.sites.some((entry) => entry.domain === domain) || domain === "www.example.com" });
+  }
   switch (path.slice("/addons/wp-tools/api/".length)) {
     case "dashboard":
       return ok({ html: wpToolsDashboardBody(wpToolsPreviewData()) });

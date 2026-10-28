@@ -2,3 +2,4 @@
 .clp-wp-tools { margin-right: 0.75rem; white-space: nowrap; }
 .site-info-value .clp-wp-tools { margin: 0 0 0 20px; }
 .site-info-value .clp-wp-tools-domain { margin: 0; }
+.site-info-value.clp-wp-tools-signs-in > a.view-site-link:not(.clp-wp-tools) { display: none; }

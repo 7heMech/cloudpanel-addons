@@ -112,8 +112,8 @@ export const SYSTEM_TWEAKS_ALLOWED_VERBS = new Set([
 ]);
 
 /**
- * Sign-in credentials, helper removal and the two policies' settings each have
- * fixed verbs; checks, installations, MainWP connections and cleanup are
+ * Sign-in credentials, whether a site is WordPress, helper removal and the
+ * settings each have fixed verbs; checks, installations, MainWP connections and cleanup are
  * `start`ed as background jobs of a fixed task list. None accepts paths,
  * plugin names or arbitrary commands. `run` is absent for the reason the
  * manager's is: only the unit `start` launched may run a job.
@@ -121,9 +121,11 @@ export const SYSTEM_TWEAKS_ALLOWED_VERBS = new Set([
 export const WP_TOOLS_ALLOWED_VERBS = new Set([
   "sites",
   "sign-in",
+  "site-kind",
   "remove",
   "varnish-settings",
   "mainwp-settings",
+  "domain-link-settings",
   "start",
   "job",
   "watch-job",

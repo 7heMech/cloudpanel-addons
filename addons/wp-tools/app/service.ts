@@ -53,6 +53,11 @@ export const wpToolsService = {
     return call<WpLoginResult | WpMaintenanceReply | WpBasicAuthReply>("sign-in", args);
   },
 
+  /** Whether a site's pages offer the sign-in; `asUser` as for `signIn`. */
+  siteKind(domain: string, asUser?: string): Promise<ActionResult<{ wordpress: boolean }>> {
+    return call("site-kind", [`--domain=${domain}`, ...(asUser ? [`--as-user=${asUser}`] : [])]);
+  },
+
   remove(): Promise<ActionResult<WpRemoveResult>> {
     return call<WpRemoveResult>("remove", [], LIST_TIMEOUT_MS);
   },

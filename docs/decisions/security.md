@@ -132,17 +132,20 @@ login page, and authentication failures do not fall back to anonymous access.
 The gate is where a request goes by default, after the URL is taken apart and
 before the route is chosen. The liveness probe the update page polls is inside
 it, and nothing reads it without a session: the page that polls it has one. The
-exceptions are below: nine named routes, and two routes settled ahead of the
+exceptions are below: eleven named routes, and two routes settled ahead of the
 gate by a credential of their own.
 
-Nine routes are named as exceptions. Two are WordPress Tools':
-`POST /wp-tools/api/sign-in` and the `GET /wp-tools/api/session` that hands out
-the CSRF pair, because the links that use them are injected into CloudPanel's
-own Sites page and site pages, which a non-administrator sees too. The third is Panel Tweaks'
-read-only `GET /panel-tweaks/api/panel`, which answers the script injected into
-that same page with the sites CloudPanel would list for the caller. The last two
-are DNS's `POST /dns/api/provision` and its `GET /dns/api/session`, which Panel
-Tweaks' script calls on the page a new site lands on, for whoever created it.
+Eleven routes are named as exceptions. Three are WordPress Tools':
+`POST /wp-tools/api/sign-in`, the `GET /wp-tools/api/session` that hands out
+the CSRF pair, and `GET /wp-tools/api/site-kind`, which says only whether one of
+the caller's own sites is a WordPress. The links that use them are injected into
+CloudPanel's own Sites page and site pages, which a non-administrator sees too.
+The fourth is Panel Tweaks' read-only `GET /panel-tweaks/api/panel`, which
+answers the script injected into that same page with the sites CloudPanel would
+list for the caller. Three are DNS's: `POST /dns/api/provision` and its
+`GET /dns/api/session`, which Panel Tweaks' script calls on the page a new site
+lands on, for whoever created it, and `GET /dns/api/site`, which a site's
+SSL/TLS page asks for that site's readiness.
 The remaining four are Security Keys' own-account routes, called from the card
 on CloudPanel's Security page; the gateway reads whose keys they are from the
 session itself.
