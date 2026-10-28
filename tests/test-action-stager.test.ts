@@ -138,10 +138,16 @@ describe("the target shorthand", () => {
     expect(expandTarget("stg", "shop.example.com")).toBe("stg.shop.example.com");
   });
 
+  // The page carries its own copy: the executable keeps no function source.
   test("the page's script expands it the same way", () => {
     const page = { readyState: "loading", addEventListener() {} };
     const expand = new Function("document", `${CLIENT_JS}\nreturn expandTarget;`)(page) as typeof expandTarget;
-    expect(expand("STG", "www.example.com")).toBe("stg.example.com");
+    expect(CLIENT_JS).not.toContain("[native code]");
+    for (const input of ["stg", "staging.other.test", "  STG ", "stg.example.com.", "   ", "", "a.b"]) {
+      for (const source of ["example.com", "www.example.com", "shop.example.com"]) {
+        expect(expand(input, source)).toBe(expandTarget(input, source));
+      }
+    }
   });
 });
 
