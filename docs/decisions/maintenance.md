@@ -37,8 +37,10 @@ A domain query opens the focused page for that site, drawn in the shell's site
 mode, so CloudPanel's site information and site tabs stay above it. The status
 badge and the site's switch sit in the heading. It says when the global override
 is what is serving the maintenance page, because changing the saved setting
-there does not lift it. IP bypasses and the maintenance page fold into summaries
-("1 bypass", "Default" or "Custom").
+there does not lift it. The badge, switch and All sites link stay together in
+one row; on a narrow screen the whole row moves below the title, while a phone's
+desktop view lets the description wrap beside it. IP bypasses and the maintenance
+page fold into summaries ("1 bypass", "Default" or "Custom").
 
 The maintenance page section opens on a preview. An Edit switch turns editing
 on and nothing else, showing the HTML with a Preview tab beside it: turning it

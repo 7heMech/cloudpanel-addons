@@ -1,6 +1,7 @@
 /* The status and the switch that sets it, beside the page's title. */
-.heading-controls { display:flex; flex-wrap:wrap; align-items:center; gap:12px; }
-.heading-controls .btn { margin-left:8px; }
+.maintenance-heading > :first-child { flex:1; min-width:0; }
+.heading-controls { display:flex; flex:0 0 auto; align-items:center; gap:12px; }
+.heading-controls .btn { margin-left:8px; white-space:nowrap; }
 .state-live { color:var(--ok); border-color:var(--ok); }
 .state-maintenance { color:var(--bad); border-color:var(--bad); }
 .state-uncovered { color:var(--warn); border-color:var(--warn); }
@@ -50,8 +51,8 @@ html.dark #template-ace .ace_numeric,
 html.dark #template-ace .ace_entity { color:#d9a9ff; }
 html.dark #template-ace .ace_comment { color:#93a1ad; }
 @media (max-width:760px) {
-  .heading-controls { flex:1 1 100%; }
-  .heading-controls .btn { margin-left:auto; }
+  .heading-controls { flex:1 1 100%; gap:8px; }
+  .heading-controls .btn { margin-left:auto; padding-left:12px; padding-right:12px; }
   .bulk-actions { flex:1 1 100%; margin-left:0; flex-wrap:nowrap; }
   .bulk-actions .btn { flex:1 1 0; padding-left:10px; padding-right:10px; }
 }
