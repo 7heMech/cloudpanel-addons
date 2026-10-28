@@ -73,8 +73,10 @@ jobs:
           # `clp-addons serve`, sharing one copy of the Bun runtime.
           #
           # recon showed avx2 on the target CPU, so the standard glibc x64
-          # target applies rather than the baseline variant.
-          bun build --compile --target=bun-linux-x64 --bytecode --minify --format=esm \
+          # target applies rather than the baseline variant. --aot compiles to
+          # machine code for the platform the build runs on, which is why the
+          # runner is x64 Linux too.
+          bun build --compile --aot --trim --no-compile-function-source --target=bun-linux-x64 --minify --format=esm \
             --define "process.env.CLP_ADDONS_VERSION=\"${VERSION}\"" \
             --outfile dist/clp-addons-linux-x64 cli/index.ts
 

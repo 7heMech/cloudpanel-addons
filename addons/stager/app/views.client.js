@@ -1,5 +1,5 @@
-// expandTarget is prepended by views.ts from service.ts, so the preview and
-// the route expand a bare label the same way.
+// expandTarget is prepended by views.ts from expand-target.client.js, a copy
+// of the one the route uses, so the preview and the route expand a label alike.
 
 function previewTarget() {
   const input = document.getElementById('target');
