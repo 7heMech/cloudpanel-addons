@@ -174,6 +174,13 @@ const JOB_SUMMARIES = {
     if (data.failed.length) text += ' ' + data.failed.length + ' failed; see the sites below.';
     return { text: text, kind: data.failed.length || data.pending ? 'warn' : 'ok' };
   },
+  'new-site-plugins': function (data, job) {
+    const plugins = data.plugins || [];
+    const failed = plugins.filter(function (plugin) { return plugin.status === 'failed'; });
+    if (data.outcome !== 'done') return { text: 'No site called ' + job.domains[0] + ' was created, so no plugins were installed.', kind: 'warn' };
+    if (failed.length) return { text: failed.length + ' of ' + plural(plugins.length, 'plugin') + ' could not be installed on ' + job.domains[0] + '; see below.', kind: 'warn' };
+    return { text: plural(plugins.length, 'plugin') + ' installed on ' + job.domains[0] + '.' };
+  },
 };
 
 async function jobFinished(job) {

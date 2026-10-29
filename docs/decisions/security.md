@@ -85,7 +85,13 @@ accepts and under a deadline root enforces itself. Only administrators can manag
 that policy or install the official CLP plugin; sign-in's non-administrator
 exception does not apply. Checks, installations and MainWP connections run as
 background jobs whose runner the gateway cannot start; the page can only start
-one of a fixed set of tasks and watch it. The normal WordPress plugin remains installed when
+one of a fixed set of tasks and watch it. Plugins an administrator chooses on
+CloudPanel's new-site form are named only by a WordPress.org slug of a strict
+pattern or by the random id root gave an uploaded zip; root inspects each zip
+without extracting it, fetches directory plugins only from WordPress.org's API
+and download host, refuses a site that already exists, and hands each zip to
+the site's user on stdin. Uploads reach root through the gateway in parts under
+its input limit and are kept root-only until a job installs or discards them. The normal WordPress plugin remains installed when
 automation stops. See [WordPress Tools](wp-tools.md).
 
 Panel Tweaks' size measurement is the same kind of job: the page can start the

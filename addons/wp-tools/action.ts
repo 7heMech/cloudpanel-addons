@@ -13,8 +13,9 @@
  * WP-CLI runs the same way. Root never writes there itself: the site's user
  * controls every name under its root, so a symlink there would aim a root write
  * or `rm -rf` anywhere on the box. Requests carry a domain, fixed booleans and,
- * for a sign-in, the checked panel user and browser address -- no paths and no
- * file contents.
+ * for a sign-in, the checked panel user and browser address -- no paths. The one
+ * file content is a plugin zip chosen for a new site, which is staged in root's
+ * own storage under an id root picks and handed to the site's user on stdin.
  */
 import { Database } from "bun:sqlite";
 import { PANEL_USER_NAME_RE, panelUserOwnsSite } from "../../lib/panel-users";
@@ -24,10 +25,12 @@ import { normalizeMappedIpv4 } from "../../lib/ip-address";
 import { existsSync } from "node:fs";
 import { join } from "node:path";
 import {
-  ActionFailure, emitActionError, emitActionOk, failAction, validateDomain, withFileLock, type CommandResult,
+  ActionFailure, emitActionError, emitActionOk, failAction, validateDomain, withFileLock, withFileLockSync, type CommandResult,
 } from "../../cli/action-common";
 import { CLI_BIN, CONFIG_DIR, PANEL_DB, STATE_DIR } from "../../cli/paths";
-import { jobDir, jobIdArgument, pruneJobs, readJobLog, watchJobRecord, type startJobUnit } from "../../cli/job-store";
+import {
+  jobDir, jobGet, jobIdArgument, jobSet, pruneJobs, readJobLog, validateJobId, watchJobRecord, type startJobUnit,
+} from "../../cli/job-store";
 import { readUnixAccounts, siteAccountProblem, splitSharedUids, type UnixAccount } from "../../lib/site-accounts";
 import {
   DEFAULT_MAINTENANCE_ACTION_PATHS, addBypass, maintenanceBlocks, type MaintenanceActionPaths,
@@ -41,9 +44,14 @@ import {
   MAINWP_GUARD_FILE, emptyMainwpState, mainwpAction, mainwpNeedsRepair, mainwpView, readMainwpState, syncMainwp, syncMainwpAll, type MainwpResult, type MainwpRun,
 } from "./mainwp";
 import {
-  JOB_BUDGET_MS, MAX_JOB_DOMAINS, WP_JOB_TASKS, activeWpJobs, policyOf, runWpJob, startWpJob, wpJobView,
-  type WpJobTask, type WpJobs, type WpJobView,
+  JOB_BUDGET_MS, MAX_JOB_DOMAINS, WP_START_TASKS, activeWpJobs, newSiteJobs, policyOf, runWpJob, startWpJob, waitingNewSiteJobs, wpJobView,
+  type WpJobs, type WpJobView,
 } from "./jobs";
+import {
+  MAX_NEW_SITE_PLUGINS, UPLOAD_ID_RE, claimUploads, discardUpload, parsePluginList, pruneUploads, releaseUploads,
+  runNewSitePlugins, stageUploadPart, type NewSiteLookup, type NewSiteOptions, type NewSitePlugin,
+} from "./new-site-plugins";
+import { DIRECTORY_SLUG_RE } from "./plugin-zip";
 
 import { basicAuthBlocks, basicAuthRewritable, withBasicAuthBypass, type reloadNginx } from "./basic-auth";
 
@@ -157,9 +165,13 @@ export interface WpToolsActionPaths {
   jobsLockFile: string;
   /** What systemd runs for a job. */
   actionBinary: string;
+  /** Plugin zips waiting for the new-site form they were chosen on. */
+  uploadsDir: string;
+  /** Held while an upload is staged or a new site's plan is recorded. */
+  pluginsLockFile: string;
 }
 
-export interface WpToolsActionOptions extends VarnishOptions {
+export interface WpToolsActionOptions extends VarnishOptions, Pick<NewSiteOptions, "fetch" | "waits" | "sleep"> {
   paths?: Partial<WpToolsActionPaths>;
   emitReply?: boolean;
   processUid?: number;
@@ -170,6 +182,8 @@ export interface WpToolsActionOptions extends VarnishOptions {
   domainValidator?: (value: string) => string;
   /** Test-only; production hands a job to systemd. */
   startJob?: typeof startJobUnit;
+  /** Test-only; production reads an upload part from stdin. */
+  input?: string;
 }
 
 export const DEFAULT_WP_TOOLS_PATHS: WpToolsActionPaths = {
@@ -192,6 +206,8 @@ export const DEFAULT_WP_TOOLS_PATHS: WpToolsActionPaths = {
   jobsDir: `${STATE_DIR}/wp-tools/jobs`,
   jobsLockFile: "/run/lock/clp-addons/wp-jobs.lock",
   actionBinary: CLI_BIN,
+  uploadsDir: `${STATE_DIR}/wp-tools/uploads`,
+  pluginsLockFile: "/run/lock/clp-addons/wp-plugins.lock",
 };
 
 function pathsFor(options: WpToolsActionOptions): WpToolsActionPaths {
@@ -212,6 +228,7 @@ interface PanelSiteRow {
   type: string;
   varnish_cache: number | string | null;
   php_version: string | null;
+  created_at: string | null;
 }
 
 function openPanelDatabase(path: string): Database {
@@ -251,8 +268,9 @@ function panelSites(paths: WpToolsActionPaths): PanelSiteRow[] {
     const varnish = columns.some((column) => column.name === "varnish_cache") ? "varnish_cache" : "0 AS varnish_cache";
     const phpSettings = db.query("SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'php_settings';").get();
     const php = phpSettings ? "(SELECT p.php_version FROM php_settings p WHERE p.site_id = site.id LIMIT 1)" : "NULL";
+    const created = columns.some((column) => column.name === "created_at") ? "created_at" : "NULL AS created_at";
     return db.query<PanelSiteRow, []>(
-      `SELECT domain_name, user, application, root_directory, type, ${varnish}, ${php} AS php_version FROM site ORDER BY domain_name;`,
+      `SELECT domain_name, user, application, root_directory, type, ${varnish}, ${php} AS php_version, ${created} FROM site ORDER BY domain_name;`,
     ).all();
   } catch (error) {
     failAction(`CloudPanel site list could not be read: ${reason(error)}`);
@@ -691,17 +709,17 @@ function parseAction(argv: string[], options: WpToolsActionOptions): ParsedActio
 
 // --- background jobs ------------------------------------------------------
 
-const JOB_CONFIRMATION: Partial<Record<WpJobTask, string>> = { "mainwp-connect": "connect", "mainwp-cleanup": "mainwp" };
+const JOB_CONFIRMATION: Partial<Record<(typeof WP_START_TASKS)[number], string>> = { "mainwp-connect": "connect", "mainwp-cleanup": "mainwp" };
 
 /** `start --task=<task> [--domains=a,b] [--confirm=...]`, validated before anything is recorded. */
-function parseJobStart(rest: string[], options: WpToolsActionOptions): { task: WpJobTask; domains: string[] } {
+function parseJobStart(rest: string[], options: WpToolsActionOptions): { task: (typeof WP_START_TASKS)[number]; domains: string[] } {
   const fields: Record<string, string> = {};
   for (const argument of rest) {
     const match = /^--(task|domains|confirm)=(.*)$/.exec(argument);
     if (!match || fields[match[1]!] !== undefined) failAction(`unexpected argument '${argument}'`);
     fields[match[1]!] = match[2]!;
   }
-  const task = WP_JOB_TASKS.find((known) => known === fields.task);
+  const task = WP_START_TASKS.find((known) => known === fields.task);
   if (!task) failAction("choose a job with --task");
   const validate = options.domainValidator ?? ((value: string) => validateDomain(value));
   const domains = fields.domains === undefined ? [] : [...new Set(fields.domains.split(",").map((domain) => validate(domain)))];
@@ -728,9 +746,154 @@ async function startJob(paths: WpToolsActionPaths, rest: string[], options: WpTo
   }));
 }
 
+// --- plugins for a new site ----------------------------------------------
+
+/** The new site as CloudPanel has it so far, or null before it exists or while its database is busy. */
+function newSiteLookup(paths: WpToolsActionPaths, domain: string): NewSiteLookup | null {
+  try {
+    const row = panelSites(paths).find((candidate) => candidate.domain_name.toLowerCase() === domain);
+    if (!row) return null;
+    const site = resolvedSites(paths).find((candidate) => candidate.row.domain_name === row.domain_name);
+    return {
+      createdAt: String(row.created_at ?? ""),
+      site: site ? {
+        domain: row.domain_name, user: row.user, root: site.root, home: site.account.home, phpVersion: String(row.php_version ?? ""),
+      } : null,
+    };
+  } catch {
+    return null;
+  }
+}
+
+/** `plugin-upload [--upload=<id>] --part=<n> [--last]`, one base64 part on stdin. */
+async function uploadPart(paths: WpToolsActionPaths, rest: string[], input: string): Promise<unknown> {
+  let id: string | undefined;
+  let part = -1;
+  let last = false;
+  for (const argument of rest) {
+    const upload = /^--upload=(.*)$/.exec(argument);
+    const index = /^--part=(\d{1,3})$/.exec(argument);
+    if (upload && id === undefined && UPLOAD_ID_RE.test(upload[1]!)) id = upload[1]!;
+    else if (index && part < 0) part = Number(index[1]);
+    else if (argument === "--last" && !last) last = true;
+    else failAction(`unexpected argument '${argument}'`);
+  }
+  if (part < 0) failAction("an upload part needs --part");
+  if (!existsSync(paths.configFile)) failAction("WordPress Tools must be enabled before uploading a plugin");
+  return withFileLock(paths.pluginsLockFile, 15, "another plugin upload is being saved", async () => {
+    try {
+      return stageUploadPart(paths.uploadsDir, { id, part, last }, input);
+    } catch (error) {
+      failAction(reason(error));
+    }
+  });
+}
+
+function discard(paths: WpToolsActionPaths, rest: string[]): unknown {
+  const id = rest.length === 1 ? /^--upload=([a-f0-9]{32})$/.exec(rest[0]!)?.[1] : undefined;
+  if (!id) failAction("'plugin-discard' takes exactly --upload=<id>");
+  return { discarded: discardUpload(paths.uploadsDir, id) };
+}
+
+/**
+ * `new-site --domain=<d> [--plugins=slug:1,...] [--uploads=id:0,...] [--replaces=<job>]`: the
+ * plugins an administrator chose on CloudPanel's new-site form, recorded as a
+ * job that waits for that site. Directory plugins go first, so an uploaded
+ * add-on finds the plugin it extends already active.
+ */
+async function recordNewSite(paths: WpToolsActionPaths, rest: string[], options: WpToolsActionOptions): Promise<{ job: WpJobView }> {
+  const fields: Record<string, string> = {};
+  for (const argument of rest) {
+    const match = /^--(domain|plugins|uploads|replaces)=(.*)$/.exec(argument);
+    if (!match || fields[match[1]!] !== undefined) failAction(`unexpected argument '${argument}'`);
+    fields[match[1]!] = match[2]!;
+  }
+  const domain = (options.domainValidator ?? ((value: string) => validateDomain(value)))(fields.domain ?? "").toLowerCase();
+  let directory: { key: string; activate: boolean }[];
+  let uploads: { key: string; activate: boolean }[];
+  try {
+    directory = parsePluginList(fields.plugins, DIRECTORY_SLUG_RE, "WordPress.org plugin slug");
+    uploads = parsePluginList(fields.uploads, UPLOAD_ID_RE, "upload id");
+  } catch (error) {
+    failAction(reason(error));
+  }
+  const replaces = fields.replaces === undefined ? undefined : validateJobId(fields.replaces);
+  if (replaces === null) failAction("'--replaces' takes a job id");
+  const total = directory.length + uploads.length;
+  if (total === 0) failAction("choose at least one plugin");
+  if (total > MAX_NEW_SITE_PLUGINS) failAction(`a new site takes at most ${MAX_NEW_SITE_PLUGINS} plugins`);
+  if (!existsSync(paths.configFile)) failAction("WordPress Tools must be enabled first");
+  return withFileLock(paths.pluginsLockFile, 15, "another plugin choice is being saved", async () => {
+    // Only a site that does not exist yet: this is no way into an existing one.
+    if (panelSites(paths).some((row) => row.domain_name.toLowerCase() === domain)) {
+      failAction(`CloudPanel already has a site called ${domain}; plugins are chosen here only for a new one`);
+    }
+    // A form CloudPanel sent back and the administrator submitted again: the
+    // later choice is the one that counts, and it may name the same uploads.
+    const replaced = waitingNewSiteJobs(paths.jobsDir, (view) => view.domains[0] === domain || view.id === replaces);
+    for (const view of replaced) {
+      jobSet(jobDir(paths.jobsDir, view.id), "superseded", "1");
+      releaseUploads(paths.uploadsDir, view.plugins.flatMap((plugin) => plugin.upload ? [plugin.upload] : []));
+    }
+    let claimed;
+    try { claimed = claimUploads(paths.uploadsDir, uploads.map((upload) => upload.key)); }
+    catch (error) { failAction(reason(error)); }
+    const plan: NewSitePlugin[] = [
+      ...directory.map(({ key, activate }) => ({ source: "wordpress.org" as const, slug: key, name: key, activate })),
+      ...claimed.map((upload, index) => ({
+        source: "upload" as const, slug: upload.slug, name: upload.name, activate: uploads[index]!.activate, upload: upload.id,
+      })),
+    ];
+    const slugs = plan.map((plugin) => plugin.slug.toLowerCase());
+    try {
+      if (new Set(slugs).size !== slugs.length) failAction("the same plugin is chosen twice");
+      return {
+        job: startWpJob({
+          jobsDir: paths.jobsDir, task: "new-site-plugins", domains: [domain], plugins: plan,
+          actionBinary: paths.actionBinary, start: options.startJob,
+        }),
+      };
+    } catch (error) {
+      releaseUploads(paths.uploadsDir, claimed.map((upload) => upload.id));
+      throw error;
+    }
+  });
+}
+
+function runNewSiteJob(
+  paths: WpToolsActionPaths, view: WpJobView, options: WpToolsActionOptions,
+  onProgress: (progress: { completed: number; total: number; site: string }) => void, step: (text: string) => void,
+) {
+  const dir = jobDir(paths.jobsDir, view.id);
+  const superseded = () => jobGet(dir, "superseded") === "1";
+  return runNewSitePlugins({
+    runuser: paths.runuser,
+    uploadsDir: paths.uploadsDir,
+    domain: view.domains[0]!,
+    plugins: view.plugins,
+    chosenAt: view.createdAt,
+    lookup: () => newSiteLookup(paths, view.domains[0]!),
+    superseded,
+    // Under the lock a later submission takes to supersede this one, so either
+    // it sees this job installing, or this job sees it was replaced.
+    begin: () => withFileLockSync(paths.pluginsLockFile, 30, "a plugin choice is still being saved", () => {
+      if (superseded()) return false;
+      jobSet(dir, "phase", "installing");
+      return true;
+    }),
+    enabled: () => existsSync(paths.configFile),
+    deadline: Date.now() + JOB_BUDGET_MS,
+  }, options, onProgress, step);
+}
+
 /** systemd's half: wait for the policy's lock, which a timer pass may hold, then do the work. */
 async function runJob(paths: WpToolsActionPaths, id: string, options: WpToolsActionOptions): Promise<WpJobView | null> {
-  await runWpJob(paths.jobsDir, id, async (task, domains, onProgress) => {
+  await runWpJob(paths.jobsDir, id, async (view, onProgress, step) => {
+    const { task, domains } = view;
+    if (task === "new-site-plugins") {
+      if (!existsSync(paths.configFile)) failAction("WordPress Tools is not enabled");
+      return runNewSiteJob(paths, view, options, onProgress, step);
+    }
     const varnish = policyOf(task) === "varnish";
     const lock = varnish ? paths.varnishLockFile : paths.mainwpLockFile;
     const busy = varnish ? "a WordPress Varnish change is still running" : "a MainWP change is still running";
@@ -748,8 +911,9 @@ async function runJob(paths: WpToolsActionPaths, id: string, options: WpToolsAct
   return wpJobView(paths.jobsDir, id);
 }
 
-/** Expired job records go, and one whose runner died is marked failed. */
+/** Expired job records and plugin uploads go, and a job whose runner died is marked failed. */
 export function pruneWpJobs(options: WpToolsActionOptions = {}): void {
+  pruneUploads(pathsFor(options).uploadsDir);
   pruneJobs({
     addon: "wp-tools",
     jobsDir: pathsFor(options).jobsDir,
@@ -765,6 +929,9 @@ export async function executeWpToolsAction(
   if ((options.processUid ?? process.getuid?.()) !== 0) failAction("WordPress Tools actions must run as root");
   const paths = pathsFor(options);
   if (argv[0] === "start") return startJob(paths, argv.slice(1), options);
+  if (argv[0] === "new-site") return recordNewSite(paths, argv.slice(1), options);
+  if (argv[0] === "plugin-upload") return uploadPart(paths, argv.slice(1), options.input ?? await Bun.stdin.text());
+  if (argv[0] === "plugin-discard") return discard(paths, argv.slice(1));
   if (argv[0] === "run") return runJob(paths, jobIdArgument(argv.slice(1)), options);
   if (argv[0] === "job") {
     const id = jobIdArgument(argv.slice(1));
@@ -798,8 +965,10 @@ export async function executeWpToolsAction(
       mainwpError = `${paths.mainwpState} cannot be read: ${reason(error)}`;
     }
     let jobs: WpJobs = { varnish: null, mainwp: null };
+    let newSites: WpJobView[] = [];
     try {
       jobs = activeWpJobs(paths.jobsDir);
+      newSites = newSiteJobs(paths.jobsDir);
     } catch {
       // A job the page cannot see still finishes; the page only loses its progress.
     }
@@ -810,7 +979,7 @@ export async function executeWpToolsAction(
     } catch (error) {
       domainLinkError = `${paths.domainLinkState} cannot be read: ${reason(error)}`;
     }
-    return { sites: wordpressSites(paths, varnish), varnish, varnishError, mainwp, mainwpError, domainLink, domainLinkError, jobs };
+    return { sites: wordpressSites(paths, varnish), varnish, varnishError, mainwp, mainwpError, domainLink, domainLinkError, jobs, newSites };
   }
   // The manager renders the templates again once this is saved; nothing here
   // touches them.
