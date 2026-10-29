@@ -613,10 +613,10 @@ function logCreation(domain: string, user: string, at = new Date()): void {
 
 test("a site manager's plugins go only into a site that account created", async () => {
   await allowSiteManagers(true);
+  // Someone else made a site of that name before the choice, in the same second; it does not count.
+  logCreation("new.example.com", "other-mgr");
   const { job } = await act<{ job: WpJobView }>(["new-site", "--domain=new.example.com", "--plugins=woocommerce:1", "--as-user=mgr"]);
   addSite("new.example.com", "newsite");
-  // Someone else made a site of that name before this one, and long ago; neither counts.
-  logCreation("new.example.com", "other-mgr", new Date(Date.now() - 3_600_000));
   // CloudPanel logs the creation a little after the site appears; the job waits for it.
   onSleep = () => { if (sleeps === 2) logCreation("New.Example.com", "mgr"); };
   const done = await runJob(job.id);
@@ -627,6 +627,8 @@ test("a site manager's plugins go only into a site that account created", async 
 
 test("a site manager's plugins are not installed into a site another account created", async () => {
   await allowSiteManagers(true);
+  // The manager's own earlier creation of that name, logged just before the choice, is not this site's.
+  logCreation("new.example.com", "mgr");
   const { job } = await act<{ job: WpJobView }>(["new-site", "--domain=new.example.com", "--plugins=woocommerce:1", "--as-user=mgr"]);
   addSite("new.example.com", "newsite");
   logCreation("new.example.com", "admin");
@@ -643,6 +645,8 @@ test("a site manager's plugins are not installed into a site another account cre
 
 test("a site manager whose site's creation CloudPanel never logs gets nothing installed", async () => {
   await allowSiteManagers(true);
+  // Only an entry from before the choice, which does not count.
+  logCreation("new.example.com", "mgr");
   const { job } = await act<{ job: WpJobView }>(["new-site", "--domain=new.example.com", "--plugins=woocommerce:1", "--as-user=mgr"]);
   addSite("new.example.com", "newsite");
   const done = await runJob(job.id, { waits: { siteMs: 60_000, wordpressMs: 0, pollMs: 1 } });

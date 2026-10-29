@@ -282,6 +282,20 @@ function siteManagerMayChoose(paths: WpToolsActionPaths, userName: string): void
   if (role !== "ROLE_SITE_MANAGER") failAction("only administrators and site managers choose plugins for new sites");
 }
 
+/** The newest entry in CloudPanel's event log, which a site manager's job reads past; -1 without a log. */
+function latestEventId(paths: WpToolsActionPaths): number {
+  const db = openPanelDatabase(paths.panelDb);
+  try {
+    const table = db.query("SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'event';").get();
+    if (!table) return -1;
+    return Number(db.query<{ id: number | null }, []>("SELECT MAX(id) AS id FROM event;").get()?.id ?? 0);
+  } catch (error) {
+    failAction(`CloudPanel's event log could not be read: ${reason(error)}`);
+  } finally {
+    db.close();
+  }
+}
+
 function asUserArgument(value: string | undefined): string {
   if (value === undefined) return "";
   if (!PANEL_USER_NAME_RE.test(value)) failAction("that is not a valid panel user name");
@@ -778,7 +792,7 @@ async function startJob(paths: WpToolsActionPaths, rest: string[], options: WpTo
 // --- plugins for a new site ----------------------------------------------
 
 /** The new site as CloudPanel has it so far, or null before it exists or while its database is busy. */
-function newSiteLookup(paths: WpToolsActionPaths, domain: string, since: string): NewSiteLookup | null {
+function newSiteLookup(paths: WpToolsActionPaths, domain: string, eventsAfter: number): NewSiteLookup | null {
   try {
     const row = panelSites(paths).find((candidate) => candidate.domain_name.toLowerCase() === domain);
     if (!row) return null;
@@ -788,7 +802,7 @@ function newSiteLookup(paths: WpToolsActionPaths, domain: string, since: string)
       site: site ? {
         domain: row.domain_name, user: row.user, root: site.root, home: site.account.home, phpVersion: String(row.php_version ?? ""),
       } : null,
-      creator: wordpressCreator(paths, domain, since),
+      creator: wordpressCreator(paths, domain, eventsAfter),
     };
   } catch {
     return null;
@@ -796,20 +810,21 @@ function newSiteLookup(paths: WpToolsActionPaths, domain: string, since: string)
 }
 
 /**
- * Who CloudPanel's event log says created this WordPress site since `since`
- * (an ISO time), or null when it records no such creation yet. CloudPanel
- * keeps no creator on the site itself; the log is what its Events page shows.
+ * Who CloudPanel's event log says created this WordPress site after the entry
+ * `eventsAfter`, the newest when the choice was saved; null when it records no
+ * such creation yet. CloudPanel keeps no creator on the site itself; the log
+ * is what its Events page shows, and its ids are AUTOINCREMENT, so a later
+ * entry always has a greater one where whole-second times could not tell.
  */
-function wordpressCreator(paths: WpToolsActionPaths, domain: string, since: string): string | null {
+function wordpressCreator(paths: WpToolsActionPaths, domain: string, eventsAfter: number): string | null {
+  if (!Number.isSafeInteger(eventsAfter) || eventsAfter < 0) return null;
   const db = openPanelDatabase(paths.panelDb);
   try {
     const table = db.query("SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'event';").get();
     if (!table) return null;
-    // CloudPanel writes created_at as UTC "YYYY-MM-DD HH:MM:SS"; a little before the choice, as for the site's own.
-    const from = new Date(Date.parse(since) - 2 * 60_000).toISOString().slice(0, 19).replace("T", " ");
-    const rows = db.query<{ user_name: string; event_data: string | null }, [string]>(
-      "SELECT user_name, event_data FROM event WHERE event_name = 'SITE_WORDPRESS_CREATE' AND created_at >= ? ORDER BY id DESC;",
-    ).all(from);
+    const rows = db.query<{ user_name: string; event_data: string | null }, [number]>(
+      "SELECT user_name, event_data FROM event WHERE event_name = 'SITE_WORDPRESS_CREATE' AND id > ? ORDER BY id DESC;",
+    ).all(eventsAfter);
     for (const row of rows) {
       let site: unknown;
       try { site = (JSON.parse(row.event_data ?? "") as { site?: unknown }).site; } catch { continue; }
@@ -915,6 +930,8 @@ async function recordNewSite(paths: WpToolsActionPaths, rest: string[], options:
       return {
         job: startWpJob({
           jobsDir: paths.jobsDir, task: "new-site-plugins", domains: [domain], plugins: plan, chosenBy: asUser,
+          // Under the lock, so a creation logged after this is the one this job waits for.
+          ...(asUser ? { eventsAfter: String(latestEventId(paths)) } : {}),
           actionBinary: paths.actionBinary, start: options.startJob,
         }),
       };
@@ -989,7 +1006,7 @@ function runNewSiteJob(
     plugins: view.plugins,
     chosenAt: view.createdAt,
     chosenBy: view.chosenBy,
-    lookup: () => newSiteLookup(paths, view.domains[0]!, view.createdAt),
+    lookup: () => newSiteLookup(paths, view.domains[0]!, Number.parseInt(jobGet(dir, "eventsAfter") || "-1", 10)),
     superseded,
     // Under the lock a later submission takes to supersede this one, so either
     // it sees this job installing, or this job sees it was replaced.

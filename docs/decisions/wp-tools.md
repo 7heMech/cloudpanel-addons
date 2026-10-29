@@ -692,8 +692,10 @@ it as `chosenBy`, which the WordPress Tools page shows. Its plugins go only into
 a site that account created: the name may have been free when they chose, and
 taken by someone else since. CloudPanel keeps no creator on the site, so the
 job waits, with WordPress, for the `SITE_WORDPRESS_CREATE` entry CloudPanel's
-event log writes for that domain since the choice, and installs nothing if it
-names another account or never comes. An administrator's choice is not held to
+event log writes for that domain, and installs nothing if it names another
+account or never comes. Only an entry after the newest one when the choice was
+saved counts: the log's ids are `AUTOINCREMENT`, where whole-second times could
+not tell an entry from just before the choice from one just after it. An administrator's choice is not held to
 this. The search asks root
 `new-site-access` before it runs, since only root can read the switch.
 Uploading, discarding an upload, the switch and every other WP Tools route stay

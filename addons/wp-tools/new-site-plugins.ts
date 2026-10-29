@@ -284,7 +284,8 @@ export interface NewSiteLookup {
   site: WpSite | null;
   /**
    * The panel account CloudPanel's own event log says created it as a
-   * WordPress site, since the choice was made; null until it has said so.
+   * WordPress site, in an entry logged after the choice was saved; null until
+   * it has said so.
    */
   creator: string | null;
 }

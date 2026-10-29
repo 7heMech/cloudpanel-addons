@@ -145,6 +145,8 @@ export function startWpJob(options: {
   plugins?: NewSitePlugin[];
   /** The site manager a new site's plan is for. */
   chosenBy?: string;
+  /** The newest CloudPanel event when a site manager chose; their site's creation is logged after it. */
+  eventsAfter?: string;
 }): WpJobView {
   const { jobsDir, task, domains } = options;
   const policy = policyOf(task);
@@ -159,6 +161,7 @@ export function startWpJob(options: {
       task, domains: domains.join(","),
       ...(options.plugins ? { plugins: JSON.stringify(options.plugins) } : {}),
       ...(options.chosenBy ? { chosenBy: options.chosenBy } : {}),
+      ...(options.eventsAfter ? { eventsAfter: options.eventsAfter } : {}),
     },
     description: `clp-addons: WordPress Tools ${task}`,
     actionBinary: options.actionBinary,
