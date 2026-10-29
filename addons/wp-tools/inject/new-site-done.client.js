@@ -36,6 +36,11 @@
       alert.appendChild(list);
     }
     if (kind === 'warning' || kind === 'danger') {
+      // WordPress Tools' page is an administrator's; a site manager is told who can look.
+      if (!box.hasAttribute('data-admin')) {
+        alert.appendChild(document.createTextNode('Install them in WordPress, or ask an administrator, who can see what happened in WordPress Tools.'));
+        return;
+      }
       var link = document.createElement('a');
       link.className = 'alert-link';
       link.href = url + '/';

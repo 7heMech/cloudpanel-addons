@@ -122,7 +122,7 @@ export function newSiteDoneSnippet(url: string, siteManagers: boolean): string {
       ${choosers(siteManagers)}
       {% set clpWpPluginsSite = (app.session.get('siteCredentials')|default({}))['Site'|trans]|default({}) %}
       {% set clpWpPluginsDomain = (clpWpPluginsSite['Domain Name'|trans]|default(''))|replace({'https://': '', 'http://': ''})|trim('/')|lower %}
-      <div class="alert-container" id="clp-wp-plugins-status" data-url="${url}" data-domain="{{ clpWpPluginsDomain }}" hidden>
+      <div class="alert-container" id="clp-wp-plugins-status" data-url="${url}" data-domain="{{ clpWpPluginsDomain }}"{% if is_granted('ROLE_ADMIN') %} data-admin{% endif %} hidden>
         <div class="alert alert-info" role="status"></div>
       </div>
       <style>${NEW_SITE_STYLE}</style>

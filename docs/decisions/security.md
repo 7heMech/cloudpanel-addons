@@ -154,8 +154,9 @@ CloudPanel's own Sites page and site pages, which a non-administrator sees too.
 WordPress Site form and the page it lands on, which site managers use as well.
 The handler turns away anyone but an administrator or a site manager; root
 holds a site manager to the administrator's switch, to WordPress.org plugins,
-to a domain CloudPanel does not have yet, and to the status of the job they
-recorded themselves. Uploading and the switch stay behind the gate.
+to a domain CloudPanel does not have yet, to a site CloudPanel's event log
+says that account created, and to the status of the job they recorded
+themselves. Uploading and the switch stay behind the gate.
 The seventh is Panel Tweaks' read-only `GET /panel-tweaks/api/panel`, which
 answers the script injected into that same page with the sites CloudPanel would
 list for the caller. Three are DNS's: `POST /dns/api/provision` and its

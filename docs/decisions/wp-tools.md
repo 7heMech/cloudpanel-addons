@@ -688,7 +688,13 @@ status from CloudPanel's database rather than its session, refusing anything
 but an active site manager. A site manager's `new-site` names no uploads, gets
 the same refusal of a domain CloudPanel already has and of a site older than the
 choice, and replaces or clears only choices that account made; the job records
-it as `chosenBy`, which the WordPress Tools page shows. The search asks root
+it as `chosenBy`, which the WordPress Tools page shows. Its plugins go only into
+a site that account created: the name may have been free when they chose, and
+taken by someone else since. CloudPanel keeps no creator on the site, so the
+job waits, with WordPress, for the `SITE_WORDPRESS_CREATE` entry CloudPanel's
+event log writes for that domain since the choice, and installs nothing if it
+names another account or never comes. An administrator's choice is not held to
+this. The search asks root
 `new-site-access` before it runs, since only root can read the switch.
 Uploading, discarding an upload, the switch and every other WP Tools route stay
 behind the gate.
@@ -697,7 +703,8 @@ The landing page follows its job through `new-site-status`, which tells a site
 manager only about a job that account recorded, which is the site it just
 created; any other id reads as one that does not exist. Its reply is the job's
 state, step, progress and result, without the plan's upload ids or the log, for
-administrators too.
+administrators too. Only an administrator's landing page links to WordPress
+Tools when something failed; a site manager's says to ask one.
 
 `ROLE_USER` stays out: the handler refuses it and root would too. Such an
 account cannot create a site in CloudPanel at all, so for that role plugins would

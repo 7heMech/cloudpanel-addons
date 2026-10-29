@@ -282,6 +282,11 @@ export interface NewSiteLookup {
   createdAt: string;
   /** Null while the account or its root cannot be resolved yet. */
   site: WpSite | null;
+  /**
+   * The panel account CloudPanel's own event log says created it as a
+   * WordPress site, since the choice was made; null until it has said so.
+   */
+  creator: string | null;
 }
 
 export interface NewSiteRun {
@@ -291,6 +296,8 @@ export interface NewSiteRun {
   plugins: NewSitePlugin[];
   /** When the plugins were chosen: the job's own `createdAt`. */
   chosenAt: string;
+  /** The site manager who chose them, or "" for an administrator. */
+  chosenBy: string;
   lookup: () => NewSiteLookup | null;
   /** Whether a later submission of the same form took over; asked only while waiting for the site. */
   superseded: () => boolean;
@@ -443,8 +450,15 @@ export async function runNewSitePlugins(
     let last = "";
     for (;;) {
       if (!run.enabled()) throw new Error("WordPress Tools was disabled before WordPress was installed");
-      site = run.lookup()?.site ?? null;
-      if (site && isWordPress(site.root)) {
+      const found = run.lookup();
+      site = found?.site ?? null;
+      // A site manager's choice goes only into a site that account created:
+      // the name may have been free when they chose, and someone else's since.
+      if (run.chosenBy && found?.creator && found.creator !== run.chosenBy) {
+        throw new Error(`${run.domain} was created by another account, so the plugins ${run.chosenBy} chose were not installed`);
+      }
+      if (run.chosenBy && !found?.creator) last = "CloudPanel has not recorded who created it";
+      else if (site && isWordPress(site.root)) {
         try {
           await runWp(run, site, ["core", "is-installed"], options, run.deadline);
           break;

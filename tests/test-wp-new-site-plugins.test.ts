@@ -312,6 +312,7 @@ beforeEach(() => {
     CREATE TABLE site (id INTEGER PRIMARY KEY, type TEXT, domain_name TEXT, root_directory TEXT, user TEXT, application TEXT, varnish_cache INTEGER, created_at TEXT);
     CREATE TABLE php_settings (site_id INTEGER, php_version TEXT);
     CREATE TABLE user (id INTEGER PRIMARY KEY, user_name TEXT, role TEXT, status INTEGER);
+    CREATE TABLE event (id INTEGER PRIMARY KEY AUTOINCREMENT, created_at TEXT, user_name TEXT, user_role TEXT, event_name TEXT, event_data TEXT);
     INSERT INTO user VALUES (1, 'admin', 'ROLE_ADMIN', 1), (2, 'mgr', 'ROLE_SITE_MANAGER', 1), (3, 'other-mgr', 'ROLE_SITE_MANAGER', 1),
       (4, 'client', 'ROLE_USER', 1), (5, 'gone', 'ROLE_SITE_MANAGER', 0);
   `);
@@ -599,6 +600,56 @@ test("the setting is the administrator's page's, and an unreadable one reads as 
   await expect(act(["new-site", "--domain=new.example.com", "--plugins=woocommerce:1", "--as-user=mgr"])).rejects.toThrow("cannot be read");
 });
 
+/** What CloudPanel's event log records when an account creates a WordPress site. */
+function logCreation(domain: string, user: string, at = new Date()): void {
+  const db = new Database(join(root, "panel.sq3"));
+  try {
+    db.run("INSERT INTO event (created_at, user_name, user_role, event_name, event_data) VALUES (?, ?, 'ROLE_SITE_MANAGER', 'SITE_WORDPRESS_CREATE', ?)",
+      [at.toISOString().slice(0, 19).replace("T", " "), user, JSON.stringify({ site: domain, siteUser: "x" })]);
+  } finally {
+    db.close();
+  }
+}
+
+test("a site manager's plugins go only into a site that account created", async () => {
+  await allowSiteManagers(true);
+  const { job } = await act<{ job: WpJobView }>(["new-site", "--domain=new.example.com", "--plugins=woocommerce:1", "--as-user=mgr"]);
+  addSite("new.example.com", "newsite");
+  // Someone else made a site of that name before this one, and long ago; neither counts.
+  logCreation("new.example.com", "other-mgr", new Date(Date.now() - 3_600_000));
+  // CloudPanel logs the creation a little after the site appears; the job waits for it.
+  onSleep = () => { if (sleeps === 2) logCreation("New.Example.com", "mgr"); };
+  const done = await runJob(job.id);
+  expect(done.state).toBe("done");
+  expect(sleeps).toBeGreaterThanOrEqual(2);
+  expect((done.result as NewSiteResult).plugins.map((plugin) => plugin.status)).toEqual(["activated"]);
+});
+
+test("a site manager's plugins are not installed into a site another account created", async () => {
+  await allowSiteManagers(true);
+  const { job } = await act<{ job: WpJobView }>(["new-site", "--domain=new.example.com", "--plugins=woocommerce:1", "--as-user=mgr"]);
+  addSite("new.example.com", "newsite");
+  logCreation("new.example.com", "admin");
+  const done = await runJob(job.id);
+  expect(done.state).toBe("failed");
+  expect(done.error).toContain("was created by another account");
+  expect(commands).toEqual([]);
+  // An administrator's choice is not held to it.
+  const admins = (await act<{ job: WpJobView }>(["new-site", "--domain=fresh.example.com", "--plugins=woocommerce:1"])).job;
+  addSite("fresh.example.com", "fresh");
+  logCreation("fresh.example.com", "mgr");
+  expect((await runJob(admins.id)).state).toBe("done");
+});
+
+test("a site manager whose site's creation CloudPanel never logs gets nothing installed", async () => {
+  await allowSiteManagers(true);
+  const { job } = await act<{ job: WpJobView }>(["new-site", "--domain=new.example.com", "--plugins=woocommerce:1", "--as-user=mgr"]);
+  addSite("new.example.com", "newsite");
+  const done = await runJob(job.id, { waits: { siteMs: 60_000, wordpressMs: 0, pollMs: 1 } });
+  expect(done.error).toContain("CloudPanel has not recorded who created it");
+  expect(commands).toEqual([]);
+});
+
 // --- the manager's routes -------------------------------------------------
 
 const originals = { ...wpToolsService };
@@ -731,6 +782,9 @@ test("the new-site blocks are for administrators, and site managers only while a
     expect(form).toContain(`'${route}`);
   }
   expect(newSiteDoneSnippet("/addons/wp-tools", true)).toContain("'/api/new-site-status?job='");
+  // Only an administrator's landing page links to WordPress Tools' own page.
+  expect(newSiteDoneSnippet("/addons/wp-tools", true)).toContain("{% if is_granted('ROLE_ADMIN') %} data-admin{% endif %}");
+  expect(newSiteDoneSnippet("/addons/wp-tools", true)).toContain("ask an administrator");
   const targets = WP_TOOLS_TARGETS.filter((target) => target.slug.startsWith("new-site"));
   expect(targets.map((target) => [target.template, target.required])).toEqual([
     ["Frontend/Site/New/wordpress.html.twig", false],

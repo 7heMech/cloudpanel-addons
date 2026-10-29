@@ -827,6 +827,9 @@ function panelLoginStub(dark: boolean): string {
 
 /** Frontend/Site/New/wordpress.html.twig with its Twig evaluated, less the panel's progress script. */
 function panelNewSiteStub(url: URL, dark: boolean): string {
+  // ?manager draws the form for a site manager, who sees the Plugins row only
+  // while WP Tools' switch for them is on, and never the upload control.
+  const manager = url.searchParams.has("manager");
   // ?chosen starts with three plugins chosen, as a form CloudPanel sent back
   // would; ?q=woo searches as the page loads. A screenshot wants WAIT=3000.
   const seed = url.searchParams.has("chosen") ? `<script>sessionStorage.setItem("clp-addons-new-site-plugins", ${JSON.stringify(JSON.stringify([
@@ -859,7 +862,7 @@ function panelNewSiteStub(url: URL, dark: boolean): string {
                 <div class="col-6">${field("adminPassword", "Admin Password", "preview-only-password")}</div>
               </div>
             </div>
-${seed}${twigForRole(wpToolsNewSiteForm("/addons/wp-tools", true), !url.searchParams.has("manager"))}${search}
+${seed}${manager && !wpNewSiteManagers ? "" : twigForRole(wpToolsNewSiteForm("/addons/wp-tools", wpNewSiteManagers), !manager)}${search}
             <div class="row">
               <div class="col-6 text-start">
                 <a href="/sites" class="btn btn-lg btn-gray">Back</a>

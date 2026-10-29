@@ -778,7 +778,7 @@ async function startJob(paths: WpToolsActionPaths, rest: string[], options: WpTo
 // --- plugins for a new site ----------------------------------------------
 
 /** The new site as CloudPanel has it so far, or null before it exists or while its database is busy. */
-function newSiteLookup(paths: WpToolsActionPaths, domain: string): NewSiteLookup | null {
+function newSiteLookup(paths: WpToolsActionPaths, domain: string, since: string): NewSiteLookup | null {
   try {
     const row = panelSites(paths).find((candidate) => candidate.domain_name.toLowerCase() === domain);
     if (!row) return null;
@@ -788,9 +788,36 @@ function newSiteLookup(paths: WpToolsActionPaths, domain: string): NewSiteLookup
       site: site ? {
         domain: row.domain_name, user: row.user, root: site.root, home: site.account.home, phpVersion: String(row.php_version ?? ""),
       } : null,
+      creator: wordpressCreator(paths, domain, since),
     };
   } catch {
     return null;
+  }
+}
+
+/**
+ * Who CloudPanel's event log says created this WordPress site since `since`
+ * (an ISO time), or null when it records no such creation yet. CloudPanel
+ * keeps no creator on the site itself; the log is what its Events page shows.
+ */
+function wordpressCreator(paths: WpToolsActionPaths, domain: string, since: string): string | null {
+  const db = openPanelDatabase(paths.panelDb);
+  try {
+    const table = db.query("SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'event';").get();
+    if (!table) return null;
+    // CloudPanel writes created_at as UTC "YYYY-MM-DD HH:MM:SS"; a little before the choice, as for the site's own.
+    const from = new Date(Date.parse(since) - 2 * 60_000).toISOString().slice(0, 19).replace("T", " ");
+    const rows = db.query<{ user_name: string; event_data: string | null }, [string]>(
+      "SELECT user_name, event_data FROM event WHERE event_name = 'SITE_WORDPRESS_CREATE' AND created_at >= ? ORDER BY id DESC;",
+    ).all(from);
+    for (const row of rows) {
+      let site: unknown;
+      try { site = (JSON.parse(row.event_data ?? "") as { site?: unknown }).site; } catch { continue; }
+      if (typeof site === "string" && site.toLowerCase() === domain) return row.user_name;
+    }
+    return null;
+  } finally {
+    db.close();
   }
 }
 
@@ -961,7 +988,8 @@ function runNewSiteJob(
     domain: view.domains[0]!,
     plugins: view.plugins,
     chosenAt: view.createdAt,
-    lookup: () => newSiteLookup(paths, view.domains[0]!),
+    chosenBy: view.chosenBy,
+    lookup: () => newSiteLookup(paths, view.domains[0]!, view.createdAt),
     superseded,
     // Under the lock a later submission takes to supersede this one, so either
     // it sees this job installing, or this job sees it was replaced.
