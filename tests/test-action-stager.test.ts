@@ -4,7 +4,8 @@ import { chmodSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync 
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { applicationOk, dotenvProblem, holdCloneMail, rewriteDotenvContent, rewriteWpConfig } from "../addons/stager/action";
-import { expandTarget } from "../addons/stager/app/service";
+import { expandTarget, stagerService } from "../addons/stager/app/service";
+import { handle as stagerHandle } from "../addons/stager/app";
 import { CLIENT_JS } from "../addons/stager/app/views";
 
 const repo = join(import.meta.dir, "..");
@@ -138,7 +139,28 @@ describe("the target shorthand", () => {
     expect(expandTarget("stg", "shop.example.com")).toBe("stg.shop.example.com");
   });
 
-  // The page carries its own copy: the executable keeps no function source.
+  // The page sends what was typed, so the route's rule decides the site.
+  test("the route expands a bare label the page sent as typed", async () => {
+    const listSites = stagerService.listSites;
+    const startClone = stagerService.startClone;
+    const started: string[][] = [];
+    stagerService.listSites = async () => [{ domain: "www.example.com", siteType: "php", siteUser: "example", phpVersion: "8.3", application: "WordPress", databases: 1 }];
+    stagerService.startClone = async (source, target) => { started.push([source, target]); return { ok: true, data: { job: "job" } }; };
+    try {
+      const response = await stagerHandle(new Request("https://panel.example/addons/stager/api/clones", {
+        method: "POST",
+        headers: { Origin: "https://panel.example", Host: "panel.example", Cookie: "clp_addons_csrf=csrf_token", "x-clp-addons-csrf": "csrf_token", "Content-Type": "application/json" },
+        body: JSON.stringify({ source: "www.example.com", target: "  STG ", tls: false }),
+      }), "/api/clones");
+      expect(response.status).toBe(200);
+      expect(started).toEqual([["www.example.com", "stg.example.com"]]);
+    } finally {
+      stagerService.listSites = listSites;
+      stagerService.startClone = startClone;
+    }
+  });
+
+  // The preview label runs its own copy: the executable keeps no function source.
   test("the page's script expands it the same way", () => {
     const page = { readyState: "loading", addEventListener() {} };
     const expand = new Function("document", `${CLIENT_JS}\nreturn expandTarget;`)(page) as typeof expandTarget;
