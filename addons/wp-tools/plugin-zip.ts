@@ -181,7 +181,8 @@ export function inspectPluginZip(bytes: Uint8Array, maxBytes = MAX_UPLOAD_BYTES)
   // The main file is usually named after the folder; WordPress looks at every
   // PHP file directly inside it, and so does this, up to a point.
   const candidates = own
-    .filter((entry) => /^[^/]+\/[^/]+\.php$/i.test(entry.name) && entry.size <= 4 * 1024 * 1024)
+    // An empty file has no header, and cannot be inflated into a zero-byte limit.
+    .filter((entry) => /^[^/]+\/[^/]+\.php$/i.test(entry.name) && entry.size > 0 && entry.size <= 4 * 1024 * 1024)
     .sort((a, b) => Number(b.name === `${folder}/${folder}.php`) - Number(a.name === `${folder}/${folder}.php`))
     .slice(0, 50);
   for (const entry of candidates) {

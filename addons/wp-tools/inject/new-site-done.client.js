@@ -65,9 +65,13 @@
 
   var misses = 0;
   function poll() {
-    fetch(url + '/api/jobs/' + encodeURIComponent(job.id), { credentials: 'same-origin' }).then(function (response) {
+    // A request or body that stalls counts as a miss, as a failed one does.
+    var abort = window.AbortController ? new AbortController() : null;
+    var timer = setTimeout(function () { if (abort) abort.abort(); }, 10000);
+    fetch(url + '/api/jobs/' + encodeURIComponent(job.id), { credentials: 'same-origin', signal: abort ? abort.signal : undefined }).then(function (response) {
       return response.json();
     }).then(function (reply) {
+      clearTimeout(timer);
       if (!reply.ok) throw new Error(reply.error);
       misses = 0;
       var view = reply.data.job;
@@ -76,6 +80,7 @@
       show('info', 'Installing the plugins chosen for ' + domain + count + '…');
       setTimeout(poll, 2000);
     }).catch(function () {
+      clearTimeout(timer);
       if (++misses < 5) { setTimeout(poll, 3000); return; }
       show('warning', 'WordPress Tools stopped answering while installing the plugins for ' + domain + '. It carries on in the background.');
     });

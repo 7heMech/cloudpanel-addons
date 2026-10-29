@@ -6,7 +6,7 @@ import { jobApiRoute } from "../../../lib/job-stream";
 import { MAX_NEW_SITE_PLUGINS, UPLOAD_ID_RE } from "../new-site-plugins";
 import { DIRECTORY_SLUG_RE, MAX_UPLOAD_BYTES } from "../plugin-zip";
 import { searchDirectory, searchTerm } from "./plugin-search";
-import { validateDomain, validateJobId, wpToolsService, type NewSiteChoice } from "./service";
+import { validateDomain, wpToolsService, type NewSiteChoice } from "./service";
 import { dashboardBody, dashboardView, layout } from "./views";
 
 function json(body: unknown, status = 200): Response {
@@ -17,7 +17,10 @@ function errorMessage(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
 }
 
-/** The new-site form's choice, checked field by field; a string says what is wrong. */
+/**
+ * The new-site form's choice, checked field by field; a string says what is
+ * wrong. No plugins at all clears an earlier choice for that domain.
+ */
 function newSiteChoice(body: Record<string, unknown>): NewSiteChoice | string {
   const domain = validateDomain(typeof body.domain === "string" ? body.domain.trim().toLowerCase() : body.domain);
   if (!domain) return "enter the new site's domain name first";
@@ -25,19 +28,15 @@ function newSiteChoice(body: Record<string, unknown>): NewSiteChoice | string {
   const plugins = list(body.plugins ?? []);
   const uploads = list(body.uploads ?? []);
   if (!plugins || !uploads) return "plugins and uploads must be lists";
-  if (plugins.length + uploads.length === 0) return "choose at least one plugin";
   if (plugins.length + uploads.length > MAX_NEW_SITE_PLUGINS) return `a new site takes at most ${MAX_NEW_SITE_PLUGINS} plugins`;
   const valid = (item: Record<string, unknown>, key: string, pattern: RegExp) =>
     item && typeof item === "object" && typeof item[key] === "string" && pattern.test(item[key]) && typeof item.activate === "boolean";
   if (!plugins.every((item) => valid(item, "slug", DIRECTORY_SLUG_RE))) return "that is not a WordPress.org plugin slug";
   if (!uploads.every((item) => valid(item, "id", UPLOAD_ID_RE))) return "an uploaded plugin is no longer waiting; upload it again";
-  const replaces = body.replaces === undefined ? undefined : validateJobId(body.replaces);
-  if (replaces === null) return "that is not a job id";
   return {
     domain,
     plugins: plugins.map((item) => ({ slug: item.slug as string, activate: item.activate as boolean })),
     uploads: uploads.map((item) => ({ id: item.id as string, activate: item.activate as boolean })),
-    ...(replaces ? { replaces } : {}),
   };
 }
 

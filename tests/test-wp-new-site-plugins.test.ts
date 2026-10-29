@@ -45,10 +45,11 @@ function zip(files: ZipFile[]): Uint8Array {
     const flags = (file.encrypted ? 1 : 0) | 0x800;
     const local = Buffer.alloc(30);
     local.writeUInt32LE(0x04034b50, 0); local.writeUInt16LE(20, 4); local.writeUInt16LE(flags, 6); local.writeUInt16LE(method, 8);
+    local.writeUInt32LE(Bun.hash.crc32(plain), 14);
     local.writeUInt32LE(body.length, 18); local.writeUInt32LE(plain.length, 22); local.writeUInt16LE(localName.length, 26);
     const central = Buffer.alloc(46);
     central.writeUInt32LE(0x02014b50, 0); central.writeUInt16LE((3 << 8) | 20, 4); central.writeUInt16LE(20, 6);
-    central.writeUInt16LE(flags, 8); central.writeUInt16LE(method, 10); central.writeUInt32LE(body.length, 20);
+    central.writeUInt16LE(flags, 8); central.writeUInt16LE(method, 10); central.writeUInt32LE(Bun.hash.crc32(plain), 16); central.writeUInt32LE(body.length, 20);
     central.writeUInt32LE(plain.length, 24); central.writeUInt16LE(name.length, 28);
     central.writeUInt32LE(((file.mode ?? (file.name.endsWith("/") ? 0o040755 : 0o100644)) << 16) >>> 0, 38);
     central.writeUInt32LE(offset, 42);
@@ -102,6 +103,8 @@ test("a zip that would write outside its folder, or is not a plain plugin, is re
     ["not a zip file", new TextEncoder().encode("<?php /* Plugin Name: not a zip */")],
   ];
   for (const [reason, bytes] of refused) expect(() => inspectPluginZip(bytes), reason).toThrow(reason);
+  // An empty PHP file beside the main one is skipped, not taken for damage.
+  expect(inspectPluginZip(zip([{ name: "acme/" }, { name: "acme/a-empty.php", data: "" }, { name: "acme/plugin.php", data: HEADER("Acme") }])).name).toBe("Acme");
   expect(() => inspectPluginZip(plugin(), 100)).toThrow("larger than");
 });
 
@@ -343,7 +346,6 @@ test("plugins are chosen only for a site that does not exist yet, by strict slug
   for (const plugins of ["../x:1", "Woo:1", "woocommerce", "woocommerce:yes", "woo commerce:1"]) {
     await expect(act(["new-site", "--domain=new.example.com", `--plugins=${plugins}`])).rejects.toThrow("not a valid");
   }
-  await expect(act(["new-site", "--domain=new.example.com"])).rejects.toThrow("at least one plugin");
   await expect(act(["new-site", "--domain=new.example.com", `--plugins=${Array.from({ length: 21 }, (_, i) => `p${i}:1`).join(",")}`])).rejects.toThrow("at most 20");
   await expect(act(["new-site", "--domain=new.example.com", `--uploads=${"0".repeat(32)}:1`])).rejects.toThrow("no longer waiting");
   await expect(act(["new-site", "--domain=new.example.com", "--plugins=acme-payments:1", `--uploads=${upload()}:1`])).rejects.toThrow("chosen twice");
@@ -436,8 +438,11 @@ test("a site that existed before the plugins were chosen is left alone", async (
 test("a form CloudPanel sent back ends its job quietly, and a resubmission takes over its uploads", async () => {
   const id = upload();
   const first = (await act<{ job: WpJobView }>(["new-site", "--domain=new.example.com", `--uploads=${id}:1`])).job;
-  // Submitted again, under another name this time, saying which job it replaces.
-  const second = (await act<{ job: WpJobView }>(["new-site", "--domain=other.example.com", `--uploads=${id}:1`, `--replaces=${first.id}`])).job;
+  // Another domain's waiting job is never touched: it may be a site CloudPanel is still creating.
+  const elsewhere = (await act<{ job: WpJobView }>(["new-site", "--domain=other.example.com", "--plugins=woocommerce:1"])).job;
+  // Submitted again for the same domain, with the same upload.
+  const second = (await act<{ job: WpJobView }>(["new-site", "--domain=new.example.com", `--uploads=${id}:1`, "--plugins=contact-form-7:1"])).job;
+  expect(jobGet(jobDir(join(root, "jobs"), elsewhere.id), "superseded")).toBe("");
   expect(jobGet(jobDir(join(root, "jobs"), first.id), "superseded")).toBe("1");
   const replaced = await runJob(first.id);
   expect(replaced.result).toEqual({ outcome: "superseded", plugins: [] });
@@ -454,8 +459,36 @@ test("a form CloudPanel sent back ends its job quietly, and a resubmission takes
 test("a job that found its site is not replaced", async () => {
   const { job } = await act<{ job: WpJobView }>(["new-site", "--domain=new.example.com", "--plugins=woocommerce:1"]);
   jobSet(jobDir(join(root, "jobs"), job.id), "phase", "installing");
-  await act(["new-site", "--domain=new.example.com", "--plugins=woocommerce:1", `--replaces=${job.id}`]);
+  await act(["new-site", "--domain=new.example.com", "--plugins=woocommerce:1"]);
   expect(jobGet(jobDir(join(root, "jobs"), job.id), "superseded")).toBe("");
+});
+
+test("submitted again with every plugin removed, the earlier choice is cleared and its uploads deleted", async () => {
+  const id = upload();
+  const { job } = await act<{ job: WpJobView }>(["new-site", "--domain=new.example.com", "--plugins=woocommerce:1", `--uploads=${id}:1`]);
+  expect(await act<{ job: WpJobView | null }>(["new-site", "--domain=new.example.com"])).toEqual({ job: null });
+  expect(jobGet(jobDir(join(root, "jobs"), job.id), "superseded")).toBe("1");
+  expect(existsSync(join(uploads(), id))).toBe(false);
+  expect(started).toHaveLength(1);
+  // Clearing names no plugin, so it is refused for no site, existing or not.
+  expect(await act<{ job: WpJobView | null }>(["new-site", "--domain=existing.example.com"])).toEqual({ job: null });
+  const cleared = await runJob(job.id);
+  expect(cleared.result).toEqual({ outcome: "superseded", plugins: [] });
+  expect(commands).toEqual([]);
+});
+
+test("a site CloudPanel recorded no creation time for is left alone", async () => {
+  const { job } = await act<{ job: WpJobView }>(["new-site", "--domain=new.example.com", "--plugins=woocommerce:1"]);
+  addSite("new.example.com", "newsite", "");
+  const done = await runJob(job.id);
+  expect(done.error).toContain("no creation time");
+  expect(commands).toEqual([]);
+});
+
+test("every running new-site job is listed, however many finished ones there are", async () => {
+  for (let i = 0; i < 12; i++) await act(["new-site", `--domain=site${i}.example.com`, "--plugins=woocommerce:1"]);
+  const { newSiteJobs } = await import("../addons/wp-tools/jobs");
+  expect(newSiteJobs(join(root, "jobs"))).toHaveLength(12);
 });
 
 test("the WordPress Tools page lists what new sites' jobs did, and not the forms that were sent back", async () => {
@@ -512,12 +545,10 @@ test("the new-site route checks the choice before root sees it", async () => {
   wpToolsService.newSite = async (choice) => { sent.push(choice); return { ok: true, data: { job: {} as WpJobView } }; };
   const refused: [unknown, string][] = [
     [{ domain: "", plugins: [{ slug: "woocommerce", activate: true }] }, "domain name"],
-    [{ domain: "new.example.com" }, "at least one"],
     [{ domain: "new.example.com", plugins: [{ slug: "../x", activate: true }] }, "slug"],
     [{ domain: "new.example.com", plugins: [{ slug: "woocommerce", activate: "yes" }] }, "slug"],
     [{ domain: "new.example.com", uploads: [{ id: "/etc/passwd", activate: true }] }, "upload it again"],
     [{ domain: "new.example.com", plugins: Array.from({ length: 21 }, () => ({ slug: "woocommerce", activate: true })) }, "at most 20"],
-    [{ domain: "new.example.com", plugins: [{ slug: "woocommerce", activate: true }], replaces: "../job" }, "job id"],
   ];
   for (const [body, error] of refused) {
     const response = await post("/api/new-site", JSON.stringify(body));
@@ -527,6 +558,9 @@ test("the new-site route checks the choice before root sees it", async () => {
   expect(sent).toEqual([]);
   expect((await post("/api/new-site", JSON.stringify({ domain: " New.Example.com ", plugins: [{ slug: "woocommerce", activate: false }] }))).status).toBe(200);
   expect(sent).toEqual([{ domain: "new.example.com", plugins: [{ slug: "woocommerce", activate: false }], uploads: [] }]);
+  // No plugins at all clears an earlier choice; root decides what that touches.
+  expect((await post("/api/new-site", JSON.stringify({ domain: "new.example.com", plugins: [], uploads: [] }))).status).toBe(200);
+  expect(sent[1]).toEqual({ domain: "new.example.com", plugins: [], uploads: [] });
 });
 
 test("an upload over 32 MB is refused before root sees any of it", async () => {

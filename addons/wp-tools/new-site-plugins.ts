@@ -432,6 +432,7 @@ export async function runNewSitePlugins(
     if (!run.begin()) { superseded = true; return { outcome: "superseded", plugins: [] }; }
     // Refused when the plan was made; asked again in case the name was free
     // then and an older site was restored under it since.
+    if (!found.createdAt) throw new Error(`CloudPanel recorded no creation time for ${run.domain}, so nothing was installed`);
     if (!(Date.parse(`${found.createdAt.replace(" ", "T")}Z`) >= chosen - CREATED_SKEW_MS)) {
       throw new Error(`${run.domain} existed before its plugins were chosen, so nothing was installed`);
     }

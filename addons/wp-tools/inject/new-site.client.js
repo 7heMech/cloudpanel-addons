@@ -237,14 +237,19 @@
 
   // Ahead of CloudPanel's own handler, which submits the form and starts its
   // progress counter: the choice is recorded first, then the form goes as it
-  // would have.
+  // would have. Recording it replaces any choice still waiting for the same
+  // domain, so a form CloudPanel sent back and submitted again with every
+  // plugin removed still clears the one recorded the first time.
   document.addEventListener('submit', function (event) {
     if (event.target !== form || saved) return;
     var domain = domainInput ? domainInput.value.trim().toLowerCase() : '';
     var ready = chosen.filter(function (item) { return !item.pending; });
-    if (!ready.length || !domain) {
-      // Nothing to install, or a form CloudPanel will send back anyway.
-      try { sessionStorage.removeItem(JOB); } catch (e) {}
+    var earlier = null;
+    try { earlier = JSON.parse(sessionStorage.getItem(JOB) || 'null'); } catch (e) {}
+    var clearing = !ready.length && earlier && earlier.domain === domain;
+    // A form CloudPanel will send back anyway, or nothing chosen now or before.
+    if (!domain || (!ready.length && !clearing)) {
+      if (!ready.length) try { sessionStorage.removeItem(JOB); } catch (e) {}
       return;
     }
     event.preventDefault();
@@ -254,25 +259,27 @@
     var busy = function (on) { Array.prototype.forEach.call(buttons, function (button) { button.disabled = on; }); };
     busy(true);
     showError('');
-    var earlier = null;
-    try { earlier = JSON.parse(sessionStorage.getItem(JOB) || 'null'); } catch (e) {}
     call('/api/new-site', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
         domain: domain,
         plugins: ready.filter(function (item) { return item.source !== 'upload'; }).map(function (item) { return { slug: item.slug, activate: item.activate }; }),
-        uploads: ready.filter(function (item) { return item.source === 'upload'; }).map(function (item) { return { id: item.id, activate: item.activate }; }),
-        replaces: earlier && earlier.id ? earlier.id : undefined
+        uploads: ready.filter(function (item) { return item.source === 'upload'; }).map(function (item) { return { id: item.id, activate: item.activate }; })
       })
     }).then(function (data) {
-      try { sessionStorage.setItem(JOB, JSON.stringify({ domain: domain, id: data.job.id })); } catch (e) {}
+      try {
+        if (data.job) sessionStorage.setItem(JOB, JSON.stringify({ domain: domain, id: data.job.id }));
+        else sessionStorage.removeItem(JOB);
+      } catch (e) {}
       saved = true;
       busy(false);
       if (form.requestSubmit) form.requestSubmit(); else window.jQuery(form).trigger('submit');
     }, function (failure) {
       busy(false);
-      showError('The plugins could not be saved: ' + failure.message.replace(/\.?$/, '.') + ' Remove them to create the site without them.');
+      showError(clearing
+        ? 'The plugins chosen before could not be cleared: ' + failure.message.replace(/\.?$/, '.') + ' Try again.'
+        : 'The plugins could not be saved: ' + failure.message.replace(/\.?$/, '.') + ' Remove them to create the site without them.');
     });
   }, true);
 

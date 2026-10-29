@@ -99,17 +99,19 @@ export function activeWpJobs(jobsDir: string): WpJobs {
   return jobs;
 }
 
-/** New sites' plugin jobs, newest first: the running ones and what the recent ones did. */
+/** New sites' plugin jobs, newest first: every running one, and what the `limit` most recent finished ones did. */
 export function newSiteJobs(jobsDir: string, limit = 10): WpJobView[] {
   const jobs: WpJobView[] = [];
+  let finished = 0;
   for (const id of listJobIds(jobsDir)) {
     const view = wpJobView(jobsDir, id);
     if (view?.task !== "new-site-plugins") continue;
+    if (active(view.state)) { jobs.push(view); continue; }
     const result = view.result as NewSiteResult | null;
     // A form CloudPanel rejected, or one submitted again, installed nothing and is no news.
-    if (result && result.outcome !== "done") continue;
+    if ((result && result.outcome !== "done") || finished >= limit) continue;
     jobs.push(view);
-    if (jobs.length >= limit) break;
+    finished++;
   }
   return jobs;
 }

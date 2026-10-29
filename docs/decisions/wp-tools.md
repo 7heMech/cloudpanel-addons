@@ -578,14 +578,18 @@ hook, that hook could wake a waiting job instead of the poll.
 This is no way into an existing site. `new-site` refuses a domain CloudPanel
 already has, and the job refuses a site whose `created_at` is more than two
 minutes older than the choice, in case an older site was restored under the
-name meanwhile.
+name meanwhile, or that has no `created_at` to compare.
 
 CloudPanel sends a form back with an error without creating anything, so the
 choice is kept in the tab's session storage and the row comes back filled in.
-Submitting again records a new job that names the one before it; that job, and
-any other still waiting for the same domain, is superseded and hands its uploads
-to the new one. Superseding and a job's switch from waiting to installing take
-the same lock, so exactly one of them installs. A job whose site never appears
+Submitting again records a new job, and any job still waiting for the same
+domain is superseded and hands its uploads to the new one. Submitting it with
+every plugin removed still tells WordPress Tools, with an empty choice that only
+supersedes, so plugins taken off the form are not installed after all; their
+uploads are deleted. A job for another domain is never touched: one still
+waiting may be for a site CloudPanel is creating in another request.
+Superseding and a job's switch from waiting to installing take the same lock,
+so exactly one of them installs. A job whose site never appears
 ends as `not-created`, which is what an abandoned form leaves; it installs
 nothing, deletes its uploads, and is not listed.
 
@@ -643,7 +647,7 @@ already there or failed. The landing page, `wordpress-installed.html.twig`,
 follows the job whose id the form left in session storage, if it is for the
 domain the page shows, and says how it ended in a box shaped like the panel's
 flash messages. The WordPress Tools page's **Plugins on new sites** card shows
-running jobs with the shared progress bar and the ten most recent results,
+every running job with the shared progress bar and the ten most recent results,
 failures included, for the seven days a job record is kept.
 
 At most twenty plugins a site. Everything here is administrator-only: the Twig

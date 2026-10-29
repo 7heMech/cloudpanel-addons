@@ -29,7 +29,7 @@ import {
 } from "../../cli/action-common";
 import { CLI_BIN, CONFIG_DIR, PANEL_DB, STATE_DIR } from "../../cli/paths";
 import {
-  jobDir, jobGet, jobIdArgument, jobSet, pruneJobs, readJobLog, validateJobId, watchJobRecord, type startJobUnit,
+  jobDir, jobGet, jobIdArgument, jobSet, pruneJobs, readJobLog, watchJobRecord, type startJobUnit,
 } from "../../cli/job-store";
 import { readUnixAccounts, siteAccountProblem, splitSharedUids, type UnixAccount } from "../../lib/site-accounts";
 import {
@@ -48,7 +48,7 @@ import {
   type WpJobs, type WpJobView,
 } from "./jobs";
 import {
-  MAX_NEW_SITE_PLUGINS, UPLOAD_ID_RE, claimUploads, discardUpload, parsePluginList, pruneUploads, releaseUploads,
+  MAX_NEW_SITE_PLUGINS, UPLOAD_ID_RE, claimUploads, discardUpload, parsePluginList, pruneUploads, releaseUploads, removeUploads,
   runNewSitePlugins, stageUploadPart, type NewSiteLookup, type NewSiteOptions, type NewSitePlugin,
 } from "./new-site-plugins";
 import { DIRECTORY_SLUG_RE } from "./plugin-zip";
@@ -796,15 +796,19 @@ function discard(paths: WpToolsActionPaths, rest: string[]): unknown {
 }
 
 /**
- * `new-site --domain=<d> [--plugins=slug:1,...] [--uploads=id:0,...] [--replaces=<job>]`: the
+ * `new-site --domain=<d> [--plugins=slug:1,...] [--uploads=id:0,...]`: the
  * plugins an administrator chose on CloudPanel's new-site form, recorded as a
  * job that waits for that site. Directory plugins go first, so an uploaded
  * add-on finds the plugin it extends already active.
+ *
+ * Any earlier choice still waiting for the same domain is replaced, and one
+ * with no plugins only clears it: CloudPanel sent the form back, and the
+ * administrator submitted it again with a different choice, or none.
  */
-async function recordNewSite(paths: WpToolsActionPaths, rest: string[], options: WpToolsActionOptions): Promise<{ job: WpJobView }> {
+async function recordNewSite(paths: WpToolsActionPaths, rest: string[], options: WpToolsActionOptions): Promise<{ job: WpJobView | null }> {
   const fields: Record<string, string> = {};
   for (const argument of rest) {
-    const match = /^--(domain|plugins|uploads|replaces)=(.*)$/.exec(argument);
+    const match = /^--(domain|plugins|uploads)=(.*)$/.exec(argument);
     if (!match || fields[match[1]!] !== undefined) failAction(`unexpected argument '${argument}'`);
     fields[match[1]!] = match[2]!;
   }
@@ -817,23 +821,22 @@ async function recordNewSite(paths: WpToolsActionPaths, rest: string[], options:
   } catch (error) {
     failAction(reason(error));
   }
-  const replaces = fields.replaces === undefined ? undefined : validateJobId(fields.replaces);
-  if (replaces === null) failAction("'--replaces' takes a job id");
   const total = directory.length + uploads.length;
-  if (total === 0) failAction("choose at least one plugin");
   if (total > MAX_NEW_SITE_PLUGINS) failAction(`a new site takes at most ${MAX_NEW_SITE_PLUGINS} plugins`);
   if (!existsSync(paths.configFile)) failAction("WordPress Tools must be enabled first");
   return withFileLock(paths.pluginsLockFile, 15, "another plugin choice is being saved", async () => {
     // Only a site that does not exist yet: this is no way into an existing one.
-    if (panelSites(paths).some((row) => row.domain_name.toLowerCase() === domain)) {
+    if (total && panelSites(paths).some((row) => row.domain_name.toLowerCase() === domain)) {
       failAction(`CloudPanel already has a site called ${domain}; plugins are chosen here only for a new one`);
     }
-    // A form CloudPanel sent back and the administrator submitted again: the
-    // later choice is the one that counts, and it may name the same uploads.
-    const replaced = waitingNewSiteJobs(paths.jobsDir, (view) => view.domains[0] === domain || view.id === replaces);
-    for (const view of replaced) {
-      jobSet(jobDir(paths.jobsDir, view.id), "superseded", "1");
-      releaseUploads(paths.uploadsDir, view.plugins.flatMap((plugin) => plugin.upload ? [plugin.upload] : []));
+    // The later choice is the one that counts, and it may name the same uploads.
+    const replaced = waitingNewSiteJobs(paths.jobsDir, (view) => view.domains[0] === domain);
+    const released = replaced.flatMap((view) => view.plugins.flatMap((plugin) => plugin.upload ? [plugin.upload] : []));
+    for (const view of replaced) jobSet(jobDir(paths.jobsDir, view.id), "superseded", "1");
+    releaseUploads(paths.uploadsDir, released);
+    if (!total) {
+      removeUploads(paths.uploadsDir, released);
+      return { job: null };
     }
     let claimed;
     try { claimed = claimUploads(paths.uploadsDir, uploads.map((upload) => upload.key)); }

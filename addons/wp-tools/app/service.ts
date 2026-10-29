@@ -32,8 +32,6 @@ export interface NewSiteChoice {
   domain: string;
   plugins: { slug: string; activate: boolean }[];
   uploads: { id: string; activate: boolean }[];
-  /** The job an earlier submission of the same form recorded, which this one replaces. */
-  replaces?: string;
 }
 
 function call<T>(verb: string, args: string[] = [], timeout?: number): Promise<ActionResult<T>> {
@@ -123,14 +121,17 @@ export const wpToolsService = {
   discardUpload(id: string): Promise<ActionResult<{ discarded: boolean }>> {
     return call("plugin-discard", [`--upload=${id}`]);
   },
-  /** Recorded before CloudPanel creates the site; the job waits for it. */
-  newSite(choice: NewSiteChoice): Promise<ActionResult<{ job: WpJobView }>> {
+  /**
+   * Recorded before CloudPanel creates the site; the job waits for it. It
+   * replaces any choice still waiting for the same domain, and an empty one
+   * only clears that.
+   */
+  newSite(choice: NewSiteChoice): Promise<ActionResult<{ job: WpJobView | null }>> {
     const list = (items: { key: string; activate: boolean }[]) => items.map((item) => `${item.key}:${item.activate ? 1 : 0}`).join(",");
     return call("new-site", [
       `--domain=${choice.domain}`,
       ...(choice.plugins.length ? [`--plugins=${list(choice.plugins.map((plugin) => ({ key: plugin.slug, activate: plugin.activate })))}`] : []),
       ...(choice.uploads.length ? [`--uploads=${list(choice.uploads.map((upload) => ({ key: upload.id, activate: upload.activate })))}`] : []),
-      ...(choice.replaces ? [`--replaces=${choice.replaces}`] : []),
     ]);
   },
 

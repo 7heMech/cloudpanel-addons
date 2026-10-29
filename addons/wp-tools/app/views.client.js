@@ -177,6 +177,7 @@ const JOB_SUMMARIES = {
   'new-site-plugins': function (data, job) {
     const plugins = data.plugins || [];
     const failed = plugins.filter(function (plugin) { return plugin.status === 'failed'; });
+    if (data.outcome === 'superseded') return { text: 'The plugins chosen for ' + job.domains[0] + ' were replaced by a later choice.' };
     if (data.outcome !== 'done') return { text: 'No site called ' + job.domains[0] + ' was created, so no plugins were installed.', kind: 'warn' };
     if (failed.length) return { text: failed.length + ' of ' + plural(plugins.length, 'plugin') + ' could not be installed on ' + job.domains[0] + '; see below.', kind: 'warn' };
     return { text: plural(plugins.length, 'plugin') + ' installed on ' + job.domains[0] + '.' };

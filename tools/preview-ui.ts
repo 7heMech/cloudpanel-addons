@@ -835,7 +835,7 @@ function panelNewSiteStub(url: URL, dark: boolean): string {
     { source: "upload", slug: "acme-payments", name: "Acme Payments 2.4.1", activate: false, id: "0123456789abcdef0123456789abcdef" },
   ]))});</script>` : "";
   const term = url.searchParams.get("q");
-  const search = term ? `<script>(function () { var input = document.getElementById("clp-wp-plugin-search"); input.value = ${JSON.stringify(term)};
+  const search = term ? `<script>(function () { var input = document.getElementById("clp-wp-plugin-search"); input.value = ${JSON.stringify(term).replaceAll("<", "\\u003c")};
   input.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter" })); })();</script>` : "";
   const field = (id: string, label: string, value: string, type = "text") => `<label for="site_new_word_press_${id}" class="col-form-label required">${label}</label>
                   <input type="${type}" id="site_new_word_press_${id}" name="site_new_word_press[${id}]" required="required" class="form-control form-control-lg" value="${value}">`;
@@ -881,7 +881,7 @@ ${seed}${wpToolsNewSiteForm("/addons/wp-tools").replace("{% if is_granted('ROLE_
 function panelNewSiteDoneStub(domain: string, dark: boolean): string {
   const block = wpToolsNewSiteDone("/addons/wp-tools")
     .replace(/\{% if is_granted\('ROLE_ADMIN'\) %\}|\{% endif %\}|\{% set [^%]*%\}/g, "")
-    .replace("{{ clpWpPluginsDomain }}", domain.toLowerCase());
+    .replace("{{ clpWpPluginsDomain }}", () => Bun.escapeHTML(domain.toLowerCase()));
   return panelPageStub("WordPress Site has been created!", "", ["frontend/new-site.css"], `<main class="main-container"><div class="container-fluid container-limited-width new-site-container-fix">
   <div class="wordpress-site-created-container">
     <div class="page-header"><div class="page-title"><h1>WordPress Site has been created!</h1></div></div>
@@ -891,7 +891,7 @@ function panelNewSiteDoneStub(domain: string, dark: boolean): string {
           <div class="card-form">
             <div class="row"><div class="col">
               <div class="site-credentials-text">Copy the credentials for your created WordPress site.</div>
-              <textarea id="site-credentials" class="form-control form-control-lg" rows="8">Site: https://${domain}\nAdmin User Name: admin</textarea>
+              <textarea id="site-credentials" class="form-control form-control-lg" rows="8">Site: https://${Bun.escapeHTML(domain)}\nAdmin User Name: admin</textarea>
             </div></div>
             <div class="row"><div class="col"><a href="/sites" class="btn btn-lg btn-gray">Back to Sites</a></div></div>
           </div>
@@ -1323,7 +1323,8 @@ async function wpToolsPreviewApi(req: Request, path: string): Promise<Response |
         })),
       ];
       if (domain === "shop.example.com") return Response.json({ ok: false, error: "CloudPanel already has a site called shop.example.com; plugins are chosen here only for a new one" }, { status: 400 });
-      return ok({ job: wpNewSitePreviewJob(domain, chosen) });
+      // An empty choice only clears an earlier one, as on a box.
+      return ok({ job: chosen.length ? wpNewSitePreviewJob(domain, chosen) : null });
     }
     case "dashboard":
       return ok({ html: wpToolsDashboardBody(wpToolsPreviewData()) });
@@ -1644,7 +1645,7 @@ const server = Bun.serve({
     // GET, so the preview's refusal of other methods does not catch it.
     if (path === "/site/new/wordpress" || path === "/site/new/wordpress/installed") {
       const dark = url.searchParams.has("dark");
-      const page = path.endsWith("/installed") ? panelNewSiteDoneStub(url.searchParams.get("domain") ?? "", dark) : panelNewSiteStub(url, dark);
+      const page = path.endsWith("/installed") ? panelNewSiteDoneStub(url.searchParams.get("site_new_word_press[domainName]") ?? url.searchParams.get("domain") ?? "", dark) : panelNewSiteStub(url, dark);
       return new Response(page, { headers: withCsrfCookie({ "Content-Type": "text/html; charset=utf-8", "Cache-Control": "no-store" }, "preview-token") });
     }
     if (path === "/login" || path === "/security") {
@@ -1865,7 +1866,9 @@ const server = Bun.serve({
       }
       wpToolsJobs = { varnish: null, mainwp: null };
       // ?newsites=none leaves the card with only its explanation; ?newsites=running adds one part-way.
-      wpNewSiteJobs = url.searchParams.get("newsites") === "none" ? [] : wpNewSiteSamples();
+      // Jobs the preview form started stay, so the page it lands on can still follow them.
+      const started = wpNewSiteJobs.filter((job) => !wpNewSiteSamples().some((sample) => sample.id === job.id));
+      wpNewSiteJobs = url.searchParams.get("newsites") === "none" ? [] : [...started, ...wpNewSiteSamples()];
       if (url.searchParams.get("newsites") === "running") {
         wpNewSitePreviewJob("new-client.example.org", wpNewSiteSamples()[0]!.plugins, Date.now() - 4_400);
       }
