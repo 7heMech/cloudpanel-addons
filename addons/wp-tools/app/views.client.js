@@ -130,6 +130,15 @@ async function setDomainLink(input) {
   })) input.checked = !signIn;
 }
 
+async function setNewSiteManagers(input) {
+  const siteManagers = input.checked;
+  if (!await change('/api/new-site-settings', { siteManagers: siteManagers }, function () {
+    return { text: siteManagers
+      ? 'Site managers now see the Plugins row on CloudPanel\'s New WordPress Site form, without uploads.'
+      : 'Only administrators see the Plugins row on CloudPanel\'s New WordPress Site form now.' };
+  })) input.checked = !siteManagers;
+}
+
 function syncSummary(data) {
   let text = 'Checked ' + plural(data.checked, 'site') + '; ' + data.installed + ' installed or activated.';
   if (data.pending) text += ' ' + data.pending + ' still to check; check again to continue.';

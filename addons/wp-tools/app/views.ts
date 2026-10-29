@@ -213,7 +213,7 @@ function newSiteRow(job: WpJobView): string {
     : `<span class="hint">${when(job.finishedAt)}</span>`;
   return `
               <tr data-domain="${esc(job.domains[0] ?? "")}">
-                <td class="site-cell">${esc(job.domains[0] ?? "")}</td>
+                <td class="site-cell">${esc(job.domains[0] ?? "")}${job.chosenBy ? `<div class="hint">chosen by ${esc(job.chosenBy)}</div>` : ""}</td>
                 <td data-label="Plugins">${plugins}</td>
                 <td data-label="Finished">${state}</td>
               </tr>`;
@@ -316,24 +316,32 @@ function mainwpSection(sites: WpSiteView[], state: MainwpView, error: string, jo
       </div>`;
 }
 
-function domainLinkCard(signIn: boolean, error: string): string {
-  const title = "Sign in from the domain";
-  const body = error
+function switchSection(title: string, id: string, on: boolean, handler: string, hint: string, error: string): string {
+  return error
     ? `<div class="wp-section"><h3>${title}</h3><div class="alert" role="alert">${esc(error)}</div></div>`
     : `
       <div class="wp-section">
         <div class="split-card">
           <div>
             <h3>${title}</h3>
-            <p class="hint">On a WordPress site's pages in CloudPanel, the domain at the top signs in to WordPress instead of opening the site; Ctrl-click still opens it. Off, a WP Login link sits beside the domain instead.</p>
+            <p class="hint">${hint}</p>
           </div>
-          <label class="switch"><input id="domain-link" type="checkbox" aria-label="${title}" ${signIn ? "checked" : ""} onchange="setDomainLink(this)"><span></span></label>
+          <label class="switch"><input id="${id}" type="checkbox" aria-label="${title}" ${on ? "checked" : ""} onchange="${handler}(this)"><span></span></label>
         </div>
       </div>`;
+}
+
+/** The switches that change what CloudPanel's own pages draw, which saving renders again. */
+function panelPagesCard(data: WpDashboard): string {
   return `
     <div class="card">
-      <div class="card-header"><h2>Site pages</h2></div>
-      ${body}
+      <div class="card-header"><h2>CloudPanel's pages</h2></div>
+      ${switchSection("Sign in from the domain", "domain-link", data.domainLink.signIn, "setDomainLink",
+    "On a WordPress site's pages in CloudPanel, the domain at the top signs in to WordPress instead of opening the site; Ctrl-click still opens it. Off, a WP Login link sits beside the domain instead.",
+    data.domainLinkError)}
+      ${switchSection("Site managers choose plugins for new sites", "new-site-managers", data.newSiteAccess?.siteManagers ?? false, "setNewSiteManagers",
+    "Site managers get the Plugins row on the New WordPress Site form too, with WordPress.org plugins only. Uploading a zip stays with administrators.",
+    data.newSiteAccessError ?? "")}
     </div>`;
 }
 
@@ -348,7 +356,7 @@ function automationCard(data: WpDashboard): string {
 
 /** Everything below the heading; the page repaints it from `/api/dashboard` after a change. */
 export function dashboardBody(data: WpDashboard): string {
-  return `${sitesCard(data)}${newSitesCard(data.newSites ?? [])}${automationCard(data)}${domainLinkCard(data.domainLink.signIn, data.domainLinkError)}`;
+  return `${sitesCard(data)}${newSitesCard(data.newSites ?? [])}${automationCard(data)}${panelPagesCard(data)}`;
 }
 
 export function dashboardView(data: WpDashboard): string {

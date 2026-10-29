@@ -348,7 +348,8 @@ The action answers with the same disk check a sign-in makes, held as the
 sign-in is to a site the caller's account has. The panel's link is hidden only
 once ours is shown; the two look alike, so the swap does not show.
 
-The **Sign in from the domain** switch, on by default, turns that off; the
+The **Sign in from the domain** switch, under **CloudPanel's pages** and on by
+default, turns that off; the
 panel's link then stays and a WP Login link goes beside it. It is markup, so
 the setting is read when the templates are rendered:
 `/var/lib/clp-addons/wp-tools/domain-link.json`, root-owned, written
@@ -547,6 +548,8 @@ gone, as the other addons' upkeep does.
 
 CloudPanel's New WordPress Site form gets a Plugins row: search WordPress.org
 and pick, or upload a zip, and choose for each whether it is activated. It is
+an administrator's, and a site manager's for WordPress.org plugins while an
+administrator allows it; see Who may choose. It is
 WordPress Tools' rather than Panel Tweaks' or DNS's because it puts code into a
 customer's site, which is what this addon exists to keep separate, and it is
 built from this addon's parts: the site discovery and account refusals, the
@@ -645,46 +648,62 @@ user, and refuses traversal itself as well.
 The job's result names each plugin and whether it was activated, installed,
 already there or failed. The landing page, `wordpress-installed.html.twig`,
 follows the job whose id the form left in session storage, if it is for the
-domain the page shows, and says how it ended in a box shaped like the panel's
+domain the page shows, through `new-site-status`, and says how it ended in a box shaped like the panel's
 flash messages. The WordPress Tools page's **Plugins on new sites** card shows
 every running job with the shared progress bar and the ten most recent results,
 failures included, for the seven days a job record is kept.
 
-At most twenty plugins a site. Everything here is administrator-only: the Twig
-blocks test `ROLE_ADMIN`, the four routes check it as well as the manager's gate,
-and none is a self-scoped exception. The gateway allows `plugin-upload`,
-`plugin-discard` and `new-site`; `start` does not accept the `new-site-plugins`
-task, so a job can only be recorded with the plan `new-site` validated.
+At most twenty plugins a site. The gateway allows `plugin-upload`,
+`plugin-discard`, `new-site`, `new-site-status`, `new-site-access` and
+`new-site-settings`; `start` does not accept the `new-site-plugins` task, so a
+job can only be recorded with the plan `new-site` validated.
 
-### Other roles, later
+### Who may choose
 
-Undecided; this is what each way would take. CloudPanel has three roles
-(`lib/panel-users.ts`). `ROLE_ADMIN` and `ROLE_SITE_MANAGER` see every site and
-can create sites; `ROLE_USER` sees only the sites `user_sites` gives it and
-cannot create one, so for that role this would mean installing plugins on an
-existing site of its own, which is a different feature. Both other roles can
-already write PHP into the sites they have through CloudPanel's File Manager, so
-which plugins they may choose is the operator's offer to clients rather than a
-boundary between users; it should still be enforced as root.
+Administrators, and site managers while an administrator allows it.
+CloudPanel has three roles (`lib/panel-users.ts`). `ROLE_ADMIN` and
+`ROLE_SITE_MANAGER` see every site and create sites on this very form, so the
+picker is offered to a site manager where they already work, without any of the
+Addons area. Both can already write PHP into any site through CloudPanel's File
+Manager, so which plugins a site manager may pick is the operator's offer to
+clients rather than a boundary between users; it is still enforced as root.
 
-- **A curated list.** The administrator keeps a list of WordPress.org slugs on
-  this page, each with whether it is activated by default; other roles pick only
-  from it, with no search. Needs a root-only list file, a list editor, the row
-  drawn for the role from that list, and `new-site --as-user` refusing any slug
-  not on it.
-- **A switch per role.** For each role: no plugins, the curated list, or the
-  whole directory. Needs the list above plus a policy record, and the root
-  action re-reading the account's role and status from CloudPanel's database,
-  as sign-in does.
-- **Uploads stay administrators'.** A zip is code nobody has reviewed, from
-  anywhere; the curated list exists so that a client can be offered plugins
-  without that.
+**Site managers choose plugins for new sites**, under **CloudPanel's pages** on
+this page, is off by default and kept in root-only
+`/var/lib/clp-addons/wp-tools/new-site-access.json`; an unreadable file reads as
+off and the page says so. It is markup: the Twig blocks test `ROLE_ADMIN`, and
+`ROLE_SITE_MANAGER` as well while it is on, so it is read when the templates are
+rendered and saving it renders them again through the manager's `reconcile`, as
+the domain link does. The upload control and its note are drawn for
+`ROLE_ADMIN` only, whatever the switch says: a zip is code nobody has reviewed,
+from anywhere.
 
-Any of them needs the routes admitted for the role by name in
-`SELF_SCOPED_ROUTES` (WP Tools' whole mount must not become `siteManager`), the
-manager passing the session's user as `--as-user`, root checking role, status
-and policy itself, and the Twig blocks rendered for the role, re-rendered when
-the policy changes as the domain link is.
+The picker's three routes are named in the manager's `SELF_SCOPED_ROUTES`:
+`GET /api/plugin-search`, `POST /api/new-site` and `GET /api/new-site-status`.
+WP Tools' whole mount must not become `siteManager`, since its page signs in to
+and installs into every site. The handler turns away anyone but an administrator
+or a site manager, and names a site manager to root with `--as-user`, as DNS's
+provision route does. Root then reads the switch, and the account's role and
+status from CloudPanel's database rather than its session, refusing anything
+but an active site manager. A site manager's `new-site` names no uploads, gets
+the same refusal of a domain CloudPanel already has and of a site older than the
+choice, and replaces or clears only choices that account made; the job records
+it as `chosenBy`, which the WordPress Tools page shows. The search asks root
+`new-site-access` before it runs, since only root can read the switch.
+Uploading, discarding an upload, the switch and every other WP Tools route stay
+behind the gate.
+
+The landing page follows its job through `new-site-status`, which tells a site
+manager only about a job that account recorded, which is the site it just
+created; any other id reads as one that does not exist. Its reply is the job's
+state, step, progress and result, without the plan's upload ids or the log, for
+administrators too.
+
+`ROLE_USER` stays out: the handler refuses it and root would too. Such an
+account cannot create a site in CloudPanel at all, so for that role plugins would
+mean installing on an existing site of its own, a different feature with its
+own refusals: root checking `user_sites` as sign-in does, and never this
+form's "a site that does not exist yet".
 
 ## Direction
 

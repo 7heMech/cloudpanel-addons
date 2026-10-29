@@ -7,6 +7,8 @@ import type { MainwpView } from "../mainwp";
 import type { WpVarnishState } from "../varnish";
 import type { WpDomainLink } from "../domain-link";
 import { UPLOAD_PART_BYTES, type StagedUpload } from "../new-site-plugins";
+import type { WpNewSiteAccess } from "../new-site-access";
+import type { NewSiteStatus } from "../action";
 
 export { validateDomain };
 export { validateJobId } from "../../../lib/job-id";
@@ -25,6 +27,10 @@ export interface WpDashboard {
   jobs: WpJobs;
   /** Recent new sites' plugin jobs, newest first; absent on a page drawn without them. */
   newSites?: WpJobView[];
+  /** Whether site managers may choose plugins; absent on a page drawn without it. */
+  newSiteAccess?: WpNewSiteAccess;
+  /** Set when that setting cannot be read; it reads as off. */
+  newSiteAccessError?: string;
 }
 
 /** One plugin as the new-site form chose it. */
@@ -32,6 +38,8 @@ export interface NewSiteChoice {
   domain: string;
   plugins: { slug: string; activate: boolean }[];
   uploads: { id: string; activate: boolean }[];
+  /** The site manager the choice is for; root holds them to what an administrator allowed. */
+  asUser?: string;
 }
 
 function call<T>(verb: string, args: string[] = [], timeout?: number): Promise<ActionResult<T>> {
@@ -132,7 +140,19 @@ export const wpToolsService = {
       `--domain=${choice.domain}`,
       ...(choice.plugins.length ? [`--plugins=${list(choice.plugins.map((plugin) => ({ key: plugin.slug, activate: plugin.activate })))}`] : []),
       ...(choice.uploads.length ? [`--uploads=${list(choice.uploads.map((upload) => ({ key: upload.id, activate: upload.activate })))}`] : []),
+      ...(choice.asUser ? [`--as-user=${choice.asUser}`] : []),
     ]);
+  },
+  /** One new site's job, for the page it lands on; a site manager only sees their own. */
+  newSiteStatus(id: string, asUser?: string): Promise<ActionResult<{ job: NewSiteStatus }>> {
+    return call("new-site-status", [`--job=${id}`, ...(asUser ? [`--as-user=${asUser}`] : [])]);
+  },
+  /** Whether this caller may use the form's Plugins row, and upload to it. */
+  newSiteAccess(asUser?: string): Promise<ActionResult<{ uploads: boolean }>> {
+    return call("new-site-access", asUser ? [`--as-user=${asUser}`] : []);
+  },
+  newSiteSettings(siteManagers: boolean): Promise<ActionResult<{ newSiteAccess: WpNewSiteAccess }>> {
+    return call("new-site-settings", [`--site-managers=${siteManagers}`]);
   },
 
   getJob(id: string): Promise<ActionResult<{ job: WpJobView; log: string }>> {

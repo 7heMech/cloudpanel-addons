@@ -244,7 +244,7 @@ function options(extra: Partial<WpToolsActionOptions> = {}): WpToolsActionOption
       lockFile: join(root, "wp.lock"), varnishState: join(root, "varnish.json"), varnishLockFile: join(root, "wp-varnish.lock"),
       mainwpState: join(root, "mainwp.json"), mainwpLockFile: join(root, "wp-mainwp.lock"),
       jobsDir: join(root, "jobs"), jobsLockFile: join(root, "wp-jobs.lock"), actionBinary: "/usr/local/bin/clp-addons",
-      uploadsDir: uploads(), pluginsLockFile: join(root, "wp-plugins.lock"),
+      uploadsDir: uploads(), pluginsLockFile: join(root, "wp-plugins.lock"), newSiteAccessState: join(root, "new-site-access.json"),
     },
     startJob: (unit) => { started.push(unit); return { ok: true, stdout: "", stderr: "" }; },
     domainValidator: (domain) => domain.toLowerCase(),
@@ -311,6 +311,9 @@ beforeEach(() => {
   db.exec(`
     CREATE TABLE site (id INTEGER PRIMARY KEY, type TEXT, domain_name TEXT, root_directory TEXT, user TEXT, application TEXT, varnish_cache INTEGER, created_at TEXT);
     CREATE TABLE php_settings (site_id INTEGER, php_version TEXT);
+    CREATE TABLE user (id INTEGER PRIMARY KEY, user_name TEXT, role TEXT, status INTEGER);
+    INSERT INTO user VALUES (1, 'admin', 'ROLE_ADMIN', 1), (2, 'mgr', 'ROLE_SITE_MANAGER', 1), (3, 'other-mgr', 'ROLE_SITE_MANAGER', 1),
+      (4, 'client', 'ROLE_USER', 1), (5, 'gone', 'ROLE_SITE_MANAGER', 0);
   `);
   db.close();
   addSite("existing.example.com", "existing", "2026-01-01 00:00:00");
@@ -325,7 +328,9 @@ function upload(slug = "acme-payments", name = "Acme Payments"): string {
 }
 
 test("the gateway admits the plugin verbs and still no runner", () => {
-  for (const verb of ["plugin-upload", "plugin-discard", "new-site"]) expect(WP_TOOLS_ALLOWED_VERBS.has(verb)).toBe(true);
+  for (const verb of ["plugin-upload", "plugin-discard", "new-site", "new-site-status", "new-site-access", "new-site-settings"]) {
+    expect(WP_TOOLS_ALLOWED_VERBS.has(verb)).toBe(true);
+  }
   expect(WP_TOOLS_ALLOWED_VERBS.has("run")).toBe(false);
 });
 
@@ -333,7 +338,11 @@ test("the upload verb stages parts from stdin and refuses anything but its own a
   const bytes = plugin();
   const reply = await act<{ id: string; upload: { slug: string } }>(["plugin-upload", "--part=0", "--last"], { input: base64(bytes) });
   expect(reply.upload.slug).toBe("acme-payments");
-  for (const argv of [["plugin-upload"], ["plugin-upload", "--part=0", "--path=/etc/passwd"], ["plugin-upload", "--upload=../x", "--part=1"]]) {
+  for (const argv of [
+    ["plugin-upload"], ["plugin-upload", "--part=0", "--path=/etc/passwd"], ["plugin-upload", "--upload=../x", "--part=1"],
+    // Uploading is an administrator's: there is no way to say it is for anyone else.
+    ["plugin-upload", "--part=0", "--last", "--as-user=mgr"], ["plugin-discard", `--upload=${"0".repeat(32)}`, "--as-user=mgr"],
+  ]) {
     await expect(act(argv, { input: base64(bytes) })).rejects.toThrow();
   }
   rmSync(join(root, "wp-tools.conf"));
@@ -512,32 +521,156 @@ test("repair's upkeep drops uploads no form claimed", async () => {
   expect(existsSync(join(uploads(), id))).toBe(false);
 });
 
+// --- site managers --------------------------------------------------------
+
+async function allowSiteManagers(on: boolean): Promise<void> {
+  expect(await act<{ newSiteAccess: { siteManagers: boolean } }>(["new-site-settings", `--site-managers=${on}`])).toEqual({ newSiteAccess: { siteManagers: on } });
+}
+
+test("a site manager chooses only while an administrator allows it, and only as one", async () => {
+  // Off when never set.
+  await expect(act(["new-site", "--domain=new.example.com", "--plugins=woocommerce:1", "--as-user=mgr"])).rejects.toThrow("has not let site managers");
+  await expect(act(["new-site-access", "--as-user=mgr"])).rejects.toThrow("has not let site managers");
+  expect(await act<{ uploads: boolean }>(["new-site-access"])).toEqual({ uploads: true });
+  await allowSiteManagers(true);
+  expect(await act<{ uploads: boolean }>(["new-site-access", "--as-user=mgr"])).toEqual({ uploads: false });
+  const { job } = await act<{ job: WpJobView }>(["new-site", "--domain=new.example.com", "--plugins=woocommerce:1", "--as-user=mgr"]);
+  expect(job.chosenBy).toBe("mgr");
+  // CloudPanel's own record of the account decides, not the session that named it.
+  for (const user of ["client", "gone", "nobody"]) {
+    await expect(act(["new-site", "--domain=other.example.com", "--plugins=woocommerce:1", `--as-user=${user}`])).rejects.toThrow("only administrators and site managers");
+  }
+  await expect(act(["new-site", "--domain=other.example.com", "--plugins=woocommerce:1", "--as-user=bad name"])).rejects.toThrow("not a valid panel user name");
+  await allowSiteManagers(false);
+  await expect(act(["new-site", "--domain=other.example.com", "--plugins=woocommerce:1", "--as-user=mgr"])).rejects.toThrow("has not let site managers");
+  await expect(act(["new-site-settings", "--site-managers=true", "--as-user=mgr"])).rejects.toThrow("--site-managers=true|false");
+});
+
+test("a site manager cannot upload, and cannot reach a site that exists", async () => {
+  await allowSiteManagers(true);
+  const id = upload();
+  await expect(act(["new-site", "--domain=new.example.com", `--uploads=${id}:1`, "--as-user=mgr"])).rejects.toThrow("only an administrator can upload");
+  await expect(act(["new-site", "--domain=new.example.com", "--plugins=woocommerce:1", `--uploads=${id}:1`, "--as-user=mgr"])).rejects.toThrow("only an administrator can upload");
+  // The upload is still the administrator's to use.
+  expect(claimUploads(uploads(), [id])).toHaveLength(1);
+  await expect(act(["new-site", "--domain=existing.example.com", "--plugins=woocommerce:1", "--as-user=mgr"])).rejects.toThrow("already has a site called existing.example.com");
+  expect(started).toEqual([]);
+});
+
+test("a site manager replaces and clears only their own choices", async () => {
+  await allowSiteManagers(true);
+  const admins = (await act<{ job: WpJobView }>(["new-site", "--domain=new.example.com", "--plugins=woocommerce:1"])).job;
+  const others = (await act<{ job: WpJobView }>(["new-site", "--domain=new.example.com", "--plugins=akismet:1", "--as-user=other-mgr"])).job;
+  const mine = (await act<{ job: WpJobView }>(["new-site", "--domain=new.example.com", "--plugins=contact-form-7:1", "--as-user=mgr"])).job;
+  const superseded = (id: string) => jobGet(jobDir(join(root, "jobs"), id), "superseded");
+  expect([superseded(admins.id), superseded(others.id)]).toEqual(["", ""]);
+  expect(await act<{ job: WpJobView | null }>(["new-site", "--domain=new.example.com", "--as-user=mgr"])).toEqual({ job: null });
+  expect([superseded(admins.id), superseded(others.id), superseded(mine.id)]).toEqual(["", "", "1"]);
+  // An administrator's choice replaces anyone's.
+  await act(["new-site", "--domain=new.example.com"]);
+  expect([superseded(admins.id), superseded(others.id)]).toEqual(["1", "1"]);
+});
+
+test("a site manager is told the status of their own choice and of nothing else", async () => {
+  await allowSiteManagers(true);
+  const id = upload();
+  const admins = (await act<{ job: WpJobView }>(["new-site", "--domain=a.example.com", `--uploads=${id}:1`])).job;
+  const others = (await act<{ job: WpJobView }>(["new-site", "--domain=b.example.com", "--plugins=akismet:1", "--as-user=other-mgr"])).job;
+  const mine = (await act<{ job: WpJobView }>(["new-site", "--domain=c.example.com", "--plugins=akismet:1", "--as-user=mgr"])).job;
+  const status = await act<{ job: Record<string, unknown> }>(["new-site-status", `--job=${mine.id}`, "--as-user=mgr"]);
+  expect(Object.keys(status.job).sort()).toEqual(["completed", "domain", "error", "id", "result", "site", "state", "step", "total"]);
+  expect(status.job).toMatchObject({ id: mine.id, domain: "c.example.com", state: "queued" });
+  for (const id of [admins.id, others.id]) await expect(act(["new-site-status", `--job=${id}`, "--as-user=mgr"])).rejects.toThrow("no such job");
+  await expect(act(["new-site-status", `--job=${mine.id}`, "--as-user=client"])).rejects.toThrow("no such job");
+  // An administrator sees any, still without the upload ids the plan holds.
+  const admin = await act<{ job: unknown }>(["new-site-status", `--job=${admins.id}`]);
+  expect(JSON.stringify(admin)).not.toContain(id);
+  await expect(act(["new-site-status", "--job=../../etc"])).rejects.toThrow("takes --job");
+});
+
+test("the setting is the administrator's page's, and an unreadable one reads as off", async () => {
+  await allowSiteManagers(true);
+  const sites = await act<{ newSiteAccess: { siteManagers: boolean }; newSiteAccessError: string }>(["sites"]);
+  expect(sites).toMatchObject({ newSiteAccess: { siteManagers: true }, newSiteAccessError: "" });
+  writeFileSync(join(root, "new-site-access.json"), "{");
+  const broken = await act<{ newSiteAccess: { siteManagers: boolean }; newSiteAccessError: string }>(["sites"]);
+  expect(broken.newSiteAccess.siteManagers).toBe(false);
+  expect(broken.newSiteAccessError).toContain("cannot be read");
+  await expect(act(["new-site", "--domain=new.example.com", "--plugins=woocommerce:1", "--as-user=mgr"])).rejects.toThrow("cannot be read");
+});
+
 // --- the manager's routes -------------------------------------------------
 
 const originals = { ...wpToolsService };
 afterEach(() => Object.assign(wpToolsService, originals));
+
+const userOf = (roles: string[]) => roles.includes("ROLE_ADMIN") ? "admin" : roles.includes("ROLE_SITE_MANAGER") ? "mgr" : "someone";
 
 function post(path: string, body: string | Uint8Array, roles = ["ROLE_ADMIN"], type = "application/json") {
   const csrf = "a".repeat(64);
   return handle(new Request(`https://panel.example.com/addons/wp-tools${path}`, {
     method: "POST", body,
     headers: { Host: "panel.example.com", Origin: "https://panel.example.com", Cookie: `clp_addons_csrf=${csrf}`, "X-CLP-Addons-CSRF": csrf, "Content-Type": type },
-  }), path, undefined, undefined, { user: roles.includes("ROLE_ADMIN") ? "admin" : "someone", roles });
+  }), path, undefined, undefined, { user: userOf(roles), roles });
 }
 
-test("only an administrator may search, upload or choose plugins, even past the manager's gate", async () => {
+function get(path: string, roles: string[]) {
+  return handle(new Request(`https://panel.example.com/addons/wp-tools${path}`), path.split("?")[0]!, undefined, undefined, { user: userOf(roles), roles });
+}
+
+test("a panel user may not search, upload or choose plugins, even past the manager's gate", async () => {
   const called: string[] = [];
   wpToolsService.uploadPlugin = async () => { called.push("upload"); return { ok: true }; };
   wpToolsService.newSite = async () => { called.push("new-site"); return { ok: true }; };
   wpToolsService.discardUpload = async () => { called.push("discard"); return { ok: true }; };
-  for (const roles of [["ROLE_USER"], ["ROLE_SITE_MANAGER"]]) {
-    expect((await post("/api/plugin-upload", plugin(), roles, "application/octet-stream")).status).toBe(404);
-    expect((await post("/api/new-site", JSON.stringify({ domain: "new.example.com", plugins: [{ slug: "woocommerce", activate: true }] }), roles)).status).toBe(404);
-    expect((await post("/api/plugin-discard", JSON.stringify({ id: "0".repeat(32) }), roles)).status).toBe(404);
-    const search = await handle(new Request("https://panel.example.com/addons/wp-tools/api/plugin-search?q=woo"), "/api/plugin-search", undefined, undefined, { user: "someone", roles });
-    expect(search.status).toBe(404);
-  }
+  wpToolsService.newSiteStatus = async () => { called.push("status"); return { ok: true }; };
+  wpToolsService.newSiteAccess = async () => { called.push("access"); return { ok: true }; };
+  wpToolsService.newSiteSettings = async () => { called.push("settings"); return { ok: true }; };
+  const roles = ["ROLE_USER"];
+  expect((await post("/api/plugin-upload", plugin(), roles, "application/octet-stream")).status).toBe(404);
+  expect((await post("/api/new-site", JSON.stringify({ domain: "new.example.com", plugins: [{ slug: "woocommerce", activate: true }] }), roles)).status).toBe(404);
+  expect((await post("/api/plugin-discard", JSON.stringify({ id: "0".repeat(32) }), roles)).status).toBe(404);
+  expect((await post("/api/new-site-settings", JSON.stringify({ siteManagers: true }), roles)).status).toBe(404);
+  expect((await get("/api/plugin-search?q=woo", roles)).status).toBe(404);
+  expect((await get(`/api/new-site-status?job=20261029T192025Z-4a8d82`, roles)).status).toBe(404);
   expect(called).toEqual([]);
+});
+
+test("a site manager chooses WordPress.org plugins on their own account's behalf, and nothing else", async () => {
+  const called: unknown[] = [];
+  wpToolsService.uploadPlugin = async () => { called.push("upload"); return { ok: true }; };
+  wpToolsService.discardUpload = async () => { called.push("discard"); return { ok: true }; };
+  wpToolsService.newSiteSettings = async () => { called.push("settings"); return { ok: true }; };
+  wpToolsService.newSite = async (choice) => { called.push(choice); return { ok: true, data: { job: null } }; };
+  wpToolsService.newSiteStatus = async (id, asUser) => { called.push(["status", id, asUser]); return { ok: true }; };
+  wpToolsService.newSiteAccess = async (asUser) => { called.push(["access", asUser]); return { ok: false, error: "an administrator has not let site managers choose plugins for new sites" }; };
+  const roles = ["ROLE_SITE_MANAGER"];
+  expect((await post("/api/plugin-upload", plugin(), roles, "application/octet-stream")).status).toBe(404);
+  expect((await post("/api/plugin-discard", JSON.stringify({ id: "0".repeat(32) }), roles)).status).toBe(404);
+  expect((await post("/api/new-site-settings", JSON.stringify({ siteManagers: true }), roles)).status).toBe(404);
+  const withUpload = await post("/api/new-site", JSON.stringify({ domain: "new.example.com", uploads: [{ id: "0".repeat(32), activate: true }] }), roles);
+  expect(withUpload.status).toBe(403);
+  expect(called).toEqual([]);
+  expect((await post("/api/new-site", JSON.stringify({ domain: "new.example.com", plugins: [{ slug: "woocommerce", activate: true }] }), roles)).status).toBe(200);
+  expect((await get("/api/new-site-status?job=20261029T192025Z-4a8d82", roles)).status).toBe(200);
+  // The search asks root first, and does not run while the switch is off.
+  expect((await get("/api/plugin-search?q=woo", roles)).status).toBe(403);
+  expect(called).toEqual([
+    { domain: "new.example.com", plugins: [{ slug: "woocommerce", activate: true }], uploads: [], asUser: "mgr" },
+    ["status", "20261029T192025Z-4a8d82", "mgr"],
+    ["access", "mgr"],
+  ]);
+});
+
+test("saving who may choose renders CloudPanel's templates again", async () => {
+  const called: unknown[] = [];
+  wpToolsService.newSiteSettings = async (on) => { called.push(["settings", on]); return { ok: true, data: { newSiteAccess: { siteManagers: on } } }; };
+  wpToolsService.renderPanelTemplates = async () => { called.push("render"); return { ok: false, error: "the panel's templates changed" }; };
+  const response = await post("/api/new-site-settings", JSON.stringify({ siteManagers: true }));
+  expect(response.status).toBe(500);
+  expect(((await response.json()) as { error: string }).error).toContain("Saved, but CloudPanel's new-site form still shows the old choice");
+  expect(called).toEqual([["settings", true], "render"]);
+  expect((await post("/api/new-site-settings", JSON.stringify({ siteManagers: "yes" }))).status).toBe(400);
 });
 
 test("the new-site route checks the choice before root sees it", async () => {
@@ -579,19 +712,25 @@ test("an upload travels to root in parts the gateway accepts", async () => {
 
 // --- what goes into CloudPanel's pages ------------------------------------
 
-test("the new-site blocks are for administrators, submit no field of their own, and parse", () => {
-  for (const block of [newSiteFormSnippet("/addons/wp-tools"), newSiteDoneSnippet("/addons/wp-tools")]) {
-    expect(block.trim().startsWith("{% if is_granted('ROLE_ADMIN') %}")).toBe(true);
-    expect(block.trim().endsWith("{% endif %}")).toBe(true);
-    expect(block).not.toMatch(/<(?:input|select|textarea)[^>]*\sname=/);
-    for (const source of block.matchAll(/<script>([\s\S]*?)<\/script>/g)) expect(() => new Function(source[1]!)).not.toThrow();
+test("the new-site blocks are for administrators, and site managers only while allowed, submit no field of their own, and parse", () => {
+  for (const managers of [false, true]) {
+    for (const block of [newSiteFormSnippet("/addons/wp-tools", managers), newSiteDoneSnippet("/addons/wp-tools", managers)]) {
+      expect(block.trim().startsWith(managers
+        ? "{% if is_granted('ROLE_ADMIN') or is_granted('ROLE_SITE_MANAGER') %}"
+        : "{% if is_granted('ROLE_ADMIN') %}")).toBe(true);
+      expect(block.trim().endsWith("{% endif %}")).toBe(true);
+      expect(block).not.toMatch(/<(?:input|select|textarea)[^>]*\sname=/);
+      for (const source of block.matchAll(/<script>([\s\S]*?)<\/script>/g)) expect(() => new Function(source[1]!)).not.toThrow();
+    }
+    // The upload control is an administrator's whatever the switch says.
+    expect(newSiteFormSnippet("/addons/wp-tools", managers)).toMatch(/\{% if is_granted\('ROLE_ADMIN'\) %\}<label[^{]*id="clp-wp-plugin-file"[^{]*\{% endif %\}/);
   }
   // What the form's script calls is what the handler answers.
-  const form = newSiteFormSnippet("/addons/wp-tools");
+  const form = newSiteFormSnippet("/addons/wp-tools", true);
   for (const route of ["/api/plugin-search", "/api/plugin-upload", "/api/plugin-discard", "/api/new-site", "/api/session"]) {
     expect(form).toContain(`'${route}`);
   }
-  expect(newSiteDoneSnippet("/addons/wp-tools")).toContain("'/api/jobs/'");
+  expect(newSiteDoneSnippet("/addons/wp-tools", true)).toContain("'/api/new-site-status?job='");
   const targets = WP_TOOLS_TARGETS.filter((target) => target.slug.startsWith("new-site"));
   expect(targets.map((target) => [target.template, target.required])).toEqual([
     ["Frontend/Site/New/wordpress.html.twig", false],

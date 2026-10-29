@@ -122,7 +122,10 @@ export const SYSTEM_TWEAKS_ALLOWED_VERBS = new Set([
  * WordPress.org slug of a strict pattern or by the id root gave an upload:
  * `plugin-upload` stages a zip in parts on stdin, `plugin-discard` drops one,
  * and `new-site` records the choice as a job that waits for a site that does
- * not exist yet.
+ * not exist yet. `new-site-status` reports one such job and `new-site-access`
+ * says whether the caller may choose at all; with `new-site` they carry
+ * `--as-user` for a site manager, whom root holds to the administrator's
+ * `new-site-settings` switch and to directory plugins.
  */
 export const WP_TOOLS_ALLOWED_VERBS = new Set([
   "sites",
@@ -138,6 +141,9 @@ export const WP_TOOLS_ALLOWED_VERBS = new Set([
   "plugin-upload",
   "plugin-discard",
   "new-site",
+  "new-site-status",
+  "new-site-access",
+  "new-site-settings",
 ]);
 
 export const CLOUDFLARE_IPS_ALLOWED_VERBS = new Set([

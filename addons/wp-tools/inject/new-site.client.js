@@ -30,7 +30,13 @@
   var timer = null;
   var asked = 0;
 
-  try { chosen = JSON.parse(sessionStorage.getItem(CHOICE) || '[]').filter(function (item) { return !item.pending; }); }
+  // Drawn for administrators only: nobody else may hand a site a zip.
+  var canUpload = Boolean(file);
+  try {
+    chosen = JSON.parse(sessionStorage.getItem(CHOICE) || '[]').filter(function (item) {
+      return !item.pending && (canUpload || item.source !== 'upload');
+    });
+  }
   catch (e) { chosen = []; }
 
   function remember() {
@@ -198,7 +204,7 @@
 
   // --- uploads --------------------------------------------------------------
 
-  file.addEventListener('change', function () {
+  if (file) file.addEventListener('change', function () {
     var files = Array.prototype.slice.call(file.files || []);
     file.value = '';
     showError('');

@@ -6,7 +6,7 @@ import { jobApiRoute } from "../../../lib/job-stream";
 import { MAX_NEW_SITE_PLUGINS, UPLOAD_ID_RE } from "../new-site-plugins";
 import { DIRECTORY_SLUG_RE, MAX_UPLOAD_BYTES } from "../plugin-zip";
 import { searchDirectory, searchTerm } from "./plugin-search";
-import { validateDomain, wpToolsService, type NewSiteChoice } from "./service";
+import { validateDomain, validateJobId, wpToolsService, type NewSiteChoice } from "./service";
 import { dashboardBody, dashboardView, layout } from "./views";
 
 function json(body: unknown, status = 200): Response {
@@ -15,6 +15,17 @@ function json(body: unknown, status = 200): Response {
 
 function errorMessage(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
+}
+
+/**
+ * Who may choose plugins on the new-site form: an administrator, or a site
+ * manager on their own account's behalf. Root holds the site manager to the
+ * switch and their current role; anyone else is turned away here.
+ */
+function newSiteChooser(auth: { user: string; roles: string[] } | null | undefined): { asUser?: string } | null {
+  if (auth?.roles.includes("ROLE_ADMIN")) return {};
+  if (auth?.user && auth.roles.includes("ROLE_SITE_MANAGER")) return { asUser: auth.user };
+  return null;
 }
 
 /**
@@ -111,12 +122,26 @@ export async function handle(
     if (routed) return routed;
   }
 
-  // The new-site form's search. Administrators only, as everything about
-  // choosing plugins for a new site is for now; see docs/decisions/wp-tools.md.
-  if (method === "GET" && path === "/api/plugin-search") {
-    if (!auth?.roles.includes("ROLE_ADMIN")) return json({ ok: false, error: "not found" }, 404);
-    const term = searchTerm(new URL(req.url).searchParams.get("q"));
+  // The new-site form's search and the status its landing page follows, for an
+  // administrator, or for a site manager while an administrator allows it.
+  // The manager's gate lets a site manager reach these by name; root decides
+  // the rest, so the switch is asked before the search runs.
+  if (method === "GET" && (path === "/api/plugin-search" || path === "/api/new-site-status")) {
+    const chooser = newSiteChooser(auth);
+    if (!chooser) return json({ ok: false, error: "not found" }, 404);
+    const params = new URL(req.url).searchParams;
+    if (path === "/api/new-site-status") {
+      const id = validateJobId(params.get("job"));
+      if (!id) return json({ ok: false, error: "not a valid job id" }, 400);
+      const result = await wpToolsService.newSiteStatus(id, chooser.asUser);
+      return json(result, result.ok ? 200 : 404);
+    }
+    const term = searchTerm(params.get("q"));
     if (!term) return json({ ok: false, error: "type at least two characters" }, 400);
+    if (chooser.asUser) {
+      const allowed = await wpToolsService.newSiteAccess(chooser.asUser);
+      if (!allowed.ok) return json(allowed, 403);
+    }
     try {
       return json({ ok: true, data: { plugins: await searchDirectory(term) } });
     } catch (error) {
@@ -128,9 +153,26 @@ export async function handle(
   const denied = guardMutation(req);
   if (denied) return denied;
 
+  // Choosing plugins for a new site: an administrator, or a site manager for
+  // whom root re-checks the switch and the role, and allows directory plugins
+  // only. Nothing here is narrowed by site, since the site does not exist yet;
+  // root refuses a domain CloudPanel already has.
+  if (path === "/api/new-site") {
+    const chooser = newSiteChooser(auth);
+    if (!chooser) return json({ ok: false, error: "not found" }, 404);
+    let body: Record<string, unknown>;
+    try { body = await readJsonObject(req, 16 * 1024); }
+    catch (error) { return bodyErrorResponse(error); }
+    const choice = newSiteChoice(body);
+    if (typeof choice === "string") return json({ ok: false, error: choice }, 400);
+    if (chooser.asUser && choice.uploads.length) return json({ ok: false, error: "only an administrator can upload plugins" }, 403);
+    const result = await wpToolsService.newSite({ ...choice, ...(chooser.asUser ? { asUser: chooser.asUser } : {}) });
+    return json(result, result.ok ? 200 : 400);
+  }
+
   // A plugin zip is code that will run as the new site's user, so uploading
-  // one stays an administrator's even once other roles may pick plugins.
-  if (path === "/api/plugin-upload" || path === "/api/plugin-discard" || path === "/api/new-site") {
+  // one stays an administrator's whoever else may pick plugins.
+  if (path === "/api/plugin-upload" || path === "/api/plugin-discard") {
     if (!auth?.roles.includes("ROLE_ADMIN")) return json({ ok: false, error: "not found" }, 404);
     if (path === "/api/plugin-upload") {
       let zip: Uint8Array;
@@ -146,16 +188,10 @@ export async function handle(
       return json(result, result.ok ? 200 : 400);
     }
     let body: Record<string, unknown>;
-    try { body = await readJsonObject(req, 16 * 1024); }
+    try { body = await readJsonObject(req, 4 * 1024); }
     catch (error) { return bodyErrorResponse(error); }
-    if (path === "/api/plugin-discard") {
-      if (typeof body.id !== "string" || !UPLOAD_ID_RE.test(body.id)) return json({ ok: false, error: "that is not an upload" }, 400);
-      const result = await wpToolsService.discardUpload(body.id);
-      return json(result, result.ok ? 200 : 400);
-    }
-    const choice = newSiteChoice(body);
-    if (typeof choice === "string") return json({ ok: false, error: choice }, 400);
-    const result = await wpToolsService.newSite(choice);
+    if (typeof body.id !== "string" || !UPLOAD_ID_RE.test(body.id)) return json({ ok: false, error: "that is not an upload" }, 400);
+    const result = await wpToolsService.discardUpload(body.id);
     return json(result, result.ok ? 200 : 400);
   }
 
@@ -189,9 +225,9 @@ export async function handle(
     return json(result, result.ok ? 200 : 400);
   }
 
-  if (path.startsWith("/api/mainwp-") || path.startsWith("/api/varnish-") || path === "/api/domain-link") {
-    // Only sign-in and its CSRF bootstrap are exceptions to the manager's
-    // administrator gate. Keep that boundary explicit here as well.
+  if (path.startsWith("/api/mainwp-") || path.startsWith("/api/varnish-") || path === "/api/domain-link" || path === "/api/new-site-settings") {
+    // These are administrators' whatever other WP Tools routes the manager's
+    // gate lets through by name. Keep that boundary explicit here as well.
     if (!auth?.roles.includes("ROLE_ADMIN")) return json({ ok: false, error: "not found" }, 404);
     let body: Record<string, unknown>;
     // A batch connection names every site it is for.
@@ -217,6 +253,17 @@ export async function handle(
       if (!rendered.ok) {
         const why = rendered.error ?? "the CloudPanel templates could not be updated";
         return json({ ok: false, error: `Saved, but CloudPanel's site pages still show the old link: ${why}`, data: result.data }, 500);
+      }
+    } else if (path === "/api/new-site-settings") {
+      if (typeof body.siteManagers !== "boolean") return json({ ok: false, error: "siteManagers must be true or false" }, 400);
+      result = await wpToolsService.newSiteSettings(body.siteManagers);
+      if (!result.ok) return json(result, 400);
+      // Who sees the form's Plugins row is decided in the templates, as the
+      // domain link is: saved either way, and the page says if they are stale.
+      const rendered = await wpToolsService.renderPanelTemplates();
+      if (!rendered.ok) {
+        const why = rendered.error ?? "the CloudPanel templates could not be updated";
+        return json({ ok: false, error: `Saved, but CloudPanel's new-site form still shows the old choice: ${why}`, data: result.data }, 500);
       }
     } else if (path === "/api/varnish-sync") result = await wpToolsService.startJob("varnish-check");
     else if (path === "/api/mainwp-sync") result = await wpToolsService.startJob("mainwp-check");

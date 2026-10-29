@@ -18,7 +18,7 @@
  * own storage under an id root picks and handed to the site's user on stdin.
  */
 import { Database } from "bun:sqlite";
-import { PANEL_USER_NAME_RE, panelUserOwnsSite } from "../../lib/panel-users";
+import { PANEL_USER_NAME_RE, panelUserOwnsSite, panelUserRole } from "../../lib/panel-users";
 import { createHash, randomBytes } from "node:crypto";
 import { isIP } from "node:net";
 import { normalizeMappedIpv4 } from "../../lib/ip-address";
@@ -29,7 +29,7 @@ import {
 } from "../../cli/action-common";
 import { CLI_BIN, CONFIG_DIR, PANEL_DB, STATE_DIR } from "../../cli/paths";
 import {
-  jobDir, jobGet, jobIdArgument, jobSet, pruneJobs, readJobLog, watchJobRecord, type startJobUnit,
+  jobDir, jobGet, jobIdArgument, jobSet, pruneJobs, readJobLog, validateJobId, watchJobRecord, type startJobUnit,
 } from "../../cli/job-store";
 import { readUnixAccounts, siteAccountProblem, splitSharedUids, type UnixAccount } from "../../lib/site-accounts";
 import {
@@ -52,6 +52,7 @@ import {
   runNewSitePlugins, stageUploadPart, type NewSiteLookup, type NewSiteOptions, type NewSitePlugin,
 } from "./new-site-plugins";
 import { DIRECTORY_SLUG_RE } from "./plugin-zip";
+import { DEFAULT_NEW_SITE_ACCESS, readNewSiteAccess, saveNewSiteAccess, type WpNewSiteAccess } from "./new-site-access";
 
 import { basicAuthBlocks, basicAuthRewritable, withBasicAuthBypass, type reloadNginx } from "./basic-auth";
 
@@ -158,6 +159,8 @@ export interface WpToolsActionPaths {
   varnishState: string;
   varnishLockFile: string;
   domainLinkState: string;
+  /** Whether site managers may choose plugins on the new-site form. */
+  newSiteAccessState: string;
   mainwpState: string;
   mainwpLockFile: string;
   jobsDir: string;
@@ -201,6 +204,7 @@ export const DEFAULT_WP_TOOLS_PATHS: WpToolsActionPaths = {
   varnishState: `${STATE_DIR}/wp-tools/varnish.json`,
   varnishLockFile: "/run/lock/clp-addons/wp-varnish.lock",
   domainLinkState: `${STATE_DIR}/wp-tools/domain-link.json`,
+  newSiteAccessState: `${STATE_DIR}/wp-tools/new-site-access.json`,
   mainwpState: `${STATE_DIR}/wp-tools/mainwp.json`,
   mainwpLockFile: "/run/lock/clp-addons/wp-mainwp.lock",
   jobsDir: `${STATE_DIR}/wp-tools/jobs`,
@@ -257,6 +261,31 @@ function mayManageSite(paths: WpToolsActionPaths, userName: string, domain: stri
   } finally {
     db.close();
   }
+}
+
+/**
+ * Holds a site manager's request for plugins on a new site to what an
+ * administrator allowed: the switch on, and the account an active site
+ * manager in CloudPanel's own database now, whatever its session said.
+ * Administrators' requests carry no name and are not asked.
+ */
+function siteManagerMayChoose(paths: WpToolsActionPaths, userName: string): void {
+  let access: WpNewSiteAccess;
+  try { access = readNewSiteAccess(paths.newSiteAccessState); }
+  catch { failAction("the new-site plugins setting cannot be read; an administrator can save it again"); }
+  if (!access.siteManagers) failAction("an administrator has not let site managers choose plugins for new sites");
+  const db = openPanelDatabase(paths.panelDb);
+  let role: string | null;
+  try { role = panelUserRole(db, userName); }
+  catch (error) { failAction(`CloudPanel could not say who you are: ${reason(error)}`); }
+  finally { db.close(); }
+  if (role !== "ROLE_SITE_MANAGER") failAction("only administrators and site managers choose plugins for new sites");
+}
+
+function asUserArgument(value: string | undefined): string {
+  if (value === undefined) return "";
+  if (!PANEL_USER_NAME_RE.test(value)) failAction("that is not a valid panel user name");
+  return value;
 }
 
 function panelSites(paths: WpToolsActionPaths): PanelSiteRow[] {
@@ -796,19 +825,20 @@ function discard(paths: WpToolsActionPaths, rest: string[]): unknown {
 }
 
 /**
- * `new-site --domain=<d> [--plugins=slug:1,...] [--uploads=id:0,...]`: the
- * plugins an administrator chose on CloudPanel's new-site form, recorded as a
- * job that waits for that site. Directory plugins go first, so an uploaded
- * add-on finds the plugin it extends already active.
+ * `new-site --domain=<d> [--plugins=slug:1,...] [--uploads=id:0,...] [--as-user=<u>]`:
+ * the plugins chosen on CloudPanel's new-site form, recorded as a job that
+ * waits for that site. Directory plugins go first, so an uploaded add-on finds
+ * the plugin it extends already active. `--as-user` names a site manager, held
+ * to the switch, to directory plugins and to their own earlier choices.
  *
  * Any earlier choice still waiting for the same domain is replaced, and one
- * with no plugins only clears it: CloudPanel sent the form back, and the
- * administrator submitted it again with a different choice, or none.
+ * with no plugins only clears it: CloudPanel sent the form back, and it was
+ * submitted again with a different choice, or none.
  */
 async function recordNewSite(paths: WpToolsActionPaths, rest: string[], options: WpToolsActionOptions): Promise<{ job: WpJobView | null }> {
   const fields: Record<string, string> = {};
   for (const argument of rest) {
-    const match = /^--(domain|plugins|uploads)=(.*)$/.exec(argument);
+    const match = /^--(domain|plugins|uploads|as-user)=(.*)$/.exec(argument);
     if (!match || fields[match[1]!] !== undefined) failAction(`unexpected argument '${argument}'`);
     fields[match[1]!] = match[2]!;
   }
@@ -821,16 +851,21 @@ async function recordNewSite(paths: WpToolsActionPaths, rest: string[], options:
   } catch (error) {
     failAction(reason(error));
   }
+  const asUser = asUserArgument(fields["as-user"]);
+  // A zip is code nobody has reviewed: only an administrator hands one to a site.
+  if (asUser && uploads.length) failAction("only an administrator can upload plugins");
   const total = directory.length + uploads.length;
   if (total > MAX_NEW_SITE_PLUGINS) failAction(`a new site takes at most ${MAX_NEW_SITE_PLUGINS} plugins`);
   if (!existsSync(paths.configFile)) failAction("WordPress Tools must be enabled first");
+  if (asUser) siteManagerMayChoose(paths, asUser);
   return withFileLock(paths.pluginsLockFile, 15, "another plugin choice is being saved", async () => {
     // Only a site that does not exist yet: this is no way into an existing one.
     if (total && panelSites(paths).some((row) => row.domain_name.toLowerCase() === domain)) {
       failAction(`CloudPanel already has a site called ${domain}; plugins are chosen here only for a new one`);
     }
     // The later choice is the one that counts, and it may name the same uploads.
-    const replaced = waitingNewSiteJobs(paths.jobsDir, (view) => view.domains[0] === domain);
+    // A site manager replaces only their own; an administrator, anyone's.
+    const replaced = waitingNewSiteJobs(paths.jobsDir, (view) => view.domains[0] === domain && (!asUser || view.chosenBy === asUser));
     const released = replaced.flatMap((view) => view.plugins.flatMap((plugin) => plugin.upload ? [plugin.upload] : []));
     for (const view of replaced) jobSet(jobDir(paths.jobsDir, view.id), "superseded", "1");
     releaseUploads(paths.uploadsDir, released);
@@ -852,7 +887,7 @@ async function recordNewSite(paths: WpToolsActionPaths, rest: string[], options:
       if (new Set(slugs).size !== slugs.length) failAction("the same plugin is chosen twice");
       return {
         job: startWpJob({
-          jobsDir: paths.jobsDir, task: "new-site-plugins", domains: [domain], plugins: plan,
+          jobsDir: paths.jobsDir, task: "new-site-plugins", domains: [domain], plugins: plan, chosenBy: asUser,
           actionBinary: paths.actionBinary, start: options.startJob,
         }),
       };
@@ -861,6 +896,57 @@ async function recordNewSite(paths: WpToolsActionPaths, rest: string[], options:
       throw error;
     }
   });
+}
+
+/** What the page a new site lands on is told about its job: no upload ids, no log. */
+export interface NewSiteStatus {
+  id: string;
+  domain: string;
+  state: string;
+  step: string;
+  error: string;
+  completed: number;
+  total: number;
+  site: string;
+  result: WpJobView["result"];
+}
+
+/**
+ * `new-site-status --job=<id> [--as-user=<u>]`. A site manager is told only
+ * about a job they recorded themselves, which is the site they just created;
+ * any other id reads as one that does not exist.
+ */
+function newSiteStatus(paths: WpToolsActionPaths, rest: string[]): { job: NewSiteStatus } {
+  let id = "";
+  let asUser = "";
+  for (const argument of rest) {
+    if (argument.startsWith("--job=") && !id) id = validateJobId(argument.slice("--job=".length)) ?? "";
+    else if (argument.startsWith("--as-user=") && !asUser) asUser = asUserArgument(argument.slice("--as-user=".length));
+    else failAction(`unexpected argument '${argument}'`);
+  }
+  if (!id) failAction("'new-site-status' takes --job=<id>");
+  if (asUser) {
+    const db = openPanelDatabase(paths.panelDb);
+    try { if (panelUserRole(db, asUser) !== "ROLE_SITE_MANAGER") failAction("no such job"); }
+    finally { db.close(); }
+  }
+  const view = wpJobView(paths.jobsDir, id);
+  if (!view || view.task !== "new-site-plugins" || (asUser && view.chosenBy !== asUser)) failAction("no such job");
+  const { state, step, error, completed, total, site, result } = view;
+  return { job: { id, domain: view.domains[0] ?? "", state, step, error, completed, total, site, result } };
+}
+
+/**
+ * `new-site-access [--as-user=<u>]`: whether this caller may use the form's
+ * Plugins row, and upload to it. The manager asks before searching
+ * WordPress.org for a site manager, since only root can read the switch.
+ */
+function newSiteAccess(paths: WpToolsActionPaths, rest: string[]): { uploads: boolean } {
+  const asUser = rest.length === 1 && rest[0]!.startsWith("--as-user=") ? asUserArgument(rest[0]!.slice("--as-user=".length))
+    : rest.length ? failAction("'new-site-access' takes only --as-user") : "";
+  if (!existsSync(paths.configFile)) failAction("WordPress Tools is not enabled");
+  if (asUser) siteManagerMayChoose(paths, asUser);
+  return { uploads: !asUser };
 }
 
 function runNewSiteJob(
@@ -933,6 +1019,17 @@ export async function executeWpToolsAction(
   const paths = pathsFor(options);
   if (argv[0] === "start") return startJob(paths, argv.slice(1), options);
   if (argv[0] === "new-site") return recordNewSite(paths, argv.slice(1), options);
+  if (argv[0] === "new-site-status") return newSiteStatus(paths, argv.slice(1));
+  if (argv[0] === "new-site-access") return newSiteAccess(paths, argv.slice(1));
+  // An administrator's; the manager renders the templates again once it is saved.
+  if (argv[0] === "new-site-settings") {
+    const enabled = argv.length === 2 ? /^--site-managers=(true|false)$/.exec(argv[1]!)?.[1] : undefined;
+    if (!enabled) failAction("'new-site-settings' takes --site-managers=true|false");
+    if (!existsSync(paths.configFile)) failAction("WordPress Tools must be enabled before changing who chooses plugins");
+    const newSiteAccess = { siteManagers: enabled === "true" };
+    saveNewSiteAccess(paths.newSiteAccessState, newSiteAccess);
+    return { newSiteAccess };
+  }
   if (argv[0] === "plugin-upload") return uploadPart(paths, argv.slice(1), options.input ?? await Bun.stdin.text());
   if (argv[0] === "plugin-discard") return discard(paths, argv.slice(1));
   if (argv[0] === "run") return runJob(paths, jobIdArgument(argv.slice(1)), options);
@@ -982,7 +1079,17 @@ export async function executeWpToolsAction(
     } catch (error) {
       domainLinkError = `${paths.domainLinkState} cannot be read: ${reason(error)}`;
     }
-    return { sites: wordpressSites(paths, varnish), varnish, varnishError, mainwp, mainwpError, domainLink, domainLinkError, jobs, newSites };
+    let newSiteAccess: WpNewSiteAccess = { ...DEFAULT_NEW_SITE_ACCESS };
+    let newSiteAccessError = "";
+    try {
+      newSiteAccess = readNewSiteAccess(paths.newSiteAccessState);
+    } catch (error) {
+      newSiteAccessError = `${paths.newSiteAccessState} cannot be read: ${reason(error)}`;
+    }
+    return {
+      sites: wordpressSites(paths, varnish), varnish, varnishError, mainwp, mainwpError, domainLink, domainLinkError, jobs, newSites,
+      newSiteAccess, newSiteAccessError,
+    };
   }
   // The manager renders the templates again once this is saved; nothing here
   // touches them.

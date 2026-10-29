@@ -9,7 +9,7 @@ account in a new tab. Allow pop-ups for CloudPanel. On CloudPanel's Sites page
 a **WP Login** shortcut does the same, and on each WordPress site's own pages
 the domain at the top signs in; Ctrl-click it to open the site instead. Panel
 users get both for their own sites. To keep the domain opening the site, turn
-off **Sign in from the domain** under **Site pages**; a WP Login link then sits
+off **Sign in from the domain** under **CloudPanel's pages**; a WP Login link then sits
 beside it.
 To clean up helpers, choose **Remove** in the **Sign-in helper on N sites** line
 under the table. The next sign-in installs the helper again.
@@ -20,7 +20,11 @@ On CloudPanel's **New WordPress Site** form, the **Plugins** row chooses plugins
 to install on the site being created. Search WordPress.org and click a result to
 add it, or **Upload .zip** for a plugin from elsewhere, up to 32 MB. Untick
 **Activate** to leave one installed but inactive. Then create the site as usual.
-The row is for administrators only.
+
+The row is for administrators. To offer it to site managers too, turn on **Site
+managers choose plugins for new sites** under **CloudPanel's pages**. They get
+WordPress.org plugins only, with no **Upload .zip**, and see only how their own
+choices went. Panel users never get it.
 
 WordPress.org plugins are installed first, then uploads, as the site's own user
 once CloudPanel has set up WordPress. The page the new site lands on says how

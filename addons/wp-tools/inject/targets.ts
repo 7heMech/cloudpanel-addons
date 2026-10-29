@@ -22,8 +22,10 @@
 //
 // The New WordPress Site form gets a Plugins row, and the page a new site
 // lands on says how they were installed. Unlike the links, both are for
-// administrators only, for now: see "Plugins for a new site" in
-// docs/decisions/wp-tools.md.
+// administrators, and for site managers only while an administrator allows it
+// -- a setting read at render time, like the domain link's -- and the upload
+// control is an administrator's whatever it says: see "Plugins for a new site"
+// in docs/decisions/wp-tools.md.
 //
 // None is `required`: a CloudPanel release that renames the sites card, the
 // Manage link or the Domain box should cost the link, not stop the addon from
@@ -33,6 +35,7 @@ import type { AddonTarget } from "../../../lib/addon-target";
 import { ROW_ACTION_CLASS } from "../../../lib/row-actions";
 import { DEFAULT_WP_TOOLS_PATHS, WORDPRESS_APPLICATIONS } from "../action";
 import { DEFAULT_DOMAIN_LINK, readDomainLink } from "../domain-link";
+import { DEFAULT_NEW_SITE_ACCESS, readNewSiteAccess } from "../new-site-access";
 
 const WORDPRESS = `{% if site.application in [${WORDPRESS_APPLICATIONS.map((name) => `'${name}'`).join(", ")}] %}`;
 
@@ -77,24 +80,30 @@ import NEW_SITE_STYLE from "./new-site.css" with { type: "text" };
 import NEW_SITE_SCRIPT from "./new-site.client.js" with { type: "text" };
 import NEW_SITE_DONE_SCRIPT from "./new-site-done.client.js" with { type: "text" };
 
+/** Who the new-site blocks are drawn for. */
+function choosers(siteManagers: boolean): string {
+  return `{% if is_granted('ROLE_ADMIN')${siteManagers ? " or is_granted('ROLE_SITE_MANAGER')" : ""} %}`;
+}
+
 /**
  * The Plugins row, before the form's Back and Create buttons. The inputs have
- * no names, since Symfony refuses a field its form does not declare.
+ * no names, since Symfony refuses a field its form does not declare. The upload
+ * control is drawn for administrators only.
  */
-export function newSiteFormSnippet(url: string): string {
+export function newSiteFormSnippet(url: string, siteManagers: boolean): string {
   return `
-            {% if is_granted('ROLE_ADMIN') %}
+            ${choosers(siteManagers)}
             <div class="row clp-wp-plugins" id="clp-wp-plugins" data-url="${url}">
               <div class="col-12">
                 <label class="col-form-label" for="clp-wp-plugin-search">Plugins</label>
                 <div class="clp-wp-plugins-bar">
                   <input type="search" class="form-control" id="clp-wp-plugin-search" placeholder="Search WordPress.org plugins" autocomplete="off"
                     role="combobox" aria-expanded="false" aria-controls="clp-wp-plugin-results" aria-describedby="clp-wp-plugins-note">
-                  <label class="btn btn-gray clp-wp-plugins-upload">Upload .zip<input type="file" id="clp-wp-plugin-file" accept=".zip,application/zip" multiple></label>
+                  {% if is_granted('ROLE_ADMIN') %}<label class="btn btn-gray clp-wp-plugins-upload">Upload .zip<input type="file" id="clp-wp-plugin-file" accept=".zip,application/zip" multiple></label>{% endif %}
                 </div>
                 <ul class="clp-wp-plugin-results" id="clp-wp-plugin-results" role="listbox" aria-label="WordPress.org plugins" hidden></ul>
                 <ul class="clp-wp-plugin-chosen" id="clp-wp-plugin-chosen" aria-label="Plugins to install" hidden></ul>
-                <div class="form-text" id="clp-wp-plugins-note">Installed as the site's own user once WordPress is set up. A zip may be up to 32 MB.</div>
+                <div class="form-text" id="clp-wp-plugins-note">Installed as the site's own user once WordPress is set up.{% if is_granted('ROLE_ADMIN') %} A zip may be up to 32 MB.{% endif %}</div>
                 <div class="alert alert-danger clp-wp-plugins-error" id="clp-wp-plugins-error" role="alert" hidden></div>
               </div>
             </div>
@@ -108,9 +117,9 @@ export function newSiteFormSnippet(url: string): string {
  * messages above it. The domain is read as Panel Tweaks' certificate status
  * reads it, from the credentials the panel keeps for this page.
  */
-export function newSiteDoneSnippet(url: string): string {
+export function newSiteDoneSnippet(url: string, siteManagers: boolean): string {
   return `
-      {% if is_granted('ROLE_ADMIN') %}
+      ${choosers(siteManagers)}
       {% set clpWpPluginsSite = (app.session.get('siteCredentials')|default({}))['Site'|trans]|default({}) %}
       {% set clpWpPluginsDomain = (clpWpPluginsSite['Domain Name'|trans]|default(''))|replace({'https://': '', 'http://': ''})|trim('/')|lower %}
       <div class="alert-container" id="clp-wp-plugins-status" data-url="${url}" data-domain="{{ clpWpPluginsDomain }}" hidden>
@@ -119,6 +128,15 @@ export function newSiteDoneSnippet(url: string): string {
       <style>${NEW_SITE_STYLE}</style>
       <script>${NEW_SITE_DONE_SCRIPT}</script>
       {% endif %}`;
+}
+
+/** Root work, at render time; an unreadable setting is the default, off. */
+function storedSiteManagers(): boolean {
+  try {
+    return readNewSiteAccess(DEFAULT_WP_TOOLS_PATHS.newSiteAccessState).siteManagers;
+  } catch {
+    return DEFAULT_NEW_SITE_ACCESS.siteManagers;
+  }
 }
 
 /** Root work, at render time; an unreadable setting is the default. */
@@ -161,13 +179,13 @@ export const WP_TOOLS_TARGETS: AddonTarget[] = [
     template: "Frontend/Site/New/wordpress.html.twig",
     anchorBefore: '            <div class="row">\n              <div class="col-6 text-start">',
     required: false,
-    snippet: newSiteFormSnippet,
+    snippet: (url) => newSiteFormSnippet(url, storedSiteManagers()),
   },
   {
     slug: "new-site-plugins-status",
     template: "Frontend/Site/New/wordpress-installed.html.twig",
     anchorBefore: '      <div class="card">',
     required: false,
-    snippet: newSiteDoneSnippet,
+    snippet: (url) => newSiteDoneSnippet(url, storedSiteManagers()),
   },
 ];

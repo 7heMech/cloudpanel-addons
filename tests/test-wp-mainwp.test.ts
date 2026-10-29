@@ -416,11 +416,11 @@ test("the page puts sites first and draws only the controls that do something", 
   expect(checked).toMatch(/data-domain="new.test" onclick="connectMainwp\(this\)">Connect</);
   expect(checked).toContain("Connect all unconnected (1)");
   expect(checked).toContain('aria-label="Select manual.test" disabled>');
-  // With both policies on, the only switches are theirs and the domain link's, and every row keeps its action.
+  // With both policies on, the only switches are theirs and CloudPanel's pages' two, and every row keeps its action.
   chosen.enabled = true;
   const on = page(sites, chosen, true);
   expect([...on.matchAll(/<th scope="col"[^>]*>([^<]*)<\/th>/g)].map((match) => match[1])).toEqual(heads);
-  expect(on.match(/class="switch"/g)).toHaveLength(3);
+  expect(on.match(/class="switch"/g)).toHaveLength(4);
   expect(on).toMatch(/data-domain="new.test" onclick="connectMainwp\(this\)">Connect</);
   // Varnish's Install, too, waits for a check to say the plugin is missing.
   expect(on).not.toContain("installPlugin(this)");

@@ -44,6 +44,8 @@ export interface WpJobView {
   site: string;
   /** What a new site's job was asked to install; empty for every other task. */
   plugins: NewSitePlugin[];
+  /** The site manager who chose them, or "" for an administrator and every other task. */
+  chosenBy: string;
   result: VarnishSyncResult | MainwpResult | NewSiteResult | null;
 }
 
@@ -86,6 +88,7 @@ export function wpJobView(jobsDir: string, id: string): WpJobView | null {
     ...jobCommonFields(dir),
     ...jobSiteProgress(dir),
     plugins: task === "new-site-plugins" ? planOf(dir) : [],
+    chosenBy: jobGet(dir, "chosenBy"),
     result: readJobResult<WpJobView["result"]>(dir),
   };
 }
@@ -140,6 +143,8 @@ export function startWpJob(options: {
   start?: typeof startJobUnit;
   /** A new site's plan; new sites are not one at a time, since each waits for its own. */
   plugins?: NewSitePlugin[];
+  /** The site manager a new site's plan is for. */
+  chosenBy?: string;
 }): WpJobView {
   const { jobsDir, task, domains } = options;
   const policy = policyOf(task);
@@ -150,7 +155,11 @@ export function startWpJob(options: {
   const id = queueJob({
     addon: "wp-tools",
     jobsDir,
-    fields: { task, domains: domains.join(","), ...(options.plugins ? { plugins: JSON.stringify(options.plugins) } : {}) },
+    fields: {
+      task, domains: domains.join(","),
+      ...(options.plugins ? { plugins: JSON.stringify(options.plugins) } : {}),
+      ...(options.chosenBy ? { chosenBy: options.chosenBy } : {}),
+    },
     description: `clp-addons: WordPress Tools ${task}`,
     actionBinary: options.actionBinary,
     runtimeSeconds: JOB_RUNTIME_SECONDS,

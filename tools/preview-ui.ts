@@ -859,7 +859,7 @@ function panelNewSiteStub(url: URL, dark: boolean): string {
                 <div class="col-6">${field("adminPassword", "Admin Password", "preview-only-password")}</div>
               </div>
             </div>
-${seed}${wpToolsNewSiteForm("/addons/wp-tools").replace("{% if is_granted('ROLE_ADMIN') %}", "").replace("{% endif %}", "")}${search}
+${seed}${twigForRole(wpToolsNewSiteForm("/addons/wp-tools", true), !url.searchParams.has("manager"))}${search}
             <div class="row">
               <div class="col-6 text-start">
                 <a href="/sites" class="btn btn-lg btn-gray">Back</a>
@@ -877,10 +877,19 @@ ${seed}${wpToolsNewSiteForm("/addons/wp-tools").replace("{% if is_granted('ROLE_
 </div></main>`, dark);
 }
 
+/**
+ * A new-site block as the panel renders it for an administrator, or for a site
+ * manager (`?manager` on the form): the administrator-only parts go, and so do
+ * the remaining conditions, which both roles pass.
+ */
+function twigForRole(block: string, admin: boolean): string {
+  const shown = admin ? block : block.replace(/\{% if is_granted\('ROLE_ADMIN'\) %\}[^{]*?\{% endif %\}/g, "");
+  return shown.replace(/\{% (?:if [^%]*|endif |set [^%]*)%\}/g, "");
+}
+
 /** Frontend/Site/New/wordpress-installed.html.twig, for the domain the form above sent. */
 function panelNewSiteDoneStub(domain: string, dark: boolean): string {
-  const block = wpToolsNewSiteDone("/addons/wp-tools")
-    .replace(/\{% if is_granted\('ROLE_ADMIN'\) %\}|\{% endif %\}|\{% set [^%]*%\}/g, "")
+  const block = twigForRole(wpToolsNewSiteDone("/addons/wp-tools", true), true)
     .replace("{{ clpWpPluginsDomain }}", () => Bun.escapeHTML(domain.toLowerCase()));
   return panelPageStub("WordPress Site has been created!", "", ["frontend/new-site.css"], `<main class="main-container"><div class="container-fluid container-limited-width new-site-container-fix">
   <div class="wordpress-site-created-container">
@@ -1171,7 +1180,7 @@ function wpToolsPreviewJob(task: WpJobView["task"], domains: string[], finish: (
   const id = `${new Date().toISOString().replace(/[-:]/g, "").slice(0, 15)}Z-${Math.random().toString(16).slice(2, 8).padEnd(6, "0")}`;
   const job: PreviewJob = {
     id, task, policy: task.startsWith("varnish") ? "varnish" : "mainwp", domains, state: "running", step: "", error: "",
-    createdAt: "", startedAt: "", finishedAt: "", completed: 0, total: domains.length, site: domains[0] ?? "", plugins: [], result: null,
+    createdAt: "", startedAt: "", finishedAt: "", completed: 0, total: domains.length, site: domains[0] ?? "", plugins: [], chosenBy: "", result: null,
     startedMs, finish,
   };
   wpToolsJobs[job.policy as "varnish" | "mainwp"] = job;
@@ -1184,11 +1193,13 @@ function wpToolsPreviewJob(task: WpJobView["task"], domains: string[], finish: (
  * plugin a second; one named "broken" fails, as a zip WordPress refuses would.
  */
 let wpNewSiteJobs: PreviewJob[] = [];
+/** The WP Tools switch that lets site managers use the form's Plugins row. */
+let wpNewSiteManagers = false;
 function wpNewSitePreviewJob(domain: string, plugins: NewSitePlugin[], startedMs = Date.now()): PreviewJob {
   const id = `${new Date(startedMs).toISOString().replace(/[-:]/g, "").slice(0, 15)}Z-${Math.random().toString(16).slice(2, 8).padEnd(6, "0")}`;
   const job: PreviewJob = {
     id, task: "new-site-plugins", policy: "plugins", domains: [domain], state: "running", step: `Waiting for WordPress on ${domain}`, error: "",
-    createdAt: new Date(startedMs).toISOString().slice(0, 19) + "Z", startedAt: "", finishedAt: "", completed: 0, total: 0, site: "", plugins, result: null,
+    createdAt: new Date(startedMs).toISOString().slice(0, 19) + "Z", startedAt: "", finishedAt: "", completed: 0, total: 0, site: "", plugins, chosenBy: "", result: null,
     startedMs, finish: () => {},
   };
   wpNewSiteJobs.unshift(job);
@@ -1214,11 +1225,11 @@ function wpNewSiteTick(job: PreviewJob): PreviewJob {
   } satisfies NewSiteResult;
   return job;
 }
-function wpNewSiteFinished(domain: string, finishedAt: string, plugins: NewSiteResult["plugins"]): PreviewJob {
+function wpNewSiteFinished(domain: string, finishedAt: string, plugins: NewSiteResult["plugins"], chosenBy = ""): PreviewJob {
   return {
     id: `${finishedAt.replace(/[-:]/g, "").slice(0, 15)}Z-0a0b0c`, task: "new-site-plugins", policy: "plugins", domains: [domain], state: "done",
     step: "Finished", error: "", createdAt: finishedAt, startedAt: finishedAt, finishedAt, completed: plugins.length, total: plugins.length, site: "",
-    plugins: plugins.map(({ status: _status, error: _error, ...plugin }) => plugin), result: { outcome: "done", plugins }, startedMs: 0, finish: () => {},
+    plugins: plugins.map(({ status: _status, error: _error, ...plugin }) => plugin), chosenBy, result: { outcome: "done", plugins }, startedMs: 0, finish: () => {},
   };
 }
 function wpNewSiteSamples(): PreviewJob[] {
@@ -1229,6 +1240,10 @@ function wpNewSiteSamples(): PreviewJob[] {
       { source: "upload", slug: "acme-payments", name: "Acme Payments 2.4.1", activate: false, status: "installed", error: "" },
       { source: "wordpress.org", slug: "akismet", name: "Akismet Anti-spam: Spam Protection", activate: true, status: "present", error: "" },
     ]),
+    // Chosen by a site manager, which only WordPress.org plugins can be.
+    wpNewSiteFinished("client.example.net", "2026-10-28T08:40:02Z", [
+      { source: "wordpress.org", slug: "wp-mail-smtp", name: "WP Mail SMTP", activate: true, status: "activated", error: "" },
+    ], "jordan"),
     wpNewSiteFinished("blog.example.com", "2026-10-27T09:03:12Z", [
       { source: "wordpress.org", slug: "contact-form-7", name: "Contact Form 7", activate: true, status: "activated", error: "" },
       { source: "upload", slug: "elementor-pro", name: "Elementor Pro 3.25.0", activate: true, status: "failed", error: "the plugin was installed but WordPress did not activate it" },
@@ -1260,6 +1275,7 @@ const wpToolsPreviewData = () => {
   for (const job of wpNewSiteJobs) wpNewSiteTick(job);
   return {
     newSites: wpNewSiteJobs,
+    newSiteAccess: { siteManagers: wpNewSiteManagers },
     sites: wpToolsPreview.sites,
     varnish: { enabled: wpToolsPreview.automatic, sites: {} },
     varnishError: wpToolsPreview.error,
@@ -1354,6 +1370,15 @@ async function wpToolsPreviewApi(req: Request, path: string): Promise<Response |
     case "varnish-settings":
       wpToolsPreview.automatic = body.enabled === true;
       return ok({});
+    case "new-site-settings":
+      wpNewSiteManagers = body.siteManagers === true;
+      return ok({ newSiteAccess: { siteManagers: wpNewSiteManagers } });
+    case "new-site-status": {
+      const found = wpNewSiteJobs.find((entry) => entry.id === new URL(req.url).searchParams.get("job"));
+      if (!found) return Response.json({ ok: false, error: "no such job" }, { status: 404 });
+      const { id, state, step, error, completed, total, site: working, result } = wpNewSiteTick(found);
+      return ok({ job: { id, domain: found.domains[0], state, step, error, completed, total, site: working, result } });
+    }
     case "domain-link":
       wpDomainSignIn = body.signIn === true;
       return ok({ domainLink: { signIn: wpDomainSignIn } });

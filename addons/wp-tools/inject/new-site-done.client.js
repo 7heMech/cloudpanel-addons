@@ -68,7 +68,8 @@
     // A request or body that stalls counts as a miss, as a failed one does.
     var abort = window.AbortController ? new AbortController() : null;
     var timer = setTimeout(function () { if (abort) abort.abort(); }, 10000);
-    fetch(url + '/api/jobs/' + encodeURIComponent(job.id), { credentials: 'same-origin', signal: abort ? abort.signal : undefined }).then(function (response) {
+    // The one status route a site manager reaches, and only for their own choice.
+    fetch(url + '/api/new-site-status?job=' + encodeURIComponent(job.id), { credentials: 'same-origin', signal: abort ? abort.signal : undefined }).then(function (response) {
       return response.json();
     }).then(function (reply) {
       clearTimeout(timer);
