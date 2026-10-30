@@ -112,7 +112,7 @@ it; assigning a site explicitly, including to no category, records its id too,
 so a deliberate choice is not overwritten later.
 
 Reconciliation runs as the addon's `newSites` hook, seconds after CloudPanel
-writes a new site's vhost (see [Platform](platform.md#new-sites)), and as its
+saves a new site (see [Platform](platform.md#new-sites)), and as its
 `repair` upkeep every fifteen minutes. It puts new sites in the default category
 and rewrites an assigned site whose pool file no longer matches it. The second
 half is not housekeeping: changing a site's PHP version in the panel deletes its

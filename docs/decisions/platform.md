@@ -218,14 +218,44 @@ catalog order, so DNS normally writes a site's records before SMTP Relay binds
 its user. Each gets a 15-second head start rather than waiting for the one
 before it to finish: DNS can wait minutes for its lock behind a fleet check, and
 until SMTP Relay binds the site its mail login is refused. One addon failing
-does not skip the next. CloudPanel commits the site row
-about 200 ms after writing the vhost, so the service runs again 10 seconds
-later, even if the first run failed. The units exist while any installed addon
-declares `newSites`; repair restarts the watcher if it has stopped. It takes no
-operation lock: each addon's work takes its own. Vhost rewrites also wake the
-watcher; when the site set is unchanged, the hooks make no network calls or
-configuration writes. Update and repair disable and remove the units listed in
-`LEGACY_UNITS` in `cli/paths.ts`.
+does not skip the next. The units exist while any installed addon declares
+`newSites`; repair restarts the watcher if it has stopped. It takes no
+operation lock: each addon's work takes its own. Update and repair disable and
+remove the units listed in `LEGACY_UNITS` in `cli/paths.ts`.
+
+The vhost is not the site yet. CloudPanel commits the site's row in its
+database after writing the vhost: half a second later on staging, for a
+WordPress site too, whose files and installation come after the row and do not
+delay it. A busy panel database delays it further, because CloudPanel's insert
+waits for the other writers. Deleting a site removes the vhost first and the row
+about 0.75 s later. So the row's commit is the second event. `sync-sites` reads
+the panel's domains (read-only, so its own read is not a write) and runs the
+hooks only when they differ from the ones they last ran for, recorded in
+`/var/lib/clp-addons/new-sites-seen.json`. Then, while a site is in flight, it
+starts `clp-addons-new-site-rows.path`, which watches
+`/home/clp/htdocs/app/data` and starts the same service; when none is, it stops
+it again. In flight means a `<domain>.conf` vhost written in the last hour with
+no row, or a row whose vhost is gone while the vhost directory changed in the
+last hour. CloudPanel's own vhosts and ours, such as `default.conf`, have no dot
+in their name, and the hour bounds a site that never finishes arriving.
+CloudPanel's database uses a rollback journal, so every commit creates and
+deletes `db.sq3-journal` in that directory; a connection closing is a change
+too.
+
+The rows watcher is not left running because the panel writes its database
+every few seconds even when idle: its monitoring agent made 14 commits in two
+minutes on an idle staging box. While it runs, each of those starts the service
+for about 30 ms to read one table and find nothing new. A path unit does not
+start a service again for a change made while that service is still running, so
+`sync-sites` reads the domains once more after starting the watcher, and goes
+round again if a row arrived while the hooks ran; a commit in the moment between
+that read and the service ending is seen at the panel's next write. Several
+starts in a few seconds are normal while a site is in flight, so the service has
+no start limit: systemd's default fails a unit, and the path that started it,
+after five starts in ten seconds. Hooks that ran for a set of sites do not run
+again for it even if one failed, because the rows watcher would otherwise repeat
+every hook on every panel write; the 15-minute pass retries it. Vhost rewrites
+that add or remove no site run no hook.
 
 ## One way to watch a job
 

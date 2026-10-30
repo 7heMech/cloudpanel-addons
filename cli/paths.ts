@@ -41,6 +41,8 @@ export const AUTH_SOCKET_UNIT = "clp-addons-auth.socket";
 export const AUTH_SERVICE_UNIT = "clp-addons-auth.service";
 export const AUTH_SOCKET_PATH = `${SOCKET_DIR}/auth.sock`;
 export const PANEL_DB = "/home/clp/htdocs/app/data/db.sq3";
+/** The panel database's directory, where its rollback journal comes and goes with every write. */
+export const PANEL_DB_DIR = "/home/clp/htdocs/app/data";
 /** Site vhosts, which stay with the distro Nginx in both panel layouts. */
 export const DISTRO_NGINX_SITES_DIR = "/etc/nginx/sites-enabled";
 const PANEL_NGINX_DIR = "/home/clp/services/nginx";
@@ -109,6 +111,10 @@ export const RECONCILE_PATH = "clp-addons-anchor.path";
 export const ANCHOR_SERVICE = "clp-addons-anchor.service";
 export const NEW_SITES_SERVICE = "clp-addons-new-sites.service";
 export const NEW_SITES_PATH = "clp-addons-new-sites.path";
+/** Started by `sync-sites` only while a new site's vhost waits for its row. */
+export const NEW_SITE_ROWS_PATH = "clp-addons-new-site-rows.path";
+/** The site domains the new-site hooks last ran for. */
+export const NEW_SITES_SEEN_FILE = `${STATE_DIR}/new-sites-seen.json`;
 
 
 export const LEGACY_UNITS = [
