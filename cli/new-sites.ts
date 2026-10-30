@@ -77,16 +77,17 @@ export function sitesInFlight(vhostDir: string, domains: string[], now: number):
   }
   if (now - dirChanged >= NEW_SITE_ROW_WAIT_MS) return [];
   const rows = new Set(domains);
-  const vhosts = new Set(names.flatMap((name) => {
+  // Domain to file name: the name is matched without case, but read as it is.
+  const vhosts = new Map(names.flatMap((name) => {
     const domain = name.endsWith(".conf") ? name.slice(0, -".conf".length).toLowerCase() : "";
-    return domain.includes(".") ? [domain] : [];
+    return domain.includes(".") ? [[domain, name] as const] : [];
   }));
-  const created = [...vhosts].filter((domain) => {
-    if (rows.has(domain)) return false;
+  const created = [...vhosts].flatMap(([domain, name]) => {
+    if (rows.has(domain)) return [];
     try {
-      return now - statSync(join(vhostDir, `${domain}.conf`)).mtimeMs < NEW_SITE_ROW_WAIT_MS;
+      return now - statSync(join(vhostDir, name)).mtimeMs < NEW_SITE_ROW_WAIT_MS ? [domain] : [];
     } catch {
-      return false;
+      return [];
     }
   });
   return [...created, ...domains.filter((domain) => !vhosts.has(domain))];
@@ -121,8 +122,11 @@ export async function syncNewSites(ops: NewSiteWatchOps, paths: NewSiteWatchPath
   for (;;) {
     const domains = panelSiteDomains(paths.panelDb);
     if (domains === null) {
-      // Nothing to compare with: run as the watcher always did, and let the hooks report the problem.
+      // Nothing to compare with: run as the watcher always did, and let the hooks
+      // report the problem. Whatever held the database, such as a long write,
+      // ends in a write, which the rows watcher turns into another look.
       await ops.runHooks();
+      ops.watchRows(true);
       return;
     }
     if (!sameDomains(domains, seen)) {

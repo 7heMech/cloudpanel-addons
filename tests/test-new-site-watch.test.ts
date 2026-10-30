@@ -110,12 +110,12 @@ test("a deleted site's vhost goes first, and the row's removal runs the hooks", 
   expect(rowEvent.calls).toEqual(["hooks", "unwatch"]);
 });
 
-test("an unreadable panel database runs the hooks as before and leaves the watcher alone", async () => {
+test("an unreadable panel database runs the hooks as before and looks again at its next write", async () => {
   const panel = box();
   rmSync(panel.panelDb);
   const run = recorder();
   await syncNewSites(run.ops, panel);
-  expect(run.calls).toEqual(["hooks"]);
+  expect(run.calls).toEqual(["hooks", "watch"]);
 });
 
 test("only a recent vhost named for a domain, or a row whose vhost has just gone, is in flight", () => {
@@ -126,10 +126,12 @@ test("only a recent vhost named for a domain, or a row whose vhost has just gone
   panel.addVhost("Known.Example.com.conf");
   panel.addVhost("orphan.example.com.conf", NEW_SITE_ROW_WAIT_MS + 60_000);
   panel.addVhost("new.example.com.conf");
+  panel.addVhost("Upper.Example.com.conf");
   panel.addVhost("notes.txt");
   const now = Date.now();
   expect(sitesInFlight(panel.vhostDir, ["known.example.com", "deleted.example.com"], now))
-    .toEqual(["new.example.com", "deleted.example.com"]);
+    .toEqual(expect.arrayContaining(["new.example.com", "upper.example.com", "deleted.example.com"]));
+  expect(sitesInFlight(panel.vhostDir, ["known.example.com", "deleted.example.com"], now)).toHaveLength(3);
   // An hour after the directory last changed, nothing is on its way: a row without a vhost is the operator's to look at.
   const later = now + NEW_SITE_ROW_WAIT_MS + 1;
   expect(sitesInFlight(panel.vhostDir, ["known.example.com", "deleted.example.com"], later)).toEqual([]);

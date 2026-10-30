@@ -255,7 +255,10 @@ no start limit: systemd's default fails a unit, and the path that started it,
 after five starts in ten seconds. Hooks that ran for a set of sites do not run
 again for it even if one failed, because the rows watcher would otherwise repeat
 every hook on every panel write; the 15-minute pass retries it. Vhost rewrites
-that add or remove no site run no hook.
+that add or remove no site run no hook. When the domains cannot be read, such as
+behind a write that holds the database longer than the five-second busy wait,
+the hooks run as they always did and the rows watcher is started, so the write
+that releases the database brings another look.
 
 ## One way to watch a job
 
