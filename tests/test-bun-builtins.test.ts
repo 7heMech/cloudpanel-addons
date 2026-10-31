@@ -7,11 +7,11 @@ import { foldServerName, hostnameBoundary } from "../addons/stager/action";
 import { provenancePolicy } from "../cli/release";
 
 test("a snapshot's stamp is the local time date(1) would print", () => {
-  // Sampled either side of date(1), so a second boundary between them cannot fail it.
-  const before = dateStamp();
-  const printed = Bun.spawnSync(["date", "+%Y%m%d%H%M%S"]).stdout.toString().trim();
-  const after = dateStamp();
-  expect([before, after]).toContain(printed);
+  // bun test runs in UTC without setting TZ, so date(1) is handed the zone Bun resolved.
+  const instant = 1_767_323_045;
+  const env = { ...process.env, TZ: Intl.DateTimeFormat().resolvedOptions().timeZone };
+  const printed = Bun.spawnSync(["date", "-d", `@${instant}`, "+%Y%m%d%H%M%S"], { env }).stdout.toString().trim();
+  expect(dateStamp(false, new Date(instant * 1000))).toBe(printed);
   expect(dateStamp(false, new Date(2026, 0, 2, 3, 4, 5))).toBe("20260102030405");
 });
 
