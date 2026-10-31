@@ -175,9 +175,9 @@ function fixture(options: { provisioned: boolean; enabled: string[] }): string {
     // An addon's own units are part of "already enabled": a disable has to
     // find them to stop and remove them.
     const units: Record<string, string[]> = {
-      "cloudflare-ips": ["clp-addons-new-sites.path", "clp-addons-new-sites.service"],
-      smtp: ["clp-addons-new-sites.path", "clp-addons-new-sites.service"],
-      dns: ["clp-addons-new-sites.path", "clp-addons-new-sites.service"],
+      "cloudflare-ips": ["clp-addons-new-sites.path", "clp-addons-new-sites.service", "clp-addons-new-site-rows.path"],
+      smtp: ["clp-addons-new-sites.path", "clp-addons-new-sites.service", "clp-addons-new-site-rows.path"],
+      dns: ["clp-addons-new-sites.path", "clp-addons-new-sites.service", "clp-addons-new-site-rows.path"],
     };
     for (const unit of units[name] ?? []) writeFileSync(join(root, "systemd", unit), "# placeholder\n");
   }
@@ -270,16 +270,26 @@ test("the shared new-site watcher is started when its units appear and stopped w
   // Disable withdrew the saved policy, so enable puts it back.
   expect(on.cli).toEqual(["action smtp reconcile"]);
   const service = readFileSync(join(on.root, "systemd", "clp-addons-new-sites.service"), "utf8");
-  // CloudPanel commits a new site's row after writing its vhost, so it runs twice, and a failed first run still waits for the second.
-  expect(service).toMatch(/ExecStart=-\S+ sync-sites\nExecStart=\/bin\/sleep 10\nExecStart=\/\S+ sync-sites\n/);
+  // A row that comes after its vhost wakes the service through the rows watcher, not a second timed run.
+  expect(service).toMatch(/\nExecStart=\/\S+ sync-sites\n$/);
+  expect(service).not.toContain("sleep");
+  // The rows watcher can start it several times in a few seconds; a start limit would fail it.
+  expect(service).toContain("StartLimitIntervalSec=0");
   expect(readFileSync(join(on.root, "systemd", "clp-addons-new-sites.path"), "utf8")).toContain("PathChanged=/etc/nginx/sites-enabled");
+  // The rows watcher is started by sync-sites while a vhost waits for its row, never at boot.
+  const rows = readFileSync(join(on.root, "systemd", "clp-addons-new-site-rows.path"), "utf8");
+  expect(rows).toContain("PathChanged=/home/clp/htdocs/app/data\nUnit=clp-addons-new-sites.service");
+  expect(rows).not.toContain("[Install]");
+  expect(on.systemd.join(" ")).not.toContain("clp-addons-new-site-rows.path");
 
   const off = toggle([{ verb: "disable", addon: "smtp" }], { enabled: ["smtp"] });
   expect(off.error).toBeUndefined();
   expect(off.cli).toEqual(["action smtp deactivate"]);
   expect(off.systemd).toContain("disable --now clp-addons-new-sites.path");
+  expect(off.systemd).toContain("stop clp-addons-new-site-rows.path");
   expect(existsSync(join(off.root, "systemd", "clp-addons-new-sites.path"))).toBe(false);
   expect(existsSync(join(off.root, "systemd", "clp-addons-new-sites.service"))).toBe(false);
+  expect(existsSync(join(off.root, "systemd", "clp-addons-new-site-rows.path"))).toBe(false);
 });
 
 test("the watcher stays while SMTP still uses it, and disabling DNS stops its transient pass", () => {

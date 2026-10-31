@@ -5,7 +5,7 @@ import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import {
   ANCHOR_SERVICE, CLI_BIN, DISTRO_NGINX_SITES_DIR,
-  NEW_SITES_PATH, NEW_SITES_SERVICE,
+  NEW_SITES_PATH, NEW_SITES_SERVICE, NEW_SITE_ROWS_PATH, PANEL_DB_DIR,
   CONFIG_DIR, LIBEXEC_DIR, INSTATIC_BACKUP_CRON, LEGACY_UNITS,
   AUTH_SERVICE_UNIT, AUTH_SOCKET_PATH, AUTH_SOCKET_UNIT, LOCK_DIR, MANAGER_UNIT,
   PANEL_GROUP, PANEL_USER, RECONCILE_PATH, RECONCILE_SERVICE,
@@ -684,20 +684,26 @@ ExecStart=/usr/local/bin/clp-addons repair --anchors-only --quiet
  * New sites need DNS and SMTP Relay quickly: DNS before automatic SSL asks for
  * a certificate, and SMTP because a site's login is refused any sender but its
  * bare name until the sender map lists it. CloudPanel writes a vhost for every
- * new site, but commits the site row about 200 ms later, so the sync runs
- * again shortly after to catch a row that was not there yet. A vhost write
- * that adds or removes no site changes nothing.
+ * new site and commits its row afterwards, later still when its database is
+ * busy. The vhost wakes the service; while a vhost and the rows disagree,
+ * `sync-sites` starts the second path unit, which wakes it on every write to
+ * the panel database until they agree (see `cli/new-sites.ts`). A write that
+ * adds or removes no site runs no hook.
+ *
+ * The rows watcher can start the service several times in a few seconds on a
+ * busy panel, and systemd's default start limit would then fail the unit and
+ * the watcher with it, so the service has none: each start is a read of the
+ * database, and a path unit cannot start a service that is still running.
  */
-export function newSiteUnits(): { service: string; path: string } {
+export function newSiteUnits(): { service: string; path: string; rows: string } {
   return {
     service: `[Unit]
 Description=Apply addons to new CloudPanel sites
+StartLimitIntervalSec=0
 
 [Service]
 Type=oneshot
 TimeoutStartSec=15min
-ExecStart=-${CLI_BIN} sync-sites
-ExecStart=/bin/sleep 10
 ExecStart=${CLI_BIN} sync-sites
 `,
     path: `[Unit]
@@ -709,6 +715,13 @@ Unit=${NEW_SITES_SERVICE}
 
 [Install]
 WantedBy=paths.target
+`,
+    rows: `[Unit]
+Description=Watch for the rows of new CloudPanel sites
+
+[Path]
+PathChanged=${PANEL_DB_DIR}
+Unit=${NEW_SITES_SERVICE}
 `,
   };
 }
@@ -795,11 +808,15 @@ function removeManaged(path: string): boolean {
 
 /**
  * Writes one addon's own units while it is enabled, and stops and removes them
- * once it is not. `trigger` is the unit that schedules the rest.
+ * once it is not. `trigger` is the unit that schedules the rest; any other path
+ * unit among them is one that is started on demand, and is stopped too.
  */
 function syncAddonUnits(enabled: boolean, trigger: string, units: [string, string][]): "added" | "removed" | null {
   if (enabled) return units.map(([name, body]) => writeManaged(`${SYSTEMD_DIR}/${name}`, body)).some(Boolean) ? "added" : null;
   if (existsSync(`${SYSTEMD_DIR}/${trigger}`)) tryRun("systemctl", ["disable", "--now", trigger]);
+  for (const [name] of units) {
+    if (name !== trigger && name.endsWith(".path") && existsSync(`${SYSTEMD_DIR}/${name}`)) tryRun("systemctl", ["stop", name]);
+  }
   return units.map(([name]) => removeManaged(`${SYSTEMD_DIR}/${name}`)).some(Boolean) ? "removed" : null;
 }
 
@@ -829,7 +846,7 @@ export function installUnits(specs: AddonSpec[]): UnitChanges {
 
   const siteUnits = newSiteUnits();
   const newSites = syncAddonUnits(specs.some((spec) => spec.newSites), NEW_SITES_PATH, [
-    [NEW_SITES_SERVICE, siteUnits.service], [NEW_SITES_PATH, siteUnits.path],
+    [NEW_SITES_SERVICE, siteUnits.service], [NEW_SITES_PATH, siteUnits.path], [NEW_SITE_ROWS_PATH, siteUnits.rows],
   ]);
 
   const auth = authUnits();
@@ -931,12 +948,12 @@ export function startUnits(options: StartUnitsOptions = {}): void {
 export function stopUnits(keepShared = false): void {
   if (keepShared) return;
   reconcileInstaticBackupCron(false);
-  for (const unit of [MANAGER_UNIT, RECONCILE_TIMER, RECONCILE_PATH, NEW_SITES_PATH,
+  for (const unit of [MANAGER_UNIT, RECONCILE_TIMER, RECONCILE_PATH, NEW_SITES_PATH, NEW_SITE_ROWS_PATH,
     AUTH_SOCKET_UNIT, AUTH_SERVICE_UNIT]) {
     tryRun("systemctl", ["disable", "--now", unit]);
   }
   for (const unit of [MANAGER_UNIT, RECONCILE_SERVICE, RECONCILE_TIMER, RECONCILE_PATH, ANCHOR_SERVICE,
-    NEW_SITES_SERVICE, NEW_SITES_PATH,
+    NEW_SITES_SERVICE, NEW_SITES_PATH, NEW_SITE_ROWS_PATH,
     AUTH_SOCKET_UNIT, AUTH_SERVICE_UNIT]) {
     rmSync(`${SYSTEMD_DIR}/${unit}`, { force: true });
   }
