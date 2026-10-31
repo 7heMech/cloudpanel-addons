@@ -45,6 +45,8 @@ export const PANEL_DB = "/home/clp/htdocs/app/data/db.sq3";
 export const PANEL_DB_DIR = "/home/clp/htdocs/app/data";
 /** Site vhosts, which stay with the distro Nginx in both panel layouts. */
 export const DISTRO_NGINX_SITES_DIR = "/etc/nginx/sites-enabled";
+/** Where CloudPanel writes each site's certificate, `<domain>.crt`, which its vhost names. */
+export const NGINX_CERTIFICATES_DIR = "/etc/nginx/ssl-certificates";
 const PANEL_NGINX_DIR = "/home/clp/services/nginx";
 
 export interface NginxLayout {
@@ -111,6 +113,8 @@ export const RECONCILE_PATH = "clp-addons-anchor.path";
 export const ANCHOR_SERVICE = "clp-addons-anchor.service";
 export const NEW_SITES_SERVICE = "clp-addons-new-sites.service";
 export const NEW_SITES_PATH = "clp-addons-new-sites.path";
+export const CERTIFICATES_SERVICE = "clp-addons-certificates.service";
+export const CERTIFICATES_PATH = "clp-addons-certificates.path";
 /** Started by `sync-sites` only while a new site's vhost waits for its row. */
 export const NEW_SITE_ROWS_PATH = "clp-addons-new-site-rows.path";
 /** The site domains the new-site hooks last ran for. */

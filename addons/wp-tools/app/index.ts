@@ -91,6 +91,26 @@ export async function handle(
     return json(result, result.ok ? 200 : 400);
   }
 
+  // CloudPanel's "WordPress installed" page says the site it created is ready
+  // for its checks. Whoever created it reaches this; the action holds it to the
+  // sites the caller's account has, and the reply says nothing either way.
+  if (method === "POST" && path === "/api/site-installed") {
+    const denied = guardMutation(req);
+    if (denied) return denied;
+    let body: Record<string, unknown>;
+    try {
+      body = await readJsonObject(req, 1024);
+    } catch (error) {
+      return bodyErrorResponse(error);
+    }
+    const domain = validateDomain(body.domain);
+    if (!domain) return json({ ok: false, error: "that is not a valid hostname" }, 400);
+    const admin = auth?.roles.includes("ROLE_ADMIN") ?? false;
+    if (!admin && !auth?.user) return json({ ok: false, error: "not found" }, 404);
+    const result = await wpToolsService.siteInstalled(domain, admin ? undefined : auth!.user);
+    return json(result.ok ? { ok: true } : { ok: false, error: result.error }, result.ok ? 200 : 400);
+  }
+
   if (method === "GET" && path === "/") {
     const csrf = newCsrfToken();
     try {

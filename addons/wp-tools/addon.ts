@@ -1,8 +1,24 @@
 import { handle } from "./app/index";
-import { pruneWpJobs, runWpToolsAction, wpPoliciesActive, type WpToolsActionOptions } from "./action";
+import {
+  pruneWpJobs, reconcileWpNewSites, runWpToolsAction, wpPoliciesActive,
+  type WpNewSiteEvent, type WpNewSitesResult, type WpToolsActionOptions,
+} from "./action";
 import { queueAddonPass } from "../../cli/job-store";
 import { WP_TOOLS_TARGETS } from "./inject/targets";
 import type { AddonDefinition } from "../../cli/addon-catalog";
+import { log } from "../../cli/util";
+
+const CHECKS: Record<string, string> = { "varnish-check": "CLP Varnish Cache", "mainwp-check": "MainWP Child" };
+
+function newSitesLine(result: WpNewSitesResult): string | null {
+  for (const failure of result.failed) log.warn(`WordPress Tools: ${failure}`);
+  const queued = Object.entries(result.queued).map(([task, domains]) => `${CHECKS[task]} check queued for ${(domains ?? []).join(", ")}`);
+  if (queued.length) return queued.join("; ");
+  return result.added.length ? `${result.added.join(", ")} waits for WordPress` : null;
+}
+
+const newSiteEvent = (event: WpNewSiteEvent) => async (options?: Record<string, unknown>) =>
+  newSitesLine(await reconcileWpNewSites((options ?? {}) as WpToolsActionOptions, event));
 
 export const WP_TOOLS_ADDON: AddonDefinition = {
   name: "wp-tools",
@@ -12,12 +28,24 @@ export const WP_TOOLS_ADDON: AddonDefinition = {
   targets: WP_TOOLS_TARGETS,
   handler: handle,
   action: runWpToolsAction,
+  // A new site is checked as it becomes ready: when its row is committed, when
+  // CloudPanel's "WordPress installed" page says so, and when its certificate
+  // is written.
+  newSites: { label: "WordPress Tools", run: newSiteEvent("sites") },
+  certificates: { label: "WordPress Tools", run: newSiteEvent("certificates") },
   maintenance: {
     label: "WordPress plugins",
-    run: (options) => {
+    run: async (options) => {
+      const actionOptions = (options ?? {}) as WpToolsActionOptions;
       // Job records expire, and one whose runner died is marked failed, so the page stops following it.
-      pruneWpJobs((options ?? {}) as WpToolsActionOptions);
-      if (!wpPoliciesActive((options ?? {}) as WpToolsActionOptions)) return null;
+      pruneWpJobs(actionOptions);
+      // Which sites exist now, so that the watcher's first wake does not take them all for new ones.
+      try {
+        await reconcileWpNewSites(actionOptions, "seed");
+      } catch (error) {
+        log.warn(`WordPress Tools new sites: ${error instanceof Error ? error.message : String(error)}`);
+      }
+      if (!wpPoliciesActive(actionOptions)) return null;
       return queueAddonPass({ addon: "wp-tools", verb: "sync", description: "WordPress plugin policies", runtime: 180 })
         ? "plugin policy pass queued" : null;
     },

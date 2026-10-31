@@ -75,6 +75,9 @@ export const wpToolsService = {
   siteKind(domain: string, asUser?: string): Promise<ActionResult<{ wordpress: boolean }>> {
     return call("site-kind", [`--domain=${domain}`, ...(asUser ? [`--as-user=${asUser}`] : [])]);
   },
+  siteInstalled(domain: string, asUser?: string): Promise<ActionResult<Record<string, never>>> {
+    return call("site-installed", [`--domain=${domain}`, ...(asUser ? [`--as-user=${asUser}`] : [])]);
+  },
 
   remove(): Promise<ActionResult<WpRemoveResult>> {
     return call<WpRemoveResult>("remove", [], LIST_TIMEOUT_MS);

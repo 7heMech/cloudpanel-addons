@@ -141,10 +141,10 @@ login page, and authentication failures do not fall back to anonymous access.
 The gate is where a request goes by default, after the URL is taken apart and
 before the route is chosen. The liveness probe the update page polls is inside
 it, and nothing reads it without a session: the page that polls it has one. The
-exceptions are below: fourteen named routes, and two routes settled ahead of the
+exceptions are below: fifteen named routes, and two routes settled ahead of the
 gate by a credential of their own.
 
-Fourteen routes are named as exceptions. Six are WordPress Tools':
+Fifteen routes are named as exceptions. Seven are WordPress Tools':
 `POST /wp-tools/api/sign-in`, the `GET /wp-tools/api/session` that hands out
 the CSRF pair, and `GET /wp-tools/api/site-kind`, which says only whether one of
 the caller's own sites is a WordPress. The links that use them are injected into
@@ -157,7 +157,11 @@ holds a site manager to the administrator's switch, to WordPress.org plugins,
 to a domain CloudPanel does not have yet, to a site CloudPanel's event log
 says that account created, and to the status of the job they recorded
 themselves. Uploading and the switch stay behind the gate.
-The seventh is Panel Tweaks' read-only `GET /panel-tweaks/api/panel`, which
+`POST /wp-tools/api/site-installed` is called from that landing page too, by
+whoever created the site: it carries only the domain, is refused for a site
+that is not the caller's, and answers with nothing. What it starts is the check
+automation would make at its next pass.
+The eighth is Panel Tweaks' read-only `GET /panel-tweaks/api/panel`, which
 answers the script injected into that same page with the sites CloudPanel would
 list for the caller. Three are DNS's: `POST /dns/api/provision` and its
 `GET /dns/api/session`, which Panel Tweaks' script calls on the page a new site
@@ -170,10 +174,10 @@ session itself.
 A session that only clears the gate this way is dispatched straight to that
 addon, ahead of the update check and the manager's own routes, so nothing else
 in the manager runs for it. The authorisation it skips here is made up for as
-root: the sign-in and provision actions are told which panel user the request is
+root: the sign-in, site-installed and provision actions are told which panel user the request is
 for and refuse any site CloudPanel would not list for that account, and the
 plugin picker's are told which site manager it is for. The set is a
-literal of fourteen strings rather than a prefix or a pattern, so a route cannot join it by
+literal of fifteen strings rather than a prefix or a pattern, so a route cannot join it by
 being named something similar.
 
 An addon may also declare `siteManager` in its catalog definition, which admits

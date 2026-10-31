@@ -220,8 +220,10 @@ before it to finish: DNS can wait minutes for its lock behind a fleet check, and
 until SMTP Relay binds the site its mail login is refused. One addon failing
 does not skip the next. The units exist while any installed addon declares
 `newSites`; repair restarts the watcher if it has stopped. It takes no
-operation lock: each addon's work takes its own. Update and repair disable and
-remove the units listed in `LEGACY_UNITS` in `cli/paths.ts`.
+operation lock: each addon's work takes its own. Work that runs a site's own
+code is queued rather than done in the hook, as WordPress Tools hands its checks
+to background jobs (see [WordPress Tools](wp-tools.md#new-sites)). Update and
+repair disable and remove the units listed in `LEGACY_UNITS` in `cli/paths.ts`.
 
 The vhost is not the site yet. CloudPanel commits the site's row in its
 database after writing the vhost: half a second later on staging, for a
@@ -259,6 +261,20 @@ that add or remove no site run no hook. When the domains cannot be read, such as
 behind a write that holds the database longer than the five-second busy wait,
 the hooks run as they always did and the rows watcher is started, so the write
 that releases the database brings another look.
+
+A site's certificate is a later step of its creation, and an addon whose work
+needs the site's HTTPS declares `certificates`. `clp-addons-certificates.path`
+watches `/etc/nginx/ssl-certificates`, where CloudPanel writes each site's
+`<domain>.crt` and key in place, so the vhost, which names that path, is not
+rewritten. Its service runs `clp-addons sync-certificates`: each installed
+addon's `certificates`, in catalog order, one after another. It is not part of
+the new-site watcher because a certificate changes no domain, so `sync-sites`
+would run no hook for it, and because a path that changes while its service is
+running starts nothing. This service takes a second and runs again three
+seconds later, because the key and the certificate are separate writes. Every
+renewal wakes it too, so a hook does nothing when no site is waiting on it. The
+units exist while any installed addon declares `certificates`, and repair
+restarts the watcher as it does the new-site one.
 
 ## One way to watch a job
 

@@ -8,6 +8,11 @@
 // -- the condition can be Twig, and the script cannot. The script and its rules
 // go above the table instead, where they are emitted once.
 //
+// CloudPanel's "WordPress installed" page, where creating a WordPress site
+// lands once its installation has finished, takes a script that tells the
+// addon so, which is the moment a new site's checks can run (see
+// docs/decisions/wp-tools.md, "New sites").
+//
 // The site pages' Domain box is a partial rendered once per page, so its link
 // carries the script and rule with it. Which link it is depends on a setting,
 // read when the templates are rendered; the addon's page renders them again
@@ -139,6 +144,38 @@ function storedSiteManagers(): boolean {
   }
 }
 
+/**
+ * The "WordPress installed" page's addition. The domain is the one CloudPanel
+ * keeps in the session for the credentials it shows, as Panel Tweaks reads it
+ * for automatic SSL; the page is reached only from a creation that succeeded.
+ * The script sends that domain and nothing else, and shows nothing: the route
+ * holds it to the caller's own sites and answers with nothing either.
+ */
+export function installedSnippet(url: string): string {
+  return `
+      {% set clpWpSite = (app.session.get('siteCredentials')|default({}))['Site'|trans]|default({}) %}
+      {% set clpWpDomain = (clpWpSite['Domain Name'|trans]|default(''))|replace({'https://': '', 'http://': ''})|lower %}
+      {% if clpWpDomain %}
+      <script data-clp-wp-installed="{{ clpWpDomain }}">(function () {
+  var domain = document.currentScript.getAttribute("data-clp-wp-installed");
+  function csrf() {
+    var match = document.cookie.match(/(?:^|;\\s*)clp_addons_csrf=([^;]+)/);
+    return match ? match[1] : "";
+  }
+  (csrf() ? Promise.resolve() : fetch("${url}/api/session", { credentials: "same-origin", headers: { Accept: "application/json" } }))
+    .then(function () {
+      return fetch("${url}/api/site-installed", {
+        method: "POST",
+        credentials: "same-origin",
+        headers: { "Content-Type": "application/json", "X-CLP-Addons-CSRF": csrf(), Accept: "application/json" },
+        body: JSON.stringify({ domain: domain })
+      });
+    })
+    .catch(function () {});
+})();</script>
+      {% endif %}`;
+}
+
 /** Root work, at render time; an unreadable setting is the default. */
 function storedSignIn(): boolean {
   try {
@@ -187,5 +224,13 @@ export const WP_TOOLS_TARGETS: AddonTarget[] = [
     anchorBefore: '      <div class="card">',
     required: false,
     snippet: (url) => newSiteDoneSnippet(url, storedSiteManagers()),
+  },
+  {
+    // Where Panel Tweaks' automatic SSL status goes too; the two blocks are independent.
+    slug: "wordpress-installed",
+    template: "Frontend/Site/New/wordpress-installed.html.twig",
+    anchorBefore: '      <div class="card">',
+    required: false,
+    snippet: installedSnippet,
   },
 ];

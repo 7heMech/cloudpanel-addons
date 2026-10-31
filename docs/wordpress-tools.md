@@ -47,7 +47,8 @@ installations with Varnish enabled qualify. On a multisite network the plugin
 is network-activated, which covers every site in it.
 
 Every 15 minutes the repair timer queues a background pass to install the
-plugin on sites that have not had it yet. **Check now** checks every site and
+plugin on sites that have not had it yet. A WordPress site created in CloudPanel
+gets it within seconds of its installation finishing. **Check now** checks every site and
 refreshes the status shown; with automation on it also installs where the
 policy says to, with it off it changes nothing. A site shows **Install** or
 **Activate** only once a check has found the plugin missing or inactive. The
@@ -94,6 +95,9 @@ and notes. A must-use plugin, `clp-addons-mainwp.php`, hides MainWP Child from
 the site's Plugins list and stops its administrators deactivating or
 disconnecting it. A site the Dashboard cannot reach over HTTPS with a valid
 certificate shows **Waiting for HTTPS** and is tried again on the next pass. A
+new site is connected within seconds of its certificate being installed, or as
+soon as WordPress is installed if its HTTPS already works, for example behind
+Cloudflare's proxy. A
 firewall, Cloudflare-only rule or maintenance page blocks it too; allow the
 server's own address. **Check now** refreshes every site and, with automation
 on, connects them at once.
@@ -128,8 +132,9 @@ WordPress Tools made, so cleanup can no longer remove them.
 ### A Dashboard on another server
 
 Choose **On another server** as the **MainWP Dashboard**, then turn on **Install
-MainWP Child automatically**. Every 15 minutes, sites that have never had MainWP
-Child get it installed but left inactive: MainWP Child turns itself off when no
+MainWP Child automatically**. Every 15 minutes, and within seconds of a new
+site's WordPress being installed, sites that have never had MainWP Child get it
+installed but left inactive: MainWP Child turns itself off when no
 Dashboard connects within its connection timeout, 20 minutes unless changed in
 its settings. To connect a site, click **Activate** (or **Install**) beside it,
 then add it in your MainWP Dashboard with the site's administrator username and

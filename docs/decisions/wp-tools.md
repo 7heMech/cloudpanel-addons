@@ -523,8 +523,8 @@ transient systemd unit, `clp-addons action wp-tools run --job <id>`, with an
 hour's `RuntimeMaxSec`; the pass inside stops starting sites five minutes
 before that and reports the rest as pending. `run` is not in the gateway's verb
 table, so only that unit runs a job, and `start` accepts only its fixed tasks,
-domains for the tasks that take them, and the same confirmations the routes
-require.
+domains for the tasks that take them (a check may name the sites it covers, as
+a new site's does), and the same confirmations the routes require.
 
 Each policy runs one job at a time: `start` refuses a second while one is
 queued or running, under a lock of its own. The runner takes the policy's lock,
@@ -575,8 +575,9 @@ answer over HTTPS: everything it does is WP-CLI, and downloads are root's.
 Waiting in the job rather than in the landing page means a browser that closes
 during creation still gets its plugins; waiting in the job rather than in the
 shared new-site watcher means it does not depend on when the vhost appears,
-which is before WordPress is installed. Were WP Tools to have its own `newSites`
-hook, that hook could wake a waiting job instead of the poll.
+which is before WordPress is installed. WP Tools' own `newSites` hook (see New
+sites) is no help here: it runs when the site's row is committed, before
+WordPress's files exist.
 
 This is no way into an existing site. `new-site` refuses a domain CloudPanel
 already has, and the job refuses a site whose `created_at` is more than two
@@ -713,6 +714,89 @@ account cannot create a site in CloudPanel at all, so for that role plugins woul
 mean installing on an existing site of its own, a different feature with its
 own refusals: root checking `user_sites` as sign-in does, and never this
 form's "a site that does not exist yet".
+
+## New sites
+
+A new site is checked as it becomes ready, rather than at the next 15-minute
+pass. It becomes ready in steps, and each step is an event the addon hears:
+
+1. **The site exists.** The new-site watcher runs `newSites` when CloudPanel
+   commits the site's row (see [Platform](platform.md#new-sites)). That is about
+   half a second after the vhost, before WordPress's files are downloaded, so
+   the site is added to the pending list with nothing to check yet. The hook
+   runs once per change to the set of domains, so it is not told again.
+2. **WordPress is installed.** CloudPanel installs it in the same request, then
+   lands the browser on its "WordPress installed" page, ten seconds or more
+   after the row on staging. A block injected there posts the domain to
+   `POST /api/site-installed`. This is the only event that says WordPress is
+   ready: without it the next is the certificate, which does not come at all
+   when automatic SSL is off or the site's HTTPS is Cloudflare's, and Varnish,
+   which needs no HTTPS, would wait for the 15-minute pass. It also adds the
+   site to the pending list itself if the watcher has not yet.
+3. **The certificate is installed.** CloudPanel writes
+   `/etc/nginx/ssl-certificates/<domain>.crt`, which wakes the certificate
+   watcher (see [Platform](platform.md#new-sites)). Connecting to MainWP needs
+   that HTTPS.
+4. **A WordPress Tools job ends.** Its runner looks again, so a site that waited
+   for a running job of its policy is not left behind.
+
+Root-owned `/var/lib/clp-addons/wp-tools/new-sites.json` (`0600`) holds every
+domain the panel had at the last look and the sites still pending. A new site
+is a domain missing from that list. The first look, and repair's upkeep
+whenever the file is missing or unreadable, only records the domains there are,
+so enabling or upgrading the addon does not take every site for a new one. A
+panel that lists no site is taken for a bad read and changes nothing.
+
+Every event re-checks the pending sites and queues the checks that have become
+possible, for those sites only, as background jobs: the same `varnish-check` and
+`mainwp-check` the page starts, limited to them with `--domains`. Those jobs
+decide as the 15-minute pass would, so locks, HTTPS readiness, WordPress
+detection and enrollment are unchanged, and no event runs site code itself.
+
+- Varnish's check is owed while its automation is on, the site has CloudPanel's
+  Varnish flag and no plugin has been seen there. MainWP's is owed while its
+  automation is on, outside cleanup, for a site that is not the Dashboard, not
+  one a check found to be a multisite network and not yet connected (with a
+  Dashboard on another server, whose Child has not been seen yet).
+- A check becomes possible once `wp-includes`, `wp-content` and `wp-config.php`
+  are on disk, or the installed page has said so, and while the site still has
+  its vhost and certificate. Files without the configuration are an
+  installation still running; a site without its vhost is being deleted, since
+  CloudPanel removes the vhost and certificate before the row.
+- Each check records how ready the site was when it was queued: on disk, or
+  installed, and for MainWP also which certificate the site had, by its file's
+  time and size. An event queues a check again only once that changes. So an
+  early check that found a half-installed WordPress runs again when the
+  installed page arrives, MainWP runs again when the real certificate replaces
+  the self-signed one, and an event that changes nothing for a site does
+  nothing.
+- A policy that already has a job queued or running gets no second one, and
+  the site is not marked as tried; that job's end looks again.
+
+MainWP is tried once on the self-signed certificate a site starts with. Behind
+Cloudflare's proxy that can already be the HTTPS the Dashboard sees, so such a
+site needs no certificate event. No timer is needed for it. A site leaves the
+list when automation owes it nothing, when it is not a PHP site, when neither
+policy is on, or an hour after it appeared. Anything no event reports, such as a
+Dashboard that was down or WordPress installed by hand later, is the 15-minute
+pass's.
+
+With nothing pending, a certificate renewal or a job's end costs one read of the
+state file; a vhost rewrite runs no hook at all. The watchers, the installed
+route, job ends and repair's upkeep take one lock of their own, so they never
+interleave. The jobs they queue still wait for their policy's lock, which keeps
+them from running alongside a 15-minute pass.
+
+The installed page's call is reachable by whoever created the site, as DNS's
+provision route is (see [Security](security.md)). It carries only the domain,
+`site-installed` refuses a site that is not the caller's, and the reply is
+empty. It can only bring forward a check automation would make anyway, at most
+once per readiness step. The domain comes from the credentials CloudPanel keeps
+in the session for that page, as Panel Tweaks' automatic SSL reads it, and
+reaches the script through an attribute Twig escapes. The plugin status on
+the same page is drawn only for the roles that may choose plugins and only reads
+its job, so the two blocks stay separate.
+
 
 ## Direction
 

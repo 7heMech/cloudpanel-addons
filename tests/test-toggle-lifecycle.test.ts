@@ -178,6 +178,7 @@ function fixture(options: { provisioned: boolean; enabled: string[] }): string {
       "cloudflare-ips": ["clp-addons-new-sites.path", "clp-addons-new-sites.service", "clp-addons-new-site-rows.path"],
       smtp: ["clp-addons-new-sites.path", "clp-addons-new-sites.service", "clp-addons-new-site-rows.path"],
       dns: ["clp-addons-new-sites.path", "clp-addons-new-sites.service", "clp-addons-new-site-rows.path"],
+      "wp-tools": ["clp-addons-new-sites.path", "clp-addons-new-sites.service", "clp-addons-certificates.path", "clp-addons-certificates.service"],
     };
     for (const unit of units[name] ?? []) writeFileSync(join(root, "systemd", unit), "# placeholder\n");
   }
@@ -290,6 +291,21 @@ test("the shared new-site watcher is started when its units appear and stopped w
   expect(existsSync(join(off.root, "systemd", "clp-addons-new-sites.path"))).toBe(false);
   expect(existsSync(join(off.root, "systemd", "clp-addons-new-sites.service"))).toBe(false);
   expect(existsSync(join(off.root, "systemd", "clp-addons-new-site-rows.path"))).toBe(false);
+});
+
+test("WP Tools brings the certificate watcher with it, and takes it away again", () => {
+  const on = toggle([{ verb: "enable", addon: "wp-tools" }]);
+  expect(on.error).toBeUndefined();
+  expect(on.systemd).toContain("enable clp-addons-certificates.path");
+  expect(on.systemd).toContain("restart clp-addons-certificates.path");
+  expect(on.systemd).toContain("enable clp-addons-new-sites.path");
+  expect(readFileSync(join(on.root, "systemd", "clp-addons-certificates.path"), "utf8")).toContain("PathChanged=/etc/nginx/ssl-certificates");
+
+  const off = toggle([{ verb: "disable", addon: "wp-tools" }], { enabled: ["wp-tools"] });
+  expect(off.error).toBeUndefined();
+  expect(off.systemd).toContain("disable --now clp-addons-certificates.path");
+  expect(existsSync(join(off.root, "systemd", "clp-addons-certificates.path"))).toBe(false);
+  expect(existsSync(join(off.root, "systemd", "clp-addons-certificates.service"))).toBe(false);
 });
 
 test("the watcher stays while SMTP still uses it, and disabling DNS stops its transient pass", () => {

@@ -83,6 +83,8 @@ export interface AddonDefinition {
   maintenance?: AddonMaintenance;
   /** Work for sites CloudPanel has just created, run seconds after it writes their vhost. */
   newSites?: AddonMaintenance;
+  /** Work for sites whose certificate CloudPanel has just written. */
+  certificates?: AddonMaintenance;
 }
 
 /**
@@ -164,6 +166,11 @@ export function templateWatchPaths(): string[] {
 /** The installed addons with work for new sites, in catalog order. */
 export function addonNewSites(installed: AddonSpec[]): AddonSpec[] {
   return installed.filter((spec) => spec.newSites !== undefined);
+}
+
+/** The installed addons with work for a certificate CloudPanel has just written, in catalog order. */
+export function addonCertificates(installed: AddonSpec[]): AddonSpec[] {
+  return installed.filter((spec) => spec.certificates !== undefined);
 }
 
 /** The installed addons that want upkeep during repair, in catalog order. */
