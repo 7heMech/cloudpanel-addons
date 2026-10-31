@@ -28,10 +28,16 @@ export const WP_TOOLS_ADDON: AddonDefinition = {
   targets: WP_TOOLS_TARGETS,
   handler: handle,
   action: runWpToolsAction,
-  // A new site is checked as it becomes ready: when its row is committed, when
-  // CloudPanel's "WordPress installed" page says so, and when its certificate
-  // is written.
-  newSites: { label: "WordPress Tools", run: newSiteEvent("sites") },
+  // A new site is checked when its row is committed, on each panel write while
+  // CloudPanel installs its WordPress, and when its certificate is written.
+  newSites: {
+    label: "WordPress Tools",
+    run: newSiteEvent("sites"),
+    waiting: async (options) => {
+      const result = await reconcileWpNewSites((options ?? {}) as WpToolsActionOptions, "wake");
+      return { waiting: result.waiting.length > 0, line: newSitesLine(result) };
+    },
+  },
   certificates: { label: "WordPress Tools", run: newSiteEvent("certificates") },
   maintenance: {
     label: "WordPress plugins",

@@ -262,6 +262,17 @@ behind a write that holds the database longer than the five-second busy wait,
 the hooks run as they always did and the rows watcher is started, so the write
 that releases the database brings another look.
 
+Some of a site's creation comes after its row, in the same request, and
+changes no file the watchers see: CloudPanel installs WordPress as root after
+committing the row. An addon that waits for such a step gives its `newSites` a
+`waiting` check. `sync-sites` runs it on every wake for an hour after the hooks
+last ran for a change to the sites, by the time on `new-sites-seen.json`, and
+keeps the rows watcher running while any says it is still waiting. It runs it
+once more after starting the watcher, as it reads the rows again, because the
+write that ends the request may come while the service runs. A check that fails
+counts as waiting. While nothing waits, the rows watcher runs only for sites in
+flight.
+
 A site's certificate is a later step of its creation, and an addon whose work
 needs the site's HTTPS declares `certificates`. `clp-addons-certificates.path`
 watches `/etc/nginx/ssl-certificates`, where CloudPanel writes each site's

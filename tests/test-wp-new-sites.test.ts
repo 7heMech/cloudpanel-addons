@@ -7,19 +7,20 @@ import {
   executeWpToolsAction, reconcileWpNewSites, type WpJobView, type WpNewSiteEvent, type WpNewSitesResult, type WpToolsActionOptions,
 } from "../addons/wp-tools/action";
 import { WP_TOOLS_ADDON } from "../addons/wp-tools/addon";
-import { WP_TOOLS_TARGETS, installedSnippet } from "../addons/wp-tools/inject/targets";
 import { emptyMainwpState, mainwpOwesSite, saveMainwpState, type MainwpState } from "../addons/wp-tools/mainwp";
 import { NEW_SITE_PENDING_MS, readNewSitesState, type NewSitesState } from "../addons/wp-tools/new-sites";
 import { readVarnishState, type WpCommand } from "../addons/wp-tools/varnish";
 import { ADDONS, addonCertificates, addonNewSites } from "../cli/addon-catalog";
 import { certificateUnits } from "../cli/provision";
-import { WP_TOOLS_ALLOWED_VERBS } from "../lib/gateway-protocol";
 
 let root = "";
 let now = 0;
 let commands: WpCommand[];
 let installed: Set<string>;
 let started: Parameters<NonNullable<WpToolsActionOptions["startJob"]>>[0][];
+/** Who owns each file the tests cannot chown: root unless handed over. */
+let owners: Map<string, number>;
+let uids: Map<string, number>;
 
 const T0 = Date.parse("2026-10-29T12:00:00Z");
 
@@ -37,6 +38,10 @@ function options(): WpToolsActionOptions {
     },
     startJob: (unit) => { started.push(unit); return { ok: true, stdout: "", stderr: "" }; },
     domainValidator: (domain) => domain,
+    fileOwner: (path) => {
+      if (!existsSync(path)) throw new Error("missing");
+      return owners.get(path) ?? 0;
+    },
     runWpCommand: async (command) => {
       commands.push(command);
       const domain = command.argv.find((arg) => arg.startsWith("--url="))!.slice("--url=https://".length);
@@ -46,9 +51,11 @@ function options(): WpToolsActionOptions {
   };
 }
 
-function event(kind: WpNewSiteEvent = "sites", domain = ""): Promise<WpNewSitesResult> {
-  return reconcileWpNewSites(options(), kind, domain);
+function event(kind: WpNewSiteEvent = "sites"): Promise<WpNewSitesResult> {
+  return reconcileWpNewSites(options(), kind);
 }
+
+const NOTHING: WpNewSitesResult = { added: [], queued: {}, pending: [], waiting: [], failed: [] };
 
 function state(): NewSitesState {
   return readNewSitesState(join(root, "new-sites.json"))!;
@@ -61,9 +68,10 @@ function dbRun(sql: string): void {
 
 let nextId = 10;
 /** CloudPanel creating a site: the account and the row, then its vhost; WordPress comes later. */
-function addSite(domain: string, user: string, { type = "php", varnish = 1 } = {}): void {
+function addSite(domain: string, user: string, { type = "php", application = "WordPress", varnish = 1 } = {}): void {
+  uids.set(user, 1100 + nextId);
   writeFileSync(join(root, "passwd"), `${readFileSync(join(root, "passwd"), "utf8")}\n${user}:x:${1100 + nextId}:${1100 + nextId}::${join(root, "home", user)}:/bin/sh`);
-  dbRun(`INSERT INTO site VALUES (${nextId}, '${type}', '${domain}', '${domain}', '${user}', 'WordPress', ${varnish});
+  dbRun(`INSERT INTO site VALUES (${nextId}, '${type}', '${domain}', '${domain}', '${user}', '${application}', ${varnish});
     INSERT INTO php_settings VALUES (${nextId}, '8.3');`);
   nextId++;
   mkdirSync(join(root, "vhosts"), { recursive: true });
@@ -71,11 +79,15 @@ function addSite(domain: string, user: string, { type = "php", varnish = 1 } = {
   certificate(domain, "self-signed");
 }
 
-/** WordPress's files; its configuration is written as the installation runs. */
-function installWordPress(user: string, domain: string, { config = true } = {}): void {
+/**
+ * WordPress's files and configuration, written by CloudPanel's installer as
+ * root; the configuration is handed to the site user once the installation ends.
+ */
+function installWordPress(user: string, domain: string, { finished = true } = {}): void {
   const site = join(root, "home", user, "htdocs", domain);
   for (const directory of ["wp-includes", "wp-content"]) mkdirSync(join(site, directory), { recursive: true });
-  if (config) writeFileSync(join(site, "wp-config.php"), "<?php\n");
+  writeFileSync(join(site, "wp-config.php"), "<?php\n");
+  if (finished) owners.set(join(site, "wp-config.php"), uids.get(user)!);
 }
 
 let stamp = 0;
@@ -104,6 +116,8 @@ beforeEach(() => {
   commands = [];
   installed = new Set();
   started = [];
+  owners = new Map();
+  uids = new Map([["shop", 1100]]);
   writeFileSync(join(root, "wp-tools.conf"), "");
   writeFileSync(join(root, "varnish.json"), JSON.stringify({ enabled: true, sites: {} }));
   const db = new Database(join(root, "panel.sq3"), { create: true });
@@ -124,18 +138,17 @@ beforeEach(() => {
 afterEach(() => rmSync(root, { recursive: true, force: true }));
 
 test("the first look learns the sites there are, and a vhost rewrite with nothing pending changes nothing", async () => {
-  expect(await event()).toEqual({ added: [], queued: {}, pending: [], failed: [] });
+  expect(await event()).toEqual(NOTHING);
   expect(state()).toEqual({ known: ["shop.example.com"], pending: [] });
   const written = statSync(join(root, "new-sites.json")).mtimeMs;
   const before = readFileSync(join(root, "new-sites.json"), "utf8");
   now += 60_000;
-  expect(await event()).toEqual({ added: [], queued: {}, pending: [], failed: [] });
+  expect(await event()).toEqual(NOTHING);
   expect(readFileSync(join(root, "new-sites.json"), "utf8")).toBe(before);
   expect(statSync(join(root, "new-sites.json")).mtimeMs).toBe(written);
-  // With nothing pending, a certificate or a job ending reads only the state file.
+  // With nothing pending, a wake, a certificate or a job ending reads only the state file.
   rmSync(join(root, "panel.sq3"));
-  expect(await event("certificates")).toEqual({ added: [], queued: {}, pending: [], failed: [] });
-  expect(await event("job")).toEqual({ added: [], queued: {}, pending: [], failed: [] });
+  for (const kind of ["wake", "certificates", "job"] as const) expect(await event(kind)).toEqual(NOTHING);
   expect(started).toEqual([]);
   expect(commands).toEqual([]);
 });
@@ -151,38 +164,46 @@ test("repair makes the baseline once, so the watcher's first wake is not every s
   expect((await event()).added).toEqual(["new.example.com"]);
 });
 
-test("each step of a new WordPress site queues the check it makes possible, once", async () => {
+test("a new WordPress site is checked once CloudPanel hands its configuration to the site user", async () => {
   await event();
-  // The row's commit: no WordPress yet, so nothing is queued and nothing runs until the next event.
+  const waiting = WP_TOOLS_ADDON.newSites!.waiting!;
+  // The row's commit: no WordPress yet, so nothing is queued, and the watcher keeps waking.
   addSite("new.example.com", "newsite");
   expect(await WP_TOOLS_ADDON.newSites!.run(options() as Record<string, unknown>)).toBe("new.example.com waits for WordPress");
   expect(state().pending).toEqual([{ domain: "new.example.com", since: T0, tried: {} }]);
-  // Its files without a configuration are an installation still running.
-  installWordPress("newsite", "new.example.com", { config: false });
-  expect((await event("certificates")).queued).toEqual({});
+  expect(await waiting(options() as Record<string, unknown>)).toEqual({ waiting: true, line: null });
+  // The installer writes wp-config.php as root while WordPress is still being installed.
+  installWordPress("newsite", "new.example.com", { finished: false });
+  expect(await event("wake")).toMatchObject({ queued: {}, waiting: ["new.example.com"] });
+  expect(await event("certificates")).toMatchObject({ queued: {}, waiting: ["new.example.com"] });
 
-  // The next event, here a certificate written, finds it configured.
+  // Its last step hands the configuration over, and the next wake queues the check.
   installWordPress("newsite", "new.example.com");
   now += 10_000;
-  expect(await event("certificates")).toMatchObject({ added: [], queued: { "varnish-check": ["new.example.com"] }, pending: ["new.example.com"] });
+  expect(await waiting(options() as Record<string, unknown>)).toEqual({ waiting: false, line: "CLP Varnish Cache check queued for new.example.com" });
   expect(commands).toEqual([]);
   expect(started.map((unit) => unit.description)).toEqual(["clp-addons: WordPress Tools varnish-check"]);
-  // Another event at the same step queues nothing again.
-  finishJobs();
+  expect(state().pending).toEqual([{ domain: "new.example.com", since: T0, wordpress: true, tried: { "varnish-check": "wordpress" } }]);
+  // Nothing waits for WordPress now, so a wake reads only the state file; other events queue nothing again.
+  rmSync(join(root, "panel.sq3"), { force: true });
+  expect(await event("wake")).toEqual(NOTHING);
+  expect(await waiting(options() as Record<string, unknown>)).toEqual({ waiting: false, line: null });
+});
+
+test("a checked site's job end drops it once automation owes it nothing", async () => {
+  await event();
+  addSite("new.example.com", "newsite");
+  await event();
+  installWordPress("newsite", "new.example.com");
+  expect((await event("wake")).queued).toEqual({ "varnish-check": ["new.example.com"] });
   expect((await event()).queued).toEqual({});
   expect((await event("certificates")).queued).toEqual({});
-
-  // "WordPress installed" is a later step, so a check that ran early runs again.
-  expect(await executeWpToolsAction(["site-installed", "--domain=new.example.com"], options())).toEqual({});
-  expect(started).toHaveLength(2);
-  const job = jobs().find((id) => readFileSync(join(root, "jobs", id, "state"), "utf8").trim() === "queued")!;
-  const done = await executeWpToolsAction(["run", "--job", job], options()) as WpJobView;
+  const done = await executeWpToolsAction(["run", "--job", jobs()[0]!], options()) as WpJobView;
   expect(done).toMatchObject({ task: "varnish-check", domains: ["new.example.com"], state: "done", result: { checked: 1, installed: 1 } });
   expect(new Set(commands.map((command) => command.argv[2]))).toEqual(new Set(["newsite"]));
   expect(readVarnishState(join(root, "varnish.json")).sites["new.example.com"]).toMatchObject({ status: "active", seen: true });
-  // The job's end found nothing more owed, and the site left the list.
   expect(state().pending).toEqual([]);
-  expect(started).toHaveLength(2);
+  expect(started).toHaveLength(1);
 });
 
 test("MainWP's check is queued again when the site's certificate changes, until it is connected", async () => {
@@ -219,53 +240,26 @@ test("a policy's running job is not doubled; its end checks the waiting site", a
   // The page's check runs to its end, which checks the pending sites again.
   await executeWpToolsAction(["run", "--job", job.id], options());
   expect(started.map((unit) => unit.description)).toEqual(["clp-addons: WordPress Tools varnish-install", "clp-addons: WordPress Tools varnish-check"]);
-  expect(state().pending[0]!.tried).toEqual({ "varnish-check": "files" });
-});
-
-test("CloudPanel's installed page can arrive before the watcher has looked", async () => {
-  await event();
-  addSite("quick.example.com", "quick");
-  installWordPress("quick", "quick.example.com");
-  expect(await executeWpToolsAction(["site-installed", "--domain=quick.example.com"], options())).toEqual({});
-  expect(state().pending).toEqual([{ domain: "quick.example.com", since: T0, installed: true, tried: { "varnish-check": "installed" } }]);
-  // The watcher's own run then finds it known and already checked.
-  finishJobs();
-  expect(await event()).toMatchObject({ added: [], queued: {} });
-  // A site the panel already had is not new because its page was opened again.
-  expect(await executeWpToolsAction(["site-installed", "--domain=shop.example.com"], options())).toEqual({});
-  expect(state().pending.map((site) => site.domain)).toEqual(["quick.example.com"]);
-});
-
-test("the installed page's call is held to the caller's own site and says nothing", async () => {
-  await event();
-  addSite("mine.example.com", "mine");
-  dbRun("INSERT INTO user_sites SELECT 1, id FROM site WHERE domain_name = 'mine.example.com';");
-  await expect(executeWpToolsAction(["site-installed", "--domain=mine.example.com", "--as-user=nosy"], options())).rejects.toThrow("not yours");
-  expect(state().pending).toEqual([]);
-  expect(await executeWpToolsAction(["site-installed", "--domain=mine.example.com", "--as-user=owner"], options())).toEqual({});
-  expect(state().pending.map((site) => site.domain)).toEqual(["mine.example.com"]);
-  for (const args of [["site-installed", "--domain=mine.example.com", "--client-ip=203.0.113.9"], ["site-installed", "--domain=mine.example.com", "--enabled=true"]]) {
-    await expect(executeWpToolsAction(args, options())).rejects.toThrow();
-  }
-  expect(WP_TOOLS_ALLOWED_VERBS.has("site-installed")).toBe(true);
-  rmSync(join(root, "wp-tools.conf"));
-  await expect(executeWpToolsAction(["site-installed", "--domain=mine.example.com"], options())).rejects.toThrow("not enabled");
+  expect(state().pending[0]!.tried).toEqual({ "varnish-check": "wordpress" });
 });
 
 test("with automation off, for a site that cannot be a WordPress, or after an hour, nothing is queued", async () => {
   await event();
-  addSite("static.example.com", "static", { type: "static" });
+  addSite("static.example.com", "static", { type: "static", application: "Static" });
   expect(await event()).toMatchObject({ added: ["static.example.com"], queued: {}, pending: [] });
+  // A PHP site that is not CloudPanel's WordPress keeps nothing waiting.
+  addSite("php.example.com", "php", { application: "PHP" });
+  expect(await event()).toMatchObject({ added: ["php.example.com"], queued: {}, pending: [], waiting: [] });
   // Without Varnish on the site, its check is not owed.
   addSite("plain.example.com", "plain", { varnish: 0 });
   installWordPress("plain", "plain.example.com");
   expect(await event()).toMatchObject({ queued: {}, pending: [] });
   // A site whose WordPress never comes is the 15-minute pass's after an hour.
   addSite("late.example.com", "late");
-  expect((await event()).pending).toEqual(["late.example.com"]);
+  expect(await event()).toMatchObject({ pending: ["late.example.com"], waiting: ["late.example.com"] });
   now += NEW_SITE_PENDING_MS;
   installWordPress("late", "late.example.com");
-  expect(await event("certificates")).toMatchObject({ queued: {}, pending: [] });
+  expect(await event("certificates")).toMatchObject({ queued: {}, pending: [], waiting: [] });
   writeFileSync(join(root, "varnish.json"), JSON.stringify({ enabled: false, sites: {} }));
   addSite("off.example.com", "off");
   installWordPress("off", "off.example.com");
@@ -274,7 +268,7 @@ test("with automation off, for a site that cannot be a WordPress, or after an ho
   // A disabled addon looks at nothing.
   rmSync(join(root, "wp-tools.conf"));
   addSite("later.example.com", "later");
-  expect(await event()).toEqual({ added: [], queued: {}, pending: [], failed: [] });
+  expect(await event()).toEqual(NOTHING);
 });
 
 test("what MainWP automation still owes a site", () => {
@@ -289,21 +283,6 @@ test("what MainWP automation still owes a site", () => {
   // A Dashboard elsewhere needs only the Child, installed once.
   expect(mainwpOwesSite({ ...waiting, remote: true }, "new.example.com")).toBe(false);
   expect(mainwpOwesSite({ ...waiting, remote: true, sites: {} }, "new.example.com")).toBe(true);
-});
-
-test("CloudPanel's installed page tells the addon its site, and nothing else", () => {
-  const target = WP_TOOLS_TARGETS.find((candidate) => candidate.slug === "wordpress-installed")!;
-  expect(target.template).toBe("Frontend/Site/New/wordpress-installed.html.twig");
-  expect(target.required).toBe(false);
-  const block = installedSnippet("/addons/wp-tools");
-  expect(target.snippet("/addons/wp-tools")).toBe(block);
-  // The domain CloudPanel shows the credentials for, escaped by Twig into an attribute.
-  expect(block).toContain("app.session.get('siteCredentials')");
-  expect(block).toContain('data-clp-wp-installed="{{ clpWpDomain }}"');
-  expect(block).not.toContain("|raw");
-  expect(block).toContain('fetch("/addons/wp-tools/api/site-installed"');
-  expect(block).toContain("JSON.stringify({ domain: domain })");
-  expect(block).toContain("/(?:^|;\\s*)clp_addons_csrf=([^;]+)/");
 });
 
 test("the watchers run WP Tools, and the certificate watcher watches CloudPanel's certificates", () => {

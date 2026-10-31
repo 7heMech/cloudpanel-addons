@@ -1,9 +1,8 @@
-// A new site becomes ready for WordPress Tools in steps, and each step is an
-// event: CloudPanel writes its vhost, installs WordPress and lands the browser
-// on its "WordPress installed" page, and later writes its certificate. Each of
-// those re-checks the sites still pending here and queues the checks that have
-// become possible, for those sites only. Nothing runs between events, and the
-// 15-minute pass stays the backstop for whatever no event reports.
+// A new site becomes ready for WordPress Tools in steps: CloudPanel commits its
+// row, installs WordPress in the same request, and may later write its
+// certificate. Each wake re-checks the sites still pending here and queues the
+// checks that have become possible, for those sites only. The 15-minute pass
+// stays the backstop for whatever no wake reports.
 
 import { existsSync, readFileSync, statSync } from "node:fs";
 import { join } from "node:path";
@@ -18,8 +17,8 @@ export interface NewSite {
   domain: string;
   /** When the addon first saw it, in milliseconds. */
   since: number;
-  /** CloudPanel's "WordPress installed" page said its installation finished. */
-  installed?: boolean;
+  /** CloudPanel has finished installing its WordPress. */
+  wordpress?: boolean;
   /** How ready the site was when each check was last queued; a check is queued again only once that changes. */
   tried: Partial<Record<NewSiteCheck, string>>;
 }
@@ -37,7 +36,7 @@ export function readNewSitesState(path: string): NewSitesState | null {
   try {
     const state = JSON.parse(readFileSync(path, "utf8")) as NewSitesState;
     const site = (value: NewSite) => Boolean(value) && typeof value.domain === "string" && Number.isSafeInteger(value.since)
-      && (value.installed === undefined || typeof value.installed === "boolean")
+      && (value.wordpress === undefined || typeof value.wordpress === "boolean")
       && Boolean(value.tried) && typeof value.tried === "object" && !Array.isArray(value.tried)
       && Object.values(value.tried).every((ready) => typeof ready === "string");
     if (!Array.isArray(state.known) || !state.known.every((domain) => typeof domain === "string")
@@ -63,6 +62,20 @@ export function noteSites(state: NewSitesState, domains: string[], now: number):
   state.pending = state.pending.filter((site) => current.has(site.domain));
   for (const domain of added) state.pending.push({ domain, since: now, tried: {} });
   return added;
+}
+
+/**
+ * Whether CloudPanel has finished installing WordPress in this site. Its
+ * installer runs as root and hands `wp-config.php` to the site user only after
+ * the last `wp config set`, so the file existing is not enough; an
+ * installation that failed is never handed over.
+ */
+export function wordpressInstalled(root: string, uid: number, owner = (path: string) => statSync(path).uid): boolean {
+  try {
+    return owner(join(root, "wp-config.php")) === uid;
+  } catch {
+    return false;
+  }
 }
 
 /**

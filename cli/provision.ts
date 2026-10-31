@@ -686,10 +686,10 @@ ExecStart=/usr/local/bin/clp-addons repair --anchors-only --quiet
  * a certificate, and SMTP because a site's login is refused any sender but its
  * bare name until the sender map lists it. CloudPanel writes a vhost for every
  * new site and commits its row afterwards, later still when its database is
- * busy. The vhost wakes the service; while a vhost and the rows disagree,
- * `sync-sites` starts the second path unit, which wakes it on every write to
- * the panel database until they agree (see `cli/new-sites.ts`). A write that
- * adds or removes no site runs no hook.
+ * busy. The vhost wakes the service; while a vhost and the rows disagree, or
+ * an addon waits for a later step of a new site, `sync-sites` starts the
+ * second path unit, which wakes it on every write to the panel database (see
+ * `cli/new-sites.ts`). A write that adds or removes no site runs no hook.
  *
  * The rows watcher can start the service several times in a few seconds on a
  * busy panel, and systemd's default start limit would then fail the unit and

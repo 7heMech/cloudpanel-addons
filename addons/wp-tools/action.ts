@@ -55,15 +55,14 @@ import {
 import { DIRECTORY_SLUG_RE } from "./plugin-zip";
 import { DEFAULT_NEW_SITE_ACCESS, readNewSiteAccess, saveNewSiteAccess, type WpNewSiteAccess } from "./new-site-access";
 import {
-  NEW_SITE_PENDING_MS, certificateStamp, noteSites, readNewSitesState, saveNewSitesState,
+  NEW_SITE_PENDING_MS, certificateStamp, noteSites, readNewSitesState, saveNewSitesState, wordpressInstalled,
   type NewSite, type NewSiteCheck, type NewSitesState,
 } from "./new-sites";
 
 import { basicAuthBlocks, basicAuthRewritable, withBasicAuthBypass, type reloadNginx } from "./basic-auth";
 
 export type WpToolsVerb =
-  "sites" | "sign-in" | "site-kind" | "site-installed" | "remove" | "sync" | "varnish-settings" | "varnish-install" | "varnish-sync"
-  | "domain-link-settings";
+  "sites" | "sign-in" | "site-kind" | "remove" | "sync" | "varnish-settings" | "varnish-install" | "varnish-sync" | "domain-link-settings";
 export type { WpJobs, WpJobView } from "./jobs";
 
 /** How long a job's runner waits for a pass the timer started to finish. */
@@ -198,6 +197,8 @@ export interface WpToolsActionOptions extends VarnishOptions, Pick<NewSiteOption
   startJob?: typeof startJobUnit;
   /** Test-only; production reads an upload part from stdin. */
   input?: string;
+  /** Test-only; production reads the file's owner from disk. */
+  fileOwner?: (path: string) => number;
 }
 
 export const DEFAULT_WP_TOOLS_PATHS: WpToolsActionPaths = {
@@ -377,18 +378,18 @@ function isWordPress(root: string): boolean {
  * an account that is missing, belongs to the box, or shares its uid with
  * another site, the same refusals SMTP and Terminal make.
  */
-function resolvedSites(paths: WpToolsActionPaths): { row: PanelSiteRow; account: SiteAccount; root: string }[] {
+function resolvedSites(paths: WpToolsActionPaths): { row: PanelSiteRow; account: SiteAccount; root: string; uid: number }[] {
   const accounts = readAccounts(paths.passwd);
   const rows = panelSites(paths).flatMap((row) => {
     const account = accounts.get(row.user);
     return account ? [{ row, ...account }] : [];
   });
-  const resolved: { row: PanelSiteRow; account: SiteAccount; root: string }[] = [];
+  const resolved: { row: PanelSiteRow; account: SiteAccount; root: string; uid: number }[] = [];
   for (const { row, uid, gid, home } of splitSharedUids(rows).unique) {
     if (siteAccountProblem({ user: row.user, uid, gid }) || !home.startsWith("/")) continue;
     const account = { name: row.user, home };
     try {
-      resolved.push({ row, account, root: siteRoot(account, row) });
+      resolved.push({ row, account, root: siteRoot(account, row), uid });
     } catch {
       // A site whose recorded root is not a plain directory name is left alone.
     }
@@ -505,12 +506,12 @@ async function syncPolicies(options: WpToolsActionOptions): Promise<unknown> {
 // --- new sites ------------------------------------------------------------
 
 /**
- * What woke the new-site check: the vhost watcher (`sites`), a certificate
- * written (`certificates`), CloudPanel's "WordPress installed" page
- * (`installed`), a WordPress Tools job ending (`job`), or repair making sure
- * there is a baseline (`seed`).
+ * What woke the new-site check: the sites changing (`sites`), the new-site
+ * watcher waking again while a site waits for its WordPress (`wake`), a
+ * certificate written (`certificates`), a WordPress Tools job ending (`job`),
+ * or repair making sure there is a baseline (`seed`).
  */
-export type WpNewSiteEvent = "sites" | "certificates" | "installed" | "job" | "seed";
+export type WpNewSiteEvent = "sites" | "wake" | "certificates" | "job" | "seed";
 
 export interface WpNewSitesResult {
   /** Domains the panel did not have last time. */
@@ -519,18 +520,19 @@ export interface WpNewSitesResult {
   queued: Partial<Record<NewSiteCheck, string[]>>;
   /** New sites automation may still owe a check. */
   pending: string[];
+  /** Pending sites whose WordPress CloudPanel is still installing. */
+  waiting: string[];
   failed: string[];
 }
 
 /**
  * Queues the checks that pending sites are newly ready for, and drops the
- * sites automation owes nothing. A check is ready once the site's WordPress is
- * on disk with its configuration, or CloudPanel said it is installed; MainWP's
- * is ready again whenever the site's certificate changes, since connecting
- * needs the HTTPS the Dashboard will see. A check already queued at the same
- * readiness is not queued again, so an event that changes nothing for a site
- * does nothing, and one that finds the policy's job running leaves the site for
- * that job's end.
+ * sites automation owes nothing. A check is ready once CloudPanel has finished
+ * installing the site's WordPress; MainWP's is ready again whenever the site's
+ * certificate changes, since connecting needs the HTTPS the Dashboard will see.
+ * A check already queued at the same readiness is not queued again, so a wake
+ * that changes nothing for a site does nothing, and one that finds the
+ * policy's job running leaves the site for that job's end.
  */
 async function queueReadyChecks(paths: WpToolsActionPaths, state: NewSitesState, options: WpToolsActionOptions, result: WpNewSitesResult): Promise<void> {
   const safely = <T>(read: () => T): T | null => {
@@ -546,10 +548,19 @@ async function queueReadyChecks(paths: WpToolsActionPaths, state: NewSitesState,
   const wanted = new Map<NewSiteCheck, { site: NewSite; ready: string }[]>();
   state.pending = state.pending.filter((pending) => {
     const site = sites.get(pending.domain);
-    // Only a PHP site can hold a WordPress; an account not readable yet may still come.
-    if (!site) return true;
-    if (site.row.type !== "php") return false;
-    if (!isWordPress(site.root) || !(pending.installed || existsSync(join(site.root, "wp-config.php")))) return true;
+    // An account not readable yet may still come.
+    if (!site) {
+      result.waiting.push(pending.domain);
+      return true;
+    }
+    if (site.row.type !== "php" || site.row.application?.toLowerCase() !== "wordpress") return false;
+    if (!pending.wordpress) {
+      if (!wordpressInstalled(site.root, site.uid, options.fileOwner)) {
+        result.waiting.push(pending.domain);
+        return true;
+      }
+      pending.wordpress = true;
+    }
     // CloudPanel removes a site's vhost and certificate before its row: without them it is being deleted.
     const certificate = certificateStamp(paths.certificatesDir, pending.domain);
     if (certificate === "none" || !existsSync(join(paths.nginxVhostDir, `${pending.domain}.conf`))) return true;
@@ -557,9 +568,8 @@ async function queueReadyChecks(paths: WpToolsActionPaths, state: NewSitesState,
     if (varnish?.enabled && Boolean(Number(site.row.varnish_cache)) && !varnish.sites[pending.domain]?.seen) owed.push("varnish-check");
     if (mainwp && mainwpOwesSite(mainwp, pending.domain)) owed.push("mainwp-check");
     if (!owed.length) return false;
-    const step = pending.installed ? "installed" : "files";
     for (const task of owed) {
-      const ready = task === "mainwp-check" ? `${step}:${certificate}` : step;
+      const ready = task === "mainwp-check" ? certificate : "wordpress";
       if (pending.tried[task] !== ready) wanted.set(task, [...wanted.get(task) ?? [], { site: pending, ready }]);
     }
     return true;
@@ -588,22 +598,20 @@ async function queueReadyChecks(paths: WpToolsActionPaths, state: NewSitesState,
 
 /**
  * Checks new sites as they become ready rather than at the next 15-minute
- * pass. The new-site watcher, run when a site's row is committed, compares the
- * panel's domains with the last ones seen and adds each new one to the pending
- * list; every event then re-checks that list and queues the existing per-site
- * checks as background jobs for the sites now ready. Nothing here runs
- * WordPress, so no caller is held up. With nothing pending, a certificate or a
- * job's end costs one read of the state file.
+ * pass. When the panel's sites change, the domains it did not have before are
+ * added to the pending list; every wake then re-checks that list and queues
+ * the existing per-site checks as background jobs for the sites now ready.
+ * Nothing here runs WordPress, so no caller is held up. When nothing waits on
+ * it, a wake costs one read of the state file.
  */
-export async function reconcileWpNewSites(
-  options: WpToolsActionOptions = {},
-  event: WpNewSiteEvent = "sites",
-  domain = "",
-): Promise<WpNewSitesResult> {
+export async function reconcileWpNewSites(options: WpToolsActionOptions = {}, event: WpNewSiteEvent = "sites"): Promise<WpNewSitesResult> {
   const paths = pathsFor(options);
-  const result: WpNewSitesResult = { added: [], queued: {}, pending: [], failed: [] };
-  // A certificate or a job ending concerns only sites already pending.
-  if ((event === "certificates" || event === "job") && !readNewSitesState(paths.newSitesState)?.pending.length) return result;
+  const result: WpNewSitesResult = { added: [], queued: {}, pending: [], waiting: [], failed: [] };
+  if (event !== "sites" && event !== "seed") {
+    const pending = readNewSitesState(paths.newSitesState)?.pending ?? [];
+    // The watcher's wakes concern only sites still being installed; the others, any site still pending.
+    if (!(event === "wake" ? pending.some((site) => !site.wordpress) : pending.length)) return result;
+  }
   return withFileLock(paths.newSitesLockFile, 15, "new WordPress sites are still being checked", async () => {
     if (!existsSync(paths.configFile)) return result;
     const state = readNewSitesState(paths.newSitesState);
@@ -619,10 +627,6 @@ export async function reconcileWpNewSites(
     const now = (options.now?.() ?? new Date()).getTime();
     const before = JSON.stringify(state);
     result.added = noteSites(state, domains, now);
-    if (event === "installed") {
-      const site = state.pending.find((pending) => pending.domain === domain);
-      if (site) site.installed = true;
-    }
     state.pending = state.pending.filter((site) => now - site.since < NEW_SITE_PENDING_MS);
     if (state.pending.length) await queueReadyChecks(paths, state, options, result);
     if (JSON.stringify(state) !== before) saveNewSitesState(paths.newSitesState, state);
@@ -837,8 +841,7 @@ interface ParsedAction {
 function parseAction(argv: string[], options: WpToolsActionOptions): ParsedAction {
   const [rawVerb, ...rest] = argv;
   const verbs: WpToolsVerb[] = [
-    "sites", "sign-in", "site-kind", "site-installed", "remove", "sync", "varnish-settings", "varnish-install", "varnish-sync",
-    "domain-link-settings",
+    "sites", "sign-in", "site-kind", "remove", "sync", "varnish-settings", "varnish-install", "varnish-sync", "domain-link-settings",
   ];
   const verb = verbs.find((known) => known === rawVerb);
   if (!verb) failAction(`unknown WordPress Tools verb '${rawVerb ?? ""}'`);
@@ -879,17 +882,15 @@ function parseAction(argv: string[], options: WpToolsActionOptions): ParsedActio
     if (/^--enabled=(true|false)$/.test(argument)) { enabled = argument.endsWith("=true"); continue; }
     failAction(`unexpected argument '${argument}'`);
   }
-  if ((verb === "site-kind" || verb === "site-installed") && (clientIp || addBypass || allowBasicAuth)) {
-    failAction(`'${verb}' takes no --client-ip, --add-bypass or --allow-basic-auth`);
-  }
-  if (verb !== "sign-in" && verb !== "site-kind" && verb !== "site-installed" && (asUser || clientIp || addBypass || allowBasicAuth)) {
+  if (verb === "site-kind" && (clientIp || addBypass || allowBasicAuth)) failAction("'site-kind' takes no --client-ip, --add-bypass or --allow-basic-auth");
+  if (verb !== "sign-in" && verb !== "site-kind" && (asUser || clientIp || addBypass || allowBasicAuth)) {
     failAction(`'${verb}' takes no --as-user, --client-ip, --add-bypass or --allow-basic-auth`);
   }
   // Only an administrator may lift either Nginx gate for their request address.
   if ((addBypass || allowBasicAuth) && (asUser || !clientIp)) failAction("only an administrator's sign-in can add its address as a bypass");
   if (asUser && !PANEL_USER_NAME_RE.test(asUser)) failAction("that is not a valid panel user name");
   if (verb === "varnish-settings" || verb === "domain-link-settings" ? enabled === undefined : enabled !== undefined) failAction(`'${verb}' has invalid --enabled`);
-  if (verb === "sign-in" || verb === "site-kind" || verb === "site-installed" || verb === "varnish-install") {
+  if (verb === "sign-in" || verb === "site-kind" || verb === "varnish-install") {
     // The panel's own hostname is refused here as it is everywhere else: the
     // panel is not a site, and nothing of ours writes into it.
     domain = (options.domainValidator ?? ((value: string) => validateDomain(value)))(domain);
@@ -1323,17 +1324,6 @@ export async function executeWpToolsAction(
     if (asUser && !mayManageSite(paths, asUser, domain)) failAction("that site is not yours to sign in to");
     const site = resolvedSites(paths).find((candidate) => candidate.row.domain_name === domain);
     return { wordpress: Boolean(site && isWordPress(site.root)) };
-  }
-  // CloudPanel's "WordPress installed" page says the site's installation has
-  // finished. The request carries only the domain, held to the caller's own
-  // sites, and the reply says nothing: what follows is what automation would
-  // do at its next pass, sooner.
-  if (verb === "site-installed") {
-    if (!existsSync(paths.configFile)) failAction("WordPress Tools is not enabled");
-    if (asUser && !mayManageSite(paths, asUser, domain)) failAction("that site is not yours");
-    const { failed } = await reconcileWpNewSites(options, "installed", domain);
-    for (const failure of failed) process.stderr.write(`[wp-tools] WARN: ${failure}\n`);
-    return {};
   }
   // Both writing paths take the lock: a sign-in that ran while the addon was
   // being withdrawn would put a loader back into a site it had just left.
