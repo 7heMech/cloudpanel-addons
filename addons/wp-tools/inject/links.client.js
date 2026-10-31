@@ -121,6 +121,8 @@
   function start(event) {
     var link = event.target.closest ? event.target.closest("a.clp-wp-tools") : null;
     if (!link) return;
+    // The domain keeps the site's address, which a modified click opens.
+    if (link.getAttribute("href") !== "#" && (event.ctrlKey || event.metaKey || event.shiftKey || event.altKey)) return;
     event.preventDefault();
     if (link.dataset.busy === "1") return;
     link.dataset.busy = "1";
@@ -131,4 +133,22 @@
   // One listener on the document rather than one per row: the rows are the
   // panel's, and a filtered or re-sorted table moves them around.
   document.addEventListener("click", start);
+
+  // A site page's link, drawn hidden: CloudPanel gives those pages no
+  // application, so the addon is asked whether the site is a WordPress. The
+  // domain that signs in takes the place of the panel's own link.
+  var pending = document.querySelectorAll("a.clp-wp-tools[data-clp-site-kind]");
+  Array.prototype.forEach.call(pending, function (link) {
+    link.removeAttribute("data-clp-site-kind");
+    fetch("ADDON_URL/api/site-kind?domain=" + encodeURIComponent(link.getAttribute("data-clp-domain")), {
+      credentials: "same-origin", headers: { Accept: "application/json" }
+    })
+      .then(function (response) { return response.json(); })
+      .then(function (payload) {
+        if (!payload || payload.ok !== true || !payload.data.wordpress) return;
+        link.hidden = false;
+        if (link.classList.contains("clp-wp-tools-domain")) link.parentNode.classList.add("clp-wp-tools-signs-in");
+      })
+      .catch(function () {});
+  });
 })();

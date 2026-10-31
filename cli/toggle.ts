@@ -7,7 +7,7 @@ import { reconcileAnchors, reconcileMaintenanceNginx, reconcileNginx } from "./r
 import { requireMainwpSettled } from "../addons/wp-tools/mainwp";
 import { withFileLockSync } from "./action-common";
 import { reconcilePhpGuard, settlePhpGuard } from "./php-guard";
-import { removeWpLogin, DEFAULT_WP_TOOLS_PATHS } from "../addons/wp-tools/action";
+import { removeMainwpGuards, removeWpLogin, DEFAULT_WP_TOOLS_PATHS } from "../addons/wp-tools/action";
 import { type AddonSpec } from "./addon-catalog";
 import { withOperationLock, withOperationLockSync } from "./operation-lock";
 import {
@@ -98,7 +98,7 @@ async function enableAddon(spec: AddonSpec): Promise<void> {
  * one site's files moved would be worse than a helper left behind and named.
  */
 /**
- * Takes the sign-in helper out of every site, then removes the addon's config
+ * Takes the sign-in helper and the MainWP guard out of every site, then removes the addon's config
  * under the same lock. A sign-in waiting on that lock then finds the addon gone
  * rather than putting a helper back into a site it has just left.
  */
@@ -110,6 +110,13 @@ export function withdrawWpTools(removeConfig: () => void): void {
       if (failed.length > 0) log.warn(`the sign-in helper is still in ${failed.join("; ")}`);
     } catch (error) {
       log.warn(`the sign-in helper could not be removed from every site: ${error instanceof Error ? error.message : String(error)}`);
+    }
+    try {
+      const { removed, failed } = removeMainwpGuards();
+      if (removed > 0) log.ok(`MainWP guard removed from ${removed} site${removed === 1 ? "" : "s"}`);
+      if (failed.length > 0) log.warn(`the MainWP guard is still in ${failed.join("; ")}`);
+    } catch (error) {
+      log.warn(`the MainWP guard could not be removed from every site: ${error instanceof Error ? error.message : String(error)}`);
     }
     removeConfig();
   });

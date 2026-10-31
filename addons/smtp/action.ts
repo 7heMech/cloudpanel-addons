@@ -19,6 +19,7 @@ import {
   type CommandResult,
 } from "../../cli/action-common";
 import { CLI_BIN, PANEL_DB, STATE_DIR } from "../../cli/paths";
+import { standInDomains } from "../../cli/stand-ins";
 import { log } from "../../cli/util";
 import { writeFileAtomic } from "../../lib/atomic-write";
 import { readUnixAccounts, siteAccountProblem, splitSharedUids, TRUSTED_LOGINS } from "../../lib/site-accounts";
@@ -356,13 +357,14 @@ function checkedSites(rows: SmtpSiteRow[], skipped: SiteSet["skipped"] = []): Si
 function panelSites(paths: SmtpPaths, fixture?: SmtpSiteRow[]): SiteSet {
   if (fixture) return checkedSites(fixture);
   const accounts = readUnixAccounts(paths.passwd);
+  const standIns = standInDomains();
   const db = new Database(paths.panelDb, { readonly: true });
   try {
     const rows = db.query<{ id: number; domain_name: string; user: string; type: string; php_version: string | null }, []>(
       `SELECT site.id, site.domain_name, site.user, site.type, php_settings.php_version
          FROM site LEFT JOIN php_settings ON php_settings.site_id = site.id
         ORDER BY site.domain_name`,
-    ).all();
+    ).all().filter((row) => !standIns.has(String(row.domain_name)));
     const sites: SmtpSiteRow[] = [];
     const skipped: SiteSet["skipped"] = [];
     for (const row of rows) {

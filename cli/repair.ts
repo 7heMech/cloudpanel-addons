@@ -6,7 +6,7 @@ import { reconcilePhpGuard } from "./php-guard";
 import { runAddonMaintenance, runManagerMaintenance } from "./maintenance";
 import { withOperationLock } from "./operation-lock";
 import { conffilesReleased } from "./conffiles";
-import { MANAGER_UNIT, NEW_SITES_PATH, SYSTEMD_DIR } from "./paths";
+import { CERTIFICATES_PATH, MANAGER_UNIT, NEW_SITES_PATH, SYSTEMD_DIR } from "./paths";
 import {
   ensureAuthHelperReady, ensureDirs, ensurePathWatching, ensureServiceUser, ensureTimerArmed, hardenBackups, installUnits,
   managerSocketProblem, reconcilePanelIdentity, removeLegacyUnits, startUnits,
@@ -79,6 +79,7 @@ async function applyRepair(positional: string[], flags: Record<string, string | 
   else {
     ensureTimerArmed("clp-addons-reconcile.timer", quiet);
     if (all.some((spec) => spec.newSites)) ensurePathWatching(NEW_SITES_PATH, quiet);
+    if (all.some((spec) => spec.certificates)) ensurePathWatching(CERTIFICATES_PATH, quiet);
   }
   reconcileAnchors(quiet);
   if (!reconcileMaintenanceNginx(quiet)) log.err("Nginx maintenance check is not ready; fix the problem above, then run repair again");

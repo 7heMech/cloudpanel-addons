@@ -13,6 +13,7 @@
   .wp-status { flex-wrap: nowrap; }
 }
 .wp-helper { margin: -18px 0 30px; }
+.wp-batch { display: flex; gap: 12px; }
 .wp-link { padding: 0; border: 0; background: none; color: var(--link); font: inherit; text-decoration: underline; cursor: pointer; }
 .wp-link:hover { color: var(--accent); }
 .wp-section h3 { margin: 0 0 6px; font-size: 16px; }
@@ -39,9 +40,26 @@
   .wp-controls { justify-content: space-between; }
   .mainwp-picker select { max-width: none; flex-basis: 100%; }
   .mainwp-controls .btn { flex: 1 1 auto; }
+  /* The selection count sits under the heading, Select all beside both, and the batch buttons share the next line. */
+  .card-header.toolbar:has(.wp-batch) { display: grid; grid-template-columns: 1fr auto; gap: 2px 12px; }
+  .toolbar:has(.wp-batch) .mobile-select-all { grid-area: 1 / 2 / 3 / 3; align-self: center; }
+  .toolbar .wp-batch { grid-column: 1 / -1; margin: 12px 0 0; }
+  .wp-batch .btn { flex: 1 1 0; white-space: nowrap; }
 }
 .wp-jobs { display: grid; gap: 12px; padding: 18px 32px; }
 .wp-jobs + .fleet-filter { padding-top: 0; }
 .wp-jobs > .hint { margin: 0; }
 @media (max-width: 940px) { .wp-jobs { padding: 16px 20px; } }
 .wp-status.is-working .badge::after { content: " · working…"; }
+.wp-card-note { margin: 0; padding: 18px 32px; }
+.wp-card-note + .wp-jobs { padding-top: 0; }
+.wp-plugin-list { display: grid; gap: 6px; margin: 0; padding: 0; list-style: none; }
+.wp-plugin-list .wp-plugin-name { font-weight: 600; }
+@media (min-width: 941px) {
+  .wp-new-site-table td.site-cell { min-width: 200px; }
+  .wp-new-site-table td:last-child { white-space: nowrap; }
+}
+@media (max-width: 940px) {
+  .wp-card-note { padding: 16px 20px; }
+  .wp-new-site-table td.site-cell, .wp-new-site-table td[data-label="Plugins"] { flex-basis: 100%; }
+}

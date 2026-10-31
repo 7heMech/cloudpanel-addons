@@ -1,8 +1,8 @@
 # DNS
 
 DNS keeps each site's Cloudflare records to a profile, and can set the site's
-domain up in Mailcow. Enable **DNS** under Addons, or run
-`clp-addons install dns`.
+domain up in Mailcow. It also serves redirect domains. Enable **DNS** under
+Addons, or run `clp-addons install dns`.
 
 ## Set up
 
@@ -54,14 +54,40 @@ place. If the zone is new, the page says which nameservers to set at the
 registrar; the certificate is requested automatically once the zone is active.
 Until then the site's **SSL/TLS** tab shows the nameservers too, to anyone who
 can open the site, site managers and the site's own users included. Click a
-nameserver or its clipboard icon on the **SSL/TLS** tab to copy that one. In
-the site's **Details**, use the clipboard icon beside it.
+nameserver or its clipboard icon in either message to copy that one. In the
+site's **Details**, use the clipboard icon beside it.
 
 **Details** on a site shows its zone and every pending change. Drift is
 corrected every 15 minutes, or at once with **Check now**. **Change log** lists
 every record, zone and Mailcow change DNS made, newest first, and what made it.
 When a site is deleted from CloudPanel while DNS manages it, its records stay in
 Cloudflare until you choose **Remove records** or **Keep**. A Mailcow domain is never deleted.
+
+## Redirect domains
+
+A redirect domain sends every request for a domain, and its `www`, or for one
+host such as `tv.example.com`, to another URL. Choose **Add redirect** above the
+sites. **Keep path** sends `/about` on to `/about` at the target; turn it off
+for a target that is one page.
+
+With Cloudflare connected, Cloudflare answers the redirect and this server is
+never reached. Give the domain a profile to keep its mail: every row of the
+profile applies except the domain's own address records. Without a connection,
+a static site on this server answers it instead, with a Let's Encrypt
+certificate once the domain points here. Connecting Cloudflare later moves it
+there after you review it, and deletes that site.
+
+**Find redirects in Cloudflare** lists the whole-domain redirect rules your
+connections reach that DNS does not manage yet, such as Terraform's. Tick the
+ones to take over, check **Keep path** for each, choose a profile for their
+mail, and confirm the review. Each rule is updated in place; DNS never adds a
+second one beside it.
+
+Deleting a redirect domain once DNS is Automatic deletes its rule after a
+review; its records stay until a site's profile replaces them. If it also has
+a stand-in site on this server, that site stays until you confirm the review,
+then is deleted too. To turn a site into a redirect, delete it in CloudPanel
+first.
 
 ## Leaving Terraform
 
@@ -73,6 +99,7 @@ the old tooling without letting it destroy anything:
    `tofu state rm` (or `terraform state rm`) or `removed` blocks with
    `lifecycle { destroy = false }`, and delete their declarations. Never run
    `destroy`, and check that the plan deletes nothing remotely.
-3. Assign the sites while DNS asks first, and check. Records it should not
-   manage, such as redirects or one-off records at other names, stay untouched.
+3. Assign the sites while DNS asks first, and check. Take over its redirects
+   with **Find redirects in Cloudflare**. One-off records at other names stay
+   untouched.
 4. Turn on Automatic once the plans look right.

@@ -9,6 +9,7 @@ import {
 import { reconcileAnchors, reconcileMaintenanceNginx, reconcileNginx } from "./reconcile";
 import { reconcilePhpGuard } from "./php-guard";
 import { type AddonSpec } from "./addon-catalog";
+import { keepNewsSince, recordNewsSince } from "./manager-action";
 import { operationLockEnv, withOperationLock } from "./operation-lock";
 import { CLI_BIN, LEGACY_GH, MANAGER_UNIT } from "./paths";
 import {
@@ -117,6 +118,7 @@ async function applyUpdate(argv: string[], options: { beforeManagerRestart?: () 
       // much a half-finished update as a handoff that will not run. The
       // rollback itself is outside it, so its own failure is not retried.
       let failure: string | null = null;
+      const restoreNewsSince = keepNewsSince();
       try {
         replaceArtifacts(artifacts, target);
         options.beforeManagerRestart?.();
@@ -126,7 +128,10 @@ async function applyUpdate(argv: string[], options: { beforeManagerRestart?: () 
       } catch (error) {
         failure = error instanceof Error ? error.message : String(error);
       }
-      if (failure) rollbackUpdate(current, failure);
+      if (failure) {
+        restoreNewsSince();
+        rollbackUpdate(current, failure);
+      }
       return;
     }
     installArtifacts(artifacts, target);
@@ -138,6 +143,7 @@ async function applyUpdate(argv: string[], options: { beforeManagerRestart?: () 
     ? flags["updated-from"].replace(/^v/, "")
     : current;
   const versionChanged = updatedFrom !== target;
+  if (versionChanged) recordNewsSince(updatedFrom);
   const specs = finalizeUpdate(options.beforeManagerRestart);
   if (specs.length === 0) {
     log.ok(versionChanged

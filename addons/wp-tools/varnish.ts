@@ -40,7 +40,7 @@ export interface VarnishOptions {
   onProgress?: (progress: WpProgress) => void;
 }
 
-/** One pass: every eligible site, only the ones automation can still act on, or one domain. */
+/** One pass: every eligible site, only the ones automation can still act on, some sites, or one domain. */
 export interface VarnishRun {
   statePath: string;
   runuser: string;
@@ -48,6 +48,8 @@ export interface VarnishRun {
   /** Every domain the panel has; state for any other is dropped. */
   domains: Set<string>;
   domain?: string;
+  /** Only these sites, checked as a pass would check them: a new site's check. */
+  targets?: string[];
   dueOnly?: boolean;
   /** When the pass stops starting sites; a background job sets a long one. */
   deadline?: number;
@@ -129,7 +131,8 @@ export async function syncVarnish(run: VarnishRun, options: VarnishOptions = {})
   if (pruneVarnishState(state, run.domains)) saveVarnishState(run.statePath, state);
   const result: VarnishSyncResult = { installed: 0, checked: 0, pending: 0, failed: [] };
   if (!state.enabled && run.dueOnly) return result;
-  const candidates = run.sites.filter((site) => site.eligible && (!run.domain || site.domain === run.domain));
+  const candidates = run.sites.filter((site) => site.eligible && (!run.domain || site.domain === run.domain)
+    && (!run.targets || run.targets.includes(site.domain)));
   if (run.domain && candidates.length !== 1) throw new Error("that site is not eligible for Varnish installation");
   // Once a plugin has been seen, automation never touches that site again, so
   // the timer leaves it alone; Check now still refreshes what the page shows.

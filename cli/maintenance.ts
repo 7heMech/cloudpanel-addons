@@ -1,6 +1,6 @@
 // The upkeep `repair` and the reconcile timer run, per addon and for the manager's own job records.
 
-import { type AddonSpec, addonMaintenance, addonNewSites } from "./addon-catalog";
+import { type AddonSpec, addonCertificates, addonMaintenance, addonNewSites } from "./addon-catalog";
 import { pruneManagerJobs } from "./manager-action";
 import { log } from "./util";
 /**
@@ -53,6 +53,45 @@ export async function runNewSiteWork(installed: AddonSpec[], headStartMs = NEW_S
     await Promise.race([done, Bun.sleep(headStartMs)]);
   }
   await Promise.all(running);
+}
+
+/**
+ * Whether any installed addon still waits for a new site, asking each that
+ * waits at all. One that fails is taken to be waiting, so it is asked again.
+ */
+export async function newSitesWaiting(installed: AddonSpec[]): Promise<boolean> {
+  let waiting = false;
+  for (const spec of addonNewSites(installed)) {
+    const task = spec.newSites!;
+    if (!task.waiting) continue;
+    try {
+      const result = await task.waiting();
+      if (result.line) log.ok(`${task.label}: ${result.line}`);
+      waiting ||= result.waiting;
+    } catch (error) {
+      log.warn(`${task.label} failed: ${error instanceof Error ? error.message : String(error)}`);
+      waiting = true;
+    }
+  }
+  return waiting;
+}
+
+/**
+ * What the certificate watcher runs: each installed addon's work for a site
+ * whose certificate CloudPanel has just written, in catalog order, one after
+ * another. It is for work that waits on a site's HTTPS, and is cheap when there
+ * is none, since every renewal wakes it too.
+ */
+export async function runCertificateWork(installed: AddonSpec[]): Promise<void> {
+  for (const spec of addonCertificates(installed)) {
+    const task = spec.certificates!;
+    try {
+      const line = await task.run();
+      if (line) log.ok(`${task.label}: ${line}`);
+    } catch (error) {
+      log.warn(`${task.label} failed: ${error instanceof Error ? error.message : String(error)}`);
+    }
+  }
 }
 
 /**

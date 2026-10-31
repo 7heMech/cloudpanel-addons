@@ -138,6 +138,11 @@ export const MAX_BODY_BYTES = 64 * 1024;
  * moment it passes the limit.
  */
 export async function readBoundedText(req: Request | Response, maxBytes = MAX_BODY_BYTES): Promise<string> {
+  return new TextDecoder().decode(await readBoundedBytes(req, maxBytes));
+}
+
+/** The same reader, for a body that is not text: a plugin zip, a download. */
+export async function readBoundedBytes(req: Request | Response, maxBytes = MAX_BODY_BYTES): Promise<Uint8Array> {
   const declared = req.headers.get("content-length");
   if (declared !== null) {
     // RFC 9110 gives Content-Length as 1*DIGIT. Number() would take "0x40",
@@ -146,26 +151,24 @@ export async function readBoundedText(req: Request | Response, maxBytes = MAX_BO
     if (Number(declared) > maxBytes) throw new BodyError("request body is too large", 413);
   }
 
-  let text = "";
+  const chunks: Uint8Array[] = [];
+  let total = 0;
   const body = req.body;
   if (body) {
     const reader = body.getReader();
-    const decoder = new TextDecoder();
-    let total = 0;
     try {
       for (;;) {
         const { done, value } = await reader.read();
         if (done) break;
         total += value.byteLength;
         if (total > maxBytes) throw new BodyError("request body is too large", 413);
-        text += decoder.decode(value, { stream: true });
+        chunks.push(value);
       }
-      text += decoder.decode();
     } finally {
       await reader.cancel().catch(() => {});
     }
   }
-  return text;
+  return Buffer.concat(chunks, total);
 }
 
 /** The same reader, with the body required to be a JSON object. */

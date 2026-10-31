@@ -171,7 +171,7 @@ describe("profiles", () => {
 });
 
 describe("the Cloudflare token template", () => {
-  test("is a user token for any account and every zone, with the permissions the profiles use", () => {
+  test("is a user token for any account and every zone, with the permissions the profiles and redirect domains use", () => {
     const template = tokenTemplate(seededPolicy().profiles);
     const url = new URL(template.url);
     expect(url.origin + url.pathname).toBe("https://dash.cloudflare.com/profile/api-tokens");
@@ -179,9 +179,10 @@ describe("the Cloudflare token template", () => {
     expect(url.searchParams.get("zoneId")).toBe("all");
     expect(JSON.parse(url.searchParams.get("permissionGroupKeys")!)).toEqual([
       { key: "account_settings", type: "read" }, { key: "zone", type: "edit" }, { key: "dns", type: "edit" },
-      { key: "zone_settings", type: "edit" }, { key: "config_settings", type: "edit" },
+      { key: "dynamic_url_redirects", type: "edit" }, { key: "zone_settings", type: "edit" }, { key: "config_settings", type: "edit" },
     ]);
     expect(template.permissions).toContain("Config Rules: Edit");
+    expect(template.permissions).toContain("Single Redirect: Edit");
   });
 
   test("asks for WAF only for a firewall skip", () => {

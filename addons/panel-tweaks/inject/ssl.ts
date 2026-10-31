@@ -1,5 +1,8 @@
 import type { AddonTarget } from "../../../lib/addon-target";
-import SCRIPT from "./ssl.client.js" with { type: "text" };
+import { NAMESERVER_NOTICE_JS } from "../../../lib/nameserver-notice";
+import CLIENT from "./ssl.client.js" with { type: "text" };
+
+export const SCRIPT = `${NAMESERVER_NOTICE_JS}\n${CLIENT}`;
 
 export const NATIVE_SSL_TYPES = ["wordpress", "php", "static", "nodejs", "python", "reverse-proxy"] as const;
 

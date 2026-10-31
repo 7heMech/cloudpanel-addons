@@ -55,20 +55,31 @@ function mountedAddons(): string[] {
  * sign-in is one because the panel user it signs in for is one CloudPanel
  * already gave the site's file manager and database to, so the shortcut adds
  * no authority; the root action holds it to the sites `user_sites` maps to
- * that account. The session route hands out the CSRF pair those callers cannot
+ * that account. Its site-kind route answers only whether such a site is a
+ * WordPress, which its site pages need to know to offer the sign-in. The session route hands out the CSRF pair those callers cannot
  * get from an addon page, and reads nothing. Panel Tweaks' state route is one
  * because the page it enhances is CloudPanel's own Sites page, which every
  * panel user sees; the action narrows the reply to the rows that page would
  * already have drawn for the caller. DNS's provision route is called from the
  * page a new site lands on, by whoever created it, and its site route from the
  * site's SSL/TLS page; the action refuses a site that is not the caller's and
- * answers with readiness, or the zone and the nameservers it waits for, only. Security Keys'
+ * answers with readiness, or the zone and the nameservers it waits for, only.
+ * WordPress Tools' plugin search, new-site choice and its status are called
+ * from CloudPanel's New WordPress Site form and the page it lands on, which site
+ * managers use too: the handler turns away anyone but an administrator or a
+ * site manager, and root holds a site manager to the administrator's switch,
+ * to WordPress.org plugins, to a site that does not exist yet and to the status
+ * of their own choice. Uploading stays behind the gate. Security Keys'
  * routes are the caller's own keys, managed from CloudPanel's Security page;
  * the gateway reads whose they are from the session itself.
  */
 const SELF_SCOPED_ROUTES = new Set([
   "POST /wp-tools/api/sign-in",
   "GET /wp-tools/api/session",
+  "GET /wp-tools/api/site-kind",
+  "GET /wp-tools/api/plugin-search",
+  "POST /wp-tools/api/new-site",
+  "GET /wp-tools/api/new-site-status",
   "GET /panel-tweaks/api/panel",
   "GET /dns/api/session",
   "POST /dns/api/provision",
@@ -153,11 +164,11 @@ export async function handleRequest(req: Request, server: Server<unknown>): Prom
     // process, and a page that still denied the addon existed would be
     // wrong for exactly as long as anybody was likely to look at it.
     const enabled = ADDON_NAMES.filter((name) => existsSync(ADDONS[name]!.configFile));
-    const [job, seen] = await Promise.all([latestManagerJobView(), seenNews()]);
+    const [job, news] = await Promise.all([latestManagerJobView(), seenNews()]);
     return indexPage(enabled, notice, {
       available: ADDON_NAMES.filter((name) => !enabled.includes(name)),
       job,
-      seen,
+      ...news,
       csrf: newCsrfToken(),
     });
   }

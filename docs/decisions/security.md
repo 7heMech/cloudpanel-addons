@@ -85,7 +85,16 @@ accepts and under a deadline root enforces itself. Only administrators can manag
 that policy or install the official CLP plugin; sign-in's non-administrator
 exception does not apply. Checks, installations and MainWP connections run as
 background jobs whose runner the gateway cannot start; the page can only start
-one of a fixed set of tasks and watch it. The normal WordPress plugin remains installed when
+one of a fixed set of tasks and watch it. Plugins chosen on CloudPanel's
+new-site form are named only by a WordPress.org slug of a strict pattern or by
+the random id root gave an uploaded zip; root inspects each zip without
+extracting it, fetches directory plugins only from WordPress.org's API and
+download host, refuses a site that already exists, and hands each zip to the
+site's user on stdin. Uploads reach root through the gateway in parts under its
+input limit and are kept root-only until a job installs or discards them. Only
+administrators upload. Site managers choose directory plugins only, and only
+while an administrator's switch allows it, which root reads along with the
+account's role and status in CloudPanel's database. The normal WordPress plugin remains installed when
 automation stops. See [WordPress Tools](wp-tools.md).
 
 Panel Tweaks' size measurement is the same kind of job: the page can start the
@@ -132,17 +141,28 @@ login page, and authentication failures do not fall back to anonymous access.
 The gate is where a request goes by default, after the URL is taken apart and
 before the route is chosen. The liveness probe the update page polls is inside
 it, and nothing reads it without a session: the page that polls it has one. The
-exceptions are below: nine named routes, and two routes settled ahead of the
+exceptions are below: fourteen named routes, and two routes settled ahead of the
 gate by a credential of their own.
 
-Nine routes are named as exceptions. Two are WordPress Tools':
-`POST /wp-tools/api/sign-in` and the `GET /wp-tools/api/session` that hands out
-the CSRF pair, because the link that uses them is injected into CloudPanel's own
-Sites page, which a non-administrator sees too. The third is Panel Tweaks'
-read-only `GET /panel-tweaks/api/panel`, which answers the script injected into
-that same page with the sites CloudPanel would list for the caller. The last two
-are DNS's `POST /dns/api/provision` and its `GET /dns/api/session`, which Panel
-Tweaks' script calls on the page a new site lands on, for whoever created it.
+Fourteen routes are named as exceptions. Six are WordPress Tools':
+`POST /wp-tools/api/sign-in`, the `GET /wp-tools/api/session` that hands out
+the CSRF pair, and `GET /wp-tools/api/site-kind`, which says only whether one of
+the caller's own sites is a WordPress. The links that use them are injected into
+CloudPanel's own Sites page and site pages, which a non-administrator sees too.
+`GET /wp-tools/api/plugin-search`, `POST /wp-tools/api/new-site` and
+`GET /wp-tools/api/new-site-status` are the plugin picker on CloudPanel's New
+WordPress Site form and the page it lands on, which site managers use as well.
+The handler turns away anyone but an administrator or a site manager; root
+holds a site manager to the administrator's switch, to WordPress.org plugins,
+to a domain CloudPanel does not have yet, to a site CloudPanel's event log
+says that account created, and to the status of the job they recorded
+themselves. Uploading and the switch stay behind the gate.
+The seventh is Panel Tweaks' read-only `GET /panel-tweaks/api/panel`, which
+answers the script injected into that same page with the sites CloudPanel would
+list for the caller. Three are DNS's: `POST /dns/api/provision` and its
+`GET /dns/api/session`, which Panel Tweaks' script calls on the page a new site
+lands on, for whoever created it, and `GET /dns/api/site`, which a site's
+SSL/TLS page asks for that site's readiness.
 The remaining four are Security Keys' own-account routes, called from the card
 on CloudPanel's Security page; the gateway reads whose keys they are from the
 session itself.
@@ -151,8 +171,9 @@ A session that only clears the gate this way is dispatched straight to that
 addon, ahead of the update check and the manager's own routes, so nothing else
 in the manager runs for it. The authorisation it skips here is made up for as
 root: the sign-in and provision actions are told which panel user the request is
-for and refuse any site CloudPanel would not list for that account. The set is a
-literal of nine strings rather than a prefix or a pattern, so a route cannot join it by
+for and refuse any site CloudPanel would not list for that account, and the
+plugin picker's are told which site manager it is for. The set is a
+literal of fourteen strings rather than a prefix or a pattern, so a route cannot join it by
 being named something similar.
 
 An addon may also declare `siteManager` in its catalog definition, which admits
@@ -299,7 +320,9 @@ source authentication.
 
 Enrollment deliberately gives one administrator-chosen Dashboard administrative
 control of each connected site: a compromised Dashboard can run PHP as every
-connected site's user. A child receives only its own Security ID and the
+connected site's user. With automation on that is every site on the server,
+including one a site owner had connected to another Dashboard, and the guard
+stops site administrators undoing it; the page asks before turning it on. A child receives only its own Security ID and the
 Dashboard's public key. Child and Dashboard code run as their own site users
 through the shared WP-CLI runner, and root only validates their marked replies.
 A child's administrator login reaches the Dashboard only if it matches

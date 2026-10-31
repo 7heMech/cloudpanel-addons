@@ -116,7 +116,7 @@ function rowClaims(type: string, name: string, content: string): Claim {
  * The records `profile` wants for one site. SPF rows are returned as written
  * here and merged with what is published once the zone has been read.
  */
-export function renderProfile(profile: Profile, vars: SiteVars): Rendered {
+export function renderProfile(profile: Profile, vars: SiteVars, skip?: (name: string, type: string) => boolean): Rendered {
   const rendered: Rendered = { zone: vars.zone, records: [], claims: [], waitingDkim: [], problems: [] };
   profile.records.forEach((row: RecordTemplate, index) => {
     const where = `Record ${index + 1} (${row.type} ${row.name})`;
@@ -130,6 +130,7 @@ export function renderProfile(profile: Profile, vars: SiteVars): Rendered {
       rendered.problems.push(`${where}: ${name || "its name"} is not a name in the ${vars.zone} zone`);
       return;
     }
+    if (skip?.(name, row.type)) return;
     const unknown = (["ipv4", "ipv6"] as const).find((family) => vars[family] === null && row.content.includes(`{${family}}`));
     if (unknown) {
       rendered.problems.push(`${where}: this server's ${unknown === "ipv4" ? "IPv4" : "IPv6"} address could not be detected; set it under Server addresses`);
@@ -182,6 +183,25 @@ export function renderProfile(profile: Profile, vars: SiteVars): Rendered {
   }
   const spfNames = rendered.records.filter((record) => record.type === "TXT" && isSpf(record.content)).map((record) => record.name);
   if (new Set(spfNames).size !== spfNames.length) rendered.problems.push("Only one SPF row may write to a name");
+  return rendered;
+}
+
+const WEB_TYPES = new Set(["A", "AAAA", "CNAME"]);
+
+/**
+ * What a redirect domain wants: its profile's rows, if it has one, without the
+ * web rows -- address and CNAME rows at the domain and its `www` -- and a
+ * proxied placeholder at each host the redirect answers for, which owns every
+ * address and CNAME there. Mail rows and anything else render as for a site.
+ */
+export function renderRedirect(profile: Profile | null, hosts: string[], vars: SiteVars, placeholder: string): Rendered {
+  const own = new Set([vars.domain, `www.${vars.domain}`]);
+  const web = (name: string, type: string) => own.has(name) && WEB_TYPES.has(type);
+  const rendered: Rendered = profile ? renderProfile(profile, vars, web) : { zone: vars.zone, records: [], claims: [], waitingDkim: [], problems: [] };
+  for (const host of hosts) {
+    rendered.records.push({ type: "AAAA", name: host, content: placeholder, proxied: true, ttl: 1, priority: null });
+    rendered.claims.push({ name: host, type: "A" }, { name: host, type: "AAAA" });
+  }
   return rendered;
 }
 

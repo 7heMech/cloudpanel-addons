@@ -334,7 +334,14 @@ function dnsShowSite(domain) {
   const plan = site.plan;
   dnsSiteShown = domain;
   CLP_ROOT.getElementById('dns-site-heading').textContent = domain;
-  let html = '<dl class="dns-facts"><dt>Profile</dt><dd>' + dnsEsc(profile ? profile.name : '—') + (profile ? ' · ' + (dnsState.automatic ? 'Automatic' : 'Ask first') : '') + '</dd>';
+  let html = '<dl class="dns-facts">';
+  if (site.redirect) {
+    const kept = [site.redirect.keepPath && 'path', site.redirect.keepQuery && 'query string'].filter(Boolean);
+    html += '<dt>Redirects to</dt><dd class="dns-change-detail">' + dnsEsc(site.redirect.target) + '</dd>' +
+      '<dt>Status</dt><dd>' + site.redirect.status + (kept.length ? ' · keeps the ' + kept.join(' and ') : '') + '</dd>' +
+      '<dt>Served by</dt><dd>' + (plan && plan.zone ? 'Cloudflare' : site.redirect.standIn ? 'A stand-in site on this server' : dnsState.connections.length ? 'Cloudflare' : 'A stand-in site on this server, once DNS is Automatic') + '</dd>';
+  }
+  html += '<dt>Profile</dt><dd>' + dnsEsc(profile ? profile.name : '—') + (profile || site.redirect ? ' · ' + (dnsState.automatic ? 'Automatic' : 'Ask first') : '') + '</dd>';
   if (plan && plan.zone) {
     html += '<dt>Zone</dt><dd>' + dnsEsc(plan.zone.name) + ' · ' + dnsEsc(plan.zone.status) + '</dd>' +
       '<dt>Through</dt><dd>' + dnsEsc(plan.zone.connection) + ' · ' + dnsEsc(plan.zone.account) + '</dd>';
@@ -364,10 +371,12 @@ function dnsShowSite(domain) {
       html += '<h3 class="dns-section">' + (dnsState.automatic ? 'To change' : 'Differences, not changed until DNS is Automatic') + '</h3>' + dnsChanges(plan.changes);
     }
   }
+  if (site.redirect) html += '<p><button class="btn" type="button" onclick="dnsEditRedirect(\'' + dnsEsc(domain) + '\')">Edit redirect</button></p>';
   CLP_ROOT.getElementById('dns-site-body').innerHTML = html;
   const pending = plan && !plan.problems.length && plan.changes.some(function (change) { return change.action !== 'note'; });
   const apply = CLP_ROOT.getElementById('dns-site-apply');
-  apply.hidden = !(profile && dnsState.automatic && pending);
+  // A redirect is applied by the next check, or through its review when it is held.
+  apply.hidden = !(dnsState.automatic && pending && (site.redirect ? plan.held : profile));
   apply.textContent = plan && plan.held ? 'Review changes' : 'Apply now';
   dnsOpen('dns-site-dialog');
 }
@@ -394,6 +403,108 @@ function dnsForget(domain) {
 
 function dnsRemoveRecords(domain) {
   dnsPost('/api/records/remove', { domain: domain });
+}
+
+// --- redirect domains -------------------------------------------------------
+
+function dnsProfileChoices(selected) {
+  return '<option value="">No profile</option>' + dnsState.profiles.map(function (profile) {
+    return '<option value="' + dnsEsc(profile.id) + '"' + (profile.id === selected ? ' selected' : '') + '>' + dnsEsc(profile.name) + '</option>';
+  }).join('');
+}
+
+function dnsEditRedirect(source) {
+  const site = source ? dnsState.sites.find(function (candidate) { return candidate.domain === source; }) : null;
+  const redirect = site && site.redirect;
+  const form = CLP_ROOT.getElementById('dns-redirect-form');
+  form.reset();
+  const field = function (name) { return form.elements.namedItem(name); };
+  field('source').value = redirect ? redirect.source : '';
+  field('source').readOnly = Boolean(redirect);
+  field('target').value = redirect ? redirect.target : '';
+  field('status').value = String(redirect ? redirect.status : 301);
+  field('keepPath').checked = redirect ? redirect.keepPath : true;
+  field('keepQuery').checked = redirect ? redirect.keepQuery : true;
+  field('profileId').innerHTML = dnsProfileChoices(redirect ? redirect.profileId : null);
+  CLP_ROOT.getElementById('dns-redirect-where').textContent = dnsState.connections.length
+    ? 'Cloudflare answers it: a Single Redirect rule and a proxied placeholder record, so this server is never reached.'
+    : 'With no Cloudflare connection, a static site on this server answers it and gets a Let\'s Encrypt certificate once the domain points here.';
+  CLP_ROOT.getElementById('dns-redirect-delete').hidden = !redirect;
+  CLP_ROOT.getElementById('dns-redirect-heading').textContent = redirect ? 'Edit ' + redirect.source : 'Add redirect';
+  CLP_ROOT.getElementById('dns-site-dialog').close();
+  dnsOpen('dns-redirect-dialog');
+}
+
+function dnsSaveRedirect(event) {
+  event.preventDefault();
+  const form = event.currentTarget;
+  const field = function (name) { return form.elements.namedItem(name); };
+  dnsPost('/api/redirects', {
+    source: field('source').value.trim(), target: field('target').value.trim(), status: Number(field('status').value),
+    keepPath: field('keepPath').checked, keepQuery: field('keepQuery').checked, profileId: field('profileId').value || null,
+  }, CLP_ROOT.getElementById('dns-redirect-dialog'));
+}
+
+async function dnsDeleteRedirect() {
+  const dialog = CLP_ROOT.getElementById('dns-redirect-dialog');
+  const source = CLP_ROOT.getElementById('dns-redirect-form').elements.namedItem('source').value;
+  const site = dnsState.sites.find(function (candidate) { return candidate.domain === source; });
+  dialog.close();
+  // Once Automatic, deleting a redirect Cloudflare serves is a review of the rule it deletes.
+  if (!site.redirect.standIn && dnsState.automatic && dnsState.connections.length) return dnsPost('/api/redirects/delete', { source: source });
+  const accepted = await confirmAction({
+    title: 'Delete the redirect for ' + source + '?',
+    text: site.redirect.standIn
+      ? 'Its stand-in site is deleted from this server, so ' + source + ' stops redirecting.'
+      : 'DNS stops managing it. Its rule and records stay in Cloudflare and keep redirecting.',
+    confirmLabel: 'Delete', danger: true,
+  });
+  if (accepted) dnsPost('/api/redirects/delete', { source: source });
+}
+
+let dnsFound = [];
+
+async function dnsFindRedirects(button) {
+  const label = button.textContent;
+  button.textContent = 'Reading Cloudflare…';
+  const reply = await dnsPost('/api/redirects/find', {});
+  button.textContent = label;
+  if (reply && reply.data && reply.data.found) dnsShowFound(reply.data.found);
+}
+
+function dnsShowFound(found) {
+  dnsFound = found.redirects;
+  const notes = found.notes.length ? '<div class="alert">' + found.notes.map(dnsEsc).join('<br>') + '</div>' : '';
+  CLP_ROOT.getElementById('dns-found-body').innerHTML = notes + (dnsFound.length
+    ? '<div class="table-scroll"><table class="fleet-table dns-found-table"><thead><tr><th class="site-select"><input type="checkbox" checked aria-label="Select all" onchange="dnsSelectFound(this.checked)"></th>' +
+      '<th>Domain</th><th>Redirects to</th><th>Status</th><th>Keep path</th></tr></thead><tbody>' + dnsFound.map(function (redirect, index) {
+        return '<tr><td class="site-select"><input type="checkbox" name="take" value="' + index + '" checked aria-label="Take over ' + dnsEsc(redirect.source) + '"></td>' +
+          '<td class="site-cell"><strong>' + dnsEsc(redirect.source) + '</strong>' + (redirect.source === redirect.zone ? '<span class="hint">and www</span>' : '') + '</td>' +
+          '<td data-label="Redirects to" class="dns-change-detail">' + dnsEsc(redirect.target) + '</td>' +
+          '<td data-label="Status">' + redirect.status + '</td>' +
+          '<td data-label="Keep path"><label class="switch"><input type="checkbox" name="keepPath" data-index="' + index + '"' + (redirect.keepPath ? ' checked' : '') +
+          ' aria-label="Keep the path for ' + dnsEsc(redirect.source) + '"><span></span></label></td></tr>';
+      }).join('') + '</tbody></table></div>'
+    : '<div class="empty">No whole-domain redirect rules are waiting to be taken over.</div>');
+  CLP_ROOT.getElementById('dns-found-profile').innerHTML = dnsProfileChoices(null);
+  CLP_ROOT.getElementById('dns-found-submit').hidden = !dnsFound.length;
+  dnsOpen('dns-found-dialog');
+}
+
+function dnsSelectFound(on) {
+  CLP_ROOT.querySelectorAll('#dns-found-body input[name="take"]').forEach(function (box) { box.checked = on; });
+}
+
+function dnsTakeOver(event) {
+  event.preventDefault();
+  const body = CLP_ROOT.getElementById('dns-found-body');
+  const chosen = Array.from(body.querySelectorAll('input[name="take"]:checked')).map(function (box) {
+    const redirect = dnsFound[Number(box.value)];
+    const keepPath = body.querySelector('input[name="keepPath"][data-index="' + box.value + '"]').checked;
+    return { source: redirect.source, target: redirect.target, status: redirect.status, keepPath: keepPath, keepQuery: redirect.keepQuery };
+  });
+  if (!chosen.length) return dnsDialogError(CLP_ROOT.getElementById('dns-found-dialog'), 'Select at least one redirect.');
+  dnsPost('/api/redirects/take-over', { redirects: chosen, profileId: CLP_ROOT.getElementById('dns-found-profile').value || null }, CLP_ROOT.getElementById('dns-found-dialog'));
 }
 
 // --- connections and settings -----------------------------------------------

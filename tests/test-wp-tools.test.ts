@@ -4,15 +4,16 @@ import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, sy
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
-  executeWpToolsAction, WP_LOGIN_FIELD, WORDPRESS_APPLICATIONS,
+  DEFAULT_WP_TOOLS_PATHS, executeWpToolsAction, removeMainwpGuards, WP_LOGIN_FIELD, WORDPRESS_APPLICATIONS,
   type WpBasicAuthReply, type WpToolsActionOptions, type WpLoginResult, type WpMaintenanceReply, type WpRemoveResult, type WpSiteView,
 } from "../addons/wp-tools/action";
 import { DEFAULT_MAINTENANCE_ACTION_PATHS } from "../addons/maintenance/action";
-import { WP_TOOLS_TARGETS } from "../addons/wp-tools/inject/targets";
+import { WP_TOOLS_TARGETS, siteInfoSnippet } from "../addons/wp-tools/inject/targets";
 import { ROW_ACTION_CLASS } from "../lib/row-actions";
 
 const scriptTarget = WP_TOOLS_TARGETS.find((target) => target.slug === "sites-script")!;
 const linkTarget = WP_TOOLS_TARGETS.find((target) => target.slug === "sites-action")!;
+const siteInfoTarget = WP_TOOLS_TARGETS.find((target) => target.slug === "site-info-link")!;
 
 // --- what goes into CloudPanel's own page ---------------------------------
 
@@ -44,9 +45,61 @@ test("the link is per-site Twig for every role, and the script is emitted once",
   expect(script).toContain('document.addEventListener("click"');
 });
 
-// Neither block may stop an install: the addon's own page signs in to the same
+// CloudPanel's Frontend/Site/Partial/site-info.html.twig, up to the Site User box.
+const SITE_INFO = `<div class="site-info-container">
+  <div class="site-info-box">
+    <h3>{% trans %}Domain{% endtrans %}</h3>
+    <div class="site-info-value">
+      <a class="view-site-link" target="_blank" href="https://{{ site.domainName }}">
+        {{ site.domainName }}
+        <svg width="12" height="12" viewBox="0 0 512 512"><path d="M440,256Z"></path></svg>
+      </a>
+    </div>
+  </div>
+  <div class="site-info-box">`;
+
+test("the site pages' link sits after the Domain link, with its own script", () => {
+  const anchor = siteInfoTarget.anchorAfter!;
+  expect(SITE_INFO.split(anchor).length).toBe(2);
+  // Inside the Domain box, after the panel's own link.
+  const at = SITE_INFO.indexOf(anchor) + anchor.length;
+  expect(SITE_INFO.slice(0, at)).toContain('class="view-site-link"');
+  expect(SITE_INFO.slice(at)).toMatch(/^\n    <\/div>/);
+
+  for (const signIn of [true, false]) {
+    const block = siteInfoSnippet("/addons/wp-tools", signIn);
+    expect(block).not.toContain("is_granted");
+    expect(block).toContain('data-clp-domain="{{ site.domainName }}"');
+    // CloudPanel's site pages give Twig a site with no application, so every
+    // PHP site gets the link hidden, and the addon is asked whether to show it.
+    expect(block).toContain("{% if site.type == 'php' %}");
+    expect(block).not.toContain("site.application");
+    expect(block).toMatch(/<a [^>]*hidden[^>]*data-clp-site-kind/);
+    expect(block).toContain("/addons/wp-tools/api/site-kind?domain=");
+    // The partial is rendered once per page, so the script rides with the link.
+    expect(block).toContain("/addons/wp-tools/api/sign-in");
+  }
+});
+
+test("the domain signs in by default, keeping the site's address for a modified click", () => {
+  const domain = siteInfoSnippet("/addons/wp-tools", true);
+  // The panel's own link is hidden by a rule once ours is shown, never rewritten.
+  expect(domain).toContain(".site-info-value.clp-wp-tools-signs-in > a.view-site-link:not(.clp-wp-tools) { display: none; }");
+  expect(domain).toContain('classList.add("clp-wp-tools-signs-in")');
+  expect(domain).toContain('<a href="https://{{ site.domainName }}" hidden class="clp-wp-tools clp-wp-tools-domain view-site-link"');
+  expect(domain).not.toContain("WP Login");
+  expect(domain).toContain("event.ctrlKey || event.metaKey");
+
+  // Off, the panel's link stays and WP Login goes beside it.
+  const beside = siteInfoSnippet("/addons/wp-tools", false);
+  expect(beside).toContain('<a href="#" hidden class="clp-wp-tools view-site-link"');
+  expect(beside).not.toContain("clp-wp-tools-domain view-site-link");
+  expect(beside).toContain("WP Login");
+});
+
+// No block may stop an install: the addon's own page signs in to the same
 // sites whether or not CloudPanel's markup still matches.
-test("neither block is required", () => {
+test("no block is required", () => {
   for (const target of WP_TOOLS_TARGETS) expect(target.required).toBe(false);
 });
 
@@ -84,6 +137,7 @@ function options(extra: Partial<WpToolsActionOptions> = {}): WpToolsActionOption
       },
       varnishState: join(root, "varnish.json"),
       varnishLockFile: join(root, "wp-varnish.lock"),
+      domainLinkState: join(root, "domain-link.json"),
     },
     ...extra,
   };
@@ -179,6 +233,33 @@ test("the site list is what is on disk, not what the panel's application column 
   expect(sites.every((site) => site.helper === false)).toBe(true);
 });
 
+// What a site page asks before it shows the link: the disk decides, for a site
+// the caller could sign in to.
+test("a site's kind is told only for a site the caller could sign in to", async () => {
+  expect(await act<unknown>(["site-kind", "--domain=shop.example.com"])).toEqual({ wordpress: true });
+  expect(await act<unknown>(["site-kind", "--domain=shop.example.com", "--as-user=shopkeeper"])).toEqual({ wordpress: true });
+  expect(await act<unknown>(["site-kind", "--domain=nowhere.example.com"])).toEqual({ wordpress: false });
+  await expect(act(["site-kind", "--domain=shop.example.com", "--as-user=nosy"])).rejects.toThrow("not yours");
+  await expect(act(["site-kind", "--domain=shop.example.com", "--client-ip=203.0.113.9"])).rejects.toThrow("takes no --client-ip");
+});
+
+test("the domain link signs in until it is switched off, and only while the addon is enabled", async () => {
+  expect((await act<{ domainLink: { signIn: boolean } }>(["sites"])).domainLink).toEqual({ signIn: true });
+  expect(await act<unknown>(["domain-link-settings", "--enabled=false"])).toEqual({ domainLink: { signIn: false } });
+  expect(await act<{ domainLink: { signIn: boolean }; domainLinkError: string }>(["sites"]))
+    .toMatchObject({ domainLink: { signIn: false }, domainLinkError: "" });
+  await expect(act(["domain-link-settings"])).rejects.toThrow("invalid --enabled");
+  await expect(act(["domain-link-settings", "--enabled=true", "--domain=shop.example.com"])).rejects.toThrow("takes no --domain");
+
+  // Unreadable, the page says so and shows the default rather than failing.
+  writeFileSync(join(root, "domain-link.json"), "{}");
+  expect(await act<{ domainLink: { signIn: boolean }; domainLinkError: string }>(["sites"]))
+    .toMatchObject({ domainLink: { signIn: true }, domainLinkError: expect.stringContaining("is invalid") });
+
+  rmSync(join(root, "wp-tools.conf"));
+  await expect(act(["domain-link-settings", "--enabled=true"])).rejects.toThrow("must be enabled");
+});
+
 // A non-administrator's request names itself, and the action holds it to the
 // sites CloudPanel would list for that account.
 test("a named panel user signs in only to the sites that are theirs", async () => {
@@ -262,6 +343,17 @@ test("remove takes the loader back out of every site that has it", async () => {
   expect(existsSync(join(siteDir("shop", "shop.example.com"), "wp-content"))).toBe(true);
 
   expect((await act<WpRemoveResult>(["remove"])).removed).toBe(0);
+});
+
+test("withdrawing the addon takes the MainWP guard out as each site's user", () => {
+  const muPlugins = join(siteDir("shop", "shop.example.com"), "wp-content", "mu-plugins");
+  mkdirSync(muPlugins, { recursive: true });
+  writeFileSync(join(muPlugins, "clp-addons-mainwp.php"), "<?php\n");
+  const paths = options().paths!;
+  expect(removeMainwpGuards({ ...DEFAULT_WP_TOOLS_PATHS, ...paths })).toEqual({ removed: 1, failed: [] });
+  expect(existsSync(join(muPlugins, "clp-addons-mainwp.php"))).toBe(false);
+  expect(runuserLog()).toEqual(["shop PATH"]);
+  expect(removeMainwpGuards({ ...DEFAULT_WP_TOOLS_PATHS, ...paths }).removed).toBe(0);
 });
 
 // The site's user controls every name under its root, so a symlink there would

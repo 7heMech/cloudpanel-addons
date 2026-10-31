@@ -2,8 +2,8 @@
 
 ## Why it is an addon and not a tweak
 
-WordPress Tools groups sign-in, optional Varnish installation and optional
-MainWP Child enrollment.
+WordPress Tools groups sign-in, plugins chosen while creating a site, optional
+Varnish installation and optional MainWP Child enrollment.
 [Panel Tweaks](panel-tweaks.md) changes what CloudPanel's own pages look like;
 this addon writes into a customer's site. An operator who enables a filterable
 site list does not thereby authorize those actions, and the gateway's fixed
@@ -117,11 +117,12 @@ each cell. A site that has not been checked shows Not checked and no button:
 until a check says the plugin is missing or inactive, Install is a guess, and
 the same holds for MainWP's Connect. With a Dashboard on this server the table
 also gets a selection column and **Connect selected to MainWP** and **Connect
-all unconnected** above it, for sites checked or not; see Background jobs. The two automation policies are set once, so they share one card
-below the table. A row has no automation switch of its own: automation acts
-only on a site it has never seen, so a listed site has normally been handled by
-a pass already, and removing the plugin in WordPress keeps a site out, since a
-removed plugin is never put back. The
+all unconnected** above it, for sites checked or not; see Background jobs. On a
+phone the heading's selection count sits under it, with Select all beside both,
+and the two batch buttons share the next line under shorter labels. The two automation policies are set once, so they share one card
+below the table. A row has no automation switch of its own: Varnish automation
+acts only on a site it has never seen, so a listed site has normally been
+handled by a pass already, and MainWP automation acts on every site. The
 page draws only controls that do something: the MainWP column and switch
 appear once a Dashboard is chosen, here or on another server; until then the
 card holds only the picker, plus cleanup while Child plugins the addon
@@ -168,8 +169,8 @@ The addon's page refuses form submissions, as every response does by default.
 Its sign-in window opens on the addon's page for that one site, whose policy
 lets a form go only to the site's HTTPS origin, and the token's form is written
 into it once it has loaded. This keeps the response header size independent
-of the site count and within the panel's proxy buffer. CloudPanel's Sites page
-sets no policy, so its link opens a blank window. Either way the window's
+of the site count and within the panel's proxy buffer. CloudPanel's own pages
+set no policy, so their links open a blank window. Either way the window's
 `opener` is cut before the form is submitted, so a page on the site cannot send
 the panel's tab elsewhere.
 
@@ -194,8 +195,9 @@ bypass behind. The address comes from the request, never the page, and the
 root action refuses
 `--add-bypass` with `--as-user`: lifting maintenance is an administrator's
 decision. Anyone else is told the site is in maintenance. The wording comes
-from the action, so both pages that sign in say the same thing. On the panel's
-Sites page it is shown in CloudPanel's own Bootstrap modal, as are failures.
+from the action, so every page that signs in says the same thing. On the
+panel's own pages it is shown in CloudPanel's own Bootstrap modal, as are
+failures.
 
 A browser that reaches the panel over IPv4 and the site over IPv6 is still
 turned away after the bypass, as it would be after adding the address by hand.
@@ -280,18 +282,17 @@ The addon's own page asks the disk: a site is WordPress when its root holds
 list and what will actually work are the same set, and a WordPress installed
 under the Generic vhost template is in it.
 
-The link on CloudPanel's Sites page cannot ask the disk. It is inside the
-template's site loop, so its condition has to be Twig, and what Twig has is the
-`application` column -- which for a PHP site is the vhost template the site was
-created from. So the link appears for the WordPress-family templates the panel
+The links on CloudPanel's pages cannot ask the disk. Their condition is Twig,
+and what Twig has is the `application` column -- which for a PHP site is the
+vhost template the site was created from. So the links appear for the WordPress-family templates the panel
 ships and the action refuses anything that turns out not to be one, the same
 bargain the Stager addon's own site-list condition made. The complete list is
-the addon's page; the link is the shortcut for the common case.
+the addon's page; the links are the shortcut for the common case.
 
 ## Every role that can see the site
 
-The link is not administrator-only. CloudPanel lists a `ROLE_USER` only the
-sites `user_sites` maps to their account, and that account already has the site
+The links are not administrator-only. CloudPanel lists and opens for a
+`ROLE_USER` only the sites `user_sites` maps to their account, and that account already has the site
 through the panel's file manager and its database, so signing in to its
 WordPress is a shortcut past work they can already do rather than authority they
 did not have. `ROLE_SITE_MANAGER` and `ROLE_ADMIN` see every site, and are not
@@ -304,7 +305,7 @@ account, and refuses a deactivated account whatever its role, because a session
 outlives the status change that should have ended it. An administrator's
 request carries no name and is not narrowed.
 
-Two things follow from the link living on a page this addon did not render. The
+Two things follow from the links living on pages this addon did not render. The
 manager's blanket administrator gate has to name the sign-in route as an
 exception, which `docs/decisions/security.md` describes; and the browser may
 hold no CSRF cookie, because the only responses that set one are addon pages a
@@ -312,10 +313,10 @@ non-administrator cannot open. So the script fetches `/api/session` -- which
 reads nothing and answers with the cookie and its token -- but only when there
 is no token to send.
 
-## Two blocks, neither required
+## Where the links go
 
-The link and the script are separate injections into the same template because
-the page has two places for them: anything put in the action cell is emitted
+On the Sites page the link and the script are separate injections into the same
+template because the page has two places for them: anything put in the action cell is emitted
 once per row, which suits a Twig condition and not a script. The script goes
 above the table, where it is emitted once, and binds one listener to the
 document rather than one per row -- the rows belong to CloudPanel, and the Panel
@@ -328,8 +329,37 @@ every WordPress row. The menu Panel Tweaks can build reads the other way and
 restores the order, so the link carries `clp-addons-row-action` from
 `lib/row-actions.ts` for it to sort on.
 
-Neither is `required`, so a CloudPanel release that renames the sites card or
-the Manage link costs the shortcut rather than stopping the addon from being
+On a site's own pages the domain itself signs in. The panel's link to the site
+there repeats what the Sites page and the address bar already give, while a way
+into wp-admin is what an operator on a site's pages is usually after. The block
+goes in the Domain box, after the panel's own link, and puts a link of its own
+there with a rule hiding the panel's: CloudPanel's markup is matched, never
+rewritten. Ours keeps the site's address, and the script leaves a Ctrl-, Cmd-,
+Shift- or Alt-click to the browser, so the site still opens from it in a new
+tab. That box is `Frontend/Site/Partial/site-info.html.twig`, rendered once per
+page on every site tab, so one injection carries the link, the script and its
+rules. Addon pages in a site's tab strip draw their own copy of the box, which
+still opens the site.
+
+CloudPanel's site pages hand Twig a site without its id or application, so the
+block cannot test for WordPress as the Sites page does. It draws the link hidden
+on every PHP site, and the script asks `GET /api/site-kind` whether to show it.
+The action answers with the same disk check a sign-in makes, held as the
+sign-in is to a site the caller's account has. The panel's link is hidden only
+once ours is shown; the two look alike, so the swap does not show.
+
+The **Sign in from the domain** switch, under **CloudPanel's pages** and on by
+default, turns that off; the
+panel's link then stays and a WP Login link goes beside it. It is markup, so
+the setting is read when the templates are rendered:
+`/var/lib/clp-addons/wp-tools/domain-link.json`, root-owned, written
+atomically with mode `0600`, absent meaning on. Saving it asks the manager to
+render the templates again. The setting is saved even when that fails; the page
+repaints with it and says CloudPanel's site pages still show the old link. An unreadable file renders as the
+default and the page reports it.
+
+None is `required`, so a CloudPanel release that renames the sites card, the
+Manage link or the Domain link costs the shortcut rather than stopping the addon from being
 enabled. The addon's own page signs in to the same sites either way.
 
 ## MainWP enrollment
@@ -356,6 +386,11 @@ Interrupted children are recovered first, within the pass budget and before
 querying the Dashboard. A successful recovery is journaled as `restored`, so an
 unavailable Dashboard cannot prevent disable or uninstall once authentication
 is safe.
+A site the Dashboard already has a record for is reconnected through MainWP's
+own reconnect rather than removed and added again, so the record keeps its id,
+groups, tags and client. The adapter gives the record the new Security ID and
+the child's administrator first, which is all the Child checks while that
+administrator's password requirement is off.
 MainWP stores "use the global setting" for a new record's certificate check, so
 the adapter sets it to verify. It also cuts MainWP's request timeout to 20
 seconds, so registration fails inside the addon's deadline instead of being
@@ -375,22 +410,42 @@ before each step that changes the site. The page gets a projection without
 snapshots, IDs or keys. Connected means the child's and the Dashboard's
 public-key fingerprints match; with no claim, that connection is the operator's.
 
-Automation installs only a Child that is absent and never seen, and with a
-Dashboard on this server that automation also connects it: installing and
-connecting are one step, since a Child installed for this Dashboard and left
-unconnected would only switch itself off. It does not extend to a site that
-already has a Child, connected or not. That Child is someone's: it may be
-waiting for a Dashboard elsewhere, or have been disconnected on purpose, and
-connecting it would take it over. So an installed Child is marked seen and
-needs Connect, as does a site whose existing connection or Dashboard record
-needs the operator; batch connection is how to choose many at once. An attempt whose readback
-shows nothing changed and no Dashboard record gives up its claim and is retried
-on the next pass, like a failed Varnish download. Otherwise the claim stays and
-Retry resumes it, undoing first its own registration the Dashboard never
-recorded. A phase left by a crash is reported as interrupted, after its setting
-is restored.
+With a Dashboard on this server, automation is enforcement: every pass keeps
+every site connected to that Dashboard, whatever happened to its Child since.
+The server's sites are the operator's fleet, and a site that drifts out of the
+Dashboard unnoticed is the failure this exists to prevent. Installing and
+connecting are one step, since a Child left unconnected would only switch
+itself off. A Child connected to another Dashboard, or holding a key no
+Dashboard has any more, is disconnected the way the Child's own Disconnect does
+and connected here; so is one the operator chooses with Connect while automation
+is off. A takeover whose registration does not land gives the Child back the
+connection it had. Turning automation on, or choosing a Dashboard with it on, asks first,
+since it takes sites from any other Dashboard. An attempt whose readback shows
+nothing changed and no Dashboard record gives up its claim and is retried on
+the next pass, like a failed Varnish download. Otherwise the claim stays, and
+the next pass or Retry resumes it, undoing first its own registration the
+Dashboard never recorded. With automation off, a phase left by a crash is
+reported as interrupted, after its setting is restored.
 
-Cleanup acts on a child only if its key is the recorded one, comes from the
+A connected site gets a guard, `clp-addons-mainwp.php` in `mu-plugins`, written
+and removed as the site's user through the adapter. It hides MainWP Child from
+the Plugins list, refuses `deactivate_plugin` for it, removes the Child's
+settings page and drops its Disconnect post, so a site administrator cannot
+undo the connection between passes. A site whose `wp-config.php` moves the
+must-use folder reports that instead, since the guard would not load. WP-CLI and the Dashboard's own requests are
+unaffected, so checks see the site as it is. The guard is beside the Child, not
+the Child itself as a must-use plugin: the Child sets itself up in an activation
+hook and finds its own path in the plugins directory, and WordPress does not
+update must-use plugins, so the Dashboard could no longer update it. Deletion
+over SSH or SFTP is not something WordPress can stop; the next pass puts the
+Child back. Once nothing enforces the connection -- automation paused, cleanup,
+a Dashboard elsewhere or none usable -- the next passes remove each guard. Withdrawing the
+addon removes them without WordPress, as it removes the sign-in helper.
+
+A connection the addon takes over is never in its snapshot, so cleanup leaves
+that Child disconnected rather than handing it back to the other Dashboard. A
+Dashboard record it reconnected was the operator's and stays theirs, so cleanup
+leaves it; only a Child the addon installed for it is removed, as anywhere else. Cleanup acts on a child only if its key is the recorded one, comes from the
 addon's Security ID, or is gone. A Child someone has connected since is left as
 it is and only forgotten. Where the addon installed the plugin, cleanup deletes
 it and restores every MainWP option (`mainwp_`, `wp_mainwp_` and their
@@ -431,9 +486,10 @@ since. Moving to a Dashboard elsewhere requires cleaning up the connections the
 addon made; moving back does not, since an installed Child belongs to no
 Dashboard.
 
-MainWP has its own lock, separate from Varnish and sign-in. The queued pass
-looks only at unseen sites, unfinished phases, pending cleanup and retired
-records, and starts sites for 25 seconds; Check now, connections and cleanup
+MainWP has its own lock, separate from Varnish and sign-in. While enforcing,
+the queued pass looks at every site, least recently checked first; otherwise
+only at unseen sites, unfinished phases, guards to remove, pending cleanup and
+retired records. It starts sites for 25 seconds; Check now, connections and cleanup
 run as background jobs. An enrollment that has started gets up to a minute, so
 the budget never stops registration part-way. A pass asks the Dashboard about
 at most 64 sites, least recently checked first; a job plans every due site up
@@ -444,16 +500,16 @@ cleanup then finishes on the children.
 
 Connecting several sites is one job over the chosen domains, or over every
 site the page counts as unconnected: not the Dashboard, not connected, not a
-multisite network. A site that turns out to be connected already is recorded
-and left alone. Each site is still its own enrollment with its own claim and
+multisite network. A site that turns out to be connected to this Dashboard
+already is recorded and left alone. Each site is still its own enrollment with its own claim and
 recovery, so one failure does not stop the rest. Batch connection is offered
 only for a Dashboard on this server: one elsewhere has to add each site itself
 within the Child's connection timeout, so activating many at once would only
 start their timers together.
 
 The switch only pauses automation. Disabling or uninstalling leaves the
-connections, as it leaves the Varnish plugin, and refuses only while an
-enrollment stopped before its temporary setting was restored. `--purge`
+connections, as it leaves the Varnish plugin, removes the guards, and refuses
+only while an enrollment stopped before its temporary setting was restored. `--purge`
 forgets which connections the addon made.
 
 ## Background jobs
@@ -467,15 +523,16 @@ transient systemd unit, `clp-addons action wp-tools run --job <id>`, with an
 hour's `RuntimeMaxSec`; the pass inside stops starting sites five minutes
 before that and reports the rest as pending. `run` is not in the gateway's verb
 table, so only that unit runs a job, and `start` accepts only its fixed tasks,
-domains for the tasks that take them, and the same confirmations the routes
-require.
+domains for the tasks that take them (a check may name the sites it covers, as
+a new site's does), and the same confirmations the routes require.
 
 Each policy runs one job at a time: `start` refuses a second while one is
 queued or running, under a lock of its own. The runner takes the policy's lock,
 waiting up to four minutes for a timer pass to finish, and holds it for the
 whole job, so nothing else changes that policy's state meanwhile. While a
 policy's job runs the page disables that policy's buttons, switch and Dashboard
-picker; sign-in and the other policy stay usable.
+picker; sign-in and the other policy stay usable. New sites' plugin jobs are not one at a time:
+each waits for its own site and takes neither policy's lock.
 
 The runner writes how many sites it has done, of how many, and which one it is
 on before each site, through the shared per-site progress (see
@@ -487,8 +544,252 @@ it did, from the result the job saved. A job record is kept for seven days;
 repair's maintenance prunes older ones and marks failed a job whose unit is
 gone, as the other addons' upkeep does.
 
+## Plugins for a new site
+
+CloudPanel's New WordPress Site form gets a Plugins row: search WordPress.org
+and pick, or upload a zip, and choose for each whether it is activated. It is
+an administrator's, and a site manager's for WordPress.org plugins while an
+administrator allows it; see Who may choose. It is
+WordPress Tools' rather than Panel Tweaks' or DNS's because it puts code into a
+customer's site, which is what this addon exists to keep separate, and it is
+built from this addon's parts: the site discovery and account refusals, the
+WP-CLI runner and the job store. It is a choice per site, made where the site
+is made; a set every new site gets would be a policy on this page instead.
+
+### Recorded before the site exists
+
+The row is injected before the form's Back and Create buttons, beside Panel
+Tweaks' certificate option, and its inputs have no names, since Symfony refuses
+a field its form does not declare. Its script takes the form's submit ahead of
+CloudPanel's own handler, records the choice with `POST /api/new-site`, and then
+submits the form as it would have gone. A choice that cannot be recorded stops
+the submission and says why, so a site is never created without the plugins it
+was promised silently.
+
+The choice is a background job recorded before CloudPanel has created anything,
+because CloudPanel creates the site and installs WordPress inside that one
+request. The job waits up to ten minutes for a site of that name to appear in
+the panel's database, then up to ten more for `wp-includes`, `wp-content` and
+`wp core is-installed`, polling every three seconds. It never needs the site to
+answer over HTTPS: everything it does is WP-CLI, and downloads are root's.
+Waiting in the job rather than in the landing page means a browser that closes
+during creation still gets its plugins; waiting in the job rather than in the
+shared new-site watcher means it does not depend on when the vhost appears,
+which is before WordPress is installed. It polls rather than following New
+sites' wakes, which only queue jobs and do not hand a running one its site.
+
+This is no way into an existing site. `new-site` refuses a domain CloudPanel
+already has, and the job refuses a site whose `created_at` is more than two
+minutes older than the choice, in case an older site was restored under the
+name meanwhile, or that has no `created_at` to compare.
+
+CloudPanel sends a form back with an error without creating anything, so the
+choice is kept in the tab's session storage and the row comes back filled in.
+Submitting again records a new job, and any job still waiting for the same
+domain is superseded and hands its uploads to the new one. Submitting it with
+every plugin removed still tells WordPress Tools, with an empty choice that only
+supersedes, so plugins taken off the form are not installed after all; their
+uploads are deleted. A job for another domain is never touched: one still
+waiting may be for a site CloudPanel is creating in another request.
+Superseding and a job's switch from waiting to installing take the same lock,
+so exactly one of them installs. A job whose site never appears
+ends as `not-created`, which is what an abandoned form leaves; it installs
+nothing, deletes its uploads, and is not listed.
+
+### Installing
+
+Each plugin in turn, WordPress.org ones first so an uploaded add-on finds the
+plugin it extends already active. A fixed `wp eval` lists the installed plugin
+folders and their activation on a marked line. One already there, such as the
+Akismet WordPress ships, is left as it is and activated if asked. Otherwise root
+has the zip in memory -- the staged upload, or WordPress.org's download -- and
+inspects it again. The site's user writes it from stdin into a fresh `mktemp -d`
+directory, WP-CLI installs it from there with `--activate`, or
+`--activate-network` on a multisite network, and the directory is removed as
+that user. The list is read again to confirm the plugin is there, and active if
+it should be. One failing does not stop the rest; its saved error is a
+500-character summary, as Varnish's is.
+
+A WordPress.org plugin is fetched by root from `api.wordpress.org`'s
+`plugin_information` for its slug, and its `download_link` must be
+`https://downloads.wordpress.org/plugin/<name>.zip`; no redirect is followed,
+the download is bounded at 64 MiB, and the zip must unpack into the folder the
+slug names. Slugs match `^[a-z0-9](?:[a-z0-9-]{0,98}[a-z0-9])?$` everywhere they
+are accepted. Searching is the manager's: a public read-only call to
+`query_plugins`, whose reply is cut to the slug, name, version, author, install
+count and summary, as bounded text. Icons are left out, since loading them would
+tell WordPress.org each administrator's address.
+
+### Uploads
+
+A zip goes from the browser to the manager in one request, bounded at 32 MiB
+before it is read, and on to root in parts of 704 KiB as base64, each one
+gateway request under the gateway's 1 MiB limit. Root picks a random 128-bit id
+with the first part, takes the rest in order only, and inspects the zip with the
+last: one that is not a plugin is deleted at once. Uploads live in root-only
+`/var/lib/clp-addons/wp-tools/uploads/<id>/`, at most twenty at a time. Removing
+one from the form discards it; one no job claimed goes after six hours, and a
+claimed one after two days if its job never deleted it, both in repair's upkeep.
+A job deletes the uploads it was given when it ends.
+
+A zip is read without extracting it. Its central directory is checked whole:
+no ZIP64, split or encrypted archive, only stored or deflated entries, no
+absolute, drive-letter, backslash, control-character, `.` or `..` path, no name
+twice, no symlink or special file, a local header naming the same file as the
+directory, at most 30,000 entries and 256 MiB unpacked. Every entry but macOS's
+`__MACOSX` must be inside one folder whose name is plain
+(`^[A-Za-z0-9][A-Za-z0-9._-]{0,99}$`), and a PHP file directly in it must carry
+a `Plugin Name:` header in its first 8 KiB, which is inflated in memory. That
+folder becomes the plugin's slug. WordPress extracts the zip later as the site's
+user, and refuses traversal itself as well.
+
+### Where the result shows
+
+The job's result names each plugin and whether it was activated, installed,
+already there or failed. The landing page, `wordpress-installed.html.twig`,
+follows the job whose id the form left in session storage, if it is for the
+domain the page shows, through `new-site-status`, and says how it ended in a box shaped like the panel's
+flash messages. The WordPress Tools page's **Plugins on new sites** card shows
+every running job with the shared progress bar and the ten most recent results,
+failures included, for the seven days a job record is kept.
+
+At most twenty plugins a site. The gateway allows `plugin-upload`,
+`plugin-discard`, `new-site`, `new-site-status`, `new-site-access` and
+`new-site-settings`; `start` does not accept the `new-site-plugins` task, so a
+job can only be recorded with the plan `new-site` validated.
+
+### Who may choose
+
+Administrators, and site managers while an administrator allows it.
+CloudPanel has three roles (`lib/panel-users.ts`). `ROLE_ADMIN` and
+`ROLE_SITE_MANAGER` see every site and create sites on this very form, so the
+picker is offered to a site manager where they already work, without any of the
+Addons area. Both can already write PHP into any site through CloudPanel's File
+Manager, so which plugins a site manager may pick is the operator's offer to
+clients rather than a boundary between users; it is still enforced as root.
+
+**Site managers choose plugins for new sites**, under **CloudPanel's pages** on
+this page, is off by default and kept in root-only
+`/var/lib/clp-addons/wp-tools/new-site-access.json`; an unreadable file reads as
+off and the page says so. It is markup: the Twig blocks test `ROLE_ADMIN`, and
+`ROLE_SITE_MANAGER` as well while it is on, so it is read when the templates are
+rendered and saving it renders them again through the manager's `reconcile`, as
+the domain link does. The upload control and its note are drawn for
+`ROLE_ADMIN` only, whatever the switch says: a zip is code nobody has reviewed,
+from anywhere.
+
+The picker's three routes are named in the manager's `SELF_SCOPED_ROUTES`:
+`GET /api/plugin-search`, `POST /api/new-site` and `GET /api/new-site-status`.
+WP Tools' whole mount must not become `siteManager`, since its page signs in to
+and installs into every site. The handler turns away anyone but an administrator
+or a site manager, and names a site manager to root with `--as-user`, as DNS's
+provision route does. Root then reads the switch, and the account's role and
+status from CloudPanel's database rather than its session, refusing anything
+but an active site manager. A site manager's `new-site` names no uploads, gets
+the same refusal of a domain CloudPanel already has and of a site older than the
+choice, and replaces or clears only choices that account made; the job records
+it as `chosenBy`, which the WordPress Tools page shows. Its plugins go only into
+a site that account created: the name may have been free when they chose, and
+taken by someone else since. CloudPanel keeps no creator on the site, so the
+job waits, with WordPress, for the `SITE_WORDPRESS_CREATE` entry CloudPanel's
+event log writes for that domain, and installs nothing if it names another
+account or never comes. Only an entry after the newest one when the choice was
+saved counts: the log's ids are `AUTOINCREMENT`, where whole-second times could
+not tell an entry from just before the choice from one just after it. An administrator's choice is not held to
+this. The search asks root
+`new-site-access` before it runs, since only root can read the switch.
+Uploading, discarding an upload, the switch and every other WP Tools route stay
+behind the gate.
+
+The landing page follows its job through `new-site-status`, which tells a site
+manager only about a job that account recorded, which is the site it just
+created; any other id reads as one that does not exist. Its reply is the job's
+state, step, progress and result, without the plan's upload ids or the log, for
+administrators too. Only an administrator's landing page links to WordPress
+Tools when something failed; a site manager's says to ask one.
+
+`ROLE_USER` stays out: the handler refuses it and root would too. Such an
+account cannot create a site in CloudPanel at all, so for that role plugins would
+mean installing on an existing site of its own, a different feature with its
+own refusals: root checking `user_sites` as sign-in does, and never this
+form's "a site that does not exist yet".
+
+## New sites
+
+A new site is checked as soon as it is ready, rather than at the next 15-minute
+pass. WP Tools hears four things:
+
+1. **The site exists.** The new-site watcher runs `newSites` when CloudPanel
+   commits the site's row (see [Platform](platform.md#new-sites)). WordPress
+   is not installed yet, so the site goes onto the pending list.
+2. **WordPress is installed.** CloudPanel installs it later in the same
+   request, as root, so nothing about the installation wakes anything. The
+   hook's `waiting` keeps the watcher waking on the panel's database writes
+   while a pending site is still being installed. Each wake checks only those
+   sites. The request ends with a write, the creation event and the PHP
+   worker closing the database, and that happens even when the browser was
+   closed after submitting.
+3. **The certificate is installed.** CloudPanel writes
+   `/etc/nginx/ssl-certificates/<domain>.crt`, which wakes the certificate
+   watcher (see [Platform](platform.md#new-sites)). Connecting to MainWP needs
+   that HTTPS.
+4. **A WordPress Tools job ends.** Its runner looks again, so a site that waited
+   for a running job of its policy is not left behind.
+
+A site's WordPress is installed once its `wp-config.php` belongs to the site
+user: one `stat`, compared with the account's uid. The installer writes
+`wp-config.php` as root about 1.5 s before `wp core install` ends, so the file
+existing proves nothing. After every `wp` call it runs `chown -R` over the
+site's directory, and the last `wp config set` is followed by that hand-over
+within 30 ms. An installation that failed is never handed over, so its site
+waits out the hour. A site whose account cannot be read yet keeps waiting, up
+to the same hour. Once it can, only a PHP site whose CloudPanel application is
+WordPress keeps waiting; any other site leaves the list.
+
+Root-owned `/var/lib/clp-addons/wp-tools/new-sites.json` (`0600`) holds every
+domain the panel had at the last look and the sites still pending. A new site
+is a domain missing from that list. The first look, and repair's upkeep
+whenever the file is missing or unreadable, only records the domains there are,
+so enabling or upgrading the addon does not take every site for a new one. A
+panel that lists no site is taken for a bad read and changes nothing.
+
+Each wake re-checks the pending sites and queues the checks that have become
+possible, for those sites only, as background jobs: the same `varnish-check`
+and `mainwp-check` the page starts, limited to them with `--domains`. Those
+jobs decide as the 15-minute pass would, so locks, HTTPS readiness, WordPress
+detection and enrollment are unchanged, and no wake runs site code itself.
+
+- Varnish's check is owed while its automation is on, the site has CloudPanel's
+  Varnish flag and no plugin has been seen there. MainWP's is owed while its
+  automation is on, outside cleanup, for a site that is not the Dashboard, not
+  one a check found to be a multisite network and not yet connected (with a
+  Dashboard on another server, whose Child has not been seen yet).
+- A check is possible once the site's WordPress is installed, and while the
+  site still has its vhost and certificate. A site without them is being
+  deleted, since CloudPanel removes both before the row.
+- Each check records the readiness it was queued at: WordPress installed, and
+  for MainWP the site's certificate, by its file's time and size. A check is
+  queued again only when that changes. So MainWP runs again when the real
+  certificate replaces the self-signed one, and a wake that changes nothing
+  for a site does nothing.
+- A policy that already has a job queued or running gets no second one, and
+  the site is not marked as tried; that job's end looks again.
+
+MainWP is tried once on the self-signed certificate a site starts with. Behind
+Cloudflare's proxy that can already be the HTTPS the Dashboard sees, so such a
+site needs no certificate. A site leaves the list when automation owes it
+nothing, when it cannot be a WordPress, when neither policy is on, or an hour
+after it appeared. Anything none of these reports, such as a Dashboard that was
+down or WordPress installed by hand later, is the 15-minute pass's.
+
+When no pending site is being installed, a wake costs one read of the state
+file, as do a certificate renewal and a job's end with nothing pending. The
+watchers, job ends and repair's upkeep take one lock of their own, so they never
+interleave. The jobs they queue still wait for their policy's lock, which keeps
+them from running alongside a 15-minute pass.
+
 ## Direction
 
-A later change may let the operator pick any plugins from the WordPress.org
-registry to install automatically, with setup options for predefined ones such
-as CLP Varnish Cache and MainWP Child, or per-plugin setup.
+A later change may let the operator choose plugins every new site gets, with
+setup options for predefined ones such as CLP Varnish Cache and MainWP Child,
+or per-plugin setup.

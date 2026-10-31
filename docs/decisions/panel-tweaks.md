@@ -163,7 +163,9 @@ issues twice. When the DNS addon is installed, the script first asks it to
 write the new site's records (see [DNS](dns.md)). DNS answers with the names its
 records cover -- `www` only where it writes one -- or with why DNS is not ready
 yet, in which case no certificate is requested here and DNS retries as root
-later. Without DNS, or for a site DNS does not manage, the certificate is for
+later. The page says so with no link, as there is nothing to do on the SSL/TLS
+tab; a zone waiting for its nameservers gets DNS's own notice, the nameservers
+copyable. Without DNS, or for a site DNS does not manage, the certificate is for
 the created domain alone; the form's default `www` name needs DNS the operator
 may not have. DNS counts as absent only when its session route answers 404 or
 403; when it does not answer, or cannot write the records, nothing is requested
@@ -304,6 +306,17 @@ values beside each other and a desktop for eight, and a desktop dropping the
 runtime column is not a phone's decision. Only the keys somebody moved are
 stored, so a column a later release adds arrives at its own default rather than
 switched off by an old answer.
+
+The download arrow after the picker saves the sites the search and the filter
+leave, in the table's current order, as CSV. It is built in the browser from the
+reply the table was painted from, so it needs no route of its own and carries
+nothing the reader's page does not already have. It has every column, shown or
+not, because a spreadsheet is where an operator picks columns. Values are as the
+panel recorded them -- UTC timestamps and bytes -- rather than as the cells
+paint them. A value that starts like a spreadsheet formula gets a leading
+quote, so it is read as text. The file starts with a byte-order mark so Excel
+reads it as UTF-8. The arrow is part of the toolbar, so it appears only when the
+Sites table enhancement is on.
 
 The rule sheet is written while the browser is still parsing the table, from a
 choice `localStorage` can answer immediately, so a column that is off is never

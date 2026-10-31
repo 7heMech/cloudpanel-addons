@@ -24,6 +24,7 @@ import {
   readJobResult, runSiteJob, watchJobRecord, type JobCommonFields, type JobSiteProgress, type startJobUnit,
 } from "../../cli/job-store";
 import { CLI_BIN, PANEL_DB, STATE_DIR } from "../../cli/paths";
+import { standInDomains } from "../../cli/stand-ins";
 import { writeFileAtomic } from "../../lib/atomic-write";
 import { certificateIssuer, issuerLabel } from "../../lib/certificate-issuer";
 import { PANEL_USER_NAME_RE, panelUserSites } from "../../lib/panel-users";
@@ -518,12 +519,14 @@ function issuerNames(row: PanelSiteRow): { issuer?: string } {
 }
 
 function siteViews(rows: PanelSiteRow[], cache: DiskCache): TweakSiteView[] {
+  // DNS's stand-ins are static sites that only serve a redirect.
+  const standIns = standInDomains();
   return rows.map((row) => ({
     domain: row.domain_name,
     user: row.user,
     type: row.type,
     application: row.application ?? "",
-    runtime: runtimeOf(row),
+    runtime: standIns.has(row.domain_name) ? "Redirect" : runtimeOf(row),
     createdAt: row.created_at ?? "",
     cloudflareOnly: Boolean(row.allow_traffic_from_cloudflare_only),
     varnish: Boolean(row.varnish_cache),

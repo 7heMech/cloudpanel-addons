@@ -1,6 +1,8 @@
 /**
  * Cloudflare's token-template URL. `config_settings` and `zone_waf` are missing
- * from the documented keys but fill Config Rules and Zone WAF in the form.
+ * from the documented keys but fill Config Rules and Zone WAF in the form;
+ * `dynamic_url_redirects`, for Single Redirect, is missing too, so the page
+ * lists every permission as well.
  * https://developers.cloudflare.com/fundamentals/api/how-to/account-owned-token-template/
  */
 import type { Profile } from "./model";
@@ -17,12 +19,13 @@ interface Permission {
 }
 
 export function tokenTemplate(profiles: Profile[]): TokenTemplate {
-  // Zone: Edit even before a profile creates zones, so switching that on later
-  // works with the token already pasted.
+  // Zone: Edit even before a profile creates zones, and Single Redirect before
+  // any redirect domain, so either works later with the token already pasted.
   const permissions: Permission[] = [
     { key: "account_settings", type: "read", label: "Account Settings: Read" },
     { key: "zone", type: "edit", label: "Zone: Edit" },
     { key: "dns", type: "edit", label: "DNS: Edit" },
+    { key: "dynamic_url_redirects", type: "edit", label: "Single Redirect: Edit" },
   ];
   if (profiles.some((profile) => profile.zone.ssl !== null || profile.zone.alwaysHttps !== null)) {
     permissions.push({ key: "zone_settings", type: "edit", label: "Zone Settings: Edit" });
