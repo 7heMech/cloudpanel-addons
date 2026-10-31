@@ -14,7 +14,8 @@ function newSitesLine(result: WpNewSitesResult): string | null {
   for (const failure of result.failed) log.warn(`WordPress Tools: ${failure}`);
   const queued = Object.entries(result.queued).map(([task, domains]) => `${CHECKS[task]} check queued for ${(domains ?? []).join(", ")}`);
   if (queued.length) return queued.join("; ");
-  return result.added.length ? `${result.added.join(", ")} waits for WordPress` : null;
+  const waiting = result.added.filter((domain) => result.waiting.includes(domain));
+  return waiting.length ? `${waiting.join(", ")} waits for WordPress` : null;
 }
 
 const newSiteEvent = (event: WpNewSiteEvent) => async (options?: Record<string, unknown>) =>

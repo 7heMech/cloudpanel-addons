@@ -742,8 +742,9 @@ user: one `stat`, compared with the account's uid. The installer writes
 existing proves nothing. After every `wp` call it runs `chown -R` over the
 site's directory, and the last `wp config set` is followed by that hand-over
 within 30 ms. An installation that failed is never handed over, so its site
-waits out the hour. Only a PHP site whose CloudPanel application is WordPress
-can be waiting; any other site leaves the list when it is first looked at.
+waits out the hour. A site whose account cannot be read yet keeps waiting, up
+to the same hour. Once it can, only a PHP site whose CloudPanel application is
+WordPress keeps waiting; any other site leaves the list.
 
 Root-owned `/var/lib/clp-addons/wp-tools/new-sites.json` (`0600`) holds every
 domain the panel had at the last look and the sites still pending. A new site

@@ -247,6 +247,8 @@ test("with automation off, for a site that cannot be a WordPress, or after an ho
   await event();
   addSite("static.example.com", "static", { type: "static", application: "Static" });
   expect(await event()).toMatchObject({ added: ["static.example.com"], queued: {}, pending: [] });
+  addSite("static2.example.com", "static2", { type: "static", application: "Static" });
+  expect(await WP_TOOLS_ADDON.newSites!.run(options() as Record<string, unknown>)).toBeNull();
   // A PHP site that is not CloudPanel's WordPress keeps nothing waiting.
   addSite("php.example.com", "php", { application: "PHP" });
   expect(await event()).toMatchObject({ added: ["php.example.com"], queued: {}, pending: [], waiting: [] });
