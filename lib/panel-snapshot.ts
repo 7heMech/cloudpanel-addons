@@ -156,13 +156,11 @@ function openConsistentSnapshot(databasePath: string): IsolatedDatabase {
 }
 
 /** Every site but DNS's stand-ins, which are redirects rather than sites. */
-export function readPanelDatabase(
-  databasePath = PANEL_DB,
-  standIns = standInDomains(STAND_INS_FILE, 0, databasePath),
-): PanelDatabaseSnapshot {
+export function readPanelDatabase(databasePath = PANEL_DB, standInsFile = STAND_INS_FILE, rootUid = 0): PanelDatabaseSnapshot {
   if (!databaseExists(databasePath)) return emptyPanelDatabaseSnapshot();
 
   const isolated = openConsistentSnapshot(databasePath);
+  const standIns = standInDomains(standInsFile, rootUid, isolated.db);
 
   const ports = new Set<number>();
   const sites: SanitizedSite[] = [];

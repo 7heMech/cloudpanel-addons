@@ -45,17 +45,20 @@ function readMarks(file: string, rootUid: number): Record<string, StandInMark> {
   }
 }
 
-/** The stand-ins' domains; none when DNS has made none, or the record is not root's own. */
-export function standInDomains(file = STAND_INS_FILE, rootUid = 0, panelDb = PANEL_DB): Set<string> {
+/**
+ * The stand-ins' domains; none when DNS has made none, or the record is not root's own.
+ * An open database is read as it is, so a caller's snapshot and this agree on the rows.
+ */
+export function standInDomains(file = STAND_INS_FILE, rootUid = 0, panelDb: string | Database = PANEL_DB): Set<string> {
   const marks = readMarks(file, rootUid);
   if (Object.keys(marks).length === 0) return new Set();
   try {
-    const db = new Database(panelDb, { readonly: true });
+    const db = typeof panelDb === "string" ? new Database(panelDb, { readonly: true }) : panelDb;
     try {
       const rows = db.query<{ id: number; domain_name: string; user: string }, []>("SELECT id, domain_name, user FROM site").all();
       return new Set(rows.filter((row) => isStandInSite(marks[row.domain_name], { id: Number(row.id), user: row.user })).map((row) => row.domain_name));
     } finally {
-      db.close();
+      if (typeof panelDb === "string") db.close();
     }
   } catch {
     return new Set(Object.keys(marks));
