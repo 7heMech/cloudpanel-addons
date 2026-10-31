@@ -73,7 +73,7 @@ function mountedAddons(): string[] {
  * routes are the caller's own keys, managed from CloudPanel's Security page;
  * the gateway reads whose they are from the session itself.
  */
-const SELF_SCOPED_ROUTES = new Set([
+export const SELF_SCOPED_ROUTES = new Set([
   "POST /wp-tools/api/sign-in",
   "GET /wp-tools/api/session",
   "GET /wp-tools/api/site-kind",
