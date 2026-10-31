@@ -24,6 +24,7 @@ import { runAuthActionStdin } from "./auth-action";
 import { runManagerAction, type ManagerOps } from "./manager-action";
 import { runSmtpSubmit } from "../addons/smtp/submit";
 import { runTerminalPty } from "../addons/terminal/pty";
+import { runCertificateWork } from "./maintenance";
 import { runSyncSites } from "./new-sites";
 
 /**
@@ -129,6 +130,11 @@ async function main(): Promise<number> {
       requireRoot("sync-sites");
       if (rest.length) fatal("sync-sites takes no arguments");
       await runSyncSites(installedAddons());
+      return 0;
+    case "sync-certificates":
+      requireRoot("sync-certificates");
+      if (rest.length) fatal("sync-certificates takes no arguments");
+      await runCertificateWork(installedAddons());
       return 0;
     case "status": await cmdStatus(); return 0;
     case "maintenance": await cmdMaintenance(rest); return 0;

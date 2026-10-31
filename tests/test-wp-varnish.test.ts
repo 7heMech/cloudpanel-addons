@@ -426,7 +426,7 @@ test("a job that fails says why, and the next one starts", async () => {
 
 test("a job starts only with its own fixed arguments", async () => {
   for (const args of [
-    [], ["--task=varnish-sync"], ["--task=varnish-check", "--domains=shop.example.com"], ["--task=varnish-install"],
+    [], ["--task=varnish-sync"], ["--task=mainwp-cleanup", "--domains=shop.example.com"], ["--task=varnish-install"],
     ["--task=varnish-install", "--domains=shop.example.com,blog.example.com"], ["--task=mainwp-connect", "--domains=shop.example.com"],
     ["--task=mainwp-connect", "--confirm=connect"], ["--task=mainwp-cleanup"], ["--task=mainwp-check", "--confirm=mainwp"],
     ["--task=varnish-check", "--task=mainwp-check"], ["--task=varnish-check", "--path=/etc"],

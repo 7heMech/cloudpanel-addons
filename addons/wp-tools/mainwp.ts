@@ -257,6 +257,17 @@ function enforcing(state: MainwpState): boolean {
   return state.enabled && !state.remote && !state.cleanup && Boolean(state.dashboard);
 }
 
+/**
+ * Whether automation still has work on this site: connecting it to a Dashboard
+ * on this server, or installing a Child that one elsewhere has never seen.
+ */
+export function mainwpOwesSite(state: MainwpState, domain: string): boolean {
+  if (!state.enabled || state.cleanup || domain === state.dashboard) return false;
+  const record = state.sites[domain];
+  if (record?.status === "unsupported") return false;
+  return state.remote ? !record?.seen : record?.status !== "connected";
+}
+
 export function mainwpView(state: MainwpState): MainwpView {
   const sites = Object.fromEntries(Object.entries(state.sites).map(([domain, record]) => [domain, {
     status: record.status, seen: record.seen, checkedAt: record.checkedAt, error: record.error, ownedConnection: record.ownedConnection,

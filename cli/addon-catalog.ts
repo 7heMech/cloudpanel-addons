@@ -47,6 +47,16 @@ export interface AddonMaintenance {
   run: (options?: Record<string, unknown>) => string | null | Promise<string | null>;
 }
 
+/** Work for sites CloudPanel has just created. */
+export interface AddonNewSites extends AddonMaintenance {
+  /**
+   * Asked on every wake of the new-site watcher for an hour after the sites
+   * last changed: whether a new site still waits for a later step of its
+   * creation. While one does, the watcher keeps waking on panel writes.
+   */
+  waiting?: (options?: Record<string, unknown>) => Promise<{ waiting: boolean; line: string | null }>;
+}
+
 /** What an addon declares about itself. Paths are derived, not declared. */
 export interface AddonDefinition {
   name: string;
@@ -82,7 +92,9 @@ export interface AddonDefinition {
   siteManager?: boolean;
   maintenance?: AddonMaintenance;
   /** Work for sites CloudPanel has just created, run seconds after it writes their vhost. */
-  newSites?: AddonMaintenance;
+  newSites?: AddonNewSites;
+  /** Work for sites whose certificate CloudPanel has just written. */
+  certificates?: AddonMaintenance;
 }
 
 /**
@@ -164,6 +176,11 @@ export function templateWatchPaths(): string[] {
 /** The installed addons with work for new sites, in catalog order. */
 export function addonNewSites(installed: AddonSpec[]): AddonSpec[] {
   return installed.filter((spec) => spec.newSites !== undefined);
+}
+
+/** The installed addons with work for a certificate CloudPanel has just written, in catalog order. */
+export function addonCertificates(installed: AddonSpec[]): AddonSpec[] {
+  return installed.filter((spec) => spec.certificates !== undefined);
 }
 
 /** The installed addons that want upkeep during repair, in catalog order. */

@@ -6,19 +6,24 @@
 // database is held by other writers. It deletes a site the same way round: the
 // vhost goes, then the row. The vhost wakes this; while a vhost and the rows
 // disagree, a second watcher on the database's directory wakes it again at the
-// commit. That watcher runs only while a site is between the two, because the
-// panel writes its database every few seconds even when idle.
+// commit. That watcher runs only while a site is between the two, or while an
+// addon says a new site still waits for a later step of the same request,
+// because the panel writes its database every few seconds even when idle.
 
 import { Database } from "bun:sqlite";
 import { readdirSync, readFileSync, statSync } from "node:fs";
 import { join } from "node:path";
 import { writeFileAtomic } from "../lib/atomic-write";
 import type { AddonSpec } from "./addon-catalog";
-import { runNewSiteWork } from "./maintenance";
+import { newSitesWaiting, runNewSiteWork } from "./maintenance";
 import { DISTRO_NGINX_SITES_DIR, NEW_SITE_ROWS_PATH, NEW_SITES_SEEN_FILE, PANEL_DB } from "./paths";
 import { log, tryRun } from "./util";
 
-/** A vhost and the rows that still disagree this long after the vhosts last changed are not a site on its way. */
+/**
+ * A vhost and the rows that still disagree this long after the vhosts last
+ * changed are not a site on its way, and no addon waits for a site longer than
+ * this after the sites last changed.
+ */
 export const NEW_SITE_ROW_WAIT_MS = 60 * 60 * 1000;
 
 export interface NewSiteWatchPaths {
@@ -37,6 +42,8 @@ export const DEFAULT_NEW_SITE_WATCH_PATHS: NewSiteWatchPaths = {
 export interface NewSiteWatchOps {
   /** Every installed addon's `newSites`. */
   runHooks: () => Promise<void>;
+  /** Whether an addon still waits for a new site. */
+  waiting: () => Promise<boolean>;
   /** Start or stop watching the panel database for a row that is still to come. */
   watchRows: (on: boolean) => void;
   now?: () => number;
@@ -105,20 +112,32 @@ function readSeen(file: string): string[] | null {
 const sameDomains = (a: string[], b: string[] | null) =>
   b !== null && a.length === b.length && a.every((domain, i) => domain === b[i]);
 
+/** Whether the hooks last ran, for a change to the sites, within the hour. */
+function sitesChangedRecently(seenFile: string, now: number): boolean {
+  try {
+    return now - statSync(seenFile).mtimeMs < NEW_SITE_ROW_WAIT_MS;
+  } catch {
+    return false;
+  }
+}
+
 /**
  * Run the hooks when the panel's sites differ from the last time they ran, then
- * watch for the row of any site whose vhost has come or gone without it. Hooks that ran for a
- * set of sites do not run again for it, whether they succeeded or not: the
- * row watcher wakes this on every panel write, and a hook that keeps failing
- * is the 15-minute pass's to retry.
+ * watch for the row of any site whose vhost has come or gone without it, and
+ * keep watching while an addon waits for a new site. Hooks that ran for a set
+ * of sites do not run again for it, whether they succeeded or not: the row
+ * watcher wakes this on every panel write, and a hook that keeps failing is the
+ * 15-minute pass's to retry. Addons that wait are asked again on every wake.
  *
  * A path unit does not start its service again for a change made while the
  * service runs, so after arming the watcher this looks once more: a row that
- * arrived while the hooks ran is handled now rather than at the next write.
+ * arrived while the hooks ran, or the write an addon waits for, is handled now
+ * rather than at the next write.
  */
 export async function syncNewSites(ops: NewSiteWatchOps, paths: NewSiteWatchPaths = DEFAULT_NEW_SITE_WATCH_PATHS): Promise<void> {
   const now = ops.now ?? Date.now;
   let seen = readSeen(paths.seenFile);
+  let lookedAgain = false;
   for (;;) {
     const domains = panelSiteDomains(paths.panelDb);
     if (domains === null) {
@@ -134,10 +153,13 @@ export async function syncNewSites(ops: NewSiteWatchOps, paths: NewSiteWatchPath
       writeFileAtomic(paths.seenFile, `${JSON.stringify({ domains })}\n`, { mode: 0o600, createParent: true });
       seen = domains;
     }
-    const waiting = sitesInFlight(paths.vhostDir, domains, now());
-    ops.watchRows(waiting.length > 0);
-    if (!waiting.length) return;
-    if (sameDomains(panelSiteDomains(paths.panelDb) ?? domains, domains)) return;
+    const inFlight = sitesInFlight(paths.vhostDir, domains, now()).length > 0;
+    const waiting = sitesChangedRecently(paths.seenFile, now()) && await ops.waiting();
+    ops.watchRows(inFlight || waiting);
+    if (!inFlight && !waiting) return;
+    if (!sameDomains(panelSiteDomains(paths.panelDb) ?? domains, domains)) continue;
+    if (!waiting || lookedAgain) return;
+    lookedAgain = true;
   }
 }
 
@@ -145,6 +167,7 @@ export async function syncNewSites(ops: NewSiteWatchOps, paths: NewSiteWatchPath
 export async function runSyncSites(installed: AddonSpec[]): Promise<void> {
   await syncNewSites({
     runHooks: () => runNewSiteWork(installed),
+    waiting: () => newSitesWaiting(installed),
     watchRows: (on) => {
       const result = tryRun("systemctl", [on ? "start" : "stop", NEW_SITE_ROWS_PATH]);
       if (!result.ok) log.warn(`could not ${on ? "start" : "stop"} ${NEW_SITE_ROWS_PATH}: ${result.out}`);
