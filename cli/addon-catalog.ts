@@ -13,6 +13,7 @@
 import type { Server } from "bun";
 import { CONFIG_DIR, STATE_DIR, TEMPLATES_DIR } from "./paths";
 import type { AddonTarget } from "../lib/addon-target";
+import { compareSemver } from "../lib/semver";
 import { CLOUDFLARE_IPS_ADDON } from "../addons/cloudflare-ips/addon";
 import { DNS_ADDON } from "../addons/dns/addon";
 import { GIT_ADDON } from "../addons/git/addon";
@@ -46,6 +47,16 @@ export interface AddonMaintenance {
   run: (options?: Record<string, unknown>) => string | null | Promise<string | null>;
 }
 
+/** Work for sites CloudPanel has just created. */
+export interface AddonNewSites extends AddonMaintenance {
+  /**
+   * Asked on every wake of the new-site watcher for an hour after the sites
+   * last changed: whether a new site still waits for a later step of its
+   * creation. While one does, the watcher keeps waking on panel writes.
+   */
+  waiting?: (options?: Record<string, unknown>) => Promise<{ waiting: boolean; line: string | null }>;
+}
+
 /** What an addon declares about itself. Paths are derived, not declared. */
 export interface AddonDefinition {
   name: string;
@@ -53,9 +64,9 @@ export interface AddonDefinition {
   description: string;
   /** systemd units this addon cannot work without, such as `docker`. */
   requiresUnits?: string[];
-  /** The exact release it first shipped in, such as `2.0.0-rc.1`; the Addons page marks it New there. */
+  /** The release it first shipped in, such as `2.0.0-rc.1`; the Addons page marks it New for boxes updated past it. */
   added?: string;
-  /** What changed in one exact release, shown as Changed only while that release is installed. */
+  /** What changed in one release, shown as Changed on the same terms as `added`. */
   changed?: { in: string; note: string };
   /** Ticked when the installer asks which addons to install. */
   preselected?: boolean;
@@ -81,7 +92,9 @@ export interface AddonDefinition {
   siteManager?: boolean;
   maintenance?: AddonMaintenance;
   /** Work for sites CloudPanel has just created, run seconds after it writes their vhost. */
-  newSites?: AddonMaintenance;
+  newSites?: AddonNewSites;
+  /** Work for sites whose certificate CloudPanel has just written. */
+  certificates?: AddonMaintenance;
 }
 
 /**
@@ -128,20 +141,21 @@ export const ADDONS: Record<string, AddonSpec> = Object.fromEntries(
 
 export const ADDON_NAMES: string[] = DEFINITIONS.map((definition) => definition.name);
 
-/** What the Addons page says is new about an addon in the installed release, keyed by that version. */
+/** What the Addons page says is new about an addon since the box's previous release, keyed by the release that declared it. */
 export interface AddonNews {
   kind: "new" | "changed";
-  /** `dns@2.0.0-rc.1`: opening the addon reads this release's notice only. */
+  /** `dns@2.0.0-rc.1`: opening the addon reads this notice only. */
   key: string;
   note?: string;
 }
 
-export function addonNews(name: string, version: string): AddonNews | null {
+/** The notice declared after `since` and no later than `version`; New wins over Changed. */
+export function addonNews(name: string, version: string, since: string): AddonNews | null {
   const spec = ADDONS[name];
   if (!spec) return null;
-  const release = version.replace(/^v/, "");
-  if (spec.added === release) return { kind: "new", key: `${name}@${release}` };
-  if (spec.changed?.in === release) return { kind: "changed", key: `${name}@${release}`, note: spec.changed.note };
+  const pending = (release: string) => compareSemver(release, since) > 0 && compareSemver(release, version) <= 0;
+  if (spec.added && pending(spec.added)) return { kind: "new", key: `${name}@${spec.added}` };
+  if (spec.changed && pending(spec.changed.in)) return { kind: "changed", key: `${name}@${spec.changed.in}`, note: spec.changed.note };
   return null;
 }
 
@@ -162,6 +176,11 @@ export function templateWatchPaths(): string[] {
 /** The installed addons with work for new sites, in catalog order. */
 export function addonNewSites(installed: AddonSpec[]): AddonSpec[] {
   return installed.filter((spec) => spec.newSites !== undefined);
+}
+
+/** The installed addons with work for a certificate CloudPanel has just written, in catalog order. */
+export function addonCertificates(installed: AddonSpec[]): AddonSpec[] {
+  return installed.filter((spec) => spec.certificates !== undefined);
 }
 
 /** The installed addons that want upkeep during repair, in catalog order. */

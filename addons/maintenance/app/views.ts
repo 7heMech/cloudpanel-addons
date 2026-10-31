@@ -176,7 +176,7 @@ export function siteView(
   const coverage = site.uncovered
     ? `<div class="notice" id="coverage-notice">Nginx does not run the maintenance check for this site because ${esc(site.uncovered)}, so visitors get the site whatever is set here.</div>`
     : "";
-  return `<div class="page-heading" data-global-maintenance="${globalEnabled}" data-uncovered="${site.uncovered ? "true" : "false"}">
+  return `<div class="page-heading maintenance-heading" data-global-maintenance="${globalEnabled}" data-uncovered="${site.uncovered ? "true" : "false"}">
     <div><h1>Maintenance Mode</h1><p>Visitors get HTTP 503 with a five-minute Retry-After. Certificate challenges and bypassed IPs stay live.</p></div>
     <div class="heading-controls">${statusBadge(site, globalEnabled)}
       <label class="switch switch-danger"><input type="checkbox" data-toggle-domain="${esc(site.domain)}" aria-label="Maintenance mode for ${esc(site.domain)}" ${site.enabled ? "checked" : ""} onchange="toggleMaintenance('${domain}', this.checked)"><span></span></label>

@@ -192,6 +192,7 @@ function recordBody(record: RecordWrite): Record<string, unknown> {
 const PHASE_PERMISSIONS: Record<string, string> = {
   http_config_settings: "Config Rules: Edit",
   http_request_firewall_custom: "Zone WAF: Edit",
+  http_request_dynamic_redirect: "Single Redirect: Edit",
 };
 const rulesPermission = (phase: string) => PHASE_PERMISSIONS[phase] ?? "rules permissions";
 
@@ -359,6 +360,10 @@ export class CloudflareApi {
   async updateRule(zoneId: string, phase: string, rulesetId: string, ruleId: string, rule: RuleWrite): Promise<CfRuleset> {
     const { result } = await needs(rulesPermission(phase), () => this.call(`/zones/${id(zoneId)}/rulesets/${rulesetId}/rules/${ruleId}`, "PATCH", rule));
     return parseRuleset(result);
+  }
+
+  async deleteRule(zoneId: string, phase: string, rulesetId: string, ruleId: string): Promise<void> {
+    await needs(rulesPermission(phase), () => this.call(`/zones/${id(zoneId)}/rulesets/${id(rulesetId)}/rules/${id(ruleId)}`, "DELETE"));
   }
 
   async createZone(accountId: string, name: string): Promise<CfZone> {

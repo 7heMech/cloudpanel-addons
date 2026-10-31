@@ -21,6 +21,8 @@ test("the WordPress page refuses every form, so its header does not grow with th
     varnishError: "",
     mainwp: mainwpView(emptyMainwpState()),
     mainwpError: "",
+    domainLink: { signIn: true },
+    domainLinkError: "",
     jobs: { varnish: null, mainwp: null },
   } });
   const response = await handle(new Request("https://panel.example.com/addons/wp-tools/"), "/");
@@ -101,5 +103,52 @@ test("checks, installs, connections and cleanup start background jobs, and only 
   } finally {
     wpToolsService.startJob = originalStart;
     wpToolsService.getJob = originalGet;
+  }
+});
+
+test("the domain link setting is administrator-only and renders the panel's templates again", async () => {
+  const originalSettings = wpToolsService.domainLinkSettings;
+  const originalRender = wpToolsService.renderPanelTemplates;
+  const saved: boolean[] = [];
+  let renders = 0;
+  let rendered = true;
+  wpToolsService.domainLinkSettings = async (signIn) => { saved.push(signIn); return { ok: true, data: { domainLink: { signIn } } }; };
+  wpToolsService.renderPanelTemplates = async () => { renders++; return rendered ? { ok: true } : { ok: false, error: "templates failed" }; };
+  const csrf = "a".repeat(64);
+  const post = (body: unknown, roles = ["ROLE_ADMIN"]) => handle(new Request("https://panel.example.com/addons/wp-tools/api/domain-link", {
+    method: "POST",
+    headers: { Host: "panel.example.com", Origin: "https://panel.example.com", Cookie: `clp_addons_csrf=${csrf}`, "X-CLP-Addons-CSRF": csrf, "Content-Type": "application/json" },
+    body: JSON.stringify(body),
+  }), "/api/domain-link", undefined, undefined, { user: "admin", roles });
+  try {
+    expect((await post({ signIn: false })).status).toBe(200);
+    expect((await post({ signIn: "no" })).status).toBe(400);
+    expect((await post({ signIn: true }, ["ROLE_USER"])).status).toBe(404);
+    expect(saved).toEqual([false]);
+    expect(renders).toBe(1);
+    // Saved, but the panel still shows the old link: say so, with what was saved.
+    rendered = false;
+    const failed = await post({ signIn: true });
+    expect(failed.status).toBe(500);
+    expect(await failed.json()).toEqual({ ok: false, error: "Saved, but CloudPanel's site pages still show the old link: templates failed", data: { domainLink: { signIn: true } } });
+  } finally {
+    wpToolsService.domainLinkSettings = originalSettings;
+    wpToolsService.renderPanelTemplates = originalRender;
+  }
+});
+
+test("a site page asks whether its site is a WordPress, held to the caller's own sites", async () => {
+  const original = wpToolsService.siteKind;
+  const calls: [string, string | undefined][] = [];
+  wpToolsService.siteKind = async (domain, asUser) => { calls.push([domain, asUser]); return { ok: true, data: { wordpress: true } }; };
+  const get = (query: string, roles: string[]) => handle(new Request(`https://panel.example.com/addons/wp-tools/api/site-kind${query}`, { headers: { Host: "panel.example.com" } }),
+    "/api/site-kind", undefined, undefined, { user: "shopkeeper", roles });
+  try {
+    expect((await get("?domain=Shop.Example.com", ["ROLE_ADMIN"])).status).toBe(200);
+    expect((await get("?domain=shop.example.com", ["ROLE_USER"])).status).toBe(200);
+    expect((await get("?domain=bad%20name", ["ROLE_USER"])).status).toBe(400);
+    expect(calls).toEqual([["shop.example.com", undefined], ["shop.example.com", "shopkeeper"]]);
+  } finally {
+    wpToolsService.siteKind = original;
   }
 });

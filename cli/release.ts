@@ -106,10 +106,6 @@ export async function fetchVerified(rel: ResolvedRelease, names: string[]): Prom
   return artifacts;
 }
 
-function escapeRegExp(text: string): string {
-  return text.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-}
-
 /**
  * What `gh attestation verify --repo --signer-workflow` checks: a SLSA
  * provenance statement for these bytes, signed in Sigstore's public log by a
@@ -119,7 +115,7 @@ function escapeRegExp(text: string): string {
  * reusable workflow signs for whichever repository calls it.
  */
 export const provenancePolicy = (tag: string) => ({
-  subjectAlternativeName: new RegExp(`^https://github\\.com/${escapeRegExp(REPO)}/\\.github/workflows/release\\.yml@refs/tags/${escapeRegExp(tag)}$`),
+  subjectAlternativeName: new RegExp(`^https://github\\.com/${RegExp.escape(REPO)}/\\.github/workflows/release\\.yml@refs/tags/${RegExp.escape(tag)}$`),
   extensions: { issuer: "https://token.actions.githubusercontent.com" },
   oids: [{ oid: { id: [1, 3, 6, 1, 4, 1, 57264, 1, 12] }, value: derUtf8(`https://github.com/${REPO}`) }],
 });

@@ -178,6 +178,7 @@
       addCount(rows);
       buildToolbar(rows);
       buildColumnPicker(Boolean(tweaks.diskUsage));
+      buildDownload(rows, Boolean(tweaks.diskUsage));
       makeSortable(rows);
     }
 
@@ -622,6 +623,70 @@
       }
 
       holder.hidden = false;
+    }
+
+    // --- the download ------------------------------------------------------
+
+    // The sites the search and the filter leave, in the order the table is
+    // sorted, with every column whether or not it is shown: a spreadsheet is
+    // where an operator picks columns. Values are as the panel recorded them --
+    // UTC timestamps and bytes -- rather than as a cell paints them. A value a
+    // spreadsheet would read as a formula is quoted as text, because every one
+    // of them came out of somebody's database.
+    function buildDownload(rows, withDisk) {
+      var button = document.getElementById("clp-tweaks-download");
+      if (!button) return;
+
+      function field(value) {
+        var text = value === null || value === undefined ? "" : String(value);
+        if (/^[=+\-@\t\r]/.test(text)) text = "'" + text;
+        return '"' + text.replace(/"/g, '""') + '"';
+      }
+
+      function csv() {
+        var head = ["Domain", "Site user", "Application", "Runtime", "SSL", "SSL expires (UTC)"];
+        if (withDisk) head.push("Files (bytes)", "Databases (bytes)", "Measured at");
+        head.push("Created (UTC)", "Cloudflare only", "Varnish");
+        var lines = [head.map(field).join(",")];
+        var shown = rows.filter(function (row) { return !row.el.hidden; }).sort(function (a, b) {
+          return a.el.compareDocumentPosition(b.el) & Node.DOCUMENT_POSITION_FOLLOWING ? -1 : 1;
+        });
+        for (var i = 0; i < shown.length; i++) {
+          var row = shown[i];
+          var site = row.site;
+          var certificate = site && site.certificate;
+          var disk = site && site.disk;
+          var line = [
+            row.domain,
+            site ? site.user : "",
+            applicationName(site),
+            site ? site.runtime : "",
+            certificate ? certificate.issuer || certificateName(certificate.type) : "None",
+            certificate ? certificate.expiresAt : ""
+          ];
+          if (withDisk) {
+            line.push(disk ? Number(disk.bytes) || 0 : "", disk ? Number(disk.databaseBytes) || 0 : "",
+              disk ? disk.measuredAt : "");
+          }
+          line.push(site ? site.createdAt : "", site && site.cloudflareOnly ? "yes" : "no",
+            site && site.varnish ? "yes" : "no");
+          lines.push(line.map(field).join(","));
+        }
+        // The byte-order mark is what makes Excel read the file as UTF-8.
+        return "﻿" + lines.join("\r\n") + "\r\n";
+      }
+
+      button.addEventListener("click", function () {
+        var url = URL.createObjectURL(new Blob([csv()], { type: "text/csv;charset=utf-8" }));
+        var link = document.createElement("a");
+        link.href = url;
+        link.download = "sites-" + location.hostname + "-" + new Date().toISOString().slice(0, 10) + ".csv";
+        document.body.appendChild(link);
+        link.click();
+        link.remove();
+        setTimeout(function () { URL.revokeObjectURL(url); }, 1000);
+      });
+      button.hidden = false;
     }
 
 

@@ -14,6 +14,7 @@ import type { SmtpState } from "../addons/smtp/action";
 import { dashboardView as dnsDashboardView, layout as dnsLayout } from "../addons/dns/app/views";
 import type { DnsState, Review as DnsReview } from "../addons/dns/action";
 import type { SitePlan as DnsSitePlan } from "../addons/dns/engine";
+import type { Redirect as DnsRedirect } from "../addons/dns/model";
 import { PRESETS as DNS_PRESETS, seededPolicy as dnsSeededPolicy } from "../addons/dns/presets";
 import { tokenTemplate as dnsTokenTemplate } from "../addons/dns/token";
 import { dashboardView as panelTweaksDashboardView, layout as panelTweaksLayout } from "../addons/panel-tweaks/app/views";
@@ -25,7 +26,10 @@ import { MENU_ONLY_CLASS } from "../lib/row-actions";
 
 /** The `site.type` values Stager's own Twig condition offers a Clone for. */
 const CLONABLE_TYPES = ["php", "static", "reverse-proxy"];
-import { WP_TOOLS_TARGETS } from "../addons/wp-tools/inject/targets";
+import {
+  WP_TOOLS_TARGETS, newSiteDoneSnippet as wpToolsNewSiteDone, newSiteFormSnippet as wpToolsNewSiteForm, siteInfoSnippet as wpToolsSiteInfo,
+} from "../addons/wp-tools/inject/targets";
+import type { NewSitePlugin, NewSiteResult } from "../addons/wp-tools/new-site-plugins";
 import { dashboardBody as wpToolsDashboardBody, dashboardView as wpToolsDashboardView, layout as wpToolsLayout } from "../addons/wp-tools/app/views";
 import type { MainwpSiteView, MainwpView } from "../addons/wp-tools/mainwp";
 import { WORDPRESS_APPLICATIONS, type WpJobView, type WpSiteView } from "../addons/wp-tools/action";
@@ -81,9 +85,13 @@ function dnsPreviewState(url: URL): DnsState {
     domain, profileId: "web", mode, zone: zone("example.com"), changes: [], problems: [], zoneChoices: [],
     certificateNames: [domain], ...extra,
   });
-  const sites = setup ? [
+  const redirect = (source: string, target: string, extra: Partial<DnsRedirect & { standIn: boolean }> = {}): DnsRedirect & { standIn: boolean } =>
+    ({ source, target, status: 301, keepPath: true, keepQuery: true, profileId: null, standIn: false, ...extra });
+  const sites: DnsState["sites"] = setup ? [
     { domain: "example.com", type: "wordpress", profileId: null, plan: null, ssl: null },
     { domain: "shop.example.com", type: "php", profileId: null, plan: null, ssl: null },
+    { domain: "old-name.example.org", type: "redirect", profileId: null, ssl: null, redirect: redirect("old-name.example.org", "https://example.com", { standIn: true }),
+      plan: { ...plan("old-name.example.org", { profileId: null, zone: null, certificateNames: [] }), redirect: true as const } },
   ] : [
     { domain: "example.com", type: "wordpress", profileId: "web", plan: plan("example.com", { certificateNames: ["example.com", "www.example.com"] }), ssl: null },
     { domain: "shop.example.com", type: "php", profileId: "web", plan: plan("shop.example.com", { changes: [
@@ -112,7 +120,17 @@ function dnsPreviewState(url: URL): DnsState {
       { action: "create", subject: "A brand-new.example.co.uk", detail: "203.0.113.10 · proxied" },
     ] }), ssl: null },
     { domain: "docs.example.com", type: "static", profileId: null, plan: null, ssl: null },
-  ];
+    { domain: "example-brand.net", type: "redirect", profileId: "web-mailcow", ssl: null, redirect: redirect("example-brand.net", "https://example.com", { profileId: "web-mailcow" }),
+      plan: { ...plan("example-brand.net", { profileId: "web-mailcow", zone: zone("example-brand.net"), certificateNames: [] }), redirect: true as const } },
+    { domain: "book.example.com", type: "redirect", profileId: null, ssl: null,
+      redirect: redirect("book.example.com", "https://shop.example.org/products/the-example-handbook-second-edition", { keepPath: false, status: 302 }),
+      plan: { ...plan("book.example.com", { profileId: null, certificateNames: [], changes: [
+        { action: "update", subject: "Cloudflare redirect rule", detail: "book.example.com: 302 to https://shop.example.org/products/the-example-handbook-second-edition · keeps the query string",
+          before: "302 to https://shop.example.org/products/the-example-handbook-second-edition · keeps the path and query string · except Let's Encrypt checks · another tool's rule, taken over in place" },
+        { action: "update", subject: "AAAA book.example.com", detail: "100:: · proxied", before: "2001:db8::10 · proxied" },
+        { action: "delete", subject: "A book.example.com", detail: "203.0.113.10 · proxied" },
+      ] }), redirect: true as const } },
+  ].sort((a, b) => a.domain.localeCompare(b.domain));
   const at = (minutes: number) => new Date(Date.now() - minutes * 60_000).toISOString();
   const log: DnsState["log"] = setup ? [] : [
     { at: at(3), cause: "New site", sites: ["new-client.example.org"], zone: "example.org", action: "create", subject: "Cloudflare zone",
@@ -153,6 +171,13 @@ function dnsPreviewState(url: URL): DnsState {
     log,
   };
 }
+
+const dnsFoundRule = (source: string, target: string, keepPath = true) => ({ source, zone: source, target, status: 301 as const, keepPath, keepQuery: true });
+const DNS_PREVIEW_FOUND = {
+  redirects: [dnsFoundRule("example-old.org", "https://example.com"), dnsFoundRule("example-press.com", "https://shop.example.org/products/the-example-handbook-second-edition"),
+    dnsFoundRule("examplebooks.net", "https://example.com/books")],
+  notes: ["3 zones could not be read: Cloudflare: the token lacks Single Redirect: Edit for this zone; add it to the token in Cloudflare (Authentication error (10000))"],
+};
 
 function dnsPreviewReview(state: DnsState): DnsReview {
   const sites = state.sites.filter((site) => site.plan).map((site) => ({ ...site.plan!, problems: [], zoneChoices: [] }));
@@ -688,6 +713,8 @@ html.dark a { color: #fff; }
 .site-info-box { margin: 0 60px 0 0; min-width: 200px; }
 .site-info-box h3 { font-size: 14px; color: #aaa; margin: 0 0 5px; font-weight: 500; }
 .site-info-value { font-size: 18px; }
+a.view-site-link svg { margin: 0 0 0 2px; fill: #aaa; }
+a.view-site-link:hover svg { fill: #0078d4; }
 .tab-container { border: 1px solid #e2e2e2; background: #fff; margin: 0 0 30px; }
 html.dark .tab-container { background: #25282f; border-color: #a8b3cf33; }
 .tab-container ul { padding: 0 20px; margin: 0; list-style: none; }
@@ -700,7 +727,7 @@ html.dark .tab-container ul li.active a { color: #fff; }
 .preview-banner button { margin-left: 12px; }
 `;
 
-function panelSiteStub(site: SiteContext, activeSlug: string): string {
+function panelSiteStub(site: SiteContext, activeSlug: string, wordpress: boolean): string {
   const tabs = siteTabs(site, activeSlug)
     .map((tab) => `      <li${tab.active ? ' class="active"' : ""}><a href="${tab.href}">${tab.label}</a></li>`)
     .join("\n");
@@ -721,7 +748,7 @@ function panelSiteStub(site: SiteContext, activeSlug: string): string {
   <div class="container-fluid container-limited-width">
     <div class="site-container">
       <div class="site-info-container">
-        <div class="site-info-box"><h3>Domain</h3><div class="site-info-value"><a href="https://${site.domain}">${site.domain}</a></div></div>
+        <div class="site-info-box"><h3>Domain</h3><div class="site-info-value"><a class="view-site-link" target="_blank" href="https://${site.domain}">${site.domain} ${PANEL_EXTERNAL_ICON}</a>${wordpress ? twigForSite(wpToolsSiteInfo("/addons/wp-tools", wpDomainSignIn).replace("{% if site.type == 'php' %}", ""), site.domain) : ""}</div></div>
         <div class="site-info-box"><h3>Site User</h3><div class="site-info-value">${site.user}</div></div>
         <div class="site-info-box"><h3>IP Address</h3><div class="site-info-value">${PREVIEW_PUBLIC_IP}</div></div>
       </div>
@@ -798,6 +825,95 @@ function panelLoginStub(dark: boolean): string {
 </div>`, dark);
 }
 
+/** Frontend/Site/New/wordpress.html.twig with its Twig evaluated, less the panel's progress script. */
+function panelNewSiteStub(url: URL, dark: boolean): string {
+  // ?manager draws the form for a site manager, who sees the Plugins row only
+  // while WP Tools' switch for them is on, and never the upload control.
+  const manager = url.searchParams.has("manager");
+  // ?chosen starts with three plugins chosen, as a form CloudPanel sent back
+  // would; ?q=woo searches as the page loads. A screenshot wants WAIT=3000.
+  const seed = url.searchParams.has("chosen") ? `<script>sessionStorage.setItem("clp-addons-new-site-plugins", ${JSON.stringify(JSON.stringify([
+    { source: "wordpress.org", slug: "woocommerce", name: "WooCommerce", activate: true },
+    { source: "wordpress.org", slug: "wordpress-seo", name: "Yoast SEO", activate: true },
+    { source: "upload", slug: "acme-payments", name: "Acme Payments 2.4.1", activate: false, id: "0123456789abcdef0123456789abcdef" },
+  ]))});</script>` : "";
+  const term = url.searchParams.get("q");
+  const search = term ? `<script>(function () { var input = document.getElementById("clp-wp-plugin-search"); input.value = ${JSON.stringify(term).replaceAll("<", "\\u003c")};
+  input.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter" })); })();</script>` : "";
+  const field = (id: string, label: string, value: string, type = "text") => `<label for="site_new_word_press_${id}" class="col-form-label required">${label}</label>
+                  <input type="${type}" id="site_new_word_press_${id}" name="site_new_word_press[${id}]" required="required" class="form-control form-control-lg" value="${value}">`;
+  return panelPageStub("New WordPress Site", "", ["frontend/new-site.css"], `<main class="main-container"><div class="container-fluid container-limited-width new-site-container-fix">
+  <div class="new-site-container">
+    <div class="page-header"><div class="page-title"><h1>New WordPress Site</h1></div></div>
+    <div class="page-content">
+      <form name="site_new_word_press" method="get" action="/site/new/wordpress/installed" id="new-wordpress-site-form">
+      <div class="card">
+        <div class="card-body card-body-no-padding">
+          <div class="card-form">
+            <div class="row">
+              <div class="col-12">
+                ${field("domainName", "Domain Name", "")}
+              </div>
+            </div>
+            <div class="pre-install-container">
+              <div class="row"><div class="col-12">${field("siteTitle", "Site Title", "")}</div></div>
+              <div class="row">
+                <div class="col-6">${field("adminUserName", "Admin User Name", "admin")}</div>
+                <div class="col-6">${field("adminPassword", "Admin Password", "preview-only-password")}</div>
+              </div>
+            </div>
+${seed}${manager && !wpNewSiteManagers ? "" : twigForRole(wpToolsNewSiteForm("/addons/wp-tools", wpNewSiteManagers), !manager)}${search}
+            <div class="row">
+              <div class="col-6 text-start">
+                <a href="/sites" class="btn btn-lg btn-gray">Back</a>
+              </div>
+              <div class="col-6 text-end">
+                <button type="submit" id="site_new_word_press_submit" class="btn-blue btn-lg btn">Create</button>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+      </form>
+    </div>
+  </div>
+</div></main>`, dark);
+}
+
+/**
+ * A new-site block as the panel renders it for an administrator, or for a site
+ * manager (`?manager` on the form): the administrator-only parts go, and so do
+ * the remaining conditions, which both roles pass.
+ */
+function twigForRole(block: string, admin: boolean): string {
+  const shown = admin ? block : block.replace(/\{% if is_granted\('ROLE_ADMIN'\) %\}[^{]*?\{% endif %\}/g, "");
+  return shown.replace(/\{% (?:if [^%]*|endif |set [^%]*)%\}/g, "");
+}
+
+/** Frontend/Site/New/wordpress-installed.html.twig, for the domain the form above sent. */
+function panelNewSiteDoneStub(domain: string, dark: boolean): string {
+  const block = twigForRole(wpToolsNewSiteDone("/addons/wp-tools", true), true)
+    .replace("{{ clpWpPluginsDomain }}", () => Bun.escapeHTML(domain.toLowerCase()));
+  return panelPageStub("WordPress Site has been created!", "", ["frontend/new-site.css"], `<main class="main-container"><div class="container-fluid container-limited-width new-site-container-fix">
+  <div class="wordpress-site-created-container">
+    <div class="page-header"><div class="page-title"><h1>WordPress Site has been created!</h1></div></div>
+    <div class="page-content">${block}
+      <div class="card">
+        <div class="card-body card-body-no-padding">
+          <div class="card-form">
+            <div class="row"><div class="col">
+              <div class="site-credentials-text">Copy the credentials for your created WordPress site.</div>
+              <textarea id="site-credentials" class="form-control form-control-lg" rows="8">Site: https://${Bun.escapeHTML(domain)}\nAdmin User Name: admin</textarea>
+            </div></div>
+            <div class="row"><div class="col"><a href="/sites" class="btn btn-lg btn-gray">Back to Sites</a></div></div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+</div></main>`, dark);
+}
+
 function panelSecurityStub(dark: boolean): string {
   const block = SECURITY_KEYS_TARGETS.find((target) => target.slug === "account-card")!.snippet("/addons/security-keys");
   return panelPageStub("Two-Factor Authentication", "", ["frontend/account.css"], `<main class="main-container"><div class="container-fluid container-limited-width">
@@ -825,6 +941,7 @@ function panelSecurityStub(dark: boolean): string {
  * panel's own from assets/css/style.css and assets/css/frontend/sites.css.
  */
 const WP_TOOLS_SITES_SCRIPT = WP_TOOLS_TARGETS.find((target) => target.slug === "sites-script")!;
+const PANEL_EXTERNAL_ICON = '<svg width="12" height="12" aria-hidden="true" viewBox="0 0 512 512"><path d="M440,256H424a8,8,0,0,0-8,8V464a16,16,0,0,1-16,16H48a16,16,0,0,1-16-16V112A16,16,0,0,1,48,96H248a8,8,0,0,0,8-8V72a8,8,0,0,0-8-8H48A48,48,0,0,0,0,112V464a48,48,0,0,0,48,48H400a48,48,0,0,0,48-48V264A8,8,0,0,0,440,256ZM500,0,364,.34a12,12,0,0,0-12,12v10a12,12,0,0,0,12,12L454,34l.7.71L131.51,357.86a12,12,0,0,0,0,17l5.66,5.66a12,12,0,0,0,17,0L477.29,57.34l.71.7-.34,90a12,12,0,0,0,12,12h10a12,12,0,0,0,12-12L512,12A12,12,0,0,0,500,0Z"></path></svg>';
 const TERMINAL_SITES_SCRIPT = TERMINAL_TARGETS.find((target) => target.slug === "sites-script")!;
 const TERMINAL_SITES_ACTION = TERMINAL_TARGETS.find((target) => target.slug === "sites-action")!;
 const TERMINAL_SITE_BUTTON = TERMINAL_TARGETS.find((target) => target.slug === "site-button")!;
@@ -1055,6 +1172,8 @@ function mainwpPreview(url: URL): MainwpView {
     },
   };
 }
+/** Outlives a visit to the WP Tools page, so its switch shows on the site pages. */
+let wpDomainSignIn = true;
 let wpToolsPreview = { sites: [] as WpSiteView[], automatic: false, error: "", mainwp: mainwpPreview(new URL("http://localhost")), mainwpError: "" };
 // A job advances one site a second from when it was started; ?wpjob=varnish or
 // ?wpjob=mainwp draws the page with one part-way through.
@@ -1064,12 +1183,83 @@ function wpToolsPreviewJob(task: WpJobView["task"], domains: string[], finish: (
   const id = `${new Date().toISOString().replace(/[-:]/g, "").slice(0, 15)}Z-${Math.random().toString(16).slice(2, 8).padEnd(6, "0")}`;
   const job: PreviewJob = {
     id, task, policy: task.startsWith("varnish") ? "varnish" : "mainwp", domains, state: "running", step: "", error: "",
-    createdAt: "", startedAt: "", finishedAt: "", completed: 0, total: domains.length, site: domains[0] ?? "", result: null,
+    createdAt: "", startedAt: "", finishedAt: "", completed: 0, total: domains.length, site: domains[0] ?? "", plugins: [], chosenBy: "", result: null,
     startedMs, finish,
   };
-  wpToolsJobs[job.policy] = job;
+  wpToolsJobs[job.policy as "varnish" | "mainwp"] = job;
   return wpToolsPreviewTick(job);
 }
+
+/**
+ * What the new-site form's choices did, as the WP Tools page lists them. A job
+ * the form starts here waits three seconds for its site and then installs a
+ * plugin a second; one named "broken" fails, as a zip WordPress refuses would.
+ */
+let wpNewSiteJobs: PreviewJob[] = [];
+/** The WP Tools switch that lets site managers use the form's Plugins row. */
+let wpNewSiteManagers = false;
+function wpNewSitePreviewJob(domain: string, plugins: NewSitePlugin[], startedMs = Date.now()): PreviewJob {
+  const id = `${new Date(startedMs).toISOString().replace(/[-:]/g, "").slice(0, 15)}Z-${Math.random().toString(16).slice(2, 8).padEnd(6, "0")}`;
+  const job: PreviewJob = {
+    id, task: "new-site-plugins", policy: "plugins", domains: [domain], state: "running", step: `Waiting for WordPress on ${domain}`, error: "",
+    createdAt: new Date(startedMs).toISOString().slice(0, 19) + "Z", startedAt: "", finishedAt: "", completed: 0, total: 0, site: "", plugins, chosenBy: "", result: null,
+    startedMs, finish: () => {},
+  };
+  wpNewSiteJobs.unshift(job);
+  return wpNewSiteTick(job);
+}
+function wpNewSiteTick(job: PreviewJob): PreviewJob {
+  if (job.state === "done") return job;
+  const elapsed = Math.floor((Date.now() - job.startedMs) / 1000) - 3;
+  if (elapsed < 0) return job;
+  job.total = job.plugins.length;
+  job.completed = Math.min(job.total, elapsed);
+  job.site = job.plugins[job.completed]?.name ?? "";
+  job.step = job.site ? `Installing ${job.completed + 1} of ${job.total}: ${job.site}` : "";
+  if (job.completed < job.total) return job;
+  job.state = "done";
+  job.step = "Finished";
+  job.finishedAt = new Date().toISOString().slice(0, 19) + "Z";
+  job.result = {
+    outcome: "done",
+    plugins: job.plugins.map(({ upload: _upload, ...plugin }) => /broken/i.test(plugin.name)
+      ? { ...plugin, status: "failed" as const, error: "WP-CLI failed: Error: The plugin could not be activated: Plugin file does not exist." }
+      : { ...plugin, status: plugin.activate ? "activated" as const : "installed" as const, error: "" }),
+  } satisfies NewSiteResult;
+  return job;
+}
+function wpNewSiteFinished(domain: string, finishedAt: string, plugins: NewSiteResult["plugins"], chosenBy = ""): PreviewJob {
+  return {
+    id: `${finishedAt.replace(/[-:]/g, "").slice(0, 15)}Z-0a0b0c`, task: "new-site-plugins", policy: "plugins", domains: [domain], state: "done",
+    step: "Finished", error: "", createdAt: finishedAt, startedAt: finishedAt, finishedAt, completed: plugins.length, total: plugins.length, site: "",
+    plugins: plugins.map(({ status: _status, error: _error, ...plugin }) => plugin), chosenBy, result: { outcome: "done", plugins }, startedMs: 0, finish: () => {},
+  };
+}
+function wpNewSiteSamples(): PreviewJob[] {
+  return [
+    wpNewSiteFinished("shop.example.com", "2026-10-28T14:12:31Z", [
+      { source: "wordpress.org", slug: "woocommerce", name: "WooCommerce", activate: true, status: "activated", error: "" },
+      { source: "wordpress.org", slug: "wordpress-seo", name: "Yoast SEO", activate: true, status: "activated", error: "" },
+      { source: "upload", slug: "acme-payments", name: "Acme Payments 2.4.1", activate: false, status: "installed", error: "" },
+      { source: "wordpress.org", slug: "akismet", name: "Akismet Anti-spam: Spam Protection", activate: true, status: "present", error: "" },
+    ]),
+    // Chosen by a site manager, which only WordPress.org plugins can be.
+    wpNewSiteFinished("client.example.net", "2026-10-28T08:40:02Z", [
+      { source: "wordpress.org", slug: "wp-mail-smtp", name: "WP Mail SMTP", activate: true, status: "activated", error: "" },
+    ], "jordan"),
+    wpNewSiteFinished("blog.example.com", "2026-10-27T09:03:12Z", [
+      { source: "wordpress.org", slug: "contact-form-7", name: "Contact Form 7", activate: true, status: "activated", error: "" },
+      { source: "upload", slug: "elementor-pro", name: "Elementor Pro 3.25.0", activate: true, status: "failed", error: "the plugin was installed but WordPress did not activate it" },
+    ]),
+  ];
+}
+const PREVIEW_DIRECTORY = [
+  { slug: "woocommerce", name: "WooCommerce", version: "9.3.3", author: "Automattic", activeInstalls: 7000000, summary: "Everything you need to launch an online store in days and keep it growing for years." },
+  { slug: "wordpress-seo", name: "Yoast SEO", version: "23.7", author: "Team Yoast", activeInstalls: 10000000, summary: "Improve your WordPress SEO: Write better content and have a fully optimized WordPress site using the Yoast SEO plugin." },
+  { slug: "contact-form-7", name: "Contact Form 7", version: "6.0", author: "Takayuki Miyoshi", activeInstalls: 10000000, summary: "Just another contact form plugin. Simple but flexible." },
+  { slug: "woocommerce-payments", name: "WooPayments: Integrated WooCommerce Payments", version: "8.4.0", author: "Automattic", activeInstalls: 600000, summary: "Securely accept credit and debit cards on your site. Manage transactions without leaving your WordPress dashboard." },
+  { slug: "wp-mail-smtp", name: "WP Mail SMTP by WPForms – The Most Popular SMTP and Email Log Plugin", version: "4.1.1", author: "WP Mail SMTP", activeInstalls: 4000000, summary: "Make email delivery easy for WordPress. Connect with SMTP, Gmail, Outlook, SendGrid, Mailgun, SES, Zoho, + more." },
+];
 function wpToolsPreviewTick(job: PreviewJob): PreviewJob {
   if (job.state === "done") return job;
   job.completed = Math.min(job.total, Math.floor((Date.now() - job.startedMs) / 1000));
@@ -1079,16 +1269,21 @@ function wpToolsPreviewTick(job: PreviewJob): PreviewJob {
   job.state = "done";
   job.result = { checked: job.total, installed: 0, connected: job.task === "mainwp-connect" ? job.total : 0, removed: 0, pending: 0, failed: [] };
   finishedWpJobs.set(job.id, job);
-  if (wpToolsJobs[job.policy] === job) wpToolsJobs[job.policy] = null;
+  const policy = job.policy as "varnish" | "mainwp";
+  if (wpToolsJobs[policy] === job) wpToolsJobs[policy] = null;
   return job;
 }
 const wpToolsPreviewData = () => {
   for (const job of Object.values(wpToolsJobs)) if (job) wpToolsPreviewTick(job);
+  for (const job of wpNewSiteJobs) wpNewSiteTick(job);
   return {
+    newSites: wpNewSiteJobs,
+    newSiteAccess: { siteManagers: wpNewSiteManagers },
     sites: wpToolsPreview.sites,
     varnish: { enabled: wpToolsPreview.automatic, sites: {} },
     varnishError: wpToolsPreview.error,
     mainwp: wpToolsPreview.mainwp, mainwpError: wpToolsPreview.mainwpError,
+    domainLink: { signIn: wpDomainSignIn }, domainLinkError: "",
     jobs: { varnish: wpToolsJobs.varnish, mainwp: wpToolsJobs.mainwp },
   };
 };
@@ -1100,14 +1295,56 @@ async function wpToolsPreviewApi(req: Request, path: string): Promise<Response |
   const site = wpToolsPreview.sites.find((entry) => entry.domain === body.domain);
   const jobPath = /^\/addons\/wp-tools\/api\/jobs\/([^/]+)$/.exec(path);
   if (jobPath) {
+    const newSite = wpNewSiteJobs.find((entry) => entry.id === jobPath[1]);
+    if (newSite) return ok({ job: wpNewSiteTick(newSite), log: "" });
     const job = Object.values(wpToolsJobs).find((entry) => entry?.id === jobPath[1]) ?? finishedWpJobs.get(jobPath[1]!);
     if (!job) return Response.json({ ok: false, error: "job not found" }, { status: 404 });
     wpToolsPreviewTick(job);
     return ok({ job, log: "" });
   }
+  if (path === "/addons/wp-tools/api/plugin-search") {
+    const term = (new URL(req.url).searchParams.get("q") ?? "").toLowerCase();
+    // ?offline on the form's page stands in for WordPress.org not answering.
+    const referer = req.headers.get("referer");
+    if (referer && new URL(referer).searchParams.has("offline")) {
+      return Response.json({ ok: false, error: "WordPress.org did not answer the search: The operation timed out." }, { status: 502 });
+    }
+    const words = term.split(/\s+/).filter(Boolean);
+    return ok({ plugins: PREVIEW_DIRECTORY.filter((plugin) => words.every((word) => `${plugin.name} ${plugin.slug}`.toLowerCase().includes(word))) });
+  }
   const started = (job: PreviewJob) => ok({ job });
   const mainwpTargets = () => wpToolsPreview.sites.map((entry) => entry.domain).filter((domain) => domain !== wpToolsPreview.mainwp.dashboard);
+  if (path === "/addons/wp-tools/api/site-kind") {
+    const domain = new URL(req.url).searchParams.get("domain");
+    return ok({ wordpress: wpToolsPreview.sites.some((entry) => entry.domain === domain) || domain === "www.example.com" });
+  }
   switch (path.slice("/addons/wp-tools/api/".length)) {
+    case "session":
+      return Response.json({ ok: true }, { headers: withCsrfCookie({}, "preview-token") });
+    case "plugin-upload": {
+      // The preview cannot read the zip; a slow second stands in for the upload.
+      await Bun.sleep(1000);
+      const size = Number(req.headers.get("content-length") ?? 0);
+      const id = Math.random().toString(16).slice(2).padEnd(32, "0").slice(0, 32);
+      return ok({ upload: { id, slug: `uploaded-${id.slice(0, 4)}`, name: size % 2 ? "Broken Example" : "Acme Payments", version: "2.4.1", size } });
+    }
+    case "plugin-discard":
+      return ok({ discarded: true });
+    case "new-site": {
+      const domain = typeof body.domain === "string" ? body.domain : "";
+      const chosen = [
+        ...(Array.isArray(body.plugins) ? body.plugins as { slug: string; activate: boolean }[] : []).map((plugin) => ({
+          source: "wordpress.org" as const, slug: plugin.slug, activate: plugin.activate,
+          name: PREVIEW_DIRECTORY.find((entry) => entry.slug === plugin.slug)?.name ?? plugin.slug,
+        })),
+        ...(Array.isArray(body.uploads) ? body.uploads as { id: string; activate: boolean }[] : []).map((upload) => ({
+          source: "upload" as const, slug: `uploaded-${upload.id.slice(0, 4)}`, activate: upload.activate, name: "Acme Payments 2.4.1", upload: upload.id,
+        })),
+      ];
+      if (domain === "shop.example.com") return Response.json({ ok: false, error: "CloudPanel already has a site called shop.example.com; plugins are chosen here only for a new one" }, { status: 400 });
+      // An empty choice only clears an earlier one, as on a box.
+      return ok({ job: chosen.length ? wpNewSitePreviewJob(domain, chosen) : null });
+    }
     case "dashboard":
       return ok({ html: wpToolsDashboardBody(wpToolsPreviewData()) });
     case "mainwp-settings":
@@ -1136,6 +1373,18 @@ async function wpToolsPreviewApi(req: Request, path: string): Promise<Response |
     case "varnish-settings":
       wpToolsPreview.automatic = body.enabled === true;
       return ok({});
+    case "new-site-settings":
+      wpNewSiteManagers = body.siteManagers === true;
+      return ok({ newSiteAccess: { siteManagers: wpNewSiteManagers } });
+    case "new-site-status": {
+      const found = wpNewSiteJobs.find((entry) => entry.id === new URL(req.url).searchParams.get("job"));
+      if (!found) return Response.json({ ok: false, error: "no such job" }, { status: 404 });
+      const { id, state, step, error, completed, total, site: working, result } = wpNewSiteTick(found);
+      return ok({ job: { id, domain: found.domains[0], state, step, error, completed, total, site: working, result } });
+    }
+    case "domain-link":
+      wpDomainSignIn = body.signIn === true;
+      return ok({ domainLink: { signIn: wpDomainSignIn } });
     case "varnish-install":
       return started(wpToolsPreviewJob("varnish-install", site ? [site.domain] : [], () => { if (site) site.varnishPlugin = active(); }));
     case "varnish-sync": {
@@ -1419,6 +1668,14 @@ const server = Bun.serve({
         headers: { "Content-Type": "text/html; charset=utf-8", "Cache-Control": "no-store" },
       });
     }
+    // CloudPanel's New WordPress Site form and the page it lands on, with WP
+    // Tools' Plugins row and its status in place. The form submits here with
+    // GET, so the preview's refusal of other methods does not catch it.
+    if (path === "/site/new/wordpress" || path === "/site/new/wordpress/installed") {
+      const dark = url.searchParams.has("dark");
+      const page = path.endsWith("/installed") ? panelNewSiteDoneStub(url.searchParams.get("site_new_word_press[domainName]") ?? url.searchParams.get("domain") ?? "", dark) : panelNewSiteStub(url, dark);
+      return new Response(page, { headers: withCsrfCookie({ "Content-Type": "text/html; charset=utf-8", "Cache-Control": "no-store" }, "preview-token") });
+    }
     if (path === "/login" || path === "/security") {
       const dark = url.searchParams.has("dark");
       return new Response(path === "/login" ? panelLoginStub(dark) : panelSecurityStub(dark), {
@@ -1450,6 +1707,7 @@ const server = Bun.serve({
         panelSiteStub(
           { domain: site.domain, user: site.siteUser, type: site.siteType, varnishCache: siteVarnish[site.domain] === true },
           panelSite[2]!,
+          WORDPRESS_APPLICATIONS.includes(site.application),
         ),
         { headers: { "Content-Type": "text/html; charset=utf-8", "Cache-Control": "no-store" } },
       );
@@ -1635,6 +1893,13 @@ const server = Bun.serve({
         });
       }
       wpToolsJobs = { varnish: null, mainwp: null };
+      // ?newsites=none leaves the card with only its explanation; ?newsites=running adds one part-way.
+      // Jobs the preview form started stay, so the page it lands on can still follow them.
+      const started = wpNewSiteJobs.filter((job) => !wpNewSiteSamples().some((sample) => sample.id === job.id));
+      wpNewSiteJobs = url.searchParams.get("newsites") === "none" ? [] : [...started, ...wpNewSiteSamples()];
+      if (url.searchParams.get("newsites") === "running") {
+        wpNewSitePreviewJob("new-client.example.org", wpNewSiteSamples()[0]!.plugins, Date.now() - 4_400);
+      }
       const job = url.searchParams.get("wpjob");
       // Started a few seconds ago, and about a minute from done.
       if (job === "varnish") wpToolsPreviewJob("varnish-check", Array.from({ length: 64 }, (_, i) => `site${i}.example.com`), () => {}, Date.now() - 17_400);
@@ -1648,7 +1913,8 @@ const server = Bun.serve({
       html = phpResourcesLayout("PHP Resources", phpResourcesDashboardView(phpChanges ?? phpResourcesPreviewState(url)), notice)
         .replace("</body>", () => opener ? `<script>addEventListener("DOMContentLoaded",function(){${opener}})</script></body>` : "</body>");
     } else if (path === "/addons/dns/" || path === "/addons/dns") {
-      // ?dialog=profile|advanced|new|review|site|pending|choose|connection|mailcow|server opens that dialog on load; ?ask shows DNS
+      // ?dialog=profile|advanced|new|review|site|pending|choose|connection|mailcow|server|redirect|new-redirect|redirect-site|found opens
+      // that dialog on load; ?ask shows DNS
       // before Automatic is turned on;
       // ?at=<selector> hides the cards above that one, for a phone screenshot of something below the fold; ?dark
       // draws the dark theme.
@@ -1666,6 +1932,10 @@ const server = Bun.serve({
         connection: "dnsEditConnection('')",
         mailcow: "dnsEditMailcow()",
         server: "dnsEditServer()",
+        redirect: "dnsEditRedirect('example-brand.net')",
+        "new-redirect": "dnsEditRedirect('')",
+        "redirect-site": "dnsShowSite('book.example.com')",
+        found: `dnsShowFound(${JSON.stringify(DNS_PREVIEW_FOUND)})`,
       };
       const opener = (dialog ? openers[dialog] ?? "" : at ? `const card=document.querySelector(${JSON.stringify(at)})?.closest("#dns-root > *");for(let el=document.getElementById("dns-root").firstElementChild;el&&el!==card;el=el.nextElementSibling)el.style.display="none"` : "");
       html = dnsLayout("DNS", dnsDashboardView(state), notice)

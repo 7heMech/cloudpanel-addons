@@ -735,8 +735,9 @@ describe("zones and new sites", () => {
     // What the owner can act on, such as a pending zone's nameservers, they still see.
     env.cf.token(TOKEN, { owner: "user", accounts: [env.agency], zoneEdit: true });
     env.cf.zones[0]!.status = "pending";
-    expect((await env.act<ProvisionReply>("provision", undefined, ["--domain=shop.example.com", "--as-user=bob"])).reason)
-      .toContain("set its nameservers at the registrar");
+    const pending = await env.act<ProvisionReply>("provision", undefined, ["--domain=shop.example.com", "--as-user=bob"]);
+    expect(pending.reason).toContain("set its nameservers at the registrar");
+    expect(pending).toMatchObject({ zone: "example.com", nameServers: ["ada.ns.cloudflare.com", "bob.ns.cloudflare.com"] });
   });
 
   test("a site's own pages see its zone's nameservers from the last check, and only the owner's", async () => {

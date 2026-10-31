@@ -42,3 +42,14 @@ export function panelUserOwnsSite(db: Database, userName: string, domain: string
   const sites = panelUserSites(db, userName);
   return sites === "all" || (sites !== null && sites.has(domain));
 }
+
+/**
+ * The role of an active panel account, or null for one that does not exist or
+ * is deactivated: what a feature offered to a role rather than to a site asks.
+ */
+export function panelUserRole(db: Database, userName: string): string | null {
+  const account = db.query<{ role: string | null; status: number | null }, [string]>(
+    "SELECT role, status FROM user WHERE user_name = ?",
+  ).get(userName);
+  return account && Number(account.status) === 1 ? account.role : null;
+}

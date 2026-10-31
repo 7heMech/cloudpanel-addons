@@ -10,7 +10,7 @@ import { dirname, join } from "node:path";
 import {
   ActionCommandFailure, ActionFailure, commandFailure, emitActionError, emitActionOk,
   failAction, forwardCommandOutput as defaultForwardCommandOutput, normalizeIdentityHostname,
-  availableSiteUser, readable, runCommand, validateDomain, validateFlag, validatePort, validateTag,
+  availableSiteUser, readable, runCommand, siteUserTaken, validateDomain, validateFlag, validatePort, validateTag,
   withFileLock,
 } from "../../cli/action-common";
 import { PANEL_IDENTITY_PATH } from "../../cli/paths";
@@ -487,27 +487,6 @@ function siteUserOf(domain: string, paths: InstaticActionPaths): string | null {
   }
 }
 
-/**
- * Whether a site user is spoken for, asked of both things that can refuse it.
- *
- * `createUser` fails if the account exists, and CloudPanel validates the site
- * row separately -- it answers "siteUser: This value already exists" for a name
- * another site holds. The two sets are not the same: an account can exist
- * without a site (a system account, or one left by a half-finished delete), and
- * a row can name an account someone removed by hand.
- */
-export function siteUserTaken(user: string, paths: InstaticActionPaths): boolean {
-  if (runCommand("getent", ["passwd", user]).ok) return true;
-  if (!readable(paths.panelDb)) return false;
-  try {
-    return queryPanel(paths, (db) =>
-      db.query("SELECT 1 FROM site WHERE user = ? LIMIT 1;").get(user)) != null;
-  } catch {
-    // Unreadable here means the create is about to fail for a better reason.
-    return false;
-  }
-}
-
 function commandCombinedOutput(command: string, args: string[]): string {
   let directory = "";
   let fd = -1;
@@ -688,7 +667,7 @@ async function healthCheck(port: number, domain: string): Promise<boolean> {
     if (result.stderr) diagnostic(result.stderr);
     code = result.stdout.trim();
     if (/^[23]/.test(code)) break;
-    await new Promise((resolve) => setTimeout(resolve, 1000));
+    await Bun.sleep(1000);
   }
   if (!/^[23]/.test(code)) {
     diagnostic(`[instatic] WARN: container did not answer on 127.0.0.1:${port} (last: ${code || "none"})\n`);
@@ -703,7 +682,7 @@ async function healthCheck(port: number, domain: string): Promise<boolean> {
     if (result.stderr) diagnostic(result.stderr);
     code = result.stdout.trim();
     if (/^(?:[23]\d\d|401|403|503)$/.test(code)) return true;
-    await new Promise((resolve) => setTimeout(resolve, 1000));
+    await Bun.sleep(1000);
   }
   diagnostic(`[instatic] WARN: container is up but nginx did not serve ${domain} (last: ${code || "none"})\n`);
   return false;
@@ -894,11 +873,12 @@ export function pruneSnapshots(dir: string): void {
   for (const file of files.slice(5)) rmSync(file.path, { force: true });
 }
 
-function dateStamp(utc = false): string {
+/** The server's local time as `date +%Y%m%d%H%M%S` writes it, for snapshot names; UTC for job records. */
+export function dateStamp(utc = false, now = new Date()): string {
   if (utc) return jobTimestamp();
-  const result = runCommand("date", ["+%Y%m%d%H%M%S"]);
-  if (!result.ok) throw commandFailure("date", result);
-  return result.stdout.trim();
+  const pad = (value: number) => String(value).padStart(2, "0");
+  return `${now.getFullYear()}${pad(now.getMonth() + 1)}${pad(now.getDate())}`
+    + `${pad(now.getHours())}${pad(now.getMinutes())}${pad(now.getSeconds())}`;
 }
 
 function cleanupCreate(name: string, dir: string, domain: string, siteCreated: boolean, paths: InstaticActionPaths, storage?: SnapshotSources): void {
@@ -984,7 +964,7 @@ async function cmdCreate(action: ParsedInstaticAction, paths: InstaticActionPath
       diagnostic(`[instatic] CloudPanel site ${domain} already exists as the right reverse proxy; adopting it\n`);
     } else {
       diagnostic(`[instatic] creating CloudPanel reverse-proxy site for ${domain}\n`);
-      const siteUser = availableSiteUser(domain, (user) => siteUserTaken(user, paths));
+      const siteUser = availableSiteUser(domain, (user) => siteUserTaken(user, paths.panelDb));
       const password = generatedPassword();
       const result = runCommand(paths.clpctl, [
         "site:add:reverse-proxy",
@@ -1630,7 +1610,7 @@ async function cmdRun(action: ParsedInstaticAction, paths: InstaticActionPaths):
       diagnostic(`[instatic] CloudPanel site ${domain} already exists as the right reverse proxy; adopting it\n`);
     } else {
       setStep(jDir, `creating CloudPanel reverse-proxy site for ${domain}`);
-      const siteUser = availableSiteUser(domain, (user) => siteUserTaken(user, paths));
+      const siteUser = availableSiteUser(domain, (user) => siteUserTaken(user, paths.panelDb));
       const password = generatedPassword();
       const result = runCommand(paths.clpctl, [
         "site:add:reverse-proxy",

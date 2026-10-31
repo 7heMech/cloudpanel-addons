@@ -50,7 +50,7 @@ possibly out of date rather than as plain success.
 The optional policy records CloudPanel site IDs that already existed when the
 policy was enabled. The shared new-site watcher (see
 [Platform](platform.md#new-sites)) runs the check seconds after CloudPanel
-writes a site's vhost, and repair runs it every 15 minutes. An unseen site ID
+saves a new site, and repair runs it every 15 minutes. An unseen site ID
 is treated as a newly created site and receives Cloudflare-only access. This
 also handles deletion and recreation of the same hostname because the new site
 has a new ID.

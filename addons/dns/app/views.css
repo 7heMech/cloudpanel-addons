@@ -38,6 +38,11 @@
 .toolbar #bulk-profile { width:auto; min-width:200px; max-width:100%; }
 .dns-site-table td select { min-width:190px; }
 .dns-status { min-width:180px; }
+.dns-redirect-tools { display:flex; gap:8px; flex-wrap:wrap; }
+.dns-redirect-target { max-width:260px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+.dns-dialog-start { margin-right:auto; }
+.dns-found-table .dns-change-detail { overflow-wrap:anywhere; }
+#dns-found-body { margin-bottom:16px; }
 .dns-settings-table td:first-child { width:220px; }
 .dns-settings-table .mono { color:var(--muted); font-size:13px; }
 .dns-profile-table .switch-state { font-weight:400; color:var(--muted); min-width:84px; }
@@ -52,6 +57,7 @@
   :is(.dns-site-table,.dns-profile-table) :is(th,td):not(:first-child) { padding-left:12px; }
   :is(.dns-site-table,.dns-profile-table) :is(th,td):not(:last-child) { padding-right:12px; }
   .dns-site-table .type-cell { white-space:nowrap; color:var(--muted); }
+  .dns-found-table .site-cell { white-space:nowrap; }
   :is(.dns-profile-table,.dns-orphan-table,.dns-settings-table) .action-cell .actions { justify-content:flex-end; }
 }
 
@@ -187,6 +193,9 @@ p.dns-dialog-note { margin:20px 0 0; }
   .card-header:not(.toolbar):has(> .btn, > .dns-profile-tools) { flex-direction:column; align-items:stretch; }
   .toolbar #bulk-profile { flex:1 1 100%; }
   .toolbar .toolbar-end { margin-left:0; }
+  .dns-redirect-tools { flex:1 1 100%; }
+  .dns-redirect-tools .btn { flex:1 1 auto; }
+  .dns-redirect-target { max-width:none; white-space:normal; overflow-wrap:anywhere; }
   .card-footer { flex-direction:column; align-items:stretch; }
   .dns-rows-wrap { border:0; overflow:visible; }
   .dns-rows, .dns-rows tbody { display:block; }

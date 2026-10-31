@@ -113,6 +113,17 @@ test("Varnish capability crosses the gateway per site", () => {
   expect(sites.find((s) => s.domain === "plain.example")?.varnishCache).toBe(false);
 });
 
+test("DNS's stand-ins are left out of the sites every addon lists", () => {
+  const path = createDatabase(fixture("stand-ins"), (db) => {
+    db.run("CREATE TABLE site (id INTEGER PRIMARY KEY, domain_name TEXT, user TEXT, type TEXT, reverse_proxy_url TEXT)");
+    db.query("INSERT INTO site VALUES (?, ?, ?, ?, NULL)").run(1, "real.example", "real", "php");
+    db.query("INSERT INTO site VALUES (?, ?, ?, ?, NULL)").run(2, "moved.example", "moved-1a2b3c4d", "static");
+  });
+  const marks = join(fixtureDir, `stand-ins-${counter++}.json`);
+  writeFileSync(marks, JSON.stringify({ "moved.example": { siteUser: "moved-1a2b3c4d", siteId: 2 } }), { mode: 0o600 });
+  expect(readPanelDatabase(path, marks, process.getuid!()).sites.map((s) => s.domain)).toEqual(["real.example"]);
+});
+
 test("a read-only scan leaves the database bytes, mtime and sidecars alone", () => {
   const path = partialDatabase();
   const beforeBytes = readFileSync(path);

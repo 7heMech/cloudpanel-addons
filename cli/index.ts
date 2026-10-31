@@ -24,7 +24,8 @@ import { runAuthActionStdin } from "./auth-action";
 import { runManagerAction, type ManagerOps } from "./manager-action";
 import { runSmtpSubmit } from "../addons/smtp/submit";
 import { runTerminalPty } from "../addons/terminal/pty";
-import { runNewSiteWork } from "./maintenance";
+import { runCertificateWork } from "./maintenance";
+import { runSyncSites } from "./new-sites";
 
 /**
  * The privileged half of the three manager verbs.
@@ -128,7 +129,12 @@ async function main(): Promise<number> {
     case "sync-sites":
       requireRoot("sync-sites");
       if (rest.length) fatal("sync-sites takes no arguments");
-      await runNewSiteWork(installedAddons());
+      await runSyncSites(installedAddons());
+      return 0;
+    case "sync-certificates":
+      requireRoot("sync-certificates");
+      if (rest.length) fatal("sync-certificates takes no arguments");
+      await runCertificateWork(installedAddons());
       return 0;
     case "status": await cmdStatus(); return 0;
     case "maintenance": await cmdMaintenance(rest); return 0;

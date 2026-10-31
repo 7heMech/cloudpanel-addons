@@ -302,6 +302,31 @@ function clampSiteUser(name: string): string {
 }
 
 /**
+ * Whether a site user is spoken for, asked of both things that can refuse it.
+ *
+ * `createUser` fails if the account exists, and CloudPanel validates the site
+ * row separately -- it answers "siteUser: This value already exists" for a name
+ * another site holds. The two sets are not the same: an account can exist
+ * without a site (a system account, or one left by a half-finished delete), and
+ * a row can name an account someone removed by hand.
+ */
+export function siteUserTaken(user: string, panelDb: string): boolean {
+  if (runCommand("getent", ["passwd", user]).ok) return true;
+  if (!readable(panelDb)) return false;
+  try {
+    const db = new Database(panelDb, { readonly: true });
+    try {
+      return db.query("SELECT 1 FROM site WHERE user = ? LIMIT 1;").get(user) != null;
+    } finally {
+      db.close();
+    }
+  } catch {
+    // Unreadable here means the create is about to fail for a better reason.
+    return false;
+  }
+}
+
+/**
  * The panel-style name, or the first free variation of it. CloudPanel enforces
  * one site per site user, so the caller supplies the question "is this account
  * taken" and this answers with one that is not.
@@ -379,10 +404,6 @@ const libc = process.platform === "linux"
 const LOCK_EX = 2;
 const LOCK_NB = 4;
 const LOCK_UN = 8;
-
-function sleep(milliseconds: number): Promise<void> {
-  return new Promise((resolve) => setTimeout(resolve, milliseconds));
-}
 
 export interface FileLockHandle {
   release(): void;
@@ -481,7 +502,7 @@ export async function acquireFileLock(
     while (true) {
       if (libc.symbols.flock(fd, LOCK_EX | LOCK_NB) === 0) break;
       if (Date.now() >= deadline) lockTimeout(onTimeout, path);
-      await sleep(100);
+      await Bun.sleep(100);
     }
     state.locked = true;
     takeLock(fd, options);

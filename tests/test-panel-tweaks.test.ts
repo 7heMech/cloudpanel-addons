@@ -249,6 +249,17 @@ test("the column picker is in the block, and a switched-off column is never pain
   expect(sites({ sitesMobile: false })).toContain('var NARROW_QUERY = false && !desktopSite ? "(max-width: 1100px)" : "not all";');
 });
 
+// The download is the toolbar's, so it comes and goes with the Sites table
+// switch, and a value a spreadsheet would run as a formula goes in as text.
+test("the download sits in the toolbar and quotes formulas as text", () => {
+  expect(sites({ sitesTable: true })).toMatch(/<button type="button" class="form-control clp-tweaks-download" id="clp-tweaks-download"\s[^>]*Download the sites shown as CSV">/);
+  expect(sites({ sitesTable: false })).toMatch(/id="clp-tweaks-download"[^>]* hidden>/);
+  const snippet = sites({ sitesTable: true });
+  expect(snippet).toContain("buildDownload(rows, Boolean(tweaks.diskUsage));");
+  expect(snippet).toContain(`if (/^[=+\\-@\\t\\r]/.test(text)) text = "'" + text;`);
+  expect(snippet).toContain('return \'"\' + text.replace(/"/g, \'""\') + \'"\';');
+});
+
 // The addon's own page shows the panel's Sites page in a frame, so an operator
 // can see what a switch does without leaving the addon.
 test("the preview frame is the panel's own page, with the injected block over it", () => {

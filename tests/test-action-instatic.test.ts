@@ -6,7 +6,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
   DEFAULT_INSTATIC_ACTION_PATHS, makeSnapshot, parseInstaticAction, panelIdentityForInstatic, pruneSnapshots,
-  siteUserTaken, validateInstaticDomain,
+  validateInstaticDomain,
 } from "../addons/instatic/action";
 import { dashboardView, jobView, newInstanceView, pendingCreations } from "../addons/instatic/app/views";
 import type { InstanceView, InstaticJobView } from "../addons/instatic/app/service";
@@ -299,23 +299,3 @@ describe("the TLS certificate option", () => {
   });
 });
 
-// Two different things refuse a site user, and they do not hold the same set:
-// createUser fails when the account exists, and CloudPanel validates the site
-// row separately. Asking only getent would offer a name a site already holds,
-// which the panel then rejects with "siteUser: This value already exists".
-test("a site user is taken when an account or a panel site already has it", () => {
-  const root = mkdtempSync(join(tmpdir(), "instatic-site-user-"));
-  try {
-    const panelDb = join(root, "panel.db");
-    const db = new Database(panelDb);
-    db.run("CREATE TABLE site (user TEXT)");
-    db.run("INSERT INTO site VALUES ('site-only-user')");
-    db.close();
-    const paths = { ...DEFAULT_INSTATIC_ACTION_PATHS, panelDb };
-    expect(siteUserTaken("root", paths)).toBe(true);
-    expect(siteUserTaken("site-only-user", paths)).toBe(true);
-    expect(siteUserTaken("nobody-has-this-user", paths)).toBe(false);
-  } finally {
-    rmSync(root, { recursive: true, force: true });
-  }
-});

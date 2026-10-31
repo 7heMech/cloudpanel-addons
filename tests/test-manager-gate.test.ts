@@ -20,6 +20,8 @@ function probe(
   // past the gate reaches the addon's own handler. No addon is installed here,
   // so the real splitMount would answer null for every path.
   dispatchMounts = false,
+  // What the root gateway answers, by `addon:verb`; anything else fails.
+  gateway: Record<string, unknown> = {},
 ): Array<Record<string, unknown>> {
   const script = `
 import { mock } from "bun:test";
@@ -39,8 +41,14 @@ mock.module("./lib/update-check.ts", () => ({
   checkCliUpdate: async () => { reached.push("update-check"); return null; },
 }));
 mock.module("./lib/gateway-client.ts", () => ({
-  callGatewayAction: async () => { reached.push("gateway"); return { ok: false, error: "no gateway in this test" }; },
+  callGatewayAction: async (addon, verb, args) => {
+    reached.push("gateway");
+    reached.push(["gateway", addon, verb, ...(args || [])].join(" "));
+    return ${JSON.stringify(gateway)}[addon + ":" + verb] ?? { ok: false, error: "no gateway in this test" };
+  },
 }));
+// Nothing here reaches the network: a WordPress.org search answers no plugins.
+globalThis.fetch = async () => { reached.push("fetch"); return Response.json({ plugins: [] }); };
 mock.module("./lib/mount.ts", () => ({
   ADDONS_BASE_PATH: "/addons",
   mountPath: (addon) => "/addons/" + addon,
@@ -93,9 +101,18 @@ test("a non-administrator reaches only the named self-scoped routes", () => {
   const results = probe({ user: "someone", roles: ["ROLE_USER"] }, [
     { path: "/addons/wp-tools/api/sign-in", method: "POST" },
     { path: "/addons/wp-tools/api/session" },
+    { path: "/addons/wp-tools/api/site-kind" },
+    { path: "/addons/wp-tools/api/site-kind", method: "POST" },
     { path: "/addons/wp-tools/", method: "GET" },
     { path: "/addons/wp-tools/api/remove", method: "POST" },
     { path: "/addons/wp-tools/api/sign-in", method: "GET" },
+      // Uploading a plugin, and who may choose them, stay administrators'.
+    { path: "/addons/wp-tools/api/plugin-upload", method: "POST" },
+    { path: "/addons/wp-tools/api/plugin-discard", method: "POST" },
+    { path: "/addons/wp-tools/api/new-site-settings", method: "POST" },
+    { path: "/addons/wp-tools/api/plugin-search" },
+    { path: "/addons/wp-tools/api/new-site", method: "POST" },
+    { path: "/addons/wp-tools/api/new-site-status" },
     { path: "/addons/panel-tweaks/api/panel" },
     { path: "/addons/dns/api/session" },
     { path: "/addons/dns/api/provision", method: "POST" },
@@ -113,6 +130,10 @@ test("a non-administrator reaches only the named self-scoped routes", () => {
   expect(dispatched.map((result) => `${result.method} ${result.path}`)).toEqual([
     "POST /addons/wp-tools/api/sign-in",
     "GET /addons/wp-tools/api/session",
+    "GET /addons/wp-tools/api/site-kind",
+    "GET /addons/wp-tools/api/plugin-search",
+    "POST /addons/wp-tools/api/new-site",
+    "GET /addons/wp-tools/api/new-site-status",
     "GET /addons/panel-tweaks/api/panel",
     "GET /addons/dns/api/session",
     "POST /addons/dns/api/provision",
@@ -162,6 +183,59 @@ test("a site manager reaches the addons that declare the role and nothing else",
   for (const result of results) {
     expect(result.reached).not.toContain("update-check");
   }
+});
+
+// The plugin picker on CloudPanel's new-site form, which site managers use
+// too. The gate lets a site manager through to these three routes by name and
+// no further; the switch is root's, so it is the gateway's answer here.
+test("a site manager reaches the plugin picker's routes, and root's switch decides", () => {
+  const csrf = { Origin: "https://panel.example", Host: "panel.example", Cookie: "clp_addons_csrf=gate-test", "X-CLP-Addons-CSRF": "gate-test" };
+  const requests = [
+    { path: "/addons/wp-tools/api/new-site", method: "POST", headers: csrf,
+      body: JSON.stringify({ domain: "new.example.com", plugins: [{ slug: "woocommerce", activate: true }] }) },
+    { path: "/addons/wp-tools/api/new-site", method: "POST", headers: csrf,
+      body: JSON.stringify({ domain: "new.example.com", uploads: [{ id: "0".repeat(32), activate: true }] }) },
+    { path: "/addons/wp-tools/api/plugin-search?q=woo" },
+    { path: "/addons/wp-tools/api/new-site-status?job=20261029T192025Z-4a8d82" },
+    { path: "/addons/wp-tools/api/plugin-upload", method: "POST", headers: csrf, body: "PK" },
+    { path: "/addons/wp-tools/api/plugin-discard", method: "POST", headers: csrf, body: JSON.stringify({ id: "0".repeat(32) }) },
+    { path: "/addons/wp-tools/api/new-site-settings", method: "POST", headers: csrf, body: JSON.stringify({ siteManagers: true }) },
+    { path: "/addons/wp-tools/" },
+  ];
+  const off = "an administrator has not let site managers choose plugins for new sites";
+  const statuses = (gateway: Record<string, unknown>) => {
+    const results = probe({ user: "manager", roles: ["ROLE_SITE_MANAGER"] }, requests, true, gateway);
+    for (const result of results) expect(result.reached).not.toContain("update-check");
+    return results;
+  };
+
+  const refused = statuses({
+    "wp-tools:new-site": { ok: false, error: off },
+    "wp-tools:new-site-access": { ok: false, error: off },
+    "wp-tools:new-site-status": { ok: false, error: "no such job" },
+  });
+  expect(refused.map((result) => result.status)).toEqual([400, 403, 403, 404, 403, 403, 403, 403]);
+  expect(refused[0]!.body).toEqual({ ok: false, error: off });
+  // Root is told whose request it is; a zip is refused before root is asked.
+  expect(refused[0]!.reached).toContain("gateway wp-tools new-site --domain=new.example.com --plugins=woocommerce:1 --as-user=manager");
+  expect(refused[1]!.reached).not.toContain("gateway");
+  expect(refused[2]!.reached).toContain("gateway wp-tools new-site-access --as-user=manager");
+  expect(refused[2]!.reached).not.toContain("fetch");
+  expect(refused[3]!.reached).toContain("gateway wp-tools new-site-status --job=20261029T192025Z-4a8d82 --as-user=manager");
+  // Uploading, discarding, the switch itself and the addon's page stay behind the gate.
+  for (const result of refused.slice(4)) {
+    expect(result.body).toEqual({ ok: false, error: "administrator role required" });
+    expect(result.reached).not.toContain("gateway");
+  }
+
+  const allowed = statuses({
+    "wp-tools:new-site": { ok: true, data: { job: { id: "20261029T192025Z-4a8d82" } } },
+    "wp-tools:new-site-access": { ok: true, data: { uploads: false } },
+    "wp-tools:new-site-status": { ok: true, data: { job: { id: "20261029T192025Z-4a8d82", state: "running" } } },
+  });
+  expect(allowed.map((result) => result.status)).toEqual([200, 403, 200, 200, 403, 403, 403, 403]);
+  expect(allowed[2]!.reached).toContain("fetch");
+  expect(allowed[2]!.body).toEqual({ ok: true, data: { plugins: [] } });
 });
 
 test("an ordinary user cannot create or manage Instatic sites", () => {

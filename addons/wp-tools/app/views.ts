@@ -7,6 +7,7 @@ import { mountPath } from "../../../lib/mount";
 import type { WpJobView, WpSiteView } from "../action";
 import type { VarnishPluginStatus } from "../varnish";
 import type { MainwpStatus, MainwpView } from "../mainwp";
+import type { NewSitePluginOutcome, NewSitePluginStatus, NewSiteResult } from "../new-site-plugins";
 import type { WpDashboard } from "./service";
 
 const BASE = mountPath("wp-tools");
@@ -120,6 +121,7 @@ const JOB_TITLES: Record<WpJobView["task"], string> = {
   "mainwp-check": "Checking MainWP Child",
   "mainwp-connect": "Connecting sites to MainWP",
   "mainwp-cleanup": "Cleaning up MainWP",
+  "new-site-plugins": "Installing plugins",
 };
 
 function jobsStrip(data: WpDashboard): string {
@@ -134,8 +136,10 @@ function batchToolbar(data: WpDashboard, count: number): string {
   return `
         <span class="toolbar-note" id="site-selection">No sites selected</span>
         <button class="btn mobile-select-all" id="select-all-btn" type="button" onclick="toggleAllSites()">Select all</button>
-        <button class="btn toolbar-end" type="button" data-needs-selection disabled onclick="connectMainwpSelected()">Connect selected to MainWP</button>
-        <button class="btn" type="button" data-count="${count}"${count && !busy ? "" : " disabled"} onclick="connectMainwpAll(this)">Connect all unconnected (${count})</button>`;
+        <div class="toolbar-end wp-batch">
+          <button class="btn" type="button" data-needs-selection disabled onclick="connectMainwpSelected()"><span class="wp-long">Connect selected to MainWP</span><span class="wp-short">Connect selected</span></button>
+          <button class="btn" type="button" data-count="${count}"${count && !busy ? "" : " disabled"} onclick="connectMainwpAll(this)"><span class="wp-long">Connect all unconnected (${count})</span><span class="wp-short">Connect all (${count})</span></button>
+        </div>`;
 }
 
 function helperLine(sites: WpSiteView[]): string {
@@ -181,6 +185,63 @@ function sitesCard(data: WpDashboard): string {
     </div>${helperLine(sites)}`;
 }
 
+const NEW_SITE_STATUS: Record<NewSitePluginStatus, [label: string, tone: string]> = {
+  activated: ["Active", "state-done"],
+  installed: ["Installed", ""],
+  present: ["Already there", ""],
+  failed: ["Failed", "state-failed"],
+};
+
+function when(stamp: string): string {
+  return stamp ? `${esc(stamp.replace("T", " ").slice(0, 16))} UTC` : "";
+}
+
+function newSitePlugin(plugin: NewSitePluginOutcome): string {
+  const [label, tone] = NEW_SITE_STATUS[plugin.status] ?? ["Failed", "state-failed"];
+  const source = plugin.source === "upload" ? "uploaded" : "WordPress.org";
+  return `<li><span class="wp-plugin-name">${esc(plugin.name)}</span> <span class="badge ${tone}">${label}</span> <span class="wp-note">${source}</span>${
+    plugin.error ? `<div class="wp-error">${esc(plugin.error)}</div>` : ""}</li>`;
+}
+
+function newSiteRow(job: WpJobView): string {
+  const result = job.result as NewSiteResult | null;
+  const plugins = result?.plugins.length
+    ? `<ul class="wp-plugin-list">${result.plugins.map(newSitePlugin).join("")}</ul>`
+    : `<ul class="wp-plugin-list">${job.plugins.map((plugin) => `<li><span class="wp-plugin-name">${esc(plugin.name)}</span></li>`).join("")}</ul>`;
+  const state = job.state === "failed"
+    ? `<span class="badge state-failed">Failed</span><div class="wp-error">${esc(job.error)}</div>`
+    : `<span class="hint">${when(job.finishedAt)}</span>`;
+  return `
+              <tr data-domain="${esc(job.domains[0] ?? "")}">
+                <td class="site-cell">${esc(job.domains[0] ?? "")}${job.chosenBy ? `<div class="hint">chosen by ${esc(job.chosenBy)}</div>` : ""}</td>
+                <td data-label="Plugins">${plugins}</td>
+                <td data-label="Finished">${state}</td>
+              </tr>`;
+}
+
+/** What the new-site form's choices did, and the ones still waiting for their site. */
+function newSitesCard(jobs: WpJobView[]): string {
+  const running = jobs.filter((job) => job.state === "queued" || job.state === "running");
+  const finished = jobs.filter((job) => !running.includes(job));
+  return `
+    <div class="card card-table">
+      <div class="card-header"><h2>Plugins on new sites</h2></div>
+      <p class="hint wp-card-note">Choose plugins from WordPress.org, or upload them as zips, on CloudPanel's New WordPress Site form. Each is installed as the site's own user once WordPress is set up, and the page the new site lands on says how it went.</p>${
+  running.length ? `
+      <div class="wp-jobs">${running.map((job) => `
+        ${jobProgressHtml(job, `Plugins for ${job.domains[0] ?? ""}`)}`).join("")}
+      </div>` : ""}${
+  finished.length ? `
+      <div class="table-scroll">
+        <table class="fleet-table wp-new-site-table">
+          <thead><tr><th scope="col">Site</th><th scope="col">Plugins</th><th scope="col">Finished</th></tr></thead>
+          <tbody>${finished.map(newSiteRow).join("")}
+          </tbody>
+        </table>
+      </div>` : ""}
+    </div>`;
+}
+
 function varnishSection(automatic: boolean, error: string, job: WpJobView | null): string {
   const title = "Install CLP Varnish Cache automatically";
   if (error) return `<div class="wp-section"><h3>${title}</h3><div class="alert" role="alert">${esc(error)}</div></div>`;
@@ -211,7 +272,7 @@ function dashboardPicker(sites: WpSiteView[], state: MainwpView, busy = false): 
 }
 
 function mainwpSection(sites: WpSiteView[], state: MainwpView, error: string, job: WpJobView | null): string {
-  const title = state.remote ? "Install MainWP Child automatically" : "Install and connect MainWP Child automatically";
+  const title = state.remote ? "Install MainWP Child automatically" : "Keep every site connected to MainWP";
   if (error) return `<div class="wp-section"><h3>${title}</h3><div class="alert" role="alert">${esc(error)}</div></div>`;
   const cleanable = state.owned > 0 || state.cleanup;
   const busy = job ? " disabled" : "";
@@ -236,7 +297,7 @@ function mainwpSection(sites: WpSiteView[], state: MainwpView, error: string, jo
   }
   const summary = state.remote
     ? "On every WordPress site that has never had MainWP Child, checked every 15 minutes. It stays inactive, since it turns itself off when no Dashboard connects soon after activation: activate a site just before adding it in your Dashboard. A Child removed in WordPress is left alone."
-    : "On every WordPress site that has never had MainWP Child, once it answers over HTTPS, checked every 15 minutes. A site that already has a Child, or had one removed, is connected only when you choose it above.";
+    : "Checked every 15 minutes: each WordPress site gets MainWP Child installed, activated and connected to this Dashboard once it answers over HTTPS, even if it was connected to another one. Site administrators cannot see, deactivate or disconnect it.";
   return `
       <div class="wp-section">
         <div class="split-card">
@@ -255,6 +316,35 @@ function mainwpSection(sites: WpSiteView[], state: MainwpView, error: string, jo
       </div>`;
 }
 
+function switchSection(title: string, id: string, on: boolean, handler: string, hint: string, error: string): string {
+  return error
+    ? `<div class="wp-section"><h3>${title}</h3><div class="alert" role="alert">${esc(error)}</div></div>`
+    : `
+      <div class="wp-section">
+        <div class="split-card">
+          <div>
+            <h3>${title}</h3>
+            <p class="hint">${hint}</p>
+          </div>
+          <label class="switch"><input id="${id}" type="checkbox" aria-label="${title}" ${on ? "checked" : ""} onchange="${handler}(this)"><span></span></label>
+        </div>
+      </div>`;
+}
+
+/** The switches that change what CloudPanel's own pages draw, which saving renders again. */
+function panelPagesCard(data: WpDashboard): string {
+  return `
+    <div class="card">
+      <div class="card-header"><h2>CloudPanel's pages</h2></div>
+      ${switchSection("Sign in from the domain", "domain-link", data.domainLink.signIn, "setDomainLink",
+    "On a WordPress site's pages in CloudPanel, the domain at the top signs in to WordPress instead of opening the site; Ctrl-click still opens it. Off, a WP Login link sits beside the domain instead.",
+    data.domainLinkError)}
+      ${switchSection("Site managers choose plugins for new sites", "new-site-managers", data.newSiteAccess?.siteManagers ?? false, "setNewSiteManagers",
+    "Site managers get the Plugins row on the New WordPress Site form too, with WordPress.org plugins only. Uploading a zip stays with administrators.",
+    data.newSiteAccessError ?? "")}
+    </div>`;
+}
+
 function automationCard(data: WpDashboard): string {
   return `
     <div class="card">
@@ -266,7 +356,7 @@ function automationCard(data: WpDashboard): string {
 
 /** Everything below the heading; the page repaints it from `/api/dashboard` after a change. */
 export function dashboardBody(data: WpDashboard): string {
-  return `${sitesCard(data)}${automationCard(data)}`;
+  return `${sitesCard(data)}${newSitesCard(data.newSites ?? [])}${automationCard(data)}${panelPagesCard(data)}`;
 }
 
 export function dashboardView(data: WpDashboard): string {
@@ -274,7 +364,7 @@ export function dashboardView(data: WpDashboard): string {
     <div class="page-heading">
       <div>
         <h1>WordPress Tools</h1>
-        <p>Sign in to any WordPress on this server as its first administrator, and install CLP Varnish Cache and MainWP Child automatically.</p>
+        <p>Sign in to any WordPress on this server as its first administrator, choose plugins for new WordPress sites, and install CLP Varnish Cache and MainWP Child automatically.</p>
       </div>
     </div>
     <div id="wp-dashboard">${dashboardBody(data)}</div>`;

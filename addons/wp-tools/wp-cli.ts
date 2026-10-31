@@ -20,6 +20,8 @@ export interface WpCommand {
   /** Root's own limit, a little past the `timeout` the command runs under. */
   timeoutMs: number;
   stdin?: string;
+  /** A zip handed to the site's user, in place of `stdin`. */
+  stdinBytes?: Uint8Array;
   sensitive?: boolean;
 }
 
@@ -33,7 +35,7 @@ const OUTPUT_LIMIT = 64 * 1024;
  */
 export async function commandOutput(command: WpCommand): Promise<string> {
   const child = Bun.spawn(command.argv, {
-    cwd: command.cwd, env: command.env, stdin: command.stdin === undefined ? "ignore" : new TextEncoder().encode(command.stdin), stdout: "pipe", stderr: "pipe",
+    cwd: command.cwd, env: command.env, stdin: command.stdinBytes ?? (command.stdin === undefined ? "ignore" : new TextEncoder().encode(command.stdin)), stdout: "pipe", stderr: "pipe",
   });
   const readers = [child.stdout.getReader(), child.stderr.getReader()];
   let failure = "";

@@ -22,6 +22,7 @@ const MAX_PROFILES = 24;
 const MAX_RECORDS = 60;
 export const MAX_CONNECTIONS = 12;
 const MAX_SKIP_IPS = 20;
+const MAX_REDIRECTS = 500;
 const NAME_MAX = 40;
 
 export interface RecordTemplate {
@@ -62,6 +63,21 @@ export interface Profile {
   zone: ZoneOptions;
 }
 
+/** A host whose requests Cloudflare, or a stand-in site on this server, sends elsewhere. */
+export interface Redirect {
+  /** A zone apex, which covers its `www` too, or one host inside a zone. */
+  source: string;
+  target: string;
+  status: RedirectStatus;
+  keepPath: boolean;
+  keepQuery: boolean;
+  /** Whose rows other than the web rows still apply, such as mail. */
+  profileId: string | null;
+}
+
+export const REDIRECT_STATUSES = [301, 302, 307, 308] as const;
+export type RedirectStatus = (typeof REDIRECT_STATUSES)[number];
+
 export interface Connection {
   id: string;
   label: string;
@@ -95,6 +111,7 @@ export interface Policy {
   defaultProfileId: string | null;
   /** Domain to profile id. A site that is absent is left alone. */
   assignments: Record<string, string>;
+  redirects: Redirect[];
   knownSiteIds: number[];
   /** New sites whose changes beyond their own address records wait for an administrator's review. */
   held: string[];
@@ -358,7 +375,9 @@ export function parsePolicy(value: unknown): Policy {
       profiles,
       defaultProfileId: raw.defaultProfileId && ids.has(raw.defaultProfileId) ? raw.defaultProfileId : null,
       assignments,
-      held: [...new Set((raw.held ?? []).filter((domain) => typeof domain === "string" && assignments[domain]))],
+      redirects: parseRedirects(raw.redirects, ids),
+      held: [...new Set((raw.held ?? []).filter((domain) => typeof domain === "string"
+        && (assignments[domain] || (raw.redirects ?? []).some((redirect) => redirect?.source === domain))))],
       knownSiteIds: [...new Set((raw.knownSiteIds ?? []).filter((id) => Number.isSafeInteger(id) && id > 0))],
       connections: parseConnections(raw.connections ?? []),
       zoneChoices: choices,
@@ -372,6 +391,54 @@ export function parsePolicy(value: unknown): Policy {
     if (error instanceof ActionFailure) failAction(`the DNS policy is malformed: ${error.message}`);
     throw error;
   }
+}
+
+/** An absolute http(s) URL with no credentials or fragment; with the path kept, no query either, and no trailing slash. */
+export function redirectTarget(value: unknown, keepPath: boolean): string {
+  if (typeof value !== "string") failAction("The target must be a URL, such as https://example.com");
+  let url: URL;
+  try {
+    url = new URL(value.trim());
+  } catch {
+    failAction("The target must be a URL, such as https://example.com");
+  }
+  if ((url.protocol !== "https:" && url.protocol !== "http:") || url.username || url.password || url.hash || !dnsName(url.hostname)) {
+    failAction("The target must be an http or https URL, such as https://example.com");
+  }
+  if (keepPath && url.search) failAction("A target that keeps the path cannot have a query string");
+  const text = url.href;
+  if (/["'$;{}\\\s]/.test(text) || text.length > 1024) failAction("The target has characters a redirect cannot carry");
+  return keepPath ? text.replace(/\/+$/, "") : text;
+}
+
+export function parseRedirect(value: unknown, profiles?: Set<string>): Redirect {
+  if (!value || typeof value !== "object" || Array.isArray(value)) failAction("the redirect is malformed");
+  const raw = value as Record<string, unknown>;
+  const source = hostname(raw.source, "The redirect's domain");
+  const keepPath = flag(raw.keepPath ?? true, "Keep path");
+  const target = redirectTarget(raw.target, keepPath);
+  const host = new URL(target).hostname;
+  if (host === source || host === `www.${source}`) failAction(`${source} cannot redirect to itself`);
+  const status = REDIRECT_STATUSES.find((code) => code === Number(raw.status ?? 301));
+  if (!status) failAction("The status must be 301, 302, 307 or 308");
+  const profile = raw.profileId == null || raw.profileId === "" ? null : profileId(raw.profileId);
+  return {
+    source, target, status, keepPath, keepQuery: flag(raw.keepQuery ?? true, "Keep query string"),
+    profileId: profile && (!profiles || profiles.has(profile)) ? profile : null,
+  };
+}
+
+export function parseRedirects(value: unknown, profiles?: Set<string>): Redirect[] {
+  if (value == null) return [];
+  if (!Array.isArray(value)) failAction("the redirects must be a list");
+  if (value.length > MAX_REDIRECTS) failAction(`at most ${MAX_REDIRECTS} redirect domains`);
+  const redirects = value.map((entry) => parseRedirect(entry, profiles));
+  const seen = new Set<string>();
+  for (const redirect of redirects) {
+    if (seen.has(redirect.source)) failAction(`${redirect.source} is listed as a redirect twice`);
+    seen.add(redirect.source);
+  }
+  return redirects.sort((a, b) => a.source.localeCompare(b.source));
 }
 
 export function parseSecrets(value: unknown): Secrets {

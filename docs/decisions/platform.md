@@ -29,22 +29,25 @@ The Addons page is two lists, Enabled and Available, one row per addon with its
 one-line description and its buttons, so the whole catalog fits on a screen. A
 search above them keeps only the rows whose name and description contain every
 one of its words, and hides a list it empties. An
-addon's `added` version (`2.0.0-rc.1`, for example) marks it New only in that
-exact installed release. An existing addon's `changed.in` version marks it
-Changed on the same terms, with one line saying what changed; the rest is the
-changelog's, which the update page links. Release candidates and patch releases
-are distinct: updating drops older notices, even ones nobody opened. Only
-notices declared for the installed release appear. Opening the addon from its
-row clears its badge and note for that release, for every administrator and
-device: the box usually has one person who updates it, and a per-user record
-would need a panel identity for nothing. The page asks the manager's
-`mark-news-seen` verb, which takes only the
-addon name and works out the key (`dns@2.0.0-rc.1`) itself. It reads only keys
-for current notices from `manager/news-seen.json` under the state directory,
-discarding other keys when it records a new read. A later release that marks
-the addon again shows its new notice. The version comes from the running
-binary, so replacing it changes which notices are eligible without the updater
-deleting read state. Reinstalling the same version keeps read notices cleared.
+addon's `added` version (`2.0.0-rc.1`, for example) marks it New on a box
+whose previous release was older than that and whose installed release is not.
+An existing addon's `changed.in` version marks it Changed on the same terms,
+with one line saying what changed; the rest is the changelog's, which the update
+page links. So a box updated from 1.5.2 to 2.0.0 sees what every 2.0.0 release
+candidate declared, and one that already ran 2.0.0-rc.1 sees none of it. The
+previous release is `manager/news-since` under the state directory: an update
+writes the release it replaced, and puts the file back if it rolls back, and
+`install --local` writes the one its artifact manifest named, or the installed
+release itself on a fresh install, where nothing is new to whoever installed it. A box without the file was updated
+from a release that kept none, so it sees every notice up to the installed one.
+Opening the addon from its row clears its badge and note, for every
+administrator and device: the box usually has one person who updates it, and a
+per-user record would need a panel identity for nothing. The page asks the
+manager's `mark-news-seen` verb, which takes only the addon name and works out
+the key (`dns@2.0.0-rc.1`, the release that declared the notice) itself. It
+reads only keys for notices still shown from `manager/news-seen.json`,
+discarding other keys when it records a new read. Reinstalling the same version
+changes neither file.
 
 ## One catalog, compiled in
 
@@ -215,14 +218,76 @@ catalog order, so DNS normally writes a site's records before SMTP Relay binds
 its user. Each gets a 15-second head start rather than waiting for the one
 before it to finish: DNS can wait minutes for its lock behind a fleet check, and
 until SMTP Relay binds the site its mail login is refused. One addon failing
-does not skip the next. CloudPanel commits the site row
-about 200 ms after writing the vhost, so the service runs again 10 seconds
-later, even if the first run failed. The units exist while any installed addon
-declares `newSites`; repair restarts the watcher if it has stopped. It takes no
-operation lock: each addon's work takes its own. Vhost rewrites also wake the
-watcher; when the site set is unchanged, the hooks make no network calls or
-configuration writes. Update and repair disable and remove the units listed in
-`LEGACY_UNITS` in `cli/paths.ts`.
+does not skip the next. The units exist while any installed addon declares
+`newSites`; repair restarts the watcher if it has stopped. It takes no
+operation lock: each addon's work takes its own. Work that runs a site's own
+code is queued rather than done in the hook, as WordPress Tools hands its checks
+to background jobs (see [WordPress Tools](wp-tools.md#new-sites)). Update and
+repair disable and remove the units listed in `LEGACY_UNITS` in `cli/paths.ts`.
+
+The vhost is not the site yet. CloudPanel commits the site's row in its
+database after writing the vhost: half a second later on staging, for a
+WordPress site too, whose files and installation come after the row and do not
+delay it. A busy panel database delays it further, because CloudPanel's insert
+waits for the other writers. Deleting a site removes the vhost first and the row
+about 0.75 s later. So the row's commit is the second event. `sync-sites` reads
+the panel's sites, each domain with its id (read-only, so its own read is not a
+write), and runs the hooks only when they differ from the ones they last ran
+for, recorded in `/var/lib/clp-addons/new-sites-seen.json`. The panel never
+reuses an id, so a site deleted and added again at its domain is a change even
+if the deletion went unseen. Then, while a site is in flight, it
+starts `clp-addons-new-site-rows.path`, which watches
+`/home/clp/htdocs/app/data` and starts the same service; when none is, it stops
+it again. In flight means a `<domain>.conf` vhost written in the last hour with
+no row, or a row whose vhost is gone while the vhost directory changed in the
+last hour. CloudPanel's own vhosts and ours, such as `default.conf`, have no dot
+in their name, and the hour bounds a site that never finishes arriving.
+CloudPanel's database uses a rollback journal, so every commit creates and
+deletes `db.sq3-journal` in that directory; a connection closing is a change
+too.
+
+The rows watcher is not left running because the panel writes its database
+every few seconds even when idle: its monitoring agent made 14 commits in two
+minutes on an idle staging box. While it runs, each of those starts the service
+for about 30 ms to read one table and find nothing new. A path unit does not
+start a service again for a change made while that service is still running, so
+`sync-sites` reads the sites once more after starting the watcher, and goes
+round again if a row arrived while the hooks ran; a commit in the moment between
+that read and the service ending is seen at the panel's next write. Several
+starts in a few seconds are normal while a site is in flight, so the service has
+no start limit: systemd's default fails a unit, and the path that started it,
+after five starts in ten seconds. Hooks that ran for a set of sites do not run
+again for it even if one failed, because the rows watcher would otherwise repeat
+every hook on every panel write; the 15-minute pass retries it. Vhost rewrites
+that add or remove no site run no hook. When the sites cannot be read, such as
+behind a write that holds the database longer than the five-second busy wait,
+the hooks run as they always did and the rows watcher is started, so the write
+that releases the database brings another look.
+
+Some of a site's creation comes after its row, in the same request, and
+changes no file the watchers see: CloudPanel installs WordPress as root after
+committing the row. An addon that waits for such a step gives its `newSites` a
+`waiting` check. `sync-sites` runs it on every wake for an hour after the hooks
+last ran for a change to the sites, by the time on `new-sites-seen.json`, and
+keeps the rows watcher running while any says it is still waiting. It runs it
+once more after starting the watcher, as it reads the rows again, because the
+write that ends the request may come while the service runs. A check that fails
+counts as waiting. While nothing waits, the rows watcher runs only for sites in
+flight.
+
+A site's certificate is a later step of its creation, and an addon whose work
+needs the site's HTTPS declares `certificates`. `clp-addons-certificates.path`
+watches `/etc/nginx/ssl-certificates`, where CloudPanel writes each site's
+`<domain>.crt` and key in place, so the vhost, which names that path, is not
+rewritten. Its service runs `clp-addons sync-certificates`: each installed
+addon's `certificates`, in catalog order, one after another. It is not part of
+the new-site watcher because a certificate changes no domain, so `sync-sites`
+would run no hook for it, and because a path that changes while its service is
+running starts nothing. This service takes a second and runs again three
+seconds later, because the key and the certificate are separate writes. Every
+renewal wakes it too, so a hook does nothing when no site is waiting on it. The
+units exist while any installed addon declares `certificates`, and repair
+restarts the watcher as it does the new-site one.
 
 ## One way to watch a job
 
