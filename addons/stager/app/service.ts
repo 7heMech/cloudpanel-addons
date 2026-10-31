@@ -53,8 +53,8 @@ export { validateJobId } from "../../../lib/job-id";
  * Here rather than in the action binary because it is a convenience, and the
  * action binary must not rewrite its input -- a boundary that silently
  * corrects a value is one that eventually corrects it wrong. What crosses the
- * boundary is always a complete hostname. The page's script carries this same
- * function, so it is written in the JavaScript a browser runs.
+ * boundary is always a complete hostname. The page sends what was typed; its
+ * preview label runs a copy, expand-target.client.js.
  */
 export function expandTarget(input: string, source: string): string {
   const t = String(input || "").trim().toLowerCase().replace(/\.$/, "");
