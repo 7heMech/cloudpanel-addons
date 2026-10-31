@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, expect, test } from "bun:test";
 import { Database } from "bun:sqlite";
-import { existsSync, mkdirSync, mkdtempSync, readdirSync, rmSync, utimesSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, utimesSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { deflateRawSync } from "node:zlib";
@@ -794,4 +794,41 @@ test("the new-site blocks are for administrators, and site managers only while a
     ["Frontend/Site/New/wordpress.html.twig", false],
     ["Frontend/Site/New/wordpress-installed.html.twig", false],
   ]);
+});
+
+test("Create waits for an upload still in progress, even when it is the only plugin chosen", () => {
+  const listeners: Record<string, ((event: unknown) => void)[]> = {};
+  const node = (): any => ({
+    hidden: false, textContent: "", value: "", style: {}, files: [] as unknown[],
+    classList: { add() {}, remove() {} },
+    addEventListener: (type: string, fn: (event: unknown) => void) => { (listeners[type] ??= []).push(fn); },
+    appendChild() {}, setAttribute() {}, getAttribute: () => "/addons/wp-tools", querySelectorAll: () => [],
+  });
+  const form = node();
+  const domain = Object.assign(node(), { value: "new.example.test" });
+  form.querySelector = () => domain;
+  const nodes: Record<string, any> = Object.fromEntries(
+    ["clp-wp-plugins", "clp-wp-plugin-search", "clp-wp-plugin-results", "clp-wp-plugin-chosen", "clp-wp-plugin-file", "clp-wp-plugins-error"].map((id) => [id, node()]),
+  );
+  nodes["clp-wp-plugins"].closest = () => form;
+  const document = {
+    cookie: "clp_addons_csrf=token", getElementById: (id: string) => nodes[id], createElement: node,
+    addEventListener: (type: string, fn: (event: unknown) => void) => { (listeners[`document ${type}`] ??= []).push(fn); },
+  };
+  const storage = new Map<string, string>([["clp-addons-new-site-job", JSON.stringify({ domain: "old.example.test", id: "j1" })]]);
+  const sessionStorage = { getItem: (key: string) => storage.get(key) ?? null, setItem: (key: string, value: string) => storage.set(key, value), removeItem: (key: string) => storage.delete(key) };
+  const fetched: string[] = [];
+  const fetch = (url: string) => { fetched.push(url); return new Promise(() => {}); };
+  const source = readFileSync(join(import.meta.dir, "../addons/wp-tools/inject/new-site.client.js"), "utf8");
+  new Function("document", "sessionStorage", "fetch", source)(document, sessionStorage, fetch);
+
+  nodes["clp-wp-plugin-file"].files = [{ name: "big.zip", size: 1024 }];
+  for (const fn of listeners.change!) fn({});
+  let stopped = 0;
+  const submit = { target: form, preventDefault: () => { stopped++; }, stopImmediatePropagation: () => { stopped++; } };
+  for (const fn of listeners["document submit"]!) fn(submit);
+  expect(stopped).toBe(2);
+  expect(nodes["clp-wp-plugins-error"].textContent).toBe("Wait for the upload to finish, then create the site.");
+  expect(storage.has("clp-addons-new-site-job")).toBe(true);
+  expect(fetched.some((url) => url.endsWith("/api/new-site"))).toBe(false);
 });

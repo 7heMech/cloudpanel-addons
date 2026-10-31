@@ -231,9 +231,11 @@ WordPress site too, whose files and installation come after the row and do not
 delay it. A busy panel database delays it further, because CloudPanel's insert
 waits for the other writers. Deleting a site removes the vhost first and the row
 about 0.75 s later. So the row's commit is the second event. `sync-sites` reads
-the panel's domains (read-only, so its own read is not a write) and runs the
-hooks only when they differ from the ones they last ran for, recorded in
-`/var/lib/clp-addons/new-sites-seen.json`. Then, while a site is in flight, it
+the panel's sites, each domain with its id (read-only, so its own read is not a
+write), and runs the hooks only when they differ from the ones they last ran
+for, recorded in `/var/lib/clp-addons/new-sites-seen.json`. The panel never
+reuses an id, so a site deleted and added again at its domain is a change even
+if the deletion went unseen. Then, while a site is in flight, it
 starts `clp-addons-new-site-rows.path`, which watches
 `/home/clp/htdocs/app/data` and starts the same service; when none is, it stops
 it again. In flight means a `<domain>.conf` vhost written in the last hour with
@@ -249,7 +251,7 @@ every few seconds even when idle: its monitoring agent made 14 commits in two
 minutes on an idle staging box. While it runs, each of those starts the service
 for about 30 ms to read one table and find nothing new. A path unit does not
 start a service again for a change made while that service is still running, so
-`sync-sites` reads the domains once more after starting the watcher, and goes
+`sync-sites` reads the sites once more after starting the watcher, and goes
 round again if a row arrived while the hooks ran; a commit in the moment between
 that read and the service ending is seen at the panel's next write. Several
 starts in a few seconds are normal while a site is in flight, so the service has
@@ -257,7 +259,7 @@ no start limit: systemd's default fails a unit, and the path that started it,
 after five starts in ten seconds. Hooks that ran for a set of sites do not run
 again for it even if one failed, because the rows watcher would otherwise repeat
 every hook on every panel write; the 15-minute pass retries it. Vhost rewrites
-that add or remove no site run no hook. When the domains cannot be read, such as
+that add or remove no site run no hook. When the sites cannot be read, such as
 behind a write that holds the database longer than the five-second busy wait,
 the hooks run as they always did and the rows watcher is started, so the write
 that releases the database brings another look.

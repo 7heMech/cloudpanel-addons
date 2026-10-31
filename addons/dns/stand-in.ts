@@ -6,9 +6,8 @@
  * Each is recorded before CloudPanel creates it, so the new-site work of every
  * addon already knows it is not an ordinary site.
  */
-import { Database } from "bun:sqlite";
 import { randomBytes } from "node:crypto";
-import { availableSiteUser, runCommand } from "../../cli/action-common";
+import { panelSiteUserFor, runCommand } from "../../cli/action-common";
 import { replaceSiteVhost, type SiteVhostPaths } from "../../cli/site-vhost";
 import { ownsStandInSite } from "../../cli/stand-ins";
 import type { StandIn, StandIns } from "./engine";
@@ -85,13 +84,9 @@ function saveStandIns(paths: StandInPaths, records: Record<string, StandInRecord
   writeState(paths.file, records, paths.rootUid);
 }
 
-function panelUsers(panelDb: string): Set<string> {
-  const db = new Database(panelDb, { readonly: true });
-  try {
-    return new Set(db.query<{ user: string }, []>("SELECT user FROM site").all().map((row) => row.user));
-  } finally {
-    db.close();
-  }
+/** A site user no one picks in the panel, so the site that has it is this stand-in's even before its id is recorded. */
+function standInUser(domain: string): string {
+  return `${panelSiteUserFor(domain).slice(0, 23).replace(/-+$/, "")}-${randomBytes(4).toString("hex")}`;
 }
 
 function clpctl(paths: StandInPaths, args: string[], what: string): void {
@@ -104,6 +99,14 @@ export function clpctlStandIns(
   paths: StandInPaths, panelSite: (domain: string) => { id: number; user?: string } | undefined, now: () => number,
 ): StandIns {
   const records = readStandIns(paths);
+  // A creation interrupted before it recorded the site's id.
+  for (const [domain, record] of Object.entries(records)) {
+    const site = record.siteId === undefined ? panelSite(domain) : undefined;
+    if (site && site.user === record.siteUser) {
+      record.siteId = site.id;
+      saveStandIns(paths, records);
+    }
+  }
   const ours = (domain: string, record = readStandIns(paths)[domain]) => {
     const site = panelSite(domain);
     return site !== undefined && ownsStandInSite(record, site);
@@ -119,30 +122,27 @@ export function clpctlStandIns(
     current,
     async create(redirect) {
       if (panelSite(redirect.source)) throw new Error(`CloudPanel already has a site ${redirect.source}`);
-      const taken = panelUsers(paths.vhost.panelDb);
-      const siteUser = availableSiteUser(redirect.source, (user) => taken.has(user) || runCommand("id", ["-u", user]).ok);
+      const siteUser = standInUser(redirect.source);
       const saved = readStandIns(paths);
       // Incomplete until the vhost redirects: a site whose cleanup fails is kept,
       // and a later pass has to write its vhost rather than take it as done.
       saved[redirect.source] = { ...spec(redirect), incomplete: true, siteUser, createdAt: now(), certificate: { attempts: 0, nextAt: now(), done: false } };
       saveStandIns(paths, saved);
-      // Only a site known to be this one is deleted on failure: another may have taken the domain meanwhile.
-      let siteId: number | null = null;
       try {
         clpctl(paths, ["site:add:static", `--domainName=${redirect.source}`, `--siteUser=${siteUser}`,
           `--siteUserPassword=${randomBytes(24).toString("base64url")}`], `CloudPanel did not create ${redirect.source}`);
         const site = panelSite(redirect.source);
         if (site?.user !== siteUser) throw new Error(`CloudPanel does not list ${redirect.source} as the site it created`);
-        siteId = site.id;
         const created = readStandIns(paths);
-        created[redirect.source] = { ...created[redirect.source]!, siteId };
+        created[redirect.source] = { ...created[redirect.source]!, siteId: site.id };
         saveStandIns(paths, created);
         replaceSiteVhost(paths.vhost, redirect.source, standInBody(redirect.source, redirect));
         const done = readStandIns(paths);
         delete done[redirect.source]!.incomplete;
         saveStandIns(paths, done);
       } catch (error) {
-        if (siteId !== null && panelSite(redirect.source)?.id === siteId) {
+        // Only a site with this user is deleted: another may have taken the domain meanwhile.
+        if (panelSite(redirect.source)?.user === siteUser) {
           try {
             clpctl(paths, ["site:delete", `--domainName=${redirect.source}`, "--force"],
               `CloudPanel did not clean up ${redirect.source}; its stand-in record was kept`);

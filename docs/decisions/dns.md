@@ -197,11 +197,15 @@ waits for a connection.
 
 `standins.json` records each one with its site user before CloudPanel creates
 it, so the new-site work of every addon already sees it, and adds CloudPanel's
-site id once the site exists. A record counts only while the panel site at its
+site id once the site exists. The user ends in eight random hex digits, which
+no one picks in the panel, so a site with it is the stand-in's even before its
+id is recorded: a failed creation deletes only a site with that user, and one
+interrupted before the id was saved takes the id from that site on the next
+pass. A record counts only while the panel site at its
 domain has that user and id, or that user for the few minutes it is being
 created (`cli/stand-ins.ts`): a site added there after the stand-in was deleted
-in CloudPanel is an ordinary site. DNS changes or deletes only a site whose id
-it recorded, even when creating one fails, and makes no stand-in where a site
+in CloudPanel is an ordinary site. DNS otherwise changes or deletes only a site
+whose id it recorded, and makes no stand-in where a site
 already exists. If creation fails and CloudPanel also refuses to delete the
 site, DNS keeps its ownership record so a later deletion can still identify
 the site, and reports both failures. The record stays marked incomplete until

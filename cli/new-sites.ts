@@ -29,7 +29,7 @@ export const NEW_SITE_ROW_WAIT_MS = 60 * 60 * 1000;
 export interface NewSiteWatchPaths {
   panelDb: string;
   vhostDir: string;
-  /** The domains the hooks last ran for. */
+  /** The sites the hooks last ran for. */
   seenFile: string;
 }
 
@@ -49,15 +49,19 @@ export interface NewSiteWatchOps {
   now?: () => number;
 }
 
-/** The panel's site domains, lower-cased and sorted; null when the database cannot be read. */
-export function panelSiteDomains(panelDb: string): string[] | null {
+/**
+ * The panel's sites as `<domain> <id>`, the domain lower-cased, sorted; null
+ * when the database cannot be read. With the id, a site deleted and added again
+ * at its domain is a change even when the deletion went unseen.
+ */
+export function panelSites(panelDb: string): string[] | null {
   try {
     // Read-only, so closing it is not a write the row watcher would see.
     const db = new Database(panelDb, { readonly: true });
     try {
       db.exec("PRAGMA busy_timeout = 5000;");
-      return [...new Set(db.query<{ domain_name: unknown }, []>("SELECT domain_name FROM site").all()
-        .flatMap((row) => typeof row.domain_name === "string" ? [row.domain_name.toLowerCase()] : []))].sort();
+      return [...new Set(db.query<{ id: unknown; domain_name: unknown }, []>("SELECT id, domain_name FROM site").all()
+        .flatMap((row) => typeof row.domain_name === "string" ? [`${row.domain_name.toLowerCase()} ${row.id}`] : []))].sort();
     } finally {
       db.close();
     }
@@ -102,15 +106,15 @@ export function sitesInFlight(vhostDir: string, domains: string[], now: number):
 
 function readSeen(file: string): string[] | null {
   try {
-    const seen = JSON.parse(readFileSync(file, "utf8")) as { domains?: unknown };
-    return Array.isArray(seen.domains) && seen.domains.every((domain) => typeof domain === "string") ? seen.domains : null;
+    const seen = JSON.parse(readFileSync(file, "utf8")) as { sites?: unknown };
+    return Array.isArray(seen.sites) && seen.sites.every((site) => typeof site === "string") ? seen.sites : null;
   } catch {
     return null;
   }
 }
 
-const sameDomains = (a: string[], b: string[] | null) =>
-  b !== null && a.length === b.length && a.every((domain, i) => domain === b[i]);
+const sameSites = (a: string[], b: string[] | null) =>
+  b !== null && a.length === b.length && a.every((site, i) => site === b[i]);
 
 /** Whether the hooks last ran, for a change to the sites, within the hour. */
 function sitesChangedRecently(seenFile: string, now: number): boolean {
@@ -139,8 +143,8 @@ export async function syncNewSites(ops: NewSiteWatchOps, paths: NewSiteWatchPath
   let seen = readSeen(paths.seenFile);
   let lookedAgain = false;
   for (;;) {
-    const domains = panelSiteDomains(paths.panelDb);
-    if (domains === null) {
+    const sites = panelSites(paths.panelDb);
+    if (sites === null) {
       // Nothing to compare with: run as the watcher always did, and let the hooks
       // report the problem. Whatever held the database, such as a long write,
       // ends in a write, which the rows watcher turns into another look.
@@ -148,16 +152,17 @@ export async function syncNewSites(ops: NewSiteWatchOps, paths: NewSiteWatchPath
       ops.watchRows(true);
       return;
     }
-    if (!sameDomains(domains, seen)) {
+    if (!sameSites(sites, seen)) {
       await ops.runHooks();
-      writeFileAtomic(paths.seenFile, `${JSON.stringify({ domains })}\n`, { mode: 0o600, createParent: true });
-      seen = domains;
+      writeFileAtomic(paths.seenFile, `${JSON.stringify({ sites })}\n`, { mode: 0o600, createParent: true });
+      seen = sites;
     }
+    const domains = sites.map((site) => site.slice(0, site.lastIndexOf(" ")));
     const inFlight = sitesInFlight(paths.vhostDir, domains, now()).length > 0;
     const waiting = sitesChangedRecently(paths.seenFile, now()) && await ops.waiting();
     ops.watchRows(inFlight || waiting);
     if (!inFlight && !waiting) return;
-    if (!sameDomains(panelSiteDomains(paths.panelDb) ?? domains, domains)) continue;
+    if (!sameSites(panelSites(paths.panelDb) ?? sites, sites)) continue;
     if (!waiting || lookedAgain) return;
     lookedAgain = true;
   }

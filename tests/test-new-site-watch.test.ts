@@ -16,7 +16,7 @@ function box(): NewSiteWatchPaths & { addRow: (domain: string) => void; addVhost
   const paths = { panelDb: join(root, "db.sq3"), vhostDir: join(root, "sites-enabled"), seenFile: join(root, "state", "seen.json") };
   mkdirSync(paths.vhostDir);
   const db = new Database(paths.panelDb, { create: true });
-  db.exec("CREATE TABLE site (id INTEGER PRIMARY KEY, domain_name TEXT NOT NULL)");
+  db.exec("CREATE TABLE site (id INTEGER PRIMARY KEY AUTOINCREMENT, domain_name TEXT NOT NULL)");
   db.close();
   return {
     ...paths,
@@ -109,6 +109,21 @@ test("a deleted site's vhost goes first, and the row's removal runs the hooks", 
   const rowEvent = recorder();
   await syncNewSites(rowEvent.ops, panel);
   expect(rowEvent.calls).toEqual(["hooks", "ready", "unwatch"]);
+});
+
+test("a site deleted and added again at its domain runs the hooks, though the deletion went unseen", async () => {
+  const panel = box();
+  panel.addRow("a.example.com");
+  panel.addVhost("a.example.com.conf");
+  await syncNewSites(recorder().ops, panel);
+
+  const writer = new Database(panel.panelDb);
+  writer.query("DELETE FROM site WHERE domain_name = ?").run("a.example.com");
+  writer.close();
+  panel.addRow("a.example.com");
+  const run = recorder();
+  await syncNewSites(run.ops, panel);
+  expect(run.calls).toEqual(["hooks", "ready", "unwatch"]);
 });
 
 test("an addon waiting for a new site keeps the watcher running, and is asked once more before the service ends", async () => {

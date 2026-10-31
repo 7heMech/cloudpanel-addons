@@ -558,6 +558,42 @@ esac
     expect(readStandIns(paths)["new.example"]).toBeUndefined();
   });
 
+  test("a creation that fails after CloudPanel made the site deletes the site with the stand-in's user", async () => {
+    const { paths, calls } = setup({});
+    const created = join(paths.vhost.tempDir, "created-user");
+    writeFileSync(paths.clpctl, `#!/bin/sh
+echo "$1" >> ${join(paths.vhost.tempDir, "calls")}
+case "$1" in
+  site:add:static)
+    for arg in "$@"; do
+      case "$arg" in --siteUser=*) printf '%s' "\${arg#--siteUser=}" > ${created} ;; esac
+    done
+    echo 'timed out' >&2; exit 1 ;;
+  site:delete) rm -f ${created} ;;
+esac
+`);
+    let user = "";
+    const panelSite = (domain: string) => domain === "new.example" && existsSync(created)
+      ? { id: 9, user: user = readFileSync(created, "utf8") } : undefined;
+    await expect(clpctlStandIns(paths, panelSite, () => 0).create(redirect("new.example"))).rejects.toThrow("CloudPanel did not create new.example");
+    expect(user).toMatch(/^new-[0-9a-f]{8}$/);
+    expect(calls()).toBe("site:add:static\nsite:delete\n");
+    expect(readStandIns(paths)["new.example"]).toBeUndefined();
+  });
+
+  test("a creation interrupted before it recorded the site's id takes it from the site with its user", () => {
+    const { paths } = setup({});
+    const saved = readStandIns(paths);
+    const pending = { ...saved["hazon.uk"]!, siteId: undefined, incomplete: true };
+    writeFileSync(paths.file, JSON.stringify({ ...saved, "new.example": { ...pending, siteUser: "new-0a1b2c3d" }, "taken.example": { ...pending, siteUser: "taken-0a1b2c3d" } }));
+    const sites: Record<string, { id: number; user: string }> = { "new.example": { id: 11, user: "new-0a1b2c3d" }, "taken.example": { id: 12, user: "taken" } };
+    const standIns = clpctlStandIns(paths, (domain) => sites[domain], () => 0);
+    expect(standIns.current["new.example"]).toMatchObject({ incomplete: true });
+    expect(readStandIns(paths)["new.example"]?.siteId).toBe(11);
+    expect(standIns.current["taken.example"]).toBeUndefined();
+    expect(readStandIns(paths)["taken.example"]?.siteId).toBeUndefined();
+  });
+
   test("a record without a site id hides its site only while it is being created, and never lets DNS delete it", () => {
     const mark = { siteUser: "hazon", createdAt: 1_000_000 };
     const site = { id: 7, user: "hazon" };

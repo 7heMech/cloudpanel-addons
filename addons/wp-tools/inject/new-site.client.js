@@ -254,8 +254,8 @@
     try { earlier = JSON.parse(sessionStorage.getItem(JOB) || 'null'); } catch (e) {}
     var clearing = !ready.length && earlier && earlier.domain === domain;
     // A form CloudPanel will send back anyway, or nothing chosen now or before.
-    if (!domain || (!ready.length && !clearing)) {
-      if (!ready.length) try { sessionStorage.removeItem(JOB); } catch (e) {}
+    if (!domain || (!chosen.length && !clearing)) {
+      if (!chosen.length) try { sessionStorage.removeItem(JOB); } catch (e) {}
       return;
     }
     event.preventDefault();
