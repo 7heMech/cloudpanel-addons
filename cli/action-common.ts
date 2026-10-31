@@ -380,10 +380,6 @@ const LOCK_EX = 2;
 const LOCK_NB = 4;
 const LOCK_UN = 8;
 
-function sleep(milliseconds: number): Promise<void> {
-  return new Promise((resolve) => setTimeout(resolve, milliseconds));
-}
-
 export interface FileLockHandle {
   release(): void;
 }
@@ -481,7 +477,7 @@ export async function acquireFileLock(
     while (true) {
       if (libc.symbols.flock(fd, LOCK_EX | LOCK_NB) === 0) break;
       if (Date.now() >= deadline) lockTimeout(onTimeout, path);
-      await sleep(100);
+      await Bun.sleep(100);
     }
     state.locked = true;
     takeLock(fd, options);

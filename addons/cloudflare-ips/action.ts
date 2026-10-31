@@ -184,21 +184,17 @@ function requestedDomains(input: string | undefined): string[] {
   return [...new Set(domains as string[])];
 }
 
-function escapedRegex(value: string): string {
-  return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-}
-
 /** Applies the same two rendered-vhost changes as CloudPanel's own form. */
 export function transformVhost(content: string, siteUser: string, enabled: boolean): string {
   const access = new RegExp(
-    `^([ \\t]*access_log[ \\t]+/home/${escapedRegex(siteUser)}/logs/nginx/access\\.log[ \\t]+)(main|cloudflare)([ \\t]*;[ \\t]*)$`,
+    `^([ \\t]*access_log[ \\t]+/home/${RegExp.escape(siteUser)}/logs/nginx/access\\.log[ \\t]+)(main|cloudflare)([ \\t]*;[ \\t]*)$`,
     "gm",
   );
   const matches = [...content.matchAll(access)];
   if (matches.length !== 1) failAction("the site's generated Nginx access-log marker is missing or ambiguous");
 
   let result = content.replace(access, `$1${enabled ? "cloudflare" : "main"}$3`);
-  const includeLine = new RegExp(`^[ \\t]*${escapedRegex(CLOUDFLARE_INCLUDE)}[ \\t]*(?:\\r?\\n|$)`, "gm");
+  const includeLine = new RegExp(`^[ \\t]*${RegExp.escape(CLOUDFLARE_INCLUDE)}[ \\t]*(?:\\r?\\n|$)`, "gm");
   result = result.replace(includeLine, "");
   if (enabled) {
     access.lastIndex = 0;

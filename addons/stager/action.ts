@@ -658,12 +658,8 @@ function setStep(ctx: { dir: string; step: string }, value: string): void {
   logLine(value);
 }
 
-function escapeRegExp(value: string): string {
-  return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-}
-
 export function hostnameBoundary(domain: string): RegExp {
-  return new RegExp(`(^|[^A-Za-z0-9.-])${escapeRegExp(domain)}([^A-Za-z0-9-]|$)`, "g");
+  return new RegExp(`(^|[^A-Za-z0-9.-])${RegExp.escape(domain)}([^A-Za-z0-9-]|$)`, "g");
 }
 
 function stripTrailingNewlines(value: string): string {
@@ -712,7 +708,7 @@ export function takeRedirectBlock(body: string): string {
 }
 
 export function foldServerName(body: string, domain: string, replacement: string): string {
-  const escaped = escapeRegExp(domain);
+  const escaped = RegExp.escape(domain);
   const generatedApex = new RegExp(`^(\\s*)server_name ${escaped} www1\\.${escaped};\\s*$`);
   const generatedSubdomain = new RegExp(`^(\\s*)server_name ${escaped};\\s*$`);
   return body.split("\n").map((line) => {
