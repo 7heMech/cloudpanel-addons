@@ -2,8 +2,12 @@
 // privileged actions. Keeping these on the exported helpers prevents the
 // callers from silently drifting apart.
 import { describe, expect, test } from "bun:test";
+import { Database } from "bun:sqlite";
+import { mkdtempSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import {
-  availableSiteUser, dbNameFor, dbUserFor, panelSiteUserFor, siteUserFor,
+  availableSiteUser, dbNameFor, dbUserFor, panelSiteUserFor, siteUserFor, siteUserTaken,
 } from "../cli/action-common";
 
 const DOMAINS = [
@@ -157,4 +161,24 @@ describe("picking a free site user", () => {
   test("it gives up rather than looping when everything is taken", () => {
     expect(() => availableSiteUser("example.com", () => true)).toThrow(/could not find a free site user/);
   });
+});
+
+// Two different things refuse a site user, and they do not hold the same set:
+// createUser fails when the account exists, and CloudPanel validates the site
+// row separately. Asking only getent would offer a name a site already holds,
+// which the panel then rejects with "siteUser: This value already exists".
+test("a site user is taken when an account or a panel site already has it", () => {
+  const root = mkdtempSync(join(tmpdir(), "site-user-"));
+  try {
+    const panelDb = join(root, "panel.db");
+    const db = new Database(panelDb);
+    db.run("CREATE TABLE site (user TEXT)");
+    db.run("INSERT INTO site VALUES ('site-only-user')");
+    db.close();
+    expect(siteUserTaken("root", panelDb)).toBe(true);
+    expect(siteUserTaken("site-only-user", panelDb)).toBe(true);
+    expect(siteUserTaken("nobody-has-this-user", panelDb)).toBe(false);
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
 });

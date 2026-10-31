@@ -13,6 +13,7 @@ import { existsSync, mkdtempSync, readdirSync, readFileSync, rmSync, statSync } 
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { PANEL_DB } from "../cli/paths";
+import { STAND_INS_FILE, standInDomains } from "../cli/stand-ins";
 import { ADDONS } from "../cli/addon-catalog";
 import { PORT_RANGE, type PanelSnapshot, type SanitizedSite } from "./snapshot-reader";
 import { readPanelPublicIp } from "./panel-public-ip";
@@ -154,17 +155,19 @@ function openConsistentSnapshot(databasePath: string): IsolatedDatabase {
   }
 }
 
-export function readPanelDatabase(databasePath = PANEL_DB): PanelDatabaseSnapshot {
+/** Every site but DNS's stand-ins, which are redirects rather than sites. */
+export function readPanelDatabase(databasePath = PANEL_DB, standInsFile = STAND_INS_FILE, rootUid = 0): PanelDatabaseSnapshot {
   if (!databaseExists(databasePath)) return emptyPanelDatabaseSnapshot();
 
   const isolated = openConsistentSnapshot(databasePath);
+  const standIns = standInDomains(standInsFile, rootUid, isolated.db);
 
   const ports = new Set<number>();
   const sites: SanitizedSite[] = [];
   try {
     for (const row of siteRowsWithVarnish(isolated.db)) {
       const domain = asText(row.domain_name);
-      if (domain) {
+      if (domain && !standIns.has(domain)) {
         sites.push({
           domain,
           user: asText(row.user),

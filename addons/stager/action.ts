@@ -17,7 +17,7 @@ import {
 import {
   ActionCommandFailure, ActionFailure, acquireFileLock, actionErrorJson, commandFailure, emitActionError, emitActionOk,
   dbNameFor, dbUserFor, failAction, normalizeIdentityHostname, readable, readPanelIdentity,
-  runCommand, siteUserFor, validateDomain, validateEmail, validateFlag, validateJob, validateMfa, validatePort,
+  runCommand, siteUserFor, siteUserTaken, validateDomain, validateEmail, validateFlag, validateJob, validateMfa, validatePort,
   type CommandResult, type FileLockHandle,
 } from "../../cli/action-common";
 
@@ -338,10 +338,6 @@ function generatedPassword(): string {
 
 function generatedDbPassword(): string {
   return randomBytes(24).toString("base64").replace(/[^a-zA-Z0-9]/g, "").slice(0, 24);
-}
-
-function userTaken(user: string): boolean {
-  return runCommand("getent", ["passwd", user]).ok;
 }
 
 function queryPanel<T>(paths: StagerActionPaths, query: (db: Database) => T): T {
@@ -1718,7 +1714,7 @@ function cmdClone(action: ParsedStagerAction, paths: StagerActionPaths, releaseL
   }
 
   const stagingUser = siteUserFor(target);
-  if (userTaken(stagingUser)) failAction(`the site user ${stagingUser} already exists; ${target} may be half-created`);
+  if (siteUserTaken(stagingUser, paths.panelDb)) failAction(`the site user ${stagingUser} already exists; ${target} may be half-created`);
   let entries: string[] = [];
   try {
     entries = readdirSync(paths.jobsDir);
@@ -2066,7 +2062,7 @@ async function cmdRun(id: string, paths: StagerActionPaths): Promise<void> {
     }
 
     ctx.stgUser = siteUserFor(ctx.target);
-    if (userTaken(ctx.stgUser)) failJob(ctx, `the site user ${ctx.stgUser} already exists; ${ctx.target} may be half-created`);
+    if (siteUserTaken(ctx.stgUser, ctx.paths.panelDb)) failJob(ctx, `the site user ${ctx.stgUser} already exists; ${ctx.target} may be half-created`);
     const stagingPassword = generatedPassword();
     if (ctx.srcType === "php") {
       setStep(ctx, `creating the staging site ${ctx.target} on PHP ${ctx.phpVersion}`);
