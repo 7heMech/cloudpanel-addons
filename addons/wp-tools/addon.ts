@@ -29,6 +29,14 @@ export const WP_TOOLS_ADDON: AddonDefinition = {
   targets: WP_TOOLS_TARGETS,
   handler: handle,
   action: runWpToolsAction,
+  // The sign-in and site-kind from CloudPanel's site pages, held to the
+  // caller's own sites, and plugins chosen on its New WordPress Site form by
+  // an administrator or a site manager. The session route hands out the CSRF
+  // pair those callers cannot get from an addon page, and reads nothing.
+  selfScopedRoutes: [
+    "GET /api/session", "POST /api/sign-in", "GET /api/site-kind",
+    "GET /api/plugin-search", "POST /api/new-site", "GET /api/new-site-status",
+  ],
   // A new site is checked when its row is committed, on each panel write while
   // CloudPanel installs its WordPress, and when its certificate is written.
   newSites: {

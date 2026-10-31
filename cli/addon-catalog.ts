@@ -90,6 +90,19 @@ export interface AddonDefinition {
    * is one place for every addon that says so.
    */
   siteManager?: boolean;
+  /**
+   * Routes under the mount, as `METHOD /path`, that any signed-in panel user
+   * reaches. Each scopes itself: its handler decides whom it answers for and
+   * calls only verbs declared `panel-user`, `site-manager` or `own-account`,
+   * which the manager holds it to.
+   */
+  selfScopedRoutes?: string[];
+  /**
+   * Requests under `prefix` (of the path past `/addons`) answered before the
+   * session gate, on a credential root checks. `handle` returns null to leave
+   * the request to the gate, and may call only `pre-gate` verbs.
+   */
+  preGate?: { prefix: string; handle: (req: Request, path: string) => Promise<Response | null> };
   maintenance?: AddonMaintenance;
   /** Work for sites CloudPanel has just created, run seconds after it writes their vhost. */
   newSites?: AddonNewSites;

@@ -7,17 +7,18 @@ root gateway on `/run/clp-addons/auth.sock`, which is available only to root and
 the `clp-addons` group. In production the gateway also checks that the peer is
 the `clp-addons` account running the root-owned installed binary.
 
-The gateway accepts only fixed addon and verb combinations and starts
-`/usr/local/bin/clp-addons` with an argument array. Each action validates all
+The gateway accepts only the addon and verb combinations each addon declares
+web-reachable in its `addons/<name>/verbs.ts` (the manager's in
+`manager/verbs.ts`), and starts `/usr/local/bin/clp-addons` with an argument
+array. A root-only verb is declared with the reason the web may not reach it. Each action validates all
 arguments again before deriving paths, locking, or changing the host. Unknown
 addons, verbs, free-form paths, and malformed action replies are rejected.
 
-The gateway's streaming mode is restricted to the verbs in
-`STREAM_ALLOWED_VERBS`: it starts one worker, pipes its output without
+The gateway's streaming mode is restricted to the verbs declared `stream`: it starts one worker, pipes its output without
 interpreting addon data, and stops the worker when the manager socket closes.
 Session re-authorization remains in the manager that owns the stream.
 
-One stream, `terminal:session`, also carries bytes from the manager to the
+One stream, `terminal:session`, declared `duplex`, also carries bytes from the manager to the
 worker, and it is the one privileged action the gateway does not take on the
 manager's word. The request carries the CloudPanel session id; the gateway
 checks it as it checks any session, requires an active administrator, and passes
@@ -33,7 +34,7 @@ gets a fixed `PATH` and nothing else from the gateway's environment, and the
 site user's process never inherits the gateway's stderr. See
 [Terminal](terminal.md).
 
-The one-shot actions in `OWN_ACCOUNT_VERBS` -- Security Keys' `keys`,
+The one-shot actions declared `own-account` -- Security Keys' `keys`,
 `register-options`, `register` and `remove` -- are checked the same way for any
 active account rather than an administrator: the request carries the session
 id, the gateway appends the `--panel-user` it found, a manager that names one is
@@ -172,9 +173,17 @@ addon, ahead of the update check and the manager's own routes, so nothing else
 in the manager runs for it. The authorisation it skips here is made up for as
 root: the sign-in and provision actions are told which panel user the request is
 for and refuse any site CloudPanel would not list for that account, and the
-plugin picker's are told which site manager it is for. The set is a
-literal of fourteen strings rather than a prefix or a pattern, so a route cannot join it by
-being named something similar.
+plugin picker's are told which site manager it is for. Each addon names its
+routes as exact strings in its definition's `selfScopedRoutes`, rather than a
+prefix or a pattern, so a route cannot join them by being named something similar.
+
+The manager also holds such a request to the verbs declared for its caller.
+Each verb declares who may ask for it from the web: `admin`, `site-manager`,
+`panel-user` (any signed-in account, which the route names to root with
+`--as-user`), `own-account` or `pre-gate`. A request that passed the gate as a
+non-administrator, or a route answered ahead of the gate, runs with its caller
+recorded, and the gateway client refuses any verb above it before the socket is
+reached. Root's own checks do not depend on this one.
 
 An addon may also declare `siteManager` in its catalog definition, which admits
 a `ROLE_SITE_MANAGER` session to that addon's whole mount rather than to a named

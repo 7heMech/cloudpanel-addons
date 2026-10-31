@@ -1,15 +1,21 @@
 // Client helper for communicating with the root gateway daemon over UNIX socket.
 // Handles both gateway socket IPC and hermetic test runner execution.
 
+import { AsyncLocalStorage } from "node:async_hooks";
 import { existsSync } from "node:fs";
 import {
+  callerMay,
+  webVerb,
   GATEWAY_SOCKET_PATH,
   DEFAULT_CLI_BIN,
   DEFAULT_GATEWAY_TIMEOUT_MS,
   MAX_GATEWAY_INPUT_BYTES,
   type ActionResult,
+  type GatewayAddon,
   type GatewayRequest,
   type PanelSnapshot,
+  type StreamVerb,
+  type WebVerb,
 } from "./gateway-protocol";
 
 export type { ActionResult } from "./gateway-protocol";
@@ -19,7 +25,7 @@ export interface GatewayClientOptions {
   maxBuffer?: number;
   socketPath?: string;
   /**
-   * For an `OWN_ACCOUNT_VERBS` action: the CloudPanel session the gateway
+   * For an `own-account` verb: the CloudPanel session the gateway
    * checks itself. Such an action has no direct-spawn fallback, because that
    * fallback is the check it would skip.
    */
@@ -31,6 +37,22 @@ export interface GatewayStream { close(): void }
 export interface DuplexGatewayStream extends GatewayStream {
   /** Send one line to a duplex stream's worker; ignored by every other stream. */
   write(line: string): void;
+}
+
+/**
+ * Whom the request being answered is for, when it is not an administrator:
+ * their panel roles, or null before the manager's gate. Set by the manager
+ * around such a request, and held against each verb's declared access, so a
+ * route that lets a non-administrator through cannot reach a verb that is not
+ * theirs. Root checks its own part regardless.
+ */
+export const gatewayCaller = new AsyncLocalStorage<{ roles: readonly string[] | null }>();
+
+function refusedForCaller(addon: string, verb: string): string | null {
+  const caller = gatewayCaller.getStore();
+  if (!caller) return null;
+  const declared = webVerb(addon, verb);
+  return declared && callerMay(declared.web, caller.roles) ? null : `${addon} ${verb} is not available to this session`;
 }
 
 interface CommandFailure {
@@ -218,13 +240,15 @@ async function callGatewaySocket<T>(
  * If running in test mode with CLP_ADDONS_ACTION_TEST_BIN or running as root without socket,
  * invokes directly. Otherwise dispatches securely through the root gateway daemon over UNIX socket.
  */
-export async function callGatewayAction<T = unknown>(
-  addon: "stager" | "instatic" | "cloudflare-ips" | "maintenance" | "php-resources" | "git" | "panel-tweaks" | "system-tweaks" | "wp-tools" | "smtp" | "dns" | "terminal" | "security-keys" | "manager",
-  verb: string,
+export async function callGatewayAction<T = unknown, A extends GatewayAddon = GatewayAddon>(
+  addon: A,
+  verb: WebVerb<A>,
   args: string[] = [],
   input?: string,
   options: GatewayClientOptions = {},
 ): Promise<ActionResult<T>> {
+  const refused = refusedForCaller(addon, verb);
+  if (refused) return { ok: false, error: refused };
   const socketPath = options.socketPath ?? GATEWAY_SOCKET_PATH;
   const timeoutMs = options.timeout ?? DEFAULT_GATEWAY_TIMEOUT_MS;
 
@@ -280,9 +304,9 @@ function streamReply<T>(line: string): ActionResult<T> | null {
  * session itself, and `write` reaches the worker's stdin. Such a stream has no
  * direct-spawn fallback, because that fallback is the check it would skip.
  */
-export function streamGatewayAction<T = unknown>(options: {
-  addon: "stager" | "instatic" | "git" | "panel-tweaks" | "terminal" | "wp-tools" | "manager";
-  verb: string;
+export function streamGatewayAction<T = unknown, A extends GatewayAddon = GatewayAddon>(options: {
+  addon: A;
+  verb: StreamVerb<A>;
   args?: string[];
   sessionId?: string;
   socketPath?: string;
@@ -396,6 +420,11 @@ export function streamGatewayAction<T = unknown>(options: {
     ...(options.sessionId !== undefined ? { sessionId: options.sessionId } : {}),
   }) + "\n";
 
+  const refused = refusedForCaller(options.addon, options.verb);
+  if (refused) {
+    queueMicrotask(() => finish(refused));
+    return stream;
+  }
   const direct = Boolean(process.env.CLP_ADDONS_ACTION_TEST_BIN) || (process.getuid?.() === 0 && !existsSync(socketPath));
   if (direct && options.sessionId !== undefined) {
     queueMicrotask(() => finish("this stream needs the root gateway"));

@@ -53,8 +53,9 @@ changes neither file.
 
 `cli/addon-catalog.ts` is the only registration seam. An addon declares itself
 in `addons/<name>/addon.ts` -- title, description, injection targets, required
-systemd units, its manager handler, its privileged action and any repair upkeep
--- and the catalog derives its config file and state directory from its name, so
+systemd units, its manager handler, its privileged action, the routes it opens
+to non-administrators or answers ahead of the gate, and any repair upkeep -- and
+the catalog derives its config file and state directory from its name, so
 a definition cannot name a file provisioning will not look for.
 
 Repair upkeep runs inside repair's operation lock, so it stays short. Work that
@@ -64,6 +65,14 @@ runtime bound and is skipped while the previous pass is still running.
 
 The catalog is an explicit list, not filesystem discovery. This ships as one
 binary; a registry that depended on what happened to be on disk could be wrong.
+
+An addon's verbs are declared in its `verbs.ts`, which imports nothing, so the
+root gateway can read them without loading the addon. The gateway's allowlist,
+the action's verb type, the services' typed gateway calls and the manager's
+per-caller check all come from that one declaration, and a test reads each
+action's dispatcher to check it handles exactly those verbs.
+`tests/__snapshots__/test-web-verbs.test.ts.snap` lists every web-reachable verb
+with who may call it, so a change to the gateway's surface shows in review.
 
 The manager and the auth gateway are not in it. They have no config file to
 enable, no mount path of their own and no state to keep, so they are dispatched

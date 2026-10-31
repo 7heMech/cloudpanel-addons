@@ -1,3 +1,4 @@
+import { SECURITY_KEYS_VERBS } from "./verbs";
 import { createHmac, randomBytes } from "node:crypto";
 import {
   chmodSync, closeSync, constants as fs, existsSync, fchmodSync, fchownSync, fstatSync, linkSync, lstatSync, mkdirSync, openSync,
@@ -22,13 +23,10 @@ import {
  * signature is their credential. `users`, `revoke` and `settings` are the
  * administrator's.
  */
-export type SecurityKeysVerb =
-  | "login-options" | "sign-in" | "keys" | "register-options" | "register" | "remove" | "users" | "revoke" | "settings";
+export type SecurityKeysVerb = keyof typeof SECURITY_KEYS_VERBS;
 
-const VERBS: SecurityKeysVerb[] = [
-  "login-options", "sign-in", "keys", "register-options", "register", "remove", "users", "revoke", "settings",
-];
-const OWN_ACCOUNT_VERBS = new Set<SecurityKeysVerb>(["keys", "register-options", "register", "remove"]);
+const VERBS = Object.keys(SECURITY_KEYS_VERBS) as SecurityKeysVerb[];
+const OWN_ACCOUNT_VERBS = new Set(VERBS.filter((verb) => SECURITY_KEYS_VERBS[verb].web === "own-account"));
 
 const STORE_VERSION = 1;
 const CHALLENGE_TTL_MS = 5 * 60_000;
@@ -555,11 +553,14 @@ export async function runSecurityKeysAction(argv: string[], options: SecurityKey
     else if (verb === "settings") {
       saveSettings(paths, readInput(options));
       data = allUsers(paths);
-    } else {
+    } else if (verb === "revoke") {
       const input = readInput(options);
       if (typeof input.user !== "string" || !PANEL_USER_NAME_RE.test(input.user)) failAction("choose a user");
       removeKey(paths, input.user, input.id, "an administrator");
       data = allUsers(paths);
+    } else {
+      verb satisfies never;
+      failAction(`unknown security-keys verb '${verb}'`);
     }
     if (emit) emitActionOk(data);
     return 0;

@@ -42,7 +42,7 @@ export async function handleManagerRoute(
     const name = safeDecodePathSegment(addonRoute[1]!);
     if (!name) return managerJson({ ok: false, error: "invalid addon name" }, 400);
     if (!ADDON_NAMES.includes(name)) return managerJson({ ok: false, error: "unknown addon" }, 404);
-    const result = await managerAction(addonRoute[2]!, [`--addon=${name}`]);
+    const result = await managerAction(addonRoute[2] as "enable" | "disable", [`--addon=${name}`]);
     return managerJson(result, result.ok ? 200 : 400);
   }
 

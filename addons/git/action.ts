@@ -27,6 +27,7 @@ import {
   type FileLockHandle,
 } from "../../cli/action-common";
 import { PANEL_IDENTITY_PATH } from "../../cli/paths";
+import { GIT_VERBS } from "./verbs";
 
 const JOB_RETENTION_DAYS = 14;
 
@@ -54,10 +55,7 @@ export const WEBHOOK_TOKEN_RE = /^[A-Za-z0-9_-]{43}$/;
 export const MAX_HOOK_BODY_BYTES = 128 * 1024;
 const MAX_HOOK_INPUT_BYTES = 4 * MAX_HOOK_BODY_BYTES;
 
-export type GitVerb =
-  | "sites" | "domains" | "status" | "configure" | "forget" | "keygen"
-  | "webhook-enable" | "webhook-disable" | "hook"
-  | "deploy" | "run" | "job" | "jobs" | "watch-job" | "prune";
+export type GitVerb = keyof typeof GIT_VERBS;
 
 export interface GitActionPaths {
   dataDir: string;

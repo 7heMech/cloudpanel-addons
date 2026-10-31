@@ -12,6 +12,7 @@ import { standInDomains } from "../../cli/stand-ins";
 import {
   errorMessage, openPanelDatabase, trustedVhost, withNginxTransaction, withRecoveryFailures, writeAtomicOwned,
 } from "../../cli/nginx-transaction";
+import { CLOUDFLARE_IPS_VERBS } from "./verbs";
 
 const POLICY_VERSION = 1;
 const MAX_SITES_PER_REQUEST = 10_000;
@@ -19,7 +20,7 @@ const HOST_LABEL = "[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?";
 const HOST_RE = new RegExp(`^(?:${HOST_LABEL})(?:\\.${HOST_LABEL})+$`);
 const CLOUDFLARE_INCLUDE = "include /etc/nginx/cloudflare/ips;";
 
-export type CloudflareVerb = "list" | "set" | "policy" | "reconcile";
+export type CloudflareVerb = keyof typeof CLOUDFLARE_IPS_VERBS;
 
 export interface CloudflareActionPaths {
   panelDb: string;

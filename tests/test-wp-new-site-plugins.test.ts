@@ -17,7 +17,7 @@ import {
 } from "../addons/wp-tools/new-site-plugins";
 import { inspectPluginZip } from "../addons/wp-tools/plugin-zip";
 import type { WpCommand } from "../addons/wp-tools/wp-cli";
-import { WP_TOOLS_ALLOWED_VERBS } from "../lib/gateway-protocol";
+import { webVerb } from "../lib/gateway-protocol";
 
 // --- a zip writer, so every refusal is about one thing ---------------------
 
@@ -330,9 +330,9 @@ function upload(slug = "acme-payments", name = "Acme Payments"): string {
 
 test("the gateway admits the plugin verbs and still no runner", () => {
   for (const verb of ["plugin-upload", "plugin-discard", "new-site", "new-site-status", "new-site-access", "new-site-settings"]) {
-    expect(WP_TOOLS_ALLOWED_VERBS.has(verb)).toBe(true);
+    expect((webVerb("wp-tools", verb) !== null)).toBe(true);
   }
-  expect(WP_TOOLS_ALLOWED_VERBS.has("run")).toBe(false);
+  expect((webVerb("wp-tools", "run") !== null)).toBe(false);
 });
 
 test("the upload verb stages parts from stdin and refuses anything but its own arguments", async () => {

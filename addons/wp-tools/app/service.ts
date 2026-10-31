@@ -1,4 +1,5 @@
 import { callGatewayAction, type ActionResult, type GatewayStream } from "../../../lib/gateway-client";
+import type { WebVerb } from "../../../lib/gateway-protocol";
 import { watchGatewayJob, type JobWatcher } from "../../../lib/job-stream";
 import type { WpLoginResult, WpMaintenanceReply, WpBasicAuthReply, WpRemoveResult, WpSiteView } from "../action";
 import type { WpJobs, WpJobTask, WpJobView } from "../jobs";
@@ -42,7 +43,7 @@ export interface NewSiteChoice {
   asUser?: string;
 }
 
-function call<T>(verb: string, args: string[] = [], timeout?: number): Promise<ActionResult<T>> {
+function call<T>(verb: WebVerb<"wp-tools">, args: string[] = [], timeout?: number): Promise<ActionResult<T>> {
   return callGatewayAction<T>("wp-tools", verb, args, undefined, timeout ? { timeout } : undefined);
 }
 

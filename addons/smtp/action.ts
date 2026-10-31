@@ -11,6 +11,7 @@
  * `sendmail_path` in each PHP version's conf.d, which only rewrites the From
  * header. Postfix cannot fix a From on another domain without a milter.
  */
+import { SMTP_VERBS } from "./verbs";
 import { Database } from "bun:sqlite";
 import { chmodSync, existsSync, lstatSync, mkdirSync, readdirSync, readFileSync, readlinkSync, rmSync, symlinkSync } from "node:fs";
 import { dirname, join } from "node:path";
@@ -29,10 +30,8 @@ import {
 } from "./config";
 import { prepareSubmission, RULE_DIR, rulePathFor, SENDMAIL } from "./submit";
 
-type SmtpVerb = "list" | "save-profile" | "delete-profile" | "assign" | "set-default" | "save-grants" | "test" |
-  "reconcile" | "sync-sites" | "deactivate";
-const VERBS: SmtpVerb[] = ["list", "save-profile", "delete-profile", "assign", "set-default", "save-grants", "test",
-  "reconcile", "sync-sites", "deactivate"];
+type SmtpVerb = keyof typeof SMTP_VERBS;
+const VERBS = Object.keys(SMTP_VERBS) as SmtpVerb[];
 const BODY_VERBS: SmtpVerb[] = ["save-profile", "delete-profile", "assign", "set-default", "save-grants", "test"];
 
 const POSTFIX_KEYS = [

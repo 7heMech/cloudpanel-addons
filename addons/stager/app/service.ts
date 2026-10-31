@@ -1,6 +1,7 @@
 import type { SiteContext } from "../../../lib/site-context";
 import { fetchPanelInfo, readPanelSnapshot, type PanelSnapshot } from "../../../lib/snapshot-reader";
 import { callGatewayAction, type ActionResult, type GatewayStream } from "../../../lib/gateway-client";
+import type { WebVerb } from "../../../lib/gateway-protocol";
 import { watchGatewayJob, type JobWatcher } from "../../../lib/job-stream";
 export { type ActionResult };
 
@@ -19,7 +20,7 @@ export interface ActionCallOptions {
 }
 
 export async function callAction<T = unknown>(
-  verb: string,
+  verb: WebVerb<"stager">,
   args: string[],
   // On stdin rather than in argv, because the only value that ever needs this
   // is a password and argv is world-readable through /proc.

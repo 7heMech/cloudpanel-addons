@@ -1,5 +1,6 @@
 import { getNextAvailablePort, readPanelSnapshot, type PanelSnapshot } from "../../../lib/snapshot-reader";
 import { callGatewayAction, type ActionResult, type GatewayStream } from "../../../lib/gateway-client";
+import type { WebVerb } from "../../../lib/gateway-protocol";
 import { watchGatewayJob, type JobWatcher } from "../../../lib/job-stream";
 export { type ActionResult };
 
@@ -15,7 +16,7 @@ const TIMEOUTS: Record<string, number> = {
 };
 const DEFAULT_TIMEOUT = 60_000;
 
-async function callAction<T = unknown>(verb: string, args: string[]): Promise<ActionResult<T>> {
+async function callAction<T = unknown>(verb: WebVerb<"instatic">, args: string[]): Promise<ActionResult<T>> {
   return callGatewayAction<T>("instatic", verb, args, undefined, {
     timeout: TIMEOUTS[verb] ?? DEFAULT_TIMEOUT,
     maxBuffer: 8 * 1024 * 1024,

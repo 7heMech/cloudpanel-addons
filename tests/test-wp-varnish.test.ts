@@ -10,7 +10,7 @@ import { dashboardView, layout } from "../addons/wp-tools/app/views";
 import { emptyMainwpState, mainwpView, saveMainwpState } from "../addons/wp-tools/mainwp";
 import { WP_TOOLS_ADDON } from "../addons/wp-tools/addon";
 import type { WpDashboard } from "../addons/wp-tools/app/service";
-import { WP_TOOLS_ALLOWED_VERBS } from "../lib/gateway-protocol";
+import { webVerb } from "../lib/gateway-protocol";
 import { withFileLock } from "../cli/action-common";
 import { jobDir, jobSet } from "../cli/job-store";
 import { wpJobView } from "../addons/wp-tools/jobs";
@@ -203,7 +203,7 @@ test("a Varnish failure does not prevent the queued MainWP pass", async () => {
 });
 
 test("the periodic verb refuses arguments and stays outside the gateway", async () => {
-  expect(WP_TOOLS_ALLOWED_VERBS.has("sync")).toBe(false);
+  expect((webVerb("wp-tools", "sync") !== null)).toBe(false);
   for (const arg of ["--domain=shop.example.com", "--enabled=true", "--as-user=admin"]) {
     await expect(act("sync", arg)).rejects.toThrow();
   }
@@ -223,7 +223,7 @@ test("an exclusion list left in the state is ignored and dropped on the next wri
   expect((await act<VarnishSyncResult>("varnish-sync")).installed).toBe(1);
   expect(readFileSync(join(root, "varnish.json"), "utf8")).not.toContain("excluded");
   await expect(act("varnish-site", "--domain=shop.example.com", "--excluded=true")).rejects.toThrow("unknown WordPress Tools verb");
-  for (const verb of ["varnish-site", "mainwp-site"]) expect(WP_TOOLS_ALLOWED_VERBS.has(verb)).toBe(false);
+  for (const verb of ["varnish-site", "mainwp-site"]) expect((webVerb("wp-tools", verb) !== null)).toBe(false);
 });
 
 test("existing inactive plugins and subsequently removed plugins require explicit action", async () => {
@@ -363,9 +363,9 @@ test("Varnish verbs reject missing, duplicate and unrelated arguments", async ()
     ["varnish-settings", "--enabled=true", "--enabled=false"],
     ["varnish-sync", "--enabled=true"], ["varnish-install", "--domain=shop.example.com", "--as-user=boss"],
   ]) await expect(act(...args)).rejects.toThrow();
-  expect(WP_TOOLS_ALLOWED_VERBS.has("varnish-settings")).toBe(true);
+  expect((webVerb("wp-tools", "varnish-settings") !== null)).toBe(true);
   // The page starts checks and installations as background jobs instead.
-  for (const verb of ["varnish-install", "varnish-sync"]) expect(WP_TOOLS_ALLOWED_VERBS.has(verb)).toBe(false);
+  for (const verb of ["varnish-install", "varnish-sync"]) expect((webVerb("wp-tools", verb) !== null)).toBe(false);
 });
 
 test("Varnish routes remain administrator-only", async () => {
@@ -437,8 +437,8 @@ test("a job starts only with its own fixed arguments", async () => {
   expect(started).toEqual([]);
   rmSync(join(root, "wp-tools.conf"));
   await expect(act("start", "--task=varnish-check")).rejects.toThrow("enabled");
-  for (const verb of ["start", "job", "watch-job"]) expect(WP_TOOLS_ALLOWED_VERBS.has(verb)).toBe(true);
-  expect(WP_TOOLS_ALLOWED_VERBS.has("run")).toBe(false);
+  for (const verb of ["start", "job", "watch-job"]) expect((webVerb("wp-tools", verb) !== null)).toBe(true);
+  expect((webVerb("wp-tools", "run") !== null)).toBe(false);
 });
 
 test("multisite records an earlier version skipped are checked again", async () => {

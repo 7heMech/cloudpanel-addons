@@ -1,4 +1,5 @@
 import { handle } from "./app/index";
+import { GIT_HOOK_PREFIX, handleGitHook } from "./app/hook";
 import { runGitAction } from "./action";
 import { GIT_TARGETS } from "./inject/targets";
 import type { AddonDefinition } from "../../cli/addon-catalog";
@@ -15,6 +16,8 @@ export const GIT_ADDON: AddonDefinition = {
   // has. Everything this addon does runs as the site's own user, so it hands
   // that role no authority the panel has not already given it.
   siteManager: true,
+  // Push-to-deploy: the token in the URL is the credential, and only root can read it.
+  preGate: { prefix: GIT_HOOK_PREFIX, handle: handleGitHook },
   // Job-record expiry and stale-job recovery. A deployment killed by a reboot
   // or an OOM leaves its record `running` for ever otherwise, and only this
   // clears it.

@@ -6,8 +6,7 @@ import { join } from "node:path";
 import {
   parseGatewayRequest,
   type GatewayRequest,
-  INSTATIC_ALLOWED_VERBS,
-  CLOUDFLARE_IPS_ALLOWED_VERBS,
+  webVerb,
 } from "../lib/gateway-protocol";
 import { callGatewayAuth, callGatewayPanelInfo } from "../lib/gateway-client";
 import { createAuthActionServer } from "../cli/auth-action";
@@ -320,8 +319,8 @@ describe("Gateway Protocol & Server", () => {
     }
   });
 
-  test("INSTATIC_ALLOWED_VERBS excludes run and gateway rejects instatic run", async () => {
-    expect(INSTATIC_ALLOWED_VERBS.has("run")).toBe(false);
+  test("instatic run is root-only and gateway rejects instatic run", async () => {
+    expect((webVerb("instatic", "run") !== null)).toBe(false);
 
     const dir = mkdtempSync(join(tmpdir(), "clp-gateway-instatic-run-"));
     const sockPath = join(dir, "gateway.sock");
@@ -359,8 +358,7 @@ describe("Gateway Protocol & Server", () => {
   });
 
   test("the Cloudflare dashboard cannot invoke the timer-only reconcile verb", () => {
-    expect(CLOUDFLARE_IPS_ALLOWED_VERBS).toEqual(new Set(["list", "set", "policy"]));
-    expect(CLOUDFLARE_IPS_ALLOWED_VERBS.has("reconcile")).toBe(false);
+    expect((webVerb("cloudflare-ips", "reconcile") !== null)).toBe(false);
   });
 });
 

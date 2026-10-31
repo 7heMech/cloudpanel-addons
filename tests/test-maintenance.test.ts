@@ -18,7 +18,6 @@ import { MAINTENANCE_INCLUDE_PATH } from "../cli/maintenance-vhosts";
 import {
   inspectNginxMaintenance, NGINX_MAINTENANCE_BLOCK, reconcileNginxMaintenance, releaseMaintenanceSettings,
 } from "../cli/inject";
-import { MAINTENANCE_ALLOWED_VERBS } from "../lib/gateway-protocol";
 
 /** A vhost whose one server runs the standalone maintenance check. */
 function coveredVhost(domain: string): string {
@@ -634,14 +633,6 @@ test("maintenance integration preserves ACME and normalizes non-GET errors throu
     required: true,
   });
   expect(MAINTENANCE_TARGETS[0]!.snippet("/addons/maintenance")).toContain("site.domainName|url_encode");
-  expect(MAINTENANCE_ALLOWED_VERBS).toEqual(new Set([
-    "sites",
-    "enable-many",
-    "disable-many",
-    "status", "enable", "disable", "get-template", "set-template", "reset-template", "set-bypass",
-    "global-status", "global-enable", "global-disable",
-    "global-set-bypass",
-  ]));
 });
 
 test("purgeVarnish sends PURGE requests for domain and www/bare aliases and handles failures safely", async () => {

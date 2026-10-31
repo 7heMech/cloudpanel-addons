@@ -678,7 +678,7 @@ the domain link does. The upload control and its note are drawn for
 `ROLE_ADMIN` only, whatever the switch says: a zip is code nobody has reviewed,
 from anywhere.
 
-The picker's three routes are named in the manager's `SELF_SCOPED_ROUTES`:
+The picker's three routes are named in WP Tools' `selfScopedRoutes`:
 `GET /api/plugin-search`, `POST /api/new-site` and `GET /api/new-site-status`.
 WP Tools' whole mount must not become `siteManager`, since its page signs in to
 and installs into every site. The handler turns away anyone but an administrator
