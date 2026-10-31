@@ -2,8 +2,8 @@
 
 ## Why it is an addon and not a tweak
 
-WordPress Tools groups sign-in, optional Varnish installation and optional
-MainWP Child enrollment.
+WordPress Tools groups sign-in, plugins chosen while creating a site, optional
+Varnish installation and optional MainWP Child enrollment.
 [Panel Tweaks](panel-tweaks.md) changes what CloudPanel's own pages look like;
 this addon writes into a customer's site. An operator who enables a filterable
 site list does not thereby authorize those actions, and the gateway's fixed
@@ -348,7 +348,8 @@ The action answers with the same disk check a sign-in makes, held as the
 sign-in is to a site the caller's account has. The panel's link is hidden only
 once ours is shown; the two look alike, so the swap does not show.
 
-The **Sign in from the domain** switch, on by default, turns that off; the
+The **Sign in from the domain** switch, under **CloudPanel's pages** and on by
+default, turns that off; the
 panel's link then stays and a WP Login link goes beside it. It is markup, so
 the setting is read when the templates are rendered:
 `/var/lib/clp-addons/wp-tools/domain-link.json`, root-owned, written
@@ -530,7 +531,8 @@ queued or running, under a lock of its own. The runner takes the policy's lock,
 waiting up to four minutes for a timer pass to finish, and holds it for the
 whole job, so nothing else changes that policy's state meanwhile. While a
 policy's job runs the page disables that policy's buttons, switch and Dashboard
-picker; sign-in and the other policy stay usable.
+picker; sign-in and the other policy stay usable. New sites' plugin jobs are not one at a time:
+each waits for its own site and takes neither policy's lock.
 
 The runner writes how many sites it has done, of how many, and which one it is
 on before each site, through the shared per-site progress (see
@@ -542,8 +544,178 @@ it did, from the result the job saved. A job record is kept for seven days;
 repair's maintenance prunes older ones and marks failed a job whose unit is
 gone, as the other addons' upkeep does.
 
+## Plugins for a new site
+
+CloudPanel's New WordPress Site form gets a Plugins row: search WordPress.org
+and pick, or upload a zip, and choose for each whether it is activated. It is
+an administrator's, and a site manager's for WordPress.org plugins while an
+administrator allows it; see Who may choose. It is
+WordPress Tools' rather than Panel Tweaks' or DNS's because it puts code into a
+customer's site, which is what this addon exists to keep separate, and it is
+built from this addon's parts: the site discovery and account refusals, the
+WP-CLI runner and the job store. It is a choice per site, made where the site
+is made; a set every new site gets would be a policy on this page instead.
+
+### Recorded before the site exists
+
+The row is injected before the form's Back and Create buttons, beside Panel
+Tweaks' certificate option, and its inputs have no names, since Symfony refuses
+a field its form does not declare. Its script takes the form's submit ahead of
+CloudPanel's own handler, records the choice with `POST /api/new-site`, and then
+submits the form as it would have gone. A choice that cannot be recorded stops
+the submission and says why, so a site is never created without the plugins it
+was promised silently.
+
+The choice is a background job recorded before CloudPanel has created anything,
+because CloudPanel creates the site and installs WordPress inside that one
+request. The job waits up to ten minutes for a site of that name to appear in
+the panel's database, then up to ten more for `wp-includes`, `wp-content` and
+`wp core is-installed`, polling every three seconds. It never needs the site to
+answer over HTTPS: everything it does is WP-CLI, and downloads are root's.
+Waiting in the job rather than in the landing page means a browser that closes
+during creation still gets its plugins; waiting in the job rather than in the
+shared new-site watcher means it does not depend on when the vhost appears,
+which is before WordPress is installed. Were WP Tools to have its own `newSites`
+hook, that hook could wake a waiting job instead of the poll.
+
+This is no way into an existing site. `new-site` refuses a domain CloudPanel
+already has, and the job refuses a site whose `created_at` is more than two
+minutes older than the choice, in case an older site was restored under the
+name meanwhile, or that has no `created_at` to compare.
+
+CloudPanel sends a form back with an error without creating anything, so the
+choice is kept in the tab's session storage and the row comes back filled in.
+Submitting again records a new job, and any job still waiting for the same
+domain is superseded and hands its uploads to the new one. Submitting it with
+every plugin removed still tells WordPress Tools, with an empty choice that only
+supersedes, so plugins taken off the form are not installed after all; their
+uploads are deleted. A job for another domain is never touched: one still
+waiting may be for a site CloudPanel is creating in another request.
+Superseding and a job's switch from waiting to installing take the same lock,
+so exactly one of them installs. A job whose site never appears
+ends as `not-created`, which is what an abandoned form leaves; it installs
+nothing, deletes its uploads, and is not listed.
+
+### Installing
+
+Each plugin in turn, WordPress.org ones first so an uploaded add-on finds the
+plugin it extends already active. A fixed `wp eval` lists the installed plugin
+folders and their activation on a marked line. One already there, such as the
+Akismet WordPress ships, is left as it is and activated if asked. Otherwise root
+has the zip in memory -- the staged upload, or WordPress.org's download -- and
+inspects it again. The site's user writes it from stdin into a fresh `mktemp -d`
+directory, WP-CLI installs it from there with `--activate`, or
+`--activate-network` on a multisite network, and the directory is removed as
+that user. The list is read again to confirm the plugin is there, and active if
+it should be. One failing does not stop the rest; its saved error is a
+500-character summary, as Varnish's is.
+
+A WordPress.org plugin is fetched by root from `api.wordpress.org`'s
+`plugin_information` for its slug, and its `download_link` must be
+`https://downloads.wordpress.org/plugin/<name>.zip`; no redirect is followed,
+the download is bounded at 64 MiB, and the zip must unpack into the folder the
+slug names. Slugs match `^[a-z0-9](?:[a-z0-9-]{0,98}[a-z0-9])?$` everywhere they
+are accepted. Searching is the manager's: a public read-only call to
+`query_plugins`, whose reply is cut to the slug, name, version, author, install
+count and summary, as bounded text. Icons are left out, since loading them would
+tell WordPress.org each administrator's address.
+
+### Uploads
+
+A zip goes from the browser to the manager in one request, bounded at 32 MiB
+before it is read, and on to root in parts of 704 KiB as base64, each one
+gateway request under the gateway's 1 MiB limit. Root picks a random 128-bit id
+with the first part, takes the rest in order only, and inspects the zip with the
+last: one that is not a plugin is deleted at once. Uploads live in root-only
+`/var/lib/clp-addons/wp-tools/uploads/<id>/`, at most twenty at a time. Removing
+one from the form discards it; one no job claimed goes after six hours, and a
+claimed one after two days if its job never deleted it, both in repair's upkeep.
+A job deletes the uploads it was given when it ends.
+
+A zip is read without extracting it. Its central directory is checked whole:
+no ZIP64, split or encrypted archive, only stored or deflated entries, no
+absolute, drive-letter, backslash, control-character, `.` or `..` path, no name
+twice, no symlink or special file, a local header naming the same file as the
+directory, at most 30,000 entries and 256 MiB unpacked. Every entry but macOS's
+`__MACOSX` must be inside one folder whose name is plain
+(`^[A-Za-z0-9][A-Za-z0-9._-]{0,99}$`), and a PHP file directly in it must carry
+a `Plugin Name:` header in its first 8 KiB, which is inflated in memory. That
+folder becomes the plugin's slug. WordPress extracts the zip later as the site's
+user, and refuses traversal itself as well.
+
+### Where the result shows
+
+The job's result names each plugin and whether it was activated, installed,
+already there or failed. The landing page, `wordpress-installed.html.twig`,
+follows the job whose id the form left in session storage, if it is for the
+domain the page shows, through `new-site-status`, and says how it ended in a box shaped like the panel's
+flash messages. The WordPress Tools page's **Plugins on new sites** card shows
+every running job with the shared progress bar and the ten most recent results,
+failures included, for the seven days a job record is kept.
+
+At most twenty plugins a site. The gateway allows `plugin-upload`,
+`plugin-discard`, `new-site`, `new-site-status`, `new-site-access` and
+`new-site-settings`; `start` does not accept the `new-site-plugins` task, so a
+job can only be recorded with the plan `new-site` validated.
+
+### Who may choose
+
+Administrators, and site managers while an administrator allows it.
+CloudPanel has three roles (`lib/panel-users.ts`). `ROLE_ADMIN` and
+`ROLE_SITE_MANAGER` see every site and create sites on this very form, so the
+picker is offered to a site manager where they already work, without any of the
+Addons area. Both can already write PHP into any site through CloudPanel's File
+Manager, so which plugins a site manager may pick is the operator's offer to
+clients rather than a boundary between users; it is still enforced as root.
+
+**Site managers choose plugins for new sites**, under **CloudPanel's pages** on
+this page, is off by default and kept in root-only
+`/var/lib/clp-addons/wp-tools/new-site-access.json`; an unreadable file reads as
+off and the page says so. It is markup: the Twig blocks test `ROLE_ADMIN`, and
+`ROLE_SITE_MANAGER` as well while it is on, so it is read when the templates are
+rendered and saving it renders them again through the manager's `reconcile`, as
+the domain link does. The upload control and its note are drawn for
+`ROLE_ADMIN` only, whatever the switch says: a zip is code nobody has reviewed,
+from anywhere.
+
+The picker's three routes are named in the manager's `SELF_SCOPED_ROUTES`:
+`GET /api/plugin-search`, `POST /api/new-site` and `GET /api/new-site-status`.
+WP Tools' whole mount must not become `siteManager`, since its page signs in to
+and installs into every site. The handler turns away anyone but an administrator
+or a site manager, and names a site manager to root with `--as-user`, as DNS's
+provision route does. Root then reads the switch, and the account's role and
+status from CloudPanel's database rather than its session, refusing anything
+but an active site manager. A site manager's `new-site` names no uploads, gets
+the same refusal of a domain CloudPanel already has and of a site older than the
+choice, and replaces or clears only choices that account made; the job records
+it as `chosenBy`, which the WordPress Tools page shows. Its plugins go only into
+a site that account created: the name may have been free when they chose, and
+taken by someone else since. CloudPanel keeps no creator on the site, so the
+job waits, with WordPress, for the `SITE_WORDPRESS_CREATE` entry CloudPanel's
+event log writes for that domain, and installs nothing if it names another
+account or never comes. Only an entry after the newest one when the choice was
+saved counts: the log's ids are `AUTOINCREMENT`, where whole-second times could
+not tell an entry from just before the choice from one just after it. An administrator's choice is not held to
+this. The search asks root
+`new-site-access` before it runs, since only root can read the switch.
+Uploading, discarding an upload, the switch and every other WP Tools route stay
+behind the gate.
+
+The landing page follows its job through `new-site-status`, which tells a site
+manager only about a job that account recorded, which is the site it just
+created; any other id reads as one that does not exist. Its reply is the job's
+state, step, progress and result, without the plan's upload ids or the log, for
+administrators too. Only an administrator's landing page links to WordPress
+Tools when something failed; a site manager's says to ask one.
+
+`ROLE_USER` stays out: the handler refuses it and root would too. Such an
+account cannot create a site in CloudPanel at all, so for that role plugins would
+mean installing on an existing site of its own, a different feature with its
+own refusals: root checking `user_sites` as sign-in does, and never this
+form's "a site that does not exist yet".
+
 ## Direction
 
-A later change may let the operator pick any plugins from the WordPress.org
-registry to install automatically, with setup options for predefined ones such
-as CLP Varnish Cache and MainWP Child, or per-plugin setup.
+A later change may let the operator choose plugins every new site gets, with
+setup options for predefined ones such as CLP Varnish Cache and MainWP Child,
+or per-plugin setup.

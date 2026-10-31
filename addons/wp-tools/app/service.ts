@@ -6,6 +6,9 @@ import { validateDomain } from "../../../lib/app-http";
 import type { MainwpView } from "../mainwp";
 import type { WpVarnishState } from "../varnish";
 import type { WpDomainLink } from "../domain-link";
+import { UPLOAD_PART_BYTES, type StagedUpload } from "../new-site-plugins";
+import type { WpNewSiteAccess } from "../new-site-access";
+import type { NewSiteStatus } from "../action";
 
 export { validateDomain };
 export { validateJobId } from "../../../lib/job-id";
@@ -22,6 +25,21 @@ export interface WpDashboard {
   domainLinkError: string;
   /** The background job each policy is running, which the page follows. */
   jobs: WpJobs;
+  /** Recent new sites' plugin jobs, newest first; absent on a page drawn without them. */
+  newSites?: WpJobView[];
+  /** Whether site managers may choose plugins; absent on a page drawn without it. */
+  newSiteAccess?: WpNewSiteAccess;
+  /** Set when that setting cannot be read; it reads as off. */
+  newSiteAccessError?: string;
+}
+
+/** One plugin as the new-site form chose it. */
+export interface NewSiteChoice {
+  domain: string;
+  plugins: { slug: string; activate: boolean }[];
+  uploads: { id: string; activate: boolean }[];
+  /** The site manager the choice is for; root holds them to what an administrator allowed. */
+  asUser?: string;
 }
 
 function call<T>(verb: string, args: string[] = [], timeout?: number): Promise<ActionResult<T>> {
@@ -85,6 +103,58 @@ export const wpToolsService = {
       `--task=${task}`, ...(domains.length ? [`--domains=${domains.join(",")}`] : []), ...(confirm ? [`--confirm=${confirm}`] : []),
     ]);
   },
+  /**
+   * A zip goes to root in parts, each one gateway request, whose input is
+   * bounded at 1 MiB; root picks the id with the first and inspects the zip
+   * with the last.
+   */
+  async uploadPlugin(zip: Uint8Array): Promise<ActionResult<{ upload: StagedUpload }>> {
+    let id = "";
+    const parts = Math.max(1, Math.ceil(zip.byteLength / UPLOAD_PART_BYTES));
+    for (let part = 0; part < parts; part++) {
+      const chunk = zip.subarray(part * UPLOAD_PART_BYTES, (part + 1) * UPLOAD_PART_BYTES);
+      const args = [...(id ? [`--upload=${id}`] : []), `--part=${part}`, ...(part === parts - 1 ? ["--last"] : [])];
+      const result = await callGatewayAction<{ id: string; upload?: StagedUpload }>(
+        "wp-tools", "plugin-upload", args, Buffer.from(chunk).toString("base64"),
+      );
+      if (!result.ok || !result.data) {
+        if (id) await wpToolsService.discardUpload(id);
+        return { ok: false, error: result.error ?? "the upload was refused" };
+      }
+      id = result.data.id;
+      if (result.data.upload) return { ok: true, data: { upload: result.data.upload } };
+    }
+    return { ok: false, error: "the upload did not finish" };
+  },
+  discardUpload(id: string): Promise<ActionResult<{ discarded: boolean }>> {
+    return call("plugin-discard", [`--upload=${id}`]);
+  },
+  /**
+   * Recorded before CloudPanel creates the site; the job waits for it. It
+   * replaces any choice still waiting for the same domain, and an empty one
+   * only clears that.
+   */
+  newSite(choice: NewSiteChoice): Promise<ActionResult<{ job: WpJobView | null }>> {
+    const list = (items: { key: string; activate: boolean }[]) => items.map((item) => `${item.key}:${item.activate ? 1 : 0}`).join(",");
+    return call("new-site", [
+      `--domain=${choice.domain}`,
+      ...(choice.plugins.length ? [`--plugins=${list(choice.plugins.map((plugin) => ({ key: plugin.slug, activate: plugin.activate })))}`] : []),
+      ...(choice.uploads.length ? [`--uploads=${list(choice.uploads.map((upload) => ({ key: upload.id, activate: upload.activate })))}`] : []),
+      ...(choice.asUser ? [`--as-user=${choice.asUser}`] : []),
+    ]);
+  },
+  /** One new site's job, for the page it lands on; a site manager only sees their own. */
+  newSiteStatus(id: string, asUser?: string): Promise<ActionResult<{ job: NewSiteStatus }>> {
+    return call("new-site-status", [`--job=${id}`, ...(asUser ? [`--as-user=${asUser}`] : [])]);
+  },
+  /** Whether this caller may use the form's Plugins row, and upload to it. */
+  newSiteAccess(asUser?: string): Promise<ActionResult<{ uploads: boolean }>> {
+    return call("new-site-access", asUser ? [`--as-user=${asUser}`] : []);
+  },
+  newSiteSettings(siteManagers: boolean): Promise<ActionResult<{ newSiteAccess: WpNewSiteAccess }>> {
+    return call("new-site-settings", [`--site-managers=${siteManagers}`]);
+  },
+
   getJob(id: string): Promise<ActionResult<{ job: WpJobView; log: string }>> {
     return call("job", [`--job=${id}`]);
   },

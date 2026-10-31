@@ -43,7 +43,9 @@ async function run(cmd: string[], options: { cwd?: string; quiet?: boolean } = {
 let sandboxless = false;
 
 async function screenshot(chrome: string, url: string, file: string): Promise<void> {
-  const args = ["--hide-scrollbars", `--window-size=${windowSize}`, `--screenshot=${file}`, url];
+  // WAIT lets a page's timers and requests run first, in milliseconds of virtual time.
+  const wait = process.env.WAIT ? [`--virtual-time-budget=${Number(process.env.WAIT)}`] : [];
+  const args = ["--hide-scrollbars", `--window-size=${windowSize}`, ...wait, `--screenshot=${file}`, url];
   const attempt = (extra: string[]) => run([chrome, ...extra, ...args], { quiet: true });
   if (sandboxless) return void (await attempt(["--no-sandbox"]));
   try {

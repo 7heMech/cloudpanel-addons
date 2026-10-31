@@ -114,9 +114,18 @@ export const SYSTEM_TWEAKS_ALLOWED_VERBS = new Set([
 /**
  * Sign-in credentials, whether a site is WordPress, helper removal and the
  * settings each have fixed verbs; checks, installations, MainWP connections and cleanup are
- * `start`ed as background jobs of a fixed task list. None accepts paths,
- * plugin names or arbitrary commands. `run` is absent for the reason the
- * manager's is: only the unit `start` launched may run a job.
+ * `start`ed as background jobs of a fixed task list. None accepts paths or
+ * arbitrary commands. `run` is absent for the reason the manager's is: only the
+ * unit `start` launched may run a job.
+ *
+ * Plugins for a new site are the exception that names plugins, and only by a
+ * WordPress.org slug of a strict pattern or by the id root gave an upload:
+ * `plugin-upload` stages a zip in parts on stdin, `plugin-discard` drops one,
+ * and `new-site` records the choice as a job that waits for a site that does
+ * not exist yet. `new-site-status` reports one such job and `new-site-access`
+ * says whether the caller may choose at all; with `new-site` they carry
+ * `--as-user` for a site manager, whom root holds to the administrator's
+ * `new-site-settings` switch and to directory plugins.
  */
 export const WP_TOOLS_ALLOWED_VERBS = new Set([
   "sites",
@@ -129,6 +138,12 @@ export const WP_TOOLS_ALLOWED_VERBS = new Set([
   "start",
   "job",
   "watch-job",
+  "plugin-upload",
+  "plugin-discard",
+  "new-site",
+  "new-site-status",
+  "new-site-access",
+  "new-site-settings",
 ]);
 
 export const CLOUDFLARE_IPS_ALLOWED_VERBS = new Set([
