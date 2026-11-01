@@ -2,10 +2,6 @@
 .maintenance-heading > :first-child { flex:1; min-width:0; }
 .heading-controls { display:flex; flex:0 0 auto; align-items:center; gap:12px; }
 .heading-controls .btn { margin-left:8px; white-space:nowrap; }
-.state-live { color:var(--ok); border-color:var(--ok); }
-.state-maintenance { color:var(--bad); border-color:var(--bad); }
-.state-uncovered { color:var(--warn); border-color:var(--warn); }
-.state-unavailable { color:var(--muted); }
 .card-header .hint { font-size:14px; font-weight:400; }
 .bypass-disclosure { margin-top:20px; padding-top:20px; border-top:1px solid var(--border); }
 .disclosure > .hint { margin:0 0 16px; }

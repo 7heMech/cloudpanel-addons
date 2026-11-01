@@ -1,6 +1,6 @@
 import { esc } from "../../../lib/app-http";
 import {
-  FLEET_FOOTER_HTML, FLEET_ROW_SELECTION_JS, JOB_PROGRESS_JS, JOB_PROGRESS_STYLE, fleetFilterHtml, fleetRowSelectionStyle,
+  ATTENTION_RANK, FLEET_FOOTER_HTML, FLEET_ROW_SELECTION_JS, JOB_PROGRESS_JS, JOB_PROGRESS_STYLE, fleetFilterHtml, fleetRowSelectionStyle,
   jobProgressHtml, renderLayout,
 } from "../../../lib/app-ui";
 import { mountPath } from "../../../lib/mount";
@@ -34,7 +34,7 @@ export function layout(
 
 const PLUGIN_STATUS: Record<VarnishPluginStatus, [label: string, tone: string]> = {
   active: ["Active", "state-done"],
-  inactive: ["Inactive", "state-paused"],
+  inactive: ["Inactive", "tone-warn"],
   missing: ["Not installed", ""],
   error: ["Check failed", "state-failed"],
 };
@@ -42,8 +42,8 @@ const PLUGIN_STATUS: Record<VarnishPluginStatus, [label: string, tone: string]> 
 const MAINWP_STATUS: Record<MainwpStatus, [label: string, tone: string]> = {
   missing: ["Not installed", ""],
   inactive: ["Installed, inactive", ""],
-  "waiting-https": ["Waiting for HTTPS", "state-paused"],
-  "not-connected": ["Not connected", "state-paused"],
+  "waiting-https": ["Waiting for HTTPS", "tone-warn"],
+  "not-connected": ["Not connected", "tone-warn"],
   connected: ["Connected", "state-done"],
   unsupported: ["Multisite, skipped", ""],
   error: ["Check failed", "state-failed"],
@@ -54,14 +54,20 @@ function checkedTitle(checkedAt: string): string {
   return checked ? ` title="Checked ${esc(checked)} UTC"` : "";
 }
 
+/** The plugin's chip on a site with Varnish on. */
+function varnishBadge(site: WpSiteView): [label: string, tone: string] {
+  const record = site.varnishPlugin;
+  return !record ? ["Not checked", ""]
+    : record.status === "missing" && record.seen ? ["Removed", ""]
+    : record.status === "active" && record.network ? ["Network active", "state-done"] : PLUGIN_STATUS[record.status];
+}
+
 function varnishCell(site: WpSiteView, available: boolean, job: WpJobView | null): string {
   if (!available) return '<span class="toolbar-note">Unavailable</span>';
   if (!site.varnishCache) return '<span class="hint" title="Varnish Cache is off for this site in CloudPanel, so the plugin has nothing to purge">Varnish off</span>';
   const domain = esc(site.domain);
   const record = site.varnishPlugin;
-  const [label, tone] = !record ? ["Not checked", ""]
-    : record.status === "missing" && record.seen ? ["Removed", ""]
-    : record.status === "active" && record.network ? ["Network active", "state-done"] : PLUGIN_STATUS[record.status];
+  const [label, tone] = varnishBadge(site);
   // Only a check says what a site needs; the backend installs if missing and activates.
   const status = record?.status;
   const action = !record || status === "active" ? ""
@@ -78,12 +84,18 @@ function connectable(site: WpSiteView, state: MainwpView): boolean {
     && status !== "connected" && status !== "unsupported";
 }
 
+/** The Child's chip on a site other than the Dashboard. */
+function mainwpBadge(site: WpSiteView, state: MainwpView): [label: string, tone: string] {
+  const record = state.sites[site.domain];
+  return !record ? ["Not checked", ""]
+    : record.status === "missing" && record.seen ? ["Removed", ""] : MAINWP_STATUS[record.status];
+}
+
 function mainwpCell(site: WpSiteView, state: MainwpView, job: WpJobView | null): string {
   if (site.domain === state.dashboard) return '<div class="wp-status" data-policy="mainwp"><span class="badge state-done">Dashboard</span></div>';
   const domain = esc(site.domain);
   const record = state.sites[site.domain];
-  const [label, tone] = !record ? ["Not checked", ""]
-    : record.status === "missing" && record.seen ? ["Removed", ""] : MAINWP_STATUS[record.status];
+  const [label, tone] = mainwpBadge(site, state);
   // A Dashboard elsewhere connects the site itself; here the Child is only installed and activated.
   const verb = record?.status === "error" ? "Retry" : !state.remote ? "Connect"
     : record?.status === "inactive" ? "Activate" : record?.status === "not-connected" ? "" : "Install";
@@ -106,12 +118,23 @@ function siteRow(site: WpSiteView, data: WpDashboard, mainwp: boolean, selectabl
   const box = selectable ? `
                 <td class="site-select"><input class="site-checkbox" type="checkbox" onchange="paintFleetSelection()" aria-label="Select ${domain}"${
     connectable(site, data.mainwp) && !data.jobs.mainwp ? "" : " disabled"}></td>` : "";
+  // The filter and the "Needs attention first" sort go by the chips the row shows.
+  const varnish = site.varnishCache && !data.varnishError ? varnishBadge(site) : null;
+  const child = mainwp && site.domain !== data.mainwp.dashboard ? mainwpBadge(site, data.mainwp) : null;
+  const rank = Math.min(...[varnish, child].map((badge) => !badge ? ATTENTION_RANK.muted
+    : badge[1] === "state-failed" ? ATTENTION_RANK.bad : badge[1] === "tone-warn" ? ATTENTION_RANK.warn
+    : badge[1] === "state-done" ? ATTENTION_RANK.ok : ATTENTION_RANK.muted));
+  const show = [
+    rank <= ATTENTION_RANK.warn ? "attention" : "",
+    varnish && varnish[1] !== "state-done" ? "varnish" : "",
+    child && data.mainwp.sites[site.domain]?.status !== "connected" && data.mainwp.sites[site.domain]?.status !== "unsupported" ? "mainwp" : "",
+  ].filter(Boolean).join(" ");
   return `
-              <tr data-domain="${domain}" data-find="${esc(`${site.domain} ${site.user}`)}"${select}>${box}
+              <tr data-domain="${domain}" data-find="${esc(`${site.domain} ${site.user}`)}" data-show="${show}" data-sort-attention="${rank}" data-sort-owner="${esc(site.user)}"${select}>${box}
                 <td class="site-cell">${domain}<div class="hint">${esc(site.user)}</div></td>
                 <td data-label="CLP Varnish Cache">${varnishCell(site, !data.varnishError, data.jobs.varnish)}</td>${
   mainwp ? `\n                <td data-label="MainWP Child">${mainwpCell(site, data.mainwp, data.jobs.mainwp)}</td>` : ""}
-                <td class="action-cell"><button class="btn btn-primary" type="button" data-domain="${domain}" onclick="signIn(this)">Sign in</button></td>
+                <td class="action-cell"><button class="btn" type="button" data-domain="${domain}" onclick="signIn(this)">Sign in</button></td>
               </tr>`;
 }
 
@@ -165,7 +188,17 @@ function sitesCard(data: WpDashboard): string {
     <div class="card card-table">
       <div class="card-header${selectable ? " toolbar" : ""}"><h2>WordPress sites</h2>${selectable ? batchToolbar(data, unconnected) : ""}</div>
       ${jobsStrip(data)}
-      ${fleetFilterHtml({ count: sites.length, summary: `${sites.length} sites` })}
+      ${fleetFilterHtml({
+        count: sites.length,
+        placeholder: "Find a site or user",
+        filters: [
+          { value: "attention", label: "Needs attention" },
+          ...(data.varnishError ? [] : [{ value: "varnish", label: "CLP Varnish Cache not active" }]),
+          ...(mainwp ? [{ value: "mainwp", label: "MainWP not connected" }] : []),
+        ],
+        sorts: [{ value: "attention", label: "Needs attention first" }, { value: "owner", label: "Site user" }],
+        summary: `${sites.length} sites`,
+      })}
       <div class="table-scroll">
         <table class="fleet-table wp-site-table${selectable ? " wp-selectable" : ""}">
           <thead>

@@ -139,7 +139,7 @@
   var found = [];
   // Installed on every new site by WordPress Tools' own automation, which owns them.
   var automatic = [];
-  var AUTOMATIC_LABEL = 'Already installed';
+  var AUTOMATIC_LABEL = 'Installed automatically';
   function paintResults() {
     results.textContent = '';
     found.forEach(function (plugin) {

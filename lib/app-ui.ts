@@ -63,25 +63,34 @@ export function whenText(iso: string): string {
 /** Below this many sites the whole table fits on a screen, so it needs no search. */
 export const FLEET_FILTER_MIN = 6;
 
+/** A row's place in a "Needs attention first" sort, by the tone of its worst status. */
+export const ATTENTION_RANK = { bad: 0, warn: 1, info: 2, ok: 3, muted: 4 } as const;
+
 /**
- * Search, and an optional filter, above a site table whose rows carry
- * `data-domain`, `data-find` and `data-show`; the client half is `filterFleet`.
+ * Search, an optional filter and an optional sort above a site table whose rows
+ * carry `data-domain`, `data-find`, `data-show` and a `data-sort-<value>` for
+ * each sort; the client half is `filterFleet`.
  */
 export function fleetFilterHtml(options: {
   count: number;
   placeholder?: string;
   filters?: { value: string; label: string }[];
+  sorts?: { value: string; label: string }[];
   summary: string;
 }): string {
   if (options.count < FLEET_FILTER_MIN) return "";
+  const choices = (list: { value: string; label: string }[]) =>
+    list.map((item) => `<option value="${esc(item.value)}">${esc(item.label)}</option>`).join("");
   const filters = options.filters?.length
-    ? `<select id="fleet-show" data-keep aria-label="Show" onchange="filterFleet()"><option value="">All sites</option>${options.filters
-      .map((filter) => `<option value="${esc(filter.value)}">${esc(filter.label)}</option>`).join("")}</select>`
+    ? `<select id="fleet-show" data-keep aria-label="Show" onchange="filterFleet()"><option value="">All sites</option>${choices(options.filters)}</select>`
+    : "";
+  const sorts = options.sorts?.length
+    ? `<label class="fleet-sort">Sort <select id="fleet-sort" data-keep onchange="filterFleet()"><option value="">Site name</option>${choices(options.sorts)}</select></label>`
     : "";
   const placeholder = options.placeholder ?? "Find a site";
   return `<div class="fleet-filter">
       <input type="search" id="fleet-find" data-keep placeholder="${esc(placeholder)}" aria-label="${esc(placeholder)}" oninput="filterFleet()">
-      ${filters}<span class="hint" id="fleet-summary" data-all="${esc(options.summary)}">${esc(options.summary)}</span>
+      ${filters}${sorts}<span class="hint" id="fleet-summary" data-all="${esc(options.summary)}">${esc(options.summary)}</span>
     </div>`;
 }
 

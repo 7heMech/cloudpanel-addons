@@ -128,8 +128,11 @@ appear once a Dashboard is chosen, here or on another server; until then the
 card holds only the picker, plus cleanup while Child plugins the addon
 installed remain from a deleted Dashboard, and automation reads as off; a site
 without Varnish in CloudPanel says Varnish off. A muted line under the table offers to remove the
-sign-in helper while any site has it, and the shared search appears from six
-sites. After any change the page fetches
+sign-in helper while any site has it, and the shared search (site or user)
+appears from six sites, with filters for needs attention, CLP Varnish Cache not
+active and MainWP not connected, and sorts by attention or site user. Sign in is
+a plain button: on every row, a solid one would be the loudest thing on the
+page. After any change the page fetches
 `/api/dashboard`, a server-rendered fragment of everything below the heading,
 and repaints from it, so row status always comes from the same renderer as the
 first load and the page never reloads.
@@ -557,7 +560,7 @@ WP-CLI runner and the job store. It is a choice per site, made where the site
 is made; a set every new site gets would be a policy on this page instead.
 
 CLP Varnish Cache and MainWP Child are not offered while their automation is
-on: search lists them as already installed, and root refuses a choice that
+on: search lists them as installed automatically, and root refuses a choice that
 names either, by slug, when it is recorded. Each then has one owner, so the
 form's job and the policy's check never install it at once, MainWP's cleanup
 still finds the Child its own, and a Varnish plugin chosen inactive is not left

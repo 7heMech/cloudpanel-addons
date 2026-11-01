@@ -1,7 +1,7 @@
 import CLIENT_BODY from "./views.client.js" with { type: "text" };
 import CSS from "./views.css" with { type: "text" };
 import { esc } from "../../../lib/app-http";
-import { FLEET_FOOTER_HTML, FLEET_ROW_SELECTION_JS, fleetFilterHtml, fleetRowSelectionStyle, renderLayout } from "../../../lib/app-ui";
+import { ATTENTION_RANK, FLEET_FOOTER_HTML, FLEET_ROW_SELECTION_JS, fleetFilterHtml, fleetRowSelectionStyle, renderLayout } from "../../../lib/app-ui";
 import { mountPath } from "../../../lib/mount";
 import type { DnsState, SiteView } from "../action";
 import type { Profile } from "../model";
@@ -90,17 +90,29 @@ export function siteStatus(site: SiteView, automatic: boolean): { label: string;
   return { label: "In sync", tone: "ok", hint: zone };
 }
 
+/** A line under a status, cut to two lines in the table; Details and the tooltip have it whole. */
+function hintLine(text: string): string {
+  return text ? `<span class="hint dns-clamp" title="${esc(text)}">${esc(text)}</span>` : "";
+}
+
 function siteRow(site: SiteView, state: DnsState): string {
   const status = siteStatus(site, state.automatic);
   const runs = site.redirect
     ? `Redirect<span class="hint dns-redirect-target" title="${esc(site.redirect.target)}">→ ${esc(site.redirect.target.replace(/^https?:\/\//, ""))}</span>`
     : esc(TYPE_LABELS[site.type] ?? site.type);
-  return `<tr data-domain="${esc(site.domain)}" data-profile-id="${esc(site.profileId ?? "")}"${site.plan?.held ? " data-held" : ""} tabindex="0" aria-selected="false" onclick="toggleSiteSelection(event, this)" onkeydown="toggleSiteSelection(event, this)">
+  const profile = state.profiles.find((candidate) => candidate.id === site.profileId);
+  const show = [
+    status.tone === "bad" ? "attention" : status.tone === "warn" ? "pending" : "",
+    site.redirect ? "redirect" : "",
+    profile || site.redirect ? "" : "unmanaged",
+  ].filter(Boolean).join(" ");
+  const sorts = ` data-sort-attention="${ATTENTION_RANK[status.tone as keyof typeof ATTENTION_RANK] ?? ATTENTION_RANK.muted}" data-sort-profile="${esc(profile?.name ?? "")}"`;
+  return `<tr data-domain="${esc(site.domain)}" data-profile-id="${esc(site.profileId ?? "")}" data-show="${show}"${sorts}${site.plan?.held ? " data-held" : ""} tabindex="0" aria-selected="false" onclick="toggleSiteSelection(event, this)" onkeydown="toggleSiteSelection(event, this)">
     <td class="site-select"><input class="site-checkbox" type="checkbox" onchange="paintFleetSelection()" aria-label="Select ${esc(site.domain)}"></td>
     <td class="site-cell"><strong>${esc(site.domain)}</strong></td>
     <td class="type-cell">${runs}</td>
     <td data-label="Profile" class="dns-profile-cell"><select aria-label="Profile for ${esc(site.domain)}" onchange="dnsAssignRow(this)">${profileOptions(state.profiles, site.profileId, site.redirect ? "No profile" : NO_PROFILE)}</select></td>
-    <td data-label="DNS" class="dns-status"><span class="tone-${status.tone}">${esc(status.label)}</span>${status.hint ? `<span class="hint">${esc(status.hint)}</span>` : ""}${site.ssl ? `<span class="hint">${esc(site.ssl.startsWith("Waiting for DNS") ? "Certificate requested; waits for DNS" : `Certificate: ${site.ssl}`)}</span>` : ""}</td>
+    <td data-label="DNS" class="dns-status">${status.label === "—" ? '<span class="tone-muted">—</span>' : `<span class="badge tone-${status.tone}">${esc(status.label)}</span>`}${hintLine(status.hint)}${site.ssl ? hintLine(site.ssl.startsWith("Waiting for DNS") ? "Certificate requested; waits for DNS" : `Certificate: ${site.ssl}`) : ""}</td>
     <td class="action-cell">${site.profileId || site.redirect ? `<button class="btn" type="button" onclick="dnsShowSite('${esc(site.domain)}')">Details</button>` : ""}</td>
   </tr>`;
 }
@@ -270,7 +282,15 @@ export function dashboardContent(state: DnsState, now = Date.now()): string {
         <button class="btn" id="assign-selected" type="button" disabled data-needs-selection onclick="dnsAssignSelected()">Assign selected</button>
         ${redirectTools(state)}
       </div>
-      ${fleetFilterHtml({ count: state.sites.length, summary: siteCount(state) })}
+      ${fleetFilterHtml({
+        count: state.sites.length,
+        filters: [
+          { value: "attention", label: "Needs attention" }, { value: "pending", label: "Changes waiting" },
+          { value: "redirect", label: "Redirects" }, { value: "unmanaged", label: "Not managed" },
+        ],
+        sorts: [{ value: "attention", label: "Needs attention first" }, { value: "profile", label: "Profile" }],
+        summary: siteCount(state),
+      })}
       <div class="table-scroll"><table class="fleet-table dns-site-table"><thead><tr>
         <th class="site-select"><input id="select-all" type="checkbox" onchange="selectAllSites(this.checked)" aria-label="Select all sites"></th>
         <th>Site</th><th>Runs</th><th>Profile</th><th>DNS</th><th class="action-cell"></th>
@@ -348,7 +368,7 @@ const DIALOGS = `
   <dialog id="dns-site-dialog" aria-labelledby="dns-site-heading">
     <div class="dialog-header"><h2 id="dns-site-heading">Site</h2></div>
     <div id="dns-site-body"></div>
-    <div class="actions dialog-actions"><button class="btn" type="button" onclick="this.closest('dialog').close()">Close</button><button class="btn btn-primary" id="dns-site-apply" type="button" onclick="dnsApplySite()">Apply now</button></div>
+    <div class="actions dialog-actions"><button class="btn dns-dialog-start" id="dns-site-edit" type="button" hidden onclick="dnsEditRedirect(dnsSiteShown)">Edit redirect</button><button class="btn" type="button" onclick="this.closest('dialog').close()">Close</button><button class="btn btn-primary" id="dns-site-apply" type="button" onclick="dnsApplySite()">Apply now</button></div>
   </dialog>
   <dialog id="dns-redirect-dialog" aria-labelledby="dns-redirect-heading"><form id="dns-redirect-form" onsubmit="dnsSaveRedirect(event)">
     <div class="dialog-header"><h2 id="dns-redirect-heading">Add redirect</h2></div>

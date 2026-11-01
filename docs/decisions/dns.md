@@ -70,7 +70,13 @@ The page puts the sites first, then the profiles with the choice of default,
 the connections and settings that are set once, and last the change log, which
 is looked back at rather than worked in. The site
 list has the shared search from six sites and selection, as the other site
-lists do. Until a connection exists it opens with the three steps that make a
+lists do, with filters for needs attention, changes waiting, redirects and not
+managed, and sorts by attention or profile. A site's Details dialog leads with
+what needs doing: its status chip beside the domain, then problems and, while
+its zone is pending, the nameservers to set at the registrar, each with its own
+copy button; then what will change, with a redirect's pending changes said to
+come at the next check, since it has no Apply; then the facts that only
+describe it. A redirect's Edit sits in the dialog's footer. Until a connection exists it opens with the three steps that make a
 new site publish itself: connect, choose the default, turn on Automatic. The
 bar and the switch are there without a connection too once a redirect domain
 exists, since its stand-in site waits for Automatic.

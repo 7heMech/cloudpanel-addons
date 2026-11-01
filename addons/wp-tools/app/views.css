@@ -63,3 +63,9 @@
   .wp-card-note { padding: 16px 20px; }
   .wp-new-site-table td.site-cell, .wp-new-site-table td[data-label="Plugins"] { flex-basis: 100%; }
 }
+/* Each policy's column holds a chip and its button with room to spare, so the
+   two never run together; an error wraps rather than widening its column. */
+@media (min-width: 941px) {
+  .wp-site-table td[data-label] { min-width: 240px; }
+  .wp-site-table .wp-error { max-width: 420px; }
+}

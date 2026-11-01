@@ -357,8 +357,19 @@ header on a phone, so moving between the two does not move the header.
 
 Every addon renders into one shell in `lib/app-ui.ts`: palette, cards, tables,
 badges, switches, toolbars, one confirmation dialog and one inline notice per
-page. A badge names what something is rather than being read for itself, so it
-is set a size below the smallest body text wherever it appears. A switch that
+page. A badge names a state rather than being read for itself, so it is set a
+size below body text, as a tinted chip in one of five tones -- ok, info, warn,
+bad, muted -- and every addon names its states through them (`tone-*`, with the
+job states mapped onto the same five), so one colour means one thing on every
+page; a running container is ok while a running job is info. A table cell keeps
+its status to the chip and a line or two; the whole explanation is in the row's
+details or tooltip. A value left at its default (no profile, no category,
+CloudPanel's limits) reads muted, so what somebody chose stands out. A table has
+at most one solid button per card, never one per row, and a row's Delete stays a
+plain button that turns red only under the pointer or focus, so a column of
+them does not outweigh the rows. On a wide screen a long hostname is cut to one
+line, with the whole name on hover, and the actions column takes only its
+buttons' width, so the status columns keep their room. A switch that
 decides one thing for a whole page keeps its full size; one repeated per table
 row comes down to the height of the line beside it, so the control does not set
 the row's height. An addon supplies its brand, its own tabs, its script and any rule only it
@@ -486,8 +497,13 @@ notices and `confirmAction`. The one confirmation dialog can ask the operator to
 type a word, such as the domain, before something that cannot be undone, and a
 press on any dialog's backdrop closes it. Fleet tables also get site-selection
 helpers: `paintFleetSelection` paints the count, select-all and every control
-marked `data-needs-selection` by shared ids, and `fleetFilterHtml` adds a search
-and an optional filter once a table has six sites. A row the search hides is
+marked `data-needs-selection` by shared ids, and `fleetFilterHtml` adds a search,
+an optional filter and an optional sort once a table has six sites. The sort is
+a select in that bar rather than clickable headings, because a phone hides the
+table heading; each row carries a `data-sort-<key>` (Needs attention first ranks
+rows by the tone of their worst status), ties go by domain, and the rows keep
+the server's order until a sort is picked. It survives a repaint like the search
+does, and the phone's ten-site cut is taken after it. A row the search hides is
 deselected, so a bulk action only reaches sites on screen. Pages with background
 jobs get the shared job watcher. Theme initialization runs before styles are
 painted.

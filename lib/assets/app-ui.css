@@ -141,16 +141,33 @@ td a:hover { color: var(--accent); }
 .site-select { width: 42px; text-align: center; }
 .site-select input { width: 18px; height: 18px; margin: 0; accent-color: var(--primary); }
 .site-cell { font-weight: 600; overflow-wrap: anywhere; }
+/* A long hostname is cut to one line rather than squeezing the columns beside
+   it; its tooltip has it whole (app-ui.client.js). */
+@media (min-width: 941px) {
+  /* The buttons' column takes only their width, so the rest goes to the columns beside the site. */
+  .fleet-table td.action-cell { width: 1%; }
+  .fleet-table td.site-cell { max-width: 300px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .fleet-table td.site-cell > * { overflow: hidden; text-overflow: ellipsis; }
+}
 .site-cell a, .site-cell .hint { overflow-wrap: anywhere; font-weight: 400; }
 .site-cell a { font-weight: 600; }
 .mono { font-family: var(--mono); font-size: 14px; }
-/* A tag names what something is; it sits beside the text it belongs to and
-   reads as secondary to it, so it stays a size below the smallest body text. */
-.badge { display: inline-block; padding: 2px 6px; border-radius: 4px; font-size: 11px;
-  line-height: 1.3; border: 1px solid var(--border); white-space: nowrap; }
-.state-running, .state-done { color: var(--ok); border-color: currentColor; }
-.state-exited, .state-created, .state-paused { color: var(--warn); border-color: currentColor; }
-.state-absent, .state-unknown, .state-failed { color: var(--bad); border-color: currentColor; }
+/* A status chip: tinted by its tone, a size below body text. Every addon names
+   a state through one of five tones, so the same colour means the same thing on
+   every page; a chip without one is a neutral tag. */
+.badge { display: inline-block; padding: 2px 8px; border-radius: 4px; font-size: 12px; font-weight: 600;
+  line-height: 1.4; white-space: nowrap; color: var(--muted);
+  border: 1px solid color-mix(in srgb, currentColor 30%, transparent);
+  background: color-mix(in srgb, currentColor 10%, transparent); }
+.tone-ok, .state-done, .state-live { color: var(--ok); }
+.tone-info, .state-running { color: var(--accent); }
+.tone-warn, .state-uncovered { color: var(--warn); }
+.tone-bad, .state-failed, .state-absent, .state-unknown, .state-maintenance, .state-deleted { color: var(--bad); }
+.tone-muted, .state-queued, .state-unavailable { color: var(--muted); }
+/* A value left at its default reads quieter than one somebody chose. */
+.is-default, td select:has(> option[value=""]:checked) { color: var(--muted); }
+/* Every row has a Delete; it turns red only when the pointer or focus is on it. */
+td .btn-danger:not(:hover):not(:focus-visible) { color: var(--button-text); border-color: var(--button-border); }
 .btn { display: inline-flex; align-items: center; justify-content: center; gap: 6px; text-align: center;
   background: var(--button-bg); color: var(--button-text); border: 1px solid var(--button-border);
   border-radius: 4px; padding: 8px 20px; font-size: 14px; font-weight: 500; line-height: 1.5; cursor: pointer; }
@@ -308,6 +325,7 @@ pre { background: var(--bg); border: 1px solid var(--border); border-radius: 4px
 .fleet-filter { display: flex; flex-wrap: wrap; align-items: center; gap: 10px 12px; padding: 0 32px 18px; }
 .fleet-filter input { flex: 1 1 220px; max-width: 320px; }
 .fleet-filter select { width: auto; }
+.fleet-sort { display: inline-flex; align-items: center; gap: 8px; margin: 0; font-size: 14px; color: var(--muted); white-space: nowrap; }
 .fleet-filter .hint { margin-left: auto; }
 .card-header + .fleet-filter { padding-top: 18px; }
 .fleet-table tr[hidden] { display: none !important; }

@@ -26,7 +26,7 @@ export function layout(
 }
 
 function badge(text: string, tone: "ok" | "warn" | "bad" | "plain"): string {
-  const state = { ok: " state-running", warn: " state-exited", bad: " state-absent", plain: "" }[tone];
+  const state = { ok: " tone-ok", warn: " tone-warn", bad: " tone-bad", plain: "" }[tone];
   return `<span class="badge${state}">${esc(text)}</span>`;
 }
 
