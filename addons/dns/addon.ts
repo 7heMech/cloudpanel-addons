@@ -26,7 +26,7 @@ export const DNS_ADDON: AddonDefinition = {
       return joined.length ? `${joined.join(", ")} joined the default profile` : null;
     },
   },
-  maintenance: {
+  repair: {
     label: "DNS",
     run: () => {
       queueAddonPass({ addon: "dns", verb: "reconcile", description: "Check and enforce DNS for CloudPanel sites", runtime: 1800 });

@@ -92,13 +92,13 @@ test("repair queues DNS with a runtime bound and leaves a running pass alone", (
       const ok = args[0] !== "systemctl" || active;
       return { success: ok, stdout: "", stderr: "", exitCode: ok ? 0 : 3 };
     };
-    DNS_ADDON.maintenance!.run();
+    DNS_ADDON.repair!.run();
     expect(calls[1]).toContain("--unit=clp-addon-dns-reconcile");
     expect(calls[1]).toContain("--property=RuntimeMaxSec=1800");
     expect(calls[1]!.slice(-4)).toEqual(["/usr/local/bin/clp-addons", "action", "dns", "reconcile"]);
     active = true;
     calls.length = 0;
-    DNS_ADDON.maintenance!.run();
+    DNS_ADDON.repair!.run();
     expect(calls).toEqual([["systemctl", "is-active", "--quiet", "clp-addon-dns-reconcile"]]);
   } finally {
     Bun.spawnSync = original;

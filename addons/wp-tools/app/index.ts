@@ -1,6 +1,6 @@
 import { signInWindow } from "./sign-in-window";
 import {
-  BodyError, bodyErrorResponse, clientIp, guardMutation, htmlResponse, jsonResponse, readBoundedBytes, readJsonObject, newCsrfToken, safeDecodePathSegment,
+  BodyError, bodyErrorResponse, clientIp, guardMutation, htmlResponse, jsonResponse, readBoundedBytes, readJsonObject, newCsrfToken, safeDecodePathSegment, readBody,
 } from "../../../lib/app-http";
 import { jobApiRoute } from "../../../lib/job-stream";
 import { MAX_NEW_SITE_PLUGINS, UPLOAD_ID_RE } from "../new-site-plugins";
@@ -199,12 +199,8 @@ export async function handle(
   // CloudPanel's Sites page. This is the one route a non-administrator reaches,
   // and the only thing this side decides is whose request it is.
   if (path === "/api/sign-in") {
-    let body: Record<string, unknown>;
-    try {
-      body = await readJsonObject(req, 4 * 1024);
-    } catch (error) {
-      return bodyErrorResponse(error);
-    }
+    const body = await readBody(req, 4 * 1024);
+    if (body instanceof Response) return body;
     const domain = validateDomain(body.domain);
     if (!domain) return json({ ok: false, error: "that is not a valid hostname" }, 400);
     const admin = auth?.roles.includes("ROLE_ADMIN") ?? false;

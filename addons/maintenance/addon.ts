@@ -14,7 +14,7 @@ export const MAINTENANCE_ADDON: AddonDefinition = {
   action: runMaintenanceAction,
   // A site deleted from CloudPanel leaves its state behind, and a site created
   // again under its name would otherwise come back serving the 503 page.
-  maintenance: {
+  repair: {
     label: "maintenance state (prune)",
     run: async () => {
       const removed = pruneMaintenanceState();

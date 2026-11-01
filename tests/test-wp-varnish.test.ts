@@ -130,7 +130,7 @@ test("repair queues nothing while both policies are off", async () => {
       calls.push(args);
       return { success: true, stdout: "", stderr: "", exitCode: 0 };
     };
-    expect(await WP_TOOLS_ADDON.maintenance!.run(options() as Record<string, unknown>)).toBeNull();
+    expect(await WP_TOOLS_ADDON.repair!.run(options() as Record<string, unknown>)).toBeNull();
     expect(calls).toEqual([]);
   } finally {
     Bun.spawnSync = spawn;
@@ -147,7 +147,7 @@ test("repair queues a bounded policy pass without running site code", async () =
       calls.push(args);
       return { success: args[0] === "systemd-run", stdout: "", stderr: "", exitCode: 0 };
     };
-    expect(await WP_TOOLS_ADDON.maintenance!.run(options() as Record<string, unknown>)).toBe("plugin policy pass queued");
+    expect(await WP_TOOLS_ADDON.repair!.run(options() as Record<string, unknown>)).toBe("plugin policy pass queued");
     expect(calls).toHaveLength(2);
     const queued = calls[1]!;
     expect(queued).toContain("--no-block");

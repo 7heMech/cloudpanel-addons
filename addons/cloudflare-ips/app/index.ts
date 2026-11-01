@@ -1,5 +1,5 @@
 import {
-  bodyErrorResponse, guardMutation, htmlResponse, jsonResponse, newCsrfToken, readJsonObject,
+  htmlResponse, jsonResponse, newCsrfToken, readMutation,
 } from "../../../lib/app-http";
 import { cloudflareService } from "./service";
 import { dashboardView, layout } from "./views";
@@ -44,10 +44,8 @@ export async function handle(
   }
 
   if (req.method === "POST" && path === "/api/sites") {
-    const denied = guardMutation(req);
-    if (denied) return denied;
-    let body: Record<string, unknown>;
-    try { body = await readJsonObject(req); } catch (error) { return bodyErrorResponse(error); }
+    const body = await readMutation(req);
+    if (body instanceof Response) return body;
     const values = body as { domains?: unknown; enabled?: unknown };
     if (!Array.isArray(values.domains) || values.domains.length === 0 ||
         !values.domains.every((domain: unknown) => typeof domain === "string") || typeof values.enabled !== "boolean") {
@@ -58,10 +56,8 @@ export async function handle(
   }
 
   if (req.method === "POST" && path === "/api/policy") {
-    const denied = guardMutation(req);
-    if (denied) return denied;
-    let body: Record<string, unknown>;
-    try { body = await readJsonObject(req); } catch (error) { return bodyErrorResponse(error); }
+    const body = await readMutation(req);
+    if (body instanceof Response) return body;
     if (!validMutationBody(body)) return json({ ok: false, error: "enabled must be boolean" }, 400);
     const result = await cloudflareService.setAutomatic(body.enabled);
     return json(result, result.ok ? 200 : 400);

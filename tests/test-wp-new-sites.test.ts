@@ -156,7 +156,7 @@ test("the first look learns the sites there are, and a vhost rewrite with nothin
 test("repair makes the baseline once, so the watcher's first wake is not every site", async () => {
   // With both policies off, upkeep queues no 15-minute pass, so nothing here reaches systemd.
   writeFileSync(join(root, "varnish.json"), JSON.stringify({ enabled: false, sites: {} }));
-  expect(await WP_TOOLS_ADDON.maintenance!.run(options() as Record<string, unknown>)).toBeNull();
+  expect(await WP_TOOLS_ADDON.repair!.run(options() as Record<string, unknown>)).toBeNull();
   expect(state().known).toEqual(["shop.example.com"]);
   addSite("new.example.com", "newsite");
   await event("seed");
@@ -166,7 +166,7 @@ test("repair makes the baseline once, so the watcher's first wake is not every s
 
 test("a new WordPress site is checked once CloudPanel hands its configuration to the site user", async () => {
   await event();
-  const waiting = WP_TOOLS_ADDON.newSites!.waiting!;
+  const waiting = WP_TOOLS_ADDON.newSites!.resumePending!;
   // The row's commit: no WordPress yet, so nothing is queued, and the watcher keeps waking.
   addSite("new.example.com", "newsite");
   expect(await WP_TOOLS_ADDON.newSites!.run(options() as Record<string, unknown>)).toBe("new.example.com waits for WordPress");

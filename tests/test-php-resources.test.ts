@@ -209,7 +209,7 @@ test("the upkeep clears abandoned temp files from /tmp only while System Tweaks,
     if (process.getuid?.() === 0) chownSync(file, uid, uid);
     const threeHoursAgo = (Date.now() - 3 * 3_600_000) / 1000;
     utimesSync(file, threeHoursAgo, threeHoursAgo);
-    const upkeep = () => PHP_RESOURCES_ADDON.maintenance!.run({
+    const upkeep = () => PHP_RESOURCES_ADDON.repair!.run({
       ...options(box), tmpCleanup: { paths: { tmpDir, procDir: join(box.root, "proc"), passwd: join(box.root, "passwd") } },
     } as Record<string, unknown>);
 

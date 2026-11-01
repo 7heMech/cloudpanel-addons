@@ -10,12 +10,12 @@
 // addon says a new site still waits for a later step of the same request,
 // because the panel writes its database every few seconds even when idle.
 
-import { Database } from "bun:sqlite";
+import { withPanelDb } from "./panel-db";
 import { readdirSync, readFileSync, statSync } from "node:fs";
 import { join } from "node:path";
 import { writeFileAtomic } from "../lib/atomic-write";
 import type { AddonSpec } from "./addon-catalog";
-import { newSitesWaiting, runNewSiteWork } from "./maintenance";
+import { resumePendingNewSites, runNewSiteWork } from "./addon-hooks";
 import { DISTRO_NGINX_SITES_DIR, NEW_SITE_ROWS_PATH, NEW_SITES_SEEN_FILE, PANEL_DB } from "./paths";
 import { log, tryRun } from "./util";
 
@@ -42,8 +42,8 @@ export const DEFAULT_NEW_SITE_WATCH_PATHS: NewSiteWatchPaths = {
 export interface NewSiteWatchOps {
   /** Every installed addon's `newSites`. */
   runHooks: () => Promise<void>;
-  /** Whether an addon still waits for a new site. */
-  waiting: () => Promise<boolean>;
+  /** Every installed addon's `newSites.resumePending`; whether one still waits for a new site. */
+  resumePending: () => Promise<boolean>;
   /** Start or stop watching the panel database for a row that is still to come. */
   watchRows: (on: boolean) => void;
   now?: () => number;
@@ -57,14 +57,8 @@ export interface NewSiteWatchOps {
 export function panelSites(panelDb: string): string[] | null {
   try {
     // Read-only, so closing it is not a write the row watcher would see.
-    const db = new Database(panelDb, { readonly: true });
-    try {
-      db.exec("PRAGMA busy_timeout = 5000;");
-      return [...new Set(db.query<{ id: unknown; domain_name: unknown }, []>("SELECT id, domain_name FROM site").all()
-        .flatMap((row) => typeof row.domain_name === "string" ? [`${row.domain_name.toLowerCase()} ${row.id}`] : []))].sort();
-    } finally {
-      db.close();
-    }
+    return withPanelDb(panelDb, (db) => [...new Set(db.query<{ id: unknown; domain_name: unknown }, []>("SELECT id, domain_name FROM site").all()
+      .flatMap((row) => typeof row.domain_name === "string" ? [`${row.domain_name.toLowerCase()} ${row.id}`] : []))].sort());
   } catch {
     return null;
   }
@@ -159,7 +153,7 @@ export async function syncNewSites(ops: NewSiteWatchOps, paths: NewSiteWatchPath
     }
     const domains = sites.map((site) => site.slice(0, site.lastIndexOf(" ")));
     const inFlight = sitesInFlight(paths.vhostDir, domains, now()).length > 0;
-    const waiting = sitesChangedRecently(paths.seenFile, now()) && await ops.waiting();
+    const waiting = sitesChangedRecently(paths.seenFile, now()) && await ops.resumePending();
     ops.watchRows(inFlight || waiting);
     if (!inFlight && !waiting) return;
     if (!sameSites(panelSites(paths.panelDb) ?? sites, sites)) continue;
@@ -172,7 +166,7 @@ export async function syncNewSites(ops: NewSiteWatchOps, paths: NewSiteWatchPath
 export async function runSyncSites(installed: AddonSpec[]): Promise<void> {
   await syncNewSites({
     runHooks: () => runNewSiteWork(installed),
-    waiting: () => newSitesWaiting(installed),
+    resumePending: () => resumePendingNewSites(installed),
     watchRows: (on) => {
       const result = tryRun("systemctl", [on ? "start" : "stop", NEW_SITE_ROWS_PATH]);
       if (!result.ok) log.warn(`could not ${on ? "start" : "stop"} ${NEW_SITE_ROWS_PATH}: ${result.out}`);

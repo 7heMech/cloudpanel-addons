@@ -22,9 +22,8 @@ import {
   listJobIds, newJobId, pruneJobs, readJobLog, startJobUnit, watchJobRecord,
 } from "../../cli/job-store";
 import {
-  ActionCommandFailure, ActionFailure, acquireFileLock, deletedSites, emitActionError, emitActionOk, failAction,
-  readable, runCommand, validateDomain, validateJob,
-  type FileLockHandle,
+  ActionFailure, acquireFileLock, deletedSites, emitActionOk, failAction, readable, runCommand, validateDomain,
+  validateJob, reportActionFailure, type FileLockHandle,
 } from "../../cli/action-common";
 import { PANEL_IDENTITY_PATH } from "../../cli/paths";
 import { GIT_VERBS } from "./verbs";
@@ -1281,16 +1280,6 @@ export async function runGitAction(argv: string[], options?: GitActionOptions): 
     }
   } catch (error) {
     if (error instanceof JobFailure) return 1;
-    if (error instanceof ActionFailure) {
-      if (emitReply) emitActionError(error.message, error.data, "git");
-      else process.stderr.write(`[git] ERROR: ${error.message}\n`);
-      return 1;
-    }
-    const message = error instanceof ActionCommandFailure
-      ? error.message
-      : error instanceof Error ? error.message : "git action failed";
-    if (emitReply) emitActionError(message, undefined, "git");
-    else process.stderr.write(`[git] ERROR: ${message}\n`);
-    return 1;
+    return reportActionFailure("git", error, emitReply);
   }
 }

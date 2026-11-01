@@ -1,6 +1,6 @@
 import {
   SECURITY_HEADERS, bodyErrorResponse, clientIp, guardMutation, htmlResponse, jsonResponse, newCsrfToken,
-  policyResponse, readJsonObject, redirectResponse, safeDecodePathSegment,
+  policyResponse, readJsonObject, redirectResponse, safeDecodePathSegment, readBody, readMutation,
 } from "../../../lib/app-http";
 import { fleetView, fragment, layout, siteView } from "./views";
 import { embedLandingUrl } from "../../../lib/shadow-embed";
@@ -117,10 +117,8 @@ export async function handle(
   }
 
   if (method === "POST" && path === "/api/global-toggle") {
-    const denied = guardMutation(req);
-    if (denied) return denied;
-    let body: Record<string, unknown>;
-    try { body = await readJsonObject(req, 1024); } catch (error) { return bodyErrorResponse(error); }
+    const body = await readMutation(req, 1024);
+    if (body instanceof Response) return body;
     if (typeof body.enabled !== "boolean") return json({ ok: false, error: "enabled must be a boolean" }, 400);
     const result = await maintenanceService.setGlobalEnabled(body.enabled);
     if (!result.ok) return json({ ok: false, error: result.error ?? "failed to toggle global maintenance" }, 500);
@@ -128,10 +126,8 @@ export async function handle(
   }
 
   if (method === "PUT" && path === "/api/global-bypasses") {
-    const denied = guardMutation(req);
-    if (denied) return denied;
-    let body: Record<string, unknown>;
-    try { body = await readJsonObject(req, 16 * 1024); } catch (error) { return bodyErrorResponse(error); }
+    const body = await readMutation(req, 16 * 1024);
+    if (body instanceof Response) return body;
     const ips = body.ips;
     if (!Array.isArray(ips) || ips.length > MAX_BYPASS_IPS || ips.some((ip: unknown) => typeof ip !== "string")) {
       return json({ ok: false, error: `ips must contain at most ${MAX_BYPASS_IPS} addresses` }, 400);
@@ -143,10 +139,8 @@ export async function handle(
   // The selected sites, switched by one action call; a site that fails is named
   // in the reply rather than stopping the rest.
   if (method === "POST" && path === "/api/bulk-toggle") {
-    const denied = guardMutation(req);
-    if (denied) return denied;
-    let body: Record<string, unknown>;
-    try { body = await readJsonObject(req, 16 * 1024); } catch (error) { return bodyErrorResponse(error); }
+    const body = await readMutation(req, 16 * 1024);
+    if (body instanceof Response) return body;
     if (typeof body.enabled !== "boolean") return json({ ok: false, error: "enabled must be a boolean" }, 400);
     if (!Array.isArray(body.domains) || body.domains.length === 0) {
       return json({ ok: false, error: "domains must list at least one site" }, 400);
@@ -169,8 +163,8 @@ export async function handle(
     if (!domain) return json({ ok: false, error: "invalid domain" }, 400);
     let result;
     if (route[2] === "toggle" && method === "POST") {
-      let body: Record<string, unknown>;
-      try { body = await readJsonObject(req, 1024); } catch (error) { return bodyErrorResponse(error); }
+      const body = await readBody(req, 1024);
+      if (body instanceof Response) return body;
       if (typeof body.enabled !== "boolean") return json({ ok: false, error: "enabled must be a boolean" }, 400);
       result = await maintenanceService.setEnabled(domain, body.enabled);
       // The fleet page repaints from the reply; the site page paints the one switch it has.
@@ -187,8 +181,8 @@ export async function handle(
     } else if (route[2] === "template" && method === "DELETE") {
       result = await maintenanceService.resetTemplate(domain);
     } else if (route[2] === "bypasses" && method === "PUT") {
-      let body: Record<string, unknown>;
-      try { body = await readJsonObject(req, 16 * 1024); } catch (error) { return bodyErrorResponse(error); }
+      const body = await readBody(req, 16 * 1024);
+      if (body instanceof Response) return body;
       const ips = body.ips;
       if (!Array.isArray(ips) || ips.length > MAX_BYPASS_IPS || ips.some((ip: unknown) => typeof ip !== "string")) {
         return json({ ok: false, error: `ips must contain at most ${MAX_BYPASS_IPS} addresses` }, 400);

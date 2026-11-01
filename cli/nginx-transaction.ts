@@ -1,6 +1,6 @@
 import { Database } from "bun:sqlite";
 import { lstatSync, readFileSync, rmSync } from "node:fs";
-import { ActionFailure, failAction, type CommandResult } from "./action-common";
+import { ActionFailure, errorMessage, failAction, type CommandResult } from "./action-common";
 import { writeFileAtomic } from "../lib/atomic-write";
 
 export interface NginxFileBackup {
@@ -14,16 +14,6 @@ export interface NginxFileBackup {
 export function writeAtomicOwned(path: string, content: string, mode: number, uid: number, gid: number): void {
   // Preserve the panel's ownership so it can still rewrite its files.
   writeFileAtomic(path, content, { mode, owner: { uid, gid }, createParent: true });
-}
-
-export function openPanelDatabase(path: string, readOnly = false, busyTimeoutMs = 5000): Database {
-  try {
-    const db = new Database(path, { create: false, ...(readOnly ? { readonly: true } : { readwrite: true }) });
-    db.exec(`PRAGMA busy_timeout = ${busyTimeoutMs};`);
-    return db;
-  } catch (error) {
-    failAction(`CloudPanel database could not be opened: ${error instanceof Error ? error.message : String(error)}`);
-  }
 }
 
 /** The `allow` entries of CloudPanel's Cloudflare list, or none without one. */
@@ -65,9 +55,6 @@ function commandError(label: string, result: CommandResult): string {
   return `${label} failed: ${(result.stderr || result.stdout || `exit ${result.exitCode ?? "unknown"}`).trim()}`;
 }
 
-export function errorMessage(error: unknown): string {
-  return error instanceof Error ? error.message : String(error);
-}
 
 export function withRecoveryFailures(primary: unknown, label: string, failures: string[]): Error {
   const original = primary instanceof Error ? primary : new Error(String(primary));

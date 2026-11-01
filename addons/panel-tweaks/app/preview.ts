@@ -25,6 +25,7 @@ import type { PanelTweaksState, TweakSiteView } from "../action";
 const ROWS = 5;
 
 import PREVIEW_STYLE from "./preview.css" with { type: "text" };
+import PREVIEW_SCRIPT from "./preview.client.js" with { type: "text" };
 
 function actionCell(site: TweakSiteView): string {
   return `<a href="/site/${esc(site.domain)}/settings">Manage</a>`;
@@ -68,23 +69,7 @@ export function previewPage(state: PanelTweaksState): string {
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, shrink-to-fit=no">
 <title>Sites preview</title>
-<script>
-(function () {
-  function syncTheme() {
-    var dark = /(?:^|;\\s*)theme=dark(?:;|$)/.test(document.cookie);
-    try {
-      if (parent !== window) dark = parent.document.documentElement.classList.contains('dark');
-    } catch (e) {}
-    document.documentElement.classList.toggle('dark', dark);
-  }
-  syncTheme();
-  try {
-    if (parent !== window) new MutationObserver(syncTheme).observe(parent.document.documentElement, {
-      attributes: true, attributeFilter: ['class']
-    });
-  } catch (e) {}
-})();
-</script>
+<script>${PREVIEW_SCRIPT}</script>
 <link rel="stylesheet" href="/assets/css/bootstrap.min.css">
 <link rel="stylesheet" href="/assets/css/style.css">
 <link rel="stylesheet" href="/assets/css/style-dark.css">

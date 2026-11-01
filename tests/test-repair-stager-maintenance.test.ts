@@ -178,7 +178,7 @@ test.serial("repair's automatic entry point runs prune for real: a stuck job fli
     }));
 
     const paths = ${JSON.stringify(paths)};
-    const { runAddonMaintenance } = await import("./cli/maintenance.ts");
+    const { runAddonRepairs } = await import("./cli/addon-hooks.ts");
     const { STAGER_ADDON } = await import("./addons/stager/addon.ts");
     const stagerSpec = { ...STAGER_ADDON, configFile: "", stateDir: "" };
     const maintenanceOutput = [];
@@ -188,7 +188,7 @@ test.serial("repair's automatic entry point runs prune for real: a stuck job fli
       return true;
     };
     try {
-      await runAddonMaintenance([stagerSpec], { paths });
+      await runAddonRepairs([stagerSpec], { paths });
     } finally {
       process.stdout.write = originalWrite;
     }

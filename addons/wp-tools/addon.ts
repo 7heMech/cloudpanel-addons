@@ -42,13 +42,13 @@ export const WP_TOOLS_ADDON: AddonDefinition = {
   newSites: {
     label: "WordPress Tools",
     run: newSiteEvent("sites"),
-    waiting: async (options) => {
+    resumePending: async (options) => {
       const result = await reconcileWpNewSites((options ?? {}) as WpToolsActionOptions, "wake");
       return { waiting: result.waiting.length > 0, line: newSitesLine(result) };
     },
   },
   certificates: { label: "WordPress Tools", run: newSiteEvent("certificates") },
-  maintenance: {
+  repair: {
     label: "WordPress plugins",
     run: async (options) => {
       const actionOptions = (options ?? {}) as WpToolsActionOptions;

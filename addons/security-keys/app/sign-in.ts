@@ -6,7 +6,7 @@
 // cannot finish a sign-in it did not start and land the browser in someone
 // else's account.
 
-import { bodyErrorResponse, guardOrigin, jsonResponse, readJsonObject } from "../../../lib/app-http";
+import { guardOrigin, jsonResponse, readBody } from "../../../lib/app-http";
 import { ADDONS_BASE_PATH, mountPath } from "../../../lib/mount";
 import { securityKeysService } from "./service";
 
@@ -35,8 +35,8 @@ export async function handleSignIn(req: Request, path: string): Promise<Response
     );
   }
 
-  let body: Record<string, unknown>;
-  try { body = await readJsonObject(req, 16 * 1024); } catch (error) { return bodyErrorResponse(error); }
+  const body = await readBody(req, 16 * 1024);
+  if (body instanceof Response) return body;
   const challengeId = new Bun.CookieMap(req.headers.get("cookie") ?? "").get(CHALLENGE_COOKIE) ?? "";
   const response = typeof body.response === "object" && body.response !== null ? body.response as Record<string, unknown> : {};
   const result = await securityKeysService.signIn({

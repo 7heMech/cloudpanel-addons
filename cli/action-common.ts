@@ -75,9 +75,56 @@ export function actionErrorJson(message: string, data?: unknown): string {
   return JSON.stringify(reply);
 }
 
-export function emitActionError(message: string, data?: unknown, addon = "instatic"): void {
+export function emitActionError(addon: string, message: string, data?: unknown): void {
   process.stderr.write(`[${addon}] ERROR: ${message}\n`);
   process.stdout.write(`${actionErrorJson(message, data)}\n`);
+}
+
+export function errorMessage(error: unknown): string {
+  return error instanceof Error ? error.message : String(error);
+}
+
+/**
+ * Report a failed action and return its exit code: a JSON reply on stdout and
+ * the message on stderr, where the gateway's journal keeps it. With `emit`
+ * false, as when repair runs a verb in-process, only the stderr line.
+ */
+export function reportActionFailure(addon: string, error: unknown, emit = true, message = errorMessage(error)): 1 {
+  if (emit) emitActionError(addon, message, error instanceof ActionFailure ? error.data : undefined);
+  else process.stderr.write(`[${addon}] ERROR: ${message}\n`);
+  return 1;
+}
+
+/** A verb's request body: at most `maxBytes`, and a JSON object. */
+export function parseJsonRequest(raw: string, maxBytes: number): Record<string, unknown> {
+  if (Buffer.byteLength(raw, "utf8") > maxBytes) failAction("the request is too large");
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(raw);
+  } catch {
+    failAction("the request must be JSON");
+  }
+  if (typeof parsed !== "object" || parsed === null || Array.isArray(parsed)) failAction("the request must be a JSON object");
+  return parsed as Record<string, unknown>;
+}
+
+/** The request body passed in, or else stdin's, as `parseJsonRequest` reads it. */
+export async function readJsonRequest(input: string | undefined, maxBytes: number): Promise<Record<string, unknown>> {
+  return parseJsonRequest(input ?? await Bun.stdin.text(), maxBytes);
+}
+
+/** Returned by a verb that wrote its own replies, such as a stream of job snapshots. */
+export const REPLIED = Symbol("replied");
+
+/** Run one action verb to its JSON reply and exit code. */
+export async function replyToAction(addon: string, emit: boolean, run: () => unknown): Promise<number> {
+  try {
+    const data = await run();
+    if (emit && data !== REPLIED) emitActionOk(data);
+    return 0;
+  } catch (error) {
+    return reportActionFailure(addon, error, emit);
+  }
 }
 
 export function normalizeIdentityHostname(value: string): string | null {

@@ -19,7 +19,7 @@ export const PANEL_TWEAKS_ADDON: AddonDefinition = {
   // timer of their own. The hook uses the stored measurement
   // time to do the expensive sweep about every six hours, and returns nothing
   // for a tweak that is off.
-  maintenance: {
+  repair: {
     label: "panel tweaks",
     run: (options) => panelTweaksUpkeep((options ?? {}) as PanelTweaksActionOptions),
   },

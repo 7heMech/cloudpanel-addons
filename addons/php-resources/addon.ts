@@ -28,7 +28,7 @@ export const PHP_RESOURCES_ADDON: AddonDefinition = {
   },
   // A site whose pool file CloudPanel rewrote when its PHP version changed, and
   // a new site whose pool file was not there yet, are noticed here.
-  maintenance: {
+  repair: {
     label: "php resources",
     run: async (options) => {
       const actionOptions = (options ?? {}) as PhpResourcesActionOptions;

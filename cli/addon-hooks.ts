@@ -1,6 +1,6 @@
 // The upkeep `repair` and the reconcile timer run, per addon and for the manager's own job records.
 
-import { type AddonSpec, addonCertificates, addonMaintenance, addonNewSites } from "./addon-catalog";
+import { type AddonSpec, addonCertificates, addonRepairs, addonNewSites } from "./addon-catalog";
 import { pruneManagerJobs } from "./manager-action";
 import { log } from "./util";
 /**
@@ -11,12 +11,12 @@ import { log } from "./util";
  * now declares its own, and none of it is allowed to fail the rest of repair:
  * this is self-healing, not a precondition for anything.
  */
-export async function runAddonMaintenance(
+export async function runAddonRepairs(
   installed: AddonSpec[],
   options?: Record<string, unknown>,
 ): Promise<void> {
-  for (const spec of addonMaintenance(installed)) {
-    const task = spec.maintenance!;
+  for (const spec of addonRepairs(installed)) {
+    const task = spec.repair!;
     try {
       const line = await task.run(options);
       if (line) log.ok(`${task.label}: ${line}`);
@@ -56,16 +56,16 @@ export async function runNewSiteWork(installed: AddonSpec[], headStartMs = NEW_S
 }
 
 /**
- * Whether any installed addon still waits for a new site, asking each that
- * waits at all. One that fails is taken to be waiting, so it is asked again.
+ * Run each installed addon's `resumePending`, and say whether any still waits
+ * for a new site. One that fails is taken to be waiting, so it runs again.
  */
-export async function newSitesWaiting(installed: AddonSpec[]): Promise<boolean> {
+export async function resumePendingNewSites(installed: AddonSpec[]): Promise<boolean> {
   let waiting = false;
   for (const spec of addonNewSites(installed)) {
     const task = spec.newSites!;
-    if (!task.waiting) continue;
+    if (!task.resumePending) continue;
     try {
-      const result = await task.waiting();
+      const result = await task.resumePending();
       if (result.line) log.ok(`${task.label}: ${result.line}`);
       waiting ||= result.waiting;
     } catch (error) {
@@ -99,11 +99,11 @@ export async function runCertificateWork(installed: AddonSpec[]): Promise<void> 
  * killed part-way (a reboot during an update) otherwise leaves a record that
  * says "running" forever, and the index page would keep following it.
  */
-export function runManagerMaintenance(): void {
+export function runManagerRepair(): void {
   try {
     const { removed, stuck } = pruneManagerJobs();
     if (removed || stuck) log.ok(`manager job records: ${removed} expired, ${stuck} marked failed`);
   } catch (error) {
-    log.warn(`manager maintenance (prune) failed: ${error instanceof Error ? error.message : String(error)}`);
+    log.warn(`manager (prune) failed: ${error instanceof Error ? error.message : String(error)}`);
   }
 }

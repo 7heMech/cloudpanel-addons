@@ -165,6 +165,10 @@ restores the original vhost if validation or reload fails. If CloudPanel changes
 the surrounding file, reconciliation stops instead of applying a patch against
 unknown markup.
 
+`lib/panel-anchors.ts` names every CloudPanel template an addon patches, and the
+anchor lines more than one addon patches against, so a CloudPanel release that
+moves one is fixed once.
+
 Maintenance Mode also owns a marked block in `/etc/nginx/global_settings`.
 That block is reconciled from a hashed pristine copy and validated with the
 customer-site Nginx configuration before reload. Runtime site toggles only
@@ -276,11 +280,12 @@ that releases the database brings another look.
 Some of a site's creation comes after its row, in the same request, and
 changes no file the watchers see: CloudPanel installs WordPress as root after
 committing the row. An addon that waits for such a step gives its `newSites` a
-`waiting` check. `sync-sites` runs it on every wake for an hour after the hooks
+`resumePending` step, which queues what the latest step allows and says whether
+a site still waits. `sync-sites` runs it on every wake for an hour after the hooks
 last ran for a change to the sites, by the time on `new-sites-seen.json`, and
 keeps the rows watcher running while any says it is still waiting. It runs it
 once more after starting the watcher, as it reads the rows again, because the
-write that ends the request may come while the service runs. A check that fails
+write that ends the request may come while the service runs. A step that fails
 counts as waiting. While nothing waits, the rows watcher runs only for sites in
 flight.
 
@@ -486,6 +491,14 @@ and an optional filter once a table has six sites. A row the search hides is
 deselected, so a bulk action only reaches sites on screen. Pages with background
 jobs get the shared job watcher. Theme initialization runs before styles are
 painted.
+
+## Reading the panel database
+
+Root-side code reads CloudPanel's SQLite database through `cli/panel-db.ts`:
+`withPanelDb` opens it read-only with a busy timeout and closes it, and
+`openPanelDatabase` holds it open for a caller that reads across several steps
+or writes. Each caller keeps its own query and says what an unreadable database
+means for it: a refusal, an empty answer, or a failed action.
 
 ## Live panel data
 

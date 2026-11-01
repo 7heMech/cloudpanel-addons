@@ -8,12 +8,12 @@
 // opens every site either way.
 
 import type { AddonTarget } from "../../../lib/addon-target";
-import { SITE_TAB_TEMPLATE } from "../../../lib/panel-nav";
 import { ROW_ACTION_CLASS } from "../../../lib/row-actions";
 import { OPEN_JS } from "../app/views";
 
 import STYLE from "./links.css" with { type: "text" };
 import LINKS_JS from "./links.client.js" with { type: "text" };
+import { ANCHORS, TEMPLATES } from "../../../lib/panel-anchors";
 
 const ADMIN = "{% if is_granted('ROLE_ADMIN') %}";
 
@@ -26,8 +26,8 @@ function script(url: string): string {
 export const TERMINAL_TARGETS: AddonTarget[] = [
   {
     slug: "sites-script",
-    template: "Frontend/Site/index.html.twig",
-    anchorBefore: '<div class="card card-table">',
+    template: TEMPLATES.sites,
+    anchorBefore: ANCHORS.sitesTable,
     required: false,
     snippet: (url) => `
         ${ADMIN}${script(url)}
@@ -35,8 +35,8 @@ export const TERMINAL_TARGETS: AddonTarget[] = [
   },
   {
     slug: "sites-action",
-    template: "Frontend/Site/index.html.twig",
-    anchorBefore: `<a href="{{ path('clp_site', {'domainName': site.domainName}) }}">{% trans %}Manage{% endtrans %}</a>`,
+    template: TEMPLATES.sites,
+    anchorBefore: ANCHORS.siteManageLink,
     required: false,
     snippet: (url) => `
         ${ADMIN}
@@ -47,7 +47,7 @@ export const TERMINAL_TARGETS: AddonTarget[] = [
     // Beside the tab list rather than in it: the list scrolls sideways when a
     // site has many tabs, and this must stay in view whatever the others add.
     slug: "site-button",
-    template: SITE_TAB_TEMPLATE,
+    template: TEMPLATES.siteTabs,
     anchorAfter: "  </ul>",
     required: false,
     snippet: (url) => `

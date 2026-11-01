@@ -1,5 +1,5 @@
 import {
-  bodyErrorResponse, guardMutation, htmlResponse, jsonResponse, newCsrfToken, readJsonObject,
+  guardMutation, htmlResponse, jsonResponse, newCsrfToken, readBody,
 } from "../../../lib/app-http";
 import type { ActionResult } from "../../../lib/gateway-client";
 import { REBOOT_TIME_ERROR, validRebootTime } from "../updates";
@@ -48,12 +48,8 @@ export async function handle(
 
   if (path === "/api/install-updates") return repaint(await systemTweaksService.installUpdates());
 
-  let body: Record<string, unknown>;
-  try {
-    body = await readJsonObject(req, 1024);
-  } catch (error) {
-    return bodyErrorResponse(error);
-  }
+  const body = await readBody(req, 1024);
+  if (body instanceof Response) return body;
 
   if (path === "/api/updates") {
     const wanted: Record<string, boolean | string> = {};
