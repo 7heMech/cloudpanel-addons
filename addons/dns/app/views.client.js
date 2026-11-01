@@ -337,7 +337,9 @@ function dnsShowSite(domain) {
   dnsSiteShown = domain;
   const heading = CLP_ROOT.getElementById('dns-site-heading');
   heading.textContent = domain;
-  const row = Array.prototype.find.call(CLP_ROOT.querySelectorAll('tr[data-domain]'), function (candidate) { return candidate.dataset.domain === domain; });
+  const row = Array.prototype.find.call(CLP_ROOT.querySelectorAll('tr[data-domain], tr[data-redirect]'), function (candidate) {
+    return (candidate.dataset.domain || candidate.dataset.redirect) === domain;
+  });
   const chip = row && row.querySelector('.dns-status .badge');
   if (chip) heading.appendChild(chip.cloneNode(true));
 
@@ -378,7 +380,8 @@ function dnsShowSite(domain) {
       '<dt>Status</dt><dd>' + site.redirect.status + (kept.length ? ' · keeps the ' + kept.join(' and ') : '') + '</dd>' +
       '<dt>Served by</dt><dd>' + (plan && plan.zone ? 'Cloudflare' : site.redirect.standIn ? 'A stand-in site on this server' : dnsState.connections.length ? 'Cloudflare' : 'A stand-in site on this server, once DNS is Automatic') + '</dd>';
   }
-  html += '<dt>Profile</dt><dd>' + dnsEsc(profile ? profile.name : '—') + (profile || site.redirect ? ' · ' + (dnsState.automatic ? 'Automatic' : 'Ask first') : '') + '</dd>';
+  html += '<dt>Profile</dt><dd>' + (profile ? dnsEsc(profile.name) + ' · ' + (dnsState.automatic ? 'Automatic' : 'Ask first')
+    : site.redirect ? 'No profile · ' + (dnsState.automatic ? 'Automatic' : 'Ask first') : '—') + '</dd>';
   if (plan && plan.zone) {
     html += '<dt>Zone</dt><dd>' + dnsEsc(plan.zone.name) + ' · ' + dnsEsc(plan.zone.status) + '</dd>' +
       '<dt>Through</dt><dd>' + dnsEsc(plan.zone.connection) + ' · ' + dnsEsc(plan.zone.account) + '</dd>';

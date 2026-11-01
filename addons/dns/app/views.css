@@ -36,8 +36,10 @@
 .toolbar #bulk-profile { width:auto; min-width:200px; max-width:100%; }
 .dns-site-table td select { min-width:190px; }
 .dns-status { min-width:220px; }
-.dns-redirect-tools { display:flex; gap:8px; flex-wrap:wrap; }
-.dns-redirect-target { max-width:220px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+.dns-redirect-tools { display:flex; flex-shrink:0; gap:8px; flex-wrap:wrap; }
+.dns-redirect-target { display:block; max-width:240px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; font:14px/1.5 var(--mono); }
+.dns-redirect-table .action-cell .actions { flex-wrap:nowrap; }
+.dns-redirect-profile { white-space:nowrap; }
 .dns-dialog-start { margin-right:auto; }
 .dns-found-table .dns-change-detail { overflow-wrap:anywhere; }
 #dns-found-body { margin-bottom:16px; }
@@ -181,6 +183,8 @@ p.dns-dialog-note { margin:20px 0 0; }
   .fleet-table.dns-profile-table td.wide-cell { order:2; }
   .fleet-table.dns-profile-table td.dns-sites-cell { display:none; }
   .dns-site-table td select { min-width:0; }
+  /* A redirect card: the domain, then where it goes across the full width. */
+  .fleet-table.dns-redirect-table td.dns-redirect-cell, .fleet-table.dns-redirect-table td.dns-status { flex-basis:100%; }
   .card-footer { padding:16px 20px; }
 }
 /* The editor's rows become cards: type, name and the remove button on top, content beneath, then the rest. */
@@ -191,7 +195,7 @@ p.dns-dialog-note { margin:20px 0 0; }
   .dns-profile-tools { width:100%; flex-wrap:wrap; }
   .dns-default-field { flex:1 1 200px; }
   .dns-default-field select { width:100%; min-width:0; }
-  .card-header:not(.toolbar):has(> .btn, > .dns-profile-tools) { flex-direction:column; align-items:stretch; }
+  .card-header:not(.toolbar):has(> .btn, > .dns-profile-tools, > .dns-redirect-tools) { flex-direction:column; align-items:stretch; }
   .toolbar #bulk-profile { flex:1 1 100%; }
   .toolbar .toolbar-end { margin-left:0; }
   .dns-redirect-tools { flex:1 1 100%; }

@@ -66,12 +66,20 @@ every sender is left exactly as written.
 
 ## Ask first and Automatic
 
-The page puts the sites first, then the profiles with the choice of default,
+The page puts the sites first, then the redirect domains, then the profiles
+with the choice of default,
 the connections and settings that are set once, and last the change log, which
 is looked back at rather than worked in. The site
 list has the shared search from six sites and selection, as the other site
 lists do, with filters for needs attention, changes waiting and not managed,
-and by what each site runs, Redirect included; every heading sorts. A site's Details dialog leads with
+and by what each site runs; every heading sorts. Redirect domains are planned
+and checked with the sites but are not CloudPanel sites, so they have a
+Redirects card of their own, holding Add redirect and Find redirects in
+Cloudflare: each row has the target, its status and what kept, who serves it,
+the profile its mail rows come from, and the DNS status, with Edit and Details.
+Its rows are not site rows, so the site table's selection, filter and sort
+leave them out, and a redirect's profile is chosen in Edit rather than in the
+row. A site's Details dialog leads with
 what needs doing: its status chip beside the domain, then problems and, while
 its zone is pending, the nameservers to set at the registrar, each with its own
 copy button; then what will change, with a redirect's pending changes said to
