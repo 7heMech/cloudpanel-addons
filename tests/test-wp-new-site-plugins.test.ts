@@ -15,6 +15,7 @@ import {
   MAX_STAGED_UPLOADS, UPLOAD_PART_BYTES, claimUploads, discardUpload, downloadDirectoryPlugin, pruneUploads, stageUploadPart,
   type NewSiteResult,
 } from "../addons/wp-tools/new-site-plugins";
+import { emptyMainwpState } from "../addons/wp-tools/mainwp";
 import { inspectPluginZip } from "../addons/wp-tools/plugin-zip";
 import type { WpCommand } from "../addons/wp-tools/wp-cli";
 import { webVerb } from "../lib/gateway-protocol";
@@ -375,6 +376,22 @@ test("plugins are chosen only for a site that does not exist yet, by strict slug
   expect(() => claimUploads(uploads(), [id])).toThrow("no longer waiting");
 });
 
+test("a plugin an automation policy installs is not chosen on the form while that policy is on", async () => {
+  writeFileSync(join(root, "varnish.json"), JSON.stringify({ enabled: true, sites: {} }));
+  const mainwp = { ...emptyMainwpState(), enabled: true, dashboard: "dashboard.example.com" };
+  writeFileSync(join(root, "mainwp.json"), JSON.stringify(mainwp));
+  expect(await act<{ uploads: boolean; automatic: string[] }>(["new-site-access"])).toEqual({ uploads: true, automatic: ["clp-varnish-cache", "mainwp-child"] });
+  for (const slug of ["clp-varnish-cache", "mainwp-child"]) {
+    await expect(act(["new-site", "--domain=new.example.com", `--plugins=woocommerce:1,${slug}:1`])).rejects.toThrow(`${slug} is installed on new sites by WordPress Tools' automation`);
+  }
+  // Cleaning up, MainWP installs nothing, so its Child may be chosen like any plugin.
+  writeFileSync(join(root, "mainwp.json"), JSON.stringify({ ...mainwp, cleanup: true }));
+  writeFileSync(join(root, "varnish.json"), JSON.stringify({ enabled: false, sites: {} }));
+  expect(await act<{ uploads: boolean; automatic: string[] }>(["new-site-access"])).toEqual({ uploads: true, automatic: [] });
+  const { job } = await act<{ job: WpJobView }>(["new-site", "--domain=new.example.com", "--plugins=clp-varnish-cache:1,mainwp-child:1"]);
+  expect(job.plugins.map((plugin) => plugin.slug)).toEqual(["clp-varnish-cache", "mainwp-child"]);
+});
+
 async function runJob(id: string, extra: Partial<WpToolsActionOptions> = {}): Promise<WpJobView> {
   await act(["run", "--job", id], extra);
   return wpJobView(join(root, "jobs"), id)!;
@@ -532,9 +549,9 @@ test("a site manager chooses only while an administrator allows it, and only as 
   // Off when never set.
   await expect(act(["new-site", "--domain=new.example.com", "--plugins=woocommerce:1", "--as-user=mgr"])).rejects.toThrow("has not let site managers");
   await expect(act(["new-site-access", "--as-user=mgr"])).rejects.toThrow("has not let site managers");
-  expect(await act<{ uploads: boolean }>(["new-site-access"])).toEqual({ uploads: true });
+  expect(await act<{ uploads: boolean; automatic: string[] }>(["new-site-access"])).toEqual({ uploads: true, automatic: [] });
   await allowSiteManagers(true);
-  expect(await act<{ uploads: boolean }>(["new-site-access", "--as-user=mgr"])).toEqual({ uploads: false });
+  expect(await act<{ uploads: boolean; automatic: string[] }>(["new-site-access", "--as-user=mgr"])).toEqual({ uploads: false, automatic: [] });
   const { job } = await act<{ job: WpJobView }>(["new-site", "--domain=new.example.com", "--plugins=woocommerce:1", "--as-user=mgr"]);
   expect(job.chosenBy).toBe("mgr");
   // CloudPanel's own record of the account decides, not the session that named it.

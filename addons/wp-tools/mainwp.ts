@@ -11,6 +11,7 @@ import PHP from "./mainwp.php" with { type: "text" };
 import GUARD from "./mainwp-guard.php" with { type: "text" };
 
 /** Where the guard lives in a site, which withdrawing the addon removes without WordPress. */
+export const MAINWP_CHILD_PLUGIN = "mainwp-child";
 export const MAINWP_GUARD_FILE = "wp-content/mu-plugins/clp-addons-mainwp.php";
 const GUARD_HASH = createHash("sha256").update(GUARD).digest("hex");
 
@@ -705,7 +706,7 @@ async function takeSnapshot(pass: Pass, site: WpSite, record: MainwpRecord, stat
 async function downloadChild(pass: Pass, site: WpSite, status: ChildStatus): Promise<void> {
   // A directory WordPress does not list is a broken earlier download.
   const force = status.files ? ["--force"] : [];
-  await runWp(pass.run, site, ["plugin", "install", "mainwp-child", ...force], pass.options, pass.deadline);
+  await runWp(pass.run, site, ["plugin", "install", MAINWP_CHILD_PLUGIN, ...force], pass.options, pass.deadline);
 }
 
 async function setGuard(pass: Pass, site: WpSite, record: MainwpRecord, on: boolean): Promise<void> {

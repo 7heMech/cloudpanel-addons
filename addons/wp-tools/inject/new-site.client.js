@@ -137,6 +137,9 @@
   // --- search ---------------------------------------------------------------
 
   var found = [];
+  // Installed on every new site by WordPress Tools' own automation, which owns them.
+  var automatic = [];
+  var AUTOMATIC_LABEL = 'Already installed';
   function paintResults() {
     results.textContent = '';
     found.forEach(function (plugin) {
@@ -152,8 +155,10 @@
       pick.appendChild(head);
       if (plugin.summary) pick.appendChild(element('span', 'clp-wp-plugin-summary', plugin.summary));
       var added = has(plugin.slug);
-      pick.appendChild(element('span', 'clp-wp-plugin-add', added ? 'Added' : 'Add'));
-      pick.disabled = added;
+      var auto = automatic.indexOf(plugin.slug) !== -1;
+      pick.appendChild(element('span', 'clp-wp-plugin-add', auto ? AUTOMATIC_LABEL : added ? 'Added' : 'Add'));
+      pick.disabled = added || auto;
+      if (auto) pick.classList.add('is-automatic');
       pick.addEventListener('click', function () {
         if (has(plugin.slug) || full()) return;
         showError('');
@@ -183,6 +188,7 @@
     call('/api/plugin-search?q=' + encodeURIComponent(term)).then(function (data) {
       if (ticket !== asked) return;
       found = data.plugins;
+      automatic = data.automatic || [];
       if (!found.length) showError('WordPress.org has no plugin matching “' + term + '”.'); else showError('');
       paintResults();
     }, function (failure) {

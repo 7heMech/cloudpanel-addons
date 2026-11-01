@@ -22,6 +22,8 @@
 .clp-wp-plugin-summary { grid-column: 1; overflow-wrap: anywhere; }
 .clp-wp-plugin-add { grid-area: 1 / 2 / 3 / 3; align-self: center; color: #0078d4; font-weight: 600; font-size: 14px; }
 .clp-wp-plugin-result:disabled .clp-wp-plugin-add { color: inherit; font-weight: 400; }
+.clp-wp-plugin-result.is-automatic { opacity: 1; }
+.clp-wp-plugin-result.is-automatic .clp-wp-plugin-add { color: #9bacb6; }
 @media (hover: hover) {
   .clp-wp-plugin-result:not(:disabled):hover { background: rgba(127, 143, 153, .1); }
 }
@@ -41,7 +43,8 @@ html.dark .clp-wp-plugin-remove { filter: invert(1) grayscale(100%) brightness(2
   .clp-wp-plugins-bar { flex-wrap: wrap; }
   .clp-wp-plugins-upload { flex: 1 1 100%; justify-content: center; }
   .clp-wp-plugin-result { grid-template-columns: 1fr; }
-  .clp-wp-plugin-add { display: none; }
+  .clp-wp-plugin-result:not(.is-automatic) .clp-wp-plugin-add { display: none; }
+  .clp-wp-plugin-result.is-automatic .clp-wp-plugin-add { grid-area: auto; font-size: 13px; }
   .clp-wp-plugin-source { flex: 1 1 auto; }
 }
 /* The landing page's status, beside CloudPanel's own flash messages. */

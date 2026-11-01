@@ -36,12 +36,12 @@ import {
   DEFAULT_MAINTENANCE_ACTION_PATHS, addBypass, maintenanceBlocks, type MaintenanceActionPaths,
 } from "../maintenance/action";
 import {
-  pruneVarnishState, readVarnishState, saveVarnishState, syncVarnish,
+  CLP_VARNISH_PLUGIN, pruneVarnishState, readVarnishState, saveVarnishState, syncVarnish,
   type VarnishRun, type VarnishSiteRecord, type VarnishOptions, type VarnishSyncResult, type WpVarnishState,
 } from "./varnish";
 import { DEFAULT_DOMAIN_LINK, readDomainLink, saveDomainLink, type WpDomainLink } from "./domain-link";
 import {
-  MAINWP_GUARD_FILE, emptyMainwpState, mainwpAction, mainwpNeedsRepair, mainwpOwesSite, mainwpView, readMainwpState, syncMainwp, syncMainwpAll,
+  MAINWP_CHILD_PLUGIN, MAINWP_GUARD_FILE, emptyMainwpState, mainwpAction, mainwpNeedsRepair, mainwpOwesSite, mainwpView, readMainwpState, syncMainwp, syncMainwpAll,
   type MainwpResult, type MainwpRun, type MainwpState,
 } from "./mainwp";
 import {
@@ -1066,6 +1066,8 @@ async function recordNewSite(paths: WpToolsActionPaths, rest: string[], options:
     const slugs = plan.map((plugin) => plugin.slug.toLowerCase());
     try {
       if (new Set(slugs).size !== slugs.length) failAction("the same plugin is chosen twice");
+      const automatic = automaticPlugins(paths).find((slug) => slugs.includes(slug));
+      if (automatic) failAction(`${automatic} is installed on new sites by WordPress Tools' automation; remove it from the list`);
       return {
         job: startWpJob({
           jobsDir: paths.jobsDir, task: "new-site-plugins", domains: [domain], plugins: plan, chosenBy: asUser,
@@ -1124,12 +1126,25 @@ function newSiteStatus(paths: WpToolsActionPaths, rest: string[]): { job: NewSit
  * Plugins row, and upload to it. The manager asks before searching
  * WordPress.org for a site manager, since only root can read the switch.
  */
-function newSiteAccess(paths: WpToolsActionPaths, rest: string[]): { uploads: boolean } {
+function newSiteAccess(paths: WpToolsActionPaths, rest: string[]): { uploads: boolean; automatic: string[] } {
   const asUser = rest.length === 1 && rest[0]!.startsWith("--as-user=") ? asUserArgument(rest[0]!.slice("--as-user=".length))
     : rest.length ? failAction("'new-site-access' takes only --as-user") : "";
   if (!existsSync(paths.configFile)) failAction("WordPress Tools is not enabled");
   if (asUser) siteManagerMayChoose(paths, asUser);
-  return { uploads: !asUser };
+  return { uploads: !asUser, automatic: automaticPlugins(paths) };
+}
+
+/** Plugins an automation policy that is on installs on every new site, so the form does not offer them. */
+function automaticPlugins(paths: WpToolsActionPaths): string[] {
+  const safely = <T>(read: () => T): T | null => {
+    try { return read(); } catch { return null; }
+  };
+  const varnish = safely(() => readVarnishState(paths.varnishState));
+  const mainwp = safely(() => readMainwpState(paths.mainwpState));
+  return [
+    ...(varnish?.enabled ? [CLP_VARNISH_PLUGIN] : []),
+    ...(mainwp?.enabled && !mainwp.cleanup ? [MAINWP_CHILD_PLUGIN] : []),
+  ];
 }
 
 function runNewSiteJob(

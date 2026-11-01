@@ -1258,6 +1258,8 @@ const PREVIEW_DIRECTORY = [
   { slug: "wordpress-seo", name: "Yoast SEO", version: "23.7", author: "Team Yoast", activeInstalls: 10000000, summary: "Improve your WordPress SEO: Write better content and have a fully optimized WordPress site using the Yoast SEO plugin." },
   { slug: "contact-form-7", name: "Contact Form 7", version: "6.0", author: "Takayuki Miyoshi", activeInstalls: 10000000, summary: "Just another contact form plugin. Simple but flexible." },
   { slug: "woocommerce-payments", name: "WooPayments: Integrated WooCommerce Payments", version: "8.4.0", author: "Automattic", activeInstalls: 600000, summary: "Securely accept credit and debit cards on your site. Manage transactions without leaving your WordPress dashboard." },
+  { slug: "mainwp-child", name: "MainWP Child – Securely Connects to the MainWP Dashboard", version: "5.2", author: "MainWP", activeInstalls: 700000, summary: "Provides a secure connection between your MainWP Dashboard and your WordPress sites." },
+  { slug: "clp-varnish-cache", name: "CLP Varnish Cache", version: "1.0.3", author: "cloudpanel.io", activeInstalls: 20000, summary: "Purges CloudPanel's Varnish Cache when content changes." },
   { slug: "wp-mail-smtp", name: "WP Mail SMTP by WPForms – The Most Popular SMTP and Email Log Plugin", version: "4.1.1", author: "WP Mail SMTP", activeInstalls: 4000000, summary: "Make email delivery easy for WordPress. Connect with SMTP, Gmail, Outlook, SendGrid, Mailgun, SES, Zoho, + more." },
 ];
 function wpToolsPreviewTick(job: PreviewJob): PreviewJob {
@@ -1310,7 +1312,10 @@ async function wpToolsPreviewApi(req: Request, path: string): Promise<Response |
       return Response.json({ ok: false, error: "WordPress.org did not answer the search: The operation timed out." }, { status: 502 });
     }
     const words = term.split(/\s+/).filter(Boolean);
-    return ok({ plugins: PREVIEW_DIRECTORY.filter((plugin) => words.every((word) => `${plugin.name} ${plugin.slug}`.toLowerCase().includes(word))) });
+    // ?auto on the form's page stands in for both automation policies being on.
+    const automatic = referer && new URL(referer).searchParams.has("auto") ? ["clp-varnish-cache", "mainwp-child"]
+      : [...(wpToolsPreview.automatic ? ["clp-varnish-cache"] : []), ...(wpToolsPreview.mainwp.enabled ? ["mainwp-child"] : [])];
+    return ok({ automatic, plugins: PREVIEW_DIRECTORY.filter((plugin) => words.every((word) => `${plugin.name} ${plugin.slug}`.toLowerCase().includes(word))) });
   }
   const started = (job: PreviewJob) => ok({ job });
   const mainwpTargets = () => wpToolsPreview.sites.map((entry) => entry.domain).filter((domain) => domain !== wpToolsPreview.mainwp.dashboard);
