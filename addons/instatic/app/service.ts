@@ -6,7 +6,7 @@ export { type ActionResult };
 
 // create pulls an image and waits on a health check, so it needs the longest
 // budget. Everything else is quick.
-const TIMEOUTS: Record<string, number> = {
+const TIMEOUTS: Partial<Record<WebVerb<"instatic">, number>> = {
   create: 300_000,
   update: 300_000,
   // Recreate may snapshot and migrate a legacy instance into its site home.
@@ -17,7 +17,7 @@ const TIMEOUTS: Record<string, number> = {
 const DEFAULT_TIMEOUT = 60_000;
 
 async function callAction<T = unknown>(verb: WebVerb<"instatic">, args: string[]): Promise<ActionResult<T>> {
-  return callGatewayAction<T>("instatic", verb, args, undefined, {
+  return callGatewayAction("instatic", verb, args, undefined, {
     timeout: TIMEOUTS[verb] ?? DEFAULT_TIMEOUT,
     maxBuffer: 8 * 1024 * 1024,
   });

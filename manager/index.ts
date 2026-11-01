@@ -1,7 +1,7 @@
 // The manager's own API: update status, enable, disable, update, the badges
 // an administrator has opened, and following the job each mutation starts.
 import { guardMutation, jsonResponse, safeDecodePathSegment } from "../lib/app-http";
-import { streamGatewayAction } from "../lib/gateway-client";
+import { streamGatewayAction, type ActionResult } from "../lib/gateway-client";
 import { jobEventStream, type JobWatcher } from "../lib/job-stream";
 import { ADDON_NAMES } from "../cli/addon-catalog";
 import { JOB_ID_RE } from "../cli/job-store";
@@ -42,7 +42,7 @@ export async function handleManagerRoute(
     const name = safeDecodePathSegment(addonRoute[1]!);
     if (!name) return managerJson({ ok: false, error: "invalid addon name" }, 400);
     if (!ADDON_NAMES.includes(name)) return managerJson({ ok: false, error: "unknown addon" }, 404);
-    const result = await managerAction(addonRoute[2] as "enable" | "disable", [`--addon=${name}`]);
+    const result = await managerAction(addonRoute[2] === "enable" ? "enable" : "disable", [`--addon=${name}`]);
     return managerJson(result, result.ok ? 200 : 400);
   }
 
@@ -75,11 +75,11 @@ export async function handleManagerRoute(
         ended = true;
         handlers.onClose(error);
       };
-      return streamGatewayAction<{ job: ManagerJobView; log: string }>({
+      return streamGatewayAction({
         addon: "manager",
         verb: "watch-job",
         args: [`--id=${jobId}`],
-        onReply(reply) {
+        onReply(reply: ActionResult<{ job: ManagerJobView; log: string }>) {
           if (reply.ok && reply.data) handlers.onSnapshot(reply.data);
           else if (!reply.ok) close(reply.error);
           else close("gateway returned an empty job snapshot");

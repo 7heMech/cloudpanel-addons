@@ -320,7 +320,7 @@ describe("Gateway Protocol & Server", () => {
   });
 
   test("instatic run is root-only and gateway rejects instatic run", async () => {
-    expect((webVerb("instatic", "run") !== null)).toBe(false);
+    expect(webVerb("instatic", "run")).toBeNull();
 
     const dir = mkdtempSync(join(tmpdir(), "clp-gateway-instatic-run-"));
     const sockPath = join(dir, "gateway.sock");
@@ -358,7 +358,7 @@ describe("Gateway Protocol & Server", () => {
   });
 
   test("the Cloudflare dashboard cannot invoke the timer-only reconcile verb", () => {
-    expect((webVerb("cloudflare-ips", "reconcile") !== null)).toBe(false);
+    expect(webVerb("cloudflare-ips", "reconcile")).toBeNull();
   });
 });
 

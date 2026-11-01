@@ -1125,7 +1125,9 @@ export async function executePhpResourcesAction(
     const request = assignRequest(body, options);
     return assignSites(paths, request.domains, request.categoryId, command);
   }
-  return setDefaultCategory(paths, body.categoryId == null ? null : parseCategoryId(body.categoryId));
+  if (verb === "set-default") return setDefaultCategory(paths, body.categoryId == null ? null : parseCategoryId(body.categoryId));
+  verb satisfies never;
+  failAction(`unknown PHP resources verb '${verb}'`);
 }
 
 export async function runPhpResourcesAction(

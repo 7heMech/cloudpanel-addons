@@ -3,7 +3,7 @@ import type { WebVerb } from "../../../lib/gateway-protocol";
 import type { SmtpState, SmtpTestResult } from "../action";
 
 const call = (verb: WebVerb<"smtp">, body?: unknown): Promise<ActionResult<SmtpState>> =>
-  callGatewayAction<SmtpState>("smtp", verb, [], body === undefined ? undefined : JSON.stringify(body));
+  callGatewayAction("smtp", verb, [], body === undefined ? undefined : JSON.stringify(body));
 
 export const smtpService = {
   state: () => call("list"),

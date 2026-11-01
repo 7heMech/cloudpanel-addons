@@ -382,7 +382,12 @@ export async function runCloudflareAction(argv: string[], options: CloudflareAct
       data = { autoEnableNewSites: policy.autoEnableNewSites };
     } else if (action.verb === "set") {
       data = await setSelected(paths, requestedDomains(options.input), action.enabled!, command);
-    } else data = await reconcileNewSites(paths, command);
+    } else if (action.verb === "reconcile") {
+      data = await reconcileNewSites(paths, command);
+    } else {
+      action.verb satisfies never;
+      failAction(`unknown Cloudflare IP action '${action.verb}'`);
+    }
     if (emit) emitActionOk(data);
     return 0;
   } catch (error) {

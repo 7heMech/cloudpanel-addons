@@ -330,9 +330,9 @@ function upload(slug = "acme-payments", name = "Acme Payments"): string {
 
 test("the gateway admits the plugin verbs and still no runner", () => {
   for (const verb of ["plugin-upload", "plugin-discard", "new-site", "new-site-status", "new-site-access", "new-site-settings"]) {
-    expect((webVerb("wp-tools", verb) !== null)).toBe(true);
+    expect(webVerb("wp-tools", verb)).not.toBeNull();
   }
-  expect((webVerb("wp-tools", "run") !== null)).toBe(false);
+  expect(webVerb("wp-tools", "run")).toBeNull();
 });
 
 test("the upload verb stages parts from stdin and refuses anything but its own arguments", async () => {

@@ -9,7 +9,7 @@ type Fleet = { users: UserKeysView[]; settings: Settings };
 type OwnKeys = { keys: KeyView[]; canAdd: boolean; syncedPasskeys: boolean };
 
 async function call<T>(verb: WebVerb<"security-keys">, input?: unknown, sessionId?: string): Promise<ActionResult<T>> {
-  return callGatewayAction<T>(
+  return callGatewayAction(
     "security-keys", verb, [], input === undefined ? undefined : JSON.stringify(input),
     sessionId === undefined ? {} : { sessionId },
   );

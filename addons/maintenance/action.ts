@@ -639,8 +639,11 @@ export async function executeMaintenanceAction(
     return { domain, custom: false, html: DEFAULT_MAINTENANCE_PAGE };
   }
 
-  await replaceBypasses(paths, domain, options);
-  return maintenanceStatus(paths, domain);
+  if (verb === "set-bypass") {
+    await replaceBypasses(paths, domain, options);
+    return maintenanceStatus(paths, domain);
+  }
+  failAction(`unknown maintenance verb '${verb}'`);
 }
 
 export async function runMaintenanceAction(

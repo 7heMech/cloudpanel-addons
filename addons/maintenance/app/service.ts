@@ -36,14 +36,14 @@ export interface BulkToggleResult {
 }
 
 function action<T>(verb: WebVerb<"maintenance">, domain: string, input?: string): Promise<ActionResult<T>> {
-  return callGatewayAction<T>("maintenance", verb, [`--domain=${domain}`], input, {
+  return callGatewayAction("maintenance", verb, [`--domain=${domain}`], input, {
     timeout: 10_000,
     maxBuffer: 1024 * 1024,
   });
 }
 
 function globalAction<T>(verb: WebVerb<"maintenance">, input?: string): Promise<ActionResult<T>> {
-  return callGatewayAction<T>("maintenance", verb, [], input, {
+  return callGatewayAction("maintenance", verb, [], input, {
     timeout: 30_000,
     maxBuffer: 1024 * 1024,
   });

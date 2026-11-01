@@ -8,7 +8,7 @@ export { type ActionResult };
 // clone only writes a job record and hands the work to systemd, so it
 // answers immediately -- the long operation is the job itself, which nothing
 // here waits on.
-const TIMEOUTS: Record<string, number> = {
+const TIMEOUTS: Partial<Record<WebVerb<"stager">, number>> = {
   clone: 60_000,
   promote: 60_000,
 };
@@ -27,7 +27,7 @@ export async function callAction<T = unknown>(
   input?: string,
   options: ActionCallOptions = {},
 ): Promise<ActionResult<T>> {
-  return callGatewayAction<T>("stager", verb, args, input, {
+  return callGatewayAction("stager", verb, args, input, {
     timeout: options.timeout ?? TIMEOUTS[verb] ?? DEFAULT_TIMEOUT,
     maxBuffer: options.maxBuffer,
   });

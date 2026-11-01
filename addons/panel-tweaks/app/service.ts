@@ -4,7 +4,7 @@ import { watchGatewayJob, type JobWatcher } from "../../../lib/job-stream";
 import type { MeasureJobView, MeasureStarted, PanelTweaks, PanelTweaksState, SetTweaksResult } from "../action";
 
 function call<T>(verb: WebVerb<"panel-tweaks">, args: string[] = [], input?: string, timeout?: number): Promise<ActionResult<T>> {
-  return callGatewayAction<T>("panel-tweaks", verb, args, input, timeout ? { timeout } : undefined);
+  return callGatewayAction("panel-tweaks", verb, args, input, timeout ? { timeout } : undefined);
 }
 
 export const panelTweaksService = {

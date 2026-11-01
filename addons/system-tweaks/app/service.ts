@@ -4,7 +4,7 @@ import type { SystemTweaksState } from "../action";
 import { INSTALL_GATEWAY_TIMEOUT_MS, PANEL_PHP_GATEWAY_TIMEOUT_MS, REAL_IP_GATEWAY_TIMEOUT_MS } from "../limits";
 
 function call(verb: WebVerb<"system-tweaks">, input?: string, timeout?: number): Promise<ActionResult<SystemTweaksState>> {
-  return callGatewayAction<SystemTweaksState>("system-tweaks", verb, [], input, timeout ? { timeout } : undefined);
+  return callGatewayAction("system-tweaks", verb, [], input, timeout ? { timeout } : undefined);
 }
 
 export const systemTweaksService = {

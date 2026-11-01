@@ -21,11 +21,11 @@ export { validateJobId } from "../../../lib/job-id";
 
 // keygen shells out to ssh-keygen and deploy only writes a record and hands the
 // work to systemd; neither is slow, and the deployment itself is the job.
-const TIMEOUTS: Record<string, number> = { sites: 60_000, keygen: 30_000 };
+const TIMEOUTS: Partial<Record<WebVerb<"git">, number>> = { sites: 60_000, keygen: 30_000 };
 const DEFAULT_TIMEOUT = 20_000;
 
 function action<T>(verb: WebVerb<"git">, args: string[] = [], input?: string): Promise<ActionResult<T>> {
-  return callGatewayAction<T>("git", verb, args, input, {
+  return callGatewayAction("git", verb, args, input, {
     timeout: TIMEOUTS[verb] ?? DEFAULT_TIMEOUT,
     maxBuffer: 1024 * 1024,
   });

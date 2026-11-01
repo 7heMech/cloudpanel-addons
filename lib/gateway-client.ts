@@ -20,6 +20,15 @@ import {
 
 export type { ActionResult } from "./gateway-protocol";
 
+/**
+ * A reply as root sent it: its data is the action's JSON, which nothing here
+ * checks. A caller states the shape it expects by the type it gives the
+ * result, such as its own `Promise<ActionResult<T>>`; `never` makes it say so,
+ * and keeps the call free of a type argument, which would stop the addon and
+ * verb being checked together.
+ */
+export type GatewayReply = ActionResult<never>;
+
 export interface GatewayClientOptions {
   timeout?: number;
   maxBuffer?: number;
@@ -240,13 +249,13 @@ async function callGatewaySocket<T>(
  * If running in test mode with CLP_ADDONS_ACTION_TEST_BIN or running as root without socket,
  * invokes directly. Otherwise dispatches securely through the root gateway daemon over UNIX socket.
  */
-export async function callGatewayAction<T = unknown, A extends GatewayAddon = GatewayAddon>(
+export async function callGatewayAction<A extends GatewayAddon>(
   addon: A,
   verb: WebVerb<A>,
   args: string[] = [],
   input?: string,
   options: GatewayClientOptions = {},
-): Promise<ActionResult<T>> {
+): Promise<GatewayReply> {
   const refused = refusedForCaller(addon, verb);
   if (refused) return { ok: false, error: refused };
   const socketPath = options.socketPath ?? GATEWAY_SOCKET_PATH;
@@ -257,7 +266,7 @@ export async function callGatewayAction<T = unknown, A extends GatewayAddon = Ga
 
   // 1. Hermetic test runner override
   if (process.env.CLP_ADDONS_ACTION_TEST_BIN) {
-    return runCommandDirect<T>(
+    return runCommandDirect<never>(
       process.env.CLP_ADDONS_ACTION_TEST_BIN,
       ["action", addon, verb, ...args],
       options,
@@ -267,7 +276,7 @@ export async function callGatewayAction<T = unknown, A extends GatewayAddon = Ga
 
   // 2. Direct root execution fallback if socket is absent (e.g. offline testing as root)
   if (process.getuid?.() === 0 && !existsSync(socketPath)) {
-    return runCommandDirect<T>(
+    return runCommandDirect<never>(
       DEFAULT_CLI_BIN,
       ["action", addon, verb, ...args],
       options,
@@ -287,7 +296,7 @@ export async function callGatewayAction<T = unknown, A extends GatewayAddon = Ga
   };
 
   const clientTimeoutMs = timeoutMs + 2_500;
-  return callGatewaySocket<T>(request, socketPath, clientTimeoutMs);
+  return callGatewaySocket<never>(request, socketPath, clientTimeoutMs);
 }
 
 const MAX_GATEWAY_STREAM_BUFFER_BYTES = 16 * 1024 * 1024;
@@ -304,7 +313,7 @@ function streamReply<T>(line: string): ActionResult<T> | null {
  * session itself, and `write` reaches the worker's stdin. Such a stream has no
  * direct-spawn fallback, because that fallback is the check it would skip.
  */
-export function streamGatewayAction<T = unknown, A extends GatewayAddon = GatewayAddon>(options: {
+export function streamGatewayAction<A extends GatewayAddon>(options: {
   addon: A;
   verb: StreamVerb<A>;
   args?: string[];
@@ -315,7 +324,7 @@ export function streamGatewayAction<T = unknown, A extends GatewayAddon = Gatewa
   maxLineBytes?: number;
   /** Each line as it arrived, for a stream whose lines are not action replies. */
   onLine?: (line: string) => void;
-  onReply?: (reply: ActionResult<T>) => void;
+  onReply?: (reply: GatewayReply) => void;
   onClose: (error?: string) => void;
 }): DuplexGatewayStream {
   let socket: Bun.Socket | null = null;
@@ -365,7 +374,7 @@ export function streamGatewayAction<T = unknown, A extends GatewayAddon = Gatewa
       if (options.onLine) {
         options.onLine(line);
       } else {
-        const reply = streamReply<T>(line);
+        const reply = streamReply<never>(line);
         if (reply) options.onReply?.(reply);
       }
       if (closed) break;

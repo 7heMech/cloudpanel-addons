@@ -9,7 +9,7 @@ function call<T>(verb: WebVerb<"php-resources">, args: string[] = [], input?: st
   // Assigning a fleet writes one file per site and reloads each PHP version
   // once, which is quick unless the box is loaded; the default 60s covers it,
   // and the shorter budget the read paths could use is not worth two timeouts.
-  return callGatewayAction<T>("php-resources", verb, args, input);
+  return callGatewayAction("php-resources", verb, args, input);
 }
 
 export const phpResourcesService = {

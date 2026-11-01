@@ -12,7 +12,7 @@ export interface CloudflareState {
 }
 
 async function call<T>(verb: WebVerb<"cloudflare-ips">, args: string[] = [], input?: string): Promise<ActionResult<T>> {
-  return callGatewayAction<T>("cloudflare-ips", verb, args, input);
+  return callGatewayAction("cloudflare-ips", verb, args, input);
 }
 
 export const cloudflareService = {
