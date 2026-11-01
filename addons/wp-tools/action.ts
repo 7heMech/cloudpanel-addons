@@ -49,7 +49,7 @@ import {
   type WpJobs, type WpJobView,
 } from "./jobs";
 import {
-  MAX_NEW_SITE_PLUGINS, UPLOAD_ID_RE, claimUploads, discardUpload, parsePluginList, pruneUploads, releaseUploads, removeUploads,
+  MAX_NEW_SITE_PLUGINS, UPLOAD_ID_RE, claimUploads, discardUpload, parsePluginList, pruneUploads, releaseUploads, removeUploads, stagedUploads,
   runNewSitePlugins, stageUploadPart, type NewSiteLookup, type NewSiteOptions, type NewSitePlugin,
 } from "./new-site-plugins";
 import { DIRECTORY_SLUG_RE } from "./plugin-zip";
@@ -1048,6 +1048,17 @@ async function recordNewSite(paths: WpToolsActionPaths, rest: string[], options:
     // A site manager replaces only their own; an administrator, anyone's.
     const replaced = waitingNewSiteJobs(paths.jobsDir, (view) => view.domains[0] === domain && (!asUser || view.chosenBy === asUser));
     const released = replaced.flatMap((view) => view.plugins.flatMap((plugin) => plugin.upload ? [plugin.upload] : []));
+    // Everything that can refuse the new choice is checked before the earlier
+    // one is superseded, so a refused resubmission leaves it waiting, uploads and all.
+    if (total) {
+      let staged;
+      try { staged = stagedUploads(paths.uploadsDir, uploads.map((upload) => upload.key), released); }
+      catch (error) { failAction(errorMessage(error)); }
+      const slugs = [...directory.map((plugin) => plugin.key), ...staged.map((upload) => upload.slug)].map((slug) => slug.toLowerCase());
+      if (new Set(slugs).size !== slugs.length) failAction("the same plugin is chosen twice");
+      const automatic = automaticPlugins(paths).find((slug) => slugs.includes(slug));
+      if (automatic) failAction(`${automatic} is installed on new sites by WordPress Tools' automation; remove it from the list`);
+    }
     for (const view of replaced) jobSet(jobDir(paths.jobsDir, view.id), "superseded", "1");
     releaseUploads(paths.uploadsDir, released);
     if (!total) {
@@ -1063,11 +1074,7 @@ async function recordNewSite(paths: WpToolsActionPaths, rest: string[], options:
         source: "upload" as const, slug: upload.slug, name: upload.name, activate: uploads[index]!.activate, upload: upload.id,
       })),
     ];
-    const slugs = plan.map((plugin) => plugin.slug.toLowerCase());
     try {
-      if (new Set(slugs).size !== slugs.length) failAction("the same plugin is chosen twice");
-      const automatic = automaticPlugins(paths).find((slug) => slugs.includes(slug));
-      if (automatic) failAction(`${automatic} is installed on new sites by WordPress Tools' automation; remove it from the list`);
       return {
         job: startWpJob({
           jobsDir: paths.jobsDir, task: "new-site-plugins", domains: [domain], plugins: plan, chosenBy: asUser,

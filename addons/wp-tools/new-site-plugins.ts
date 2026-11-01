@@ -210,6 +210,19 @@ export function claimUploads(uploadsDir: string, ids: string[]): StagedUpload[] 
   return found.map(({ id, meta }) => ({ id, ...meta.plugin! }));
 }
 
+/**
+ * The plugins staged uploads hold, read without claiming them, to check a
+ * choice before anything changes. An upload in `releasing` may be claimed
+ * already: the choice being replaced holds it, and gives it back if this one is kept.
+ */
+export function stagedUploads(uploadsDir: string, ids: string[], releasing: string[]): StagedUpload[] {
+  return ids.map((id) => {
+    const meta = readMeta(uploadDir(uploadsDir, id));
+    if (!meta?.plugin || (meta.claimed && !releasing.includes(id))) throw new Error("an uploaded plugin is no longer waiting; upload it again");
+    return { id, ...meta.plugin };
+  });
+}
+
 /** Give claimed uploads back, when the job that claimed them could not be started. */
 export function releaseUploads(uploadsDir: string, ids: string[]): void {
   for (const id of ids) {

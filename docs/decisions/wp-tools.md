@@ -599,7 +599,10 @@ name meanwhile, or that has no `created_at` to compare.
 CloudPanel sends a form back with an error without creating anything, so the
 choice is kept in the tab's session storage and the row comes back filled in.
 Submitting again records a new job, and any job still waiting for the same
-domain is superseded and hands its uploads to the new one. Submitting it with
+domain is superseded and hands its uploads to the new one -- but only once the
+new choice has passed every check, so a refused resubmission (a plugin chosen
+twice, or one automation took over in the meantime) leaves the earlier job
+waiting with its uploads. Submitting it with
 every plugin removed still tells WordPress Tools, with an empty choice that only
 supersedes, so plugins taken off the form are not installed after all; their
 uploads are deleted. A job for another domain is never touched: one still

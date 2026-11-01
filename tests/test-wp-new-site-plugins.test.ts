@@ -483,6 +483,20 @@ test("a form CloudPanel sent back ends its job quietly, and a resubmission takes
   expect(commands).toEqual([]);
 });
 
+test("a resubmission that is refused leaves the earlier choice waiting, uploads and all", async () => {
+  const id = upload();
+  const first = (await act<{ job: WpJobView }>(["new-site", "--domain=new.example.com", `--uploads=${id}:1`, "--plugins=mainwp-child:1"])).job;
+  // Automation comes on between the two submissions, so the retained choice is now refused.
+  writeFileSync(join(root, "mainwp.json"), JSON.stringify({ ...emptyMainwpState(), enabled: true, dashboard: "dashboard.example.com" }));
+  await expect(act(["new-site", "--domain=new.example.com", `--uploads=${id}:1`, "--plugins=mainwp-child:1"]))
+    .rejects.toThrow("mainwp-child is installed on new sites by WordPress Tools' automation");
+  await expect(act(["new-site", "--domain=new.example.com", `--uploads=${id}:1`, "--plugins=woocommerce:1,woocommerce:0"]))
+    .rejects.toThrow("the same plugin is chosen twice");
+  expect(jobGet(jobDir(join(root, "jobs"), first.id), "superseded")).toBe("");
+  // The upload is still the first job's: claimed, and so not free for another choice.
+  await expect(act(["new-site", "--domain=other.example.com", `--uploads=${id}:1`])).rejects.toThrow("no longer waiting");
+});
+
 test("a job that found its site is not replaced", async () => {
   const { job } = await act<{ job: WpJobView }>(["new-site", "--domain=new.example.com", "--plugins=woocommerce:1"]);
   jobSet(jobDir(join(root, "jobs"), job.id), "phase", "installing");

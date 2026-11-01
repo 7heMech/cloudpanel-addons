@@ -142,8 +142,8 @@ A redirect domain is a source host, a target URL, a status (301, 302, 307 or
 308), keep path and keep query string, and optionally a profile. The source is a
 zone's apex, which covers its `www` too, or one host in a zone that holds other
 things; `www` is added only to an apex. A redirect domain is planned beside the
-sites, in the same table, through the same switch, reviews, log and lock, and
-can be assigned a profile in bulk like a site. It cannot be a CloudPanel site:
+sites, through the same switch, reviews, log and lock, but listed in a
+Redirects card of its own, where its profile is chosen in Edit. It cannot be a CloudPanel site:
 adding one for a site's domain is refused, and a site created later at a
 redirect's domain stops the redirect with a problem.
 
