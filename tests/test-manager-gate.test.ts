@@ -40,7 +40,9 @@ mock.module("./lib/sso-auth.ts", () => ({
 mock.module("./lib/update-check.ts", () => ({
   checkCliUpdate: async () => { reached.push("update-check"); return null; },
 }));
+const realGateway = await import("./lib/gateway-client.ts");
 mock.module("./lib/gateway-client.ts", () => ({
+  ...realGateway,
   callGatewayAction: async (addon, verb, args) => {
     reached.push("gateway");
     reached.push(["gateway", addon, verb, ...(args || [])].join(" "));
@@ -313,7 +315,9 @@ mock.module("./lib/sso-auth.ts", () => ({
 mock.module("./lib/update-check.ts", () => ({ checkCliUpdate: async () => null }));
 
 let calls = 0;
+const realGateway = await import("./lib/gateway-client.ts");
 mock.module("./lib/gateway-client.ts", () => ({
+  ...realGateway,
   callGatewayAction: async (addon, verb, args, input) => {
     calls++;
     const token = JSON.parse(input ?? "{}").token;
@@ -402,7 +406,9 @@ mock.module("./lib/sso-auth.ts", () => ({
 }));
 mock.module("./lib/update-check.ts", () => ({ checkCliUpdate: async () => null }));
 const asked = [];
+const realGateway = await import("./lib/gateway-client.ts");
 mock.module("./lib/gateway-client.ts", () => ({
+  ...realGateway,
   callGatewayAction: async (addon, verb, args, input) => {
     asked.push(verb + " " + (input ?? ""));
     if (verb === "login-options") return { ok: true, data: { challengeId: "c".repeat(32), challenge: "xyz" } };

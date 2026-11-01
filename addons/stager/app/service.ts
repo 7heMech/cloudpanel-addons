@@ -1,13 +1,14 @@
 import type { SiteContext } from "../../../lib/site-context";
 import { fetchPanelInfo, readPanelSnapshot, type PanelSnapshot } from "../../../lib/snapshot-reader";
 import { callGatewayAction, type ActionResult, type GatewayStream } from "../../../lib/gateway-client";
+import type { WebVerb } from "../../../lib/gateway-protocol";
 import { watchGatewayJob, type JobWatcher } from "../../../lib/job-stream";
 export { type ActionResult };
 
 // clone only writes a job record and hands the work to systemd, so it
 // answers immediately -- the long operation is the job itself, which nothing
 // here waits on.
-const TIMEOUTS: Record<string, number> = {
+const TIMEOUTS: Partial<Record<WebVerb<"stager">, number>> = {
   clone: 60_000,
   promote: 60_000,
 };
@@ -19,14 +20,14 @@ export interface ActionCallOptions {
 }
 
 export async function callAction<T = unknown>(
-  verb: string,
+  verb: WebVerb<"stager">,
   args: string[],
   // On stdin rather than in argv, because the only value that ever needs this
   // is a password and argv is world-readable through /proc.
   input?: string,
   options: ActionCallOptions = {},
 ): Promise<ActionResult<T>> {
-  return callGatewayAction<T>("stager", verb, args, input, {
+  return callGatewayAction("stager", verb, args, input, {
     timeout: options.timeout ?? TIMEOUTS[verb] ?? DEFAULT_TIMEOUT,
     maxBuffer: options.maxBuffer,
   });

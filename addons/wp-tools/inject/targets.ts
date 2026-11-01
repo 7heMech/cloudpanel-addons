@@ -79,6 +79,7 @@ export function siteInfoSnippet(url: string, signIn: boolean): string {
 import NEW_SITE_STYLE from "./new-site.css" with { type: "text" };
 import NEW_SITE_SCRIPT from "./new-site.client.js" with { type: "text" };
 import NEW_SITE_DONE_SCRIPT from "./new-site-done.client.js" with { type: "text" };
+import { ANCHORS, TEMPLATES } from "../../../lib/panel-anchors";
 
 /** Who the new-site blocks are drawn for. */
 function choosers(siteManagers: boolean): string {
@@ -151,15 +152,15 @@ function storedSignIn(): boolean {
 export const WP_TOOLS_TARGETS: AddonTarget[] = [
   {
     slug: "sites-script",
-    template: "Frontend/Site/index.html.twig",
-    anchorBefore: '<div class="card card-table">',
+    template: TEMPLATES.sites,
+    anchorBefore: ANCHORS.sitesTable,
     required: false,
     snippet: script,
   },
   {
     slug: "sites-action",
-    template: "Frontend/Site/index.html.twig",
-    anchorBefore: `<a href="{{ path('clp_site', {'domainName': site.domainName}) }}">{% trans %}Manage{% endtrans %}</a>`,
+    template: TEMPLATES.sites,
+    anchorBefore: ANCHORS.siteManageLink,
     required: false,
     snippet: () => `
         ${WORDPRESS}
@@ -169,22 +170,22 @@ export const WP_TOOLS_TARGETS: AddonTarget[] = [
   {
     // The end of the Domain link, the only icon in the partial.
     slug: "site-info-link",
-    template: "Frontend/Site/Partial/site-info.html.twig",
+    template: TEMPLATES.siteInfo,
     anchorAfter: "</svg>\n      </a>",
     required: false,
     snippet: (url) => siteInfoSnippet(url, storedSignIn()),
   },
   {
     slug: "new-site-plugins",
-    template: "Frontend/Site/New/wordpress.html.twig",
-    anchorBefore: '            <div class="row">\n              <div class="col-6 text-start">',
+    template: TEMPLATES.newWordPressSite,
+    anchorBefore: ANCHORS.newSiteButtons,
     required: false,
     snippet: (url) => newSiteFormSnippet(url, storedSiteManagers()),
   },
   {
     slug: "new-site-plugins-status",
-    template: "Frontend/Site/New/wordpress-installed.html.twig",
-    anchorBefore: '      <div class="card">',
+    template: TEMPLATES.wordPressInstalled,
+    anchorBefore: ANCHORS.wordPressInstalledCard,
     required: false,
     snippet: (url) => newSiteDoneSnippet(url, storedSiteManagers()),
   },

@@ -22,11 +22,11 @@ import {
   listJobIds, newJobId, pruneJobs, readJobLog, startJobUnit, watchJobRecord,
 } from "../../cli/job-store";
 import {
-  ActionCommandFailure, ActionFailure, acquireFileLock, deletedSites, emitActionError, emitActionOk, failAction,
-  readable, runCommand, validateDomain, validateJob,
-  type FileLockHandle,
+  ActionFailure, acquireFileLock, deletedSites, emitActionOk, failAction, readable, runCommand, validateDomain,
+  validateJob, reportActionFailure, type FileLockHandle,
 } from "../../cli/action-common";
 import { PANEL_IDENTITY_PATH } from "../../cli/paths";
+import { GIT_VERBS } from "./verbs";
 
 const JOB_RETENTION_DAYS = 14;
 
@@ -54,10 +54,7 @@ export const WEBHOOK_TOKEN_RE = /^[A-Za-z0-9_-]{43}$/;
 export const MAX_HOOK_BODY_BYTES = 128 * 1024;
 const MAX_HOOK_INPUT_BYTES = 4 * MAX_HOOK_BODY_BYTES;
 
-export type GitVerb =
-  | "sites" | "domains" | "status" | "configure" | "forget" | "keygen"
-  | "webhook-enable" | "webhook-disable" | "hook"
-  | "deploy" | "run" | "job" | "jobs" | "watch-job" | "prune";
+export type GitVerb = keyof typeof GIT_VERBS;
 
 export interface GitActionPaths {
   dataDir: string;
@@ -1283,16 +1280,6 @@ export async function runGitAction(argv: string[], options?: GitActionOptions): 
     }
   } catch (error) {
     if (error instanceof JobFailure) return 1;
-    if (error instanceof ActionFailure) {
-      if (emitReply) emitActionError(error.message, error.data, "git");
-      else process.stderr.write(`[git] ERROR: ${error.message}\n`);
-      return 1;
-    }
-    const message = error instanceof ActionCommandFailure
-      ? error.message
-      : error instanceof Error ? error.message : "git action failed";
-    if (emitReply) emitActionError(message, undefined, "git");
-    else process.stderr.write(`[git] ERROR: ${message}\n`);
-    return 1;
+    return reportActionFailure("git", error, emitReply);
   }
 }

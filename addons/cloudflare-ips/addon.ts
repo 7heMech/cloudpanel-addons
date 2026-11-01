@@ -20,5 +20,5 @@ export const CLOUDFLARE_IPS_ADDON: AddonDefinition = {
   action: runCloudflareAction,
   newSites: { label: "Cloudflare IP Access", run: protectNewSites },
   // A site whose vhost was not ready when it was created is tried again here.
-  maintenance: { label: "Cloudflare IP Access", run: protectNewSites },
+  repair: { label: "Cloudflare IP Access", run: protectNewSites },
 };

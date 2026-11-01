@@ -1,12 +1,13 @@
+import { MAINTENANCE_VERBS } from "./verbs";
 import { Database } from "bun:sqlite";
-import { standInDomains } from "../../cli/stand-ins";
+import { withPanelDb, withoutStandIns } from "../../cli/panel-db";
 import { isIP } from "node:net";
 import {
   chmodSync, existsSync, lstatSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, renameSync, rmSync, statSync,
 } from "node:fs";
 import { join } from "node:path";
 import {
-  ActionFailure, deletedSites, emitActionError, emitActionOk, failAction, normalizeIdentityHostname, withFileLock,
+  ActionFailure, deletedSites, replyToAction, failAction, normalizeIdentityHostname, withFileLock,
   validateDomain,
 } from "../../cli/action-common";
 import { MAINTENANCE_INCLUDE_PATH, maintenanceGap, maintenanceGaps } from "../../cli/maintenance-vhosts";
@@ -74,21 +75,7 @@ export const DEFAULT_MAINTENANCE_ACTION_PATHS: MaintenanceActionPaths = {
   includePath: MAINTENANCE_INCLUDE_PATH,
 };
 
-type MaintenanceVerb =
-  | "sites"
-  | "enable-many"
-  | "disable-many"
-  | "status"
-  | "enable"
-  | "disable"
-  | "get-template"
-  | "set-template"
-  | "reset-template"
-  | "set-bypass"
-  | "global-status"
-  | "global-enable"
-  | "global-disable"
-  | "global-set-bypass";
+type MaintenanceVerb = keyof typeof MAINTENANCE_VERBS;
 
 interface ParsedAction {
   verb: MaintenanceVerb;
@@ -136,25 +123,19 @@ function parseAction(argv: string[], paths: MaintenanceActionPaths, options: Mai
   };
 }
 
-function assertPanelSite(paths: MaintenanceActionPaths, domain: string): void {
-  let db: Database;
+/** Read the panel database, failing the action when it cannot be. */
+function readPanel<T>(paths: MaintenanceActionPaths, read: (db: Database) => T): T {
   try {
-    db = new Database(paths.panelDb, { readonly: true });
-  } catch {
-    failAction("CloudPanel's site database is unavailable");
-  }
-  try {
-    db.exec("PRAGMA busy_timeout = 5000;");
-    const row = db.query<{ present: number }, [string]>(
-      "SELECT 1 AS present FROM site WHERE lower(domain_name) = ? LIMIT 1",
-    ).get(domain);
-    if (!row) failAction(`CloudPanel site not found: '${domain}'`);
+    return withPanelDb(paths.panelDb, read);
   } catch (error) {
     if (error instanceof ActionFailure) throw error;
     failAction("CloudPanel's site database could not be read");
-  } finally {
-    db.close();
   }
+}
+
+function assertPanelSite(paths: MaintenanceActionPaths, domain: string): void {
+  const present = readPanel(paths, (db) => db.query("SELECT 1 FROM site WHERE lower(domain_name) = ? LIMIT 1").get(domain) != null);
+  if (!present) failAction(`CloudPanel site not found: '${domain}'`);
 }
 
 function assertDirectory(path: string): void {
@@ -325,8 +306,7 @@ export function maintenanceStatus(paths: MaintenanceActionPaths, domain: string)
   assertPanelSite(paths, domain);
   let uncovered: string | null = null;
   try {
-    const db = new Database(paths.panelDb, { readonly: true });
-    try { uncovered = maintenanceGap(db, domain, coveragePaths(paths)); } finally { db.close(); }
+    uncovered = withPanelDb(paths.panelDb, (db) => maintenanceGap(db, domain, coveragePaths(paths)));
   } catch {
     // Coverage that cannot be checked is not claimed either way.
   }
@@ -335,26 +315,14 @@ export function maintenanceStatus(paths: MaintenanceActionPaths, domain: string)
 
 /** Every site's status and Nginx coverage, from one read of the panel and of the state directory. */
 function allStatuses(paths: MaintenanceActionPaths): { global: GlobalMaintenanceStatus; sites: MaintenanceSiteStatus[] } {
-  let rows: { domain_name: string; type: unknown; user: unknown }[];
-  let gaps: Map<string, string>;
-  let db: Database;
-  try {
-    db = new Database(paths.panelDb, { readonly: true });
-  } catch {
-    failAction("CloudPanel's site database is unavailable");
-  }
-  try {
-    db.exec("PRAGMA busy_timeout = 5000;");
-    const standIns = standInDomains();
-    rows = db.query<{ domain_name: string; type: unknown; user: unknown }, []>(
+  const { rows, gaps } = readPanel(paths, (db) => {
+    const rows = withoutStandIns(db.query<{ domain_name: string; type: unknown; user: unknown }, []>(
       "SELECT domain_name, type, user FROM site ORDER BY domain_name",
-    ).all().filter((row) => !standIns.has(String(row.domain_name)));
+    ).all());
+    let gaps: Map<string, string>;
     try { gaps = maintenanceGaps(db, coveragePaths(paths)); } catch { gaps = new Map(); }
-  } catch {
-    failAction("CloudPanel's site database could not be read");
-  } finally {
-    db.close();
-  }
+    return { rows, gaps };
+  });
   const globalDir = siteDir(paths, "_global");
   const sites = rows.map((row): MaintenanceSiteStatus => {
     const type = typeof row.type === "string" ? row.type : "";
@@ -505,22 +473,8 @@ async function toggleMany(
   let requested: unknown;
   try { requested = (JSON.parse(input) as { domains?: unknown }).domains; } catch { failAction("expected JSON with a domains list"); }
   if (!Array.isArray(requested) || requested.length === 0) failAction("domains must list at least one site");
-  let present: Set<string>;
-  let db: Database;
-  try {
-    db = new Database(paths.panelDb, { readonly: true });
-  } catch {
-    failAction("CloudPanel's site database is unavailable");
-  }
-  try {
-    db.exec("PRAGMA busy_timeout = 5000;");
-    present = new Set(db.query<{ domain_name: string }, []>("SELECT lower(domain_name) AS domain_name FROM site").all()
-      .map((row) => row.domain_name));
-  } catch {
-    failAction("CloudPanel's site database could not be read");
-  } finally {
-    db.close();
-  }
+  const present = readPanel(paths, (db) => new Set(db.query<{ domain_name: string }, []>("SELECT lower(domain_name) AS domain_name FROM site").all()
+    .map((row) => row.domain_name)));
   const updated: string[] = [];
   const failed: { domain: string; error: string }[] = [];
   for (const raw of requested) {
@@ -597,16 +551,8 @@ export async function executeMaintenanceAction(
     );
 
     try {
-      const db = new Database(paths.panelDb, { readonly: true });
-      let domainNames: string[] = [];
-      try {
-        db.exec("PRAGMA busy_timeout = 5000;");
-        domainNames = db.query<{ domain_name: string }, []>(
-          "SELECT domain_name FROM site",
-        ).all().map((r) => r.domain_name);
-      } finally {
-        db.close();
-      }
+      const domainNames = withPanelDb(paths.panelDb, (db) =>
+        db.query<{ domain_name: string }, []>("SELECT domain_name FROM site").all().map((row) => row.domain_name));
 
       await purgeVarnishMany(domainNames, options);
     } catch {
@@ -652,23 +598,18 @@ export async function executeMaintenanceAction(
     return { domain, custom: false, html: DEFAULT_MAINTENANCE_PAGE };
   }
 
-  await replaceBypasses(paths, domain, options);
-  return maintenanceStatus(paths, domain);
+  if (verb === "set-bypass") {
+    await replaceBypasses(paths, domain, options);
+    return maintenanceStatus(paths, domain);
+  }
+  failAction(`unknown maintenance verb '${verb}'`);
 }
 
 export async function runMaintenanceAction(
   argv: string[],
   options: MaintenanceActionOptions = {},
 ): Promise<number> {
-  try {
-    const data = await executeMaintenanceAction(argv, options);
-    if (options.emitReply !== false) emitActionOk(data);
-    return 0;
-  } catch (error) {
-    const message = error instanceof Error ? error.message : String(error);
-    if (options.emitReply !== false) emitActionError(message, error instanceof ActionFailure ? error.data : undefined, "maintenance");
-    return 1;
-  }
+  return replyToAction("maintenance", options.emitReply !== false, () => executeMaintenanceAction(argv, options));
 }
 
 export { DEFAULT_MAINTENANCE_PAGE as DEFAULT_MAINTENANCE_TEMPLATE };

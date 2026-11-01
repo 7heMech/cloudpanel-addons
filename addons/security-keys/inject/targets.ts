@@ -12,6 +12,7 @@ import LOGIN_STYLE from "./login.css" with { type: "text" };
 import ACCOUNT_SCRIPT from "./account.client.js" with { type: "text" };
 import ACCOUNT_STYLE from "./account.css" with { type: "text" };
 import WEBAUTHN_SCRIPT from "./webauthn.client.js" with { type: "text" };
+import { TEMPLATES } from "../../../lib/panel-anchors";
 
 function script(source: string, url: string): string {
   return `<script>(function () {\n${WEBAUTHN_SCRIPT}\n${source.split("ADDON_URL").join(url)}\n})();</script>`;
@@ -20,7 +21,7 @@ function script(source: string, url: string): string {
 export const SECURITY_KEYS_TARGETS: AddonTarget[] = [
   {
     slug: "login-button",
-    template: "Frontend/Login/login.html.twig",
+    template: TEMPLATES.login,
     anchorAfter: "</form>",
     required: false,
     snippet: (url) => `{% verbatim %}
@@ -35,7 +36,7 @@ export const SECURITY_KEYS_TARGETS: AddonTarget[] = [
   },
   {
     slug: "account-card",
-    template: "Frontend/User/Account/security.html.twig",
+    template: TEMPLATES.accountSecurity,
     anchorAfter: "          {% endif %}\n        </div>\n       </div>",
     required: false,
     snippet: (url) => `{% verbatim %}

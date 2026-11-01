@@ -1,3 +1,4 @@
+import { hasSite, withPanelDb } from "../../cli/panel-db";
 import { Database } from "bun:sqlite";
 import { randomBytes } from "node:crypto";
 import {
@@ -8,16 +9,16 @@ import { tmpdir } from "node:os";
 import { writeFileAtomic } from "../../lib/atomic-write";
 import { dirname, join } from "node:path";
 import {
-  ActionCommandFailure, ActionFailure, commandFailure, emitActionError, emitActionOk,
-  failAction, forwardCommandOutput as defaultForwardCommandOutput, normalizeIdentityHostname,
-  availableSiteUser, readable, runCommand, siteUserTaken, validateDomain, validateFlag, validatePort, validateTag,
-  withFileLock,
+  ActionCommandFailure, ActionFailure, commandFailure, emitActionOk, failAction, forwardCommandOutput as defaultForwardCommandOutput,
+  normalizeIdentityHostname, availableSiteUser, readable, runCommand, siteUserTaken,
+  validateDomain, validateFlag, validatePort, validateTag, withFileLock, reportActionFailure,
 } from "../../cli/action-common";
 import { PANEL_IDENTITY_PATH } from "../../cli/paths";
 import {
   createJobDir, createJobLog, jobCommonFields, jobDir as storeJobDir, jobGet, jobSet, jobTimestamp,
   JOB_ID_RE, listJobIds, newJobId, pruneJobs, readJobLog, startJobUnit, watchJobRecord, type PruneJobsResult,
 } from "../../cli/job-store";
+import { INSTATIC_VERBS } from "./verbs";
 
 const REGISTRY_IMAGE = "ghcr.io/corebunch/instatic";
 const CONTAINER_PORT = 3001;
@@ -114,7 +115,7 @@ export const DEFAULT_INSTATIC_ACTION_PATHS: InstaticActionPaths = {
   homeDir: "/home",
 };
 
-export type InstaticVerb = "list" | "create" | "update" | "start" | "stop" | "restart" | "recreate" | "snapshot" | "backup" | "status" | "logs" | "delete" | "job" | "watch-job" | "jobs" | "prune" | "run";
+export type InstaticVerb = keyof typeof INSTATIC_VERBS;
 
 export interface ParsedInstaticAction {
   verb: InstaticVerb;
@@ -419,23 +420,12 @@ function readMeta(key: string, file: string): string {
 }
 
 function queryPanel<T>(paths: InstaticActionPaths, query: (db: Database) => T): T {
-  if (!readable(paths.panelDb)) throw new Error("panel database is not readable");
-  const db = new Database(paths.panelDb, { readonly: true });
-  try {
-    return query(db);
-  } finally {
-    db.close();
-  }
+  return withPanelDb(paths.panelDb, query);
 }
 
 function panelSiteExists(domain: string, paths: InstaticActionPaths): PanelSiteQuery {
-  if (!readable(paths.panelDb)) return { ok: false, exists: false };
   try {
-    const count = queryPanel(paths, (db) => {
-      const row = db.query("SELECT COUNT(*) AS count FROM site WHERE domain_name = ?;").get(domain) as { count?: number | string } | null;
-      return Number(row?.count ?? 0);
-    });
-    return { ok: true, exists: count > 0 };
+    return { ok: true, exists: queryPanel(paths, (db) => hasSite(db, domain)) };
   } catch {
     return { ok: false, exists: false };
   }
@@ -1282,18 +1272,16 @@ export function deleteInstaticInstance(
 
   let count: number;
   try {
-    count = queryPanel(paths, (db) => {
-      const row = db.query("SELECT COUNT(*) AS count FROM site WHERE domain_name = ?;").get(domain) as { count?: number | string } | null;
-      return Number(row?.count ?? 0);
-    });
+    count = queryPanel(paths, (db) => Number((db.query("SELECT COUNT(*) AS count FROM site WHERE domain_name = ?;").get(domain) as { count?: number | string } | null)?.count ?? 0));
   } catch {
     failAction("cannot read CloudPanel sites; nothing was deleted");
   }
   if (count !== 0 && count !== 1) failAction("unexpected CloudPanel site count; nothing was deleted");
+  const exists = count === 1;
 
   const created = readMeta("siteCreatedByAddon", meta) === "true";
   const portText = readMeta("port", meta);
-  if (count === 1 && created) {
+  if (exists && created) {
     const proxy = siteIsOurProxy(domain, portText, paths);
     if (!proxy.ok) failAction(`refusing to delete a changed CloudPanel site: ${proxy.reason}`);
   }
@@ -1316,7 +1304,7 @@ export function deleteInstaticInstance(
     if (!removed.ok) failAction("container removal failed; data preserved");
   }
 
-  if (created && count === 1) {
+  if (created && exists) {
     const removed = runCommand(paths.clpctl, ["site:delete", `--domainName=${domain}`, "--force"]);
     forwardCommandOutput(removed);
     if (!removed.ok) failAction("CloudPanel site deletion failed; archive and instance data preserved; retry Delete");
@@ -1806,16 +1794,6 @@ export async function runInstaticAction(argv: string[], options?: InstaticAction
     }
     return 0;
   } catch (error) {
-    if (error instanceof ActionFailure) {
-      emitActionError(error.message, error.data);
-      return 1;
-    }
-    if (error instanceof ActionCommandFailure) {
-      emitActionError(error.message);
-      return 1;
-    }
-    const message = error instanceof Error ? error.message : "instatic action failed";
-    emitActionError(message);
-    return 1;
+    return reportActionFailure("instatic", error);
   }
 }

@@ -1,7 +1,8 @@
 /** Root actions and lifecycle hooks for server-wide update and PHP settings. */
+import { SYSTEM_TWEAKS_VERBS } from "./verbs";
 import { existsSync, lstatSync, readFileSync } from "node:fs";
 import {
-  ActionFailure, emitActionError, emitActionOk, failAction, withFileLock, withFileLockSync,
+  replyToAction, errorMessage, failAction, readJsonRequest, withFileLock, withFileLockSync,
 } from "../../cli/action-common";
 import { ROOT_UID, STATE_DIR } from "../../cli/paths";
 import { reconcilePhpGuard, type PhpGuardOptions } from "../../cli/php-guard";
@@ -21,7 +22,7 @@ import { clearAbandonedTmpFiles, type TmpCleanupOptions } from "../../cli/tmp-cl
 const SETTINGS_VERSION = 1;
 const MAX_INPUT_BYTES = 4 * 1024;
 
-export type SystemTweaksVerb = "state" | "set-updates" | "install-updates" | "set-upload-guard" | "set-real-ip" | "set-panel-php";
+export type SystemTweaksVerb = keyof typeof SYSTEM_TWEAKS_VERBS;
 
 export interface SystemTweaksSettings {
   updates: UpdateSettings;
@@ -69,10 +70,6 @@ export interface SystemTweaksOptions {
 
 function pathsFor(options: SystemTweaksOptions): SystemTweaksPaths {
   return { ...DEFAULT_SYSTEM_TWEAKS_PATHS, ...options.paths };
-}
-
-function reason(error: unknown): string {
-  return error instanceof Error ? error.message : String(error);
 }
 
 export function readSettings(paths: SystemTweaksPaths): SystemTweaksSettings {
@@ -135,20 +132,11 @@ function stateOf(options: SystemTweaksOptions): SystemTweaksState {
 
 function panelPhpOrError(options?: PanelPhpOptions): PanelPhpStatus | { error: string } {
   try { return panelPhpStatus(options); }
-  catch (error) { return { error: reason(error) }; }
+  catch (error) { return { error: errorMessage(error) }; }
 }
 
-async function requestBody(options: SystemTweaksOptions): Promise<Record<string, unknown>> {
-  const raw = options.input !== undefined ? options.input : await Bun.stdin.text();
-  if (Buffer.byteLength(raw, "utf8") > MAX_INPUT_BYTES) failAction("the request is too large");
-  let parsed: unknown;
-  try {
-    parsed = JSON.parse(raw);
-  } catch {
-    failAction("the request must be JSON");
-  }
-  if (typeof parsed !== "object" || parsed === null || Array.isArray(parsed)) failAction("the request must be a JSON object");
-  return parsed as Record<string, unknown>;
+function requestBody(options: SystemTweaksOptions): Promise<Record<string, unknown>> {
+  return readJsonRequest(options.input, MAX_INPUT_BYTES);
 }
 
 async function setUpdates(options: SystemTweaksOptions): Promise<SystemTweaksState> {
@@ -220,7 +208,7 @@ async function changePanelPhp(options: SystemTweaksOptions): Promise<SystemTweak
 
 function parseVerb(argv: string[]): SystemTweaksVerb {
   const [rawVerb, ...rest] = argv;
-  const verbs: SystemTweaksVerb[] = ["state", "set-updates", "install-updates", "set-upload-guard", "set-real-ip", "set-panel-php"];
+  const verbs = Object.keys(SYSTEM_TWEAKS_VERBS) as SystemTweaksVerb[];
   const verb = verbs.find((known) => known === rawVerb);
   if (!verb) failAction(`unknown system tweaks verb '${rawVerb ?? ""}'`);
   if (rest.length > 0) failAction(`unexpected argument '${rest[0]}'`);
@@ -235,6 +223,10 @@ export async function executeSystemTweaksAction(argv: string[], options: SystemT
   if (verb === "set-upload-guard") return setUploadGuard(options);
   if (verb === "set-real-ip") return setRealIp(options);
   if (verb === "set-panel-php") return changePanelPhp(options);
+  if (verb !== "install-updates") {
+    verb satisfies never;
+    failAction(`unknown system tweaks verb '${verb}'`);
+  }
   // One deadline for the install and the state read that answers it, which the
   // gateway's timeout is sized from.
   const now = options.now ?? Date.now;
@@ -246,17 +238,7 @@ export async function executeSystemTweaksAction(argv: string[], options: SystemT
 }
 
 export async function runSystemTweaksAction(argv: string[], options: SystemTweaksOptions = {}): Promise<number> {
-  const emit = options.emitReply !== false;
-  try {
-    const data = await executeSystemTweaksAction(argv, options);
-    if (emit) emitActionOk(data);
-    return 0;
-  } catch (error) {
-    const message = reason(error);
-    if (emit) emitActionError(message, error instanceof ActionFailure ? error.data : undefined, "system-tweaks");
-    else process.stderr.write(`[system-tweaks] ERROR: ${message}\n`);
-    return 1;
-  }
+  return replyToAction("system-tweaks", options.emitReply !== false, () => executeSystemTweaksAction(argv, options));
 }
 
 function withSettingsLock<T>(options: SystemTweaksOptions, body: (paths: SystemTweaksPaths, settings: SystemTweaksSettings) => T): T {
@@ -275,19 +257,19 @@ export async function systemTweaksMaintenance(options: SystemTweaksOptions = {})
     const tmp = clearAbandonedTmpFiles(options.tmpCleanup);
     if (tmp) lines.push(tmp);
   } catch (error) {
-    failures.push(`/tmp cleanup: ${reason(error)}`);
+    failures.push(`/tmp cleanup: ${errorMessage(error)}`);
   }
   try {
     const upkeep = systemTweaksUpkeep(options);
     if (upkeep) lines.push(upkeep);
   } catch (error) {
-    failures.push(reason(error));
+    failures.push(errorMessage(error));
   }
   try {
     const php = await reconcilePanelPhp(options.panelPhp);
     if (php) lines.push(php);
   } catch (error) {
-    failures.push(`panel PHP: ${reason(error)}`);
+    failures.push(`panel PHP: ${errorMessage(error)}`);
   }
   if (failures.length) throw new Error([...failures, ...lines].join("; "));
   return lines.join("; ") || null;

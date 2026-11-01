@@ -1,0 +1,20 @@
+// Every verb `clp-addons action instatic` takes, and who may ask root for it from the web.
+export const INSTATIC_VERBS = {
+  list: { web: "site-manager" },
+  create: { web: "site-manager" },
+  update: { web: "site-manager" },
+  delete: { web: "site-manager" },
+  start: { web: "site-manager" },
+  stop: { web: "site-manager" },
+  restart: { web: "site-manager" },
+  recreate: { web: "site-manager" },
+  snapshot: { web: "site-manager" },
+  status: { web: "site-manager" },
+  logs: { web: "site-manager" },
+  job: { web: "site-manager" },
+  jobs: { web: "site-manager" },
+  "watch-job": { web: "site-manager", stream: "one-way" },
+  run: { web: false, why: "the job runner, started only by the transient unit the create path launches" },
+  prune: { web: false, why: "retention sweeping, run by the reconcile timer" },
+  backup: { web: false, why: "run by the cron file the addon installs" },
+} as const;

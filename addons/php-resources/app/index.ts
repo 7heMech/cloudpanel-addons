@@ -1,5 +1,5 @@
 import {
-  bodyErrorResponse, guardMutation, htmlResponse, jsonResponse, newCsrfToken, readJsonObject,
+  guardMutation, htmlResponse, jsonResponse, newCsrfToken, readBody,
 } from "../../../lib/app-http";
 import { phpResourcesService, validateDomain } from "./service";
 import { dashboardView, layout, siteCardHtml } from "./views";
@@ -58,12 +58,8 @@ export async function handle(
   const denied = guardMutation(req);
   if (denied) return denied;
 
-  let body: Record<string, unknown>;
-  try {
-    body = await readJsonObject(req, 256 * 1024);
-  } catch (error) {
-    return bodyErrorResponse(error);
-  }
+  const body = await readBody(req, 256 * 1024);
+  if (body instanceof Response) return body;
 
   if (path === "/api/categories") return change(await phpResourcesService.saveCategory(body));
   if (path === "/api/categories/delete") return change(await phpResourcesService.deleteCategory(body.id));

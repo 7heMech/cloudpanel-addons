@@ -6,11 +6,12 @@
 // the patching machinery.
 
 import type { AddonTarget } from "../../../lib/addon-target";
+import { TEMPLATES } from "../../../lib/panel-anchors";
 
 export const INSTATIC_TARGETS: AddonTarget[] = [
   {
     slug: "new-site-card",
-    template: "Frontend/Site/New/index.html.twig",
+    template: TEMPLATES.newSite,
     anchorAfter: '<div class="site-type-container">',
     required: false,
     snippet: (url) => `

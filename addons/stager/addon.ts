@@ -15,8 +15,8 @@ export const STAGER_ADDON: AddonDefinition = {
   // it ran on its own before: only an explicit CLI invocation reached prune, so
   // a clone killed by an OOM, a `systemctl stop` or a reboot left its target
   // stuck `running` for ever, and only prune clears that.
-  maintenance: {
-    label: "stager maintenance (prune)",
+  repair: {
+    label: "stager (prune)",
     run: async (options) => {
       const code = await runStagerAction(["prune"], { ...(options ?? {}), emitReply: false });
       if (code !== 0) throw new Error(`prune returned exit code ${code}`);

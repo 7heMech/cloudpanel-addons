@@ -1,4 +1,4 @@
-import { bodyErrorResponse, guardMutation, htmlResponse, jsonResponse, newCsrfToken, readJsonObject } from "../../../lib/app-http";
+import { htmlResponse, jsonResponse, newCsrfToken, readMutation } from "../../../lib/app-http";
 import { smtpService } from "./service";
 import { dashboardContent, dashboardView, layout } from "./views";
 
@@ -24,10 +24,8 @@ export async function handle(req: Request, path: string, notice?: { current: str
     return jsonResponse(result, { status: result.ok ? 200 : 500 });
   }
   if (req.method === "POST") {
-    const denied = guardMutation(req);
-    if (denied) return denied;
-    let body: Record<string, unknown>;
-    try { body = await readJsonObject(req, 256 * 1024); } catch (error) { return bodyErrorResponse(error); }
+    const body = await readMutation(req, 256 * 1024);
+    if (body instanceof Response) return body;
     if (path === "/api/test") {
       const result = await smtpService.test(body);
       return jsonResponse(result, { status: result.ok ? 200 : 400 });

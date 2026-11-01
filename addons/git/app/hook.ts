@@ -30,6 +30,7 @@ export function gitHookPath(domain: string, token: string): string {
 }
 
 export async function handleGitHook(req: Request, path: string): Promise<Response | null> {
+  if (req.method !== "POST") return null;
   const segments = path.slice(GIT_HOOK_PREFIX.length).split("/");
   if (segments.length !== 2) return null;
   const domain = validateDomain(safeDecodePathSegment(segments[0]!) ?? "");

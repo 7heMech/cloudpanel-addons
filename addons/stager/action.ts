@@ -1,3 +1,5 @@
+import { hasSite, withPanelDb, withoutStandIns } from "../../cli/panel-db";
+import { STAGER_VERBS } from "./verbs";
 import { Database } from "bun:sqlite";
 import { randomBytes } from "node:crypto";
 import {
@@ -9,15 +11,14 @@ import { CLI_BIN, CONFIG_DIR, PANEL_IDENTITY_PATH } from "../../cli/paths";
 import { executeSmtpAction } from "../smtp/action";
 import { writeFileAtomic } from "../../lib/atomic-write";
 import { learnVhostMapContent, renderVhostBodyResult } from "../../cli/site-vhost";
-import { standInDomains } from "../../cli/stand-ins";
 import {
   createJobDir, createJobLog, findOlderThan, jobCommonFields, jobDir as storeJobDir, jobGet, jobSet,
   jobTimestamp, listJobIds, newJobId, pruneJobs, readJobLog, startJobUnit, watchJobRecord,
 } from "../../cli/job-store";
 import {
-  ActionCommandFailure, ActionFailure, acquireFileLock, actionErrorJson, commandFailure, emitActionError, emitActionOk,
-  dbNameFor, dbUserFor, failAction, normalizeIdentityHostname, readable, readPanelIdentity,
-  runCommand, siteUserFor, siteUserTaken, validateDomain, validateEmail, validateFlag, validateJob, validateMfa, validatePort,
+  ActionFailure, acquireFileLock, actionErrorJson, emitActionOk, dbNameFor, dbUserFor, failAction,
+  normalizeIdentityHostname, readable, readPanelIdentity, runCommand, siteUserFor, siteUserTaken, validateDomain,
+  validateEmail, validateFlag, validateJob, validateMfa, validatePort, reportActionFailure,
   type CommandResult, type FileLockHandle,
 } from "../../cli/action-common";
 
@@ -28,7 +29,7 @@ const PORT_MIN = 39000;
 const PORT_MAX = 39999;
 const CLONABLE_TYPES = ["php", "static", "reverse-proxy"] as const;
 
-export type StagerVerb = "sites" | "jobs" | "prune" | "describe" | "clone" | "promote" | "run" | "job" | "watch-job";
+export type StagerVerb = keyof typeof STAGER_VERBS;
 
 /**
  * What a promote leaves behind from the live site rather than taking from the
@@ -159,14 +160,6 @@ function pathsFor(options?: StagerActionOptions): StagerActionPaths {
 
 function emitStagerOk(paths: StagerActionPaths, data: unknown): void {
   if (paths.emitReply !== false) emitActionOk(data);
-}
-
-function emitStagerError(message: string, data: unknown, emitReply: boolean): void {
-  if (emitReply) {
-    emitActionError(message, data, "stager");
-  } else {
-    process.stderr.write(`[stager] ERROR: ${message}\n`);
-  }
 }
 
 function requireRoot(): void {
@@ -341,23 +334,12 @@ function generatedDbPassword(): string {
 }
 
 function queryPanel<T>(paths: StagerActionPaths, query: (db: Database) => T): T {
-  if (!readable(paths.panelDb)) throw new Error("panel database is not readable");
-  const db = new Database(paths.panelDb, { readonly: true });
-  try {
-    return query(db);
-  } finally {
-    db.close();
-  }
+  return withPanelDb(paths.panelDb, query);
 }
 
 function siteExists(paths: StagerActionPaths, domain: string): boolean {
-  if (!readable(paths.panelDb)) return false;
   try {
-    const count = queryPanel(paths, (db) => {
-      const row = db.query("SELECT COUNT(*) AS count FROM site WHERE domain_name = ?;").get(domain) as { count?: number | string } | null;
-      return Number(row?.count ?? 0);
-    });
-    return count > 0;
+    return queryPanel(paths, (db) => hasSite(db, domain));
   } catch {
     return false;
   }
@@ -1616,11 +1598,10 @@ function cmdSites(paths: StagerActionPaths): void {
   }
 
   const sites: Array<Record<string, unknown>> = [];
-  const standIns = standInDomains();
-  for (const row of rows) {
+  for (const row of withoutStandIns(rows)) {
     const domain = typeof row.domain_name === "string" ? row.domain_name : "";
     const type = typeof row.type === "string" ? row.type : "";
-    if (!domain || standIns.has(domain)) continue;
+    if (!domain) continue;
     if (type === "reverse-proxy" && !instaticBackendOf(paths, domain)) continue;
     sites.push({
       domain,
@@ -2726,7 +2707,7 @@ async function cmdRunPromote(id: string, dir: string, paths: StagerActionPaths):
  * Put back a document root whose promote died between the two renames.
  *
  * The window is one rename wide, but a site with no document root at all is
- * the worst state this addon can leave behind, so the maintenance pass looks
+ * the worst state this addon can leave behind, so the repair pass looks
  * for it explicitly rather than waiting for an operator to notice.
  */
 export function recoverInterruptedPromotions(paths: StagerActionPaths): number {
@@ -2936,16 +2917,6 @@ export async function runStagerAction(argv: string[], options?: StagerActionOpti
     }
   } catch (error) {
     if (error instanceof JobFailure || error instanceof RunReplyFailure) return 1;
-    if (error instanceof ActionFailure) {
-      emitStagerError(error.message, error.data, emitReply);
-      return 1;
-    }
-    if (error instanceof ActionCommandFailure) {
-      emitStagerError(error.message, undefined, emitReply);
-      return 1;
-    }
-    const message = error instanceof Error ? error.message : "stager action failed";
-    emitStagerError(message, undefined, emitReply);
-    return 1;
+    return reportActionFailure("stager", error, emitReply);
   }
 }

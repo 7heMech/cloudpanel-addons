@@ -5,7 +5,8 @@ import { BlockList, isIP } from "node:net";
 import { join } from "node:path";
 import { normalizeMappedIpv4 } from "../../lib/ip-address";
 import { ActionFailure, failAction, runCommand, type CommandResult } from "../../cli/action-common";
-import { openPanelDatabase, trustedVhost, withNginxTransactionAsync } from "../../cli/nginx-transaction";
+import { openPanelDatabase } from "../../cli/panel-db";
+import { trustedVhost, withNginxTransactionAsync } from "../../cli/nginx-transaction";
 
 export interface BasicAuthPaths {
   panelDb: string;

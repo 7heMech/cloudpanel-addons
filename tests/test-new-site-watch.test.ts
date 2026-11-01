@@ -39,7 +39,7 @@ function recorder(onHooks: () => void = () => {}, waiting: () => boolean = () =>
     calls,
     ops: {
       runHooks: async () => { calls.push("hooks"); onHooks(); },
-      waiting: async () => { const still = waiting(); calls.push(still ? "waiting" : "ready"); return still; },
+      resumePending: async () => { const still = waiting(); calls.push(still ? "waiting" : "ready"); return still; },
       watchRows: (on: boolean) => { calls.push(on ? "watch" : "unwatch"); },
     },
   };

@@ -9,11 +9,10 @@ import { MANAGER_UNIT, PANEL_GROUP, SERVICE_USER, SOCKET_PATH } from "../cli/pat
 import { CLI_VERSION } from "../cli/release";
 import { fatal, log } from "../cli/util";
 import { jsonResponse, newCsrfToken } from "../lib/app-http";
+import { gatewayCaller } from "../lib/gateway-client";
 import { splitMount } from "../lib/mount";
 import { adminGate, authenticateRequest } from "../lib/sso-auth";
 import { checkCliUpdate } from "../lib/update-check";
-import { GIT_HOOK_PREFIX, handleGitHook } from "../addons/git/app/hook";
-import { SIGN_IN_PREFIX, handleSignIn } from "../addons/security-keys/app/sign-in";
 import { handleManagerRoute } from "./index";
 import { latestManagerJobView, seenNews } from "./service";
 import { indexPage, updatePage } from "./views";
@@ -44,76 +43,21 @@ function mountedAddons(): string[] {
 }
 
 /**
- * The routes a signed-in non-administrator may reach, named one by one.
- *
- * An addon that declares `siteManager` is the other way in, for the whole
- * mount rather than a route: CloudPanel does not narrow a site manager's site
- * list, so its pages are already scoped for that role.
- *
- * The blanket gate below is what makes the manager an administrative surface,
- * and these are the exceptions that scope themselves instead. The WordPress
- * sign-in is one because the panel user it signs in for is one CloudPanel
- * already gave the site's file manager and database to, so the shortcut adds
- * no authority; the root action holds it to the sites `user_sites` maps to
- * that account. Its site-kind route answers only whether such a site is a
- * WordPress, which its site pages need to know to offer the sign-in. The session route hands out the CSRF pair those callers cannot
- * get from an addon page, and reads nothing. Panel Tweaks' state route is one
- * because the page it enhances is CloudPanel's own Sites page, which every
- * panel user sees; the action narrows the reply to the rows that page would
- * already have drawn for the caller. DNS's provision route is called from the
- * page a new site lands on, by whoever created it, and its site route from the
- * site's SSL/TLS page; the action refuses a site that is not the caller's and
- * answers with readiness, or the zone and the nameservers it waits for, only.
- * WordPress Tools' plugin search, new-site choice and its status are called
- * from CloudPanel's New WordPress Site form and the page it lands on, which site
- * managers use too: the handler turns away anyone but an administrator or a
- * site manager, and root holds a site manager to the administrator's switch,
- * to WordPress.org plugins, to a site that does not exist yet and to the status
- * of their own choice. Uploading stays behind the gate. Security Keys'
- * routes are the caller's own keys, managed from CloudPanel's Security page;
- * the gateway reads whose they are from the session itself.
- */
-const SELF_SCOPED_ROUTES = new Set([
-  "POST /wp-tools/api/sign-in",
-  "GET /wp-tools/api/session",
-  "GET /wp-tools/api/site-kind",
-  "GET /wp-tools/api/plugin-search",
-  "POST /wp-tools/api/new-site",
-  "GET /wp-tools/api/new-site-status",
-  "GET /panel-tweaks/api/panel",
-  "GET /dns/api/session",
-  "POST /dns/api/provision",
-  "GET /dns/api/site",
-  "GET /security-keys/api/keys",
-  "POST /security-keys/api/register-options",
-  "POST /security-keys/api/register",
-  "POST /security-keys/api/remove",
-]);
-
-/**
  * Every request the manager answers, in the order it decides them. Exported so
  * a test can send real requests through the same function the socket does.
  */
 export async function handleRequest(req: Request, server: Server<unknown>): Promise<Response> {
   const path = internalPath(new URL(req.url).pathname);
 
-  // The one credential that is not a CloudPanel session. A POST whose URL
-  // carries a per-site token the root gateway recognises is a push-to-deploy
-  // delivery and is answered here; anything else returns null and meets the
-  // gate below, so this is a second credential type rather than an exception
-  // list, and the URL is no oracle for which sites have a webhook.
-  // Nothing is looked up for a request that is not shaped like one: the gate
-  // below stays the first thing every other request meets.
-  if (req.method === "POST" && path.startsWith(GIT_HOOK_PREFIX) && mountedAddons().includes("git")) {
-    const delivery = await handleGitHook(req, path);
-    if (delivery) return delivery;
-  }
-
-  // Passkey sign-in, from the login page: there is no session yet, and the
-  // key's signature, checked as root, is the credential.
-  if (path.startsWith(SIGN_IN_PREFIX) && mountedAddons().includes("security-keys")) {
-    const signIn = await handleSignIn(req, path);
-    if (signIn) return signIn;
+  // An addon's route before the gate answers on a credential root checks, such
+  // as a push-to-deploy token or a passkey's signature, and returns null for
+  // anything else, which then meets the gate like any other request. Nothing
+  // is looked up for a request outside its prefix.
+  for (const name of ADDON_NAMES) {
+    const preGate = ADDONS[name]!.preGate;
+    if (!preGate || !path.startsWith(preGate.prefix) || !mountedAddons().includes(name)) continue;
+    const answer = await gatewayCaller.run({ roles: null }, () => preGate.handle(req, path));
+    if (answer) return answer;
   }
 
   // Nothing else is answered before this, not even the liveness probe: a route
@@ -126,19 +70,24 @@ export async function handleRequest(req: Request, server: Server<unknown>): Prom
   // The manager is an administrative surface. Keep this decision at the
   // shared socket boundary so every mounted HTML and API route, including
   // future handlers and the manager index, receives the same gate before
-  // update checks or addon code can run.
+  // update checks or addon code can run. The exceptions: a signed-in
+  // non-administrator reaches an addon's self-scoped routes, and a site
+  // manager all of an addon that declares `siteManager`. Straight to the addon,
+  // ahead of the update check and the manager's own routes, and only to the
+  // verbs declared for them.
   const denied = adminGate(gate.auth);
   if (denied) {
-    const selfScoped = SELF_SCOPED_ROUTES.has(`${req.method} ${path}`);
-    const siteManager = gate.auth?.roles.includes("ROLE_SITE_MANAGER") ?? false;
+    const name = path.split("/")[1] ?? "";
+    const addon = Object.hasOwn(ADDONS, name) ? ADDONS[name]! : null;
+    const selfScoped = addon?.selfScopedRoutes?.includes(`${req.method} ${path.slice(name.length + 1) || "/"}`) ?? false;
+    const siteManager = addon?.siteManager === true && (gate.auth?.roles.includes("ROLE_SITE_MANAGER") ?? false);
     if (!selfScoped && !siteManager) return denied;
-    // Straight to the addon, ahead of the update check and the manager's own
-    // routes: what this session is allowed is that handler, not the rest of
-    // the manager with a narrower path.
     const scoped = splitMount(path, mountedAddons());
     if (!scoped) return denied;
-    if (!selfScoped && ADDONS[scoped.addon]?.siteManager !== true) return denied;
-    return await addonHandler(scoped.addon)!(req, scoped.rest, null, server, gate.auth);
+    return await gatewayCaller.run(
+      { roles: gate.auth?.roles ?? [] },
+      () => addonHandler(scoped.addon)!(req, scoped.rest, null, server, gate.auth),
+    );
   }
 
   // Polled while this process restarts; the gateway that validates the session

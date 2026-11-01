@@ -11,7 +11,8 @@
 // -- what counts as a change, when the stream closes, and the keepalive -- lives
 // here.
 import { jsonResponse, policyHeaders, safeDecodePathSegment } from "./app-http";
-import { streamGatewayAction, type GatewayStream } from "./gateway-client";
+import { streamGatewayAction, type ActionResult, type GatewayStream } from "./gateway-client";
+import type { GatewayAddon, StreamVerb } from "./gateway-protocol";
 import { isTerminalJobState, validateJobId } from "./job-id";
 import { stillAuthorized } from "./sso-auth";
 
@@ -69,8 +70,11 @@ export type JobWatcher<J extends JobProgress> = (
  * started to differ, which is the drift this module exists to stop -- so the
  * watcher lives here beside the endpoint that consumes it.
  */
+/** The addons whose jobs can be watched: those that declare a `watch-job` stream. */
+export type JobAddon = { [A in GatewayAddon]: "watch-job" extends StreamVerb<A> ? A : never }[GatewayAddon];
+
 export function watchGatewayJob<J extends JobProgress>(
-  addon: Parameters<typeof streamGatewayAction>[0]["addon"],
+  addon: JobAddon,
   id: string,
   handlers: Parameters<JobWatcher<J>>[1],
 ): GatewayStream {
@@ -80,11 +84,11 @@ export function watchGatewayJob<J extends JobProgress>(
     ended = true;
     handlers.onClose(error);
   };
-  return streamGatewayAction<JobSnapshot<J>>({
+  return streamGatewayAction({
     addon,
     verb: "watch-job",
     args: ["--job", id],
-    onReply(reply) {
+    onReply(reply: ActionResult<JobSnapshot<J>>) {
       if (reply.ok && reply.data) handlers.onSnapshot(reply.data);
       else close(reply.error ?? "the gateway returned an empty job snapshot");
     },

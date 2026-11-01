@@ -17,25 +17,10 @@ import {
 } from "../lib/sso-auth";
 import {
   parseGatewayRequest,
+  isGatewayAddon,
+  webVerb,
   MAX_GATEWAY_INPUT_BYTES,
   DEFAULT_GATEWAY_TIMEOUT_MS,
-  STAGER_ALLOWED_VERBS,
-  INSTATIC_ALLOWED_VERBS,
-  MAINTENANCE_ALLOWED_VERBS,
-  GIT_ALLOWED_VERBS,
-  CLOUDFLARE_IPS_ALLOWED_VERBS,
-  SMTP_ALLOWED_VERBS,
-  DNS_ALLOWED_VERBS,
-  PHP_RESOURCES_ALLOWED_VERBS,
-  PANEL_TWEAKS_ALLOWED_VERBS,
-  SYSTEM_TWEAKS_ALLOWED_VERBS,
-  WP_TOOLS_ALLOWED_VERBS,
-  MANAGER_ALLOWED_VERBS,
-  STREAM_ALLOWED_VERBS,
-  DUPLEX_STREAM_VERBS,
-  TERMINAL_ALLOWED_VERBS,
-  SECURITY_KEYS_ALLOWED_VERBS,
-  OWN_ACCOUNT_VERBS,
   DUPLEX_WORKER_MARKER,
 } from "../lib/gateway-protocol";
 import { getLivePanelInfo } from "../lib/panel-snapshot";
@@ -43,25 +28,6 @@ import { getLivePanelInfo } from "../lib/panel-snapshot";
 export const MAX_AUTH_INPUT_BYTES = MAX_SESSION_ID_LENGTH + 1;
 export const MAX_AUTH_REPLY_BYTES = 32 * 1024;
 const AUTH_STDIN_TIMEOUT_MS = 2_000;
-
-// A Map rather than an object literal: the key comes off the wire, and
-// `{}["constructor"]` is truthy.
-const ALLOWED_VERBS = new Map<string, Set<string>>([
-  ["stager", STAGER_ALLOWED_VERBS],
-  ["instatic", INSTATIC_ALLOWED_VERBS],
-  ["maintenance", MAINTENANCE_ALLOWED_VERBS],
-  ["git", GIT_ALLOWED_VERBS],
-  ["cloudflare-ips", CLOUDFLARE_IPS_ALLOWED_VERBS],
-  ["smtp", SMTP_ALLOWED_VERBS],
-  ["dns", DNS_ALLOWED_VERBS],
-  ["php-resources", PHP_RESOURCES_ALLOWED_VERBS],
-  ["panel-tweaks", PANEL_TWEAKS_ALLOWED_VERBS],
-  ["system-tweaks", SYSTEM_TWEAKS_ALLOWED_VERBS],
-  ["wp-tools", WP_TOOLS_ALLOWED_VERBS],
-  ["terminal", TERMINAL_ALLOWED_VERBS],
-  ["security-keys", SECURITY_KEYS_ALLOWED_VERBS],
-  ["manager", MANAGER_ALLOWED_VERBS],
-]);
 
 const SESSION_ID_RE = /^[a-zA-Z0-9,-]+$/;
 const ROLE_RE = /^ROLE_[A-Z0-9_]{1,120}$/;
@@ -529,21 +495,21 @@ export function createAuthActionServer(options: AuthActionOptions = {}): net.Ser
           // reached through the same gateway because enabling an addon and
           // replacing the binary are root work requested from an unprivileged
           // web process.
-          const allowed = ALLOWED_VERBS.get(request.addon);
-          if (!allowed) {
+          if (!isGatewayAddon(request.addon)) {
             socket.end(JSON.stringify({ ok: false, error: "unknown addon" }) + "\n");
             return;
           }
           // A duplex verb is only ever a stream: this path checks no session
           // and would hand the worker the manager's own arguments and stdin.
-          if (!allowed.has(request.verb) || DUPLEX_STREAM_VERBS.has(`${request.addon}:${request.verb}`)) {
+          const declared = webVerb(request.addon, request.verb);
+          if (!declared || declared.stream === "duplex") {
             socket.end(JSON.stringify({ ok: false, error: "invalid verb" }) + "\n");
             return;
           }
 
           // An own-account verb is told whose account by the session it was
           // sent with, which this checks itself, never by the manager.
-          const ownAccount = OWN_ACCOUNT_VERBS.has(`${request.addon}:${request.verb}`);
+          const ownAccount = declared.web === "own-account";
           if (ownAccount !== (request.sessionId !== undefined)) {
             socket.end(JSON.stringify({ ok: false, error: ownAccount ? "a panel session is required" : "invalid verb" }) + "\n");
             return;
@@ -618,16 +584,16 @@ export function createAuthActionServer(options: AuthActionOptions = {}): net.Ser
         }
 
         if (request.kind === "stream-action") {
-          const allowed = ALLOWED_VERBS.get(request.addon);
-          if (!allowed) {
+          if (!isGatewayAddon(request.addon)) {
             socket.end(JSON.stringify({ ok: false, error: "unknown addon" }) + "\n");
             return;
           }
-          if (!allowed.has(request.verb) || !STREAM_ALLOWED_VERBS.has(request.verb)) {
+          const declared = webVerb(request.addon, request.verb);
+          if (!declared?.stream) {
             socket.end(JSON.stringify({ ok: false, error: "invalid verb" }) + "\n");
             return;
           }
-          const duplex = DUPLEX_STREAM_VERBS.has(`${request.addon}:${request.verb}`);
+          const duplex = declared.stream === "duplex";
           if (duplex !== (request.sessionId !== undefined)) {
             socket.end(JSON.stringify({ ok: false, error: duplex ? "a panel session is required" : "invalid verb" }) + "\n");
             return;

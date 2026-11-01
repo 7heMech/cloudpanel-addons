@@ -12,11 +12,12 @@
  * shape, and it accepts no path. Automatic SSL submits CloudPanel's own certificate form from the
  * browser; here it is only a switch.
  */
+import { openPanelDatabase } from "../../cli/panel-db";
 import { Database } from "bun:sqlite";
 import { existsSync, lstatSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import {
-  ActionFailure, acquireFileLock, emitActionError, emitActionOk, failAction, runCommand, withFileLock,
+  ActionFailure, acquireFileLock, REPLIED, replyToAction, emitActionOk, errorMessage, failAction, readJsonRequest, runCommand, withFileLock,
   type CommandResult, type FileLockHandle,
 } from "../../cli/action-common";
 import {
@@ -271,10 +272,6 @@ function pathsFor(options: PanelTweaksActionOptions): PanelTweaksActionPaths {
   return { ...DEFAULT_PANEL_TWEAKS_PATHS, ...options.paths };
 }
 
-function reason(error: unknown): string {
-  return error instanceof Error ? error.message : String(error);
-}
-
 function nowIso(options: PanelTweaksActionOptions): string {
   return (options.now?.() ?? new Date()).toISOString();
 }
@@ -378,15 +375,6 @@ interface PanelSiteRow {
   certificate_pem: string | null;
 }
 
-function openPanelDatabase(path: string): Database {
-  try {
-    const db = new Database(path, { readonly: true });
-    db.exec("PRAGMA busy_timeout = 5000;");
-    return db;
-  } catch (error) {
-    failAction(`CloudPanel database could not be opened: ${reason(error)}`);
-  }
-}
 
 /**
  * One query for everything the Sites table shows.
@@ -477,7 +465,7 @@ function panelSites(db: Database): PanelSiteRow[] {
   try {
     return db.query<PanelSiteRow, []>(siteQuery(db)).all();
   } catch (error) {
-    failAction(`CloudPanel site list could not be read: ${reason(error)}`);
+    failAction(`CloudPanel site list could not be read: ${errorMessage(error)}`);
   }
 }
 
@@ -550,7 +538,7 @@ function siteViews(rows: PanelSiteRow[], cache: DiskCache): TweakSiteView[] {
  * administrator's request carries no name and sees every site.
  */
 function stateOf(paths: PanelTweaksActionPaths, asUser = ""): PanelTweaksState {
-  const db = openPanelDatabase(paths.panelDb);
+  const db = openPanelDatabase(paths.panelDb, true);
   try {
     const cache = readDiskCache(paths);
     let rows = panelSites(db);
@@ -590,7 +578,7 @@ function siteAccounts(passwd: string): Map<string, SiteAccount> {
   try {
     content = readFileSync(passwd, "utf8");
   } catch (error) {
-    failAction(`the account database could not be read: ${reason(error)}`);
+    failAction(`the account database could not be read: ${errorMessage(error)}`);
   }
   for (const line of content.split("\n")) {
     const fields = line.split(":");
@@ -641,7 +629,7 @@ function scanDisk(
   options: PanelTweaksActionOptions,
 ): ScanResult {
   const run = options.run ?? runCommand;
-  const db = openPanelDatabase(paths.panelDb);
+  const db = openPanelDatabase(paths.panelDb, true);
   let rows: PanelSiteRow[];
   let databases: Map<string, string[]>;
   try {
@@ -714,18 +702,7 @@ function parseAction(argv: string[]): ParsedAction {
 }
 
 async function requestTweaks(options: PanelTweaksActionOptions, current: PanelTweaks): Promise<PanelTweaks> {
-  const raw = options.input !== undefined ? options.input : await Bun.stdin.text();
-  if (Buffer.byteLength(raw, "utf8") > MAX_INPUT_BYTES) failAction("the request is too large");
-  let parsed: unknown;
-  try {
-    parsed = JSON.parse(raw);
-  } catch {
-    failAction("the request must be JSON");
-  }
-  if (typeof parsed !== "object" || parsed === null || Array.isArray(parsed)) {
-    failAction("the request must be a JSON object");
-  }
-  const body = parsed as Record<string, unknown>;
+  const body = await readJsonRequest(options.input, MAX_INPUT_BYTES);
   const wanted = { ...current };
   let named = 0;
   for (const key of TWEAK_KEYS) {
@@ -865,8 +842,12 @@ export async function executePanelTweaksAction(
   if (verb === "state") return stateOf(paths, asUser);
   if (verb === "set-tweaks") return setTweaks(paths, options);
   if (verb === "measure") return startMeasurement(paths, options);
-  return withFileLock(paths.scanLockFile, 15, "a disk measurement is already running", async () =>
-    scanDisk(paths, options));
+  if (verb === "scan") {
+    return withFileLock(paths.scanLockFile, 15, "a disk measurement is already running", async () =>
+      scanDisk(paths, options));
+  }
+  verb satisfies never;
+  failAction(`unknown panel tweaks verb '${verb}'`);
 }
 
 export async function runPanelTweaksAction(
@@ -874,29 +855,20 @@ export async function runPanelTweaksAction(
   options: PanelTweaksActionOptions = {},
 ): Promise<number> {
   const emit = options.emitReply !== false;
-  try {
-    if (argv[0] === "watch-job") {
-      if ((options.processUid ?? process.getuid?.()) !== 0) failAction("panel tweaks actions must run as root");
-      const paths = pathsFor(options);
-      const id = jobIdArgument(argv.slice(1));
-      const dir = jobDir(paths.jobsDir, id);
-      if (!measureJobView(paths.jobsDir, id)) failAction(`no such job: ${id}`);
-      await watchJobRecord({
-        dir,
-        read: () => ({ job: measureJobView(paths.jobsDir, id), log: readJobLog(dir) }),
-        emit: (data) => { if (emit) emitActionOk(data); },
-      });
-      return 0;
-    }
-    const data = await executePanelTweaksAction(argv, options);
-    if (emit) emitActionOk(data);
-    return 0;
-  } catch (error) {
-    const message = reason(error);
-    if (emit) emitActionError(message, error instanceof ActionFailure ? error.data : undefined, "panel-tweaks");
-    else process.stderr.write(`[panel-tweaks] ERROR: ${message}\n`);
-    return 1;
-  }
+  return replyToAction("panel-tweaks", emit, async () => {
+    if (argv[0] !== "watch-job") return executePanelTweaksAction(argv, options);
+    if ((options.processUid ?? process.getuid?.()) !== 0) failAction("panel tweaks actions must run as root");
+    const paths = pathsFor(options);
+    const id = jobIdArgument(argv.slice(1));
+    const dir = jobDir(paths.jobsDir, id);
+    if (!measureJobView(paths.jobsDir, id)) failAction(`no such job: ${id}`);
+    await watchJobRecord({
+      dir,
+      read: () => ({ job: measureJobView(paths.jobsDir, id), log: readJobLog(dir) }),
+      emit: (data) => { if (emit) emitActionOk(data); },
+    });
+    return REPLIED;
+  });
 }
 
 /** The repair hook: expire old measurements, and sweep the disk when due. */

@@ -14,7 +14,8 @@ import { existsSync, lstatSync, readFileSync, readdirSync, rmSync } from "node:f
 import { join } from "node:path";
 import { writeFileAtomic } from "../lib/atomic-write";
 import { CONFIG_DIR, PANEL_FPM_UNIT, PHP_FPM_BIN_DIR, PHP_GUARD_INI_NAME, PHP_ROOT, ROOT_UID, STATE_DIR } from "./paths";
-import { errorMessage, withRecoveryFailures } from "./nginx-transaction";
+import { errorMessage } from "./action-common";
+import { withRecoveryFailures } from "./nginx-transaction";
 import { unitActive } from "./provision";
 import { log, tryRun } from "./util";
 

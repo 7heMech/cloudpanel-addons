@@ -11,12 +11,15 @@ export const PANEL_TWEAKS_ADDON: AddonDefinition = {
   preselected: true,
   targets: PANEL_TWEAKS_TARGETS,
   handler: handle,
+  // Read by the script on CloudPanel's own Sites page, which every panel user
+  // sees; root answers with the rows that page already drew for the caller.
+  selfScopedRoutes: ["GET /api/panel"],
   action: runPanelTweaksAction,
   // Measured site sizes ride the fifteen-minute repair timer rather than a
   // timer of their own. The hook uses the stored measurement
   // time to do the expensive sweep about every six hours, and returns nothing
   // for a tweak that is off.
-  maintenance: {
+  repair: {
     label: "panel tweaks",
     run: (options) => panelTweaksUpkeep((options ?? {}) as PanelTweaksActionOptions),
   },

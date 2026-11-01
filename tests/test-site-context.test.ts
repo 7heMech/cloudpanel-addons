@@ -4,7 +4,8 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { ADDON_SITE_TABS, SITE_CONTEXT_STYLE, siteInfoHtml, siteTabs } from "../lib/site-context";
 import { BASE_STYLE, renderLayout } from "../lib/app-ui";
-import { siteLayoutTarget, SITE_TAB_TEMPLATE } from "../lib/panel-nav";
+import { siteLayoutTarget } from "../lib/panel-nav";
+import { TEMPLATES } from "../lib/panel-anchors";
 import { GIT_TARGETS } from "../addons/git/inject/targets";
 import { STAGER_TARGETS } from "../addons/stager/inject/targets";
 import { MAINTENANCE_TARGETS } from "../addons/maintenance/inject/targets";
@@ -135,8 +136,8 @@ test("the reproduced site information carries the panel's own measurements", () 
 
 test("the site layout rule targets the same partial an addon adds its tab to", () => {
   const layout = siteLayoutTarget();
-  expect(layout.template).toBe(SITE_TAB_TEMPLATE);
-  expect(MAINTENANCE_TARGETS.some((target) => target.template === SITE_TAB_TEMPLATE)).toBe(true);
+  expect(layout.template).toBe(TEMPLATES.siteTabs);
+  expect(MAINTENANCE_TARGETS.some((target) => target.template === TEMPLATES.siteTabs)).toBe(true);
   // Anchored on the strip's own container, so it lands ahead of the tabs.
   expect(layout.anchorBefore).toBe('<div class="tab-container">');
   const snippet = layout.snippet("/addons/");

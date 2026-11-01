@@ -211,11 +211,11 @@ site, DNS keeps its ownership record so a later deletion can still identify
 the site, and reports both failures. The record stays marked incomplete until
 the vhost is written, so a later pass writes it rather than taking a static
 site that does not redirect for a working stand-in.
-DNS, Stager, Maintenance, SMTP
-Relay and Cloudflare IP Access leave stand-ins out of their site lists, so does
-the panel snapshot the Git, Maintenance, Stager and Terminal pages read, PHP
-Resources and WordPress Tools never list a static site, and Panel Tweaks shows
-"Redirect" as its runtime on the Sites page. Global maintenance mode reaches a
+DNS leaves stand-ins out of its site list through `isStandInSite`, and Stager,
+Maintenance, SMTP Relay and Cloudflare IP Access through `withoutStandIns` in
+`cli/panel-db.ts`. The panel snapshot the Git, Maintenance, Stager and Terminal
+pages read leaves them out too. PHP Resources and WordPress Tools never list a
+static site, and Panel Tweaks shows "Redirect" as its runtime on the Sites page. Global maintenance mode reaches a
 stand-in as it does every vhost.
 
 Adding a connection holds every redirect a stand-in serves, and removing the
@@ -240,9 +240,8 @@ missing zones; Cloudflare refuses a zone
 create without it by naming an internal permission, `account.zone.create`,
 which the page reports as Zone Edit. The URL uses the keys in Cloudflare's
 [template reference](https://developers.cloudflare.com/fundamentals/api/how-to/account-owned-token-template/),
-plus `config_settings` and `zone_waf`, which the reference leaves out but the
-form accepts, and `dynamic_url_redirects` for Single Redirect, which the
-reference also leaves out. The dashboard drops an unknown key without saying so, which is
+plus `config_settings`, `zone_waf` and `dynamic_redirect` (Single Redirect),
+which the reference leaves out but are the dashboard's own permission names. The dashboard drops an unknown key without saying so, which is
 why the page also lists the permissions. The template has no parameter for
 Client IP Address Filtering, so the page shows the server's detected addresses
 to paste there. Their API permissions are

@@ -87,6 +87,7 @@ import SITES_MOBILE_STYLE from "./sites-mobile.css" with { type: "text" };
 // The menu uses the otherwise empty far-right end of the values. It is outside
 // the grid, so it cannot change either detail column's starting position.
 import MENU_MOBILE_STYLE from "./menu-mobile.css" with { type: "text" };
+import { ANCHORS, TEMPLATES } from "../../../lib/panel-anchors";
 
 /**
  * The action column's links, behind one button.
@@ -336,10 +337,8 @@ export function panelMobileSnippet(on: boolean, adminArea = false): string {
   return `<style>${PANEL_HEADER_STYLE}${NEW_SITE_STYLE}${SITE_TABLES_STYLE}</style><script>${SITE_TABLES_SCRIPT}</script>`;
 }
 
-export const SITES_TEMPLATE = "Frontend/Site/index.html.twig";
-
 /** Both headers carry the same opening tag; only Admin gets the sidebar rules. */
-export const HEADER_TEMPLATES = ["Frontend/Partial/header.html.twig", "Admin/Partial/header.html.twig"];
+export const HEADER_TEMPLATES = [TEMPLATES.header, TEMPLATES.adminHeader];
 
 export { sitesSnippet };
 
@@ -347,7 +346,7 @@ export const PANEL_TWEAKS_TARGETS: AddonTarget[] = [
   ...sslTargets(() => storedTweaks().autoSsl),
   {
     slug: "login-device-theme",
-    template: "Frontend/Login/layout.html.twig",
+    template: TEMPLATES.loginLayout,
     // The shared layout every unauthenticated page extends (login, two-factor).
     // Injecting into its <head> runs before the stylesheets load, so a dark
     // device never paints the white default first.
@@ -357,8 +356,8 @@ export const PANEL_TWEAKS_TARGETS: AddonTarget[] = [
   },
   {
     slug: "sites-table",
-    template: SITES_TEMPLATE,
-    anchorBefore: '<div class="card card-table">',
+    template: TEMPLATES.sites,
+    anchorBefore: ANCHORS.sitesTable,
     // Not required: a CloudPanel release that renames this card should cost the
     // sites table its enhancements, not stop the addon -- and with it the login
     // theme -- from being enabled at all.

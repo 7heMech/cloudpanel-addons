@@ -7,7 +7,7 @@
  * CloudPanel box empties /tmp short of a reboot. A WordPress image job that keeps
  * timing out leaves close to a gigabyte behind on every try.
  */
-import { Database } from "bun:sqlite";
+import { withPanelDb } from "./panel-db";
 import { lstatSync, readdirSync, readFileSync, readlinkSync, unlinkSync } from "node:fs";
 import { join } from "node:path";
 import { PANEL_DB } from "./paths";
@@ -136,15 +136,9 @@ export function removeAbandonedTmpFiles(
 
 /** The Unix users CloudPanel runs PHP sites as: every site it recorded PHP settings for. */
 export function phpSiteUsers(panelDb = PANEL_DB): string[] {
-  const db = new Database(panelDb, { readonly: true });
-  try {
-    db.exec("PRAGMA busy_timeout = 5000;");
-    return db.query<{ user: string }, []>(
-      "SELECT DISTINCT site.user AS user FROM site JOIN php_settings ON php_settings.site_id = site.id;",
-    ).all().map((row) => String(row.user));
-  } finally {
-    db.close();
-  }
+  return withPanelDb(panelDb, (db) => db.query<{ user: string }, []>(
+    "SELECT DISTINCT site.user AS user FROM site JOIN php_settings ON php_settings.site_id = site.id;",
+  ).all().map((row) => String(row.user)));
 }
 
 function sizeText(bytes: number): string {

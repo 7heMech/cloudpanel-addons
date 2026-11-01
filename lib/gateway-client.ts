@@ -1,25 +1,40 @@
 // Client helper for communicating with the root gateway daemon over UNIX socket.
 // Handles both gateway socket IPC and hermetic test runner execution.
 
+import { AsyncLocalStorage } from "node:async_hooks";
 import { existsSync } from "node:fs";
 import {
+  callerMay,
+  webVerb,
   GATEWAY_SOCKET_PATH,
   DEFAULT_CLI_BIN,
   DEFAULT_GATEWAY_TIMEOUT_MS,
   MAX_GATEWAY_INPUT_BYTES,
   type ActionResult,
+  type GatewayAddon,
   type GatewayRequest,
   type PanelSnapshot,
+  type StreamVerb,
+  type WebVerb,
 } from "./gateway-protocol";
 
 export type { ActionResult } from "./gateway-protocol";
+
+/**
+ * A reply as root sent it: its data is the action's JSON, which nothing here
+ * checks. A caller states the shape it expects by the type it gives the
+ * result, such as its own `Promise<ActionResult<T>>`; `never` makes it say so,
+ * and keeps the call free of a type argument, which would stop the addon and
+ * verb being checked together.
+ */
+export type GatewayReply = ActionResult<never>;
 
 export interface GatewayClientOptions {
   timeout?: number;
   maxBuffer?: number;
   socketPath?: string;
   /**
-   * For an `OWN_ACCOUNT_VERBS` action: the CloudPanel session the gateway
+   * For an `own-account` verb: the CloudPanel session the gateway
    * checks itself. Such an action has no direct-spawn fallback, because that
    * fallback is the check it would skip.
    */
@@ -31,6 +46,22 @@ export interface GatewayStream { close(): void }
 export interface DuplexGatewayStream extends GatewayStream {
   /** Send one line to a duplex stream's worker; ignored by every other stream. */
   write(line: string): void;
+}
+
+/**
+ * Whom the request being answered is for, when it is not an administrator:
+ * their panel roles, or null before the manager's gate. Set by the manager
+ * around such a request, and held against each verb's declared access, so a
+ * route that lets a non-administrator through cannot reach a verb that is not
+ * theirs. Root checks its own part regardless.
+ */
+export const gatewayCaller = new AsyncLocalStorage<{ roles: readonly string[] | null }>();
+
+function refusedForCaller(addon: string, verb: string): string | null {
+  const caller = gatewayCaller.getStore();
+  if (!caller) return null;
+  const declared = webVerb(addon, verb);
+  return declared && callerMay(declared.web, caller.roles) ? null : `${addon} ${verb} is not available to this session`;
 }
 
 interface CommandFailure {
@@ -218,13 +249,15 @@ async function callGatewaySocket<T>(
  * If running in test mode with CLP_ADDONS_ACTION_TEST_BIN or running as root without socket,
  * invokes directly. Otherwise dispatches securely through the root gateway daemon over UNIX socket.
  */
-export async function callGatewayAction<T = unknown>(
-  addon: "stager" | "instatic" | "cloudflare-ips" | "maintenance" | "php-resources" | "git" | "panel-tweaks" | "system-tweaks" | "wp-tools" | "smtp" | "dns" | "terminal" | "security-keys" | "manager",
-  verb: string,
+export async function callGatewayAction<A extends GatewayAddon>(
+  addon: A,
+  verb: WebVerb<A>,
   args: string[] = [],
   input?: string,
   options: GatewayClientOptions = {},
-): Promise<ActionResult<T>> {
+): Promise<GatewayReply> {
+  const refused = refusedForCaller(addon, verb);
+  if (refused) return { ok: false, error: refused };
   const socketPath = options.socketPath ?? GATEWAY_SOCKET_PATH;
   const timeoutMs = options.timeout ?? DEFAULT_GATEWAY_TIMEOUT_MS;
 
@@ -233,7 +266,7 @@ export async function callGatewayAction<T = unknown>(
 
   // 1. Hermetic test runner override
   if (process.env.CLP_ADDONS_ACTION_TEST_BIN) {
-    return runCommandDirect<T>(
+    return runCommandDirect<never>(
       process.env.CLP_ADDONS_ACTION_TEST_BIN,
       ["action", addon, verb, ...args],
       options,
@@ -243,7 +276,7 @@ export async function callGatewayAction<T = unknown>(
 
   // 2. Direct root execution fallback if socket is absent (e.g. offline testing as root)
   if (process.getuid?.() === 0 && !existsSync(socketPath)) {
-    return runCommandDirect<T>(
+    return runCommandDirect<never>(
       DEFAULT_CLI_BIN,
       ["action", addon, verb, ...args],
       options,
@@ -263,7 +296,7 @@ export async function callGatewayAction<T = unknown>(
   };
 
   const clientTimeoutMs = timeoutMs + 2_500;
-  return callGatewaySocket<T>(request, socketPath, clientTimeoutMs);
+  return callGatewaySocket<never>(request, socketPath, clientTimeoutMs);
 }
 
 const MAX_GATEWAY_STREAM_BUFFER_BYTES = 16 * 1024 * 1024;
@@ -280,9 +313,9 @@ function streamReply<T>(line: string): ActionResult<T> | null {
  * session itself, and `write` reaches the worker's stdin. Such a stream has no
  * direct-spawn fallback, because that fallback is the check it would skip.
  */
-export function streamGatewayAction<T = unknown>(options: {
-  addon: "stager" | "instatic" | "git" | "panel-tweaks" | "terminal" | "wp-tools" | "manager";
-  verb: string;
+export function streamGatewayAction<A extends GatewayAddon>(options: {
+  addon: A;
+  verb: StreamVerb<A>;
   args?: string[];
   sessionId?: string;
   socketPath?: string;
@@ -291,7 +324,7 @@ export function streamGatewayAction<T = unknown>(options: {
   maxLineBytes?: number;
   /** Each line as it arrived, for a stream whose lines are not action replies. */
   onLine?: (line: string) => void;
-  onReply?: (reply: ActionResult<T>) => void;
+  onReply?: (reply: GatewayReply) => void;
   onClose: (error?: string) => void;
 }): DuplexGatewayStream {
   let socket: Bun.Socket | null = null;
@@ -341,7 +374,7 @@ export function streamGatewayAction<T = unknown>(options: {
       if (options.onLine) {
         options.onLine(line);
       } else {
-        const reply = streamReply<T>(line);
+        const reply = streamReply<never>(line);
         if (reply) options.onReply?.(reply);
       }
       if (closed) break;
@@ -396,6 +429,11 @@ export function streamGatewayAction<T = unknown>(options: {
     ...(options.sessionId !== undefined ? { sessionId: options.sessionId } : {}),
   }) + "\n";
 
+  const refused = refusedForCaller(options.addon, options.verb);
+  if (refused) {
+    queueMicrotask(() => finish(refused));
+    return stream;
+  }
   const direct = Boolean(process.env.CLP_ADDONS_ACTION_TEST_BIN) || (process.getuid?.() === 0 && !existsSync(socketPath));
   if (direct && options.sessionId !== undefined) {
     queueMicrotask(() => finish("this stream needs the root gateway"));

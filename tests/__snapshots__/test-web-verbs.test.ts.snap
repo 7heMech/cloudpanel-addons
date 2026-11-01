@@ -1,0 +1,158 @@
+// Bun Snapshot v1, https://bun.sh/docs/test/snapshots
+
+exports[`the web-reachable verbs and who may call them 1`] = `
+"cloudflare-ips:list                admin
+cloudflare-ips:policy              admin
+cloudflare-ips:set                 admin
+dns:assign                         admin
+dns:check                          admin
+dns:choose-zone                    admin
+dns:confirm                        admin
+dns:delete-profile                 admin
+dns:delete-redirect                admin
+dns:find-redirects                 admin
+dns:forget-records                 admin
+dns:list                           admin
+dns:provision                      panel-user
+dns:remove-connection              admin
+dns:remove-mailcow                 admin
+dns:remove-records                 admin
+dns:save-connection                admin
+dns:save-mailcow                   admin
+dns:save-profile                   admin
+dns:save-redirect                  admin
+dns:save-server                    admin
+dns:set-automatic                  admin
+dns:set-default                    admin
+dns:site-status                    panel-user
+dns:take-over                      admin
+dns:zone-account                   admin
+git:configure                      site-manager
+git:deploy                         site-manager
+git:domains                        site-manager
+git:forget                         site-manager
+git:hook                           pre-gate
+git:job                            site-manager
+git:jobs                           site-manager
+git:keygen                         site-manager
+git:sites                          site-manager
+git:status                         site-manager
+git:watch-job                      site-manager stream
+git:webhook-disable                site-manager
+git:webhook-enable                 site-manager
+instatic:create                    site-manager
+instatic:delete                    site-manager
+instatic:job                       site-manager
+instatic:jobs                      site-manager
+instatic:list                      site-manager
+instatic:logs                      site-manager
+instatic:recreate                  site-manager
+instatic:restart                   site-manager
+instatic:snapshot                  site-manager
+instatic:start                     site-manager
+instatic:status                    site-manager
+instatic:stop                      site-manager
+instatic:update                    site-manager
+instatic:watch-job                 site-manager stream
+maintenance:disable                admin
+maintenance:disable-many           admin
+maintenance:enable                 admin
+maintenance:enable-many            admin
+maintenance:get-template           admin
+maintenance:global-disable         admin
+maintenance:global-enable          admin
+maintenance:global-set-bypass      admin
+maintenance:global-status          admin
+maintenance:reset-template         admin
+maintenance:set-bypass             admin
+maintenance:set-template           admin
+maintenance:sites                  admin
+maintenance:status                 admin
+manager:disable                    admin
+manager:enable                     admin
+manager:job                        admin
+manager:mark-news-seen             admin
+manager:news-seen                  admin
+manager:reconcile                  admin
+manager:update                     admin
+manager:watch-job                  admin stream
+panel-tweaks:job                   admin
+panel-tweaks:measure               admin
+panel-tweaks:set-tweaks            admin
+panel-tweaks:state                 panel-user
+panel-tweaks:watch-job             admin stream
+php-resources:assign               admin
+php-resources:delete-category      admin
+php-resources:list                 admin
+php-resources:save-category        admin
+php-resources:set-default          admin
+php-resources:site                 admin
+security-keys:keys                 own-account
+security-keys:login-options        pre-gate
+security-keys:register             own-account
+security-keys:register-options     own-account
+security-keys:remove               own-account
+security-keys:revoke               admin
+security-keys:settings             admin
+security-keys:sign-in              pre-gate
+security-keys:users                admin
+smtp:assign                        admin
+smtp:delete-profile                admin
+smtp:list                          admin
+smtp:save-grants                   admin
+smtp:save-profile                  admin
+smtp:set-default                   admin
+smtp:test                          admin
+stager:clone                       admin
+stager:describe                    admin
+stager:job                         admin
+stager:jobs                        admin
+stager:promote                     admin
+stager:prune                       admin
+stager:sites                       admin
+stager:watch-job                   admin stream
+system-tweaks:install-updates      admin
+system-tweaks:set-panel-php        admin
+system-tweaks:set-real-ip          admin
+system-tweaks:set-updates          admin
+system-tweaks:set-upload-guard     admin
+system-tweaks:state                admin
+terminal:session                   admin duplex
+wp-tools:domain-link-settings      admin
+wp-tools:job                       admin
+wp-tools:mainwp-settings           admin
+wp-tools:new-site                  site-manager
+wp-tools:new-site-access           site-manager
+wp-tools:new-site-settings         admin
+wp-tools:new-site-status           site-manager
+wp-tools:plugin-discard            admin
+wp-tools:plugin-upload             admin
+wp-tools:remove                    admin
+wp-tools:sign-in                   panel-user
+wp-tools:site-kind                 panel-user
+wp-tools:sites                     admin
+wp-tools:start                     admin
+wp-tools:varnish-settings          admin
+wp-tools:watch-job                 admin stream"
+`;
+
+exports[`the routes that do not need an administrator 1`] = `
+"before the gate: /git/hook/
+before the gate: /security-keys/login/
+site managers: /git/
+site managers: /instatic/
+any panel user: GET /dns/api/session
+any panel user: GET /dns/api/site
+any panel user: GET /panel-tweaks/api/panel
+any panel user: GET /security-keys/api/keys
+any panel user: GET /wp-tools/api/new-site-status
+any panel user: GET /wp-tools/api/plugin-search
+any panel user: GET /wp-tools/api/session
+any panel user: GET /wp-tools/api/site-kind
+any panel user: POST /dns/api/provision
+any panel user: POST /security-keys/api/register
+any panel user: POST /security-keys/api/register-options
+any panel user: POST /security-keys/api/remove
+any panel user: POST /wp-tools/api/new-site
+any panel user: POST /wp-tools/api/sign-in"
+`;

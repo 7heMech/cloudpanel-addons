@@ -407,7 +407,7 @@ page.
 
 A site's size is `du` over its home directory, plus its databases' directories
 under the MySQL data directory, which root can read without asking CloudPanel
-for the master password. The sweep runs from the addon's `maintenance` hook, so
+for the master password. The sweep runs from the addon's `repair` hook, so
 it uses the existing fifteen-minute repair rather than a timer of its own. The
 hook reads the cached measurement time and only walks the disk when roughly six
 hours have passed; the timer therefore checks cheaply between sweeps. Enabling

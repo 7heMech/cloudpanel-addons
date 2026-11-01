@@ -5,8 +5,7 @@
 import { instaticService, validateDomain, validateTag, validateJobId } from "./service";
 import { layout, dashboardView, newInstanceView, jobView } from "./views";
 import {
-  bodyErrorResponse, errorBlock, guardMutation, htmlResponse, jsonResponse, newCsrfToken, readJsonObject,
-  safeDecodePathSegment,
+  errorBlock, guardMutation, htmlResponse, jsonResponse, newCsrfToken, safeDecodePathSegment, readBody,
 } from "../../../lib/app-http";
 import { listAvailableTags } from "./tags";
 import { jobApiRoute } from "../../../lib/job-stream";
@@ -99,8 +98,8 @@ export async function handle(
     const blocked = guardMutation(req);
     if (blocked) return blocked;
 
-    let body: Record<string, unknown>;
-    try { body = await readJsonObject(req); } catch (error) { return bodyErrorResponse(error); }
+    const body = await readBody(req);
+    if (body instanceof Response) return body;
     const { domain: rawDomain, tag: rawTag, tls } = body;
     const domain = validateDomain(rawDomain);
     const tag = validateTag(rawTag);
@@ -125,8 +124,8 @@ export async function handle(
   if (path === "/api/bulk" && method === "POST") {
     const blocked = guardMutation(req);
     if (blocked) return blocked;
-    let body: Record<string, unknown>;
-    try { body = await readJsonObject(req); } catch (error) { return bodyErrorResponse(error); }
+    const body = await readBody(req);
+    if (body instanceof Response) return body;
     const verb = body.verb;
     if (verb !== "update" && verb !== "restart") return json({ ok: false, error: "verb must be update or restart" }, 400);
     const tag = verb === "update" ? validateTag(body.tag) : null;
@@ -195,12 +194,8 @@ export async function handle(
           // Only the read is guarded: an oversized body is a 413 the reader
           // already decided, and folding it into the tag's 400 would answer a
           // different question than the caller asked.
-          let body: Record<string, unknown>;
-          try {
-            body = await readJsonObject(req);
-          } catch (error) {
-            return bodyErrorResponse(error);
-          }
+          const body = await readBody(req);
+          if (body instanceof Response) return body;
           const tag = validateTag(body.tag);
           if (!tag) return json({ ok: false, error: "tag must be an exact version such as 0.0.18" }, 400);
           const res = await instaticService.updateInstance(domain, tag);

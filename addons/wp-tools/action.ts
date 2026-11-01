@@ -17,7 +17,7 @@
  * file content is a plugin zip chosen for a new site, which is staged in root's
  * own storage under an id root picks and handed to the site's user on stdin.
  */
-import { Database } from "bun:sqlite";
+import { openPanelDatabase } from "../../cli/panel-db";
 import { PANEL_USER_NAME_RE, panelUserOwnsSite, panelUserRole } from "../../lib/panel-users";
 import { createHash, randomBytes } from "node:crypto";
 import { isIP } from "node:net";
@@ -25,7 +25,7 @@ import { normalizeMappedIpv4 } from "../../lib/ip-address";
 import { existsSync } from "node:fs";
 import { join } from "node:path";
 import {
-  ActionFailure, emitActionError, emitActionOk, failAction, validateDomain, withFileLock, withFileLockSync, type CommandResult,
+  REPLIED, replyToAction, emitActionOk, errorMessage, failAction, validateDomain, withFileLock, withFileLockSync, type CommandResult,
 } from "../../cli/action-common";
 import { CLI_BIN, CONFIG_DIR, NGINX_CERTIFICATES_DIR, PANEL_DB, STATE_DIR } from "../../cli/paths";
 import {
@@ -233,10 +233,6 @@ function pathsFor(options: WpToolsActionOptions): WpToolsActionPaths {
   return { ...DEFAULT_WP_TOOLS_PATHS, ...options.paths };
 }
 
-function reason(error: unknown): string {
-  return error instanceof Error ? error.message : String(error);
-}
-
 // --- panel database -------------------------------------------------------
 
 interface PanelSiteRow {
@@ -250,15 +246,6 @@ interface PanelSiteRow {
   created_at: string | null;
 }
 
-function openPanelDatabase(path: string): Database {
-  try {
-    const db = new Database(path, { readonly: true });
-    db.exec("PRAGMA busy_timeout = 1000;");
-    return db;
-  } catch (error) {
-    failAction(`CloudPanel database could not be opened: ${reason(error)}`);
-  }
-}
 
 /**
  * Whether a panel user may sign in to this site's WordPress.
@@ -268,11 +255,11 @@ function openPanelDatabase(path: string): Database {
  * Sites page is built from.
  */
 function mayManageSite(paths: WpToolsActionPaths, userName: string, domain: string): boolean {
-  const db = openPanelDatabase(paths.panelDb);
+  const db = openPanelDatabase(paths.panelDb, true, 1000);
   try {
     return panelUserOwnsSite(db, userName, domain);
   } catch (error) {
-    failAction(`CloudPanel could not say whose site that is: ${reason(error)}`);
+    failAction(`CloudPanel could not say whose site that is: ${errorMessage(error)}`);
   } finally {
     db.close();
   }
@@ -289,23 +276,23 @@ function siteManagerMayChoose(paths: WpToolsActionPaths, userName: string): void
   try { access = readNewSiteAccess(paths.newSiteAccessState); }
   catch { failAction("the new-site plugins setting cannot be read; an administrator can save it again"); }
   if (!access.siteManagers) failAction("an administrator has not let site managers choose plugins for new sites");
-  const db = openPanelDatabase(paths.panelDb);
+  const db = openPanelDatabase(paths.panelDb, true, 1000);
   let role: string | null;
   try { role = panelUserRole(db, userName); }
-  catch (error) { failAction(`CloudPanel could not say who you are: ${reason(error)}`); }
+  catch (error) { failAction(`CloudPanel could not say who you are: ${errorMessage(error)}`); }
   finally { db.close(); }
   if (role !== "ROLE_SITE_MANAGER") failAction("only administrators and site managers choose plugins for new sites");
 }
 
 /** The newest entry in CloudPanel's event log, which a site manager's job reads past; -1 without a log. */
 function latestEventId(paths: WpToolsActionPaths): number {
-  const db = openPanelDatabase(paths.panelDb);
+  const db = openPanelDatabase(paths.panelDb, true, 1000);
   try {
     const table = db.query("SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'event';").get();
     if (!table) return -1;
     return Number(db.query<{ id: number | null }, []>("SELECT MAX(id) AS id FROM event;").get()?.id ?? 0);
   } catch (error) {
-    failAction(`CloudPanel's event log could not be read: ${reason(error)}`);
+    failAction(`CloudPanel's event log could not be read: ${errorMessage(error)}`);
   } finally {
     db.close();
   }
@@ -318,7 +305,7 @@ function asUserArgument(value: string | undefined): string {
 }
 
 function panelSites(paths: WpToolsActionPaths): PanelSiteRow[] {
-  const db = openPanelDatabase(paths.panelDb);
+  const db = openPanelDatabase(paths.panelDb, true, 1000);
   try {
     // Older panels have no Varnish column. Their sign-in behavior is unchanged,
     // and they contribute no eligible sites to plugin installation.
@@ -331,7 +318,7 @@ function panelSites(paths: WpToolsActionPaths): PanelSiteRow[] {
       `SELECT domain_name, user, application, root_directory, type, ${varnish}, ${php} AS php_version, ${created} FROM site ORDER BY domain_name;`,
     ).all();
   } catch (error) {
-    failAction(`CloudPanel site list could not be read: ${reason(error)}`);
+    failAction(`CloudPanel site list could not be read: ${errorMessage(error)}`);
   } finally {
     db.close();
   }
@@ -348,7 +335,7 @@ function readAccounts(passwd: string): Map<string, UnixAccount> {
   try {
     return readUnixAccounts(passwd);
   } catch (error) {
-    failAction(`the account database could not be read: ${reason(error)}`);
+    failAction(`the account database could not be read: ${errorMessage(error)}`);
   }
 }
 
@@ -491,13 +478,13 @@ async function syncPolicies(options: WpToolsActionOptions): Promise<unknown> {
     varnish = await reconcileWpVarnish(options, { dueOnly: true });
     failed.push(...varnish.failed);
   } catch (error) {
-    failed.push(reason(error));
+    failed.push(errorMessage(error));
   }
   try {
     mainwp = await reconcileWpMainwp(options);
     failed.push(...mainwp.failed);
   } catch (error) {
-    failed.push(reason(error));
+    failed.push(errorMessage(error));
   }
   if (failed.length) failAction(failed.join("; "));
   return { varnish, mainwp };
@@ -587,12 +574,12 @@ async function queueReadyChecks(paths: WpToolsActionPaths, state: NewSitesState,
           for (const { site, ready: at } of ready) site.tried[task] = at;
           result.queued[task] = domains;
         } catch (error) {
-          result.failed.push(reason(error));
+          result.failed.push(errorMessage(error));
         }
       }
     });
   } catch (error) {
-    result.failed.push(reason(error));
+    result.failed.push(errorMessage(error));
   }
 }
 
@@ -766,7 +753,7 @@ function mintWpLogin(
       10_000,
     );
   } catch (error) {
-    failAction(`the sign-in could not be written into ${domain}: ${reason(error)}`);
+    failAction(`the sign-in could not be written into ${domain}: ${errorMessage(error)}`);
   }
 
   return {
@@ -817,7 +804,7 @@ export function removeMainwpGuards(paths: WpToolsActionPaths = DEFAULT_WP_TOOLS_
       runAsSite(paths, site.account, ["rm", "-f", "--", guard]);
       removed++;
     } catch (error) {
-      failed.push(`${site.row.domain_name}: ${reason(error)}`);
+      failed.push(`${site.row.domain_name}: ${errorMessage(error)}`);
     }
   }
   return { removed, failed };
@@ -970,7 +957,7 @@ function newSiteLookup(paths: WpToolsActionPaths, domain: string, eventsAfter: n
  */
 function wordpressCreator(paths: WpToolsActionPaths, domain: string, eventsAfter: number): string | null {
   if (!Number.isSafeInteger(eventsAfter) || eventsAfter < 0) return null;
-  const db = openPanelDatabase(paths.panelDb);
+  const db = openPanelDatabase(paths.panelDb, true, 1000);
   try {
     const table = db.query("SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'event';").get();
     if (!table) return null;
@@ -1007,7 +994,7 @@ async function uploadPart(paths: WpToolsActionPaths, rest: string[], input: stri
     try {
       return stageUploadPart(paths.uploadsDir, { id, part, last }, input);
     } catch (error) {
-      failAction(reason(error));
+      failAction(errorMessage(error));
     }
   });
 }
@@ -1043,7 +1030,7 @@ async function recordNewSite(paths: WpToolsActionPaths, rest: string[], options:
     directory = parsePluginList(fields.plugins, DIRECTORY_SLUG_RE, "WordPress.org plugin slug");
     uploads = parsePluginList(fields.uploads, UPLOAD_ID_RE, "upload id");
   } catch (error) {
-    failAction(reason(error));
+    failAction(errorMessage(error));
   }
   const asUser = asUserArgument(fields["as-user"]);
   // A zip is code nobody has reviewed: only an administrator hands one to a site.
@@ -1069,7 +1056,7 @@ async function recordNewSite(paths: WpToolsActionPaths, rest: string[], options:
     }
     let claimed;
     try { claimed = claimUploads(paths.uploadsDir, uploads.map((upload) => upload.key)); }
-    catch (error) { failAction(reason(error)); }
+    catch (error) { failAction(errorMessage(error)); }
     const plan: NewSitePlugin[] = [
       ...directory.map(({ key, activate }) => ({ source: "wordpress.org" as const, slug: key, name: key, activate })),
       ...claimed.map((upload, index) => ({
@@ -1122,7 +1109,7 @@ function newSiteStatus(paths: WpToolsActionPaths, rest: string[]): { job: NewSit
   }
   if (!id) failAction("'new-site-status' takes --job=<id>");
   if (asUser) {
-    const db = openPanelDatabase(paths.panelDb);
+    const db = openPanelDatabase(paths.panelDb, true, 1000);
     try { if (panelUserRole(db, asUser) !== "ROLE_SITE_MANAGER") failAction("no such job"); }
     finally { db.close(); }
   }
@@ -1200,7 +1187,7 @@ async function runJob(paths: WpToolsActionPaths, id: string, options: WpToolsAct
     const { failed } = await reconcileWpNewSites(options, "job");
     for (const failure of failed) process.stderr.write(`[wp-tools] WARN: ${failure}\n`);
   } catch (error) {
-    process.stderr.write(`[wp-tools] WARN: new sites were not checked again: ${reason(error)}\n`);
+    process.stderr.write(`[wp-tools] WARN: new sites were not checked again: ${errorMessage(error)}\n`);
   }
   return wpJobView(paths.jobsDir, id);
 }
@@ -1260,14 +1247,14 @@ export async function executeWpToolsAction(
     try {
       varnish = readVarnishState(paths.varnishState);
     } catch (error) {
-      varnishError = `${paths.varnishState} cannot be read: ${reason(error)}`;
+      varnishError = `${paths.varnishState} cannot be read: ${errorMessage(error)}`;
     }
     let mainwp = mainwpView(emptyMainwpState());
     let mainwpError = "";
     try {
       mainwp = mainwpView(readMainwpState(paths.mainwpState));
     } catch (error) {
-      mainwpError = `${paths.mainwpState} cannot be read: ${reason(error)}`;
+      mainwpError = `${paths.mainwpState} cannot be read: ${errorMessage(error)}`;
     }
     let jobs: WpJobs = { varnish: null, mainwp: null };
     let newSites: WpJobView[] = [];
@@ -1282,14 +1269,14 @@ export async function executeWpToolsAction(
     try {
       domainLink = readDomainLink(paths.domainLinkState);
     } catch (error) {
-      domainLinkError = `${paths.domainLinkState} cannot be read: ${reason(error)}`;
+      domainLinkError = `${paths.domainLinkState} cannot be read: ${errorMessage(error)}`;
     }
     let newSiteAccess: WpNewSiteAccess = { ...DEFAULT_NEW_SITE_ACCESS };
     let newSiteAccessError = "";
     try {
       newSiteAccess = readNewSiteAccess(paths.newSiteAccessState);
     } catch (error) {
-      newSiteAccessError = `${paths.newSiteAccessState} cannot be read: ${reason(error)}`;
+      newSiteAccessError = `${paths.newSiteAccessState} cannot be read: ${errorMessage(error)}`;
     }
     return {
       sites: wordpressSites(paths, varnish), varnish, varnishError, mainwp, mainwpError, domainLink, domainLinkError, jobs, newSites,
@@ -1360,27 +1347,18 @@ export async function runWpToolsAction(
   options: WpToolsActionOptions = {},
 ): Promise<number> {
   const emit = options.emitReply !== false;
-  try {
-    if (argv[0] === "watch-job") {
-      if ((options.processUid ?? process.getuid?.()) !== 0) failAction("WordPress Tools actions must run as root");
-      const paths = pathsFor(options);
-      const id = jobIdArgument(argv.slice(1));
-      const dir = jobDir(paths.jobsDir, id);
-      if (!wpJobView(paths.jobsDir, id)) failAction(`no such job: ${id}`);
-      await watchJobRecord({
-        dir,
-        read: () => ({ job: wpJobView(paths.jobsDir, id), log: readJobLog(dir) }),
-        emit: (data) => { if (emit) emitActionOk(data); },
-      });
-      return 0;
-    }
-    const data = await executeWpToolsAction(argv, options);
-    if (emit) emitActionOk(data);
-    return 0;
-  } catch (error) {
-    const message = reason(error);
-    if (emit) emitActionError(message, error instanceof ActionFailure ? error.data : undefined, "wp-tools");
-    else process.stderr.write(`[wp-tools] ERROR: ${message}\n`);
-    return 1;
-  }
+  return replyToAction("wp-tools", emit, async () => {
+    if (argv[0] !== "watch-job") return executeWpToolsAction(argv, options);
+    if ((options.processUid ?? process.getuid?.()) !== 0) failAction("WordPress Tools actions must run as root");
+    const paths = pathsFor(options);
+    const id = jobIdArgument(argv.slice(1));
+    const dir = jobDir(paths.jobsDir, id);
+    if (!wpJobView(paths.jobsDir, id)) failAction(`no such job: ${id}`);
+    await watchJobRecord({
+      dir,
+      read: () => ({ job: wpJobView(paths.jobsDir, id), log: readJobLog(dir) }),
+      emit: (data) => { if (emit) emitActionOk(data); },
+    });
+    return REPLIED;
+  });
 }

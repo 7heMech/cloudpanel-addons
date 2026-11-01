@@ -53,8 +53,9 @@ changes neither file.
 
 `cli/addon-catalog.ts` is the only registration seam. An addon declares itself
 in `addons/<name>/addon.ts` -- title, description, injection targets, required
-systemd units, its manager handler, its privileged action and any repair upkeep
--- and the catalog derives its config file and state directory from its name, so
+systemd units, its manager handler, its privileged action, the routes it opens
+to non-administrators or answers ahead of the gate, and any repair upkeep -- and
+the catalog derives its config file and state directory from its name, so
 a definition cannot name a file provisioning will not look for.
 
 Repair upkeep runs inside repair's operation lock, so it stays short. Work that
@@ -64,6 +65,14 @@ runtime bound and is skipped while the previous pass is still running.
 
 The catalog is an explicit list, not filesystem discovery. This ships as one
 binary; a registry that depended on what happened to be on disk could be wrong.
+
+An addon's verbs are declared in its `verbs.ts`, which imports nothing, so the
+root gateway can read them without loading the addon. The gateway's allowlist,
+the action's verb type, the services' typed gateway calls and the manager's
+per-caller check all come from that one declaration, and a test reads each
+action's dispatcher to check it handles exactly those verbs.
+`tests/__snapshots__/test-web-verbs.test.ts.snap` lists every web-reachable verb
+with who may call it, so a change to the gateway's surface shows in review.
 
 The manager and the auth gateway are not in it. They have no config file to
 enable, no mount path of their own and no state to keep, so they are dispatched
@@ -155,6 +164,10 @@ Before changing Nginx, the reconciler validates the complete configuration and
 restores the original vhost if validation or reload fails. If CloudPanel changes
 the surrounding file, reconciliation stops instead of applying a patch against
 unknown markup.
+
+`lib/panel-anchors.ts` names every CloudPanel template an addon patches, and the
+anchor lines more than one addon patches against, so a CloudPanel release that
+moves one is fixed once.
 
 Maintenance Mode also owns a marked block in `/etc/nginx/global_settings`.
 That block is reconciled from a hashed pristine copy and validated with the
@@ -267,11 +280,12 @@ that releases the database brings another look.
 Some of a site's creation comes after its row, in the same request, and
 changes no file the watchers see: CloudPanel installs WordPress as root after
 committing the row. An addon that waits for such a step gives its `newSites` a
-`waiting` check. `sync-sites` runs it on every wake for an hour after the hooks
+`resumePending` step, which queues what the latest step allows and says whether
+a site still waits. `sync-sites` runs it on every wake for an hour after the hooks
 last ran for a change to the sites, by the time on `new-sites-seen.json`, and
 keeps the rows watcher running while any says it is still waiting. It runs it
 once more after starting the watcher, as it reads the rows again, because the
-write that ends the request may come while the service runs. A check that fails
+write that ends the request may come while the service runs. A step that fails
 counts as waiting. While nothing waits, the rows watcher runs only for sites in
 flight.
 
@@ -477,6 +491,14 @@ and an optional filter once a table has six sites. A row the search hides is
 deselected, so a bulk action only reaches sites on screen. Pages with background
 jobs get the shared job watcher. Theme initialization runs before styles are
 painted.
+
+## Reading the panel database
+
+Root-side code reads CloudPanel's SQLite database through `cli/panel-db.ts`:
+`withPanelDb` opens it read-only with a busy timeout and closes it, and
+`openPanelDatabase` holds it open for a caller that reads across several steps
+or writes. Each caller keeps its own query and says what an unreadable database
+means for it: a refusal, an empty answer, or a failed action.
 
 ## Live panel data
 

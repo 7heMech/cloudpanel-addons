@@ -1,6 +1,5 @@
 import {
-  bodyErrorResponse, guardMutation, htmlResponse, jsonResponse, newCsrfToken, policyResponse, readJsonObject,
-  policyHeaders, safeDecodePathSegment, SECURITY_HEADERS, validateDomain,
+  guardMutation, htmlResponse, jsonResponse, newCsrfToken, policyResponse, policyHeaders, safeDecodePathSegment, SECURITY_HEADERS, validateDomain, readBody, readMutation,
 } from "../../../lib/app-http";
 import { fetchPanelInfo } from "../../../lib/snapshot-reader";
 import { panelSessionId } from "../../../lib/sso-auth";
@@ -86,14 +85,8 @@ export async function handle(
   const owner = ownerOf(auth.user, sessionId);
 
   if (path === "/api/sessions" && method === "POST") {
-    const denied = guardMutation(req);
-    if (denied) return denied;
-    let body: Record<string, unknown>;
-    try {
-      body = await readJsonObject(req, 4 * 1024);
-    } catch (error) {
-      return bodyErrorResponse(error);
-    }
+    const body = await readMutation(req, 4 * 1024);
+    if (body instanceof Response) return body;
     const domain = validateDomain(body.domain);
     const cols = size(body.cols);
     const rows = size(body.rows);
@@ -116,12 +109,8 @@ export async function handle(
   if (denied) return denied;
 
   if (match[2] === "/input" && method === "POST") {
-    let body: Record<string, unknown>;
-    try {
-      body = await readJsonObject(req);
-    } catch (error) {
-      return bodyErrorResponse(error);
-    }
+    const body = await readBody(req);
+    if (body instanceof Response) return body;
     const data = body.data;
     const resize = body.size;
     if (data !== undefined && typeof data !== "string") return json({ ok: false, error: "data must be text" }, 400);

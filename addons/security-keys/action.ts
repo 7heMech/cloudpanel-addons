@@ -1,3 +1,4 @@
+import { SECURITY_KEYS_VERBS } from "./verbs";
 import { createHmac, randomBytes } from "node:crypto";
 import {
   chmodSync, closeSync, constants as fs, existsSync, fchmodSync, fchownSync, fstatSync, linkSync, lstatSync, mkdirSync, openSync,
@@ -5,9 +6,10 @@ import {
 } from "node:fs";
 import { dirname, join } from "node:path";
 import {
-  ActionFailure, emitActionError, emitActionOk, failAction, oneLine, withFileLockSync,
+  ActionFailure, emitActionOk, failAction, parseJsonRequest, oneLine, withFileLockSync, errorMessage, reportActionFailure,
 } from "../../cli/action-common";
-import { openPanelDatabase, writeAtomicOwned } from "../../cli/nginx-transaction";
+import { openPanelDatabase } from "../../cli/panel-db";
+import { writeAtomicOwned } from "../../cli/nginx-transaction";
 import { LOCK_DIR, PANEL_DB, PANEL_VAR_DIR, STATE_DIR } from "../../cli/paths";
 import { PANEL_USER_NAME_RE } from "../../lib/panel-users";
 import {
@@ -22,13 +24,10 @@ import {
  * signature is their credential. `users`, `revoke` and `settings` are the
  * administrator's.
  */
-export type SecurityKeysVerb =
-  | "login-options" | "sign-in" | "keys" | "register-options" | "register" | "remove" | "users" | "revoke" | "settings";
+export type SecurityKeysVerb = keyof typeof SECURITY_KEYS_VERBS;
 
-const VERBS: SecurityKeysVerb[] = [
-  "login-options", "sign-in", "keys", "register-options", "register", "remove", "users", "revoke", "settings",
-];
-const OWN_ACCOUNT_VERBS = new Set<SecurityKeysVerb>(["keys", "register-options", "register", "remove"]);
+const VERBS = Object.keys(SECURITY_KEYS_VERBS) as SecurityKeysVerb[];
+const OWN_ACCOUNT_VERBS = new Set(VERBS.filter((verb) => SECURITY_KEYS_VERBS[verb].web === "own-account"));
 
 const STORE_VERSION = 1;
 const CHALLENGE_TTL_MS = 5 * 60_000;
@@ -139,12 +138,7 @@ function parseArgs(argv: string[]): Parsed {
 }
 
 function readInput(options: SecurityKeysActionOptions): Record<string, unknown> {
-  const raw = options.input ?? readFileSync(0, "utf8");
-  if (raw.length > MAX_INPUT_BYTES) failAction("input is too large");
-  let value: unknown;
-  try { value = JSON.parse(raw); } catch { failAction("input must be JSON"); }
-  if (typeof value !== "object" || value === null || Array.isArray(value)) failAction("input must be a JSON object");
-  return value as Record<string, unknown>;
+  return parseJsonRequest(options.input ?? readFileSync(0, "utf8"), MAX_INPUT_BYTES);
 }
 
 function storePath(paths: SecurityKeysPaths): string {
@@ -555,25 +549,25 @@ export async function runSecurityKeysAction(argv: string[], options: SecurityKey
     else if (verb === "settings") {
       saveSettings(paths, readInput(options));
       data = allUsers(paths);
-    } else {
+    } else if (verb === "revoke") {
       const input = readInput(options);
       if (typeof input.user !== "string" || !PANEL_USER_NAME_RE.test(input.user)) failAction("choose a user");
       removeKey(paths, input.user, input.id, "an administrator");
       data = allUsers(paths);
+    } else {
+      verb satisfies never;
+      failAction(`unknown security-keys verb '${verb}'`);
     }
     if (emit) emitActionOk(data);
     return 0;
   } catch (error) {
-    let message = error instanceof Error ? error.message : String(error);
-    const data = error instanceof ActionFailure ? error.data : undefined;
+    let message = errorMessage(error);
     // The two verbs anyone who reaches the login page can call.
     const refused = error instanceof SignInRefusal || error instanceof WebAuthnError;
     if (argv[0] === "login-options" || argv[0] === "sign-in") {
       audit(`sign-in ${refused ? "refused" : "failed"}: ${message}`);
       if (!refused) message = SIGN_IN_UNAVAILABLE;
     }
-    if (emit) emitActionError(message, data, "security-keys");
-    else process.stderr.write(`[security-keys] ERROR: ${message}\n`);
-    return 1;
+    return reportActionFailure("security-keys", error, emit, message);
   }
 }

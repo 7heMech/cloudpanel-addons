@@ -18,11 +18,13 @@
  * to find the next free port; changing any of it here would make the panel and
  * the running pool disagree about the same site.
  */
+import { openPanelDatabase } from "../../cli/panel-db";
+import { PHP_RESOURCES_VERBS } from "./verbs";
 import { Database } from "bun:sqlite";
 import { chmodSync, existsSync, lstatSync, mkdirSync, readFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import {
-  ActionFailure, emitActionError, emitActionOk, failAction, nameSlug, oneLine, runCommand, validateDomain, withFileLock,
+  ActionFailure, replyToAction, errorMessage, failAction, readJsonRequest, nameSlug, oneLine, runCommand, validateDomain, withFileLock,
   type CommandResult,
 } from "../../cli/action-common";
 import { CONFIG_DIR, PANEL_DB, STATE_DIR } from "../../cli/paths";
@@ -31,8 +33,7 @@ import { writeFileAtomic } from "../../lib/atomic-write";
 
 const POLICY_VERSION = 1;
 
-export type PhpResourcesVerb =
-  | "list" | "site" | "save-category" | "delete-category" | "assign" | "set-default" | "reconcile";
+export type PhpResourcesVerb = keyof typeof PHP_RESOURCES_VERBS;
 
 /** The process manager modes php-fpm accepts. */
 export const PM_MODES = ["static", "dynamic", "ondemand"] as const;
@@ -202,10 +203,6 @@ export const DEFAULT_PHP_RESOURCES_ACTION_PATHS: PhpResourcesActionPaths = {
 
 function pathsFor(options: PhpResourcesActionOptions): PhpResourcesActionPaths {
   return { ...DEFAULT_PHP_RESOURCES_ACTION_PATHS, ...options.paths };
-}
-
-function reason(error: unknown): string {
-  return error instanceof Error ? error.message : String(error);
 }
 
 // ---------------------------------------------------------------------------
@@ -520,15 +517,6 @@ function writeTrusted(file: TrustedFile, content: string): void {
 // Panel state
 // ---------------------------------------------------------------------------
 
-function openPanelDatabase(path: string): Database {
-  try {
-    const db = new Database(path, { readonly: true });
-    db.exec("PRAGMA busy_timeout = 5000;");
-    return db;
-  } catch (error) {
-    failAction(`CloudPanel database could not be opened: ${reason(error)}`);
-  }
-}
 
 /**
  * Every site with a PHP-FPM pool, which is every site CloudPanel recorded PHP
@@ -550,7 +538,7 @@ function phpSiteRows(db: Database): SiteRow[] {
       phpVersion: String(row.php_version),
     }));
   } catch (error) {
-    failAction(`CloudPanel does not expose its PHP settings: ${reason(error)}`);
+    failAction(`CloudPanel does not expose its PHP settings: ${errorMessage(error)}`);
   }
 }
 
@@ -623,7 +611,7 @@ function readPolicy(path: string, expectedUid: number): Policy {
     raw = JSON.parse(readFileSync(path, "utf8"));
   } catch (error) {
     if (error instanceof ActionFailure) throw error;
-    failAction(`the PHP resources policy could not be read: ${reason(error)}`);
+    failAction(`the PHP resources policy could not be read: ${errorMessage(error)}`);
   }
   if (typeof raw !== "object" || raw === null || Array.isArray(raw)) failAction("the PHP resources policy is malformed");
   const policy = raw as Partial<Policy>;
@@ -743,7 +731,7 @@ function applyMany(
         writeTrusted(file, rendered);
         written.push({ file, domain: entry.site.domain });
       } catch (error) {
-        outcome.failed.set(entry.site.domain, reason(error));
+        outcome.failed.set(entry.site.domain, errorMessage(error));
       }
     }
     if (!written.length) continue;
@@ -757,7 +745,7 @@ function applyMany(
       // worse than either outcome on its own. A second failure here has nothing
       // left to say that the first one does not.
       try { applyPhpVersion(paths, version, command); } catch { /* reported below */ }
-      for (const entry of written) outcome.failed.set(entry.domain, reason(error));
+      for (const entry of written) outcome.failed.set(entry.domain, errorMessage(error));
     }
   }
   return outcome;
@@ -806,7 +794,7 @@ function requireSite(rows: SiteRow[], domain: string): SiteRow {
 }
 
 function panelSites(paths: PhpResourcesActionPaths): SiteRow[] {
-  const db = openPanelDatabase(paths.panelDb);
+  const db = openPanelDatabase(paths.panelDb, true);
   try {
     return phpSiteRows(db);
   } finally {
@@ -1063,17 +1051,8 @@ function parseAction(argv: string[], options: PhpResourcesActionOptions): Parsed
 /** The largest request any verb takes: `assign` naming a whole fleet. */
 const MAX_INPUT_BYTES = 256 * 1024;
 
-async function requestBody(options: PhpResourcesActionOptions): Promise<Record<string, unknown>> {
-  const raw = options.input !== undefined ? options.input : await Bun.stdin.text();
-  if (Buffer.byteLength(raw, "utf8") > MAX_INPUT_BYTES) failAction("the request is too large");
-  let parsed: unknown;
-  try {
-    parsed = JSON.parse(raw);
-  } catch {
-    failAction("the request must be JSON");
-  }
-  if (typeof parsed !== "object" || parsed === null || Array.isArray(parsed)) failAction("the request must be a JSON object");
-  return parsed as Record<string, unknown>;
+function requestBody(options: PhpResourcesActionOptions): Promise<Record<string, unknown>> {
+  return readJsonRequest(options.input, MAX_INPUT_BYTES);
 }
 
 function categoryRequest(body: Record<string, unknown>): CategoryRequest {
@@ -1125,22 +1104,14 @@ export async function executePhpResourcesAction(
     const request = assignRequest(body, options);
     return assignSites(paths, request.domains, request.categoryId, command);
   }
-  return setDefaultCategory(paths, body.categoryId == null ? null : parseCategoryId(body.categoryId));
+  if (verb === "set-default") return setDefaultCategory(paths, body.categoryId == null ? null : parseCategoryId(body.categoryId));
+  verb satisfies never;
+  failAction(`unknown PHP resources verb '${verb}'`);
 }
 
 export async function runPhpResourcesAction(
   argv: string[],
   options: PhpResourcesActionOptions = {},
 ): Promise<number> {
-  const emit = options.emitReply !== false;
-  try {
-    const data = await executePhpResourcesAction(argv, options);
-    if (emit) emitActionOk(data);
-    return 0;
-  } catch (error) {
-    const message = reason(error);
-    if (emit) emitActionError(message, error instanceof ActionFailure ? error.data : undefined, "php-resources");
-    else process.stderr.write(`[php-resources] ERROR: ${message}\n`);
-    return 1;
-  }
+  return replyToAction("php-resources", options.emitReply !== false, () => executePhpResourcesAction(argv, options));
 }

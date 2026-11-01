@@ -24,7 +24,7 @@ import { runAuthActionStdin } from "./auth-action";
 import { runManagerAction, type ManagerOps } from "./manager-action";
 import { runSmtpSubmit } from "../addons/smtp/submit";
 import { runTerminalPty } from "../addons/terminal/pty";
-import { runCertificateWork } from "./maintenance";
+import { runCertificateWork } from "./addon-hooks";
 import { runSyncSites } from "./new-sites";
 
 /**

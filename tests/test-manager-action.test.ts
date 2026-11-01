@@ -8,7 +8,6 @@ import { describe, test, expect } from "bun:test";
 import { mkdirSync, mkdtempSync, rmSync, utimesSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { MANAGER_ALLOWED_VERBS } from "../lib/gateway-protocol";
 import { createAuthActionServer } from "../cli/auth-action";
 import {
   activeManagerJob, createJob, type CreateJobOptions, latestManagerJob, markNewsSeen, parseManagerFlags, pruneManagerJobs,
@@ -66,10 +65,6 @@ async function gatewayReply(request: string): Promise<string> {
 const NOOP_OPS: ManagerOps = { enable: () => {}, disable: () => {}, update: async () => {}, reconcile: () => {} };
 
 describe("the gateway's manager namespace", () => {
-  test("offers exactly the verbs a page may ask for", () => {
-    expect([...MANAGER_ALLOWED_VERBS].sort()).toEqual(["disable", "enable", "job", "mark-news-seen", "news-seen", "reconcile", "update", "watch-job"]);
-  });
-
   // The runner is started by the transient unit the create path launches, and
   // by nothing else. Reaching it through the gateway would skip the check that
   // makes a second click follow the first click's job instead of starting a

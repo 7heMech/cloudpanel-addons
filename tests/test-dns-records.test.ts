@@ -179,7 +179,7 @@ describe("the Cloudflare token template", () => {
     expect(url.searchParams.get("zoneId")).toBe("all");
     expect(JSON.parse(url.searchParams.get("permissionGroupKeys")!)).toEqual([
       { key: "account_settings", type: "read" }, { key: "zone", type: "edit" }, { key: "dns", type: "edit" },
-      { key: "dynamic_url_redirects", type: "edit" }, { key: "zone_settings", type: "edit" }, { key: "config_settings", type: "edit" },
+      { key: "dynamic_redirect", type: "edit" }, { key: "zone_settings", type: "edit" }, { key: "config_settings", type: "edit" },
     ]);
     expect(template.permissions).toContain("Config Rules: Edit");
     expect(template.permissions).toContain("Single Redirect: Edit");
