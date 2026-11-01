@@ -7,13 +7,14 @@
  * create, update and delete they would make, and only a confirmation of that
  * same plan saves and applies them.
  */
+import { withPanelDb } from "../../cli/panel-db";
 import { DNS_VERBS } from "./verbs";
 import { Database } from "bun:sqlite";
 import { createHash, randomBytes } from "node:crypto";
 import { existsSync, mkdirSync } from "node:fs";
 import { dirname } from "node:path";
 import {
-  ActionFailure, emitActionError, emitActionOk, failAction, nameSlug, oneLine, withFileLock,
+  ActionFailure, errorMessage, replyToAction, failAction, readJsonRequest, nameSlug, oneLine, withFileLock,
 } from "../../cli/action-common";
 import { queueAddonPass } from "../../cli/job-store";
 import { CONFIG_DIR, PANEL_DB, STATE_DIR } from "../../cli/paths";
@@ -201,7 +202,6 @@ interface Pending {
 
 const emptyStatus = (): Status => ({ checkedAt: null, connections: [], plans: {}, backoff: { cloudflare: 0, mailcow: 0 } });
 const hash = (value: unknown): string => createHash("sha256").update(JSON.stringify(value) ?? "null").digest("hex");
-const reason = (error: unknown): string => error instanceof Error ? error.message : String(error);
 
 class Files {
   constructor(private readonly paths: DnsPaths) {}
@@ -285,9 +285,7 @@ function panelTime(value: unknown): number {
 }
 
 export function panelSites(panelDb: string): PanelSite[] {
-  const db = new Database(panelDb, { readonly: true });
-  try {
-    db.exec("PRAGMA busy_timeout = 5000");
+  return withPanelDb(panelDb, (db) => {
     const site = columns(db, "site");
     const certificate = site.has("certificate_id") && columns(db, "certificate").has("type");
     const rows = db.query<{ id: number; domain_name: string; type: string; created_at: string | null; cf: number | null; cert: string | null; user: string | null }, []>(
@@ -312,9 +310,7 @@ export function panelSites(panelDb: string): PanelSite[] {
       });
     }
     return sites;
-  } finally {
-    db.close();
-  }
+  });
 }
 
 // ---------------------------------------------------------------------------
@@ -940,7 +936,7 @@ class Action {
       if (settings.sharedMailbox) await api.senderAcl(settings.sharedMailbox);
       else await api.hasDomain(settings.host);
     } catch (error) {
-      failAction(redact(reason(error), [key]));
+      failAction(redact(errorMessage(error), [key]));
     }
     const next = { ...structuredClone(policy), mailcow: settings };
     return this.change(next, "Mailcow saved.", this.mailcowSites(next), key);
@@ -1173,17 +1169,8 @@ async function changeVerb(action: Action, verb: DnsVerb, body: Record<string, un
   failAction(`unknown DNS change '${verb}'`);
 }
 
-async function bodyOf(options: DnsActionOptions): Promise<Record<string, unknown>> {
-  const raw = options.input ?? await Bun.stdin.text();
-  if (Buffer.byteLength(raw) > MAX_BODY) failAction("DNS request is too large");
-  let value: unknown;
-  try {
-    value = JSON.parse(raw);
-  } catch {
-    failAction("DNS request must be JSON");
-  }
-  if (!value || typeof value !== "object" || Array.isArray(value)) failAction("DNS request must be an object");
-  return value as Record<string, unknown>;
+function bodyOf(options: DnsActionOptions): Promise<Record<string, unknown>> {
+  return readJsonRequest(options.input, MAX_BODY);
 }
 
 function provisionArguments(args: string[]): { domain: string; asUser: string; ssl: boolean } {
@@ -1215,12 +1202,8 @@ export async function executeDnsAction(argv: string[], options: DnsActionOptions
   if (verb === "list") return action.state();
 
   if (provision?.asUser) {
-    const db = new Database(paths.panelDb, { readonly: true });
-    try {
-      if (!panelUserOwnsSite(db, provision.asUser, provision.domain)) failAction("That site is not one of yours");
-    } finally {
-      db.close();
-    }
+    const owns = withPanelDb(paths.panelDb, (db) => panelUserOwnsSite(db, provision.asUser!, provision.domain));
+    if (!owns) failAction("That site is not one of yours");
   }
   if (verb === "site-status") return action.siteStatus(provision!.domain);
 
@@ -1305,12 +1288,5 @@ async function perform(
 }
 
 export async function runDnsAction(argv: string[], options: DnsActionOptions = {}): Promise<number> {
-  try {
-    const result = await executeDnsAction(argv, options);
-    if (options.emitReply !== false) emitActionOk(result);
-    return 0;
-  } catch (error) {
-    if (options.emitReply !== false) emitActionError(reason(error), error instanceof ActionFailure ? error.data : undefined, "dns");
-    return 1;
-  }
+  return replyToAction("dns", options.emitReply !== false, () => executeDnsAction(argv, options));
 }

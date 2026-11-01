@@ -8,11 +8,11 @@
  * The panel user arrives from the gateway, which took it from the CloudPanel
  * session it checked itself; the manager never names it.
  */
-import { Database } from "bun:sqlite";
+import { openPanelDatabase } from "../../cli/panel-db";
 import { existsSync, readdirSync, readFileSync, realpathSync } from "node:fs";
 import { join } from "node:path";
 import {
-  ActionFailure, emitActionError, failAction, validateDomain,
+  ActionFailure, emitActionError, errorMessage, failAction, validateDomain,
 } from "../../cli/action-common";
 import { CLI_BIN, PANEL_DB } from "../../cli/paths";
 import { DUPLEX_WORKER_MARKER } from "../../lib/gateway-protocol";
@@ -70,10 +70,6 @@ export interface TerminalTarget {
   dir: string;
 }
 
-function reason(error: unknown): string {
-  return error instanceof Error ? error.message : String(error);
-}
-
 /** What reaches the journal: a refusal may quote an argument, and an argument is not ours. */
 function printable(text: string): string {
   return text.replace(/[\u0000-\u001f\u007f-\u009f]/g, "?").slice(0, 300);
@@ -126,20 +122,14 @@ function insideHome(path: string, home: string): boolean {
  * refusal. Every rule is checked here, as root, before anything is started.
  */
 export function resolveTerminalTarget(request: TerminalRequest, paths: TerminalActionPaths): TerminalTarget {
-  let db: Database;
-  try {
-    db = new Database(paths.panelDb, { readonly: true });
-    db.exec("PRAGMA busy_timeout = 5000;");
-  } catch (error) {
-    failAction(`CloudPanel database could not be opened: ${reason(error)}`);
-  }
+  const db = openPanelDatabase(paths.panelDb, true);
   let rows: SiteRow[];
   try {
     if (!panelUserOwnsSite(db, request.panelUser, request.domain)) failAction("that site is not yours to open");
     rows = db.query<SiteRow, []>("SELECT domain_name, user, root_directory FROM site").all();
   } catch (error) {
     if (error instanceof ActionFailure) throw error;
-    failAction(`CloudPanel site list could not be read: ${reason(error)}`);
+    failAction(`CloudPanel site list could not be read: ${errorMessage(error)}`);
   } finally {
     db.close();
   }
@@ -151,7 +141,7 @@ export function resolveTerminalTarget(request: TerminalRequest, paths: TerminalA
   try {
     accounts = readUnixAccounts(paths.passwd);
   } catch (error) {
-    failAction(`the account database could not be read: ${reason(error)}`);
+    failAction(`the account database could not be read: ${errorMessage(error)}`);
   }
   const account = accounts.get(row.user);
   if (!account) failAction(`the site user ${row.user} has no Unix account`);
@@ -247,7 +237,7 @@ export async function runTerminalAction(argv: string[], options: TerminalActionO
     request = parseTerminalRequest(argv, options);
     target = resolveTerminalTarget(request, paths);
   } catch (error) {
-    emitActionError(printable(reason(error)), undefined, "terminal");
+    emitActionError("terminal", printable(errorMessage(error)));
     return 1;
   }
 

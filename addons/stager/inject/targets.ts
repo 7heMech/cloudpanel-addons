@@ -14,6 +14,7 @@
 import type { AddonTarget } from "../../../lib/addon-target";
 import { ADDON_SITE_TABS } from "../../../lib/site-context";
 import { MENU_ONLY_CLASS, MENU_ONLY_STYLE } from "../../../lib/row-actions";
+import { ANCHORS, TEMPLATES } from "../../../lib/panel-anchors";
 
 // The label the panel's strip shows and the label the addon's own reproduction
 // of that strip shows are the same string, from lib/site-context.
@@ -44,9 +45,8 @@ export const STAGER_TARGETS: AddonTarget[] = [
     // Staging -- which is the order ADDON_SITE_TABS gives the reproduced strip
     // too. It settles on the same file however many times it runs.
     slug: "site-tab",
-    template: "Frontend/Site/Partial/tab-container.html.twig",
-    anchorAfter: `      <a href="{{ path('clp_site_logs', {'domainName': site.domainName}) }}">{% trans %}Logs{% endtrans %}</a>
-    </li>`,
+    template: TEMPLATES.siteTabs,
+    anchorAfter: ANCHORS.siteLogsTab,
     required: true,
     snippet: (url) => `
         {% if is_granted('ROLE_ADMIN') %}${CLONABLE}
@@ -62,8 +62,8 @@ export const STAGER_TARGETS: AddonTarget[] = [
   // than left to the addon that draws the menu.
   {
     slug: "site-list-style",
-    template: "Frontend/Site/index.html.twig",
-    anchorBefore: '<div class="card card-table">',
+    template: TEMPLATES.sites,
+    anchorBefore: ANCHORS.sitesTable,
     required: false,
     snippet: () => `
           {% if is_granted('ROLE_ADMIN') %}
@@ -72,8 +72,8 @@ export const STAGER_TARGETS: AddonTarget[] = [
   },
   {
     slug: "site-list-action",
-    template: "Frontend/Site/index.html.twig",
-    anchorAfter: `<a href="{{ path('clp_site', {'domainName': site.domainName}) }}">{% trans %}Manage{% endtrans %}</a>`,
+    template: TEMPLATES.sites,
+    anchorAfter: ANCHORS.siteManageLink,
     required: false,
     snippet: (url) => `
         {% if is_granted('ROLE_ADMIN') %}${CLONABLE}

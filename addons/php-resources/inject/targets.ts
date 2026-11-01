@@ -11,6 +11,8 @@
 // the addon, and stays hidden if it cannot.
 
 import type { AddonTarget } from "../../../lib/addon-target";
+import SITE_CARD_SCRIPT from "./site-card.client.js" with { type: "text" };
+import { TEMPLATES } from "../../../lib/panel-anchors";
 
 // Read-only rows in a form the panel draws with bordered inputs: the label is
 // dimmed rather than recoloured, so it follows CloudPanel's own light and dark
@@ -27,7 +29,7 @@ export const PHP_RESOURCES_TARGETS: AddonTarget[] = [
     // appears exactly where a pool file exists: a static or Node.js site has no
     // PHP settings form and gets nothing.
     slug: "site-settings-card",
-    template: "Frontend/Site/settings.html.twig",
+    template: TEMPLATES.siteSettings,
     anchorAfter: `            {{ form_end(phpSettingsForm) }}
           </div>`,
     required: false,
@@ -43,27 +45,7 @@ export const PHP_RESOURCES_TARGETS: AddonTarget[] = [
             </div>
           </div>
           <style>${STYLE}</style>
-          <script>
-            (function () {
-              var card = document.getElementById('clp-php-resources');
-              var body = document.getElementById('clp-php-resources-body');
-              if (!card || !body) return;
-              // A deep link to an addon tab passes through this page and throws
-              // its content away, so the card would be fetched to be discarded.
-              if (new URLSearchParams(location.search).has('clp-addon')) return;
-              fetch('${url}/site-card?domain=' + encodeURIComponent(card.dataset.domain), {
-                credentials: 'same-origin',
-                headers: { Accept: 'application/json' }
-              })
-                .then(function (res) { return res.json(); })
-                .then(function (payload) {
-                  if (!payload || payload.ok !== true) return;
-                  body.innerHTML = payload.html;
-                  card.hidden = false;
-                })
-                .catch(function () {});
-            })();
-          </script>
+          <script>${SITE_CARD_SCRIPT.split("ADDON_URL").join(url)}</script>
           {% endif %}`,
   },
 ];

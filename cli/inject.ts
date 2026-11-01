@@ -36,8 +36,9 @@ import {
 } from "./paths";
 import type { AddonTarget } from "../lib/addon-target";
 import { writeAtomic } from "./util";
-import { runCommand, type CommandResult } from "./action-common";
-import { cloudflareRanges, errorMessage, nginxFileChange, openPanelDatabase, trustedVhost, withNginxTransaction, writeAtomicOwned } from "./nginx-transaction";
+import { errorMessage, runCommand, type CommandResult } from "./action-common";
+import { openPanelDatabase } from "./panel-db";
+import { cloudflareRanges, nginxFileChange, trustedVhost, withNginxTransaction, writeAtomicOwned } from "./nginx-transaction";
 import { MAINTENANCE_INCLUDE_PATH, sitesWithoutMaintenance, stageMaintenanceVhosts } from "./maintenance-vhosts";
 
 // CloudPanel versions this patch's markup assumptions were verified against.

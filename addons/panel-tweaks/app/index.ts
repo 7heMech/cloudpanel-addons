@@ -1,5 +1,5 @@
 import {
-  SECURITY_HEADERS, bodyErrorResponse, guardMutation, htmlResponse, jsonResponse, newCsrfToken, readJsonObject,
+  SECURITY_HEADERS, guardMutation, htmlResponse, jsonResponse, newCsrfToken, readBody,
 } from "../../../lib/app-http";
 import { callGatewayAction } from "../../../lib/gateway-client";
 import { jobApiRoute } from "../../../lib/job-stream";
@@ -119,12 +119,8 @@ export async function handle(
   if (denied) return denied;
 
   if (path === "/api/tweaks") {
-    let body: Record<string, unknown>;
-    try {
-      body = await readJsonObject(req, 8 * 1024);
-    } catch (error) {
-      return bodyErrorResponse(error);
-    }
+    const body = await readBody(req, 8 * 1024);
+    if (body instanceof Response) return body;
     const result = await panelTweaksService.setTweaks(body);
     if (!result.ok || !result.data) return json(result, 400);
     if (result.data.reinject) {

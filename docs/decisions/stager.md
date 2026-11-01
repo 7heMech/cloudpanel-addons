@@ -104,7 +104,7 @@ for a clone as for a promote.
 
 The replaced document root, the database dump and the content export are kept
 with the job record and expire with it. A promote that dies between the two
-renames is put back by the maintenance pass, which is also what removes the
+renames is put back by the repair pass, which is also what removes the
 retained roots once their records expire.
 
 ## Mail
@@ -129,7 +129,7 @@ rollback.
 
 On failure, a clone removes the site, database, temporary vhost template, and
 Instatic instance it created, and a promote puts the live document root back.
-The maintenance pass marks interrupted jobs as failed, restores an interrupted
+The repair pass marks interrupted jobs as failed, restores an interrupted
 vhost change or an interrupted promote, and removes expired records and the
 document roots a promote replaced.
 

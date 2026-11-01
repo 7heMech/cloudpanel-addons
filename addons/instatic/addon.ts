@@ -17,7 +17,7 @@ export const INSTATIC_ADDON: AddonDefinition = {
   siteManager: true,
   // A creation job killed part-way stays `running` for ever, and `running` is
   // what blocks a retry for that hostname.
-  maintenance: {
+  repair: {
     label: "instatic job records",
     run: () => {
       // Called directly rather than through the verb: the verb prints its

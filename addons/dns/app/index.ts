@@ -1,4 +1,4 @@
-import { bodyErrorResponse, guardMutation, htmlResponse, jsonResponse, newCsrfToken, readJsonObject, validateDomain } from "../../../lib/app-http";
+import { htmlResponse, jsonResponse, newCsrfToken, validateDomain, readMutation } from "../../../lib/app-http";
 import { dnsService } from "./service";
 import { dashboardContent, dashboardView, layout } from "./views";
 import type { WebVerb } from "../../../lib/gateway-protocol";
@@ -33,14 +33,8 @@ const CHANGES: Record<string, WebVerb<"dns">> = {
  * theirs and answers with readiness, or the zone and its nameservers, only.
  */
 async function provision(req: Request, auth: { user: string; roles: string[] } | null | undefined): Promise<Response> {
-  const denied = guardMutation(req);
-  if (denied) return denied;
-  let body: Record<string, unknown>;
-  try {
-    body = await readJsonObject(req, 4 * 1024);
-  } catch (error) {
-    return bodyErrorResponse(error);
-  }
+  const body = await readMutation(req, 4 * 1024);
+  if (body instanceof Response) return body;
   const domain = validateDomain(body.domain);
   if (!domain) return jsonResponse({ ok: false, error: "invalid domain" }, { status: 400 });
   if (!auth?.user) return jsonResponse({ ok: false, error: "not found" }, { status: 404 });
@@ -76,14 +70,8 @@ export async function handle(
     return htmlResponse(layout("DNS", dashboardView(result.data), notice), { csrf });
   }
   if (req.method === "POST" && CHANGES[path]) {
-    const denied = guardMutation(req);
-    if (denied) return denied;
-    let body: Record<string, unknown>;
-    try {
-      body = await readJsonObject(req, 256 * 1024);
-    } catch (error) {
-      return bodyErrorResponse(error);
-    }
+    const body = await readMutation(req, 256 * 1024);
+    if (body instanceof Response) return body;
     const result = await dnsService.change(CHANGES[path]!, body);
     if (result.ok && result.data) return jsonResponse({ ...result, html: dashboardContent(result.data) });
     return jsonResponse(result, { status: 400 });

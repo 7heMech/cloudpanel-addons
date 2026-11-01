@@ -21,8 +21,8 @@ export const GIT_ADDON: AddonDefinition = {
   // Job-record expiry and stale-job recovery. A deployment killed by a reboot
   // or an OOM leaves its record `running` for ever otherwise, and only this
   // clears it.
-  maintenance: {
-    label: "git maintenance (prune)",
+  repair: {
+    label: "git (prune)",
     run: async (options) => {
       const code = await runGitAction(["prune"], { ...(options ?? {}), emitReply: false });
       if (code !== 0) throw new Error(`prune returned exit code ${code}`);

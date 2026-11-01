@@ -8,7 +8,7 @@
  * rendered vhosts, so a replacement can only use placeholders the panel
  * already fills for that site.
  */
-import { Database } from "bun:sqlite";
+import { withPanelDb } from "./panel-db";
 import { chmodSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { writeFileAtomic } from "../lib/atomic-write";
@@ -136,25 +136,15 @@ export const DEFAULT_SITE_VHOST_PATHS: SiteVhostPaths = {
 };
 
 export function storedVhost(panelDb: string, domain: string): string {
-  const db = new Database(panelDb, { readonly: true });
-  try {
-    db.exec("PRAGMA busy_timeout = 5000");
+  return withPanelDb(panelDb, (db) => {
     const row = db.query<{ vhost_template: string | null }, [string]>("SELECT vhost_template FROM site WHERE domain_name = ?").get(domain);
     if (!row?.vhost_template) throw new Error(`CloudPanel has no vhost stored for ${domain}`);
     return row.vhost_template;
-  } finally {
-    db.close();
-  }
+  });
 }
 
 function storedRoot(panelDb: string, domain: string): string | undefined {
-  const db = new Database(panelDb, { readonly: true });
-  try {
-    db.exec("PRAGMA busy_timeout = 5000");
-    return db.query<{ root_directory: string | null }, [string]>("SELECT root_directory FROM site WHERE domain_name = ?").get(domain)?.root_directory ?? undefined;
-  } finally {
-    db.close();
-  }
+  return withPanelDb(panelDb, (db) => db.query<{ root_directory: string | null }, [string]>("SELECT root_directory FROM site WHERE domain_name = ?").get(domain)?.root_directory ?? undefined);
 }
 
 const sqlLiteral = (value: string): string => `'${value.replaceAll("'", "''")}'`;

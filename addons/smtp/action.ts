@@ -12,15 +12,14 @@
  * header. Postfix cannot fix a From on another domain without a milter.
  */
 import { SMTP_VERBS } from "./verbs";
-import { Database } from "bun:sqlite";
 import { chmodSync, existsSync, lstatSync, mkdirSync, readdirSync, readFileSync, readlinkSync, rmSync, symlinkSync } from "node:fs";
 import { dirname, join } from "node:path";
 import {
-  ActionFailure, emitActionError, emitActionOk, failAction, nameSlug, oneLine, runCommand, withFileLock,
+  ActionFailure, replyToAction, errorMessage, failAction, readJsonRequest, nameSlug, oneLine, runCommand, withFileLock,
   type CommandResult,
 } from "../../cli/action-common";
 import { CLI_BIN, PANEL_DB, STATE_DIR } from "../../cli/paths";
-import { standInDomains } from "../../cli/stand-ins";
+import { withPanelDb, withoutStandIns } from "../../cli/panel-db";
 import { log } from "../../cli/util";
 import { writeFileAtomic } from "../../lib/atomic-write";
 import { readUnixAccounts, siteAccountProblem, splitSharedUids, TRUSTED_LOGINS } from "../../lib/site-accounts";
@@ -158,7 +157,6 @@ export const DEFAULT_SMTP_PATHS: SmtpPaths = {
 };
 
 type Run = (command: string, args: string[]) => CommandResult;
-const reason = (error: unknown): string => error instanceof Error ? error.message : String(error);
 const commandError = (result: CommandResult): string => result.stderr.trim() || result.stdout.trim() || "command failed";
 function runChecked(run: Run, command: string, args: string[]): string {
   const result = run(command, args);
@@ -252,7 +250,7 @@ function readPolicy(paths: SmtpPaths): SmtpPolicy {
     });
   } catch (error) {
     if (error instanceof ActionFailure) throw error;
-    failAction(`SMTP configuration is malformed: ${reason(error)}`);
+    failAction(`SMTP configuration is malformed: ${errorMessage(error)}`);
   }
 }
 
@@ -356,14 +354,12 @@ function checkedSites(rows: SmtpSiteRow[], skipped: SiteSet["skipped"] = []): Si
 function panelSites(paths: SmtpPaths, fixture?: SmtpSiteRow[]): SiteSet {
   if (fixture) return checkedSites(fixture);
   const accounts = readUnixAccounts(paths.passwd);
-  const standIns = standInDomains();
-  const db = new Database(paths.panelDb, { readonly: true });
-  try {
-    const rows = db.query<{ id: number; domain_name: string; user: string; type: string; php_version: string | null }, []>(
+  return withPanelDb(paths.panelDb, (db) => {
+    const rows = withoutStandIns(db.query<{ id: number; domain_name: string; user: string; type: string; php_version: string | null }, []>(
       `SELECT site.id, site.domain_name, site.user, site.type, php_settings.php_version
          FROM site LEFT JOIN php_settings ON php_settings.site_id = site.id
         ORDER BY site.domain_name`,
-    ).all().filter((row) => !standIns.has(String(row.domain_name)));
+    ).all());
     const sites: SmtpSiteRow[] = [];
     const skipped: SiteSet["skipped"] = [];
     for (const row of rows) {
@@ -378,9 +374,7 @@ function panelSites(paths: SmtpPaths, fixture?: SmtpSiteRow[]): SiteSet {
       });
     }
     return checkedSites(sites, skipped);
-  } finally {
-    db.close();
-  }
+  });
 }
 
 function requireSite(sites: SmtpSiteRow[], domain: string): SmtpSiteRow {
@@ -779,7 +773,7 @@ function commit(paths: SmtpPaths, before: SmtpPolicy, next: SmtpPolicy, sites: S
     try {
       applyConfiguration(paths, before, sites, run);
     } catch (rollbackError) {
-      failAction(`SMTP update failed (${reason(error)}); restoring the previous settings also failed: ${reason(rollbackError)}`);
+      failAction(`SMTP update failed (${errorMessage(error)}); restoring the previous settings also failed: ${errorMessage(rollbackError)}`);
     }
     throw error;
   }
@@ -996,13 +990,8 @@ function reconcile(paths: SmtpPaths, policy: SmtpPolicy, { sites, skipped }: Sit
   return { repaired: repair ? applyConfiguration(paths, next, sites, run) : 0, joined };
 }
 
-async function inputBody(options: SmtpActionOptions): Promise<Record<string, unknown>> {
-  const raw = options.input ?? await Bun.stdin.text();
-  if (Buffer.byteLength(raw) > 256 * 1024) failAction("SMTP request is too large");
-  let value: unknown;
-  try { value = JSON.parse(raw); } catch { failAction("SMTP request must be JSON"); }
-  if (!value || typeof value !== "object" || Array.isArray(value)) failAction("SMTP request must be an object");
-  return value as Record<string, unknown>;
+function inputBody(options: SmtpActionOptions): Promise<Record<string, unknown>> {
+  return readJsonRequest(options.input, 256 * 1024);
 }
 
 export async function executeSmtpAction(argv: string[], options: SmtpActionOptions = {}): Promise<unknown> {
@@ -1067,14 +1056,7 @@ export async function executeSmtpAction(argv: string[], options: SmtpActionOptio
 }
 
 export async function runSmtpAction(argv: string[], options: SmtpActionOptions = {}): Promise<number> {
-  try {
-    const result = await executeSmtpAction(argv, options);
-    if (options.emitReply !== false) emitActionOk(result);
-    return 0;
-  } catch (error) {
-    if (options.emitReply !== false) emitActionError(reason(error), error instanceof ActionFailure ? error.data : undefined, "smtp");
-    return 1;
-  }
+  return replyToAction("smtp", options.emitReply !== false, () => executeSmtpAction(argv, options));
 }
 
 /** Called by disable/uninstall after the addon is no longer available to the UI. */

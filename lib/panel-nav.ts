@@ -2,74 +2,14 @@ import type { AddonTarget } from "./addon-target";
 import { SITE_EMBED_SCRIPT, SITE_EMBED_STYLE } from "./shadow-embed";
 import { esc, escJs } from "./app-http";
 import { RELEASES_URL, UPDATE_STYLE, updateNoticeHtml } from "./update-ui";
+import HEADER_UPDATE_SCRIPT from "./assets/header-update.client.js" with { type: "text" };
 
 export function headerUpdateScript(addonsUrl = "/addons/"): string {
   const baseUrl = addonsUrl.replace(/\/+$/, "");
-  const updateUrl = `${baseUrl}/update`;
-  const statusUrl = `${baseUrl}/api/update`;
-  return `(function() {
-  if (window.__clpAddonsUpdateInit) return;
-  window.__clpAddonsUpdateInit = true;
-
-  function hide() {
-    var notice = document.getElementById("clp-addons-update-notice");
-    if (notice) notice.remove();
-    var header = document.querySelector(".header");
-    if (header) header.classList.remove("clp-addons-has-update");
-  }
-
-  function render(info) {
-    if (!info || info.hasUpdate !== true || typeof info.latest !== "string") {
-      hide();
-      return;
-    }
-    var latest = info.latest.replace(/^v/, "");
-    var header = document.querySelector(".header");
-    var tools = header && header.querySelector(".navbar-right");
-    if (!tools) return;
-    var notice = document.getElementById("clp-addons-update-notice");
-    if (!notice) {
-      var holder = document.createElement("div");
-      holder.innerHTML = "${escJs(updateNoticeHtml("", updateUrl))}";
-      notice = holder.firstElementChild;
-      tools.insertAdjacentElement("beforebegin", notice);
-    }
-    notice.querySelector(".update-label").textContent = "Addons · v" + latest + " available";
-    notice.querySelector(".clp-addon-update-badge").title = "clp-addons v" + latest + " available";
-    notice.querySelector(".clp-addon-changelog-link").href = "${escJs(RELEASES_URL)}/tag/v" + encodeURIComponent(latest);
-    header.classList.add("clp-addons-has-update");
-  }
-
-  var checking = false;
-  var checkAgain = false;
-  function check() {
-    if (checking) {
-      checkAgain = true;
-      return;
-    }
-    checking = true;
-    fetch("${escJs(statusUrl)}", {
-      cache: "no-store",
-      headers: { Accept: "application/json" }
-    })
-    .then(function(response) { return response.ok ? response.json() : null; })
-    .then(function(body) {
-      render(body && body.ok !== false ? body.data : null);
-    })
-    .catch(function() { hide(); })
-    .finally(function() {
-      checking = false;
-      if (checkAgain) {
-        checkAgain = false;
-        check();
-      }
-    });
-  }
-  if (document.readyState === "loading") document.addEventListener("DOMContentLoaded", check, { once: true });
-  else check();
-  window.addEventListener("pageshow", function(event) { if (event.persisted) check(); });
-  window.addEventListener("focus", check);
-})();`;
+  return HEADER_UPDATE_SCRIPT
+    .replace("NOTICE_HTML", () => escJs(updateNoticeHtml("", `${baseUrl}/update`)))
+    .replace("RELEASES_URL", () => escJs(RELEASES_URL))
+    .replace("STATUS_URL", () => escJs(`${baseUrl}/api/update`));
 }
 
 /**
@@ -142,7 +82,7 @@ function updateSnippet(url: string): string {
 export function headerTarget(): AddonTarget {
   return {
     slug: "header-nav",
-    template: "Frontend/Partial/header.html.twig",
+    template: TEMPLATES.header,
     anchorAfter: `<a href="{{ path('clp_sites') }}" title="{% trans %}Sites{% endtrans %}">{% trans %}Sites{% endtrans %}</a>`,
     required: true,
     snippet: (url) => `
@@ -155,7 +95,6 @@ export function headerTarget(): AddonTarget {
 
 
 /** The panel partial whose tab strip an addon adds a site-scoped tab to. */
-export const SITE_TAB_TEMPLATE = "Frontend/Site/Partial/tab-container.html.twig";
 
 // CloudPanel lays its site tabs out as inline blocks inside a 1200px-limited
 // container, sized for exactly the tabs it ships. An addon's tab is the
@@ -167,6 +106,7 @@ export const SITE_TAB_TEMPLATE = "Frontend/Site/Partial/tab-container.html.twig"
 // 200px-minimum boxes, which overflows the page on a phone whatever the tabs
 // do.
 import SITE_LAYOUT_STYLE from "./assets/site-layout.css" with { type: "text" };
+import { TEMPLATES } from "./panel-anchors";
 
 // A scrolled strip can hide the tab the page is on and the tab the keyboard has
 // reached, which are the two tabs an operator needs to see. Nothing else about
@@ -203,7 +143,7 @@ function deferred(body: string): string {
 export function siteLayoutTarget(): AddonTarget {
   return {
     slug: "site-layout",
-    template: SITE_TAB_TEMPLATE,
+    template: TEMPLATES.siteTabs,
     anchorBefore: '<div class="tab-container">',
     required: true,
     snippet: () => `<style>${SITE_LAYOUT_STYLE}${SITE_EMBED_STYLE}</style>
@@ -217,7 +157,7 @@ ${SITE_EMBED_SCRIPT}</script>
 export function adminHeaderTarget(): AddonTarget {
   return {
     slug: "admin-header-update",
-    template: "Admin/Partial/header.html.twig",
+    template: TEMPLATES.adminHeader,
     anchorBefore: "</header>",
     required: false,
     snippet: (url) => `

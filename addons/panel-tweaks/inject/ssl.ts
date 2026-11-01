@@ -1,6 +1,7 @@
 import type { AddonTarget } from "../../../lib/addon-target";
 import { NAMESERVER_NOTICE_JS } from "../../../lib/nameserver-notice";
 import CLIENT from "./ssl.client.js" with { type: "text" };
+import { ANCHORS, TEMPLATES } from "../../../lib/panel-anchors";
 
 export const SCRIPT = `${NAMESERVER_NOTICE_JS}\n${CLIENT}`;
 
@@ -60,21 +61,21 @@ export function sslTargets(enabled: () => boolean): AddonTarget[] {
     ...NATIVE_SSL_TYPES.map((type) => ({
       slug: `${type}-ssl-option`,
       template: `Frontend/Site/New/${type}.html.twig`,
-      anchorBefore: '            <div class="row">\n              <div class="col-6 text-start">',
+      anchorBefore: ANCHORS.newSiteButtons,
       required: false,
       snippet: () => sslFormSnippet(enabled()),
     })),
     {
       slug: "sites-ssl",
-      template: "Frontend/Site/index.html.twig",
-      anchorBefore: '<div class="card card-table">',
+      template: TEMPLATES.sites,
+      anchorBefore: ANCHORS.sitesTable,
       required: false,
       snippet: () => sslSitesSnippet(enabled()),
     },
     {
       slug: "wordpress-ssl",
-      template: "Frontend/Site/New/wordpress-installed.html.twig",
-      anchorBefore: '      <div class="card">',
+      template: TEMPLATES.wordPressInstalled,
+      anchorBefore: ANCHORS.wordPressInstalledCard,
       required: false,
       snippet: () => sslWordPressSnippet(enabled()),
     },

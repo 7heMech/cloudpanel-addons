@@ -6,8 +6,7 @@ import { stagerService, validateDomain, validateJobId, expandTarget, promoteBloc
 import type { JobResult, JobView } from "./service";
 import { layout, fragment, jobsView, newCloneView, jobView, promoteView, siteStagingView } from "./views";
 import {
-  bodyErrorResponse, errorBlock, guardMutation, htmlResponse, jsonResponse, newCsrfToken, readJsonObject,
-  redirectResponse, safeDecodePathSegment,
+  errorBlock, guardMutation, htmlResponse, jsonResponse, newCsrfToken, redirectResponse, safeDecodePathSegment, readBody,
 } from "../../../lib/app-http";
 import { mountPath } from "../../../lib/mount";
 import { getNextAvailablePort, type SanitizedSite } from "../../../lib/snapshot-reader";
@@ -328,8 +327,8 @@ async function postClone(req: Request): Promise<Response> {
   const blocked = guardMutation(req);
   if (blocked) return blocked;
 
-  let body: Record<string, unknown>;
-  try { body = await readJsonObject(req); } catch (error) { return bodyErrorResponse(error); }
+  const body = await readBody(req);
+  if (body instanceof Response) return body;
   const {
     source: rawSource, target: rawTarget, tls,
     instaticEmail, instaticPassword, mfaCode,

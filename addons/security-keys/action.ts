@@ -6,9 +6,10 @@ import {
 } from "node:fs";
 import { dirname, join } from "node:path";
 import {
-  ActionFailure, emitActionError, emitActionOk, failAction, oneLine, withFileLockSync,
+  ActionFailure, emitActionOk, failAction, parseJsonRequest, oneLine, withFileLockSync, errorMessage, reportActionFailure,
 } from "../../cli/action-common";
-import { openPanelDatabase, writeAtomicOwned } from "../../cli/nginx-transaction";
+import { openPanelDatabase } from "../../cli/panel-db";
+import { writeAtomicOwned } from "../../cli/nginx-transaction";
 import { LOCK_DIR, PANEL_DB, PANEL_VAR_DIR, STATE_DIR } from "../../cli/paths";
 import { PANEL_USER_NAME_RE } from "../../lib/panel-users";
 import {
@@ -137,12 +138,7 @@ function parseArgs(argv: string[]): Parsed {
 }
 
 function readInput(options: SecurityKeysActionOptions): Record<string, unknown> {
-  const raw = options.input ?? readFileSync(0, "utf8");
-  if (raw.length > MAX_INPUT_BYTES) failAction("input is too large");
-  let value: unknown;
-  try { value = JSON.parse(raw); } catch { failAction("input must be JSON"); }
-  if (typeof value !== "object" || value === null || Array.isArray(value)) failAction("input must be a JSON object");
-  return value as Record<string, unknown>;
+  return parseJsonRequest(options.input ?? readFileSync(0, "utf8"), MAX_INPUT_BYTES);
 }
 
 function storePath(paths: SecurityKeysPaths): string {
@@ -565,16 +561,13 @@ export async function runSecurityKeysAction(argv: string[], options: SecurityKey
     if (emit) emitActionOk(data);
     return 0;
   } catch (error) {
-    let message = error instanceof Error ? error.message : String(error);
-    const data = error instanceof ActionFailure ? error.data : undefined;
+    let message = errorMessage(error);
     // The two verbs anyone who reaches the login page can call.
     const refused = error instanceof SignInRefusal || error instanceof WebAuthnError;
     if (argv[0] === "login-options" || argv[0] === "sign-in") {
       audit(`sign-in ${refused ? "refused" : "failed"}: ${message}`);
       if (!refused) message = SIGN_IN_UNAVAILABLE;
     }
-    if (emit) emitActionError(message, data, "security-keys");
-    else process.stderr.write(`[security-keys] ERROR: ${message}\n`);
-    return 1;
+    return reportActionFailure("security-keys", error, emit, message);
   }
 }

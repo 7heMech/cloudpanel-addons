@@ -4,8 +4,7 @@
 // a request for /addons/git/api/... arrives as /api/... .
 
 import {
-  bodyErrorResponse, errorBlock, guardMutation, htmlResponse, jsonResponse, newCsrfToken, readJsonObject,
-  redirectResponse, safeDecodePathSegment,
+  errorBlock, guardMutation, htmlResponse, jsonResponse, newCsrfToken, redirectResponse, safeDecodePathSegment, readBody, readMutation,
 } from "../../../lib/app-http";
 import { jobApiRoute } from "../../../lib/job-stream";
 import { embedLandingUrl } from "../../../lib/shadow-embed";
@@ -64,8 +63,8 @@ function settingsFrom(body: Record<string, unknown>): GitSettings | string {
 
 /** The one flag the deploy key and the webhook URL both take: mint a new one. */
 async function readReplaceFlag(req: Request): Promise<boolean | Response> {
-  let body: Record<string, unknown>;
-  try { body = await readJsonObject(req, 1024); } catch (error) { return bodyErrorResponse(error); }
+  const body = await readBody(req, 1024);
+  if (body instanceof Response) return body;
   if (body.replace !== undefined && typeof body.replace !== "boolean") {
     return json({ ok: false, error: "replace must be a boolean" }, 400);
   }
@@ -165,8 +164,8 @@ export async function handle(
     if (!domain) return json({ ok: false, error: "that is not a valid hostname" }, 400);
 
     if (siteRoute[2] === "config" && method === "PUT") {
-      let body: Record<string, unknown>;
-      try { body = await readJsonObject(req, 8 * 1024); } catch (error) { return bodyErrorResponse(error); }
+      const body = await readBody(req, 8 * 1024);
+      if (body instanceof Response) return body;
       const settings = settingsFrom(body);
       if (typeof settings === "string") return json({ ok: false, error: settings }, 400);
       const result = await gitService.configure(domain, settings);
@@ -195,10 +194,8 @@ export async function handle(
 
   if (path === "/api/deployments") {
     if (method !== "POST") return json({ ok: false, error: "method not allowed" }, 405);
-    const denied = guardMutation(req);
-    if (denied) return denied;
-    let body: Record<string, unknown>;
-    try { body = await readJsonObject(req, 1024); } catch (error) { return bodyErrorResponse(error); }
+    const body = await readMutation(req, 1024);
+    if (body instanceof Response) return body;
     const domain = validateDomain(body.domain);
     if (!domain) return json({ ok: false, error: "that is not a valid hostname" }, 400);
     try {

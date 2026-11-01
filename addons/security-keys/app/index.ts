@@ -1,5 +1,5 @@
 import {
-  bodyErrorResponse, guardMutation, htmlResponse, jsonResponse, newCsrfToken, readJsonObject,
+  guardMutation, htmlResponse, jsonResponse, newCsrfToken, readBody, readMutation,
 } from "../../../lib/app-http";
 import { panelSessionId } from "../../../lib/sso-auth";
 import { securityKeysService, type Settings } from "./service";
@@ -40,8 +40,8 @@ export async function handle(
       const result = await securityKeysService.registerOptions(sessionId);
       return json(result, result.ok ? 200 : 400);
     }
-    let body: Record<string, unknown>;
-    try { body = await readJsonObject(req, 32 * 1024); } catch (error) { return bodyErrorResponse(error); }
+    const body = await readBody(req, 32 * 1024);
+    if (body instanceof Response) return body;
     if (path === "/api/register") {
       const response = typeof body.response === "object" && body.response !== null ? body.response as Record<string, unknown> : {};
       const result = await securityKeysService.register(sessionId, {
@@ -75,20 +75,16 @@ export async function handle(
   }
 
   if (method === "POST" && path === "/api/revoke") {
-    const denied = guardMutation(req);
-    if (denied) return denied;
-    let body: Record<string, unknown>;
-    try { body = await readJsonObject(req, 4 * 1024); } catch (error) { return bodyErrorResponse(error); }
+    const body = await readMutation(req, 4 * 1024);
+    if (body instanceof Response) return body;
     if (typeof body.user !== "string" || typeof body.id !== "string") return json({ ok: false, error: "choose a key to remove" }, 400);
     const result = await securityKeysService.revoke(body.user, body.id);
     return json(result.ok && result.data ? { ...result, html: dashboardView(result.data) } : result, result.ok ? 200 : 400);
   }
 
   if (method === "POST" && path === "/api/settings") {
-    const denied = guardMutation(req);
-    if (denied) return denied;
-    let body: Record<string, unknown>;
-    try { body = await readJsonObject(req, 4 * 1024); } catch (error) { return bodyErrorResponse(error); }
+    const body = await readMutation(req, 4 * 1024);
+    if (body instanceof Response) return body;
     if (!Array.isArray(body.roles) || typeof body.syncedPasskeys !== "boolean") {
       return json({ ok: false, error: "roles must be a list and syncedPasskeys true or false" }, 400);
     }

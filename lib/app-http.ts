@@ -194,6 +194,20 @@ export function bodyErrorResponse(error: unknown): Response {
   throw error;
 }
 
+/** A request's JSON object body, or the response refusing it. */
+export async function readBody(req: Request, maxBytes?: number): Promise<Record<string, unknown> | Response> {
+  try {
+    return await readJsonObject(req, maxBytes);
+  } catch (error) {
+    return bodyErrorResponse(error);
+  }
+}
+
+/** A state-changing request's JSON object body, once its origin and CSRF token pass; or the response refusing it. */
+export async function readMutation(req: Request, maxBytes?: number): Promise<Record<string, unknown> | Response> {
+  return guardMutation(req) ?? await readBody(req, maxBytes);
+}
+
 /**
  * Percent-decode one path segment, or null when the encoding is malformed.
  *

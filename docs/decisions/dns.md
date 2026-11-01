@@ -211,11 +211,11 @@ site, DNS keeps its ownership record so a later deletion can still identify
 the site, and reports both failures. The record stays marked incomplete until
 the vhost is written, so a later pass writes it rather than taking a static
 site that does not redirect for a working stand-in.
-DNS, Stager, Maintenance, SMTP
-Relay and Cloudflare IP Access leave stand-ins out of their site lists, so does
-the panel snapshot the Git, Maintenance, Stager and Terminal pages read, PHP
-Resources and WordPress Tools never list a static site, and Panel Tweaks shows
-"Redirect" as its runtime on the Sites page. Global maintenance mode reaches a
+DNS leaves stand-ins out of its site list through `isStandInSite`, and Stager,
+Maintenance, SMTP Relay and Cloudflare IP Access through `withoutStandIns` in
+`cli/panel-db.ts`. The panel snapshot the Git, Maintenance, Stager and Terminal
+pages read leaves them out too. PHP Resources and WordPress Tools never list a
+static site, and Panel Tweaks shows "Redirect" as its runtime on the Sites page. Global maintenance mode reaches a
 stand-in as it does every vhost.
 
 Adding a connection holds every redirect a stand-in serves, and removing the

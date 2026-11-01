@@ -22,7 +22,7 @@ export const SMTP_ADDON: AddonDefinition = {
       return result.joined ? `${count(result.joined, "new site")} joined the default profile` : null;
     },
   },
-  maintenance: {
+  repair: {
     label: "SMTP relay",
     run: async (options) => {
       const result = await executeSmtpAction(["reconcile"], (options ?? {}) as SmtpActionOptions) as { repaired: number; joined: number };

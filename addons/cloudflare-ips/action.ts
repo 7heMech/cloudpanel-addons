@@ -4,13 +4,13 @@ import {
 } from "node:fs";
 import { dirname, join } from "node:path";
 import {
-  ActionFailure, emitActionError, emitActionOk, failAction, runCommand, validateFlag, withFileLock,
+  errorMessage, replyToAction, failAction, runCommand, validateFlag, withFileLock,
   type CommandResult,
 } from "../../cli/action-common";
 import { PANEL_DB, STATE_DIR } from "../../cli/paths";
-import { standInDomains } from "../../cli/stand-ins";
+import { openPanelDatabase, withoutStandIns } from "../../cli/panel-db";
 import {
-  errorMessage, openPanelDatabase, trustedVhost, withNginxTransaction, withRecoveryFailures, writeAtomicOwned,
+  trustedVhost, withNginxTransaction, withRecoveryFailures, writeAtomicOwned,
 } from "../../cli/nginx-transaction";
 import { CLOUDFLARE_IPS_VERBS } from "./verbs";
 
@@ -144,11 +144,9 @@ function writePolicy(path: string, policy: Policy, expectedUid: number): void {
 
 function siteRows(db: Database): SiteRow[] {
   try {
-    const standIns = standInDomains();
-    return db.query<SiteRow, []>(
+    return withoutStandIns(db.query<SiteRow, []>(
       "SELECT id, domain_name, user, allow_traffic_from_cloudflare_only FROM site ORDER BY domain_name;",
-    ).all().map((row) => ({ ...row, id: Number(row.id), domain_name: String(row.domain_name), user: String(row.user) }))
-      .filter((row) => !standIns.has(row.domain_name));
+    ).all().map((row) => ({ ...row, id: Number(row.id), domain_name: String(row.domain_name), user: String(row.user) })));
   } catch (error) {
     failAction(`CloudPanel does not expose the required Cloudflare site setting: ${error instanceof Error ? error.message : String(error)}`);
   }
@@ -369,31 +367,19 @@ function requireRoot(): void {
 }
 
 export async function runCloudflareAction(argv: string[], options: CloudflareActionOptions = {}): Promise<number> {
-  const emit = options.emitReply !== false;
-  try {
+  return replyToAction("cloudflare-ips", options.emitReply !== false, async () => {
     requireRoot();
     const paths = pathsFor(options);
     const action = parseAction(argv);
     const command = options.run ?? runCommand;
-    let data: unknown;
-    if (action.verb === "list") data = listState(paths);
-    else if (action.verb === "policy") {
+    if (action.verb === "list") return listState(paths);
+    if (action.verb === "policy") {
       const policy = await setPolicy(paths, action.enabled!);
-      data = { autoEnableNewSites: policy.autoEnableNewSites };
-    } else if (action.verb === "set") {
-      data = await setSelected(paths, requestedDomains(options.input), action.enabled!, command);
-    } else if (action.verb === "reconcile") {
-      data = await reconcileNewSites(paths, command);
-    } else {
-      action.verb satisfies never;
-      failAction(`unknown Cloudflare IP action '${action.verb}'`);
+      return { autoEnableNewSites: policy.autoEnableNewSites };
     }
-    if (emit) emitActionOk(data);
-    return 0;
-  } catch (error) {
-    const message = error instanceof Error ? error.message : String(error);
-    if (emit) emitActionError(message, error instanceof ActionFailure ? error.data : undefined, "cloudflare-ips");
-    else process.stderr.write(`[cloudflare-ips] ERROR: ${message}\n`);
-    return 1;
-  }
+    if (action.verb === "set") return setSelected(paths, requestedDomains(options.input), action.enabled!, command);
+    if (action.verb === "reconcile") return reconcileNewSites(paths, command);
+    action.verb satisfies never;
+    failAction(`unknown Cloudflare IP action '${action.verb}'`);
+  });
 }

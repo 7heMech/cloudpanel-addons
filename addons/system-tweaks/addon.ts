@@ -11,7 +11,7 @@ export const SYSTEM_TWEAKS_ADDON: AddonDefinition = {
   targets: [],
   handler: handle,
   action: runSystemTweaksAction,
-  maintenance: {
+  repair: {
     label: "system tweaks",
     run: () => systemTweaksMaintenance(),
   },

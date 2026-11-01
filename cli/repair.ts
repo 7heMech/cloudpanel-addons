@@ -3,7 +3,7 @@
 import { installedAddons, resolveAddon, migrateOldAddonNames } from "./addons";
 import { reconcileAnchors, reconcileMaintenanceNginx, reconcileNginx } from "./reconcile";
 import { reconcilePhpGuard } from "./php-guard";
-import { runAddonMaintenance, runManagerMaintenance } from "./maintenance";
+import { runAddonRepairs, runManagerRepair } from "./addon-hooks";
 import { withOperationLock } from "./operation-lock";
 import { conffilesReleased } from "./conffiles";
 import { CERTIFICATES_PATH, MANAGER_UNIT, NEW_SITES_PATH, SYSTEMD_DIR } from "./paths";
@@ -90,7 +90,7 @@ async function applyRepair(positional: string[], flags: Record<string, string | 
   // skips the reload if that check fails. Running prune first, while the
   // master vhost might still be broken, would leave a just-restored site
   // vhost on disk but unloaded until the next 15-minute cycle.
-  await runAddonMaintenance(all);
-  runManagerMaintenance();
+  await runAddonRepairs(all);
+  runManagerRepair();
   if (!quiet) log.ok(`repair complete (${specs.map((spec) => spec.name).join(", ") || "no addon enabled"})`);
 }

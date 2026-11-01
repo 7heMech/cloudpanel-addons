@@ -39,8 +39,8 @@ export type AddonHandler = (
   auth?: { user: string; roles: string[] } | null,
 ) => Promise<Response>;
 
-/** Upkeep this addon wants during `repair`. */
-export interface AddonMaintenance {
+/** Work an addon hands the platform to run at one of its moments. */
+export interface AddonHook {
   /** How it is named when it reports or fails. */
   label: string;
   /** Returns a line worth printing, or null when there was nothing to do. */
@@ -48,13 +48,14 @@ export interface AddonMaintenance {
 }
 
 /** Work for sites CloudPanel has just created. */
-export interface AddonNewSites extends AddonMaintenance {
+export interface AddonNewSites extends AddonHook {
   /**
-   * Asked on every wake of the new-site watcher for an hour after the sites
-   * last changed: whether a new site still waits for a later step of its
-   * creation. While one does, the watcher keeps waking on panel writes.
+   * Run on every wake of the new-site watcher for an hour after the sites last
+   * changed: queues what a new site's latest step of creation allows, and says
+   * whether one still waits for a later step. While one does, the watcher
+   * keeps waking on panel writes.
    */
-  waiting?: (options?: Record<string, unknown>) => Promise<{ waiting: boolean; line: string | null }>;
+  resumePending?: (options?: Record<string, unknown>) => Promise<{ waiting: boolean; line: string | null }>;
 }
 
 /** What an addon declares about itself. Paths are derived, not declared. */
@@ -103,11 +104,12 @@ export interface AddonDefinition {
    * the request to the gate, and may call only `pre-gate` verbs.
    */
   preGate?: { prefix: string; handle: (req: Request, path: string) => Promise<Response | null> };
-  maintenance?: AddonMaintenance;
+  /** Upkeep run by `repair` and its fifteen-minute timer. */
+  repair?: AddonHook;
   /** Work for sites CloudPanel has just created, run seconds after it writes their vhost. */
   newSites?: AddonNewSites;
   /** Work for sites whose certificate CloudPanel has just written. */
-  certificates?: AddonMaintenance;
+  certificates?: AddonHook;
 }
 
 /**
@@ -197,6 +199,6 @@ export function addonCertificates(installed: AddonSpec[]): AddonSpec[] {
 }
 
 /** The installed addons that want upkeep during repair, in catalog order. */
-export function addonMaintenance(installed: AddonSpec[]): AddonSpec[] {
-  return installed.filter((spec) => spec.maintenance !== undefined);
+export function addonRepairs(installed: AddonSpec[]): AddonSpec[] {
+  return installed.filter((spec) => spec.repair !== undefined);
 }

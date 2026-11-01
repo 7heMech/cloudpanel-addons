@@ -7,7 +7,8 @@ import {
   panelVersion, reconcile, reconcileNginxMaintenance, reconcileNginxProxy,
 } from "./inject";
 import { ensureMaintenanceData } from "../addons/maintenance/action";
-import { SITE_TAB_TEMPLATE, adminHeaderTarget, headerTarget, siteLayoutTarget } from "../lib/panel-nav";
+import { TEMPLATES } from "../lib/panel-anchors";
+import { adminHeaderTarget, headerTarget, siteLayoutTarget } from "../lib/panel-nav";
 import { ADDONS, ADDON_NAMES } from "./addon-catalog";
 import { mountPath } from "./paths";
 import { log } from "./util";
@@ -35,7 +36,7 @@ export function installedInjections(exclude?: string, managerNav = true): Inject
 
   // The site tab strip only needs its one-row rule once some installed addon is
   // actually adding a tab to it, and it needs it exactly once however many do.
-  if (installed.some((name) => ADDONS[name]!.targets.some((target) => target.template === SITE_TAB_TEMPLATE))) {
+  if (installed.some((name) => ADDONS[name]!.targets.some((target) => target.template === TEMPLATES.siteTabs))) {
     injections.push({ addon: "manager", target: siteLayoutTarget(), url: "/addons/" });
   }
 
