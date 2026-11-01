@@ -1,4 +1,4 @@
-import { describe, expect, test } from "bun:test";
+import { afterAll, beforeAll, describe, expect, test } from "bun:test";
 import { readFileSync } from "node:fs";
 import { ADDONS as CATALOG } from "../cli/addon-catalog";
 import { callGatewayAction, gatewayCaller, streamGatewayAction } from "../lib/gateway-client";
@@ -82,6 +82,13 @@ describe("each action dispatches exactly the verbs it declares", () => {
 // declared for them; a refusal never reaches the socket.
 describe("the manager refuses a verb its caller may not ask for", () => {
   const options = { socketPath: "/nonexistent/clp-addons-test.sock", timeout: 1_000 };
+  // Run as root with no socket, an allowed call would otherwise start the installed binary.
+  const testBin = process.env.CLP_ADDONS_ACTION_TEST_BIN;
+  beforeAll(() => { process.env.CLP_ADDONS_ACTION_TEST_BIN = "/nonexistent/clp-addons-test-bin"; });
+  afterAll(() => {
+    if (testBin === undefined) delete process.env.CLP_ADDONS_ACTION_TEST_BIN;
+    else process.env.CLP_ADDONS_ACTION_TEST_BIN = testBin;
+  });
   const refused = (addon: string, verb: string) => ({ ok: false, error: `${addon} ${verb} is not available to this session` });
 
   test.each([
