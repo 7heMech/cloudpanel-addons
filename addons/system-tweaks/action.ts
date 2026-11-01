@@ -20,7 +20,7 @@ import {
 import { log } from "../../cli/util";
 import { clearAbandonedTmpFiles, type TmpCleanupOptions } from "../../cli/tmp-cleanup";
 import {
-  expectRule, firewallStatus, setRuleProtocol, syncFirewall, type FirewallOptions, type FirewallStatus,
+  firewallStatus, setRuleProtocol, syncFirewall, type FirewallOptions, type FirewallStatus,
 } from "./firewall";
 
 const SETTINGS_VERSION = 1;
@@ -238,10 +238,6 @@ export async function executeSystemTweaksAction(argv: string[], options: SystemT
   if (verb === "firewall") return firewallStatus(options.firewall);
   if (verb === "set-firewall-protocol") {
     setRuleProtocol(await requestBody(options), options.firewall);
-    return firewallStatus(options.firewall);
-  }
-  if (verb === "expect-firewall-rule") {
-    expectRule(await requestBody(options), options.firewall);
     return firewallStatus(options.firewall);
   }
   if (verb !== "install-updates") {

@@ -4,7 +4,7 @@ import {
 import type { ActionResult } from "../../../lib/gateway-client";
 import { REBOOT_TIME_ERROR, validRebootTime } from "../updates";
 import type { SystemTweaksState } from "../action";
-import { FIREWALL_PROTOCOLS, normalizePortRange, type FirewallProtocol, type FirewallStatus } from "../firewall";
+import { FIREWALL_PROTOCOLS, ruleKey, type FirewallProtocol, type FirewallStatus } from "../firewall";
 import { systemTweaksService } from "./service";
 import { dashboardView, layout } from "./views";
 
@@ -85,18 +85,14 @@ export async function handle(
   }
 
   if (path === "/api/firewall/rule") {
-    if (!Number.isSafeInteger(body.id) || !FIREWALL_PROTOCOLS.includes(body.protocol as FirewallProtocol)) {
-      return json({ ok: false, error: "a rule id and a protocol of tcp, udp or both are required" }, 400);
+    const { portRange, source, protocol, id } = body;
+    if (typeof portRange !== "string" || typeof source !== "string" || !ruleKey(portRange, source)) {
+      return json({ ok: false, error: "Port Range must be a port or a range such as 8000-8100, and Source an address or a CIDR" }, 400);
     }
-    return firewallReply(await systemTweaksService.setFirewallProtocol(body.id as number, body.protocol as string));
-  }
-
-  if (path === "/api/firewall/new-rule") {
-    const portRange = typeof body.portRange === "string" ? normalizePortRange(body.portRange) : null;
-    if (!portRange || !FIREWALL_PROTOCOLS.includes(body.protocol as FirewallProtocol)) {
-      return json({ ok: false, error: "Port Range must be a port or a range such as 8000-8100" }, 400);
+    if (!FIREWALL_PROTOCOLS.includes(protocol as FirewallProtocol) || (id !== undefined && !Number.isSafeInteger(id))) {
+      return json({ ok: false, error: "a protocol of tcp, udp or both is required" }, 400);
     }
-    return firewallReply(await systemTweaksService.expectFirewallRule(portRange, body.protocol as string));
+    return firewallReply(await systemTweaksService.setFirewallProtocol({ portRange, source, protocol: protocol as string, id: id as number | undefined }));
   }
 
   if (path === "/api/real-ip") {

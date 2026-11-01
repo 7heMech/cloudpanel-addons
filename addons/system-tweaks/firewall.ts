@@ -13,9 +13,11 @@ import { writeFileAtomic } from "../../lib/atomic-write";
 export type FirewallProtocol = "tcp" | "udp" | "both";
 export const FIREWALL_PROTOCOLS: readonly FirewallProtocol[] = ["tcp", "udp", "both"];
 
-const STATE_VERSION = 1;
-/** How long a protocol chosen on the add form waits for the rule CloudPanel saves. */
-export const PENDING_TTL_MS = 10 * 60_000;
+const STATE_VERSION = 2;
+/** How long a protocol no rule has matched yet waits for one before it is forgotten. */
+export const UNMATCHED_GRACE_MS = 60 * 60_000;
+/** CloudPanel's own port: UDP alone there would close the panel to TCP. */
+const PANEL_PORT = "8443";
 /** ufw's files must have been left alone this long before they are read. */
 const QUIET_MS = 2_000;
 const QUIET_LIMIT_MS = 60_000;
@@ -23,12 +25,12 @@ const MAX_PASSES = 5;
 
 export interface PanelRule { id: number; portRange: string; source: string }
 export interface UfwRule { proto: "tcp" | "udp"; port: string; src: string }
-export interface PendingRule { portRange: string; protocol: FirewallProtocol; afterId: number; at: number }
 
 export interface FirewallState {
-  /** Rule ids that are not TCP alone; every other rule is CloudPanel's own TCP. */
+  /** By `<port range> <source>` (see ruleKey); a rule with no entry is CloudPanel's own TCP. */
   protocols: Record<string, Exclude<FirewallProtocol, "tcp">>;
-  pending: PendingRule[];
+  /** Entries no rule has matched yet, with when they were chosen. */
+  unmatched: Record<string, number>;
   /** The ufw rules this addon added or removed against CloudPanel's own, so it can put them back. */
   managed: UfwRule[];
   /** Set while System Tweaks is off, so a watcher still running then applies nothing. */
@@ -138,6 +140,13 @@ export function ufwPort(portRange: string): string | null {
   return match[2] === undefined || from === to ? String(from) : `${from}:${to}`;
 }
 
+/** What a rule is, as CloudPanel's form stores the range and ufw writes the source: `51820 0.0.0.0/0`. */
+export function ruleKey(portRange: string, source: string): string | null {
+  const range = normalizePortRange(portRange);
+  const address = normalizeSource(source);
+  return range && address ? `${range} ${address.text}` : null;
+}
+
 // --- What is on disk -------------------------------------------------------
 
 export function readPanelRules(panelDb: string): PanelRule[] {
@@ -169,7 +178,7 @@ function readUfwRules(paths: FirewallPaths): UfwRule[] {
 }
 
 export function readFirewallState(paths: FirewallPaths): FirewallState {
-  const state: FirewallState = { protocols: {}, pending: [], managed: [] };
+  const state: FirewallState = { protocols: {}, unmatched: {}, managed: [] };
   if (!existsSync(paths.stateFile)) return state;
   const info = lstatSync(paths.stateFile);
   if (!info.isFile() || info.uid !== paths.rootUid || (info.mode & 0o022) !== 0) {
@@ -179,16 +188,12 @@ export function readFirewallState(paths: FirewallPaths): FirewallState {
   try { stored = JSON.parse(readFileSync(paths.stateFile, "utf8")); } catch { return state; }
   if (stored?.version !== STATE_VERSION) return state;
   if (stored.withdrawn === true) state.withdrawn = true;
-  for (const [id, protocol] of Object.entries((stored.protocols ?? {}) as Record<string, unknown>)) {
-    if (/^\d{1,9}$/.test(id) && (protocol === "udp" || protocol === "both")) state.protocols[id] = protocol;
-  }
-  if (Array.isArray(stored.pending)) {
-    for (const item of stored.pending as Record<string, unknown>[]) {
-      if (typeof item?.portRange === "string" && ufwPort(item.portRange) && FIREWALL_PROTOCOLS.includes(item.protocol as FirewallProtocol)
-        && Number.isInteger(item.afterId) && typeof item.at === "number") {
-        state.pending.push(item as unknown as PendingRule);
-      }
-    }
+  const unmatched = (stored.unmatched ?? {}) as Record<string, unknown>;
+  for (const [key, protocol] of Object.entries((stored.protocols ?? {}) as Record<string, unknown>)) {
+    const [range = "", source = ""] = key.split(" ");
+    if (ruleKey(range, source) !== key || (protocol !== "udp" && protocol !== "both")) continue;
+    state.protocols[key] = protocol;
+    if (typeof unmatched[key] === "number") state.unmatched[key] = unmatched[key];
   }
   if (Array.isArray(stored.managed)) {
     for (const item of stored.managed as Record<string, unknown>[]) {
@@ -209,26 +214,23 @@ function writeFirewallState(paths: FirewallPaths, state: FirewallState): void {
 // --- Deciding --------------------------------------------------------------
 
 /**
- * Hands a protocol chosen on the add form to the rules CloudPanel saved after
- * it, and forgets protocols of rules that are gone and choices that waited too long.
+ * Forgets an entry once a rule matched it and none does any more, and one no
+ * rule has matched once it has waited UNMATCHED_GRACE_MS: the forms record a
+ * choice before CloudPanel saves its rule.
  */
 export function settleState(state: FirewallState, rules: PanelRule[], now: number): FirewallState {
-  const ids = new Set(rules.map((rule) => String(rule.id)));
-  const protocols = Object.fromEntries(Object.entries(state.protocols).filter(([id]) => ids.has(id)));
-  const known = new Set(Object.keys(state.protocols));
-  const pending: PendingRule[] = [];
-  for (const item of state.pending) {
-    const fresh = rules.filter((rule) => rule.id > item.afterId && !known.has(String(rule.id)) && rule.portRange === item.portRange);
-    if (!fresh.length) {
-      if (now - item.at < PENDING_TTL_MS) pending.push(item);
-      continue;
-    }
-    for (const rule of fresh) {
-      known.add(String(rule.id));
-      if (item.protocol !== "tcp") protocols[String(rule.id)] = item.protocol;
+  const present = new Set(rules.map((rule) => ruleKey(rule.portRange, rule.source)));
+  const protocols: FirewallState["protocols"] = {};
+  const unmatched: FirewallState["unmatched"] = {};
+  for (const [key, protocol] of Object.entries(state.protocols)) {
+    const since = state.unmatched[key];
+    if (present.has(key)) protocols[key] = protocol;
+    else if (since !== undefined && now - since < UNMATCHED_GRACE_MS) {
+      protocols[key] = protocol;
+      unmatched[key] = since;
     }
   }
-  return { ...state, protocols, pending };
+  return { ...state, protocols, unmatched };
 }
 
 /** CloudPanel's own UDP rules, for HTTP/3, which it adds on every rebuild. */
@@ -258,7 +260,7 @@ export function planFirewall(rules: PanelRule[], protocols: FirewallState["proto
     if (!port || !source) continue;
     const name = `${port} ${source.text}`;
     const group = groups.get(name) ?? { port, src: source.text, tcp: false, udp: false };
-    const protocol = protocols[String(rule.id)] ?? "tcp";
+    const protocol = protocols[ruleKey(rule.portRange, rule.source) ?? ""] ?? "tcp";
     group.tcp ||= protocol !== "udp";
     group.udp ||= protocol !== "tcp";
     groups.set(name, group);
@@ -329,7 +331,7 @@ export function syncFirewall(mode: "apply" | "withdraw" | "restore", options: Fi
   if (!ufwInstalled(paths)) return null;
   // Nothing chosen and nothing changed: ufw is CloudPanel's alone.
   const held = readFirewallState(paths);
-  const idle = !Object.keys(held.protocols).length && !held.pending.length && !held.managed.length;
+  const idle = !Object.keys(held.protocols).length && !held.managed.length;
   if (idle && Boolean(held.withdrawn) === !enabled) return null;
   if (mode === "apply" && held.withdrawn) return null;
   const now = options.now ?? Date.now;
@@ -374,6 +376,7 @@ export function syncFirewall(mode: "apply" | "withdraw" | "restore", options: Fi
 export interface FirewallStatus {
   /** Whether ufw is on this box at all. */
   available: boolean;
+  /** By CloudPanel's rule id, for its pages: the rules that are not TCP alone. */
   protocols: Record<string, FirewallProtocol>;
   /** The port ranges open to UDP by a rule's protocol, besides CloudPanel's own 443. */
   udpPorts: string[];
@@ -382,48 +385,47 @@ export interface FirewallStatus {
 export function firewallStatus(options: FirewallOptions = {}): FirewallStatus {
   const paths = pathsOf(options);
   if (!ufwInstalled(paths)) return { available: false, protocols: {}, udpPorts: [] };
-  const rules = readPanelRules(paths.panelDb);
-  const state = settleState(readFirewallState(paths), rules, (options.now ?? Date.now)());
-  const udpPorts = [...new Set(rules.filter((rule) => state.protocols[String(rule.id)]).map((rule) => rule.portRange))]
-    .sort((a, b) => parseInt(a, 10) - parseInt(b, 10));
-  return { available: true, protocols: state.protocols, udpPorts };
+  const state = readFirewallState(paths);
+  const protocols: FirewallStatus["protocols"] = {};
+  const udpPorts = new Set<string>();
+  for (const rule of readPanelRules(paths.panelDb)) {
+    const protocol = state.protocols[ruleKey(rule.portRange, rule.source) ?? ""];
+    if (!protocol) continue;
+    protocols[rule.id] = protocol;
+    udpPorts.add(rule.portRange);
+  }
+  return { available: true, protocols, udpPorts: [...udpPorts].sort((a, b) => parseInt(a, 10) - parseInt(b, 10)) };
 }
 
-function protocolOf(value: unknown): FirewallProtocol {
-  if (!FIREWALL_PROTOCOLS.includes(value as FirewallProtocol)) failAction("protocol must be tcp, udp or both");
-  return value as FirewallProtocol;
-}
-
-/** The edit form: the rule exists, so its protocol is set now and applied when CloudPanel rebuilds ufw. */
+/**
+ * What the add and edit forms send just before CloudPanel's own submit: the
+ * Port Range and Source they hold, the protocol, and on the edit form the
+ * rule's id. CloudPanel applies it when it rebuilds ufw after saving.
+ */
 export function setRuleProtocol(body: Record<string, unknown>, options: FirewallOptions = {}): void {
   const paths = pathsOf(options);
-  const protocol = protocolOf(body.protocol);
-  if (!Number.isSafeInteger(body.id) || (body.id as number) < 1) failAction("id must be a firewall rule's id");
-  const id = String(body.id);
-  withFileLockSync(paths.lockFile, 30, "another firewall change is still running", () => {
-    if (!readPanelRules(paths.panelDb).some((rule) => String(rule.id) === id)) failAction("there is no such firewall rule");
-    const state = readFirewallState(paths);
-    if (protocol === "tcp") delete state.protocols[id];
-    else state.protocols[id] = protocol;
-    writeFirewallState(paths, state);
-  });
-}
-
-/** The add form: the rule does not exist yet, so the protocol waits for the next rule saved with that port range. */
-export function expectRule(body: Record<string, unknown>, options: FirewallOptions = {}): void {
-  const paths = pathsOf(options);
-  const protocol = protocolOf(body.protocol);
-  const portRange = typeof body.portRange === "string" ? normalizePortRange(body.portRange) : null;
-  if (!portRange) failAction("portRange must be a port or a range such as 8000-8100");
+  if (!FIREWALL_PROTOCOLS.includes(body.protocol as FirewallProtocol)) failAction("protocol must be tcp, udp or both");
+  const protocol = body.protocol as FirewallProtocol;
+  const key = typeof body.portRange === "string" && typeof body.source === "string" ? ruleKey(body.portRange, body.source) : null;
+  if (!key) failAction("Port Range must be a port or a range such as 8000-8100, and Source an address or a CIDR");
+  if (protocol === "udp" && key.startsWith(`${PANEL_PORT} `)) {
+    failAction(`CloudPanel itself is on port ${PANEL_PORT}, which UDP alone would close to TCP; choose TCP and UDP`);
+  }
   const now = (options.now ?? Date.now)();
   withFileLockSync(paths.lockFile, 30, "another firewall change is still running", () => {
-    const rules = readPanelRules(paths.panelDb);
-    const afterId = rules.reduce((max, rule) => Math.max(max, rule.id), 0);
     const state = readFirewallState(paths);
-    state.pending = [
-      ...state.pending.filter((item) => item.portRange !== portRange && now - item.at < PENDING_TTL_MS),
-      { portRange, protocol, afterId, at: now },
-    ];
+    if ((state.protocols[key] ?? "tcp") === protocol) return;
+    const matching = readPanelRules(paths.panelDb).filter((rule) => ruleKey(rule.portRange, rule.source) === key);
+    // Another rule has this port range and source, which this form would change too.
+    if (matching.length && !matching.some((rule) => rule.id === body.id)) {
+      failAction(`a rule for ${key.replace(" ", " from ")} already exists; set its protocol on that rule's edit page`);
+    }
+    delete state.unmatched[key];
+    if (protocol === "tcp") delete state.protocols[key];
+    else {
+      state.protocols[key] = protocol;
+      if (!matching.length) state.unmatched[key] = now;
+    }
     writeFirewallState(paths, state);
   });
 }

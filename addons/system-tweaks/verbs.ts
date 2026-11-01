@@ -9,5 +9,4 @@ export const SYSTEM_TWEAKS_VERBS = {
   "set-panel-php": { web: "admin" },
   firewall: { web: "admin" },
   "set-firewall-protocol": { web: "admin" },
-  "expect-firewall-rule": { web: "admin" },
 } as const;

@@ -332,27 +332,40 @@ next change on that page. The table has no protocol column, and Symfony refuses
 a field its form does not declare.
 
 So System Tweaks keeps the protocol itself, in
-`/var/lib/clp-addons/system-tweaks/firewall.json`, by CloudPanel's rule id
-(AUTOINCREMENT, so never reused). A rule with no entry is TCP, CloudPanel's own.
+`/var/lib/clp-addons/system-tweaks/firewall.json`, keyed by what the rule is:
+its port range, as CloudPanel's form stores it, and its source, as ufw writes
+it (`"51820 0.0.0.0/0": "udp"`). CloudPanel already refuses two rows with the
+same port range and source. A protocol applies only to rows that match exactly;
+every other row is TCP, CloudPanel's own, so choosing TCP deletes the entry.
+Rule ids are not used: a rebuilt table (a restore, a CloudPanel migration) can
+give an id to another rule, which a stored "UDP only" would then strip of TCP,
+SSH included, and ids say nothing on a box whose rules were renumbered. Rows
+whose source differs only in spelling (`203.0.113.9` and `203.0.113.9/32`) share
+a protocol.
+
 It adds a Protocol field (TCP, UDP, TCP and UDP) after Port Range on the add and
 edit forms, and a Protocol column after Port Range in the table, which fills
-from the `firewall` verb. The field has no name. The edit form sets its rule's
-protocol through `set-firewall-protocol` before it submits. On the add form the
-rule has no id yet, so `expect-firewall-rule` records the port range, as
-CloudPanel's form normalises it, with the highest rule id at that moment; the
-next rules saved above that id with that range take the protocol. A choice
-waits ten minutes. A failed request stops the form with an error, except a TCP
-choice on the add form, which is CloudPanel's own and submits anyway. System
-Tweaks' page gets one line: the UDP ports the protocols open, with a link to
-the Firewall page.
+from the `firewall` verb. The field has no name and shows once System Tweaks
+answers. Both forms send their Port Range, Source, protocol and, on the edit
+form, the rule's id to `set-firewall-protocol`, then submit. That refuses UDP
+alone for port 8443, which would close CloudPanel's own panel to TCP, and a
+change to a port range and source another rule already has, since CloudPanel
+then refuses the form as a duplicate or saves a row that shares the protocol. A
+failed request stops the form with an error. System Tweaks' page gets one line:
+the UDP ports the protocols open, with a link to the Firewall page.
+
+The form sends its choice before CloudPanel saves the row, and a pass can run in
+between, so an entry no row has matched yet waits an hour. One that matched and
+no longer does is forgotten at once: deleting a rule, or editing its port range
+or source, retires it. An entry left by a form CloudPanel refused can only ever
+apply to a rule with exactly its port range and source.
 
 `clp-addons-firewall.path` watches `/etc/ufw/user.rules` and `user6.rules`
 while System Tweaks is enabled, which is how it learns that CloudPanel rebuilt
 ufw; the 15-minute repair runs the same pass. `clp-addons sync-firewall` runs
 each installed addon's `firewall` hook. The pass waits until both files have
 been still for two seconds, since the rebuild writes them once per command,
-then, under its own lock, settles waiting choices, forgets ids no longer in the
-table, and compares ufw's `### tuple ###` lines with the protocols. Sources are
+then, under its own lock, forgets entries as above and compares ufw's `### tuple ###` lines with the protocols. Sources are
 compared the way ufw records them: the network address, without `/32` or
 `/128`, IPv6 compressed. It repeats until a pass changes nothing, at most five
 times, so a rebuild still running when it starts is caught, and refuses to loop
@@ -373,3 +386,8 @@ Disabling marks the protocols withdrawn under the same lock before putting
 ufw back, because that change wakes the watcher, which must not apply them
 again. A failure there warns and does not keep System Tweaks on. Enabling clears
 the mark and applies the kept protocols.
+
+CloudPanel v3 migrates the rules themselves. If v3 has a protocol of its own,
+System Tweaks writes each stored choice onto the v3 rule with the same port
+range and source, then retires its file and its page patch. Without the addon,
+a UDP rule comes back as TCP.

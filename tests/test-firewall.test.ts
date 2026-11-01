@@ -4,8 +4,8 @@ import { mkdtempSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
-  PENDING_TTL_MS, expectRule, firewallStatus, normalizePortRange, normalizeSource, parseUfwRules, planFirewall,
-  readFirewallState, setRuleProtocol, settleState, syncFirewall, ufwPort,
+  UNMATCHED_GRACE_MS, firewallStatus, normalizePortRange, normalizeSource, parseUfwRules, planFirewall,
+  readFirewallState, ruleKey, setRuleProtocol, settleState, syncFirewall, ufwPort,
   type FirewallOptions, type FirewallState, type PanelRule, type UfwRule,
 } from "../addons/system-tweaks/firewall";
 
@@ -41,6 +41,8 @@ test("sources and ports are compared the way ufw writes them", () => {
   expect(normalizePortRange(" 8000 - 8100 ")).toBe("8000-8100");
   expect(normalizePortRange("053")).toBe("53");
   expect(normalizePortRange("53,54")).toBeNull();
+  expect(ruleKey(" 8000 - 8100 ", " 203.0.113.9/32 ")).toBe("8000-8100 203.0.113.9");
+  expect(ruleKey("53", "any")).toBeNull();
 });
 
 test("only plain inbound allow rules are read from ufw's files", () => {
@@ -58,34 +60,23 @@ test("only plain inbound allow rules are read from ufw's files", () => {
   ]);
 });
 
-test("a protocol chosen on the add form goes to the rules saved after it with that port range", () => {
+test("an entry is kept while a rule matches it, or while it waits for its first one", () => {
   const now = 1_000_000;
-  const rules = [...ANYWHERE, { id: 5, portRange: "53", source: "0.0.0.0/0" }, { id: 6, portRange: "53", source: "::/0" }];
   const state: FirewallState = {
-    protocols: {},
-    pending: [
-      { portRange: "53", protocol: "udp", afterId: 4, at: now - 1000 },
-      { portRange: "22", protocol: "udp", afterId: 4, at: now - 1000 },
-    ],
+    protocols: { "22 0.0.0.0/0": "udp", "53 ::/0": "both", "51820 0.0.0.0/0": "udp", "60000 0.0.0.0/0": "udp" },
+    unmatched: { "51820 0.0.0.0/0": now - 1000, "60000 0.0.0.0/0": now - UNMATCHED_GRACE_MS },
     managed: [],
   };
-  const settled = settleState(state, rules, now);
-  expect(settled.protocols).toEqual({ 5: "udp", 6: "udp" });
-  // Rule 22 existed before the choice, so it is not taken for the new rule.
-  expect(settled.pending).toEqual([state.pending[1]!]);
-  // It waits ten minutes for its rule, then is forgotten.
-  expect(settleState(state, ANYWHERE, now + PENDING_TTL_MS).pending).toEqual([]);
-  // A TCP choice is CloudPanel's own, and is used up by its rule all the same.
-  const tcp = settleState({ ...state, pending: [{ portRange: "53", protocol: "tcp", afterId: 4, at: now }] }, rules, now);
-  expect(tcp).toEqual({ protocols: {}, pending: [], managed: [] });
-  // A rule that already has a protocol keeps it.
-  const kept = settleState({ ...state, protocols: { 5: "both" } }, rules, now);
-  expect(kept.protocols).toEqual({ 5: "both", 6: "udp" });
-});
-
-test("protocols of rules that are gone are forgotten", () => {
-  const settled = settleState({ protocols: { 3: "udp", 99: "both" }, pending: [], managed: [] }, ANYWHERE, 0);
-  expect(settled.protocols).toEqual({ 3: "udp" });
+  // 22 matches; 53 matched once and its rule is gone; 51820 was just chosen; 60000 waited too long.
+  expect(settleState(state, ANYWHERE, now)).toEqual({
+    protocols: { "22 0.0.0.0/0": "udp", "51820 0.0.0.0/0": "udp" },
+    unmatched: { "51820 0.0.0.0/0": now - 1000 },
+    managed: [],
+  });
+  // Once its rule is saved it no longer waits, and goes with the rule.
+  const saved = settleState(state, [...ANYWHERE, { id: 5, portRange: "51820", source: "0.0.0.0/0" }], now);
+  expect(saved.unmatched).toEqual({});
+  expect(settleState(saved, ANYWHERE, now).protocols).toEqual({ "22 0.0.0.0/0": "udp" });
 });
 
 test("TCP alone asks nothing of ufw", () => {
@@ -94,7 +85,7 @@ test("TCP alone asks nothing of ufw", () => {
 
 test("UDP opens UDP and closes the TCP rule CloudPanel just added; additions go first", () => {
   const rules = [...ANYWHERE, { id: 5, portRange: "51820", source: "0.0.0.0/0" }, { id: 6, portRange: "3478-3479", source: "203.0.113.0/24" }];
-  const plan = planFirewall(rules, { 5: "udp", 6: "udp" }, [], panelBuilt(rules));
+  const plan = planFirewall(rules, { "51820 0.0.0.0/0": "udp", "3478-3479 203.0.113.0/24": "udp" }, [], panelBuilt(rules));
   expect(plan.commands).toEqual([
     ["allow", "proto", "udp", "from", "0.0.0.0/0", "to", "any", "port", "51820"],
     ["allow", "proto", "udp", "from", "203.0.113.0/24", "to", "any", "port", "3478:3479"],
@@ -106,15 +97,29 @@ test("UDP opens UDP and closes the TCP rule CloudPanel just added; additions go 
 
 test("TCP and UDP opens UDP beside CloudPanel's TCP", () => {
   const rules = [...ANYWHERE, { id: 5, portRange: "53", source: "::/0" }];
-  const plan = planFirewall(rules, { 5: "both" }, [], panelBuilt(rules));
+  const plan = planFirewall(rules, { "53 ::/0": "both" }, [], panelBuilt(rules));
   expect(plan.commands).toEqual([["allow", "proto", "udp", "from", "::/0", "to", "any", "port", "53"]]);
   expect(plan.managed).toEqual([{ proto: "udp", port: "53", src: "::/0" }]);
 });
 
-test("a rule whose TCP another rule for the same port and source still wants keeps it", () => {
-  const rules = [...ANYWHERE, { id: 5, portRange: "53", source: "0.0.0.0/0" }, { id: 6, portRange: "53", source: "0.0.0.0/0" }];
-  const plan = planFirewall(rules, { 5: "udp" }, [], panelBuilt(rules));
-  expect(plan.commands).toEqual([["allow", "proto", "udp", "from", "0.0.0.0/0", "to", "any", "port", "53"]]);
+test("a protocol applies only to rules with exactly its port range and source", () => {
+  const rules = [...ANYWHERE, { id: 5, portRange: "53", source: "203.0.113.9/32" }, { id: 6, portRange: "53", source: "203.0.113.10" }];
+  const plan = planFirewall(rules, { "53 203.0.113.9": "udp", "51820 0.0.0.0/0": "udp", "22 203.0.113.9": "udp" }, [], panelBuilt(rules));
+  expect(plan.commands).toEqual([
+    ["allow", "proto", "udp", "from", "203.0.113.9", "to", "any", "port", "53"],
+    ["delete", "allow", "proto", "tcp", "from", "203.0.113.9", "to", "any", "port", "53"],
+  ]);
+});
+
+test("a rule reusing an id another rule had keeps CloudPanel's TCP", () => {
+  const before = [...ANYWHERE, { id: 5, portRange: "51820", source: "0.0.0.0/0" }];
+  const protocols = { "51820 0.0.0.0/0": "udp" } as const;
+  const applied = planFirewall(before, protocols, [], panelBuilt(before));
+  // CloudPanel's table rebuilt: id 5 is now SSH from one address.
+  const after = [...ANYWHERE, { id: 5, portRange: "22", source: "198.51.100.7" }];
+  const present = [...panelBuilt(after), { proto: "udp" as const, port: "51820", src: "0.0.0.0/0" }];
+  const plan = planFirewall(after, protocols, applied.managed, present);
+  expect(plan.commands).toEqual([["delete", "allow", "proto", "udp", "from", "0.0.0.0/0", "to", "any", "port", "51820"]]);
 });
 
 test("UDP 443 stays CloudPanel's own when a 443 rule goes back to TCP", () => {
@@ -126,7 +131,7 @@ test("UDP 443 stays CloudPanel's own when a 443 rule goes back to TCP", () => {
 
 test("switching off puts back CloudPanel's own rules and leaves the operator's alone", () => {
   const rules = [...ANYWHERE, { id: 5, portRange: "51820", source: "0.0.0.0/0" }, { id: 6, portRange: "53", source: "0.0.0.0/0" }];
-  const applied = planFirewall(rules, { 5: "udp", 6: "both" }, [], panelBuilt(rules));
+  const applied = planFirewall(rules, { "51820 0.0.0.0/0": "udp", "53 0.0.0.0/0": "both" }, [], panelBuilt(rules));
   const operator: UfwRule = { proto: "udp", port: "60000:61000", src: "0.0.0.0/0" };
   const present = [
     ...panelBuilt(rules).filter((rule) => !(rule.proto === "tcp" && rule.port === "51820")),
@@ -189,6 +194,11 @@ function box() {
     db.query("INSERT INTO firewall_rule (created_at, updated_at, port_range, source) VALUES ('now', 'now', ?, ?)").run(portRange, source);
     db.close();
   };
+  const editRule = (id: number, portRange: string, source: string) => {
+    const db = new Database(panelDb);
+    db.query("UPDATE firewall_rule SET port_range = ?, source = ? WHERE id = ?").run(portRange, source, id);
+    db.close();
+  };
   const deleteRule = (id: number) => {
     const db = new Database(panelDb);
     db.query("DELETE FROM firewall_rule WHERE id = ?").run(id);
@@ -203,25 +213,28 @@ function box() {
     tuples.push(...panelBuilt(rows));
     write();
   };
-  return { dir, paths, options, tuples, calls, addRule, deleteRule, rebuild, has: (rule: UfwRule) => tuples.some((item) => same(item, rule)) };
+  return { dir, paths, options, tuples, calls, addRule, editRule, deleteRule, rebuild, has: (rule: UfwRule) => tuples.some((item) => same(item, rule)) };
 }
 
-test("the add form, CloudPanel's rebuilds and switching off, end to end", () => {
+test("the forms, CloudPanel's rebuilds and switching off, end to end", () => {
   const b = box();
   b.addRule("22", "0.0.0.0/0");
   b.addRule("22", "::/0");
   b.rebuild();
   expect(syncFirewall("apply", b.options)).toBeNull();
 
-  // The add form names the protocol, then CloudPanel saves the rule and rebuilds.
-  expectRule({ portRange: "51820", protocol: "udp" }, b.options);
+  // The add form names the protocol; a pass that runs before CloudPanel saves the rule keeps it.
+  setRuleProtocol({ portRange: "51820", source: "0.0.0.0/0", protocol: "udp" }, b.options);
+  expect(syncFirewall("apply", b.options)).toBeNull();
+  expect(readFirewallState(b.paths).protocols).toEqual({ "51820 0.0.0.0/0": "udp" });
   b.addRule("51820", "0.0.0.0/0");
   b.rebuild();
   expect(b.has({ proto: "tcp", port: "51820", src: "0.0.0.0/0" })).toBe(true);
   expect(syncFirewall("apply", b.options)).toBe("2 ufw rules changed");
   expect(b.has({ proto: "udp", port: "51820", src: "0.0.0.0/0" })).toBe(true);
   expect(b.has({ proto: "tcp", port: "51820", src: "0.0.0.0/0" })).toBe(false);
-  expect(readFirewallState(b.paths)).toMatchObject({ protocols: { 3: "udp" }, pending: [] });
+  expect(readFirewallState(b.paths)).toMatchObject({ protocols: { "51820 0.0.0.0/0": "udp" }, unmatched: {} });
+  expect(JSON.parse(readFileSync(b.paths.stateFile, "utf8"))).toMatchObject({ version: 2, protocols: { "51820 0.0.0.0/0": "udp" } });
   expect(firewallStatus(b.options)).toEqual({ available: true, protocols: { 3: "udp" }, udpPorts: ["51820"] });
 
   // Another rule's change rebuilds ufw from CloudPanel's table; the UDP rule comes back.
@@ -236,7 +249,7 @@ test("the add form, CloudPanel's rebuilds and switching off, end to end", () => 
   expect(b.calls).toEqual([]);
 
   // The edit form makes it TCP and UDP.
-  setRuleProtocol({ id: 3, protocol: "both" }, b.options);
+  setRuleProtocol({ id: 3, portRange: "51820", source: "0.0.0.0/0", protocol: "both" }, b.options);
   b.rebuild();
   syncFirewall("apply", b.options);
   expect(b.has({ proto: "udp", port: "51820", src: "0.0.0.0/0" })).toBe(true);
@@ -247,7 +260,7 @@ test("the add form, CloudPanel's rebuilds and switching off, end to end", () => 
   const own = [...b.tuples];
   b.rebuild();
   expect(new Set(own.map((rule) => JSON.stringify(rule)))).toEqual(new Set(b.tuples.map((rule) => JSON.stringify(rule))));
-  expect(readFirewallState(b.paths).protocols).toEqual({ 3: "both" });
+  expect(readFirewallState(b.paths).protocols).toEqual({ "51820 0.0.0.0/0": "both" });
   // The watcher the withdrawal itself woke applies nothing while System Tweaks is off.
   expect(syncFirewall("apply", b.options)).toBeNull();
   expect(b.has({ proto: "udp", port: "51820", src: "0.0.0.0/0" })).toBe(false);
@@ -256,30 +269,69 @@ test("the add form, CloudPanel's rebuilds and switching off, end to end", () => 
   expect(b.has({ proto: "udp", port: "51820", src: "0.0.0.0/0" })).toBe(true);
   expect(readFirewallState(b.paths).withdrawn).toBeUndefined();
 
+  // The edit form moves the rule to 51821: the protocol goes with it and the old entry is forgotten.
+  setRuleProtocol({ id: 3, portRange: "51821", source: "0.0.0.0/0", protocol: "both" }, b.options);
+  b.editRule(3, "51821", "0.0.0.0/0");
+  b.rebuild();
+  syncFirewall("apply", b.options);
+  expect(readFirewallState(b.paths).protocols).toEqual({ "51821 0.0.0.0/0": "both" });
+  expect(b.has({ proto: "udp", port: "51821", src: "0.0.0.0/0" })).toBe(true);
+  expect(b.has({ proto: "udp", port: "51820", src: "0.0.0.0/0" })).toBe(false);
+
   // Deleting the rule in the panel forgets its protocol.
   b.deleteRule(3);
   b.rebuild();
   syncFirewall("apply", b.options);
   expect(readFirewallState(b.paths).protocols).toEqual({});
-  expect(b.has({ proto: "udp", port: "51820", src: "0.0.0.0/0" })).toBe(false);
+  expect(b.has({ proto: "udp", port: "51821", src: "0.0.0.0/0" })).toBe(false);
+});
+
+test("a choice from a form CloudPanel refused touches no other rule", () => {
+  const b = box();
+  b.addRule("22", "0.0.0.0/0");
+  b.rebuild();
+  // UDP chosen, then CloudPanel's validation stops the form: no rule is saved.
+  setRuleProtocol({ portRange: "53", source: "203.0.113.9", protocol: "udp" }, b.options);
+  // A rule on the same port from another source stays TCP.
+  b.addRule("53", "0.0.0.0/0");
+  b.rebuild();
+  expect(syncFirewall("apply", b.options)).toBeNull();
+  expect(b.has({ proto: "tcp", port: "53", src: "0.0.0.0/0" })).toBe(true);
+  expect(b.has({ proto: "udp", port: "53", src: "0.0.0.0/0" })).toBe(false);
 });
 
 test("the forms' requests are checked before anything is stored", () => {
   const b = box();
   b.addRule("22", "0.0.0.0/0");
-  expect(() => setRuleProtocol({ id: 2, protocol: "udp" }, b.options)).toThrow("there is no such firewall rule");
-  expect(() => setRuleProtocol({ id: 1, protocol: "icmp" }, b.options)).toThrow("protocol must be tcp, udp or both");
-  expect(() => setRuleProtocol({ id: "1", protocol: "udp" }, b.options)).toThrow("id must be");
-  expect(() => expectRule({ portRange: "1:2", protocol: "udp" }, b.options)).toThrow("portRange must be");
-  expect(() => expectRule({ portRange: "53; ufw disable", protocol: "udp" }, b.options)).toThrow("portRange must be");
-  setRuleProtocol({ id: 1, protocol: "udp" }, b.options);
-  setRuleProtocol({ id: 1, protocol: "tcp" }, b.options);
-  expect(readFirewallState(b.paths).protocols).toEqual({});
-  // A second choice for the same port range replaces the first.
-  expectRule({ portRange: "53", protocol: "udp" }, b.options);
-  expectRule({ portRange: " 53 ", protocol: "both" }, b.options);
-  expect(readFirewallState(b.paths).pending).toEqual([{ portRange: "53", protocol: "both", afterId: 1, at: 0 }]);
-  expect(readFileSync(b.paths.stateFile, "utf8")).toContain('"version": 1');
+  b.addRule("8443", "0.0.0.0/0");
+  const rule = (portRange: string, protocol: string, extra: Record<string, unknown> = {}) => ({ portRange, source: "0.0.0.0/0", protocol, ...extra });
+  expect(() => setRuleProtocol(rule("22", "icmp"), b.options)).toThrow("protocol must be tcp, udp or both");
+  expect(() => setRuleProtocol(rule("1:2", "udp"), b.options)).toThrow("Port Range must be");
+  expect(() => setRuleProtocol(rule("53; ufw disable", "udp"), b.options)).toThrow("Port Range must be");
+  expect(() => setRuleProtocol({ portRange: "53", source: "any", protocol: "udp" }, b.options)).toThrow("Source an address");
+  // UDP alone on CloudPanel's own port would close the panel.
+  expect(() => setRuleProtocol(rule("8443", "udp", { id: 2 }), b.options)).toThrow("CloudPanel itself is on port 8443");
+  setRuleProtocol(rule("8443", "both", { id: 2 }), b.options);
+  // The add form for a port range and source that already have a rule would change that rule.
+  expect(() => setRuleProtocol(rule("22", "udp"), b.options)).toThrow("a rule for 22 from 0.0.0.0/0 already exists");
+  expect(() => setRuleProtocol(rule("22", "udp", { id: 2 }), b.options)).toThrow("already exists");
+  expect(() => setRuleProtocol(rule("22", "udp", { id: "1" }), b.options)).toThrow("already exists");
+  setRuleProtocol(rule("22", "tcp"), b.options);
+  setRuleProtocol(rule("22", "udp", { id: 1 }), b.options);
+  setRuleProtocol(rule(" 53 ", "both"), b.options);
+  expect(readFirewallState(b.paths).protocols).toEqual({ "8443 0.0.0.0/0": "both", "22 0.0.0.0/0": "udp", "53 0.0.0.0/0": "both" });
+  expect(readFirewallState(b.paths).unmatched).toEqual({ "53 0.0.0.0/0": 0 });
+  // TCP is CloudPanel's own, so choosing it deletes the entry.
+  setRuleProtocol(rule("22", "tcp", { id: 1 }), b.options);
+  setRuleProtocol(rule("53", "tcp"), b.options);
+  expect(readFirewallState(b.paths)).toMatchObject({ protocols: { "8443 0.0.0.0/0": "both" }, unmatched: {} });
+});
+
+test("the id-keyed state of earlier builds reads as empty", () => {
+  const b = box();
+  mkdirSync(join(b.dir, "state"));
+  writeFileSync(b.paths.stateFile, JSON.stringify({ version: 1, protocols: { 7: "udp" }, pending: [], managed: [] }), { mode: 0o600 });
+  expect(readFirewallState(b.paths)).toEqual({ protocols: {}, unmatched: {}, managed: [] });
 });
 
 test("a box without ufw is left alone", () => {

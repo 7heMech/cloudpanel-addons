@@ -37,12 +37,8 @@ export const systemTweaksService = {
     return callGatewayAction("system-tweaks", "firewall", []);
   },
 
-  setFirewallProtocol(id: number, protocol: string): Promise<ActionResult<FirewallStatus>> {
-    return callGatewayAction("system-tweaks", "set-firewall-protocol", [], JSON.stringify({ id, protocol }));
-  },
-
-  expectFirewallRule(portRange: string, protocol: string): Promise<ActionResult<FirewallStatus>> {
-    return callGatewayAction("system-tweaks", "expect-firewall-rule", [], JSON.stringify({ portRange, protocol }));
+  setFirewallProtocol(rule: { portRange: string; source: string; protocol: string; id?: number }): Promise<ActionResult<FirewallStatus>> {
+    return callGatewayAction("system-tweaks", "set-firewall-protocol", [], JSON.stringify(rule));
   },
 
 };

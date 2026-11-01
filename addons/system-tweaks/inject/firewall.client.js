@@ -1,8 +1,7 @@
 // The Protocol field and column on CloudPanel's Firewall pages. Written for the
 // panel's page, so plain ES5 with its own fetch. CloudPanel's own form posts
-// nothing about a protocol: the add form tells System Tweaks which protocol the
-// next rule with this port range gets, the edit form sets its rule's, and both
-// then submit as CloudPanel's own form would.
+// nothing about a protocol: both forms tell System Tweaks the Port Range, Source
+// and protocol they hold, then submit as CloudPanel's own form would.
 (function () {
   var url = "ADDON_URL";
   var NAMES = { tcp: 'TCP', udp: 'UDP', both: 'TCP and UDP' };
@@ -54,9 +53,9 @@
   var form = field && field.closest('form');
   if (!form) return;
   var select = document.getElementById('clp-fw-protocol-select');
-  var rule = Number(field.getAttribute('data-rule')) || 0;
+  var rule = Number(field.getAttribute('data-rule')) || undefined;
   var portRange = form.querySelector('input[id$="_portRange"]');
-  var loaded = rule ? null : 'tcp';
+  var source = form.querySelector('input[id$="_source"]');
   var sent = false;
 
   function showError(text) {
@@ -71,34 +70,26 @@
     box.textContent = text;
   }
 
-  if (rule) {
-    // Shown once the rule's own protocol is known, so it never offers TCP for a UDP rule.
-    call('/api/firewall').then(function (reply) {
-      loaded = (reply.protocols || {})[String(rule)] || 'tcp';
-      select.value = loaded;
-      field.hidden = false;
-    }).catch(function () {});
-  } else {
+  // Shown once System Tweaks answers, so it never offers TCP for a UDP rule,
+  // and without System Tweaks the form is CloudPanel's own.
+  call('/api/firewall').then(function (reply) {
+    select.value = (rule && (reply.protocols || {})[String(rule)]) || 'tcp';
     field.hidden = false;
-  }
+  }).catch(function () {});
 
   document.addEventListener('submit', function (event) {
     if (event.target !== form || sent || field.hidden) return;
-    var protocol = select.value;
-    if (rule && protocol === loaded) return;
     event.preventDefault();
     event.stopImmediatePropagation();
     var submitter = event.submitter || form.querySelector('button[type="submit"]');
     if (submitter) submitter.disabled = true;
-    var body = rule ? { id: rule, protocol: protocol } : { portRange: portRange ? portRange.value : '', protocol: protocol };
-    call(rule ? '/api/firewall/rule' : '/api/firewall/new-rule', body).then(function () {
+    var body = { portRange: portRange ? portRange.value : '', source: source ? source.value : '', protocol: select.value, id: rule };
+    call('/api/firewall/rule', body).then(function () {
       sent = true;
       if (submitter) submitter.disabled = false;
       if (form.requestSubmit) form.requestSubmit(submitter && submitter.form === form ? submitter : undefined); else form.submit();
     }, function (failure) {
       if (submitter) submitter.disabled = false;
-      // A TCP rule is CloudPanel's own; nothing is lost by saving it without us.
-      if (protocol === 'tcp' && !rule) { sent = true; form.submit(); return; }
       showError('The protocol could not be saved: ' + failure.message.replace(/\.?$/, '.') + ' Nothing was changed.');
     });
   }, true);
