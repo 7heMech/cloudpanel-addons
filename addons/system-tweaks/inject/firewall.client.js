@@ -54,8 +54,6 @@
   if (!form) return;
   var select = document.getElementById('clp-fw-protocol-select');
   var rule = Number(field.getAttribute('data-rule')) || undefined;
-  var portRange = form.querySelector('input[id$="_portRange"]');
-  var source = form.querySelector('input[id$="_source"]');
   var sent = false;
 
   function showError(text) {
@@ -83,7 +81,9 @@
     event.stopImmediatePropagation();
     var submitter = event.submitter || form.querySelector('button[type="submit"]');
     if (submitter) submitter.disabled = true;
-    var body = { portRange: portRange ? portRange.value : '', source: source ? source.value : '', protocol: select.value, id: rule };
+    // Read now: this script runs before CloudPanel's Source field exists.
+    var value = function (name) { var input = form.querySelector('input[id$="_' + name + '"]'); return input ? input.value : ''; };
+    var body = { portRange: value('portRange'), source: value('source'), protocol: select.value, id: rule };
     call('/api/firewall/rule', body).then(function () {
       sent = true;
       if (submitter) submitter.disabled = false;
