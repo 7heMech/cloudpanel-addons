@@ -1,6 +1,6 @@
 import { esc, escJs } from "../../../lib/app-http";
 import {
-  FLEET_FOOTER_HTML, FLEET_ROW_SELECTION_JS, fleetFilterHtml, fleetRowSelectionStyle, renderFragment, renderLayout,
+  ATTENTION_RANK, FLEET_FOOTER_HTML, FLEET_ROW_SELECTION_JS, fleetFilterHtml, filterWord, valueFilters, fleetRowSelectionStyle, renderFragment, renderLayout,
 } from "../../../lib/app-ui";
 import type { EmbedFragment } from "../../../lib/shadow-embed";
 import { mountPath } from "../../../lib/mount";
@@ -116,9 +116,10 @@ function globalCard(globalEnabled: boolean, disabled: boolean, bypasses: string[
 function siteRow(site: MaintenanceSiteView, globalEnabled: boolean): string {
   const notes = [site.customTemplate ? "Custom page" : "", site.bypasses.length ? plural(site.bypasses.length, "bypass", "bypasses") : ""]
     .filter(Boolean).join(" · ");
-  const show = [serving(site, globalEnabled) ? "maintenance" : "live", site.uncovered ? "uncovered" : ""].filter(Boolean).join(" ");
+  const show = [serving(site, globalEnabled) ? "maintenance" : "live", site.uncovered ? "uncovered" : "", filterWord("type", siteTypeLabel(site.type))].filter(Boolean).join(" ");
   const domain = esc(site.domain);
-  return `<tr data-domain="${domain}" data-show="${show}" tabindex="0" aria-selected="false" onclick="toggleSiteSelection(event, this)" onkeydown="toggleSiteSelection(event, this)">
+  const rank = serving(site, globalEnabled) ? ATTENTION_RANK.bad : site.uncovered ? ATTENTION_RANK.warn : ATTENTION_RANK.ok;
+  return `<tr data-domain="${domain}" data-show="${show}" data-sort-status="${rank}" tabindex="0" aria-selected="false" onclick="toggleSiteSelection(event, this)" onkeydown="toggleSiteSelection(event, this)">
     <td class="site-select"><input class="site-checkbox" type="checkbox" onchange="paintFleetSelection()" aria-label="Select ${domain}"${site.error ? " disabled" : ""}></td>
     <td class="site-cell"><a href="${BASE}?domain=${encodeURIComponent(site.domain)}">${domain}</a>${notes ? `<div class="hint">${esc(notes)}</div>` : ""}${site.error ? `<div class="hint">${esc(site.error)}</div>` : ""}${site.uncovered ? `<div class="hint">${esc(uncoveredText(site.uncovered))}</div>` : ""}</td>
     <td class="type-cell">${esc(siteTypeLabel(site.type))}</td>
@@ -139,12 +140,13 @@ export function fleetView(fleet: MaintenanceFleet, currentIp = ""): string {
     { value: "maintenance", label: "In maintenance" },
     { value: "live", label: "Live" },
     ...(uncovered ? [{ value: "uncovered", label: "Not covered" }] : []),
+    ...valueFilters("Type", "type", sites.map((site) => siteTypeLabel(site.type))),
   ];
   const table = sites.length
     ? `${fleetFilterHtml({ count: sites.length, filters, summary: plural(sites.length, "site") })}
       <div class="table-scroll"><table class="fleet-table maintenance-fleet-table"><thead><tr>
         <th scope="col" class="site-select"><input id="select-all" type="checkbox" onchange="selectAllSites(this.checked)" aria-label="Select all sites"></th>
-        <th scope="col">Site</th><th scope="col">Type</th><th scope="col">Effective status</th><th scope="col" class="action-cell">Site setting</th>
+        <th scope="col" data-sort="domain">Site</th><th scope="col" data-sort="type">Type</th><th scope="col" data-sort="status">Effective status</th><th scope="col" class="action-cell">Site setting</th>
       </tr></thead><tbody>${sites.map((site) => siteRow(site, globalEnabled)).join("")}</tbody></table></div>
       ${FLEET_FOOTER_HTML}`
     : '<div class="empty">No CloudPanel sites were found.</div>';

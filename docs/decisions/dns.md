@@ -66,11 +66,25 @@ every sender is left exactly as written.
 
 ## Ask first and Automatic
 
-The page puts the sites first, then the profiles with the choice of default,
+The page puts the sites first, then the redirect domains, then the profiles
+with the choice of default,
 the connections and settings that are set once, and last the change log, which
 is looked back at rather than worked in. The site
 list has the shared search from six sites and selection, as the other site
-lists do. Until a connection exists it opens with the three steps that make a
+lists do, with filters for needs attention, changes waiting and not managed,
+and by what each site runs; every heading sorts. Redirect domains are planned
+and checked with the sites but are not CloudPanel sites, so they have a
+Redirects card of their own, holding Add redirect and Find redirects in
+Cloudflare: each row has the target, its status and what kept, who serves it,
+the profile its mail rows come from, and the DNS status, with Edit and Details.
+Its rows are not site rows, so the site table's selection, filter and sort
+leave them out, and a redirect's profile is chosen in Edit rather than in the
+row. A site's Details dialog leads with
+what needs doing: its status chip beside the domain, then problems and, while
+its zone is pending, the nameservers to set at the registrar, each with its own
+copy button; then what will change, with a redirect's pending changes said to
+come at the next check, since it has no Apply; then the facts that only
+describe it. A redirect's Edit sits in the dialog's footer. Until a connection exists it opens with the three steps that make a
 new site publish itself: connect, choose the default, turn on Automatic. The
 bar and the switch are there without a connection too once a redirect domain
 exists, since its stand-in site waits for Automatic.
@@ -128,8 +142,8 @@ A redirect domain is a source host, a target URL, a status (301, 302, 307 or
 308), keep path and keep query string, and optionally a profile. The source is a
 zone's apex, which covers its `www` too, or one host in a zone that holds other
 things; `www` is added only to an apex. A redirect domain is planned beside the
-sites, in the same table, through the same switch, reviews, log and lock, and
-can be assigned a profile in bulk like a site. It cannot be a CloudPanel site:
+sites, through the same switch, reviews, log and lock, but listed in a
+Redirects card of its own, where its profile is chosen in Edit. It cannot be a CloudPanel site:
 adding one for a site's domain is refused, and a site created later at a
 redirect's domain stops the redirect with a problem.
 

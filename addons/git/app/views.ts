@@ -5,7 +5,7 @@
 
 import { esc } from "../../../lib/app-http";
 import {
-  FLEET_FOOTER_HTML, FLEET_ROW_SELECTION_JS, JOB_STYLE, JOB_WATCH_JS, fleetFilterHtml, fleetRowSelectionStyle, jobStateClass,
+  ATTENTION_RANK, FLEET_FOOTER_HTML, FLEET_ROW_SELECTION_JS, JOB_STYLE, JOB_WATCH_JS, fleetFilterHtml, filterWord, valueFilters, fleetRowSelectionStyle, jobStateClass,
   renderFragment, renderLayout, sinceText, whenText,
 } from "../../../lib/app-ui";
 import type { EmbedFragment } from "../../../lib/shadow-embed";
@@ -317,9 +317,9 @@ export function fleetView(sites: GitSiteStatus[]): string {
   const row = (site: GitSiteStatus): string => {
     const job = site.lastJob;
     const domain = esc(site.domain);
-    const show = [attention(site) ? "attention" : "", running(site) ? "deploying" : ""].filter(Boolean).join(" ");
+    const show = [attention(site) ? "attention" : "", running(site) ? "deploying" : "", site.siteType ? filterWord("type", siteTypeLabel(site.siteType)) : ""].filter(Boolean).join(" ");
     return `
-      <tr data-domain="${domain}" data-show="${show}"${running(site) ? ` data-job="${esc(job!.id)}"` : ""} tabindex="0" aria-selected="false"
+      <tr data-domain="${domain}" data-show="${show}" data-sort-attention="${attention(site) ? ATTENTION_RANK.bad : running(site) ? ATTENTION_RANK.info : ATTENTION_RANK.ok}"${running(site) ? ` data-job="${esc(job!.id)}"` : ""} tabindex="0" aria-selected="false"
         onclick="toggleSiteSelection(event, this)" onkeydown="toggleSiteSelection(event, this)">
         <td class="site-select">
           <input class="site-checkbox" type="checkbox" onchange="paintFleetSelection()" aria-label="Select ${domain}"${available(site) ? "" : " disabled"}>
@@ -365,14 +365,17 @@ export function fleetView(sites: GitSiteStatus[]): string {
       </div>
       ${fleetFilterHtml({
         count: sites.length,
-        filters: [{ value: "attention", label: "Needs attention" }, { value: "deploying", label: "Deploying" }],
+        filters: [
+          { value: "attention", label: "Needs attention" }, { value: "deploying", label: "Deploying" },
+          ...valueFilters("Type", "type", sites.map((site) => site.siteType ? siteTypeLabel(site.siteType) : "")),
+        ],
         summary: `${sites.length} sites`,
       })}
       <div class="table-scroll"><table class="fleet-table git-fleet-table">
         <thead><tr>
           <th scope="col" class="site-select"><input type="checkbox" id="select-all" aria-label="Select all sites" onchange="selectAllSites(this.checked)"></th>
-          <th scope="col">Site</th><th scope="col">Branch</th>
-          <th scope="col">Current checkout</th><th scope="col">Last deployment</th><th scope="col" aria-label="Actions"></th>
+          <th scope="col" data-sort="domain">Site</th><th scope="col" data-sort="branch">Branch</th>
+          <th scope="col" data-sort="checkout">Current checkout</th><th scope="col" data-sort="attention">Last deployment</th><th scope="col" aria-label="Actions"></th>
         </tr></thead>
         <tbody>${sites.map(row).join("")}</tbody>
       </table></div>

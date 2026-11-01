@@ -931,7 +931,7 @@ test("the page shows update options only once updates are on, and says what sile
   expect(outside).not.toContain("skip CloudPanel's PHP");
   // Partly covered is not covered, and a pool that turns upload progress back on is not Off.
   expect(outside).toContain("Repositories: 1 of 3 covered, 1 partly");
-  expect(outside).toContain('<span class="badge state-exited">Partly</span>');
+  expect(outside).toContain('<span class="badge tone-warn">Partly</span>');
   expect(outside).toContain("Off on its one PHP-FPM, on again in 1 pool");
   expect(outside).toContain("A reboot has been needed since 2026-10-01 and automatic reboot is off, so the server still runs the old kernel.");
   expect(dashboardView(state, Date.parse("2026-10-03T00:00:00Z"))).not.toContain("A reboot has been needed");

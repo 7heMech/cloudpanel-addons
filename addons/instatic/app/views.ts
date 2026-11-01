@@ -5,7 +5,7 @@
 
 import { esc, escJs } from "../../../lib/app-http";
 import {
-  FLEET_FOOTER_HTML, FLEET_ROW_SELECTION_JS, JOB_STYLE, JOB_WATCH_JS, fleetFilterHtml, fleetRowSelectionStyle, jobStateClass, jobStateLabel,
+  ATTENTION_RANK, FLEET_FOOTER_HTML, FLEET_ROW_SELECTION_JS, JOB_STYLE, JOB_WATCH_JS, fleetFilterHtml, filterWord, valueFilters, fleetRowSelectionStyle, jobStateClass, jobStateLabel,
   renderLayout, whenText,
 } from "../../../lib/app-ui";
 import { mountPath } from "../../../lib/mount";
@@ -51,9 +51,9 @@ export function layout(
   });
 }
 
+/** A container's state as a tone: a running container is healthy, unlike a running job, which is busy. */
 function stateClass(state: string): string {
-  const known = ["running", "exited", "created", "paused", "absent", "unknown"];
-  return known.includes(state) ? `state-${state}` : "state-unknown";
+  return ({ running: "tone-ok", exited: "tone-warn", created: "tone-warn", paused: "tone-warn" } as Record<string, string>)[state] ?? "tone-bad";
 }
 
 /** The newest job for each domain. */
@@ -143,7 +143,9 @@ export function dashboardView(
           ? `<span class="badge state-running">Updating</span><div class="hint">${esc(updating.step)} · <a href="${BASE}/jobs/${esc(updating.id)}">Log</a></div>`
           : `<span class="badge ${stateClass(i.state)}">${esc(STATE_LABELS[i.state] ?? i.state)}</span>${failedUpdate
             ? `<div class="hint tone-bad">Update to ${esc(failedUpdate.tag)} failed · <a href="${BASE}/jobs/${esc(failedUpdate.id)}">Log</a></div>` : ""}`;
-      return `<tr data-domain="${esc(i.domain)}" data-find="${esc(i.domain)}" data-tag="${esc(i.tag)}"${behind ? " data-behind" : ""} tabindex="0" aria-selected="false" onclick="toggleSiteSelection(event, this)" onkeydown="toggleSiteSelection(event, this)">
+      const tone = missing || failedUpdate ? "bad" : updating ? "info" : stateClass(i.state).slice("tone-".length) as keyof typeof ATTENTION_RANK;
+      const show = [behind ? "behind" : "", missing || i.state !== "running" ? "stopped" : "", filterWord("version", i.tag)].filter(Boolean).join(" ");
+      return `<tr data-domain="${esc(i.domain)}" data-find="${esc(i.domain)}" data-tag="${esc(i.tag)}"${behind ? " data-behind" : ""} data-show="${show}" data-sort-attention="${ATTENTION_RANK[tone]}" data-sort-version="${esc(i.tag)}" tabindex="0" aria-selected="false" onclick="toggleSiteSelection(event, this)" onkeydown="toggleSiteSelection(event, this)">
   <td class="site-select"><input class="site-checkbox" type="checkbox" onchange="paintFleetSelection()" aria-label="Select ${esc(i.domain)}"${missing || updating ? " disabled" : ""}></td>
   <td class="site-cell">${missing ? `<span class="mono">${esc(i.domain)}</span>` : esc(i.domain)}</td>
   <td data-label="Version">
@@ -186,9 +188,16 @@ export function dashboardView(
       <button class="btn" type="button" data-needs-selection disabled onclick="bulkInstatic('restart')">Restart</button>
     </div>
   </div>
-  ${fleetFilterHtml({ count: instances.length, summary: `${instances.length} sites` })}
+  ${fleetFilterHtml({
+    count: instances.length,
+    filters: [
+      { value: "behind", label: "Update available" }, { value: "stopped", label: "Not running" },
+      ...valueFilters("Version", "version", instances.map((i) => i.tag)),
+    ],
+    summary: `${instances.length} sites`,
+  })}
   <div class="table-scroll"><table class="fleet-table instatic-table">
-    <thead><tr><th scope="col" class="site-select"><input id="select-all" type="checkbox" onchange="selectAllSites(this.checked)" aria-label="Select all sites"></th><th scope="col">Site</th><th scope="col">Version</th><th scope="col">State</th><th scope="col" class="action-cell">Actions</th></tr></thead>
+    <thead><tr><th scope="col" class="site-select"><input id="select-all" type="checkbox" onchange="selectAllSites(this.checked)" aria-label="Select all sites"></th><th scope="col" data-sort="domain">Site</th><th scope="col" data-sort="version">Version</th><th scope="col" data-sort="attention">State</th><th scope="col" class="action-cell">Actions</th></tr></thead>
     <tbody>${jobRows}${rows}</tbody>
   </table></div>
   ${FLEET_FOOTER_HTML}`

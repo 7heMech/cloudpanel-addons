@@ -1,7 +1,7 @@
 import CLIENT_BODY from "./views.client.js" with { type: "text" };
 import CSS from "./views.css" with { type: "text" };
 import { esc } from "../../../lib/app-http";
-import { FLEET_FOOTER_HTML, FLEET_ROW_SELECTION_JS, fleetFilterHtml, fleetRowSelectionStyle, renderLayout } from "../../../lib/app-ui";
+import { ATTENTION_RANK, FLEET_FOOTER_HTML, FLEET_ROW_SELECTION_JS, fleetFilterHtml, filterWord, valueFilters, fleetRowSelectionStyle, renderLayout } from "../../../lib/app-ui";
 import { mountPath } from "../../../lib/mount";
 import type { DnsState, SiteView } from "../action";
 import type { Profile } from "../model";
@@ -90,18 +90,68 @@ export function siteStatus(site: SiteView, automatic: boolean): { label: string;
   return { label: "In sync", tone: "ok", hint: zone };
 }
 
+/** A line under a status, cut to two lines in the table; Details and the tooltip have it whole. */
+function hintLine(text: string): string {
+  return text ? `<span class="hint dns-clamp" title="${esc(text)}">${esc(text)}</span>` : "";
+}
+
+function typeLabel(site: SiteView): string {
+  return TYPE_LABELS[site.type] ?? site.type;
+}
+
+/** The status cell both tables share: a chip, then its line and the certificate's, each cut to two lines. */
+function statusCell(site: SiteView, automatic: boolean): string {
+  const status = siteStatus(site, automatic);
+  return `${status.label === "—" ? '<span class="tone-muted">—</span>' : `<span class="badge tone-${status.tone}">${esc(status.label)}</span>`}${hintLine(status.hint)}${
+    site.ssl ? hintLine(site.ssl.startsWith("Waiting for DNS") ? "Certificate requested; waits for DNS" : `Certificate: ${site.ssl}`) : ""}`;
+}
+
+/** Who answers the redirect now, in the words the Details dialog uses at more length. */
+function servedBy(site: SiteView, state: DnsState): string {
+  if (site.plan?.zone) return "by Cloudflare";
+  if (site.redirect!.standIn) return "by a stand-in site";
+  return state.connections.length ? "by Cloudflare" : "by a stand-in site once Automatic";
+}
+
+/**
+ * A redirect domain's row. It is not a site row (no `data-domain`), so the
+ * Sites table's selection, filter and sort leave it alone; its profile, for
+ * the mail rows, is chosen in Edit.
+ */
+function redirectRow(site: SiteView, state: DnsState): string {
+  const redirect = site.redirect!;
+  const profile = state.profiles.find((candidate) => candidate.id === site.profileId);
+  const kept = [redirect.keepPath && "path", redirect.keepQuery && "query"].filter(Boolean);
+  const domain = esc(site.domain);
+  return `<tr data-redirect="${domain}">
+    <td class="site-cell"><strong>${domain}</strong></td>
+    <td data-label="Redirects to" class="dns-redirect-cell"><span class="dns-redirect-target" title="${esc(redirect.target)}">${esc(redirect.target.replace(/^https?:\/\//, ""))}</span>
+      <span class="hint">${redirect.status}${kept.length ? ` · keeps ${kept.join(" and ")}` : ""} · ${servedBy(site, state)}</span></td>
+    <td data-label="Profile" class="dns-redirect-profile">${profile ? esc(profile.name) : '<span class="tone-muted">No profile</span>'}</td>
+    <td data-label="DNS" class="dns-status">${statusCell(site, state.automatic)}</td>
+    <td class="action-cell"><div class="actions">
+      <button class="btn" type="button" onclick="dnsEditRedirect('${domain}')">Edit</button>
+      <button class="btn" type="button" onclick="dnsShowSite('${domain}')">Details</button>
+    </div></td>
+  </tr>`;
+}
+
 function siteRow(site: SiteView, state: DnsState): string {
   const status = siteStatus(site, state.automatic);
-  const runs = site.redirect
-    ? `Redirect<span class="hint dns-redirect-target" title="${esc(site.redirect.target)}">→ ${esc(site.redirect.target.replace(/^https?:\/\//, ""))}</span>`
-    : esc(TYPE_LABELS[site.type] ?? site.type);
-  return `<tr data-domain="${esc(site.domain)}" data-profile-id="${esc(site.profileId ?? "")}"${site.plan?.held ? " data-held" : ""} tabindex="0" aria-selected="false" onclick="toggleSiteSelection(event, this)" onkeydown="toggleSiteSelection(event, this)">
+  const profile = state.profiles.find((candidate) => candidate.id === site.profileId);
+  const show = [
+    status.tone === "bad" ? "attention" : status.tone === "warn" ? "pending" : "",
+    filterWord("type", typeLabel(site)),
+    profile ? "" : "unmanaged",
+  ].filter(Boolean).join(" ");
+  const sorts = ` data-sort-attention="${ATTENTION_RANK[status.tone as keyof typeof ATTENTION_RANK] ?? ATTENTION_RANK.muted}" data-sort-profile="${esc(profile?.name ?? "")}" data-sort-type="${esc(typeLabel(site))}"`;
+  return `<tr data-domain="${esc(site.domain)}" data-profile-id="${esc(site.profileId ?? "")}" data-show="${show}"${sorts}${site.plan?.held ? " data-held" : ""} tabindex="0" aria-selected="false" onclick="toggleSiteSelection(event, this)" onkeydown="toggleSiteSelection(event, this)">
     <td class="site-select"><input class="site-checkbox" type="checkbox" onchange="paintFleetSelection()" aria-label="Select ${esc(site.domain)}"></td>
     <td class="site-cell"><strong>${esc(site.domain)}</strong></td>
-    <td class="type-cell">${runs}</td>
-    <td data-label="Profile" class="dns-profile-cell"><select aria-label="Profile for ${esc(site.domain)}" onchange="dnsAssignRow(this)">${profileOptions(state.profiles, site.profileId, site.redirect ? "No profile" : NO_PROFILE)}</select></td>
-    <td data-label="DNS" class="dns-status"><span class="tone-${status.tone}">${esc(status.label)}</span>${status.hint ? `<span class="hint">${esc(status.hint)}</span>` : ""}${site.ssl ? `<span class="hint">${esc(site.ssl.startsWith("Waiting for DNS") ? "Certificate requested; waits for DNS" : `Certificate: ${site.ssl}`)}</span>` : ""}</td>
-    <td class="action-cell">${site.profileId || site.redirect ? `<button class="btn" type="button" onclick="dnsShowSite('${esc(site.domain)}')">Details</button>` : ""}</td>
+    <td class="type-cell">${esc(typeLabel(site))}</td>
+    <td data-label="Profile" class="dns-profile-cell"><select aria-label="Profile for ${esc(site.domain)}" onchange="dnsAssignRow(this)">${profileOptions(state.profiles, site.profileId, NO_PROFILE)}</select></td>
+    <td data-label="DNS" class="dns-status">${statusCell(site, state.automatic)}</td>
+    <td class="action-cell">${site.profileId ? `<button class="btn" type="button" onclick="dnsShowSite('${esc(site.domain)}')">Details</button>` : ""}</td>
   </tr>`;
 }
 
@@ -213,16 +263,21 @@ function logRow(line: DnsState["log"][number]): string {
     <td class="wide-cell dns-change-detail">${esc(line.detail)}${line.before ? `<span class="hint">Was: ${esc(line.before)}</span>` : ""}</td></tr>`;
 }
 
-function siteCount(state: DnsState): string {
-  const redirects = state.sites.filter((site) => site.redirect).length;
-  const sites = plural(state.sites.length - redirects, "site");
-  return redirects ? `${sites} · ${plural(redirects, "redirect")}` : sites;
-}
-
-/** Redirect domains sit in the sites table, so they are assigned and checked with the sites. */
-function redirectTools(state: DnsState): string {
-  return `<span class="dns-redirect-tools">${state.connections.length ? '<button class="btn" type="button" onclick="dnsFindRedirects(this)">Find redirects in Cloudflare</button>' : ""}
-    <button class="btn" type="button" onclick="dnsEditRedirect('')">Add redirect</button></span>`;
+/**
+ * Redirect domains get a card of their own: they are planned and checked with
+ * the sites, but they are not CloudPanel sites, and a Sites table holding both
+ * read as one list doing two jobs.
+ */
+function redirectsCard(state: DnsState, redirects: SiteView[]): string {
+  const tools = `<div class="dns-redirect-tools">${state.connections.length ? '<button class="btn" type="button" onclick="dnsFindRedirects(this)">Find redirects in Cloudflare</button>' : ""}
+    <button class="btn" type="button" onclick="dnsEditRedirect('')">Add redirect</button></div>`;
+  return `<div class="card card-table"><div class="card-header"><div><h2>Redirects</h2>
+      <p class="hint">Domains with no site here that send every visitor to another address, with their mail kept by a profile.</p></div>${tools}</div>
+    ${redirects.length ? `<div class="table-scroll"><table class="fleet-table dns-redirect-table"><thead><tr>
+        <th>Domain</th><th>Redirects to</th><th>Profile</th><th>DNS</th><th class="action-cell"></th>
+      </tr></thead><tbody>${redirects.map((site) => redirectRow(site, state)).join("")}</tbody></table></div>`
+      : '<div class="empty">No redirect domains.</div>'}
+  </div>`;
 }
 
 export function dashboardView(state: DnsState): string {
@@ -233,7 +288,11 @@ export function dashboardView(state: DnsState): string {
 export function dashboardContent(state: DnsState, now = Date.now()): string {
   const data = JSON.stringify(state).replaceAll("<", "\\u003c");
   const profiles = state.profiles.map(profileRow).join("");
-  const sites = state.sites.map((site) => siteRow(site, state)).join("");
+  const plain = state.sites.filter((site) => !site.redirect);
+  const redirects = state.sites.filter((site) => site.redirect);
+  const sites = plain.map((site) => siteRow(site, state)).join("");
+  const checked = `<div class="card-footer"><span class="hint">${esc(ago(state.checkedAt, now))}. Drift is checked every 15 minutes.</span>
+        <button class="btn" type="button" onclick="dnsCheck(this)"${state.connections.length || redirects.length ? "" : " disabled"}>Check now</button></div>`;
   const waiting = state.waitUntil > now
     ? `<div class="notice">Cloudflare or Mailcow asked this server to wait until ${esc(new Date(state.waitUntil).toISOString().slice(11, 16))} UTC. Checks resume after that.</div>` : "";
   const orphans = state.orphans.length ? `<div class="card card-table"><div class="card-header"><div><h2>Records of deleted sites</h2>
@@ -261,25 +320,31 @@ export function dashboardContent(state: DnsState, now = Date.now()): string {
       <p>Keep each site's Cloudflare DNS to its profile's records.</p></div></div>
     ${waiting}${setupCard(state)}${modeBar(state)}
     <div class="card card-table">
-    ${state.sites.length ? `<div class="card-header toolbar">
+    ${plain.length ? `<div class="card-header toolbar">
         <h2>Sites</h2>
         <span class="toolbar-note" id="site-selection">No sites selected</span>
         <button class="btn mobile-select-all" id="select-all-btn" type="button" onclick="toggleAllSites()">Select all</button>
         <select class="toolbar-end" id="bulk-profile" aria-label="Profile for the selected sites"><option value="" selected disabled>Choose a profile</option>${state.profiles
           .map((profile) => `<option value="${esc(profile.id)}">${esc(profile.name)}</option>`).join("")}<option value="-">${NO_PROFILE}</option></select>
         <button class="btn" id="assign-selected" type="button" disabled data-needs-selection onclick="dnsAssignSelected()">Assign selected</button>
-        ${redirectTools(state)}
       </div>
-      ${fleetFilterHtml({ count: state.sites.length, summary: siteCount(state) })}
+      ${fleetFilterHtml({
+        count: plain.length,
+        filters: [
+          { value: "attention", label: "Needs attention" }, { value: "pending", label: "Changes waiting" }, { value: "unmanaged", label: "Not managed" },
+          ...valueFilters("Type", "type", plain.map(typeLabel)),
+        ],
+        summary: plural(plain.length, "site"),
+      })}
       <div class="table-scroll"><table class="fleet-table dns-site-table"><thead><tr>
         <th class="site-select"><input id="select-all" type="checkbox" onchange="selectAllSites(this.checked)" aria-label="Select all sites"></th>
-        <th>Site</th><th>Runs</th><th>Profile</th><th>DNS</th><th class="action-cell"></th>
+        <th data-sort="domain">Site</th><th data-sort="type">Runs</th><th data-sort="profile">Profile</th><th data-sort="attention" data-sort-label="DNS status">DNS</th><th class="action-cell"></th>
       </tr></thead><tbody>${sites}</tbody></table></div>
       ${FLEET_FOOTER_HTML}
-      <div class="card-footer"><span class="hint">${esc(ago(state.checkedAt, now))}. Drift is checked every 15 minutes.</span>
-        <button class="btn" type="button" onclick="dnsCheck(this)"${state.connections.length || state.sites.some((site) => site.redirect) ? "" : " disabled"}>Check now</button></div>`
-      : `<div class="card-header toolbar"><h2>Sites</h2>${redirectTools(state)}</div><div class="empty">CloudPanel has no sites yet.</div>`}
+      ${checked}`
+      : `<div class="card-header"><h2>Sites</h2></div><div class="empty">CloudPanel has no sites yet.</div>${redirects.length ? checked : ""}`}
     </div>
+    ${redirectsCard(state, redirects)}
     ${orphans}
     <div class="card card-table"><div class="card-header"><div><h2>Profiles</h2>
       <p class="hint">A profile is the records each of its sites should have. Records that conflict with them are deleted, at the names the profile writes and nowhere else.</p></div>
@@ -348,7 +413,7 @@ const DIALOGS = `
   <dialog id="dns-site-dialog" aria-labelledby="dns-site-heading">
     <div class="dialog-header"><h2 id="dns-site-heading">Site</h2></div>
     <div id="dns-site-body"></div>
-    <div class="actions dialog-actions"><button class="btn" type="button" onclick="this.closest('dialog').close()">Close</button><button class="btn btn-primary" id="dns-site-apply" type="button" onclick="dnsApplySite()">Apply now</button></div>
+    <div class="actions dialog-actions"><button class="btn dns-dialog-start" id="dns-site-edit" type="button" hidden onclick="dnsEditRedirect(dnsSiteShown)">Edit redirect</button><button class="btn" type="button" onclick="this.closest('dialog').close()">Close</button><button class="btn btn-primary" id="dns-site-apply" type="button" onclick="dnsApplySite()">Apply now</button></div>
   </dialog>
   <dialog id="dns-redirect-dialog" aria-labelledby="dns-redirect-heading"><form id="dns-redirect-form" onsubmit="dnsSaveRedirect(event)">
     <div class="dialog-header"><h2 id="dns-redirect-heading">Add redirect</h2></div>

@@ -108,7 +108,7 @@ keeps the policy; enabling applies it again.
 ## The page
 
 Sites come first; from six sites, a search and filters for Not handled,
-Discarded and Blocked sit above them. Each site's Mail choice reads as what
+Discarded, Blocked and site type sit above them, and the headings sort. Each site's Mail choice reads as what
 happens to its mail: Relay through a profile, Don't handle, or Discard (never
 delivered). Then come the profiles that have an SMTP server, with where
 new sites' mail goes in their header. Until a profile has one, a checklist

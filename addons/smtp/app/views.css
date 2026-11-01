@@ -1,8 +1,5 @@
 .numeric { text-align:right; font-variant-numeric:tabular-nums; }
 .card-header p.hint { margin:5px 0 0; }
-.tone-ok { color:var(--ok); }
-.tone-warn { color:var(--warn); }
-.tone-bad { color:var(--bad); }
 .smtp-setup { border-color:var(--primary); }
 .smtp-setup h2 { margin:0 0 4px; }
 .smtp-checklist { list-style:none; margin:0; padding:0; counter-reset:step; }

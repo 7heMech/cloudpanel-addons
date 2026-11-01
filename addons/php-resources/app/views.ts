@@ -1,7 +1,7 @@
 import CLIENT_JS_BODY from "./views.client.js" with { type: "text" };
 import { esc } from "../../../lib/app-http";
 import {
-  FLEET_FOOTER_HTML, FLEET_ROW_SELECTION_JS, fleetFilterHtml, fleetRowSelectionStyle, renderLayout,
+  ATTENTION_RANK, FLEET_FOOTER_HTML, FLEET_ROW_SELECTION_JS, fleetFilterHtml, filterWord, valueFilters, fleetRowSelectionStyle, renderLayout,
 } from "../../../lib/app-ui";
 import { mountPath } from "../../../lib/mount";
 import {
@@ -218,7 +218,9 @@ function categoryRow(category: PoolCategory, sites: number): string {
 }
 
 function siteTableRow(site: PoolSiteState, categories: PoolCategory[]): string {
-  return `<tr data-domain="${esc(site.domain)}" data-show="${site.drifted ? "drifted" : ""}" data-category-id="${esc(site.categoryId ?? "")}" data-drifted="${site.drifted}" tabindex="0" aria-selected="false" onclick="toggleSiteSelection(event, this)" onkeydown="toggleSiteSelection(event, this)">
+  const category = categories.find((candidate) => candidate.id === site.categoryId);
+  const show = [site.drifted ? "drifted" : "", filterWord("php", `PHP ${site.phpVersion}`), filterWord("category", category?.name ?? NO_CATEGORY)].filter(Boolean).join(" ");
+  return `<tr data-domain="${esc(site.domain)}" data-show="${show}" data-sort-category="${esc(category?.name ?? "")}" data-category-id="${esc(site.categoryId ?? "")}" data-drifted="${site.drifted}" tabindex="0" aria-selected="false" onclick="toggleSiteSelection(event, this)" onkeydown="toggleSiteSelection(event, this)">
     <td class="site-select"><input class="site-checkbox" type="checkbox" onchange="paintFleetSelection()" aria-label="Select ${esc(site.domain)}"></td>
     <td class="site-cell">${esc(site.domain)}<span class="hint">PHP ${esc(site.phpVersion)}${
       site.drifted ? ' · <span class="tone-warn">its pool file no longer matches its category</span>' : ""
@@ -256,10 +258,14 @@ export function dashboardView(state: PhpResourcesState): string {
         <select class="toolbar-end" id="bulk-category" data-keep aria-label="Category to put the selected sites in">${bulkOptions(state.categories)}</select>
         <button class="btn" id="assign-selected" type="button" disabled data-needs-selection onclick="assignSelected()">Assign selected</button>
       </div>
-      ${fleetFilterHtml({ count: total, filters: [{ value: "drifted", label: "Drifted" }], summary: `${total} PHP site${total === 1 ? "" : "s"}` })}
+      ${fleetFilterHtml({ count: total, filters: [
+        { value: "drifted", label: "Drifted" },
+        ...valueFilters("PHP", "php", state.sites.map((site) => `PHP ${site.phpVersion}`)),
+        ...valueFilters("Category", "category", state.sites.map((site) => state.categories.find((category) => category.id === site.categoryId)?.name ?? NO_CATEGORY)),
+      ], summary: `${total} PHP site${total === 1 ? "" : "s"}` })}
       <div class="table-scroll"><table class="fleet-table php-sites-table"><thead><tr>
         <th scope="col" class="site-select"><input id="select-all" type="checkbox" onchange="selectAllSites(this.checked)" aria-label="Select all sites"></th>
-        <th scope="col">Site</th><th scope="col">Category</th><th scope="col">Now running</th>
+        <th scope="col" data-sort="domain">Site</th><th scope="col" data-sort="category">Category</th><th scope="col" data-sort="running">Now running</th>
       </tr></thead><tbody>${siteRows}</tbody></table></div>
       ${FLEET_FOOTER_HTML}`
     : '<div class="empty">No CloudPanel site runs PHP, so there is no PHP-FPM pool to tune.</div>'}

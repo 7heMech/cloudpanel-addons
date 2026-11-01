@@ -6,7 +6,7 @@ import type { SanitizedSite } from "../../../lib/snapshot-reader";
 
 import { esc } from "../../../lib/app-http";
 import {
-  FLEET_FOOTER_HTML, JOB_STYLE, JOB_WATCH_JS, fleetFilterHtml, jobStateClass, jobStateLabel, renderFragment, renderLayout,
+  FLEET_FOOTER_HTML, FLEET_ROW_SELECTION_JS, JOB_STYLE, JOB_WATCH_JS, fleetFilterHtml, filterWord, valueFilters, jobStateClass, jobStateLabel, renderFragment, renderLayout,
   whenText,
 } from "../../../lib/app-ui";
 import type { EmbedFragment } from "../../../lib/shadow-embed";
@@ -46,7 +46,7 @@ export function layout(
     base: BASE,
     nav: [],
     css: STYLE + JOB_STYLE,
-    script: JOB_WATCH_JS + CLIENT_JS,
+    script: `${FLEET_ROW_SELECTION_JS}\n${JOB_WATCH_JS}${CLIENT_JS}`,
     updateNotice,
     ...(site ? { site: { ...site, activeSlug: "stager" } } : {}),
   });
@@ -62,7 +62,7 @@ export function fragment(title: string, content: string): EmbedFragment {
     base: BASE,
     nav: [],
     css: STYLE + JOB_STYLE,
-    script: JOB_WATCH_JS + CLIENT_JS,
+    script: `${FLEET_ROW_SELECTION_JS}\n${JOB_WATCH_JS}${CLIENT_JS}`,
   });
 }
 
@@ -254,7 +254,7 @@ function sourceSummary(site: SiteSummary): string {
 export function newCloneView(source: SiteSummary | null, sites: SiteSummary[], error?: string): string {
   if (!source) {
     const options = sites
-      .map((s) => `<tr data-domain="${esc(s.domain)}" data-find="${esc(`${s.domain} ${s.application}`)}">
+      .map((s) => `<tr data-domain="${esc(s.domain)}" data-find="${esc(`${s.domain} ${s.application}`)}" data-show="${filterWord("type", typeLabel(s.siteType))} ${filterWord("app", s.application || "Generic")}">
         <td class="site-cell"><a href="${BASE}/new?source=${encodeURIComponent(s.domain)}">${esc(s.domain)}</a></td>
         <td class="type-cell">${esc(typeLabel(s.siteType))}${s.phpVersion ? ` ${esc(s.phpVersion)}` : ""}</td>
         <td data-label="Application">${esc(s.application || "Generic")}</td>
@@ -268,8 +268,15 @@ export function newCloneView(source: SiteSummary | null, sites: SiteSummary[], e
         ${
           sites.length === 0
             ? `<div class="empty">No clonable sites found in CloudPanel.</div>`
-            : `${fleetFilterHtml({ count: sites.length, summary: `${sites.length} sites` })}
-              <div class="table-scroll"><table class="fleet-table"><thead><tr><th scope="col">Domain</th><th scope="col">Type</th><th scope="col">Application</th><th scope="col" class="action-cell" aria-label="Actions"></th></tr></thead><tbody>${options}</tbody></table></div>
+            : `${fleetFilterHtml({
+              count: sites.length,
+              filters: [
+                ...valueFilters("Type", "type", sites.map((s) => typeLabel(s.siteType))),
+                ...valueFilters("Application", "app", sites.map((s) => s.application || "Generic")),
+              ],
+              summary: `${sites.length} sites`,
+            })}
+              <div class="table-scroll"><table class="fleet-table"><thead><tr><th scope="col" data-sort="domain">Domain</th><th scope="col" data-sort="type">Type</th><th scope="col" data-sort="application">Application</th><th scope="col" class="action-cell" aria-label="Actions"></th></tr></thead><tbody>${options}</tbody></table></div>
               ${FLEET_FOOTER_HTML}`
         }
       </div>`;

@@ -53,6 +53,8 @@ itself: cloning is not an everyday action, and a link in every row of the list
 an operator reads every day is priced as though it were. `Clone` is marked
 `clp-addons-menu-only` from `lib/row-actions.ts`, and Stager emits the rule that
 hides it, so on a box with no action menu it appears in neither place.
+Choosing the source at `/new` is a fleet list: its headings sort, and from six
+sites it has the shared search and filters by type and application.
 
 The clone form names the source in one line from the `sites` listing and
 prefills the hostname `stg`. It does not measure the source, because measuring

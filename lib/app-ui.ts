@@ -63,25 +63,54 @@ export function whenText(iso: string): string {
 /** Below this many sites the whole table fits on a screen, so it needs no search. */
 export const FLEET_FILTER_MIN = 6;
 
+/** A row's place when its status column is sorted: the tone of its worst status, worst first. */
+export const ATTENTION_RANK = { bad: 0, warn: 1, info: 2, ok: 3, muted: 4 } as const;
+
+export interface FleetFilter { value: string; label: string; group?: string }
+
+/** The `data-show` word a row carries for a value of a filter group such as its type. */
+export function filterWord(prefix: string, label: string): string {
+  return `${prefix}-${label.toLowerCase().replace(/[^a-z0-9]+/g, "-")}`;
+}
+
+/** One filter per distinct label, under `group`; none when every row shares one, since it would filter nothing. */
+export function valueFilters(group: string, prefix: string, labels: string[]): FleetFilter[] {
+  const distinct = [...new Set(labels.filter(Boolean))].sort((a, b) => a.localeCompare(b, undefined, { numeric: true }));
+  return distinct.length < 2 ? [] : distinct.map((label) => ({ value: filterWord(prefix, label), label, group }));
+}
+
 /**
- * Search, and an optional filter, above a site table whose rows carry
+ * Search and an optional filter above a site table whose rows carry
  * `data-domain`, `data-find` and `data-show`; the client half is `filterFleet`.
+ * The filter is a menu of checkboxes: within a group a row needs any of the
+ * ticked words, across groups all of them. Its sort is the table's headings,
+ * each `th[data-sort]`; the Sort select here stands in for them on a phone,
+ * where the heading is hidden.
  */
 export function fleetFilterHtml(options: {
   count: number;
   placeholder?: string;
-  filters?: { value: string; label: string }[];
+  filters?: FleetFilter[];
   summary: string;
 }): string {
   if (options.count < FLEET_FILTER_MIN) return "";
-  const filters = options.filters?.length
-    ? `<select id="fleet-show" data-keep aria-label="Show" onchange="filterFleet()"><option value="">All sites</option>${options.filters
-      .map((filter) => `<option value="${esc(filter.value)}">${esc(filter.label)}</option>`).join("")}</select>`
+  const groups = new Map<string, FleetFilter[]>();
+  for (const filter of options.filters ?? []) {
+    const group = filter.group ?? "Status";
+    groups.set(group, [...(groups.get(group) ?? []), filter]);
+  }
+  const filters = groups.size
+    ? `<details class="fleet-show" id="fleet-show"><summary><span id="fleet-show-label">All sites</span></summary>
+        <div class="fleet-show-menu" role="group" aria-label="Show">${[...groups].map(([group, list]) => `
+          <fieldset><legend${groups.size > 1 ? "" : ' class="visually-hidden"'}>${esc(group)}</legend>${list.map((filter) =>
+            `<label><input type="checkbox" value="${esc(filter.value)}" data-group="${esc(group)}" onchange="pickFleetFilter()"> ${esc(filter.label)}</label>`).join("")}</fieldset>`).join("")}
+          <button class="fleet-show-clear" type="button" onclick="clearFleetFilters()">Show all sites</button>
+        </div></details>`
     : "";
   const placeholder = options.placeholder ?? "Find a site";
   return `<div class="fleet-filter">
       <input type="search" id="fleet-find" data-keep placeholder="${esc(placeholder)}" aria-label="${esc(placeholder)}" oninput="filterFleet()">
-      ${filters}<span class="hint" id="fleet-summary" data-all="${esc(options.summary)}">${esc(options.summary)}</span>
+      ${filters}<label class="fleet-sort" hidden>Sort <select id="fleet-sort" onchange="pickFleetSort(this.value)"></select></label><span class="hint" id="fleet-summary" data-all="${esc(options.summary)}">${esc(options.summary)}</span>
     </div>`;
 }
 

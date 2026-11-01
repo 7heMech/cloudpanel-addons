@@ -4,7 +4,6 @@
 .limit-cell .hint { white-space:normal; }
 .php-sites-table .site-cell .hint { display:block; }
 .php-sites-table td[data-label="Category"] select { width:270px; max-width:100%; }
-.tone-warn { color:var(--warn); }
 .toolbar #bulk-category { width:auto; min-width:200px; max-width:100%; }
 .notice-actions { margin-top:12px; }
 .category-tools { display:flex; align-items:flex-end; gap:12px; flex-shrink:0; }

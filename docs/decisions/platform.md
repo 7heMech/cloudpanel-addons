@@ -357,8 +357,19 @@ header on a phone, so moving between the two does not move the header.
 
 Every addon renders into one shell in `lib/app-ui.ts`: palette, cards, tables,
 badges, switches, toolbars, one confirmation dialog and one inline notice per
-page. A badge names what something is rather than being read for itself, so it
-is set a size below the smallest body text wherever it appears. A switch that
+page. A badge names a state rather than being read for itself, so it is set a
+size below body text, as a tinted chip in one of five tones -- ok, info, warn,
+bad, muted -- and every addon names its states through them (`tone-*`, with the
+job states mapped onto the same five), so one colour means one thing on every
+page; a running container is ok while a running job is info. A table cell keeps
+its status to the chip and a line or two; the whole explanation is in the row's
+details or tooltip. A value left at its default (no profile, no category,
+CloudPanel's limits) reads muted, so what somebody chose stands out. A table has
+at most one solid button per card, never one per row, and a row's Delete stays a
+plain button that turns red only under the pointer or focus, so a column of
+them does not outweigh the rows. On a wide screen a long hostname is cut to one
+line, with the whole name on hover, and the actions column takes only its
+buttons' width, so the status columns keep their room. A switch that
 decides one thing for a whole page keeps its full size; one repeated per table
 row comes down to the height of the line beside it, so the control does not set
 the row's height. An addon supplies its brand, its own tabs, its script and any rule only it
@@ -487,7 +498,20 @@ type a word, such as the domain, before something that cannot be undone, and a
 press on any dialog's backdrop closes it. Fleet tables also get site-selection
 helpers: `paintFleetSelection` paints the count, select-all and every control
 marked `data-needs-selection` by shared ids, and `fleetFilterHtml` adds a search
-and an optional filter once a table has six sites. A row the search hides is
+and an optional filter once a table has six sites. The filter is a menu of
+checkboxes in groups (a status group, and a type, version or category group
+wherever the rows hold at least two values): within a group a row needs any
+ticked word of its `data-show`, across groups all of them, so WordPress and PHP
+together with Needs attention shows the WordPress and PHP sites that need
+attention. Sorting is by the headings, as on CloudPanel's Sites page with Panel
+Tweaks: each `th[data-sort]` sorts by its column on a click or Enter, and again
+reverses it. A row's `data-sort-<key>` gives the value where the cell's text
+would not -- a status column ranks by tone, worst first, and a select's text is
+every option it has -- rows without a value go last, ties go by domain, and the
+rows keep the server's order until a heading is picked; tables under six sites
+sort too. A phone hides the heading, so there a Sort select built from the same
+headings stands in for it. The ticked filters and the sort survive a repaint,
+and the phone's ten-site cut is taken after both. A row the search hides is
 deselected, so a bulk action only reaches sites on screen. Pages with background
 jobs get the shared job watcher. Theme initialization runs before styles are
 painted.

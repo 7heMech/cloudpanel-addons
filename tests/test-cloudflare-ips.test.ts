@@ -115,7 +115,7 @@ test("six sites bring a search and an Off filter", () => {
   const sites = ["a", "b", "c", "d", "e", "f"].map((name, index) => site(`${name}.example.test`, index % 2 === 0));
   const html = dashboardView({ autoEnableNewSites: false, sites });
   expect(html).toContain('id="fleet-find"');
-  expect(html).toContain('<option value="off">Off</option>');
+  expect(html).toContain('<input type="checkbox" value="off" data-group="Status" onchange="pickFleetFilter()"> Off</label>');
   expect(html).toContain('data-domain="b.example.test" data-enabled="false" data-show="off"');
   expect(html).toContain('data-domain="a.example.test" data-enabled="true" data-show="on"');
   expect(html).toContain('id="fleet-none" hidden');
@@ -123,7 +123,7 @@ test("six sites bring a search and an Off filter", () => {
 
 test("the switch column ends where the table ends, as the Maintenance table does", () => {
   const html = dashboardView({ autoEnableNewSites: true, sites: [site("a.example.test", true)] });
-  expect(html).toContain('<th scope="col" class="action-cell">Cloudflare only</th>');
+  expect(html).toContain('<th scope="col" class="action-cell" data-sort="enabled">Cloudflare only</th>');
   expect(html).toContain('<td class="action-cell" data-label="Cloudflare only">');
   expect(html).toContain('<button class="btn mobile-select-all" id="select-all-btn" type="button" onclick="toggleAllSites()">Select all</button>');
   const page = layout("Cloudflare IP access", html);

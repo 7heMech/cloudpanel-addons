@@ -764,7 +764,7 @@ test("the page offers a Dashboard on another server and Install or Activate per 
     varnish: { enabled: false, sites: {} }, varnishError: "", mainwp: mainwpView(state), mainwpError: "", domainLink: { signIn: true }, domainLinkError: "", jobs: { varnish: null, mainwp: null } });
   expect(page).toContain('<option value="@remote" selected>On another server</option>');
   expect(page).not.toContain("Choose a site");
-  expect(page).toContain('<th scope="col">MainWP Child</th>');
+  expect(page).toContain('<th scope="col" data-sort="mainwp">MainWP Child</th>');
   expect(page).toContain("Install MainWP Child automatically");
   expect(page).not.toContain("Keep every site connected");
   expect(page).toMatch(/data-domain="new.test" data-remote onclick="connectMainwp\(this\)">Activate</);
