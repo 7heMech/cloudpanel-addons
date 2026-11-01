@@ -6,6 +6,7 @@ import type { SystemTweaksState } from "../action";
 import type { CoverageRow, LastRun, UpdateSettings, UpdatesStatus } from "../updates";
 import type { FpmUploadProgress } from "../upload-progress";
 import type { PanelPhpChoice, PanelPhpStatus } from "../panel-php";
+import type { FirewallStatus } from "../firewall";
 
 import STYLE from "./views.css" with { type: "text" };
 import SCRIPT from "./views.client.js" with { type: "text" };
@@ -336,13 +337,22 @@ function settingsCard(state: SystemTweaksState): string {
     </div>`;
 }
 
+/** The protocols are set on CloudPanel's own Firewall page; this page only says where. */
+function firewallLine(status: FirewallStatus | { error: string }): string {
+  if ("error" in status || !status.available) return "";
+  const link = `<a href="/admin/firewall">Firewall</a>`;
+  return status.udpPorts.length
+    ? `<br>UDP ports open from CloudPanel's ${link} page: ${esc(status.udpPorts.join(", "))}.`
+    : `<br>Rules on CloudPanel's ${link} page can open UDP ports too.`;
+}
+
 export function dashboardView(state: SystemTweaksState, now = Date.now()): string {
   return `
     <div class="page-heading">
       <div>
         <h1>System Tweaks</h1>
         <p>Server-wide settings for this machine.</p>
-        <p class="hint">Every 15 minutes it also clears PHP and ImageMagick temp files that timed-out requests left in /tmp.</p>
+        <p class="hint">Every 15 minutes it also clears PHP and ImageMagick temp files that timed-out requests left in /tmp.${firewallLine(state.firewall)}</p>
       </div>
     </div>
     <div class="card">

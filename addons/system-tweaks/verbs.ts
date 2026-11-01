@@ -7,4 +7,7 @@ export const SYSTEM_TWEAKS_VERBS = {
   "set-upload-guard": { web: "admin" },
   "set-real-ip": { web: "admin" },
   "set-panel-php": { web: "admin" },
+  firewall: { web: "admin" },
+  "set-firewall-protocol": { web: "admin" },
+  "expect-firewall-rule": { web: "admin" },
 } as const;

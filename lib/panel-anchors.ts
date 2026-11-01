@@ -17,6 +17,9 @@ export const TEMPLATES = {
   newSite: "Frontend/Site/New/index.html.twig",
   newWordPressSite: "Frontend/Site/New/wordpress.html.twig",
   wordPressInstalled: "Frontend/Site/New/wordpress-installed.html.twig",
+  firewall: "Admin/Security/Firewall/index.html.twig",
+  firewallAddRule: "Admin/Security/Firewall/add-rule.html.twig",
+  firewallEditRule: "Admin/Security/Firewall/edit-rule.html.twig",
 } as const;
 
 export const ANCHORS = {

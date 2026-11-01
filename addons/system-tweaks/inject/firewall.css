@@ -1,0 +1,7 @@
+/* Five fields where CloudPanel draws four: Type and Source give up a little each. */
+@media (min-width: 577px) {
+  .card-form .row:has(> .clp-fw-protocol:not([hidden])) > .col-3 { width: 20.8333%; }
+  .card-form .row:has(> .clp-fw-protocol:not([hidden])) > .col-4 { width: 25%; }
+}
+/* One more column: the headings stay on one line, and Description takes the squeeze. */
+.table:has(.clp-fw-protocol-heading) th, .clp-fw-protocol-cell { white-space: nowrap; }

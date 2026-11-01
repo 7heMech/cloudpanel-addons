@@ -4,6 +4,7 @@ import {
 import type { ActionResult } from "../../../lib/gateway-client";
 import { REBOOT_TIME_ERROR, validRebootTime } from "../updates";
 import type { SystemTweaksState } from "../action";
+import { FIREWALL_PROTOCOLS, normalizePortRange, type FirewallProtocol, type FirewallStatus } from "../firewall";
 import { systemTweaksService } from "./service";
 import { dashboardView, layout } from "./views";
 
@@ -13,6 +14,11 @@ function json(body: unknown, status = 200): Response {
 
 function errorMessage(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
+}
+
+function firewallReply(result: ActionResult<FirewallStatus>): Response {
+  if (!result.ok || !result.data) return json({ ok: false, error: result.error ?? "the firewall protocols are unavailable" }, 400);
+  return json({ ok: true, protocols: result.data.protocols });
 }
 
 /** Every change answers with the page it leaves behind, so the browser repaints instead of reloading. */
@@ -27,6 +33,9 @@ export async function handle(
   updateNotice?: { current: string; latest: string } | null,
 ): Promise<Response> {
   if (req.method === "GET" && path === "/health") return json({ ok: true, service: "system-tweaks-manager" });
+  // CloudPanel's Firewall pages: the protocols, and a CSRF cookie for the page that sets one.
+  if (req.method === "GET" && path === "/api/session") return jsonResponse({ ok: true }, { csrf: newCsrfToken() });
+  if (req.method === "GET" && path === "/api/firewall") return firewallReply(await systemTweaksService.firewall());
 
   if (req.method === "GET" && path === "/") {
     const csrf = newCsrfToken();
@@ -73,6 +82,21 @@ export async function handle(
   if (path === "/api/panel-php") {
     if (typeof body.php !== "string") return json({ ok: false, error: "php must be a version such as 8.4" }, 400);
     return repaint(await systemTweaksService.setPanelPhp(body.php));
+  }
+
+  if (path === "/api/firewall/rule") {
+    if (!Number.isSafeInteger(body.id) || !FIREWALL_PROTOCOLS.includes(body.protocol as FirewallProtocol)) {
+      return json({ ok: false, error: "a rule id and a protocol of tcp, udp or both are required" }, 400);
+    }
+    return firewallReply(await systemTweaksService.setFirewallProtocol(body.id as number, body.protocol as string));
+  }
+
+  if (path === "/api/firewall/new-rule") {
+    const portRange = typeof body.portRange === "string" ? normalizePortRange(body.portRange) : null;
+    if (!portRange || !FIREWALL_PROTOCOLS.includes(body.protocol as FirewallProtocol)) {
+      return json({ ok: false, error: "Port Range must be a port or a range such as 8000-8100" }, 400);
+    }
+    return firewallReply(await systemTweaksService.expectFirewallRule(portRange, body.protocol as string));
   }
 
   if (path === "/api/real-ip") {

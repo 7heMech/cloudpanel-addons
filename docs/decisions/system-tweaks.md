@@ -3,7 +3,8 @@
 System Tweaks holds settings for the server rather than for CloudPanel's pages,
 which stay with [Panel Tweaks](panel-tweaks.md). PHP worker limits stay with
 [PHP Resources](php-resources.md). System Tweaks also owns the PHP version
-that runs the panel itself.
+that runs the panel itself, and the protocol of each rule on CloudPanel's own
+Firewall page.
 
 ## The page
 
@@ -318,3 +319,57 @@ file. A closed descriptor or a process that has exited can be skipped; an
 inspection failure for a process whose directory still exists stops the cleanup,
 and the pass reports it, as it does unlink errors other than a file that has
 already gone. The rest of the upkeep still runs.
+
+## Firewall
+
+CloudPanel's Firewall page (Admin → Security → Firewall) opens every rule for
+TCP only, so a UDP port such as WireGuard's or DNS needed ufw by hand. That does
+not last: every add, edit or delete there runs `ufw --force reset`, re-adds each
+row of its `firewall_rule` table with `ufw allow proto tcp from <source> to any
+port <range>`, adds UDP 443 for HTTP/3 from `0.0.0.0/0` and `::/0`, and enables
+ufw. Anything else, an edit to `/etc/ufw/*.rules` included, is gone after the
+next change on that page. The table has no protocol column, and Symfony refuses
+a field its form does not declare.
+
+So System Tweaks keeps the protocol itself, in
+`/var/lib/clp-addons/system-tweaks/firewall.json`, by CloudPanel's rule id
+(AUTOINCREMENT, so never reused). A rule with no entry is TCP, CloudPanel's own.
+It adds a Protocol field (TCP, UDP, TCP and UDP) after Port Range on the add and
+edit forms, and a Protocol column after Port Range in the table, which fills
+from the `firewall` verb. The field has no name. The edit form sets its rule's
+protocol through `set-firewall-protocol` before it submits. On the add form the
+rule has no id yet, so `expect-firewall-rule` records the port range, as
+CloudPanel's form normalises it, with the highest rule id at that moment; the
+next rules saved above that id with that range take the protocol. A choice
+waits ten minutes. A failed request stops the form with an error, except a TCP
+choice on the add form, which is CloudPanel's own and submits anyway. System
+Tweaks' page gets one line: the UDP ports the protocols open, with a link to
+the Firewall page.
+
+`clp-addons-firewall.path` watches `/etc/ufw/user.rules` and `user6.rules`
+while System Tweaks is enabled, which is how it learns that CloudPanel rebuilt
+ufw; the 15-minute repair runs the same pass. `clp-addons sync-firewall` runs
+each installed addon's `firewall` hook. The pass waits until both files have
+been still for two seconds, since the rebuild writes them once per command,
+then, under its own lock, settles waiting choices, forgets ids no longer in the
+table, and compares ufw's `### tuple ###` lines with the protocols. Sources are
+compared the way ufw records them: the network address, without `/32` or
+`/128`, IPv6 compressed. It repeats until a pass changes nothing, at most five
+times, so a rebuild still running when it starts is caught, and refuses to loop
+on commands ufw does not take. Its own writes wake the watcher once more, which
+finds nothing to do.
+
+It touches only what a protocol asks for. UDP adds `allow proto udp` and deletes
+CloudPanel's TCP rule for that port and source, unless another TCP rule for both
+still wants it; TCP and UDP adds the UDP rule. Additions run before deletions.
+The rules it changed are recorded, so a rule set back to TCP, or every rule when
+System Tweaks is disabled or uninstalled, goes back to CloudPanel's own: TCP
+for each row, and UDP 443 untouched. Rules the operator added for other ports
+are left alone, until CloudPanel's next rebuild removes them as it always did.
+ufw runs with argument arrays; ports and sources from the table must match a
+port, a range, an address or a CIDR, or the row is skipped.
+
+Disabling marks the protocols withdrawn under the same lock before putting
+ufw back, because that change wakes the watcher, which must not apply them
+again. A failure there warns and does not keep System Tweaks on. Enabling clears
+the mark and applies the kept protocols.
