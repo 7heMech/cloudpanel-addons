@@ -67,7 +67,7 @@ export interface AddonDefinition {
   requiresUnits?: string[];
   /** The release it first shipped in, such as `2.0.0-rc.1`; the Addons page marks it New for boxes updated past it. */
   added?: string;
-  /** What changed in one release, shown as Changed on the same terms as `added`. */
+  /** A change an operator must know about, such as moved settings or new effects on sites, shown as Changed on the same terms as `added`; not for layout or speed. */
   changed?: { in: string; note: string };
   /** Ticked when the installer asks which addons to install. */
   preselected?: boolean;
