@@ -240,9 +240,8 @@ missing zones; Cloudflare refuses a zone
 create without it by naming an internal permission, `account.zone.create`,
 which the page reports as Zone Edit. The URL uses the keys in Cloudflare's
 [template reference](https://developers.cloudflare.com/fundamentals/api/how-to/account-owned-token-template/),
-plus `config_settings` and `zone_waf`, which the reference leaves out but the
-form accepts, and `dynamic_url_redirects` for Single Redirect, which the
-reference also leaves out. The dashboard drops an unknown key without saying so, which is
+plus `config_settings`, `zone_waf` and `dynamic_redirect` (Single Redirect),
+which the reference leaves out but are the dashboard's own permission names. The dashboard drops an unknown key without saying so, which is
 why the page also lists the permissions. The template has no parameter for
 Client IP Address Filtering, so the page shows the server's detected addresses
 to paste there. Their API permissions are
