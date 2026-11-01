@@ -70,8 +70,8 @@ The page puts the sites first, then the profiles with the choice of default,
 the connections and settings that are set once, and last the change log, which
 is looked back at rather than worked in. The site
 list has the shared search from six sites and selection, as the other site
-lists do, with filters for needs attention, changes waiting, redirects and not
-managed, and sorts by attention or profile. A site's Details dialog leads with
+lists do, with filters for needs attention, changes waiting and not managed,
+and by what each site runs, Redirect included; every heading sorts. A site's Details dialog leads with
 what needs doing: its status chip beside the domain, then problems and, while
 its zone is pending, the nameservers to set at the registrar, each with its own
 copy button; then what will change, with a redirect's pending changes said to

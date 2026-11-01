@@ -12,9 +12,9 @@ note under its name. Rows are selected by click or checkbox and "Turn on
 selected" or "Turn off selected" switch them through one bulk route and one
 `enable-many` or `disable-many` action, which reads the panel database once, so most of
 the fleet can go into maintenance without the global switch; turning sites on
-asks first, with their names. From six sites a search, a filter (in
-maintenance, live, not covered) and an in maintenance first sort sit above the
-table. Every fleet change answers
+asks first, with their names. From six sites a search and filters (in
+maintenance, live, not covered, and the site type) sit above the table, whose
+headings sort. Every fleet change answers
 with the redrawn fleet, which the page repaints.
 
 Below the table one card holds the global override: a switch that decides what

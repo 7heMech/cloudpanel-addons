@@ -112,8 +112,8 @@ branch. The fleet reply carries no webhook tokens and no keys; it reads a key
 only for an SSH remote, to say whether one exists. Rows are selected by click
 or checkbox for Deploy selected, which skips active jobs and unavailable sites,
 so a site's name is plain text and its Manage button opens the site's page;
-from six sites a search, a filter (needs attention, deploying) and a needs
-attention first sort sit above the table. Connect a site links to CloudPanel's site list, where each site's Git tab
+from six sites a search and filters (needs attention, deploying, site type) sit
+above the table, whose headings sort. Connect a site links to CloudPanel's site list, where each site's Git tab
 starts setup.
 
 CloudPanel's own site list carries a "Deploy from Git" link, left of the

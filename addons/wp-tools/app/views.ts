@@ -118,19 +118,20 @@ function siteRow(site: WpSiteView, data: WpDashboard, mainwp: boolean, selectabl
   const box = selectable ? `
                 <td class="site-select"><input class="site-checkbox" type="checkbox" onchange="paintFleetSelection()" aria-label="Select ${domain}"${
     connectable(site, data.mainwp) && !data.jobs.mainwp ? "" : " disabled"}></td>` : "";
-  // The filter and the "Needs attention first" sort go by the chips the row shows.
+  // The filter and each status column's sort go by the chips the row shows.
   const varnish = site.varnishCache && !data.varnishError ? varnishBadge(site) : null;
   const child = mainwp && site.domain !== data.mainwp.dashboard ? mainwpBadge(site, data.mainwp) : null;
-  const rank = Math.min(...[varnish, child].map((badge) => !badge ? ATTENTION_RANK.muted
+  const rank = (badge: [string, string] | null): number => !badge ? ATTENTION_RANK.muted
     : badge[1] === "state-failed" ? ATTENTION_RANK.bad : badge[1] === "tone-warn" ? ATTENTION_RANK.warn
-    : badge[1] === "state-done" ? ATTENTION_RANK.ok : ATTENTION_RANK.muted));
+    : badge[1] === "state-done" ? ATTENTION_RANK.ok : ATTENTION_RANK.muted;
+  const childRank = site.domain === data.mainwp.dashboard ? ATTENTION_RANK.ok : rank(child);
   const show = [
-    rank <= ATTENTION_RANK.warn ? "attention" : "",
+    Math.min(rank(varnish), rank(child)) <= ATTENTION_RANK.warn ? "attention" : "",
     varnish && varnish[1] !== "state-done" ? "varnish" : "",
     child && data.mainwp.sites[site.domain]?.status !== "connected" && data.mainwp.sites[site.domain]?.status !== "unsupported" ? "mainwp" : "",
   ].filter(Boolean).join(" ");
   return `
-              <tr data-domain="${domain}" data-find="${esc(`${site.domain} ${site.user}`)}" data-show="${show}" data-sort-attention="${rank}" data-sort-owner="${esc(site.user)}"${select}>${box}
+              <tr data-domain="${domain}" data-find="${esc(`${site.domain} ${site.user}`)}" data-show="${show}" data-sort-varnish="${data.varnishError ? "" : rank(varnish)}" data-sort-mainwp="${childRank}"${select}>${box}
                 <td class="site-cell">${domain}<div class="hint">${esc(site.user)}</div></td>
                 <td data-label="CLP Varnish Cache">${varnishCell(site, !data.varnishError, data.jobs.varnish)}</td>${
   mainwp ? `\n                <td data-label="MainWP Child">${mainwpCell(site, data.mainwp, data.jobs.mainwp)}</td>` : ""}
@@ -196,7 +197,6 @@ function sitesCard(data: WpDashboard): string {
           ...(data.varnishError ? [] : [{ value: "varnish", label: "CLP Varnish Cache not active" }]),
           ...(mainwp ? [{ value: "mainwp", label: "MainWP not connected" }] : []),
         ],
-        sorts: [{ value: "attention", label: "Needs attention first" }, { value: "owner", label: "Site user" }],
         summary: `${sites.length} sites`,
       })}
       <div class="table-scroll">
@@ -204,9 +204,9 @@ function sitesCard(data: WpDashboard): string {
           <thead>
             <tr>${selectable ? `
               <th scope="col" class="site-select"><input id="select-all" type="checkbox" onchange="selectAllSites(this.checked)" aria-label="Select all sites"${data.jobs.mainwp ? " disabled" : ""}></th>` : ""}
-              <th scope="col">Site</th>
-              <th scope="col" title="The WordPress plugin that clears CloudPanel's Varnish cache when content changes">CLP Varnish Cache</th>${
-  mainwp ? '\n              <th scope="col">MainWP Child</th>' : ""}
+              <th scope="col" data-sort="domain">Site</th>
+              <th scope="col" data-sort="varnish" title="The WordPress plugin that clears CloudPanel's Varnish cache when content changes">CLP Varnish Cache</th>${
+  mainwp ? '\n              <th scope="col" data-sort="mainwp">MainWP Child</th>' : ""}
               <th scope="col" class="action-cell"></th>
             </tr>
           </thead>

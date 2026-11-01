@@ -130,7 +130,8 @@ installed remain from a deleted Dashboard, and automation reads as off; a site
 without Varnish in CloudPanel says Varnish off. A muted line under the table offers to remove the
 sign-in helper while any site has it, and the shared search (site or user)
 appears from six sites, with filters for needs attention, CLP Varnish Cache not
-active and MainWP not connected, and sorts by attention or site user. Sign in is
+active and MainWP not connected; each heading sorts, a status column worst
+first. Sign in is
 a plain button: on every row, a solid one would be the loudest thing on the
 page. After any change the page fetches
 `/api/dashboard`, a server-rendered fragment of everything below the heading,

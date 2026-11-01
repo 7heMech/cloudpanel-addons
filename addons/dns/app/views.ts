@@ -1,7 +1,7 @@
 import CLIENT_BODY from "./views.client.js" with { type: "text" };
 import CSS from "./views.css" with { type: "text" };
 import { esc } from "../../../lib/app-http";
-import { ATTENTION_RANK, FLEET_FOOTER_HTML, FLEET_ROW_SELECTION_JS, fleetFilterHtml, fleetRowSelectionStyle, renderLayout } from "../../../lib/app-ui";
+import { ATTENTION_RANK, FLEET_FOOTER_HTML, FLEET_ROW_SELECTION_JS, fleetFilterHtml, filterWord, valueFilters, fleetRowSelectionStyle, renderLayout } from "../../../lib/app-ui";
 import { mountPath } from "../../../lib/mount";
 import type { DnsState, SiteView } from "../action";
 import type { Profile } from "../model";
@@ -95,6 +95,10 @@ function hintLine(text: string): string {
   return text ? `<span class="hint dns-clamp" title="${esc(text)}">${esc(text)}</span>` : "";
 }
 
+function typeLabel(site: SiteView): string {
+  return site.redirect ? "Redirect" : TYPE_LABELS[site.type] ?? site.type;
+}
+
 function siteRow(site: SiteView, state: DnsState): string {
   const status = siteStatus(site, state.automatic);
   const runs = site.redirect
@@ -103,10 +107,10 @@ function siteRow(site: SiteView, state: DnsState): string {
   const profile = state.profiles.find((candidate) => candidate.id === site.profileId);
   const show = [
     status.tone === "bad" ? "attention" : status.tone === "warn" ? "pending" : "",
-    site.redirect ? "redirect" : "",
+    filterWord("type", typeLabel(site)),
     profile || site.redirect ? "" : "unmanaged",
   ].filter(Boolean).join(" ");
-  const sorts = ` data-sort-attention="${ATTENTION_RANK[status.tone as keyof typeof ATTENTION_RANK] ?? ATTENTION_RANK.muted}" data-sort-profile="${esc(profile?.name ?? "")}"`;
+  const sorts = ` data-sort-attention="${ATTENTION_RANK[status.tone as keyof typeof ATTENTION_RANK] ?? ATTENTION_RANK.muted}" data-sort-profile="${esc(profile?.name ?? "")}" data-sort-type="${esc(typeLabel(site))}"`;
   return `<tr data-domain="${esc(site.domain)}" data-profile-id="${esc(site.profileId ?? "")}" data-show="${show}"${sorts}${site.plan?.held ? " data-held" : ""} tabindex="0" aria-selected="false" onclick="toggleSiteSelection(event, this)" onkeydown="toggleSiteSelection(event, this)">
     <td class="site-select"><input class="site-checkbox" type="checkbox" onchange="paintFleetSelection()" aria-label="Select ${esc(site.domain)}"></td>
     <td class="site-cell"><strong>${esc(site.domain)}</strong></td>
@@ -285,15 +289,14 @@ export function dashboardContent(state: DnsState, now = Date.now()): string {
       ${fleetFilterHtml({
         count: state.sites.length,
         filters: [
-          { value: "attention", label: "Needs attention" }, { value: "pending", label: "Changes waiting" },
-          { value: "redirect", label: "Redirects" }, { value: "unmanaged", label: "Not managed" },
+          { value: "attention", label: "Needs attention" }, { value: "pending", label: "Changes waiting" }, { value: "unmanaged", label: "Not managed" },
+          ...valueFilters("Type", "type", state.sites.map(typeLabel)),
         ],
-        sorts: [{ value: "attention", label: "Needs attention first" }, { value: "profile", label: "Profile" }],
         summary: siteCount(state),
       })}
       <div class="table-scroll"><table class="fleet-table dns-site-table"><thead><tr>
         <th class="site-select"><input id="select-all" type="checkbox" onchange="selectAllSites(this.checked)" aria-label="Select all sites"></th>
-        <th>Site</th><th>Runs</th><th>Profile</th><th>DNS</th><th class="action-cell"></th>
+        <th data-sort="domain">Site</th><th data-sort="type">Runs</th><th data-sort="profile">Profile</th><th data-sort="attention" data-sort-label="DNS status">DNS</th><th class="action-cell"></th>
       </tr></thead><tbody>${sites}</tbody></table></div>
       ${FLEET_FOOTER_HTML}
       <div class="card-footer"><span class="hint">${esc(ago(state.checkedAt, now))}. Drift is checked every 15 minutes.</span>

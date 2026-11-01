@@ -650,8 +650,8 @@ test("the page puts the sites first and the default for new sites in the Categor
   expect(html.indexOf("<h2>PHP sites</h2>")).toBeLessThan(html.indexOf("<h2>Categories</h2>"));
   expect(html.indexOf("<h2>Categories</h2>")).toBeLessThan(html.indexOf('id="default-category"'));
   expect(html).toContain("None (CloudPanel&#x27;s limits)");
-  expect(html).toContain('<option value="drifted">Drifted</option>');
-  expect(html).toContain('data-domain="a.example.com" data-show="drifted"');
+  expect(html).toContain('<input type="checkbox" value="drifted" data-group="Status" onchange="pickFleetFilter()"> Drifted</label>');
+  expect(html).toMatch(/data-domain="a\.example\.com" data-show="drifted php-[^"]* category-[^"]*"/);
   expect(html).toContain('id="assign-selected" type="button" disabled data-needs-selection');
   expect(html).toContain('id="bulk-category" data-keep');
   expect(html).not.toContain("closeCategoryDialogOnBackdrop");

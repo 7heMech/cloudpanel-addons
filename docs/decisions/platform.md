@@ -497,13 +497,21 @@ notices and `confirmAction`. The one confirmation dialog can ask the operator to
 type a word, such as the domain, before something that cannot be undone, and a
 press on any dialog's backdrop closes it. Fleet tables also get site-selection
 helpers: `paintFleetSelection` paints the count, select-all and every control
-marked `data-needs-selection` by shared ids, and `fleetFilterHtml` adds a search,
-an optional filter and an optional sort once a table has six sites. The sort is
-a select in that bar rather than clickable headings, because a phone hides the
-table heading; each row carries a `data-sort-<key>` (Needs attention first ranks
-rows by the tone of their worst status), ties go by domain, and the rows keep
-the server's order until a sort is picked. It survives a repaint like the search
-does, and the phone's ten-site cut is taken after it. A row the search hides is
+marked `data-needs-selection` by shared ids, and `fleetFilterHtml` adds a search
+and an optional filter once a table has six sites. The filter is a menu of
+checkboxes in groups (a status group, and a type, version or category group
+wherever the rows hold at least two values): within a group a row needs any
+ticked word of its `data-show`, across groups all of them, so WordPress and PHP
+together with Needs attention shows the WordPress and PHP sites that need
+attention. Sorting is by the headings, as on CloudPanel's Sites page with Panel
+Tweaks: each `th[data-sort]` sorts by its column on a click or Enter, and again
+reverses it. A row's `data-sort-<key>` gives the value where the cell's text
+would not -- a status column ranks by tone, worst first, and a select's text is
+every option it has -- rows without a value go last, ties go by domain, and the
+rows keep the server's order until a heading is picked; tables under six sites
+sort too. A phone hides the heading, so there a Sort select built from the same
+headings stands in for it. The ticked filters and the sort survive a repaint,
+and the phone's ten-site cut is taken after both. A row the search hides is
 deselected, so a bulk action only reaches sites on screen. Pages with background
 jobs get the shared job watcher. Theme initialization runs before styles are
 painted.

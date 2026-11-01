@@ -2,7 +2,7 @@ import CLIENT_BODY from "./views.client.js" with { type: "text" };
 import CSS from "./views.css" with { type: "text" };
 import { esc } from "../../../lib/app-http";
 import {
-  ATTENTION_RANK, FLEET_FOOTER_HTML, FLEET_ROW_SELECTION_JS, fleetFilterHtml, fleetRowSelectionStyle, renderLayout,
+  ATTENTION_RANK, FLEET_FOOTER_HTML, FLEET_ROW_SELECTION_JS, fleetFilterHtml, filterWord, valueFilters, fleetRowSelectionStyle, renderLayout,
 } from "../../../lib/app-ui";
 import { mountPath } from "../../../lib/mount";
 import type { SmtpProfileView, SmtpSiteView, SmtpState } from "../action";
@@ -69,9 +69,11 @@ function siteRow(site: SmtpSiteView, profiles: SmtpProfileView[]): string {
     : site.bypass ? '<span class="hint tone-warn">Bypassed: its PHP-FPM pool sets its own sendmail_path</span>'
     : site.sender === null ? '<span class="hint">—</span>'
     : discards ? '<span class="hint">Discarded</span>' : `<span class="mono">${wrappable(site.sender)}</span>`;
-  const show = [site.profileId === null ? "unrelayed" : "", discards ? "discarded" : "", site.blocked || site.bypass ? "blocked" : ""].filter(Boolean).join(" ");
+  const show = [site.profileId === null ? "unrelayed" : "", discards ? "discarded" : "", site.blocked || site.bypass ? "blocked" : "", filterWord("type", typeLabel(site))].filter(Boolean).join(" ");
+  // What the Mail select shows, since a select's text is every option it has.
+  const mail = site.profileId === null ? NO_PROFILE : discards ? DONT_SEND_LABEL : `Relay through ${profiles.find((profile) => profile.id === site.profileId)?.name ?? ""}`;
   const grants = site.grants.length ? ` · also sends as ${site.grants.map(esc).join(", ")}` : "";
-  return `<tr data-domain="${esc(site.domain)}" data-find="${esc([site.domain, ...site.grants].join(" "))}" data-show="${show}" data-sort-attention="${site.blocked || site.bypass ? ATTENTION_RANK.warn : site.profileId === null ? ATTENTION_RANK.info : ATTENTION_RANK.ok}" data-profile-id="${esc(site.profileId ?? "")}" tabindex="0" aria-selected="false" onclick="toggleSiteSelection(event, this)" onkeydown="toggleSiteSelection(event, this)">
+  return `<tr data-domain="${esc(site.domain)}" data-find="${esc([site.domain, ...site.grants].join(" "))}" data-show="${show}" data-sort-from="${site.blocked || site.bypass ? ATTENTION_RANK.warn : site.sender === null || discards ? ATTENTION_RANK.muted : ATTENTION_RANK.ok}" data-sort-mail="${esc(mail)}" data-profile-id="${esc(site.profileId ?? "")}" tabindex="0" aria-selected="false" onclick="toggleSiteSelection(event, this)" onkeydown="toggleSiteSelection(event, this)">
     <td class="site-select"><input class="site-checkbox" type="checkbox" onchange="paintFleetSelection()" aria-label="Select ${esc(site.domain)}"></td>
     <td class="site-cell"><strong>${esc(site.domain)}</strong><span class="hint">${esc(site.user)} · ${esc(typeLabel(site))}${grants}</span></td>
     <td data-label="Mail"><select aria-label="Where mail from ${esc(site.domain)} goes" onchange="smtpAssignRow(this)">${profileOptions(profiles, site.profileId)}</select></td>
@@ -125,10 +127,11 @@ export function dashboardContent(state: SmtpState): string {
       </div>
       ${fleetFilterHtml({ count: total, filters: [
         { value: "unrelayed", label: "Not handled" }, { value: "discarded", label: "Discarded" }, { value: "blocked", label: "Blocked" },
-      ], sorts: [{ value: "attention", label: "Needs attention first" }], summary: `${total} site${total === 1 ? "" : "s"}` })}
+        ...valueFilters("Type", "type", state.sites.map(typeLabel)),
+      ], summary: `${total} site${total === 1 ? "" : "s"}` })}
       <div class="table-scroll"><table class="fleet-table smtp-site-table"><thead><tr>
         <th class="site-select"><input id="select-all" type="checkbox" onchange="selectAllSites(this.checked)" aria-label="Select all sites"></th>
-        <th>Site</th><th>Mail</th><th>From</th><th class="action-cell">Actions</th>
+        <th data-sort="domain">Site</th><th data-sort="mail">Mail</th><th data-sort="from">From</th><th class="action-cell">Actions</th>
       </tr></thead><tbody>${sites}</tbody></table></div>
       ${FLEET_FOOTER_HTML}`
       : '<div class="empty">CloudPanel has no sites yet.</div>'}

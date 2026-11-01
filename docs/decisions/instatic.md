@@ -24,8 +24,8 @@ selected and updated to the latest version or restarted together; each update
 is its own job. While any job runs, the dashboard fetches itself again every
 four seconds, and an updating row shows its step and cannot be selected. A
 failed update is named on its row until another replaces it. From six sites
-the shared search has filters for update available and not running, and sorts
-by attention or oldest version first. A finished job
+the shared search has filters for update available, not running and version,
+and every heading sorts. A finished job
 repaints its result view. A site's name is plain text, so clicking it selects
 the row like the rest of it; Manage starts with Open admin and Visit site. On a
 wide screen Manage opens a menu; on a phone its buttons open below Update and

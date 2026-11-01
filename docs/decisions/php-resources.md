@@ -53,8 +53,8 @@ Everything is decided at `/addons/php-resources/`. The page opens with a drift
 notice when there is drift, then the PHP sites, then the categories with the
 choice of category for new sites in their header. The site table carries
 selection and a bulk assignment, because moving forty sites is the ordinary
-operation; from six sites it has a search, a Drifted filter and sorts by
-drift or category. Each site shows
+operation; from six sites it has a search and filters for drifted, PHP
+version and category, and its headings sort. Each site shows
 its PHP version under its name. A site row selects as a whole with a
 highlighted state and keyboard support. Desktop retains the conventional
 checkbox; at 940px or narrower, where rows become cards, it is omitted and the
