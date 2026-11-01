@@ -435,7 +435,12 @@ pre { background: var(--bg); border: 1px solid var(--border); border-radius: 4px
   html.dark .card-table:has(.fleet-table tr[aria-selected="true"]) > .card-header { background: var(--surface); }
   .fleet-filter { padding: 0 20px 16px; }
   .card-header + .fleet-filter { padding-top: 16px; }
-  .fleet-filter > input { max-width: none; }
+  /* Search on its own row, then filter and Sort in equal halves, so a longer
+     filter label never moves anything. */
+  .fleet-filter > input { flex-basis: 100%; max-width: none; }
+  .fleet-show, .fleet-sort { flex: 1 1 0; min-width: 0; }
+  .fleet-show > summary > span { overflow: hidden; text-overflow: ellipsis; }
+  .fleet-sort select { flex: 1; min-width: 0; }
   .fleet-filter .hint { flex-basis: 100%; margin-left: 0; }
   .split-card { flex-wrap: wrap; }
   .split-card > :last-child { flex-basis: 100%; }
