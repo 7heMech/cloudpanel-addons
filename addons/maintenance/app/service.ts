@@ -1,4 +1,5 @@
 import { callGatewayAction, type ActionResult } from "../../../lib/gateway-client";
+import type { WebVerb } from "../../../lib/gateway-protocol";
 import { fetchPanelInfo } from "../../../lib/snapshot-reader";
 import type { SiteContext } from "../../../lib/site-context";
 import type { GlobalMaintenanceStatus, MaintenanceSiteStatus, MaintenanceStatus } from "../action";
@@ -34,15 +35,15 @@ export interface BulkToggleResult {
   failed: { domain: string; error: string }[];
 }
 
-function action<T>(verb: string, domain: string, input?: string): Promise<ActionResult<T>> {
-  return callGatewayAction<T>("maintenance", verb, [`--domain=${domain}`], input, {
+function action<T>(verb: WebVerb<"maintenance">, domain: string, input?: string): Promise<ActionResult<T>> {
+  return callGatewayAction("maintenance", verb, [`--domain=${domain}`], input, {
     timeout: 10_000,
     maxBuffer: 1024 * 1024,
   });
 }
 
-function globalAction<T>(verb: string, input?: string): Promise<ActionResult<T>> {
-  return callGatewayAction<T>("maintenance", verb, [], input, {
+function globalAction<T>(verb: WebVerb<"maintenance">, input?: string): Promise<ActionResult<T>> {
+  return callGatewayAction("maintenance", verb, [], input, {
     timeout: 30_000,
     maxBuffer: 1024 * 1024,
   });

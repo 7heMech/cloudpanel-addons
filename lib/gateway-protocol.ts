@@ -1,242 +1,107 @@
-// Protocol definitions for the root gateway daemon.
-// This module has zero imports and zero cyclical dependencies.
+// Protocol definitions for the root gateway daemon. It imports only the
+// addons' verb tables, which import nothing.
+import { CLOUDFLARE_IPS_VERBS } from "../addons/cloudflare-ips/verbs";
+import { DNS_VERBS } from "../addons/dns/verbs";
+import { GIT_VERBS } from "../addons/git/verbs";
+import { INSTATIC_VERBS } from "../addons/instatic/verbs";
+import { MAINTENANCE_VERBS } from "../addons/maintenance/verbs";
+import { PANEL_TWEAKS_VERBS } from "../addons/panel-tweaks/verbs";
+import { PHP_RESOURCES_VERBS } from "../addons/php-resources/verbs";
+import { SECURITY_KEYS_VERBS } from "../addons/security-keys/verbs";
+import { SMTP_VERBS } from "../addons/smtp/verbs";
+import { STAGER_VERBS } from "../addons/stager/verbs";
+import { SYSTEM_TWEAKS_VERBS } from "../addons/system-tweaks/verbs";
+import { TERMINAL_VERBS } from "../addons/terminal/verbs";
+import { WP_TOOLS_VERBS } from "../addons/wp-tools/verbs";
+import { MANAGER_VERBS } from "../manager/verbs";
 
 export const GATEWAY_SOCKET_PATH = "/run/clp-addons/auth.sock";
 export const DEFAULT_CLI_BIN = "/usr/local/bin/clp-addons";
 export const MAX_GATEWAY_INPUT_BYTES = 1024 * 1024; // 1 MB max input (for clone credentials, etc.)
 export const DEFAULT_GATEWAY_TIMEOUT_MS = 60_000;
 
-export const STAGER_ALLOWED_VERBS = new Set([
-  "sites",
-  "clone",
-  "promote",
-  "describe",
-  "jobs",
-  "prune",
-  "job",
-  "watch-job",
-]);
-
-export const INSTATIC_ALLOWED_VERBS = new Set([
-  "list",
-  "create",
-  "update",
-  "delete",
-  "start",
-  "stop",
-  "restart",
-  "recreate",
-  "snapshot",
-  "status",
-  "logs",
-  "job",
-  "jobs",
-  "watch-job",
-]);
+/** Who may ask root for a verb from the web. */
+export type WebAccess =
+  /** An administrator, behind the manager's gate. */
+  | "admin"
+  /** An administrator or a site manager; CloudPanel does not narrow a site manager's sites. */
+  | "site-manager"
+  /** Any signed-in panel user; the route names a non-administrator with --as-user and root holds them to their own sites. */
+  | "panel-user"
+  /** Any signed-in panel user, on their own account: the gateway reads whose from the session itself. */
+  | "own-account"
+  /** Before there is a session, on a credential root checks, such as a webhook token or a passkey's signature. */
+  | "pre-gate";
 
 /**
- * `run` and `prune` are deliberately absent. `run` is the deployment runner,
- * started only by the transient unit the deploy path launches, and `prune` is
- * retention sweeping the repair timer owns.
+ * One verb of `clp-addons action <addon>`. A root-only verb says why the web
+ * may not reach it. A stream's output is copied to the socket as it comes; a
+ * duplex stream also gets the socket's bytes on stdin, and the gateway checks
+ * its session itself.
  */
-export const GIT_ALLOWED_VERBS = new Set([
-  "sites",
-  "domains",
-  "status",
-  "configure",
-  "forget",
-  "keygen",
-  "webhook-enable",
-  "webhook-disable",
-  "hook",
-  "deploy",
-  "job",
-  "jobs",
-  "watch-job",
-]);
-
-export const MAINTENANCE_ALLOWED_VERBS = new Set([
-  "sites",
-  "enable-many",
-  "disable-many",
-  "status",
-  "enable",
-  "disable",
-  "get-template",
-  "set-template",
-  "reset-template",
-  "set-bypass",
-  "global-status",
-  "global-enable",
-  "global-disable",
-  "global-set-bypass",
-]);
+export type VerbDeclaration =
+  | { readonly web: WebAccess; readonly stream?: "one-way" | "duplex" }
+  | { readonly web: false; readonly why: string };
 
 /**
- * `reconcile` is deliberately absent, as it is for Cloudflare IP Access: it
- * walks the whole fleet and is the repair path's to run, not a page's.
+ * Every verb, declared once in its addon's own `verbs.ts`. The gateway's
+ * allowlist, the action's verb type and the manager's per-caller check are all
+ * read from here. Those files import nothing, so neither does the gateway.
  */
-export const PHP_RESOURCES_ALLOWED_VERBS = new Set([
-  "list",
-  "site",
-  "save-category",
-  "delete-category",
-  "assign",
-  "set-default",
-]);
+export const ADDON_VERBS = {
+  "cloudflare-ips": CLOUDFLARE_IPS_VERBS,
+  dns: DNS_VERBS,
+  git: GIT_VERBS,
+  instatic: INSTATIC_VERBS,
+  maintenance: MAINTENANCE_VERBS,
+  manager: MANAGER_VERBS,
+  "panel-tweaks": PANEL_TWEAKS_VERBS,
+  "php-resources": PHP_RESOURCES_VERBS,
+  "security-keys": SECURITY_KEYS_VERBS,
+  smtp: SMTP_VERBS,
+  stager: STAGER_VERBS,
+  "system-tweaks": SYSTEM_TWEAKS_VERBS,
+  terminal: TERMINAL_VERBS,
+  "wp-tools": WP_TOOLS_VERBS,
+} as const satisfies Record<string, Record<string, VerbDeclaration>>;
+
+export type GatewayAddon = keyof typeof ADDON_VERBS;
+type Verbs<A extends GatewayAddon> = (typeof ADDON_VERBS)[A];
+/** Every verb `clp-addons action <addon>` takes. */
+export type AddonVerb<A extends GatewayAddon> = keyof Verbs<A> & string;
+/** The verbs of an addon the web may ask for; of any addon, when it is not known which. */
+export type WebVerb<A extends GatewayAddon> = A extends GatewayAddon
+  ? { [V in keyof Verbs<A>]: Verbs<A>[V] extends { web: false } ? never : V }[keyof Verbs<A>] & string
+  : never;
+/** The verbs of an addon whose output is streamed. */
+export type StreamVerb<A extends GatewayAddon> = A extends GatewayAddon
+  ? { [V in keyof Verbs<A>]: Verbs<A>[V] extends { stream: string } ? V : never }[keyof Verbs<A>] & string
+  : never;
+
+export function isGatewayAddon(addon: string): addon is GatewayAddon {
+  return Object.hasOwn(ADDON_VERBS, addon);
+}
 
 /**
- * A size measurement is `measure`d as a background job, which `job` and
- * `watch-job` follow. `scan` and `run` are absent: the sweep is the repair
- * timer's, and only the unit `measure` launched may run a job.
+ * How the web may reach `addon verb`, or null when it may not. The names come
+ * off the wire, so only own keys count: `{}["constructor"]` is truthy.
  */
-export const PANEL_TWEAKS_ALLOWED_VERBS = new Set([
-  "state",
-  "set-tweaks",
-  "measure",
-  "job",
-  "watch-job",
-]);
+export function webVerb(addon: string, verb: string): Exclude<VerbDeclaration, { web: false }> | null {
+  if (!isGatewayAddon(addon)) return null;
+  const verbs: Record<string, VerbDeclaration> = ADDON_VERBS[addon];
+  if (!Object.hasOwn(verbs, verb)) return null;
+  const declared = verbs[verb]!;
+  return declared.web === false ? null : declared;
+}
 
-/**
- * `install-updates` installs one fixed package; no verb takes a package name,
- * a path or an apt option.
- */
-export const SYSTEM_TWEAKS_ALLOWED_VERBS = new Set([
-  "state",
-  "set-updates",
-  "install-updates",
-  "set-upload-guard",
-  "set-real-ip",
-  "set-panel-php",
-]);
-
-/**
- * Sign-in credentials, whether a site is WordPress, helper removal and the
- * settings each have fixed verbs; checks, installations, MainWP connections and cleanup are
- * `start`ed as background jobs of a fixed task list. None accepts paths or
- * arbitrary commands. `run` is absent for the reason the manager's is: only the
- * unit `start` launched may run a job.
- *
- * Plugins for a new site are the exception that names plugins, and only by a
- * WordPress.org slug of a strict pattern or by the id root gave an upload:
- * `plugin-upload` stages a zip in parts on stdin, `plugin-discard` drops one,
- * and `new-site` records the choice as a job that waits for a site that does
- * not exist yet. `new-site-status` reports one such job and `new-site-access`
- * says whether the caller may choose at all; with `new-site` they carry
- * `--as-user` for a site manager, whom root holds to the administrator's
- * `new-site-settings` switch and to directory plugins.
- */
-export const WP_TOOLS_ALLOWED_VERBS = new Set([
-  "sites",
-  "sign-in",
-  "site-kind",
-  "remove",
-  "varnish-settings",
-  "mainwp-settings",
-  "domain-link-settings",
-  "start",
-  "job",
-  "watch-job",
-  "plugin-upload",
-  "plugin-discard",
-  "new-site",
-  "new-site-status",
-  "new-site-access",
-  "new-site-settings",
-]);
-
-export const CLOUDFLARE_IPS_ALLOWED_VERBS = new Set([
-  "list",
-  "set",
-  "policy",
-]);
-
-export const SMTP_ALLOWED_VERBS = new Set([
-  "list", "save-profile", "delete-profile", "assign", "set-default", "save-grants", "test",
-]);
-
-/**
- * `provision` and `site-status` admit ordinary panel users as well as site
- * managers, and carry `--as-user` so the action holds them to that account's
- * own sites.
- */
-export const DNS_ALLOWED_VERBS = new Set([
-  "list", "check", "save-profile", "delete-profile", "set-automatic", "zone-account", "assign", "set-default", "confirm",
-  "save-connection", "remove-connection", "choose-zone", "save-mailcow", "remove-mailcow", "save-server", "remove-records", "forget-records",
-  "save-redirect", "delete-redirect", "find-redirects", "take-over", "provision", "site-status",
-]);
-
-/** `run` is absent for the same reason as the manager's: only the job's own unit starts it. */
-
-/**
- * The manager's own privileged verbs: enabling and disabling an addon that
- * already ships inside this binary, and replacing the binary itself.
- *
- * `run` is deliberately absent. It is the job runner, and the only thing
- * allowed to start it is the transient systemd unit that the create path
- * launches, which is what makes "one click, one job" enforceable: reaching
- * `run` through the gateway would bypass the create path's duplicate check.
- */
-export const MANAGER_ALLOWED_VERBS = new Set([
-  "enable",
-  "disable",
-  "update",
-  "job",
-  "watch-job",
-  // Which New and Changed badges an administrator has opened. The key is
-  // computed here from the addon name, so the page cannot record anything else.
-  "news-seen",
-  "mark-news-seen",
-  // Rendering the panel's templates again. It belongs to the manager rather
-  // than to an addon because one pass regenerates every addon's block in a
-  // shared file; an addon that reconciled only its own would strip the others.
-  "reconcile",
-]);
-
-/**
- * One verb: a shell as a site's user. The gateway checks the session itself
- * before running it, rather than trusting the manager; see
- * docs/decisions/terminal.md.
- */
-export const TERMINAL_ALLOWED_VERBS = new Set(["session"]);
-
-/**
- * Passkey sign-in. `login-options` and `sign-in` are answered before there is
- * a session; the account verbs are in `OWN_ACCOUNT_VERBS`.
- */
-export const SECURITY_KEYS_ALLOWED_VERBS = new Set([
-  "login-options",
-  "sign-in",
-  "keys",
-  "register-options",
-  "register",
-  "remove",
-  "users",
-  "revoke",
-  "settings",
-]);
-
-/**
- * The `addon:verb` actions that act on the caller's own panel account. Only
- * these accept, and require, the CloudPanel session id; the gateway checks it
- * itself and passes the user it found as `--panel-user`.
- */
-export const OWN_ACCOUNT_VERBS = new Set([
-  "security-keys:keys",
-  "security-keys:register-options",
-  "security-keys:register",
-  "security-keys:remove",
-]);
-
-export const STREAM_ALLOWED_VERBS = new Set(["watch-job", "session"]);
-
-/**
- * The `addon:verb` pairs whose socket carries bytes both ways. Only these
- * accept, and require, the CloudPanel session id the gateway checks itself;
- * every other stream ignores what the manager sends after its request line.
- */
-export const DUPLEX_STREAM_VERBS = new Set(["terminal:session"]);
+/** Whether a caller with these panel roles, or none before the gate, may ask for a verb of this access. */
+export function callerMay(access: WebAccess, roles: readonly string[] | null): boolean {
+  if (access === "pre-gate") return true;
+  if (roles === null) return false;
+  if (roles.includes("ROLE_ADMIN")) return true;
+  if (access === "site-manager") return roles.includes("ROLE_SITE_MANAGER");
+  return access === "panel-user" || access === "own-account";
+}
 
 /**
  * Set in the environment of a worker the gateway started for a duplex stream,

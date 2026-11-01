@@ -13,6 +13,9 @@ export const DNS_ADDON: AddonDefinition = {
   targets: DNS_TARGETS,
   handler: handle,
   action: runDnsAction,
+  // From the page a new site lands on and from its SSL/TLS page, by whoever
+  // can open them; root refuses a site that is not the caller's.
+  selfScopedRoutes: ["GET /api/session", "POST /api/provision", "GET /api/site"],
   withdrawn: () => {
     tryRun("systemctl", ["stop", "clp-addon-dns-reconcile"]);
   },

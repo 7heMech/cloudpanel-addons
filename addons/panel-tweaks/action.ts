@@ -865,8 +865,12 @@ export async function executePanelTweaksAction(
   if (verb === "state") return stateOf(paths, asUser);
   if (verb === "set-tweaks") return setTweaks(paths, options);
   if (verb === "measure") return startMeasurement(paths, options);
-  return withFileLock(paths.scanLockFile, 15, "a disk measurement is already running", async () =>
-    scanDisk(paths, options));
+  if (verb === "scan") {
+    return withFileLock(paths.scanLockFile, 15, "a disk measurement is already running", async () =>
+      scanDisk(paths, options));
+  }
+  verb satisfies never;
+  failAction(`unknown panel tweaks verb '${verb}'`);
 }
 
 export async function runPanelTweaksAction(

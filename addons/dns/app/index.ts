@@ -1,8 +1,9 @@
 import { bodyErrorResponse, guardMutation, htmlResponse, jsonResponse, newCsrfToken, readJsonObject, validateDomain } from "../../../lib/app-http";
 import { dnsService } from "./service";
 import { dashboardContent, dashboardView, layout } from "./views";
+import type { WebVerb } from "../../../lib/gateway-protocol";
 
-const CHANGES: Record<string, string> = {
+const CHANGES: Record<string, WebVerb<"dns">> = {
   "/api/check": "check",
   "/api/profiles": "save-profile",
   "/api/profiles/delete": "delete-profile",

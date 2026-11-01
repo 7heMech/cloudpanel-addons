@@ -1,4 +1,5 @@
 import { callGatewayAction, type ActionResult, type GatewayStream } from "../../../lib/gateway-client";
+import type { WebVerb } from "../../../lib/gateway-protocol";
 import { watchGatewayJob, type JobWatcher } from "../../../lib/job-stream";
 import type { WpLoginResult, WpMaintenanceReply, WpBasicAuthReply, WpRemoveResult, WpSiteView } from "../action";
 import type { WpJobs, WpJobTask, WpJobView } from "../jobs";
@@ -42,8 +43,8 @@ export interface NewSiteChoice {
   asUser?: string;
 }
 
-function call<T>(verb: string, args: string[] = [], timeout?: number): Promise<ActionResult<T>> {
-  return callGatewayAction<T>("wp-tools", verb, args, undefined, timeout ? { timeout } : undefined);
+function call<T>(verb: WebVerb<"wp-tools">, args: string[] = [], timeout?: number): Promise<ActionResult<T>> {
+  return callGatewayAction("wp-tools", verb, args, undefined, timeout ? { timeout } : undefined);
 }
 
 /** Finding the WordPress sites means a stat of every site root on the box. */
@@ -114,7 +115,7 @@ export const wpToolsService = {
     for (let part = 0; part < parts; part++) {
       const chunk = zip.subarray(part * UPLOAD_PART_BYTES, (part + 1) * UPLOAD_PART_BYTES);
       const args = [...(id ? [`--upload=${id}`] : []), `--part=${part}`, ...(part === parts - 1 ? ["--last"] : [])];
-      const result = await callGatewayAction<{ id: string; upload?: StagedUpload }>(
+      const result: ActionResult<{ id: string; upload?: StagedUpload }> = await callGatewayAction(
         "wp-tools", "plugin-upload", args, Buffer.from(chunk).toString("base64"),
       );
       if (!result.ok || !result.data) {

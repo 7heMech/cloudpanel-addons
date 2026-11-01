@@ -18,6 +18,7 @@
  * to find the next free port; changing any of it here would make the panel and
  * the running pool disagree about the same site.
  */
+import { PHP_RESOURCES_VERBS } from "./verbs";
 import { Database } from "bun:sqlite";
 import { chmodSync, existsSync, lstatSync, mkdirSync, readFileSync } from "node:fs";
 import { dirname, join } from "node:path";
@@ -31,8 +32,7 @@ import { writeFileAtomic } from "../../lib/atomic-write";
 
 const POLICY_VERSION = 1;
 
-export type PhpResourcesVerb =
-  | "list" | "site" | "save-category" | "delete-category" | "assign" | "set-default" | "reconcile";
+export type PhpResourcesVerb = keyof typeof PHP_RESOURCES_VERBS;
 
 /** The process manager modes php-fpm accepts. */
 export const PM_MODES = ["static", "dynamic", "ondemand"] as const;
@@ -1125,7 +1125,9 @@ export async function executePhpResourcesAction(
     const request = assignRequest(body, options);
     return assignSites(paths, request.domains, request.categoryId, command);
   }
-  return setDefaultCategory(paths, body.categoryId == null ? null : parseCategoryId(body.categoryId));
+  if (verb === "set-default") return setDefaultCategory(paths, body.categoryId == null ? null : parseCategoryId(body.categoryId));
+  verb satisfies never;
+  failAction(`unknown PHP resources verb '${verb}'`);
 }
 
 export async function runPhpResourcesAction(

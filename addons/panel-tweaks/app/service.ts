@@ -1,9 +1,10 @@
 import { callGatewayAction, type ActionResult, type GatewayStream } from "../../../lib/gateway-client";
+import type { WebVerb } from "../../../lib/gateway-protocol";
 import { watchGatewayJob, type JobWatcher } from "../../../lib/job-stream";
 import type { MeasureJobView, MeasureStarted, PanelTweaks, PanelTweaksState, SetTweaksResult } from "../action";
 
-function call<T>(verb: string, args: string[] = [], input?: string, timeout?: number): Promise<ActionResult<T>> {
-  return callGatewayAction<T>("panel-tweaks", verb, args, input, timeout ? { timeout } : undefined);
+function call<T>(verb: WebVerb<"panel-tweaks">, args: string[] = [], input?: string, timeout?: number): Promise<ActionResult<T>> {
+  return callGatewayAction("panel-tweaks", verb, args, input, timeout ? { timeout } : undefined);
 }
 
 export const panelTweaksService = {

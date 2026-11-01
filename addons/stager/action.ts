@@ -1,3 +1,4 @@
+import { STAGER_VERBS } from "./verbs";
 import { Database } from "bun:sqlite";
 import { randomBytes } from "node:crypto";
 import {
@@ -28,7 +29,7 @@ const PORT_MIN = 39000;
 const PORT_MAX = 39999;
 const CLONABLE_TYPES = ["php", "static", "reverse-proxy"] as const;
 
-export type StagerVerb = "sites" | "jobs" | "prune" | "describe" | "clone" | "promote" | "run" | "job" | "watch-job";
+export type StagerVerb = keyof typeof STAGER_VERBS;
 
 /**
  * What a promote leaves behind from the live site rather than taking from the

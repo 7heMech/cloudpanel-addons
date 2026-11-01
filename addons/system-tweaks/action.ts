@@ -1,4 +1,5 @@
 /** Root actions and lifecycle hooks for server-wide update and PHP settings. */
+import { SYSTEM_TWEAKS_VERBS } from "./verbs";
 import { existsSync, lstatSync, readFileSync } from "node:fs";
 import {
   ActionFailure, emitActionError, emitActionOk, failAction, withFileLock, withFileLockSync,
@@ -21,7 +22,7 @@ import { clearAbandonedTmpFiles, type TmpCleanupOptions } from "../../cli/tmp-cl
 const SETTINGS_VERSION = 1;
 const MAX_INPUT_BYTES = 4 * 1024;
 
-export type SystemTweaksVerb = "state" | "set-updates" | "install-updates" | "set-upload-guard" | "set-real-ip" | "set-panel-php";
+export type SystemTweaksVerb = keyof typeof SYSTEM_TWEAKS_VERBS;
 
 export interface SystemTweaksSettings {
   updates: UpdateSettings;
@@ -220,7 +221,7 @@ async function changePanelPhp(options: SystemTweaksOptions): Promise<SystemTweak
 
 function parseVerb(argv: string[]): SystemTweaksVerb {
   const [rawVerb, ...rest] = argv;
-  const verbs: SystemTweaksVerb[] = ["state", "set-updates", "install-updates", "set-upload-guard", "set-real-ip", "set-panel-php"];
+  const verbs = Object.keys(SYSTEM_TWEAKS_VERBS) as SystemTweaksVerb[];
   const verb = verbs.find((known) => known === rawVerb);
   if (!verb) failAction(`unknown system tweaks verb '${rawVerb ?? ""}'`);
   if (rest.length > 0) failAction(`unexpected argument '${rest[0]}'`);
@@ -235,6 +236,10 @@ export async function executeSystemTweaksAction(argv: string[], options: SystemT
   if (verb === "set-upload-guard") return setUploadGuard(options);
   if (verb === "set-real-ip") return setRealIp(options);
   if (verb === "set-panel-php") return changePanelPhp(options);
+  if (verb !== "install-updates") {
+    verb satisfies never;
+    failAction(`unknown system tweaks verb '${verb}'`);
+  }
   // One deadline for the install and the state read that answers it, which the
   // gateway's timeout is sized from.
   const now = options.now ?? Date.now;

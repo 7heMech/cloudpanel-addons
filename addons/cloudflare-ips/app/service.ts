@@ -1,4 +1,5 @@
 import { callGatewayAction, type ActionResult } from "../../../lib/gateway-client";
+import type { WebVerb } from "../../../lib/gateway-protocol";
 
 export interface CloudflareSiteView {
   domain: string;
@@ -10,8 +11,8 @@ export interface CloudflareState {
   autoEnableNewSites: boolean;
 }
 
-async function call<T>(verb: string, args: string[] = [], input?: string): Promise<ActionResult<T>> {
-  return callGatewayAction<T>("cloudflare-ips", verb, args, input);
+async function call<T>(verb: WebVerb<"cloudflare-ips">, args: string[] = [], input?: string): Promise<ActionResult<T>> {
+  return callGatewayAction("cloudflare-ips", verb, args, input);
 }
 
 export const cloudflareService = {

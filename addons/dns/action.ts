@@ -7,6 +7,7 @@
  * create, update and delete they would make, and only a confirmation of that
  * same plan saves and applies them.
  */
+import { DNS_VERBS } from "./verbs";
 import { Database } from "bun:sqlite";
 import { createHash, randomBytes } from "node:crypto";
 import { existsSync, mkdirSync } from "node:fs";
@@ -37,13 +38,9 @@ import { clpctlIssue, NEW_SITE_WINDOW, requestSsl, retryCertificates, type Issue
 import { readState, writeState } from "./store";
 import { tokenTemplate, type TokenTemplate } from "./token";
 
-export type DnsVerb = "list" | "check" | "save-profile" | "delete-profile" | "set-automatic" | "zone-account" | "assign" | "set-default" | "confirm"
-  | "save-connection" | "remove-connection" | "choose-zone" | "save-mailcow" | "remove-mailcow" | "save-server" | "remove-records" | "forget-records"
-  | "save-redirect" | "delete-redirect" | "find-redirects" | "take-over" | "provision" | "site-status" | "reconcile" | "sync-sites";
+export type DnsVerb = keyof typeof DNS_VERBS;
 
-const VERBS: DnsVerb[] = ["list", "check", "save-profile", "delete-profile", "set-automatic", "zone-account", "assign", "set-default", "confirm",
-  "save-connection", "remove-connection", "choose-zone", "save-mailcow", "remove-mailcow", "save-server", "remove-records", "forget-records",
-  "save-redirect", "delete-redirect", "find-redirects", "take-over", "provision", "site-status", "reconcile", "sync-sites"];
+const VERBS = Object.keys(DNS_VERBS) as DnsVerb[];
 const NO_BODY: DnsVerb[] = ["list", "check", "find-redirects", "provision", "site-status", "reconcile", "sync-sites"];
 const MAX_BODY = 256 * 1024;
 const REVIEW_LIFETIME = 15 * 60_000;

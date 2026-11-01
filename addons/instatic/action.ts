@@ -18,6 +18,7 @@ import {
   createJobDir, createJobLog, jobCommonFields, jobDir as storeJobDir, jobGet, jobSet, jobTimestamp,
   JOB_ID_RE, listJobIds, newJobId, pruneJobs, readJobLog, startJobUnit, watchJobRecord, type PruneJobsResult,
 } from "../../cli/job-store";
+import { INSTATIC_VERBS } from "./verbs";
 
 const REGISTRY_IMAGE = "ghcr.io/corebunch/instatic";
 const CONTAINER_PORT = 3001;
@@ -114,7 +115,7 @@ export const DEFAULT_INSTATIC_ACTION_PATHS: InstaticActionPaths = {
   homeDir: "/home",
 };
 
-export type InstaticVerb = "list" | "create" | "update" | "start" | "stop" | "restart" | "recreate" | "snapshot" | "backup" | "status" | "logs" | "delete" | "job" | "watch-job" | "jobs" | "prune" | "run";
+export type InstaticVerb = keyof typeof INSTATIC_VERBS;
 
 export interface ParsedInstaticAction {
   verb: InstaticVerb;

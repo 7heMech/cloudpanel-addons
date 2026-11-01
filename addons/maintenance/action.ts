@@ -1,3 +1,4 @@
+import { MAINTENANCE_VERBS } from "./verbs";
 import { Database } from "bun:sqlite";
 import { standInDomains } from "../../cli/stand-ins";
 import { isIP } from "node:net";
@@ -74,21 +75,7 @@ export const DEFAULT_MAINTENANCE_ACTION_PATHS: MaintenanceActionPaths = {
   includePath: MAINTENANCE_INCLUDE_PATH,
 };
 
-type MaintenanceVerb =
-  | "sites"
-  | "enable-many"
-  | "disable-many"
-  | "status"
-  | "enable"
-  | "disable"
-  | "get-template"
-  | "set-template"
-  | "reset-template"
-  | "set-bypass"
-  | "global-status"
-  | "global-enable"
-  | "global-disable"
-  | "global-set-bypass";
+type MaintenanceVerb = keyof typeof MAINTENANCE_VERBS;
 
 interface ParsedAction {
   verb: MaintenanceVerb;
@@ -652,8 +639,11 @@ export async function executeMaintenanceAction(
     return { domain, custom: false, html: DEFAULT_MAINTENANCE_PAGE };
   }
 
-  await replaceBypasses(paths, domain, options);
-  return maintenanceStatus(paths, domain);
+  if (verb === "set-bypass") {
+    await replaceBypasses(paths, domain, options);
+    return maintenanceStatus(paths, domain);
+  }
+  failAction(`unknown maintenance verb '${verb}'`);
 }
 
 export async function runMaintenanceAction(

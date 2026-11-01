@@ -21,7 +21,7 @@ import { STAGER_TARGETS } from "../addons/stager/inject/targets";
 import { MENU_ONLY_CLASS, MENU_ONLY_STYLE, ROW_ACTION_CLASS, ROW_MENU_CLASS } from "../lib/row-actions";
 import { withFileLock } from "../cli/action-common";
 import { jobDir, jobGet, jobSet } from "../cli/job-store";
-import { PANEL_TWEAKS_ALLOWED_VERBS, STREAM_ALLOWED_VERBS } from "../lib/gateway-protocol";
+import { webVerb } from "../lib/gateway-protocol";
 import { CLOUDFLARE_ORIGIN } from "./fixtures/certificates";
 
 const loginTarget = PANEL_TWEAKS_TARGETS.find((target) => target.slug === "login-device-theme")!;
@@ -900,8 +900,7 @@ test("the scheduled sweep leaves the disk to a measurement an operator started",
 });
 
 test("the page starts and follows a measurement through the gateway's job verbs only", async () => {
-  expect([...PANEL_TWEAKS_ALLOWED_VERBS].sort()).toEqual(["job", "measure", "set-tweaks", "state", "watch-job"]);
-  expect(STREAM_ALLOWED_VERBS.has("scan-stream")).toBe(false);
+  expect(webVerb("panel-tweaks", "scan")).toBeNull();
 
   const original = { measure: panelTweaksService.measure, getJob: panelTweaksService.getJob };
   const token = "panel-tweaks-test-token";
