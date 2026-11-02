@@ -387,7 +387,8 @@ ufw back, because that change wakes the watcher, which must not apply them
 again. A failure there warns and does not keep System Tweaks on. Enabling clears
 the mark and applies the kept protocols.
 
-CloudPanel v3 migrates the rules themselves. If v3 has a protocol of its own,
-System Tweaks writes each stored choice onto the v3 rule with the same port
-range and source, then retires its file and its page patch. Without the addon,
-a UDP rule comes back as TCP.
+CloudPanel v3: CloudPanel's own migration carries the rules, and keying by
+port range and source is what lets the choices follow them. Nothing for v3 is
+built yet. If v3 has a protocol of its own, the plan is to write each stored
+choice onto the v3 rule with the same port range and source, then retire this
+file and the page patch. Without the addon, a UDP rule comes back as TCP.
