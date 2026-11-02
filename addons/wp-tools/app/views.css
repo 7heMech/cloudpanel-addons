@@ -1,3 +1,5 @@
+@import "../../../lib/assets/job-progress.css";
+@import "../../../lib/assets/fleet-row-selection.css";
 .card-header + .fleet-filter { padding-top: 18px; }
 .wp-status { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 10px; }
 .wp-status .btn { min-height: 32px; padding: 4px 12px; font-size: 13px; white-space: nowrap; }

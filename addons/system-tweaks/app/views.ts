@@ -1,6 +1,6 @@
 import { PHP_GUARD_INI_NAME } from "../../../cli/paths";
 import { esc } from "../../../lib/app-http";
-import { TWEAK_ROW_JS, TWEAK_ROW_STYLE, renderLayout, sinceText } from "../../../lib/app-ui";
+import { TWEAK_ROW_JS, renderLayout, sinceText } from "../../../lib/app-ui";
 import { mountPath } from "../../../lib/mount";
 import type { SystemTweaksState } from "../action";
 import type { CoverageRow, LastRun, UpdateSettings, UpdatesStatus } from "../updates";
@@ -19,7 +19,7 @@ export function layout(
     brand: "System Tweaks",
     base: mountPath("system-tweaks"),
     nav: [],
-    css: TWEAK_ROW_STYLE + STYLE,
+    css: STYLE,
     script: TWEAK_ROW_JS + SCRIPT,
     updateNotice,
   });

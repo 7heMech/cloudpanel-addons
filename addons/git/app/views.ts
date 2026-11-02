@@ -5,7 +5,7 @@
 
 import { esc } from "../../../lib/app-http";
 import {
-  ATTENTION_RANK, FLEET_FOOTER_HTML, FLEET_ROW_SELECTION_JS, JOB_STYLE, JOB_WATCH_JS, fleetFilterHtml, filterWord, valueFilters, fleetRowSelectionStyle, jobStateClass,
+  ATTENTION_RANK, FLEET_FOOTER_HTML, FLEET_ROW_SELECTION_JS, JOB_WATCH_JS, fleetFilterHtml, filterWord, valueFilters, jobStateClass,
   renderFragment, renderLayout, sinceText, whenText,
 } from "../../../lib/app-ui";
 import type { EmbedFragment } from "../../../lib/shadow-embed";
@@ -33,7 +33,6 @@ import CLIENT_JS from "./views.client.js" with { type: "text" };
 export { CLIENT_JS };
 
 // Built once: nothing here changes between renders.
-const PAGE_STYLE = STYLE + JOB_STYLE + fleetRowSelectionStyle("git-fleet-table");
 const PAGE_SCRIPT = `${JOB_WATCH_JS}\n${FLEET_ROW_SELECTION_JS}\n${CLIENT_JS}`;
 
 export function layout(
@@ -47,7 +46,7 @@ export function layout(
     brand: "Git Deploy",
     base: BASE,
     nav: [],
-    css: PAGE_STYLE,
+    css: STYLE,
     script: PAGE_SCRIPT,
     updateNotice,
     admin,
@@ -61,7 +60,7 @@ export function fragment(title: string, content: string): EmbedFragment {
     brand: "Git Deploy",
     base: BASE,
     nav: [],
-    css: PAGE_STYLE,
+    css: STYLE,
     script: PAGE_SCRIPT,
   });
 }

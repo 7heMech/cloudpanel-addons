@@ -1,6 +1,6 @@
 import { esc } from "../../../lib/app-http";
 import {
-  JOB_PROGRESS_JS, JOB_PROGRESS_STYLE, TWEAK_ROW_JS, TWEAK_ROW_STYLE, jobProgressHtml, renderLayout, sinceText,
+  JOB_PROGRESS_JS, TWEAK_ROW_JS, jobProgressHtml, renderLayout, sinceText,
 } from "../../../lib/app-ui";
 import { mountPath } from "../../../lib/mount";
 import type { PanelTweaks, PanelTweaksState } from "../action";
@@ -22,7 +22,7 @@ export function layout(
     brand: "Panel Tweaks",
     base: BASE,
     nav: [],
-    css: TWEAK_ROW_STYLE + JOB_PROGRESS_STYLE + STYLE,
+    css: STYLE,
     script: TWEAK_ROW_JS + JOB_PROGRESS_JS + SCRIPT,
     updateNotice,
   });

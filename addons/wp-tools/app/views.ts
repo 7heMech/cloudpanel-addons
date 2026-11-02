@@ -1,7 +1,6 @@
 import { esc } from "../../../lib/app-http";
 import {
-  ATTENTION_RANK, FLEET_FOOTER_HTML, FLEET_ROW_SELECTION_JS, JOB_PROGRESS_JS, JOB_PROGRESS_STYLE, fleetFilterHtml, fleetRowSelectionStyle,
-  jobProgressHtml, renderLayout,
+  ATTENTION_RANK, FLEET_FOOTER_HTML, FLEET_ROW_SELECTION_JS, JOB_PROGRESS_JS, fleetFilterHtml, jobProgressHtml, renderLayout,
 } from "../../../lib/app-ui";
 import { mountPath } from "../../../lib/mount";
 import type { WpJobView, WpSiteView } from "../action";
@@ -26,7 +25,7 @@ export function layout(
     brand: "WordPress Tools",
     base: BASE,
     nav: [],
-    css: `${JOB_PROGRESS_STYLE}${STYLE}${fleetRowSelectionStyle("wp-selectable")}`,
+    css: STYLE,
     script: `${FLEET_ROW_SELECTION_JS}\n${JOB_PROGRESS_JS}\n${SCRIPT}`,
     updateNotice,
   });

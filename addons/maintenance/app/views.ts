@@ -1,6 +1,6 @@
 import { esc, escJs } from "../../../lib/app-http";
 import {
-  ATTENTION_RANK, FLEET_FOOTER_HTML, FLEET_ROW_SELECTION_JS, fleetFilterHtml, filterWord, valueFilters, fleetRowSelectionStyle, renderFragment, renderLayout,
+  ATTENTION_RANK, FLEET_FOOTER_HTML, FLEET_ROW_SELECTION_JS, fleetFilterHtml, filterWord, valueFilters, renderFragment, renderLayout,
 } from "../../../lib/app-ui";
 import type { EmbedFragment } from "../../../lib/shadow-embed";
 import { mountPath } from "../../../lib/mount";
@@ -11,11 +11,10 @@ const BASE = mountPath("maintenance");
 
 // Switches, toolbars, the confirmation dialog and the inline notice are in
 // lib/app-ui; only what this addon alone draws is here.
-import CSS from "./views.css" with { type: "text" };
+import STYLE from "./views.css" with { type: "text" };
 
 import CLIENT_BODY from "./views.client.js" with { type: "text" };
 
-const STYLE = CSS + fleetRowSelectionStyle("maintenance-fleet-table");
 export const CLIENT_JS = `${FLEET_ROW_SELECTION_JS}\n${CLIENT_BODY}`;
 
 export function layout(

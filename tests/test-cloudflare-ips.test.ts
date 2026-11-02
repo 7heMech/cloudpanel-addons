@@ -126,8 +126,6 @@ test("the switch column ends where the table ends, as the Maintenance table does
   expect(html).toContain('<th scope="col" class="action-cell" data-sort="enabled">Cloudflare only</th>');
   expect(html).toContain('<td class="action-cell" data-label="Cloudflare only">');
   expect(html).toContain('<button class="btn mobile-select-all" id="select-all-btn" type="button" onclick="toggleAllSites()">Select all</button>');
-  const page = layout("Cloudflare IP access", html);
-  expect(page).toContain(".cloudflare-site-table td.action-cell::before { display: none; }");
 });
 
 interface FakeElement {

@@ -9,7 +9,9 @@ import { siteLayoutTarget } from "../lib/panel-nav";
 import {
   EMBED_LANDING_CLASS, EMBED_MARKER, embedLandingUrl, shadowStyle, SITE_EMBED_SCRIPT,
 } from "../lib/shadow-embed";
+import { join } from "node:path";
 import { ADDON_SITE_TABS } from "../lib/site-context";
+import { bundleStyles } from "../tools/browser-assets";
 
 test("the stylesheet is rewritten for a shadow root", () => {
   const css = shadowStyle(BASE_STYLE);
@@ -25,9 +27,20 @@ test("the stylesheet is rewritten for a shadow root", () => {
   // Rules an addon adds are rewritten too, including the editor's dark tint.
   expect(shadowStyle(BASE_STYLE + "\nhtml.dark #template-ace { background:#000; }"))
     .toContain(":host(.dark) #template-ace");
+  expect(shadowStyle("@media (max-width:940px){body{font-size:15px}}")).toStartWith("@media (max-width:940px){:host {");
   // Everything else is the shell unchanged.
   expect(css).toContain(".switch input:checked + span");
   expect(css).toContain(".card {");
+});
+
+test("the stylesheet is rewritten for a shadow root once the build has minified it", async () => {
+  const path = join(import.meta.dir, "../lib/assets/app-ui.css");
+  for (const minify of [false, true]) {
+    const css = shadowStyle((await bundleStyles([path], minify)).get(path)!);
+    expect({ minify, dark: /html\.dark/.test(css), root: css.includes(":root"), body: /(^|[\s{}])body\s*\{/.test(css) })
+      .toEqual({ minify, dark: false, root: false, body: false });
+    expect(css).toContain(":host(.dark)");
+  }
 });
 
 test("a fragment is a page with no document around it", () => {

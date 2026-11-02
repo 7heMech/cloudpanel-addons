@@ -1,3 +1,4 @@
+@import "../../../lib/assets/job.css";
 
 .notes { margin: 0; padding-left: 1.1rem; }
 .notes li { margin: 8px 0; font-size: 14px; color: var(--muted); }

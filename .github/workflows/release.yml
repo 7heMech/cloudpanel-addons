@@ -68,15 +68,9 @@ jobs:
         run: |
           set -euo pipefail
           mkdir -p dist
-
-          # One binary: the CLI and every addon's manager, selected at runtime by
-          # `clp-addons serve`, sharing one copy of the Bun runtime.
-          #
-          # recon showed avx2 on the target CPU, so the standard glibc x64
-          # target applies rather than the baseline variant.
-          bun build --compile --target=bun-linux-x64 --bytecode --minify --format=esm \
-            --define "process.env.CLP_ADDONS_VERSION=\"${VERSION}\"" \
-            --outfile dist/clp-addons-linux-x64 cli/index.ts
+          # tools/build.ts: the compile options, and the browser scripts and
+          # stylesheets minified on the way in.
+          bun run build
 
       - name: Stage the bootstrap installer
         # install.sh is part of the release, not just a file in the repo. Being

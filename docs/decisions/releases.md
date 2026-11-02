@@ -31,7 +31,7 @@ Development, CI, staging, and release use the Bun version pinned by
 `packageManager` in `package.json`; the workflows read it from there. Installs
 use the frozen `bun.lock`.
 
-Builds compile minified ESM with `--bytecode`. The gateway starts a fresh
+Builds compile minified ESM with bytecode, from `tools/build.ts`. The gateway starts a fresh
 `clp-addons action` process for every request, and bytecode roughly halves that
 startup for about 4% more binary size.
 

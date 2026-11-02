@@ -478,18 +478,29 @@ Stylesheets and browser scripts live in `.css` and `.client.js` files beside the
 module that serves them, imported with `with { type: "text" }`. Keeping them in
 their own files lets editors highlight, format and lint them.
 
-They are served as they are, never bundled or minified. The pages carry inline
-handlers calling top-level functions by name from markup no bundler sees, so
-tree-shaking and renaming would break them. The panel's nginx already gzips
-these responses, which is where the size saving comes from.
+Scripts are never bundled, and names are never shortened: the pages carry
+inline handlers calling top-level functions by name from markup no bundler
+sees, so tree-shaking and renaming would break them. Stylesheets are bundled by
+Bun, so one shares another with `@import` (an addon's page imports
+`lib/assets/job.css` or `fleet-row-selection.css`) rather than TypeScript
+joining strings; a stylesheet chosen at runtime, such as Panel Tweaks' per-tweak
+blocks, is still joined in code. `tools/build.ts` does this for the binary and
+also minifies, scripts by whitespace only and stylesheets fully, about 12% off a
+gzipped page. `tools/dev-assets.ts`, preloaded by `bunfig.toml` for anything Bun
+runs from the repo, does the same for the preview and tests, without minifying,
+as each stylesheet is first imported; `bun --watch` restarts when it or a file
+it imports changes. Bun prints the CSS in
+its own layout and order, so a test checks markup and behaviour, not a
+stylesheet's text. Most assets land in CloudPanel's Twig templates, so the
+build puts a space after any `{` that minifying leaves before `{`, `%` or `#`.
+Nothing may depend on a comment, since minifying strips them all.
 
 Values a file cannot know -- the addon's mount URL, the shared class names,
 JSON the manager computes -- are bare identifiers or string tokens in the asset,
 substituted by the module that imports it. That keeps each file valid CSS or
 JavaScript on its own.
 
-What stays in TypeScript is what a file could not hold on its own: a one-rule
-string built from a shared class name, a script fragment that is a function
+What stays in TypeScript is what a file could not hold on its own: a script fragment that is a function
 body rather than a program, and a `<script>` element indented to sit inside a
 Twig template.
 

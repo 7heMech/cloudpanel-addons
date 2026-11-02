@@ -6,7 +6,7 @@ import type { SanitizedSite } from "../../../lib/snapshot-reader";
 
 import { esc } from "../../../lib/app-http";
 import {
-  FLEET_FOOTER_HTML, FLEET_ROW_SELECTION_JS, JOB_STYLE, JOB_WATCH_JS, fleetFilterHtml, filterWord, valueFilters, jobStateClass, jobStateLabel, renderFragment, renderLayout,
+  FLEET_FOOTER_HTML, FLEET_ROW_SELECTION_JS, JOB_WATCH_JS, fleetFilterHtml, filterWord, valueFilters, jobStateClass, jobStateLabel, renderFragment, renderLayout,
   whenText,
 } from "../../../lib/app-ui";
 import type { EmbedFragment } from "../../../lib/shadow-embed";
@@ -45,7 +45,7 @@ export function layout(
     brand: "Stager",
     base: BASE,
     nav: [],
-    css: STYLE + JOB_STYLE,
+    css: STYLE,
     script: `${FLEET_ROW_SELECTION_JS}\n${JOB_WATCH_JS}${CLIENT_JS}`,
     updateNotice,
     ...(site ? { site: { ...site, activeSlug: "stager" } } : {}),
@@ -61,7 +61,7 @@ export function fragment(title: string, content: string): EmbedFragment {
     brand: "Stager",
     base: BASE,
     nav: [],
-    css: STYLE + JOB_STYLE,
+    css: STYLE,
     script: `${FLEET_ROW_SELECTION_JS}\n${JOB_WATCH_JS}${CLIENT_JS}`,
   });
 }

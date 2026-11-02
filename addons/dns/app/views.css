@@ -1,3 +1,4 @@
+@import "../../../lib/assets/fleet-row-selection.css";
 .numeric { text-align:right; font-variant-numeric:tabular-nums; }
 .card-header p.hint { margin:5px 0 0; }
 .card-header > .btn { flex-shrink:0; white-space:nowrap; }
@@ -164,8 +165,6 @@ p.dns-dialog-note { margin:20px 0 0; }
 #dns-site-heading { display:flex; flex-wrap:wrap; align-items:center; gap:8px 12px; }
 #dns-site-heading .badge { font-size:13px; }
 #dns-site-body > h3.dns-section:first-child { margin-top:0; }
-/* fleet-row-selection */
-
 .dns-card-sites { display:none; }
 @media (max-width:940px) {
   .fleet-table.dns-site-table td.site-select { display:none; }

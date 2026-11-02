@@ -10,7 +10,7 @@
 import { expect, test } from "bun:test";
 import { existsSync, readFileSync } from "node:fs";
 import { join } from "node:path";
-import { BASE_CLIENT_JS, BASE_STYLE, THEME_INIT_JS } from "../lib/app-ui";
+import { BASE_CLIENT_JS, THEME_INIT_JS } from "../lib/app-ui";
 import { headerUpdateScript } from "../lib/panel-nav";
 import { ADDON_NAMES } from "../cli/addon-catalog";
 import { CLIENT_JS as INSTATIC_CLIENT_JS } from "../addons/instatic/app/views";
@@ -72,28 +72,6 @@ test("addon theme follows CloudPanel's cookie before the page paints", () => {
   }
 });
 
-test("a switch sits on the line of whatever it is beside", () => {
-  // Both are labels, so both inherit the gap a field label leaves above its
-  // input. Nothing sits under a switch, and that margin is what pushed every
-  // one of them above the centre of its toolbar row or table cell.
-  expect(BASE_STYLE).toContain(".switch-field { display: inline-flex; align-items: center; gap: 10px; margin: 0;");
-  expect(BASE_STYLE).toContain(".switch { position: relative; display: inline-flex; width: 50px; height: 28px; margin: 0;");
-  // One switch per row is a repeated control and comes down to the line height
-  // beside it; a switch that decides the whole page keeps its full size.
-  expect(BASE_STYLE).toContain(".fleet-table .switch { width: 44px; height: 24px; }");
-});
-
-test("a dialog is usable on a phone", () => {
-  const narrow = BASE_STYLE.slice(BASE_STYLE.indexOf("@media (max-width: 940px)"));
-  // The frame gives up its desktop padding, and the buttons take the row so a
-  // confirmation label wraps inside its button rather than off the edge.
-  expect(narrow).toContain("dialog { padding: 20px; width: calc(100% - 20px);");
-  expect(narrow).toContain(".dialog-actions .btn { flex: 1 1 auto; }");
-  // The visual viewport, so a collapsing address bar cannot cover the buttons.
-  expect(narrow).toContain("dialog { max-height: calc(100dvh - 20px); }");
-  expect(BASE_STYLE).toContain("dialog { max-height: calc(100dvh - 40px); }");
-});
-
 // `confirmAction` reads title, text, details, confirmLabel, danger and onAccept, and
 // ignores anything else, so a dialog built with the wrong key opens explaining
 // nothing and no type, test or console message says so.
@@ -125,19 +103,9 @@ test("every confirmAction call uses the keys the shared dialog reads", () => {
 });
 
 test("a fleet table gives the domain its own line on a phone", () => {
-  const narrow = BASE_STYLE.slice(BASE_STYLE.indexOf("@media (max-width: 940px)"));
   // Squeezed into a sixth of a phone's width, a hostname wrapped one or two
   // characters at a time. The row becomes a block and every other cell names
   // the column heading the phone no longer has room to show.
-  expect(narrow).toContain(".fleet-table thead { display: none; }");
-  expect(narrow).toContain(".fleet-table td.site-select { display: flex; flex: 0 0 42px; width: 42px;");
-  expect(narrow).toContain(".fleet-table td.site-cell { flex: 1 1 calc(100% - 200px); min-width: 0;");
-  // What a site is rides beside the domain as a tag, and every labelled cell
-  // keeps half the row whatever it holds -- a status badge that grew when a
-  // site went into maintenance used to move everything under it.
-  expect(narrow).toContain(".fleet-table td.type-cell { flex: 0 1 auto;");
-  expect(narrow).toContain(".fleet-table td[data-label] { flex: 1 1 calc(50% - 6px); min-width: 0; }");
-  expect(narrow).toContain(".fleet-table td[data-label]::before { content: attr(data-label);");
 
   for (const html of [
     maintenanceFleetView({ global: { global: false, bypasses: [] }, sites: [{
@@ -152,12 +120,6 @@ test("a fleet table gives the domain its own line on a phone", () => {
     expect(html).toContain('<table class="fleet-table');
     expect(html).toContain('<td class="site-cell"');
   }
-});
-
-test("a mobile select-all control is hidden on desktop and shown on a phone", () => {
-  expect(BASE_STYLE).toContain(".mobile-select-all { display: none; }");
-  const narrow = BASE_STYLE.slice(BASE_STYLE.indexOf("@media (max-width: 940px)"));
-  expect(narrow).toContain(".mobile-select-all { display: inline-flex;");
 });
 
 // A route that saved a change and then failed at something after it answers

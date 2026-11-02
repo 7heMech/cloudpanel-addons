@@ -1,3 +1,5 @@
+@import "../../../lib/assets/tweak-rows.css";
+@import "../../../lib/assets/job-progress.css";
 .tweak-list > .tweak-row:first-child { padding-top: 0; border-top: 0; }
 .tweak-list > .tweak-row:last-child { padding-bottom: 0; }
 

@@ -1,8 +1,8 @@
+@import "../../../lib/assets/fleet-row-selection.css";
 #cf-summary { margin: 4px 0 0; }
 .toolbar-actions { margin-left: auto; }
 .cf-policy { flex-wrap: nowrap; }
 .split-card.cf-policy > .switch { flex-basis: auto; }
-/* fleet-row-selection */
 @media (max-width: 760px) {
   .toolbar-actions { flex: 1 1 100%; margin-left: 0; }
   .toolbar-actions .btn { flex: 1 1 calc(50% - 6px); padding-right:10px; padding-left:10px; white-space:nowrap; }

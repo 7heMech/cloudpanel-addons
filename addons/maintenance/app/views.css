@@ -1,3 +1,4 @@
+@import "../../../lib/assets/fleet-row-selection.css";
 /* The status and the switch that sets it, beside the page's title. */
 .maintenance-heading > :first-child { flex:1; min-width:0; }
 .heading-controls { display:flex; flex:0 0 auto; align-items:center; gap:12px; }
