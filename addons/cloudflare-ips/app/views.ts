@@ -13,8 +13,7 @@ const plural = (count: number, word: string): string => `${count} ${word}${count
 // from lib/app-ui so this addon looks like the rest of the manager.
 import VIEWS_CSS from "./views.css" with { type: "text" };
 
-const STYLE = VIEWS_CSS
-  .split("/* fleet-row-selection */").join(fleetRowSelectionStyle("cloudflare-site-table"));
+const STYLE = VIEWS_CSS + fleetRowSelectionStyle("cloudflare-site-table");
 
 export const CLIENT_JS = `
 ${FLEET_ROW_SELECTION_JS}

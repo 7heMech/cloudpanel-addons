@@ -8,7 +8,7 @@ import { mountPath } from "../../../lib/mount";
 import type { SmtpProfileView, SmtpSiteView, SmtpState } from "../action";
 
 const BASE = mountPath("smtp");
-const STYLE = CSS.split("/* fleet-row-selection */").join(fleetRowSelectionStyle("smtp-site-table"));
+const STYLE = CSS + fleetRowSelectionStyle("smtp-site-table");
 export const CLIENT = `${FLEET_ROW_SELECTION_JS}\n${CLIENT_BODY}`;
 const NO_PROFILE = "Don't handle";
 const DONT_SEND = "dont-send";

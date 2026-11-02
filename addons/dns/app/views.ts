@@ -9,7 +9,7 @@ import { CLIPBOARD } from "../../../lib/clipboard";
 import { SSL_LABELS } from "../zone";
 
 const BASE = mountPath("dns");
-const STYLE = CSS.split("/* fleet-row-selection */").join(fleetRowSelectionStyle("dns-site-table"));
+const STYLE = CSS + fleetRowSelectionStyle("dns-site-table");
 const CLIENT = `${FLEET_ROW_SELECTION_JS}\nconst DNS_CLIPBOARD = ${JSON.stringify(CLIPBOARD)};\n${CLIENT_BODY}`;
 const NO_PROFILE = "Not managed";
 

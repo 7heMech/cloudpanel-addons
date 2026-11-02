@@ -15,8 +15,7 @@ const BASE = mountPath("php-resources");
 // are in lib/app-ui; only what this addon alone draws is here.
 import VIEWS_CSS from "./views.css" with { type: "text" };
 
-const STYLE = VIEWS_CSS
-  .split("/* fleet-row-selection */").join(fleetRowSelectionStyle("php-sites-table"));
+const STYLE = VIEWS_CSS + fleetRowSelectionStyle("php-sites-table");
 
 interface Field {
   key: keyof PoolProfile;

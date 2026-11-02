@@ -477,10 +477,14 @@ Stylesheets and browser scripts live in `.css` and `.client.js` files beside the
 module that serves them, imported with `with { type: "text" }`. Keeping them in
 their own files lets editors highlight, format and lint them.
 
-They are served as they are, never bundled or minified. The pages carry inline
+They are never bundled, and names are never shortened: the pages carry inline
 handlers calling top-level functions by name from markup no bundler sees, so
-tree-shaking and renaming would break them. The panel's nginx already gzips
-these responses, which is where the size saving comes from.
+tree-shaking and renaming would break them. `tools/build.ts` minifies them as
+the binary is built, scripts by whitespace only and stylesheets fully, which
+takes about 12% off a gzipped page; tests and the preview use the source. Most
+land in CloudPanel's Twig templates, so the build puts a space after any `{`
+that minifying leaves before `{`, `%` or `#`. Nothing may depend on a comment,
+since minifying strips them all.
 
 Values a file cannot know -- the addon's mount URL, the shared class names,
 JSON the manager computes -- are bare identifiers or string tokens in the asset,

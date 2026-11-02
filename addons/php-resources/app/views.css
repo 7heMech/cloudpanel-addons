@@ -12,7 +12,6 @@
 .category-tools .btn { white-space:nowrap; }
 #category-dialog { width:720px; }
 #category-more { margin-top:20px; padding-top:20px; border-top:1px solid var(--border); }
-/* fleet-row-selection */
 @media (max-width:760px) {
   #category-dialog { width:calc(100% - 20px); }
   .toolbar #bulk-category { flex:1 1 100%; }
