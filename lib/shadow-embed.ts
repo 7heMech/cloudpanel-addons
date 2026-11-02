@@ -37,7 +37,7 @@ export function shadowStyle(css: string): string {
     .replace(/(^|[\s,{}])html\.dark(?=[\s{,.#:[>+~])/g, "$1:host(.dark)")
     .replace(/(^|[\s,{}]):root(?=\s*[{,])/g, "$1:host")
     .replace(
-      /(^|[\s}])body\s*\{[^}]*\}/g,
+      /(^|[\s{}])body\s*\{[^}]*\}/g,
       "$1:host { display: block; color: var(--text); font-family: var(--clp-addon-font-family);\n  font-size: 16px; line-height: 1.5; }",
     );
 }

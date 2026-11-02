@@ -6,7 +6,7 @@ import { resolve } from "node:path";
 // Script names are kept: page markup and other scripts call the scripts'
 // top-level functions by name.
 
-const ROOT = resolve(import.meta.dir, "..");
+export const ROOT = resolve(import.meta.dir, "..");
 const transpiler = new Bun.Transpiler({ loader: "js", minifyWhitespace: true });
 
 /** Most of these land in CloudPanel's Twig templates, where `{{`, `{%` and `{#` open a tag. */
@@ -18,7 +18,10 @@ const TWIG_OPENER = /\{(?=[{%#])/;
  * its text as written.
  */
 export function twigSafe(source: string, minified: string): string {
-  if (TWIG_OPENER.test(source)) return source;
+  return TWIG_OPENER.test(source) ? source : breakTwigOpeners(minified);
+}
+
+function breakTwigOpeners(minified: string): string {
   return minified.replace(new RegExp(TWIG_OPENER, "g"), "{ ");
 }
 
@@ -39,7 +42,9 @@ export async function bundleStyles(paths: string[], minify: boolean): Promise<Ma
     const path = resolve(ROOT, output.path);
     if (!paths.includes(path)) throw new Error(`no source for ${output.path}`);
     const text = await output.text();
-    bundled.set(path, minify ? twigSafe(await Bun.file(path).text(), text) : text);
+    // Kept as written, a stylesheet would ship with its `@import`s unresolved.
+    if (minify && TWIG_OPENER.test(await Bun.file(path).text())) throw new Error(`${path} has a Twig opener; put a space after its {`);
+    bundled.set(path, minify ? breakTwigOpeners(text) : text);
   }
   return bundled;
 }

@@ -1,4 +1,4 @@
-/* A job's progress page. Imported after the base style, so its state colours override the container palette only where a job is drawn. */
+/* A job's progress page: its details, current step, summary and timing. */
 .kv { display: grid; grid-template-columns: minmax(110px, 180px) minmax(0, 1fr); gap: 12px 25px; align-items: baseline; margin: 0; }
 .kv dt { color: var(--muted); font-size: 14px; }
 .kv dd { margin: 0; overflow-wrap: anywhere; }

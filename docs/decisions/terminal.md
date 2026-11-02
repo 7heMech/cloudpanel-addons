@@ -101,5 +101,6 @@ can start after.
 
 `@xterm/xterm` and `@xterm/addon-fit` are vendored unmodified under
 `addons/terminal/app/vendor/` with their licence and the tarball's integrity
-hash, and served from versioned paths with a year-long cache. The popup is the
+hash, and served from versioned paths with a year-long cache; the build
+minifies `xterm.css` like every other stylesheet. The popup is the
 one page whose content security policy allows `'self'` scripts and styles.

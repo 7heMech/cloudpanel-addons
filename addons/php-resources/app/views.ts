@@ -13,9 +13,7 @@ const BASE = mountPath("php-resources");
 
 // Cards, switches, the form grid, the confirmation dialog and the inline notice
 // are in lib/app-ui; only what this addon alone draws is here.
-import VIEWS_CSS from "./views.css" with { type: "text" };
-
-const STYLE = VIEWS_CSS;
+import STYLE from "./views.css" with { type: "text" };
 
 interface Field {
   key: keyof PoolProfile;

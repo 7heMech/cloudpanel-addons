@@ -11,11 +11,10 @@ const BASE = mountPath("maintenance");
 
 // Switches, toolbars, the confirmation dialog and the inline notice are in
 // lib/app-ui; only what this addon alone draws is here.
-import CSS from "./views.css" with { type: "text" };
+import STYLE from "./views.css" with { type: "text" };
 
 import CLIENT_BODY from "./views.client.js" with { type: "text" };
 
-const STYLE = CSS;
 export const CLIENT_JS = `${FLEET_ROW_SELECTION_JS}\n${CLIENT_BODY}`;
 
 export function layout(

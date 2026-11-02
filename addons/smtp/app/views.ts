@@ -1,5 +1,5 @@
 import CLIENT_BODY from "./views.client.js" with { type: "text" };
-import CSS from "./views.css" with { type: "text" };
+import STYLE from "./views.css" with { type: "text" };
 import { esc } from "../../../lib/app-http";
 import {
   ATTENTION_RANK, FLEET_FOOTER_HTML, FLEET_ROW_SELECTION_JS, fleetFilterHtml, filterWord, valueFilters, renderLayout,
@@ -8,7 +8,6 @@ import { mountPath } from "../../../lib/mount";
 import type { SmtpProfileView, SmtpSiteView, SmtpState } from "../action";
 
 const BASE = mountPath("smtp");
-const STYLE = CSS;
 export const CLIENT = `${FLEET_ROW_SELECTION_JS}\n${CLIENT_BODY}`;
 const NO_PROFILE = "Don't handle";
 const DONT_SEND = "dont-send";

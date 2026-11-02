@@ -485,8 +485,10 @@ Bun, so one shares another with `@import` (an addon's page imports
 joining strings; a stylesheet chosen at runtime, such as Panel Tweaks' per-tweak
 blocks, is still joined in code. `tools/build.ts` does this for the binary and
 also minifies, scripts by whitespace only and stylesheets fully, about 12% off a
-gzipped page. `tools/dev-assets.ts`, preloaded by `bunfig.toml`, does the same
-for `bun run`, the preview and tests, without minifying. Bun prints the CSS in
+gzipped page. `tools/dev-assets.ts`, preloaded by `bunfig.toml` for anything Bun
+runs from the repo, does the same for the preview and tests, without minifying,
+as each stylesheet is first imported; `bun --watch` restarts when it or a file
+it imports changes. Bun prints the CSS in
 its own layout and order, so a test checks markup and behaviour, not a
 stylesheet's text. Most assets land in CloudPanel's Twig templates, so the
 build puts a space after any `{` that minifying leaves before `{`, `%` or `#`.
