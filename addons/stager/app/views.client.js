@@ -1,5 +1,6 @@
-// expandTarget is prepended by views.ts from service.ts, so the preview and
-// the route expand a bare label the same way.
+// expandTarget is prepended by views.ts from expand-target.client.js, a copy
+// of the one the route uses. It only labels the preview: the form sends what
+// was typed, and the route expands it, so the copy never decides the site.
 
 function previewTarget() {
   const input = document.getElementById('target');
@@ -11,7 +12,7 @@ function previewTarget() {
 
 async function startClone() {
   const source = document.getElementById('source-domain').value;
-  const target = expandTarget(document.getElementById('target').value, source);
+  const target = document.getElementById('target').value.trim();
   const tls = document.getElementById('tls').checked;
   if (!target) { notify('Enter a hostname for the staging site.', 'error'); return false; }
   const payload = { source: source, target: target, tls: tls };

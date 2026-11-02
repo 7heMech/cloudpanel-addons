@@ -31,8 +31,9 @@ import STYLE from "./views.css" with { type: "text" };
  * Exported so tests/test-app.test.ts can parse it.
  */
 import VIEWS_JS from "./views.client.js" with { type: "text" };
-// One expandTarget for the route and the hostname preview.
-const CLIENT_JS = `const expandTarget = ${expandTarget.toString()};\n${VIEWS_JS}`;
+// The hostname preview's expandTarget, kept answer for answer with the route's.
+import EXPAND_TARGET_JS from "./expand-target.client.js" with { type: "text" };
+const CLIENT_JS = `${EXPAND_TARGET_JS}\n${VIEWS_JS}`;
 export { CLIENT_JS };
 
 export function layout(
