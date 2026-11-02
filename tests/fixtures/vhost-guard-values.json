@@ -1,0 +1,202 @@
+{
+ "rootDirectory": [
+  [
+   "example.com/public",
+   true
+  ],
+  [
+   "example.com/",
+   true
+  ],
+  [
+   "",
+   true
+  ],
+  [
+   "café/public",
+   true
+  ],
+  [
+   "x;\n  location /dav/ { dav_methods PUT; alias /tmp/; }\n#",
+   false
+  ],
+  [
+   "x;location/{}",
+   false
+  ],
+  [
+   "../../../etc",
+   false
+  ],
+  [
+   "a b",
+   false
+  ],
+  [
+   "a/./b",
+   false
+  ],
+  [
+   "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx",
+   false
+  ]
+ ],
+ "botName": [
+  [
+   "AhrefsBot",
+   true
+  ],
+  [
+   "Bot With Space",
+   true
+  ],
+  [
+   "facebookexternalhit/1.1",
+   true
+  ],
+  [
+   "+bot",
+   false
+  ],
+  [
+   "a))\n{return 200;}\nif ($a ~ (b",
+   false
+  ],
+  [
+   "a\tb",
+   false
+  ]
+ ],
+ "blockedIp": [
+  [
+   "192.0.2.1",
+   true
+  ],
+  [
+   "192.0.2.0/24",
+   true
+  ],
+  [
+   "2001:db8::/32",
+   true
+  ],
+  [
+   "192.0.2.1/24/\")",
+   false
+  ],
+  [
+   "192.0.2.1/33",
+   false
+  ],
+  [
+   "192.0.2.1;",
+   false
+  ]
+ ],
+ "allowedIps": [
+  [
+   "",
+   true
+  ],
+  [
+   "192.0.2.1,198.51.100.0/24",
+   true
+  ],
+  [
+   "192.0.2.1, 198.51.100.0/24",
+   true
+  ],
+  [
+   "192.0.2.1/x; allow all",
+   false
+  ],
+  [
+   "192.0.2.1,,",
+   false
+  ]
+ ],
+ "additionalConfiguration": [
+  [
+   "date.timezone=UTC;\ndisplay_errors=off;",
+   true
+  ],
+  [
+   "a=b\";\n}\nserver {",
+   false
+  ],
+  [
+   "a=$undefined_var",
+   false
+  ],
+  [
+   "a=\\b",
+   false
+  ]
+ ],
+ "varnishServer": [
+  [
+   "127.0.0.1:6081",
+   true
+  ],
+  [
+   "127.0.0.1:6081/",
+   true
+  ],
+  [
+   "varnish.internal",
+   true
+  ],
+  [
+   "[::1]:6081",
+   true
+  ],
+  [
+   "127.0.0.1;\nalias /",
+   false
+  ],
+  [
+   "a b",
+   false
+  ]
+ ],
+ "reverseProxyUrl": [
+  [
+   "http://127.0.0.1:8080/app?x=1&y=2",
+   true
+  ],
+  [
+   "HTTPS://example.com",
+   true
+  ],
+  [
+   "http://127.0.0.1:8080; alias /;",
+   false
+  ],
+  [
+   "ftp://x",
+   false
+  ],
+  [
+   "http://a/$uri",
+   false
+  ]
+ ],
+ "port": [
+  [
+   "3000",
+   true
+  ],
+  [
+   "8000;",
+   false
+  ],
+  [
+   "",
+   false
+  ],
+  [
+   "123456",
+   false
+  ]
+ ]
+}

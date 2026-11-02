@@ -82,6 +82,29 @@ A panel behind Cloudflare keeps its visitors' addresses. Switch the setting off
 only if a load balancer or proxy other than Cloudflare, on a public address,
 sits in front of this server or its panel.
 
+## Nginx config injection
+
+**Block nginx config injection** is on by default. CloudPanel writes site
+settings such as **Root Directory** into the site's Nginx config without
+checking them, so without it any panel account with a site can take over the
+server. With it, a value that would add Nginx directives is refused with a page
+saying which field, and only administrators can save the **Vhost** editor and
+PageSpeed settings. Other users can still view the vhost.
+
+Refusals are logged to `/home/clp/logs/php/error.log` as `clp-addons vhost
+guard: refused ...`, with the reason. If an administrator is refused the Vhost
+editor and the reason is not a pending two-factor code, the guard could not read
+their session: switch the setting off until clp-addons is updated. Turning it off removes the guard; existing vhosts are not changed either
+way.
+
+It checks what is sent through the panel only. A site's own shell or SFTP user
+can still write a Varnish server into `~/.varnish-cache/settings.json`, which
+CloudPanel puts into the vhost the next time that site's settings are saved. The
+setting lists such values, and saved site settings it would refuse now, such as
+a Root Directory saved before it was on. Check each one and that site's vhost in
+`/etc/nginx/sites-enabled/`; the addon changes nothing itself. `clp-addons
+repair` prints the same list.
+
 ## Abandoned temp files
 
 Every 15 minutes System Tweaks removes the PHP and ImageMagick temp files that

@@ -98,6 +98,10 @@ function setRealIp(input) {
   return change(input, '/api/real-ip', { enabled: input.checked }, switchText(input), 'Saved.');
 }
 
+function setVhostGuard(input) {
+  return change(input, '/api/vhost-guard', { enabled: input.checked }, switchText(input), 'Saved.');
+}
+
 // A change restarts the panel and waits for it to answer.
 function setPanelPhp(select) {
   const label = select.options[select.selectedIndex].textContent;

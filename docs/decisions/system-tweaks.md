@@ -9,8 +9,8 @@ Firewall page.
 ## The page
 
 Two cards: Automatic updates, which an operator comes back to, then one
-Settings card for the panel's PHP, the upload-progress mitigation and forged
-visitor IPs, which are set once. Each row says what it does in a sentence; the
+Settings card for the panel's PHP, the upload-progress mitigation, forged
+visitor IPs and nginx config injection, which are set once. Each row says what it does in a sentence; the
 reasons are here. The Nginx, MySQL, CloudPanel and reboot rows appear only once
 System Tweaks' own switch is on, since they change nothing before. The
 repositories and each PHP-FPM's upload-progress value fold into a summary that
@@ -292,6 +292,97 @@ whatever the upgrade installed. The panel's file is not a conffile: a
 `bun tests/integration/integration-real-ip.ts` runs real Nginx in Docker: it
 reproduces the bypass on the stock directives, then shows the edited ones reject
 it while Cloudflare peers and loopback proxies keep working.
+
+## Nginx config injection
+
+CloudPanel renders site settings into the site's vhost without checking them,
+and the sites' Nginx runs as `user root;`. Any panel account with a site could
+end a Root Directory with `;` and add directives: a WebDAV `alias` writes files
+as root, and `fastcgi_pass` to the root File Manager pool runs them (Full
+Disclosure 2026/Oct/14, CloudPanel 2.5.4-3). The same holds for blocked bot
+names (only a length limit), blocked IPs and basic-auth allowlists (the netmask
+is cast with `(int)` or not read), the Varnish server, the reverse-proxy URL,
+ports, and PHP's additional configuration, which sits inside a quoted
+`PHP_VALUE`. The Vhost editor and PageSpeed settings are raw Nginx config, and
+CloudPanel offers both to every account that can open the site; its only check
+refuses `disable_symlinks`.
+
+**Block nginx config injection**, on by default (`blockVhostInjection`), puts
+`vhost-guard.php` in front of CloudPanel as the `[clp]` pool's
+`php_admin_value[auto_prepend_file]`. The setting is a pool file,
+`pool.d/zz-clp-addons-vhost-guard.conf`, that reopens CloudPanel's `[clp]`
+section; PHP-FPM merges a section it has seen, so the File Manager pool and
+CloudPanel's own `cloudpanel.conf` are untouched. Both files sit in
+`/home/clp/services/php-fpm/fpm`, which CloudPanel's update does not replace,
+and next to each other, so removing the binary never leaves the pool naming a
+missing script. An admin value cannot be overridden by `PHP_VALUE` or
+`ini_set`.
+
+The guard reads the same `$_POST` Symfony reads, keyed by the form names
+CloudPanel's form types produce (`site_domain_settings[rootDirectory]` and so
+on), so no URL spelling reaches CloudPanel's form without passing it. Each field
+gets the allowlist its Nginx context can hold: folder names without `.` or `..`
+for the Root Directory, IP addresses and CIDR ranges (each trimmed, as
+CloudPanel does), digits for ports, a host and port for Varnish, an `http(s)`
+URL without whitespace, quotes, `;`, braces or `$`, a Varnish server trimmed of
+slashes as CloudPanel trims it, and no `"`, `\`, braces or
+`$` in PHP's additional configuration. A bot name lands in an unquoted regex, so
+it has no `+` or other regex operators that would stop Nginx loading. These
+checks apply to administrators too, who can still use the Vhost editor for a
+value they refuse. A `vhost-template` parameter, in the query or the body, or a
+PageSpeed form is accepted only from an active `ROLE_ADMIN`, who can change the
+server anyway. The guard finds the account from the `cloudpanel` session file:
+it walks PHP's `name|value` session format, re-serializing each value to find
+where it ends, so a typed login name cannot pass for the next entry, unserializes
+with `allowed_classes => false`, refuses a session whose `mfaAuthenticated` is
+`false`, which CloudPanel leaves while a TOTP code is owed, and reads the role
+and status from CloudPanel's database. Anything it cannot read counts as not an
+administrator, and the refusal says which step failed, since a CloudPanel update
+that changes its session or user layout would refuse every administrator until
+this addon follows it. A refusal is a 403 page naming the field, and a line in
+the panel's PHP error log.
+
+Switching it on writes both files, config-tests with the binary and arguments
+of the unit's merged `ExecStart`, reloads `clp-php-fpm`, and requires two
+answers over FastCGI within 20 seconds: the login page, and a refusal of a
+`vhost-template` query without a session, which CloudPanel alone answers with
+the login page. Otherwise its own files go back as they were, if they were
+there, and the FPM is reloaded again; a pool file it did not write is not kept.
+It holds Panel PHP's lock while it does, and repair reads the setting under
+System Tweaks' own lock first. Repair reinstalls and reloads when either file
+differs or the running pool does not refuse, so an install interrupted before
+its reload, or a script OPcache still holds, does not pass for one in force.
+The page's "On" asks the running pool the same question.
+CloudPanel's update runs `chown -R clp:clp /home/clp`, which repair also undoes.
+Enabling the addon queues the reconcile service, since the synchronous enable
+cannot wait for the panel, and `clp-addons update` queues it too.
+Switching off or disabling removes the pool file and reloads before deleting
+the script, even when the pool file had already gone, since the running FPM may
+still prepend the script; it puts the pool file back if the reload fails. Repair waits only
+five seconds for Panel PHP's lock, so it does not hold the page's switches
+behind a Panel PHP change; the next run catches up.
+
+The guard sees only new saves. A value saved before it was in place stays in
+CloudPanel's database, and the Varnish server is not in the database at all:
+CloudPanel reads it from `/home/<site user>/.varnish-cache/settings.json`, which
+the site's own user owns and can write, and renders it whenever that site's
+vhost is next written. That is a path into the vhost the guard does not close:
+it sees only the panel's HTTP requests, and a site's shell or SFTP user, which a
+panel account can create, or any code running as that user, writes the file
+directly, and the next save of any of that site's settings renders it. So the
+state read and repair check every stored value the guard has a rule for, the
+Varnish file of every site included. The file is opened without following a
+link or waiting on a FIFO, and checked through the descriptor it opened, since
+its owner can swap it at any moment. `vhost-values.ts` holds the guard's
+rules again; `tests/fixtures/vhost-guard-values.json` is sent to the PHP by the
+integration test and checked against the TypeScript by `bun test`, so the two
+give the same answers. A value either would refuse is listed by site and field,
+on the page and in repair's output. Nothing is changed: a match is a value to
+look at, not proof of an attack.
+
+`bun tests/integration/integration-vhost-guard.ts` runs the guard in Docker on
+PHP 8.1, 8.4 and 8.5 against the advisory's payloads, legitimate values and
+sessions for each role.
 
 ## Abandoned temp files
 

@@ -10,5 +10,7 @@ export const INSTALL_DEADLINE_MS = 600_000;
 export const INSTALL_GATEWAY_TIMEOUT_MS = INSTALL_DEADLINE_MS + 30_000;
 /** A config test, a restart, up to 20 s for the panel to answer, and the same again to undo it. */
 export const PANEL_PHP_GATEWAY_TIMEOUT_MS = 90_000;
+/** Lock waiting, an FPM config test and reload, 20 s for the panel to answer, and the reload that undoes it. */
+export const VHOST_GUARD_GATEWAY_TIMEOUT_MS = 90_000 + 4 * COMMAND_MS;
 /** Nginx validation and reload, a rollback of both, lock waiting and the reply. */
 export const REAL_IP_GATEWAY_TIMEOUT_MS = 4 * COMMAND_MS + 60_000;

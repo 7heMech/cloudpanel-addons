@@ -95,6 +95,11 @@ export async function handle(
     return firewallReply(await systemTweaksService.setFirewallProtocol({ portRange, source, protocol: protocol as string, id: id as number | undefined }));
   }
 
+  if (path === "/api/vhost-guard") {
+    if (typeof body.enabled !== "boolean") return json({ ok: false, error: "enabled must be true or false" }, 400);
+    return repaint(await systemTweaksService.setVhostGuard(body.enabled));
+  }
+
   if (path === "/api/real-ip") {
     if (typeof body.enabled !== "boolean") return json({ ok: false, error: "enabled must be true or false" }, 400);
     return repaint(await systemTweaksService.setRealIp(body.enabled));

@@ -501,7 +501,8 @@ function previewTheme(html: string, url: URL): string {
 /**
  * ?updates=missing|outside|off|on picks how unattended-upgrades stands, and
  * ?guard=off shows the upload-progress mitigation opted out, and ?realip=off
- * leaves X-Real-IP trusted from any address. ?reboot switches automatic reboot
+ * leaves X-Real-IP trusted from any address, ?vhost=off leaves panel
+ * input unchecked, and ?injected lists stored settings the guard would refuse. ?reboot switches automatic reboot
  * on, ?at=03:30 sets its time, and ?overdue dates the required reboot weeks back.
  */
 function systemTweaksPreviewState(url: URL): SystemTweaksState {
@@ -544,6 +545,10 @@ function systemTweaksPreviewState(url: URL): SystemTweaksState {
     panelPhp: panelPhpPreviewStatus(url),
     realIp: { blockForged: url.searchParams.get("realip") !== "off", trustsAnyAddress: url.searchParams.get("realip") === "off", problem: "" },
     firewall: { available: true, protocols: { 9: "udp", 10: "udp", 11: "both" }, udpPorts: url.searchParams.has("noudp") ? [] : ["53", "51820"] },
+    vhostGuard: {
+      enabled: url.searchParams.get("vhost") !== "off", active: url.searchParams.get("vhost") !== "off",
+      stored: url.searchParams.has("injected") ? [{ domain: "shop.example.com", field: "Root Directory" }, { domain: "blog.example.com", field: "Varnish server" }] : [],
+    },
     uploadProgress: {
       guard,
       fpms: [...php.map((version) => ({
@@ -565,6 +570,8 @@ function systemTweaksPreviewMutation(path: string, source: URL, body: Record<str
   if (path.endsWith("/install-updates")) {
     state.updates.installed = true;
     state.updates.version = "2.9.1+nmu3";
+  } else if (path.endsWith("/vhost-guard")) {
+    state.vhostGuard = { ...state.vhostGuard, enabled: body.enabled === true, active: body.enabled === true };
   } else if (path.endsWith("/real-ip")) {
     state.realIp = { blockForged: body.enabled === true, trustsAnyAddress: body.enabled !== true, problem: "" };
   } else if (path.endsWith("/upload-guard")) {
