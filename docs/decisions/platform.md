@@ -32,8 +32,9 @@ one of its words, and hides a list it empties. An
 addon's `added` version (`2.0.0-rc.1`, for example) marks it New on a box
 whose previous release was older than that and whose installed release is not.
 An existing addon's `changed.in` version marks it Changed on the same terms,
-with one line saying what changed; the rest is the changelog's, which the update
-page links. So a box updated from 1.5.2 to 2.0.0 sees what every 2.0.0 release
+with one line saying what changed. Changed is only for what an operator must
+know, such as a moved setting or a new effect on sites; a new layout or a faster
+pick-up is the changelog's, which the update page links. So a box updated from 1.5.2 to 2.0.0 sees what every 2.0.0 release
 candidate declared, and one that already ran 2.0.0-rc.1 sees none of it. The
 previous release is `manager/news-since` under the state directory: an update
 writes the release it replaced, and puts the file back if it rolls back, and
