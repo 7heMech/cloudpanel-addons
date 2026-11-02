@@ -32,11 +32,12 @@ export function embedLandingUrl(domain: string, slug: string): string {
  * document belongs to CloudPanel.
  */
 export function shadowStyle(css: string): string {
+  // Wherever a selector starts, so minified, nested and listed selectors match too.
   return css
-    .replace(/(^|\n)html\.dark /g, "$1:host(.dark) ")
-    .replace(/(^|\n):root \{/g, "$1:host {")
+    .replace(/(^|[\s,{}])html\.dark(?=[\s{,.#:[>+~])/g, "$1:host(.dark)")
+    .replace(/(^|[\s,{}]):root(?=\s*[{,])/g, "$1:host")
     .replace(
-      /(^|\n)body \{[^}]*\}/g,
+      /(^|[\s}])body\s*\{[^}]*\}/g,
       "$1:host { display: block; color: var(--text); font-family: var(--clp-addon-font-family);\n  font-size: 16px; line-height: 1.5; }",
     );
 }
