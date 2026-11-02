@@ -311,6 +311,21 @@ function realIpLine(state: SystemTweaksState["realIp"]): string {
     state.blockForged ? " Run clp-addons repair." : ""}</span>`;
 }
 
+/** Site settings saved before the guard, or by a site's own user, that it would refuse now. */
+function storedValuesWarning(stored: SystemTweaksState["vhostGuard"]["stored"]): string {
+  if ("error" in stored) return `<p class="st-status hint">Stored site settings could not be checked: ${esc(stored.error)}</p>`;
+  if (!stored.length) return "";
+  const listed = stored.slice(0, 10).map((value) => `${esc(value.domain)}: ${esc(value.field)}`).join("; ");
+  return warning(`These saved site settings would be refused now, so they may hold nginx directives: ${listed}${
+    stored.length > 10 ? `; and ${stored.length - 10} more` : ""}. Check each one and the site's vhost.`);
+}
+
+function vhostGuardLine(state: SystemTweaksState["vhostGuard"]): string {
+  if (state.active) return `${badge("On", "ok")} <span>Panel input is checked before CloudPanel writes it into a vhost.</span>`;
+  if (state.enabled) return `${badge("Not applied", "warn")} <span>Run clp-addons repair.</span>`;
+  return `${badge("Off", "plain")} <span>Any panel account with a site can write nginx config, and nginx runs as root.</span>`;
+}
+
 function settingsCard(state: SystemTweaksState): string {
   return `
     <div class="card">
@@ -332,6 +347,16 @@ function settingsCard(state: SystemTweaksState): string {
         checked: state.realIp.blockForged,
         onchange: "setRealIp(this)",
         extra: `<p class="st-status">${realIpLine(state.realIp)}</p>`,
+      })}${settingRow({
+        key: "blockVhostInjection",
+        title: "Block nginx config injection",
+        description: [
+          "Refuses site settings CloudPanel would write into a vhost unchecked, such as a Root Directory holding nginx directives.",
+          "Only administrators can save the Vhost editor and PageSpeed settings.",
+        ],
+        checked: state.vhostGuard.enabled,
+        onchange: "setVhostGuard(this)",
+        extra: `<p class="st-status">${vhostGuardLine(state.vhostGuard)}</p>${storedValuesWarning(state.vhostGuard.stored)}`,
       })}
       </div>
     </div>`;

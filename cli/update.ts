@@ -11,7 +11,7 @@ import { reconcilePhpGuard } from "./php-guard";
 import { type AddonSpec } from "./addon-catalog";
 import { keepNewsSince, recordNewsSince } from "./manager-action";
 import { operationLockEnv, withOperationLock } from "./operation-lock";
-import { CLI_BIN, LEGACY_GH, MANAGER_UNIT } from "./paths";
+import { CLI_BIN, LEGACY_GH, MANAGER_UNIT, RECONCILE_SERVICE } from "./paths";
 import {
   ensureAuthHelperReady, ensureDirs, ensureServiceUser, installUnits, reconcilePanelIdentity,
   removeLegacyUnits, startUnits, unitActive, writeConfig,
@@ -19,7 +19,7 @@ import {
 import {
   CLI_VERSION, type FetchedArtifact, fetchVerified, resolveRelease, verifyAttestation,
 } from "./release";
-import { fatal, log, parseFlags, requireRoot, run } from "./util";
+import { fatal, log, parseFlags, requireRoot, run, tryRun } from "./util";
 import { compareSemver, isPrerelease } from "../lib/semver";
 /**
  * Reconcile all provisioning from the binary that owns the definitions.
@@ -46,6 +46,9 @@ function finalizeUpdate(beforeManagerRestart?: () => void): AddonSpec[] {
     if (!reconcileNginx(false)) log.warn("Nginx proxy needs manual repair");
     reconcilePhpGuard(true);
     startUnits({ beforeManagerRestart });
+    // Addon upkeep, such as a changed guard System Tweaks installs, would
+    // otherwise wait for the next quarter-hour; it runs once this update lets go of the lock.
+    tryRun("systemctl", ["start", "--no-block", RECONCILE_SERVICE]);
     if (renames.length > 0 && unitActive(MANAGER_UNIT) !== "active") revertAddonRenames(renames);
     return specs;
   } catch (error) {

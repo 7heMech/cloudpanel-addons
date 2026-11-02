@@ -22,6 +22,8 @@ import { clearAbandonedTmpFiles, type TmpCleanupOptions } from "../../cli/tmp-cl
 import {
   firewallStatus, setRuleProtocol, syncFirewall, type FirewallOptions, type FirewallStatus,
 } from "./firewall";
+import { installVhostGuard, queueVhostGuard, removeVhostGuard, vhostGuardStatus, type VhostGuardOptions } from "./vhost-guard";
+import { storedVhostValues, type StoredVhostValue, type VhostValuesOptions } from "./vhost-values";
 
 const SETTINGS_VERSION = 1;
 const MAX_INPUT_BYTES = 4 * 1024;
@@ -36,6 +38,8 @@ export interface SystemTweaksSettings {
   uploadProgressGuard: boolean;
   /** Stop nginx.conf trusting X-Real-IP from every address. */
   blockForgedRealIp: boolean;
+  /** Refuse panel input CloudPanel would write into a vhost unchecked. */
+  blockVhostInjection: boolean;
 }
 
 export interface SystemTweaksState {
@@ -43,6 +47,7 @@ export interface SystemTweaksState {
   settings: UpdateSettings;
   uploadProgress: { guard: boolean; fpms: FpmUploadProgress[] };
   realIp: RealIpStatus & { blockForged: boolean };
+  vhostGuard: { enabled: boolean; active: boolean; stored: StoredVhostValue[] | { error: string } };
   panelPhp: PanelPhpStatus | { error: string };
   firewall: FirewallStatus | { error: string };
 }
@@ -68,6 +73,8 @@ export interface SystemTweaksOptions {
   uploadProgress?: UploadProgressOptions;
   phpGuard?: PhpGuardOptions;
   realIp?: RealIpOptions;
+  vhostGuard?: VhostGuardOptions;
+  vhostValues?: VhostValuesOptions;
   panelPhp?: PanelPhpOptions;
   tmpCleanup?: TmpCleanupOptions;
   firewall?: FirewallOptions;
@@ -84,6 +91,7 @@ export function readSettings(paths: SystemTweaksPaths): SystemTweaksSettings {
     enabledTimers: [],
     uploadProgressGuard: true,
     blockForgedRealIp: true,
+    blockVhostInjection: true,
   };
   if (!existsSync(paths.settingsFile)) return settings;
   const info = lstatSync(paths.settingsFile);
@@ -106,6 +114,7 @@ export function readSettings(paths: SystemTweaksPaths): SystemTweaksSettings {
   }
   if (stored.uploadProgressGuard === false) settings.uploadProgressGuard = false;
   if (stored.blockForgedRealIp === false) settings.blockForgedRealIp = false;
+  if (stored.blockVhostInjection === false) settings.blockVhostInjection = false;
   return settings;
 }
 
@@ -122,7 +131,7 @@ function guardOptions(options: SystemTweaksOptions): PhpGuardOptions {
   return { ...options.phpGuard, paths: { optOutSettings: paths.settingsFile, ...options.phpGuard?.paths } };
 }
 
-function stateOf(options: SystemTweaksOptions): SystemTweaksState {
+async function stateOf(options: SystemTweaksOptions): Promise<SystemTweaksState> {
   const settings = readSettings(pathsFor(options));
   return {
     updates: updatesStatus(options.updates),
@@ -132,6 +141,7 @@ function stateOf(options: SystemTweaksOptions): SystemTweaksState {
       fpms: uploadProgressStatus(options.uploadProgress),
     },
     realIp: { ...realIpStatus(options.realIp), blockForged: settings.blockForgedRealIp },
+    vhostGuard: { enabled: settings.blockVhostInjection, ...await vhostGuardStatus(options.vhostGuard), stored: storedOrError(options.vhostValues) },
     panelPhp: panelPhpOrError(options.panelPhp),
     firewall: firewallOrError(options.firewall),
   };
@@ -139,6 +149,11 @@ function stateOf(options: SystemTweaksOptions): SystemTweaksState {
 
 function firewallOrError(options?: FirewallOptions): FirewallStatus | { error: string } {
   try { return firewallStatus(options); }
+  catch (error) { return { error: errorMessage(error) }; }
+}
+
+function storedOrError(options?: VhostValuesOptions): StoredVhostValue[] | { error: string } {
+  try { return storedVhostValues(options); }
   catch (error) { return { error: errorMessage(error) }; }
 }
 
@@ -211,6 +226,19 @@ async function setRealIp(options: SystemTweaksOptions): Promise<SystemTweaksStat
   return stateOf(options);
 }
 
+async function setVhostGuard(options: SystemTweaksOptions): Promise<SystemTweaksState> {
+  const paths = pathsFor(options);
+  const body = await requestBody(options);
+  if (typeof body.enabled !== "boolean") failAction("enabled must be true or false");
+  await withFileLock(paths.lockFile, 15, "another system tweaks change is still running", async () => {
+    const settings = readSettings(paths);
+    if (body.enabled) await installVhostGuard(options.vhostGuard);
+    else removeVhostGuard(options.vhostGuard);
+    writeSettings(paths, { ...settings, blockVhostInjection: body.enabled as boolean });
+  });
+  return stateOf(options);
+}
+
 async function changePanelPhp(options: SystemTweaksOptions): Promise<SystemTweaksState> {
   const body = await requestBody(options);
   if (typeof body.php !== "string") failAction("php must be a version such as 8.4, or empty for CloudPanel's own");
@@ -234,6 +262,7 @@ export async function executeSystemTweaksAction(argv: string[], options: SystemT
   if (verb === "set-updates") return setUpdates(options);
   if (verb === "set-upload-guard") return setUploadGuard(options);
   if (verb === "set-real-ip") return setRealIp(options);
+  if (verb === "set-vhost-guard") return setVhostGuard(options);
   if (verb === "set-panel-php") return changePanelPhp(options);
   if (verb === "firewall") return firewallStatus(options.firewall);
   if (verb === "set-firewall-protocol") {
@@ -289,6 +318,22 @@ export async function systemTweaksMaintenance(options: SystemTweaksOptions = {})
     failures.push(`firewall: ${errorMessage(error)}`);
   }
   try {
+    // Read under the lock, so a switch-off running beside it is not undone.
+    const paths = pathsFor(options);
+    // A short wait for Panel PHP's lock, so this does not hold the page's switches behind one.
+    const putBack = await withFileLock(paths.lockFile, 15, "another system tweaks change is still running", async () =>
+      readSettings(paths).blockVhostInjection && await installVhostGuard({ lockWaitSeconds: 5, ...options.vhostGuard }));
+    if (putBack) lines.push("vhost guard put back");
+  } catch (error) {
+    failures.push(`vhost guard: ${errorMessage(error)}`);
+  }
+  try {
+    const stored = storedVhostValues(options.vhostValues);
+    if (stored.length) lines.push(`stored site settings the vhost guard would refuse: ${stored.map((value) => `${value.domain} ${value.field}`).join(", ")}`);
+  } catch (error) {
+    failures.push(`stored site settings: ${errorMessage(error)}`);
+  }
+  try {
     const php = await reconcilePanelPhp(options.panelPhp);
     if (php) lines.push(php);
   } catch (error) {
@@ -319,6 +364,7 @@ export function withdrawSystemTweaks(options: SystemTweaksOptions = {}): void {
       applyUpdates({ ...settings.updates, enabled: false }, settings.enabledTimers, options.updates);
       if (settings.enabledTimers.length) writeSettings(paths, { ...settings, enabledTimers: [] });
       applyRealIp(false, options.realIp);
+      removeVhostGuard(options.vhostGuard);
     });
   } catch (error) {
     // The addon stays enabled, so its panel PHP choice comes back with it.
@@ -340,6 +386,7 @@ export function restoreSystemTweaks(options: SystemTweaksOptions = {}): void {
       }
       if (!settings.uploadProgressGuard) reconcilePhpGuard(true, false, guardOptions(options));
       if (settings.blockForgedRealIp) applyRealIp(true, options.realIp);
+      if (settings.blockVhostInjection) queueVhostGuard(options.vhostGuard);
     });
   } finally {
     restorePanelPhp(options.panelPhp);

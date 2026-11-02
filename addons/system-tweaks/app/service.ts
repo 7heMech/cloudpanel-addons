@@ -2,7 +2,7 @@ import { callGatewayAction, type ActionResult } from "../../../lib/gateway-clien
 import type { WebVerb } from "../../../lib/gateway-protocol";
 import type { SystemTweaksState } from "../action";
 import type { FirewallStatus } from "../firewall";
-import { INSTALL_GATEWAY_TIMEOUT_MS, PANEL_PHP_GATEWAY_TIMEOUT_MS, REAL_IP_GATEWAY_TIMEOUT_MS } from "../limits";
+import { INSTALL_GATEWAY_TIMEOUT_MS, PANEL_PHP_GATEWAY_TIMEOUT_MS, REAL_IP_GATEWAY_TIMEOUT_MS, VHOST_GUARD_GATEWAY_TIMEOUT_MS } from "../limits";
 
 function call(verb: WebVerb<"system-tweaks">, input?: string, timeout?: number): Promise<ActionResult<SystemTweaksState>> {
   return callGatewayAction("system-tweaks", verb, [], input, timeout ? { timeout } : undefined);
@@ -39,6 +39,10 @@ export const systemTweaksService = {
 
   setFirewallProtocol(rule: { portRange: string; source: string; protocol: string; id?: number }): Promise<ActionResult<FirewallStatus>> {
     return callGatewayAction("system-tweaks", "set-firewall-protocol", [], JSON.stringify(rule));
+  },
+
+  setVhostGuard(enabled: boolean): Promise<ActionResult<SystemTweaksState>> {
+    return call("set-vhost-guard", JSON.stringify({ enabled }), VHOST_GUARD_GATEWAY_TIMEOUT_MS);
   },
 
 };
