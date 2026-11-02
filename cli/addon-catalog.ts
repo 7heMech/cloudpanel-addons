@@ -110,6 +110,8 @@ export interface AddonDefinition {
   newSites?: AddonNewSites;
   /** Work for sites whose certificate CloudPanel has just written. */
   certificates?: AddonHook;
+  /** Work after ufw's rule files change, which CloudPanel's Firewall page rebuilds. */
+  firewall?: AddonHook;
 }
 
 /**
@@ -196,6 +198,11 @@ export function addonNewSites(installed: AddonSpec[]): AddonSpec[] {
 /** The installed addons with work for a certificate CloudPanel has just written, in catalog order. */
 export function addonCertificates(installed: AddonSpec[]): AddonSpec[] {
   return installed.filter((spec) => spec.certificates !== undefined);
+}
+
+/** The installed addons with work for a change to ufw's rules, in catalog order. */
+export function addonFirewall(installed: AddonSpec[]): AddonSpec[] {
+  return installed.filter((spec) => spec.firewall !== undefined);
 }
 
 /** The installed addons that want upkeep during repair, in catalog order. */

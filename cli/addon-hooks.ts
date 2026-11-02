@@ -1,6 +1,6 @@
 // The upkeep `repair` and the reconcile timer run, per addon and for the manager's own job records.
 
-import { type AddonSpec, addonCertificates, addonRepairs, addonNewSites } from "./addon-catalog";
+import { type AddonHook, type AddonSpec, addonCertificates, addonFirewall, addonRepairs, addonNewSites } from "./addon-catalog";
 import { pruneManagerJobs } from "./manager-action";
 import { log } from "./util";
 /**
@@ -83,8 +83,16 @@ export async function resumePendingNewSites(installed: AddonSpec[]): Promise<boo
  * is none, since every renewal wakes it too.
  */
 export async function runCertificateWork(installed: AddonSpec[]): Promise<void> {
-  for (const spec of addonCertificates(installed)) {
-    const task = spec.certificates!;
+  await runHooks(addonCertificates(installed).map((spec) => spec.certificates!));
+}
+
+/** What the firewall watcher runs: each installed addon's work for ufw's rules, in catalog order. */
+export async function runFirewallWork(installed: AddonSpec[]): Promise<void> {
+  await runHooks(addonFirewall(installed).map((spec) => spec.firewall!));
+}
+
+async function runHooks(tasks: AddonHook[]): Promise<void> {
+  for (const task of tasks) {
     try {
       const line = await task.run();
       if (line) log.ok(`${task.label}: ${line}`);

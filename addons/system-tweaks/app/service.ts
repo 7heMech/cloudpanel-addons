@@ -1,6 +1,7 @@
 import { callGatewayAction, type ActionResult } from "../../../lib/gateway-client";
 import type { WebVerb } from "../../../lib/gateway-protocol";
 import type { SystemTweaksState } from "../action";
+import type { FirewallStatus } from "../firewall";
 import { INSTALL_GATEWAY_TIMEOUT_MS, PANEL_PHP_GATEWAY_TIMEOUT_MS, REAL_IP_GATEWAY_TIMEOUT_MS } from "../limits";
 
 function call(verb: WebVerb<"system-tweaks">, input?: string, timeout?: number): Promise<ActionResult<SystemTweaksState>> {
@@ -30,6 +31,14 @@ export const systemTweaksService = {
 
   setRealIp(enabled: boolean): Promise<ActionResult<SystemTweaksState>> {
     return call("set-real-ip", JSON.stringify({ enabled }), REAL_IP_GATEWAY_TIMEOUT_MS);
+  },
+
+  firewall(): Promise<ActionResult<FirewallStatus>> {
+    return callGatewayAction("system-tweaks", "firewall", []);
+  },
+
+  setFirewallProtocol(rule: { portRange: string; source: string; protocol: string; id?: number }): Promise<ActionResult<FirewallStatus>> {
+    return callGatewayAction("system-tweaks", "set-firewall-protocol", [], JSON.stringify(rule));
   },
 
 };

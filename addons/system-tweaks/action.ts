@@ -17,7 +17,11 @@ import { applyRealIp, realIpStatus, type RealIpOptions, type RealIpStatus } from
 import {
   panelPhpStatus, reconcilePanelPhp, restorePanelPhp, setPanelPhp, withdrawPanelPhp, type PanelPhpOptions, type PanelPhpStatus,
 } from "./panel-php";
+import { log } from "../../cli/util";
 import { clearAbandonedTmpFiles, type TmpCleanupOptions } from "../../cli/tmp-cleanup";
+import {
+  firewallStatus, setRuleProtocol, syncFirewall, type FirewallOptions, type FirewallStatus,
+} from "./firewall";
 
 const SETTINGS_VERSION = 1;
 const MAX_INPUT_BYTES = 4 * 1024;
@@ -40,6 +44,7 @@ export interface SystemTweaksState {
   uploadProgress: { guard: boolean; fpms: FpmUploadProgress[] };
   realIp: RealIpStatus & { blockForged: boolean };
   panelPhp: PanelPhpStatus | { error: string };
+  firewall: FirewallStatus | { error: string };
 }
 
 export interface SystemTweaksPaths {
@@ -65,6 +70,7 @@ export interface SystemTweaksOptions {
   realIp?: RealIpOptions;
   panelPhp?: PanelPhpOptions;
   tmpCleanup?: TmpCleanupOptions;
+  firewall?: FirewallOptions;
   now?: () => number;
 }
 
@@ -127,7 +133,13 @@ function stateOf(options: SystemTweaksOptions): SystemTweaksState {
     },
     realIp: { ...realIpStatus(options.realIp), blockForged: settings.blockForgedRealIp },
     panelPhp: panelPhpOrError(options.panelPhp),
+    firewall: firewallOrError(options.firewall),
   };
+}
+
+function firewallOrError(options?: FirewallOptions): FirewallStatus | { error: string } {
+  try { return firewallStatus(options); }
+  catch (error) { return { error: errorMessage(error) }; }
 }
 
 function panelPhpOrError(options?: PanelPhpOptions): PanelPhpStatus | { error: string } {
@@ -223,6 +235,11 @@ export async function executeSystemTweaksAction(argv: string[], options: SystemT
   if (verb === "set-upload-guard") return setUploadGuard(options);
   if (verb === "set-real-ip") return setRealIp(options);
   if (verb === "set-panel-php") return changePanelPhp(options);
+  if (verb === "firewall") return firewallStatus(options.firewall);
+  if (verb === "set-firewall-protocol") {
+    setRuleProtocol(await requestBody(options), options.firewall);
+    return firewallStatus(options.firewall);
+  }
   if (verb !== "install-updates") {
     verb satisfies never;
     failAction(`unknown system tweaks verb '${verb}'`);
@@ -266,6 +283,12 @@ export async function systemTweaksMaintenance(options: SystemTweaksOptions = {})
     failures.push(errorMessage(error));
   }
   try {
+    const firewall = syncFirewall("apply", options.firewall);
+    if (firewall) lines.push(`firewall: ${firewall}`);
+  } catch (error) {
+    failures.push(`firewall: ${errorMessage(error)}`);
+  }
+  try {
     const php = await reconcilePanelPhp(options.panelPhp);
     if (php) lines.push(php);
   } catch (error) {
@@ -302,6 +325,10 @@ export function withdrawSystemTweaks(options: SystemTweaksOptions = {}): void {
     restorePanelPhp(options.panelPhp);
     throw error;
   }
+  // A firewall that cannot be put back does not keep the addon on: CloudPanel's
+  // next change on its Firewall page rebuilds ufw without these rules anyway.
+  try { syncFirewall("withdraw", options.firewall); }
+  catch (error) { log.warn(`ufw still has UDP rules from System Tweaks: ${errorMessage(error)}`); }
 }
 
 export function restoreSystemTweaks(options: SystemTweaksOptions = {}): void {
@@ -317,4 +344,11 @@ export function restoreSystemTweaks(options: SystemTweaksOptions = {}): void {
   } finally {
     restorePanelPhp(options.panelPhp);
   }
+  try { syncFirewall("restore", options.firewall); }
+  catch (error) { log.warn(`firewall protocols wait for the next repair: ${errorMessage(error)}`); }
+}
+
+/** What the firewall watcher runs whenever ufw's rule files change. */
+export function systemTweaksFirewall(options: SystemTweaksOptions = {}): string | null {
+  return syncFirewall("apply", options.firewall);
 }
