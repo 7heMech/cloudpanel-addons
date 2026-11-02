@@ -306,6 +306,13 @@ function box(options: { installed?: boolean; timers?: Record<string, string>; fa
       },
       realIp: { run: nginxRun, paths: { nginxConf, panelConf, cloudflareIps, panelUid: uid, rootUid: uid } },
       tmpCleanup: { paths: { tmpDir: join(tmpRoot, "tmp"), procDir: join(tmpRoot, "proc"), passwd: join(tmpRoot, "passwd") }, panelDb },
+      // No ufw in this fixture; tests/test-firewall.test.ts covers it.
+      firewall: {
+        paths: {
+          stateFile: join(dir, "firewall.json"), lockFile: join(dir, "firewall.lock"), panelDb,
+          userRules: join(dir, "ufw", "user.rules"), user6Rules: join(dir, "ufw", "user6.rules"), rootUid: uid,
+        },
+      },
     },
   };
 }
@@ -786,7 +793,7 @@ test("failed downloads retain the package URL in expandable details and escape t
   const updates = updatesStatus(b.options.updates);
   expect(updates.lastRun?.outcome).toBe("failed");
   expect(updates.lastRun?.message).toContain("php8.2-bcmath.deb");
-  const html = dashboardView({ updates, settings: { ...DEFAULT_UPDATE_SETTINGS }, uploadProgress: { guard: true, fpms: [] }, realIp: { blockForged: true, trustsAnyAddress: false, problem: "" }, panelPhp: { error: "" } });
+  const html = dashboardView({ updates, settings: { ...DEFAULT_UPDATE_SETTINGS }, uploadProgress: { guard: true, fpms: [] }, realIp: { blockForged: true, trustsAnyAddress: false, problem: "" }, panelPhp: { error: "" }, firewall: { error: "" } });
   expect(html).toContain("A package download failed (HTTP 404).");
   expect(html).toContain('<details class="st-run-details"><summary>Failure details</summary>');
   expect(html).toContain("php8.2-bcmath.deb failed to download, aborting &lt;script&gt;");
@@ -922,7 +929,7 @@ test("the page shows update options only once updates are on, and says what sile
     uploadProgress: { guard: true, fpms: [{
       label: "PHP 8.2", version: "8.2", enabled: false, setBy: "clp-addons" as const,
       source: "/etc/php/8.2/fpm/conf.d/99-clp-addons-upload-progress.ini", offWithoutGuard: false, poolsOn: ["legacy.example.com"],
-    }] }, realIp: { blockForged: true, trustsAnyAddress: false, problem: "" }, panelPhp: { error: "" },
+    }] }, realIp: { blockForged: true, trustsAnyAddress: false, problem: "" }, panelPhp: { error: "" }, firewall: { error: "" },
   };
   const now = Date.parse("2026-10-25T00:00:00Z");
   const outside = dashboardView(state, now);
@@ -964,4 +971,17 @@ test("the page shows update options only once updates are on, and says what sile
     settings: { ...DEFAULT_UPDATE_SETTINGS, enabled: true, reboot: true },
     updates: { ...updates, managed: true, reboot: true, rebootTime: "now", rebootWithUsers: false },
   }, now)).toContain("restarts the server. It is skipped while anyone is logged in.");
+});
+
+test("the page names the UDP ports CloudPanel's Firewall page opens, in one line", () => {
+  const b = box();
+  const base = {
+    updates: updatesStatus(b.options.updates), settings: { ...DEFAULT_UPDATE_SETTINGS }, uploadProgress: { guard: true, fpms: [] },
+    realIp: { blockForged: true, trustsAnyAddress: false, problem: "" }, panelPhp: { error: "" },
+  };
+  const open = dashboardView({ ...base, firewall: { available: true, protocols: { 5: "udp" }, udpPorts: ["53", "3478-3479"] } });
+  expect(open).toContain(`<br>UDP ports open from CloudPanel's <a href="/admin/firewall">Firewall</a> page: 53, 3478-3479.</p>`);
+  expect(dashboardView({ ...base, firewall: { available: true, protocols: {}, udpPorts: [] } })).toContain("can open UDP ports too");
+  expect(dashboardView({ ...base, firewall: { available: false, protocols: {}, udpPorts: [] } })).not.toContain("/admin/firewall");
+  expect(dashboardView({ ...base, firewall: { error: "no" } })).not.toContain("/admin/firewall");
 });

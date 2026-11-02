@@ -6,6 +6,7 @@ import { dirname, join } from "node:path";
 import {
   ANCHOR_SERVICE, CLI_BIN, DISTRO_NGINX_SITES_DIR,
   NEW_SITES_PATH, NEW_SITES_SERVICE, CERTIFICATES_PATH, CERTIFICATES_SERVICE, NGINX_CERTIFICATES_DIR,
+  FIREWALL_PATH, FIREWALL_SERVICE, UFW_RULE_FILES,
   NEW_SITE_ROWS_PATH, PANEL_DB_DIR,
   CONFIG_DIR, LIBEXEC_DIR, INSTATIC_BACKUP_CRON, LEGACY_UNITS,
   AUTH_SERVICE_UNIT, AUTH_SOCKET_PATH, AUTH_SOCKET_UNIT, LOCK_DIR, MANAGER_UNIT,
@@ -761,6 +762,35 @@ WantedBy=paths.target
 }
 
 /**
+ * CloudPanel's Firewall page rebuilds ufw from its own table on every change,
+ * with `ufw reset` first. The service waits for the rebuild to settle itself;
+ * see `addons/system-tweaks/firewall.ts`.
+ */
+export function firewallUnits(): { service: string; path: string } {
+  return {
+    service: `[Unit]
+Description=Apply addons to CloudPanel's firewall rules
+StartLimitIntervalSec=0
+
+[Service]
+Type=oneshot
+TimeoutStartSec=5min
+ExecStart=${CLI_BIN} sync-firewall
+`,
+    path: `[Unit]
+Description=Watch CloudPanel's firewall rules
+
+[Path]
+${UFW_RULE_FILES.map((path) => `PathChanged=${path}`).join("\n")}
+Unit=${FIREWALL_SERVICE}
+
+[Install]
+WantedBy=paths.target
+`,
+  };
+}
+
+/**
  * Everything the watcher's fast repair reconciles: Twig anchors, the panel
  * vhost, site vhosts, global settings, and Cloudflare ranges. The service's
  * delay lets CloudPanel commit a new site's row after creating its vhost.
@@ -792,6 +822,8 @@ export interface UnitChanges {
   newSites: "added" | "removed" | null;
   /** The shared certificate watcher was added or removed by this pass. */
   certificates: "added" | "removed" | null;
+  /** The firewall watcher was added or removed by this pass. */
+  firewall: "added" | "removed" | null;
   /** The auth socket or service definition differs. */
   auth: boolean;
   /** The Instatic backup cron file was created or removed. */
@@ -888,6 +920,10 @@ export function installUnits(specs: AddonSpec[]): UnitChanges {
   const certificates = syncAddonUnits(specs.some((spec) => spec.certificates), CERTIFICATES_PATH, [
     [CERTIFICATES_SERVICE, certUnits.service], [CERTIFICATES_PATH, certUnits.path],
   ]);
+  const fwUnits = firewallUnits();
+  const firewall = syncAddonUnits(specs.some((spec) => spec.firewall), FIREWALL_PATH, [
+    [FIREWALL_SERVICE, fwUnits.service], [FIREWALL_PATH, fwUnits.path],
+  ]);
 
   const auth = authUnits();
   const authWrites = [
@@ -900,9 +936,10 @@ export function installUnits(specs: AddonSpec[]): UnitChanges {
     reconcile: reconcileChanged,
     newSites,
     certificates,
+    firewall,
     auth: authWrites.some(Boolean),
     cron,
-    systemd: manager || reconcileChanged || newSites !== null || certificates !== null || authWrites.some(Boolean),
+    systemd: manager || reconcileChanged || newSites !== null || certificates !== null || firewall !== null || authWrites.some(Boolean),
   };
   // systemd only needs telling when a definition it reads actually moved. The
   // cron file is not systemd's, so it does not count towards this.
@@ -933,6 +970,10 @@ export function applyToggleUnits(changes: UnitChanges): void {
   if (changes.certificates === "added") {
     run("systemctl", ["enable", CERTIFICATES_PATH]);
     run("systemctl", ["restart", CERTIFICATES_PATH]);
+  }
+  if (changes.firewall === "added") {
+    run("systemctl", ["enable", FIREWALL_PATH]);
+    run("systemctl", ["restart", FIREWALL_PATH]);
   }
 }
 
@@ -983,7 +1024,7 @@ export function startUnits(options: StartUnitsOptions = {}): void {
   run("systemctl", ["restart", RECONCILE_TIMER]);
   run("systemctl", ["enable", RECONCILE_PATH]);
   run("systemctl", ["restart", RECONCILE_PATH]);
-  for (const path of [NEW_SITES_PATH, CERTIFICATES_PATH]) {
+  for (const path of [NEW_SITES_PATH, CERTIFICATES_PATH, FIREWALL_PATH]) {
     if (!existsSync(`${SYSTEMD_DIR}/${path}`)) continue;
     run("systemctl", ["enable", path]);
     run("systemctl", ["restart", path]);
@@ -994,12 +1035,12 @@ export function startUnits(options: StartUnitsOptions = {}): void {
 export function stopUnits(keepShared = false): void {
   if (keepShared) return;
   reconcileInstaticBackupCron(false);
-  for (const unit of [MANAGER_UNIT, RECONCILE_TIMER, RECONCILE_PATH, NEW_SITES_PATH, CERTIFICATES_PATH, NEW_SITE_ROWS_PATH,
+  for (const unit of [MANAGER_UNIT, RECONCILE_TIMER, RECONCILE_PATH, NEW_SITES_PATH, CERTIFICATES_PATH, FIREWALL_PATH, NEW_SITE_ROWS_PATH,
     AUTH_SOCKET_UNIT, AUTH_SERVICE_UNIT]) {
     tryRun("systemctl", ["disable", "--now", unit]);
   }
   for (const unit of [MANAGER_UNIT, RECONCILE_SERVICE, RECONCILE_TIMER, RECONCILE_PATH, ANCHOR_SERVICE,
-    NEW_SITES_SERVICE, NEW_SITES_PATH, CERTIFICATES_SERVICE, CERTIFICATES_PATH, NEW_SITE_ROWS_PATH,
+    NEW_SITES_SERVICE, NEW_SITES_PATH, CERTIFICATES_SERVICE, CERTIFICATES_PATH, FIREWALL_SERVICE, FIREWALL_PATH, NEW_SITE_ROWS_PATH,
     AUTH_SOCKET_UNIT, AUTH_SERVICE_UNIT]) {
     rmSync(`${SYSTEMD_DIR}/${unit}`, { force: true });
   }

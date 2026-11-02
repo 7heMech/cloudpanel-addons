@@ -111,7 +111,9 @@ stager:promote                     admin
 stager:prune                       admin
 stager:sites                       admin
 stager:watch-job                   admin stream
+system-tweaks:firewall             admin
 system-tweaks:install-updates      admin
+system-tweaks:set-firewall-protocol admin
 system-tweaks:set-panel-php        admin
 system-tweaks:set-real-ip          admin
 system-tweaks:set-updates          admin

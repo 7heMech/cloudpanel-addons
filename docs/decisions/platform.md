@@ -303,6 +303,13 @@ renewal wakes it too, so a hook does nothing when no site is waiting on it. The
 units exist while any installed addon declares `certificates`, and repair
 restarts the watcher as it does the new-site one.
 
+An addon that follows CloudPanel's Firewall page declares `firewall`.
+`clp-addons-firewall.path` watches ufw's `user.rules` and `user6.rules`, and its
+service runs `clp-addons sync-firewall`, each installed addon's `firewall` in
+catalog order. The units exist, and repair restarts the watcher, on the same
+terms as the certificate one. See
+[System Tweaks](system-tweaks.md#firewall).
+
 ## One way to watch a job
 
 `lib/job-stream.ts` owns both job-observation routes: `/api/jobs/:id` polls and

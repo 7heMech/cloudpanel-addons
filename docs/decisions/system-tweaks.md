@@ -3,7 +3,8 @@
 System Tweaks holds settings for the server rather than for CloudPanel's pages,
 which stay with [Panel Tweaks](panel-tweaks.md). PHP worker limits stay with
 [PHP Resources](php-resources.md). System Tweaks also owns the PHP version
-that runs the panel itself.
+that runs the panel itself, and the protocol of each rule on CloudPanel's own
+Firewall page.
 
 ## The page
 
@@ -318,3 +319,76 @@ file. A closed descriptor or a process that has exited can be skipped; an
 inspection failure for a process whose directory still exists stops the cleanup,
 and the pass reports it, as it does unlink errors other than a file that has
 already gone. The rest of the upkeep still runs.
+
+## Firewall
+
+CloudPanel's Firewall page (Admin → Security → Firewall) opens every rule for
+TCP only, so a UDP port such as WireGuard's or DNS needed ufw by hand. That does
+not last: every add, edit or delete there runs `ufw --force reset`, re-adds each
+row of its `firewall_rule` table with `ufw allow proto tcp from <source> to any
+port <range>`, adds UDP 443 for HTTP/3 from `0.0.0.0/0` and `::/0`, and enables
+ufw. Anything else, an edit to `/etc/ufw/*.rules` included, is gone after the
+next change on that page. The table has no protocol column, and Symfony refuses
+a field its form does not declare.
+
+So System Tweaks keeps the protocol itself, in
+`/var/lib/clp-addons/system-tweaks/firewall.json`, keyed by what the rule is:
+its port range, as CloudPanel's form stores it, and its source, as ufw writes
+it (`"51820 0.0.0.0/0": "udp"`). CloudPanel already refuses two rows with the
+same port range and source. A protocol applies only to rows that match exactly;
+every other row is TCP, CloudPanel's own, so choosing TCP deletes the entry.
+Rule ids are not used: a rebuilt table (a restore, a CloudPanel migration) can
+give an id to another rule, which a stored "UDP only" would then strip of TCP,
+SSH included, and ids say nothing on a box whose rules were renumbered. Rows
+whose source differs only in spelling (`203.0.113.9` and `203.0.113.9/32`) share
+a protocol.
+
+It adds a Protocol field (TCP, UDP, TCP and UDP) after Port Range on the add and
+edit forms, and a Protocol column after Port Range in the table, which fills
+from the `firewall` verb. The field has no name and shows once System Tweaks
+answers. Both forms send their Port Range, Source, protocol and, on the edit
+form, the rule's id to `set-firewall-protocol`, then submit. That refuses UDP
+alone for port 8443, which would close CloudPanel's own panel to TCP, and a
+change to a port range and source another rule already has, since CloudPanel
+then refuses the form as a duplicate or saves a row that shares the protocol. A
+failed request stops the form with an error. System Tweaks' page gets one line:
+the UDP ports the protocols open, with a link to the Firewall page.
+
+The form sends its choice before CloudPanel saves the row, and a pass can run in
+between, so an entry no row has matched yet waits an hour. One that matched and
+no longer does is forgotten at once: deleting a rule, or editing its port range
+or source, retires it. An entry left by a form CloudPanel refused can only ever
+apply to a rule with exactly its port range and source.
+
+`clp-addons-firewall.path` watches `/etc/ufw/user.rules` and `user6.rules`
+while System Tweaks is enabled, which is how it learns that CloudPanel rebuilt
+ufw; the 15-minute repair runs the same pass. `clp-addons sync-firewall` runs
+each installed addon's `firewall` hook. The pass waits until both files have
+been still for two seconds, since the rebuild writes them once per command,
+then, under its own lock, forgets entries as above and compares ufw's `### tuple ###` lines with the protocols. Sources are
+compared the way ufw records them: the network address, without `/32` or
+`/128`, IPv6 compressed. It repeats until a pass changes nothing, at most five
+times, so a rebuild still running when it starts is caught, and refuses to loop
+on commands ufw does not take. Its own writes wake the watcher once more, which
+finds nothing to do.
+
+It touches only what a protocol asks for. UDP adds `allow proto udp` and deletes
+CloudPanel's TCP rule for that port and source, unless another TCP rule for both
+still wants it; TCP and UDP adds the UDP rule. Additions run before deletions.
+The rules it changed are recorded, so a rule set back to TCP, or every rule when
+System Tweaks is disabled or uninstalled, goes back to CloudPanel's own: TCP
+for each row, and UDP 443 untouched. Rules the operator added for other ports
+are left alone, until CloudPanel's next rebuild removes them as it always did.
+ufw runs with argument arrays; ports and sources from the table must match a
+port, a range, an address or a CIDR, or the row is skipped.
+
+Disabling marks the protocols withdrawn under the same lock before putting
+ufw back, because that change wakes the watcher, which must not apply them
+again. A failure there warns and does not keep System Tweaks on. Enabling clears
+the mark and applies the kept protocols.
+
+CloudPanel v3: CloudPanel's own migration carries the rules, and keying by
+port range and source is what lets the choices follow them. Nothing for v3 is
+built yet. If v3 has a protocol of its own, the plan is to write each stored
+choice onto the v3 rule with the same port range and source, then retire this
+file and the page patch. Without the addon, a UDP rule comes back as TCP.
