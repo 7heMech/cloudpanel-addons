@@ -1,5 +1,6 @@
 import { expect, test } from "bun:test";
-import { minifyScript, minifyStyles, twigSafe } from "../tools/minify-assets";
+import { bundleStyles, minifyScript, twigSafe } from "../tools/browser-assets";
+import DNS_STYLE from "../addons/dns/app/views.css" with { type: "text" };
 
 const glob = (pattern: string) => [...new Bun.Glob(pattern).scanSync({ absolute: true })].sort();
 const scripts = glob("{cli,lib,manager,addons}/**/*.client.js");
@@ -27,7 +28,7 @@ test("minified scripts keep their top-level names and stay valid Twig text", asy
 });
 
 test("minified stylesheets keep their placeholders and stay valid Twig text", async () => {
-  const minified = await minifyStyles(styles);
+  const minified = await bundleStyles(styles, true);
   for (const path of styles) {
     const source = await Bun.file(path).text();
     const out = minified.get(path)!;
@@ -35,6 +36,12 @@ test("minified stylesheets keep their placeholders and stay valid Twig text", as
     expect({ path, ROW_MENU_CLASS: count(out, "ROW_MENU_CLASS") }).toEqual({ path, ROW_MENU_CLASS: count(source, "ROW_MENU_CLASS") });
     expect({ path, twig: TWIG_OPENER.test(out) }).toEqual({ path, twig: false });
   }
+});
+
+test("a stylesheet's @import is inlined at runtime and in the build", async () => {
+  expect(DNS_STYLE).not.toContain("@import");
+  expect(DNS_STYLE).toContain('.fleet-table tbody tr[aria-selected="true"]');
+  for (const [path, text] of await bundleStyles(styles, true)) expect({ path, imports: text.includes("@import") }).toEqual({ path, imports: false });
 });
 
 test("no code depends on a comment the minifier strips", async () => {

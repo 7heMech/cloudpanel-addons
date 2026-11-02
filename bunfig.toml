@@ -1,0 +1,4 @@
+preload = ["./tools/dev-assets.ts"]
+
+[test]
+preload = ["./tools/dev-assets.ts"]

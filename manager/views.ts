@@ -3,7 +3,7 @@
 import { ADDONS, addonHandler, addonNews } from "../cli/addon-catalog";
 import { CLI_VERSION } from "../cli/release";
 import { esc, escJs, htmlResponse } from "../lib/app-http";
-import { JOB_STYLE, JOB_WATCH_JS, renderLayout } from "../lib/app-ui";
+import { JOB_WATCH_JS, renderLayout } from "../lib/app-ui";
 import { mountPath } from "../lib/mount";
 import { UPDATE_PATH, changelogUrl } from "../lib/update-ui";
 import type { CliUpdateInfo } from "../lib/update-check";
@@ -180,7 +180,7 @@ function managerPage(
     brand: "CloudPanel Addons",
     base: "/addons",
     nav: [],
-    css: JOB_STYLE + MANAGER_INDEX_CSS,
+    css: MANAGER_INDEX_CSS,
     script: MANAGER_INDEX_JS + JOB_WATCH_JS + (live ? `
 const managerJobTarget = CLP_ROOT.querySelector('[data-manager-job-status]');
 watchJob('${escJs(live.id)}', managerJobTarget ? managerJobTarget.closest('[data-manager-job-card]') : null, managerJobFinished);

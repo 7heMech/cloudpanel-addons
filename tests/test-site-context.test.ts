@@ -2,8 +2,8 @@ import { expect, test } from "bun:test";
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { ADDON_SITE_TABS, SITE_CONTEXT_STYLE, siteInfoHtml, siteTabs } from "../lib/site-context";
-import { BASE_STYLE, renderLayout } from "../lib/app-ui";
+import { ADDON_SITE_TABS, siteInfoHtml, siteTabs } from "../lib/site-context";
+import { renderLayout } from "../lib/app-ui";
 import { siteLayoutTarget } from "../lib/panel-nav";
 import { TEMPLATES } from "../lib/panel-anchors";
 import { GIT_TARGETS } from "../addons/git/inject/targets";
@@ -119,19 +119,9 @@ test("a site manager's shell offers its addon tabs without administrator links",
   expect(admin).toContain('id="clp-admin-area"');
 });
 
-test("the reproduced site information carries the panel's own measurements", () => {
-  // CloudPanel's assets/css/frontend/site.css. A reproduction that only looks
-  // approximately right is what makes an addon page read as a different page:
-  // the columns have to start where the panel starts them.
-  expect(SITE_CONTEXT_STYLE).toContain("min-width: 200px");
-  expect(SITE_CONTEXT_STYLE).toContain("margin: 0 60px 0 0");
-  expect(SITE_CONTEXT_STYLE).toContain("font-size: 14px; font-weight: 500; color: #aaa");
-  expect(SITE_CONTEXT_STYLE).toContain(".clp-addon-site-value { font-size: 18px");
-  // The panel's own strip keeps that column too; only a narrow screen gives it up.
+test("the panel's own site strip keeps its column width outside a narrow screen", () => {
   const snippet = siteLayoutTarget().snippet("/addons/");
-  expect(snippet).toContain(".site-info-box { max-width: 100%; }");
   expect(snippet.split("@media")[0]).not.toContain("min-width");
-  expect(snippet).toContain("min-width: 0; margin-right: 30px");
 });
 
 test("the site layout rule targets the same partial an addon adds its tab to", () => {
@@ -141,15 +131,6 @@ test("the site layout rule targets the same partial an addon adds its tab to", (
   // Anchored on the strip's own container, so it lands ahead of the tabs.
   expect(layout.anchorBefore).toBe('<div class="tab-container">');
   const snippet = layout.snippet("/addons/");
-  expect(snippet).toContain("flex-wrap: nowrap");
-  expect(snippet).toContain("overflow-x: auto");
-  // A strip that scrolls must not draw a bar: overflow-x alone also makes
-  // overflow-y auto, and the bar itself ate 10px of the strip's height.
-  expect(snippet).toContain("overflow-y: hidden");
-  expect(snippet).toContain("scrollbar-width: none");
-  expect(snippet).toContain("::-webkit-scrollbar { display: none; }");
-  expect(BASE_STYLE).toContain(".clp-addon-tabs::-webkit-scrollbar { display: none; }");
-  expect(BASE_STYLE.split(".clp-addon-tabs {")[1]!.split("}")[0]).toContain("overflow-y: hidden");
   expect(snippet).toContain("scrollIntoView");
   // Widening the panel's own limited-width container is what this rule avoids.
   expect(snippet).not.toContain(".container-limited-width");

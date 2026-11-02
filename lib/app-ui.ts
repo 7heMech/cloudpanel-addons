@@ -121,16 +121,6 @@ export function fleetFilterHtml(options: {
 export const FLEET_FOOTER_HTML = `<div class="empty" id="fleet-none" hidden>No site matches.</div>
 <div class="fleet-more" id="fleet-more" hidden><button class="btn" type="button" onclick="showAllSites()">Show all sites</button></div>`;
 
-/** Shared interaction and focus treatment for selectable site-table rows. */
-export function fleetRowSelectionStyle(tableClass: string): string {
-  return `
-.${tableClass} tbody tr { cursor: pointer; transition: background-color .15s, box-shadow .15s; }
-.${tableClass} tbody tr:hover { background: rgb(38 125 221 / 6%); }
-.${tableClass} tbody tr[aria-selected="true"] { background: rgb(38 125 221 / 12%); box-shadow: inset 4px 0 var(--primary); }
-.${tableClass} tbody tr:focus-visible { outline: 2px solid var(--accent); outline-offset: -3px; }
-`;
-}
-
 /**
  * Shared selection for the Cloudflare, PHP and SMTP site tables: which rows
  * there are, which are picked, and the mouse and keyboard ways to pick them.
@@ -163,19 +153,9 @@ export { THEME_INIT_JS };
 import BASE_CLIENT_JS from "./assets/app-ui.client.js" with { type: "text" };
 export { BASE_CLIENT_JS };
 
-/**
- * Styling for a job's progress page, used by every addon that runs work in the
- * background. Appended after BASE_STYLE by the addon that needs it, so the
- * state colours here override the container-state palette above only on the
- * pages that draw a job.
- */
-import JOB_STYLE from "./assets/job.css" with { type: "text" };
-export { JOB_STYLE };
-
 /** A list of settings, one switch each; the client half opens a setting's wording on a phone. */
-import TWEAK_ROW_STYLE from "./assets/tweak-rows.css" with { type: "text" };
 import TWEAK_ROW_JS from "./assets/tweak-rows.client.js" with { type: "text" };
-export { TWEAK_ROW_STYLE, TWEAK_ROW_JS };
+export { TWEAK_ROW_JS };
 
 /**
  * The client half of the job progress page: paint an update, and follow a job
@@ -205,9 +185,8 @@ export { JOB_WATCH_JS };
  * it with `jobProgressHtml` and the client half follows every one it finds
  * with `followJobProgress(onFinished)`, so a reload picks the job up again.
  */
-import JOB_PROGRESS_STYLE from "./assets/job-progress.css" with { type: "text" };
 import JOB_PROGRESS_JS from "./assets/job-progress.client.js" with { type: "text" };
-export { JOB_PROGRESS_STYLE, JOB_PROGRESS_JS };
+export { JOB_PROGRESS_JS };
 
 /** What the bar needs of a job; both addons' job views carry it. */
 export interface SiteJobProgress {

@@ -1,4 +1,4 @@
-import { minifyAssetsPlugin } from "./minify-assets";
+import { minifyAssetsPlugin } from "./browser-assets";
 
 // One binary: the CLI and every addon's manager, selected at runtime by
 // `clp-addons serve`, sharing one copy of the Bun runtime. recon showed avx2 on

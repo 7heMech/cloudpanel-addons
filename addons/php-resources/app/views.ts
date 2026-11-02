@@ -1,7 +1,7 @@
 import CLIENT_JS_BODY from "./views.client.js" with { type: "text" };
 import { esc } from "../../../lib/app-http";
 import {
-  ATTENTION_RANK, FLEET_FOOTER_HTML, FLEET_ROW_SELECTION_JS, fleetFilterHtml, filterWord, valueFilters, fleetRowSelectionStyle, renderLayout,
+  ATTENTION_RANK, FLEET_FOOTER_HTML, FLEET_ROW_SELECTION_JS, fleetFilterHtml, filterWord, valueFilters, renderLayout,
 } from "../../../lib/app-ui";
 import { mountPath } from "../../../lib/mount";
 import {
@@ -15,7 +15,7 @@ const BASE = mountPath("php-resources");
 // are in lib/app-ui; only what this addon alone draws is here.
 import VIEWS_CSS from "./views.css" with { type: "text" };
 
-const STYLE = VIEWS_CSS + fleetRowSelectionStyle("php-sites-table");
+const STYLE = VIEWS_CSS;
 
 interface Field {
   key: keyof PoolProfile;

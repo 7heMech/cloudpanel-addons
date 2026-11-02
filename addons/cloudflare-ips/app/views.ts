@@ -1,7 +1,7 @@
 import CLIENT_JS_BODY from "./views.client.js" with { type: "text" };
 import { esc } from "../../../lib/app-http";
 import {
-  FLEET_FOOTER_HTML, FLEET_ROW_SELECTION_JS, fleetFilterHtml, fleetRowSelectionStyle, renderLayout,
+  FLEET_FOOTER_HTML, FLEET_ROW_SELECTION_JS, fleetFilterHtml, renderLayout,
 } from "../../../lib/app-ui";
 import { mountPath } from "../../../lib/mount";
 import type { CloudflareState } from "./service";
@@ -13,7 +13,7 @@ const plural = (count: number, word: string): string => `${count} ${word}${count
 // from lib/app-ui so this addon looks like the rest of the manager.
 import VIEWS_CSS from "./views.css" with { type: "text" };
 
-const STYLE = VIEWS_CSS + fleetRowSelectionStyle("cloudflare-site-table");
+const STYLE = VIEWS_CSS;
 
 export const CLIENT_JS = `
 ${FLEET_ROW_SELECTION_JS}

@@ -5,7 +5,7 @@
 
 import { esc, escJs } from "../../../lib/app-http";
 import {
-  ATTENTION_RANK, FLEET_FOOTER_HTML, FLEET_ROW_SELECTION_JS, JOB_STYLE, JOB_WATCH_JS, fleetFilterHtml, filterWord, valueFilters, fleetRowSelectionStyle, jobStateClass, jobStateLabel,
+  ATTENTION_RANK, FLEET_FOOTER_HTML, FLEET_ROW_SELECTION_JS, JOB_WATCH_JS, fleetFilterHtml, filterWord, valueFilters, jobStateClass, jobStateLabel,
   renderLayout, whenText,
 } from "../../../lib/app-ui";
 import { mountPath } from "../../../lib/mount";
@@ -44,7 +44,7 @@ export function layout(
     brand: "Instatic CMS",
     base: BASE,
     nav: [],
-    css: STYLE + JOB_STYLE + fleetRowSelectionStyle("instatic-table"),
+    css: STYLE,
     script: JOB_WATCH_JS + FLEET_ROW_SELECTION_JS + CLIENT_JS,
     updateNotice,
     admin,

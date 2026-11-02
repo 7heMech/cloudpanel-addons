@@ -1,3 +1,4 @@
+@import "../lib/assets/job.css";
 
 .addon-list { padding: 0; }
 .addon-list > h2 { margin: 0; padding: 18px 24px; border-bottom: 1px solid var(--border); font-size: 16px; }

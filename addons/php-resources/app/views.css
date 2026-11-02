@@ -1,3 +1,4 @@
+@import "../../../lib/assets/fleet-row-selection.css";
 .name-cell { max-width:340px; }
 .numeric { text-align:right; font-variant-numeric:tabular-nums; }
 .limit-cell { white-space:nowrap; }

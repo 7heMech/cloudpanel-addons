@@ -1,3 +1,4 @@
+@import "../../../lib/assets/fleet-row-selection.css";
 .numeric { text-align:right; font-variant-numeric:tabular-nums; }
 .card-header p.hint { margin:5px 0 0; }
 .smtp-setup { border-color:var(--primary); }
