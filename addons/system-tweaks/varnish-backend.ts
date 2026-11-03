@@ -59,7 +59,8 @@ function sites(db: Database): Site[] {
     "SELECT domain_name, user, varnish_cache, vhost_template FROM site ORDER BY domain_name",
   ).all().flatMap((row) => {
     const domain = String(row.domain_name ?? "");
-    if (normalizeIdentityHostname(domain) !== domain || typeof row.vhost_template !== "string") return [];
+    // No glob characters: nginx reads `*` in an include path as a mask.
+    if (normalizeIdentityHostname(domain) !== domain || !/^[a-z0-9.-]+$/.test(domain) || typeof row.vhost_template !== "string") return [];
     return [{ domain, user: String(row.user ?? ""), varnish: Number(row.varnish_cache) === 1, template: row.vhost_template }];
   });
 }

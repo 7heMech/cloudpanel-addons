@@ -398,7 +398,8 @@ back, administrators' included. Switching off removes the drop-in, puts the
 placeholder back in the stored vhosts and the checked line in the rendered ones,
 reloads, then removes each include no rendered vhost names, so one CloudPanel
 rendered from the old stored vhost meanwhile still loads; a rendered vhost that
-is not root's alone refuses it, since its include is about to go. The page's "On" also needs the
+is not root's alone refuses it, since its include is about to go. A switch-off
+that fails there puts the guard back at once, since the setting stays on. The page's "On" also needs the
 drop-in in place and no stored vhost holding the placeholder.
 
 The guard also sees only new saves. A value saved before it was in place stays in

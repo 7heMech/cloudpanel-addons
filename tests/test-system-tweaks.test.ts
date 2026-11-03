@@ -6,7 +6,7 @@ import { join } from "node:path";
 import type { CommandResult } from "../cli/action-common";
 import { inspectPhpGuard, reconcilePhpGuard, type PhpGuardOptions } from "../cli/php-guard";
 import {
-  executeSystemTweaksAction, restoreSystemTweaks, systemTweaksMaintenance, systemTweaksUpkeep, withdrawSystemTweaks,
+  executeSystemTweaksAction, readSettings, restoreSystemTweaks, systemTweaksMaintenance, systemTweaksUpkeep, withdrawSystemTweaks,
   type SystemTweaksOptions, type SystemTweaksState,
 } from "../addons/system-tweaks/action";
 import {
@@ -160,6 +160,7 @@ interface Box {
   fpm: { failTest: boolean; status: number; loaded: boolean; commands: string[] };
   vhostGuardPaths: { script: string; pool: string };
   valuesDb: string;
+  varnish: { failDaemonReload: boolean };
 }
 
 const VALUES_SCHEMA = `
@@ -305,8 +306,12 @@ function box(options: { installed?: boolean; timers?: Record<string, string>; fa
   values.close();
   const nginxUnit = join(dir, "nginx.service");
   writeFileSync(nginxUnit, "[Service]\nExecStartPre=/usr/sbin/nginx -t -q\nExecReload=/usr/sbin/nginx -s reload\n");
-  const varnishRun = (command: string, args: string[]): CommandResult =>
-    command === "systemctl" && args[0] === "show" ? ok(`${nginxUnit}\n`) : ok();
+  const varnish = { failDaemonReload: false };
+  const varnishRun = (command: string, args: string[]): CommandResult => {
+    if (command === "systemctl" && args[0] === "show") return ok(`${nginxUnit}\n`);
+    if (command === "systemctl" && args[0] === "daemon-reload" && varnish.failDaemonReload) return { ok: false, stdout: "", stderr: "Access denied" };
+    return ok();
+  };
   const tmpRoot = join(dir, "tmp-cleanup");
   mkdirSync(join(tmpRoot, "tmp"), { recursive: true });
   mkdirSync(join(tmpRoot, "proc"));
@@ -321,7 +326,7 @@ function box(options: { installed?: boolean; timers?: Record<string, string>; fa
     paths: { phpRoot, fpmBinDir: sbin, rootUid: uid, optOutConfig: guardConfig, optOutSettings: settingsFile },
   };
   return {
-    aptDir, commands, timers, phpRoot, guardConfig, settingsFile, installed, nginxConf, panelConf, cloudflareIps, nginx, fpm, vhostGuardPaths, valuesDb,
+    aptDir, commands, timers, phpRoot, guardConfig, settingsFile, installed, nginxConf, panelConf, cloudflareIps, nginx, fpm, vhostGuardPaths, valuesDb, varnish,
     dropIn: join(aptDir, "52clp-addons-unattended-upgrades"),
     options: {
       processUid: 0,
@@ -854,6 +859,16 @@ test("a reload that fails while removing the guard puts the pool file back and k
   expect(existsSync(b.vhostGuardPaths.pool)).toBe(true);
   expect(existsSync(b.vhostGuardPaths.script)).toBe(true);
   expect((await act(b, ["state"])).vhostGuard).toMatchObject({ enabled: true, active: true });
+});
+
+test("Varnish backends that cannot be removed put the guard back, since the setting stays on", async () => {
+  const b = box();
+  await act(b, ["set-vhost-guard"], { enabled: true });
+  b.varnish.failDaemonReload = true;
+  await expect(act(b, ["set-vhost-guard"], { enabled: false })).rejects.toThrow("daemon-reload failed");
+  expect(existsSync(b.vhostGuardPaths.pool)).toBe(true);
+  expect(existsSync(b.vhostGuardPaths.script)).toBe(true);
+  expect(readSettings({ settingsFile: b.settingsFile, lockFile: "", rootUid: process.getuid!() }).blockVhostInjection).toBe(true);
 });
 
 test("the page shows the vhost guard as on, waiting for repair, or off", () => {

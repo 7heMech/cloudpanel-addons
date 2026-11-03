@@ -245,7 +245,13 @@ async function setVhostGuard(options: SystemTweaksOptions): Promise<SystemTweaks
       installVarnishBackends(options.varnishBackend);
     } else {
       removeVhostGuard(options.vhostGuard);
-      removeVarnishBackends(options.varnishBackend);
+      try {
+        removeVarnishBackends(options.varnishBackend);
+      } catch (error) {
+        // Still on, so the guard comes back now rather than at the next repair.
+        await installVhostGuard(options.vhostGuard).catch(() => queueVhostGuard(options.vhostGuard));
+        throw error;
+      }
       writeSettings(paths, { ...settings, blockVhostInjection: false });
     }
   });
@@ -390,7 +396,12 @@ export function withdrawSystemTweaks(options: SystemTweaksOptions = {}): void {
       if (settings.enabledTimers.length) writeSettings(paths, { ...settings, enabledTimers: [] });
       applyRealIp(false, options.realIp);
       removeVhostGuard(options.vhostGuard);
-      removeVarnishBackends(options.varnishBackend);
+      try {
+        removeVarnishBackends(options.varnishBackend);
+      } catch (error) {
+        queueVhostGuard(options.vhostGuard);
+        throw error;
+      }
     });
   } catch (error) {
     // The addon stays enabled, so its panel PHP choice comes back with it.
