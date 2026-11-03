@@ -100,12 +100,14 @@ first install. `install` takes no `--version`; changing version is `update`.
 
 ## Default selection
 
-The installer preselects Panel Tweaks, System Tweaks, Maintenance Mode, Terminal
-and Security Keys, each marked `preselected` in its addon definition. A default is useful on almost any box, needs no outside
-account, and changes nothing until used unless the change is itself protective.
-Addons that need a Cloudflare token or relay account, manage Postfix, or serve
-one task (Stager, Instatic, Git Deploy, PHP Resources) are chosen by hand, as are
-Cloudflare IP Access and WordPress Tools, which only some boxes want. The
+The installer preselects Panel Tweaks, System Tweaks, Maintenance Mode and
+Security Keys, each marked `preselected` in its addon definition. A default is
+useful on almost any box, needs no outside account, and changes nothing until
+used unless the change is itself protective. Addons that need a Cloudflare token
+or relay account, manage Postfix, or serve one task (Stager, Instatic, Git Deploy,
+PHP Resources) are chosen by hand, as are Cloudflare IP Access and WordPress
+Tools, which only some boxes want, and Terminal, which hands administrators a
+shell as any site's user. The
 selection only applies when the installer runs; `update` never adds an addon.
 
 ## Update behavior
