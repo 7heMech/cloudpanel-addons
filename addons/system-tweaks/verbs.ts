@@ -8,6 +8,7 @@ export const SYSTEM_TWEAKS_VERBS = {
   "set-real-ip": { web: "admin" },
   "set-vhost-guard": { web: "admin" },
   "set-panel-php": { web: "admin" },
+  "set-php-pools": { web: "admin" },
   firewall: { web: "admin" },
   "set-firewall-protocol": { web: "admin" },
 } as const;

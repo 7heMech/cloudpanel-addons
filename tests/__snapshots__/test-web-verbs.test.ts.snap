@@ -115,6 +115,7 @@ system-tweaks:firewall             admin
 system-tweaks:install-updates      admin
 system-tweaks:set-firewall-protocol admin
 system-tweaks:set-panel-php        admin
+system-tweaks:set-php-pools        admin
 system-tweaks:set-real-ip          admin
 system-tweaks:set-updates          admin
 system-tweaks:set-upload-guard     admin

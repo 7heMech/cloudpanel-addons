@@ -5,6 +5,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { CommandResult } from "../cli/action-common";
 import {
+  addonLogrotate, cloudpanelLogrotate, sitesWithOwnLogrotate,
   installVarnishBackends, removeVarnishBackends, syncVarnishBackends, varnishBackend, varnishBackendsActive,
   type VarnishBackendOptions,
 } from "../addons/system-tweaks/varnish-backend";
@@ -67,7 +68,7 @@ function fixture(nginxTest = true): Fixture {
       run,
       paths: {
         panelDb: db, homeRoot: join(dir, "home"), passwdFile: join(dir, "passwd"), vhostDir: join(dir, "sites-enabled"),
-        includeDir: join(dir, "varnish"), logDir: join(dir, "nginx-logs"),
+        includeDir: join(dir, "varnish"), logDir: join(dir, "nginx-logs"), logrotateDir: join(dir, "logrotate.d"),
         dropIn: join(dir, "nginx.service.d", "zz-clp-addons-varnish.conf"), bin: "/usr/local/bin/clp-addons", vhostUid: process.getuid!(),
       },
     },
@@ -280,4 +281,35 @@ test("a rendered vhost whose placeholders cannot be read back still gets root's 
   syncVarnishBackends(f.options);
   expect(vhost(f)).not.toContain("/home/shop/logs");
   expect(varnishBackendsActive(f.options)).toBe(true);
+});
+
+test("CloudPanel's logrotate file rotates the site's own folders as its user and nginx's as root, and comes back on switch-off", () => {
+  const f = fixture();
+  const dir = join(f.dir, "logrotate.d");
+  mkdirSync(dir, { recursive: true });
+  // As CloudPanel writes it: its template, without a final newline.
+  writeFileSync(join(dir, "shop"), cloudpanelLogrotate("shop"));
+  chmodSync(join(dir, "shop"), 0o644);
+  installVarnishBackends(f.options);
+  const managed = readFileSync(join(dir, "shop"), "utf8");
+  expect(managed).toBe(addonLogrotate("shop", join(f.dir, "nginx-logs")));
+  expect(managed).toContain("/home/shop/logs/php/*.log /home/shop/logs/varnish-cache/*.log {\n    su shop shop\n");
+  expect(managed).toContain(`${join(f.dir, "nginx-logs")}/shop/*.log {\n    daily`);
+  expect(managed).not.toContain("su root root");
+  expect(sitesWithOwnLogrotate(f.options)).toEqual([]);
+
+  removeVarnishBackends(f.options);
+  expect(readFileSync(join(dir, "shop"), "utf8")).toBe(cloudpanelLogrotate("shop"));
+});
+
+test("a logrotate file edited by hand is left as it is and listed", () => {
+  const f = fixture();
+  const dir = join(f.dir, "logrotate.d");
+  mkdirSync(dir, { recursive: true });
+  const edited = `${cloudpanelLogrotate("shop").replace("rotate 7", "rotate 30")}\n`;
+  writeFileSync(join(dir, "shop"), edited);
+  chmodSync(join(dir, "shop"), 0o644);
+  installVarnishBackends(f.options);
+  expect(readFileSync(join(dir, "shop"), "utf8")).toBe(edited);
+  expect(sitesWithOwnLogrotate(f.options)).toEqual(["shop.example.com"]);
 });

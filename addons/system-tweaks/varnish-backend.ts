@@ -38,6 +38,7 @@ export const DEFAULT_VARNISH_BACKEND_PATHS = {
   vhostDir: DISTRO_NGINX_SITES_DIR,
   includeDir: "/etc/nginx/clp-addons-varnish",
   logDir: "/var/log/clp-addons-nginx",
+  logrotateDir: "/etc/logrotate.d",
   dropIn: `${SYSTEMD_DIR}/nginx.service.d/zz-clp-addons-varnish.conf`,
   unit: "nginx.service",
   bin: CLI_BIN,
@@ -327,6 +328,74 @@ function linkHomeLogs(site: Site, paths: VarnishBackendPaths, siteLogDir: string
   });
 }
 
+/** `/etc/logrotate.d/<user>` as CloudPanel's site creator writes it: everything in `~/logs`, rotated as root. */
+export function cloudpanelLogrotate(user: string): string {
+  return `/home/${user}/logs/*/*.log {
+    su root root
+    daily
+    missingok
+    rotate 7
+    dateext
+    dateformat -%Y-%m-%d
+    create 0640 ${user} ${user}
+    postrotate
+      /etc/init.d/nginx reload &> /dev/null || true
+    endscript
+}`;
+}
+
+/**
+ * The same rotation, with the folders the site's user owns rotated as that
+ * user, so a link it puts there gets only its own rights, and nginx's logs
+ * rotated as root in root's directory. The reload still runs as root.
+ */
+export function addonLogrotate(user: string, logDir: string): string {
+  const options = `    daily
+    missingok
+    rotate 7
+    dateext
+    dateformat -%Y-%m-%d`;
+  return `# Managed by clp-addons System Tweaks: the site's own logs rotate as its user, nginx's in root's directory.
+/home/${user}/logs/php/*.log /home/${user}/logs/varnish-cache/*.log {
+    su ${user} ${user}
+${options}
+    create 0640 ${user} ${user}
+}
+
+${logDir}/${user}/*.log {
+${options}
+    create 0640 root ${user}
+    postrotate
+      /etc/init.d/nginx reload &> /dev/null || true
+    endscript
+}
+`;
+}
+
+/** The site's logrotate file when only root can change it, as a regular file. */
+function logrotateText(site: Site, paths: VarnishBackendPaths): string | null {
+  const file = join(paths.logrotateDir, site.user);
+  try {
+    const info = lstatSync(file);
+    if (!info.isFile() || info.uid !== paths.vhostUid || (info.mode & 0o022) !== 0) return null;
+    return readFileSync(file, "utf8");
+  } catch {
+    return null;
+  }
+}
+
+/** Swap CloudPanel's logrotate file for the addon's, or back; a file edited by hand stays as it is. */
+function syncLogrotate(site: Site, paths: VarnishBackendPaths, enabled: boolean): void {
+  const current = logrotateText(site, paths);
+  if (current === null) return;
+  const cloudpanel = cloudpanelLogrotate(site.user);
+  const ours = addonLogrotate(site.user, paths.logDir);
+  const next = enabled
+    ? (current.replace(/\n$/, "") === cloudpanel ? ours : null)
+    : (current === ours ? cloudpanel : null);
+  if (next !== null) writeFileAtomic(join(paths.logrotateDir, site.user), next, { mode: 0o644 });
+}
+
 /** Keep the site's logs in root's directory, linked from `~/logs/nginx`, with the access-log format CloudPanel's Cloudflare setting asks for. */
 function syncSiteLogs(site: Site, paths: VarnishBackendPaths, owner: Owner): void {
   ensureRootDir(paths.logDir, 0o711, paths.vhostUid, 0);
@@ -353,6 +422,7 @@ function unstageSiteLogs(all: Site[], paths: VarnishBackendPaths, passwd: Map<st
   for (const site of all) {
     const owner = siteOwner(site, paths, passwd);
     const siteLogDir = join(paths.logDir, site.user);
+    syncLogrotate(site, paths, false);
     withHomeLogs(site, paths, (logsFd) => {
       const entry = at(logsFd, "nginx");
       try {
@@ -399,6 +469,7 @@ export function syncVarnishBackends(options: VarnishBackendOptions = {}): string
       // One site's logs must not keep the other sites' includes from being written.
       try { syncSiteLogs(site, paths, siteOwner(site, paths, passwd)); } catch {}
     }
+    try { syncLogrotate(site, paths, true); } catch {}
     if (!usesInclude(site, paths)) continue;
     const backend = varnishBackend(site.varnish, readVarnishSettings(paths.homeRoot, site.user));
     if (backend.refused) refused.push(site.domain);
@@ -634,6 +705,19 @@ function renderedHomeLogs(site: Site, paths: VarnishBackendPaths): boolean {
  * Sites whose rendered vhost still names a log in the user's home. The sync
  * leaves a vhost alone when root is not the only one who can write it.
  */
+/** Sites whose logrotate file is neither CloudPanel's nor the addon's, so the sync leaves it as it is. */
+export function sitesWithOwnLogrotate(options: VarnishBackendOptions = {}): string[] {
+  const { paths } = contextOf(options);
+  try {
+    return withPanelDb(paths.panelDb, sites).filter((site) => {
+      const current = logrotateText(site, paths) ?? (present(join(paths.logrotateDir, site.user)) ? "" : null);
+      return current !== null && current !== addonLogrotate(site.user, paths.logDir);
+    }).map((site) => site.domain);
+  } catch {
+    return [];
+  }
+}
+
 export function sitesWithHomeLogs(options: VarnishBackendOptions = {}): string[] {
   const { paths } = contextOf(options);
   try {
@@ -655,7 +739,8 @@ export function varnishBackendsActive(options: VarnishBackendOptions = {}): bool
       && !site.template.includes(`/home/${site.user}/logs/nginx/`)
       && !renderedHomeLogs(site, ctx.paths)
       && (!site.template.includes(varnishIncludeLine(ctx.paths.includeDir, site.domain)) || existsSync(join(ctx.paths.includeDir, `${site.domain}.conf`)))
-      && (!site.template.includes(`${ctx.paths.logDir}/${site.user}/`) || isRootDir(join(ctx.paths.logDir, site.user), ctx.paths.vhostUid)));
+      && (!site.template.includes(`${ctx.paths.logDir}/${site.user}/`) || isRootDir(join(ctx.paths.logDir, site.user), ctx.paths.vhostUid))
+      && logrotateText(site, ctx.paths)?.replace(/\n$/, "") !== cloudpanelLogrotate(site.user));
   } catch {
     return false;
   }

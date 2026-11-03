@@ -27,6 +27,7 @@ import { runTerminalPty } from "../addons/terminal/pty";
 import { runCertificateWork, runFirewallWork } from "./addon-hooks";
 import { runSyncSites } from "./new-sites";
 import { syncVarnishBackends } from "../addons/system-tweaks/varnish-backend";
+import { systemTweaksPhpPools } from "../addons/system-tweaks/action";
 
 /**
  * The privileged half of the three manager verbs.
@@ -148,6 +149,13 @@ async function main(): Promise<number> {
       if (rest.length) fatal("sync-varnish takes no arguments");
       const refused = syncVarnishBackends();
       if (refused.length) log.warn(`Varnish server refused, so these sites skip Varnish: ${refused.join(", ")}`);
+      return 0;
+    }
+    case "sync-php-pools": {
+      // Every PHP-FPM unit runs this after it starts or reloads; its failure does not stop PHP-FPM.
+      requireRoot("sync-php-pools");
+      if (rest.length) fatal("sync-php-pools takes no arguments");
+      systemTweaksPhpPools();
       return 0;
     }
     case "status": await cmdStatus(); return 0;

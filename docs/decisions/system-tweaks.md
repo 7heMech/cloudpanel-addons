@@ -440,6 +440,18 @@ switch-off that fails there puts the guard, drop-in and links back at once,
 since the setting stays on. The page's "On" also needs the drop-in in place and
 no stored vhost holding the placeholders or a log path in the home.
 
+CloudPanel writes `/etc/logrotate.d/<site user>` once, at site creation, from
+a template that rotates `/home/<site user>/logs/*/*.log` with `su root root`.
+logrotate then renames and creates files as root wherever a folder the user
+put in `~/logs` points. With the setting on, the sync swaps that exact file for
+two blocks: `~/logs/php` and `~/logs/varnish-cache` with `su <site user>
+<site user>`, and `/var/log/clp-addons-nginx/<site user>/*.log` as root with
+`create 0640 root <site user>`. logrotate still runs the `postrotate` nginx
+reload as root under `su`, and a rename through a link the user swapped in is
+refused, both checked on staging. A file that is neither CloudPanel's nor the
+addon's stays as it is and is listed on the page; one still CloudPanel's keeps
+the page from "On". Switching off puts CloudPanel's file back.
+
 The guard also sees only new saves. A value saved before it was in place stays in
 CloudPanel's database. So the state read and repair check every stored value the
 guard has a rule for, and each site's Varnish file as the sync reads it.
@@ -453,6 +465,42 @@ look at, not proof of an attack.
 `bun tests/integration/integration-vhost-guard.ts` runs the guard in Docker on
 PHP 8.1, 8.4 and 8.5 against the advisory's payloads, legitimate values,
 sessions for each role, and a Vhost editor save holding the Varnish placeholder.
+
+## PHP pool isolation
+
+CloudPanel's pools listen on `127.0.0.1:<port>`, from 11000 for PHP 7.1 to
+20000 for PHP 8.5 and the site ports above each, with `listen.allowed_clients
+= 127.0.0.1`. That stops other hosts, not other accounts on this one: any local
+process can send FastCGI with its own `SCRIPT_FILENAME` and `PHP_VALUE` and run
+PHP as the pool's user. Unix sockets with per-pool permissions would close it
+too, but CloudPanel renders `fastcgi_pass 127.0.0.1:{{php_fpm_port}};` into
+every vhost and rewrites pool files on PHP changes, so a socket would break the
+site whenever either side was re-rendered without the other.
+
+So `pool-isolation.ts` loads `table inet clp_addons_php_pools`. It reads every
+`[pool]` in `/etc/php/<version>/fpm/pool.d/*.conf` with a TCP `listen` and its
+`user`, and on output to `lo` accepts those ports from uid 0, the panel's user,
+nginx's `user`, and each port's own pool user (a set of `port . uid`), then
+rejects the rest with a TCP reset. Only those exact ports are matched, since
+memcached's 11211 sits inside the range. The table is loaded with `nft -f`
+from `/var/lib/clp-addons/system-tweaks/php-pools.nft` in one transaction that
+creates and deletes it first, so a refused file leaves the previous rules. ufw
+rewrites only its own chains in `ip filter`, so `ufw reload` and CloudPanel's
+Firewall page leave the table in place.
+
+CloudPanel reloads or restarts a version's unit with `systemctl` whenever it
+adds, moves or removes a pool. A drop-in on each `php<version>-fpm.service`
+runs `clp-addons sync-php-pools` as `ExecStartPre=` and after the unit's own
+`ExecReload=`; the start is also what loads the table after a reboot.
+`ExecStartPost=` is not used: the units are `Type=notify` with a `PIDFile=`,
+and with a start-post command systemd waits for a PID file PHP-FPM does not
+write, so the start timed out on staging. The sync reads the setting without
+the system tweaks lock, since a change on the page can be what reloads PHP-FPM,
+and removes the table again if the setting went off while it was loading.
+Repair and re-enabling the addon put the drop-ins and table back; switching
+off and disabling the addon remove both. "On" needs the drop-in on every
+version, the recorded ruleset equal to the one the pool files give now, and the
+table loaded.
 
 ## Abandoned temp files
 

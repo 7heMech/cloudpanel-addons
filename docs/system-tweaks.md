@@ -114,13 +114,36 @@ you edit a vhost: the **Vhost** editor refuses `{{varnish_proxy_pass}}`,
 `{{nginx_access_log}}`, `{{nginx_error_log}}` and log paths under `/home`.
 The addon only rewrites a vhost that root alone can write. The page lists any
 site whose vhost still writes logs in the home: make that file in
-`/etc/nginx/sites-enabled` mode 644, then run `clp-addons repair`. Turning the
-setting off puts the placeholders and the `~/logs/nginx` directories back.
+`/etc/nginx/sites-enabled` mode 644, then run `clp-addons repair`.
+
+CloudPanel's `/etc/logrotate.d/<user>` rotates everything in `~/logs` as root,
+so the site's user could point a folder there at any directory and have root
+rotate the logs in it. With the setting on, the file rotates `~/logs/php` and
+`~/logs/varnish-cache` as the site's user and the nginx logs as root in their
+own directory. A file someone edited by hand is left as it is and listed on
+the page. Turning the setting off puts the placeholders, the `~/logs/nginx`
+directories and CloudPanel's logrotate files back.
 
 The setting also lists saved site settings it would refuse now, such as a Root
 Directory saved before it was on, and Varnish servers it refuses. Check each
 one and that site's vhost in `/etc/nginx/sites-enabled/`. `clp-addons repair`
 prints the same list.
+
+## Isolate PHP pools
+
+CloudPanel runs each site's PHP on its own port on `127.0.0.1`, which any
+account on the server can connect to. A site's shell user, or a script on
+another site, could send PHP to that port and run it as that site's user, with
+its files and database password. With this setting on, only nginx, the panel
+and the site's own user can connect to the site's PHP port. Memcached, Redis
+and other local services are not affected.
+
+The rule lives in its own nftables table, `inet clp_addons_php_pools`, which
+CloudPanel's **Firewall** page and ufw leave alone. Each PHP-FPM version
+refreshes it when it starts or reloads, which is when CloudPanel adds, moves
+or removes a site. A tool that connects to another site's PHP port from its own
+account, such as a monitoring agent, stops working: run it as root or turn
+the setting off.
 
 ## Abandoned temp files
 
