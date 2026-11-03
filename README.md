@@ -1,10 +1,11 @@
 # CloudPanel Addons
 
-Extra features for [CloudPanel](https://www.cloudpanel.io/): staging copies,
-maintenance pages, Git deploys, one-click WordPress sign-in, and more. You sign
-in with your existing CloudPanel login.
+Security hardening and extra features for [CloudPanel](https://www.cloudpanel.io/).
+The default install blocks nginx config injection from panel accounts, forged
+visitor IPs and PHP's upload-progress exploit path. See
+[Hardening](SECURITY/HARDENING.md) for the full list.
 
-This is an unofficial project, not affiliated with or endorsed by CloudPanel.
+Unofficial, not affiliated with or endorsed by CloudPanel.
 
 ## Install
 
@@ -14,8 +15,9 @@ Log in to your server as **root** and run:
 curl -fsSL https://github.com/7heMech/cloudpanel-addons/releases/latest/download/install.sh | bash
 ```
 
-The installer asks which addons you want, and installs Docker or Postfix when a
-selected addon needs it. Updates are checked against GitHub build provenance.
+Asks which addons you want, installs dependencies for them if needed and checks
+provenance.
+
 Requires an x86-64 CloudPanel host.
 
 When it finishes, open the new **Addons** tab in CloudPanel.
