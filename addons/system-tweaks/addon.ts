@@ -1,6 +1,6 @@
 import { handle } from "./app/index";
 import {
-  restoreSystemTweaks, runSystemTweaksAction, systemTweaksFirewall, systemTweaksMaintenance, withdrawSystemTweaks,
+  restoreSystemTweaks, runSystemTweaksAction, systemTweaksFirewall, systemTweaksMaintenance, systemTweaksVarnish, withdrawSystemTweaks,
 } from "./action";
 import { SYSTEM_TWEAKS_TARGETS } from "./inject/targets";
 import type { AddonDefinition } from "../../cli/addon-catalog";
@@ -18,6 +18,10 @@ export const SYSTEM_TWEAKS_ADDON: AddonDefinition = {
   repair: {
     label: "system tweaks",
     run: () => systemTweaksMaintenance(),
+  },
+  newSites: {
+    label: "system tweaks Varnish backends",
+    run: () => systemTweaksVarnish(),
   },
   firewall: {
     label: "system tweaks firewall",

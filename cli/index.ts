@@ -26,6 +26,7 @@ import { runSmtpSubmit } from "../addons/smtp/submit";
 import { runTerminalPty } from "../addons/terminal/pty";
 import { runCertificateWork, runFirewallWork } from "./addon-hooks";
 import { runSyncSites } from "./new-sites";
+import { syncVarnishBackends } from "../addons/system-tweaks/varnish-backend";
 
 /**
  * The privileged half of the three manager verbs.
@@ -141,6 +142,14 @@ async function main(): Promise<number> {
       if (rest.length) fatal("sync-firewall takes no arguments");
       await runFirewallWork(installedAddons());
       return 0;
+    case "sync-varnish": {
+      // nginx's unit runs this before it loads the vhosts; its failure does not stop the reload.
+      requireRoot("sync-varnish");
+      if (rest.length) fatal("sync-varnish takes no arguments");
+      const refused = syncVarnishBackends();
+      if (refused.length) log.warn(`Varnish server refused, so these sites skip Varnish: ${refused.join(", ")}`);
+      return 0;
+    }
     case "status": await cmdStatus(); return 0;
     case "maintenance": await cmdMaintenance(rest); return 0;
     case "uninstall": cmdUninstall(rest); return 0;

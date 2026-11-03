@@ -362,27 +362,57 @@ still prepend the script; it puts the pool file back if the reload fails. Repair
 five seconds for Panel PHP's lock, so it does not hold the page's switches
 behind a Panel PHP change; the next run catches up.
 
-The guard sees only new saves. A value saved before it was in place stays in
-CloudPanel's database, and the Varnish server is not in the database at all:
-CloudPanel reads it from `/home/<site user>/.varnish-cache/settings.json`, which
-the site's own user owns and can write, and renders it whenever that site's
-vhost is next written. That is a path into the vhost the guard does not close:
-it sees only the panel's HTTP requests, and a site's shell or SFTP user, which a
-panel account can create, or any code running as that user, writes the file
-directly, and the next save of any of that site's settings renders it. So the
-state read and repair check every stored value the guard has a rule for, the
-Varnish file of every site included. The file is opened without following a
-link or waiting on a FIFO, and checked through the descriptor it opened, since
-its owner can swap it at any moment. `vhost-values.ts` holds the guard's
-rules again; `tests/fixtures/vhost-guard-values.json` is sent to the PHP by the
-integration test and checked against the TypeScript by `bun test`, so the two
-give the same answers. A value either would refuse is listed by site and field,
+The Varnish server never passes through the panel's form when the site's own
+user writes it: CloudPanel's `{{varnish_proxy_pass}}` is filled from
+`/home/<site user>/.varnish-cache/settings.json`, which that user owns, read with
+`sudo cat` whenever the site's vhost is rendered. A shell or SFTP user, which a
+panel account can create, or any code the site runs, could put directives there.
+Checking the file before CloudPanel reads it races its owner; making it
+root-owned does not hold, since the owner can rename it away, and CloudPanel's own
+Varnish save and `clpctl system:permissions:reset` hand it back. A check when nginx
+reloads races too: CloudPanel writes vhosts in place with `tee` and reloads in the
+background, so a second save can land between the check and nginx reading the file.
+
+So the setting also takes the file out of the vhost. Each site's stored vhost
+names `include /etc/nginx/clp-addons-varnish/<domain>.conf;` where it had the
+placeholder, and a drop-in on `nginx.service` runs `clp-addons sync-varnish`
+before nginx starts or reloads, which is how CloudPanel applies every save. The
+sync opens each settings file without following a link or waiting on a FIFO and
+writes the line CloudPanel would render: `proxy_pass http://<server>;` when Varnish
+is on and the server passes the guard's rule, CloudPanel's `127.0.0.1:8080`
+backend otherwise, and nothing for a site whose `varnish_cache` is off. A refused
+server logs to the journal, and the site goes on without Varnish. nginx reads only
+these root-owned lines, so what the file holds at any moment cannot reach it. The
+drop-in copies the unit's own `ExecStartPre=` and `ExecReload=` lines after the
+sync, and refuses a unit without exactly one of each; the sync's failure does not
+stop nginx loading the includes it last wrote.
+
+Switching on writes the includes and the drop-in, then swaps the placeholder in
+every stored vhost, and in each rendered one whose placeholders read back from its
+stored one, in one database transaction with `nginx -t` and a reload, undone
+together on failure. A rendered vhost that differs from its stored one keeps its
+line until CloudPanel renders it. The new-site watcher and repair do the same for
+new sites, whose stored vhost comes from CloudPanel's template with the
+placeholder. The guard refuses a Vhost editor save that brings the placeholder
+back, administrators' included. Switching off removes the drop-in, puts the
+placeholder back in the stored vhosts and the checked line in the rendered ones,
+reloads, then removes the includes; a rendered vhost that is not root's alone
+refuses it, since its include is about to go. The page's "On" also needs the
+drop-in in place and no stored vhost holding the placeholder.
+
+The guard also sees only new saves. A value saved before it was in place stays in
+CloudPanel's database. So the state read and repair check every stored value the
+guard has a rule for, and each site's Varnish file as the sync reads it.
+`vhost-values.ts` holds the guard's rules again;
+`tests/fixtures/vhost-guard-values.json` is sent to the PHP by the integration
+test and checked against the TypeScript by `bun test`, so the two give the same
+answers. A value either would refuse is listed by site and field,
 on the page and in repair's output. Nothing is changed: a match is a value to
 look at, not proof of an attack.
 
 `bun tests/integration/integration-vhost-guard.ts` runs the guard in Docker on
-PHP 8.1, 8.4 and 8.5 against the advisory's payloads, legitimate values and
-sessions for each role.
+PHP 8.1, 8.4 and 8.5 against the advisory's payloads, legitimate values,
+sessions for each role, and a Vhost editor save holding the Varnish placeholder.
 
 ## Abandoned temp files
 

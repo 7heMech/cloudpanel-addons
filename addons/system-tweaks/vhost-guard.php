@@ -72,6 +72,15 @@
         }
     }
 
+    // CloudPanel fills this from a file the site's own user can write; each
+    // site's vhost names a checked include in its place.
+    foreach ([$_GET, $_POST] as $input) {
+        $template = $input['vhost-template'] ?? null;
+        if (is_string($template) && str_contains($template, '{{varnish_proxy_pass}}')) {
+            $refuse('The Vhost cannot use {{varnish_proxy_pass}}, which CloudPanel fills from a file the site\'s own user can write. Keep the include line clp-addons put in its place.');
+        }
+    }
+
     // The Vhost editor and PageSpeed's settings are raw nginx config, so only an
     // administrator, who could change the server anyway, may save them.
     $raw = false;

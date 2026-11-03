@@ -1,9 +1,9 @@
 /**
  * Stored site settings that `vhost-guard.php` would refuse today. The guard
- * only sees new saves, so a value written before it was in place, or by a
- * site's own user into its Varnish settings file, stays in the vhost CloudPanel
- * renders. These are the guard's rules again; `tests/fixtures/vhost-guard-values.json`
- * holds both to the same answers.
+ * only sees new saves, so a value written before it was in place stays in the
+ * vhost CloudPanel renders; a Varnish server a site's own user wrote is left out
+ * of it by varnish-backend.ts. These are the guard's rules again;
+ * `tests/fixtures/vhost-guard-values.json` holds both to the same answers.
  */
 import { closeSync, constants, fstatSync, openSync, readFileSync } from "node:fs";
 import { isIP } from "node:net";
@@ -59,8 +59,8 @@ const FIELDS: { field: string; rule: VhostValueRule; sql: string }[] = [
   { field: "Python port", rule: "port", sql: "SELECT s.domain_name, p.port AS value FROM python_settings p JOIN site s ON s.id = p.site_id" },
 ];
 
-/** The Varnish server a site's own settings file names; null when there is none. */
-function varnishServer(homeRoot: string, user: string): string | null {
+/** A site's Varnish settings file, as its own user left it; null when there is none to read. */
+export function readVarnishSettings(homeRoot: string, user: string): Record<string, unknown> | null {
   if (!/^[a-z][-a-z0-9_]+$/i.test(user)) return null;
   let fd: number;
   try {
@@ -73,8 +73,8 @@ function varnishServer(homeRoot: string, user: string): string | null {
   try {
     const info = fstatSync(fd);
     if (!info.isFile() || info.size > 64 * 1024) return null;
-    const server = JSON.parse(readFileSync(fd, "utf8"))?.server;
-    return typeof server === "string" ? server : null;
+    const settings = JSON.parse(readFileSync(fd, "utf8"));
+    return settings !== null && typeof settings === "object" && !Array.isArray(settings) ? settings : null;
   } catch {
     return null;
   } finally {
@@ -92,8 +92,8 @@ export function storedVhostValues(options: VhostValuesOptions = {}): StoredVhost
     }
     // Every site's, not only those with Varnish on: switching it on later renders the file.
     for (const row of db.query("SELECT domain_name, user FROM site").all() as { domain_name: string; user: string }[]) {
-      const server = varnishServer(options.homeRoot ?? "/home", row.user);
-      if (server !== null && !VHOST_VALUE_RULES.varnishServer(server)) found.push({ domain: row.domain_name, field: "Varnish server" });
+      const server = readVarnishSettings(options.homeRoot ?? "/home", row.user)?.server;
+      if (typeof server === "string" && !VHOST_VALUE_RULES.varnishServer(server)) found.push({ domain: row.domain_name, field: "Varnish server" });
     }
   });
   return found;
