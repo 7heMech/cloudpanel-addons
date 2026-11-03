@@ -16,7 +16,7 @@ curl -fsSL https://github.com/7heMech/cloudpanel-addons/releases/latest/download
 ```
 
 Asks which addons you want, installs dependencies for them if needed and checks
-provenance.
+the download's SHA-256 checksum. Updates also check build provenance.
 
 Requires an x86-64 CloudPanel host.
 
