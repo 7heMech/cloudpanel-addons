@@ -66,6 +66,11 @@ CloudPanel reads from the tenant's writable settings file. Invalid servers fall
 back to the local backend without Varnish.
 [Guide](docs/system-tweaks.md#nginx-config-injection)
 
+**Site nginx logs.** Each site's logs move from its home to a directory only
+root can write, and `~/logs/nginx` becomes a link to it. The root nginx master
+can no longer be made to append to a file the tenant links in its place.
+[Guide](docs/system-tweaks.md#nginx-config-injection)
+
 **Forged visitor IPs.** The setting removes nginx's trust in IP headers from
 arbitrary public clients. Loopback and private proxies remain trusted; the
 panel also trusts Cloudflare.
