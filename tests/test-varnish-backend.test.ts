@@ -188,3 +188,18 @@ test("switching off puts the placeholder and the checked line back, then removes
   expect(f.commands).toEqual(["systemctl daemon-reload", "nginx -t", "systemctl reload nginx"]);
   expect(removeVarnishBackends(f.options)).toBe(false);
 });
+
+test("switching off keeps an include a rendered vhost still names", () => {
+  const f = fixture();
+  installVarnishBackends(f.options);
+  const line = INCLUDE_LINE(f.dir, "shop.example.com");
+  // CloudPanel rendering from the old stored vhost just after the revert read the file.
+  const run = f.options.run!;
+  f.options.run = (command, args) => {
+    const result = run(command, args);
+    if (command === "systemctl" && args[0] === "reload") writeFileSync(join(f.dir, "sites-enabled", "shop.example.com.conf"), rendered(line));
+    return result;
+  };
+  removeVarnishBackends(f.options);
+  expect(include(f)).toBe("proxy_pass http://127.0.0.1:6081;");
+});

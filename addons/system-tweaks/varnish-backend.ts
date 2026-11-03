@@ -238,7 +238,14 @@ export function removeVarnishBackends(options: VarnishBackendOptions = {}): bool
     }
     throw error;
   }
-  rmSync(ctx.paths.includeDir, { recursive: true, force: true });
+  // A vhost CloudPanel rendered from the old stored one meanwhile still names its include.
+  for (const name of existsSync(ctx.paths.includeDir) ? readdirSync(ctx.paths.includeDir) : []) {
+    const domain = name.replace(/\.conf$/, "");
+    if (!regularText(join(ctx.paths.vhostDir, name))?.includes(varnishIncludeLine(ctx.paths.includeDir, domain))) {
+      rmSync(join(ctx.paths.includeDir, name), { recursive: true, force: true });
+    }
+  }
+  if (existsSync(ctx.paths.includeDir) && readdirSync(ctx.paths.includeDir).length === 0) rmSync(ctx.paths.includeDir, { recursive: true });
   return true;
 }
 
