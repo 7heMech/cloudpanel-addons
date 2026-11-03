@@ -79,6 +79,8 @@ const CASES: Case[] = [
   { name: "the Vhost editor as a user posing as an administrator", args: [...raw("vhost-template", "server {}"), ...as("forged1")], refused: true },
   { name: "the Vhost editor with a session that does not exist", args: [...raw("vhost-template", "server {}"), ...as("missing1")], refused: true },
   { name: "the Vhost editor with a session id that climbs out", args: [...raw("vhost-template", "server {}"), ...as("../../x")], refused: true },
+  { name: "the Vhost editor bringing back the Varnish placeholder as an administrator", args: [...raw("vhost-template", "location / { {{varnish_proxy_pass}} }"), ...as("admin1")], refused: true },
+  { name: "the Vhost editor bringing back the Varnish placeholder in the query", args: [...query("vhost-template", "{{varnish_proxy_pass}}"), ...as("admin1")], refused: true },
   { name: "PageSpeed as an administrator", args: [...form("site_page_speed_settings", { settings: "pagespeed off;" }), ...as("admin1")], refused: false },
   { name: "PageSpeed as a user", args: [...form("site_page_speed_settings", { isEnabled: "1" }), ...as("user1")], refused: true },
 ];

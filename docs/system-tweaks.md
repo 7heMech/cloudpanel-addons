@@ -94,16 +94,23 @@ PageSpeed settings. Other users can still view the vhost.
 Refusals are logged to `/home/clp/logs/php/error.log` as `clp-addons vhost
 guard: refused ...`, with the reason. If an administrator is refused the Vhost
 editor and the reason is not a pending two-factor code, the guard could not read
-their session: switch the setting off until clp-addons is updated. Turning it off removes the guard; existing vhosts are not changed either
-way.
+their session: switch the setting off until clp-addons is updated. Turning it off removes the guard.
 
-It checks what is sent through the panel only. A site's own shell or SFTP user
-can still write a Varnish server into `~/.varnish-cache/settings.json`, which
-CloudPanel puts into the vhost the next time that site's settings are saved. The
-setting lists such values, and saved site settings it would refuse now, such as
-a Root Directory saved before it was on. Check each one and that site's vhost in
-`/etc/nginx/sites-enabled/`; the addon changes nothing itself. `clp-addons
-repair` prints the same list.
+A site's own shell or SFTP user can also write a Varnish server into
+`~/.varnish-cache/settings.json`, which CloudPanel renders into the vhost. With
+the setting on, each site's vhost includes
+`/etc/nginx/clp-addons-varnish/<domain>.conf` in place of
+`{{varnish_proxy_pass}}`, and the addon rewrites that file from the site's
+settings each time nginx reloads. A
+server that would add nginx directives is left out, and the site skips Varnish
+until it is fixed. Keep that include line when you edit a vhost: the **Vhost**
+editor refuses `{{varnish_proxy_pass}}`. Turning the setting off puts the
+placeholder back.
+
+The setting also lists saved site settings it would refuse now, such as a Root
+Directory saved before it was on, and Varnish servers it refuses. Check each
+one and that site's vhost in `/etc/nginx/sites-enabled/`. `clp-addons repair`
+prints the same list.
 
 ## Abandoned temp files
 

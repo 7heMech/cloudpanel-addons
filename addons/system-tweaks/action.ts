@@ -24,6 +24,7 @@ import {
 } from "./firewall";
 import { installVhostGuard, queueVhostGuard, removeVhostGuard, vhostGuardStatus, type VhostGuardOptions } from "./vhost-guard";
 import { storedVhostValues, type StoredVhostValue, type VhostValuesOptions } from "./vhost-values";
+import { installVarnishBackends, removeVarnishBackends, varnishBackendsActive, type VarnishBackendOptions } from "./varnish-backend";
 
 const SETTINGS_VERSION = 1;
 const MAX_INPUT_BYTES = 4 * 1024;
@@ -38,7 +39,7 @@ export interface SystemTweaksSettings {
   uploadProgressGuard: boolean;
   /** Stop nginx.conf trusting X-Real-IP from every address. */
   blockForgedRealIp: boolean;
-  /** Refuse panel input CloudPanel would write into a vhost unchecked. */
+  /** Refuse panel input CloudPanel would write into a vhost unchecked, and render Varnish backends from a checked include. */
   blockVhostInjection: boolean;
 }
 
@@ -75,6 +76,7 @@ export interface SystemTweaksOptions {
   realIp?: RealIpOptions;
   vhostGuard?: VhostGuardOptions;
   vhostValues?: VhostValuesOptions;
+  varnishBackend?: VarnishBackendOptions;
   panelPhp?: PanelPhpOptions;
   tmpCleanup?: TmpCleanupOptions;
   firewall?: FirewallOptions;
@@ -141,7 +143,11 @@ async function stateOf(options: SystemTweaksOptions): Promise<SystemTweaksState>
       fpms: uploadProgressStatus(options.uploadProgress),
     },
     realIp: { ...realIpStatus(options.realIp), blockForged: settings.blockForgedRealIp },
-    vhostGuard: { enabled: settings.blockVhostInjection, ...await vhostGuardStatus(options.vhostGuard), stored: storedOrError(options.vhostValues) },
+    vhostGuard: {
+      enabled: settings.blockVhostInjection,
+      active: (await vhostGuardStatus(options.vhostGuard)).active && varnishBackendsActive(options.varnishBackend),
+      stored: storedOrError(options.vhostValues),
+    },
     panelPhp: panelPhpOrError(options.panelPhp),
     firewall: firewallOrError(options.firewall),
   };
@@ -232,9 +238,22 @@ async function setVhostGuard(options: SystemTweaksOptions): Promise<SystemTweaks
   if (typeof body.enabled !== "boolean") failAction("enabled must be true or false");
   await withFileLock(paths.lockFile, 15, "another system tweaks change is still running", async () => {
     const settings = readSettings(paths);
-    if (body.enabled) await installVhostGuard(options.vhostGuard);
-    else removeVhostGuard(options.vhostGuard);
-    writeSettings(paths, { ...settings, blockVhostInjection: body.enabled as boolean });
+    if (body.enabled) {
+      await installVhostGuard(options.vhostGuard);
+      // On once the guard is, so repair finishes the includes if they fail here.
+      writeSettings(paths, { ...settings, blockVhostInjection: true });
+      installVarnishBackends(options.varnishBackend);
+    } else {
+      removeVhostGuard(options.vhostGuard);
+      try {
+        removeVarnishBackends(options.varnishBackend);
+      } catch (error) {
+        // Still on, so the guard comes back now rather than at the next repair.
+        await installVhostGuard(options.vhostGuard).catch(() => queueVhostGuard(options.vhostGuard));
+        throw error;
+      }
+      writeSettings(paths, { ...settings, blockVhostInjection: false });
+    }
   });
   return stateOf(options);
 }
@@ -328,6 +347,12 @@ export async function systemTweaksMaintenance(options: SystemTweaksOptions = {})
     failures.push(`vhost guard: ${errorMessage(error)}`);
   }
   try {
+    const varnish = systemTweaksVarnish(options);
+    if (varnish) lines.push(varnish);
+  } catch (error) {
+    failures.push(`Varnish backends: ${errorMessage(error)}`);
+  }
+  try {
     const stored = storedVhostValues(options.vhostValues);
     if (stored.length) lines.push(`stored site settings the vhost guard would refuse: ${stored.map((value) => `${value.domain} ${value.field}`).join(", ")}`);
   } catch (error) {
@@ -341,6 +366,12 @@ export async function systemTweaksMaintenance(options: SystemTweaksOptions = {})
   }
   if (failures.length) throw new Error([...failures, ...lines].join("; "));
   return lines.join("; ") || null;
+}
+
+/** Repair's and the new-site watcher's: every site's Varnish backend comes from its checked include. */
+export function systemTweaksVarnish(options: SystemTweaksOptions = {}): string | null {
+  return withSettingsLock(options, (_paths, settings) =>
+    settings.blockVhostInjection && installVarnishBackends(options.varnishBackend) ? "Varnish backends moved to checked includes" : null);
 }
 
 export function systemTweaksUpkeep(options: SystemTweaksOptions = {}): string | null {
@@ -365,6 +396,12 @@ export function withdrawSystemTweaks(options: SystemTweaksOptions = {}): void {
       if (settings.enabledTimers.length) writeSettings(paths, { ...settings, enabledTimers: [] });
       applyRealIp(false, options.realIp);
       removeVhostGuard(options.vhostGuard);
+      try {
+        removeVarnishBackends(options.varnishBackend);
+      } catch (error) {
+        queueVhostGuard(options.vhostGuard);
+        throw error;
+      }
     });
   } catch (error) {
     // The addon stays enabled, so its panel PHP choice comes back with it.

@@ -6,7 +6,7 @@ import { join } from "node:path";
 import type { CommandResult } from "../cli/action-common";
 import { inspectPhpGuard, reconcilePhpGuard, type PhpGuardOptions } from "../cli/php-guard";
 import {
-  executeSystemTweaksAction, restoreSystemTweaks, systemTweaksMaintenance, systemTweaksUpkeep, withdrawSystemTweaks,
+  executeSystemTweaksAction, readSettings, restoreSystemTweaks, systemTweaksMaintenance, systemTweaksUpkeep, withdrawSystemTweaks,
   type SystemTweaksOptions, type SystemTweaksState,
 } from "../addons/system-tweaks/action";
 import {
@@ -160,10 +160,11 @@ interface Box {
   fpm: { failTest: boolean; status: number; loaded: boolean; commands: string[] };
   vhostGuardPaths: { script: string; pool: string };
   valuesDb: string;
+  varnish: { failDaemonReload: boolean };
 }
 
 const VALUES_SCHEMA = `
-CREATE TABLE site (id INTEGER PRIMARY KEY, domain_name TEXT, user TEXT, root_directory TEXT, reverse_proxy_url TEXT, basic_auth_id INTEGER);
+CREATE TABLE site (id INTEGER PRIMARY KEY, domain_name TEXT, user TEXT, root_directory TEXT, reverse_proxy_url TEXT, basic_auth_id INTEGER, varnish_cache INTEGER DEFAULT 0, vhost_template TEXT DEFAULT '');
 CREATE TABLE blocked_bot (id INTEGER PRIMARY KEY, site_id INTEGER, name TEXT);
 CREATE TABLE blocked_ip (id INTEGER PRIMARY KEY, site_id INTEGER, ip TEXT);
 CREATE TABLE basic_auth (id INTEGER PRIMARY KEY, whitelisted_ips TEXT);
@@ -303,6 +304,14 @@ function box(options: { installed?: boolean; timers?: Record<string, string>; fa
   values.exec(VALUES_SCHEMA);
   values.exec("INSERT INTO site (id, domain_name, user, root_directory) VALUES (1, 'example.com', 'example', 'example.com');");
   values.close();
+  const nginxUnit = join(dir, "nginx.service");
+  writeFileSync(nginxUnit, "[Service]\nExecStartPre=/usr/sbin/nginx -t -q\nExecReload=/usr/sbin/nginx -s reload\n");
+  const varnish = { failDaemonReload: false };
+  const varnishRun = (command: string, args: string[]): CommandResult => {
+    if (command === "systemctl" && args[0] === "show") return ok(`${nginxUnit}\n`);
+    if (command === "systemctl" && args[0] === "daemon-reload" && varnish.failDaemonReload) return { ok: false, stdout: "", stderr: "Access denied" };
+    return ok();
+  };
   const tmpRoot = join(dir, "tmp-cleanup");
   mkdirSync(join(tmpRoot, "tmp"), { recursive: true });
   mkdirSync(join(tmpRoot, "proc"));
@@ -317,7 +326,7 @@ function box(options: { installed?: boolean; timers?: Record<string, string>; fa
     paths: { phpRoot, fpmBinDir: sbin, rootUid: uid, optOutConfig: guardConfig, optOutSettings: settingsFile },
   };
   return {
-    aptDir, commands, timers, phpRoot, guardConfig, settingsFile, installed, nginxConf, panelConf, cloudflareIps, nginx, fpm, vhostGuardPaths, valuesDb,
+    aptDir, commands, timers, phpRoot, guardConfig, settingsFile, installed, nginxConf, panelConf, cloudflareIps, nginx, fpm, vhostGuardPaths, valuesDb, varnish,
     dropIn: join(aptDir, "52clp-addons-unattended-upgrades"),
     options: {
       processUid: 0,
@@ -348,6 +357,13 @@ function box(options: { installed?: boolean; timers?: Record<string, string>; fa
         }),
       },
       vhostValues: { panelDb: valuesDb, homeRoot: join(dir, "home") },
+      varnishBackend: {
+        run: varnishRun,
+        paths: {
+          panelDb: valuesDb, homeRoot: join(dir, "home"), vhostDir: join(dir, "sites-enabled"),
+          includeDir: join(dir, "varnish"), dropIn: join(dir, "nginx.service.d", "zz-clp-addons-varnish.conf"), vhostUid: uid,
+        },
+      },
       tmpCleanup: { paths: { tmpDir: join(tmpRoot, "tmp"), procDir: join(tmpRoot, "proc"), passwd: join(tmpRoot, "passwd") }, panelDb },
       // No ufw in this fixture; tests/test-firewall.test.ts covers it.
       firewall: {
@@ -843,6 +859,16 @@ test("a reload that fails while removing the guard puts the pool file back and k
   expect(existsSync(b.vhostGuardPaths.pool)).toBe(true);
   expect(existsSync(b.vhostGuardPaths.script)).toBe(true);
   expect((await act(b, ["state"])).vhostGuard).toMatchObject({ enabled: true, active: true });
+});
+
+test("Varnish backends that cannot be removed put the guard back, since the setting stays on", async () => {
+  const b = box();
+  await act(b, ["set-vhost-guard"], { enabled: true });
+  b.varnish.failDaemonReload = true;
+  await expect(act(b, ["set-vhost-guard"], { enabled: false })).rejects.toThrow("daemon-reload failed");
+  expect(existsSync(b.vhostGuardPaths.pool)).toBe(true);
+  expect(existsSync(b.vhostGuardPaths.script)).toBe(true);
+  expect(readSettings({ settingsFile: b.settingsFile, lockFile: "", rootUid: process.getuid!() }).blockVhostInjection).toBe(true);
 });
 
 test("the page shows the vhost guard as on, waiting for repair, or off", () => {

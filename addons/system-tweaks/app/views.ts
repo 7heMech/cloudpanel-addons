@@ -351,7 +351,7 @@ function settingsCard(state: SystemTweaksState): string {
         key: "blockVhostInjection",
         title: "Block nginx config injection",
         description: [
-          "Refuses site settings CloudPanel would write into a vhost unchecked, such as a Root Directory holding nginx directives.",
+          "Refuses site settings CloudPanel would write into a vhost unchecked, such as a Root Directory or Varnish server holding nginx directives.",
           "Only administrators can save the Vhost editor and PageSpeed settings.",
         ],
         checked: state.vhostGuard.enabled,
