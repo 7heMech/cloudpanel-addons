@@ -320,6 +320,14 @@ function storedValuesWarning(stored: SystemTweaksState["vhostGuard"]["stored"]):
     stored.length > 10 ? `; and ${stored.length - 10} more` : ""}. Check each one and the site's vhost.`);
 }
 
+/** Sites whose vhost the sync leaves alone, so nginx still opens their logs in the user's home. */
+function homeLogsWarning(domains: string[]): string {
+  if (!domains.length) return "";
+  const listed = domains.slice(0, 10).map(esc).join(", ");
+  return warning(`These sites' vhosts still write nginx logs in the site user's home, where that user can point them at any file: ${listed}${
+    domains.length > 10 ? ` and ${domains.length - 10} more` : ""}. clp-addons rewrites a vhost only when root alone can write it: make each one in /etc/nginx/sites-enabled mode 644, then run clp-addons repair.`);
+}
+
 function vhostGuardLine(state: SystemTweaksState["vhostGuard"]): string {
   if (state.active) return `${badge("On", "ok")} <span>Panel input is checked before CloudPanel writes it into a vhost.</span>`;
   if (state.enabled) return `${badge("Not applied", "warn")} <span>Run clp-addons repair.</span>`;
@@ -352,11 +360,11 @@ function settingsCard(state: SystemTweaksState): string {
         title: "Block nginx config injection",
         description: [
           "Refuses site settings CloudPanel would write into a vhost unchecked, such as a Root Directory or Varnish server holding nginx directives.",
-          "Only administrators can save the Vhost editor and PageSpeed settings.",
+          "Only administrators can save the Vhost editor and PageSpeed settings, and site nginx logs move where only root can write.",
         ],
         checked: state.vhostGuard.enabled,
         onchange: "setVhostGuard(this)",
-        extra: `<p class="st-status">${vhostGuardLine(state.vhostGuard)}</p>${storedValuesWarning(state.vhostGuard.stored)}`,
+        extra: `<p class="st-status">${vhostGuardLine(state.vhostGuard)}</p>${storedValuesWarning(state.vhostGuard.stored)}${homeLogsWarning(state.vhostGuard.homeLogs)}`,
       })}
       </div>
     </div>`;

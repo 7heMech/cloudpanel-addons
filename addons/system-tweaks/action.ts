@@ -24,7 +24,7 @@ import {
 } from "./firewall";
 import { installVhostGuard, queueVhostGuard, removeVhostGuard, vhostGuardStatus, type VhostGuardOptions } from "./vhost-guard";
 import { storedVhostValues, type StoredVhostValue, type VhostValuesOptions } from "./vhost-values";
-import { installVarnishBackends, removeVarnishBackends, varnishBackendsActive, type VarnishBackendOptions } from "./varnish-backend";
+import { installVarnishBackends, removeVarnishBackends, sitesWithHomeLogs, varnishBackendsActive, type VarnishBackendOptions } from "./varnish-backend";
 
 const SETTINGS_VERSION = 1;
 const MAX_INPUT_BYTES = 4 * 1024;
@@ -48,7 +48,7 @@ export interface SystemTweaksState {
   settings: UpdateSettings;
   uploadProgress: { guard: boolean; fpms: FpmUploadProgress[] };
   realIp: RealIpStatus & { blockForged: boolean };
-  vhostGuard: { enabled: boolean; active: boolean; stored: StoredVhostValue[] | { error: string } };
+  vhostGuard: { enabled: boolean; active: boolean; stored: StoredVhostValue[] | { error: string }; homeLogs: string[] };
   panelPhp: PanelPhpStatus | { error: string };
   firewall: FirewallStatus | { error: string };
 }
@@ -147,6 +147,7 @@ async function stateOf(options: SystemTweaksOptions): Promise<SystemTweaksState>
       enabled: settings.blockVhostInjection,
       active: (await vhostGuardStatus(options.vhostGuard)).active && varnishBackendsActive(options.varnishBackend),
       stored: storedOrError(options.vhostValues),
+      homeLogs: settings.blockVhostInjection ? sitesWithHomeLogs(options.varnishBackend) : [],
     },
     panelPhp: panelPhpOrError(options.panelPhp),
     firewall: firewallOrError(options.firewall),
@@ -371,7 +372,7 @@ export async function systemTweaksMaintenance(options: SystemTweaksOptions = {})
 /** Repair's and the new-site watcher's: every site's Varnish backend comes from its checked include. */
 export function systemTweaksVarnish(options: SystemTweaksOptions = {}): string | null {
   return withSettingsLock(options, (_paths, settings) =>
-    settings.blockVhostInjection && installVarnishBackends(options.varnishBackend) ? "Varnish backends moved to checked includes" : null);
+    settings.blockVhostInjection && installVarnishBackends(options.varnishBackend) ? "Varnish backends and site nginx logs moved to root-owned paths" : null);
 }
 
 export function systemTweaksUpkeep(options: SystemTweaksOptions = {}): string | null {

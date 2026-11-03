@@ -872,15 +872,17 @@ test("Varnish backends that cannot be removed put the guard back, since the sett
 });
 
 test("the page shows the vhost guard as on, waiting for repair, or off", () => {
-  const html = (vhostGuard: SystemTweaksState["vhostGuard"]) => dashboardView({
+  const html = (partial: Omit<SystemTweaksState["vhostGuard"], "homeLogs"> & { homeLogs?: string[] }) => dashboardView({
     updates: updatesStatus({ run: () => ({ ok: false, stdout: "", stderr: "" }) }), settings: { ...DEFAULT_UPDATE_SETTINGS },
-    uploadProgress: { guard: true, fpms: [] }, realIp: { blockForged: true, trustsAnyAddress: false, problem: "" }, vhostGuard, panelPhp: { error: "" }, firewall: { error: "" },
+    uploadProgress: { guard: true, fpms: [] }, realIp: { blockForged: true, trustsAnyAddress: false, problem: "" }, vhostGuard: { homeLogs: [], ...partial }, panelPhp: { error: "" }, firewall: { error: "" },
   });
   expect(html({ enabled: true, active: true, stored: [] })).toContain("Panel input is checked before CloudPanel writes it into a vhost.");
   expect(html({ enabled: true, active: false, stored: [] })).toContain("Not applied");
   expect(html({ enabled: false, active: false, stored: [] })).toContain("Any panel account with a site can write nginx config");
   const flagged = html({ enabled: true, active: true, stored: [{ domain: "shop.example.com", field: "Root Directory" }] });
   expect(flagged).toContain("These saved site settings would be refused now, so they may hold nginx directives: shop.example.com: Root Directory.");
+  expect(html({ enabled: true, active: false, stored: [], homeLogs: ["shop.example.com"] }))
+    .toContain("These sites' vhosts still write nginx logs in the site user's home, where that user can point them at any file: shop.example.com.");
   expect(html({ enabled: true, active: true, stored: { error: "panel database is not readable" } })).toContain("Stored site settings could not be checked: panel database is not readable");
 });
 
@@ -999,7 +1001,7 @@ test("failed downloads retain the package URL in expandable details and escape t
   const updates = updatesStatus(b.options.updates);
   expect(updates.lastRun?.outcome).toBe("failed");
   expect(updates.lastRun?.message).toContain("php8.2-bcmath.deb");
-  const html = dashboardView({ updates, settings: { ...DEFAULT_UPDATE_SETTINGS }, uploadProgress: { guard: true, fpms: [] }, realIp: { blockForged: true, trustsAnyAddress: false, problem: "" }, vhostGuard: { enabled: true, active: true, stored: [] }, panelPhp: { error: "" }, firewall: { error: "" } });
+  const html = dashboardView({ updates, settings: { ...DEFAULT_UPDATE_SETTINGS }, uploadProgress: { guard: true, fpms: [] }, realIp: { blockForged: true, trustsAnyAddress: false, problem: "" }, vhostGuard: { enabled: true, active: true, stored: [], homeLogs: [] }, panelPhp: { error: "" }, firewall: { error: "" } });
   expect(html).toContain("A package download failed (HTTP 404).");
   expect(html).toContain('<details class="st-run-details"><summary>Failure details</summary>');
   expect(html).toContain("php8.2-bcmath.deb failed to download, aborting &lt;script&gt;");
@@ -1135,7 +1137,7 @@ test("the page shows update options only once updates are on, and says what sile
     uploadProgress: { guard: true, fpms: [{
       label: "PHP 8.2", version: "8.2", enabled: false, setBy: "clp-addons" as const,
       source: "/etc/php/8.2/fpm/conf.d/99-clp-addons-upload-progress.ini", offWithoutGuard: false, poolsOn: ["legacy.example.com"],
-    }] }, realIp: { blockForged: true, trustsAnyAddress: false, problem: "" }, vhostGuard: { enabled: true, active: true, stored: [] }, panelPhp: { error: "" }, firewall: { error: "" },
+    }] }, realIp: { blockForged: true, trustsAnyAddress: false, problem: "" }, vhostGuard: { enabled: true, active: true, stored: [], homeLogs: [] }, panelPhp: { error: "" }, firewall: { error: "" },
   };
   const now = Date.parse("2026-10-25T00:00:00Z");
   const outside = dashboardView(state, now);
@@ -1183,7 +1185,7 @@ test("the page names the UDP ports CloudPanel's Firewall page opens, in one line
   const b = box();
   const base = {
     updates: updatesStatus(b.options.updates), settings: { ...DEFAULT_UPDATE_SETTINGS }, uploadProgress: { guard: true, fpms: [] },
-    realIp: { blockForged: true, trustsAnyAddress: false, problem: "" }, vhostGuard: { enabled: true, active: true, stored: [] }, panelPhp: { error: "" },
+    realIp: { blockForged: true, trustsAnyAddress: false, problem: "" }, vhostGuard: { enabled: true, active: true, stored: [], homeLogs: [] }, panelPhp: { error: "" },
   };
   const open = dashboardView({ ...base, firewall: { available: true, protocols: { 5: "udp" }, udpPorts: ["53", "3478-3479"] } });
   expect(open).toContain(`<br>UDP ports open from CloudPanel's <a href="/admin/firewall">Firewall</a> page: 53, 3478-3479.</p>`);

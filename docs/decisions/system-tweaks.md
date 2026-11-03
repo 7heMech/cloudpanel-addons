@@ -387,20 +387,58 @@ drop-in copies the unit's own `ExecStartPre=` and `ExecReload=` lines after the
 sync, and refuses a unit without exactly one of each; the sync's failure does not
 stop nginx loading the includes it last wrote.
 
-Switching on writes the includes and the drop-in, then swaps the placeholder in
-every stored vhost, and in each rendered one whose placeholders read back from its
-stored one, in one database transaction with `nginx -t` and a reload, undone
-together on failure. A rendered vhost that differs from its stored one keeps its
-line until CloudPanel renders it. The new-site watcher and repair do the same for
-new sites, whose stored vhost comes from CloudPanel's template with the
-placeholder. The guard refuses a Vhost editor save that brings the placeholder
-back, administrators' included. Switching off removes the drop-in, puts the
-placeholder back in the stored vhosts and the checked line in the rendered ones,
-reloads, then removes each include no rendered vhost names, so one CloudPanel
-rendered from the old stored vhost meanwhile still loads; a rendered vhost that
-is not root's alone refuses it, since its include is about to go. A switch-off
-that fails there puts the guard back at once, since the setting stays on. The page's "On" also needs the
-drop-in in place and no stored vhost holding the placeholder.
+The same sync also moves each site's nginx logs out of `/home/<site user>`.
+CloudPanel renders `{{nginx_access_log}}` and `{{nginx_error_log}}` as paths in
+`/home/<site user>/logs/nginx/`, which that user owns. The root nginx master
+opens both files, following links, on start, reload, `nginx -t` and the `USR1`
+log reopen, and appends to whatever they point at. A root-owned
+`~/logs/nginx` in place would not hold, since the user owns `~/logs` and can
+rename it away. So each stored and rendered vhost names
+`/var/log/clp-addons-nginx/<site user>/access.log` and `error.log` instead, in a
+directory only root can write (`0750 root:<site user>`, under `0711 root:root`).
+
+The sync makes `~/logs/nginx` a link to that directory, so CloudPanel's **Logs**
+tab (a `sudo ls` and read of `/home/<site user>/logs/nginx/`), the site user's
+shell and `/etc/logrotate.d/<site user>` keep working. Logrotate's `create`
+then leaves a new log owned by the site user in root's directory, which it can
+write but not replace with a link. The first time, the sync copies each
+log-named file from the old directory, opened without following links or
+blocking on a FIFO and only with one link, at most its last 64 MiB. It removes a
+file once it has copied all of it, and moves the old directory aside as
+`nginx.before-clp-addons-<time>` when anything is left. Everything it does in
+the user's directories goes through directory descriptors opened with
+`O_NOFOLLOW`, and it sets owner and mode on open descriptors, never by path, so
+a link the user swaps in meanwhile is never followed. `chown -R`, which
+CloudPanel's `clpctl system:permissions:reset` runs on the home, changes the
+link itself, not its target. Both were checked on staging.
+
+The sync also rewrites CloudPanel's two exact log lines in each rendered vhost
+before nginx loads it, with the access-log format the site's Cloudflare setting
+asks for. That covers a new site before the watcher reaches it, a rendered vhost
+whose placeholders cannot be read back, and CloudPanel's Cloudflare form, which
+re-renders the stored line with its old format. It leaves a vhost that root is
+not alone in being able to write, such as one with mode `0664`. The page lists
+each site whose rendered vhost still names a log in the home, and is not "On"
+while there is one.
+
+Switching on writes the includes, log directories and the drop-in, then swaps
+the Varnish and log placeholders in every stored vhost, and in each rendered one
+whose placeholders read back from its stored one, in one database transaction
+with `nginx -t` and a reload, undone together on failure. A rendered vhost that
+differs from its stored one keeps its Varnish line until CloudPanel renders it,
+but gets the log lines. The new-site watcher and repair do the same for new
+sites, whose stored vhost comes from CloudPanel's template with the
+placeholders. The guard refuses a Vhost editor save that brings
+`{{varnish_proxy_pass}}`, `{{nginx_access_log}}`, `{{nginx_error_log}}` or an
+`access_log` or `error_log` under `/home` back, administrators' included.
+Switching off removes the drop-in, puts `~/logs/nginx` back as the user's
+directory with a copy of the logs, puts the placeholders back in the stored
+vhosts and the home and Varnish lines back in the rendered ones, reloads, then
+removes each include and log directory no rendered vhost names; a rendered vhost
+that is not root's alone refuses it, since the paths it names are about to go. A
+switch-off that fails there puts the guard, drop-in and links back at once,
+since the setting stays on. The page's "On" also needs the drop-in in place and
+no stored vhost holding the placeholders or a log path in the home.
 
 The guard also sees only new saves. A value saved before it was in place stays in
 CloudPanel's database. So the state read and repair check every stored value the

@@ -97,15 +97,25 @@ editor and the reason is not a pending two-factor code, the guard could not read
 their session: switch the setting off until clp-addons is updated. Turning it off removes the guard.
 
 A site's own shell or SFTP user can also write a Varnish server into
-`~/.varnish-cache/settings.json`, which CloudPanel renders into the vhost. With
-the setting on, each site's vhost includes
-`/etc/nginx/clp-addons-varnish/<domain>.conf` in place of
+`~/.varnish-cache/settings.json`, which CloudPanel renders into the vhost, or
+replace `~/logs/nginx/access.log` and `error.log` with links to any file, which
+the root nginx master then appends to. With the setting on, each site's vhost
+includes `/etc/nginx/clp-addons-varnish/<domain>.conf` in place of
 `{{varnish_proxy_pass}}`, and the addon rewrites that file from the site's
-settings each time nginx reloads. A
-server that would add nginx directives is left out, and the site skips Varnish
-until it is fixed. Keep that include line when you edit a vhost: the **Vhost**
-editor refuses `{{varnish_proxy_pass}}`. Turning the setting off puts the
-placeholder back.
+settings each time nginx reloads. A server that would add nginx directives is
+left out, and the site skips Varnish until it is fixed.
+
+Each site's nginx logs move to `/var/log/clp-addons-nginx/<user>/`, which only
+root can write, and `~/logs/nginx` becomes a link to it, so CloudPanel's
+**Logs** tab, the site user's shell and logrotate keep working. If the old
+directory held anything besides logs, it stays as
+`~/logs/nginx.before-clp-addons-<time>`. Keep the include and log lines when
+you edit a vhost: the **Vhost** editor refuses `{{varnish_proxy_pass}}`,
+`{{nginx_access_log}}`, `{{nginx_error_log}}` and log paths under `/home`.
+The addon only rewrites a vhost that root alone can write. The page lists any
+site whose vhost still writes logs in the home: make that file in
+`/etc/nginx/sites-enabled` mode 644, then run `clp-addons repair`. Turning the
+setting off puts the placeholders and the `~/logs/nginx` directories back.
 
 The setting also lists saved site settings it would refuse now, such as a Root
 Directory saved before it was on, and Varnish servers it refuses. Check each

@@ -548,6 +548,7 @@ function systemTweaksPreviewState(url: URL): SystemTweaksState {
     vhostGuard: {
       enabled: url.searchParams.get("vhost") !== "off", active: url.searchParams.get("vhost") !== "off",
       stored: url.searchParams.has("injected") ? [{ domain: "shop.example.com", field: "Root Directory" }, { domain: "blog.example.com", field: "Varnish server" }] : [],
+      homeLogs: url.searchParams.has("homelogs") ? ["shop.example.com"] : [],
     },
     uploadProgress: {
       guard,

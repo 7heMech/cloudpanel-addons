@@ -81,6 +81,11 @@ const CASES: Case[] = [
   { name: "the Vhost editor with a session id that climbs out", args: [...raw("vhost-template", "server {}"), ...as("../../x")], refused: true },
   { name: "the Vhost editor bringing back the Varnish placeholder as an administrator", args: [...raw("vhost-template", "location / { {{varnish_proxy_pass}} }"), ...as("admin1")], refused: true },
   { name: "the Vhost editor bringing back the Varnish placeholder in the query", args: [...query("vhost-template", "{{varnish_proxy_pass}}"), ...as("admin1")], refused: true },
+  { name: "the Vhost editor bringing back the access log placeholder as an administrator", args: [...raw("vhost-template", "server { {{nginx_access_log}} }"), ...as("admin1")], refused: true },
+  { name: "the Vhost editor bringing back the error log placeholder as an administrator", args: [...raw("vhost-template", "server { {{nginx_error_log}} }"), ...as("admin1")], refused: true },
+  { name: "the Vhost editor pointing access_log under /home as an administrator", args: [...raw("vhost-template", "server {\n  access_log /home/shop/logs/nginx/access.log main;\n}"), ...as("admin1")], refused: true },
+  { name: "the Vhost editor pointing error_log at //home as an administrator", args: [...raw("vhost-template", "server {\n  error_log //home/shop/logs/nginx/error.log;\n}"), ...as("admin1")], refused: true },
+  { name: "the Vhost editor with managed /var/log/clp-addons-nginx log paths as an administrator", args: [...raw("vhost-template", "server {\n  access_log /var/log/clp-addons-nginx/shop/access.log main;\n  error_log /var/log/clp-addons-nginx/shop/error.log;\n}"), ...as("admin1")], refused: false },
   { name: "PageSpeed as an administrator", args: [...form("site_page_speed_settings", { settings: "pagespeed off;" }), ...as("admin1")], refused: false },
   { name: "PageSpeed as a user", args: [...form("site_page_speed_settings", { isEnabled: "1" }), ...as("user1")], refused: true },
 ];
