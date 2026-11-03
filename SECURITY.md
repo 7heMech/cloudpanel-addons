@@ -69,7 +69,12 @@ back to the local backend without Varnish.
 **Site nginx logs.** Each site's logs move from its home to a directory only
 root can write, and `~/logs/nginx` becomes a link to it. The root nginx master
 can no longer be made to append to a file the tenant links in its place.
+logrotate rotates the tenant's own log folders as the tenant, not as root.
 [Guide](docs/system-tweaks.md#nginx-config-injection)
+
+**PHP pools.** Only nginx and a site's own user can connect to the site's
+PHP-FPM port, so one tenant cannot run PHP as another.
+[Guide](docs/system-tweaks.md#isolate-php-pools)
 
 **Forged visitor IPs.** The setting removes nginx's trust in IP headers from
 arbitrary public clients. Loopback and private proxies remain trusted; the
