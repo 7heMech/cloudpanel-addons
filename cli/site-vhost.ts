@@ -53,8 +53,12 @@ export function learnVhostMapContent(template: string, renderedInput: string): V
     let value: string;
     if (index + 1 < count) {
       const next = literals[index + 1]!;
-      const position = remaining.indexOf(next);
+      let position = remaining.indexOf(next);
       if (position === -1) return reject(`the rendered vhost does not contain the text after {{${key}}}`);
+      const cfInclude = "include /etc/nginx/cloudflare/ips;";
+      if (keys[index] === "nginx_access_log" && remaining.slice(position + next.length).startsWith(`${cfInclude}${next}`)) {
+        position += next.length + cfInclude.length;
+      }
       value = remaining.slice(0, position);
     } else {
       const tail = literals[count]!;
@@ -161,6 +165,10 @@ export function replaceSiteVhost(paths: SiteVhostPaths, domain: string, body: st
   const previous = readFileSync(conf, "utf8");
   const learned = learnVhostMapContent(stored, previous);
   if (!learned.map) throw new Error(`the vhost of ${domain} could not be read: ${learned.reason}`);
+  const managedAccess = /^[ \t]*(access_log[ \t]+\/var\/log\/clp-addons-nginx\/[^\s;]+\/access\.log[ \t]+(?:main|cloudflare)[ \t]*;)/m.exec(stored)?.[1];
+  const managedError = /^[ \t]*(error_log[ \t]+\/var\/log\/clp-addons-nginx\/[^\s;]+\/error\.log[ \t]*;)/m.exec(stored)?.[1];
+  if (managedAccess) body = body.replaceAll("{{nginx_access_log}}", managedAccess);
+  if (managedError) body = body.replaceAll("{{nginx_error_log}}", managedError);
   const root = learned.map.get("root");
   if (rootDirectory !== undefined && root) learned.map.set("root", root.replace(/\/htdocs\/[^;\s]*;/, `/htdocs/${rootDirectory};`));
   const rendered = renderVhostBodyResult(body, learned.map);

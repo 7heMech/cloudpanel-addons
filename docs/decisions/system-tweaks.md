@@ -387,20 +387,89 @@ drop-in copies the unit's own `ExecStartPre=` and `ExecReload=` lines after the
 sync, and refuses a unit without exactly one of each; the sync's failure does not
 stop nginx loading the includes it last wrote.
 
-Switching on writes the includes and the drop-in, then swaps the placeholder in
-every stored vhost, and in each rendered one whose placeholders read back from its
-stored one, in one database transaction with `nginx -t` and a reload, undone
-together on failure. A rendered vhost that differs from its stored one keeps its
-line until CloudPanel renders it. The new-site watcher and repair do the same for
-new sites, whose stored vhost comes from CloudPanel's template with the
-placeholder. The guard refuses a Vhost editor save that brings the placeholder
-back, administrators' included. Switching off removes the drop-in, puts the
-placeholder back in the stored vhosts and the checked line in the rendered ones,
-reloads, then removes each include no rendered vhost names, so one CloudPanel
-rendered from the old stored vhost meanwhile still loads; a rendered vhost that
-is not root's alone refuses it, since its include is about to go. A switch-off
-that fails there puts the guard back at once, since the setting stays on. The page's "On" also needs the
-drop-in in place and no stored vhost holding the placeholder.
+The same sync also moves each site's nginx logs out of `/home/<site user>`.
+CloudPanel renders `{{nginx_access_log}}` and `{{nginx_error_log}}` as paths in
+`/home/<site user>/logs/nginx/`, which that user owns. The root nginx master
+opens both files, following links, on start, reload, `nginx -t` and the `USR1`
+log reopen, and appends to whatever they point at. A root-owned
+`~/logs/nginx` in place would not hold, since the user owns `~/logs` and can
+rename it away. So each stored and rendered vhost names
+`/var/log/clp-addons-nginx/<site user>/access.log` and `error.log` instead, in a
+directory only root can write (`0750 root:<site user>`, under `0711 root:root`).
+
+The sync makes `~/logs/nginx` a link to that directory, so CloudPanel's **Logs**
+tab (a `sudo ls` and read of `/home/<site user>/logs/nginx/`), the site user's
+shell and `/etc/logrotate.d/<site user>` keep working. Logrotate's `create`
+then leaves a new log owned by the site user in root's directory, which it can
+write but not replace with a link. The first time, the sync copies each
+log-named file from the old directory, opened without following links or
+blocking on a FIFO and only with one link, at most its last 64 MiB. It removes a
+file once it has copied all of it, and moves the old directory aside as
+`nginx.before-clp-addons-<time>` when anything is left. Everything it does in
+the user's directories goes through directory descriptors opened with
+`O_NOFOLLOW`, and it sets owner and mode on open descriptors, never by path, so
+a link the user swaps in meanwhile is never followed. `chown -R`, which
+CloudPanel's `clpctl system:permissions:reset` runs on the home, changes the
+link itself, not its target.
+
+A deleted site's directory goes at the next sync. CloudPanel deletes a site's
+vhost, reloads nginx, deletes the user with its home and logrotate file, then the
+row; the reload's sync still sees the row, and the new-site watcher's, which the
+row's deletion wakes, removes the directory. The sync removes a directory only
+when no site row names its user and no vhost in `sites-enabled`, read through
+links, names a path in it, and `rmSync` removes links without following them.
+The logs go at once rather than being kept a while: CloudPanel deletes the
+copies in the home at the same time, and a new site given the same user name
+would otherwise get the old site's logs, since the sync gives the directory to
+the user's new group.
+
+The sync also rewrites CloudPanel's two exact log lines in each rendered vhost
+before nginx loads it, with the access-log format the site's Cloudflare setting
+asks for. That covers a new site before the watcher reaches it, a rendered vhost
+whose placeholders cannot be read back, and CloudPanel's Cloudflare form, which
+re-renders the stored line with its old format. It leaves a vhost that root is
+not alone in being able to write, such as one with mode `0664`. The page lists
+each site whose rendered vhost still names a log in the home, and is not "On"
+while there is one.
+
+Switching on writes the includes, log directories and the drop-in, then swaps
+the Varnish and log placeholders in every stored vhost, and in each rendered one
+whose placeholders read back from its stored one, in one database transaction
+with `nginx -t` and a reload, undone together on failure. A rendered vhost that
+differs from its stored one keeps its Varnish line until CloudPanel renders it,
+but gets the log lines. The new-site watcher and repair do the same for new
+sites, whose stored vhost comes from CloudPanel's template with the
+placeholders. The guard refuses a Vhost editor save that brings
+`{{varnish_proxy_pass}}`, `{{nginx_access_log}}`, `{{nginx_error_log}}` or an
+`access_log` or `error_log` under `/home` back, administrators' included.
+Switching off removes the drop-in, puts `~/logs/nginx` back as the user's
+directory with a copy of the logs, puts the placeholders back in the stored
+vhosts and the home and Varnish lines back in the rendered ones, reloads, then
+removes each include no rendered vhost names; a rendered vhost that is not
+root's alone refuses it, since the paths it names are about to go. The copy
+follows the same rule as switching on: log-named files only, read without
+following links, at most the last 64 MiB of each. So each log directory no
+rendered vhost names is moved to `/var/log/clp-addons-nginx-kept/<site
+user>-<time>`, in a directory only root can open, and only the files copied in
+full and unchanged since are deleted from it. What is left, such as a larger
+log, another file, or the lines nginx wrote between the copy and the reload,
+stays there for the operator; a move that fails leaves the directory where it
+is. A
+switch-off that fails there puts the guard, drop-in and links back at once,
+since the setting stays on. The page's "On" also needs the drop-in in place and
+no stored vhost holding the placeholders or a log path in the home.
+
+CloudPanel writes `/etc/logrotate.d/<site user>` once, at site creation, from
+a template that rotates `/home/<site user>/logs/*/*.log` with `su root root`.
+logrotate then renames and creates files as root wherever a folder the user
+put in `~/logs` points. With the setting on, the sync swaps that exact file for
+two blocks: `~/logs/php` and `~/logs/varnish-cache` with `su <site user>
+<site user>`, and `/var/log/clp-addons-nginx/<site user>/*.log` as root with
+`create 0640 root <site user>`. logrotate still runs the `postrotate` nginx
+reload as root under `su`, and a rename through a link the user swapped in is
+refused. A file that is neither CloudPanel's nor the
+addon's stays as it is and is listed on the page; one still CloudPanel's keeps
+the page from "On". Switching off puts CloudPanel's file back.
 
 The guard also sees only new saves. A value saved before it was in place stays in
 CloudPanel's database. So the state read and repair check every stored value the
@@ -415,6 +484,60 @@ look at, not proof of an attack.
 `bun tests/integration/integration-vhost-guard.ts` runs the guard in Docker on
 PHP 8.1, 8.4 and 8.5 against the advisory's payloads, legitimate values,
 sessions for each role, and a Vhost editor save holding the Varnish placeholder.
+
+## PHP pool isolation
+
+CloudPanel's pools listen on `127.0.0.1:<port>`, from 11000 for PHP 7.1 to
+20000 for PHP 8.5 and the site ports above each, with `listen.allowed_clients
+= 127.0.0.1`. That stops other hosts, not other accounts on this one: any local
+process can send FastCGI with its own `SCRIPT_FILENAME` and `PHP_VALUE` and run
+PHP as the pool's user. Unix sockets with per-pool permissions would close it
+too, but CloudPanel renders `fastcgi_pass 127.0.0.1:{{php_fpm_port}};` into
+every vhost and rewrites pool files on PHP changes, so a socket would break the
+site whenever either side was re-rendered without the other.
+
+So `pool-isolation.ts` loads `table inet clp_addons_php_pools`. It reads every
+`[pool]` in `/etc/php/<version>/fpm/pool.d/*.conf` with a TCP `listen` and its
+`user`, and on output to `lo` accepts those ports from uid 0, the panel's user,
+nginx's `user`, and each port's own pool user (a set of `port . uid`), then
+rejects the rest with a TCP reset. Only those exact ports are matched, since
+memcached's 11211 sits inside the range. The table is loaded with `nft -f`
+from `/var/lib/clp-addons/system-tweaks/php-pools.nft` in one transaction that
+creates and deletes it first, so a refused file leaves the previous rules. ufw
+rewrites only its own chains in `ip filter`, so `ufw reload` and CloudPanel's
+Firewall page leave the table in place.
+
+CloudPanel reloads or restarts a version's unit with `systemctl` whenever it
+adds, moves or removes a pool, after writing the pool files. A drop-in on each
+`php<version>-fpm.service` runs `clp-addons sync-php-pools` as `ExecStartPre=`,
+which also loads the table after a reboot. On a reload the unit's own
+`ExecReload=` sends `USR2` and returns before PHP-FPM has bound the new ports,
+so the sync runs both before and after it. The drop-in resets `ExecReload=` and
+lists `sync-php-pools --before-reload`, the unit's own reload lines as systemd
+assembles them from its file and the other drop-ins, then `sync-php-pools`.
+The first loads the pool files' ports together with those already in the
+table, so a new or moved port is closed before PHP-FPM listens on it. PHP-FPM
+takes over its sockets and lets the old ones go only after `systemctl reload`
+returns, about 80 ms later on staging, so the second, and every other sync,
+keeps a loaded port no pool file names while `/proc/net/tcp` or `tcp6` still
+shows something listening on it, and drops it at the next sync after that. A
+kept port admits only the user it had, and only while no pool file names it,
+so a port handed to another site's pool admits that pool's user alone. Both
+syncs ignore failure so PHP-FPM still reloads, and the 15-minute repair loads
+the table again. A unit whose reload lines cannot be
+read, such as one with a continued line, gets the sync after its reload only.
+The page's "On" compares each drop-in with the unit's current reload lines, so
+a package update that changes them is fixed by the next repair.
+`ExecStartPost=` is not used: the units are `Type=notify` with a `PIDFile=`,
+and with a start-post command systemd waits for a PID file PHP-FPM does not
+write, so the start times out. The sync reads the setting without
+the system tweaks lock, since a change on the page can be what reloads PHP-FPM,
+and removes the table again if the setting went off while it was loading.
+Repair and re-enabling the addon put the drop-ins and table back; switching
+off and disabling the addon remove both. "On" needs the drop-in on every
+version as the unit's reload lines give it now, the table loaded, and its
+ruleset closing every pool file's port to the right users; a port it keeps
+closed until the next sync does not count against it.
 
 ## Abandoned temp files
 

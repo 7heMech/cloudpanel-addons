@@ -72,12 +72,29 @@
         }
     }
 
-    // CloudPanel fills this from a file the site's own user can write; each
-    // site's vhost names a checked include in its place.
+    // CloudPanel fills these from a file or directory the site's own user can
+    // write or replace with a symlink; each site's vhost names root-owned paths
+    // in their place.
     foreach ([$_GET, $_POST] as $input) {
         $template = $input['vhost-template'] ?? null;
-        if (is_string($template) && str_contains($template, '{{varnish_proxy_pass}}')) {
+        if (!is_string($template)) continue;
+        if (str_contains($template, '{{varnish_proxy_pass}}')) {
             $refuse('The Vhost cannot use {{varnish_proxy_pass}}, which CloudPanel fills from a file the site\'s own user can write. Keep the include line clp-addons put in its place.');
+        }
+        // nginx resolves `..` in a log path, and a relative one from its own
+        // prefix, so a path with `..` is refused wherever it seems to lead.
+        $homeLog = false;
+        preg_match_all('~(?:\A|[;{}\s])(?:access_log|error_log)\s+[\'"]?([^\'"\s;{}]+)~', $template, $logPaths);
+        foreach ($logPaths[1] as $path) {
+            $collapsed = $path;
+            do {
+                $previous = $collapsed;
+                $collapsed = str_replace(['//', '/./'], '/', $collapsed);
+            } while ($collapsed !== $previous);
+            if (preg_match('~(?:\A|/)\.\.(?:/|\z)~', $path) === 1 || preg_match('~\A/home(?:/|\z)~', $collapsed) === 1) $homeLog = true;
+        }
+        if (str_contains($template, '{{nginx_access_log}}') || str_contains($template, '{{nginx_error_log}}') || $homeLog) {
+            $refuse('The Vhost cannot use {{nginx_access_log}}, {{nginx_error_log}} or log paths under /home or with .., which the site\'s own user can replace with a symlink. Keep the /var/log/clp-addons-nginx/ lines clp-addons put in their place.');
         }
     }
 

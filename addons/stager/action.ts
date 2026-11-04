@@ -946,6 +946,16 @@ export function composeVhostBodyContent(sourceBodyInput: string, targetBodyInput
 
   let candidate = foldServerName(stripRedirectBlock(sourceBody), source, nameLine);
   candidate = candidate.replace(hostnameBoundary(source), `$1${target}$2`);
+  const targetAccess = /^[ \t]*(access_log[ \t]+\/var\/log\/clp-addons-nginx\/[^\s;]+\/access\.log[ \t]+(?:main|cloudflare)[ \t]*;)/m.exec(targetBody)?.[1]
+    ?? (targetBody.includes("{{nginx_access_log}}") ? "{{nginx_access_log}}" : null);
+  const targetError = /^[ \t]*(error_log[ \t]+\/var\/log\/clp-addons-nginx\/[^\s;]+\/error\.log[ \t]*;)/m.exec(targetBody)?.[1]
+    ?? (targetBody.includes("{{nginx_error_log}}") ? "{{nginx_error_log}}" : null);
+  if (targetAccess) {
+    candidate = candidate.replace(/^([ \t]*)access_log[ \t]+\/var\/log\/clp-addons-nginx\/[^\s;]+\/access\.log[ \t]+(?:main|cloudflare)[ \t]*;/gm, `$1${targetAccess}`);
+  }
+  if (targetError) {
+    candidate = candidate.replace(/^([ \t]*)error_log[ \t]+\/var\/log\/clp-addons-nginx\/[^\s;]+\/error\.log[ \t]*;/gm, `$1${targetError}`);
+  }
   const lines = candidate.split("\n");
   while (lines.length && /^\s*$/.test(lines[0]!)) lines.shift();
   candidate = lines.join("\n").replace(/\n+$/g, "");

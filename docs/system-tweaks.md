@@ -97,20 +97,58 @@ editor and the reason is not a pending two-factor code, the guard could not read
 their session: switch the setting off until clp-addons is updated. Turning it off removes the guard.
 
 A site's own shell or SFTP user can also write a Varnish server into
-`~/.varnish-cache/settings.json`, which CloudPanel renders into the vhost. With
-the setting on, each site's vhost includes
-`/etc/nginx/clp-addons-varnish/<domain>.conf` in place of
+`~/.varnish-cache/settings.json`, which CloudPanel renders into the vhost, or
+replace `~/logs/nginx/access.log` and `error.log` with links to any file, which
+the root nginx master then appends to. With the setting on, each site's vhost
+includes `/etc/nginx/clp-addons-varnish/<domain>.conf` in place of
 `{{varnish_proxy_pass}}`, and the addon rewrites that file from the site's
-settings each time nginx reloads. A
-server that would add nginx directives is left out, and the site skips Varnish
-until it is fixed. Keep that include line when you edit a vhost: the **Vhost**
-editor refuses `{{varnish_proxy_pass}}`. Turning the setting off puts the
-placeholder back.
+settings each time nginx reloads. A server that would add nginx directives is
+left out, and the site skips Varnish until it is fixed.
+
+Each site's nginx logs move to `/var/log/clp-addons-nginx/<user>/`, which only
+root can write, and `~/logs/nginx` becomes a link to it, so CloudPanel's
+**Logs** tab, the site user's shell and logrotate keep working. If the old
+directory held anything besides logs, it stays as
+`~/logs/nginx.before-clp-addons-<time>`. Deleting a site deletes its folder
+there too, as CloudPanel deletes the logs in its home. Keep the include and log lines when
+you edit a vhost: the **Vhost** editor refuses `{{varnish_proxy_pass}}`,
+`{{nginx_access_log}}`, `{{nginx_error_log}}` and log paths under `/home`.
+The addon only rewrites a vhost that root alone can write. The page lists any
+site whose vhost still writes logs in the home: make that file in
+`/etc/nginx/sites-enabled` owned by root with mode 644 (`chown root:root`,
+`chmod 644`), then run `clp-addons repair`.
+
+CloudPanel's `/etc/logrotate.d/<user>` rotates everything in `~/logs` as root,
+so the site's user could point a folder there at any directory and have root
+rotate the logs in it. With the setting on, the file rotates `~/logs/php` and
+`~/logs/varnish-cache` as the site's user and the nginx logs as root in their
+own directory. A file someone edited by hand is left as it is and listed on
+the page. Turning the setting off puts the placeholders, the `~/logs/nginx`
+directories and CloudPanel's logrotate files back. Anything it cannot copy back
+in full, such as a log over 64 MiB, stays in
+`/var/log/clp-addons-nginx-kept/<user>-<time>/`, which only root can open;
+delete that folder when you no longer need it.
 
 The setting also lists saved site settings it would refuse now, such as a Root
 Directory saved before it was on, and Varnish servers it refuses. Check each
 one and that site's vhost in `/etc/nginx/sites-enabled/`. `clp-addons repair`
 prints the same list.
+
+## Isolate PHP pools
+
+CloudPanel runs each site's PHP on its own port on `127.0.0.1`, which any
+account on the server can connect to. A site's shell user, or a script on
+another site, could send PHP to that port and run it as that site's user, with
+its files and database password. With this setting on, only nginx, the panel
+and the site's own user can connect to the site's PHP port. Memcached, Redis
+and other local services are not affected.
+
+The rule lives in its own nftables table, `inet clp_addons_php_pools`, which
+CloudPanel's **Firewall** page and ufw leave alone. Each PHP-FPM version
+refreshes it when it starts, and before and after it reloads, which is when
+CloudPanel adds, moves or removes a site. A tool that connects to another site's PHP port from its own
+account, such as a monitoring agent, stops working: run it as root or turn
+the setting off.
 
 ## Abandoned temp files
 

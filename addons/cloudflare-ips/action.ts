@@ -186,7 +186,7 @@ function requestedDomains(input: string | undefined): string[] {
 /** Applies the same two rendered-vhost changes as CloudPanel's own form. */
 export function transformVhost(content: string, siteUser: string, enabled: boolean): string {
   const access = new RegExp(
-    `^([ \\t]*access_log[ \\t]+/home/${RegExp.escape(siteUser)}/logs/nginx/access\\.log[ \\t]+)(main|cloudflare)([ \\t]*;[ \\t]*)$`,
+    `^([ \\t]*access_log[ \\t]+(?:/home/${RegExp.escape(siteUser)}/logs/nginx|/var/log/clp-addons-nginx/${RegExp.escape(siteUser)})/access\\.log[ \\t]+)(main|cloudflare)([ \\t]*;[ \\t]*)$`,
     "gm",
   );
   const matches = [...content.matchAll(access)];

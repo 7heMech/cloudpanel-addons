@@ -98,6 +98,10 @@ function setRealIp(input) {
   return change(input, '/api/real-ip', { enabled: input.checked }, switchText(input), 'Saved.');
 }
 
+function setPhpPools(input) {
+  return change(input, '/api/php-pools', { enabled: input.checked }, switchText(input), 'Saved.');
+}
+
 function setVhostGuard(input) {
   return change(input, '/api/vhost-guard', { enabled: input.checked }, switchText(input), 'Saved.');
 }

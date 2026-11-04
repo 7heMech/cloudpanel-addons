@@ -24,7 +24,8 @@ import {
 } from "./firewall";
 import { installVhostGuard, queueVhostGuard, removeVhostGuard, vhostGuardStatus, type VhostGuardOptions } from "./vhost-guard";
 import { storedVhostValues, type StoredVhostValue, type VhostValuesOptions } from "./vhost-values";
-import { installVarnishBackends, removeVarnishBackends, varnishBackendsActive, type VarnishBackendOptions } from "./varnish-backend";
+import { installPoolIsolation, poolIsolationStatus, removePoolIsolation, syncPoolIsolation, type PoolIsolationOptions, type PoolIsolationStatus } from "./pool-isolation";
+import { installVarnishBackends, removeVarnishBackends, sitesWithHomeLogs, sitesWithOwnLogrotate, varnishBackendsActive, type VarnishBackendOptions } from "./varnish-backend";
 
 const SETTINGS_VERSION = 1;
 const MAX_INPUT_BYTES = 4 * 1024;
@@ -41,6 +42,8 @@ export interface SystemTweaksSettings {
   blockForgedRealIp: boolean;
   /** Refuse panel input CloudPanel would write into a vhost unchecked, and render Varnish backends from a checked include. */
   blockVhostInjection: boolean;
+  /** Let only nginx and each pool's own user connect to a site's PHP-FPM port. */
+  isolatePhpPools: boolean;
 }
 
 export interface SystemTweaksState {
@@ -48,7 +51,8 @@ export interface SystemTweaksState {
   settings: UpdateSettings;
   uploadProgress: { guard: boolean; fpms: FpmUploadProgress[] };
   realIp: RealIpStatus & { blockForged: boolean };
-  vhostGuard: { enabled: boolean; active: boolean; stored: StoredVhostValue[] | { error: string } };
+  vhostGuard: { enabled: boolean; active: boolean; stored: StoredVhostValue[] | { error: string }; homeLogs: string[]; ownLogrotate: string[] };
+  phpPools: PoolIsolationStatus & { enabled: boolean };
   panelPhp: PanelPhpStatus | { error: string };
   firewall: FirewallStatus | { error: string };
 }
@@ -77,6 +81,7 @@ export interface SystemTweaksOptions {
   vhostGuard?: VhostGuardOptions;
   vhostValues?: VhostValuesOptions;
   varnishBackend?: VarnishBackendOptions;
+  phpPools?: PoolIsolationOptions;
   panelPhp?: PanelPhpOptions;
   tmpCleanup?: TmpCleanupOptions;
   firewall?: FirewallOptions;
@@ -94,6 +99,7 @@ export function readSettings(paths: SystemTweaksPaths): SystemTweaksSettings {
     uploadProgressGuard: true,
     blockForgedRealIp: true,
     blockVhostInjection: true,
+    isolatePhpPools: true,
   };
   if (!existsSync(paths.settingsFile)) return settings;
   const info = lstatSync(paths.settingsFile);
@@ -117,6 +123,7 @@ export function readSettings(paths: SystemTweaksPaths): SystemTweaksSettings {
   if (stored.uploadProgressGuard === false) settings.uploadProgressGuard = false;
   if (stored.blockForgedRealIp === false) settings.blockForgedRealIp = false;
   if (stored.blockVhostInjection === false) settings.blockVhostInjection = false;
+  if (stored.isolatePhpPools === false) settings.isolatePhpPools = false;
   return settings;
 }
 
@@ -147,7 +154,10 @@ async function stateOf(options: SystemTweaksOptions): Promise<SystemTweaksState>
       enabled: settings.blockVhostInjection,
       active: (await vhostGuardStatus(options.vhostGuard)).active && varnishBackendsActive(options.varnishBackend),
       stored: storedOrError(options.vhostValues),
+      homeLogs: settings.blockVhostInjection ? sitesWithHomeLogs(options.varnishBackend) : [],
+      ownLogrotate: settings.blockVhostInjection ? sitesWithOwnLogrotate(options.varnishBackend) : [],
     },
+    phpPools: { enabled: settings.isolatePhpPools, ...poolIsolationStatus(options.phpPools) },
     panelPhp: panelPhpOrError(options.panelPhp),
     firewall: firewallOrError(options.firewall),
   };
@@ -258,6 +268,25 @@ async function setVhostGuard(options: SystemTweaksOptions): Promise<SystemTweaks
   return stateOf(options);
 }
 
+async function setPhpPools(options: SystemTweaksOptions): Promise<SystemTweaksState> {
+  const paths = pathsFor(options);
+  const body = await requestBody(options);
+  if (typeof body.enabled !== "boolean") failAction("enabled must be true or false");
+  await withFileLock(paths.lockFile, 15, "another system tweaks change is still running", async () => {
+    const settings = readSettings(paths);
+    // Saved first, so a PHP-FPM reload meanwhile follows the new setting.
+    writeSettings(paths, { ...settings, isolatePhpPools: body.enabled as boolean });
+    try {
+      if (body.enabled) installPoolIsolation(options.phpPools);
+      else removePoolIsolation(options.phpPools);
+    } catch (error) {
+      writeSettings(paths, settings);
+      throw error;
+    }
+  });
+  return stateOf(options);
+}
+
 async function changePanelPhp(options: SystemTweaksOptions): Promise<SystemTweaksState> {
   const body = await requestBody(options);
   if (typeof body.php !== "string") failAction("php must be a version such as 8.4, or empty for CloudPanel's own");
@@ -283,6 +312,7 @@ export async function executeSystemTweaksAction(argv: string[], options: SystemT
   if (verb === "set-real-ip") return setRealIp(options);
   if (verb === "set-vhost-guard") return setVhostGuard(options);
   if (verb === "set-panel-php") return changePanelPhp(options);
+  if (verb === "set-php-pools") return setPhpPools(options);
   if (verb === "firewall") return firewallStatus(options.firewall);
   if (verb === "set-firewall-protocol") {
     setRuleProtocol(await requestBody(options), options.firewall);
@@ -347,6 +377,12 @@ export async function systemTweaksMaintenance(options: SystemTweaksOptions = {})
     failures.push(`vhost guard: ${errorMessage(error)}`);
   }
   try {
+    const pools = withSettingsLock(options, (_paths, settings) => settings.isolatePhpPools && installPoolIsolation(options.phpPools));
+    if (pools) lines.push("PHP pool ports limited to nginx and each pool's own user");
+  } catch (error) {
+    failures.push(`PHP pools: ${errorMessage(error)}`);
+  }
+  try {
     const varnish = systemTweaksVarnish(options);
     if (varnish) lines.push(varnish);
   } catch (error) {
@@ -371,7 +407,7 @@ export async function systemTweaksMaintenance(options: SystemTweaksOptions = {})
 /** Repair's and the new-site watcher's: every site's Varnish backend comes from its checked include. */
 export function systemTweaksVarnish(options: SystemTweaksOptions = {}): string | null {
   return withSettingsLock(options, (_paths, settings) =>
-    settings.blockVhostInjection && installVarnishBackends(options.varnishBackend) ? "Varnish backends moved to checked includes" : null);
+    settings.blockVhostInjection && installVarnishBackends(options.varnishBackend) ? "Varnish backends and site nginx logs moved to root-owned paths" : null);
 }
 
 export function systemTweaksUpkeep(options: SystemTweaksOptions = {}): string | null {
@@ -402,6 +438,7 @@ export function withdrawSystemTweaks(options: SystemTweaksOptions = {}): void {
         queueVhostGuard(options.vhostGuard);
         throw error;
       }
+      removePoolIsolation(options.phpPools);
     });
   } catch (error) {
     // The addon stays enabled, so its panel PHP choice comes back with it.
@@ -424,6 +461,7 @@ export function restoreSystemTweaks(options: SystemTweaksOptions = {}): void {
       if (!settings.uploadProgressGuard) reconcilePhpGuard(true, false, guardOptions(options));
       if (settings.blockForgedRealIp) applyRealIp(true, options.realIp);
       if (settings.blockVhostInjection) queueVhostGuard(options.vhostGuard);
+      if (settings.isolatePhpPools) installPoolIsolation(options.phpPools);
     });
   } finally {
     restorePanelPhp(options.panelPhp);
@@ -435,4 +473,18 @@ export function restoreSystemTweaks(options: SystemTweaksOptions = {}): void {
 /** What the firewall watcher runs whenever ufw's rule files change. */
 export function systemTweaksFirewall(options: SystemTweaksOptions = {}): string | null {
   return syncFirewall("apply", options.firewall);
+}
+
+/**
+ * What every PHP-FPM unit runs before it starts, and before and after it
+ * reloads. It reads the setting without the lock: a change on the page can be
+ * what reloaded PHP-FPM.
+ */
+export function systemTweaksPhpPools(options: SystemTweaksOptions = {}, beforeReload = false): boolean {
+  const paths = pathsFor(options);
+  if (!readSettings(paths).isolatePhpPools) return false;
+  const changed = syncPoolIsolation(options.phpPools, beforeReload);
+  // Switched off meanwhile: the switch-off may have removed the table before this loaded it.
+  if (!readSettings(paths).isolatePhpPools) removePoolIsolation(options.phpPools);
+  return changed;
 }

@@ -320,6 +320,29 @@ function storedValuesWarning(stored: SystemTweaksState["vhostGuard"]["stored"]):
     stored.length > 10 ? `; and ${stored.length - 10} more` : ""}. Check each one and the site's vhost.`);
 }
 
+/** Sites whose vhost the sync leaves alone, so nginx still opens their logs in the user's home. */
+function homeLogsWarning(domains: string[]): string {
+  if (!domains.length) return "";
+  const listed = domains.slice(0, 10).map(esc).join(", ");
+  return warning(`These sites' vhosts still write nginx logs in the site user's home, where that user can point them at any file: ${listed}${
+    domains.length > 10 ? ` and ${domains.length - 10} more` : ""}. clp-addons rewrites a vhost only when root alone can write it: make each one in /etc/nginx/sites-enabled owned by root with mode 644, then run clp-addons repair.`);
+}
+
+/** Sites whose logrotate file was edited by hand, so the sync left it as it is. */
+function ownLogrotateWarning(domains: string[]): string {
+  if (!domains.length) return "";
+  const listed = domains.slice(0, 10).map(esc).join(", ");
+  return warning(`These sites' files in /etc/logrotate.d were edited by hand, so clp-addons left them as they are: ${listed}${
+    domains.length > 10 ? ` and ${domains.length - 10} more` : ""}. A file that rotates the site's home as root lets its user have root rotate files it links there. Rotate the home with su set to the site's user.`);
+}
+
+function phpPoolsLine(state: SystemTweaksState["phpPools"]): string {
+  if (state.problem) return `${badge("Not applied", "warn")} <span>${esc(state.problem)}</span>`;
+  if (state.active) return `${badge("On", "ok")} <span>Each pool's port answers only nginx and the pool's own user.</span>`;
+  if (state.enabled) return `${badge("Not applied", "warn")} <span>Run clp-addons repair.</span>`;
+  return `${badge("Off", "plain")} <span>Any account on the server can run PHP as any site through its pool's port.</span>`;
+}
+
 function vhostGuardLine(state: SystemTweaksState["vhostGuard"]): string {
   if (state.active) return `${badge("On", "ok")} <span>Panel input is checked before CloudPanel writes it into a vhost.</span>`;
   if (state.enabled) return `${badge("Not applied", "warn")} <span>Run clp-addons repair.</span>`;
@@ -352,11 +375,21 @@ function settingsCard(state: SystemTweaksState): string {
         title: "Block nginx config injection",
         description: [
           "Refuses site settings CloudPanel would write into a vhost unchecked, such as a Root Directory or Varnish server holding nginx directives.",
-          "Only administrators can save the Vhost editor and PageSpeed settings.",
+          "Only administrators can save the Vhost editor and PageSpeed settings, and site nginx logs move where only root can write.",
         ],
         checked: state.vhostGuard.enabled,
         onchange: "setVhostGuard(this)",
-        extra: `<p class="st-status">${vhostGuardLine(state.vhostGuard)}</p>${storedValuesWarning(state.vhostGuard.stored)}`,
+        extra: `<p class="st-status">${vhostGuardLine(state.vhostGuard)}</p>${storedValuesWarning(state.vhostGuard.stored)}${homeLogsWarning(state.vhostGuard.homeLogs)}${ownLogrotateWarning(state.vhostGuard.ownLogrotate)}`,
+      })}${settingRow({
+        key: "isolatePhpPools",
+        title: "Isolate PHP pools",
+        description: [
+          "Lets only nginx and each site's own user connect to the site's PHP-FPM port, so one site's user cannot run PHP as another site's.",
+          "A tool that reaches another site's pool from its own account, such as a monitoring agent, stops working.",
+        ],
+        checked: state.phpPools.enabled,
+        onchange: "setPhpPools(this)",
+        extra: `<p class="st-status">${phpPoolsLine(state.phpPools)}</p>`,
       })}
       </div>
     </div>`;
