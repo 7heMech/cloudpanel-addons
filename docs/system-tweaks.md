@@ -264,6 +264,52 @@ PasswordAuthentication no
 PermitRootLogin prohibit-password
 ```
 
+## clpctl injection
+
+**Block clpctl injection** is on by default. CloudPanel's `clpctlWrapper` lets
+every local account, including each site's own Unix user, run four clpctl
+commands as root, and a crafted option value can break out of the shell clpctl
+builds and run anything as root. A hacked site runs as its site user, so without
+this a site compromise becomes a server compromise.
+
+With it, System Tweaks replaces `/usr/bin/clpctlWrapper` with a version that
+passes root and the panel through unchanged and, for every other caller, allows
+only `db:export`, `system:permissions:reset` and `varnish-cache:purge` with
+option values that hold no shell metacharacter:
+
+- `db:import` is **refused** for site users. CloudPanel runs an imported dump as
+  the database administrator, so its SQL could read or change any site's
+  database, not just the caller's. Import your own database instead with your own
+  credentials — through phpMyAdmin, or `mysql -u<your database user> <your
+  database> < dump.sql` — which confines the import to that database.
+- `system:permissions:reset` is allowed only on the caller's own home directory
+  as a whole, which cannot be redirected by a symlink. Resetting a single
+  subfolder is no longer possible with the guard on.
+- `db:export` is written by clpctl as the caller and only for the caller's own
+  database, so it works as before.
+
+The panel's own operations and `clpctl db:import`, `site:add`, `db:add` and the
+rest are untouched when run as root, so the panel, the Stager and operators are
+unaffected.
+
+The setting is version-pinned: it installs only over a wrapper and CloudPanel
+version it was built against, saving the original first. If CloudPanel ships a
+wrapper it does not recognise, or a version it does not know, the page shows
+**Paused** and leaves CloudPanel's own wrapper in place, so clpctl is never
+broken; update clp-addons to pick up the new version. Once the hardened wrapper
+is installed it stays on across a CloudPanel version bump; the version is checked
+again only if a CloudPanel update has put its own wrapper back, in which case
+`clp-addons repair` re-hardens when the version is known and otherwise leaves the
+original in place. Turning the setting off restores CloudPanel's original wrapper
+exactly. If the saved copy of the original is ever lost while the hardened
+wrapper is installed, the page says so and clpctl stops until you restore
+CloudPanel's wrapper and run `clp-addons repair`.
+
+This closes the break-out. CloudPanel itself still has to fix the root cause:
+clpctl stripping backslashes from its arguments, its commands building shell
+strings from option values, `db:import` running the dump as the database
+administrator, and the panel user `clp` having full `sudo`.
+
 ## Abandoned temp files
 
 Every 15 minutes System Tweaks removes the PHP and ImageMagick temp files that

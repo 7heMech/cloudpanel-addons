@@ -3,7 +3,7 @@ import type { WebVerb } from "../../../lib/gateway-protocol";
 import type { SystemTweaksState } from "../action";
 import type { FirewallStatus } from "../firewall";
 import {
-  DATABASE_GATEWAY_TIMEOUT_MS, INSTALL_GATEWAY_TIMEOUT_MS, LOGIN_JAILS_GATEWAY_TIMEOUT_MS, PANEL_CERT_GATEWAY_TIMEOUT_MS, PANEL_PHP_GATEWAY_TIMEOUT_MS, PHP_POOLS_GATEWAY_TIMEOUT_MS, POOL_GUARD_GATEWAY_TIMEOUT_MS, REAL_IP_GATEWAY_TIMEOUT_MS,
+  CLPCTL_GUARD_GATEWAY_TIMEOUT_MS, DATABASE_GATEWAY_TIMEOUT_MS, INSTALL_GATEWAY_TIMEOUT_MS, LOGIN_JAILS_GATEWAY_TIMEOUT_MS, PANEL_CERT_GATEWAY_TIMEOUT_MS, PANEL_PHP_GATEWAY_TIMEOUT_MS, PHP_POOLS_GATEWAY_TIMEOUT_MS, POOL_GUARD_GATEWAY_TIMEOUT_MS, REAL_IP_GATEWAY_TIMEOUT_MS,
 } from "../limits";
 
 function call(verb: WebVerb<"system-tweaks">, input?: string, timeout?: number): Promise<ActionResult<SystemTweaksState>> {
@@ -77,6 +77,10 @@ export const systemTweaksService = {
 
   unban(jail: string, ip: string): Promise<ActionResult<SystemTweaksState>> {
     return call("unban", JSON.stringify({ jail, ip }));
+  },
+
+  setClpctlGuard(enabled: boolean): Promise<ActionResult<SystemTweaksState>> {
+    return call("set-clpctl-guard", JSON.stringify({ enabled }), CLPCTL_GUARD_GATEWAY_TIMEOUT_MS);
   },
 
 };

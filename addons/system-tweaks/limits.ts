@@ -22,3 +22,5 @@ export const REAL_IP_GATEWAY_TIMEOUT_MS = 4 * COMMAND_MS + 60_000;
 export const LOGIN_JAILS_GATEWAY_TIMEOUT_MS = 6 * COMMAND_MS + 30_000;
 /** Generating a key pair, Nginx validation and reload, a rollback of both, lock waiting and the reply. */
 export const PANEL_CERT_GATEWAY_TIMEOUT_MS = 5 * COMMAND_MS + 60_000;
+/** A dpkg version query and a wrapper file swap, with lock waiting and the reply. */
+export const CLPCTL_GUARD_GATEWAY_TIMEOUT_MS = 2 * COMMAND_MS + 30_000;

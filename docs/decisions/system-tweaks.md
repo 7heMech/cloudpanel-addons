@@ -10,10 +10,10 @@ Firewall page.
 
 Four cards: Automatic updates, which an operator comes back to; one
 Settings card for the panel's PHP, the upload-progress mitigation, forged
-visitor IPs, phpMyAdmin, the panel's certificate and nginx config injection,
-which are set once; Failed logins, with the two fail2ban jails and the
-addresses they block; and Database, which says who can reach MySQL. Each row
-says what it does in a sentence; the
+visitor IPs, phpMyAdmin, the panel's certificate, nginx config injection and
+clpctl injection, which are set once; Failed logins, with the two fail2ban jails
+and the addresses they block; and Database, which says who can reach MySQL. Each
+row says what it does in a sentence; the
 reasons are here. The Nginx, MySQL, CloudPanel and reboot rows appear only once
 System Tweaks' own switch is on, since they change nothing before. The
 repositories and each PHP-FPM's upload-progress value fold into a summary that
@@ -845,6 +845,125 @@ CloudPanel's class, and the test checks each answer, the download's headers,
 the owner, mode and contents of what is left on disk, that files and folders
 only root can reach stay out of reach, and that the permissions action hands
 root's files under its target to the site user.
+
+## clpctl injection
+
+CloudPanel installs `/usr/bin/clpctlWrapper` and a sudoers rule,
+`ALL ALL=(ALL) NOPASSWD: /usr/bin/clpctlWrapper`, so every local account can run
+the wrapper as root. The wrapper runs clpctl as the panel user `clp`, who has
+`NOPASSWD: ALL`, and clpctl restricts a caller that is neither root nor `clp`,
+read from `SUDO_USER`, to four commands: `db:export`, `db:import`,
+`system:permissions:reset` and `varnish-cache:purge`. A site's own Unix user is
+such a caller, and a hacked site app runs as that user.
+
+Those four still reach root. The wrapper escapes each argument and runs them as
+one double-quoted string under `su -c`; clpctl then strips every run of three
+backslashes from each argument, undoing part of that escaping, and its import
+and permission-reset commands embed the value in a `bash -c "…"` string. A
+value with a `"` followed by `;` closes the string and runs a command as `clp`,
+which is root. `db:import` also reads files and databases as root. This is the
+sudo-to-root path the web guards do not cover, so it is its own setting rather
+than part of the nginx one.
+
+**Block clpctl injection**, on by default (`blockClpctlInjection`), replaces the
+wrapper with `clpctl-wrapper.sh`. It reads `SUDO_USER` as clpctl does: root, `clp`
+and an empty caller run CloudPanel's original wrapper unchanged, since they are
+already root-equivalent and tightening them only risks breaking the panel. Every
+other caller may run only the four commands. Each option value is first checked
+against an allowlist that admits no backslash, quote, backtick, `$`, `;` or
+newline — a `--databaseName` of letters, digits, underscore and hyphen; a
+`--directories`/`--files` octal mode; a `--purge` of `all`, a tag list, or a
+plain http(s) URL — so the triple-backslash clpctl strips cannot be formed and
+nothing breaks out of clpctl's later shell strings. A flag that takes no value,
+such as `--quiet`, is refused if given one, and anything unrecognised is refused.
+
+**`db:import` is refused for these callers.** clpctl runs the dump through
+`mysql` with the database server's administrator credentials
+(`root@127.0.0.1`), and the per-database check only picks the default schema; it
+does not limit what SQL the dump contains. A site user could put
+`CREATE TABLE x AS SELECT * FROM <other site's db>.<table>` in a dump and read
+another tenant's data, or run anything else the admin account can. Staging the
+file as a root-owned copy closes the file read but not this, and clpctl does not
+offer a way to import as the site's own database user, so the wrapper blocks the
+command. Site users import with their own database credentials instead — through
+phpMyAdmin, or `mysql -u<their database user>` — which confines them to their own
+database. Root, the Stager and the panel keep `db:import` through the
+pass-through path. CloudPanel running import as the database administrator is
+upstream's to fix.
+
+The other two file-taking commands open their paths as root too, and a path
+check alone cannot hold them because the caller can swap a component they own for
+a symlink after the check. So each is given a stable target:
+
+- **`system:permissions:reset --path`** runs `find -P` and `chown -R` as root.
+  It is allowed only on the caller's own home, `/home/<caller>`, which is
+  root-owned at its parent and so cannot be swapped; `find -P` and `chown -R` do
+  not descend into symlinks inside it. A subfolder could have a component swapped
+  after the check, so it is refused, and the wrapper passes the resolved home
+  itself. Resetting a single subfolder is therefore no longer possible with the
+  guard on.
+- **`db:export --file`** is written by clpctl as the caller
+  (`mysqldump | sudo -u <user> tee <file>`), and its `--databaseName` must be the
+  caller's own site, which clpctl checks, so a swapped link only redirects a write
+  the caller could make anyway. The value is kept shell-safe and, as clpctl's own
+  check requires, inside the home.
+
+The command runs from the caller's home, so clpctl resolves a defaulted reset
+path or a relative export path to the home, not to wherever the caller stood.
+Callers that run as root, the Stager and the panel's own flows among them, take
+the pass-through path unchanged.
+
+The mitigation is version-pinned, in `clpctl-guard.ts`, by three hash sets.
+`KNOWN_ORIGINAL_SHA256` is the SHA-256 of each CloudPanel wrapper it was built
+against; `KNOWN_VERSIONS` the CloudPanel package versions (from `dpkg-query`);
+and `SHIPPED_WRAPPER_SHA256` the SHA-256 of every hardened wrapper this addon
+has itself shipped, so an older one from an earlier release is still recognised
+as ours, upgraded to the current script rather than taken for a stranger's, and
+never has its saved original deleted from under it. The version gate applies at
+**install** time: the wrapper is replaced only over its own wrapper, or over a
+known original on a known version, with that original saved to
+`clpctlWrapper.orig` first. A CloudPanel wrapper whose bytes it does not know, or
+a version it does not know, leaves everything in place and is shown as paused,
+since the aim is never to brick clpctl.
+
+Once the hardened wrapper is installed its own bytes govern clpctl's contract,
+so it **stays active across a CloudPanel version bump**: the status is still
+`ours`, and nothing re-reads the version. The version gate bites again only when
+CloudPanel's original wrapper has come back — after an update that reinstalls
+it — and the version is no longer one this release knows: repair then leaves the
+original in place rather than re-hardening on a CloudPanel it has not been
+checked against. The wrapper bytes are what make a replacement safe; the version
+is recorded so that re-hardening after the original returns is conservative, and
+extending either set after checking a release on staging re-enables it. A
+CloudPanel update that reinstalls the original on a known version is re-hardened
+by repair, under the same lock the other settings reconcile with. Switching off
+or disabling restores the saved original exactly and drops the copy; a wrapper
+the build no longer recognises is left alone with its saved copy kept, so a
+working clpctl can still be restored.
+
+The sudoers rule is left alone. Narrowing it to a group would be undone by
+CloudPanel's updates and could lock a site user out of the clpctl commands it is
+meant to run, so once the wrapper is safe there is nothing to gain and a working
+panel to lose. The `varnish-cache:purge` SSRF, where the purge target is read
+from the site-owned `~/.varnish-cache/settings.json` rather than the command
+line, is not something this wrapper can constrain from the argument it sees; it
+is upstream's to fix. What only CloudPanel can fix is recorded in the mitigation:
+clpctl stripping backslashes, its commands building shell strings from option
+values, `db:import` running the dump as the database administrator, and `clp`'s
+own `NOPASSWD: ALL`.
+
+`tests/test-clpctl-guard.test.ts` drives the install, pinning, upgrade of an
+older shipped wrapper, repair and restore in the TypeScript, including that a
+wrapper the build no longer recognises keeps its saved original, and runs the
+wrapper itself through bash: root and `clp` pass through; a site user's export,
+reset and purge commands run with validated, normalised values; `db:import` is
+refused for a site user but still runs for root; and a disallowed command, a
+value carrying a metacharacter, an inline value on a valueless flag, an export
+file or reset path that escapes the home, and a reset of a subfolder rather than
+the home are all refused before the original wrapper runs.
+`tests/test-system-tweaks.test.ts` covers that a withdrawal which fails after
+restoring CloudPanel's wrapper puts the hardened one back, since the setting
+stays on.
 
 ## Abandoned temp files
 

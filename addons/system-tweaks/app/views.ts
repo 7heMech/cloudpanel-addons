@@ -381,6 +381,21 @@ function fileManagerGuardLine(state: SystemTweaksState["fileManagerGuard"]): str
   return `${badge("Off", "plain")} <span>Any panel account with a site can read and change files anywhere on the server through the File Manager, which runs as root.</span>`;
 }
 
+function clpctlGuardLine(state: SystemTweaksState["clpctlGuard"]): string {
+  if ("error" in state) return `${badge("Unknown", "warn")} <span>${esc(state.error)}</span>`;
+  const where = state.version ? ` (CloudPanel ${esc(state.version)})` : "";
+  if (state.active) return `${badge("On", "ok")} <span>The clpctlWrapper is the hardened one${where}.</span>`;
+  if (state.enabled && state.wrapper === "ours") {
+    // Our wrapper is installed but its saved original is gone, so it falls back
+    // to nothing and refuses every caller: clpctl cannot run until it is fixed.
+    return `${badge("Action needed", "bad")} <span>${esc(state.reason ?? "the saved original is missing")}, so clpctl cannot run. Restore CloudPanel's clpctlWrapper, then run clp-addons repair.</span>`;
+  }
+  if (state.enabled) {
+    return `${badge("Paused", "warn")} <span>${esc(state.reason ?? "the wrapper was left in place")}. CloudPanel's own wrapper is untouched.</span>`;
+  }
+  return `${badge("Off", "plain")} <span>A site's own user can reach root through clpctlWrapper${where}.</span>`;
+}
+
 function settingsCard(state: SystemTweaksState): string {
   return `
     <div class="card">
@@ -452,6 +467,16 @@ function settingsCard(state: SystemTweaksState): string {
         checked: state.fileManagerGuard.enabled,
         onchange: "setFileManagerGuard(this)",
         extra: `<p class="st-status">${fileManagerGuardLine(state.fileManagerGuard)}</p>`,
+      })}${settingRow({
+        key: "blockClpctlInjection",
+        title: "Block clpctl injection",
+        description: [
+          "Replaces CloudPanel's clpctlWrapper so a site's own Unix user cannot break out of clpctl's shell and run commands as root.",
+          "Root and the panel are unaffected, and the four commands sites may run still work with ordinary values.",
+        ],
+        checked: "error" in state.clpctlGuard ? true : state.clpctlGuard.enabled,
+        onchange: "setClpctlGuard(this)",
+        extra: `<p class="st-status">${clpctlGuardLine(state.clpctlGuard)}</p>`,
       })}
       </div>
     </div>`;

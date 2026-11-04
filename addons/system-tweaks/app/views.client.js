@@ -126,6 +126,10 @@ function setFileManagerGuard(input) {
   return change(input, '/api/file-manager-guard', { enabled: input.checked }, switchText(input), 'Saved.');
 }
 
+function setClpctlGuard(input) {
+  return change(input, '/api/clpctl-guard', { enabled: input.checked }, switchText(input), 'Saved.');
+}
+
 // A change restarts the panel and waits for it to answer.
 function setPanelPhp(select) {
   const label = select.options[select.selectedIndex].textContent;
