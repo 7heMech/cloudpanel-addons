@@ -421,6 +421,31 @@ function syncSiteLogs(site: Site, paths: VarnishBackendPaths, owner: Owner): voi
   } catch {}
 }
 
+/** Every user a site row names, as stored, including rows the sync skips. */
+function siteUsers(db: Database): Set<string> {
+  return new Set(db.query<{ user: unknown }, []>("SELECT user FROM site").all().map((row) => String(row.user ?? "")));
+}
+
+/**
+ * Remove each site log directory whose user is not in `keep` and that no
+ * vhost in sites-enabled writes to, as when CloudPanel has deleted the site.
+ * rmSync removes a link in place and never follows one.
+ */
+function pruneSiteLogDirs(paths: VarnishBackendPaths, keep: Set<string>): void {
+  if (!existsSync(paths.logDir)) return;
+  const vhosts = existsSync(paths.vhostDir)
+    ? readdirSync(paths.vhostDir).filter((entry) => entry.endsWith(".conf")).map((name) => {
+      // Read through a link: a vhost linked from sites-available still writes there.
+      try { return readFileSync(join(paths.vhostDir, name), "utf8"); } catch { return ""; }
+    })
+    : [];
+  for (const user of readdirSync(paths.logDir)) {
+    const prefix = `${paths.logDir}/${user}/`;
+    if (keep.has(user) || vhosts.some((vhost) => vhost.includes(prefix))) continue;
+    rmSync(join(paths.logDir, user), { recursive: true, force: true });
+  }
+}
+
 /** Put `~/logs/nginx` back as the site user's own directory, with a copy of the logs root kept. */
 function unstageSiteLogs(all: Site[], paths: VarnishBackendPaths, passwd: Map<string, Owner>): void {
   for (const site of all) {
@@ -461,15 +486,13 @@ function unstageSiteLogs(all: Site[], paths: VarnishBackendPaths, passwd: Map<st
  */
 export function syncVarnishBackends(options: VarnishBackendOptions = {}): string[] {
   const { paths } = contextOf(options);
-  const all = withPanelDb(paths.panelDb, sites);
+  const { all, users } = withPanelDb(paths.panelDb, (db) => ({ all: sites(db), users: siteUsers(db) }));
   const passwd = passwdUsers(paths.passwdFile);
   mkdirSync(paths.includeDir, { recursive: true, mode: 0o755 });
   const kept = new Set<string>();
-  const keptLogs = new Set<string>();
   const refused: string[] = [];
   for (const site of all) {
     if (usesLogs(site, paths)) {
-      keptLogs.add(join(paths.logDir, site.user));
       // One site's logs must not keep the other sites' includes from being written.
       try { syncSiteLogs(site, paths, siteOwner(site, paths, passwd)); } catch {}
     }
@@ -488,15 +511,7 @@ export function syncVarnishBackends(options: VarnishBackendOptions = {}): string
     if (kept.has(file) || regularText(join(paths.vhostDir, name))?.includes(varnishIncludeLine(paths.includeDir, domain))) continue;
     rmSync(file, { force: true });
   }
-  if (existsSync(paths.logDir)) {
-    const vhosts = existsSync(paths.vhostDir) ? readdirSync(paths.vhostDir).filter((entry) => entry.endsWith(".conf")) : [];
-    for (const user of readdirSync(paths.logDir)) {
-      const dir = join(paths.logDir, user);
-      const prefix = `${paths.logDir}/${user}/`;
-      if (keptLogs.has(dir) || vhosts.some((name) => regularText(join(paths.vhostDir, name))?.includes(prefix))) continue;
-      rmSync(dir, { recursive: true, force: true });
-    }
-  }
+  pruneSiteLogDirs(paths, users);
   return refused;
 }
 
@@ -689,13 +704,7 @@ export function removeVarnishBackends(options: VarnishBackendOptions = {}): bool
   }
   if (existsSync(ctx.paths.includeDir) && readdirSync(ctx.paths.includeDir).length === 0) rmSync(ctx.paths.includeDir, { recursive: true });
   if (existsSync(ctx.paths.logDir)) {
-    const vhosts = existsSync(ctx.paths.vhostDir) ? readdirSync(ctx.paths.vhostDir).filter((entry) => entry.endsWith(".conf")) : [];
-    for (const user of readdirSync(ctx.paths.logDir)) {
-      const prefix = `${ctx.paths.logDir}/${user}/`;
-      if (!vhosts.some((name) => regularText(join(ctx.paths.vhostDir, name))?.includes(prefix))) {
-        rmSync(join(ctx.paths.logDir, user), { recursive: true, force: true });
-      }
-    }
+    pruneSiteLogDirs(ctx.paths, new Set());
     if (readdirSync(ctx.paths.logDir).length === 0) rmSync(ctx.paths.logDir, { recursive: true });
   }
   return true;

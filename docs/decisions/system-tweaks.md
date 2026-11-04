@@ -412,6 +412,17 @@ a link the user swaps in meanwhile is never followed. `chown -R`, which
 CloudPanel's `clpctl system:permissions:reset` runs on the home, changes the
 link itself, not its target.
 
+A deleted site's directory goes at the next sync. CloudPanel deletes a site's
+vhost, reloads nginx, deletes the user with its home and logrotate file, then the
+row; the reload's sync still sees the row, and the new-site watcher's, which the
+row's deletion wakes, removes the directory. The sync removes a directory only
+when no site row names its user and no vhost in `sites-enabled`, read through
+links, names a path in it, and `rmSync` removes links without following them.
+The logs go at once rather than being kept a while: CloudPanel deletes the
+copies in the home at the same time, and a new site given the same user name
+would otherwise get the old site's logs, since the sync gives the directory to
+the user's new group.
+
 The sync also rewrites CloudPanel's two exact log lines in each rendered vhost
 before nginx loads it, with the access-log format the site's Cloudflare setting
 asks for. That covers a new site before the watcher reaches it, a rendered vhost

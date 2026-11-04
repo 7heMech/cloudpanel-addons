@@ -313,3 +313,49 @@ test("a logrotate file edited by hand is left as it is and listed", () => {
   expect(readFileSync(join(dir, "shop"), "utf8")).toBe(edited);
   expect(sitesWithOwnLogrotate(f.options)).toEqual(["shop.example.com"]);
 });
+
+test("a deleted site's log directory goes with it, unless a site row or a vhost still names it, and removing it follows no link", () => {
+  const f = fixture();
+  const logDir = join(f.dir, "nginx-logs");
+  const db = new Database(f.db);
+  db.query("UPDATE site SET vhost_template = ? WHERE domain_name = 'shop.example.com'").run("server {\n  {{nginx_access_log}}\n  {{nginx_error_log}}\n}");
+  db.close();
+  installVarnishBackends(f.options);
+  expect(existsSync(join(logDir, "shop", "access.log"))).toBe(true);
+  writeFileSync(join(logDir, "shop", "access.log"), "request\n");
+  writeFileSync(join(f.dir, "canary.txt"), "root secret\n");
+  symlinkSync(join(f.dir, "canary.txt"), join(logDir, "shop", "access.log-2026-11-03"));
+  mkdirSync(join(f.dir, "elsewhere"));
+  writeFileSync(join(f.dir, "elsewhere", "kept.log"), "kept\n");
+  symlinkSync(join(f.dir, "elsewhere"), join(logDir, "linked"));
+  // A row the sync skips, here one with no stored vhost, still keeps its user's directory.
+  mkdirSync(join(logDir, "odd"));
+  const panel = new Database(f.db);
+  panel.query("INSERT INTO site (domain_name, user, varnish_cache, vhost_template) VALUES (?, ?, ?, NULL)").run("odd.example.com", "odd", 0);
+  panel.close();
+  // A vhost linked in from elsewhere still writing there keeps it too.
+  mkdirSync(join(logDir, "gone"));
+  mkdirSync(join(f.dir, "sites-available"));
+  writeFileSync(join(f.dir, "sites-available", "gone.example.com.conf"), `server {\n  error_log ${logDir}/gone/error.log;\n}\n`);
+  symlinkSync(join(f.dir, "sites-available", "gone.example.com.conf"), join(f.dir, "sites-enabled", "gone.example.com.conf"));
+
+  // CloudPanel deletes the site: its vhost, then its row.
+  rmSync(join(f.dir, "sites-enabled", "shop.example.com.conf"));
+  syncVarnishBackends(f.options);
+  expect(existsSync(join(logDir, "shop"))).toBe(true);
+  const after = new Database(f.db);
+  after.exec("DELETE FROM site WHERE domain_name = 'shop.example.com'");
+  after.close();
+  syncVarnishBackends(f.options);
+
+  expect(existsSync(join(logDir, "shop"))).toBe(false);
+  expect(readFileSync(join(f.dir, "canary.txt"), "utf8")).toBe("root secret\n");
+  expect(existsSync(join(logDir, "linked"))).toBe(false);
+  expect(readFileSync(join(f.dir, "elsewhere", "kept.log"), "utf8")).toBe("kept\n");
+  expect(existsSync(join(logDir, "odd"))).toBe(true);
+  expect(existsSync(join(logDir, "gone"))).toBe(true);
+
+  rmSync(join(f.dir, "sites-enabled", "gone.example.com.conf"));
+  syncVarnishBackends(f.options);
+  expect(existsSync(join(logDir, "gone"))).toBe(false);
+});

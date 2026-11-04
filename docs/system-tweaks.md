@@ -109,7 +109,8 @@ Each site's nginx logs move to `/var/log/clp-addons-nginx/<user>/`, which only
 root can write, and `~/logs/nginx` becomes a link to it, so CloudPanel's
 **Logs** tab, the site user's shell and logrotate keep working. If the old
 directory held anything besides logs, it stays as
-`~/logs/nginx.before-clp-addons-<time>`. Keep the include and log lines when
+`~/logs/nginx.before-clp-addons-<time>`. Deleting a site deletes its folder
+there too, as CloudPanel deletes the logs in its home. Keep the include and log lines when
 you edit a vhost: the **Vhost** editor refuses `{{varnish_proxy_pass}}`,
 `{{nginx_access_log}}`, `{{nginx_error_log}}` and log paths under `/home`.
 The addon only rewrites a vhost that root alone can write. The page lists any
