@@ -186,3 +186,18 @@ function readNews(event) {
 document.addEventListener('click', readNews);
 // A middle click opens it in a tab without a click event; a right click opens nothing.
 document.addEventListener('auxclick', (event) => { if (event.button === 1) readNews(event); });
+
+// Reads every notice without opening the addons, available ones included.
+function readAllNews(button) {
+  button.disabled = true;
+  fetch(CLP_BASE + '/api/addons/news-seen', {
+    method: 'POST', headers: { 'X-CLP-Addons-CSRF': csrf() },
+  }).then((response) => {
+    if (!response.ok) throw new Error('not marked');
+    CLP_ROOT.querySelectorAll('[data-news]').forEach((row) => {
+      row.removeAttribute('data-news');
+      row.querySelectorAll('.addon-about h3 .badge, .addon-changed').forEach((node) => node.remove());
+    });
+    button.remove();
+  }).catch(() => { button.disabled = false; });
+}

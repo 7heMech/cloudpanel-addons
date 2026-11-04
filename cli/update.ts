@@ -57,16 +57,18 @@ function finalizeUpdate(beforeManagerRestart?: () => void): AddonSpec[] {
   }
 }
 
+type UpdateOptions = { beforeManagerRestart?: () => void; onStep?: (step: string) => void };
+
 /**
  * Updates release artifacts when necessary. If the binary moves, re-run this
  * same command as the installed copy and let only that process provision.
  */
-export async function cmdUpdate(argv: string[], options: { beforeManagerRestart?: () => void } = {}): Promise<void> {
+export async function cmdUpdate(argv: string[], options: UpdateOptions = {}): Promise<void> {
   requireRoot("update");
   return withOperationLock("update", () => applyUpdate(argv, options));
 }
 
-async function applyUpdate(argv: string[], options: { beforeManagerRestart?: () => void }): Promise<void> {
+async function applyUpdate(argv: string[], options: UpdateOptions): Promise<void> {
   const { flags } = parseFlags(argv);
   // A box running a pre-release keeps following them; a release takes it back to releases.
   const release = await resolveRelease(
@@ -90,7 +92,7 @@ async function applyUpdate(argv: string[], options: { beforeManagerRestart?: () 
   }
   let artifacts: FetchedArtifact[] | undefined;
   if (!artifactsCurrent) {
-    artifacts = await fetchVerified(release, artifactNames());
+    artifacts = await fetchVerified(release, artifactNames(), options.onStep);
     await verifyAttestation(release, artifacts, flags["skip-attestation"] === true);
   }
 

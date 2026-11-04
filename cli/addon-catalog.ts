@@ -67,8 +67,8 @@ export interface AddonDefinition {
   requiresUnits?: string[];
   /** The release it first shipped in, such as `2.0.0-rc.1`; the Addons page marks it New for boxes updated past it. */
   added?: string;
-  /** A change an operator must know about, such as moved settings or new effects on sites, shown as Changed on the same terms as `added`; not for layout or speed. */
-  changed?: { in: string; note: string };
+  /** Changes an operator must know about, such as moved settings or new effects on sites, each shown as Changed on the same terms as `added`; not for layout or speed. */
+  changed?: { in: string; note: string }[];
   /** Ticked when the installer asks which addons to install. */
   preselected?: boolean;
   targets: AddonTarget[];
@@ -158,22 +158,36 @@ export const ADDONS: Record<string, AddonSpec> = Object.fromEntries(
 
 export const ADDON_NAMES: string[] = DEFINITIONS.map((definition) => definition.name);
 
-/** What the Addons page says is new about an addon since the box's previous release, keyed by the release that declared it. */
+/** What the Addons page says is new about an addon until it is read. */
 export interface AddonNews {
   kind: "new" | "changed";
-  /** `dns@2.0.0-rc.1`: opening the addon reads this notice only. */
-  key: string;
-  note?: string;
+  /** The notices the badge stands for, such as `dns@2.0.0-rc.1`; reading the badge reads them all. */
+  keys: string[];
+  /** What changed, newest first. */
+  notes: string[];
 }
 
-/** The notice declared after `since` and no later than `version`; New wins over Changed. */
-export function addonNews(name: string, version: string, since: string): AddonNews | null {
+/** Every notice the addon declared after `since` and no later than `version`, read or not. */
+export function addonNoticeKeys(name: string, version: string, since: string): string[] {
   const spec = ADDONS[name];
-  if (!spec) return null;
+  if (!spec) return [];
   const pending = (release: string) => compareSemver(release, since) > 0 && compareSemver(release, version) <= 0;
-  if (spec.added && pending(spec.added)) return { kind: "new", key: `${name}@${spec.added}` };
-  if (spec.changed && pending(spec.changed.in)) return { kind: "changed", key: `${name}@${spec.changed.in}`, note: spec.changed.note };
-  return null;
+  return [spec.added, ...(spec.changed ?? []).map((change) => change.in)]
+    .filter((release): release is string => release !== undefined && pending(release))
+    .map((release) => `${name}@${release}`);
+}
+
+/** The addon's unread notices; an unread New covers its Changed ones. */
+export function addonNews(name: string, version: string, since: string, seen: readonly string[] = []): AddonNews | null {
+  const spec = ADDONS[name];
+  const keys = addonNoticeKeys(name, version, since);
+  if (!spec || !keys.some((key) => !seen.includes(key))) return null;
+  const newKey = spec.added ? `${name}@${spec.added}` : null;
+  if (newKey && keys.includes(newKey) && !seen.includes(newKey)) return { kind: "new", keys, notes: [] };
+  const unread = (spec.changed ?? [])
+    .filter((change) => keys.includes(`${name}@${change.in}`) && !seen.includes(`${name}@${change.in}`))
+    .sort((a, b) => compareSemver(b.in, a.in));
+  return { kind: "changed", keys: unread.map((change) => `${name}@${change.in}`), notes: unread.map((change) => change.note) };
 }
 
 /** The addon's manager handler, or undefined when it mounts no routes. */

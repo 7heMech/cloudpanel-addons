@@ -15,14 +15,25 @@ export interface ResolvedRelease {
   assets: Map<string, string>;
 }
 
-async function download(url: string): Promise<Buffer> {
+async function download(url: string, onPercent?: (percent: number) => void): Promise<Buffer> {
   const response = await fetch(url, {
     redirect: "follow",
     headers: { "User-Agent": "clp-addons" },
     signal: AbortSignal.timeout(300_000),
   });
   if (!response.ok) fatal(`download failed: ${response.status} ${response.statusText} for ${url}`);
-  return Buffer.from(await response.arrayBuffer());
+  const total = Number(response.headers.get("content-length"));
+  if (!onPercent || !total || !response.body) return Buffer.from(await response.arrayBuffer());
+  const chunks: Uint8Array[] = [];
+  let received = 0;
+  let shown = 0;
+  for await (const chunk of response.body) {
+    chunks.push(chunk);
+    received += chunk.length;
+    const percent = Math.floor((received / total) * 10) * 10;
+    if (percent > shown) onPercent(shown = percent);
+  }
+  return Buffer.concat(chunks);
 }
 
 async function github(path: string): Promise<unknown> {
@@ -85,8 +96,8 @@ export interface FetchedArtifact {
   bytes: Buffer;
 }
 
-export async function fetchVerified(rel: ResolvedRelease, names: string[]): Promise<FetchedArtifact[]> {
-  log.step(`fetching checksums for ${rel.tag}`);
+export async function fetchVerified(rel: ResolvedRelease, names: string[], onStep = log.step): Promise<FetchedArtifact[]> {
+  onStep(`fetching checksums for ${rel.tag}`);
   const sums = parseSums((await download(rel.assets.get("SHA256SUMS")!)).toString("utf-8"));
   const artifacts: FetchedArtifact[] = [];
   for (const name of names) {
@@ -94,8 +105,8 @@ export async function fetchVerified(rel: ResolvedRelease, names: string[]): Prom
     if (!url) fatal(`release ${rel.tag} has no asset named ${name}`);
     const expected = sums.get(name);
     if (!expected) fatal(`SHA256SUMS for ${rel.tag} does not list ${name}`);
-    log.step(`downloading ${name}`);
-    const bytes = await download(url);
+    onStep(`downloading ${name}`);
+    const bytes = await download(url, (percent) => onStep(`downloading ${name}: ${percent}%`));
     const actual = sha256(bytes);
     if (actual !== expected) {
       fatal(`checksum mismatch for ${name}\n  expected ${expected}\n  actual   ${actual}`);

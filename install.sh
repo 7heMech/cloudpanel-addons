@@ -78,7 +78,7 @@ trap cleanup EXIT
 # substituted binary would come with a substituted install.sh.
 step "downloading clp-addons ${VERSION}"
 curl -fsSL -o "${TMP}/SHA256SUMS" "${BASE}/SHA256SUMS" || die "download failed: SHA256SUMS"
-curl -fsSL -o "${TMP}/${ARTIFACT}" "${BASE}/${ARTIFACT}" || die "download failed: ${ARTIFACT}"
+curl -fSL --progress-bar -o "${TMP}/${ARTIFACT}" "${BASE}/${ARTIFACT}" || die "download failed: ${ARTIFACT}"
 expected=$(awk -v f="$ARTIFACT" '$2 == f || $2 == "*" f { print $1 }' "${TMP}/SHA256SUMS" | head -1)
 [[ -n $expected ]] || die "SHA256SUMS does not list ${ARTIFACT}"
 [[ $(sha256sum "${TMP}/${ARTIFACT}" | awk '{print $1}') == "$expected" ]] || die "checksum mismatch for ${ARTIFACT}"

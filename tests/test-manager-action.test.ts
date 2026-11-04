@@ -299,14 +299,14 @@ describe("opened badges", () => {
     const file = join(dir, "news-seen.json");
     try {
       expect(readNewsSeen(file, "2.0.0-rc.1", "1.5.2")).toEqual([]);
-      expect(markNewsSeen("dns", file, "2.0.0-rc.1", "1.5.2")).toEqual(["dns@2.0.0-rc.1"]);
-      expect(markNewsSeen("dns", file, "v2.0.0-rc.1", "1.5.2")).toEqual(["dns@2.0.0-rc.1"]);
-      expect(markNewsSeen("stager", file, "2.0.0-rc.1", "1.5.2")).toEqual(["dns@2.0.0-rc.1", "stager@2.0.0-rc.1"]);
+      expect(markNewsSeen(["dns"], file, "2.0.0-rc.1", "1.5.2")).toEqual(["dns@2.0.0-rc.1"]);
+      expect(markNewsSeen(["dns"], file, "v2.0.0-rc.1", "1.5.2")).toEqual(["dns@2.0.0-rc.1"]);
+      expect(markNewsSeen(["stager"], file, "2.0.0-rc.1", "1.5.2")).toEqual(["dns@2.0.0-rc.1", "stager@2.0.0-rc.1"]);
       // A later release still shows the notice to a box updated from before it.
       expect(readNewsSeen(file, "2.0.0", "1.5.2")).toEqual(["dns@2.0.0-rc.1", "stager@2.0.0-rc.1"]);
       // Once the box has run that release, the notice and its key go.
       expect(readNewsSeen(file, "2.0.0-rc.2", "2.0.0-rc.1")).toEqual([]);
-      expect(markNewsSeen("dns", file, "2.0.0-rc.2", "2.0.0-rc.1")).toEqual([]);
+      expect(markNewsSeen(["dns"], file, "2.0.0-rc.2", "2.0.0-rc.1")).toEqual([]);
     } finally {
       rmSync(dir, { recursive: true, force: true });
     }
@@ -326,12 +326,39 @@ describe("opened badges", () => {
     }
   });
 
+  test("are all read at once, available addons included", () => {
+    const dir = mkdtempSync(join(tmpdir(), "clp-news-"));
+    const file = join(dir, "news-seen.json");
+    try {
+      const seen = markNewsSeen(undefined, file, "2.0.0", "1.5.2");
+      expect(seen).toContain("dns@2.0.0-rc.1");
+      expect(seen).toContain("stager@2.0.0-rc.1");
+      expect(Object.keys(ADDONS).filter((name) => addonNews(name, "2.0.0", "1.5.2", seen))).toEqual([]);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
   test("cover the releases after the previous one, up to the installed one", () => {
-    expect(addonNews("dns", "2.0.0-rc.4", "1.5.2")?.key).toBe("dns@2.0.0-rc.1");
+    expect(addonNews("dns", "2.0.0-rc.4", "1.5.2")?.keys).toEqual(["dns@2.0.0-rc.1"]);
     expect(addonNews("dns", "2.0.0", "1.5.2")?.kind).toBe("new");
     expect(addonNews("stager", "2.0.0", "1.5.2")?.kind).toBe("changed");
     expect(addonNews("dns", "2.0.0-rc.4", "2.0.0-rc.1")).toBeNull();
     expect(addonNews("dns", "1.5.2", "1.5.1")).toBeNull();
+  });
+
+  test("add up across releases, newest first, and an unread New covers them", () => {
+    const original = ADDONS.dns!;
+    try {
+      ADDONS.dns = { ...original, added: "2.0.0-rc.1", changed: [{ in: "2.0.0", note: "First." }, { in: "2.1.0", note: "Second." }] };
+      expect(addonNews("dns", "2.1.0", "2.0.0-rc.1")).toEqual({ kind: "changed", keys: ["dns@2.1.0", "dns@2.0.0"], notes: ["Second.", "First."] });
+      expect(addonNews("dns", "2.1.0", "2.0.0-rc.1", ["dns@2.1.0"])).toEqual({ kind: "changed", keys: ["dns@2.0.0"], notes: ["First."] });
+      expect(addonNews("dns", "2.1.0", "1.5.2")?.kind).toBe("new");
+      expect(addonNews("dns", "2.1.0", "1.5.2")?.keys).toEqual(["dns@2.0.0-rc.1", "dns@2.0.0", "dns@2.1.0"]);
+      expect(addonNews("dns", "2.1.0", "1.5.2", ["dns@2.0.0-rc.1", "dns@2.0.0", "dns@2.1.0"])).toBeNull();
+    } finally {
+      ADDONS.dns = original;
+    }
   });
 
   test("start after the installed release on a fresh install, and after the replaced one on an update", () => {
@@ -345,10 +372,13 @@ describe("opened badges", () => {
       // Reinstalling the same release keeps the record.
       recordNewsSince("2.0.0-rc.4", file, "2.0.0-rc.4");
       expect(readNewsSince(file)).toBe("2.0.0-rc.4");
-      recordNewsSince("v1.5.2", file, "2.0.0");
-      expect(readNewsSince(file)).toBe("1.5.2");
+      // A later update keeps it, so notices nobody has read stay up.
+      recordNewsSince("2.0.0-rc.4", file, "2.0.0");
+      expect(readNewsSince(file)).toBe("2.0.0-rc.4");
       writeFileSync(file, "garbage\n");
       expect(readNewsSince(file)).toBe("0.0.0");
+      recordNewsSince("v1.5.2", file, "2.0.0");
+      expect(readNewsSince(file)).toBe("1.5.2");
       // An update that rolls back leaves the record as it found it.
       writeFileSync(file, "2.0.0-rc.3\n");
       const restore = keepNewsSince(file);
@@ -371,8 +401,8 @@ describe("opened badges", () => {
     try {
       for (const [previous, current] of [["2.0.0-rc.1", "2.0.0-rc.2"], ["2.0.0", "2.0.1"]] as const) {
         const file = join(dir, `news-${current}.json`);
-        ADDONS.dns = { ...original, added: previous, changed: { in: current, note: "New DNS controls." } };
-        const openedBefore = markNewsSeen("dns", file, previous, "1.5.2");
+        ADDONS.dns = { ...original, added: previous, changed: [{ in: current, note: "New DNS controls." }] };
+        const openedBefore = markNewsSeen(["dns"], file, previous, "1.5.2");
         expect(openedBefore).toEqual([`dns@${previous}`]);
         expect(readNewsSeen(file, current, previous)).toEqual([]);
         const render = (seen: string[]) => indexPage(["dns"], null, { version: current, since: previous, seen }).text();
@@ -381,7 +411,7 @@ describe("opened badges", () => {
         expect(fresh).toContain(">Changed<");
         expect(fresh).toContain("New DNS controls.");
         expect(fresh).toContain(`data-news="dns@${current}"`);
-        const openedNow = markNewsSeen("dns", file, current, previous);
+        const openedNow = markNewsSeen(["dns"], file, current, previous);
         expect(openedNow).toEqual([`dns@${current}`]);
         const seen = await render(openedNow);
         expect(seen).not.toContain(">Changed<");
@@ -417,6 +447,7 @@ describe("the manager index", () => {
       expect(html).toContain('data-news="dns@2.0.0-rc.1"');
       expect(html).toContain('data-news="stager@2.0.0-rc.1"');
       expect(html).toContain('<p class="addon-changed">');
+      expect(html).toContain("readAllNews(this)");
     }
     // A box that already ran the release, or was installed fresh on a later one, sees none, opened or not.
     for (const since of ["2.0.0-rc.1", "2.0.0-rc.4"]) {
@@ -425,6 +456,7 @@ describe("the manager index", () => {
       expect(updated).not.toContain(">Changed<");
       expect(updated).not.toContain('data-news="');
       expect(updated).not.toContain('<p class="addon-changed">');
+      expect(updated).not.toContain("readAllNews(this)");
     }
   });
 

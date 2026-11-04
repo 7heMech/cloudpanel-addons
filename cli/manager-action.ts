@@ -29,7 +29,7 @@ import {
   type PruneJobsResult,
 } from "./job-store";
 import { CLI_BIN, LOCK_DIR, STATE_DIR } from "./paths";
-import { ADDONS, ADDON_NAMES, addonNews } from "./addon-catalog";
+import { ADDONS, ADDON_NAMES, addonNews, addonNoticeKeys } from "./addon-catalog";
 import { CLI_VERSION } from "./release";
 import { Fatal, log, requireRoot, writeAtomic } from "./util";
 
@@ -58,7 +58,7 @@ export type ManagerJobKind = "enable" | "disable" | "update";
 export interface ManagerOps {
   enable(addon: string): Promise<void> | void;
   disable(addon: string): Promise<void> | void;
-  update(beforeManagerRestart?: () => void): Promise<void>;
+  update(beforeManagerRestart?: () => void, onStep?: (step: string) => void): Promise<void>;
   /** Render every installed addon's block into the panel's templates again. */
   reconcile(): void;
 }
@@ -119,18 +119,25 @@ function failReply(error: string, data?: unknown, emit = true): number {
  * release that kept none, so every notice up to the installed one is news.
  */
 export function readNewsSince(file = NEWS_SINCE_FILE): string {
+  return storedNewsSince(file) ?? "0.0.0";
+}
+
+function storedNewsSince(file: string): string | null {
   try {
     const since = readFileSync(file, "utf-8").trim();
     if (/^\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?$/.test(since)) return since;
   } catch { /* none yet */ }
-  return "0.0.0";
+  return null;
 }
 
 /**
  * Called when the binary's release changes: `previous` is the one it replaced,
  * or null on a fresh install, where nothing is new to whoever installed it.
+ * Only the first record counts, so a notice stays up through later updates
+ * until someone reads it.
  */
 export function recordNewsSince(previous: string | null, file = NEWS_SINCE_FILE, version = CLI_VERSION): void {
+  if (storedNewsSince(file) !== null) return;
   const current = version.replace(/^v/, "");
   const since = previous === null ? current : previous.replace(/^v/, "");
   if (previous !== null && since === current) return;
@@ -158,26 +165,29 @@ export function keepNewsSince(file = NEWS_SINCE_FILE): () => void {
 }
 
 /**
- * The badges already opened that still mean something: a key for a notice no
- * longer shown, or a name no longer in the catalog, is dropped, so the file
+ * The notices already read that still mean something: a key for a notice no
+ * longer declared, or a name no longer in the catalog, is dropped, so the file
  * never outgrows the catalog.
  */
 export function readNewsSeen(file = NEWS_SEEN_FILE, version = CLI_VERSION, since = readNewsSince()): string[] {
   let stored: unknown = [];
   try { stored = JSON.parse(readFileSync(file, "utf-8")); } catch { /* none yet */ }
   if (!Array.isArray(stored)) return [];
+  const current = version.replace(/^v/, "");
   return stored.filter((key): key is string =>
-    typeof key === "string" && addonNews(key.split("@")[0]!, version, since)?.key === key);
+    typeof key === "string" && addonNoticeKeys(key.split("@")[0]!, current, since).includes(key));
 }
 
-/** Records the addon's current badge as read; an addon with none records nothing. */
-export function markNewsSeen(addon: string, file = NEWS_SEEN_FILE, version = CLI_VERSION, since = readNewsSince()): string[] {
-  // Locked so two administrators opening different addons both keep their key.
+/** Records the badge of the named addons, or of every addon, as read. */
+export function markNewsSeen(addons: string[] = ADDON_NAMES, file = NEWS_SEEN_FILE, version = CLI_VERSION, since = readNewsSince()): string[] {
+  const current = version.replace(/^v/, "");
+  // Locked so two administrators reading different addons both keep their keys.
   return withFileLockSync(`${file}.lock`, 5, "another addon is being marked as read", () => {
-    const seen = readNewsSeen(file, version, since);
-    const key = addonNews(addon, version, since)?.key;
-    if (!key || seen.includes(key)) return seen;
-    seen.push(key);
+    const seen = readNewsSeen(file, current, since);
+    const keys = addons.flatMap((addon) => addonNews(addon, current, since, seen)?.keys ?? []);
+    const fresh = keys.filter((key) => !seen.includes(key));
+    if (!fresh.length) return seen;
+    seen.push(...fresh);
     writeAtomic(file, `${JSON.stringify(seen)}\n`, 0o644);
     return seen;
   });
@@ -385,6 +395,9 @@ export async function runManagerJob(id: string, ops: ManagerOps, jobsDir = MANAG
       await ops.update(() => {
         jobSet(dir, "step", "restarting background services");
         jobSet(dir, "event", "restarting");
+      }, (step) => {
+        log.step(step);
+        jobSet(dir, "step", step);
       });
     } else {
       throw new Fatal(`job '${id}' has no kind this binary knows how to run`);
@@ -455,9 +468,8 @@ export async function runManagerAction(
         return reply({ ok: true, data: { since, seen: readNewsSeen(options.newsFile, options.version, since) } }, options.emitReply !== false);
       }
       case "mark-news-seen":
-        if (!addon) return failReply("'mark-news-seen' needs --addon", undefined, options.emitReply !== false);
-        if (!ADDONS[addon]) return failReply(`unknown addon '${addon}'`, undefined, options.emitReply !== false);
-        return reply({ ok: true, data: markNewsSeen(addon, options.newsFile, options.version, readNewsSince(options.sinceFile)) }, options.emitReply !== false);
+        if (addon && !ADDONS[addon]) return failReply(`unknown addon '${addon}'`, undefined, options.emitReply !== false);
+        return reply({ ok: true, data: markNewsSeen(addon ? [addon] : undefined, options.newsFile, options.version, readNewsSince(options.sinceFile)) }, options.emitReply !== false);
       case "watch-job": {
         const jobsDir = options.jobsDir ?? MANAGER_JOBS_DIR;
         const wanted = id || latestManagerJob(jobsDir);
