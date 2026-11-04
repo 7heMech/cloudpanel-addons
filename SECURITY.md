@@ -13,9 +13,10 @@ declared addon operations, and starts them with an argument array. Root actions
 validate their inputs before changing the host.
 [Design](docs/decisions/security.md#privileged-actions)
 
-Addon pages use the existing CloudPanel session. The gateway rejects expired
-or malformed sessions and checks the account's current status and role in the
-panel database. The manager requires an administrator by default. Named
+Addon pages use the existing CloudPanel session. A separate authentication
+gateway checks it on every addon page request: it rejects expired or malformed
+sessions and rechecks the account's current status and role in the panel
+database. The manager requires an administrator by default. Named
 exceptions let other accounts work with their permitted sites or their own
 security keys. Browser changes require the panel's origin and a CSRF token.
 Git webhooks and passkey sign-in have separate credential checks.
@@ -37,10 +38,10 @@ script checks only the download's checksum.
 
 Root and CloudPanel administrators can change the host. The installed addon
 binary, the web manager, CloudPanel's authentication and its database are
-trusted. For most operations, the gateway relies on the manager to identify
-the caller and enforce their role. A compromised manager could request those
-allowed root operations. Terminal and own-account security-key operations
-add a session check in the gateway itself.
+trusted. For most operations, the root gateway relies on the manager to
+identify the caller and enforce their role. A compromised manager could request
+those allowed root operations. Terminal and own-account security-key operations
+add a session check in the root gateway itself.
 
 The addons do not change CloudPanel's root nginx workers or root File Manager
 pool, and do not provide per-site operating-system isolation. Protecting known
