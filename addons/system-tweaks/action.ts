@@ -14,6 +14,7 @@ import {
 import { INSTALL_DEADLINE_MS } from "./limits";
 import { uploadProgressStatus, type FpmUploadProgress, type UploadProgressOptions } from "./upload-progress";
 import { applyRealIp, realIpStatus, type RealIpOptions, type RealIpStatus } from "./real-ip";
+import { applyPhpMyAdmin, phpMyAdminStatus, type PhpMyAdminOptions, type PhpMyAdminStatus } from "./phpmyadmin";
 import {
   panelPhpStatus, reconcilePanelPhp, restorePanelPhp, setPanelPhp, withdrawPanelPhp, type PanelPhpOptions, type PanelPhpStatus,
 } from "./panel-php";
@@ -44,6 +45,8 @@ export interface SystemTweaksSettings {
   blockVhostInjection: boolean;
   /** Let only nginx and each pool's own user connect to a site's PHP-FPM port. */
   isolatePhpPools: boolean;
+  /** Keep basic auth outside phpMyAdmin and hide its example, setup and version files. */
+  protectPhpMyAdmin: boolean;
 }
 
 export interface SystemTweaksState {
@@ -53,6 +56,7 @@ export interface SystemTweaksState {
   realIp: RealIpStatus & { blockForged: boolean };
   vhostGuard: { enabled: boolean; active: boolean; stored: StoredVhostValue[] | { error: string }; homeLogs: string[]; ownLogrotate: string[] };
   phpPools: PoolIsolationStatus & { enabled: boolean };
+  phpMyAdmin: PhpMyAdminStatus & { enabled: boolean };
   panelPhp: PanelPhpStatus | { error: string };
   firewall: FirewallStatus | { error: string };
 }
@@ -78,6 +82,7 @@ export interface SystemTweaksOptions {
   uploadProgress?: UploadProgressOptions;
   phpGuard?: PhpGuardOptions;
   realIp?: RealIpOptions;
+  phpMyAdmin?: PhpMyAdminOptions;
   vhostGuard?: VhostGuardOptions;
   vhostValues?: VhostValuesOptions;
   varnishBackend?: VarnishBackendOptions;
@@ -100,6 +105,7 @@ export function readSettings(paths: SystemTweaksPaths): SystemTweaksSettings {
     blockForgedRealIp: true,
     blockVhostInjection: true,
     isolatePhpPools: true,
+    protectPhpMyAdmin: true,
   };
   if (!existsSync(paths.settingsFile)) return settings;
   const info = lstatSync(paths.settingsFile);
@@ -124,6 +130,7 @@ export function readSettings(paths: SystemTweaksPaths): SystemTweaksSettings {
   if (stored.blockForgedRealIp === false) settings.blockForgedRealIp = false;
   if (stored.blockVhostInjection === false) settings.blockVhostInjection = false;
   if (stored.isolatePhpPools === false) settings.isolatePhpPools = false;
+  if (stored.protectPhpMyAdmin === false) settings.protectPhpMyAdmin = false;
   return settings;
 }
 
@@ -150,6 +157,7 @@ async function stateOf(options: SystemTweaksOptions): Promise<SystemTweaksState>
       fpms: uploadProgressStatus(options.uploadProgress),
     },
     realIp: { ...realIpStatus(options.realIp), blockForged: settings.blockForgedRealIp },
+    phpMyAdmin: { ...phpMyAdminStatus(options.phpMyAdmin), enabled: settings.protectPhpMyAdmin },
     vhostGuard: {
       enabled: settings.blockVhostInjection,
       active: (await vhostGuardStatus(options.vhostGuard)).active && varnishBackendsActive(options.varnishBackend),
@@ -242,6 +250,18 @@ async function setRealIp(options: SystemTweaksOptions): Promise<SystemTweaksStat
   return stateOf(options);
 }
 
+async function setPhpMyAdmin(options: SystemTweaksOptions): Promise<SystemTweaksState> {
+  const paths = pathsFor(options);
+  const body = await requestBody(options);
+  if (typeof body.enabled !== "boolean") failAction("enabled must be true or false");
+  await withFileLock(paths.lockFile, 15, "another system tweaks change is still running", async () => {
+    const settings = readSettings(paths);
+    applyPhpMyAdmin(body.enabled as boolean, options.phpMyAdmin);
+    writeSettings(paths, { ...settings, protectPhpMyAdmin: body.enabled as boolean });
+  });
+  return stateOf(options);
+}
+
 async function setVhostGuard(options: SystemTweaksOptions): Promise<SystemTweaksState> {
   const paths = pathsFor(options);
   const body = await requestBody(options);
@@ -311,6 +331,7 @@ export async function executeSystemTweaksAction(argv: string[], options: SystemT
   if (verb === "set-upload-guard") return setUploadGuard(options);
   if (verb === "set-real-ip") return setRealIp(options);
   if (verb === "set-vhost-guard") return setVhostGuard(options);
+  if (verb === "set-phpmyadmin") return setPhpMyAdmin(options);
   if (verb === "set-panel-php") return changePanelPhp(options);
   if (verb === "set-php-pools") return setPhpPools(options);
   if (verb === "firewall") return firewallStatus(options.firewall);
@@ -361,6 +382,12 @@ export async function systemTweaksMaintenance(options: SystemTweaksOptions = {})
     failures.push(errorMessage(error));
   }
   try {
+    const phpMyAdmin = systemTweaksPhpMyAdmin(options);
+    if (phpMyAdmin) lines.push(phpMyAdmin);
+  } catch (error) {
+    failures.push(`phpMyAdmin rules: ${errorMessage(error)}`);
+  }
+  try {
     const firewall = syncFirewall("apply", options.firewall);
     if (firewall) lines.push(`firewall: ${firewall}`);
   } catch (error) {
@@ -404,6 +431,12 @@ export async function systemTweaksMaintenance(options: SystemTweaksOptions = {})
   return lines.join("; ") || null;
 }
 
+/** Repair's, and the fast repair's when CloudPanel rewrites its vhost. */
+export function systemTweaksPhpMyAdmin(options: SystemTweaksOptions = {}): string | null {
+  return withSettingsLock(options, (_paths, settings) =>
+    settings.protectPhpMyAdmin && applyPhpMyAdmin(true, options.phpMyAdmin) ? "phpMyAdmin rules put back" : null);
+}
+
 /** Repair's and the new-site watcher's: every site's Varnish backend comes from its checked include. */
 export function systemTweaksVarnish(options: SystemTweaksOptions = {}): string | null {
   return withSettingsLock(options, (_paths, settings) =>
@@ -431,6 +464,7 @@ export function withdrawSystemTweaks(options: SystemTweaksOptions = {}): void {
       applyUpdates({ ...settings.updates, enabled: false }, settings.enabledTimers, options.updates);
       if (settings.enabledTimers.length) writeSettings(paths, { ...settings, enabledTimers: [] });
       applyRealIp(false, options.realIp);
+      applyPhpMyAdmin(false, options.phpMyAdmin);
       removeVhostGuard(options.vhostGuard);
       try {
         removeVarnishBackends(options.varnishBackend);
@@ -460,6 +494,7 @@ export function restoreSystemTweaks(options: SystemTweaksOptions = {}): void {
       }
       if (!settings.uploadProgressGuard) reconcilePhpGuard(true, false, guardOptions(options));
       if (settings.blockForgedRealIp) applyRealIp(true, options.realIp);
+      if (settings.protectPhpMyAdmin) applyPhpMyAdmin(true, options.phpMyAdmin);
       if (settings.blockVhostInjection) queueVhostGuard(options.vhostGuard);
       if (settings.isolatePhpPools) installPoolIsolation(options.phpPools);
     });

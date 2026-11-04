@@ -544,6 +544,7 @@ function systemTweaksPreviewState(url: URL): SystemTweaksState {
     },
     panelPhp: panelPhpPreviewStatus(url),
     realIp: { blockForged: url.searchParams.get("realip") !== "off", trustsAnyAddress: url.searchParams.get("realip") === "off", problem: "" },
+    phpMyAdmin: { enabled: url.searchParams.get("pma") !== "off", active: url.searchParams.get("pma") !== "off", problem: "" },
     firewall: { available: true, protocols: { 9: "udp", 10: "udp", 11: "both" }, udpPorts: url.searchParams.has("noudp") ? [] : ["53", "51820"] },
     vhostGuard: {
       enabled: url.searchParams.get("vhost") !== "off", active: url.searchParams.get("vhost") !== "off",
@@ -575,6 +576,8 @@ function systemTweaksPreviewMutation(path: string, source: URL, body: Record<str
     state.updates.version = "2.9.1+nmu3";
   } else if (path.endsWith("/vhost-guard")) {
     state.vhostGuard = { ...state.vhostGuard, enabled: body.enabled === true, active: body.enabled === true };
+  } else if (path.endsWith("/phpmyadmin")) {
+    state.phpMyAdmin = { enabled: body.enabled === true, active: body.enabled === true, problem: "" };
   } else if (path.endsWith("/real-ip")) {
     state.realIp = { blockForged: body.enabled === true, trustsAnyAddress: body.enabled !== true, problem: "" };
   } else if (path.endsWith("/upload-guard")) {

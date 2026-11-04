@@ -102,6 +102,10 @@ function setPhpPools(input) {
   return change(input, '/api/php-pools', { enabled: input.checked }, switchText(input), 'Saved.');
 }
 
+function setPhpMyAdmin(input) {
+  return change(input, '/api/phpmyadmin', { enabled: input.checked }, switchText(input), 'Saved.');
+}
+
 function setVhostGuard(input) {
   return change(input, '/api/vhost-guard', { enabled: input.checked }, switchText(input), 'Saved.');
 }

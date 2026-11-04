@@ -311,6 +311,13 @@ function realIpLine(state: SystemTweaksState["realIp"]): string {
     state.blockForged ? " Run clp-addons repair." : ""}</span>`;
 }
 
+function phpMyAdminLine(state: SystemTweaksState["phpMyAdmin"]): string {
+  if (state.problem) return `${badge("Unknown", "warn")} <span>${esc(state.problem)}</span>`;
+  if (state.active) return `${badge("On", "ok")} <span>Basic auth covers every panel URL outside phpMyAdmin.</span>`;
+  if (state.enabled) return `${badge("Not applied", "warn")} <span>Run clp-addons repair.</span>`;
+  return `${badge("Off", "plain")} <span>phpMyAdmin's example sign-on script lets anyone make this server try MySQL logins on other hosts.</span>`;
+}
+
 /** Site settings saved before the guard, or by a site's own user, that it would refuse now. */
 function storedValuesWarning(stored: SystemTweaksState["vhostGuard"]["stored"]): string {
   if ("error" in stored) return `<p class="st-status hint">Stored site settings could not be checked: ${esc(stored.error)}</p>`;
@@ -370,6 +377,16 @@ function settingsCard(state: SystemTweaksState): string {
         checked: state.realIp.blockForged,
         onchange: "setRealIp(this)",
         extra: `<p class="st-status">${realIpLine(state.realIp)}</p>`,
+      })}${settingRow({
+        key: "protectPhpMyAdmin",
+        title: "Lock down phpMyAdmin",
+        description: [
+          "Keeps the panel's basic auth on URLs that only start with /phpmyadmin, such as /phpmyadmin/../file-manager/.",
+          "Hides phpMyAdmin's example and setup scripts and the files that show its version. Signing in from the panel still works.",
+        ],
+        checked: state.phpMyAdmin.enabled,
+        onchange: "setPhpMyAdmin(this)",
+        extra: `<p class="st-status">${phpMyAdminLine(state.phpMyAdmin)}</p>`,
       })}${settingRow({
         key: "blockVhostInjection",
         title: "Block nginx config injection",

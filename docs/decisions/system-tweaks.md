@@ -10,7 +10,7 @@ Firewall page.
 
 Two cards: Automatic updates, which an operator comes back to, then one
 Settings card for the panel's PHP, the upload-progress mitigation, forged
-visitor IPs and nginx config injection, which are set once. Each row says what it does in a sentence; the
+visitor IPs, phpMyAdmin and nginx config injection, which are set once. Each row says what it does in a sentence; the
 reasons are here. The Nginx, MySQL, CloudPanel and reboot rows appear only once
 System Tweaks' own switch is on, since they change nothing before. The
 repositories and each PHP-FPM's upload-progress value fold into a summary that
@@ -292,6 +292,66 @@ whatever the upgrade installed. The panel's file is not a conffile: a
 `bun tests/integration/integration-real-ip.ts` runs real Nginx in Docker: it
 reproduces the bypass on the stock directives, then shows the edited ones reject
 it while Cloudflare peers and loopback proxies keep working.
+
+## phpMyAdmin
+
+CloudPanel 6's panel vhost, `/home/clp/services/nginx/sites-enabled/cloudpanel.conf`,
+sets `$basicAuth` on when `/home/clp/services/nginx/basic-auth/credentials`
+exists, then off again when `$request_uri ~ ^/phpmyadmin`. `$request_uri` is the
+raw request line, so `/phpmyadmin/../file-manager/` or
+`/phpmyadmin/..%2ffile-manager/` matched it while Nginx served the normalized
+`/file-manager/` without basic auth. phpMyAdmin also served its stock
+`examples/signon.php`, which takes a MySQL host, port, user and password from
+anyone and makes phpMyAdmin connect to them: a way to probe hosts and ports from
+the server and to sign a victim's browser in to phpMyAdmin. `setup/`,
+`composer.json`, `RELEASE-DATE-*`, `vendor/composer/installed.json` and `sql/`
+were served too.
+
+**Lock down phpMyAdmin**, on by default (`protectPhpMyAdmin`), adds one marked
+block (`# clp-addons:phpmyadmin:start` to `:end`) right before the vhost's
+`auth_basic $basicAuth;`, in `addons/system-tweaks/phpmyadmin.ts`. It leaves
+CloudPanel's lines as they are and only ever sets `$basicAuth` on: on when the
+credentials file named by the vhost's `auth_basic_user_file` exists and the
+decoded, normalized `$uri` is not `/phpmyadmin` or under `/phpmyadmin/`. Server
+`set` and `if` directives run in file order and again after each internal
+redirect, so the block must come after CloudPanel's and before the
+`if (-f $request_filename) { break; }` that ends them; the `auth_basic` line is
+that place. A phpMyAdmin URL that falls through to the panel's `/index.php` now
+needs basic auth, which no phpMyAdmin page does. A vhost without exactly one
+`auth_basic $basicAuth;` and one `auth_basic_user_file` gets nothing and the
+page says why.
+
+The block also answers 404, before basic auth, for `examples/`, `setup/`,
+`sql/`, `vendor/`, `libraries/`, `templates/`, `locale/` and `tmp/`, which no
+phpMyAdmin page loads in the browser, and for its release and package files,
+dotfiles and `config.sample.inc.php`. These are regex locations placed ahead of
+CloudPanel's `\.php$` location, which would otherwise run the scripts. `doc/`
+stays: phpMyAdmin's help links open it when it is present, and its static
+files give the version away anyway. The panel opens phpMyAdmin through
+`/pma/...`, which redirects to `/phpmyadmin/login.php`, so its sign-in is
+unaffected; the staging check loaded that page and every script, stylesheet and
+image it names, with and without basic auth.
+
+It is a setting of its own rather than part of **Block nginx config
+injection**: that one guards what panel accounts write into site vhosts, while
+this changes the panel's own vhost and phpMyAdmin, and either can be wanted
+without the other. It is on by default because nothing it removes is used.
+
+The vhost belongs to the `clp` account, mode 770, so the change uses the shared
+Nginx transaction as the forged-IP setting does: the file is accepted when owned
+by that account and not world-writable, written with its owner kept, tested
+with `nginx -t -c /home/clp/services/nginx/nginx.conf`, reloaded with
+`clp-nginx`, and restored on failure. Switching off removes the block and leaves
+the file as CloudPanel wrote it. A CloudPanel update rewrites the vhost, which
+wakes `clp-addons-anchor.path`; its `repair --anchors-only` puts the block back
+after the `/addons/` proxy, and the 15-minute repair does too. Disabling the
+addon removes it.
+
+The `/addons/` proxy's reconciler in `cli/inject.ts` records a hash of the vhost
+without its own block, and refuses to touch a file whose hash changed. It
+leaves the phpMyAdmin block out of that hash too, so neither reconciler reads
+the other's block as a CloudPanel rewrite. Both write the vhost with its owner
+kept, so CloudPanel's own account can still rewrite it.
 
 ## Nginx config injection
 

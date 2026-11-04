@@ -33,6 +33,10 @@ export const systemTweaksService = {
     return call("set-real-ip", JSON.stringify({ enabled }), REAL_IP_GATEWAY_TIMEOUT_MS);
   },
 
+  setPhpMyAdmin(enabled: boolean): Promise<ActionResult<SystemTweaksState>> {
+    return call("set-phpmyadmin", JSON.stringify({ enabled }), REAL_IP_GATEWAY_TIMEOUT_MS);
+  },
+
   firewall(): Promise<ActionResult<FirewallStatus>> {
     return callGatewayAction("system-tweaks", "firewall", []);
   },

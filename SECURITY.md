@@ -94,6 +94,14 @@ mitigates the session path of
 patched PHP packages are still required.
 [Guide](docs/system-tweaks.md#php-upload-progress-mitigation)
 
+**phpMyAdmin.** The panel's basic auth skips only phpMyAdmin itself, not any
+address that merely starts with `/phpmyadmin`, such as
+`/phpmyadmin/../file-manager/`. phpMyAdmin's example sign-on script, which let
+anyone make the server try MySQL logins on other hosts, its setup script, its
+internal folders and the files that show its version return 404. Signing in to
+phpMyAdmin from the panel is unchanged.
+[Guide](docs/system-tweaks.md#phpmyadmin)
+
 The nginx settings default to on when System Tweaks is enabled. PHP upload
 progress is disabled independently of that addon; System Tweaks provides its
 opt-out. Existing saved nginx values are flagged for review, not repaired.
