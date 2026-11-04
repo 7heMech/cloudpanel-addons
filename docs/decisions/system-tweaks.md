@@ -410,7 +410,7 @@ the user's directories goes through directory descriptors opened with
 `O_NOFOLLOW`, and it sets owner and mode on open descriptors, never by path, so
 a link the user swaps in meanwhile is never followed. `chown -R`, which
 CloudPanel's `clpctl system:permissions:reset` runs on the home, changes the
-link itself, not its target. Both were checked on staging.
+link itself, not its target.
 
 The sync also rewrites CloudPanel's two exact log lines in each rendered vhost
 before nginx loads it, with the access-log format the site's Cloudflare setting
@@ -448,7 +448,7 @@ two blocks: `~/logs/php` and `~/logs/varnish-cache` with `su <site user>
 <site user>`, and `/var/log/clp-addons-nginx/<site user>/*.log` as root with
 `create 0640 root <site user>`. logrotate still runs the `postrotate` nginx
 reload as root under `su`, and a rename through a link the user swapped in is
-refused, both checked on staging. A file that is neither CloudPanel's nor the
+refused. A file that is neither CloudPanel's nor the
 addon's stays as it is and is listed on the page; one still CloudPanel's keeps
 the page from "On". Switching off puts CloudPanel's file back.
 
@@ -494,7 +494,7 @@ runs `clp-addons sync-php-pools` as `ExecStartPre=` and after the unit's own
 `ExecReload=`; the start is also what loads the table after a reboot.
 `ExecStartPost=` is not used: the units are `Type=notify` with a `PIDFile=`,
 and with a start-post command systemd waits for a PID file PHP-FPM does not
-write, so the start timed out on staging. The sync reads the setting without
+write, so the start times out. The sync reads the setting without
 the system tweaks lock, since a change on the page can be what reloads PHP-FPM,
 and removes the table again if the setting went off while it was loading.
 Repair and re-enabling the addon put the drop-ins and table back; switching

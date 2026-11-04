@@ -325,7 +325,7 @@ function homeLogsWarning(domains: string[]): string {
   if (!domains.length) return "";
   const listed = domains.slice(0, 10).map(esc).join(", ");
   return warning(`These sites' vhosts still write nginx logs in the site user's home, where that user can point them at any file: ${listed}${
-    domains.length > 10 ? ` and ${domains.length - 10} more` : ""}. clp-addons rewrites a vhost only when root alone can write it: make each one in /etc/nginx/sites-enabled mode 644, then run clp-addons repair.`);
+    domains.length > 10 ? ` and ${domains.length - 10} more` : ""}. clp-addons rewrites a vhost only when root alone can write it: make each one in /etc/nginx/sites-enabled owned by root with mode 644, then run clp-addons repair.`);
 }
 
 /** Sites whose logrotate file was edited by hand, so the sync left it as it is. */

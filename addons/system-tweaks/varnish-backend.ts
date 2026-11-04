@@ -13,7 +13,7 @@ import type { Database } from "bun:sqlite";
 import {
   chmodSync, chownSync, closeSync, constants, existsSync, fchmodSync, fchownSync, fstatSync, lchownSync,
   lstatSync, mkdirSync, openSync, readdirSync, readFileSync, readlinkSync, readSync, renameSync,
-  rmdirSync, rmSync, symlinkSync, unlinkSync, writeSync,
+  rmdirSync, rmSync, symlinkSync, unlinkSync, writeFileSync,
 } from "node:fs";
 import { join } from "node:path";
 import { failAction, normalizeIdentityHostname, runCommand, type CommandResult } from "../../cli/action-common";
@@ -242,7 +242,11 @@ function createFileAt(path: string, data: Uint8Array, owner: Owner, mode: number
   try {
     fchownSync(fd, owner.uid, owner.gid);
     fchmodSync(fd, mode);
-    writeSync(fd, data);
+    // All of it or none: a short write on a full disk must not count as a copy.
+    writeFileSync(fd, data);
+  } catch (error) {
+    try { unlinkSync(path); } catch {}
+    throw error;
   } finally {
     closeSync(fd);
   }
@@ -665,8 +669,8 @@ export function removeVarnishBackends(options: VarnishBackendOptions = {}): bool
   }
   const all = withPanelDb(ctx.paths.panelDb, sites);
   const passwd = passwdUsers(ctx.paths.passwdFile);
-  unstageSiteLogs(all, ctx.paths, passwd);
   try {
+    unstageSiteLogs(all, ctx.paths, passwd);
     withVhosts(ctx, false);
   } catch (error) {
     if (dropIn !== null) {

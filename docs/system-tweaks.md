@@ -114,7 +114,8 @@ you edit a vhost: the **Vhost** editor refuses `{{varnish_proxy_pass}}`,
 `{{nginx_access_log}}`, `{{nginx_error_log}}` and log paths under `/home`.
 The addon only rewrites a vhost that root alone can write. The page lists any
 site whose vhost still writes logs in the home: make that file in
-`/etc/nginx/sites-enabled` mode 644, then run `clp-addons repair`.
+`/etc/nginx/sites-enabled` owned by root with mode 644 (`chown root:root`,
+`chmod 644`), then run `clp-addons repair`.
 
 CloudPanel's `/etc/logrotate.d/<user>` rotates everything in `~/logs` as root,
 so the site's user could point a folder there at any directory and have root
