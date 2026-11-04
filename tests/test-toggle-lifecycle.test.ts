@@ -179,6 +179,7 @@ function fixture(options: { provisioned: boolean; enabled: string[] }): string {
       smtp: ["clp-addons-new-sites.path", "clp-addons-new-sites.service", "clp-addons-new-site-rows.path"],
       dns: ["clp-addons-new-sites.path", "clp-addons-new-sites.service", "clp-addons-new-site-rows.path"],
       "wp-tools": ["clp-addons-new-sites.path", "clp-addons-new-sites.service", "clp-addons-certificates.path", "clp-addons-certificates.service"],
+      "system-tweaks": ["clp-addons-firewall.path", "clp-addons-firewall.service"],
     };
     for (const unit of units[name] ?? []) writeFileSync(join(root, "systemd", unit), "# placeholder\n");
   }
@@ -465,6 +466,15 @@ function optedOutFixture(alsoEnabled: string[] = []): { root: string; guard: str
 }
 
 const guardTests = (run: Run) => run.calls.filter(([cmd, args]) => cmd.endsWith("php-fpm8.3") && args[0] === "-t");
+
+test("disabling System Tweaks takes the firewall watcher away", () => {
+  const { root } = optedOutFixture(["maintenance"]);
+  const run = toggle([{ verb: "disable", addon: "system-tweaks" }], { root });
+  expect(run.error).toBeUndefined();
+  expect(run.systemd).toContain("disable --now clp-addons-firewall.path");
+  expect(existsSync(join(root, "systemd", "clp-addons-firewall.path"))).toBe(false);
+  expect(existsSync(join(root, "systemd", "clp-addons-firewall.service"))).toBe(false);
+});
 
 test("disabling System Tweaks puts its opted-out guard back, even with no addon left", () => {
   const { root, guard } = optedOutFixture();

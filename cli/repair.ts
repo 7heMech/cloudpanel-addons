@@ -1,12 +1,12 @@
 // `clp-addons repair`.
 
 import { installedAddons, resolveAddon, migrateOldAddonNames } from "./addons";
-import { reconcileAnchors, reconcileMaintenanceNginx, reconcileNginx } from "./reconcile";
+import { reconcileAnchors, reconcileMaintenanceNginx, reconcileNginx, reconcilePhpMyAdminRules } from "./reconcile";
 import { reconcilePhpGuard } from "./php-guard";
 import { runAddonRepairs, runManagerRepair } from "./addon-hooks";
 import { withOperationLock } from "./operation-lock";
 import { conffilesReleased } from "./conffiles";
-import { CERTIFICATES_PATH, MANAGER_UNIT, NEW_SITES_PATH, SYSTEMD_DIR } from "./paths";
+import { CERTIFICATES_PATH, FIREWALL_PATH, MANAGER_UNIT, NEW_SITES_PATH, SYSTEMD_DIR } from "./paths";
 import {
   ensureAuthHelperReady, ensureDirs, ensurePathWatching, ensureServiceUser, ensureTimerArmed, hardenBackups, installUnits,
   managerSocketProblem, reconcilePanelIdentity, removeLegacyUnits, startUnits,
@@ -16,7 +16,8 @@ import { fatal, log, parseFlags, requireRoot } from "./util";
 import { existsSync } from "node:fs";
 /**
  * Reconciles manager provisioning and enabled addon state, or only injected
- * CloudPanel anchors and the Nginx proxy when `--anchors-only` is supplied.
+ * CloudPanel anchors, the Nginx proxy and System Tweaks' phpMyAdmin rules when
+ * `--anchors-only` is supplied.
  */
 export async function cmdRepair(argv: string[]): Promise<void> {
   requireRoot("repair");
@@ -44,6 +45,7 @@ async function applyRepair(positional: string[], flags: Record<string, string | 
     reconcileAnchors(quiet);
     if (!reconcileMaintenanceNginx(quiet)) log.err("Nginx maintenance check is not ready; fix the problem above, then run repair again");
     if (!reconcileNginx(quiet)) log.err("Nginx proxy is not ready; run repair after checking the master vhost");
+    reconcilePhpMyAdminRules(quiet);
     return;
   }
   migrateOldAddonNames(quiet);
@@ -80,6 +82,7 @@ async function applyRepair(positional: string[], flags: Record<string, string | 
     ensureTimerArmed("clp-addons-reconcile.timer", quiet);
     if (all.some((spec) => spec.newSites)) ensurePathWatching(NEW_SITES_PATH, quiet);
     if (all.some((spec) => spec.certificates)) ensurePathWatching(CERTIFICATES_PATH, quiet);
+    if (all.some((spec) => spec.firewall)) ensurePathWatching(FIREWALL_PATH, quiet);
   }
   reconcileAnchors(quiet);
   if (!reconcileMaintenanceNginx(quiet)) log.err("Nginx maintenance check is not ready; fix the problem above, then run repair again");

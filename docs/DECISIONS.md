@@ -13,6 +13,7 @@
 - [Git Deploy](decisions/git.md)
 - [Panel Tweaks](decisions/panel-tweaks.md)
 - [System Tweaks](decisions/system-tweaks.md)
+  - [Retiring a mitigation](decisions/system-tweaks.md#retiring-a-mitigation) — per-mitigation checklist for when CloudPanel fixes the root cause
 - [WordPress Tools](decisions/wp-tools.md)
 - [Terminal](decisions/terminal.md)
 - [Security Keys](decisions/security-keys.md)

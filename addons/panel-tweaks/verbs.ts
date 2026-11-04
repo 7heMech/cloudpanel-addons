@@ -4,6 +4,11 @@ export const PANEL_TWEAKS_VERBS = {
   // sees; a non-administrator is named with --as-user and gets their own rows.
   state: { web: "panel-user" },
   "set-tweaks": { web: "admin" },
+  branding: { web: "admin" },
+  "set-branding": { web: "admin" },
+  // The logos and favicon the panel's pages, the login page among them, load.
+  // Public by nature; root answers only an image a branding slot names.
+  "branding-asset": { web: "pre-gate" },
   // A size measurement, run as a background job that `job` and `watch-job` follow.
   measure: { web: "admin" },
   job: { web: "admin" },

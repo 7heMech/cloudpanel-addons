@@ -24,8 +24,10 @@ import { runAuthActionStdin } from "./auth-action";
 import { runManagerAction, type ManagerOps } from "./manager-action";
 import { runSmtpSubmit } from "../addons/smtp/submit";
 import { runTerminalPty } from "../addons/terminal/pty";
-import { runCertificateWork } from "./addon-hooks";
+import { runCertificateWork, runFirewallWork } from "./addon-hooks";
 import { runSyncSites } from "./new-sites";
+import { syncVarnishBackends } from "../addons/system-tweaks/varnish-backend";
+import { systemTweaksPhpPools } from "../addons/system-tweaks/action";
 
 /**
  * The privileged half of the three manager verbs.
@@ -38,7 +40,7 @@ import { runSyncSites } from "./new-sites";
 export const MANAGER_OPS: ManagerOps = {
   enable: applyEnable,
   disable: applyDisable,
-  update: (beforeManagerRestart) => cmdUpdate([], { beforeManagerRestart }),
+  update: (beforeManagerRestart, onStep) => cmdUpdate([], { beforeManagerRestart, onStep }),
   // Short: this one answers a live request from the panel, so it refuses and
   // names the operation in the way rather than making the page wait it out.
   reconcile: () => withOperationLockSync("reconcile", () => {
@@ -136,6 +138,26 @@ async function main(): Promise<number> {
       if (rest.length) fatal("sync-certificates takes no arguments");
       await runCertificateWork(installedAddons());
       return 0;
+    case "sync-firewall":
+      requireRoot("sync-firewall");
+      if (rest.length) fatal("sync-firewall takes no arguments");
+      await runFirewallWork(installedAddons());
+      return 0;
+    case "sync-varnish": {
+      // nginx's unit runs this before it loads the vhosts; its failure does not stop the reload.
+      requireRoot("sync-varnish");
+      if (rest.length) fatal("sync-varnish takes no arguments");
+      const refused = syncVarnishBackends();
+      if (refused.length) log.warn(`Varnish server refused, so these sites skip Varnish: ${refused.join(", ")}`);
+      return 0;
+    }
+    case "sync-php-pools": {
+      // Every PHP-FPM unit runs this before it starts, and before and after it reloads; its failure does not stop PHP-FPM.
+      requireRoot("sync-php-pools");
+      if (rest.length > 1 || (rest.length === 1 && rest[0] !== "--before-reload")) fatal("sync-php-pools takes only --before-reload");
+      systemTweaksPhpPools({}, rest[0] === "--before-reload");
+      return 0;
+    }
     case "status": await cmdStatus(); return 0;
     case "maintenance": await cmdMaintenance(rest); return 0;
     case "uninstall": cmdUninstall(rest); return 0;

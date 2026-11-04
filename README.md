@@ -1,10 +1,11 @@
 # CloudPanel Addons
 
-Extra features for [CloudPanel](https://www.cloudpanel.io/): staging copies,
-maintenance pages, Git deploys, one-click WordPress sign-in, and more. You sign
-in with your existing CloudPanel login.
+Security hardening and extra features for [CloudPanel](https://www.cloudpanel.io/).
+The default install adds nginx config-injection checks, restricts trusted IP
+headers and disables PHP upload progress. See the
+[security model and hardening](SECURITY.md).
 
-This is an unofficial project, not affiliated with or endorsed by CloudPanel.
+Unofficial, not affiliated with or endorsed by CloudPanel.
 
 ## Install
 
@@ -14,8 +15,9 @@ Log in to your server as **root** and run:
 curl -fsSL https://github.com/7heMech/cloudpanel-addons/releases/latest/download/install.sh | bash
 ```
 
-The installer asks which addons you want, and installs Docker or Postfix when a
-selected addon needs it. Updates are checked against GitHub build provenance.
+Asks which addons you want, installs dependencies for them if needed and checks
+the download's SHA-256 checksum. Updates also check build provenance.
+
 Requires an x86-64 CloudPanel host.
 
 When it finishes, open the new **Addons** tab in CloudPanel.
@@ -34,8 +36,8 @@ When it finishes, open the new **Addons** tab in CloudPanel.
 | PHP Resources | Categories of PHP-FPM worker limits, assigned in bulk and to new sites. |
 | [SMTP Relay](docs/smtp-relay.md) | Send each site's mail through SMTP relay profiles, WordPress and PHP included. |
 | Git Deploy | Deploys from a Git remote, from the panel or from a push. |
-| Panel Tweaks | Site search, columns and CSV download, automatic SSL for native sites, mobile layouts and themes. |
-| [System Tweaks](docs/system-tweaks.md) | Automatic security updates, the panel’s PHP version, the PHP upload-progress mitigation, forged visitor-IP blocking and clearing abandoned PHP temp files from /tmp. |
+| Panel Tweaks | Site search, columns and CSV download, automatic SSL for native sites, mobile layouts, themes and branding. |
+| [System Tweaks](docs/system-tweaks.md) | Security hardening, automatic updates, the panel's PHP version, PHP temp-file cleanup and UDP firewall rules. |
 | [WordPress Tools](docs/wordpress-tools.md) | One-click WordPress sign-in, plugins chosen on the new-site form, optional CLP Varnish Cache installation and MainWP Child enrollment. |
 | Terminal | A shell as a site's own user, in its own window, for administrators. |
 | Security Keys | Sign in with a passkey or a hardware key such as a YubiKey instead of a password and two-factor code, for the roles an administrator allows. Needs the panel on a hostname with a valid certificate. |

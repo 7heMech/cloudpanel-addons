@@ -125,7 +125,8 @@ export async function handle(
   // The new-site form's search and the status its landing page follows, for an
   // administrator, or for a site manager while an administrator allows it.
   // The manager's gate lets a site manager reach these by name; root decides
-  // the rest, so the switch is asked before the search runs.
+  // the rest, so the switch is asked before the search runs. Its answer also
+  // names the plugins automation installs, which the form does not offer.
   if (method === "GET" && (path === "/api/plugin-search" || path === "/api/new-site-status")) {
     const chooser = newSiteChooser(auth);
     if (!chooser) return json({ ok: false, error: "not found" }, 404);
@@ -138,12 +139,10 @@ export async function handle(
     }
     const term = searchTerm(params.get("q"));
     if (!term) return json({ ok: false, error: "type at least two characters" }, 400);
-    if (chooser.asUser) {
-      const allowed = await wpToolsService.newSiteAccess(chooser.asUser);
-      if (!allowed.ok) return json(allowed, 403);
-    }
+    const allowed = await wpToolsService.newSiteAccess(chooser.asUser);
+    if (!allowed.ok) return json(allowed, 403);
     try {
-      return json({ ok: true, data: { plugins: await searchDirectory(term) } });
+      return json({ ok: true, data: { plugins: await searchDirectory(term), automatic: allowed.data?.automatic ?? [] } });
     } catch (error) {
       return json({ ok: false, error: errorMessage(error) }, 502);
     }

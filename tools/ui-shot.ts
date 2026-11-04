@@ -110,8 +110,10 @@ async function ensurePreview(): Promise<void> {
   // Watched, because this server outlives the run that started it and the next
   // run reuses it: without it a second screenshot of an edited page is taken of
   // the old one, which looks like the edit having no effect. Bun watches the
-  // stylesheets and browser scripts too, since they are imported as text.
+  // stylesheets and browser scripts too, since they are imported as text. Run
+  // from the repo, whose bunfig.toml preloads the stylesheet bundling.
   Bun.spawn(["bun", "--watch", join(repo, "tools/preview-ui.ts")], {
+    cwd: repo,
     env: { ...process.env, PORT: String(port) },
     stdout: "ignore",
     stderr: "ignore",

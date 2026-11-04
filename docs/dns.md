@@ -66,8 +66,8 @@ Cloudflare until you choose **Remove records** or **Keep**. A Mailcow domain is 
 ## Redirect domains
 
 A redirect domain sends every request for a domain, and its `www`, or for one
-host such as `tv.example.com`, to another URL. Choose **Add redirect** above the
-sites. **Keep path** sends `/about` on to `/about` at the target; turn it off
+host such as `tv.example.com`, to another URL. Choose **Add redirect** on the
+**Redirects** card, below the sites. **Keep path** sends `/about` on to `/about` at the target; turn it off
 for a target that is one page.
 
 With Cloudflare connected, Cloudflare answers the redirect and this server is

@@ -132,10 +132,10 @@ function guardOf(command: string): number {
  * A runner that holds every command to one deadline: each gets its own guard
  * or what is left, whichever is shorter, and none starts once it has passed.
  */
-export function withDeadline(run: Run, deadline: number, now: () => number = Date.now): Run {
+export function withDeadline(run: Run, deadline: number, now: () => number = Date.now, what = "unattended-upgrades"): Run {
   return (command, args, env) => {
     const remaining = deadline - now();
-    if (remaining <= 0) failAction("the install ran out of time; try again, or install unattended-upgrades with apt");
+    if (remaining <= 0) failAction(`the install ran out of time; try again, or install ${what} with apt`);
     return run(command, args, env, Math.min(guardOf(command), remaining));
   };
 }

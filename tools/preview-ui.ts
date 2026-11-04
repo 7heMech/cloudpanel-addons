@@ -37,6 +37,7 @@ import { siteTabs, type SiteContext } from "../lib/site-context";
 import { DEFAULT_MAINTENANCE_TEMPLATE } from "../addons/maintenance/action";
 import { PRESET_CATEGORIES, STOCK_PROFILE, type PhpResourcesState, type PoolSiteState } from "../addons/php-resources/action";
 import type { MeasureJobView, PanelTweaksState } from "../addons/panel-tweaks/action";
+import { DEFAULT_BRANDING } from "../addons/panel-tweaks/branding";
 import type { PanelPhpStatus } from "../addons/system-tweaks/panel-php";
 import ACE_MODE_HTML from "../addons/maintenance/app/ace-mode-html.js" with { type: "text" };
 import type { InstanceView, InstaticJobView } from "../addons/instatic/app/service";
@@ -501,9 +502,28 @@ function previewTheme(html: string, url: URL): string {
 /**
  * ?updates=missing|outside|off|on picks how unattended-upgrades stands, and
  * ?guard=off shows the upload-progress mitigation opted out, and ?realip=off
- * leaves X-Real-IP trusted from any address. ?reboot switches automatic reboot
+ * leaves X-Real-IP trusted from any address, ?vhost=off leaves panel
+ * input unchecked, and ?injected lists stored settings the guard would refuse. ?reboot switches automatic reboot
  * on, ?at=03:30 sets its time, and ?overdue dates the required reboot weeks back.
+ * ?fail2ban=missing shows fail2ban not installed, ?bans=0 no blocked addresses, and ?nodomain no custom domain.
+ * ?db=open|unknown|local|pending picks where MySQL listens (firewalled by default),
+ * ?dbremote shows a client connected from elsewhere and ?dbroot root's default password.
  */
+function databasePreviewState(url: URL): Exclude<SystemTweaksState["database"], { error: string }> {
+  const db = url.searchParams.get("db");
+  return {
+    running: true,
+    exposed: db === "local" ? [] : ["*:3306", "*:33060"],
+    loopback: db === "local" || db === "pending",
+    fileInPlace: db === "local" || db === "pending",
+    firewall: db === "open" ? { state: "off", openTo: [] }
+      : db === "unknown" ? { state: "unknown", openTo: [], reason: `the loaded rule "INPUT -p tcp -j NFQUEUE" goes to NFQUEUE` }
+      : { state: "on", openTo: [] },
+    remoteClients: url.searchParams.has("dbremote") ? ["203.0.113.24"] : [],
+    defaultPassword: url.searchParams.has("dbroot") ? [{ from: "loopback", password: "root" }] : [],
+  };
+}
+
 function systemTweaksPreviewState(url: URL): SystemTweaksState {
   if (systemTweaksPreview) return systemTweaksPreview;
   const mode = url.searchParams.get("updates") ?? "outside";
@@ -543,6 +563,33 @@ function systemTweaksPreviewState(url: URL): SystemTweaksState {
     },
     panelPhp: panelPhpPreviewStatus(url),
     realIp: { blockForged: url.searchParams.get("realip") !== "off", trustsAnyAddress: url.searchParams.get("realip") === "off", problem: "" },
+    phpMyAdmin: { enabled: url.searchParams.get("pma") !== "off", active: url.searchParams.get("pma") !== "off", problem: "" },
+    panelCert: panelCertPreviewStatus(url.searchParams.get("cert")),
+    loginJails: {
+      panel: true, ssh: false, service: "active", running: ["clp-addons-panel", "clp-addons-domain"], panelLog: true, problem: "",
+      customDomain: url.searchParams.has("nodomain") ? null : { name: "panel.example.com", logged: true, supported: true },
+      missing: url.searchParams.get("fail2ban") === "missing" ? ["fail2ban", "python3-systemd"] : [],
+      bans: url.searchParams.get("bans") === "0" ? [] : [
+        { jail: "clp-addons-panel", ip: "203.0.113.45", until: "2026-10-24 07:41:09" },
+        { jail: "clp-addons-domain", ip: "2001:db8:4::17", until: "2026-10-24 07:52:30" },
+      ],
+      sshd: { password: true, rootLogin: "yes" },
+    },
+    database: databasePreviewState(url),
+    firewall: { available: true, protocols: { 9: "udp", 10: "udp", 11: "both" }, udpPorts: url.searchParams.has("noudp") ? [] : ["53", "51820"] },
+    vhostGuard: {
+      enabled: url.searchParams.get("vhost") !== "off", active: url.searchParams.get("vhost") !== "off",
+      stored: url.searchParams.has("injected") ? [{ domain: "shop.example.com", field: "Root Directory" }, { domain: "blog.example.com", field: "Varnish server" }] : [],
+      homeLogs: url.searchParams.has("homelogs") ? ["shop.example.com"] : [],
+      ownLogrotate: url.searchParams.has("homelogs") ? ["blog.example.com"] : [],
+    },
+    phpPools: { enabled: url.searchParams.get("pools") !== "off", active: url.searchParams.get("pools") !== "off", problem: "" },
+    fileManagerGuard: { enabled: url.searchParams.get("fm") !== "off", active: url.searchParams.get("fm") !== "off" },
+    clpctlGuard: url.searchParams.get("clpctl") === "off"
+      ? { enabled: false, active: false, applicable: true, wrapper: "known-original", version: "2.5.4-3" }
+      : url.searchParams.get("clpctl") === "paused"
+        ? { enabled: true, active: false, applicable: false, wrapper: "unknown", version: "2.6.0-1", reason: "/usr/bin/clpctlWrapper is not a CloudPanel wrapper this version was built against, so it is left in place" }
+        : { enabled: true, active: true, applicable: true, wrapper: "ours", version: "2.5.4-3" },
     uploadProgress: {
       guard,
       fpms: [...php.map((version) => ({
@@ -558,14 +605,51 @@ function systemTweaksPreviewState(url: URL): SystemTweaksState {
   };
 }
 
+/** `?cert=shared`, `own` or `domain`; generated otherwise. */
+function panelCertPreviewStatus(kind: string | null): SystemTweaksState["panelCert"] {
+  if (kind === "shared") return { kind: "shared", replace: false, subject: "CN=cloudpanel.clp", expires: "2020-10-13T13:34:38.000Z" };
+  if (kind === "own") return { kind: "own", replace: true, subject: "CN=panel.example.com", expires: "2027-01-20T23:44:08.000Z" };
+  return {
+    kind: "generated", replace: true, subject: "CN=panel", names: ["panel", "203.0.113.10", "2001:DB8:0:0:0:0:0:10"],
+    expires: "2029-01-12T11:13:22.000Z", fingerprint: "B3:8F:1F:49:FF:E3:47:F6:85:15:A5:BF:F8:89:A6:B6:B5:C8:34:4A:1C:89:4D:E6:1F:03:8A:C6:A5:7D:99:5D",
+    ...(kind === "domain" ? { customDomain: "panel.example.com" } : {}),
+  };
+}
+
 function systemTweaksPreviewMutation(path: string, source: URL, body: Record<string, any>): Response | null {
   if (!path.startsWith("/addons/system-tweaks/api/")) return null;
   const state = structuredClone(systemTweaksPreviewState(source));
   if (path.endsWith("/install-updates")) {
     state.updates.installed = true;
     state.updates.version = "2.9.1+nmu3";
+  } else if (path.endsWith("/vhost-guard")) {
+    state.vhostGuard = { ...state.vhostGuard, enabled: body.enabled === true, active: body.enabled === true };
+  } else if (path.endsWith("/phpmyadmin")) {
+    state.phpMyAdmin = { enabled: body.enabled === true, active: body.enabled === true, problem: "" };
+  } else if (path.endsWith("/file-manager-guard")) {
+    state.fileManagerGuard = { enabled: body.enabled === true, active: body.enabled === true };
+  } else if (path.endsWith("/panel-cert")) {
+    state.panelCert = { ...(body.enabled === true ? panelCertPreviewStatus(null) : state.panelCert), replace: body.enabled === true };
+  } else if (path.endsWith("/database-loopback")) {
+    if (!("error" in state.database)) {
+      state.database = { ...state.database, loopback: body.enabled === true, fileInPlace: body.enabled === true, exposed: body.enabled === true ? [] : ["*:3306", "*:33060"] };
+    }
+  } else if (path.endsWith("/clpctl-guard")) {
+    state.clpctlGuard = body.enabled === true
+      ? { enabled: true, active: true, applicable: true, wrapper: "ours", version: "2.5.4-3" }
+      : { enabled: false, active: false, applicable: true, wrapper: "known-original", version: "2.5.4-3" };
   } else if (path.endsWith("/real-ip")) {
     state.realIp = { blockForged: body.enabled === true, trustsAnyAddress: body.enabled !== true, problem: "" };
+  } else if (path.endsWith("/login-jails") && !("error" in state.loginJails)) {
+    const jails = state.loginJails as Exclude<SystemTweaksState["loginJails"], { error: string }>;
+    Object.assign(jails, body);
+    jails.running = [...(jails.panel ? ["clp-addons-panel", "clp-addons-domain"] : []), ...(jails.ssh ? ["sshd"] : [])];
+    jails.bans = jails.bans.filter((ban) => jails.running.includes(ban.jail));
+  } else if (path.endsWith("/unban") && !("error" in state.loginJails)) {
+    const jails = state.loginJails as Exclude<SystemTweaksState["loginJails"], { error: string }>;
+    jails.bans = jails.bans.filter((ban) => ban.ip !== body.ip);
+  } else if (path.endsWith("/install-fail2ban") && !("error" in state.loginJails)) {
+    (state.loginJails as { missing: string[] }).missing = [];
   } else if (path.endsWith("/upload-guard")) {
     state.uploadProgress.guard = body.enabled === true;
     for (const row of state.uploadProgress.fpms) {
@@ -629,6 +713,7 @@ function panelTweaksPreviewState(url: URL): PanelTweaksState {
       panelMobile: on,
       diskUsage: on,
       autoSsl: on,
+      branding: on,
     },
     diskMeasuredAt: measured ? at : "",
     sites: url.searchParams.has("empty") ? [] : [
@@ -1258,6 +1343,8 @@ const PREVIEW_DIRECTORY = [
   { slug: "wordpress-seo", name: "Yoast SEO", version: "23.7", author: "Team Yoast", activeInstalls: 10000000, summary: "Improve your WordPress SEO: Write better content and have a fully optimized WordPress site using the Yoast SEO plugin." },
   { slug: "contact-form-7", name: "Contact Form 7", version: "6.0", author: "Takayuki Miyoshi", activeInstalls: 10000000, summary: "Just another contact form plugin. Simple but flexible." },
   { slug: "woocommerce-payments", name: "WooPayments: Integrated WooCommerce Payments", version: "8.4.0", author: "Automattic", activeInstalls: 600000, summary: "Securely accept credit and debit cards on your site. Manage transactions without leaving your WordPress dashboard." },
+  { slug: "mainwp-child", name: "MainWP Child – Securely Connects to the MainWP Dashboard", version: "5.2", author: "MainWP", activeInstalls: 700000, summary: "Provides a secure connection between your MainWP Dashboard and your WordPress sites." },
+  { slug: "clp-varnish-cache", name: "CLP Varnish Cache", version: "1.0.3", author: "cloudpanel.io", activeInstalls: 20000, summary: "Purges CloudPanel's Varnish Cache when content changes." },
   { slug: "wp-mail-smtp", name: "WP Mail SMTP by WPForms – The Most Popular SMTP and Email Log Plugin", version: "4.1.1", author: "WP Mail SMTP", activeInstalls: 4000000, summary: "Make email delivery easy for WordPress. Connect with SMTP, Gmail, Outlook, SendGrid, Mailgun, SES, Zoho, + more." },
 ];
 function wpToolsPreviewTick(job: PreviewJob): PreviewJob {
@@ -1310,7 +1397,10 @@ async function wpToolsPreviewApi(req: Request, path: string): Promise<Response |
       return Response.json({ ok: false, error: "WordPress.org did not answer the search: The operation timed out." }, { status: 502 });
     }
     const words = term.split(/\s+/).filter(Boolean);
-    return ok({ plugins: PREVIEW_DIRECTORY.filter((plugin) => words.every((word) => `${plugin.name} ${plugin.slug}`.toLowerCase().includes(word))) });
+    // ?auto on the form's page stands in for both automation policies being on.
+    const automatic = referer && new URL(referer).searchParams.has("auto") ? ["clp-varnish-cache", "mainwp-child"]
+      : [...(wpToolsPreview.automatic ? ["clp-varnish-cache"] : []), ...(wpToolsPreview.mainwp.enabled ? ["mainwp-child"] : [])];
+    return ok({ automatic, plugins: PREVIEW_DIRECTORY.filter((plugin) => words.every((word) => `${plugin.name} ${plugin.slug}`.toLowerCase().includes(word))) });
   }
   const started = (job: PreviewJob) => ok({ job });
   const mainwpTargets = () => wpToolsPreview.sites.map((entry) => entry.domain).filter((domain) => domain !== wpToolsPreview.mainwp.dashboard);
@@ -1629,7 +1719,7 @@ const server = Bun.serve({
     if (req.method !== "GET") return Response.json({ ok: false, error: "UI preview only; no changes were made." }, { status: 409 });
     // These are the same two logo URLs the installed manager gets from its
     // CloudPanel origin. Only this development preview fetches the public demo.
-    if (["/assets/images/logo.svg", "/assets/images/logo-dark.svg"].includes(path)) {
+    if (["/assets/images/logo.svg", "/assets/images/logo-dark.svg", "/assets/images/cloudpanel-cloud.svg", "/assets/images/favicon.svg"].includes(path)) {
       const upstream = await fetch(`https://demo.cloudpanel.io${path}`);
       // fetch decodes compression; do not forward the original Content-Encoding.
       return new Response(await upstream.arrayBuffer(), {
@@ -1872,7 +1962,10 @@ const server = Bun.serve({
         headers: { "Content-Type": "text/html; charset=utf-8", "Cache-Control": "no-store" },
       });
     } else if (path === "/addons/panel-tweaks/" || path === "/addons/panel-tweaks") {
-      html = panelTweaksLayout("Panel Tweaks", panelTweaksDashboardView(panelTweaksPreviewState(url)), notice);
+      html = panelTweaksLayout("Panel Tweaks", panelTweaksDashboardView(panelTweaksPreviewState(url), {
+        ...DEFAULT_BRANDING, customCss: true, css: ".header { border-bottom: 2px solid #267ddd; }",
+        footerHtml: '<li><a href="https://example.com/support">Support</a></li>\n<li>© Example Hosting</li>',
+      }), notice);
     } else if (path === "/addons/system-tweaks/" || path === "/addons/system-tweaks") {
       systemTweaksPreview = null;
       html = systemTweaksLayout("System Tweaks", systemTweaksDashboardView(systemTweaksPreviewState(url)), notice);

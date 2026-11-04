@@ -11,7 +11,7 @@ import { reconcilePhpGuard } from "./php-guard";
 import { type AddonSpec } from "./addon-catalog";
 import { keepNewsSince, recordNewsSince } from "./manager-action";
 import { operationLockEnv, withOperationLock } from "./operation-lock";
-import { CLI_BIN, LEGACY_GH, MANAGER_UNIT } from "./paths";
+import { CLI_BIN, LEGACY_GH, MANAGER_UNIT, RECONCILE_SERVICE } from "./paths";
 import {
   ensureAuthHelperReady, ensureDirs, ensureServiceUser, installUnits, reconcilePanelIdentity,
   removeLegacyUnits, startUnits, unitActive, writeConfig,
@@ -19,7 +19,7 @@ import {
 import {
   CLI_VERSION, type FetchedArtifact, fetchVerified, resolveRelease, verifyAttestation,
 } from "./release";
-import { fatal, log, parseFlags, requireRoot, run } from "./util";
+import { fatal, log, parseFlags, requireRoot, run, tryRun } from "./util";
 import { compareSemver, isPrerelease } from "../lib/semver";
 /**
  * Reconcile all provisioning from the binary that owns the definitions.
@@ -46,6 +46,9 @@ function finalizeUpdate(beforeManagerRestart?: () => void): AddonSpec[] {
     if (!reconcileNginx(false)) log.warn("Nginx proxy needs manual repair");
     reconcilePhpGuard(true);
     startUnits({ beforeManagerRestart });
+    // Addon upkeep, such as a changed guard System Tweaks installs, would
+    // otherwise wait for the next quarter-hour; it runs once this update lets go of the lock.
+    tryRun("systemctl", ["start", "--no-block", RECONCILE_SERVICE]);
     if (renames.length > 0 && unitActive(MANAGER_UNIT) !== "active") revertAddonRenames(renames);
     return specs;
   } catch (error) {
@@ -54,16 +57,18 @@ function finalizeUpdate(beforeManagerRestart?: () => void): AddonSpec[] {
   }
 }
 
+type UpdateOptions = { beforeManagerRestart?: () => void; onStep?: (step: string) => void };
+
 /**
  * Updates release artifacts when necessary. If the binary moves, re-run this
  * same command as the installed copy and let only that process provision.
  */
-export async function cmdUpdate(argv: string[], options: { beforeManagerRestart?: () => void } = {}): Promise<void> {
+export async function cmdUpdate(argv: string[], options: UpdateOptions = {}): Promise<void> {
   requireRoot("update");
   return withOperationLock("update", () => applyUpdate(argv, options));
 }
 
-async function applyUpdate(argv: string[], options: { beforeManagerRestart?: () => void }): Promise<void> {
+async function applyUpdate(argv: string[], options: UpdateOptions): Promise<void> {
   const { flags } = parseFlags(argv);
   // A box running a pre-release keeps following them; a release takes it back to releases.
   const release = await resolveRelease(
@@ -87,7 +92,7 @@ async function applyUpdate(argv: string[], options: { beforeManagerRestart?: () 
   }
   let artifacts: FetchedArtifact[] | undefined;
   if (!artifactsCurrent) {
-    artifacts = await fetchVerified(release, artifactNames());
+    artifacts = await fetchVerified(release, artifactNames(), options.onStep);
     await verifyAttestation(release, artifacts, flags["skip-attestation"] === true);
   }
 

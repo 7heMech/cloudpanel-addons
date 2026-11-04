@@ -384,7 +384,7 @@ test("the fleet selects rows and switches the selected sites, with search from s
   expect(few).not.toContain('id="fleet-find"');
   const many = fleetView(fleetOf(Array.from({ length: 6 }, (_, i) => site({ domain: `s${i}.example.com` }))));
   expect(many).toContain('id="fleet-find"');
-  expect(many).toContain('<option value="maintenance">In maintenance</option>');
+  expect(many).toContain('<input type="checkbox" value="maintenance" data-group="Status" onchange="pickFleetFilter()"> In maintenance</label>');
   expect(CLIENT_JS).toContain("function paintFleetSelection()");
   expect(CLIENT_JS).toContain("call('/api/bulk-toggle'");
 });

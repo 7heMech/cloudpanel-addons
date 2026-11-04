@@ -267,7 +267,8 @@ function check(result: CommandResult, what: string): void {
   if (!result.ok) failAction(`${what}: ${(result.stderr || result.stdout).trim() || `exit ${result.exitCode ?? "unknown"}`}`);
 }
 
-function page(ctx: Context, script: string, uri: string): Record<string, string> {
+/** FastCGI parameters for a plain GET of one of the panel's pages, as Nginx would send it. */
+export function panelPageParams(panelRoot: string, script: string, uri: string): Record<string, string> {
   return {
     GATEWAY_INTERFACE: "CGI/1.1",
     SERVER_PROTOCOL: "HTTP/1.1",
@@ -275,8 +276,8 @@ function page(ctx: Context, script: string, uri: string): Record<string, string>
     REQUEST_URI: uri,
     SCRIPT_NAME: script,
     DOCUMENT_URI: script,
-    SCRIPT_FILENAME: ctx.paths.panelRoot + script,
-    DOCUMENT_ROOT: ctx.paths.panelRoot,
+    SCRIPT_FILENAME: panelRoot + script,
+    DOCUMENT_ROOT: panelRoot,
     QUERY_STRING: "",
     SERVER_NAME: "127.0.0.1",
     SERVER_ADDR: "127.0.0.1",
@@ -298,7 +299,7 @@ async function unhealthy(ctx: Context, php: string): Promise<string | null> {
     ["the File Manager", ctx.paths.fileManagerSocket, "/file-manager/index.php", "/file-manager/index.php", (status: number) => status < 400],
   ] as const) {
     try {
-      const reply = await ctx.request(socket, page(ctx, script, uri));
+      const reply = await ctx.request(socket, panelPageParams(ctx.paths.panelRoot, script, uri));
       if (!accept(reply.status)) return `${what} answered ${reply.status}`;
     } catch (error) {
       return reason(error);

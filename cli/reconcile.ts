@@ -7,6 +7,7 @@ import {
   panelVersion, reconcile, reconcileNginxMaintenance, reconcileNginxProxy,
 } from "./inject";
 import { ensureMaintenanceData } from "../addons/maintenance/action";
+import { systemTweaksPhpMyAdmin } from "../addons/system-tweaks/action";
 import { TEMPLATES } from "../lib/panel-anchors";
 import { adminHeaderTarget, headerTarget, siteLayoutTarget } from "../lib/panel-nav";
 import { ADDONS, ADDON_NAMES } from "./addon-catalog";
@@ -117,4 +118,15 @@ export function reconcileMaintenanceNginx(quiet: boolean, enabled = existsSync(A
   }
   log.err(`Nginx maintenance check: ${result.detail ?? result.state}`);
   return false;
+}
+
+/** System Tweaks' phpMyAdmin rules, for the fast repair that runs when CloudPanel rewrites its vhost. */
+export function reconcilePhpMyAdminRules(quiet: boolean): void {
+  if (!existsSync(ADDONS["system-tweaks"]!.configFile)) return;
+  try {
+    const line = systemTweaksPhpMyAdmin();
+    if (line && !quiet) log.ok(line);
+  } catch (error) {
+    log.err(`phpMyAdmin rules: ${error instanceof Error ? error.message : String(error)}`);
+  }
 }

@@ -128,8 +128,12 @@ appear once a Dashboard is chosen, here or on another server; until then the
 card holds only the picker, plus cleanup while Child plugins the addon
 installed remain from a deleted Dashboard, and automation reads as off; a site
 without Varnish in CloudPanel says Varnish off. A muted line under the table offers to remove the
-sign-in helper while any site has it, and the shared search appears from six
-sites. After any change the page fetches
+sign-in helper while any site has it, and the shared search (site or user)
+appears from six sites, with filters for needs attention, CLP Varnish Cache not
+active and MainWP not connected; each heading sorts, a status column worst
+first. Sign in is
+a plain button: on every row, a solid one would be the loudest thing on the
+page. After any change the page fetches
 `/api/dashboard`, a server-rendered fragment of everything below the heading,
 and repaints from it, so row status always comes from the same renderer as the
 first load and the page never reloads.
@@ -556,6 +560,15 @@ built from this addon's parts: the site discovery and account refusals, the
 WP-CLI runner and the job store. It is a choice per site, made where the site
 is made; a set every new site gets would be a policy on this page instead.
 
+CLP Varnish Cache and MainWP Child are not offered while their automation is
+on: search lists them as installed automatically, and root refuses a choice that
+names either, by slug, when it is recorded. Each then has one owner, so the
+form's job and the policy's check never install it at once, MainWP's cleanup
+still finds the Child its own, and a Varnish plugin chosen inactive is not left
+so by a policy that only installs. MainWP counts as on outside cleanup. Turned
+on after a choice is recorded, a policy finds its plugin already there and
+treats it as it would one installed by hand.
+
 ### Recorded before the site exists
 
 The row is injected before the form's Back and Create buttons, beside Panel
@@ -586,7 +599,10 @@ name meanwhile, or that has no `created_at` to compare.
 CloudPanel sends a form back with an error without creating anything, so the
 choice is kept in the tab's session storage and the row comes back filled in.
 Submitting again records a new job, and any job still waiting for the same
-domain is superseded and hands its uploads to the new one. Submitting it with
+domain is superseded and hands its uploads to the new one -- but only once the
+new choice has passed every check, so a refused resubmission (a plugin chosen
+twice, or one automation took over in the meantime) leaves the earlier job
+waiting with its uploads. Submitting it with
 every plugin removed still tells WordPress Tools, with an empty choice that only
 supersedes, so plugins taken off the form are not installed after all; their
 uploads are deleted. A job for another domain is never touched: one still
@@ -697,7 +713,8 @@ account or never comes. Only an entry after the newest one when the choice was
 saved counts: the log's ids are `AUTOINCREMENT`, where whole-second times could
 not tell an entry from just before the choice from one just after it. An administrator's choice is not held to
 this. The search asks root
-`new-site-access` before it runs, since only root can read the switch.
+`new-site-access` before it runs, since only root can read the switch and the
+automation policies; an administrator's search asks too, for the policies.
 Uploading, discarding an upload, the switch and every other WP Tools route stay
 behind the gate.
 

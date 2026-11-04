@@ -232,12 +232,12 @@ test("a site manager reaches the plugin picker's routes, and root's switch decid
 
   const allowed = statuses({
     "wp-tools:new-site": { ok: true, data: { job: { id: "20261029T192025Z-4a8d82" } } },
-    "wp-tools:new-site-access": { ok: true, data: { uploads: false } },
+    "wp-tools:new-site-access": { ok: true, data: { uploads: false, automatic: ["mainwp-child"] } },
     "wp-tools:new-site-status": { ok: true, data: { job: { id: "20261029T192025Z-4a8d82", state: "running" } } },
   });
   expect(allowed.map((result) => result.status)).toEqual([200, 403, 200, 200, 403, 403, 403, 403]);
   expect(allowed[2]!.reached).toContain("fetch");
-  expect(allowed[2]!.body).toEqual({ ok: true, data: { plugins: [] } });
+  expect(allowed[2]!.body).toEqual({ ok: true, data: { plugins: [], automatic: ["mainwp-child"] } });
 });
 
 test("an ordinary user cannot create or manage Instatic sites", () => {

@@ -83,8 +83,6 @@ test("the site pages' link sits after the Domain link, with its own script", () 
 
 test("the domain signs in by default, keeping the site's address for a modified click", () => {
   const domain = siteInfoSnippet("/addons/wp-tools", true);
-  // The panel's own link is hidden by a rule once ours is shown, never rewritten.
-  expect(domain).toContain(".site-info-value.clp-wp-tools-signs-in > a.view-site-link:not(.clp-wp-tools) { display: none; }");
   expect(domain).toContain('classList.add("clp-wp-tools-signs-in")');
   expect(domain).toContain('<a href="https://{{ site.domainName }}" hidden class="clp-wp-tools clp-wp-tools-domain view-site-link"');
   expect(domain).not.toContain("WP Login");

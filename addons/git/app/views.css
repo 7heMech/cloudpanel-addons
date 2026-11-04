@@ -1,3 +1,5 @@
+@import "../../../lib/assets/job.css";
+@import "../../../lib/assets/fleet-row-selection.css";
 .git-status { border-top: 3px solid var(--accent); }
 .git-commit { display: flex; align-items: flex-start; gap: 14px; }
 .git-commit h2 { margin: 0 0 8px; font-size: 22px; line-height: 1.35; overflow-wrap: anywhere; }

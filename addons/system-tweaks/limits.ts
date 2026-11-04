@@ -10,5 +10,17 @@ export const INSTALL_DEADLINE_MS = 600_000;
 export const INSTALL_GATEWAY_TIMEOUT_MS = INSTALL_DEADLINE_MS + 30_000;
 /** A config test, a restart, up to 20 s for the panel to answer, and the same again to undo it. */
 export const PANEL_PHP_GATEWAY_TIMEOUT_MS = 90_000;
-/** Nginx validation and reload, a rollback of both, lock waiting and the reply. */
+/** Lock waiting, an FPM config test and reload, 20 s for the panel to answer, and the reload that undoes it. */
+export const POOL_GUARD_GATEWAY_TIMEOUT_MS = 90_000 + 4 * COMMAND_MS;
+/** A daemon-reload, the nft checks and load, lock waiting and the reply. */
+export const PHP_POOLS_GATEWAY_TIMEOUT_MS = 4 * COMMAND_MS + 30_000;
+/** A MySQL restart (120 s) and 60 s to come back, the same again to undo it, lock waiting and the state read. */
+export const DATABASE_GATEWAY_TIMEOUT_MS = 2 * (120_000 + 60_000) + 60_000;
+/** Nginx validation and reload, a rollback of both, lock waiting and the reply; phpMyAdmin's switch uses it too. */
 export const REAL_IP_GATEWAY_TIMEOUT_MS = 4 * COMMAND_MS + 60_000;
+/** The panel nginx's test and reload and their rollback, a fail2ban config test and reload, and the reply. */
+export const LOGIN_JAILS_GATEWAY_TIMEOUT_MS = 6 * COMMAND_MS + 30_000;
+/** Generating a key pair, Nginx validation and reload, a rollback of both, lock waiting and the reply. */
+export const PANEL_CERT_GATEWAY_TIMEOUT_MS = 5 * COMMAND_MS + 60_000;
+/** A dpkg version query and a wrapper file swap, with lock waiting and the reply. */
+export const CLPCTL_GUARD_GATEWAY_TIMEOUT_MS = 2 * COMMAND_MS + 30_000;

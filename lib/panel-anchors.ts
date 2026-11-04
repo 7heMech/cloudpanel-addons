@@ -6,6 +6,9 @@
 export const TEMPLATES = {
   login: "Frontend/Login/login.html.twig",
   loginLayout: "Frontend/Login/layout.html.twig",
+  layout: "Frontend/layout.html.twig",
+  adminLayout: "Admin/layout.html.twig",
+  footer: "Partial/footer.html.twig",
   header: "Frontend/Partial/header.html.twig",
   adminHeader: "Admin/Partial/header.html.twig",
   accountSecurity: "Frontend/User/Account/security.html.twig",
@@ -17,6 +20,9 @@ export const TEMPLATES = {
   newSite: "Frontend/Site/New/index.html.twig",
   newWordPressSite: "Frontend/Site/New/wordpress.html.twig",
   wordPressInstalled: "Frontend/Site/New/wordpress-installed.html.twig",
+  firewall: "Admin/Security/Firewall/index.html.twig",
+  firewallAddRule: "Admin/Security/Firewall/add-rule.html.twig",
+  firewallEditRule: "Admin/Security/Firewall/edit-rule.html.twig",
 } as const;
 
 export const ANCHORS = {

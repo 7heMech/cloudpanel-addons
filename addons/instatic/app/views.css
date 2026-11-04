@@ -1,3 +1,5 @@
+@import "../../../lib/assets/job.css";
+@import "../../../lib/assets/fleet-row-selection.css";
 
 .behind { color: var(--warn); border-color: var(--warn); margin-left: 0.35rem; }
 .btn-update { border-color: var(--warn); color: var(--warn); }
@@ -18,5 +20,4 @@
 .job-step { margin-top: 0; margin-bottom: 8px; }
 .job-step:empty { display: none; }
 .job-alert { margin: 0 0 12px; }
-.job-timing { margin-top: 12px; }
 .job-links { margin-top: 20px; }

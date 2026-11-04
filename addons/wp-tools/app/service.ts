@@ -148,8 +148,8 @@ export const wpToolsService = {
   newSiteStatus(id: string, asUser?: string): Promise<ActionResult<{ job: NewSiteStatus }>> {
     return call("new-site-status", [`--job=${id}`, ...(asUser ? [`--as-user=${asUser}`] : [])]);
   },
-  /** Whether this caller may use the form's Plugins row, and upload to it. */
-  newSiteAccess(asUser?: string): Promise<ActionResult<{ uploads: boolean }>> {
+  /** Whether this caller may use the form's Plugins row and upload to it, and which plugins automation installs. */
+  newSiteAccess(asUser?: string): Promise<ActionResult<{ uploads: boolean; automatic: string[] }>> {
     return call("new-site-access", asUser ? [`--as-user=${asUser}`] : []);
   },
   newSiteSettings(siteManagers: boolean): Promise<ActionResult<{ newSiteAccess: WpNewSiteAccess }>> {

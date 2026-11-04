@@ -63,25 +63,54 @@ export function whenText(iso: string): string {
 /** Below this many sites the whole table fits on a screen, so it needs no search. */
 export const FLEET_FILTER_MIN = 6;
 
+/** A row's place when its status column is sorted: the tone of its worst status, worst first. */
+export const ATTENTION_RANK = { bad: 0, warn: 1, info: 2, ok: 3, muted: 4 } as const;
+
+export interface FleetFilter { value: string; label: string; group?: string }
+
+/** The `data-show` word a row carries for a value of a filter group such as its type. */
+export function filterWord(prefix: string, label: string): string {
+  return `${prefix}-${label.toLowerCase().replace(/[^a-z0-9]+/g, "-")}`;
+}
+
+/** One filter per distinct label, under `group`; none when every row shares one, since it would filter nothing. */
+export function valueFilters(group: string, prefix: string, labels: string[]): FleetFilter[] {
+  const distinct = [...new Set(labels.filter(Boolean))].sort((a, b) => a.localeCompare(b, undefined, { numeric: true }));
+  return distinct.length < 2 ? [] : distinct.map((label) => ({ value: filterWord(prefix, label), label, group }));
+}
+
 /**
- * Search, and an optional filter, above a site table whose rows carry
+ * Search and an optional filter above a site table whose rows carry
  * `data-domain`, `data-find` and `data-show`; the client half is `filterFleet`.
+ * The filter is a menu of checkboxes: within a group a row needs any of the
+ * ticked words, across groups all of them. Its sort is the table's headings,
+ * each `th[data-sort]`; the Sort select here stands in for them on a phone,
+ * where the heading is hidden.
  */
 export function fleetFilterHtml(options: {
   count: number;
   placeholder?: string;
-  filters?: { value: string; label: string }[];
+  filters?: FleetFilter[];
   summary: string;
 }): string {
   if (options.count < FLEET_FILTER_MIN) return "";
-  const filters = options.filters?.length
-    ? `<select id="fleet-show" data-keep aria-label="Show" onchange="filterFleet()"><option value="">All sites</option>${options.filters
-      .map((filter) => `<option value="${esc(filter.value)}">${esc(filter.label)}</option>`).join("")}</select>`
+  const groups = new Map<string, FleetFilter[]>();
+  for (const filter of options.filters ?? []) {
+    const group = filter.group ?? "Status";
+    groups.set(group, [...(groups.get(group) ?? []), filter]);
+  }
+  const filters = groups.size
+    ? `<details class="fleet-show" id="fleet-show"><summary><span id="fleet-show-label">All sites</span></summary>
+        <div class="fleet-show-menu" role="group" aria-label="Show">${[...groups].map(([group, list]) => `
+          <fieldset><legend${groups.size > 1 ? "" : ' class="visually-hidden"'}>${esc(group)}</legend>${list.map((filter) =>
+            `<label><input type="checkbox" value="${esc(filter.value)}" data-group="${esc(group)}" onchange="pickFleetFilter()"> ${esc(filter.label)}</label>`).join("")}</fieldset>`).join("")}
+          <button class="fleet-show-clear" type="button" onclick="clearFleetFilters()">Show all sites</button>
+        </div></details>`
     : "";
   const placeholder = options.placeholder ?? "Find a site";
   return `<div class="fleet-filter">
       <input type="search" id="fleet-find" data-keep placeholder="${esc(placeholder)}" aria-label="${esc(placeholder)}" oninput="filterFleet()">
-      ${filters}<span class="hint" id="fleet-summary" data-all="${esc(options.summary)}">${esc(options.summary)}</span>
+      ${filters}<label class="fleet-sort" hidden>Sort <select id="fleet-sort" onchange="pickFleetSort(this.value)"></select></label><span class="hint" id="fleet-summary" data-all="${esc(options.summary)}">${esc(options.summary)}</span>
     </div>`;
 }
 
@@ -91,16 +120,6 @@ export function fleetFilterHtml(options: {
  */
 export const FLEET_FOOTER_HTML = `<div class="empty" id="fleet-none" hidden>No site matches.</div>
 <div class="fleet-more" id="fleet-more" hidden><button class="btn" type="button" onclick="showAllSites()">Show all sites</button></div>`;
-
-/** Shared interaction and focus treatment for selectable site-table rows. */
-export function fleetRowSelectionStyle(tableClass: string): string {
-  return `
-.${tableClass} tbody tr { cursor: pointer; transition: background-color .15s, box-shadow .15s; }
-.${tableClass} tbody tr:hover { background: rgb(38 125 221 / 6%); }
-.${tableClass} tbody tr[aria-selected="true"] { background: rgb(38 125 221 / 12%); box-shadow: inset 4px 0 var(--primary); }
-.${tableClass} tbody tr:focus-visible { outline: 2px solid var(--accent); outline-offset: -3px; }
-`;
-}
 
 /**
  * Shared selection for the Cloudflare, PHP and SMTP site tables: which rows
@@ -134,19 +153,9 @@ export { THEME_INIT_JS };
 import BASE_CLIENT_JS from "./assets/app-ui.client.js" with { type: "text" };
 export { BASE_CLIENT_JS };
 
-/**
- * Styling for a job's progress page, used by every addon that runs work in the
- * background. Appended after BASE_STYLE by the addon that needs it, so the
- * state colours here override the container-state palette above only on the
- * pages that draw a job.
- */
-import JOB_STYLE from "./assets/job.css" with { type: "text" };
-export { JOB_STYLE };
-
 /** A list of settings, one switch each; the client half opens a setting's wording on a phone. */
-import TWEAK_ROW_STYLE from "./assets/tweak-rows.css" with { type: "text" };
 import TWEAK_ROW_JS from "./assets/tweak-rows.client.js" with { type: "text" };
-export { TWEAK_ROW_STYLE, TWEAK_ROW_JS };
+export { TWEAK_ROW_JS };
 
 /**
  * The client half of the job progress page: paint an update, and follow a job
@@ -176,9 +185,8 @@ export { JOB_WATCH_JS };
  * it with `jobProgressHtml` and the client half follows every one it finds
  * with `followJobProgress(onFinished)`, so a reload picks the job up again.
  */
-import JOB_PROGRESS_STYLE from "./assets/job-progress.css" with { type: "text" };
 import JOB_PROGRESS_JS from "./assets/job-progress.client.js" with { type: "text" };
-export { JOB_PROGRESS_STYLE, JOB_PROGRESS_JS };
+export { JOB_PROGRESS_JS };
 
 /** What the bar needs of a job; both addons' job views carry it. */
 export interface SiteJobProgress {

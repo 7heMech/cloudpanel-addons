@@ -1,3 +1,5 @@
+@import "../../../lib/assets/job-progress.css";
+@import "../../../lib/assets/fleet-row-selection.css";
 .card-header + .fleet-filter { padding-top: 18px; }
 .wp-status { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 10px; }
 .wp-status .btn { min-height: 32px; padding: 4px 12px; font-size: 13px; white-space: nowrap; }
@@ -62,4 +64,10 @@
 @media (max-width: 940px) {
   .wp-card-note { padding: 16px 20px; }
   .wp-new-site-table td.site-cell, .wp-new-site-table td[data-label="Plugins"] { flex-basis: 100%; }
+}
+/* Each policy's column holds a chip and its button with room to spare, so the
+   two never run together; an error wraps rather than widening its column. */
+@media (min-width: 941px) {
+  .wp-site-table td[data-label] { min-width: 240px; }
+  .wp-site-table .wp-error { max-width: 420px; }
 }

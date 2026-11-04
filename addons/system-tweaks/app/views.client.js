@@ -41,7 +41,8 @@ function working(control, text) {
   line.setAttribute('role', 'status');
   line.innerHTML = '<span class="badge">Working</span> ';
   line.append(text);
-  const after = option ? option.lastElementChild : row.querySelector('.tweak-note');
+  const after = option ? option.lastElementChild
+    : row ? row.querySelector('.tweak-note') : control.closest('.st-fold, .st-install');
   after.after(line);
   const page = setTimeout(function () {
     notify(text + ' Other settings wait until it finishes.', 'warn');
@@ -98,11 +99,55 @@ function setRealIp(input) {
   return change(input, '/api/real-ip', { enabled: input.checked }, switchText(input), 'Saved.');
 }
 
+function setPhpPools(input) {
+  return change(input, '/api/php-pools', { enabled: input.checked }, switchText(input), 'Saved.');
+}
+
+function setPhpMyAdmin(input) {
+  return change(input, '/api/phpmyadmin', { enabled: input.checked }, switchText(input), 'Saved.');
+}
+
+function setPanelCert(input) {
+  return change(input, '/api/panel-cert', { enabled: input.checked }, switchText(input), 'Saved.');
+}
+
+// Either way MySQL restarts, and the page waits for it to come back.
+function setDatabaseLoopback(input) {
+  return change(input, '/api/database-loopback', { enabled: input.checked },
+    input.checked ? 'Binding MySQL to 127.0.0.1, which restarts it…' : 'Restarting MySQL on its own settings…',
+    input.checked ? 'MySQL accepts connections from this server only.' : 'MySQL uses its own settings again.');
+}
+
+function setVhostGuard(input) {
+  return change(input, '/api/vhost-guard', { enabled: input.checked }, switchText(input), 'Saved.');
+}
+
+function setFileManagerGuard(input) {
+  return change(input, '/api/file-manager-guard', { enabled: input.checked }, switchText(input), 'Saved.');
+}
+
+function setClpctlGuard(input) {
+  return change(input, '/api/clpctl-guard', { enabled: input.checked }, switchText(input), 'Saved.');
+}
+
 // A change restarts the panel and waits for it to answer.
 function setPanelPhp(select) {
   const label = select.options[select.selectedIndex].textContent;
   return change(select, '/api/panel-php', { php: select.value },
     'Switching the panel to ' + label + '…', 'The panel answers on ' + label + '.');
+}
+
+function setLoginJails(input) {
+  return change(input, '/api/login-jails', { [input.dataset.setting]: input.checked }, switchText(input), 'Saved.');
+}
+
+function installFail2ban(button) {
+  return change(button, '/api/install-fail2ban', {}, 'Installing fail2ban…', 'fail2ban is installed.');
+}
+
+function unban(button) {
+  const ip = button.dataset.ip;
+  return change(button, '/api/unban', { jail: button.dataset.jail, ip: ip }, 'Unblocking ' + ip + '…', ip + ' is unblocked.');
 }
 
 function installUpdates(button) {

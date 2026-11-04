@@ -1,11 +1,14 @@
 import { PHP_GUARD_INI_NAME } from "../../../cli/paths";
 import { esc } from "../../../lib/app-http";
-import { TWEAK_ROW_JS, TWEAK_ROW_STYLE, renderLayout, sinceText } from "../../../lib/app-ui";
+import { TWEAK_ROW_JS, renderLayout, sinceText } from "../../../lib/app-ui";
 import { mountPath } from "../../../lib/mount";
 import type { SystemTweaksState } from "../action";
 import type { CoverageRow, LastRun, UpdateSettings, UpdatesStatus } from "../updates";
 import type { FpmUploadProgress } from "../upload-progress";
 import type { PanelPhpChoice, PanelPhpStatus } from "../panel-php";
+import type { FirewallStatus } from "../firewall";
+import { DOMAIN_JAIL, JAIL_LIMITS, PANEL_JAIL, type Ban, type SshLogin } from "../login-jails";
+import type { DatabaseStatus } from "../database";
 
 import STYLE from "./views.css" with { type: "text" };
 import SCRIPT from "./views.client.js" with { type: "text" };
@@ -19,14 +22,14 @@ export function layout(
     brand: "System Tweaks",
     base: mountPath("system-tweaks"),
     nav: [],
-    css: TWEAK_ROW_STYLE + STYLE,
+    css: STYLE,
     script: TWEAK_ROW_JS + SCRIPT,
     updateNotice,
   });
 }
 
 function badge(text: string, tone: "ok" | "warn" | "bad" | "plain"): string {
-  const state = { ok: " state-running", warn: " state-exited", bad: " state-absent", plain: "" }[tone];
+  const state = { ok: " tone-ok", warn: " tone-warn", bad: " tone-bad", plain: "" }[tone];
   return `<span class="badge${state}">${esc(text)}</span>`;
 }
 
@@ -310,6 +313,89 @@ function realIpLine(state: SystemTweaksState["realIp"]): string {
     state.blockForged ? " Run clp-addons repair." : ""}</span>`;
 }
 
+function phpMyAdminLine(state: SystemTweaksState["phpMyAdmin"]): string {
+  if (state.problem) return `${badge("Unknown", "warn")} <span>${esc(state.problem)}</span>`;
+  if (state.active) return `${badge("On", "ok")} <span>Basic auth covers every panel URL outside phpMyAdmin.</span>`;
+  if (state.enabled) return `${badge("Not applied", "warn")} <span>Run clp-addons repair.</span>`;
+  return `${badge("Off", "plain")} <span>phpMyAdmin's example sign-on script lets anyone make this server try MySQL logins on other hosts.</span>`;
+}
+
+/** Which certificate the panel serves on 8443, and the custom domain's, which the sites' Nginx serves. */
+export function panelCertLine(state: SystemTweaksState["panelCert"]): string {
+  const until = state.expires ? ` It expires on ${state.expires.slice(0, 10)}.` : "";
+  const line = {
+    shared: `${badge("Shared", state.replace ? "bad" : "warn")} <span>The panel uses CloudPanel's default certificate, whose private key is public.${
+      state.replace ? " Run clp-addons repair." : ""}</span>`,
+    generated: `${badge("Generated", "ok")} <span>The panel uses a certificate made on this server for ${esc((state.names ?? []).join(", "))}.${until}</span>`,
+    own: `${badge("Own", "ok")} <span>The panel uses its own certificate${state.subject ? `, ${esc(state.subject)}` : ""}.${until}</span>`,
+    unknown: `${badge("Unknown", "warn")} <span>${esc(state.problem ?? "")}</span>`,
+  }[state.kind];
+  const fingerprint = state.kind === "generated" && state.fingerprint
+    ? `<br><span class="hint">SHA-256 ${esc(state.fingerprint)}: check it against the one your browser shows before you accept it.</span>` : "";
+  const domain = state.customDomain
+    ? `<br><span>Your custom domain ${esc(state.customDomain)} serves its own certificate on port 443 and is not changed.</span>` : "";
+  return line + fingerprint + domain;
+}
+
+/** Site settings saved before the guard, or by a site's own user, that it would refuse now. */
+function storedValuesWarning(stored: SystemTweaksState["vhostGuard"]["stored"]): string {
+  if ("error" in stored) return `<p class="st-status hint">Stored site settings could not be checked: ${esc(stored.error)}</p>`;
+  if (!stored.length) return "";
+  const listed = stored.slice(0, 10).map((value) => `${esc(value.domain)}: ${esc(value.field)}`).join("; ");
+  return warning(`These saved site settings would be refused now, so they may hold nginx directives: ${listed}${
+    stored.length > 10 ? `; and ${stored.length - 10} more` : ""}. Check each one and the site's vhost.`);
+}
+
+/** Sites whose vhost the sync leaves alone, so nginx still opens their logs in the user's home. */
+function homeLogsWarning(domains: string[]): string {
+  if (!domains.length) return "";
+  const listed = domains.slice(0, 10).map(esc).join(", ");
+  return warning(`These sites' vhosts still write nginx logs in the site user's home, where that user can point them at any file: ${listed}${
+    domains.length > 10 ? ` and ${domains.length - 10} more` : ""}. clp-addons rewrites a vhost only when root alone can write it: make each one in /etc/nginx/sites-enabled owned by root with mode 644, then run clp-addons repair.`);
+}
+
+/** Sites whose logrotate file was edited by hand, so the sync left it as it is. */
+function ownLogrotateWarning(domains: string[]): string {
+  if (!domains.length) return "";
+  const listed = domains.slice(0, 10).map(esc).join(", ");
+  return warning(`These sites' files in /etc/logrotate.d were edited by hand, so clp-addons left them as they are: ${listed}${
+    domains.length > 10 ? ` and ${domains.length - 10} more` : ""}. A file that rotates the site's home as root lets its user have root rotate files it links there. Rotate the home with su set to the site's user.`);
+}
+
+function phpPoolsLine(state: SystemTweaksState["phpPools"]): string {
+  if (state.problem) return `${badge("Not applied", "warn")} <span>${esc(state.problem)}</span>`;
+  if (state.active) return `${badge("On", "ok")} <span>Each pool's port answers only nginx and the pool's own user.</span>`;
+  if (state.enabled) return `${badge("Not applied", "warn")} <span>Run clp-addons repair.</span>`;
+  return `${badge("Off", "plain")} <span>Any account on the server can run PHP as any site through its pool's port.</span>`;
+}
+
+function vhostGuardLine(state: SystemTweaksState["vhostGuard"]): string {
+  if (state.active) return `${badge("On", "ok")} <span>Panel input is checked before CloudPanel writes it into a vhost.</span>`;
+  if (state.enabled) return `${badge("Not applied", "warn")} <span>Run clp-addons repair.</span>`;
+  return `${badge("Off", "plain")} <span>Any panel account with a site can write nginx config, and nginx runs as root.</span>`;
+}
+
+function fileManagerGuardLine(state: SystemTweaksState["fileManagerGuard"]): string {
+  if (state.active) return `${badge("On", "ok")} <span>The File Manager stays in each site's home.</span>`;
+  if (state.enabled) return `${badge("Not applied", "warn")} <span>Run clp-addons repair.</span>`;
+  return `${badge("Off", "plain")} <span>Any panel account with a site can read and change files anywhere on the server through the File Manager, which runs as root.</span>`;
+}
+
+function clpctlGuardLine(state: SystemTweaksState["clpctlGuard"]): string {
+  if ("error" in state) return `${badge("Unknown", "warn")} <span>${esc(state.error)}</span>`;
+  const where = state.version ? ` (CloudPanel ${esc(state.version)})` : "";
+  if (state.active) return `${badge("On", "ok")} <span>The clpctlWrapper is the hardened one${where}.</span>`;
+  if (state.enabled && state.wrapper === "ours") {
+    // Our wrapper is installed but its saved original is gone, so it falls back
+    // to nothing and refuses every caller: clpctl cannot run until it is fixed.
+    return `${badge("Action needed", "bad")} <span>${esc(state.reason ?? "the saved original is missing")}, so clpctl cannot run. Restore CloudPanel's clpctlWrapper, then run clp-addons repair.</span>`;
+  }
+  if (state.enabled) {
+    return `${badge("Paused", "warn")} <span>${esc(state.reason ?? "the wrapper was left in place")}. CloudPanel's own wrapper is untouched.</span>`;
+  }
+  return `${badge("Off", "plain")} <span>A site's own user can reach root through clpctlWrapper${where}.</span>`;
+}
+
 function settingsCard(state: SystemTweaksState): string {
   return `
     <div class="card">
@@ -331,8 +417,244 @@ function settingsCard(state: SystemTweaksState): string {
         checked: state.realIp.blockForged,
         onchange: "setRealIp(this)",
         extra: `<p class="st-status">${realIpLine(state.realIp)}</p>`,
+      })}${settingRow({
+        key: "protectPhpMyAdmin",
+        title: "Lock down phpMyAdmin",
+        description: [
+          "Keeps the panel's basic auth on URLs that only start with /phpmyadmin, such as /phpmyadmin/../file-manager/.",
+          "Hides phpMyAdmin's example and setup scripts and the files that show its version. Signing in from the panel still works.",
+        ],
+        checked: state.phpMyAdmin.enabled,
+        onchange: "setPhpMyAdmin(this)",
+        extra: `<p class="st-status">${phpMyAdminLine(state.phpMyAdmin)}</p>`,
+      })}${settingRow({
+        key: "replacePanelCert",
+        title: "Replace the shared panel certificate",
+        description: [
+          "Every CloudPanel install serves port 8443 with the same certificate and private key, so anyone who sees the traffic can decrypt it. This swaps it for one generated on this server.",
+          "A certificate you installed yourself is left alone. Off stops replacing it; a generated one stays.",
+        ],
+        checked: state.panelCert.replace,
+        onchange: "setPanelCert(this)",
+        extra: `<p class="st-status">${panelCertLine(state.panelCert)}</p>`,
+      })}${settingRow({
+        key: "blockVhostInjection",
+        title: "Block nginx config injection",
+        description: [
+          "Refuses site settings CloudPanel would write into a vhost unchecked, such as a Root Directory or Varnish server holding nginx directives.",
+          "Only administrators can save the Vhost editor and PageSpeed settings, and site nginx logs move where only root can write.",
+        ],
+        checked: state.vhostGuard.enabled,
+        onchange: "setVhostGuard(this)",
+        extra: `<p class="st-status">${vhostGuardLine(state.vhostGuard)}</p>${storedValuesWarning(state.vhostGuard.stored)}${homeLogsWarning(state.vhostGuard.homeLogs)}${ownLogrotateWarning(state.vhostGuard.ownLogrotate)}`,
+      })}${settingRow({
+        key: "isolatePhpPools",
+        title: "Isolate PHP pools",
+        description: [
+          "Lets only nginx and each site's own user connect to the site's PHP-FPM port, so one site's user cannot run PHP as another site's.",
+          "A tool that reaches another site's pool from its own account, such as a monitoring agent, stops working.",
+        ],
+        checked: state.phpPools.enabled,
+        onchange: "setPhpPools(this)",
+        extra: `<p class="st-status">${phpPoolsLine(state.phpPools)}</p>`,
+      })}${settingRow({
+        key: "confineFileManager",
+        title: "Keep the File Manager in the site's home",
+        description: [
+          "Refuses File Manager requests that reach outside the site's home through .. or a symbolic link, and archives that would extract device files or setuid programs.",
+          "Only the panel's own nginx can reach the File Manager's PHP.",
+        ],
+        checked: state.fileManagerGuard.enabled,
+        onchange: "setFileManagerGuard(this)",
+        extra: `<p class="st-status">${fileManagerGuardLine(state.fileManagerGuard)}</p>`,
+      })}${settingRow({
+        key: "blockClpctlInjection",
+        title: "Block clpctl injection",
+        description: [
+          "Replaces CloudPanel's clpctlWrapper so a site's own Unix user cannot break out of clpctl's shell and run commands as root.",
+          "Root and the panel are unaffected, and the four commands sites may run still work with ordinary values.",
+        ],
+        checked: "error" in state.clpctlGuard ? true : state.clpctlGuard.enabled,
+        onchange: "setClpctlGuard(this)",
+        extra: `<p class="st-status">${clpctlGuardLine(state.clpctlGuard)}</p>`,
       })}
       </div>
+    </div>`;
+}
+
+type DatabaseState = SystemTweaksState["database"];
+
+function listing(items: string[]): string {
+  return esc(items.length > 1 ? `${items.slice(0, -1).join(", ")} and ${items.at(-1)}` : items[0] ?? "");
+}
+
+/** Where MySQL listens, and what stands between it and the internet. */
+function databaseLine(state: DatabaseStatus & { loopback: boolean }): string {
+  if (state.listenersUnknown) return `${badge("Unknown", "warn")} <span>Where MySQL listens could not be read: ${esc(state.listenersUnknown)}.</span>`;
+  if (!state.running) return `${badge("Not running", "plain")} <span>MySQL is not listening on TCP here.</span>`;
+  if (!state.exposed.length) return `${badge("This server only", "ok")} <span>MySQL accepts connections on 127.0.0.1 only.</span>`;
+  const where = `Listens on ${listing(state.exposed)}.`;
+  if (state.loopback && state.fileInPlace) {
+    return `${badge("Not applied", "warn")} <span>${where} It moves to 127.0.0.1 at MySQL's next restart: systemctl restart mysql.</span>`;
+  }
+  if (state.firewall.state === "off") {
+    return `${badge("Open", "bad")} <span>${where} The firewall rules loaded now let anyone reach it, unless a firewall outside this server blocks it.</span>`;
+  }
+  if (state.firewall.state === "unknown") {
+    return `${badge("Unknown", "warn")} <span>${where} Whether the loaded firewall rules block it is unclear: ${esc(state.firewall.reason ?? "they could not be read")}.</span>`;
+  }
+  if (state.firewall.openTo.length) {
+    return `${badge("Open", "warn")} <span>${where} The loaded firewall rules allow ${listing(state.firewall.openTo)}.</span>`;
+  }
+  return `${badge("Firewalled", "warn")} <span>${where} The loaded firewall rules drop it, so the firewall is all that keeps it private.</span>`;
+}
+
+/** Root's default password, and how to change it without breaking the panel. */
+function defaultPasswordNote(state: DatabaseStatus): string {
+  const found = state.defaultPassword;
+  if ("error" in found) return `<p class="st-status hint">Root's password could not be checked: ${esc(found.error)}</p>`;
+  if (!state.running) return "";
+  if (!found.length) return `<p class="st-status hint">Root does not log in with a default password.</p>`;
+  const what = found.map((hit) => `${hit.password === "root" ? "the password root" : "no password"} from ${hit.from === "loopback" ? "this server" : "other hosts"}`);
+  return warning(`MySQL's root account logs in with ${listing(what)}. Change it in MySQL first, then enter the new password under
+    Admin → Settings → <a href="/admin/database-servers">Database Servers</a> on the 127.0.0.1 server. CloudPanel logs in with the password stored there,
+    so changing it only in MySQL breaks its Databases page.`);
+}
+
+function databaseCard(state: DatabaseState): string {
+  const description = [
+    "Has MySQL accept connections from this server only, with bind-address 127.0.0.1. Sites and the panel connect over 127.0.0.1 or the socket and keep working. Apps on other machines lose access; reach it over an SSH tunnel instead.",
+    "Off by default: CloudPanel creates every database user for any host, so System Tweaks cannot tell whether something remote uses one. A change restarts MySQL, so sites lose their database for a few seconds.",
+  ];
+  if ("error" in state) {
+    return `
+    <div class="card">
+      <div class="card-header"><h2>Database</h2></div>
+      <div class="tweak-list">${settingRow({ key: "databaseLoopback", title: "MySQL on this server only", description, control: "",
+        extra: `<div class="alert st-alert" role="alert">${esc(state.error)}</div>` })}
+      </div>
+    </div>`;
+  }
+  const remote = state.remoteClients.length
+    ? warning(`Connected now from ${listing(state.remoteClients)}. ${state.loopback ? "" : "These lose access once MySQL accepts connections from this server only."}`)
+    : "";
+  return `
+    <div class="card">
+      <div class="card-header"><h2>Database</h2></div>
+      <div class="tweak-list">${settingRow({
+        key: "databaseLoopback",
+        title: "MySQL on this server only",
+        description,
+        checked: state.loopback,
+        disabled: !state.running && !state.loopback,
+        onchange: "setDatabaseLoopback(this)",
+        extra: `<p class="st-status">${databaseLine(state)}</p>${remote}${defaultPasswordNote(state)}`,
+      })}
+      </div>
+    </div>`;
+}
+
+/** The protocols are set on CloudPanel's own Firewall page; this page only says where. */
+function firewallLine(status: FirewallStatus | { error: string }): string {
+  if ("error" in status || !status.available) return "";
+  const link = `<a href="/admin/firewall">Firewall</a>`;
+  return status.udpPorts.length
+    ? `<br>UDP ports open from CloudPanel's ${link} page: ${esc(status.udpPorts.join(", "))}.`
+    : `<br>Rules on CloudPanel's ${link} page can open UDP ports too.`;
+}
+
+type LoginJails = SystemTweaksState["loginJails"];
+type LoginJailsReady = Exclude<LoginJails, { error: string }>;
+
+const LIMIT_TEXT = `${JAIL_LIMITS.maxretry} failed logins within an hour`;
+
+function jailLine(jails: LoginJailsReady, jail: string, on: boolean): string {
+  if (!on) return `${badge("Off", "plain")}`;
+  if (jails.missing.length) return `${badge("Not running", "warn")} <span>Install fail2ban below.</span>`;
+  if (jails.service === "masked") return `${badge("Not running", "warn")} <span>fail2ban.service is masked. Unmask it, then run clp-addons repair.</span>`;
+  if (jail === PANEL_JAIL && jails.panelLog === null) {
+    return `${badge("Not running", "warn")} <span>This CloudPanel has no separate panel nginx to log failed logins from.</span>`;
+  }
+  if (jail === PANEL_JAIL && jails.problem) return `${badge("Not running", "warn")} <span>${esc(jails.problem)}</span>`;
+  if (!jails.running.includes(jail) || (jail === PANEL_JAIL && !jails.panelLog)) {
+    return `${badge("Not running", "warn")} <span>Run clp-addons repair.</span>`;
+  }
+  return `${badge("On", "ok")} <span>fail2ban is watching.</span>`;
+}
+
+/** What sshd accepts now, and how to stop it. The setting never changes sshd. */
+function sshdWarning(sshd: SshLogin | null): string {
+  if (!sshd) return "";
+  const open: string[] = [];
+  if (sshd.password) open.push("SSH accepts passwords");
+  if (sshd.rootLogin === "yes") open.push(`root can log in with ${sshd.password ? "a password" : "a key or password"}`);
+  if (!open.length) return "";
+  return warning(`${esc(open.join(", and "))}. Once your key logs in, set <code>PasswordAuthentication no</code> and <code>PermitRootLogin prohibit-password</code> in a file in /etc/ssh/sshd_config.d/, then run <code>systemctl reload ssh</code>.`);
+}
+
+function bansTable(bans: Ban[]): string {
+  const command = `<p class="hint">Or run <code>fail2ban-client unban &lt;address&gt;</code>.</p>`;
+  if (!bans.length) return `<details class="st-fold"><summary>Blocked addresses: none</summary>${command}</details>`;
+  const rows = bans.map((ban) => `
+          <tr><td><span class="st-name">${esc(ban.ip)}</span><span class="hint st-detail">${ban.jail === PANEL_JAIL ? "Panel" : ban.jail === DOMAIN_JAIL ? "Custom domain, HTTPS" : "SSH"}, until ${esc(ban.until)}</span></td>
+            <td class="st-state"><button class="btn btn-sm" type="button" data-jail="${esc(ban.jail)}" data-ip="${esc(ban.ip)}" onclick="unban(this)">Unblock</button></td></tr>`).join("");
+  return `
+      <details class="st-fold" open>
+        <summary>${badge(String(bans.length), "warn")} Blocked address${bans.length === 1 ? "" : "es"}</summary>
+        <div class="table-scroll"><table class="st-table"><thead><tr><th>Address</th><th class="st-state"></th></tr></thead>
+          <tbody>${rows}</tbody></table></div>${command}
+      </details>`;
+}
+
+/** Logins through CloudPanel's custom domain reach the panel from loopback, so the sites' nginx counts them. */
+function customDomainLine(jails: LoginJailsReady): string {
+  const domain = jails.customDomain;
+  if (!domain || !jails.panel || jails.missing.length) return "";
+  if (!domain.supported) {
+    return warning(`Logins through ${esc(domain.name)} are not counted: its vhost has more than one server block or server_name, so System Tweaks leaves it alone.`);
+  }
+  if (!domain.logged || !jails.running.includes(DOMAIN_JAIL)) {
+    return warning(`Logins through ${esc(domain.name)} are not counted yet. Run clp-addons repair.`);
+  }
+  return `<p class="hint st-suggest">Logins through ${esc(domain.name)} count too. A block for those covers HTTPS on port 443 for every site on this server, because the firewall cannot tell sites apart.</p>`;
+}
+
+function loginJailsCard(jails: LoginJails): string {
+  if ("error" in jails) {
+    return `
+    <div class="card">
+      <div class="card-header"><h2>Failed logins</h2></div>
+      <div class="alert st-alert" role="alert">${esc(jails.error)}</div>
+    </div>`;
+  }
+  const install = jails.missing.length && (jails.panel || jails.ssh) ? `
+      <p class="st-status">${badge("Not installed", "bad")} <span>${esc(jails.missing.join(", "))} ${jails.missing.length === 1 ? "is" : "are"} not installed.</span></p>
+      <div class="st-install"><button class="btn" type="button" onclick="installFail2ban(this)">Install fail2ban</button></div>` : "";
+  return `
+    <div class="card">
+      <div class="card-header"><h2>Failed logins</h2></div>
+      <div class="tweak-list">${settingRow({
+        key: "panel",
+        title: "Block panel login guessing",
+        description: [
+          `After ${LIMIT_TEXT}, fail2ban blocks the address from the panel's port 8443 for an hour. This server's own addresses, private networks and Cloudflare are never blocked.`,
+          "Behind Cloudflare the server sees only Cloudflare's addresses, so nothing is blocked; use Cloudflare's rate limiting there.",
+        ],
+        checked: jails.panel,
+        onchange: "setLoginJails(this)",
+        extra: `<p class="st-status">${jailLine(jails, PANEL_JAIL, jails.panel)}</p>${customDomainLine(jails)}`,
+      })}${settingRow({
+        key: "ssh",
+        title: "Block SSH login guessing",
+        description: [
+          `After ${LIMIT_TEXT}, fail2ban blocks the address from SSH for an hour.`,
+          "Off by default, because an SSH client that offers several wrong keys counts as failed logins and could block you.",
+        ],
+        checked: jails.ssh,
+        onchange: "setLoginJails(this)",
+        extra: `<p class="st-status">${jailLine(jails, "sshd", jails.ssh)}</p>${sshdWarning(jails.sshd)}`,
+      })}
+      </div>${install}${jails.running.length ? bansTable(jails.bans) : ""}
     </div>`;
 }
 
@@ -342,12 +664,12 @@ export function dashboardView(state: SystemTweaksState, now = Date.now()): strin
       <div>
         <h1>System Tweaks</h1>
         <p>Server-wide settings for this machine.</p>
-        <p class="hint">Every 15 minutes it also clears PHP and ImageMagick temp files that timed-out requests left in /tmp.</p>
+        <p class="hint">Every 15 minutes it also clears PHP and ImageMagick temp files that timed-out requests left in /tmp.${firewallLine(state.firewall)}</p>
       </div>
     </div>
     <div class="card">
       <div class="card-header"><h2>Automatic updates</h2></div>
       <div class="tweak-list">${updateRows(state.updates, state.settings)}
       </div>${statusList(state.updates, now)}${coverageDetails(state.updates)}
-    </div>${settingsCard(state)}`;
+    </div>${settingsCard(state)}${loginJailsCard(state.loginJails)}${databaseCard(state.database)}`;
 }

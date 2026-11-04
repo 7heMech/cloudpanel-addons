@@ -28,26 +28,34 @@ knows nothing about it.
 The Addons page is two lists, Enabled and Available, one row per addon with its
 one-line description and its buttons, so the whole catalog fits on a screen. A
 search above them keeps only the rows whose name and description contain every
-one of its words, and hides a list it empties. An
-addon's `added` version (`2.0.0-rc.1`, for example) marks it New on a box
-whose previous release was older than that and whose installed release is not.
-An existing addon's `changed.in` version marks it Changed on the same terms,
-with one line saying what changed; the rest is the changelog's, which the update
-page links. So a box updated from 1.5.2 to 2.0.0 sees what every 2.0.0 release
-candidate declared, and one that already ran 2.0.0-rc.1 sees none of it. The
-previous release is `manager/news-since` under the state directory: an update
-writes the release it replaced, and puts the file back if it rolls back, and
-`install --local` writes the one its artifact manifest named, or the installed
-release itself on a fresh install, where nothing is new to whoever installed it. A box without the file was updated
-from a release that kept none, so it sees every notice up to the installed one.
-Opening the addon from its row clears its badge and note, for every
-administrator and device: the box usually has one person who updates it, and a
-per-user record would need a panel identity for nothing. The page asks the
-manager's `mark-news-seen` verb, which takes only the addon name and works out
-the key (`dns@2.0.0-rc.1`, the release that declared the notice) itself. It
-reads only keys for notices still shown from `manager/news-seen.json`,
-discarding other keys when it records a new read. Reinstalling the same version
-changes neither file.
+one of its words, and hides a list it empties.
+
+An addon's `added` version (`2.0.0-rc.1`, for example) marks it New on a box
+that started tracking notices before that release and has installed it. Each
+entry in an existing addon's `changed` list marks it Changed on the same terms,
+with one line saying what changed, newest first; an unread New covers them.
+Changed is only for what an operator must know, such as a moved setting or a new
+effect on sites; a new layout or a faster pick-up is the changelog's, which the
+update page links. An entry stays in the list when a later release adds
+another, so a box that skips releases sees every one it missed.
+
+Where tracking starts is `manager/news-since` under the state directory, written
+once: the first update writes the release it replaced, `install --local` the one
+its artifact manifest named, or the installed release itself on a fresh install,
+where nothing is new to whoever installed it. A box without the file sees every
+notice up to the installed one. Later updates leave the file alone, so a notice
+stays up through any number of updates until it is read, and an update that
+rolls back puts the file back as it found it.
+
+Each notice is read on its own key (`dns@2.0.0-rc.1`, the addon and the release
+that declared it), for every administrator and device: the box usually has one
+person who updates it, and a per-user record would need a panel identity for
+nothing. Opening an addon from its row reads its notices; Mark all read, shown
+beside Updates while any are unread, reads every addon's, available ones
+included, without enabling them. Both go through the manager's `mark-news-seen`
+verb, which takes an addon name or none and works out the keys itself.
+`manager/news-seen.json` keeps only keys the catalog still declares in the
+tracked range, so it never outgrows the catalog.
 
 ## One catalog, compiled in
 
@@ -303,6 +311,13 @@ renewal wakes it too, so a hook does nothing when no site is waiting on it. The
 units exist while any installed addon declares `certificates`, and repair
 restarts the watcher as it does the new-site one.
 
+An addon that follows CloudPanel's Firewall page declares `firewall`.
+`clp-addons-firewall.path` watches ufw's `user.rules` and `user6.rules`, and its
+service runs `clp-addons sync-firewall`, each installed addon's `firewall` in
+catalog order. The units exist, and repair restarts the watcher, on the same
+terms as the certificate one. See
+[System Tweaks](system-tweaks.md#firewall).
+
 ## One way to watch a job
 
 `lib/job-stream.ts` owns both job-observation routes: `/api/jobs/:id` polls and
@@ -357,8 +372,19 @@ header on a phone, so moving between the two does not move the header.
 
 Every addon renders into one shell in `lib/app-ui.ts`: palette, cards, tables,
 badges, switches, toolbars, one confirmation dialog and one inline notice per
-page. A badge names what something is rather than being read for itself, so it
-is set a size below the smallest body text wherever it appears. A switch that
+page. A badge names a state rather than being read for itself, so it is set a
+size below body text, as a tinted chip in one of five tones -- ok, info, warn,
+bad, muted -- and every addon names its states through them (`tone-*`, with the
+job states mapped onto the same five), so one colour means one thing on every
+page; a running container is ok while a running job is info. A table cell keeps
+its status to the chip and a line or two; the whole explanation is in the row's
+details or tooltip. A value left at its default (no profile, no category,
+CloudPanel's limits) reads muted, so what somebody chose stands out. A table has
+at most one solid button per card, never one per row, and a row's Delete stays a
+plain button that turns red only under the pointer or focus, so a column of
+them does not outweigh the rows. On a wide screen a long hostname is cut to one
+line, with the whole name on hover, and the actions column takes only its
+buttons' width, so the status columns keep their room. A switch that
 decides one thing for a whole page keeps its full size; one repeated per table
 row comes down to the height of the line beside it, so the control does not set
 the row's height. An addon supplies its brand, its own tabs, its script and any rule only it
@@ -466,18 +492,29 @@ Stylesheets and browser scripts live in `.css` and `.client.js` files beside the
 module that serves them, imported with `with { type: "text" }`. Keeping them in
 their own files lets editors highlight, format and lint them.
 
-They are served as they are, never bundled or minified. The pages carry inline
-handlers calling top-level functions by name from markup no bundler sees, so
-tree-shaking and renaming would break them. The panel's nginx already gzips
-these responses, which is where the size saving comes from.
+Scripts are never bundled, and names are never shortened: the pages carry
+inline handlers calling top-level functions by name from markup no bundler
+sees, so tree-shaking and renaming would break them. Stylesheets are bundled by
+Bun, so one shares another with `@import` (an addon's page imports
+`lib/assets/job.css` or `fleet-row-selection.css`) rather than TypeScript
+joining strings; a stylesheet chosen at runtime, such as Panel Tweaks' per-tweak
+blocks, is still joined in code. `tools/build.ts` does this for the binary and
+also minifies, scripts by whitespace only and stylesheets fully, about 12% off a
+gzipped page. `tools/dev-assets.ts`, preloaded by `bunfig.toml` for anything Bun
+runs from the repo, does the same for the preview and tests, without minifying,
+as each stylesheet is first imported; `bun --watch` restarts when it or a file
+it imports changes. Bun prints the CSS in
+its own layout and order, so a test checks markup and behaviour, not a
+stylesheet's text. Most assets land in CloudPanel's Twig templates, so the
+build puts a space after any `{` that minifying leaves before `{`, `%` or `#`.
+Nothing may depend on a comment, since minifying strips them all.
 
 Values a file cannot know -- the addon's mount URL, the shared class names,
 JSON the manager computes -- are bare identifiers or string tokens in the asset,
 substituted by the module that imports it. That keeps each file valid CSS or
 JavaScript on its own.
 
-What stays in TypeScript is what a file could not hold on its own: a one-rule
-string built from a shared class name, a script fragment that is a function
+What stays in TypeScript is what a file could not hold on its own: a script fragment that is a function
 body rather than a program, and a `<script>` element indented to sit inside a
 Twig template.
 
@@ -487,7 +524,20 @@ type a word, such as the domain, before something that cannot be undone, and a
 press on any dialog's backdrop closes it. Fleet tables also get site-selection
 helpers: `paintFleetSelection` paints the count, select-all and every control
 marked `data-needs-selection` by shared ids, and `fleetFilterHtml` adds a search
-and an optional filter once a table has six sites. A row the search hides is
+and an optional filter once a table has six sites. The filter is a menu of
+checkboxes in groups (a status group, and a type, version or category group
+wherever the rows hold at least two values): within a group a row needs any
+ticked word of its `data-show`, across groups all of them, so WordPress and PHP
+together with Needs attention shows the WordPress and PHP sites that need
+attention. Sorting is by the headings, as on CloudPanel's Sites page with Panel
+Tweaks: each `th[data-sort]` sorts by its column on a click or Enter, and again
+reverses it. A row's `data-sort-<key>` gives the value where the cell's text
+would not -- a status column ranks by tone, worst first, and a select's text is
+every option it has -- rows without a value go last, ties go by domain, and the
+rows keep the server's order until a heading is picked; tables under six sites
+sort too. A phone hides the heading, so there a Sort select built from the same
+headings stands in for it. The ticked filters and the sort survive a repaint,
+and the phone's ten-site cut is taken after both. A row the search hides is
 deselected, so a bulk action only reaches sites on screen. Pages with background
 jobs get the shared job watcher. Theme initialization runs before styles are
 painted.

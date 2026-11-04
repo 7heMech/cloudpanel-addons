@@ -328,36 +328,33 @@ function dnsConfirm() {
   dnsPost('/api/confirm', { token: dnsReviewToken }, CLP_ROOT.getElementById('dns-review-dialog'));
 }
 
+// The site's state and what it needs first, then what will change, then the
+// facts that only describe it.
 function dnsShowSite(domain) {
   const site = dnsState.sites.find(function (candidate) { return candidate.domain === domain; });
   const profile = dnsProfile(site.profileId);
   const plan = site.plan;
   dnsSiteShown = domain;
-  CLP_ROOT.getElementById('dns-site-heading').textContent = domain;
-  let html = '<dl class="dns-facts">';
-  if (site.redirect) {
-    const kept = [site.redirect.keepPath && 'path', site.redirect.keepQuery && 'query string'].filter(Boolean);
-    html += '<dt>Redirects to</dt><dd class="dns-change-detail">' + dnsEsc(site.redirect.target) + '</dd>' +
-      '<dt>Status</dt><dd>' + site.redirect.status + (kept.length ? ' · keeps the ' + kept.join(' and ') : '') + '</dd>' +
-      '<dt>Served by</dt><dd>' + (plan && plan.zone ? 'Cloudflare' : site.redirect.standIn ? 'A stand-in site on this server' : dnsState.connections.length ? 'Cloudflare' : 'A stand-in site on this server, once DNS is Automatic') + '</dd>';
-  }
-  html += '<dt>Profile</dt><dd>' + dnsEsc(profile ? profile.name : '—') + (profile || site.redirect ? ' · ' + (dnsState.automatic ? 'Automatic' : 'Ask first') : '') + '</dd>';
-  if (plan && plan.zone) {
-    html += '<dt>Zone</dt><dd>' + dnsEsc(plan.zone.name) + ' · ' + dnsEsc(plan.zone.status) + '</dd>' +
-      '<dt>Through</dt><dd>' + dnsEsc(plan.zone.connection) + ' · ' + dnsEsc(plan.zone.account) + '</dd>';
-    if (plan.zone.status !== 'active' && plan.zone.nameServers.length) {
-      // One button each: a registrar usually has a field per nameserver.
-      html += '<dt>Nameservers</dt><dd class="dns-nameservers">' + plan.zone.nameServers.map(function (server) {
-        return '<div class="dns-copy"><code>' + dnsEsc(server) + '</code><button class="dns-clip" type="button" title="Copy" aria-label="Copy ' + dnsEsc(server) +
-          '" onclick="dnsCopyText(this.previousElementSibling.textContent)">' + DNS_CLIPBOARD + '</button></div>';
-      }).join('') + '</dd>';
-    }
-  }
-  if (site.ssl) html += '<dt>Certificate</dt><dd>' + dnsEsc(site.ssl) + '</dd>';
-  html += '</dl>';
+  const heading = CLP_ROOT.getElementById('dns-site-heading');
+  heading.textContent = domain;
+  const row = Array.prototype.find.call(CLP_ROOT.querySelectorAll('tr[data-domain], tr[data-redirect]'), function (candidate) {
+    return (candidate.dataset.domain || candidate.dataset.redirect) === domain;
+  });
+  const chip = row && row.querySelector('.dns-status .badge');
+  if (chip) heading.appendChild(chip.cloneNode(true));
+
+  let html = '';
   if (!plan) html += '<p class="hint">Not checked yet. Check now reads it from Cloudflare.</p>';
   else {
     html += dnsProblems(plan.problems);
+    if (plan.zone && plan.zone.status !== 'active' && plan.zone.nameServers.length) {
+      html += '<div class="notice dns-nameservers"><span>Set ' + dnsEsc(plan.zone.name) + "'s nameservers at its registrar:</span>" +
+        plan.zone.nameServers.map(function (server) {
+          // One button each: a registrar usually has a field per nameserver.
+          return '<span class="dns-copy"><code>' + dnsEsc(server) + '</code><button class="dns-clip" type="button" title="Copy" aria-label="Copy ' + dnsEsc(server) +
+            '" onclick="dnsCopyText(this.previousElementSibling.textContent)">' + DNS_CLIPBOARD + '</button></span>';
+        }).join('') + '</div>';
+    }
     if (plan.zoneChoices.length) {
       html += '<div class="dns-choice"><label for="dns-zone-choice">Manage ' + dnsEsc(plan.zoneChoices[0].zone) + ' through</label><div class="dns-inline">' +
         '<select id="dns-zone-choice">' + plan.zoneChoices.map(function (choice) {
@@ -367,12 +364,32 @@ function dnsShowSite(domain) {
     if (plan.held && !plan.problems.length) {
       html += '<div class="notice">CloudPanel created this site, so its own address records went in straight away. The changes marked below reach further and wait until you review them.</div>';
     }
-    if (!plan.problems.length) {
+    if (!plan.problems.length && plan.changes.length) {
       html += '<h3 class="dns-section">' + (dnsState.automatic ? 'To change' : 'Differences, not changed until DNS is Automatic') + '</h3>' + dnsChanges(plan.changes);
+      // A redirect has no Apply: the next check makes its changes.
+      if (dnsState.automatic && site.redirect && !plan.held && plan.changes.some(function (change) { return change.action !== 'note'; })) {
+        html += '<p class="hint">The next check makes these, within 15 minutes.</p>';
+      }
     }
   }
-  if (site.redirect) html += '<p><button class="btn" type="button" onclick="dnsEditRedirect(\'' + dnsEsc(domain) + '\')">Edit redirect</button></p>';
+
+  html += '<h3 class="dns-section">' + (site.redirect ? 'Redirect' : 'Site') + '</h3><dl class="dns-facts">';
+  if (site.redirect) {
+    const kept = [site.redirect.keepPath && 'path', site.redirect.keepQuery && 'query string'].filter(Boolean);
+    html += '<dt>Redirects to</dt><dd class="dns-change-detail">' + dnsEsc(site.redirect.target) + '</dd>' +
+      '<dt>Status</dt><dd>' + site.redirect.status + (kept.length ? ' · keeps the ' + kept.join(' and ') : '') + '</dd>' +
+      '<dt>Served by</dt><dd>' + (plan && plan.zone ? 'Cloudflare' : site.redirect.standIn ? 'A stand-in site on this server' : dnsState.connections.length ? 'Cloudflare' : 'A stand-in site on this server, once DNS is Automatic') + '</dd>';
+  }
+  html += '<dt>Profile</dt><dd>' + (profile ? dnsEsc(profile.name) + ' · ' + (dnsState.automatic ? 'Automatic' : 'Ask first')
+    : site.redirect ? 'No profile · ' + (dnsState.automatic ? 'Automatic' : 'Ask first') : '—') + '</dd>';
+  if (plan && plan.zone) {
+    html += '<dt>Zone</dt><dd>' + dnsEsc(plan.zone.name) + ' · ' + dnsEsc(plan.zone.status) + '</dd>' +
+      '<dt>Through</dt><dd>' + dnsEsc(plan.zone.connection) + ' · ' + dnsEsc(plan.zone.account) + '</dd>';
+  }
+  if (site.ssl) html += '<dt>Certificate</dt><dd>' + dnsEsc(site.ssl) + '</dd>';
+  html += '</dl>';
   CLP_ROOT.getElementById('dns-site-body').innerHTML = html;
+  CLP_ROOT.getElementById('dns-site-edit').hidden = !site.redirect;
   const pending = plan && !plan.problems.length && plan.changes.some(function (change) { return change.action !== 'note'; });
   const apply = CLP_ROOT.getElementById('dns-site-apply');
   // A redirect is applied by the next check, or through its review when it is held.

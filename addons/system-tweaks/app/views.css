@@ -1,3 +1,4 @@
+@import "../../../lib/assets/tweak-rows.css";
 .tweak-list > .tweak-row:first-child { padding-top: 0; border-top: 0; }
 .st-status { margin-top: 10px !important; }
 .st-status .badge { margin-right: 6px; }

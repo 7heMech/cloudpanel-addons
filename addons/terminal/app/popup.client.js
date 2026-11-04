@@ -155,7 +155,7 @@ function finish(info) {
 }
 
 async function createSession() {
-  setStatus('Connecting', 'state-paused');
+  setStatus('Connecting', 'tone-warn');
   try {
     const reply = await call(SESSIONS, {
       method: 'POST',
@@ -180,7 +180,7 @@ function attach(reattaching) {
     userLabel.textContent = 'as ' + info.user;
     userLabel.hidden = false;
     joined = true;
-    setStatus('Connected', 'state-running');
+    setStatus('Connected', 'tone-ok');
     sendSize();
   });
   events.addEventListener('reset', function (event) {
@@ -195,7 +195,7 @@ function attach(reattaching) {
   events.onerror = function () {
     if (ended || !events) return;
     if (events.readyState !== EventSource.CLOSED) {
-      setStatus('Reconnecting', 'state-paused');
+      setStatus('Reconnecting', 'tone-warn');
       return;
     }
     events = null;
@@ -604,14 +604,14 @@ window.addEventListener('pagehide', function () {
 window.addEventListener('pageshow', function (event) {
   if (!event.persisted || !sessionId || ended) return;
   if (events) events.close();
-  setStatus('Connecting', 'state-paused');
+  setStatus('Connecting', 'tone-warn');
   attach(true);
 });
 
 const storedSession = sessionStorage.getItem(STORE_KEY);
 if (storedSession) {
   sessionId = storedSession;
-  setStatus('Connecting', 'state-paused');
+  setStatus('Connecting', 'tone-warn');
   attach(true);
 } else {
   createSession();

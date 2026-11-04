@@ -95,7 +95,7 @@ export function popupPage(domain: string): string {
   <img class="term-logo clp-addon-logo-dark" src="/assets/images/logo-dark.svg" alt="CloudPanel" width="100" height="20">
   <span class="term-domain" title="${esc(domain)}">${esc(domain)}</span>
   <span class="term-user" id="term-user" hidden></span>
-  <span class="badge state-paused" id="term-status" role="status">Connecting</span>
+  <span class="badge tone-warn" id="term-status" role="status">Connecting</span>
   <div class="term-tools">
     <button class="term-tool" type="button" onclick="changeFont(-1)" aria-label="Smaller text" title="Smaller text">A−</button>
     <button class="term-tool" type="button" onclick="changeFont(1)" aria-label="Larger text" title="Larger text">A+</button>

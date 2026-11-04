@@ -66,5 +66,5 @@ jobs:
 
       - name: Build
         # Compiling is part of the check: a type error the checker tolerates
-        # can still fail `bun build --compile`.
+        # can still fail the compile.
         run: bun run build

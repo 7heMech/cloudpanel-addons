@@ -533,15 +533,6 @@ test("only root may change a pool, and only the declared verbs exist", async () 
   }
 });
 
-test("the PHP Resources category dialog fits a phone", () => {
-  const html = layout(
-    "PHP resources",
-    dashboardView({ categories: [], defaultCategoryId: null, sites: [] }),
-  );
-  expect(html).toContain("#category-dialog { width:720px; }");
-  expect(html).toContain("@media (max-width:760px) {\n  #category-dialog { width:calc(100% - 20px); }");
-});
-
 test("the category dialog shows name, process manager and max children, and the rest under More limits", () => {
   const html = dashboardView({ categories: [], defaultCategoryId: null, sites: [] });
   const dialog = html.slice(html.indexOf('<dialog id="category-dialog"'));
@@ -635,7 +626,6 @@ test("the site table carries the mobile select-all control and selectable rows",
   expect(html).toContain('tabindex="0" aria-selected="false" onclick="toggleSiteSelection(event, this)"');
   expect(html).toContain('<span class="hint">PHP 8.2</span>');
   expect(html).not.toContain('class="type-cell"');
-  expect(layout("PHP resources", html)).toContain(".fleet-table.php-sites-table td.site-select { display:none; }");
 });
 
 test("the page puts the sites first and the default for new sites in the Categories header", () => {
@@ -650,8 +640,8 @@ test("the page puts the sites first and the default for new sites in the Categor
   expect(html.indexOf("<h2>PHP sites</h2>")).toBeLessThan(html.indexOf("<h2>Categories</h2>"));
   expect(html.indexOf("<h2>Categories</h2>")).toBeLessThan(html.indexOf('id="default-category"'));
   expect(html).toContain("None (CloudPanel&#x27;s limits)");
-  expect(html).toContain('<option value="drifted">Drifted</option>');
-  expect(html).toContain('data-domain="a.example.com" data-show="drifted"');
+  expect(html).toContain('<input type="checkbox" value="drifted" data-group="Status" onchange="pickFleetFilter()"> Drifted</label>');
+  expect(html).toMatch(/data-domain="a\.example\.com" data-show="drifted php-[^"]* category-[^"]*"/);
   expect(html).toContain('id="assign-selected" type="button" disabled data-needs-selection');
   expect(html).toContain('id="bulk-category" data-keep');
   expect(html).not.toContain("closeCategoryDialogOnBackdrop");

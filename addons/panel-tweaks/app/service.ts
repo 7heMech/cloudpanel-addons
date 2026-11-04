@@ -1,7 +1,10 @@
 import { callGatewayAction, type ActionResult, type GatewayStream } from "../../../lib/gateway-client";
 import type { WebVerb } from "../../../lib/gateway-protocol";
 import { watchGatewayJob, type JobWatcher } from "../../../lib/job-stream";
-import type { MeasureJobView, MeasureStarted, PanelTweaks, PanelTweaksState, SetTweaksResult } from "../action";
+import type {
+  MeasureJobView, MeasureStarted, PanelTweaks, PanelTweaksState, SetBrandingResult, SetTweaksResult,
+} from "../action";
+import type { Branding } from "../branding";
 
 function call<T>(verb: WebVerb<"panel-tweaks">, args: string[] = [], input?: string, timeout?: number): Promise<ActionResult<T>> {
   return callGatewayAction("panel-tweaks", verb, args, input, timeout ? { timeout } : undefined);
@@ -16,6 +19,18 @@ export const panelTweaksService = {
 
   setTweaks(wanted: Partial<PanelTweaks>): Promise<ActionResult<SetTweaksResult>> {
     return call<SetTweaksResult>("set-tweaks", [], JSON.stringify(wanted));
+  },
+
+  branding(): Promise<ActionResult<Branding>> {
+    return call<Branding>("branding");
+  },
+
+  setBranding(wanted: Record<string, unknown>): Promise<ActionResult<SetBrandingResult>> {
+    return call<SetBrandingResult>("set-branding", [], JSON.stringify(wanted));
+  },
+
+  brandingAsset(name: string): Promise<ActionResult<{ type: string; data: string }>> {
+    return call("branding-asset", [`--name=${name}`]);
   },
 
   // A measurement is a background job; the reply is the recorded job, or the

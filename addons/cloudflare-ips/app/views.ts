@@ -1,7 +1,7 @@
 import CLIENT_JS_BODY from "./views.client.js" with { type: "text" };
 import { esc } from "../../../lib/app-http";
 import {
-  FLEET_FOOTER_HTML, FLEET_ROW_SELECTION_JS, fleetFilterHtml, fleetRowSelectionStyle, renderLayout,
+  FLEET_FOOTER_HTML, FLEET_ROW_SELECTION_JS, fleetFilterHtml, renderLayout,
 } from "../../../lib/app-ui";
 import { mountPath } from "../../../lib/mount";
 import type { CloudflareState } from "./service";
@@ -11,10 +11,7 @@ const plural = (count: number, word: string): string => `${count} ${word}${count
 
 // Switches, the toolbar, the confirmation dialog and the inline notice come
 // from lib/app-ui so this addon looks like the rest of the manager.
-import VIEWS_CSS from "./views.css" with { type: "text" };
-
-const STYLE = VIEWS_CSS
-  .split("/* fleet-row-selection */").join(fleetRowSelectionStyle("cloudflare-site-table"));
+import STYLE from "./views.css" with { type: "text" };
 
 export const CLIENT_JS = `
 ${FLEET_ROW_SELECTION_JS}
@@ -36,7 +33,7 @@ export function dashboardView(state: CloudflareState): string {
   const total = state.sites.length;
   const summary = `${enabled} of ${plural(total, "site")} allow Cloudflare only`;
   const rows = state.sites.map((site) => `
-    <tr data-domain="${esc(site.domain)}" data-enabled="${site.enabled}" data-show="${site.enabled ? "on" : "off"}" tabindex="0" aria-selected="false" onclick="toggleSiteSelection(event, this)" onkeydown="toggleSiteSelection(event, this)">
+    <tr data-domain="${esc(site.domain)}" data-enabled="${site.enabled}" data-show="${site.enabled ? "on" : "off"}" data-sort-enabled="${site.enabled ? "on" : "off"}" tabindex="0" aria-selected="false" onclick="toggleSiteSelection(event, this)" onkeydown="toggleSiteSelection(event, this)">
       <td class="site-select"><input class="site-checkbox" type="checkbox" onchange="paintFleetSelection()" aria-label="Select ${esc(site.domain)}"></td>
       <td class="site-cell"><span class="site-name">${esc(site.domain)}</span></td>
       <td class="action-cell" data-label="Cloudflare only">
@@ -64,7 +61,7 @@ export function dashboardView(state: CloudflareState): string {
           <div class="table-scroll"><table class="fleet-table cloudflare-site-table">
             <thead><tr>
               <th scope="col" class="site-select"><input id="select-all" type="checkbox" onchange="selectAllSites(this.checked)" aria-label="Select all sites"></th>
-              <th scope="col">Site</th><th scope="col" class="action-cell">Cloudflare only</th>
+              <th scope="col" data-sort="domain">Site</th><th scope="col" class="action-cell" data-sort="enabled">Cloudflare only</th>
             </tr></thead>
             <tbody>${rows}</tbody>
           </table></div>

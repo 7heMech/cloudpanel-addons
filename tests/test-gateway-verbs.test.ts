@@ -25,10 +25,10 @@ function dispatchedVerbs(addon: GatewayAddon): string[] {
   for (const file of SOURCES[addon] ?? [`addons/${addon}/action.ts`]) {
     const source = readFileSync(new URL(`../${file}`, import.meta.url), "utf8");
     for (const table of source.matchAll(/const ARGUMENTS[^=]*= \{([^}]*)\}/g)) {
-      for (const match of table[1]!.matchAll(/"([a-z][a-z-]*)":/g)) verbs.add(match[1]!);
+      for (const match of table[1]!.matchAll(/"([a-z][a-z0-9-]*)":/g)) verbs.add(match[1]!);
     }
-    for (const match of source.matchAll(/case "([a-z][a-z-]*)":/g)) verbs.add(match[1]!);
-    for (const match of source.matchAll(/(?:argv\[0\]|verb|rawVerb) [!=]== "([a-z][a-z-]*)"/g)) verbs.add(match[1]!);
+    for (const match of source.matchAll(/case "([a-z][a-z0-9-]*)":/g)) verbs.add(match[1]!);
+    for (const match of source.matchAll(/(?:argv\[0\]|verb|rawVerb) [!=]== "([a-z][a-z0-9-]*)"/g)) verbs.add(match[1]!);
   }
   return [...verbs].sort();
 }
