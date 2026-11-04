@@ -48,10 +48,12 @@ configuration inputs does not remove those privileges. The Vhost editor remains
 administrator-only while the injection guard is on.
 [Trust boundaries](docs/decisions/security.md#trust-and-limits)
 
-## Hardening with System Tweaks
+## Mitigations
 
-[System Tweaks](docs/system-tweaks.md) shows whether each setting is applied.
-The [design](docs/decisions/system-tweaks.md) describes its checks and limits.
+Each fix the addons make to CloudPanel is listed here, with the setting that
+applies it. [System Tweaks](docs/system-tweaks.md) shows whether each setting is
+applied, and the [design](docs/decisions/system-tweaks.md) describes its checks
+and limits.
 
 ### On by default
 
