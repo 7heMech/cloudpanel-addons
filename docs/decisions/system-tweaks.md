@@ -516,10 +516,15 @@ so the sync runs both before and after it. The drop-in resets `ExecReload=` and
 lists `sync-php-pools --before-reload`, the unit's own reload lines as systemd
 assembles them from its file and the other drop-ins, then `sync-php-pools`.
 The first loads the pool files' ports together with those already in the
-table, so a new or moved port is closed before PHP-FPM listens on it and an old
-one stays closed while PHP-FPM may still listen there; the second trims the
-table to the pool files. Both ignore failure so PHP-FPM still reloads, and the
-15-minute repair loads the table again. A unit whose reload lines cannot be
+table, so a new or moved port is closed before PHP-FPM listens on it. PHP-FPM
+takes over its sockets and lets the old ones go only after `systemctl reload`
+returns, about 80 ms later on staging, so the second, and every other sync,
+keeps a loaded port no pool file names while `/proc/net/tcp` or `tcp6` still
+shows something listening on it, and drops it at the next sync after that. A
+kept port admits only the user it had, and only while no pool file names it,
+so a port handed to another site's pool admits that pool's user alone. Both
+syncs ignore failure so PHP-FPM still reloads, and the 15-minute repair loads
+the table again. A unit whose reload lines cannot be
 read, such as one with a continued line, gets the sync after its reload only.
 The page's "On" compares each drop-in with the unit's current reload lines, so
 a package update that changes them is fixed by the next repair.
@@ -530,8 +535,9 @@ the system tweaks lock, since a change on the page can be what reloads PHP-FPM,
 and removes the table again if the setting went off while it was loading.
 Repair and re-enabling the addon put the drop-ins and table back; switching
 off and disabling the addon remove both. "On" needs the drop-in on every
-version as the unit's reload lines give it now, the recorded ruleset equal to
-the one the pool files give now, and the table loaded.
+version as the unit's reload lines give it now, the table loaded, and its
+ruleset closing every pool file's port to the right users; a port it keeps
+closed until the next sync does not count against it.
 
 ## Abandoned temp files
 

@@ -11,8 +11,9 @@
  * every PHP-FPM unit runs `clp-addons sync-php-pools` before each start, which
  * also covers the first one after a reboot. On a reload it runs before the
  * unit's own reload lines, adding the ports in the pool files to those already
- * closed, so a new port is closed before PHP-FPM binds it and an old one until
- * PHP-FPM lets it go; after them, it trims the table to the pool files. Not after the start:
+ * closed, so a new port is closed before PHP-FPM binds it. After them, and on
+ * every other sync, it drops a port no pool file names once nothing listens on
+ * it, since PHP-FPM lets an old port go only after the reload returns. Not after the start:
  * these units are `Type=notify` with a `PIDFile=`, and with a start-post
  * command systemd waits for a PID file PHP-FPM does not write, until the start
  * times out.
@@ -34,6 +35,7 @@ export const DEFAULT_POOL_ISOLATION_PATHS = {
   systemdDir: SYSTEMD_DIR,
   /** The ruleset last loaded, which is also what `nft -f` reads. */
   rulesFile: `${STATE_DIR}/system-tweaks/php-pools.nft`,
+  procNet: "/proc/net",
   bin: CLI_BIN,
   panelUser: PANEL_USER,
 };
@@ -141,12 +143,14 @@ function nginxUser(nginxConf: string): string {
  * this host is matched, so a site's PHP still reaches the same port elsewhere.
  */
 export function poolRuleset(pools: Pool[], users: Map<string, number>, trusted: string[], also: LoadedSets = { ports: [], owners: [] }): string {
-  const ports = [...new Set([...pools.map((pool) => pool.port), ...also.ports])].sort((a, b) => a - b);
+  const poolPorts = new Set(pools.map((pool) => pool.port));
+  const ports = [...new Set([...poolPorts, ...also.ports])].sort((a, b) => a - b);
   const trustedUids = [...new Set([0, ...trusted.map((name) => users.get(name)).filter((uid): uid is number => uid !== undefined)])].sort((a, b) => a - b);
+  // A port a pool file names admits only that pool's user, never one it had before.
   const owners = [...new Set([...pools.flatMap((pool) => {
     const uid = users.get(pool.user);
     return uid === undefined ? [] : [`${pool.port} . ${uid}`];
-  }), ...also.owners])].sort();
+  }), ...also.owners.filter((owner) => !poolPorts.has(Number(owner.split(" . ")[0])))])].sort();
   const elements = (values: (string | number)[]) => values.length ? ` elements = { ${values.join(", ")} };` : "";
   return [
     "# Managed by clp-addons System Tweaks: only nginx and each pool's own user reach a PHP-FPM pool's port.",
@@ -174,6 +178,29 @@ function loadedSets(rules: string): LoadedSets {
   return {
     ports: elements("ports").map(Number).filter((port) => Number.isInteger(port) && port > 0 && port < 65536),
     owners: elements("owners").filter((owner) => /^[0-9]+ \. [0-9]+$/.test(owner)),
+  };
+}
+
+/** TCP ports something on this host listens on, from /proc/net/tcp and tcp6. */
+function listeningPorts(procNet: string): Set<number> {
+  const ports = new Set<number>();
+  for (const file of ["tcp", "tcp6"]) {
+    let text = "";
+    try { text = readFileSync(join(procNet, file), "utf8"); } catch { continue; }
+    for (const line of text.split("\n").slice(1)) {
+      const fields = line.trim().split(/\s+/);
+      if (fields[3] === "0A") ports.add(Number.parseInt(fields[1]?.split(":")[1] ?? "", 16));
+    }
+  }
+  return ports;
+}
+
+/** The loaded sets cut to the ports something still listens on. */
+function stillListening(loaded: LoadedSets, procNet: string): LoadedSets {
+  const listening = listeningPorts(procNet);
+  return {
+    ports: loaded.ports.filter((port) => listening.has(port)),
+    owners: loaded.owners.filter((owner) => listening.has(Number(owner.split(" . ")[0]))),
   };
 }
 
@@ -228,15 +255,17 @@ function tableLoaded(run: (command: string, args: string[]) => CommandResult): b
 }
 
 /**
- * Load the table from the pool files as they are now. Before a reload, the
- * ports already loaded stay closed too, since PHP-FPM still listens on them
- * until it has reloaded. Returns whether anything changed.
+ * Load the table from the pool files as they are now. A port already loaded
+ * stays closed before a reload, and afterwards while something still listens
+ * on it, since PHP-FPM lets an old port go only after the reload returns.
+ * Returns whether anything changed.
  */
 export function syncPoolIsolation(options: PoolIsolationOptions = {}, beforeReload = false): boolean {
   const { paths, run } = context(options);
   const inForce = tableLoaded(run);
   const current = regularText(paths.rulesFile);
-  const rules = expectedRuleset(paths, beforeReload && inForce && current !== null ? loadedSets(current) : undefined);
+  const closed = inForce && current !== null ? loadedSets(current) : undefined;
+  const rules = expectedRuleset(paths, closed && (beforeReload ? closed : stillListening(closed, paths.procNet)));
   if (current === rules && inForce) return false;
   writeFileAtomic(paths.rulesFile, rules, { mode: 0o600, createParent: true });
   const loaded = run("nft", ["-f", paths.rulesFile]);
@@ -290,5 +319,7 @@ export function poolIsolationStatus(options: PoolIsolationOptions = {}): PoolIso
   const { paths, run } = context(options);
   if (!run("nft", ["--version"]).ok) return { active: false, problem: "nft is not installed." };
   const dropIns = versions(paths).every((version) => regularText(dropInPath(paths, version)) === poolDropIn(paths.bin, unitReloadLines(run, version)));
-  return { active: dropIns && regularText(paths.rulesFile) === expectedRuleset(paths) && tableLoaded(run), problem: "" };
+  // Every pool file's port is closed to the right users; a port kept closed until the next sync is not a gap.
+  const current = regularText(paths.rulesFile);
+  return { active: dropIns && current !== null && current === expectedRuleset(paths, loadedSets(current)) && tableLoaded(run), problem: "" };
 }

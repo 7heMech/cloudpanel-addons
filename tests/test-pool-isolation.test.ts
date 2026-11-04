@@ -50,10 +50,16 @@ function fixture() {
     run,
     paths: {
       phpRoot, passwdFile: join(dir, "passwd"), nginxConf: join(dir, "nginx.conf"), systemdDir: join(dir, "systemd"),
-      rulesFile: join(dir, "state", "php-pools.nft"), bin: "/usr/local/bin/clp-addons", panelUser: "clp",
+      rulesFile: join(dir, "state", "php-pools.nft"), bin: "/usr/local/bin/clp-addons", panelUser: "clp", procNet: join(dir, "proc-net"),
     },
   };
-  return { dir, phpRoot, pool, nft, units, commands, options };
+  // What /proc/net/tcp lists: these ports are listened on.
+  const listen = (...ports: number[]) => {
+    mkdirSync(join(dir, "proc-net"), { recursive: true });
+    const rows = ports.map((port, i) => `   ${i}: 0100007F:${port.toString(16).toUpperCase().padStart(4, "0")} 00000000:0000 0A 00000000:00000000 00:00000000 00000000     0        0 1 1 0000000000000000 100 0 0 10 0`);
+    writeFileSync(join(dir, "proc-net", "tcp"), ["  sl  local_address rem_address   st tx_queue rx_queue tr tm->when retrnsmt   uid  timeout inode", ...rows, ""].join("\n"));
+  };
+  return { dir, phpRoot, pool, nft, units, listen, commands, options };
 }
 
 test("listen values that reach a TCP port, and sockets left out", () => {
@@ -145,7 +151,7 @@ test("remove takes out the drop-ins and the table", () => {
   expect(removePoolIsolation(f.options)).toBe(false);
 });
 
-test("before a reload the new pool's port is closed and the old one stays closed; after it, only the pool files' ports are", () => {
+test("a new pool's port is closed before the reload, and an old one until nothing listens on it", () => {
   const f = fixture();
   installPoolIsolation(f.options);
   const rules = () => readFileSync(join(f.dir, "state", "php-pools.nft"), "utf8");
@@ -154,18 +160,33 @@ test("before a reload the new pool's port is closed and the old one stays closed
   expect(syncPoolIsolation(f.options, true)).toBe(true);
   expect(rules()).toContain("set ports { type inet_service; elements = { 17001, 18000, 18001, 18005 }; }");
   expect(rules()).toContain("set owners { type inet_service . uid; elements = { 17001 . 1002, 18000 . 33, 18001 . 1001, 18005 . 1001 }; }");
-  expect(poolIsolationStatus(f.options).active).toBe(false);
+  expect(poolIsolationStatus(f.options).active).toBe(true);
+  // The reload has returned, but PHP-FPM still listens on 18001.
+  f.listen(17001, 18000, 18001, 18005);
+  expect(syncPoolIsolation(f.options)).toBe(false);
+  expect(rules()).toContain("set ports { type inet_service; elements = { 17001, 18000, 18001, 18005 }; }");
+  // Once it has let go, the next sync drops it.
+  f.listen(17001, 18000, 18005);
   expect(syncPoolIsolation(f.options)).toBe(true);
   expect(rules()).toContain("set ports { type inet_service; elements = { 17001, 18000, 18005 }; }");
-  expect(poolIsolationStatus(f.options).active).toBe(true);
-  // Nothing new: the sync before the reload changes nothing.
+  expect(rules()).toContain("set owners { type inet_service . uid; elements = { 17001 . 1002, 18000 . 33, 18005 . 1001 }; }");
   expect(syncPoolIsolation(f.options, true)).toBe(false);
+
+  // A port given to another site's pool admits only the new user, even while the old pool may still hold it.
+  f.pool("8.3", "shop.example.com.conf", "[shop.example.com]\nlisten = 127.0.0.1:18006\nuser = shop\n");
+  f.pool("8.3", "new.example.com.conf", "[new.example.com]\nlisten = 127.0.0.1:18005\nuser = blog\n");
+  syncPoolIsolation(f.options, true);
+  expect(rules()).toContain("set owners { type inet_service . uid; elements = { 17001 . 1002, 18000 . 33, 18005 . 1002, 18006 . 1001 }; }");
+
+  // A pool file whose port the table does not close is a gap.
+  f.pool("8.3", "late.example.com.conf", "[late.example.com]\nlisten = 127.0.0.1:18007\nuser = blog\n");
+  expect(poolIsolationStatus(f.options).active).toBe(false);
 
   // After a reboot the recorded ports are stale, so the sync before a start uses the pool files alone.
   f.nft.loaded = false;
-  f.pool("8.3", "shop.example.com.conf", "[shop.example.com]\nlisten = 127.0.0.1:18006\nuser = shop\n");
+  f.listen();
   syncPoolIsolation(f.options, true);
-  expect(rules()).toContain("set ports { type inet_service; elements = { 17001, 18000, 18006 }; }");
+  expect(rules()).toContain("set ports { type inet_service; elements = { 17001, 18000, 18005, 18006, 18007 }; }");
 });
 
 test("the drop-in keeps the reload lines other drop-ins give the unit, and syncs after the reload only when it cannot read them", () => {
