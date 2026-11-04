@@ -60,7 +60,10 @@ and limits.
 **Nginx config injection.** The guard validates new panel settings before
 CloudPanel renders them into nginx config, addressing the
 [CloudPanel 2.5.4-3 disclosure](https://seclists.org/fulldisclosure/2026/Oct/14).
-Only active administrators can save raw Vhost and PageSpeed configuration.
+Only active administrators can save raw Vhost and PageSpeed configuration,
+which also closes
+[CVE-2024-44765](https://nvd.nist.gov/vuln/detail/CVE-2024-44765), where a
+non-admin account edited its vhost to serve the panel's own files.
 [Guide](docs/system-tweaks.md#nginx-config-injection)
 
 **The site's Varnish file.** A checked, root-owned include replaces the backend
