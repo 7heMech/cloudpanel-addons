@@ -165,8 +165,8 @@ login page, and authentication failures do not fall back to anonymous access.
 The gate is where a request goes by default, after the URL is taken apart and
 before the route is chosen. The liveness probe the update page polls is inside
 it, and nothing reads it without a session: the page that polls it has one. The
-exceptions are below: fourteen named routes, and two routes settled ahead of the
-gate by a credential of their own.
+exceptions are below: fourteen named routes, two routes settled ahead of the
+gate by a credential of their own, and one public route for branding images.
 
 Fourteen routes are named as exceptions. Six are WordPress Tools':
 `POST /wp-tools/api/sign-in`, the `GET /wp-tools/api/session` that hands out
@@ -236,6 +236,15 @@ key's signature is the credential, checked as root against a single-use
 challenge root signed, so issuing one writes nothing. Both routes exist only while the addon is installed and
 require the panel's own Origin; every other request under that prefix meets the
 gate. See [Security Keys](security-keys.md).
+
+The third has no credential, because what it serves is public: `GET
+/addons/panel-tweaks/branding/<sha256>.<ext>` answers the logos and favicon
+Theme & Branding puts on CloudPanel's pages, the login page among them. The name
+must be a content hash, and root answers only a file a branding slot currently
+names; anything else falls through to the gate. The reply carries
+`nosniff`, a `sandbox` policy with `default-src 'none'`, so an SVG opened on its
+own runs and loads nothing, and an SVG carrying scripts, event handlers or
+embedded documents is refused at upload as well. See [Panel Tweaks](panel-tweaks.md).
 
 What a stranger gets back is the redirect Symfony sends for any path CloudPanel
 will not serve them, reproduced byte for byte: same status, same headers, same

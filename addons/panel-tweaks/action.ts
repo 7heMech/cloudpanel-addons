@@ -29,6 +29,7 @@ import { standInDomains } from "../../cli/stand-ins";
 import { writeFileAtomic } from "../../lib/atomic-write";
 import { certificateIssuer, issuerLabel } from "../../lib/certificate-issuer";
 import { PANEL_USER_NAME_RE, panelUserSites } from "../../lib/panel-users";
+import { applyBranding, brandingAsset, MAX_BRANDING_INPUT_BYTES, readBranding, type Branding } from "./branding";
 
 const TWEAKS_VERSION = 1;
 const DISK_VERSION = 1;
@@ -41,7 +42,7 @@ const MEASURE_LOCK_WAIT_SECONDS = 60 * 60;
 const JOB_RETENTION_DAYS = 7;
 
 /** `scan` is the repair timer's sweep; the page starts a `measure` job instead. */
-export type PanelTweaksVerb = "state" | "set-tweaks" | "scan" | "measure";
+export type PanelTweaksVerb = "state" | "set-tweaks" | "scan" | "measure" | "branding" | "set-branding";
 
 /**
  * What the addon does, as independent modes.
@@ -68,6 +69,8 @@ export interface PanelTweaks {
   diskUsage: boolean;
   /** Offer a Let's Encrypt certificate after creating any native site. */
   autoSsl: boolean;
+  /** Logos, favicon, custom CSS and footer from the Theme & Branding settings. */
+  branding: boolean;
 }
 
 export const DEFAULT_TWEAKS: PanelTweaks = {
@@ -79,6 +82,7 @@ export const DEFAULT_TWEAKS: PanelTweaks = {
   // Off until asked for: it is the only tweak that reads the whole disk.
   diskUsage: false,
   autoSsl: false,
+  branding: false,
 };
 
 /**
@@ -89,7 +93,7 @@ export const DEFAULT_TWEAKS: PanelTweaks = {
  * autoSsl decides whether the creation and completion scripts are present.
  */
 export const TEMPLATE_TWEAK_KEYS: (keyof PanelTweaks)[] =
-  ["deviceTheme", "sitesMobile", "actionMenu", "panelMobile", "autoSsl"];
+  ["deviceTheme", "sitesMobile", "actionMenu", "panelMobile", "autoSsl", "branding"];
 
 export const TWEAK_KEYS = Object.keys(DEFAULT_TWEAKS) as (keyof PanelTweaks)[];
 
@@ -239,6 +243,9 @@ export interface PanelTweaksActionPaths {
   /** Where MySQL keeps one directory per database, when the box has MySQL. */
   mysqlDir: string;
   passwd: string;
+  /** Theme & Branding settings, and the images they name. */
+  brandingFile: string;
+  brandingDir: string;
   rootUid: number;
 }
 
@@ -265,6 +272,8 @@ export const DEFAULT_PANEL_TWEAKS_PATHS: PanelTweaksActionPaths = {
   actionBinary: CLI_BIN,
   mysqlDir: "/var/lib/mysql",
   passwd: "/etc/passwd",
+  brandingFile: `${STATE_DIR}/panel-tweaks/branding.json`,
+  brandingDir: `${STATE_DIR}/panel-tweaks/branding`,
   rootUid: 0,
 };
 
@@ -684,7 +693,7 @@ interface ParsedAction {
 
 function parseAction(argv: string[]): ParsedAction {
   const [rawVerb, ...rest] = argv;
-  const verbs: PanelTweaksVerb[] = ["state", "set-tweaks", "scan", "measure"];
+  const verbs: PanelTweaksVerb[] = ["state", "set-tweaks", "scan", "measure", "branding", "set-branding"];
   const verb = verbs.find((known) => known === rawVerb);
   if (!verb) failAction(`unknown panel tweaks verb '${rawVerb ?? ""}'`);
 
@@ -737,6 +746,25 @@ async function setTweaks(
       reinject: TEMPLATE_TWEAK_KEYS.some((key) => current[key] !== wanted[key]),
     };
   });
+}
+
+export interface SetBrandingResult {
+  branding: Branding;
+  /** Whether the templates carry branding at all, and so must be rendered again. */
+  reinject: boolean;
+}
+
+async function setBranding(paths: PanelTweaksActionPaths, options: PanelTweaksActionOptions): Promise<SetBrandingResult> {
+  return withFileLock(paths.lockFile, 15, "another panel tweaks change is still running", async () => {
+    const body = await readJsonRequest(options.input, MAX_BRANDING_INPUT_BYTES);
+    return { branding: applyBranding(paths, body), reinject: readTweaks(paths).branding };
+  });
+}
+
+/** `branding-asset --name=<sha256>.<ext>`, answered before there is a session. */
+function brandingAssetArgument(argv: string[]): string {
+  if (argv.length !== 1 || !argv[0]!.startsWith("--name=")) failAction("branding-asset takes --name=<file>");
+  return argv[0]!.slice("--name=".length);
 }
 
 // --- the measurement an operator starts -------------------------------------
@@ -837,10 +865,13 @@ export async function executePanelTweaksAction(
     if (!job) failAction(`no such job: ${id}`);
     return { job, log: readJobLog(jobDir(paths.jobsDir, id)) };
   }
+  if (argv[0] === "branding-asset") return brandingAsset(paths, brandingAssetArgument(argv.slice(1)));
   const { verb, asUser } = parseAction(argv);
 
   if (verb === "state") return stateOf(paths, asUser);
   if (verb === "set-tweaks") return setTweaks(paths, options);
+  if (verb === "branding") return readBranding(paths);
+  if (verb === "set-branding") return setBranding(paths, options);
   if (verb === "measure") return startMeasurement(paths, options);
   if (verb === "scan") {
     return withFileLock(paths.scanLockFile, 15, "a disk measurement is already running", async () =>

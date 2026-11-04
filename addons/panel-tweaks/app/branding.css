@@ -1,0 +1,30 @@
+.branding-card[hidden] { display: none; }
+.branding-tiles { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 12px; margin-top: 12px; }
+.branding-tiles.is-wide { grid-template-columns: repeat(2, minmax(0, 1fr)); margin-top: 18px; }
+.tweak-row:not(.is-enabled) .branding-tiles { opacity: .6; }
+.branding-tile { display: flex; flex-direction: column; min-width: 0; border: 1px solid var(--border); border-radius: 8px;
+  background: var(--panel); }
+.branding-tile-head { display: flex; align-items: center; gap: 8px; padding: 10px 12px; border-bottom: 1px solid var(--row-border);
+  font-size: 13px; font-weight: 600; }
+.branding-tile-size { margin-left: auto; color: var(--muted); font-weight: 400; }
+.branding-mode { padding: 1px 8px; border: 1px solid var(--border); border-radius: 99px; color: var(--muted);
+  font-size: 11px; font-weight: 600; }
+.branding-tile-preview { display: flex; align-items: center; justify-content: center; height: 88px; padding: 12px;
+  background: #fff; }
+/* Each preview sits on the background the logo will: the panel's light or dark header. */
+.branding-tile.is-dark .branding-tile-preview { background: #1c1f26; }
+.branding-tile-preview img { max-width: 100%; max-height: 100%; object-fit: contain; }
+.branding-tiles.is-wide .branding-tile-preview img { height: 31px; }
+.branding-tiles:not(.is-wide) .branding-tile-preview img { height: 56px; }
+.branding-tile.is-favicon .branding-tile-preview img { width: 32px; height: 32px; }
+.branding-tile-actions { display: flex; gap: 8px; padding: 10px 12px; border-top: 1px solid var(--row-border); }
+.branding-tile-actions .btn { min-height: 32px; padding: 4px 10px; font-size: 13px; cursor: pointer; }
+.branding-tile-actions .branding-reset { margin-left: auto; }
+.branding-label { display: block; margin: 16px 0 6px; font-size: 14px; font-weight: 600; }
+.branding-code { font-family: Monaco, "Courier New", monospace; font-size: 13px; line-height: 1.5; resize: vertical; }
+.branding-card .form-actions { margin-top: 12px; }
+.branding-card .hint code { font-size: 12px; }
+@media (max-width: 760px) {
+  .branding-tiles, .branding-tiles.is-wide { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .branding-tile.is-favicon { grid-column: 1 / -1; }
+}

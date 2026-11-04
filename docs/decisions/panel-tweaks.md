@@ -134,6 +134,44 @@ and were cards titled by their colour bar. On a phone that tab instead puts its
 four controls two to a row and an access log's date above its line, so the line
 has the card's width. The Sites table is left to its own cards.
 
+## Theme & Branding
+
+A copy of the Theme & Branding tab CloudPanel v3 has in its Admin area: header
+logos for each theme, a square mark, a favicon, custom CSS and the footer. Its
+settings live on the addon's page rather than in Admin, so that when v3 ships
+its own, removing this is removing the addon's switch and `branding.ts`. The
+switch is a mode: off takes every block out of the templates and keeps the
+settings, and each section's own switch, as in v3, does the same for that part.
+
+Everything is baked into CloudPanel's templates, since the login page has no
+session to ask with, so a change to the switch or, while it is on, to a setting
+renders the templates again. One block goes in the head of each of the three
+layouts, after their stylesheets so custom CSS wins ties, and one before the
+footer's closing list. All four are optional anchors. The operator's CSS and
+HTML are written inside `{% verbatim %}`; text containing `endverbatim` is
+refused on save and dropped on read, because what followed it would be Twig run
+by the panel's PHP. A `</style` in the CSS is escaped so it cannot close its
+sheet. The footer HTML is an administrator's markup on every user's page; an
+administrator already has root through the addons, so that grants nothing.
+
+Images are stored under the addon's state directory, named by their SHA-256,
+and served from the addon's mount ahead of the session gate (see
+[Security](security.md)): inlined, every page would carry them, and written into
+CloudPanel's webroot, root would be writing into a directory the panel's own
+user can swap for a link. A content name is never stale, so the reply is
+cached for a year. The type is read from the file's first bytes, not from its
+name. An image nothing names any more is deleted on the next save.
+
+A script in the head block puts the logos into `.logo img` as the parser adds
+them, before they are painted. In the header it rewrites the data attributes
+CloudPanel's theme switch reads, so that switch keeps swapping light and dark.
+The square mark replaces the cloud on the login pages and, below 760px, the
+header logo; each pair falls back to the other, and each theme to the other.
+The favicon replaces the panel's icon link, and the light mark is the
+`apple-touch-icon`. The footer's own items replace CloudPanel's links but not
+its language selector, and the panel's Update available button moves into the
+last of them.
+
 ## SSL after native site creation
 
 `autoSsl` is off by default. It adds a checked, unnamed checkbox to the

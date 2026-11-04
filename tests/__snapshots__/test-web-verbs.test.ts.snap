@@ -76,8 +76,11 @@ manager:news-seen                  admin
 manager:reconcile                  admin
 manager:update                     admin
 manager:watch-job                  admin stream
+panel-tweaks:branding              admin
+panel-tweaks:branding-asset        pre-gate
 panel-tweaks:job                   admin
 panel-tweaks:measure               admin
+panel-tweaks:set-branding          admin
 panel-tweaks:set-tweaks            admin
 panel-tweaks:state                 panel-user
 panel-tweaks:watch-job             admin stream
@@ -150,6 +153,7 @@ wp-tools:watch-job                 admin stream"
 
 exports[`the routes that do not need an administrator 1`] = `
 "before the gate: /git/hook/
+before the gate: /panel-tweaks/branding/
 before the gate: /security-keys/login/
 site managers: /git/
 site managers: /instatic/

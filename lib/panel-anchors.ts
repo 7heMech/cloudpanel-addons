@@ -6,6 +6,9 @@
 export const TEMPLATES = {
   login: "Frontend/Login/login.html.twig",
   loginLayout: "Frontend/Login/layout.html.twig",
+  layout: "Frontend/layout.html.twig",
+  adminLayout: "Admin/layout.html.twig",
+  footer: "Partial/footer.html.twig",
   header: "Frontend/Partial/header.html.twig",
   adminHeader: "Admin/Partial/header.html.twig",
   accountSecurity: "Frontend/User/Account/security.html.twig",
