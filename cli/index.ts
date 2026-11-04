@@ -152,10 +152,10 @@ async function main(): Promise<number> {
       return 0;
     }
     case "sync-php-pools": {
-      // Every PHP-FPM unit runs this after it starts or reloads; its failure does not stop PHP-FPM.
+      // Every PHP-FPM unit runs this before it starts, and before and after it reloads; its failure does not stop PHP-FPM.
       requireRoot("sync-php-pools");
-      if (rest.length) fatal("sync-php-pools takes no arguments");
-      systemTweaksPhpPools();
+      if (rest.length > 1 || (rest.length === 1 && rest[0] !== "--before-reload")) fatal("sync-php-pools takes only --before-reload");
+      systemTweaksPhpPools({}, rest[0] === "--before-reload");
       return 0;
     }
     case "status": await cmdStatus(); return 0;

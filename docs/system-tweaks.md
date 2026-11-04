@@ -124,7 +124,10 @@ rotate the logs in it. With the setting on, the file rotates `~/logs/php` and
 `~/logs/varnish-cache` as the site's user and the nginx logs as root in their
 own directory. A file someone edited by hand is left as it is and listed on
 the page. Turning the setting off puts the placeholders, the `~/logs/nginx`
-directories and CloudPanel's logrotate files back.
+directories and CloudPanel's logrotate files back. Anything it cannot copy back
+in full, such as a log over 64 MiB, stays in
+`/var/log/clp-addons-nginx-kept/<user>-<time>/`, which only root can open;
+delete that folder when you no longer need it.
 
 The setting also lists saved site settings it would refuse now, such as a Root
 Directory saved before it was on, and Varnish servers it refuses. Check each
@@ -142,8 +145,8 @@ and other local services are not affected.
 
 The rule lives in its own nftables table, `inet clp_addons_php_pools`, which
 CloudPanel's **Firewall** page and ufw leave alone. Each PHP-FPM version
-refreshes it when it starts or reloads, which is when CloudPanel adds, moves
-or removes a site. A tool that connects to another site's PHP port from its own
+refreshes it when it starts, and before and after it reloads, which is when
+CloudPanel adds, moves or removes a site. A tool that connects to another site's PHP port from its own
 account, such as a monitoring agent, stops working: run it as root or turn
 the setting off.
 

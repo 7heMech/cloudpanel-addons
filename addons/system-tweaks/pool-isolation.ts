@@ -8,15 +8,17 @@
  *
  * The ports change whenever CloudPanel adds, moves or removes a site's pool, and
  * it reloads or restarts that PHP-FPM with systemctl each time. A drop-in on
- * every PHP-FPM unit runs `clp-addons sync-php-pools` before each start and
- * after each reload, which rewrites the table from the pool files as they are
- * then; the start includes the first one after a reboot. Not after the start:
+ * every PHP-FPM unit runs `clp-addons sync-php-pools` before each start, which
+ * also covers the first one after a reboot. On a reload it runs before the
+ * unit's own reload lines, adding the ports in the pool files to those already
+ * closed, so a new port is closed before PHP-FPM binds it and an old one until
+ * PHP-FPM lets it go; after them, it trims the table to the pool files. Not after the start:
  * these units are `Type=notify` with a `PIDFile=`, and with a start-post
  * command systemd waits for a PID file PHP-FPM does not write, until the start
  * times out.
  */
 import { existsSync, lstatSync, readdirSync, readFileSync, rmSync } from "node:fs";
-import { join } from "node:path";
+import { basename, join } from "node:path";
 import { runCommand, type CommandResult } from "../../cli/action-common";
 import { CLI_BIN, PANEL_USER, STATE_DIR, SYSTEMD_DIR } from "../../cli/paths";
 import { writeFileAtomic } from "../../lib/atomic-write";
@@ -138,13 +140,13 @@ function nginxUser(nginxConf: string): string {
  * the pool's own user; any other local account is refused. Only traffic to
  * this host is matched, so a site's PHP still reaches the same port elsewhere.
  */
-export function poolRuleset(pools: Pool[], users: Map<string, number>, trusted: string[]): string {
-  const ports = [...new Set(pools.map((pool) => pool.port))].sort((a, b) => a - b);
+export function poolRuleset(pools: Pool[], users: Map<string, number>, trusted: string[], also: LoadedSets = { ports: [], owners: [] }): string {
+  const ports = [...new Set([...pools.map((pool) => pool.port), ...also.ports])].sort((a, b) => a - b);
   const trustedUids = [...new Set([0, ...trusted.map((name) => users.get(name)).filter((uid): uid is number => uid !== undefined)])].sort((a, b) => a - b);
-  const owners = [...new Set(pools.flatMap((pool) => {
+  const owners = [...new Set([...pools.flatMap((pool) => {
     const uid = users.get(pool.user);
     return uid === undefined ? [] : [`${pool.port} . ${uid}`];
-  }))].sort();
+  }), ...also.owners])].sort();
   const elements = (values: (string | number)[]) => values.length ? ` elements = { ${values.join(", ")} };` : "";
   return [
     "# Managed by clp-addons System Tweaks: only nginx and each pool's own user reach a PHP-FPM pool's port.",
@@ -164,15 +166,54 @@ export function poolRuleset(pools: Pool[], users: Map<string, number>, trusted: 
   ].join("\n");
 }
 
-function expectedRuleset(paths: PoolIsolationPaths): string {
-  return poolRuleset(phpPools({ paths }), uids(paths.passwdFile), [paths.panelUser, nginxUser(paths.nginxConf)]);
+/** The ports and port-owner pairs of a ruleset {@link poolRuleset} wrote. */
+export interface LoadedSets { ports: number[]; owners: string[] }
+
+function loadedSets(rules: string): LoadedSets {
+  const elements = (set: string) => new RegExp(`^  set ${set} \\{[^{}]*elements = \\{ ([^{}]*) \\}; \\}$`, "m").exec(rules)?.[1]?.split(", ") ?? [];
+  return {
+    ports: elements("ports").map(Number).filter((port) => Number.isInteger(port) && port > 0 && port < 65536),
+    owners: elements("owners").filter((owner) => /^[0-9]+ \. [0-9]+$/.test(owner)),
+  };
 }
 
-export function poolDropIn(bin: string): string {
+function expectedRuleset(paths: PoolIsolationPaths, also?: LoadedSets): string {
+  return poolRuleset(phpPools({ paths }), uids(paths.passwdFile), [paths.panelUser, nginxUser(paths.nginxConf)], also);
+}
+
+/**
+ * The unit's own `ExecReload=` lines as systemd puts them together from its
+ * file and drop-ins, without ours; null when they cannot be read.
+ */
+function unitReloadLines(run: (command: string, args: string[]) => CommandResult, version: string): string[] | null {
+  const shown = run("systemctl", ["show", "-p", "FragmentPath", "-p", "DropInPaths", `php${version}-fpm.service`]);
+  if (!shown.ok) return null;
+  const property = (key: string) => shown.stdout.split("\n").find((line) => line.startsWith(`${key}=`))?.slice(key.length + 1).trim() ?? "";
+  const files = [property("FragmentPath"), ...property("DropInPaths").split(/\s+/)].filter((file) => file && basename(file) !== DROP_IN);
+  let lines: string[] = [];
+  for (const file of files) {
+    let text: string;
+    try { text = readFileSync(file, "utf8"); } catch { return null; }
+    for (const line of text.split("\n").map((raw) => raw.trimEnd())) {
+      if (!line.startsWith("ExecReload=")) continue;
+      if (line.endsWith("\\")) return null;
+      lines = line === "ExecReload=" ? [] : [...lines, line];
+    }
+  }
+  return lines.length ? lines : null;
+}
+
+/**
+ * Sync before every start, and on a reload both before the unit's own reload
+ * lines and after them. A unit whose reload lines cannot be read gets the sync
+ * after its reload only.
+ */
+export function poolDropIn(bin: string, reload: string[] | null): string {
   return [
     "# Managed by clp-addons System Tweaks: refreshes which accounts reach each PHP pool's port.",
     "[Service]",
     `ExecStartPre=-${bin} sync-php-pools`,
+    ...(reload ? ["ExecReload=", `ExecReload=-${bin} sync-php-pools --before-reload`, ...reload] : []),
     `ExecReload=-${bin} sync-php-pools`,
     "",
   ].join("\n");
@@ -186,11 +227,17 @@ function tableLoaded(run: (command: string, args: string[]) => CommandResult): b
   return run("nft", ["list", "table", "inet", POOL_TABLE]).ok;
 }
 
-/** Load the table from the pool files as they are now. Returns whether anything changed. */
-export function syncPoolIsolation(options: PoolIsolationOptions = {}): boolean {
+/**
+ * Load the table from the pool files as they are now. Before a reload, the
+ * ports already loaded stay closed too, since PHP-FPM still listens on them
+ * until it has reloaded. Returns whether anything changed.
+ */
+export function syncPoolIsolation(options: PoolIsolationOptions = {}, beforeReload = false): boolean {
   const { paths, run } = context(options);
-  const rules = expectedRuleset(paths);
-  if (regularText(paths.rulesFile) === rules && tableLoaded(run)) return false;
+  const inForce = tableLoaded(run);
+  const current = regularText(paths.rulesFile);
+  const rules = expectedRuleset(paths, beforeReload && inForce && current !== null ? loadedSets(current) : undefined);
+  if (current === rules && inForce) return false;
   writeFileAtomic(paths.rulesFile, rules, { mode: 0o600, createParent: true });
   const loaded = run("nft", ["-f", paths.rulesFile]);
   if (!loaded.ok) {
@@ -206,7 +253,7 @@ export function installPoolIsolation(options: PoolIsolationOptions = {}): boolea
   let units = false;
   for (const version of versions(paths)) {
     const file = dropInPath(paths, version);
-    const content = poolDropIn(paths.bin);
+    const content = poolDropIn(paths.bin, unitReloadLines(run, version));
     if (regularText(file) === content) continue;
     writeFileAtomic(file, content, { mode: 0o644, createParent: true });
     units = true;
@@ -242,6 +289,6 @@ export function removePoolIsolation(options: PoolIsolationOptions = {}): boolean
 export function poolIsolationStatus(options: PoolIsolationOptions = {}): PoolIsolationStatus {
   const { paths, run } = context(options);
   if (!run("nft", ["--version"]).ok) return { active: false, problem: "nft is not installed." };
-  const dropIns = versions(paths).every((version) => regularText(dropInPath(paths, version)) === poolDropIn(paths.bin));
+  const dropIns = versions(paths).every((version) => regularText(dropInPath(paths, version)) === poolDropIn(paths.bin, unitReloadLines(run, version)));
   return { active: dropIns && regularText(paths.rulesFile) === expectedRuleset(paths) && tableLoaded(run), problem: "" };
 }

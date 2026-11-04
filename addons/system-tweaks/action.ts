@@ -476,13 +476,14 @@ export function systemTweaksFirewall(options: SystemTweaksOptions = {}): string 
 }
 
 /**
- * What every PHP-FPM unit runs after it starts or reloads. It reads the
- * setting without the lock: a change on the page can be what reloaded PHP-FPM.
+ * What every PHP-FPM unit runs before it starts, and before and after it
+ * reloads. It reads the setting without the lock: a change on the page can be
+ * what reloaded PHP-FPM.
  */
-export function systemTweaksPhpPools(options: SystemTweaksOptions = {}): boolean {
+export function systemTweaksPhpPools(options: SystemTweaksOptions = {}, beforeReload = false): boolean {
   const paths = pathsFor(options);
   if (!readSettings(paths).isolatePhpPools) return false;
-  const changed = syncPoolIsolation(options.phpPools);
+  const changed = syncPoolIsolation(options.phpPools, beforeReload);
   // Switched off meanwhile: the switch-off may have removed the table before this loaded it.
   if (!readSettings(paths).isolatePhpPools) removePoolIsolation(options.phpPools);
   return changed;

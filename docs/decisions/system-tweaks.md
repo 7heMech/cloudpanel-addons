@@ -445,8 +445,16 @@ placeholders. The guard refuses a Vhost editor save that brings
 Switching off removes the drop-in, puts `~/logs/nginx` back as the user's
 directory with a copy of the logs, puts the placeholders back in the stored
 vhosts and the home and Varnish lines back in the rendered ones, reloads, then
-removes each include and log directory no rendered vhost names; a rendered vhost
-that is not root's alone refuses it, since the paths it names are about to go. A
+removes each include no rendered vhost names; a rendered vhost that is not
+root's alone refuses it, since the paths it names are about to go. The copy
+follows the same rule as switching on: log-named files only, read without
+following links, at most the last 64 MiB of each. So each log directory no
+rendered vhost names is moved to `/var/log/clp-addons-nginx-kept/<site
+user>-<time>`, in a directory only root can open, and only the files copied in
+full and unchanged since are deleted from it. What is left, such as a larger
+log, another file, or the lines nginx wrote between the copy and the reload,
+stays there for the operator; a move that fails leaves the directory where it
+is. A
 switch-off that fails there puts the guard, drop-in and links back at once,
 since the setting stays on. The page's "On" also needs the drop-in in place and
 no stored vhost holding the placeholders or a log path in the home.
@@ -500,9 +508,21 @@ rewrites only its own chains in `ip filter`, so `ufw reload` and CloudPanel's
 Firewall page leave the table in place.
 
 CloudPanel reloads or restarts a version's unit with `systemctl` whenever it
-adds, moves or removes a pool. A drop-in on each `php<version>-fpm.service`
-runs `clp-addons sync-php-pools` as `ExecStartPre=` and after the unit's own
-`ExecReload=`; the start is also what loads the table after a reboot.
+adds, moves or removes a pool, after writing the pool files. A drop-in on each
+`php<version>-fpm.service` runs `clp-addons sync-php-pools` as `ExecStartPre=`,
+which also loads the table after a reboot. On a reload the unit's own
+`ExecReload=` sends `USR2` and returns before PHP-FPM has bound the new ports,
+so the sync runs both before and after it. The drop-in resets `ExecReload=` and
+lists `sync-php-pools --before-reload`, the unit's own reload lines as systemd
+assembles them from its file and the other drop-ins, then `sync-php-pools`.
+The first loads the pool files' ports together with those already in the
+table, so a new or moved port is closed before PHP-FPM listens on it and an old
+one stays closed while PHP-FPM may still listen there; the second trims the
+table to the pool files. Both ignore failure so PHP-FPM still reloads, and the
+15-minute repair loads the table again. A unit whose reload lines cannot be
+read, such as one with a continued line, gets the sync after its reload only.
+The page's "On" compares each drop-in with the unit's current reload lines, so
+a package update that changes them is fixed by the next repair.
 `ExecStartPost=` is not used: the units are `Type=notify` with a `PIDFile=`,
 and with a start-post command systemd waits for a PID file PHP-FPM does not
 write, so the start times out. The sync reads the setting without
@@ -510,8 +530,8 @@ the system tweaks lock, since a change on the page can be what reloads PHP-FPM,
 and removes the table again if the setting went off while it was loading.
 Repair and re-enabling the addon put the drop-ins and table back; switching
 off and disabling the addon remove both. "On" needs the drop-in on every
-version, the recorded ruleset equal to the one the pool files give now, and the
-table loaded.
+version as the unit's reload lines give it now, the recorded ruleset equal to
+the one the pool files give now, and the table loaded.
 
 ## Abandoned temp files
 

@@ -426,12 +426,42 @@ function siteUsers(db: Database): Set<string> {
   return new Set(db.query<{ user: unknown }, []>("SELECT user FROM site").all().map((row) => String(row.user ?? "")));
 }
 
+/** Each site user's logs copied back into its home on switch-off, by name, with the size copied. */
+type CopiedLogs = Map<string, Map<string, number>>;
+
+/** Where switch-off keeps what it could not copy back in full: root's alone, beside the log directory. */
+function keptLogDir(paths: VarnishBackendPaths): string {
+  return `${paths.logDir}-kept`;
+}
+
+/**
+ * Move a site log directory aside into {@link keptLogDir}, then delete from it
+ * each file copied in full whose size has not changed since. What is left,
+ * such as a log over the copy limit or lines nginx wrote after the copy, stays.
+ */
+function keepUncopiedLogs(paths: VarnishBackendPaths, user: string, copied: Map<string, number>): void {
+  const keptRoot = keptLogDir(paths);
+  ensureRootDir(keptRoot, 0o700, paths.vhostUid, 0);
+  const aside = join(keptRoot, `${user}-${Date.now()}`);
+  try { renameSync(join(paths.logDir, user), aside); } catch { return; }
+  for (const name of readdirSync(aside)) {
+    const file = join(aside, name);
+    try {
+      const info = lstatSync(file);
+      if (info.isFile() && copied.get(name) === info.size) unlinkSync(file);
+    } catch {}
+  }
+  try { rmdirSync(aside); } catch { return; }
+  try { rmdirSync(keptRoot); } catch {}
+}
+
 /**
  * Remove each site log directory whose user is not in `keep` and that no
  * vhost in sites-enabled writes to, as when CloudPanel has deleted the site.
- * rmSync removes a link in place and never follows one.
+ * rmSync removes a link in place and never follows one. On switch-off,
+ * `copied` says what is in the homes, and the rest is kept.
  */
-function pruneSiteLogDirs(paths: VarnishBackendPaths, keep: Set<string>): void {
+function pruneSiteLogDirs(paths: VarnishBackendPaths, keep: Set<string>, copied?: CopiedLogs): void {
   if (!existsSync(paths.logDir)) return;
   const vhosts = existsSync(paths.vhostDir)
     ? readdirSync(paths.vhostDir).filter((entry) => entry.endsWith(".conf")).map((name) => {
@@ -442,12 +472,18 @@ function pruneSiteLogDirs(paths: VarnishBackendPaths, keep: Set<string>): void {
   for (const user of readdirSync(paths.logDir)) {
     const prefix = `${paths.logDir}/${user}/`;
     if (keep.has(user) || vhosts.some((vhost) => vhost.includes(prefix))) continue;
-    rmSync(join(paths.logDir, user), { recursive: true, force: true });
+    const dir = join(paths.logDir, user);
+    if (copied && isRootDir(dir, paths.vhostUid)) keepUncopiedLogs(paths, user, copied.get(user) ?? new Map());
+    else rmSync(dir, { recursive: true, force: true });
   }
 }
 
-/** Put `~/logs/nginx` back as the site user's own directory, with a copy of the logs root kept. */
-function unstageSiteLogs(all: Site[], paths: VarnishBackendPaths, passwd: Map<string, Owner>): void {
+/**
+ * Put `~/logs/nginx` back as the site user's own directory, with a copy of the
+ * logs root kept. Returns what was copied in full.
+ */
+function unstageSiteLogs(all: Site[], paths: VarnishBackendPaths, passwd: Map<string, Owner>): CopiedLogs {
+  const copied: CopiedLogs = new Map();
   for (const site of all) {
     const owner = siteOwner(site, paths, passwd);
     const siteLogDir = join(paths.logDir, site.user);
@@ -470,13 +506,18 @@ function unstageSiteLogs(all: Site[], paths: VarnishBackendPaths, passwd: Map<st
         } catch {}
         for (const name of names.filter((name) => LOG_NAME.test(name))) {
           const log = readLogTail(join(siteLogDir, name));
-          if (log !== null) createFileAt(at(nginxFd, name), log.data, owner, 0o640);
+          if (log !== null && createFileAt(at(nginxFd, name), log.data, owner, 0o640) && log.whole) {
+            const user = copied.get(site.user) ?? new Map<string, number>();
+            user.set(name, log.data.length);
+            copied.set(site.user, user);
+          }
         }
       } finally {
         closeSync(nginxFd);
       }
     });
   }
+  return copied;
 }
 
 /**
@@ -684,8 +725,9 @@ export function removeVarnishBackends(options: VarnishBackendOptions = {}): bool
   }
   const all = withPanelDb(ctx.paths.panelDb, sites);
   const passwd = passwdUsers(ctx.paths.passwdFile);
+  let copied: CopiedLogs;
   try {
-    unstageSiteLogs(all, ctx.paths, passwd);
+    copied = unstageSiteLogs(all, ctx.paths, passwd);
     withVhosts(ctx, false);
   } catch (error) {
     if (dropIn !== null) {
@@ -704,7 +746,7 @@ export function removeVarnishBackends(options: VarnishBackendOptions = {}): bool
   }
   if (existsSync(ctx.paths.includeDir) && readdirSync(ctx.paths.includeDir).length === 0) rmSync(ctx.paths.includeDir, { recursive: true });
   if (existsSync(ctx.paths.logDir)) {
-    pruneSiteLogDirs(ctx.paths, new Set());
+    pruneSiteLogDirs(ctx.paths, new Set(), copied);
     if (readdirSync(ctx.paths.logDir).length === 0) rmSync(ctx.paths.logDir, { recursive: true });
   }
   return true;

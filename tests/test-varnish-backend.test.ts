@@ -1,6 +1,6 @@
 import { afterEach, expect, test } from "bun:test";
 import { Database } from "bun:sqlite";
-import { chmodSync, existsSync, lstatSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, readlinkSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
+import { appendFileSync, chmodSync, existsSync, lstatSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, readlinkSync, rmSync, statSync, symlinkSync, truncateSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { CommandResult } from "../cli/action-common";
@@ -383,4 +383,58 @@ test.skipIf(process.getuid?.() === 0)("a switch-off that fails while putting ~/l
   expect(template(f)).toContain(`access_log ${managedDir}/access.log main;`);
   expect(existsSync(join(managedDir, "access.log"))).toBe(true);
   expect(f.commands.filter((command) => command === "systemctl daemon-reload").length).toBe(3);
+});
+
+test("switching off keeps aside, in a directory only root can read, whatever it could not copy back in full", () => {
+  const f = fixture();
+  const db = new Database(f.db);
+  db.query("UPDATE site SET vhost_template = ? WHERE domain_name = 'shop.example.com'").run("server {\n  {{nginx_access_log}}\n  {{nginx_error_log}}\n}");
+  db.close();
+  mkdirSync(join(f.dir, "home", "shop", "logs"), { recursive: true });
+  installVarnishBackends(f.options);
+  const managedDir = join(f.dir, "nginx-logs", "shop");
+  const homeLogs = join(f.dir, "home", "shop", "logs", "nginx");
+  writeFileSync(join(managedDir, "access.log"), "before\n");
+  writeFileSync(join(managedDir, "error.log"), "an error\n");
+  writeFileSync(join(managedDir, "notes.txt"), "not a log\n");
+  // Over the 64 MiB copy limit; sparse, so it takes no space.
+  const big = join(managedDir, "access.log-2026-11-01");
+  writeFileSync(big, "");
+  truncateSync(big, 64 * 1024 * 1024 + 10);
+  // nginx writes to root's log between the copy and the reload.
+  const run = f.options.run!;
+  f.options.run = (command, args) => {
+    if (command === "systemctl" && args.join(" ") === "reload nginx") appendFileSync(join(managedDir, "access.log"), "after\n");
+    return run(command, args);
+  };
+
+  removeVarnishBackends(f.options);
+  expect(existsSync(join(f.dir, "nginx-logs"))).toBe(false);
+  expect(readFileSync(join(homeLogs, "access.log"), "utf8")).toBe("before\n");
+  expect(readFileSync(join(homeLogs, "error.log"), "utf8")).toBe("an error\n");
+  expect(statSync(join(homeLogs, "access.log-2026-11-01")).size).toBe(64 * 1024 * 1024);
+
+  const keptRoot = join(f.dir, "nginx-logs-kept");
+  expect(statSync(keptRoot).mode & 0o777).toBe(0o700);
+  const kept = readdirSync(keptRoot);
+  expect(kept.length).toBe(1);
+  expect(kept[0]).toMatch(/^shop-[0-9]+$/);
+  const aside = join(keptRoot, kept[0]!);
+  expect(readdirSync(aside).sort()).toEqual(["access.log", "access.log-2026-11-01", "notes.txt"]);
+  expect(readFileSync(join(aside, "access.log"), "utf8")).toBe("before\nafter\n");
+  expect(statSync(join(aside, "access.log-2026-11-01")).size).toBe(64 * 1024 * 1024 + 10);
+});
+
+test("switching off leaves nothing aside when every log was copied back in full", () => {
+  const f = fixture();
+  const db = new Database(f.db);
+  db.query("UPDATE site SET vhost_template = ? WHERE domain_name = 'shop.example.com'").run("server {\n  {{nginx_access_log}}\n  {{nginx_error_log}}\n}");
+  db.close();
+  mkdirSync(join(f.dir, "home", "shop", "logs"), { recursive: true });
+  installVarnishBackends(f.options);
+  writeFileSync(join(f.dir, "nginx-logs", "shop", "access.log"), "a request\n");
+  removeVarnishBackends(f.options);
+  expect(existsSync(join(f.dir, "nginx-logs"))).toBe(false);
+  expect(existsSync(join(f.dir, "nginx-logs-kept"))).toBe(false);
+  expect(readFileSync(join(f.dir, "home", "shop", "logs", "nginx", "access.log"), "utf8")).toBe("a request\n");
 });
