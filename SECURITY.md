@@ -43,8 +43,9 @@ identify the caller and enforce their role. A compromised manager could request
 those allowed root operations. Terminal and own-account security-key operations
 add a session check in the root gateway itself.
 
-The addons do not change CloudPanel's root nginx workers or root File Manager
-pool, and do not provide per-site operating-system isolation. Protecting known
+The addons put a guard in front of CloudPanel's root File Manager pool and limit
+its socket to `clp`, but do not change its root user or CloudPanel's root nginx
+workers, and do not provide per-site operating-system isolation. Protecting known
 configuration inputs does not remove those privileges. The Vhost editor remains
 administrator-only while the injection guard is on.
 [Trust boundaries](docs/decisions/security.md#trust-and-limits)
@@ -101,6 +102,17 @@ anyone make the server try MySQL logins on other hosts, its setup script, its
 internal folders and the files that show its version return 404. Signing in to
 phpMyAdmin from the panel is unchanged.
 [Guide](docs/system-tweaks.md#phpmyadmin)
+
+**File Manager paths.** CloudPanel's File Manager runs as root and followed `..`
+and symbolic links out of the site's home, so a panel account could read, create
+or take over files anywhere on the server, and extract device files and setuid
+programs. A guard refuses such requests and archives, and only the panel's nginx
+can reach the File Manager's PHP. Every File Manager action that writes, deletes,
+changes permissions or reads a file's contents runs as the site's own user, so a
+link planted mid-request can only reach what that user could already reach.
+Folder listings still run as root and could show a raced folder's file names, but
+no contents.
+[Guide](docs/system-tweaks.md#file-manager)
 
 The nginx settings default to on when System Tweaks is enabled. PHP upload
 progress is disabled independently of that addon; System Tweaks provides its

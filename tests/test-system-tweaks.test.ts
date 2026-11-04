@@ -1,6 +1,6 @@
 import { afterEach, expect, mock, test } from "bun:test";
 import { Database } from "bun:sqlite";
-import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from "node:fs";
+import { chmodSync, existsSync, lstatSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { CommandResult } from "../cli/action-common";
@@ -17,7 +17,11 @@ import { dashboardView } from "../addons/system-tweaks/app/views";
 import { releaseRealIp } from "../addons/system-tweaks/real-ip";
 
 const dirs: string[] = [];
-afterEach(() => { for (const dir of dirs.splice(0)) rmSync(dir, { recursive: true, force: true }); });
+const listeners: { stop(): void }[] = [];
+afterEach(() => {
+  for (const listener of listeners.splice(0)) listener.stop();
+  for (const dir of dirs.splice(0)) rmSync(dir, { recursive: true, force: true });
+});
 
 function tempDir(): string {
   const dir = mkdtempSync(join(tmpdir(), "clp-system-tweaks-"));
@@ -160,6 +164,8 @@ interface Box {
   nginx: { fail: boolean; failPanel: boolean; commands: string[] };
   fpm: { failTest: boolean; status: number; loaded: boolean; commands: string[] };
   vhostGuardPaths: { script: string; pool: string };
+  fm: { failTest: boolean; status: number; loaded: boolean; commands: string[] };
+  fileManagerGuardPaths: { script: string; pool: string; socket: string };
   valuesDb: string;
   varnish: { failDaemonReload: boolean };
   panelVhost: string;
@@ -317,6 +323,28 @@ function box(options: { installed?: boolean; timers?: Record<string, string>; fa
     lockFile: join(dir, "panel-php.lock"),
     rootUid: uid,
   };
+  // The File Manager pool reloads through its own fake, so the vhost guard's commands stay its own.
+  const fm = { failTest: false, status: 200, loaded: false, commands: [] as string[] };
+  const fmRun = (command: string, args: string[]): CommandResult => {
+    fm.commands.push(`${command} ${args.join(" ")}`);
+    if (command === "systemctl" && args[0] === "show") {
+      return ok(`{ path=${sbin}/php-fpm8.3 ; argv[]=${sbin}/php-fpm8.3 -R -F -y ${dir}/clp/php-fpm.conf -c ${dir}/clp/php.ini ; ignore_errors=no }`);
+    }
+    if (command.endsWith("php-fpm8.3") && fm.failTest) return { ok: false, stdout: "", stderr: "ERROR: bad pool" };
+    if (command === "systemctl" && args[0] === "reload") fm.loaded = existsSync(fileManagerGuardPaths.pool);
+    return ok();
+  };
+  const fileManagerGuardPaths = {
+    script: join(dir, "clp", "clp-addons-file-manager-guard.php"),
+    pool: join(dir, "clp", "pool.d", "zz-clp-addons-file-manager-guard.conf"),
+    socket: join(dir, "fm.sock"),
+    lockFile: join(dir, "panel-php.lock"),
+    rootUid: uid,
+    panelUid: uid,
+    panelGid: process.getgid!(),
+  };
+  listeners.push(Bun.listen({ unix: fileManagerGuardPaths.socket, socket: { data() {} } }));
+  chmodSync(fileManagerGuardPaths.socket, 0o660);
   // CloudPanel's tables the stored-value check reads, with one clean site.
   const valuesDb = join(dir, "values.sq3");
   const values = new Database(valuesDb, { create: true });
@@ -355,6 +383,7 @@ function box(options: { installed?: boolean; timers?: Record<string, string>; fa
   };
   return {
     pools, aptDir, commands, timers, phpRoot, guardConfig, settingsFile, installed, nginxConf, panelConf, cloudflareIps, nginx, fpm, panelVhost, vhostGuardPaths, valuesDb, varnish,
+    fm, fileManagerGuardPaths,
     dropIn: join(aptDir, "52clp-addons-unattended-upgrades"),
     options: {
       processUid: 0,
@@ -383,6 +412,12 @@ function box(options: { installed?: boolean; timers?: Record<string, string>; fa
         run: fpmRun, paths: vhostGuardPaths, sleep: async () => {}, healthTimeoutMs: 0,
         request: async (_socket, params) => ({
           status: params.QUERY_STRING === "vhost-template=" ? (fpm.loaded ? 403 : 200) : fpm.status, headers: {}, body: "",
+        }),
+      },
+      fileManagerGuard: {
+        run: fmRun, paths: fileManagerGuardPaths, sleep: async () => {}, healthTimeoutMs: 0,
+        request: async (_socket, params) => ({
+          status: params.HTTP_COOKIE === "cloudpanel=../x" ? (fm.loaded ? 403 : 200) : fm.status, headers: {}, body: "",
         }),
       },
       vhostValues: { panelDb: valuesDb, homeRoot: join(dir, "home") },
@@ -932,10 +967,124 @@ test("Varnish backends that cannot be removed put the guard back, since the sett
   expect(readSettings({ settingsFile: b.settingsFile, lockFile: "", rootUid: process.getuid!() }).blockVhostInjection).toBe(true);
 });
 
+test("both guards install as one file each, with the shared session reader in place of its include", async () => {
+  const b = box();
+  await systemTweaksMaintenance(b.options);
+  for (const path of [b.vhostGuardPaths.script, b.fileManagerGuardPaths.script]) {
+    const text = readFileSync(path, "utf8");
+    expect(text).not.toContain("panel-session.php");
+    expect(text).toContain("preg_match('/\\A[A-Za-z0-9,-]{1,128}\\z/', $id)");
+  }
+});
+
+// --- File Manager guard -------------------------------------------------------
+
+const socketMode = (b: Box) => lstatSync(b.fileManagerGuardPaths.socket).mode & 0o777;
+
+test("the File Manager guard is on by default: repair installs it, leaves the socket to clp, and then has nothing to do", async () => {
+  const b = box();
+  expect((await act(b, ["state"])).fileManagerGuard).toEqual({ enabled: true, active: false });
+  restoreSystemTweaks(b.options);
+  expect(b.fm.commands).toEqual(["systemctl start --no-block clp-addons-reconcile.service"]);
+
+  b.fm.commands.length = 0;
+  expect(await systemTweaksMaintenance(b.options)).toContain("File Manager guard put back");
+  expect(readFileSync(b.fileManagerGuardPaths.pool, "utf8")).toBe([
+    "; Managed by clp-addons System Tweaks: keeps the File Manager in the site's home, and its socket to clp.",
+    "[clp-file-manager]",
+    `php_admin_value[auto_prepend_file] = ${b.fileManagerGuardPaths.script}`,
+    "listen.owner = clp",
+    "listen.mode = 0600",
+    "",
+  ].join("\n"));
+  expect(readFileSync(b.fileManagerGuardPaths.script, "utf8")).toStartWith("<?php\n// Managed by clp-addons System Tweaks");
+  expect(b.fm.commands.at(-1)).toBe("systemctl reload clp-php-fpm.service");
+  expect(socketMode(b)).toBe(0o600);
+  expect((await act(b, ["state"])).fileManagerGuard).toEqual({ enabled: true, active: true });
+
+  b.fm.commands.length = 0;
+  expect(await systemTweaksMaintenance(b.options) ?? "").not.toContain("File Manager guard");
+  expect(b.fm.commands).toEqual([]);
+
+  // A socket FPM made again from CloudPanel's own pool file.
+  chmodSync(b.fileManagerGuardPaths.socket, 0o660);
+  expect((await act(b, ["state"])).fileManagerGuard).toEqual({ enabled: true, active: false });
+  expect(await systemTweaksMaintenance(b.options)).toContain("File Manager guard put back");
+  expect(socketMode(b)).toBe(0o600);
+});
+
+test("switching the File Manager guard off removes it and gives the socket back to group clp; the vhost guard stays", async () => {
+  const b = box();
+  await systemTweaksMaintenance(b.options);
+  const off = await act(b, ["set-file-manager-guard"], { enabled: false });
+  expect(off.fileManagerGuard).toEqual({ enabled: false, active: false });
+  expect(off.vhostGuard).toMatchObject({ enabled: true, active: true });
+  expect(existsSync(b.fileManagerGuardPaths.pool)).toBe(false);
+  expect(existsSync(b.fileManagerGuardPaths.script)).toBe(false);
+  expect(socketMode(b)).toBe(0o660);
+  expect(await systemTweaksMaintenance(b.options) ?? "").not.toContain("File Manager guard");
+  expect(existsSync(b.fileManagerGuardPaths.pool)).toBe(false);
+
+  expect((await act(b, ["set-file-manager-guard"], { enabled: true })).fileManagerGuard).toEqual({ enabled: true, active: true });
+  withdrawSystemTweaks(b.options);
+  expect(existsSync(b.fileManagerGuardPaths.pool)).toBe(false);
+  expect(socketMode(b)).toBe(0o660);
+});
+
+test("a File Manager guard the pool rejects, or that does not refuse, is removed again and the socket left as it was", async () => {
+  for (const fault of ["config", "health"] as const) {
+    const b = box();
+    if (fault === "config") b.fm.failTest = true;
+    else b.fm.status = 500;
+    await expect(act(b, ["set-file-manager-guard"], { enabled: true })).rejects.toThrow(
+      fault === "config" ? "the panel's PHP-FPM rejected its config: ERROR: bad pool; it was removed again"
+        : "the panel did not come back with the File Manager guard: the File Manager answered 500; it was removed again");
+    expect(existsSync(b.fileManagerGuardPaths.pool)).toBe(false);
+    expect(socketMode(b)).toBe(0o660);
+    expect(readSettings({ settingsFile: b.settingsFile, lockFile: "", rootUid: process.getuid!() }).confineFileManager).toBe(true);
+  }
+});
+
+test("switching the File Manager guard off records the opt-out first, and a removal that fails puts the setting back on", async () => {
+  const b = box();
+  await act(b, ["set-file-manager-guard"], { enabled: true });
+  const settingsDir = join(b.settingsFile, "..");
+  const confined = () => readSettings({ settingsFile: b.settingsFile, lockFile: "", rootUid: process.getuid!() }).confineFileManager;
+
+  // A save that fails leaves both the guard and the setting on.
+  chmodSync(settingsDir, 0o500);
+  try {
+    await expect(act(b, ["set-file-manager-guard"], { enabled: false })).rejects.toThrow();
+  } finally {
+    chmodSync(settingsDir, 0o700);
+  }
+  expect(existsSync(b.fileManagerGuardPaths.pool)).toBe(true);
+  expect(confined()).toBe(true);
+
+  // A reload that fails keeps the guard, so the setting goes back to on.
+  b.fm.failTest = true;
+  await expect(act(b, ["set-file-manager-guard"], { enabled: false })).rejects.toThrow("rejected its config");
+  expect(existsSync(b.fileManagerGuardPaths.pool)).toBe(true);
+  expect(confined()).toBe(true);
+});
+
+test("a withdrawal that fails after the File Manager guard is gone queues it back, unless it was switched off", async () => {
+  for (const confine of [true, false]) {
+    const b = box();
+    await act(b, ["set-vhost-guard"], { enabled: true });
+    await act(b, ["set-file-manager-guard"], { enabled: confine });
+    b.varnish.failDaemonReload = true;
+    b.fm.commands.length = 0;
+    expect(() => withdrawSystemTweaks(b.options)).toThrow("daemon-reload failed");
+    expect(existsSync(b.fileManagerGuardPaths.pool)).toBe(false);
+    expect(b.fm.commands.includes("systemctl start --no-block clp-addons-reconcile.service")).toBe(confine);
+  }
+});
+
 test("the page shows the vhost guard as on, waiting for repair, or off", () => {
   const html = (partial: Omit<SystemTweaksState["vhostGuard"], "homeLogs" | "ownLogrotate"> & { homeLogs?: string[]; ownLogrotate?: string[] }) => dashboardView({
     updates: updatesStatus({ run: () => ({ ok: false, stdout: "", stderr: "" }) }), settings: { ...DEFAULT_UPDATE_SETTINGS },
-    uploadProgress: { guard: true, fpms: [] }, realIp: { blockForged: true, trustsAnyAddress: false, problem: "" }, phpMyAdmin: { enabled: true, active: true, problem: "" }, vhostGuard: { homeLogs: [], ownLogrotate: [], ...partial }, phpPools: { enabled: true, active: true, problem: "" }, panelPhp: { error: "" }, firewall: { error: "" },
+    uploadProgress: { guard: true, fpms: [] }, realIp: { blockForged: true, trustsAnyAddress: false, problem: "" }, phpMyAdmin: { enabled: true, active: true, problem: "" }, vhostGuard: { homeLogs: [], ownLogrotate: [], ...partial }, phpPools: { enabled: true, active: true, problem: "" }, fileManagerGuard: { enabled: true, active: true }, panelPhp: { error: "" }, firewall: { error: "" },
   });
   expect(html({ enabled: true, active: true, stored: [] })).toContain("Panel input is checked before CloudPanel writes it into a vhost.");
   expect(html({ enabled: true, active: false, stored: [] })).toContain("Not applied");
@@ -972,7 +1121,7 @@ test("the page shows PHP pool isolation as on, waiting for repair, or off", () =
   const html = (phpPools: SystemTweaksState["phpPools"]) => dashboardView({
     updates: updatesStatus({ run: () => ({ ok: false, stdout: "", stderr: "" }) }), settings: { ...DEFAULT_UPDATE_SETTINGS },
     uploadProgress: { guard: true, fpms: [] }, realIp: { blockForged: true, trustsAnyAddress: false, problem: "" },
-    phpMyAdmin: { enabled: true, active: true, problem: "" }, vhostGuard: { enabled: true, active: true, stored: [], homeLogs: [], ownLogrotate: [] }, phpPools, panelPhp: { error: "" }, firewall: { error: "" },
+    phpMyAdmin: { enabled: true, active: true, problem: "" }, vhostGuard: { enabled: true, active: true, stored: [], homeLogs: [], ownLogrotate: [] }, phpPools, fileManagerGuard: { enabled: true, active: true }, panelPhp: { error: "" }, firewall: { error: "" },
   });
   expect(html({ enabled: true, active: true, problem: "" })).toContain("Each pool's port answers only nginx and the pool's own user.");
   expect(html({ enabled: true, active: false, problem: "" })).toContain("Run clp-addons repair.");
@@ -1095,7 +1244,7 @@ test("failed downloads retain the package URL in expandable details and escape t
   const updates = updatesStatus(b.options.updates);
   expect(updates.lastRun?.outcome).toBe("failed");
   expect(updates.lastRun?.message).toContain("php8.2-bcmath.deb");
-  const html = dashboardView({ updates, settings: { ...DEFAULT_UPDATE_SETTINGS }, uploadProgress: { guard: true, fpms: [] }, realIp: { blockForged: true, trustsAnyAddress: false, problem: "" }, phpMyAdmin: { enabled: true, active: true, problem: "" }, vhostGuard: { enabled: true, active: true, stored: [], homeLogs: [], ownLogrotate: [] }, phpPools: { enabled: true, active: true, problem: "" }, panelPhp: { error: "" }, firewall: { error: "" } });
+  const html = dashboardView({ updates, settings: { ...DEFAULT_UPDATE_SETTINGS }, uploadProgress: { guard: true, fpms: [] }, realIp: { blockForged: true, trustsAnyAddress: false, problem: "" }, phpMyAdmin: { enabled: true, active: true, problem: "" }, vhostGuard: { enabled: true, active: true, stored: [], homeLogs: [], ownLogrotate: [] }, phpPools: { enabled: true, active: true, problem: "" }, fileManagerGuard: { enabled: true, active: true }, panelPhp: { error: "" }, firewall: { error: "" } });
   expect(html).toContain("A package download failed (HTTP 404).");
   expect(html).toContain('<details class="st-run-details"><summary>Failure details</summary>');
   expect(html).toContain("php8.2-bcmath.deb failed to download, aborting &lt;script&gt;");
@@ -1231,7 +1380,7 @@ test("the page shows update options only once updates are on, and says what sile
     uploadProgress: { guard: true, fpms: [{
       label: "PHP 8.2", version: "8.2", enabled: false, setBy: "clp-addons" as const,
       source: "/etc/php/8.2/fpm/conf.d/99-clp-addons-upload-progress.ini", offWithoutGuard: false, poolsOn: ["legacy.example.com"],
-    }] }, realIp: { blockForged: true, trustsAnyAddress: false, problem: "" }, phpMyAdmin: { enabled: true, active: true, problem: "" }, vhostGuard: { enabled: true, active: true, stored: [], homeLogs: [], ownLogrotate: [] }, phpPools: { enabled: true, active: true, problem: "" }, panelPhp: { error: "" }, firewall: { error: "" },
+    }] }, realIp: { blockForged: true, trustsAnyAddress: false, problem: "" }, phpMyAdmin: { enabled: true, active: true, problem: "" }, vhostGuard: { enabled: true, active: true, stored: [], homeLogs: [], ownLogrotate: [] }, phpPools: { enabled: true, active: true, problem: "" }, fileManagerGuard: { enabled: true, active: true }, panelPhp: { error: "" }, firewall: { error: "" },
   };
   const now = Date.parse("2026-10-25T00:00:00Z");
   const outside = dashboardView(state, now);
@@ -1279,7 +1428,7 @@ test("the page names the UDP ports CloudPanel's Firewall page opens, in one line
   const b = box();
   const base = {
     updates: updatesStatus(b.options.updates), settings: { ...DEFAULT_UPDATE_SETTINGS }, uploadProgress: { guard: true, fpms: [] },
-    realIp: { blockForged: true, trustsAnyAddress: false, problem: "" }, phpMyAdmin: { enabled: true, active: true, problem: "" }, vhostGuard: { enabled: true, active: true, stored: [], homeLogs: [], ownLogrotate: [] }, phpPools: { enabled: true, active: true, problem: "" }, panelPhp: { error: "" },
+    realIp: { blockForged: true, trustsAnyAddress: false, problem: "" }, phpMyAdmin: { enabled: true, active: true, problem: "" }, vhostGuard: { enabled: true, active: true, stored: [], homeLogs: [], ownLogrotate: [] }, phpPools: { enabled: true, active: true, problem: "" }, fileManagerGuard: { enabled: true, active: true }, panelPhp: { error: "" },
   };
   const open = dashboardView({ ...base, firewall: { available: true, protocols: { 5: "udp" }, udpPorts: ["53", "3478-3479"] } });
   expect(open).toContain(`<br>UDP ports open from CloudPanel's <a href="/admin/firewall">Firewall</a> page: 53, 3478-3479.</p>`);

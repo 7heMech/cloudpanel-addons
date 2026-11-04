@@ -2,7 +2,7 @@ import { callGatewayAction, type ActionResult } from "../../../lib/gateway-clien
 import type { WebVerb } from "../../../lib/gateway-protocol";
 import type { SystemTweaksState } from "../action";
 import type { FirewallStatus } from "../firewall";
-import { INSTALL_GATEWAY_TIMEOUT_MS, PANEL_PHP_GATEWAY_TIMEOUT_MS, PHP_POOLS_GATEWAY_TIMEOUT_MS, REAL_IP_GATEWAY_TIMEOUT_MS, VHOST_GUARD_GATEWAY_TIMEOUT_MS } from "../limits";
+import { INSTALL_GATEWAY_TIMEOUT_MS, PANEL_PHP_GATEWAY_TIMEOUT_MS, PHP_POOLS_GATEWAY_TIMEOUT_MS, POOL_GUARD_GATEWAY_TIMEOUT_MS, REAL_IP_GATEWAY_TIMEOUT_MS } from "../limits";
 
 function call(verb: WebVerb<"system-tweaks">, input?: string, timeout?: number): Promise<ActionResult<SystemTweaksState>> {
   return callGatewayAction("system-tweaks", verb, [], input, timeout ? { timeout } : undefined);
@@ -50,7 +50,11 @@ export const systemTweaksService = {
   },
 
   setVhostGuard(enabled: boolean): Promise<ActionResult<SystemTweaksState>> {
-    return call("set-vhost-guard", JSON.stringify({ enabled }), VHOST_GUARD_GATEWAY_TIMEOUT_MS);
+    return call("set-vhost-guard", JSON.stringify({ enabled }), POOL_GUARD_GATEWAY_TIMEOUT_MS);
+  },
+
+  setFileManagerGuard(enabled: boolean): Promise<ActionResult<SystemTweaksState>> {
+    return call("set-file-manager-guard", JSON.stringify({ enabled }), POOL_GUARD_GATEWAY_TIMEOUT_MS);
   },
 
 };

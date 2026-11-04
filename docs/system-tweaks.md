@@ -165,6 +165,35 @@ CloudPanel adds, moves or removes a site. A tool that connects to another site's
 account, such as a monitoring agent, stops working: run it as root or turn
 the setting off.
 
+## File Manager
+
+**Keep the File Manager in the site's home** is on by default. CloudPanel's File
+Manager runs as root, and without the setting a panel account with a site can
+use it to read, write or take over files anywhere on the server. With it, the
+File Manager refuses a request that names a path outside the site's home or
+through a symbolic link, and an archive that holds device files or setuid
+programs. Browsing, editing, uploading, extracting, compressing and downloading
+ordinary files work as before. Links stay where they are and keep working for
+the site; the File Manager just will not open them.
+
+Every File Manager action that changes or reads a file runs as the site's own
+user rather than as root, so it cannot reach anywhere that user could not:
+editing, saving, downloading, uploading, renaming, deleting, creating, copying,
+moving, extracting, compressing and changing permissions. Folder listings are
+unchanged. Changing permissions still hands everything under the file to the
+site user, as before. Files and folders the site user cannot read or write can
+no longer be opened or changed from the File Manager, where root used to; fix
+their ownership with **Change Permissions** first. Each action logs `runuser`
+sessions opening and closing in the system journal.
+
+Refusals are logged to `/home/clp/logs/php/error.log` as `clp-addons file
+manager guard: refused ...`, with the reason. If the File Manager refuses
+everything with a reason about the panel session, CloudPanel has changed its
+session format: switch the setting off until clp-addons is updated.
+
+The setting also lets only the panel's own nginx connect to the File Manager's
+PHP. Turning it off removes the guard and gives the socket back to group `clp`.
+
 ## Abandoned temp files
 
 Every 15 minutes System Tweaks removes the PHP and ImageMagick temp files that

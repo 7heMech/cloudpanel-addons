@@ -110,6 +110,11 @@ export async function handle(
     return repaint(await systemTweaksService.setPhpMyAdmin(body.enabled));
   }
 
+  if (path === "/api/file-manager-guard") {
+    if (typeof body.enabled !== "boolean") return json({ ok: false, error: "enabled must be true or false" }, 400);
+    return repaint(await systemTweaksService.setFileManagerGuard(body.enabled));
+  }
+
   if (path === "/api/real-ip") {
     if (typeof body.enabled !== "boolean") return json({ ok: false, error: "enabled must be true or false" }, 400);
     return repaint(await systemTweaksService.setRealIp(body.enabled));

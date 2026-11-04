@@ -553,6 +553,7 @@ function systemTweaksPreviewState(url: URL): SystemTweaksState {
       ownLogrotate: url.searchParams.has("homelogs") ? ["blog.example.com"] : [],
     },
     phpPools: { enabled: url.searchParams.get("pools") !== "off", active: url.searchParams.get("pools") !== "off", problem: "" },
+    fileManagerGuard: { enabled: url.searchParams.get("fm") !== "off", active: url.searchParams.get("fm") !== "off" },
     uploadProgress: {
       guard,
       fpms: [...php.map((version) => ({
@@ -578,6 +579,8 @@ function systemTweaksPreviewMutation(path: string, source: URL, body: Record<str
     state.vhostGuard = { ...state.vhostGuard, enabled: body.enabled === true, active: body.enabled === true };
   } else if (path.endsWith("/phpmyadmin")) {
     state.phpMyAdmin = { enabled: body.enabled === true, active: body.enabled === true, problem: "" };
+  } else if (path.endsWith("/file-manager-guard")) {
+    state.fileManagerGuard = { enabled: body.enabled === true, active: body.enabled === true };
   } else if (path.endsWith("/real-ip")) {
     state.realIp = { blockForged: body.enabled === true, trustsAnyAddress: body.enabled !== true, problem: "" };
   } else if (path.endsWith("/upload-guard")) {
