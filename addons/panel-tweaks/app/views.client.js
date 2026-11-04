@@ -40,6 +40,7 @@ async function setTweak(input) {
 // A nested switch follows its parent: the action turns it off with the parent,
 // and it cannot be reached again until the parent is back on.
 function syncDependents(key, on) {
+  if (key === 'branding') document.getElementById('branding-card').hidden = !on;
   for (const child of document.querySelectorAll('[data-tweak-parent="' + key + '"]')) {
     child.disabled = !on;
     if (on || !child.checked) continue;

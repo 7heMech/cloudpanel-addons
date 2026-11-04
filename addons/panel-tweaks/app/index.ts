@@ -5,6 +5,7 @@ import { callGatewayAction } from "../../../lib/gateway-client";
 import { jobApiRoute } from "../../../lib/job-stream";
 import { panelTweaksService } from "./service";
 import { previewPage } from "./preview";
+import { MAX_BRANDING_INPUT_BYTES } from "../branding";
 import { dashboardView, layout } from "./views";
 
 function json(body: unknown, status = 200): Response {
@@ -34,7 +35,7 @@ function errorMessage(error: unknown): string {
 /**
  * Put the blocks CloudPanel's own templates carry back, or take them away.
  *
- * The login theme, mobile layouts, row menu and automatic SSL are markup in
+ * The login theme, mobile layouts, row menu, automatic SSL and branding are markup in
  * a CloudPanel template, so moving one of those switches means the templates
  * have to be rendered again -- and rendering them is the manager's own
  * privileged work, not an addon's: one pass regenerates every addon's block in
@@ -60,9 +61,10 @@ export async function handle(
   if (method === "GET" && path === "/") {
     const csrf = newCsrfToken();
     try {
-      const result = await panelTweaksService.state();
+      const [result, branding] = await Promise.all([panelTweaksService.state(), panelTweaksService.branding()]);
       if (!result.ok || !result.data) throw new Error(result.error ?? "the panel tweaks state is unavailable");
-      const view = dashboardView(result.data);
+      if (!branding.ok || !branding.data) throw new Error(branding.error ?? "the branding settings are unavailable");
+      const view = dashboardView(result.data, branding.data);
       return htmlResponse(layout("Panel Tweaks", view, updateNotice), {
         csrf,
         headers: { "Content-Security-Policy": pageCsp() },
@@ -127,6 +129,18 @@ export async function handle(
       const failure = await reinjectTemplates();
       // The switch is saved either way; what failed is the panel's copy of it,
       // and saying so is more use than pretending nothing moved.
+      if (failure) return json({ ok: false, error: failure, data: result.data }, 500);
+    }
+    return json(result);
+  }
+
+  if (path === "/api/branding") {
+    const body = await readBody(req, MAX_BRANDING_INPUT_BYTES);
+    if (body instanceof Response) return body;
+    const result = await panelTweaksService.setBranding(body);
+    if (!result.ok || !result.data) return json(result, 400);
+    if (result.data.reinject) {
+      const failure = await reinjectTemplates();
       if (failure) return json({ ok: false, error: failure, data: result.data }, 500);
     }
     return json(result);

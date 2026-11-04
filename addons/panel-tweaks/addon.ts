@@ -1,4 +1,5 @@
 import { handle } from "./app/index";
+import { BRANDING_ASSET_PREFIX, handleBrandingAsset } from "./app/branding-asset";
 import { panelTweaksUpkeep, runPanelTweaksAction, type PanelTweaksActionOptions } from "./action";
 import { PANEL_TWEAKS_TARGETS } from "./inject/targets";
 import type { AddonDefinition } from "../../cli/addon-catalog";
@@ -6,7 +7,7 @@ import type { AddonDefinition } from "../../cli/addon-catalog";
 export const PANEL_TWEAKS_ADDON: AddonDefinition = {
   name: "panel-tweaks",
   title: "Panel Tweaks",
-  description: "Site search, columns and CSV download, automatic SSL for native sites, mobile layouts and theme improvements.",
+  description: "Site search, columns and CSV download, automatic SSL for native sites, mobile layouts, theme improvements and branding.",
   changed: [{ in: "2.0.0-rc.1", note: "The PHP version CloudPanel itself runs on moved to System Tweaks." }],
   preselected: true,
   targets: PANEL_TWEAKS_TARGETS,
@@ -15,6 +16,7 @@ export const PANEL_TWEAKS_ADDON: AddonDefinition = {
   // sees; root answers with the rows that page already drew for the caller.
   selfScopedRoutes: ["GET /api/panel"],
   action: runPanelTweaksAction,
+  preGate: { prefix: BRANDING_ASSET_PREFIX, handle: handleBrandingAsset },
   // Measured site sizes ride the fifteen-minute repair timer rather than a
   // timer of their own. The hook uses the stored measurement
   // time to do the expensive sweep about every six hours, and returns nothing

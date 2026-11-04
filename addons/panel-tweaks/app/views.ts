@@ -4,6 +4,8 @@ import {
 } from "../../../lib/app-ui";
 import { mountPath } from "../../../lib/mount";
 import type { PanelTweaks, PanelTweaksState } from "../action";
+import { DEFAULT_BRANDING, type Branding } from "../branding";
+import { brandingCard } from "./branding";
 
 const BASE = mountPath("panel-tweaks");
 
@@ -12,6 +14,7 @@ const BASE = mountPath("panel-tweaks");
 import STYLE from "./views.css" with { type: "text" };
 
 import SCRIPT from "./views.client.js" with { type: "text" };
+import BRANDING_SCRIPT from "./branding.client.js" with { type: "text" };
 
 export function layout(
   title: string,
@@ -23,7 +26,7 @@ export function layout(
     base: BASE,
     nav: [],
     css: STYLE,
-    script: TWEAK_ROW_JS + JOB_PROGRESS_JS + SCRIPT,
+    script: TWEAK_ROW_JS + JOB_PROGRESS_JS + SCRIPT + BRANDING_SCRIPT,
     updateNotice,
   });
 }
@@ -85,6 +88,12 @@ const COPY: TweakCopy[] = [
     category: "Panel",
     title: "Device theme on first visit",
     description: "Uses the device's theme on the first visit. Afterward, CloudPanel's theme switch takes over.",
+  },
+  {
+    key: "branding",
+    category: "Panel",
+    title: "Theme & Branding",
+    description: "Your own logos, favicon, CSS and footer on every CloudPanel page, the login page included. Switching it off keeps the settings.",
   },
 ];
 
@@ -158,7 +167,7 @@ function previewCard(state: PanelTweaksState): string {
     </div>`;
 }
 
-export function dashboardView(state: PanelTweaksState): string {
+export function dashboardView(state: PanelTweaksState, branding: Branding = DEFAULT_BRANDING): string {
   return `
     <div class="page-heading">
       <div>
@@ -175,5 +184,5 @@ export function dashboardView(state: PanelTweaksState): string {
       <div class="card-header"><h2>Whole panel</h2></div>
       <div class="tweak-list">${tweakList(state, "Panel")}
       </div>
-    </div>`;
+    </div>${brandingCard(branding, state.tweaks.branding)}`;
 }

@@ -37,6 +37,7 @@ import { siteTabs, type SiteContext } from "../lib/site-context";
 import { DEFAULT_MAINTENANCE_TEMPLATE } from "../addons/maintenance/action";
 import { PRESET_CATEGORIES, STOCK_PROFILE, type PhpResourcesState, type PoolSiteState } from "../addons/php-resources/action";
 import type { MeasureJobView, PanelTweaksState } from "../addons/panel-tweaks/action";
+import { DEFAULT_BRANDING } from "../addons/panel-tweaks/branding";
 import type { PanelPhpStatus } from "../addons/system-tweaks/panel-php";
 import ACE_MODE_HTML from "../addons/maintenance/app/ace-mode-html.js" with { type: "text" };
 import type { InstanceView, InstaticJobView } from "../addons/instatic/app/service";
@@ -712,6 +713,7 @@ function panelTweaksPreviewState(url: URL): PanelTweaksState {
       panelMobile: on,
       diskUsage: on,
       autoSsl: on,
+      branding: on,
     },
     diskMeasuredAt: measured ? at : "",
     sites: url.searchParams.has("empty") ? [] : [
@@ -1717,7 +1719,7 @@ const server = Bun.serve({
     if (req.method !== "GET") return Response.json({ ok: false, error: "UI preview only; no changes were made." }, { status: 409 });
     // These are the same two logo URLs the installed manager gets from its
     // CloudPanel origin. Only this development preview fetches the public demo.
-    if (["/assets/images/logo.svg", "/assets/images/logo-dark.svg"].includes(path)) {
+    if (["/assets/images/logo.svg", "/assets/images/logo-dark.svg", "/assets/images/cloudpanel-cloud.svg", "/assets/images/favicon.svg"].includes(path)) {
       const upstream = await fetch(`https://demo.cloudpanel.io${path}`);
       // fetch decodes compression; do not forward the original Content-Encoding.
       return new Response(await upstream.arrayBuffer(), {
@@ -1960,7 +1962,10 @@ const server = Bun.serve({
         headers: { "Content-Type": "text/html; charset=utf-8", "Cache-Control": "no-store" },
       });
     } else if (path === "/addons/panel-tweaks/" || path === "/addons/panel-tweaks") {
-      html = panelTweaksLayout("Panel Tweaks", panelTweaksDashboardView(panelTweaksPreviewState(url)), notice);
+      html = panelTweaksLayout("Panel Tweaks", panelTweaksDashboardView(panelTweaksPreviewState(url), {
+        ...DEFAULT_BRANDING, customCss: true, css: ".header { border-bottom: 2px solid #267ddd; }",
+        footerHtml: '<li><a href="https://example.com/support">Support</a></li>\n<li>© Example Hosting</li>',
+      }), notice);
     } else if (path === "/addons/system-tweaks/" || path === "/addons/system-tweaks") {
       systemTweaksPreview = null;
       html = systemTweaksLayout("System Tweaks", systemTweaksDashboardView(systemTweaksPreviewState(url)), notice);

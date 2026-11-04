@@ -13,7 +13,8 @@
 // reconciliation. The layout switches that decide how a page is painted before
 // any reply could arrive -- the login theme, the two narrow-screen layouts and
 // the row menu -- are read here instead, which is why moving one of those
-// renders the templates again. Automatic SSL (ssl.ts) is read here too.
+// renders the templates again. Automatic SSL (ssl.ts) and Theme & Branding
+// (branding.ts) are read here too.
 
 import MENU_STYLE_SOURCE from "./menu.css" with { type: "text" };
 import SITES_SCRIPT_SOURCE from "./sites.client.js" with { type: "text" };
@@ -29,6 +30,7 @@ import {
 } from "../action";
 import type { PanelTweaks } from "../action";
 import { sslTargets } from "./ssl";
+import { brandingTargets } from "./branding";
 
 /** Marker that the one-time device default has already been applied. */
 const SEEDED_KEY = "clp_addons_device_theme";
@@ -373,4 +375,5 @@ export const PANEL_TWEAKS_TARGETS: AddonTarget[] = [
     required: false,
     snippet: () => panelMobileSnippet(storedTweaks().panelMobile, index === 1),
   })),
+  ...brandingTargets(),
 ];
