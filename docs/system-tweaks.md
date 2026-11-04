@@ -285,3 +285,55 @@ The change reaches ufw a few seconds after the page saves, and stays through
 later changes on the Firewall page. Check it with `ufw status`. Disabling
 System Tweaks sets every rule back to TCP in ufw and keeps the choices for
 when it is enabled again.
+
+## MySQL access
+
+The **Database** card shows where MySQL listens, whether the firewall rules
+loaded now let anyone reach it (**Firewalled**, **Open** or **Unknown**), any client connected from another address, and whether its `root` account
+still logs in with the password `root` or none.
+
+Switch on **MySQL on this server only** to make MySQL accept connections from
+this server only. It writes
+`zz-clp-addons-loopback.cnf` with `bind-address = 127.0.0.1` into
+`/etc/mysql/mysql.conf.d` (or `mariadb.conf.d`) and restarts MySQL. Sites lose
+their database for a few seconds. If MySQL does not come back on `127.0.0.1`
+within a minute, the file is removed and MySQL restarts on its old settings.
+
+Sites, the panel and phpMyAdmin keep working. Anything on another machine that
+connects to this MySQL stops working, including a desktop SQL client. Use an SSH
+tunnel instead:
+
+```bash
+ssh -L 3306:127.0.0.1:3306 root@your-server
+```
+
+The setting is off by default, because the page cannot tell whether something
+remote uses the database. Check the **Connected now from** line and your
+Firewall page for a rule on port 3306 before switching it on. Switching it off
+removes the file and restarts MySQL. Disabling System Tweaks removes the file
+too, and MySQL listens on every address again after its next restart.
+
+If the page says root logs in with a default password, change it on every root
+account the list below shows. "From this server" is usually `'root'@'127.0.0.1'`
+or `'root'@'localhost'`; "from other hosts" is an account such as `'root'@'%'`.
+CloudPanel logs in as `'root'@'127.0.0.1'` with the password it stores, so that
+account's new password must also go into CloudPanel, or its Databases page stops
+working. Change it in MySQL first.
+
+1. List root's accounts, then set a new password on each one:
+
+   ```bash
+   mysql -h 127.0.0.1 -u root -p -e "SELECT user, host FROM mysql.user WHERE user = 'root'"
+   # The account CloudPanel uses:
+   mysql -h 127.0.0.1 -u root -p -e "ALTER USER 'root'@'127.0.0.1' IDENTIFIED BY 'new-password'"
+   # Every other host the list shows, such as '%' or 'localhost':
+   mysql -h 127.0.0.1 -u root -p -e "ALTER USER 'root'@'%' IDENTIFIED BY 'another-password'"
+   ```
+
+   If you do not use `'root'@'%'` from another machine, drop it instead:
+   `DROP USER 'root'@'%'`.
+
+2. In CloudPanel, open **Admin → Settings → Database Servers**, edit the `127.0.0.1` server,
+   enter the `'root'@'127.0.0.1'` password and save. CloudPanel checks it before
+   saving. The other accounts' passwords do not go into CloudPanel.
+3. Open a site's **Databases** page to confirm the panel still connects.

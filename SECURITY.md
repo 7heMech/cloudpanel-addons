@@ -154,3 +154,14 @@ checks and rollback. Check panel compatibility when choosing a version.
 CloudPanel's own PHP builds, which the distro's security rules alone leave out.
 It includes nginx by default; database and CloudPanel updates are separate choices.
 [Guide](docs/system-tweaks.md#automatic-updates)
+
+**MySQL reachable from other hosts.** CloudPanel's MySQL listens on every
+address, and CloudPanel creates every database user for any host (`'%'`), so only
+the firewall keeps the database private. A box with ufw off, or a rule opening
+port 3306, exposes every site's database login, and possibly `root` with the
+install's default password `root`. System Tweaks' Database card shows where MySQL
+listens, what the loaded firewall rules allow, clients connected from elsewhere,
+and whether root still uses a default password. **MySQL on this server only**
+(opt-in) binds it to `127.0.0.1` and undoes the change if MySQL does not come
+back.
+[Guide](docs/system-tweaks.md#mysql-access)

@@ -111,6 +111,13 @@ function setPanelCert(input) {
   return change(input, '/api/panel-cert', { enabled: input.checked }, switchText(input), 'Saved.');
 }
 
+// Either way MySQL restarts, and the page waits for it to come back.
+function setDatabaseLoopback(input) {
+  return change(input, '/api/database-loopback', { enabled: input.checked },
+    input.checked ? 'Binding MySQL to 127.0.0.1, which restarts it…' : 'Restarting MySQL on its own settings…',
+    input.checked ? 'MySQL accepts connections from this server only.' : 'MySQL uses its own settings again.');
+}
+
 function setVhostGuard(input) {
   return change(input, '/api/vhost-guard', { enabled: input.checked }, switchText(input), 'Saved.');
 }

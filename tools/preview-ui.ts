@@ -505,7 +505,24 @@ function previewTheme(html: string, url: URL): string {
  * input unchecked, and ?injected lists stored settings the guard would refuse. ?reboot switches automatic reboot
  * on, ?at=03:30 sets its time, and ?overdue dates the required reboot weeks back.
  * ?fail2ban=missing shows fail2ban not installed, ?bans=0 no blocked addresses, and ?nodomain no custom domain.
+ * ?db=open|unknown|local|pending picks where MySQL listens (firewalled by default),
+ * ?dbremote shows a client connected from elsewhere and ?dbroot root's default password.
  */
+function databasePreviewState(url: URL): Exclude<SystemTweaksState["database"], { error: string }> {
+  const db = url.searchParams.get("db");
+  return {
+    running: true,
+    exposed: db === "local" ? [] : ["*:3306", "*:33060"],
+    loopback: db === "local" || db === "pending",
+    fileInPlace: db === "local" || db === "pending",
+    firewall: db === "open" ? { state: "off", openTo: [] }
+      : db === "unknown" ? { state: "unknown", openTo: [], reason: `the loaded rule "INPUT -p tcp -j NFQUEUE" goes to NFQUEUE` }
+      : { state: "on", openTo: [] },
+    remoteClients: url.searchParams.has("dbremote") ? ["203.0.113.24"] : [],
+    defaultPassword: url.searchParams.has("dbroot") ? [{ from: "loopback", password: "root" }] : [],
+  };
+}
+
 function systemTweaksPreviewState(url: URL): SystemTweaksState {
   if (systemTweaksPreview) return systemTweaksPreview;
   const mode = url.searchParams.get("updates") ?? "outside";
@@ -557,6 +574,7 @@ function systemTweaksPreviewState(url: URL): SystemTweaksState {
       ],
       sshd: { password: true, rootLogin: "yes" },
     },
+    database: databasePreviewState(url),
     firewall: { available: true, protocols: { 9: "udp", 10: "udp", 11: "both" }, udpPorts: url.searchParams.has("noudp") ? [] : ["53", "51820"] },
     vhostGuard: {
       enabled: url.searchParams.get("vhost") !== "off", active: url.searchParams.get("vhost") !== "off",
@@ -606,6 +624,10 @@ function systemTweaksPreviewMutation(path: string, source: URL, body: Record<str
     state.fileManagerGuard = { enabled: body.enabled === true, active: body.enabled === true };
   } else if (path.endsWith("/panel-cert")) {
     state.panelCert = { ...(body.enabled === true ? panelCertPreviewStatus(null) : state.panelCert), replace: body.enabled === true };
+  } else if (path.endsWith("/database-loopback")) {
+    if (!("error" in state.database)) {
+      state.database = { ...state.database, loopback: body.enabled === true, fileInPlace: body.enabled === true, exposed: body.enabled === true ? [] : ["*:3306", "*:33060"] };
+    }
   } else if (path.endsWith("/real-ip")) {
     state.realIp = { blockForged: body.enabled === true, trustsAnyAddress: body.enabled !== true, problem: "" };
   } else if (path.endsWith("/login-jails") && !("error" in state.loginJails)) {

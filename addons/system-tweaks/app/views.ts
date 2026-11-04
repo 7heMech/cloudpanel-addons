@@ -8,6 +8,7 @@ import type { FpmUploadProgress } from "../upload-progress";
 import type { PanelPhpChoice, PanelPhpStatus } from "../panel-php";
 import type { FirewallStatus } from "../firewall";
 import { DOMAIN_JAIL, JAIL_LIMITS, PANEL_JAIL, type Ban, type SshLogin } from "../login-jails";
+import type { DatabaseStatus } from "../database";
 
 import STYLE from "./views.css" with { type: "text" };
 import SCRIPT from "./views.client.js" with { type: "text" };
@@ -456,6 +457,77 @@ function settingsCard(state: SystemTweaksState): string {
     </div>`;
 }
 
+type DatabaseState = SystemTweaksState["database"];
+
+function listing(items: string[]): string {
+  return esc(items.length > 1 ? `${items.slice(0, -1).join(", ")} and ${items.at(-1)}` : items[0] ?? "");
+}
+
+/** Where MySQL listens, and what stands between it and the internet. */
+function databaseLine(state: DatabaseStatus & { loopback: boolean }): string {
+  if (!state.running) return `${badge("Not running", "plain")} <span>MySQL is not listening on TCP here.</span>`;
+  if (!state.exposed.length) return `${badge("This server only", "ok")} <span>MySQL accepts connections on 127.0.0.1 only.</span>`;
+  const where = `Listens on ${listing(state.exposed)}.`;
+  if (state.loopback && state.fileInPlace) {
+    return `${badge("Not applied", "warn")} <span>${where} It moves to 127.0.0.1 at MySQL's next restart: systemctl restart mysql.</span>`;
+  }
+  if (state.firewall.state === "off") {
+    return `${badge("Open", "bad")} <span>${where} The firewall rules loaded now let anyone reach it, unless a firewall outside this server blocks it.</span>`;
+  }
+  if (state.firewall.state === "unknown") {
+    return `${badge("Unknown", "warn")} <span>${where} Whether the loaded firewall rules block it is unclear: ${esc(state.firewall.reason ?? "they could not be read")}.</span>`;
+  }
+  if (state.firewall.openTo.length) {
+    return `${badge("Open", "warn")} <span>${where} The loaded firewall rules allow ${listing(state.firewall.openTo)}.</span>`;
+  }
+  return `${badge("Firewalled", "warn")} <span>${where} The loaded firewall rules drop it, so the firewall is all that keeps it private.</span>`;
+}
+
+/** Root's default password, and how to change it without breaking the panel. */
+function defaultPasswordNote(state: DatabaseStatus): string {
+  const found = state.defaultPassword;
+  if ("error" in found) return `<p class="st-status hint">Root's password could not be checked: ${esc(found.error)}</p>`;
+  if (!state.running) return "";
+  if (!found.length) return `<p class="st-status hint">Root does not log in with a default password.</p>`;
+  const what = found.map((hit) => `${hit.password === "root" ? "the password root" : "no password"} from ${hit.from === "loopback" ? "this server" : "other hosts"}`);
+  return warning(`MySQL's root account logs in with ${listing(what)}. Change it in MySQL first, then enter the new password under
+    Admin → Settings → <a href="/admin/database-servers">Database Servers</a> on the 127.0.0.1 server. CloudPanel logs in with the password stored there,
+    so changing it only in MySQL breaks its Databases page.`);
+}
+
+function databaseCard(state: DatabaseState): string {
+  const description = [
+    "Has MySQL accept connections from this server only, with bind-address 127.0.0.1. Sites and the panel connect over 127.0.0.1 or the socket and keep working. Apps on other machines lose access; reach it over an SSH tunnel instead.",
+    "Off by default: CloudPanel creates every database user for any host, so System Tweaks cannot tell whether something remote uses one. A change restarts MySQL, so sites lose their database for a few seconds.",
+  ];
+  if ("error" in state) {
+    return `
+    <div class="card">
+      <div class="card-header"><h2>Database</h2></div>
+      <div class="tweak-list">${settingRow({ key: "databaseLoopback", title: "MySQL on this server only", description, control: "",
+        extra: `<div class="alert st-alert" role="alert">${esc(state.error)}</div>` })}
+      </div>
+    </div>`;
+  }
+  const remote = state.remoteClients.length
+    ? warning(`Connected now from ${listing(state.remoteClients)}. ${state.loopback ? "" : "These lose access once MySQL accepts connections from this server only."}`)
+    : "";
+  return `
+    <div class="card">
+      <div class="card-header"><h2>Database</h2></div>
+      <div class="tweak-list">${settingRow({
+        key: "databaseLoopback",
+        title: "MySQL on this server only",
+        description,
+        checked: state.loopback,
+        disabled: !state.running && !state.loopback,
+        onchange: "setDatabaseLoopback(this)",
+        extra: `<p class="st-status">${databaseLine(state)}</p>${remote}${defaultPasswordNote(state)}`,
+      })}
+      </div>
+    </div>`;
+}
+
 /** The protocols are set on CloudPanel's own Firewall page; this page only says where. */
 function firewallLine(status: FirewallStatus | { error: string }): string {
   if ("error" in status || !status.available) return "";
@@ -573,5 +645,5 @@ export function dashboardView(state: SystemTweaksState, now = Date.now()): strin
       <div class="card-header"><h2>Automatic updates</h2></div>
       <div class="tweak-list">${updateRows(state.updates, state.settings)}
       </div>${statusList(state.updates, now)}${coverageDetails(state.updates)}
-    </div>${settingsCard(state)}${loginJailsCard(state.loginJails)}`;
+    </div>${settingsCard(state)}${loginJailsCard(state.loginJails)}${databaseCard(state.database)}`;
 }
