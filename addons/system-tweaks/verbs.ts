@@ -15,6 +15,7 @@ export const SYSTEM_TWEAKS_VERBS = {
   "set-login-jails": { web: "admin" },
   "install-fail2ban": { web: "admin" },
   unban: { web: "admin" },
+  "set-database-loopback": { web: "admin" },
   firewall: { web: "admin" },
   "set-firewall-protocol": { web: "admin" },
 } as const;

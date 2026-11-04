@@ -118,6 +118,11 @@ export async function handle(
     return repaint(await systemTweaksService.setFileManagerGuard(body.enabled));
   }
 
+  if (path === "/api/database-loopback") {
+    if (typeof body.enabled !== "boolean") return json({ ok: false, error: "enabled must be true or false" }, 400);
+    return repaint(await systemTweaksService.setDatabaseLoopback(body.enabled));
+  }
+
   if (path === "/api/real-ip") {
     if (typeof body.enabled !== "boolean") return json({ ok: false, error: "enabled must be true or false" }, 400);
     return repaint(await systemTweaksService.setRealIp(body.enabled));

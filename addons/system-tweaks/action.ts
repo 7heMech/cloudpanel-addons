@@ -35,6 +35,7 @@ import {
   applyLoginJails, installLoginJailPackages, loginJailsStatus, releaseLoginJails, unban,
   type Fail2banBefore, type LoginJailOptions, type LoginJailSettings, type LoginJailsStatus,
 } from "./login-jails";
+import { databaseStatus, reconcileDatabaseFile, setDatabaseLoopback, type DatabaseOptions, type DatabaseStatus } from "./database";
 
 const SETTINGS_VERSION = 1;
 const MAX_INPUT_BYTES = 4 * 1024;
@@ -63,6 +64,8 @@ export interface SystemTweaksSettings {
   loginJails: LoginJailSettings;
   /** fail2ban.service before System Tweaks first started it, which turning both jails off puts back. */
   fail2banBefore: Fail2banBefore | null;
+  /** Have MySQL accept connections from this server only; off unless the operator asks, see database.ts. */
+  databaseLoopback: boolean;
 }
 
 export interface SystemTweaksState {
@@ -78,6 +81,7 @@ export interface SystemTweaksState {
   panelPhp: PanelPhpStatus | { error: string };
   firewall: FirewallStatus | { error: string };
   loginJails: (LoginJailsStatus & LoginJailSettings) | { error: string };
+  database: (DatabaseStatus & { loopback: boolean }) | { error: string };
 }
 
 export interface SystemTweaksPaths {
@@ -112,6 +116,7 @@ export interface SystemTweaksOptions {
   tmpCleanup?: TmpCleanupOptions;
   firewall?: FirewallOptions;
   loginJails?: LoginJailOptions;
+  database?: DatabaseOptions;
   now?: () => number;
 }
 
@@ -132,6 +137,7 @@ export function readSettings(paths: SystemTweaksPaths): SystemTweaksSettings {
     replacePanelCert: true,
     loginJails: { panel: true, ssh: false },
     fail2banBefore: null,
+    databaseLoopback: false,
   };
   if (!existsSync(paths.settingsFile)) return settings;
   const info = lstatSync(paths.settingsFile);
@@ -166,6 +172,7 @@ export function readSettings(paths: SystemTweaksPaths): SystemTweaksSettings {
   if (typeof before?.enabled === "boolean" && typeof before.active === "boolean") {
     settings.fail2banBefore = { enabled: before.enabled, active: before.active };
   }
+  if (stored.databaseLoopback === true) settings.databaseLoopback = true;
   return settings;
 }
 
@@ -209,11 +216,17 @@ async function stateOf(options: SystemTweaksOptions): Promise<SystemTweaksState>
     panelPhp: panelPhpOrError(options.panelPhp),
     firewall: firewallOrError(options.firewall),
     loginJails: loginJailsOrError(settings.loginJails, options.loginJails),
+    database: databaseOrError(settings.databaseLoopback, options.database),
   };
 }
 
 function loginJailsOrError(settings: LoginJailSettings, options?: LoginJailOptions): SystemTweaksState["loginJails"] {
   try { return { ...loginJailsStatus(options), ...settings }; }
+  catch (error) { return { error: errorMessage(error) }; }
+}
+
+function databaseOrError(loopback: boolean, options?: DatabaseOptions): SystemTweaksState["database"] {
+  try { return { ...databaseStatus(options), loopback }; }
   catch (error) { return { error: errorMessage(error) }; }
 }
 
@@ -414,6 +427,19 @@ async function setLoginJails(options: SystemTweaksOptions): Promise<SystemTweaks
   return stateOf(options);
 }
 
+async function setDatabase(options: SystemTweaksOptions): Promise<SystemTweaksState> {
+  const paths = pathsFor(options);
+  const body = await requestBody(options);
+  if (typeof body.enabled !== "boolean") failAction("enabled must be true or false");
+  await withFileLock(paths.lockFile, 15, "another system tweaks change is still running", async () => {
+    // First, so a settings file it cannot trust stops the change before MySQL restarts.
+    const settings = readSettings(paths);
+    await setDatabaseLoopback(body.enabled as boolean, options.database);
+    writeSettings(paths, { ...settings, databaseLoopback: body.enabled as boolean });
+  });
+  return stateOf(options);
+}
+
 async function changePanelPhp(options: SystemTweaksOptions): Promise<SystemTweaksState> {
   const body = await requestBody(options);
   if (typeof body.php !== "string") failAction("php must be a version such as 8.4, or empty for CloudPanel's own");
@@ -448,6 +474,7 @@ export async function executeSystemTweaksAction(argv: string[], options: SystemT
     unban(await requestBody(options), options.loginJails);
     return stateOf(options);
   }
+  if (verb === "set-database-loopback") return setDatabase(options);
   if (verb === "firewall") return firewallStatus(options.firewall);
   if (verb === "set-firewall-protocol") {
     setRuleProtocol(await requestBody(options), options.firewall);
@@ -605,6 +632,8 @@ export function systemTweaksUpkeep(options: SystemTweaksOptions = {}): string | 
     }
     if (settings.blockForgedRealIp && applyRealIp(true, options.realIp)) notices.push("visitor-IP trust narrowed again");
     if (settleLoginJails(paths, settings, options)) notices.push("login jails restored");
+    const database = reconcileDatabaseFile(settings.databaseLoopback, options.database);
+    if (database) notices.push(database);
     return notices.join("; ") || null;
   });
 }
@@ -620,6 +649,7 @@ export function withdrawSystemTweaks(options: SystemTweaksOptions = {}): void {
       applyPhpMyAdmin(false, options.phpMyAdmin);
       releaseLoginJails(settings.fail2banBefore, options.loginJails);
       if (settings.fail2banBefore) writeSettings(paths, { ...readSettings(paths), fail2banBefore: null });
+      reconcileDatabaseFile(false, options.database);
       try {
         removeFileManagerGuard(options.fileManagerGuard);
         removeVhostGuard(options.vhostGuard);
@@ -659,6 +689,7 @@ export function restoreSystemTweaks(options: SystemTweaksOptions = {}): void {
       if (settings.blockForgedRealIp) applyRealIp(true, options.realIp);
       if (settings.protectPhpMyAdmin) applyPhpMyAdmin(true, options.phpMyAdmin);
       settleLoginJails(paths, readSettings(paths), options);
+      if (settings.databaseLoopback) reconcileDatabaseFile(true, options.database);
       if (settings.blockVhostInjection) queueVhostGuard(options.vhostGuard);
       if (settings.isolatePhpPools) installPoolIsolation(options.phpPools);
       if (settings.confineFileManager) queueFileManagerGuard(options.fileManagerGuard);

@@ -8,11 +8,12 @@ Firewall page.
 
 ## The page
 
-Three cards: Automatic updates, which an operator comes back to; one
+Four cards: Automatic updates, which an operator comes back to; one
 Settings card for the panel's PHP, the upload-progress mitigation, forged
 visitor IPs, phpMyAdmin, the panel's certificate and nginx config injection,
-which are set once; and Failed logins, with the two fail2ban jails and the
-addresses they block. Each row says what it does in a sentence; the
+which are set once; Failed logins, with the two fail2ban jails and the
+addresses they block; and Database, which says who can reach MySQL. Each row
+says what it does in a sentence; the
 reasons are here. The Nginx, MySQL, CloudPanel and reboot rows appear only once
 System Tweaks' own switch is on, since they change nothing before. The
 repositories and each PHP-FPM's upload-progress value fold into a summary that
@@ -1088,3 +1089,111 @@ port range and source is what lets the choices follow them. Nothing for v3 is
 built yet. If v3 has a protocol of its own, the plan is to write each stored
 choice onto the v3 rule with the same port range and source, then retire this
 file and the page patch. Without the addon, a UDP rule comes back as TCP.
+
+## Database exposure
+
+CloudPanel's MySQL (Percona 8.0 on Debian 12, or MariaDB, depending on the
+install) listens on every address, on 3306 and, for MySQL, the X Protocol's
+33060. CloudPanel's ufw rules do not open either, so on a stock box the
+firewall is the only barrier. A box with ufw off, an input policy of `ACCEPT`,
+or a rule someone added on the Firewall page exposes it.
+
+CloudPanel creates every database user as `'name'@'%'`: its Databases page has
+no host field, and its connection class always grants on `%`. Every user can
+log in from any address that reaches the port. The panel itself connects as
+`root` to `127.0.0.1:3306`, with the password stored encrypted in the
+`database_server` table of `/home/clp/htdocs/app/data/db.sq3`, under the panel's
+`APP_SECRET`. The package install leaves root's password as `root`. CloudPanel
+changes it to a random one when its first administrator is created, for
+`'root'@'127.0.0.1'` only, and does not check that the change worked.
+
+### What the page shows
+
+`databaseStatus` reads, without credentials:
+
+- the server's TCP listeners, from `ss -Hltnp` for `mysqld` or `mariadbd`;
+- what the loaded firewall rules do with a new connection from outside to each
+  exposed port (see below);
+- peers beyond loopback connected to those ports right now;
+- whether root logs in with `root` or no password.
+
+### The firewall state
+
+The state comes from the rules loaded now, not from ufw's files. `ufw.conf`
+can say `ENABLED=yes` while nothing is loaded: the rules failed to load at boot,
+or someone flushed them. `input-rules.ts` reads `iptables-save -t filter`, and
+`ip6tables-save` when the server listens on IPv6 or a wildcard. It follows
+`INPUT` in order, jumps and `RETURN` included, for a new TCP connection to the
+port from an address that is not this box, on an interface other than `lo`. It
+reads the matches ufw writes: protocol, ports and multiport lists, conntrack
+state, address type, source, destination and interface, `limit` and `recent`.
+A rule limited to some sources or interfaces adds an opening such as
+`3306 from 10.0.0.5` and the walk goes on. A rate-limited accept, such as
+`ufw limit`, counts as open. A match it cannot read may drop, which only closes
+the port further. If it could accept, or the rule goes to a target such as
+`NFQUEUE`, the state is unknown, with that rule quoted on the page.
+
+The page says **Firewalled** only when every exposed port ends in a drop or
+reject from outside. It says **Open** when they are accepted from anywhere,
+including when no filter table is loaded. It says **Unknown** when the rules
+cannot be read or a save command fails.
+
+Another nftables table cannot let in what these rules drop, because a packet
+must pass every base chain on the input hook. It can drop what they accept. So
+an accept turns into unknown when `nft list chains` shows an input hook outside
+iptables-nft's `ip filter` and `ip6 filter`. A firewall outside the box, such as
+a cloud provider's, is not visible here, and the page says so on Open.
+
+The password check logs in as a client would, with the `mysql` or `mariadb`
+client, `--no-defaults` so no option file supplies credentials, and only the
+two public defaults on its command line. It tries `127.0.0.1`, then the box's own
+public address when the server listens on one: a connection from that address
+matches the accounts another host would, such as a `'root'@'%'`. It reads no
+stored password and runs nothing but `SELECT 1`. Each try that fails counts
+against `FAILED_LOGIN_ATTEMPTS` or MariaDB's `max_password_errors` where an
+operator set them, so the outcome, and never a password, is kept in
+`/var/lib/clp-addons/system-tweaks/database-check.json` for 15 minutes, or until
+the listeners change.
+
+System Tweaks does not change root's password. A password the panel does not
+know breaks its Databases page and `clpctl db:*`. The page tells the operator
+to change it in MySQL first and then on Admin → Settings → Database Servers. CloudPanel
+logs in with the new password before it saves it there. Saving that form also
+clears the server's default flag, which only gates deleting it.
+
+### Binding to loopback
+
+**MySQL on this server only** (`databaseLoopback`) writes
+`zz-clp-addons-loopback.cnf` with `bind-address = 127.0.0.1` and
+`loose-mysqlx-bind-address = 127.0.0.1`. It goes in the first of
+`/etc/mysql/mariadb.conf.d`, `/etc/mysql/mysql.conf.d` and `/etc/mysql/conf.d`
+that exists, and its name sorts after CloudPanel's `mysqld.cnf` and MariaDB's
+`50-server.cnf`. The `loose-` prefix lets MariaDB, which has no X Protocol,
+start with only a warning. Before restarting, `my_print_defaults` must report
+`127.0.0.1` as the last `bind-address`. A later file that sets another one is
+named in the refusal and the file is removed again, with no restart.
+
+The change restarts `mysql` (MariaDB's unit aliases that name) and waits up to
+60 seconds for it to be active, to listen on loopback only and to send a
+handshake on `127.0.0.1`. The probe is a plain connection that never logs in,
+and MySQL's host cache ignores loopback. Otherwise the previous file goes back
+and the server restarts again. Switching off removes the file and restarts the
+same way. Turning it on when the server already listens on loopback alone writes
+the file without a restart. The gateway timeout is in `limits.ts`.
+
+It is off by default. Sites connect over `127.0.0.1` or the socket, and both
+match `%` users, so a site never loses access. A client elsewhere does, and
+`mysql.user` cannot show one: every CloudPanel user is `%`. The page shows the
+signs it can see, which are a loaded rule that opens the port and a client
+connected now. A client that connects once a night, or through a rule broad enough to
+look like something else, leaves neither. A restart also drops every site's
+connections for a few seconds, which installing or updating clp-addons must not
+do unasked. The page recommends it while the server listens beyond loopback.
+
+Repair and enabling the addon write the file back when the setting is on and
+it is missing, and repair removes it when the setting is off. Neither restarts
+MySQL, so a running server picks up the change at its next restart and the page
+says so. Disabling System Tweaks removes the file without a restart.
+
+Docker does not change this. Its rules sit on `FORWARD` and bypass ufw only for
+ports a container publishes, and the host's MySQL is not one of them.

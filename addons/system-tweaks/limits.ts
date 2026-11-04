@@ -14,6 +14,8 @@ export const PANEL_PHP_GATEWAY_TIMEOUT_MS = 90_000;
 export const POOL_GUARD_GATEWAY_TIMEOUT_MS = 90_000 + 4 * COMMAND_MS;
 /** A daemon-reload, the nft checks and load, lock waiting and the reply. */
 export const PHP_POOLS_GATEWAY_TIMEOUT_MS = 4 * COMMAND_MS + 30_000;
+/** A MySQL restart (120 s) and 60 s to come back, the same again to undo it, lock waiting and the state read. */
+export const DATABASE_GATEWAY_TIMEOUT_MS = 2 * (120_000 + 60_000) + 60_000;
 /** Nginx validation and reload, a rollback of both, lock waiting and the reply; phpMyAdmin's switch uses it too. */
 export const REAL_IP_GATEWAY_TIMEOUT_MS = 4 * COMMAND_MS + 60_000;
 /** The panel nginx's test and reload and their rollback, a fail2ban config test and reload, and the reply. */
