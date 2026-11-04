@@ -1,6 +1,6 @@
 import { afterEach, expect, test } from "bun:test";
 import { Database } from "bun:sqlite";
-import { chmodSync, existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
+import { chmodSync, existsSync, lstatSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, readlinkSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { CommandResult } from "../cli/action-common";
@@ -358,4 +358,29 @@ test("a deleted site's log directory goes with it, unless a site row or a vhost 
   rmSync(join(f.dir, "sites-enabled", "gone.example.com.conf"));
   syncVarnishBackends(f.options);
   expect(existsSync(join(logDir, "gone"))).toBe(false);
+});
+
+// As root, fchown to another user succeeds, so nothing here fails.
+test.skipIf(process.getuid?.() === 0)("a switch-off that fails while putting ~/logs/nginx back puts the drop-in and the link back", () => {
+  const f = fixture();
+  const db = new Database(f.db);
+  db.query("UPDATE site SET vhost_template = ? WHERE domain_name = 'shop.example.com'").run("server {\n  {{nginx_access_log}}\n  {{nginx_error_log}}\n  location / {\n    {{varnish_proxy_pass}}\n  }\n}");
+  db.close();
+  mkdirSync(join(f.dir, "home", "shop", "logs", "nginx"), { recursive: true });
+  installVarnishBackends(f.options);
+  const dropIn = readFileSync(f.options.paths!.dropIn!, "utf8");
+  const managedDir = join(f.dir, "nginx-logs", "shop");
+  const homeLogs = join(f.dir, "home", "shop", "logs", "nginx");
+  expect(readlinkSync(homeLogs)).toBe(managedDir);
+
+  // A user this process cannot give the directory to makes unstaging the logs throw.
+  writeFileSync(f.options.paths!.passwdFile!, "shop:x:4242:4242::/home/shop:/bin/bash\n");
+  expect(() => removeVarnishBackends(f.options)).toThrow();
+
+  expect(readFileSync(f.options.paths!.dropIn!, "utf8")).toBe(dropIn);
+  expect(lstatSync(homeLogs).isSymbolicLink()).toBe(true);
+  expect(readlinkSync(homeLogs)).toBe(managedDir);
+  expect(template(f)).toContain(`access_log ${managedDir}/access.log main;`);
+  expect(existsSync(join(managedDir, "access.log"))).toBe(true);
+  expect(f.commands.filter((command) => command === "systemctl daemon-reload").length).toBe(3);
 });
