@@ -136,6 +136,20 @@ generated on the server, and repair puts it back after a CloudPanel update. A
 certificate the operator installed is left alone.
 [Guide](docs/system-tweaks.md#panel-certificate)
 
+**clpctl injection.** A hardened `clpctlWrapper` replaces CloudPanel's, so a
+site's own Unix user can no longer reach root or another tenant's data through
+clpctl and the `NOPASSWD` sudoers rule. Root and the panel pass through unchanged;
+other callers may run only `db:export`, `system:permissions:reset` and
+`varnish-cache:purge`, with values holding no shell metacharacter, a permissions
+reset confined to the caller's own home, and an export written as the caller.
+`db:import` is refused for them, because CloudPanel runs the dump as the database
+administrator, which can read any site's database; they import with their own
+database credentials instead. Version-pinned and fail-safe, it leaves an
+unrecognised wrapper in place. CloudPanel must still fix clpctl's backslash
+stripping, its shell-string command builders, `db:import` running as the database
+administrator, and `clp`'s own `NOPASSWD: ALL`.
+[Guide](docs/system-tweaks.md#clpctl-injection)
+
 The nginx settings default to on when System Tweaks is enabled. PHP upload
 progress is disabled independently of that addon; System Tweaks provides its
 opt-out. Existing saved nginx values are flagged for review, not repaired.

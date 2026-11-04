@@ -36,6 +36,9 @@ import {
   type Fail2banBefore, type LoginJailOptions, type LoginJailSettings, type LoginJailsStatus,
 } from "./login-jails";
 import { databaseStatus, reconcileDatabaseFile, setDatabaseLoopback, type DatabaseOptions, type DatabaseStatus } from "./database";
+import {
+  applyClpctlGuard, clpctlGuardOrError, restoreClpctlWrapper, type ClpctlGuardOptions, type ClpctlGuardStatus,
+} from "./clpctl-guard";
 
 const SETTINGS_VERSION = 1;
 const MAX_INPUT_BYTES = 4 * 1024;
@@ -66,6 +69,8 @@ export interface SystemTweaksSettings {
   fail2banBefore: Fail2banBefore | null;
   /** Have MySQL accept connections from this server only; off unless the operator asks, see database.ts. */
   databaseLoopback: boolean;
+  /** Replace CloudPanel's clpctlWrapper with one that closes the sudo-to-root injection. */
+  blockClpctlInjection: boolean;
 }
 
 export interface SystemTweaksState {
@@ -78,6 +83,7 @@ export interface SystemTweaksState {
   phpMyAdmin: PhpMyAdminStatus & { enabled: boolean };
   fileManagerGuard: { enabled: boolean; active: boolean };
   panelCert: PanelCertStatus & { replace: boolean };
+  clpctlGuard: ClpctlGuardStatus | { error: string };
   panelPhp: PanelPhpStatus | { error: string };
   firewall: FirewallStatus | { error: string };
   loginJails: (LoginJailsStatus & LoginJailSettings) | { error: string };
@@ -112,6 +118,7 @@ export interface SystemTweaksOptions {
   vhostValues?: VhostValuesOptions;
   varnishBackend?: VarnishBackendOptions;
   phpPools?: PoolIsolationOptions;
+  clpctlGuard?: ClpctlGuardOptions;
   panelPhp?: PanelPhpOptions;
   tmpCleanup?: TmpCleanupOptions;
   firewall?: FirewallOptions;
@@ -138,6 +145,7 @@ export function readSettings(paths: SystemTweaksPaths): SystemTweaksSettings {
     loginJails: { panel: true, ssh: false },
     fail2banBefore: null,
     databaseLoopback: false,
+    blockClpctlInjection: true,
   };
   if (!existsSync(paths.settingsFile)) return settings;
   const info = lstatSync(paths.settingsFile);
@@ -173,6 +181,7 @@ export function readSettings(paths: SystemTweaksPaths): SystemTweaksSettings {
     settings.fail2banBefore = { enabled: before.enabled, active: before.active };
   }
   if (stored.databaseLoopback === true) settings.databaseLoopback = true;
+  if (stored.blockClpctlInjection === false) settings.blockClpctlInjection = false;
   return settings;
 }
 
@@ -213,6 +222,7 @@ async function stateOf(options: SystemTweaksOptions): Promise<SystemTweaksState>
       enabled: settings.confineFileManager,
       active: (await fileManagerGuardStatus(options.fileManagerGuard)).active,
     },
+    clpctlGuard: clpctlGuardOrError(settings.blockClpctlInjection, options.clpctlGuard),
     panelPhp: panelPhpOrError(options.panelPhp),
     firewall: firewallOrError(options.firewall),
     loginJails: loginJailsOrError(settings.loginJails, options.loginJails),
@@ -404,6 +414,33 @@ async function setFileManagerGuard(options: SystemTweaksOptions): Promise<System
   return stateOf(options);
 }
 
+async function setClpctlGuard(options: SystemTweaksOptions): Promise<SystemTweaksState> {
+  const paths = pathsFor(options);
+  const body = await requestBody(options);
+  if (typeof body.enabled !== "boolean") failAction("enabled must be true or false");
+  await withFileLock(paths.lockFile, 15, "another system tweaks change is still running", async () => {
+    const settings = readSettings(paths);
+    if (body.enabled) {
+      // On whether or not the wrapper can be swapped now: a CloudPanel version
+      // this release does not know leaves it paused, and repair applies it once
+      // a newer clp-addons knows the version. The page shows which.
+      writeSettings(paths, { ...settings, blockClpctlInjection: true });
+      applyClpctlGuard(options.clpctlGuard);
+    } else {
+      // Record the opt-out first, then restore. A restore that fails leaves the
+      // hardened wrapper in place, so the setting is rolled back to on to match.
+      writeSettings(paths, { ...settings, blockClpctlInjection: false });
+      try {
+        restoreClpctlWrapper(options.clpctlGuard);
+      } catch (error) {
+        writeSettings(paths, settings);
+        throw error;
+      }
+    }
+  });
+  return stateOf(options);
+}
+
 /** Applies the jails and records what fail2ban was before them; the caller holds the settings lock. */
 function settleLoginJails(paths: SystemTweaksPaths, settings: SystemTweaksSettings, options: SystemTweaksOptions): boolean {
   const applied = applyLoginJails(settings.loginJails, settings.fail2banBefore, options.loginJails);
@@ -467,6 +504,7 @@ export async function executeSystemTweaksAction(argv: string[], options: SystemT
   if (verb === "set-phpmyadmin") return setPhpMyAdmin(options);
   if (verb === "set-file-manager-guard") return setFileManagerGuard(options);
   if (verb === "set-panel-cert") return setPanelCert(options);
+  if (verb === "set-clpctl-guard") return setClpctlGuard(options);
   if (verb === "set-panel-php") return changePanelPhp(options);
   if (verb === "set-php-pools") return setPhpPools(options);
   if (verb === "set-login-jails") return setLoginJails(options);
@@ -590,6 +628,12 @@ export async function systemTweaksMaintenance(options: SystemTweaksOptions = {})
     failures.push(`Varnish backends: ${errorMessage(error)}`);
   }
   try {
+    const clpctl = systemTweaksClpctlGuard(options);
+    if (clpctl) lines.push(clpctl);
+  } catch (error) {
+    failures.push(`clpctl wrapper guard: ${errorMessage(error)}`);
+  }
+  try {
     const stored = storedVhostValues(options.vhostValues);
     if (stored.length) lines.push(`stored site settings the vhost guard would refuse: ${stored.map((value) => `${value.domain} ${value.field}`).join(", ")}`);
   } catch (error) {
@@ -609,6 +653,21 @@ export async function systemTweaksMaintenance(options: SystemTweaksOptions = {})
 export function systemTweaksPhpMyAdmin(options: SystemTweaksOptions = {}): string | null {
   return withSettingsLock(options, (_paths, settings) =>
     settings.protectPhpMyAdmin && applyPhpMyAdmin(true, options.phpMyAdmin) ? "phpMyAdmin rules put back" : null);
+}
+
+/**
+ * Repair's: re-apply the hardened clpctlWrapper after a CloudPanel update
+ * reinstalls the original. A version this release does not know leaves the
+ * wrapper in place, reported, not as a failure.
+ */
+export function systemTweaksClpctlGuard(options: SystemTweaksOptions = {}): string | null {
+  return withSettingsLock(options, (_paths, settings) => {
+    if (!settings.blockClpctlInjection) return null;
+    const result = applyClpctlGuard(options.clpctlGuard);
+    if (result.changed) return "clpctl wrapper guard put back";
+    if (!result.active && result.reason) return `clpctl wrapper guard paused: ${result.reason}`;
+    return null;
+  });
 }
 
 /** Repair's and the new-site watcher's: every site's Varnish backend comes from its checked include. */
@@ -643,29 +702,44 @@ export function withdrawSystemTweaks(options: SystemTweaksOptions = {}): void {
   withdrawPanelPhp(options.panelPhp);
   try {
     withSettingsLock(options, (paths, settings) => {
-      applyUpdates({ ...settings.updates, enabled: false }, settings.enabledTimers, options.updates);
-      if (settings.enabledTimers.length) writeSettings(paths, { ...settings, enabledTimers: [] });
-      applyRealIp(false, options.realIp);
-      applyPhpMyAdmin(false, options.phpMyAdmin);
-      releaseLoginJails(settings.fail2banBefore, options.loginJails);
-      if (settings.fail2banBefore) writeSettings(paths, { ...readSettings(paths), fail2banBefore: null });
-      reconcileDatabaseFile(false, options.database);
+      // First: it throws when our wrapper is in place but its saved original is
+      // gone, and then nothing else is withdrawn, so the other protections stay.
+      restoreClpctlWrapper(options.clpctlGuard);
       try {
-        removeFileManagerGuard(options.fileManagerGuard);
-        removeVhostGuard(options.vhostGuard);
+        applyUpdates({ ...settings.updates, enabled: false }, settings.enabledTimers, options.updates);
+        if (settings.enabledTimers.length) writeSettings(paths, { ...settings, enabledTimers: [] });
+        applyRealIp(false, options.realIp);
+        applyPhpMyAdmin(false, options.phpMyAdmin);
+        releaseLoginJails(settings.fail2banBefore, options.loginJails);
+        if (settings.fail2banBefore) writeSettings(paths, { ...readSettings(paths), fail2banBefore: null });
+        reconcileDatabaseFile(false, options.database);
         try {
-          removeVarnishBackends(options.varnishBackend);
+          removeFileManagerGuard(options.fileManagerGuard);
+          removeVhostGuard(options.vhostGuard);
+          try {
+            removeVarnishBackends(options.varnishBackend);
+          } catch (error) {
+            queueVhostGuard(options.vhostGuard);
+            throw error;
+          }
         } catch (error) {
-          queueVhostGuard(options.vhostGuard);
+          // The addon stays enabled, so the File Manager guard comes back now
+          // rather than at the next repair, unless it was switched off.
+          if (settings.confineFileManager) queueFileManagerGuard(options.fileManagerGuard);
           throw error;
         }
+        removePoolIsolation(options.phpPools);
       } catch (error) {
-        // The addon stays enabled, so the File Manager guard comes back now
-        // rather than at the next repair, unless it was switched off.
-        if (settings.confineFileManager) queueFileManagerGuard(options.fileManagerGuard);
+        // A later step failed, so deactivation does not complete and the addon
+        // stays enabled. The wrapper is already back to CloudPanel's vulnerable
+        // one, so put ours back, since the setting still asks for it, rather than
+        // leave the box exposed until the next repair. Best effort: a failure
+        // here must not hide the real one, and repair retries.
+        if (settings.blockClpctlInjection) {
+          try { applyClpctlGuard(options.clpctlGuard); } catch { /* repair re-applies */ }
+        }
         throw error;
       }
-      removePoolIsolation(options.phpPools);
     });
   } catch (error) {
     // The addon stays enabled, so its panel PHP choice comes back with it.
@@ -693,6 +767,7 @@ export function restoreSystemTweaks(options: SystemTweaksOptions = {}): void {
       if (settings.blockVhostInjection) queueVhostGuard(options.vhostGuard);
       if (settings.isolatePhpPools) installPoolIsolation(options.phpPools);
       if (settings.confineFileManager) queueFileManagerGuard(options.fileManagerGuard);
+      if (settings.blockClpctlInjection) applyClpctlGuard(options.clpctlGuard);
     });
   } finally {
     restorePanelPhp(options.panelPhp);
