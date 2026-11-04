@@ -36,6 +36,7 @@ import {
 } from "./paths";
 import type { AddonTarget } from "../lib/addon-target";
 import { writeAtomic } from "./util";
+import { withoutPhpMyAdminRules } from "../addons/system-tweaks/phpmyadmin";
 import { errorMessage, runCommand, type CommandResult } from "./action-common";
 import { openPanelDatabase } from "./panel-db";
 import { cloudflareRanges, nginxFileChange, trustedVhost, withNginxTransaction, writeAtomicOwned } from "./nginx-transaction";
@@ -488,6 +489,11 @@ function stripNginxProxy(content: string): string {
   return content.replace(NGINX_PROXY_BLOCK_RE, "");
 }
 
+/** The vhost as CloudPanel wrote it, without the proxy or System Tweaks' phpMyAdmin rules. */
+function panelUpstream(content: string): string {
+  return withoutPhpMyAdminRules(stripNginxProxy(content));
+}
+
 /**
  * The one quote- and comment-aware pass every scanner below is built from.
  *
@@ -592,9 +598,10 @@ function commandFailure(command: string, args: string[]): string | null {
   }
 }
 
-function restoreNginxContent(path: string, content: string): void {
-  const mode = statSync(path).mode & 0o777;
-  writeAtomic(path, content, mode);
+/** Keeps the file's owner: CloudPanel 6's panel account must still be able to rewrite its vhost. */
+function writeNginxContent(path: string, content: string): void {
+  const stat = statSync(path);
+  writeAtomicOwned(path, content, stat.mode & 0o777, stat.uid, stat.gid);
 }
 
 function removeNginxState(files: { pristine: string; hash: string; path: string }): void {
@@ -650,7 +657,7 @@ export function inspectNginxProxy(options: NginxPaths = {}): NginxProxyStatus {
   }
   if (baseline) {
     const expected = baseline.hash;
-    const found = sha256(stripNginxProxy(content));
+    const found = sha256(panelUpstream(content));
     if (expected !== found) {
       return upstreamChangedResult(path, expected, found);
     }
@@ -683,7 +690,7 @@ export function reconcileNginxProxy(options: NginxPaths & { enabled?: boolean; r
   const onDisk = resolved.content;
 
   const files = nginxStateFiles(p.stateDir);
-  const upstream = stripNginxProxy(onDisk);
+  const upstream = panelUpstream(onDisk);
   const found = sha256(upstream);
   const baseline = readNginxBaseline(files);
   if (hasNginxState(files) && baseline === null) {
@@ -718,8 +725,7 @@ export function reconcileNginxProxy(options: NginxPaths & { enabled?: boolean; r
     if (!enabled) removeNginxState(files);
     return { state: enabled ? "ok" : "missing", changed: false, vhostPath: selectedPath };
   }
-  const mode = statSync(vhostPath).mode & 0o777;
-  writeAtomic(vhostPath, rendered.content, mode);
+  writeNginxContent(vhostPath, rendered.content);
 
   if (!reload) {
     if (!enabled) removeNginxState(files);
@@ -732,13 +738,13 @@ export function reconcileNginxProxy(options: NginxPaths & { enabled?: boolean; r
   const layout = nginxLayout();
   const tested = commandFailure("nginx", layout.configFile ? ["-t", "-c", layout.configFile] : ["-t"]);
   if (tested) {
-    restoreNginxContent(vhostPath, onDisk);
+    writeNginxContent(vhostPath, onDisk);
     return { state: "validation-failed", changed: false, vhostPath: selectedPath, detail: `nginx -t failed: ${tested}` };
   }
 
   const reloaded = commandFailure("systemctl", ["reload", layout.service]);
   if (reloaded) {
-    restoreNginxContent(vhostPath, onDisk);
+    writeNginxContent(vhostPath, onDisk);
     return { state: "validation-failed", changed: false, vhostPath: selectedPath, detail: `nginx reload failed: ${reloaded}` };
   }
 

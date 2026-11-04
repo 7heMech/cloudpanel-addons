@@ -82,6 +82,21 @@ A panel behind Cloudflare keeps its visitors' addresses. Switch the setting off
 only if a load balancer or proxy other than Cloudflare, on a public address,
 sits in front of this server or its panel.
 
+## phpMyAdmin
+
+**Lock down phpMyAdmin** is on by default. CloudPanel's own basic auth for the
+panel (`clpctl cloudpanel:enable:basic-auth`) skips every address that starts
+with `/phpmyadmin`, so `/phpmyadmin/../file-manager/` reached the File Manager
+without the password. With the setting on, basic auth skips only phpMyAdmin.
+phpMyAdmin's example and setup scripts, the folders its pages never load, and
+the files that show its version, such as `composer.json`, return 404. Opening
+phpMyAdmin from a site's **Databases** page works as before. Its help links
+still open the documentation that ships with it.
+
+Turning the setting off takes the rules out of CloudPanel's panel vhost. While
+it is on, repair puts them back within seconds when a CloudPanel update rewrites
+that file.
+
 ## Nginx config injection
 
 **Block nginx config injection** is on by default. CloudPanel writes site

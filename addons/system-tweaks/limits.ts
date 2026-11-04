@@ -14,5 +14,5 @@ export const PANEL_PHP_GATEWAY_TIMEOUT_MS = 90_000;
 export const VHOST_GUARD_GATEWAY_TIMEOUT_MS = 90_000 + 4 * COMMAND_MS;
 /** A daemon-reload, the nft checks and load, lock waiting and the reply. */
 export const PHP_POOLS_GATEWAY_TIMEOUT_MS = 4 * COMMAND_MS + 30_000;
-/** Nginx validation and reload, a rollback of both, lock waiting and the reply. */
+/** Nginx validation and reload, a rollback of both, lock waiting and the reply; phpMyAdmin's switch uses it too. */
 export const REAL_IP_GATEWAY_TIMEOUT_MS = 4 * COMMAND_MS + 60_000;
