@@ -1236,6 +1236,9 @@ changes it to a random one when its first administrator is created, for
 - peers beyond loopback connected to those ports right now;
 - whether root logs in with `root` or no password.
 
+When `ss` fails, the page says **Unknown** with its error instead of
+**This server only**, and reports no exposure, clients or password check.
+
 ### The firewall state
 
 The state comes from the rules loaded now, not from ufw's files. `ufw.conf`
@@ -1290,7 +1293,9 @@ that exists, and its name sorts after CloudPanel's `mysqld.cnf` and MariaDB's
 `50-server.cnf`. The `loose-` prefix lets MariaDB, which has no X Protocol,
 start with only a warning. Before restarting, `my_print_defaults` must report
 `127.0.0.1` as the last `bind-address`. A later file that sets another one is
-named in the refusal and the file is removed again, with no restart.
+named in the refusal and the file is removed again, with no restart. If
+`ss -Hltnp` fails, the switch is refused before the file is touched: a failed
+query cannot show the server is already on loopback, or check it afterwards.
 
 The change restarts `mysql` (MariaDB's unit aliases that name) and waits up to
 60 seconds for it to be active, to listen on loopback only and to send a

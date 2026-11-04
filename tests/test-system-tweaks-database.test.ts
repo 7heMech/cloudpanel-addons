@@ -214,6 +214,48 @@ test("an unexpected login error is reported rather than taken as no default", ()
   expect(databaseStatus(s.options).defaultPassword).toEqual({ error: "logging in to 127.0.0.1 failed: ERROR 2003 (HY000): Can't connect to MySQL server on '127.0.0.1:3306' (111)" });
 });
 
+/** Makes `ss -Hltnp` fail, as when ss is missing. */
+function ssFails(s: Server): void {
+  const base = s.options.run!;
+  s.options.run = (command, args) => command === "ss" && args[0] === "-Hltnp"
+    ? { ok: false, stdout: "", stderr: "ss: command not found\n", exitCode: 127 }
+    : base(command, args);
+}
+
+test("listeners that cannot be read are reported as unknown, not as loopback only", () => {
+  const s = server();
+  ssFails(s);
+  expect(databaseStatus(s.options)).toEqual({
+    running: false, listenersUnknown: "ss failed: ss: command not found", exposed: [],
+    firewall: { state: "unknown", openTo: [], reason: "ss failed: ss: command not found" }, remoteClients: [], defaultPassword: [], fileInPlace: false,
+  });
+});
+
+test("switching on is refused before the file is written when ss fails", async () => {
+  const s = server();
+  ssFails(s);
+  await expect(setDatabaseLoopback(true, s.options)).rejects.toThrow("could not tell where MySQL listens: ss failed: ss: command not found");
+  expect(existsSync(s.file)).toBe(false);
+  expect(s.calls.some((call) => call[1] === "restart")).toBe(false);
+
+  // An applied file with the server still wide is not taken as done either.
+  writeFileSync(s.file, DATABASE_FILE);
+  await expect(setDatabaseLoopback(true, s.options)).rejects.toThrow("could not tell where MySQL listens");
+  await expect(setDatabaseLoopback(false, s.options)).rejects.toThrow("could not tell where MySQL listens");
+  expect(readFileSync(s.file, "utf8")).toBe(DATABASE_FILE);
+  expect(s.calls.some((call) => call[1] === "restart")).toBe(false);
+});
+
+test("the action does not save the setting when ss fails", async () => {
+  const s = server();
+  ssFails(s);
+  const paths = { settingsFile: join(s.dir, "settings.json"), lockFile: join(s.dir, "lock"), rootUid: process.getuid!() };
+  await expect(executeSystemTweaksAction(["set-database-loopback"], {
+    processUid: 0, paths, database: s.options, input: JSON.stringify({ enabled: true }),
+  })).rejects.toThrow("could not tell where MySQL listens");
+  expect(existsSync(paths.settingsFile)).toBe(false);
+});
+
 test("switching on writes the file, restarts and needs loopback only; off removes it and restarts", async () => {
   const s = server();
   await setDatabaseLoopback(true, s.options);
@@ -317,4 +359,7 @@ test("the page says where MySQL listens, what reaches it, and how to change a de
   expect(pending).toContain("Root does not log in with a default password.");
   const local = dashboardView({ ...state, database: { ...database, exposed: [], loopback: true, fileInPlace: true, remoteClients: [] } });
   expect(local).toContain("accepts connections on 127.0.0.1 only");
+  const unread = dashboardView({ ...state, database: { ...database, running: false, exposed: [], listenersUnknown: "ss failed: ss: command not found" } });
+  expect(unread).toContain("Where MySQL listens could not be read: ss failed: ss: command not found.");
+  expect(unread).not.toContain("127.0.0.1 only");
 });

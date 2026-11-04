@@ -490,6 +490,7 @@ function listing(items: string[]): string {
 
 /** Where MySQL listens, and what stands between it and the internet. */
 function databaseLine(state: DatabaseStatus & { loopback: boolean }): string {
+  if (state.listenersUnknown) return `${badge("Unknown", "warn")} <span>Where MySQL listens could not be read: ${esc(state.listenersUnknown)}.</span>`;
   if (!state.running) return `${badge("Not running", "plain")} <span>MySQL is not listening on TCP here.</span>`;
   if (!state.exposed.length) return `${badge("This server only", "ok")} <span>MySQL accepts connections on 127.0.0.1 only.</span>`;
   const where = `Listens on ${listing(state.exposed)}.`;

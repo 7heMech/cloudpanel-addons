@@ -65,6 +65,8 @@ export interface DefaultPassword { from: "loopback" | "other hosts"; password: "
 export interface DatabaseStatus {
   /** Whether a MySQL or MariaDB server is listening on TCP here. */
   running: boolean;
+  /** Why its listeners could not be read; the fields about them are then empty. */
+  listenersUnknown?: string;
   /** Its listeners beyond loopback, as `*:3306`. */
   exposed: string[];
   /**
@@ -156,9 +158,10 @@ function classicPort(all: Endpoint[]): number {
   return (all.find((listener) => listener.port === 3306) ?? all.find((listener) => listener.port !== 33060) ?? all[0]!).port;
 }
 
-function listeners(ctx: Context): Endpoint[] {
+function listeners(ctx: Context): Endpoint[] | { error: string } {
   const shown = ctx.run("ss", ["-Hltnp"]);
-  return shown.ok ? parseListeners(shown.stdout) : [];
+  if (shown.ok) return parseListeners(shown.stdout);
+  return { error: `ss failed: ${(shown.stderr || shown.stdout).trim().split("\n")[0] || `exit ${shown.exitCode ?? "unknown"}`}` };
 }
 
 // --- The firewall --------------------------------------------------------
@@ -293,18 +296,26 @@ function current(path: string): string | null {
 
 export function databaseStatus(options: DatabaseOptions = {}): DatabaseStatus {
   const ctx = contextOf(options);
-  const all = listeners(ctx);
+  const shown = listeners(ctx);
+  const file = optionFile(ctx);
+  const fileInPlace = file !== null && current(file) === DATABASE_FILE;
+  if ("error" in shown) {
+    return {
+      running: false, listenersUnknown: shown.error, exposed: [], firewall: { state: "unknown", openTo: [], reason: shown.error },
+      remoteClients: [], defaultPassword: [], fileInPlace,
+    };
+  }
+  const all = shown;
   const exposed = all.filter((listener) => !isLoopback(listener.host));
   const ports = [...new Set(all.map((listener) => listener.port))];
   const established = ctx.run("ss", ["-Htn", "state", "established"]);
-  const file = optionFile(ctx);
   return {
     running: all.length > 0,
     exposed: exposed.map((listener) => listener.text),
     firewall: firewallFor(ctx, exposed),
     remoteClients: established.ok ? parseRemoteClients(established.stdout, ports) : [],
     defaultPassword: all.length ? defaultPasswords(ctx, all, exposed) : [],
-    fileInPlace: file !== null && current(file) === DATABASE_FILE,
+    fileInPlace,
   };
 }
 
@@ -324,6 +335,7 @@ async function unhealthy(ctx: Context, loopbackOnly: boolean): Promise<string | 
   const state = ctx.run("systemctl", ["is-active", ctx.paths.service]).stdout.trim();
   if (state !== "active") return `${ctx.paths.service} is ${state || "not running"}`;
   const all = listeners(ctx);
+  if ("error" in all) return all.error;
   if (!all.length) return "it is not listening on TCP";
   const exposed = all.filter((listener) => !isLoopback(listener.host));
   if (loopbackOnly && exposed.length) return `it still listens on ${exposed.map((listener) => listener.text).join(", ")}`;
@@ -366,10 +378,11 @@ export async function setDatabaseLoopback(on: boolean, options: DatabaseOptions 
   if (before !== null && before !== DATABASE_FILE && !before.startsWith(DATABASE_MARKER)) {
     failAction(`${file} is not this addon's; move it away to let System Tweaks manage it`);
   }
+  if (!on && before === null) return;
   const all = listeners(ctx);
+  if ("error" in all) failAction(`could not tell where MySQL listens: ${all.error}`);
   const exposed = all.some((listener) => !isLoopback(listener.host));
   if (on && before === DATABASE_FILE && !exposed) return;
-  if (!on && before === null) return;
   put(file, on ? DATABASE_FILE : null);
   let restarted = false;
   try {
