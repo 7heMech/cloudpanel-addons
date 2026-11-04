@@ -11,6 +11,9 @@ export const SYSTEM_TWEAKS_VERBS = {
   "set-file-manager-guard": { web: "admin" },
   "set-panel-php": { web: "admin" },
   "set-php-pools": { web: "admin" },
+  "set-login-jails": { web: "admin" },
+  "install-fail2ban": { web: "admin" },
+  unban: { web: "admin" },
   firewall: { web: "admin" },
   "set-firewall-protocol": { web: "admin" },
 } as const;

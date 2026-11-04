@@ -504,6 +504,7 @@ function previewTheme(html: string, url: URL): string {
  * leaves X-Real-IP trusted from any address, ?vhost=off leaves panel
  * input unchecked, and ?injected lists stored settings the guard would refuse. ?reboot switches automatic reboot
  * on, ?at=03:30 sets its time, and ?overdue dates the required reboot weeks back.
+ * ?fail2ban=missing shows fail2ban not installed, ?bans=0 no blocked addresses, and ?nodomain no custom domain.
  */
 function systemTweaksPreviewState(url: URL): SystemTweaksState {
   if (systemTweaksPreview) return systemTweaksPreview;
@@ -545,6 +546,16 @@ function systemTweaksPreviewState(url: URL): SystemTweaksState {
     panelPhp: panelPhpPreviewStatus(url),
     realIp: { blockForged: url.searchParams.get("realip") !== "off", trustsAnyAddress: url.searchParams.get("realip") === "off", problem: "" },
     phpMyAdmin: { enabled: url.searchParams.get("pma") !== "off", active: url.searchParams.get("pma") !== "off", problem: "" },
+    loginJails: {
+      panel: true, ssh: false, service: "active", running: ["clp-addons-panel", "clp-addons-domain"], panelLog: true, problem: "",
+      customDomain: url.searchParams.has("nodomain") ? null : { name: "panel.example.com", logged: true, supported: true },
+      missing: url.searchParams.get("fail2ban") === "missing" ? ["fail2ban", "python3-systemd"] : [],
+      bans: url.searchParams.get("bans") === "0" ? [] : [
+        { jail: "clp-addons-panel", ip: "203.0.113.45", until: "2026-10-24 07:41:09" },
+        { jail: "clp-addons-domain", ip: "2001:db8:4::17", until: "2026-10-24 07:52:30" },
+      ],
+      sshd: { password: true, rootLogin: "yes" },
+    },
     firewall: { available: true, protocols: { 9: "udp", 10: "udp", 11: "both" }, udpPorts: url.searchParams.has("noudp") ? [] : ["53", "51820"] },
     vhostGuard: {
       enabled: url.searchParams.get("vhost") !== "off", active: url.searchParams.get("vhost") !== "off",
@@ -583,6 +594,16 @@ function systemTweaksPreviewMutation(path: string, source: URL, body: Record<str
     state.fileManagerGuard = { enabled: body.enabled === true, active: body.enabled === true };
   } else if (path.endsWith("/real-ip")) {
     state.realIp = { blockForged: body.enabled === true, trustsAnyAddress: body.enabled !== true, problem: "" };
+  } else if (path.endsWith("/login-jails") && !("error" in state.loginJails)) {
+    const jails = state.loginJails as Exclude<SystemTweaksState["loginJails"], { error: string }>;
+    Object.assign(jails, body);
+    jails.running = [...(jails.panel ? ["clp-addons-panel", "clp-addons-domain"] : []), ...(jails.ssh ? ["sshd"] : [])];
+    jails.bans = jails.bans.filter((ban) => jails.running.includes(ban.jail));
+  } else if (path.endsWith("/unban") && !("error" in state.loginJails)) {
+    const jails = state.loginJails as Exclude<SystemTweaksState["loginJails"], { error: string }>;
+    jails.bans = jails.bans.filter((ban) => ban.ip !== body.ip);
+  } else if (path.endsWith("/install-fail2ban") && !("error" in state.loginJails)) {
+    (state.loginJails as { missing: string[] }).missing = [];
   } else if (path.endsWith("/upload-guard")) {
     state.uploadProgress.guard = body.enabled === true;
     for (const row of state.uploadProgress.fpms) {

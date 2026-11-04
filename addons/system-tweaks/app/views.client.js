@@ -41,7 +41,8 @@ function working(control, text) {
   line.setAttribute('role', 'status');
   line.innerHTML = '<span class="badge">Working</span> ';
   line.append(text);
-  const after = option ? option.lastElementChild : row.querySelector('.tweak-note');
+  const after = option ? option.lastElementChild
+    : row ? row.querySelector('.tweak-note') : control.closest('.st-fold, .st-install');
   after.after(line);
   const page = setTimeout(function () {
     notify(text + ' Other settings wait until it finishes.', 'warn');
@@ -119,6 +120,19 @@ function setPanelPhp(select) {
   const label = select.options[select.selectedIndex].textContent;
   return change(select, '/api/panel-php', { php: select.value },
     'Switching the panel to ' + label + '…', 'The panel answers on ' + label + '.');
+}
+
+function setLoginJails(input) {
+  return change(input, '/api/login-jails', { [input.dataset.setting]: input.checked }, switchText(input), 'Saved.');
+}
+
+function installFail2ban(button) {
+  return change(button, '/api/install-fail2ban', {}, 'Installing fail2ban…', 'fail2ban is installed.');
+}
+
+function unban(button) {
+  const ip = button.dataset.ip;
+  return change(button, '/api/unban', { jail: button.dataset.jail, ip: ip }, 'Unblocking ' + ip + '…', ip + ' is unblocked.');
 }
 
 function installUpdates(button) {

@@ -114,6 +114,20 @@ Folder listings still run as root and could show a raced folder's file names, bu
 no contents.
 [Guide](docs/system-tweaks.md#file-manager)
 
+**Password guessing against the panel and SSH.** CloudPanel records only
+successful logins and has no limit on failed ones. System Tweaks makes the
+panel's nginx log each failed password, two-factor code and basic-auth attempt to
+the journal, and a fail2ban jail blocks the address from port 8443 for an hour
+after 5 failures within an hour. Logins through CloudPanel's custom domain are
+logged by the sites' nginx with the client's own address and blocked on port 443,
+which covers every site on the server. An opt-in jail does the same for SSH. Bans
+are kept in fail2ban's own nftables table, so CloudPanel's Firewall page doesn't
+clear them. Loopback, the server's own addresses, private networks and Cloudflare
+are never blocked, so behind Cloudflare the panel jail blocks nothing. sshd's
+settings are not changed; the page warns when password or root login is allowed.
+Switching it off puts fail2ban back as it was.
+[Guide](docs/system-tweaks.md#failed-logins)
+
 The nginx settings default to on when System Tweaks is enabled. PHP upload
 progress is disabled independently of that addon; System Tweaks provides its
 opt-out. Existing saved nginx values are flagged for review, not repaired.

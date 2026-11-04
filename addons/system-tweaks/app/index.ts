@@ -1,3 +1,4 @@
+import { isIP } from "node:net";
 import {
   guardMutation, htmlResponse, jsonResponse, newCsrfToken, readBody,
 } from "../../../lib/app-http";
@@ -5,6 +6,7 @@ import type { ActionResult } from "../../../lib/gateway-client";
 import { REBOOT_TIME_ERROR, validRebootTime } from "../updates";
 import type { SystemTweaksState } from "../action";
 import { FIREWALL_PROTOCOLS, ruleKey, type FirewallProtocol, type FirewallStatus } from "../firewall";
+import { LOGIN_JAILS } from "../login-jails";
 import { systemTweaksService } from "./service";
 import { dashboardView, layout } from "./views";
 
@@ -56,6 +58,7 @@ export async function handle(
   if (denied) return denied;
 
   if (path === "/api/install-updates") return repaint(await systemTweaksService.installUpdates());
+  if (path === "/api/install-fail2ban") return repaint(await systemTweaksService.installFail2ban());
 
   const body = await readBody(req, 1024);
   if (body instanceof Response) return body;
@@ -118,6 +121,24 @@ export async function handle(
   if (path === "/api/real-ip") {
     if (typeof body.enabled !== "boolean") return json({ ok: false, error: "enabled must be true or false" }, 400);
     return repaint(await systemTweaksService.setRealIp(body.enabled));
+  }
+
+  if (path === "/api/login-jails") {
+    const wanted: { panel?: boolean; ssh?: boolean } = {};
+    for (const key of ["panel", "ssh"] as const) {
+      if (body[key] === undefined) continue;
+      if (typeof body[key] !== "boolean") return json({ ok: false, error: `${key} must be true or false` }, 400);
+      wanted[key] = body[key];
+    }
+    if (!Object.keys(wanted).length) return json({ ok: false, error: "no jail was named" }, 400);
+    return repaint(await systemTweaksService.setLoginJails(wanted));
+  }
+
+  if (path === "/api/unban") {
+    if (!(LOGIN_JAILS as readonly unknown[]).includes(body.jail) || typeof body.ip !== "string" || !isIP(body.ip)) {
+      return json({ ok: false, error: "a jail and an IP address are required" }, 400);
+    }
+    return repaint(await systemTweaksService.unban(body.jail as string, body.ip));
   }
 
   return json({ ok: false, error: "not found" }, 404);

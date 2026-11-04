@@ -2,7 +2,7 @@ import { callGatewayAction, type ActionResult } from "../../../lib/gateway-clien
 import type { WebVerb } from "../../../lib/gateway-protocol";
 import type { SystemTweaksState } from "../action";
 import type { FirewallStatus } from "../firewall";
-import { INSTALL_GATEWAY_TIMEOUT_MS, PANEL_PHP_GATEWAY_TIMEOUT_MS, PHP_POOLS_GATEWAY_TIMEOUT_MS, POOL_GUARD_GATEWAY_TIMEOUT_MS, REAL_IP_GATEWAY_TIMEOUT_MS } from "../limits";
+import { INSTALL_GATEWAY_TIMEOUT_MS, LOGIN_JAILS_GATEWAY_TIMEOUT_MS, PANEL_PHP_GATEWAY_TIMEOUT_MS, PHP_POOLS_GATEWAY_TIMEOUT_MS, POOL_GUARD_GATEWAY_TIMEOUT_MS, REAL_IP_GATEWAY_TIMEOUT_MS } from "../limits";
 
 function call(verb: WebVerb<"system-tweaks">, input?: string, timeout?: number): Promise<ActionResult<SystemTweaksState>> {
   return callGatewayAction("system-tweaks", verb, [], input, timeout ? { timeout } : undefined);
@@ -55,6 +55,18 @@ export const systemTweaksService = {
 
   setFileManagerGuard(enabled: boolean): Promise<ActionResult<SystemTweaksState>> {
     return call("set-file-manager-guard", JSON.stringify({ enabled }), POOL_GUARD_GATEWAY_TIMEOUT_MS);
+  },
+
+  setLoginJails(wanted: { panel?: boolean; ssh?: boolean }): Promise<ActionResult<SystemTweaksState>> {
+    return call("set-login-jails", JSON.stringify(wanted), LOGIN_JAILS_GATEWAY_TIMEOUT_MS);
+  },
+
+  installFail2ban(): Promise<ActionResult<SystemTweaksState>> {
+    return call("install-fail2ban", undefined, INSTALL_GATEWAY_TIMEOUT_MS);
+  },
+
+  unban(jail: string, ip: string): Promise<ActionResult<SystemTweaksState>> {
+    return call("unban", JSON.stringify({ jail, ip }));
   },
 
 };

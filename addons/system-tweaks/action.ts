@@ -30,6 +30,10 @@ import {
 import { storedVhostValues, type StoredVhostValue, type VhostValuesOptions } from "./vhost-values";
 import { installPoolIsolation, poolIsolationStatus, removePoolIsolation, syncPoolIsolation, type PoolIsolationOptions, type PoolIsolationStatus } from "./pool-isolation";
 import { installVarnishBackends, removeVarnishBackends, sitesWithHomeLogs, sitesWithOwnLogrotate, varnishBackendsActive, type VarnishBackendOptions } from "./varnish-backend";
+import {
+  applyLoginJails, installLoginJailPackages, loginJailsStatus, releaseLoginJails, unban,
+  type Fail2banBefore, type LoginJailOptions, type LoginJailSettings, type LoginJailsStatus,
+} from "./login-jails";
 
 const SETTINGS_VERSION = 1;
 const MAX_INPUT_BYTES = 4 * 1024;
@@ -52,6 +56,10 @@ export interface SystemTweaksSettings {
   protectPhpMyAdmin: boolean;
   /** Refuse File Manager requests that leave the site's home, and leave its socket to clp. */
   confineFileManager: boolean;
+  /** fail2ban jails for the panel login and for SSH. */
+  loginJails: LoginJailSettings;
+  /** fail2ban.service before System Tweaks first started it, which turning both jails off puts back. */
+  fail2banBefore: Fail2banBefore | null;
 }
 
 export interface SystemTweaksState {
@@ -65,6 +73,7 @@ export interface SystemTweaksState {
   fileManagerGuard: { enabled: boolean; active: boolean };
   panelPhp: PanelPhpStatus | { error: string };
   firewall: FirewallStatus | { error: string };
+  loginJails: (LoginJailsStatus & LoginJailSettings) | { error: string };
 }
 
 export interface SystemTweaksPaths {
@@ -97,6 +106,7 @@ export interface SystemTweaksOptions {
   panelPhp?: PanelPhpOptions;
   tmpCleanup?: TmpCleanupOptions;
   firewall?: FirewallOptions;
+  loginJails?: LoginJailOptions;
   now?: () => number;
 }
 
@@ -114,6 +124,8 @@ export function readSettings(paths: SystemTweaksPaths): SystemTweaksSettings {
     isolatePhpPools: true,
     protectPhpMyAdmin: true,
     confineFileManager: true,
+    loginJails: { panel: true, ssh: false },
+    fail2banBefore: null,
   };
   if (!existsSync(paths.settingsFile)) return settings;
   const info = lstatSync(paths.settingsFile);
@@ -140,6 +152,13 @@ export function readSettings(paths: SystemTweaksPaths): SystemTweaksSettings {
   if (stored.isolatePhpPools === false) settings.isolatePhpPools = false;
   if (stored.protectPhpMyAdmin === false) settings.protectPhpMyAdmin = false;
   if (stored.confineFileManager === false) settings.confineFileManager = false;
+  const jails = (stored.loginJails ?? {}) as Record<string, unknown>;
+  if (jails.panel === false) settings.loginJails.panel = false;
+  if (jails.ssh === true) settings.loginJails.ssh = true;
+  const before = stored.fail2banBefore as Record<string, unknown> | null | undefined;
+  if (typeof before?.enabled === "boolean" && typeof before.active === "boolean") {
+    settings.fail2banBefore = { enabled: before.enabled, active: before.active };
+  }
   return settings;
 }
 
@@ -181,7 +200,13 @@ async function stateOf(options: SystemTweaksOptions): Promise<SystemTweaksState>
     },
     panelPhp: panelPhpOrError(options.panelPhp),
     firewall: firewallOrError(options.firewall),
+    loginJails: loginJailsOrError(settings.loginJails, options.loginJails),
   };
+}
+
+function loginJailsOrError(settings: LoginJailSettings, options?: LoginJailOptions): SystemTweaksState["loginJails"] {
+  try { return { ...loginJailsStatus(options), ...settings }; }
+  catch (error) { return { error: errorMessage(error) }; }
 }
 
 function firewallOrError(options?: FirewallOptions): FirewallStatus | { error: string } {
@@ -345,6 +370,29 @@ async function setFileManagerGuard(options: SystemTweaksOptions): Promise<System
   return stateOf(options);
 }
 
+/** Applies the jails and records what fail2ban was before them; the caller holds the settings lock. */
+function settleLoginJails(paths: SystemTweaksPaths, settings: SystemTweaksSettings, options: SystemTweaksOptions): boolean {
+  const applied = applyLoginJails(settings.loginJails, settings.fail2banBefore, options.loginJails);
+  const next = { ...settings, loginJails: { ...settings.loginJails, ssh: applied.ssh }, fail2banBefore: applied.before };
+  if (JSON.stringify(next) !== JSON.stringify(readSettings(paths))) writeSettings(paths, next);
+  return applied.changed;
+}
+
+async function setLoginJails(options: SystemTweaksOptions): Promise<SystemTweaksState> {
+  const paths = pathsFor(options);
+  const body = await requestBody(options);
+  const named = (["panel", "ssh"] as const).filter((key) => body[key] !== undefined);
+  if (!named.length) failAction("no jail was named");
+  for (const key of named) if (typeof body[key] !== "boolean") failAction(`${key} must be true or false`);
+  await withFileLock(paths.lockFile, 15, "another system tweaks change is still running", async () => {
+    const settings = readSettings(paths);
+    const wanted = { ...settings, loginJails: { ...settings.loginJails } };
+    for (const key of named) wanted.loginJails[key] = body[key] as boolean;
+    settleLoginJails(paths, wanted, options);
+  });
+  return stateOf(options);
+}
+
 async function changePanelPhp(options: SystemTweaksOptions): Promise<SystemTweaksState> {
   const body = await requestBody(options);
   if (typeof body.php !== "string") failAction("php must be a version such as 8.4, or empty for CloudPanel's own");
@@ -373,23 +421,47 @@ export async function executeSystemTweaksAction(argv: string[], options: SystemT
   if (verb === "set-file-manager-guard") return setFileManagerGuard(options);
   if (verb === "set-panel-php") return changePanelPhp(options);
   if (verb === "set-php-pools") return setPhpPools(options);
+  if (verb === "set-login-jails") return setLoginJails(options);
+  if (verb === "unban") {
+    unban(await requestBody(options), options.loginJails);
+    return stateOf(options);
+  }
   if (verb === "firewall") return firewallStatus(options.firewall);
   if (verb === "set-firewall-protocol") {
     setRuleProtocol(await requestBody(options), options.firewall);
     return firewallStatus(options.firewall);
   }
-  if (verb !== "install-updates") {
+  if (verb !== "install-updates" && verb !== "install-fail2ban") {
     verb satisfies never;
     failAction(`unknown system tweaks verb '${verb}'`);
   }
   // One deadline for the install and the state read that answers it, which the
   // gateway's timeout is sized from.
   const now = options.now ?? Date.now;
-  const run = withDeadline(options.updates?.run ?? systemRun, now() + INSTALL_DEADLINE_MS, now);
+  const deadline = now() + INSTALL_DEADLINE_MS;
+  if (verb === "install-fail2ban") {
+    const run = withDeadline(options.loginJails?.run ?? systemRun, deadline, now, "fail2ban");
+    const bounded = { ...options, loginJails: { ...options.loginJails, run } };
+    await withFileLock(pathsFor(options).lockFile, 15, "another system tweaks change is still running", async () => {
+      const paths = pathsFor(options);
+      const settings = readSettings(paths);
+      // Not there before, so not running before: switching the jails off stops and disables it.
+      const before = settings.fail2banBefore ?? (missingFail2ban(bounded) ? { enabled: false, active: false } : null);
+      installLoginJailPackages(bounded.loginJails);
+      settleLoginJails(paths, { ...settings, fail2banBefore: before }, bounded);
+    });
+    return stateOf(bounded);
+  }
+  const run = withDeadline(options.updates?.run ?? systemRun, deadline, now);
   const bounded = { ...options, updates: { ...options.updates, run }, uploadProgress: { ...options.uploadProgress, run } };
   await withFileLock(pathsFor(options).lockFile, 15, "another system tweaks change is still running", async () =>
     installUnattendedUpgrades(bounded.updates));
   return stateOf(bounded);
+}
+
+function missingFail2ban(options: SystemTweaksOptions): boolean {
+  const run = options.loginJails?.run ?? systemRun;
+  return !run("dpkg-query", ["-W", "-f=${Status}", "fail2ban"]).stdout.includes("install ok installed");
 }
 
 export async function runSystemTweaksAction(argv: string[], options: SystemTweaksOptions = {}): Promise<number> {
@@ -499,6 +571,7 @@ export function systemTweaksUpkeep(options: SystemTweaksOptions = {}): string | 
       if (applied.changed) notices.push("automatic updates config restored");
     }
     if (settings.blockForgedRealIp && applyRealIp(true, options.realIp)) notices.push("visitor-IP trust narrowed again");
+    if (settleLoginJails(paths, settings, options)) notices.push("login jails restored");
     return notices.join("; ") || null;
   });
 }
@@ -512,6 +585,8 @@ export function withdrawSystemTweaks(options: SystemTweaksOptions = {}): void {
       if (settings.enabledTimers.length) writeSettings(paths, { ...settings, enabledTimers: [] });
       applyRealIp(false, options.realIp);
       applyPhpMyAdmin(false, options.phpMyAdmin);
+      releaseLoginJails(settings.fail2banBefore, options.loginJails);
+      if (settings.fail2banBefore) writeSettings(paths, { ...readSettings(paths), fail2banBefore: null });
       try {
         removeFileManagerGuard(options.fileManagerGuard);
         removeVhostGuard(options.vhostGuard);
@@ -550,6 +625,7 @@ export function restoreSystemTweaks(options: SystemTweaksOptions = {}): void {
       if (!settings.uploadProgressGuard) reconcilePhpGuard(true, false, guardOptions(options));
       if (settings.blockForgedRealIp) applyRealIp(true, options.realIp);
       if (settings.protectPhpMyAdmin) applyPhpMyAdmin(true, options.phpMyAdmin);
+      settleLoginJails(paths, readSettings(paths), options);
       if (settings.blockVhostInjection) queueVhostGuard(options.vhostGuard);
       if (settings.isolatePhpPools) installPoolIsolation(options.phpPools);
       if (settings.confineFileManager) queueFileManagerGuard(options.fileManagerGuard);

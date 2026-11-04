@@ -194,6 +194,51 @@ session format: switch the setting off until clp-addons is updated.
 The setting also lets only the panel's own nginx connect to the File Manager's
 PHP. Turning it off removes the guard and gives the socket back to group `clp`.
 
+## Failed logins
+
+**Block panel login guessing** is on by default. After 5 failed panel logins
+from one address within an hour, fail2ban blocks that address from port 8443 for
+an hour. Wrong passwords, wrong two-factor codes and wrong basic-auth passwords
+all count. The block covers only the panel, so you can still reach the server
+over SSH.
+
+Logins through CloudPanel's custom domain count too. They pass through the
+sites' nginx on port 443, so an address blocked for them loses HTTPS to every
+site on this server for the hour, not only the panel.
+
+**Block SSH login guessing** is off by default. Switched on, it blocks an address
+from SSH for an hour after 5 failed logins within an hour. An SSH client that
+offers several wrong keys counts as failing, so make sure yours offers the right
+key first.
+
+Both need fail2ban. If it is missing, choose **Install fail2ban**, which installs
+`fail2ban`, `python3-systemd` and `nftables`. Switching both jails off, or
+disabling System Tweaks, puts fail2ban back as it was: stopped if it was not
+running before, and still running with your own jails if it was.
+
+Never blocked: loopback, this server's own addresses, private networks and
+Cloudflare. Behind Cloudflare the server sees only Cloudflare's addresses, so
+the panel jail blocks nothing; use Cloudflare's rate limiting there. Add your
+own addresses to `ignoreip` under `[DEFAULT]` in `/etc/fail2ban/jail.local`,
+keeping `127.0.0.1/8 ::1`, then run `fail2ban-client reload`.
+
+Blocked addresses are listed under the jails, each with **Unblock**. Over SSH:
+
+```bash
+fail2ban-client status clp-addons-panel   # or clp-addons-domain, sshd
+fail2ban-client unban 203.0.113.7
+```
+
+The setting never changes sshd. The page warns when sshd accepts passwords or
+root can log in with one. To stop that, first check that your key logs in, then
+put these lines in a file such as `/etc/ssh/sshd_config.d/10-keys-only.conf` and
+run `systemctl reload ssh`:
+
+```
+PasswordAuthentication no
+PermitRootLogin prohibit-password
+```
+
 ## Abandoned temp files
 
 Every 15 minutes System Tweaks removes the PHP and ImageMagick temp files that

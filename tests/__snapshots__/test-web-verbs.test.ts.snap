@@ -112,9 +112,11 @@ stager:prune                       admin
 stager:sites                       admin
 stager:watch-job                   admin stream
 system-tweaks:firewall             admin
+system-tweaks:install-fail2ban     admin
 system-tweaks:install-updates      admin
 system-tweaks:set-file-manager-guard admin
 system-tweaks:set-firewall-protocol admin
+system-tweaks:set-login-jails      admin
 system-tweaks:set-panel-php        admin
 system-tweaks:set-php-pools        admin
 system-tweaks:set-phpmyadmin       admin
@@ -123,6 +125,7 @@ system-tweaks:set-updates          admin
 system-tweaks:set-upload-guard     admin
 system-tweaks:set-vhost-guard      admin
 system-tweaks:state                admin
+system-tweaks:unban                admin
 terminal:session                   admin duplex
 wp-tools:domain-link-settings      admin
 wp-tools:job                       admin
