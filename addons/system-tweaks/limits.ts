@@ -16,3 +16,5 @@ export const POOL_GUARD_GATEWAY_TIMEOUT_MS = 90_000 + 4 * COMMAND_MS;
 export const PHP_POOLS_GATEWAY_TIMEOUT_MS = 4 * COMMAND_MS + 30_000;
 /** Nginx validation and reload, a rollback of both, lock waiting and the reply; phpMyAdmin's switch uses it too. */
 export const REAL_IP_GATEWAY_TIMEOUT_MS = 4 * COMMAND_MS + 60_000;
+/** The panel nginx's test and reload and their rollback, a fail2ban config test and reload, and the reply. */
+export const LOGIN_JAILS_GATEWAY_TIMEOUT_MS = 6 * COMMAND_MS + 30_000;

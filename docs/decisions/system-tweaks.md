@@ -8,9 +8,11 @@ Firewall page.
 
 ## The page
 
-Two cards: Automatic updates, which an operator comes back to, then one
+Three cards: Automatic updates, which an operator comes back to; one
 Settings card for the panel's PHP, the upload-progress mitigation, forged
-visitor IPs, phpMyAdmin and nginx config injection, which are set once. Each row says what it does in a sentence; the
+visitor IPs, phpMyAdmin and nginx config injection, which are set once; and
+Failed logins, with the two fail2ban jails and the addresses they block. Each
+row says what it does in a sentence; the
 reasons are here. The Nginx, MySQL, CloudPanel and reboot rows appear only once
 System Tweaks' own switch is on, since they change nothing before. The
 repositories and each PHP-FPM's upload-progress value fold into a summary that
@@ -818,6 +820,150 @@ file. A closed descriptor or a process that has exited can be skipped; an
 inspection failure for a process whose directory still exists stops the cleanup,
 and the pass reports it, as it does unlink errors other than a file that has
 already gone. The rest of the upkeep still runs.
+
+## Login jails
+
+CloudPanel has no limit on failed panel logins, and several of its weaknesses
+start with one. Two settings give fail2ban a jail each: **Block panel login
+guessing** (`loginJails.panel`, on by default) and **Block SSH login guessing**
+(`loginJails.ssh`, off by default). Both ban after 5 failures within an hour,
+for an hour, and only on their own port: 8443 for the panel, sshd's ports for
+SSH. An operator who mistypes the panel password from the office can still SSH
+in and unblock themselves, and the reverse.
+
+### Where failed panel logins come from
+
+CloudPanel's `event` table records only successful logins, and the panel's
+nginx has `access_log off;`. Its login form is Symfony's: a failed `POST /login`,
+a bad CSRF token included, answers 302 to `/login`, and a successful one 302 to
+`/` or the page the visitor wanted. A wrong two-factor code re-renders
+`/login/mfa` with 200, and the right one answers 302. The panel's basic auth
+answers 401, and a 401 to a request carrying a user name is a wrong password.
+
+So the panel's `nginx.conf` gets a marked block in place of its http-level
+`access_log off;` (kept, commented, as `#clp-addons:login-log access_log off;`):
+three `map`s that name a failure `password`, `mfa` or `basic-auth`, and an
+`access_log` to `syslog:server=unix:/dev/log` tagged `clp_addons_panel` with
+`if=` on that name. Nothing else is logged. The server block in `cloudpanel.conf`
+has no `access_log` of its own, so it inherits this one; editing the http block
+leaves `cloudpanel.conf` alone, which the `/addons/` proxy's baseline hash
+covers. If an operator gives the server block its own `access_log`, the jail
+sees nothing.
+
+The maps match `$request_uri`, the path as the client sent it, because by the
+time nginx logs, `try_files` has changed `$uri` to `/index.php`. Symfony 6's
+router matches the path after `rawurldecode`, and it takes `/index.php` off the
+front as the base URL, so `/login/%6dfa`, `/login%2Fmfa` and
+`/index.php/login/mfa` all reach the two-factor form. Each map therefore
+accepts any character of the path, and of an optional `/index.php` prefix,
+either as itself or percent-encoded, and ignores case. A spelling that matches
+but that CloudPanel does not route, such as `/LOGIN/MFA`, gets a 404 and is not
+counted, so the wider match adds no false failures. The password login needs no
+such care: Symfony's form authenticator runs only when the raw path is exactly
+`/login`, and every other spelling just renders the form.
+
+The line names `$realip_remote_addr`, the address that opened the connection,
+because that is what nftables can block. `$remote_addr` would be wrong both
+ways: behind Cloudflare it is the visitor, whom a ban on this server cannot
+stop, and through a proxy the panel trusts it can come from a header. The
+panel jail's `ignoreip` holds the private ranges and Cloudflare's list (from
+`/etc/nginx/cloudflare/ips`), the proxies the panel trusts, so the jail never
+blocks a proxy and everyone behind it. Behind Cloudflare the jail therefore
+blocks nothing; Cloudflare's own rate limiting is the tool there.
+
+### The custom domain
+
+CloudPanel's custom domain (Admin → Settings) is a vhost of the sites' nginx,
+`/etc/nginx/sites-enabled/custom-domain.conf`, that proxies to
+`https://127.0.0.1:8443/` with `X-Forwarded-For $remote_addr`. The panel's
+nginx sees every such login from `127.0.0.1`, which the panel jail never bans.
+Trusting the forwarded address when it comes from loopback would let any local
+account, a site's SSH user included, connect to `127.0.0.1:8443` with a
+header naming the operator's address and have it banned.
+
+So the same maps go at the top of that vhost, outside its server block, and an
+`access_log` tagged `clp_addons_domain` goes after its `server_name`. The sites'
+nginx logs `$realip_remote_addr`, the client's own connection. Its workers run
+as root on CloudPanel (the `user` line of `/etc/nginx/nginx.conf`), so the
+`clp-addons-domain` jail matches `_UID=0`, and only root can write a line it
+counts. It bans on 443. nftables cannot see which host a client asked for, so
+an address blocked there loses HTTPS to every site on the server for the hour;
+the page says so. The jail has the panel jail's `ignoreip`, so a custom domain
+behind Cloudflare is not throttled either.
+
+CloudPanel rewrites the vhost whenever an administrator saves the custom
+domain, and the 15-minute repair puts the log back, so logins through a newly
+saved domain can go uncounted for up to 15 minutes. The new-site watcher wakes
+on that write too, but runs its hooks only when the list of sites changes. A vhost with more than one server block or
+`server_name` is left alone, and the page says that logins through it are not
+counted. The edit uses the shared nginx transaction for the sites' nginx: `nginx
+-t`, a reload, and the file restored on failure.
+
+journald stores the lines of an account with uid 1000 or above, such as `clp`,
+in that user's journal, which fail2ban's systemd backend skips by default, so
+the jail uses `backend = systemd[journalflags=1]` (local journals, every user).
+Its `journalmatch` is `SYSLOG_IDENTIFIER=clp_addons_panel _UID=<clp's uid>`.
+journald takes `_UID` from the socket's credentials, so another local account
+can `logger -t clp_addons_panel` but cannot get a line matched, and cannot get
+an address banned. A log file would need rotating, and nginx gives a reopened
+log to its worker account.
+
+### fail2ban's files and bans
+
+Three files, each rewritten whole and removed when both jails are off:
+
+- `/etc/fail2ban/jail.d/clp-addons.local` holds the jails. A `.local` in
+  `jail.d` is read after `jail.local`, so its `[sshd]` decides: `enabled = false`
+  while the SSH setting is off, which also stops Debian's `defaults-debian.conf`
+  from starting an sshd jail that fails without `/var/log/auth.log` and takes
+  fail2ban down with it.
+- `/etc/fail2ban/jail.d/00-clp-addons.conf` sets `[DEFAULT] ignoreip =
+  127.0.0.1/8 ::1`. The jails add to it with `%(known/ignoreip)s`, which fails
+  when nothing defined it before; as a `.conf` read first, an operator's own
+  `ignoreip` in `jail.local` replaces it and is kept. fail2ban's
+  `ignoreself` covers the server's own addresses.
+- `/etc/fail2ban/filter.d/clp-addons-panel.conf` matches the nginx line.
+
+Bans use `nftables-multiport`, which keeps them in fail2ban's own
+`inet f2b-table`. CloudPanel's Firewall page runs `ufw --force reset`, and ufw
+flushes only the iptables-nft `ip filter` and `ip6 filter` tables, so the bans
+stay. Debian's default `iptables-multiport` chains would be flushed with them.
+The chain hooks input at priority -1, before ufw's.
+
+The SSH jail reads the journal with `backend = systemd`, since Debian 12 ships
+without rsyslog. It is off by default because a client that offers several
+wrong keys counts as failed logins, which could block the operator from the one
+way in that does not depend on the panel. The setting never edits
+`sshd_config`: turning off password or root login without a working key locks
+the operator out. The page reads `sshd -T` and says when sshd accepts passwords
+or root can log in with one, and how to change it.
+
+### The service
+
+The jails need `fail2ban`, `python3-systemd` and `nftables`; the page offers to
+install whichever are missing, and does nothing until they are there. Writing
+the files runs `fail2ban-client -t`, and a refused config puts the files back.
+A running fail2ban is reloaded, a stopped or failed one restarted and enabled
+at boot. A masked unit is left alone.
+
+The first time it starts fail2ban, System Tweaks records whether the unit was
+enabled and running (`fail2banBefore`). Switching both jails off, or disabling
+System Tweaks, removes the files and both nginx edits, then stops or disables
+fail2ban only if it was not running or enabled before; an operator's own fail2ban
+is reloaded and keeps running. If fail2ban was already running with an `sshd`
+jail when System Tweaks took over, the SSH setting turns on with it, so the
+operator's SSH protection stays. Installing fail2ban from the page records it
+as not running before.
+
+The 15-minute repair rewrites the files and both nginx edits, restarts a
+fail2ban that stopped, and puts the block back after CloudPanel rewrites the
+panel's `nginx.conf`. The page lists each jail's bans with
+`fail2ban-client get <jail> banip --with-time`, and its Unblock runs
+`fail2ban-client set <jail> unbanip <ip>`; the `unban` verb takes only these
+three jails and an address.
+
+On a CloudPanel whose panel shares the sites' nginx there is no panel
+`nginx.conf` to edit, so the panel jail says it cannot run there.
 
 ## Firewall
 

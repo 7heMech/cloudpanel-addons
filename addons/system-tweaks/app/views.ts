@@ -7,6 +7,7 @@ import type { CoverageRow, LastRun, UpdateSettings, UpdatesStatus } from "../upd
 import type { FpmUploadProgress } from "../upload-progress";
 import type { PanelPhpChoice, PanelPhpStatus } from "../panel-php";
 import type { FirewallStatus } from "../firewall";
+import { DOMAIN_JAIL, JAIL_LIMITS, PANEL_JAIL, type Ban, type SshLogin } from "../login-jails";
 
 import STYLE from "./views.css" with { type: "text" };
 import SCRIPT from "./views.client.js" with { type: "text" };
@@ -437,6 +438,101 @@ function firewallLine(status: FirewallStatus | { error: string }): string {
     : `<br>Rules on CloudPanel's ${link} page can open UDP ports too.`;
 }
 
+type LoginJails = SystemTweaksState["loginJails"];
+type LoginJailsReady = Exclude<LoginJails, { error: string }>;
+
+const LIMIT_TEXT = `${JAIL_LIMITS.maxretry} failed logins within an hour`;
+
+function jailLine(jails: LoginJailsReady, jail: string, on: boolean): string {
+  if (!on) return `${badge("Off", "plain")}`;
+  if (jails.missing.length) return `${badge("Not running", "warn")} <span>Install fail2ban below.</span>`;
+  if (jails.service === "masked") return `${badge("Not running", "warn")} <span>fail2ban.service is masked. Unmask it, then run clp-addons repair.</span>`;
+  if (jail === PANEL_JAIL && jails.panelLog === null) {
+    return `${badge("Not running", "warn")} <span>This CloudPanel has no separate panel nginx to log failed logins from.</span>`;
+  }
+  if (jail === PANEL_JAIL && jails.problem) return `${badge("Not running", "warn")} <span>${esc(jails.problem)}</span>`;
+  if (!jails.running.includes(jail) || (jail === PANEL_JAIL && !jails.panelLog)) {
+    return `${badge("Not running", "warn")} <span>Run clp-addons repair.</span>`;
+  }
+  return `${badge("On", "ok")} <span>fail2ban is watching.</span>`;
+}
+
+/** What sshd accepts now, and how to stop it. The setting never changes sshd. */
+function sshdWarning(sshd: SshLogin | null): string {
+  if (!sshd) return "";
+  const open: string[] = [];
+  if (sshd.password) open.push("SSH accepts passwords");
+  if (sshd.rootLogin === "yes") open.push(`root can log in with ${sshd.password ? "a password" : "a key or password"}`);
+  if (!open.length) return "";
+  return warning(`${esc(open.join(", and "))}. Once your key logs in, set <code>PasswordAuthentication no</code> and <code>PermitRootLogin prohibit-password</code> in a file in /etc/ssh/sshd_config.d/, then run <code>systemctl reload ssh</code>.`);
+}
+
+function bansTable(bans: Ban[]): string {
+  const command = `<p class="hint">Or run <code>fail2ban-client unban &lt;address&gt;</code>.</p>`;
+  if (!bans.length) return `<details class="st-fold"><summary>Blocked addresses: none</summary>${command}</details>`;
+  const rows = bans.map((ban) => `
+          <tr><td><span class="st-name">${esc(ban.ip)}</span><span class="hint st-detail">${ban.jail === PANEL_JAIL ? "Panel" : ban.jail === DOMAIN_JAIL ? "Custom domain, HTTPS" : "SSH"}, until ${esc(ban.until)}</span></td>
+            <td class="st-state"><button class="btn btn-sm" type="button" data-jail="${esc(ban.jail)}" data-ip="${esc(ban.ip)}" onclick="unban(this)">Unblock</button></td></tr>`).join("");
+  return `
+      <details class="st-fold" open>
+        <summary>${badge(String(bans.length), "warn")} Blocked address${bans.length === 1 ? "" : "es"}</summary>
+        <div class="table-scroll"><table class="st-table"><thead><tr><th>Address</th><th class="st-state"></th></tr></thead>
+          <tbody>${rows}</tbody></table></div>${command}
+      </details>`;
+}
+
+/** Logins through CloudPanel's custom domain reach the panel from loopback, so the sites' nginx counts them. */
+function customDomainLine(jails: LoginJailsReady): string {
+  const domain = jails.customDomain;
+  if (!domain || !jails.panel || jails.missing.length) return "";
+  if (!domain.supported) {
+    return warning(`Logins through ${esc(domain.name)} are not counted: its vhost has more than one server block or server_name, so System Tweaks leaves it alone.`);
+  }
+  if (!domain.logged || !jails.running.includes(DOMAIN_JAIL)) {
+    return warning(`Logins through ${esc(domain.name)} are not counted yet. Run clp-addons repair.`);
+  }
+  return `<p class="hint st-suggest">Logins through ${esc(domain.name)} count too. A block for those covers HTTPS on port 443 for every site on this server, because the firewall cannot tell sites apart.</p>`;
+}
+
+function loginJailsCard(jails: LoginJails): string {
+  if ("error" in jails) {
+    return `
+    <div class="card">
+      <div class="card-header"><h2>Failed logins</h2></div>
+      <div class="alert st-alert" role="alert">${esc(jails.error)}</div>
+    </div>`;
+  }
+  const install = jails.missing.length && (jails.panel || jails.ssh) ? `
+      <p class="st-status">${badge("Not installed", "bad")} <span>${esc(jails.missing.join(", "))} ${jails.missing.length === 1 ? "is" : "are"} not installed.</span></p>
+      <div class="st-install"><button class="btn" type="button" onclick="installFail2ban(this)">Install fail2ban</button></div>` : "";
+  return `
+    <div class="card">
+      <div class="card-header"><h2>Failed logins</h2></div>
+      <div class="tweak-list">${settingRow({
+        key: "panel",
+        title: "Block panel login guessing",
+        description: [
+          `After ${LIMIT_TEXT}, fail2ban blocks the address from the panel's port 8443 for an hour. This server's own addresses, private networks and Cloudflare are never blocked.`,
+          "Behind Cloudflare the server sees only Cloudflare's addresses, so nothing is blocked; use Cloudflare's rate limiting there.",
+        ],
+        checked: jails.panel,
+        onchange: "setLoginJails(this)",
+        extra: `<p class="st-status">${jailLine(jails, PANEL_JAIL, jails.panel)}</p>${customDomainLine(jails)}`,
+      })}${settingRow({
+        key: "ssh",
+        title: "Block SSH login guessing",
+        description: [
+          `After ${LIMIT_TEXT}, fail2ban blocks the address from SSH for an hour.`,
+          "Off by default, because an SSH client that offers several wrong keys counts as failed logins and could block you.",
+        ],
+        checked: jails.ssh,
+        onchange: "setLoginJails(this)",
+        extra: `<p class="st-status">${jailLine(jails, "sshd", jails.ssh)}</p>${sshdWarning(jails.sshd)}`,
+      })}
+      </div>${install}${jails.running.length ? bansTable(jails.bans) : ""}
+    </div>`;
+}
+
 export function dashboardView(state: SystemTweaksState, now = Date.now()): string {
   return `
     <div class="page-heading">
@@ -450,5 +546,5 @@ export function dashboardView(state: SystemTweaksState, now = Date.now()): strin
       <div class="card-header"><h2>Automatic updates</h2></div>
       <div class="tweak-list">${updateRows(state.updates, state.settings)}
       </div>${statusList(state.updates, now)}${coverageDetails(state.updates)}
-    </div>${settingsCard(state)}`;
+    </div>${settingsCard(state)}${loginJailsCard(state.loginJails)}`;
 }
