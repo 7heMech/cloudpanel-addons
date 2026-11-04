@@ -8,9 +8,9 @@ import type { AddonDefinition } from "../../cli/addon-catalog";
 export const SYSTEM_TWEAKS_ADDON: AddonDefinition = {
   name: "system-tweaks",
   title: "System Tweaks",
-  description: "Automatic security updates, the PHP upload-progress mitigation, a newer PHP for CloudPanel itself, forged visitor-IP blocking, nginx config injection blocking, phpMyAdmin lockdown, a File Manager kept in each site's home, fail2ban jails for failed logins, /tmp cleanup and UDP firewall rules.",
+  description: "Automatic security updates, the PHP upload-progress mitigation, a newer PHP for CloudPanel itself, forged visitor-IP blocking, the panel's own certificate, nginx config injection blocking, phpMyAdmin lockdown, a File Manager kept in each site's home, fail2ban jails for failed logins, /tmp cleanup and UDP firewall rules.",
   added: "2.0.0-rc.1",
-  changed: { in: "2.0.0", note: "Open UDP ports from CloudPanel's own Firewall page." },
+  changed: { in: "2.0.0", note: "Open UDP ports from CloudPanel's own Firewall page. The panel's shared certificate is replaced, so your browser asks you to accept the new one." },
   preselected: true,
   targets: SYSTEM_TWEAKS_TARGETS,
   handler: handle,

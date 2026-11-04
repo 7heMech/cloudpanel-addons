@@ -319,6 +319,23 @@ function phpMyAdminLine(state: SystemTweaksState["phpMyAdmin"]): string {
   return `${badge("Off", "plain")} <span>phpMyAdmin's example sign-on script lets anyone make this server try MySQL logins on other hosts.</span>`;
 }
 
+/** Which certificate the panel serves on 8443, and the custom domain's, which the sites' Nginx serves. */
+export function panelCertLine(state: SystemTweaksState["panelCert"]): string {
+  const until = state.expires ? ` It expires on ${state.expires.slice(0, 10)}.` : "";
+  const line = {
+    shared: `${badge("Shared", state.replace ? "bad" : "warn")} <span>The panel uses CloudPanel's default certificate, whose private key is public.${
+      state.replace ? " Run clp-addons repair." : ""}</span>`,
+    generated: `${badge("Generated", "ok")} <span>The panel uses a certificate made on this server for ${esc((state.names ?? []).join(", "))}.${until}</span>`,
+    own: `${badge("Own", "ok")} <span>The panel uses its own certificate${state.subject ? `, ${esc(state.subject)}` : ""}.${until}</span>`,
+    unknown: `${badge("Unknown", "warn")} <span>${esc(state.problem ?? "")}</span>`,
+  }[state.kind];
+  const fingerprint = state.kind === "generated" && state.fingerprint
+    ? `<br><span class="hint">SHA-256 ${esc(state.fingerprint)}: check it against the one your browser shows before you accept it.</span>` : "";
+  const domain = state.customDomain
+    ? `<br><span>Your custom domain ${esc(state.customDomain)} serves its own certificate on port 443 and is not changed.</span>` : "";
+  return line + fingerprint + domain;
+}
+
 /** Site settings saved before the guard, or by a site's own user, that it would refuse now. */
 function storedValuesWarning(stored: SystemTweaksState["vhostGuard"]["stored"]): string {
   if ("error" in stored) return `<p class="st-status hint">Stored site settings could not be checked: ${esc(stored.error)}</p>`;
@@ -394,6 +411,16 @@ function settingsCard(state: SystemTweaksState): string {
         checked: state.phpMyAdmin.enabled,
         onchange: "setPhpMyAdmin(this)",
         extra: `<p class="st-status">${phpMyAdminLine(state.phpMyAdmin)}</p>`,
+      })}${settingRow({
+        key: "replacePanelCert",
+        title: "Replace the shared panel certificate",
+        description: [
+          "Every CloudPanel install serves port 8443 with the same certificate and private key, so anyone who sees the traffic can decrypt it. This swaps it for one generated on this server.",
+          "A certificate you installed yourself is left alone. Off stops replacing it; a generated one stays.",
+        ],
+        checked: state.panelCert.replace,
+        onchange: "setPanelCert(this)",
+        extra: `<p class="st-status">${panelCertLine(state.panelCert)}</p>`,
       })}${settingRow({
         key: "blockVhostInjection",
         title: "Block nginx config injection",

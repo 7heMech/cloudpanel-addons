@@ -18,3 +18,5 @@ export const PHP_POOLS_GATEWAY_TIMEOUT_MS = 4 * COMMAND_MS + 30_000;
 export const REAL_IP_GATEWAY_TIMEOUT_MS = 4 * COMMAND_MS + 60_000;
 /** The panel nginx's test and reload and their rollback, a fail2ban config test and reload, and the reply. */
 export const LOGIN_JAILS_GATEWAY_TIMEOUT_MS = 6 * COMMAND_MS + 30_000;
+/** Generating a key pair, Nginx validation and reload, a rollback of both, lock waiting and the reply. */
+export const PANEL_CERT_GATEWAY_TIMEOUT_MS = 5 * COMMAND_MS + 60_000;

@@ -97,6 +97,31 @@ Turning the setting off takes the rules out of CloudPanel's panel vhost. While
 it is on, repair puts them back within seconds when a CloudPanel update rewrites
 that file.
 
+## Panel certificate
+
+**Replace the shared panel certificate** is on by default. CloudPanel serves its
+panel on port 8443 with the same certificate and private key on every server, so
+anyone who can see the traffic can read it. System Tweaks replaces it with a
+certificate made on this server for its hostname and IP addresses. Your browser
+warns about the new certificate once. Compare the SHA-256 fingerprint in the
+row with the one your browser shows, then accept it.
+
+A certificate you installed yourself is left alone. A CloudPanel custom domain,
+set under **Admin → Settings**, keeps its own Let's Encrypt certificate on port
+443. Port 8443 still answers on the server's IP, so it gets the new certificate
+too.
+
+A CloudPanel update puts the shared certificate back, and the next repair,
+within 15 minutes, installs the same generated one again. Run `clp-addons
+repair` to do it at once. Switching the setting off stops that and keeps the
+certificate the panel has.
+
+To see what the panel serves:
+
+```bash
+openssl s_client -connect 127.0.0.1:8443 </dev/null 2>/dev/null | openssl x509 -noout -subject -enddate -fingerprint -sha256
+```
+
 ## Nginx config injection
 
 **Block nginx config injection** is on by default. CloudPanel writes site

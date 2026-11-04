@@ -546,6 +546,7 @@ function systemTweaksPreviewState(url: URL): SystemTweaksState {
     panelPhp: panelPhpPreviewStatus(url),
     realIp: { blockForged: url.searchParams.get("realip") !== "off", trustsAnyAddress: url.searchParams.get("realip") === "off", problem: "" },
     phpMyAdmin: { enabled: url.searchParams.get("pma") !== "off", active: url.searchParams.get("pma") !== "off", problem: "" },
+    panelCert: panelCertPreviewStatus(url.searchParams.get("cert")),
     loginJails: {
       panel: true, ssh: false, service: "active", running: ["clp-addons-panel", "clp-addons-domain"], panelLog: true, problem: "",
       customDomain: url.searchParams.has("nodomain") ? null : { name: "panel.example.com", logged: true, supported: true },
@@ -580,6 +581,17 @@ function systemTweaksPreviewState(url: URL): SystemTweaksState {
   };
 }
 
+/** `?cert=shared`, `own` or `domain`; generated otherwise. */
+function panelCertPreviewStatus(kind: string | null): SystemTweaksState["panelCert"] {
+  if (kind === "shared") return { kind: "shared", replace: false, subject: "CN=cloudpanel.clp", expires: "2020-10-13T13:34:38.000Z" };
+  if (kind === "own") return { kind: "own", replace: true, subject: "CN=panel.example.com", expires: "2027-01-20T23:44:08.000Z" };
+  return {
+    kind: "generated", replace: true, subject: "CN=panel", names: ["panel", "203.0.113.10", "2001:DB8:0:0:0:0:0:10"],
+    expires: "2029-01-12T11:13:22.000Z", fingerprint: "B3:8F:1F:49:FF:E3:47:F6:85:15:A5:BF:F8:89:A6:B6:B5:C8:34:4A:1C:89:4D:E6:1F:03:8A:C6:A5:7D:99:5D",
+    ...(kind === "domain" ? { customDomain: "panel.example.com" } : {}),
+  };
+}
+
 function systemTweaksPreviewMutation(path: string, source: URL, body: Record<string, any>): Response | null {
   if (!path.startsWith("/addons/system-tweaks/api/")) return null;
   const state = structuredClone(systemTweaksPreviewState(source));
@@ -592,6 +604,8 @@ function systemTweaksPreviewMutation(path: string, source: URL, body: Record<str
     state.phpMyAdmin = { enabled: body.enabled === true, active: body.enabled === true, problem: "" };
   } else if (path.endsWith("/file-manager-guard")) {
     state.fileManagerGuard = { enabled: body.enabled === true, active: body.enabled === true };
+  } else if (path.endsWith("/panel-cert")) {
+    state.panelCert = { ...(body.enabled === true ? panelCertPreviewStatus(null) : state.panelCert), replace: body.enabled === true };
   } else if (path.endsWith("/real-ip")) {
     state.realIp = { blockForged: body.enabled === true, trustsAnyAddress: body.enabled !== true, problem: "" };
   } else if (path.endsWith("/login-jails") && !("error" in state.loginJails)) {

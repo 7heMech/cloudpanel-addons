@@ -1,9 +1,10 @@
 import { afterEach, expect, mock, test } from "bun:test";
 import { Database } from "bun:sqlite";
 import { chmodSync, existsSync, lstatSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from "node:fs";
+import { X509Certificate } from "node:crypto";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import type { CommandResult } from "../cli/action-common";
+import { runCommand, type CommandResult } from "../cli/action-common";
 import { inspectPhpGuard, reconcilePhpGuard, type PhpGuardOptions } from "../cli/php-guard";
 import {
   executeSystemTweaksAction, readSettings, restoreSystemTweaks, systemTweaksMaintenance, systemTweaksPhpMyAdmin, systemTweaksPhpPools, systemTweaksUpkeep, withdrawSystemTweaks,
@@ -408,6 +409,16 @@ function box(options: { installed?: boolean; timers?: Record<string, string>; fa
       },
       realIp: { run: nginxRun, paths: { nginxConf, panelConf, cloudflareIps, panelUid: uid, rootUid: uid } },
       phpMyAdmin: { run: () => ok(), paths: { vhost: panelVhost, panelConf, panelUid: uid, rootUid: uid } },
+      // No panel server block until a test writes one.
+      panelCert: {
+        run: (command, args) => command === "openssl" ? runCommand(command, args) : nginxRun(command, args),
+        hostname: () => "panel", addresses: () => ["203.0.113.10"],
+        paths: {
+          vhost: join(dir, "cloudpanel.conf"), panelConf, cert: join(dir, "cert.crt"), key: join(dir, "private.key"),
+          storedCert: join(dir, "state", "panel-cert.crt"), storedKey: join(dir, "state", "panel-cert.key"),
+          customDomainVhost: join(dir, "custom-domain.conf"), panelUid: uid, rootUid: uid,
+        },
+      },
       vhostGuard: {
         run: fpmRun, paths: vhostGuardPaths, sleep: async () => {}, healthTimeoutMs: 0,
         request: async (_socket, params) => ({
@@ -848,6 +859,59 @@ test("switching phpMyAdmin's lockdown off restores the vhost and repair leaves i
   expect(readFileSync(b.panelVhost, "utf8")).toBe(PANEL_VHOST);
 });
 
+// --- Panel certificate ---------------------------------------------------------
+
+/** A stand-in for CloudPanel's shared pair, made fresh so no key is committed. */
+function sharedPanelCert(b: Box): { cert: string; key: string } {
+  const paths = b.options.panelCert!.paths!;
+  const made = runCommand("openssl", ["req", "-x509", "-newkey", "ec", "-pkeyopt", "ec_paramgen_curve:P-256", "-nodes",
+    "-days", "30", "-subj", "/CN=cloudpanel.clp", "-keyout", paths.key!, "-out", paths.cert!]);
+  if (!made.ok) throw new Error(made.stderr);
+  writeFileSync(paths.vhost!, `server {\n  listen 8443 ssl;\n  ssl_certificate_key ${paths.key};\n  ssl_certificate ${paths.cert};\n  set $basicAuth "off";\n  if (-f /home/clp/services/nginx/basic-auth/credentials) {\n    set $basicAuth "on";\n  }\n  if ($request_uri ~ ^/phpmyadmin) {\n    set $basicAuth "off";\n  }\n  auth_basic $basicAuth;\n  auth_basic_user_file /home/clp/services/nginx/basic-auth/credentials;\n}\n`);
+  const cert = readFileSync(paths.cert!, "utf8");
+  b.options.panelCert!.sharedFingerprint = new X509Certificate(cert).fingerprint256;
+  return { cert, key: readFileSync(paths.key!, "utf8") };
+}
+
+test("the shared panel certificate is replaced on activation and repair, and off stops only that", async () => {
+  const b = box();
+  const shared = sharedPanelCert(b);
+  const certFile = b.options.panelCert!.paths!.cert!;
+  expect((await act(b, ["state"])).panelCert).toMatchObject({ kind: "shared", replace: true });
+  restoreSystemTweaks(b.options);
+  expect((await act(b, ["state"])).panelCert).toMatchObject({ kind: "generated", replace: true, names: ["panel", "203.0.113.10"] });
+  const generated = readFileSync(certFile, "utf8");
+
+  writeFileSync(certFile, shared.cert);
+  writeFileSync(b.options.panelCert!.paths!.key!, shared.key);
+  expect(await systemTweaksMaintenance(b.options)).toContain("panel's shared certificate replaced");
+  expect(readFileSync(certFile, "utf8")).toBe(generated);
+
+  // Neither switching off nor disabling puts the published key back.
+  const off = await act(b, ["set-panel-cert"], { enabled: false });
+  expect(off.panelCert).toMatchObject({ kind: "generated", replace: false });
+  withdrawSystemTweaks(b.options);
+  expect(readFileSync(certFile, "utf8")).toBe(generated);
+  writeFileSync(certFile, shared.cert);
+  writeFileSync(b.options.panelCert!.paths!.key!, shared.key);
+  expect(await systemTweaksMaintenance(b.options) ?? "").not.toContain("certificate");
+  expect(readFileSync(certFile, "utf8")).toBe(shared.cert);
+
+  expect((await act(b, ["set-panel-cert"], { enabled: true })).panelCert).toMatchObject({ kind: "generated", replace: true });
+  expect(readFileSync(certFile, "utf8")).toBe(generated);
+});
+
+test("a panel certificate Nginx rejects keeps the switch where it was", async () => {
+  const b = box();
+  const shared = sharedPanelCert(b);
+  await act(b, ["set-panel-cert"], { enabled: false });
+  b.options.panelCert!.run = (command, args) => command === "openssl" ? runCommand(command, args)
+    : { ok: command !== "nginx", stdout: "", stderr: "emerg" };
+  await expect(act(b, ["set-panel-cert"], { enabled: true })).rejects.toThrow("Nginx validation failed");
+  expect(readFileSync(b.options.panelCert!.paths!.cert!, "utf8")).toBe(shared.cert);
+  expect(readSettings({ settingsFile: b.settingsFile, lockFile: "", rootUid: process.getuid!() }).replacePanelCert).toBe(false);
+});
+
 // --- Vhost injection guard ----------------------------------------------------
 
 test("the vhost guard is on by default: repair installs it and reloads the panel's FPM once", async () => {
@@ -1092,7 +1156,7 @@ test("a withdrawal that fails after the File Manager guard is gone queues it bac
 test("the page shows the vhost guard as on, waiting for repair, or off", () => {
   const html = (partial: Omit<SystemTweaksState["vhostGuard"], "homeLogs" | "ownLogrotate"> & { homeLogs?: string[]; ownLogrotate?: string[] }) => dashboardView({
     updates: updatesStatus({ run: () => ({ ok: false, stdout: "", stderr: "" }) }), settings: { ...DEFAULT_UPDATE_SETTINGS },
-    uploadProgress: { guard: true, fpms: [] }, realIp: { blockForged: true, trustsAnyAddress: false, problem: "" }, phpMyAdmin: { enabled: true, active: true, problem: "" }, vhostGuard: { homeLogs: [], ownLogrotate: [], ...partial }, phpPools: { enabled: true, active: true, problem: "" }, fileManagerGuard: { enabled: true, active: true }, panelPhp: { error: "" }, firewall: { error: "" }, loginJails: { error: "" },
+    uploadProgress: { guard: true, fpms: [] }, realIp: { blockForged: true, trustsAnyAddress: false, problem: "" }, phpMyAdmin: { enabled: true, active: true, problem: "" }, vhostGuard: { homeLogs: [], ownLogrotate: [], ...partial }, phpPools: { enabled: true, active: true, problem: "" }, fileManagerGuard: { enabled: true, active: true }, panelCert: { kind: "generated" as const, replace: true }, panelPhp: { error: "" }, firewall: { error: "" }, loginJails: { error: "" },
   });
   expect(html({ enabled: true, active: true, stored: [] })).toContain("Panel input is checked before CloudPanel writes it into a vhost.");
   expect(html({ enabled: true, active: false, stored: [] })).toContain("Not applied");
@@ -1129,7 +1193,7 @@ test("the page shows PHP pool isolation as on, waiting for repair, or off", () =
   const html = (phpPools: SystemTweaksState["phpPools"]) => dashboardView({
     updates: updatesStatus({ run: () => ({ ok: false, stdout: "", stderr: "" }) }), settings: { ...DEFAULT_UPDATE_SETTINGS },
     uploadProgress: { guard: true, fpms: [] }, realIp: { blockForged: true, trustsAnyAddress: false, problem: "" },
-    phpMyAdmin: { enabled: true, active: true, problem: "" }, vhostGuard: { enabled: true, active: true, stored: [], homeLogs: [], ownLogrotate: [] }, phpPools, fileManagerGuard: { enabled: true, active: true }, panelPhp: { error: "" }, firewall: { error: "" }, loginJails: { error: "" },
+    phpMyAdmin: { enabled: true, active: true, problem: "" }, vhostGuard: { enabled: true, active: true, stored: [], homeLogs: [], ownLogrotate: [] }, phpPools, fileManagerGuard: { enabled: true, active: true }, panelCert: { kind: "generated" as const, replace: true }, panelPhp: { error: "" }, firewall: { error: "" }, loginJails: { error: "" },
   });
   expect(html({ enabled: true, active: true, problem: "" })).toContain("Each pool's port answers only nginx and the pool's own user.");
   expect(html({ enabled: true, active: false, problem: "" })).toContain("Run clp-addons repair.");
@@ -1252,7 +1316,7 @@ test("failed downloads retain the package URL in expandable details and escape t
   const updates = updatesStatus(b.options.updates);
   expect(updates.lastRun?.outcome).toBe("failed");
   expect(updates.lastRun?.message).toContain("php8.2-bcmath.deb");
-  const html = dashboardView({ updates, settings: { ...DEFAULT_UPDATE_SETTINGS }, uploadProgress: { guard: true, fpms: [] }, realIp: { blockForged: true, trustsAnyAddress: false, problem: "" }, phpMyAdmin: { enabled: true, active: true, problem: "" }, vhostGuard: { enabled: true, active: true, stored: [], homeLogs: [], ownLogrotate: [] }, phpPools: { enabled: true, active: true, problem: "" }, fileManagerGuard: { enabled: true, active: true }, panelPhp: { error: "" }, firewall: { error: "" }, loginJails: { error: "" } });
+  const html = dashboardView({ updates, settings: { ...DEFAULT_UPDATE_SETTINGS }, uploadProgress: { guard: true, fpms: [] }, realIp: { blockForged: true, trustsAnyAddress: false, problem: "" }, phpMyAdmin: { enabled: true, active: true, problem: "" }, vhostGuard: { enabled: true, active: true, stored: [], homeLogs: [], ownLogrotate: [] }, phpPools: { enabled: true, active: true, problem: "" }, fileManagerGuard: { enabled: true, active: true }, panelCert: { kind: "generated" as const, replace: true }, panelPhp: { error: "" }, firewall: { error: "" }, loginJails: { error: "" } });
   expect(html).toContain("A package download failed (HTTP 404).");
   expect(html).toContain('<details class="st-run-details"><summary>Failure details</summary>');
   expect(html).toContain("php8.2-bcmath.deb failed to download, aborting &lt;script&gt;");
@@ -1388,7 +1452,7 @@ test("the page shows update options only once updates are on, and says what sile
     uploadProgress: { guard: true, fpms: [{
       label: "PHP 8.2", version: "8.2", enabled: false, setBy: "clp-addons" as const,
       source: "/etc/php/8.2/fpm/conf.d/99-clp-addons-upload-progress.ini", offWithoutGuard: false, poolsOn: ["legacy.example.com"],
-    }] }, realIp: { blockForged: true, trustsAnyAddress: false, problem: "" }, phpMyAdmin: { enabled: true, active: true, problem: "" }, vhostGuard: { enabled: true, active: true, stored: [], homeLogs: [], ownLogrotate: [] }, phpPools: { enabled: true, active: true, problem: "" }, fileManagerGuard: { enabled: true, active: true }, panelPhp: { error: "" }, firewall: { error: "" }, loginJails: { error: "" },
+    }] }, realIp: { blockForged: true, trustsAnyAddress: false, problem: "" }, phpMyAdmin: { enabled: true, active: true, problem: "" }, vhostGuard: { enabled: true, active: true, stored: [], homeLogs: [], ownLogrotate: [] }, phpPools: { enabled: true, active: true, problem: "" }, fileManagerGuard: { enabled: true, active: true }, panelCert: { kind: "generated" as const, replace: true }, panelPhp: { error: "" }, firewall: { error: "" }, loginJails: { error: "" },
   };
   const now = Date.parse("2026-10-25T00:00:00Z");
   const outside = dashboardView(state, now);
@@ -1436,7 +1500,7 @@ test("the page names the UDP ports CloudPanel's Firewall page opens, in one line
   const b = box();
   const base = {
     updates: updatesStatus(b.options.updates), settings: { ...DEFAULT_UPDATE_SETTINGS }, uploadProgress: { guard: true, fpms: [] },
-    realIp: { blockForged: true, trustsAnyAddress: false, problem: "" }, phpMyAdmin: { enabled: true, active: true, problem: "" }, vhostGuard: { enabled: true, active: true, stored: [], homeLogs: [], ownLogrotate: [] }, phpPools: { enabled: true, active: true, problem: "" }, fileManagerGuard: { enabled: true, active: true }, panelPhp: { error: "" }, loginJails: { error: "" } as const,
+    realIp: { blockForged: true, trustsAnyAddress: false, problem: "" }, phpMyAdmin: { enabled: true, active: true, problem: "" }, vhostGuard: { enabled: true, active: true, stored: [], homeLogs: [], ownLogrotate: [] }, phpPools: { enabled: true, active: true, problem: "" }, fileManagerGuard: { enabled: true, active: true }, panelCert: { kind: "generated" as const, replace: true }, panelPhp: { error: "" }, loginJails: { error: "" } as const,
   };
   const open = dashboardView({ ...base, firewall: { available: true, protocols: { 5: "udp" }, udpPorts: ["53", "3478-3479"] } });
   expect(open).toContain(`<br>UDP ports open from CloudPanel's <a href="/admin/firewall">Firewall</a> page: 53, 3478-3479.</p>`);
@@ -1462,7 +1526,7 @@ test("the Failed logins card lists bans with an Unblock each, and warns about wh
   const b = box();
   const base = {
     updates: updatesStatus(b.options.updates), settings: { ...DEFAULT_UPDATE_SETTINGS }, uploadProgress: { guard: true, fpms: [] },
-    realIp: { blockForged: true, trustsAnyAddress: false, problem: "" }, phpMyAdmin: { enabled: true, active: true, problem: "" }, vhostGuard: { enabled: true, active: true, stored: [], homeLogs: [], ownLogrotate: [] }, phpPools: { enabled: true, active: true, problem: "" }, fileManagerGuard: { enabled: true, active: true }, panelPhp: { error: "" }, firewall: { error: "" },
+    realIp: { blockForged: true, trustsAnyAddress: false, problem: "" }, phpMyAdmin: { enabled: true, active: true, problem: "" }, vhostGuard: { enabled: true, active: true, stored: [], homeLogs: [], ownLogrotate: [] }, phpPools: { enabled: true, active: true, problem: "" }, fileManagerGuard: { enabled: true, active: true }, panelCert: { kind: "generated" as const, replace: true }, panelPhp: { error: "" }, firewall: { error: "" },
   };
   const jails = {
     panel: true, ssh: false, missing: [], service: "active" as const, running: ["clp-addons-panel", "clp-addons-domain"], panelLog: true, problem: "",

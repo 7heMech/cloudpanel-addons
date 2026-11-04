@@ -6,6 +6,7 @@ export const SYSTEM_TWEAKS_VERBS = {
   "install-updates": { web: "admin" },
   "set-upload-guard": { web: "admin" },
   "set-real-ip": { web: "admin" },
+  "set-panel-cert": { web: "admin" },
   "set-vhost-guard": { web: "admin" },
   "set-phpmyadmin": { web: "admin" },
   "set-file-manager-guard": { web: "admin" },
