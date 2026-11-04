@@ -128,6 +128,14 @@ settings are not changed; the page warns when password or root login is allowed.
 Switching it off puts fail2ban back as it was.
 [Guide](docs/system-tweaks.md#failed-logins)
 
+**The panel's shared certificate.** CloudPanel serves its panel on port 8443
+with one certificate and private key shared by every install
+([CVE-2023-0391](https://nvd.nist.gov/vuln/detail/CVE-2023-0391)), so anyone who
+can see the traffic can decrypt it. The setting replaces them with a pair
+generated on the server, and repair puts it back after a CloudPanel update. A
+certificate the operator installed is left alone.
+[Guide](docs/system-tweaks.md#panel-certificate)
+
 The nginx settings default to on when System Tweaks is enabled. PHP upload
 progress is disabled independently of that addon; System Tweaks provides its
 opt-out. Existing saved nginx values are flagged for review, not repaired.

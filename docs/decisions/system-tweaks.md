@@ -10,9 +10,9 @@ Firewall page.
 
 Three cards: Automatic updates, which an operator comes back to; one
 Settings card for the panel's PHP, the upload-progress mitigation, forged
-visitor IPs, phpMyAdmin and nginx config injection, which are set once; and
-Failed logins, with the two fail2ban jails and the addresses they block. Each
-row says what it does in a sentence; the
+visitor IPs, phpMyAdmin, the panel's certificate and nginx config injection,
+which are set once; and Failed logins, with the two fail2ban jails and the
+addresses they block. Each row says what it does in a sentence; the
 reasons are here. The Nginx, MySQL, CloudPanel and reboot rows appear only once
 System Tweaks' own switch is on, since they change nothing before. The
 repositories and each PHP-FPM's upload-progress value fold into a summary that
@@ -354,6 +354,57 @@ without its own block, and refuses to touch a file whose hash changed. It
 leaves the phpMyAdmin block out of that hash too, so neither reconciler reads
 the other's block as a CloudPanel rewrite. Both write the vhost with its owner
 kept, so CloudPanel's own account can still rewrite it.
+
+## The panel's certificate
+
+The panel's Nginx serves port 8443 with
+`/home/clp/services/nginx/ssl-certificates/cert.crt` and `private.key`, which
+the `cloudpanel` package ships identical on every install
+([CVE-2023-0391](https://nvd.nist.gov/vuln/detail/CVE-2023-0391)):
+`CN=cloudpanel.clp`, expired 2020-10-13, SHA-256 `6D:13:60:EC:…:62:4F:2B`. Its
+private key is public, so anyone who can see the panel's traffic can decrypt it,
+and scanners find CloudPanel panels by it. CloudPanel's custom domain does not
+change it. CloudPanel writes that domain's vhost and Let's Encrypt certificate
+for the sites' Nginx on 443 (`/etc/nginx/sites-enabled/custom-domain.conf`),
+which proxies to `https://127.0.0.1:8443` without verifying the certificate.
+Port 8443 stays open on the server's addresses with the shared certificate.
+
+**Replace the shared panel certificate**, on by default (`replacePanelCert`), is
+a setting of its own. Forged visitor IPs is the other change to the panel's
+Nginx, but it is about which headers Nginx trusts, and an operator may want one
+without the other. When the panel's server block names CloudPanel's two files
+and the certificate there has the shared fingerprint, it runs `openssl req` for
+an ECDSA P-256 key and a self-signed certificate. The certificate's CN and DNS
+name are the hostname, it has an IP name for each address other than loopback
+and link-local, `serverAuth`, and 800 days of validity, since Apple refuses
+server certificates valid for more than 825. The pair replaces CloudPanel's two
+files, keeping their owner and mode without access for others. The shared Nginx
+transaction then runs `nginx -t -c` on the panel's config and reloads
+`clp-nginx`, and a failure puts both files back. `nginx -t` loads the pair, so
+it also catches a key that does not match. The pair is kept, root-only, in
+`/var/lib/clp-addons/system-tweaks/panel-cert.crt` and `.key`, written once the
+panel accepted it.
+
+Any other certificate is left alone: a pair an operator put in those files, or a
+server block that names other files. The root action writes only CloudPanel's
+own two paths, so the `clp` account, which owns the server block, cannot point
+it at another file.
+
+The two files are not dpkg conffiles, so a `cloudpanel` upgrade writes the
+shared pair back. Activation and the 15-minute repair put the stored pair in
+again, so the fingerprint a browser accepted stays the same. Within 30 days of
+expiry, repair generates a new pair. On CloudPanel's older layout, where the
+panel shares the sites' Nginx, there is no panel server block and repair does
+nothing.
+
+Switching off stops the replacing and keeps the current certificate. Disabling
+the addon keeps it too: putting a published key back makes nothing work better.
+Reinstalling the `cloudpanel` package restores CloudPanel's.
+
+The row says which certificate port 8443 serves: Shared, Generated with its
+names, expiry and SHA-256 fingerprint to compare with the browser's, or Own with
+its subject and expiry. It names the custom domain from `/etc/.clp_custom_domain`
+while that domain's vhost exists. `set-panel-cert` takes `{"enabled":true}`.
 
 ## Nginx config injection
 

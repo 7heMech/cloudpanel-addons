@@ -107,6 +107,10 @@ function setPhpMyAdmin(input) {
   return change(input, '/api/phpmyadmin', { enabled: input.checked }, switchText(input), 'Saved.');
 }
 
+function setPanelCert(input) {
+  return change(input, '/api/panel-cert', { enabled: input.checked }, switchText(input), 'Saved.');
+}
+
 function setVhostGuard(input) {
   return change(input, '/api/vhost-guard', { enabled: input.checked }, switchText(input), 'Saved.');
 }

@@ -123,6 +123,11 @@ export async function handle(
     return repaint(await systemTweaksService.setRealIp(body.enabled));
   }
 
+  if (path === "/api/panel-cert") {
+    if (typeof body.enabled !== "boolean") return json({ ok: false, error: "enabled must be true or false" }, 400);
+    return repaint(await systemTweaksService.setPanelCert(body.enabled));
+  }
+
   if (path === "/api/login-jails") {
     const wanted: { panel?: boolean; ssh?: boolean } = {};
     for (const key of ["panel", "ssh"] as const) {

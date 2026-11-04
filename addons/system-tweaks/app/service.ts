@@ -2,7 +2,9 @@ import { callGatewayAction, type ActionResult } from "../../../lib/gateway-clien
 import type { WebVerb } from "../../../lib/gateway-protocol";
 import type { SystemTweaksState } from "../action";
 import type { FirewallStatus } from "../firewall";
-import { INSTALL_GATEWAY_TIMEOUT_MS, LOGIN_JAILS_GATEWAY_TIMEOUT_MS, PANEL_PHP_GATEWAY_TIMEOUT_MS, PHP_POOLS_GATEWAY_TIMEOUT_MS, POOL_GUARD_GATEWAY_TIMEOUT_MS, REAL_IP_GATEWAY_TIMEOUT_MS } from "../limits";
+import {
+  INSTALL_GATEWAY_TIMEOUT_MS, LOGIN_JAILS_GATEWAY_TIMEOUT_MS, PANEL_CERT_GATEWAY_TIMEOUT_MS, PANEL_PHP_GATEWAY_TIMEOUT_MS, PHP_POOLS_GATEWAY_TIMEOUT_MS, POOL_GUARD_GATEWAY_TIMEOUT_MS, REAL_IP_GATEWAY_TIMEOUT_MS,
+} from "../limits";
 
 function call(verb: WebVerb<"system-tweaks">, input?: string, timeout?: number): Promise<ActionResult<SystemTweaksState>> {
   return callGatewayAction("system-tweaks", verb, [], input, timeout ? { timeout } : undefined);
@@ -35,6 +37,10 @@ export const systemTweaksService = {
 
   setPhpMyAdmin(enabled: boolean): Promise<ActionResult<SystemTweaksState>> {
     return call("set-phpmyadmin", JSON.stringify({ enabled }), REAL_IP_GATEWAY_TIMEOUT_MS);
+  },
+
+  setPanelCert(enabled: boolean): Promise<ActionResult<SystemTweaksState>> {
+    return call("set-panel-cert", JSON.stringify({ enabled }), PANEL_CERT_GATEWAY_TIMEOUT_MS);
   },
 
   firewall(): Promise<ActionResult<FirewallStatus>> {

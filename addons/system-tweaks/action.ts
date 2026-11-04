@@ -15,6 +15,7 @@ import { INSTALL_DEADLINE_MS } from "./limits";
 import { uploadProgressStatus, type FpmUploadProgress, type UploadProgressOptions } from "./upload-progress";
 import { applyRealIp, realIpStatus, type RealIpOptions, type RealIpStatus } from "./real-ip";
 import { applyPhpMyAdmin, phpMyAdminStatus, type PhpMyAdminOptions, type PhpMyAdminStatus } from "./phpmyadmin";
+import { panelCertStatus, replacePanelCert, type PanelCertOptions, type PanelCertStatus } from "./panel-cert";
 import {
   panelPhpStatus, reconcilePanelPhp, restorePanelPhp, setPanelPhp, withdrawPanelPhp, type PanelPhpOptions, type PanelPhpStatus,
 } from "./panel-php";
@@ -56,6 +57,8 @@ export interface SystemTweaksSettings {
   protectPhpMyAdmin: boolean;
   /** Refuse File Manager requests that leave the site's home, and leave its socket to clp. */
   confineFileManager: boolean;
+  /** Replace CloudPanel's shared panel certificate with one generated here. */
+  replacePanelCert: boolean;
   /** fail2ban jails for the panel login and for SSH. */
   loginJails: LoginJailSettings;
   /** fail2ban.service before System Tweaks first started it, which turning both jails off puts back. */
@@ -71,6 +74,7 @@ export interface SystemTweaksState {
   phpPools: PoolIsolationStatus & { enabled: boolean };
   phpMyAdmin: PhpMyAdminStatus & { enabled: boolean };
   fileManagerGuard: { enabled: boolean; active: boolean };
+  panelCert: PanelCertStatus & { replace: boolean };
   panelPhp: PanelPhpStatus | { error: string };
   firewall: FirewallStatus | { error: string };
   loginJails: (LoginJailsStatus & LoginJailSettings) | { error: string };
@@ -98,6 +102,7 @@ export interface SystemTweaksOptions {
   phpGuard?: PhpGuardOptions;
   realIp?: RealIpOptions;
   phpMyAdmin?: PhpMyAdminOptions;
+  panelCert?: PanelCertOptions;
   vhostGuard?: VhostGuardOptions;
   fileManagerGuard?: FileManagerGuardOptions;
   vhostValues?: VhostValuesOptions;
@@ -124,6 +129,7 @@ export function readSettings(paths: SystemTweaksPaths): SystemTweaksSettings {
     isolatePhpPools: true,
     protectPhpMyAdmin: true,
     confineFileManager: true,
+    replacePanelCert: true,
     loginJails: { panel: true, ssh: false },
     fail2banBefore: null,
   };
@@ -152,6 +158,7 @@ export function readSettings(paths: SystemTweaksPaths): SystemTweaksSettings {
   if (stored.isolatePhpPools === false) settings.isolatePhpPools = false;
   if (stored.protectPhpMyAdmin === false) settings.protectPhpMyAdmin = false;
   if (stored.confineFileManager === false) settings.confineFileManager = false;
+  if (stored.replacePanelCert === false) settings.replacePanelCert = false;
   const jails = (stored.loginJails ?? {}) as Record<string, unknown>;
   if (jails.panel === false) settings.loginJails.panel = false;
   if (jails.ssh === true) settings.loginJails.ssh = true;
@@ -186,6 +193,7 @@ async function stateOf(options: SystemTweaksOptions): Promise<SystemTweaksState>
     },
     realIp: { ...realIpStatus(options.realIp), blockForged: settings.blockForgedRealIp },
     phpMyAdmin: { ...phpMyAdminStatus(options.phpMyAdmin), enabled: settings.protectPhpMyAdmin },
+    panelCert: { ...panelCertStatus(options.panelCert), replace: settings.replacePanelCert },
     vhostGuard: {
       enabled: settings.blockVhostInjection,
       active: (await vhostGuardStatus(options.vhostGuard)).active && varnishBackendsActive(options.varnishBackend),
@@ -296,6 +304,19 @@ async function setPhpMyAdmin(options: SystemTweaksOptions): Promise<SystemTweaks
     const settings = readSettings(paths);
     applyPhpMyAdmin(body.enabled as boolean, options.phpMyAdmin);
     writeSettings(paths, { ...settings, protectPhpMyAdmin: body.enabled as boolean });
+  });
+  return stateOf(options);
+}
+
+/** Off only stops the replacing: a certificate generated here stays, since the shared key is public. */
+async function setPanelCert(options: SystemTweaksOptions): Promise<SystemTweaksState> {
+  const paths = pathsFor(options);
+  const body = await requestBody(options);
+  if (typeof body.enabled !== "boolean") failAction("enabled must be true or false");
+  await withFileLock(paths.lockFile, 15, "another system tweaks change is still running", async () => {
+    const settings = readSettings(paths);
+    if (body.enabled) replacePanelCert(options.panelCert);
+    writeSettings(paths, { ...settings, replacePanelCert: body.enabled as boolean });
   });
   return stateOf(options);
 }
@@ -419,6 +440,7 @@ export async function executeSystemTweaksAction(argv: string[], options: SystemT
   if (verb === "set-vhost-guard") return setVhostGuard(options);
   if (verb === "set-phpmyadmin") return setPhpMyAdmin(options);
   if (verb === "set-file-manager-guard") return setFileManagerGuard(options);
+  if (verb === "set-panel-cert") return setPanelCert(options);
   if (verb === "set-panel-php") return changePanelPhp(options);
   if (verb === "set-php-pools") return setPhpPools(options);
   if (verb === "set-login-jails") return setLoginJails(options);
@@ -529,6 +551,12 @@ export async function systemTweaksMaintenance(options: SystemTweaksOptions = {})
     failures.push(`File Manager guard: ${errorMessage(error)}`);
   }
   try {
+    const cert = systemTweaksPanelCert(options);
+    if (cert) lines.push(cert);
+  } catch (error) {
+    failures.push(`panel certificate: ${errorMessage(error)}`);
+  }
+  try {
     const varnish = systemTweaksVarnish(options);
     if (varnish) lines.push(varnish);
   } catch (error) {
@@ -560,6 +588,11 @@ export function systemTweaksPhpMyAdmin(options: SystemTweaksOptions = {}): strin
 export function systemTweaksVarnish(options: SystemTweaksOptions = {}): string | null {
   return withSettingsLock(options, (_paths, settings) =>
     settings.blockVhostInjection && installVarnishBackends(options.varnishBackend) ? "Varnish backends and site nginx logs moved to root-owned paths" : null);
+}
+
+/** Repair's: CloudPanel's shared panel certificate is replaced again after an update puts it back. */
+export function systemTweaksPanelCert(options: SystemTweaksOptions = {}): string | null {
+  return withSettingsLock(options, (_paths, settings) => settings.replacePanelCert ? replacePanelCert(options.panelCert) : null);
 }
 
 export function systemTweaksUpkeep(options: SystemTweaksOptions = {}): string | null {
@@ -633,6 +666,8 @@ export function restoreSystemTweaks(options: SystemTweaksOptions = {}): void {
   } finally {
     restorePanelPhp(options.panelPhp);
   }
+  try { systemTweaksPanelCert(options); }
+  catch (error) { log.warn(`the panel's shared certificate waits for the next repair: ${errorMessage(error)}`); }
   try { syncFirewall("restore", options.firewall); }
   catch (error) { log.warn(`firewall protocols wait for the next repair: ${errorMessage(error)}`); }
 }
