@@ -27,14 +27,13 @@ function addonRow(name: string, enabled: boolean, job: ManagerJobView | null, ne
       <button class="btn" type="button" onclick="disableAddon('${escJs(spec.name)}', '${escJs(title)}', this)" aria-label="Disable ${esc(title)}">Disable</button>`
     : `<button class="btn" type="button" onclick="enableAddon('${escJs(spec.name)}', this)" aria-label="Enable ${esc(title)}">Enable</button>`;
   // Opening the addon from this row reads its notice for every administrator.
-  const found = addonNews(spec.name, news.version, news.since);
-  const notice = found && !news.seen.includes(found.key) ? found : null;
-  return `<article class="addon-row" data-manager-job-card="${esc(spec.name)}"${notice ? ` data-news="${esc(notice.key)}"` : ""} data-find="${esc(`${title} ${spec.name} ${spec.description ?? ""}`)}">
+  const notice = addonNews(spec.name, news.version, news.since, news.seen);
+  return `<article class="addon-row" data-manager-job-card="${esc(spec.name)}"${notice ? ` data-news="${esc(notice.keys.join(" "))}"` : ""} data-find="${esc(`${title} ${spec.name} ${spec.description ?? ""}`)}">
   <div class="addon-about">
     <h3>${heading}${notice?.kind === "new" ? ' <span class="badge state-queued">New</span>'
       : notice?.kind === "changed" ? ' <span class="badge">Changed</span>' : ""}</h3>
     ${spec.description ? `<p>${esc(spec.description)}</p>` : ""}${
-  notice?.note ? `<p class="addon-changed">${esc(notice.note)}</p>` : ""}
+  (notice?.notes ?? []).map((note) => `<p class="addon-changed">${esc(note)}</p>`).join("")}
   </div>
   <div class="addon-actions">${actions}</div>
   ${addonJob ? managerJobStatus(addonJob) : ""}
@@ -116,7 +115,9 @@ export function indexPage(
   const search = enabled.length + available.length > 0
     ? `<div class="addon-find"><input type="search" id="addon-find" data-keep placeholder="Find an addon" aria-label="Find an addon" oninput="findAddons()"></div>`
     : "";
-  const content = `<div class="page-heading"><h1>Addons</h1><a class="btn" href="${UPDATE_PATH}">Updates</a></div>` +
+  const unread = [...enabled, ...available].some((name) => addonNews(name, news.version, news.since, news.seen));
+  const readAll = unread ? `<button class="btn" type="button" onclick="readAllNews(this)">Mark all read</button>` : "";
+  const content = `<div class="page-heading"><h1>Addons</h1><div class="page-actions">${readAll}<a class="btn" href="${UPDATE_PATH}">Updates</a></div></div>` +
     managerJobFailure(options.job ?? null) +
     managerJobBlock(options.job ?? null, claimed) +
     search +

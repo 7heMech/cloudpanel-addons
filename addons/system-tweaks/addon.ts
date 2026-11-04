@@ -10,7 +10,7 @@ export const SYSTEM_TWEAKS_ADDON: AddonDefinition = {
   title: "System Tweaks",
   description: "Automatic security updates, the PHP upload-progress mitigation, a newer PHP for CloudPanel itself, forged visitor-IP blocking, the panel's own certificate, nginx config injection blocking, phpMyAdmin lockdown, a File Manager kept in each site's home, clpctl wrapper hardening, fail2ban jails for failed logins, /tmp cleanup, UDP firewall rules and MySQL exposure checks.",
   added: "2.0.0-rc.1",
-  changed: { in: "2.0.0", note: "Several CloudPanel security weaknesses are now mitigated; the panel's shared certificate is replaced, so your browser asks you to accept the new one once." },
+  changed: [{ in: "2.0.0", note: "Several CloudPanel security weaknesses are now mitigated; the panel's shared certificate is replaced, so your browser asks you to accept the new one once." }],
   preselected: true,
   targets: SYSTEM_TWEAKS_TARGETS,
   handler: handle,

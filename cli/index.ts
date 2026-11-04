@@ -40,7 +40,7 @@ import { systemTweaksPhpPools } from "../addons/system-tweaks/action";
 export const MANAGER_OPS: ManagerOps = {
   enable: applyEnable,
   disable: applyDisable,
-  update: (beforeManagerRestart) => cmdUpdate([], { beforeManagerRestart }),
+  update: (beforeManagerRestart, onStep) => cmdUpdate([], { beforeManagerRestart, onStep }),
   // Short: this one answers a live request from the panel, so it refuses and
   // names the operation in the way rather than making the page wait it out.
   reconcile: () => withOperationLockSync("reconcile", () => {
