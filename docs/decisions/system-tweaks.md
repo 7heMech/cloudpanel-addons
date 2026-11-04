@@ -371,8 +371,8 @@ refuses `disable_symlinks`.
 `vhost-guard.php` in front of CloudPanel as the `[clp]` pool's
 `php_admin_value[auto_prepend_file]`. The setting is a pool file,
 `pool.d/zz-clp-addons-vhost-guard.conf`, that reopens CloudPanel's `[clp]`
-section; PHP-FPM merges a section it has seen, so the File Manager pool and
-CloudPanel's own `cloudpanel.conf` are untouched. Both files sit in
+section; PHP-FPM merges a section it has seen, so CloudPanel's own
+`cloudpanel.conf` is untouched and no other pool gets the guard. Both files sit in
 `/home/clp/services/php-fpm/fpm`, which CloudPanel's update does not replace,
 and next to each other, so removing the binary never leaves the pool naming a
 missing script. An admin value cannot be overridden by `PHP_VALUE` or
@@ -391,8 +391,9 @@ it has no `+` or other regex operators that would stop Nginx loading. These
 checks apply to administrators too, who can still use the Vhost editor for a
 value they refuse. A `vhost-template` parameter, in the query or the body, or a
 PageSpeed form is accepted only from an active `ROLE_ADMIN`, who can change the
-server anyway. The guard finds the account from the `cloudpanel` session file:
-it walks PHP's `name|value` session format, re-serializing each value to find
+server anyway. The guard finds the account from the `cloudpanel` session file,
+read by `panel-session.php`, which the File Manager guard shares: it walks PHP's
+`name|value` session format, re-serializing each value to find
 where it ends, so a typed login name cannot pass for the next entry, unserializes
 with `allowed_classes => false`, refuses a session whose `mfaAuthenticated` is
 `false`, which CloudPanel leaves while a TOTP code is owed, and reads the role
@@ -598,6 +599,198 @@ off and disabling the addon remove both. "On" needs the drop-in on every
 version as the unit's reload lines give it now, the table loaded, and its
 ruleset closing every pool file's port to the right users; a port it keeps
 closed until the next sync does not count against it.
+
+## File Manager
+
+CloudPanel's File Manager runs in its own PHP-FPM pool, `[clp-file-manager]`,
+as root. It takes the site user from the panel session and joins each path a
+request names to `/home/<site user>/`. Its own `checkPath` resolves the path and
+compares a string prefix, so `/home/user-other` passes for `/home/user`, and
+several actions skip even that. On CloudPanel 2.5.4 a plain panel account can:
+
+- read any file as root by compressing an ID with `..` in it, or a link the File
+  Manager's own extract made, then downloading `archive.zip`;
+- create a root-owned file anywhere by making `archive.zip` a link before
+  compressing;
+- move a file anywhere by moving it onto a link of the same name, since `mv`
+  follows a link to a folder;
+- write over any file by copying onto a link, or into an existing folder of the
+  copy's name that holds a link where `cp -a` puts the copy: `cp` writes
+  through a link it meets inside a target folder;
+- give the site user any file, because creating a folder over a link runs
+  `chown` and `chmod` on the link's target;
+- extract device files and setuid-root programs, since `bsdtar` keeps an
+  archive's owners, modes and device nodes when root runs it. A device file the
+  site user can write is the raw disk.
+
+**Keep the File Manager in the site's home**, on by default
+(`confineFileManager`), puts `file-manager-guard.php` in front of CloudPanel as
+the pool's `auto_prepend_file`, with a pool file,
+`pool.d/zz-clp-addons-file-manager-guard.conf`, that reopens
+`[clp-file-manager]`. It is a separate setting from Block nginx config
+injection because it guards a different pool against a different attack, and
+fails differently: an operator who has to switch one off for a false refusal
+keeps the other. Installing, health checks, repair and removal are the vhost
+guard's (`pool-guard.ts`), with the File Manager's page standing in for the
+login page and a malformed session cookie for the probe: CloudPanel alone
+answers it with an empty page, and the guard with a 403. Switching it off saves
+the opt-out before removing the guard, and puts the setting back on if the
+removal fails, so repair never reinstalls a guard the administrator took away
+or leaves one in place that the setting says is off. A withdrawal that fails
+after removing it queues it back while the setting is on, since the addon stays
+enabled.
+
+Each installed guard is one file. `panel-session.php` is written into both in
+place of their `require` of it, so the two never depend on a third file and
+`tests/integration` runs exactly what is installed.
+
+The guard refuses with a 403, a JSON error naming the reason, and a line in the
+panel's PHP error log. It refuses:
+
+- a `cloudpanel` cookie that is not a session ID, or a session it cannot read,
+  on both of CloudPanel's scripts, which put the cookie into a file path;
+- a backend action it does not know, so a CloudPanel update that adds one is
+  refused until this addon checks it;
+- a site user name with anything but letters, digits and `._-`, which
+  CloudPanel passes unescaped to `chown`;
+- any path a request names, for every action, that has a `..` segment or passes
+  through a symbolic link at any step from the home down, including the last;
+  a path that does not exist yet is one CloudPanel will create;
+- the paths CloudPanel derives: a rename's new name, a copy's `<name>_copy`, a
+  move's destination file, an upload's file, a new file or folder,
+  `archive.zip` in a compress target, and the copy and output of a `.gz` it
+  extracts;
+- a copy, move or `.gz` copy target that already exists as a folder and holds a
+  link anywhere under it, since `cp` and `mv` put the item inside that folder
+  and `cp` writes through a link it meets there. `bsdtar` replaces links in its
+  destination, and the `chown -R` and `find -P` CloudPanel runs afterwards do
+  not follow them, so a tar or zip destination is checked only at its own path;
+- the site's home itself as the file to delete, rename, copy, move or extract;
+- a permissions value other than three or four octal digits;
+- an archive whose `bsdtar -tv` listing has a device file, FIFO, socket,
+  setuid or setgid entry, or does not list cleanly. Links inside an archive are
+  extracted, since `bsdtar` will not extract through one, and the rules above
+  refuse them afterwards.
+
+### Every write as the site user
+
+The checks above run before CloudPanel acts, so a site user with SSH, SFTP or
+PHP on the site can plant a link in between, and every action CloudPanel ran as
+root then wrote, read or changed where it points. On staging, loops flipping a
+link into root-only files won against new files and folders, saving a text
+file, tar and zip extraction and copies, and put a root-only file's contents
+into downloads and archives. So once a request passes the checks, the guard is
+CloudPanel's backend for every action that writes, deletes, changes
+permissions, or reads a file's contents: text reads and saves, download,
+rename, delete, new file and folder, upload, permissions, copy, move, extract
+and compress. CloudPanel's code for those never runs. Each command runs as the
+site user with `runuser -u <user> --` and an argument list, never a shell
+string. Steps CloudPanel does with PHP's own functions run under the pool's
+umask (022), and steps it does through `sudo` under `sudo`'s (the pool's with
+022 added). A link planted at any moment can then only reach what that user
+could already reach.
+
+Where CloudPanel calls a PHP function rather than a command, so the result
+depends on that function's own behaviour, the guard runs the same function in a
+PHP CLI of the pool's version, as the site user: `file_get_contents` and
+`readfile` for text and downloads, with `finfo_file` and `filesize` for the
+download's headers; `file_put_contents` for a save; `mkdir`, `rename` and the
+`chmod` `move_uploaded_file` does, for an upload, whose temporary file the guard
+hands it on standard input; and `ZipArchive`, walked as CloudPanel's compress
+walks folders, for an archive. The helper's code is in the guard and goes to
+the CLI as an argument, since the site user cannot read CloudPanel's or this
+addon's files. The guard refuses before doing anything when that CLI, or its
+`zip` or `fileinfo` extension, is missing.
+
+The guard does what CloudPanel does, step for step, and answers as it does,
+since the File Manager's page reads those answers:
+
+- It starts the File Manager's own PHP session before answering, as
+  CloudPanel's backend does, so the replies carry the same cookie and cache
+  headers.
+- A path that does not resolve ends the request with `File is not valid: `, as
+  CloudPanel's `checkPath` does. The guard clears PHP's realpath cache first,
+  which outlives a request in an FPM worker. Where CloudPanel answers `[]`, an
+  empty body, or nothing, so does the guard, for the same inputs, including
+  names its `isFilenameValid` refuses.
+- Replies that describe a file are that file as CloudPanel's own
+  `App\File\Manager::getFileData` describes it: the guard loads CloudPanel's
+  class and calls that private method by reflection, so the fields are
+  CloudPanel's and follow its updates. It refuses before doing anything if the
+  class or the method is missing.
+- A failed command CloudPanel leaves uncaught answers an empty 500, as its
+  uncaught exception does, and the guard logs the command's error. One it
+  catches, in extract and compress, gives its
+  `Command " : <command>" failed, error message: <output>` text, with the
+  command as CloudPanel shows it less `/usr/bin/sudo`.
+- Names and steps follow CloudPanel's: a copy's `<name>_copy.<ext>` or
+  `<name>_copy` (`noext_copy.` for a file without an extension), `chmod 770` on
+  what a copy, move, new file or new folder produces, `rm -rf` or `rm -f` for a
+  delete, `find -P` running `chmod` on folders then files for permissions,
+  `bsdtar -p` for tar and zip (root's `bsdtar` keeps the archive's modes, and
+  `-p` does that for anyone), and `mkdir -p`, `cp` and `gunzip` for a `.gz`.
+- CloudPanel's `chown` to the site user after each action has nothing to do
+  for files that user made, so the guard runs none. Its `chmod 770` after an
+  upload or extract runs in the background and is killed with its request, so
+  the guard runs none either.
+
+One step stays root's: the permissions action hands everything under the file
+to the site user, which only root can do. The guard runs it as
+`find -P <home> ... -execdir chown -h <user>:<user> {} +`, which starts at the
+home, which only root can replace, descends only along the file's own path and
+then through the file, never follows a link, and runs `chown -h` from inside
+each folder by name, so a link planted anywhere is changed itself rather than
+followed. With `fs.protected_hardlinks` the site user cannot link one of root's
+files in either; without it the guard skips this step.
+
+The guard's checks stay in front of all of it as a first refusal, including the
+archive listing, now also run as the site user. A site user cannot make a
+device file, and a setuid program they extract is their own, but such an
+archive is still refused before anything happens.
+
+Results differ only where root could do more than the site user: a file the
+site user cannot read cannot be read, downloaded, copied or compressed, and a
+folder they cannot write takes no new files; every file in a copy is the site
+user's, where root's `cp -a` kept other owners below the top; and an upload or
+extract no longer hands the rest of an existing folder to the site user, which
+CloudPanel's `chown -R` did.
+
+Folder listings stay with CloudPanel. They read names and file details, not
+contents, so a link planted mid-listing shows at most the names, sizes, owners
+and dates in a folder it points to. The file details in the guard's own
+replies are read as root the same way.
+
+The File Manager's own listings give every file and folder the ID of its
+resolved path, so browsing and acting on listed files never names a link. A link under the home is still there and still works for the site; only
+the File Manager will not follow it. CloudPanel's compress walks folders
+without following links to folders and stops at a link to a file outside the
+home, so the guard checks only the named sources.
+
+The same pool file sets `listen.owner = clp` and `listen.mode = 0600`. The
+socket was `root:clp 0660`, and group `clp` holds the `clp-addons` service
+account as well as `clp`. Any of its members could have asked the root pool to
+run a PHP file. `clp-addons` needs the group for one thing: the manager sets its
+own socket's group to `clp`, which a process can do only for a group it is in,
+so the panel's Nginx, running as `clp`, can reach `/addons/`. Taking it out of
+the group would close that page. The File Manager has no client but the panel's
+Nginx, so its socket goes to `clp` alone. A reload keeps the socket FPM already
+has, so the install sets its owner and mode itself, and the page's "On" needs
+them. Switching off gives it back to `root:clp 0660`.
+
+What a guard in front of CloudPanel cannot fix:
+
+- `checkPath`'s prefix comparison and the unescaped arguments in CloudPanel's
+  `ChmodCommand` and `ChownCommand` stay in its code. The guard refuses every
+  request that would reach them with a sibling home or a shell word.
+
+`bun tests/integration/integration-file-manager-guard.ts` runs the guard in
+Docker on PHP 8.1, 8.4 and 8.5 against each action, with a home holding links
+out of it and archives with device files, FIFOs and setuid programs. Every
+action the guard does runs as a real site user against a stand-in for
+CloudPanel's class, and the test checks each answer, the download's headers,
+the owner, mode and contents of what is left on disk, that files and folders
+only root can reach stay out of reach, and that the permissions action hands
+root's files under its target to the site user.
 
 ## Abandoned temp files
 

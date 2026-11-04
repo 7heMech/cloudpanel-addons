@@ -108,28 +108,9 @@
 
     // Why the request is not an active administrator's, or null when it is.
     $notAdministrator = static function (): ?string {
-        $id = $_COOKIE['cloudpanel'] ?? null;
-        if (!is_string($id) || preg_match('/\A[A-Za-z0-9,-]{1,128}\z/', $id) !== 1) return 'no panel session';
-        $path = '/home/clp/htdocs/app/files/var/sessions/sess_' . $id;
-        if (is_link($path) || !is_file($path) || filesize($path) > 262144) return 'no panel session';
-        $data = file_get_contents($path);
-        if (!is_string($data)) return 'the session file could not be read';
-        // PHP's session format: name|serialized, repeated. Each value is
-        // re-serialized to find where it ends, so a string inside one cannot
-        // pass for the next name.
-        $attributes = null;
-        for ($at = 0; $at < strlen($data);) {
-            $bar = strpos($data, '|', $at);
-            if ($bar === false) return 'the session file is not in PHP\'s format';
-            $value = @unserialize(substr($data, $bar + 1), ['allowed_classes' => false, 'max_depth' => 32]);
-            $encoded = serialize($value);
-            if ($value === false || substr_compare($data, $encoded, $bar + 1, strlen($encoded)) !== 0) return 'a session value could not be read back';
-            if (substr($data, $at, $bar - $at) === '_sf2_attributes') $attributes = $value;
-            $at = $bar + 1 + strlen($encoded);
-        }
-        // CloudPanel sets this to false while a TOTP code is still owed.
-        if (is_array($attributes) && ($attributes['mfaAuthenticated'] ?? null) === false) return 'the two-factor step is still pending';
-        $token = is_array($attributes) ? ($attributes['_security_main'] ?? null) : null;
+        $attributes = (require __DIR__ . '/panel-session.php')();
+        if (is_string($attributes)) return $attributes;
+        $token = $attributes['_security_main'] ?? null;
         $token = is_string($token) ? @unserialize($token, ['allowed_classes' => false, 'max_depth' => 32]) : null;
         // Symfony's token serializes as [firewall, [user, ...]].
         $state = is_object($token) ? (array) $token : [];

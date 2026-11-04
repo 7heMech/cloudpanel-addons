@@ -1,12 +1,13 @@
 // bun tests/integration/integration-vhost-guard.ts (requires Docker)
 //
-// Runs System Tweaks' vhost guard in PHP's own web server as the prepend file,
+// Runs System Tweaks' vhost guard, as installed, in PHP's own web server as the prepend file,
 // on the oldest and newest PHP the panel can run on, with session files in
 // Symfony's format and CloudPanel's user table, and sends it the requests
 // CloudPanel's forms send.
-import { chmodSync, cpSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { chmodSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { VHOST_GUARD_SCRIPT } from "../../addons/system-tweaks/vhost-guard";
 import VALUES from "../fixtures/vhost-guard-values.json";
 
 interface Case {
@@ -149,7 +150,7 @@ const dir = mkdtempSync(join(tmpdir(), "clp-vhost-guard-"));
 let failed = false;
 try {
   chmodSync(dir, 0o755);
-  cpSync(join(import.meta.dir, "../../addons/system-tweaks/vhost-guard.php"), join(dir, "vhost-guard.php"));
+  writeFileSync(join(dir, "vhost-guard.php"), VHOST_GUARD_SCRIPT);
   writeFileSync(join(dir, "setup.php"), SETUP);
   const part = (c: Case, key: string) => c.args.filter((arg) => arg.startsWith(`${key}=`)).map((arg) => arg.slice(key.length + 1)).join("&");
   writeFileSync(join(dir, "cases.tsv"), CASES.map((c) => [

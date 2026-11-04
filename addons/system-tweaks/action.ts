@@ -24,6 +24,9 @@ import {
   firewallStatus, setRuleProtocol, syncFirewall, type FirewallOptions, type FirewallStatus,
 } from "./firewall";
 import { installVhostGuard, queueVhostGuard, removeVhostGuard, vhostGuardStatus, type VhostGuardOptions } from "./vhost-guard";
+import {
+  fileManagerGuardStatus, installFileManagerGuard, queueFileManagerGuard, removeFileManagerGuard, type FileManagerGuardOptions,
+} from "./file-manager-guard";
 import { storedVhostValues, type StoredVhostValue, type VhostValuesOptions } from "./vhost-values";
 import { installPoolIsolation, poolIsolationStatus, removePoolIsolation, syncPoolIsolation, type PoolIsolationOptions, type PoolIsolationStatus } from "./pool-isolation";
 import { installVarnishBackends, removeVarnishBackends, sitesWithHomeLogs, sitesWithOwnLogrotate, varnishBackendsActive, type VarnishBackendOptions } from "./varnish-backend";
@@ -47,6 +50,8 @@ export interface SystemTweaksSettings {
   isolatePhpPools: boolean;
   /** Keep basic auth outside phpMyAdmin and hide its example, setup and version files. */
   protectPhpMyAdmin: boolean;
+  /** Refuse File Manager requests that leave the site's home, and leave its socket to clp. */
+  confineFileManager: boolean;
 }
 
 export interface SystemTweaksState {
@@ -57,6 +62,7 @@ export interface SystemTweaksState {
   vhostGuard: { enabled: boolean; active: boolean; stored: StoredVhostValue[] | { error: string }; homeLogs: string[]; ownLogrotate: string[] };
   phpPools: PoolIsolationStatus & { enabled: boolean };
   phpMyAdmin: PhpMyAdminStatus & { enabled: boolean };
+  fileManagerGuard: { enabled: boolean; active: boolean };
   panelPhp: PanelPhpStatus | { error: string };
   firewall: FirewallStatus | { error: string };
 }
@@ -84,6 +90,7 @@ export interface SystemTweaksOptions {
   realIp?: RealIpOptions;
   phpMyAdmin?: PhpMyAdminOptions;
   vhostGuard?: VhostGuardOptions;
+  fileManagerGuard?: FileManagerGuardOptions;
   vhostValues?: VhostValuesOptions;
   varnishBackend?: VarnishBackendOptions;
   phpPools?: PoolIsolationOptions;
@@ -106,6 +113,7 @@ export function readSettings(paths: SystemTweaksPaths): SystemTweaksSettings {
     blockVhostInjection: true,
     isolatePhpPools: true,
     protectPhpMyAdmin: true,
+    confineFileManager: true,
   };
   if (!existsSync(paths.settingsFile)) return settings;
   const info = lstatSync(paths.settingsFile);
@@ -131,6 +139,7 @@ export function readSettings(paths: SystemTweaksPaths): SystemTweaksSettings {
   if (stored.blockVhostInjection === false) settings.blockVhostInjection = false;
   if (stored.isolatePhpPools === false) settings.isolatePhpPools = false;
   if (stored.protectPhpMyAdmin === false) settings.protectPhpMyAdmin = false;
+  if (stored.confineFileManager === false) settings.confineFileManager = false;
   return settings;
 }
 
@@ -166,6 +175,10 @@ async function stateOf(options: SystemTweaksOptions): Promise<SystemTweaksState>
       ownLogrotate: settings.blockVhostInjection ? sitesWithOwnLogrotate(options.varnishBackend) : [],
     },
     phpPools: { enabled: settings.isolatePhpPools, ...poolIsolationStatus(options.phpPools) },
+    fileManagerGuard: {
+      enabled: settings.confineFileManager,
+      active: (await fileManagerGuardStatus(options.fileManagerGuard)).active,
+    },
     panelPhp: panelPhpOrError(options.panelPhp),
     firewall: firewallOrError(options.firewall),
   };
@@ -307,6 +320,31 @@ async function setPhpPools(options: SystemTweaksOptions): Promise<SystemTweaksSt
   return stateOf(options);
 }
 
+async function setFileManagerGuard(options: SystemTweaksOptions): Promise<SystemTweaksState> {
+  const paths = pathsFor(options);
+  const body = await requestBody(options);
+  if (typeof body.enabled !== "boolean") failAction("enabled must be true or false");
+  await withFileLock(paths.lockFile, 15, "another system tweaks change is still running", async () => {
+    const settings = readSettings(paths);
+    if (body.enabled) {
+      await installFileManagerGuard(options.fileManagerGuard);
+      writeSettings(paths, { ...settings, confineFileManager: true });
+    } else {
+      // Record the opt-out first, so repair never puts back a guard the
+      // administrator took away; a removal that fails leaves it in place, so
+      // the setting goes back to on to match.
+      writeSettings(paths, { ...settings, confineFileManager: false });
+      try {
+        removeFileManagerGuard(options.fileManagerGuard);
+      } catch (error) {
+        writeSettings(paths, settings);
+        throw error;
+      }
+    }
+  });
+  return stateOf(options);
+}
+
 async function changePanelPhp(options: SystemTweaksOptions): Promise<SystemTweaksState> {
   const body = await requestBody(options);
   if (typeof body.php !== "string") failAction("php must be a version such as 8.4, or empty for CloudPanel's own");
@@ -332,6 +370,7 @@ export async function executeSystemTweaksAction(argv: string[], options: SystemT
   if (verb === "set-real-ip") return setRealIp(options);
   if (verb === "set-vhost-guard") return setVhostGuard(options);
   if (verb === "set-phpmyadmin") return setPhpMyAdmin(options);
+  if (verb === "set-file-manager-guard") return setFileManagerGuard(options);
   if (verb === "set-panel-php") return changePanelPhp(options);
   if (verb === "set-php-pools") return setPhpPools(options);
   if (verb === "firewall") return firewallStatus(options.firewall);
@@ -410,6 +449,14 @@ export async function systemTweaksMaintenance(options: SystemTweaksOptions = {})
     failures.push(`PHP pools: ${errorMessage(error)}`);
   }
   try {
+    const paths = pathsFor(options);
+    const putBack = await withFileLock(paths.lockFile, 15, "another system tweaks change is still running", async () =>
+      readSettings(paths).confineFileManager && await installFileManagerGuard({ lockWaitSeconds: 5, ...options.fileManagerGuard }));
+    if (putBack) lines.push("File Manager guard put back");
+  } catch (error) {
+    failures.push(`File Manager guard: ${errorMessage(error)}`);
+  }
+  try {
     const varnish = systemTweaksVarnish(options);
     if (varnish) lines.push(varnish);
   } catch (error) {
@@ -465,11 +512,19 @@ export function withdrawSystemTweaks(options: SystemTweaksOptions = {}): void {
       if (settings.enabledTimers.length) writeSettings(paths, { ...settings, enabledTimers: [] });
       applyRealIp(false, options.realIp);
       applyPhpMyAdmin(false, options.phpMyAdmin);
-      removeVhostGuard(options.vhostGuard);
       try {
-        removeVarnishBackends(options.varnishBackend);
+        removeFileManagerGuard(options.fileManagerGuard);
+        removeVhostGuard(options.vhostGuard);
+        try {
+          removeVarnishBackends(options.varnishBackend);
+        } catch (error) {
+          queueVhostGuard(options.vhostGuard);
+          throw error;
+        }
       } catch (error) {
-        queueVhostGuard(options.vhostGuard);
+        // The addon stays enabled, so the File Manager guard comes back now
+        // rather than at the next repair, unless it was switched off.
+        if (settings.confineFileManager) queueFileManagerGuard(options.fileManagerGuard);
         throw error;
       }
       removePoolIsolation(options.phpPools);
@@ -497,6 +552,7 @@ export function restoreSystemTweaks(options: SystemTweaksOptions = {}): void {
       if (settings.protectPhpMyAdmin) applyPhpMyAdmin(true, options.phpMyAdmin);
       if (settings.blockVhostInjection) queueVhostGuard(options.vhostGuard);
       if (settings.isolatePhpPools) installPoolIsolation(options.phpPools);
+      if (settings.confineFileManager) queueFileManagerGuard(options.fileManagerGuard);
     });
   } finally {
     restorePanelPhp(options.panelPhp);

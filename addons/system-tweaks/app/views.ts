@@ -356,6 +356,12 @@ function vhostGuardLine(state: SystemTweaksState["vhostGuard"]): string {
   return `${badge("Off", "plain")} <span>Any panel account with a site can write nginx config, and nginx runs as root.</span>`;
 }
 
+function fileManagerGuardLine(state: SystemTweaksState["fileManagerGuard"]): string {
+  if (state.active) return `${badge("On", "ok")} <span>The File Manager stays in each site's home.</span>`;
+  if (state.enabled) return `${badge("Not applied", "warn")} <span>Run clp-addons repair.</span>`;
+  return `${badge("Off", "plain")} <span>Any panel account with a site can read and change files anywhere on the server through the File Manager, which runs as root.</span>`;
+}
+
 function settingsCard(state: SystemTweaksState): string {
   return `
     <div class="card">
@@ -407,6 +413,16 @@ function settingsCard(state: SystemTweaksState): string {
         checked: state.phpPools.enabled,
         onchange: "setPhpPools(this)",
         extra: `<p class="st-status">${phpPoolsLine(state.phpPools)}</p>`,
+      })}${settingRow({
+        key: "confineFileManager",
+        title: "Keep the File Manager in the site's home",
+        description: [
+          "Refuses File Manager requests that reach outside the site's home through .. or a symbolic link, and archives that would extract device files or setuid programs.",
+          "Only the panel's own nginx can reach the File Manager's PHP.",
+        ],
+        checked: state.fileManagerGuard.enabled,
+        onchange: "setFileManagerGuard(this)",
+        extra: `<p class="st-status">${fileManagerGuardLine(state.fileManagerGuard)}</p>`,
       })}
       </div>
     </div>`;

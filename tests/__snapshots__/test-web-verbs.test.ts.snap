@@ -113,6 +113,7 @@ stager:sites                       admin
 stager:watch-job                   admin stream
 system-tweaks:firewall             admin
 system-tweaks:install-updates      admin
+system-tweaks:set-file-manager-guard admin
 system-tweaks:set-firewall-protocol admin
 system-tweaks:set-panel-php        admin
 system-tweaks:set-php-pools        admin
