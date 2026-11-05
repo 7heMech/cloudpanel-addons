@@ -36,6 +36,8 @@
 .st-reboot-time select { flex: 0 1 280px; min-width: 0; }
 .st-reboot-time input { flex: 0 1 170px; min-width: 0; }
 .st-reboot-time + .hint { margin-top: 6px; font-size: 13px; }
+.st-backup-options { display: grid; grid-template-columns: auto minmax(60px, 100px); align-items: center; justify-content: start; gap: 8px 14px; margin-top: 12px; }
+.st-backup-options select { min-width: 0; }
 .st-fold { margin-top: 14px; }
 .st-fold > summary { cursor: pointer; color: var(--muted); font-size: 14px; }
 .st-fold > summary .badge { margin-right: 6px; }

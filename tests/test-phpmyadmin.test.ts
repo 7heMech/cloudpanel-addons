@@ -1,5 +1,5 @@
 import { afterEach, expect, test } from "bun:test";
-import { chmodSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { chmodSync, mkdtempSync, readFileSync, rmSync, statSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { CommandResult } from "../cli/action-common";
@@ -49,7 +49,8 @@ function box(content = VHOST) {
     return { ok: true, stdout: "", stderr: "" };
   };
   const uid = process.getuid!();
-  const options: PhpMyAdminOptions = { run, paths: { vhost, panelConf, panelUid: uid, rootUid: uid } };
+  const gid = process.getgid!();
+  const options: PhpMyAdminOptions = { run, paths: { vhost, panelConf, panelUid: uid, panelGid: gid, rootUid: uid, rootGid: gid } };
   return { dir, vhost, panelConf, nginx, options };
 }
 
@@ -99,18 +100,82 @@ test("switching on tests and reloads the panel's Nginx, and off restores CloudPa
   expect(readFileSync(b.vhost, "utf8")).toBe(VHOST);
 });
 
-test("a block Nginx rejects is taken back out and Nginx reloads nothing new", () => {
+test.each([0o644, 0o770])("a root-owned panel vhost with mode %i keeps its ownership and permissions", (mode) => {
   const b = box();
-  b.nginx.fail = true;
-  expect(() => applyPhpMyAdmin(true, b.options)).toThrow("Nginx validation failed");
+  // The fixture's owner stands in for root, distinct from the panel account.
+  const options = { ...b.options, paths: { ...b.options.paths, panelUid: process.getuid!() + 1 } };
+  chmodSync(b.vhost, mode);
+  const { uid, gid } = statSync(b.vhost);
+  const metadata = () => { const info = statSync(b.vhost); return { uid: info.uid, gid: info.gid, mode: info.mode & 0o777 }; };
+  expect(phpMyAdminStatus(options)).toEqual({ active: false, problem: "" });
+  expect(applyPhpMyAdmin(true, options)).toBe(true);
+  expect(phpMyAdminStatus(options)).toEqual({ active: true, problem: "" });
+  expect(metadata()).toEqual({ uid, gid, mode });
+  expect(applyPhpMyAdmin(false, options)).toBe(true);
   expect(readFileSync(b.vhost, "utf8")).toBe(VHOST);
+  expect(metadata()).toEqual({ uid, gid, mode });
+});
+
+test.each([false, true])("a block Nginx rejects is taken back out with its owner kept (root-owned: %s)", (rootOwned) => {
+  const b = box();
+  const options = rootOwned ? { ...b.options, paths: { ...b.options.paths, panelUid: process.getuid!() + 1 } } : b.options;
+  const before = statSync(b.vhost);
+  b.nginx.fail = true;
+  expect(() => applyPhpMyAdmin(true, options)).toThrow("Nginx validation failed");
+  expect(readFileSync(b.vhost, "utf8")).toBe(VHOST);
+  expect(statSync(b.vhost)).toMatchObject({ uid: before.uid, gid: before.gid, mode: before.mode });
   expect(b.nginx.commands.filter((command) => command.startsWith("systemctl"))).toEqual([]);
 });
 
-test("a group-writable vhost not owned by the panel account is refused", () => {
+test("a vhost owned by neither root nor the panel account is refused", () => {
   const b = box();
-  expect(() => applyPhpMyAdmin(true, { ...b.options, paths: { ...b.options.paths, panelUid: process.getuid!() + 1 } })).toThrow("refusing");
+  const uid = process.getuid!();
+  const options = { ...b.options, paths: { ...b.options.paths, panelUid: uid + 1, rootUid: uid + 2 } };
+  expect(phpMyAdminStatus(options).problem).toContain(`owned by uid ${uid}`);
+  expect(() => applyPhpMyAdmin(true, options)).toThrow("refusing");
+  expect(b.nginx.commands).toEqual([]);
   expect(readFileSync(b.vhost, "utf8")).toBe(VHOST);
+});
+
+test.each([false, true])("world-writable and symlinked panel vhosts stay refused (root-owned: %s)", (rootOwned) => {
+  const b = box();
+  const options = rootOwned ? { ...b.options, paths: { ...b.options.paths, panelUid: process.getuid!() + 1 } } : b.options;
+  chmodSync(b.vhost, 0o772);
+  expect(phpMyAdminStatus(options).problem).toContain("world-writable");
+  expect(() => applyPhpMyAdmin(true, options)).toThrow("world-writable");
+  chmodSync(b.vhost, 0o770);
+  const link = join(b.dir, "linked.conf");
+  symlinkSync(b.vhost, link);
+  const linked = { ...options, paths: { ...options.paths, vhost: link } };
+  expect(phpMyAdminStatus(linked).problem).toContain("symlink");
+  expect(() => applyPhpMyAdmin(true, linked)).toThrow("symlink");
+  expect(readFileSync(b.vhost, "utf8")).toBe(VHOST);
+  expect(b.nginx.commands).toEqual([]);
+});
+
+test("panel files writable by an unrelated group are refused, while read-only group access is allowed", () => {
+  const b = box();
+  const gid = process.getgid!();
+  const options = { ...b.options, paths: { ...b.options.paths, panelUid: process.getuid!() + 1, panelGid: gid + 1, rootGid: gid + 2 } };
+  expect(phpMyAdminStatus(options).problem).toContain(`untrusted gid ${gid}`);
+  expect(() => applyPhpMyAdmin(true, options)).toThrow(`untrusted gid ${gid}`);
+  expect(readFileSync(b.vhost, "utf8")).toBe(VHOST);
+  expect(b.nginx.commands).toEqual([]);
+  chmodSync(b.vhost, 0o750);
+  expect(phpMyAdminStatus(options)).toEqual({ active: false, problem: "" });
+  expect(applyPhpMyAdmin(true, options)).toBe(true);
+  expect(statSync(b.vhost)).toMatchObject({ gid });
+  expect(statSync(b.vhost).mode & 0o777).toBe(0o750);
+});
+
+test("the panel's primary group can differ from its UID and from root's group", () => {
+  const b = box();
+  const gid = process.getgid!();
+  const options = { ...b.options, paths: { ...b.options.paths, panelUid: process.getuid!() + 1, panelGid: gid, rootGid: gid + 1 } };
+  expect(applyPhpMyAdmin(true, options)).toBe(true);
+  expect(phpMyAdminStatus(options)).toEqual({ active: true, problem: "" });
+  expect(statSync(b.vhost)).toMatchObject({ uid: process.getuid!(), gid });
+  expect(statSync(b.vhost).mode & 0o777).toBe(0o770);
 });
 
 test("the /addons/ proxy keeps its baseline whether or not the block is there", () => {

@@ -3,7 +3,7 @@ import { Database } from "bun:sqlite";
 import { chmodSync, existsSync, lstatSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from "node:fs";
 import { X509Certificate } from "node:crypto";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 import { runCommand, type CommandResult } from "../cli/action-common";
 import { inspectPhpGuard, reconcilePhpGuard, type PhpGuardOptions } from "../cli/php-guard";
 import {
@@ -17,6 +17,7 @@ import { iniBoolean, iniSetting, uploadProgressStatus } from "../addons/system-t
 import { dashboardView } from "../addons/system-tweaks/app/views";
 import { releaseRealIp } from "../addons/system-tweaks/real-ip";
 import WRAPPER_SCRIPT from "../addons/system-tweaks/clpctl-wrapper.sh" with { type: "text" };
+import { DEFAULT_BACKUP_COMPRESSION } from "../addons/system-tweaks/backup-compression";
 
 // CloudPanel's original /usr/bin/clpctlWrapper (cloudpanel 2.5.4-3), whose SHA-256
 // is in KNOWN_ORIGINAL_SHA256, so the guard treats it as a known original.
@@ -428,8 +429,8 @@ function box(options: { installed?: boolean; timers?: Record<string, string>; fa
           fpmBinDir: sbin, procRoot: join(dir, "proc"), rootUid: uid,
         },
       },
-      realIp: { run: nginxRun, paths: { nginxConf, panelConf, cloudflareIps, panelUid: uid, rootUid: uid } },
-      phpMyAdmin: { run: () => ok(), paths: { vhost: panelVhost, panelConf, panelUid: uid, rootUid: uid } },
+      realIp: { run: nginxRun, paths: { nginxConf, panelConf, cloudflareIps, panelUid: uid, panelGid: process.getgid!(), rootUid: uid, rootGid: process.getgid!() } },
+      phpMyAdmin: { run: () => ok(), paths: { vhost: panelVhost, panelConf, panelUid: uid, panelGid: process.getgid!(), rootUid: uid, rootGid: process.getgid!() } },
       // No panel server block until a test writes one.
       panelCert: {
         run: (command, args) => command === "openssl" ? runCommand(command, args) : nginxRun(command, args),
@@ -473,7 +474,7 @@ function box(options: { installed?: boolean; timers?: Record<string, string>; fa
       loginJails: {
         run: () => ({ ok: false, stdout: "", stderr: "not installed" }),
         paths: {
-          fail2banDir: join(dir, "fail2ban"), panelConf: null, panelUid: uid, cloudflareIps,
+          fail2banDir: join(dir, "fail2ban"), panelConf: null, panelUid: uid, panelGid: process.getgid!(), rootGid: process.getgid!(), cloudflareIps,
           domainVhost: join(dir, "custom-domain.conf"), sitesConf: nginxConf, domainUid: 0, rootUid: uid,
         },
       },
@@ -1180,6 +1181,19 @@ test("a withdrawal that fails after the File Manager guard is gone queues it bac
   }
 });
 
+test("repair still re-applies later guards when MySQL cannot be inspected", () => {
+  const b = box();
+  const guardPaths = { wrapper: join(tempDir(), "clpctlWrapper"), backup: join(tempDir(), "clpctlWrapper.orig"), rootUid: process.getuid!() };
+  b.options.clpctlGuard = { version: "2.5.4-3", paths: guardPaths };
+  writeFileSync(guardPaths.wrapper, CLPCTL_ORIGINAL, { mode: 0o700 });
+  mkdirSync(b.options.database!.paths!.confDirs![0]!, { recursive: true });
+  mkdirSync(dirname(b.settingsFile), { recursive: true, mode: 0o700 });
+  writeFileSync(b.settingsFile, JSON.stringify({ version: 1, databaseLoopback: true }), { mode: 0o600 });
+  // The fixture's systemctl fails, as `systemctl show` does for a unit that is mid-restart.
+  restoreSystemTweaks(b.options);
+  expect(readFileSync(guardPaths.wrapper, "utf8")).toBe(WRAPPER_SCRIPT);
+});
+
 test("a withdrawal that fails after restoring the wrapper puts the hardened wrapper back", async () => {
   const b = box();
   const uid = process.getuid!();
@@ -1201,7 +1215,7 @@ test("a withdrawal that fails after restoring the wrapper puts the hardened wrap
 test("the page shows the vhost guard as on, waiting for repair, or off", () => {
   const html = (partial: Omit<SystemTweaksState["vhostGuard"], "homeLogs" | "ownLogrotate"> & { homeLogs?: string[]; ownLogrotate?: string[] }) => dashboardView({
     updates: updatesStatus({ run: () => ({ ok: false, stdout: "", stderr: "" }) }), settings: { ...DEFAULT_UPDATE_SETTINGS },
-    uploadProgress: { guard: true, fpms: [] }, realIp: { blockForged: true, trustsAnyAddress: false, problem: "" }, phpMyAdmin: { enabled: true, active: true, problem: "" }, vhostGuard: { homeLogs: [], ownLogrotate: [], ...partial }, phpPools: { enabled: true, active: true, problem: "" }, fileManagerGuard: { enabled: true, active: true }, panelCert: { kind: "generated" as const, replace: true }, clpctlGuard: { error: "" }, panelPhp: { error: "" }, firewall: { error: "" }, loginJails: { error: "" }, database: { error: "" },
+    uploadProgress: { guard: true, fpms: [] }, realIp: { blockForged: true, trustsAnyAddress: false, problem: "" }, phpMyAdmin: { enabled: true, active: true, problem: "" }, vhostGuard: { homeLogs: [], ownLogrotate: [], ...partial }, phpPools: { enabled: true, active: true, problem: "" }, fileManagerGuard: { enabled: true, active: true }, panelCert: { kind: "generated" as const, replace: true }, backupCompression: { enabled: false, level: 3, threads: 1, active: false, supported: true, installed: true, problem: "" }, clpctlGuard: { error: "" }, panelPhp: { error: "" }, firewall: { error: "" }, loginJails: { error: "" }, database: { error: "" },
   });
   expect(html({ enabled: true, active: true, stored: [] })).toContain("Panel input is checked before CloudPanel writes it into a vhost.");
   expect(html({ enabled: true, active: false, stored: [] })).toContain("Not applied");
@@ -1238,7 +1252,7 @@ test("the page shows PHP pool isolation as on, waiting for repair, or off", () =
   const html = (phpPools: SystemTweaksState["phpPools"]) => dashboardView({
     updates: updatesStatus({ run: () => ({ ok: false, stdout: "", stderr: "" }) }), settings: { ...DEFAULT_UPDATE_SETTINGS },
     uploadProgress: { guard: true, fpms: [] }, realIp: { blockForged: true, trustsAnyAddress: false, problem: "" },
-    phpMyAdmin: { enabled: true, active: true, problem: "" }, vhostGuard: { enabled: true, active: true, stored: [], homeLogs: [], ownLogrotate: [] }, phpPools, fileManagerGuard: { enabled: true, active: true }, panelCert: { kind: "generated" as const, replace: true }, clpctlGuard: { error: "" }, panelPhp: { error: "" }, firewall: { error: "" }, loginJails: { error: "" }, database: { error: "" },
+    phpMyAdmin: { enabled: true, active: true, problem: "" }, vhostGuard: { enabled: true, active: true, stored: [], homeLogs: [], ownLogrotate: [] }, phpPools, fileManagerGuard: { enabled: true, active: true }, panelCert: { kind: "generated" as const, replace: true }, backupCompression: { enabled: false, level: 3, threads: 1, active: false, supported: true, installed: true, problem: "" }, clpctlGuard: { error: "" }, panelPhp: { error: "" }, firewall: { error: "" }, loginJails: { error: "" }, database: { error: "" },
   });
   expect(html({ enabled: true, active: true, problem: "" })).toContain("Each pool's port answers only nginx and the pool's own user.");
   expect(html({ enabled: true, active: false, problem: "" })).toContain("Run clp-addons repair.");
@@ -1361,7 +1375,7 @@ test("failed downloads retain the package URL in expandable details and escape t
   const updates = updatesStatus(b.options.updates);
   expect(updates.lastRun?.outcome).toBe("failed");
   expect(updates.lastRun?.message).toContain("php8.2-bcmath.deb");
-  const html = dashboardView({ updates, settings: { ...DEFAULT_UPDATE_SETTINGS }, uploadProgress: { guard: true, fpms: [] }, realIp: { blockForged: true, trustsAnyAddress: false, problem: "" }, phpMyAdmin: { enabled: true, active: true, problem: "" }, vhostGuard: { enabled: true, active: true, stored: [], homeLogs: [], ownLogrotate: [] }, phpPools: { enabled: true, active: true, problem: "" }, fileManagerGuard: { enabled: true, active: true }, panelCert: { kind: "generated" as const, replace: true }, clpctlGuard: { error: "" }, panelPhp: { error: "" }, firewall: { error: "" }, loginJails: { error: "" }, database: { error: "" } });
+  const html = dashboardView({ updates, settings: { ...DEFAULT_UPDATE_SETTINGS }, uploadProgress: { guard: true, fpms: [] }, realIp: { blockForged: true, trustsAnyAddress: false, problem: "" }, phpMyAdmin: { enabled: true, active: true, problem: "" }, vhostGuard: { enabled: true, active: true, stored: [], homeLogs: [], ownLogrotate: [] }, phpPools: { enabled: true, active: true, problem: "" }, fileManagerGuard: { enabled: true, active: true }, panelCert: { kind: "generated" as const, replace: true }, backupCompression: { enabled: false, level: 3, threads: 1, active: false, supported: true, installed: true, problem: "" }, clpctlGuard: { error: "" }, panelPhp: { error: "" }, firewall: { error: "" }, loginJails: { error: "" }, database: { error: "" } });
   expect(html).toContain("A package download failed (HTTP 404).");
   expect(html).toContain('<details class="st-run-details"><summary>Failure details</summary>');
   expect(html).toContain("php8.2-bcmath.deb failed to download, aborting &lt;script&gt;");
@@ -1497,7 +1511,7 @@ test("the page shows update options only once updates are on, and says what sile
     uploadProgress: { guard: true, fpms: [{
       label: "PHP 8.2", version: "8.2", enabled: false, setBy: "clp-addons" as const,
       source: "/etc/php/8.2/fpm/conf.d/99-clp-addons-upload-progress.ini", offWithoutGuard: false, poolsOn: ["legacy.example.com"],
-    }] }, realIp: { blockForged: true, trustsAnyAddress: false, problem: "" }, phpMyAdmin: { enabled: true, active: true, problem: "" }, vhostGuard: { enabled: true, active: true, stored: [], homeLogs: [], ownLogrotate: [] }, phpPools: { enabled: true, active: true, problem: "" }, fileManagerGuard: { enabled: true, active: true }, panelCert: { kind: "generated" as const, replace: true }, clpctlGuard: { error: "" }, panelPhp: { error: "" }, firewall: { error: "" }, loginJails: { error: "" }, database: { error: "" },
+    }] }, realIp: { blockForged: true, trustsAnyAddress: false, problem: "" }, phpMyAdmin: { enabled: true, active: true, problem: "" }, vhostGuard: { enabled: true, active: true, stored: [], homeLogs: [], ownLogrotate: [] }, phpPools: { enabled: true, active: true, problem: "" }, fileManagerGuard: { enabled: true, active: true }, panelCert: { kind: "generated" as const, replace: true }, backupCompression: { enabled: false, level: 3, threads: 1, active: false, supported: true, installed: true, problem: "" }, clpctlGuard: { error: "" }, panelPhp: { error: "" }, firewall: { error: "" }, loginJails: { error: "" }, database: { error: "" },
   };
   const now = Date.parse("2026-10-25T00:00:00Z");
   const outside = dashboardView(state, now);
@@ -1545,7 +1559,7 @@ test("the page names the UDP ports CloudPanel's Firewall page opens, in one line
   const b = box();
   const base = {
     updates: updatesStatus(b.options.updates), settings: { ...DEFAULT_UPDATE_SETTINGS }, uploadProgress: { guard: true, fpms: [] },
-    realIp: { blockForged: true, trustsAnyAddress: false, problem: "" }, phpMyAdmin: { enabled: true, active: true, problem: "" }, vhostGuard: { enabled: true, active: true, stored: [], homeLogs: [], ownLogrotate: [] }, phpPools: { enabled: true, active: true, problem: "" }, fileManagerGuard: { enabled: true, active: true }, panelCert: { kind: "generated" as const, replace: true }, clpctlGuard: { error: "" }, panelPhp: { error: "" }, loginJails: { error: "" }, database: { error: "" } as const,
+    realIp: { blockForged: true, trustsAnyAddress: false, problem: "" }, phpMyAdmin: { enabled: true, active: true, problem: "" }, vhostGuard: { enabled: true, active: true, stored: [], homeLogs: [], ownLogrotate: [] }, phpPools: { enabled: true, active: true, problem: "" }, fileManagerGuard: { enabled: true, active: true }, panelCert: { kind: "generated" as const, replace: true }, backupCompression: { enabled: false, level: 3, threads: 1, active: false, supported: true, installed: true, problem: "" }, clpctlGuard: { error: "" }, panelPhp: { error: "" }, loginJails: { error: "" }, database: { error: "" } as const,
   };
   const open = dashboardView({ ...base, firewall: { available: true, protocols: { 5: "udp" }, udpPorts: ["53", "3478-3479"] } });
   expect(open).toContain(`<br>UDP ports open from CloudPanel's <a href="/admin/firewall">Firewall</a> page: 53, 3478-3479.</p>`);
@@ -1571,7 +1585,7 @@ test("the Failed logins card lists bans with an Unblock each, and warns about wh
   const b = box();
   const base = {
     updates: updatesStatus(b.options.updates), settings: { ...DEFAULT_UPDATE_SETTINGS }, uploadProgress: { guard: true, fpms: [] },
-    realIp: { blockForged: true, trustsAnyAddress: false, problem: "" }, phpMyAdmin: { enabled: true, active: true, problem: "" }, vhostGuard: { enabled: true, active: true, stored: [], homeLogs: [], ownLogrotate: [] }, phpPools: { enabled: true, active: true, problem: "" }, fileManagerGuard: { enabled: true, active: true }, panelCert: { kind: "generated" as const, replace: true }, clpctlGuard: { error: "" }, panelPhp: { error: "" }, firewall: { error: "" }, database: { error: "" },
+    realIp: { blockForged: true, trustsAnyAddress: false, problem: "" }, phpMyAdmin: { enabled: true, active: true, problem: "" }, vhostGuard: { enabled: true, active: true, stored: [], homeLogs: [], ownLogrotate: [] }, phpPools: { enabled: true, active: true, problem: "" }, fileManagerGuard: { enabled: true, active: true }, panelCert: { kind: "generated" as const, replace: true }, backupCompression: { enabled: false, level: 3, threads: 1, active: false, supported: true, installed: true, problem: "" }, clpctlGuard: { error: "" }, panelPhp: { error: "" }, firewall: { error: "" }, database: { error: "" },
   };
   const jails = {
     panel: true, ssh: false, missing: [], service: "active" as const, running: ["clp-addons-panel", "clp-addons-domain"], panelLog: true, problem: "",
@@ -1594,4 +1608,63 @@ test("the Failed logins card lists bans with an Unblock each, and warns about wh
   expect(domain({ name: "cp.example.com", logged: false, supported: false })).toContain("more than one server block");
   expect(dashboardView({ ...base, loginJails: { ...jails, panelLog: false } })).toContain("Not running</span> <span>Run clp-addons repair.");
   expect(dashboardView({ ...base, loginJails: { ...jails, problem: "refusing /x: it is a symlink" } })).toContain("refusing /x: it is a symlink");
+});
+
+
+test("remote backup compression saves only after validation, survives repair, and withdraws with the addon", async () => {
+  const b = box();
+  const dir = tempDir();
+  const remoteCommand = join(dir, "RemoteBackupCreateCommand.php");
+  const tarCommand = join(dir, "TarCreateCommand.php");
+  const original = "<?php $tarCreator->create($sources, $destinationFile, $excludes);";
+  writeFileSync(remoteCommand, original);
+  writeFileSync(tarCommand, "tar fixture");
+  b.options.backupCompression = {
+    paths: { remoteCommand, tarCommand }, version: "2.5.4-3",
+    fingerprints: { remote: Bun.CryptoHasher.hash("sha256", original, "hex"), tar: Bun.CryptoHasher.hash("sha256", "tar fixture", "hex") },
+    run: () => ({ ok: true, stdout: "", stderr: "" }),
+  };
+  const on = { enabled: true, level: 3, threads: 1 };
+  b.options.backupCompression.version = "next";
+  await expect(act(b, ["set-backup-compression"], on)).rejects.toThrow("has not been checked");
+  expect(JSON.parse(readFileSync(b.settingsFile, "utf8")).backupCompression).toEqual(DEFAULT_BACKUP_COMPRESSION);
+  expect(readFileSync(remoteCommand, "utf8")).toBe(original);
+  b.options.backupCompression.version = "2.5.4-3";
+  const state = await act(b, ["set-backup-compression"], on);
+  expect(state.backupCompression).toMatchObject({ ...on, active: true });
+  const html = dashboardView(state);
+  expect(html).toContain("Compress remote backups with Zstandard");
+  expect(html).toContain("Worker threads");
+  expect(html).toContain("Restore .tar.zst archives over SSH");
+  writeFileSync(remoteCommand, original);
+  await systemTweaksMaintenance(b.options);
+  expect(readFileSync(remoteCommand, "utf8")).toContain("clp-addons:backup-zstd:3:1");
+  withdrawSystemTweaks(b.options);
+  expect(readFileSync(remoteCommand, "utf8")).toBe(original);
+  restoreSystemTweaks(b.options);
+  expect(readFileSync(remoteCommand, "utf8")).toContain("clp-addons:backup-zstd:3:1");
+  await act(b, ["set-backup-compression"], DEFAULT_BACKUP_COMPRESSION);
+  await systemTweaksMaintenance(b.options);
+  expect(readFileSync(remoteCommand, "utf8")).toBe(original);
+});
+
+test("the backup compression API forwards the validated selection and repaints its actual state", async () => {
+  const { handle } = await import("../addons/system-tweaks/app");
+  const { systemTweaksService } = await import("../addons/system-tweaks/app/service");
+  const state = await act(box(), ["state"]);
+  const original = systemTweaksService.setBackupCompression;
+  const calls: unknown[] = [];
+  systemTweaksService.setBackupCompression = async (settings) => { calls.push(settings); return { ok: true, data: state }; };
+  const body = { enabled: true, level: 6, threads: 2 };
+  const csrf = "a".repeat(64);
+  try {
+    const req = new Request("https://panel.example.com/addons/system-tweaks/api/backup-compression", {
+      method: "POST", headers: { Host: "panel.example.com", Origin: "https://panel.example.com", "Content-Type": "application/json",
+        Cookie: `clp_addons_csrf=${csrf}`, "X-CLP-Addons-CSRF": csrf }, body: JSON.stringify(body),
+    });
+    const response = await handle(req, "/api/backup-compression");
+    expect(response.status).toBe(200);
+    expect((await response.json() as { html: string }).html).toBe(dashboardView(state));
+    expect(calls).toEqual([body]);
+  } finally { systemTweaksService.setBackupCompression = original; }
 });

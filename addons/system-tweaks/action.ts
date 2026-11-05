@@ -39,6 +39,10 @@ import { databaseStatus, reconcileDatabaseFile, setDatabaseLoopback, type Databa
 import {
   applyClpctlGuard, clpctlGuardOrError, restoreClpctlWrapper, type ClpctlGuardOptions, type ClpctlGuardStatus,
 } from "./clpctl-guard";
+import {
+  BACKUP_COMPRESSION_ERROR, DEFAULT_BACKUP_COMPRESSION, backupCompressionStatus, reconcileBackupCompression, validBackupCompression,
+  type BackupCompressionOptions, type BackupCompressionSettings, type BackupCompressionStatus,
+} from "./backup-compression";
 
 const SETTINGS_VERSION = 1;
 const MAX_INPUT_BYTES = 4 * 1024;
@@ -71,6 +75,7 @@ export interface SystemTweaksSettings {
   databaseLoopback: boolean;
   /** Replace CloudPanel's clpctlWrapper with one that closes the sudo-to-root injection. */
   blockClpctlInjection: boolean;
+  backupCompression: BackupCompressionSettings;
 }
 
 export interface SystemTweaksState {
@@ -88,6 +93,7 @@ export interface SystemTweaksState {
   firewall: FirewallStatus | { error: string };
   loginJails: (LoginJailsStatus & LoginJailSettings) | { error: string };
   database: (DatabaseStatus & { loopback: boolean }) | { error: string };
+  backupCompression: BackupCompressionStatus;
 }
 
 export interface SystemTweaksPaths {
@@ -124,6 +130,7 @@ export interface SystemTweaksOptions {
   firewall?: FirewallOptions;
   loginJails?: LoginJailOptions;
   database?: DatabaseOptions;
+  backupCompression?: BackupCompressionOptions;
   now?: () => number;
 }
 
@@ -146,6 +153,7 @@ export function readSettings(paths: SystemTweaksPaths): SystemTweaksSettings {
     fail2banBefore: null,
     databaseLoopback: false,
     blockClpctlInjection: true,
+    backupCompression: { ...DEFAULT_BACKUP_COMPRESSION },
   };
   if (!existsSync(paths.settingsFile)) return settings;
   const info = lstatSync(paths.settingsFile);
@@ -182,6 +190,7 @@ export function readSettings(paths: SystemTweaksPaths): SystemTweaksSettings {
   }
   if (stored.databaseLoopback === true) settings.databaseLoopback = true;
   if (stored.blockClpctlInjection === false) settings.blockClpctlInjection = false;
+  if (validBackupCompression(stored.backupCompression)) settings.backupCompression = { ...stored.backupCompression };
   return settings;
 }
 
@@ -227,6 +236,7 @@ async function stateOf(options: SystemTweaksOptions): Promise<SystemTweaksState>
     firewall: firewallOrError(options.firewall),
     loginJails: loginJailsOrError(settings.loginJails, options.loginJails),
     database: databaseOrError(settings.databaseLoopback, options.database),
+    backupCompression: backupCompressionStatus(settings.backupCompression, options.backupCompression),
   };
 }
 
@@ -477,6 +487,19 @@ async function setDatabase(options: SystemTweaksOptions): Promise<SystemTweaksSt
   return stateOf(options);
 }
 
+async function setBackupCompression(options: SystemTweaksOptions): Promise<SystemTweaksState> {
+  const body = await requestBody(options);
+  if (!validBackupCompression(body)) failAction(BACKUP_COMPRESSION_ERROR);
+  const paths = pathsFor(options);
+  await withFileLock(paths.lockFile, 15, "another system tweaks change is still running", async () => {
+    const settings = readSettings(paths);
+    writeSettings(paths, { ...settings, backupCompression: { ...body } });
+    try { reconcileBackupCompression(body, options.backupCompression); }
+    catch (error) { writeSettings(paths, settings); throw error; }
+  });
+  return stateOf(options);
+}
+
 async function changePanelPhp(options: SystemTweaksOptions): Promise<SystemTweaksState> {
   const body = await requestBody(options);
   if (typeof body.php !== "string") failAction("php must be a version such as 8.4, or empty for CloudPanel's own");
@@ -505,6 +528,7 @@ export async function executeSystemTweaksAction(argv: string[], options: SystemT
   if (verb === "set-file-manager-guard") return setFileManagerGuard(options);
   if (verb === "set-panel-cert") return setPanelCert(options);
   if (verb === "set-clpctl-guard") return setClpctlGuard(options);
+  if (verb === "set-backup-compression") return setBackupCompression(options);
   if (verb === "set-panel-php") return changePanelPhp(options);
   if (verb === "set-php-pools") return setPhpPools(options);
   if (verb === "set-login-jails") return setLoginJails(options);
@@ -645,6 +669,12 @@ export async function systemTweaksMaintenance(options: SystemTweaksOptions = {})
   } catch (error) {
     failures.push(`panel PHP: ${errorMessage(error)}`);
   }
+  try {
+    const changed = withSettingsLock(options, (_paths, settings) => reconcileBackupCompression(settings.backupCompression, options.backupCompression));
+    if (changed) lines.push("remote backup compression reconciled");
+  } catch (error) {
+    failures.push(`remote backup compression: ${errorMessage(error)}`);
+  }
   if (failures.length) throw new Error([...failures, ...lines].join("; "));
   return lines.join("; ") || null;
 }
@@ -729,6 +759,7 @@ export function withdrawSystemTweaks(options: SystemTweaksOptions = {}): void {
           throw error;
         }
         removePoolIsolation(options.phpPools);
+        reconcileBackupCompression({ ...settings.backupCompression, enabled: false }, options.backupCompression);
       } catch (error) {
         // A later step failed, so deactivation does not complete and the addon
         // stays enabled. The wrapper is already back to CloudPanel's vulnerable
@@ -763,11 +794,16 @@ export function restoreSystemTweaks(options: SystemTweaksOptions = {}): void {
       if (settings.blockForgedRealIp) applyRealIp(true, options.realIp);
       if (settings.protectPhpMyAdmin) applyPhpMyAdmin(true, options.phpMyAdmin);
       settleLoginJails(paths, readSettings(paths), options);
-      if (settings.databaseLoopback) reconcileDatabaseFile(true, options.database);
+      // It inspects MySQL's units, which can be mid-restart; the guards below must still come back.
+      if (settings.databaseLoopback) {
+        try { reconcileDatabaseFile(true, options.database); }
+        catch (error) { log.warn(`MySQL on this server only waits for the next repair: ${errorMessage(error)}`); }
+      }
       if (settings.blockVhostInjection) queueVhostGuard(options.vhostGuard);
       if (settings.isolatePhpPools) installPoolIsolation(options.phpPools);
       if (settings.confineFileManager) queueFileManagerGuard(options.fileManagerGuard);
       if (settings.blockClpctlInjection) applyClpctlGuard(options.clpctlGuard);
+      reconcileBackupCompression(settings.backupCompression, options.backupCompression);
     });
   } finally {
     restorePanelPhp(options.panelPhp);
