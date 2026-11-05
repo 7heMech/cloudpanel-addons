@@ -638,6 +638,8 @@ function systemTweaksPreviewMutation(path: string, source: URL, body: Record<str
     if (!("error" in state.database)) {
       state.database = { ...state.database, loopback: body.enabled === true, fileInPlace: body.enabled === true, exposed: body.enabled === true ? [] : ["*:3306", "*:33060"] };
     }
+  } else if (path.endsWith("/backup-compression")) {
+    state.backupCompression = { ...state.backupCompression, enabled: body.enabled === true, active: body.enabled === true, level: body.level, threads: body.threads };
   } else if (path.endsWith("/clpctl-guard")) {
     state.clpctlGuard = body.enabled === true
       ? { enabled: true, active: true, applicable: true, wrapper: "ours", version: "2.5.4-3" }

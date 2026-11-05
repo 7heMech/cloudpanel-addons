@@ -1418,7 +1418,9 @@ connections for a few seconds, which installing or updating clp-addons must not
 do unasked. The page recommends it while the server listens beyond loopback.
 
 Repair and enabling the addon restore missing managed files when the setting
-is on; repair and addon withdrawal remove them when it is off. Socket changes
+is on; repair and addon withdrawal remove them when it is off. Restoring them
+inspects MySQL's units, which can be mid-restart, so a repair that cannot logs
+a warning and still re-applies the protections after it. Socket changes
 reload systemd's configuration without restarting either unit. `systemctl show`
 then describes the next listener configuration, so status continues to use
 the kernel's sockets rather than claiming the live restriction is applied.

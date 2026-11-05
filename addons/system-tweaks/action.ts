@@ -794,7 +794,11 @@ export function restoreSystemTweaks(options: SystemTweaksOptions = {}): void {
       if (settings.blockForgedRealIp) applyRealIp(true, options.realIp);
       if (settings.protectPhpMyAdmin) applyPhpMyAdmin(true, options.phpMyAdmin);
       settleLoginJails(paths, readSettings(paths), options);
-      if (settings.databaseLoopback) reconcileDatabaseFile(true, options.database);
+      // It inspects MySQL's units, which can be mid-restart; the guards below must still come back.
+      if (settings.databaseLoopback) {
+        try { reconcileDatabaseFile(true, options.database); }
+        catch (error) { log.warn(`MySQL on this server only waits for the next repair: ${errorMessage(error)}`); }
+      }
       if (settings.blockVhostInjection) queueVhostGuard(options.vhostGuard);
       if (settings.isolatePhpPools) installPoolIsolation(options.phpPools);
       if (settings.confineFileManager) queueFileManagerGuard(options.fileManagerGuard);

@@ -3,7 +3,7 @@ import { Database } from "bun:sqlite";
 import { chmodSync, existsSync, lstatSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from "node:fs";
 import { X509Certificate } from "node:crypto";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 import { runCommand, type CommandResult } from "../cli/action-common";
 import { inspectPhpGuard, reconcilePhpGuard, type PhpGuardOptions } from "../cli/php-guard";
 import {
@@ -1179,6 +1179,19 @@ test("a withdrawal that fails after the File Manager guard is gone queues it bac
     expect(existsSync(b.fileManagerGuardPaths.pool)).toBe(false);
     expect(b.fm.commands.includes("systemctl start --no-block clp-addons-reconcile.service")).toBe(confine);
   }
+});
+
+test("repair still re-applies later guards when MySQL cannot be inspected", () => {
+  const b = box();
+  const guardPaths = { wrapper: join(tempDir(), "clpctlWrapper"), backup: join(tempDir(), "clpctlWrapper.orig"), rootUid: process.getuid!() };
+  b.options.clpctlGuard = { version: "2.5.4-3", paths: guardPaths };
+  writeFileSync(guardPaths.wrapper, CLPCTL_ORIGINAL, { mode: 0o700 });
+  mkdirSync(b.options.database!.paths!.confDirs![0]!, { recursive: true });
+  mkdirSync(dirname(b.settingsFile), { recursive: true, mode: 0o700 });
+  writeFileSync(b.settingsFile, JSON.stringify({ version: 1, databaseLoopback: true }), { mode: 0o600 });
+  // The fixture's systemctl fails, as `systemctl show` does for a unit that is mid-restart.
+  restoreSystemTweaks(b.options);
+  expect(readFileSync(guardPaths.wrapper, "utf8")).toBe(WRAPPER_SCRIPT);
 });
 
 test("a withdrawal that fails after restoring the wrapper puts the hardened wrapper back", async () => {
