@@ -17,9 +17,10 @@
 .branding-tiles.is-wide .branding-tile-preview img { height: 31px; }
 .branding-tiles:not(.is-wide) .branding-tile-preview img { height: 56px; }
 .branding-tile.is-favicon .branding-tile-preview img { width: 32px; height: 32px; }
-.branding-tile-actions { display: flex; gap: 8px; padding: 10px 12px; border-top: 1px solid var(--row-border); }
-.branding-tile-actions .btn { min-height: 32px; padding: 4px 10px; font-size: 13px; cursor: pointer; }
-.branding-tile-actions .branding-reset { margin-left: auto; }
+.branding-tile-actions { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; padding: 10px 12px;
+  border-top: 1px solid var(--row-border); }
+.branding-tile-actions .btn { flex: 1 0 auto; margin: 0; min-height: 32px; padding: 4px 10px;
+  font-size: 13px; white-space: nowrap; cursor: pointer; }
 .branding-label { display: block; margin: 16px 0 6px; font-size: 14px; font-weight: 600; }
 .branding-code { font-family: Monaco, "Courier New", monospace; font-size: 13px; line-height: 1.5; resize: vertical; }
 .branding-card .form-actions { margin-top: 12px; }

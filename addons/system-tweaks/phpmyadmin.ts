@@ -11,7 +11,7 @@ import { readFileSync } from "node:fs";
 import { failAction, runCommand, type CommandResult } from "../../cli/action-common";
 import { nginxFileChange, trustedVhost, withNginxTransaction } from "../../cli/nginx-transaction";
 import { ROOT_UID, nginxLayout } from "../../cli/paths";
-import { panelUserUid } from "../../lib/sso-auth";
+import { panelUserGid, panelUserUid } from "../../lib/sso-auth";
 import { COMMAND_MS } from "./limits";
 
 // The /addons/ proxy's baseline in cli/inject.ts leaves this block out with withoutPhpMyAdminRules.
@@ -68,9 +68,11 @@ export const DEFAULT_PHPMYADMIN_PATHS = {
   /** Null takes the panel's own nginx.conf when it has one, as CloudPanel 6 does. */
   panelConf: null as string | null,
   panelUid: null as number | null,
+  panelGid: null as number | null,
   nginx: "nginx",
   systemctl: "systemctl",
   rootUid: ROOT_UID,
+  rootGid: 0,
 };
 
 export interface PhpMyAdminOptions {
@@ -89,13 +91,14 @@ function target(options: PhpMyAdminOptions) {
   const paths = { ...DEFAULT_PHPMYADMIN_PATHS, ...options.paths };
   const layout = nginxLayout();
   const config = paths.panelConf ?? layout.configFile ?? undefined;
-  // On CloudPanel 6 the vhost belongs to the panel's account, mode 770; before it, to root.
+  // The panel's vhost can belong to its account or root, retaining CloudPanel's mode 770.
   const owned = config !== undefined;
+  const panelGid = paths.panelGid ?? panelUserGid();
   return {
     paths,
     vhost: paths.vhost ?? `${layout.sitesDir}/cloudpanel.conf`,
-    uid: owned ? paths.panelUid ?? panelUserUid() ?? paths.rootUid : paths.rootUid,
-    groupWritable: owned,
+    uid: owned ? [paths.panelUid ?? panelUserUid() ?? paths.rootUid, paths.rootUid] as const : paths.rootUid,
+    groupWritable: owned ? [paths.rootGid, ...(panelGid === null ? [] : [panelGid])] : false,
     nginx: { nginx: paths.nginx, systemctl: paths.systemctl, config, service: config ? "clp-nginx" : "nginx" },
   };
 }

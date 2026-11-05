@@ -33,6 +33,30 @@ function badge(text: string, tone: "ok" | "warn" | "bad" | "plain"): string {
   return `<span class="badge${state}">${esc(text)}</span>`;
 }
 
+function backupCompressionCard(state: SystemTweaksState["backupCompression"]): string {
+  const available = state.supported && state.installed;
+  const status = state.active ? badge("On", "ok") : state.enabled ? badge("Paused", "warn") : badge("Off", "plain");
+  const select = (key: "level" | "threads", count: number, label: string) => `
+    <label for="backup-${key}">${label}</label>
+    <select id="backup-${key}" aria-label="${label}" data-current="${state[key]}" onchange="setBackupCompression(this)"${available ? "" : " disabled"}>
+      ${Array.from({ length: count }, (_, index) => index + 1).map((value) => `<option value="${value}"${value === state[key] ? " selected" : ""}>${value}</option>`).join("")}
+    </select>`;
+  return `<div class="card">
+    <div class="card-header"><h2>Remote backups</h2></div>
+    <div class="tweak-list">${settingRow({
+      key: "backup-compression", title: "Compress remote backups with Zstandard",
+      description: [
+        "Creates backup.tar.zst for CloudPanel's Remote Backups. Higher levels can make smaller files but use more CPU time and memory. One worker thread is the default.",
+        "Existing backups, database dumps, schedules, exclusions and retention stay as configured. To restore, download the archive and extract it over SSH with tar --zstd -xf backup.tar.zst in an empty directory.",
+      ],
+      checked: state.enabled, disabled: !available && !state.enabled, onchange: "setBackupCompression(this)",
+      extra: `<p class="st-status">${status} <span>${esc(state.problem || (state.active ? "The next remote backup uses backup.tar.zst." : "CloudPanel's backup format is unchanged."))}</span></p>
+        <div class="st-backup-options">${select("level", 19, "Compression level")}${select("threads", 8, "Worker threads")}</div>
+        ${state.enabled ? '<p class="hint">Restore .tar.zst archives over SSH; CloudPanel’s File Manager does not offer extraction for this format.</p>' : ""}`,
+    })}</div>
+  </div>`;
+}
+
 const DAY_MS = 86_400_000;
 /** How long a required reboot may wait, with automatic reboot off, before the page says so. */
 const REBOOT_OVERDUE_DAYS = 7;
@@ -376,7 +400,7 @@ function vhostGuardLine(state: SystemTweaksState["vhostGuard"]): string {
 }
 
 function fileManagerGuardLine(state: SystemTweaksState["fileManagerGuard"]): string {
-  if (state.active) return `${badge("On", "ok")} <span>The File Manager stays in each site's home.</span>`;
+  if (state.active) return `${badge("On", "ok")} <span>File Manager access is limited to each site's files.</span>`;
   if (state.enabled) return `${badge("Not applied", "warn")} <span>Run clp-addons repair.</span>`;
   return `${badge("Off", "plain")} <span>Any panel account with a site can read and change files anywhere on the server through the File Manager, which runs as root.</span>`;
 }
@@ -459,7 +483,7 @@ function settingsCard(state: SystemTweaksState): string {
         extra: `<p class="st-status">${phpPoolsLine(state.phpPools)}</p>`,
       })}${settingRow({
         key: "confineFileManager",
-        title: "Keep the File Manager in the site's home",
+        title: "Restrict File Manager to site files",
         description: [
           "Refuses File Manager requests that reach outside the site's home through .. or a symbolic link, and archives that would extract device files or setuid programs.",
           "Only the panel's own nginx can reach the File Manager's PHP.",
@@ -492,9 +516,10 @@ function listing(items: string[]): string {
 function databaseLine(state: DatabaseStatus & { loopback: boolean }): string {
   if (state.listenersUnknown) return `${badge("Unknown", "warn")} <span>Where MySQL listens could not be read: ${esc(state.listenersUnknown)}.</span>`;
   if (!state.running) return `${badge("Not running", "plain")} <span>MySQL is not listening on TCP here.</span>`;
-  if (!state.exposed.length) return `${badge("This server only", "ok")} <span>MySQL accepts connections on 127.0.0.1 only.</span>`;
+  if (!state.exposed.length) return `${badge("This server only", "ok")} <span>MySQL accepts connections only from this server.</span>`;
   const where = `Listens on ${listing(state.exposed)}.`;
   if (state.loopback && state.fileInPlace) {
+    if (state.socketUnit) return `${badge("Not applied", "warn")} <span>${where} The saved restriction applies when MySQL and ${esc(state.socketUnit)} are stopped and started together.</span>`;
     return `${badge("Not applied", "warn")} <span>${where} It moves to 127.0.0.1 at MySQL's next restart: systemctl restart mysql.</span>`;
   }
   if (state.firewall.state === "off") {
@@ -523,7 +548,7 @@ function defaultPasswordNote(state: DatabaseStatus): string {
 
 function databaseCard(state: DatabaseState): string {
   const description = [
-    "Has MySQL accept connections from this server only, with bind-address 127.0.0.1. Sites and the panel connect over 127.0.0.1 or the socket and keep working. Apps on other machines lose access; reach it over an SSH tunnel instead.",
+    "Allows MySQL and MariaDB connections only from this server. Sites and the panel connect over localhost or a Unix socket and keep working. Apps on other machines lose access; reach it over an SSH tunnel instead.",
     "Off by default: CloudPanel creates every database user for any host, so System Tweaks cannot tell whether something remote uses one. A change restarts MySQL, so sites lose their database for a few seconds.",
   ];
   if ("error" in state) {
@@ -671,5 +696,5 @@ export function dashboardView(state: SystemTweaksState, now = Date.now()): strin
       <div class="card-header"><h2>Automatic updates</h2></div>
       <div class="tweak-list">${updateRows(state.updates, state.settings)}
       </div>${statusList(state.updates, now)}${coverageDetails(state.updates)}
-    </div>${settingsCard(state)}${loginJailsCard(state.loginJails)}${databaseCard(state.database)}`;
+    </div>${backupCompressionCard(state.backupCompression)}${settingsCard(state)}${loginJailsCard(state.loginJails)}${databaseCard(state.database)}`;
 }

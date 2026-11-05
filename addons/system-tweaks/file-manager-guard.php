@@ -32,7 +32,7 @@
     $attributes = (require __DIR__ . '/panel-session.php')();
     if ($attributes === 'no panel session') $refuse('there is no panel session; sign in to CloudPanel again');
     if (is_string($attributes)) {
-        $refuse("{$attributes}. If this persists, switch off Keep the File Manager in the site's home in Addons, System Tweaks until clp-addons is updated");
+        $refuse("{$attributes}. If this persists, switch off Restrict File Manager to site files in Addons, System Tweaks until clp-addons is updated");
     }
     if (!$backend) return;
 

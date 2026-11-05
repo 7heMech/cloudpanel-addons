@@ -170,16 +170,25 @@ function decodeUtf8(bytes: Uint8Array): string | null {
   }
 }
 
-export function panelUserUid(): number | null {
+function panelUserId(field: 2 | 3): number | null {
   try {
     const line = readFileSync("/etc/passwd", "utf8")
       .split("\n")
       .find((entry) => entry.startsWith(`${PANEL_USER}:`));
-    const uid = Number.parseInt(line?.split(":")[2] ?? "", 10);
-    return Number.isInteger(uid) && uid >= 0 ? uid : null;
+    const id = Number.parseInt(line?.split(":")[field] ?? "", 10);
+    return Number.isInteger(id) && id >= 0 ? id : null;
   } catch {
     return null;
   }
+}
+
+export function panelUserUid(): number | null {
+  return panelUserId(2);
+}
+
+/** The panel account's primary group; it need not have the same ID as its user. */
+export function panelUserGid(): number | null {
+  return panelUserId(3);
 }
 
 export interface SessionFileOptions {

@@ -10,7 +10,7 @@ import { failAction, type CommandResult } from "../../cli/action-common";
 import { cloudflareRanges, nginxFileChange, trustedVhost, withNginxTransaction } from "../../cli/nginx-transaction";
 import { CLOUDFLARE_IPS_PATH, ROOT_UID, nginxLayout } from "../../cli/paths";
 import { writeFileAtomic } from "../../lib/atomic-write";
-import { panelUserUid } from "../../lib/sso-auth";
+import { panelUserGid, panelUserUid } from "../../lib/sso-auth";
 import { systemRun, type Run } from "./updates";
 
 export const PANEL_JAIL = "clp-addons-panel";
@@ -45,6 +45,7 @@ export const DEFAULT_LOGIN_JAIL_PATHS = {
   /** The panel's own nginx.conf; null on a CloudPanel whose panel shares the sites' nginx. */
   panelConf: nginxLayout().configFile as string | null,
   panelUid: null as number | null,
+  panelGid: null as number | null,
   cloudflareIps: CLOUDFLARE_IPS_PATH,
   /** CloudPanel's custom-domain vhost, which proxies the panel from the sites' nginx. */
   domainVhost: "/etc/nginx/sites-enabled/custom-domain.conf",
@@ -55,6 +56,7 @@ export const DEFAULT_LOGIN_JAIL_PATHS = {
   domainUid: null as number | null,
   /** Who must own the custom domain's vhost. */
   rootUid: ROOT_UID,
+  rootGid: 0,
 };
 
 export interface LoginJailOptions {
@@ -190,13 +192,17 @@ const NO_ANCHOR = "the panel's nginx.conf has no single access_log off; line to 
 function panelTarget(ctx: Context) {
   const conf = ctx.paths.panelConf;
   if (!conf || !existsSync(conf)) return null;
-  return { conf, uid: ctx.paths.panelUid ?? panelUserUid() ?? ROOT_UID };
+  const gid = ctx.paths.panelGid ?? panelUserGid();
+  return {
+    conf, uid: [ctx.paths.panelUid ?? panelUserUid() ?? ctx.paths.rootUid, ctx.paths.rootUid] as const,
+    groups: [ctx.paths.rootGid, ...(gid === null ? [] : [gid])],
+  };
 }
 
 function panelLogActive(ctx: Context): boolean | null {
   const target = panelTarget(ctx);
   if (!target) return null;
-  const { content } = trustedVhost(target.conf, target.uid, true);
+  const { content } = trustedVhost(target.conf, target.uid, target.groups);
   return withLoginLog(content) === content;
 }
 
@@ -210,7 +216,7 @@ export function applyLoginLog(enabled: boolean, options: LoginJailOptions = {}):
   if (wanted(current) === current) return false;
   const nginx = { nginx: "nginx", systemctl: "systemctl", config: target.conf, service: "clp-nginx" };
   return withNginxTransaction(null, nginx, (command, args) => ctx.run(command, args), (changes) => {
-    const change = nginxFileChange(target.conf, null, target.uid, true);
+    const change = nginxFileChange(target.conf, null, target.uid, target.groups);
     if (change.backup.content === null) return;
     change.content = wanted(change.backup.content);
     changes.push(change);

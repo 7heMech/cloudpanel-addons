@@ -130,6 +130,14 @@ function setClpctlGuard(input) {
   return change(input, '/api/clpctl-guard', { enabled: input.checked }, switchText(input), 'Saved.');
 }
 
+function setBackupCompression(control) {
+  return change(control, '/api/backup-compression', {
+    enabled: CLP_ROOT.querySelector('[data-setting="backup-compression"]').checked,
+    level: Number(CLP_ROOT.getElementById('backup-level').value),
+    threads: Number(CLP_ROOT.getElementById('backup-threads').value),
+  }, 'Saving remote backup compression…', 'Saved. Applies to the next remote backup.');
+}
+
 // A change restarts the panel and waits for it to answer.
 function setPanelPhp(select) {
   const label = select.options[select.selectedIndex].textContent;

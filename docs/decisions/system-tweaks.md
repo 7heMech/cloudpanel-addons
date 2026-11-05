@@ -3,12 +3,13 @@
 System Tweaks holds settings for the server rather than for CloudPanel's pages,
 which stay with [Panel Tweaks](panel-tweaks.md). PHP worker limits stay with
 [PHP Resources](php-resources.md). System Tweaks also owns the PHP version
-that runs the panel itself, and the protocol of each rule on CloudPanel's own
-Firewall page.
+that runs the panel itself, the protocol of each rule on CloudPanel's own
+Firewall page, and optional compression for remote site backups.
 
 ## The page
 
-Four cards: Automatic updates, which an operator comes back to; one
+Five cards: Automatic updates, which an operator comes back to; Remote backups,
+with optional Zstandard compression and its level and worker count; one
 Settings card for the panel's PHP, the upload-progress mitigation, forged
 visitor IPs, phpMyAdmin, the panel's certificate, nginx config injection and
 clpctl injection, which are set once; Failed logins, with the two fail2ban jails
@@ -141,6 +142,60 @@ The page never reports what the drop-in meant to do. It reads the result:
   `/var/log/unattended-upgrades/unattended-upgrades.log`, or in `.1.gz` just after
   logrotate empties it.
 - **Reboot**: `/var/run/reboot-required` and `.pkgs`.
+
+## Remote backup compression
+
+CloudPanel 2.5.4-3's `RemoteBackupCreateCommand` creates `backup.tar` through
+`TarCreator` and `TarCreateCommand`, copies it through Rclone, then deletes the
+temporary archive in `finally`. Database backups use gzip separately.
+`backup-compression.ts` replaces only the remote command's archive-creation
+call. It appends `.zst` to the destination and invokes the same tar command
+builder with `--use-compress-program='/usr/bin/zstd -LEVEL -TTHREADS'`.
+Sources, excludes, the six-hour timeout, Rclone, notification handling and
+retention stay with CloudPanel. The suffix and compressor live in one PHP
+class, replaced atomically, so an invocation already in progress keeps its
+loaded code and its own destination through upload and cleanup. No PHP-FPM
+reload is needed: remote backups run through the CLI.
+
+The setting defaults off, including for existing System Tweaks installations.
+The administrator chooses a level from 1 to 19 and 1 to 8 worker threads;
+defaults are level 3 and one worker. Both HTTP and root action validate the
+complete setting, and no arbitrary compressor, path or shell flags are accepted.
+The page reports whether the setting is actually installed and whether zstd
+is available. The existing System Tweaks lock serializes changes with repair.
+A failed application restores the previous settings.
+
+Applying requires CloudPanel package version 2.5.4-3, the pinned SHA-256 of its
+remote command, and the pinned hash of its shared tar command builder. The
+builder itself is never edited. A managed source is recognized only when
+removing the exact generated block reproduces the original fingerprint; the
+same check makes disable restore the original bytes without maintaining a
+separate backup. Unknown or edited source is left in place and reported.
+If a recognized patch remains while its package or dependencies become
+unsupported, repair restores the original command and reports the problem,
+retaining the operator's preference for a later supported version.
+Enabling checks zstd and lints the proposed source with CloudPanel CLI's
+`php8.1 -n -l` before the rename, preserves file ownership and permissions, and
+refuses an intervening source edit. Disabling does not require zstd, PHP, or
+the original package version. Repair re-applies a saved selection when a known
+package overwrites the source, and addon deactivation withdraws it. A repair
+that cannot apply it logs why and carries on with the other settings;
+deactivation withdraws it first, so an edited command stops deactivation
+before any protection is removed.
+
+Unit tests cover settings validation, source drift, package changes, dependency
+and lint failures, restoration and reapplication. The opt-in
+`tests/integration/integration-backup-compression.ts` runs on a CloudPanel host
+using temporary copies of its actual source and fictional files. It checks
+archive creation through CloudPanel's real tar builder and command executor,
+Zstandard integrity, exclusions, preserved symlinks and database dumps,
+restoration, compressor failure, and restoring the uncompressed format.
+It does not run the remote-backup job or upload anything.
+
+The operator's restore procedure is in [System Tweaks](../system-tweaks.md#remote-backup-compression).
+CloudPanel's File Manager does not offer `.tar.zst` extraction, so the setting
+shows that restoration uses SSH. Its format does not change the separate
+Instatic recovery archive or database import command.
 
 ## The panel's own PHP
 
@@ -278,8 +333,11 @@ Switching off removes the prefix and leaves each file byte-for-byte as CloudPane
 wrote it. Each instance uses the shared Nginx transaction with its own
 validation (`nginx -t`, or `nginx -t -c` for the panel) and reload (`nginx` or
 `clp-nginx`), restoring the file on failure; a panel failure also undoes the
-sites' half. The panel's file belongs to the `clp` account with mode 770, so it
-is accepted when owned by that account and not world-writable. The gateway
+sites' half. The panel's file may belong to `clp` or root, including mode 770.
+It must be a regular file, not a symlink or world-writable; group write is
+accepted only for root's group or the `clp` account's primary group, looked up
+independently of its UID. The sites' file still requires root ownership and
+no group write. Writes and rollback preserve each file's UID, GID and mode. The gateway
 timeout is in `limits.ts`. Activation and the 15-minute repair reapply the
 edit when CloudPanel rewrites a file, and rebuild the panel's Cloudflare block
 when CloudPanel's list changes, so a rewrite leaves the trust open until then. Disabling the addon restores both lines.
@@ -340,11 +398,13 @@ injection**: that one guards what panel accounts write into site vhosts, while
 this changes the panel's own vhost and phpMyAdmin, and either can be wanted
 without the other. It is on by default because nothing it removes is used.
 
-The vhost belongs to the `clp` account, mode 770, so the change uses the shared
-Nginx transaction as the forged-IP setting does: the file is accepted when owned
-by that account and not world-writable, written with its owner kept, tested
-with `nginx -t -c /home/clp/services/nginx/nginx.conf`, reloaded with
-`clp-nginx`, and restored on failure. Switching off removes the block and leaves
+The panel vhost may belong to `clp` or root, including mode 770. It uses the
+same owner and writable-group checks as the panel's `nginx.conf` above;
+other owners, unrelated writable groups, world write and symlinks are refused.
+The shared Nginx transaction preserves its UID, GID and mode, tests it with
+`nginx -t -c /home/clp/services/nginx/nginx.conf`, reloads `clp-nginx`, and
+restores its contents and metadata on failure. The older shared-Nginx layout
+still requires a root-owned vhost without group write. Switching off removes the block and leaves
 the file as CloudPanel wrote it. A CloudPanel update rewrites the vhost, which
 wakes `clp-addons-anchor.path`; its `repair --anchors-only` puts the block back
 after the `/addons/` proxy, and the 15-minute repair does too. Disabling the
@@ -353,8 +413,8 @@ addon removes it.
 The `/addons/` proxy's reconciler in `cli/inject.ts` records a hash of the vhost
 without its own block, and refuses to touch a file whose hash changed. It
 leaves the phpMyAdmin block out of that hash too, so neither reconciler reads
-the other's block as a CloudPanel rewrite. Both write the vhost with its owner
-kept, so CloudPanel's own account can still rewrite it.
+the other's block as a CloudPanel rewrite. Both preserve the vhost's current
+owner, group and permissions.
 
 ## The panel's certificate
 
@@ -677,7 +737,7 @@ several actions skip even that. On CloudPanel 2.5.4 a plain panel account can:
   archive's owners, modes and device nodes when root runs it. A device file the
   site user can write is the raw disk.
 
-**Keep the File Manager in the site's home**, on by default
+**Restrict File Manager to site files**, on by default
 (`confineFileManager`), puts `file-manager-guard.php` in front of CloudPanel as
 the pool's `auto_prepend_file`, with a pool file,
 `pool.d/zz-clp-addons-file-manager-guard.conf`, that reopens
@@ -1021,6 +1081,12 @@ leaves `cloudpanel.conf` alone, which the `/addons/` proxy's baseline hash
 covers. If an operator gives the server block its own `access_log`, the jail
 sees nothing.
 
+The panel config uses the same root-or-`clp` owner and trusted writable-group
+checks as the forged-IP setting, preserving its UID, GID and mode on apply and
+rollback. Its owner does not select the journal UID: the jail still follows
+the panel's worker account. The custom-domain vhost retains its root-only
+owner and no-group-write checks.
+
 The maps match `$request_uri`, the path as the client sent it, because by the
 time nginx logs, `try_files` has changed `$uri` to `/index.php`. Symfony 6's
 router matches the path after `rawurldecode`, and it takes `/index.php` off the
@@ -1291,22 +1357,66 @@ clears the server's default flag, which only gates deleting it.
 `/etc/mysql/mariadb.conf.d`, `/etc/mysql/mysql.conf.d` and `/etc/mysql/conf.d`
 that exists, and its name sorts after CloudPanel's `mysqld.cnf` and MariaDB's
 `50-server.cnf`. The `loose-` prefix lets MariaDB, which has no X Protocol,
-start with only a warning. Before restarting, `my_print_defaults` must report
-`127.0.0.1` as the last `bind-address`. A later file that sets another one is
-named in the refusal and the file is removed again, with no restart. If
-`ss -Hltnp` fails, the switch is refused before the file is touched: a failed
-query cannot show the server is already on loopback, or check it afterwards.
+start with only a warning. Before restarting, the running server's executable
+(read through systemd's `MainPID`) parses its configuration with
+`--verbose --help`. Its effective `bind-address`, and `mysqlx-bind-address` when
+present, must be `127.0.0.1`. This includes the daemon's version-specific option
+groups and options such as `skip-bind-address`; reading the last textual
+`bind-address` from a guessed list of `my_print_defaults` groups does not.
+A conflicting value, an ignored include directory or a failed configuration
+check restores the previous file without restarting. When the service is
+stopped, the check tries the installed MariaDB and MySQL server programs.
+
+Explicit bind/defaults options in the running daemon's command line are
+refused before the file is touched. Errors report option names, never the
+rest of the command line, which can contain credentials. If `ss -Hltnp` fails,
+the switch is also refused before the file is touched: a failed query cannot
+show the server is already on loopback, or check it afterwards.
+
+[MariaDB socket activation](https://github.com/mariadb-corporation/mariadb-docs/blob/main/server/server-management/starting-and-stopping-mariadb/systemd/configuring.md)
+passes listeners created by systemd to the server. Its `ListenStream` entries
+control their addresses; the daemon's bind settings do not restrict inherited
+listeners. The supported `mariadb.socket` path has `Accept=no`, activates the
+same database service and contains only recognized stream addresses. Additional
+socket units or unsupported listener forms are refused before mutation. A
+masked or removed `mariadb.socket` that has settled as inactive or failed
+activates nothing, so a managed drop-in left for it counts as no socket and
+switching off removes it. A stopped MySQL, and its socket if it has one, stays
+stopped when the switch changes; the files apply at its next start.
+
+`database-socket.ts` builds
+`/etc/systemd/system/mariadb.socket.d/zz-clp-addons-loopback.conf`. An empty
+`ListenStream=` resets the configured list, followed by the existing Unix and
+abstract Unix sockets and localhost TCP listeners on the existing ports.
+IPv6-origin listeners retain `::1` alongside `127.0.0.1`. The original unit,
+other drop-ins, socket permissions and enablement are untouched. Removing the
+addon's drop-in restores the original configuration without a stored copy of
+vendor files. Only a root-owned, non-writable regular managed file with the
+canonical body and matching checksum can be replaced or removed; symlinks and
+edited or foreign files are refused.
+
+Changing socket bindings stops the service and socket in one systemd
+transaction, reloads the configuration, then starts them together. Both
+processes must release their descriptors; restarting only the service leaves
+systemd's public listener open. Systemd orders the socket before its service
+on start and reverses that order on stop. On failure, the previous addon files
+are restored, systemd reloads, and the original active states are recovered.
+The live kernel listeners and protocol handshake determine success, including
+listeners whose `ss` owner list includes both systemd and MariaDB.
 
 The change restarts `mysql` (MariaDB's unit aliases that name) and waits up to
 60 seconds for it to be active, to listen on loopback only and to send a
-handshake on `127.0.0.1`. The probe is a plain connection that never logs in,
-and MySQL's host cache ignores loopback. Otherwise the previous file goes back
-and the server restarts again. Switching off removes the file and restarts the
+handshake on `127.0.0.1`. A server that is active and answers but still listens
+beyond loopback fails immediately: waiting cannot change its startup binding.
+The probe is a plain connection that never logs in, and MySQL's host cache
+ignores loopback. On failure the previous file goes back and the server
+restarts again; a failed rollback restart is reported as a failure even if a
+process still answers. Switching off removes the file and restarts the
 same way. Turning it on when the server already listens on loopback alone writes
 the file without a restart. The gateway timeout is in `limits.ts`.
 
-It is off by default. Sites connect over `127.0.0.1` or the socket, and both
-match `%` users, so a site never loses access. A client elsewhere does, and
+It is off by default. CloudPanel sites connecting over `127.0.0.1` or the
+socket keep access, and both match `%` users. A client elsewhere loses access, and
 `mysql.user` cannot show one: every CloudPanel user is `%`. The page shows the
 signs it can see, which are a loaded rule that opens the port and a client
 connected now. A client that connects once a night, or through a rule broad enough to
@@ -1314,10 +1424,20 @@ look like something else, leaves neither. A restart also drops every site's
 connections for a few seconds, which installing or updating clp-addons must not
 do unasked. The page recommends it while the server listens beyond loopback.
 
-Repair and enabling the addon write the file back when the setting is on and
-it is missing, and repair removes it when the setting is off. Neither restarts
-MySQL, so a running server picks up the change at its next restart and the page
-says so. Disabling System Tweaks removes the file without a restart.
+Repair and enabling the addon restore missing managed files when the setting
+is on; repair and addon withdrawal remove them when it is off. Restoring them
+inspects MySQL's units, which can be mid-restart, so a repair that cannot logs
+a warning and still re-applies the protections after it. Socket changes
+reload systemd's configuration without restarting either unit. `systemctl show`
+then describes the next listener configuration, so status continues to use
+the kernel's sockets rather than claiming the live restriction is applied.
+The page identifies when both database and socket need a coordinated restart.
+
+The disposable-container integration test
+`tests/integration/integration-database-socket.ts` uses Debian 12, systemd and
+MariaDB 10.11. It reproduces the service-only restart failure, exercises real
+enable/disable and repair/withdrawal, checks IPv4/IPv6 and both Unix socket
+forms, and injects restart/reload failures to verify recovery and retained data.
 
 Docker does not change this. Its rules sit on `FORWARD` and bypass ufw only for
 ports a container publishes, and the host's MySQL is not one of them.

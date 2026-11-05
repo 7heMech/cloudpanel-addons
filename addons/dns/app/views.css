@@ -41,6 +41,7 @@
 .dns-redirect-target { display:block; max-width:240px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; font:14px/1.5 var(--mono); }
 .dns-redirect-table .action-cell .actions { flex-wrap:nowrap; }
 .dns-redirect-profile { white-space:nowrap; }
+.dns-card-target { display:none; }
 .dns-dialog-start { margin-right:auto; }
 .dns-found-table .dns-change-detail { overflow-wrap:anywhere; }
 #dns-found-body { margin-bottom:16px; }
@@ -182,8 +183,16 @@ p.dns-dialog-note { margin:20px 0 0; }
   .fleet-table.dns-profile-table td.wide-cell { order:2; }
   .fleet-table.dns-profile-table td.dns-sites-cell { display:none; }
   .dns-site-table td select { min-width:0; }
-  /* A redirect card: the domain, then where it goes across the full width. */
-  .fleet-table.dns-redirect-table td.dns-redirect-cell, .fleet-table.dns-redirect-table td.dns-status { flex-basis:100%; }
+  /* A redirect card, laid out like a site card: "domain → target" with its
+     note beneath, the DNS status across the width, then the profile with the
+     buttons beside it. */
+  .dns-redirect-table .dns-card-target { display:inline; font-weight:400; overflow-wrap:anywhere; }
+  .dns-redirect-table .dns-card-target > [aria-hidden] { margin-left:4px; }
+  .fleet-table.dns-redirect-table td.dns-redirect-cell { flex-basis:100%; margin-top:-10px; }
+  .fleet-table.dns-redirect-table td.dns-redirect-cell::before, .dns-redirect-table .dns-redirect-target { display:none; }
+  .fleet-table.dns-redirect-table td.dns-status { flex-basis:100%; }
+  .fleet-table.dns-redirect-table td.dns-redirect-profile { flex:1 1 0; order:1; }
+  .fleet-table.dns-redirect-table td.action-cell:has(.btn) { flex:0 0 auto; order:2; align-self:flex-end; }
   .card-footer { padding:16px 20px; }
 }
 /* The editor's rows become cards: type, name and the remove button on top, content beneath, then the rest. */

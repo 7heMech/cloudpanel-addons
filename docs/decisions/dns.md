@@ -79,7 +79,9 @@ Cloudflare: each row has the target, its status and what kept, who serves it,
 the profile its mail rows come from, and the DNS status, with Edit and Details.
 Its rows are not site rows, so the site table's selection, filter and sort
 leave them out, and a redirect's profile is chosen in Edit rather than in the
-row. A site's Details dialog leads with
+row. On a phone each card heads with "domain → target" and its note, then the
+DNS status, then the profile with Edit and Details beside it, as a site card
+does; past ten redirects the rest wait behind a Show all button. A site's Details dialog leads with
 what needs doing: its status chip beside the domain, then problems and, while
 its zone is pending, the nameservers to set at the registrar, each with its own
 copy button; then what will change, with a redirect's pending changes said to

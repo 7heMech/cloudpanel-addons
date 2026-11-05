@@ -1,5 +1,5 @@
 import { afterEach, expect, test } from "bun:test";
-import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { CommandResult } from "../cli/action-common";
@@ -11,6 +11,7 @@ import { inputVerdict, otherInputHooks, parseFilterTable } from "../addons/syste
 import { dashboardView } from "../addons/system-tweaks/app/views";
 import { updatesStatus } from "../addons/system-tweaks/updates";
 import { executeSystemTweaksAction, type SystemTweaksState } from "../addons/system-tweaks/action";
+import { parseSocketBindings, renderSocketFile } from "../addons/system-tweaks/database-socket";
 
 const dirs: string[] = [];
 afterEach(() => { for (const dir of dirs.splice(0)) rmSync(dir, { recursive: true, force: true }); });
@@ -49,8 +50,9 @@ interface Server {
   /** Passwords root accepts, by host tried. */
   accepts: Record<string, string[]>;
   restartFails?: boolean;
-  /** Another file's bind-address that my_print_defaults reports after ours. */
+  /** A bind-address override that the daemon reports after reading ours. */
   laterBind?: string;
+  triggeredBy?: string;
   /** What iptables-save, ip6tables-save and nft list chains print, or null to fail. */
   rules: { v4: string | null; v6: string | null; nft: string | null };
   options: DatabaseOptions;
@@ -62,6 +64,10 @@ function server(listening = WIDE): Server {
   const conf = join(dir, "mysql.conf.d");
   mkdirSync(conf);
   writeFileSync(join(dir, "mysql"), "");
+  const procRoot = join(dir, "proc");
+  mkdirSync(join(procRoot, "2000"), { recursive: true });
+  writeFileSync(join(procRoot, "2000", "cmdline"), "/usr/sbin/mysqld\0");
+  symlinkSync("/usr/sbin/mysqld", join(procRoot, "2000", "exe"));
   const s: Server = {
     dir, conf, file: join(conf, "zz-clp-addons-loopback.cnf"), calls: [], listening, accepts: {}, rules: { v4: UFW4, v6: UFW6, nft: null },
     options: {},
@@ -75,11 +81,11 @@ function server(listening = WIDE): Server {
       const out = s.rules[command === "iptables-save" ? "v4" : command === "ip6tables-save" ? "v6" : "nft"];
       return out === null ? { ok: false, stdout: "", stderr: `${command}: command not found`, exitCode: 127 } : ok(out);
     }
-    if (command === "my_print_defaults") {
-      const binds = existsSync(s.file) ? ["--bind-address=127.0.0.1"] : [];
-      if (s.laterBind) binds.push(`--bind-address=${s.laterBind}`);
-      return ok(["--datadir=/home/mysql/", ...binds].join("\n"));
+    if (command === "/usr/sbin/mysqld") {
+      const bind = existsSync(s.file) ? "127.0.0.1" : "*";
+      return ok(`bind-address                       ${s.laterBind ?? bind}\nmysqlx-bind-address                ${bind}\n`);
     }
+    if (command === "systemctl" && args[0] === "show") return ok(`Id=mysql.service\nMainPID=2000\nTriggeredBy=${s.triggeredBy ?? ""}\nActiveState=active\n`);
     if (command === "systemctl" && args[0] === "restart") {
       if (s.restartFails) return { ok: false, stdout: "", stderr: "Job failed", exitCode: 1 };
       s.listening = existsSync(s.file) ? LOCAL : WIDE;
@@ -101,10 +107,59 @@ function server(listening = WIDE): Server {
     healthTimeoutMs: 0,
     paths: {
       confDirs: [join(dir, "mariadb.conf.d"), conf], checkFile: join(dir, "check.json"), clients: [join(dir, "mysql")],
-      rootUid: process.getuid!(),
+      rootUid: process.getuid!(), procRoot, socketFile: join(dir, "mariadb.socket.d", "zz-clp-addons-loopback.conf"),
     },
   };
   return s;
+}
+
+function socketServer() {
+  const s = server();
+  s.triggeredBy = "mariadb.socket";
+  const socket = {
+    original: ["@mariadb", "/run/mysqld/mysqld.sock", "[::]:3306"],
+    configured: [] as string[], active: true, serviceActive: true, accept: "no", triggers: "mariadb.service",
+    override: null as string[] | null, load: "loaded",
+  };
+  socket.configured = [...socket.original];
+  const refresh = () => {
+    s.listening = socket.active ? socket.configured.filter((stream) => !stream.startsWith("/") && !stream.startsWith("@")).map((stream) =>
+      `LISTEN 0 80 ${stream === "[::]:3306" ? "*:3306" : stream} *:* users:(("systemd",pid=1,fd=40)${socket.serviceActive ? ',("mariadbd",pid=2000,fd=3)' : ""})`).join("\n") : "";
+  };
+  refresh();
+  const proc = s.options.paths!.procRoot!;
+  rmSync(join(proc, "2000", "exe"));
+  symlinkSync("/usr/sbin/mariadbd", join(proc, "2000", "exe"));
+  writeFileSync(join(proc, "2000", "cmdline"), "/usr/sbin/mariadbd\0");
+  const base = s.options.run!;
+  s.options.run = (command, args) => {
+    if (command === "/usr/sbin/mariadbd") {
+      s.calls.push([command, ...args]);
+      return ok(`bind-address                       ${existsSync(s.file) ? "127.0.0.1" : "*"}\n`);
+    }
+    if (command === "systemctl") {
+      s.calls.push([command, ...args]);
+      if (args[0] === "show" && args[1] === "mysql") return ok(`Id=mariadb.service\nMainPID=${socket.serviceActive ? "2000" : "0"}\nTriggeredBy=${s.triggeredBy}\nActiveState=${socket.serviceActive ? "active" : "inactive"}\n`);
+      if (args[0] === "show" && args[1] === "mariadb.socket") return ok([
+        "Id=mariadb.socket", `LoadState=${socket.load}`, `ActiveState=${socket.active ? "active" : "inactive"}`,
+        `Accept=${socket.accept}`, `Triggers=${socket.triggers}`, ...socket.configured.map((stream) => `Listen=${stream} (Stream)`), "",
+      ].join("\n"));
+      if (args[0] === "is-active") return ok(`${(args[1] === "mariadb.socket" ? socket.active : socket.serviceActive) ? "active" : "inactive"}\n`);
+      if (args[0] === "daemon-reload") {
+        socket.configured = socket.override ?? (existsSync(s.options.paths!.socketFile!)
+          ? readFileSync(s.options.paths!.socketFile!, "utf8").split("\n").filter((line) => /^ListenStream=.+/.test(line)).map((line) => line.slice(13))
+          : [...socket.original]);
+        return ok();
+      }
+      if (args[0] === "stop") { socket.active = false; socket.serviceActive = false; refresh(); return ok(); }
+      if (args[0] === "start") {
+        socket.active = args.includes("mariadb.socket"); socket.serviceActive = args.includes("mysql"); refresh(); return ok();
+      }
+      s.calls.pop();
+    }
+    return base(command, args);
+  };
+  return Object.assign(s, { socket, refresh });
 }
 
 test("the server's listeners and the clients connected from elsewhere come from ss", () => {
@@ -295,12 +350,263 @@ test("a server already on loopback gets the file without a restart", async () =>
   expect(s.calls.some((call) => call[1] === "restart")).toBe(false);
 });
 
-test("a later bind-address elsewhere is refused before any restart", async () => {
+test("a bind-address override in any daemon option group is refused before any restart", async () => {
   const s = server();
   s.laterBind = "0.0.0.0";
-  await expect(setDatabaseLoopback(true, s.options)).rejects.toThrow("sets bind-address after");
+  await expect(setDatabaseLoopback(true, s.options)).rejects.toThrow("effective bind-address is 0.0.0.0");
   expect(existsSync(s.file)).toBe(false);
   expect(s.calls.some((call) => call[1] === "restart")).toBe(false);
+});
+
+test("skip-bind-address is checked using the daemon's parsed value, not the last bind-address text", async () => {
+  const s = server();
+  // MySQL reports 0 for --bind-address=127.0.0.1 --skip-bind-address.
+  s.laterBind = "0";
+  await expect(setDatabaseLoopback(true, s.options)).rejects.toThrow("effective bind-address is 0");
+  expect(existsSync(s.file)).toBe(false);
+  expect(s.calls).toContainEqual(["/usr/sbin/mysqld", "--verbose", "--help"]);
+  expect(s.calls.some((call) => call[0] === "my_print_defaults" || call[1] === "restart")).toBe(false);
+});
+
+test("socket activation preserves Unix sockets and IPv6 localhost, then off restores the original unit", async () => {
+  const s = socketServer();
+  await setDatabaseLoopback(true, s.options);
+  expect(s.socket.configured).toEqual(["/run/mysqld/mysqld.sock", "127.0.0.1:3306", "@mariadb", "[::1]:3306"]);
+  expect(s.calls.filter((call) => call[1] === "stop" || call[1] === "start")).toEqual([
+    ["systemctl", "stop", "mysql", "mariadb.socket"], ["systemctl", "start", "mariadb.socket", "mysql"],
+  ]);
+  expect(databaseStatus(s.options)).toMatchObject({ exposed: [], fileInPlace: true, socketUnit: "mariadb.socket" });
+  s.calls.length = 0;
+  await setDatabaseLoopback(true, s.options);
+  expect(s.calls.some((call) => ["stop", "start", "restart", "daemon-reload"].includes(call[1]!))).toBe(false);
+  await setDatabaseLoopback(false, s.options);
+  expect(s.socket.configured).toEqual(s.socket.original);
+  expect(existsSync(s.file)).toBe(false);
+  expect(existsSync(s.options.paths!.socketFile!)).toBe(false);
+  expect(databaseStatus(s.options).exposed).toEqual(["*:3306"]);
+});
+
+test("systemd-owned descriptors are checked before MariaDB is activated, without starting a stopped service", async () => {
+  const s = socketServer();
+  s.socket.serviceActive = false;
+  s.refresh();
+  expect(databaseStatus(s.options)).toMatchObject({ running: true, exposed: ["*:3306"], socketUnit: "mariadb.socket" });
+  s.options.probe = async () => { throw new Error("must not activate the service"); };
+  await setDatabaseLoopback(true, s.options);
+  expect(s.socket.active).toBe(true);
+  expect(s.socket.serviceActive).toBe(false);
+  expect(s.calls).toContainEqual(["systemctl", "start", "mariadb.socket"]);
+  expect(parseListeners(s.listening, [3306]).map((listener) => listener.host)).toEqual(["127.0.0.1", "::1"]);
+});
+
+test("socket repair and withdrawal reload definitions without changing live descriptors", async () => {
+  const s = socketServer();
+  const originalLive = s.listening;
+  expect(reconcileDatabaseFile(true, s.options)).toContain("MySQL and mariadb.socket are next stopped and started together");
+  expect(s.listening).toBe(originalLive);
+  expect(databaseStatus(s.options)).toMatchObject({ exposed: ["*:3306"], fileInPlace: true, socketUnit: "mariadb.socket" });
+  rmSync(s.options.paths!.socketFile!);
+  expect(reconcileDatabaseFile(true, s.options)).toContain("put back");
+  expect(s.listening).toBe(originalLive);
+  expect(reconcileDatabaseFile(false, s.options)).toContain("removed");
+  expect(s.socket.configured).toEqual(s.socket.original);
+  expect(s.listening).toBe(originalLive);
+  expect(existsSync(s.file)).toBe(false);
+  expect(existsSync(s.options.paths!.socketFile!)).toBe(false);
+  expect(s.calls.some((call) => ["stop", "start", "restart"].includes(call[1]!))).toBe(false);
+});
+
+test("a masked or removed socket leaves only its stale drop-in, which switching off removes", async () => {
+  for (const load of ["masked", "not-found"]) {
+    const s = socketServer();
+    await setDatabaseLoopback(true, s.options);
+    expect(existsSync(s.options.paths!.socketFile!)).toBe(true);
+    // The operator stops socket activation; MariaDB then binds by itself, on 127.0.0.1 from our option file.
+    Object.assign(s.socket, { load, active: false, configured: [] });
+    s.triggeredBy = "";
+    s.listening = 'LISTEN 0 80 127.0.0.1:3306 *:* users:(("mariadbd",pid=2000,fd=3))';
+    expect(databaseStatus(s.options)).toMatchObject({ exposed: [], fileInPlace: true });
+    expect(databaseStatus(s.options).socketUnit).toBeUndefined();
+    await setDatabaseLoopback(false, s.options);
+    expect(existsSync(s.file)).toBe(false);
+    expect(existsSync(s.options.paths!.socketFile!)).toBe(false);
+  }
+});
+
+test("switching off leaves a stopped MySQL stopped, with or without a stale socket drop-in", async () => {
+  for (const load of ["loaded", "masked"]) {
+    const s = socketServer();
+    await setDatabaseLoopback(true, s.options);
+    Object.assign(s.socket, { active: false, serviceActive: false });
+    if (load === "masked") Object.assign(s.socket, { load, configured: [] });
+    s.triggeredBy = load === "masked" ? "" : "mariadb.socket";
+    s.listening = "";
+    s.calls.length = 0;
+    await setDatabaseLoopback(false, s.options);
+    expect(existsSync(s.file)).toBe(false);
+    expect(existsSync(s.options.paths!.socketFile!)).toBe(false);
+    expect(s.calls.some((call) => call[0] === "systemctl" && ["start", "restart"].includes(call[1]!))).toBe(false);
+  }
+});
+
+test("a masked socket still changing state is not taken for a stale one", async () => {
+  const s = socketServer();
+  await setDatabaseLoopback(true, s.options);
+  Object.assign(s.socket, { load: "masked", active: false, configured: [] });
+  s.triggeredBy = "";
+  const run = s.options.run!;
+  s.options.run = (command, args) => {
+    const result = run(command, args);
+    return command === "systemctl" && args[0] === "show" && args[1] === "mariadb.socket"
+      ? { ...result, stdout: result.stdout.replace("ActiveState=inactive", "ActiveState=deactivating") } : result;
+  };
+  await expect(setDatabaseLoopback(false, s.options)).rejects.toThrow("could not inspect a settled mariadb.socket");
+  expect(existsSync(s.options.paths!.socketFile!)).toBe(true);
+});
+
+test("foreign, edited and symlinked socket drop-ins are refused before any mutation", async () => {
+  const s = socketServer();
+  const path = s.options.paths!.socketFile!;
+  mkdirSync(join(s.dir, "mariadb.socket.d"), { mode: 0o755 });
+  const expected = renderSocketFile(parseSocketBindings(s.socket.original.map((value) => `Listen=${value} (Stream)`).join("\n")).loopback);
+  for (const text of ["[Socket]\nListenStream=3307\n", expected.replace("@mariadb", "@different")]) {
+    writeFileSync(path, text, { mode: 0o644 });
+    await expect(setDatabaseLoopback(true, s.options)).rejects.toThrow("not an unchanged System Tweaks socket file");
+    expect(() => reconcileDatabaseFile(false, s.options)).toThrow("not an unchanged System Tweaks socket file");
+    expect(readFileSync(path, "utf8")).toBe(text);
+  }
+  rmSync(path);
+  const target = join(s.dir, "operator.conf");
+  writeFileSync(target, expected);
+  symlinkSync(target, path);
+  await expect(setDatabaseLoopback(true, s.options)).rejects.toThrow("not a trusted regular file");
+  expect(existsSync(s.file)).toBe(false);
+  expect(s.calls.some((call) => ["stop", "start", "restart", "daemon-reload"].includes(call[1]!))).toBe(false);
+});
+
+test("an operator's writable drop-in directory blocks writing there, not withdrawal", async () => {
+  const s = socketServer();
+  const dir = join(s.dir, "mariadb.socket.d");
+  mkdirSync(dir);
+  chmodSync(dir, 0o775);
+  expect(reconcileDatabaseFile(false, s.options)).toBeNull();
+  await expect(setDatabaseLoopback(true, s.options)).rejects.toThrow("not a trusted directory");
+  expect(existsSync(s.file)).toBe(false);
+  expect(existsSync(s.options.paths!.socketFile!)).toBe(false);
+  expect(s.calls.some((call) => ["stop", "start", "restart"].includes(call[1]!))).toBe(false);
+});
+
+test("unrelated activation units, Accept=yes and unsupported descriptors leave configuration alone", async () => {
+  for (const setup of [
+    (s: ReturnType<typeof socketServer>) => { s.triggeredBy += " unrelated.socket"; },
+    (s: ReturnType<typeof socketServer>) => { s.socket.accept = "yes"; },
+    (s: ReturnType<typeof socketServer>) => { s.socket.triggers = "other.service"; },
+    (s: ReturnType<typeof socketServer>) => { s.socket.configured = ["vsock:3:3306"]; },
+  ]) {
+    const s = socketServer();
+    setup(s);
+    await expect(setDatabaseLoopback(true, s.options)).rejects.toThrow();
+    expect(existsSync(s.file)).toBe(false);
+    expect(existsSync(s.options.paths!.socketFile!)).toBe(false);
+    expect(s.calls.some((call) => ["stop", "start", "restart", "daemon-reload"].includes(call[1]!))).toBe(false);
+  }
+});
+
+test("later socket overrides fail before stopping and restore the previous files", async () => {
+  const s = socketServer();
+  s.socket.override = [...s.socket.original];
+  await expect(setDatabaseLoopback(true, s.options)).rejects.toThrow("another mariadb.socket setting overrides the managed listeners");
+  expect(existsSync(s.file)).toBe(false);
+  expect(existsSync(s.options.paths!.socketFile!)).toBe(false);
+  expect(s.calls.some((call) => ["stop", "start", "restart"].includes(call[1]!))).toBe(false);
+  expect(s.socket.serviceActive).toBe(true);
+});
+
+test("a failed socket/service start restores both files and both original active states", async () => {
+  const s = socketServer();
+  const base = s.options.run!;
+  let starts = 0;
+  s.options.run = (command, args) => {
+    if (command === "systemctl" && args[0] === "start" && ++starts === 1) {
+      s.calls.push([command, ...args]);
+      return { ok: false, stdout: "", stderr: "injected start failure", exitCode: 1 };
+    }
+    return base(command, args);
+  };
+  await expect(setDatabaseLoopback(true, s.options)).rejects.toThrow("injected start failure; the previous settings are back");
+  expect(existsSync(s.file)).toBe(false);
+  expect(existsSync(s.options.paths!.socketFile!)).toBe(false);
+  expect(s.socket.configured).toEqual(s.socket.original);
+  expect(s.socket.active && s.socket.serviceActive).toBe(true);
+  expect(parseListeners(s.listening).map((listener) => listener.text)).toEqual(["*:3306"]);
+  expect(starts).toBe(2);
+});
+
+test("startup overrides are refused without reporting other command-line arguments", async () => {
+  const s = server();
+  for (const option of ["--bind-address=*", "--skip-bind_address", "--loose-skip-bind-address", "--defaults-file=/private/custom.cnf", "--no-defaults"]) {
+    writeFileSync(join(s.options.paths!.procRoot!, "2000", "cmdline"), `/usr/sbin/mysqld\0${option}\0--some-secret=do-not-report\0`);
+    const failure = await setDatabaseLoopback(true, s.options).then(() => "", (error: Error) => error.message);
+    expect(failure).toContain(`MySQL starts with ${option.split("=")[0]!.replaceAll("_", "-")}`);
+    expect(failure).not.toContain("do-not-report");
+    expect(failure).not.toContain("/private/custom.cnf");
+    expect(existsSync(s.file)).toBe(false);
+  }
+  expect(s.calls.some((call) => call[1] === "restart")).toBe(false);
+});
+
+test("unreadable startup or daemon configuration prevents a restart and preserves the prior file", async () => {
+  const s = server();
+  writeFileSync(s.file, DATABASE_FILE);
+  rmSync(join(s.options.paths!.procRoot!, "2000", "cmdline"));
+  await expect(setDatabaseLoopback(true, s.options)).rejects.toThrow("could not inspect the running MySQL command");
+  writeFileSync(join(s.options.paths!.procRoot!, "2000", "cmdline"), "/usr/sbin/mysqld\0");
+  const base = s.options.run!;
+  s.options.run = (command, args) => command === "/usr/sbin/mysqld"
+    ? { ok: false, stdout: "", stderr: "unknown option", exitCode: 1 }
+    : base(command, args);
+  await expect(setDatabaseLoopback(true, s.options)).rejects.toThrow("could not verify MySQL's effective bind-address");
+  expect(readFileSync(s.file, "utf8")).toBe(DATABASE_FILE);
+  expect(s.calls.some((call) => call[1] === "restart")).toBe(false);
+});
+
+test("a healthy server still bound publicly rolls back immediately instead of polling for a minute", async () => {
+  const s = server();
+  let now = 0;
+  let sleeps = 0;
+  s.options.healthTimeoutMs = 60_000;
+  s.options.now = () => now;
+  s.options.sleep = async (ms) => { sleeps++; now += ms; };
+  const base = s.options.run!;
+  s.options.run = (command, args) => {
+    const result = base(command, args);
+    if (command === "systemctl" && args[0] === "restart") s.listening = WIDE;
+    return result;
+  };
+  await expect(setDatabaseLoopback(true, s.options)).rejects.toThrow("it still listens on *:3306, *:33060; the previous settings are back");
+  expect(sleeps).toBe(0);
+  expect(existsSync(s.file)).toBe(false);
+  expect(s.calls.filter((call) => call[1] === "restart")).toHaveLength(2);
+});
+
+test("a server still starting is allowed to become ready before testing its final bindings", async () => {
+  const s = server();
+  let now = 0;
+  let probes = 0;
+  s.options.healthTimeoutMs = 60_000;
+  s.options.now = () => now;
+  s.options.sleep = async (ms) => { now += ms; s.listening = LOCAL; };
+  s.options.probe = async () => ++probes > 1;
+  const base = s.options.run!;
+  s.options.run = (command, args) => {
+    const result = base(command, args);
+    if (command === "systemctl" && args[0] === "restart") s.listening = WIDE;
+    return result;
+  };
+  await setDatabaseLoopback(true, s.options);
+  expect(probes).toBe(2);
+  expect(now).toBe(1_000);
+  expect(s.calls.filter((call) => call[1] === "restart")).toHaveLength(1);
 });
 
 test("a server that does not come back gets its previous settings and another restart", async () => {
@@ -311,6 +617,37 @@ test("a server that does not come back gets its previous settings and another re
   expect(existsSync(s.file)).toBe(false);
   expect(s.calls.filter((call) => call[1] === "restart")).toHaveLength(2);
   expect(s.listening).toBe(WIDE);
+});
+
+test("a failed rollback restart is reported even when the old process still answers", async () => {
+  const s = server();
+  const base = s.options.run!;
+  let restarts = 0;
+  s.options.run = (command, args) => {
+    if (command === "systemctl" && args[0] === "restart") {
+      restarts++;
+      if (restarts === 2) return { ok: false, stdout: "", stderr: "rollback restart failed", exitCode: 1 };
+    }
+    const result = base(command, args);
+    s.listening = WIDE;
+    return result;
+  };
+  await expect(setDatabaseLoopback(true, s.options)).rejects.toThrow("putting the previous settings back failed: restarting mysql failed: rollback restart failed");
+  expect(existsSync(s.file)).toBe(false);
+  expect(restarts).toBe(2);
+});
+
+test("a stopped MariaDB server validates its own options without a restart or X Protocol requirement", async () => {
+  const s = server("");
+  const base = s.options.run!;
+  s.options.run = (command, args) => {
+    if (command === "systemctl" && args[0] === "show") return ok("Id=mysql.service\nMainPID=0\nTriggeredBy=\nActiveState=inactive\n");
+    if (command === "/usr/sbin/mariadbd") return ok("bind-address                       127.0.0.1\n");
+    return base(command, args);
+  };
+  await setDatabaseLoopback(true, s.options);
+  expect(readFileSync(s.file, "utf8")).toBe(DATABASE_FILE);
+  expect(s.calls.some((call) => call[1] === "restart")).toBe(false);
 });
 
 test("a file of the same name that is not the addon's is left alone", async () => {
@@ -343,7 +680,7 @@ test("the page says where MySQL listens, what reaches it, and how to change a de
     phpMyAdmin: { enabled: true, active: true, problem: "" },
     vhostGuard: { enabled: true, active: true, stored: [], homeLogs: [], ownLogrotate: [] }, phpPools: { enabled: true, active: true, problem: "" },
     fileManagerGuard: { enabled: true, active: true }, panelCert: { kind: "generated" as const, replace: true },
-    clpctlGuard: { error: "" }, panelPhp: { error: "" }, firewall: { error: "" }, loginJails: { error: "" }, database,
+    backupCompression: { enabled: false, level: 3, threads: 1, active: false, supported: true, installed: true, problem: "" }, clpctlGuard: { error: "" }, panelPhp: { error: "" }, firewall: { error: "" }, loginJails: { error: "" }, database,
   } satisfies SystemTweaksState;
   const open = dashboardView(state);
   expect(open).toContain("The firewall rules loaded now let anyone reach it");
@@ -358,7 +695,10 @@ test("the page says where MySQL listens, what reaches it, and how to change a de
   expect(pending).toContain("at MySQL's next restart");
   expect(pending).toContain("Root does not log in with a default password.");
   const local = dashboardView({ ...state, database: { ...database, exposed: [], loopback: true, fileInPlace: true, remoteClients: [] } });
-  expect(local).toContain("accepts connections on 127.0.0.1 only");
+  expect(local).toContain("accepts connections only from this server");
+  const socketPending = dashboardView({ ...state, database: { ...database, loopback: true, fileInPlace: true, socketUnit: "mariadb.socket", defaultPassword: [] } });
+  expect(socketPending).toContain("mariadb.socket");
+  expect(socketPending).not.toContain("systemctl restart mysql");
   const unread = dashboardView({ ...state, database: { ...database, running: false, exposed: [], listenersUnknown: "ss failed: ss: command not found" } });
   expect(unread).toContain("Where MySQL listens could not be read: ss failed: ss: command not found.");
   expect(unread).not.toContain("127.0.0.1 only");

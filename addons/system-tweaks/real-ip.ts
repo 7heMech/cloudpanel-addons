@@ -9,9 +9,9 @@
 import { existsSync, readFileSync } from "node:fs";
 import { isIP } from "node:net";
 import { runCommand, type CommandResult } from "../../cli/action-common";
-import { cloudflareRanges, nginxFileChange, trustedVhost, withNginxTransaction } from "../../cli/nginx-transaction";
+import { cloudflareRanges, nginxFileChange, trustedVhost, withNginxTransaction, type NginxFileOwner, type NginxGroupWrite } from "../../cli/nginx-transaction";
 import { CLOUDFLARE_IPS_PATH, ROOT_UID, nginxLayout } from "../../cli/paths";
-import { panelUserUid } from "../../lib/sso-auth";
+import { panelUserGid, panelUserUid } from "../../lib/sso-auth";
 import { COMMAND_MS } from "./limits";
 
 export const REAL_IP_MARKER = "#clp-addons:untrusted ";
@@ -27,10 +27,12 @@ export const DEFAULT_REAL_IP_PATHS = {
   /** CloudPanel 6's own Nginx; null on the older layout, where the panel shares the sites' instance. */
   panelConf: nginxLayout().configFile as string | null,
   panelUid: null as number | null,
+  panelGid: null as number | null,
   cloudflareIps: CLOUDFLARE_IPS_PATH,
   nginx: "nginx",
   systemctl: "systemctl",
   rootUid: ROOT_UID,
+  rootGid: 0,
 };
 
 export interface RealIpOptions {
@@ -47,8 +49,8 @@ export interface RealIpStatus {
 
 interface Instance {
   conf: string;
-  uid: number;
-  groupWritable: boolean;
+  uid: NginxFileOwner;
+  groupWritable: NginxGroupWrite;
   config?: string;
   service?: string;
   /** Proxies trusted in place of every address. */
@@ -81,10 +83,12 @@ function instances(options: RealIpOptions): { sites: Instance; panel: Instance |
   const paths = { ...DEFAULT_REAL_IP_PATHS, ...options.paths };
   const sites = { conf: paths.nginxConf, uid: paths.rootUid, groupWritable: false, proxies: [] };
   if (!paths.panelConf || !existsSync(paths.panelConf)) return { sites, panel: null };
-  // The panel's files belong to its own account, mode 770.
+  // CloudPanel's mode 770 is valid with either its own account or root as owner.
   const uid = paths.panelUid ?? panelUserUid() ?? paths.rootUid;
+  const gid = paths.panelGid ?? panelUserGid();
   return { sites, panel: {
-    conf: paths.panelConf, uid, groupWritable: true, config: paths.panelConf, service: "clp-nginx",
+    conf: paths.panelConf, uid: [uid, paths.rootUid], groupWritable: [paths.rootGid, ...(gid === null ? [] : [gid])],
+    config: paths.panelConf, service: "clp-nginx",
     proxies: cloudflareProxies(paths.cloudflareIps),
   } };
 }

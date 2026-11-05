@@ -1,7 +1,7 @@
 import CLIENT_BODY from "./views.client.js" with { type: "text" };
 import STYLE from "./views.css" with { type: "text" };
 import { esc } from "../../../lib/app-http";
-import { ATTENTION_RANK, FLEET_FOOTER_HTML, FLEET_ROW_SELECTION_JS, fleetFilterHtml, filterWord, valueFilters, renderLayout } from "../../../lib/app-ui";
+import { ATTENTION_RANK, FLEET_FOOTER_HTML, FLEET_ROW_SELECTION_JS, PHONE_CUT, fleetFilterHtml, filterWord, phoneMoreHtml, valueFilters, renderLayout } from "../../../lib/app-ui";
 import { mountPath } from "../../../lib/mount";
 import type { DnsState, SiteView } from "../action";
 import type { Profile } from "../model";
@@ -122,9 +122,11 @@ function redirectRow(site: SiteView, state: DnsState): string {
   const profile = state.profiles.find((candidate) => candidate.id === site.profileId);
   const kept = [redirect.keepPath && "path", redirect.keepQuery && "query"].filter(Boolean);
   const domain = esc(site.domain);
+  const target = esc(redirect.target.replace(/^https?:\/\//, ""));
+  // A phone card heads with "domain → target" and drops the Redirects to cell's own copy.
   return `<tr data-redirect="${domain}">
-    <td class="site-cell"><strong>${domain}</strong></td>
-    <td data-label="Redirects to" class="dns-redirect-cell"><span class="dns-redirect-target" title="${esc(redirect.target)}">${esc(redirect.target.replace(/^https?:\/\//, ""))}</span>
+    <td class="site-cell"><strong>${domain}</strong><span class="dns-card-target"><span aria-hidden="true">→</span><span class="visually-hidden">redirects to</span> ${target}</span></td>
+    <td data-label="Redirects to" class="dns-redirect-cell"><span class="dns-redirect-target" title="${esc(redirect.target)}">${target}</span>
       <span class="hint">${redirect.status}${kept.length ? ` · keeps ${kept.join(" and ")}` : ""} · ${servedBy(site, state)}</span></td>
     <td data-label="Profile" class="dns-redirect-profile">${profile ? esc(profile.name) : '<span class="tone-muted">No profile</span>'}</td>
     <td data-label="DNS" class="dns-status">${statusCell(site, state.automatic)}</td>
@@ -274,7 +276,8 @@ function redirectsCard(state: DnsState, redirects: SiteView[]): string {
       <p class="hint">Domains with no site here that send every visitor to another address, with their mail kept by a profile.</p></div>${tools}</div>
     ${redirects.length ? `<div class="table-scroll"><table class="fleet-table dns-redirect-table"><thead><tr>
         <th>Domain</th><th>Redirects to</th><th>Profile</th><th>DNS</th><th class="action-cell"></th>
-      </tr></thead><tbody>${redirects.map((site) => redirectRow(site, state)).join("")}</tbody></table></div>`
+      </tr></thead><tbody data-phone-cut="dns-redirects">${redirects.map((site) => redirectRow(site, state)).join("")}</tbody></table></div>
+      ${redirects.length > PHONE_CUT ? phoneMoreHtml("dns-redirects", `Show all ${plural(redirects.length, "redirect")}`) : ""}`
       : '<div class="empty">No redirect domains.</div>'}
   </div>`;
 }

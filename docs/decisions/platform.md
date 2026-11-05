@@ -407,7 +407,9 @@ list of more than twelve rows with something below its card scrolls in a box of
 its own under a sticky heading; a list that ends the page grows with it. On a
 phone a list longer than ten sites shows the first ten and a button for the rest,
 so the settings below it stay close; the hidden rows are deselected like rows
-search hides, and search covers every site. Page and form actions wrap within the
+search hides, and search covers every site. A second long list on the page,
+such as DNS's redirects, gets the same cut and button through
+`tbody[data-phone-cut]` and `phoneMoreHtml`. Page and form actions wrap within the
 available width. Two-column card and field grids hold until 760px, where the
 tables have already given way. Live enable, disable and update jobs
 put their state, current step and output in the manager card that owns the job,
