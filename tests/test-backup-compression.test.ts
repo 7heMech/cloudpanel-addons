@@ -87,7 +87,8 @@ test("repair re-applies a known original after a package replaces it", () => {
 test("a block from before long mode is upgraded by repair and restored by disable", () => {
   const f = fixture();
   writeFileSync(f.remoteCommand, ORIGINAL.replace("$tarCreator->create($sources, $destinationFile, $excludes);", backupCompressionBlock(ON, false)));
-  expect(backupCompressionStatus(ON, f.options).active).toBe(false);
+  // It already writes backup.tar.zst at the chosen level.
+  expect(backupCompressionStatus(ON, f.options).active).toBe(true);
   expect(reconcileBackupCompression(ON, f.options)).toBe(true);
   expect(f.read()).toContain("'/usr/bin/zstd -3 -T1 --long=27'");
   expect(backupCompressionStatus(ON, f.options).active).toBe(true);

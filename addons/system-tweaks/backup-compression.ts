@@ -96,16 +96,16 @@ function inspect(options: BackupCompressionOptions) {
   const ctx = context(options);
   const source = readSource(ctx.paths.remoteCommand);
   let original = source.text;
-  let applied: (BackupCompressionSettings & { current: boolean }) | null = null;
+  let applied: BackupCompressionSettings | null = null;
   if (original.includes(MARKER)) {
     const edited = new Error("the remote backup compression block was edited; the file is left in place");
     const found = /\/\* clp-addons:backup-zstd:(\d+):(\d+) \*\//.exec(original);
     const settings = { enabled: true, level: Number(found?.[1]), threads: Number(found?.[2]) };
     if (!validBackupCompression(settings)) throw edited;
-    const current = [true, false].find((long) => original.split(backupCompressionBlock(settings, long)).length === 2);
-    if (current === undefined) throw edited;
-    applied = { ...settings, current };
-    original = original.replace(backupCompressionBlock(settings, current), ORIGINAL_CALL);
+    const long = [true, false].find((withLong) => original.split(backupCompressionBlock(settings, withLong)).length === 2);
+    if (long === undefined) throw edited;
+    applied = settings;
+    original = original.replace(backupCompressionBlock(settings, long), ORIGINAL_CALL);
   }
   if (hash(original) !== ctx.hashes.remote || original.split(ORIGINAL_CALL).length !== 2) {
     throw new Error("CloudPanel's remote backup code is not a version this tweak supports; the file is left in place");
@@ -135,7 +135,7 @@ export function backupCompressionStatus(settings: BackupCompressionSettings, opt
     const problem = supportProblem(ctx, options);
     return {
       ...settings, installed, supported: !problem,
-      active: !!ctx.applied?.current && !problem && installed && ctx.applied.level === settings.level && ctx.applied.threads === settings.threads,
+      active: !!ctx.applied && !problem && installed && ctx.applied.level === settings.level && ctx.applied.threads === settings.threads,
       problem: problem || (installed ? "" : "Install zstd on the server to enable compression"),
     };
   } catch (error) {
