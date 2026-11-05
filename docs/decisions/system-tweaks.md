@@ -150,7 +150,11 @@ CloudPanel 2.5.4-3's `RemoteBackupCreateCommand` creates `backup.tar` through
 temporary archive in `finally`. Database backups use gzip separately.
 `backup-compression.ts` replaces only the remote command's archive-creation
 call. It appends `.zst` to the destination and invokes the same tar command
-builder with `--use-compress-program='/usr/bin/zstd -LEVEL -TTHREADS'`.
+builder with `--use-compress-program='/usr/bin/zstd -LEVEL -TTHREADS --long=27'`.
+The 128 MiB window finds files repeated across a site, such as copied plugins
+or old archives, for about 100 MB more memory; `zstd -d` accepts that window
+without options. A block from 2.0.0-rc.8, without `--long`, is still
+recognized, and repair replaces it.
 Sources, excludes, the six-hour timeout, Rclone, notification handling and
 retention stay with CloudPanel. The suffix and compressor live in one PHP
 class, replaced atomically, so an invocation already in progress keeps its

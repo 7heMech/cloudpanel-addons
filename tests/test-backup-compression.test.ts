@@ -4,7 +4,7 @@ import { lstatSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSyn
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
-  DEFAULT_BACKUP_COMPRESSION, backupCompressionStatus, reconcileBackupCompression, validBackupCompression,
+  DEFAULT_BACKUP_COMPRESSION, backupCompressionBlock, backupCompressionStatus, reconcileBackupCompression, validBackupCompression,
   type BackupCompressionOptions,
 } from "../addons/system-tweaks/backup-compression";
 import { executeSystemTweaksAction, readSettings } from "../addons/system-tweaks/action";
@@ -57,7 +57,7 @@ test("filename, tar compression and excludes move together; turning off restores
   expect(reconcileBackupCompression(ON, f.options)).toBe(true);
   const next = f.read();
   expect(next).toContain("$destinationFile .= '.zst';");
-  expect(next).toContain("'/usr/bin/zstd -3 -T1'");
+  expect(next).toContain("'/usr/bin/zstd -3 -T1 --long=27'");
   expect(next).toContain("$clpAddonsTar->setExcludes($excludes);");
   expect(next).toContain("upload($destinationFile);");
   expect(next).toContain("cleanup($destinationFile);");
@@ -66,7 +66,7 @@ test("filename, tar compression and excludes move together; turning off restores
   expect(reconcileBackupCompression(ON, f.options)).toBe(false);
   const stronger = { enabled: true, level: 9, threads: 2 };
   expect(reconcileBackupCompression(stronger, f.options)).toBe(true);
-  expect(f.read()).toContain("'/usr/bin/zstd -9 -T2'");
+  expect(f.read()).toContain("'/usr/bin/zstd -9 -T2 --long=27'");
   expect(f.read().split("$destinationFile .= '.zst';")).toHaveLength(2);
   expect(backupCompressionStatus(ON, f.options).active).toBe(false);
   // Restore does not depend on the current package or on zstd still being installed.
@@ -82,6 +82,18 @@ test("repair re-applies a known original after a package replaces it", () => {
   expect(backupCompressionStatus(ON, f.options).active).toBe(false);
   expect(reconcileBackupCompression(ON, f.options)).toBe(true);
   expect(backupCompressionStatus(ON, f.options).active).toBe(true);
+});
+
+test("a block from before long mode is upgraded by repair and restored by disable", () => {
+  const f = fixture();
+  writeFileSync(f.remoteCommand, ORIGINAL.replace("$tarCreator->create($sources, $destinationFile, $excludes);", backupCompressionBlock(ON, false)));
+  expect(backupCompressionStatus(ON, f.options).active).toBe(false);
+  expect(reconcileBackupCompression(ON, f.options)).toBe(true);
+  expect(f.read()).toContain("'/usr/bin/zstd -3 -T1 --long=27'");
+  expect(backupCompressionStatus(ON, f.options).active).toBe(true);
+  writeFileSync(f.remoteCommand, ORIGINAL.replace("$tarCreator->create($sources, $destinationFile, $excludes);", backupCompressionBlock(ON, false)));
+  expect(reconcileBackupCompression(DEFAULT_BACKUP_COMPRESSION, f.options)).toBe(true);
+  expect(f.read()).toBe(ORIGINAL);
 });
 
 test("unknown versions, modified source and a changed tar builder are refused before writes", () => {
