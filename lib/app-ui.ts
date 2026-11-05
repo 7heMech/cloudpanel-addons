@@ -121,6 +121,17 @@ export function fleetFilterHtml(options: {
 export const FLEET_FOOTER_HTML = `<div class="empty" id="fleet-none" hidden>No site matches.</div>
 <div class="fleet-more" id="fleet-more" hidden><button class="btn" type="button" onclick="showAllSites()">Show all sites</button></div>`;
 
+/** Rows a phone shows of a long list before its Show all button. */
+export const PHONE_CUT = 10;
+
+/**
+ * The Show all button under a second long list, such as DNS's redirects; its
+ * `tbody[data-phone-cut]` names the same `id`. The fleet script cuts and shows it.
+ */
+export function phoneMoreHtml(id: string, label: string): string {
+  return `<div class="fleet-more" data-phone-more="${esc(id)}" hidden><button class="btn" type="button" onclick="showAllRows('${esc(id)}')">${esc(label)}</button></div>`;
+}
+
 /**
  * Shared selection for the Cloudflare, PHP and SMTP site tables: which rows
  * there are, which are picked, and the mouse and keyboard ways to pick them.

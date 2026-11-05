@@ -142,6 +142,20 @@ describe("connecting Cloudflare", () => {
     expect(automatic).toContain('<div class="empty">No changes yet.</div>');
   });
 
+  test("a long redirects list is cut on a phone, and each card heads with domain → target", async () => {
+    const state = await setup().act("list");
+    const redirects = (count: number) => Array.from({ length: count }, (_, i) => ({
+      domain: `old-${i}.example.net`, type: "redirect", profileId: null, ssl: null, plan: null,
+      redirect: { source: `old-${i}.example.net`, target: "https://example.com/new", status: 301, keepPath: true, keepQuery: true, profileId: null, standIn: false },
+    })) as typeof state.sites;
+    const long = dashboardContent({ ...state, sites: redirects(11) });
+    expect(long).toContain('<tbody data-phone-cut="dns-redirects">');
+    expect(long).toContain('data-phone-more="dns-redirects"');
+    expect(long).toContain("Show all 11 redirects");
+    expect(long).toContain('<span class="visually-hidden">redirects to</span> example.com/new</span>');
+    expect(dashboardContent({ ...state, sites: redirects(10) })).not.toContain("data-phone-more");
+  });
+
   test("a token is verified, its accounts and zones found, and it never comes back to the page", async () => {
     const env = setup();
     env.cf.zone("example.org", env.church);
