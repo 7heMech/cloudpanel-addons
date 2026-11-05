@@ -10,12 +10,29 @@ const GREEN = "\x1b[32m";
 const color = process.stdout.isTTY === true;
 const paint = (c: string, s: string) => (color ? `${c}${s}${RESET}` : s);
 
+// A progress line a terminal redraws in place, until the next line ends it.
+let redrawing = false;
+const endRedraw = () => {
+  if (redrawing) process.stdout.write("\n");
+  redrawing = false;
+};
+
 export const log = {
-  step: (m: string) => console.log(`${paint(DIM, "›")} ${m}`),
-  ok: (m: string) => console.log(`${paint(GREEN, "✓")} ${m}`),
-  warn: (m: string) => console.warn(`${paint(YELLOW, "!")} ${m}`),
-  err: (m: string) => console.error(`${paint(RED, "✗")} ${m}`),
-  plain: (m = "") => console.log(m),
+  step: (m: string) => { endRedraw(); console.log(`${paint(DIM, "›")} ${m}`); },
+  ok: (m: string) => { endRedraw(); console.log(`${paint(GREEN, "✓")} ${m}`); },
+  warn: (m: string) => { endRedraw(); console.warn(`${paint(YELLOW, "!")} ${m}`); },
+  err: (m: string) => { endRedraw(); console.error(`${paint(RED, "✗")} ${m}`); },
+  plain: (m = "") => { endRedraw(); console.log(m); },
+  /** Redrawn in a terminal; elsewhere only the last one is written. */
+  progress: (m: string, done: boolean) => {
+    if (!color) {
+      if (done) log.step(m);
+      return;
+    }
+    process.stdout.write(`\r\x1b[K${paint(DIM, "›")} ${m}`);
+    redrawing = !done;
+    if (done) process.stdout.write("\n");
+  },
 };
 
 export class Fatal extends Error {}

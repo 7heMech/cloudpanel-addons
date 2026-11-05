@@ -30,7 +30,7 @@ import {
 } from "./job-store";
 import { CLI_BIN, LOCK_DIR, STATE_DIR } from "./paths";
 import { ADDONS, ADDON_NAMES, addonNews, addonNoticeKeys } from "./addon-catalog";
-import { CLI_VERSION } from "./release";
+import { CLI_VERSION, type OnProgress } from "./release";
 import { Fatal, log, requireRoot, writeAtomic } from "./util";
 
 /** Where the manager's own job records live, beside each addon's state. */
@@ -58,7 +58,11 @@ export type ManagerJobKind = "enable" | "disable" | "update";
 export interface ManagerOps {
   enable(addon: string): Promise<void> | void;
   disable(addon: string): Promise<void> | void;
-  update(beforeManagerRestart?: () => void, onStep?: (step: string) => void): Promise<void>;
+  update(
+    beforeManagerRestart?: () => void,
+    onStep?: (step: string) => void,
+    onProgress?: OnProgress,
+  ): Promise<void>;
   /** Render every installed addon's block into the panel's templates again. */
   reconcile(): void;
 }
@@ -398,6 +402,9 @@ export async function runManagerJob(id: string, ops: ManagerOps, jobsDir = MANAG
       }, (step) => {
         log.step(step);
         jobSet(dir, "step", step);
+      }, (progress, done) => {
+        if (done) log.step(progress);
+        jobSet(dir, "step", progress);
       });
     } else {
       throw new Fatal(`job '${id}' has no kind this binary knows how to run`);
