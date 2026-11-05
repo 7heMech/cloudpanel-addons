@@ -18,14 +18,16 @@ import { writeFileAtomic } from "../../lib/atomic-write";
 
 export interface BackupCompressionSettings { enabled: boolean; level: number; threads: number }
 export const DEFAULT_BACKUP_COMPRESSION: BackupCompressionSettings = { enabled: false, level: 3, threads: 1 };
-export const BACKUP_COMPRESSION_ERROR = "enabled must be true or false, level an integer from 1 to 19, and threads an integer from 1 to 8";
+/** Past this, one thread is slow enough for a large site to meet CloudPanel's six-hour limit. */
+export const MAX_BACKUP_LEVEL = 12;
+export const BACKUP_COMPRESSION_ERROR = `enabled must be true or false, level an integer from 1 to ${MAX_BACKUP_LEVEL}, and threads an integer from 1 to 8`;
 
 export function validBackupCompression(value: unknown): value is BackupCompressionSettings {
   if (!value || typeof value !== "object" || Array.isArray(value)) return false;
   const setting = value as BackupCompressionSettings;
   return Object.keys(value).every((key) => ["enabled", "level", "threads"].includes(key))
     && typeof setting.enabled === "boolean"
-    && Number.isInteger(setting.level) && setting.level >= 1 && setting.level <= 19
+    && Number.isInteger(setting.level) && setting.level >= 1 && setting.level <= MAX_BACKUP_LEVEL
     && Number.isInteger(setting.threads) && setting.threads >= 1 && setting.threads <= 8;
 }
 
