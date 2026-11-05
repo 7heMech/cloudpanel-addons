@@ -433,6 +433,37 @@ test("a masked or removed socket leaves only its stale drop-in, which switching 
   }
 });
 
+test("switching off leaves a stopped MySQL stopped, with or without a stale socket drop-in", async () => {
+  for (const load of ["loaded", "masked"]) {
+    const s = socketServer();
+    await setDatabaseLoopback(true, s.options);
+    Object.assign(s.socket, { active: false, serviceActive: false });
+    if (load === "masked") Object.assign(s.socket, { load, configured: [] });
+    s.triggeredBy = load === "masked" ? "" : "mariadb.socket";
+    s.listening = "";
+    s.calls.length = 0;
+    await setDatabaseLoopback(false, s.options);
+    expect(existsSync(s.file)).toBe(false);
+    expect(existsSync(s.options.paths!.socketFile!)).toBe(false);
+    expect(s.calls.some((call) => call[0] === "systemctl" && ["start", "restart"].includes(call[1]!))).toBe(false);
+  }
+});
+
+test("a masked socket still changing state is not taken for a stale one", async () => {
+  const s = socketServer();
+  await setDatabaseLoopback(true, s.options);
+  Object.assign(s.socket, { load: "masked", active: false, configured: [] });
+  s.triggeredBy = "";
+  const run = s.options.run!;
+  s.options.run = (command, args) => {
+    const result = run(command, args);
+    return command === "systemctl" && args[0] === "show" && args[1] === "mariadb.socket"
+      ? { ...result, stdout: result.stdout.replace("ActiveState=inactive", "ActiveState=deactivating") } : result;
+  };
+  await expect(setDatabaseLoopback(false, s.options)).rejects.toThrow("could not inspect a settled mariadb.socket");
+  expect(existsSync(s.options.paths!.socketFile!)).toBe(true);
+});
+
 test("foreign, edited and symlinked socket drop-ins are refused before any mutation", async () => {
   const s = socketServer();
   const path = s.options.paths!.socketFile!;

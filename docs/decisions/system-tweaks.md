@@ -1379,8 +1379,10 @@ control their addresses; the daemon's bind settings do not restrict inherited
 listeners. The supported `mariadb.socket` path has `Accept=no`, activates the
 same database service and contains only recognized stream addresses. Additional
 socket units or unsupported listener forms are refused before mutation. A
-masked or removed `mariadb.socket` activates nothing, so a managed drop-in left
-for it counts as no socket and switching off removes it.
+masked or removed `mariadb.socket` that has settled as inactive or failed
+activates nothing, so a managed drop-in left for it counts as no socket and
+switching off removes it. A stopped MySQL, and its socket if it has one, stays
+stopped when the switch changes; the files apply at its next start.
 
 `database-socket.ts` builds
 `/etc/systemd/system/mariadb.socket.d/zz-clp-addons-loopback.conf`. An empty
