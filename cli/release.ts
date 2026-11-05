@@ -15,24 +15,34 @@ export interface ResolvedRelease {
   assets: Map<string, string>;
 }
 
-async function download(url: string, onPercent?: (percent: number) => void): Promise<Buffer> {
+const PROGRESS_EVERY_MS = 1000;
+
+const megabytes = (bytes: number) => (bytes / 1_000_000).toFixed(1);
+
+async function download(url: string, onProgress?: OnProgress): Promise<Buffer> {
   const response = await fetch(url, {
     redirect: "follow",
     headers: { "User-Agent": "clp-addons" },
     signal: AbortSignal.timeout(300_000),
   });
   if (!response.ok) fatal(`download failed: ${response.status} ${response.statusText} for ${url}`);
-  const total = Number(response.headers.get("content-length"));
-  if (!onPercent || !total || !response.body) return Buffer.from(await response.arrayBuffer());
+  if (!onProgress || !response.body) return Buffer.from(await response.arrayBuffer());
+  const total = Number(response.headers.get("content-length")) || 0;
+  const progress = (received: number) => total
+    ? `${Math.floor((received / total) * 100)}% (${megabytes(received)} of ${megabytes(total)} MB)`
+    : `${megabytes(received)} MB`;
   const chunks: Uint8Array[] = [];
   let received = 0;
-  let shown = 0;
+  let shownAt = Date.now();
   for await (const chunk of response.body) {
     chunks.push(chunk);
     received += chunk.length;
-    const percent = Math.floor((received / total) * 10) * 10;
-    if (percent > shown) onPercent(shown = percent);
+    if (Date.now() - shownAt >= PROGRESS_EVERY_MS) {
+      shownAt = Date.now();
+      onProgress(progress(received), false);
+    }
   }
+  onProgress(progress(received), true);
   return Buffer.concat(chunks);
 }
 
@@ -96,7 +106,15 @@ export interface FetchedArtifact {
   bytes: Buffer;
 }
 
-export async function fetchVerified(rel: ResolvedRelease, names: string[], onStep = log.step): Promise<FetchedArtifact[]> {
+export type OnProgress = (progress: string, done: boolean) => void;
+
+/** `onProgress` reports each download about once a second, and once more as it ends. */
+export async function fetchVerified(
+  rel: ResolvedRelease,
+  names: string[],
+  onStep = log.step,
+  onProgress: OnProgress = log.progress,
+): Promise<FetchedArtifact[]> {
   onStep(`fetching checksums for ${rel.tag}`);
   const sums = parseSums((await download(rel.assets.get("SHA256SUMS")!)).toString("utf-8"));
   const artifacts: FetchedArtifact[] = [];
@@ -106,7 +124,7 @@ export async function fetchVerified(rel: ResolvedRelease, names: string[], onSte
     const expected = sums.get(name);
     if (!expected) fatal(`SHA256SUMS for ${rel.tag} does not list ${name}`);
     onStep(`downloading ${name}`);
-    const bytes = await download(url, (percent) => onStep(`downloading ${name}: ${percent}%`));
+    const bytes = await download(url, (progress, done) => onProgress(`downloading ${name}: ${progress}`, done));
     const actual = sha256(bytes);
     if (actual !== expected) {
       fatal(`checksum mismatch for ${name}\n  expected ${expected}\n  actual   ${actual}`);

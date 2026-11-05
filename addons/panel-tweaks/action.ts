@@ -761,6 +761,13 @@ async function setBranding(paths: PanelTweaksActionPaths, options: PanelTweaksAc
   });
 }
 
+/** The logos the addon pages draw: none unless Theme & Branding and its logo section are on. */
+function brandingLogos(paths: PanelTweaksActionPaths): Branding["logos"] | null {
+  if (!readTweaks(paths).branding) return null;
+  const branding = readBranding(paths);
+  return branding.customLogo ? branding.logos : null;
+}
+
 /** `branding-asset --name=<sha256>.<ext>`, answered before there is a session. */
 function brandingAssetArgument(argv: string[]): string {
   if (argv.length !== 1 || !argv[0]!.startsWith("--name=")) failAction("branding-asset takes --name=<file>");
@@ -866,6 +873,10 @@ export async function executePanelTweaksAction(
     return { job, log: readJobLog(jobDir(paths.jobsDir, id)) };
   }
   if (argv[0] === "branding-asset") return brandingAsset(paths, brandingAssetArgument(argv.slice(1)));
+  if (argv[0] === "branding-logos") {
+    if (argv.length !== 1) failAction("branding-logos takes no options");
+    return brandingLogos(paths);
+  }
   const { verb, asUser } = parseAction(argv);
 
   if (verb === "state") return stateOf(paths, asUser);

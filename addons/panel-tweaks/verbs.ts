@@ -9,6 +9,8 @@ export const PANEL_TWEAKS_VERBS = {
   // The logos and favicon the panel's pages, the login page among them, load.
   // Public by nature; root answers only an image a branding slot names.
   "branding-asset": { web: "pre-gate" },
+  // Which of those images the addon pages' own header and favicon use.
+  "branding-logos": { web: "pre-gate" },
   // A size measurement, run as a background job that `job` and `watch-job` follow.
   measure: { web: "admin" },
   job: { web: "admin" },

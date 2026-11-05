@@ -17,7 +17,7 @@ import {
   removeLegacyUnits, startUnits, unitActive, writeConfig,
 } from "./provision";
 import {
-  CLI_VERSION, type FetchedArtifact, fetchVerified, resolveRelease, verifyAttestation,
+  CLI_VERSION, type FetchedArtifact, fetchVerified, type OnProgress, resolveRelease, verifyAttestation,
 } from "./release";
 import { fatal, log, parseFlags, requireRoot, run, tryRun } from "./util";
 import { compareSemver, isPrerelease } from "../lib/semver";
@@ -57,7 +57,11 @@ function finalizeUpdate(beforeManagerRestart?: () => void): AddonSpec[] {
   }
 }
 
-type UpdateOptions = { beforeManagerRestart?: () => void; onStep?: (step: string) => void };
+type UpdateOptions = {
+  beforeManagerRestart?: () => void;
+  onStep?: (step: string) => void;
+  onProgress?: OnProgress;
+};
 
 /**
  * Updates release artifacts when necessary. If the binary moves, re-run this
@@ -92,7 +96,7 @@ async function applyUpdate(argv: string[], options: UpdateOptions): Promise<void
   }
   let artifacts: FetchedArtifact[] | undefined;
   if (!artifactsCurrent) {
-    artifacts = await fetchVerified(release, artifactNames(), options.onStep);
+    artifacts = await fetchVerified(release, artifactNames(), options.onStep, options.onProgress);
     await verifyAttestation(release, artifacts, flags["skip-attestation"] === true);
   }
 

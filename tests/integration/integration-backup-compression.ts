@@ -82,7 +82,7 @@ file_put_contents(${php(uploaded)}, $destinationFile);
     rmSync(uploaded);
     // Use the real CloudPanel command executor's failure handling with a
     // failing compressor. Its caller must not advance to the upload.
-    writeHarness(block.replace(`/usr/bin/zstd -${level} -T${threads}`, "/bin/false"));
+    writeHarness(block.replace(`/usr/bin/zstd -${level} -T${threads} --long=27`, "/bin/false"));
     run(["/usr/bin/php8.1", harness], false);
     assert.equal(existsSync(uploaded), false);
     assert.equal(existsSync(archive + ".zst"), false);

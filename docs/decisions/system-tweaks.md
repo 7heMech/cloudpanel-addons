@@ -150,7 +150,11 @@ CloudPanel 2.5.4-3's `RemoteBackupCreateCommand` creates `backup.tar` through
 temporary archive in `finally`. Database backups use gzip separately.
 `backup-compression.ts` replaces only the remote command's archive-creation
 call. It appends `.zst` to the destination and invokes the same tar command
-builder with `--use-compress-program='/usr/bin/zstd -LEVEL -TTHREADS'`.
+builder with `--use-compress-program='/usr/bin/zstd -LEVEL -TTHREADS --long=27'`.
+The 128 MiB window finds files repeated across a site, such as copied plugins
+or old archives, for about 100 MB more memory; `zstd -d` accepts that window
+without options. A block from 2.0.0-rc.8, without `--long`, is still
+recognized, and repair replaces it.
 Sources, excludes, the six-hour timeout, Rclone, notification handling and
 retention stay with CloudPanel. The suffix and compressor live in one PHP
 class, replaced atomically, so an invocation already in progress keeps its
@@ -158,8 +162,9 @@ loaded code and its own destination through upload and cleanup. No PHP-FPM
 reload is needed: remote backups run through the CLI.
 
 The setting defaults off, including for existing System Tweaks installations.
-The administrator chooses a level from 1 to 19 and 1 to 8 worker threads;
-defaults are level 3 and one worker. Both HTTP and root action validate the
+The administrator chooses a level from 1 to 12 and 1 to 8 worker threads;
+defaults are level 3 and one worker. Above 12, one worker is slow enough for a
+large site to reach the six-hour timeout. Both HTTP and root action validate the
 complete setting, and no arbitrary compressor, path or shell flags are accepted.
 The page reports whether the setting is actually installed and whether zstd
 is available. The existing System Tweaks lock serializes changes with repair.
