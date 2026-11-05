@@ -1,6 +1,7 @@
 import { callGatewayAction, type ActionResult, type GatewayStream } from "../../../lib/gateway-client";
 import type { WebVerb } from "../../../lib/gateway-protocol";
 import { watchGatewayJob, type JobWatcher } from "../../../lib/job-stream";
+import { forgetPanelLogos } from "../../../lib/panel-logos";
 import type {
   MeasureJobView, MeasureStarted, PanelTweaks, PanelTweaksState, SetBrandingResult, SetTweaksResult,
 } from "../action";
@@ -17,8 +18,9 @@ export const panelTweaksService = {
     return call<PanelTweaksState>("state", asUser ? [`--as-user=${asUser}`] : []);
   },
 
+  // Either can change the logos the addon pages draw.
   setTweaks(wanted: Partial<PanelTweaks>): Promise<ActionResult<SetTweaksResult>> {
-    return call<SetTweaksResult>("set-tweaks", [], JSON.stringify(wanted));
+    return call<SetTweaksResult>("set-tweaks", [], JSON.stringify(wanted)).finally(forgetPanelLogos);
   },
 
   branding(): Promise<ActionResult<Branding>> {
@@ -26,7 +28,7 @@ export const panelTweaksService = {
   },
 
   setBranding(wanted: Record<string, unknown>): Promise<ActionResult<SetBrandingResult>> {
-    return call<SetBrandingResult>("set-branding", [], JSON.stringify(wanted));
+    return call<SetBrandingResult>("set-branding", [], JSON.stringify(wanted)).finally(forgetPanelLogos);
   },
 
   brandingAsset(name: string): Promise<ActionResult<{ type: string; data: string }>> {

@@ -8,6 +8,7 @@
 // any extra rules; everything else is shared.
 
 import { esc, escJs } from "./app-http";
+import { panelLogos, type PanelLogos } from "./panel-logos";
 import { shadowStyle, type EmbedFragment } from "./shadow-embed";
 import { SITE_CONTEXT_STYLE, siteInfoHtml, siteTabs, type SiteContext } from "./site-context";
 import { UPDATE_STYLE, updateNoticeHtml } from "./update-ui";
@@ -291,6 +292,27 @@ export function renderFragment(title: string, content: string, chrome: Chrome): 
   };
 }
 
+/**
+ * CloudPanel's logo, or Theme & Branding's. The square mark stands in for the
+ * header logo on a phone, and for all of it when there is no header logo.
+ */
+export function logosHtml(logos: PanelLogos | null): string {
+  const header = logos?.header ?? logos?.mark;
+  if (!logos || !header) {
+    return `      <img class="clp-addon-logo clp-addon-logo-light" src="/assets/images/logo.svg" alt="CloudPanel" width="155" height="31">
+      <img class="clp-addon-logo clp-addon-logo-dark" src="/assets/images/logo-dark.svg" alt="CloudPanel" width="155" height="31">`;
+  }
+  const mark = logos.header ? logos.mark : null;
+  return [0, 1].map((theme) => `      <picture class="clp-addon-logo-${theme ? "dark" : "light"}">${mark
+    ? `<source media="(max-width: 760px)" srcset="${esc(mark[theme]!)}">` : ""}<img class="clp-addon-logo clp-addon-logo-custom" src="${esc(header[theme]!)}" alt="Home" height="31"></picture>`).join("\n");
+}
+
+export function faviconHtml(logos: PanelLogos | null): string {
+  if (!logos?.favicon) return "";
+  const type = logos.favicon.endsWith(".svg") ? "image/svg+xml" : logos.favicon.endsWith(".ico") ? "image/x-icon" : "image/png";
+  return `<link rel="icon" type="${type}" href="${esc(logos.favicon)}">\n`;
+}
+
 export function renderLayout(title: string, content: string, chrome: Chrome): string {
   const isAddonsRoute = chrome.base === "/addons" || chrome.base.startsWith("/addons/");
   // A site-scoped page belongs to the site, so it highlights Sites; it is not
@@ -329,15 +351,14 @@ ${contextualNav}
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, shrink-to-fit=no">
 <title>${esc(title)}</title>
-<script>${THEME_INIT_JS}</script>
+${faviconHtml(panelLogos())}<script>${THEME_INIT_JS}</script>
 <style>${BASE_STYLE}${SITE_CONTEXT_STYLE}${UPDATE_STYLE}${chrome.css ?? ""}</style>
 </head>
 <body>
 <header class="clp-addon-header">
   <div class="clp-addon-header-inner">
     <a class="clp-addon-brand" href="${esc("/")}" aria-label="${esc("CloudPanel home")}">
-      <img class="clp-addon-logo clp-addon-logo-light" src="/assets/images/logo.svg" alt="CloudPanel" width="155" height="31">
-      <img class="clp-addon-logo clp-addon-logo-dark" src="/assets/images/logo-dark.svg" alt="CloudPanel" width="155" height="31">
+${logosHtml(panelLogos())}
     </a>
     <nav class="clp-addon-primary-nav" aria-label="${esc("CloudPanel navigation")}">
 ${primaryNav}
@@ -367,10 +388,8 @@ ${primaryNav}
 <main>${contextualHeader}${FLASH_HTML}${viewRoot(content)}</main>
 ${CONFIRM_HTML}
 <footer class="clp-addon-footer">
-  <a href="https://www.cloudpanel.io/blog/" target="_blank" rel="noopener noreferrer">Blog</a>
-  <a href="https://www.cloudpanel.io/docs/v2/" target="_blank" rel="noopener noreferrer">Docs</a>
-  <a href="https://github.com/7heMech/cloudpanel-addons/issues" target="_blank" rel="noopener noreferrer">Addon issues</a>
-  <a href="https://www.cloudpanel.io/" target="_blank" rel="noopener noreferrer">CloudPanel</a>
+  <a href="https://github.com/7heMech/cloudpanel-addons/issues" target="_blank" rel="noopener noreferrer">Report addons issue</a>
+  <a href="https://github.com/7heMech/cloudpanel-addons" target="_blank" rel="noopener noreferrer">Star addons on GitHub</a>
 </footer>
 <script>const CLP_BASE = "${escJs(chrome.base)}";
 ${BASE_CLIENT_JS}${chrome.script}</script>
@@ -394,7 +413,7 @@ export function renderToolWindow(
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, shrink-to-fit=no, interactive-widget=resizes-content">
 <title>${esc(title)}</title>
-<script>${THEME_INIT_JS}</script>
+${faviconHtml(panelLogos())}<script>${THEME_INIT_JS}</script>
 ${chrome.head ?? ""}<style>${BASE_STYLE}${chrome.css ?? ""}</style>
 </head>
 <body class="clp-tool-window">

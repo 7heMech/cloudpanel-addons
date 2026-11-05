@@ -7,6 +7,7 @@ import type { CoverageRow, LastRun, UpdateSettings, UpdatesStatus } from "../upd
 import type { FpmUploadProgress } from "../upload-progress";
 import type { PanelPhpChoice, PanelPhpStatus } from "../panel-php";
 import type { FirewallStatus } from "../firewall";
+import { MAX_BACKUP_LEVEL } from "../backup-compression";
 import { DOMAIN_JAIL, JAIL_LIMITS, PANEL_JAIL, type Ban, type SshLogin } from "../login-jails";
 import type { DatabaseStatus } from "../database";
 
@@ -51,7 +52,7 @@ function backupCompressionCard(state: SystemTweaksState["backupCompression"]): s
       ],
       checked: state.enabled, disabled: !available && !state.enabled, onchange: "setBackupCompression(this)",
       extra: `<p class="st-status">${status} <span>${esc(state.problem || (state.active ? "The next remote backup uses backup.tar.zst." : "CloudPanel's backup format is unchanged."))}</span></p>
-        <div class="st-backup-options">${select("level", 19, "Compression level")}${select("threads", 8, "Worker threads")}</div>
+        <div class="st-backup-options">${select("level", MAX_BACKUP_LEVEL, "Compression level")}${select("threads", 8, "Worker threads")}</div>
         ${state.enabled ? '<p class="hint">Restore .tar.zst archives over SSH; CloudPanel’s File Manager does not offer extraction for this format.</p>' : ""}`,
     })}</div>
   </div>`;

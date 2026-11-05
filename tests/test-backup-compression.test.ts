@@ -143,7 +143,7 @@ test("an upstream edit during validation wins over the pending tweak", () => {
 });
 
 test("only bounded integers reach the command, at both the root action and HTTP boundary", async () => {
-  const bad = [null, [], {}, { ...ON, level: "3; touch /tmp/no" }, { ...ON, level: 0 }, { ...ON, level: 20 },
+  const bad = [null, [], {}, { ...ON, level: "3; touch /tmp/no" }, { ...ON, level: 0 }, { ...ON, level: 13 },
     { ...ON, threads: 0 }, { ...ON, threads: 9 }, { ...ON, threads: 1.5 }, { ...ON, enabled: "yes" }, { ...ON, command: "zstd" }];
   for (const body of bad) {
     expect(validBackupCompression(body)).toBe(false);

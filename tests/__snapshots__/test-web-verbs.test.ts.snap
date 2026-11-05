@@ -78,6 +78,7 @@ manager:update                     admin
 manager:watch-job                  admin stream
 panel-tweaks:branding              admin
 panel-tweaks:branding-asset        pre-gate
+panel-tweaks:branding-logos        pre-gate
 panel-tweaks:job                   admin
 panel-tweaks:measure               admin
 panel-tweaks:set-branding          admin

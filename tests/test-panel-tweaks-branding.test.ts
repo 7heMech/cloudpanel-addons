@@ -8,6 +8,8 @@ import { brandingFooterSnippet, brandingHeadSnippet } from "../addons/panel-twea
 import { PANEL_TWEAKS_TARGETS } from "../addons/panel-tweaks/inject/targets";
 import { BRANDING_ASSET_PREFIX, handleBrandingAsset } from "../addons/panel-tweaks/app/branding-asset";
 import { panelTweaksService } from "../addons/panel-tweaks/app/service";
+import { faviconHtml, logosHtml } from "../lib/app-ui";
+import { logosFromSlots } from "../lib/panel-logos";
 
 const PNG = Buffer.concat([Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]), Buffer.from("rest")]).toString("base64");
 const SVG = Buffer.from('<?xml version="1.0"?><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 10 10"><rect width="10" height="10"/></svg>').toString("base64");
@@ -163,4 +165,33 @@ test("the blocks go into all three layouts and the footer, none of them required
     "Admin/layout.html.twig", "Frontend/Login/layout.html.twig", "Frontend/layout.html.twig", "Partial/footer.html.twig",
   ]);
   expect(targets.every((target) => !target.required)).toBe(true);
+});
+
+test("the addon pages get the logos only while the switch and the logo section are both on", async () => {
+  await act(["set-branding"], { customLogo: true, logo: { slot: "headerLight", data: PNG } });
+  expect(await act(["branding-logos"])).toBeNull();
+  await act(["set-tweaks"], { branding: true });
+  const logos = await act<Branding["logos"]>(["branding-logos"]);
+  expect(logos.headerLight).toMatch(/^[0-9a-f]{64}\.png$/);
+  await act(["set-branding"], { customLogo: false });
+  expect(await act(["branding-logos"])).toBeNull();
+  await expect(act(["branding-logos", "--x"])).rejects.toThrow("no options");
+});
+
+test("an addon page's header draws the uploaded logos, the mark on a phone, and CloudPanel's without them", () => {
+  const [light, dark, mark] = ["a", "b", "c"].map((c) => `${c.repeat(64)}.png`);
+  expect(logosHtml(null)).toContain("/assets/images/logo.svg");
+  expect(logosFromSlots({ headerLight: "", headerDark: "", markLight: "", markDark: "", favicon: "" })).toBeNull();
+
+  const both = logosHtml(logosFromSlots({ headerLight: light!, headerDark: dark!, markLight: mark!, markDark: "", favicon: "" }));
+  expect(both).not.toContain("/assets/images/logo");
+  expect(both).toContain(`class="clp-addon-logo-light"><source media="(max-width: 760px)" srcset="/addons/panel-tweaks/branding/${mark}"><img class="clp-addon-logo clp-addon-logo-custom" src="/addons/panel-tweaks/branding/${light}"`);
+  // The dark mark falls back to the light one.
+  expect(both).toContain(`class="clp-addon-logo-dark"><source media="(max-width: 760px)" srcset="/addons/panel-tweaks/branding/${mark}"><img class="clp-addon-logo clp-addon-logo-custom" src="/addons/panel-tweaks/branding/${dark}"`);
+
+  const markOnly = logosHtml(logosFromSlots({ headerLight: "", headerDark: "", markLight: mark!, markDark: "", favicon: light! }));
+  expect(markOnly).not.toContain("<source");
+  expect(markOnly).toContain(`src="/addons/panel-tweaks/branding/${mark}"`);
+  expect(faviconHtml(logosFromSlots({ headerLight: "", headerDark: "", markLight: "", markDark: "", favicon: light! })))
+    .toBe(`<link rel="icon" type="image/png" href="/addons/panel-tweaks/branding/${light}">\n`);
 });
