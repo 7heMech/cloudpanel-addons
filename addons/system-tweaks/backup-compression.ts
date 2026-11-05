@@ -68,8 +68,12 @@ function context(options: BackupCompressionOptions) {
 
 const hash = (source: string) => createHash("sha256").update(source).digest("hex");
 
-/** Fixed PHP and bounded integers only; no user-supplied shell options. */
-export function backupCompressionBlock(settings: BackupCompressionSettings): string {
+/**
+ * Fixed PHP and bounded integers only; no user-supplied shell options. A
+ * 128 MiB window finds files repeated across the site; plain `zstd -d` reads
+ * it. `long: false` is the block 2.0.0-rc.8 wrote, recognized so it upgrades.
+ */
+export function backupCompressionBlock(settings: BackupCompressionSettings, long = true): string {
   if (!validBackupCompression(settings)) throw new Error(BACKUP_COMPRESSION_ERROR);
   return `${MARKER}${settings.level}:${settings.threads} */
 $destinationFile .= '.zst';
@@ -77,7 +81,7 @@ $clpAddonsTar = new \\App\\System\\Command\\TarCreateCommand();
 $clpAddonsTar->setSources($sources);
 $clpAddonsTar->setDestinationFile($destinationFile);
 $clpAddonsTar->setExcludes($excludes);
-$clpAddonsTar->addFlag('--use-compress-program', '/usr/bin/zstd -${settings.level} -T${settings.threads}');
+$clpAddonsTar->addFlag('--use-compress-program', '/usr/bin/zstd -${settings.level} -T${settings.threads}${long ? " --long=27" : ""}');
 (new \\App\\System\\CommandExecutor())->execute($clpAddonsTar, 21600);
 /* clp-addons:backup-zstd:end */`;
 }
@@ -94,12 +98,14 @@ function inspect(options: BackupCompressionOptions) {
   let original = source.text;
   let applied: BackupCompressionSettings | null = null;
   if (original.includes(MARKER)) {
+    const edited = new Error("the remote backup compression block was edited; the file is left in place");
     const found = /\/\* clp-addons:backup-zstd:(\d+):(\d+) \*\//.exec(original);
-    if (!found) throw new Error("the remote backup compression block was edited; the file is left in place");
-    applied = { enabled: true, level: Number(found[1]), threads: Number(found[2]) };
-    const block = backupCompressionBlock(applied);
-    if (original.split(block).length !== 2) throw new Error("the remote backup compression block was edited; the file is left in place");
-    original = original.replace(block, ORIGINAL_CALL);
+    const settings = { enabled: true, level: Number(found?.[1]), threads: Number(found?.[2]) };
+    if (!validBackupCompression(settings)) throw edited;
+    const long = [true, false].find((withLong) => original.split(backupCompressionBlock(settings, withLong)).length === 2);
+    if (long === undefined) throw edited;
+    applied = settings;
+    original = original.replace(backupCompressionBlock(settings, long), ORIGINAL_CALL);
   }
   if (hash(original) !== ctx.hashes.remote || original.split(ORIGINAL_CALL).length !== 2) {
     throw new Error("CloudPanel's remote backup code is not a version this tweak supports; the file is left in place");
