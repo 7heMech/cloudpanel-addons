@@ -178,7 +178,10 @@ Enabling checks zstd and lints the proposed source with CloudPanel CLI's
 `php8.1 -n -l` before the rename, preserves file ownership and permissions, and
 refuses an intervening source edit. Disabling does not require zstd, PHP, or
 the original package version. Repair re-applies a saved selection when a known
-package overwrites the source, and addon deactivation withdraws it.
+package overwrites the source, and addon deactivation withdraws it. A repair
+that cannot apply it logs why and carries on with the other settings;
+deactivation withdraws it first, so an edited command stops deactivation
+before any protection is removed.
 
 Unit tests cover settings validation, source drift, package changes, dependency
 and lint failures, restoration and reapplication. The opt-in
@@ -1375,7 +1378,9 @@ passes listeners created by systemd to the server. Its `ListenStream` entries
 control their addresses; the daemon's bind settings do not restrict inherited
 listeners. The supported `mariadb.socket` path has `Accept=no`, activates the
 same database service and contains only recognized stream addresses. Additional
-socket units or unsupported listener forms are refused before mutation.
+socket units or unsupported listener forms are refused before mutation. A
+masked or removed `mariadb.socket` activates nothing, so a managed drop-in left
+for it counts as no socket and switching off removes it.
 
 `database-socket.ts` builds
 `/etc/systemd/system/mariadb.socket.d/zz-clp-addons-loopback.conf`. An empty

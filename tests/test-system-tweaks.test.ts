@@ -1646,6 +1646,19 @@ test("remote backup compression saves only after validation, survives repair, an
   await act(b, ["set-backup-compression"], DEFAULT_BACKUP_COMPRESSION);
   await systemTweaksMaintenance(b.options);
   expect(readFileSync(remoteCommand, "utf8")).toBe(original);
+
+  // A CloudPanel past the supported version gets the stock command back, and repair still finishes.
+  await act(b, ["set-backup-compression"], on);
+  b.options.backupCompression.version = "next";
+  restoreSystemTweaks(b.options);
+  expect(readFileSync(remoteCommand, "utf8")).toBe(original);
+  // An edited command stops withdrawal before any other protection comes off.
+  b.options.backupCompression.version = "2.5.4-3";
+  restoreSystemTweaks(b.options);
+  writeFileSync(remoteCommand, `${readFileSync(remoteCommand, "utf8")}\n// edited`);
+  expect(existsSync(b.fileManagerGuardPaths.pool)).toBe(true);
+  expect(() => withdrawSystemTweaks(b.options)).toThrow();
+  expect(existsSync(b.fileManagerGuardPaths.pool)).toBe(true);
 });
 
 test("the backup compression API forwards the validated selection and repaints its actual state", async () => {
