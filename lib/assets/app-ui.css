@@ -48,6 +48,9 @@ h2, h3 { font-size: 18px; }
 .clp-addon-logo-dark { display: none; }
 html.dark .clp-addon-logo-light { display: none; }
 html.dark .clp-addon-logo-dark { display: block; }
+.clp-addon-brand picture { min-width: 0; }
+/* Theme & Branding's logos keep the panel logo's height, at any width, on every screen. */
+.clp-addon-brand .clp-addon-logo-custom { width: auto; height: 31px; max-width: 100%; object-fit: contain; }
 .clp-addon-primary-nav { display: flex; flex-shrink: 0; align-items: stretch; gap: 14px; }
 .clp-addon-primary-link { display: flex; align-items: center; padding: 0 15px; margin-left: 0;
   color: var(--header-link); font-size: 16px; font-weight: 700; white-space: nowrap; }

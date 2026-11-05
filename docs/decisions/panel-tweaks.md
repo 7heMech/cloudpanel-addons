@@ -172,6 +172,13 @@ The favicon replaces the panel's icon link, and the light mark is the
 its language selector, and the panel's Update available button moves into the
 last of them.
 
+The addon pages draw their own header, so the manager asks root for the logo
+slots (`branding-logos`, answered only while the switch and the logo section
+are both on) and keeps the answer for a minute; saving either setting from the
+addon's page drops it at once. The header uses the same pairs and fallbacks,
+with the mark below 760px, and the favicon replaces the panel's. Custom CSS and
+the footer stay on CloudPanel's pages: they are written against its markup.
+
 ## SSL after native site creation
 
 `autoSsl` is off by default. It adds a checked, unnamed checkbox to the

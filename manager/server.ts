@@ -12,6 +12,7 @@ import { jsonResponse, newCsrfToken } from "../lib/app-http";
 import { gatewayCaller } from "../lib/gateway-client";
 import { splitMount } from "../lib/mount";
 import { adminGate, authenticateRequest } from "../lib/sso-auth";
+import { refreshPanelLogos } from "../lib/panel-logos";
 import { checkCliUpdate } from "../lib/update-check";
 import { handleManagerRoute } from "./index";
 import { latestManagerJobView, seenNews } from "./service";
@@ -66,6 +67,7 @@ export async function handleRequest(req: Request, server: Server<unknown>): Prom
   // Sent as the gate built it. The shared header policy used to go over the
   // top, which is what made a refusal here look unlike the panel's own.
   if (gate.response) return gate.response;
+  if (req.method === "GET") await refreshPanelLogos(mountedAddons().includes("panel-tweaks"));
 
   // The manager is an administrative surface. Keep this decision at the
   // shared socket boundary so every mounted HTML and API route, including
