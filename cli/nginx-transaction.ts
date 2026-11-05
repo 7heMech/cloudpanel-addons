@@ -26,17 +26,27 @@ export function cloudflareRanges(path: string): string[] {
   });
 }
 
+/** Panel files may be owned by the panel account or root; site files require one exact owner. */
+export type NginxFileOwner = number | readonly [number, ...number[]];
+/** A group allowlist keeps group write limited to those accounts; true retains the caller's existing policy. */
+export type NginxGroupWrite = boolean | readonly number[];
+
 /** `groupWritable` accepts a file its owning account's group may write, as CloudPanel's panel files are. */
-export function trustedVhost(path: string, expectedUid: number, groupWritable = false): NginxFileBackup & { content: string } {
+export function trustedVhost(path: string, expectedUid: NginxFileOwner, groupWritable: NginxGroupWrite = false): NginxFileBackup & { content: string } {
   const stat = lstatSync(path);
+  const owners = typeof expectedUid === "number" ? [expectedUid] : expectedUid;
   const refuse = (reason: string, fix: string) => failAction(`refusing ${path}: ${reason}; ${fix}`);
   if (stat.isSymbolicLink()) refuse("it is a symlink", "replace it with a regular file");
   if (!stat.isFile()) refuse("it is not a regular file", "replace it with a regular file");
-  if (stat.uid !== expectedUid) {
+  if (!owners.includes(stat.uid)) {
+    const owner = owners[0]!;
     refuse(
-      `owned by uid ${stat.uid}, expected ${expectedUid === 0 ? "root (0)" : `uid ${expectedUid}`}`,
-      expectedUid === 0 ? `run chown root:root ${path}` : `run chown ${expectedUid} ${path}`,
+      `owned by uid ${stat.uid}, expected ${owners.map((uid) => uid === 0 ? "root (0)" : `uid ${uid}`).join(" or ")}`,
+      owner === 0 ? `run chown root:root ${path}` : `run chown ${owner} ${path}`,
     );
+  }
+  if ((stat.mode & 0o020) !== 0 && typeof groupWritable !== "boolean" && !groupWritable.includes(stat.gid)) {
+    refuse(`group-writable by untrusted gid ${stat.gid} (mode ${(stat.mode & 0o777).toString(8)})`, `run chmod g-w ${path}`);
   }
   if ((stat.mode & (groupWritable ? 0o002 : 0o022)) !== 0) {
     const who = [(stat.mode & 0o020) !== 0 ? "group" : "", (stat.mode & 0o002) !== 0 ? "world" : ""].filter(Boolean).join("- and ");
@@ -82,13 +92,14 @@ export interface NginxChange {
   content: string | null;
 }
 
-export function nginxFileChange(path: string, content: string | null, expectedUid: number, groupWritable = false): NginxChange {
+export function nginxFileChange(path: string, content: string | null, expectedUid: NginxFileOwner, groupWritable: NginxGroupWrite = false): NginxChange {
   let backup: NginxFileBackup;
   try {
     backup = trustedVhost(path, expectedUid, groupWritable);
   } catch (error) {
     if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
-    backup = { path, content: null, mode: 0o644, uid: expectedUid, gid: process.getgid?.() ?? 0 };
+    const uid = typeof expectedUid === "number" ? expectedUid : expectedUid[0];
+    backup = { path, content: null, mode: 0o644, uid, gid: process.getgid?.() ?? 0 };
   }
   return { backup, content };
 }

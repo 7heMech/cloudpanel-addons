@@ -49,6 +49,46 @@ To try a run without installing anything:
 unattended-upgrade --dry-run -d
 ```
 
+## Remote backup compression
+
+**Compress remote backups with Zstandard** is off by default. CloudPanel
+2.5.4-3 creates uncompressed `backup.tar` files for Remote Backups. Switching
+this on makes the next remote backup create and upload `backup.tar.zst`.
+It applies to scheduled backups and **Create Backup** in CloudPanel.
+
+Compression level defaults to **3**, with **1 worker thread**. Levels 1–19
+and 1–8 workers are available. Higher levels trade CPU time and memory for
+potentially smaller archives; more workers use more CPU and memory. The space
+saved depends on the contents, and already compressed media and database dumps
+may shrink little. Scheduling, storage destinations, exclusions and retention
+remain CloudPanel's. Database dumps keep their `.sql.gz` format, and existing
+backups are untouched.
+
+The server needs the `zstd` package. If the page reports it missing, install it
+as root with `apt-get install zstd`. An unsupported CloudPanel version or edited
+backup implementation is reported on the page and is not replaced. Repair
+re-applies the setting after a supported CloudPanel package restores its own
+code. If the package or compressor becomes unsupported while the recognized
+tweak is still installed, repair restores the stock command and reports the
+problem. Switching off, or disabling System Tweaks, restores the original backup
+command; a backup already running finishes in the format it started with.
+
+Restore `.tar.zst` archives over SSH. CloudPanel's File Manager does not offer
+extraction for this format. Save the archive as `~/tmp/backup.tar.zst` and, as
+the site user, extract it into an empty directory before copying the files you
+need:
+
+```bash
+mkdir ~/tmp/backup-restore
+cd ~/tmp/backup-restore
+zstd -t ../backup.tar.zst
+tar --zstd -xf ../backup.tar.zst
+```
+
+The restore machine also needs `zstd`. Old `.tar` backups still restore with
+`tar -xf backup.tar`. Disabling compression does not convert or delete backups
+already stored remotely.
+
 ## PHP upload-progress mitigation
 
 Every installation turns off `session.upload_progress.enabled` on each PHP-FPM,
@@ -95,7 +135,9 @@ still open the documentation that ships with it.
 
 Turning the setting off takes the rules out of CloudPanel's panel vhost. While
 it is on, repair puts them back within seconds when a CloudPanel update rewrites
-that file.
+that file. The panel vhost can belong to root or `clp`; it does not need a
+change of owner. System Tweaks keeps its owner and permissions and refuses
+files writable by anyone outside root and the panel's group.
 
 ## Panel certificate
 
@@ -192,7 +234,7 @@ the setting off.
 
 ## File Manager
 
-**Keep the File Manager in the site's home** is on by default. CloudPanel's File
+**Restrict File Manager to site files** is on by default. CloudPanel's File
 Manager runs as root, and without the setting a panel account with a site can
 use it to read, write or take over files anywhere on the server. With it, the
 File Manager refuses a request that names a path outside the site's home or
@@ -338,12 +380,22 @@ The **Database** card shows where MySQL listens, whether the firewall rules
 loaded now let anyone reach it (**Firewalled**, **Open** or **Unknown**), any client connected from another address, and whether its `root` account
 still logs in with the password `root` or none.
 
-Switch on **MySQL on this server only** to make MySQL accept connections from
-this server only. It writes
-`zz-clp-addons-loopback.cnf` with `bind-address = 127.0.0.1` into
-`/etc/mysql/mysql.conf.d` (or `mariadb.conf.d`) and restarts MySQL. Sites lose
-their database for a few seconds. If MySQL does not come back on `127.0.0.1`
-within a minute, the file is removed and MySQL restarts on its old settings.
+Switch on **MySQL on this server only** to restrict MySQL or MariaDB to local
+connections. It writes `zz-clp-addons-loopback.cnf` into
+`/etc/mysql/mysql.conf.d` (or `mariadb.conf.d`) and restarts the database. Sites
+lose their database connection briefly. The configuration is checked first;
+conflicting startup options or unsupported configurations are reported before
+restarting. If the database does not come back within a minute, the previous
+configuration is restored and started again. A running server that answers but
+still listens publicly is rolled back immediately.
+
+On servers using **mariadb.socket**, systemd owns the listeners and ignores
+MariaDB's `bind-address` for those sockets. The setting also adds its own socket
+override, keeps the existing Unix sockets, and restricts TCP to localhost.
+IPv6 listeners retain access through `::1`. It stops and starts the database
+and socket together so the old public listener is closed. Original unit files,
+other overrides and socket activation stay in place; switching off removes
+only the addon's configuration and restores the server's own listening setup.
 
 Sites, the panel and phpMyAdmin keep working. Anything on another machine that
 connects to this MySQL stops working, including a desktop SQL client. Use an SSH
@@ -356,8 +408,16 @@ ssh -L 3306:127.0.0.1:3306 root@your-server
 The setting is off by default, because the page cannot tell whether something
 remote uses the database. Check the **Connected now from** line and your
 Firewall page for a rule on port 3306 before switching it on. Switching it off
-removes the file and restarts MySQL. Disabling System Tweaks removes the file
-too, and MySQL listens on every address again after its next restart.
+removes the addon's configuration and restarts MySQL (and its socket when used).
+Repair and addon activation/deactivation reconcile configuration without
+restarting the database. The page reports when the live listener still needs
+the saved change applied. For socket activation, a service-only restart does
+not replace systemd's listener; apply it during a suitable interruption with:
+
+```bash
+systemctl stop mysql mariadb.socket
+systemctl start mariadb.socket mysql
+```
 
 If the page says root logs in with a default password, change it on every root
 account the list below shows. "From this server" is usually `'root'@'127.0.0.1'`

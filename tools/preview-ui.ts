@@ -575,6 +575,10 @@ function systemTweaksPreviewState(url: URL): SystemTweaksState {
       ],
       sshd: { password: true, rootLogin: "yes" },
     },
+    backupCompression: {
+      enabled: url.searchParams.get("compression") === "zstd", active: url.searchParams.get("compression") === "zstd",
+      level: 3, threads: 1, supported: true, installed: true, problem: "",
+    },
     database: databasePreviewState(url),
     firewall: { available: true, protocols: { 9: "udp", 10: "udp", 11: "both" }, udpPorts: url.searchParams.has("noudp") ? [] : ["53", "51820"] },
     vhostGuard: {
@@ -696,7 +700,8 @@ function panelPhpPreviewStatus(url: URL): PanelPhpStatus {
  * the widest the page gets: `?off` is the state an operator lands on after
  * enabling the addon, `?unmeasured` is the gap before the first sweep,
  * `?measuring` draws a measurement part-way through, and `?nocards` keeps the
- * table on a narrow screen.
+ * table on a narrow screen. `?custom-logos` shows uploaded header logos and
+ * their Reset buttons beside empty mobile/login slots.
  */
 function panelTweaksPreviewState(url: URL): PanelTweaksState {
   const on = !url.searchParams.has("off");
@@ -1717,6 +1722,13 @@ const server = Bun.serve({
     const repaintReply = await repaintPreviewMutation(req, url);
     if (repaintReply) return repaintReply;
     if (req.method !== "GET") return Response.json({ ok: false, error: "UI preview only; no changes were made." }, { status: 409 });
+    const logoPreview = /^\/addons\/panel-tweaks\/branding\/preview-header-(light|dark)\.svg$/.exec(path);
+    if (logoPreview) {
+      const color = logoPreview[1] === "dark" ? "#ffffff" : "#172b4d";
+      return new Response(`<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 220 32"><text x="110" y="24" text-anchor="middle" font-family="sans-serif" font-size="24" font-weight="700" fill="${color}">Example Hosting</text></svg>`, {
+        headers: { "Content-Type": "image/svg+xml" },
+      });
+    }
     // These are the same two logo URLs the installed manager gets from its
     // CloudPanel origin. Only this development preview fetches the public demo.
     if (["/assets/images/logo.svg", "/assets/images/logo-dark.svg", "/assets/images/cloudpanel-cloud.svg", "/assets/images/favicon.svg"].includes(path)) {
@@ -1964,6 +1976,11 @@ const server = Bun.serve({
     } else if (path === "/addons/panel-tweaks/" || path === "/addons/panel-tweaks") {
       html = panelTweaksLayout("Panel Tweaks", panelTweaksDashboardView(panelTweaksPreviewState(url), {
         ...DEFAULT_BRANDING, customCss: true, css: ".header { border-bottom: 2px solid #267ddd; }",
+        customLogo: url.searchParams.has("custom-logos"),
+        logos: url.searchParams.has("custom-logos") ? {
+          ...DEFAULT_BRANDING.logos,
+          headerLight: "preview-header-light.svg", headerDark: "preview-header-dark.svg",
+        } : DEFAULT_BRANDING.logos,
         footerHtml: '<li><a href="https://example.com/support">Support</a></li>\n<li>© Example Hosting</li>',
       }), notice);
     } else if (path === "/addons/system-tweaks/" || path === "/addons/system-tweaks") {

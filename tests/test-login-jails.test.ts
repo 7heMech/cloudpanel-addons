@@ -1,5 +1,5 @@
 import { afterEach, expect, test } from "bun:test";
-import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { CommandResult } from "../cli/action-common";
@@ -77,7 +77,7 @@ function box(service = { enabled: true, active: false, jails: [] as string[] }) 
     return ok();
   };
   const options: LoginJailOptions = {
-    run, paths: { fail2banDir, panelConf, panelUid: uid, cloudflareIps, domainVhost, domainUid: 0, rootUid: uid },
+    run, paths: { fail2banDir, panelConf, panelUid: uid, panelGid: process.getgid!(), cloudflareIps, domainVhost, domainUid: 0, rootUid: uid, rootGid: process.getgid!() },
   };
   const file = (name: string) => join(fail2banDir, name);
   const read = (name: string) => existsSync(file(name)) ? readFileSync(file(name), "utf8") : null;
@@ -142,6 +142,31 @@ test("a fail2ban that was neither running nor enabled is stopped and disabled ag
   expect(readFileSync(b.panelConf, "utf8")).toBe(PANEL_CONF);
   releaseLoginJails(before, b.options);
   expect(b.state).toMatchObject({ enabled: false, active: false });
+});
+
+test("a root-owned panel config keeps its owner while the jail follows the panel worker UID", () => {
+  const b = box();
+  const panelUid = b.uid + 1;
+  const options = { ...b.options, paths: { ...b.options.paths, panelUid } };
+  const before = statSync(b.panelConf);
+  expect(loginJailsStatus(options)).toMatchObject({ panelLog: false, problem: "" });
+  const applied = applyLoginJails({ panel: true, ssh: false }, null, options);
+  expect(loginJailsStatus(options)).toMatchObject({ panelLog: true, problem: "" });
+  expect(statSync(b.panelConf)).toMatchObject({ uid: before.uid, gid: before.gid, mode: before.mode });
+  expect(b.read("jail.d/clp-addons.local")).toContain(`journalmatch = SYSLOG_IDENTIFIER=clp_addons_panel _UID=${panelUid}`);
+  applyLoginJails({ panel: false, ssh: false }, applied.before, options);
+  expect(readFileSync(b.panelConf, "utf8")).toBe(PANEL_CONF);
+  expect(statSync(b.panelConf)).toMatchObject({ uid: before.uid, gid: before.gid, mode: before.mode });
+});
+
+test("login logging refuses a panel config writable by an unrelated group", () => {
+  const b = box();
+  const gid = process.getgid!();
+  const options = { ...b.options, paths: { ...b.options.paths, panelGid: gid + 1, rootGid: gid + 2 } };
+  expect(loginJailsStatus(options).problem).toContain(`untrusted gid ${gid}`);
+  expect(() => applyLoginJails({ panel: true, ssh: false }, null, options)).toThrow(`untrusted gid ${gid}`);
+  expect(readFileSync(b.panelConf, "utf8")).toBe(PANEL_CONF);
+  expect(b.state.commands).not.toContain("systemctl reload clp-nginx");
 });
 
 test("an SSH jail fail2ban already ran stays on, and a running fail2ban is reloaded rather than restarted", () => {
