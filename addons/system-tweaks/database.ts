@@ -344,7 +344,7 @@ function socketState(ctx: Context, service: ServiceState, managed: string | null
   const state = property(shown.stdout, "ActiveState");
   const load = property(shown.stdout, "LoadState");
   // Masked or removed, it activates nothing: a drop-in of ours left behind is simply removed.
-  if (!force && !service.sockets.includes(DATABASE_SOCKET_UNIT) && (load === "masked" || load === "not-found") && state !== "active") return null;
+  if (!force && !service.sockets.includes(DATABASE_SOCKET_UNIT) && (load === "masked" || load === "not-found") && (state === "inactive" || state === "failed")) return null;
   if (!shown.ok || load !== "loaded" || property(shown.stdout, "Id") !== DATABASE_SOCKET_UNIT ||
     !["active", "inactive", "failed"].includes(state ?? "")) failAction(`could not inspect a settled ${DATABASE_SOCKET_UNIT}; MySQL has not been restarted`);
   if (state !== "active" && managed === null && !force) return null;
@@ -556,8 +556,8 @@ export async function setDatabaseLoopback(on: boolean, options: DatabaseOptions 
       appliedSocket = reloadSocket(ctx, socket, on ? socket.bindings.loopback : undefined);
     }
     if (on && !exposed) return;
-    // A stopped server and stopped activation socket stay stopped.
-    if (socket && !socket.active && !service.active) return;
+    // A stopped server, and its activation socket if any, stay stopped; the files apply at its next start.
+    if (!service.active && !socket?.active) return;
     restarted = true;
     if (socket) {
       stopSocketAndService(ctx, socket);
