@@ -119,7 +119,7 @@ function socketServer() {
   const socket = {
     original: ["@mariadb", "/run/mysqld/mysqld.sock", "[::]:3306"],
     configured: [] as string[], active: true, serviceActive: true, accept: "no", triggers: "mariadb.service",
-    override: null as string[] | null,
+    override: null as string[] | null, load: "loaded",
   };
   socket.configured = [...socket.original];
   const refresh = () => {
@@ -141,7 +141,7 @@ function socketServer() {
       s.calls.push([command, ...args]);
       if (args[0] === "show" && args[1] === "mysql") return ok(`Id=mariadb.service\nMainPID=${socket.serviceActive ? "2000" : "0"}\nTriggeredBy=${s.triggeredBy}\nActiveState=${socket.serviceActive ? "active" : "inactive"}\n`);
       if (args[0] === "show" && args[1] === "mariadb.socket") return ok([
-        "Id=mariadb.socket", "LoadState=loaded", `ActiveState=${socket.active ? "active" : "inactive"}`,
+        "Id=mariadb.socket", `LoadState=${socket.load}`, `ActiveState=${socket.active ? "active" : "inactive"}`,
         `Accept=${socket.accept}`, `Triggers=${socket.triggers}`, ...socket.configured.map((stream) => `Listen=${stream} (Stream)`), "",
       ].join("\n"));
       if (args[0] === "is-active") return ok(`${(args[1] === "mariadb.socket" ? socket.active : socket.serviceActive) ? "active" : "inactive"}\n`);
@@ -414,6 +414,23 @@ test("socket repair and withdrawal reload definitions without changing live desc
   expect(existsSync(s.file)).toBe(false);
   expect(existsSync(s.options.paths!.socketFile!)).toBe(false);
   expect(s.calls.some((call) => ["stop", "start", "restart"].includes(call[1]!))).toBe(false);
+});
+
+test("a masked or removed socket leaves only its stale drop-in, which switching off removes", async () => {
+  for (const load of ["masked", "not-found"]) {
+    const s = socketServer();
+    await setDatabaseLoopback(true, s.options);
+    expect(existsSync(s.options.paths!.socketFile!)).toBe(true);
+    // The operator stops socket activation; MariaDB then binds by itself, on 127.0.0.1 from our option file.
+    Object.assign(s.socket, { load, active: false, configured: [] });
+    s.triggeredBy = "";
+    s.listening = 'LISTEN 0 80 127.0.0.1:3306 *:* users:(("mariadbd",pid=2000,fd=3))';
+    expect(databaseStatus(s.options)).toMatchObject({ exposed: [], fileInPlace: true });
+    expect(databaseStatus(s.options).socketUnit).toBeUndefined();
+    await setDatabaseLoopback(false, s.options);
+    expect(existsSync(s.file)).toBe(false);
+    expect(existsSync(s.options.paths!.socketFile!)).toBe(false);
+  }
 });
 
 test("foreign, edited and symlinked socket drop-ins are refused before any mutation", async () => {

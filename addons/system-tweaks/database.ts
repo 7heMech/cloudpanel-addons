@@ -342,7 +342,10 @@ function socketState(ctx: Context, service: ServiceState, managed: string | null
   if (!service.sockets.includes(DATABASE_SOCKET_UNIT) && managed === null && !force) return null;
   const shown = ctx.run("systemctl", ["show", DATABASE_SOCKET_UNIT, "--property=Id", "--property=LoadState", "--property=ActiveState", "--property=Accept", "--property=Triggers", "--property=Listen"]);
   const state = property(shown.stdout, "ActiveState");
-  if (!shown.ok || property(shown.stdout, "LoadState") !== "loaded" || property(shown.stdout, "Id") !== DATABASE_SOCKET_UNIT ||
+  const load = property(shown.stdout, "LoadState");
+  // Masked or removed, it activates nothing: a drop-in of ours left behind is simply removed.
+  if (!force && !service.sockets.includes(DATABASE_SOCKET_UNIT) && (load === "masked" || load === "not-found") && state !== "active") return null;
+  if (!shown.ok || load !== "loaded" || property(shown.stdout, "Id") !== DATABASE_SOCKET_UNIT ||
     !["active", "inactive", "failed"].includes(state ?? "")) failAction(`could not inspect a settled ${DATABASE_SOCKET_UNIT}; MySQL has not been restarted`);
   if (state !== "active" && managed === null && !force) return null;
   if (property(shown.stdout, "Accept") !== "no" || property(shown.stdout, "Triggers") !== service.id) {

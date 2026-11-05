@@ -736,6 +736,8 @@ export function withdrawSystemTweaks(options: SystemTweaksOptions = {}): void {
       // gone, and then nothing else is withdrawn, so the other protections stay.
       restoreClpctlWrapper(options.clpctlGuard);
       try {
+        // Next: it refuses an edited backup command, and then the protections below stay.
+        reconcileBackupCompression({ ...settings.backupCompression, enabled: false }, options.backupCompression);
         applyUpdates({ ...settings.updates, enabled: false }, settings.enabledTimers, options.updates);
         if (settings.enabledTimers.length) writeSettings(paths, { ...settings, enabledTimers: [] });
         applyRealIp(false, options.realIp);
@@ -759,7 +761,6 @@ export function withdrawSystemTweaks(options: SystemTweaksOptions = {}): void {
           throw error;
         }
         removePoolIsolation(options.phpPools);
-        reconcileBackupCompression({ ...settings.backupCompression, enabled: false }, options.backupCompression);
       } catch (error) {
         // A later step failed, so deactivation does not complete and the addon
         // stays enabled. The wrapper is already back to CloudPanel's vulnerable
@@ -803,7 +804,9 @@ export function restoreSystemTweaks(options: SystemTweaksOptions = {}): void {
       if (settings.isolatePhpPools) installPoolIsolation(options.phpPools);
       if (settings.confineFileManager) queueFileManagerGuard(options.fileManagerGuard);
       if (settings.blockClpctlInjection) applyClpctlGuard(options.clpctlGuard);
-      reconcileBackupCompression(settings.backupCompression, options.backupCompression);
+      // It refuses once CloudPanel moves past the supported version; activation must still finish.
+      try { reconcileBackupCompression(settings.backupCompression, options.backupCompression); }
+      catch (error) { log.warn(`remote backup compression waits for the next repair: ${errorMessage(error)}`); }
     });
   } finally {
     restorePanelPhp(options.panelPhp);
