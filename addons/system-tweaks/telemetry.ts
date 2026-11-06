@@ -16,6 +16,7 @@ export const DEFAULT_TELEMETRY_PATHS = {
   unit: "clp-agent.service",
   systemctl: "systemctl",
   systemdRun: "systemd-run",
+  bash: "/bin/bash",
 };
 
 export const TELEMETRY_DROP_IN = `# clp-addons System Tweaks: Block CloudPanel telemetry. Switching it off removes this file.
@@ -40,10 +41,33 @@ export interface TelemetryStatus {
 /**
  * systemd ignores IPAddressDeny= where the kernel or a container manager offers
  * no cgroup BPF, so a unit with the same filter sends one UDP datagram to a
- * documentation address: refused means the filter is enforced.
+ * documentation address. The filter is enforced when that send is refused and
+ * the same send outside it is not.
  */
-const PROBE = ["--quiet", "--wait", "--collect", "--pipe", "-p", "IPAddressDeny=any", "-p", "IPAddressAllow=localhost",
-  "/bin/bash", "-c", "echo > /dev/udp/192.0.2.1/9"];
+const PROBE_SCRIPT = 'if r=$({ echo > /dev/udp/192.0.2.1/9; } 2>&1); then echo clp-addons-probe:sent; else echo "clp-addons-probe:refused:$r"; fi';
+const FILTERED_PROBE = ["--quiet", "--wait", "--collect", "--pipe", "-p", "IPAddressDeny=any", "-p", "IPAddressAllow=localhost",
+  "/bin/bash", "-c", PROBE_SCRIPT];
+
+type ProbeResult = "sent" | "refused" | "other";
+
+function probe(result: CommandResult): ProbeResult | null {
+  if (result.stdout.includes("clp-addons-probe:sent")) return "sent";
+  const refused = result.stdout.match(/clp-addons-probe:refused:(.*)/);
+  if (!refused) return null;
+  return refused[1]!.includes("Operation not permitted") ? "refused" : "other";
+}
+
+function enforcementProblem(ctx: ReturnType<typeof context>): string {
+  const filtered = ctx.run(ctx.paths.systemdRun, FILTERED_PROBE);
+  const inside = probe(filtered);
+  if (inside === null) return `whether the block is enforced could not be checked: ${filtered.stderr.trim() || "systemd-run failed"}`;
+  if (inside === "sent") return "systemd loaded the block, but this kernel or container does not enforce IP filters, so clp-agent can still send";
+  if (inside === "other") return `whether the block is enforced could not be checked: ${filtered.stdout.trim()}`;
+  if (probe(ctx.run(ctx.paths.bash, ["-c", PROBE_SCRIPT])) !== "sent") {
+    return "whether the block is enforced could not be checked: something else on this server also refuses the test send";
+  }
+  return "";
+}
 
 function context(options: TelemetryOptions) {
   const paths = { ...DEFAULT_TELEMETRY_PATHS, ...options.paths };
@@ -73,14 +97,8 @@ export function telemetryStatus(options: TelemetryOptions = {}): TelemetryStatus
   try {
     const { agent, loaded } = show(ctx);
     if (!agent || !loaded || !dropInInPlace(ctx.paths.dropIn)) return { agent, blocked: false, problem: "" };
-    const probe = ctx.run(ctx.paths.systemdRun, PROBE);
-    if (!probe.ok && probe.stderr.includes("Operation not permitted")) return { agent, blocked: true, problem: "" };
-    return {
-      agent, blocked: false,
-      problem: probe.ok
-        ? "systemd loaded the block, but this kernel or container does not enforce IP filters, so clp-agent can still send"
-        : `whether the block is enforced could not be checked: ${probe.stderr.trim() || "systemd-run failed"}`,
-    };
+    const problem = enforcementProblem(ctx);
+    return { agent, blocked: problem === "", problem };
   } catch (error) {
     return { agent: false, blocked: false, problem: error instanceof Error ? error.message : String(error) };
   }

@@ -192,7 +192,7 @@ interface Box {
   valuesDb: string;
   varnish: { failDaemonReload: boolean };
   panelVhost: string;
-  agent: { installed: boolean; loaded: boolean; enforced: boolean; commands: string[] };
+  agent: { installed: boolean; loaded: boolean; probe: "refused" | "sent" | "unit-failed"; control: "refused" | "sent"; commands: string[] };
   agentDropIn: string;
 }
 
@@ -403,10 +403,21 @@ function box(options: { installed?: boolean; timers?: Record<string, string>; fa
   };
   // systemd as two flags: whether clp-agent is installed and whether the drop-in is loaded.
   const agentDropIn = join(dir, "clp-agent.service.d", "zz-clp-addons-telemetry.conf");
-  const agent = { installed: true, loaded: false, enforced: true, commands: [] as string[] };
+  // `probe` is what the filtered test send meets; `control` the same send outside the filter.
+  const agent = {
+    installed: true, loaded: false, commands: [] as string[],
+    probe: "refused" as "refused" | "sent" | "unit-failed", control: "sent" as "refused" | "sent",
+  };
+  const sendResult = (outcome: "refused" | "sent") =>
+    ok(outcome === "sent" ? "clp-addons-probe:sent\n" : "clp-addons-probe:refused:/bin/bash: line 1: echo: write error: Operation not permitted\n");
   const agentRun = (command: string, args: string[]): CommandResult => {
     agent.commands.push(`${command} ${args.join(" ")}`);
-    if (command === "systemd-run") return agent.enforced ? { ok: false, stdout: "", stderr: "echo: write error: Operation not permitted" } : ok();
+    if (command === "systemd-run") {
+      return agent.probe === "unit-failed"
+        ? { ok: false, stdout: "", stderr: "Failed to start transient service unit: Operation not permitted" }
+        : sendResult(agent.probe);
+    }
+    if (command === "/bin/bash") return sendResult(agent.control);
     if (args[0] === "daemon-reload") agent.loaded = existsSync(agentDropIn);
     if (args[0] !== "show") return ok();
     return ok([
@@ -1322,12 +1333,19 @@ test("a drop-in systemd has not loaded is reloaded, and a box without clp-agent 
 test("a loaded block the kernel does not enforce is not called blocked, and one that cannot be removed does not stop deactivation", async () => {
   const b = box();
   await act(b, ["set-telemetry"], { enabled: true });
-  b.agent.enforced = false;
+  b.agent.probe = "sent";
   const state = (await act(b, ["state"])).telemetry;
   expect(state.blocked).toBe(false);
   expect(state.problem).toContain("does not enforce IP filters");
+  // A unit that never ran proves nothing, even when its error reads like the filter's.
+  b.agent.probe = "unit-failed";
+  expect((await act(b, ["state"])).telemetry).toMatchObject({ blocked: false, problem: expect.stringContaining("could not be checked") });
+  // Refused inside and outside the filter: something else refuses it.
+  b.agent.probe = "refused";
+  b.agent.control = "refused";
+  expect((await act(b, ["state"])).telemetry).toMatchObject({ blocked: false, problem: expect.stringContaining("also refuses the test send") });
 
-  b.agent.enforced = true;
+  b.agent.control = "sent";
   b.options.telemetry!.run = (command, args) => args[0] === "daemon-reload" ? { ok: false, stdout: "", stderr: "Access denied" } : { ok: true, stdout: "", stderr: "" };
   expect(() => withdrawSystemTweaks(b.options)).not.toThrow();
   expect(b.pools.loaded).toBe(false);

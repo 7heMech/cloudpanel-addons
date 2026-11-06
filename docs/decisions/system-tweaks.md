@@ -1055,8 +1055,9 @@ CloudPanel updates. The daily send fails; the agent logs it and exits, systemd
 restarts it after 3 seconds, and it waits for the next day. systemd ignores the
 filter where the kernel or a container manager offers no cgroup BPF, so the page
 calls it blocked only when `systemctl show` has the drop-in loaded and a
-transient unit with the same filter fails to send one UDP datagram to
-192.0.2.1. Repair writes it back and reloads systemd if it is missing or not
+transient unit with the same filter is refused sending one UDP datagram to
+192.0.2.1 while the same send outside it goes out; a unit that fails to start,
+or a send refused both ways, reads as unchecked. Repair writes it back and reloads systemd if it is missing or not
 loaded; switching off removes it. Deactivation removes it last and, like the
 firewall, only warns when it cannot, so it never holds the other protections in
 place.
