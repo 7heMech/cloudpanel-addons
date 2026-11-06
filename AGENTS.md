@@ -10,6 +10,13 @@
   `docs/instatic-backups.md`; keep implementation detail in Decisions.
 - Add a Decisions category only when none of the existing files fits. Keep
   `docs/DECISIONS.md` as an index.
+- When a change is something an operator must know, such as a new default, a
+  moved setting or a new effect on sites, add an entry to the addon's `changed`
+  list in its `addon.ts`, with the release it ships in. Other changes go only in
+  the release notes.
+- After a pull request merges into `dev`, add one line for it to the open
+  release pull request's body (`dev` into `main`); that body becomes the
+  release notes.
 - Keep `clp-addons help` terser than any doc: one line per operator command,
   with its options and no explanation. Leave out `action` and the commands only
   systemd, Postfix or the gateway run. Update it in the same change as an
