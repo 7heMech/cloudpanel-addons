@@ -61,8 +61,10 @@ function server(ramMb = 3819) {
     options: {} as MemoryOptions,
   };
   const ok = (stdout = ""): CommandResult => ({ ok: true, stdout, stderr: "" });
-  const run = (command: string, args: string[]): CommandResult => {
-    s.calls.push([command, ...args]);
+  const run = (program: string, given: string[]): CommandResult => {
+    s.calls.push([program, ...given]);
+    // Unit queries run as `env TZ=UTC systemctl show …`.
+    const [command, args] = program === "env" ? [given[1]!, given.slice(2)] : [program, given];
     if (command === "systemctl" && args[0] === "daemon-reload") { s.reloads++; return ok(); }
     if (command === "systemctl" && args[0] === "show" && args.includes("ExecStart")) {
       return ok("ExecStart={ path=/usr/sbin/varnishd ; argv[]=/usr/sbin/varnishd -a :6081 -f /etc/varnish/default.vcl -s malloc,512m ; }\nActiveState=active\n");
@@ -75,7 +77,7 @@ function server(ramMb = 3819) {
         // With its drop-in, systemd reports the drop-in's score.
         const dropIn = join(s.systemd, `${name}.d`, "zz-clp-addons-oom.conf");
         const score = existsSync(dropIn) ? /OOMScoreAdjust=(-?\d+)/.exec(readFileSync(dropIn, "utf8"))![1] : String(unit.oom);
-        return `Id=${name}\nLoadState=loaded\nActiveState=${unit.activating ? "activating" : unit.active ? "active" : "inactive"}\nControlGroup=/system.slice/${name}\nOOMScoreAdjust=${score}\nExecMainStartTimestamp=@${Math.floor(unit.startedAt / 1000)}\n`;
+        return `Id=${name}\nLoadState=loaded\nActiveState=${unit.activating ? "activating" : unit.active ? "active" : "inactive"}\nControlGroup=/system.slice/${name}\nOOMScoreAdjust=${score}\nExecMainStartTimestamp=${utc(unit.startedAt)}\n`;
       }).join("\n"));
     }
     if (command.endsWith("redis-cli")) {
@@ -105,10 +107,16 @@ function server(ramMb = 3819) {
     paths: {
       meminfo, confDirs: [join(dir, "missing.conf.d"), conf], servers: [mysqld], redisConf, redisCli: "/usr/bin/redis-cli",
       memcachedConf: join(dir, "memcached.conf"), phpRoot, systemdDir: s.systemd, cgroupRoot: cgroup, procRoot: proc,
-      stateFile: join(dir, "memory.json"), bin: "/usr/local/bin/clp-addons",
+      stateFile: join(dir, "memory.json"), stateLock: join(dir, "memory.lock"), bin: "/usr/local/bin/clp-addons",
     },
   };
   return s;
+}
+
+/** A time as systemd prints it with TZ=UTC: `Thu 2026-11-05 06:53:12 UTC`. */
+function utc(ms: number): string {
+  const iso = new Date(ms).toISOString();
+  return `${["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"][new Date(ms).getUTCDay()]} ${iso.slice(0, 10)} ${iso.slice(11, 19)} UTC`;
 }
 
 const on = (change: Partial<MemorySettings> = {}): MemorySettings => ({ ...DEFAULT_MEMORY, mysql: true, redis: true, ...change });
@@ -263,7 +271,7 @@ test("a systemctl that fails is reported, not taken for services that are not in
   const s = server();
   applyMemory(on(), s.options);
   const run = s.options.run!;
-  s.options.run = (command, args, timeoutMs) => command === "systemctl" && args[0] === "show" && args.includes("Id")
+  s.options.run = (command, args, timeoutMs) => command === "env" && args[2] === "show"
     ? { ok: false, stdout: "", stderr: "Failed to connect to bus: Connection refused" } : run(command, args, timeoutMs);
   expect(() => applyMemory({ ...DEFAULT_MEMORY }, s.options)).toThrow("systemctl show failed: Failed to connect to bus");
   // Its start hooks stay, so nothing is left half-removed.

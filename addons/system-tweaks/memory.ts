@@ -8,8 +8,8 @@
  */
 import { existsSync, readdirSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
-import { failAction, runCommand, type CommandResult } from "../../cli/action-common";
-import { CLI_BIN, STATE_DIR, SYSTEMD_DIR } from "../../cli/paths";
+import { failAction, runCommand, withFileLockSync, type CommandResult } from "../../cli/action-common";
+import { CLI_BIN, LOCK_DIR, STATE_DIR, SYSTEMD_DIR } from "../../cli/paths";
 import { writeFileAtomic } from "../../lib/atomic-write";
 import { COMMAND_MS } from "./limits";
 
@@ -145,6 +145,8 @@ export const DEFAULT_MEMORY_PATHS = {
   procRoot: "/proc",
   /** When this addon last took its MySQL file away, so the page can say the old values are still running. */
   stateFile: `${STATE_DIR}/system-tweaks/memory.json`,
+  /** Held while memory.json is read and rewritten: the page, repair and Redis's start hook all write it. */
+  stateLock: `${LOCK_DIR}/system-tweaks-memory.lock`,
   bin: CLI_BIN,
 };
 
@@ -220,17 +222,26 @@ interface Unit {
 
 const UNIT_PROPERTIES = ["Id", "LoadState", "ActiveState", "ControlGroup", "OOMScoreAdjust", "ExecMainStartTimestamp"];
 
+/**
+ * systemd prints a timestamp as `Thu 2026-11-05 06:53:12 UTC` in the zone TZ names. `--timestamp=unix`
+ * would be simpler, but needs systemd 251, newer than Ubuntu 22.04's 249.
+ */
+function startSeconds(value: string): number | null {
+  const at = /^\w+ (\d{4}-\d\d-\d\d) (\d\d:\d\d:\d\d) UTC$/.exec(value);
+  const ms = at ? Date.parse(`${at[1]}T${at[2]}Z`) : NaN;
+  return Number.isFinite(ms) ? ms / 1000 : null;
+}
+
 /** One `systemctl show` for all of them; it prints a block per unit, in order, blank-line separated. */
 function units(ctx: Context, names: string[]): Unit[] {
   if (!names.length) return [];
-  const shown = ctx.run("systemctl", ["show", "--timestamp=unix", ...UNIT_PROPERTIES.flatMap((key) => ["-p", key]), ...names]);
+  const shown = ctx.run("env", ["TZ=UTC", "systemctl", "show", ...UNIT_PROPERTIES.flatMap((key) => ["-p", key]), ...names]);
   // A unit that is not installed shows LoadState=not-found; a failure is not one.
   if (!shown.ok) throw new Error(`systemctl show failed: ${commandError(shown)}`);
   const blocks = shown.stdout.split(/\n\s*\n/);
   return names.map((name, index) => {
     const block = blocks[index] ?? "";
     const value = (key: string) => block.split("\n").find((line) => line.startsWith(`${key}=`))?.slice(key.length + 1).trim() ?? "";
-    const started = /^@(\d+)/.exec(value("ExecMainStartTimestamp"))?.[1];
     return {
       id: value("Id") || name,
       loaded: value("LoadState") === "loaded",
@@ -238,7 +249,7 @@ function units(ctx: Context, names: string[]): Unit[] {
       activating: value("ActiveState") === "activating",
       controlGroup: value("ControlGroup"),
       oomScore: Number(value("OOMScoreAdjust")) || 0,
-      startedAt: started ? Number(started) : null,
+      startedAt: startSeconds(value("ExecMainStartTimestamp")),
     };
   });
 }
@@ -338,9 +349,11 @@ function readState(ctx: Context): MemoryState {
 }
 
 function writeState(ctx: Context, change: MemoryState): void {
-  const next: MemoryState = { ...readState(ctx), ...change };
-  if (!next.redisCapped) delete next.redisCapped;
-  writeFileAtomic(ctx.paths.stateFile, `${JSON.stringify(next)}\n`, { mode: 0o600, createParent: true });
+  withFileLockSync(ctx.paths.stateLock, 10, "another memory limits change is still running", () => {
+    const next: MemoryState = { ...readState(ctx), ...change };
+    if (!next.redisCapped) delete next.redisCapped;
+    writeFileAtomic(ctx.paths.stateFile, `${JSON.stringify(next)}\n`, { mode: 0o600, createParent: true });
+  });
 }
 
 function recordRemoval(ctx: Context): void {

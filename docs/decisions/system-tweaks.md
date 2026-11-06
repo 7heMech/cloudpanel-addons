@@ -1547,7 +1547,8 @@ carry `loose-`, so it warns and starts.
 
 System Tweaks never restarts MySQL for this. The file applies at its next start,
 and the page shows Pending while the file is newer than the running server's
-`ExecMainStartTimestamp`. Restarting would take every site's database away for
+`ExecMainStartTimestamp`, read with `TZ=UTC` rather than `--timestamp=unix`,
+which needs systemd 251 and Ubuntu 22.04 has 249. Restarting would take every site's database away for
 a few seconds on a click, and nothing here is urgent enough for that. The
 dynamic `SET GLOBAL innodb_buffer_pool_size` is not used either: it needs a
 login, and System Tweaks does not decrypt the root password the panel stores
@@ -1571,6 +1572,8 @@ start hook is the remaining place. Switching off sets both back to what
 `redis.conf` says, or Redis's defaults where it says nothing, but only when the
 running Redis holds a cap System Tweaks set: `memory.json` in its state
 directory records that, and a Redis restart, which drops it, clears the record.
+The page, repair and Redis's start hook all rewrite that file, so each holds
+its own lock while it reads and rewrites it, and none loses the other's field.
 With the switch off and no such record, repair does not even read Redis's
 settings, so values an operator set with `CONFIG SET` stay.
 

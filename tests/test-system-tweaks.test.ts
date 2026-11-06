@@ -263,8 +263,8 @@ function dumpOf(aptDir: string): string {
 
 /** `systemctl show` for units none of which are installed. */
 function noUnits(command: string, args: string[]): CommandResult {
-  if (command !== "systemctl" || args[0] !== "show") return { ok: true, stdout: "", stderr: "" };
-  const names = args.slice(1).filter((arg, index, all) => !arg.startsWith("-") && all[index - 1] !== "-p");
+  if (command !== "env" || args[2] !== "show") return { ok: true, stdout: "", stderr: "" };
+  const names = args.slice(3).filter((arg, index, all) => !arg.startsWith("-") && all[index - 1] !== "-p");
   return { ok: true, stdout: names.map((name) => `Id=${name}\nLoadState=not-found\nActiveState=inactive\n`).join("\n"), stderr: "" };
 }
 
@@ -524,7 +524,7 @@ function box(options: { installed?: boolean; timers?: Record<string, string>; fa
         run: noUnits,
         paths: {
           meminfo: join(dir, "meminfo"), confDirs: [join(dir, "mysql.conf.d")], systemdDir: join(dir, "systemd"), phpRoot,
-          stateFile: join(dir, "memory.json"), memcachedConf: join(dir, "memcached.conf"), redisConf: join(dir, "redis.conf"),
+          stateFile: join(dir, "memory.json"), stateLock: join(dir, "memory.lock"), memcachedConf: join(dir, "memcached.conf"), redisConf: join(dir, "redis.conf"),
         },
       },
       // No ufw in this fixture; tests/test-firewall.test.ts covers it.
@@ -1279,8 +1279,8 @@ test("the memory switches save the change, and a change that fails leaves the sa
   // MySQL and Redis installed and stopped; tests/test-system-tweaks-memory.test.ts runs them.
   memory.paths = { ...memory.paths, servers: [] };
   memory.run = (command, args) => {
-    if (command !== "systemctl" || args[0] !== "show") return { ok: true, stdout: "", stderr: "" };
-    const names = args.slice(1).filter((arg, index, all) => !arg.startsWith("-") && all[index - 1] !== "-p");
+    if (command !== "env" || args[2] !== "show") return { ok: true, stdout: "", stderr: "" };
+    const names = args.slice(3).filter((arg, index, all) => !arg.startsWith("-") && all[index - 1] !== "-p");
     return { ok: true, stdout: names.map((name) => ["mysql.service", "redis-server.service"].includes(name)
       ? `Id=${name}\nLoadState=loaded\nActiveState=inactive\n` : `Id=${name}\nLoadState=not-found\nActiveState=inactive\n`).join("\n"), stderr: "" };
   };
