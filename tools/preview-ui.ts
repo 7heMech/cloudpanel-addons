@@ -594,6 +594,7 @@ function systemTweaksPreviewState(url: URL): SystemTweaksState {
       : url.searchParams.get("clpctl") === "paused"
         ? { enabled: true, active: false, applicable: false, wrapper: "unknown", version: "2.6.0-1", reason: "/usr/bin/clpctlWrapper is not a CloudPanel wrapper this version was built against, so it is left in place" }
         : { enabled: true, active: true, applicable: true, wrapper: "ours", version: "2.5.4-3" },
+    telemetry: { enabled: url.searchParams.get("telemetry") !== "off", agent: true, blocked: url.searchParams.get("telemetry") !== "off", problem: "" },
     uploadProgress: {
       guard,
       fpms: [...php.map((version) => ({
@@ -644,6 +645,8 @@ function systemTweaksPreviewMutation(path: string, source: URL, body: Record<str
     state.clpctlGuard = body.enabled === true
       ? { enabled: true, active: true, applicable: true, wrapper: "ours", version: "2.5.4-3" }
       : { enabled: false, active: false, applicable: true, wrapper: "known-original", version: "2.5.4-3" };
+  } else if (path.endsWith("/telemetry")) {
+    state.telemetry = { enabled: body.enabled === true, agent: true, blocked: body.enabled === true, problem: "" };
   } else if (path.endsWith("/real-ip")) {
     state.realIp = { blockForged: body.enabled === true, trustsAnyAddress: body.enabled !== true, problem: "" };
   } else if (path.endsWith("/login-jails") && !("error" in state.loginJails)) {

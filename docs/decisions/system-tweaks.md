@@ -11,8 +11,8 @@ Firewall page, and optional compression for remote site backups.
 Five cards: Automatic updates, which an operator comes back to; Remote backups,
 with optional Zstandard compression and its level and worker count; one
 Settings card for the panel's PHP, the upload-progress mitigation, forged
-visitor IPs, phpMyAdmin, the panel's certificate, nginx config injection and
-clpctl injection, which are set once; Failed logins, with the two fail2ban jails
+visitor IPs, phpMyAdmin, the panel's certificate, nginx config injection,
+clpctl injection and CloudPanel telemetry, which are set once; Failed logins, with the two fail2ban jails
 and the addresses they block; and Database, which says who can reach MySQL. Each
 row says what it does in a sentence; the
 reasons are here. The Nginx, MySQL, CloudPanel and reboot rows appear only once
@@ -183,7 +183,10 @@ Enabling checks zstd and lints the proposed source with CloudPanel CLI's
 `php8.1 -n -l` before the rename, preserves file ownership and permissions, and
 refuses an intervening source edit. Disabling does not require zstd, PHP, or
 the original package version. Repair re-applies a saved selection when a known
-package overwrites the source, and addon deactivation withdraws it. A repair
+package overwrites the source, and addon deactivation withdraws it. A
+CloudPanel update replaces the whole app tree, templates included, so the
+`repair --anchors-only` the template watcher runs puts the edit back within
+seconds rather than at the next 15-minute repair. A repair
 that cannot apply it logs why and carries on with the other settings;
 deactivation withdraws it first, so an edited command stops deactivation
 before any protection is removed.
@@ -1030,6 +1033,36 @@ the home are all refused before the original wrapper runs.
 restoring CloudPanel's wrapper puts the hardened one back, since the setting
 stays on.
 
+## CloudPanel telemetry
+
+CloudPanel runs `clp-agent` as root. It writes the dashboard's CPU, memory, load
+and disk graphs into the panel database, and once a day, at 08:08
+server time plus a random 3 to 600 seconds, it posts a form field `payload` to
+`https://ing.cloudpanel.io/`. Captured on staging against a stand-in endpoint,
+the JSON holds the instance ID, cloud, CPU count, memory, disk size and
+architecture; the version and edition; every site's domain, application, PHP
+version and creation date; and every panel user's user name, first and last
+name, email and creation date. It does not act on the reply, and the binary has
+no way to run commands. There is no setting to turn it off.
+
+**Block CloudPanel telemetry**, on by default (`blockTelemetry`), writes
+`/etc/systemd/system/clp-agent.service.d/zz-clp-addons-telemetry.conf` with
+`IPAddressDeny=any` and `IPAddressAllow=localhost`, reloads systemd and restarts
+the agent, whose address filter is set when it starts. The kernel then drops
+everything the agent sends off the server, DNS included, while it keeps writing
+the graphs. The package ships its unit under `/lib`, so the drop-in survives
+CloudPanel updates. The daily send fails; the agent logs it and exits, systemd
+restarts it after 3 seconds, and it waits for the next day. The page reads
+`systemctl show` and calls it blocked only when systemd has loaded the drop-in.
+Repair writes it back and reloads systemd if it is missing or not loaded;
+switching off and addon deactivation remove it.
+
+Masking the agent would stop the graphs. A hosts-file sinkhole does not last on
+a box whose cloud-init manages `/etc/hosts`, and removing the agent's line from
+`/etc/cron.d/clp` lasts only until the package puts it back. The panel's own
+version and announcement checks send no payload beyond the server's address and
+version, and stay.
+
 ## Abandoned temp files
 
 A PHP request stopped by `max_execution_time` or `request_terminate_timeout`
@@ -1474,6 +1507,7 @@ the saved original named in the row) to see what CloudPanel itself ships.
 | Password guessing — SSH (`loginJails.ssh`, opt-in) | sshd allows password and root logins, and nothing limits repeated SSH failures (Debian 12 without rsyslog has no `/var/log/auth.log` for the stock jail) | `sshd -T \| grep -E 'passwordauthentication\|permitrootlogin'` shows `yes`/password, and no working fail2ban `sshd` jail | the SSH jail wiring — once sshd is key-only or the distro ships a working jail |
 | MySQL exposure (`databaseLoopback`, opt-in) | MySQL listens on every address and CloudPanel creates every DB user as `'name'@'%'`, so only the firewall keeps it private | `ss -tlnp \| grep -E ':3306\|:33060'` shows `*:3306`/`*:33060` (not `127.0.0.1`), and a CloudPanel-created DB user has host `%` (the Databases page has no host field) | the setting, `database.ts`, its `SECURITY.md` entry and tests — once CloudPanel binds to loopback and scopes DB users to a host |
 | clpctl injection (`blockClpctlInjection`) | `ALL ALL=(ALL) NOPASSWD: /usr/bin/clpctlWrapper` lets any local account run clpctl as root, clpctl strips runs of three backslashes from each argument and builds `bash -c "…"` strings, and `db:import` runs as the DB administrator | `grep 'clpctlWrapper' /etc/sudoers.d/cloudpanel` shows the `NOPASSWD` rule, and `grep str_replace /home/clp/htdocs/app/files/bin/clpctl` shows `str_replace("\\\\\\", '', $arg)` (with the setting on, the live wrapper is ours; CloudPanel's original is saved at `/var/lib/clp-addons/system-tweaks/clpctlWrapper.orig`) | the setting, `clpctl-guard.ts`, `clpctl-wrapper.sh`, its `SECURITY.md` entry and tests — once clpctl stops stripping backslashes, stops building shell strings, and `db:import` runs as the caller |
+| CloudPanel telemetry (`blockTelemetry`) | `clp-agent` posts every site's domain and every panel user's name and email to `ing.cloudpanel.io` once a day, with no opt-out | `strings /usr/sbin/clp-agent \| grep -E 'ing.cloudpanel.io\|FROM user'` prints both | the setting, `telemetry.ts`, its `SECURITY.md` entry and tests — once the agent stops sending that data or CloudPanel offers an opt-out |
 | Panel PHP / PHP 8.1 (`panelPhp`, opt-in) | Runs the panel, phpMyAdmin and File Manager on PHP 8.1, which has [ended upstream support](https://www.php.net/eol.php) | `php8.1 -v` reports 8.1.x and the panel's own FPM pool is PHP 8.1, while 8.1 is past its php.net EOL date | the Panel PHP setting and `panel-php.ts` — once CloudPanel ships its panel on a supported PHP |
 | Forged visitor IPs (`blockForgedRealIp`) | The panel nginx trusts `set_real_ip_from 0.0.0.0/0;`, so any client can forge its address with an IP header | `grep 'set_real_ip_from 0.0.0.0/0' /home/clp/services/nginx/nginx.conf` shows the line present/uncommented (the guard comments it as `#clp-addons:untrusted …`) | the setting, `real-ip.ts`, its `SECURITY.md` entry and tests — once CloudPanel trusts only loopback, private ranges and Cloudflare |
 | PHP upload progress (every install) | PHP-FPM defaults `session.upload_progress.enabled` to On, the session path of [CVE-2026-109619](https://github.com/php/php-src/security/advisories/GHSA-6wmf-4rv5-p3rp) | `php -i \| grep session.upload_progress.enabled` is `On` by default and the installed PHP build is not yet patched for the advisory | the `uploadProgressGuard` and `php-guard` wiring — once the PHP packages carry the fix |
