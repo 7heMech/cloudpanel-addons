@@ -309,6 +309,45 @@ test.serial("repair runs addon maintenance after the anchors and Nginx, and --an
   expect(output.anchorsOnly).toEqual(["anchors", "maintenance", "nginx"]);
 });
 
+test.serial("--anchors-only puts System Tweaks' phpMyAdmin rules and backup command back once it is installed", () => {
+  const dir = mkdtempSync(join(tmpdir(), "clp-anchors-tweaks-"));
+  const config = join(dir, "system-tweaks.conf");
+  writeFileSync(config, "");
+  const script = `${mockPrelude}
+    globalThis.__order = [];
+    mock.module("./cli/inject.ts", () => ({
+      KNOWN_GOOD_PANEL_VERSIONS: [],
+      inspect: () => ({ state: "ok" }),
+      inspectNginxMaintenance: () => ({ state: "ok" }),
+      inspectNginxProxy: () => ({ state: "ok" }),
+      masterVhostHost: () => null,
+      panelVersion: () => "test",
+      purgeTwigCache: () => {},
+      reconcile: () => ({ statuses: [], changed: false }),
+      reconcileNginxMaintenance: () => ({ state: "missing", changed: false }),
+      reconcileNginxProxy: () => ({ state: "ok", changed: false }),
+    }));
+    const realTweaks = await import("./addons/system-tweaks/action.ts");
+    mock.module("./addons/system-tweaks/action.ts", () => ({
+      ...realTweaks,
+      systemTweaksPhpMyAdmin: () => { globalThis.__order.push("phpmyadmin"); return null; },
+      systemTweaksBackupCompression: () => { globalThis.__order.push("backup"); return null; },
+    }));
+    const { ADDONS } = await import("./cli/addon-catalog.ts");
+    ADDONS["system-tweaks"].configFile = ${JSON.stringify(config)};
+    const { cmdRepair } = await import("./cli/repair.ts");
+    await cmdRepair(["--anchors-only"]);
+    process.stdout.write(JSON.stringify(globalThis.__order));
+  `;
+  try {
+    const result = spawnSync(process.execPath, ["-e", script], { cwd: repo, encoding: "utf8" });
+    expect(result.status, result.stderr).toBe(0);
+    expect(JSON.parse(result.stdout.trim().split("\n").pop() ?? "")).toEqual(["phpmyadmin", "backup"]);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
 test.serial("repair leaves Nginx's conffiles alone while an unattended upgrade has them", () => {
   const script = `${mockPrelude}
     globalThis.__order = [];

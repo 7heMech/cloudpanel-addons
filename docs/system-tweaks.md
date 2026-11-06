@@ -352,6 +352,18 @@ clpctl stripping backslashes from its arguments, its commands building shell
 strings from option values, `db:import` running the dump as the database
 administrator, and the panel user `clp` having full `sudo`.
 
+## CloudPanel telemetry
+
+**Block CloudPanel telemetry** is on by default. Once a day CloudPanel's
+`clp-agent` sends CloudPanel the server's ID and hardware, every site's domain
+and every panel user's name and email. The setting cuts the agent off from the
+network, so nothing leaves the server; it keeps drawing the dashboard's graphs.
+CloudPanel's update and announcement checks still work.
+
+To check it, `systemctl show clp-agent -p IPAddressDeny` prints
+`IPAddressDeny=::/0 0.0.0.0/0`. Switching it off removes the drop-in and
+restarts the agent.
+
 ## Abandoned temp files
 
 Every 15 minutes System Tweaks removes the PHP and ImageMagick temp files that

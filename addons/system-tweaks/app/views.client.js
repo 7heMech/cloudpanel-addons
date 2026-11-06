@@ -130,6 +130,10 @@ function setClpctlGuard(input) {
   return change(input, '/api/clpctl-guard', { enabled: input.checked }, switchText(input), 'Saved.');
 }
 
+function setTelemetry(input) {
+  return change(input, '/api/telemetry', { enabled: input.checked }, switchText(input), 'Saved.');
+}
+
 function setBackupCompression(control) {
   return change(control, '/api/backup-compression', {
     enabled: CLP_ROOT.querySelector('[data-setting="backup-compression"]').checked,

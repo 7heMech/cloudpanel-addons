@@ -55,6 +55,10 @@ const PROBE = String.raw`
     return { positional, flags };
   }
 
+  // System Tweaks' own repair writes /etc and runs systemctl; its tests drive it with fixtures.
+  const realSystemTweaks = await import("./addons/system-tweaks/action.ts");
+  mock.module("./addons/system-tweaks/action.ts", () => ({ ...realSystemTweaks, systemTweaksMaintenance: async () => null }));
+
   const realProvision = await import("./cli/provision.ts?repair-test-real");
   mock.module("./cli/release.ts", () => ({
     CLI_VERSION: "1.2.3",

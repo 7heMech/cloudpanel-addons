@@ -421,6 +421,14 @@ function clpctlGuardLine(state: SystemTweaksState["clpctlGuard"]): string {
   return `${badge("Off", "plain")} <span>A site's own user can reach root through clpctlWrapper${where}.</span>`;
 }
 
+function telemetryLine(state: SystemTweaksState["telemetry"]): string {
+  if (state.problem) return `${badge("Unknown", "warn")} <span>${esc(state.problem)}</span>`;
+  if (!state.agent) return `${badge("No agent", "plain")} <span>CloudPanel's clp-agent is not installed here.</span>`;
+  if (state.blocked) return `${badge("Blocked", "ok")} <span>clp-agent can reach only this server.</span>`;
+  if (state.enabled) return `${badge("Not applied", "warn")} <span>Run clp-addons repair.</span>`;
+  return `${badge("Sending", "plain")} <span>clp-agent sends CloudPanel every site's domain and every panel user's name and email once a day.</span>`;
+}
+
 function settingsCard(state: SystemTweaksState): string {
   return `
     <div class="card">
@@ -502,6 +510,16 @@ function settingsCard(state: SystemTweaksState): string {
         checked: "error" in state.clpctlGuard ? true : state.clpctlGuard.enabled,
         onchange: "setClpctlGuard(this)",
         extra: `<p class="st-status">${clpctlGuardLine(state.clpctlGuard)}</p>`,
+      })}${settingRow({
+        key: "blockTelemetry",
+        title: "Block CloudPanel telemetry",
+        description: [
+          "Cuts CloudPanel's clp-agent off from the network, so it stops sending the server's ID and hardware, every site's domain and every panel user's name and email.",
+          "The agent keeps recording the dashboard's graphs.",
+        ],
+        checked: state.telemetry.enabled,
+        onchange: "setTelemetry(this)",
+        extra: `<p class="st-status">${telemetryLine(state.telemetry)}</p>`,
       })}
       </div>
     </div>`;
