@@ -361,7 +361,7 @@ network, so nothing leaves the server; it keeps drawing the dashboard's graphs.
 CloudPanel's update and announcement checks still work.
 
 To check it, `systemctl show clp-agent -p IPAddressDeny` prints
-`IPAddressDeny=0.0.0.0/0 ::/0`. Switching it off removes the drop-in and
+`IPAddressDeny=::/0 0.0.0.0/0`. Switching it off removes the drop-in and
 restarts the agent.
 
 ## Abandoned temp files
