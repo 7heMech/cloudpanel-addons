@@ -66,10 +66,9 @@ const PANEL_UPDATE_STYLE = UPDATE_STYLE + PANEL_HEADER_STYLE + `
   .header.clp-addons-has-update .nav-link-container { display: flex; overflow-x: auto; scrollbar-width: none; }
   .header.clp-addons-has-update .nav-link-container::-webkit-scrollbar { display: none; }
   .header.clp-addons-has-update .nav-link-container > a { flex: 0 0 auto; margin-left: 0; line-height: 48px; }
-}
-@media (max-width: 600px) {
+  /* Starts where the logo and the navigation start, as on the addon pages. */
   .header #clp-addons-update-notice,
-  .header .header-instance-information-container + #clp-addons-update-notice { justify-content: center; padding: 10px 16px; }
+  .header .header-instance-information-container + #clp-addons-update-notice { justify-content: flex-start; }
 }
 `;
 
