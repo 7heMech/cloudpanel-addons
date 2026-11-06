@@ -247,11 +247,12 @@ A connection is one API token. The page links to Cloudflare's user-owned token
 template (`/profile/api-tokens` with `permissionGroupKeys`, `accountId=*` and
 `zoneId=all`), so the operator chooses accounts and zones on Cloudflare's own
 screen and never types an account ID. The permissions are Account Settings
-Read, Zone Edit, DNS Edit and Single Redirect Edit, then the union of what the
+Read, Zone Edit, DNS Edit, Single Redirect Edit and API Tokens Read, then the union of what the
 saved profiles use: Zone Settings Edit, Config Rules Edit and Zone WAF Edit for
 the features that need them. Single Redirect Edit is asked for before any
 redirect domain exists, so finding the redirects to take over works with the
-token first pasted. Zone Edit is asked for whatever the profiles use, since Automatic creates
+token first pasted. API Tokens Read lets the token's own permissions and
+zones be read (`/user/tokens/{id}`); it exposes token metadata, never a secret. Zone Edit is asked for whatever the profiles use, since Automatic creates
 missing zones; Cloudflare refuses a zone
 create without it by naming an internal permission, `account.zone.create`,
 which the page reports as Zone Edit. The URL uses the keys in Cloudflare's
