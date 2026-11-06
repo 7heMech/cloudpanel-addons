@@ -61,7 +61,8 @@ site's **Details**, use the clipboard icon beside it.
 corrected every 15 minutes, or at once with **Check now**. **Change log** lists
 every record, zone and Mailcow change DNS made, newest first, and what made it.
 When a site is deleted from CloudPanel while DNS manages it, its records stay in
-Cloudflare until you choose **Remove records** or **Keep**. A Mailcow domain is never deleted.
+Cloudflare until you choose **Remove records** or **Keep**; if its zone is deleted
+in Cloudflare, they leave the list on their own. A Mailcow domain is never deleted.
 
 ## Redirect domains
 

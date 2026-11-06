@@ -444,6 +444,11 @@ class Action {
     for (const [domain, entry] of Object.entries(run.managed(plans.filter((plan) => domains === "all" || domains.includes(plan.domain))))) {
       managed[domain] = entry;
     }
+    for (const [domain, entry] of Object.entries(managed)) {
+      if (current.has(domain) || !run.zoneGone(entry)) continue;
+      run.logZoneGone(domain, entry);
+      delete managed[domain];
+    }
     this.files.saveManaged(managed);
   }
 
@@ -792,13 +797,14 @@ class Action {
   }
 
   /** The tracked records of a site CloudPanel no longer has, that are unchanged and no current site writes. */
-  private async removable(domain: string): Promise<{ run: DnsRun; entry: ManagedRecords; ids: string[]; plans: SitePlan[] }> {
+  private async removable(domain: string): Promise<{ run: DnsRun; entry: ManagedRecords; ids: string[]; plans: SitePlan[]; gone?: true }> {
     const entry = this.files.managed()[domain];
     if (!entry) failAction(`DNS tracks no records for ${domain}`);
     if (this.sites().some((site) => site.domain === domain)) failAction(`${domain} is still a CloudPanel site`);
     const policy = this.files.policy();
     const run = this.run(policy);
     await run.discover();
+    if (run.zoneGone(entry)) return { run, entry, ids: [], plans: [], gone: true };
     await run.load(run.plannedDomains());
     const currentPlans = run.planAll();
     if (run.unread(entry.zoneId)) failAction(`${entry.zoneName} could not be read for the sites in it; check again before removing records`);
@@ -820,8 +826,19 @@ class Action {
     return { run, entry, ids, plans };
   }
 
+  /** A deleted zone took the records with it: there is nothing left to remove. */
+  private forgetGone(run: DnsRun, domain: string, entry: ManagedRecords): DnsReply {
+    this.cause = "Remove records";
+    run.logZoneGone(domain, entry);
+    const managed = this.files.managed();
+    delete managed[domain];
+    this.files.saveManaged(managed);
+    return this.reply({ notice: `${entry.zoneName} is no longer in Cloudflare, so ${domain}'s records went with it.` });
+  }
+
   async reviewRemoval(domain: string): Promise<DnsReply> {
-    const { entry, ids, plans } = await this.removable(domain);
+    const { run, entry, ids, plans, gone } = await this.removable(domain);
+    if (gone) return this.forgetGone(run, domain, entry);
     const skipped = entry.records.length - ids.length;
     const token = randomBytes(24).toString("hex");
     this.files.savePending({
@@ -842,7 +859,11 @@ class Action {
 
   private async confirmRemoval(pending: Pending): Promise<DnsReply> {
     const { domain } = pending.removal!;
-    const { run, entry, ids, plans } = await this.removable(domain);
+    const { run, entry, ids, plans, gone } = await this.removable(domain);
+    if (gone) {
+      this.files.savePending(null);
+      return this.forgetGone(run, domain, entry);
+    }
     if (this.digest(plans) !== pending.digest) return this.reviewRemoval(domain);
     this.files.savePending(null);
     this.cause = "Remove records";
