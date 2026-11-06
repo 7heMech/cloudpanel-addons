@@ -26,6 +26,7 @@ export function tokenTemplate(profiles: Profile[]): TokenTemplate {
     { key: "zone", type: "edit", label: "Zone: Edit" },
     { key: "dns", type: "edit", label: "DNS: Edit" },
     { key: "dynamic_redirect", type: "edit", label: "Single Redirect: Edit" },
+    { key: "api_tokens", type: "read", label: "API Tokens: Read" },
   ];
   if (profiles.some((profile) => profile.zone.ssl !== null || profile.zone.alwaysHttps !== null)) {
     permissions.push({ key: "zone_settings", type: "edit", label: "Zone Settings: Edit" });

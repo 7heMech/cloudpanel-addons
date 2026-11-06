@@ -247,11 +247,12 @@ A connection is one API token. The page links to Cloudflare's user-owned token
 template (`/profile/api-tokens` with `permissionGroupKeys`, `accountId=*` and
 `zoneId=all`), so the operator chooses accounts and zones on Cloudflare's own
 screen and never types an account ID. The permissions are Account Settings
-Read, Zone Edit, DNS Edit and Single Redirect Edit, then the union of what the
+Read, Zone Edit, DNS Edit, Single Redirect Edit and API Tokens Read, then the union of what the
 saved profiles use: Zone Settings Edit, Config Rules Edit and Zone WAF Edit for
 the features that need them. Single Redirect Edit is asked for before any
 redirect domain exists, so finding the redirects to take over works with the
-token first pasted. Zone Edit is asked for whatever the profiles use, since Automatic creates
+token first pasted. API Tokens Read lets the token's own permissions and
+zones be read (`/user/tokens/{id}`); it exposes token metadata, never a secret. Zone Edit is asked for whatever the profiles use, since Automatic creates
 missing zones; Cloudflare refuses a zone
 create without it by naming an internal permission, `account.zone.create`,
 which the page reports as Zone Edit. The URL uses the keys in Cloudflare's
@@ -434,6 +435,11 @@ lists them; Remove plans the deletion of those
 still unchanged and at no name a current site's profile writes, and deletes
 them after the same kind of review. It refuses while a site in that zone could
 not be read or planned safely. Keep forgets them. Neither touches the zone or Mailcow.
+When every connection, the one that wrote them among them, lists its zones
+and none lists theirs, the zone was deleted and its records with it: a check
+or Remove forgets them and logs the zone as deleted. Cloudflare answers such a
+zone's reads with Authentication error, so only the listing tells it apart.
+While any connection could not list its zones, nothing is forgotten.
 
 Assigning no profile, Ask first, deleting a profile, disabling and
 uninstalling all stop DNS writing and change nothing outside the server;
