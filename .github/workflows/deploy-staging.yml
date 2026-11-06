@@ -19,6 +19,9 @@
 # The deploy itself is `tools/deploy-stg.ts`, the same script run by hand from a
 # workstation. A second copy of the upload-swap-repair sequence written in YAML
 # is a second thing to keep correct.
+#
+# A push to dev of a commit already on main is skipped: that is dev being reset
+# to a merged release, which its pull request into main already deployed.
 
 name: deploy-staging
 
@@ -45,8 +48,33 @@ concurrency:
 permissions: {}
 
 jobs:
-  deploy:
+  gate:
     if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: read
+    outputs:
+      deploy: ${{ steps.check.outputs.deploy }}
+    steps:
+      - name: Skip a push of a commit already on main
+        id: check
+        env:
+          GH_TOKEN: ${{ github.token }}
+          EVENT: ${{ github.event_name }}
+        run: |
+          set -euo pipefail
+          deploy=true
+          if [ "$EVENT" = push ]; then
+            status=$(gh api "repos/$GITHUB_REPOSITORY/compare/main...$GITHUB_SHA" --jq .status)
+            case "$status" in
+              identical|behind) deploy=false; echo "$GITHUB_SHA is already on main; not deploying" ;;
+            esac
+          fi
+          echo "deploy=$deploy" >> "$GITHUB_OUTPUT"
+
+  deploy:
+    needs: gate
+    if: needs.gate.outputs.deploy == 'true'
     runs-on: ubuntu-24.04
     # Holds the staging credentials and records what was deployed. Add a
     # required reviewer here to make a staging deploy a manual step.

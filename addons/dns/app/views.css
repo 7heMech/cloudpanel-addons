@@ -193,6 +193,12 @@ p.dns-dialog-note { margin:20px 0 0; }
   .fleet-table.dns-redirect-table td.dns-status { flex-basis:100%; }
   .fleet-table.dns-redirect-table td.dns-redirect-profile { flex:1 1 0; order:1; }
   .fleet-table.dns-redirect-table td.action-cell:has(.btn) { flex:0 0 auto; order:2; align-self:flex-end; }
+  /* A log card: time and cause on the first line with the action at its end,
+     then the record and the change across the width. The table's 1% width
+     would otherwise squeeze the time to a letter per line. */
+  .fleet-table.dns-log-table td.dns-log-when { flex:1 1 0; width:auto; min-width:0; }
+  .dns-log-table .dns-log-when .mono { white-space:nowrap; margin-right:4px; }
+  .dns-log-table .dns-log-when .hint { display:inline-block; }
   .card-footer { padding:16px 20px; }
 }
 /* The editor's rows become cards: type, name and the remove button on top, content beneath, then the rest. */
