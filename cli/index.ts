@@ -16,7 +16,7 @@ import { CLI_VERSION } from "./release";
 import { installedConfig } from "./provision";
 import { reconcile } from "./inject";
 import { fatal, Fatal, log, requireRoot } from "./util";
-import { LOCKABLE_ADDONS, lockedAddons, writeLockedAddons } from "../lib/root-locks";
+import { LOCKABLE_ADDONS, ROOT_LOCKS_FILE, lockedAddons, writeLockedAddons } from "../lib/root-locks";
 import { withOperationLockSync } from "./operation-lock";
 import { runRecon } from "./recon";
 import { cmdServe } from "../manager/server";
@@ -87,7 +87,8 @@ function cmdLock(argv: string[], lock: boolean): void {
   try {
     locked = lockedAddons();
   } catch (error) {
-    fatal(`${error instanceof Error ? error.message : String(error)}; until root fixes it, every lockable addon counts as locked`);
+    fatal(`${error instanceof Error ? error.message : String(error)}, so every lockable addon counts as locked. ` +
+      `Note what it locked, remove it with rm ${ROOT_LOCKS_FILE}, then lock those addons again`);
   }
   if (!addon) {
     log.plain(locked.length ? `Locked: ${locked.join(", ")}` : "Nothing is locked.");

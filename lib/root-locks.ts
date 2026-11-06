@@ -16,8 +16,13 @@ export function lockedAddons(file = ROOT_LOCKS_FILE, rootUid = 0): string[] {
   if (!existsSync(file)) return [];
   const info = lstatSync(file);
   if (!info.isFile() || info.uid !== rootUid || (info.mode & 0o022) !== 0) throw new Error(`${file} is not a trusted regular file`);
-  const stored = JSON.parse(readFileSync(file, "utf8")) as { addons?: unknown };
-  if (!Array.isArray(stored.addons)) throw new Error(`${file} has no addons list`);
+  let stored: { addons?: unknown } | null;
+  try {
+    stored = JSON.parse(readFileSync(file, "utf8"));
+  } catch {
+    throw new Error(`${file} is not valid JSON`);
+  }
+  if (!Array.isArray(stored?.addons)) throw new Error(`${file} has no addons list`);
   return stored.addons.filter((addon): addon is string => typeof addon === "string");
 }
 

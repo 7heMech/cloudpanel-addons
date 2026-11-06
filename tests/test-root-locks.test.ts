@@ -75,3 +75,10 @@ test("a lock file others can write counts as locking everything", async () => {
 test("a lock file root does not own counts as locking everything", () => {
   expect(addonLocked("system-tweaks", locks([]), uid + 1)).toBe(true);
 });
+
+test("a lock file that does not parse counts as locking everything", () => {
+  const file = locks([]);
+  writeFileSync(file, "{");
+  expect(() => lockedAddons(file, uid)).toThrow("is not valid JSON");
+  expect(addonLocked("system-tweaks", file, uid)).toBe(true);
+});

@@ -49,8 +49,9 @@ Settings, Failed logins and Database switches; updates, backups, memory,
 unblocking and the firewall stay with administrators.
 
 The locks are `/etc/clp-addons/locks.json`, mode `0644` so the manager can show
-them. A file that is not root's alone, or not a regular file, locks every
-lockable addon rather than none. The page leaves a locked switch read-only and
+them. A file that is not root's alone, not a regular file or not readable
+locks every lockable addon rather than none; `lock` and `unlock` then refuse
+and tell root to remove it and lock again what should stay locked. The page leaves a locked switch read-only and
 names the command.
 
 The gateway's streaming mode is restricted to the verbs declared `stream`: it starts one worker, pipes its output without
