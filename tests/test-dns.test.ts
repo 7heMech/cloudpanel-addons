@@ -941,6 +941,43 @@ describe("sites CloudPanel no longer has", () => {
     expect((await env.act("list")).orphans).toEqual([]);
   });
 
+  test("a zone deleted in Cloudflare is forgotten with its records, by Remove records or the next check", async () => {
+    const deleted = async () => {
+      const env = setup();
+      await env.connect();
+      await env.act("assign", { domains: ["example.com", "shop.example.com"], profileId: "web" });
+      await env.automatic();
+      env.sites.splice(0, env.sites.length);
+      env.cf.zones.splice(0, env.cf.zones.length);
+      return { env, writes: env.cf.writes().length };
+    };
+
+    const removed = await deleted();
+    const reply = await removed.env.act("remove-records", { domain: "shop.example.com" });
+    expect(reply.review).toBeUndefined();
+    expect(reply.notice).toBe("example.com is no longer in Cloudflare, so shop.example.com's records went with it.");
+    expect(reply.orphans.map((orphan) => orphan.domain)).toEqual(["example.com"]);
+    expect(reply.log[0]).toMatchObject({ sites: ["shop.example.com"], action: "delete", subject: "Cloudflare zone" });
+    expect(removed.env.cf.writes().length).toBe(removed.writes);
+
+    const checked = await deleted();
+    expect((await checked.env.act("check")).orphans).toEqual([]);
+    expect(checked.env.cf.writes().length).toBe(checked.writes);
+  });
+
+  test("a connection that cannot be read forgets no records", async () => {
+    const env = setup();
+    await env.connect();
+    await env.act("assign", { domains: ["shop.example.com"], profileId: "web" });
+    await env.automatic();
+    env.sites.splice(env.sites.findIndex((entry) => entry.domain === "shop.example.com"), 1);
+    env.cf.limit = { after: 0, retryAfter: "600" };
+    await env.act("check").catch(() => undefined);
+    env.cf.limit = null;
+    env.clock.now += 3_600_000;
+    expect((await env.act("list")).orphans.map((orphan) => orphan.domain)).toEqual(["shop.example.com"]);
+  });
+
   test("Keep forgets them and changes nothing in Cloudflare", async () => {
     const env = setup();
     await env.connect();

@@ -1016,6 +1016,22 @@ export class DnsRun {
     return state !== undefined && (state.records === null || state.error !== null);
   }
 
+  /**
+   * Whether the connection that wrote a site's records listed its zones and
+   * that zone was not among them. Cloudflare answers a deleted zone's reads
+   * with "Authentication error", so the listing is what tells it apart.
+   */
+  zoneGone(entry: Pick<ManagedRecords, "connectionId" | "zoneId">): boolean {
+    const connection = this.connections.find((candidate) => candidate.id === entry.connectionId);
+    return Boolean(connection?.active)
+      && !this.zoneRefs.some((ref) => ref.connectionId === entry.connectionId && ref.zone.id === entry.zoneId);
+  }
+
+  logZoneGone(domain: string, entry: ManagedRecords): void {
+    this.logged([domain], entry.zoneName, "delete", "Cloudflare zone",
+      `Deleted outside DNS, with the ${entry.records.length === 1 ? "record" : `${entry.records.length} records`} DNS wrote for ${domain}`);
+  }
+
   /** The zone's records, read now, through the connection that tracked them. */
   async readZone(connectionId: string, zoneId: string): Promise<CfRecord[]> {
     const api = this.cloudflare.get(connectionId);
