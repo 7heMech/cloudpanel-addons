@@ -258,7 +258,7 @@ const LOG_LABELS: Record<string, string> = { create: "Create", update: "Update",
 function logRow(line: DnsState["log"][number]): string {
   const when = line.at.slice(0, 16).replace("T", " ");
   const where = [line.sites.join(", "), line.zone && !line.sites.includes(line.zone) ? line.zone : ""].filter(Boolean).join(" · ");
-  return `<tr><td class="dns-log-when"><span class="mono">${esc(when)}</span><span class="hint">${esc(line.cause)}</span></td>
+  return `<tr><td class="dns-log-when"><span class="mono">${esc(when)}</span> <span class="hint">${esc(line.cause)}</span></td>
     <td><span class="badge dns-${esc(line.action)}">${LOG_LABELS[line.action] ?? esc(line.action)}</span></td>
     <td class="wide-cell"><strong>${esc(line.subject)}</strong>${where ? `<span class="hint">${esc(where)}</span>` : ""}</td>
     <td class="wide-cell dns-change-detail">${esc(line.detail)}${line.before ? `<span class="hint">Was: ${esc(line.before)}</span>` : ""}</td></tr>`;
