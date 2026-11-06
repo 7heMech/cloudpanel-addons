@@ -26,6 +26,8 @@ export const LOGIN_JAILS_GATEWAY_TIMEOUT_MS = 6 * COMMAND_MS + 30_000;
 export const PANEL_CERT_GATEWAY_TIMEOUT_MS = 5 * COMMAND_MS + 60_000;
 /** A dpkg version query and a wrapper file swap, with lock waiting and the reply. */
 export const CLPCTL_GUARD_GATEWAY_TIMEOUT_MS = 2 * COMMAND_MS + 30_000;
+/** Unit queries, a daemon-reload, MySQL's option check, Redis's CONFIG SET, lock waiting and the reply. */
+export const MEMORY_GATEWAY_TIMEOUT_MS = 8 * COMMAND_MS + 30_000;
 /** Settings lock, package and compressor checks, PHP lint, and the state reply. */
 export const BACKUP_COMPRESSION_GATEWAY_TIMEOUT_MS = 90_000;
 /** A daemon-reload, two unit queries and the agent's restart, with lock waiting and the reply. */

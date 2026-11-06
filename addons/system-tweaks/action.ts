@@ -44,6 +44,10 @@ import {
   type BackupCompressionOptions, type BackupCompressionSettings, type BackupCompressionStatus,
 } from "./backup-compression";
 import { applyTelemetryBlock, telemetryStatus, type TelemetryOptions, type TelemetryStatus } from "./telemetry";
+import {
+  DEFAULT_MEMORY, MEMORY_ERROR, applyMemory, memoryChange, memoryStatus, syncMemory, validMemorySettings,
+  type MemoryOptions, type MemorySettings, type MemoryStatus,
+} from "./memory";
 
 const SETTINGS_VERSION = 1;
 const MAX_INPUT_BYTES = 4 * 1024;
@@ -79,6 +83,8 @@ export interface SystemTweaksSettings {
   /** Deny CloudPanel's clp-agent every address but loopback. */
   blockTelemetry: boolean;
   backupCompression: BackupCompressionSettings;
+  /** Memory limits worked out from the server's RAM; see memory.ts. */
+  memory: MemorySettings;
 }
 
 export interface SystemTweaksState {
@@ -98,6 +104,7 @@ export interface SystemTweaksState {
   database: (DatabaseStatus & { loopback: boolean }) | { error: string };
   backupCompression: BackupCompressionStatus;
   telemetry: TelemetryStatus & { enabled: boolean };
+  memory: (MemoryStatus & { settings: MemorySettings }) | { error: string };
 }
 
 export interface SystemTweaksPaths {
@@ -136,6 +143,7 @@ export interface SystemTweaksOptions {
   database?: DatabaseOptions;
   backupCompression?: BackupCompressionOptions;
   telemetry?: TelemetryOptions;
+  memory?: MemoryOptions;
   now?: () => number;
 }
 
@@ -160,6 +168,7 @@ export function readSettings(paths: SystemTweaksPaths): SystemTweaksSettings {
     blockClpctlInjection: true,
     blockTelemetry: true,
     backupCompression: { ...DEFAULT_BACKUP_COMPRESSION },
+    memory: { ...DEFAULT_MEMORY },
   };
   if (!existsSync(paths.settingsFile)) return settings;
   const info = lstatSync(paths.settingsFile);
@@ -198,6 +207,7 @@ export function readSettings(paths: SystemTweaksPaths): SystemTweaksSettings {
   if (stored.blockClpctlInjection === false) settings.blockClpctlInjection = false;
   if (stored.blockTelemetry === false) settings.blockTelemetry = false;
   if (validBackupCompression(stored.backupCompression)) settings.backupCompression = { ...stored.backupCompression };
+  if (validMemorySettings(stored.memory)) settings.memory = { ...stored.memory };
   return settings;
 }
 
@@ -245,7 +255,13 @@ async function stateOf(options: SystemTweaksOptions): Promise<SystemTweaksState>
     database: databaseOrError(settings.databaseLoopback, options.database),
     backupCompression: backupCompressionStatus(settings.backupCompression, options.backupCompression),
     telemetry: { ...telemetryStatus(options.telemetry), enabled: settings.blockTelemetry },
+    memory: memoryOrError(settings.memory, options.memory),
   };
+}
+
+function memoryOrError(settings: MemorySettings, options?: MemoryOptions): SystemTweaksState["memory"] {
+  try { return { ...memoryStatus(settings, options), settings }; }
+  catch (error) { return { error: errorMessage(error) }; }
 }
 
 function loginJailsOrError(settings: LoginJailSettings, options?: LoginJailOptions): SystemTweaksState["loginJails"] {
@@ -520,6 +536,26 @@ async function setBackupCompression(options: SystemTweaksOptions): Promise<Syste
   return stateOf(options);
 }
 
+async function setMemory(options: SystemTweaksOptions): Promise<SystemTweaksState> {
+  const change = memoryChange(await requestBody(options));
+  if (!change) failAction(MEMORY_ERROR);
+  const paths = pathsFor(options);
+  await withFileLock(paths.lockFile, 15, "another system tweaks change is still running", async () => {
+    const settings = readSettings(paths);
+    const wanted = { ...settings.memory, ...change };
+    // Saved first, so a MySQL or Redis start meanwhile follows the new setting.
+    writeSettings(paths, { ...settings, memory: wanted });
+    try {
+      applyMemory(wanted, options.memory);
+    } catch (error) {
+      writeSettings(paths, settings);
+      try { applyMemory(settings.memory, options.memory, false); } catch { /* repair puts it back */ }
+      throw error;
+    }
+  });
+  return stateOf(options);
+}
+
 async function changePanelPhp(options: SystemTweaksOptions): Promise<SystemTweaksState> {
   const body = await requestBody(options);
   if (typeof body.php !== "string") failAction("php must be a version such as 8.4, or empty for CloudPanel's own");
@@ -551,6 +587,7 @@ export async function executeSystemTweaksAction(argv: string[], options: SystemT
   if (verb === "set-backup-compression") return setBackupCompression(options);
   if (verb === "set-telemetry") return setTelemetry(options);
   if (verb === "set-panel-php") return changePanelPhp(options);
+  if (verb === "set-memory") return setMemory(options);
   if (verb === "set-php-pools") return setPhpPools(options);
   if (verb === "set-login-jails") return setLoginJails(options);
   if (verb === "unban") {
@@ -702,6 +739,12 @@ export async function systemTweaksMaintenance(options: SystemTweaksOptions = {})
   } catch (error) {
     failures.push(`CloudPanel telemetry: ${errorMessage(error)}`);
   }
+  try {
+    const memory =withSettingsLock(options, (_paths, settings) => applyMemory(settings.memory, options.memory));
+    if (memory.length) lines.push(memory.join("; "));
+  } catch (error) {
+    failures.push(`memory limits: ${errorMessage(error)}`);
+  }
   if (failures.length) throw new Error([...failures, ...lines].join("; "));
   return lines.join("; ") || null;
 }
@@ -818,6 +861,9 @@ export function withdrawSystemTweaks(options: SystemTweaksOptions = {}): void {
   // next change on its Firewall page rebuilds ufw without these rules anyway.
   try { syncFirewall("withdraw", options.firewall); }
   catch (error) { log.warn(`ufw still has UDP rules from System Tweaks: ${errorMessage(error)}`); }
+  // Nothing here keeps a site safe, so like the firewall it does not keep the addon on.
+  try { withSettingsLock(options, (_paths, settings) => applyMemory({ ...settings.memory, mysql: false, redis: false, oom: false }, options.memory, false)); }
+  catch (error) { log.warn(`memory limits are still in place: ${errorMessage(error)}`); }
 }
 
 export function restoreSystemTweaks(options: SystemTweaksOptions = {}): void {
@@ -855,6 +901,16 @@ export function restoreSystemTweaks(options: SystemTweaksOptions = {}): void {
   catch (error) { log.warn(`the panel's shared certificate waits for the next repair: ${errorMessage(error)}`); }
   try { syncFirewall("restore", options.firewall); }
   catch (error) { log.warn(`firewall protocols wait for the next repair: ${errorMessage(error)}`); }
+  try { withSettingsLock(options, (_paths, settings) => applyMemory(settings.memory, options.memory)); }
+  catch (error) { log.warn(`memory limits wait for the next repair: ${errorMessage(error)}`); }
+}
+
+/**
+ * What MySQL's unit runs before it starts and Redis's after it starts. It reads
+ * the setting without the lock, as a change on the page never waits on them.
+ */
+export function systemTweaksMemory(kind: "mysql" | "redis", options: SystemTweaksOptions = {}): boolean {
+  return syncMemory(kind, readSettings(pathsFor(options)).memory, options.memory);
 }
 
 /** What the firewall watcher runs whenever ufw's rule files change. */

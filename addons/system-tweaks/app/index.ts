@@ -8,6 +8,7 @@ import type { SystemTweaksState } from "../action";
 import { BACKUP_COMPRESSION_ERROR, validBackupCompression } from "../backup-compression";
 import { FIREWALL_PROTOCOLS, ruleKey, type FirewallProtocol, type FirewallStatus } from "../firewall";
 import { LOGIN_JAILS } from "../login-jails";
+import { MEMORY_ERROR, memoryChange } from "../memory";
 import { systemTweaksService } from "./service";
 import { dashboardView, layout } from "./views";
 
@@ -137,6 +138,12 @@ export async function handle(
   if (path === "/api/backup-compression") {
     if (!validBackupCompression(body)) return json({ ok: false, error: BACKUP_COMPRESSION_ERROR }, 400);
     return repaint(await systemTweaksService.setBackupCompression(body));
+  }
+
+  if (path === "/api/memory") {
+    const change = memoryChange(body);
+    if (!change) return json({ ok: false, error: MEMORY_ERROR }, 400);
+    return repaint(await systemTweaksService.setMemory(change));
   }
 
   if (path === "/api/real-ip") {

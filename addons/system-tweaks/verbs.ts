@@ -13,6 +13,7 @@ export const SYSTEM_TWEAKS_VERBS = {
   "set-clpctl-guard": { web: "admin" },
   "set-backup-compression": { web: "admin" },
   "set-telemetry": { web: "admin" },
+  "set-memory": { web: "admin" },
   "set-panel-php": { web: "admin" },
   "set-php-pools": { web: "admin" },
   "set-login-jails": { web: "admin" },

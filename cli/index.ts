@@ -27,7 +27,7 @@ import { runTerminalPty } from "../addons/terminal/pty";
 import { runCertificateWork, runFirewallWork } from "./addon-hooks";
 import { runSyncSites } from "./new-sites";
 import { syncVarnishBackends } from "../addons/system-tweaks/varnish-backend";
-import { systemTweaksPhpPools } from "../addons/system-tweaks/action";
+import { systemTweaksMemory, systemTweaksPhpPools } from "../addons/system-tweaks/action";
 
 /**
  * The privileged half of the three manager verbs.
@@ -156,6 +156,13 @@ async function main(): Promise<number> {
       requireRoot("sync-php-pools");
       if (rest.length > 1 || (rest.length === 1 && rest[0] !== "--before-reload")) fatal("sync-php-pools takes only --before-reload");
       systemTweaksPhpPools({}, rest[0] === "--before-reload");
+      return 0;
+    }
+    case "sync-memory": {
+      // MySQL's unit runs this before it starts and Redis's after; its failure does not stop either.
+      requireRoot("sync-memory");
+      if (rest.length !== 1 || (rest[0] !== "mysql" && rest[0] !== "redis")) fatal("sync-memory takes mysql or redis");
+      systemTweaksMemory(rest[0]);
       return 0;
     }
     case "status": await cmdStatus(); return 0;
