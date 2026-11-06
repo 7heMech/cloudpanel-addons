@@ -11,7 +11,7 @@ import {
   DEFAULT_UPDATE_SETTINGS, REBOOT_TIME_ERROR, UPDATE_SETTING_KEYS, applyUpdates, validRebootTime, effectiveReboot, installUnattendedUpgrades, systemRun, unattendedUpgradesInstalled, updatesStatus, withDeadline,
   type UpdateSettings, type UpdatesOptions, type UpdatesStatus,
 } from "./updates";
-import { INSTALL_DEADLINE_MS } from "./limits";
+import { INSTALL_DEADLINE_MS, MEMORY_DEADLINE_MS } from "./limits";
 import { uploadProgressStatus, type FpmUploadProgress, type UploadProgressOptions } from "./upload-progress";
 import { applyRealIp, realIpStatus, type RealIpOptions, type RealIpStatus } from "./real-ip";
 import { applyPhpMyAdmin, phpMyAdminStatus, type PhpMyAdminOptions, type PhpMyAdminStatus } from "./phpmyadmin";
@@ -541,15 +541,17 @@ async function setMemory(options: SystemTweaksOptions): Promise<SystemTweaksStat
   if (!change) failAction(MEMORY_ERROR);
   const paths = pathsFor(options);
   await withFileLock(paths.lockFile, 15, "another system tweaks change is still running", async () => {
+    // One deadline for the change and its undoing, which the gateway's timeout is sized from.
+    const bounded = { ...options.memory, deadline: (options.memory?.now ?? Date.now)() + MEMORY_DEADLINE_MS };
     const settings = readSettings(paths);
     const wanted = { ...settings.memory, ...change };
     // Saved first, so a MySQL or Redis start meanwhile follows the new setting.
     writeSettings(paths, { ...settings, memory: wanted });
     try {
-      applyMemory(wanted, options.memory);
+      applyMemory(wanted, bounded);
     } catch (error) {
       writeSettings(paths, settings);
-      try { applyMemory(settings.memory, options.memory, false); } catch { /* repair puts it back */ }
+      try { applyMemory(settings.memory, bounded, false); } catch { /* repair puts it back */ }
       throw error;
     }
   });

@@ -152,8 +152,11 @@ export type MemoryPaths = typeof DEFAULT_MEMORY_PATHS;
 
 export interface MemoryOptions {
   paths?: Partial<MemoryPaths>;
-  run?: (command: string, args: string[]) => CommandResult;
+  /** Runs one command, killed after `timeoutMs`. */
+  run?: (command: string, args: string[], timeoutMs: number) => CommandResult;
   now?: () => number;
+  /** When every command must have finished, in ms since the epoch; each one gets what is left, at most COMMAND_MS. */
+  deadline?: number;
 }
 
 interface Context {
@@ -163,10 +166,17 @@ interface Context {
 }
 
 function contextOf(options: MemoryOptions): Context {
+  const run = options.run ?? runCommand;
+  const now = options.now ?? Date.now;
+  const { deadline } = options;
   return {
     paths: { ...DEFAULT_MEMORY_PATHS, ...options.paths },
-    run: options.run ?? ((command, args) => runCommand(command, args, COMMAND_MS)),
-    now: options.now ?? Date.now,
+    run: deadline === undefined ? (command, args) => run(command, args, COMMAND_MS) : (command, args) => {
+      const remaining = deadline - now();
+      if (remaining <= 0) failAction("the memory change ran out of time; repair finishes it");
+      return run(command, args, Math.min(COMMAND_MS, remaining));
+    },
+    now,
   };
 }
 

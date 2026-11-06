@@ -1526,6 +1526,12 @@ the sizes are worked out again when the services start:
 Both hooks read the setting without the settings lock, as the PHP-FPM hook does:
 nothing on the page waits for MySQL or Redis to start.
 
+A change from the page has one 120-second deadline for itself and, when a step
+fails, for putting the previous settings back; each command gets what is left
+of it, at most its usual 30 seconds. One change is a few seconds when nothing
+hangs. The gateway's timeout adds the 15-second lock wait and, for the page it
+answers with, the same time as loading the page.
+
 ### MySQL
 
 The option file is read after CloudPanel's `mysqld.cnf`, in the same directory

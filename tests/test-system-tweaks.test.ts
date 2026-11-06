@@ -1290,8 +1290,8 @@ test("the memory switches save the change, and a change that fails leaves the sa
 
   // The password is found only once Redis is running, so make it running.
   const show = memory.run;
-  memory.run = (command, args) => {
-    const shown = show(command, args);
+  memory.run = (command, args, timeoutMs) => {
+    const shown = show!(command, args, timeoutMs);
     return { ...shown, stdout: shown.stdout.replace("Id=redis-server.service\nLoadState=loaded\nActiveState=inactive", "Id=redis-server.service\nLoadState=loaded\nActiveState=active") };
   };
   await expect(act(b, ["set-memory"], { redis: true })).rejects.toThrow("has a password");

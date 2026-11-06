@@ -27,11 +27,15 @@ export const PANEL_CERT_GATEWAY_TIMEOUT_MS = 5 * COMMAND_MS + 60_000;
 /** A dpkg version query and a wrapper file swap, with lock waiting and the reply. */
 export const CLPCTL_GUARD_GATEWAY_TIMEOUT_MS = 2 * COMMAND_MS + 30_000;
 /**
- * One apply is at most ten commands in turn (three unit queries, two daemon-reloads, MySQL's option
- * check, and Redis's CONFIG GET, INFO and two CONFIG SETs); a failed one applies the previous
- * settings again. Then lock waiting, the state read and the reply.
+ * Everything `set-memory` changes, and its undoing when a step fails: one apply is at most ten
+ * commands, and a few seconds when nothing hangs. A command that would outlast it is cut short.
  */
-export const MEMORY_GATEWAY_TIMEOUT_MS = 2 * 10 * COMMAND_MS + 60_000;
+export const MEMORY_DEADLINE_MS = 120_000;
+/**
+ * The change under its deadline, the 15 s lock wait, then the page's state read, given the same
+ * time as loading the page (DEFAULT_GATEWAY_TIMEOUT_MS), and the reply.
+ */
+export const MEMORY_GATEWAY_TIMEOUT_MS = MEMORY_DEADLINE_MS + 15_000 + 60_000 + 30_000;
 /** Settings lock, package and compressor checks, PHP lint, and the state reply. */
 export const BACKUP_COMPRESSION_GATEWAY_TIMEOUT_MS = 90_000;
 /** A daemon-reload, two unit queries and the agent's restart, with lock waiting and the reply. */

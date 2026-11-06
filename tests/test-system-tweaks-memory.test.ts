@@ -263,8 +263,8 @@ test("a systemctl that fails is reported, not taken for services that are not in
   const s = server();
   applyMemory(on(), s.options);
   const run = s.options.run!;
-  s.options.run = (command, args) => command === "systemctl" && args[0] === "show" && args.includes("Id")
-    ? { ok: false, stdout: "", stderr: "Failed to connect to bus: Connection refused" } : run(command, args);
+  s.options.run = (command, args, timeoutMs) => command === "systemctl" && args[0] === "show" && args.includes("Id")
+    ? { ok: false, stdout: "", stderr: "Failed to connect to bus: Connection refused" } : run(command, args, timeoutMs);
   expect(() => applyMemory({ ...DEFAULT_MEMORY }, s.options)).toThrow("systemctl show failed: Failed to connect to bus");
   // Its start hooks stay, so nothing is left half-removed.
   expect(existsSync(join(s.systemd, "mysql.service.d", "zz-clp-addons-memory.conf"))).toBe(true);
@@ -308,4 +308,27 @@ test("a switch asked for a service that is not installed is refused", () => {
   s.units["redis-server.service"]!.loaded = false;
   expect(() => applyMemory(on(), s.options)).toThrow("redis-server.service is not installed");
   expect(memoryStatus({ ...DEFAULT_MEMORY }, s.options).redis.installed).toBe(false);
+});
+
+test("under a deadline each command gets what is left of it, and none runs once it has passed", () => {
+  const s = server();
+  const timeouts: number[] = [];
+  const run = s.options.run!;
+  let clock = 0;
+  const bounded: MemoryOptions = {
+    ...s.options, now: () => clock, deadline: 45_000,
+    run: (command, args, timeoutMs) => { timeouts.push(timeoutMs); return run(command, args, timeoutMs); },
+  };
+  applyMemory(on({ redis: false }), bounded);
+  // Capped at a single command's 30 s guard, which is less than the 45 s left.
+  expect(new Set(timeouts)).toEqual(new Set([30_000]));
+  clock = 30_000;
+  timeouts.length = 0;
+  applyMemory(on({ redis: false }), bounded);
+  expect(Math.max(...timeouts)).toBe(15_000);
+  clock = 45_000;
+  const calls = s.calls.length;
+  expect(() => applyMemory({ ...DEFAULT_MEMORY }, bounded)).toThrow("ran out of time");
+  expect(s.calls.length).toBe(calls);
+  expect(existsSync(s.file)).toBe(true);
 });
