@@ -1284,7 +1284,10 @@ test("the memory switches save the change, and a change that fails leaves the sa
     return { ok: true, stdout: names.map((name) => ["mysql.service", "redis-server.service"].includes(name)
       ? `Id=${name}\nLoadState=loaded\nActiveState=inactive\n` : `Id=${name}\nLoadState=not-found\nActiveState=inactive\n`).join("\n"), stderr: "" };
   };
-  const state = await act(b, ["set-memory"], { mysql: true, profile: "database" });
+  // The reply is the saved settings; the page comes from its own state request.
+  expect(await act(b, ["set-memory"], { mysql: true, profile: "database" }) as unknown)
+    .toEqual({ memory: { profile: "database", mysql: true, redis: false, oom: true } });
+  const state = await act(b, ["state"]);
   expect(state.memory).toMatchObject({ settings: { profile: "database", mysql: true, redis: false, oom: true }, mysql: { inPlace: true } });
   expect(readSettings(b.options.paths as SystemTweaksPaths).memory).toEqual({ profile: "database", mysql: true, redis: false, oom: true });
 
@@ -1604,6 +1607,38 @@ test("the reboot-time API validates input and returns replacement HTML from the 
     }
     expect(calls).toEqual([{ rebootTime: "03:30" }, { rebootTime: "now" }]);
   } finally { systemTweaksService.setUpdates = original; }
+});
+
+test("the memory API saves through set-memory and repaints from a separate state request", async () => {
+  const { handle } = await import("../addons/system-tweaks/app");
+  const { systemTweaksService } = await import("../addons/system-tweaks/app/service");
+  const state = await act(box(), ["state"]);
+  const original = { setMemory: systemTweaksService.setMemory, state: systemTweaksService.state };
+  const calls: string[] = [];
+  systemTweaksService.setMemory = async (change) => {
+    calls.push(`set-memory ${JSON.stringify(change)}`);
+    return change.redis ? { ok: false, error: "Redis has a password in redis.conf" } : { ok: true, data: { memory: { profile: "cache", mysql: false, redis: false, oom: true } } };
+  };
+  systemTweaksService.state = async () => { calls.push("state"); return { ok: true, data: state }; };
+  const request = (body: unknown) => new Request("https://panel.example.com/addons/system-tweaks/api/memory", {
+    method: "POST",
+    headers: { Host: "panel.example.com", Origin: "https://panel.example.com", "Content-Type": "application/json",
+      Cookie: `clp_addons_csrf=${"a".repeat(64)}`, "X-CLP-Addons-CSRF": "a".repeat(64) },
+    body: JSON.stringify(body),
+  });
+  try {
+    expect((await handle(request({ profile: "huge" }), "/api/memory")).status).toBe(400);
+    expect(calls).toEqual([]);
+    const response = await handle(request({ profile: "cache" }), "/api/memory");
+    expect(response.status).toBe(200);
+    expect((await response.json() as { html: string }).html).toBe(dashboardView(state));
+    expect(calls).toEqual(['set-memory {"profile":"cache"}', "state"]);
+    // A refused change answers with its error and reads no state.
+    const refused = await handle(request({ redis: true }), "/api/memory");
+    expect(refused.status).toBe(400);
+    expect(await refused.json()).toMatchObject({ ok: false, error: "Redis has a password in redis.conf" });
+    expect(calls.at(-1)).toBe('set-memory {"redis":true}');
+  } finally { Object.assign(systemTweaksService, original); }
 });
 
 test("System Tweaks exposes panel PHP state and validates its change action", async () => {

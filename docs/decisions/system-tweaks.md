@@ -1529,8 +1529,10 @@ nothing on the page waits for MySQL or Redis to start.
 A change from the page has one 120-second deadline for itself and, when a step
 fails, for putting the previous settings back; each command gets what is left
 of it, at most its usual 30 seconds. One change is a few seconds when nothing
-hangs. The gateway's timeout adds the 15-second lock wait and, for the page it
-answers with, the same time as loading the page.
+hangs. `set-memory` answers with the saved settings only, and the page the
+browser repaints comes from a separate `state` request, bounded as loading the
+page is. The gateway's timeout for `set-memory` is the deadline, the 15-second
+settings lock wait, the waits on `memory.json`'s lock, and the reply.
 
 ### MySQL
 

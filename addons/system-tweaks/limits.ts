@@ -32,10 +32,11 @@ export const CLPCTL_GUARD_GATEWAY_TIMEOUT_MS = 2 * COMMAND_MS + 30_000;
  */
 export const MEMORY_DEADLINE_MS = 120_000;
 /**
- * The change under its deadline, the 15 s lock wait, then the page's state read, given the same
- * time as loading the page (DEFAULT_GATEWAY_TIMEOUT_MS), and the reply.
+ * The change and its undoing under their deadline, the 15 s settings lock wait, and memory.json's own
+ * lock, waited on for up to 10 s at most three times in a change and three in its undoing; then the
+ * reply. The page the browser repaints comes from a separate `state` request.
  */
-export const MEMORY_GATEWAY_TIMEOUT_MS = MEMORY_DEADLINE_MS + 15_000 + 60_000 + 30_000;
+export const MEMORY_GATEWAY_TIMEOUT_MS = MEMORY_DEADLINE_MS + 15_000 + 6 * 10_000 + 30_000;
 /** Settings lock, package and compressor checks, PHP lint, and the state reply. */
 export const BACKUP_COMPRESSION_GATEWAY_TIMEOUT_MS = 90_000;
 /** A daemon-reload, two unit queries and the agent's restart, with lock waiting and the reply. */

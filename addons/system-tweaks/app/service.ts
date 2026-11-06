@@ -89,8 +89,9 @@ export const systemTweaksService = {
     return call("set-telemetry", JSON.stringify({ enabled }), TELEMETRY_GATEWAY_TIMEOUT_MS);
   },
 
-  setMemory(change: Partial<MemorySettings>): Promise<ActionResult<SystemTweaksState>> {
-    return call("set-memory", JSON.stringify(change), MEMORY_GATEWAY_TIMEOUT_MS);
+  /** Answers with the saved settings; the page comes from `state()`. */
+  setMemory(change: Partial<MemorySettings>): Promise<ActionResult<{ memory: MemorySettings }>> {
+    return callGatewayAction("system-tweaks", "set-memory", [], JSON.stringify(change), { timeout: MEMORY_GATEWAY_TIMEOUT_MS });
   },
 
   setBackupCompression(settings: BackupCompressionSettings): Promise<ActionResult<SystemTweaksState>> {

@@ -143,7 +143,10 @@ export async function handle(
   if (path === "/api/memory") {
     const change = memoryChange(body);
     if (!change) return json({ ok: false, error: MEMORY_ERROR }, 400);
-    return repaint(await systemTweaksService.setMemory(change));
+    const saved = await systemTweaksService.setMemory(change);
+    if (!saved.ok) return json(saved, 400);
+    // Its own request, so the state read gets the time loading the page gets.
+    return repaint(await systemTweaksService.state());
   }
 
   if (path === "/api/real-ip") {

@@ -536,11 +536,16 @@ async function setBackupCompression(options: SystemTweaksOptions): Promise<Syste
   return stateOf(options);
 }
 
-async function setMemory(options: SystemTweaksOptions): Promise<SystemTweaksState> {
+/**
+ * Answers with the saved settings only. The page the browser repaints comes
+ * from a separate `state` request, bounded like loading the page, so this
+ * verb's timeout covers its own work alone.
+ */
+async function setMemory(options: SystemTweaksOptions): Promise<{ memory: MemorySettings }> {
   const change = memoryChange(await requestBody(options));
   if (!change) failAction(MEMORY_ERROR);
   const paths = pathsFor(options);
-  await withFileLock(paths.lockFile, 15, "another system tweaks change is still running", async () => {
+  return withFileLock(paths.lockFile, 15, "another system tweaks change is still running", async () => {
     // One deadline for the change and its undoing, which the gateway's timeout is sized from.
     const bounded = { ...options.memory, deadline: (options.memory?.now ?? Date.now)() + MEMORY_DEADLINE_MS };
     const settings = readSettings(paths);
@@ -554,8 +559,8 @@ async function setMemory(options: SystemTweaksOptions): Promise<SystemTweaksStat
       try { applyMemory(settings.memory, bounded, false); } catch { /* repair puts it back */ }
       throw error;
     }
+    return { memory: wanted };
   });
-  return stateOf(options);
 }
 
 async function changePanelPhp(options: SystemTweaksOptions): Promise<SystemTweaksState> {
