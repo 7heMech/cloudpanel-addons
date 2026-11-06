@@ -8,7 +8,7 @@ import { runCommand, type CommandResult } from "../cli/action-common";
 import { inspectPhpGuard, reconcilePhpGuard, type PhpGuardOptions } from "../cli/php-guard";
 import {
   executeSystemTweaksAction, readSettings, restoreSystemTweaks, systemTweaksMaintenance, systemTweaksPhpMyAdmin, systemTweaksPhpPools, systemTweaksUpkeep, withdrawSystemTweaks,
-  type SystemTweaksOptions, type SystemTweaksState,
+  type SystemTweaksOptions, type SystemTweaksPaths, type SystemTweaksState,
 } from "../addons/system-tweaks/action";
 import {
   allowedPatterns, coverageOf, dropInFor, fnmatch, parseAptConfig, parsePolicy, updatesStatus, DEFAULT_UPDATE_SETTINGS, type UpdatesStatus,
@@ -1269,6 +1269,34 @@ test("the page shows the vhost guard as on, waiting for repair, or off", () => {
   expect(html({ enabled: true, active: false, stored: [], homeLogs: ["shop.example.com"] }))
     .toContain("These sites' vhosts still write nginx logs in the site user's home, where that user can point them at any file: shop.example.com.");
   expect(html({ enabled: true, active: true, stored: { error: "panel database is not readable" } })).toContain("Stored site settings could not be checked: panel database is not readable");
+});
+
+test("the memory switches save the change, and a change that fails leaves the saved settings as they were", async () => {
+  const b = box();
+  const memory = b.options.memory!;
+  mkdirSync(memory.paths!.confDirs![0]!, { recursive: true });
+  writeFileSync(memory.paths!.redisConf!, "port 6379\nrequirepass secret\n");
+  // MySQL and Redis installed and stopped; tests/test-system-tweaks-memory.test.ts runs them.
+  memory.paths = { ...memory.paths, servers: [] };
+  memory.run = (command, args) => {
+    if (command !== "systemctl" || args[0] !== "show") return { ok: true, stdout: "", stderr: "" };
+    const names = args.slice(1).filter((arg, index, all) => !arg.startsWith("-") && all[index - 1] !== "-p");
+    return { ok: true, stdout: names.map((name) => ["mysql.service", "redis-server.service"].includes(name)
+      ? `Id=${name}\nLoadState=loaded\nActiveState=inactive\n` : `Id=${name}\nLoadState=not-found\nActiveState=inactive\n`).join("\n"), stderr: "" };
+  };
+  const state = await act(b, ["set-memory"], { mysql: true, profile: "database" });
+  expect(state.memory).toMatchObject({ settings: { profile: "database", mysql: true, redis: false, oom: true }, mysql: { inPlace: true } });
+  expect(readSettings(b.options.paths as SystemTweaksPaths).memory).toEqual({ profile: "database", mysql: true, redis: false, oom: true });
+
+  // The password is found only once Redis is running, so make it running.
+  const show = memory.run;
+  memory.run = (command, args) => {
+    const shown = show(command, args);
+    return { ...shown, stdout: shown.stdout.replace("Id=redis-server.service\nLoadState=loaded\nActiveState=inactive", "Id=redis-server.service\nLoadState=loaded\nActiveState=active") };
+  };
+  await expect(act(b, ["set-memory"], { redis: true })).rejects.toThrow("has a password");
+  expect(readSettings(b.options.paths as SystemTweaksPaths).memory.redis).toBe(false);
+  await expect(act(b, ["set-memory"], { profile: "huge" })).rejects.toThrow("profile must be");
 });
 
 test("PHP pool isolation switches from the page, repair puts it back, and the PHP-FPM hook follows the setting", async () => {

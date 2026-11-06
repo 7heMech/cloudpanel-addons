@@ -7,7 +7,6 @@ import {
   DEFAULT_MEMORY, MYSQL_MARKER, applyMemory, memoryChange, memoryPlan, memoryStatus, mysqlOptionFile, syncMemory,
   type MemoryOptions, type MemorySettings,
 } from "../addons/system-tweaks/memory";
-import { executeSystemTweaksAction, type SystemTweaksState } from "../addons/system-tweaks/action";
 
 const dirs: string[] = [];
 afterEach(() => {
@@ -277,20 +276,4 @@ test("a switch asked for a service that is not installed is refused", () => {
   s.units["redis-server.service"]!.loaded = false;
   expect(() => applyMemory(on(), s.options)).toThrow("redis-server.service is not installed");
   expect(memoryStatus({ ...DEFAULT_MEMORY }, s.options).redis.installed).toBe(false);
-});
-
-test("the action saves the change, and a change that fails leaves the saved settings as they were", async () => {
-  const s = server();
-  const paths = { settingsFile: join(s.dir, "state", "settings.json"), lockFile: join(s.dir, "lock"), rootUid: process.getuid!() };
-  const act = (body: unknown) => executeSystemTweaksAction(["set-memory"], {
-    processUid: 0, paths, memory: s.options, input: JSON.stringify(body),
-  }) as Promise<SystemTweaksState>;
-  const state = await act({ mysql: true, profile: "database" });
-  expect(state.memory).toMatchObject({ settings: { profile: "database", mysql: true, redis: false, oom: true }, mysql: { inPlace: true } });
-  expect(JSON.parse(readFileSync(paths.settingsFile, "utf8")).memory).toEqual({ profile: "database", mysql: true, redis: false, oom: true });
-
-  writeFileSync(join(s.dir, "redis.conf"), "port 6379\nrequirepass secret\n");
-  await expect(act({ redis: true })).rejects.toThrow("has a password");
-  expect(JSON.parse(readFileSync(paths.settingsFile, "utf8")).memory.redis).toBe(false);
-  await expect(act({ profile: "huge" })).rejects.toThrow("profile must be");
 });
