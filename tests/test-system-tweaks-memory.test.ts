@@ -239,6 +239,38 @@ test("Redis is capped at once and on every start, and switching off gives it its
   expect(existsSync(join(s.systemd, "redis-server.service.d", "zz-clp-addons-memory.conf"))).toBe(false);
 });
 
+test("with Cap Redis off and never on, Redis's live values are the operator's and are left alone", () => {
+  const s = server();
+  // Set at runtime by the operator; redis.conf says nothing.
+  s.redis.maxmemory = 128 * MB;
+  s.redis.policy = "volatile-ttl";
+  expect(applyMemory({ ...DEFAULT_MEMORY }, s.options)).not.toContain("Redis back on its own limit");
+  expect(s.redis).toMatchObject({ maxmemory: 128 * MB, policy: "volatile-ttl" });
+  expect(s.calls.some((call) => call[0]!.endsWith("redis-cli"))).toBe(false);
+
+  // A cap of ours that a Redis restart already dropped is not taken off later either.
+  applyMemory(on({ mysql: false }), s.options);
+  s.units["redis-server.service"]!.active = false;
+  applyMemory({ ...DEFAULT_MEMORY }, s.options);
+  s.units["redis-server.service"]!.active = true;
+  s.redis.maxmemory = 128 * MB;
+  s.redis.policy = "volatile-ttl";
+  expect(applyMemory({ ...DEFAULT_MEMORY }, s.options)).toEqual([]);
+  expect(s.redis).toMatchObject({ maxmemory: 128 * MB, policy: "volatile-ttl" });
+});
+
+test("a systemctl that fails is reported, not taken for services that are not installed", () => {
+  const s = server();
+  applyMemory(on(), s.options);
+  const run = s.options.run!;
+  s.options.run = (command, args) => command === "systemctl" && args[0] === "show" && args.includes("Id")
+    ? { ok: false, stdout: "", stderr: "Failed to connect to bus: Connection refused" } : run(command, args);
+  expect(() => applyMemory({ ...DEFAULT_MEMORY }, s.options)).toThrow("systemctl show failed: Failed to connect to bus");
+  // Its start hooks stay, so nothing is left half-removed.
+  expect(existsSync(join(s.systemd, "mysql.service.d", "zz-clp-addons-memory.conf"))).toBe(true);
+  expect(() => memoryStatus(on(), s.options)).toThrow("systemctl show failed");
+});
+
 test("a Redis with a password is left alone and says why", () => {
   const s = server();
   writeFileSync(join(s.dir, "redis.conf"), "port 6379\nrequirepass secret\n");

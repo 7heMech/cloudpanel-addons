@@ -1562,7 +1562,11 @@ which unattended-upgrades handles by skipping the package, so Redis's security
 updates would stop. Debian's `redis.conf` has no include directory, and an
 `ExecStart=` override would have to copy the package's command line, so the
 start hook is the remaining place. Switching off sets both back to what
-`redis.conf` says, or Redis's defaults where it says nothing.
+`redis.conf` says, or Redis's defaults where it says nothing, but only when the
+running Redis holds a cap System Tweaks set: `memory.json` in its state
+directory records that, and a Redis restart, which drops it, clears the record.
+With the switch off and no such record, repair does not even read Redis's
+settings, so values an operator set with `CONFIG SET` stay.
 
 `allkeys-lru` suits a cache, which is what sites on CloudPanel use Redis for.
 A site that keeps a job queue or other data it cannot lose in Redis would lose

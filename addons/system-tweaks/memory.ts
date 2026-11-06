@@ -214,7 +214,9 @@ const UNIT_PROPERTIES = ["Id", "LoadState", "ActiveState", "ControlGroup", "OOMS
 function units(ctx: Context, names: string[]): Unit[] {
   if (!names.length) return [];
   const shown = ctx.run("systemctl", ["show", "--timestamp=unix", ...UNIT_PROPERTIES.flatMap((key) => ["-p", key]), ...names]);
-  const blocks = shown.ok ? shown.stdout.split(/\n\s*\n/) : [];
+  // A unit that is not installed shows LoadState=not-found; a failure is not one.
+  if (!shown.ok) throw new Error(`systemctl show failed: ${commandError(shown)}`);
+  const blocks = shown.stdout.split(/\n\s*\n/);
   return names.map((name, index) => {
     const block = blocks[index] ?? "";
     const value = (key: string) => block.split("\n").find((line) => line.startsWith(`${key}=`))?.slice(key.length + 1).trim() ?? "";
@@ -306,21 +308,41 @@ function checkEffective(ctx: Context, plan: MemoryPlan, file: string): void {
   }
 }
 
+/**
+ * What this addon did that the box does not show: when it took its MySQL file
+ * away, and whether the running Redis holds a cap it set, so switching off
+ * restores only what it changed.
+ */
+interface MemoryState { mysqlRemovedAt?: number; redisCapped?: boolean }
+
+function readState(ctx: Context): MemoryState {
+  try {
+    const stored = JSON.parse(text(ctx.paths.stateFile) ?? "") as Record<string, unknown>;
+    return {
+      ...(typeof stored.mysqlRemovedAt === "number" ? { mysqlRemovedAt: stored.mysqlRemovedAt } : {}),
+      ...(stored.redisCapped === true ? { redisCapped: true } : {}),
+    };
+  } catch {
+    return {};
+  }
+}
+
+function writeState(ctx: Context, change: MemoryState): void {
+  const next: MemoryState = { ...readState(ctx), ...change };
+  if (!next.redisCapped) delete next.redisCapped;
+  writeFileAtomic(ctx.paths.stateFile, `${JSON.stringify(next)}\n`, { mode: 0o600, createParent: true });
+}
+
 function recordRemoval(ctx: Context): void {
   try {
-    writeFileAtomic(ctx.paths.stateFile, `${JSON.stringify({ mysqlRemovedAt: ctx.now() })}\n`, { mode: 0o600, createParent: true });
+    writeState(ctx, { mysqlRemovedAt: ctx.now() });
   } catch {
     // Unrecorded only means the page cannot say the old values are still running.
   }
 }
 
 function removedAt(ctx: Context): number | null {
-  try {
-    const stored = JSON.parse(text(ctx.paths.stateFile) ?? "") as { mysqlRemovedAt?: unknown };
-    return typeof stored.mysqlRemovedAt === "number" ? stored.mysqlRemovedAt : null;
-  } catch {
-    return null;
-  }
+  return readState(ctx).mysqlRemovedAt ?? null;
 }
 
 function modifiedAt(path: string): number | null {
@@ -388,12 +410,21 @@ function redisSet(ctx: Context, conf: RedisConf, key: string, value: string): vo
  * and stop the next security update at a prompt unattended-upgrades skips.
  */
 function reconcileRedisLive(ctx: Context, settings: MemorySettings, redisUnit: Unit): boolean {
-  if (!redisUnit.active && !redisUnit.activating) return false;
+  const capped = readState(ctx).redisCapped === true;
+  if (!redisUnit.active && !redisUnit.activating) {
+    // A stopped Redis forgets CONFIG SET, so there is no cap of ours left to take off.
+    if (!settings.redis && capped) writeState(ctx, { redisCapped: false });
+    return false;
+  }
+  // Off and never capped by this addon: the live values are the operator's, CONFIG SET included.
+  if (!settings.redis && !capped) return false;
   const conf = redisConf(ctx);
   if (conf.password) {
     if (settings.redis) throw new Error("Redis has a password in redis.conf, so System Tweaks leaves it alone");
     return false;
   }
+  // Recorded first, so a cap set just before a failure is still taken off later.
+  if (settings.redis && !capped) writeState(ctx, { redisCapped: true });
   const live = redisLive(ctx, conf);
   const wanted = settings.redis
     ? { maxmemory: String(memoryPlan(ramMb({ paths: ctx.paths }), settings.profile).redisMb * 1024 * 1024), policy: REDIS_POLICY }
@@ -401,6 +432,7 @@ function reconcileRedisLive(ctx: Context, settings: MemorySettings, redisUnit: U
   let changed = false;
   if (String(live.maxmemory) !== wanted.maxmemory) { redisSet(ctx, conf, "maxmemory", wanted.maxmemory); changed = true; }
   if (live.policy !== wanted.policy) { redisSet(ctx, conf, "maxmemory-policy", wanted.policy); changed = true; }
+  if (!settings.redis) writeState(ctx, { redisCapped: false });
   return changed;
 }
 
