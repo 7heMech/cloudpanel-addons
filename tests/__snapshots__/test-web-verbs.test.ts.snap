@@ -124,6 +124,7 @@ system-tweaks:set-database-loopback admin
 system-tweaks:set-file-manager-guard admin
 system-tweaks:set-firewall-protocol admin
 system-tweaks:set-login-jails      admin
+system-tweaks:set-memory           admin
 system-tweaks:set-panel-cert       admin
 system-tweaks:set-panel-php        admin
 system-tweaks:set-php-pools        admin

@@ -52,6 +52,7 @@ import { SECURITY_KEYS_TARGETS } from "../addons/security-keys/inject/targets";
 import type { UserKeysView } from "../addons/security-keys/action";
 import { dashboardView as systemTweaksDashboardView, layout as systemTweaksLayout } from "../addons/system-tweaks/app/views";
 import type { SystemTweaksState } from "../addons/system-tweaks/action";
+import { MEMORY_PROFILES, memoryPlan, type MemoryProfile, type MemorySettings } from "../addons/system-tweaks/memory";
 
 const versions: AvailableTags = { tags: ["0.0.19", "0.0.18"], latest: "0.0.19", source: "registry" };
 const instances: InstanceView[] = [
@@ -524,6 +525,26 @@ function databasePreviewState(url: URL): Exclude<SystemTweaksState["database"], 
   };
 }
 
+/** `?memory=on`, `pending` or `off` (the default, with protection on); `?profile=` and `?ram=` in MB. */
+function memoryPreviewState(url: URL, settings?: MemorySettings): SystemTweaksState["memory"] {
+  const mode = url.searchParams.get("memory") ?? "off";
+  const profile = (MEMORY_PROFILES as readonly string[]).includes(url.searchParams.get("profile") ?? "") ? url.searchParams.get("profile") as MemoryProfile : "balanced";
+  const chosen = settings ?? { profile, mysql: mode !== "off", redis: mode !== "off", oom: true };
+  const plan = memoryPlan(Number(url.searchParams.get("ram")) || 3819, chosen.profile);
+  return {
+    settings: chosen,
+    plan,
+    mysql: { installed: true, inPlace: chosen.mysql, pending: chosen.mysql && mode === "pending" },
+    redis: {
+      installed: true, maxmemoryMb: chosen.redis ? plan.redisMb : 0, policy: chosen.redis ? "allkeys-lru" : "noeviction",
+      usedMb: 212, capped: chosen.redis, problem: "",
+    },
+    oom: { inPlace: chosen.oom },
+    varnishMb: 512,
+    memcachedMb: 64,
+  };
+}
+
 function systemTweaksPreviewState(url: URL): SystemTweaksState {
   if (systemTweaksPreview) return systemTweaksPreview;
   const mode = url.searchParams.get("updates") ?? "outside";
@@ -580,6 +601,7 @@ function systemTweaksPreviewState(url: URL): SystemTweaksState {
       level: 3, threads: 1, supported: true, installed: true, problem: "",
     },
     database: databasePreviewState(url),
+    memory: memoryPreviewState(url),
     firewall: { available: true, protocols: { 9: "udp", 10: "udp", 11: "both" }, udpPorts: url.searchParams.has("noudp") ? [] : ["53", "51820"] },
     vhostGuard: {
       enabled: url.searchParams.get("vhost") !== "off", active: url.searchParams.get("vhost") !== "off",
@@ -639,6 +661,8 @@ function systemTweaksPreviewMutation(path: string, source: URL, body: Record<str
     if (!("error" in state.database)) {
       state.database = { ...state.database, loopback: body.enabled === true, fileInPlace: body.enabled === true, exposed: body.enabled === true ? [] : ["*:3306", "*:33060"] };
     }
+  } else if (path.endsWith("/memory") && !("error" in state.memory)) {
+    state.memory = memoryPreviewState(source, { ...state.memory.settings, ...body });
   } else if (path.endsWith("/backup-compression")) {
     state.backupCompression = { ...state.backupCompression, enabled: body.enabled === true, active: body.enabled === true, level: body.level, threads: body.threads };
   } else if (path.endsWith("/clpctl-guard")) {
