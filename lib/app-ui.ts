@@ -388,7 +388,7 @@ ${primaryNav}
 <main>${contextualHeader}${FLASH_HTML}${viewRoot(content)}</main>
 ${CONFIRM_HTML}
 <footer class="clp-addon-footer">
-  <a href="https://github.com/7heMech/cloudpanel-addons/issues" target="_blank" rel="noopener noreferrer">Report addons issue</a>
+  <a href="https://github.com/7heMech/cloudpanel-addons/issues" target="_blank" rel="noopener noreferrer">Report an issue with addons</a>
   <a href="https://github.com/7heMech/cloudpanel-addons" target="_blank" rel="noopener noreferrer">Star addons on GitHub</a>
 </footer>
 <script>const CLP_BASE = "${escJs(chrome.base)}";
