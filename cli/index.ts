@@ -16,7 +16,7 @@ import { CLI_VERSION } from "./release";
 import { installedConfig } from "./provision";
 import { reconcile } from "./inject";
 import { fatal, Fatal, log, requireRoot } from "./util";
-import { LOCKABLE_ADDONS, ROOT_LOCKS_FILE, lockedAddons, writeLockedAddons } from "../lib/root-locks";
+import { LOCKABLE_ADDONS, ROOT_LOCKS_FILE, isLockable, lockedAddons, writeLockedAddons } from "../lib/root-locks";
 import { withOperationLockSync } from "./operation-lock";
 import { runRecon } from "./recon";
 import { cmdServe } from "../manager/server";
@@ -96,7 +96,7 @@ function cmdLock(argv: string[], lock: boolean): void {
     return;
   }
   requireRoot(lock ? "lock" : "unlock");
-  if (!(LOCKABLE_ADDONS as string[]).includes(addon)) fatal(`${addon} has nothing to lock; lockable: ${LOCKABLE_ADDONS.join(", ")}`);
+  if (!isLockable(addon)) fatal(`${addon} has nothing to lock; lockable: ${LOCKABLE_ADDONS.join(", ")}`);
   if (lock === locked.includes(addon)) {
     log.plain(`${addon} is already ${lock ? "locked" : "unlocked"}`);
     return;

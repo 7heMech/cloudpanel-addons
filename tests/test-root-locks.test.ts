@@ -82,3 +82,10 @@ test("a lock file that does not parse counts as locking everything", () => {
   expect(() => lockedAddons(file, uid)).toThrow("is not valid JSON");
   expect(addonLocked("system-tweaks", file, uid)).toBe(true);
 });
+
+test("a lock directory others can write counts as locking everything", () => {
+  const open = mkdtempSync(`${dir}/open-`);
+  chmodSync(open, 0o777);
+  expect(() => lockedAddons(`${open}/locks.json`, uid)).toThrow("is not a directory only root can write");
+  expect(addonLocked("system-tweaks", `${open}/locks.json`, uid)).toBe(true);
+});

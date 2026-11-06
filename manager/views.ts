@@ -5,7 +5,7 @@ import { CLI_VERSION } from "../cli/release";
 import { esc, escJs, htmlResponse } from "../lib/app-http";
 import { JOB_WATCH_JS, renderLayout } from "../lib/app-ui";
 import { mountPath } from "../lib/mount";
-import { LOCKABLE_ADDONS, addonLocked } from "../lib/root-locks";
+import { addonLocked, isLockable } from "../lib/root-locks";
 import { UPDATE_PATH, changelogUrl } from "../lib/update-ui";
 import type { CliUpdateInfo } from "../lib/update-check";
 import type { ManagerJobView } from "../cli/manager-action";
@@ -25,7 +25,7 @@ function addonRow(name: string, enabled: boolean, job: ManagerJobView | null, ne
   const heading = enabled && href ? `<a href="${esc(href)}">${esc(title)}</a>` : esc(title);
   const actions = enabled
     ? `${href ? `<a class="btn btn-primary" href="${esc(href)}" aria-label="Open ${esc(title)}">Open</a>` : ""}
-      ${(LOCKABLE_ADDONS as string[]).includes(spec.name) && addonLocked(spec.name)
+      ${isLockable(spec.name) && addonLocked(spec.name)
         ? `<span class="badge" title="Run clp-addons unlock ${esc(spec.name)} on the server to disable it">Locked by root</span>`
         : `<button class="btn" type="button" onclick="disableAddon('${escJs(spec.name)}', '${escJs(title)}', this)" aria-label="Disable ${esc(title)}">Disable</button>`}`
     : `<button class="btn" type="button" onclick="enableAddon('${escJs(spec.name)}', this)" aria-label="Enable ${esc(title)}">Enable</button>`;

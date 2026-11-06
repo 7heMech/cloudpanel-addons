@@ -42,15 +42,16 @@ addons, verbs, free-form paths, and malformed action replies are rejected.
 An administrator can switch a protection off from the web, so a stolen
 administrator session could switch them all off. `clp-addons lock <addon>`
 withdraws that: the gateway refuses the verbs the addon declares `lock` while
-it is locked, and the manager refuses to disable the addon. Only root changes
+it is locked, on the one-shot and streaming paths alike, and the manager refuses to disable the addon. Only root changes
 the lock, from a shell; neither command is a gateway verb. A root shell is not
 held to it either, since it can unlock anyway. System Tweaks declares its
 Settings, Failed logins and Database switches; updates, backups, memory,
 unblocking and the firewall stay with administrators.
 
 The locks are `/etc/clp-addons/locks.json`, mode `0644` so the manager can show
-them. A file that is not root's alone, not a regular file or not readable
-locks every lockable addon rather than none; `lock` and `unlock` then refuse
+them. A file that is not root's alone, not a regular file or not readable, or
+a directory others could remove it from, locks every lockable addon rather than
+none; `lock` and `unlock` then refuse
 and tell root to remove it and lock again what should stay locked. The page leaves a locked switch read-only and
 names the command.
 
