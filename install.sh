@@ -57,7 +57,7 @@ ok "dependencies available"
 can_ask() { [[ -t 1 && ${TERM:-dumb} != dumb ]] && ( : < /dev/tty ) 2>/dev/null; }
 IFS=',' read -r -a ADDON_LIST <<< "$SELECTED"
 if (( ${#ADDON_LIST[@]} == 0 )) && { (( ASSUME_YES )) || ! can_ask; }; then
-  die "no addons selected and no terminal to ask on. Pass --addons=panel-tweaks,maintenance"
+  die "no addons selected and no terminal to ask on. Pass --addons=panel-tweaks,system-tweaks"
 fi
 
 # /releases/latest is the newest release that is not a prerelease. A

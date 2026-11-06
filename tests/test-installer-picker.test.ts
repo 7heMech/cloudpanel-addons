@@ -3,7 +3,7 @@ import { EventEmitter } from "node:events";
 import { ADDONS, ADDON_NAMES } from "../cli/addon-catalog";
 import { pickAddons, type Terminal } from "../cli/menu";
 
-const PRESELECTED = ["maintenance", "panel-tweaks", "system-tweaks", "security-keys"];
+const PRESELECTED = ["panel-tweaks", "system-tweaks"];
 
 function pick(...keys: string[]): { result: Promise<string[] | null>; rawModes: boolean[]; screen: () => string } {
   const rawModes: boolean[] = [];
