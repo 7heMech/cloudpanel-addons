@@ -8,7 +8,9 @@ installed on the staging CloudPanel box, and a release's pull request into
 `main` is installed again as it would merge, so a change is observed on a real
 panel before it reaches a release. A pull request into `dev` is not deployed:
 several are often open at once, and the one box should hold `dev` rather than
-whichever of them pushed last. Trying one first is
+whichever of them pushed last. A push to `dev` of a commit already on `main` is
+not deployed either: that is `dev` reset to a merged release, which its pull
+request already installed. Trying one first is
 `bun run deploy:stg` from its branch. There is one box, so it holds whatever
 deployed last; a pull request from a fork is skipped, because it cannot be
 given credentials that authenticate as root on a live machine. Some of this project's behaviour has nowhere else to be
