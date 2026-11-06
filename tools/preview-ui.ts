@@ -2014,7 +2014,7 @@ const server = Bun.serve({
       }), notice);
     } else if (path === "/addons/system-tweaks/" || path === "/addons/system-tweaks") {
       systemTweaksPreview = null;
-      html = systemTweaksLayout("System Tweaks", systemTweaksDashboardView(systemTweaksPreviewState(url)), notice);
+      html = systemTweaksLayout("System Tweaks", systemTweaksDashboardView(systemTweaksPreviewState(url), Date.now(), url.searchParams.has("locked")), notice);
     } else if (path === "/addons/terminal/" || path === "/addons/terminal") {
       html = terminalLayout("Terminal", terminalDashboardView(empty ? [] : terminalPreviewSites), notice);
     } else if (path === "/addons/wp-tools/" || path === "/addons/wp-tools") {

@@ -98,6 +98,11 @@ function settingRow(row: Row): string {
       </div>`;
 }
 
+/** A row of a protection root can lock (`clp-addons lock system-tweaks`): read-only while it is. */
+function lockableRow(row: Row, locked: boolean): string {
+  return settingRow({ ...row, disabled: row.disabled || locked });
+}
+
 function warning(text: string): string {
   return `<p class="notice st-inline-notice">${text}</p>`;
 }
@@ -305,7 +310,7 @@ export function panelPhpLine(status: PanelPhpStatus): string {
   return lines.join(" ");
 }
 
-export function panelPhpRow(status: PanelPhpStatus | { error: string }): string {
+export function panelPhpRow(status: PanelPhpStatus | { error: string }, locked = false): string {
   const description = "Runs CloudPanel's pages, phpMyAdmin and the File Manager. CloudPanel has not tested newer versions, so a change is undone if the login page or File Manager stops answering.";
   if ("error" in status) {
     return settingRow({ key: "panelPhp", title: "Panel PHP", description, control: "",
@@ -316,7 +321,7 @@ export function panelPhpRow(status: PanelPhpStatus | { error: string }): string 
       extra: `<p class="st-status hint">CloudPanel's PHP-FPM unit is not one this addon recognises, so the panel keeps the PHP CloudPanel chose.</p>` });
   }
   const select = `
-            <select id="panel-php" aria-label="Panel PHP" data-current="${esc(status.wanted)}" onchange="setPanelPhp(this)"${status.overriddenBy ? " disabled" : ""}>${status.choices
+            <select id="panel-php" aria-label="Panel PHP" data-current="${esc(status.wanted)}" onchange="setPanelPhp(this)"${status.overriddenBy || locked ? " disabled" : ""}>${status.choices
     .map((choice) => phpOption(choice, status.stock, (status.wanted || status.stock) === choice.version)).join("")}${
     status.wanted && !status.choices.some((choice) => choice.version === status.wanted)
       ? `<option value="${esc(status.wanted)}" selected disabled>PHP ${esc(status.wanted)} (unavailable)</option>` : ""}</select>`;
@@ -430,18 +435,18 @@ function telemetryLine(state: SystemTweaksState["telemetry"]): string {
   return `${badge("Sending", "plain")} <span>clp-agent sends CloudPanel every site's domain and every panel user's name and email once a day.</span>`;
 }
 
-function settingsCard(state: SystemTweaksState): string {
+function settingsCard(state: SystemTweaksState, locked: boolean): string {
   return `
     <div class="card">
       <div class="card-header"><h2>Settings</h2></div>
-      <div class="tweak-list">${panelPhpRow(state.panelPhp)}${settingRow({
+      <div class="tweak-list">${panelPhpRow(state.panelPhp, locked)}${lockableRow({
         key: "uploadProgressGuard",
         title: "PHP upload-progress mitigation",
         description: `Turns PHP's session upload progress, a route into CVE-2026-109619, off on every PHP-FPM with ${PHP_GUARD_INI_NAME}. Off removes only that file.`,
         checked: state.uploadProgress.guard,
         onchange: "setUploadGuard(this)",
         extra: uploadProgressDetails(state.uploadProgress.fpms),
-      })}${settingRow({
+      }, locked)}${lockableRow({
         key: "blockForgedRealIp",
         title: "Block forged visitor IPs",
         description: [
@@ -451,7 +456,7 @@ function settingsCard(state: SystemTweaksState): string {
         checked: state.realIp.blockForged,
         onchange: "setRealIp(this)",
         extra: `<p class="st-status">${realIpLine(state.realIp)}</p>`,
-      })}${settingRow({
+      }, locked)}${lockableRow({
         key: "protectPhpMyAdmin",
         title: "Lock down phpMyAdmin",
         description: [
@@ -461,7 +466,7 @@ function settingsCard(state: SystemTweaksState): string {
         checked: state.phpMyAdmin.enabled,
         onchange: "setPhpMyAdmin(this)",
         extra: `<p class="st-status">${phpMyAdminLine(state.phpMyAdmin)}</p>`,
-      })}${settingRow({
+      }, locked)}${lockableRow({
         key: "replacePanelCert",
         title: "Replace the shared panel certificate",
         description: [
@@ -471,7 +476,7 @@ function settingsCard(state: SystemTweaksState): string {
         checked: state.panelCert.replace,
         onchange: "setPanelCert(this)",
         extra: `<p class="st-status">${panelCertLine(state.panelCert)}</p>`,
-      })}${settingRow({
+      }, locked)}${lockableRow({
         key: "blockVhostInjection",
         title: "Block nginx config injection",
         description: [
@@ -481,7 +486,7 @@ function settingsCard(state: SystemTweaksState): string {
         checked: state.vhostGuard.enabled,
         onchange: "setVhostGuard(this)",
         extra: `<p class="st-status">${vhostGuardLine(state.vhostGuard)}</p>${storedValuesWarning(state.vhostGuard.stored)}${homeLogsWarning(state.vhostGuard.homeLogs)}${ownLogrotateWarning(state.vhostGuard.ownLogrotate)}`,
-      })}${settingRow({
+      }, locked)}${lockableRow({
         key: "isolatePhpPools",
         title: "Isolate PHP pools",
         description: [
@@ -491,7 +496,7 @@ function settingsCard(state: SystemTweaksState): string {
         checked: state.phpPools.enabled,
         onchange: "setPhpPools(this)",
         extra: `<p class="st-status">${phpPoolsLine(state.phpPools)}</p>`,
-      })}${settingRow({
+      }, locked)}${lockableRow({
         key: "confineFileManager",
         title: "Restrict File Manager to site files",
         description: [
@@ -501,7 +506,7 @@ function settingsCard(state: SystemTweaksState): string {
         checked: state.fileManagerGuard.enabled,
         onchange: "setFileManagerGuard(this)",
         extra: `<p class="st-status">${fileManagerGuardLine(state.fileManagerGuard)}</p>`,
-      })}${settingRow({
+      }, locked)}${lockableRow({
         key: "blockClpctlInjection",
         title: "Block clpctl injection",
         description: [
@@ -511,7 +516,7 @@ function settingsCard(state: SystemTweaksState): string {
         checked: "error" in state.clpctlGuard ? true : state.clpctlGuard.enabled,
         onchange: "setClpctlGuard(this)",
         extra: `<p class="st-status">${clpctlGuardLine(state.clpctlGuard)}</p>`,
-      })}${settingRow({
+      }, locked)}${lockableRow({
         key: "blockTelemetry",
         title: "Block CloudPanel telemetry",
         description: [
@@ -521,7 +526,7 @@ function settingsCard(state: SystemTweaksState): string {
         checked: state.telemetry.enabled,
         onchange: "setTelemetry(this)",
         extra: `<p class="st-status">${telemetryLine(state.telemetry)}</p>`,
-      })}
+      }, locked)}
       </div>
     </div>`;
 }
@@ -566,7 +571,7 @@ function defaultPasswordNote(state: DatabaseStatus): string {
     so changing it only in MySQL breaks its Databases page.`);
 }
 
-function databaseCard(state: DatabaseState): string {
+function databaseCard(state: DatabaseState, locked: boolean): string {
   const description = [
     "Allows MySQL and MariaDB connections only from this server. Sites and the panel connect over localhost or a Unix socket and keep working. Apps on other machines lose access; reach it over an SSH tunnel instead.",
     "Off by default: CloudPanel creates every database user for any host, so System Tweaks cannot tell whether something remote uses one. A change restarts MySQL, so sites lose their database for a few seconds.",
@@ -586,7 +591,7 @@ function databaseCard(state: DatabaseState): string {
   return `
     <div class="card">
       <div class="card-header"><h2>Database</h2></div>
-      <div class="tweak-list">${settingRow({
+      <div class="tweak-list">${lockableRow({
         key: "databaseLoopback",
         title: "MySQL on this server only",
         description,
@@ -594,7 +599,7 @@ function databaseCard(state: DatabaseState): string {
         disabled: !state.running && !state.loopback,
         onchange: "setDatabaseLoopback(this)",
         extra: `<p class="st-status">${databaseLine(state)}</p>${remote}${defaultPasswordNote(state)}`,
-      })}
+      }, locked)}
       </div>
     </div>`;
 }
@@ -790,7 +795,7 @@ function customDomainLine(jails: LoginJailsReady): string {
   return `<p class="hint st-suggest">Logins through ${esc(domain.name)} count too. A block for those covers HTTPS on port 443 for every site on this server, because the firewall cannot tell sites apart.</p>`;
 }
 
-function loginJailsCard(jails: LoginJails): string {
+function loginJailsCard(jails: LoginJails, locked: boolean): string {
   if ("error" in jails) {
     return `
     <div class="card">
@@ -804,7 +809,7 @@ function loginJailsCard(jails: LoginJails): string {
   return `
     <div class="card">
       <div class="card-header"><h2>Failed logins</h2></div>
-      <div class="tweak-list">${settingRow({
+      <div class="tweak-list">${lockableRow({
         key: "panel",
         title: "Block panel login guessing",
         description: [
@@ -814,7 +819,7 @@ function loginJailsCard(jails: LoginJails): string {
         checked: jails.panel,
         onchange: "setLoginJails(this)",
         extra: `<p class="st-status">${jailLine(jails, PANEL_JAIL, jails.panel)}</p>${customDomainLine(jails)}`,
-      })}${settingRow({
+      }, locked)}${lockableRow({
         key: "ssh",
         title: "Block SSH login guessing",
         description: [
@@ -824,12 +829,12 @@ function loginJailsCard(jails: LoginJails): string {
         checked: jails.ssh,
         onchange: "setLoginJails(this)",
         extra: `<p class="st-status">${jailLine(jails, "sshd", jails.ssh)}</p>${sshdWarning(jails.sshd)}`,
-      })}
+      }, locked)}
       </div>${install}${jails.running.length ? bansTable(jails.bans) : ""}
     </div>`;
 }
 
-export function dashboardView(state: SystemTweaksState, now = Date.now()): string {
+export function dashboardView(state: SystemTweaksState, now = Date.now(), locked = false): string {
   return `
     <div class="page-heading">
       <div>
@@ -837,10 +842,11 @@ export function dashboardView(state: SystemTweaksState, now = Date.now()): strin
         <p>Server-wide settings for this machine.</p>
         <p class="hint">Every 15 minutes it also clears PHP and ImageMagick temp files that timed-out requests left in /tmp.${firewallLine(state.firewall)}</p>
       </div>
-    </div>
+    </div>${locked ? `
+    <p class="notice">Root has locked the Settings, Failed logins and Database switches. To change one, run <code>clp-addons unlock system-tweaks</code> on the server.</p>` : ""}
     <div class="card">
       <div class="card-header"><h2>Automatic updates</h2></div>
       <div class="tweak-list">${updateRows(state.updates, state.settings)}
       </div>${statusList(state.updates, now)}${coverageDetails(state.updates)}
-    </div>${backupCompressionCard(state.backupCompression)}${settingsCard(state)}${loginJailsCard(state.loginJails)}${databaseCard(state.database)}${memoryCard(state.memory)}`;
+    </div>${backupCompressionCard(state.backupCompression)}${settingsCard(state, locked)}${loginJailsCard(state.loginJails, locked)}${databaseCard(state.database, locked)}${memoryCard(state.memory)}`;
 }

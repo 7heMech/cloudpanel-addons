@@ -22,6 +22,7 @@
 import { existsSync, mkdirSync, readFileSync, rmSync } from "node:fs";
 import { join } from "node:path";
 import { withFileLock, withFileLockSync } from "./action-common";
+import { LOCKABLE_ADDONS, addonLocked } from "../lib/root-locks";
 import {
   createJobDir, createJobLog, findOlderThan, jobCommonFields, jobDir, jobGet, jobSet,
   jobTimestamp, jobUnitIsActive, listJobIds, newJobId, pruneJobs, readJobLog, startJobUnit,
@@ -276,6 +277,7 @@ function rejectImpossible(kind: ManagerJobKind, addon: string): string | null {
   const isEnabled = enabled(addon);
   if (kind === "enable" && isEnabled) return `${addon} is already enabled`;
   if (kind === "disable" && !isEnabled) return `${addon} is already disabled`;
+  if (kind === "disable" && (LOCKABLE_ADDONS as string[]).includes(addon) && addonLocked(addon)) return `root has locked ${addon}; run clp-addons unlock ${addon} on the server first`;
   return null;
 }
 

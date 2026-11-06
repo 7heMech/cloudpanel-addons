@@ -600,6 +600,20 @@ test("a box whose operator already turned updates on reads as configured outside
   expect(dashboardView(state)).toContain("Configured outside System Tweaks in 20auto-upgrades");
 });
 
+test("root's lock leaves the protections read-only and the rest of the page as it was", async () => {
+  const state = await act(box(), ["state"]);
+  const open = dashboardView(state);
+  const locked = dashboardView(state, Date.now(), true);
+  const switchOf = (html: string, key: string) => html.match(new RegExp(`data-setting="${key}"[^>]*>`))![0];
+  expect(open).not.toContain("clp-addons unlock system-tweaks");
+  expect(locked).toContain("<code>clp-addons unlock system-tweaks</code>");
+  for (const key of ["confineFileManager", "blockVhostInjection", "panel", "ssh"]) {
+    expect(switchOf(open, key)).not.toContain("disabled");
+    expect(switchOf(locked, key)).toContain("disabled");
+  }
+  expect(switchOf(locked, "enabled")).not.toContain("disabled");
+});
+
 test("switching on writes only the drop-in, and switching off restores the operator's own setup", async () => {
   const b = box();
   const before = readFileSync(join(b.aptDir, "20auto-upgrades"), "utf8");

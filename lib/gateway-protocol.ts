@@ -37,10 +37,11 @@ export type WebAccess =
  * One verb of `clp-addons action <addon>`. A root-only verb says why the web
  * may not reach it. A stream's output is copied to the socket as it comes; a
  * duplex stream also gets the socket's bytes on stdin, and the gateway checks
- * its session itself.
+ * its session itself. A `lock` verb is refused from the web while root has
+ * locked its addon (`clp-addons lock`).
  */
 export type VerbDeclaration =
-  | { readonly web: WebAccess; readonly stream?: "one-way" | "duplex" }
+  | { readonly web: WebAccess; readonly stream?: "one-way" | "duplex"; readonly lock?: true }
   | { readonly web: false; readonly why: string };
 
 /**

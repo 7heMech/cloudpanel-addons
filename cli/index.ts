@@ -16,6 +16,7 @@ import { CLI_VERSION } from "./release";
 import { installedConfig } from "./provision";
 import { reconcile } from "./inject";
 import { fatal, Fatal, log, requireRoot } from "./util";
+import { LOCKABLE_ADDONS, lockedAddons, writeLockedAddons } from "../lib/root-locks";
 import { withOperationLockSync } from "./operation-lock";
 import { runRecon } from "./recon";
 import { cmdServe } from "../manager/server";
@@ -58,6 +59,8 @@ function usage(): void {
   clp-addons status
   clp-addons uninstall <addon> --yes [--purge]
   clp-addons maintenance <domain> [on|off|status]
+  clp-addons lock [<addon>]
+  clp-addons unlock <addon>
   clp-addons --version
 
 Addons: ${ADDON_NAMES.join(", ")}`);
@@ -74,6 +77,33 @@ async function cmdAction(argv: string[]): Promise<number> {
   if (!spec?.action) fatal(`unknown action addon '${addon ?? ""}'`);
   if (!installedConfig(spec)) fatal(`the ${spec.name} addon is not installed`);
   return spec.action(rest);
+}
+
+/** With no addon, lists the locks; `lock` alone needs no root, as it only reads. */
+function cmdLock(argv: string[], lock: boolean): void {
+  const [addon, ...extra] = argv;
+  if (extra.length || (!lock && !addon)) fatal(`usage: clp-addons ${lock ? "lock [<addon>]" : "unlock <addon>"}`);
+  let locked: string[];
+  try {
+    locked = lockedAddons();
+  } catch (error) {
+    fatal(`${error instanceof Error ? error.message : String(error)}; until root fixes it, every lockable addon counts as locked`);
+  }
+  if (!addon) {
+    log.plain(locked.length ? `Locked: ${locked.join(", ")}` : "Nothing is locked.");
+    log.plain(`Lockable: ${LOCKABLE_ADDONS.join(", ")}`);
+    return;
+  }
+  requireRoot(lock ? "lock" : "unlock");
+  if (!(LOCKABLE_ADDONS as string[]).includes(addon)) fatal(`${addon} has nothing to lock; lockable: ${LOCKABLE_ADDONS.join(", ")}`);
+  if (lock === locked.includes(addon)) {
+    log.plain(`${addon} is already ${lock ? "locked" : "unlocked"}`);
+    return;
+  }
+  writeLockedAddons(lock ? [...locked, addon] : locked.filter((name) => name !== addon));
+  log.ok(lock
+    ? `${addon} is locked: the panel shows its protections but cannot change them or disable the addon`
+    : `${addon} is unlocked: administrators can change it from the panel again`);
 }
 
 async function cmdMaintenance(argv: string[]): Promise<void> {
@@ -167,6 +197,8 @@ async function main(): Promise<number> {
     }
     case "status": await cmdStatus(); return 0;
     case "maintenance": await cmdMaintenance(rest); return 0;
+    case "lock": cmdLock(rest, true); return 0;
+    case "unlock": cmdLock(rest, false); return 0;
     case "uninstall": cmdUninstall(rest); return 0;
     case "action": return await cmdAction(rest);
     case "smtp-submit": return await runSmtpSubmit(rest);

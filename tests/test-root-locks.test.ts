@@ -1,0 +1,77 @@
+// Root locks: the gateway refuses a locked addon's protections to the web.
+import { afterAll, beforeAll, expect, test } from "bun:test";
+import { chmodSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { createAuthActionServer } from "../cli/auth-action";
+import { LOCKABLE_ADDONS, addonLocked, lockedAddons } from "../lib/root-locks";
+
+const uid = process.getuid?.() ?? 0;
+let dir = "";
+
+beforeAll(() => { dir = mkdtempSync(`${tmpdir()}/root-locks-`); });
+afterAll(() => rmSync(dir, { recursive: true, force: true }));
+
+function locks(addons: string[], mode = 0o644): string {
+  const file = `${dir}/locks-${Math.random().toString(36).slice(2)}.json`;
+  writeFileSync(file, JSON.stringify({ addons }));
+  chmodSync(file, mode);
+  return file;
+}
+
+async function ask(file: string, addon: string, verb: string): Promise<{ reply: unknown; ran: boolean }> {
+  let ran = false;
+  const spawn = ((_args: string[], options: Record<string, unknown>) => {
+    ran = true;
+    return Bun.spawn(["echo", '{"ok":true}'], options as never);
+  }) as unknown as typeof Bun.spawn;
+  const socketPath = `${dir}/gw-${Math.random().toString(36).slice(2)}.sock`;
+  const server = createAuthActionServer({ enforcePeer: false, spawn, locks: { file, rootUid: uid } });
+  await new Promise<void>((resolve) => server.listen(socketPath, resolve));
+  try {
+    let received = "";
+    const done = Promise.withResolvers<void>();
+    const socket = await Bun.connect({
+      unix: socketPath,
+      socket: {
+        data(_s, chunk) { received += Buffer.from(chunk).toString("utf8"); },
+        close() { done.resolve(); },
+        error() {},
+      },
+    });
+    socket.write(JSON.stringify({ kind: "action", addon, verb }) + "\n");
+    await done.promise;
+    return { reply: JSON.parse(received), ran };
+  } finally {
+    await new Promise<void>((resolve) => server.close(() => resolve()));
+  }
+}
+
+test("System Tweaks is lockable", () => {
+  expect(LOCKABLE_ADDONS).toContain("system-tweaks");
+});
+
+test("a locked addon's protections are refused, and its other verbs still run", async () => {
+  const file = locks(["system-tweaks"]);
+  expect(await ask(file, "system-tweaks", "set-file-manager-guard")).toEqual({
+    reply: { ok: false, error: "root has locked system-tweaks; run clp-addons unlock system-tweaks on the server" },
+    ran: false,
+  });
+  expect((await ask(file, "system-tweaks", "state")).ran).toBe(true);
+  expect((await ask(file, "system-tweaks", "set-updates")).ran).toBe(true);
+});
+
+test("an unlocked addon's protections run", async () => {
+  expect((await ask(locks([]), "system-tweaks", "set-file-manager-guard")).ran).toBe(true);
+  expect((await ask(`${dir}/missing.json`, "system-tweaks", "set-file-manager-guard")).ran).toBe(true);
+});
+
+test("a lock file others can write counts as locking everything", async () => {
+  const file = locks([], 0o666);
+  expect(() => lockedAddons(file, uid)).toThrow("not a trusted regular file");
+  expect(addonLocked("system-tweaks", file, uid)).toBe(true);
+  expect((await ask(file, "system-tweaks", "set-file-manager-guard")).ran).toBe(false);
+});
+
+test("a lock file root does not own counts as locking everything", () => {
+  expect(addonLocked("system-tweaks", locks([]), uid + 1)).toBe(true);
+});

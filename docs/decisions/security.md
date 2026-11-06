@@ -37,6 +37,22 @@ array. A root-only verb is declared with the reason the web may not reach it. Ea
 arguments again before deriving paths, locking, or changing the host. Unknown
 addons, verbs, free-form paths, and malformed action replies are rejected.
 
+### Root locks
+
+An administrator can switch a protection off from the web, so a stolen
+administrator session could switch them all off. `clp-addons lock <addon>`
+withdraws that: the gateway refuses the verbs the addon declares `lock` while
+it is locked, and the manager refuses to disable the addon. Only root changes
+the lock, from a shell; neither command is a gateway verb. A root shell is not
+held to it either, since it can unlock anyway. System Tweaks declares its
+Settings, Failed logins and Database switches; updates, backups, memory,
+unblocking and the firewall stay with administrators.
+
+The locks are `/etc/clp-addons/locks.json`, mode `0644` so the manager can show
+them. A file that is not root's alone, or not a regular file, locks every
+lockable addon rather than none. The page leaves a locked switch read-only and
+names the command.
+
 The gateway's streaming mode is restricted to the verbs declared `stream`: it starts one worker, pipes its output without
 interpreting addon data, and stops the worker when the manager socket closes.
 Session re-authorization remains in the manager that owns the stream.

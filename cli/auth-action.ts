@@ -24,6 +24,7 @@ import {
   DUPLEX_WORKER_MARKER,
 } from "../lib/gateway-protocol";
 import { getLivePanelInfo } from "../lib/panel-snapshot";
+import { addonLocked } from "../lib/root-locks";
 
 export const MAX_AUTH_INPUT_BYTES = MAX_SESSION_ID_LENGTH + 1;
 export const MAX_AUTH_REPLY_BYTES = 32 * 1024;
@@ -53,6 +54,8 @@ export interface AuthActionOptions {
   sessionRecheckMs?: number;
   /** Test-only; production looks again a second after a failed recheck. */
   sessionConfirmMs?: number;
+  /** Test-only; production reads ROOT_LOCKS_FILE, owned by root. */
+  locks?: { file: string; rootUid: number };
 }
 
 const SOL_SOCKET = 1;
@@ -504,6 +507,11 @@ export function createAuthActionServer(options: AuthActionOptions = {}): net.Ser
           const declared = webVerb(request.addon, request.verb);
           if (!declared || declared.stream === "duplex") {
             socket.end(JSON.stringify({ ok: false, error: "invalid verb" }) + "\n");
+            return;
+          }
+
+          if ("lock" in declared && declared.lock && addonLocked(request.addon, options.locks?.file, options.locks?.rootUid)) {
+            socket.end(JSON.stringify({ ok: false, error: `root has locked ${request.addon}; run clp-addons unlock ${request.addon} on the server` }) + "\n");
             return;
           }
 

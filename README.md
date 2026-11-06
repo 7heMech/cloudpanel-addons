@@ -58,6 +58,7 @@ security keys under Account → Security, in the roles an administrator allows.
 | `clp-addons update` | Install the latest verified release. |
 | `clp-addons repair` | Restore managed services and CloudPanel integration. |
 | `clp-addons maintenance <domain> [on\|off\|status]` | Control or inspect maintenance mode for a site. |
+| `clp-addons lock <addon>` | Keep an addon's protections from being switched off in the panel; `unlock` reverses it. |
 | `clp-addons uninstall <addon> --yes` | Remove an addon and keep its data. |
 
 Addon names are `cloudflare-ips`, `dns`, `instatic`, `stager`, `maintenance`,

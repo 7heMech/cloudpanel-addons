@@ -1,5 +1,13 @@
 # System Tweaks
 
+## Locking the protections
+
+To keep the Settings, Failed logins and Database switches as they are, even
+against an administrator's account, run `clp-addons lock system-tweaks` as
+root. The page then shows them read-only and System Tweaks cannot be disabled
+from it. `clp-addons unlock system-tweaks` hands them back; `clp-addons lock`
+lists what is locked.
+
 ## Automatic updates
 
 1. Open **Addons → System Tweaks**. If `unattended-upgrades` is missing, choose
