@@ -15,6 +15,7 @@ export const DEFAULT_TELEMETRY_PATHS = {
   dropIn: "/etc/systemd/system/clp-agent.service.d/zz-clp-addons-telemetry.conf",
   unit: "clp-agent.service",
   systemctl: "systemctl",
+  systemdRun: "systemd-run",
 };
 
 export const TELEMETRY_DROP_IN = `# clp-addons System Tweaks: Block CloudPanel telemetry. Switching it off removes this file.
@@ -31,10 +32,18 @@ export interface TelemetryOptions {
 export interface TelemetryStatus {
   /** CloudPanel's clp-agent unit is installed. */
   agent: boolean;
-  /** systemd has loaded the drop-in, so the agent can reach only this server. */
+  /** systemd has loaded the drop-in and this kernel enforces it, so the agent can reach only this server. */
   blocked: boolean;
   problem: string;
 }
+
+/**
+ * systemd ignores IPAddressDeny= where the kernel or a container manager offers
+ * no cgroup BPF, so a unit with the same filter sends one UDP datagram to a
+ * documentation address: refused means the filter is enforced.
+ */
+const PROBE = ["--quiet", "--wait", "--collect", "--pipe", "-p", "IPAddressDeny=any", "-p", "IPAddressAllow=localhost",
+  "/bin/bash", "-c", "echo > /dev/udp/192.0.2.1/9"];
 
 function context(options: TelemetryOptions) {
   const paths = { ...DEFAULT_TELEMETRY_PATHS, ...options.paths };
@@ -63,7 +72,15 @@ export function telemetryStatus(options: TelemetryOptions = {}): TelemetryStatus
   const ctx = context(options);
   try {
     const { agent, loaded } = show(ctx);
-    return { agent, blocked: agent && loaded && dropInInPlace(ctx.paths.dropIn), problem: "" };
+    if (!agent || !loaded || !dropInInPlace(ctx.paths.dropIn)) return { agent, blocked: false, problem: "" };
+    const probe = ctx.run(ctx.paths.systemdRun, PROBE);
+    if (!probe.ok && probe.stderr.includes("Operation not permitted")) return { agent, blocked: true, problem: "" };
+    return {
+      agent, blocked: false,
+      problem: probe.ok
+        ? "systemd loaded the block, but this kernel or container does not enforce IP filters, so clp-agent can still send"
+        : `whether the block is enforced could not be checked: ${probe.stderr.trim() || "systemd-run failed"}`,
+    };
   } catch (error) {
     return { agent: false, blocked: false, problem: error instanceof Error ? error.message : String(error) };
   }

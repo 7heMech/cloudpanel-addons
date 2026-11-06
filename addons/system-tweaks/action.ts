@@ -778,7 +778,6 @@ export function withdrawSystemTweaks(options: SystemTweaksOptions = {}): void {
         releaseLoginJails(settings.fail2banBefore, options.loginJails);
         if (settings.fail2banBefore) writeSettings(paths, { ...readSettings(paths), fail2banBefore: null });
         reconcileDatabaseFile(false, options.database);
-        applyTelemetryBlock(false, options.telemetry);
         try {
           removeFileManagerGuard(options.fileManagerGuard);
           removeVhostGuard(options.vhostGuard);
@@ -812,6 +811,9 @@ export function withdrawSystemTweaks(options: SystemTweaksOptions = {}): void {
     restorePanelPhp(options.panelPhp);
     throw error;
   }
+  // Like the firewall below, it does not keep the addon on or the protections in place.
+  try { applyTelemetryBlock(false, options.telemetry); }
+  catch (error) { log.warn(`clp-agent is still blocked from the network: ${errorMessage(error)}; remove /etc/systemd/system/clp-agent.service.d/zz-clp-addons-telemetry.conf`); }
   // A firewall that cannot be put back does not keep the addon on: CloudPanel's
   // next change on its Firewall page rebuilds ufw without these rules anyway.
   try { syncFirewall("withdraw", options.firewall); }

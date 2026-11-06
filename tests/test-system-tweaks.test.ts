@@ -192,7 +192,7 @@ interface Box {
   valuesDb: string;
   varnish: { failDaemonReload: boolean };
   panelVhost: string;
-  agent: { installed: boolean; loaded: boolean; commands: string[] };
+  agent: { installed: boolean; loaded: boolean; enforced: boolean; commands: string[] };
   agentDropIn: string;
 }
 
@@ -403,9 +403,10 @@ function box(options: { installed?: boolean; timers?: Record<string, string>; fa
   };
   // systemd as two flags: whether clp-agent is installed and whether the drop-in is loaded.
   const agentDropIn = join(dir, "clp-agent.service.d", "zz-clp-addons-telemetry.conf");
-  const agent = { installed: true, loaded: false, commands: [] as string[] };
+  const agent = { installed: true, loaded: false, enforced: true, commands: [] as string[] };
   const agentRun = (command: string, args: string[]): CommandResult => {
     agent.commands.push(`${command} ${args.join(" ")}`);
+    if (command === "systemd-run") return agent.enforced ? { ok: false, stdout: "", stderr: "echo: write error: Operation not permitted" } : ok();
     if (args[0] === "daemon-reload") agent.loaded = existsSync(agentDropIn);
     if (args[0] !== "show") return ok();
     return ok([
@@ -1316,6 +1317,20 @@ test("a drop-in systemd has not loaded is reloaded, and a box without clp-agent 
   expect(existsSync(bare.agentDropIn)).toBe(true);
   expect(bare.agent.commands.some((command) => command.includes("try-restart"))).toBe(false);
   expect((await act(bare, ["state"])).telemetry).toEqual({ enabled: true, agent: false, blocked: false, problem: "" });
+});
+
+test("a loaded block the kernel does not enforce is not called blocked, and one that cannot be removed does not stop deactivation", async () => {
+  const b = box();
+  await act(b, ["set-telemetry"], { enabled: true });
+  b.agent.enforced = false;
+  const state = (await act(b, ["state"])).telemetry;
+  expect(state.blocked).toBe(false);
+  expect(state.problem).toContain("does not enforce IP filters");
+
+  b.agent.enforced = true;
+  b.options.telemetry!.run = (command, args) => args[0] === "daemon-reload" ? { ok: false, stdout: "", stderr: "Access denied" } : { ok: true, stdout: "", stderr: "" };
+  expect(() => withdrawSystemTweaks(b.options)).not.toThrow();
+  expect(b.pools.loaded).toBe(false);
 });
 
 test("the page shows telemetry as blocked, waiting for repair, sending, or without an agent", () => {

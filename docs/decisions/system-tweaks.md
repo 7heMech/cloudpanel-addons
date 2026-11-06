@@ -1052,10 +1052,14 @@ the agent, whose address filter is set when it starts. The kernel then drops
 everything the agent sends off the server, DNS included, while it keeps writing
 the graphs. The package ships its unit under `/lib`, so the drop-in survives
 CloudPanel updates. The daily send fails; the agent logs it and exits, systemd
-restarts it after 3 seconds, and it waits for the next day. The page reads
-`systemctl show` and calls it blocked only when systemd has loaded the drop-in.
-Repair writes it back and reloads systemd if it is missing or not loaded;
-switching off and addon deactivation remove it.
+restarts it after 3 seconds, and it waits for the next day. systemd ignores the
+filter where the kernel or a container manager offers no cgroup BPF, so the page
+calls it blocked only when `systemctl show` has the drop-in loaded and a
+transient unit with the same filter fails to send one UDP datagram to
+192.0.2.1. Repair writes it back and reloads systemd if it is missing or not
+loaded; switching off removes it. Deactivation removes it last and, like the
+firewall, only warns when it cannot, so it never holds the other protections in
+place.
 
 Masking the agent would stop the graphs. A hosts-file sinkhole does not last on
 a box whose cloud-init manages `/etc/hosts`, and removing the agent's line from
