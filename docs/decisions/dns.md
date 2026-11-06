@@ -435,11 +435,11 @@ lists them; Remove plans the deletion of those
 still unchanged and at no name a current site's profile writes, and deletes
 them after the same kind of review. It refuses while a site in that zone could
 not be read or planned safely. Keep forgets them. Neither touches the zone or Mailcow.
-When the connection that wrote them lists its zones without theirs, the zone
-was deleted (or left the token) and its records with it: a check or Remove
-forgets them and logs the zone as deleted. Cloudflare answers such a zone's
-reads with Authentication error, so only the listing tells it apart, and a
-connection that could not list its zones forgets nothing.
+When every connection, the one that wrote them among them, lists its zones
+and none lists theirs, the zone was deleted and its records with it: a check
+or Remove forgets them and logs the zone as deleted. Cloudflare answers such a
+zone's reads with Authentication error, so only the listing tells it apart.
+While any connection could not list its zones, nothing is forgotten.
 
 Assigning no profile, Ask first, deleting a profile, disabling and
 uninstalling all stop DNS writing and change nothing outside the server;

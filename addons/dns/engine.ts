@@ -1017,14 +1017,14 @@ export class DnsRun {
   }
 
   /**
-   * Whether the connection that wrote a site's records listed its zones and
-   * that zone was not among them. Cloudflare answers a deleted zone's reads
-   * with "Authentication error", so the listing is what tells it apart.
+   * Whether every connection, the one that wrote a site's records among them,
+   * listed its zones and none listed that zone. Cloudflare answers a deleted
+   * zone's reads with "Authentication error", so the listing tells it apart.
    */
   zoneGone(entry: Pick<ManagedRecords, "connectionId" | "zoneId">): boolean {
-    const connection = this.connections.find((candidate) => candidate.id === entry.connectionId);
-    return Boolean(connection?.active)
-      && !this.zoneRefs.some((ref) => ref.connectionId === entry.connectionId && ref.zone.id === entry.zoneId);
+    return this.connections.some((connection) => connection.id === entry.connectionId)
+      && this.connections.every((connection) => connection.active)
+      && !this.zoneRefs.some((ref) => ref.zone.id === entry.zoneId);
   }
 
   logZoneGone(domain: string, entry: ManagedRecords): void {

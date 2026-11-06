@@ -978,6 +978,17 @@ describe("sites CloudPanel no longer has", () => {
     expect((await env.act("list")).orphans.map((orphan) => orphan.domain)).toEqual(["shop.example.com"]);
   });
 
+  test("a zone another connection still lists keeps its records tracked", async () => {
+    const env = setup();
+    await env.connect();
+    await env.act("assign", { domains: ["shop.example.com"], profileId: "web" });
+    await env.automatic();
+    await env.connect(SECOND_TOKEN);
+    env.cf.tokens.get(TOKEN)!.accounts = [];
+    env.sites.splice(env.sites.findIndex((entry) => entry.domain === "shop.example.com"), 1);
+    expect((await env.act("check")).orphans.map((orphan) => orphan.domain)).toEqual(["shop.example.com"]);
+  });
+
   test("Keep forgets them and changes nothing in Cloudflare", async () => {
     const env = setup();
     await env.connect();
