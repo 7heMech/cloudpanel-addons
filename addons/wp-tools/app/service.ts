@@ -1,7 +1,9 @@
 import { callGatewayAction, type ActionResult, type GatewayStream } from "../../../lib/gateway-client";
 import type { WebVerb } from "../../../lib/gateway-protocol";
 import { watchGatewayJob, type JobWatcher } from "../../../lib/job-stream";
-import type { WpLoginResult, WpMaintenanceReply, WpBasicAuthReply, WpRemoveResult, WpSiteView } from "../action";
+import type {
+  WpLoginResult, WpMaintenanceReply, WpBasicAuthReply, WpRemoveResult, WpSiteView, NewSiteStatus,
+} from "../action";
 import type { WpJobs, WpJobTask, WpJobView } from "../jobs";
 import { validateDomain } from "../../../lib/app-http";
 import type { MainwpView } from "../mainwp";
@@ -9,7 +11,6 @@ import type { WpVarnishState } from "../varnish";
 import type { WpDomainLink } from "../domain-link";
 import { UPLOAD_PART_BYTES, type StagedUpload } from "../new-site-plugins";
 import type { WpNewSiteAccess } from "../new-site-access";
-import type { NewSiteStatus } from "../action";
 
 export { validateDomain };
 export { validateJobId } from "../../../lib/job-id";

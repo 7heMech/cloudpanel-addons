@@ -4,18 +4,8 @@
 import { AsyncLocalStorage } from "node:async_hooks";
 import { existsSync } from "node:fs";
 import {
-  callerMay,
-  webVerb,
-  GATEWAY_SOCKET_PATH,
-  DEFAULT_CLI_BIN,
-  DEFAULT_GATEWAY_TIMEOUT_MS,
-  MAX_GATEWAY_INPUT_BYTES,
-  type ActionResult,
-  type GatewayAddon,
-  type GatewayRequest,
-  type PanelSnapshot,
-  type StreamVerb,
-  type WebVerb,
+  callerMay, webVerb, GATEWAY_SOCKET_PATH, DEFAULT_CLI_BIN, DEFAULT_GATEWAY_TIMEOUT_MS, type ActionResult,
+  type GatewayAddon, type GatewayRequest, type PanelSnapshot, type StreamVerb, type WebVerb,
 } from "./gateway-protocol";
 
 export type { ActionResult } from "./gateway-protocol";

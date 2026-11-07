@@ -1,10 +1,8 @@
 // `clp-addons repair`.
 
-import { installedAddons, resolveAddon, migrateOldAddonNames } from "./addons";
-import {
-  reconcileAnchors, reconcileBackupCommand, reconcileMaintenanceNginx, reconcileMotd, reconcileNginx,
-  reconcilePhpMyAdminRules,
-} from "./reconcile";
+import { enabledAddons } from "../addons/catalog";
+import { resolveAddon, migrateOldAddonNames } from "./addons";
+import { reconcileAnchors, reconcileNginx, reconcilePanelBlocks, runAnchorWork } from "./reconcile";
 import { reconcilePhpGuard } from "../lib/php-guard";
 import { runAddonRepairs, runManagerRepair } from "./addon-hooks";
 import { withOperationLock } from "./operation-lock";
@@ -19,6 +17,8 @@ import { unitActive } from "../lib/systemd";
 import { fatal, log, requireRoot } from "../lib/log";
 import { parseFlags } from "./flags";
 import { existsSync } from "node:fs";
+const PANEL_BLOCKS_NOT_READY = "a change to CloudPanel's Nginx settings is not ready; fix the problem above, then run repair again";
+
 /**
  * Reconciles manager provisioning and enabled addon state, or only injected
  * CloudPanel anchors, the Nginx proxy and System Tweaks' phpMyAdmin rules,
@@ -48,11 +48,9 @@ async function applyRepair(positional: string[], flags: Record<string, string | 
     // unreachable in between. Both reconcilers no-op when nothing drifted, so
     // this stays cheap enough to run on every template write during an upgrade.
     reconcileAnchors(quiet);
-    if (!reconcileMaintenanceNginx(quiet)) log.err("Nginx maintenance check is not ready; fix the problem above, then run repair again");
+    if (!reconcilePanelBlocks(quiet)) log.err(PANEL_BLOCKS_NOT_READY);
     if (!reconcileNginx(quiet)) log.err("Nginx proxy is not ready; run repair after checking the master vhost");
-    reconcilePhpMyAdminRules(quiet);
-    reconcileBackupCommand(quiet);
-    reconcileMotd(quiet);
+    await runAnchorWork(quiet);
     return;
   }
   try {
@@ -62,8 +60,8 @@ async function applyRepair(positional: string[], flags: Record<string, string | 
     // Upkeep of everything else does not wait on the move; the next repair tries it again.
     log.warn(`renamed addons were not moved yet: ${error instanceof Error ? error.message : String(error)}`);
   }
-  const specs = positional[0] ? [resolveAddon(positional[0])] : installedAddons();
-  const all = installedAddons();
+  const specs = positional[0] ? [resolveAddon(positional[0])] : enabledAddons();
+  const all = enabledAddons();
   // An installation with every addon disabled still needs its timer, its Nginx
   // proxy and the panel's Addons entry reconciled -- that is the state the page
   // offering them back is served from. Only a box with no manager at all has
@@ -98,7 +96,7 @@ async function applyRepair(positional: string[], flags: Record<string, string | 
     if (all.some((spec) => spec.firewall)) ensurePathWatching(FIREWALL_PATH, quiet);
   }
   reconcileAnchors(quiet);
-  if (!reconcileMaintenanceNginx(quiet)) log.err("Nginx maintenance check is not ready; fix the problem above, then run repair again");
+  if (!reconcilePanelBlocks(quiet)) log.err(PANEL_BLOCKS_NOT_READY);
   if (!reconcileNginx(quiet)) log.err("Nginx proxy is not ready; run repair after checking the master vhost");
   reconcilePhpGuard(true, quiet);
   // Runs after the master-vhost reconciliation above, not before: recovering

@@ -87,7 +87,7 @@ mock.module("./lib/command.ts", () => ({
   },
 }));
 
-// The real installUnits, applyToggleUnits, writeConfig, installedConfig and
+// The real installUnits, applyToggleUnits, writeConfig, addonEnabled and
 // platformProvisioned are under test. Everything replaced below either needs
 // root or reaches outside the fixture; each records that it was reached, which
 // is most of what these tests assert.
@@ -110,6 +110,8 @@ mock.module("./cli/provision.ts", () => ({
   unitActive: () => "active",
   unitPid: () => null,
 }));
+const __maintenanceNginx0 = await import("./addons/maintenance/nginx.ts");
+mock.module("./addons/maintenance/nginx.ts", () => ({ ...__maintenanceNginx0, reconcileNginxMaintenance: () => { inject.push("maintenance"); return { state: "ok", changed: false }; } }));
 mock.module("./cli/inject.ts", () => ({
   KNOWN_GOOD_PANEL_VERSIONS: [],
   inspect: () => ({ state: "ok" }),
@@ -119,7 +121,6 @@ mock.module("./cli/inject.ts", () => ({
   panelVersion: () => "test",
   purgeTwigCache: record(inject, "purgeTwigCache"),
   reconcile: (injections) => { inject.push("reconcile:" + injections.length); return { statuses: [], changed: false }; },
-  reconcileNginxMaintenance: () => { inject.push("maintenance"); return { state: "ok", changed: false }; },
   reconcileNginxProxy: () => { inject.push("proxy"); return { state: "ok", changed: false }; },
   findMasterVhost: () => null,
   panelVhostWatchPath: () => null,

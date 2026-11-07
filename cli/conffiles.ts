@@ -4,6 +4,7 @@
 // run, `clp-addons apt-hook pre` gives each edited file its package text back
 // when that package has an upgrade waiting, and `apt-hook post` lets repair put
 // the edits back on whatever the upgrade installed.
+import type { ConffileEdit } from "../lib/addon-definition";
 import { lstatSync, readFileSync, rmSync } from "node:fs";
 import { dirname } from "node:path";
 import { writeFileAtomic } from "../lib/atomic-write";
@@ -16,13 +17,6 @@ const STALE_MS = 6 * 60 * 60 * 1000;
 const UPGRADE_SERVICE = "apt-daily-upgrade.service";
 const COMMAND_MS = 30_000;
 
-export interface ConffileEdit {
-  path: string;
-  /** Text only this project's edit leaves in the file. */
-  marker: string;
-  /** Restores the package text without a reload; whether it wrote anything. */
-  release: () => boolean;
-}
 
 type Run = (command: string, args: string[]) => CommandResult;
 

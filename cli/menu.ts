@@ -3,8 +3,7 @@
 // through the same enable and disable the Addons page runs.
 
 import { dashboardUrl } from "./addons";
-import { ADDONS, ADDON_NAMES } from "../addons/catalog";
-import { installedConfig } from "./provision";
+import { ADDONS, ADDON_NAMES, addonEnabled } from "../addons/catalog";
 import { unitActive } from "../lib/systemd";
 import { MANAGER_UNIT } from "../lib/paths";
 import { CLI_VERSION } from "../lib/version";
@@ -27,7 +26,7 @@ interface MenuState {
 }
 
 function readEnabled(): Set<string> {
-  return new Set(ADDON_NAMES.filter((name) => installedConfig(ADDONS[name]!)));
+  return new Set(ADDON_NAMES.filter((name) => addonEnabled(ADDONS[name]!)));
 }
 
 /** A checkbox per addon, with its description or, once changed, what will happen to it. */

@@ -14,7 +14,7 @@ import {
   rmSync, statSync, chmodSync, writeSync, constants as fsConstants,
 } from "node:fs";
 import { join } from "node:path";
-import { CLI_BIN } from "../../lib/paths";
+import { CLI_BIN, PANEL_IDENTITY_PATH } from "../../lib/paths";
 import { writeFileAtomic } from "../../lib/atomic-write";
 import { secretEquals } from "../../lib/secret-equals";
 import {
@@ -28,7 +28,6 @@ import { readable } from "../../lib/files";
 import { runCommand } from "../../lib/command";
 import { validateDomain } from "../../lib/panel-identity";
 import { validateJob } from "../../lib/validate";
-import { PANEL_IDENTITY_PATH } from "../../lib/paths";
 import { GIT_VERBS } from "./verbs";
 
 const JOB_RETENTION_DAYS = 14;

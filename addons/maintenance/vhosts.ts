@@ -4,8 +4,8 @@ import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import { normalizeIdentityHostname } from "../../lib/panel-identity";
 import { trustedVhost, type NginxChange } from "../../lib/nginx-transaction";
+import { MAINTENANCE_INCLUDE_PATH } from "../../lib/paths";
 
-export const MAINTENANCE_INCLUDE_PATH = "/etc/nginx/clp-addons-maintenance.conf";
 const START = "# clp-addons:maintenance-include:start";
 const END = "# clp-addons:maintenance-include:end";
 const BLOCK = /\r?\n[ \t]*# clp-addons:maintenance-include:start\r?\n[ \t]*include [^\r\n]+;\r?\n[ \t]*# clp-addons:maintenance-include:end[ \t]*\r?\n/g;

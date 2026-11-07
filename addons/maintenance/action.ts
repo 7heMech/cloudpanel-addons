@@ -1,18 +1,17 @@
 import { writeFileAtomic } from "../../lib/atomic-write";
 import { MAINTENANCE_VERBS } from "./verbs";
 import { Database } from "bun:sqlite";
-import { withPanelDb, withoutStandIns } from "../../lib/panel-db";
+import { withPanelDb, withoutStandIns, deletedSites } from "../../lib/panel-db";
 import { isIP } from "node:net";
 import {
   chmodSync, existsSync, lstatSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, renameSync, rmSync, statSync,
 } from "node:fs";
 import { join } from "node:path";
 import { ActionFailure, replyToAction, failAction } from "../../lib/action";
-import { deletedSites } from "../../lib/panel-db";
 import { normalizeIdentityHostname, validateDomain } from "../../lib/panel-identity";
 import { withFileLock } from "../../lib/file-lock";
-import { MAINTENANCE_INCLUDE_PATH, maintenanceGap, maintenanceGaps } from "./vhosts";
-import { DISTRO_NGINX_SITES_DIR, NGINX_GLOBAL_SETTINGS, PANEL_IDENTITY_PATH } from "../../lib/paths";
+import { MAINTENANCE_INCLUDE_PATH, DISTRO_NGINX_SITES_DIR, NGINX_GLOBAL_SETTINGS, PANEL_IDENTITY_PATH } from "../../lib/paths";
+import { maintenanceGap, maintenanceGaps } from "./vhosts";
 import DEFAULT_TEMPLATE from "./default.html" with { type: "text" };
 
 const DEFAULT_MAINTENANCE_PAGE = DEFAULT_TEMPLATE as unknown as string;

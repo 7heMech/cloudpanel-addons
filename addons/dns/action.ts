@@ -17,7 +17,6 @@ import { ActionFailure, replyToAction, failAction, readJsonRequest } from "../..
 import { errorMessage } from "../../lib/errors";
 import { nameSlug, oneLine } from "../../lib/validate";
 import { withFileLock } from "../../lib/file-lock";
-import { queueAddonPass } from "../../lib/job-store";
 import { CONFIG_DIR, PANEL_DB, STATE_DIR } from "../../lib/paths";
 import { DEFAULT_SITE_VHOST_PATHS } from "../../lib/site-vhost";
 import { PANEL_USER_NAME_RE, panelUserOwnsSite } from "../../lib/panel-users";

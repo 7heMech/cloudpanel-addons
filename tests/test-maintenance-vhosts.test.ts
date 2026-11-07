@@ -5,11 +5,13 @@ import {
 } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { inspectNginxMaintenance, NGINX_MAINTENANCE_BLOCK, reconcileNginxMaintenance } from "../cli/inject";
-import { MAINTENANCE_INCLUDE_PATH, transformMaintenanceVhost } from "../addons/maintenance/vhosts";
+import {
+  inspectNginxMaintenance, NGINX_MAINTENANCE_BLOCK, reconcileNginxMaintenance,
+} from "../addons/maintenance/nginx";
+import { MAINTENANCE_INCLUDE_PATH, PANEL_DB } from "../lib/paths";
+import { transformMaintenanceVhost } from "../addons/maintenance/vhosts";
 import { trustedVhost } from "../lib/nginx-transaction";
 import { reconcileUnits } from "../cli/provision";
-import { PANEL_DB } from "../lib/paths";
 import type { CommandResult } from "../lib/command";
 
 const domain = "example.test";

@@ -1,6 +1,7 @@
 // `clp-addons install`.
 
-import { dashboardUrl, installedAddons, migrateOldAddonNames, resolveAddon } from "./addons";
+import { dashboardUrl, migrateOldAddonNames, resolveAddon } from "./addons";
+import { enabledAddons } from "../addons/catalog";
 import { artifactNames, installArtifacts, installedTag } from "./artifacts";
 import { bootstrapProvision, applyEnable } from "./toggle";
 import { type AddonSpec } from "../lib/addon-definition";
@@ -31,7 +32,7 @@ export async function cmdInstall(argv: string[]): Promise<void> {
     applyLocal(specs.shift(), local);
     for (const spec of specs) await applyEnable(spec.name);
     log.plain();
-    if (!installedAddons().some((spec) => spec.name === "system-tweaks")) {
+    if (!enabledAddons().some((spec) => spec.name === "system-tweaks")) {
       log.plain("System Tweaks is recommended: it applies the security fixes. Enable it on the Addons page or with: clp-addons enable system-tweaks");
     }
     log.plain(`Dashboard URL: ${dashboardUrl()}`);
@@ -40,7 +41,7 @@ export async function cmdInstall(argv: string[]): Promise<void> {
 
 function applyLocal(spec: AddonSpec | undefined, dir: string): void {
   if (spec) ensureRequiredUnits(spec);
-  const specs = [...installedAddons().filter((item) => item.name !== spec?.name), ...(spec ? [spec] : [])];
+  const specs = [...enabledAddons().filter((item) => item.name !== spec?.name), ...(spec ? [spec] : [])];
   const artifacts = loadLocal(dir, artifactNames());
   ensureServiceUser();
   ensureDirs(specs, true);

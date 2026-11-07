@@ -10,7 +10,8 @@
  * no state to keep -- and giving them addon definitions would only make the
  * catalog describe things that cannot be toggled.
  */
-import { CONFIG_DIR, STATE_DIR, TEMPLATES_DIR } from "../lib/paths";
+import { existsSync } from "node:fs";
+import { TEMPLATES_DIR, addonConfigFile, addonStateDir } from "../lib/paths";
 import type { AddonDefinition, AddonHandler, AddonNews, AddonSpec } from "../lib/addon-definition";
 import { compareSemver } from "../lib/semver";
 import { CLOUDFLARE_IPS_ADDON } from "./cloudflare-ips/addon";
@@ -50,8 +51,8 @@ const DEFINITIONS: AddonDefinition[] = [
 function specOf(definition: AddonDefinition): AddonSpec {
   return {
     ...definition,
-    configFile: `${CONFIG_DIR}/${definition.name}.conf`,
-    stateDir: `${STATE_DIR}/${definition.name}`,
+    configFile: addonConfigFile(definition.name),
+    stateDir: addonStateDir(definition.name),
   };
 }
 
@@ -60,6 +61,16 @@ export const ADDONS: Record<string, AddonSpec> = Object.fromEntries(
 );
 
 export const ADDON_NAMES: string[] = DEFINITIONS.map((definition) => definition.name);
+
+/** An addon is enabled while its config file exists. */
+export function addonEnabled(spec: AddonSpec): boolean {
+  return existsSync(spec.configFile);
+}
+
+/** The enabled addons, in catalog order. */
+export function enabledAddons(): AddonSpec[] {
+  return Object.values(ADDONS).filter(addonEnabled);
+}
 
 /** Every notice the addon declared after `since` and no later than `version`, read or not. */
 export function addonNoticeKeys(name: string, version: string, since: string): string[] {

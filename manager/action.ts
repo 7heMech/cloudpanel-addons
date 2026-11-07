@@ -31,7 +31,7 @@ import {
   type PruneJobsResult,
 } from "../lib/job-store";
 import { CLI_BIN, LOCK_DIR, STATE_DIR } from "../lib/paths";
-import { ADDONS, ADDON_NAMES, addonNews, addonNoticeKeys } from "../addons/catalog";
+import { ADDONS, ADDON_NAMES, addonNews, addonNoticeKeys, addonEnabled } from "../addons/catalog";
 import { CLI_VERSION } from "../lib/version";
 import { type OnProgress } from "../cli/release";
 import { Fatal, log, requireRoot } from "../lib/log";
@@ -261,7 +261,7 @@ export function pruneManagerJobs(jobsDir = MANAGER_JOBS_DIR): PruneJobsResult {
 }
 
 function enabled(name: string): boolean {
-  return existsSync(ADDONS[name]!.configFile);
+  return addonEnabled(ADDONS[name]!);
 }
 
 /**

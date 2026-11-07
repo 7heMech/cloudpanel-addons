@@ -2,17 +2,15 @@
 // install or a first enable needs. A toggle is not an install: it applies a
 // delta and keeps the addon's state.
 
-import { installedAddons, resolveAddon } from "./addons";
-import { reconcileAnchors, reconcileMaintenanceNginx, reconcileNginx } from "./reconcile";
-import { requireMainwpSettled } from "../addons/wp-tools/mainwp";
-import { withFileLockSync } from "../lib/file-lock";
+import { enabledAddons, addonEnabled } from "../addons/catalog";
+import { resolveAddon } from "./addons";
+import { reconcileAnchors, reconcileNginx, reconcilePanelBlocks } from "./reconcile";
 import { reconcilePhpGuard, settlePhpGuard } from "../lib/php-guard";
-import { removeMainwpGuards, removeWpLogin, DEFAULT_WP_TOOLS_PATHS } from "../addons/wp-tools/action";
 import { type AddonSpec } from "../lib/addon-definition";
 import { withOperationLock, withOperationLockSync } from "./operation-lock";
 import {
   applyToggleUnits, ensureAuthHelperReady, ensureDirs, ensureRequiredUnits, ensureServiceUser, installUnits,
-  installedConfig, platformProvisioned, reconcilePanelIdentity, removeLegacyUnits, startUnits, writeConfig,
+  platformProvisioned, reconcilePanelIdentity, removeLegacyUnits, startUnits, writeConfig,
 } from "./provision";
 import { fatal, log, requireRoot } from "../lib/log";
 import { rmSync } from "node:fs";
@@ -37,7 +35,7 @@ export function bootstrapProvision(specs: AddonSpec[]): void {
   removeLegacyUnits(true);
   ensureDirs(specs);
   if (!reconcileAnchors(false)) fatal("could not safely patch the required CloudPanel templates");
-  if (!reconcileMaintenanceNginx(false)) fatal("could not safely inject the Nginx maintenance check");
+  if (!reconcilePanelBlocks(false)) fatal("could not safely change CloudPanel's Nginx settings");
   if (!reconcileNginx(false)) fatal("could not safely inject the CloudPanel Nginx proxy");
   reconcilePhpGuard(true);
   startUnits();
@@ -59,7 +57,7 @@ export async function applyEnable(name: string): Promise<void> {
 
 async function enableAddon(spec: AddonSpec): Promise<void> {
   ensureRequiredUnits(spec);
-  const before = installedAddons().filter((item) => item.name !== spec.name);
+  const before = enabledAddons().filter((item) => item.name !== spec.name);
   const specs = [...before, spec];
 
   if (!platformProvisioned()) {
@@ -82,43 +80,10 @@ async function enableAddon(spec: AddonSpec): Promise<void> {
   if (spec.targets.length > 0 && !reconcileAnchors(false)) {
     fatal("could not safely patch the required CloudPanel templates");
   }
-  if (spec.name === "maintenance" && !reconcileMaintenanceNginx(false, true)) {
-    fatal("could not safely inject the Nginx maintenance check");
-  }
+  if (spec.panelBlock && !spec.panelBlock.reconcile(true, false)) fatal("could not safely change CloudPanel's Nginx settings");
   applyToggleUnits(changes);
   spec.activate?.();
   log.ok(`${spec.name} enabled`);
-}
-
-/**
- * The WordPress sign-in helper is a file in somebody else's site, not state in
- * this addon's own directory, so withdrawing the addon has to take it back out.
- * A failure warns rather than stops: an addon that cannot be removed because
- * one site's files moved would be worse than a helper left behind and named.
- */
-/**
- * Takes the sign-in helper and the MainWP guard out of every site, then removes the addon's config
- * under the same lock. A sign-in waiting on that lock then finds the addon gone
- * rather than putting a helper back into a site it has just left.
- */
-export function withdrawWpTools(removeConfig: () => void): void {
-  withFileLockSync(DEFAULT_WP_TOOLS_PATHS.lockFile, 30, "a WordPress sign-in is still running", () => {
-    try {
-      const { removed, failed } = removeWpLogin();
-      if (removed > 0) log.ok(`sign-in helper removed from ${removed} site${removed === 1 ? "" : "s"}`);
-      if (failed.length > 0) log.warn(`the sign-in helper is still in ${failed.join("; ")}`);
-    } catch (error) {
-      log.warn(`the sign-in helper could not be removed from every site: ${error instanceof Error ? error.message : String(error)}`);
-    }
-    try {
-      const { removed, failed } = removeMainwpGuards();
-      if (removed > 0) log.ok(`MainWP guard removed from ${removed} site${removed === 1 ? "" : "s"}`);
-      if (failed.length > 0) log.warn(`the MainWP guard is still in ${failed.join("; ")}`);
-    } catch (error) {
-      log.warn(`the MainWP guard could not be removed from every site: ${error instanceof Error ? error.message : String(error)}`);
-    }
-    removeConfig();
-  });
 }
 
 /**
@@ -132,28 +97,20 @@ export function applyDisable(name: string): void {
   requireRoot("disable");
   const spec = resolveAddon(name);
   withOperationLockSync(`disable ${spec.name}`, () => {
-    if (!installedConfig(spec)) return log.ok(`${spec.name} is already disabled`);
+    if (!addonEnabled(spec)) return log.ok(`${spec.name} is already disabled`);
     disableAddon(spec);
   });
 }
 
 function disableAddon(spec: AddonSpec): void {
-  if (spec.name !== "wp-tools") return disableAddonContents(spec);
-  withFileLockSync(DEFAULT_WP_TOOLS_PATHS.mainwpLockFile, 15, "a MainWP change is still running", () => {
-    requireMainwpSettled(DEFAULT_WP_TOOLS_PATHS.mainwpState);
-    withFileLockSync(DEFAULT_WP_TOOLS_PATHS.varnishLockFile, 15, "a WordPress Varnish change is still running", () => disableAddonContents(spec));
-  });
-}
-
-function disableAddonContents(spec: AddonSpec): void {
-  const remaining = installedAddons().filter((item) => item.name !== spec.name);
+  const remaining = enabledAddons().filter((item) => item.name !== spec.name);
 
   spec.deactivate?.();
   const removeConfig = () => {
     rmSync(spec.configFile, { force: true });
     rmSync(`${spec.configFile}.new`, { force: true });
   };
-  if (spec.name === "wp-tools") withdrawWpTools(removeConfig);
+  if (spec.withdraw) spec.withdraw(removeConfig);
   else removeConfig();
   try {
     spec.withdrawn?.();
@@ -175,9 +132,7 @@ function disableAddonContents(spec: AddonSpec): void {
   // argument. The Twig cache is purged by the reconciler when the markup
   // actually changes; disable used to purge it a second time unconditionally.
   if (spec.targets.length > 0) reconcileAnchors(false);
-  if (spec.name === "maintenance" && !reconcileMaintenanceNginx(false, false)) {
-    fatal("could not safely update the Nginx maintenance check");
-  }
+  if (spec.panelBlock && !spec.panelBlock.reconcile(false, false)) fatal("could not safely change CloudPanel's Nginx settings");
   ensureDirs(remaining);
   // Nothing of ours may act on a site once no addon is enabled.
   if (remaining.length === 0) reconcilePanelIdentity(true, remaining);

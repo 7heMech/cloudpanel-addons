@@ -5,6 +5,7 @@ import {
 } from "./action";
 import { queueAddonPass } from "../../lib/job-store";
 import { WP_TOOLS_TARGETS } from "./inject/targets";
+import { withdrawWpTools } from "./withdraw";
 import type { AddonDefinition } from "../../lib/addon-definition";
 import { log } from "../../lib/log";
 
@@ -29,6 +30,7 @@ export const WP_TOOLS_ADDON: AddonDefinition = {
   targets: WP_TOOLS_TARGETS,
   handler: handle,
   action: runWpToolsAction,
+  withdraw: withdrawWpTools,
   // The sign-in and site-kind from CloudPanel's site pages, held to the
   // caller's own sites, and plugins chosen on its New WordPress Site form by
   // an administrator or a site manager. The session route hands out the CSRF

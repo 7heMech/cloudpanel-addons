@@ -3,19 +3,16 @@
 // repair, uninstall and the manager's own reconcile verb all come through here.
 
 import {
-  purgeTwigCache as purgeInjectCache, type Injection, KNOWN_GOOD_PANEL_VERSIONS, type TargetStatus,
-  panelVersion, reconcile, reconcileNginxMaintenance, reconcileNginxProxy,
+  purgeTwigCache as purgeInjectCache, type Injection, KNOWN_GOOD_PANEL_VERSIONS, type TargetStatus, panelVersion,
+  reconcile, reconcileNginxProxy,
 } from "./inject";
-import { ensureMaintenanceData } from "../addons/maintenance/action";
-import {
-  systemTweaksBackupCompression, systemTweaksMotd, systemTweaksPhpMyAdmin,
-} from "../addons/system-tweaks/action";
 import { TEMPLATES } from "../lib/panel-anchors";
 import { adminHeaderTarget, headerTarget, siteLayoutTarget } from "../lib/panel-nav";
-import { ADDONS, ADDON_NAMES } from "../addons/catalog";
+import { ADDONS, ADDON_NAMES, addonEnabled, enabledAddons } from "../addons/catalog";
+import type { AddonSpec } from "../lib/addon-definition";
+import { errorMessage } from "../lib/errors";
 import { mountPath } from "../lib/paths";
 import { log } from "../lib/log";
-import { existsSync } from "node:fs";
 /**
  * `managerNav` is whether the panel keeps its "Addons" entry.
  *
@@ -28,7 +25,7 @@ import { existsSync } from "node:fs";
  */
 export function installedInjections(exclude?: string, managerNav = true): Injection[] {
   const injections: Injection[] = [];
-  const installed = ADDON_NAMES.filter((name) => name !== exclude && existsSync(ADDONS[name]!.configFile));
+  const installed = ADDON_NAMES.filter((name) => name !== exclude && addonEnabled(ADDONS[name]!));
 
   // Kept outside the addon target lists so installing a second addon cannot
   // emit a second style/script block or replace the first one's marker.
@@ -111,46 +108,28 @@ export function reconcileNginx(quiet: boolean, enabled = true): boolean {
   return false;
 }
 
-export function reconcileMaintenanceNginx(quiet: boolean, enabled = existsSync(ADDONS.maintenance!.configFile)): boolean {
-  if (enabled) ensureMaintenanceData(ADDONS.maintenance!.stateDir);
-  const result = reconcileNginxMaintenance({ enabled });
-  if (result.state === "ok" || (!enabled && result.state === "missing")) {
-    if (result.changed && !quiet) log.ok(enabled ? "Nginx maintenance check injected and verified" : "Nginx maintenance check removed and verified");
-    return true;
+/**
+ * Every addon's marked block in a file CloudPanel owns, in while the addon is
+ * enabled and out while it is not. False when one could not be put right.
+ */
+export function reconcilePanelBlocks(quiet: boolean, enabled: (spec: AddonSpec) => boolean = addonEnabled): boolean {
+  let ok = true;
+  for (const spec of Object.values(ADDONS)) {
+    if (spec.panelBlock && !spec.panelBlock.reconcile(enabled(spec), quiet)) ok = false;
   }
-  log.err(`Nginx maintenance check: ${result.detail ?? result.state}`);
-  return false;
+  return ok;
 }
 
-/** System Tweaks' phpMyAdmin rules, for the fast repair that runs when CloudPanel rewrites its vhost. */
-export function reconcilePhpMyAdminRules(quiet: boolean): void {
-  if (!existsSync(ADDONS["system-tweaks"]!.configFile)) return;
-  try {
-    const line = systemTweaksPhpMyAdmin();
-    if (line && !quiet) log.ok(line);
-  } catch (error) {
-    log.err(`phpMyAdmin rules: ${error instanceof Error ? error.message : String(error)}`);
-  }
-}
-
-/** A CloudPanel update replaces the whole app tree, so System Tweaks' backup command edit goes back with the templates. */
-export function reconcileBackupCommand(quiet: boolean): void {
-  if (!existsSync(ADDONS["system-tweaks"]!.configFile)) return;
-  try {
-    const line = systemTweaksBackupCompression();
-    if (line && !quiet) log.ok(line);
-  } catch (error) {
-    log.err(`remote backup compression: ${error instanceof Error ? error.message : String(error)}`);
-  }
-}
-
-/** A CloudPanel upgrade empties /etc/update-motd.d and puts its banner back. */
-export function reconcileMotd(quiet: boolean): void {
-  if (!existsSync(ADDONS["system-tweaks"]!.configFile)) return;
-  try {
-    const line = systemTweaksMotd();
-    if (line && !quiet) log.ok(line);
-  } catch (error) {
-    log.err(`SSH login message: ${error instanceof Error ? error.message : String(error)}`);
+/** What the enabled addons redo when CloudPanel rewrites a file the anchor watcher sees. */
+export async function runAnchorWork(quiet: boolean): Promise<void> {
+  for (const spec of enabledAddons()) {
+    for (const hook of spec.anchors ?? []) {
+      try {
+        const line = await hook.run();
+        if (line && !quiet) log.ok(line);
+      } catch (error) {
+        log.err(`${hook.label}: ${errorMessage(error)}`);
+      }
+    }
   }
 }

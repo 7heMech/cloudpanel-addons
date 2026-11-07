@@ -14,10 +14,10 @@ import { handle as handleMaintenance } from "../addons/maintenance/app/index";
 import { maintenanceService, type MaintenanceSiteView } from "../addons/maintenance/app/service";
 import { CLIENT_JS, fleetView, layout, siteView } from "../addons/maintenance/app/views";
 import { MAINTENANCE_TARGETS } from "../addons/maintenance/inject/targets";
-import { MAINTENANCE_INCLUDE_PATH } from "../addons/maintenance/vhosts";
+import { MAINTENANCE_INCLUDE_PATH } from "../lib/paths";
 import {
   inspectNginxMaintenance, NGINX_MAINTENANCE_BLOCK, reconcileNginxMaintenance, releaseMaintenanceSettings,
-} from "../cli/inject";
+} from "../addons/maintenance/nginx";
 
 /** A vhost whose one server runs the standalone maintenance check. */
 function coveredVhost(domain: string): string {

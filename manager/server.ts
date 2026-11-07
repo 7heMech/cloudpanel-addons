@@ -4,14 +4,13 @@ import type { Server } from "bun";
 import { chmodSync, chownSync, existsSync, readFileSync, unlinkSync } from "node:fs";
 import { execFileSync } from "node:child_process";
 import { userInfo } from "node:os";
-import { ADDONS, ADDON_NAMES, addonHandler } from "../addons/catalog";
+import { ADDONS, ADDON_NAMES, addonHandler, addonEnabled } from "../addons/catalog";
 import { MANAGER_UNIT, PANEL_GROUP, SERVICE_USER, SOCKET_PATH } from "../lib/paths";
 import { CLI_VERSION } from "../lib/version";
 import { fatal, log } from "../lib/log";
 import { jsonResponse, newCsrfToken } from "../lib/app-http";
-import { mountPath } from "../lib/mount";
+import { mountPath, splitMount } from "../lib/mount";
 import { gatewayCaller } from "../lib/gateway-client";
-import { splitMount } from "../lib/mount";
 import { adminGate, authenticateRequest } from "../lib/sso-auth";
 import { refreshPanelLogos } from "../lib/panel-logos";
 import { checkCliUpdate } from "../lib/update-check";
@@ -41,7 +40,7 @@ function internalPath(path: string): string {
  * addon killed the only surface that could re-enable it.
  */
 function mountedAddons(): string[] {
-  return ADDON_NAMES.filter((name) => addonHandler(name) && existsSync(ADDONS[name]!.configFile));
+  return ADDON_NAMES.filter((name) => addonHandler(name) && addonEnabled(ADDONS[name]!));
 }
 
 /**
@@ -122,7 +121,7 @@ export async function handleRequest(req: Request, server: Server<unknown>): Prom
     // that has just finished enabling an addon has not yet restarted this
     // process, and a page that still denied the addon existed would be
     // wrong for exactly as long as anybody was likely to look at it.
-    const enabled = ADDON_NAMES.filter((name) => existsSync(ADDONS[name]!.configFile));
+    const enabled = ADDON_NAMES.filter((name) => addonEnabled(ADDONS[name]!));
     const [job, news] = await Promise.all([latestManagerJobView(), seenNews()]);
     return indexPage(enabled, notice, {
       available: ADDON_NAMES.filter((name) => !enabled.includes(name)),

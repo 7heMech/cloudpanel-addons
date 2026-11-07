@@ -80,6 +80,8 @@ export function nginxLayout(panelDir = PANEL_NGINX_DIR): NginxLayout {
 }
 export const NGINX_PROXY_STATE_DIR = "/var/lib/clp-addons/nginx";
 export const NGINX_GLOBAL_SETTINGS = "/etc/nginx/global_settings";
+/** Maintenance Mode's check, which each site vhost includes. */
+export const MAINTENANCE_INCLUDE_PATH = "/etc/nginx/clp-addons-maintenance.conf";
 export const CLOUDFLARE_IPS_PATH = "/etc/nginx/cloudflare/ips";
 export const NGINX_MAINTENANCE_STATE_DIR = "/var/lib/clp-addons/nginx-maintenance";
 
@@ -95,6 +97,10 @@ export const PANEL_CACHE_POOL_DIR = `${PANEL_APP}/var/cache/prod/pools/app`;
 export const ROOT_UID = 0;
 export const CONFIG_DIR = "/etc/clp-addons";
 export const STATE_DIR = "/var/lib/clp-addons";
+/** An addon is enabled while this file exists. */
+export const addonConfigFile = (addon: string) => `${CONFIG_DIR}/${addon}.conf`;
+/** What an addon keeps, which disabling leaves in place. */
+export const addonStateDir = (addon: string) => `${STATE_DIR}/${addon}`;
 export const ARTIFACT_MANIFEST_PATH = `${STATE_DIR}/artifacts.json`;
 export const TEMPLATE_STATE_DIR = `${STATE_DIR}/templates`;
 export const LOCK_DIR = "/run/lock/clp-addons";

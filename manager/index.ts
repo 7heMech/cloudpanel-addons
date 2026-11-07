@@ -7,8 +7,7 @@ import { ADDON_NAMES } from "../addons/catalog";
 import { JOB_ID_RE } from "../lib/job-store";
 import type { ManagerJobView } from "./action";
 import type { CliUpdateInfo } from "../lib/update-check";
-import { indexPage, updatePage } from "./views";
-import { latestManagerJobView, managerAction } from "./service";
+import { managerAction } from "./service";
 
 function managerJson(body: unknown, status = 200): Response {
   return jsonResponse(body, { status });

@@ -8,6 +8,7 @@ import { ActionFailure, failAction } from "../../lib/action";
 import { runCommand, type CommandResult } from "../../lib/command";
 import { openPanelDatabase } from "../../lib/panel-db";
 import { trustedVhost, withNginxTransactionAsync } from "../../lib/nginx-transaction";
+import { MAINTENANCE_INCLUDE_PATH, NGINX_GLOBAL_SETTINGS } from "../../lib/paths";
 
 export interface BasicAuthPaths {
   panelDb: string;
@@ -127,7 +128,7 @@ export function basicAuthVhost(content: string, domain: string, previous: string
   if (!server.directives.some(({ words, start }) => words[0] === "auth_basic" && start >= blockStart && start < blockEnd)) refuse();
   const accessRules = new Set(["satisfy", "allow", "deny", "auth_basic", "auth_basic_user_file"]);
   const safeIncludes = new Set([
-    "/etc/nginx/global_settings", "/etc/nginx/clp-addons-maintenance.conf",
+    NGINX_GLOBAL_SETTINGS, MAINTENANCE_INCLUDE_PATH,
     "fastcgi_params", "/etc/nginx/fastcgi_params",
   ]);
   const affected = [server];

@@ -1,12 +1,13 @@
 // `clp-addons update`, and the rollback a failed one runs.
 
 import { rmSync } from "node:fs";
-import { installedAddons, migrateOldAddonNames, revertAddonRenames } from "./addons";
+import { enabledAddons } from "../addons/catalog";
+import { migrateOldAddonNames, revertAddonRenames } from "./addons";
 import {
   artifactNames, currentArtifactsMatch, installArtifacts, keepPreviousArtifacts, replaceArtifacts,
   rollbackUpdate,
 } from "./artifacts";
-import { reconcileAnchors, reconcileMaintenanceNginx, reconcileNginx } from "./reconcile";
+import { reconcileAnchors, reconcileNginx, reconcilePanelBlocks } from "./reconcile";
 import { reconcilePhpGuard } from "../lib/php-guard";
 import { type AddonSpec } from "../lib/addon-definition";
 import { keepNewsSince, recordNewsSince } from "../manager/action";
@@ -33,7 +34,7 @@ function finalizeUpdate(beforeManagerRestart?: () => void): AddonSpec[] {
   // names, so they go back first.
   const renames = migrateOldAddonNames();
   try {
-    const specs = installedAddons();
+    const specs = enabledAddons();
     ensureServiceUser();
     ensureDirs(specs);
     ensureAuthHelperReady();
@@ -44,7 +45,7 @@ function finalizeUpdate(beforeManagerRestart?: () => void): AddonSpec[] {
     installUnits(specs);
     ensureDirs(specs);
     reconcileAnchors(false);
-    if (!reconcileMaintenanceNginx(false)) log.warn("Nginx maintenance check needs manual repair");
+    if (!reconcilePanelBlocks(false)) log.warn("a change to CloudPanel's Nginx settings needs manual repair");
     if (!reconcileNginx(false)) log.warn("Nginx proxy needs manual repair");
     reconcilePhpGuard(true);
     startUnits({ beforeManagerRestart });

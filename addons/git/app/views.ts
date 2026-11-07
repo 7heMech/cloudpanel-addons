@@ -16,7 +16,7 @@ import {
   MAX_BRANCH_LENGTH, MAX_DIRECTORY_LENGTH, MAX_POST_DEPLOY_LENGTH, MAX_REMOTE_LENGTH, usesDeployKey,
 } from "../action";
 import { gitHookPath } from "./hook";
-import type { GitJobView, GitSiteStatus } from "./service";
+import type { GitSiteStatus } from "./service";
 
 const BASE = mountPath("git");
 

@@ -4,11 +4,11 @@
 
 import { withFileLockSync } from "../lib/file-lock";
 import { migrateResourceMemory } from "../addons/resource-limits/migration";
-import { ADDONS, ADDON_NAMES } from "../addons/catalog";
+import { ADDONS, ADDON_NAMES, addonEnabled } from "../addons/catalog";
 import { type AddonSpec } from "../lib/addon-definition";
 import { masterVhostHost } from "./inject";
 import { CONFIG_DIR, LOCK_DIR, STATE_DIR, SYSTEMD_DIR } from "../lib/paths";
-import { installedConfig, writeConfig } from "./provision";
+import { writeConfig } from "./provision";
 import { fatal, log } from "../lib/log";
 import { chownSync, existsSync, readFileSync, readdirSync, renameSync, rmSync, statSync, writeFileSync } from "node:fs";
 export function resolveAddon(name: string | undefined): AddonSpec {
@@ -16,10 +16,6 @@ export function resolveAddon(name: string | undefined): AddonSpec {
   const spec = ADDONS[key];
   if (!spec) fatal(`unknown addon '${key}'. Available: ${ADDON_NAMES.join(", ")}`);
   return spec;
-}
-
-export function installedAddons(): AddonSpec[] {
-  return ADDON_NAMES.map((name) => ADDONS[name]!).filter(installedConfig);
 }
 
 /** Shipped addon ids whose saved state and enabled records move with the feature. */
@@ -89,7 +85,7 @@ function migrateAddonState(quiet: boolean): AddonRename[] {
         ? { text: readFileSync(legacyConfig, "utf8"), uid: statSync(legacyConfig).uid, gid: statSync(legacyConfig).gid }
         : null;
       const stateMoved = existsSync(legacyState);
-      const configCreated = config !== null && !installedConfig(spec);
+      const configCreated = config !== null && !addonEnabled(spec);
       const renamed: AddonRename = { from, to, config, stateMoved: false, configCreated };
       renames.push(renamed);
       if (stateMoved) {

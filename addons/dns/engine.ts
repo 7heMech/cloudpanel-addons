@@ -12,12 +12,14 @@ import { CloudflareApi, type CfAccount, type CfRecord, type CfRuleset, type CfZo
 import { type ApiFetch, ProviderError } from "./http";
 import { aclAllows, MailcowApi, type MailcowDkim } from "./mailcow";
 import type { AccountRef, Policy, Profile, Redirect, Secrets } from "./model";
-import { describeRecord, diffRecords, renderProfile, renderRedirect, type Diff, type RecordOp, type Rendered, type SiteVars } from "./records";
+import {
+  describeRecord, diffRecords, renderProfile, renderRedirect, type Diff, type RecordOp, type Rendered, type SiteVars,
+} from "./records";
 import {
   describeRedirect, foundRedirect, PLACEHOLDER, REDIRECT_PHASE, redirectAction, redirectHosts, redirectRef, redirectRuleState, standInHosts, wantedRedirectRule,
   type FoundRedirect,
 } from "./redirects";
-import { CONFIG_PHASE, FIREWALL_PHASE, ruleState, SSL_LABELS, wantedRules, wantedSettings, zoneWants, type ZoneWants } from "./zone";
+import { ruleState, SSL_LABELS, wantedRules, wantedSettings, zoneWants, type ZoneWants } from "./zone";
 
 export const RECORD_COMMENT = "Managed by CloudPanel DNS";
 

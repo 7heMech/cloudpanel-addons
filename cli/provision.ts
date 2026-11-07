@@ -15,10 +15,9 @@ import {
   PANEL_GROUP, PANEL_USER, RECONCILE_PATH, RECONCILE_SERVICE,
   RECONCILE_TIMER, SERVICE_GROUP, SERVICE_USER, SESSION_DIR, SHARED_GROUP, SOCKET_DIR, STATE_DIR,
   SOCKET_PATH, SYSTEMD_DIR, TWIG_CACHE_DIR, PANEL_IDENTITY_PATH, NGINX_GLOBAL_SETTINGS, CLOUDFLARE_IPS_PATH,
-  APT_UPGRADE_DROPIN, UPDATE_MOTD_DIR,
+  APT_UPGRADE_DROPIN, UPDATE_MOTD_DIR, MAINTENANCE_INCLUDE_PATH,
 } from "../lib/paths";
-import { MAINTENANCE_INCLUDE_PATH } from "../addons/maintenance/vhosts";
-import { ADDONS, ADDON_NAMES, templateWatchPaths } from "../addons/catalog";
+import { enabledAddons, templateWatchPaths } from "../addons/catalog";
 import { type AddonSpec } from "../lib/addon-definition";
 import { findMasterVhost, panelVhostWatchPath } from "./inject";
 import { panelUserUid } from "../lib/sso-auth";
@@ -112,10 +111,6 @@ export function panelIdentityFromVhost(content: string): PanelIdentity | null {
   // all is still rejected -- it is not the file we think it is.
   if (!exact) return sawDirective && names.size === 0 ? { primary: "", aliases: [] } : null;
   return { primary: exact, aliases: [...names].filter((name) => name !== exact).sort() };
-}
-
-function installedAddonSpecs(): AddonSpec[] {
-  return ADDON_NAMES.map((name) => ADDONS[name]!).filter((spec) => existsSync(spec.configFile));
 }
 
 /**
@@ -478,16 +473,16 @@ export function ensureDirs(
   fs.chown(CONFIG_DIR, root, root);
   fs.chmod(CONFIG_DIR, 0o755);
   fs.chown(STATE_DIR, root, resolve("-g", SHARED_GROUP));
-  // Nginx workers need traversal (but not listing) to stat maintenance flags
-  // and read the public HTML files. Addon directories retain their own modes.
-  fs.chmod(STATE_DIR, specs.some((spec) => spec.name === "maintenance") ? 0o751 : 0o750);
+  // An addon whose state directory Nginx workers traverse needs them to pass
+  // through this one too; listing stays closed.
+  fs.chmod(STATE_DIR, specs.some((spec) => (spec.stateDirMode ?? 0o750) & 0o001) ? 0o751 : 0o750);
   fs.chown(SOCKET_DIR, resolve("-u", SERVICE_USER), resolve("-g", SERVICE_GROUP));
   fs.chmod(SOCKET_DIR, 0o755);
   fs.chown(BACKUP_DIR, root, root);
   fs.chmod(BACKUP_DIR, 0o755);
   for (const spec of specs) {
     fs.chown(spec.stateDir, root, root);
-    fs.chmod(spec.stateDir, spec.name === "maintenance" ? 0o711 : 0o750);
+    fs.chmod(spec.stateDir, spec.stateDirMode ?? 0o750);
   }
 
   const snapshot = `${STATE_DIR}/snapshot.json`;
@@ -521,7 +516,7 @@ export function hardenBackups(spec: AddonSpec, quiet = false): void {
  * Record who the panel is: the root action binary reads this to refuse
  * operating on the panel's own hostname.
  */
-export function reconcilePanelIdentity(quiet = false, specs: AddonSpec[] = installedAddonSpecs()): void {
+export function reconcilePanelIdentity(quiet = false, specs: AddonSpec[] = enabledAddons()): void {
   if (specs.length > 0) {
     ensurePanelIdentity(quiet);
   } else {
@@ -545,10 +540,6 @@ export function writeConfig(spec: AddonSpec, force = false): void {
   writeFileAtomic(spec.configFile, body, { mode: 0o640, createParent: true });
   run("chown", [`root:${SERVICE_GROUP}`, spec.configFile]);
   rmSync(`${spec.configFile}.new`, { force: true });
-}
-
-export function installedConfig(spec: AddonSpec): boolean {
-  return existsSync(spec.configFile);
 }
 
 export function serviceUnit(specs: AddonSpec[]): string {

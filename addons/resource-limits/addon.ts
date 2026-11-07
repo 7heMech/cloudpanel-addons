@@ -1,4 +1,4 @@
-import { restoreResourceMemory, withdrawResourceMemory } from "./memory-settings";
+import { resourceLimitsMemory, restoreResourceMemory, withdrawResourceMemory } from "./memory-settings";
 import { handle } from "./app/index";
 import {
   DEFAULT_RESOURCE_LIMITS_ACTION_PATHS, executeResourceLimitsAction, runResourceLimitsAction,
@@ -9,7 +9,7 @@ import type { AddonDefinition } from "../../lib/addon-definition";
 import { existsSync } from "node:fs";
 import { clearAbandonedTmpFiles } from "../../lib/tmp-cleanup";
 import { errorMessage } from "../../lib/errors";
-import { log } from "../../lib/log";
+import { fatal, log } from "../../lib/log";
 
 const count = (value: number, word: string) => `${value} ${word}${value === 1 ? "" : "s"}`;
 
@@ -26,6 +26,16 @@ export const RESOURCE_LIMITS_ADDON: AddonDefinition = {
   targets: RESOURCE_LIMITS_TARGETS,
   handler: handle,
   action: runResourceLimitsAction,
+  commands: {
+    // MySQL's unit runs this before it starts and Redis's after; its failure does not stop either.
+    "sync-memory": {
+      root: true,
+      run: (argv) => {
+        if (argv.length !== 1 || (argv[0] !== "mysql" && argv[0] !== "redis")) fatal("sync-memory takes mysql or redis");
+        resourceLimitsMemory(argv[0]);
+      },
+    },
+  },
   newSites: {
     label: "resource limits",
     run: async (options) => {

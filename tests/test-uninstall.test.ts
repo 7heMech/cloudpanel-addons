@@ -31,12 +31,13 @@ mock.module("./lib/paths.ts", () => ({
 const realCatalog = await import("./addons/catalog.ts");
 mock.module("./addons/catalog.ts", () => ({
   ...realCatalog,
+  addonEnabled: (spec) => spec.configFile === configFile && existsSync(configFile),
+  enabledAddons: () => Object.values(realCatalog.ADDONS).filter((spec) => spec.configFile === configFile && existsSync(configFile)),
   ADDONS: { ...realCatalog.ADDONS, instatic: { ...realCatalog.ADDONS.instatic, configFile } },
 }));
 const realProvision = await import("./cli/provision.ts");
 mock.module("./cli/provision.ts", () => ({
   ...realProvision,
-  installedConfig: (spec) => spec.configFile === configFile && existsSync(configFile),
   reconcilePanelIdentity: (_quiet, specs) => {
     if (specs?.length === 0) rmSync(root + "/panel-identity.conf", { force: true });
   },
@@ -44,7 +45,7 @@ mock.module("./cli/provision.ts", () => ({
 }));
 mock.module("./cli/reconcile.ts", () => ({
   reconcileAnchors: (_quiet, _exclude, managerNav) => { event("anchors nav=" + managerNav); return true; },
-  reconcileMaintenanceNginx: (_quiet, enabled) => { event("maintenance " + enabled); return true; },
+  reconcilePanelBlocks: (_quiet, enabled) => { event("maintenance " + enabled()); return true; },
   reconcileNginx: (_quiet, enabled) => { event("nginx " + enabled); return process.env.CLP_TEST_NGINX_FAILS !== "1"; },
 }));
 mock.module("./lib/php-guard.ts", () => ({ reconcilePhpGuard: (wanted) => event("phpGuard " + wanted) }));

@@ -9,7 +9,7 @@ import { tmpdir } from "node:os";
 import { writeFileAtomic } from "../../lib/atomic-write";
 import { dirname, join } from "node:path";
 import { ActionCommandFailure, ActionFailure, emitActionOk, failAction, reportActionFailure } from "../../lib/action";
-import { commandFailure, forwardCommandOutput as defaultForwardCommandOutput, runCommand } from "../../lib/command";
+import { commandFailure, runCommand } from "../../lib/command";
 import { normalizeIdentityHostname, validateDomain } from "../../lib/panel-identity";
 import { availableSiteUser, siteUserTaken } from "../../lib/site-user";
 import { readable } from "../../lib/files";

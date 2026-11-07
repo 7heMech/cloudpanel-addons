@@ -209,6 +209,12 @@ mock.module("../cli/release", () => ({
 }));
 
 mock.module("../lib/systemd", () => ({ unitActive: () => managerUnitState }));
+const __catalog = await import("../addons/catalog");
+const __enabled = () => hasInstalledAddon;
+// Every addon counts as enabled here, so the Nginx block one keeps in CloudPanel's files is left alone.
+const __addons = Object.fromEntries(Object.entries(__catalog.ADDONS).map(([name, spec]) =>
+  [name, spec.panelBlock ? { ...spec, panelBlock: { ...spec.panelBlock, reconcile: () => true } } : spec]));
+mock.module("../addons/catalog", () => ({ ...__catalog, ADDONS: __addons, addonEnabled: __enabled, enabledAddons: () => Object.values(__addons).filter(__enabled) }));
 mock.module("../cli/provision", () => ({
   ...realProvision,
   ensureDirs: () => { calls.push("ensureDirs"); provisioning.dirs = true; },
@@ -218,7 +224,6 @@ mock.module("../cli/provision", () => ({
   hardenBackups: record("hardenBackups"),
   reconcilePanelIdentity: () => { calls.push("reconcilePanelIdentity"); provisioning.sudoers = true; },
   installUnits: () => { calls.push("installUnits"); provisioning.units = true; },
-  installedConfig: () => hasInstalledAddon,
   purgeTwigCache: record("purgeTwigCache"),
   removeLegacyUnits: () => { calls.push("removeLegacyUnits"); provisioning.legacyUnits = false; },
   startUnits: (options?: { beforeManagerRestart?: () => void }) => {

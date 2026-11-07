@@ -3,12 +3,13 @@ import { memoryCard } from "./memory-view";
 import CLIENT_JS_BODY from "./views.client.js" with { type: "text" };
 import { esc } from "../../../lib/app-http";
 import {
-  TWEAK_ROW_JS, ATTENTION_RANK, FLEET_FOOTER_HTML, FLEET_SELECTION_HTML, FLEET_ROW_SELECTION_JS, fleetFilterHtml, filterWord, valueFilters, renderLayout,
+  TWEAK_ROW_JS, FLEET_FOOTER_HTML, FLEET_SELECTION_HTML, FLEET_ROW_SELECTION_JS, fleetFilterHtml, filterWord,
+  valueFilters, renderLayout,
 } from "../../../lib/app-ui";
 import { mountPath } from "../../../lib/mount";
 import {
-  DEFAULT_CATEGORY_PROFILE, PM_MODES, STOCK_PROFILE,
-  type ResourceLimitsState, type PoolCategory, type PoolProfile, type PoolSiteState,
+  DEFAULT_CATEGORY_PROFILE, PM_MODES, type ResourceLimitsState, type PoolCategory, type PoolProfile,
+  type PoolSiteState,
 } from "../action";
 
 const BASE = mountPath("resource-limits");

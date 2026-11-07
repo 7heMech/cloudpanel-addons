@@ -30,6 +30,40 @@ export interface AddonNewSites extends AddonHook {
   resumePending?: (options?: Record<string, unknown>) => Promise<{ waiting: boolean; line: string | null }>;
 }
 
+/** A top-level `clp-addons` command an addon owns. */
+export interface AddonCommand {
+  /** Its line in `clp-addons help`, after `clp-addons `; none for a command only systemd, Postfix or the gateway runs. */
+  usage?: string;
+  /** Refused to anyone but root, before anything else is checked. */
+  root?: true;
+  /** Refused while the addon is disabled. */
+  enabledOnly?: true;
+  run: (argv: string[]) => number | void | Promise<number | void>;
+}
+
+/** An edit the addon makes to a dpkg conffile, which an unattended upgrade must find as the package left it. */
+export interface ConffileEdit {
+  path: string;
+  /** Text only this project's edit leaves in the file. */
+  marker: string;
+  /** Restores the package text without a reload; whether it wrote anything. */
+  release: () => boolean;
+}
+
+/**
+ * A marked block an addon keeps in a file CloudPanel owns: put in while the
+ * addon is enabled and taken out when it is not, by install, update, repair,
+ * the toggles and self-uninstall.
+ */
+export interface PanelBlock {
+  /** Its row in `clp-addons status`. */
+  label: string;
+  /** False when it could not be put right, having said why. */
+  reconcile: (enabled: boolean, quiet: boolean) => boolean;
+  /** What `clp-addons status` says of it while the addon is enabled. */
+  inspect: () => { ok: boolean; text: string };
+}
+
 /** What an addon declares about itself. Paths are derived, not declared. */
 export interface AddonDefinition {
   name: string;
@@ -46,6 +80,8 @@ export interface AddonDefinition {
   handler?: AddonHandler;
   /** The privileged verbs this addon runs as root, if it has any. */
   action?: (argv: string[], options?: Record<string, unknown>) => Promise<number> | number;
+  /** The mode of its state directory, 0750 unless something outside the addon must reach into it. */
+  stateDirMode?: number;
   /** Withdraw changes outside addon state before disabling. */
   deactivate?: () => void;
   /** Stop what is still running once the config is gone and nothing new can start. */
@@ -82,6 +118,20 @@ export interface AddonDefinition {
   certificates?: AddonHook;
   /** Work after ufw's rule files change, which CloudPanel's Firewall page rebuilds. */
   firewall?: AddonHook;
+  /** Work `repair --anchors-only` runs when CloudPanel rewrites a file the anchor watcher sees, each step reported on its own. */
+  anchors?: AddonHook[];
+  /** A marked block the addon keeps in a file CloudPanel owns. */
+  panelBlock?: PanelBlock;
+  /** The conffile edits `apt-hook pre` hands back to dpkg before an unattended upgrade. */
+  conffiles?: ConffileEdit[];
+  /** Top-level commands, by name, such as `maintenance` or ones systemd runs. */
+  commands?: Record<string, AddonCommand>;
+  /**
+   * Disabling, when it must hold the addon's own locks: takes out what the addon
+   * put into sites and calls `removeConfig` while it still holds them, so nothing
+   * waiting on them starts again in a site the addon has just left.
+   */
+  withdraw?: (removeConfig: () => void) => void;
 }
 
 /**

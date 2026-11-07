@@ -63,8 +63,25 @@ tracked range, so it never outgrows the catalog.
 in `addons/<name>/addon.ts` -- title, description, injection targets, required
 systemd units, its manager handler, its privileged action, the routes it opens
 to non-administrators or answers ahead of the gate, and any repair upkeep -- and
-the catalog derives its config file and state directory from its name, so
-a definition cannot name a file provisioning will not look for.
+the catalog derives its config file and state directory from its name
+(`addonConfigFile` and `addonStateDir` in `lib/paths.ts`), so a definition
+cannot name a file provisioning will not look for. An addon is enabled while
+its config file exists; `addonEnabled` and `enabledAddons` in the catalog are
+the only places that ask.
+
+Everything the platform does for one addon is declared there too, so no
+command, reconciler or toggle names an addon:
+
+- `commands`: top-level commands the addon owns, such as `maintenance` or the
+  `sync-*` hooks systemd runs, each with its `help` line if it has one.
+- `panelBlock`: a marked block in a file CloudPanel owns, put in while the
+  addon is enabled and taken out otherwise by install, update, repair, the
+  toggles and self-uninstall, with its row in `status`.
+- `anchors`: work `repair --anchors-only` runs when CloudPanel rewrites a
+  file the anchor watcher sees.
+- `conffiles`: dpkg conffile edits `apt-hook pre` hands back.
+- `withdraw`: disabling under the addon's own locks.
+- `stateDirMode`: a state directory something outside the addon must reach.
 
 Repair upkeep runs inside repair's operation lock, so it stays short. Work that
 waits on the network or on a site's own code is queued with `queueAddonPass`
@@ -109,7 +126,8 @@ addons toggle through the same enable and disable the Addons page runs, and
 status, repair and update run the commands of those names. Without a terminal or
 root it prints the plain overview. Help lists operator commands only. `action`
 is how the gateway runs an addon's root verbs, and `serve`, `smtp-submit` and
-`terminal-pty` are started by systemd, Postfix and the terminal action.
+`terminal-pty` are started by systemd, Postfix and the terminal action. A
+command no platform verb answers is looked up among the addons' `commands`.
 
 Color is decided per stream: `paint` in `lib/log.ts` colors only when the
 stream it writes to is a terminal and `hasColors` allows it, so `NO_COLOR` and

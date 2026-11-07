@@ -47,6 +47,11 @@ const mockPrelude = String.raw`
     verifyAttestation: async () => {},
   }));
   mock.module("./lib/systemd.ts", () => ({ unitActive: () => "active" }));
+  const __catalog = await import("./addons/catalog.ts");
+  // Stager is enabled, and an addon whose config a test points at a file it wrote.
+  const { existsSync: __exists } = await import("node:fs");
+  const __enabled = (spec) => spec.name === "stager" || __exists(spec.configFile);
+  mock.module("./addons/catalog.ts", () => ({ ...__catalog, addonEnabled: __enabled, enabledAddons: () => Object.values(__catalog.ADDONS).filter(__enabled) }));
   mock.module("./cli/provision.ts", () => ({
     ensureDirs: () => {},
     ensureAuthHelperReady: () => {},
@@ -59,7 +64,6 @@ const mockPrelude = String.raw`
     installUnits: () => ({ manager: false, reconcile: false, newSites: null, certificates: null, dns: null, auth: false, cron: false, systemd: false }),
     applyToggleUnits: () => {},
     platformProvisioned: () => true,
-    installedConfig: (spec) => spec.name === "stager",
     purgeTwigCache: () => {},
     removeLegacyUnits: () => {},
     startUnits: () => {},
@@ -70,6 +74,8 @@ const mockPrelude = String.raw`
     warnIfPanelSessionUnreadable: () => {},
     writeConfig: () => {},
   }));
+  const __maintenanceNginx0 = await import("./addons/maintenance/nginx.ts");
+  mock.module("./addons/maintenance/nginx.ts", () => ({ ...__maintenanceNginx0, reconcileNginxMaintenance: () => ({ state: "missing", changed: false }) }));
   mock.module("./cli/inject.ts", () => ({
     KNOWN_GOOD_PANEL_VERSIONS: [],
     inspect: () => ({ state: "ok" }),
@@ -79,7 +85,6 @@ const mockPrelude = String.raw`
     panelVersion: () => "test",
     purgeTwigCache: () => {},
     reconcile: () => ({ statuses: [], changed: false }),
-    reconcileNginxMaintenance: () => ({ state: "missing", changed: false }),
     reconcileNginxProxy: () => ({ state: "ok", changed: false }),
   }));
   globalThis.__repairLog = [];
@@ -282,6 +287,8 @@ test.serial("repair runs addon maintenance after the anchors and Nginx, and --an
   // a configuration that is still broken.
   const script = `${mockPrelude}
     globalThis.__order = [];
+    const __maintenanceNginx1 = await import("./addons/maintenance/nginx.ts");
+    mock.module("./addons/maintenance/nginx.ts", () => ({ ...__maintenanceNginx1, reconcileNginxMaintenance: () => { globalThis.__order.push("maintenance"); return { state: "missing", changed: false }; } }));
     mock.module("./cli/inject.ts", () => ({
       KNOWN_GOOD_PANEL_VERSIONS: [],
       inspect: () => ({ state: "ok" }),
@@ -291,7 +298,6 @@ test.serial("repair runs addon maintenance after the anchors and Nginx, and --an
       panelVersion: () => "test",
       purgeTwigCache: () => {},
       reconcile: () => { globalThis.__order.push("anchors"); return { statuses: [], changed: false }; },
-      reconcileNginxMaintenance: () => { globalThis.__order.push("maintenance"); return { state: "missing", changed: false }; },
       reconcileNginxProxy: () => { globalThis.__order.push("nginx"); return { state: "ok", changed: false }; },
     }));
     const realAction = await import("./addons/stager/action.ts");
@@ -320,6 +326,8 @@ test.serial("--anchors-only puts System Tweaks' phpMyAdmin rules and backup comm
   writeFileSync(config, "");
   const script = `${mockPrelude}
     globalThis.__order = [];
+    const __maintenanceNginx2 = await import("./addons/maintenance/nginx.ts");
+    mock.module("./addons/maintenance/nginx.ts", () => ({ ...__maintenanceNginx2, reconcileNginxMaintenance: () => ({ state: "missing", changed: false }) }));
     mock.module("./cli/inject.ts", () => ({
       KNOWN_GOOD_PANEL_VERSIONS: [],
       inspect: () => ({ state: "ok" }),
@@ -329,7 +337,6 @@ test.serial("--anchors-only puts System Tweaks' phpMyAdmin rules and backup comm
       panelVersion: () => "test",
       purgeTwigCache: () => {},
       reconcile: () => ({ statuses: [], changed: false }),
-      reconcileNginxMaintenance: () => ({ state: "missing", changed: false }),
       reconcileNginxProxy: () => ({ state: "ok", changed: false }),
     }));
     const realTweaks = await import("./addons/system-tweaks/action.ts");
@@ -357,6 +364,8 @@ test.serial("repair leaves Nginx's conffiles alone while an unattended upgrade h
   const script = `${mockPrelude}
     globalThis.__order = [];
     mock.module("./cli/conffiles.ts", () => ({ conffilesReleased: () => true }));
+    const __maintenanceNginx3 = await import("./addons/maintenance/nginx.ts");
+    mock.module("./addons/maintenance/nginx.ts", () => ({ ...__maintenanceNginx3, reconcileNginxMaintenance: () => { globalThis.__order.push("maintenance"); return { state: "missing", changed: false }; } }));
     mock.module("./cli/inject.ts", () => ({
       KNOWN_GOOD_PANEL_VERSIONS: [],
       inspect: () => ({ state: "ok" }),
@@ -366,7 +375,6 @@ test.serial("repair leaves Nginx's conffiles alone while an unattended upgrade h
       panelVersion: () => "test",
       purgeTwigCache: () => {},
       reconcile: () => { globalThis.__order.push("anchors"); return { statuses: [], changed: false }; },
-      reconcileNginxMaintenance: () => { globalThis.__order.push("maintenance"); return { state: "missing", changed: false }; },
       reconcileNginxProxy: () => { globalThis.__order.push("nginx"); return { state: "ok", changed: false }; },
     }));
     const { cmdRepair } = await import("./cli/repair.ts");
