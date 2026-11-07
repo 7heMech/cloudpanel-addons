@@ -35,27 +35,12 @@ for mount in / /home; do
 done
 addresses=$(ip -o addr show scope global 2>/dev/null | awk '$2 !~ /^(docker|br-|veth|virbr|lxc|cni|podman)/ { sub(/\\/.*/, "", $4); printf "%s%s", sep, $4; sep = " " }')
 [ -n "$addresses" ] && row Addresses "$addresses"
-if command -v apt >/dev/null 2>&1; then
-  pending=$(timeout 3 apt list --upgradable 2>/dev/null | grep -c upgradable)
-  case "$pending" in
-    0|'') row Updates "none pending" ;;
-    1) row Updates "1 package can be upgraded" ;;
-    *) row Updates "$pending packages can be upgraded" ;;
-  esac
-fi
-if [ -f /var/run/reboot-required ]; then
-  by=$(sort -u /var/run/reboot-required.pkgs 2>/dev/null | tr '\\n' ' ')
-  row Reboot "required\${by:+ by $by}"
-fi
-if [ -d /home/clp ]; then
-  domain=$([ -f /etc/.clp_custom_domain ] && timeout 1 head -c 253 /etc/.clp_custom_domain | tr -cd 'A-Za-z0-9.-')
-  if [ -n "$domain" ]; then
-    row Panel "https://$domain/"
-  else
-    ipv4=$(ip -o -4 addr show scope global 2>/dev/null | awk '$2 !~ /^(docker|br-|veth|virbr|lxc|cni|podman)/ { sub(/\\/.*/, "", $4); print $4; exit }')
-    [ -n "$ipv4" ] && row Panel "https://$ipv4:8443"
-  fi
-fi
+command -v apt >/dev/null && row Updates "$(timeout 3 apt list --upgradable 2>/dev/null | grep -c upgradable) pending"
+by=$(sort -u /var/run/reboot-required.pkgs 2>/dev/null | paste -sd ' ')
+[ -f /var/run/reboot-required ] && row Reboot "required\${by:+ by $by}"
+domain=$([ -f /etc/.clp_custom_domain ] && timeout 1 head -c 253 /etc/.clp_custom_domain | tr -cd 'A-Za-z0-9.-')
+ipv4=$(printf '%s\\n' $addresses | grep -m 1 -v :)
+if [ -n "$domain" ]; then row Panel "https://$domain/"; elif [ -d /home/clp ] && [ -n "$ipv4" ]; then row Panel "https://$ipv4:8443"; fi
 echo
 `;
 
@@ -74,23 +59,14 @@ function pathsOf(options: MotdOptions): typeof DEFAULT_MOTD_PATHS {
   return { ...DEFAULT_MOTD_PATHS, ...options.paths };
 }
 
-function executable(path: string): boolean {
-  try {
-    const info = lstatSync(path);
-    return info.isFile() && (info.mode & 0o111) !== 0;
-  } catch {
-    return false;
-  }
+/** A regular file's permission bits, or null when there is none. */
+function modeOf(path: string): number | null {
+  const info = lstatSync(path, { throwIfNoEntry: false });
+  return info?.isFile() ? info.mode & 0o7777 : null;
 }
 
-function scriptInPlace(path: string): boolean {
-  try {
-    const info = lstatSync(path);
-    return info.isFile() && (info.mode & 0o7777) === 0o755 && readFileSync(path, "utf8") === MOTD_SCRIPT;
-  } catch {
-    return false;
-  }
-}
+const executable = (path: string) => ((modeOf(path) ?? 0) & 0o111) !== 0;
+const scriptInPlace = (path: string) => modeOf(path) === 0o755 && readFileSync(path, "utf8") === MOTD_SCRIPT;
 
 export function motdStatus(options: MotdOptions = {}): MotdStatus {
   const paths = pathsOf(options);
@@ -104,20 +80,15 @@ export function motdStatus(options: MotdOptions = {}): MotdStatus {
  */
 export function applyMotd(serverInfo: boolean, options: MotdOptions = {}): boolean {
   const paths = pathsOf(options);
-  let changed = false;
   if (serverInfo) {
-    if (!scriptInPlace(paths.script)) {
-      writeFileAtomic(paths.script, MOTD_SCRIPT, { mode: 0o755, createParent: true });
-      changed = true;
-    }
-    if (executable(paths.banner)) {
-      chmodSync(paths.banner, 0o644);
-      changed = true;
-    }
-    return changed;
+    const write = !scriptInPlace(paths.script);
+    if (write) writeFileAtomic(paths.script, MOTD_SCRIPT, { mode: 0o755, createParent: true });
+    const silence = executable(paths.banner);
+    if (silence) chmodSync(paths.banner, 0o644);
+    return write || silence;
   }
   if (!existsSync(paths.script)) return false;
   rmSync(paths.script, { force: true });
-  if (existsSync(paths.banner) && lstatSync(paths.banner).isFile() && !executable(paths.banner)) chmodSync(paths.banner, 0o755);
+  if (modeOf(paths.banner) !== null && !executable(paths.banner)) chmodSync(paths.banner, 0o755);
   return true;
 }

@@ -91,24 +91,9 @@ function setUpdates(input) {
   return change(input, '/api/updates', { [input.dataset.setting]: input.checked }, switchText(input), 'Saved.');
 }
 
-function setUploadGuard(input) {
-  return change(input, '/api/upload-guard', { enabled: input.checked }, switchText(input), 'Saved.');
-}
-
-function setRealIp(input) {
-  return change(input, '/api/real-ip', { enabled: input.checked }, switchText(input), 'Saved.');
-}
-
-function setPhpPools(input) {
-  return change(input, '/api/php-pools', { enabled: input.checked }, switchText(input), 'Saved.');
-}
-
-function setPhpMyAdmin(input) {
-  return change(input, '/api/phpmyadmin', { enabled: input.checked }, switchText(input), 'Saved.');
-}
-
-function setPanelCert(input) {
-  return change(input, '/api/panel-cert', { enabled: input.checked }, switchText(input), 'Saved.');
+// Each on/off switch posts to /api/<name>.
+function setSwitch(input, name) {
+  return change(input, '/api/' + name, { enabled: input.checked }, switchText(input), 'Saved.');
 }
 
 // Either way MySQL restarts, and the page waits for it to come back.
@@ -116,26 +101,6 @@ function setDatabaseLoopback(input) {
   return change(input, '/api/database-loopback', { enabled: input.checked },
     input.checked ? 'Binding MySQL to 127.0.0.1, which restarts it…' : 'Restarting MySQL on its own settings…',
     input.checked ? 'MySQL accepts connections from this server only.' : 'MySQL uses its own settings again.');
-}
-
-function setVhostGuard(input) {
-  return change(input, '/api/vhost-guard', { enabled: input.checked }, switchText(input), 'Saved.');
-}
-
-function setFileManagerGuard(input) {
-  return change(input, '/api/file-manager-guard', { enabled: input.checked }, switchText(input), 'Saved.');
-}
-
-function setClpctlGuard(input) {
-  return change(input, '/api/clpctl-guard', { enabled: input.checked }, switchText(input), 'Saved.');
-}
-
-function setTelemetry(input) {
-  return change(input, '/api/telemetry', { enabled: input.checked }, switchText(input), 'Saved.');
-}
-
-function setMotd(input) {
-  return change(input, '/api/motd', { enabled: input.checked }, switchText(input), 'Saved.');
 }
 
 function setBackupCompression(control) {

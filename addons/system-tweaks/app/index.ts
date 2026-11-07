@@ -8,7 +8,7 @@ import type { SystemTweaksState } from "../action";
 import { BACKUP_COMPRESSION_ERROR, validBackupCompression } from "../backup-compression";
 import { FIREWALL_PROTOCOLS, ruleKey, type FirewallProtocol, type FirewallStatus } from "../firewall";
 import { LOGIN_JAILS } from "../login-jails";
-import { systemTweaksService } from "./service";
+import { isSwitchVerb, systemTweaksService } from "./service";
 import { dashboardView, layout } from "./views";
 
 function json(body: unknown, status = 200): Response {
@@ -64,6 +64,13 @@ export async function handle(
   const body = await readBody(req, 1024);
   if (body instanceof Response) return body;
 
+  // Each on/off switch posts to /api/<name> and runs set-<name>.
+  const verb = `set-${path.replace(/^\/api\//, "")}`;
+  if (isSwitchVerb(verb)) {
+    if (typeof body.enabled !== "boolean") return json({ ok: false, error: "enabled must be true or false" }, 400);
+    return repaint(await systemTweaksService.setSwitch(verb, body.enabled));
+  }
+
   if (path === "/api/updates") {
     const wanted: Record<string, boolean | string> = {};
     for (const [key, value] of Object.entries(body)) {
@@ -76,11 +83,6 @@ export async function handle(
       wanted[key] = value;
     }
     return repaint(await systemTweaksService.setUpdates(wanted));
-  }
-
-  if (path === "/api/upload-guard") {
-    if (typeof body.enabled !== "boolean") return json({ ok: false, error: "enabled must be true or false" }, 400);
-    return repaint(await systemTweaksService.setUploadGuard(body.enabled));
   }
 
   if (path === "/api/panel-php") {
@@ -99,59 +101,9 @@ export async function handle(
     return firewallReply(await systemTweaksService.setFirewallProtocol({ portRange, source, protocol: protocol as string, id: id as number | undefined }));
   }
 
-  if (path === "/api/vhost-guard") {
-    if (typeof body.enabled !== "boolean") return json({ ok: false, error: "enabled must be true or false" }, 400);
-    return repaint(await systemTweaksService.setVhostGuard(body.enabled));
-  }
-
-  if (path === "/api/php-pools") {
-    if (typeof body.enabled !== "boolean") return json({ ok: false, error: "enabled must be true or false" }, 400);
-    return repaint(await systemTweaksService.setPhpPools(body.enabled));
-  }
-
-  if (path === "/api/phpmyadmin") {
-    if (typeof body.enabled !== "boolean") return json({ ok: false, error: "enabled must be true or false" }, 400);
-    return repaint(await systemTweaksService.setPhpMyAdmin(body.enabled));
-  }
-
-  if (path === "/api/file-manager-guard") {
-    if (typeof body.enabled !== "boolean") return json({ ok: false, error: "enabled must be true or false" }, 400);
-    return repaint(await systemTweaksService.setFileManagerGuard(body.enabled));
-  }
-
-  if (path === "/api/database-loopback") {
-    if (typeof body.enabled !== "boolean") return json({ ok: false, error: "enabled must be true or false" }, 400);
-    return repaint(await systemTweaksService.setDatabaseLoopback(body.enabled));
-  }
-
-  if (path === "/api/clpctl-guard") {
-    if (typeof body.enabled !== "boolean") return json({ ok: false, error: "enabled must be true or false" }, 400);
-    return repaint(await systemTweaksService.setClpctlGuard(body.enabled));
-  }
-
-  if (path === "/api/telemetry") {
-    if (typeof body.enabled !== "boolean") return json({ ok: false, error: "enabled must be true or false" }, 400);
-    return repaint(await systemTweaksService.setTelemetry(body.enabled));
-  }
-
-  if (path === "/api/motd") {
-    if (typeof body.enabled !== "boolean") return json({ ok: false, error: "enabled must be true or false" }, 400);
-    return repaint(await systemTweaksService.setMotd(body.enabled));
-  }
-
   if (path === "/api/backup-compression") {
     if (!validBackupCompression(body)) return json({ ok: false, error: BACKUP_COMPRESSION_ERROR }, 400);
     return repaint(await systemTweaksService.setBackupCompression(body));
-  }
-
-  if (path === "/api/real-ip") {
-    if (typeof body.enabled !== "boolean") return json({ ok: false, error: "enabled must be true or false" }, 400);
-    return repaint(await systemTweaksService.setRealIp(body.enabled));
-  }
-
-  if (path === "/api/panel-cert") {
-    if (typeof body.enabled !== "boolean") return json({ ok: false, error: "enabled must be true or false" }, 400);
-    return repaint(await systemTweaksService.setPanelCert(body.enabled));
   }
 
   if (path === "/api/login-jails") {

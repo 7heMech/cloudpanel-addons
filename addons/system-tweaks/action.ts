@@ -333,63 +333,17 @@ async function setUploadGuard(options: SystemTweaksOptions): Promise<SystemTweak
   return stateOf(options);
 }
 
-async function setRealIp(options: SystemTweaksOptions): Promise<SystemTweaksState> {
-  const paths = pathsFor(options);
-  const body = await requestBody(options);
-  if (typeof body.enabled !== "boolean") failAction("enabled must be true or false");
-  await withFileLock(paths.lockFile, 15, "another system tweaks change is still running", async () => {
-    const settings = readSettings(paths);
-    applyRealIp(body.enabled as boolean, options.realIp);
-    writeSettings(paths, { ...settings, blockForgedRealIp: body.enabled as boolean });
-  });
-  return stateOf(options);
-}
+type SwitchKey = "blockForgedRealIp" | "protectPhpMyAdmin" | "replacePanelCert" | "blockTelemetry" | "serverInfoMotd";
 
-async function setPhpMyAdmin(options: SystemTweaksOptions): Promise<SystemTweaksState> {
+/** A switch whose change is applied before it is saved, so a failed change keeps the old setting. */
+async function setSwitch(options: SystemTweaksOptions, key: SwitchKey, apply: (enabled: boolean) => unknown): Promise<SystemTweaksState> {
   const paths = pathsFor(options);
-  const body = await requestBody(options);
-  if (typeof body.enabled !== "boolean") failAction("enabled must be true or false");
+  const { enabled } = await requestBody(options);
+  if (typeof enabled !== "boolean") failAction("enabled must be true or false");
   await withFileLock(paths.lockFile, 15, "another system tweaks change is still running", async () => {
     const settings = readSettings(paths);
-    applyPhpMyAdmin(body.enabled as boolean, options.phpMyAdmin);
-    writeSettings(paths, { ...settings, protectPhpMyAdmin: body.enabled as boolean });
-  });
-  return stateOf(options);
-}
-
-async function setTelemetry(options: SystemTweaksOptions): Promise<SystemTweaksState> {
-  const paths = pathsFor(options);
-  const body = await requestBody(options);
-  if (typeof body.enabled !== "boolean") failAction("enabled must be true or false");
-  await withFileLock(paths.lockFile, 15, "another system tweaks change is still running", async () => {
-    const settings = readSettings(paths);
-    applyTelemetryBlock(body.enabled as boolean, options.telemetry);
-    writeSettings(paths, { ...settings, blockTelemetry: body.enabled as boolean });
-  });
-  return stateOf(options);
-}
-
-async function setMotd(options: SystemTweaksOptions): Promise<SystemTweaksState> {
-  const paths = pathsFor(options);
-  const body = await requestBody(options);
-  if (typeof body.enabled !== "boolean") failAction("enabled must be true or false");
-  await withFileLock(paths.lockFile, 15, "another system tweaks change is still running", async () => {
-    const settings = readSettings(paths);
-    applyMotd(body.enabled as boolean, options.motd);
-    writeSettings(paths, { ...settings, serverInfoMotd: body.enabled as boolean });
-  });
-  return stateOf(options);
-}
-
-/** Off only stops the replacing: a certificate generated here stays, since the shared key is public. */
-async function setPanelCert(options: SystemTweaksOptions): Promise<SystemTweaksState> {
-  const paths = pathsFor(options);
-  const body = await requestBody(options);
-  if (typeof body.enabled !== "boolean") failAction("enabled must be true or false");
-  await withFileLock(paths.lockFile, 15, "another system tweaks change is still running", async () => {
-    const settings = readSettings(paths);
-    if (body.enabled) replacePanelCert(options.panelCert);
-    writeSettings(paths, { ...settings, replacePanelCert: body.enabled as boolean });
+    apply(enabled);
+    writeSettings(paths, { ...settings, [key]: enabled });
   });
   return stateOf(options);
 }
@@ -562,15 +516,16 @@ export async function executeSystemTweaksAction(argv: string[], options: SystemT
   if (verb === "state") return stateOf(options);
   if (verb === "set-updates") return setUpdates(options);
   if (verb === "set-upload-guard") return setUploadGuard(options);
-  if (verb === "set-real-ip") return setRealIp(options);
+  if (verb === "set-real-ip") return setSwitch(options, "blockForgedRealIp", (on) => applyRealIp(on, options.realIp));
   if (verb === "set-vhost-guard") return setVhostGuard(options);
-  if (verb === "set-phpmyadmin") return setPhpMyAdmin(options);
+  if (verb === "set-phpmyadmin") return setSwitch(options, "protectPhpMyAdmin", (on) => applyPhpMyAdmin(on, options.phpMyAdmin));
   if (verb === "set-file-manager-guard") return setFileManagerGuard(options);
-  if (verb === "set-panel-cert") return setPanelCert(options);
+  // Off only stops the replacing: a certificate generated here stays, since the shared key is public.
+  if (verb === "set-panel-cert") return setSwitch(options, "replacePanelCert", (on) => on && replacePanelCert(options.panelCert));
   if (verb === "set-clpctl-guard") return setClpctlGuard(options);
   if (verb === "set-backup-compression") return setBackupCompression(options);
-  if (verb === "set-telemetry") return setTelemetry(options);
-  if (verb === "set-motd") return setMotd(options);
+  if (verb === "set-telemetry") return setSwitch(options, "blockTelemetry", (on) => applyTelemetryBlock(on, options.telemetry));
+  if (verb === "set-motd") return setSwitch(options, "serverInfoMotd", (on) => applyMotd(on, options.motd));
   if (verb === "set-panel-php") return changePanelPhp(options);
   if (verb === "set-php-pools") return setPhpPools(options);
   if (verb === "set-login-jails") return setLoginJails(options);

@@ -15,6 +15,7 @@ import {
 } from "../addons/system-tweaks/updates";
 import { iniBoolean, iniSetting, uploadProgressStatus } from "../addons/system-tweaks/upload-progress";
 import { dashboardView } from "../addons/system-tweaks/app/views";
+import { isSwitchVerb } from "../addons/system-tweaks/app/service";
 import { releaseRealIp } from "../addons/system-tweaks/real-ip";
 import WRAPPER_SCRIPT from "../addons/system-tweaks/clpctl-wrapper.sh" with { type: "text" };
 import { DEFAULT_BACKUP_COMPRESSION } from "../addons/system-tweaks/backup-compression";
@@ -754,7 +755,7 @@ function systemTweaksClient() {
     },
   };
   const client = new Function("call", "busy", "notify", "clearNotice", "repaintView", "CLP_ROOT", "clpFlashTimer", "document",
-    `${source}\nreturn { installUpdates, setUpdates, setPanelPhp };`)(
+    `${source}\nreturn { installUpdates, setUpdates, setPanelPhp, setSwitch };`)(
     (path: string, options: { body: string }) => new Promise((answer) => {
       events.push(`POST ${path} ${options.body}`);
       replies.push({ path, body: options.body, answer });
@@ -766,7 +767,7 @@ function systemTweaksClient() {
     { getElementById: () => ({}), querySelector: () => null, querySelectorAll: () => [] },
     0,
     document,
-  ) as Record<"installUpdates" | "setUpdates" | "setPanelPhp", (control: unknown) => Promise<void>>;
+  ) as Record<"installUpdates" | "setUpdates" | "setPanelPhp", (control: unknown) => Promise<void>> & { setSwitch: (control: unknown, name: string) => Promise<void> };
   return { client, control, events, replies, lines };
 }
 
@@ -783,6 +784,17 @@ test("a change says it is running on its own row, and repaints the page from its
 });
 
 
+test("every on/off switch on the page posts to a route that runs its verb", async () => {
+  const names = [...dashboardView(await act(box(), ["state"])).matchAll(/setSwitch\(this, '([a-z-]+)'\)/g)].map((match) => match[1]!);
+  expect(names).toContain("motd");
+  expect(names.filter((name) => !isSwitchVerb(`set-${name}`))).toEqual([]);
+  const { client, control, replies } = systemTweaksClient();
+  const pending = client.setSwitch(control("Server info at SSH login"), "motd");
+  await Bun.sleep(0);
+  expect(replies[0]).toMatchObject({ path: "/api/motd", body: '{"enabled":true}' });
+  replies[0]!.answer({ ok: true, html: "" });
+  await pending;
+});
 
 // Switching updates on and then the panel's PHP, before the first answered, let
 // the first reply repaint the PHP picker back as if its change had stopped.
