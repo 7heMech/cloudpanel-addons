@@ -3,57 +3,49 @@
 import { dashboardUrl, installedAddons, migrateOldAddonNames, resolveAddon } from "./addons";
 import { artifactNames, installArtifacts, installedTag } from "./artifacts";
 import { bootstrapProvision, applyEnable } from "./toggle";
-import { ADDONS, ADDON_NAMES, type AddonSpec } from "./addon-catalog";
+import { type AddonSpec } from "./addon-catalog";
 import { recordNewsSince } from "./manager-action";
-import { pickAddons } from "./menu";
 import { withOperationLock } from "./operation-lock";
 import { ensureDirs, ensureRequiredUnits, ensureServiceUser } from "./provision";
 import { CLI_VERSION, loadLocal } from "./release";
 import { fatal, log, parseFlags, requireRoot } from "./util";
 
 /**
- * Enables bundled code. `--local` is install.sh handing over the binary it has
- * just installed, so its artifacts are recorded before provisioning. With no
- * addon named, a terminal is asked which ones. Changing version is `update`.
+ * What install.sh runs: `--local` hands over the binary it has just installed,
+ * so its artifacts are recorded before provisioning, with or without addons.
+ * Changing version is `update`.
  */
 export async function cmdInstall(argv: string[]): Promise<void> {
   requireRoot("install");
   const { positional, flags } = parseFlags(argv);
   const unknown = Object.keys(flags).find((flag) => flag !== "local");
   if (unknown) fatal(`install does not take --${unknown}${unknown === "version" ? "; change version with clp-addons update --version" : ""}`);
-  if (flags.local === true) fatal("--local requires a value");
-  const names = positional.length > 0 ? positional : await askAddons();
-  const [first, ...rest] = [...new Set(names)].map(resolveAddon);
-  return withOperationLock(`install ${names.join(", ")}`, async () => {
+  const local = flags.local;
+  if (typeof local !== "string") fatal("install is what install.sh runs; turn addons on with clp-addons enable <addon>");
+  const specs = [...new Set(positional)].map(resolveAddon);
+  return withOperationLock(`install ${positional.join(", ") || "clp-addons"}`, async () => {
     // Re-running the installer on an older box must not leave a renamed addon behind until repair.
     migrateOldAddonNames();
-    if (typeof flags.local === "string") applyLocal(first!, flags.local);
-    else await applyEnable(first!.name);
-    for (const spec of rest) await applyEnable(spec.name);
+    applyLocal(specs.shift(), local);
+    for (const spec of specs) await applyEnable(spec.name);
     log.plain();
+    if (!installedAddons().some((spec) => spec.name === "system-tweaks")) {
+      log.plain("System Tweaks is recommended: it applies the security fixes. Enable it on the Addons page or with: clp-addons enable system-tweaks");
+    }
     log.plain(`Dashboard URL: ${dashboardUrl()}`);
   });
 }
 
-async function askAddons(): Promise<string[]> {
-  const preselected = ADDON_NAMES.filter((name) => ADDONS[name]!.preselected);
-  if (!process.stdin.isTTY || !process.stdout.isTTY || process.env.TERM === "dumb") {
-    fatal(`name the addons to install, for example: clp-addons install ${preselected.join(" ")}`);
-  }
-  const picked = await pickAddons();
-  if (!picked) fatal("installation cancelled");
-  return picked;
-}
-
-function applyLocal(spec: AddonSpec, dir: string): void {
-  ensureRequiredUnits(spec);
-  const specs = [...installedAddons().filter((item) => item.name !== spec.name), spec];
+function applyLocal(spec: AddonSpec | undefined, dir: string): void {
+  if (spec) ensureRequiredUnits(spec);
+  const specs = [...installedAddons().filter((item) => item.name !== spec?.name), ...(spec ? [spec] : [])];
   const artifacts = loadLocal(dir, artifactNames());
   ensureServiceUser();
   ensureDirs(specs, true);
   recordNewsSince(installedTag());
   installArtifacts(artifacts, CLI_VERSION.replace(/^v/, ""));
   bootstrapProvision(specs);
+  if (!spec) return log.ok("clp-addons installed");
   spec.activate?.();
   log.ok(`${spec.name} installed`);
 }

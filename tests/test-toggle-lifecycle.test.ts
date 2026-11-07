@@ -138,7 +138,7 @@ try {
   for (const step of JSON.parse(process.env.CLP_TEST_STEPS)) {
     if (step.verb === "enable") await cli.applyEnable(step.addon);
     else if (step.verb === "disable") cli.applyDisable(step.addon);
-    else if (step.verb === "uninstall") (await import("./cli/uninstall.ts")).cmdUninstall([step.addon, "--yes"]);
+    else if (step.verb === "uninstall") (await import("./cli/uninstall.ts")).cmdSelfUninstall(["--yes"]);
     // A between-steps nudge, so a test can spoil a unit file the way something
     // outside this binary would and watch the next toggle put it back.
     else chmodSync(root + "/systemd/" + step.addon, step.mode);
@@ -187,7 +187,8 @@ function fixture(options: { provisioned: boolean; enabled: string[] }): string {
 }
 
 type Step =
-  | { verb: "enable" | "disable" | "uninstall"; addon: string }
+  | { verb: "enable" | "disable"; addon: string }
+  | { verb: "uninstall" }
   | { verb: "chmod"; addon: string; mode: number };
 
 function toggle(
@@ -492,17 +493,20 @@ test("a guard that fails its config test does not stop a disable", () => {
   expect(run.warnings.some((line) => line.includes("repair will retry"))).toBe(true);
 });
 
-test("uninstalling the last addon never writes the guard it is about to remove", () => {
+test("self-uninstall refuses while an addon is enabled", () => {
   const { root, guard } = optedOutFixture();
-  const run = toggle([{ verb: "uninstall", addon: "system-tweaks" }], { root });
-  expect(run.error).toBeUndefined();
-  expect(guardTests(run)).toEqual([]);
+  const run = toggle([{ verb: "uninstall" }], { root });
+  expect(run.error).toContain("clp-addons disable system-tweaks");
+  expect(existsSync(join(root, "etc", "system-tweaks.conf"))).toBe(true);
   expect(existsSync(guard)).toBe(false);
 });
 
-test("uninstalling System Tweaks while another addon remains puts the guard back", () => {
-  const { root, guard } = optedOutFixture(["maintenance"]);
-  const run = toggle([{ verb: "uninstall", addon: "system-tweaks" }], { root });
+test("self-uninstall after the last disable removes the guard, the units and the binary", () => {
+  const { root, guard } = optedOutFixture();
+  writeFileSync(join(root, "clp-addons"), "");
+  const run = toggle([{ verb: "disable", addon: "system-tweaks" }, { verb: "uninstall" }], { root });
   expect(run.error).toBeUndefined();
-  expect(existsSync(guard)).toBe(true);
+  expect(existsSync(guard)).toBe(false);
+  expect(run.provision).toContain("stopUnits");
+  expect(existsSync(join(root, "clp-addons"))).toBe(false);
 });

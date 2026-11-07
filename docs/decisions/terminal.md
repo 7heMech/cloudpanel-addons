@@ -140,7 +140,7 @@ site sends reaches a root process.
 
 Closing the PTY hangs the shell up, as a dropped SSH connection does. What a
 user deliberately detached, such as `nohup`, outlives the window under their
-logind session, as it would over SSH. Disabling or uninstalling the addon stops
+logind session, as it would over SSH. Disabling the addon stops
 every worker, which hangs up every shell, once its config is gone, so no worker
 can start after.
 

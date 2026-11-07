@@ -1,8 +1,8 @@
 # CloudPanel Addons
 
 Security hardening and extra features for [CloudPanel](https://www.cloudpanel.io/).
-The default install adds nginx config-injection checks, restricts trusted IP
-headers and disables PHP upload progress. See the
+[System Tweaks](docs/system-tweaks.md) fixes CloudPanel security weaknesses such
+as nginx config injection and forged visitor IPs. See the
 [security model and hardening](SECURITY.md).
 
 Unofficial, not affiliated with or endorsed by CloudPanel.
@@ -15,12 +15,12 @@ Log in to your server as **root** and run:
 curl -fsSL https://github.com/7heMech/cloudpanel-addons/releases/latest/download/install.sh | bash
 ```
 
-Asks which addons you want, installs dependencies for them if needed and checks
-the download's SHA-256 checksum. Updates also check build provenance.
+Checks the download's SHA-256 checksum; updates also check build provenance.
+Requires an x86-64 CloudPanel host with AVX2 (Intel 2013+, AMD 2015+). On a VM,
+set the CPU type to `host`.
 
-Requires an x86-64 CloudPanel host.
-
-When it finishes, open the new **Addons** tab in CloudPanel.
+When it finishes, open the new **Addons** tab in CloudPanel and enable the
+addons you want. System Tweaks is recommended.
 
 ![CloudPanel Addons Manager](docs/screenshots/addons.png)
 
@@ -54,17 +54,20 @@ security keys under Account → Security, in the roles an administrator allows.
 | --- | --- |
 | `clp-addons` | As root, toggle addons and run status, repair or update. |
 | `clp-addons status` | Check services and CloudPanel integration. |
-| `clp-addons install <addon>` | Enable an addon, installing Docker if it needs it. |
+| `clp-addons enable <addon>` | Enable an addon, installing Docker if it needs it. |
+| `clp-addons disable <addon>` | Disable an addon and keep its data. |
 | `clp-addons update` | Install the latest verified release. |
 | `clp-addons repair` | Restore managed services and CloudPanel integration. |
 | `clp-addons maintenance <domain> [on\|off\|status]` | Control or inspect maintenance mode for a site. |
-| `clp-addons terminal root allow <user>` | Let one administrator, with two-factor on, open a root shell from the panel; `deny` takes it back. |
-| `clp-addons uninstall <addon> --yes` | Remove an addon and keep its data. |
+| `clp-addons terminal root allow <user>` | Let one administrator with 2FA open a root terminal from the panel; `deny` takes it back. |
 
 Addon names are `cloudflare-ips`, `dns`, `instatic`, `stager`, `maintenance`,
 `php-resources`, `git`, `panel-tweaks`, `system-tweaks`, `wp-tools`, `smtp`, `terminal`
-and `security-keys`. Run
-`clp-addons --help` for version selection and data removal options.
+and `security-keys`. Run `clp-addons --help` for version selection options.
+
+To remove CloudPanel Addons, disable every addon, then run
+`clp-addons self-uninstall --yes`. Sites keep running, Instatic sites included,
+and addon data stays in `/var/lib/clp-addons`.
 
 See [Instatic backup and restore](docs/instatic-backups.md) for CloudPanel Remote
 Backups.

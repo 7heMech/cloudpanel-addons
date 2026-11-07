@@ -4,7 +4,7 @@ import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, 
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
-function bootstrap(version: string, checksum: "good" | "bad" = "good"): { status: number | null; events: string[]; output: string } {
+function bootstrap(version: string, checksum: "good" | "bad" = "good", addons = "instatic stager"): { status: number | null; events: string[]; output: string } {
   const root = mkdtempSync(`${tmpdir()}/installer-bootstrap-test-`);
   try {
     const bin = join(root, "bin");
@@ -31,7 +31,7 @@ REPO=7heMech/cloudpanel-addons
 ARTIFACT=clp-addons-linux-x64
 CLI_TARGET="$TEST_ROOT/clp-addons"
 VERSION=${version}
-ADDON_LIST=(instatic stager)
+ADDON_LIST=(${addons})
 step() { :; }
 ok() { :; }
 die() { printf '%s\\n' "$*" >&2; exit 1; }
@@ -100,29 +100,8 @@ test("a binary that does not match SHA256SUMS is never run", () => {
   expect(result.output).toContain("checksum mismatch");
 });
 
-// The binary asks on /dev/tty, so the script must know before downloading
-// whether it can. Each case runs under a real pseudo-terminal from `script`.
-test.each([
-  { name: "a terminal", command: "bash $HARNESS", asks: true },
-  { name: "no terminal to open, though output is one", command: "setsid -w bash $HARNESS", asks: false },
-  { name: "output piped elsewhere", command: "bash $HARNESS | cat", asks: false },
-  { name: "a terminal that cannot redraw", command: "TERM=dumb bash $HARNESS", asks: false },
-])("the installer asks only with $name", ({ command, asks }) => {
-  const root = mkdtempSync(`${tmpdir()}/installer-tty-test-`);
-  try {
-    const source = readFileSync(join(import.meta.dir, "..", "install.sh"), "utf8");
-    const canAsk = source.match(/^can_ask\(\) \{.*\}$/m)?.[0];
-    if (!canAsk) throw new Error("can_ask was not found in install.sh");
-    const harness = join(root, "harness.sh");
-    const result = join(root, "result");
-    writeFileSync(harness, `${canAsk}\nif can_ask; then echo yes > "${result}"; else echo no > "${result}"; fi\n`);
-    spawnSync("script", ["-qec", command, "/dev/null"], {
-      env: { ...process.env, TERM: "xterm", HARNESS: harness },
-      stdio: "ignore",
-      timeout: 10_000,
-    });
-    expect(readFileSync(result, "utf8").trim()).toBe(asks ? "yes" : "no");
-  } finally {
-    rmSync(root, { recursive: true, force: true });
-  }
+test("with no addons named, only the binary and its services are installed", () => {
+  const result = bootstrap("latest", "good", "");
+  expect(result.status, result.output).toBe(0);
+  expect(result.events[2]).toStartWith("clp:install --local=");
 });

@@ -52,7 +52,7 @@ export const KNOWN_GOOD_PANEL_VERSIONS = ["2.5.4-3+clp-bookworm"];
  *
  * The addon supplies markup and nothing else. Markers are added here rather
  * than by the addon, so two addons cannot pick the same ones -- which is how
- * uninstalling one used to strip the other's block as well.
+ * removing one used to strip the other's block as well.
  */
 export interface Injection {
   addon: string;
@@ -168,7 +168,7 @@ export function inspect(inj: Injection, paths?: Partial<InjectPaths>): TargetSta
 /**
  * Make every template match exactly the set of injections given.
  *
- * Removal is not a separate operation: uninstalling an addon means calling this
+ * Removal is not a separate operation: disabling an addon means calling this
  * with that addon's injections left out, and the file is re-rendered without
  * them. Passing none for a file restores it to pristine.
  */
@@ -187,7 +187,7 @@ export function reconcile(
   }
 
   // Files that carry a block from an addon no longer in the set still have to
-  // be visited, or an uninstalled addon's markup stays on the page.
+  // be visited, or a disabled addon's markup stays on the page.
   for (const file of patchedFiles(p)) if (!byFile.has(file)) byFile.set(file, []);
 
   const statuses: TargetStatus[] = [];

@@ -87,10 +87,12 @@ kept in `/usr/local/libexec/clp-addons/gh`.
 `install.sh` checks the host, downloads the binary from
 `/releases/latest/download` or the `--version` tag, checks it against
 `SHA256SUMS`, and installs it. It makes no GitHub API call. It then runs
-`clp-addons install --local=DIR` with the addons from `--addons`, or with none
-on the terminal the script was started from, so the binary asks. The question,
-the addon names and what each addon needs, such as Docker, live only in the
-binary, and the picker is the same list as the `clp-addons` menu.
+`clp-addons install --local=DIR` with the addons from `--addons`, if any. With
+none it installs the manager and its CloudPanel hooks with every addon off,
+the state disabling the last addon leaves, and the operator enables addons on
+the Addons page or in the `clp-addons` menu. It never asks, so it needs no
+terminal. The addon names and what each addon needs, such as Docker, live only
+in the binary.
 
 The installer does not check provenance. Under `curl | bash`, `install.sh`
 comes from the same release as the binary, so anyone able to substitute the
@@ -102,12 +104,20 @@ first install. `install` takes no `--version`; changing version is `update`.
 
 ## Default selection
 
-The installer preselects Panel Tweaks and System Tweaks, each marked
-`preselected` in its addon definition: they work on the panel and the server
-themselves, so they suit any box, need no outside account, and change nothing
-until used unless the change is itself protective. Every other addon is chosen
-by hand. The selection only applies when the installer runs; `update` never
-adds an addon.
+No addon is enabled by default; the installer recommends System Tweaks, which
+holds the security fixes. `update` never adds an addon.
+
+## Uninstall
+
+The commands that act on one addon are only `enable` and `disable`. Removing
+the installation is `self-uninstall`, named so that it cannot be mistaken for
+removing one addon. It refuses while any addon is enabled, so every addon's own
+withdrawal has already run through disable. It deletes no data and leaves every
+site serving: Instatic containers run under Docker's own restart policy behind
+CloudPanel reverse-proxy sites, and neither disable nor `self-uninstall` stops
+them. Their daily recovery archive stops with Instatic's backup cron.
+`/var/lib/clp-addons` stays, since sites created before 1.1.3 keep their data
+there.
 
 ## Update behavior
 
