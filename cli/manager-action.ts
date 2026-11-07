@@ -271,13 +271,13 @@ function enabled(name: string): boolean {
  * by `installedInjections` for the same reason. Taking the installation away
  * altogether is still `clp-addons uninstall`.
  */
-function rejectImpossible(kind: ManagerJobKind, addon: string): string | null {
+function rejectImpossible(kind: ManagerJobKind, addon: string, locks?: CreateJobOptions["locks"]): string | null {
   if (kind === "update") return null;
   if (!ADDON_NAMES.includes(addon)) return `unknown addon '${addon}'`;
   const isEnabled = enabled(addon);
   if (kind === "enable" && isEnabled) return `${addon} is already enabled`;
   if (kind === "disable" && !isEnabled) return `${addon} is already disabled`;
-  if (addonLocked(addon)) return `root has locked ${addon}; run clp-addons unlock ${addon} on the server first`;
+  if (addonLocked(addon, locks?.file, locks?.rootUid)) return `root has locked ${addon}; run clp-addons unlock ${addon} on the server first`;
   return null;
 }
 
@@ -304,6 +304,8 @@ export interface CreateJobOptions {
   startUnit?: typeof startJobUnit;
   emitReply?: boolean;
   onReply?: (res: any) => void;
+  /** Tests only: a lock file of their own, owned by them. */
+  locks?: { file: string; rootUid: number };
 }
 
 export async function createJob(
@@ -326,7 +328,7 @@ export async function createJob(
     return failReply(error, data, emit);
   };
 
-  const refusal = rejectImpossible(kind, addon);
+  const refusal = rejectImpossible(kind, addon, options.locks);
   if (refusal) return emitFail(refusal);
 
   const running = activeManagerJob(jobsDir);

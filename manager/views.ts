@@ -25,7 +25,7 @@ function addonRow(name: string, enabled: boolean, job: ManagerJobView | null, ne
   const heading = enabled && href ? `<a href="${esc(href)}">${esc(title)}</a>` : esc(title);
   const lock = lockState(spec.name);
   const toggle = lock !== "unlocked"
-    ? `<span class="badge" title="${lock === "damaged" ? `The lock file is damaged; run clp-addons lock on the server` : `Run clp-addons unlock ${esc(spec.name)} on the server to ${enabled ? "disable" : "enable"} it`}">Locked by root</span>`
+    ? `<span class="badge" title="${lock === "damaged" ? `The lock file cannot be read or trusted; run clp-addons lock on the server` : `Run clp-addons unlock ${esc(spec.name)} on the server to ${enabled ? "disable" : "enable"} it`}">Locked by root</span>`
     : enabled
       ? `<button class="btn" type="button" onclick="disableAddon('${escJs(spec.name)}', '${escJs(title)}', this)" aria-label="Disable ${esc(title)}">Disable</button>`
       : `<button class="btn" type="button" onclick="enableAddon('${escJs(spec.name)}', this)" aria-label="Enable ${esc(title)}">Enable</button>`;

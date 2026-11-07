@@ -5,7 +5,7 @@
 // page: which verbs the root gateway will run at all, and the job record that
 // carries the outcome across the manager restart each of them ends with.
 import { describe, test, expect } from "bun:test";
-import { mkdirSync, mkdtempSync, rmSync, utimesSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, rmSync, utimesSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { createAuthActionServer } from "../cli/auth-action";
@@ -701,4 +701,25 @@ describe("manager route decoding and safe segment decoder", () => {
     expect(body.ok).toBe(false);
     expect(body.error).toBe("invalid addon name");
   });
+});
+
+test.skipIf(existsSync(ADDONS["system-tweaks"]!.configFile))("the manager refuses to enable an addon root has locked", async () => {
+  const dir = mkdtempSync(join(tmpdir(), "manager-locks-"));
+  try {
+    const file = join(dir, "locks.json");
+    writeFileSync(file, JSON.stringify({ addons: ["system-tweaks"] }));
+    const replies: any[] = [];
+    let started = false;
+    const result = await createJob("enable", "system-tweaks", {
+      jobsDir: join(dir, "jobs"), lockDir: join(dir, "lock"), emitReply: false,
+      startUnit: () => { started = true; return { ok: true, stdout: "", stderr: "" }; },
+      onReply: (data) => replies.push(data),
+      locks: { file, rootUid: process.getuid?.() ?? 0 },
+    });
+    expect(result).not.toBe(0);
+    expect(started).toBe(false);
+    expect(replies[0].error).toBe("root has locked system-tweaks; run clp-addons unlock system-tweaks on the server first");
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
 });

@@ -843,7 +843,7 @@ function loginJailsCard(jails: LoginJails, locked: boolean): string {
 
 const LOCK_NOTICE: Record<Exclude<LockState, "unlocked">, string> = {
   locked: "Root has locked the Settings, Failed logins and Database switches as they are, and System Tweaks cannot be disabled. To change them, run <code>clp-addons unlock system-tweaks</code> on the server.",
-  damaged: "The root lock file is damaged, so the Settings, Failed logins and Database switches stay as they are, and System Tweaks cannot be disabled. Run <code>clp-addons lock</code> on the server to see how to fix it.",
+  damaged: "The root lock file cannot be read or trusted, so the Settings, Failed logins and Database switches stay as they are, and System Tweaks cannot be disabled. Run <code>clp-addons lock</code> on the server to see how to fix it.",
 };
 
 export function dashboardView(state: SystemTweaksState, now = Date.now(), lock: LockState = "unlocked"): string {
@@ -855,8 +855,8 @@ export function dashboardView(state: SystemTweaksState, now = Date.now(), lock: 
         <p>Server-wide settings for this machine.</p>
         <p class="hint">Every 15 minutes it also clears PHP and ImageMagick temp files that timed-out requests left in /tmp.${firewallLine(state.firewall)}</p>
       </div>
-    </div>${lock !== "unlocked" ? `
-    <p class="notice">${LOCK_NOTICE[lock]}</p>` : ""}
+    </div>${locked ? `
+    <p class="notice">${LOCK_NOTICE[lock as keyof typeof LOCK_NOTICE]}</p>` : ""}
     <div class="card">
       <div class="card-header"><h2>Automatic updates</h2></div>
       <div class="tweak-list">${updateRows(state.updates, state.settings)}

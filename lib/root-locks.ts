@@ -27,12 +27,16 @@ export function isLockable(addon: string): boolean {
 
 const rootsAlone = (info: Stats, rootUid: number) => info.uid === rootUid && (info.mode & 0o022) === 0;
 
-const missing = (error: unknown) => (error as NodeJS.ErrnoException)?.code === "ENOENT";
+const errno = (error: unknown) => (error as NodeJS.ErrnoException)?.code;
+
+/** The lock file itself is wrong; root recovers by removing it and locking again. */
+export class UntrustedLockFile extends Error {}
 
 /**
- * The locked addons. Only a missing directory or file means none: any other
- * error, or a file or directory root does not own alone, is thrown, so the
- * caller fails closed. The file is checked and read through one descriptor.
+ * The locked addons. Only a missing directory or file means none. A file or
+ * directory root does not own alone, or one that does not parse, throws
+ * UntrustedLockFile; any other error is thrown as it is. Either way the caller
+ * fails closed. The file is checked and read through one descriptor.
  */
 export function lockedAddons(file = ROOT_LOCKS_FILE, rootUid = 0): string[] {
   const dir = dirname(file);
@@ -40,34 +44,36 @@ export function lockedAddons(file = ROOT_LOCKS_FILE, rootUid = 0): string[] {
   try {
     dirInfo = lstatSync(dir);
   } catch (error) {
-    if (missing(error)) return [];
+    if (errno(error) === "ENOENT") return [];
     throw error;
   }
-  if (!dirInfo.isDirectory() || !rootsAlone(dirInfo, rootUid)) throw new Error(`${dir} is not a directory only root can write`);
+  if (!dirInfo.isDirectory() || !rootsAlone(dirInfo, rootUid)) throw new UntrustedLockFile(`${dir} is not a directory only root can write`);
   let fd: number;
   try {
     fd = openSync(file, constants.O_RDONLY | constants.O_NOFOLLOW | constants.O_NONBLOCK);
   } catch (error) {
-    if (missing(error)) return [];
-    throw new Error(`${file} is not a trusted regular file`);
+    if (errno(error) === "ENOENT") return [];
+    // O_NOFOLLOW refuses a link with ELOOP.
+    if (errno(error) === "ELOOP") throw new UntrustedLockFile(`${file} is not a trusted regular file`);
+    throw error;
   }
   try {
     const info = fstatSync(fd);
-    if (!info.isFile() || !rootsAlone(info, rootUid)) throw new Error(`${file} is not a trusted regular file`);
+    if (!info.isFile() || !rootsAlone(info, rootUid)) throw new UntrustedLockFile(`${file} is not a trusted regular file`);
     let stored: { addons?: unknown } | null;
     try {
       stored = JSON.parse(readFileSync(fd, "utf8"));
     } catch {
-      throw new Error(`${file} is not valid JSON`);
+      throw new UntrustedLockFile(`${file} is not valid JSON`);
     }
-    if (!Array.isArray(stored?.addons)) throw new Error(`${file} has no addons list`);
+    if (!Array.isArray(stored?.addons)) throw new UntrustedLockFile(`${file} has no addons list`);
     return stored.addons.filter((addon): addon is string => typeof addon === "string");
   } finally {
     closeSync(fd);
   }
 }
 
-/** "damaged" when the lock file cannot be trusted, which locks every lockable addon. */
+/** "damaged" when the lock file cannot be read or trusted, which locks every lockable addon. */
 export type LockState = "unlocked" | "locked" | "damaged";
 
 /** An addon with nothing to lock is always "unlocked". */

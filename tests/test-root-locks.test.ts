@@ -120,3 +120,15 @@ test("an addon with nothing to lock is never locked, even by a broken file", () 
   writeFileSync(file, "{");
   expect(addonLocked("dns", file, uid)).toBe(false);
 });
+
+test.skipIf(uid === 0)("a lock file that cannot be opened reports why, not that it is untrusted", () => {
+  const shut = mkdtempSync(`${dir}/unreadable-`);
+  writeFileSync(`${shut}/locks.json`, JSON.stringify({ addons: [] }));
+  chmodSync(`${shut}/locks.json`, 0o000);
+  try {
+    expect(() => lockedAddons(`${shut}/locks.json`, uid)).toThrow("EACCES");
+    expect(lockState("system-tweaks", `${shut}/locks.json`, uid)).toBe("damaged");
+  } finally {
+    chmodSync(`${shut}/locks.json`, 0o644);
+  }
+});

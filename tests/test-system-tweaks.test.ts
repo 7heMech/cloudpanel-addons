@@ -614,7 +614,7 @@ test("root's lock leaves the protections read-only and the rest of the page as i
     expect(switchOf(damaged, key)).toContain("disabled");
   }
   expect(switchOf(locked, "enabled")).not.toContain("disabled");
-  expect(damaged).toContain("The root lock file is damaged");
+  expect(damaged).toContain("The root lock file cannot be read or trusted");
   expect(damaged).toContain("<code>clp-addons lock</code>");
 });
 

@@ -151,10 +151,11 @@ administrators.
 
 The locks are `/etc/clp-addons/locks.json`, mode `0644` so the manager can show
 them, read through one descriptor opened without following links. Only a
-missing file means no locks. A file that is not root's alone, not a regular
-file or unreadable, or a directory others could remove it from, locks every
-lockable addon; `lock` and `unlock` then refuse and tell root to remove it and
-lock again what should stay locked. `lock` creates the directory `0755` whatever
+missing file means no locks. A file that cannot be read, is not root's alone,
+is not a regular file or does not parse, or a directory others could remove it
+from, locks every lockable addon; `lock` and `unlock` then refuse, and for an
+untrusted file tell root to remove it and lock again what should stay locked.
+A read error is reported as it is, so a healthy file is not removed. `lock` creates the directory `0755` whatever
 root's umask. The page leaves a locked switch read-only, taking which switches
 from the verbs' `lock` flag, and names the command, or `clp-addons lock` when
 the file is damaged.

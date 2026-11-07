@@ -16,7 +16,7 @@ import { CLI_VERSION } from "./release";
 import { installedConfig } from "./provision";
 import { reconcile } from "./inject";
 import { fatal, Fatal, log, requireRoot } from "./util";
-import { LOCKABLE_ADDONS, ROOT_LOCKS_FILE, ROOT_LOCKS_LOCK, isLockable, lockedAddons, writeLockedAddons } from "../lib/root-locks";
+import { LOCKABLE_ADDONS, ROOT_LOCKS_FILE, ROOT_LOCKS_LOCK, UntrustedLockFile, isLockable, lockedAddons, writeLockedAddons } from "../lib/root-locks";
 import { withOperationLockSync } from "./operation-lock";
 import { withFileLockSync } from "./action-common";
 import { runRecon } from "./recon";
@@ -88,7 +88,10 @@ function cmdLock(argv: string[], lock: boolean): void {
     try {
       return lockedAddons();
     } catch (error) {
-      fatal(`${error instanceof Error ? error.message : String(error)}, so every lockable addon counts as locked. ` +
+      if (!(error instanceof UntrustedLockFile)) {
+        fatal(`cannot read ${ROOT_LOCKS_FILE}: ${error instanceof Error ? error.message : String(error)}; every lockable addon counts as locked until it can be`);
+      }
+      fatal(`${error.message}, so every lockable addon counts as locked. ` +
         `Note what it locked, remove it with rm ${ROOT_LOCKS_FILE}, then lock those addons again`);
     }
   };
