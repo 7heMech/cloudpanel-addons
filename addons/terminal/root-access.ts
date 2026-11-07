@@ -106,7 +106,7 @@ export function grantProblem(db: Database, grant: RootGrant): string | null {
   if (!found || found.id !== grant.id) return `${grant.user} is not the account root allowed; root can run clp-addons terminal root allow ${grant.user} again`;
   if (Number(found.status) !== 1) return `${grant.user} is deactivated`;
   if (found.role !== "ROLE_ADMIN") return `${grant.user} is no longer an administrator`;
-  if (Number(found.mfa) !== 1) return "A root terminal needs two-factor authentication: turn it on in Account → Security.";
+  if (Number(found.mfa) !== 1) return "A root terminal needs 2FA: turn it on in Account → Security.";
   return null;
 }
 
