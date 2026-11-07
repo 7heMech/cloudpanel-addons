@@ -8,6 +8,7 @@ import type { SystemTweaksState } from "../action";
 import { BACKUP_COMPRESSION_ERROR, validBackupCompression } from "../backup-compression";
 import { FIREWALL_PROTOCOLS, ruleKey, type FirewallProtocol, type FirewallStatus } from "../firewall";
 import { LOGIN_JAILS } from "../login-jails";
+import { MEMORY_ERROR, memoryChange } from "../memory";
 import { systemTweaksService } from "./service";
 import { dashboardView, layout } from "./views";
 
@@ -129,9 +130,23 @@ export async function handle(
     return repaint(await systemTweaksService.setClpctlGuard(body.enabled));
   }
 
+  if (path === "/api/telemetry") {
+    if (typeof body.enabled !== "boolean") return json({ ok: false, error: "enabled must be true or false" }, 400);
+    return repaint(await systemTweaksService.setTelemetry(body.enabled));
+  }
+
   if (path === "/api/backup-compression") {
     if (!validBackupCompression(body)) return json({ ok: false, error: BACKUP_COMPRESSION_ERROR }, 400);
     return repaint(await systemTweaksService.setBackupCompression(body));
+  }
+
+  if (path === "/api/memory") {
+    const change = memoryChange(body);
+    if (!change) return json({ ok: false, error: MEMORY_ERROR }, 400);
+    const saved = await systemTweaksService.setMemory(change);
+    if (!saved.ok) return json(saved, 400);
+    // Its own request, so the state read gets the time loading the page gets.
+    return repaint(await systemTweaksService.state());
   }
 
   if (path === "/api/real-ip") {

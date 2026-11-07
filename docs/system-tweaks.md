@@ -352,6 +352,18 @@ clpctl stripping backslashes from its arguments, its commands building shell
 strings from option values, `db:import` running the dump as the database
 administrator, and the panel user `clp` having full `sudo`.
 
+## CloudPanel telemetry
+
+**Block CloudPanel telemetry** is on by default. Once a day CloudPanel's
+`clp-agent` sends CloudPanel the server's ID and hardware, every site's domain
+and every panel user's name and email. The setting cuts the agent off from the
+network, so nothing leaves the server; it keeps drawing the dashboard's graphs.
+CloudPanel's update and announcement checks still work.
+
+To check it, `systemctl show clp-agent -p IPAddressDeny` prints
+`IPAddressDeny=::/0 0.0.0.0/0`. Switching it off removes the drop-in and
+restarts the agent.
+
 ## Abandoned temp files
 
 Every 15 minutes System Tweaks removes the PHP and ImageMagick temp files that
@@ -443,3 +455,34 @@ working. Change it in MySQL first.
    enter the `'root'@'127.0.0.1'` password and save. CloudPanel checks it before
    saving. The other accounts' passwords do not go into CloudPanel.
 3. Open a site's **Databases** page to confirm the panel still connects.
+
+## Memory
+
+The **Memory** card sizes MySQL and Redis from the server's RAM, and decides
+what the kernel kills first when memory runs out.
+
+1. Choose a **Memory profile**: **Balanced**, **Database-heavy** or
+   **Cache-heavy**. The card lists what it gives each service on this server and
+   what is left for PHP. Only the profile is saved: the sizes are worked out
+   again each time MySQL or Redis starts, so after you resize the server they
+   follow its new RAM at the next boot.
+2. Switch on **Size MySQL to this server** to replace CloudPanel's fixed MySQL
+   values with the profile's buffer pool, connection limit and smaller
+   per-connection buffers. It writes `zz-clp-addons-memory.cnf` next to
+   CloudPanel's `mysqld.cnf` and never restarts MySQL: the card shows
+   **Pending** until the next restart, which you can do when it suits you:
+
+   ```bash
+   systemctl restart mysql
+   ```
+
+   More connections at once than the limit get *Too many connections*.
+3. Switch on **Cap Redis** to limit Redis to the profile's share. When it is
+   full, Redis evicts the keys used least recently. It applies at once. Leave
+   it off if a site keeps a job queue or other data in Redis it cannot lose.
+4. **Protect MySQL and nginx when memory runs out** is on by default. When the
+   server runs out of memory, the kernel kills a site's PHP worker, failing one
+   request, instead of MySQL or nginx, which would take every site down.
+
+Switching any of them off removes System Tweaks' files and puts back
+CloudPanel's values: Redis at once, MySQL at its next restart.

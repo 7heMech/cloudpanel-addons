@@ -52,6 +52,7 @@ import { SECURITY_KEYS_TARGETS } from "../addons/security-keys/inject/targets";
 import type { UserKeysView } from "../addons/security-keys/action";
 import { dashboardView as systemTweaksDashboardView, layout as systemTweaksLayout } from "../addons/system-tweaks/app/views";
 import type { SystemTweaksState } from "../addons/system-tweaks/action";
+import { MEMORY_PROFILES, memoryPlan, type MemoryProfile, type MemorySettings } from "../addons/system-tweaks/memory";
 
 const versions: AvailableTags = { tags: ["0.0.19", "0.0.18"], latest: "0.0.19", source: "registry" };
 const instances: InstanceView[] = [
@@ -524,6 +525,26 @@ function databasePreviewState(url: URL): Exclude<SystemTweaksState["database"], 
   };
 }
 
+/** `?memory=on`, `pending` or `off` (the default, with protection on); `?profile=` and `?ram=` in MB. */
+function memoryPreviewState(url: URL, settings?: MemorySettings): SystemTweaksState["memory"] {
+  const mode = url.searchParams.get("memory") ?? "off";
+  const profile = (MEMORY_PROFILES as readonly string[]).includes(url.searchParams.get("profile") ?? "") ? url.searchParams.get("profile") as MemoryProfile : "balanced";
+  const chosen = settings ?? { profile, mysql: mode !== "off", redis: mode !== "off", oom: true };
+  const plan = memoryPlan(Number(url.searchParams.get("ram")) || 3819, chosen.profile);
+  return {
+    settings: chosen,
+    plan,
+    mysql: { installed: true, inPlace: chosen.mysql, pending: chosen.mysql && mode === "pending" },
+    redis: {
+      installed: true, maxmemoryMb: chosen.redis ? plan.redisMb : 0, policy: chosen.redis ? "allkeys-lru" : "noeviction",
+      usedMb: 212, capped: chosen.redis, problem: "",
+    },
+    oom: { inPlace: chosen.oom },
+    varnishMb: 512,
+    memcachedMb: 64,
+  };
+}
+
 function systemTweaksPreviewState(url: URL): SystemTweaksState {
   if (systemTweaksPreview) return systemTweaksPreview;
   const mode = url.searchParams.get("updates") ?? "outside";
@@ -580,6 +601,7 @@ function systemTweaksPreviewState(url: URL): SystemTweaksState {
       level: 3, threads: 1, supported: true, installed: true, problem: "",
     },
     database: databasePreviewState(url),
+    memory: memoryPreviewState(url),
     firewall: { available: true, protocols: { 9: "udp", 10: "udp", 11: "both" }, udpPorts: url.searchParams.has("noudp") ? [] : ["53", "51820"] },
     vhostGuard: {
       enabled: url.searchParams.get("vhost") !== "off", active: url.searchParams.get("vhost") !== "off",
@@ -594,6 +616,7 @@ function systemTweaksPreviewState(url: URL): SystemTweaksState {
       : url.searchParams.get("clpctl") === "paused"
         ? { enabled: true, active: false, applicable: false, wrapper: "unknown", version: "2.6.0-1", reason: "/usr/bin/clpctlWrapper is not a CloudPanel wrapper this version was built against, so it is left in place" }
         : { enabled: true, active: true, applicable: true, wrapper: "ours", version: "2.5.4-3" },
+    telemetry: { enabled: url.searchParams.get("telemetry") !== "off", agent: true, blocked: url.searchParams.get("telemetry") !== "off", problem: "" },
     uploadProgress: {
       guard,
       fpms: [...php.map((version) => ({
@@ -638,12 +661,16 @@ function systemTweaksPreviewMutation(path: string, source: URL, body: Record<str
     if (!("error" in state.database)) {
       state.database = { ...state.database, loopback: body.enabled === true, fileInPlace: body.enabled === true, exposed: body.enabled === true ? [] : ["*:3306", "*:33060"] };
     }
+  } else if (path.endsWith("/memory") && !("error" in state.memory)) {
+    state.memory = memoryPreviewState(source, { ...state.memory.settings, ...body });
   } else if (path.endsWith("/backup-compression")) {
     state.backupCompression = { ...state.backupCompression, enabled: body.enabled === true, active: body.enabled === true, level: body.level, threads: body.threads };
   } else if (path.endsWith("/clpctl-guard")) {
     state.clpctlGuard = body.enabled === true
       ? { enabled: true, active: true, applicable: true, wrapper: "ours", version: "2.5.4-3" }
       : { enabled: false, active: false, applicable: true, wrapper: "known-original", version: "2.5.4-3" };
+  } else if (path.endsWith("/telemetry")) {
+    state.telemetry = { enabled: body.enabled === true, agent: true, blocked: body.enabled === true, problem: "" };
   } else if (path.endsWith("/real-ip")) {
     state.realIp = { blockForged: body.enabled === true, trustsAnyAddress: body.enabled !== true, problem: "" };
   } else if (path.endsWith("/login-jails") && !("error" in state.loginJails)) {

@@ -130,12 +130,26 @@ function setClpctlGuard(input) {
   return change(input, '/api/clpctl-guard', { enabled: input.checked }, switchText(input), 'Saved.');
 }
 
+function setTelemetry(input) {
+  return change(input, '/api/telemetry', { enabled: input.checked }, switchText(input), 'Saved.');
+}
+
 function setBackupCompression(control) {
   return change(control, '/api/backup-compression', {
     enabled: CLP_ROOT.querySelector('[data-setting="backup-compression"]').checked,
     level: Number(CLP_ROOT.getElementById('backup-level').value),
     threads: Number(CLP_ROOT.getElementById('backup-threads').value),
   }, 'Saving remote backup compression…', 'Saved. Applies to the next remote backup.');
+}
+
+// The profile's select, or one of the three switches; MySQL's applies at its next restart.
+function setMemory(control) {
+  if (control.tagName === 'SELECT') {
+    const label = control.options[control.selectedIndex].textContent;
+    return change(control, '/api/memory', { profile: control.value }, 'Switching to the ' + label + ' profile…', 'Saved.');
+  }
+  const key = control.dataset.setting.slice('memory-'.length);
+  return change(control, '/api/memory', { [key]: control.checked }, switchText(control), 'Saved.');
 }
 
 // A change restarts the panel and waits for it to answer.

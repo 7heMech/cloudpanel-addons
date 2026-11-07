@@ -11,7 +11,7 @@ import {
   DEFAULT_UPDATE_SETTINGS, REBOOT_TIME_ERROR, UPDATE_SETTING_KEYS, applyUpdates, validRebootTime, effectiveReboot, installUnattendedUpgrades, systemRun, unattendedUpgradesInstalled, updatesStatus, withDeadline,
   type UpdateSettings, type UpdatesOptions, type UpdatesStatus,
 } from "./updates";
-import { INSTALL_DEADLINE_MS } from "./limits";
+import { INSTALL_DEADLINE_MS, MEMORY_DEADLINE_MS } from "./limits";
 import { uploadProgressStatus, type FpmUploadProgress, type UploadProgressOptions } from "./upload-progress";
 import { applyRealIp, realIpStatus, type RealIpOptions, type RealIpStatus } from "./real-ip";
 import { applyPhpMyAdmin, phpMyAdminStatus, type PhpMyAdminOptions, type PhpMyAdminStatus } from "./phpmyadmin";
@@ -43,6 +43,11 @@ import {
   BACKUP_COMPRESSION_ERROR, DEFAULT_BACKUP_COMPRESSION, backupCompressionStatus, reconcileBackupCompression, validBackupCompression,
   type BackupCompressionOptions, type BackupCompressionSettings, type BackupCompressionStatus,
 } from "./backup-compression";
+import { applyTelemetryBlock, telemetryStatus, type TelemetryOptions, type TelemetryStatus } from "./telemetry";
+import {
+  DEFAULT_MEMORY, MEMORY_ERROR, applyMemory, memoryChange, memoryStatus, syncMemory, validMemorySettings,
+  type MemoryOptions, type MemorySettings, type MemoryStatus,
+} from "./memory";
 
 const SETTINGS_VERSION = 1;
 const MAX_INPUT_BYTES = 4 * 1024;
@@ -75,7 +80,11 @@ export interface SystemTweaksSettings {
   databaseLoopback: boolean;
   /** Replace CloudPanel's clpctlWrapper with one that closes the sudo-to-root injection. */
   blockClpctlInjection: boolean;
+  /** Deny CloudPanel's clp-agent every address but loopback. */
+  blockTelemetry: boolean;
   backupCompression: BackupCompressionSettings;
+  /** Memory limits worked out from the server's RAM; see memory.ts. */
+  memory: MemorySettings;
 }
 
 export interface SystemTweaksState {
@@ -94,6 +103,8 @@ export interface SystemTweaksState {
   loginJails: (LoginJailsStatus & LoginJailSettings) | { error: string };
   database: (DatabaseStatus & { loopback: boolean }) | { error: string };
   backupCompression: BackupCompressionStatus;
+  telemetry: TelemetryStatus & { enabled: boolean };
+  memory: (MemoryStatus & { settings: MemorySettings }) | { error: string };
 }
 
 export interface SystemTweaksPaths {
@@ -131,6 +142,8 @@ export interface SystemTweaksOptions {
   loginJails?: LoginJailOptions;
   database?: DatabaseOptions;
   backupCompression?: BackupCompressionOptions;
+  telemetry?: TelemetryOptions;
+  memory?: MemoryOptions;
   now?: () => number;
 }
 
@@ -153,7 +166,9 @@ export function readSettings(paths: SystemTweaksPaths): SystemTweaksSettings {
     fail2banBefore: null,
     databaseLoopback: false,
     blockClpctlInjection: true,
+    blockTelemetry: true,
     backupCompression: { ...DEFAULT_BACKUP_COMPRESSION },
+    memory: { ...DEFAULT_MEMORY },
   };
   if (!existsSync(paths.settingsFile)) return settings;
   const info = lstatSync(paths.settingsFile);
@@ -190,7 +205,9 @@ export function readSettings(paths: SystemTweaksPaths): SystemTweaksSettings {
   }
   if (stored.databaseLoopback === true) settings.databaseLoopback = true;
   if (stored.blockClpctlInjection === false) settings.blockClpctlInjection = false;
+  if (stored.blockTelemetry === false) settings.blockTelemetry = false;
   if (validBackupCompression(stored.backupCompression)) settings.backupCompression = { ...stored.backupCompression };
+  if (validMemorySettings(stored.memory)) settings.memory = { ...stored.memory };
   return settings;
 }
 
@@ -237,7 +254,14 @@ async function stateOf(options: SystemTweaksOptions): Promise<SystemTweaksState>
     loginJails: loginJailsOrError(settings.loginJails, options.loginJails),
     database: databaseOrError(settings.databaseLoopback, options.database),
     backupCompression: backupCompressionStatus(settings.backupCompression, options.backupCompression),
+    telemetry: { ...telemetryStatus(options.telemetry), enabled: settings.blockTelemetry },
+    memory: memoryOrError(settings.memory, options.memory),
   };
+}
+
+function memoryOrError(settings: MemorySettings, options?: MemoryOptions): SystemTweaksState["memory"] {
+  try { return { ...memoryStatus(settings, options), settings }; }
+  catch (error) { return { error: errorMessage(error) }; }
 }
 
 function loginJailsOrError(settings: LoginJailSettings, options?: LoginJailOptions): SystemTweaksState["loginJails"] {
@@ -337,6 +361,18 @@ async function setPhpMyAdmin(options: SystemTweaksOptions): Promise<SystemTweaks
     const settings = readSettings(paths);
     applyPhpMyAdmin(body.enabled as boolean, options.phpMyAdmin);
     writeSettings(paths, { ...settings, protectPhpMyAdmin: body.enabled as boolean });
+  });
+  return stateOf(options);
+}
+
+async function setTelemetry(options: SystemTweaksOptions): Promise<SystemTweaksState> {
+  const paths = pathsFor(options);
+  const body = await requestBody(options);
+  if (typeof body.enabled !== "boolean") failAction("enabled must be true or false");
+  await withFileLock(paths.lockFile, 15, "another system tweaks change is still running", async () => {
+    const settings = readSettings(paths);
+    applyTelemetryBlock(body.enabled as boolean, options.telemetry);
+    writeSettings(paths, { ...settings, blockTelemetry: body.enabled as boolean });
   });
   return stateOf(options);
 }
@@ -500,6 +536,33 @@ async function setBackupCompression(options: SystemTweaksOptions): Promise<Syste
   return stateOf(options);
 }
 
+/**
+ * Answers with the saved settings only. The page the browser repaints comes
+ * from a separate `state` request, bounded like loading the page, so this
+ * verb's timeout covers its own work alone.
+ */
+async function setMemory(options: SystemTweaksOptions): Promise<{ memory: MemorySettings }> {
+  const change = memoryChange(await requestBody(options));
+  if (!change) failAction(MEMORY_ERROR);
+  const paths = pathsFor(options);
+  return withFileLock(paths.lockFile, 15, "another system tweaks change is still running", async () => {
+    // One deadline for the change and its undoing, which the gateway's timeout is sized from.
+    const bounded = { ...options.memory, deadline: (options.memory?.now ?? Date.now)() + MEMORY_DEADLINE_MS };
+    const settings = readSettings(paths);
+    const wanted = { ...settings.memory, ...change };
+    // Saved first, so a MySQL or Redis start meanwhile follows the new setting.
+    writeSettings(paths, { ...settings, memory: wanted });
+    try {
+      applyMemory(wanted, bounded);
+    } catch (error) {
+      writeSettings(paths, settings);
+      try { applyMemory(settings.memory, bounded, false); } catch { /* repair puts it back */ }
+      throw error;
+    }
+    return { memory: wanted };
+  });
+}
+
 async function changePanelPhp(options: SystemTweaksOptions): Promise<SystemTweaksState> {
   const body = await requestBody(options);
   if (typeof body.php !== "string") failAction("php must be a version such as 8.4, or empty for CloudPanel's own");
@@ -529,7 +592,9 @@ export async function executeSystemTweaksAction(argv: string[], options: SystemT
   if (verb === "set-panel-cert") return setPanelCert(options);
   if (verb === "set-clpctl-guard") return setClpctlGuard(options);
   if (verb === "set-backup-compression") return setBackupCompression(options);
+  if (verb === "set-telemetry") return setTelemetry(options);
   if (verb === "set-panel-php") return changePanelPhp(options);
+  if (verb === "set-memory") return setMemory(options);
   if (verb === "set-php-pools") return setPhpPools(options);
   if (verb === "set-login-jails") return setLoginJails(options);
   if (verb === "unban") {
@@ -670,10 +735,22 @@ export async function systemTweaksMaintenance(options: SystemTweaksOptions = {})
     failures.push(`panel PHP: ${errorMessage(error)}`);
   }
   try {
-    const changed = withSettingsLock(options, (_paths, settings) => reconcileBackupCompression(settings.backupCompression, options.backupCompression));
-    if (changed) lines.push("remote backup compression reconciled");
+    const changed = systemTweaksBackupCompression(options);
+    if (changed) lines.push(changed);
   } catch (error) {
     failures.push(`remote backup compression: ${errorMessage(error)}`);
+  }
+  try {
+    const telemetry = withSettingsLock(options, (_paths, settings) => settings.blockTelemetry && applyTelemetryBlock(true, options.telemetry));
+    if (telemetry) lines.push("CloudPanel telemetry blocked again");
+  } catch (error) {
+    failures.push(`CloudPanel telemetry: ${errorMessage(error)}`);
+  }
+  try {
+    const memory =withSettingsLock(options, (_paths, settings) => applyMemory(settings.memory, options.memory));
+    if (memory.length) lines.push(memory.join("; "));
+  } catch (error) {
+    failures.push(`memory limits: ${errorMessage(error)}`);
   }
   if (failures.length) throw new Error([...failures, ...lines].join("; "));
   return lines.join("; ") || null;
@@ -683,6 +760,12 @@ export async function systemTweaksMaintenance(options: SystemTweaksOptions = {})
 export function systemTweaksPhpMyAdmin(options: SystemTweaksOptions = {}): string | null {
   return withSettingsLock(options, (_paths, settings) =>
     settings.protectPhpMyAdmin && applyPhpMyAdmin(true, options.phpMyAdmin) ? "phpMyAdmin rules put back" : null);
+}
+
+/** Repair's, and the fast repair's after a CloudPanel update replaces the backup command. */
+export function systemTweaksBackupCompression(options: SystemTweaksOptions = {}): string | null {
+  return withSettingsLock(options, (_paths, settings) =>
+    reconcileBackupCompression(settings.backupCompression, options.backupCompression) ? "remote backup compression reconciled" : null);
 }
 
 /**
@@ -778,10 +861,16 @@ export function withdrawSystemTweaks(options: SystemTweaksOptions = {}): void {
     restorePanelPhp(options.panelPhp);
     throw error;
   }
+  // Like the firewall below, it does not keep the addon on or the protections in place.
+  try { applyTelemetryBlock(false, options.telemetry); }
+  catch (error) { log.warn(`clp-agent is still blocked from the network: ${errorMessage(error)}; remove /etc/systemd/system/clp-agent.service.d/zz-clp-addons-telemetry.conf`); }
   // A firewall that cannot be put back does not keep the addon on: CloudPanel's
   // next change on its Firewall page rebuilds ufw without these rules anyway.
   try { syncFirewall("withdraw", options.firewall); }
   catch (error) { log.warn(`ufw still has UDP rules from System Tweaks: ${errorMessage(error)}`); }
+  // Nothing here keeps a site safe, so like the firewall it does not keep the addon on.
+  try { withSettingsLock(options, (_paths, settings) => applyMemory({ ...settings.memory, mysql: false, redis: false, oom: false }, options.memory, false)); }
+  catch (error) { log.warn(`memory limits are still in place: ${errorMessage(error)}`); }
 }
 
 export function restoreSystemTweaks(options: SystemTweaksOptions = {}): void {
@@ -807,6 +896,10 @@ export function restoreSystemTweaks(options: SystemTweaksOptions = {}): void {
       // It refuses once CloudPanel moves past the supported version; activation must still finish.
       try { reconcileBackupCompression(settings.backupCompression, options.backupCompression); }
       catch (error) { log.warn(`remote backup compression waits for the next repair: ${errorMessage(error)}`); }
+      if (settings.blockTelemetry) {
+        try { applyTelemetryBlock(true, options.telemetry); }
+        catch (error) { log.warn(`blocking CloudPanel telemetry waits for the next repair: ${errorMessage(error)}`); }
+      }
     });
   } finally {
     restorePanelPhp(options.panelPhp);
@@ -815,6 +908,16 @@ export function restoreSystemTweaks(options: SystemTweaksOptions = {}): void {
   catch (error) { log.warn(`the panel's shared certificate waits for the next repair: ${errorMessage(error)}`); }
   try { syncFirewall("restore", options.firewall); }
   catch (error) { log.warn(`firewall protocols wait for the next repair: ${errorMessage(error)}`); }
+  try { withSettingsLock(options, (_paths, settings) => applyMemory(settings.memory, options.memory)); }
+  catch (error) { log.warn(`memory limits wait for the next repair: ${errorMessage(error)}`); }
+}
+
+/**
+ * What MySQL's unit runs before it starts and Redis's after it starts. It reads
+ * the setting without the lock, as a change on the page never waits on them.
+ */
+export function systemTweaksMemory(kind: "mysql" | "redis", options: SystemTweaksOptions = {}): boolean {
+  return syncMemory(kind, readSettings(pathsFor(options)).memory, options.memory);
 }
 
 /** What the firewall watcher runs whenever ufw's rule files change. */

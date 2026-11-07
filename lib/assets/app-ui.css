@@ -42,8 +42,10 @@ h2, h3 { font-size: 18px; }
 .clp-addon-header-inner { display: flex; flex-wrap: wrap; align-items: stretch; min-height: 75px; }
 /* CloudPanel top-aligns its logo (.header .logo { padding: 20px 0 0 20px }) rather than
    centring it, so centring here sits the logo ~1.5px lower than the panel's own header. */
-.clp-addon-brand { flex: 0 0 235px; display: flex; align-items: flex-start; padding: 20px 0 0 20px;
-  margin-right: 20px; border-right: 1px solid var(--row-border); }
+/* The 75px is the brand's own: once the update notice wraps onto a row of its
+   own, the two rows meet the header's min-height between them. */
+.clp-addon-brand { flex: 0 0 235px; display: flex; align-items: flex-start; min-height: 75px;
+  padding: 20px 0 0 20px; margin-right: 20px; border-right: 1px solid var(--row-border); }
 .clp-addon-logo { display: block; flex: 0 0 auto; width: 155px; height: 31px; }
 .clp-addon-logo-dark { display: none; }
 html.dark .clp-addon-logo-light { display: none; }

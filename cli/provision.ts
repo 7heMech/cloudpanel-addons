@@ -981,9 +981,9 @@ export function applyToggleUnits(changes: UnitChanges): void {
  * Whether this box already went through a full install.
  *
  * A toggle applies a delta, which is only meaningful when there is something to
- * apply it to. `clp-addons install <addon>` with no version flag is also the
- * first-install path on a fresh box, and there the delta would be applied to
- * nothing: no service user, no units, no auth socket. This is the cheap check
+ * apply it to. An enable on a box where the platform was never set up, or a
+ * failed install left it half done, would apply the delta to nothing: no
+ * service user, no units, no auth socket. This is the cheap check
  * that tells the two apart, so the toggle path can hand a first install back to
  * the full one instead of half-provisioning a machine.
  *

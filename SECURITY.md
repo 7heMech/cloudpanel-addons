@@ -150,6 +150,12 @@ stripping, its shell-string command builders, `db:import` running as the databas
 administrator, and `clp`'s own `NOPASSWD: ALL`.
 [Guide](docs/system-tweaks.md#clpctl-injection)
 
+**CloudPanel telemetry.** `clp-agent` sends CloudPanel every site's domain and
+every panel user's name and email once a day, with no opt-out. The setting
+denies the agent every address but the server's own, so it keeps drawing the
+dashboard's graphs and sends nothing.
+[Guide](docs/system-tweaks.md#cloudpanel-telemetry)
+
 The nginx settings default to on when System Tweaks is enabled. PHP upload
 progress is disabled independently of that addon; System Tweaks provides its
 opt-out. Existing saved nginx values are flagged for review, not repaired.

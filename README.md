@@ -1,8 +1,8 @@
 # CloudPanel Addons
 
 Security hardening and extra features for [CloudPanel](https://www.cloudpanel.io/).
-The default install adds nginx config-injection checks, restricts trusted IP
-headers and disables PHP upload progress. See the
+[System Tweaks](docs/system-tweaks.md) fixes CloudPanel security weaknesses such
+as nginx config injection and forged visitor IPs. See the
 [security model and hardening](SECURITY.md).
 
 Unofficial, not affiliated with or endorsed by CloudPanel.
@@ -15,13 +15,12 @@ Log in to your server as **root** and run:
 curl -fsSL https://github.com/7heMech/cloudpanel-addons/releases/latest/download/install.sh | bash
 ```
 
-Asks which addons you want, installs dependencies for them if needed and checks
-the download's SHA-256 checksum. Updates also check build provenance.
-
+Checks the download's SHA-256 checksum; updates also check build provenance.
 Requires an x86-64 CloudPanel host with AVX2 (Intel 2013+, AMD 2015+). On a VM,
 set the CPU type to `host`.
 
-When it finishes, open the new **Addons** tab in CloudPanel.
+When it finishes, open the new **Addons** tab in CloudPanel and enable the
+addons you want. System Tweaks is recommended.
 
 ![CloudPanel Addons Manager](docs/screenshots/addons.png)
 
@@ -38,7 +37,7 @@ When it finishes, open the new **Addons** tab in CloudPanel.
 | [SMTP Relay](docs/smtp-relay.md) | Send each site's mail through SMTP relay profiles, WordPress and PHP included. |
 | Git Deploy | Deploys from a Git remote, from the panel or from a push. |
 | Panel Tweaks | Site search, columns and CSV download, automatic SSL for native sites, mobile layouts, themes and branding. |
-| [System Tweaks](docs/system-tweaks.md) | Security hardening, automatic updates, the panel's PHP version, remote backup compression, PHP temp-file cleanup and UDP firewall rules. |
+| [System Tweaks](docs/system-tweaks.md) | Security hardening, automatic updates, the panel's PHP version, remote backup compression, memory limits sized to the server, PHP temp-file cleanup and UDP firewall rules. |
 | [WordPress Tools](docs/wordpress-tools.md) | One-click WordPress sign-in, plugins chosen on the new-site form, optional CLP Varnish Cache installation and MainWP Child enrollment. |
 | Terminal | A shell as a site's own user, in its own window, for administrators. |
 | Security Keys | Sign in with a passkey or a hardware key such as a YubiKey instead of a password and two-factor code, for the roles an administrator allows. Needs the panel on a hostname with a valid certificate. |
@@ -55,16 +54,19 @@ security keys under Account → Security, in the roles an administrator allows.
 | --- | --- |
 | `clp-addons` | As root, toggle addons and run status, repair or update. |
 | `clp-addons status` | Check services and CloudPanel integration. |
-| `clp-addons install <addon>` | Enable an addon, installing Docker if it needs it. |
+| `clp-addons enable <addon>` | Enable an addon, installing Docker if it needs it. |
+| `clp-addons disable <addon>` | Disable an addon and keep its data. |
 | `clp-addons update` | Install the latest verified release. |
 | `clp-addons repair` | Restore managed services and CloudPanel integration. |
 | `clp-addons maintenance <domain> [on\|off\|status]` | Control or inspect maintenance mode for a site. |
-| `clp-addons uninstall <addon> --yes` | Remove an addon and keep its data. |
 
 Addon names are `cloudflare-ips`, `dns`, `instatic`, `stager`, `maintenance`,
 `php-resources`, `git`, `panel-tweaks`, `system-tweaks`, `wp-tools`, `smtp`, `terminal`
-and `security-keys`. Run
-`clp-addons --help` for version selection and data removal options.
+and `security-keys`. Run `clp-addons --help` for version selection options.
+
+To remove CloudPanel Addons, disable every addon, then run
+`clp-addons self-uninstall --yes`. Sites keep running, Instatic sites included,
+and addon data stays in `/var/lib/clp-addons`.
 
 See [Instatic backup and restore](docs/instatic-backups.md) for CloudPanel Remote
 Backups.

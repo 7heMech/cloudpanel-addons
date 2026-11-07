@@ -124,11 +124,13 @@ system-tweaks:set-database-loopback admin
 system-tweaks:set-file-manager-guard admin
 system-tweaks:set-firewall-protocol admin
 system-tweaks:set-login-jails      admin
+system-tweaks:set-memory           admin
 system-tweaks:set-panel-cert       admin
 system-tweaks:set-panel-php        admin
 system-tweaks:set-php-pools        admin
 system-tweaks:set-phpmyadmin       admin
 system-tweaks:set-real-ip          admin
+system-tweaks:set-telemetry        admin
 system-tweaks:set-updates          admin
 system-tweaks:set-upload-guard     admin
 system-tweaks:set-vhost-guard      admin

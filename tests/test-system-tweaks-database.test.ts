@@ -680,7 +680,7 @@ test("the page says where MySQL listens, what reaches it, and how to change a de
     phpMyAdmin: { enabled: true, active: true, problem: "" },
     vhostGuard: { enabled: true, active: true, stored: [], homeLogs: [], ownLogrotate: [] }, phpPools: { enabled: true, active: true, problem: "" },
     fileManagerGuard: { enabled: true, active: true }, panelCert: { kind: "generated" as const, replace: true },
-    backupCompression: { enabled: false, level: 3, threads: 1, active: false, supported: true, installed: true, problem: "" }, clpctlGuard: { error: "" }, panelPhp: { error: "" }, firewall: { error: "" }, loginJails: { error: "" }, database,
+    backupCompression: { enabled: false, level: 3, threads: 1, active: false, supported: true, installed: true, problem: "" }, telemetry: { enabled: true, agent: true, blocked: true, problem: "" }, clpctlGuard: { error: "" }, panelPhp: { error: "" }, firewall: { error: "" }, loginJails: { error: "" }, database, memory: { error: "" },
   } satisfies SystemTweaksState;
   const open = dashboardView(state);
   expect(open).toContain("The firewall rules loaded now let anyone reach it");

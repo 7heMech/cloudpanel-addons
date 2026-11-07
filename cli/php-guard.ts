@@ -176,7 +176,7 @@ export function reconcilePhpSessionGuard(install: boolean, options: PhpGuardOpti
 }
 
 /**
- * After a disable, or an uninstall that leaves the binary: System Tweaks'
+ * After a disable: System Tweaks'
  * opt-out may just have stopped counting. The addon is already gone, so a
  * failure warns and leaves the guard to the repair timer.
  */
