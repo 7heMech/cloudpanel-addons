@@ -18,7 +18,8 @@ curl -fsSL https://github.com/7heMech/cloudpanel-addons/releases/latest/download
 Asks which addons you want, installs dependencies for them if needed and checks
 the download's SHA-256 checksum. Updates also check build provenance.
 
-Requires an x86-64 CloudPanel host.
+Requires an x86-64 CloudPanel host with AVX2 (Intel 2013+, AMD 2015+). On a VM,
+set the CPU type to `host`.
 
 When it finishes, open the new **Addons** tab in CloudPanel.
 
