@@ -123,11 +123,15 @@ export function fleetFilterHtml(options: {
 export const FLEET_SELECTION_HTML = `<div class="fleet-selection"><span class="toolbar-note" id="site-selection">No sites selected</span>
 <button class="btn mobile-select-all" id="select-all-btn" type="button" onclick="toggleAllSites()">Select all</button></div>`;
 
+/** Under the table: the line shown when search or filter leaves no row. */
+export const FLEET_NONE_HTML = `<div class="empty" id="fleet-none" hidden>No site matches.</div>`;
+
 /**
- * Under the table: the line shown when search or filter leaves no row, and the
- * button that shows the rest of a long list on a phone.
+ * `FLEET_NONE_HTML` and the button that shows the rest of a long list on a
+ * phone. A page that ends with its list uses `FLEET_NONE_HTML` alone, and the
+ * fleet script then shows every site.
  */
-export const FLEET_FOOTER_HTML = `<div class="empty" id="fleet-none" hidden>No site matches.</div>
+export const FLEET_FOOTER_HTML = `${FLEET_NONE_HTML}
 <div class="fleet-more" id="fleet-more" hidden><button class="btn" type="button" onclick="showAllSites()">Show all sites</button></div>`;
 
 /** Rows a phone shows of a long list before its Show all button. */

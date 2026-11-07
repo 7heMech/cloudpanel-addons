@@ -420,7 +420,9 @@ actions across the width. On a wide screen a
 list of more than twelve rows with something below its card scrolls in a box of
 its own under a sticky heading; a list that ends the page grows with it. On a
 phone a list longer than ten sites shows the first ten and a button for the rest,
-so the settings below it stay close. Search covers every site, and Select all
+so the settings below it stay close; a page that ends with its list, such as
+Maintenance Mode's, leaves out the button (`FLEET_NONE_HTML` in place of
+`FLEET_FOOTER_HTML`) and shows every site. Search covers every site, and Select all
 and the bulk actions reach the sites past the cut too: those rows are marked
 `data-cut` rather than deselected. A second long list on the page,
 such as DNS's redirects, gets the same cut and button through
@@ -546,7 +548,8 @@ options that each turn on and off, highlighted while on, in groups (a status gro
 wherever the rows hold at least two values): within a group a row needs any
 ticked word of its `data-show`, across groups all of them, so WordPress and PHP
 together with Needs attention shows the WordPress and PHP sites that need
-attention. Sorting is by the headings, as on CloudPanel's Sites page with Panel
+attention. The menu opens over the page, above its button when the window has
+more room there. Sorting is by the headings, as on CloudPanel's Sites page with Panel
 Tweaks: each `th[data-sort]` sorts by its column on a click or Enter, and again
 reverses it. A row's `data-sort-<key>` gives the value where the cell's text
 would not -- a status column ranks by tone, worst first, and a select's text is

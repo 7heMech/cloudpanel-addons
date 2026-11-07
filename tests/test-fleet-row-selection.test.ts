@@ -50,3 +50,25 @@ test("on a phone, Select all reaches the sites past the ten-site cut and search 
   client.toggleAllSites();
   expect(rows.some((row) => row.box.checked)).toBe(false);
 });
+
+test("a page without the Show all button shows every site on a phone", () => {
+  const el = () => ({ textContent: "", disabled: false, checked: false, hidden: false });
+  const byId: Record<string, unknown> = { "site-selection": el(), "fleet-find": { ...el(), value: "" } };
+  const rows = Array.from({ length: 14 }, (_, index) => ({
+    hidden: false,
+    dataset: { domain: `site${index}.test` },
+    setAttribute: () => {},
+    hasAttribute: () => false,
+    toggleAttribute: () => {},
+    querySelector: () => el(),
+  }));
+  const root = {
+    getElementById: (id: string) => byId[id] ?? null,
+    querySelector: () => null,
+    querySelectorAll: (sel: string) => sel === "tr[data-domain]" ? rows : [],
+  };
+  const window = { matchMedia: () => ({ matches: true, addEventListener: () => {} }) };
+  const plural = (n: number, word: string) => `${n} ${word}${n === 1 ? "" : "s"}`;
+  new Function("CLP_ROOT", "window", "plural", FLEET_ROW_SELECTION_JS)(root, window, plural);
+  expect(rows.some((row) => row.hidden)).toBe(false);
+});
