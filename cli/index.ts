@@ -16,8 +16,9 @@ import { CLI_VERSION } from "./release";
 import { installedConfig } from "./provision";
 import { reconcile } from "./inject";
 import { fatal, Fatal, log, requireRoot } from "./util";
-import { LOCKABLE_ADDONS, ROOT_LOCKS_FILE, isLockable, lockedAddons, writeLockedAddons } from "../lib/root-locks";
+import { LOCKABLE_ADDONS, ROOT_LOCKS_FILE, ROOT_LOCKS_LOCK, isLockable, lockedAddons, writeLockedAddons } from "../lib/root-locks";
 import { withOperationLockSync } from "./operation-lock";
+import { withFileLockSync } from "./action-common";
 import { runRecon } from "./recon";
 import { cmdServe } from "../manager/server";
 import { executeMaintenanceAction, type MaintenanceStatus } from "../addons/maintenance/action";
@@ -96,12 +97,18 @@ function cmdLock(argv: string[], lock: boolean): void {
     return;
   }
   requireRoot(lock ? "lock" : "unlock");
-  if (!isLockable(addon)) fatal(`${addon} has nothing to lock; lockable: ${LOCKABLE_ADDONS.join(", ")}`);
-  if (lock === locked.includes(addon)) {
+  // An entry for an addon that no longer declares anything can still be unlocked.
+  if (lock && !isLockable(addon)) fatal(`${addon} has nothing to lock; lockable: ${LOCKABLE_ADDONS.join(", ")}`);
+  const changed = withFileLockSync(ROOT_LOCKS_LOCK, 15, "another lock or unlock is still running", () => {
+    const current = lockedAddons();
+    if (lock === current.includes(addon)) return false;
+    writeLockedAddons(lock ? [...current, addon] : current.filter((name) => name !== addon));
+    return true;
+  });
+  if (!changed) {
     log.plain(`${addon} is already ${lock ? "locked" : "unlocked"}`);
     return;
   }
-  writeLockedAddons(lock ? [...locked, addon] : locked.filter((name) => name !== addon));
   log.ok(lock
     ? `${addon} is locked: the panel shows its protections but cannot change them or disable the addon`
     : `${addon} is unlocked: administrators can change it from the panel again`);

@@ -843,7 +843,7 @@ export function dashboardView(state: SystemTweaksState, now = Date.now(), locked
         <p class="hint">Every 15 minutes it also clears PHP and ImageMagick temp files that timed-out requests left in /tmp.${firewallLine(state.firewall)}</p>
       </div>
     </div>${locked ? `
-    <p class="notice">Root has locked the Settings, Failed logins and Database switches. To change one, run <code>clp-addons unlock system-tweaks</code> on the server.</p>` : ""}
+    <p class="notice">Root has locked the Settings, Failed logins and Database switches as they are, and System Tweaks cannot be disabled. To change them, run <code>clp-addons unlock system-tweaks</code> on the server.</p>` : ""}
     <div class="card">
       <div class="card-header"><h2>Automatic updates</h2></div>
       <div class="tweak-list">${updateRows(state.updates, state.settings)}

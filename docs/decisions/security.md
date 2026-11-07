@@ -37,24 +37,6 @@ array. A root-only verb is declared with the reason the web may not reach it. Ea
 arguments again before deriving paths, locking, or changing the host. Unknown
 addons, verbs, free-form paths, and malformed action replies are rejected.
 
-### Root locks
-
-An administrator can switch a protection off from the web, so a stolen
-administrator session could switch them all off. `clp-addons lock <addon>`
-withdraws that: the gateway refuses the verbs the addon declares `lock` while
-it is locked, on the one-shot and streaming paths alike, and the manager refuses to disable the addon. Only root changes
-the lock, from a shell; neither command is a gateway verb. A root shell is not
-held to it either, since it can unlock anyway. System Tweaks declares its
-Settings, Failed logins and Database switches; updates, backups, memory,
-unblocking and the firewall stay with administrators.
-
-The locks are `/etc/clp-addons/locks.json`, mode `0644` so the manager can show
-them. A file that is not root's alone, not a regular file or not readable, or
-a directory others could remove it from, locks every lockable addon rather than
-none; `lock` and `unlock` then refuse
-and tell root to remove it and lock again what should stay locked. The page leaves a locked switch read-only and
-names the command.
-
 The gateway's streaming mode is restricted to the verbs declared `stream`: it starts one worker, pipes its output without
 interpreting addon data, and stops the worker when the manager socket closes.
 Session re-authorization remains in the manager that owns the stream.
@@ -153,6 +135,27 @@ Cloudflare proxy requests carry the visitor in `CF-Connecting-IP`, which that
 configuration does not use; Nginx sees the edge, so the panel IP may never
 match. Both limits appear in the confirmation. WordPress sign-in itself changes
 no real-IP trust.
+
+### Root locks
+
+An administrator can switch a protection off from the web, so a stolen
+administrator session could switch them all off. `clp-addons lock <addon>`
+freezes them as they are, on or off: the gateway refuses the verbs the addon
+declares `lock`, on the one-shot and streaming paths alike, and the manager
+refuses to disable the addon. Only root changes a lock, from a shell; neither
+command is a gateway verb, and both hold a file lock so concurrent runs keep
+each other's change. A root shell is not held to it, since it could unlock
+anyway. System Tweaks declares its Settings, Failed logins and Database
+switches; updates, backups, memory, unblocking and the firewall stay with
+administrators.
+
+The locks are `/etc/clp-addons/locks.json`, mode `0644` so the manager can show
+them, read through one descriptor opened without following links. Only a
+missing file means no locks. A file that is not root's alone, not a regular
+file or unreadable, or a directory others could remove it from, locks every
+lockable addon; `lock` and `unlock` then refuse and tell root to remove it and
+lock again what should stay locked. The page leaves a locked switch read-only
+and names the command.
 
 ## CloudPanel authentication
 

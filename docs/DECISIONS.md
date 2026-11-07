@@ -2,7 +2,7 @@
 
 - [Platform integration](decisions/platform.md)
 - [Security](decisions/security.md)
-  - [Root locks](decisions/security.md#root-locks) — protections only root can switch off
+  - [Root locks](decisions/security.md#root-locks) — protections only root can change
 - [Cloudflare IP Access](decisions/cloudflare-ips.md)
 - [DNS](decisions/dns.md)
 - [Releases and updates](decisions/releases.md)

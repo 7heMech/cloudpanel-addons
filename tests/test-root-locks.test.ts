@@ -1,6 +1,6 @@
 // Root locks: the gateway refuses a locked addon's protections to the web.
 import { afterAll, beforeAll, expect, test } from "bun:test";
-import { chmodSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { chmodSync, mkdtempSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { createAuthActionServer } from "../cli/auth-action";
 import { LOCKABLE_ADDONS, addonLocked, lockedAddons } from "../lib/root-locks";
@@ -88,4 +88,27 @@ test("a lock directory others can write counts as locking everything", () => {
   chmodSync(open, 0o777);
   expect(() => lockedAddons(`${open}/locks.json`, uid)).toThrow("is not a directory only root can write");
   expect(addonLocked("system-tweaks", `${open}/locks.json`, uid)).toBe(true);
+});
+
+test("a lock file reached through a link counts as locking everything", () => {
+  const link = `${mkdtempSync(`${dir}/link-`)}/locks.json`;
+  symlinkSync(locks([]), link);
+  expect(addonLocked("system-tweaks", link, uid)).toBe(true);
+});
+
+test.skipIf(uid === 0)("a lock file that cannot be read counts as locking everything, not as no locks", () => {
+  const shut = mkdtempSync(`${dir}/shut-`);
+  writeFileSync(`${shut}/locks.json`, JSON.stringify({ addons: [] }));
+  chmodSync(shut, 0o000);
+  try {
+    expect(addonLocked("system-tweaks", `${shut}/locks.json`, uid)).toBe(true);
+  } finally {
+    chmodSync(shut, 0o700);
+  }
+});
+
+test("an addon with nothing to lock is never locked, even by a broken file", () => {
+  const file = locks([]);
+  writeFileSync(file, "{");
+  expect(addonLocked("dns", file, uid)).toBe(false);
 });
