@@ -93,7 +93,7 @@ export function fleetFilterHtml(options: {
   count: number;
   placeholder?: string;
   filters?: FleetFilter[];
-  summary: string;
+  summary?: string;
 }): string {
   if (options.count < FLEET_FILTER_MIN) return "";
   const groups = new Map<string, FleetFilter[]>();
@@ -112,7 +112,7 @@ export function fleetFilterHtml(options: {
   const placeholder = options.placeholder ?? "Find a site";
   return `<div class="fleet-filter">
       <input type="search" id="fleet-find" data-keep placeholder="${esc(placeholder)}" aria-label="${esc(placeholder)}" oninput="filterFleet()">
-      ${filters}<span class="hint" id="fleet-summary" data-all="${esc(options.summary)}">${esc(options.summary)}</span>
+      ${filters}${options.summary === undefined ? "" : `<span class="hint" id="fleet-summary" data-all="${esc(options.summary)}">${esc(options.summary)}</span>`}
     </div>`;
 }
 

@@ -2028,11 +2028,13 @@ const server = Bun.serve({
       systemTweaksPreview = null;
       html = systemTweaksLayout("System Tweaks", systemTweaksDashboardView(systemTweaksPreviewState(url), Date.now(), url.searchParams.get("locked") === "damaged" ? "damaged" : url.searchParams.has("locked") ? "locked" : "unlocked"), notice);
     } else if (path === "/addons/terminal/" || path === "/addons/terminal") {
-      // ?root shows the root shell's card, ?root=stale one whose password changed.
+      // ?root shows the root shell's card, ?root=stale one whose password changed; ?many passes the phone's cut.
       const rootGrant = url.searchParams.get("root");
       const root = rootGrant === null ? { granted: false, problem: null }
         : { granted: true, problem: rootGrant === "stale" ? "A root terminal needs 2FA: turn it on in Account → Security." : null };
-      html = terminalLayout("Terminal", terminalDashboardView(empty ? [] : terminalPreviewSites, root, "admin"), notice);
+      html = terminalLayout("Terminal", terminalDashboardView(empty ? [] : url.searchParams.has("many")
+        ? [...terminalPreviewSites, ...Array.from({ length: 14 }, (_, i) => ({ domain: `site${i + 1}.example.net`, user: `site${i + 1}`, type: "php" }))]
+        : terminalPreviewSites, root, "admin"), notice);
     } else if (path === "/addons/wp-tools/" || path === "/addons/wp-tools") {
       wpToolsPreview = {
         sites: wpToolsPreviewSites(url),
