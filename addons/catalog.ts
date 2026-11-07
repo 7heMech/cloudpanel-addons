@@ -113,23 +113,3 @@ export function templateWatchPaths(): string[] {
   }
   return [...paths].sort();
 }
-
-/** The installed addons with work for new sites, in catalog order. */
-export function addonNewSites(installed: AddonSpec[]): AddonSpec[] {
-  return installed.filter((spec) => spec.newSites !== undefined);
-}
-
-/** The installed addons with work for a certificate CloudPanel has just written, in catalog order. */
-export function addonCertificates(installed: AddonSpec[]): AddonSpec[] {
-  return installed.filter((spec) => spec.certificates !== undefined);
-}
-
-/** The installed addons with work for a change to ufw's rules, in catalog order. */
-export function addonFirewall(installed: AddonSpec[]): AddonSpec[] {
-  return installed.filter((spec) => spec.firewall !== undefined);
-}
-
-/** The installed addons that want upkeep during repair, in catalog order. */
-export function addonRepairs(installed: AddonSpec[]): AddonSpec[] {
-  return installed.filter((spec) => spec.repair !== undefined);
-}

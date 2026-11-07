@@ -28,6 +28,7 @@
 // fifteen minutes, forever.
 
 import { writeFileAtomic } from "../lib/atomic-write";
+import { tryRun } from "../lib/command";
 import { execFileSync } from "node:child_process";
 import {
   existsSync, readFileSync, writeFileSync, mkdirSync, rmSync, readdirSync, statSync, realpathSync,
@@ -546,31 +547,6 @@ function renderNginxProxy(content: string, enabled: boolean): { content?: string
   };
 }
 
-function commandFailure(command: string, args: string[]): string | null {
-  try {
-    const result = Bun.spawnSync([command, ...args], {
-      stdin: "ignore",
-      stdout: "pipe",
-      stderr: "pipe",
-      env: process.env,
-    });
-    if (result.success) return null;
-    const stderr = result.stderr.toString("utf-8");
-    const stdout = result.stdout.toString("utf-8");
-    return (stderr || stdout || `Command failed: ${command}${args.length ? ` ${args.join(" ")}` : ""}`).trim();
-  } catch (err) {
-    const e = err as { stdout?: unknown; stderr?: unknown; message?: unknown };
-    const output = (value: unknown): string => {
-      if (typeof value === "string") return value;
-      if (value instanceof Uint8Array) return Buffer.from(value).toString("utf-8");
-      return value == null ? "" : String(value);
-    };
-    const stderr = output(e.stderr);
-    const stdout = output(e.stdout);
-    return (stderr || stdout || output(e.message) || `Command failed: ${command}${args.length ? ` ${args.join(" ")}` : ""}`).trim();
-  }
-}
-
 /** Keeps the file's owner: CloudPanel 6's panel account must still be able to rewrite its vhost. */
 function writeNginxContent(path: string, content: string): void {
   const stat = statSync(path);
@@ -686,16 +662,16 @@ export function reconcileNginxProxy(options: NginxPaths & { enabled?: boolean; r
   // CloudPanel 6 the panel runs a second Nginx whose config the distro `nginx -t`
   // never reads, so testing the wrong one would pass on a broken vhost.
   const layout = nginxLayout();
-  const tested = commandFailure("nginx", layout.configFile ? ["-t", "-c", layout.configFile] : ["-t"]);
-  if (tested) {
+  const tested = tryRun("nginx", layout.configFile ? ["-t", "-c", layout.configFile] : ["-t"]);
+  if (!tested.ok) {
     writeNginxContent(vhostPath, onDisk);
-    return { state: "validation-failed", changed: false, vhostPath: selectedPath, detail: `nginx -t failed: ${tested}` };
+    return { state: "validation-failed", changed: false, vhostPath: selectedPath, detail: `nginx -t failed: ${tested.out}` };
   }
 
-  const reloaded = commandFailure("systemctl", ["reload", layout.service]);
-  if (reloaded) {
+  const reloaded = tryRun("systemctl", ["reload", layout.service]);
+  if (!reloaded.ok) {
     writeNginxContent(vhostPath, onDisk);
-    return { state: "validation-failed", changed: false, vhostPath: selectedPath, detail: `nginx reload failed: ${reloaded}` };
+    return { state: "validation-failed", changed: false, vhostPath: selectedPath, detail: `nginx reload failed: ${reloaded.out}` };
   }
 
   if (!enabled) {

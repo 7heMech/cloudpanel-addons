@@ -20,7 +20,8 @@ import {
 } from "./provision";
 import { unitActive } from "../lib/systemd";
 import { CLI_VERSION } from "../lib/version";
-import { type FetchedArtifact, fetchVerified, type OnProgress, resolveRelease, verifyAttestation } from "./release";
+import { type FetchedArtifact, fetchVerified, resolveRelease, verifyAttestation } from "./release";
+import type { OnProgress } from "../lib/log";
 import { fatal, log, requireRoot } from "../lib/log";
 import { parseFlags } from "./flags";
 import { run, tryRun } from "../lib/command";

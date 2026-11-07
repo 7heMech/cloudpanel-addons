@@ -1,7 +1,7 @@
 import { expect, test } from "bun:test";
 import { readFileSync } from "node:fs";
-import { join } from "node:path";
-import { ADDONS, ADDON_NAMES, addonHandler, addonRepairs, addonNewSites, templateWatchPaths } from "../addons/catalog";
+import { dirname, join } from "node:path";
+import { ADDONS, ADDON_NAMES, addonHandler, templateWatchPaths } from "../addons/catalog";
 import { type AddonSpec } from "../lib/addon-definition";
 import { runNewSiteWork } from "../cli/addon-hooks";
 import { mountPath } from "../lib/mount";
@@ -61,26 +61,25 @@ test("required systemd dependencies survive into the catalog", () => {
 });
 
 test("repair upkeep is the addons that ask for it, in catalog order", () => {
-  const all = ADDON_NAMES.map((name) => ADDONS[name]!);
-  expect(addonRepairs(all).map((spec) => spec.name)).toEqual(["cloudflare-ips", "dns", "instatic", "stager", "maintenance", "resource-limits", "git", "panel-tweaks", "system-tweaks", "wp-tools", "smtp"]);
-  // Gated on being installed: repair passes the installed set, not every addon.
-  expect(addonRepairs([ADDONS.stager!]).map((spec) => spec.name)).toEqual(["stager"]);
-  expect(addonRepairs([ADDONS.terminal!])).toEqual([]);
+  expect(ADDON_NAMES.filter((name) => ADDONS[name]!.repair)).toEqual(["cloudflare-ips", "dns", "instatic", "stager", "maintenance", "resource-limits", "git", "panel-tweaks", "system-tweaks", "wp-tools", "smtp"]);
 });
 
-test("new-site work runs DNS before SMTP Relay, and only for installed addons", () => {
-  const all = ADDON_NAMES.map((name) => ADDONS[name]!);
-  expect(addonNewSites(all).map((spec) => spec.name)).toEqual(["cloudflare-ips", "dns", "resource-limits", "system-tweaks", "wp-tools", "smtp"]);
-  expect(addonNewSites([ADDONS.smtp!]).map((spec) => spec.name)).toEqual(["smtp"]);
+test("new-site work runs DNS before SMTP Relay", () => {
+  expect(ADDON_NAMES.filter((name) => ADDONS[name]!.newSites)).toEqual(["cloudflare-ips", "dns", "resource-limits", "system-tweaks", "wp-tools", "smtp"]);
 });
 
-test("the path constants do not import any addon", () => {
-  // cli/paths.ts held the registry, so the module owning the project's paths
-  // imported every addon's target list to describe them. A leaf that imports
-  // its consumers is the shape a dependency cycle grows out of.
-  const source = readFileSync(join(REPO, "lib/paths.ts"), "utf8");
-  expect(source).not.toMatch(/from "\.\.\/addons\//);
-  expect(source).not.toContain("export const ADDONS");
+test("imports point from what changes most to what changes least", () => {
+  const imports = (dir: string) => [...new Bun.Glob(`${dir}/**/*.ts`).scanSync(REPO)].flatMap((file) =>
+    [...readFileSync(join(REPO, file), "utf8").matchAll(/from "(\.[^"]+)"/g)]
+      .map((match) => ({ file, target: join(dirname(file), match[1]!) })));
+  const offending = [
+    // lib/ is shared by every side and imports only itself, plus the addons' verb tables, which import nothing.
+    ...imports("lib").filter(({ target }) => !target.startsWith("lib/") && !/^addons\/[^/]+\/verbs$|^manager\/verbs$/.test(target)),
+    // An addon builds on lib/ and on other addons, never on the commands or the manager.
+    ...imports("addons").filter(({ target }) => target.startsWith("cli/") || target.startsWith("manager/")),
+    ...imports("manager").filter(({ target }) => target.startsWith("cli/")),
+  ];
+  expect(offending).toEqual([]);
 });
 
 test("the manager and the auth gateway are not addons", () => {

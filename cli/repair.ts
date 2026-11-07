@@ -5,7 +5,8 @@ import { enabledAddons, phpGuardOptedOut } from "../addons/catalog";
 import { resolveAddon, migrateOldAddonNames } from "./addons";
 import { reconcileAnchors, reconcileNginx, reconcilePanelBlocks, runAnchorWork } from "./reconcile";
 import { reconcilePhpGuard } from "../lib/php-guard";
-import { runAddonRepairs, runManagerRepair } from "./addon-hooks";
+import { runAddonRepairs } from "./addon-hooks";
+import { pruneManagerJobs } from "../manager/action";
 import { withOperationLock } from "./operation-lock";
 import { conffilesReleased } from "./conffiles";
 import { CERTIFICATES_PATH, FIREWALL_PATH, MANAGER_UNIT, NEW_SITES_PATH, SYSTEMD_DIR } from "../lib/paths";
@@ -108,4 +109,18 @@ async function applyRepair(positional: string[], flags: Record<string, string | 
   await runAddonRepairs(all);
   runManagerRepair();
   if (!quiet) log.ok(`repair complete (${specs.map((spec) => spec.name).join(", ") || "no addon enabled"})`);
+}
+
+/**
+ * The manager's own job records need the same upkeep the addons' do: a runner
+ * killed part-way (a reboot during an update) otherwise leaves a record that
+ * says "running" forever, and the index page would keep following it.
+ */
+function runManagerRepair(): void {
+  try {
+    const { removed, stuck } = pruneManagerJobs();
+    if (removed || stuck) log.ok(`manager job records: ${removed} expired, ${stuck} marked failed`);
+  } catch (error) {
+    log.warn(`manager (prune) failed: ${errorMessage(error)}`);
+  }
 }

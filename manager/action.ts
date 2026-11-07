@@ -34,8 +34,7 @@ import {
 } from "../lib/job-store";
 import { ADDONS, ADDON_NAMES, addonNews, addonNoticeKeys, addonEnabled } from "../addons/catalog";
 import { CLI_VERSION } from "../lib/version";
-import { type OnProgress } from "../cli/release";
-import { Fatal, log, requireRoot } from "../lib/log";
+import { type OnProgress, Fatal, log, requireRoot } from "../lib/log";
 
 /** Where the manager's own job records live, beside each addon's state. */
 export const MANAGER_STATE_DIR = addonStateDir("manager");

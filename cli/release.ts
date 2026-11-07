@@ -6,7 +6,7 @@ import { getTrustedRoot } from "@sigstore/tuf";
 import { Verifier, toSignedEntity, toTrustMaterial } from "@sigstore/verify";
 import { REPO, SIGSTORE_DIR } from "../lib/paths";
 import { VERSION_TAG_RE, newestRelease } from "../lib/semver";
-import { fatal, log } from "../lib/log";
+import { fatal, log, type OnProgress } from "../lib/log";
 
 const API = "https://api.github.com";
 const BUNDLES_ASSET = "attestations.jsonl";
@@ -106,8 +106,6 @@ export interface FetchedArtifact {
   name: string;
   bytes: Buffer;
 }
-
-export type OnProgress = (progress: string, done: boolean) => void;
 
 /** `onProgress` reports each download about once a second, and once more as it ends. */
 export async function fetchVerified(

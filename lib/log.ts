@@ -12,6 +12,9 @@ const endRedraw = () => {
   redrawing = false;
 };
 
+/** A progress line, redrawn until `done`. */
+export type OnProgress = (progress: string, done: boolean) => void;
+
 export const log = {
   step: (m: string) => { endRedraw(); console.log(`${paint("2", "›")} ${m}`); },
   ok: (m: string) => { endRedraw(); console.log(`${paint("32", "✓")} ${m}`); },
