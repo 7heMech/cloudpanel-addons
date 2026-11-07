@@ -31,7 +31,7 @@ beforeEach(() => {
   chmodSync(`${base}/box/etc`, 0o755);
   paths = {
     panelDb: `${base}/box/panel.sqlite`, passwd: `${base}/box/passwd`, runuser: "/usr/sbin/runuser", homes: `${base}/box/home`,
-    rootAccess: { panelDb: `${base}/box/panel.sqlite`, grants: `${base}/box/etc/terminal-root.json`, rootUid: uid },
+    rootAccess: { panelDb: `${base}/box/panel.sqlite`, grants: `${base}/box/etc/terminal-root.json`, securityKeys: `${base}/box/security-keys`, rootUid: uid },
   };
   const panel = db();
   panel.run(`CREATE TABLE user (id INTEGER PRIMARY KEY, user_name TEXT, role TEXT, status INTEGER,
@@ -278,7 +278,16 @@ test("a root access check that fails says so, rather than that root never allowe
 
 test("a passkey sign-in opens it with a key the account had when root allowed it, and not with a later one", () => {
   allow("alice");
+  const store = (keys: string[]) => {
+    mkdirSync(paths.rootAccess.securityKeys, { recursive: true });
+    writeFileSync(`${paths.rootAccess.securityKeys}/credentials.json`,
+      JSON.stringify({ users: { alice: { userId: 1, keys: keys.map((id) => ({ id, name: id })) } } }), { mode: 0o600 });
+  };
+  store(["alice-key", "added-later"]);
   expect(access("alice", "passkey:alice-key")).toEqual({ granted: true, problem: null });
   expect(access("alice", "passkey:added-later").problem).toBe("This passkey was added after root allowed you: sign in with your 2FA code, or ask root to allow you again.");
   expect(access("alice", "0").problem).toContain("used neither your 2FA code nor a passkey");
+  // Removed or revoked, the key no longer opens one, even from the session it signed in.
+  store(["added-later"]);
+  expect(access("alice", "passkey:alice-key").problem).toContain("no longer on your account");
 });

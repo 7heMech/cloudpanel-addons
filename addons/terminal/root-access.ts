@@ -135,11 +135,14 @@ export function grantProblem(db: Database, grant: RootGrant): string | null {
  * 2FA on is not enough: a session signed in before it was turned on stays
  * signed in, and never passed it.
  */
-function sessionProblem(grant: RootGrant, session: string): string | null {
+function sessionProblem(grant: RootGrant, session: string, paths: RootAccessPaths): string | null {
   if (session === "1") return null;
   if (session.startsWith("passkey:")) {
-    return grant.keys.includes(session.slice("passkey:".length)) ? null
-      : "This passkey was added after root allowed you: sign in with your 2FA code, or ask root to allow you again.";
+    const key = session.slice("passkey:".length);
+    if (!grant.keys.includes(key)) return "This passkey was added after root allowed you: sign in with your 2FA code, or ask root to allow you again.";
+    // A key removed or revoked since, perhaps because it was lost, opens nothing more.
+    return accountPasskeys(paths.securityKeys, grant.user, grant.id, paths.rootUid).some((found) => found.id === key) ? null
+      : "This passkey is no longer on your account: sign in with your 2FA code or another passkey to open a root terminal.";
   }
   return "This sign-in used neither your 2FA code nor a passkey: sign out and in again with one to open a root terminal.";
 }
@@ -147,11 +150,13 @@ function sessionProblem(grant: RootGrant, session: string): string | null {
 export interface RootAccessPaths {
   panelDb: string;
   grants: string;
-  /** Who must own the grants file; root, except in tests. */
+  /** Security Keys' state, for the keys an account has now. */
+  securityKeys: string;
+  /** Who must own the grants file and Security Keys' state; root, except in tests. */
   rootUid: number;
 }
 
-export const DEFAULT_ROOT_ACCESS_PATHS: RootAccessPaths = { panelDb: PANEL_DB, grants: ROOT_GRANTS_FILE, rootUid: 0 };
+export const DEFAULT_ROOT_ACCESS_PATHS: RootAccessPaths = { panelDb: PANEL_DB, grants: ROOT_GRANTS_FILE, securityKeys: SECURITY_KEYS_DIR, rootUid: 0 };
 
 export interface RootAccess {
   /** False for an administrator root never allowed. */
@@ -180,7 +185,7 @@ export function rootAccess(panelUser: string, paths: RootAccessPaths, session: s
   let db: Database | null = null;
   try {
     db = openPanelDatabase(paths.panelDb, true);
-    return { granted: true, problem: grantProblem(db, grant) ?? sessionProblem(grant, session) };
+    return { granted: true, problem: grantProblem(db, grant) ?? sessionProblem(grant, session, paths) };
   } catch (error) {
     return failed("CloudPanel's user list", error);
   } finally {

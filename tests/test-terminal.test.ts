@@ -48,7 +48,7 @@ beforeAll(() => {
   root = realpathSync(root);
   paths = {
     panelDb: `${root}/panel.sqlite`, passwd: `${root}/passwd`, runuser: "/usr/sbin/runuser", homes: `${root}/home`,
-    rootAccess: { panelDb: `${root}/panel.sqlite`, grants: `${root}/etc/terminal-root.json`, rootUid: process.getuid?.() ?? 0 },
+    rootAccess: { panelDb: `${root}/panel.sqlite`, grants: `${root}/etc/terminal-root.json`, securityKeys: `${root}/security-keys`, rootUid: process.getuid?.() ?? 0 },
   };
 });
 

@@ -70,7 +70,9 @@ the same minute carries the marker, so the unmarked session is the passkey's.
 A password session from while 2FA was off never counts. `allow` pins the
 passkeys the account has then and lists them by name, since an administrator
 signed in as the account could have added one: a key added later does not
-open a root shell until root allows the account again.
+open a root shell until root allows the account again. A key removed or revoked
+since opens nothing more, even from the session it signed in, as 2FA set up
+again does for the code.
 
 Each grant is also pinned to CloudPanel's `user.id`, so a name deleted and
 created again is not the account root allowed. A deactivation, a demotion or
