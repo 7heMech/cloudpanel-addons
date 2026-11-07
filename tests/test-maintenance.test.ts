@@ -338,8 +338,9 @@ test("the fleet counts what visitors get, in the table's header", () => {
   expect(rendered).not.toContain('data-label="Page"');
   // An unreadable site cannot be selected or switched.
   expect(rendered).toMatch(/aria-label="Select unknown\.example\.com" disabled/);
-  // The table comes before the global card.
-  expect(rendered.indexOf("maintenance-fleet-table")).toBeLessThan(rendered.indexOf("Global maintenance"));
+  // The global card comes before the table, which ends the page without a phone cut.
+  expect(rendered.indexOf("Global maintenance")).toBeLessThan(rendered.indexOf("maintenance-fleet-table"));
+  expect(rendered).not.toContain('id="fleet-more"');
 });
 
 test("the global override covers a site whose own setting could not be read", () => {

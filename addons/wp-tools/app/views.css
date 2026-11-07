@@ -57,6 +57,8 @@
 }
 @media (max-width: 940px) {
   .wp-card-note { padding: 16px 20px; }
+  .wp-new-site-header { flex-wrap: wrap; }
+  .wp-new-site-header > .btn { flex-basis: 100%; }
   .wp-new-site-table td.site-cell, .wp-new-site-table td[data-label="Plugins"] { flex-basis: 100%; }
 }
 /* Each policy's column holds a chip and its button with room to spare, so the

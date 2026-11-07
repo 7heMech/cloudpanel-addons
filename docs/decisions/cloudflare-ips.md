@@ -23,7 +23,9 @@ steps and reports each failure with the original operation error.
 ## Dashboard
 
 The site table comes first, with how many sites allow Cloudflare only in its
-header; from six sites a search and an Off filter appear, and the headings sort. Enable selected and
+header; from six sites a search and an Off only toggle appear, and the headings sort. The toggle
+is the shared filter with one criterion, so it is a button highlighted while on
+rather than a one-item menu. Enable selected and
 Disable selected act on the ticked rows, which the filter keeps to rows on
 screen. Their confirmation counts the sites whose setting changes, and an
 enable says that a site not proxied through Cloudflare stops answering; a

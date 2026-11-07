@@ -17,11 +17,11 @@ maintenance, live, not covered, and the site type) sit above the table, whose
 headings sort. Every fleet change answers
 with the redrawn fleet, which the page repaints.
 
-Below the table one card holds the global override: a switch that decides what
-visitors get for every site at once and changes nothing a site has saved, and
-the global IP bypasses behind a summary that counts them. Its confirmation names
+Above the table one card holds the global override, the page's main control: a
+switch that decides what visitors get for every site at once and changes nothing
+a site has saved, and the global IP bypasses behind a summary that counts them. Its confirmation names
 the site count and how many have maintenance saved off. While it is on, a banner
-above the table says every site serves the maintenance page, and a site whose own
+above both cards says every site serves the maintenance page, and a site whose own
 setting is off, or could not be read, shows a "Maintenance (Global)" badge;
 turning it off returns each site to its saved setting. Turning it on or off
 purges Varnish cache across the fleet. Global bypasses (up to 64) apply to every

@@ -65,7 +65,7 @@ function rootButton(root: RootAccess, user: string): string {
 export function dashboardView(sites: SanitizedSite[], root: RootAccess = { granted: false, problem: null }, user = ""): string {
   const table = sites.length === 0
     ? '<div class="empty">CloudPanel has no sites yet.</div>'
-    : `${fleetFilterHtml({ count: sites.length, placeholder: "Find a site or user", summary: `${sites.length} sites` })}
+    : `${fleetFilterHtml({ count: sites.length, placeholder: "Find a site or user" })}
       <div class="table-scroll">
         <table class="fleet-table terminal-site-table">
           <thead>
@@ -86,7 +86,7 @@ export function dashboardView(sites: SanitizedSite[], root: RootAccess = { grant
       </div>${rootButton(root, user)}
     </div>
     <div class="card card-table">
-      <div class="card-header"><h2>Sites</h2></div>
+      <div class="card-header"><h2>Sites${sites.length ? `<span class="heading-count" id="fleet-count">${sites.length}</span>` : ""}</h2></div>
       ${table}
     </div>`;
 }

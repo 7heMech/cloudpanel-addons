@@ -61,12 +61,14 @@ html.dark .sk-tile:has(input:checked) { background: rgb(38 125 221 / 10%); }
   .sk-switch-row > .switch { grid-row: 1; }
   .sk-switch-row > .hint { grid-column: 1 / -1; }
   .sk-checklist > li { align-items: flex-start; gap: 14px; }
-  .sk-toolbar { padding: 16px; }
+  .sk-toolbar { padding: 16px 16px 4px; }
   .sk-toolbar input { max-width: none; }
-  .sk-toolbar .hint { flex-basis: 100%; margin-left: 0; }
+  .sk-toolbar select { flex: 1 1 100%; }
+  .sk-toolbar .hint { flex-basis: 100%; margin: -4px 0 0; }
   .sk-table thead { display: none; }
   .sk-table, .sk-table tbody, .sk-table tr { display: block; }
   .sk-group-head th { display: block; padding: 16px 16px 4px; }
+  .sk-group:first-of-type .sk-group-head th { padding-top: 12px; }
   /* A key's details stack, with Remove centred beside them. */
   .sk-table tr.sk-key { display: grid; grid-template-columns: minmax(0, 1fr) auto; column-gap: 12px; padding: 10px 16px 10px 28px; }
   .sk-table td { display: block; padding: 0; border: 0; }

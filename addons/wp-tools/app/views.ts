@@ -256,7 +256,7 @@ function newSitesCard(jobs: WpJobView[]): string {
   const finished = jobs.filter((job) => !running.includes(job));
   return `
     <div class="card card-table">
-      <div class="card-header"><h2>Plugins on new sites</h2></div>
+      <div class="card-header wp-new-site-header"><h2>Plugins on new sites</h2><a class="btn" href="/site/new/wordpress">New WordPress site</a></div>
       <p class="hint wp-card-note">Choose plugins from WordPress.org, or upload them as zips, on CloudPanel's New WordPress Site form. Each is installed as the site's own user once WordPress is set up, and the page the new site lands on says how it went.</p>${
   running.length ? `
       <div class="wp-jobs">${running.map((job) => `

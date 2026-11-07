@@ -18,8 +18,10 @@ addresses they block; SSH login, with the login message. MySQL access belongs wi
 MySQL and Redis sizing belong to Resource Limits alongside PHP worker limits. Each row says what it does; the
 reasons are here. The Nginx, MySQL, CloudPanel and reboot rows appear only once
 System Tweaks' own switch is on, since they change nothing before. The
-repositories and each PHP-FPM's upload-progress value fold into a summary that
-opens, and the summary says when something needs a look.
+repositories, each PHP-FPM's upload-progress value and the blocked addresses
+fold into a summary that opens, and the summary says when something needs a
+look. They start closed; the blocked addresses, once opened, stay open across an
+Unblock.
 
 Three states would otherwise do nothing visible, so the page calls them out:
 updates that run but leave CloudPanel's PHP uncovered; a reboot required for

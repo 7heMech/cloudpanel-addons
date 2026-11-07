@@ -137,6 +137,14 @@ export function dashboardView(
     <button class="btn" onclick="act('${d}','recreate')" title="Rebuild the recorded version, preserving data and enabling native backups for older instances">Recreate</button>
     <button class="btn" onclick="showLogs('${d}', '${escJs(String(i.port ?? ""))}')">Logs</button>
     <button class="btn btn-danger" onclick="askDelete('${d}')">Delete</button>`;
+      // A phone has no room for the menu: the buttons sit in the row, without the ones it rarely needs.
+      const phoneActions = missing ? actions
+        : `${i.state === "running"
+          ? `<button class="btn" onclick="askStop('${d}')">Stop</button>`
+          : `<button class="btn" onclick="act('${d}','start')">Start</button>`}
+    <button class="btn" onclick="takeSnapshot('${d}')">Snapshot</button>
+    <button class="btn" onclick="showLogs('${d}', '${escJs(String(i.port ?? ""))}')">Logs</button>
+    <button class="btn btn-danger" onclick="askDelete('${d}')">Delete</button>`;
       const state = missing
         ? '<span class="badge state-absent" title="The CloudPanel site was deleted; Delete archives and removes the instance">Deleted</span>'
         : updating
@@ -153,9 +161,11 @@ export function dashboardView(
     ${behind ? `<span class="badge behind" title="${esc(latest)} is available">${esc(latest)} available</span>` : ""}
   </td>
   <td data-label="State">${state}</td>
-  <td class="action-cell wide-cell" data-label="Actions"><div class="instatic-row-actions">${update}<details id="instance-actions-${esc(i.domain)}" class="row-actions"><summary>Manage</summary><div class="actions">
+  <td class="action-cell wide-cell"><div class="instatic-row-actions">${update}<details id="instance-actions-${esc(i.domain)}" class="row-actions"><summary>Manage</summary><div class="actions">
     ${actions}
-  </div></details></div></td>
+  </div></details></div><div class="actions instatic-phone-actions">${update}
+    ${phoneActions}
+  </div></td>
 </tr>`;
     })
     .join("\n");

@@ -5,6 +5,12 @@ function openFromRow(button, event) {
 (function () {
   const find = document.getElementById('fleet-find');
   if (!find) return;
+  const count = document.getElementById('fleet-count');
+  find.addEventListener('input', function () {
+    const rows = siteRows();
+    const shown = rows.filter(function (row) { return !row.hidden || row.hasAttribute('data-cut'); }).length;
+    count.textContent = shown === rows.length ? String(rows.length) : shown + ' / ' + rows.length;
+  });
   find.addEventListener('keydown', function (event) {
     if (event.key !== 'Enter') return;
     const shown = siteRows().filter(function (row) { return !row.hidden; });
