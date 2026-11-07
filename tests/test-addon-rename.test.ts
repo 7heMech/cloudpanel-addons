@@ -17,7 +17,7 @@ function fixture(): string {
 }
 
 /** Runs the migration with the paths, config writer and log pointed at `root`. */
-function migrate(root: string, revert = false): { warnings: string[]; error?: string } {
+function migrate(root: string, revert = false, legacyWaitSeconds = 300): { warnings: string[]; error?: string } {
   const script = `
     import { mock } from "bun:test";
     import { writeFileSync } from "node:fs";
@@ -38,7 +38,7 @@ function migrate(root: string, revert = false): { warnings: string[]; error?: st
     const { migrateOldAddonNames, revertAddonRenames } = await import("./cli/addons.ts");
     let error;
     try {
-      const renames = migrateOldAddonNames();
+      const renames = migrateOldAddonNames(false, ${legacyWaitSeconds});
       if (${revert}) revertAddonRenames(renames);
     } catch (caught) { error = caught.message; }
     process.stdout.write(JSON.stringify({ warnings, error }));
@@ -253,4 +253,19 @@ test("with nothing to move, update and repair do not wait on a memory change's l
     expect(migrate(root)).toEqual({ warnings: [] });
     expect(Date.now() - started).toBeLessThan(10_000);
   });
+});
+
+test("the move waits for a PHP Resources change the earlier version is still running", async () => {
+  const { withFileLockSync } = await import("../cli/action-common");
+  const root = fixture();
+  mkdirSync(join(root, "locks"));
+  writeFileSync(join(root, "etc", "php-resources.conf"), "# clp-addons: php-resources\n");
+  mkdirSync(join(root, "state", "php-resources"));
+  writeFileSync(join(root, "state", "php-resources", "policy.json"), "{}");
+  withFileLockSync(join(root, "locks", "php-resources.lock"), 1, "held", () => {
+    expect(migrate(root, false, 1).error).toContain("a PHP Resources change from the earlier version is still running");
+  });
+  expect(existsSync(join(root, "state", "php-resources", "policy.json"))).toBe(true);
+  expect(migrate(root).warnings).toEqual([]);
+  expect(existsSync(join(root, "state", "resource-limits", "policy.json"))).toBe(true);
 });

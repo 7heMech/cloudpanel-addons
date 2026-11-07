@@ -197,9 +197,11 @@ the sizes are worked out again when the services start:
   new cap at once; MySQL's file changes and the page says it applies at the
   next restart.
 
-Both hooks hold the memory settings lock while reading and applying the policy,
-so a migration or an Off change cannot race them. No memory change waits for
-MySQL or Redis to start or stop.
+Both hooks read the policy without the memory settings lock, which a change
+holds for up to two minutes. A change saves before it applies, so after
+applying, a hook reads the policy again and applies it once more if it moved:
+an Off change that lands meanwhile wins. No memory change waits for MySQL or
+Redis to start or stop.
 
 A change from the page has one 120-second deadline for itself and, when a step
 fails, for putting the previous settings back; each command gets what is left
@@ -303,7 +305,9 @@ An update moves a `php-resources` policy and enabled record to
 `resource-limits`; a disabled install keeps its categories without being
 enabled. Old URL paths redirect, with their suffix, query and method, after the
 admin gate, so a site Settings card loaded before the panel reloads still works.
-No old config, state directory or lock is kept.
+No old config, state directory or lock is kept. The move first waits, up to
+five minutes, for a PHP Resources change the earlier version is still applying,
+which would otherwise write its old policy back.
 
 Memory settings saved in System Tweaks move to Resource Limits' own files. An
 enabled System Tweaks with a memory protection on enables Resource Limits to
@@ -317,6 +321,7 @@ Memory settings and runtime state are root-only regular files. The settings
 lock serialises changes and upkeep; repair and new-site runs leave the memory
 step to a change that holds it. Service start hooks read without the lock and
 check the enabled config, so disabling the addon cannot recreate withdrawn
-limits. Disabling keeps PHP's saved policy and current pools, withdraws memory
-sizing and OOM overrides, and leaves MySQL's running sizes until its next
-restart.
+limits. Withdrawing waits as long as a change can hold the lock, since once the
+enabled config is gone nothing would retry it. Disabling keeps PHP's saved
+policy and current pools, withdraws memory sizing and OOM overrides, and leaves
+MySQL's running sizes until its next restart.

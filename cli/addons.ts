@@ -49,16 +49,20 @@ function migrationPending(): boolean {
   }
 }
 
-export function migrateOldAddonNames(quiet = false): AddonRename[] {
+export function migrateOldAddonNames(quiet = false, legacyWaitSeconds = 300): AddonRename[] {
   if (!migrationPending()) {
     // Lock files hold no saved policy. Old processes are replaced by provisioning.
     rmSync(`${LOCK_DIR}/php-resources.lock`, { force: true });
     rmSync(`${LOCK_DIR}/system-tweaks-memory.lock`, { force: true });
     return [];
   }
-  // Service start hooks and settings writes must see the policy on one side of the transfer.
-  return withFileLockSync(`${LOCK_DIR}/resource-limits-settings.lock`, 15, "a resource limits change is still running", () =>
-    withFileLockSync(`${LOCK_DIR}/system-tweaks.lock`, 15, "a system tweaks change is still running", () => migrateAddonState(quiet)));
+  // Service start hooks and settings writes must see the policy on one side of
+  // the transfer. A PHP Resources change the earlier version started may still
+  // be applying pools; moving its policy from under it would let it write the
+  // old directory back, so the move waits for it as long as such a change runs.
+  return withFileLockSync(`${LOCK_DIR}/php-resources.lock`, legacyWaitSeconds, "a PHP Resources change from the earlier version is still running", () =>
+    withFileLockSync(`${LOCK_DIR}/resource-limits-settings.lock`, 15, "a resource limits change is still running", () =>
+      withFileLockSync(`${LOCK_DIR}/system-tweaks.lock`, 15, "a system tweaks change is still running", () => migrateAddonState(quiet))));
 }
 
 function migrateAddonState(quiet: boolean): AddonRename[] {

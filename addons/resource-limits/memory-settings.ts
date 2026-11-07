@@ -84,10 +84,16 @@ export function restoreResourceMemory(options: ResourceMemoryOptions = {}, ifIdl
   }
 }
 
+/**
+ * How long withdrawing waits for a change to finish. It runs once the enabled
+ * record is gone, so giving up would leave the limits with nothing to retry.
+ */
+export const WITHDRAW_LOCK_WAIT_S = MEMORY_DEADLINE_MS / 1000 + 30;
+
 /** Run after the enabled record is removed, so a service hook cannot put the limits back. */
 export function withdrawResourceMemory(options: ResourceMemoryOptions = {}): void {
   const paths = { ...DEFAULT_MEMORY_SETTINGS_PATHS, ...options.memorySettings };
-  withFileLockSync(paths.lockFile, 15, "another resource limits change is still running", () => {
+  withFileLockSync(paths.lockFile, WITHDRAW_LOCK_WAIT_S, "another resource limits change is still running", () => {
     // A late start hook may have queued cleanup just before the addon was re-enabled.
     if (existsSync(paths.enabledConfig)) return;
     applyMemory({ ...DEFAULT_MEMORY, mysql: false, redis: false, oom: false }, options.memory, false);
@@ -97,12 +103,17 @@ export function withdrawResourceMemory(options: ResourceMemoryOptions = {}): voi
 /**
  * What MySQL's and Redis's start hooks run. It reads the setting without the
  * lock, which a change holds for up to two minutes: the settings file is
- * replaced in one rename, and the change saves before it applies.
+ * replaced in one rename, and the change saves before it applies. A change
+ * saved while this applied the old settings may also have finished first, so
+ * the settings are read again and, if they moved, applied once more.
  */
 export function resourceLimitsMemory(kind: "mysql" | "redis", options: ResourceMemoryOptions = {}): boolean {
   const paths = { ...DEFAULT_MEMORY_SETTINGS_PATHS, ...options.memorySettings };
   if (!existsSync(paths.enabledConfig)) return false;
-  const changed = syncMemory(kind, readMemorySettings(options), options.memory);
+  const applied = readMemorySettings(options);
+  let changed = syncMemory(kind, applied, options.memory);
+  const latest = readMemorySettings(options);
+  if (JSON.stringify(latest) !== JSON.stringify(applied)) changed = syncMemory(kind, latest, options.memory) || changed;
   // A disable may have removed its files while the hook was running.
   if (!existsSync(paths.enabledConfig)) withdrawResourceMemory(options);
   return changed;
