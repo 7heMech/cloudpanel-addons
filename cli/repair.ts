@@ -50,7 +50,8 @@ async function applyRepair(positional: string[], flags: Record<string, string | 
     return;
   }
   try {
-    migrateOldAddonNames(quiet);
+    // An earlier version's PHP Resources change is not waited for here; the next repair moves it.
+    migrateOldAddonNames(quiet, 0);
   } catch (error) {
     // Upkeep of everything else does not wait on the move; the next repair tries it again.
     log.warn(`renamed addons were not moved yet: ${error instanceof Error ? error.message : String(error)}`);

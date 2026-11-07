@@ -193,14 +193,9 @@ export function runTerminalRootCommand(argv: string[]): void {
     withPanel((db) => { for (const grant of grants) log.plain(`${grant.user}: ${grantProblem(db, grant) ?? "can open a root shell"}`); });
     return;
   }
-  withFileLockSync(ROOT_GRANTS_LOCK, 15, "another terminal root change is still running", () => {
-    const current = read();
-    const others = current.filter((grant) => grant.user !== user);
-    if (verb === "deny") {
-      if (others.length === current.length) fatal(`${user} was not allowed a root shell`);
-      writeRootGrants(others);
-      return;
-    }
+  // Looked up before the grants lock, so CloudPanel holding its database does not hold up other changes.
+  let grant: RootGrant | null = null;
+  if (verb === "allow") {
     const found = withPanel((db) => account(db, user!));
     if (!found) fatal(`CloudPanel has no user ${user}`);
     if (Number(found.status) !== 1) fatal(`${user} is deactivated`);
@@ -208,7 +203,14 @@ export function runTerminalRootCommand(argv: string[]): void {
     // Allowed without it, the first to set it up -- any administrator after a password reset -- would be the owner.
     const mfa = mfaDigest(found);
     if (mfa === null) fatal(`${user} has 2FA off: they turn it on in Account → Security first, then allow them`);
-    writeRootGrants([...others, { user: user!, id: found.id, mfa }]);
+    grant = { user: user!, id: found.id, mfa };
+  }
+  withFileLockSync(ROOT_GRANTS_LOCK, 15, "another terminal root change is still running", () => {
+    const current = read();
+    const others = current.filter((candidate) => candidate.user !== user);
+    if (grant) return writeRootGrants([...others, grant]);
+    if (others.length === current.length) fatal(`${user} was not allowed a root shell`);
+    writeRootGrants(others);
   });
   log.ok(verb === "allow"
     ? `${user} can open a root shell from the panel, signed in with their 2FA code`

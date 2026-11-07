@@ -161,8 +161,13 @@ function disableAddonContents(spec: AddonSpec): void {
   } catch (error) {
     // With the config gone a second disable would say it is done, and repair
     // skips a disabled addon, so the half-withdrawn addon is enabled again.
-    writeConfig(spec, true);
-    fatal(`${spec.name} could not be disabled and is still enabled: ${error instanceof Error ? error.message : String(error)}. Run clp-addons disable ${spec.name} again`);
+    const reason = error instanceof Error ? error.message : String(error);
+    try {
+      writeConfig(spec, true);
+    } catch (restore) {
+      fatal(`${spec.name} could not be disabled (${reason}), nor enabled again (${restore instanceof Error ? restore.message : String(restore)}). Run clp-addons enable ${spec.name}, then disable it again`);
+    }
+    fatal(`${spec.name} could not be disabled and is still enabled: ${reason}. Run clp-addons disable ${spec.name} again`);
   }
   // Even with no addon left the binary stays, and repair keeps the guard.
   settlePhpGuard();

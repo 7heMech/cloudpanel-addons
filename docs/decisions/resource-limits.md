@@ -305,9 +305,10 @@ An update moves a `php-resources` policy and enabled record to
 `resource-limits`; a disabled install keeps its categories without being
 enabled. Old URL paths redirect, with their suffix, query and method, after the
 admin gate, so a site Settings card loaded before the panel reloads still works.
-No old config, state directory or lock is kept. The move first waits, up to
-five minutes, for a PHP Resources change the earlier version is still applying,
-which would otherwise write its old policy back.
+No old config, state directory or lock is kept. A PHP Resources change the
+earlier version is still applying would write its old policy back, so an update
+or install waits up to five minutes for it, and a repair leaves the move to the
+next repair.
 
 Memory settings saved in System Tweaks move to Resource Limits' own files. An
 enabled System Tweaks with a memory protection on enables Resource Limits to
