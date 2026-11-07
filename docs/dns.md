@@ -2,7 +2,7 @@
 
 DNS keeps each site's Cloudflare records to a profile, and can set the site's
 domain up in Mailcow. It also serves redirect domains. Enable **DNS** under
-Addons, or run `clp-addons install dns`.
+Addons, or run `clp-addons enable dns`.
 
 ## Set up
 

@@ -22,7 +22,7 @@ import { existsSync } from "node:fs";
  * addon could be disabled from the page the entry leads to: disabling the last
  * one took the link away, and the only way back to the page that would offer
  * the addons again was to know the URL. The entry now goes when the
- * installation goes, which is `cmdUninstall`'s call to make, not this one's.
+ * installation goes, which is `clp-addons-uninstall`'s call to make, not this one's.
  */
 export function installedInjections(exclude?: string, managerNav = true): Injection[] {
   const injections: Injection[] = [];

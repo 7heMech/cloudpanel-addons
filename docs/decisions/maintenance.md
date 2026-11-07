@@ -138,10 +138,9 @@ writer, when an administrator agrees; see [WordPress Tools](wp-tools.md).
 The state root, global directory, and per-domain directories are mode `0711`,
 which lets Nginx traverse a known path without listing domains or bypasses.
 Per-site toggle and all bypass files are mode `0600`; the global toggle and
-public HTML files are mode `0644`. Disabling or
-uninstalling the addon removes the marked includes from templates and rendered
-vhosts, the standalone check, the global Nginx block and the client-IP map. Site
-state remains unless purge was requested.
+public HTML files are mode `0644`. Disabling the addon removes the marked
+includes from templates and rendered vhosts, the standalone check, the global
+Nginx block and the client-IP map. Site state remains.
 
 Repair's upkeep removes the state directory of a domain CloudPanel no longer
 has, so a site created again under that name starts live, with no bypasses or

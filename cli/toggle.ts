@@ -125,10 +125,9 @@ export function withdrawWpTools(removeConfig: () => void): void {
 /**
  * Turn one addon off and leave everything it made behind.
  *
- * Deliberately not `cmdUninstall`: that removes the binary once the last addon
- * goes, and may remove an addon's data. Disabling withdraws the addon from the
- * panel -- its config, its units' knowledge of it, its Twig markup -- and keeps
- * its state directory, so enabling it again returns the same instances.
+ * Disabling withdraws the addon from the panel -- its config, its units'
+ * knowledge of it, its Twig markup -- and keeps its state directory, so
+ * enabling it again returns the same instances.
  */
 export function applyDisable(name: string): void {
   requireRoot("disable");

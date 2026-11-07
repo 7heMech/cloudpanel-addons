@@ -70,8 +70,8 @@ WP-CLI and the site's matching PHP command must already be installed on the
 server. Use WordPress to configure the plugin and manage its updates. The addon
 does not change CloudPanel's Varnish setting or the plugin's cache settings.
 
-Turning off automatic installation stops future changes. Disabling or
-uninstalling WordPress Tools removes its sign-in helper and stops automation;
+Turning off automatic installation stops future changes. Disabling WordPress
+Tools removes its sign-in helper and stops automation;
 the CLP plugin remains available in WordPress, where you can deactivate or
 delete it. Kept addon data retains automation settings for the next enable.
 
@@ -121,7 +121,7 @@ removed. **Cleanup pending** means a site or the
 Dashboard needs attention; fix it and retry. Cleanup does not undo work done
 through MainWP or end WordPress sessions it opened.
 
-Disabling or uninstalling WordPress Tools leaves MainWP connections in place and
+Disabling WordPress Tools leaves MainWP connections in place and
 removes the must-use plugin; clean up first to remove the connections. Both refuse while an interrupted connection's
 temporary authentication setting needs recovery. Run `clp-addons repair wp-tools`
 and let its background pass finish before retrying. If the page reports that

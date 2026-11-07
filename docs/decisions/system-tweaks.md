@@ -244,8 +244,7 @@ reapplies through the reconcile service. Disabling is synchronous, so it cannot
 ask the pools for a page: under the same lock, it config-tests the PHP the unit
 will start without the drop-in, CloudPanel's own or an operator's override, and
 requires the unit to come back running it. Otherwise, including a failed
-`daemon-reload`, it puts the drop-in back and refuses to disable; an uninstall
-that aborts later reactivates the addon. While the addon is disabled the stored
+`daemon-reload`, it puts the drop-in back and refuses to disable. While the addon is disabled the stored
 choice is marked withdrawn, and a change that was waiting for the lock refuses,
 as it does once the addon's config is gone, so neither can write the drop-in
 again; enabling clears the mark. A disable whose other half fails after
@@ -276,11 +275,10 @@ install, update and repair write it whenever any addon is installed. System
 Tweaks is where it is shown and the only place to opt out. The opt-out is
 `uploadProgressGuard: false` in `/var/lib/clp-addons/system-tweaks/settings.json`,
 and `cli/php-guard.ts` honours it only while `system-tweaks.conf` exists.
-The shared disable and uninstall paths reconcile the guard once the config is
+The shared disable path reconciles the guard once the config is
 gone. Disabling puts it back even when no addon is left, because the binary
-stays and repair keeps the guard while it is installed. Uninstalling puts it
-back while another addon remains, and the last uninstall removes it with the
-binary. A failure there warns and leaves the guard to the repair timer, since
+stays and repair keeps the guard while it is installed;
+`clp-addons-uninstall` removes it with the binary. A failure there warns and leaves the guard to the repair timer, since
 the addon is already withdrawn. So an existing box
 keeps its protection after an update without anyone enabling System Tweaks, and
 no box loses the guard because an addon it never had was missing.
@@ -1303,7 +1301,7 @@ It touches only what a protocol asks for. UDP adds `allow proto udp` and deletes
 CloudPanel's TCP rule for that port and source, unless another TCP rule for both
 still wants it; TCP and UDP adds the UDP rule. Additions run before deletions.
 The rules it changed are recorded, so a rule set back to TCP, or every rule when
-System Tweaks is disabled or uninstalled, goes back to CloudPanel's own: TCP
+System Tweaks is disabled, goes back to CloudPanel's own: TCP
 for each row, and UDP 443 untouched. Rules the operator added for other ports
 are left alone, until CloudPanel's next rebuild removes them as it always did.
 ufw runs with argument arrays; ports and sources from the table must match a

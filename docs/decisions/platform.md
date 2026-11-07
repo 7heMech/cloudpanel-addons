@@ -141,7 +141,7 @@ provisioned and does not attempt drift recovery.
 
 ## One operation at a time
 
-`install`, `enable`, `disable`, `repair`, `update`, `uninstall` and the panel's
+`install`, `enable`, `disable`, `repair`, `update`, `clp-addons-uninstall` and the panel's
 template reconcile all rewrite the same config files, units, Twig templates and
 Nginx fragments, and none of that is atomic across the set. Each takes one
 exclusive lock in `/run/lock/clp-addons/operation.lock` for the whole operation,

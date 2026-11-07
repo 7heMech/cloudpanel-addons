@@ -565,7 +565,7 @@ export async function acquireFileLock(
 }
 
 /**
- * The same lock for callers that cannot await: disable, uninstall and the
+ * The same lock for callers that cannot await: disable, clp-addons-uninstall and the
  * template reconcile are synchronous from end to end.
  */
 export function acquireFileLockSync(

@@ -22,7 +22,7 @@ else.
 Sign-in is available whenever the addon is enabled. Automatic Varnish installation and
 MainWP enrollment are separate opt-in policies, off when no settings exist.
 
-Disabling or uninstalling removes the sign-in helper from every site it is in.
+Disabling removes the sign-in helper from every site it is in.
 A site whose files cannot be deleted does not stop the ones after it; withdrawal
 names it and the reason. A maintenance bypass an administrator accepted while
 signing in belongs to Maintenance Mode: it stays in that site's bypass list
@@ -45,7 +45,7 @@ Every 15 minutes repair queues `clp-addons action wp-tools sync` through
 `queueAddonPass`. That pass runs outside repair's operation lock. The transient
 unit has a 180-second runtime limit and skips an already running pass. Each policy checks
 the enabled config under its own lock before reading state or discovering sites;
-disable and uninstall hold both locks while removing config and state. The
+disable holds both locks while removing config. The
 Varnish pass checks only sites automation can still act on: no record yet, or a
 plugin not yet seen. It has a 30-second budget. **Check now** checks every
 eligible site in a background job (see below) and refreshes what the page
@@ -243,7 +243,7 @@ with maintenance in `cli/nginx-config.ts`. Only a regular,
 root-owned vhost that is not writable by other users can be replaced. Its mode
 and ownership survive atomic replacement; credentials and other content remain.
 
-Disable and uninstall remove the helper from every site and then the addon's
+Disable removes the helper from every site and then the addon's
 config under the sign-in lock, and a sign-in refuses once the config is gone,
 so one that was waiting cannot put a helper back. The sign-in lock waits up to
 five seconds. Minting as the site user has ten
@@ -388,7 +388,7 @@ previous setting is journaled first. It is restored in `finally`, or by the next
 queued pass after a crash, even when automation is off.
 Interrupted children are recovered first, within the pass budget and before
 querying the Dashboard. A successful recovery is journaled as `restored`, so an
-unavailable Dashboard cannot prevent disable or uninstall once authentication
+unavailable Dashboard cannot prevent disable once authentication
 is safe.
 A site the Dashboard already has a record for is reconnected through MainWP's
 own reconnect rather than removed and added again, so the record keeps its id,
@@ -511,7 +511,7 @@ only for a Dashboard on this server: one elsewhere has to add each site itself
 within the Child's connection timeout, so activating many at once would only
 start their timers together.
 
-The switch only pauses automation. Disabling or uninstalling leaves the
+The switch only pauses automation. Disabling leaves the
 connections, as it leaves the Varnish plugin, removes the guards, and refuses
 only while an enrollment stopped before its temporary setting was restored. `--purge`
 forgets which connections the addon made.

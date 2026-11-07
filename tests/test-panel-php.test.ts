@@ -331,7 +331,7 @@ test("a refused disable leaves choosing the panel's PHP available", async () => 
   expect(readFileSync(env.dropIn, "utf8")).toContain("php-fpm8.3 ");
 });
 
-test("a change admitted before an uninstall purged its state still finds the addon gone", async () => {
+test("a change admitted before the addon's state was removed still finds the addon gone", async () => {
   const env = box();
   await setPanelPhp("8.4", env.options);
   withdrawPanelPhp(env.options);

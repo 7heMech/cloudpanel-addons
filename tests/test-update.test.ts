@@ -292,18 +292,19 @@ mock.module("../lib/panel-snapshot", () => ({
 }));
 
 const { cmdInstall } = await import("../cli/install");
+const { applyEnable } = await import("../cli/toggle");
 const { cmdUpdate } = await import("../cli/update");
 const { NEWS_SINCE_FILE } = await import("../cli/manager-action");
 const handoffCall = (tag: string, ...args: string[]) =>
   `run:${CLI_BIN} ${["update", ...args, `--version=${tag}`, "--no-self-update", "--updated-from=1.2.3"].join(" ")}`;
 
-test("install enables bundled addons with no release checks or gh, even when all addons were disabled", async () => {
+test("enable turns bundled addons on with no release checks or gh, even when all addons were disabled", async () => {
   for (const enabled of [true, false]) {
     calls.length = 0;
     resetProvisioning();
     hasInstalledAddon = enabled;
     artifactsAvailable = false;
-    await cmdInstall(["stager"]);
+    await applyEnable("stager");
     expect(calls).not.toContain("resolveRelease");
     expect(calls).not.toContain("fetchVerified");
     expect(calls).not.toContain("verifyAttestation");
@@ -326,13 +327,19 @@ test("bootstrap local artifacts are checked without invoking the remote verifier
   expect(calls).toContain("startUnits");
 });
 
-test("install enables every addon it is given", async () => {
+test("install.sh with no addons named provisions the platform with none enabled", async () => {
   calls.length = 0;
   resetProvisioning();
-  await cmdInstall(["stager", "terminal"]);
-  expect(calls).toContain("writeConfig:stager");
-  expect(calls).toContain("writeConfig:terminal");
-  expect(calls.some((call) => call.startsWith(`run:${CLI_BIN} install`))).toBe(false);
+  await cmdInstall(["--local=/tmp/bootstrap"]);
+  expect(calls).toContain(`writeAtomic:${CLI_BIN}`);
+  expect(calls).toContain("startUnits");
+  expect(calls.some((call) => call.startsWith("writeConfig:"))).toBe(false);
+});
+
+test("install without install.sh's binary points to enable", async () => {
+  calls.length = 0;
+  await expect(cmdInstall(["stager"])).rejects.toThrow("clp-addons enable");
+  expect(calls).not.toContain("writeConfig:stager");
 });
 
 test("install.sh's binary is recorded once and then enables every addon", async () => {
@@ -347,7 +354,7 @@ test("install.sh's binary is recorded once and then enables every addon", async 
 test("install refuses an unknown addon before installing any", async () => {
   calls.length = 0;
   resetProvisioning();
-  await expect(cmdInstall(["stager", "nonesuch"])).rejects.toThrow("unknown addon 'nonesuch'");
+  await expect(cmdInstall(["stager", "nonesuch", "--local=/tmp/bootstrap"])).rejects.toThrow("unknown addon 'nonesuch'");
   expect(calls).not.toContain("writeConfig:stager");
 });
 

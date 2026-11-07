@@ -288,7 +288,7 @@ export async function runTerminalAction(argv: string[], options: TerminalActionO
 
 /**
  * Stop every terminal's root worker, which hangs up its shell. Run when the
- * addon is disabled or uninstalled, so taking it away also takes away the
+ * addon is disabled, so taking it away also takes away the
  * shells it opened.
  */
 export function endAllTerminals(proc = "/proc"): number {
