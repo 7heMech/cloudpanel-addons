@@ -9,7 +9,8 @@ import { existsSync, lstatSync, readFileSync, readlinkSync, realpathSync, statSy
 import { dlopen, FFIType } from "bun:ffi";
 import { Database } from "bun:sqlite";
 import { requireRoot } from "./util";
-import { CLI_BIN, CONFIG_DIR, PANEL_DB, SERVICE_GROUP, SERVICE_USER, SESSION_DIR } from "./paths";
+import { CLI_BIN, CONFIG_DIR, PANEL_DB, SERVICE_GROUP, SERVICE_USER, SESSION_DIR, STATE_DIR } from "./paths";
+import { passkeyFor } from "../addons/security-keys/sign-ins";
 import {
   MAX_SESSION_ID_LENGTH,
   parsePanelSession,
@@ -44,6 +45,8 @@ export interface AuthActionOptions {
   panelDb?: string;
   /** Test-only override; production checks whether Security Keys is enabled. */
   securityKeys?: boolean;
+  /** Test-only; production reads Security Keys' sign-ins from its state directory, owned by root. */
+  securityKeysState?: { dir: string; uid: number };
   /** Test-only socket path override for daemon mode; production uses systemd FD 3. */
   listenPath?: string;
   /** Test-only panel info reader override. */
@@ -235,6 +238,16 @@ const STALLED_INPUT_MS = 30_000;
 /** How long output may keep arriving after a duplex worker has exited. */
 const OUTPUT_AFTER_EXIT_MS = 1_000;
 
+/** What a session proves of its sign-in beyond the password: see SESSION_2FA_ENV. */
+function sessionProof(session: ParsedPanelSession, options: AuthActionOptions): string {
+  if (session.twoFactor) return "1";
+  const securityKeys = options.securityKeys ?? existsSync(`${CONFIG_DIR}/security-keys.conf`);
+  if (!securityKeys || session.createdAt === null) return "0";
+  const state = options.securityKeysState ?? { dir: `${STATE_DIR}/security-keys`, uid: 0 };
+  const key = passkeyFor(session.user, session.createdAt, state.dir, state.uid);
+  return key ? `passkey:${key}` : "0";
+}
+
 interface SessionAccount {
   user: string;
   /** What a session verb's worker is told about this sign-in's two-factor step. */
@@ -247,7 +260,7 @@ async function sessionUser(sessionId: string, options: AuthActionOptions, role?:
     if (sessionId.length > 128 || !SESSION_ID_RE.test(sessionId)) return null;
     const session = await checkSession(sessionId, options);
     if (!session || (role !== undefined && !session.roles.includes(role))) return null;
-    return { user: session.user, env: { [SESSION_2FA_ENV]: session.twoFactor ? "1" : "0" } };
+    return { user: session.user, env: { [SESSION_2FA_ENV]: sessionProof(session, options) } };
   } catch {
     return null;
   }

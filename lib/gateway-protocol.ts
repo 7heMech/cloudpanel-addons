@@ -111,7 +111,8 @@ export function callerMay(access: WebAccess, roles: readonly string[] | null): b
 export const DUPLEX_WORKER_MARKER = "CLP_ADDONS_DUPLEX_WORKER";
 /**
  * Set by the gateway on a session verb's worker: "1" when that panel session
- * passed CloudPanel's own two-factor step, "0" otherwise.
+ * passed CloudPanel's own two-factor step, `passkey:<credential id>` when a
+ * Security Keys sign-in opened it, "0" otherwise.
  */
 export const SESSION_2FA_ENV = "CLP_ADDONS_SESSION_2FA";
 
