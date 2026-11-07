@@ -148,12 +148,12 @@ test("the manager asks for --root, and a ready line must agree on who the shell 
 });
 
 test("the page offers a root shell only to an allowed administrator, and says how to be one", () => {
-  expect(dashboardView([], { granted: true, problem: null }, "alice")).toContain("Open root shell");
+  expect(dashboardView([], { granted: true, problem: null }, "alice")).toContain("Open a root terminal");
   const refused = dashboardView([], { granted: true, problem: "Root shells need two-factor authentication: turn it on under Account → Security" }, "alice");
-  expect(refused).not.toContain("Open root shell");
+  expect(refused).not.toContain("Open a root terminal");
   expect(refused).toContain("turn it on under Account → Security");
   const other = dashboardView([], { granted: false, problem: null }, "bob");
-  expect(other).not.toContain("Open root shell");
+  expect(other).not.toContain("Open a root terminal");
   expect(other).toContain("clp-addons terminal root allow bob");
   const popup = popupPage(null);
   expect(popup).toContain('data-domain=""');

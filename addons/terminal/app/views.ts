@@ -53,7 +53,7 @@ function rootCard(root: { granted: boolean; problem: string | null }, user: stri
   }
   const action = root.problem
     ? `<span class="tone-bad">${esc(root.problem)}</span>`
-    : `<button class="btn" type="button" onclick="clpOpenTerminal(CLP_BASE, '', event.shiftKey)">Open root shell</button>`;
+    : `<button class="btn" type="button" onclick="clpOpenTerminal(CLP_BASE, '', event.shiftKey)" aria-label="Open a root terminal">Open terminal</button>`;
   return `
     <div class="card">
       <div class="card-header"><h2>This server</h2></div>
