@@ -1,5 +1,5 @@
 import { expect, test } from "bun:test";
-import OPEN_JS from "../addons/terminal/app/open.client.js" with { type: "text" };
+import OPEN_JS from "../lib/assets/terminal-open.client.js" with { type: "text" };
 
 test("each site's terminal opens separately and repeated clicks reuse only that site", () => {
   for (const phone of [false, true]) {

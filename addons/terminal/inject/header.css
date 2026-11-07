@@ -1,0 +1,3 @@
+.header .navbar-right > ul > li.clp-root-shell > a:hover { color: #0078d4; }
+.header .navbar-right > ul > li.clp-root-shell > a svg { margin: -3px 5px 0 0; vertical-align: middle; }
+@media (max-width: 760px) { .clp-root-shell-label { display: none; } }

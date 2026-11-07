@@ -160,7 +160,9 @@ async function createSession() {
     const reply = await call(SESSIONS, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ domain: TERM_DOMAIN, cols: term.cols, rows: term.rows }),
+      body: JSON.stringify(TERM_DOMAIN
+        ? { domain: TERM_DOMAIN, cols: term.cols, rows: term.rows }
+        : { root: true, cols: term.cols, rows: term.rows }),
     });
     sessionId = reply.data.id;
     sessionStorage.setItem(STORE_KEY, sessionId);
