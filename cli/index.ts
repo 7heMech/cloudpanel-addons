@@ -58,7 +58,7 @@ function usage(): void {
   clp-addons repair [<addon>] [--quiet] [--anchors-only]
   clp-addons status
   clp-addons maintenance <domain> [on|off|status]
-  clp-addons self-uninstall --yes
+  clp-addons self-uninstall
   clp-addons --version
 
 Addons: ${ADDON_NAMES.join(", ")}`);
