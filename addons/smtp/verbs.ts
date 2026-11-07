@@ -9,5 +9,5 @@ export const SMTP_VERBS = {
   test: { web: "admin" },
   reconcile: { web: false, why: "run by repair and on enable" },
   "sync-sites": { web: false, why: "run by the new-site watcher" },
-  deactivate: { web: false, why: "run locally during disable or uninstall" },
+  deactivate: { web: false, why: "run locally during disable" },
 } as const;

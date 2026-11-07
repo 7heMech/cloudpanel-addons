@@ -11,8 +11,13 @@ let dir = "";
 
 beforeAll(() => {
   dir = mkdtempSync(`${tmpdir()}/own-account-gateway-`);
-  writeFileSync(`${dir}/sess_live`, readFileSync(join(import.meta.dir, "fixtures/session/authenticated.txt"), "utf8")
-    .split(/\r?\n/).filter((line) => line.length > 0 && !line.startsWith("#")).join(""));
+  const session = readFileSync(join(import.meta.dir, "fixtures/session/authenticated.txt"), "utf8")
+    .split(/\r?\n/).filter((line) => line.length > 0 && !line.startsWith("#")).join("");
+  writeFileSync(`${dir}/sess_live`, session);
+  // Signed in while the account had no 2FA, so CloudPanel never wrote the marker.
+  writeFileSync(`${dir}/sess_nomfa`, session
+    .replace('a:2:{s:16:"mfaAuthenticated";b:1;', "a:1:{")
+    .replace("\u0000App\\Entity\\User\u0000mfa\";b:1;", "\u0000App\\Entity\\User\u0000mfa\";b:0;"));
   const db = new Database(`${dir}/panel.sqlite`);
   db.run("CREATE TABLE user (user_name TEXT, role TEXT, status INTEGER)");
   // An ordinary panel user: these verbs are for every account, not only admins.
@@ -22,10 +27,12 @@ beforeAll(() => {
 
 afterAll(() => rmSync(dir, { recursive: true, force: true }));
 
-async function ask(request: Record<string, unknown>): Promise<{ reply: unknown; argv: string[] | null }> {
+async function ask(request: Record<string, unknown>): Promise<{ reply: unknown; argv: string[] | null; env?: Record<string, string> }> {
   let argv: string[] | null = null;
+  let env: Record<string, string> = {};
   const spawn = ((args: string[], options: Record<string, unknown>) => {
     argv = args;
+    env = options.env as Record<string, string>;
     return Bun.spawn(["echo", '{"ok":true}'], options as never);
   }) as unknown as typeof Bun.spawn;
   const socketPath = `${dir}/gw-${Math.random().toString(36).slice(2)}.sock`;
@@ -46,7 +53,8 @@ async function ask(request: Record<string, unknown>): Promise<{ reply: unknown; 
     });
     socket.write(JSON.stringify({ kind: "action", ...request }) + "\n");
     await done.promise;
-    return { reply: JSON.parse(received), argv };
+    // Only a worker that ran has an environment.
+    return { reply: JSON.parse(received), argv, ...(argv ? { env } : {}) };
   } finally {
     await new Promise<void>((resolve) => server.close(() => resolve()));
   }
@@ -74,4 +82,11 @@ test("any other verb refuses a session rather than ignoring it", async () => {
   expect(await ask({ addon: "security-keys", verb: "users", sessionId: "live" })).toEqual({ reply: { ok: false, error: "invalid verb" }, argv: null });
   const { argv } = await ask({ addon: "security-keys", verb: "login-options" });
   expect(argv!.slice(1)).toEqual(["action", "security-keys", "login-options"]);
+});
+
+test("the worker is told whether the session passed 2FA, which the manager cannot claim", async () => {
+  expect((await ask({ addon: "security-keys", verb: "keys", sessionId: "live" })).env!.CLP_ADDONS_SESSION_2FA).toBe("1");
+  const unmarked = await ask({ addon: "security-keys", verb: "keys", sessionId: "nomfa" });
+  expect(unmarked.argv!.at(-1)).toBe("--panel-user=redacted_user");
+  expect(unmarked.env!.CLP_ADDONS_SESSION_2FA).toBe("0");
 });

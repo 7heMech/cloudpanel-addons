@@ -1,20 +1,21 @@
 # System Tweaks
 
 System Tweaks holds settings for the server rather than for CloudPanel's pages,
-which stay with [Panel Tweaks](panel-tweaks.md). PHP worker limits stay with
-[PHP Resources](php-resources.md). System Tweaks also owns the PHP version
+which stay with [Panel Tweaks](panel-tweaks.md). PHP worker and server memory limits stay with
+[Resource Limits](resource-limits.md). System Tweaks also owns the PHP version
 that runs the panel itself, the protocol of each rule on CloudPanel's own
-Firewall page, and optional compression for remote site backups.
+Firewall page and optional compression for remote site backups.
 
 ## The page
 
-Five cards: Automatic updates, which an operator comes back to; Remote backups,
+Four cards: Automatic updates, which an operator comes back to; Remote backups,
 with optional Zstandard compression and its level and worker count; one
-Settings card for the panel's PHP, the upload-progress mitigation, forged
-visitor IPs, phpMyAdmin, the panel's certificate, nginx config injection and
-clpctl injection, which are set once; Failed logins, with the two fail2ban jails
-and the addresses they block; and Database, which says who can reach MySQL. Each
-row says what it does in a sentence; the
+Hardening card for the panel's PHP, the upload-progress mitigation, forged
+visitor IPs, phpMyAdmin, MySQL access, the panel's certificate, nginx config
+injection, PHP pool isolation, File Manager confinement, clpctl injection and
+CloudPanel telemetry; Failed logins, with the two fail2ban jails and the
+addresses they block. MySQL access belongs with the protection settings;
+MySQL and Redis sizing belong to Resource Limits alongside PHP worker limits. Each row says what it does; the
 reasons are here. The Nginx, MySQL, CloudPanel and reboot rows appear only once
 System Tweaks' own switch is on, since they change nothing before. The
 repositories and each PHP-FPM's upload-progress value fold into a summary that
@@ -36,10 +37,10 @@ adds that the reboot is skipped while anyone is logged in.
 The page makes one change at a time. Every change answers with the whole page
 as it stands, so a second change running beside it would be repainted over by
 the first reply, its controls put back as if it had stopped. While a change
-runs, every control on the page is disabled, the row it belongs to says what is
-running, and a change slower than a moment also says so over the page, naming
-it and that the other settings wait. Descriptions stop short of the switch
-column, and a long one takes a line per thought.
+runs, every control on the page is disabled, a pulsing Working badge below the
+row's description says what is running, and a change slower than a moment also
+says so over the page, naming it and that the other settings wait. Descriptions
+stop short of the switch column, and a long one takes a line per thought.
 
 Failed runs show a short summary with expandable log details, including the
 failed package URL when unattended-upgrades logs one.
@@ -183,7 +184,10 @@ Enabling checks zstd and lints the proposed source with CloudPanel CLI's
 `php8.1 -n -l` before the rename, preserves file ownership and permissions, and
 refuses an intervening source edit. Disabling does not require zstd, PHP, or
 the original package version. Repair re-applies a saved selection when a known
-package overwrites the source, and addon deactivation withdraws it. A repair
+package overwrites the source, and addon deactivation withdraws it. A
+CloudPanel update replaces the whole app tree, templates included, so the
+`repair --anchors-only` the template watcher runs puts the edit back within
+seconds rather than at the next 15-minute repair. A repair
 that cannot apply it logs why and carries on with the other settings;
 deactivation withdraws it first, so an edited command stops deactivation
 before any protection is removed.
@@ -239,8 +243,7 @@ reapplies through the reconcile service. Disabling is synchronous, so it cannot
 ask the pools for a page: under the same lock, it config-tests the PHP the unit
 will start without the drop-in, CloudPanel's own or an operator's override, and
 requires the unit to come back running it. Otherwise, including a failed
-`daemon-reload`, it puts the drop-in back and refuses to disable; an uninstall
-that aborts later reactivates the addon. While the addon is disabled the stored
+`daemon-reload`, it puts the drop-in back and refuses to disable. While the addon is disabled the stored
 choice is marked withdrawn, and a change that was waiting for the lock refuses,
 as it does once the addon's config is gone, so neither can write the drop-in
 again; enabling clears the mark. A disable whose other half fails after
@@ -271,12 +274,11 @@ install, update and repair write it whenever any addon is installed. System
 Tweaks is where it is shown and the only place to opt out. The opt-out is
 `uploadProgressGuard: false` in `/var/lib/clp-addons/system-tweaks/settings.json`,
 and `cli/php-guard.ts` honours it only while `system-tweaks.conf` exists.
-The shared disable and uninstall paths reconcile the guard once the config is
-gone. Disabling puts it back even when no addon is left, because the binary
-stays and repair keeps the guard while it is installed. Uninstalling puts it
-back while another addon remains, and the last uninstall removes it with the
-binary. A failure there warns and leaves the guard to the repair timer, since
-the addon is already withdrawn. So an existing box
+The shared disable path reconciles the guard once the config is gone.
+Disabling puts it back even when no addon is left, because the binary stays and
+repair keeps the guard while it is installed; `self-uninstall` removes it with
+the binary. A failure there warns and leaves the guard to the repair timer,
+since the addon is already withdrawn. So an existing box
 keeps its protection after an update without anyone enabling System Tweaks, and
 no box loses the guard because an addon it never had was missing.
 
@@ -1030,6 +1032,41 @@ the home are all refused before the original wrapper runs.
 restoring CloudPanel's wrapper puts the hardened one back, since the setting
 stays on.
 
+## CloudPanel telemetry
+
+CloudPanel runs `clp-agent` as root. It writes the dashboard's CPU, memory, load
+and disk graphs into the panel database, and once a day, at 08:08
+server time plus a random 3 to 600 seconds, it posts a form field `payload` to
+`https://ing.cloudpanel.io/`. Captured on staging against a stand-in endpoint,
+the JSON holds the instance ID, cloud, CPU count, memory, disk size and
+architecture; the version and edition; every site's domain, application, PHP
+version and creation date; and every panel user's user name, first and last
+name, email and creation date. It does not act on the reply, and the binary has
+no way to run commands. There is no setting to turn it off.
+
+**Block CloudPanel telemetry**, on by default (`blockTelemetry`), writes
+`/etc/systemd/system/clp-agent.service.d/zz-clp-addons-telemetry.conf` with
+`IPAddressDeny=any` and `IPAddressAllow=localhost`, reloads systemd and restarts
+the agent, whose address filter is set when it starts. The kernel then drops
+everything the agent sends off the server, DNS included, while it keeps writing
+the graphs. The package ships its unit under `/lib`, so the drop-in survives
+CloudPanel updates. The daily send fails; the agent logs it and exits, systemd
+restarts it after 3 seconds, and it waits for the next day. systemd ignores the
+filter where the kernel or a container manager offers no cgroup BPF, so the page
+calls it blocked only when `systemctl show` has the drop-in loaded and a
+transient unit with the same filter is refused sending one UDP datagram to
+192.0.2.1 while the same send outside it goes out; a unit that fails to start,
+or a send refused both ways, reads as unchecked. Repair writes it back and reloads systemd if it is missing or not
+loaded; switching off removes it. Deactivation removes it last and, like the
+firewall, only warns when it cannot, so it never holds the other protections in
+place.
+
+Masking the agent would stop the graphs. A hosts-file sinkhole does not last on
+a box whose cloud-init manages `/etc/hosts`, and removing the agent's line from
+`/etc/cron.d/clp` lasts only until the package puts it back. The panel's own
+version and announcement checks send no payload beyond the server's address and
+version, and stay.
+
 ## Abandoned temp files
 
 A PHP request stopped by `max_execution_time` or `request_terminate_timeout`
@@ -1038,9 +1075,9 @@ empties `/tmp` only at boot. An image too large for ImageMagick's memory limit
 is cached on disk, so a WordPress image job that keeps timing out leaves close
 to a gigabyte in `/tmp` on every try, and has filled a production disk that way.
 Clearing them is upkeep for the server rather than a PHP-FPM limit, so System
-Tweaks owns it, and an install with the installer's defaults has it. PHP
-Resources runs the same pass while System Tweaks is off, since an update never
-enables an addon and a box with PHP Resources alone would otherwise lose it.
+Tweaks owns it, and an install with the installer's defaults has it. Resource
+Limits runs the same pass while System Tweaks is off, since an update never
+enables an addon and a box with Resource Limits alone would otherwise lose it.
 
 The repair timer removes them every 15 minutes, as the first step of System
 Tweaks' upkeep, so a failing update or panel PHP check cannot stop it. It takes
@@ -1173,9 +1210,12 @@ stay. Debian's default `iptables-multiport` chains would be flushed with them.
 The chain hooks input at priority -1, before ufw's.
 
 The SSH jail reads the journal with `backend = systemd`, since Debian 12 ships
-without rsyslog. It is off by default because a client that offers several
-wrong keys counts as failed logins, which could block the operator from the one
-way in that does not depend on the panel. The setting never edits
+without rsyslog. Its one-hour `findtime` includes failures already in the
+journal when the jail starts, even if fail2ban was only just installed. The
+page explains why enabling it can immediately populate the live ban list.
+It is off by default because a client that offers several wrong keys counts as
+failed logins, which could block the operator from the one way in that does not
+depend on the panel. The setting never edits
 `sshd_config`: turning off password or root login without a working key locks
 the operator out. The page reads `sshd -T` and says when sshd accepts passwords
 or root can log in with one, and how to change it.
@@ -1263,7 +1303,7 @@ It touches only what a protocol asks for. UDP adds `allow proto udp` and deletes
 CloudPanel's TCP rule for that port and source, unless another TCP rule for both
 still wants it; TCP and UDP adds the UDP rule. Additions run before deletions.
 The rules it changed are recorded, so a rule set back to TCP, or every rule when
-System Tweaks is disabled or uninstalled, goes back to CloudPanel's own: TCP
+System Tweaks is disabled, goes back to CloudPanel's own: TCP
 for each row, and UDP 443 untouched. Rules the operator added for other ports
 are left alone, until CloudPanel's next rebuild removes them as it always did.
 ufw runs with argument arrays; ports and sources from the table must match a
@@ -1474,6 +1514,7 @@ the saved original named in the row) to see what CloudPanel itself ships.
 | Password guessing — SSH (`loginJails.ssh`, opt-in) | sshd allows password and root logins, and nothing limits repeated SSH failures (Debian 12 without rsyslog has no `/var/log/auth.log` for the stock jail) | `sshd -T \| grep -E 'passwordauthentication\|permitrootlogin'` shows `yes`/password, and no working fail2ban `sshd` jail | the SSH jail wiring — once sshd is key-only or the distro ships a working jail |
 | MySQL exposure (`databaseLoopback`, opt-in) | MySQL listens on every address and CloudPanel creates every DB user as `'name'@'%'`, so only the firewall keeps it private | `ss -tlnp \| grep -E ':3306\|:33060'` shows `*:3306`/`*:33060` (not `127.0.0.1`), and a CloudPanel-created DB user has host `%` (the Databases page has no host field) | the setting, `database.ts`, its `SECURITY.md` entry and tests — once CloudPanel binds to loopback and scopes DB users to a host |
 | clpctl injection (`blockClpctlInjection`) | `ALL ALL=(ALL) NOPASSWD: /usr/bin/clpctlWrapper` lets any local account run clpctl as root, clpctl strips runs of three backslashes from each argument and builds `bash -c "…"` strings, and `db:import` runs as the DB administrator | `grep 'clpctlWrapper' /etc/sudoers.d/cloudpanel` shows the `NOPASSWD` rule, and `grep str_replace /home/clp/htdocs/app/files/bin/clpctl` shows `str_replace("\\\\\\", '', $arg)` (with the setting on, the live wrapper is ours; CloudPanel's original is saved at `/var/lib/clp-addons/system-tweaks/clpctlWrapper.orig`) | the setting, `clpctl-guard.ts`, `clpctl-wrapper.sh`, its `SECURITY.md` entry and tests — once clpctl stops stripping backslashes, stops building shell strings, and `db:import` runs as the caller |
+| CloudPanel telemetry (`blockTelemetry`) | `clp-agent` posts every site's domain and every panel user's name and email to `ing.cloudpanel.io` once a day, with no opt-out | `strings /usr/sbin/clp-agent \| grep -E 'ing.cloudpanel.io\|FROM user'` prints both | the setting, `telemetry.ts`, its `SECURITY.md` entry and tests — once the agent stops sending that data or CloudPanel offers an opt-out |
 | Panel PHP / PHP 8.1 (`panelPhp`, opt-in) | Runs the panel, phpMyAdmin and File Manager on PHP 8.1, which has [ended upstream support](https://www.php.net/eol.php) | `php8.1 -v` reports 8.1.x and the panel's own FPM pool is PHP 8.1, while 8.1 is past its php.net EOL date | the Panel PHP setting and `panel-php.ts` — once CloudPanel ships its panel on a supported PHP |
 | Forged visitor IPs (`blockForgedRealIp`) | The panel nginx trusts `set_real_ip_from 0.0.0.0/0;`, so any client can forge its address with an IP header | `grep 'set_real_ip_from 0.0.0.0/0' /home/clp/services/nginx/nginx.conf` shows the line present/uncommented (the guard comments it as `#clp-addons:untrusted …`) | the setting, `real-ip.ts`, its `SECURITY.md` entry and tests — once CloudPanel trusts only loopback, private ranges and Cloudflare |
 | PHP upload progress (every install) | PHP-FPM defaults `session.upload_progress.enabled` to On, the session path of [CVE-2026-109619](https://github.com/php/php-src/security/advisories/GHSA-6wmf-4rv5-p3rp) | `php -i \| grep session.upload_progress.enabled` is `On` by default and the installed PHP build is not yet patched for the advisory | the `uploadProgressGuard` and `php-guard` wiring — once the PHP packages carry the fix |

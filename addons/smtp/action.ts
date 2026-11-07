@@ -178,7 +178,7 @@ function trustedRead(path: string, uid: number): string | null {
 // Policy
 // ---------------------------------------------------------------------------
 
-/** Produced on read, like PHP Resources' presets, so a read never writes. */
+/** Produced on read, like Resource Limits' presets, so a read never writes. */
 function seededPolicy(): SmtpPolicy {
   return { version: 2, profiles: [{ ...DONT_SEND }], defaultProfileId: null, assignments: {}, grants: {}, knownSiteIds: [] };
 }
@@ -1059,7 +1059,7 @@ export async function runSmtpAction(argv: string[], options: SmtpActionOptions =
   return replyToAction("smtp", options.emitReply !== false, () => executeSmtpAction(argv, options));
 }
 
-/** Called by disable/uninstall after the addon is no longer available to the UI. */
+/** Called by disable after the addon is no longer available to the UI. */
 export function deactivateSmtp(): void {
   const result = runCommand(CLI_BIN, ["action", "smtp", "deactivate"]);
   if (!result.ok) failAction(`SMTP could not be deactivated: ${commandError(result)}`);

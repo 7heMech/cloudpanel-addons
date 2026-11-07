@@ -4,14 +4,14 @@ import { chmodSync, chownSync, existsSync, mkdirSync, mkdtempSync, readFileSync,
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
-  DEFAULT_CATEGORY_PROFILE, executePhpResourcesAction, parseProfile, readProfileFromPool, renderPool,
+  DEFAULT_CATEGORY_PROFILE, executeResourceLimitsAction, parseProfile, readProfileFromPool, renderPool,
   PRESET_CATEGORIES, STOCK_PROFILE,
-  type PhpResourcesActionOptions, type PhpResourcesActionPaths, type PhpResourcesResult,
-  type PhpResourcesState, type PoolProfile, type PoolSiteState, type ReconcileResult,
-} from "../addons/php-resources/action";
+  type ResourceLimitsActionOptions, type ResourceLimitsActionPaths, type ResourceLimitsResult,
+  type ResourceLimitsState, type PoolProfile, type PoolSiteState, type ReconcileResult,
+} from "../addons/resource-limits/action";
 import type { CommandResult } from "../cli/action-common";
-import { PHP_RESOURCES_ADDON } from "../addons/php-resources/addon";
-import { CLIENT_JS, dashboardView, layout, siteCardHtml } from "../addons/php-resources/app/views";
+import { RESOURCE_LIMITS_ADDON } from "../addons/resource-limits/addon";
+import { CLIENT_JS, dashboardView, layout, siteCardHtml } from "../addons/resource-limits/app/views";
 
 /** CloudPanel's PoolBuilder output, byte for byte, with no trailing newline. */
 const STOCK_POOL = `[shop.example.com]
@@ -110,7 +110,7 @@ test("a profile php-fpm would refuse is refused here first", () => {
 });
 
 interface Box {
-  paths: PhpResourcesActionPaths;
+  paths: ResourceLimitsActionPaths;
   root: string;
   commands: string[][];
   /** Command prefixes that should report failure, e.g. "php-fpm8.2 -t". */
@@ -127,7 +127,8 @@ function poolFor(domain: string, port: number): string {
 }
 
 function makeBox(): Box {
-  const root = mkdtempSync(join(tmpdir(), "clp-php-resources-"));
+  const root = mkdtempSync(join(tmpdir(), "clp-resource-limits-"));
+  writeFileSync(join(root, "enabled.conf"), "enabled");
   const panelDb = join(root, "db.sq3");
   const db = new Database(panelDb, { create: true });
   db.exec(`CREATE TABLE site (id INTEGER PRIMARY KEY AUTOINCREMENT, type TEXT, domain_name TEXT, user TEXT);
@@ -138,15 +139,15 @@ function makeBox(): Box {
   const commands: string[][] = [];
   const failing = new Set<string>();
 
-  const paths: PhpResourcesActionPaths = {
+  const paths: ResourceLimitsActionPaths = {
     panelDb,
     phpRoot: join(root, "etc/php"),
     sbinDir: join(root, "sbin"),
     policyFile: join(root, "state/policy.json"),
-    lockFile: join(root, "lock/php-resources.lock"),
+    systemTweaksConfig: join(root, "system-tweaks.conf"),
+    lockFile: join(root, "lock/resource-limits.lock"),
     systemctl: "systemctl",
     rootUid: process.getuid?.() ?? 0,
-    systemTweaksConfig: join(root, "system-tweaks.conf"),
   };
 
   let nextPort = 17001;
@@ -185,8 +186,10 @@ function makeBox(): Box {
   };
 }
 
-function options(box: Box, input?: string): PhpResourcesActionOptions {
+function options(box: Box, input?: string): ResourceLimitsActionOptions {
   return {
+    memorySettings: { settingsFile: join(box.root, "memory-settings.json"), enabledConfig: join(box.root, "enabled.conf"), lockFile: join(box.root, "memory-settings.lock") },
+    memory: { paths: { meminfo: join(box.root, "missing-meminfo"), confDirs: [], phpRoot: join(box.root, "no-php"), systemdDir: join(box.root, "systemd"), stateFile: join(box.root, "memory.json"), stateLock: join(box.root, "memory.lock"), redisConf: join(box.root, "no-redis.conf"), memcachedConf: join(box.root, "no-memcached.conf") }, run: () => ({ ok: true, stdout: "", stderr: "" }) },
     paths: box.paths,
     processUid: 0,
     run: box.run,
@@ -209,7 +212,7 @@ test("the upkeep clears abandoned temp files from /tmp only while System Tweaks,
     if (process.getuid?.() === 0) chownSync(file, uid, uid);
     const threeHoursAgo = (Date.now() - 3 * 3_600_000) / 1000;
     utimesSync(file, threeHoursAgo, threeHoursAgo);
-    const upkeep = () => PHP_RESOURCES_ADDON.repair!.run({
+    const upkeep = () => RESOURCE_LIMITS_ADDON.repair!.run({
       ...options(box), tmpCleanup: { paths: { tmpDir, procDir: join(box.root, "proc"), passwd: join(box.root, "passwd") } },
     } as Record<string, unknown>);
 
@@ -228,7 +231,7 @@ function reloadsOf(box: Box, version: string): number {
   return box.commands.filter((command) => command.join(" ") === `systemctl reload php${version}-fpm`).length;
 }
 
-function siteIn(state: PhpResourcesState, domain: string): PoolSiteState {
+function siteIn(state: ResourceLimitsState, domain: string): PoolSiteState {
   return state.sites.find((site) => site.domain === domain)!;
 }
 
@@ -236,14 +239,14 @@ const tuned: PoolProfile = { ...STOCK_PROFILE, pm: "dynamic", maxChildren: 24, s
 const BUSY = PRESET_CATEGORIES.find((category) => category.id === "standard")!;
 
 function assign(box: Box, domains: string[], categoryId: string | null): Promise<unknown> {
-  return executePhpResourcesAction(["assign"], options(box, JSON.stringify({ domains, categoryId })));
+  return executeResourceLimitsAction(["assign"], options(box, JSON.stringify({ domains, categoryId })));
 }
 
 test("a server that has saved nothing already has the preset categories", async () => {
   const box = makeBox();
   try {
     box.addSite("shop.example.com", "8.2");
-    const state = await executePhpResourcesAction(["list"], options(box)) as PhpResourcesState;
+    const state = await executeResourceLimitsAction(["list"], options(box)) as ResourceLimitsState;
     expect(state.categories.map((category) => category.id)).toEqual(["lite", "standard", "pro"]);
     expect(state.categories.map((category) => ({
       mode: category.profile.pm,
@@ -278,7 +281,7 @@ test("assigning a fleet writes every pool and reloads each PHP version once", as
     box.addSite("news.example.com", "8.3");
     box.addSite("untouched.example.com", "8.3");
 
-    const result = await assign(box, ["shop.example.com", "blog.example.com", "news.example.com"], "standard") as PhpResourcesResult;
+    const result = await assign(box, ["shop.example.com", "blog.example.com", "news.example.com"], "standard") as ResourceLimitsResult;
     expect(result.failures).toEqual([]);
     for (const [domain, version] of [["shop.example.com", "8.2"], ["blog.example.com", "8.2"], ["news.example.com", "8.3"]]) {
       expect(siteIn(result, domain!).categoryName).toBe("Standard");
@@ -308,9 +311,9 @@ test("editing a category rewrites every pool that follows it", async () => {
     box.addSite("blog.example.com", "8.2");
     await assign(box, ["shop.example.com"], "standard");
 
-    const saved = await executePhpResourcesAction(["save-category"], options(box, JSON.stringify({
+    const saved = await executeResourceLimitsAction(["save-category"], options(box, JSON.stringify({
       id: "standard", name: "Standard", description: BUSY.description, profile: tuned,
-    }))) as PhpResourcesResult;
+    }))) as ResourceLimitsResult;
     expect(saved.failures).toEqual([]);
     expect(readProfileFromPool(readFileSync(box.poolOf("shop.example.com", "8.2"), "utf8"))).toEqual(tuned);
     // A site in no category is nobody's to rewrite.
@@ -323,17 +326,17 @@ test("editing a category rewrites every pool that follows it", async () => {
 test("a category is created by name, and a name is used once", async () => {
   const box = makeBox();
   try {
-    const created = await executePhpResourcesAction(["save-category"], options(box, JSON.stringify({
+    const created = await executeResourceLimitsAction(["save-category"], options(box, JSON.stringify({
       name: "Import worker", description: "Long running imports.", profile: tuned,
-    }))) as PhpResourcesResult;
+    }))) as ResourceLimitsResult;
     const added = created.categories.find((category) => category.id === "import-worker")!;
     expect(added.name).toBe("Import worker");
     expect(added.profile).toEqual(tuned);
 
-    await expect(executePhpResourcesAction(["save-category"], options(box, JSON.stringify({
+    await expect(executeResourceLimitsAction(["save-category"], options(box, JSON.stringify({
       name: "import worker", profile: tuned,
     })))).rejects.toThrow(/already exists/);
-    await expect(executePhpResourcesAction(["save-category"], options(box, JSON.stringify({
+    await expect(executeResourceLimitsAction(["save-category"], options(box, JSON.stringify({
       name: "   ", profile: tuned,
     })))).rejects.toThrow(/category name is required/);
   } finally {
@@ -346,7 +349,7 @@ test("taking a site out of a category restores CloudPanel's own pool file", asyn
   try {
     box.addSite("shop.example.com", "8.2");
     await assign(box, ["shop.example.com"], "standard");
-    const released = await assign(box, ["shop.example.com"], null) as PhpResourcesResult;
+    const released = await assign(box, ["shop.example.com"], null) as ResourceLimitsResult;
     expect(siteIn(released, "shop.example.com").categoryId).toBeNull();
     expect(readFileSync(box.poolOf("shop.example.com", "8.2"), "utf8")).toBe(STOCK_POOL);
   } finally {
@@ -359,12 +362,12 @@ test("deleting a category gives the sites in it CloudPanel's limits back", async
   try {
     box.addSite("shop.example.com", "8.2");
     await assign(box, ["shop.example.com"], "standard");
-    await executePhpResourcesAction(["set-default"], options(box, JSON.stringify({ categoryId: "standard" })));
+    await executeResourceLimitsAction(["set-default"], options(box, JSON.stringify({ categoryId: "standard" })));
 
-    const after = await executePhpResourcesAction(
+    const after = await executeResourceLimitsAction(
       ["delete-category"],
       options(box, JSON.stringify({ id: "standard" })),
-    ) as PhpResourcesResult;
+    ) as ResourceLimitsResult;
     expect(after.categories.map((category) => category.id)).toEqual(["lite", "pro"]);
     expect(after.defaultCategoryId).toBeNull();
     expect(siteIn(after, "shop.example.com").categoryId).toBeNull();
@@ -383,7 +386,7 @@ test("a PHP version whose service is not running is written but not reloaded", a
     // moves one, and the pool file is what it reads when it does.
     box.failing.add("systemctl is-active --quiet php8.2-fpm");
 
-    const result = await assign(box, ["shop.example.com"], "standard") as PhpResourcesResult;
+    const result = await assign(box, ["shop.example.com"], "standard") as ResourceLimitsResult;
     expect(siteIn(result, "shop.example.com").categoryId).toBe("standard");
     expect(readProfileFromPool(readFileSync(box.poolOf("shop.example.com", "8.2"), "utf8"))).toEqual(BUSY.profile);
     expect(reloadsOf(box, "8.2")).toBe(0);
@@ -400,7 +403,7 @@ test("a configuration php-fpm refuses leaves the pool file as it was", async () 
     await expect(assign(box, ["shop.example.com"], "standard")).rejects.toThrow(/configuration test failed/);
     expect(readFileSync(box.poolOf("shop.example.com", "8.2"), "utf8")).toBe(STOCK_POOL);
     // Nothing was assigned either, so the next reconciliation will not write it.
-    const state = await executePhpResourcesAction(["list"], options(box)) as PhpResourcesState;
+    const state = await executeResourceLimitsAction(["list"], options(box)) as ResourceLimitsState;
     expect(siteIn(state, "shop.example.com").categoryId).toBeNull();
   } finally {
     rmSync(box.root, { recursive: true, force: true });
@@ -411,26 +414,26 @@ test("the default category reaches sites created after it, and no others", async
   const box = makeBox();
   try {
     box.addSite("shop.example.com", "8.2");
-    await executePhpResourcesAction(["set-default"], options(box, JSON.stringify({ categoryId: "standard" })));
+    await executeResourceLimitsAction(["set-default"], options(box, JSON.stringify({ categoryId: "standard" })));
 
     // The site that already existed is left alone.
-    let result = await executePhpResourcesAction(["reconcile"], options(box)) as ReconcileResult;
+    let result = await executeResourceLimitsAction(["reconcile"], options(box)) as ReconcileResult;
     expect(result).toEqual({ discovered: 0, applied: 0, repaired: 0 });
     expect(readFileSync(box.poolOf("shop.example.com", "8.2"), "utf8")).toBe(STOCK_POOL);
 
     box.addSite("new.example.com", "8.2");
-    result = await executePhpResourcesAction(["reconcile"], options(box)) as ReconcileResult;
+    result = await executeResourceLimitsAction(["reconcile"], options(box)) as ReconcileResult;
     expect(result.discovered).toBe(1);
     expect(result.applied).toBe(1);
     expect(readProfileFromPool(readFileSync(box.poolOf("new.example.com", "8.2"), "utf8"))).toEqual(BUSY.profile);
 
     // And only once: a second pass has nothing left to do.
-    result = await executePhpResourcesAction(["reconcile"], options(box)) as ReconcileResult;
+    result = await executeResourceLimitsAction(["reconcile"], options(box)) as ReconcileResult;
     expect(result).toEqual({ discovered: 0, applied: 0, repaired: 0 });
 
     // Choosing no default changes nothing that already joined.
-    await executePhpResourcesAction(["set-default"], options(box, JSON.stringify({ categoryId: null })));
-    const state = await executePhpResourcesAction(["list"], options(box)) as PhpResourcesState;
+    await executeResourceLimitsAction(["set-default"], options(box, JSON.stringify({ categoryId: null })));
+    const state = await executeResourceLimitsAction(["list"], options(box)) as ResourceLimitsState;
     expect(state.defaultCategoryId).toBeNull();
     expect(siteIn(state, "new.example.com").categoryId).toBe("standard");
   } finally {
@@ -443,11 +446,11 @@ test("a site taken out of a category is not a new site the default can claim", a
   try {
     box.addSite("shop.example.com", "8.2");
     await assign(box, ["shop.example.com"], null);
-    await executePhpResourcesAction(["set-default"], options(box, JSON.stringify({ categoryId: "standard" })));
+    await executeResourceLimitsAction(["set-default"], options(box, JSON.stringify({ categoryId: "standard" })));
     box.addSite("new.example.com", "8.2");
 
-    await executePhpResourcesAction(["reconcile"], options(box));
-    const state = await executePhpResourcesAction(["list"], options(box)) as PhpResourcesState;
+    await executeResourceLimitsAction(["reconcile"], options(box));
+    const state = await executeResourceLimitsAction(["list"], options(box)) as ResourceLimitsState;
     expect(siteIn(state, "shop.example.com").categoryId).toBeNull();
     expect(siteIn(state, "new.example.com").categoryId).toBe("standard");
   } finally {
@@ -473,14 +476,14 @@ test("a pool file CloudPanel rewrote for a new PHP version is restored", async (
     writeFileSync(moved, poolFor("shop.example.com", 17005));
     chmodSync(moved, 0o644);
 
-    const before = await executePhpResourcesAction(["site", "--domain=shop.example.com"], options(box)) as PoolSiteState;
+    const before = await executeResourceLimitsAction(["site", "--domain=shop.example.com"], options(box)) as PoolSiteState;
     expect(before.drifted).toBe(true);
 
-    const result = await executePhpResourcesAction(["reconcile"], options(box)) as ReconcileResult;
+    const result = await executeResourceLimitsAction(["reconcile"], options(box)) as ReconcileResult;
     expect(result.repaired).toBe(1);
     expect(readProfileFromPool(readFileSync(moved, "utf8"))).toEqual(BUSY.profile);
 
-    const after = await executePhpResourcesAction(["site", "--domain=shop.example.com"], options(box)) as PoolSiteState;
+    const after = await executeResourceLimitsAction(["site", "--domain=shop.example.com"], options(box)) as PoolSiteState;
     expect(after.drifted).toBe(false);
     expect(after.phpVersion).toBe("8.3");
   } finally {
@@ -498,7 +501,7 @@ test("a site CloudPanel no longer has stops being carried", async () => {
     panel.query("DELETE FROM site WHERE domain_name = 'shop.example.com';").run();
     panel.close();
 
-    await executePhpResourcesAction(["reconcile"], options(box));
+    await executeResourceLimitsAction(["reconcile"], options(box));
     expect(JSON.parse(readFileSync(box.paths.policyFile, "utf8")).assignments).toEqual({});
   } finally {
     rmSync(box.root, { recursive: true, force: true });
@@ -521,10 +524,10 @@ test("a site with no PHP settings has no pool to assign", async () => {
 test("only root may change a pool, and only the declared verbs exist", async () => {
   const box = makeBox();
   try {
-    await expect(executePhpResourcesAction(["list"], { ...options(box), processUid: 1000 }))
+    await expect(executeResourceLimitsAction(["list"], { ...options(box), processUid: 1000 }))
       .rejects.toThrow(/must run as root/);
-    await expect(executePhpResourcesAction(["reload"], options(box))).rejects.toThrow(/usage:/);
-    await expect(executePhpResourcesAction(["list", "--domain=shop.example.com"], options(box)))
+    await expect(executeResourceLimitsAction(["reload"], options(box))).rejects.toThrow(/usage:/);
+    await expect(executeResourceLimitsAction(["list", "--domain=shop.example.com"], options(box)))
       .rejects.toThrow(/takes no arguments/);
     await expect(assign(box, ["shop.example.com"], "no-such-category"))
       .rejects.toThrow(/there is no category/);
@@ -534,7 +537,7 @@ test("only root may change a pool, and only the declared verbs exist", async () 
 });
 
 test("the category dialog shows name, process manager and max children, and the rest under More limits", () => {
-  const html = dashboardView({ categories: [], defaultCategoryId: null, sites: [] });
+  const html = dashboardView({ memory: { error: "Unavailable" }, categories: [], defaultCategoryId: null, sites: [] });
   const dialog = html.slice(html.indexOf('<dialog id="category-dialog"'));
   const more = dialog.indexOf('<details class="disclosure" id="category-more">');
   expect(more).toBeGreaterThan(0);
@@ -547,7 +550,7 @@ test("the category dialog shows name, process manager and max children, and the 
   }
 });
 
-test("php-resources site cards and select-all keep selection in sync", () => {
+test("resource-limits site cards and select-all keep selection in sync", () => {
   const el = (over: any = {}) => ({ textContent: "", className: "", disabled: false, checked: false, indeterminate: false, ...over });
   const byId: Record<string, any> = {
     "site-selection": el(), "select-all": el(), "select-all-btn": el(), "assign-selected": el({ disabled: true }),
@@ -611,12 +614,12 @@ test("php-resources site cards and select-all keep selection in sync", () => {
 // and that a row is selectable by tapping the card rather than the checkbox
 // the phone layout hides.
 test("the site table carries the mobile select-all control and selectable rows", () => {
-  const html = dashboardView({
+  const html = dashboardView({ memory: { error: "Unavailable" },
     categories: [],
     defaultCategoryId: null,
     sites: [{
       domain: "example.com", siteUser: "user", phpVersion: "8.2",
-      poolFile: "/etc/php/8.2/fpm/pool.d/example.com.conf",
+      memoryLimitMb: 256, poolFile: "/etc/php/8.2/fpm/pool.d/example.com.conf",
       current: { ...STOCK_PROFILE },
       categoryId: null, categoryName: null, drifted: false,
     }],
@@ -631,10 +634,10 @@ test("the site table carries the mobile select-all control and selectable rows",
 test("the page puts the sites first and the default for new sites in the Categories header", () => {
   const sites: PoolSiteState[] = ["a", "b", "c", "d", "e", "f"].map((name, index) => ({
     domain: `${name}.example.com`, siteUser: name, phpVersion: "8.3",
-    poolFile: `/etc/php/8.3/fpm/pool.d/${name}.example.com.conf`,
+    memoryLimitMb: 256, poolFile: `/etc/php/8.3/fpm/pool.d/${name}.example.com.conf`,
     current: { ...STOCK_PROFILE }, categoryId: "lite", categoryName: "Lite", drifted: index === 0,
   }));
-  const html = dashboardView({ categories: PRESET_CATEGORIES, defaultCategoryId: "standard", sites });
+  const html = dashboardView({ memory: { error: "Unavailable" }, categories: PRESET_CATEGORIES, defaultCategoryId: "standard", sites });
   expect(html).not.toContain('class="card stats"');
   expect(html).not.toContain("default-card");
   expect(html.indexOf("<h2>PHP sites</h2>")).toBeLessThan(html.indexOf("<h2>Categories</h2>"));
@@ -653,16 +656,16 @@ test("a category's unused spare-server numbers do not read as drift", async () =
   try {
     box.addSite("shop.example.com", "8.2");
     // On demand, with dynamic numbers kept from an earlier edit: none of them reach the pool file.
-    const saved = await executePhpResourcesAction(["save-category"], options(box, JSON.stringify({
+    const saved = await executeResourceLimitsAction(["save-category"], options(box, JSON.stringify({
       id: null, name: "Quiet", description: "",
       profile: { ...STOCK_PROFILE, maxChildren: 6, startServers: 4, minSpareServers: 3, maxSpareServers: 5 },
-    }))) as PhpResourcesResult;
+    }))) as ResourceLimitsResult;
     const quiet = saved.categories.find((category) => category.name === "Quiet")!;
     await assign(box, ["shop.example.com"], quiet.id);
 
-    const state = await executePhpResourcesAction(["list"], options(box)) as PhpResourcesState;
+    const state = await executeResourceLimitsAction(["list"], options(box)) as ResourceLimitsState;
     expect(siteIn(state, "shop.example.com").drifted).toBe(false);
-    const result = await executePhpResourcesAction(["reconcile"], options(box)) as ReconcileResult;
+    const result = await executeResourceLimitsAction(["reconcile"], options(box)) as ReconcileResult;
     expect(result.repaired).toBe(0);
   } finally {
     rmSync(box.root, { recursive: true, force: true });
@@ -673,19 +676,19 @@ test("a new site whose pool could not be written joins the default on a later pa
   const box = makeBox();
   try {
     box.addSite("shop.example.com", "8.2");
-    await executePhpResourcesAction(["set-default"], options(box, JSON.stringify({ categoryId: "standard" })));
+    await executeResourceLimitsAction(["set-default"], options(box, JSON.stringify({ categoryId: "standard" })));
     box.addSite("new.example.com", "8.2");
     // The vhost is there before the pool file is.
     const pool = box.poolOf("new.example.com", "8.2");
     const stock = readFileSync(pool, "utf8");
     rmSync(pool);
 
-    await expect(executePhpResourcesAction(["reconcile"], options(box))).rejects.toThrow(/new\.example\.com/);
+    await expect(executeResourceLimitsAction(["reconcile"], options(box))).rejects.toThrow(/new\.example\.com/);
     expect(JSON.parse(readFileSync(box.paths.policyFile, "utf8")).assignments["new.example.com"]).toBeUndefined();
 
     writeFileSync(pool, stock);
     chmodSync(pool, 0o644);
-    const result = await executePhpResourcesAction(["reconcile"], options(box)) as ReconcileResult;
+    const result = await executeResourceLimitsAction(["reconcile"], options(box)) as ReconcileResult;
     expect(result.applied).toBe(1);
     expect(readProfileFromPool(readFileSync(pool, "utf8"))).toEqual(BUSY.profile);
   } finally {
@@ -696,7 +699,7 @@ test("a new site whose pool could not be written joins the default on a later pa
 test("the card on a site's Settings tab sums the pool up in a line and keeps the rest behind a toggle", () => {
   const html = siteCardHtml({
     domain: "shop.example.com", siteUser: "shop", phpVersion: "8.3",
-    poolFile: "/etc/php/8.3/fpm/pool.d/shop.example.com.conf",
+    memoryLimitMb: 256, poolFile: "/etc/php/8.3/fpm/pool.d/shop.example.com.conf",
     current: { ...BUSY.profile }, categoryId: "standard", categoryName: "Standard", drifted: false,
   });
   const toggle = html.indexOf('<details class="clp-addon-limits"><summary>All limits</summary>');
@@ -704,4 +707,17 @@ test("the card on a site's Settings tab sums the pool up in a line and keeps the
   expect(html.indexOf("Standard")).toBeLessThan(toggle);
   expect(html.indexOf("On demand, up to 8")).toBeLessThan(toggle);
   expect(html.indexOf("Max Requests per Worker")).toBeGreaterThan(toggle);
+});
+
+test("a temp-cleanup failure still reconciles PHP pools", async () => {
+  const box = makeBox();
+  try {
+    box.addSite("shop.example.com", "8.2");
+    await assign(box, ["shop.example.com"], "standard");
+    writeFileSync(box.poolOf("shop.example.com", "8.2"), STOCK_POOL);
+    await RESOURCE_LIMITS_ADDON.repair!.run({
+      ...options(box), tmpCleanup: { panelDb: join(box.root, "missing/db.sq3") },
+    } as Record<string, unknown>);
+    expect(readProfileFromPool(readFileSync(box.poolOf("shop.example.com", "8.2"), "utf8"))).toEqual(BUSY.profile);
+  } finally { rmSync(box.root, { recursive: true, force: true }); }
 });

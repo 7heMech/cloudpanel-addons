@@ -28,9 +28,65 @@ long-press selection and menu. The copy is editable with `inputmode="none"`, so
 that menu still offers Paste, which goes to the shell; no other edit is
 accepted. Copying, pasting or a tap that clears the selection removes it.
 
-Administrators only, and never root. A shell as a site's user is what SSH
-already gives anyone with that user's key; it is offered to the people who can
-already create one.
+Administrators only. A shell as a site's user is what SSH already gives anyone
+with that user's key; it is offered to the people who can already create one.
+A root shell is offered only to the administrators root names; see Root.
+
+## Root
+
+Root names who may open a root shell with `clp-addons terminal root allow
+<user>` from a shell; `deny` takes it back and `clp-addons terminal root` lists
+them. Nothing in the panel can change the list. An allowed administrator gets a
+terminal icon in both of CloudPanel's headers and in the addons' copy of it,
+just before the account menu, and a Root terminal button on Addons → Terminal.
+The others get no icon; their button shows a notice naming the command, so
+they know whom to ask. The icon stays hidden until the page has asked
+`/addons/terminal/api/root-access`. Every panel page asks, so the manager
+keeps root's answer a minute per user instead of starting a root process for
+each page; the Terminal page asks afresh, and the worker always checks.
+
+Any administrator can reset another's password in CloudPanel and sign in as
+them, so a grant to a name alone would be a root shell for every
+administrator. A grant therefore holds the account's two-factor setup:
+`allow` refuses an account with 2FA off, and records a digest of its 2FA
+secret. CloudPanel's user form has no two-factor field: only the account turns
+its own on or off, and only root (`clpctl user:disable:mfa`) turns it off for
+someone else, so a reset password gets no further than the code. But with 2FA
+off, whoever is signed in can set it up with their own phone, so 2FA switched
+off and set up again is a new secret, and the grant needs root again. The
+account's setting is not enough on its own either: a session signed in
+before two-factor was turned on stays signed in, and never passed the code.
+So the gateway tells every session verb's worker, in
+`CLP_ADDONS_SESSION_2FA`, whether that session carries CloudPanel's own
+"two-factor passed" marker, and a root shell needs it. A passkey sign-in
+through Security Keys is two factors itself but goes through CloudPanel's
+`/autologin`, which writes no marker and looks the same as such an old
+session, so it does not open a root shell; that administrator signs in with
+the code for one.
+
+Each grant is also pinned to CloudPanel's `user.id`, so a name deleted and
+created again is not the account root allowed. A deactivation, a demotion or
+2FA switched off refuses it while it lasts, and the button's notice says which;
+2FA set up again needs root to allow the account again. A password change does
+not touch it. A stolen session of the allowed administrator itself still gets a
+root shell for as long as that session lasts.
+
+The grants are `/etc/clp-addons/terminal-root.json`, root's alone, `0600`, read
+through one descriptor opened without following links. Only a missing file
+means nobody. One that is not root's alone, a link, or one that does not parse
+refuses everyone, and `terminal root` then tells root to remove it and allow
+again. The manager learns whether its user is allowed only through the
+own-account `root-access` verb, which root answers from the file; the session
+worker checks again before it starts `runuser --login root` and every 15
+seconds while the shell runs, ending it when the grant stops holding. A check
+that cannot read the list or CloudPanel's database refuses a new shell, but an
+open one gets three such checks in a row before it ends, so CloudPanel holding
+its database for a moment does not cut it off. A shell that has not hung up
+five seconds after it is told to is killed. The helper runs as root only with
+`CLP_ROOT_SHELL=1`, which the worker passes for a root shell alone. The
+journal gets "opened a root shell" and "closed a root shell" lines like a
+site's. A ready line naming root is accepted only for a root shell, and one
+naming anyone else only for a site.
 
 ## Transport
 
@@ -93,7 +149,7 @@ site sends reaches a root process.
 
 Closing the PTY hangs the shell up, as a dropped SSH connection does. What a
 user deliberately detached, such as `nohup`, outlives the window under their
-logind session, as it would over SSH. Disabling or uninstalling the addon stops
+logind session, as it would over SSH. Disabling the addon stops
 every worker, which hangs up every shell, once its config is gone, so no worker
 can start after.
 

@@ -9,6 +9,7 @@ import { MANAGER_UNIT, PANEL_GROUP, SERVICE_USER, SOCKET_PATH } from "../cli/pat
 import { CLI_VERSION } from "../cli/release";
 import { fatal, log } from "../cli/util";
 import { jsonResponse, newCsrfToken } from "../lib/app-http";
+import { mountPath } from "../lib/mount";
 import { gatewayCaller } from "../lib/gateway-client";
 import { splitMount } from "../lib/mount";
 import { adminGate, authenticateRequest } from "../lib/sso-auth";
@@ -90,6 +91,13 @@ export async function handleRequest(req: Request, server: Server<unknown>): Prom
       { roles: gate.auth?.roles ?? [] },
       () => addonHandler(scoped.addon)!(req, scoped.rest, null, server, gate.auth),
     );
+  }
+
+  // Keep already-loaded site Settings cards and bookmarked pages working after the rename.
+  // This runs behind both authentication gates; 308 preserves API methods and query strings.
+  if (path === "/php-resources" || path.startsWith("/php-resources/")) {
+    const query = new URL(req.url).search;
+    return new Response(null, { status: 308, headers: { Location: `${mountPath("resource-limits")}${path.slice("/php-resources".length)}${query}` } });
   }
 
   // Polled while this process restarts; the gateway that validates the session

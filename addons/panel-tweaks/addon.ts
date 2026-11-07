@@ -9,7 +9,6 @@ export const PANEL_TWEAKS_ADDON: AddonDefinition = {
   title: "Panel Tweaks",
   description: "Site search, columns and CSV download, automatic SSL for native sites, mobile layouts, theme improvements and branding.",
   changed: [{ in: "2.0.0-rc.1", note: "The PHP version CloudPanel itself runs on moved to System Tweaks." }],
-  preselected: true,
   targets: PANEL_TWEAKS_TARGETS,
   handler: handle,
   // Read by the script on CloudPanel's own Sites page, which every panel user

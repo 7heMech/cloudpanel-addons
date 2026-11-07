@@ -12,7 +12,7 @@ import { type AddonSpec } from "./addon-catalog";
 import { withOperationLock, withOperationLockSync } from "./operation-lock";
 import {
   applyToggleUnits, ensureAuthHelperReady, ensureDirs, ensureRequiredUnits, ensureServiceUser,
-  installUnits, platformProvisioned, reconcilePanelIdentity, removeLegacyUnits,
+  installUnits, installedConfig, platformProvisioned, reconcilePanelIdentity, removeLegacyUnits,
   startUnits, writeConfig,
 } from "./provision";
 import { fatal, log, requireRoot } from "./util";
@@ -125,15 +125,17 @@ export function withdrawWpTools(removeConfig: () => void): void {
 /**
  * Turn one addon off and leave everything it made behind.
  *
- * Deliberately not `cmdUninstall`: that removes the binary once the last addon
- * goes, and may remove an addon's data. Disabling withdraws the addon from the
- * panel -- its config, its units' knowledge of it, its Twig markup -- and keeps
- * its state directory, so enabling it again returns the same instances.
+ * Disabling withdraws the addon from the panel -- its config, its units'
+ * knowledge of it, its Twig markup -- and keeps its state directory, so
+ * enabling it again returns the same instances.
  */
 export function applyDisable(name: string): void {
   requireRoot("disable");
   const spec = resolveAddon(name);
-  withOperationLockSync(`disable ${spec.name}`, () => disableAddon(spec));
+  withOperationLockSync(`disable ${spec.name}`, () => {
+    if (!installedConfig(spec)) return log.ok(`${spec.name} is already disabled`);
+    disableAddon(spec);
+  });
 }
 
 function disableAddon(spec: AddonSpec): void {
@@ -154,7 +156,19 @@ function disableAddonContents(spec: AddonSpec): void {
   };
   if (spec.name === "wp-tools") withdrawWpTools(removeConfig);
   else removeConfig();
-  spec.withdrawn?.();
+  try {
+    spec.withdrawn?.();
+  } catch (error) {
+    // With the config gone a second disable would say it is done, and repair
+    // skips a disabled addon, so the half-withdrawn addon is enabled again.
+    const reason = error instanceof Error ? error.message : String(error);
+    try {
+      writeConfig(spec, true);
+    } catch (restore) {
+      fatal(`${spec.name} could not be disabled (${reason}), nor enabled again (${restore instanceof Error ? restore.message : String(restore)}). Run clp-addons enable ${spec.name}, then disable it again`);
+    }
+    fatal(`${spec.name} could not be disabled and is still enabled: ${reason}. Run clp-addons disable ${spec.name} again`);
+  }
   // Even with no addon left the binary stays, and repair keeps the guard.
   settlePhpGuard();
   // Reconciled after the config file is gone, so the injection set is read

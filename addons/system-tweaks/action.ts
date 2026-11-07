@@ -43,6 +43,7 @@ import {
   BACKUP_COMPRESSION_ERROR, DEFAULT_BACKUP_COMPRESSION, backupCompressionStatus, reconcileBackupCompression, validBackupCompression,
   type BackupCompressionOptions, type BackupCompressionSettings, type BackupCompressionStatus,
 } from "./backup-compression";
+import { applyTelemetryBlock, telemetryStatus, type TelemetryOptions, type TelemetryStatus } from "./telemetry";
 
 const SETTINGS_VERSION = 1;
 const MAX_INPUT_BYTES = 4 * 1024;
@@ -75,6 +76,8 @@ export interface SystemTweaksSettings {
   databaseLoopback: boolean;
   /** Replace CloudPanel's clpctlWrapper with one that closes the sudo-to-root injection. */
   blockClpctlInjection: boolean;
+  /** Deny CloudPanel's clp-agent every address but loopback. */
+  blockTelemetry: boolean;
   backupCompression: BackupCompressionSettings;
 }
 
@@ -94,6 +97,7 @@ export interface SystemTweaksState {
   loginJails: (LoginJailsStatus & LoginJailSettings) | { error: string };
   database: (DatabaseStatus & { loopback: boolean }) | { error: string };
   backupCompression: BackupCompressionStatus;
+  telemetry: TelemetryStatus & { enabled: boolean };
 }
 
 export interface SystemTweaksPaths {
@@ -126,11 +130,12 @@ export interface SystemTweaksOptions {
   phpPools?: PoolIsolationOptions;
   clpctlGuard?: ClpctlGuardOptions;
   panelPhp?: PanelPhpOptions;
-  tmpCleanup?: TmpCleanupOptions;
   firewall?: FirewallOptions;
   loginJails?: LoginJailOptions;
   database?: DatabaseOptions;
   backupCompression?: BackupCompressionOptions;
+  telemetry?: TelemetryOptions;
+  tmpCleanup?: TmpCleanupOptions;
   now?: () => number;
 }
 
@@ -153,6 +158,7 @@ export function readSettings(paths: SystemTweaksPaths): SystemTweaksSettings {
     fail2banBefore: null,
     databaseLoopback: false,
     blockClpctlInjection: true,
+    blockTelemetry: true,
     backupCompression: { ...DEFAULT_BACKUP_COMPRESSION },
   };
   if (!existsSync(paths.settingsFile)) return settings;
@@ -190,6 +196,7 @@ export function readSettings(paths: SystemTweaksPaths): SystemTweaksSettings {
   }
   if (stored.databaseLoopback === true) settings.databaseLoopback = true;
   if (stored.blockClpctlInjection === false) settings.blockClpctlInjection = false;
+  if (stored.blockTelemetry === false) settings.blockTelemetry = false;
   if (validBackupCompression(stored.backupCompression)) settings.backupCompression = { ...stored.backupCompression };
   return settings;
 }
@@ -237,6 +244,7 @@ async function stateOf(options: SystemTweaksOptions): Promise<SystemTweaksState>
     loginJails: loginJailsOrError(settings.loginJails, options.loginJails),
     database: databaseOrError(settings.databaseLoopback, options.database),
     backupCompression: backupCompressionStatus(settings.backupCompression, options.backupCompression),
+    telemetry: { ...telemetryStatus(options.telemetry), enabled: settings.blockTelemetry },
   };
 }
 
@@ -337,6 +345,18 @@ async function setPhpMyAdmin(options: SystemTweaksOptions): Promise<SystemTweaks
     const settings = readSettings(paths);
     applyPhpMyAdmin(body.enabled as boolean, options.phpMyAdmin);
     writeSettings(paths, { ...settings, protectPhpMyAdmin: body.enabled as boolean });
+  });
+  return stateOf(options);
+}
+
+async function setTelemetry(options: SystemTweaksOptions): Promise<SystemTweaksState> {
+  const paths = pathsFor(options);
+  const body = await requestBody(options);
+  if (typeof body.enabled !== "boolean") failAction("enabled must be true or false");
+  await withFileLock(paths.lockFile, 15, "another system tweaks change is still running", async () => {
+    const settings = readSettings(paths);
+    applyTelemetryBlock(body.enabled as boolean, options.telemetry);
+    writeSettings(paths, { ...settings, blockTelemetry: body.enabled as boolean });
   });
   return stateOf(options);
 }
@@ -529,6 +549,7 @@ export async function executeSystemTweaksAction(argv: string[], options: SystemT
   if (verb === "set-panel-cert") return setPanelCert(options);
   if (verb === "set-clpctl-guard") return setClpctlGuard(options);
   if (verb === "set-backup-compression") return setBackupCompression(options);
+  if (verb === "set-telemetry") return setTelemetry(options);
   if (verb === "set-panel-php") return changePanelPhp(options);
   if (verb === "set-php-pools") return setPhpPools(options);
   if (verb === "set-login-jails") return setLoginJails(options);
@@ -670,10 +691,16 @@ export async function systemTweaksMaintenance(options: SystemTweaksOptions = {})
     failures.push(`panel PHP: ${errorMessage(error)}`);
   }
   try {
-    const changed = withSettingsLock(options, (_paths, settings) => reconcileBackupCompression(settings.backupCompression, options.backupCompression));
-    if (changed) lines.push("remote backup compression reconciled");
+    const changed = systemTweaksBackupCompression(options);
+    if (changed) lines.push(changed);
   } catch (error) {
     failures.push(`remote backup compression: ${errorMessage(error)}`);
+  }
+  try {
+    const telemetry = withSettingsLock(options, (_paths, settings) => settings.blockTelemetry && applyTelemetryBlock(true, options.telemetry));
+    if (telemetry) lines.push("CloudPanel telemetry blocked again");
+  } catch (error) {
+    failures.push(`CloudPanel telemetry: ${errorMessage(error)}`);
   }
   if (failures.length) throw new Error([...failures, ...lines].join("; "));
   return lines.join("; ") || null;
@@ -683,6 +710,12 @@ export async function systemTweaksMaintenance(options: SystemTweaksOptions = {})
 export function systemTweaksPhpMyAdmin(options: SystemTweaksOptions = {}): string | null {
   return withSettingsLock(options, (_paths, settings) =>
     settings.protectPhpMyAdmin && applyPhpMyAdmin(true, options.phpMyAdmin) ? "phpMyAdmin rules put back" : null);
+}
+
+/** Repair's, and the fast repair's after a CloudPanel update replaces the backup command. */
+export function systemTweaksBackupCompression(options: SystemTweaksOptions = {}): string | null {
+  return withSettingsLock(options, (_paths, settings) =>
+    reconcileBackupCompression(settings.backupCompression, options.backupCompression) ? "remote backup compression reconciled" : null);
 }
 
 /**
@@ -778,6 +811,9 @@ export function withdrawSystemTweaks(options: SystemTweaksOptions = {}): void {
     restorePanelPhp(options.panelPhp);
     throw error;
   }
+  // Like the firewall below, it does not keep the addon on or the protections in place.
+  try { applyTelemetryBlock(false, options.telemetry); }
+  catch (error) { log.warn(`clp-agent is still blocked from the network: ${errorMessage(error)}; remove /etc/systemd/system/clp-agent.service.d/zz-clp-addons-telemetry.conf`); }
   // A firewall that cannot be put back does not keep the addon on: CloudPanel's
   // next change on its Firewall page rebuilds ufw without these rules anyway.
   try { syncFirewall("withdraw", options.firewall); }
@@ -807,6 +843,10 @@ export function restoreSystemTweaks(options: SystemTweaksOptions = {}): void {
       // It refuses once CloudPanel moves past the supported version; activation must still finish.
       try { reconcileBackupCompression(settings.backupCompression, options.backupCompression); }
       catch (error) { log.warn(`remote backup compression waits for the next repair: ${errorMessage(error)}`); }
+      if (settings.blockTelemetry) {
+        try { applyTelemetryBlock(true, options.telemetry); }
+        catch (error) { log.warn(`blocking CloudPanel telemetry waits for the next repair: ${errorMessage(error)}`); }
+      }
     });
   } finally {
     restorePanelPhp(options.panelPhp);

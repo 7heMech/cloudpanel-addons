@@ -45,7 +45,8 @@ export function ownerOf(user: string, sessionId: string): Owner {
 }
 
 export interface OpenRequest {
-  domain: string;
+  /** Null for a root shell on the server itself. */
+  domain: string | null;
   cols: number;
   rows: number;
   /** The CloudPanel session id, which the gateway checks itself. */
@@ -66,7 +67,7 @@ export const gatewayOpener: StreamOpener = (request, handlers) =>
   streamGatewayAction({
     addon: "terminal",
     verb: "session",
-    args: [`--domain=${request.domain}`, `--cols=${request.cols}`, `--rows=${request.rows}`],
+    args: [request.domain === null ? "--root" : `--domain=${request.domain}`, `--cols=${request.cols}`, `--rows=${request.rows}`],
     sessionId: request.sessionId,
     maxLineBytes: MAX_LINE_BYTES,
     onLine: handlers.onLine,
@@ -135,7 +136,7 @@ interface Client {
 interface Session {
   id: string;
   owner: Owner;
-  domain: string;
+  domain: string | null;
   user: string;
   state: "starting" | "open" | "ended";
   stream: TerminalStream | null;
@@ -254,6 +255,10 @@ export class TerminalSessions {
                 prelude += line.length + 1;
                 if (prelude > MAX_PRELUDE_BYTES) settle({ ok: false, error: "the terminal sent something unexpected" });
                 return;
+              }
+              // A site's login files can print anything, a ready line naming root included.
+              if ((message.user === "root") !== (request.domain === null)) {
+                return settle({ ok: false, error: "the terminal sent something unexpected" });
               }
               session.state = "open";
               session.user = message.user;

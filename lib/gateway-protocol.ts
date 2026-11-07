@@ -6,7 +6,7 @@ import { GIT_VERBS } from "../addons/git/verbs";
 import { INSTATIC_VERBS } from "../addons/instatic/verbs";
 import { MAINTENANCE_VERBS } from "../addons/maintenance/verbs";
 import { PANEL_TWEAKS_VERBS } from "../addons/panel-tweaks/verbs";
-import { PHP_RESOURCES_VERBS } from "../addons/php-resources/verbs";
+import { RESOURCE_LIMITS_VERBS } from "../addons/resource-limits/verbs";
 import { SECURITY_KEYS_VERBS } from "../addons/security-keys/verbs";
 import { SMTP_VERBS } from "../addons/smtp/verbs";
 import { STAGER_VERBS } from "../addons/stager/verbs";
@@ -56,7 +56,7 @@ export const ADDON_VERBS = {
   maintenance: MAINTENANCE_VERBS,
   manager: MANAGER_VERBS,
   "panel-tweaks": PANEL_TWEAKS_VERBS,
-  "php-resources": PHP_RESOURCES_VERBS,
+  "resource-limits": RESOURCE_LIMITS_VERBS,
   "security-keys": SECURITY_KEYS_VERBS,
   smtp: SMTP_VERBS,
   stager: STAGER_VERBS,
@@ -108,6 +108,11 @@ export function callerMay(access: WebAccess, roles: readonly string[] | null): b
  * after checking its session. A duplex worker refuses to run without it.
  */
 export const DUPLEX_WORKER_MARKER = "CLP_ADDONS_DUPLEX_WORKER";
+/**
+ * Set by the gateway on a session verb's worker: "1" when that panel session
+ * passed CloudPanel's own two-factor step, "0" otherwise.
+ */
+export const SESSION_2FA_ENV = "CLP_ADDONS_SESSION_2FA";
 
 export interface SanitizedSite {
   domain: string;

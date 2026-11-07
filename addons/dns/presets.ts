@@ -78,7 +78,7 @@ function seeded(id: string, name: string, presetIds: string[]): Profile {
   };
 }
 
-/** Produced on read, like PHP Resources' categories, so a read never writes and a deleted one stays deleted. */
+/** Produced on read, like Resource Limits' categories, so a read never writes and a deleted one stays deleted. */
 export function seededPolicy(): Policy {
   return {
     version: 1,

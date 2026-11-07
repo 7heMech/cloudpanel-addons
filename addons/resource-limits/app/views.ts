@@ -1,15 +1,17 @@
+import MEMORY_JS from "./memory.client.js" with { type: "text" };
+import { memoryCard } from "./memory-view";
 import CLIENT_JS_BODY from "./views.client.js" with { type: "text" };
 import { esc } from "../../../lib/app-http";
 import {
-  ATTENTION_RANK, FLEET_FOOTER_HTML, FLEET_ROW_SELECTION_JS, fleetFilterHtml, filterWord, valueFilters, renderLayout,
+  TWEAK_ROW_JS, ATTENTION_RANK, FLEET_FOOTER_HTML, FLEET_ROW_SELECTION_JS, fleetFilterHtml, filterWord, valueFilters, renderLayout,
 } from "../../../lib/app-ui";
 import { mountPath } from "../../../lib/mount";
 import {
   DEFAULT_CATEGORY_PROFILE, PM_MODES, STOCK_PROFILE,
-  type PhpResourcesState, type PoolCategory, type PoolProfile, type PoolSiteState,
+  type ResourceLimitsState, type PoolCategory, type PoolProfile, type PoolSiteState,
 } from "../action";
 
-const BASE = mountPath("php-resources");
+const BASE = mountPath("resource-limits");
 
 // Cards, switches, the form grid, the confirmation dialog and the inline notice
 // are in lib/app-ui; only what this addon alone draws is here.
@@ -163,6 +165,8 @@ function categoryForm(profile: PoolProfile): string {
 
 export const CLIENT_JS = `
 ${FLEET_ROW_SELECTION_JS}
+${TWEAK_ROW_JS}
+${MEMORY_JS}
 ${CLIENT_JS_BODY}`;
 
 export function layout(
@@ -171,7 +175,7 @@ export function layout(
   updateNotice?: { current: string; latest: string } | null,
 ): string {
   return renderLayout(title, content, {
-    brand: "PHP Resources",
+    brand: "Resource Limits",
     // No tab strip of its own: this addon has one page, reached from the
     // Addons list, and the panel's own site page only reports what it decided.
     base: BASE,
@@ -227,7 +231,7 @@ function siteTableRow(site: PoolSiteState, categories: PoolCategory[]): string {
   </tr>`;
 }
 
-export function dashboardView(state: PhpResourcesState): string {
+export function dashboardView(state: ResourceLimitsState): string {
   const counts = new Map(state.categories.map((category) => [category.id, 0]));
   for (const site of state.sites) {
     if (site.categoryId) counts.set(site.categoryId, (counts.get(site.categoryId) ?? 0) + 1);
@@ -239,9 +243,11 @@ export function dashboardView(state: PhpResourcesState): string {
   const total = state.sites.length;
 
   return `<div class="page-heading">
-    <div><h1>PHP Resources</h1>
-      <p>Put PHP sites into categories, and give each category its PHP-FPM worker limits.</p></div>
+    <div><h1>Resource Limits</h1>
+      <p>Set PHP worker limits and share this server’s memory between PHP, MySQL and Redis.</p>
+      <p class="hint">PHP’s <code>memory_limit</code> and <code>upload_max_filesize</code> stay in CloudPanel’s PHP Settings tab.</p></div>
   </div>
+  ${memoryCard(state.memory, state.sites)}
   ${drifted
     ? `<div class="notice">${drifted} ${drifted === 1 ? "site no longer matches the category it is" : "sites no longer match the category they are"} in, which is what changing a PHP version leaves behind. Repair puts ${drifted === 1 ? "it" : "them"} back within fifteen minutes.
       <div class="actions notice-actions"><button class="btn" type="button" onclick="repairDrifted()">Put them back now</button></div></div>`

@@ -803,7 +803,7 @@ export async function configureMainwp(
 }
 
 /**
- * Disabling or uninstalling WordPress Tools leaves MainWP connections in place,
+ * Disabling WordPress Tools leaves MainWP connections in place,
  * but not an interrupted enrollment, whose temporary setting only repair restores.
  */
 export function requireMainwpSettled(path: string): void {

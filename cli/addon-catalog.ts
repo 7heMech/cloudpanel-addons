@@ -22,7 +22,7 @@ import { MAINTENANCE_ADDON } from "../addons/maintenance/addon";
 import { PANEL_TWEAKS_ADDON } from "../addons/panel-tweaks/addon";
 import { SYSTEM_TWEAKS_ADDON } from "../addons/system-tweaks/addon";
 import { WP_TOOLS_ADDON } from "../addons/wp-tools/addon";
-import { PHP_RESOURCES_ADDON } from "../addons/php-resources/addon";
+import { RESOURCE_LIMITS_ADDON } from "../addons/resource-limits/addon";
 import { STAGER_ADDON } from "../addons/stager/addon";
 import { SMTP_ADDON } from "../addons/smtp/addon";
 import { TERMINAL_ADDON } from "../addons/terminal/addon";
@@ -69,14 +69,12 @@ export interface AddonDefinition {
   added?: string;
   /** Changes an operator must know about, such as moved settings or new effects on sites, each shown as Changed on the same terms as `added`; not for layout or speed. */
   changed?: { in: string; note: string }[];
-  /** Ticked when the installer asks which addons to install. */
-  preselected?: boolean;
   targets: AddonTarget[];
   /** The manager routes this addon mounts, if it has any. */
   handler?: AddonHandler;
   /** The privileged verbs this addon runs as root, if it has any. */
   action?: (argv: string[], options?: Record<string, unknown>) => Promise<number> | number;
-  /** Withdraw changes outside addon state before disabling or uninstalling. */
+  /** Withdraw changes outside addon state before disabling. */
   deactivate?: () => void;
   /** Stop what is still running once the config is gone and nothing new can start. */
   withdrawn?: () => void;
@@ -117,7 +115,7 @@ export interface AddonDefinition {
 /**
  * The addon's platform-facing shape: the definition plus the paths the platform
  * derives from its name. Kept as a distinct type because provisioning, repair
- * and uninstall care about the files, not about the handler.
+ * and disable care about the files, not about the handler.
  */
 export interface AddonSpec extends AddonDefinition {
   configFile: string;
@@ -134,7 +132,7 @@ const DEFINITIONS: AddonDefinition[] = [
   INSTATIC_ADDON,
   STAGER_ADDON,
   MAINTENANCE_ADDON,
-  PHP_RESOURCES_ADDON,
+  RESOURCE_LIMITS_ADDON,
   GIT_ADDON,
   PANEL_TWEAKS_ADDON,
   SYSTEM_TWEAKS_ADDON,

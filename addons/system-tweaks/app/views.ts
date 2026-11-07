@@ -421,10 +421,18 @@ function clpctlGuardLine(state: SystemTweaksState["clpctlGuard"]): string {
   return `${badge("Off", "plain")} <span>A site's own user can reach root through clpctlWrapper${where}.</span>`;
 }
 
-function settingsCard(state: SystemTweaksState): string {
+function telemetryLine(state: SystemTweaksState["telemetry"]): string {
+  if (state.problem) return `${badge("Unknown", "warn")} <span>${esc(state.problem)}</span>`;
+  if (!state.agent) return `${badge("No agent", "plain")} <span>CloudPanel's clp-agent is not installed here.</span>`;
+  if (state.blocked) return `${badge("Blocked", "ok")} <span>clp-agent can reach only this server.</span>`;
+  if (state.enabled) return `${badge("Not applied", "warn")} <span>Run clp-addons repair.</span>`;
+  return `${badge("Sending", "plain")} <span>clp-agent sends CloudPanel every site's domain and every panel user's name and email once a day.</span>`;
+}
+
+function hardeningCard(state: SystemTweaksState): string {
   return `
     <div class="card">
-      <div class="card-header"><h2>Settings</h2></div>
+      <div class="card-header"><h2>Hardening</h2></div>
       <div class="tweak-list">${panelPhpRow(state.panelPhp)}${settingRow({
         key: "uploadProgressGuard",
         title: "PHP upload-progress mitigation",
@@ -452,7 +460,7 @@ function settingsCard(state: SystemTweaksState): string {
         checked: state.phpMyAdmin.enabled,
         onchange: "setPhpMyAdmin(this)",
         extra: `<p class="st-status">${phpMyAdminLine(state.phpMyAdmin)}</p>`,
-      })}${settingRow({
+      })}${databaseRow(state.database)}${settingRow({
         key: "replacePanelCert",
         title: "Replace the shared panel certificate",
         description: [
@@ -502,6 +510,16 @@ function settingsCard(state: SystemTweaksState): string {
         checked: "error" in state.clpctlGuard ? true : state.clpctlGuard.enabled,
         onchange: "setClpctlGuard(this)",
         extra: `<p class="st-status">${clpctlGuardLine(state.clpctlGuard)}</p>`,
+      })}${settingRow({
+        key: "blockTelemetry",
+        title: "Block CloudPanel telemetry",
+        description: [
+          "Cuts CloudPanel's clp-agent off from the network, so it stops sending the server's ID and hardware, every site's domain and every panel user's name and email.",
+          "The agent keeps recording the dashboard's graphs.",
+        ],
+        checked: state.telemetry.enabled,
+        onchange: "setTelemetry(this)",
+        extra: `<p class="st-status">${telemetryLine(state.telemetry)}</p>`,
       })}
       </div>
     </div>`;
@@ -547,37 +565,27 @@ function defaultPasswordNote(state: DatabaseStatus): string {
     so changing it only in MySQL breaks its Databases page.`);
 }
 
-function databaseCard(state: DatabaseState): string {
+function databaseRow(state: DatabaseState): string {
   const description = [
     "Allows MySQL and MariaDB connections only from this server. Sites and the panel connect over localhost or a Unix socket and keep working. Apps on other machines lose access; reach it over an SSH tunnel instead.",
     "Off by default: CloudPanel creates every database user for any host, so System Tweaks cannot tell whether something remote uses one. A change restarts MySQL, so sites lose their database for a few seconds.",
   ];
   if ("error" in state) {
-    return `
-    <div class="card">
-      <div class="card-header"><h2>Database</h2></div>
-      <div class="tweak-list">${settingRow({ key: "databaseLoopback", title: "MySQL on this server only", description, control: "",
-        extra: `<div class="alert st-alert" role="alert">${esc(state.error)}</div>` })}
-      </div>
-    </div>`;
+    return settingRow({ key: "databaseLoopback", title: "MySQL on this server only", description, control: "",
+      extra: `<div class="alert st-alert" role="alert">${esc(state.error)}</div>` });
   }
   const remote = state.remoteClients.length
     ? warning(`Connected now from ${listing(state.remoteClients)}. ${state.loopback ? "" : "These lose access once MySQL accepts connections from this server only."}`)
     : "";
-  return `
-    <div class="card">
-      <div class="card-header"><h2>Database</h2></div>
-      <div class="tweak-list">${settingRow({
-        key: "databaseLoopback",
-        title: "MySQL on this server only",
-        description,
-        checked: state.loopback,
-        disabled: !state.running && !state.loopback,
-        onchange: "setDatabaseLoopback(this)",
-        extra: `<p class="st-status">${databaseLine(state)}</p>${remote}${defaultPasswordNote(state)}`,
-      })}
-      </div>
-    </div>`;
+  return settingRow({
+    key: "databaseLoopback",
+    title: "MySQL on this server only",
+    description,
+    checked: state.loopback,
+    disabled: !state.running && !state.loopback,
+    onchange: "setDatabaseLoopback(this)",
+    extra: `<p class="st-status">${databaseLine(state)}</p>${remote}${defaultPasswordNote(state)}`,
+  });
 }
 
 /** The protocols are set on CloudPanel's own Firewall page; this page only says where. */
@@ -678,7 +686,7 @@ function loginJailsCard(jails: LoginJails): string {
         ],
         checked: jails.ssh,
         onchange: "setLoginJails(this)",
-        extra: `<p class="st-status">${jailLine(jails, "sshd", jails.ssh)}</p>${sshdWarning(jails.sshd)}`,
+        extra: `<p class="st-status">${jailLine(jails, "sshd", jails.ssh)}</p>${jails.ssh ? '<p class="hint st-suggest">SSH already records failed logins. The last hour counts when you switch this on, so addresses can be blocked immediately, even after a fresh fail2ban install.</p>' : ""}${sshdWarning(jails.sshd)}`,
       })}
       </div>${install}${jails.running.length ? bansTable(jails.bans) : ""}
     </div>`;
@@ -689,13 +697,13 @@ export function dashboardView(state: SystemTweaksState, now = Date.now()): strin
     <div class="page-heading">
       <div>
         <h1>System Tweaks</h1>
-        <p>Server-wide settings for this machine.</p>
-        <p class="hint">Every 15 minutes it also clears PHP and ImageMagick temp files that timed-out requests left in /tmp.${firewallLine(state.firewall)}</p>
+        <p>Hardening, automatic updates, panel PHP and remote backups.</p>
+        <p class="hint">Every 15 minutes it also clears PHP and ImageMagick temp files that timed-out requests left in /tmp. PHP worker limits and memory sizing are in <a href="/addons/resource-limits/">Resource Limits</a>.${firewallLine(state.firewall)}</p>
       </div>
     </div>
     <div class="card">
       <div class="card-header"><h2>Automatic updates</h2></div>
       <div class="tweak-list">${updateRows(state.updates, state.settings)}
       </div>${statusList(state.updates, now)}${coverageDetails(state.updates)}
-    </div>${backupCompressionCard(state.backupCompression)}${settingsCard(state)}${loginJailsCard(state.loginJails)}${databaseCard(state.database)}`;
+    </div>${backupCompressionCard(state.backupCompression)}${hardeningCard(state)}${loginJailsCard(state.loginJails)}`;
 }

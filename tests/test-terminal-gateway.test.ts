@@ -126,6 +126,8 @@ test("an administrator's session starts the worker as that user and copies bytes
     expect(options.env).toEqual({
       PATH: "/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin",
       CLP_ADDONS_DUPLEX_WORKER: "1",
+      // This session passed CloudPanel's 2FA step.
+      CLP_ADDONS_SESSION_2FA: "1",
     });
     // The session id rides on the request, never on a command line.
     expect(argv.join(" ")).not.toContain("live");

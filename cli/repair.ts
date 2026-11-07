@@ -1,7 +1,7 @@
 // `clp-addons repair`.
 
 import { installedAddons, resolveAddon, migrateOldAddonNames } from "./addons";
-import { reconcileAnchors, reconcileMaintenanceNginx, reconcileNginx, reconcilePhpMyAdminRules } from "./reconcile";
+import { reconcileAnchors, reconcileBackupCommand, reconcileMaintenanceNginx, reconcileNginx, reconcilePhpMyAdminRules } from "./reconcile";
 import { reconcilePhpGuard } from "./php-guard";
 import { runAddonRepairs, runManagerRepair } from "./addon-hooks";
 import { withOperationLock } from "./operation-lock";
@@ -16,8 +16,8 @@ import { fatal, log, parseFlags, requireRoot } from "./util";
 import { existsSync } from "node:fs";
 /**
  * Reconciles manager provisioning and enabled addon state, or only injected
- * CloudPanel anchors, the Nginx proxy and System Tweaks' phpMyAdmin rules when
- * `--anchors-only` is supplied.
+ * CloudPanel anchors, the Nginx proxy and System Tweaks' phpMyAdmin rules and
+ * backup command when `--anchors-only` is supplied.
  */
 export async function cmdRepair(argv: string[]): Promise<void> {
   requireRoot("repair");
@@ -46,9 +46,16 @@ async function applyRepair(positional: string[], flags: Record<string, string | 
     if (!reconcileMaintenanceNginx(quiet)) log.err("Nginx maintenance check is not ready; fix the problem above, then run repair again");
     if (!reconcileNginx(quiet)) log.err("Nginx proxy is not ready; run repair after checking the master vhost");
     reconcilePhpMyAdminRules(quiet);
+    reconcileBackupCommand(quiet);
     return;
   }
-  migrateOldAddonNames(quiet);
+  try {
+    // An earlier version's PHP Resources change is not waited for here; the next repair moves it.
+    migrateOldAddonNames(quiet, 0);
+  } catch (error) {
+    // Upkeep of everything else does not wait on the move; the next repair tries it again.
+    log.warn(`renamed addons were not moved yet: ${error instanceof Error ? error.message : String(error)}`);
+  }
   const specs = positional[0] ? [resolveAddon(positional[0])] : installedAddons();
   const all = installedAddons();
   // An installation with every addon disabled still needs its timer, its Nginx

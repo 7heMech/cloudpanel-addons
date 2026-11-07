@@ -1,5 +1,8 @@
 # System Tweaks
 
+Hardening, automatic updates, panel PHP, remote backups and firewall rules.
+PHP worker limits and the server memory budget are in [Resource Limits](resource-limits.md).
+
 ## Automatic updates
 
 1. Open **Addons → System Tweaks**. If `unattended-upgrades` is missing, choose
@@ -99,7 +102,7 @@ off removes only that file. It comes back if System Tweaks is disabled.
 
 ## Panel PHP
 
-Under **Addons → System Tweaks → Settings**, choose a newer installed version
+Under **Addons → System Tweaks → Hardening**, choose a newer installed version
 in **Panel PHP**. The page warns while the panel is left on PHP 8.1. This changes the PHP used by CloudPanel's pages,
 phpMyAdmin and File Manager. Site PHP versions keep their own settings.
 
@@ -278,6 +281,10 @@ from SSH for an hour after 5 failed logins within an hour. An SSH client that
 offers several wrong keys counts as failing, so make sure yours offers the right
 key first.
 
+SSH records failures even without fail2ban installed. When you switch the jail
+on, it reads the last hour of those logs, so addresses can appear in **Blocked
+addresses** immediately. These are actual bans on this server.
+
 Both need fail2ban. If it is missing, choose **Install fail2ban**, which installs
 `fail2ban`, `python3-systemd` and `nftables`. Switching both jails off, or
 disabling System Tweaks, puts fail2ban back as it was: stopped if it was not
@@ -352,12 +359,24 @@ clpctl stripping backslashes from its arguments, its commands building shell
 strings from option values, `db:import` running the dump as the database
 administrator, and the panel user `clp` having full `sudo`.
 
+## CloudPanel telemetry
+
+**Block CloudPanel telemetry** is on by default. Once a day CloudPanel's
+`clp-agent` sends CloudPanel the server's ID and hardware, every site's domain
+and every panel user's name and email. The setting cuts the agent off from the
+network, so nothing leaves the server; it keeps drawing the dashboard's graphs.
+CloudPanel's update and announcement checks still work.
+
+To check it, `systemctl show clp-agent -p IPAddressDeny` prints
+`IPAddressDeny=::/0 0.0.0.0/0`. Switching it off removes the drop-in and
+restarts the agent.
+
 ## Abandoned temp files
 
 Every 15 minutes System Tweaks removes the PHP and ImageMagick temp files that
 timed-out requests left in `/tmp`: ImageMagick's after two idle hours, PHP
 uploads and WordPress downloads after a day. It removes only files a PHP site's
-own user owns and no process has open. There is nothing to set. PHP Resources
+own user owns and no process has open. There is nothing to set. Resource Limits
 does the same while System Tweaks is off.
 
 ## UDP ports
@@ -376,9 +395,10 @@ when it is enabled again.
 
 ## MySQL access
 
-The **Database** card shows where MySQL listens, whether the firewall rules
-loaded now let anyone reach it (**Firewalled**, **Open** or **Unknown**), any client connected from another address, and whether its `root` account
-still logs in with the password `root` or none.
+Under **Hardening**, **MySQL on this server only** shows where MySQL listens,
+whether the firewall rules loaded now let anyone reach it (**Firewalled**,
+**Open** or **Unknown**), any client connected from another address, and whether
+its `root` account still logs in with the password `root` or none.
 
 Switch on **MySQL on this server only** to restrict MySQL or MariaDB to local
 connections. It writes `zz-clp-addons-loopback.cnf` into

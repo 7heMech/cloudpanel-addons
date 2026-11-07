@@ -4,8 +4,8 @@
  * This is the only addon that puts its own code inside a site, which is why it is
  * an addon rather than a switch on Panel Tweaks: an operator who wants a
  * filterable site list should not have to install the code that can put a file
- * inside a customer's WordPress. Installing this is the decision, and
- * uninstalling it takes the file back out of every site. Installing CLP Varnish
+ * inside a customer's WordPress. Enabling this is the decision, and
+ * disabling it takes the file back out of every site. Installing CLP Varnish
  * Cache is a separate opt-in; that plugin is WordPress's to manage and stays.
  *
  * Everything it writes or deletes in a site it does as the site's own user,
@@ -768,7 +768,7 @@ function mintWpLogin(
 /**
  * Take the sign-in back out of every site that has it.
  *
- * Disabling or uninstalling the addon runs this: leaving a loader behind in
+ * Disabling the addon runs this: leaving a loader behind in
  * somebody else's site because the addon went away would make it something an
  * operator cannot fully withdraw.
  */

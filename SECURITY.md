@@ -150,6 +150,12 @@ stripping, its shell-string command builders, `db:import` running as the databas
 administrator, and `clp`'s own `NOPASSWD: ALL`.
 [Guide](docs/system-tweaks.md#clpctl-injection)
 
+**CloudPanel telemetry.** `clp-agent` sends CloudPanel every site's domain and
+every panel user's name and email once a day, with no opt-out. The setting
+denies the agent every address but the server's own, so it keeps drawing the
+dashboard's graphs and sends nothing.
+[Guide](docs/system-tweaks.md#cloudpanel-telemetry)
+
 The nginx settings default to on when System Tweaks is enabled. PHP upload
 progress is disabled independently of that addon; System Tweaks provides its
 opt-out. Existing saved nginx values are flagged for review, not repaired.
@@ -173,7 +179,7 @@ It includes nginx by default; database and CloudPanel updates are separate choic
 address, and CloudPanel creates every database user for any host (`'%'`), so only
 the firewall keeps the database private. A box with ufw off, or a rule opening
 port 3306, exposes every site's database login, and possibly `root` with the
-install's default password `root`. System Tweaks' Database card shows where MySQL
+install's default password `root`. System Tweaks' Hardening card shows where MySQL
 listens, what the loaded firewall rules allow, clients connected from elsewhere,
 and whether root still uses a default password. **MySQL on this server only**
 (opt-in) binds it to `127.0.0.1` and undoes the change if MySQL does not come

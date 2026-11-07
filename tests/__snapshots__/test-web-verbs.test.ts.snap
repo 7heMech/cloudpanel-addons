@@ -85,12 +85,13 @@ panel-tweaks:set-branding          admin
 panel-tweaks:set-tweaks            admin
 panel-tweaks:state                 panel-user
 panel-tweaks:watch-job             admin stream
-php-resources:assign               admin
-php-resources:delete-category      admin
-php-resources:list                 admin
-php-resources:save-category        admin
-php-resources:set-default          admin
-php-resources:site                 admin
+resource-limits:assign             admin
+resource-limits:delete-category    admin
+resource-limits:list               admin
+resource-limits:save-category      admin
+resource-limits:set-default        admin
+resource-limits:set-memory         admin
+resource-limits:site               admin
 security-keys:keys                 own-account
 security-keys:login-options        pre-gate
 security-keys:register             own-account
@@ -129,11 +130,13 @@ system-tweaks:set-panel-php        admin
 system-tweaks:set-php-pools        admin
 system-tweaks:set-phpmyadmin       admin
 system-tweaks:set-real-ip          admin
+system-tweaks:set-telemetry        admin
 system-tweaks:set-updates          admin
 system-tweaks:set-upload-guard     admin
 system-tweaks:set-vhost-guard      admin
 system-tweaks:state                admin
 system-tweaks:unban                admin
+terminal:root-access               own-account
 terminal:session                   admin duplex
 wp-tools:domain-link-settings      admin
 wp-tools:job                       admin

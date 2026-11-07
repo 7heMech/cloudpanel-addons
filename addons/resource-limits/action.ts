@@ -6,7 +6,7 @@
  * -- and offers nothing that changes them. Its own PHP Settings form writes
  * `memory_limit` and friends into the site's Nginx vhost as `PHP_VALUE`, and
  * never touches the pool. So the pool file is the panel's blind spot, and it is
- * the only file this addon writes.
+ * the only PHP configuration this addon writes. Server memory limits live alongside it.
  *
  * A site's pool follows the category it is in: editing the category rewrites
  * every pool assigned to it. That is the whole point -- a fleet is tuned by
@@ -18,8 +18,9 @@
  * to find the next free port; changing any of it here would make the panel and
  * the running pool disagree about the same site.
  */
+import { resourceMemoryState, setResourceMemory, type ResourceMemoryOptions, type ResourceMemoryState } from "./memory-settings";
 import { openPanelDatabase } from "../../cli/panel-db";
-import { PHP_RESOURCES_VERBS } from "./verbs";
+import { RESOURCE_LIMITS_VERBS } from "./verbs";
 import { Database } from "bun:sqlite";
 import { chmodSync, existsSync, lstatSync, mkdirSync, readFileSync } from "node:fs";
 import { dirname, join } from "node:path";
@@ -33,7 +34,7 @@ import { writeFileAtomic } from "../../lib/atomic-write";
 
 const POLICY_VERSION = 1;
 
-export type PhpResourcesVerb = keyof typeof PHP_RESOURCES_VERBS;
+export type ResourceLimitsVerb = keyof typeof RESOURCE_LIMITS_VERBS;
 
 /** The process manager modes php-fpm accepts. */
 export const PM_MODES = ["static", "dynamic", "ondemand"] as const;
@@ -125,6 +126,8 @@ export interface PoolSiteState {
   siteUser: string;
   phpVersion: string;
   poolFile: string;
+  /** CloudPanel PHP Settings; -1 is unlimited, null is unavailable. */
+  memoryLimitMb: number | null;
   /** What the pool file holds now. */
   current: PoolProfile;
   /** The category this site is in, or null when it is in none. */
@@ -134,15 +137,19 @@ export interface PoolSiteState {
   drifted: boolean;
 }
 
-export interface PhpResourcesState {
+interface PoolState {
   categories: PoolCategory[];
   /** The category a site created from now on joins, or null for none. */
   defaultCategoryId: string | null;
   sites: PoolSiteState[];
 }
 
+export interface ResourceLimitsState extends PoolState {
+  memory: ResourceMemoryState;
+}
+
 /** What a change answers with: the new state, and the sites it could not reach. */
-export interface PhpResourcesResult extends PhpResourcesState {
+export interface ResourceLimitsResult extends ResourceLimitsState {
   failures: string[];
 }
 
@@ -160,9 +167,10 @@ interface SiteRow {
   domain: string;
   user: string;
   phpVersion: string;
+  memoryLimitMb: number | null;
 }
 
-export interface PhpResourcesActionPaths {
+export interface ResourceLimitsActionPaths {
   panelDb: string;
   /** Root of the per-version PHP trees, `/etc/php/<version>/fpm/pool.d`. */
   phpRoot: string;
@@ -173,12 +181,12 @@ export interface PhpResourcesActionPaths {
   systemctl: string;
   /** Owner every file this action trusts and writes must have. */
   rootUid: number;
-  /** Present while System Tweaks is enabled, which then clears /tmp itself. */
+  /** System Tweaks' enabled record: while it exists, System Tweaks clears /tmp. */
   systemTweaksConfig: string;
 }
 
-export interface PhpResourcesActionOptions {
-  paths?: Partial<PhpResourcesActionPaths>;
+export interface ResourceLimitsActionOptions extends ResourceMemoryOptions {
+  paths?: Partial<ResourceLimitsActionPaths>;
   input?: string;
   emitReply?: boolean;
   run?: (command: string, args: string[]) => CommandResult;
@@ -190,19 +198,19 @@ export interface PhpResourcesActionOptions {
   tmpCleanup?: TmpCleanupOptions;
 }
 
-export const DEFAULT_PHP_RESOURCES_ACTION_PATHS: PhpResourcesActionPaths = {
+export const DEFAULT_RESOURCE_LIMITS_ACTION_PATHS: ResourceLimitsActionPaths = {
   panelDb: PANEL_DB,
   phpRoot: "/etc/php",
   sbinDir: "/usr/sbin",
-  policyFile: `${STATE_DIR}/php-resources/policy.json`,
-  lockFile: "/run/lock/clp-addons/php-resources.lock",
+  policyFile: `${STATE_DIR}/resource-limits/policy.json`,
+  lockFile: "/run/lock/clp-addons/resource-limits.lock",
   systemctl: "systemctl",
   rootUid: 0,
   systemTweaksConfig: `${CONFIG_DIR}/system-tweaks.conf`,
 };
 
-function pathsFor(options: PhpResourcesActionOptions): PhpResourcesActionPaths {
-  return { ...DEFAULT_PHP_RESOURCES_ACTION_PATHS, ...options.paths };
+function pathsFor(options: ResourceLimitsActionOptions): ResourceLimitsActionPaths {
+  return { ...DEFAULT_RESOURCE_LIMITS_ACTION_PATHS, ...options.paths };
 }
 
 // ---------------------------------------------------------------------------
@@ -518,6 +526,17 @@ function writeTrusted(file: TrustedFile, content: string): void {
 // ---------------------------------------------------------------------------
 
 
+/** PHP ini shorthand; unknown or nonpositive limits cannot produce a budget. */
+export function phpMemoryLimitMb(value: unknown): number | null {
+  if (typeof value !== "string") return null;
+  if (value.trim() === "-1") return -1;
+  const match = /^([0-9]+)\s*([KMG]?)$/i.exec(value.trim());
+  if (!match) return null;
+  const scale = { "": 1 / 1048576, K: 1 / 1024, M: 1, G: 1024 }[match[2]!.toUpperCase()]!;
+  const mb = Number(match[1]) * scale;
+  return Number.isFinite(mb) && mb > 0 ? mb : null;
+}
+
 /**
  * Every site with a PHP-FPM pool, which is every site CloudPanel recorded PHP
  * settings for. The version comes from the same row, because that is what
@@ -525,9 +544,11 @@ function writeTrusted(file: TrustedFile, content: string): void {
  */
 function phpSiteRows(db: Database): SiteRow[] {
   try {
-    return db.query<{ id: number; domain_name: string; user: string; php_version: string }, []>(
+    const columns = db.query<{ name: string }, []>("PRAGMA table_info(php_settings)").all();
+    const memoryColumn = columns.some((column) => column.name === "memory_limit") ? "php_settings.memory_limit" : "NULL";
+    return db.query<{ id: number; domain_name: string; user: string; php_version: string; memory_limit: string | null }, []>(
       `SELECT site.id AS id, site.domain_name AS domain_name, site.user AS user,
-              php_settings.php_version AS php_version
+              php_settings.php_version AS php_version, ${memoryColumn} AS memory_limit
          FROM site
          JOIN php_settings ON php_settings.site_id = site.id
         ORDER BY site.domain_name;`,
@@ -536,6 +557,7 @@ function phpSiteRows(db: Database): SiteRow[] {
       domain: String(row.domain_name).toLowerCase(),
       user: String(row.user),
       phpVersion: String(row.php_version),
+      memoryLimitMb: phpMemoryLimitMb(row.memory_limit),
     }));
   } catch (error) {
     failAction(`CloudPanel does not expose its PHP settings: ${errorMessage(error)}`);
@@ -547,7 +569,7 @@ function validPhpVersion(value: string): boolean {
   return /^[0-9]+\.[0-9]+$/.test(value);
 }
 
-function poolFileFor(paths: PhpResourcesActionPaths, site: SiteRow): string {
+function poolFileFor(paths: ResourceLimitsActionPaths, site: SiteRow): string {
   if (!validPhpVersion(site.phpVersion)) {
     failAction(`CloudPanel recorded an unusable PHP version for ${site.domain}: '${site.phpVersion}'`);
   }
@@ -606,19 +628,19 @@ function readPolicy(path: string, expectedUid: number): Policy {
   try {
     const stat = lstatSync(path);
     if (!stat.isFile() || stat.isSymbolicLink() || stat.uid !== expectedUid || (stat.mode & 0o022) !== 0) {
-      failAction("the PHP resources policy file is not a trusted regular file");
+      failAction("the Resource limits policy file is not a trusted regular file");
     }
     raw = JSON.parse(readFileSync(path, "utf8"));
   } catch (error) {
     if (error instanceof ActionFailure) throw error;
-    failAction(`the PHP resources policy could not be read: ${errorMessage(error)}`);
+    failAction(`the Resource limits policy could not be read: ${errorMessage(error)}`);
   }
-  if (typeof raw !== "object" || raw === null || Array.isArray(raw)) failAction("the PHP resources policy is malformed");
+  if (typeof raw !== "object" || raw === null || Array.isArray(raw)) failAction("the Resource limits policy is malformed");
   const policy = raw as Partial<Policy>;
   if (policy.version !== POLICY_VERSION || !Array.isArray(policy.categories) ||
       typeof policy.assignments !== "object" || policy.assignments === null ||
       !Array.isArray(policy.knownSiteIds) || !policy.knownSiteIds.every(Number.isInteger)) {
-    failAction("the PHP resources policy is malformed");
+    failAction("the Resource limits policy is malformed");
   }
   return stablePolicy({
     version: POLICY_VERSION,
@@ -637,7 +659,7 @@ function writePolicy(path: string, policy: Policy, expectedUid: number): void {
   if (existsSync(path)) {
     const stat = lstatSync(path);
     if (!stat.isFile() || stat.isSymbolicLink() || stat.uid !== expectedUid || (stat.mode & 0o022) !== 0) {
-      failAction("the PHP resources policy file is not a trusted regular file");
+      failAction("the Resource limits policy file is not a trusted regular file");
     }
     uid = stat.uid;
     gid = stat.gid;
@@ -649,10 +671,10 @@ function writePolicy(path: string, policy: Policy, expectedUid: number): void {
   });
 }
 
-async function withPolicyLock<T>(paths: PhpResourcesActionPaths, body: () => Promise<T>): Promise<T> {
+async function withPolicyLock<T>(paths: ResourceLimitsActionPaths, body: () => Promise<T>): Promise<T> {
   mkdirSync(dirname(paths.lockFile), { recursive: true });
   chmodSync(dirname(paths.lockFile), 0o700);
-  return withFileLock(paths.lockFile, 30, "another PHP resources operation is running", body);
+  return withFileLock(paths.lockFile, 30, "another Resource limits operation is running", body);
 }
 
 // ---------------------------------------------------------------------------
@@ -677,7 +699,7 @@ function commandError(label: string, result: CommandResult): string {
  * it would put a daemon on the box that the panel did not ask for.
  */
 function applyPhpVersion(
-  paths: PhpResourcesActionPaths,
+  paths: ResourceLimitsActionPaths,
   version: string,
   command: (command: string, args: string[]) => CommandResult,
 ): void {
@@ -709,7 +731,7 @@ interface ApplyOutcome {
  * and the files no longer agree.
  */
 function applyMany(
-  paths: PhpResourcesActionPaths,
+  paths: ResourceLimitsActionPaths,
   entries: { site: SiteRow; profile: PoolProfile }[],
   command: (command: string, args: string[]) => CommandResult,
 ): ApplyOutcome {
@@ -770,7 +792,7 @@ function readableProfile(poolFile: string, expectedUid: number): PoolProfile {
   }
 }
 
-function stateFor(paths: PhpResourcesActionPaths, site: SiteRow, policy: Policy): PoolSiteState {
+function stateFor(paths: ResourceLimitsActionPaths, site: SiteRow, policy: Policy): PoolSiteState {
   const poolFile = poolFileFor(paths, site);
   const assigned = policy.assignments[site.domain];
   const category = assigned ? policy.categories.find((candidate) => candidate.id === assigned) ?? null : null;
@@ -779,6 +801,7 @@ function stateFor(paths: PhpResourcesActionPaths, site: SiteRow, policy: Policy)
     domain: site.domain,
     siteUser: site.user,
     phpVersion: site.phpVersion,
+    memoryLimitMb: site.memoryLimitMb,
     poolFile,
     current,
     categoryId: category?.id ?? null,
@@ -793,7 +816,7 @@ function requireSite(rows: SiteRow[], domain: string): SiteRow {
   return site;
 }
 
-function panelSites(paths: PhpResourcesActionPaths): SiteRow[] {
+function panelSites(paths: ResourceLimitsActionPaths): SiteRow[] {
   const db = openPanelDatabase(paths.panelDb, true);
   try {
     return phpSiteRows(db);
@@ -802,7 +825,7 @@ function panelSites(paths: PhpResourcesActionPaths): SiteRow[] {
   }
 }
 
-function stateOf(paths: PhpResourcesActionPaths, policy: Policy, sites?: SiteRow[]): PhpResourcesState {
+function stateOf(paths: ResourceLimitsActionPaths, policy: Policy, sites?: SiteRow[]): PoolState {
   return {
     categories: policy.categories,
     defaultCategoryId: policy.defaultCategoryId,
@@ -828,10 +851,10 @@ interface CategoryRequest {
  * needs twenty workers rather than fifteen has decided it for all of them.
  */
 async function saveCategory(
-  paths: PhpResourcesActionPaths,
+  paths: ResourceLimitsActionPaths,
   request: CategoryRequest,
   command: (command: string, args: string[]) => CommandResult,
-): Promise<PhpResourcesResult> {
+): Promise<Omit<ResourceLimitsResult, "memory">> {
   return withPolicyLock(paths, async () => {
     const policy = readPolicy(paths.policyFile, paths.rootUid);
     const clash = policy.categories.find((candidate) =>
@@ -871,10 +894,10 @@ async function saveCategory(
  * the page lie about what the box is running.
  */
 async function deleteCategory(
-  paths: PhpResourcesActionPaths,
+  paths: ResourceLimitsActionPaths,
   id: string,
   command: (command: string, args: string[]) => CommandResult,
-): Promise<PhpResourcesResult> {
+): Promise<Omit<ResourceLimitsResult, "memory">> {
   return withPolicyLock(paths, async () => {
     const policy = readPolicy(paths.policyFile, paths.rootUid);
     findCategory(policy, id);
@@ -896,11 +919,11 @@ async function deleteCategory(
 }
 
 async function assignSites(
-  paths: PhpResourcesActionPaths,
+  paths: ResourceLimitsActionPaths,
   domains: string[],
   categoryId: string | null,
   command: (command: string, args: string[]) => CommandResult,
-): Promise<PhpResourcesResult> {
+): Promise<Omit<ResourceLimitsResult, "memory">> {
   return withPolicyLock(paths, async () => {
     const policy = readPolicy(paths.policyFile, paths.rootUid);
     const profile = categoryId === null ? STOCK_PROFILE : findCategory(policy, categoryId).profile;
@@ -925,9 +948,9 @@ async function assignSites(
 }
 
 async function setDefaultCategory(
-  paths: PhpResourcesActionPaths,
+  paths: ResourceLimitsActionPaths,
   categoryId: string | null,
-): Promise<PhpResourcesResult> {
+): Promise<Omit<ResourceLimitsResult, "memory">> {
   return withPolicyLock(paths, async () => {
     const policy = readPolicy(paths.policyFile, paths.rootUid);
     if (categoryId !== null) findCategory(policy, categoryId);
@@ -959,8 +982,8 @@ export interface ReconcileResult {
  * template, so a site in a category silently returns to `pm.max_children = 250`
  * the moment somebody moves it from 8.2 to 8.3.
  */
-export async function reconcilePhpResources(
-  paths: PhpResourcesActionPaths = DEFAULT_PHP_RESOURCES_ACTION_PATHS,
+export async function reconcileResourceLimits(
+  paths: ResourceLimitsActionPaths = DEFAULT_RESOURCE_LIMITS_ACTION_PATHS,
   command: (command: string, args: string[]) => CommandResult = runCommand,
 ): Promise<ReconcileResult> {
   return withPolicyLock(paths, async () => {
@@ -1017,20 +1040,20 @@ export async function reconcilePhpResources(
 }
 
 interface ParsedAction {
-  verb: PhpResourcesVerb;
+  verb: ResourceLimitsVerb;
   domain: string;
 }
 
-const PER_SITE_VERBS: PhpResourcesVerb[] = ["site"];
-const FLEET_VERBS: PhpResourcesVerb[] = ["list", "save-category", "delete-category", "assign", "set-default", "reconcile"];
+const PER_SITE_VERBS: ResourceLimitsVerb[] = ["site"];
+const FLEET_VERBS: ResourceLimitsVerb[] = ["list", "save-category", "delete-category", "assign", "set-default", "reconcile", "set-memory"];
 
-function parseAction(argv: string[], options: PhpResourcesActionOptions): ParsedAction {
+function parseAction(argv: string[], options: ResourceLimitsActionOptions): ParsedAction {
   const normalized = argv.flatMap((arg) => arg.startsWith("--domain=")
     ? ["--domain", arg.slice("--domain=".length)]
     : [arg]);
-  const verb = normalized[0] as PhpResourcesVerb | undefined;
+  const verb = normalized[0] as ResourceLimitsVerb | undefined;
   if (!verb || ![...PER_SITE_VERBS, ...FLEET_VERBS].includes(verb)) {
-    failAction("usage: clp-addons action php-resources {list|save-category|delete-category|assign|set-default|reconcile} | site --domain <domain>");
+    failAction("usage: clp-addons action resource-limits {list|save-category|delete-category|assign|set-default|set-memory|reconcile} | site --domain <domain>");
   }
   if (FLEET_VERBS.includes(verb)) {
     if (normalized.length > 1) failAction(`${verb} takes no arguments`);
@@ -1051,7 +1074,7 @@ function parseAction(argv: string[], options: PhpResourcesActionOptions): Parsed
 /** The largest request any verb takes: `assign` naming a whole fleet. */
 const MAX_INPUT_BYTES = 256 * 1024;
 
-function requestBody(options: PhpResourcesActionOptions): Promise<Record<string, unknown>> {
+function requestBody(options: ResourceLimitsActionOptions): Promise<Record<string, unknown>> {
   return readJsonRequest(options.input, MAX_INPUT_BYTES);
 }
 
@@ -1069,7 +1092,7 @@ const MAX_ASSIGN_DOMAINS = 2_000;
 
 function assignRequest(
   body: Record<string, unknown>,
-  options: PhpResourcesActionOptions,
+  options: ResourceLimitsActionOptions,
 ): { domains: string[]; categoryId: string | null } {
   if (!Array.isArray(body.domains)) failAction("a list of domains is required");
   if (body.domains.length === 0) failAction("no sites were named");
@@ -1082,36 +1105,38 @@ function assignRequest(
   return { domains, categoryId: body.categoryId == null ? null : parseCategoryId(body.categoryId) };
 }
 
-export async function executePhpResourcesAction(
+export async function executeResourceLimitsAction(
   argv: string[],
-  options: PhpResourcesActionOptions = {},
+  options: ResourceLimitsActionOptions = {},
 ): Promise<unknown> {
-  if ((options.processUid ?? process.getuid?.()) !== 0) failAction("PHP resources actions must run as root");
+  if ((options.processUid ?? process.getuid?.()) !== 0) failAction("Resource limits actions must run as root");
   const paths = pathsFor(options);
   const command = options.run ?? runCommand;
   const { verb, domain } = parseAction(argv, options);
 
-  if (verb === "list") return stateOf(paths, readPolicy(paths.policyFile, paths.rootUid));
-  if (verb === "reconcile") return reconcilePhpResources(paths, command);
+  const complete = (state: PoolState) => ({ ...state, memory: resourceMemoryState(options) });
+  if (verb === "list") return complete(stateOf(paths, readPolicy(paths.policyFile, paths.rootUid)));
+  if (verb === "reconcile") return reconcileResourceLimits(paths, command);
   if (verb === "site") {
     const policy = readPolicy(paths.policyFile, paths.rootUid);
     return stateFor(paths, requireSite(panelSites(paths), domain), policy);
   }
   const body = await requestBody(options);
-  if (verb === "save-category") return saveCategory(paths, categoryRequest(body), command);
-  if (verb === "delete-category") return deleteCategory(paths, parseCategoryId(body.id), command);
+  if (verb === "set-memory") return setResourceMemory(body, options);
+  if (verb === "save-category") return complete(await saveCategory(paths, categoryRequest(body), command));
+  if (verb === "delete-category") return complete(await deleteCategory(paths, parseCategoryId(body.id), command));
   if (verb === "assign") {
     const request = assignRequest(body, options);
-    return assignSites(paths, request.domains, request.categoryId, command);
+    return complete(await assignSites(paths, request.domains, request.categoryId, command));
   }
-  if (verb === "set-default") return setDefaultCategory(paths, body.categoryId == null ? null : parseCategoryId(body.categoryId));
+  if (verb === "set-default") return complete(await setDefaultCategory(paths, body.categoryId == null ? null : parseCategoryId(body.categoryId)));
   verb satisfies never;
-  failAction(`unknown PHP resources verb '${verb}'`);
+  failAction(`unknown Resource limits verb '${verb}'`);
 }
 
-export async function runPhpResourcesAction(
+export async function runResourceLimitsAction(
   argv: string[],
-  options: PhpResourcesActionOptions = {},
+  options: ResourceLimitsActionOptions = {},
 ): Promise<number> {
-  return replyToAction("php-resources", options.emitReply !== false, () => executePhpResourcesAction(argv, options));
+  return replyToAction("resource-limits", options.emitReply !== false, () => executeResourceLimitsAction(argv, options));
 }

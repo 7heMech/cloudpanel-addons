@@ -8,7 +8,7 @@
 - [Instatic CMS](decisions/instatic.md)
 - [Stager](decisions/stager.md)
 - [Maintenance Mode](decisions/maintenance.md)
-- [PHP Resources](decisions/php-resources.md)
+- [Resource Limits](decisions/resource-limits.md)
 - [SMTP Relay](decisions/smtp.md)
 - [Git Deploy](decisions/git.md)
 - [Panel Tweaks](decisions/panel-tweaks.md)

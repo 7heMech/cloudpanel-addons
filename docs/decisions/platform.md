@@ -141,7 +141,7 @@ provisioned and does not attempt drift recovery.
 
 ## One operation at a time
 
-`install`, `enable`, `disable`, `repair`, `update`, `uninstall` and the panel's
+`install`, `enable`, `disable`, `repair`, `update`, `self-uninstall` and the panel's
 template reconcile all rewrite the same config files, units, Twig templates and
 Nginx fragments, and none of that is atomic across the set. Each takes one
 exclusive lock in `/run/lock/clp-addons/operation.lock` for the whole operation,
@@ -192,9 +192,10 @@ notice there. The panel lays the header out as one non-wrapping flex row of a
 fixed height, sized for exactly the three things in it, so a fourth has nowhere
 to go; flattening the right-hand wrapper lets the row wrap. Below 960px the
 panel navigation takes the second row and the update notice takes the third, so
-the navigation cannot be shrunk out of view by the added controls. Those rules
-apply only while a notice is actually in the row, so a panel with nothing to
-update is shaped as CloudPanel drew it.
+the navigation cannot be shrunk out of view by the added controls; the notice
+then starts where the logo does, as on the addon pages. Those rules apply only
+while a notice is actually in the row, so a panel with nothing to update is
+shaped as CloudPanel drew it.
 
 Panel Tweaks wants the same rules for a different reason, on a narrow screen
 and on any day, so `headerWrapStyle` in `lib/panel-nav.ts` takes the header's own

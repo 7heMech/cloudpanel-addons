@@ -13,6 +13,7 @@ import { CLI_BIN, CONFIG_DIR, PANEL_DB, SERVICE_GROUP, SERVICE_USER, SESSION_DIR
 import {
   MAX_SESSION_ID_LENGTH,
   parsePanelSession,
+  type ParsedPanelSession,
   readPanelSessionFile,
 } from "../lib/sso-auth";
 import {
@@ -22,6 +23,7 @@ import {
   MAX_GATEWAY_INPUT_BYTES,
   DEFAULT_GATEWAY_TIMEOUT_MS,
   DUPLEX_WORKER_MARKER,
+  SESSION_2FA_ENV,
 } from "../lib/gateway-protocol";
 import { getLivePanelInfo } from "../lib/panel-snapshot";
 
@@ -181,35 +183,37 @@ export async function runAuthAction(
       } catch {}
     }
     if (!sessionId || !SESSION_ID_RE.test(sessionId)) return invalidReply();
-
-    const sessionDir = options.sessionDir ?? SESSION_DIR;
-    const sessionPath = `${sessionDir}/sess_${sessionId}`;
-    const sessionBytes = await readPanelSessionFile(sessionPath, {
-      ownerUid: options.ownerUid,
-      warn: () => {},
-    });
-    const unmarkedMfa = options.securityKeys ?? existsSync(`${CONFIG_DIR}/security-keys.conf`);
-    const session = sessionBytes ? parsePanelSession(sessionBytes, { unmarkedMfa }) : null;
+    const session = await checkSession(sessionId, options);
     if (!session) return invalidReply();
-
-    const dbPath = options.panelDb ?? PANEL_DB;
-    let roles = session.roles;
-    if (existsSync(dbPath)) {
-      const dbRole = lookupUserRole(dbPath, session.user);
-      if (!dbRole) return invalidReply();
-      roles = [dbRole];
-    }
 
     const reply = JSON.stringify({
       valid: true,
       user: session.user,
-      roles,
+      roles: session.roles,
       expiresAt: session.expiresAt,
     }) + "\n";
     return Buffer.byteLength(reply, "utf8") <= MAX_AUTH_REPLY_BYTES ? reply : invalidReply();
   } catch {
     return invalidReply();
   }
+}
+
+/** One session, with the roles CloudPanel's database gives its user now, or null when it is not valid. */
+async function checkSession(sessionId: string, options: AuthActionOptions): Promise<ParsedPanelSession | null> {
+  const sessionDir = options.sessionDir ?? SESSION_DIR;
+  const sessionPath = `${sessionDir}/sess_${sessionId}`;
+  const sessionBytes = await readPanelSessionFile(sessionPath, {
+    ownerUid: options.ownerUid,
+    warn: () => {},
+  });
+  const unmarkedMfa = options.securityKeys ?? existsSync(`${CONFIG_DIR}/security-keys.conf`);
+  const session = sessionBytes ? parsePanelSession(sessionBytes, { unmarkedMfa }) : null;
+  if (!session) return null;
+
+  const dbPath = options.panelDb ?? PANEL_DB;
+  if (!existsSync(dbPath)) return session;
+  const dbRole = lookupUserRole(dbPath, session.user);
+  return dbRole ? { ...session, roles: [dbRole] } : null;
 }
 
 /** How often a duplex stream's panel session is checked again. */
@@ -228,28 +232,34 @@ const STALLED_INPUT_MS = 30_000;
 /** How long output may keep arriving after a duplex worker has exited. */
 const OUTPUT_AFTER_EXIT_MS = 1_000;
 
+interface SessionAccount {
+  user: string;
+  /** What a session verb's worker is told about this sign-in's two-factor step. */
+  env: Record<string, string>;
+}
+
 /** The panel user behind a session, when it is an active account's. */
-async function sessionUser(sessionId: string, options: AuthActionOptions, role?: string): Promise<string | null> {
+async function sessionUser(sessionId: string, options: AuthActionOptions, role?: string): Promise<SessionAccount | null> {
   try {
-    const reply = JSON.parse(await runAuthAction(sessionId + "\n", options)) as {
-      valid?: unknown; user?: unknown; roles?: unknown;
-    };
-    if (reply.valid !== true || typeof reply.user !== "string") return null;
-    if (role === undefined) return reply.user;
-    return Array.isArray(reply.roles) && reply.roles.includes(role) ? reply.user : null;
+    if (sessionId.length > 128 || !SESSION_ID_RE.test(sessionId)) return null;
+    const session = await checkSession(sessionId, options);
+    if (!session || (role !== undefined && !session.roles.includes(role))) return null;
+    return { user: session.user, env: { [SESSION_2FA_ENV]: session.twoFactor ? "1" : "0" } };
   } catch {
     return null;
   }
 }
 
 /** The panel user behind a session, when it is an active administrator's. */
-function adminSessionUser(sessionId: string, options: AuthActionOptions): Promise<string | null> {
+function adminSessionUser(sessionId: string, options: AuthActionOptions): Promise<SessionAccount | null> {
   return sessionUser(sessionId, options, "ROLE_ADMIN");
 }
 
 interface DuplexInput {
   /** The session the stream was opened with, checked again while it runs. */
   sessionId: string;
+  /** What the worker is told about that session. */
+  env: Record<string, string>;
   /** Bytes that arrived before the worker did. */
   pending: Buffer[];
   /** Route every later socket byte to the worker's stdin. */
@@ -293,8 +303,8 @@ async function runStreamAction(
 
   try {
     proc = (options.spawn ?? Bun.spawn)(argv, duplex
-      ? { stdin: "pipe", stdout: "pipe", stderr: "inherit", env: DUPLEX_WORKER_ENV }
-      : { stdin: "ignore", stdout: "pipe", stderr: "inherit", env: process.env });
+      ? { stdin: "pipe", stdout: "pipe", stderr: "inherit", env: { ...DUPLEX_WORKER_ENV, ...duplex.env } }
+      : { stdin: "ignore", stdout: "pipe", stderr: "inherit", env: { ...process.env, [SESSION_2FA_ENV]: "0" } });
     if (stopping || socket.destroyed) stop();
 
     if (duplex) {
@@ -515,17 +525,20 @@ export function createAuthActionServer(options: AuthActionOptions = {}): net.Ser
             return;
           }
           let args = request.args ?? [];
+          // The gateway's own environment never carries a session's answer.
+          let env: Record<string, string | undefined> = { ...process.env, [SESSION_2FA_ENV]: "0" };
           if (ownAccount) {
             if (args.some((arg) => arg.startsWith("--panel-user"))) {
               socket.end(JSON.stringify({ ok: false, error: "invalid arguments" }) + "\n");
               return;
             }
-            const user = await sessionUser(request.sessionId!, options);
-            if (!user) {
+            const account = await sessionUser(request.sessionId!, options);
+            if (!account) {
               socket.end(JSON.stringify({ ok: false, error: "the panel session is not valid" }) + "\n");
               return;
             }
-            args = [...args, `--panel-user=${user}`];
+            args = [...args, `--panel-user=${account.user}`];
+            env = { ...env, ...account.env };
           }
 
           const actionTimeout = request.timeoutMs ?? DEFAULT_GATEWAY_TIMEOUT_MS;
@@ -545,7 +558,7 @@ export function createAuthActionServer(options: AuthActionOptions = {}): net.Ser
                 stdin,
                 stdout: "pipe",
                 stderr: "pipe",
-                env: process.env,
+                env,
                 timeout: actionTimeout,
                 maxBuffer: 16 * 1024 * 1024,
               },
@@ -616,17 +629,18 @@ export function createAuthActionServer(options: AuthActionOptions = {}): net.Ser
             socket.end(JSON.stringify({ ok: false, error: "invalid arguments" }) + "\n");
             return;
           }
-          const user = await adminSessionUser(request.sessionId!, options);
-          if (!user) {
+          const account = await adminSessionUser(request.sessionId!, options);
+          if (!account) {
             socket.end(JSON.stringify({ ok: false, error: "the panel session is not an active administrator's" }) + "\n");
             return;
           }
           await runStreamAction(
             socket,
-            [CLI_BIN, "action", request.addon, request.verb, ...args, `--panel-user=${user}`],
+            [CLI_BIN, "action", request.addon, request.verb, ...args, `--panel-user=${account.user}`],
             options,
             {
               sessionId: request.sessionId!,
+              env: account.env,
               pending,
               attach: (write) => { forward = write; },
             },
