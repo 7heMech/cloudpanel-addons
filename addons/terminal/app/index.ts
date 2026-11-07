@@ -1,3 +1,4 @@
+import { errorMessage } from "../../../lib/errors";
 import {
   guardMutation, htmlResponse, jsonResponse, newCsrfToken, policyResponse, policyHeaders, safeDecodePathSegment, SECURITY_HEADERS, validateDomain, readBody, readMutation,
 } from "../../../lib/app-http";
@@ -55,7 +56,7 @@ async function rootAccessOf(user: string | undefined, sessionId: string | null, 
   try {
     reply = await callGatewayAction("terminal", "root-access", [], undefined, { sessionId }) as ActionResult<RootAccessView>;
   } catch (error) {
-    reply = { ok: false, error: error instanceof Error ? error.message : String(error) };
+    reply = { ok: false, error: errorMessage(error) };
   }
   // A failed check is not an answer: it is not cached, and it does not say root never allowed this account.
   if (!reply.ok || !reply.data) return { granted: false, problem: `Root terminal access could not be checked: ${reply.error ?? "no answer"}` };
@@ -84,7 +85,7 @@ export async function handle(
       const sites = [...info.sites].sort((a, b) => a.domain.localeCompare(b.domain));
       return htmlResponse(layout("Terminal", dashboardView(sites, root, auth?.user ?? ""), updateNotice), { csrf: newCsrfToken() });
     } catch (error) {
-      const message = error instanceof Error ? error.message : String(error);
+      const message = errorMessage(error);
       return htmlResponse(layout("Terminal", inventoryUnavailableView(message), updateNotice), { status: 500 });
     }
   }

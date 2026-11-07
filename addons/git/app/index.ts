@@ -3,6 +3,7 @@
 // The manager router strips the /addons/git prefix before dispatching here, so
 // a request for /addons/git/api/... arrives as /api/... .
 
+import { errorMessage } from "../../../lib/errors";
 import {
   errorBlock, guardMutation, htmlResponse, jsonResponse, newCsrfToken, redirectResponse, safeDecodePathSegment, readBody, readMutation,
 } from "../../../lib/app-http";
@@ -103,7 +104,7 @@ export async function handle(
       const page = await sitePage(domain);
       return html(layout(page.title, page.content, updateNotice, { ...page.context, ...tabs }, admin), csrf);
     } catch (error) {
-      const message = error instanceof Error ? error.message : String(error);
+      const message = errorMessage(error);
       return html(layout("Git Deploy", errorBlock(error), updateNotice, undefined, admin), csrf, /not found/i.test(message) ? 404 : 500);
     }
   }
@@ -118,7 +119,7 @@ export async function handle(
       const page = await sitePage(domain);
       return fragmentJson(fragment(page.title, page.content), csrf);
     } catch (error) {
-      const message = error instanceof Error ? error.message : String(error);
+      const message = errorMessage(error);
       return json({ ok: false, error: message }, /not found/i.test(message) ? 404 : 500);
     }
   }
@@ -131,7 +132,7 @@ export async function handle(
       const content = domain ? (await sitePage(domain)).content : fleetView(await gitService.listSites());
       return json({ ok: true, html: content });
     } catch (error) {
-      return json({ ok: false, error: error instanceof Error ? error.message : String(error) }, 500);
+      return json({ ok: false, error: errorMessage(error) }, 500);
     }
   }
 
@@ -141,7 +142,7 @@ export async function handle(
     try {
       return json({ ok: true, domains: await gitService.configuredDomains() });
     } catch (error) {
-      return json({ ok: false, error: error instanceof Error ? error.message : String(error) }, 500);
+      return json({ ok: false, error: errorMessage(error) }, 500);
     }
   }
 
@@ -202,7 +203,7 @@ export async function handle(
       const result = await gitService.deploy(domain);
       return json(result, result.ok ? 200 : 400);
     } catch (error) {
-      const message = error instanceof Error ? error.message : String(error);
+      const message = errorMessage(error);
       console.error("[git] deployment request failed:", message);
       return json({ ok: false, error: message }, 500);
     }

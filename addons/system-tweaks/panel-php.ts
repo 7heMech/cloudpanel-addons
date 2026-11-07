@@ -6,6 +6,7 @@
  * then proven by asking both pools for a page over their sockets, which Nginx's
  * optional basic auth cannot answer for; a failure puts the previous unit back.
  */
+import { errorMessage } from "../../lib/errors";
 import {
   LOCK_DIR, addonConfigFile, addonStateDir, PANEL_FPM_UNIT, PHP_FPM_BIN_DIR, RECONCILE_SERVICE, SYSTEMD_DIR,
 } from "../../lib/paths";
@@ -125,7 +126,7 @@ function contextOf(options: PanelPhpOptions): Context {
 }
 
 function reason(error: unknown): string {
-  return error instanceof Error ? error.message : String(error);
+  return errorMessage(error);
 }
 
 function newer(a: string, b: string): boolean {

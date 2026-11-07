@@ -13,6 +13,7 @@
 // ever pruned anything. Those are the kinds of differences nobody chooses on
 // purpose, so the decisions live here now and the addons keep only the meaning
 // of their own fields.
+import { errorMessage } from "./errors";
 import { randomBytes } from "node:crypto";
 import {
   closeSync, fstatSync, mkdirSync, openSync, readFileSync, readdirSync, readSync, rmSync,
@@ -482,7 +483,7 @@ export async function runSiteJob<T>(
     jobSet(dir, "finishedAt", jobTimestamp());
     jobSet(dir, "state", "done");
   } catch (error) {
-    jobSet(dir, "error", error instanceof Error ? error.message : String(error));
+    jobSet(dir, "error", errorMessage(error));
     jobSet(dir, "site", "");
     jobSet(dir, "step", "Failed");
     jobSet(dir, "finishedAt", jobTimestamp());

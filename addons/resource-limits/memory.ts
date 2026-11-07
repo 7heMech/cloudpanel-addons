@@ -6,6 +6,7 @@
  * server resized up or down picks them up at its next boot. See "Memory
  * limits" in docs/decisions/resource-limits.md.
  */
+import { errorMessage } from "../../lib/errors";
 import { addonStateDir, CLI_BIN, LOCK_DIR, SYSTEMD_DIR } from "../../lib/paths";
 import { existsSync, readdirSync, readFileSync, rmSync, statSync, utimesSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
@@ -631,7 +632,7 @@ export function memoryStatus(settings: MemorySettings, options: MemoryOptions = 
         redis.capped = live.maxmemory === plan.redisMb * 1048576 && live.policy === REDIS_POLICY;
       }
     } catch (error) {
-      redis.problem = error instanceof Error ? error.message : String(error);
+      redis.problem = errorMessage(error);
     }
   }
   return {

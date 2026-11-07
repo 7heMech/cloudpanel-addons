@@ -1,5 +1,6 @@
 // The upkeep `repair` and the reconcile timer run, per addon and for the manager's own job records.
 
+import { errorMessage } from "../lib/errors";
 import { type AddonHook, type AddonSpec } from "../lib/addon-definition";
 import { addonCertificates, addonFirewall, addonRepairs, addonNewSites } from "../addons/catalog";
 import { pruneManagerJobs } from "../manager/action";
@@ -22,7 +23,7 @@ export async function runAddonRepairs(
       const line = await task.run(options);
       if (line) log.ok(`${task.label}: ${line}`);
     } catch (error) {
-      log.warn(`${task.label} failed: ${error instanceof Error ? error.message : String(error)}`);
+      log.warn(`${task.label} failed: ${errorMessage(error)}`);
     }
   }
 }
@@ -47,7 +48,7 @@ export async function runNewSiteWork(installed: AddonSpec[], headStartMs = NEW_S
         const line = await task.run();
         if (line) log.ok(`${task.label}: ${line}`);
       } catch (error) {
-        log.warn(`${task.label} failed: ${error instanceof Error ? error.message : String(error)}`);
+        log.warn(`${task.label} failed: ${errorMessage(error)}`);
       }
     })();
     running.push(done);
@@ -70,7 +71,7 @@ export async function resumePendingNewSites(installed: AddonSpec[]): Promise<boo
       if (result.line) log.ok(`${task.label}: ${result.line}`);
       waiting ||= result.waiting;
     } catch (error) {
-      log.warn(`${task.label} failed: ${error instanceof Error ? error.message : String(error)}`);
+      log.warn(`${task.label} failed: ${errorMessage(error)}`);
       waiting = true;
     }
   }
@@ -98,7 +99,7 @@ async function runHooks(tasks: AddonHook[]): Promise<void> {
       const line = await task.run();
       if (line) log.ok(`${task.label}: ${line}`);
     } catch (error) {
-      log.warn(`${task.label} failed: ${error instanceof Error ? error.message : String(error)}`);
+      log.warn(`${task.label} failed: ${errorMessage(error)}`);
     }
   }
 }
@@ -113,6 +114,6 @@ export function runManagerRepair(): void {
     const { removed, stuck } = pruneManagerJobs();
     if (removed || stuck) log.ok(`manager job records: ${removed} expired, ${stuck} marked failed`);
   } catch (error) {
-    log.warn(`manager (prune) failed: ${error instanceof Error ? error.message : String(error)}`);
+    log.warn(`manager (prune) failed: ${errorMessage(error)}`);
   }
 }

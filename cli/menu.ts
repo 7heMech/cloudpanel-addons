@@ -2,6 +2,7 @@
 // state, and the few things an operator does to them, one key each. Toggles go
 // through the same enable and disable the Addons page runs.
 
+import { errorMessage } from "../lib/errors";
 import { dashboardUrl } from "./addons";
 import { ADDONS, ADDON_NAMES, addonEnabled } from "../addons/catalog";
 import { unitActive } from "../lib/systemd";
@@ -128,7 +129,7 @@ export async function cmdMenu(): Promise<void> {
     try {
       await task();
     } catch (error) {
-      log.err(error instanceof Error ? error.message : String(error));
+      log.err(errorMessage(error));
     }
     out.write("\n");
     state.enabled = readEnabled();

@@ -6,6 +6,7 @@
  * working and nothing leaves the server. The package ships the unit under
  * /lib, so the drop-in under /etc survives CloudPanel updates.
  */
+import { errorMessage } from "../../lib/errors";
 import { existsSync, readFileSync, rmSync } from "node:fs";
 import { runCommand, type CommandResult } from "../../lib/command";
 import { writeFileAtomic } from "../../lib/atomic-write";
@@ -100,7 +101,7 @@ export function telemetryStatus(options: TelemetryOptions = {}): TelemetryStatus
     const problem = enforcementProblem(ctx);
     return { agent, blocked: problem === "", problem };
   } catch (error) {
-    return { agent: false, blocked: false, problem: error instanceof Error ? error.message : String(error) };
+    return { agent: false, blocked: false, problem: errorMessage(error) };
   }
 }
 

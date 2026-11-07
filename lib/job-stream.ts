@@ -10,6 +10,7 @@
 // The addon supplies a reader and a watcher. Everything about the wire format
 // -- what counts as a change, when the stream closes, and the keepalive -- lives
 // here.
+import { errorMessage } from "./errors";
 import { jsonResponse, policyHeaders, safeDecodePathSegment } from "./app-http";
 import { streamGatewayAction, type ActionResult, type GatewayStream } from "./gateway-client";
 import type { GatewayAddon, StreamVerb } from "./gateway-protocol";
@@ -300,7 +301,7 @@ export async function jobEventStream<J extends JobProgress>(options: {
           });
           if (closed) watcher.close();
         } catch (error) {
-          const message = error instanceof Error ? error.message : String(error);
+          const message = errorMessage(error);
           if (send(`event: error\ndata: ${JSON.stringify({ error: message })}\n\n`)) finish();
         }
         return;

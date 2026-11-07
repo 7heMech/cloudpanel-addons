@@ -1,3 +1,4 @@
+import { errorMessage } from "../../../lib/errors";
 import { isIP } from "node:net";
 import {
   guardMutation, htmlResponse, jsonResponse, newCsrfToken, readBody,
@@ -16,9 +17,6 @@ function json(body: unknown, status = 200): Response {
   return jsonResponse(body, { status });
 }
 
-function errorMessage(error: unknown): string {
-  return error instanceof Error ? error.message : String(error);
-}
 
 function firewallReply(result: ActionResult<FirewallStatus>): Response {
   if (!result.ok || !result.data) return json({ ok: false, error: result.error ?? "the firewall protocols are unavailable" }, 400);

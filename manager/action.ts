@@ -19,6 +19,7 @@
 // that outlives the restart, and returns a job id. The browser follows that id
 // and reconnects once the manager is back.
 
+import { errorMessage } from "../lib/errors";
 import { addonStateDir, CLI_BIN, LOCK_DIR } from "../lib/paths";
 import { writeFileAtomic } from "../lib/atomic-write";
 import { existsSync, mkdirSync, readFileSync, rmSync } from "node:fs";
@@ -151,7 +152,7 @@ export function recordNewsSince(previous: string | null, file = NEWS_SINCE_FILE,
   try {
     writeFileAtomic(file, `${since}\n`, { mode: 0o644, createParent: true });
   } catch (error) {
-    log.warn(`could not record the release the Addons page badges start after: ${message(error)}`);
+    log.warn(`could not record the release the Addons page badges start after: ${errorMessage(error)}`);
   }
 }
 
@@ -166,7 +167,7 @@ export function keepNewsSince(file = NEWS_SINCE_FILE): () => void {
       if (kept === null) rmSync(file, { force: true });
       else writeFileAtomic(file, kept, { mode: 0o644, createParent: true });
     } catch (error) {
-      log.warn(`could not restore the release the Addons page badges start after: ${message(error)}`);
+      log.warn(`could not restore the release the Addons page badges start after: ${errorMessage(error)}`);
     }
   };
 }
@@ -200,10 +201,6 @@ export function markNewsSeen(addons: string[] = ADDON_NAMES, file = NEWS_SEEN_FI
   });
 }
 
-function message(error: unknown): string {
-  if (error instanceof Fatal || error instanceof Error) return error.message;
-  return String(error);
-}
 
 /**
  * The job that is still going, if there is one.
@@ -371,7 +368,7 @@ export async function createJob(
       return emitOk({ ok: true, data: { jobId: id, existing: false } });
     });
   } catch (error) {
-    return emitFail(message(error));
+    return emitFail(errorMessage(error));
   }
 }
 
@@ -417,7 +414,7 @@ export async function runManagerJob(id: string, ops: ManagerOps, jobsDir = MANAG
     }
   } catch (error) {
     jobSet(dir, "event", "");
-    jobSet(dir, "error", message(error));
+    jobSet(dir, "error", errorMessage(error));
     jobSet(dir, "finishedAt", jobTimestamp());
     jobSet(dir, "state", "failed");
     return 1;
@@ -509,6 +506,6 @@ export async function runManagerAction(
         return failReply(`unknown manager verb '${verb ?? ""}'`, undefined, options.emitReply !== false);
     }
   } catch (error) {
-    return failReply(message(error), undefined, options.emitReply !== false);
+    return failReply(errorMessage(error), undefined, options.emitReply !== false);
   }
 }

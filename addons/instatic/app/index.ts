@@ -2,6 +2,7 @@
 //
 // The manager router strips the /addons/ prefix before dispatching here.
 
+import { errorMessage } from "../../../lib/errors";
 import { instaticService, validateDomain, validateTag, validateJobId } from "./service";
 import { layout, dashboardView, newInstanceView, jobView } from "./views";
 import {
@@ -115,7 +116,7 @@ export async function handle(
     try {
       return json({ ok: true, html: await dashboard() });
     } catch (error) {
-      return json({ ok: false, error: error instanceof Error ? error.message : String(error) }, 500);
+      return json({ ok: false, error: errorMessage(error) }, 500);
     }
   }
 

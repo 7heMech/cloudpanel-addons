@@ -1,3 +1,4 @@
+import { errorMessage } from "../../../lib/errors";
 import { MEMORY_ERROR, memoryChange } from "../memory";
 import {
   guardMutation, htmlResponse, jsonResponse, newCsrfToken, readBody,
@@ -9,9 +10,6 @@ function json(body: unknown, status = 200): Response {
   return jsonResponse(body, { status });
 }
 
-function errorMessage(error: unknown): string {
-  return error instanceof Error ? error.message : String(error);
-}
 
 /** Every change answers with the whole state, so they all reply the same way. */
 async function change(result: Awaited<ReturnType<typeof resourceLimitsService.assign>>): Promise<Response> {

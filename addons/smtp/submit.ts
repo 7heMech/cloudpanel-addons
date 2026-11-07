@@ -1,3 +1,4 @@
+import { errorMessage } from "../../lib/errors";
 import { lstatSync, readFileSync } from "node:fs";
 import { CONFIG_DIR } from "../../lib/paths";
 import { senderFor, smtpAddress, trustedFile, type SmtpRewriteRule, type SmtpSubmissionRule } from "./config";
@@ -149,7 +150,7 @@ function sendmail(path: string, argv: string[], stdin: Uint8Array | "inherit"): 
   try {
     return Bun.spawnSync([path, ...argv], { stdin, stdout: "inherit", stderr: "inherit" }).exitCode ?? 1;
   } catch (error) {
-    process.stderr.write(`[smtp] cannot run ${path}: ${error instanceof Error ? error.message : String(error)}\n`);
+    process.stderr.write(`[smtp] cannot run ${path}: ${errorMessage(error)}\n`);
     return 1;
   }
 }
@@ -169,7 +170,7 @@ export async function runSmtpSubmit(
   try {
     input = options.input ?? await readBoundedSubmission(Bun.stdin.stream());
   } catch (error) {
-    process.stderr.write(`[smtp] ${error instanceof Error ? error.message : String(error)}\n`);
+    process.stderr.write(`[smtp] ${errorMessage(error)}\n`);
     return 1;
   }
   let prepared: { message: Uint8Array; sender: string };

@@ -1,5 +1,6 @@
 // `clp-addons update`, and the rollback a failed one runs.
 
+import { errorMessage } from "../lib/errors";
 import { rmSync } from "node:fs";
 import { enabledAddons, phpGuardOptedOut } from "../addons/catalog";
 import { migrateOldAddonNames, revertAddonRenames } from "./addons";
@@ -123,7 +124,7 @@ async function applyUpdate(argv: string[], options: UpdateOptions): Promise<void
       try {
         keepPreviousArtifacts();
       } catch (error) {
-        fatal(`could not keep the running binary aside, so the update was not started: ${error instanceof Error ? error.message : String(error)}`);
+        fatal(`could not keep the running binary aside, so the update was not started: ${errorMessage(error)}`);
       }
       // Everything from the replacement onwards is one boundary: the binary
       // and its manifest are written here, so a failure between them is as
@@ -138,7 +139,7 @@ async function applyUpdate(argv: string[], options: UpdateOptions): Promise<void
         const state = unitActive(MANAGER_UNIT);
         if (state !== "active") failure = `${MANAGER_UNIT} is ${state} after the update`;
       } catch (error) {
-        failure = error instanceof Error ? error.message : String(error);
+        failure = errorMessage(error);
       }
       if (failure) {
         restoreNewsSince();

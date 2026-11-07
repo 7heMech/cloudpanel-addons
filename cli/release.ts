@@ -1,3 +1,4 @@
+import { errorMessage } from "../lib/errors";
 import { existsSync, readFileSync } from "node:fs";
 import { bundleFromJSON } from "@sigstore/bundle";
 import type { TrustedRoot } from "@sigstore/protobuf-specs";
@@ -195,7 +196,7 @@ export async function verifyAttestation(
   try {
     verifier = new Verifier(toTrustMaterial(await trustedRoot()));
   } catch (error) {
-    fatal(`could not load Sigstore's trusted keys: ${error instanceof Error ? error.message : String(error)}`);
+    fatal(`could not load Sigstore's trusted keys: ${errorMessage(error)}`);
   }
 
   for (const artifact of artifacts) {
@@ -209,7 +210,7 @@ export async function verifyAttestation(
     try {
       verifier.verify(toSignedEntity(bundleFromJSON(bundle)), provenancePolicy(rel.tag));
     } catch (error) {
-      fatal(`provenance verification failed for ${artifact.name}: ${error instanceof Error ? error.message : String(error)}`);
+      fatal(`provenance verification failed for ${artifact.name}: ${errorMessage(error)}`);
     }
     log.ok(`${artifact.name} provenance verified`);
   }

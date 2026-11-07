@@ -5,6 +5,7 @@
  * deleting them is the whole undo. The vhost guard and the File Manager guard
  * are two of these.
  */
+import { errorMessage } from "../../lib/errors";
 import { lstatSync, readFileSync, rmSync } from "node:fs";
 import { dirname } from "node:path";
 import { failAction } from "../../lib/action";
@@ -171,7 +172,7 @@ export function poolGuard<P extends PoolGuardPaths>(spec: PoolGuardSpec<P>) {
       if (problem) return problem;
       return await spec.refusing(ctx) ? null : "the panel's PHP-FPM is not running the guard";
     } catch (error) {
-      return error instanceof Error ? error.message : String(error);
+      return errorMessage(error);
     }
   }
 
@@ -226,7 +227,7 @@ export function poolGuard<P extends PoolGuardPaths>(spec: PoolGuardSpec<P>) {
           if (beforePool === null) {
             try { spec.socket?.undo(ctx); } catch { /* the socket goes back to CloudPanel's at FPM's next restart */ }
           }
-          failAction(`${error instanceof Error ? error.message : String(error)}; ${reloaded ? undone : `${undone}, but ${ctx.paths.unit} did not reload`}`);
+          failAction(`${errorMessage(error)}; ${reloaded ? undone : `${undone}, but ${ctx.paths.unit} did not reload`}`);
         }
         return true;
       });

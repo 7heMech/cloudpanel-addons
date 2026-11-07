@@ -1,5 +1,6 @@
 // `clp-addons repair`.
 
+import { errorMessage } from "../lib/errors";
 import { enabledAddons, phpGuardOptedOut } from "../addons/catalog";
 import { resolveAddon, migrateOldAddonNames } from "./addons";
 import { reconcileAnchors, reconcileNginx, reconcilePanelBlocks, runAnchorWork } from "./reconcile";
@@ -58,7 +59,7 @@ async function applyRepair(positional: string[], flags: Record<string, string | 
     migrateOldAddonNames(quiet, 0);
   } catch (error) {
     // Upkeep of everything else does not wait on the move; the next repair tries it again.
-    log.warn(`renamed addons were not moved yet: ${error instanceof Error ? error.message : String(error)}`);
+    log.warn(`renamed addons were not moved yet: ${errorMessage(error)}`);
   }
   const specs = positional[0] ? [resolveAddon(positional[0])] : enabledAddons();
   const all = enabledAddons();
@@ -78,7 +79,7 @@ async function applyRepair(positional: string[], flags: Record<string, string | 
   try {
     ensureAuthHelperReady();
   } catch (error) {
-    log.warn(`panel auth helper check failed, continuing without it: ${error instanceof Error ? error.message : String(error)}`);
+    log.warn(`panel auth helper check failed, continuing without it: ${errorMessage(error)}`);
   }
   for (const spec of all) {
     writeConfig(spec, true);

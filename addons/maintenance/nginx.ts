@@ -203,7 +203,7 @@ function inspectMaintenance(options: MaintenanceNginxPaths): MaintenanceNginxSta
         };
       } finally { db.close(); }
     } catch (error) {
-      return { state: "uncovered-sites", settingsPath, detail: `Site maintenance checks could not be verified: ${error instanceof Error ? error.message : String(error)}` };
+      return { state: "uncovered-sites", settingsPath, detail: `Site maintenance checks could not be verified: ${errorMessage(error)}` };
     }
   }
   if (readIfPresent(includePath) !== `${NGINX_MAINTENANCE_BLOCK}\n`) {
@@ -321,6 +321,6 @@ function reconcileMaintenance(options: ReconcileOptions): MaintenanceNginxResult
       return { state: enabled ? "ok" : "missing", changed: result.changed, settingsPath: selectedPath };
     } finally { db?.close(); }
   } catch (error) {
-    return { state: "validation-failed", changed: false, settingsPath: selectedPath, detail: error instanceof Error ? error.message : String(error) };
+    return { state: "validation-failed", changed: false, settingsPath: selectedPath, detail: errorMessage(error) };
   }
 }

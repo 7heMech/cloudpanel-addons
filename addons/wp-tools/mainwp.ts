@@ -2,6 +2,7 @@
 // Dashboard on this server, or, for a Dashboard on another server, only install
 // the Child; and withdraw only what that added.
 
+import { errorMessage } from "../../lib/errors";
 import { existsSync, readFileSync } from "node:fs";
 import { createHash, randomBytes } from "node:crypto";
 import { writeFileAtomic } from "../../lib/atomic-write";
@@ -292,7 +293,7 @@ function prune(state: MainwpState, domains: Set<string>): void {
 }
 
 function message(error: unknown): string {
-  return error instanceof Error ? error.message : String(error);
+  return errorMessage(error);
 }
 
 async function bridge<T>(

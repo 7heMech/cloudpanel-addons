@@ -1,3 +1,4 @@
+import { errorMessage } from "../../../lib/errors";
 import {
   htmlResponse, jsonResponse, newCsrfToken, readMutation,
 } from "../../../lib/app-http";
@@ -12,9 +13,6 @@ function json(body: unknown, status = 200): Response {
   return jsonResponse(body, { status });
 }
 
-function errorMessage(error: unknown): string {
-  return error instanceof Error ? error.message : String(error);
-}
 
 function validMutationBody(body: unknown): body is { enabled: boolean } {
   return typeof body === "object" && body !== null && typeof (body as { enabled?: unknown }).enabled === "boolean";

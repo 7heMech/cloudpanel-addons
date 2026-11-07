@@ -11,6 +11,7 @@
 // chose, and the job deletes what it was given when it ends. Nothing a browser
 // sends becomes a path.
 
+import { errorMessage } from "../../lib/errors";
 import { randomBytes } from "node:crypto";
 import { appendFileSync, existsSync, mkdirSync, readFileSync, readdirSync, rmSync, statSync } from "node:fs";
 import { join } from "node:path";
@@ -268,7 +269,7 @@ export async function downloadDirectoryPlugin(slug: string, fetchImpl: Fetch = f
     info = JSON.parse(await readBoundedText(response, 1024 * 1024));
   } catch (error) {
     if (error instanceof Error && error.message === "not found") throw new Error("WordPress.org has no plugin with that slug");
-    throw new Error(`WordPress.org did not answer: ${error instanceof Error ? error.message : String(error)}`);
+    throw new Error(`WordPress.org did not answer: ${errorMessage(error)}`);
   }
   if (!info || typeof info !== "object" || info.error || info.slug !== slug) throw new Error("WordPress.org has no plugin with that slug");
   if (typeof info.download_link !== "string" || !DOWNLOAD_RE.test(info.download_link)) {
@@ -280,7 +281,7 @@ export async function downloadDirectoryPlugin(slug: string, fetchImpl: Fetch = f
     if (!response.ok) throw new Error(`HTTP ${response.status}`);
     zip = await readBoundedBytes(response, MAX_DOWNLOAD_BYTES);
   } catch (error) {
-    throw new Error(`the download from WordPress.org failed: ${error instanceof Error ? error.message : String(error)}`);
+    throw new Error(`the download from WordPress.org failed: ${errorMessage(error)}`);
   }
   const inspected = inspectPluginZip(zip, MAX_DOWNLOAD_BYTES);
   if (inspected.slug !== slug) throw new Error("the WordPress.org download is not the plugin that was chosen");
@@ -416,7 +417,7 @@ async function installOne(run: NewSiteRun, site: WpSite, plugin: NewSitePlugin, 
     if (plugin.activate && !after.plugins[plugin.slug]) throw new Error("the plugin was installed but WordPress did not activate it");
   } catch (error) {
     outcome.status = "failed";
-    outcome.error = cleanLabel(error instanceof Error ? error.message : String(error)).slice(0, 500);
+    outcome.error = cleanLabel(errorMessage(error)).slice(0, 500);
   }
   return outcome;
 }
@@ -477,7 +478,7 @@ export async function runNewSitePlugins(
           await runWp(run, site, ["core", "is-installed"], options, run.deadline);
           break;
         } catch (error) {
-          last = error instanceof Error ? error.message : String(error);
+          last = errorMessage(error);
         }
       }
       if (now() > appeared + waits.wordpressMs) {

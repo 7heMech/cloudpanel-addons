@@ -6,6 +6,7 @@
  * Each is recorded before CloudPanel creates it, so the new-site work of every
  * addon already knows it is not an ordinary site.
  */
+import { errorMessage } from "../../lib/errors";
 import { randomBytes } from "node:crypto";
 import { panelSiteUserFor } from "../../lib/site-user";
 import { runCommand } from "../../lib/command";
@@ -148,7 +149,7 @@ export function clpctlStandIns(
             clpctl(paths, ["site:delete", `--domainName=${redirect.source}`, "--force"],
               `CloudPanel did not clean up ${redirect.source}; its stand-in record was kept`);
           } catch (cleanupError) {
-            throw new Error(`${error instanceof Error ? error.message : String(error)}; ${cleanupError instanceof Error ? cleanupError.message : String(cleanupError)}`);
+            throw new Error(`${errorMessage(error)}; ${errorMessage(cleanupError)}`);
           }
         }
         const after = readStandIns(paths);

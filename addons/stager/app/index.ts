@@ -2,6 +2,7 @@
 //
 // The manager router strips the /addons/ prefix before dispatching here.
 
+import { errorMessage } from "../../../lib/errors";
 import { stagerService, validateDomain, validateJobId, expandTarget, promoteBlocked } from "./service";
 import type { JobResult, JobView } from "./service";
 import { layout, fragment, jobsView, newCloneView, jobView, promoteView, siteStagingView } from "./views";
@@ -132,7 +133,7 @@ export async function handle(
           csrf,
         );
       } catch (err) {
-        const message = err instanceof Error ? err.message : String(err);
+        const message = errorMessage(err);
         const status = /not found/i.test(message) ? 404 : 500;
         return html(layout("Staging", errorBlock(err), updateNotice), csrf, status);
       }
@@ -182,7 +183,7 @@ export async function handle(
         csrf,
       );
     } catch (err) {
-      const message = err instanceof Error ? err.message : String(err);
+      const message = errorMessage(err);
       return json({ ok: false, error: message }, /not found/i.test(message) ? 404 : 500);
     }
   }
@@ -295,7 +296,7 @@ export async function handle(
     try {
       return await postPromote(req);
     } catch (err) {
-      const msg = err instanceof Error ? err.message : String(err);
+      const msg = errorMessage(err);
       console.error("[stager] promote request failed:", msg);
       return json({ ok: false, error: msg }, 500);
     }
@@ -309,7 +310,7 @@ export async function handle(
     try {
       return await postClone(req);
     } catch (err) {
-      const msg = err instanceof Error ? err.message : String(err);
+      const msg = errorMessage(err);
       console.error("[stager] clone request failed:", msg);
       return json({ ok: false, error: msg }, 500);
     }

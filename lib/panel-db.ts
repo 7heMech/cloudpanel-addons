@@ -1,6 +1,7 @@
 // Reading CloudPanel's own SQLite database. Every caller asks its own question
 // of it; what is shared is how it is opened and that DNS's stand-ins, rows
 // CloudPanel lists but no operator made, are not taken for sites.
+import { errorMessage } from "./errors";
 import { Database } from "bun:sqlite";
 import { failAction } from "./action";
 import { readable } from "./files";
@@ -32,7 +33,7 @@ export function openPanelDatabase(path: string, readOnly = false, busyTimeoutMs 
     db.exec(`PRAGMA busy_timeout = ${busyTimeoutMs};`);
     return db;
   } catch (error) {
-    failAction(`CloudPanel database could not be opened: ${error instanceof Error ? error.message : String(error)}`);
+    failAction(`CloudPanel database could not be opened: ${errorMessage(error)}`);
   }
 }
 

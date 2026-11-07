@@ -3,6 +3,7 @@
  * `clp-addons terminal root allow`, each pinned to the account and the
  * two-factor setup it had then. See docs/decisions/terminal.md#root.
  */
+import { errorMessage } from "../../lib/errors";
 import { addonStateDir, CONFIG_DIR, LOCK_DIR, PANEL_DB } from "../../lib/paths";
 import { createHash } from "node:crypto";
 import {
@@ -175,7 +176,7 @@ export interface RootAccess {
  */
 export function rootAccess(panelUser: string, paths: RootAccessPaths, session: string): RootAccess {
   const failed = (what: string, error: unknown): RootAccess =>
-    ({ granted: true, problem: `${what} cannot be read: ${error instanceof Error ? error.message : String(error)}`, unreadable: true });
+    ({ granted: true, problem: `${what} cannot be read: ${errorMessage(error)}`, unreadable: true });
   let grant: RootGrant | undefined;
   try {
     grant = readRootGrants(paths.grants, paths.rootUid).find((candidate) => candidate.user === panelUser);
@@ -206,7 +207,7 @@ export function runTerminalRootCommand(argv: string[]): void {
       return readRootGrants();
     } catch (error) {
       if (!(error instanceof UntrustedGrants)) {
-        fatal(`cannot read ${ROOT_GRANTS_FILE}: ${error instanceof Error ? error.message : String(error)}; nobody can open a root shell until it can be`);
+        fatal(`cannot read ${ROOT_GRANTS_FILE}: ${errorMessage(error)}; nobody can open a root shell until it can be`);
       }
       fatal(`${error.message}, so nobody can open a root shell. Note who it allowed, remove it with rm ${ROOT_GRANTS_FILE}, then allow them again`);
     }

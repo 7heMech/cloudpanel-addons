@@ -4,6 +4,7 @@
 // guards protect mutating addon routes after the request has passed SSO: a
 // same-origin check and a CSRF token stop cross-origin browser requests.
 
+import { errorMessage } from "./errors";
 import { randomBytes } from "node:crypto";
 import { isIP } from "node:net";
 import { secretEquals } from "./secret-equals";
@@ -354,10 +355,6 @@ export const SECURITY_HEADERS: Record<string, string> = {
   "Referrer-Policy": "no-referrer",
   "X-Frame-Options": "DENY",
 };
-
-export function errorMessage(error: unknown): string {
-  return error instanceof Error ? error.message : String(error);
-}
 
 /** What a page draws in place of its content when loading it failed. */
 export function errorBlock(error: unknown): string {

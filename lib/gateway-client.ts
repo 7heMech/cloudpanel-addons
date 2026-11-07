@@ -1,3 +1,4 @@
+import { errorMessage } from "./errors";
 import { AUTH_SOCKET_PATH, CLI_BIN } from "./paths";
 // Client helper for communicating with the root gateway daemon over UNIX socket.
 // Handles both gateway socket IPC and hermetic test runner execution.
@@ -459,7 +460,7 @@ export function streamGatewayAction<A extends GatewayAddon>(options: {
         await child.exited.then(() => { childExited = true; }, () => undefined);
         if (!finished) finish();
       } catch (error) {
-        finish(error instanceof Error ? error.message : String(error));
+        finish(errorMessage(error));
       }
     })();
     return stream;
@@ -518,7 +519,7 @@ export async function callGatewayPanelInfo(
       const info = getLivePanelInfo();
       return { ok: true, data: info };
     } catch (error) {
-      return { ok: false, error: error instanceof Error ? error.message : String(error) };
+      return { ok: false, error: errorMessage(error) };
     }
   }
 

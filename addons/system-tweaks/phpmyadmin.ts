@@ -7,6 +7,7 @@
  * give its version away. The panel signs in through /phpmyadmin/login.php,
  * which stays served.
  */
+import { errorMessage } from "../../lib/errors";
 import { readFileSync } from "node:fs";
 import { failAction } from "../../lib/action";
 import { runCommand, type CommandResult } from "../../lib/command";
@@ -114,7 +115,7 @@ export function phpMyAdminStatus(options: PhpMyAdminOptions = {}): PhpMyAdminSta
     if (wanted === null) return { active: false, problem: NO_ANCHOR };
     return { active: wanted === content, problem: "" };
   } catch (error) {
-    return { active: false, problem: error instanceof Error ? error.message : String(error) };
+    return { active: false, problem: errorMessage(error) };
   }
 }
 

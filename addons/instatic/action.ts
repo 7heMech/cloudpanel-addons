@@ -1,3 +1,4 @@
+import { errorMessage } from "../../lib/errors";
 import { CLI_BIN, LOCK_DIR, PANEL_DB, addonStateDir, PANEL_IDENTITY_PATH } from "../../lib/paths";
 import { hasSite, withPanelDb } from "../../lib/panel-db";
 import { Database } from "bun:sqlite";
@@ -1143,7 +1144,7 @@ async function replaceInstance(
     } catch (rollbackError) {
       failAction(`replacement failed; recovery failed: ${String(rollbackError)}; snapshot: ${snapshot}`, { logs });
     }
-    failAction(`${error instanceof Error ? error.message : String(error)}; previous instance preserved`, { failedTag: tag, restoredTag: previousTag, logs });
+    failAction(`${errorMessage(error)}; previous instance preserved`, { failedTag: tag, restoredTag: previousTag, logs });
   }
 
   const removed = !renamed || runDiagnostic("docker", ["rm", `${name}-prev`]);
@@ -1224,7 +1225,7 @@ async function runUpdateJob(jDir: string, paths: InstaticActionPaths): Promise<v
   } catch (error) {
     const data = error instanceof ActionFailure ? error.data as { logs?: string } | undefined : undefined;
     if (data?.logs) diagnostic(`[instatic] the new container's output:\n${data.logs}\n`);
-    const msg = error instanceof Error ? error.message : String(error);
+    const msg = errorMessage(error);
     jobSet(jDir, "finishedAt", dateStamp(true));
     jobSet(jDir, "error", msg);
     diagnostic(`[instatic] ERROR: ${msg}\n`);
@@ -1366,7 +1367,7 @@ function initialNativeBackup(domain: string, paths: InstaticActionPaths): void {
   try {
     makeNativeBackup(domain, paths);
   } catch (error) {
-    diagnostic(`[instatic] WARN: ${error instanceof Error ? error.message : String(error)}\n`);
+    diagnostic(`[instatic] WARN: ${errorMessage(error)}\n`);
   }
 }
 
@@ -1382,7 +1383,7 @@ async function cmdBackup(action: ParsedInstaticAction, paths: InstaticActionPath
         backups.push({ domain, snapshot: makeNativeBackup(domain, paths) });
       });
     } catch (error) {
-      const message = error instanceof Error ? error.message : String(error);
+      const message = errorMessage(error);
       failures.push({ domain: entry, error: message });
       diagnostic(`[instatic] backup failed for ${entry}: ${message}\n`);
     }
@@ -1676,7 +1677,7 @@ async function cmdRun(action: ParsedInstaticAction, paths: InstaticActionPaths):
   } catch (error) {
     if (cleanupActive) cleanupCreate(name, dir, domain, siteCreated, paths, storage);
     jobSet(jDir, "finishedAt", dateStamp(true));
-    const msg = error instanceof Error ? error.message : String(error);
+    const msg = errorMessage(error);
     jobSet(jDir, "error", msg);
     diagnostic(`[instatic] ERROR: ${msg}\n`);
     jobSet(jDir, "state", "failed");

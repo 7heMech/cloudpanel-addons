@@ -5,6 +5,7 @@
  * CloudPanel's own and a restart, undone if the server does not come back.
  * See "Database exposure" in docs/decisions/system-tweaks.md.
  */
+import { errorMessage } from "../../lib/errors";
 import { addonStateDir, ROOT_UID } from "../../lib/paths";
 import { existsSync, lstatSync, readFileSync, readlinkSync, rmSync } from "node:fs";
 import { connect } from "node:net";
@@ -582,9 +583,9 @@ export async function setDatabaseLoopback(on: boolean, options: DatabaseOptions 
       restored = after ? `the previous settings were put back, but ${after}` : "the previous settings are back";
     } catch (restoreError) {
       if (restoreError === error) throw error;
-      restored = `putting the previous settings back failed: ${restoreError instanceof Error ? restoreError.message : String(restoreError)}`;
+      restored = `putting the previous settings back failed: ${errorMessage(restoreError)}`;
     }
-    failAction(`${error instanceof Error ? error.message : String(error)}; ${restored}`);
+    failAction(`${errorMessage(error)}; ${restored}`);
   }
 }
 

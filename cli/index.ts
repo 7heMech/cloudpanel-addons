@@ -1,6 +1,7 @@
 // The entrypoint: argv in, exit code out. Each verb lives in its own module
 // and this one only decides which. `auth` and `manager` are dispatched before
 // the catalog is consulted, because neither is an addon.
+import { errorMessage } from "../lib/errors";
 import { dashboardUrl, resolveAddon } from "./addons";
 import { enabledAddons, ADDONS, ADDON_NAMES, addonEnabled } from "../addons/catalog";
 import { reconcileAnchors } from "./reconcile";
@@ -101,7 +102,7 @@ function cmdLock(argv: string[], lock: boolean): void {
       return lockedAddons();
     } catch (error) {
       if (!(error instanceof UntrustedLockFile)) {
-        fatal(`cannot read ${ROOT_LOCKS_FILE}: ${error instanceof Error ? error.message : String(error)}; every lockable addon counts as locked until it can be`);
+        fatal(`cannot read ${ROOT_LOCKS_FILE}: ${errorMessage(error)}; every lockable addon counts as locked until it can be`);
       }
       fatal(`${error.message}, so every lockable addon counts as locked. ` + (error.directory
         ? "Make it owned by root and not writable by group or others, then run this again"

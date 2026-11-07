@@ -4,6 +4,7 @@
  * journal. fail2ban bans in its own nftables table, which `ufw reset` does not
  * touch. See "Login jails" in docs/decisions/system-tweaks.md.
  */
+import { errorMessage } from "../../lib/errors";
 import { existsSync, readFileSync, rmSync } from "node:fs";
 import { isIP } from "node:net";
 import { failAction } from "../../lib/action";
@@ -525,7 +526,7 @@ export function loginJailsStatus(options: LoginJailOptions = {}): LoginJailsStat
   const problems: string[] = [];
   let panelLog: boolean | null = null;
   try { panelLog = panelLogActive(ctx); }
-  catch (error) { problems.push(error instanceof Error ? error.message : String(error)); }
+  catch (error) { problems.push(errorMessage(error)); }
   let customDomain: LoginJailsStatus["customDomain"] = null;
   try {
     const vhost = readDomainVhost(ctx);
@@ -534,7 +535,7 @@ export function loginJailsStatus(options: LoginJailOptions = {}): LoginJailsStat
       const wanted = withDomainLog(vhost);
       customDomain = { name: name ?? ctx.paths.domainVhost, logged: wanted === vhost, supported: wanted !== null };
     }
-  } catch (error) { problems.push(error instanceof Error ? error.message : String(error)); }
+  } catch (error) { problems.push(errorMessage(error)); }
   const sshd = sshLogin(sshdConfig(ctx));
   const missing = missingPackages(options);
   if (missing.includes("fail2ban")) {

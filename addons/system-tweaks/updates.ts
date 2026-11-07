@@ -8,6 +8,7 @@
  * is the whole undo. What the page reports is read back from `apt-config dump`
  * and `apt-cache policy`, never from what this file meant to say.
  */
+import { errorMessage } from "../../lib/errors";
 import { existsSync, lstatSync, readFileSync, readdirSync, rmSync, statSync } from "node:fs";
 import { basename, join } from "node:path";
 import { failAction } from "../../lib/action";
@@ -153,7 +154,7 @@ export function systemRun(command: string, args: string[], env?: Record<string, 
     });
     return { ok: result.success, stdout: result.stdout.toString(), stderr: result.stderr.toString(), exitCode: result.exitCode };
   } catch (error) {
-    return { ok: false, stdout: "", stderr: error instanceof Error ? error.message : String(error), exitCode: null };
+    return { ok: false, stdout: "", stderr: errorMessage(error), exitCode: null };
   }
 }
 

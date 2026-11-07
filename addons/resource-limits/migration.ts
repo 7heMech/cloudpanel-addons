@@ -1,4 +1,5 @@
 /** Transfer the unreleased System Tweaks memory policy without rewriting its hardening settings. */
+import { errorMessage } from "../../lib/errors";
 import { addonConfigFile, addonStateDir, SYSTEMD_DIR } from "../../lib/paths";
 import { existsSync, lstatSync, readFileSync, rmSync, rmdirSync } from "node:fs";
 import { writeFileAtomic } from "../../lib/atomic-write";
@@ -37,7 +38,7 @@ export function migrateResourceMemory(enable: () => void): (() => void) | null {
     source = snapshot(`${addonStateDir("system-tweaks")}/settings.json`);
     runtime = snapshot(`${addonStateDir("system-tweaks")}/memory.json`);
   } catch (error) {
-    return skipped(error instanceof Error ? error.message : String(error));
+    return skipped(errorMessage(error));
   }
   // System Tweaks itself ignores a settings file it cannot parse.
   try { stored = source ? JSON.parse(source.text) as Record<string, unknown> : null; } catch { stored = null; }
@@ -107,6 +108,6 @@ export function migrateResourceMemory(enable: () => void): (() => void) | null {
     return undo;
   } catch (error) {
     undo();
-    return skipped(error instanceof Error ? error.message : String(error));
+    return skipped(errorMessage(error));
   }
 }

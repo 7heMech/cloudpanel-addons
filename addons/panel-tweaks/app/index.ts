@@ -1,3 +1,4 @@
+import { errorMessage } from "../../../lib/errors";
 import {
   SECURITY_HEADERS, guardMutation, htmlResponse, jsonResponse, newCsrfToken, readBody,
 } from "../../../lib/app-http";
@@ -28,9 +29,6 @@ function pageCsp(): string {
   return (SECURITY_HEADERS["Content-Security-Policy"] ?? "").replace("default-src 'none'", "default-src 'none'; frame-src 'self'");
 }
 
-function errorMessage(error: unknown): string {
-  return error instanceof Error ? error.message : String(error);
-}
 
 /**
  * Put the blocks CloudPanel's own templates carry back, or take them away.

@@ -1,3 +1,4 @@
+import { errorMessage } from "../../../lib/errors";
 import {
   SECURITY_HEADERS, bodyErrorResponse, clientIp, guardMutation, htmlResponse, jsonResponse, newCsrfToken,
   policyResponse, readJsonObject, redirectResponse, safeDecodePathSegment, readBody, readMutation,
@@ -90,7 +91,7 @@ export async function handle(
         csrf,
       );
     } catch (error) {
-      const message = error instanceof Error ? error.message : String(error);
+      const message = errorMessage(error);
       const status = /not found/i.test(message) ? 404 : 500;
       return html(layout("Maintenance Mode", `<div class="alert">${Bun.escapeHTML(message)}</div>`, updateNotice), csrf, status);
     }
@@ -111,7 +112,7 @@ export async function handle(
         csrf,
       );
     } catch (error) {
-      const message = error instanceof Error ? error.message : String(error);
+      const message = errorMessage(error);
       return json({ ok: false, error: message }, /not found/i.test(message) ? 404 : 500);
     }
   }

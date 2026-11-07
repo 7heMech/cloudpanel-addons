@@ -1,3 +1,4 @@
+import { errorMessage } from "../../lib/errors";
 import { handle } from "./app/index";
 import {
   pruneWpJobs, reconcileWpNewSites, runWpToolsAction, wpPoliciesActive,
@@ -60,7 +61,7 @@ export const WP_TOOLS_ADDON: AddonDefinition = {
       try {
         await reconcileWpNewSites(actionOptions, "seed");
       } catch (error) {
-        log.warn(`WordPress Tools new sites: ${error instanceof Error ? error.message : String(error)}`);
+        log.warn(`WordPress Tools new sites: ${errorMessage(error)}`);
       }
       if (!wpPoliciesActive(actionOptions)) return null;
       return queueAddonPass({ addon: "wp-tools", verb: "sync", description: "WordPress plugin policies", runtime: 180 })

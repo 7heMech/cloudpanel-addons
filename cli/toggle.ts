@@ -2,6 +2,7 @@
 // install or a first enable needs. A toggle is not an install: it applies a
 // delta and keeps the addon's state.
 
+import { errorMessage } from "../lib/errors";
 import { enabledAddons, addonEnabled, phpGuardOptedOut } from "../addons/catalog";
 import { resolveAddon } from "./addons";
 import { reconcileAnchors, reconcileNginx, reconcilePanelBlocks } from "./reconcile";
@@ -117,11 +118,11 @@ function disableAddon(spec: AddonSpec): void {
   } catch (error) {
     // With the config gone a second disable would say it is done, and repair
     // skips a disabled addon, so the half-withdrawn addon is enabled again.
-    const reason = error instanceof Error ? error.message : String(error);
+    const reason = errorMessage(error);
     try {
       writeConfig(spec, true);
     } catch (restore) {
-      fatal(`${spec.name} could not be disabled (${reason}), nor enabled again (${restore instanceof Error ? restore.message : String(restore)}). Run clp-addons enable ${spec.name}, then disable it again`);
+      fatal(`${spec.name} could not be disabled (${reason}), nor enabled again (${errorMessage(restore)}). Run clp-addons enable ${spec.name}, then disable it again`);
     }
     fatal(`${spec.name} could not be disabled and is still enabled: ${reason}. Run clp-addons disable ${spec.name} again`);
   }

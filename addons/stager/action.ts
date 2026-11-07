@@ -1,3 +1,4 @@
+import { errorMessage } from "../../lib/errors";
 import { LOCK_DIR, PANEL_DB, addonConfigFile, addonStateDir, CLI_BIN, PANEL_IDENTITY_PATH, DISTRO_NGINX_SITES_DIR } from "../../lib/paths";
 import { hasSite, withPanelDb, withoutStandIns } from "../../lib/panel-db";
 import { STAGER_VERBS } from "./verbs";
@@ -525,7 +526,7 @@ export async function holdCloneMail(
     logLine(`SMTP Relay: ${domain} is in the Don't send profile`);
     notes.push(`SMTP Relay discards ${domain}'s mail (Don't send profile); move it to another profile there to let it send`);
   } catch (error) {
-    const reason = error instanceof Error ? error.message : String(error);
+    const reason = errorMessage(error);
     warnLine(`SMTP Relay could not hold ${domain}'s mail: ${reason}`);
     notes.push(`${domain} could not be put in SMTP Relay's Don't send profile, so it may send mail to real customers: ${reason}. Assign it there in SMTP Relay`);
   }
@@ -2221,7 +2222,7 @@ async function cmdRun(id: string, paths: StagerActionPaths): Promise<void> {
           if (original === null) failAction("could not read the clone's wp-config.php");
           rewritten = rewriteWpConfig(original, ctx.target, { name: ctx.stgDbName, user: ctx.stgDbUser, pass: ctx.stgDbPass });
         } catch (error) {
-          failJob(ctx, `${error instanceof Error ? error.message : String(error)}, so the clone was removed before it could reach ${ctx.source}'s database`);
+          failJob(ctx, `${errorMessage(error)}, so the clone was removed before it could reach ${ctx.source}'s database`);
         }
         if (!writeAsSiteUser(ctx.stgUser, wpConfig, rewritten)) failJob(ctx, "could not write the clone's wp-config.php, so the clone was removed");
         if (Bun.which("wp")) {

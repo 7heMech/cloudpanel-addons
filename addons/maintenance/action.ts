@@ -1,3 +1,4 @@
+import { errorMessage } from "../../lib/errors";
 import {
   LOCK_DIR, PANEL_DB, addonStateDir, MAINTENANCE_INCLUDE_PATH, DISTRO_NGINX_SITES_DIR, NGINX_GLOBAL_SETTINGS,
   PANEL_IDENTITY_PATH,
@@ -337,7 +338,7 @@ function allStatuses(paths: MaintenanceActionPaths): { global: GlobalMaintenance
     } catch (error) {
       return {
         domain: row.domain_name, enabled: false, customTemplate: false, bypasses: [], uncovered, type, user,
-        error: error instanceof Error ? error.message : String(error),
+        error: errorMessage(error),
       };
     }
   });
@@ -490,7 +491,7 @@ async function toggleMany(
       else rmSync(flag, { force: true });
       updated.push(domain);
     } catch (error) {
-      failed.push({ domain: shown, error: error instanceof Error ? error.message : String(error) });
+      failed.push({ domain: shown, error: errorMessage(error) });
     }
   }
   await purgeVarnishMany(updated, options);

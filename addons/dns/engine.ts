@@ -6,6 +6,7 @@
  * Planning is synchronous over what was read, so the same pass can plan,
  * write, and plan again for its report without reading everything twice.
  */
+import { errorMessage } from "../../lib/errors";
 import { getDomain } from "tldts";
 import type { Addresses } from "./addresses";
 import { CloudflareApi, type CfAccount, type CfRecord, type CfRuleset, type CfZone } from "./cloudflare";
@@ -159,7 +160,7 @@ const NOT_REDIRECTING = "A static site that does not redirect yet";
 const MAILCOW_PLACEHOLDER = /\{mailcow\./;
 
 function reason(error: unknown): string {
-  return error instanceof Error ? error.message : String(error);
+  return errorMessage(error);
 }
 
 export class DnsRun {

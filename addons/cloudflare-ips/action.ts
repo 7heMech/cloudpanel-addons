@@ -118,7 +118,7 @@ function readPolicy(path: string, expectedUid: number): Policy {
     }
     raw = JSON.parse(readFileSync(path, "utf8"));
   } catch (error) {
-    failAction(`Cloudflare IP policy could not be read: ${error instanceof Error ? error.message : String(error)}`);
+    failAction(`Cloudflare IP policy could not be read: ${errorMessage(error)}`);
   }
   if (typeof raw !== "object" || raw === null) failAction("Cloudflare IP policy is malformed");
   const policy = raw as Partial<Policy>;
@@ -150,7 +150,7 @@ function siteRows(db: Database): SiteRow[] {
       "SELECT id, domain_name, user, allow_traffic_from_cloudflare_only FROM site ORDER BY domain_name;",
     ).all().map((row) => ({ ...row, id: Number(row.id), domain_name: String(row.domain_name), user: String(row.user) })));
   } catch (error) {
-    failAction(`CloudPanel does not expose the required Cloudflare site setting: ${error instanceof Error ? error.message : String(error)}`);
+    failAction(`CloudPanel does not expose the required Cloudflare site setting: ${errorMessage(error)}`);
   }
 }
 

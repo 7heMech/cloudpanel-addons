@@ -1,3 +1,4 @@
+import { errorMessage } from "../../../lib/errors";
 import { signInWindow } from "./sign-in-window";
 import {
   BodyError, bodyErrorResponse, clientIp, guardMutation, htmlResponse, jsonResponse, readBoundedBytes, readJsonObject, newCsrfToken, safeDecodePathSegment, readBody,
@@ -13,9 +14,6 @@ function json(body: unknown, status = 200): Response {
   return jsonResponse(body, { status });
 }
 
-function errorMessage(error: unknown): string {
-  return error instanceof Error ? error.message : String(error);
-}
 
 /**
  * Who may choose plugins on the new-site form: an administrator, or a site

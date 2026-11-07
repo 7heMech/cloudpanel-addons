@@ -4,6 +4,7 @@
 // production caller; optional directory/owner/db/listen arguments exist solely
 // for hermetic unit tests and are never exposed through action argv.
 
+import { errorMessage } from "../lib/errors";
 import {
   addonConfigFile, addonStateDir, CLI_BIN, PANEL_DB, SERVICE_GROUP, SERVICE_USER, SESSION_DIR,
 } from "../lib/paths";
@@ -424,7 +425,7 @@ async function runStreamAction(
     if (!socket.destroyed) {
       socket.end(JSON.stringify({
         ok: false,
-        error: error instanceof Error ? error.message : String(error),
+        error: errorMessage(error),
       }) + "\n");
     }
   }
@@ -617,7 +618,7 @@ export function createAuthActionServer(options: AuthActionOptions = {}): net.Ser
             socket.end(
               JSON.stringify({
                 ok: false,
-                error: err instanceof Error ? err.message : String(err),
+                error: errorMessage(err),
               }) + "\n",
             );
           }

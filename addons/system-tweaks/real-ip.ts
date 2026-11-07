@@ -6,6 +6,7 @@
  * a panel behind Cloudflare keeps its visitors. The sites' X-Real-IP is passed
  * through Cloudflare unchanged, so trusting Cloudflare there would reopen it.
  */
+import { errorMessage } from "../../lib/errors";
 import { existsSync, readFileSync } from "node:fs";
 import { isIP } from "node:net";
 import { runCommand, type CommandResult } from "../../lib/command";
@@ -104,7 +105,7 @@ export function realIpStatus(options: RealIpOptions = {}): RealIpStatus {
       const { content } = trustedVhost(instance.conf, instance.uid, instance.groupWritable);
       if (new RegExp(ANY.source, "m").test(content)) trustsAnyAddress = true;
     } catch (error) {
-      problems.push(error instanceof Error ? error.message : String(error));
+      problems.push(errorMessage(error));
     }
   }
   return { trustsAnyAddress, problem: problems.join("; ") };

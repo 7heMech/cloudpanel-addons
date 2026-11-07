@@ -1,3 +1,4 @@
+import { errorMessage } from "../../lib/errors";
 import { existsSync, readFileSync } from "node:fs";
 import { runWp as wp, type WpCommand, type WpProgress } from "./wp-cli";
 export { commandOutput, type WpCommand } from "./wp-cli";
@@ -178,7 +179,7 @@ export async function syncVarnish(run: VarnishRun, options: VarnishOptions = {})
       }
     } catch (error) {
       record.status = "error";
-      record.error = error instanceof Error ? error.message : String(error);
+      record.error = errorMessage(error);
       result.failed.push(`${site.domain}: ${record.error}`);
     }
     state.sites[site.domain] = record;

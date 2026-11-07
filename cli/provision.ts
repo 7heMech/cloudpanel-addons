@@ -1,3 +1,4 @@
+import { errorMessage } from "../lib/errors";
 import { unitActive } from "../lib/systemd";
 import { writeFileAtomic } from "../lib/atomic-write";
 import {
@@ -431,7 +432,7 @@ export function warnIfPanelSessionUnreadable(
   try {
     ensurePanelSessionReadable(commands, sessionDir, expectedUid, expectedGid);
   } catch (error) {
-    const message = error instanceof Error ? error.message : String(error);
+    const message = errorMessage(error);
     log.warn(`panel session check failed, continuing without it: ${message}`);
   }
 }

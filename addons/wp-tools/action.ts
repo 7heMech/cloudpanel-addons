@@ -785,7 +785,7 @@ export function removeWpLogin(paths: WpToolsActionPaths = DEFAULT_WP_TOOLS_PATHS
       runAsSite(paths, site.account, ["rm", "-rf", "--", loader, join(site.root, SECRET_DIR)]);
       removed++;
     } catch (error) {
-      failed.push(`${site.row.domain_name}: ${error instanceof Error ? error.message : String(error)}`);
+      failed.push(`${site.row.domain_name}: ${errorMessage(error)}`);
     }
   }
   return { removed, failed };
