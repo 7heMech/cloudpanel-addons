@@ -1,14 +1,10 @@
 import { execFileSync, type ExecFileSyncOptions } from "node:child_process";
 import { writeFileAtomic } from "../lib/atomic-write";
 
-const RESET = "\x1b[0m";
-const DIM = "\x1b[2m";
-const RED = "\x1b[31m";
-const YELLOW = "\x1b[33m";
-const GREEN = "\x1b[32m";
-
-const color = process.stdout.isTTY === true;
-const paint = (c: string, s: string) => (color ? `${c}${s}${RESET}` : s);
+/** Colored only when that stream is a terminal that wants color. */
+export function paint(code: string, text: string, stream: NodeJS.WriteStream = process.stdout): string {
+  return stream.isTTY && stream.hasColors(16) ? `\x1b[${code}m${text}\x1b[0m` : text;
+}
 
 // A progress line a terminal redraws in place, until the next line ends it.
 let redrawing = false;
@@ -18,18 +14,18 @@ const endRedraw = () => {
 };
 
 export const log = {
-  step: (m: string) => { endRedraw(); console.log(`${paint(DIM, "›")} ${m}`); },
-  ok: (m: string) => { endRedraw(); console.log(`${paint(GREEN, "✓")} ${m}`); },
-  warn: (m: string) => { endRedraw(); console.warn(`${paint(YELLOW, "!")} ${m}`); },
-  err: (m: string) => { endRedraw(); console.error(`${paint(RED, "✗")} ${m}`); },
+  step: (m: string) => { endRedraw(); console.log(`${paint("2", "›")} ${m}`); },
+  ok: (m: string) => { endRedraw(); console.log(`${paint("32", "✓")} ${m}`); },
+  warn: (m: string) => { endRedraw(); console.warn(`${paint("33", "!", process.stderr)} ${m}`); },
+  err: (m: string) => { endRedraw(); console.error(`${paint("31", "✗", process.stderr)} ${m}`); },
   plain: (m = "") => { endRedraw(); console.log(m); },
   /** Redrawn in a terminal; elsewhere only the last one is written. */
   progress: (m: string, done: boolean) => {
-    if (!color) {
+    if (!process.stdout.isTTY) {
       if (done) log.step(m);
       return;
     }
-    process.stdout.write(`\r\x1b[K${paint(DIM, "›")} ${m}`);
+    process.stdout.write(`\r\x1b[K${paint("2", "›")} ${m}`);
     redrawing = !done;
     if (done) process.stdout.write("\n");
   },
