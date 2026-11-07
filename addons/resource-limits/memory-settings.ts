@@ -83,11 +83,15 @@ export function withdrawResourceMemory(options: ResourceMemoryOptions = {}): voi
   });
 }
 
+/**
+ * What MySQL's and Redis's start hooks run. It reads the setting without the
+ * lock, which a change holds for up to two minutes: the settings file is
+ * replaced in one rename, and the change saves before it applies.
+ */
 export function resourceLimitsMemory(kind: "mysql" | "redis", options: ResourceMemoryOptions = {}): boolean {
   const paths = { ...DEFAULT_MEMORY_SETTINGS_PATHS, ...options.memorySettings };
   if (!existsSync(paths.enabledConfig)) return false;
-  const changed = withFileLockSync(paths.lockFile, 15, "another resource limits change is still running", () =>
-    existsSync(paths.enabledConfig) && syncMemory(kind, readMemorySettings(options), options.memory));
+  const changed = syncMemory(kind, readMemorySettings(options), options.memory);
   // A disable may have removed its files while the hook was running.
   if (!existsSync(paths.enabledConfig)) withdrawResourceMemory(options);
   return changed;

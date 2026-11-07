@@ -144,6 +144,7 @@ function makeBox(): Box {
     phpRoot: join(root, "etc/php"),
     sbinDir: join(root, "sbin"),
     policyFile: join(root, "state/policy.json"),
+    systemTweaksConfig: join(root, "system-tweaks.conf"),
     lockFile: join(root, "lock/resource-limits.lock"),
     systemctl: "systemctl",
     rootUid: process.getuid?.() ?? 0,
@@ -197,7 +198,7 @@ function options(box: Box, input?: string): ResourceLimitsActionOptions {
   };
 }
 
-test("Resource Limits owns abandoned temp-file cleanup even while System Tweaks is enabled", async () => {
+test("the upkeep clears abandoned temp files from /tmp only while System Tweaks, which does it, is off", async () => {
   const box = makeBox();
   try {
     box.addSite("shop.example.com", "8.3");
@@ -215,7 +216,10 @@ test("Resource Limits owns abandoned temp-file cleanup even while System Tweaks 
       ...options(box), tmpCleanup: { paths: { tmpDir, procDir: join(box.root, "proc"), passwd: join(box.root, "passwd") } },
     } as Record<string, unknown>);
 
-    writeFileSync(join(box.root, "system-tweaks.conf"), "");
+    writeFileSync(box.paths.systemTweaksConfig, "");
+    await upkeep();
+    expect(existsSync(file)).toBe(true);
+    rmSync(box.paths.systemTweaksConfig);
     await upkeep();
     expect(existsSync(file)).toBe(false);
   } finally {
@@ -711,9 +715,9 @@ test("a temp-cleanup failure still reconciles PHP pools", async () => {
     box.addSite("shop.example.com", "8.2");
     await assign(box, ["shop.example.com"], "standard");
     writeFileSync(box.poolOf("shop.example.com", "8.2"), STOCK_POOL);
-    await expect(RESOURCE_LIMITS_ADDON.repair!.run({
+    await RESOURCE_LIMITS_ADDON.repair!.run({
       ...options(box), tmpCleanup: { panelDb: join(box.root, "missing/db.sq3") },
-    } as Record<string, unknown>)).rejects.toThrow("/tmp cleanup");
+    } as Record<string, unknown>);
     expect(readProfileFromPool(readFileSync(box.poolOf("shop.example.com", "8.2"), "utf8"))).toEqual(BUSY.profile);
   } finally { rmSync(box.root, { recursive: true, force: true }); }
 });

@@ -56,7 +56,6 @@ function migrateAddonState(quiet: boolean): AddonRename[] {
       }
       const spec = ADDONS[to]!;
       if (existsSync(legacyState) && existsSync(spec.stateDir) && readdirSync(spec.stateDir).length > 0) {
-        if (from === "php-resources") throw new Error(`both ${legacyState} and ${spec.stateDir} hold state; refusing to discard either policy`);
         log.warn(`${from} was not renamed: ${legacyState} and ${spec.stateDir} both hold state. ` +
           `Keep the current one under ${spec.stateDir}, remove ${legacyState}, then run 'clp-addons repair'`);
         continue;

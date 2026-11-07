@@ -28,7 +28,7 @@ import {
   ActionFailure, replyToAction, errorMessage, failAction, readJsonRequest, nameSlug, oneLine, runCommand, validateDomain, withFileLock,
   type CommandResult,
 } from "../../cli/action-common";
-import { PANEL_DB, STATE_DIR } from "../../cli/paths";
+import { CONFIG_DIR, PANEL_DB, STATE_DIR } from "../../cli/paths";
 import type { TmpCleanupOptions } from "../../cli/tmp-cleanup";
 import { writeFileAtomic } from "../../lib/atomic-write";
 
@@ -181,6 +181,8 @@ export interface ResourceLimitsActionPaths {
   systemctl: string;
   /** Owner every file this action trusts and writes must have. */
   rootUid: number;
+  /** System Tweaks' enabled record: while it exists, System Tweaks clears /tmp. */
+  systemTweaksConfig: string;
 }
 
 export interface ResourceLimitsActionOptions extends ResourceMemoryOptions {
@@ -204,6 +206,7 @@ export const DEFAULT_RESOURCE_LIMITS_ACTION_PATHS: ResourceLimitsActionPaths = {
   lockFile: "/run/lock/clp-addons/resource-limits.lock",
   systemctl: "systemctl",
   rootUid: 0,
+  systemTweaksConfig: `${CONFIG_DIR}/system-tweaks.conf`,
 };
 
 function pathsFor(options: ResourceLimitsActionOptions): ResourceLimitsActionPaths {

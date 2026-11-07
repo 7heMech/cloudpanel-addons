@@ -20,6 +20,7 @@ import {
   panelPhpStatus, reconcilePanelPhp, restorePanelPhp, setPanelPhp, withdrawPanelPhp, type PanelPhpOptions, type PanelPhpStatus,
 } from "./panel-php";
 import { log } from "../../cli/util";
+import { clearAbandonedTmpFiles, type TmpCleanupOptions } from "../../cli/tmp-cleanup";
 import {
   firewallStatus, setRuleProtocol, syncFirewall, type FirewallOptions, type FirewallStatus,
 } from "./firewall";
@@ -134,6 +135,7 @@ export interface SystemTweaksOptions {
   database?: DatabaseOptions;
   backupCompression?: BackupCompressionOptions;
   telemetry?: TelemetryOptions;
+  tmpCleanup?: TmpCleanupOptions;
   now?: () => number;
 }
 
@@ -610,6 +612,12 @@ function withSettingsLock<T>(options: SystemTweaksOptions, body: (paths: SystemT
 export async function systemTweaksMaintenance(options: SystemTweaksOptions = {}): Promise<string | null> {
   const lines: string[] = [];
   const failures: string[] = [];
+  try {
+    const tmp = clearAbandonedTmpFiles(options.tmpCleanup);
+    if (tmp) lines.push(tmp);
+  } catch (error) {
+    failures.push(`/tmp cleanup: ${errorMessage(error)}`);
+  }
   try {
     const upkeep = systemTweaksUpkeep(options);
     if (upkeep) lines.push(upkeep);

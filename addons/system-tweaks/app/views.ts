@@ -698,7 +698,7 @@ export function dashboardView(state: SystemTweaksState, now = Date.now()): strin
       <div>
         <h1>System Tweaks</h1>
         <p>Hardening, automatic updates, panel PHP and remote backups.</p>
-        <p class="hint">PHP worker limits, memory sizing and temporary-file cleanup are in <a href="/addons/resource-limits/">Resource Limits</a>.${firewallLine(state.firewall)}</p>
+        <p class="hint">Every 15 minutes it also clears PHP and ImageMagick temp files that timed-out requests left in /tmp. PHP worker limits and memory sizing are in <a href="/addons/resource-limits/">Resource Limits</a>.${firewallLine(state.firewall)}</p>
       </div>
     </div>
     <div class="card">

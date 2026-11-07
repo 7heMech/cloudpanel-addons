@@ -2,6 +2,7 @@
 import { existsSync, lstatSync, readFileSync, rmSync, rmdirSync } from "node:fs";
 import { CONFIG_DIR, STATE_DIR, SYSTEMD_DIR } from "./paths";
 import { writeFileAtomic } from "../lib/atomic-write";
+import { log } from "./util";
 import { DEFAULT_MEMORY, validMemorySettings } from "../addons/resource-limits/memory";
 
 interface SavedFile { path: string; text: string; mode: number; uid: number; gid: number }
@@ -15,11 +16,24 @@ function restore(file: SavedFile): void {
   writeFileAtomic(file.path, file.text, { mode: file.mode, owner: { uid: file.uid, gid: file.gid }, createParent: true });
 }
 
+/** Anything that stops the move leaves both files as they were, and the next repair tries again. */
+const skipped = (why: string) => {
+  log.warn(`System Tweaks' memory settings were not moved to Resource Limits: ${why}. Resource Limits keeps its own; check them on its page`);
+  return null;
+};
+
 /** A rollback is kept in memory only: no old-id aliases or backups remain on the box. */
 export function migrateResourceMemory(enable: () => void): (() => void) | null {
-  const source = snapshot(`${STATE_DIR}/system-tweaks/settings.json`);
-  const stored = source ? JSON.parse(source.text) as Record<string, unknown> : null;
-  const runtime = snapshot(`${STATE_DIR}/system-tweaks/memory.json`);
+  let source: SavedFile | null;
+  let stored: Record<string, unknown> | null;
+  let runtime: SavedFile | null;
+  try {
+    source = snapshot(`${STATE_DIR}/system-tweaks/settings.json`);
+    stored = source ? JSON.parse(source.text) as Record<string, unknown> : null;
+    runtime = snapshot(`${STATE_DIR}/system-tweaks/memory.json`);
+  } catch (error) {
+    return skipped(error instanceof Error ? error.message : String(error));
+  }
   const hasMemory = stored?.version === 1 && Object.hasOwn(stored, "memory");
   // Early dev installs could have applied the default without ever saving settings.
   const defaultOom = [`${SYSTEMD_DIR}/nginx.service.d/zz-clp-addons-oom.conf`]
@@ -28,7 +42,7 @@ export function migrateResourceMemory(enable: () => void): (() => void) | null {
   // rewrite the old drop-in comment. Do not mistake that for an unsaved default.
   if (!hasMemory && !runtime && existsSync(`${STATE_DIR}/resource-limits/settings.json`)) return null;
   if (!hasMemory && !runtime && !defaultOom) return null;
-  if (hasMemory && !validMemorySettings(stored!.memory)) throw new Error("cannot migrate invalid System Tweaks memory settings");
+  if (hasMemory && !validMemorySettings(stored!.memory)) return skipped("they are not valid");
   const savedMemory = hasMemory && validMemorySettings(stored!.memory) ? stored!.memory : { ...DEFAULT_MEMORY };
   const targetDir = `${STATE_DIR}/resource-limits`;
   const directoryExisted = existsSync(targetDir);
@@ -54,13 +68,13 @@ export function migrateResourceMemory(enable: () => void): (() => void) | null {
     const targetSettings = target ? JSON.parse(target.text) : null;
     const existingMemory = targetSettings?.memory;
     if (target && (targetSettings?.version !== 1 || !validMemorySettings(existingMemory) || (["profile", "mysql", "redis", "oom"] as const).some((key) => existingMemory[key] !== memory[key]))) {
-      throw new Error("both addons hold different memory settings; refusing to discard either policy");
+      throw new Error("Resource Limits already holds different ones");
     }
     keep(settingsPath);
     if (!target) writeFileAtomic(settingsPath, `${JSON.stringify({ version: 1, memory }, null, 2)}\n`, { mode: 0o600, createParent: true });
     if (runtime) {
       const existing = snapshot(runtimePath);
-      if (existing && existing.text !== runtime.text) throw new Error("both addons hold different memory runtime state");
+      if (existing && existing.text !== runtime.text) throw new Error("Resource Limits already holds different runtime state");
       keep(runtimePath); keep(runtime.path);
       if (!existing) restore({ ...runtime, path: runtimePath });
       rmSync(runtime.path);
@@ -74,5 +88,8 @@ export function migrateResourceMemory(enable: () => void): (() => void) | null {
       restore({ ...source, text: `${JSON.stringify(stored, null, 2)}\n` });
     }
     return undo;
-  } catch (error) { undo(); throw error; }
+  } catch (error) {
+    undo();
+    return skipped(error instanceof Error ? error.message : String(error));
+  }
 }

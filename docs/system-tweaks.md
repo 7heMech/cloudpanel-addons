@@ -371,6 +371,14 @@ To check it, `systemctl show clp-agent -p IPAddressDeny` prints
 `IPAddressDeny=::/0 0.0.0.0/0`. Switching it off removes the drop-in and
 restarts the agent.
 
+## Abandoned temp files
+
+Every 15 minutes System Tweaks removes the PHP and ImageMagick temp files that
+timed-out requests left in `/tmp`: ImageMagick's after two idle hours, PHP
+uploads and WordPress downloads after a day. It removes only files a PHP site's
+own user owns and no process has open. There is nothing to set. Resource Limits
+does the same while System Tweaks is off.
+
 ## UDP ports
 
 CloudPanel's own **Admin → Security → Firewall** gets a **Protocol** for each

@@ -6,6 +6,7 @@ import {
 } from "./action";
 import { RESOURCE_LIMITS_TARGETS } from "./inject/targets";
 import type { AddonDefinition } from "../../cli/addon-catalog";
+import { existsSync } from "node:fs";
 import { clearAbandonedTmpFiles } from "../../cli/tmp-cleanup";
 import { errorMessage } from "../../cli/action-common";
 import { log } from "../../cli/util";
@@ -18,7 +19,7 @@ export const RESOURCE_LIMITS_ADDON: AddonDefinition = {
   description: "PHP worker limits and a shared memory budget for PHP, MySQL and Redis.",
   preselected: true,
   changed: [
-    { in: "2.0.1-rc.1", note: "PHP Resources is now Resource Limits. PHP categories are kept, and memory settings move here from System Tweaks. Resource Limits is preselected on fresh installs and owns abandoned temporary-file cleanup." },
+    { in: "2.0.1-rc.1", note: "PHP Resources is now Resource Limits. PHP categories are kept, and memory settings move here from System Tweaks. Resource Limits is preselected on fresh installs." },
     { in: "2.0.1-rc.1", note: "When the server runs out of memory, the kernel now kills a site's PHP worker before MySQL or nginx. A new Memory card can also size MySQL and cap Redis to the server's RAM; both are off until you switch them on." },
   ],
   activate: () => { restoreResourceMemory(); },
@@ -47,10 +48,13 @@ export const RESOURCE_LIMITS_ADDON: AddonDefinition = {
       const failures: string[] = [];
       try { restoreResourceMemory(actionOptions); }
       catch (error) { failures.push(`memory limits: ${errorMessage(error)}`); }
-      try {
-        const cleared = clearAbandonedTmpFiles({ panelDb: paths.panelDb, ...actionOptions.tmpCleanup });
-        if (cleared) log.ok(`resource limits: ${cleared}`);
-      } catch (error) { failures.push(`/tmp cleanup: ${errorMessage(error)}`); }
+      // System Tweaks clears /tmp; a box with this addon and not that one keeps the cleanup.
+      if (!existsSync(paths.systemTweaksConfig)) {
+        try {
+          const cleared = clearAbandonedTmpFiles({ panelDb: paths.panelDb, ...actionOptions.tmpCleanup });
+          if (cleared) log.ok(`resource limits: ${cleared}`);
+        } catch (error) { log.warn(`resource limits /tmp cleanup failed: ${errorMessage(error)}`); }
+      }
       const result = await executeResourceLimitsAction(["reconcile"], actionOptions) as ReconcileResult;
       if (failures.length) throw new Error(failures.join("; "));
       if (!result.applied && !result.repaired) return null;

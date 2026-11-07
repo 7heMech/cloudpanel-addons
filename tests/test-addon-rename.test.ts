@@ -178,25 +178,47 @@ test("an early dev install's default OOM protection migrates without saved setti
   expect(JSON.parse(readFileSync(join(root, "state/resource-limits/settings.json"), "utf8")).memory.oom).toBe(true);
 });
 
-test("invalid saved memory aborts and restores the PHP rename instead of enabling defaults", () => {
+test("invalid saved memory stays put with a warning, enables no defaults, and the PHP rename still happens", () => {
   const root = fixture();
   writeFileSync(join(root, "etc/php-resources.conf"), "# clp-addons: php-resources\n");
   save(root, "php-resources/policy.json", { version: 1, categories: [] });
   save(root, "system-tweaks/settings.json", { version: 1, memory: { profile: "wrong", oom: false } });
-  expect(migrate(root).error).toContain("invalid System Tweaks memory settings");
-  expect(existsSync(join(root, "etc/php-resources.conf"))).toBe(true);
-  expect(existsSync(join(root, "etc/resource-limits.conf"))).toBe(false);
-  expect(existsSync(join(root, "state/php-resources/policy.json"))).toBe(true);
-  expect(existsSync(join(root, "state/resource-limits"))).toBe(false);
+  const result = migrate(root);
+  expect(result.error).toBeUndefined();
+  expect(result.warnings.join("\n")).toContain("not moved to Resource Limits: they are not valid");
+  expect(existsSync(join(root, "state/resource-limits/policy.json"))).toBe(true);
+  expect(existsSync(join(root, "state/resource-limits/settings.json"))).toBe(false);
+  expect(JSON.parse(readFileSync(join(root, "state/system-tweaks/settings.json"), "utf8")).memory).toEqual({ profile: "wrong", oom: false });
 });
 
-test("conflicting memory settings are both kept and the operator sees a failure", () => {
+test("a System Tweaks settings file that does not parse does not stop update or repair", () => {
+  const root = fixture();
+  mkdirSync(join(root, "state/system-tweaks"), { recursive: true });
+  writeFileSync(join(root, "state/system-tweaks/settings.json"), "{", { mode: 0o600 });
+  const result = migrate(root);
+  expect(result.error).toBeUndefined();
+  expect(result.warnings.join("\n")).toContain("not moved to Resource Limits");
+});
+
+test("PHP Resources state under both names is a warning, not a failure that blocks repair", () => {
+  const root = fixture();
+  save(root, "php-resources/policy.json", { version: 1, categories: [] });
+  save(root, "resource-limits/policy.json", { version: 1, categories: [] });
+  const result = migrate(root);
+  expect(result.error).toBeUndefined();
+  expect(result.warnings[0]).toContain("both hold state");
+  expect(existsSync(join(root, "state/php-resources/policy.json"))).toBe(true);
+});
+
+test("conflicting memory settings are both kept and the operator is warned", () => {
   const root = fixture();
   const source = { profile: "database", mysql: true, redis: false, oom: true };
   const target = { ...source, profile: "cache", mysql: false };
   save(root, "system-tweaks/settings.json", { version: 1, memory: source });
   save(root, "resource-limits/settings.json", { version: 1, memory: target });
-  expect(migrate(root).error).toContain("different memory settings");
+  const result = migrate(root);
+  expect(result.error).toBeUndefined();
+  expect(result.warnings.join("\n")).toContain("Resource Limits already holds different ones");
   expect(JSON.parse(readFileSync(join(root, "state/system-tweaks/settings.json"), "utf8")).memory).toEqual(source);
   expect(JSON.parse(readFileSync(join(root, "state/resource-limits/settings.json"), "utf8")).memory).toEqual(target);
 });

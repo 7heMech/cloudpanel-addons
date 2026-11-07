@@ -450,3 +450,16 @@ test("the shared budget counts current PHP workers and flags unlimited or unread
   expect(phpMemoryLimitMb("-1")).toBe(-1);
   expect(phpMemoryLimitMb("broken")).toBeNull();
 });
+
+test("a MySQL or Redis start does not wait for a memory change that holds the lock", async () => {
+  const { resourceLimitsMemory } = await import("../addons/resource-limits/memory-settings");
+  const { withFileLockSync } = await import("../cli/action-common");
+  const s = server();
+  const options = resourceOptions(s);
+  writeFileSync(options.memorySettings.enabledConfig, "enabled");
+  withFileLockSync(options.memorySettings.lockFile, 1, "held", () => {
+    const started = Date.now();
+    resourceLimitsMemory("mysql", options);
+    expect(Date.now() - started).toBeLessThan(1_000);
+  });
+});

@@ -505,6 +505,7 @@ function box(options: { installed?: boolean; timers?: Record<string, string>; fa
       },
       clpctlGuard: { version: null, paths: { wrapper: join(dir, "clpctlWrapper"), backup: join(dir, "clpctlWrapper.orig"), rootUid: uid } },
       telemetry: { run: agentRun, paths: { dropIn: agentDropIn } },
+      tmpCleanup: { paths: { tmpDir: join(tmpRoot, "tmp"), procDir: join(tmpRoot, "proc"), passwd: join(tmpRoot, "passwd") }, panelDb },
       // No fail2ban in this fixture; tests/test-login-jails.test.ts covers it.
       loginJails: {
         run: () => ({ ok: false, stdout: "", stderr: "not installed" }),
@@ -1606,6 +1607,14 @@ test("systemTweaksMaintenance still reconciles panel PHP when upkeep fails", asy
 });
 
 
+
+test("systemTweaksMaintenance reports a /tmp cleanup that cannot read CloudPanel's sites, and still runs the rest", async () => {
+  const b = box();
+  writeFileSync(b.nginxConf, CLOUDPANEL_NGINX_CONF);
+  b.nginx.fail = true;
+  b.options.tmpCleanup = { ...b.options.tmpCleanup, panelDb: join(b.aptDir, "missing", "db.sq3") };
+  await expect(systemTweaksMaintenance(b.options)).rejects.toThrow(/^\/tmp cleanup: .+; Nginx validation failed: emerg/);
+});
 
 test("the page shows update options only once updates are on, and says what silently goes uncovered", () => {
   const updates: UpdatesStatus = {

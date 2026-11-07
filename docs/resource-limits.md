@@ -56,7 +56,6 @@ need extra room. Unlimited or unreadable PHP limits leave the remainder unknown.
 
 ## Abandoned temp files
 
-Every fifteen minutes Resource Limits removes PHP and ImageMagick scratch files
-left in `/tmp` by timed-out requests: ImageMagick's after two idle hours, PHP
-uploads and WordPress downloads after a day. It removes only regular files owned
-by PHP site users and not open or mapped by any process. There is nothing to set.
+While System Tweaks is off, Resource Limits clears the PHP and ImageMagick temp
+files timed-out requests leave in `/tmp`, so a box without System Tweaks keeps
+that cleanup. See [System Tweaks](system-tweaks.md#abandoned-temp-files).
