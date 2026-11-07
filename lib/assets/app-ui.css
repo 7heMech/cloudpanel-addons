@@ -92,6 +92,9 @@ html.dark #theme-switch .moon { display: none; }
   padding: 6px 0; background: var(--panel); border: 1px solid var(--border); border-radius: 6px;
   box-shadow: 0 8px 28px rgb(0 0 0 / 16%); text-align: left; }
 .clp-addon-account-menu > a { display: block; padding: 9px 18px; color: var(--text); white-space: nowrap; }
+/* A phone has the root shell control here rather than in the header row. */
+@media (min-width: 761px) { .clp-addon-account-menu > a.clp-root-shell-menu { display: none; } }
+@media (max-width: 760px) { #clp-root-shell { display: none; } }
 .clp-addon-account-menu > a:hover { background: var(--row-hover, rgb(127 143 153 / 14%)); text-decoration: none; }
 main { width: 100%; max-width: 1200px; margin: 0 auto; padding: 25px 12px 40px; flex: 1; min-width: 0; }
 /* The strip scrolls when the tabs outgrow it, but never shows a bar: overflow-x

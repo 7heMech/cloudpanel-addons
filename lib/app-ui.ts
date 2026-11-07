@@ -291,6 +291,7 @@ ${primaryNav}
         </button>
         <div class="clp-addon-account-menu" id="clp-account-menu" hidden>
           <a href="${esc(PANEL_SETTINGS_URL)}">Settings</a>
+          ${chrome.admin !== false ? rootShellLink(mountPath("terminal"), 'class="clp-root-shell-menu" data-clp-root-shell hidden', "Root terminal", false) : ""}
           <a href="${esc(PANEL_LOGOUT_URL)}">Logout</a>
         </div>
       </div>

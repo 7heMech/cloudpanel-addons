@@ -71,4 +71,16 @@ export const TERMINAL_TARGETS: AddonTarget[] = [
         <li class="clp-root-shell" data-clp-root-shell style="display: none;">${rootShellLink(url, "", '<span class="clp-root-shell-label">Root terminal</span>')}<style>${HEADER_STYLE}</style><script>${rootShellScript(url)}</script></li>
         {% endif %}`,
   })),
+  // The same control in the account menu, above Logout, which a phone shows in
+  // place of the header icon; the header item's style and script cover it.
+  ...[TEMPLATES.header, TEMPLATES.adminHeader].map((template, index): AddonTarget => ({
+    slug: index === 0 ? "root-shell-menu" : "root-shell-admin-menu",
+    template,
+    anchorBefore: ANCHORS.logoutMenuItem,
+    required: false,
+    snippet: (url) => `
+        ${ADMIN}
+            <li class="clp-root-shell-menu" data-clp-root-shell style="display: none;">${rootShellLink(url, 'class="dropdown-item"', "Root terminal", false)}</li>
+        {% endif %}`,
+  })),
 ];

@@ -40,8 +40,10 @@ Root names who may open a root shell with `clp-addons terminal root allow
 them. Nothing in the panel can change the list. An allowed administrator gets a
 terminal icon in both of CloudPanel's headers and in the addons' copy of it,
 just before the account menu, and a Root terminal button on Addons → Terminal.
+Below 760px the header has no room for a fourth icon beside the logo, so the
+icon gives way to a Root terminal item in the account menu, above Logout.
 The others get no icon; their button shows a notice naming the command, so
-they know whom to ask. The icon stays hidden until the page has asked
+they know whom to ask. The icon and the menu item stay hidden until the page has asked
 `/addons/terminal/api/root-access`. Every panel page asks, so the manager
 keeps root's answer a minute per user instead of starting a root process for
 each page; the Terminal page asks afresh, and the worker always checks.
