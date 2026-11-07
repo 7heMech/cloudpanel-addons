@@ -27,9 +27,9 @@ failed update is named on its row until another replaces it. From six sites
 the shared search has filters for update available, not running and version,
 and every heading sorts. A finished job
 repaints its result view. A site's name is plain text, so clicking it selects
-the row like the rest of it. Its buttons sit in the row, with no menu: Update
-when one is available, Stop or Start, Snapshot, Logs and Delete. Restart and
-Recreate stay CLI verbs, and restart a bulk action.
+the row like the rest of it; Manage starts with Open admin and Visit site and
+opens a menu. A phone has no menu: Update, Stop or Start, Snapshot, Logs and
+Delete sit in the row, and the rest stay on a wide screen.
 
 The dashboard reads instances, jobs and registry tags in parallel. A
 creation that is queued, running, or failed with no instance to show for it is a

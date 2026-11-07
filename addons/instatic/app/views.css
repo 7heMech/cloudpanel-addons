@@ -3,11 +3,14 @@
 
 .behind { color: var(--warn); border-color: var(--warn); margin-left: 0.35rem; }
 .btn-update { border-color: var(--warn); color: var(--warn); }
-.instatic-row-actions { justify-content: flex-end; flex-wrap: nowrap; }
+.instatic-row-actions { display: flex; align-items: center; justify-content: flex-end; gap: 14px; }
+.instatic-row-actions .btn-update { padding: 5px 12px; }
+.instatic-phone-actions { display: none; }
 @media (max-width: 940px) {
   .instatic-table td.site-cell { flex-basis: 100%; }
-  .instatic-row-actions { justify-content: flex-start; flex-wrap: wrap; }
-  .instatic-row-actions .btn { flex: 1 1 auto; }
+  .instatic-row-actions { display: none; }
+  .instatic-phone-actions { display: flex; }
+  .instatic-phone-actions .btn { flex: 1 1 auto; }
 }
 .logs-port { margin: 0 0 12px; }
 .snapshot-box { background: var(--surface); border: 1px solid var(--border); border-radius: 4px; padding: 12px 16px; margin-bottom: 16px; }

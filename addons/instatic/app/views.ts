@@ -125,12 +125,24 @@ export function dashboardView(
       const actions = missing
         ? `<button class="btn" onclick="showLogs('${d}', '${escJs(String(i.port ?? ""))}')">Logs</button>
     <button class="btn btn-danger" onclick="askDelete('${d}')">Delete</button>`
-        : `${
+        : `<a class="btn" href="https://${esc(i.domain)}/admin" target="_blank" rel="noreferrer noopener">Open admin</a>
+    <a class="btn" href="https://${esc(i.domain)}" target="_blank" rel="noreferrer noopener">Visit site</a>
+    ${
       i.state === "running"
         ? `<button class="btn" onclick="askStop('${d}')">Stop</button>`
         : `<button class="btn" onclick="act('${d}','start')">Start</button>`
     }
+    <button class="btn" onclick="act('${d}','restart')">Restart</button>
     <button class="btn" onclick="takeSnapshot('${d}')" title="Create a backup snapshot of the SQLite database and instance data">Snapshot</button>
+    <button class="btn" onclick="act('${d}','recreate')" title="Rebuild the recorded version, preserving data and enabling native backups for older instances">Recreate</button>
+    <button class="btn" onclick="showLogs('${d}', '${escJs(String(i.port ?? ""))}')">Logs</button>
+    <button class="btn btn-danger" onclick="askDelete('${d}')">Delete</button>`;
+      // A phone has no room for the menu: the buttons sit in the row, without the ones it rarely needs.
+      const phoneActions = missing ? actions
+        : `${i.state === "running"
+          ? `<button class="btn" onclick="askStop('${d}')">Stop</button>`
+          : `<button class="btn" onclick="act('${d}','start')">Start</button>`}
+    <button class="btn" onclick="takeSnapshot('${d}')">Snapshot</button>
     <button class="btn" onclick="showLogs('${d}', '${escJs(String(i.port ?? ""))}')">Logs</button>
     <button class="btn btn-danger" onclick="askDelete('${d}')">Delete</button>`;
       const state = missing
@@ -149,8 +161,10 @@ export function dashboardView(
     ${behind ? `<span class="badge behind" title="${esc(latest)} is available">${esc(latest)} available</span>` : ""}
   </td>
   <td data-label="State">${state}</td>
-  <td class="action-cell wide-cell"><div class="actions instatic-row-actions">${update}
+  <td class="action-cell wide-cell"><div class="instatic-row-actions">${update}<details id="instance-actions-${esc(i.domain)}" class="row-actions"><summary>Manage</summary><div class="actions">
     ${actions}
+  </div></details></div><div class="actions instatic-phone-actions">${update}
+    ${phoneActions}
   </div></td>
 </tr>`;
     })
@@ -192,7 +206,7 @@ export function dashboardView(
     summary: `${instances.length} sites`,
   })}
   <div class="table-scroll"><table class="fleet-table instatic-table">
-    <thead><tr><th scope="col" class="site-select"><input id="select-all" type="checkbox" onchange="selectAllSites(this.checked)" aria-label="Select all sites"></th><th scope="col" data-sort="domain">Site</th><th scope="col" data-sort="version">Version</th><th scope="col" data-sort="attention">State</th><th scope="col" class="action-cell" aria-label="Actions"></th></tr></thead>
+    <thead><tr><th scope="col" class="site-select"><input id="select-all" type="checkbox" onchange="selectAllSites(this.checked)" aria-label="Select all sites"></th><th scope="col" data-sort="domain">Site</th><th scope="col" data-sort="version">Version</th><th scope="col" data-sort="attention">State</th><th scope="col" class="action-cell">Actions</th></tr></thead>
     <tbody>${jobRows}${rows}</tbody>
   </table></div>
   ${FLEET_FOOTER_HTML}`
