@@ -40,10 +40,14 @@ addresses=$(ip -o addr show scope global 2>/dev/null | awk '$2 !~ /^(docker|br-|
 [ -n "$addresses" ] && row Addresses "$addresses"
 updates=/run/clp-addons-motd-updates
 if [ ! -e "$updates" ] || [ /var/lib/dpkg/status -nt "$updates" ] || [ /var/lib/apt/lists -nt "$updates" ]; then
-  list=$(timeout 3 apt list --upgradable 2>/dev/null) && printf '%s\\n' "$list" | grep -c upgradable > "$updates.$$"
-  [ -s "$updates.$$" ] && mv -f "$updates.$$" "$updates" || { rm -f "$updates.$$"; touch "$updates"; }
+  # A failed count is not cached, so the next login tries again.
+  if list=$(timeout 3 apt list --upgradable 2>/dev/null); then
+    printf '%s\\n' "$list" | grep -c upgradable > "$updates.$$"
+    mv -f "$updates.$$" "$updates"
+  fi
 fi
-[ -s "$updates" ] && row Updates "$(cat "$updates") pending"
+count=$(cat "$updates" 2>/dev/null)
+[ -n "$count" ] && [ "$count" != 0 ] && row Updates "$count pending"
 by=$(sort -u /var/run/reboot-required.pkgs 2>/dev/null | paste -sd ' ')
 [ -f /var/run/reboot-required ] && row Reboot "required\${by:+ by $by}"
 domain=$([ -f /etc/.clp_custom_domain ] && timeout 1 head -c 253 /etc/.clp_custom_domain | tr -cd 'A-Za-z0-9.-')
@@ -105,7 +109,16 @@ export function applyMotd(serverInfo: boolean, options: MotdOptions = {}): boole
       }
     }
     const write = !scriptInPlace(paths.script);
-    if (write) writeFileAtomic(paths.script, MOTD_SCRIPT, { mode: 0o755, createParent: true });
+    try {
+      if (write) writeFileAtomic(paths.script, MOTD_SCRIPT, { mode: 0o755, createParent: true });
+    } catch (error) {
+      // Not a login with no message at all.
+      if (silence) {
+        chmodSync(paths.banner, 0o775);
+        rmSync(paths.marker, { force: true });
+      }
+      throw error;
+    }
     return write || silence;
   }
   const script = existsSync(paths.script);

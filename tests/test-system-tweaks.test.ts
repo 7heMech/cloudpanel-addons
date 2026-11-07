@@ -1,6 +1,6 @@
 import { afterEach, expect, mock, test } from "bun:test";
 import { Database } from "bun:sqlite";
-import { chmodSync, existsSync, lstatSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from "node:fs";
+import { chmodSync, existsSync, lstatSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { X509Certificate } from "node:crypto";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
@@ -1443,6 +1443,15 @@ test("server info replaces CloudPanel's login banner by default, survives its up
   expect(mode(b.motdBanner)).toBe(0o775);
   restoreSystemTweaks(b.options);
   expect((await act(b, ["state"])).motd).toEqual({ enabled: true, script: true, banner: false });
+});
+
+test("a server-info script that cannot be written leaves CloudPanel's banner on", () => {
+  const b = box();
+  // A directory in the script's place makes the write fail.
+  mkdirSync(join(b.motdScript, "x"), { recursive: true });
+  expect(() => applyMotd(true, b.options.motd)).toThrow();
+  expect(statSync(b.motdBanner).mode & 0o777).toBe(0o775);
+  expect(existsSync(b.options.motd!.paths!.marker!)).toBe(false);
 });
 
 test("switching server info off leaves a banner the operator turned off alone", () => {
