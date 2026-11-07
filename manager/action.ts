@@ -27,9 +27,8 @@ import { join } from "node:path";
 import { withFileLock, withFileLockSync } from "../lib/file-lock";
 import { addonLocked } from "../lib/root-locks";
 import {
-  createJobDir, createJobLog, findOlderThan, jobCommonFields, jobDir, jobGet, jobSet,
-  jobTimestamp, jobUnitIsActive, listJobIds, newJobId, pruneJobs, readJobLog, startJobUnit,
-  watchJobRecord,
+  jobCommonFields, jobDir, jobGet, jobIsLive, jobSet, jobTimestamp, listJobIds, markJobDone,
+  markJobRunning, pruneJobs, readJobLog, recordQueuedJob, startJobUnit, watchJobRecord,
   type PruneJobsResult,
 } from "../lib/job-store";
 import { ADDONS, ADDON_NAMES, addonNews, addonNoticeKeys, addonEnabled } from "../addons/catalog";
@@ -202,29 +201,22 @@ export function markNewsSeen(addons: string[] = ADDON_NAMES, file = NEWS_SEEN_FI
 }
 
 
-/**
- * The job that is still going, if there is one.
- *
- * This is what makes the buttons idempotent: a second click finds the first
- * click's job and follows it rather than starting a second enable. The
- * "recently created" arm matches pruneJobs' stuck rule -- `systemd-run` returns
- * before the unit is necessarily visible to `systemctl is-active`, so a job
- * seconds old is treated as live even when its unit cannot be seen yet.
- */
 /** The lock a manager operation takes before it touches shared state. */
 function withManagerLock<T>(lockDir: string, onTimeout: string, body: () => Promise<T>): Promise<T> {
   mkdirSync(lockDir, { recursive: true, mode: 0o700 });
   return withFileLock(join(lockDir, "manager.lock"), 30, onTimeout, body);
 }
 
+/**
+ * The job that is still going, if there is one.
+ *
+ * This is what makes the buttons idempotent: a second click finds the first
+ * click's job and follows it rather than starting a second enable. Live is
+ * pruneJobs' rule (`jobIsLive`), so a job seconds old counts even when its unit
+ * cannot be seen yet.
+ */
 export function activeManagerJob(jobsDir = MANAGER_JOBS_DIR): string | null {
-  for (const id of listJobIds(jobsDir)) {
-    const dir = jobDir(jobsDir, id);
-    const state = jobGet(dir, "state");
-    if (state !== "queued" && state !== "running") continue;
-    if (jobUnitIsActive("manager", id) || !findOlderThan(dir, 60 * 1000, 5)) return id;
-  }
-  return null;
+  return listJobIds(jobsDir).find((id) => jobIsLive("manager", jobsDir, id)) ?? null;
 }
 
 /** The newest job record, whatever its state. */
@@ -345,14 +337,12 @@ export async function createJob(
       }
 
       mkdirSync(stateDir, { recursive: true, mode: 0o700 });
-      const id = newJobId();
-      const dir = createJobDir(jobsDir, id);
-      const logPath = createJobLog(dir);
-      jobSet(dir, "kind", kind);
-      jobSet(dir, "addon", kind === "update" ? "" : addon);
-      jobSet(dir, "createdAt", jobTimestamp());
-      jobSet(dir, "state", "queued");
-      jobSet(dir, "step", kind === "update" ? "queued" : `queued: ${kind} ${addon}`);
+      const { id, dir } = recordQueuedJob(
+        jobsDir,
+        { kind, addon: kind === "update" ? "" : addon },
+        kind === "update" ? "queued" : `queued: ${kind} ${addon}`,
+      );
+      const logPath = join(dir, "log");
 
       const started = startUnit({
         addon: "manager",
@@ -388,8 +378,7 @@ export async function runManagerJob(id: string, ops: ManagerOps, jobsDir = MANAG
   const kind = jobGet(dir, "kind");
   const addon = jobGet(dir, "addon");
 
-  jobSet(dir, "startedAt", jobTimestamp());
-  jobSet(dir, "state", "running");
+  markJobRunning(dir);
   try {
     if (kind === "enable") {
       jobSet(dir, "step", `enabling ${addon}`);
@@ -421,8 +410,7 @@ export async function runManagerJob(id: string, ops: ManagerOps, jobsDir = MANAG
   }
   jobSet(dir, "event", "");
   jobSet(dir, "step", kind === "update" ? "updated" : `${kind}d ${addon}`);
-  jobSet(dir, "finishedAt", jobTimestamp());
-  jobSet(dir, "state", "done");
+  markJobDone(dir);
   return 0;
 }
 

@@ -7,29 +7,27 @@
 // reads another one a second later, and a rename per field is the cheapest way
 // to make that safe without a database.
 //
-// Stager and Instatic each grew their own copy of this. The copies drifted:
-// one shelled out to `date` and `openssl` for an id the other built natively,
-// one replaced files in place while the other renamed over them, and only one
-// ever pruned anything. Those are the kinds of differences nobody chooses on
-// purpose, so the decisions live here now and the addons keep only the meaning
-// of their own fields.
+// Everything about running a job that is not what the job means lives here:
+// the record, queueing it to systemd, the runner's log, its step and failure,
+// the `job`/`watch-job`/`jobs` verbs and pruning. The addons keep only the
+// meaning of their own fields.
 import { errorMessage } from "./errors";
 import { randomBytes } from "node:crypto";
 import {
-  closeSync, fstatSync, mkdirSync, openSync, readFileSync, readdirSync, readSync, rmSync,
-  statSync, writeFileSync,
+  closeSync, fchmodSync, fstatSync, mkdirSync, openSync, readFileSync, readdirSync, readSync, rmSync,
+  statSync, writeFileSync, writeSync,
 } from "node:fs";
 import { writeFileAtomic } from "./atomic-write";
 import { join } from "node:path";
-import { failAction } from "./action";
+import { emitActionOk, failAction } from "./action";
 import { runCommand } from "./command";
 import { CLI_BIN } from "./paths";
 
 /** A job id is a UTC stamp plus six hex characters: 20260911T160031Z-35e759. */
 // Re-exported from its neutral home so the app services can check an id
 // without importing this module's job orchestration. See lib/job-id.ts.
-export { JOB_ID_RE, validateJobId } from "./job-id";
-import { isTerminalJobState, JOB_ID_RE, validateJobId } from "./job-id";
+export { isActiveJobState, JOB_ID_RE, validateJobId } from "./job-id";
+import { isActiveJobState, isTerminalJobState, JOB_ID_RE, validateJobId } from "./job-id";
 
 /**
  * The longest field value that will ever be read back.
@@ -106,6 +104,148 @@ export function createJobLog(dir: string): string {
   const path = join(dir, "log");
   writeFileSync(path, "", { mode: 0o600 });
   return path;
+}
+
+// --- what a runner writes -------------------------------------------------
+//
+// An action's diagnostics go to stderr, which is the system journal. While a
+// runner works through a job they go into the job's log instead, which is what
+// the job page shows, and a write there that fails is dropped rather than sent
+// to the journal: a job's output can carry a secret or whatever a site's own
+// commands print.
+
+let activeTranscript: number | null = null;
+
+export interface JobTranscript {
+  /** Close the log and send diagnostics back where they went before. */
+  stop(): void;
+}
+
+/**
+ * Send `diagnostic` into the log at `path` until `stop`. The log is made
+ * owner-only unless `ownerOnly` is false, for a log whose mode its caller set.
+ */
+export function startJobTranscript(path: string, options: { ownerOnly?: boolean } = {}): JobTranscript {
+  const fd = openSync(path, "a", 0o600);
+  if (options.ownerOnly !== false) {
+    try {
+      fchmodSync(fd, 0o600);
+    } catch (error) {
+      closeSync(fd);
+      throw error;
+    }
+  }
+  const previous = activeTranscript;
+  activeTranscript = fd;
+  let stopped = false;
+  return {
+    stop() {
+      if (stopped) return;
+      stopped = true;
+      if (activeTranscript === fd) activeTranscript = previous;
+      try { closeSync(fd); } catch {}
+    },
+  };
+}
+
+function writeTranscript(fd: number, text: string): void {
+  const bytes = Buffer.from(text);
+  let offset = 0;
+  while (offset < bytes.length) {
+    try {
+      const written = writeSync(fd, bytes, offset, bytes.length - offset, null);
+      if (written <= 0) return;
+      offset += written;
+    } catch {
+      return;
+    }
+  }
+}
+
+/** Diagnostic output: into the running job's log, or onto stderr outside one. */
+export function diagnostic(text: string): void {
+  if (activeTranscript !== null) writeTranscript(activeTranscript, text);
+  else process.stderr.write(text);
+}
+
+/** A finished command's output, as diagnostics. */
+export function forwardCommandOutput(result: { stdout: string; stderr: string }): void {
+  if (result.stdout) diagnostic(result.stdout);
+  if (result.stderr) diagnostic(result.stderr);
+}
+
+/** Run a command, keeping its stdout as a diagnostic and dropping its stderr. */
+export function runStdoutAsDiagnostic(command: string, args: string[]): boolean {
+  const result = runCommand(command, args);
+  if (result.stdout) diagnostic(result.stdout);
+  return result.ok;
+}
+
+/** Record the step the runner is on, and log it as `[addon] step`. */
+export function setJobStep(addon: string, dir: string, step: string): void {
+  jobSet(dir, "step", step);
+  diagnostic(`[${addon}] ${step}\n`);
+}
+
+/** The runner has taken the job. */
+export function markJobRunning(dir: string): void {
+  jobSet(dir, "startedAt", jobTimestamp());
+  jobSet(dir, "state", "running");
+}
+
+/** What a job leaves for its page, owner-only: it can hold generated credentials. */
+export function writeJobResult(dir: string, result: unknown): void {
+  writeFileAtomic(join(dir, "result.json"), `${JSON.stringify(result)}\n`, { mode: 0o600 });
+}
+
+/** What a finished job recorded, or null before it has. */
+export function readJobResult<T>(dir: string): T | null {
+  try {
+    return JSON.parse(readFileSync(join(dir, "result.json"), "utf8")) as T;
+  } catch {
+    return null;
+  }
+}
+
+/** The job ended well. Last, because a watcher stops at the state. */
+export function markJobDone(dir: string): void {
+  jobSet(dir, "finishedAt", jobTimestamp());
+  jobSet(dir, "state", "done");
+}
+
+/**
+ * A job failure that is already in the record and the log. The action exits 1
+ * without a reply: the runner was started by systemd, and nobody reads one.
+ */
+export class JobFailure extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = "JobFailure";
+  }
+}
+
+/**
+ * Record the job as failed and log `[addon] ERROR: message`. It never throws:
+ * a record that cannot be written is already the larger problem, and the
+ * caller's failure is the one to report. `finishedAt` stamps the failure.
+ */
+export function recordJobFailure(addon: string, dir: string, message: string, options: { finishedAt: boolean }): void {
+  const write = (field: string, value: string) => {
+    try {
+      jobSet(dir, field, value);
+    } catch {}
+  };
+  if (options.finishedAt) write("finishedAt", jobTimestamp());
+  write("error", message);
+  diagnostic(`[${addon}] ERROR: ${message}\n`);
+  // Last, because a watcher stops at the state.
+  write("state", "failed");
+}
+
+/** Record the failure and end the run with a `JobFailure`. */
+export function failJob(addon: string, dir: string, message: string, options: { finishedAt: boolean }): never {
+  recordJobFailure(addon, dir, message, options);
+  throw new JobFailure(message);
 }
 
 /** The tail of a job's log, with trailing blank lines removed. */
@@ -224,6 +364,36 @@ export function jobCommonFields(dir: string): JobCommonFields {
   };
 }
 
+// --- the job verbs --------------------------------------------------------
+
+/** The directory of job `id`, or the action's "no such job" failure. */
+export function requireJobDir(jobsDir: string, id: string): string {
+  const dir = jobDir(jobsDir, id);
+  if (!isDirectory(dir)) failAction(`no such job: ${id}`);
+  return dir;
+}
+
+/** `job`: one record, as the addon views it, and the tail of its log. */
+export function emitJob(
+  jobsDir: string, id: string, view: (dir: string, id: string) => unknown, emit: (data: unknown) => void = emitActionOk,
+): void {
+  const dir = requireJobDir(jobsDir, id);
+  emit({ job: view(dir, id), log: readJobLog(dir) });
+}
+
+/** `watch-job`: the same reply, again each time the record changes, until the job ends. */
+export async function watchJob(
+  jobsDir: string, id: string, view: (dir: string, id: string) => unknown, emit: (data: unknown) => void = emitActionOk,
+): Promise<void> {
+  const dir = requireJobDir(jobsDir, id);
+  await watchJobRecord({ dir, read: () => ({ job: view(dir, id), log: readJobLog(dir) }), emit });
+}
+
+/** Every record, as the addon views it, newest first. */
+export function jobViews<T>(jobsDir: string, view: (dir: string, id: string) => T): T[] {
+  return listJobIds(jobsDir).map((id) => view(jobDir(jobsDir, id), id));
+}
+
 export function jobUnitName(addon: string, id: string): string {
   return `clp-addon-${addon}-job-${id}`;
 }
@@ -281,6 +451,90 @@ export function jobUnitIsActive(addon: string, id: string): boolean {
 }
 
 /**
+ * Write a queued job's record, log included, and return it. `fields` are the
+ * addon's own, written before the state, so a reader never sees a queued job
+ * without them.
+ */
+export function recordQueuedJob(jobsDir: string, fields: Record<string, string>, step: string): { id: string; dir: string } {
+  const id = newJobId();
+  const dir = createJobDir(jobsDir, id);
+  for (const [field, value] of Object.entries(fields)) jobSet(dir, field, value);
+  jobSet(dir, "createdAt", jobTimestamp());
+  jobSet(dir, "step", step);
+  jobSet(dir, "state", "queued");
+  createJobLog(dir);
+  return { id, dir };
+}
+
+export interface QueueJobOptions {
+  addon: string;
+  jobsDir: string;
+  fields: Record<string, string>;
+  description: string;
+  actionBinary: string;
+  /** The unit's RuntimeMaxSec=; without one it runs until its work ends. */
+  runtimeSeconds?: number;
+  /** What the step says until the runner starts. "Waiting to start" by default. */
+  step?: string;
+  /**
+   * Checked against every queued or running job before anything is written:
+   * the action's refusal when `dir` is one this job must not run beside, or
+   * null.
+   */
+  conflict?: (dir: string, state: string) => string | null;
+  /**
+   * Called with the record complete, just before the unit starts. A lock the
+   * runner will take is released here, or the job would wait for the process
+   * that started it.
+   */
+  beforeStart?: () => void;
+  /**
+   * An action's own name for the job, such as "clone". A unit systemd refuses
+   * then records "could not start the clone job" and fails the action with
+   * "systemd-run refused to start the clone job"; without it the record says
+   * "the background job could not be started" and the thrown error carries
+   * systemd-run's own words.
+   */
+  name?: string;
+  /** Record fields removed again when systemd refuses the unit: credentials meant only for the runner. */
+  secrets?: string[];
+  /** Pass systemd-run's own output on as a diagnostic. */
+  forwardOutput?: boolean;
+  start?: typeof startJobUnit;
+}
+
+/** Record a queued job, hand it to systemd and return its id. */
+export function queueJob(options: QueueJobOptions): string {
+  if (options.conflict) {
+    for (const existing of listJobIds(options.jobsDir)) {
+      const dir = jobDir(options.jobsDir, existing);
+      const state = jobGet(dir, "state");
+      if (!isActiveJobState(state)) continue;
+      const refusal = options.conflict(dir, state);
+      if (refusal) failAction(refusal);
+    }
+  }
+  const { id, dir } = recordQueuedJob(options.jobsDir, options.fields, options.step ?? "Waiting to start");
+  options.beforeStart?.();
+  const started = (options.start ?? startJobUnit)({
+    addon: options.addon,
+    id,
+    description: options.description,
+    actionBinary: options.actionBinary,
+    properties: options.runtimeSeconds === undefined ? [] : [`RuntimeMaxSec=${options.runtimeSeconds}`],
+  });
+  if (options.forwardOutput) forwardCommandOutput(started);
+  if (!started.ok) {
+    jobSet(dir, "error", options.name ? `could not start the ${options.name} job` : "the background job could not be started");
+    jobSet(dir, "state", "failed");
+    for (const field of options.secrets ?? []) rmSync(join(dir, field), { force: true });
+    if (options.name) failAction(`systemd-run refused to start the ${options.name} job`);
+    throw new Error(`systemd-run refused to start the job${started.stderr.trim() ? `: ${started.stderr.trim()}` : ""}`);
+  }
+  return id;
+}
+
+/**
  * Start an addon's periodic pass in a transient unit and return, so work that
  * waits on the network or on a site's own code never holds repair's operation
  * lock. A pass still running from last time is left to finish rather than
@@ -330,21 +584,35 @@ export interface PruneJobsResult {
 }
 
 /**
- * Drop expired job records and fail the ones whose runner died.
- *
- * A job is only declared stuck after five minutes of no unit and no progress:
+ * Whether a queued or running job may still have a runner: its unit is
+ * active, or the record is under five minutes old with no progress since.
  * `systemd-run` returns before the unit is necessarily visible to
  * `systemctl is-active`, and a record marked failed while its runner is still
  * working is worse than one that takes a few minutes to give up.
+ */
+function runnerMayBeAlive(addon: string, dir: string, id: string): boolean {
+  return jobUnitIsActive(addon, id) || !findOlderThan(dir, 60 * 1000, 5);
+}
+
+/** A job that is queued or running and may still have a runner. */
+export function jobIsLive(addon: string, jobsDir: string, id: string): boolean {
+  const dir = jobDir(jobsDir, id);
+  return isActiveJobState(jobGet(dir, "state")) && runnerMayBeAlive(addon, dir, id);
+}
+
+/**
+ * Drop expired job records and fail the ones whose runner died (see
+ * `jobIsLive`). `warnStuck` logs each one it fails as an `[addon] WARN:` line.
  */
 export function pruneJobs(options: {
   addon: string;
   jobsDir: string;
   retentionDays: number;
   stuckMessage: string;
+  warnStuck?: boolean;
   onStuck?: (id: string, state: string) => void;
 }): PruneJobsResult {
-  const { addon, jobsDir, retentionDays, stuckMessage, onStuck } = options;
+  const { addon, jobsDir, retentionDays, stuckMessage, warnStuck, onStuck } = options;
   let removed = 0;
   let stuck = 0;
   // listJobIds, so that nothing else that has found its way into the directory
@@ -352,9 +620,9 @@ export function pruneJobs(options: {
   for (const entry of listJobIds(jobsDir)) {
     const dir = jobDir(jobsDir, entry);
     const state = jobGet(dir, "state");
-    if (state === "queued" || state === "running") {
-      if (jobUnitIsActive(addon, entry)) continue;
-      if (!findOlderThan(dir, 60 * 1000, 5)) continue;
+    if (isActiveJobState(state)) {
+      if (runnerMayBeAlive(addon, dir, entry)) continue;
+      if (warnStuck) diagnostic(`[${addon}] WARN: job ${entry} is recorded as ${state} but nothing is running it; marking it failed\n`);
       onStuck?.(entry, state);
       jobSet(dir, "error", stuckMessage);
       jobSet(dir, "state", "failed");
@@ -373,7 +641,7 @@ export function pruneJobs(options: {
 // WordPress Tools' checks and Panel Tweaks' size measurement each visit one
 // site after another, and the page draws the same "12 of 40: site" bar for
 // both. The record fields and the step's wording are decided here, so the two
-// cannot drift apart the way Stager's and Instatic's job stores once did.
+// cannot drift apart.
 
 /** `--job=<id>` from the page, or `--job <id>` as systemd and the stream pass it. */
 export function jobIdArgument(rest: string[]): string {
@@ -401,51 +669,6 @@ export function jobSiteProgress(dir: string): JobSiteProgress {
   return { completed: jobCount(dir, "completed"), total: jobCount(dir, "total"), site: jobGet(dir, "site") };
 }
 
-/** What a finished job recorded, or null before it has. */
-export function readJobResult<T>(dir: string): T | null {
-  try {
-    return JSON.parse(readFileSync(join(dir, "result.json"), "utf8")) as T;
-  } catch {
-    return null;
-  }
-}
-
-/**
- * Record a queued job and hand it to systemd. `fields` are the addon's own,
- * written before the state, so a reader never sees a queued job without them.
- * A unit systemd refuses leaves the record failed and throws.
- */
-export function queueJob(options: {
-  addon: string;
-  jobsDir: string;
-  fields: Record<string, string>;
-  description: string;
-  actionBinary: string;
-  runtimeSeconds: number;
-  start?: typeof startJobUnit;
-}): string {
-  const id = newJobId();
-  const dir = createJobDir(options.jobsDir, id);
-  for (const [field, value] of Object.entries(options.fields)) jobSet(dir, field, value);
-  jobSet(dir, "createdAt", jobTimestamp());
-  jobSet(dir, "step", "Waiting to start");
-  jobSet(dir, "state", "queued");
-  createJobLog(dir);
-  const started = (options.start ?? startJobUnit)({
-    addon: options.addon,
-    id,
-    description: options.description,
-    actionBinary: options.actionBinary,
-    properties: [`RuntimeMaxSec=${options.runtimeSeconds}`],
-  });
-  if (!started.ok) {
-    jobSet(dir, "error", "the background job could not be started");
-    jobSet(dir, "state", "failed");
-    throw new Error(`systemd-run refused to start the job${started.stderr.trim() ? `: ${started.stderr.trim()}` : ""}`);
-  }
-  return id;
-}
-
 /** "Measuring 12 of 40: site", or "Measuring site" when there is only the one. */
 export function siteProgressStep(verb: string, progress: JobSiteProgress): string {
   return progress.total > 1
@@ -465,8 +688,7 @@ export async function runSiteJob<T>(
 ): Promise<void> {
   const state = jobGet(dir, "state");
   if (state !== "queued") throw new Error(`the job is already ${state || "gone"}`);
-  jobSet(dir, "startedAt", jobTimestamp());
-  jobSet(dir, "state", "running");
+  markJobRunning(dir);
   const onProgress = (progress: JobSiteProgress) => {
     jobSet(dir, "completed", String(progress.completed));
     jobSet(dir, "total", String(progress.total));
@@ -476,12 +698,11 @@ export async function runSiteJob<T>(
   };
   try {
     const result = await work(onProgress, (step) => jobSet(dir, "step", step));
-    writeFileAtomic(join(dir, "result.json"), `${JSON.stringify(result)}\n`, { mode: 0o600 });
+    writeJobResult(dir, result);
     jobSet(dir, "completed", jobGet(dir, "total") || "0");
     jobSet(dir, "site", "");
     jobSet(dir, "step", "Finished");
-    jobSet(dir, "finishedAt", jobTimestamp());
-    jobSet(dir, "state", "done");
+    markJobDone(dir);
   } catch (error) {
     jobSet(dir, "error", errorMessage(error));
     jobSet(dir, "site", "");
