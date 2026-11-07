@@ -664,8 +664,8 @@ The job's result names each plugin and whether it was activated, installed,
 already there or failed. The landing page, `wordpress-installed.html.twig`,
 follows the job whose id the form left in session storage, if it is for the
 domain the page shows, through `new-site-status`, and says how it ended in a box shaped like the panel's
-flash messages. The WordPress Tools page's **Plugins on new sites** card shows
-every running job with the shared progress bar and the ten most recent results,
+flash messages. The WordPress Tools page's **Plugins on new sites** card opens
+that form from its header, and shows every running job with the shared progress bar and the ten most recent results,
 failures included, for the seven days a job record is kept.
 
 At most twenty plugins a site. The gateway allows `plugin-upload`,
