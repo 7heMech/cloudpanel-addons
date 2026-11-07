@@ -28,9 +28,38 @@ long-press selection and menu. The copy is editable with `inputmode="none"`, so
 that menu still offers Paste, which goes to the shell; no other edit is
 accepted. Copying, pasting or a tap that clears the selection removes it.
 
-Administrators only, and never root. A shell as a site's user is what SSH
-already gives anyone with that user's key; it is offered to the people who can
-already create one.
+Administrators only. A shell as a site's user is what SSH already gives anyone
+with that user's key; it is offered to the people who can already create one.
+A root shell is offered only to the administrators root names; see Root.
+
+## Root
+
+Root names who may open a root shell with `clp-addons terminal root allow
+<user>` from a shell; `deny` takes it back and `clp-addons terminal root` lists
+them. Nothing in the panel can change the list. Allowed administrators get a
+"This server" card with an Open root shell button; the others get one line
+naming the command, so they know whom to ask.
+
+Any administrator can reset another's password in CloudPanel and sign in as
+them, so a grant to a name alone would be a root shell for every
+administrator. Each grant is pinned to CloudPanel's `user.id` and to a hash of
+the account's password hash and two-factor setting as they were when root
+allowed it. A reset password, a two-factor change, a name deleted and created
+again, a demotion or a deactivation stops it until root allows the account
+again; the card says which. A stolen session of the allowed administrator
+itself still gets a root shell for as long as that session lasts.
+
+The grants are `/etc/clp-addons/terminal-root.json`, root's alone, `0600`, read
+through one descriptor opened without following links. Only a missing file
+means nobody. One that is not root's alone, a link, or one that does not parse
+refuses everyone, and `terminal root` then tells root to remove it and allow
+again. The manager learns whether its user is allowed only through the
+own-account `root-access` verb, which root answers from the file; the session
+worker checks again before it starts `runuser --login root` and every 15
+seconds while the shell runs, ending it when the grant stops holding. The
+journal gets "opened a root shell" and "closed a root shell" lines like a
+site's. A ready line naming root is accepted only for a root shell, and one
+naming anyone else only for a site.
 
 ## Transport
 

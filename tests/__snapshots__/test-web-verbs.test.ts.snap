@@ -136,6 +136,7 @@ system-tweaks:set-upload-guard     admin
 system-tweaks:set-vhost-guard      admin
 system-tweaks:state                admin
 system-tweaks:unban                admin
+terminal:root-access               own-account
 terminal:session                   admin duplex
 wp-tools:domain-link-settings      admin
 wp-tools:job                       admin

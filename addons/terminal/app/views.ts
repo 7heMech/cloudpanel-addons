@@ -45,7 +45,29 @@ function siteRow(site: SanitizedSite): string {
               </tr>`;
 }
 
-export function dashboardView(sites: SanitizedSite[]): string {
+/** The root shell's card for an administrator root allowed, or a line saying how to be. */
+function rootCard(root: { granted: boolean; problem: string | null }, user: string): string {
+  if (!root.granted) {
+    return user ? `
+        <p class="hint">Root can let you open a root shell here by running <code>clp-addons terminal root allow ${esc(user)}</code> on the server.</p>` : "";
+  }
+  const action = root.problem
+    ? `<span class="tone-bad">${esc(root.problem)}</span>`
+    : `<button class="btn" type="button" onclick="clpOpenTerminal(CLP_BASE, '', event.shiftKey)">Open root shell</button>`;
+  return `
+    <div class="card">
+      <div class="card-header"><h2>This server</h2></div>
+      <div class="terminal-root">
+        <div>
+          <h3>root</h3>
+          <p class="hint">Opening and closing it is logged. It stops working if your password or two-factor setting changes, until root allows you again.</p>
+        </div>
+        ${action}
+      </div>
+    </div>`;
+}
+
+export function dashboardView(sites: SanitizedSite[], root: { granted: boolean; problem: string | null } = { granted: false, problem: null }, user = ""): string {
   const table = sites.length === 0
     ? '<div class="empty">CloudPanel has no sites yet.</div>'
     : `${fleetFilterHtml({ count: sites.length, placeholder: "Find a site or user", summary: `${sites.length} sites` })}
@@ -66,9 +88,9 @@ export function dashboardView(sites: SanitizedSite[]): string {
     <div class="page-heading">
       <div>
         <h1>Terminal</h1>
-        <p>A shell as a site's own user, starting in its site directory, in a window of its own.</p>
+        <p>A shell as a site's own user, starting in its site directory, in a window of its own.</p>${root.granted ? "" : rootCard(root, user)}
       </div>
-    </div>
+    </div>${root.granted ? rootCard(root, user) : ""}
     <div class="card card-table">
       <div class="card-header"><h2>Sites</h2></div>
       ${table}
@@ -87,13 +109,15 @@ const KEYS = [
   ["esc", "Esc"], ["tab", "Tab"], ["ctrl", "Ctrl"], ["left", "←"], ["up", "↑"], ["down", "↓"], ["right", "→"],
 ];
 
-export function popupPage(domain: string): string {
+/** A site's terminal, or with no domain a root shell on the server itself. */
+export function popupPage(domain: string | null): string {
   const keys = KEYS.map(([name, label]) =>
     `<button type="button" data-key="${name}"${name === "ctrl" ? ' id="term-ctrl" aria-pressed="false"' : ""}>${label}</button>`).join("");
   const content = `<div class="term-bar">
   <img class="term-logo clp-addon-logo-light" src="/assets/images/logo.svg" alt="CloudPanel" width="100" height="20">
   <img class="term-logo clp-addon-logo-dark" src="/assets/images/logo-dark.svg" alt="CloudPanel" width="100" height="20">
-  <span class="term-domain" title="${esc(domain)}">${esc(domain)}</span>
+  <span class="term-domain" title="${esc(domain ?? "This server")}">${esc(domain ?? "This server")}</span>${domain === null ? `
+  <span class="badge tone-bad">root</span>` : ""}
   <span class="term-user" id="term-user" hidden></span>
   <span class="badge tone-warn" id="term-status" role="status">Connecting</span>
   <div class="term-tools">
@@ -106,7 +130,7 @@ export function popupPage(domain: string): string {
   </div>
 </div>
 <div class="term-main" id="term-main">
-  <div id="terminal" data-domain="${esc(domain)}"></div>
+  <div id="terminal" data-domain="${esc(domain ?? "")}"></div>
   <div class="term-select" id="term-select" contenteditable="true" inputmode="none" spellcheck="false" autocorrect="off" autocapitalize="off" aria-label="Terminal text" hidden></div>
   <div class="term-ended" id="term-ended" hidden>
     <div class="card" role="alertdialog" aria-labelledby="term-ended-title" aria-describedby="term-ended-text">
@@ -121,7 +145,7 @@ export function popupPage(domain: string): string {
 </div>
 <div class="term-keys" aria-label="Extra keys">${keys}</div>`;
   const assets = Object.keys(XTERM_ASSETS).map((path) => `${BASE}/assets/${path}`);
-  return renderToolWindow(`${domain} — Terminal`, content, {
+  return renderToolWindow(`${domain ?? "root"} — Terminal`, content, {
     base: BASE,
     css: POPUP_STYLE,
     script: POPUP_JS,

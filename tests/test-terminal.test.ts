@@ -26,10 +26,11 @@ function fixture(sites: FixtureSite[]): void {
   rmSync(root, { recursive: true, force: true });
   mkdirSync(`${root}/home`, { recursive: true });
   const db = new Database(`${root}/panel.sqlite`);
-  db.run("CREATE TABLE user (id INTEGER PRIMARY KEY, user_name TEXT, role TEXT, status INTEGER)");
+  db.run(`CREATE TABLE user (id INTEGER PRIMARY KEY, user_name TEXT, role TEXT, status INTEGER,
+    password TEXT DEFAULT '$2y$13$hash', mfa INTEGER DEFAULT 0, mfa_secret TEXT DEFAULT 'secret')`);
   db.run("CREATE TABLE site (id INTEGER PRIMARY KEY, domain_name TEXT, user TEXT, root_directory TEXT)");
   db.run("CREATE TABLE user_sites (user_id INTEGER, site_id INTEGER)");
-  db.run("INSERT INTO user VALUES (1, 'admin', 'ROLE_ADMIN', 1), (2, 'customer', 'ROLE_USER', 1)");
+  db.run("INSERT INTO user (id, user_name, role, status) VALUES (1, 'admin', 'ROLE_ADMIN', 1), (2, 'customer', 'ROLE_USER', 1)");
   const passwd: string[] = ["root:x:0:0:root:/root:/bin/bash", "clp:x:1000:1000::/home/clp:/usr/sbin/nologin"];
   sites.forEach((site, index) => {
     db.query("INSERT INTO site VALUES (?, ?, ?, ?)").run(index + 1, site.domain, site.user, site.root ?? site.domain);
@@ -45,7 +46,10 @@ function fixture(sites: FixtureSite[]): void {
 beforeAll(() => {
   root = mkdtempSync(`${tmpdir()}/terminal-action-`);
   root = realpathSync(root);
-  paths = { panelDb: `${root}/panel.sqlite`, passwd: `${root}/passwd`, runuser: "/usr/sbin/runuser", homes: `${root}/home` };
+  paths = {
+    panelDb: `${root}/panel.sqlite`, passwd: `${root}/passwd`, runuser: "/usr/sbin/runuser", homes: `${root}/home`,
+    rootAccess: { panelDb: `${root}/panel.sqlite`, grants: `${root}/etc/terminal-root.json`, rootUid: process.getuid?.() ?? 0 },
+  };
 });
 
 afterAll(() => {
