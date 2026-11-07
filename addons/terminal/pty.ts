@@ -91,10 +91,6 @@ export async function runTerminalPty(argv: string[]): Promise<number> {
     process.stderr.write("terminal-pty takes no arguments\n");
     return 2;
   }
-  if (process.getuid?.() === 0) {
-    process.stderr.write("terminal-pty does not run as root\n");
-    return 2;
-  }
   const account = userInfo();
   const home = process.env.HOME && existsSync(process.env.HOME) ? process.env.HOME : account.homedir;
   const shell = process.env.SHELL?.startsWith("/") ? process.env.SHELL : "/bin/bash";
