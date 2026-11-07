@@ -3,7 +3,9 @@ import { Database } from "bun:sqlite";
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { executeWpToolsAction, reconcileWpVarnish, type WpJobView, type WpToolsActionOptions, type WpSiteView } from "../addons/wp-tools/action";
+import {
+  executeWpToolsAction, reconcileWpVarnish, type WpJobView, type WpToolsActionOptions, type WpSiteView,
+} from "../addons/wp-tools/action";
 import { commandOutput, readVarnishState, type WpCommand, type VarnishSyncResult } from "../addons/wp-tools/varnish";
 import { handle } from "../addons/wp-tools/app/index";
 import { dashboardView, layout } from "../addons/wp-tools/app/views";
@@ -11,8 +13,8 @@ import { emptyMainwpState, mainwpView, saveMainwpState } from "../addons/wp-tool
 import { WP_TOOLS_ADDON } from "../addons/wp-tools/addon";
 import type { WpDashboard } from "../addons/wp-tools/app/service";
 import { webVerb } from "../lib/gateway-protocol";
-import { withFileLock } from "../cli/action-common";
-import { jobDir, jobSet } from "../cli/job-store";
+import { withFileLock } from "../lib/file-lock";
+import { jobDir, jobSet } from "../lib/job-store";
 import { wpJobView } from "../addons/wp-tools/jobs";
 
 let root = "";

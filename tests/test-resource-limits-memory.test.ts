@@ -3,7 +3,7 @@ import { afterEach, expect, test } from "bun:test";
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, utimesSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import type { CommandResult } from "../cli/action-common";
+import type { CommandResult } from "../lib/command";
 import {
   DEFAULT_MEMORY, MYSQL_MARKER, applyMemory, memoryChange, memoryPlan, memoryStatus, mysqlOptionFile, syncMemory,
   type MemoryOptions, type MemorySettings,
@@ -466,7 +466,7 @@ test("the budget sets PHP's worst case against RAM and names what to fix", async
 
 test("a MySQL or Redis start does not wait for a memory change that holds the lock", async () => {
   const { resourceLimitsMemory } = await import("../addons/resource-limits/memory-settings");
-  const { withFileLockSync } = await import("../cli/action-common");
+  const { withFileLockSync } = await import("../lib/file-lock");
   const s = server();
   const options = resourceOptions(s);
   writeFileSync(options.memorySettings.enabledConfig, "enabled");
@@ -479,7 +479,7 @@ test("a MySQL or Redis start does not wait for a memory change that holds the lo
 
 test("repair and new sites leave memory to a change that holds the lock, instead of failing", async () => {
   const { restoreResourceMemory } = await import("../addons/resource-limits/memory-settings");
-  const { withFileLockSync } = await import("../cli/action-common");
+  const { withFileLockSync } = await import("../lib/file-lock");
   const s = server();
   const options = resourceOptions(s);
   writeFileSync(options.memorySettings.enabledConfig, "enabled");

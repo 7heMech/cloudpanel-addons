@@ -12,7 +12,7 @@
 // config detail that shouldn't leave the box carelessly.
 
 import { existsSync } from "node:fs";
-import { PANEL_DB } from "./paths";
+import { PANEL_DB } from "../lib/paths";
 
 /**
  * Run a shell snippet via `sh -c` and return its captured stdout as text.

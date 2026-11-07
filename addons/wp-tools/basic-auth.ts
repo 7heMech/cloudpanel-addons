@@ -1,12 +1,13 @@
-import { nginxServers, type NginxBlock } from "../../cli/nginx-config";
+import { nginxServers, type NginxBlock } from "../../lib/nginx-config";
 import { Database } from "bun:sqlite";
 import { readFileSync } from "node:fs";
 import { BlockList, isIP } from "node:net";
 import { join } from "node:path";
 import { normalizeMappedIpv4 } from "../../lib/ip-address";
-import { ActionFailure, failAction, runCommand, type CommandResult } from "../../cli/action-common";
-import { openPanelDatabase } from "../../cli/panel-db";
-import { trustedVhost, withNginxTransactionAsync } from "../../cli/nginx-transaction";
+import { ActionFailure, failAction } from "../../lib/action";
+import { runCommand, type CommandResult } from "../../lib/command";
+import { openPanelDatabase } from "../../lib/panel-db";
+import { trustedVhost, withNginxTransactionAsync } from "../../lib/nginx-transaction";
 
 export interface BasicAuthPaths {
   panelDb: string;

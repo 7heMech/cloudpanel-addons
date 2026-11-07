@@ -1,9 +1,9 @@
 /** Transfer the unreleased System Tweaks memory policy without rewriting its hardening settings. */
 import { existsSync, lstatSync, readFileSync, rmSync, rmdirSync } from "node:fs";
-import { CONFIG_DIR, STATE_DIR, SYSTEMD_DIR } from "./paths";
-import { writeFileAtomic } from "../lib/atomic-write";
-import { log } from "./util";
-import { DEFAULT_MEMORY, validMemorySettings, type MemorySettings } from "../addons/resource-limits/memory";
+import { CONFIG_DIR, STATE_DIR, SYSTEMD_DIR } from "../../lib/paths";
+import { writeFileAtomic } from "../../lib/atomic-write";
+import { log } from "../../lib/log";
+import { DEFAULT_MEMORY, validMemorySettings, type MemorySettings } from "./memory";
 
 interface SavedFile { path: string; text: string; mode: number; uid: number; gid: number }
 function snapshot(path: string): SavedFile | null {

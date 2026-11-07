@@ -14,18 +14,21 @@ import {
   rmSync, statSync, chmodSync, writeSync, constants as fsConstants,
 } from "node:fs";
 import { join } from "node:path";
-import { CLI_BIN } from "../../cli/paths";
+import { CLI_BIN } from "../../lib/paths";
 import { writeFileAtomic } from "../../lib/atomic-write";
 import { secretEquals } from "../../lib/secret-equals";
 import {
   createJobDir, createJobLog, jobCommonFields, jobDir as storeJobDir, jobGet, jobSet, jobTimestamp,
   listJobIds, newJobId, pruneJobs, readJobLog, startJobUnit, watchJobRecord,
-} from "../../cli/job-store";
-import {
-  ActionFailure, acquireFileLock, deletedSites, emitActionOk, failAction, readable, runCommand, validateDomain,
-  validateJob, reportActionFailure, type FileLockHandle,
-} from "../../cli/action-common";
-import { PANEL_IDENTITY_PATH } from "../../cli/paths";
+} from "../../lib/job-store";
+import { ActionFailure, emitActionOk, failAction, reportActionFailure } from "../../lib/action";
+import { acquireFileLock, type FileLockHandle } from "../../lib/file-lock";
+import { deletedSites } from "../../lib/panel-db";
+import { readable } from "../../lib/files";
+import { runCommand } from "../../lib/command";
+import { validateDomain } from "../../lib/panel-identity";
+import { validateJob } from "../../lib/validate";
+import { PANEL_IDENTITY_PATH } from "../../lib/paths";
 import { GIT_VERBS } from "./verbs";
 
 const JOB_RETENTION_DAYS = 14;

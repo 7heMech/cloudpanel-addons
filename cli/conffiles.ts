@@ -7,8 +7,9 @@
 import { lstatSync, readFileSync, rmSync } from "node:fs";
 import { dirname } from "node:path";
 import { writeFileAtomic } from "../lib/atomic-write";
-import { ensureLockDir, runCommand, type CommandResult } from "./action-common";
-import { CONFFILES_RELEASED_FLAG } from "./paths";
+import { ensureLockDir } from "../lib/file-lock";
+import { runCommand, type CommandResult } from "../lib/command";
+import { CONFFILES_RELEASED_FLAG } from "../lib/paths";
 
 /** Only when systemd cannot say whether the upgrade service still runs. */
 const STALE_MS = 6 * 60 * 60 * 1000;

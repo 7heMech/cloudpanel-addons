@@ -1,9 +1,11 @@
 import { afterEach, expect, test } from "bun:test";
 import { X509Certificate, createPrivateKey } from "node:crypto";
-import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, statSync, symlinkSync, writeFileSync } from "node:fs";
+import {
+  chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, statSync, symlinkSync, writeFileSync,
+} from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { runCommand, type CommandResult } from "../cli/action-common";
+import { runCommand, type CommandResult } from "../lib/command";
 import { panelCertStatus, replacePanelCert, type PanelCertOptions } from "../addons/system-tweaks/panel-cert";
 import { panelCertLine } from "../addons/system-tweaks/app/views";
 

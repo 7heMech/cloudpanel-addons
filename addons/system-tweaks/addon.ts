@@ -3,7 +3,7 @@ import {
   restoreSystemTweaks, runSystemTweaksAction, systemTweaksFirewall, systemTweaksMaintenance, systemTweaksVarnish, withdrawSystemTweaks,
 } from "./action";
 import { SYSTEM_TWEAKS_TARGETS } from "./inject/targets";
-import type { AddonDefinition } from "../../cli/addon-catalog";
+import type { AddonDefinition } from "../../lib/addon-definition";
 
 export const SYSTEM_TWEAKS_ADDON: AddonDefinition = {
   name: "system-tweaks",

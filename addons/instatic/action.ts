@@ -1,4 +1,4 @@
-import { hasSite, withPanelDb } from "../../cli/panel-db";
+import { hasSite, withPanelDb } from "../../lib/panel-db";
 import { Database } from "bun:sqlite";
 import { randomBytes } from "node:crypto";
 import {
@@ -8,16 +8,18 @@ import {
 import { tmpdir } from "node:os";
 import { writeFileAtomic } from "../../lib/atomic-write";
 import { dirname, join } from "node:path";
-import {
-  ActionCommandFailure, ActionFailure, commandFailure, emitActionOk, failAction, forwardCommandOutput as defaultForwardCommandOutput,
-  normalizeIdentityHostname, availableSiteUser, readable, runCommand, siteUserTaken,
-  validateDomain, validateFlag, validatePort, validateTag, withFileLock, reportActionFailure,
-} from "../../cli/action-common";
-import { PANEL_IDENTITY_PATH } from "../../cli/paths";
+import { ActionCommandFailure, ActionFailure, emitActionOk, failAction, reportActionFailure } from "../../lib/action";
+import { commandFailure, forwardCommandOutput as defaultForwardCommandOutput, runCommand } from "../../lib/command";
+import { normalizeIdentityHostname, validateDomain } from "../../lib/panel-identity";
+import { availableSiteUser, siteUserTaken } from "../../lib/site-user";
+import { readable } from "../../lib/files";
+import { validateFlag, validatePort, validateTag } from "../../lib/validate";
+import { withFileLock } from "../../lib/file-lock";
+import { PANEL_IDENTITY_PATH } from "../../lib/paths";
 import {
   createJobDir, createJobLog, jobCommonFields, jobDir as storeJobDir, jobGet, jobSet, jobTimestamp,
   JOB_ID_RE, listJobIds, newJobId, pruneJobs, readJobLog, startJobUnit, watchJobRecord, type PruneJobsResult,
-} from "../../cli/job-store";
+} from "../../lib/job-store";
 import { INSTATIC_VERBS } from "./verbs";
 
 const REGISTRY_IMAGE = "ghcr.io/corebunch/instatic";

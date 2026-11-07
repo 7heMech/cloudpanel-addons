@@ -9,7 +9,7 @@
 import { createHash } from "node:crypto";
 import { existsSync, lstatSync, readdirSync, readFileSync, rmSync } from "node:fs";
 import { join } from "node:path";
-import { ActionFailure, failAction } from "../../cli/action-common";
+import { ActionFailure, failAction } from "../../lib/action";
 import { writeFileAtomic } from "../../lib/atomic-write";
 
 const BRANDING_VERSION = 1;

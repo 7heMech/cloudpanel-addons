@@ -16,11 +16,13 @@ import type { PanelTweaks } from "../addons/panel-tweaks/action";
 import { previewPage } from "../addons/panel-tweaks/app/preview";
 import { handle as handlePanelTweaks } from "../addons/panel-tweaks/app/index";
 import { panelTweaksService } from "../addons/panel-tweaks/app/service";
-import { dashboardView as panelTweaksDashboardView, layout as panelTweaksLayout } from "../addons/panel-tweaks/app/views";
+import {
+  dashboardView as panelTweaksDashboardView, layout as panelTweaksLayout,
+} from "../addons/panel-tweaks/app/views";
 import { STAGER_TARGETS } from "../addons/stager/inject/targets";
 import { MENU_ONLY_CLASS, MENU_ONLY_STYLE, ROW_ACTION_CLASS, ROW_MENU_CLASS } from "../lib/row-actions";
-import { withFileLock } from "../cli/action-common";
-import { jobDir, jobGet, jobSet } from "../cli/job-store";
+import { withFileLock } from "../lib/file-lock";
+import { jobDir, jobGet, jobSet } from "../lib/job-store";
 import { webVerb } from "../lib/gateway-protocol";
 import { CLOUDFLARE_ORIGIN } from "./fixtures/certificates";
 

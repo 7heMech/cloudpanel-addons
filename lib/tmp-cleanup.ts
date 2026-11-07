@@ -11,7 +11,7 @@ import { withPanelDb } from "./panel-db";
 import { lstatSync, readdirSync, readFileSync, readlinkSync, unlinkSync } from "node:fs";
 import { join } from "node:path";
 import { PANEL_DB } from "./paths";
-import { readUnixAccounts, siteAccountProblem } from "../lib/site-accounts";
+import { readUnixAccounts, siteAccountProblem } from "./site-accounts";
 
 export interface TmpCleanupPaths {
   tmpDir: string;

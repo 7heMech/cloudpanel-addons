@@ -1,4 +1,4 @@
-import { hasSite, withPanelDb, withoutStandIns } from "../../cli/panel-db";
+import { hasSite, withPanelDb, withoutStandIns } from "../../lib/panel-db";
 import { STAGER_VERBS } from "./verbs";
 import { Database } from "bun:sqlite";
 import { randomBytes } from "node:crypto";
@@ -7,22 +7,23 @@ import {
   readFileSync, readdirSync, renameSync, rmSync, statSync, writeFileSync, writeSync,
 } from "node:fs";
 import { dirname, join } from "node:path";
-import { CLI_BIN, CONFIG_DIR, PANEL_IDENTITY_PATH } from "../../cli/paths";
+import { CLI_BIN, CONFIG_DIR, PANEL_IDENTITY_PATH } from "../../lib/paths";
 import { executeSmtpAction } from "../smtp/action";
 import { writeFileAtomic } from "../../lib/atomic-write";
-import { learnVhostMapContent, renderVhostBodyResult } from "../../cli/site-vhost";
+import { learnVhostMapContent, renderVhostBodyResult } from "../../lib/site-vhost";
 import {
   createJobDir, createJobLog, findOlderThan, jobCommonFields, jobDir as storeJobDir, jobGet, jobSet,
   jobTimestamp, listJobIds, newJobId, pruneJobs, readJobLog, startJobUnit, watchJobRecord,
-} from "../../cli/job-store";
-import {
-  ActionFailure, acquireFileLock, actionErrorJson, emitActionOk, dbNameFor, dbUserFor, failAction,
-  normalizeIdentityHostname, readable, readPanelIdentity, runCommand, siteUserFor, siteUserTaken, validateDomain,
-  validateEmail, validateFlag, validateJob, validateMfa, validatePort, reportActionFailure,
-  type CommandResult, type FileLockHandle,
-} from "../../cli/action-common";
+} from "../../lib/job-store";
+import { ActionFailure, actionErrorJson, emitActionOk, failAction, reportActionFailure } from "../../lib/action";
+import { acquireFileLock, type FileLockHandle } from "../../lib/file-lock";
+import { dbNameFor, dbUserFor, siteUserFor, siteUserTaken } from "../../lib/site-user";
+import { normalizeIdentityHostname, readPanelIdentity, validateDomain } from "../../lib/panel-identity";
+import { readable } from "../../lib/files";
+import { runCommand, type CommandResult } from "../../lib/command";
+import { validateEmail, validateFlag, validateJob, validateMfa, validatePort } from "../../lib/validate";
 
-export { learnVhostMapContent, renderVhostBodyResult, type VhostMapResult } from "../../cli/site-vhost";
+export { learnVhostMapContent, renderVhostBodyResult, type VhostMapResult } from "../../lib/site-vhost";
 
 const JOB_RETENTION_DAYS = 14;
 const PORT_MIN = 39000;

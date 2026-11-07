@@ -36,16 +36,17 @@ const mockPrelude = String.raw`
     return { positional, flags };
   }
 
-  const realPaths = await import("./cli/paths.ts");
-  mock.module("./cli/paths.ts", () => ({ ...realPaths }));
-  mock.module("./cli/php-guard.ts", () => ({ reconcilePhpGuard: () => {} }));
+  const realPaths = await import("./lib/paths.ts");
+  mock.module("./lib/paths.ts", () => ({ ...realPaths }));
+  mock.module("./lib/php-guard.ts", () => ({ reconcilePhpGuard: () => {} }));
+  mock.module("./lib/version.ts", () => ({ CLI_VERSION: "1.0.0", DEV_VERSION: "0.0.0-dev" }));
   mock.module("./cli/release.ts", () => ({
-    CLI_VERSION: "1.0.0",
     fetchVerified: async () => [],
     loadLocal: () => [],
     resolveRelease: async () => ({ tag: "v1.0.0", assets: new Map() }),
     verifyAttestation: async () => {},
   }));
+  mock.module("./lib/systemd.ts", () => ({ unitActive: () => "active" }));
   mock.module("./cli/provision.ts", () => ({
     ensureDirs: () => {},
     ensureAuthHelperReady: () => {},
@@ -83,7 +84,9 @@ const mockPrelude = String.raw`
   }));
   globalThis.__repairLog = [];
   class TestFatal extends Error {}
-  mock.module("./cli/util.ts", () => ({
+  const __realLog = await import("./lib/log.ts");
+  mock.module("./lib/log.ts", () => ({
+    ...__realLog,
     Fatal: TestFatal,
     fatal: (message) => { throw new TestFatal(message); },
     log: {
@@ -93,11 +96,13 @@ const mockPrelude = String.raw`
       err: (m) => globalThis.__repairLog.push(["err", m]),
       plain: () => {},
     },
-    parseFlags,
     requireRoot: () => {},
+  }));
+  const __realCommand = await import("./lib/command.ts");
+  mock.module("./lib/command.ts", () => ({
+    ...__realCommand,
     run: () => "",
     tryRun: () => ({ ok: true, out: "" }),
-    writeAtomic: () => {},
   }));
   mock.module("./lib/panel-snapshot.ts", () => ({ generateSnapshot: () => {} }));
   const realSso = await import("./lib/sso-auth.ts");
@@ -171,8 +176,8 @@ test.serial("repair's automatic entry point runs prune for real: a stuck job fli
 
   const paths = stagerPaths(root, jobsDir, bin);
   const script = `${mockPrelude}
-    const realIdentity = await import("./cli/action-common.ts");
-    mock.module("./cli/action-common.ts", () => ({
+    const realIdentity = await import("./lib/panel-identity.ts");
+    mock.module("./lib/panel-identity.ts", () => ({
       ...realIdentity,
       readPanelIdentity: () => ({ primary: "panel.example.test", aliases: [] }),
     }));
@@ -333,7 +338,7 @@ test.serial("--anchors-only puts System Tweaks' phpMyAdmin rules and backup comm
       systemTweaksPhpMyAdmin: () => { globalThis.__order.push("phpmyadmin"); return null; },
       systemTweaksBackupCompression: () => { globalThis.__order.push("backup"); return null; },
     }));
-    const { ADDONS } = await import("./cli/addon-catalog.ts");
+    const { ADDONS } = await import("./addons/catalog.ts");
     ADDONS["system-tweaks"].configFile = ${JSON.stringify(config)};
     const { cmdRepair } = await import("./cli/repair.ts");
     await cmdRepair(["--anchors-only"]);

@@ -1,8 +1,9 @@
 // The upkeep `repair` and the reconcile timer run, per addon and for the manager's own job records.
 
-import { type AddonHook, type AddonSpec, addonCertificates, addonFirewall, addonRepairs, addonNewSites } from "./addon-catalog";
-import { pruneManagerJobs } from "./manager-action";
-import { log } from "./util";
+import { type AddonHook, type AddonSpec } from "../lib/addon-definition";
+import { addonCertificates, addonFirewall, addonRepairs, addonNewSites } from "../addons/catalog";
+import { pruneManagerJobs } from "../manager/action";
+import { log } from "../lib/log";
 /**
  * Run each installed addon's own upkeep, in catalog order.
  *

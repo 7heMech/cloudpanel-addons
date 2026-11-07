@@ -16,11 +16,13 @@ import {
   rmdirSync, rmSync, symlinkSync, unlinkSync, writeFileSync,
 } from "node:fs";
 import { join } from "node:path";
-import { failAction, normalizeIdentityHostname, runCommand, type CommandResult } from "../../cli/action-common";
-import { trustedVhost, withNginxTransaction, type NginxChange } from "../../cli/nginx-transaction";
-import { openPanelDatabase, withPanelDb } from "../../cli/panel-db";
-import { CLI_BIN, DISTRO_NGINX_SITES_DIR, PANEL_DB, ROOT_UID, SYSTEMD_DIR } from "../../cli/paths";
-import { learnVhostMapContent, renderVhostBodyResult } from "../../cli/site-vhost";
+import { failAction } from "../../lib/action";
+import { normalizeIdentityHostname } from "../../lib/panel-identity";
+import { runCommand, type CommandResult } from "../../lib/command";
+import { trustedVhost, withNginxTransaction, type NginxChange } from "../../lib/nginx-transaction";
+import { openPanelDatabase, withPanelDb } from "../../lib/panel-db";
+import { CLI_BIN, DISTRO_NGINX_SITES_DIR, PANEL_DB, ROOT_UID, SYSTEMD_DIR } from "../../lib/paths";
+import { learnVhostMapContent, renderVhostBodyResult } from "../../lib/site-vhost";
 import { writeFileAtomic } from "../../lib/atomic-write";
 import { readVarnishSettings, VHOST_VALUE_RULES } from "./vhost-values";
 

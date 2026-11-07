@@ -329,8 +329,8 @@ mock.module("./lib/gateway-client.ts", () => ({
 }));
 
 // The addon has to look installed; its config file is what the manager reads.
-const realCatalog = await import("./cli/addon-catalog.ts");
-mock.module("./cli/addon-catalog.ts", () => ({
+const realCatalog = await import("./addons/catalog.ts");
+mock.module("./addons/catalog.ts", () => ({
   ...realCatalog,
   ADDONS: { ...realCatalog.ADDONS, git: { ...realCatalog.ADDONS.git, configFile: "./package.json" } },
 }));
@@ -418,8 +418,8 @@ mock.module("./lib/gateway-client.ts", () => ({
   },
   streamGatewayAction: () => ({ close() {} }),
 }));
-const realCatalog = await import("./cli/addon-catalog.ts");
-mock.module("./cli/addon-catalog.ts", () => ({
+const realCatalog = await import("./addons/catalog.ts");
+mock.module("./addons/catalog.ts", () => ({
   ...realCatalog,
   ADDONS: { ...realCatalog.ADDONS, "security-keys": { ...realCatalog.ADDONS["security-keys"], configFile: ${installed ? '"./package.json"' : '"./absent.conf"'} } },
 }));

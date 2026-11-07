@@ -10,14 +10,15 @@
 // addon says a new site still waits for a later step of the same request,
 // because the panel writes its database every few seconds even when idle.
 
-import { withPanelDb } from "./panel-db";
+import { withPanelDb } from "../lib/panel-db";
 import { readdirSync, readFileSync, statSync } from "node:fs";
 import { join } from "node:path";
 import { writeFileAtomic } from "../lib/atomic-write";
-import type { AddonSpec } from "./addon-catalog";
+import type { AddonSpec } from "../lib/addon-definition";
 import { resumePendingNewSites, runNewSiteWork } from "./addon-hooks";
-import { DISTRO_NGINX_SITES_DIR, NEW_SITE_ROWS_PATH, NEW_SITES_SEEN_FILE, PANEL_DB } from "./paths";
-import { log, tryRun } from "./util";
+import { DISTRO_NGINX_SITES_DIR, NEW_SITE_ROWS_PATH, NEW_SITES_SEEN_FILE, PANEL_DB } from "../lib/paths";
+import { log } from "../lib/log";
+import { tryRun } from "../lib/command";
 
 /**
  * A vhost and the rows that still disagree this long after the vhosts last

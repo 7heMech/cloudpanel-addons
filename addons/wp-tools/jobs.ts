@@ -5,7 +5,7 @@
 
 import {
   jobCommonFields, jobDir, jobGet, jobSiteProgress, listJobIds, queueJob, readJobResult, runSiteJob, type startJobUnit,
-} from "../../cli/job-store";
+} from "../../lib/job-store";
 import type { MainwpResult } from "./mainwp";
 import type { NewSitePlugin, NewSiteResult } from "./new-site-plugins";
 import type { VarnishSyncResult } from "./varnish";

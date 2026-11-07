@@ -1,8 +1,9 @@
 import { mkdirSync } from "node:fs";
 import { join } from "node:path";
-import { ActionFailure, acquireFileLock, acquireFileLockSync, type FileLockHandle } from "./action-common";
-import { LOCK_DIR } from "./paths";
-import { fatal } from "./util";
+import { ActionFailure } from "../lib/action";
+import { acquireFileLock, acquireFileLockSync, type FileLockHandle } from "../lib/file-lock";
+import { LOCK_DIR } from "../lib/paths";
+import { fatal } from "../lib/log";
 
 /**
  * The lock one clp-addons operation holds from beginning to end.

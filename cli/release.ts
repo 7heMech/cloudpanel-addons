@@ -3,9 +3,9 @@ import { bundleFromJSON } from "@sigstore/bundle";
 import type { TrustedRoot } from "@sigstore/protobuf-specs";
 import { getTrustedRoot } from "@sigstore/tuf";
 import { Verifier, toSignedEntity, toTrustMaterial } from "@sigstore/verify";
-import { REPO, SIGSTORE_DIR } from "./paths";
+import { REPO, SIGSTORE_DIR } from "../lib/paths";
 import { VERSION_TAG_RE, newestRelease } from "../lib/semver";
-import { fatal, log } from "./util";
+import { fatal, log } from "../lib/log";
 
 const API = "https://api.github.com";
 const BUNDLES_ASSET = "attestations.jsonl";
@@ -234,4 +234,3 @@ export function loadLocal(dir: string, names: string[]): FetchedArtifact[] {
   return artifacts;
 }
 
-export const CLI_VERSION: string = process.env.CLP_ADDONS_VERSION || "0.0.0-dev";

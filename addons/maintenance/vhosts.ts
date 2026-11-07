@@ -1,9 +1,9 @@
-import { nginxServers, type NginxBlock } from "./nginx-config";
+import { nginxServers, type NginxBlock } from "../../lib/nginx-config";
 import type { Database } from "bun:sqlite";
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
-import { normalizeIdentityHostname } from "./action-common";
-import { trustedVhost, type NginxChange } from "./nginx-transaction";
+import { normalizeIdentityHostname } from "../../lib/panel-identity";
+import { trustedVhost, type NginxChange } from "../../lib/nginx-transaction";
 
 export const MAINTENANCE_INCLUDE_PATH = "/etc/nginx/clp-addons-maintenance.conf";
 const START = "# clp-addons:maintenance-include:start";

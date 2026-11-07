@@ -238,7 +238,7 @@ basic-auth password through. A later rewrite accepts that pair. The check runs b
 refuse gets a pointer to the Security page instead of the offer.
 This also refuses CloudPanel's Cloudflare IP range include in the same server:
 otherwise every allowed edge could bypass basic auth. The parser is shared
-with maintenance in `cli/nginx-config.ts`. Only a regular,
+with maintenance in `lib/nginx-config.ts`. Only a regular,
 root-owned vhost that is not writable by other users can be replaced. Its mode
 and ownership survive atomic replacement; credentials and other content remain.
 
@@ -248,7 +248,7 @@ so one that was waiting cannot put a helper back. The sign-in lock waits up to
 five seconds. Minting as the site user has ten
 seconds and runs before the SQLite write transaction; panel reads and writes
 wait at most one second for database contention. The transaction, shared with
-Cloudflare IP Access and maintenance in `cli/nginx-transaction.ts`, validates
+Cloudflare IP Access and maintenance in `lib/nginx-transaction.ts`, validates
 and reloads before commit. Each Nginx command is killed after two seconds, and
 each reload waits at most three more seconds for new workers to accept requests
 and old workers to stop accepting, using `/run/nginx.pid` and `/proc`.

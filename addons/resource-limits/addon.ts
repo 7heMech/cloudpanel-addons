@@ -5,11 +5,11 @@ import {
   type ResourceLimitsActionOptions, type ReconcileResult,
 } from "./action";
 import { RESOURCE_LIMITS_TARGETS } from "./inject/targets";
-import type { AddonDefinition } from "../../cli/addon-catalog";
+import type { AddonDefinition } from "../../lib/addon-definition";
 import { existsSync } from "node:fs";
-import { clearAbandonedTmpFiles } from "../../cli/tmp-cleanup";
-import { errorMessage } from "../../cli/action-common";
-import { log } from "../../cli/util";
+import { clearAbandonedTmpFiles } from "../../lib/tmp-cleanup";
+import { errorMessage } from "../../lib/errors";
+import { log } from "../../lib/log";
 
 const count = (value: number, word: string) => `${value} ${word}${value === 1 ? "" : "s"}`;
 

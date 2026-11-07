@@ -5,7 +5,7 @@
 // rather than from the router.
 import { describe, expect, test } from "bun:test";
 import { mountPath, splitMount } from "../lib/mount";
-import { ADDON_NAMES } from "../cli/addon-catalog";
+import { ADDON_NAMES } from "../addons/catalog";
 
 const ALL = ["cloudflare-ips", "dns", "instatic", "stager", "maintenance", "resource-limits", "git", "panel-tweaks", "system-tweaks", "wp-tools", "smtp", "terminal", "security-keys"];
 

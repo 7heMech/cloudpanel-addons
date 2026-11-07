@@ -7,7 +7,7 @@
  * /lib, so the drop-in under /etc survives CloudPanel updates.
  */
 import { existsSync, readFileSync, rmSync } from "node:fs";
-import { runCommand, type CommandResult } from "../../cli/action-common";
+import { runCommand, type CommandResult } from "../../lib/command";
 import { writeFileAtomic } from "../../lib/atomic-write";
 import { COMMAND_MS } from "./limits";
 

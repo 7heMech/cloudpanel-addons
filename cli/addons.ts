@@ -2,13 +2,14 @@
 // Addons page lives. Every command needs some of this and none of it belongs
 // to one of them.
 
-import { withFileLockSync } from "./action-common";
-import { migrateResourceMemory } from "./resource-limits-migration";
-import { ADDONS, ADDON_NAMES, type AddonSpec } from "./addon-catalog";
+import { withFileLockSync } from "../lib/file-lock";
+import { migrateResourceMemory } from "../addons/resource-limits/migration";
+import { ADDONS, ADDON_NAMES } from "../addons/catalog";
+import { type AddonSpec } from "../lib/addon-definition";
 import { masterVhostHost } from "./inject";
-import { CONFIG_DIR, LOCK_DIR, STATE_DIR, SYSTEMD_DIR } from "./paths";
+import { CONFIG_DIR, LOCK_DIR, STATE_DIR, SYSTEMD_DIR } from "../lib/paths";
 import { installedConfig, writeConfig } from "./provision";
-import { fatal, log } from "./util";
+import { fatal, log } from "../lib/log";
 import { chownSync, existsSync, readFileSync, readdirSync, renameSync, rmSync, statSync, writeFileSync } from "node:fs";
 export function resolveAddon(name: string | undefined): AddonSpec {
   const key = name ?? "";

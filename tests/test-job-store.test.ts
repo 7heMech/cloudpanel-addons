@@ -5,7 +5,7 @@ import { join } from "node:path";
 import {
   createJobDir, createJobLog, jobCommonFields, jobDir, jobGet, jobSet, jobTimestamp,
   JOB_ID_RE, listJobIds, newJobId, pruneJobs, queueAddonPass, readJobLog, startJobUnit,
-} from "../cli/job-store";
+} from "../lib/job-store";
 
 function withJobsDir<T>(fn: (jobsDir: string) => T): T {
   const dir = mkdtempSync(join(tmpdir(), "clp-jobs-"));

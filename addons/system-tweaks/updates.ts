@@ -10,7 +10,8 @@
  */
 import { existsSync, lstatSync, readFileSync, readdirSync, rmSync, statSync } from "node:fs";
 import { basename, join } from "node:path";
-import { failAction, type CommandResult } from "../../cli/action-common";
+import { failAction } from "../../lib/action";
+import { type CommandResult } from "../../lib/command";
 import { writeFileAtomic } from "../../lib/atomic-write";
 import { APT_STEP_MS, COMMAND_MS } from "./limits";
 

@@ -7,12 +7,14 @@ import {
   panelVersion, reconcile, reconcileNginxMaintenance, reconcileNginxProxy,
 } from "./inject";
 import { ensureMaintenanceData } from "../addons/maintenance/action";
-import { systemTweaksBackupCompression, systemTweaksMotd, systemTweaksPhpMyAdmin } from "../addons/system-tweaks/action";
+import {
+  systemTweaksBackupCompression, systemTweaksMotd, systemTweaksPhpMyAdmin,
+} from "../addons/system-tweaks/action";
 import { TEMPLATES } from "../lib/panel-anchors";
 import { adminHeaderTarget, headerTarget, siteLayoutTarget } from "../lib/panel-nav";
-import { ADDONS, ADDON_NAMES } from "./addon-catalog";
-import { mountPath } from "./paths";
-import { log } from "./util";
+import { ADDONS, ADDON_NAMES } from "../addons/catalog";
+import { mountPath } from "../lib/paths";
+import { log } from "../lib/log";
 import { existsSync } from "node:fs";
 /**
  * `managerNav` is whether the panel keeps its "Addons" entry.

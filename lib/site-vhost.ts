@@ -11,8 +11,8 @@
 import { withPanelDb } from "./panel-db";
 import { chmodSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
-import { writeFileAtomic } from "../lib/atomic-write";
-import { runCommand } from "./action-common";
+import { writeFileAtomic } from "./atomic-write";
+import { runCommand } from "./command";
 
 export interface VhostMapResult {
   map: Map<string, string> | null;

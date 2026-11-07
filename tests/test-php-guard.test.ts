@@ -1,8 +1,10 @@
 import { afterEach, expect, test } from "bun:test";
-import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, statSync, symlinkSync, writeFileSync } from "node:fs";
+import {
+  chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, statSync, symlinkSync, writeFileSync,
+} from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { inspectPhpGuard, reconcilePhpSessionGuard, type PhpGuardOptions } from "../cli/php-guard";
+import { inspectPhpGuard, reconcilePhpSessionGuard, type PhpGuardOptions } from "../lib/php-guard";
 
 const dirs: string[] = [];
 afterEach(() => { for (const dir of dirs.splice(0)) rmSync(dir, { recursive: true, force: true }); });

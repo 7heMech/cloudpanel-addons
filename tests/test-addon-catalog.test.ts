@@ -1,10 +1,11 @@
 import { expect, test } from "bun:test";
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
-import { ADDONS, ADDON_NAMES, addonHandler, addonRepairs, addonNewSites, templateWatchPaths, type AddonSpec } from "../cli/addon-catalog";
+import { ADDONS, ADDON_NAMES, addonHandler, addonRepairs, addonNewSites, templateWatchPaths } from "../addons/catalog";
+import { type AddonSpec } from "../lib/addon-definition";
 import { runNewSiteWork } from "../cli/addon-hooks";
 import { mountPath } from "../lib/mount";
-import { CLI_ARTIFACT, CLI_BIN, LIBEXEC_DIR, SERVICE_USER, SOCKET_PATH } from "../cli/paths";
+import { CLI_ARTIFACT, CLI_BIN, LIBEXEC_DIR, SERVICE_USER, SOCKET_PATH } from "../lib/paths";
 
 const REPO = join(import.meta.dir, "..");
 
@@ -77,7 +78,7 @@ test("the path constants do not import any addon", () => {
   // cli/paths.ts held the registry, so the module owning the project's paths
   // imported every addon's target list to describe them. A leaf that imports
   // its consumers is the shape a dependency cycle grows out of.
-  const source = readFileSync(join(REPO, "cli/paths.ts"), "utf8");
+  const source = readFileSync(join(REPO, "lib/paths.ts"), "utf8");
   expect(source).not.toMatch(/from "\.\.\/addons\//);
   expect(source).not.toContain("export const ADDONS");
 });

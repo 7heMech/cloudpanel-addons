@@ -1,4 +1,4 @@
-import type { AddonDefinition } from "../../cli/addon-catalog";
+import type { AddonDefinition } from "../../lib/addon-definition";
 import { activateSmtp, deactivateSmtp, executeSmtpAction, runSmtpAction, type SmtpActionOptions } from "./action";
 import { handle } from "./app/index";
 

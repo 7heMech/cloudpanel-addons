@@ -1,7 +1,9 @@
 import { handle } from "./app/index";
-import { DEFAULT_CLOUDFLARE_ACTION_PATHS, reconcileNewSites, runCloudflareAction, type CloudflareActionPaths } from "./action";
-import type { AddonDefinition } from "../../cli/addon-catalog";
-import { log } from "../../cli/util";
+import {
+  DEFAULT_CLOUDFLARE_ACTION_PATHS, reconcileNewSites, runCloudflareAction, type CloudflareActionPaths,
+} from "./action";
+import type { AddonDefinition } from "../../lib/addon-definition";
+import { log } from "../../lib/log";
 
 async function protectNewSites(options?: Record<string, unknown>): Promise<string | null> {
   const paths = { ...DEFAULT_CLOUDFLARE_ACTION_PATHS, ...(options?.paths as Partial<CloudflareActionPaths> | undefined) };

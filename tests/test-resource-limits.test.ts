@@ -1,6 +1,8 @@
 import { expect, test } from "bun:test";
 import { Database } from "bun:sqlite";
-import { chmodSync, chownSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, utimesSync, writeFileSync } from "node:fs";
+import {
+  chmodSync, chownSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, utimesSync, writeFileSync,
+} from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
@@ -9,7 +11,7 @@ import {
   type ResourceLimitsActionOptions, type ResourceLimitsActionPaths, type ResourceLimitsResult,
   type ResourceLimitsState, type PoolProfile, type PoolSiteState, type ReconcileResult,
 } from "../addons/resource-limits/action";
-import type { CommandResult } from "../cli/action-common";
+import type { CommandResult } from "../lib/command";
 import { RESOURCE_LIMITS_ADDON } from "../addons/resource-limits/addon";
 import { CLIENT_JS, dashboardView, layout, siteCardHtml } from "../addons/resource-limits/app/views";
 

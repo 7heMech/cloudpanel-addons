@@ -28,8 +28,8 @@ function runAction(paths: Record<string, string>, argv: string[]): { code: numbe
   const script = `
     import { mock } from "bun:test";
     Object.defineProperty(process, "getuid", { value: () => 0, configurable: true });
-    const realCommon = await import("./cli/action-common.ts");
-    mock.module("./cli/action-common.ts", () => ({
+    const realCommon = await import("./lib/panel-identity.ts");
+    mock.module("./lib/panel-identity.ts", () => ({
       ...realCommon,
       readPanelIdentity: () => ({ primary: "panel.example.test", aliases: [] }),
     }));

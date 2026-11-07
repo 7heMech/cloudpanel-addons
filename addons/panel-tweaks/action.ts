@@ -12,20 +12,20 @@
  * shape, and it accepts no path. Automatic SSL submits CloudPanel's own certificate form from the
  * browser; here it is only a switch.
  */
-import { openPanelDatabase } from "../../cli/panel-db";
+import { openPanelDatabase } from "../../lib/panel-db";
 import { Database } from "bun:sqlite";
 import { existsSync, lstatSync, readFileSync } from "node:fs";
 import { join } from "node:path";
-import {
-  ActionFailure, acquireFileLock, REPLIED, replyToAction, emitActionOk, errorMessage, failAction, readJsonRequest, runCommand, withFileLock,
-  type CommandResult, type FileLockHandle,
-} from "../../cli/action-common";
+import { ActionFailure, REPLIED, replyToAction, emitActionOk, failAction, readJsonRequest } from "../../lib/action";
+import { acquireFileLock, withFileLock, type FileLockHandle } from "../../lib/file-lock";
+import { errorMessage } from "../../lib/errors";
+import { runCommand, type CommandResult } from "../../lib/command";
 import {
   jobCommonFields, jobDir, jobIdArgument, jobSiteProgress, listJobIds, pruneJobs, queueJob, readJobLog,
   readJobResult, runSiteJob, watchJobRecord, type JobCommonFields, type JobSiteProgress, type startJobUnit,
-} from "../../cli/job-store";
-import { CLI_BIN, PANEL_DB, STATE_DIR } from "../../cli/paths";
-import { standInDomains } from "../../cli/stand-ins";
+} from "../../lib/job-store";
+import { CLI_BIN, PANEL_DB, STATE_DIR } from "../../lib/paths";
+import { standInDomains } from "../../lib/stand-ins";
 import { writeFileAtomic } from "../../lib/atomic-write";
 import { certificateIssuer, issuerLabel } from "../../lib/certificate-issuer";
 import { PANEL_USER_NAME_RE, panelUserSites } from "../../lib/panel-users";

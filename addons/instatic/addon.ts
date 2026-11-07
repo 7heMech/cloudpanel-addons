@@ -1,7 +1,7 @@
 import { handle } from "./app/index";
 import { pruneInstaticJobs, runInstaticAction } from "./action";
 import { INSTATIC_TARGETS } from "./inject/targets";
-import type { AddonDefinition } from "../../cli/addon-catalog";
+import type { AddonDefinition } from "../../lib/addon-definition";
 
 export const INSTATIC_ADDON: AddonDefinition = {
   name: "instatic",

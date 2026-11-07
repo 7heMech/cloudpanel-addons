@@ -1,5 +1,5 @@
 import { lstatSync, readFileSync } from "node:fs";
-import { CONFIG_DIR } from "../../cli/paths";
+import { CONFIG_DIR } from "../../lib/paths";
 import { senderFor, smtpAddress, trustedFile, type SmtpRewriteRule, type SmtpSubmissionRule } from "./config";
 
 /** One rule file per site uid, readable only by that site's group. */

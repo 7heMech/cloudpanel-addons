@@ -9,8 +9,8 @@
  */
 import { existsSync, readFileSync, readdirSync } from "node:fs";
 import { dirname, join } from "node:path";
-import { runCommand, type CommandResult } from "../../cli/action-common";
-import { PANEL_FPM_UNIT, PHP_FPM_BIN_DIR, PHP_GUARD_INI_NAME, PHP_ROOT } from "../../cli/paths";
+import { runCommand, type CommandResult } from "../../lib/command";
+import { PANEL_FPM_UNIT, PHP_FPM_BIN_DIR, PHP_GUARD_INI_NAME, PHP_ROOT } from "../../lib/paths";
 
 const KEY = "session.upload_progress.enabled";
 const VERSION_RE = /^[0-9]+\.[0-9]+$/;

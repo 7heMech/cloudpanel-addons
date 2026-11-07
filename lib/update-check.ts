@@ -4,6 +4,7 @@
 // release is available. The manager asks on every request it serves, so the
 // answer is cached for 15 minutes and refreshed by one call at a time.
 
+import { DEV_VERSION } from "./version";
 import { compareSemver, isPrerelease, newestRelease } from "./semver";
 
 export interface CliUpdateInfo {
@@ -79,7 +80,7 @@ export async function checkCliUpdate(
   timeoutMs = 2500
 ): Promise<CliUpdateInfo | null> {
   // Development builds never check or trigger update warnings
-  if (!currentVersion || currentVersion === "0.0.0-dev") {
+  if (!currentVersion || currentVersion === DEV_VERSION) {
     return null;
   }
 

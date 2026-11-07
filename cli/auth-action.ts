@@ -8,8 +8,8 @@ import net from "node:net";
 import { existsSync, lstatSync, readFileSync, readlinkSync, realpathSync, statSync } from "node:fs";
 import { dlopen, FFIType } from "bun:ffi";
 import { Database } from "bun:sqlite";
-import { requireRoot } from "./util";
-import { CLI_BIN, CONFIG_DIR, PANEL_DB, SERVICE_GROUP, SERVICE_USER, SESSION_DIR, STATE_DIR } from "./paths";
+import { requireRoot } from "../lib/log";
+import { CLI_BIN, CONFIG_DIR, PANEL_DB, SERVICE_GROUP, SERVICE_USER, SESSION_DIR, STATE_DIR } from "../lib/paths";
 import { mfaMark, passkeyFor } from "../addons/security-keys/sign-ins";
 import {
   MAX_SESSION_ID_LENGTH,

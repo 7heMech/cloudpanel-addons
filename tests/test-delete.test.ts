@@ -6,7 +6,7 @@ import { join } from "node:path";
 import {
   DEFAULT_INSTATIC_ACTION_PATHS, deleteInstaticInstance, type InstaticActionPaths,
 } from "../addons/instatic/action";
-import { ActionFailure } from "../cli/action-common";
+import { ActionFailure } from "../lib/action";
 
 const SCENARIOS = ["missing", "present", "archive-fails", "database-fails", "docker-fails", "panel-fails", "changed-site"] as const;
 

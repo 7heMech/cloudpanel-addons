@@ -2,10 +2,12 @@
 // and its sign-in credentials are the ones root allowed.
 import { afterAll, beforeEach, expect, test } from "bun:test";
 import { Database } from "bun:sqlite";
-import { chmodSync, mkdirSync, mkdtempSync, realpathSync, renameSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
+import {
+  chmodSync, mkdirSync, mkdtempSync, realpathSync, renameSync, rmSync, symlinkSync, writeFileSync,
+} from "node:fs";
 import { createHash } from "node:crypto";
 import { tmpdir } from "node:os";
-import { ActionFailure } from "../cli/action-common";
+import { ActionFailure } from "../lib/action";
 import {
   parseTerminalRequest, resolveTerminalTarget, runTerminalAction, runuserCommand, type TerminalActionPaths,
 } from "../addons/terminal/action";

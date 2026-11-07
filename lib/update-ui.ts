@@ -1,3 +1,4 @@
+import { DEV_VERSION } from "./version";
 import { esc } from "./app-http";
 import { VERSION_TAG_RE } from "./semver";
 
@@ -7,7 +8,7 @@ export const RELEASES_URL = "https://github.com/7heMech/cloudpanel-addons/releas
 /** One release's notes, pre-releases included; every release when there is none to name, as on a development build. */
 export function changelogUrl(version = ""): string {
   const tag = `v${version.replace(/^v/, "")}`;
-  return VERSION_TAG_RE.test(tag) && tag !== "v0.0.0-dev" ? `${RELEASES_URL}/tag/${tag}` : RELEASES_URL;
+  return VERSION_TAG_RE.test(tag) && tag !== `v${DEV_VERSION}` ? `${RELEASES_URL}/tag/${tag}` : RELEASES_URL;
 }
 
 // Shared by the native CloudPanel header and every addon page. The id keeps

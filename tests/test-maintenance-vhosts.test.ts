@@ -1,14 +1,16 @@
 import { expect, test } from "bun:test";
 import { Database } from "bun:sqlite";
-import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
+import {
+  chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync,
+} from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { inspectNginxMaintenance, NGINX_MAINTENANCE_BLOCK, reconcileNginxMaintenance } from "../cli/inject";
-import { MAINTENANCE_INCLUDE_PATH, transformMaintenanceVhost } from "../cli/maintenance-vhosts";
-import { trustedVhost } from "../cli/nginx-transaction";
+import { MAINTENANCE_INCLUDE_PATH, transformMaintenanceVhost } from "../addons/maintenance/vhosts";
+import { trustedVhost } from "../lib/nginx-transaction";
 import { reconcileUnits } from "../cli/provision";
-import { PANEL_DB } from "../cli/paths";
-import type { CommandResult } from "../cli/action-common";
+import { PANEL_DB } from "../lib/paths";
+import type { CommandResult } from "../lib/command";
 
 const domain = "example.test";
 const include = `include ${MAINTENANCE_INCLUDE_PATH};`;

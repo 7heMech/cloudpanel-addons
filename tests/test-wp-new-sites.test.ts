@@ -1,6 +1,8 @@
 import { afterEach, beforeEach, expect, test } from "bun:test";
 import { Database } from "bun:sqlite";
-import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, statSync, utimesSync, writeFileSync } from "node:fs";
+import {
+  existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, statSync, utimesSync, writeFileSync,
+} from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
@@ -10,7 +12,7 @@ import { WP_TOOLS_ADDON } from "../addons/wp-tools/addon";
 import { emptyMainwpState, mainwpOwesSite, saveMainwpState, type MainwpState } from "../addons/wp-tools/mainwp";
 import { NEW_SITE_PENDING_MS, readNewSitesState, type NewSitesState } from "../addons/wp-tools/new-sites";
 import { readVarnishState, type WpCommand } from "../addons/wp-tools/varnish";
-import { ADDONS, addonCertificates, addonNewSites } from "../cli/addon-catalog";
+import { ADDONS, addonCertificates, addonNewSites } from "../addons/catalog";
 import { certificateUnits } from "../cli/provision";
 
 let root = "";

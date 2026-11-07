@@ -5,9 +5,11 @@
  * whenever ufw's rule files change. See "Firewall" in docs/decisions/system-tweaks.md.
  */
 import { existsSync, lstatSync, readFileSync, statSync } from "node:fs";
-import { failAction, runCommand, withFileLockSync, type CommandResult } from "../../cli/action-common";
-import { withPanelDb } from "../../cli/panel-db";
-import { LOCK_DIR, PANEL_DB, ROOT_UID, STATE_DIR, UFW_RULE_FILES } from "../../cli/paths";
+import { failAction } from "../../lib/action";
+import { runCommand, type CommandResult } from "../../lib/command";
+import { withFileLockSync } from "../../lib/file-lock";
+import { withPanelDb } from "../../lib/panel-db";
+import { LOCK_DIR, PANEL_DB, ROOT_UID, STATE_DIR, UFW_RULE_FILES } from "../../lib/paths";
 import { writeFileAtomic } from "../../lib/atomic-write";
 
 export type FirewallProtocol = "tcp" | "udp" | "both";

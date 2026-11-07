@@ -2,11 +2,11 @@ import { afterEach, expect, mock, test } from "bun:test";
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import { TrustedRoot } from "@sigstore/protobuf-specs";
-import * as paths from "../cli/paths";
+import * as paths from "../lib/paths";
 
 // v1.5.2's bundles are validly signed for 7heMech/cloudpanel-addons. Expecting
 // another repository leaves only the identity policy to refuse them.
-mock.module("../cli/paths", () => ({ ...paths, REPO: "attacker/cloudpanel-addons" }));
+mock.module("../lib/paths", () => ({ ...paths, REPO: "attacker/cloudpanel-addons" }));
 const { verifyAttestation } = await import("../cli/release");
 
 const fixtures = join(import.meta.dir, "fixtures/sigstore");

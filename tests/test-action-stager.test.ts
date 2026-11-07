@@ -3,7 +3,9 @@ import { execFileSync } from "node:child_process";
 import { chmodSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
-import { applicationOk, dotenvProblem, holdCloneMail, rewriteDotenvContent, rewriteWpConfig } from "../addons/stager/action";
+import {
+  applicationOk, dotenvProblem, holdCloneMail, rewriteDotenvContent, rewriteWpConfig,
+} from "../addons/stager/action";
 import { expandTarget } from "../addons/stager/app/service";
 import { CLIENT_JS } from "../addons/stager/app/views";
 
@@ -99,8 +101,8 @@ test("manual stager prune keeps its exact JSON stdout reply", () => {
   try {
     const prelude = `
       import { mock } from "bun:test";
-      mock.module("./cli/action-common.ts", async () => {
-        const real = await import("./cli/action-common.ts?manual-prune-contract");
+      mock.module("./lib/panel-identity.ts", async () => {
+        const real = await import("./lib/panel-identity.ts?manual-prune-contract");
         return { ...real, readPanelIdentity: () => ({ primary: "panel.example.test", aliases: [] }) };
       });
     `;

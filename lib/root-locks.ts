@@ -1,9 +1,11 @@
 // Addons root has locked: the gateway refuses their `lock` verbs and the
 // manager refuses to enable or disable them, so only a root shell can change
 // what they protect. See docs/decisions/security.md#root-locks.
-import { chmodSync, closeSync, constants, fstatSync, lstatSync, mkdirSync, openSync, readFileSync, type Stats } from "node:fs";
+import {
+  chmodSync, closeSync, constants, fstatSync, lstatSync, mkdirSync, openSync, readFileSync, type Stats,
+} from "node:fs";
 import { dirname } from "node:path";
-import { CONFIG_DIR, LOCK_DIR } from "../cli/paths";
+import { CONFIG_DIR, LOCK_DIR } from "./paths";
 import { ADDON_VERBS, type GatewayAddon } from "./gateway-protocol";
 import { writeFileAtomic } from "./atomic-write";
 

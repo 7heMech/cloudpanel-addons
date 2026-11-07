@@ -1,5 +1,7 @@
 import { expect, test } from "bun:test";
-import { existsSync, lstatSync, mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
+import {
+  existsSync, lstatSync, mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync,
+} from "node:fs";
 import { spawnSync } from "node:child_process";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
@@ -47,8 +49,8 @@ const record = (bucket, name) => (...args) => { bucket.push(name); return undefi
 // Only the paths are redirected. The catalog derives each addon's config file
 // and state directory from these, so pointing them at the fixture is enough --
 // there is no second list of addons to keep in step.
-const realPaths = await import("./cli/paths.ts");
-mock.module("./cli/paths.ts", () => ({
+const realPaths = await import("./lib/paths.ts");
+mock.module("./lib/paths.ts", () => ({
   ...realPaths,
   SYSTEMD_DIR: root + "/systemd",
   CONFIG_DIR: root + "/etc",
@@ -65,14 +67,18 @@ mock.module("./cli/paths.ts", () => ({
   ROOT_UID: process.getuid(),
 }));
 
-const realUtil = await import("./cli/util.ts");
+const realLog = await import("./lib/log.ts");
 class TestFatal extends Error {}
-mock.module("./cli/util.ts", () => ({
-  ...realUtil,
+mock.module("./lib/log.ts", () => ({
+  ...realLog,
   Fatal: TestFatal,
   fatal: (message) => { throw new TestFatal(message); },
   log: { step: () => {}, ok: () => {}, warn: (message) => { warnings.push(message); }, err: () => {}, plain: () => {} },
   requireRoot: () => {},
+}));
+const realCommand = await import("./lib/command.ts");
+mock.module("./lib/command.ts", () => ({
+  ...realCommand,
   run: (cmd, args) => { calls.push([cmd, args]); return cmd === "id" ? "0" : ""; },
   tryRun: (cmd, args) => {
     calls.push([cmd, args]);
@@ -86,6 +92,7 @@ mock.module("./cli/util.ts", () => ({
 // root or reaches outside the fixture; each records that it was reached, which
 // is most of what these tests assert.
 const realProvision = await import("./cli/provision.ts");
+mock.module("./lib/systemd.ts", () => ({ unitActive: () => "active" }));
 mock.module("./cli/provision.ts", () => ({
   ...realProvision,
   ensureDirs: record(provision, "ensureDirs"),

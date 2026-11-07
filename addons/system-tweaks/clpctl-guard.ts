@@ -22,8 +22,9 @@
  */
 import { createHash } from "node:crypto";
 import { lstatSync, readFileSync, rmSync } from "node:fs";
-import { errorMessage, runCommand, type CommandResult } from "../../cli/action-common";
-import { ROOT_UID, STATE_DIR } from "../../cli/paths";
+import { errorMessage } from "../../lib/errors";
+import { runCommand, type CommandResult } from "../../lib/command";
+import { ROOT_UID, STATE_DIR } from "../../lib/paths";
 import { writeFileAtomic } from "../../lib/atomic-write";
 import WRAPPER_SCRIPT from "./clpctl-wrapper.sh" with { type: "text" };
 import { COMMAND_MS } from "./limits";

@@ -19,20 +19,22 @@
 // that outlives the restart, and returns a job id. The browser follows that id
 // and reconnects once the manager is back.
 
+import { writeFileAtomic } from "../lib/atomic-write";
 import { existsSync, mkdirSync, readFileSync, rmSync } from "node:fs";
 import { join } from "node:path";
-import { withFileLock, withFileLockSync } from "./action-common";
+import { withFileLock, withFileLockSync } from "../lib/file-lock";
 import { addonLocked } from "../lib/root-locks";
 import {
   createJobDir, createJobLog, findOlderThan, jobCommonFields, jobDir, jobGet, jobSet,
   jobTimestamp, jobUnitIsActive, listJobIds, newJobId, pruneJobs, readJobLog, startJobUnit,
   watchJobRecord,
   type PruneJobsResult,
-} from "./job-store";
-import { CLI_BIN, LOCK_DIR, STATE_DIR } from "./paths";
-import { ADDONS, ADDON_NAMES, addonNews, addonNoticeKeys } from "./addon-catalog";
-import { CLI_VERSION, type OnProgress } from "./release";
-import { Fatal, log, requireRoot, writeAtomic } from "./util";
+} from "../lib/job-store";
+import { CLI_BIN, LOCK_DIR, STATE_DIR } from "../lib/paths";
+import { ADDONS, ADDON_NAMES, addonNews, addonNoticeKeys } from "../addons/catalog";
+import { CLI_VERSION } from "../lib/version";
+import { type OnProgress } from "../cli/release";
+import { Fatal, log, requireRoot } from "../lib/log";
 
 /** Where the manager's own job records live, beside each addon's state. */
 export const MANAGER_STATE_DIR = `${STATE_DIR}/manager`;
@@ -147,7 +149,7 @@ export function recordNewsSince(previous: string | null, file = NEWS_SINCE_FILE,
   const since = previous === null ? current : previous.replace(/^v/, "");
   if (previous !== null && since === current) return;
   try {
-    writeAtomic(file, `${since}\n`, 0o644);
+    writeFileAtomic(file, `${since}\n`, { mode: 0o644, createParent: true });
   } catch (error) {
     log.warn(`could not record the release the Addons page badges start after: ${message(error)}`);
   }
@@ -162,7 +164,7 @@ export function keepNewsSince(file = NEWS_SINCE_FILE): () => void {
   return () => {
     try {
       if (kept === null) rmSync(file, { force: true });
-      else writeAtomic(file, kept, 0o644);
+      else writeFileAtomic(file, kept, { mode: 0o644, createParent: true });
     } catch (error) {
       log.warn(`could not restore the release the Addons page badges start after: ${message(error)}`);
     }
@@ -193,7 +195,7 @@ export function markNewsSeen(addons: string[] = ADDON_NAMES, file = NEWS_SEEN_FI
     const fresh = keys.filter((key) => !seen.includes(key));
     if (!fresh.length) return seen;
     seen.push(...fresh);
-    writeAtomic(file, `${JSON.stringify(seen)}\n`, 0o644);
+    writeFileAtomic(file, `${JSON.stringify(seen)}\n`, { mode: 0o644, createParent: true });
     return seen;
   });
 }

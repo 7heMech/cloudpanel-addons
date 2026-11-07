@@ -13,7 +13,7 @@ import { createHash } from "node:crypto";
 import { lstatSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { runCommand, type CommandResult } from "../../cli/action-common";
+import { runCommand, type CommandResult } from "../../lib/command";
 import { writeFileAtomic } from "../../lib/atomic-write";
 
 export interface BackupCompressionSettings { enabled: boolean; level: number; threads: number }

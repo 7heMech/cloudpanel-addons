@@ -4,11 +4,11 @@ import { expect, mock, test } from "bun:test";
 // per-file isolation so these overrides cannot affect another test file.
 import * as nodeFs from "node:fs";
 import { join } from "node:path";
-import { ARTIFACT_MANIFEST_PATH, CLI_ARTIFACT, CLI_BIN, LIBEXEC_DIR, LOCK_DIR } from "../cli/paths";
+import { ARTIFACT_MANIFEST_PATH, CLI_ARTIFACT, CLI_BIN, LIBEXEC_DIR, LOCK_DIR } from "../lib/paths";
 import * as realProvision from "../cli/provision";
 
 const calls: string[] = [];
-mock.module("../cli/php-guard", () => ({ reconcilePhpGuard: () => calls.push("reconcilePhpGuard") }));
+mock.module("../lib/php-guard", () => ({ reconcilePhpGuard: () => calls.push("reconcilePhpGuard") }));
 let hasInstalledAddon = true;
 let artifactsAvailable = false;
 let artifactTampered = false;
@@ -189,8 +189,8 @@ mock.module("node:fs", () => ({
   },
 }));
 
+mock.module("../lib/version", () => ({ CLI_VERSION: "1.2.3", DEV_VERSION: "0.0.0-dev" }));
 mock.module("../cli/release", () => ({
-  CLI_VERSION: "1.2.3",
   resolveRelease: async () => {
     calls.push("resolveRelease");
     return { tag: resolvedReleaseTag, assets: new Map<string, string>() };
@@ -208,6 +208,7 @@ mock.module("../cli/release", () => ({
   },
 }));
 
+mock.module("../lib/systemd", () => ({ unitActive: () => managerUnitState }));
 mock.module("../cli/provision", () => ({
   ...realProvision,
   ensureDirs: () => { calls.push("ensureDirs"); provisioning.dirs = true; },
@@ -250,20 +251,26 @@ mock.module("../cli/inject", () => ({
   },
 }));
 
-mock.module("../cli/util", () => ({
+mock.module("../lib/atomic-write", () => ({
+  writeFileAtomic: (path: string) => {
+    calls.push(`writeAtomic:${path}`);
+    if (manifestWriteFailure && path === ARTIFACT_MANIFEST_PATH) throw new Error("manifest write failed");
+    const operation = lockedOperation();
+    if (operation) calls.push(`locked:${operation}:${path}`);
+    if (tracked.has(path)) present.add(path);
+  },
+}));
+const __realLog = await import("../lib/log");
+mock.module("../lib/log", () => ({
+  ...__realLog,
   Fatal: TestFatal,
   fatal: (message: string): never => { throw new Error(message); },
   log: { step: () => {}, ok: (msg: string) => { calls.push(`log.ok:${msg}`); }, warn: (msg: string) => { calls.push(`log.warn:${msg}`); }, err: () => {}, plain: () => {} },
-  parseFlags: (argv: string[]) => {
-    const flags: Record<string, string | true> = {};
-    for (const arg of argv) {
-      if (!arg.startsWith("--")) continue;
-      const equal = arg.indexOf("=");
-      flags[arg.slice(2, equal === -1 ? undefined : equal)] = equal === -1 ? true : arg.slice(equal + 1);
-    }
-    return { positional: argv.filter((arg) => !arg.startsWith("--")), flags };
-  },
   requireRoot: () => {},
+}));
+const __realCommand = await import("../lib/command");
+mock.module("../lib/command", () => ({
+  ...__realCommand,
   run: (cmd: string, args: string[]) => {
     calls.push(`run:${cmd} ${args.join(" ")}`);
     if (handoffFailure && cmd === CLI_BIN && args[0] === "update") throw new Error("target handoff failed");
@@ -272,13 +279,6 @@ mock.module("../cli/util", () => ({
   tryRun: (cmd: string, args: string[]) => {
     calls.push(`tryRun:${cmd} ${args.join(" ")}`);
     return { ok: true, out: "" };
-  },
-  writeAtomic: (path: string) => {
-    calls.push(`writeAtomic:${path}`);
-    if (manifestWriteFailure && path === ARTIFACT_MANIFEST_PATH) throw new Error("manifest write failed");
-    const operation = lockedOperation();
-    if (operation) calls.push(`locked:${operation}:${path}`);
-    if (tracked.has(path)) present.add(path);
   },
 }));
 
@@ -294,7 +294,7 @@ mock.module("../lib/panel-snapshot", () => ({
 const { cmdInstall } = await import("../cli/install");
 const { applyEnable } = await import("../cli/toggle");
 const { cmdUpdate } = await import("../cli/update");
-const { NEWS_SINCE_FILE } = await import("../cli/manager-action");
+const { NEWS_SINCE_FILE } = await import("../manager/action");
 const handoffCall = (tag: string, ...args: string[]) =>
   `run:${CLI_BIN} ${["update", ...args, `--version=${tag}`, "--no-self-update", "--updated-from=1.2.3"].join(" ")}`;
 

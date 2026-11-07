@@ -3,9 +3,9 @@
 import { DEFAULT_REAL_IP_PATHS, REAL_IP_MARKER, releaseRealIp } from "../addons/system-tweaks/real-ip";
 import { endConffileRelease, releaseConffiles } from "./conffiles";
 import { releaseMaintenanceSettings } from "./inject";
-import { NGINX_GLOBAL_SETTINGS } from "./paths";
+import { NGINX_GLOBAL_SETTINGS } from "../lib/paths";
 import { cmdRepair } from "./repair";
-import { fatal, log, requireRoot } from "./util";
+import { fatal, log, requireRoot } from "../lib/log";
 
 export async function cmdAptHook(argv: string[]): Promise<void> {
   requireRoot("apt-hook");

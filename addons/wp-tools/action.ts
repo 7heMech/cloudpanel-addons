@@ -17,20 +17,22 @@
  * file content is a plugin zip chosen for a new site, which is staged in root's
  * own storage under an id root picks and handed to the site's user on stdin.
  */
-import { openPanelDatabase } from "../../cli/panel-db";
+import { openPanelDatabase } from "../../lib/panel-db";
 import { PANEL_USER_NAME_RE, panelUserOwnsSite, panelUserRole } from "../../lib/panel-users";
 import { createHash, randomBytes } from "node:crypto";
 import { isIP } from "node:net";
 import { normalizeMappedIpv4 } from "../../lib/ip-address";
 import { existsSync } from "node:fs";
 import { join } from "node:path";
-import {
-  REPLIED, replyToAction, emitActionOk, errorMessage, failAction, validateDomain, withFileLock, withFileLockSync, type CommandResult,
-} from "../../cli/action-common";
-import { CLI_BIN, CONFIG_DIR, NGINX_CERTIFICATES_DIR, PANEL_DB, STATE_DIR } from "../../cli/paths";
+import { REPLIED, replyToAction, emitActionOk, failAction } from "../../lib/action";
+import { errorMessage } from "../../lib/errors";
+import { validateDomain } from "../../lib/panel-identity";
+import { withFileLock, withFileLockSync } from "../../lib/file-lock";
+import { type CommandResult } from "../../lib/command";
+import { CLI_BIN, CONFIG_DIR, NGINX_CERTIFICATES_DIR, PANEL_DB, STATE_DIR } from "../../lib/paths";
 import {
   jobDir, jobGet, jobIdArgument, jobSet, pruneJobs, readJobLog, validateJobId, watchJobRecord, type startJobUnit,
-} from "../../cli/job-store";
+} from "../../lib/job-store";
 import { readUnixAccounts, siteAccountProblem, splitSharedUids, type UnixAccount } from "../../lib/site-accounts";
 import {
   DEFAULT_MAINTENANCE_ACTION_PATHS, addBypass, maintenanceBlocks, type MaintenanceActionPaths,

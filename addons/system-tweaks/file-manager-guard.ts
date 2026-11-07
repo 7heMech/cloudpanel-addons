@@ -6,10 +6,12 @@
  * is the only client, rather than to everyone in group `clp`.
  */
 import { chmodSync, chownSync, lstatSync } from "node:fs";
-import { failAction } from "../../cli/action-common";
-import { PANEL_USER } from "../../cli/paths";
+import { failAction } from "../../lib/action";
+import { PANEL_USER } from "../../lib/paths";
 import { DEFAULT_PANEL_PHP_PATHS, panelPageParams } from "./panel-php";
-import { FPM_DIR, POOL_GUARD_PATH_DEFAULTS, poolGuard, type PoolGuardContext, type PoolGuardOptions, type PoolGuardPaths } from "./pool-guard";
+import {
+  FPM_DIR, POOL_GUARD_PATH_DEFAULTS, poolGuard, type PoolGuardContext, type PoolGuardOptions, type PoolGuardPaths,
+} from "./pool-guard";
 import GUARD_SCRIPT from "./file-manager-guard.php" with { type: "text" };
 
 export interface FileManagerGuardPaths extends PoolGuardPaths {

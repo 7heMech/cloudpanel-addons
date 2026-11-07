@@ -18,16 +18,17 @@ import {
   closeSync, fstatSync, mkdirSync, openSync, readFileSync, readdirSync, readSync, rmSync,
   statSync, writeFileSync,
 } from "node:fs";
-import { writeFileAtomic } from "../lib/atomic-write";
+import { writeFileAtomic } from "./atomic-write";
 import { join } from "node:path";
-import { failAction, runCommand } from "./action-common";
+import { failAction } from "./action";
+import { runCommand } from "./command";
 import { CLI_BIN } from "./paths";
 
 /** A job id is a UTC stamp plus six hex characters: 20260911T160031Z-35e759. */
 // Re-exported from its neutral home so the app services can check an id
 // without importing this module's job orchestration. See lib/job-id.ts.
-export { JOB_ID_RE, validateJobId } from "../lib/job-id";
-import { isTerminalJobState, JOB_ID_RE, validateJobId } from "../lib/job-id";
+export { JOB_ID_RE, validateJobId } from "./job-id";
+import { isTerminalJobState, JOB_ID_RE, validateJobId } from "./job-id";
 
 /**
  * The longest field value that will ever be read back.

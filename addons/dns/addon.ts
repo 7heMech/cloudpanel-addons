@@ -1,6 +1,6 @@
-import type { AddonDefinition } from "../../cli/addon-catalog";
-import { queueAddonPass } from "../../cli/job-store";
-import { tryRun } from "../../cli/util";
+import type { AddonDefinition } from "../../lib/addon-definition";
+import { queueAddonPass } from "../../lib/job-store";
+import { tryRun } from "../../lib/command";
 import { executeDnsAction, runDnsAction, type DnsActionOptions } from "./action";
 import { handle } from "./app/index";
 import { DNS_TARGETS } from "./inject/nameservers";

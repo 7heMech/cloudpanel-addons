@@ -8,9 +8,11 @@
  */
 import { existsSync, readFileSync } from "node:fs";
 import { isIP } from "node:net";
-import { runCommand, type CommandResult } from "../../cli/action-common";
-import { cloudflareRanges, nginxFileChange, trustedVhost, withNginxTransaction, type NginxFileOwner, type NginxGroupWrite } from "../../cli/nginx-transaction";
-import { CLOUDFLARE_IPS_PATH, ROOT_UID, nginxLayout } from "../../cli/paths";
+import { runCommand, type CommandResult } from "../../lib/command";
+import {
+  cloudflareRanges, nginxFileChange, trustedVhost, withNginxTransaction, type NginxFileOwner, type NginxGroupWrite,
+} from "../../lib/nginx-transaction";
+import { CLOUDFLARE_IPS_PATH, ROOT_UID, nginxLayout } from "../../lib/paths";
 import { panelUserGid, panelUserUid } from "../../lib/sso-auth";
 import { COMMAND_MS } from "./limits";
 

@@ -1,17 +1,19 @@
+import { writeFileAtomic } from "../../lib/atomic-write";
 import { Database } from "bun:sqlite";
 import {
   chmodSync, existsSync, lstatSync, mkdirSync, readFileSync, rmSync,
 } from "node:fs";
 import { dirname, join } from "node:path";
+import { errorMessage } from "../../lib/errors";
+import { replyToAction, failAction } from "../../lib/action";
+import { runCommand, type CommandResult } from "../../lib/command";
+import { validateFlag } from "../../lib/validate";
+import { withFileLock } from "../../lib/file-lock";
+import { PANEL_DB, STATE_DIR } from "../../lib/paths";
+import { openPanelDatabase, withoutStandIns } from "../../lib/panel-db";
 import {
-  errorMessage, replyToAction, failAction, runCommand, validateFlag, withFileLock,
-  type CommandResult,
-} from "../../cli/action-common";
-import { PANEL_DB, STATE_DIR } from "../../cli/paths";
-import { openPanelDatabase, withoutStandIns } from "../../cli/panel-db";
-import {
-  trustedVhost, withNginxTransaction, withRecoveryFailures, writeAtomicOwned,
-} from "../../cli/nginx-transaction";
+  trustedVhost, withNginxTransaction, withRecoveryFailures,
+} from "../../lib/nginx-transaction";
 import { CLOUDFLARE_IPS_VERBS } from "./verbs";
 
 const POLICY_VERSION = 1;
@@ -139,7 +141,7 @@ function writePolicy(path: string, policy: Policy, expectedUid: number): void {
     uid = stat.uid;
     gid = stat.gid;
   }
-  writeAtomicOwned(path, `${JSON.stringify(stablePolicy(policy), null, 2)}\n`, 0o600, uid, gid);
+  writeFileAtomic(path, `${JSON.stringify(stablePolicy(policy), null, 2)}\n`, { mode: 0o600, owner: { uid: uid, gid: gid }, createParent: true });
 }
 
 function siteRows(db: Database): SiteRow[] {
@@ -314,7 +316,7 @@ async function setSelected(
         if (before === null) rmSync(paths.policyFile, { force: true });
         else {
           const stat = lstatSync(paths.policyFile);
-          writeAtomicOwned(paths.policyFile, before, 0o600, stat.uid, stat.gid);
+          writeFileAtomic(paths.policyFile, before, { mode: 0o600, owner: { uid: stat.uid, gid: stat.gid }, createParent: true });
         }
       } catch (rollbackError) {
         rollbackFailures.push(errorMessage(rollbackError));

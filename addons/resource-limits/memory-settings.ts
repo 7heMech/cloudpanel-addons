@@ -1,7 +1,9 @@
 /** The saved memory policy and its lifecycle, independent of PHP's category policy. */
 import { existsSync, lstatSync, readFileSync } from "node:fs";
-import { errorMessage, failAction, withFileLock, withFileLockSync } from "../../cli/action-common";
-import { CONFIG_DIR, LOCK_DIR, STATE_DIR } from "../../cli/paths";
+import { errorMessage } from "../../lib/errors";
+import { failAction } from "../../lib/action";
+import { withFileLock, withFileLockSync } from "../../lib/file-lock";
+import { CONFIG_DIR, LOCK_DIR, STATE_DIR } from "../../lib/paths";
 import { writeFileAtomic } from "../../lib/atomic-write";
 import { MEMORY_DEADLINE_MS } from "./limits";
 import {

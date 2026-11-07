@@ -1,14 +1,14 @@
 // The Addons page: the card list, the update page, and the job card a
 // mutation leaves behind.
-import { ADDONS, addonHandler, addonNews } from "../cli/addon-catalog";
-import { CLI_VERSION } from "../cli/release";
+import { ADDONS, addonHandler, addonNews } from "../addons/catalog";
+import { CLI_VERSION, DEV_VERSION } from "../lib/version";
 import { esc, escJs, htmlResponse } from "../lib/app-http";
 import { JOB_WATCH_JS, renderLayout } from "../lib/app-ui";
 import { mountPath } from "../lib/mount";
 import { lockState } from "../lib/root-locks";
 import { UPDATE_PATH, changelogUrl } from "../lib/update-ui";
 import type { CliUpdateInfo } from "../lib/update-check";
-import type { ManagerJobView } from "../cli/manager-action";
+import type { ManagerJobView } from "./action";
 
 import MANAGER_INDEX_CSS from "./views.css" with { type: "text" };
 
@@ -147,7 +147,7 @@ export function updatePage(
 ): Response {
   const update = info?.hasUpdate ? info : null;
   const live = liveManagerJob(options.job ?? null);
-  const development = currentVersion === "0.0.0-dev";
+  const development = currentVersion === DEV_VERSION;
   const status = update ? "Update available" : info ? "Up to date" : development ? "Development build" : "Unable to check";
   const message = update
     ? "Install the latest release of CloudPanel Addons. The Addons manager will restart briefly during the update."

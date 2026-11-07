@@ -12,12 +12,15 @@
 
 import { existsSync, lstatSync, readFileSync, readdirSync, rmSync } from "node:fs";
 import { join } from "node:path";
-import { writeFileAtomic } from "../lib/atomic-write";
-import { CONFIG_DIR, PANEL_FPM_UNIT, PHP_FPM_BIN_DIR, PHP_GUARD_INI_NAME, PHP_ROOT, ROOT_UID, STATE_DIR } from "./paths";
-import { errorMessage } from "./action-common";
+import { writeFileAtomic } from "./atomic-write";
+import {
+  CONFIG_DIR, PANEL_FPM_UNIT, PHP_FPM_BIN_DIR, PHP_GUARD_INI_NAME, PHP_ROOT, ROOT_UID, STATE_DIR,
+} from "./paths";
+import { errorMessage } from "./errors";
 import { withRecoveryFailures } from "./nginx-transaction";
-import { unitActive } from "./provision";
-import { log, tryRun } from "./util";
+import { unitActive } from "./systemd";
+import { log } from "./log";
+import { tryRun } from "./command";
 
 const INI_BODY = "; Managed by clp-addons: CVE-2026-109619 session upload-progress mitigation\nsession.upload_progress.enabled = Off\n";
 const VERSION_RE = /^[0-9]+\.[0-9]+$/;

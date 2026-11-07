@@ -14,7 +14,7 @@ import { join } from "node:path";
 import {
   authenticateRequest, MAX_SESSION_BYTES, panelSessionId, parsePanelSession, readPanelSessionFile,
 } from "../lib/sso-auth";
-import { SESSION_DIR } from "../cli/paths";
+import { SESSION_DIR } from "../lib/paths";
 import { adminGate } from "../lib/sso-auth";
 
 

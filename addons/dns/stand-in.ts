@@ -7,9 +7,10 @@
  * addon already knows it is not an ordinary site.
  */
 import { randomBytes } from "node:crypto";
-import { panelSiteUserFor, runCommand } from "../../cli/action-common";
-import { replaceSiteVhost, type SiteVhostPaths } from "../../cli/site-vhost";
-import { ownsStandInSite } from "../../cli/stand-ins";
+import { panelSiteUserFor } from "../../lib/site-user";
+import { runCommand } from "../../lib/command";
+import { replaceSiteVhost, type SiteVhostPaths } from "../../lib/site-vhost";
+import { ownsStandInSite } from "../../lib/stand-ins";
 import type { StandIn, StandIns } from "./engine";
 import type { Redirect } from "./model";
 import { standInHosts } from "./redirects";

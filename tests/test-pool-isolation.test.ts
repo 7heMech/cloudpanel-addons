@@ -2,7 +2,7 @@ import { afterEach, expect, test } from "bun:test";
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import type { CommandResult } from "../cli/action-common";
+import type { CommandResult } from "../lib/command";
 import {
   installPoolIsolation, listenPort, phpPools, poolDropIn, poolIsolationStatus, poolRuleset, removePoolIsolation, syncPoolIsolation,
   type PoolIsolationOptions,

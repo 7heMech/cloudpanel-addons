@@ -1,13 +1,15 @@
 import { expect, test } from "bun:test";
-import { chmodSync, lstatSync, mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
+import {
+  chmodSync, lstatSync, mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync,
+} from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { execFileSync } from "node:child_process";
-import { nginxLayout, PANEL_GROUP, SERVICE_GROUP, SERVICE_USER } from "../cli/paths";
-import { ADDON_NAMES, ADDONS } from "../cli/addon-catalog";
+import { nginxLayout, PANEL_GROUP, SERVICE_GROUP, SERVICE_USER } from "../lib/paths";
+import { ADDON_NAMES, ADDONS } from "../addons/catalog";
 import {
-  authUnits, ensurePanelSessionReadable, reconcileUnits, serviceUnit,
-  vhostOwnerAccepted, warnIfPanelSessionUnreadable,
+  authUnits, ensurePanelSessionReadable, reconcileUnits, serviceUnit, vhostOwnerAccepted,
+  warnIfPanelSessionUnreadable,
 } from "../cli/provision";
 import { panelUserUid } from "../lib/sso-auth";
 // Other suites in this process mock.module("../cli/provision"); the query suffix keeps
@@ -98,7 +100,7 @@ test("native backup cron is installed, preserves custom schedules, and is remove
   const root = mkdtempSync(join(tmpdir(), "instatic-cron-"));
   const path = join(root, "instatic-backup");
   try {
-    // Other suites mock cli/util.writeAtomic; exercise real provisioning in
+    // Other suites mock lib/log and lib/command; exercise real provisioning in
     // its own process so this checks the actual cron file lifecycle.
     const output = execFileSync(process.execPath, ["-e", `
       import { existsSync, readFileSync, statSync, writeFileSync } from 'node:fs';
@@ -128,7 +130,7 @@ function serviceUserProbe(options: {
   failedCommand?: string;
 }): { ok: boolean; error?: string; calls: Array<{ command: string; args: string[] }> } {
   const script = `
-    import { PANEL_GROUP, SERVICE_GROUP, SERVICE_USER } from "./cli/paths.ts";
+    import { PANEL_GROUP, SERVICE_GROUP, SERVICE_USER } from "./lib/paths.ts";
     import { ensureServiceUser } from "./cli/provision.ts";
     const options = ${JSON.stringify(options)};
     const calls = [];
@@ -283,7 +285,7 @@ function requiredUnitsProbe(options: {
       }));
     }
   `;
-  // ensureRequiredUnits logs through the real cli/util.ts (unmocked here, to
+  // ensureRequiredUnits logs through the real lib/log.ts (unmocked here, to
   // exercise the genuine Docker-provisioning code path), so stdout carries
   // those step/ok lines ahead of the JSON result; only the last line is it.
   const output = execFileSync(process.execPath, ["-e", script], { cwd: REPO, encoding: "utf8" });
@@ -408,8 +410,8 @@ function provisionProbe(): {
   unsafeIdentity: { primary: string; aliases: string[] } | null;
 } {
   const script = `
-    import { ADDONS } from "./cli/addon-catalog.ts";
-    import { PANEL_IDENTITY_PATH } from "./cli/paths.ts";
+    import { ADDONS } from "./addons/catalog.ts";
+    import { PANEL_IDENTITY_PATH } from "./lib/paths.ts";
     import { panelIdentityFromVhost } from "./cli/provision.ts";
     console.log(JSON.stringify({
       identityPath: PANEL_IDENTITY_PATH,
@@ -497,7 +499,7 @@ test("every addon's APP_DATA environment assignment is a name systemd accepts", 
 test("provisioning creates every project-owned writable directory", () => {
   const result = execFileSync(process.execPath, [
     "-e",
-    `import { ADDONS } from "./cli/addon-catalog.ts";
+    `import { ADDONS } from "./addons/catalog.ts";
      import { ensureDirs } from "./cli/provision.ts";
      const created = [];
      const commands = { run: () => "0", tryRun: () => ({ ok: true, out: "" }) };
@@ -622,7 +624,7 @@ test("provisioning rejects an auth helper with the wrong probe contract", async 
 
 // Run in a fresh subprocess (rather than in-process, like the tests above) so the
 // console.warn capture below cannot be polluted by other test files in this suite that
-// mock.module("../cli/util") to silence logging for their own purposes.
+// mock.module("../lib/log") to silence logging for their own purposes.
 function panelSessionWarningProbe(sessionDir: string): { threw: boolean; warnings: string[] } {
   const script = `
     import { warnIfPanelSessionUnreadable } from "./cli/provision.ts";
@@ -717,7 +719,7 @@ test("the panel vhost may be owned by root or the panel user, but never world-wr
 test("a stock catch-all panel vhost yields an empty identity, not an install failure", () => {
   const script = `
     import { panelIdentityFromVhost } from "./cli/provision.ts";
-    import { parsePanelIdentity, validateDomain } from "./cli/action-common.ts";
+    import { parsePanelIdentity, validateDomain } from "./lib/panel-identity.ts";
     const catchAll = panelIdentityFromVhost("server { listen 8443 ssl; server_name _; }");
     const named = panelIdentityFromVhost("server { listen 8443 ssl; server_name panel.example.test; }");
     const noDirective = panelIdentityFromVhost("server { listen 8443 ssl; root /var/www; }");
@@ -779,8 +781,8 @@ test("directory provisioning applies ownership natively and resolves each accoun
   // accounts as the ones the unit files name.
   const result = execFileSync(process.execPath, [
     "-e",
-    `import { SERVICE_USER, SERVICE_GROUP, SHARED_GROUP } from "./cli/paths.ts";
-     import { ADDONS } from "./cli/addon-catalog.ts";
+    `import { SERVICE_USER, SERVICE_GROUP, SHARED_GROUP } from "./lib/paths.ts";
+     import { ADDONS } from "./addons/catalog.ts";
      import { ensureDirs } from "./cli/provision.ts";
      const spawned = [];
      const chowned = [];
@@ -868,11 +870,11 @@ test("repair removes the per-addon new-site units 1.5.x left and reloads systemd
       mock.module("node:fs", () => ({ ...fs, rmSync: (path, options) => {
         if (!String(path).startsWith("/etc/sudoers.d/")) remove(path, options);
       } }));
-      const paths = await import("./cli/paths.ts");
-      mock.module("./cli/paths.ts", () => ({ ...paths, SYSTEMD_DIR: ${JSON.stringify(root)} }));
-      const util = await import("./cli/util.ts");
+      const paths = await import("./lib/paths.ts");
+      mock.module("./lib/paths.ts", () => ({ ...paths, SYSTEMD_DIR: ${JSON.stringify(root)} }));
+      const command = await import("./lib/command.ts");
       const calls = [];
-      mock.module("./cli/util.ts", () => ({ ...util,
+      mock.module("./lib/command.ts", () => ({ ...command,
         run: (command, args) => calls.push([command, ...args]),
         tryRun: (command, args) => { calls.push([command, ...args]); return { ok: true, out: "" }; },
       }));

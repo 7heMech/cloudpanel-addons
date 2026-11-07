@@ -19,8 +19,8 @@ const PROBE = String.raw`
   import { join } from "node:path";
 
   const phpFixture = mkdtempSync(join(tmpdir(), "clp-repair-php-"));
-  const realPaths = await import("./cli/paths.ts");
-  mock.module("./cli/paths.ts", () => ({
+  const realPaths = await import("./lib/paths.ts");
+  mock.module("./lib/paths.ts", () => ({
     ...realPaths,
     PHP_ROOT: join(phpFixture, "php"),
     PHP_FPM_BIN_DIR: join(phpFixture, "sbin"),
@@ -60,14 +60,15 @@ const PROBE = String.raw`
   mock.module("./addons/system-tweaks/action.ts", () => ({ ...realSystemTweaks, systemTweaksMaintenance: async () => null }));
 
   const realProvision = await import("./cli/provision.ts?repair-test-real");
+  mock.module("./lib/version.ts", () => ({ CLI_VERSION: "1.2.3", DEV_VERSION: "0.0.0-dev" }));
   mock.module("./cli/release.ts", () => ({
-    CLI_VERSION: "1.2.3",
     resolveRelease: async () => ({ tag: "v1.2.3", assets: new Map() }),
     fetchVerified: async (_release, names = []) => names.map((name) => ({ name, bytes: Buffer.from(name, "utf-8") })),
     verifyAttestation: async () => {},
     loadLocal: (_dir, names = []) => names.map((name) => ({ name, bytes: Buffer.from(name, "utf-8") })),
   }));
 
+  mock.module("./lib/systemd.ts", () => ({ unitActive: () => "active" }));
   mock.module("./cli/provision.ts", () => ({
     ...realProvision,
     ensureDirs: (_specs, verifySession) => {
@@ -114,15 +115,24 @@ const PROBE = String.raw`
     },
   }));
 
-  mock.module("./cli/util.ts", () => ({
+  const __realLog = await import("./lib/log.ts");
+  // Installing writes the binary and its manifest under /usr/local and /var/lib.
+  const { writeFileAtomic } = await import("./lib/atomic-write.ts");
+  mock.module("./lib/atomic-write.ts", () => ({
+    writeFileAtomic: (path, ...rest) => path.startsWith(tmpdir()) ? writeFileAtomic(path, ...rest) : undefined,
+  }));
+  mock.module("./lib/log.ts", () => ({
+    ...__realLog,
     Fatal: TestFatal,
     fatal: (message) => { throw new TestFatal(message); },
     log: { step: () => {}, ok: (message) => calls.push("ok:" + message), warn: () => {}, err: () => {}, plain: () => {} },
-    parseFlags,
     requireRoot: () => {},
+  }));
+  const __realCommand = await import("./lib/command.ts");
+  mock.module("./lib/command.ts", () => ({
+    ...__realCommand,
     run: () => "",
     tryRun: (cmd) => ({ ok: !cmd.startsWith(phpFixture), out: "fixture FPM rejected configuration" }),
-    writeAtomic: () => {},
   }));
 
   mock.module("./lib/panel-snapshot.ts", () => ({

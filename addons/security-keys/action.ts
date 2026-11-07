@@ -1,3 +1,4 @@
+import { writeFileAtomic } from "../../lib/atomic-write";
 import { SECURITY_KEYS_VERBS } from "./verbs";
 import { TOKEN_TTL_SECONDS, mfaMark, recordSignIn } from "./sign-ins";
 import { createHmac, randomBytes } from "node:crypto";
@@ -6,12 +7,12 @@ import {
   readdirSync, readFileSync, readSync, rmSync, writeSync,
 } from "node:fs";
 import { dirname, join } from "node:path";
-import {
-  ActionFailure, emitActionOk, failAction, parseJsonRequest, oneLine, withFileLockSync, errorMessage, reportActionFailure,
-} from "../../cli/action-common";
-import { openPanelDatabase } from "../../cli/panel-db";
-import { writeAtomicOwned } from "../../cli/nginx-transaction";
-import { LOCK_DIR, PANEL_DB, PANEL_VAR_DIR, STATE_DIR } from "../../cli/paths";
+import { ActionFailure, emitActionOk, failAction, parseJsonRequest, reportActionFailure } from "../../lib/action";
+import { oneLine } from "../../lib/validate";
+import { withFileLockSync } from "../../lib/file-lock";
+import { errorMessage } from "../../lib/errors";
+import { openPanelDatabase } from "../../lib/panel-db";
+import { LOCK_DIR, PANEL_DB, PANEL_VAR_DIR, STATE_DIR } from "../../lib/paths";
 import { PANEL_USER_NAME_RE } from "../../lib/panel-users";
 import {
   ALGORITHMS, fromB64url, normalizeOrigin, verifyAssertion, verifyRegistration, type StoredPublicKey,
@@ -178,7 +179,7 @@ function readStore(paths: SecurityKeysPaths): Store {
 
 function writeStore(paths: SecurityKeysPaths, store: Store): void {
   const users = Object.fromEntries(Object.entries(store.users).filter(([, user]) => user.keys.length > 0).sort());
-  writeAtomicOwned(storePath(paths), `${JSON.stringify({ version: STORE_VERSION, users }, null, 2)}\n`, 0o600, paths.stateUid, process.getgid?.() ?? 0);
+  writeFileAtomic(storePath(paths), `${JSON.stringify({ version: STORE_VERSION, users }, null, 2)}\n`, { mode: 0o600, owner: { uid: paths.stateUid, gid: process.getgid?.() ?? 0 }, createParent: true });
 }
 
 function settingsPath(paths: SecurityKeysPaths): string {
@@ -202,7 +203,7 @@ function readSettings(paths: SecurityKeysPaths): Settings {
 }
 
 function writeSettings(paths: SecurityKeysPaths, settings: Settings): void {
-  writeAtomicOwned(settingsPath(paths), `${JSON.stringify(settings, null, 2)}\n`, 0o600, paths.stateUid, process.getgid?.() ?? 0);
+  writeFileAtomic(settingsPath(paths), `${JSON.stringify(settings, null, 2)}\n`, { mode: 0o600, owner: { uid: paths.stateUid, gid: process.getgid?.() ?? 0 }, createParent: true });
 }
 
 function allowedRole(settings: Settings, account: PanelAccount): boolean {
@@ -318,7 +319,7 @@ function spendChallenge<T>(paths: SecurityKeysPaths, id: string, now: number, an
   if (id in live) refuse("the sign-in request has expired; try again");
   const result = answered();
   live[id] = Number(id.split(".")[0]);
-  writeAtomicOwned(path, JSON.stringify(live), 0o600, paths.stateUid, process.getgid?.() ?? 0);
+  writeFileAtomic(path, JSON.stringify(live), { mode: 0o600, owner: { uid: paths.stateUid, gid: process.getgid?.() ?? 0 }, createParent: true });
   return result;
 }
 

@@ -21,15 +21,15 @@ const root = process.env.CLP_TEST_ROOT;
 const configFile = root + "/instatic.conf";
 const event = (name) => appendFileSync(root + "/events", name + "\n");
 
-const realPaths = await import("./cli/paths.ts");
-mock.module("./cli/paths.ts", () => ({
+const realPaths = await import("./lib/paths.ts");
+mock.module("./lib/paths.ts", () => ({
   ...realPaths,
   CLI_BIN: root + "/clp-addons",
   LIBEXEC_DIR: root + "/libexec",
   STATE_DIR: root + "/state",
 }));
-const realCatalog = await import("./cli/addon-catalog.ts");
-mock.module("./cli/addon-catalog.ts", () => ({
+const realCatalog = await import("./addons/catalog.ts");
+mock.module("./addons/catalog.ts", () => ({
   ...realCatalog,
   ADDONS: { ...realCatalog.ADDONS, instatic: { ...realCatalog.ADDONS.instatic, configFile } },
 }));
@@ -47,13 +47,13 @@ mock.module("./cli/reconcile.ts", () => ({
   reconcileMaintenanceNginx: (_quiet, enabled) => { event("maintenance " + enabled); return true; },
   reconcileNginx: (_quiet, enabled) => { event("nginx " + enabled); return process.env.CLP_TEST_NGINX_FAILS !== "1"; },
 }));
-mock.module("./cli/php-guard.ts", () => ({ reconcilePhpGuard: (wanted) => event("phpGuard " + wanted) }));
+mock.module("./lib/php-guard.ts", () => ({ reconcilePhpGuard: (wanted) => event("phpGuard " + wanted) }));
 mock.module("./cli/inject.ts", () => ({ purgeTwigCache: () => event("purgeTwigCache") }));
 mock.module("./cli/operation-lock.ts", () => ({ withOperationLockSync: (_name, fn) => fn() }));
 class TestFatal extends Error {}
-const realUtil = await import("./cli/util.ts");
-mock.module("./cli/util.ts", () => ({
-  ...realUtil,
+const realLog = await import("./lib/log.ts");
+mock.module("./lib/log.ts", () => ({
+  ...realLog,
   Fatal: TestFatal,
   fatal: (message) => { throw new TestFatal(message); },
   log: { step: () => {}, ok: () => {}, warn: () => {}, err: () => {}, plain: () => {} },

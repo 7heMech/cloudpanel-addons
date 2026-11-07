@@ -4,7 +4,7 @@ import { existsSync } from "node:fs";
 // import time, and every consumer of this leaf would then pay for it.
 export const PANEL_IDENTITY_PATH = "/etc/clp-addons/panel-identity.conf";
 
-export { mountPath } from "../lib/mount";
+export { mountPath } from "./mount";
 
 export const REPO = "7heMech/cloudpanel-addons";
 export const CLI_ARTIFACT = "clp-addons-linux-x64";

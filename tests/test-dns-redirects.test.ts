@@ -9,7 +9,7 @@ import { seededPolicy } from "../addons/dns/presets";
 import { renderRedirect, type SiteVars } from "../addons/dns/records";
 import { foundRedirect, redirectRef, redirectRuleState, wholeHostHosts } from "../addons/dns/redirects";
 import { clpctlStandIns, readStandIns, standInBody, type StandInPaths } from "../addons/dns/stand-in";
-import { isStandInSite, ownsStandInSite } from "../cli/stand-ins";
+import { isStandInSite, ownsStandInSite } from "../lib/stand-ins";
 import type { CfRule } from "../addons/dns/cloudflare";
 import type { Redirect } from "../addons/dns/model";
 import { FakeCloudflare, FakeMailcow, hexId, MAILCOW_KEY, routed } from "./fixtures/dns-api";

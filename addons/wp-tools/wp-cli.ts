@@ -1,5 +1,5 @@
 import { existsSync } from "node:fs";
-import type { JobSiteProgress } from "../../cli/job-store";
+import type { JobSiteProgress } from "../../lib/job-store";
 
 export interface WpSite {
   domain: string; user: string; root: string; home: string; phpVersion: string;

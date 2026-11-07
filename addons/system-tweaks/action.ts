@@ -1,11 +1,11 @@
 /** Root actions and lifecycle hooks for server-wide update and PHP settings. */
 import { SYSTEM_TWEAKS_VERBS } from "./verbs";
 import { existsSync, lstatSync, readFileSync } from "node:fs";
-import {
-  replyToAction, errorMessage, failAction, readJsonRequest, withFileLock, withFileLockSync,
-} from "../../cli/action-common";
-import { ROOT_UID, STATE_DIR } from "../../cli/paths";
-import { reconcilePhpGuard, type PhpGuardOptions } from "../../cli/php-guard";
+import { replyToAction, failAction, readJsonRequest } from "../../lib/action";
+import { errorMessage } from "../../lib/errors";
+import { withFileLock, withFileLockSync } from "../../lib/file-lock";
+import { ROOT_UID, STATE_DIR } from "../../lib/paths";
+import { reconcilePhpGuard, type PhpGuardOptions } from "../../lib/php-guard";
 import { writeFileAtomic } from "../../lib/atomic-write";
 import {
   DEFAULT_UPDATE_SETTINGS, REBOOT_TIME_ERROR, UPDATE_SETTING_KEYS, applyUpdates, validRebootTime, effectiveReboot, installUnattendedUpgrades, systemRun, unattendedUpgradesInstalled, updatesStatus, withDeadline,
@@ -19,23 +19,33 @@ import { panelCertStatus, replacePanelCert, type PanelCertOptions, type PanelCer
 import {
   panelPhpStatus, reconcilePanelPhp, restorePanelPhp, setPanelPhp, withdrawPanelPhp, type PanelPhpOptions, type PanelPhpStatus,
 } from "./panel-php";
-import { log } from "../../cli/util";
-import { clearAbandonedTmpFiles, type TmpCleanupOptions } from "../../cli/tmp-cleanup";
+import { log } from "../../lib/log";
+import { clearAbandonedTmpFiles, type TmpCleanupOptions } from "../../lib/tmp-cleanup";
 import {
   firewallStatus, setRuleProtocol, syncFirewall, type FirewallOptions, type FirewallStatus,
 } from "./firewall";
-import { installVhostGuard, queueVhostGuard, removeVhostGuard, vhostGuardStatus, type VhostGuardOptions } from "./vhost-guard";
+import {
+  installVhostGuard, queueVhostGuard, removeVhostGuard, vhostGuardStatus, type VhostGuardOptions,
+} from "./vhost-guard";
 import {
   fileManagerGuardStatus, installFileManagerGuard, queueFileManagerGuard, removeFileManagerGuard, type FileManagerGuardOptions,
 } from "./file-manager-guard";
 import { storedVhostValues, type StoredVhostValue, type VhostValuesOptions } from "./vhost-values";
-import { installPoolIsolation, poolIsolationStatus, removePoolIsolation, syncPoolIsolation, type PoolIsolationOptions, type PoolIsolationStatus } from "./pool-isolation";
-import { installVarnishBackends, removeVarnishBackends, sitesWithHomeLogs, sitesWithOwnLogrotate, varnishBackendsActive, type VarnishBackendOptions } from "./varnish-backend";
+import {
+  installPoolIsolation, poolIsolationStatus, removePoolIsolation, syncPoolIsolation, type PoolIsolationOptions,
+  type PoolIsolationStatus,
+} from "./pool-isolation";
+import {
+  installVarnishBackends, removeVarnishBackends, sitesWithHomeLogs, sitesWithOwnLogrotate, varnishBackendsActive,
+  type VarnishBackendOptions,
+} from "./varnish-backend";
 import {
   applyLoginJails, installLoginJailPackages, loginJailsStatus, releaseLoginJails, unban,
   type Fail2banBefore, type LoginJailOptions, type LoginJailSettings, type LoginJailsStatus,
 } from "./login-jails";
-import { databaseStatus, reconcileDatabaseFile, setDatabaseLoopback, type DatabaseOptions, type DatabaseStatus } from "./database";
+import {
+  databaseStatus, reconcileDatabaseFile, setDatabaseLoopback, type DatabaseOptions, type DatabaseStatus,
+} from "./database";
 import {
   applyClpctlGuard, clpctlGuardOrError, restoreClpctlWrapper, type ClpctlGuardOptions, type ClpctlGuardStatus,
 } from "./clpctl-guard";

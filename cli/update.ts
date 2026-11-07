@@ -7,19 +7,21 @@ import {
   rollbackUpdate,
 } from "./artifacts";
 import { reconcileAnchors, reconcileMaintenanceNginx, reconcileNginx } from "./reconcile";
-import { reconcilePhpGuard } from "./php-guard";
-import { type AddonSpec } from "./addon-catalog";
-import { keepNewsSince, recordNewsSince } from "./manager-action";
+import { reconcilePhpGuard } from "../lib/php-guard";
+import { type AddonSpec } from "../lib/addon-definition";
+import { keepNewsSince, recordNewsSince } from "../manager/action";
 import { operationLockEnv, withOperationLock } from "./operation-lock";
-import { CLI_BIN, LEGACY_GH, MANAGER_UNIT, RECONCILE_SERVICE } from "./paths";
+import { CLI_BIN, LEGACY_GH, MANAGER_UNIT, RECONCILE_SERVICE } from "../lib/paths";
 import {
-  ensureAuthHelperReady, ensureDirs, ensureServiceUser, installUnits, reconcilePanelIdentity,
-  removeLegacyUnits, startUnits, unitActive, writeConfig,
+  ensureAuthHelperReady, ensureDirs, ensureServiceUser, installUnits, reconcilePanelIdentity, removeLegacyUnits,
+  startUnits, writeConfig,
 } from "./provision";
-import {
-  CLI_VERSION, type FetchedArtifact, fetchVerified, type OnProgress, resolveRelease, verifyAttestation,
-} from "./release";
-import { fatal, log, parseFlags, requireRoot, run, tryRun } from "./util";
+import { unitActive } from "../lib/systemd";
+import { CLI_VERSION } from "../lib/version";
+import { type FetchedArtifact, fetchVerified, type OnProgress, resolveRelease, verifyAttestation } from "./release";
+import { fatal, log, requireRoot } from "../lib/log";
+import { parseFlags } from "./flags";
+import { run, tryRun } from "../lib/command";
 import { compareSemver, isPrerelease } from "../lib/semver";
 /**
  * Reconcile all provisioning from the binary that owns the definitions.

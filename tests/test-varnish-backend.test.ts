@@ -1,9 +1,12 @@
 import { afterEach, expect, test } from "bun:test";
 import { Database } from "bun:sqlite";
-import { appendFileSync, chmodSync, existsSync, lstatSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, readlinkSync, rmSync, statSync, symlinkSync, truncateSync, writeFileSync } from "node:fs";
+import {
+  appendFileSync, chmodSync, existsSync, lstatSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, readlinkSync,
+  rmSync, statSync, symlinkSync, truncateSync, writeFileSync,
+} from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import type { CommandResult } from "../cli/action-common";
+import type { CommandResult } from "../lib/command";
 import {
   addonLogrotate, cloudpanelLogrotate, sitesWithOwnLogrotate,
   installVarnishBackends, removeVarnishBackends, syncVarnishBackends, varnishBackend, varnishBackendsActive,

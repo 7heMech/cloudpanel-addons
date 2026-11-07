@@ -5,7 +5,7 @@
  * root-owned regular file of that mode is refused rather than read.
  */
 import { existsSync, lstatSync, readFileSync } from "node:fs";
-import { failAction } from "../../cli/action-common";
+import { failAction } from "../../lib/action";
 import { writeFileAtomic } from "../../lib/atomic-write";
 
 const MAX_BYTES = 16 * 1024 * 1024;

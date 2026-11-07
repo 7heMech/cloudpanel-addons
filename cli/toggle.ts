@@ -5,17 +5,16 @@
 import { installedAddons, resolveAddon } from "./addons";
 import { reconcileAnchors, reconcileMaintenanceNginx, reconcileNginx } from "./reconcile";
 import { requireMainwpSettled } from "../addons/wp-tools/mainwp";
-import { withFileLockSync } from "./action-common";
-import { reconcilePhpGuard, settlePhpGuard } from "./php-guard";
+import { withFileLockSync } from "../lib/file-lock";
+import { reconcilePhpGuard, settlePhpGuard } from "../lib/php-guard";
 import { removeMainwpGuards, removeWpLogin, DEFAULT_WP_TOOLS_PATHS } from "../addons/wp-tools/action";
-import { type AddonSpec } from "./addon-catalog";
+import { type AddonSpec } from "../lib/addon-definition";
 import { withOperationLock, withOperationLockSync } from "./operation-lock";
 import {
-  applyToggleUnits, ensureAuthHelperReady, ensureDirs, ensureRequiredUnits, ensureServiceUser,
-  installUnits, installedConfig, platformProvisioned, reconcilePanelIdentity, removeLegacyUnits,
-  startUnits, writeConfig,
+  applyToggleUnits, ensureAuthHelperReady, ensureDirs, ensureRequiredUnits, ensureServiceUser, installUnits,
+  installedConfig, platformProvisioned, reconcilePanelIdentity, removeLegacyUnits, startUnits, writeConfig,
 } from "./provision";
-import { fatal, log, requireRoot } from "./util";
+import { fatal, log, requireRoot } from "../lib/log";
 import { rmSync } from "node:fs";
 /**
  * Everything a first install has to put on the box, in the order it has to

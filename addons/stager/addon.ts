@@ -1,7 +1,7 @@
 import { handle } from "./app/index";
 import { runStagerAction } from "./action";
 import { STAGER_TARGETS } from "./inject/targets";
-import type { AddonDefinition } from "../../cli/addon-catalog";
+import type { AddonDefinition } from "../../lib/addon-definition";
 
 export const STAGER_ADDON: AddonDefinition = {
   name: "stager",

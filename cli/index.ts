@@ -11,19 +11,21 @@ import { cmdRepair } from "./repair";
 import { applyDisable, applyEnable } from "./toggle";
 import { cmdSelfUninstall } from "./uninstall";
 import { cmdUpdate } from "./update";
-import { ADDONS, ADDON_NAMES } from "./addon-catalog";
-import { CLI_VERSION } from "./release";
+import { ADDONS, ADDON_NAMES } from "../addons/catalog";
+import { CLI_VERSION } from "../lib/version";
 import { installedConfig } from "./provision";
 import { reconcile } from "./inject";
-import { fatal, Fatal, log, requireRoot } from "./util";
-import { LOCKABLE_ADDONS, ROOT_LOCKS_FILE, ROOT_LOCKS_LOCK, UntrustedLockFile, isLockable, lockedAddons, writeLockedAddons } from "../lib/root-locks";
+import { fatal, Fatal, log, requireRoot } from "../lib/log";
+import {
+  LOCKABLE_ADDONS, ROOT_LOCKS_FILE, ROOT_LOCKS_LOCK, UntrustedLockFile, isLockable, lockedAddons, writeLockedAddons,
+} from "../lib/root-locks";
 import { withOperationLockSync } from "./operation-lock";
-import { withFileLockSync } from "./action-common";
+import { withFileLockSync } from "../lib/file-lock";
 import { runRecon } from "./recon";
 import { cmdServe } from "../manager/server";
 import { executeMaintenanceAction, type MaintenanceStatus } from "../addons/maintenance/action";
 import { runAuthActionStdin } from "./auth-action";
-import { runManagerAction, type ManagerOps } from "./manager-action";
+import { runManagerAction, type ManagerOps } from "../manager/action";
 import { runSmtpSubmit } from "../addons/smtp/submit";
 import { runTerminalPty } from "../addons/terminal/pty";
 import { runTerminalRootCommand } from "../addons/terminal/root-access";

@@ -3,10 +3,10 @@ import {
   pruneWpJobs, reconcileWpNewSites, runWpToolsAction, wpPoliciesActive,
   type WpNewSiteEvent, type WpNewSitesResult, type WpToolsActionOptions,
 } from "./action";
-import { queueAddonPass } from "../../cli/job-store";
+import { queueAddonPass } from "../../lib/job-store";
 import { WP_TOOLS_TARGETS } from "./inject/targets";
-import type { AddonDefinition } from "../../cli/addon-catalog";
-import { log } from "../../cli/util";
+import type { AddonDefinition } from "../../lib/addon-definition";
+import { log } from "../../lib/log";
 
 const CHECKS: Record<string, string> = { "varnish-check": "CLP Varnish Cache", "mainwp-check": "MainWP Child" };
 

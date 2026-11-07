@@ -4,11 +4,12 @@
 import { installedAddons } from "./addons";
 import { purgeTwigCache } from "./inject";
 import { withOperationLockSync } from "./operation-lock";
-import { CLI_BIN, LIBEXEC_DIR, STATE_DIR } from "./paths";
-import { reconcilePhpGuard } from "./php-guard";
+import { CLI_BIN, LIBEXEC_DIR, STATE_DIR } from "../lib/paths";
+import { reconcilePhpGuard } from "../lib/php-guard";
 import { reconcilePanelIdentity, stopUnits } from "./provision";
 import { reconcileAnchors, reconcileMaintenanceNginx, reconcileNginx } from "./reconcile";
-import { fatal, log, parseFlags, requireRoot } from "./util";
+import { fatal, log, requireRoot } from "../lib/log";
+import { parseFlags } from "./flags";
 import { rmSync } from "node:fs";
 
 export function cmdSelfUninstall(argv: string[]): void {

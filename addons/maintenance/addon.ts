@@ -1,7 +1,7 @@
 import { handle } from "./app/index";
 import { pruneMaintenanceState, runMaintenanceAction } from "./action";
 import { MAINTENANCE_TARGETS } from "./inject/targets";
-import type { AddonDefinition } from "../../cli/addon-catalog";
+import type { AddonDefinition } from "../../lib/addon-definition";
 
 export const MAINTENANCE_ADDON: AddonDefinition = {
   name: "maintenance",

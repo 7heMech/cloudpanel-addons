@@ -7,7 +7,7 @@
  */
 import { chmodSync, existsSync, lstatSync, readFileSync, rmSync } from "node:fs";
 import { writeFileAtomic } from "../../lib/atomic-write";
-import { STATE_DIR, UPDATE_MOTD_DIR } from "../../cli/paths";
+import { STATE_DIR, UPDATE_MOTD_DIR } from "../../lib/paths";
 
 export const DEFAULT_MOTD_PATHS = {
   banner: `${UPDATE_MOTD_DIR}/10-cloudpanel`,

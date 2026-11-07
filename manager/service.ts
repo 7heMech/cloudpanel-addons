@@ -2,7 +2,7 @@
 // addons use, so there is no second path to root.
 import { callGatewayAction, type ActionResult } from "../lib/gateway-client";
 import type { WebVerb } from "../lib/gateway-protocol";
-import type { ManagerJobView } from "../cli/manager-action";
+import type { ManagerJobView } from "./action";
 
 /** The manager's own privileged verbs go over the same gateway the addons use. */
 export async function managerAction<T>(verb: WebVerb<"manager">, args: string[] = []): Promise<ActionResult<T>> {

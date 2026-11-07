@@ -1,6 +1,8 @@
 import { afterEach, beforeEach, expect, test } from "bun:test";
 import { Database } from "bun:sqlite";
-import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, utimesSync, writeFileSync } from "node:fs";
+import {
+  existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, utimesSync, writeFileSync,
+} from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { deflateRawSync } from "node:zlib";
@@ -9,7 +11,7 @@ import { handle } from "../addons/wp-tools/app/index";
 import { searchDirectory } from "../addons/wp-tools/app/plugin-search";
 import { wpToolsService } from "../addons/wp-tools/app/service";
 import { WP_TOOLS_TARGETS, newSiteDoneSnippet, newSiteFormSnippet } from "../addons/wp-tools/inject/targets";
-import { jobDir, jobGet, jobSet } from "../cli/job-store";
+import { jobDir, jobGet, jobSet } from "../lib/job-store";
 import { wpJobView, type WpJobView } from "../addons/wp-tools/jobs";
 import {
   MAX_STAGED_UPLOADS, UPLOAD_PART_BYTES, claimUploads, discardUpload, downloadDirectoryPlugin, pruneUploads, stageUploadPart,

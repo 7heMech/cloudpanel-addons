@@ -1,7 +1,7 @@
 import { closeSync, fstatSync, lstatSync, openSync, readFileSync, readSync, statSync } from "node:fs";
 import { O_NOFOLLOW, O_NONBLOCK, O_RDONLY } from "node:constants";
 import { dirname } from "node:path";
-import { AUTH_SOCKET_PATH, PANEL_PHP_INI, PANEL_USER } from "../cli/paths";
+import { AUTH_SOCKET_PATH, PANEL_PHP_INI, PANEL_USER } from "./paths";
 import { jsonResponse } from "./app-http";
 import { callGatewayAuth } from "./gateway-client";
 

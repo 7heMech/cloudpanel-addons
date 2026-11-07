@@ -23,17 +23,17 @@ function migrate(root: string, revert = false, legacyWaitSeconds = 300): { warni
     import { writeFileSync } from "node:fs";
     const root = ${JSON.stringify(root)};
     const warnings = [];
-    const realPaths = await import("./cli/paths.ts");
-    mock.module("./cli/paths.ts", () => ({ ...realPaths, CONFIG_DIR: root + "/etc", STATE_DIR: root + "/state", LOCK_DIR: root + "/locks", SYSTEMD_DIR: root + "/systemd" }));
+    const realPaths = await import("./lib/paths.ts");
+    mock.module("./lib/paths.ts", () => ({ ...realPaths, CONFIG_DIR: root + "/etc", STATE_DIR: root + "/state", LOCK_DIR: root + "/locks", SYSTEMD_DIR: root + "/systemd" }));
     const realProvision = await import("./cli/provision.ts");
     mock.module("./cli/provision.ts", () => ({
       ...realProvision,
       writeConfig: (spec) => writeFileSync(spec.configFile, "# clp-addons: " + spec.name + "\\n"),
     }));
-    const realUtil = await import("./cli/util.ts");
-    mock.module("./cli/util.ts", () => ({
-      ...realUtil,
-      log: { ...realUtil.log, ok: () => {}, warn: (message) => { warnings.push(message); } },
+    const realLog = await import("./lib/log.ts");
+    mock.module("./lib/log.ts", () => ({
+      ...realLog,
+      log: { ...realLog.log, ok: () => {}, warn: (message) => { warnings.push(message); } },
     }));
     const { migrateOldAddonNames, revertAddonRenames } = await import("./cli/addons.ts");
     let error;
@@ -245,7 +245,7 @@ test("retrying an upgrade before upkeep rewrites the old OOM marker keeps the mi
 });
 
 test("with nothing to move, update and repair do not wait on a memory change's lock", async () => {
-  const { withFileLockSync } = await import("../cli/action-common");
+  const { withFileLockSync } = await import("../lib/file-lock");
   const root = fixture();
   mkdirSync(join(root, "locks"));
   withFileLockSync(join(root, "locks/resource-limits-settings.lock"), 1, "held", () => {
@@ -256,7 +256,7 @@ test("with nothing to move, update and repair do not wait on a memory change's l
 });
 
 test("the move waits for a PHP Resources change the earlier version is still running", async () => {
-  const { withFileLockSync } = await import("../cli/action-common");
+  const { withFileLockSync } = await import("../lib/file-lock");
   const root = fixture();
   mkdirSync(join(root, "locks"));
   writeFileSync(join(root, "etc", "php-resources.conf"), "# clp-addons: php-resources\n");

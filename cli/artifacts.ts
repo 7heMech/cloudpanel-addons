@@ -1,12 +1,14 @@
 // The files an update replaces on disk, and the copy it keeps aside so a
 // failed one can be undone. An update is the only thing that writes here.
 
+import { writeFileAtomic } from "../lib/atomic-write";
 import {
   ARTIFACT_MANIFEST_PATH, AUTH_SERVICE_UNIT, AUTH_SOCKET_UNIT, CLI_ARTIFACT, CLI_BIN, LIBEXEC_DIR,
   MANAGER_UNIT,
-} from "./paths";
+} from "../lib/paths";
 import { type FetchedArtifact } from "./release";
-import { fatal, log, tryRun, writeAtomic } from "./util";
+import { fatal, log } from "../lib/log";
+import { tryRun } from "../lib/command";
 import {
   copyFileSync, existsSync, linkSync, lstatSync, mkdirSync, readFileSync, renameSync, rmSync,
 } from "node:fs";
@@ -78,7 +80,7 @@ export function currentArtifactsMatch(tag: string): boolean {
 function writeArtifactManifest(tag: string, artifacts: FetchedArtifact[]): void {
   const checksums: Record<string, string> = {};
   for (const name of artifactPaths().keys()) checksums[name] = sha256(artifact(artifacts, name));
-  writeAtomic(ARTIFACT_MANIFEST_PATH, JSON.stringify({ version: 1, tag, artifacts: checksums }) + "\n", 0o600);
+  writeFileAtomic(ARTIFACT_MANIFEST_PATH, JSON.stringify({ version: 1, tag, artifacts: checksums }) + "\n", { mode: 0o600, createParent: true });
   tryRun("chown", ["root:root", ARTIFACT_MANIFEST_PATH]);
 }
 
@@ -156,7 +158,7 @@ function restorePreviousArtifacts(): boolean {
 }
 
 export function replaceArtifacts(artifacts: FetchedArtifact[], tag: string): void {
-  writeAtomic(CLI_BIN, artifact(artifacts, CLI_ARTIFACT), 0o755);
+  writeFileAtomic(CLI_BIN, artifact(artifacts, CLI_ARTIFACT), { mode: 0o755, createParent: true });
   tryRun("chown", ["root:root", CLI_BIN]);
   writeArtifactManifest(tag, artifacts);
 }

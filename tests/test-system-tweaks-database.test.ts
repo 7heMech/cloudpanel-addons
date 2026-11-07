@@ -1,8 +1,10 @@
 import { afterEach, expect, test } from "bun:test";
-import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
+import {
+  chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync,
+} from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import type { CommandResult } from "../cli/action-common";
+import type { CommandResult } from "../lib/command";
 import {
   DATABASE_FILE, databaseStatus, parseListeners, parseRemoteClients, reconcileDatabaseFile, setDatabaseLoopback,
   type DatabaseOptions,

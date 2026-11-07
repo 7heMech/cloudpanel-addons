@@ -21,9 +21,9 @@ gateway call's own deadline bound every request instead.
 
 `manager/` holds that process: `server.ts` owns the socket, the request gate
 and the mount dispatch, and `index.ts`, `service.ts` and `views.ts` are the
-Addons page itself, laid out the way an addon's `app/` is. It is not in `cli/`
-because none of it is a command; `cli/index.ts` calls `cmdServe` and otherwise
-knows nothing about it.
+Addons page itself, laid out the way an addon's `app/` is. `action.ts` is the
+root side of its verbs, as an addon's `action.ts` is; `cli/index.ts` hands it
+the enable, disable, update and reconcile commands it runs.
 
 The Addons page is two lists, Enabled and Available, one row per addon with its
 one-line description and its buttons, so the whole catalog fits on a screen. A
@@ -59,7 +59,7 @@ tracked range, so it never outgrows the catalog.
 
 ## One catalog, compiled in
 
-`cli/addon-catalog.ts` is the only registration seam. An addon declares itself
+`addons/catalog.ts` is the only registration seam. An addon declares itself
 in `addons/<name>/addon.ts` -- title, description, injection targets, required
 systemd units, its manager handler, its privileged action, the routes it opens
 to non-administrators or answers ahead of the gate, and any repair upkeep -- and
@@ -86,10 +86,21 @@ The manager and the auth gateway are not in it. They have no config file to
 enable, no mount path of their own and no state to keep, so they are dispatched
 before the catalog is consulted rather than described by it.
 
-`cli/paths.ts` is a leaf again. It held the registry, which meant the module
-owning the project's path constants imported every addon's target list in order
-to describe them; the injection-target shape now lives in `lib/addon-target.ts`,
-which both sides import.
+## Where code lives
+
+Imports point one way, from what changes most to what changes least:
+
+- `cli/` holds the commands: argument handling, install, update, repair,
+  toggles and the platform reconcilers they run. Nothing imports it except
+  its own files and the binary's entry point.
+- `manager/` is the manager process, laid out like an addon.
+- `addons/<name>/` is one addon, and `addons/catalog.ts` lists them all.
+  An addon imports `lib/` and, where it builds on another addon, that
+  addon's exported functions; never `cli/` or `manager/`.
+- `lib/` is what every side shares: paths (`lib/paths.ts`), the action reply
+  protocol, command running, file locks, the panel database, Nginx and job
+  helpers, the addon definition types, and the web pieces. It imports only
+  `lib/`, plus the addons' `verbs.ts` tables, which import nothing.
 
 ## The CLI
 
@@ -100,7 +111,7 @@ root it prints the plain overview. Help lists operator commands only. `action`
 is how the gateway runs an addon's root verbs, and `serve`, `smtp-submit` and
 `terminal-pty` are started by systemd, Postfix and the terminal action.
 
-Color is decided per stream: `paint` in `cli/util.ts` colors only when the
+Color is decided per stream: `paint` in `lib/log.ts` colors only when the
 stream it writes to is a terminal and `hasColors` allows it, so `NO_COLOR` and
 `TERM=dumb` are honored and journald, pipes and job logs stay plain even under
 `FORCE_COLOR`; a terminal without `TERM` is plain. Bun's `Bun.color` is not
@@ -255,7 +266,7 @@ does not skip the next. The units exist while any installed addon declares
 operation lock: each addon's work takes its own. Work that runs a site's own
 code is queued rather than done in the hook, as WordPress Tools hands its checks
 to background jobs (see [WordPress Tools](wp-tools.md#new-sites)). Update and
-repair disable and remove the units listed in `LEGACY_UNITS` in `cli/paths.ts`.
+repair disable and remove the units listed in `LEGACY_UNITS` in `lib/paths.ts`.
 
 The vhost is not the site yet. CloudPanel commits the site's row in its
 database after writing the vhost: half a second later on staging, for a
@@ -347,7 +358,7 @@ differs and how it is watched does not.
 
 A job that works through sites -- WordPress Tools' checks and connections,
 Panel Tweaks' size measurement -- records its progress the same way, through
-`runSiteJob` in `cli/job-store.ts`: how many sites are done of how many, the
+`runSiteJob` in `lib/job-store.ts`: how many sites are done of how many, the
 one it is on, and a step such as `Measuring 12 of 40: site`, then its result.
 The page draws that as `jobProgressHtml` from `lib/app-ui.ts`, and the client
 half, `followJobProgress`, follows every bar on the page through the routes
@@ -355,7 +366,7 @@ above until the job ends. A page drawn while a job runs follows it again, so a
 reload picks it up. The addon keeps only what the job means: its title, what it
 disables meanwhile, and what it says when it ends.
 
-A job id is defined once, in `lib/job-id.ts`, which `cli/job-store.ts`
+A job id is defined once, in `lib/job-id.ts`, which `lib/job-store.ts`
 re-exports. The app services needed the syntax without the CLI's job
 orchestration; three copies of the pattern is how the checking side and the
 creating side drift apart. An id reaches a path join, so it is anchored at both
@@ -565,7 +576,7 @@ painted.
 
 ## Reading the panel database
 
-Root-side code reads CloudPanel's SQLite database through `cli/panel-db.ts`:
+Root-side code reads CloudPanel's SQLite database through `lib/panel-db.ts`:
 `withPanelDb` opens it read-only with a busy timeout and closes it, and
 `openPanelDatabase` holds it open for a caller that reads across several steps
 or writes. Each caller keeps its own query and says what an unreadable database

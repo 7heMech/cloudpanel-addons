@@ -202,7 +202,7 @@ served from this server: a CloudPanel static site whose vhost returns the
 redirect for the source and, for a registrable domain, its `www`, and serves
 `/.well-known/acme-challenge/` from the site's root; a target with a query
 string gets the request's after `&`. The body is written to the
-panel database as well as nginx (`cli/site-vhost.ts`), since CloudPanel renders
+panel database as well as nginx (`lib/site-vhost.ts`), since CloudPanel renders
 the file again from it, as it does when a certificate is installed. Each
 reconcile pass asks Let's Encrypt, through `clpctl`, for a stand-in still on
 its self-signed certificate: at the first pass after it is created, then 15
@@ -219,7 +219,7 @@ id is recorded: a failed creation deletes only a site with that user, and one
 interrupted before the id was saved takes the id from that site on the next
 pass. A record counts only while the panel site at its
 domain has that user and id, or that user for the few minutes it is being
-created (`cli/stand-ins.ts`): a site added there after the stand-in was deleted
+created (`lib/stand-ins.ts`): a site added there after the stand-in was deleted
 in CloudPanel is an ordinary site. DNS otherwise changes or deletes only a site
 whose id it recorded, and makes no stand-in where a site
 already exists. If creation fails and CloudPanel also refuses to delete the
@@ -229,7 +229,7 @@ the vhost is written, so a later pass writes it rather than taking a static
 site that does not redirect for a working stand-in.
 DNS leaves stand-ins out of its site list through `isStandInSite`, and Stager,
 Maintenance, SMTP Relay and Cloudflare IP Access through `withoutStandIns` in
-`cli/panel-db.ts`. The panel snapshot the Git, Maintenance, Stager and Terminal
+`lib/panel-db.ts`. The panel snapshot the Git, Maintenance, Stager and Terminal
 pages read leaves them out too. Resource Limits and WordPress Tools never list a
 static site, and Panel Tweaks shows "Redirect" as its runtime on the Sites page. Global maintenance mode reaches a
 stand-in as it does every vhost.

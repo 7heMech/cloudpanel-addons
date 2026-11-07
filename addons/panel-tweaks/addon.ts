@@ -2,7 +2,7 @@ import { handle } from "./app/index";
 import { BRANDING_ASSET_PREFIX, handleBrandingAsset } from "./app/branding-asset";
 import { panelTweaksUpkeep, runPanelTweaksAction, type PanelTweaksActionOptions } from "./action";
 import { PANEL_TWEAKS_TARGETS } from "./inject/targets";
-import type { AddonDefinition } from "../../cli/addon-catalog";
+import type { AddonDefinition } from "../../lib/addon-definition";
 
 export const PANEL_TWEAKS_ADDON: AddonDefinition = {
   name: "panel-tweaks",

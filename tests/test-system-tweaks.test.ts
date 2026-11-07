@@ -1,11 +1,14 @@
 import { afterEach, expect, mock, test } from "bun:test";
 import { Database } from "bun:sqlite";
-import { chmodSync, existsSync, lstatSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, statSync, writeFileSync } from "node:fs";
+import {
+  chmodSync, existsSync, lstatSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, statSync,
+  writeFileSync,
+} from "node:fs";
 import { X509Certificate } from "node:crypto";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
-import { runCommand, type CommandResult } from "../cli/action-common";
-import { inspectPhpGuard, reconcilePhpGuard, type PhpGuardOptions } from "../cli/php-guard";
+import { runCommand, type CommandResult } from "../lib/command";
+import { inspectPhpGuard, reconcilePhpGuard, type PhpGuardOptions } from "../lib/php-guard";
 import {
   executeSystemTweaksAction, readSettings, restoreSystemTweaks, systemTweaksMaintenance, systemTweaksMotd, systemTweaksPhpMyAdmin, systemTweaksPhpPools, systemTweaksUpkeep, withdrawSystemTweaks,
   type SystemTweaksOptions, type SystemTweaksPaths, type SystemTweaksState,

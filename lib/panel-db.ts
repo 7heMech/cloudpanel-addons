@@ -2,7 +2,8 @@
 // of it; what is shared is how it is opened and that DNS's stand-ins, rows
 // CloudPanel lists but no operator made, are not taken for sites.
 import { Database } from "bun:sqlite";
-import { failAction, readable } from "./action-common";
+import { failAction } from "./action";
+import { readable } from "./files";
 import { standInDomains } from "./stand-ins";
 
 /**
@@ -43,4 +44,27 @@ export function hasSite(db: Database, domain: string): boolean {
 /** Site rows less DNS's stand-ins, which hold a domain for a site that is not there yet. */
 export function withoutStandIns<T extends { domain_name?: unknown }>(rows: T[], standIns = standInDomains()): T[] {
   return rows.filter((row) => !standIns.has(String(row.domain_name)));
+}
+/**
+ * Which of `domains` CloudPanel no longer has, for upkeep that removes what a
+ * deleted site left behind. None when the panel database cannot be read or
+ * lists no site at all: an outage or a half-restored panel must never read as
+ * every site having been deleted.
+ */
+export function deletedSites(panelDb: string, domains: string[]): string[] {
+  let present: Set<string>;
+  try {
+    const db = new Database(panelDb, { readonly: true });
+    try {
+      db.exec("PRAGMA busy_timeout = 5000;");
+      present = new Set(db.query<{ domain_name: unknown }, []>("SELECT domain_name FROM site").all()
+        .flatMap((row) => typeof row.domain_name === "string" ? [row.domain_name.toLowerCase()] : []));
+    } finally {
+      db.close();
+    }
+  } catch {
+    return [];
+  }
+  if (present.size === 0) return [];
+  return domains.filter((domain) => !present.has(domain.toLowerCase()));
 }

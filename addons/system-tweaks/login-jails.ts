@@ -6,9 +6,10 @@
  */
 import { existsSync, readFileSync, rmSync } from "node:fs";
 import { isIP } from "node:net";
-import { failAction, type CommandResult } from "../../cli/action-common";
-import { cloudflareRanges, nginxFileChange, trustedVhost, withNginxTransaction } from "../../cli/nginx-transaction";
-import { CLOUDFLARE_IPS_PATH, ROOT_UID, nginxLayout } from "../../cli/paths";
+import { failAction } from "../../lib/action";
+import { type CommandResult } from "../../lib/command";
+import { cloudflareRanges, nginxFileChange, trustedVhost, withNginxTransaction } from "../../lib/nginx-transaction";
+import { CLOUDFLARE_IPS_PATH, ROOT_UID, nginxLayout } from "../../lib/paths";
 import { writeFileAtomic } from "../../lib/atomic-write";
 import { panelUserGid, panelUserUid } from "../../lib/sso-auth";
 import { systemRun, type Run } from "./updates";

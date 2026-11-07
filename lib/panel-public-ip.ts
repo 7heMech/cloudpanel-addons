@@ -1,7 +1,7 @@
 import { readdirSync, readFileSync, statSync } from "node:fs";
 import { isIP } from "node:net";
 import { join } from "node:path";
-import { PANEL_CACHE_POOL_DIR } from "../cli/paths";
+import { PANEL_CACHE_POOL_DIR } from "./paths";
 
 const CACHE_SCAN_MAX_FILES = 512;
 const CACHE_ITEM_MAX_BYTES = 8 * 1024;

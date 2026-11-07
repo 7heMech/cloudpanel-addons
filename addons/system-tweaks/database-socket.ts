@@ -3,7 +3,7 @@ import { createHash } from "node:crypto";
 import { lstatSync, mkdirSync, readFileSync, rmSync } from "node:fs";
 import { isIP } from "node:net";
 import { dirname } from "node:path";
-import { failAction } from "../../cli/action-common";
+import { failAction } from "../../lib/action";
 import { writeFileAtomic } from "../../lib/atomic-write";
 
 export const DATABASE_SOCKET_UNIT = "mariadb.socket";

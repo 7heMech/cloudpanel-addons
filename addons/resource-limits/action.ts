@@ -18,18 +18,22 @@
  * to find the next free port; changing any of it here would make the panel and
  * the running pool disagree about the same site.
  */
-import { resourceMemoryState, setResourceMemory, type ResourceMemoryOptions, type ResourceMemoryState } from "./memory-settings";
-import { openPanelDatabase } from "../../cli/panel-db";
+import {
+  resourceMemoryState, setResourceMemory, type ResourceMemoryOptions, type ResourceMemoryState,
+} from "./memory-settings";
+import { openPanelDatabase } from "../../lib/panel-db";
 import { RESOURCE_LIMITS_VERBS } from "./verbs";
 import { Database } from "bun:sqlite";
 import { chmodSync, existsSync, lstatSync, mkdirSync, readFileSync } from "node:fs";
 import { dirname, join } from "node:path";
-import {
-  ActionFailure, replyToAction, errorMessage, failAction, readJsonRequest, nameSlug, oneLine, runCommand, validateDomain, withFileLock,
-  type CommandResult,
-} from "../../cli/action-common";
-import { CONFIG_DIR, PANEL_DB, STATE_DIR } from "../../cli/paths";
-import type { TmpCleanupOptions } from "../../cli/tmp-cleanup";
+import { ActionFailure, replyToAction, failAction, readJsonRequest } from "../../lib/action";
+import { errorMessage } from "../../lib/errors";
+import { nameSlug, oneLine } from "../../lib/validate";
+import { runCommand, type CommandResult } from "../../lib/command";
+import { validateDomain } from "../../lib/panel-identity";
+import { withFileLock } from "../../lib/file-lock";
+import { CONFIG_DIR, PANEL_DB, STATE_DIR } from "../../lib/paths";
+import type { TmpCleanupOptions } from "../../lib/tmp-cleanup";
 import { writeFileAtomic } from "../../lib/atomic-write";
 
 const POLICY_VERSION = 1;

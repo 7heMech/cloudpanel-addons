@@ -2,9 +2,8 @@ import { expect, test } from "bun:test";
 import { chmodSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
-import {
-  ActionFailure, panelIdentityGuardForIdentity, parsePanelIdentity, readPanelIdentity,
-} from "../cli/action-common";
+import { ActionFailure } from "../lib/action";
+import { panelIdentityGuardForIdentity, parsePanelIdentity, readPanelIdentity } from "../lib/panel-identity";
 
 function guardResult(identity: ReturnType<typeof parsePanelIdentity>, candidate: string): string {
   if (!identity) return "INVALID_IDENTITY";

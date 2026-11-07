@@ -27,20 +27,25 @@
 // entry -- and then the two reconciliation timers overwrote each other every
 // fifteen minutes, forever.
 
+import { writeFileAtomic } from "../lib/atomic-write";
 import { execFileSync } from "node:child_process";
-import { existsSync, readFileSync, writeFileSync, mkdirSync, rmSync, readdirSync, statSync, realpathSync } from "node:fs";
+import {
+  existsSync, readFileSync, writeFileSync, mkdirSync, rmSync, readdirSync, statSync, realpathSync,
+} from "node:fs";
 import { dirname, join } from "node:path";
 import {
   DISTRO_NGINX_SITES_DIR, PANEL_DB, NGINX_GLOBAL_SETTINGS, NGINX_MAINTENANCE_STATE_DIR, NGINX_PROXY_STATE_DIR, nginxLayout,
   TEMPLATE_STATE_DIR, TEMPLATES_DIR, TWIG_CACHE_DIR,
-} from "./paths";
+} from "../lib/paths";
 import type { AddonTarget } from "../lib/addon-target";
-import { writeAtomic } from "./util";
 import { withoutPhpMyAdminRules } from "../addons/system-tweaks/phpmyadmin";
-import { errorMessage, runCommand, type CommandResult } from "./action-common";
-import { openPanelDatabase } from "./panel-db";
-import { cloudflareRanges, nginxFileChange, trustedVhost, withNginxTransaction, writeAtomicOwned } from "./nginx-transaction";
-import { MAINTENANCE_INCLUDE_PATH, sitesWithoutMaintenance, stageMaintenanceVhosts } from "./maintenance-vhosts";
+import { errorMessage } from "../lib/errors";
+import { runCommand, type CommandResult } from "../lib/command";
+import { openPanelDatabase } from "../lib/panel-db";
+import { cloudflareRanges, nginxFileChange, trustedVhost, withNginxTransaction } from "../lib/nginx-transaction";
+import {
+  MAINTENANCE_INCLUDE_PATH, sitesWithoutMaintenance, stageMaintenanceVhosts,
+} from "../addons/maintenance/vhosts";
 
 // CloudPanel versions this patch's markup assumptions were verified against.
 // A version outside this list is not fatal, but the hash gate below is what
@@ -601,7 +606,7 @@ function commandFailure(command: string, args: string[]): string | null {
 /** Keeps the file's owner: CloudPanel 6's panel account must still be able to rewrite its vhost. */
 function writeNginxContent(path: string, content: string): void {
   const stat = statSync(path);
-  writeAtomicOwned(path, content, stat.mode & 0o777, stat.uid, stat.gid);
+  writeFileAtomic(path, content, { mode: stat.mode & 0o777, owner: { uid: stat.uid, gid: stat.gid }, createParent: true });
 }
 
 function removeNginxState(files: { pristine: string; hash: string; path: string }): void {
@@ -707,9 +712,9 @@ export function reconcileNginxProxy(options: NginxPaths & { enabled?: boolean; r
   if (!baseline) {
     mkdirSync(p.stateDir, { recursive: true });
     const pristine = upstream;
-    writeAtomic(files.pristine, pristine, 0o600);
-    writeAtomic(files.hash, `${found}\n`, 0o600);
-    writeAtomic(files.path, `${vhostPath}\n`, 0o600);
+    writeFileAtomic(files.pristine, pristine, { mode: 0o600, createParent: true });
+    writeFileAtomic(files.hash, `${found}\n`, { mode: 0o600, createParent: true });
+    writeFileAtomic(files.path, `${vhostPath}\n`, { mode: 0o600, createParent: true });
   }
 
   const rendered = renderNginxProxy(onDisk, enabled);
@@ -990,7 +995,7 @@ export function releaseMaintenanceSettings(options: MaintenanceNginxPaths = {}):
   const upstream = stripMaintenanceNginx(read);
   if (!baseline || baseline.hash !== sha256(upstream)) return false;
   const current = trustedVhost(settingsPath, statSync(settingsPath).uid);
-  writeAtomicOwned(settingsPath, upstream, current.mode, current.uid, current.gid);
+  writeFileAtomic(settingsPath, upstream, { mode: current.mode, owner: { uid: current.uid, gid: current.gid }, createParent: true });
   removeNginxState(files);
   return true;
 }
@@ -1050,9 +1055,9 @@ function reconcileMaintenance(options: ReconcileOptions): MaintenanceNginxResult
   }
   if (read !== null && !baseline && (enabled || read.includes("# clp-addons:maintenance:start"))) {
     mkdirSync(stateDir, { recursive: true });
-    writeAtomic(files.pristine, upstream, 0o600);
-    writeAtomic(files.hash, `${found}\n`, 0o600);
-    writeAtomic(files.path, `${settingsPath}\n`, 0o600);
+    writeFileAtomic(files.pristine, upstream, { mode: 0o600, createParent: true });
+    writeFileAtomic(files.hash, `${found}\n`, { mode: 0o600, createParent: true });
+    writeFileAtomic(files.path, `${settingsPath}\n`, { mode: 0o600, createParent: true });
   }
   const rendered = enabled
     ? `${upstream}\n${NGINX_MAINTENANCE_BLOCK}\n`

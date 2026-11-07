@@ -11,13 +11,13 @@
  * A root shell (`--root`) runs the same way as root, for an administrator root
  * allowed from a shell; see root-access.ts.
  */
-import { openPanelDatabase } from "../../cli/panel-db";
+import { openPanelDatabase } from "../../lib/panel-db";
 import { existsSync, readdirSync, readFileSync, realpathSync } from "node:fs";
 import { join } from "node:path";
-import {
-  ActionFailure, emitActionError, emitActionOk, errorMessage, failAction, validateDomain,
-} from "../../cli/action-common";
-import { CLI_BIN, PANEL_DB } from "../../cli/paths";
+import { ActionFailure, emitActionError, emitActionOk, failAction } from "../../lib/action";
+import { errorMessage } from "../../lib/errors";
+import { validateDomain } from "../../lib/panel-identity";
+import { CLI_BIN, PANEL_DB } from "../../lib/paths";
 import { DUPLEX_WORKER_MARKER, SESSION_2FA_ENV } from "../../lib/gateway-protocol";
 import { PANEL_USER_NAME_RE, panelUserOwnsSite } from "../../lib/panel-users";
 import { readUnixAccounts, siteAccountProblem, splitSharedUids } from "../../lib/site-accounts";

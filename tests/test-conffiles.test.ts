@@ -2,7 +2,7 @@ import { afterEach, expect, test } from "bun:test";
 import { existsSync, mkdtempSync, rmSync, utimesSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import type { CommandResult } from "../cli/action-common";
+import type { CommandResult } from "../lib/command";
 import { conffilesReleased, endConffileRelease, releaseConffiles, upgradePending } from "../cli/conffiles";
 import { aptUpgradeDropIn } from "../cli/provision";
 

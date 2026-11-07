@@ -2,7 +2,7 @@ import { afterEach, expect, test } from "bun:test";
 import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import type { CommandResult } from "../cli/action-common";
+import type { CommandResult } from "../lib/command";
 import {
   anySpelling, applyLoginJails, customDomainName, jailFiles, loginJailsStatus, parseBans, releaseLoginJails, sshLogin, unban,
   withDomainLog, withLoginLog, withoutDomainLog, withoutLoginLog, type LoginJailOptions,

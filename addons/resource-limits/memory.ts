@@ -8,8 +8,10 @@
  */
 import { existsSync, readdirSync, readFileSync, rmSync, statSync, utimesSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
-import { failAction, runCommand, withFileLockSync, type CommandResult } from "../../cli/action-common";
-import { CLI_BIN, LOCK_DIR, STATE_DIR, SYSTEMD_DIR } from "../../cli/paths";
+import { failAction } from "../../lib/action";
+import { runCommand, type CommandResult } from "../../lib/command";
+import { withFileLockSync } from "../../lib/file-lock";
+import { CLI_BIN, LOCK_DIR, STATE_DIR, SYSTEMD_DIR } from "../../lib/paths";
 import { writeFileAtomic } from "../../lib/atomic-write";
 import { COMMAND_MS } from "./limits";
 

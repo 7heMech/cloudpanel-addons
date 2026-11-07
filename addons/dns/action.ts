@@ -7,22 +7,26 @@
  * create, update and delete they would make, and only a confirmation of that
  * same plan saves and applies them.
  */
-import { withPanelDb } from "../../cli/panel-db";
+import { withPanelDb } from "../../lib/panel-db";
 import { DNS_VERBS } from "./verbs";
 import { Database } from "bun:sqlite";
 import { createHash, randomBytes } from "node:crypto";
 import { existsSync, mkdirSync } from "node:fs";
 import { dirname } from "node:path";
-import {
-  ActionFailure, errorMessage, replyToAction, failAction, readJsonRequest, nameSlug, oneLine, withFileLock,
-} from "../../cli/action-common";
-import { queueAddonPass } from "../../cli/job-store";
-import { CONFIG_DIR, PANEL_DB, STATE_DIR } from "../../cli/paths";
-import { DEFAULT_SITE_VHOST_PATHS } from "../../cli/site-vhost";
+import { ActionFailure, replyToAction, failAction, readJsonRequest } from "../../lib/action";
+import { errorMessage } from "../../lib/errors";
+import { nameSlug, oneLine } from "../../lib/validate";
+import { withFileLock } from "../../lib/file-lock";
+import { queueAddonPass } from "../../lib/job-store";
+import { CONFIG_DIR, PANEL_DB, STATE_DIR } from "../../lib/paths";
+import { DEFAULT_SITE_VHOST_PATHS } from "../../lib/site-vhost";
 import { PANEL_USER_NAME_RE, panelUserOwnsSite } from "../../lib/panel-users";
 import { DEFAULT_SMTP_PATHS, smtpRelayAccounts, type SmtpRelayAccount } from "../smtp/action";
 import { detectAddresses, type Addresses } from "./addresses";
-import { DnsRun, readiness, type ConnectionReport, type LogEntry, type ManagedRecords, type PanelSite, type SitePlan, type StandIns } from "./engine";
+import {
+  DnsRun, readiness, type ConnectionReport, type LogEntry, type ManagedRecords, type PanelSite, type SitePlan,
+  type StandIns,
+} from "./engine";
 import { type ApiFetch, redact } from "./http";
 import { MailcowApi } from "./mailcow";
 import {
@@ -33,7 +37,7 @@ import {
 import { PRESETS, seededPolicy, type Preset } from "./presets";
 import { describeRecord, renderProfile, sameRecord } from "./records";
 import type { FoundRedirect } from "./redirects";
-import { isStandInSite } from "../../cli/stand-ins";
+import { isStandInSite } from "../../lib/stand-ins";
 import { clpctlStandIns, readStandIns, retryStandInCertificates, type StandInPaths } from "./stand-in";
 import { clpctlIssue, NEW_SITE_WINDOW, requestSsl, retryCertificates, type Issue, type SslRequest } from "./ssl";
 import { readState, writeState } from "./store";

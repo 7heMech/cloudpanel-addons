@@ -1,7 +1,7 @@
 import { handle } from "./app/index";
 import { endAllTerminals, runTerminalAction } from "./action";
 import { TERMINAL_TARGETS } from "./inject/targets";
-import type { AddonDefinition } from "../../cli/addon-catalog";
+import type { AddonDefinition } from "../../lib/addon-definition";
 
 export const TERMINAL_ADDON: AddonDefinition = {
   name: "terminal",

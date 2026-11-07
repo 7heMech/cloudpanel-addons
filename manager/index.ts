@@ -3,9 +3,9 @@
 import { guardMutation, jsonResponse, safeDecodePathSegment } from "../lib/app-http";
 import { streamGatewayAction, type ActionResult } from "../lib/gateway-client";
 import { jobEventStream, type JobWatcher } from "../lib/job-stream";
-import { ADDON_NAMES } from "../cli/addon-catalog";
-import { JOB_ID_RE } from "../cli/job-store";
-import type { ManagerJobView } from "../cli/manager-action";
+import { ADDON_NAMES } from "../addons/catalog";
+import { JOB_ID_RE } from "../lib/job-store";
+import type { ManagerJobView } from "./action";
 import type { CliUpdateInfo } from "../lib/update-check";
 import { indexPage, updatePage } from "./views";
 import { latestManagerJobView, managerAction } from "./service";

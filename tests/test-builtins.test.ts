@@ -5,7 +5,8 @@ import { mkdtempSync, mkdirSync, readFileSync, readdirSync, rmSync, writeFileSyn
 import { tmpdir } from "node:os";
 import { loadLocal } from "../cli/release";
 import { reconcile, reconcileNginxProxy, type Injection } from "../cli/inject";
-import { have, paint, tryRun } from "../cli/util";
+import { have, tryRun } from "../lib/command";
+import { paint } from "../lib/log";
 import { isNewerThan, listAvailableTags } from "../addons/instatic/app/tags";
 
 test("have finds and rejects commands", () => {

@@ -8,9 +8,10 @@
  * which stays served.
  */
 import { readFileSync } from "node:fs";
-import { failAction, runCommand, type CommandResult } from "../../cli/action-common";
-import { nginxFileChange, trustedVhost, withNginxTransaction } from "../../cli/nginx-transaction";
-import { ROOT_UID, nginxLayout } from "../../cli/paths";
+import { failAction } from "../../lib/action";
+import { runCommand, type CommandResult } from "../../lib/command";
+import { nginxFileChange, trustedVhost, withNginxTransaction } from "../../lib/nginx-transaction";
+import { ROOT_UID, nginxLayout } from "../../lib/paths";
 import { panelUserGid, panelUserUid } from "../../lib/sso-auth";
 import { COMMAND_MS } from "./limits";
 

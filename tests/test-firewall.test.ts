@@ -342,7 +342,7 @@ test("a box without ufw is left alone", () => {
 });
 
 test("the firewall watcher runs System Tweaks when ufw's rule files change", async () => {
-  const { ADDONS, addonFirewall } = await import("../cli/addon-catalog");
+  const { ADDONS, addonFirewall } = await import("../addons/catalog");
   const { firewallUnits } = await import("../cli/provision");
   expect(addonFirewall(Object.values(ADDONS)).map((spec) => spec.name)).toEqual(["system-tweaks"]);
   const units = firewallUnits();

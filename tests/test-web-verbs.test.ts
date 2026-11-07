@@ -1,5 +1,5 @@
 import { expect, test } from "bun:test";
-import { ADDONS } from "../cli/addon-catalog";
+import { ADDONS } from "../addons/catalog";
 import { ADDON_VERBS, webVerb } from "../lib/gateway-protocol";
 
 /**

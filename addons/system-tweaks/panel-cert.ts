@@ -11,9 +11,11 @@ import {
 } from "node:fs";
 import { hostname, networkInterfaces } from "node:os";
 import { join } from "node:path";
-import { errorMessage, failAction, runCommand, type CommandResult } from "../../cli/action-common";
-import { nginxFileChange, withNginxTransaction } from "../../cli/nginx-transaction";
-import { ROOT_UID, STATE_DIR } from "../../cli/paths";
+import { errorMessage } from "../../lib/errors";
+import { failAction } from "../../lib/action";
+import { runCommand, type CommandResult } from "../../lib/command";
+import { nginxFileChange, withNginxTransaction } from "../../lib/nginx-transaction";
+import { ROOT_UID, STATE_DIR } from "../../lib/paths";
 import { writeFileAtomic } from "../../lib/atomic-write";
 import { panelUserUid } from "../../lib/sso-auth";
 import { COMMAND_MS } from "./limits";

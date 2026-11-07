@@ -8,8 +8,9 @@
 import { existsSync, lstatSync, readFileSync, readlinkSync, rmSync } from "node:fs";
 import { connect } from "node:net";
 import { join } from "node:path";
-import { failAction, runCommand, type CommandResult } from "../../cli/action-common";
-import { ROOT_UID, STATE_DIR } from "../../cli/paths";
+import { failAction } from "../../lib/action";
+import { runCommand, type CommandResult } from "../../lib/command";
+import { ROOT_UID, STATE_DIR } from "../../lib/paths";
 import { inputVerdict, otherInputHooks, parseFilterTable } from "./input-rules";
 import { writeFileAtomic } from "../../lib/atomic-write";
 import { COMMAND_MS, DATABASE_SERVICE_MS } from "./limits";

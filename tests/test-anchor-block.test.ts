@@ -83,15 +83,19 @@ function probeFor(state: "anchor-not-found-in-markup" | "template-absent"): stri
     reconcileNginxProxy: () => ({ state: "ok", changed: false }),
   }));
 
-  mock.module("./cli/util.ts", () => ({
+  const __realLog = await import("./lib/log.ts");
+  mock.module("./lib/log.ts", () => ({
+    ...__realLog,
     Fatal: TestFatal,
     fatal: (message) => { throw new TestFatal(message); },
     log: { step: () => {}, ok: () => {}, warn: () => {}, err: () => {}, plain: () => {} },
-    parseFlags,
     requireRoot: () => {},
+  }));
+  const __realCommand = await import("./lib/command.ts");
+  mock.module("./lib/command.ts", () => ({
+    ...__realCommand,
     run: () => "",
     tryRun: () => ({ ok: true, out: "" }),
-    writeAtomic: () => {},
   }));
 
   const { applyEnable } = await import("./cli/toggle.ts");

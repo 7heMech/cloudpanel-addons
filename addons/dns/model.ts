@@ -4,7 +4,8 @@
  * the same way whether it arrives from the page or from the saved policy.
  */
 import { isIP } from "node:net";
-import { ActionFailure, failAction, oneLine } from "../../cli/action-common";
+import { ActionFailure, failAction } from "../../lib/action";
+import { oneLine } from "../../lib/validate";
 
 export const RECORD_TYPES = ["A", "AAAA", "CNAME", "MX", "TXT", "SRV", "CAA"] as const;
 export type RecordType = (typeof RECORD_TYPES)[number];

@@ -1,18 +1,23 @@
 // `clp-addons repair`.
 
 import { installedAddons, resolveAddon, migrateOldAddonNames } from "./addons";
-import { reconcileAnchors, reconcileBackupCommand, reconcileMaintenanceNginx, reconcileMotd, reconcileNginx, reconcilePhpMyAdminRules } from "./reconcile";
-import { reconcilePhpGuard } from "./php-guard";
+import {
+  reconcileAnchors, reconcileBackupCommand, reconcileMaintenanceNginx, reconcileMotd, reconcileNginx,
+  reconcilePhpMyAdminRules,
+} from "./reconcile";
+import { reconcilePhpGuard } from "../lib/php-guard";
 import { runAddonRepairs, runManagerRepair } from "./addon-hooks";
 import { withOperationLock } from "./operation-lock";
 import { conffilesReleased } from "./conffiles";
-import { CERTIFICATES_PATH, FIREWALL_PATH, MANAGER_UNIT, NEW_SITES_PATH, SYSTEMD_DIR } from "./paths";
+import { CERTIFICATES_PATH, FIREWALL_PATH, MANAGER_UNIT, NEW_SITES_PATH, SYSTEMD_DIR } from "../lib/paths";
 import {
-  ensureAuthHelperReady, ensureDirs, ensurePathWatching, ensureServiceUser, ensureTimerArmed, hardenBackups, installUnits,
-  managerSocketProblem, reconcilePanelIdentity, removeLegacyUnits, startUnits,
-  unitActive, warnIfPanelSessionUnreadable, writeConfig,
+  ensureAuthHelperReady, ensureDirs, ensurePathWatching, ensureServiceUser, ensureTimerArmed, hardenBackups,
+  installUnits, managerSocketProblem, reconcilePanelIdentity, removeLegacyUnits, startUnits,
+  warnIfPanelSessionUnreadable, writeConfig,
 } from "./provision";
-import { fatal, log, parseFlags, requireRoot } from "./util";
+import { unitActive } from "../lib/systemd";
+import { fatal, log, requireRoot } from "../lib/log";
+import { parseFlags } from "./flags";
 import { existsSync } from "node:fs";
 /**
  * Reconciles manager provisioning and enabled addon state, or only injected

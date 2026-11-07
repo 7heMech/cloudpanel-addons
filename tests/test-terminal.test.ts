@@ -7,7 +7,7 @@ import { Database } from "bun:sqlite";
 import { mkdirSync, mkdtempSync, realpathSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { ActionFailure } from "../cli/action-common";
+import { ActionFailure } from "../lib/action";
 import {
   parseTerminalRequest, resolveTerminalTarget, runTerminalAction, runuserCommand, type TerminalActionPaths,
 } from "../addons/terminal/action";

@@ -7,8 +7,10 @@
  */
 import { lstatSync, readFileSync, rmSync } from "node:fs";
 import { dirname } from "node:path";
-import { failAction, runCommand, withFileLock, withFileLockSync, type CommandResult } from "../../cli/action-common";
-import { PANEL_FPM_UNIT, RECONCILE_SERVICE, ROOT_UID } from "../../cli/paths";
+import { failAction } from "../../lib/action";
+import { runCommand, type CommandResult } from "../../lib/command";
+import { withFileLock, withFileLockSync } from "../../lib/file-lock";
+import { PANEL_FPM_UNIT, RECONCILE_SERVICE, ROOT_UID } from "../../lib/paths";
 import { writeFileAtomic } from "../../lib/atomic-write";
 import { fastCgiRequest, type FastCgiResponse } from "../../lib/fastcgi";
 import { DEFAULT_PANEL_PHP_PATHS } from "./panel-php";

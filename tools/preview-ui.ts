@@ -1,14 +1,27 @@
 // Local UI review with fictional data. Never starts the manager, reads panel
 // state or invokes an action. Supported mutations change fictional data only.
 import { indexPage, updatePage } from "../manager/views";
-import { dashboardView as cloudflareDashboardView, layout as cloudflareLayout } from "../addons/cloudflare-ips/app/views";
-import { dashboardView, layout as instaticLayout, newInstanceView, jobView as instaticJobView } from "../addons/instatic/app/views";
-import { jobsView, jobView, layout as stagerLayout, fragment as stagerFragment, newCloneView, promoteView, siteStagingView } from "../addons/stager/app/views";
-import { fleetView as gitFleetView, fragment as gitFragment, layout as gitLayout, siteView as gitSiteView } from "../addons/git/app/views";
+import {
+  dashboardView as cloudflareDashboardView, layout as cloudflareLayout,
+} from "../addons/cloudflare-ips/app/views";
+import {
+  dashboardView, layout as instaticLayout, newInstanceView, jobView as instaticJobView,
+} from "../addons/instatic/app/views";
+import {
+  jobsView, jobView, layout as stagerLayout, fragment as stagerFragment, newCloneView, promoteView, siteStagingView,
+} from "../addons/stager/app/views";
+import {
+  fleetView as gitFleetView, fragment as gitFragment, layout as gitLayout, siteView as gitSiteView,
+} from "../addons/git/app/views";
 import type { GitSiteStatus } from "../addons/git/app/service";
-import { fleetView as maintenanceFleetView, fragment as maintenanceFragment, layout as maintenanceLayout, siteView as maintenanceSiteView } from "../addons/maintenance/app/views";
+import {
+  fleetView as maintenanceFleetView, fragment as maintenanceFragment, layout as maintenanceLayout,
+  siteView as maintenanceSiteView,
+} from "../addons/maintenance/app/views";
 import type { MaintenanceFleet, MaintenanceSiteView } from "../addons/maintenance/app/service";
-import { dashboardView as resourceLimitsDashboardView, layout as resourceLimitsLayout } from "../addons/resource-limits/app/views";
+import {
+  dashboardView as resourceLimitsDashboardView, layout as resourceLimitsLayout,
+} from "../addons/resource-limits/app/views";
 import { dashboardView as smtpDashboardView, layout as smtpLayout } from "../addons/smtp/app/views";
 import type { SmtpState } from "../addons/smtp/action";
 import { dashboardView as dnsDashboardView, layout as dnsLayout } from "../addons/dns/app/views";
@@ -17,7 +30,9 @@ import type { SitePlan as DnsSitePlan } from "../addons/dns/engine";
 import type { Redirect as DnsRedirect } from "../addons/dns/model";
 import { PRESETS as DNS_PRESETS, seededPolicy as dnsSeededPolicy } from "../addons/dns/presets";
 import { tokenTemplate as dnsTokenTemplate } from "../addons/dns/token";
-import { dashboardView as panelTweaksDashboardView, layout as panelTweaksLayout } from "../addons/panel-tweaks/app/views";
+import {
+  dashboardView as panelTweaksDashboardView, layout as panelTweaksLayout,
+} from "../addons/panel-tweaks/app/views";
 import { siteLayoutTarget } from "../lib/panel-nav";
 import { sitesBlock } from "../addons/panel-tweaks/inject/targets";
 import { previewPage as panelTweaksPreviewPage } from "../addons/panel-tweaks/app/preview";
@@ -30,12 +45,16 @@ import {
   WP_TOOLS_TARGETS, newSiteDoneSnippet as wpToolsNewSiteDone, newSiteFormSnippet as wpToolsNewSiteForm, siteInfoSnippet as wpToolsSiteInfo,
 } from "../addons/wp-tools/inject/targets";
 import type { NewSitePlugin, NewSiteResult } from "../addons/wp-tools/new-site-plugins";
-import { dashboardBody as wpToolsDashboardBody, dashboardView as wpToolsDashboardView, layout as wpToolsLayout } from "../addons/wp-tools/app/views";
+import {
+  dashboardBody as wpToolsDashboardBody, dashboardView as wpToolsDashboardView, layout as wpToolsLayout,
+} from "../addons/wp-tools/app/views";
 import type { MainwpSiteView, MainwpView } from "../addons/wp-tools/mainwp";
 import { WORDPRESS_APPLICATIONS, type WpJobView, type WpSiteView } from "../addons/wp-tools/action";
 import { siteTabs, type SiteContext } from "../lib/site-context";
 import { DEFAULT_MAINTENANCE_TEMPLATE } from "../addons/maintenance/action";
-import { PRESET_CATEGORIES, STOCK_PROFILE, type ResourceLimitsState, type PoolSiteState } from "../addons/resource-limits/action";
+import {
+  PRESET_CATEGORIES, STOCK_PROFILE, type ResourceLimitsState, type PoolSiteState,
+} from "../addons/resource-limits/action";
 import type { MeasureJobView, PanelTweaksState } from "../addons/panel-tweaks/action";
 import { DEFAULT_BRANDING } from "../addons/panel-tweaks/branding";
 import type { PanelPhpStatus } from "../addons/system-tweaks/panel-php";
@@ -47,10 +66,14 @@ import { withCsrfCookie, SECURITY_HEADERS } from "../lib/app-http";
 import { handle as terminalHandle } from "../addons/terminal/app/index";
 import { dashboardView as terminalDashboardView, layout as terminalLayout } from "../addons/terminal/app/views";
 import { TERMINAL_TARGETS } from "../addons/terminal/inject/targets";
-import { dashboardView as securityKeysDashboardView, layout as securityKeysLayout } from "../addons/security-keys/app/views";
+import {
+  dashboardView as securityKeysDashboardView, layout as securityKeysLayout,
+} from "../addons/security-keys/app/views";
 import { SECURITY_KEYS_TARGETS } from "../addons/security-keys/inject/targets";
 import type { UserKeysView } from "../addons/security-keys/action";
-import { dashboardView as systemTweaksDashboardView, layout as systemTweaksLayout } from "../addons/system-tweaks/app/views";
+import {
+  dashboardView as systemTweaksDashboardView, layout as systemTweaksLayout,
+} from "../addons/system-tweaks/app/views";
 import type { SystemTweaksState } from "../addons/system-tweaks/action";
 import { MEMORY_PROFILES, memoryPlan, type MemoryProfile, type MemorySettings } from "../addons/resource-limits/memory";
 
@@ -1549,7 +1572,7 @@ const finishedPreviewJobs = new Set<string>();
 let previewEnabled: string[] | null = null;
 let phpChanges: ResourceLimitsState | null = null;
 const previewDeployments = new Map<string, GitSiteStatus>();
-let previewManagerJob: import("../cli/manager-action").ManagerJobView | null = null;
+let previewManagerJob: import("../manager/action").ManagerJobView | null = null;
 let previewJobNumber = 0;
 
 /**

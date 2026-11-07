@@ -8,8 +8,12 @@
  */
 import { existsSync, lstatSync, readFileSync, readdirSync, readlinkSync, rmSync } from "node:fs";
 import { join } from "node:path";
-import { failAction, runCommand, withFileLock, withFileLockSync, type CommandResult } from "../../cli/action-common";
-import { CONFIG_DIR, PANEL_FPM_UNIT, PHP_FPM_BIN_DIR, RECONCILE_SERVICE, STATE_DIR, SYSTEMD_DIR } from "../../cli/paths";
+import { failAction } from "../../lib/action";
+import { runCommand, type CommandResult } from "../../lib/command";
+import { withFileLock, withFileLockSync } from "../../lib/file-lock";
+import {
+  CONFIG_DIR, PANEL_FPM_UNIT, PHP_FPM_BIN_DIR, RECONCILE_SERVICE, STATE_DIR, SYSTEMD_DIR,
+} from "../../lib/paths";
 import { writeFileAtomic } from "../../lib/atomic-write";
 import { fastCgiRequest, type FastCgiResponse } from "../../lib/fastcgi";
 

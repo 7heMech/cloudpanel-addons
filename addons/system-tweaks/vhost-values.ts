@@ -8,8 +8,8 @@
 import { closeSync, constants, fstatSync, openSync, readFileSync } from "node:fs";
 import { isIP } from "node:net";
 import { join } from "node:path";
-import { withPanelDb } from "../../cli/panel-db";
-import { PANEL_DB } from "../../cli/paths";
+import { withPanelDb } from "../../lib/panel-db";
+import { PANEL_DB } from "../../lib/paths";
 
 export type VhostValueRule =
   | "rootDirectory" | "botName" | "blockedIp" | "allowedIps" | "additionalConfiguration"

@@ -1,4 +1,4 @@
-import { PHP_GUARD_INI_NAME } from "../../../cli/paths";
+import { PHP_GUARD_INI_NAME } from "../../../lib/paths";
 import { esc } from "../../../lib/app-http";
 import { TWEAK_ROW_JS, renderLayout, sinceText } from "../../../lib/app-ui";
 import { mountPath } from "../../../lib/mount";

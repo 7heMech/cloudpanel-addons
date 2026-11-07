@@ -6,7 +6,7 @@
 import { createHash } from "node:crypto";
 import { closeSync, constants, fstatSync, openSync, readFileSync } from "node:fs";
 import { join } from "node:path";
-import { openPanelDatabase } from "../../cli/panel-db";
+import { openPanelDatabase } from "../../lib/panel-db";
 import { writeFileAtomic } from "../../lib/atomic-write";
 
 /** How long CloudPanel honours the sign-in token Security Keys writes. */

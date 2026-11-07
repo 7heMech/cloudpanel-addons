@@ -3,15 +3,16 @@
 // through the same enable and disable the Addons page runs.
 
 import { dashboardUrl } from "./addons";
-import { ADDONS, ADDON_NAMES } from "./addon-catalog";
-import { installedConfig, unitActive } from "./provision";
-import { MANAGER_UNIT } from "./paths";
-import { CLI_VERSION } from "./release";
+import { ADDONS, ADDON_NAMES } from "../addons/catalog";
+import { installedConfig } from "./provision";
+import { unitActive } from "../lib/systemd";
+import { MANAGER_UNIT } from "../lib/paths";
+import { CLI_VERSION } from "../lib/version";
 import { cmdRepair } from "./repair";
 import { cmdStatus } from "./status";
 import { applyDisable, applyEnable } from "./toggle";
 import { cmdUpdate } from "./update";
-import { log, paint } from "./util";
+import { log, paint } from "../lib/log";
 import { checkCliUpdate, type CliUpdateInfo } from "../lib/update-check";
 
 const KEYS = "↑/↓ move · Space toggle · Enter apply · s status · r repair · u update · q quit";

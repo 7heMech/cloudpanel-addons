@@ -2,16 +2,17 @@
 
 import { dashboardUrl, installedAddons } from "./addons";
 import { secureRegularFile } from "./artifacts";
-import { ADDONS, addonHandler } from "./addon-catalog";
+import { ADDONS, addonHandler } from "../addons/catalog";
 import {
   type MaintenanceNginxStatus, type NginxProxyStatus, inspect, inspectNginxMaintenance, inspectNginxProxy,
 } from "./inject";
-import { CLI_BIN, MANAGER_UNIT, SOCKET_PATH, mountPath } from "./paths";
-import { inspectPhpGuard } from "./php-guard";
-import { managerSocketProblem, unitActive, unitPid } from "./provision";
+import { CLI_BIN, MANAGER_UNIT, SOCKET_PATH, mountPath } from "../lib/paths";
+import { inspectPhpGuard } from "../lib/php-guard";
+import { managerSocketProblem, unitPid } from "./provision";
+import { unitActive } from "../lib/systemd";
 import { installedInjections } from "./reconcile";
-import { CLI_VERSION } from "./release";
-import { log, paint } from "./util";
+import { CLI_VERSION } from "../lib/version";
+import { log, paint } from "../lib/log";
 import { existsSync } from "node:fs";
 function statusValue(value: string, ok: boolean): string {
   return paint(ok ? "32" : "31", value);

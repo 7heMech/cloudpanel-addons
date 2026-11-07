@@ -1,3 +1,5 @@
+import { unitActive } from "../lib/systemd";
+import { writeFileAtomic } from "../lib/atomic-write";
 import {
   chmodSync, chownSync, existsSync, lstatSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, statSync,
 } from "node:fs";
@@ -14,12 +16,14 @@ import {
   RECONCILE_TIMER, SERVICE_GROUP, SERVICE_USER, SESSION_DIR, SHARED_GROUP, SOCKET_DIR, STATE_DIR,
   SOCKET_PATH, SYSTEMD_DIR, TWIG_CACHE_DIR, PANEL_IDENTITY_PATH, NGINX_GLOBAL_SETTINGS, CLOUDFLARE_IPS_PATH,
   APT_UPGRADE_DROPIN, UPDATE_MOTD_DIR,
-} from "./paths";
-import { MAINTENANCE_INCLUDE_PATH } from "./maintenance-vhosts";
-import { ADDONS, ADDON_NAMES, templateWatchPaths, type AddonSpec } from "./addon-catalog";
+} from "../lib/paths";
+import { MAINTENANCE_INCLUDE_PATH } from "../addons/maintenance/vhosts";
+import { ADDONS, ADDON_NAMES, templateWatchPaths } from "../addons/catalog";
+import { type AddonSpec } from "../lib/addon-definition";
 import { findMasterVhost, panelVhostWatchPath } from "./inject";
 import { panelUserUid } from "../lib/sso-auth";
-import { fatal, log, run, tryRun, writeAtomic } from "./util";
+import { fatal, log } from "../lib/log";
+import { run, tryRun } from "../lib/command";
 
 
 const BACKUP_DIR = "/var/backups/clp-addons";
@@ -44,7 +48,7 @@ export function reconcileInstaticBackupCron(enabled: boolean, path = INSTATIC_BA
   }
   if (present) return false;
   // Preserve an operator's schedule across update/repair.
-  writeAtomic(path, instaticBackupCron(), 0o644);
+  writeFileAtomic(path, instaticBackupCron(), { mode: 0o644, createParent: true });
   return true;
 }
 export interface ProvisionCommandRunner {
@@ -172,7 +176,7 @@ function ensurePanelIdentity(quiet = false): void {
     "# Managed by clp-addons; read by the root action binary.\n" +
     `PRIMARY=${identity.primary}\n` +
     `ALIASES=${aliases}\n`;
-  writeAtomic(PANEL_IDENTITY_PATH, body, 0o600);
+  writeFileAtomic(PANEL_IDENTITY_PATH, body, { mode: 0o600, createParent: true });
   run("chown", ["root:root", PANEL_IDENTITY_PATH]);
   run("chmod", ["600", PANEL_IDENTITY_PATH]);
   if (!quiet) log.ok(`panel identity recorded from ${vhostPath}`);
@@ -534,11 +538,11 @@ export function writeConfig(spec: AddonSpec, force = false): void {
   const body = configBody(spec);
   if (existsSync(spec.configFile) && !force) {
     if (readFileSync(spec.configFile, "utf-8") === body) return;
-    writeAtomic(`${spec.configFile}.new`, body, 0o640);
+    writeFileAtomic(`${spec.configFile}.new`, body, { mode: 0o640, createParent: true });
     log.warn(`${spec.configFile} differs; wrote the managed defaults to .new`);
     return;
   }
-  writeAtomic(spec.configFile, body, 0o640);
+  writeFileAtomic(spec.configFile, body, { mode: 0o640, createParent: true });
   run("chown", [`root:${SERVICE_GROUP}`, spec.configFile]);
   rmSync(`${spec.configFile}.new`, { force: true });
 }
@@ -864,7 +868,7 @@ function managedFileIntact(path: string, body: string): boolean {
 /** Writes a managed definition unless one is already intact; returns whether it did. */
 function writeManaged(path: string, body: string): boolean {
   if (managedFileIntact(path, body)) return false;
-  writeAtomic(path, body, 0o644);
+  writeFileAtomic(path, body, { mode: 0o644, createParent: true });
   return true;
 }
 
@@ -1047,10 +1051,6 @@ export function stopUnits(keepShared = false): void {
   }
   rmSync(`${SYSTEMD_DIR}/${APT_UPGRADE_DROPIN}`, { force: true });
   tryRun("systemctl", ["daemon-reload"]);
-}
-
-export function unitActive(unit: string): string {
-  return tryRun("systemctl", ["is-active", unit]).out || "unknown";
 }
 
 /**

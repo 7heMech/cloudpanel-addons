@@ -4,14 +4,16 @@
  * two-factor setup it had then. See docs/decisions/terminal.md#root.
  */
 import { createHash } from "node:crypto";
-import { chmodSync, closeSync, constants, fstatSync, lstatSync, mkdirSync, openSync, readFileSync, type Stats } from "node:fs";
+import {
+  chmodSync, closeSync, constants, fstatSync, lstatSync, mkdirSync, openSync, readFileSync, type Stats,
+} from "node:fs";
 import { dirname } from "node:path";
 import type { Database } from "bun:sqlite";
-import { withFileLockSync } from "../../cli/action-common";
-import { openPanelDatabase } from "../../cli/panel-db";
-import { CONFIG_DIR, LOCK_DIR, PANEL_DB, STATE_DIR } from "../../cli/paths";
+import { withFileLockSync } from "../../lib/file-lock";
+import { openPanelDatabase } from "../../lib/panel-db";
+import { CONFIG_DIR, LOCK_DIR, PANEL_DB, STATE_DIR } from "../../lib/paths";
 import { accountPasskeys } from "../security-keys/sign-ins";
-import { fatal, log, requireRoot } from "../../cli/util";
+import { fatal, log, requireRoot } from "../../lib/log";
 import { writeFileAtomic } from "../../lib/atomic-write";
 import { PANEL_USER_NAME_RE } from "../../lib/panel-users";
 

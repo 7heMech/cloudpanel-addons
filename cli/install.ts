@@ -3,12 +3,14 @@
 import { dashboardUrl, installedAddons, migrateOldAddonNames, resolveAddon } from "./addons";
 import { artifactNames, installArtifacts, installedTag } from "./artifacts";
 import { bootstrapProvision, applyEnable } from "./toggle";
-import { type AddonSpec } from "./addon-catalog";
-import { recordNewsSince } from "./manager-action";
+import { type AddonSpec } from "../lib/addon-definition";
+import { recordNewsSince } from "../manager/action";
 import { withOperationLock } from "./operation-lock";
 import { ensureDirs, ensureRequiredUnits, ensureServiceUser } from "./provision";
-import { CLI_VERSION, loadLocal } from "./release";
-import { fatal, log, parseFlags, requireRoot } from "./util";
+import { CLI_VERSION } from "../lib/version";
+import { loadLocal } from "./release";
+import { fatal, log, requireRoot } from "../lib/log";
+import { parseFlags } from "./flags";
 
 /**
  * What install.sh runs: `--local` hands over the binary it has just installed,

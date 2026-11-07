@@ -12,12 +12,12 @@ import { createAuthActionServer } from "../cli/auth-action";
 import {
   activeManagerJob, createJob, type CreateJobOptions, latestManagerJob, markNewsSeen, parseManagerFlags, pruneManagerJobs,
   keepNewsSince, readManagerJob, readNewsSeen, readNewsSince, recordNewsSince, runManagerJob, type ManagerOps,
-} from "../cli/manager-action";
+} from "../manager/action";
 import { installedInjections } from "../cli/reconcile";
 import { handleManagerRoute } from "../manager/index";
 import { indexPage, updatePage } from "../manager/views";
-import { ADDONS, addonNews } from "../cli/addon-catalog";
-import { listJobIds } from "../cli/job-store";
+import { ADDONS, addonNews } from "../addons/catalog";
+import { listJobIds } from "../lib/job-store";
 import { csrfCookieHeader, newCsrfToken, safeDecodePathSegment } from "../lib/app-http";
 
 function makeJobsDir(): string {

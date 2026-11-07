@@ -12,7 +12,7 @@ import { existsSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import { BASE_CLIENT_JS, THEME_INIT_JS } from "../lib/app-ui";
 import { headerUpdateScript } from "../lib/panel-nav";
-import { ADDON_NAMES } from "../cli/addon-catalog";
+import { ADDON_NAMES } from "../addons/catalog";
 import { CLIENT_JS as INSTATIC_CLIENT_JS } from "../addons/instatic/app/views";
 import { CLIENT_JS as STAGER_CLIENT_JS } from "../addons/stager/app/views";
 import { CLIENT_JS as GIT_CLIENT_JS } from "../addons/git/app/views";

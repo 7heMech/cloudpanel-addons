@@ -8,7 +8,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
   availableSiteUser, dbNameFor, dbUserFor, panelSiteUserFor, siteUserFor, siteUserTaken,
-} from "../cli/action-common";
+} from "../lib/site-user";
 
 const DOMAINS = [
   "demo.clp-stg.local",

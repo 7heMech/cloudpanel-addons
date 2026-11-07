@@ -4,8 +4,10 @@
 // The container must have CLP_DISPOSABLE_DB_TEST=1; never run on a real server.
 import assert from "node:assert/strict";
 import { existsSync, readFileSync, rmSync, writeFileSync } from "node:fs";
-import { runCommand } from "../../cli/action-common";
-import { DATABASE_FILE, databaseStatus, reconcileDatabaseFile, setDatabaseLoopback } from "../../addons/system-tweaks/database";
+import { runCommand } from "../../lib/command";
+import {
+  DATABASE_FILE, databaseStatus, reconcileDatabaseFile, setDatabaseLoopback,
+} from "../../addons/system-tweaks/database";
 
 if (process.getuid?.() !== 0 || process.env.CLP_DISPOSABLE_DB_TEST !== "1" || !existsSync("/.dockerenv")) {
   throw new Error("run only inside the disposable Docker test container with CLP_DISPOSABLE_DB_TEST=1");

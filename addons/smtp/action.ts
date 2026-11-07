@@ -12,15 +12,18 @@
  * header. Postfix cannot fix a From on another domain without a milter.
  */
 import { SMTP_VERBS } from "./verbs";
-import { chmodSync, existsSync, lstatSync, mkdirSync, readdirSync, readFileSync, readlinkSync, rmSync, symlinkSync } from "node:fs";
-import { dirname, join } from "node:path";
 import {
-  ActionFailure, replyToAction, errorMessage, failAction, readJsonRequest, nameSlug, oneLine, runCommand, withFileLock,
-  type CommandResult,
-} from "../../cli/action-common";
-import { CLI_BIN, PANEL_DB, STATE_DIR } from "../../cli/paths";
-import { withPanelDb, withoutStandIns } from "../../cli/panel-db";
-import { log } from "../../cli/util";
+  chmodSync, existsSync, lstatSync, mkdirSync, readdirSync, readFileSync, readlinkSync, rmSync, symlinkSync,
+} from "node:fs";
+import { dirname, join } from "node:path";
+import { ActionFailure, replyToAction, failAction, readJsonRequest } from "../../lib/action";
+import { errorMessage } from "../../lib/errors";
+import { nameSlug, oneLine } from "../../lib/validate";
+import { runCommand, type CommandResult } from "../../lib/command";
+import { withFileLock } from "../../lib/file-lock";
+import { CLI_BIN, PANEL_DB, STATE_DIR } from "../../lib/paths";
+import { withPanelDb, withoutStandIns } from "../../lib/panel-db";
+import { log } from "../../lib/log";
 import { writeFileAtomic } from "../../lib/atomic-write";
 import { readUnixAccounts, siteAccountProblem, splitSharedUids, TRUSTED_LOGINS } from "../../lib/site-accounts";
 import {
