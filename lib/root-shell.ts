@@ -10,7 +10,7 @@ export const ROOT_SHELL_ICON = `<svg aria-hidden="true" width="20" height="20" v
 
 /** Opens the root window, or with no script goes to it in this tab. */
 export function rootShellLink(base: string, attributes: string, label: string): string {
-  return `<a ${attributes} href="${base}/root" title="Root shell" onclick="clpOpenTerminal('${base}', '', event.shiftKey); return false;">${ROOT_SHELL_ICON}${label}</a>`;
+  return `<a ${attributes} href="${base}/root" title="Root terminal" onclick="clpOpenTerminal('${base}', '', event.shiftKey); return false;">${ROOT_SHELL_ICON}${label}</a>`;
 }
 
 export function rootShellScript(base: string): string {

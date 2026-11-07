@@ -64,7 +64,7 @@ test("only an administrator root allowed gets a root shell", () => {
 test("two-factor must be on; switched off it pauses the grant, and back on it works without root", () => {
   allow("alice");
   change("UPDATE user SET mfa = 0 WHERE user_name = 'alice'");
-  expect(access("alice")).toEqual({ granted: true, problem: "Root shells need two-factor authentication: turn it on under Account → Security" });
+  expect(access("alice")).toEqual({ granted: true, problem: "A root terminal needs two-factor authentication: turn it on under Account → Security" });
   change("UPDATE user SET mfa = 1, mfa_secret = 'new' WHERE user_name = 'alice'");
   expect(access("alice")).toEqual({ granted: true, problem: null });
 });
@@ -123,7 +123,7 @@ test("an open root shell ends once its grant does", async () => {
   await running;
   expect(calls).toEqual([runuserCommand(paths, "root")]);
   expect(audit[0]).toBe("alice opened a root shell as root");
-  expect(audit.some((line) => line.includes("root shell ended: Root shells need two-factor authentication"))).toBe(true);
+  expect(audit.some((line) => line.includes("root shell ended: A root terminal needs two-factor authentication"))).toBe(true);
   expect(audit.at(-1)).toContain("alice closed a root shell as root");
 });
 
@@ -148,12 +148,12 @@ test("the manager asks for --root, and a ready line must agree on who the shell 
 });
 
 test("the page offers a root shell only to an allowed administrator, and says how to be one", () => {
-  expect(dashboardView([], { granted: true, problem: null }, "alice")).toContain("Open a root terminal");
-  const refused = dashboardView([], { granted: true, problem: "Root shells need two-factor authentication: turn it on under Account → Security" }, "alice");
-  expect(refused).not.toContain("Open a root terminal");
+  expect(dashboardView([], { granted: true, problem: null }, "alice")).toContain(">Root terminal<");
+  const refused = dashboardView([], { granted: true, problem: "A root terminal needs two-factor authentication: turn it on under Account → Security" }, "alice");
+  expect(refused).not.toContain(">Root terminal<");
   expect(refused).toContain("turn it on under Account → Security");
   const other = dashboardView([], { granted: false, problem: null }, "bob");
-  expect(other).not.toContain("Open a root terminal");
+  expect(other).not.toContain(">Root terminal<");
   expect(other).toContain("clp-addons terminal root allow bob");
   const popup = popupPage(null);
   expect(popup).toContain('data-domain=""');

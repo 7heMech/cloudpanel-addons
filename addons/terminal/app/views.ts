@@ -45,29 +45,18 @@ function siteRow(site: SanitizedSite): string {
               </tr>`;
 }
 
-/** The root shell's card for an administrator root allowed, or a line saying how to be. */
-function rootCard(root: { granted: boolean; problem: string | null }, user: string): string {
-  if (!root.granted) {
-    return user ? `
-        <p class="hint">Root can let you open a root shell here by running <code>clp-addons terminal root allow ${esc(user)}</code> on the server.</p>` : "";
-  }
-  const action = root.problem
-    ? `<span class="tone-bad">${esc(root.problem)}</span>`
-    : `<button class="btn" type="button" onclick="clpOpenTerminal(CLP_BASE, '', event.shiftKey)" aria-label="Open a root terminal">Open terminal</button>`;
+type RootAccess = { granted: boolean; problem: string | null };
+
+/** Under the heading: why an allowed administrator cannot open one now, or how to be allowed. */
+function rootLine(root: RootAccess, user: string): string {
+  if (root.problem) return `
+        <p><span class="tone-bad">${esc(root.problem)}</span></p>`;
+  if (root.granted || !user) return "";
   return `
-    <div class="card">
-      <div class="card-header"><h2>This server</h2></div>
-      <div class="terminal-root">
-        <div>
-          <h3>root</h3>
-          <p class="hint">Needs two-factor authentication.</p>
-        </div>
-        ${action}
-      </div>
-    </div>`;
+        <p class="hint">Root can let you open a root shell here by running <code>clp-addons terminal root allow ${esc(user)}</code> on the server.</p>`;
 }
 
-export function dashboardView(sites: SanitizedSite[], root: { granted: boolean; problem: string | null } = { granted: false, problem: null }, user = ""): string {
+export function dashboardView(sites: SanitizedSite[], root: RootAccess = { granted: false, problem: null }, user = ""): string {
   const table = sites.length === 0
     ? '<div class="empty">CloudPanel has no sites yet.</div>'
     : `${fleetFilterHtml({ count: sites.length, placeholder: "Find a site or user", summary: `${sites.length} sites` })}
@@ -88,9 +77,10 @@ export function dashboardView(sites: SanitizedSite[], root: { granted: boolean; 
     <div class="page-heading">
       <div>
         <h1>Terminal</h1>
-        <p>A shell as a site's own user, starting in its site directory, in a window of its own.</p>${root.granted ? "" : rootCard(root, user)}
-      </div>
-    </div>${root.granted ? rootCard(root, user) : ""}
+        <p>A shell as a site's own user, starting in its site directory, in a window of its own.</p>${rootLine(root, user)}
+      </div>${root.granted && !root.problem ? `
+      <button class="btn" type="button" onclick="clpOpenTerminal(CLP_BASE, '', event.shiftKey)">Root terminal</button>` : ""}
+    </div>
     <div class="card card-table">
       <div class="card-header"><h2>Sites</h2></div>
       ${table}

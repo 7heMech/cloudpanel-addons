@@ -38,7 +38,7 @@ Root names who may open a root shell with `clp-addons terminal root allow
 <user>` from a shell; `deny` takes it back and `clp-addons terminal root` lists
 them. Nothing in the panel can change the list. An allowed administrator gets a
 terminal icon in both of CloudPanel's headers and in the addons' copy of it,
-just before the account menu, and a "This server" card on Addons → Terminal.
+just before the account menu, and a Root terminal button on Addons → Terminal.
 The others get no icon and one line on that page naming the command, so they
 know whom to ask. The icon stays hidden until the page has asked
 `/addons/terminal/api/root-access`, at most once a minute per tab.
@@ -55,7 +55,7 @@ itself, so a passkey user turns two-factor on once and never types it.
 
 Each grant is also pinned to CloudPanel's `user.id`, so a name deleted and
 created again is not the account root allowed. A deactivation, a demotion or
-two-factor switched off refuses it while it lasts and the card says which;
+two-factor switched off refuses it while it lasts and the Terminal page says which;
 switched back on, it works again without root. A password change does not
 touch it. A stolen session of the allowed administrator itself still gets a
 root shell for as long as that session lasts.

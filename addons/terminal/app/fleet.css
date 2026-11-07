@@ -1,8 +1,4 @@
 .card-header + .fleet-filter { padding-top: 18px; }
-.terminal-root { display: flex; align-items: center; justify-content: space-between; gap: 16px; }
-.terminal-root h3 { margin: 0; font-size: 16px; }
-.terminal-root p { margin: 4px 0 0; }
-.terminal-root .btn { flex: 0 0 auto; white-space: nowrap; }
 /* A phone keeps each site to one row: the domain and its user, then the button. */
 @media (max-width: 940px) {
   .terminal-site-table tr { flex-wrap: nowrap; align-items: center; }

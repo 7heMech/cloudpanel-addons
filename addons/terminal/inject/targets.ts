@@ -68,7 +68,7 @@ export const TERMINAL_TARGETS: AddonTarget[] = [
     required: false,
     snippet: (url) => `
         ${ADMIN}
-        <li class="clp-root-shell" data-clp-root-shell style="display: none;">${rootShellLink(url, "", '<span class="clp-root-shell-label">Root shell</span>')}<style>${HEADER_STYLE}</style><script>${rootShellScript(url)}</script></li>
+        <li class="clp-root-shell" data-clp-root-shell style="display: none;">${rootShellLink(url, "", '<span class="clp-root-shell-label">Root terminal</span>')}<style>${HEADER_STYLE}</style><script>${rootShellScript(url)}</script></li>
         {% endif %}`,
   })),
 ];

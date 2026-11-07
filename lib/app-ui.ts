@@ -375,7 +375,7 @@ ${primaryNav}
         <span class="clp-addon-tool-label">Admin Area</span>
       </a>` : ""}
       ${chrome.admin !== false ? rootShellLink(mountPath("terminal"), 'class="clp-addon-tool" id="clp-root-shell" data-clp-root-shell hidden',
-        '<span class="clp-addon-tool-label">Root shell</span>') : ""}
+        '<span class="clp-addon-tool-label">Root terminal</span>') : ""}
       <div class="clp-addon-account">
         <button class="clp-addon-tool" id="clp-account-button" type="button" onclick="toggleAccountMenu()"
           aria-haspopup="true" aria-expanded="false" aria-label="Account">
