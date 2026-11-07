@@ -26,5 +26,5 @@
   .terminal-site-table tr:has(td[colspan]) { grid-column: 1 / -1; }
   .terminal-site-table td { border-top: 0; min-width: 0; }
   .terminal-site-table td.site-cell { flex: 1 1 auto; padding-right: 0; }
-  .terminal-site-table td.action-cell { flex: 0 0 auto; }
+  .terminal-site-table td.action-cell { flex: 0 0 auto; width: auto; }
 }

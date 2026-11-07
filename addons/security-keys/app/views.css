@@ -63,6 +63,7 @@ html.dark .sk-tile:has(input:checked) { background: rgb(38 125 221 / 10%); }
   .sk-checklist > li { align-items: flex-start; gap: 14px; }
   .sk-toolbar { padding: 16px 16px 4px; }
   .sk-toolbar input { max-width: none; }
+  .sk-toolbar select { flex: 1 1 100%; }
   .sk-toolbar .hint { flex-basis: 100%; margin: -4px 0 0; }
   .sk-table thead { display: none; }
   .sk-table, .sk-table tbody, .sk-table tr { display: block; }
