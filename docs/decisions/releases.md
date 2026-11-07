@@ -112,8 +112,9 @@ holds the security fixes. `update` never adds an addon.
 The commands that act on one addon are only `enable` and `disable`. Removing
 the installation is `self-uninstall`, named so that it cannot be mistaken for
 removing one addon. It refuses while any addon is enabled, so every addon's own
-withdrawal has already run through disable, and it keeps `/var/lib/clp-addons`.
-An addon's data is deleted from that addon, such as Instatic sites on its page.
+withdrawal has already run through disable. It deletes no data: Instatic sites
+are deleted on the Instatic page before disabling it, and `/var/lib/clp-addons`
+is removed by hand.
 
 ## Update behavior
 

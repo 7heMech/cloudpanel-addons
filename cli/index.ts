@@ -137,10 +137,7 @@ async function main(): Promise<number> {
       }
       return 0;
     case "disable":
-      for (const spec of addonArgs("disable", rest)) {
-        if (!installedConfig(spec)) log.ok(`${spec.name} is already disabled`);
-        else applyDisable(spec.name);
-      }
+      for (const spec of addonArgs("disable", rest)) applyDisable(spec.name);
       return 0;
     case "update": await cmdUpdate(rest); return 0;
     case "recon": await runRecon(); return 0;

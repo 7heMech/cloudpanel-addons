@@ -12,7 +12,7 @@ import { type AddonSpec } from "./addon-catalog";
 import { withOperationLock, withOperationLockSync } from "./operation-lock";
 import {
   applyToggleUnits, ensureAuthHelperReady, ensureDirs, ensureRequiredUnits, ensureServiceUser,
-  installUnits, platformProvisioned, reconcilePanelIdentity, removeLegacyUnits,
+  installUnits, installedConfig, platformProvisioned, reconcilePanelIdentity, removeLegacyUnits,
   startUnits, writeConfig,
 } from "./provision";
 import { fatal, log, requireRoot } from "./util";
@@ -132,7 +132,10 @@ export function withdrawWpTools(removeConfig: () => void): void {
 export function applyDisable(name: string): void {
   requireRoot("disable");
   const spec = resolveAddon(name);
-  withOperationLockSync(`disable ${spec.name}`, () => disableAddon(spec));
+  withOperationLockSync(`disable ${spec.name}`, () => {
+    if (!installedConfig(spec)) return log.ok(`${spec.name} is already disabled`);
+    disableAddon(spec);
+  });
 }
 
 function disableAddon(spec: AddonSpec): void {

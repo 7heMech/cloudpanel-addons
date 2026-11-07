@@ -30,11 +30,14 @@ export function cmdSelfUninstall(argv: string[]): void {
         "Re-run with --yes to proceed.",
       );
     }
-    stopUnits();
-    reconcileAnchors(true, undefined, false);
+    // Undone while the units still run, so a failure leaves an installation
+    // repair can keep whole and this can be re-run.
+    if (!reconcileAnchors(true, undefined, false) || !reconcileNginx(true, false)) {
+      fatal("could not undo the CloudPanel changes; clp-addons is still installed, so fix the error above and re-run");
+    }
     purgeTwigCache();
+    stopUnits();
     reconcilePanelIdentity(true, []);
-    reconcileNginx(true, false);
     reconcilePhpGuard(false, true);
     rmSync(CLI_BIN, { force: true });
     rmSync(LIBEXEC_DIR, { recursive: true, force: true });

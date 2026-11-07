@@ -44,7 +44,7 @@ mock.module("./cli/provision.ts", () => ({
 }));
 mock.module("./cli/reconcile.ts", () => ({
   reconcileAnchors: (_quiet, _exclude, managerNav) => { event("anchors nav=" + managerNav); return true; },
-  reconcileNginx: (_quiet, enabled) => { event("nginx " + enabled); return true; },
+  reconcileNginx: (_quiet, enabled) => { event("nginx " + enabled); return process.env.CLP_TEST_NGINX_FAILS !== "1"; },
 }));
 mock.module("./cli/php-guard.ts", () => ({ reconcilePhpGuard: (wanted) => event("phpGuard " + wanted) }));
 mock.module("./cli/inject.ts", () => ({ purgeTwigCache: () => event("purgeTwigCache") }));
@@ -68,11 +68,11 @@ try {
 }
 `;
 
-function uninstall(...args: string[]): { ok: boolean; error?: string; events: string[] } {
+function uninstall(args: readonly string[], nginxFails = false): { ok: boolean; error?: string; events: string[] } {
   const result = spawnSync(process.execPath, ["-e", childScript], {
     cwd: repo,
     encoding: "utf8",
-    env: { ...process.env, CLP_TEST_ROOT: root, CLP_TEST_ARGS: JSON.stringify(args) },
+    env: { ...process.env, CLP_TEST_ROOT: root, CLP_TEST_ARGS: JSON.stringify(args), CLP_TEST_NGINX_FAILS: nginxFails ? "1" : "0" },
   });
   if (result.status !== 0) throw new Error(`uninstall harness failed: ${result.stderr || result.stdout}`);
   const events = existsSync(eventsPath) ? readFileSync(eventsPath, "utf8").trim().split("\n") : [];
@@ -92,7 +92,7 @@ beforeEach(() => {
 
 test("refuses while an addon is enabled and names the disable command", () => {
   writeFileSync(configFile, "RUN_AS=clp-addons\n");
-  const result = uninstall("--yes");
+  const result = uninstall(["--yes"]);
   expect(result.ok).toBe(false);
   expect(result.error).toContain("clp-addons disable instatic");
   expect(result.events).toEqual([]);
@@ -100,7 +100,7 @@ test("refuses while an addon is enabled and names the disable command", () => {
 });
 
 test("without --yes it only says what it would remove", () => {
-  const result = uninstall();
+  const result = uninstall([]);
   expect(result.ok).toBe(false);
   expect(result.error).toContain("Re-run with --yes");
   expect(result.events).toEqual([]);
@@ -108,19 +108,28 @@ test("without --yes it only says what it would remove", () => {
 });
 
 test.each([{ args: ["instatic", "--yes"] }, { args: ["--purge", "--yes"] }])("refuses $args", ({ args }) => {
-  const result = uninstall(...args);
+  const result = uninstall(args);
   expect(result.ok).toBe(false);
   expect(result.events).toEqual([]);
 });
 
 test("with every addon disabled it removes the installation and keeps addon data", () => {
-  const result = uninstall("--yes");
+  const result = uninstall(["--yes"]);
   expect(result).toEqual({
     ok: true,
-    events: ["stopUnits", "anchors nav=false", "purgeTwigCache", "nginx false", "phpGuard false"],
+    events: ["anchors nav=false", "nginx false", "purgeTwigCache", "stopUnits", "phpGuard false"],
   });
   for (const path of [binary, libexec, identityPath]) expect(existsSync(path)).toBe(false);
   expect(existsSync(join(stateDir, "settings.json"))).toBe(true);
+});
+
+test("a CloudPanel change it cannot undo stops it before the units or the binary go", () => {
+  const result = uninstall(["--yes"], true);
+  expect(result.ok).toBe(false);
+  expect(result.error).toContain("still installed");
+  expect(result.events).toEqual(["anchors nav=false", "nginx false"]);
+  expect(existsSync(binary)).toBe(true);
+  expect(existsSync(identityPath)).toBe(true);
 });
 
 afterAll(() => rmSync(root, { recursive: true, force: true }));
