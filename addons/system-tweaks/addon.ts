@@ -1,7 +1,7 @@
 import { handle } from "./app/index";
 import {
   restoreSystemTweaks, runSystemTweaksAction, systemTweaksPhpPools, systemTweaksBackupCompression, systemTweaksFirewall, systemTweaksMaintenance,
-  systemTweaksMotd, systemTweaksPhpMyAdmin, systemTweaksVarnish, withdrawSystemTweaks,
+  systemTweaksMotd, systemTweaksPhpGuardOff, systemTweaksPhpMyAdmin, systemTweaksVarnish, withdrawSystemTweaks,
 } from "./action";
 import { SYSTEM_TWEAKS_TARGETS } from "./inject/targets";
 import { DEFAULT_REAL_IP_PATHS, REAL_IP_MARKER, releaseRealIp } from "./real-ip";
@@ -62,6 +62,7 @@ export const SYSTEM_TWEAKS_ADDON: AddonDefinition = {
     },
   },
   conffiles: [{ path: DEFAULT_REAL_IP_PATHS.nginxConf, marker: REAL_IP_MARKER, release: () => releaseRealIp() }],
+  phpGuardOff: () => systemTweaksPhpGuardOff(),
   deactivate: () => withdrawSystemTweaks(),
   activate: () => restoreSystemTweaks(),
 };

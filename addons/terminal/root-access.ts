@@ -3,6 +3,7 @@
  * `clp-addons terminal root allow`, each pinned to the account and the
  * two-factor setup it had then. See docs/decisions/terminal.md#root.
  */
+import { addonStateDir, CONFIG_DIR, LOCK_DIR, PANEL_DB } from "../../lib/paths";
 import { createHash } from "node:crypto";
 import {
   chmodSync, closeSync, constants, fstatSync, lstatSync, mkdirSync, openSync, readFileSync, type Stats,
@@ -11,7 +12,6 @@ import { dirname } from "node:path";
 import type { Database } from "bun:sqlite";
 import { withFileLockSync } from "../../lib/file-lock";
 import { openPanelDatabase } from "../../lib/panel-db";
-import { CONFIG_DIR, LOCK_DIR, PANEL_DB, STATE_DIR } from "../../lib/paths";
 import { accountPasskeys } from "../security-keys/sign-ins";
 import { fatal, log, requireRoot } from "../../lib/log";
 import { writeFileAtomic } from "../../lib/atomic-write";
@@ -19,7 +19,7 @@ import { PANEL_USER_NAME_RE } from "../../lib/panel-users";
 
 export const ROOT_GRANTS_FILE = `${CONFIG_DIR}/terminal-root.json`;
 const ROOT_GRANTS_LOCK = `${LOCK_DIR}/terminal-root.lock`;
-const SECURITY_KEYS_DIR = `${STATE_DIR}/security-keys`;
+const SECURITY_KEYS_DIR = addonStateDir("security-keys");
 
 export interface RootGrant {
   user: string;

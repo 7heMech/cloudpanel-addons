@@ -1,3 +1,7 @@
+import {
+  LOCK_DIR, PANEL_DB, addonStateDir, MAINTENANCE_INCLUDE_PATH, DISTRO_NGINX_SITES_DIR, NGINX_GLOBAL_SETTINGS,
+  PANEL_IDENTITY_PATH,
+} from "../../lib/paths";
 import { writeFileAtomic } from "../../lib/atomic-write";
 import { MAINTENANCE_VERBS } from "./verbs";
 import { Database } from "bun:sqlite";
@@ -10,7 +14,6 @@ import { join } from "node:path";
 import { ActionFailure, replyToAction, failAction } from "../../lib/action";
 import { normalizeIdentityHostname, validateDomain } from "../../lib/panel-identity";
 import { withFileLock } from "../../lib/file-lock";
-import { MAINTENANCE_INCLUDE_PATH, DISTRO_NGINX_SITES_DIR, NGINX_GLOBAL_SETTINGS, PANEL_IDENTITY_PATH } from "../../lib/paths";
 import { maintenanceGap, maintenanceGaps } from "./vhosts";
 import DEFAULT_TEMPLATE from "./default.html" with { type: "text" };
 
@@ -65,9 +68,9 @@ export interface MaintenanceActionOptions {
 }
 
 export const DEFAULT_MAINTENANCE_ACTION_PATHS: MaintenanceActionPaths = {
-  dataDir: "/var/lib/clp-addons/maintenance",
-  lockDir: "/run/lock/clp-addons",
-  panelDb: "/home/clp/htdocs/app/data/db.sq3",
+  dataDir: addonStateDir("maintenance"),
+  lockDir: LOCK_DIR,
+  panelDb: PANEL_DB,
   panelIdentityFile: PANEL_IDENTITY_PATH,
   nginxVhostDir: DISTRO_NGINX_SITES_DIR,
   nginxSettings: NGINX_GLOBAL_SETTINGS,

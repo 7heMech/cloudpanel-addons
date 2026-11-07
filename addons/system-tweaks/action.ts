@@ -1,10 +1,10 @@
 /** Root actions and lifecycle hooks for server-wide update and PHP settings. */
+import { LOCK_DIR, addonStateDir, ROOT_UID } from "../../lib/paths";
 import { SYSTEM_TWEAKS_VERBS } from "./verbs";
 import { existsSync, lstatSync, readFileSync } from "node:fs";
 import { replyToAction, failAction, readJsonRequest } from "../../lib/action";
 import { errorMessage } from "../../lib/errors";
 import { withFileLock, withFileLockSync } from "../../lib/file-lock";
-import { ROOT_UID, STATE_DIR } from "../../lib/paths";
 import { reconcilePhpGuard, type PhpGuardOptions } from "../../lib/php-guard";
 import { writeFileAtomic } from "../../lib/atomic-write";
 import {
@@ -121,8 +121,8 @@ export interface SystemTweaksPaths {
 }
 
 export const DEFAULT_SYSTEM_TWEAKS_PATHS: SystemTweaksPaths = {
-  settingsFile: `${STATE_DIR}/system-tweaks/settings.json`,
-  lockFile: "/run/lock/clp-addons/system-tweaks.lock",
+  settingsFile: `${addonStateDir("system-tweaks")}/settings.json`,
+  lockFile: `${LOCK_DIR}/system-tweaks.lock`,
   rootUid: ROOT_UID,
 };
 
@@ -226,9 +226,17 @@ function writeSettings(paths: SystemTweaksPaths, settings: SystemTweaksSettings)
   );
 }
 
-function guardOptions(options: SystemTweaksOptions): PhpGuardOptions {
-  const paths = pathsFor(options);
-  return { ...options.phpGuard, paths: { optOutSettings: paths.settingsFile, ...options.phpGuard?.paths } };
+function guardOptions(options: SystemTweaksOptions, settings: SystemTweaksSettings): PhpGuardOptions {
+  return { ...options.phpGuard, optedOut: !settings.uploadProgressGuard };
+}
+
+/** Whether the operator switched the PHP upload-progress guard off here; settings that cannot be trusted leave it on. */
+export function systemTweaksPhpGuardOff(options: SystemTweaksOptions = {}): boolean {
+  try {
+    return !readSettings(pathsFor(options)).uploadProgressGuard;
+  } catch {
+    return false;
+  }
 }
 
 async function stateOf(options: SystemTweaksOptions): Promise<SystemTweaksState> {
@@ -332,9 +340,10 @@ async function setUploadGuard(options: SystemTweaksOptions): Promise<SystemTweak
   if (typeof body.enabled !== "boolean") failAction("enabled must be true or false");
   await withFileLock(paths.lockFile, 15, "another system tweaks change is still running", async () => {
     const settings = readSettings(paths);
-    writeSettings(paths, { ...settings, uploadProgressGuard: body.enabled as boolean });
+    const changed = { ...settings, uploadProgressGuard: body.enabled as boolean };
+    writeSettings(paths, changed);
     try {
-      reconcilePhpGuard(true, true, guardOptions(options));
+      reconcilePhpGuard(true, true, guardOptions(options, changed));
     } catch (error) {
       writeSettings(paths, settings);
       throw error;
@@ -827,7 +836,7 @@ export function restoreSystemTweaks(options: SystemTweaksOptions = {}): void {
         const applied = applyUpdates(settings.updates, settings.enabledTimers, options.updates);
         writeSettings(paths, { ...settings, enabledTimers: applied.enabledTimers });
       }
-      if (!settings.uploadProgressGuard) reconcilePhpGuard(true, false, guardOptions(options));
+      if (!settings.uploadProgressGuard) reconcilePhpGuard(true, false, guardOptions(options, settings));
       if (settings.blockForgedRealIp) applyRealIp(true, options.realIp);
       if (settings.protectPhpMyAdmin) applyPhpMyAdmin(true, options.phpMyAdmin);
       settleLoginJails(paths, readSettings(paths), options);

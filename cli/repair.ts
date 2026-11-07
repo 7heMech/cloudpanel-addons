@@ -1,6 +1,6 @@
 // `clp-addons repair`.
 
-import { enabledAddons } from "../addons/catalog";
+import { enabledAddons, phpGuardOptedOut } from "../addons/catalog";
 import { resolveAddon, migrateOldAddonNames } from "./addons";
 import { reconcileAnchors, reconcileNginx, reconcilePanelBlocks, runAnchorWork } from "./reconcile";
 import { reconcilePhpGuard } from "../lib/php-guard";
@@ -98,7 +98,7 @@ async function applyRepair(positional: string[], flags: Record<string, string | 
   reconcileAnchors(quiet);
   if (!reconcilePanelBlocks(quiet)) log.err(PANEL_BLOCKS_NOT_READY);
   if (!reconcileNginx(quiet)) log.err("Nginx proxy is not ready; run repair after checking the master vhost");
-  reconcilePhpGuard(true, quiet);
+  reconcilePhpGuard(true, quiet, { optedOut: phpGuardOptedOut() });
   // Runs after the master-vhost reconciliation above, not before: recovering
   // a carried-over vhost also does its own `nginx -t` before reloading, and
   // skips the reload if that check fails. Running prune first, while the

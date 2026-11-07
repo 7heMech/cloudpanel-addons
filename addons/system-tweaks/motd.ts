@@ -5,15 +5,15 @@
  * that prints the server's own state instead; repair puts both back after a
  * CloudPanel upgrade.
  */
+import { addonStateDir, UPDATE_MOTD_DIR } from "../../lib/paths";
 import { chmodSync, existsSync, lstatSync, readFileSync, rmSync } from "node:fs";
 import { writeFileAtomic } from "../../lib/atomic-write";
-import { STATE_DIR, UPDATE_MOTD_DIR } from "../../lib/paths";
 
 export const DEFAULT_MOTD_PATHS = {
   banner: `${UPDATE_MOTD_DIR}/10-cloudpanel`,
   script: `${UPDATE_MOTD_DIR}/10-clp-addons-server-info`,
   /** Present while the banner is off because this turned it off. */
-  marker: `${STATE_DIR}/system-tweaks/motd-banner-off`,
+  marker: `${addonStateDir("system-tweaks")}/motd-banner-off`,
 };
 
 // pam_motd runs it as root with an empty environment for every SSH session,

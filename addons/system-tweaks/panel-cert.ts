@@ -5,6 +5,7 @@
  * does not change it: that domain is served by the sites' Nginx on 443, which
  * proxies to 8443 without verifying it.
  */
+import { addonStateDir, ROOT_UID } from "../../lib/paths";
 import { X509Certificate, createPrivateKey } from "node:crypto";
 import {
   closeSync, constants, existsSync, fstatSync, lstatSync, mkdirSync, mkdtempSync, openSync, readFileSync, rmSync, writeFileSync,
@@ -15,7 +16,6 @@ import { errorMessage } from "../../lib/errors";
 import { failAction } from "../../lib/action";
 import { runCommand, type CommandResult } from "../../lib/command";
 import { nginxFileChange, withNginxTransaction } from "../../lib/nginx-transaction";
-import { ROOT_UID, STATE_DIR } from "../../lib/paths";
 import { writeFileAtomic } from "../../lib/atomic-write";
 import { panelUserUid } from "../../lib/sso-auth";
 import { COMMAND_MS } from "./limits";
@@ -34,8 +34,8 @@ export const DEFAULT_PANEL_CERT_PATHS = {
   cert: `${PANEL_NGINX}/ssl-certificates/cert.crt`,
   key: `${PANEL_NGINX}/ssl-certificates/private.key`,
   /** The generated pair, kept so a CloudPanel update gets the same one back. */
-  storedCert: `${STATE_DIR}/system-tweaks/panel-cert.crt`,
-  storedKey: `${STATE_DIR}/system-tweaks/panel-cert.key`,
+  storedCert: `${addonStateDir("system-tweaks")}/panel-cert.crt`,
+  storedKey: `${addonStateDir("system-tweaks")}/panel-cert.key`,
   customDomain: "/etc/.clp_custom_domain",
   customDomainVhost: "/etc/nginx/sites-enabled/custom-domain.conf",
   nginx: "nginx",

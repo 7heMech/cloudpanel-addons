@@ -1,3 +1,4 @@
+import { addonStateDir, LOCK_DIR, PANEL_DB, PANEL_VAR_DIR } from "../../lib/paths";
 import { writeFileAtomic } from "../../lib/atomic-write";
 import { SECURITY_KEYS_VERBS } from "./verbs";
 import { TOKEN_TTL_SECONDS, mfaMark, recordSignIn } from "./sign-ins";
@@ -12,7 +13,6 @@ import { oneLine } from "../../lib/validate";
 import { withFileLockSync } from "../../lib/file-lock";
 import { errorMessage } from "../../lib/errors";
 import { openPanelDatabase } from "../../lib/panel-db";
-import { LOCK_DIR, PANEL_DB, PANEL_VAR_DIR, STATE_DIR } from "../../lib/paths";
 import { PANEL_USER_NAME_RE } from "../../lib/panel-users";
 import {
   ALGORITHMS, fromB64url, normalizeOrigin, verifyAssertion, verifyRegistration, type StoredPublicKey,
@@ -49,7 +49,7 @@ export interface SecurityKeysPaths {
 }
 
 export const DEFAULT_SECURITY_KEYS_PATHS: SecurityKeysPaths = {
-  stateDir: `${STATE_DIR}/security-keys`,
+  stateDir: addonStateDir("security-keys"),
   lockFile: `${LOCK_DIR}/security-keys.lock`,
   panelDb: PANEL_DB,
   panelVarDir: PANEL_VAR_DIR,

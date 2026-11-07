@@ -1,3 +1,4 @@
+import { CLI_BIN, LOCK_DIR, PANEL_DB, addonStateDir, PANEL_IDENTITY_PATH } from "../../lib/paths";
 import { hasSite, withPanelDb } from "../../lib/panel-db";
 import { Database } from "bun:sqlite";
 import { randomBytes } from "node:crypto";
@@ -15,7 +16,6 @@ import { availableSiteUser, siteUserTaken } from "../../lib/site-user";
 import { readable } from "../../lib/files";
 import { validateFlag, validatePort, validateTag } from "../../lib/validate";
 import { withFileLock } from "../../lib/file-lock";
-import { PANEL_IDENTITY_PATH } from "../../lib/paths";
 import {
   createJobDir, createJobLog, jobCommonFields, jobDir as storeJobDir, jobGet, jobSet, jobTimestamp,
   JOB_ID_RE, listJobIds, newJobId, pruneJobs, readJobLog, startJobUnit, watchJobRecord, type PruneJobsResult,
@@ -106,12 +106,12 @@ export interface InstaticActionPaths {
 }
 
 export const DEFAULT_INSTATIC_ACTION_PATHS: InstaticActionPaths = {
-  lockDir: "/run/lock/clp-addons",
-  dataBaseDir: "/var/lib/clp-addons/instatic",
+  lockDir: LOCK_DIR,
+  dataBaseDir: addonStateDir("instatic"),
   backupDir: "/var/backups/clp-addons/instatic",
-  jobsDir: "/var/lib/clp-addons/instatic/jobs",
-  actionBinary: "/usr/local/bin/clp-addons",
-  panelDb: "/home/clp/htdocs/app/data/db.sq3",
+  jobsDir: `${addonStateDir("instatic")}/jobs`,
+  actionBinary: CLI_BIN,
+  panelDb: PANEL_DB,
   clpctl: "/usr/bin/clpctl",
   panelIdentityFile: PANEL_IDENTITY_PATH,
   homeDir: "/home",

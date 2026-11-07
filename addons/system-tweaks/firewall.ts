@@ -4,12 +4,12 @@
  * change there, so this keeps the protocols itself and puts them back into ufw
  * whenever ufw's rule files change. See "Firewall" in docs/decisions/system-tweaks.md.
  */
+import { addonStateDir, LOCK_DIR, PANEL_DB, ROOT_UID, UFW_RULE_FILES } from "../../lib/paths";
 import { existsSync, lstatSync, readFileSync, statSync } from "node:fs";
 import { failAction } from "../../lib/action";
 import { runCommand, type CommandResult } from "../../lib/command";
 import { withFileLockSync } from "../../lib/file-lock";
 import { withPanelDb } from "../../lib/panel-db";
-import { LOCK_DIR, PANEL_DB, ROOT_UID, STATE_DIR, UFW_RULE_FILES } from "../../lib/paths";
 import { writeFileAtomic } from "../../lib/atomic-write";
 
 export type FirewallProtocol = "tcp" | "udp" | "both";
@@ -49,7 +49,7 @@ export interface FirewallPaths {
 }
 
 export const DEFAULT_FIREWALL_PATHS: FirewallPaths = {
-  stateFile: `${STATE_DIR}/system-tweaks/firewall.json`,
+  stateFile: `${addonStateDir("system-tweaks")}/firewall.json`,
   lockFile: `${LOCK_DIR}/system-tweaks-firewall.lock`,
   panelDb: PANEL_DB,
   userRules: UFW_RULE_FILES[0]!,

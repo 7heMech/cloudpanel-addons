@@ -11,6 +11,7 @@
  * `sendmail_path` in each PHP version's conf.d, which only rewrites the From
  * header. Postfix cannot fix a From on another domain without a milter.
  */
+import { LOCK_DIR, addonStateDir, CLI_BIN, PANEL_DB } from "../../lib/paths";
 import { SMTP_VERBS } from "./verbs";
 import {
   chmodSync, existsSync, lstatSync, mkdirSync, readdirSync, readFileSync, readlinkSync, rmSync, symlinkSync,
@@ -21,7 +22,6 @@ import { errorMessage } from "../../lib/errors";
 import { nameSlug, oneLine } from "../../lib/validate";
 import { runCommand, type CommandResult } from "../../lib/command";
 import { withFileLock } from "../../lib/file-lock";
-import { CLI_BIN, PANEL_DB, STATE_DIR } from "../../lib/paths";
 import { withPanelDb, withoutStandIns } from "../../lib/panel-db";
 import { log } from "../../lib/log";
 import { writeFileAtomic } from "../../lib/atomic-write";
@@ -149,9 +149,9 @@ export const DEFAULT_SMTP_PATHS: SmtpPaths = {
   phpRoot: "/etc/php",
   fpmBinDir: "/usr/sbin",
   phpBinDir: "/usr/bin",
-  stateFile: `${STATE_DIR}/smtp/config.json`,
-  originalFile: `${STATE_DIR}/smtp/postfix-original.json`,
-  lockFile: "/run/lock/clp-addons/smtp.lock",
+  stateFile: `${addonStateDir("smtp")}/config.json`,
+  originalFile: `${addonStateDir("smtp")}/postfix-original.json`,
+  lockFile: `${LOCK_DIR}/smtp.lock`,
   ruleDir: RULE_DIR,
   postfixDir: "/etc/postfix",
   sendmailLink: "/usr/local/bin/sendmail",

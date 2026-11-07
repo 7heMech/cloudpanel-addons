@@ -1,9 +1,9 @@
 /** The saved memory policy and its lifecycle, independent of PHP's category policy. */
+import { addonConfigFile, addonStateDir, LOCK_DIR } from "../../lib/paths";
 import { existsSync, lstatSync, readFileSync } from "node:fs";
 import { errorMessage } from "../../lib/errors";
 import { failAction } from "../../lib/action";
 import { withFileLock, withFileLockSync } from "../../lib/file-lock";
-import { CONFIG_DIR, LOCK_DIR, STATE_DIR } from "../../lib/paths";
 import { writeFileAtomic } from "../../lib/atomic-write";
 import { MEMORY_DEADLINE_MS } from "./limits";
 import {
@@ -12,9 +12,9 @@ import {
 } from "./memory";
 
 export const DEFAULT_MEMORY_SETTINGS_PATHS = {
-  settingsFile: `${STATE_DIR}/resource-limits/settings.json`,
+  settingsFile: `${addonStateDir("resource-limits")}/settings.json`,
   lockFile: `${LOCK_DIR}/resource-limits-settings.lock`,
-  enabledConfig: `${CONFIG_DIR}/resource-limits.conf`,
+  enabledConfig: addonConfigFile("resource-limits"),
   rootUid: 0,
 };
 export interface ResourceMemoryOptions {

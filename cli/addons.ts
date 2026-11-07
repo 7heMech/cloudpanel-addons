@@ -2,12 +2,12 @@
 // Addons page lives. Every command needs some of this and none of it belongs
 // to one of them.
 
+import { addonStateDir, CONFIG_DIR, LOCK_DIR, STATE_DIR, SYSTEMD_DIR } from "../lib/paths";
 import { withFileLockSync } from "../lib/file-lock";
 import { migrateResourceMemory } from "../addons/resource-limits/migration";
 import { ADDONS, ADDON_NAMES, addonEnabled } from "../addons/catalog";
 import { type AddonSpec } from "../lib/addon-definition";
 import { masterVhostHost } from "./inject";
-import { CONFIG_DIR, LOCK_DIR, STATE_DIR, SYSTEMD_DIR } from "../lib/paths";
 import { writeConfig } from "./provision";
 import { fatal, log } from "../lib/log";
 import { chownSync, existsSync, readFileSync, readdirSync, renameSync, rmSync, statSync, writeFileSync } from "node:fs";
@@ -36,11 +36,11 @@ export interface AddonRename {
 function migrationPending(): boolean {
   if (Object.keys(RENAMED_ADDONS).some((from) =>
     existsSync(`${CONFIG_DIR}/${from}.conf`) || existsSync(`${CONFIG_DIR}/${from}.conf.new`) || existsSync(`${STATE_DIR}/${from}`))) return true;
-  if (existsSync(`${STATE_DIR}/system-tweaks/memory.json`)) return true;
+  if (existsSync(`${addonStateDir("system-tweaks")}/memory.json`)) return true;
   const oom = `${SYSTEMD_DIR}/nginx.service.d/zz-clp-addons-oom.conf`;
   if (existsSync(oom) && readFileSync(oom, "utf8").includes("clp-addons System Tweaks:")) return true;
   try {
-    return Object.hasOwn(JSON.parse(readFileSync(`${STATE_DIR}/system-tweaks/settings.json`, "utf8")) ?? {}, "memory");
+    return Object.hasOwn(JSON.parse(readFileSync(`${addonStateDir("system-tweaks")}/settings.json`, "utf8")) ?? {}, "memory");
   } catch {
     return false;
   }

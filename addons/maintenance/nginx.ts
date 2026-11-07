@@ -11,8 +11,9 @@ import {
 } from "../../lib/nginx-baseline";
 import { cloudflareRanges, nginxFileChange, trustedVhost, withNginxTransaction } from "../../lib/nginx-transaction";
 import { openPanelDatabase } from "../../lib/panel-db";
-import { DISTRO_NGINX_SITES_DIR, NGINX_GLOBAL_SETTINGS, NGINX_MAINTENANCE_STATE_DIR, PANEL_DB } from "../../lib/paths";
-import { MAINTENANCE_INCLUDE_PATH } from "../../lib/paths";
+import {
+  DISTRO_NGINX_SITES_DIR, NGINX_GLOBAL_SETTINGS, NGINX_MAINTENANCE_STATE_DIR, PANEL_DB, MAINTENANCE_INCLUDE_PATH,
+} from "../../lib/paths";
 import { sitesWithoutMaintenance, stageMaintenanceVhosts } from "./vhosts";
 
 // A sentinel response code keeps an application's own 503 page intact. The

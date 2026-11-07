@@ -7,6 +7,7 @@
 // operator's post-deploy command itself, so a repository cannot arrive with
 // root's privileges attached to it.
 
+import { LOCK_DIR, PANEL_DB, addonStateDir, CLI_BIN, PANEL_IDENTITY_PATH } from "../../lib/paths";
 import { Database } from "bun:sqlite";
 import { randomBytes } from "node:crypto";
 import {
@@ -14,7 +15,6 @@ import {
   rmSync, statSync, chmodSync, writeSync, constants as fsConstants,
 } from "node:fs";
 import { join } from "node:path";
-import { CLI_BIN, PANEL_IDENTITY_PATH } from "../../lib/paths";
 import { writeFileAtomic } from "../../lib/atomic-write";
 import { secretEquals } from "../../lib/secret-equals";
 import {
@@ -74,11 +74,11 @@ export interface GitActionPaths {
 }
 
 export const DEFAULT_GIT_ACTION_PATHS: GitActionPaths = {
-  dataDir: "/var/lib/clp-addons/git",
-  sitesDir: "/var/lib/clp-addons/git/sites",
-  jobsDir: "/var/lib/clp-addons/git/jobs",
-  lockDir: "/run/lock/clp-addons",
-  panelDb: "/home/clp/htdocs/app/data/db.sq3",
+  dataDir: addonStateDir("git"),
+  sitesDir: `${addonStateDir("git")}/sites`,
+  jobsDir: `${addonStateDir("git")}/jobs`,
+  lockDir: LOCK_DIR,
+  panelDb: PANEL_DB,
   panelIdentityFile: PANEL_IDENTITY_PATH,
   actionBinary: CLI_BIN,
   homeDir: "/home",

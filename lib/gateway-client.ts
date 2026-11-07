@@ -1,10 +1,11 @@
+import { AUTH_SOCKET_PATH, CLI_BIN } from "./paths";
 // Client helper for communicating with the root gateway daemon over UNIX socket.
 // Handles both gateway socket IPC and hermetic test runner execution.
 
 import { AsyncLocalStorage } from "node:async_hooks";
 import { existsSync } from "node:fs";
 import {
-  callerMay, webVerb, GATEWAY_SOCKET_PATH, DEFAULT_CLI_BIN, DEFAULT_GATEWAY_TIMEOUT_MS, type ActionResult,
+  callerMay, webVerb, DEFAULT_GATEWAY_TIMEOUT_MS, type ActionResult,
   type GatewayAddon, type GatewayRequest, type PanelSnapshot, type StreamVerb, type WebVerb,
 } from "./gateway-protocol";
 
@@ -248,7 +249,7 @@ export async function callGatewayAction<A extends GatewayAddon>(
 ): Promise<GatewayReply> {
   const refused = refusedForCaller(addon, verb);
   if (refused) return { ok: false, error: refused };
-  const socketPath = options.socketPath ?? GATEWAY_SOCKET_PATH;
+  const socketPath = options.socketPath ?? AUTH_SOCKET_PATH;
   const timeoutMs = options.timeout ?? DEFAULT_GATEWAY_TIMEOUT_MS;
 
   const direct = Boolean(process.env.CLP_ADDONS_ACTION_TEST_BIN) || (process.getuid?.() === 0 && !existsSync(socketPath));
@@ -267,7 +268,7 @@ export async function callGatewayAction<A extends GatewayAddon>(
   // 2. Direct root execution fallback if socket is absent (e.g. offline testing as root)
   if (process.getuid?.() === 0 && !existsSync(socketPath)) {
     return runCommandDirect<never>(
-      DEFAULT_CLI_BIN,
+      CLI_BIN,
       ["action", addon, verb, ...args],
       options,
       input,
@@ -410,7 +411,7 @@ export function streamGatewayAction<A extends GatewayAddon>(options: {
   if (options.timeoutMs !== undefined) {
     timeoutTimer = setTimeout(() => finish("gateway stream request timed out"), options.timeoutMs);
   }
-  const socketPath = options.socketPath ?? GATEWAY_SOCKET_PATH;
+  const socketPath = options.socketPath ?? AUTH_SOCKET_PATH;
   const payload = JSON.stringify({
     kind: "stream-action",
     addon: options.addon,
@@ -430,7 +431,7 @@ export function streamGatewayAction<A extends GatewayAddon>(options: {
     return stream;
   }
   if (direct) {
-    const command = process.env.CLP_ADDONS_ACTION_TEST_BIN ?? DEFAULT_CLI_BIN;
+    const command = process.env.CLP_ADDONS_ACTION_TEST_BIN ?? CLI_BIN;
     void (async () => {
       try {
         child = Bun.spawn([command, "action", options.addon, options.verb, ...(options.args ?? [])], {
@@ -507,7 +508,7 @@ export function streamGatewayAction<A extends GatewayAddon>(options: {
 export async function callGatewayPanelInfo(
   options: GatewayClientOptions = {},
 ): Promise<ActionResult<PanelSnapshot>> {
-  const socketPath = options.socketPath ?? GATEWAY_SOCKET_PATH;
+  const socketPath = options.socketPath ?? AUTH_SOCKET_PATH;
   const timeoutMs = options.timeout ?? 5_000;
 
   // 1. Direct root execution fallback if socket is absent (e.g. offline execution as root)
@@ -532,7 +533,7 @@ export async function callGatewayPanelInfo(
  */
 export async function callGatewayAuth(
   sessionId: string,
-  socketPath: string = GATEWAY_SOCKET_PATH,
+  socketPath: string = AUTH_SOCKET_PATH,
   timeoutMs: number = 5_000,
 ): Promise<string> {
   return new Promise<string>((resolve) => {

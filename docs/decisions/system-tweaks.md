@@ -275,7 +275,9 @@ The guard stays platform-wide (see [Security](security.md#php-session-upload-pro
 install, update and repair write it whenever any addon is installed. System
 Tweaks is where it is shown and the only place to opt out. The opt-out is
 `uploadProgressGuard: false` in `/var/lib/clp-addons/system-tweaks/settings.json`,
-and `lib/php-guard.ts` honours it only while `system-tweaks.conf` exists.
+which the addon reports through its `phpGuardOff` hook; the catalog asks only
+enabled addons, so it counts only while `system-tweaks.conf` exists, and a
+settings file System Tweaks itself would not trust leaves the guard on.
 The shared disable path reconciles the guard once the config is gone.
 Disabling puts it back even when no addon is left, because the binary stays and
 repair keeps the guard while it is installed; `self-uninstall` removes it with

@@ -6,14 +6,14 @@
  * then proven by asking both pools for a page over their sockets, which Nginx's
  * optional basic auth cannot answer for; a failure puts the previous unit back.
  */
+import {
+  LOCK_DIR, addonConfigFile, addonStateDir, PANEL_FPM_UNIT, PHP_FPM_BIN_DIR, RECONCILE_SERVICE, SYSTEMD_DIR,
+} from "../../lib/paths";
 import { existsSync, lstatSync, readFileSync, readdirSync, readlinkSync, rmSync } from "node:fs";
 import { join } from "node:path";
 import { failAction } from "../../lib/action";
 import { runCommand, type CommandResult } from "../../lib/command";
 import { withFileLock, withFileLockSync } from "../../lib/file-lock";
-import {
-  CONFIG_DIR, PANEL_FPM_UNIT, PHP_FPM_BIN_DIR, RECONCILE_SERVICE, STATE_DIR, SYSTEMD_DIR,
-} from "../../lib/paths";
 import { writeFileAtomic } from "../../lib/atomic-write";
 import { fastCgiRequest, type FastCgiResponse } from "../../lib/fastcgi";
 
@@ -40,9 +40,9 @@ export const DEFAULT_PANEL_PHP_PATHS: PanelPhpPaths = {
   unit: PANEL_FPM_UNIT,
   dropInFile: `${SYSTEMD_DIR}/${PANEL_FPM_UNIT}.d/clp-addons-php.conf`,
   fpmBinDir: PHP_FPM_BIN_DIR,
-  stateFile: `${STATE_DIR}/system-tweaks/panel-php.json`,
-  lockFile: "/run/lock/clp-addons/panel-php.lock",
-  configFile: `${CONFIG_DIR}/system-tweaks.conf`,
+  stateFile: `${addonStateDir("system-tweaks")}/panel-php.json`,
+  lockFile: `${LOCK_DIR}/panel-php.lock`,
+  configFile: addonConfigFile("system-tweaks"),
   panelRoot: "/home/clp/htdocs/app/files/public",
   panelSocket: "/run/clp-php-fpm.sock",
   fileManagerSocket: "/run/clp-fm-php-fpm.sock",

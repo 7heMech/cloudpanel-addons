@@ -1,11 +1,12 @@
 // `clp-addons status`: what is installed, injected, running and reachable.
 
 import { dashboardUrl } from "./addons";
-import { enabledAddons, ADDONS, addonEnabled, addonHandler } from "../addons/catalog";
+import { enabledAddons, ADDONS, addonEnabled, addonHandler, phpGuardOptedOut } from "../addons/catalog";
 import type { AddonSpec } from "../lib/addon-definition";
 import { secureRegularFile } from "./artifacts";
 import { type NginxProxyStatus, inspect, inspectNginxProxy } from "./inject";
-import { CLI_BIN, MANAGER_UNIT, SOCKET_PATH, mountPath } from "../lib/paths";
+import { CLI_BIN, MANAGER_UNIT, SOCKET_PATH } from "../lib/paths";
+import { mountPath } from "../lib/mount";
 import { inspectPhpGuard } from "../lib/php-guard";
 import { managerSocketProblem, unitPid } from "./provision";
 import { unitActive } from "../lib/systemd";
@@ -28,7 +29,7 @@ function panelBlockStatus(spec: AddonSpec): string {
 }
 
 function phpGuardStatus(): string {
-  const { guarded, unguarded, optedOut } = inspectPhpGuard();
+  const { guarded, unguarded, optedOut } = inspectPhpGuard({ optedOut: phpGuardOptedOut() });
   if (guarded.length === 0 && unguarded.length === 0) return "No PHP-FPM found";
   if (optedOut) return statusValue("off in System Tweaks", false);
   if (unguarded.length === 0) return statusValue(`upload_progress Off on ${guarded.join(", ")} ✓`, true);

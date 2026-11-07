@@ -17,6 +17,7 @@
  * file content is a plugin zip chosen for a new site, which is staged in root's
  * own storage under an id root picks and handed to the site's user on stdin.
  */
+import { LOCK_DIR, addonConfigFile, addonStateDir, CLI_BIN, NGINX_CERTIFICATES_DIR, PANEL_DB, DISTRO_NGINX_SITES_DIR } from "../../lib/paths";
 import { openPanelDatabase } from "../../lib/panel-db";
 import { PANEL_USER_NAME_RE, panelUserOwnsSite, panelUserRole } from "../../lib/panel-users";
 import { createHash, randomBytes } from "node:crypto";
@@ -29,7 +30,6 @@ import { errorMessage } from "../../lib/errors";
 import { validateDomain } from "../../lib/panel-identity";
 import { withFileLock, withFileLockSync } from "../../lib/file-lock";
 import { type CommandResult } from "../../lib/command";
-import { CLI_BIN, CONFIG_DIR, NGINX_CERTIFICATES_DIR, PANEL_DB, STATE_DIR } from "../../lib/paths";
 import {
   jobDir, jobGet, jobIdArgument, jobSet, pruneJobs, readJobLog, validateJobId, watchJobRecord, type startJobUnit,
 } from "../../lib/job-store";
@@ -204,31 +204,31 @@ export interface WpToolsActionOptions extends VarnishOptions, Pick<NewSiteOption
 }
 
 export const DEFAULT_WP_TOOLS_PATHS: WpToolsActionPaths = {
-  configFile: `${CONFIG_DIR}/wp-tools.conf`,
+  configFile: addonConfigFile("wp-tools"),
   panelDb: PANEL_DB,
   passwd: "/etc/passwd",
-  lockFile: "/run/lock/clp-addons/wp-tools.lock",
+  lockFile: `${LOCK_DIR}/wp-tools.lock`,
   runuser: "/usr/sbin/runuser",
-  maintenanceConfig: `${CONFIG_DIR}/maintenance.conf`,
+  maintenanceConfig: addonConfigFile("maintenance"),
   maintenance: DEFAULT_MAINTENANCE_ACTION_PATHS,
-  nginxVhostDir: "/etc/nginx/sites-enabled",
+  nginxVhostDir: DISTRO_NGINX_SITES_DIR,
   nginx: "nginx",
   systemctl: "systemctl",
   vhostUid: 0,
-  varnishState: `${STATE_DIR}/wp-tools/varnish.json`,
-  varnishLockFile: "/run/lock/clp-addons/wp-varnish.lock",
-  domainLinkState: `${STATE_DIR}/wp-tools/domain-link.json`,
-  newSiteAccessState: `${STATE_DIR}/wp-tools/new-site-access.json`,
-  mainwpState: `${STATE_DIR}/wp-tools/mainwp.json`,
-  mainwpLockFile: "/run/lock/clp-addons/wp-mainwp.lock",
-  jobsDir: `${STATE_DIR}/wp-tools/jobs`,
-  jobsLockFile: "/run/lock/clp-addons/wp-jobs.lock",
-  newSitesState: `${STATE_DIR}/wp-tools/new-sites.json`,
-  newSitesLockFile: "/run/lock/clp-addons/wp-new-sites.lock",
+  varnishState: `${addonStateDir("wp-tools")}/varnish.json`,
+  varnishLockFile: `${LOCK_DIR}/wp-varnish.lock`,
+  domainLinkState: `${addonStateDir("wp-tools")}/domain-link.json`,
+  newSiteAccessState: `${addonStateDir("wp-tools")}/new-site-access.json`,
+  mainwpState: `${addonStateDir("wp-tools")}/mainwp.json`,
+  mainwpLockFile: `${LOCK_DIR}/wp-mainwp.lock`,
+  jobsDir: `${addonStateDir("wp-tools")}/jobs`,
+  jobsLockFile: `${LOCK_DIR}/wp-jobs.lock`,
+  newSitesState: `${addonStateDir("wp-tools")}/new-sites.json`,
+  newSitesLockFile: `${LOCK_DIR}/wp-new-sites.lock`,
   certificatesDir: NGINX_CERTIFICATES_DIR,
   actionBinary: CLI_BIN,
-  uploadsDir: `${STATE_DIR}/wp-tools/uploads`,
-  pluginsLockFile: "/run/lock/clp-addons/wp-plugins.lock",
+  uploadsDir: `${addonStateDir("wp-tools")}/uploads`,
+  pluginsLockFile: `${LOCK_DIR}/wp-plugins.lock`,
 };
 
 function pathsFor(options: WpToolsActionOptions): WpToolsActionPaths {

@@ -12,6 +12,7 @@
  * shape, and it accepts no path. Automatic SSL submits CloudPanel's own certificate form from the
  * browser; here it is only a switch.
  */
+import { LOCK_DIR, addonStateDir, CLI_BIN, PANEL_DB } from "../../lib/paths";
 import { openPanelDatabase } from "../../lib/panel-db";
 import { Database } from "bun:sqlite";
 import { existsSync, lstatSync, readFileSync } from "node:fs";
@@ -24,7 +25,6 @@ import {
   jobCommonFields, jobDir, jobIdArgument, jobSiteProgress, listJobIds, pruneJobs, queueJob, readJobLog,
   readJobResult, runSiteJob, watchJobRecord, type JobCommonFields, type JobSiteProgress, type startJobUnit,
 } from "../../lib/job-store";
-import { CLI_BIN, PANEL_DB, STATE_DIR } from "../../lib/paths";
 import { standInDomains } from "../../lib/stand-ins";
 import { writeFileAtomic } from "../../lib/atomic-write";
 import { certificateIssuer, issuerLabel } from "../../lib/certificate-issuer";
@@ -263,17 +263,17 @@ export interface PanelTweaksActionOptions {
 
 export const DEFAULT_PANEL_TWEAKS_PATHS: PanelTweaksActionPaths = {
   panelDb: PANEL_DB,
-  tweaksFile: `${STATE_DIR}/panel-tweaks/tweaks.json`,
-  diskFile: `${STATE_DIR}/panel-tweaks/disk-usage.json`,
-  lockFile: "/run/lock/clp-addons/panel-tweaks.lock",
-  scanLockFile: "/run/lock/clp-addons/panel-tweaks-scan.lock",
-  jobsDir: `${STATE_DIR}/panel-tweaks/jobs`,
-  jobsLockFile: "/run/lock/clp-addons/panel-tweaks-jobs.lock",
+  tweaksFile: `${addonStateDir("panel-tweaks")}/tweaks.json`,
+  diskFile: `${addonStateDir("panel-tweaks")}/disk-usage.json`,
+  lockFile: `${LOCK_DIR}/panel-tweaks.lock`,
+  scanLockFile: `${LOCK_DIR}/panel-tweaks-scan.lock`,
+  jobsDir: `${addonStateDir("panel-tweaks")}/jobs`,
+  jobsLockFile: `${LOCK_DIR}/panel-tweaks-jobs.lock`,
   actionBinary: CLI_BIN,
   mysqlDir: "/var/lib/mysql",
   passwd: "/etc/passwd",
-  brandingFile: `${STATE_DIR}/panel-tweaks/branding.json`,
-  brandingDir: `${STATE_DIR}/panel-tweaks/branding`,
+  brandingFile: `${addonStateDir("panel-tweaks")}/branding.json`,
+  brandingDir: `${addonStateDir("panel-tweaks")}/branding`,
   rootUid: 0,
 };
 

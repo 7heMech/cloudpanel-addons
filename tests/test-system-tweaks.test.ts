@@ -10,7 +10,7 @@ import { dirname, join } from "node:path";
 import { runCommand, type CommandResult } from "../lib/command";
 import { inspectPhpGuard, reconcilePhpGuard, type PhpGuardOptions } from "../lib/php-guard";
 import {
-  executeSystemTweaksAction, readSettings, restoreSystemTweaks, systemTweaksMaintenance, systemTweaksMotd, systemTweaksPhpMyAdmin, systemTweaksPhpPools, systemTweaksUpkeep, withdrawSystemTweaks,
+  executeSystemTweaksAction, readSettings, restoreSystemTweaks, systemTweaksMaintenance, systemTweaksMotd, systemTweaksPhpGuardOff, systemTweaksPhpMyAdmin, systemTweaksPhpPools, systemTweaksUpkeep, withdrawSystemTweaks,
   type SystemTweaksOptions, type SystemTweaksPaths, type SystemTweaksState,
 } from "../addons/system-tweaks/action";
 import {
@@ -448,7 +448,7 @@ function box(options: { installed?: boolean; timers?: Record<string, string>; fa
   const phpGuard: PhpGuardOptions = {
     run: () => ({ ok: true, out: "" }),
     isActive: () => false,
-    paths: { phpRoot, fpmBinDir: sbin, rootUid: uid, optOutConfig: guardConfig, optOutSettings: settingsFile },
+    paths: { phpRoot, fpmBinDir: sbin, rootUid: uid },
   };
   return {
     pools, aptDir, commands, timers, phpRoot, guardConfig, settingsFile, installed, nginxConf, panelConf, cloudflareIps, nginx, fpm, panelVhost, vhostGuardPaths, valuesDb, varnish,
@@ -1533,22 +1533,27 @@ function guardFile(b: Box, version: string): string {
   return join(b.phpRoot, version, "fpm", "conf.d", "99-clp-addons-upload-progress.ini");
 }
 
+/** What the platform passes the guard: System Tweaks' switch counts while its config exists, as the catalog asks it. */
+function platformGuard(b: Box): PhpGuardOptions {
+  return { ...b.options.phpGuard, optedOut: existsSync(b.guardConfig) && systemTweaksPhpGuardOff(b.options) };
+}
+
 test("an existing installation keeps the guard without System Tweaks", () => {
   const b = box();
   rmSync(b.guardConfig);
-  reconcilePhpGuard(true, true, b.options.phpGuard);
+  reconcilePhpGuard(true, true, platformGuard(b));
   expect(existsSync(guardFile(b, "8.1"))).toBe(true);
   // A stored opt-out counts for nothing while System Tweaks is not enabled.
   mkdirSync(join(b.settingsFile, ".."), { recursive: true });
   writeFileSync(b.settingsFile, JSON.stringify({ version: 1, uploadProgressGuard: false }), { mode: 0o600 });
-  reconcilePhpGuard(true, true, b.options.phpGuard);
+  reconcilePhpGuard(true, true, platformGuard(b));
   expect(existsSync(guardFile(b, "8.3"))).toBe(true);
-  expect(inspectPhpGuard(b.options.phpGuard).optedOut).toBe(false);
+  expect(inspectPhpGuard(platformGuard(b)).optedOut).toBe(false);
 });
 
 test("opting out in System Tweaks removes the guard, and repair keeps it removed", async () => {
   const b = box();
-  reconcilePhpGuard(true, true, b.options.phpGuard);
+  reconcilePhpGuard(true, true, platformGuard(b));
   writeFileSync(join(b.phpRoot, "8.3", "fpm", "conf.d", "30-custom.ini"), "session.upload_progress.enabled = Off\n");
   const state = await act(b, ["set-upload-guard"], { enabled: false });
   expect(state.uploadProgress.guard).toBe(false);
@@ -1558,13 +1563,13 @@ test("opting out in System Tweaks removes the guard, and repair keeps it removed
     ["PHP 8.3", false, "config"],
     ["CloudPanel (PHP 8.3)", false, "config"],
   ]);
-  reconcilePhpGuard(true, true, b.options.phpGuard);
+  reconcilePhpGuard(true, true, platformGuard(b));
   expect(existsSync(guardFile(b, "8.1"))).toBe(false);
-  expect(inspectPhpGuard(b.options.phpGuard).optedOut).toBe(true);
+  expect(inspectPhpGuard(platformGuard(b)).optedOut).toBe(true);
 
   // Without System Tweaks' config the opt-out no longer counts.
   rmSync(b.guardConfig);
-  reconcilePhpGuard(true, true, b.options.phpGuard);
+  reconcilePhpGuard(true, true, platformGuard(b));
   expect(existsSync(guardFile(b, "8.1"))).toBe(true);
 
   // Enabling it again honours the stored opt-out.

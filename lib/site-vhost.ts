@@ -8,6 +8,7 @@
  * rendered vhosts, so a replacement can only use placeholders the panel
  * already fills for that site.
  */
+import { PANEL_DB, DISTRO_NGINX_SITES_DIR } from "./paths";
 import { withPanelDb } from "./panel-db";
 import { chmodSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
@@ -133,9 +134,9 @@ export interface SiteVhostPaths {
 }
 
 export const DEFAULT_SITE_VHOST_PATHS: SiteVhostPaths = {
-  panelDb: "/home/clp/htdocs/app/data/db.sq3",
+  panelDb: PANEL_DB,
   sqlite3: "/usr/bin/sqlite3",
-  nginxVhostDir: "/etc/nginx/sites-enabled",
+  nginxVhostDir: DISTRO_NGINX_SITES_DIR,
   tempDir: "/tmp",
 };
 

@@ -1,7 +1,7 @@
 // `clp-addons update`, and the rollback a failed one runs.
 
 import { rmSync } from "node:fs";
-import { enabledAddons } from "../addons/catalog";
+import { enabledAddons, phpGuardOptedOut } from "../addons/catalog";
 import { migrateOldAddonNames, revertAddonRenames } from "./addons";
 import {
   artifactNames, currentArtifactsMatch, installArtifacts, keepPreviousArtifacts, replaceArtifacts,
@@ -47,7 +47,7 @@ function finalizeUpdate(beforeManagerRestart?: () => void): AddonSpec[] {
     reconcileAnchors(false);
     if (!reconcilePanelBlocks(false)) log.warn("a change to CloudPanel's Nginx settings needs manual repair");
     if (!reconcileNginx(false)) log.warn("Nginx proxy needs manual repair");
-    reconcilePhpGuard(true);
+    reconcilePhpGuard(true, false, { optedOut: phpGuardOptedOut() });
     startUnits({ beforeManagerRestart });
     // Addon upkeep, such as a changed guard System Tweaks installs, would
     // otherwise wait for the next quarter-hour; it runs once this update lets go of the lock.

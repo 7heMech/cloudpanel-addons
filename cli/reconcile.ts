@@ -11,7 +11,7 @@ import { adminHeaderTarget, headerTarget, siteLayoutTarget } from "../lib/panel-
 import { ADDONS, ADDON_NAMES, addonEnabled, enabledAddons } from "../addons/catalog";
 import type { AddonSpec } from "../lib/addon-definition";
 import { errorMessage } from "../lib/errors";
-import { mountPath } from "../lib/paths";
+import { mountPath } from "../lib/mount";
 import { log } from "../lib/log";
 /**
  * `managerNav` is whether the panel keeps its "Addons" entry.

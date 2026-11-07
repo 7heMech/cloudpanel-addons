@@ -36,7 +36,6 @@ function box(fpmVersions: string[], orphanVersions: string[] = [], active = new 
       isActive: (unit) => active.has(unit),
       paths: {
         phpRoot, fpmBinDir, panelFpmUnit: "clp-php-fpm.service", rootUid: process.getuid!(),
-        optOutConfig: join(dir, "system-tweaks.conf"), optOutSettings: join(dir, "settings.json"),
       },
     },
   };

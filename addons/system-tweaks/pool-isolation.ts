@@ -18,10 +18,10 @@
  * command systemd waits for a PID file PHP-FPM does not write, until the start
  * times out.
  */
+import { addonStateDir, CLI_BIN, PANEL_USER, SYSTEMD_DIR } from "../../lib/paths";
 import { existsSync, lstatSync, readdirSync, readFileSync, rmSync } from "node:fs";
 import { basename, join } from "node:path";
 import { runCommand, type CommandResult } from "../../lib/command";
-import { CLI_BIN, PANEL_USER, STATE_DIR, SYSTEMD_DIR } from "../../lib/paths";
 import { writeFileAtomic } from "../../lib/atomic-write";
 import { COMMAND_MS } from "./limits";
 
@@ -34,7 +34,7 @@ export const DEFAULT_POOL_ISOLATION_PATHS = {
   nginxConf: "/etc/nginx/nginx.conf",
   systemdDir: SYSTEMD_DIR,
   /** The ruleset last loaded, which is also what `nft -f` reads. */
-  rulesFile: `${STATE_DIR}/system-tweaks/php-pools.nft`,
+  rulesFile: `${addonStateDir("system-tweaks")}/php-pools.nft`,
   procNet: "/proc/net",
   bin: CLI_BIN,
   panelUser: PANEL_USER,

@@ -18,6 +18,7 @@
  * to find the next free port; changing any of it here would make the panel and
  * the running pool disagree about the same site.
  */
+import { LOCK_DIR, addonConfigFile, addonStateDir, PANEL_DB } from "../../lib/paths";
 import {
   resourceMemoryState, setResourceMemory, type ResourceMemoryOptions, type ResourceMemoryState,
 } from "./memory-settings";
@@ -32,7 +33,6 @@ import { nameSlug, oneLine } from "../../lib/validate";
 import { runCommand, type CommandResult } from "../../lib/command";
 import { validateDomain } from "../../lib/panel-identity";
 import { withFileLock } from "../../lib/file-lock";
-import { CONFIG_DIR, PANEL_DB, STATE_DIR } from "../../lib/paths";
 import type { TmpCleanupOptions } from "../../lib/tmp-cleanup";
 import { writeFileAtomic } from "../../lib/atomic-write";
 
@@ -206,11 +206,11 @@ export const DEFAULT_RESOURCE_LIMITS_ACTION_PATHS: ResourceLimitsActionPaths = {
   panelDb: PANEL_DB,
   phpRoot: "/etc/php",
   sbinDir: "/usr/sbin",
-  policyFile: `${STATE_DIR}/resource-limits/policy.json`,
-  lockFile: "/run/lock/clp-addons/resource-limits.lock",
+  policyFile: `${addonStateDir("resource-limits")}/policy.json`,
+  lockFile: `${LOCK_DIR}/resource-limits.lock`,
   systemctl: "systemctl",
   rootUid: 0,
-  systemTweaksConfig: `${CONFIG_DIR}/system-tweaks.conf`,
+  systemTweaksConfig: addonConfigFile("system-tweaks"),
 };
 
 function pathsFor(options: ResourceLimitsActionOptions): ResourceLimitsActionPaths {

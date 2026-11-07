@@ -2,7 +2,7 @@
 // install or a first enable needs. A toggle is not an install: it applies a
 // delta and keeps the addon's state.
 
-import { enabledAddons, addonEnabled } from "../addons/catalog";
+import { enabledAddons, addonEnabled, phpGuardOptedOut } from "../addons/catalog";
 import { resolveAddon } from "./addons";
 import { reconcileAnchors, reconcileNginx, reconcilePanelBlocks } from "./reconcile";
 import { reconcilePhpGuard, settlePhpGuard } from "../lib/php-guard";
@@ -37,7 +37,7 @@ export function bootstrapProvision(specs: AddonSpec[]): void {
   if (!reconcileAnchors(false)) fatal("could not safely patch the required CloudPanel templates");
   if (!reconcilePanelBlocks(false)) fatal("could not safely change CloudPanel's Nginx settings");
   if (!reconcileNginx(false)) fatal("could not safely inject the CloudPanel Nginx proxy");
-  reconcilePhpGuard(true);
+  reconcilePhpGuard(true, false, { optedOut: phpGuardOptedOut() });
   startUnits();
 }
 
@@ -126,7 +126,7 @@ function disableAddon(spec: AddonSpec): void {
     fatal(`${spec.name} could not be disabled and is still enabled: ${reason}. Run clp-addons disable ${spec.name} again`);
   }
   // Even with no addon left the binary stays, and repair keeps the guard.
-  settlePhpGuard();
+  settlePhpGuard({ optedOut: phpGuardOptedOut() });
   // Reconciled after the config file is gone, so the injection set is read
   // from the state that now exists rather than described by an `exclude`
   // argument. The Twig cache is purged by the reconciler when the markup

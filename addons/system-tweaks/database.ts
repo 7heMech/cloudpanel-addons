@@ -5,12 +5,12 @@
  * CloudPanel's own and a restart, undone if the server does not come back.
  * See "Database exposure" in docs/decisions/system-tweaks.md.
  */
+import { addonStateDir, ROOT_UID } from "../../lib/paths";
 import { existsSync, lstatSync, readFileSync, readlinkSync, rmSync } from "node:fs";
 import { connect } from "node:net";
 import { join } from "node:path";
 import { failAction } from "../../lib/action";
 import { runCommand, type CommandResult } from "../../lib/command";
-import { ROOT_UID, STATE_DIR } from "../../lib/paths";
 import { inputVerdict, otherInputHooks, parseFilterTable } from "./input-rules";
 import { writeFileAtomic } from "../../lib/atomic-write";
 import { COMMAND_MS, DATABASE_SERVICE_MS } from "./limits";
@@ -53,7 +53,7 @@ export interface DatabasePaths {
 export const DEFAULT_DATABASE_PATHS: DatabasePaths = {
   confDirs: ["/etc/mysql/mariadb.conf.d", "/etc/mysql/mysql.conf.d", "/etc/mysql/conf.d"],
   fileName: "zz-clp-addons-loopback.cnf",
-  checkFile: `${STATE_DIR}/system-tweaks/database-check.json`,
+  checkFile: `${addonStateDir("system-tweaks")}/database-check.json`,
   clients: ["/usr/bin/mariadb", "/usr/bin/mysql"],
   servers: ["/usr/sbin/mariadbd", "/usr/sbin/mysqld"],
   procRoot: "/proc",

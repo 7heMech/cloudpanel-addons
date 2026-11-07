@@ -4,12 +4,14 @@
 // production caller; optional directory/owner/db/listen arguments exist solely
 // for hermetic unit tests and are never exposed through action argv.
 
+import {
+  addonConfigFile, addonStateDir, CLI_BIN, PANEL_DB, SERVICE_GROUP, SERVICE_USER, SESSION_DIR,
+} from "../lib/paths";
 import net from "node:net";
 import { existsSync, lstatSync, readFileSync, readlinkSync, realpathSync, statSync } from "node:fs";
 import { dlopen, FFIType } from "bun:ffi";
 import { Database } from "bun:sqlite";
 import { requireRoot } from "../lib/log";
-import { CLI_BIN, CONFIG_DIR, PANEL_DB, SERVICE_GROUP, SERVICE_USER, SESSION_DIR, STATE_DIR } from "../lib/paths";
 import { mfaMark, passkeyFor } from "../addons/security-keys/sign-ins";
 import {
   MAX_SESSION_ID_LENGTH,
@@ -212,7 +214,7 @@ async function checkSession(sessionId: string, options: AuthActionOptions): Prom
     ownerUid: options.ownerUid,
     warn: () => {},
   });
-  const unmarkedMfa = options.securityKeys ?? existsSync(`${CONFIG_DIR}/security-keys.conf`);
+  const unmarkedMfa = options.securityKeys ?? existsSync(addonConfigFile("security-keys"));
   const session = sessionBytes ? parsePanelSession(sessionBytes, { unmarkedMfa }) : null;
   if (!session) return null;
 
@@ -241,9 +243,9 @@ const OUTPUT_AFTER_EXIT_MS = 1_000;
 /** What a session proves of its sign-in beyond the password: see SESSION_2FA_ENV. */
 function sessionProof(session: ParsedPanelSession, options: AuthActionOptions): string {
   if (session.twoFactor) return "1";
-  const securityKeys = options.securityKeys ?? existsSync(`${CONFIG_DIR}/security-keys.conf`);
+  const securityKeys = options.securityKeys ?? existsSync(addonConfigFile("security-keys"));
   if (!securityKeys || session.createdAt === null) return "0";
-  const state = options.securityKeysState ?? { dir: `${STATE_DIR}/security-keys`, uid: 0 };
+  const state = options.securityKeysState ?? { dir: addonStateDir("security-keys"), uid: 0 };
   const key = passkeyFor(session.user, session.createdAt, mfaMark(options.panelDb ?? PANEL_DB, session.user), state.dir, state.uid);
   return key ? `passkey:${key}` : "0";
 }

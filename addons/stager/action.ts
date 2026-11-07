@@ -1,3 +1,4 @@
+import { LOCK_DIR, PANEL_DB, addonConfigFile, addonStateDir, CLI_BIN, PANEL_IDENTITY_PATH, DISTRO_NGINX_SITES_DIR } from "../../lib/paths";
 import { hasSite, withPanelDb, withoutStandIns } from "../../lib/panel-db";
 import { STAGER_VERBS } from "./verbs";
 import { Database } from "bun:sqlite";
@@ -7,7 +8,6 @@ import {
   readFileSync, readdirSync, renameSync, rmSync, statSync, writeFileSync, writeSync,
 } from "node:fs";
 import { dirname, join } from "node:path";
-import { CLI_BIN, CONFIG_DIR, PANEL_IDENTITY_PATH } from "../../lib/paths";
 import { executeSmtpAction } from "../smtp/action";
 import { writeFileAtomic } from "../../lib/atomic-write";
 import { learnVhostMapContent, renderVhostBodyResult } from "../../lib/site-vhost";
@@ -76,18 +76,18 @@ export interface StagerActionPaths {
 }
 
 export const DEFAULT_STAGER_ACTION_PATHS: StagerActionPaths = {
-  lockDir: "/run/lock/clp-addons",
-  dataBaseDir: "/var/lib/clp-addons/stager",
-  jobsDir: "/var/lib/clp-addons/stager/jobs",
-  panelDb: "/home/clp/htdocs/app/data/db.sq3",
+  lockDir: LOCK_DIR,
+  dataBaseDir: addonStateDir("stager"),
+  jobsDir: `${addonStateDir("stager")}/jobs`,
+  panelDb: PANEL_DB,
   clpctl: "/usr/bin/clpctl",
   panelIdentityFile: PANEL_IDENTITY_PATH,
-  nginxVhostDir: "/etc/nginx/sites-enabled",
-  instaticDataDir: "/var/lib/clp-addons/instatic",
+  nginxVhostDir: DISTRO_NGINX_SITES_DIR,
+  instaticDataDir: addonStateDir("instatic"),
   actionBinary: CLI_BIN,
   tempDir: "/tmp",
   sqlite3: "sqlite3",
-  smtpConfigFile: `${CONFIG_DIR}/smtp.conf`,
+  smtpConfigFile: addonConfigFile("smtp"),
 };
 
 export interface ParsedStagerAction {

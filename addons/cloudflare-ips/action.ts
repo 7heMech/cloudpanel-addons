@@ -1,3 +1,4 @@
+import { LOCK_DIR, addonStateDir, PANEL_DB, DISTRO_NGINX_SITES_DIR } from "../../lib/paths";
 import { writeFileAtomic } from "../../lib/atomic-write";
 import { Database } from "bun:sqlite";
 import {
@@ -9,7 +10,6 @@ import { replyToAction, failAction } from "../../lib/action";
 import { runCommand, type CommandResult } from "../../lib/command";
 import { validateFlag } from "../../lib/validate";
 import { withFileLock } from "../../lib/file-lock";
-import { PANEL_DB, STATE_DIR } from "../../lib/paths";
 import { openPanelDatabase, withoutStandIns } from "../../lib/panel-db";
 import {
   trustedVhost, withNginxTransaction, withRecoveryFailures,
@@ -74,9 +74,9 @@ interface ParsedAction {
 
 export const DEFAULT_CLOUDFLARE_ACTION_PATHS: CloudflareActionPaths = {
   panelDb: PANEL_DB,
-  nginxVhostDir: "/etc/nginx/sites-enabled",
-  policyFile: `${STATE_DIR}/cloudflare-ips/policy.json`,
-  lockFile: "/run/lock/clp-addons/cloudflare-ips.lock",
+  nginxVhostDir: DISTRO_NGINX_SITES_DIR,
+  policyFile: `${addonStateDir("cloudflare-ips")}/policy.json`,
+  lockFile: `${LOCK_DIR}/cloudflare-ips.lock`,
   nginx: "nginx",
   systemctl: "systemctl",
   vhostUid: 0,

@@ -80,6 +80,8 @@ export interface AddonDefinition {
   handler?: AddonHandler;
   /** The privileged verbs this addon runs as root, if it has any. */
   action?: (argv: string[], options?: Record<string, unknown>) => Promise<number> | number;
+  /** Whether the operator switched the platform's PHP upload-progress guard off in this addon. */
+  phpGuardOff?: () => boolean;
   /** The mode of its state directory, 0750 unless something outside the addon must reach into it. */
   stateDirMode?: number;
   /** Withdraw changes outside addon state before disabling. */

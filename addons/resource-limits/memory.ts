@@ -6,12 +6,12 @@
  * server resized up or down picks them up at its next boot. See "Memory
  * limits" in docs/decisions/resource-limits.md.
  */
+import { addonStateDir, CLI_BIN, LOCK_DIR, SYSTEMD_DIR } from "../../lib/paths";
 import { existsSync, readdirSync, readFileSync, rmSync, statSync, utimesSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { failAction } from "../../lib/action";
 import { runCommand, type CommandResult } from "../../lib/command";
 import { withFileLockSync } from "../../lib/file-lock";
-import { CLI_BIN, LOCK_DIR, STATE_DIR, SYSTEMD_DIR } from "../../lib/paths";
 import { writeFileAtomic } from "../../lib/atomic-write";
 import { COMMAND_MS } from "./limits";
 
@@ -146,7 +146,7 @@ export const DEFAULT_MEMORY_PATHS = {
   cgroupRoot: "/sys/fs/cgroup",
   procRoot: "/proc",
   /** When this addon last took its MySQL file away, so the page can say the old values are still running. */
-  stateFile: `${STATE_DIR}/resource-limits/memory.json`,
+  stateFile: `${addonStateDir("resource-limits")}/memory.json`,
   /** Held while memory.json is read and rewritten: the page, repair and Redis's start hook all write it. */
   stateLock: `${LOCK_DIR}/resource-limits-memory.lock`,
   bin: CLI_BIN,

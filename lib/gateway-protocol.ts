@@ -15,8 +15,6 @@ import { TERMINAL_VERBS } from "../addons/terminal/verbs";
 import { WP_TOOLS_VERBS } from "../addons/wp-tools/verbs";
 import { MANAGER_VERBS } from "../manager/verbs";
 
-export const GATEWAY_SOCKET_PATH = "/run/clp-addons/auth.sock";
-export const DEFAULT_CLI_BIN = "/usr/local/bin/clp-addons";
 export const MAX_GATEWAY_INPUT_BYTES = 1024 * 1024; // 1 MB max input (for clone credentials, etc.)
 export const DEFAULT_GATEWAY_TIMEOUT_MS = 60_000;
 

@@ -5,9 +5,9 @@
  */
 import { Database } from "bun:sqlite";
 import { existsSync, lstatSync, readFileSync } from "node:fs";
-import { PANEL_DB, STATE_DIR } from "./paths";
+import { PANEL_DB, addonStateDir } from "./paths";
 
-export const STAND_INS_FILE = `${STATE_DIR}/dns/standins.json`;
+export const STAND_INS_FILE = `${addonStateDir("dns")}/standins.json`;
 
 /** Longer than creating a stand-in takes; until it is created its record has no site id. */
 const CREATING_MS = 15 * 60_000;

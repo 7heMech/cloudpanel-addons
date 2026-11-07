@@ -20,11 +20,11 @@
  * place and surfaced, so a wrapper CloudPanel has changed is never replaced
  * with one that might break clpctl. The saved original restores it byte for byte.
  */
+import { addonStateDir, ROOT_UID } from "../../lib/paths";
 import { createHash } from "node:crypto";
 import { lstatSync, readFileSync, rmSync } from "node:fs";
 import { errorMessage } from "../../lib/errors";
 import { runCommand, type CommandResult } from "../../lib/command";
-import { ROOT_UID, STATE_DIR } from "../../lib/paths";
 import { writeFileAtomic } from "../../lib/atomic-write";
 import WRAPPER_SCRIPT from "./clpctl-wrapper.sh" with { type: "text" };
 import { COMMAND_MS } from "./limits";
@@ -32,7 +32,7 @@ import { COMMAND_MS } from "./limits";
 export const DEFAULT_CLPCTL_GUARD_PATHS = {
   wrapper: "/usr/bin/clpctlWrapper",
   /** Where the original is kept; the script names this path too. */
-  backup: `${STATE_DIR}/system-tweaks/clpctlWrapper.orig`,
+  backup: `${addonStateDir("system-tweaks")}/clpctlWrapper.orig`,
   rootUid: ROOT_UID,
 };
 

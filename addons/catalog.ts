@@ -95,6 +95,11 @@ export function addonNews(name: string, version: string, since: string, seen: re
   return { kind: "changed", keys: unread.map((change) => `${name}@${change.in}`), notes: unread.map((change) => change.note) };
 }
 
+/** Whether an enabled addon has the platform's PHP upload-progress guard switched off. */
+export function phpGuardOptedOut(): boolean {
+  return enabledAddons().some((spec) => spec.phpGuardOff?.() ?? false);
+}
+
 /** The addon's manager handler, or undefined when it mounts no routes. */
 export function addonHandler(name: string): AddonHandler | undefined {
   return ADDONS[name]?.handler;

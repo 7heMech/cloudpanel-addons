@@ -19,6 +19,7 @@
 // that outlives the restart, and returns a job id. The browser follows that id
 // and reconnects once the manager is back.
 
+import { addonStateDir, CLI_BIN, LOCK_DIR } from "../lib/paths";
 import { writeFileAtomic } from "../lib/atomic-write";
 import { existsSync, mkdirSync, readFileSync, rmSync } from "node:fs";
 import { join } from "node:path";
@@ -30,14 +31,13 @@ import {
   watchJobRecord,
   type PruneJobsResult,
 } from "../lib/job-store";
-import { CLI_BIN, LOCK_DIR, STATE_DIR } from "../lib/paths";
 import { ADDONS, ADDON_NAMES, addonNews, addonNoticeKeys, addonEnabled } from "../addons/catalog";
 import { CLI_VERSION } from "../lib/version";
 import { type OnProgress } from "../cli/release";
 import { Fatal, log, requireRoot } from "../lib/log";
 
 /** Where the manager's own job records live, beside each addon's state. */
-export const MANAGER_STATE_DIR = `${STATE_DIR}/manager`;
+export const MANAGER_STATE_DIR = addonStateDir("manager");
 export const MANAGER_JOBS_DIR = `${MANAGER_STATE_DIR}/jobs`;
 /** The New and Changed badges somebody has opened, shared by every administrator. */
 export const NEWS_SEEN_FILE = `${MANAGER_STATE_DIR}/news-seen.json`;

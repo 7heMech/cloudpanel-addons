@@ -7,6 +7,7 @@
  * create, update and delete they would make, and only a confirmation of that
  * same plan saves and applies them.
  */
+import { LOCK_DIR, addonConfigFile, addonStateDir, PANEL_DB } from "../../lib/paths";
 import { withPanelDb } from "../../lib/panel-db";
 import { DNS_VERBS } from "./verbs";
 import { Database } from "bun:sqlite";
@@ -17,7 +18,6 @@ import { ActionFailure, replyToAction, failAction, readJsonRequest } from "../..
 import { errorMessage } from "../../lib/errors";
 import { nameSlug, oneLine } from "../../lib/validate";
 import { withFileLock } from "../../lib/file-lock";
-import { CONFIG_DIR, PANEL_DB, STATE_DIR } from "../../lib/paths";
 import { DEFAULT_SITE_VHOST_PATHS } from "../../lib/site-vhost";
 import { PANEL_USER_NAME_RE, panelUserOwnsSite } from "../../lib/panel-users";
 import { DEFAULT_SMTP_PATHS, smtpRelayAccounts, type SmtpRelayAccount } from "../smtp/action";
@@ -84,11 +84,11 @@ export interface DnsActionOptions {
 }
 
 export const DEFAULT_DNS_PATHS: DnsPaths = {
-  configFile: `${CONFIG_DIR}/dns.conf`,
+  configFile: addonConfigFile("dns"),
   panelDb: PANEL_DB,
-  stateDir: `${STATE_DIR}/dns`,
+  stateDir: addonStateDir("dns"),
   smtpConfig: DEFAULT_SMTP_PATHS.stateFile,
-  lockFile: "/run/lock/clp-addons/dns.lock",
+  lockFile: `${LOCK_DIR}/dns.lock`,
   clpctl: "/usr/bin/clpctl",
   sqlite3: DEFAULT_SITE_VHOST_PATHS.sqlite3,
   nginxVhostDir: DEFAULT_SITE_VHOST_PATHS.nginxVhostDir,
