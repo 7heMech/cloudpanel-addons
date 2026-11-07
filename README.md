@@ -61,7 +61,7 @@ security keys under Account → Security, in the roles an administrator allows.
 | `clp-addons maintenance <domain> [on\|off\|status]` | Control or inspect maintenance mode for a site. |
 
 Addon names are `cloudflare-ips`, `dns`, `instatic`, `stager`, `maintenance`,
-`php-resources`, `git`, `panel-tweaks`, `system-tweaks`, `wp-tools`, `smtp`, `terminal`
+`resource-limits`, `git`, `panel-tweaks`, `system-tweaks`, `wp-tools`, `smtp`, `terminal`
 and `security-keys`. Run `clp-addons --help` for version selection options.
 
 To remove CloudPanel Addons, disable every addon, then run

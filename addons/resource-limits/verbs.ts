@@ -1,5 +1,6 @@
-// Every verb `clp-addons action php-resources` takes, and who may ask root for it from the web.
-export const PHP_RESOURCES_VERBS = {
+// Every verb `clp-addons action resource-limits` takes, and who may ask root for it from the web.
+export const RESOURCE_LIMITS_VERBS = {
+  "set-memory": { web: "admin" },
   list: { web: "admin" },
   site: { web: "admin" },
   "save-category": { web: "admin" },

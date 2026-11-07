@@ -47,7 +47,7 @@ function writeProfile(profile) {
 
 function paintResources(html) {
   repaintView(CLP_ROOT.getElementById('clp-content'), html);
-  busy(false);
+  hold(false);
 }
 
 /** What to say when a change landed on some sites and not on others. */
@@ -59,9 +59,10 @@ function withFailures(message, failures) {
   };
 }
 
-async function send(path, body, done) {
+async function send(path, body, done, control, progress) {
   clearNotice();
-  busy(true);
+  hold(true);
+  const finish = control ? working(control, progress) : function () {};
   try {
     const reply = await call(path, {
       method: 'POST',
@@ -69,12 +70,16 @@ async function send(path, body, done) {
       body: JSON.stringify(body),
     });
     const flash = withFailures(done, (reply.data || {}).failures);
+    finish();
     paintResources(reply.html);
     notify(flash.message, flash.kind);
     return true;
   } catch (error) {
+    finish();
+    if (control && control.type === 'checkbox') control.checked = !control.checked;
+    if (control && control.dataset.current !== undefined) control.value = control.dataset.current;
     notify(error.message, 'error');
-    busy(false);
+    hold(false);
     return false;
   }
 }
@@ -219,7 +224,7 @@ async function repairDrifted() {
   });
   if (!groups.size) return;
   clearNotice();
-  busy(true);
+  hold(true);
   const failures = [];
   let repaired = 0;
   let html = null;
@@ -240,7 +245,7 @@ async function repairDrifted() {
   }
   const flash = withFailures(plural(repaired, 'site') + ' are back on the limits of their category.', failures);
   if (html !== null) paintResources(html);
-  busy(false);
+  hold(false);
   notify(flash.message, flash.kind);
 }
 

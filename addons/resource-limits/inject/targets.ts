@@ -1,4 +1,4 @@
-// What the PHP Resources addon adds to the CloudPanel UI: one read-only card
+// What the Resource Limits addon adds to the CloudPanel UI: one read-only card
 // on a site's Settings tab, under the panel's own PHP Settings form.
 //
 // Read-only because the limits belong to a category rather than to a site --
@@ -18,12 +18,12 @@ import { TEMPLATES } from "../../../lib/panel-anchors";
 // dimmed rather than recoloured, so it follows CloudPanel's own light and dark
 // stylesheets instead of pinning a colour of its own.
 const STYLE = [
-  "#clp-php-resources .col-form-label { padding-bottom: 0; opacity: .7; }",
-  "#clp-php-resources .clp-addon-readonly { padding: 2px 0 14px; overflow-wrap: anywhere; }",
-  "#clp-php-resources .clp-addon-limits > summary { cursor: pointer; padding: 0 0 14px; opacity: .7; }",
+  "#clp-resource-limits .col-form-label { padding-bottom: 0; opacity: .7; }",
+  "#clp-resource-limits .clp-addon-readonly { padding: 2px 0 14px; overflow-wrap: anywhere; }",
+  "#clp-resource-limits .clp-addon-limits > summary { cursor: pointer; padding: 0 0 14px; opacity: .7; }",
 ].join(" ");
 
-export const PHP_RESOURCES_TARGETS: AddonTarget[] = [
+export const RESOURCE_LIMITS_TARGETS: AddonTarget[] = [
   {
     // Inside the panel's own `{% if phpSettingsForm is defined %}`, so the card
     // appears exactly where a pool file exists: a static or Node.js site has no
@@ -35,13 +35,13 @@ export const PHP_RESOURCES_TARGETS: AddonTarget[] = [
     required: false,
     snippet: (url) => `
           {% if is_granted('ROLE_ADMIN') %}
-          <div class="card" id="clp-php-resources" data-domain="{{ site.domainName }}" hidden>
+          <div class="card" id="clp-resource-limits" data-domain="{{ site.domainName }}" hidden>
             <div class="card-header d-flex justify-content-between">
-              <div>PHP-FPM Resources</div>
+              <div>Resource Limits</div>
               <a class="btn btn-gray btn-lg" href="${url}/">Manage</a>
             </div>
             <div class="card-body card-body-no-padding">
-              <div class="card-form" id="clp-php-resources-body"></div>
+              <div class="card-form" id="clp-resource-limits-body"></div>
             </div>
           </div>
           <style>${STYLE}</style>

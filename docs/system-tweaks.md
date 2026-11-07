@@ -1,5 +1,8 @@
 # System Tweaks
 
+Hardening, automatic updates, panel PHP, remote backups and firewall rules.
+PHP worker limits and the server memory budget are in [Resource Limits](resource-limits.md).
+
 ## Automatic updates
 
 1. Open **Addons → System Tweaks**. If `unattended-upgrades` is missing, choose
@@ -99,7 +102,7 @@ off removes only that file. It comes back if System Tweaks is disabled.
 
 ## Panel PHP
 
-Under **Addons → System Tweaks → Settings**, choose a newer installed version
+Under **Addons → System Tweaks → Hardening**, choose a newer installed version
 in **Panel PHP**. The page warns while the panel is left on PHP 8.1. This changes the PHP used by CloudPanel's pages,
 phpMyAdmin and File Manager. Site PHP versions keep their own settings.
 
@@ -278,6 +281,10 @@ from SSH for an hour after 5 failed logins within an hour. An SSH client that
 offers several wrong keys counts as failing, so make sure yours offers the right
 key first.
 
+SSH records failures even without fail2ban installed. When you switch the jail
+on, it reads the last hour of those logs, so addresses can appear in **Blocked
+addresses** immediately. These are actual bans on this server.
+
 Both need fail2ban. If it is missing, choose **Install fail2ban**, which installs
 `fail2ban`, `python3-systemd` and `nftables`. Switching both jails off, or
 disabling System Tweaks, puts fail2ban back as it was: stopped if it was not
@@ -369,7 +376,7 @@ restarts the agent.
 Every 15 minutes System Tweaks removes the PHP and ImageMagick temp files that
 timed-out requests left in `/tmp`: ImageMagick's after two idle hours, PHP
 uploads and WordPress downloads after a day. It removes only files a PHP site's
-own user owns and no process has open. There is nothing to set. PHP Resources
+own user owns and no process has open. There is nothing to set. Resource Limits
 does the same while System Tweaks is off.
 
 ## UDP ports
@@ -388,9 +395,10 @@ when it is enabled again.
 
 ## MySQL access
 
-The **Database** card shows where MySQL listens, whether the firewall rules
-loaded now let anyone reach it (**Firewalled**, **Open** or **Unknown**), any client connected from another address, and whether its `root` account
-still logs in with the password `root` or none.
+Under **Hardening**, **MySQL on this server only** shows where MySQL listens,
+whether the firewall rules loaded now let anyone reach it (**Firewalled**,
+**Open** or **Unknown**), any client connected from another address, and whether
+its `root` account still logs in with the password `root` or none.
 
 Switch on **MySQL on this server only** to restrict MySQL or MariaDB to local
 connections. It writes `zz-clp-addons-loopback.cnf` into
@@ -455,34 +463,3 @@ working. Change it in MySQL first.
    enter the `'root'@'127.0.0.1'` password and save. CloudPanel checks it before
    saving. The other accounts' passwords do not go into CloudPanel.
 3. Open a site's **Databases** page to confirm the panel still connects.
-
-## Memory
-
-The **Memory** card sizes MySQL and Redis from the server's RAM, and decides
-what the kernel kills first when memory runs out.
-
-1. Choose a **Memory profile**: **Balanced**, **Database-heavy** or
-   **Cache-heavy**. The card lists what it gives each service on this server and
-   what is left for PHP. Only the profile is saved: the sizes are worked out
-   again each time MySQL or Redis starts, so after you resize the server they
-   follow its new RAM at the next boot.
-2. Switch on **Size MySQL to this server** to replace CloudPanel's fixed MySQL
-   values with the profile's buffer pool, connection limit and smaller
-   per-connection buffers. It writes `zz-clp-addons-memory.cnf` next to
-   CloudPanel's `mysqld.cnf` and never restarts MySQL: the card shows
-   **Pending** until the next restart, which you can do when it suits you:
-
-   ```bash
-   systemctl restart mysql
-   ```
-
-   More connections at once than the limit get *Too many connections*.
-3. Switch on **Cap Redis** to limit Redis to the profile's share. When it is
-   full, Redis evicts the keys used least recently. It applies at once. Leave
-   it off if a site keeps a job queue or other data in Redis it cannot lose.
-4. **Protect MySQL and nginx when memory runs out** is on by default. When the
-   server runs out of memory, the kernel kills a site's PHP worker, failing one
-   request, instead of MySQL or nginx, which would take every site down.
-
-Switching any of them off removes System Tweaks' files and puts back
-CloudPanel's values: Redis at once, MySQL at its next restart.
