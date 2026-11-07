@@ -403,12 +403,16 @@ the same reason. Instatic's instance and inventory lists and Stager's clone,
 source and promotion lists use the same fleet rows, with labels on secondary
 cells so their meaning survives the hidden table heading. Empty cells disappear
 and the site and type lead each card. A ticked row is tinted, and clicking
-anywhere on a row but a control or its Manage menu ticks it. On a wide screen a
+anywhere on a row but a control or its Manage menu ticks it; a phone shows no
+selection checkboxes, only the tint. The table's header stacks there: its title,
+then the selection count with Select all (`FLEET_SELECTION_HTML`), then the bulk
+actions across the width. On a wide screen a
 list of more than twelve rows with something below its card scrolls in a box of
 its own under a sticky heading; a list that ends the page grows with it. On a
 phone a list longer than ten sites shows the first ten and a button for the rest,
-so the settings below it stay close; the hidden rows are deselected like rows
-search hides, and search covers every site. A second long list on the page,
+so the settings below it stay close. Search covers every site, and Select all
+and the bulk actions reach the sites past the cut too: those rows are marked
+`data-cut` rather than deselected. A second long list on the page,
 such as DNS's redirects, gets the same cut and button through
 `tbody[data-phone-cut]` and `phoneMoreHtml`. Page and form actions wrap within the
 available width. Two-column card and field grids hold until 760px, where the
@@ -528,7 +532,7 @@ press on any dialog's backdrop closes it. Fleet tables also get site-selection
 helpers: `paintFleetSelection` paints the count, select-all and every control
 marked `data-needs-selection` by shared ids, and `fleetFilterHtml` adds a search
 and an optional filter once a table has six sites. The filter is a menu of
-checkboxes in groups (a status group, and a type, version or category group
+options that each turn on and off, highlighted while on, in groups (a status group, and a type, version or category group
 wherever the rows hold at least two values): within a group a row needs any
 ticked word of its `data-show`, across groups all of them, so WordPress and PHP
 together with Needs attention shows the WordPress and PHP sites that need
@@ -538,10 +542,10 @@ reverses it. A row's `data-sort-<key>` gives the value where the cell's text
 would not -- a status column ranks by tone, worst first, and a select's text is
 every option it has -- rows without a value go last, ties go by domain, and the
 rows keep the server's order until a heading is picked; tables under six sites
-sort too. A phone hides the heading, so there a Sort select built from the same
-headings stands in for it. The ticked filters and the sort survive a repaint,
-and the phone's ten-site cut is taken after both. A row the search hides is
-deselected, so a bulk action only reaches sites on screen. Pages with background
+sort too. A phone hides the heading and has no sort: a card list is searched and
+filtered rather than ordered. The ticked filters and the sort survive a repaint,
+and the phone's ten-site cut is taken after both. A row search or a filter hides
+is deselected, so a bulk action only reaches the sites the list leaves. Pages with background
 jobs get the shared job watcher. Theme initialization runs before styles are
 painted.
 
