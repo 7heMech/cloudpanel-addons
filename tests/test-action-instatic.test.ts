@@ -225,8 +225,8 @@ describe("version awareness", () => {
 // roll back the update that just happened. Wrong for the pre-delete archive,
 // which goes to /var/backups/clp-addons/<addon>: that directory holds one
 // archive per deleted instance, each the last copy of data whose CloudPanel
-// site is already gone. So `uninstall --purge` on six or more instances
-// destroyed archives it had written itself earlier in the same run.
+// site is already gone. So deleting six or more instances in one run
+// destroyed archives it had written itself earlier in that run.
 test("archiving an instance is not a rolling window", () => {
   const dir = mkdtempSync(`${tmpdir()}/clp-addons-archive-`);
   try {
@@ -241,8 +241,7 @@ test("archiving an instance is not a rolling window", () => {
 
     const backups = `${dir}/backups`;
     mkdirSync(backups, { recursive: true });
-    // Six deletions, the way uninstall --purge makes them: one archive each,
-    // into the one shared directory.
+    // Six deletions: one archive each, into the one shared directory.
     for (let i = 1; i <= 6; i++) {
       expect(makeSnapshot(inst, `${backups}/site${i}.example.com-deleted-2020010${i}.tar.gz`)).toBe(true);
     }

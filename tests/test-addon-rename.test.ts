@@ -178,28 +178,26 @@ test("an early dev install's default OOM protection migrates without saved setti
   expect(JSON.parse(readFileSync(join(root, "state/resource-limits/settings.json"), "utf8")).memory.oom).toBe(true);
 });
 
-test("invalid saved memory stays put with a warning, enables no defaults, and the PHP rename still happens", () => {
+test("invalid saved memory is dropped with one warning, enables no defaults, and the PHP rename still happens", () => {
   const root = fixture();
   writeFileSync(join(root, "etc/php-resources.conf"), "# clp-addons: php-resources\n");
   save(root, "php-resources/policy.json", { version: 1, categories: [] });
   save(root, "system-tweaks/settings.json", { version: 1, memory: { profile: "wrong", oom: false } });
   const result = migrate(root);
   expect(result.error).toBeUndefined();
-  expect(result.warnings.join("\n")).toContain("not moved to Resource Limits: they are not valid");
+  expect(result.warnings.join("\n")).toContain('dropped, not moved: {"profile":"wrong","oom":false} is not valid');
   expect(existsSync(join(root, "state/resource-limits/policy.json"))).toBe(true);
   expect(existsSync(join(root, "state/resource-limits/settings.json"))).toBe(false);
-  expect(JSON.parse(readFileSync(join(root, "state/system-tweaks/settings.json"), "utf8")).memory).toEqual({ profile: "wrong", oom: false });
+  expect(JSON.parse(readFileSync(join(root, "state/system-tweaks/settings.json"), "utf8")).memory).toBeUndefined();
+  expect(migrate(root).warnings).toEqual([]);
 });
-
-test("a System Tweaks settings file that does not parse does not stop update or repair", () => {
+test("a System Tweaks settings file that does not parse holds no memory settings, as System Tweaks reads it", () => {
   const root = fixture();
   mkdirSync(join(root, "state/system-tweaks"), { recursive: true });
   writeFileSync(join(root, "state/system-tweaks/settings.json"), "{", { mode: 0o600 });
-  const result = migrate(root);
-  expect(result.error).toBeUndefined();
-  expect(result.warnings.join("\n")).toContain("not moved to Resource Limits");
+  expect(migrate(root)).toEqual({ warnings: [] });
+  expect(readFileSync(join(root, "state/system-tweaks/settings.json"), "utf8")).toBe("{");
 });
-
 test("PHP Resources state under both names is a warning, not a failure that blocks repair", () => {
   const root = fixture();
   save(root, "php-resources/policy.json", { version: 1, categories: [] });
@@ -210,7 +208,7 @@ test("PHP Resources state under both names is a warning, not a failure that bloc
   expect(existsSync(join(root, "state/php-resources/policy.json"))).toBe(true);
 });
 
-test("conflicting memory settings are both kept and the operator is warned", () => {
+test("memory settings that differ from Resource Limits' own are dropped from System Tweaks, with one warning", () => {
   const root = fixture();
   const source = { profile: "database", mysql: true, redis: false, oom: true };
   const target = { ...source, profile: "cache", mysql: false };
@@ -218,11 +216,11 @@ test("conflicting memory settings are both kept and the operator is warned", () 
   save(root, "resource-limits/settings.json", { version: 1, memory: target });
   const result = migrate(root);
   expect(result.error).toBeUndefined();
-  expect(result.warnings.join("\n")).toContain("Resource Limits already holds different ones");
-  expect(JSON.parse(readFileSync(join(root, "state/system-tweaks/settings.json"), "utf8")).memory).toEqual(source);
+  expect(result.warnings.join("\n")).toContain("differs from Resource Limits' own");
+  expect(JSON.parse(readFileSync(join(root, "state/system-tweaks/settings.json"), "utf8")).memory).toBeUndefined();
   expect(JSON.parse(readFileSync(join(root, "state/resource-limits/settings.json"), "utf8")).memory).toEqual(target);
+  expect(migrate(root).warnings).toEqual([]);
 });
-
 test("enabled PHP with disabled System Tweaks does not reactivate saved memory protections", () => {
   const root = fixture();
   writeFileSync(join(root, "etc/php-resources.conf"), "# clp-addons: php-resources\n");
@@ -244,4 +242,15 @@ test("retrying an upgrade before upkeep rewrites the old OOM marker keeps the mi
   expect(migrate(root).error).toBeUndefined();
   expect(migrate(root).error).toBeUndefined();
   expect(JSON.parse(readFileSync(join(root, "state/resource-limits/settings.json"), "utf8")).memory).toEqual(memory);
+});
+
+test("with nothing to move, update and repair do not wait on a memory change's lock", async () => {
+  const { withFileLockSync } = await import("../cli/action-common");
+  const root = fixture();
+  mkdirSync(join(root, "locks"));
+  withFileLockSync(join(root, "locks/resource-limits-settings.lock"), 1, "held", () => {
+    const started = Date.now();
+    expect(migrate(root)).toEqual({ warnings: [] });
+    expect(Date.now() - started).toBeLessThan(10_000);
+  });
 });

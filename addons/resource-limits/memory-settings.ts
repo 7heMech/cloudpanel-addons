@@ -66,11 +66,22 @@ export async function setResourceMemory(body: Record<string, unknown>, options: 
   });
 }
 
-/** Used by activation, repair and new-site discovery (including newly installed PHP versions). */
-export function restoreResourceMemory(options: ResourceMemoryOptions = {}): string[] {
+/**
+ * Used by activation, repair and new-site discovery (including newly installed
+ * PHP versions). With `ifIdle`, a memory change that holds the lock -- for up
+ * to two minutes -- is left to apply the settings itself, rather than failing
+ * the run that asked.
+ */
+export function restoreResourceMemory(options: ResourceMemoryOptions = {}, ifIdle = false): string[] {
   const paths = { ...DEFAULT_MEMORY_SETTINGS_PATHS, ...options.memorySettings };
-  return withFileLockSync(paths.lockFile, 15, "another resource limits change is still running", () =>
-    existsSync(paths.enabledConfig) ? applyMemory(readMemorySettings(options), options.memory) : []);
+  const busy = "another resource limits change is still running";
+  try {
+    return withFileLockSync(paths.lockFile, ifIdle ? 0 : 15, busy, () =>
+      existsSync(paths.enabledConfig) ? applyMemory(readMemorySettings(options), options.memory) : []);
+  } catch (error) {
+    if (ifIdle && errorMessage(error) === busy) return [];
+    throw error;
+  }
 }
 
 /** Run after the enabled record is removed, so a service hook cannot put the limits back. */

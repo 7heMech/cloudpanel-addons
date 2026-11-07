@@ -167,7 +167,7 @@ test("a queued pass leaves absent policy state off without discovering sites", a
   expect(existsSync(join(root, "mainwp.json"))).toBe(false);
 });
 
-test("a queued pass skips disabled or uninstalled addons before reading state or sites", async () => {
+test("a queued pass skips disabled addons before reading state or sites", async () => {
   await act("varnish-settings", "--enabled=true");
   const state = { ...emptyMainwpState(), enabled: true, dashboard: "blog.example.com", cleanup: true };
   saveMainwpState(join(root, "mainwp.json"), state);

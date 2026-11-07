@@ -1,7 +1,6 @@
 // `clp-addons` with no arguments, in a root terminal: the addons, their
 // state, and the few things an operator does to them, one key each. Toggles go
-// through the same enable and disable the Addons page runs. The installer's
-// picker is the same list.
+// through the same enable and disable the Addons page runs.
 
 import { dashboardUrl } from "./addons";
 import { ADDONS, ADDON_NAMES } from "./addon-catalog";
@@ -16,7 +15,6 @@ import { log } from "./util";
 import { checkCliUpdate, type CliUpdateInfo } from "../lib/update-check";
 
 const KEYS = "↑/↓ move · Space toggle · Enter apply · s status · r repair · u update · q quit";
-const PICK_KEYS = "↑/↓ move · Space toggle · a all · n none · Enter install · q cancel";
 const QUIT_KEYS = ["q", "\x1b", "\x03", "\x04"];
 
 const paint = (code: string, text: string) => `\x1b[${code}m${text}\x1b[0m`;
@@ -49,7 +47,7 @@ function fit(line: string, width: number): string {
 }
 
 /** A checkbox per addon, with its description or, once changed, what will happen to it. */
-function addonRows(cursor: number, wanted: Set<string>, changed: (name: string) => boolean = () => false): string[] {
+function addonRows(cursor: number, wanted: Set<string>, changed: (name: string) => boolean): string[] {
   const nameWidth = Math.max(...ADDON_NAMES.map((name) => name.length));
   return ADDON_NAMES.map((name, index) => {
     const on = wanted.has(name);
@@ -92,7 +90,7 @@ function frame(state: MenuState): string[] {
   ];
 }
 
-export interface Terminal {
+interface Terminal {
   input: Pick<NodeJS.ReadStream, "setRawMode" | "resume" | "pause" | "on" | "off">;
   output: { write(text: string): unknown; columns?: number };
 }
@@ -122,45 +120,6 @@ function screen({ input, output }: Terminal) {
       output.write("\x1b[?25h");
     },
   };
-}
-
-/** The installer's question, starting from the preselected addons. Null when cancelled. */
-export function pickAddons(terminal: Terminal = TTY): Promise<string[] | null> {
-  const wanted = new Set(ADDON_NAMES.filter((name) => ADDONS[name]!.preselected));
-  const view = screen(terminal);
-  let cursor = 0;
-  const draw = () => view.draw([
-    ` ${paint("1", "Which addons should be installed?")}`,
-    "",
-    ...addonRows(cursor, wanted),
-    "",
-    ` ${paint("2", PICK_KEYS)}`,
-  ]);
-
-  return new Promise((resolve) => {
-    const finish = (picked: string[] | null) => {
-      terminal.input.off("data", onKey);
-      view.release();
-      resolve(picked);
-    };
-    const onKey = (chunk: Buffer) => {
-      const key = chunk.toString("utf-8");
-      const next = moved(key, cursor);
-      if (next !== null) cursor = next;
-      else if (key === " ") toggle(wanted, ADDON_NAMES[cursor]!);
-      else if (key === "a") for (const name of ADDON_NAMES) wanted.add(name);
-      else if (key === "n") wanted.clear();
-      else if (key === "\r" || key === "\n") {
-        if (wanted.size > 0) finish(ADDON_NAMES.filter((name) => wanted.has(name)));
-        return;
-      } else if (QUIT_KEYS.includes(key)) return finish(null);
-      else return;
-      draw();
-    };
-    view.capture();
-    terminal.input.on("data", onKey);
-    draw();
-  });
 }
 
 export async function cmdMenu(): Promise<void> {

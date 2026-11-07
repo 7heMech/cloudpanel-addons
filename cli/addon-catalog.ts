@@ -69,14 +69,12 @@ export interface AddonDefinition {
   added?: string;
   /** Changes an operator must know about, such as moved settings or new effects on sites, each shown as Changed on the same terms as `added`; not for layout or speed. */
   changed?: { in: string; note: string }[];
-  /** Ticked when the installer asks which addons to install. */
-  preselected?: boolean;
   targets: AddonTarget[];
   /** The manager routes this addon mounts, if it has any. */
   handler?: AddonHandler;
   /** The privileged verbs this addon runs as root, if it has any. */
   action?: (argv: string[], options?: Record<string, unknown>) => Promise<number> | number;
-  /** Withdraw changes outside addon state before disabling or uninstalling. */
+  /** Withdraw changes outside addon state before disabling. */
   deactivate?: () => void;
   /** Stop what is still running once the config is gone and nothing new can start. */
   withdrawn?: () => void;
@@ -117,7 +115,7 @@ export interface AddonDefinition {
 /**
  * The addon's platform-facing shape: the definition plus the paths the platform
  * derives from its name. Kept as a distinct type because provisioning, repair
- * and uninstall care about the files, not about the handler.
+ * and disable care about the files, not about the handler.
  */
 export interface AddonSpec extends AddonDefinition {
   configFile: string;

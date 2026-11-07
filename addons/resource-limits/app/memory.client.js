@@ -23,7 +23,7 @@ function working(control, text) {
   line.append(text);
   const after = option ? option.lastElementChild
     : row ? row.querySelector('.tweak-note') : control.closest('.st-fold, .st-install');
-  after.after(line);
+  if (after) after.after(line);
   const page = setTimeout(function () {
     notify(text + ' Other settings wait until it finishes.', 'warn');
     clearTimeout(clpFlashTimer);

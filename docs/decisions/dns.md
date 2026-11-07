@@ -441,7 +441,6 @@ or Remove forgets them and logs the zone as deleted. Cloudflare answers such a
 zone's reads with Authentication error, so only the listing tells it apart.
 While any connection could not list its zones, nothing is forgotten.
 
-Assigning no profile, Ask first, deleting a profile, disabling and
-uninstalling all stop DNS writing and change nothing outside the server;
-disabling also stops the periodic pass.
-Uninstall removes the enabled flag and stops that pass before purging state.
+Assigning no profile, Ask first, deleting a profile and disabling all stop DNS
+writing and change nothing outside the server; disabling also stops the
+periodic pass.

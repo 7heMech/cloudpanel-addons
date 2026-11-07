@@ -463,3 +463,16 @@ test("a MySQL or Redis start does not wait for a memory change that holds the lo
     expect(Date.now() - started).toBeLessThan(1_000);
   });
 });
+
+test("repair and new sites leave memory to a change that holds the lock, instead of failing", async () => {
+  const { restoreResourceMemory } = await import("../addons/resource-limits/memory-settings");
+  const { withFileLockSync } = await import("../cli/action-common");
+  const s = server();
+  const options = resourceOptions(s);
+  writeFileSync(options.memorySettings.enabledConfig, "enabled");
+  withFileLockSync(options.memorySettings.lockFile, 1, "held", () => {
+    const started = Date.now();
+    expect(restoreResourceMemory(options, true)).toEqual([]);
+    expect(Date.now() - started).toBeLessThan(1_000);
+  });
+});

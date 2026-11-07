@@ -3,7 +3,7 @@ import { existsSync, lstatSync, readFileSync, rmSync, rmdirSync } from "node:fs"
 import { CONFIG_DIR, STATE_DIR, SYSTEMD_DIR } from "./paths";
 import { writeFileAtomic } from "../lib/atomic-write";
 import { log } from "./util";
-import { DEFAULT_MEMORY, validMemorySettings } from "../addons/resource-limits/memory";
+import { DEFAULT_MEMORY, validMemorySettings, type MemorySettings } from "../addons/resource-limits/memory";
 
 interface SavedFile { path: string; text: string; mode: number; uid: number; gid: number }
 function snapshot(path: string): SavedFile | null {
@@ -16,24 +16,31 @@ function restore(file: SavedFile): void {
   writeFileAtomic(file.path, file.text, { mode: file.mode, owner: { uid: file.uid, gid: file.gid }, createParent: true });
 }
 
-/** Anything that stops the move leaves both files as they were, and the next repair tries again. */
+/** A file that cannot be trusted leaves both sides as they were, and the next repair tries again. */
 const skipped = (why: string) => {
-  log.warn(`System Tweaks' memory settings were not moved to Resource Limits: ${why}. Resource Limits keeps its own; check them on its page`);
+  log.warn(`System Tweaks' memory settings were not moved to Resource Limits: ${why}`);
   return null;
 };
 
-/** A rollback is kept in memory only: no old-id aliases or backups remain on the box. */
+/**
+ * A rollback is kept in memory only: no old-id aliases or backups remain on the box.
+ *
+ * Settings that cannot move cleanly -- invalid, or different from Resource
+ * Limits' own -- are dropped from System Tweaks with one warning naming them:
+ * Resource Limits never reads them, and kept they would warn on every repair.
+ */
 export function migrateResourceMemory(enable: () => void): (() => void) | null {
   let source: SavedFile | null;
-  let stored: Record<string, unknown> | null;
+  let stored: Record<string, unknown> | null = null;
   let runtime: SavedFile | null;
   try {
     source = snapshot(`${STATE_DIR}/system-tweaks/settings.json`);
-    stored = source ? JSON.parse(source.text) as Record<string, unknown> : null;
     runtime = snapshot(`${STATE_DIR}/system-tweaks/memory.json`);
   } catch (error) {
     return skipped(error instanceof Error ? error.message : String(error));
   }
+  // System Tweaks itself ignores a settings file it cannot parse.
+  try { stored = source ? JSON.parse(source.text) as Record<string, unknown> : null; } catch { stored = null; }
   const hasMemory = stored?.version === 1 && Object.hasOwn(stored, "memory");
   // Early dev installs could have applied the default without ever saving settings.
   const defaultOom = [`${SYSTEMD_DIR}/nginx.service.d/zz-clp-addons-oom.conf`]
@@ -42,8 +49,8 @@ export function migrateResourceMemory(enable: () => void): (() => void) | null {
   // rewrite the old drop-in comment. Do not mistake that for an unsaved default.
   if (!hasMemory && !runtime && existsSync(`${STATE_DIR}/resource-limits/settings.json`)) return null;
   if (!hasMemory && !runtime && !defaultOom) return null;
-  if (hasMemory && !validMemorySettings(stored!.memory)) return skipped("they are not valid");
-  const savedMemory = hasMemory && validMemorySettings(stored!.memory) ? stored!.memory : { ...DEFAULT_MEMORY };
+  const valid = !hasMemory || validMemorySettings(stored!.memory);
+  const savedMemory = hasMemory && valid ? stored!.memory as MemorySettings : { ...DEFAULT_MEMORY };
   const targetDir = `${STATE_DIR}/resource-limits`;
   const directoryExisted = existsSync(targetDir);
   const settingsPath = `${targetDir}/settings.json`;
@@ -62,30 +69,40 @@ export function migrateResourceMemory(enable: () => void): (() => void) | null {
     }
     if (!directoryExisted && existsSync(targetDir)) rmdirSync(targetDir);
   };
+  const dropped: string[] = [];
   try {
-    // A previous attempt's identical copy is safe; conflicting policies must never be silently discarded.
     const target = snapshot(settingsPath);
-    const targetSettings = target ? JSON.parse(target.text) : null;
+    let targetSettings: { version?: unknown; memory?: Record<string, unknown> } | null = null;
+    try { targetSettings = target ? JSON.parse(target.text) : null; } catch { targetSettings = null; }
     const existingMemory = targetSettings?.memory;
-    if (target && (targetSettings?.version !== 1 || !validMemorySettings(existingMemory) || (["profile", "mysql", "redis", "oom"] as const).some((key) => existingMemory[key] !== memory[key]))) {
-      throw new Error("Resource Limits already holds different ones");
+    // A previous attempt's identical copy is the same policy, not a conflict.
+    const same = !!target && targetSettings?.version === 1 && validMemorySettings(existingMemory)
+      && (["profile", "mysql", "redis", "oom"] as const).every((key) => existingMemory![key] === memory[key]);
+    let moved = false;
+    if (!valid) dropped.push(`${JSON.stringify(stored!.memory)} is not valid`);
+    else if (target && !same) dropped.push(`${JSON.stringify(memory)} differs from Resource Limits' own`);
+    else {
+      keep(settingsPath);
+      if (!target) writeFileAtomic(settingsPath, `${JSON.stringify({ version: 1, memory }, null, 2)}\n`, { mode: 0o600, createParent: true });
+      moved = true;
     }
-    keep(settingsPath);
-    if (!target) writeFileAtomic(settingsPath, `${JSON.stringify({ version: 1, memory }, null, 2)}\n`, { mode: 0o600, createParent: true });
     if (runtime) {
       const existing = snapshot(runtimePath);
-      if (existing && existing.text !== runtime.text) throw new Error("Resource Limits already holds different runtime state");
-      keep(runtimePath); keep(runtime.path);
-      if (!existing) restore({ ...runtime, path: runtimePath });
+      keep(runtime.path);
+      if (existing && existing.text !== runtime.text) dropped.push("its runtime state differs from Resource Limits' own");
+      else if (!existing) { keep(runtimePath); restore({ ...runtime, path: runtimePath }); }
       rmSync(runtime.path);
     }
-    if (sourceEnabled && (memory.mysql || memory.redis || memory.oom) && !existsSync(configPath)) {
+    if (moved && sourceEnabled && (memory.mysql || memory.redis || memory.oom) && !existsSync(configPath)) {
       keep(configPath); enable();
     }
     if (source && hasMemory) {
       keep(source.path);
       delete stored!.memory;
       restore({ ...source, text: `${JSON.stringify(stored, null, 2)}\n` });
+    }
+    if (dropped.length) {
+      log.warn(`System Tweaks' memory settings were dropped, not moved: ${dropped.join("; ")}. Resource Limits keeps its own; check them on its page`);
     }
     return undo;
   } catch (error) {

@@ -83,7 +83,7 @@ test("a failed config test rolls the files back and rethrows", () => {
   expect(b.commands).not.toContain("systemctl reload php8.1-fpm.service");
 });
 
-test("uninstall removes the drop-in everywhere", () => {
+test("withdrawing the guard removes the drop-in everywhere", () => {
   const b = box(["8.1", "8.3"], [], new Set(["clp-php-fpm.service"]));
   reconcilePhpSessionGuard(true, b.options);
   const removed = reconcilePhpSessionGuard(false, b.options);

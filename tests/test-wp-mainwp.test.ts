@@ -547,7 +547,7 @@ test("an unreadable MainWP state holds up disabling and says how to proceed", ()
   expect(() => requireMainwpSettled(run.statePath)).toThrow("restore it from a backup and retry");
 });
 
-test("only an interrupted enrollment holds up disabling or uninstalling", async () => {
+test("only an interrupted enrollment holds up disabling", async () => {
   await paused(); await syncMainwp(run, options);
   expect(() => requireMainwpSettled(run.statePath)).not.toThrow();
   fail = "restore";

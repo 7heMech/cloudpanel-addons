@@ -6,7 +6,7 @@ import { withFileLockSync } from "./action-common";
 import { migrateResourceMemory } from "./resource-limits-migration";
 import { ADDONS, ADDON_NAMES, type AddonSpec } from "./addon-catalog";
 import { masterVhostHost } from "./inject";
-import { CONFIG_DIR, LOCK_DIR, STATE_DIR } from "./paths";
+import { CONFIG_DIR, LOCK_DIR, STATE_DIR, SYSTEMD_DIR } from "./paths";
 import { installedConfig, writeConfig } from "./provision";
 import { fatal, log } from "./util";
 import { chownSync, existsSync, readFileSync, readdirSync, renameSync, rmSync, statSync, writeFileSync } from "node:fs";
@@ -35,7 +35,27 @@ export interface AddonRename {
   undo?: () => void;
 }
 
+/** Whether anything is left under an old name, so install, repair and update wait on no lock otherwise. */
+function migrationPending(): boolean {
+  if (Object.keys(RENAMED_ADDONS).some((from) =>
+    existsSync(`${CONFIG_DIR}/${from}.conf`) || existsSync(`${CONFIG_DIR}/${from}.conf.new`) || existsSync(`${STATE_DIR}/${from}`))) return true;
+  if (existsSync(`${STATE_DIR}/system-tweaks/memory.json`)) return true;
+  const oom = `${SYSTEMD_DIR}/nginx.service.d/zz-clp-addons-oom.conf`;
+  if (existsSync(oom) && readFileSync(oom, "utf8").includes("clp-addons System Tweaks:")) return true;
+  try {
+    return Object.hasOwn(JSON.parse(readFileSync(`${STATE_DIR}/system-tweaks/settings.json`, "utf8")) ?? {}, "memory");
+  } catch {
+    return false;
+  }
+}
+
 export function migrateOldAddonNames(quiet = false): AddonRename[] {
+  if (!migrationPending()) {
+    // Lock files hold no saved policy. Old processes are replaced by provisioning.
+    rmSync(`${LOCK_DIR}/php-resources.lock`, { force: true });
+    rmSync(`${LOCK_DIR}/system-tweaks-memory.lock`, { force: true });
+    return [];
+  }
   // Service start hooks and settings writes must see the policy on one side of the transfer.
   return withFileLockSync(`${LOCK_DIR}/resource-limits-settings.lock`, 15, "a resource limits change is still running", () =>
     withFileLockSync(`${LOCK_DIR}/system-tweaks.lock`, 15, "a system tweaks change is still running", () => migrateAddonState(quiet)));

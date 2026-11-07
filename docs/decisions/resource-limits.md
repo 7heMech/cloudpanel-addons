@@ -9,9 +9,9 @@ PHP Settings form writes `memory_limit` and the other `php.ini` values into the
 site's Nginx vhost as `PHP_VALUE` and never touches the pool. The pool file is
 the PHP configuration this addon owns; `memory_limit` and `upload_max_filesize`
 stay in CloudPanel’s PHP Settings tab. Server memory policy for MySQL, Redis and
-OOM priorities belongs here because PHP workers share the same RAM. Resource
-Limits is preselected by the installer, with OOM protection on and service sizing
-off. Enabling it does not assign existing PHP sites to a category.
+OOM priorities belongs here because PHP workers share the same RAM. Enabled, it
+turns OOM protection on and leaves service sizing off, and assigns no existing
+PHP site to a category.
 
 The addon owns nine directives: `pm`, `pm.max_children`, `pm.start_servers`,
 `pm.min_spare_servers`, `pm.max_spare_servers`, `pm.process_idle_timeout`,
@@ -297,32 +297,26 @@ temporary tables and other processes can consume additional RAM. MySQL and Redis
 are counted at profile sizes even while their switches are off, since their
 current allowances are not known without querying the services.
 
-## Upgrade compatibility
+## Renamed from PHP Resources
 
-The shipped `php-resources` policy directory and enabled config move to
-`resource-limits`. Disabled installs keep their categories without being enabled.
-The catalog, gateway, injection targets and shared upkeep/new-site hooks use only
-the new id. Old URL paths redirect to `/addons/resource-limits/`, preserving
-suffixes, query strings and methods after the admin gate, so site Settings cards
-loaded before a panel reload still work. No old config, state directory or lock
-alias is retained; provisioning removes obsolete units and regenerates injection
-markup and Twig caches.
+An update moves a `php-resources` policy and enabled record to
+`resource-limits`; a disabled install keeps its categories without being
+enabled. Old URL paths redirect, with their suffix, query and method, after the
+admin gate, so a site Settings card loaded before the panel reloads still works.
+No old config, state directory or lock is kept.
 
-Staging's unreleased System Tweaks memory fields move to
-`resource-limits/settings.json`; `memory.json` moves with the Redis ownership and
-MySQL pending-restart record. Other System Tweaks settings are preserved verbatim
-as values, including fields this migration does not know. Explicit Off choices
-stay off. If System Tweaks was enabled with an active memory protection, Resource
-Limits is enabled to keep it. If PHP was enabled while System Tweaks was disabled, the profile is kept and
-the memory switches stay off. If both addons were disabled, saved choices stay
-dormant until Resource Limits is enabled. An early dev install's existing System Tweaks OOM drop-in also
-counts as an enabled protection, even if no settings were saved.
+Memory settings saved in System Tweaks move to Resource Limits' own files. An
+enabled System Tweaks with a memory protection on enables Resource Limits to
+keep it; the switches of a disabled one stay off. Settings that are invalid or
+differ from Resource Limits' own are dropped from System Tweaks with one warning
+naming them, and Resource Limits keeps its own. Nothing about the move stops an
+update or a repair, and when there is nothing to move it takes no lock. A failed
+update undoes the move for the binary it restores.
 
-The upgrade retains an in-memory undo for both migrations so a failed update
-can restore the previous binary's state and enabled records. Conflicting policies
-are refused rather than overwritten. Memory settings and runtime state are
-root-only regular files; the settings lock serializes changes and upkeep, and
-service start hooks check the enabled config so disabling the addon cannot
-recreate withdrawn limits. Disabling keeps PHP's saved policy and current pools,
-withdraws memory sizing and OOM overrides, and leaves MySQL's running sizes until
-its next restart.
+Memory settings and runtime state are root-only regular files. The settings
+lock serialises changes and upkeep; repair and new-site runs leave the memory
+step to a change that holds it. Service start hooks read without the lock and
+check the enabled config, so disabling the addon cannot recreate withdrawn
+limits. Disabling keeps PHP's saved policy and current pools, withdraws memory
+sizing and OOM overrides, and leaves MySQL's running sizes until its next
+restart.
