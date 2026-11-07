@@ -109,14 +109,11 @@ holds the security fixes. `update` never adds an addon.
 
 ## Uninstall
 
-`clp-addons` only turns addons on and off. Removing the installation is a
-separate command, `clp-addons-uninstall`, so no `clp-addons` command can be
-mistaken for removing one addon. It is a two-line script, written with the
-units, that runs the binary's hidden `self-uninstall`; the removal stays in the
-binary beside the code that provisions what it removes. It refuses while any addon is
-enabled, so every addon's own withdrawal has already run through disable, and
-it keeps `/var/lib/clp-addons`. An addon's data is deleted from that addon, such
-as Instatic sites on its page.
+The commands that act on one addon are only `enable` and `disable`. Removing
+the installation is `self-uninstall`, named so that it cannot be mistaken for
+removing one addon. It refuses while any addon is enabled, so every addon's own
+withdrawal has already run through disable, and it keeps `/var/lib/clp-addons`.
+An addon's data is deleted from that addon, such as Instatic sites on its page.
 
 ## Update behavior
 

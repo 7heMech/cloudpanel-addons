@@ -1,4 +1,4 @@
-// `clp-addons-uninstall`: removes the installation once every addon is
+// `clp-addons self-uninstall`: removes the installation once every addon is
 // disabled. Addon data stays.
 
 import { installedAddons } from "./addons";
@@ -6,16 +6,16 @@ import { purgeTwigCache } from "./inject";
 import { withOperationLockSync } from "./operation-lock";
 import { CLI_BIN, LIBEXEC_DIR, STATE_DIR } from "./paths";
 import { reconcilePhpGuard } from "./php-guard";
-import { reconcilePanelIdentity, stopUnits, uninstallerPath } from "./provision";
+import { reconcilePanelIdentity, stopUnits } from "./provision";
 import { reconcileAnchors, reconcileNginx } from "./reconcile";
 import { fatal, log, parseFlags, requireRoot } from "./util";
 import { rmSync } from "node:fs";
 
 export function cmdSelfUninstall(argv: string[]): void {
-  requireRoot("clp-addons-uninstall");
+  requireRoot("self-uninstall");
   const { positional, flags } = parseFlags(argv);
   if (positional.length > 0 || Object.keys(flags).some((flag) => flag !== "yes")) {
-    fatal("clp-addons-uninstall takes only --yes; turn one addon off with clp-addons disable <addon>");
+    fatal("self-uninstall takes only --yes; turn one addon off with clp-addons disable <addon>");
   }
   withOperationLockSync("uninstall", () => {
     const enabled = installedAddons().map((spec) => spec.name);
@@ -24,7 +24,7 @@ export function cmdSelfUninstall(argv: string[]): void {
     }
     if (flags.yes !== true) {
       fatal(
-        "clp-addons-uninstall removes\n" +
+        "self-uninstall removes\n" +
         `  - ${CLI_BIN}, its services and its CloudPanel changes\n` +
         `  - nothing in ${STATE_DIR}, where addon data is kept\n` +
         "Re-run with --yes to proceed.",
@@ -36,7 +36,6 @@ export function cmdSelfUninstall(argv: string[]): void {
     reconcilePanelIdentity(true, []);
     reconcileNginx(true, false);
     reconcilePhpGuard(false, true);
-    rmSync(uninstallerPath(), { force: true });
     rmSync(CLI_BIN, { force: true });
     rmSync(LIBEXEC_DIR, { recursive: true, force: true });
     log.ok(`clp-addons removed; addon data is kept in ${STATE_DIR}`);

@@ -268,7 +268,7 @@ function enabled(name: string): boolean {
  * enabled, because every addon is compiled in and a manager with none of them
  * on is still the page that offers them back; the panel's Addons entry is kept
  * by `installedInjections` for the same reason. Taking the installation away
- * altogether is `clp-addons-uninstall`.
+ * altogether is `clp-addons self-uninstall`.
  */
 function rejectImpossible(kind: ManagerJobKind, addon: string): string | null {
   if (kind === "update") return null;

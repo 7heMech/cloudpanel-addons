@@ -275,11 +275,11 @@ install, update and repair write it whenever any addon is installed. System
 Tweaks is where it is shown and the only place to opt out. The opt-out is
 `uploadProgressGuard: false` in `/var/lib/clp-addons/system-tweaks/settings.json`,
 and `cli/php-guard.ts` honours it only while `system-tweaks.conf` exists.
-The shared disable path reconciles the guard once the config is
-gone. Disabling puts it back even when no addon is left, because the binary
-stays and repair keeps the guard while it is installed;
-`clp-addons-uninstall` removes it with the binary. A failure there warns and leaves the guard to the repair timer, since
-the addon is already withdrawn. So an existing box
+The shared disable path reconciles the guard once the config is gone.
+Disabling puts it back even when no addon is left, because the binary stays and
+repair keeps the guard while it is installed; `self-uninstall` removes it with
+the binary. A failure there warns and leaves the guard to the repair timer,
+since the addon is already withdrawn. So an existing box
 keeps its protection after an update without anyone enabling System Tweaks, and
 no box loses the guard because an addon it never had was missing.
 

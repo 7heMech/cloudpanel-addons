@@ -9,7 +9,6 @@ const root = mkdtempSync(`${tmpdir()}/uninstall-test-`);
 const stateDir = join(root, "state");
 const configFile = join(root, "instatic.conf");
 const binary = join(root, "clp-addons");
-const uninstaller = join(root, "clp-addons-uninstall");
 const libexec = join(root, "libexec");
 const identityPath = join(root, "panel-identity.conf");
 const eventsPath = join(root, "events");
@@ -42,7 +41,6 @@ mock.module("./cli/provision.ts", () => ({
     if (specs?.length === 0) rmSync(root + "/panel-identity.conf", { force: true });
   },
   stopUnits: () => event("stopUnits"),
-  uninstallerPath: () => root + "/clp-addons-uninstall",
 }));
 mock.module("./cli/reconcile.ts", () => ({
   reconcileAnchors: (_quiet, _exclude, managerNav) => { event("anchors nav=" + managerNav); return true; },
@@ -87,7 +85,7 @@ beforeEach(() => {
     mkdirSync(path, { recursive: true });
   }
   writeFileSync(join(stateDir, "settings.json"), "{}\n");
-  for (const path of [binary, uninstaller, identityPath]) writeFileSync(path, "x");
+  for (const path of [binary, identityPath]) writeFileSync(path, "x");
   rmSync(configFile, { force: true });
   rmSync(eventsPath, { force: true });
 });
@@ -121,7 +119,7 @@ test("with every addon disabled it removes the installation and keeps addon data
     ok: true,
     events: ["stopUnits", "anchors nav=false", "purgeTwigCache", "nginx false", "phpGuard false"],
   });
-  for (const path of [binary, uninstaller, libexec, identityPath]) expect(existsSync(path)).toBe(false);
+  for (const path of [binary, libexec, identityPath]) expect(existsSync(path)).toBe(false);
   expect(existsSync(join(stateDir, "settings.json"))).toBe(true);
 });
 

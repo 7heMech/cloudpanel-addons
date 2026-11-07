@@ -58,8 +58,8 @@ function usage(): void {
   clp-addons repair [<addon>] [--quiet] [--anchors-only]
   clp-addons status
   clp-addons maintenance <domain> [on|off|status]
+  clp-addons self-uninstall --yes
   clp-addons --version
-  clp-addons-uninstall --yes
 
 Addons: ${ADDON_NAMES.join(", ")}`);
 }
@@ -186,7 +186,6 @@ async function main(): Promise<number> {
     case "status": await cmdStatus(); return 0;
     case "maintenance": await cmdMaintenance(rest); return 0;
     case "self-uninstall": cmdSelfUninstall(rest); return 0;
-    case "uninstall": fatal("turn an addon off with clp-addons disable <addon>; remove clp-addons with clp-addons-uninstall");
     case "action": return await cmdAction(rest);
     case "smtp-submit": return await runSmtpSubmit(rest);
     case "terminal-pty": return await runTerminalPty(rest);

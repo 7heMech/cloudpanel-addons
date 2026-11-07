@@ -844,11 +844,11 @@ export interface UnitChanges {
  * exists to undo exactly that. Several managed units carry no `User=`, so
  * systemd runs what they name as root.
  */
-function managedFileIntact(path: string, body: string, mode = 0o644): boolean {
+function managedFileIntact(path: string, body: string): boolean {
   try {
     const info = lstatSync(path);
     if (!info.isFile()) return false;
-    if ((info.mode & 0o7777) !== mode) return false;
+    if ((info.mode & 0o7777) !== 0o644) return false;
     // The owner this compares against is the process's own rather than a
     // literal 0, because that is what writeAtomic produces. Every caller here
     // is already past requireRoot, so in service it is 0; saying so that way
@@ -861,14 +861,9 @@ function managedFileIntact(path: string, body: string, mode = 0o644): boolean {
 }
 
 /** Writes a managed definition unless one is already intact; returns whether it did. */
-/** `clp-addons-uninstall`, kept apart from the CLI so no `clp-addons` command removes the installation. */
-export function uninstallerPath(): string {
-  return `${CLI_BIN}-uninstall`;
-}
-
-function writeManaged(path: string, body: string, mode = 0o644): boolean {
-  if (managedFileIntact(path, body, mode)) return false;
-  writeAtomic(path, body, mode);
+function writeManaged(path: string, body: string): boolean {
+  if (managedFileIntact(path, body)) return false;
+  writeAtomic(path, body, 0o644);
   return true;
 }
 
@@ -935,8 +930,6 @@ export function installUnits(specs: AddonSpec[]): UnitChanges {
     writeManaged(`${SYSTEMD_DIR}/${AUTH_SOCKET_UNIT}`, auth.socket),
     writeManaged(`${SYSTEMD_DIR}/${AUTH_SERVICE_UNIT}`, auth.service),
   ];
-
-  writeManaged(uninstallerPath(), `#!/bin/sh\nexec ${CLI_BIN} self-uninstall "$@"\n`, 0o755);
 
   const changes: UnitChanges = {
     manager,

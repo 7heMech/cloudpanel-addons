@@ -1,5 +1,5 @@
 import { expect, test } from "bun:test";
-import { existsSync, lstatSync, mkdirSync, mkdtempSync, readFileSync, rmSync, statSync, symlinkSync, writeFileSync } from "node:fs";
+import { existsSync, lstatSync, mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { spawnSync } from "node:child_process";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
@@ -493,15 +493,7 @@ test("a guard that fails its config test does not stop a disable", () => {
   expect(run.warnings.some((line) => line.includes("repair will retry"))).toBe(true);
 });
 
-test("provisioning installs clp-addons-uninstall beside the binary", () => {
-  const run = toggle([{ verb: "enable", addon: "stager" }]);
-  expect(run.error).toBeUndefined();
-  const path = join(run.root, "clp-addons-uninstall");
-  expect(readFileSync(path, "utf8")).toBe(`#!/bin/sh\nexec ${join(run.root, "clp-addons")} self-uninstall "$@"\n`);
-  expect(statSync(path).mode & 0o777).toBe(0o755);
-});
-
-test("clp-addons-uninstall refuses while an addon is enabled", () => {
+test("self-uninstall refuses while an addon is enabled", () => {
   const { root, guard } = optedOutFixture();
   const run = toggle([{ verb: "uninstall" }], { root });
   expect(run.error).toContain("clp-addons disable system-tweaks");
@@ -509,11 +501,12 @@ test("clp-addons-uninstall refuses while an addon is enabled", () => {
   expect(existsSync(guard)).toBe(false);
 });
 
-test("clp-addons-uninstall after the last disable removes the guard and the units", () => {
+test("self-uninstall after the last disable removes the guard, the units and the binary", () => {
   const { root, guard } = optedOutFixture();
+  writeFileSync(join(root, "clp-addons"), "");
   const run = toggle([{ verb: "disable", addon: "system-tweaks" }, { verb: "uninstall" }], { root });
   expect(run.error).toBeUndefined();
   expect(existsSync(guard)).toBe(false);
   expect(run.provision).toContain("stopUnits");
-  expect(existsSync(join(root, "clp-addons-uninstall"))).toBe(false);
+  expect(existsSync(join(root, "clp-addons"))).toBe(false);
 });
