@@ -57,7 +57,7 @@ function rootButton(root: RootAccess, user: string): string {
     ?? (root.granted ? null : `Ask root to run clp-addons terminal root allow ${user} on the server.`);
   const action = refusal === null
     ? "clpOpenTerminal(CLP_BASE, '', event.shiftKey)"
-    : "notify(this.dataset.refusal, 'error', { text: 'Account Security', href: '/security' })";
+    : "notify(this.dataset.refusal, 'error', { text: 'Account → Security', href: '/security' })";
   return `
       <button class="btn" type="button"${refusal === null ? "" : ` data-refusal="${esc(refusal)}"`} onclick="${action}">Root terminal</button>`;
 }

@@ -64,7 +64,7 @@ test("only an administrator root allowed gets a root shell", () => {
 test("two-factor must be on; switched off it pauses the grant, and back on it works without root", () => {
   allow("alice");
   change("UPDATE user SET mfa = 0 WHERE user_name = 'alice'");
-  expect(access("alice")).toEqual({ granted: true, problem: "A root terminal needs two-factor authentication: turn it on in Account Security." });
+  expect(access("alice")).toEqual({ granted: true, problem: "A root terminal needs two-factor authentication: turn it on in Account → Security." });
   change("UPDATE user SET mfa = 1, mfa_secret = 'new' WHERE user_name = 'alice'");
   expect(access("alice")).toEqual({ granted: true, problem: null });
 });
@@ -151,12 +151,12 @@ test("the page's button opens a root shell only for an allowed administrator, an
   const allowed = dashboardView([], { granted: true, problem: null }, "alice");
   expect(allowed).toContain(`onclick="clpOpenTerminal(CLP_BASE, '', event.shiftKey)">Root terminal<`);
   expect(allowed).not.toContain("data-refusal");
-  const refused = dashboardView([], { granted: true, problem: "A root terminal needs two-factor authentication: turn it on in Account Security." }, "alice");
-  expect(refused).toContain('data-refusal="A root terminal needs two-factor authentication: turn it on in Account Security."');
+  const refused = dashboardView([], { granted: true, problem: "A root terminal needs two-factor authentication: turn it on in Account → Security." }, "alice");
+  expect(refused).toContain('data-refusal="A root terminal needs two-factor authentication: turn it on in Account → Security."');
   expect(refused).not.toContain("clpOpenTerminal(");
   const other = dashboardView([], { granted: false, problem: null }, "bob");
   expect(other).toContain("clp-addons terminal root allow bob on the server.");
-  expect(other).toContain(`onclick="notify(this.dataset.refusal, 'error', { text: 'Account Security', href: '/security' })"`);
+  expect(other).toContain(`onclick="notify(this.dataset.refusal, 'error', { text: 'Account → Security', href: '/security' })"`);
   const popup = popupPage(null);
   expect(popup).toContain('data-domain=""');
   expect(popup).toContain('<span class="badge tone-bad">root</span>');

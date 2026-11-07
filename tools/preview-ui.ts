@@ -2027,7 +2027,7 @@ const server = Bun.serve({
       // ?root shows the root shell's card, ?root=stale one whose password changed.
       const rootGrant = url.searchParams.get("root");
       const root = rootGrant === null ? { granted: false, problem: null }
-        : { granted: true, problem: rootGrant === "stale" ? "A root terminal needs two-factor authentication: turn it on in Account Security." : null };
+        : { granted: true, problem: rootGrant === "stale" ? "A root terminal needs two-factor authentication: turn it on in Account → Security." : null };
       html = terminalLayout("Terminal", terminalDashboardView(empty ? [] : terminalPreviewSites, root, "admin"), notice);
     } else if (path === "/addons/wp-tools/" || path === "/addons/wp-tools") {
       wpToolsPreview = {
