@@ -125,16 +125,12 @@ export function dashboardView(
       const actions = missing
         ? `<button class="btn" onclick="showLogs('${d}', '${escJs(String(i.port ?? ""))}')">Logs</button>
     <button class="btn btn-danger" onclick="askDelete('${d}')">Delete</button>`
-        : `<a class="btn" href="https://${esc(i.domain)}/admin" target="_blank" rel="noreferrer noopener">Open admin</a>
-    <a class="btn" href="https://${esc(i.domain)}" target="_blank" rel="noreferrer noopener">Visit site</a>
-    ${
+        : `${
       i.state === "running"
         ? `<button class="btn" onclick="askStop('${d}')">Stop</button>`
         : `<button class="btn" onclick="act('${d}','start')">Start</button>`
     }
-    <button class="btn" onclick="act('${d}','restart')">Restart</button>
     <button class="btn" onclick="takeSnapshot('${d}')" title="Create a backup snapshot of the SQLite database and instance data">Snapshot</button>
-    <button class="btn" onclick="act('${d}','recreate')" title="Rebuild the recorded version, preserving data and enabling native backups for older instances">Recreate</button>
     <button class="btn" onclick="showLogs('${d}', '${escJs(String(i.port ?? ""))}')">Logs</button>
     <button class="btn btn-danger" onclick="askDelete('${d}')">Delete</button>`;
       const state = missing
@@ -153,9 +149,9 @@ export function dashboardView(
     ${behind ? `<span class="badge behind" title="${esc(latest)} is available">${esc(latest)} available</span>` : ""}
   </td>
   <td data-label="State">${state}</td>
-  <td class="action-cell wide-cell" data-label="Actions"><div class="instatic-row-actions">${update}<details id="instance-actions-${esc(i.domain)}" class="row-actions"><summary>Manage</summary><div class="actions">
+  <td class="action-cell wide-cell"><div class="actions instatic-row-actions">${update}
     ${actions}
-  </div></details></div></td>
+  </div></td>
 </tr>`;
     })
     .join("\n");
@@ -196,7 +192,7 @@ export function dashboardView(
     summary: `${instances.length} sites`,
   })}
   <div class="table-scroll"><table class="fleet-table instatic-table">
-    <thead><tr><th scope="col" class="site-select"><input id="select-all" type="checkbox" onchange="selectAllSites(this.checked)" aria-label="Select all sites"></th><th scope="col" data-sort="domain">Site</th><th scope="col" data-sort="version">Version</th><th scope="col" data-sort="attention">State</th><th scope="col" class="action-cell">Actions</th></tr></thead>
+    <thead><tr><th scope="col" class="site-select"><input id="select-all" type="checkbox" onchange="selectAllSites(this.checked)" aria-label="Select all sites"></th><th scope="col" data-sort="domain">Site</th><th scope="col" data-sort="version">Version</th><th scope="col" data-sort="attention">State</th><th scope="col" class="action-cell" aria-label="Actions"></th></tr></thead>
     <tbody>${jobRows}${rows}</tbody>
   </table></div>
   ${FLEET_FOOTER_HTML}`
