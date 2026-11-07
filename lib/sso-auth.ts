@@ -518,6 +518,8 @@ export interface PanelSession {
 export interface ParsedPanelSession extends PanelSession {
   /** It passed CloudPanel's two-factor step, rather than having none to pass. */
   twoFactor: boolean;
+  /** Unix seconds when CloudPanel created it, which it stamps again at every sign-in; null when unrecorded. */
+  createdAt: number | null;
 }
 
 function serviceUnavailableResponse(): Response {
@@ -544,6 +546,7 @@ export function parsePanelSession(data: Uint8Array | string, options: { unmarked
     if (meta?.type !== "array" || attributes?.type !== "array") return null;
     const updated = uniqueStringEntry(meta.entries, "u");
     const lifetime = uniqueStringEntry(meta.entries, "l");
+    const created = uniqueStringEntry(meta.entries, "c");
     if (updated?.type !== "integer" || lifetime?.type !== "integer") return null;
     const seconds = lifetime.value === 0 ? panelSessionLifetime() : lifetime.value;
     if (seconds < 0 || updated.value < 0 || updated.value > Number.MAX_SAFE_INTEGER - seconds) return null;
@@ -573,7 +576,7 @@ export function parsePanelSession(data: Uint8Array | string, options: { unmarked
       return null;
     }
 
-    return { user: identity.user, roles: identity.roles, expiresAt, twoFactor: mfaEntries.length === 1 };
+    return { user: identity.user, roles: identity.roles, expiresAt, twoFactor: mfaEntries.length === 1, createdAt: created?.type === "integer" ? created.value : null };
   } catch {
     return null;
   }

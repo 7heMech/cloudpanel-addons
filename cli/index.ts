@@ -16,7 +16,9 @@ import { CLI_VERSION } from "./release";
 import { installedConfig } from "./provision";
 import { reconcile } from "./inject";
 import { fatal, Fatal, log, requireRoot } from "./util";
+import { LOCKABLE_ADDONS, ROOT_LOCKS_FILE, ROOT_LOCKS_LOCK, UntrustedLockFile, isLockable, lockedAddons, writeLockedAddons } from "../lib/root-locks";
 import { withOperationLockSync } from "./operation-lock";
+import { withFileLockSync } from "./action-common";
 import { runRecon } from "./recon";
 import { cmdServe } from "../manager/server";
 import { executeMaintenanceAction, type MaintenanceStatus } from "../addons/maintenance/action";
@@ -61,6 +63,8 @@ function usage(): void {
   clp-addons status
   clp-addons maintenance <domain> [on|off|status]
   clp-addons terminal root [allow|deny <user>]
+  clp-addons lock [<addon>]
+  clp-addons unlock <addon>
   clp-addons self-uninstall --yes
   clp-addons --version
 
@@ -78,6 +82,45 @@ async function cmdAction(argv: string[]): Promise<number> {
   if (!spec?.action) fatal(`unknown action addon '${addon ?? ""}'`);
   if (!installedConfig(spec)) fatal(`the ${spec.name} addon is not installed`);
   return spec.action(rest);
+}
+
+/** With no addon, lists the locks; `lock` alone needs no root, as it only reads. */
+function cmdLock(argv: string[], lock: boolean): void {
+  const [addon, ...extra] = argv;
+  if (extra.length || (!lock && !addon)) fatal(`usage: clp-addons ${lock ? "lock [<addon>]" : "unlock <addon>"}`);
+  const read = (): string[] => {
+    try {
+      return lockedAddons();
+    } catch (error) {
+      if (!(error instanceof UntrustedLockFile)) {
+        fatal(`cannot read ${ROOT_LOCKS_FILE}: ${error instanceof Error ? error.message : String(error)}; every lockable addon counts as locked until it can be`);
+      }
+      fatal(`${error.message}, so every lockable addon counts as locked. ` +
+        `Note what it locked, remove it with rm ${ROOT_LOCKS_FILE}, then lock those addons again`);
+    }
+  };
+  const locked = read();
+  if (!addon) {
+    log.plain(locked.length ? `Locked: ${locked.join(", ")}` : "Nothing is locked.");
+    log.plain(`Lockable: ${LOCKABLE_ADDONS.join(", ")}`);
+    return;
+  }
+  requireRoot(lock ? "lock" : "unlock");
+  // An entry for an addon that no longer declares anything can still be unlocked.
+  if (lock && !isLockable(addon)) fatal(`${addon} has nothing to lock; lockable: ${LOCKABLE_ADDONS.join(", ")}`);
+  const changed = withFileLockSync(ROOT_LOCKS_LOCK, 15, "another lock or unlock is still running", () => {
+    const current = read();
+    if (lock === current.includes(addon)) return false;
+    writeLockedAddons(lock ? [...current, addon] : current.filter((name) => name !== addon));
+    return true;
+  });
+  if (!changed) {
+    log.plain(`${addon} is already ${lock ? "locked" : "unlocked"}`);
+    return;
+  }
+  log.ok(lock
+    ? `${addon} is locked: the panel shows its protections but cannot change them or disable the addon`
+    : `${addon} is unlocked: administrators can change it from the panel again`);
 }
 
 async function cmdMaintenance(argv: string[]): Promise<void> {
@@ -186,6 +229,8 @@ async function main(): Promise<number> {
     case "status": await cmdStatus(); return 0;
     case "maintenance": await cmdMaintenance(rest); return 0;
     case "self-uninstall": cmdSelfUninstall(rest); return 0;
+    case "lock": cmdLock(rest, true); return 0;
+    case "unlock": cmdLock(rest, false); return 0;
     case "action": return await cmdAction(rest);
     case "smtp-submit": return await runSmtpSubmit(rest);
     case "terminal-pty": return await runTerminalPty(rest);

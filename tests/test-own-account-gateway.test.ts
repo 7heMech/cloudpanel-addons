@@ -2,7 +2,7 @@
 // reads whose account from the session it is sent, never from the manager.
 import { afterAll, beforeAll, expect, test } from "bun:test";
 import { Database } from "bun:sqlite";
-import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { createAuthActionServer } from "../cli/auth-action";
@@ -27,7 +27,7 @@ beforeAll(() => {
 
 afterAll(() => rmSync(dir, { recursive: true, force: true }));
 
-async function ask(request: Record<string, unknown>): Promise<{ reply: unknown; argv: string[] | null; env?: Record<string, string> }> {
+async function ask(request: Record<string, unknown>, extra: Record<string, unknown> = {}): Promise<{ reply: unknown; argv: string[] | null; env?: Record<string, string> }> {
   let argv: string[] | null = null;
   let env: Record<string, string> = {};
   const spawn = ((args: string[], options: Record<string, unknown>) => {
@@ -37,7 +37,7 @@ async function ask(request: Record<string, unknown>): Promise<{ reply: unknown; 
   }) as unknown as typeof Bun.spawn;
   const socketPath = `${dir}/gw-${Math.random().toString(36).slice(2)}.sock`;
   const server = createAuthActionServer({
-    enforcePeer: false, sessionDir: dir, ownerUid: process.getuid?.() ?? 0, panelDb: `${dir}/panel.sqlite`, spawn,
+    enforcePeer: false, sessionDir: dir, ownerUid: process.getuid?.() ?? 0, panelDb: `${dir}/panel.sqlite`, spawn, ...extra,
   });
   await new Promise<void>((resolve) => server.listen(socketPath, resolve));
   try {
@@ -89,4 +89,21 @@ test("the worker is told whether the session passed 2FA, which the manager canno
   const unmarked = await ask({ addon: "security-keys", verb: "keys", sessionId: "nomfa" });
   expect(unmarked.argv!.at(-1)).toBe("--panel-user=redacted_user");
   expect(unmarked.env!.CLP_ADDONS_SESSION_2FA).toBe("0");
+});
+
+test("a session CloudPanel opened from a passkey sign-in's token names that key", async () => {
+  const keysDir = join(dir, "security-keys");
+  mkdirSync(keysDir, { recursive: true });
+  // The fixture session was created at 1893455900.
+  const signIns = (at: number) => writeFileSync(join(keysDir, "sign-ins.json"),
+    JSON.stringify({ signIns: [{ user: "redacted_user", key: "k1", at }] }), { mode: 0o600 });
+  const state = { securityKeys: true, securityKeysState: { dir: keysDir, uid: process.getuid?.() ?? 0 } };
+  signIns(1893455890);
+  expect((await ask({ addon: "security-keys", verb: "keys", sessionId: "nomfa" }, state)).env!.CLP_ADDONS_SESSION_2FA).toBe("passkey:k1");
+  // A sign-in whose token had expired before the session began is not this session's.
+  rmSync(join(keysDir, "sign-ins.json"));
+  signIns(1893455700);
+  expect((await ask({ addon: "security-keys", verb: "keys", sessionId: "nomfa" }, state)).env!.CLP_ADDONS_SESSION_2FA).toBe("0");
+  // Nor is any with Security Keys off.
+  expect((await ask({ addon: "security-keys", verb: "keys", sessionId: "nomfa" }, { ...state, securityKeys: false })).env!.CLP_ADDONS_SESSION_2FA).toBe("0");
 });
