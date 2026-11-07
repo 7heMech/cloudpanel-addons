@@ -238,6 +238,6 @@ export function runTerminalRootCommand(argv: string[]): void {
     writeRootGrants(others);
   });
   log.ok(verb === "allow"
-    ? `${user} can open a root shell from the panel, signed in with their 2FA code`
+    ? `${user} can open a root shell from the panel, signed in with their 2FA code${grant?.keys.length ? " or one of those passkeys" : ""}`
     : `${user} cannot open a root shell; any open one closes within 15 seconds`);
 }
