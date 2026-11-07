@@ -1,7 +1,7 @@
 // The entrypoint: argv in, exit code out. Each verb lives in its own module
 // and this one only decides which. `auth` and `manager` are dispatched before
 // the catalog is consulted, because neither is an addon.
-import { dashboardUrl, installedAddons } from "./addons";
+import { dashboardUrl, installedAddons, resolveAddon } from "./addons";
 import { reconcileAnchors } from "./reconcile";
 import { cmdMenu } from "./menu";
 import { cmdStatus } from "./status";
@@ -9,7 +9,7 @@ import { cmdInstall } from "./install";
 import { cmdAptHook } from "./apt-hook";
 import { cmdRepair } from "./repair";
 import { applyDisable, applyEnable } from "./toggle";
-import { cmdUninstall } from "./uninstall";
+import { cmdSelfUninstall } from "./uninstall";
 import { cmdUpdate } from "./update";
 import { ADDONS, ADDON_NAMES } from "./addon-catalog";
 import { CLI_VERSION } from "./release";
@@ -52,12 +52,13 @@ function usage(): void {
   log.plain(`clp-addons ${CLI_VERSION} — CloudPanel Addons
 
   clp-addons
-  clp-addons install [<addon>...] [--local=DIR]
+  clp-addons enable <addon>...
+  clp-addons disable <addon>...
   clp-addons update [--version=vX.Y.Z] [--allow-prerelease] [--skip-attestation]
   clp-addons repair [<addon>] [--quiet] [--anchors-only]
   clp-addons status
-  clp-addons uninstall <addon> --yes [--purge]
   clp-addons maintenance <domain> [on|off|status]
+  clp-addons self-uninstall
   clp-addons --version
 
 Addons: ${ADDON_NAMES.join(", ")}`);
@@ -107,8 +108,13 @@ async function cmdOverview(): Promise<void> {
   log.plain(`CloudPanel Addons v${CLI_VERSION.replace(/^v/, "")}`);
   log.plain(`Dashboard: ${dashboardUrl()}`);
   const specs = installedAddons();
-  log.plain(specs.length ? `Installed: ${specs.map((spec) => spec.name).join(", ")}` : "No addons installed");
+  log.plain(specs.length ? `Enabled: ${specs.map((spec) => spec.name).join(", ")}` : "No addons enabled");
   log.plain("Run 'clp-addons status' for service and integration details.");
+}
+
+function addonArgs(verb: string, argv: string[]) {
+  if (argv.length === 0 || argv.some((arg) => arg.startsWith("-"))) fatal(`usage: clp-addons ${verb} <addon>...`);
+  return [...new Set(argv)].map(resolveAddon);
 }
 
 async function main(): Promise<number> {
@@ -124,6 +130,15 @@ async function main(): Promise<number> {
     case "--version":
     case "-v": log.plain(CLI_VERSION); return 0;
     case "install": await cmdInstall(rest); return 0;
+    case "enable":
+      for (const spec of addonArgs("enable", rest)) {
+        if (installedConfig(spec)) log.ok(`${spec.name} is already enabled`);
+        else await applyEnable(spec.name);
+      }
+      return 0;
+    case "disable":
+      for (const spec of addonArgs("disable", rest)) applyDisable(spec.name);
+      return 0;
     case "update": await cmdUpdate(rest); return 0;
     case "recon": await runRecon(); return 0;
     case "repair": await cmdRepair(rest); return 0;
@@ -167,7 +182,7 @@ async function main(): Promise<number> {
     }
     case "status": await cmdStatus(); return 0;
     case "maintenance": await cmdMaintenance(rest); return 0;
-    case "uninstall": cmdUninstall(rest); return 0;
+    case "self-uninstall": cmdSelfUninstall(rest); return 0;
     case "action": return await cmdAction(rest);
     case "smtp-submit": return await runSmtpSubmit(rest);
     case "terminal-pty": return await runTerminalPty(rest);

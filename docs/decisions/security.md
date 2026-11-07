@@ -100,7 +100,7 @@ maintenance bypass does not authorize a basic-auth bypass. Nginx commands and
 worker handovers are bounded on both the change and recovery paths, leaving
 recovery time within the gateway's 60-second deadline. Only the sign-in
 window's own page lets a form leave, and only to the one site it signs in to.
-Disabling or uninstalling removes the sign-in helper from every site. Accepted
+Disabling removes the sign-in helper from every site. Accepted
 IP bypasses stay in their respective CloudPanel or Maintenance Mode settings.
 Optional
 Varnish automation runs fixed WP-CLI commands after dropping root to the site's
@@ -376,6 +376,6 @@ verifying. Firewalls, Cloudflare-only rules, basic auth and maintenance pages ar
 never bypassed. Every MainWP route is administrator-only behind CSRF; Connect and
 cleanup need explicit confirmation. Repair only queues a runtime-bounded policy
 pass; site code and enrollment run outside the global operation lock. Each
-policy checks the enabled config under its lock, and disable and uninstall hold
+policy checks the enabled config under its lock, and disable holds
 both policy locks while withdrawing it. Revoking MainWP access does not undo
 what was done through it or end WordPress sessions it opened.
