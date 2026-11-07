@@ -603,15 +603,19 @@ test("a box whose operator already turned updates on reads as configured outside
 test("root's lock leaves the protections read-only and the rest of the page as it was", async () => {
   const state = await act(box(), ["state"]);
   const open = dashboardView(state);
-  const locked = dashboardView(state, Date.now(), true);
+  const locked = dashboardView(state, Date.now(), "locked");
+  const damaged = dashboardView(state, Date.now(), "damaged");
   const switchOf = (html: string, key: string) => html.match(new RegExp(`data-setting="${key}"[^>]*>`))![0];
   expect(open).not.toContain("clp-addons unlock system-tweaks");
   expect(locked).toContain("<code>clp-addons unlock system-tweaks</code>");
   for (const key of ["confineFileManager", "blockVhostInjection", "panel", "ssh"]) {
     expect(switchOf(open, key)).not.toContain("disabled");
     expect(switchOf(locked, key)).toContain("disabled");
+    expect(switchOf(damaged, key)).toContain("disabled");
   }
   expect(switchOf(locked, "enabled")).not.toContain("disabled");
+  expect(damaged).toContain("The root lock file is damaged");
+  expect(damaged).toContain("<code>clp-addons lock</code>");
 });
 
 test("switching on writes only the drop-in, and switching off restores the operator's own setup", async () => {

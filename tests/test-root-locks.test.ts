@@ -3,7 +3,7 @@ import { afterAll, beforeAll, expect, test } from "bun:test";
 import { chmodSync, mkdtempSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { createAuthActionServer } from "../cli/auth-action";
-import { LOCKABLE_ADDONS, addonLocked, lockedAddons } from "../lib/root-locks";
+import { LOCKABLE_ADDONS, addonLocked, lockState, lockedAddons } from "../lib/root-locks";
 
 const uid = process.getuid?.() ?? 0;
 let dir = "";
@@ -81,6 +81,14 @@ test("a lock file that does not parse counts as locking everything", () => {
   writeFileSync(file, "{");
   expect(() => lockedAddons(file, uid)).toThrow("is not valid JSON");
   expect(addonLocked("system-tweaks", file, uid)).toBe(true);
+});
+
+test("the page can tell a damaged lock file from root's lock", () => {
+  const file = locks(["system-tweaks"]);
+  expect(lockState("system-tweaks", file, uid)).toBe("locked");
+  expect(lockState("system-tweaks", locks([]), uid)).toBe("unlocked");
+  writeFileSync(file, "{");
+  expect(lockState("system-tweaks", file, uid)).toBe("damaged");
 });
 
 test("a lock directory others can write counts as locking everything", () => {

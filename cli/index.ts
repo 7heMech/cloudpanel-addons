@@ -84,13 +84,15 @@ async function cmdAction(argv: string[]): Promise<number> {
 function cmdLock(argv: string[], lock: boolean): void {
   const [addon, ...extra] = argv;
   if (extra.length || (!lock && !addon)) fatal(`usage: clp-addons ${lock ? "lock [<addon>]" : "unlock <addon>"}`);
-  let locked: string[];
-  try {
-    locked = lockedAddons();
-  } catch (error) {
-    fatal(`${error instanceof Error ? error.message : String(error)}, so every lockable addon counts as locked. ` +
-      `Note what it locked, remove it with rm ${ROOT_LOCKS_FILE}, then lock those addons again`);
-  }
+  const read = (): string[] => {
+    try {
+      return lockedAddons();
+    } catch (error) {
+      fatal(`${error instanceof Error ? error.message : String(error)}, so every lockable addon counts as locked. ` +
+        `Note what it locked, remove it with rm ${ROOT_LOCKS_FILE}, then lock those addons again`);
+    }
+  };
+  const locked = read();
   if (!addon) {
     log.plain(locked.length ? `Locked: ${locked.join(", ")}` : "Nothing is locked.");
     log.plain(`Lockable: ${LOCKABLE_ADDONS.join(", ")}`);
@@ -100,7 +102,7 @@ function cmdLock(argv: string[], lock: boolean): void {
   // An entry for an addon that no longer declares anything can still be unlocked.
   if (lock && !isLockable(addon)) fatal(`${addon} has nothing to lock; lockable: ${LOCKABLE_ADDONS.join(", ")}`);
   const changed = withFileLockSync(ROOT_LOCKS_LOCK, 15, "another lock or unlock is still running", () => {
-    const current = lockedAddons();
+    const current = read();
     if (lock === current.includes(addon)) return false;
     writeLockedAddons(lock ? [...current, addon] : current.filter((name) => name !== addon));
     return true;

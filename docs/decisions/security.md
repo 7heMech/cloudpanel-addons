@@ -142,7 +142,7 @@ An administrator can switch a protection off from the web, so a stolen
 administrator session could switch them all off. `clp-addons lock <addon>`
 freezes them as they are, on or off: the gateway refuses the verbs the addon
 declares `lock`, on the one-shot and streaming paths alike, and the manager
-refuses to disable the addon. Only root changes a lock, from a shell; neither
+refuses to enable or disable the addon. Only root changes a lock, from a shell; neither
 command is a gateway verb, and both hold a file lock so concurrent runs keep
 each other's change. A root shell is not held to it, since it could unlock
 anyway. System Tweaks declares its Settings, Failed logins and Database
@@ -154,8 +154,10 @@ them, read through one descriptor opened without following links. Only a
 missing file means no locks. A file that is not root's alone, not a regular
 file or unreadable, or a directory others could remove it from, locks every
 lockable addon; `lock` and `unlock` then refuse and tell root to remove it and
-lock again what should stay locked. The page leaves a locked switch read-only
-and names the command.
+lock again what should stay locked. `lock` creates the directory `0755` whatever
+root's umask. The page leaves a locked switch read-only, taking which switches
+from the verbs' `lock` flag, and names the command, or `clp-addons lock` when
+the file is damaged.
 
 ## CloudPanel authentication
 

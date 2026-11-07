@@ -8,6 +8,10 @@ root. The page then shows them read-only and System Tweaks cannot be disabled
 from it. `clp-addons unlock system-tweaks` hands them back; `clp-addons lock`
 lists what is locked.
 
+If `/etc/clp-addons/locks.json` is damaged or not root's alone, everything
+lockable stays locked and `lock` and `unlock` refuse. Note which addons it
+locked, `rm /etc/clp-addons/locks.json`, then lock those addons again.
+
 ## Automatic updates
 
 1. Open **Addons → System Tweaks**. If `unattended-upgrades` is missing, choose

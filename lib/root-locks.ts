@@ -1,18 +1,25 @@
 // Addons root has locked: the gateway refuses their `lock` verbs and the
-// manager refuses to disable them, so only a root shell can change what they
-// protect. See docs/decisions/security.md#root-locks.
-import { closeSync, constants, fstatSync, lstatSync, openSync, readFileSync, type Stats } from "node:fs";
+// manager refuses to enable or disable them, so only a root shell can change
+// what they protect. See docs/decisions/security.md#root-locks.
+import { chmodSync, closeSync, constants, fstatSync, lstatSync, mkdirSync, openSync, readFileSync, type Stats } from "node:fs";
 import { dirname } from "node:path";
+import { CONFIG_DIR, LOCK_DIR } from "../cli/paths";
 import { ADDON_VERBS, type GatewayAddon } from "./gateway-protocol";
 import { writeFileAtomic } from "./atomic-write";
 
-export const ROOT_LOCKS_FILE = "/etc/clp-addons/locks.json";
+export const ROOT_LOCKS_FILE = `${CONFIG_DIR}/locks.json`;
 /** Serialises `lock` and `unlock`, which read the list and write it back. */
-export const ROOT_LOCKS_LOCK = "/run/lock/clp-addons/locks.lock";
+export const ROOT_LOCKS_LOCK = `${LOCK_DIR}/locks.lock`;
+
+/** Whether a lock on its addon withholds this verb from the web. */
+export function declaresLock(addon: string, verb: string): boolean {
+  const declared = (ADDON_VERBS as Record<string, Record<string, object>>)[addon]?.[verb];
+  return !!declared && "lock" in declared && declared.lock === true;
+}
 
 /** Addons with at least one verb a lock covers. */
 export const LOCKABLE_ADDONS = (Object.keys(ADDON_VERBS) as GatewayAddon[]).filter((addon) =>
-  Object.values(ADDON_VERBS[addon]).some((declared) => "lock" in declared && declared.lock === true));
+  Object.keys(ADDON_VERBS[addon]).some((verb) => declaresLock(addon, verb)));
 
 export function isLockable(addon: string): boolean {
   return (LOCKABLE_ADDONS as string[]).includes(addon);
@@ -60,24 +67,34 @@ export function lockedAddons(file = ROOT_LOCKS_FILE, rootUid = 0): string[] {
   }
 }
 
-/** Whether a verb is one root's lock on its addon withholds from the web right now. */
-export function verbLocked(addon: string, verb: string, file = ROOT_LOCKS_FILE, rootUid = 0): boolean {
-  const declared = (ADDON_VERBS as Record<string, Record<string, object>>)[addon]?.[verb];
-  return !!declared && "lock" in declared && declared.lock === true && addonLocked(addon, file, rootUid);
+/** "damaged" when the lock file cannot be trusted, which locks every lockable addon. */
+export type LockState = "unlocked" | "locked" | "damaged";
+
+/** An addon with nothing to lock is always "unlocked". */
+export function lockState(addon: string, file = ROOT_LOCKS_FILE, rootUid = 0): LockState {
+  if (!isLockable(addon)) return "unlocked";
+  try {
+    return lockedAddons(file, rootUid).includes(addon) ? "locked" : "unlocked";
+  } catch {
+    return "damaged";
+  }
 }
 
-/** Whether a lockable addon is locked; true too when the file cannot be trusted. Never one with nothing to lock. */
+/** Whether a lockable addon is locked, including by a damaged lock file. */
 export function addonLocked(addon: string, file = ROOT_LOCKS_FILE, rootUid = 0): boolean {
-  if (!isLockable(addon)) return false;
-  try {
-    return lockedAddons(file, rootUid).includes(addon);
-  } catch {
-    return true;
-  }
+  return lockState(addon, file, rootUid) !== "unlocked";
+}
+
+/** Whether root's lock withholds this verb from the web right now. */
+export function verbLocked(addon: string, verb: string, file = ROOT_LOCKS_FILE, rootUid = 0): boolean {
+  return declaresLock(addon, verb) && addonLocked(addon, file, rootUid);
 }
 
 /** Readable by the manager, which shows the locks; written by root alone. */
 export function writeLockedAddons(addons: string[], file = ROOT_LOCKS_FILE): void {
+  // mkdir's mode is masked by root's umask, which could leave a directory
+  // lockedAddons refuses, so the mode is set outright.
+  if (mkdirSync(dirname(file), { recursive: true })) chmodSync(dirname(file), 0o755);
   writeFileAtomic(file, `${JSON.stringify({ addons: [...new Set(addons)].sort() }, null, 2)}\n`,
-    { mode: 0o644, owner: { uid: 0, gid: 0 }, createParent: true });
+    { mode: 0o644, owner: { uid: 0, gid: 0 } });
 }

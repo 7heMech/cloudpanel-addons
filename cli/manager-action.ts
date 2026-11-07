@@ -277,7 +277,7 @@ function rejectImpossible(kind: ManagerJobKind, addon: string): string | null {
   const isEnabled = enabled(addon);
   if (kind === "enable" && isEnabled) return `${addon} is already enabled`;
   if (kind === "disable" && !isEnabled) return `${addon} is already disabled`;
-  if (kind === "disable" && addonLocked(addon)) return `root has locked ${addon}; run clp-addons unlock ${addon} on the server first`;
+  if (addonLocked(addon)) return `root has locked ${addon}; run clp-addons unlock ${addon} on the server first`;
   return null;
 }
 

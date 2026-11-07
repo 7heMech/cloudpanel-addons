@@ -9,7 +9,7 @@ import { BACKUP_COMPRESSION_ERROR, validBackupCompression } from "../backup-comp
 import { FIREWALL_PROTOCOLS, ruleKey, type FirewallProtocol, type FirewallStatus } from "../firewall";
 import { LOGIN_JAILS } from "../login-jails";
 import { MEMORY_ERROR, memoryChange } from "../memory";
-import { addonLocked } from "../../../lib/root-locks";
+import { lockState } from "../../../lib/root-locks";
 import { systemTweaksService } from "./service";
 import { dashboardView, layout } from "./views";
 
@@ -29,7 +29,7 @@ function firewallReply(result: ActionResult<FirewallStatus>): Response {
 /** Every change answers with the page it leaves behind, so the browser repaints instead of reloading. */
 function repaint(result: ActionResult<SystemTweaksState>): Response {
   if (!result.ok || !result.data) return json(result, 400);
-  return json({ ok: true, html: dashboardView(result.data, Date.now(), addonLocked("system-tweaks")) });
+  return json({ ok: true, html: dashboardView(result.data, Date.now(), lockState("system-tweaks")) });
 }
 
 export async function handle(
@@ -47,7 +47,7 @@ export async function handle(
     try {
       const result = await systemTweaksService.state();
       if (!result.ok || !result.data) throw new Error(result.error ?? "the system state is unavailable");
-      return htmlResponse(layout("System Tweaks", dashboardView(result.data, Date.now(), addonLocked("system-tweaks")), updateNotice), { csrf });
+      return htmlResponse(layout("System Tweaks", dashboardView(result.data, Date.now(), lockState("system-tweaks")), updateNotice), { csrf });
     } catch (error) {
       return htmlResponse(
         layout("System Tweaks", `<div class="alert" role="alert">${Bun.escapeHTML(errorMessage(error))}</div>`, updateNotice),
