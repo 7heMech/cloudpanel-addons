@@ -1,11 +1,15 @@
 @import "../../../lib/assets/fleet-row-selection.css";
 #cf-summary { margin: 4px 0 0; }
 .toolbar-actions { margin-left: auto; }
+.cf-off-only { margin: 0; min-height: 42px; padding: 8px 16px; font-size: 16px; }
+.cf-off-only:has(input:checked) { border-color: var(--primary); background: rgb(38 125 221 / 12%); color: var(--heading); }
+.cf-off-only:has(input:focus-visible) { outline: 2px solid var(--accent); outline-offset: 1px; }
 .cf-policy { flex-wrap: nowrap; }
 .split-card.cf-policy > .switch { flex-basis: auto; }
 /* Where the shared fleet table becomes a card, this row keeps the domain and
    its action on one line instead. */
 @media (max-width: 940px) {
+  .cf-off-only { flex: 1 1 100%; }
   .cloudflare-site-table tbody tr { flex-wrap: nowrap; align-items: center; padding: 10px 20px; }
   .cloudflare-site-table td.site-cell { display: flex; align-items: center; flex: 1 1 auto; min-width: 0; }
   .cloudflare-site-table td.action-cell { width: auto; flex: 0 0 auto; margin-left: auto; display: flex; align-items: center; justify-content: flex-end; }
