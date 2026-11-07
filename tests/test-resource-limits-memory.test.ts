@@ -430,7 +430,7 @@ test("old MySQL ownership marker is rewritten without restarting the server", ()
   expect(s.calls.some((call) => call.includes("restart"))).toBe(false);
 });
 
-test("the shared budget counts current PHP workers and flags unlimited or unreadable PHP settings", async () => {
+test("the budget sets PHP's worst case against RAM and names what to fix", async () => {
   const { memoryCard } = await import("../addons/resource-limits/app/memory-view");
   const { STOCK_PROFILE, phpMemoryLimitMb } = await import("../addons/resource-limits/action");
   const s = server(8192);
@@ -439,10 +439,17 @@ test("the shared budget counts current PHP workers and flags unlimited or unread
     domain: "shop.example.com", siteUser: "shop", phpVersion: "8.3", poolFile: "pool.conf", memoryLimitMb: 256,
     current: { ...STOCK_PROFILE, maxChildren: 3 }, categoryId: null, categoryName: null, drifted: false,
   };
-  expect(memoryCard(memory, [site])).toContain("PHP workers × memory_limit</dt><dd>768 MB");
-  expect(memoryCard(memory, [{ ...site, memoryLimitMb: -1 }])).toContain("1 site(s) have unlimited PHP memory");
-  expect(memoryCard(memory, [{ ...site, memoryLimitMb: null }])).toContain("1 have no readable limit");
-  expect(memoryCard(memory, [{ ...site, memoryLimitMb: 4096 }])).toContain("These add up to more");
+  const categorised = { ...site, categoryId: "lite", categoryName: "Lite" };
+  expect(memoryCard(memory, [categorised])).toContain("PHP worst case <b>768 MB</b>");
+  expect(memoryCard(memory, [categorised])).toContain(">Fits</span>");
+  expect(memoryCard(memory, [{ ...categorised, memoryLimitMb: -1 }])).toContain("1 site has an unlimited or unreadable memory_limit");
+  expect(memoryCard(memory, [{ ...categorised, memoryLimitMb: null }])).toContain(">Unknown</span>");
+  expect(memoryCard(memory, [{ ...categorised, memoryLimitMb: 4096 }])).toContain("Lower Lite&#x27;s worker limit");
+  const stock = { ...site, current: { ...STOCK_PROFILE } };
+  const drifted = { ...stock, domain: "blog.example.com", categoryId: "lite", categoryName: "Lite", drifted: true };
+  expect(memoryCard(memory, [stock])).toContain("63 GB of it is 1 site on CloudPanel&#x27;s 250 workers: put it in a category.");
+  expect(memoryCard(memory, [drifted])).toContain("put it back below.");
+  expect(memoryCard(memory, [stock, drifted])).toContain("2 sites on CloudPanel&#x27;s 250 workers: put them in a category, or back in theirs below.");
   expect(phpMemoryLimitMb("256M")).toBe(256);
   expect(phpMemoryLimitMb("2G")).toBe(2048);
   expect(phpMemoryLimitMb("262144K")).toBe(256);

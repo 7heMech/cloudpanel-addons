@@ -22,7 +22,7 @@ function working(control, text) {
   line.innerHTML = '<span class="badge">Working</span> ';
   line.append(text);
   const after = option ? option.lastElementChild
-    : row ? row.querySelector('.tweak-note') : control.closest('.st-fold, .st-install');
+    : row ? row.querySelector('.tweak-note') : control.closest('.st-install');
   if (after) after.after(line);
   const page = setTimeout(function () {
     notify(text + ' Other settings wait until it finishes.', 'warn');

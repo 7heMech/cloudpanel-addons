@@ -1,4 +1,4 @@
-import type { PoolSiteState } from "../action";
+import { STOCK_PROFILE, type PoolSiteState } from "../action";
 import { esc } from "../../../lib/app-http";
 import { CONNECTION_MB, type MemoryProfile } from "../memory";
 import type { ResourceMemoryState } from "../memory-settings";
@@ -55,39 +55,51 @@ export function size(mb: number): string {
 }
 
 /**
- * What the profile gives each part of the server, and what is left for PHP.
- * MySQL and Redis are counted at the profile's sizes even while their switch
- * is off, since what they use then is not known here.
+ * One bar the size of RAM: what the profile gives each service, then PHP's
+ * worst case, every site's worker limit × memory_limit at once, which runs off
+ * the end when it does not fit. MySQL and Redis are counted at the profile's
+ * sizes even while their switch is off.
  */
 function memoryBudget(state: Memory, sites: PoolSiteState[]): string {
   const { plan } = state;
-  const parts: [string, number][] = [
-    ["MySQL buffer pool", state.mysql.installed ? plan.bufferPoolMb : 0],
-    ["MySQL temporary tables", state.mysql.installed ? plan.tempTableRamMb : 0],
-    ["MySQL connections, at most", state.mysql.installed ? plan.maxConnections * CONNECTION_MB : 0],
-    ["Redis", state.redis.installed ? plan.redisMb : 0],
-    ["Varnish", state.varnishMb ?? 0],
-    ["Memcached", state.memcachedMb ?? 0],
-  ];
-  const unknown = sites.filter((site) => site.memoryLimitMb === null).length;
-  const unlimited = sites.filter((site) => site.memoryLimitMb === -1).length;
-  const phpMb = sites.reduce((sum, site) => sum + (site.memoryLimitMb !== null && site.memoryLimitMb > 0 ? site.current.maxChildren * site.memoryLimitMb : 0), 0);
-  parts.push(["PHP workers × memory_limit", phpMb]);
-  const shown = parts.filter(([, mb]) => mb > 0);
-  const left = plan.ramMb - shown.reduce((total, [, mb]) => total + mb, 0);
-  const rows = shown.map(([name, mb]) => `
-          <dt>${esc(name)}</dt><dd>${esc(size(mb))}</dd>`).join("");
-  const rest = unknown || unlimited ? `<dt>Remaining budget</dt><dd>${badge("Unknown", "warn")} ${unlimited} site(s) have unlimited PHP memory; ${unknown} have no readable limit.</dd>` : left > 0 ? `<dt>Left for the OS and other processes</dt><dd>${esc(size(left))}</dd>`
-    : `<dt>Left for the OS and other processes</dt><dd>${badge("None", "bad")} These add up to more than the server's ${esc(size(plan.ramMb))}.</dd>`;
+  const parts = [
+    { name: "MySQL", tone: "s1", mb: state.mysql.installed ? plan.bufferPoolMb + plan.tempTableRamMb + plan.maxConnections * CONNECTION_MB : 0 },
+    { name: "Redis", tone: "s2", mb: state.redis.installed ? plan.redisMb : 0 },
+    { name: "Varnish", tone: "s3", mb: state.varnishMb ?? 0 },
+    { name: "Memcached", tone: "s4", mb: state.memcachedMb ?? 0 },
+  ].filter((part) => part.mb > 0);
+  const leftMb = Math.max(plan.ramMb - parts.reduce((sum, part) => sum + part.mb, 0), 0);
+  const counted = sites.filter((site) => site.memoryLimitMb !== null && site.memoryLimitMb > 0);
+  const worst = (site: PoolSiteState) => site.current.maxChildren * site.memoryLimitMb!;
+  const phpMb = counted.reduce((sum, site) => sum + worst(site), 0);
+  const over = phpMb > leftMb;
+  const php = { name: "PHP worst case", tone: "php", mb: over ? leftMb : phpMb };
+  const blocks = [...parts, php].filter((part) => part.mb > 0).map((part) => `<span class="mb-part mb-${part.tone}${part === php && over ? " mb-over" : ""}" style="flex-grow:${part.mb / plan.ramMb}" title="${esc(`${part.name}: ${size(part === php ? phpMb : part.mb)}`)}"></span>`).join("");
+  const free = over ? "" : `<span class="mb-part mb-free" style="flex-grow:${(leftMb - phpMb) / plan.ramMb}" title="${esc(`Free: ${size(leftMb - phpMb)}`)}"></span>`;
+  const legend = [...parts, { ...php, mb: phpMb }].map((part) => `<li><i class="mb-${part.tone}"></i>${esc(part.name)} <b>${esc(size(part.mb))}</b></li>`).join("");
+  const stock = counted.filter((site) => site.categoryId === null || site.drifted);
+  const loose = stock.filter((site) => site.categoryId === null).length;
+  const stockMb = stock.reduce((sum, site) => sum + worst(site), 0);
+  const fix = loose === stock.length ? "put them in a category" : loose ? "put them in a category, or back in theirs below" : "put them back below";
+  const biggest = [...Map.groupBy(counted.filter((site) => !stock.includes(site)), (site) => site.categoryName ?? "")]
+    .map(([name, list]) => [name, list.reduce((sum, site) => sum + worst(site), 0)] as const).sort((a, b) => b[1] - a[1])[0];
+  const why = stock.length
+    ? `${size(stockMb)} of it is ${stock.length === 1 ? "1 site" : `${stock.length} sites`} on CloudPanel's ${STOCK_PROFILE.maxChildren} workers: ${stock.length === 1 ? fix.replace("them", "it").replace("theirs", "its") : fix}.`
+    : biggest ? `Lower ${biggest[0]}'s worker limit, or its sites' memory_limit.` : "";
+  const uncounted = sites.length - counted.length;
+  const unknown = `${uncounted} ${uncounted === 1 ? "site has" : "sites have"} an unlimited or unreadable memory_limit and ${uncounted === 1 ? "is" : "are"} not counted.`;
+  const verdict = over
+    ? `${badge(`${size(phpMb - leftMb)} over`, "warn")} <span>${esc(why)}${uncounted ? ` ${esc(unknown)}` : ""}</span>`
+    : uncounted
+      ? `${badge("Unknown", "warn")} <span>${esc(unknown)}</span>`
+      : `${badge("Fits", "ok")} <span>Every PHP worker at its memory_limit fits in RAM.</span>`;
   return `
-      <details class="st-fold" id="memory-budget">
-        <summary>Preview this profile's memory budget</summary>
-        <p class="hint st-suggest">Assumes both MySQL sizing and Cap Redis are on. PHP uses each pool’s current worker limit × its CloudPanel memory_limit; this is an estimate of simultaneous request limits, not measured usage or a process memory cap. PHP extensions and other services need additional RAM.</p>
-        <dl class="kv st-kv">
-          <dt>RAM</dt><dd>${esc(size(plan.ramMb))}</dd>${rows}
-          ${rest}
-        </dl>
-      </details>`;
+      <div class="mb" id="memory-budget">
+        <div class="mb-head"><span>Memory budget</span><b>${esc(size(plan.ramMb))} RAM</b></div>
+        <div class="mb-bar${over ? " mb-bar-over" : ""}" role="img" aria-label="${esc(`${size(plan.ramMb)} RAM: ${[...parts, { ...php, mb: phpMb }].map((part) => `${part.name} ${size(part.mb)}`).join(", ")}`)}">${blocks}${free}</div>
+        <ul class="mb-legend">${legend}</ul>
+        <p class="mb-verdict">${verdict}</p>
+      </div>`;
 }
 
 function mysqlMemoryLine(state: Memory): string {

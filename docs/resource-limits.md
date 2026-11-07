@@ -21,8 +21,9 @@ what the kernel kills first when memory runs out.
 
 1. Choose a **Memory profile**: **Balanced**, **Database-heavy** or
    **Cache-heavy**. This chooses the sizes; only the MySQL and Redis switches
-   below enable them. **Preview this profile's memory budget** shows the plan
-   assuming both switches are on. Only the profile is saved: the sizes are
+   below enable them. **Memory budget** shows RAM split between the services
+   at the profile's sizes and PHP's worst case, and what to change when PHP
+   does not fit. Only the profile is saved: the sizes are
    worked out again each time MySQL or Redis starts, so after you resize the
    server they follow its new RAM at the next boot.
 2. Switch on **Size MySQL to this server** to replace CloudPanel's fixed MySQL

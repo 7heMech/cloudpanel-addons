@@ -168,7 +168,7 @@ process, which is MySQL, and every site loses its database.
 Settings hold a profile (`balanced`, `database` or `cache`) and three switches,
 never a size. Choosing a profile does not enable a service's sizing switch.
 With both sizing switches off, the page says Sizing off and retains the chosen
-profile for previewing. The expandable budget always assumes both sizing
+profile for previewing. The budget always assumes both sizing
 switches are on; each service's row reports its own state. The Redis row calls
 the cap On only when its switch is enabled and the live values match the
 profile, so an operator's own matching limit does not look like an active
@@ -281,21 +281,21 @@ limits and the kill order do the job.
 
 ### The budget
 
-The expandable preview counts MySQL's buffer pool, connection budget and
-in-memory temporary-table allowance, Redis's cap, Varnish's `-s malloc` size
-and Memcached's `-m` from `/etc/memcached.conf`. It also sums each PHP pool's
+One bar is the server's RAM. It holds MySQL (buffer pool, connection budget and
+in-memory temporary tables), Redis's cap, Varnish's `-s malloc` size and
+Memcached's `-m` from `/etc/memcached.conf`, then PHP's worst case: each pool's
 current `pm.max_children` × the `memory_limit` in CloudPanel's `php_settings`
-row. It uses the current pool, including drift, rather than the category that
-repair will apply. The remainder is for the OS and other processes. An unreadable
-PHP limit or `-1` (unlimited) makes that remainder unknown instead of claiming
-spare RAM. The preview assumes both sizing switches are on; their rows show
-whether they are actually enabled.
+row. It uses the current pool, including drift, rather than the category repair
+will apply. When PHP does not fit, its part runs off the end and the line below
+says by how much and what to change: sites in no category or drifted back to
+CloudPanel's 250 workers first, otherwise the category taking the most. A site
+with an unreadable or unlimited (`-1`) `memory_limit` is not counted, and the
+line says so rather than calling it a fit.
 
 This is a planning estimate of simultaneous request limits, not RSS or an
-enforced process-memory ceiling. Extensions, application overrides, per-session
-temporary tables and other processes can consume additional RAM. MySQL and Redis
-are counted at profile sizes even while their switches are off, since their
-current allowances are not known without querying the services.
+enforced process-memory ceiling. MySQL and Redis are counted at profile sizes
+even while their switches are off, since their current allowances are not known
+without querying the services.
 
 ## Renamed from PHP Resources
 
