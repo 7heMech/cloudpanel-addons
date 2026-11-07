@@ -1819,6 +1819,7 @@ test("the Failed logins card lists bans with an Unblock each, and warns about wh
   const html = dashboardView({ ...base, loginJails: jails });
   expect(html).toContain(`data-jail="clp-addons-panel" data-ip="203.0.113.7" onclick="unban(this)">Unblock</button>`);
   expect(html).toContain("Panel, until 2026-11-04 12:18:24");
+  expect(html).toContain(`<details class="st-fold" id="st-bans">`);
   expect(html).toContain("SSH accepts passwords, and root can log in with a password.");
   expect(html).toContain("fail2ban is watching.");
   const quiet = dashboardView({ ...base, loginJails: { ...jails, bans: [], sshd: { password: false, rootLogin: "prohibit-password" } } });

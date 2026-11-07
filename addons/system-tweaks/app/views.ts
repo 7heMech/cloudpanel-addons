@@ -666,12 +666,12 @@ function sshdWarning(sshd: SshLogin | null): string {
 
 function bansTable(bans: Ban[]): string {
   const command = `<p class="hint">Or run <code>fail2ban-client unban &lt;address&gt;</code>.</p>`;
-  if (!bans.length) return `<details class="st-fold"><summary>Blocked addresses: none</summary>${command}</details>`;
+  if (!bans.length) return `<details class="st-fold" id="st-bans"><summary>Blocked addresses: none</summary>${command}</details>`;
   const rows = bans.map((ban) => `
           <tr><td><span class="st-name">${esc(ban.ip)}</span><span class="hint st-detail">${ban.jail === PANEL_JAIL ? "Panel" : ban.jail === DOMAIN_JAIL ? "Custom domain, HTTPS" : "SSH"}, until ${esc(ban.until)}</span></td>
             <td class="st-state"><button class="btn btn-sm" type="button" data-jail="${esc(ban.jail)}" data-ip="${esc(ban.ip)}" onclick="unban(this)">Unblock</button></td></tr>`).join("");
   return `
-      <details class="st-fold" open>
+      <details class="st-fold" id="st-bans">
         <summary>${badge(String(bans.length), "warn")} Blocked address${bans.length === 1 ? "" : "es"}</summary>
         <div class="table-scroll"><table class="st-table"><thead><tr><th>Address</th><th class="st-state"></th></tr></thead>
           <tbody>${rows}</tbody></table></div>${command}
