@@ -506,3 +506,19 @@ test("no non-administrator reaches the terminal", () => {
     }
   }
 });
+
+test("old PHP Resources URLs redirect behind the administrator gate, including loaded site cards", () => {
+  const requests = [
+    { path: "/addons/php-resources/" },
+    { path: "/php-resources/site-card?domain=shop.example.com" },
+    { path: "/addons/php-resources/api/assign", method: "POST", body: "{}" },
+  ];
+  for (const result of probe(null, requests)) expect(result.status).toBe(302);
+  for (const result of probe({ user: "someone", roles: ["ROLE_USER"] }, requests)) expect(result.status).toBe(403);
+  const redirects = probe({ user: "admin", roles: ["ROLE_ADMIN"] }, requests);
+  expect(redirects.map((result) => result.status)).toEqual([308, 308, 308]);
+  expect(redirects.map((result) => result.location)).toEqual([
+    "/addons/resource-limits", "/addons/resource-limits/site-card?domain=shop.example.com", "/addons/resource-limits/api/assign",
+  ]);
+  expect(redirects.every((result) => (result.reached as string[]).length === 0)).toBe(true);
+});

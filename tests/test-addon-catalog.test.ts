@@ -44,7 +44,7 @@ test("every declared injection target is represented in the watch paths", () => 
 });
 
 test("every addon with privileged verbs declares them", () => {
-  for (const name of ["cloudflare-ips", "instatic", "stager", "maintenance", "php-resources", "git", "smtp", "terminal"]) {
+  for (const name of ["cloudflare-ips", "instatic", "stager", "maintenance", "resource-limits", "git", "smtp", "terminal"]) {
     expect(typeof ADDONS[name]!.action).toBe("function");
   }
   // It is markup injected into the panel's login page and has nothing to do as
@@ -61,7 +61,7 @@ test("required systemd dependencies survive into the catalog", () => {
 
 test("repair upkeep is the addons that ask for it, in catalog order", () => {
   const all = ADDON_NAMES.map((name) => ADDONS[name]!);
-  expect(addonRepairs(all).map((spec) => spec.name)).toEqual(["cloudflare-ips", "dns", "instatic", "stager", "maintenance", "php-resources", "git", "panel-tweaks", "system-tweaks", "wp-tools", "smtp"]);
+  expect(addonRepairs(all).map((spec) => spec.name)).toEqual(["cloudflare-ips", "dns", "instatic", "stager", "maintenance", "resource-limits", "git", "panel-tweaks", "system-tweaks", "wp-tools", "smtp"]);
   // Gated on being installed: repair passes the installed set, not every addon.
   expect(addonRepairs([ADDONS.stager!]).map((spec) => spec.name)).toEqual(["stager"]);
   expect(addonRepairs([ADDONS.terminal!])).toEqual([]);
@@ -69,7 +69,7 @@ test("repair upkeep is the addons that ask for it, in catalog order", () => {
 
 test("new-site work runs DNS before SMTP Relay, and only for installed addons", () => {
   const all = ADDON_NAMES.map((name) => ADDONS[name]!);
-  expect(addonNewSites(all).map((spec) => spec.name)).toEqual(["cloudflare-ips", "dns", "php-resources", "system-tweaks", "wp-tools", "smtp"]);
+  expect(addonNewSites(all).map((spec) => spec.name)).toEqual(["cloudflare-ips", "dns", "resource-limits", "system-tweaks", "wp-tools", "smtp"]);
   expect(addonNewSites([ADDONS.smtp!]).map((spec) => spec.name)).toEqual(["smtp"]);
 });
 

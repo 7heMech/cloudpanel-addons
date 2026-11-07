@@ -142,16 +142,6 @@ function setBackupCompression(control) {
   }, 'Saving remote backup compression…', 'Saved. Applies to the next remote backup.');
 }
 
-// The profile's select, or one of the three switches; MySQL's applies at its next restart.
-function setMemory(control) {
-  if (control.tagName === 'SELECT') {
-    const label = control.options[control.selectedIndex].textContent;
-    return change(control, '/api/memory', { profile: control.value }, 'Switching to the ' + label + ' profile…', 'Saved.');
-  }
-  const key = control.dataset.setting.slice('memory-'.length);
-  return change(control, '/api/memory', { [key]: control.checked }, switchText(control), 'Saved.');
-}
-
 // A change restarts the panel and waits for it to answer.
 function setPanelPhp(select) {
   const label = select.options[select.selectedIndex].textContent;

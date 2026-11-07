@@ -1,3 +1,4 @@
+@import "../../../lib/assets/tweak-rows.css";
 @import "../../../lib/assets/fleet-row-selection.css";
 .name-cell { max-width:340px; }
 .numeric { text-align:right; font-variant-numeric:tabular-nums; }
@@ -26,4 +27,33 @@
 @media (max-width:940px) {
   .fleet-table.php-sites-table td.site-select { display:none; }
   .fleet-table.php-sites-table td.site-cell { flex-basis:100%; }
+}
+
+.tweak-list > .tweak-row:first-child { padding-top: 0; border-top: 0; }
+.st-status { margin-top: 10px !important; }
+.st-status .badge { margin-right: 6px; }
+.st-alert { margin: 12px 0 0; }
+.st-fold { margin-top: 14px; }
+.st-fold > summary { cursor: pointer; color: var(--muted); font-size: 14px; }
+.st-fold > summary .badge { margin-right: 6px; }
+.st-fold[open] > summary { margin-bottom: 10px; }
+.st-fold > .hint { margin: 0 0 10px; font-size: 13px; }
+.tweak-heading select { flex: 0 1 260px; width: auto; min-width: 0; }
+.st-working .badge { animation: st-pulse 1.2s ease-in-out infinite; }
+@keyframes st-pulse { 50% { opacity: .45; } }
+.tweak-note p + p { margin-top: 2px; }
+#clp-content select:disabled { opacity: .6; cursor: progress; }
+.st-kv { display: grid; grid-template-columns: minmax(110px, 180px) minmax(0, 1fr); gap: 10px 25px; align-items: baseline;
+  margin: 0; padding-top: 18px; border-top: 1px solid var(--row-border); font-size: 14px; }
+.st-kv dt { color: var(--muted); }
+.st-kv dd { margin: 0; overflow-wrap: anywhere; }
+
+@media (max-width: 760px) {
+  .tweak-heading:has(select) { flex-wrap: wrap; }
+  .tweak-heading select { flex: 1 1 100%; }
+  .st-kv { grid-template-columns: minmax(0, 1fr); gap: 4px; }
+}
+
+@media (min-width: 761px) {
+  .tweak-body > .tweak-note { padding-right: 72px; }
 }

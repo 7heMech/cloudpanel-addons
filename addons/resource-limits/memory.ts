@@ -4,9 +4,9 @@
  * first when memory runs out. What is saved is a profile, never a number: the
  * numbers come from the RAM the server has when each service starts, so a
  * server resized up or down picks them up at its next boot. See "Memory
- * limits" in docs/decisions/system-tweaks.md.
+ * limits" in docs/decisions/resource-limits.md.
  */
-import { existsSync, readdirSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
+import { existsSync, readdirSync, readFileSync, rmSync, statSync, utimesSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { failAction, runCommand, withFileLockSync, type CommandResult } from "../../cli/action-common";
 import { CLI_BIN, LOCK_DIR, STATE_DIR, SYSTEMD_DIR } from "../../cli/paths";
@@ -95,7 +95,7 @@ export function memoryPlan(ramMb: number, profile: MemoryProfile): MemoryPlan {
   };
 }
 
-export const MYSQL_MARKER = "# Managed by clp-addons System Tweaks: MySQL memory sized for this server.";
+export const MYSQL_MARKER = "# Managed by clp-addons Resource Limits: MySQL memory sized for this server.";
 
 /**
  * Read after CloudPanel's own mysqld.cnf, so these win. `loose-` options are
@@ -144,9 +144,9 @@ export const DEFAULT_MEMORY_PATHS = {
   cgroupRoot: "/sys/fs/cgroup",
   procRoot: "/proc",
   /** When this addon last took its MySQL file away, so the page can say the old values are still running. */
-  stateFile: `${STATE_DIR}/system-tweaks/memory.json`,
+  stateFile: `${STATE_DIR}/resource-limits/memory.json`,
   /** Held while memory.json is read and rewritten: the page, repair and Redis's start hook all write it. */
-  stateLock: `${LOCK_DIR}/system-tweaks-memory.lock`,
+  stateLock: `${LOCK_DIR}/resource-limits-memory.lock`,
   bin: CLI_BIN,
 };
 
@@ -276,7 +276,7 @@ function optionFile(ctx: Context): string | null {
 
 function hookDropIn(bin: string, line: "ExecStartPre" | "ExecStartPost", kind: "mysql" | "redis"): string {
   return [
-    `# Managed by clp-addons System Tweaks: sizes ${kind === "mysql" ? "MySQL" : "Redis"} to this server's memory each time it starts.`,
+    `# Managed by clp-addons Resource Limits: sizes ${kind === "mysql" ? "MySQL" : "Redis"} to this server's memory each time it starts.`,
     "[Service]",
     // `-`: a failure leaves the last file in place and never stops the service starting.
     `${line}=-+${bin} sync-memory ${kind}`,
@@ -292,13 +292,17 @@ function reconcileMysqlFile(ctx: Context, settings: MemorySettings, check: boole
     return false;
   }
   const before = text(file);
-  if (before !== null && !before.startsWith(MYSQL_MARKER)) {
+  if (before !== null && !before.startsWith(MYSQL_MARKER) && !before.startsWith("# Managed by clp-addons System Tweaks: MySQL memory sized for this server.")) {
     if (!settings.mysql) return false;
-    throw new Error(`${file} is not this addon's; move it away to let System Tweaks manage it`);
+    throw new Error(`${file} is not this addon's; move it away to let Resource Limits manage it`);
   }
   const plan = settings.mysql ? memoryPlan(ramMb({ paths: ctx.paths }), settings.profile) : null;
   const after = plan ? mysqlOptionFile(plan, settings.profile) : null;
+  // Renaming the owner in a comment alone must not invent a pending MySQL restart.
+  const commentOnly = before !== null && after !== null && before.slice(before.indexOf("\n")) === after.slice(after.indexOf("\n"));
+  const times = commentOnly ? statSync(file) : null;
   if (!put(file, after)) return false;
+  if (times) utimesSync(file, times.atime, times.mtime);
   if (!plan) recordRemoval(ctx);
   else if (check) {
     try { checkEffective(ctx, plan, file); }
@@ -443,7 +447,7 @@ function reconcileRedisLive(ctx: Context, settings: MemorySettings, redisUnit: U
   if (!settings.redis && !capped) return false;
   const conf = redisConf(ctx);
   if (conf.password) {
-    if (settings.redis) throw new Error("Redis has a password in redis.conf, so System Tweaks leaves it alone");
+    if (settings.redis) throw new Error("Redis has a password in redis.conf, so Resource Limits leaves it alone");
     return false;
   }
   // Recorded first, so a cap set just before a failure is still taken off later.
@@ -481,7 +485,7 @@ function oomTargets(ctx: Context, mysqlUnit: Unit): { unit: Unit; score: number 
 }
 
 function oomDropIn(score: number): string {
-  return `# Managed by clp-addons System Tweaks: when memory runs out, the kernel kills site PHP before MySQL and nginx.\n[Service]\nOOMScoreAdjust=${score}\n`;
+  return `# Managed by clp-addons Resource Limits: when memory runs out, the kernel kills site PHP before MySQL and nginx.\n[Service]\nOOMScoreAdjust=${score}\n`;
 }
 
 /** Running processes keep the score they started with, so it is written to each one too. */
@@ -609,7 +613,7 @@ export function memoryStatus(settings: MemorySettings, options: MemoryOptions = 
   if (redisUnit.active) {
     try {
       const conf = redisConf(ctx);
-      if (conf.password) redis.problem = "Redis has a password in redis.conf, so System Tweaks leaves it alone.";
+      if (conf.password) redis.problem = "Redis has a password in redis.conf, so Resource Limits leaves it alone.";
       else {
         const live = redisLive(ctx, conf);
         redis.maxmemoryMb = Math.round(live.maxmemory / 1048576);

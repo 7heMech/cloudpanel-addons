@@ -8,7 +8,7 @@ import { fleetView as gitFleetView, fragment as gitFragment, layout as gitLayout
 import type { GitSiteStatus } from "../addons/git/app/service";
 import { fleetView as maintenanceFleetView, fragment as maintenanceFragment, layout as maintenanceLayout, siteView as maintenanceSiteView } from "../addons/maintenance/app/views";
 import type { MaintenanceFleet, MaintenanceSiteView } from "../addons/maintenance/app/service";
-import { dashboardView as phpResourcesDashboardView, layout as phpResourcesLayout } from "../addons/php-resources/app/views";
+import { dashboardView as resourceLimitsDashboardView, layout as resourceLimitsLayout } from "../addons/resource-limits/app/views";
 import { dashboardView as smtpDashboardView, layout as smtpLayout } from "../addons/smtp/app/views";
 import type { SmtpState } from "../addons/smtp/action";
 import { dashboardView as dnsDashboardView, layout as dnsLayout } from "../addons/dns/app/views";
@@ -35,7 +35,7 @@ import type { MainwpSiteView, MainwpView } from "../addons/wp-tools/mainwp";
 import { WORDPRESS_APPLICATIONS, type WpJobView, type WpSiteView } from "../addons/wp-tools/action";
 import { siteTabs, type SiteContext } from "../lib/site-context";
 import { DEFAULT_MAINTENANCE_TEMPLATE } from "../addons/maintenance/action";
-import { PRESET_CATEGORIES, STOCK_PROFILE, type PhpResourcesState, type PoolSiteState } from "../addons/php-resources/action";
+import { PRESET_CATEGORIES, STOCK_PROFILE, type ResourceLimitsState, type PoolSiteState } from "../addons/resource-limits/action";
 import type { MeasureJobView, PanelTweaksState } from "../addons/panel-tweaks/action";
 import { DEFAULT_BRANDING } from "../addons/panel-tweaks/branding";
 import type { PanelPhpStatus } from "../addons/system-tweaks/panel-php";
@@ -52,7 +52,7 @@ import { SECURITY_KEYS_TARGETS } from "../addons/security-keys/inject/targets";
 import type { UserKeysView } from "../addons/security-keys/action";
 import { dashboardView as systemTweaksDashboardView, layout as systemTweaksLayout } from "../addons/system-tweaks/app/views";
 import type { SystemTweaksState } from "../addons/system-tweaks/action";
-import { MEMORY_PROFILES, memoryPlan, type MemoryProfile, type MemorySettings } from "../addons/system-tweaks/memory";
+import { MEMORY_PROFILES, memoryPlan, type MemoryProfile, type MemorySettings } from "../addons/resource-limits/memory";
 
 const versions: AvailableTags = { tags: ["0.0.19", "0.0.18"], latest: "0.0.19", source: "registry" };
 const instances: InstanceView[] = [
@@ -439,28 +439,28 @@ function cloudflarePreviewState(url: URL) {
 const phpPoolSites: PoolSiteState[] = [
   {
     domain: "www.example.com", siteUser: "example", phpVersion: "8.3",
-    poolFile: "/etc/php/8.3/fpm/pool.d/www.example.com.conf",
+    memoryLimitMb: 256, poolFile: "/etc/php/8.3/fpm/pool.d/www.example.com.conf",
     current: { ...PRESET_CATEGORIES[1]!.profile },
     categoryId: "standard", categoryName: "Standard",
     drifted: false,
   },
   {
     domain: "shop.example.com", siteUser: "shop", phpVersion: "8.2",
-    poolFile: "/etc/php/8.2/fpm/pool.d/shop.example.com.conf",
+    memoryLimitMb: 256, poolFile: "/etc/php/8.2/fpm/pool.d/shop.example.com.conf",
     current: { ...PRESET_CATEGORIES[2]!.profile },
     categoryId: "pro", categoryName: "Pro",
     drifted: false,
   },
   {
     domain: "blog.example.com", siteUser: "blog", phpVersion: "8.3",
-    poolFile: "/etc/php/8.3/fpm/pool.d/blog.example.com.conf",
+    memoryLimitMb: 256, poolFile: "/etc/php/8.3/fpm/pool.d/blog.example.com.conf",
     current: { ...STOCK_PROFILE },
     categoryId: null, categoryName: null,
     drifted: false,
   },
   {
     domain: "a-rather-long-customer-hostname.staging.example.com", siteUser: "longname", phpVersion: "8.1",
-    poolFile: "/etc/php/8.1/fpm/pool.d/a-rather-long-customer-hostname.staging.example.com.conf",
+    memoryLimitMb: 256, poolFile: "/etc/php/8.1/fpm/pool.d/a-rather-long-customer-hostname.staging.example.com.conf",
     current: { ...STOCK_PROFILE },
     categoryId: "lite", categoryName: "Lite",
     drifted: true,
@@ -469,15 +469,16 @@ const phpPoolSites: PoolSiteState[] = [
 
 const phpMorePoolSites: PoolSiteState[] = ["news", "docs", "store", "events"].map((name, index) => ({
   domain: `${name}.example.org`, siteUser: name, phpVersion: index % 2 ? "8.2" : "8.3",
-  poolFile: `/etc/php/8.3/fpm/pool.d/${name}.example.org.conf`,
+  memoryLimitMb: 256, poolFile: `/etc/php/8.3/fpm/pool.d/${name}.example.org.conf`,
   current: { ...PRESET_CATEGORIES[index % 2]!.profile },
   categoryId: PRESET_CATEGORIES[index % 2]!.id, categoryName: PRESET_CATEGORIES[index % 2]!.name,
   drifted: false,
 }));
 
 /** ?default=off leaves new sites uncategorised; ?empty= drops the fleet; ?many shows search and filter. */
-function phpResourcesPreviewState(url: URL): PhpResourcesState {
+function resourceLimitsPreviewState(url: URL): ResourceLimitsState {
   return {
+    memory: memoryPreviewState(url),
     categories: url.searchParams.has("no-categories") ? [] : PRESET_CATEGORIES,
     defaultCategoryId: url.searchParams.get("default") === "off" ? null : "standard",
     sites: url.searchParams.has("empty") ? [] : url.searchParams.has("many") ? [...phpPoolSites, ...phpMorePoolSites] : phpPoolSites,
@@ -526,7 +527,7 @@ function databasePreviewState(url: URL): Exclude<SystemTweaksState["database"], 
 }
 
 /** `?memory=on`, `pending` or `off` (the default, with protection on); `?profile=` and `?ram=` in MB. */
-function memoryPreviewState(url: URL, settings?: MemorySettings): SystemTweaksState["memory"] {
+function memoryPreviewState(url: URL, settings?: MemorySettings): ResourceLimitsState["memory"] {
   const mode = url.searchParams.get("memory") ?? "off";
   const profile = (MEMORY_PROFILES as readonly string[]).includes(url.searchParams.get("profile") ?? "") ? url.searchParams.get("profile") as MemoryProfile : "balanced";
   const chosen = settings ?? { profile, mysql: mode !== "off", redis: mode !== "off", oom: true };
@@ -601,7 +602,6 @@ function systemTweaksPreviewState(url: URL): SystemTweaksState {
       level: 3, threads: 1, supported: true, installed: true, problem: "",
     },
     database: databasePreviewState(url),
-    memory: memoryPreviewState(url),
     firewall: { available: true, protocols: { 9: "udp", 10: "udp", 11: "both" }, udpPorts: url.searchParams.has("noudp") ? [] : ["53", "51820"] },
     vhostGuard: {
       enabled: url.searchParams.get("vhost") !== "off", active: url.searchParams.get("vhost") !== "off",
@@ -661,8 +661,7 @@ function systemTweaksPreviewMutation(path: string, source: URL, body: Record<str
     if (!("error" in state.database)) {
       state.database = { ...state.database, loopback: body.enabled === true, fileInPlace: body.enabled === true, exposed: body.enabled === true ? [] : ["*:3306", "*:33060"] };
     }
-  } else if (path.endsWith("/memory") && !("error" in state.memory)) {
-    state.memory = memoryPreviewState(source, { ...state.memory.settings, ...body });
+
   } else if (path.endsWith("/backup-compression")) {
     state.backupCompression = { ...state.backupCompression, enabled: body.enabled === true, active: body.enabled === true, level: body.level, threads: body.threads };
   } else if (path.endsWith("/clpctl-guard")) {
@@ -1536,7 +1535,7 @@ const panelCss: Record<string, string> = {};
 
 const finishedPreviewJobs = new Set<string>();
 let previewEnabled: string[] | null = null;
-let phpChanges: PhpResourcesState | null = null;
+let phpChanges: ResourceLimitsState | null = null;
 const previewDeployments = new Map<string, GitSiteStatus>();
 let previewManagerJob: import("../cli/manager-action").ManagerJobView | null = null;
 let previewJobNumber = 0;
@@ -1638,9 +1637,10 @@ function instaticPreviewMutation(path: string, body: Record<string, any>): Respo
 }
 
 function phpPreviewMutation(path: string, source: URL, body: Record<string, any>): Response | null {
-  if (path.startsWith("/addons/php-resources/api/")) {
-    const state = phpChanges ?? structuredClone(phpResourcesPreviewState(source));
-    if (path.endsWith("/default")) state.defaultCategoryId = body.categoryId;
+  if (path.startsWith("/addons/resource-limits/api/")) {
+    const state = phpChanges ?? structuredClone(resourceLimitsPreviewState(source));
+    if (path.endsWith("/memory") && !("error" in state.memory)) state.memory = memoryPreviewState(source, { ...state.memory.settings, ...body });
+    else if (path.endsWith("/default")) state.defaultCategoryId = body.categoryId;
     else if (path.endsWith("/assign")) {
       const category = state.categories.find((category) => category.id === body.categoryId);
       state.sites.forEach((site) => {
@@ -1657,7 +1657,7 @@ function phpPreviewMutation(path: string, source: URL, body: Record<string, any>
       state.categories = state.categories.filter((entry) => entry.id !== category.id).concat(category);
     } else return null;
     phpChanges = state;
-    return Response.json({ ok: true, data: { ...state, failures: [] }, html: phpResourcesDashboardView(state) });
+    return Response.json({ ok: true, data: { ...state, failures: [] }, html: resourceLimitsDashboardView(state) });
   }
   return null;
 }
@@ -1672,7 +1672,7 @@ function managerPreviewMutation(path: string, source: URL): Response | null {
   }
   const managerRoute = path.match(/^\/addons\/api\/addons\/([^/]+)\/(enable|disable)$/);
   if (managerRoute) {
-    previewEnabled ??= (source.searchParams.get("enabled") ?? "cloudflare-ips,instatic,stager,maintenance,php-resources,git").split(",");
+    previewEnabled ??= (source.searchParams.get("enabled") ?? "cloudflare-ips,instatic,stager,maintenance,resource-limits,git").split(",");
     previewManagerJob = {
       id: "20261021T120000Z-" + (++previewJobNumber).toString(16).padStart(6, "0"), addon: managerRoute[1]!,
       kind: managerRoute[2]!, state: "running", step: "Updating addon", error: "", createdAt: "", startedAt: "", finishedAt: "",
@@ -1951,7 +1951,7 @@ const server = Bun.serve({
     if (path === "/addons/") {
       // ?enabled= picks which addons are on, so the Available section and the
       // enable/disable buttons can be reviewed without a CloudPanel install.
-      const enabled = previewEnabled ?? (empty ? [] : (url.searchParams.get("enabled") ?? "cloudflare-ips,instatic,stager,maintenance,php-resources,git").split(",").filter(Boolean));
+      const enabled = previewEnabled ?? (empty ? [] : (url.searchParams.get("enabled") ?? "cloudflare-ips,instatic,stager,maintenance,resource-limits,git").split(",").filter(Boolean));
       const previewJob = state && ["running", "queued", "failed"].includes(state)
         ? {
             id: "20260910T093000Z-abc123", kind: "enable", addon: "stager", state,
@@ -1960,7 +1960,7 @@ const server = Bun.serve({
           }
         : null;
       const page = indexPage(enabled, notice, {
-        available: ["cloudflare-ips", "dns", "instatic", "stager", "maintenance", "php-resources", "git", "panel-tweaks", "system-tweaks", "wp-tools", "smtp", "terminal", "security-keys"].filter((name) => !enabled.includes(name)),
+        available: ["cloudflare-ips", "dns", "instatic", "stager", "maintenance", "resource-limits", "git", "panel-tweaks", "system-tweaks", "wp-tools", "smtp", "terminal", "security-keys"].filter((name) => !enabled.includes(name)),
         job: previewJob,
         csrf: "preview-csrf-token",
         version: "2.0.0",
@@ -2044,12 +2044,12 @@ const server = Bun.serve({
       if (job === "varnish") wpToolsPreviewJob("varnish-check", Array.from({ length: 64 }, (_, i) => `site${i}.example.com`), () => {}, Date.now() - 17_400);
       if (job === "mainwp") wpToolsPreviewJob("mainwp-connect", ["blog.example.com", "new.example.com", "waiting.example.com", "retry.example.com", "staging.newsletter.example-church-of-the-hills.com"], () => {}, Date.now() - 2_400);
       html = wpToolsLayout("WordPress Tools", wpToolsDashboardView(wpToolsPreviewData()), notice);
-    } else if (path === "/addons/php-resources/" || path === "/addons/php-resources") {
+    } else if (path === "/addons/resource-limits/" || path === "/addons/resource-limits") {
       // ?dialog=new|edit opens the category dialog on load (edit: the first category), ?more with More limits open.
       const dialog = url.searchParams.get("dialog");
       const opener = dialog === null ? "" : `openCategoryDialog(${dialog === "edit" ? "CLP_ROOT.querySelector('tr[data-category] button')" : "document.body"});`
         + (url.searchParams.has("more") ? "CLP_ROOT.getElementById('category-more').open=true;" : "");
-      html = phpResourcesLayout("PHP Resources", phpResourcesDashboardView(phpChanges ?? phpResourcesPreviewState(url)), notice)
+      html = resourceLimitsLayout("Resource Limits", resourceLimitsDashboardView(phpChanges ?? resourceLimitsPreviewState(url)), notice)
         .replace("</body>", () => opener ? `<script>addEventListener("DOMContentLoaded",function(){${opener}})</script></body>` : "</body>");
     } else if (path === "/addons/dns/" || path === "/addons/dns") {
       // ?dialog=profile|advanced|new|review|site|pending|choose|connection|mailcow|server|redirect|new-redirect|redirect-site|found opens

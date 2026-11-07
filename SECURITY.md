@@ -179,7 +179,7 @@ It includes nginx by default; database and CloudPanel updates are separate choic
 address, and CloudPanel creates every database user for any host (`'%'`), so only
 the firewall keeps the database private. A box with ufw off, or a rule opening
 port 3306, exposes every site's database login, and possibly `root` with the
-install's default password `root`. System Tweaks' Database card shows where MySQL
+install's default password `root`. System Tweaks' Hardening card shows where MySQL
 listens, what the loaded firewall rules allow, clients connected from elsewhere,
 and whether root still uses a default password. **MySQL on this server only**
 (opt-in) binds it to `127.0.0.1` and undoes the change if MySQL does not come

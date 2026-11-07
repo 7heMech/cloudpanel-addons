@@ -17,7 +17,7 @@ records are rows anyone can edit.
 
 A profile is an ordered list of record rows plus the zone options below, and a
 mode. Sites are assigned in bulk, and one profile can be the default for new
-sites, as in PHP Resources and SMTP Relay; choosing a default or assigning a site
+sites, as in Resource Limits and SMTP Relay; choosing a default or assigning a site
 records the site ids that exist then, so a default never reaches back over the
 fleet.
 
@@ -230,7 +230,7 @@ site that does not redirect for a working stand-in.
 DNS leaves stand-ins out of its site list through `isStandInSite`, and Stager,
 Maintenance, SMTP Relay and Cloudflare IP Access through `withoutStandIns` in
 `cli/panel-db.ts`. The panel snapshot the Git, Maintenance, Stager and Terminal
-pages read leaves them out too. PHP Resources and WordPress Tools never list a
+pages read leaves them out too. Resource Limits and WordPress Tools never list a
 static site, and Panel Tweaks shows "Redirect" as its runtime on the Sites page. Global maintenance mode reaches a
 stand-in as it does every vhost.
 

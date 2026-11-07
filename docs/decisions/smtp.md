@@ -5,7 +5,7 @@
 Postfix, which CloudPanel installs and enabling the addon installs if missing,
 is the relay client. A named profile holds one SMTP account and a From template.
 Sites are assigned to profiles in bulk, and one profile can be the default for
-new sites, as in PHP Resources. A site in no profile is not relayed. Discard is
+new sites, as in Resource Limits. A site in no profile is not relayed. Discard is
 the built-in `dont-send` profile, which routes its sites' mail to Postfix's
 `discard` transport, so it is logged and never delivered; Stager assigns
 staging copies to it. Every profile the operator creates has an SMTP server.

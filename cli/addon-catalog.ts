@@ -22,7 +22,7 @@ import { MAINTENANCE_ADDON } from "../addons/maintenance/addon";
 import { PANEL_TWEAKS_ADDON } from "../addons/panel-tweaks/addon";
 import { SYSTEM_TWEAKS_ADDON } from "../addons/system-tweaks/addon";
 import { WP_TOOLS_ADDON } from "../addons/wp-tools/addon";
-import { PHP_RESOURCES_ADDON } from "../addons/php-resources/addon";
+import { RESOURCE_LIMITS_ADDON } from "../addons/resource-limits/addon";
 import { STAGER_ADDON } from "../addons/stager/addon";
 import { SMTP_ADDON } from "../addons/smtp/addon";
 import { TERMINAL_ADDON } from "../addons/terminal/addon";
@@ -132,7 +132,7 @@ const DEFINITIONS: AddonDefinition[] = [
   INSTATIC_ADDON,
   STAGER_ADDON,
   MAINTENANCE_ADDON,
-  PHP_RESOURCES_ADDON,
+  RESOURCE_LIMITS_ADDON,
   GIT_ADDON,
   PANEL_TWEAKS_ADDON,
   SYSTEM_TWEAKS_ADDON,

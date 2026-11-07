@@ -126,6 +126,10 @@ export const NEW_SITES_SEEN_FILE = `${STATE_DIR}/new-sites-seen.json`;
 
 
 export const LEGACY_UNITS = [
+  "clp-addons-php-resources.service",
+  "clp-addons-php-resources-reconcile.service",
+  "clp-addons-php-resources-reconcile.timer",
+  "clp-addons-php-resources-reconcile.path",
   // SMTP Relay's own new-site watcher, before the shared one.
   "clp-addons-smtp-reconcile.path",
   "clp-addons-smtp-reconcile.service",
