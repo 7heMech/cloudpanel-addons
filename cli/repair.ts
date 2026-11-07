@@ -49,7 +49,13 @@ async function applyRepair(positional: string[], flags: Record<string, string | 
     reconcileBackupCommand(quiet);
     return;
   }
-  migrateOldAddonNames(quiet);
+  try {
+    // An earlier version's PHP Resources change is not waited for here; the next repair moves it.
+    migrateOldAddonNames(quiet, 0);
+  } catch (error) {
+    // Upkeep of everything else does not wait on the move; the next repair tries it again.
+    log.warn(`renamed addons were not moved yet: ${error instanceof Error ? error.message : String(error)}`);
+  }
   const specs = positional[0] ? [resolveAddon(positional[0])] : installedAddons();
   const all = installedAddons();
   // An installation with every addon disabled still needs its timer, its Nginx

@@ -35,7 +35,7 @@ function json(body: unknown, status = 200): Response {
 
 const NOT_FOUND = () => json({ ok: false, error: "not found" }, 404);
 
-export interface RootAccessView { granted: boolean; problem: string | null }
+export interface RootAccessView { granted: boolean; problem: string | null; unreadable?: true }
 
 /** How long the header's answer is reused; the worker checks for itself either way. */
 const ROOT_ACCESS_TTL_MS = 60_000;
@@ -60,7 +60,8 @@ async function rootAccessOf(user: string | undefined, sessionId: string | null, 
   // A failed check is not an answer: it is not cached, and it does not say root never allowed this account.
   if (!reply.ok || !reply.data) return { granted: false, problem: `Root terminal access could not be checked: ${reply.error ?? "no answer"}` };
   const access = { granted: reply.data.granted, problem: reply.data.problem };
-  rootAccessCache.set(user, { at: Date.now(), access });
+  // Nor is root's own read that failed, such as while CloudPanel holds its database.
+  if (!reply.data.unreadable) rootAccessCache.set(user, { at: Date.now(), access });
   return access;
 }
 

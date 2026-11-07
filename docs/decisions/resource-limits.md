@@ -197,9 +197,11 @@ the sizes are worked out again when the services start:
   new cap at once; MySQL's file changes and the page says it applies at the
   next restart.
 
-Both hooks hold the memory settings lock while reading and applying the policy,
-so a migration or an Off change cannot race them. No memory change waits for
-MySQL or Redis to start or stop.
+Both hooks read the policy without the memory settings lock, which a change
+holds for up to two minutes. A change saves before it applies, so after
+applying, a hook reads the policy again and applies it once more if it moved:
+an Off change that lands meanwhile wins. No memory change waits for MySQL or
+Redis to start or stop.
 
 A change from the page has one 120-second deadline for itself and, when a step
 fails, for putting the previous settings back; each command gets what is left
@@ -303,20 +305,26 @@ An update moves a `php-resources` policy and enabled record to
 `resource-limits`; a disabled install keeps its categories without being
 enabled. Old URL paths redirect, with their suffix, query and method, after the
 admin gate, so a site Settings card loaded before the panel reloads still works.
-No old config, state directory or lock is kept.
+No old config, state directory or lock is kept. A PHP Resources change the
+earlier version is still applying would write its old policy back, so an update
+or install waits up to five minutes for it, and a repair leaves the move to the
+next repair.
 
 Memory settings saved in System Tweaks move to Resource Limits' own files. An
 enabled System Tweaks with a memory protection on enables Resource Limits to
 keep it; the switches of a disabled one stay off. Settings that are invalid or
 differ from Resource Limits' own are dropped from System Tweaks with one warning
-naming them, and Resource Limits keeps its own. Nothing about the move stops an
-update or a repair, and when there is nothing to move it takes no lock. A failed
-update undoes the move for the binary it restores.
+naming them, and Resource Limits keeps its own. Conflicting settings never stop
+an update or a repair, and when there is nothing to move it takes no lock. A
+lock still held after its wait skips the move in a repair, which tries again
+next time, and fails an update, which then undoes the move for the binary it
+restores.
 
 Memory settings and runtime state are root-only regular files. The settings
 lock serialises changes and upkeep; repair and new-site runs leave the memory
 step to a change that holds it. Service start hooks read without the lock and
 check the enabled config, so disabling the addon cannot recreate withdrawn
-limits. Disabling keeps PHP's saved policy and current pools, withdraws memory
-sizing and OOM overrides, and leaves MySQL's running sizes until its next
-restart.
+limits. Withdrawing waits as long as a change can hold the lock, since once the
+enabled config is gone nothing would retry it. Disabling keeps PHP's saved
+policy and current pools, withdraws memory sizing and OOM overrides, and leaves
+MySQL's running sizes until its next restart.

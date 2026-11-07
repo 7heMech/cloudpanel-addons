@@ -11,8 +11,8 @@ export const SYSTEM_TWEAKS_ADDON: AddonDefinition = {
   description: "Server security, automatic updates, panel PHP, remote backup compression.",
   added: "2.0.0-rc.1",
   changed: [
-    { in: "2.0.1-rc.1", note: "Settings is now Hardening and includes MySQL on this server only." },
-    { in: "2.0.1-rc.1", note: "CloudPanel's clp-agent is cut off from the network, so it no longer sends CloudPanel your sites' domains and panel users' names and emails. Switch it off under Hardening." },
+    { in: "2.1.0-rc.1", note: "Settings is now Hardening and includes MySQL on this server only." },
+    { in: "2.1.0-rc.1", note: "CloudPanel's clp-agent is cut off from the network, so it no longer sends CloudPanel your sites' domains and panel users' names and emails. Switch it off under Hardening." },
     { in: "2.0.0", note: "Several CloudPanel security weaknesses are now mitigated; the panel's shared certificate is replaced, so your browser asks you to accept the new one once." },
   ],
   targets: SYSTEM_TWEAKS_TARGETS,

@@ -431,7 +431,7 @@ test("old MySQL ownership marker is rewritten without restarting the server", ()
 });
 
 test("the budget sets PHP's worst case against RAM and names what to fix", async () => {
-  const { memoryCard } = await import("../addons/resource-limits/app/memory-view");
+  const { memoryCard, size } = await import("../addons/resource-limits/app/memory-view");
   const { STOCK_PROFILE, phpMemoryLimitMb } = await import("../addons/resource-limits/action");
   const s = server(8192);
   const memory = { ...memoryStatus(on(), s.options), settings: on() };
@@ -450,6 +450,12 @@ test("the budget sets PHP's worst case against RAM and names what to fix", async
   expect(memoryCard(memory, [stock])).toContain("63 GB of it is 1 site on CloudPanel&#x27;s 250 workers: put it in a category.");
   expect(memoryCard(memory, [drifted])).toContain("put it back below.");
   expect(memoryCard(memory, [stock, drifted])).toContain("2 sites on CloudPanel&#x27;s 250 workers: put them in a category, or back in theirs below.");
+  // Services that alone take more than RAM are over by their whole deficit, PHP or not.
+  const crowded = { ...memory, varnishMb: memory.plan.ramMb };
+  const services = memory.plan.bufferPoolMb + memory.plan.tempTableRamMb + memory.plan.maxConnections * 8 + memory.plan.redisMb + (memory.memcachedMb ?? 0);
+  expect(memoryCard(crowded, [])).toContain(`>${size(services)} over</span>`);
+  expect(memoryCard(crowded, [])).toContain("The services alone take more than RAM");
+  expect(memoryCard(crowded, [categorised])).toContain(`>${size(services + 768)} over</span>`);
   expect(phpMemoryLimitMb("256M")).toBe(256);
   expect(phpMemoryLimitMb("2G")).toBe(2048);
   expect(phpMemoryLimitMb("262144K")).toBe(256);
@@ -482,4 +488,46 @@ test("repair and new sites leave memory to a change that holds the lock, instead
     expect(restoreResourceMemory(options, true)).toEqual([]);
     expect(Date.now() - started).toBeLessThan(1_000);
   });
+});
+
+test("a start hook that applied settings a change replaced meanwhile applies the new ones", async () => {
+  const { resourceLimitsMemory } = await import("../addons/resource-limits/memory-settings");
+  const s = server();
+  const options = resourceOptions(s);
+  const save = (memory: MemorySettings) => writeFileSync(options.memorySettings.settingsFile, JSON.stringify({ version: 1, memory }), { mode: 0o600 });
+  save(on({ mysql: false }));
+  const run = s.options.run!;
+  let switched = false;
+  // Cap Redis is switched off, and its change finishes, while the hook is setting the old cap.
+  s.options.run = (program, args, ...rest) => {
+    const result = run(program, args, ...rest);
+    if (!switched && args.includes("maxmemory") && args.includes("SET")) {
+      switched = true;
+      save(on({ mysql: false, redis: false }));
+    }
+    return result;
+  };
+  resourceLimitsMemory("redis", options);
+  expect(switched).toBe(true);
+  expect(s.redis).toMatchObject({ maxmemory: 0, policy: "noeviction" });
+});
+
+test("withdrawing waits as long as a memory change can hold the lock", async () => {
+  const { WITHDRAW_LOCK_WAIT_S } = await import("../addons/resource-limits/memory-settings");
+  const { MEMORY_DEADLINE_MS } = await import("../addons/resource-limits/limits");
+  expect(WITHDRAW_LOCK_WAIT_S * 1000).toBeGreaterThan(MEMORY_DEADLINE_MS);
+});
+
+test("a Redis that refuses CONFIG neither holds back OOM protection nor is left recorded as capped", () => {
+  const s = server();
+  const run = s.options.run!;
+  s.options.run = (program, args, ...rest) => (program.endsWith("redis-cli") && args.includes("CONFIG")
+    ? { ok: false, stdout: "", stderr: "ERR unknown command 'CONFIG'" }
+    : run(program, args, ...rest));
+  expect(() => applyMemory(on({ mysql: false }), s.options)).toThrow();
+  expect(score(s, 101)).toBe("-600");
+  const state = existsSync(join(s.dir, "memory.json")) ? readFileSync(join(s.dir, "memory.json"), "utf8") : "{}";
+  expect(JSON.parse(state).redisCapped).not.toBe(true);
+  // Off again, repair no longer asks Redis anything, so OOM protection keeps being kept.
+  expect(() => applyMemory(on({ mysql: false, redis: false }), s.options)).not.toThrow();
 });

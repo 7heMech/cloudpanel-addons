@@ -514,6 +514,12 @@ export interface PanelSession {
   expiresAt: number;
 }
 
+/** A session as the root helper reads it from CloudPanel's session file. */
+export interface ParsedPanelSession extends PanelSession {
+  /** It passed CloudPanel's two-factor step, rather than having none to pass. */
+  twoFactor: boolean;
+}
+
 function serviceUnavailableResponse(): Response {
   return Response.json(
     { ok: false, error: "authentication service unavailable" },
@@ -521,7 +527,7 @@ function serviceUnavailableResponse(): Response {
   );
 }
 
-export function parsePanelSession(data: Uint8Array | string, options: { unmarkedMfa?: boolean } = {}): PanelSession | null {
+export function parsePanelSession(data: Uint8Array | string, options: { unmarkedMfa?: boolean } = {}): ParsedPanelSession | null {
   const bytes = typeof data === "string" ? new TextEncoder().encode(data) : data;
   if (bytes.byteLength === 0 || bytes.byteLength > MAX_SESSION_BYTES) return null;
   try {
@@ -567,7 +573,7 @@ export function parsePanelSession(data: Uint8Array | string, options: { unmarked
       return null;
     }
 
-    return { user: identity.user, roles: identity.roles, expiresAt };
+    return { user: identity.user, roles: identity.roles, expiresAt, twoFactor: mfaEntries.length === 1 };
   } catch {
     return null;
   }

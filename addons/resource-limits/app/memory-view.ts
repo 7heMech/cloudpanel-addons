@@ -68,11 +68,13 @@ function memoryBudget(state: Memory, sites: PoolSiteState[]): string {
     { name: "Varnish", tone: "s3", mb: state.varnishMb ?? 0 },
     { name: "Memcached", tone: "s4", mb: state.memcachedMb ?? 0 },
   ].filter((part) => part.mb > 0);
-  const leftMb = Math.max(plan.ramMb - parts.reduce((sum, part) => sum + part.mb, 0), 0);
+  const servicesMb = parts.reduce((sum, part) => sum + part.mb, 0);
+  const leftMb = Math.max(plan.ramMb - servicesMb, 0);
   const counted = sites.filter((site) => site.memoryLimitMb !== null && site.memoryLimitMb > 0);
   const worst = (site: PoolSiteState) => site.current.maxChildren * site.memoryLimitMb!;
   const phpMb = counted.reduce((sum, site) => sum + worst(site), 0);
-  const over = phpMb > leftMb;
+  const overMb = servicesMb + phpMb - plan.ramMb;
+  const over = overMb > 0;
   const php = { name: "PHP worst case", tone: "php", mb: over ? leftMb : phpMb };
   const blocks = [...parts, php].filter((part) => part.mb > 0).map((part) => `<span class="mb-part mb-${part.tone}${part === php && over ? " mb-over" : ""}" style="flex-grow:${part.mb / plan.ramMb}" title="${esc(`${part.name}: ${size(part === php ? phpMb : part.mb)}`)}"></span>`).join("");
   const free = over ? "" : `<span class="mb-part mb-free" style="flex-grow:${(leftMb - phpMb) / plan.ramMb}" title="${esc(`Free: ${size(leftMb - phpMb)}`)}"></span>`;
@@ -83,13 +85,15 @@ function memoryBudget(state: Memory, sites: PoolSiteState[]): string {
   const fix = loose === stock.length ? "put them in a category" : loose ? "put them in a category, or back in theirs below" : "put them back below";
   const biggest = [...Map.groupBy(counted.filter((site) => !stock.includes(site)), (site) => site.categoryName ?? "")]
     .map(([name, list]) => [name, list.reduce((sum, site) => sum + worst(site), 0)] as const).sort((a, b) => b[1] - a[1])[0];
-  const why = stock.length
+  const why = servicesMb >= plan.ramMb
+    ? "The services alone take more than RAM: choose another profile, or give Varnish or Memcached less."
+    : stock.length
     ? `${size(stockMb)} of it is ${stock.length === 1 ? "1 site" : `${stock.length} sites`} on CloudPanel's ${STOCK_PROFILE.maxChildren} workers: ${stock.length === 1 ? fix.replace("them", "it").replace("theirs", "its") : fix}.`
     : biggest ? `Lower ${biggest[0]}'s worker limit, or its sites' memory_limit.` : "";
   const uncounted = sites.length - counted.length;
   const unknown = `${uncounted} ${uncounted === 1 ? "site has" : "sites have"} an unlimited or unreadable memory_limit and ${uncounted === 1 ? "is" : "are"} not counted.`;
   const verdict = over
-    ? `${badge(`${size(phpMb - leftMb)} over`, "warn")} <span>${esc(why)}${uncounted ? ` ${esc(unknown)}` : ""}</span>`
+    ? `${badge(`${size(overMb)} over`, "warn")} <span>${esc(why)}${uncounted ? ` ${esc(unknown)}` : ""}</span>`
     : uncounted
       ? `${badge("Unknown", "warn")} <span>${esc(unknown)}</span>`
       : `${badge("Fits", "ok")} <span>Every PHP worker at its memory_limit fits in RAM.</span>`;

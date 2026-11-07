@@ -3,6 +3,7 @@
 import { afterAll, beforeEach, expect, test } from "bun:test";
 import { Database } from "bun:sqlite";
 import { chmodSync, mkdirSync, mkdtempSync, realpathSync, renameSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
+import { createHash } from "node:crypto";
 import { tmpdir } from "node:os";
 import { ActionFailure } from "../cli/action-common";
 import {
@@ -41,11 +42,13 @@ beforeEach(() => {
   writeFileSync(paths.passwd, "root:x:0:0:root:/root:/bin/bash\n");
 });
 
+/** What `terminal root allow` writes: the account's id and a digest of its 2FA secret then. */
 function allow(...users: string[]): void {
   const panel = db();
-  const grants = users.map((user) => ({
-    user, id: panel.query<{ id: number }, [string]>("SELECT id FROM user WHERE user_name = ?").get(user)!.id,
-  }));
+  const grants = users.map((user) => {
+    const { id, mfa_secret } = panel.query<{ id: number; mfa_secret: string }, [string]>("SELECT id, mfa_secret FROM user WHERE user_name = ?").get(user)!;
+    return { user, id, mfa: createHash("sha256").update(`clp-addons terminal root\0${mfa_secret}`).digest("hex") };
+  });
   panel.close();
   writeFileSync(paths.rootAccess.grants, JSON.stringify({ users: grants }));
   chmodSync(paths.rootAccess.grants, 0o600);
@@ -61,12 +64,21 @@ test("only an administrator root allowed gets a root shell", () => {
   expect(access("bob")).toEqual({ granted: false, problem: null });
 });
 
-test("two-factor must be on; switched off it pauses the grant, and back on it works without root", () => {
+test("a grant holds the 2FA the owner had: switched off it stops, and set up again it needs root again", () => {
   allow("alice");
   change("UPDATE user SET mfa = 0 WHERE user_name = 'alice'");
-  expect(access("alice")).toEqual({ granted: true, problem: "A root terminal needs 2FA: turn it on in Account → Security." });
+  expect(access("alice")).toEqual({ granted: true, problem: "A root terminal needs 2FA: turn it on in Account → Security, then ask root to allow you again." });
+  // Whoever set it up again -- after a password reset, any administrator -- is not who root allowed.
   change("UPDATE user SET mfa = 1, mfa_secret = 'new' WHERE user_name = 'alice'");
+  expect(access("alice").problem).toBe("alice's 2FA was set up again after root allowed it; root can run clp-addons terminal root allow alice again");
+  allow("alice");
   expect(access("alice")).toEqual({ granted: true, problem: null });
+});
+
+test("a grant written without a 2FA digest lets nobody in", () => {
+  writeFileSync(paths.rootAccess.grants, JSON.stringify({ users: [{ user: "alice", id: 1 }] }));
+  chmodSync(paths.rootAccess.grants, 0o600);
+  expect(access("alice")).toEqual({ granted: false, problem: null });
 });
 
 test("a password change, by the account or by another administrator, leaves the grant alone", () => {
@@ -107,7 +119,9 @@ test("the worker takes --root in place of a domain, and resolves it only for an 
   expect(() => parseTerminalRequest(["session", "--root=yes", "--panel-user=alice", "--cols=1", "--rows=1"])).toThrow(ActionFailure);
   expect(() => resolveTerminalTarget(request, paths)).toThrow("root has not allowed you a root shell");
   allow("alice");
-  expect(resolveTerminalTarget(request, paths)).toEqual({ user: "root", dir: "/root" });
+  expect(resolveTerminalTarget(request, paths, true)).toEqual({ user: "root", dir: "/root" });
+  // The account has 2FA on, but this sign-in never passed it.
+  expect(() => resolveTerminalTarget(request, paths, false)).toThrow("This sign-in did not use your 2FA code");
 });
 
 test("an open root shell ends once its grant does", async () => {
@@ -115,7 +129,7 @@ test("an open root shell ends once its grant does", async () => {
   const audit: string[] = [];
   const calls: string[][] = [];
   const running = runTerminalAction(["session", "--root", "--panel-user=alice", "--cols=80", "--rows=24"], {
-    paths, processUid: 0, env: { CLP_ADDONS_DUPLEX_WORKER: "1" }, rootRecheckMs: 20,
+    paths, processUid: 0, env: { CLP_ADDONS_DUPLEX_WORKER: "1", CLP_ADDONS_SESSION_2FA: "1" }, rootRecheckMs: 20,
     audit: (line) => audit.push(line),
     spawn: ((argv: string[]) => { calls.push(argv); return Bun.spawn(["sleep", "30"]); }) as unknown as typeof Bun.spawn,
   });
@@ -131,7 +145,7 @@ test("an open root shell ends once its grant does", async () => {
 function rootSession(extra: Record<string, unknown>, child: () => ReturnType<typeof Bun.spawn>) {
   const audit: string[] = [];
   const running = runTerminalAction(["session", "--root", "--panel-user=alice", "--cols=80", "--rows=24"], {
-    paths, processUid: 0, env: { CLP_ADDONS_DUPLEX_WORKER: "1" }, rootRecheckMs: 20,
+    paths, processUid: 0, env: { CLP_ADDONS_DUPLEX_WORKER: "1", CLP_ADDONS_SESSION_2FA: "1" }, rootRecheckMs: 20,
     audit: (line) => audit.push(line),
     spawn: child as unknown as typeof Bun.spawn,
     ...extra,
@@ -177,7 +191,7 @@ test("root-access, like every terminal verb, answers only root", async () => {
     expect(await runTerminalAction(["root-access", "--panel-user=alice"], { paths, processUid: 1000 })).toBe(1);
     expect(JSON.parse(printed).error).toBe("terminal actions must run as root");
     printed = "";
-    expect(await runTerminalAction(["root-access", "--panel-user=alice"], { paths, processUid: 0 })).toBe(0);
+    expect(await runTerminalAction(["root-access", "--panel-user=alice"], { paths, processUid: 0, env: { CLP_ADDONS_SESSION_2FA: "1" } })).toBe(0);
     expect(JSON.parse(printed).data).toEqual({ granted: true, problem: null });
   } finally {
     process.stdout.write = write;
@@ -243,14 +257,19 @@ test("a root access check that fails says so, rather than that root never allowe
   let calls = 0;
   mock.module("../lib/gateway-client", () => ({
     ...realGateway,
-    callGatewayAction: async () => (calls++ === 0 ? { ok: false, error: "gateway unavailable" } : { ok: true, data: { granted: true, problem: null } }),
+    callGatewayAction: async () => [
+      { ok: false, error: "gateway unavailable" },
+      { ok: true, data: { granted: true, problem: "CloudPanel's user list cannot be read: database is locked", unreadable: true } },
+      { ok: true, data: { granted: true, problem: null } },
+    ][Math.min(calls++, 2)],
   }));
   try {
     const { handle } = await import("../addons/terminal/app/index");
     const ask = async () => (await (await handle(new Request("http://x/api/root-access", { headers: { cookie: "cloudpanel=abcdef0123456789abcdef01" } }),
-      "/api/root-access", null, undefined, { user: "carol", roles: ["ROLE_ADMIN"] })).json() as { data: unknown }).data;
+      "/api/root-access", null, undefined, { user: "carol", roles: ["ROLE_ADMIN"] })).json() as { data: { granted: boolean; problem: string | null } }).data;
     expect(await ask()).toEqual({ granted: false, problem: "Root terminal access could not be checked: gateway unavailable" });
-    // The failure was not cached: the next look asks again.
+    // Neither failure is cached: each next look asks again.
+    expect((await ask()).problem).toContain("cannot be read");
     expect(await ask()).toEqual({ granted: true, problem: null });
   } finally {
     mock.module("../lib/gateway-client", () => realGateway);

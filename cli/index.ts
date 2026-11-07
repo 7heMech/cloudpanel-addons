@@ -61,7 +61,7 @@ function usage(): void {
   clp-addons status
   clp-addons maintenance <domain> [on|off|status]
   clp-addons terminal root [allow|deny <user>]
-  clp-addons self-uninstall
+  clp-addons self-uninstall --yes
   clp-addons --version
 
 Addons: ${ADDON_NAMES.join(", ")}`);
