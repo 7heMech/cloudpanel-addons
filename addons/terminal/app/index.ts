@@ -1,6 +1,7 @@
 import {
   guardMutation, htmlResponse, jsonResponse, newCsrfToken, policyResponse, policyHeaders, safeDecodePathSegment, SECURITY_HEADERS, validateDomain, readBody, readMutation,
 } from "../../../lib/app-http";
+import { callGatewayAction, type ActionResult } from "../../../lib/gateway-client";
 import { fetchPanelInfo } from "../../../lib/snapshot-reader";
 import { panelSessionId } from "../../../lib/sso-auth";
 
@@ -34,6 +35,35 @@ function json(body: unknown, status = 200): Response {
 
 const NOT_FOUND = () => json({ ok: false, error: "not found" }, 404);
 
+export interface RootAccessView { granted: boolean; problem: string | null }
+
+/** How long the header's answer is reused; the worker checks for itself either way. */
+const ROOT_ACCESS_TTL_MS = 60_000;
+const rootAccessCache = new Map<string, { at: number; access: RootAccessView }>();
+
+/**
+ * Asked of root, which reads the grants itself; any failure offers nothing.
+ * Every panel page's header asks, so the answer is kept a minute per user
+ * rather than starting a root process for each page; the Terminal page asks
+ * afresh.
+ */
+async function rootAccessOf(user: string | undefined, sessionId: string | null, fresh = false): Promise<RootAccessView> {
+  if (!user || !sessionId) return { granted: false, problem: null };
+  const cached = rootAccessCache.get(user);
+  if (!fresh && cached && Date.now() - cached.at < ROOT_ACCESS_TTL_MS) return cached.access;
+  let reply: ActionResult<RootAccessView>;
+  try {
+    reply = await callGatewayAction("terminal", "root-access", [], undefined, { sessionId }) as ActionResult<RootAccessView>;
+  } catch (error) {
+    reply = { ok: false, error: error instanceof Error ? error.message : String(error) };
+  }
+  // A failed check is not an answer: it is not cached, and it does not say root never allowed this account.
+  if (!reply.ok || !reply.data) return { granted: false, problem: `Root terminal access could not be checked: ${reply.error ?? "no answer"}` };
+  const access = { granted: reply.data.granted, problem: reply.data.problem };
+  rootAccessCache.set(user, { at: Date.now(), access });
+  return access;
+}
+
 function size(value: unknown): number | null {
   return Number.isInteger(value) && (value as number) >= 1 && (value as number) <= MAX_TERMINAL_SIZE ? value as number : null;
 }
@@ -49,9 +79,9 @@ export async function handle(
 
   if (method === "GET" && path === "/") {
     try {
-      const info = await fetchPanelInfo();
+      const [info, root] = await Promise.all([fetchPanelInfo(), rootAccessOf(auth?.user, panelSessionId(req), true)]);
       const sites = [...info.sites].sort((a, b) => a.domain.localeCompare(b.domain));
-      return htmlResponse(layout("Terminal", dashboardView(sites), updateNotice), { csrf: newCsrfToken() });
+      return htmlResponse(layout("Terminal", dashboardView(sites, root, auth?.user ?? ""), updateNotice), { csrf: newCsrfToken() });
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
       return htmlResponse(layout("Terminal", inventoryUnavailableView(message), updateNotice), { status: 500 });
@@ -68,14 +98,17 @@ export async function handle(
   }
 
   const popup = path.match(/^\/sites\/([^/]+)$/);
-  if (method === "GET" && popup) {
-    const domain = validateDomain(safeDecodePathSegment(popup[1]!));
-    if (!domain) return NOT_FOUND();
+  if (method === "GET" && (popup || path === "/root")) {
+    const domain = popup ? validateDomain(safeDecodePathSegment(popup[1]!)) : null;
+    if (popup && !domain) return NOT_FOUND();
     return htmlResponse(popupPage(domain), {
       csrf: newCsrfToken(),
       headers: { "Content-Security-Policy": popupCsp() },
     });
   }
+
+  // What the header's root shell control asks before it shows itself.
+  if (method === "GET" && path === "/api/root-access") return json({ ok: true, data: await rootAccessOf(auth?.user, panelSessionId(req)) });
 
   if (!path.startsWith("/api/sessions")) return NOT_FOUND();
   // The manager's gate has already decided this is an administrator; a
@@ -87,10 +120,12 @@ export async function handle(
   if (path === "/api/sessions" && method === "POST") {
     const body = await readMutation(req, 4 * 1024);
     if (body instanceof Response) return body;
-    const domain = validateDomain(body.domain);
+    // Root decides whether this user may have a root shell; the manager only asks.
+    const root = body.root === true && body.domain === undefined;
+    const domain = root ? null : validateDomain(body.domain);
     const cols = size(body.cols);
     const rows = size(body.rows);
-    if (!domain || cols === null || rows === null) return json({ ok: false, error: "a domain and a terminal size are required" }, 400);
+    if ((!root && !domain) || cols === null || rows === null) return json({ ok: false, error: "a domain and a terminal size are required" }, 400);
     const result = await terminalSessions.open(owner, { domain, cols, rows, sessionId });
     return result.ok
       ? json({ ok: true, data: { id: result.id, user: result.user } })

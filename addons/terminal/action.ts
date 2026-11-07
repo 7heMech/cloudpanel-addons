@@ -7,26 +7,36 @@
  * site's user, so the only bytes this side ever writes are its own refusal.
  * The panel user arrives from the gateway, which took it from the CloudPanel
  * session it checked itself; the manager never names it.
+ *
+ * A root shell (`--root`) runs the same way as root, for an administrator root
+ * allowed from a shell; see root-access.ts.
  */
 import { openPanelDatabase } from "../../cli/panel-db";
 import { existsSync, readdirSync, readFileSync, realpathSync } from "node:fs";
 import { join } from "node:path";
 import {
-  ActionFailure, emitActionError, errorMessage, failAction, validateDomain,
+  ActionFailure, emitActionError, emitActionOk, errorMessage, failAction, validateDomain,
 } from "../../cli/action-common";
 import { CLI_BIN, PANEL_DB } from "../../cli/paths";
 import { DUPLEX_WORKER_MARKER } from "../../lib/gateway-protocol";
 import { PANEL_USER_NAME_RE, panelUserOwnsSite } from "../../lib/panel-users";
 import { readUnixAccounts, siteAccountProblem, splitSharedUids } from "../../lib/site-accounts";
+import { DEFAULT_ROOT_ACCESS_PATHS, rootAccess, type RootAccessPaths } from "./root-access";
 
 export const PTY_COMMAND = "terminal-pty";
 /** The only variables `runuser --login` keeps; the helper reads the last two. */
-export const PTY_ENV_NAMES = ["TERM", "CLP_SITE_DIR", "CLP_PTY_SIZE"];
+export const PTY_ENV_NAMES = ["TERM", "CLP_SITE_DIR", "CLP_PTY_SIZE", "CLP_ROOT_SHELL"];
 export const MAX_TERMINAL_SIZE = 1000;
 /** Below this a uid is a system account, never a site's. */
 const MIN_SITE_UID = 1000;
 /** How much of what `runuser` and the login wrote to stderr reaches the journal. */
 const MAX_LOGGED_STDERR = 4 * 1024;
+/** How often an open root shell's grant is checked again. */
+const ROOT_RECHECK_MS = 15_000;
+/** Checks in a row that may fail to read before a root shell ends anyway. */
+const ROOT_UNREADABLE_CHECKS = 3;
+/** How long a stopped shell has to hang up before it is killed. */
+const KILL_AFTER_MS = 5_000;
 
 export interface TerminalActionPaths {
   panelDb: string;
@@ -34,6 +44,8 @@ export interface TerminalActionPaths {
   runuser: string;
   /** Where every site's home must be. */
   homes: string;
+  /** Who may open a root shell. */
+  rootAccess: RootAccessPaths;
 }
 
 export interface TerminalActionOptions {
@@ -48,6 +60,10 @@ export interface TerminalActionOptions {
   /** Test-only audit sink; production writes to the gateway's journal. */
   audit?: (line: string) => void;
   now?: () => number;
+  /** Test-only; production checks a root shell's grant every 15 seconds. */
+  rootRecheckMs?: number;
+  /** Test-only; production kills a stopped shell after 5 seconds. */
+  killAfterMs?: number;
 }
 
 export const DEFAULT_TERMINAL_PATHS: TerminalActionPaths = {
@@ -55,10 +71,12 @@ export const DEFAULT_TERMINAL_PATHS: TerminalActionPaths = {
   passwd: "/etc/passwd",
   runuser: "/usr/sbin/runuser",
   homes: "/home",
+  rootAccess: DEFAULT_ROOT_ACCESS_PATHS,
 };
 
 export interface TerminalRequest {
-  domain: string;
+  /** Null for a root shell on the server itself. */
+  domain: string | null;
   panelUser: string;
   cols: number;
   rows: number;
@@ -87,13 +105,14 @@ export function parseTerminalRequest(argv: string[], options: TerminalActionOpti
   if (verb !== "session") failAction(`unknown terminal verb '${verb ?? ""}'`);
   const values = new Map<string, string>();
   for (const argument of rest) {
-    const match = argument.match(/^--(domain|panel-user|cols|rows)=(.*)$/);
+    const match = argument === "--root" ? ["", "root", ""] : argument.match(/^--(domain|panel-user|cols|rows)=(.*)$/);
     if (!match || values.has(match[1]!)) failAction(`unexpected argument '${argument}'`);
     values.set(match[1]!, match[2]!);
   }
   const panelUser = values.get("panel-user") ?? "";
   if (!PANEL_USER_NAME_RE.test(panelUser)) failAction("missing or invalid --panel-user");
-  const domain = (options.domainValidator ?? ((value: string) => validateDomain(value)))(values.get("domain") ?? "");
+  if (values.has("root") && values.has("domain")) failAction("--root takes no --domain");
+  const domain = values.has("root") ? null : (options.domainValidator ?? ((value: string) => validateDomain(value)))(values.get("domain") ?? "");
   return {
     domain,
     panelUser,
@@ -122,6 +141,7 @@ function insideHome(path: string, home: string): boolean {
  * refusal. Every rule is checked here, as root, before anything is started.
  */
 export function resolveTerminalTarget(request: TerminalRequest, paths: TerminalActionPaths): TerminalTarget {
+  if (request.domain === null) return rootTarget(request.panelUser, paths);
   const db = openPanelDatabase(paths.panelDb, true);
   let rows: SiteRow[];
   try {
@@ -175,6 +195,18 @@ export function resolveTerminalTarget(request: TerminalRequest, paths: TerminalA
   const resolved = realpathSync(root);
   if (!insideHome(resolved, home)) failAction(`the site root of ${request.domain} resolves outside its home`);
   return { user: row.user, dir: resolved };
+}
+
+/** A root shell, in root's home, for an administrator root allowed. */
+function rootTarget(panelUser: string, paths: TerminalActionPaths): TerminalTarget {
+  const access = rootAccess(panelUser, paths.rootAccess);
+  if (!access.granted) failAction("root has not allowed you a root shell");
+  if (access.problem) failAction(access.problem);
+  let home = "/root";
+  try {
+    home = readUnixAccounts(paths.passwd).get("root")?.home || home;
+  } catch {}
+  return { user: "root", dir: home };
 }
 
 /** The one command a terminal runs as root. Fixed; only the user varies. */
@@ -231,6 +263,7 @@ export async function runTerminalAction(argv: string[], options: TerminalActionO
   const paths = { ...DEFAULT_TERMINAL_PATHS, ...options.paths };
   try {
     if ((options.processUid ?? process.getuid?.()) !== 0) failAction("terminal actions must run as root");
+    if (argv[0] === "root-access") return answerRootAccess(argv.slice(1), paths);
     // Only the gateway's duplex stream, which checked the panel session
     // itself, starts a worker with this set.
     if ((options.env ?? process.env)[DUPLEX_WORKER_MARKER] !== "1") failAction("terminal sessions start only through the gateway's stream");
@@ -254,7 +287,8 @@ export async function runTerminalAction(argv: string[], options: TerminalActionO
   process.on("SIGINT", forward);
 
   const started = now();
-  audit(`${request.panelUser} opened ${request.domain} as ${target.user}`);
+  const what = request.domain ?? "a root shell";
+  audit(`${request.panelUser} opened ${what} as ${target.user}`);
   child = (options.spawn ?? Bun.spawn)(runuserCommand(paths, target.user), {
     stdin: "inherit",
     stdout: "inherit",
@@ -264,9 +298,29 @@ export async function runTerminalAction(argv: string[], options: TerminalActionO
       TERM: "xterm-256color",
       CLP_SITE_DIR: target.dir,
       CLP_PTY_SIZE: `${request.cols}x${request.rows}`,
+      // The helper refuses to run as root without it, so only a root shell does.
+      ...(request.domain === null ? { CLP_ROOT_SHELL: "1" } : {}),
     },
   });
   if (stopped) forward();
+  // The gateway already ends the stream when the panel session goes; a root
+  // shell also ends when its grant does. A read that fails, such as while
+  // CloudPanel holds its database, is given a few more checks first.
+  let unreadable = 0;
+  let killer: ReturnType<typeof setTimeout> | null = null;
+  const recheck = request.domain !== null ? null : setInterval(() => {
+    const access = rootAccess(request.panelUser, paths.rootAccess);
+    if (access.granted && !access.problem) {
+      unreadable = 0;
+      return;
+    }
+    if (access.unreadable && ++unreadable < ROOT_UNREADABLE_CHECKS) return;
+    clearInterval(recheck!);
+    audit(`${request.panelUser}'s root shell ended: ${printable(access.problem ?? "root no longer allows it")}`);
+    forward();
+    // A shell that does not hang up is killed; closing the stream then ends the helper.
+    killer = setTimeout(() => { try { child?.kill("SIGKILL"); } catch {} }, options.killAfterMs ?? KILL_AFTER_MS);
+  }, options.rootRecheckMs ?? ROOT_RECHECK_MS);
   const stderr = keepStderr(child.stderr);
   try {
     const code = await child.exited;
@@ -274,16 +328,29 @@ export async function runTerminalAction(argv: string[], options: TerminalActionO
     // site wrote some of it, so it is bounded and every line made printable
     // and labelled: it cannot pass for another journal line.
     for (const line of (await stderr()).split("\n")) {
-      if (line.trim()) audit(`${request.domain} stderr: ${printable(line)}`);
+      if (line.trim()) audit(`${request.domain ?? "root shell"} stderr: ${printable(line)}`);
     }
     const how = child.signalCode ? `signal ${child.signalCode}` : `exit ${code}`;
-    audit(`${request.panelUser} closed ${request.domain} as ${target.user} after ${duration(now() - started)}, ${how}`);
+    audit(`${request.panelUser} closed ${what} as ${target.user} after ${duration(now() - started)}, ${how}`);
     return typeof code === "number" ? code : 1;
   } finally {
+    if (recheck) clearInterval(recheck);
+    if (killer) clearTimeout(killer);
     process.off("SIGTERM", forward);
     process.off("SIGHUP", forward);
     process.off("SIGINT", forward);
   }
+}
+
+/** Whether the signed-in administrator may open a root shell, for the Terminal page. */
+function answerRootAccess(argv: string[], paths: TerminalActionPaths): number {
+  const panelUser = argv.length === 1 && argv[0]!.startsWith("--panel-user=") ? argv[0]!.slice("--panel-user=".length) : "";
+  if (!PANEL_USER_NAME_RE.test(panelUser)) {
+    emitActionError("terminal", "missing or invalid --panel-user");
+    return 1;
+  }
+  emitActionOk(rootAccess(panelUser, paths.rootAccess));
+  return 0;
 }
 
 /**

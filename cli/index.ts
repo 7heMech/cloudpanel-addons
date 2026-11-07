@@ -24,6 +24,7 @@ import { runAuthActionStdin } from "./auth-action";
 import { runManagerAction, type ManagerOps } from "./manager-action";
 import { runSmtpSubmit } from "../addons/smtp/submit";
 import { runTerminalPty } from "../addons/terminal/pty";
+import { runTerminalRootCommand } from "../addons/terminal/root-access";
 import { runCertificateWork, runFirewallWork } from "./addon-hooks";
 import { runSyncSites } from "./new-sites";
 import { syncVarnishBackends } from "../addons/system-tweaks/varnish-backend";
@@ -59,6 +60,7 @@ function usage(): void {
   clp-addons repair [<addon>] [--quiet] [--anchors-only]
   clp-addons status
   clp-addons maintenance <domain> [on|off|status]
+  clp-addons terminal root [allow|deny <user>]
   clp-addons self-uninstall
   clp-addons --version
 
@@ -187,6 +189,7 @@ async function main(): Promise<number> {
     case "action": return await cmdAction(rest);
     case "smtp-submit": return await runSmtpSubmit(rest);
     case "terminal-pty": return await runTerminalPty(rest);
+    case "terminal": runTerminalRootCommand(rest); return 0;
     case "serve": return await cmdServe();
     case "help":
     case "--help":

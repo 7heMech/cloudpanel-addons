@@ -1202,6 +1202,8 @@ const TERMINAL_TRANSCRIPT = [
 
 /** What the next popup shows: `?state=ended|moved|reconnecting|refused` on the popup page sets it. */
 let terminalPreviewState = "";
+/** Whether the last popup opened was the root shell. */
+let terminalPreviewRoot = false;
 
 /**
  * The terminal popup's API, answered with a canned transcript. The popup page
@@ -1210,17 +1212,23 @@ let terminalPreviewState = "";
 function terminalPreview(req: Request, url: URL): Response | null {
   const path = url.pathname;
   if (!path.startsWith("/addons/terminal/")) return null;
-  const popup = /^\/addons\/terminal\/sites\/[^/]+$/.test(path);
+  const popup = /^\/addons\/terminal\/(sites\/[^/]+|root)$/.test(path);
   if (popup && req.method === "GET") {
     terminalPreviewState = url.searchParams.get("state") ?? "";
+    terminalPreviewRoot = path.endsWith("/root");
     return null;
   }
   if (path.startsWith("/addons/terminal/assets/")) return null;
+  // The header's root shell control shows on a page opened with ?root.
+  if (path === "/addons/terminal/api/root-access") {
+    const granted = new URL(req.headers.get("referer") ?? "http://x/").searchParams.has("root");
+    return Response.json({ ok: true, data: { granted, problem: null } });
+  }
   if (path === "/addons/terminal/api/sessions" && req.method === "POST") {
     if (terminalPreviewState === "refused") {
       return Response.json({ ok: false, error: "www.example.com cannot be opened: its Unix user has no login shell" }, { status: 400 });
     }
-    return Response.json({ ok: true, data: { id: "preview-session-0000000", user: "example" } });
+    return Response.json({ ok: true, data: { id: "preview-session-0000000", user: terminalPreviewRoot ? "root" : "example" } });
   }
   if (/\/api\/sessions\/[^/]+\/events$/.test(path)) {
     const encoder = new TextEncoder();
@@ -1230,7 +1238,7 @@ function terminalPreview(req: Request, url: URL): Response | null {
         const send = (chunk: string) => controller.enqueue(encoder.encode(chunk));
         // A long retry keeps a dropped stream in its reconnecting state.
         send("retry: 600000\n\n");
-        send(`event: session\ndata: ${JSON.stringify({ domain: "www.example.com", user: "example" })}\n\n`);
+        send(`event: session\ndata: ${JSON.stringify(terminalPreviewRoot ? { domain: null, user: "root" } : { domain: "www.example.com", user: "example" })}\n\n`);
         send(`event: reset\nid: 1\ndata: ${Buffer.from(TERMINAL_TRANSCRIPT).toString("base64")}\n\n`);
         if (state === "ended") send(`event: ended\ndata: ${JSON.stringify({ reason: "exit", code: 0 })}\n\n`);
         if (state === "moved") send("event: moved\ndata: {}\n\n");
@@ -1789,7 +1797,7 @@ const server = Bun.serve({
     }
     if (["/", "/dashboard"].includes(path)) return Response.redirect("/addons/");
     // The popup page and its assets are the real handler's; only its API is canned.
-    if (path.startsWith("/addons/terminal/sites/") || path.startsWith("/addons/terminal/assets/")) {
+    if (path.startsWith("/addons/terminal/sites/") || path === "/addons/terminal/root" || path.startsWith("/addons/terminal/assets/")) {
       return terminalHandle(req, path.slice("/addons/terminal".length));
     }
     // /sites stands in for the panel's own site list, with the addon's block in
@@ -2016,7 +2024,11 @@ const server = Bun.serve({
       systemTweaksPreview = null;
       html = systemTweaksLayout("System Tweaks", systemTweaksDashboardView(systemTweaksPreviewState(url)), notice);
     } else if (path === "/addons/terminal/" || path === "/addons/terminal") {
-      html = terminalLayout("Terminal", terminalDashboardView(empty ? [] : terminalPreviewSites), notice);
+      // ?root shows the root shell's card, ?root=stale one whose password changed.
+      const rootGrant = url.searchParams.get("root");
+      const root = rootGrant === null ? { granted: false, problem: null }
+        : { granted: true, problem: rootGrant === "stale" ? "A root terminal needs 2FA: turn it on in Account → Security." : null };
+      html = terminalLayout("Terminal", terminalDashboardView(empty ? [] : terminalPreviewSites, root, "admin"), notice);
     } else if (path === "/addons/wp-tools/" || path === "/addons/wp-tools") {
       wpToolsPreview = {
         sites: wpToolsPreviewSites(url),

@@ -300,6 +300,7 @@ pre { background: var(--bg); border: 1px solid var(--border); border-radius: 4px
 #clp-flash.notice { background: linear-gradient(rgb(251 191 36 / 12%), rgb(251 191 36 / 12%)), var(--panel); }
 #clp-flash.alert-ok { background: linear-gradient(rgb(35 119 75 / 10%), rgb(35 119 75 / 10%)), var(--panel); }
 #clp-flash .clp-flash-text { flex: 1 1 auto; min-width: 0; }
+#clp-flash .clp-flash-text a { color: inherit; text-decoration: underline; }
 #clp-flash .clp-flash-close { flex: 0 0 auto; margin: -4px -8px 0 0; padding: 2px 8px; border: 0; background: none;
   color: inherit; font-size: 20px; line-height: 1; cursor: pointer; }
 @media (max-width: 940px) {

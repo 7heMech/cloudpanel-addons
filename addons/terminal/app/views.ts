@@ -3,7 +3,7 @@ import { FLEET_FOOTER_HTML, FLEET_ROW_SELECTION_JS, fleetFilterHtml, renderLayou
 import { mountPath } from "../../../lib/mount";
 import type { SanitizedSite } from "../../../lib/gateway-protocol";
 
-import OPEN_JS from "./open.client.js" with { type: "text" };
+import { OPEN_JS } from "../../../lib/root-shell";
 import FLEET_JS from "./fleet.client.js" with { type: "text" };
 import FLEET_STYLE from "./fleet.css" with { type: "text" };
 import POPUP_JS from "./popup.client.js" with { type: "text" };
@@ -45,7 +45,24 @@ function siteRow(site: SanitizedSite): string {
               </tr>`;
 }
 
-export function dashboardView(sites: SanitizedSite[]): string {
+type RootAccess = { granted: boolean; problem: string | null };
+
+/**
+ * Every administrator gets the button. One root has not allowed, or whose
+ * grant does not hold now, is told why in the page's notice instead of getting
+ * a window that fails.
+ */
+function rootButton(root: RootAccess, user: string): string {
+  const refusal = root.problem
+    ?? (root.granted ? null : `Ask root to run clp-addons terminal root allow ${user} on the server.`);
+  const action = refusal === null
+    ? "clpOpenTerminal(CLP_BASE, '', event.shiftKey)"
+    : "notify(this.dataset.refusal, 'error', { text: 'Account → Security', href: '/security' })";
+  return `
+      <button class="btn" type="button"${refusal === null ? "" : ` data-refusal="${esc(refusal)}"`} onclick="${action}">Root terminal</button>`;
+}
+
+export function dashboardView(sites: SanitizedSite[], root: RootAccess = { granted: false, problem: null }, user = ""): string {
   const table = sites.length === 0
     ? '<div class="empty">CloudPanel has no sites yet.</div>'
     : `${fleetFilterHtml({ count: sites.length, placeholder: "Find a site or user", summary: `${sites.length} sites` })}
@@ -66,8 +83,7 @@ export function dashboardView(sites: SanitizedSite[]): string {
     <div class="page-heading">
       <div>
         <h1>Terminal</h1>
-        <p>A shell as a site's own user, starting in its site directory, in a window of its own.</p>
-      </div>
+      </div>${rootButton(root, user)}
     </div>
     <div class="card card-table">
       <div class="card-header"><h2>Sites</h2></div>
@@ -87,13 +103,15 @@ const KEYS = [
   ["esc", "Esc"], ["tab", "Tab"], ["ctrl", "Ctrl"], ["left", "←"], ["up", "↑"], ["down", "↓"], ["right", "→"],
 ];
 
-export function popupPage(domain: string): string {
+/** A site's terminal, or with no domain a root shell on the server itself. */
+export function popupPage(domain: string | null): string {
   const keys = KEYS.map(([name, label]) =>
     `<button type="button" data-key="${name}"${name === "ctrl" ? ' id="term-ctrl" aria-pressed="false"' : ""}>${label}</button>`).join("");
   const content = `<div class="term-bar">
   <img class="term-logo clp-addon-logo-light" src="/assets/images/logo.svg" alt="CloudPanel" width="100" height="20">
   <img class="term-logo clp-addon-logo-dark" src="/assets/images/logo-dark.svg" alt="CloudPanel" width="100" height="20">
-  <span class="term-domain" title="${esc(domain)}">${esc(domain)}</span>
+  <span class="term-domain" title="${esc(domain ?? "This server")}">${esc(domain ?? "This server")}</span>${domain === null ? `
+  <span class="badge tone-bad">root</span>` : ""}
   <span class="term-user" id="term-user" hidden></span>
   <span class="badge tone-warn" id="term-status" role="status">Connecting</span>
   <div class="term-tools">
@@ -106,7 +124,7 @@ export function popupPage(domain: string): string {
   </div>
 </div>
 <div class="term-main" id="term-main">
-  <div id="terminal" data-domain="${esc(domain)}"></div>
+  <div id="terminal" data-domain="${esc(domain ?? "")}"></div>
   <div class="term-select" id="term-select" contenteditable="true" inputmode="none" spellcheck="false" autocorrect="off" autocapitalize="off" aria-label="Terminal text" hidden></div>
   <div class="term-ended" id="term-ended" hidden>
     <div class="card" role="alertdialog" aria-labelledby="term-ended-title" aria-describedby="term-ended-text">
@@ -121,7 +139,7 @@ export function popupPage(domain: string): string {
 </div>
 <div class="term-keys" aria-label="Extra keys">${keys}</div>`;
   const assets = Object.keys(XTERM_ASSETS).map((path) => `${BASE}/assets/${path}`);
-  return renderToolWindow(`${domain} — Terminal`, content, {
+  return renderToolWindow(`${domain ?? "root"} — Terminal`, content, {
     base: BASE,
     css: POPUP_STYLE,
     script: POPUP_JS,

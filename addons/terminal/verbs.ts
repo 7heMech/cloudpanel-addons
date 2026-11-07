@@ -3,4 +3,5 @@
 // the manager; see docs/decisions/terminal.md.
 export const TERMINAL_VERBS = {
   session: { web: "admin", stream: "duplex" },
+  "root-access": { web: "own-account" },
 } as const;
