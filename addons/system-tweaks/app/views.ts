@@ -99,9 +99,9 @@ function settingRow(row: Row): string {
       </div>`;
 }
 
-/** A row of a protection root can lock (`clp-addons lock system-tweaks`): read-only while it is. */
+/** A row of a protection root can lock (`clp-addons lock system-tweaks`): while it is, an on switch stays on and an off one can only go on. */
 function lockableRow(verb: WebVerb<"system-tweaks">, row: Row, locked: boolean): string {
-  return settingRow({ ...row, disabled: row.disabled || frozen(verb, locked) });
+  return settingRow({ ...row, disabled: row.disabled || (frozen(verb, locked) && !!row.checked) });
 }
 
 /** Whether root's lock covers this verb, as `verbs.ts` declares and the gateway enforces. */
@@ -316,6 +316,21 @@ export function panelPhpLine(status: PanelPhpStatus): string {
   return lines.join(" ");
 }
 
+/** `8.4` is newer than `8.3`; the manager cannot load panel-php.ts, which runs commands. */
+function newerPhp(a: string, b: string): boolean {
+  const [aMajor = 0, aMinor = 0] = a.split(".").map(Number);
+  const [bMajor = 0, bMinor = 0] = b.split(".").map(Number);
+  return aMajor !== bMajor ? aMajor > bMajor : aMinor > bMinor;
+}
+
+/** While root's lock holds, the version chosen now and those newer than the one running; otherwise every choice. */
+function phpChoices(status: PanelPhpStatus, locked: boolean): PanelPhpChoice[] {
+  if (!locked) return status.choices;
+  const current = status.wanted || status.stock!;
+  const now = status.running ?? current;
+  return status.choices.filter((choice) => choice.version === current || newerPhp(choice.version, now));
+}
+
 export function panelPhpRow(status: PanelPhpStatus | { error: string }, locked = false): string {
   const description = "Runs CloudPanel's pages, phpMyAdmin and the File Manager. CloudPanel has not tested newer versions, so a change is undone if the login page or File Manager stops answering.";
   if ("error" in status) {
@@ -326,8 +341,9 @@ export function panelPhpRow(status: PanelPhpStatus | { error: string }, locked =
     return settingRow({ key: "panelPhp", title: "Panel PHP", description, control: "",
       extra: `<p class="st-status hint">CloudPanel's PHP-FPM unit is not one this addon recognises, so the panel keeps the PHP CloudPanel chose.</p>` });
   }
+  const choices = phpChoices(status, locked);
   const select = `
-            <select id="panel-php" aria-label="Panel PHP" data-current="${esc(status.wanted)}" onchange="setPanelPhp(this)"${status.overriddenBy || locked ? " disabled" : ""}>${status.choices
+            <select id="panel-php" aria-label="Panel PHP" data-current="${esc(status.wanted)}" onchange="setPanelPhp(this)"${status.overriddenBy || (locked && choices.length < 2) ? " disabled" : ""}>${choices
     .map((choice) => phpOption(choice, status.stock, (status.wanted || status.stock) === choice.version)).join("")}${
     status.wanted && !status.choices.some((choice) => choice.version === status.wanted)
       ? `<option value="${esc(status.wanted)}" selected disabled>PHP ${esc(status.wanted)} (unavailable)</option>` : ""}</select>`;
@@ -731,9 +747,18 @@ function loginJailsCard(jails: LoginJails, locked: boolean): string {
 }
 
 const LOCK_NOTICE: Record<Exclude<LockState, "unlocked">, string> = {
-  locked: "Root has locked Hardening and Failed logins as they are. To change them, run <code>clp-addons unlock system-tweaks</code> in a root terminal.",
-  damaged: "Root's lock file cannot be trusted, so Hardening and Failed logins stay as they are. Run <code>clp-addons lock</code> in a root terminal to see how to fix it.",
+  locked: "Root has locked Hardening and Failed logins: they can be switched on here but not off, and the panel's PHP only moves to a newer version. To change that, run <code>clp-addons unlock system-tweaks</code> in a root terminal.",
+  damaged: "Root's lock file cannot be trusted, so Hardening and Failed logins can be switched on here but not off. Run <code>clp-addons lock</code> in a root terminal to see how to fix it.",
 };
+
+/** Top right of the page: the button that switches everything on and locks, or the lock once there is one. */
+function lockControl(lock: LockState): string {
+  if (lock === "unlocked") return `<button class="btn" type="button" onclick="lockSettings(this)">Lock settings</button>`;
+  const title = lock === "damaged"
+    ? "The lock file cannot be read or trusted; run clp-addons lock on the server"
+    : "Run clp-addons unlock system-tweaks on the server to switch these off again";
+  return `<span class="badge st-locked" title="${esc(title)}">Locked by root</span>`;
+}
 
 export function dashboardView(state: SystemTweaksState, now = Date.now(), lock: LockState = "unlocked"): string {
   const locked = lock !== "unlocked";
@@ -744,6 +769,7 @@ export function dashboardView(state: SystemTweaksState, now = Date.now(), lock: 
         <p>Hardening, automatic updates, panel PHP, remote backups and the SSH login message.</p>
         <p class="hint">Every 15 minutes it also clears PHP and ImageMagick temp files that timed-out requests left in /tmp. PHP worker limits and memory sizing are in <a href="/addons/resource-limits/">Resource Limits</a>.${firewallLine(state.firewall)}</p>
       </div>
+      ${lockControl(lock)}
     </div>${locked ? `
     <p class="notice">${LOCK_NOTICE[lock as keyof typeof LOCK_NOTICE]}</p>` : ""}
     <div class="card">

@@ -47,6 +47,28 @@ stop short of the switch column, and a long one takes a line per thought.
 Failed runs show a short summary with expandable log details, including the
 failed package URL when unattended-upgrades logs one.
 
+### Lock settings
+
+The page header's **Lock settings**, top right like the other addons' header
+actions, is one action on the server, the `lock-settings` verb: every Hardening
+and Failed logins switch on, the two off by default (MySQL on this server only
+and the SSH jail) included, then [root's lock](security.md#root-locks) on System
+Tweaks. Its confirmation says what that does, that MySQL restarts and that only
+`clp-addons unlock system-tweaks`, from a root shell or the panel's root
+terminal, undoes it. The verb holds the settings lock throughout, so no change
+lands between the switches and the lock. It reads the lock file first and stops
+before changing anything if root cannot trust it. It tries every switch, MySQL
+last since it restarts it, and locks only when all came on; otherwise it names
+what failed and locks nothing, leaving on what came on. The lock never holds a
+switch off. Once locked, the header shows **Locked by root** instead, and a
+notice says how to unlock. It does not touch the panel's PHP; see below.
+
+Enabling System Tweaks under a lock, which a new install has, starts it from
+its defaults: before the activation applies anything, each lockable setting is
+raised to its default, and one already on stays on. MySQL on this server only
+and the SSH jail stay as they were, off unless chosen, and can be switched on
+from the page.
+
 ## Automatic updates
 
 Updates use the distro's own `unattended-upgrades`. Everything System Tweaks
@@ -262,6 +284,20 @@ A choice and its drop-in change under one lock, and a repair run reads the
 choice only after it holds the lock. A file at the drop-in path that is not
 root's, or that others can write, is never trusted: it is replaced when a
 version is wanted and removed when none is.
+
+Under [root's lock](security.md#root-locks), `set-panel-php` accepts only an
+installed version newer than the one the panel runs now, checked under the
+choice's lock; going back to an older version or to CloudPanel's own gets the
+usual "root has locked" refusal, and the row offers only the current choice and
+newer versions. **Lock settings** does not move the panel's PHP: the panel is
+CloudPanel's code, untested on 8.2+, the newest version may not be installed,
+and a change that restarts the panel and can roll back after a failed page
+check does not belong inside one action that must either finish or lock
+nothing. Without the newer-only rule, the lock a new install starts with would
+leave the panel on 8.1 with no way to upgrade from the page. Repair's own
+fallbacks still run under a lock, since they keep the panel working: a chosen
+PHP that was removed puts the panel back on CloudPanel's own, and a failed page
+check puts back the previous drop-in.
 
 The choice is stored in `/var/lib/clp-addons/system-tweaks/panel-php.json`.
 The System Tweaks state action includes its status; `set-panel-php` accepts

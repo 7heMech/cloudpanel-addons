@@ -703,7 +703,7 @@ describe("manager route decoding and safe segment decoder", () => {
   });
 });
 
-test.skipIf(existsSync(ADDONS["system-tweaks"]!.configFile))("the manager refuses to enable an addon root has locked", async () => {
+test.skipIf(existsSync(ADDONS["system-tweaks"]!.configFile))("the manager enables an addon root has locked, since that only adds protection", async () => {
   const dir = mkdtempSync(join(tmpdir(), "manager-locks-"));
   try {
     const file = join(dir, "locks.json");
@@ -711,6 +711,27 @@ test.skipIf(existsSync(ADDONS["system-tweaks"]!.configFile))("the manager refuse
     const replies: any[] = [];
     let started = false;
     const result = await createJob("enable", "system-tweaks", {
+      jobsDir: join(dir, "jobs"), lockDir: join(dir, "lock"), newsFile: join(dir, "news"), sinceFile: join(dir, "since"), emitReply: false,
+      startUnit: () => { started = true; return { ok: true, stdout: "", stderr: "" }; },
+      onReply: (data) => replies.push(data),
+      locks: { file, rootUid: process.getuid?.() ?? 0 },
+    });
+    expect(replies[0].error).toBeUndefined();
+    expect(result).toBe(0);
+    expect(started).toBe(true);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("the manager refuses to disable an addon root has locked", async () => {
+  const dir = mkdtempSync(join(tmpdir(), "manager-locks-"));
+  try {
+    const file = join(dir, "locks.json");
+    writeFileSync(file, JSON.stringify({ addons: ["system-tweaks"] }));
+    const replies: any[] = [];
+    let started = false;
+    const result = await createJob("disable", "system-tweaks", {
       jobsDir: join(dir, "jobs"), lockDir: join(dir, "lock"), emitReply: false,
       startUnit: () => { started = true; return { ok: true, stdout: "", stderr: "" }; },
       onReply: (data) => replies.push(data),

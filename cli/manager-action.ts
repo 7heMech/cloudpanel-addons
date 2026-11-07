@@ -274,10 +274,11 @@ function enabled(name: string): boolean {
 function rejectImpossible(kind: ManagerJobKind, addon: string, locks?: CreateJobOptions["locks"]): string | null {
   if (kind === "update") return null;
   if (!ADDON_NAMES.includes(addon)) return `unknown addon '${addon}'`;
+  // Enabling only adds protection, so a lock refuses disabling alone.
+  if (kind === "disable" && addonLocked(addon, locks?.file, locks?.rootUid)) return `root has locked ${addon}; run clp-addons unlock ${addon} on the server first`;
   const isEnabled = enabled(addon);
   if (kind === "enable" && isEnabled) return `${addon} is already enabled`;
   if (kind === "disable" && !isEnabled) return `${addon} is already disabled`;
-  if (addonLocked(addon, locks?.file, locks?.rootUid)) return `root has locked ${addon}; run clp-addons unlock ${addon} on the server first`;
   return null;
 }
 

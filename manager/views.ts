@@ -24,11 +24,12 @@ function addonRow(name: string, enabled: boolean, job: ManagerJobView | null, ne
   const addonJob = live && live.addon === spec.name ? live : null;
   const heading = enabled && href ? `<a href="${esc(href)}">${esc(title)}</a>` : esc(title);
   const lock = lockState(spec.name);
-  const toggle = lock !== "unlocked"
-    ? `<span class="badge" title="${lock === "damaged" ? `The lock file cannot be read or trusted; run clp-addons lock on the server` : `Run clp-addons unlock ${esc(spec.name)} on the server to ${enabled ? "disable" : "enable"} it`}">Locked by root</span>`
-    : enabled
-      ? `<button class="btn" type="button" onclick="disableAddon('${escJs(spec.name)}', '${escJs(title)}', this)" aria-label="Disable ${esc(title)}">Disable</button>`
-      : `<button class="btn" type="button" onclick="enableAddon('${escJs(spec.name)}', this)" aria-label="Enable ${esc(title)}">Enable</button>`;
+  // A lock refuses only disabling: enabling a locked addon adds its protection.
+  const toggle = !enabled
+    ? `<button class="btn" type="button" onclick="enableAddon('${escJs(spec.name)}', this)" aria-label="Enable ${esc(title)}">Enable</button>`
+    : lock !== "unlocked"
+      ? `<span class="badge" title="${lock === "damaged" ? `The lock file cannot be read or trusted; run clp-addons lock on the server` : `Run clp-addons unlock ${esc(spec.name)} on the server to disable it`}">Locked by root</span>`
+      : `<button class="btn" type="button" onclick="disableAddon('${escJs(spec.name)}', '${escJs(title)}', this)" aria-label="Disable ${esc(title)}">Disable</button>`;
   const actions = enabled && href
     ? `<a class="btn btn-primary" href="${esc(href)}" aria-label="Open ${esc(title)}">Open</a>
       ${toggle}`

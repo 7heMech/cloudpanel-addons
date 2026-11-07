@@ -1,20 +1,44 @@
-// Addons root has locked: the gateway refuses their `lock` verbs and the
-// manager refuses to enable or disable them, so only a root shell can change
-// what they protect. See docs/decisions/security.md#root-locks.
+// Addons root has locked: the gateway lets their `lock` verbs only move toward
+// the safer state and the manager refuses to disable them, so only a root shell
+// can weaken what they protect. See docs/decisions/security.md#root-locks.
 import { chmodSync, closeSync, constants, fstatSync, lstatSync, mkdirSync, openSync, readFileSync, type Stats } from "node:fs";
 import { dirname } from "node:path";
 import { CONFIG_DIR, LOCK_DIR } from "../cli/paths";
-import { ADDON_VERBS, type GatewayAddon } from "./gateway-protocol";
+import { ADDON_VERBS, type GatewayAddon, type LockDirection } from "./gateway-protocol";
 import { writeFileAtomic } from "./atomic-write";
 
 export const ROOT_LOCKS_FILE = `${CONFIG_DIR}/locks.json`;
 /** Serialises `lock` and `unlock`, which read the list and write it back. */
 export const ROOT_LOCKS_LOCK = `${LOCK_DIR}/locks.lock`;
 
-/** Whether a lock on its addon withholds this verb from the web. */
+/** Which way a lock on its addon still lets this verb go, or null when the lock does not cover it. */
+export function lockDirection(addon: string, verb: string): LockDirection | null {
+  const verbs = (ADDON_VERBS as Record<string, Record<string, { lock?: unknown }>>)[addon];
+  const declared = verbs && Object.hasOwn(verbs, verb) ? verbs[verb] : undefined;
+  return declared?.lock === "on" || declared?.lock === "newer" ? declared.lock : null;
+}
+
+/** Whether a lock on its addon covers this verb. */
 export function declaresLock(addon: string, verb: string): boolean {
-  const declared = (ADDON_VERBS as Record<string, Record<string, object>>)[addon]?.[verb];
-  return !!declared && "lock" in declared && declared.lock === true;
+  return lockDirection(addon, verb) !== null;
+}
+
+/**
+ * Whether an `"on"` verb's JSON input only switches things on: an object
+ * naming at least one setting, every one of them true.
+ */
+export function switchesOnOnly(input: string | undefined): boolean {
+  if (input === undefined) return false;
+  let body: unknown;
+  try { body = JSON.parse(input); } catch { return false; }
+  if (!body || typeof body !== "object" || Array.isArray(body)) return false;
+  const values = Object.values(body);
+  return values.length > 0 && values.every((value) => value === true);
+}
+
+/** What the web is told when a lock refuses a change. */
+export function lockRefusal(addon: string): string {
+  return `root has locked ${addon}; run clp-addons unlock ${addon} on the server`;
 }
 
 /** Addons with at least one verb a lock covers. */
@@ -103,10 +127,10 @@ export function verbLocked(addon: string, verb: string, file = ROOT_LOCKS_FILE, 
 }
 
 /** Readable by the manager, which shows the locks; written by root alone. */
-export function writeLockedAddons(addons: string[], file = ROOT_LOCKS_FILE): void {
+export function writeLockedAddons(addons: string[], file = ROOT_LOCKS_FILE, rootUid = 0): void {
   // mkdir's mode is masked by root's umask, which could leave a directory
   // lockedAddons refuses, so the mode is set outright.
   if (mkdirSync(dirname(file), { recursive: true })) chmodSync(dirname(file), 0o755);
   writeFileAtomic(file, `${JSON.stringify({ addons: [...new Set(addons)].sort() }, null, 2)}\n`,
-    { mode: 0o644, owner: { uid: 0, gid: 0 } });
+    { mode: 0o644, owner: { uid: rootUid, gid: rootUid === 0 ? 0 : process.getgid?.() ?? 0 } });
 }

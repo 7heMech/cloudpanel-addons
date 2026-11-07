@@ -20,6 +20,9 @@ import { releaseRealIp } from "../addons/system-tweaks/real-ip";
 import WRAPPER_SCRIPT from "../addons/system-tweaks/clpctl-wrapper.sh" with { type: "text" };
 import { DEFAULT_BACKUP_COMPRESSION } from "../addons/system-tweaks/backup-compression";
 import { MOTD_SCRIPT, applyMotd } from "../addons/system-tweaks/motd";
+import { DATABASE_FILE } from "../addons/system-tweaks/database";
+import { SYSTEM_TWEAKS_VERBS } from "../addons/system-tweaks/verbs";
+import { lockedAddons } from "../lib/root-locks";
 
 // CloudPanel's original /usr/bin/clpctlWrapper (cloudpanel 2.5.4-3), whose SHA-256
 // is in KNOWN_ORIGINAL_SHA256, so the guard treats it as a known original.
@@ -601,7 +604,7 @@ test("a box whose operator already turned updates on reads as configured outside
   expect(dashboardView(state)).toContain("Configured outside System Tweaks in 20auto-upgrades");
 });
 
-test("root's lock leaves the protections read-only and the rest of the page as it was", async () => {
+test("root's lock keeps the protections that are on, on, and leaves the rest of the page as it was", async () => {
   const state = await act(box(), ["state"]);
   const open = dashboardView(state);
   const locked = dashboardView(state, Date.now(), "locked");
@@ -609,14 +612,29 @@ test("root's lock leaves the protections read-only and the rest of the page as i
   const switchOf = (html: string, key: string) => html.match(new RegExp(`data-setting="${key}"[^>]*>`))![0];
   expect(open).not.toContain("clp-addons unlock system-tweaks");
   expect(locked).toContain("<code>clp-addons unlock system-tweaks</code>");
-  for (const key of ["confineFileManager", "blockVhostInjection", "panel", "ssh"]) {
+  // On by default: read-only under a lock.
+  for (const key of ["confineFileManager", "blockVhostInjection", "panel"]) {
     expect(switchOf(open, key)).not.toContain("disabled");
     expect(switchOf(locked, key)).toContain("disabled");
     expect(switchOf(damaged, key)).toContain("disabled");
   }
+  // Off by default: it can still be switched on.
+  expect(switchOf(locked, "ssh")).not.toContain("disabled");
+  expect(switchOf(damaged, "ssh")).not.toContain("disabled");
   expect(switchOf(locked, "enabled")).not.toContain("disabled");
   expect(damaged).toContain("Root's lock file cannot be trusted");
   expect(damaged).toContain("<code>clp-addons lock</code>");
+});
+
+test("the header offers Lock settings until root's lock is there, then shows it", async () => {
+  const state = await act(box(), ["state"]);
+  const heading = (html: string) => html.slice(html.indexOf('<div class="page-heading">'), html.indexOf('<div class="card">'));
+  expect(heading(dashboardView(state))).toContain('onclick="lockSettings(this)">Lock settings</button>');
+  for (const lock of ["locked", "damaged"] as const) {
+    const html = dashboardView(state, Date.now(), lock);
+    expect(html).not.toContain("lockSettings(this)");
+    expect(html).toContain(">Locked by root</span>");
+  }
 });
 
 test("switching on writes only the drop-in, and switching off restores the operator's own setup", async () => {
@@ -1904,4 +1922,106 @@ test("the backup compression API forwards the validated selection and repaints i
     expect((await response.json() as { html: string }).html).toBe(dashboardView(state));
     expect(calls).toEqual([body]);
   } finally { systemTweaksService.setBackupCompression = original; }
+});
+
+// --- root's lock ------------------------------------------------------------------
+
+const ALL_OFF = {
+  version: 1, uploadProgressGuard: false, blockForgedRealIp: false, blockVhostInjection: false, isolatePhpPools: false,
+  protectPhpMyAdmin: false, confineFileManager: false, replacePanelCert: false, loginJails: { panel: false, ssh: false },
+  databaseLoopback: false, blockClpctlInjection: false, blockTelemetry: false, serverInfoMotd: false,
+};
+
+/** The box with root's lock file of its own, and with MySQL already bound to loopback, so switching that on restarts nothing. */
+function lockableBox(): Box & { locks: { file: string; rootUid: number; lockFile: string } } {
+  const b = box();
+  const dir = dirname(b.settingsFile);
+  mkdirSync(dir, { recursive: true });
+  const confDir = b.options.database!.paths!.confDirs![0]!;
+  mkdirSync(confDir, { recursive: true });
+  writeFileSync(join(confDir, "zz-clp-addons-loopback.cnf"), DATABASE_FILE);
+  b.options.database = {
+    ...b.options.database,
+    run: (command, args) => command === "ss" ? { ok: true, stdout: "", stderr: "" }
+      : command === "systemctl" && args[0] === "show" ? { ok: true, stdout: "Id=mysql.service\nMainPID=2000\nTriggeredBy=\nActiveState=active\n", stderr: "" }
+      : { ok: false, stdout: "", stderr: "no MySQL in this fixture" },
+  };
+  // A directory of their own: mkdtemp's is the user's alone, as a lock directory must be.
+  const own = tempDir();
+  const locks = { file: join(own, "etc", "locks.json"), rootUid: process.getuid!(), lockFile: join(own, "locks.lock") };
+  b.options.locks = locks;
+  writeFileSync(b.settingsFile, JSON.stringify(ALL_OFF), { mode: 0o600 });
+  return Object.assign(b, { locks });
+}
+
+test("Lock settings switches every lockable switch on, then locks", async () => {
+  const b = lockableBox();
+  await act(b, ["lock-settings"]);
+  const settings = readSettings(b.options.paths as SystemTweaksPaths);
+  expect(settings).toMatchObject({
+    uploadProgressGuard: true, blockForgedRealIp: true, blockVhostInjection: true, isolatePhpPools: true, protectPhpMyAdmin: true,
+    confineFileManager: true, replacePanelCert: true, loginJails: { panel: true, ssh: true }, databaseLoopback: true,
+    blockClpctlInjection: true, blockTelemetry: true,
+  });
+  // Not a protection, so not touched.
+  expect(settings.serverInfoMotd).toBe(false);
+  expect(lockedAddons(b.locks.file, b.locks.rootUid)).toEqual(["system-tweaks"]);
+});
+
+test("Lock settings covers every switch root's lock holds", () => {
+  const source = readFileSync(new URL("../addons/system-tweaks/action.ts", import.meta.url), "utf8");
+  const switches = source.match(/const SWITCHES = \{([^}]*)\}/)![1]!;
+  for (const [verb, declared] of Object.entries(SYSTEM_TWEAKS_VERBS)) {
+    if ((declared as { lock?: string }).lock !== "on" || verb === "set-login-jails") continue;
+    expect(switches).toContain(`"${verb}":`);
+  }
+});
+
+test("Lock settings refuses a lock file root cannot trust before it changes anything", async () => {
+  const b = lockableBox();
+  mkdirSync(dirname(b.locks.file), { mode: 0o755 });
+  writeFileSync(b.locks.file, JSON.stringify({ addons: [] }), { mode: 0o666 });
+  chmodSync(b.locks.file, 0o666);
+  await expect(act(b, ["lock-settings"])).rejects.toThrow("not a trusted regular file");
+  expect(readSettings(b.options.paths as SystemTweaksPaths).confineFileManager).toBe(false);
+});
+
+test("a switch that does not come on leaves nothing locked", async () => {
+  const b = lockableBox();
+  b.options.database = box().options.database;
+  await expect(act(b, ["lock-settings"])).rejects.toThrow("nothing was locked, because not every setting could be switched on: database-loopback:");
+  expect(existsSync(b.locks.file)).toBe(false);
+  // The rest came on; only the lock waits.
+  expect(readSettings(b.options.paths as SystemTweaksPaths)).toMatchObject({ confineFileManager: true, databaseLoopback: false });
+});
+
+test("under root's lock a switch goes on but not off, even asked at root's action directly", async () => {
+  const b = lockableBox();
+  await act(b, ["lock-settings"]);
+  await expect(act(b, ["set-file-manager-guard"], { enabled: false })).rejects.toThrow("root has locked system-tweaks");
+  await expect(act(b, ["set-login-jails"], { ssh: false })).rejects.toThrow("root has locked system-tweaks");
+  expect(readSettings(b.options.paths as SystemTweaksPaths)).toMatchObject({ confineFileManager: true, loginJails: { ssh: true } });
+  await act(b, ["set-file-manager-guard"], { enabled: true });
+  // The rest of the page is not held.
+  await act(b, ["set-motd"], { enabled: false });
+});
+
+test("System Tweaks enabled under root's lock starts from its defaults", () => {
+  const b = lockableBox();
+  mkdirSync(dirname(b.locks.file), { mode: 0o755 });
+  writeFileSync(b.locks.file, JSON.stringify({ addons: ["system-tweaks"] }), { mode: 0o644 });
+  writeFileSync(b.settingsFile, JSON.stringify({ ...ALL_OFF, databaseLoopback: true }), { mode: 0o600 });
+  restoreSystemTweaks(b.options);
+  expect(readSettings(b.options.paths as SystemTweaksPaths)).toMatchObject({
+    uploadProgressGuard: true, blockForgedRealIp: true, blockVhostInjection: true, isolatePhpPools: true, protectPhpMyAdmin: true,
+    confineFileManager: true, replacePanelCert: true, loginJails: { panel: true, ssh: false },
+    // Off by default, but never switched off by this.
+    databaseLoopback: true,
+    blockClpctlInjection: true, blockTelemetry: true, serverInfoMotd: false,
+  });
+
+  // Unlocked, it keeps what was chosen.
+  const open = lockableBox();
+  restoreSystemTweaks(open.options);
+  expect(readSettings(open.options.paths as SystemTweaksPaths).confineFileManager).toBe(false);
 });

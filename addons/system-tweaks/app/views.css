@@ -63,3 +63,4 @@
 }
 .tweak-note p + p { margin-top: 2px; }
 #clp-content select:disabled { opacity: .6; cursor: progress; }
+.st-locked { flex-shrink: 0; }

@@ -399,13 +399,22 @@ export function panelPhpStatus(options: PanelPhpOptions = {}): PanelPhpStatus {
   return status;
 }
 
-export async function setPanelPhp(php: string, options: PanelPhpOptions = {}): Promise<PanelPhpStatus> {
+/**
+ * `lockRefusal` is asked under the lock, and while it answers, root's lock
+ * holds the panel to an installed version newer than the one it runs now.
+ */
+export async function setPanelPhp(php: string, options: PanelPhpOptions = {}, lockRefusal?: () => string | null): Promise<PanelPhpStatus> {
   const ctx = contextOf(options);
   if (php !== "" && !VERSION_RE.test(php)) failAction("choose a PHP version such as 8.4");
   await withFileLock(ctx.paths.lockFile, 30, "another panel PHP change is still running", async () => {
     // Purging removes the withdrawn mark with the state, but not before the config.
     if (readChoice(ctx.paths).withdrawn || !existsSync(ctx.paths.configFile)) {
       failAction("System Tweaks is disabled; enable it to choose the panel's PHP");
+    }
+    const refusal = lockRefusal?.();
+    if (refusal) {
+      const now = runningVersion(ctx) ?? (readChoice(ctx.paths).php || baseUnit(ctx)?.stock);
+      if (!php || !now || !installedVersions(ctx).includes(php) || !newer(php, now)) failAction(refusal);
     }
     await apply(ctx, php);
     writeChoice(ctx.paths, { php });

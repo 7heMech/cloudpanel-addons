@@ -107,6 +107,14 @@ first install. `install` takes no `--version`; changing version is `update`.
 No addon is enabled by default; the installer recommends System Tweaks, which
 holds the security fixes. `update` never adds an addon.
 
+A new install, one with no release installed before, does lock System Tweaks
+([root locks](security.md#root-locks)), before it enables any addon, so the
+panel can switch its protections on but never off, and System Tweaks enabled
+later starts from its defaults. Re-running the installer on an installed box,
+and `update`, never add a lock: that box's switches may be off on purpose.
+`update` prints a one-line hint to run `clp-addons lock system-tweaks` while
+System Tweaks is unlocked.
+
 ## Uninstall
 
 The commands that act on one addon are only `enable` and `disable`. Removing

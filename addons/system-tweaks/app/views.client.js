@@ -122,6 +122,24 @@ function setLoginJails(input) {
   return change(input, '/api/login-jails', { [input.dataset.setting]: input.checked }, switchText(input), 'Saved.');
 }
 
+// One action on the server: every Hardening and Failed logins switch on, then
+// root's lock, which the panel cannot take off again.
+async function lockSettings(button) {
+  const accepted = await confirmAction({
+    title: 'Turn everything on and lock?',
+    text: 'Every Hardening and Failed logins switch is turned on, then locked: from then on the panel can switch them on but never off.',
+    details: [
+      'MySQL is restarted to accept connections from this server only; apps on other machines lose access.',
+      'SSH login guessing is blocked too: an SSH client that offers several wrong keys can be blocked for an hour.',
+      "The panel's PHP is not changed. While locked it can only move to a newer version.",
+      "Only root can undo it, with clp-addons unlock system-tweaks from a root shell or the panel's root terminal.",
+    ],
+    confirmLabel: 'Lock settings',
+  });
+  if (!accepted) return;
+  return change(button, '/api/lock-settings', {}, 'Switching everything on, then locking…', 'Hardening and Failed logins are on and locked.');
+}
+
 function installFail2ban(button) {
   return change(button, '/api/install-fail2ban', {}, 'Installing fail2ban…', 'fail2ban is installed.');
 }
