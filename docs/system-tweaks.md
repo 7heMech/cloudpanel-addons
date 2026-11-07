@@ -4,6 +4,18 @@ Hardening, automatic updates, panel PHP, remote backups, firewall rules and the
 SSH login message.
 PHP worker limits and the server memory budget are in [Resource Limits](resource-limits.md).
 
+## Locking the protections
+
+To keep the Hardening and Failed logins switches as they are, even against an
+administrator's account, run `clp-addons lock system-tweaks` as root, from a
+shell or the panel's root terminal. The page then shows them read-only and System Tweaks cannot be disabled
+from it. `clp-addons unlock system-tweaks` hands them back; `clp-addons lock`
+lists what is locked.
+
+If `/etc/clp-addons/locks.json` is damaged or not root's alone, everything
+lockable stays locked and `lock` and `unlock` refuse. Note which addons it
+locked, `rm /etc/clp-addons/locks.json`, then lock those addons again.
+
 ## Automatic updates
 
 1. Open **Addons → System Tweaks**. If `unattended-upgrades` is missing, choose

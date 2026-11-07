@@ -510,6 +510,7 @@ function previewTheme(html: string, url: URL): string {
  * ?fail2ban=missing shows fail2ban not installed, ?bans=0 no blocked addresses, and ?nodomain no custom domain.
  * ?db=open|unknown|local|pending picks where MySQL listens (firewalled by default),
  * ?dbremote shows a client connected from elsewhere and ?dbroot root's default password.
+ * ?locked shows root's lock, and ?locked=damaged a lock file that cannot be trusted.
  */
 function databasePreviewState(url: URL): Exclude<SystemTweaksState["database"], { error: string }> {
   const db = url.searchParams.get("db");
@@ -2025,7 +2026,7 @@ const server = Bun.serve({
       }), notice);
     } else if (path === "/addons/system-tweaks/" || path === "/addons/system-tweaks") {
       systemTweaksPreview = null;
-      html = systemTweaksLayout("System Tweaks", systemTweaksDashboardView(systemTweaksPreviewState(url)), notice);
+      html = systemTweaksLayout("System Tweaks", systemTweaksDashboardView(systemTweaksPreviewState(url), Date.now(), url.searchParams.get("locked") === "damaged" ? "damaged" : url.searchParams.has("locked") ? "locked" : "unlocked"), notice);
     } else if (path === "/addons/terminal/" || path === "/addons/terminal") {
       // ?root shows the root shell's card, ?root=stale one whose password changed.
       const rootGrant = url.searchParams.get("root");

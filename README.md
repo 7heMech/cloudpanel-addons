@@ -60,6 +60,7 @@ security keys under Account → Security, in the roles an administrator allows.
 | `clp-addons repair` | Restore managed services and CloudPanel integration. |
 | `clp-addons maintenance <domain> [on\|off\|status]` | Control or inspect maintenance mode for a site. |
 | `clp-addons terminal root allow <user>` | Let one administrator with 2FA open a root terminal from the panel; `deny` takes it back. |
+| `clp-addons lock <addon>` | Freeze an addon's protections so the panel cannot change them; `unlock` reverses it. |
 
 Addon names are `cloudflare-ips`, `dns`, `instatic`, `stager`, `maintenance`,
 `resource-limits`, `git`, `panel-tweaks`, `system-tweaks`, `wp-tools`, `smtp`, `terminal`

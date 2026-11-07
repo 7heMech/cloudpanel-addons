@@ -136,6 +136,31 @@ configuration does not use; Nginx sees the edge, so the panel IP may never
 match. Both limits appear in the confirmation. WordPress sign-in itself changes
 no real-IP trust.
 
+### Root locks
+
+An administrator can switch a protection off from the web, so a stolen
+administrator session could switch them all off. `clp-addons lock <addon>`
+freezes them as they are, on or off: the gateway refuses the verbs the addon
+declares `lock`, on the one-shot and streaming paths alike, and the manager
+refuses to enable or disable the addon. Only root changes a lock, from a
+shell; neither command is a gateway verb, and both hold a file lock so concurrent runs keep
+each other's change. A root shell is not held to it, since it could unlock
+anyway; that includes the panel's root terminal, so an administrator root
+allowed one unlocks from there. System Tweaks declares its Hardening and Failed
+logins switches, the panel's PHP included; updates, backups, unblocking and the
+firewall stay with administrators.
+
+The locks are `/etc/clp-addons/locks.json`, mode `0644` so the manager can show
+them, read through one descriptor opened without following links. Only a
+missing file means no locks. A file that cannot be read, is not root's alone,
+is not a regular file or does not parse, or a directory others could remove it
+from, locks every lockable addon; `lock` and `unlock` then refuse, and for an
+untrusted file tell root to remove it and lock again what should stay locked.
+A read error is reported as it is, so a healthy file is not removed. `lock`
+creates the directory `0755` whatever root's umask. The page leaves a locked switch read-only, taking which switches
+from the verbs' `lock` flag, and names the command to run in a root terminal,
+or `clp-addons lock` when the file is damaged.
+
 ## CloudPanel authentication
 
 The gateway reads the bounded `cloudpanel` session file without following
