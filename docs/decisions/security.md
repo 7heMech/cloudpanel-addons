@@ -155,7 +155,8 @@ them, read through one descriptor opened without following links. Only a
 missing file means no locks. A file that cannot be read, is not root's alone,
 is not a regular file or does not parse, or a directory others could remove it
 from, locks every lockable addon; `lock` and `unlock` then refuse, and for an
-untrusted file tell root to remove it and lock again what should stay locked.
+untrusted file tell root to remove it and lock again what should stay locked,
+and for an untrusted directory to make it root's alone.
 A read error is reported as it is, so a healthy file is not removed. `lock`
 creates the directory `0755` whatever root's umask. The page leaves a locked switch read-only, taking which switches
 from the verbs' `lock` flag, and names the command to run in a root terminal,

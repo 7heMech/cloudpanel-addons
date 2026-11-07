@@ -1,5 +1,5 @@
 import { SECURITY_KEYS_VERBS } from "./verbs";
-import { TOKEN_TTL_SECONDS, recordSignIn } from "./sign-ins";
+import { TOKEN_TTL_SECONDS, mfaMark, recordSignIn } from "./sign-ins";
 import { createHmac, randomBytes } from "node:crypto";
 import {
   chmodSync, closeSync, constants as fs, existsSync, fchmodSync, fchownSync, fstatSync, linkSync, lstatSync, mkdirSync, openSync,
@@ -417,7 +417,7 @@ function signIn(paths: SecurityKeysPaths, input: Record<string, unknown>, now: n
     key.lastUsedAt = new Date(now).toISOString();
     writeStore(paths, store);
     // Recorded before the token exists, so the session it opens always has its record.
-    recordSignIn(paths.stateDir, paths.stateUid, { user, key: key.id, at: Math.floor(now / 1000) });
+    recordSignIn(paths.stateDir, paths.stateUid, { user, key: key.id, at: Math.floor(now / 1000), mfa: mfaMark(paths.panelDb, user) });
     const token = mintPanelToken(paths, user, now);
     audit(`${user} signed in with the key "${key.name}"`);
     return { token, user };

@@ -555,7 +555,8 @@ rows keep the server's order until a heading is picked; tables under six sites
 sort too. A phone hides the heading and has no sort: a card list is searched and
 filtered rather than ordered. The ticked filters and the sort survive a repaint,
 and the phone's ten-site cut is taken after both. A row search or a filter hides
-is deselected, so a bulk action only reaches the sites the list leaves. Pages with background
+is deselected, so an action on the selected sites only reaches the sites the
+list leaves; WP Tools' Connect all unconnected ignores search and filters. Pages with background
 jobs get the shared job watcher. Theme initialization runs before styles are
 painted.
 

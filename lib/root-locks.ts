@@ -29,8 +29,14 @@ const rootsAlone = (info: Stats, rootUid: number) => info.uid === rootUid && (in
 
 const errno = (error: unknown) => (error as NodeJS.ErrnoException)?.code;
 
-/** The lock file itself is wrong; root recovers by removing it and locking again. */
-export class UntrustedLockFile extends Error {}
+/**
+ * The lock file, or with `directory` its directory, is wrong. Root recovers
+ * from a bad file by removing it and locking again, and from a bad directory
+ * by making it root's alone.
+ */
+export class UntrustedLockFile extends Error {
+  constructor(message: string, readonly directory = false) { super(message); }
+}
 
 /**
  * The locked addons. Only a missing directory or file means none. A file or
@@ -47,7 +53,7 @@ export function lockedAddons(file = ROOT_LOCKS_FILE, rootUid = 0): string[] {
     if (errno(error) === "ENOENT") return [];
     throw error;
   }
-  if (!dirInfo.isDirectory() || !rootsAlone(dirInfo, rootUid)) throw new UntrustedLockFile(`${dir} is not a directory only root can write`);
+  if (!dirInfo.isDirectory() || !rootsAlone(dirInfo, rootUid)) throw new UntrustedLockFile(`${dir} is not a directory only root can write`, true);
   let fd: number;
   try {
     fd = openSync(file, constants.O_RDONLY | constants.O_NOFOLLOW | constants.O_NONBLOCK);

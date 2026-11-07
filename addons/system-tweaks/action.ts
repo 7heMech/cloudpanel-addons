@@ -803,7 +803,7 @@ export function withdrawSystemTweaks(options: SystemTweaksOptions = {}): void {
   try { applyTelemetryBlock(false, options.telemetry); }
   catch (error) { log.warn(`clp-agent is still blocked from the network: ${errorMessage(error)}; remove /etc/systemd/system/clp-agent.service.d/zz-clp-addons-telemetry.conf`); }
   try { applyMotd(false, options.motd); }
-  catch (error) { log.warn(`the SSH login message is still System Tweaks': ${errorMessage(error)}`); }
+  catch (error) { log.warn(`System Tweaks' server info is still the SSH login message: ${errorMessage(error)}`); }
   // A firewall that cannot be put back does not keep the addon on: CloudPanel's
   // next change on its Firewall page rebuilds ufw without these rules anyway.
   try { syncFirewall("withdraw", options.firewall); }

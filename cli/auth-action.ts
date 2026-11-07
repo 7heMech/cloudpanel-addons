@@ -10,7 +10,7 @@ import { dlopen, FFIType } from "bun:ffi";
 import { Database } from "bun:sqlite";
 import { requireRoot } from "./util";
 import { CLI_BIN, CONFIG_DIR, PANEL_DB, SERVICE_GROUP, SERVICE_USER, SESSION_DIR, STATE_DIR } from "./paths";
-import { passkeyFor } from "../addons/security-keys/sign-ins";
+import { mfaMark, passkeyFor } from "../addons/security-keys/sign-ins";
 import {
   MAX_SESSION_ID_LENGTH,
   parsePanelSession,
@@ -244,7 +244,7 @@ function sessionProof(session: ParsedPanelSession, options: AuthActionOptions): 
   const securityKeys = options.securityKeys ?? existsSync(`${CONFIG_DIR}/security-keys.conf`);
   if (!securityKeys || session.createdAt === null) return "0";
   const state = options.securityKeysState ?? { dir: `${STATE_DIR}/security-keys`, uid: 0 };
-  const key = passkeyFor(session.user, session.createdAt, state.dir, state.uid);
+  const key = passkeyFor(session.user, session.createdAt, mfaMark(options.panelDb ?? PANEL_DB, session.user), state.dir, state.uid);
   return key ? `passkey:${key}` : "0";
 }
 

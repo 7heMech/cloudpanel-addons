@@ -14,7 +14,9 @@ lists what is locked.
 
 If `/etc/clp-addons/locks.json` is damaged or not root's alone, everything
 lockable stays locked and `lock` and `unlock` refuse. Note which addons it
-locked, `rm /etc/clp-addons/locks.json`, then lock those addons again.
+locked, `rm /etc/clp-addons/locks.json`, then lock those addons again. If
+`/etc/clp-addons` itself is not root's alone, make it so (`chown root:root`,
+`chmod go-w`) and run the command again.
 
 ## Automatic updates
 
