@@ -100,6 +100,16 @@ root it prints the plain overview. Help lists operator commands only. `action`
 is how the gateway runs an addon's root verbs, and `serve`, `smtp-submit` and
 `terminal-pty` are started by systemd, Postfix and the terminal action.
 
+Color is decided per stream: `paint` in `cli/util.ts` colors only when the
+stream it writes to is a terminal and `hasColors` allows it, so `NO_COLOR` and
+`TERM=dumb` are honored and journald, pipes and job logs stay plain even under
+`FORCE_COLOR`; a terminal without `TERM` is plain. Bun's `Bun.color` is not
+used, because it reads `TERM` without a stream and colors pipes and files. The
+log helpers write through `console.*`, which waits for a pipe; Bun's
+`process.stdout.write` does not, and whatever exceeds the pipe's buffer is lost
+when the CLI exits. The menu clips lines with `Bun.sliceAnsi`, which measures
+terminal columns and keeps escape sequences whole.
+
 ## Enable and disable apply a delta
 
 A toggle is not an install. Enabling an addon writes that addon's config file,
