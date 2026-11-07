@@ -60,7 +60,7 @@ function rootCard(root: { granted: boolean; problem: string | null }, user: stri
       <div class="terminal-root">
         <div>
           <h3>root</h3>
-          <p class="hint">Opening and closing it is logged. It needs two-factor authentication on your account. It also opens from the terminal icon at the top of every page.</p>
+          <p class="hint">Needs two-factor authentication.</p>
         </div>
         ${action}
       </div>
