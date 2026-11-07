@@ -1,5 +1,6 @@
 import { errorMessage } from "../lib/errors";
 import { unitActive } from "../lib/systemd";
+import { formatPanelIdentity, panelIdentityFromVhost } from "../lib/panel-identity";
 import { writeFileAtomic } from "../lib/atomic-write";
 import {
   chmodSync, chownSync, existsSync, lstatSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, statSync,
@@ -70,50 +71,6 @@ const directoryOperations: DirectoryOperations = {
   chown: (path, uid, gid) => { chownSync(path, uid, gid); },
 };
 
-const HOSTNAME_LABEL = "[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?";
-const HOSTNAME_RE = new RegExp(`^(?:${HOSTNAME_LABEL})(?:\\.${HOSTNAME_LABEL})+$`);
-const WILDCARD_HOSTNAME_RE = new RegExp(`^\\*\\.(?:${HOSTNAME_LABEL})(?:\\.${HOSTNAME_LABEL})+$`);
-
-export interface PanelIdentity {
-  primary: string;
-  aliases: string[];
-}
-
-function normalizePanelHostname(value: string): string | null {
-  let host = value.trim().toLowerCase();
-  if (host.endsWith(".")) host = host.slice(0, -1);
-  if (!host || host.includes("..")) return null;
-  if (HOSTNAME_RE.test(host) || WILDCARD_HOSTNAME_RE.test(host)) return host;
-  return null;
-}
-
-/** Extract the panel's exact and wildcard server names from a root-owned vhost. */
-export function panelIdentityFromVhost(content: string): PanelIdentity | null {
-  const names = new Set<string>();
-  const uncommented = content.replace(/#[^\r\n]*/g, "");
-  const directive = /(?:^|[;{}])\s*server_name\s+([^;]+);/gim;
-  let match: RegExpExecArray | null;
-  let sawDirective = false;
-  while ((match = directive.exec(uncommented))) {
-    sawDirective = true;
-    for (const raw of match[1]!.trim().split(/\s+/)) {
-      if (raw === "_" || raw.toLowerCase() === "localhost") continue;
-      const name = normalizePanelHostname(raw);
-      if (!name) return null;
-      names.add(name);
-    }
-  }
-
-  const exact = [...names].find((name) => HOSTNAME_RE.test(name));
-  // A stock CloudPanel serves the panel as `server_name _;` and only gains a
-  // hostname once an operator sets one. That is the catch-all panel, not an
-  // unparseable vhost: there is no panel domain, so nothing can collide with
-  // it, and the guard has nothing to refuse. A vhost with no server_name at
-  // all is still rejected -- it is not the file we think it is.
-  if (!exact) return sawDirective && names.size === 0 ? { primary: "", aliases: [] } : null;
-  return { primary: exact, aliases: [...names].filter((name) => name !== exact).sort() };
-}
-
 /**
  * Who may own the panel vhost we read the identity from, and inject the proxy
  * into.
@@ -167,12 +124,7 @@ function ensurePanelIdentity(quiet = false): void {
     fatal(`CloudPanel master vhost has no valid panel identity: ${vhostPath}`);
   }
 
-  const aliases = identity.aliases.length ? identity.aliases.join(" ") : "";
-  const body =
-    "# Managed by clp-addons; read by the root action binary.\n" +
-    `PRIMARY=${identity.primary}\n` +
-    `ALIASES=${aliases}\n`;
-  writeFileAtomic(PANEL_IDENTITY_PATH, body, { mode: 0o600, createParent: true });
+  writeFileAtomic(PANEL_IDENTITY_PATH, formatPanelIdentity(identity), { mode: 0o600, createParent: true });
   run("chown", ["root:root", PANEL_IDENTITY_PATH]);
   run("chmod", ["600", PANEL_IDENTITY_PATH]);
   if (!quiet) log.ok(`panel identity recorded from ${vhostPath}`);

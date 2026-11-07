@@ -8,7 +8,7 @@ import { dirname, join } from "node:path";
 import { errorMessage } from "../../lib/errors";
 import { replyToAction, failAction } from "../../lib/action";
 import { runCommand, type CommandResult } from "../../lib/command";
-import { validateFlag } from "../../lib/validate";
+import { validateFlag, HOSTNAME_RE } from "../../lib/validate";
 import { withFileLock } from "../../lib/file-lock";
 import { openPanelDatabase, withoutStandIns } from "../../lib/panel-db";
 import {
@@ -18,8 +18,6 @@ import { CLOUDFLARE_IPS_VERBS } from "./verbs";
 
 const POLICY_VERSION = 1;
 const MAX_SITES_PER_REQUEST = 10_000;
-const HOST_LABEL = "[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?";
-const HOST_RE = new RegExp(`^(?:${HOST_LABEL})(?:\\.${HOST_LABEL})+$`);
 const CLOUDFLARE_INCLUDE = "include /etc/nginx/cloudflare/ips;";
 
 export type CloudflareVerb = keyof typeof CLOUDFLARE_IPS_VERBS;
@@ -95,7 +93,7 @@ function normalizeDomain(value: unknown): string | null {
   if (typeof value !== "string" || value.length > 253) return null;
   let domain = value.toLowerCase();
   if (domain.endsWith(".")) domain = domain.slice(0, -1);
-  const match = domain.match(HOST_RE);
+  const match = domain.match(HOSTNAME_RE);
   return match?.[0] === domain ? domain : null;
 }
 

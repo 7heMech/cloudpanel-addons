@@ -412,7 +412,7 @@ function provisionProbe(): {
   const script = `
     import { ADDONS } from "./addons/catalog.ts";
     import { PANEL_IDENTITY_PATH } from "./lib/paths.ts";
-    import { panelIdentityFromVhost } from "./cli/provision.ts";
+    import { panelIdentityFromVhost } from "./lib/panel-identity.ts";
     console.log(JSON.stringify({
       identityPath: PANEL_IDENTITY_PATH,
       identity: panelIdentityFromVhost(
@@ -718,8 +718,7 @@ test("the panel vhost may be owned by root or the panel user, but never world-wr
 
 test("a stock catch-all panel vhost yields an empty identity, not an install failure", () => {
   const script = `
-    import { panelIdentityFromVhost } from "./cli/provision.ts";
-    import { parsePanelIdentity, validateDomain } from "./lib/panel-identity.ts";
+    import { panelIdentityFromVhost, parsePanelIdentity, validateDomain } from "./lib/panel-identity.ts";
     const catchAll = panelIdentityFromVhost("server { listen 8443 ssl; server_name _; }");
     const named = panelIdentityFromVhost("server { listen 8443 ssl; server_name panel.example.test; }");
     const noDirective = panelIdentityFromVhost("server { listen 8443 ssl; root /var/www; }");

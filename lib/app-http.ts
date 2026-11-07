@@ -4,6 +4,7 @@
 // guards protect mutating addon routes after the request has passed SSO: a
 // same-origin check and a CSRF token stop cross-origin browser requests.
 
+import { HOSTNAME_RE } from "./validate";
 import { errorMessage } from "./errors";
 import { randomBytes } from "node:crypto";
 import { isIP } from "node:net";
@@ -301,8 +302,6 @@ export function guardOrigin(req: Request): Response | null {
   return null;
 }
 
-const DOMAIN_RE = /^[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?(?:\.[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?)+$/;
-
 /**
  * The browser's address as the panel saw it, preferring the visitor address
  * Cloudflare sends. The panel's own Nginx takes forwarded addresses from any
@@ -319,7 +318,7 @@ export function clientIp(req: Request): string {
 export function validateDomain(value: unknown): string | null {
   if (typeof value !== "string") return null;
   const domain = value.trim().toLowerCase().replace(/\.$/, "");
-  return domain.length <= 253 && DOMAIN_RE.test(domain) ? domain : null;
+  return domain.length <= 253 && HOSTNAME_RE.test(domain) ? domain : null;
 }
 
 /** Escape for interpolation into HTML text or a double-quoted attribute. */

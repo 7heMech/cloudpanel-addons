@@ -115,3 +115,45 @@ export function validateDomain(value: string, identityPath = PANEL_IDENTITY_PATH
   panelIdentityGuard(normalized, identityPath);
   return normalized;
 }
+
+function normalizePanelHostname(value: string): string | null {
+  let host = value.trim().toLowerCase();
+  if (host.endsWith(".")) host = host.slice(0, -1);
+  if (!host || host.includes("..")) return null;
+  if (HOSTNAME_RE.test(host) || WILDCARD_HOSTNAME_RE.test(host)) return host;
+  return null;
+}
+
+/** Extract the panel's exact and wildcard server names from a root-owned vhost. */
+export function panelIdentityFromVhost(content: string): PanelIdentity | null {
+  const names = new Set<string>();
+  const uncommented = content.replace(/#[^\r\n]*/g, "");
+  const directive = /(?:^|[;{}])\s*server_name\s+([^;]+);/gim;
+  let match: RegExpExecArray | null;
+  let sawDirective = false;
+  while ((match = directive.exec(uncommented))) {
+    sawDirective = true;
+    for (const raw of match[1]!.trim().split(/\s+/)) {
+      if (raw === "_" || raw.toLowerCase() === "localhost") continue;
+      const name = normalizePanelHostname(raw);
+      if (!name) return null;
+      names.add(name);
+    }
+  }
+
+  const exact = [...names].find((name) => HOSTNAME_RE.test(name));
+  // A stock CloudPanel serves the panel as `server_name _;` and only gains a
+  // hostname once an operator sets one. That is the catch-all panel, not an
+  // unparseable vhost: there is no panel domain, so nothing can collide with
+  // it, and the guard has nothing to refuse. A vhost with no server_name at
+  // all is still rejected -- it is not the file we think it is.
+  if (!exact) return sawDirective && names.size === 0 ? { primary: "", aliases: [] } : null;
+  return { primary: exact, aliases: [...names].filter((name) => name !== exact).sort() };
+}
+
+/** The identity file's text, as `parsePanelIdentity` reads it back. */
+export function formatPanelIdentity(identity: PanelIdentity): string {
+  return "# Managed by clp-addons; read by the root action binary.\n" +
+    `PRIMARY=${identity.primary}\n` +
+    `ALIASES=${identity.aliases.join(" ")}\n`;
+}

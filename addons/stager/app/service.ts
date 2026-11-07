@@ -1,3 +1,4 @@
+import { HOSTNAME_RE } from "../../../lib/validate";
 import type { SiteContext } from "../../../lib/site-context";
 import { fetchPanelInfo, readPanelSnapshot, type PanelSnapshot } from "../../../lib/snapshot-reader";
 import { callGatewayAction, type ActionResult, type GatewayStream } from "../../../lib/gateway-client";
@@ -37,11 +38,10 @@ export async function callAction<T = unknown>(
 // action binary is the boundary and re-checks everything. This exists so the
 // UI can reject bad input with a useful message instead of a generic error
 // from the action binary.
-const DOMAIN_RE = /^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?(\.[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?)+$/;
 
 
 export function validateDomain(d: unknown): string | null {
-  return typeof d === "string" && d.length <= 253 && DOMAIN_RE.test(d) ? d : null;
+  return typeof d === "string" && d.length <= 253 && HOSTNAME_RE.test(d) ? d : null;
 }
 
 export { validateJobId } from "../../../lib/job-id";
