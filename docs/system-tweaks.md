@@ -99,7 +99,7 @@ off removes only that file. It comes back if System Tweaks is disabled.
 
 ## Panel PHP
 
-Under **Addons → System Tweaks → Settings**, choose a newer installed version
+Under **Addons → System Tweaks → Hardening**, choose a newer installed version
 in **Panel PHP**. The page warns while the panel is left on PHP 8.1. This changes the PHP used by CloudPanel's pages,
 phpMyAdmin and File Manager. Site PHP versions keep their own settings.
 
@@ -278,6 +278,10 @@ from SSH for an hour after 5 failed logins within an hour. An SSH client that
 offers several wrong keys counts as failing, so make sure yours offers the right
 key first.
 
+SSH records failures even without fail2ban installed. When you switch the jail
+on, it reads the last hour of those logs, so addresses can appear in **Blocked
+addresses** immediately. These are actual bans on this server.
+
 Both need fail2ban. If it is missing, choose **Install fail2ban**, which installs
 `fail2ban`, `python3-systemd` and `nftables`. Switching both jails off, or
 disabling System Tweaks, puts fail2ban back as it was: stopped if it was not
@@ -388,9 +392,10 @@ when it is enabled again.
 
 ## MySQL access
 
-The **Database** card shows where MySQL listens, whether the firewall rules
-loaded now let anyone reach it (**Firewalled**, **Open** or **Unknown**), any client connected from another address, and whether its `root` account
-still logs in with the password `root` or none.
+Under **Hardening**, **MySQL on this server only** shows where MySQL listens,
+whether the firewall rules loaded now let anyone reach it (**Firewalled**,
+**Open** or **Unknown**), any client connected from another address, and whether
+its `root` account still logs in with the password `root` or none.
 
 Switch on **MySQL on this server only** to restrict MySQL or MariaDB to local
 connections. It writes `zz-clp-addons-loopback.cnf` into
@@ -462,14 +467,16 @@ The **Memory** card sizes MySQL and Redis from the server's RAM, and decides
 what the kernel kills first when memory runs out.
 
 1. Choose a **Memory profile**: **Balanced**, **Database-heavy** or
-   **Cache-heavy**. The card lists what it gives each service on this server and
-   what is left for PHP. Only the profile is saved: the sizes are worked out
-   again each time MySQL or Redis starts, so after you resize the server they
-   follow its new RAM at the next boot.
+   **Cache-heavy**. This chooses the sizes; only the MySQL and Redis switches
+   below enable them. **Preview this profile's memory budget** shows the plan
+   assuming both switches are on. Only the profile is saved: the sizes are
+   worked out again each time MySQL or Redis starts, so after you resize the
+   server they follow its new RAM at the next boot.
 2. Switch on **Size MySQL to this server** to replace CloudPanel's fixed MySQL
    values with the profile's buffer pool, connection limit and smaller
    per-connection buffers. It writes `zz-clp-addons-memory.cnf` next to
-   CloudPanel's `mysqld.cnf` and never restarts MySQL: the card shows
+   CloudPanel's `mysqld.cnf`. A **Working** indicator beside the setting shows
+   while it saves and checks the sizes. It never restarts MySQL: the card shows
    **Pending** until the next restart, which you can do when it suits you:
 
    ```bash
@@ -483,6 +490,9 @@ what the kernel kills first when memory runs out.
 4. **Protect MySQL and nginx when memory runs out** is on by default. When the
    server runs out of memory, the kernel kills a site's PHP worker, failing one
    request, instead of MySQL or nginx, which would take every site down.
+   This protection is independent of the profile and sizing switches.
 
-Switching any of them off removes System Tweaks' files and puts back
-CloudPanel's values: Redis at once, MySQL at its next restart.
+To turn sizing off, switch off **Size MySQL to this server** and **Cap Redis**.
+The card then says **Sizing off**; the saved profile can still be previewed.
+Each service returns to its own configured limits: Redis at once, MySQL at its
+next restart. The out-of-memory protection has its own switch.

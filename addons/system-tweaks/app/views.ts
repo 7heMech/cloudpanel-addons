@@ -430,10 +430,10 @@ function telemetryLine(state: SystemTweaksState["telemetry"]): string {
   return `${badge("Sending", "plain")} <span>clp-agent sends CloudPanel every site's domain and every panel user's name and email once a day.</span>`;
 }
 
-function settingsCard(state: SystemTweaksState): string {
+function hardeningCard(state: SystemTweaksState): string {
   return `
     <div class="card">
-      <div class="card-header"><h2>Settings</h2></div>
+      <div class="card-header"><h2>Hardening</h2></div>
       <div class="tweak-list">${panelPhpRow(state.panelPhp)}${settingRow({
         key: "uploadProgressGuard",
         title: "PHP upload-progress mitigation",
@@ -461,7 +461,7 @@ function settingsCard(state: SystemTweaksState): string {
         checked: state.phpMyAdmin.enabled,
         onchange: "setPhpMyAdmin(this)",
         extra: `<p class="st-status">${phpMyAdminLine(state.phpMyAdmin)}</p>`,
-      })}${settingRow({
+      })}${databaseRow(state.database)}${settingRow({
         key: "replacePanelCert",
         title: "Replace the shared panel certificate",
         description: [
@@ -566,37 +566,27 @@ function defaultPasswordNote(state: DatabaseStatus): string {
     so changing it only in MySQL breaks its Databases page.`);
 }
 
-function databaseCard(state: DatabaseState): string {
+function databaseRow(state: DatabaseState): string {
   const description = [
     "Allows MySQL and MariaDB connections only from this server. Sites and the panel connect over localhost or a Unix socket and keep working. Apps on other machines lose access; reach it over an SSH tunnel instead.",
     "Off by default: CloudPanel creates every database user for any host, so System Tweaks cannot tell whether something remote uses one. A change restarts MySQL, so sites lose their database for a few seconds.",
   ];
   if ("error" in state) {
-    return `
-    <div class="card">
-      <div class="card-header"><h2>Database</h2></div>
-      <div class="tweak-list">${settingRow({ key: "databaseLoopback", title: "MySQL on this server only", description, control: "",
-        extra: `<div class="alert st-alert" role="alert">${esc(state.error)}</div>` })}
-      </div>
-    </div>`;
+    return settingRow({ key: "databaseLoopback", title: "MySQL on this server only", description, control: "",
+      extra: `<div class="alert st-alert" role="alert">${esc(state.error)}</div>` });
   }
   const remote = state.remoteClients.length
     ? warning(`Connected now from ${listing(state.remoteClients)}. ${state.loopback ? "" : "These lose access once MySQL accepts connections from this server only."}`)
     : "";
-  return `
-    <div class="card">
-      <div class="card-header"><h2>Database</h2></div>
-      <div class="tweak-list">${settingRow({
-        key: "databaseLoopback",
-        title: "MySQL on this server only",
-        description,
-        checked: state.loopback,
-        disabled: !state.running && !state.loopback,
-        onchange: "setDatabaseLoopback(this)",
-        extra: `<p class="st-status">${databaseLine(state)}</p>${remote}${defaultPasswordNote(state)}`,
-      })}
-      </div>
-    </div>`;
+  return settingRow({
+    key: "databaseLoopback",
+    title: "MySQL on this server only",
+    description,
+    checked: state.loopback,
+    disabled: !state.running && !state.loopback,
+    onchange: "setDatabaseLoopback(this)",
+    extra: `<p class="st-status">${databaseLine(state)}</p>${remote}${defaultPasswordNote(state)}`,
+  });
 }
 
 type Memory = Exclude<SystemTweaksState["memory"], { error: string }>;
@@ -631,11 +621,14 @@ function memoryBudget(state: Memory): string {
   const rest = left > 0 ? `<dt>Left for PHP and the rest</dt><dd>${esc(size(left))}</dd>`
     : `<dt>Left for PHP and the rest</dt><dd>${badge("None", "bad")} These add up to more than the server's ${esc(size(plan.ramMb))}.</dd>`;
   return `
-      <dl class="kv st-kv">
+      <details class="st-fold" id="memory-budget">
+        <summary>Preview this profile's memory budget</summary>
+        <p class="hint st-suggest">Assumes both MySQL sizing and Cap Redis are on.</p>
+        <dl class="kv st-kv">
           <dt>RAM</dt><dd>${esc(size(plan.ramMb))}</dd>${rows}
           ${rest}
-      </dl>
-      <p class="hint st-suggest">The sizes this profile gives here, with both switches below on.</p>`;
+        </dl>
+      </details>`;
 }
 
 function mysqlMemoryLine(state: Memory): string {
@@ -656,7 +649,7 @@ function redisMemoryLine(state: Memory): string {
   if (!redis.installed && !state.settings.redis) return `${badge("Not installed", "plain")} <span>Redis is not installed here.</span>`;
   if (redis.problem) return `${badge("Unknown", "warn")} <span>${esc(redis.problem)}</span>`;
   const used = redis.usedMb === null ? "" : `Using ${size(redis.usedMb)}`;
-  if (redis.capped) return `${badge("On", "ok")} <span>${esc(used)} of ${esc(size(state.plan.redisMb))}.</span>`;
+  if (state.settings.redis && redis.capped) return `${badge("On", "ok")} <span>${esc(used)} of ${esc(size(state.plan.redisMb))}.</span>`;
   if (state.settings.redis) return `${badge("Not applied", "warn")} <span>${redis.maxmemoryMb === null ? "Redis is not running; the cap applies when it starts." : "Run clp-addons repair."}</span>`;
   if (redis.maxmemoryMb === null) return `${badge("Off", "plain")}`;
   return `${badge("Off", "plain")} <span>${esc(used)}${redis.maxmemoryMb ? `, with Redis's own limit of ${esc(size(redis.maxmemoryMb))}` : ", with no limit"}.</span>`;
@@ -686,11 +679,12 @@ function memoryCard(state: SystemTweaksState["memory"]): string {
         key: "memoryProfile",
         title: "Memory profile",
         description: [
-          "How MySQL and Redis share this server's RAM: Balanced, more for the database, or more for the cache.",
+          "How MySQL and Redis share this server's RAM: Balanced, more for the database, or more for the cache. Only the sizing switches enabled below use this profile.",
           "Only a share is saved. The sizes are worked out again each time MySQL or Redis starts, so a server resized up or down gets new ones at its next boot.",
         ],
         control: select,
-        extra: memoryBudget(state),
+        extra: `${!state.settings.mysql && !state.settings.redis
+          ? `<p class="st-status">${badge("Sizing off", "plain")} <span>The profile is saved; MySQL sizing and Cap Redis are both off.</span></p>` : ""}${memoryBudget(state)}`,
       })}${settingRow({
         key: "memory-mysql",
         title: "Size MySQL to this server",
@@ -716,7 +710,10 @@ function memoryCard(state: SystemTweaksState["memory"]): string {
       })}${settingRow({
         key: "memory-oom",
         title: "Protect MySQL and nginx when memory runs out",
-        description: "When the server runs out of memory, the kernel kills a site's PHP worker, which fails one request, instead of MySQL or nginx, which takes every site down.",
+        description: [
+          "When the server runs out of memory, the kernel kills a site's PHP worker, which fails one request, instead of MySQL or nginx, which takes every site down.",
+          "Independent of the memory profile and sizing switches above.",
+        ],
         checked: state.settings.oom,
         onchange: "setMemory(this)",
         extra: `<p class="st-status">${oomLine(state)}</p>`,
@@ -823,7 +820,7 @@ function loginJailsCard(jails: LoginJails): string {
         ],
         checked: jails.ssh,
         onchange: "setLoginJails(this)",
-        extra: `<p class="st-status">${jailLine(jails, "sshd", jails.ssh)}</p>${sshdWarning(jails.sshd)}`,
+        extra: `<p class="st-status">${jailLine(jails, "sshd", jails.ssh)}</p>${jails.ssh ? '<p class="hint st-suggest">SSH already records failed logins. The last hour counts when you switch this on, so addresses can be blocked immediately, even after a fresh fail2ban install.</p>' : ""}${sshdWarning(jails.sshd)}`,
       })}
       </div>${install}${jails.running.length ? bansTable(jails.bans) : ""}
     </div>`;
@@ -842,5 +839,5 @@ export function dashboardView(state: SystemTweaksState, now = Date.now()): strin
       <div class="card-header"><h2>Automatic updates</h2></div>
       <div class="tweak-list">${updateRows(state.updates, state.settings)}
       </div>${statusList(state.updates, now)}${coverageDetails(state.updates)}
-    </div>${backupCompressionCard(state.backupCompression)}${settingsCard(state)}${loginJailsCard(state.loginJails)}${databaseCard(state.database)}${memoryCard(state.memory)}`;
+    </div>${backupCompressionCard(state.backupCompression)}${hardeningCard(state)}${loginJailsCard(state.loginJails)}${memoryCard(state.memory)}`;
 }

@@ -9,14 +9,16 @@ for MySQL, Redis and the out-of-memory killer.
 
 ## The page
 
-Six cards: Automatic updates, which an operator comes back to; Remote backups,
+Five cards: Automatic updates, which an operator comes back to; Remote backups,
 with optional Zstandard compression and its level and worker count; one
-Settings card for the panel's PHP, the upload-progress mitigation, forged
-visitor IPs, phpMyAdmin, the panel's certificate, nginx config injection,
-clpctl injection and CloudPanel telemetry, which are set once; Failed logins, with the two fail2ban jails
-and the addresses they block; Database, which says who can reach MySQL; and
-Memory, with the profile, what it gives each service and its three switches. Each
-row says what it does in a sentence; the
+Hardening card for the panel's PHP, the upload-progress mitigation, forged
+visitor IPs, phpMyAdmin, MySQL access, the panel's certificate, nginx config
+injection, PHP pool isolation, File Manager confinement, clpctl injection and
+CloudPanel telemetry; Failed logins, with the two fail2ban jails and the
+addresses they block; and Memory, with the shared MySQL/Redis profile, an
+expandable budget preview and its three switches. MySQL access belongs with
+the protection settings; MySQL and Redis sizing stay together because their
+budgets share the same RAM and profile. Each row says what it does; the
 reasons are here. The Nginx, MySQL, CloudPanel and reboot rows appear only once
 System Tweaks' own switch is on, since they change nothing before. The
 repositories and each PHP-FPM's upload-progress value fold into a summary that
@@ -38,10 +40,10 @@ adds that the reboot is skipped while anyone is logged in.
 The page makes one change at a time. Every change answers with the whole page
 as it stands, so a second change running beside it would be repainted over by
 the first reply, its controls put back as if it had stopped. While a change
-runs, every control on the page is disabled, the row it belongs to says what is
-running, and a change slower than a moment also says so over the page, naming
-it and that the other settings wait. Descriptions stop short of the switch
-column, and a long one takes a line per thought.
+runs, every control on the page is disabled, a pulsing Working badge below the
+row's description says what is running, and a change slower than a moment also
+says so over the page, naming it and that the other settings wait. Descriptions
+stop short of the switch column, and a long one takes a line per thought.
 
 Failed runs show a short summary with expandable log details, including the
 failed package URL when unattended-upgrades logs one.
@@ -1213,9 +1215,12 @@ stay. Debian's default `iptables-multiport` chains would be flushed with them.
 The chain hooks input at priority -1, before ufw's.
 
 The SSH jail reads the journal with `backend = systemd`, since Debian 12 ships
-without rsyslog. It is off by default because a client that offers several
-wrong keys counts as failed logins, which could block the operator from the one
-way in that does not depend on the panel. The setting never edits
+without rsyslog. Its one-hour `findtime` includes failures already in the
+journal when the jail starts, even if fail2ban was only just installed. The
+page explains why enabling it can immediately populate the live ban list.
+It is off by default because a client that offers several wrong keys counts as
+failed logins, which could block the operator from the one way in that does not
+depend on the panel. The setting never edits
 `sshd_config`: turning off password or root login without a working key locks
 the operator out. The page reads `sshd -T` and says when sshd accepts passwords
 or root can log in with one, and how to change it.
@@ -1500,7 +1505,15 @@ process, which is MySQL, and every site loses its database.
 ### Policy saved, sizes derived
 
 Settings hold a profile (`balanced`, `database` or `cache`) and three switches,
-never a size. The sizes come from `MemTotal` each time they are applied:
+never a size. Choosing a profile does not enable a service's sizing switch.
+With both sizing switches off, the page says Sizing off and retains the chosen
+profile for previewing. The expandable budget always assumes both sizing
+switches are on; each service's row reports its own state. The Redis row calls
+the cap On only when its switch is enabled and the live values match the
+profile, so an operator's own matching limit does not look like an active
+addon cap. Out-of-memory protection is independent of sizing.
+
+The sizes come from `MemTotal` each time they are applied:
 
 | Profile | Buffer pool | Connection budget | Redis |
 | --- | --- | --- | --- |
@@ -1533,6 +1546,9 @@ hangs. `set-memory` answers with the saved settings only, and the page the
 browser repaints comes from a separate `state` request, bounded as loading the
 page is. The gateway's timeout for `set-memory` is the deadline, the 15-second
 settings lock wait, the waits on `memory.json`'s lock, and the reply.
+The MySQL switch names the save and validation in its progress message and
+says on success that the sizes apply at the next restart; it does not report
+the running server as resized just because the file was saved.
 
 ### MySQL
 

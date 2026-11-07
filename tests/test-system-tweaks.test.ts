@@ -18,6 +18,7 @@ import { dashboardView } from "../addons/system-tweaks/app/views";
 import { releaseRealIp } from "../addons/system-tweaks/real-ip";
 import WRAPPER_SCRIPT from "../addons/system-tweaks/clpctl-wrapper.sh" with { type: "text" };
 import { DEFAULT_BACKUP_COMPRESSION } from "../addons/system-tweaks/backup-compression";
+import { DEFAULT_MEMORY, memoryPlan } from "../addons/system-tweaks/memory";
 
 // CloudPanel's original /usr/bin/clpctlWrapper (cloudpanel 2.5.4-3), whose SHA-256
 // is in KNOWN_ORIGINAL_SHA256, so the guard treats it as a known original.
@@ -754,7 +755,7 @@ function systemTweaksClient() {
     },
   };
   const client = new Function("call", "busy", "notify", "clearNotice", "repaintView", "CLP_ROOT", "clpFlashTimer", "document",
-    `${source}\nreturn { installUpdates, setUpdates, setPanelPhp };`)(
+    `${source}\nreturn { installUpdates, setUpdates, setPanelPhp, setMemory };`)(
     (path: string, options: { body: string }) => new Promise((answer) => {
       events.push(`POST ${path} ${options.body}`);
       replies.push({ path, body: options.body, answer });
@@ -766,7 +767,7 @@ function systemTweaksClient() {
     { getElementById: () => ({}), querySelector: () => null, querySelectorAll: () => [] },
     0,
     document,
-  ) as Record<"installUpdates" | "setUpdates" | "setPanelPhp", (control: unknown) => Promise<void>>;
+  ) as Record<"installUpdates" | "setUpdates" | "setPanelPhp" | "setMemory", (control: unknown) => Promise<void>>;
   return { client, control, events, replies, lines };
 }
 
@@ -780,6 +781,29 @@ test("a change says it is running on its own row, and repaints the page from its
   expect(events.slice(3)).toEqual(["idle", "repaint: <p>installed</p>", "ok: unattended-upgrades is installed."]);
   expect(lines.every((line) => line.removed)).toBe(true);
   expect(readFileSync(join(import.meta.dir, "../addons/system-tweaks/app/views.client.js"), "utf8")).not.toContain("location.reload");
+});
+
+test("MySQL sizing keeps progress visible until the reply and explains that a restart is still needed", async () => {
+  for (const checked of [true, false]) {
+    const { client, control, events, replies, lines } = systemTweaksClient();
+    const input = { ...control("Size MySQL to this server"), dataset: { setting: "memory-mysql" }, checked };
+    const pending = client.setMemory(input);
+    await Bun.sleep(0);
+    expect(replies.map(({ path, body }) => ({ path, body }))).toEqual([
+      { path: "/api/memory", body: JSON.stringify({ mysql: checked }) },
+    ]);
+    expect(events).toContain(checked ? "working: Saving and checking MySQL sizes…" : "working: Restoring CloudPanel’s MySQL sizes…");
+    expect(events).not.toContain("idle");
+    expect(lines).toHaveLength(1);
+    expect(lines[0]!.removed).toBe(false);
+    replies[0]!.answer({ ok: true, html: "<p>Pending restart</p>" });
+    await pending;
+    expect(lines[0]!.removed).toBe(true);
+    expect(events.slice(-3)).toEqual([
+      "idle", "repaint: <p>Pending restart</p>",
+      checked ? "ok: Saved. MySQL uses these sizes at its next restart." : "ok: Saved. CloudPanel’s MySQL sizes return at its next restart.",
+    ]);
+  }
 });
 
 // Switching updates on and then the panel's PHP, before the first answered, let
@@ -1300,6 +1324,35 @@ test("the memory switches save the change, and a change that fails leaves the sa
   await expect(act(b, ["set-memory"], { redis: true })).rejects.toThrow("has a password");
   expect(readSettings(b.options.paths as SystemTweaksPaths).memory.redis).toBe(false);
   await expect(act(b, ["set-memory"], { profile: "huge" })).rejects.toThrow("profile must be");
+
+  // Turning both sizing switches off persists; choosing another profile is only a preview.
+  await act(b, ["set-memory"], { mysql: false, redis: false });
+  await act(b, ["set-memory"], { profile: "cache" });
+  expect(readSettings(b.options.paths as SystemTweaksPaths).memory).toEqual({ profile: "cache", mysql: false, redis: false, oom: true });
+  expect(existsSync(join(memory.paths!.confDirs![0]!, "zz-clp-addons-memory.cnf"))).toBe(false);
+});
+
+test("memory sizing can be off while its profile is saved and Redis has its own matching limit", async () => {
+  const base = await act(box(), ["state"]);
+  const plan = memoryPlan(3819, "balanced");
+  const memory = {
+    settings: { ...DEFAULT_MEMORY }, plan,
+    mysql: { installed: true, inPlace: false, pending: true },
+    redis: { installed: true, maxmemoryMb: plan.redisMb, policy: "allkeys-lru", usedMb: 1, capped: true, problem: "" },
+    oom: { inPlace: true }, varnishMb: 512, memcachedMb: 64,
+  };
+  const html = dashboardView({ ...base, memory });
+  expect(html).toContain("Sizing off</span>");
+  expect(html).toContain("The profile is saved; MySQL sizing and Cap Redis are both off.");
+  expect(html).toContain("CloudPanel's values come back at MySQL's next restart.");
+  expect(html).toContain(`with Redis's own limit of ${plan.redisMb} MB`);
+  expect(html).toMatch(/data-setting="memory-oom"[^>]* checked/);
+  expect(html).not.toMatch(/data-setting="memory-(?:mysql|redis)"[^>]* checked/);
+
+  const enabled = dashboardView({ ...base, memory: { ...memory, settings: { ...memory.settings, redis: true } } });
+  expect(enabled).not.toContain("Sizing off</span>");
+  expect(enabled).toContain(`Using 1 MB of ${plan.redisMb} MB`);
+  expect(enabled).not.toContain("with Redis's own limit");
 });
 
 test("PHP pool isolation switches from the page, repair puts it back, and the PHP-FPM hook follows the setting", async () => {

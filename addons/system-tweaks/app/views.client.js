@@ -149,6 +149,11 @@ function setMemory(control) {
     return change(control, '/api/memory', { profile: control.value }, 'Switching to the ' + label + ' profile…', 'Saved.');
   }
   const key = control.dataset.setting.slice('memory-'.length);
+  if (key === 'mysql') {
+    return change(control, '/api/memory', { mysql: control.checked },
+      control.checked ? 'Saving and checking MySQL sizes…' : 'Restoring CloudPanel’s MySQL sizes…',
+      control.checked ? 'Saved. MySQL uses these sizes at its next restart.' : 'Saved. CloudPanel’s MySQL sizes return at its next restart.');
+  }
   return change(control, '/api/memory', { [key]: control.checked }, switchText(control), 'Saved.');
 }
 
