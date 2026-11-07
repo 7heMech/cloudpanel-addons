@@ -44,6 +44,7 @@ mock.module("./cli/provision.ts", () => ({
 }));
 mock.module("./cli/reconcile.ts", () => ({
   reconcileAnchors: (_quiet, _exclude, managerNav) => { event("anchors nav=" + managerNav); return true; },
+  reconcileMaintenanceNginx: (_quiet, enabled) => { event("maintenance " + enabled); return true; },
   reconcileNginx: (_quiet, enabled) => { event("nginx " + enabled); return process.env.CLP_TEST_NGINX_FAILS !== "1"; },
 }));
 mock.module("./cli/php-guard.ts", () => ({ reconcilePhpGuard: (wanted) => event("phpGuard " + wanted) }));
@@ -117,7 +118,7 @@ test("with every addon disabled it removes the installation and keeps addon data
   const result = uninstall(["--yes"]);
   expect(result).toEqual({
     ok: true,
-    events: ["anchors nav=false", "nginx false", "purgeTwigCache", "stopUnits", "phpGuard false"],
+    events: ["anchors nav=false", "maintenance false", "nginx false", "purgeTwigCache", "stopUnits", "phpGuard false"],
   });
   for (const path of [binary, libexec, identityPath]) expect(existsSync(path)).toBe(false);
   expect(existsSync(join(stateDir, "settings.json"))).toBe(true);
@@ -127,7 +128,7 @@ test("a CloudPanel change it cannot undo stops it before the units or the binary
   const result = uninstall(["--yes"], true);
   expect(result.ok).toBe(false);
   expect(result.error).toContain("still installed");
-  expect(result.events).toEqual(["anchors nav=false", "nginx false"]);
+  expect(result.events).toEqual(["anchors nav=false", "maintenance false", "nginx false"]);
   expect(existsSync(binary)).toBe(true);
   expect(existsSync(identityPath)).toBe(true);
 });

@@ -7,7 +7,7 @@ import { withOperationLockSync } from "./operation-lock";
 import { CLI_BIN, LIBEXEC_DIR, STATE_DIR } from "./paths";
 import { reconcilePhpGuard } from "./php-guard";
 import { reconcilePanelIdentity, stopUnits } from "./provision";
-import { reconcileAnchors, reconcileNginx } from "./reconcile";
+import { reconcileAnchors, reconcileMaintenanceNginx, reconcileNginx } from "./reconcile";
 import { fatal, log, parseFlags, requireRoot } from "./util";
 import { rmSync } from "node:fs";
 
@@ -32,7 +32,7 @@ export function cmdSelfUninstall(argv: string[]): void {
     }
     // Undone while the units still run, so a failure leaves an installation
     // repair can keep whole and this can be re-run.
-    if (!reconcileAnchors(true, undefined, false) || !reconcileNginx(true, false)) {
+    if (!reconcileAnchors(true, undefined, false) || !reconcileMaintenanceNginx(true, false) || !reconcileNginx(true, false)) {
       fatal("could not undo the CloudPanel changes; clp-addons is still installed, so fix the error above and re-run");
     }
     purgeTwigCache();
