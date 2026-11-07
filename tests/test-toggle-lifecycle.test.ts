@@ -381,12 +381,11 @@ test("disabling leaves the addon's state directory and removes only its config",
   expect(existsSync(join(run.root, "state"))).toBe(true);
 });
 
-test("the manager unit written by a toggle describes exactly the enabled set", () => {
-  const run = toggle([{ verb: "enable", addon: "stager" }], { enabled: ["instatic"] });
-  const unit = readFileSync(join(run.root, "systemd", "clp-addons.service"), "utf8");
-  expect(unit).toContain("STAGER_APP_DATA=");
-  expect(unit).toContain("INSTATIC_APP_DATA=");
-  expect(unit).not.toContain("MAINTENANCE_APP_DATA=");
+test("the manager unit written by a toggle orders it after what the enabled set needs", () => {
+  const unit = (enabled: string[]) =>
+    readFileSync(join(toggle([{ verb: "enable", addon: "stager" }], { enabled }).root, "systemd", "clp-addons.service"), "utf8");
+  expect(unit(["instatic"])).toMatch(/^After=.* docker\.service$/m);
+  expect(unit(["maintenance"])).not.toContain("docker.service");
 });
 
 test("a spoiled unit file is rewritten even though its text still matches", () => {

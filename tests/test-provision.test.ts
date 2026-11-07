@@ -17,13 +17,6 @@ import { panelUserUid } from "../lib/sso-auth";
 const realProvision = async (): Promise<typeof import("../cli/provision")> =>
   await import("../cli/provision?provision-test-real" as "../cli/provision");
 
-test("hyphenated addon names produce valid systemd environment variables", () => {
-  const unit = serviceUnit([ADDONS["cloudflare-ips"]!, ADDONS["panel-tweaks"]!]);
-  expect(unit).toContain("Environment=CLOUDFLARE_IPS_APP_DATA=/var/lib/clp-addons/cloudflare-ips");
-  expect(unit).toContain("Environment=PANEL_TWEAKS_APP_DATA=/var/lib/clp-addons/panel-tweaks");
-  expect(unit).not.toContain("Environment=CLOUDFLARE-IPS_APP_DATA");
-});
-
 const REPO = join(import.meta.dir, "..");
 
 test("timer repair persistently enables a disabled timer without restarting an armed timer", () => {
@@ -483,17 +476,6 @@ test("manager unit hardens its namespace with zero-sudo root gateway dispatch", 
   expect(unit).toContain("Restart=always");
   expect(unit).not.toContain("ExecStartPre=+");
   expect(unit).not.toContain("hmac");
-});
-
-test("every addon's APP_DATA environment assignment is a name systemd accepts", () => {
-  // systemd silently ignores (and warns on) an Environment= line whose name
-  // contains a character outside [A-Za-z0-9_], which "panel-tweaks" produced
-  // via a bare toUpperCase() before it was sanitized.
-  const specs = ADDON_NAMES.map((name) => ADDONS[name]!);
-  const unit = serviceUnit(specs);
-  const assignments = [...unit.matchAll(/^Environment=([^=]+)=/gm)].map((match) => match[1]);
-  expect(assignments.length).toBe(specs.length);
-  for (const name of assignments) expect(name).toMatch(/^[A-Za-z_][A-Za-z0-9_]*$/);
 });
 
 test("provisioning creates every project-owned writable directory", () => {

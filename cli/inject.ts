@@ -33,7 +33,6 @@ import { execFileSync } from "node:child_process";
 import {
   existsSync, readFileSync, writeFileSync, mkdirSync, rmSync, readdirSync, statSync, realpathSync,
 } from "node:fs";
-import { join } from "node:path";
 import { NGINX_PROXY_STATE_DIR, nginxLayout, TEMPLATE_STATE_DIR, TEMPLATES_DIR, TWIG_CACHE_DIR } from "../lib/paths";
 import type { AddonTarget } from "../lib/addon-target";
 import { withoutPhpMyAdminRules } from "../addons/system-tweaks/phpmyadmin";

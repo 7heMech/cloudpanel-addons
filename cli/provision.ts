@@ -8,16 +8,13 @@ import {
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import {
-  ANCHOR_SERVICE, CLI_BIN, DISTRO_NGINX_SITES_DIR,
-  NEW_SITES_PATH, NEW_SITES_SERVICE, CERTIFICATES_PATH, CERTIFICATES_SERVICE, NGINX_CERTIFICATES_DIR,
-  FIREWALL_PATH, FIREWALL_SERVICE, UFW_RULE_FILES,
-  NEW_SITE_ROWS_PATH, PANEL_DB_DIR,
-  CONFIG_DIR, LIBEXEC_DIR, INSTATIC_BACKUP_CRON, LEGACY_UNITS,
-  AUTH_SERVICE_UNIT, AUTH_SOCKET_PATH, AUTH_SOCKET_UNIT, LOCK_DIR, MANAGER_UNIT,
-  PANEL_GROUP, PANEL_USER, RECONCILE_PATH, RECONCILE_SERVICE,
-  RECONCILE_TIMER, SERVICE_GROUP, SERVICE_USER, SESSION_DIR, SHARED_GROUP, SOCKET_DIR, STATE_DIR,
-  SOCKET_PATH, SYSTEMD_DIR, TWIG_CACHE_DIR, PANEL_IDENTITY_PATH, NGINX_GLOBAL_SETTINGS, CLOUDFLARE_IPS_PATH,
-  APT_UPGRADE_DROPIN, UPDATE_MOTD_DIR, MAINTENANCE_INCLUDE_PATH,
+  ANCHOR_SERVICE, CLI_BIN, DISTRO_NGINX_SITES_DIR, NEW_SITES_PATH, NEW_SITES_SERVICE, CERTIFICATES_PATH,
+  CERTIFICATES_SERVICE, NGINX_CERTIFICATES_DIR, FIREWALL_PATH, FIREWALL_SERVICE, UFW_RULE_FILES, NEW_SITE_ROWS_PATH,
+  PANEL_DB_DIR, CONFIG_DIR, LIBEXEC_DIR, INSTATIC_BACKUP_CRON, LEGACY_UNITS, AUTH_SERVICE_UNIT, AUTH_SOCKET_PATH,
+  AUTH_SOCKET_UNIT, LOCK_DIR, MANAGER_UNIT, PANEL_GROUP, PANEL_USER, RECONCILE_PATH, RECONCILE_SERVICE,
+  RECONCILE_TIMER, SERVICE_GROUP, SERVICE_USER, SESSION_DIR, SHARED_GROUP, SOCKET_DIR, STATE_DIR, SOCKET_PATH,
+  SYSTEMD_DIR, PANEL_IDENTITY_PATH, NGINX_GLOBAL_SETTINGS, CLOUDFLARE_IPS_PATH, APT_UPGRADE_DROPIN, UPDATE_MOTD_DIR,
+  MAINTENANCE_INCLUDE_PATH,
 } from "../lib/paths";
 import { enabledAddons, templateWatchPaths } from "../addons/catalog";
 import { type AddonSpec } from "../lib/addon-definition";
@@ -498,12 +495,6 @@ export function writeConfig(spec: AddonSpec, force = false): void {
 export function serviceUnit(specs: AddonSpec[]): string {
   const dependencies = [...new Set(specs.flatMap((spec) => spec.requiresUnits ?? []))];
   const after = ["network-online.target", AUTH_SOCKET_UNIT, ...dependencies.map((unit) => `${unit}.service`)];
-  const env = specs.flatMap((spec) => [
-    // systemd environment variable names may not contain punctuation
-    // (rejected with "Invalid environment assignment, ignoring"), so normalize
-    // every non-alphanumeric character in the addon name.
-    `Environment=${spec.name.toUpperCase().replace(/[^A-Z0-9]/g, "_")}_APP_DATA=${spec.stateDir}`,
-  ]);
   // Only the root actions use /run/lock/clp-addons, creating it on demand.
   // Binding it into this service's namespace prevented startup after /run was
   // cleared by a reboot, before serve could create the manager socket.
@@ -520,7 +511,6 @@ SupplementaryGroups=${PANEL_GROUP}
 RuntimeDirectory=clp-addons
 RuntimeDirectoryMode=0755
 RuntimeDirectoryPreserve=yes
-${env.join("\n")}
 ProtectSystem=full
 ProtectHome=read-only
 PrivateTmp=yes
@@ -907,8 +897,7 @@ export function installUnits(specs: AddonSpec[]): UnitChanges {
  * only what the toggle actually created.
  *
  * The manager is not restarted here. Its unit text changes with the addon set,
- * but only `After=`/`Wants=` and unread `Environment=` lines, which matter at
- * the next start; which addons it serves is read per request. `daemon-reload`
+ * but only its `After=`/`Wants=` lines, which matter at the next start; which addons it serves is read per request. `daemon-reload`
  * has already made the new text the one systemd will use.
  */
 export function applyToggleUnits(changes: UnitChanges): void {
@@ -981,8 +970,7 @@ export function startUnits(options: StartUnitsOptions = {}): void {
   ensureTimerArmed(RECONCILE_TIMER);
 }
 
-export function stopUnits(keepShared = false): void {
-  if (keepShared) return;
+export function stopUnits(): void {
   reconcileInstaticBackupCron(false);
   for (const unit of [MANAGER_UNIT, RECONCILE_TIMER, RECONCILE_PATH, NEW_SITES_PATH, CERTIFICATES_PATH, FIREWALL_PATH, NEW_SITE_ROWS_PATH,
     AUTH_SOCKET_UNIT, AUTH_SERVICE_UNIT]) {
@@ -1057,13 +1045,6 @@ export function ensurePathWatching(unit: string, quiet = false): void {
   if (!quiet) log.warn(`${unit} is not watching; restarting it`);
   tryRun("systemctl", ["restart", unit]);
   if (unitActive(unit) !== "active" && !quiet) log.err(`${unit} still is not watching`);
-}
-
-export function purgeTwigCache(): void {
-  if (!existsSync(TWIG_CACHE_DIR)) return;
-  for (const entry of readdirSync(TWIG_CACHE_DIR)) {
-    rmSync(`${TWIG_CACHE_DIR}/${entry}`, { recursive: true, force: true });
-  }
 }
 
 export function removeLegacyUnits(quiet = false): void {
