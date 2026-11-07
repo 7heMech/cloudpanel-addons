@@ -88,6 +88,10 @@ export const systemTweaksService = {
     return call("set-telemetry", JSON.stringify({ enabled }), TELEMETRY_GATEWAY_TIMEOUT_MS);
   },
 
+  setMotd(enabled: boolean): Promise<ActionResult<SystemTweaksState>> {
+    return call("set-motd", JSON.stringify({ enabled }));
+  },
+
   /** Answers with the saved settings; the page comes from `state()`. */
   setBackupCompression(settings: BackupCompressionSettings): Promise<ActionResult<SystemTweaksState>> {
     return call("set-backup-compression", JSON.stringify(settings), BACKUP_COMPRESSION_GATEWAY_TIMEOUT_MS);

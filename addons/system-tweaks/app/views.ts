@@ -429,6 +429,32 @@ function telemetryLine(state: SystemTweaksState["telemetry"]): string {
   return `${badge("Sending", "plain")} <span>clp-agent sends CloudPanel every site's domain and every panel user's name and email once a day.</span>`;
 }
 
+function motdLine(state: SystemTweaksState["motd"]): string {
+  if (state.enabled && state.script && !state.banner) return `${badge("On", "ok")} <span>SSH logins show this server's state.</span>`;
+  if (state.enabled) return `${badge("Not applied", "warn")} <span>Run clp-addons repair.</span>`;
+  if (state.banner) return `${badge("Off", "plain")} <span>SSH logins show CloudPanel's banner.</span>`;
+  return `${badge("Off", "plain")}`;
+}
+
+function motdCard(state: SystemTweaksState["motd"]): string {
+  return `
+    <div class="card">
+      <div class="card-header"><h2>SSH login</h2></div>
+      <div class="tweak-list">${settingRow({
+        key: "serverInfoMotd",
+        title: "Server info at SSH login",
+        description: [
+          "Replaces CloudPanel's welcome banner with uptime, load, memory, disk, IP addresses, pending updates and whether a reboot is required. Site users who log in over SSH see it too.",
+          "CloudPanel's banner looks up the server's address online at every login, which holds the login up when that lookup is slow. Off puts the banner back.",
+        ],
+        checked: state.enabled,
+        onchange: "setMotd(this)",
+        extra: `<p class="st-status">${motdLine(state)}</p>`,
+      })}
+      </div>
+    </div>`;
+}
+
 function hardeningCard(state: SystemTweaksState): string {
   return `
     <div class="card">
@@ -697,7 +723,7 @@ export function dashboardView(state: SystemTweaksState, now = Date.now()): strin
     <div class="page-heading">
       <div>
         <h1>System Tweaks</h1>
-        <p>Hardening, automatic updates, panel PHP and remote backups.</p>
+        <p>Hardening, automatic updates, panel PHP, remote backups and the SSH login message.</p>
         <p class="hint">Every 15 minutes it also clears PHP and ImageMagick temp files that timed-out requests left in /tmp. PHP worker limits and memory sizing are in <a href="/addons/resource-limits/">Resource Limits</a>.${firewallLine(state.firewall)}</p>
       </div>
     </div>
@@ -705,5 +731,5 @@ export function dashboardView(state: SystemTweaksState, now = Date.now()): strin
       <div class="card-header"><h2>Automatic updates</h2></div>
       <div class="tweak-list">${updateRows(state.updates, state.settings)}
       </div>${statusList(state.updates, now)}${coverageDetails(state.updates)}
-    </div>${backupCompressionCard(state.backupCompression)}${hardeningCard(state)}${loginJailsCard(state.loginJails)}`;
+    </div>${backupCompressionCard(state.backupCompression)}${hardeningCard(state)}${loginJailsCard(state.loginJails)}${motdCard(state.motd)}`;
 }

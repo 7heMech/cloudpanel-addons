@@ -13,7 +13,7 @@ import {
   PANEL_GROUP, PANEL_USER, RECONCILE_PATH, RECONCILE_SERVICE,
   RECONCILE_TIMER, SERVICE_GROUP, SERVICE_USER, SESSION_DIR, SHARED_GROUP, SOCKET_DIR, STATE_DIR,
   SOCKET_PATH, SYSTEMD_DIR, TWIG_CACHE_DIR, PANEL_IDENTITY_PATH, NGINX_GLOBAL_SETTINGS, CLOUDFLARE_IPS_PATH,
-  APT_UPGRADE_DROPIN,
+  APT_UPGRADE_DROPIN, UPDATE_MOTD_DIR,
 } from "./paths";
 import { MAINTENANCE_INCLUDE_PATH } from "./maintenance-vhosts";
 import { ADDONS, ADDON_NAMES, templateWatchPaths, type AddonSpec } from "./addon-catalog";
@@ -792,7 +792,8 @@ WantedBy=paths.target
 
 /**
  * Everything the watcher's fast repair reconciles: Twig anchors, the panel
- * vhost, site vhosts, global settings, and Cloudflare ranges. The service's
+ * vhost, site vhosts, global settings, Cloudflare ranges, and the SSH login
+ * message CloudPanel's upgrades replace. The service's
  * delay lets CloudPanel commit a new site's row after creating its vhost.
  * Watch the range directory for atomic replacements of the IP list.
  */
@@ -801,7 +802,7 @@ function reconcileWatchPaths(): string[] {
   return [
     ...templateWatchPaths(), ...(vhost ? [vhost] : []), DISTRO_NGINX_SITES_DIR,
     NGINX_GLOBAL_SETTINGS, MAINTENANCE_INCLUDE_PATH,
-    CLOUDFLARE_IPS_PATH, dirname(CLOUDFLARE_IPS_PATH),
+    CLOUDFLARE_IPS_PATH, dirname(CLOUDFLARE_IPS_PATH), UPDATE_MOTD_DIR,
   ];
 }
 

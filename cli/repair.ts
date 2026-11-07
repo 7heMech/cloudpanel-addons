@@ -1,7 +1,7 @@
 // `clp-addons repair`.
 
 import { installedAddons, resolveAddon, migrateOldAddonNames } from "./addons";
-import { reconcileAnchors, reconcileBackupCommand, reconcileMaintenanceNginx, reconcileNginx, reconcilePhpMyAdminRules } from "./reconcile";
+import { reconcileAnchors, reconcileBackupCommand, reconcileMaintenanceNginx, reconcileMotd, reconcileNginx, reconcilePhpMyAdminRules } from "./reconcile";
 import { reconcilePhpGuard } from "./php-guard";
 import { runAddonRepairs, runManagerRepair } from "./addon-hooks";
 import { withOperationLock } from "./operation-lock";
@@ -16,8 +16,8 @@ import { fatal, log, parseFlags, requireRoot } from "./util";
 import { existsSync } from "node:fs";
 /**
  * Reconciles manager provisioning and enabled addon state, or only injected
- * CloudPanel anchors, the Nginx proxy and System Tweaks' phpMyAdmin rules and
- * backup command when `--anchors-only` is supplied.
+ * CloudPanel anchors, the Nginx proxy and System Tweaks' phpMyAdmin rules,
+ * backup command and SSH login message when `--anchors-only` is supplied.
  */
 export async function cmdRepair(argv: string[]): Promise<void> {
   requireRoot("repair");
@@ -47,6 +47,7 @@ async function applyRepair(positional: string[], flags: Record<string, string | 
     if (!reconcileNginx(quiet)) log.err("Nginx proxy is not ready; run repair after checking the master vhost");
     reconcilePhpMyAdminRules(quiet);
     reconcileBackupCommand(quiet);
+    reconcileMotd(quiet);
     return;
   }
   try {

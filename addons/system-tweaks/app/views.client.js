@@ -134,6 +134,10 @@ function setTelemetry(input) {
   return change(input, '/api/telemetry', { enabled: input.checked }, switchText(input), 'Saved.');
 }
 
+function setMotd(input) {
+  return change(input, '/api/motd', { enabled: input.checked }, switchText(input), 'Saved.');
+}
+
 function setBackupCompression(control) {
   return change(control, '/api/backup-compression', {
     enabled: CLP_ROOT.querySelector('[data-setting="backup-compression"]').checked,

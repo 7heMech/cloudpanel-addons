@@ -134,6 +134,11 @@ export async function handle(
     return repaint(await systemTweaksService.setTelemetry(body.enabled));
   }
 
+  if (path === "/api/motd") {
+    if (typeof body.enabled !== "boolean") return json({ ok: false, error: "enabled must be true or false" }, 400);
+    return repaint(await systemTweaksService.setMotd(body.enabled));
+  }
+
   if (path === "/api/backup-compression") {
     if (!validBackupCompression(body)) return json({ ok: false, error: BACKUP_COMPRESSION_ERROR }, 400);
     return repaint(await systemTweaksService.setBackupCompression(body));
