@@ -47,13 +47,18 @@ function siteRow(site: SanitizedSite): string {
 
 type RootAccess = { granted: boolean; problem: string | null };
 
-/** Under the heading: why an allowed administrator cannot open one now, or how to be allowed. */
-function rootLine(root: RootAccess, user: string): string {
-  if (root.problem) return `
-        <p><span class="tone-bad">${esc(root.problem)}</span></p>`;
-  if (root.granted || !user) return "";
+/**
+ * Every administrator gets the button. One root has not allowed, or whose
+ * grant does not hold now, is told why instead of getting a window that fails.
+ */
+function rootButton(root: RootAccess, user: string): string {
+  const refusal = root.problem
+    ?? (root.granted ? null : `Ask root to run clp-addons terminal root allow ${user} on the server.`);
+  const action = refusal === null
+    ? "clpOpenTerminal(CLP_BASE, '', event.shiftKey)"
+    : "confirmAction({ title: 'Root terminal', text: this.dataset.refusal, alert: true })";
   return `
-        <p class="hint">Root can let you open a root terminal by running <code>clp-addons terminal root allow ${esc(user)}</code> on the server.</p>`;
+      <button class="btn" type="button"${refusal === null ? "" : ` data-refusal="${esc(refusal)}"`} onclick="${action}">Root terminal</button>`;
 }
 
 export function dashboardView(sites: SanitizedSite[], root: RootAccess = { granted: false, problem: null }, user = ""): string {
@@ -76,9 +81,8 @@ export function dashboardView(sites: SanitizedSite[], root: RootAccess = { grant
   return `
     <div class="page-heading">
       <div>
-        <h1>Terminal</h1>${rootLine(root, user)}
-      </div>${root.granted && !root.problem ? `
-      <button class="btn" type="button" onclick="clpOpenTerminal(CLP_BASE, '', event.shiftKey)">Root terminal</button>` : ""}
+        <h1>Terminal</h1>
+      </div>${rootButton(root, user)}
     </div>
     <div class="card card-table">
       <div class="card-header"><h2>Sites</h2></div>

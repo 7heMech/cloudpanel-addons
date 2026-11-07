@@ -147,14 +147,16 @@ test("the manager asks for --root, and a ready line must agree on who the shell 
   expect(opened[0]).toEqual(["--root"]);
 });
 
-test("the page offers a root shell only to an allowed administrator, and says how to be one", () => {
-  expect(dashboardView([], { granted: true, problem: null }, "alice")).toContain(">Root terminal<");
+test("the page's button opens a root shell only for an allowed administrator, and otherwise says why", () => {
+  const allowed = dashboardView([], { granted: true, problem: null }, "alice");
+  expect(allowed).toContain(`onclick="clpOpenTerminal(CLP_BASE, '', event.shiftKey)">Root terminal<`);
+  expect(allowed).not.toContain("data-refusal");
   const refused = dashboardView([], { granted: true, problem: "A root terminal needs two-factor authentication: turn it on under Account → Security" }, "alice");
-  expect(refused).not.toContain(">Root terminal<");
-  expect(refused).toContain("turn it on under Account → Security");
+  expect(refused).toContain('data-refusal="A root terminal needs two-factor authentication: turn it on under Account → Security"');
+  expect(refused).not.toContain("clpOpenTerminal(");
   const other = dashboardView([], { granted: false, problem: null }, "bob");
-  expect(other).not.toContain(">Root terminal<");
-  expect(other).toContain("clp-addons terminal root allow bob");
+  expect(other).toContain("clp-addons terminal root allow bob on the server.");
+  expect(other).toContain("alert: true");
   const popup = popupPage(null);
   expect(popup).toContain('data-domain=""');
   expect(popup).toContain('<span class="badge tone-bad">root</span>');
