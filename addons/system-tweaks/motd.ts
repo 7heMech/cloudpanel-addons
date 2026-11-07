@@ -91,8 +91,14 @@ export function applyMotd(serverInfo: boolean, options: MotdOptions = {}): boole
     // The banner first: one that cannot be changed stops this before the script runs beside it.
     const silence = executable(paths.banner);
     if (silence) {
+      const marked = existsSync(paths.marker);
       writeFileAtomic(paths.marker, "", { mode: 0o600, createParent: true });
-      chmodSync(paths.banner, 0o644);
+      try {
+        chmodSync(paths.banner, 0o644);
+      } catch (error) {
+        if (!marked) rmSync(paths.marker, { force: true });
+        throw error;
+      }
     }
     const write = !scriptInPlace(paths.script);
     if (write) writeFileAtomic(paths.script, MOTD_SCRIPT, { mode: 0o755, createParent: true });

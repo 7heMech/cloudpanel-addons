@@ -1089,8 +1089,9 @@ the CPUs, so over 100% means work is waiting. Counting pending updates with
 `apt list --upgradable` takes about 0.3 s, too long for every automated
 session, so the count is kept in `/run/clp-addons-motd-updates` and redone only
 when `/var/lib/dpkg/status` or `/var/lib/apt/lists` is newer than it. The count
-runs under a 3-second timeout, and a run that fails or times out keeps the old
-count rather than reporting none.
+runs under a 3-second timeout. An `apt list` that fails or times out leaves the
+cached count as it was, and a count left empty, by a login cut off mid-count,
+is redone at the next login.
 `/etc/.clp_custom_domain` is owned by `clp`, so the script reads it only as a
 regular file, through a 1-second timeout, keeping only hostname characters; a
 FIFO or terminal escapes there would otherwise stall or write into root's
