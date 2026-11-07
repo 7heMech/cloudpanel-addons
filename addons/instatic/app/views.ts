@@ -5,7 +5,7 @@
 
 import { esc, escJs } from "../../../lib/app-http";
 import {
-  ATTENTION_RANK, FLEET_FOOTER_HTML, FLEET_ROW_SELECTION_JS, JOB_WATCH_JS, fleetFilterHtml, filterWord, valueFilters, jobStateClass, jobStateLabel,
+  ATTENTION_RANK, FLEET_FOOTER_HTML, FLEET_SELECTION_HTML, FLEET_ROW_SELECTION_JS, JOB_WATCH_JS, fleetFilterHtml, filterWord, valueFilters, jobStateClass, jobStateLabel,
   renderLayout, whenText,
 } from "../../../lib/app-ui";
 import { mountPath } from "../../../lib/mount";
@@ -181,8 +181,7 @@ export function dashboardView(
       ? `<div class="empty">No Instatic instances yet. <a href="${BASE}/new">Create one</a>.</div>`
       : `<div class="card-header toolbar">
     <h2>Sites</h2>
-    <span class="toolbar-note" id="site-selection">No sites selected</span>
-    <button class="btn mobile-select-all" id="select-all-btn" type="button" onclick="toggleAllSites()">Select all</button>
+    ${FLEET_SELECTION_HTML}
     <div class="toolbar-end actions bulk-actions">
       ${latest === null ? "" : `<button class="btn" type="button" data-needs-selection disabled onclick="bulkInstatic('update', '${escJs(latest)}')" title="Update the selected sites to ${esc(latest)}">Update to ${esc(latest)}</button>`}
       <button class="btn" type="button" data-needs-selection disabled onclick="bulkInstatic('restart')">Restart</button>

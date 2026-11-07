@@ -55,5 +55,4 @@ html.dark #template-ace .ace_comment { color:#93a1ad; }
 }
 /* The card each row becomes carries its own selection control. */
 @media (max-width:940px) {
-  .fleet-table.maintenance-fleet-table td.site-select { display:none; }
 }

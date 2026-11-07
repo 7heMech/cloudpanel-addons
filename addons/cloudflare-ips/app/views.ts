@@ -1,7 +1,7 @@
 import CLIENT_JS_BODY from "./views.client.js" with { type: "text" };
 import { esc } from "../../../lib/app-http";
 import {
-  FLEET_FOOTER_HTML, FLEET_ROW_SELECTION_JS, fleetFilterHtml, renderLayout,
+  FLEET_FOOTER_HTML, FLEET_SELECTION_HTML, FLEET_ROW_SELECTION_JS, fleetFilterHtml, renderLayout,
 } from "../../../lib/app-ui";
 import { mountPath } from "../../../lib/mount";
 import type { CloudflareState } from "./service";
@@ -50,8 +50,7 @@ export function dashboardView(state: CloudflareState): string {
         ? '<div class="empty">No sites found in CloudPanel.</div>'
         : `<div class="card-header toolbar">
             <div><h2>Sites</h2><p class="hint" id="cf-summary">${esc(summary)}</p></div>
-            <span class="toolbar-note" id="site-selection">No sites selected</span>
-            <button class="btn mobile-select-all" id="select-all-btn" type="button" onclick="toggleAllSites()">Select all</button>
+            ${FLEET_SELECTION_HTML}
             <div class="actions toolbar-actions">
               <button class="btn" id="enable-selected" type="button" disabled data-needs-selection onclick="setSelectedSites(true)">Enable selected</button>
               <button class="btn" id="disable-selected" type="button" disabled data-needs-selection onclick="setSelectedSites(false)">Disable selected</button>

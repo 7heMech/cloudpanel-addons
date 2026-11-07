@@ -2,7 +2,7 @@ import CLIENT_BODY from "./views.client.js" with { type: "text" };
 import STYLE from "./views.css" with { type: "text" };
 import { esc } from "../../../lib/app-http";
 import {
-  ATTENTION_RANK, FLEET_FOOTER_HTML, FLEET_ROW_SELECTION_JS, fleetFilterHtml, filterWord, valueFilters, renderLayout,
+  ATTENTION_RANK, FLEET_FOOTER_HTML, FLEET_SELECTION_HTML, FLEET_ROW_SELECTION_JS, fleetFilterHtml, filterWord, valueFilters, renderLayout,
 } from "../../../lib/app-ui";
 import { mountPath } from "../../../lib/mount";
 import type { SmtpProfileView, SmtpSiteView, SmtpState } from "../action";
@@ -119,8 +119,7 @@ export function dashboardContent(state: SmtpState): string {
     <div class="card card-table">
     ${total ? `<div class="card-header toolbar">
         <h2>Sites</h2>
-        <span class="toolbar-note" id="site-selection">No sites selected</span>
-        <button class="btn mobile-select-all" id="select-all-btn" type="button" onclick="toggleAllSites()">Select all</button>
+        ${FLEET_SELECTION_HTML}
         <select class="toolbar-end" id="bulk-profile" data-keep aria-label="Where mail from the selected sites goes">${bulkOptions(state.profiles)}</select>
         <button class="btn" id="assign-selected" type="button" disabled data-needs-selection onclick="smtpAssignSelected()">Assign selected</button>
       </div>
