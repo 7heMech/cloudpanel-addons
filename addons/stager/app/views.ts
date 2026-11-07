@@ -117,11 +117,11 @@ export function jobsView(
           </td>
           <td class="wide-cell" data-label="From">${esc(j.source)}</td>
           <td class="type-cell">${esc(j.result ? typeLabel(j.result.siteType) : "—")}</td>
-          <td data-label="State">
+          <td class="state-cell" data-label="State">
             ${stateBadge(j)}${missing ? ' <span class="badge state-deleted">deleted</span>' : ""}
             ${active && j.step ? `<div class="hint">${esc(j.step)}</div>` : ""}
           </td>
-          <td class="step wide-cell" data-label="Started">${esc(whenText(j.createdAt))}</td>
+          <td class="step started-cell" data-label="Started">${esc(whenText(j.createdAt))}</td>
           <td class="action-cell">${canPromote(j, missing) ? `<a href="${promoteHref(j)}">Promote</a>` : ""}</td>
         </tr>`;
     })
@@ -133,7 +133,7 @@ export function jobsView(
       ${
         jobs.length === 0
           ? `<div class="empty">No clones yet. Start one with the button above, or from a site's Staging tab.</div>`
-          : `<div class="table-scroll"><table class="fleet-table">
+          : `<div class="table-scroll"><table class="fleet-table stager-jobs">
         <thead><tr><th scope="col">Site</th><th scope="col">From</th><th scope="col">Type</th><th scope="col">State</th><th scope="col">Started</th><th scope="col" class="action-cell" aria-label="Actions"></th></tr></thead>
         <tbody>${rows}</tbody>
       </table></div>`
