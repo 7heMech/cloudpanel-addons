@@ -156,7 +156,7 @@ test("the page's button opens a root shell only for an allowed administrator, an
   expect(refused).not.toContain("clpOpenTerminal(");
   const other = dashboardView([], { granted: false, problem: null }, "bob");
   expect(other).toContain("clp-addons terminal root allow bob on the server.");
-  expect(other).toContain("alert: true");
+  expect(other).toContain(`onclick="notify(this.dataset.refusal, 'error')"`);
   const popup = popupPage(null);
   expect(popup).toContain('data-domain=""');
   expect(popup).toContain('<span class="badge tone-bad">root</span>');

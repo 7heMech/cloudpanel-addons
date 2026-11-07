@@ -49,14 +49,15 @@ type RootAccess = { granted: boolean; problem: string | null };
 
 /**
  * Every administrator gets the button. One root has not allowed, or whose
- * grant does not hold now, is told why instead of getting a window that fails.
+ * grant does not hold now, is told why in the page's notice instead of getting
+ * a window that fails.
  */
 function rootButton(root: RootAccess, user: string): string {
   const refusal = root.problem
     ?? (root.granted ? null : `Ask root to run clp-addons terminal root allow ${user} on the server.`);
   const action = refusal === null
     ? "clpOpenTerminal(CLP_BASE, '', event.shiftKey)"
-    : "confirmAction({ title: 'Root terminal', text: this.dataset.refusal, alert: true })";
+    : "notify(this.dataset.refusal, 'error')";
   return `
       <button class="btn" type="button"${refusal === null ? "" : ` data-refusal="${esc(refusal)}"`} onclick="${action}">Root terminal</button>`;
 }
