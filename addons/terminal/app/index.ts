@@ -51,8 +51,15 @@ async function rootAccessOf(user: string | undefined, sessionId: string | null, 
   if (!user || !sessionId) return { granted: false, problem: null };
   const cached = rootAccessCache.get(user);
   if (!fresh && cached && Date.now() - cached.at < ROOT_ACCESS_TTL_MS) return cached.access;
-  const reply = await callGatewayAction("terminal", "root-access", [], undefined, { sessionId }) as ActionResult<RootAccessView>;
-  const access = reply.ok && reply.data ? { granted: reply.data.granted, problem: reply.data.problem } : { granted: false, problem: null };
+  let reply: ActionResult<RootAccessView>;
+  try {
+    reply = await callGatewayAction("terminal", "root-access", [], undefined, { sessionId }) as ActionResult<RootAccessView>;
+  } catch (error) {
+    reply = { ok: false, error: error instanceof Error ? error.message : String(error) };
+  }
+  // A failed check is not an answer: it is not cached, and it does not say root never allowed this account.
+  if (!reply.ok || !reply.data) return { granted: false, problem: `Root terminal access could not be checked: ${reply.error ?? "no answer"}` };
+  const access = { granted: reply.data.granted, problem: reply.data.problem };
   rootAccessCache.set(user, { at: Date.now(), access });
   return access;
 }

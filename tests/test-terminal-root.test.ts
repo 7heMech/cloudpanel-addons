@@ -235,3 +235,24 @@ test("the header control is in both of CloudPanel's headers and the addons' own,
   expect(page).toContain('id="clp-root-shell" data-clp-root-shell hidden');
   expect(renderLayout("Terminal", "", { brand: "Terminal", base: "/addons/terminal", nav: [], script: "", admin: false })).not.toContain("clp-root-shell");
 });
+
+test("a root access check that fails says so, rather than that root never allowed the account", async () => {
+  const { mock } = await import("bun:test");
+  // Module mocks outlive the test in the same process, so the real client goes back after it.
+  const realGateway = { ...(await import("../lib/gateway-client")) };
+  let calls = 0;
+  mock.module("../lib/gateway-client", () => ({
+    ...realGateway,
+    callGatewayAction: async () => (calls++ === 0 ? { ok: false, error: "gateway unavailable" } : { ok: true, data: { granted: true, problem: null } }),
+  }));
+  try {
+    const { handle } = await import("../addons/terminal/app/index");
+    const ask = async () => (await (await handle(new Request("http://x/api/root-access", { headers: { cookie: "cloudpanel=abcdef0123456789abcdef01" } }),
+      "/api/root-access", null, undefined, { user: "carol", roles: ["ROLE_ADMIN"] })).json() as { data: unknown }).data;
+    expect(await ask()).toEqual({ granted: false, problem: "Root terminal access could not be checked: gateway unavailable" });
+    // The failure was not cached: the next look asks again.
+    expect(await ask()).toEqual({ granted: true, problem: null });
+  } finally {
+    mock.module("../lib/gateway-client", () => realGateway);
+  }
+});
