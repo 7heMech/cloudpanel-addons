@@ -38,9 +38,8 @@ test("arrows move and Space toggles, wrapping at either end", async () => {
   expect(flipped!.includes(last)).toBe(!PRESELECTED.includes(last));
 });
 
-test("n clears and a selects every addon", async () => {
+test("n clears the selection", async () => {
   expect(await pick("n", " ", "\r").result).toEqual([ADDON_NAMES[0]!]);
-  expect(await pick("n", "a", "\r").result).toEqual(ADDON_NAMES);
 });
 
 test("Enter does nothing while no addon is ticked", async () => {

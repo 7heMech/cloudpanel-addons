@@ -16,7 +16,7 @@ import { log } from "./util";
 import { checkCliUpdate, type CliUpdateInfo } from "../lib/update-check";
 
 const KEYS = "↑/↓ move · Space toggle · Enter apply · s status · r repair · u update · q quit";
-const PICK_KEYS = "↑/↓ move · Space toggle · a all · n none · Enter install · q cancel";
+const PICK_KEYS = "↑/↓ move · Space toggle · n none · Enter install · q cancel";
 const QUIT_KEYS = ["q", "\x1b", "\x03", "\x04"];
 
 const paint = (code: string, text: string) => `\x1b[${code}m${text}\x1b[0m`;
@@ -148,7 +148,6 @@ export function pickAddons(terminal: Terminal = TTY): Promise<string[] | null> {
       const next = moved(key, cursor);
       if (next !== null) cursor = next;
       else if (key === " ") toggle(wanted, ADDON_NAMES[cursor]!);
-      else if (key === "a") for (const name of ADDON_NAMES) wanted.add(name);
       else if (key === "n") wanted.clear();
       else if (key === "\r" || key === "\n") {
         if (wanted.size > 0) finish(ADDON_NAMES.filter((name) => wanted.has(name)));
