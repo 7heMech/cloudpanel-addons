@@ -39,7 +39,7 @@ done
 addresses=$(ip -o addr show scope global 2>/dev/null | awk '$2 !~ /^(docker|br-|veth|virbr|lxc|cni|podman)/ { sub(/\\/.*/, "", $4); printf "%s%s", sep, $4; sep = " " }')
 [ -n "$addresses" ] && row Addresses "$addresses"
 updates=/run/clp-addons-motd-updates
-if [ ! -e "$updates" ] || [ /var/lib/dpkg/status -nt "$updates" ] || [ /var/lib/apt/lists -nt "$updates" ]; then
+if [ ! -s "$updates" ] || [ /var/lib/dpkg/status -nt "$updates" ] || [ /var/lib/apt/lists -nt "$updates" ]; then
   list=$(timeout 3 apt list --upgradable 2>/dev/null) && printf '%s\\n' "$list" | grep -c upgradable > "$updates"
 fi
 [ -s "$updates" ] && row Updates "$(cat "$updates") pending"
@@ -88,20 +88,21 @@ export function motdStatus(options: MotdOptions = {}): MotdStatus {
 export function applyMotd(serverInfo: boolean, options: MotdOptions = {}): boolean {
   const paths = pathsOf(options);
   if (serverInfo) {
-    const write = !scriptInPlace(paths.script);
-    if (write) writeFileAtomic(paths.script, MOTD_SCRIPT, { mode: 0o755, createParent: true });
+    // The banner first: one that cannot be changed stops this before the script runs beside it.
     const silence = executable(paths.banner);
     if (silence) {
       writeFileAtomic(paths.marker, "", { mode: 0o600, createParent: true });
       chmodSync(paths.banner, 0o644);
     }
+    const write = !scriptInPlace(paths.script);
+    if (write) writeFileAtomic(paths.script, MOTD_SCRIPT, { mode: 0o755, createParent: true });
     return write || silence;
   }
   const script = existsSync(paths.script);
   const silenced = existsSync(paths.marker);
   rmSync(paths.script, { force: true });
   // CloudPanel's own mode for it.
-  if (silenced && modeOf(paths.banner) !== null) chmodSync(paths.banner, 0o775);
+  if (silenced && modeOf(paths.banner) !== null && !executable(paths.banner)) chmodSync(paths.banner, 0o775);
   rmSync(paths.marker, { force: true });
   return script || silenced;
 }
