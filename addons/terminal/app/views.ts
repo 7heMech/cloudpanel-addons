@@ -3,7 +3,7 @@ import { FLEET_FOOTER_HTML, FLEET_ROW_SELECTION_JS, fleetFilterHtml, renderLayou
 import { mountPath } from "../../../lib/mount";
 import type { SanitizedSite } from "../../../lib/gateway-protocol";
 
-import OPEN_JS from "./open.client.js" with { type: "text" };
+import { OPEN_JS } from "../../../lib/root-shell";
 import FLEET_JS from "./fleet.client.js" with { type: "text" };
 import FLEET_STYLE from "./fleet.css" with { type: "text" };
 import POPUP_JS from "./popup.client.js" with { type: "text" };
@@ -60,7 +60,7 @@ function rootCard(root: { granted: boolean; problem: string | null }, user: stri
       <div class="terminal-root">
         <div>
           <h3>root</h3>
-          <p class="hint">Opening and closing it is logged. It stops working if your password or two-factor setting changes, until root allows you again.</p>
+          <p class="hint">Opening and closing it is logged. It needs two-factor authentication on your account. It also opens from the terminal icon at the top of every page.</p>
         </div>
         ${action}
       </div>

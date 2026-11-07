@@ -58,7 +58,7 @@ security keys under Account → Security, in the roles an administrator allows.
 | `clp-addons update` | Install the latest verified release. |
 | `clp-addons repair` | Restore managed services and CloudPanel integration. |
 | `clp-addons maintenance <domain> [on\|off\|status]` | Control or inspect maintenance mode for a site. |
-| `clp-addons terminal root allow <user>` | Let one administrator open a root shell from Addons → Terminal; `deny` takes it back. |
+| `clp-addons terminal root allow <user>` | Let one administrator, with two-factor on, open a root shell from the panel; `deny` takes it back. |
 | `clp-addons uninstall <addon> --yes` | Remove an addon and keep its data. |
 
 Addon names are `cloudflare-ips`, `dns`, `instatic`, `stager`, `maintenance`,

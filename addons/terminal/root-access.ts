@@ -1,9 +1,9 @@
 /**
  * Who may open a root shell: administrators root named from a shell with
- * `clp-addons terminal root allow`, each pinned to the account and sign-in
- * credentials it had then. See docs/decisions/terminal.md#root.
+ * `clp-addons terminal root allow`, each pinned to the account it was then,
+ * and only while that account has two-factor authentication on. See
+ * docs/decisions/terminal.md#root.
  */
-import { createHash } from "node:crypto";
 import { chmodSync, closeSync, constants, fstatSync, lstatSync, mkdirSync, openSync, readFileSync, type Stats } from "node:fs";
 import { dirname } from "node:path";
 import type { Database } from "bun:sqlite";
@@ -21,29 +21,13 @@ export interface RootGrant {
   user: string;
   /** CloudPanel's `user.id`: a name deleted and created again is someone else. */
   id: number;
-  /** What `credentials` gave when root allowed it. */
-  credentials: string;
 }
 
 interface PanelAccount {
   id: number;
-  user_name: string;
-  password: string;
   mfa: number | null;
-  mfa_secret: string | null;
   role: string | null;
   status: number | null;
-}
-
-/**
- * Changes whenever the account's password or two-factor setting does. Any
- * administrator can reset another's password in CloudPanel and sign in as
- * them, so a grant that outlived that would be root for every administrator.
- */
-export function credentials(account: Pick<PanelAccount, "id" | "password" | "mfa" | "mfa_secret">): string {
-  return createHash("sha256")
-    .update(JSON.stringify([account.id, account.password, Number(account.mfa) === 1, account.mfa_secret ?? ""]))
-    .digest("hex");
 }
 
 /** The file is wrong in itself; root recovers by removing it and allowing again. */
@@ -90,8 +74,7 @@ export function readRootGrants(file = ROOT_GRANTS_FILE, rootUid = 0): RootGrant[
     return stored.users.filter((grant): grant is RootGrant =>
       !!grant && typeof grant === "object"
       && typeof grant.user === "string" && PANEL_USER_NAME_RE.test(grant.user)
-      && Number.isSafeInteger(grant.id)
-      && typeof grant.credentials === "string" && /^[0-9a-f]{64}$/.test(grant.credentials));
+      && Number.isSafeInteger(grant.id));
   } finally {
     closeSync(fd);
   }
@@ -101,24 +84,29 @@ function writeRootGrants(grants: RootGrant[], file = ROOT_GRANTS_FILE): void {
   // mkdir's mode is masked by root's umask, which could leave a directory
   // readRootGrants refuses, so the mode is set outright.
   if (mkdirSync(dirname(file), { recursive: true })) chmodSync(dirname(file), 0o755);
-  const users = [...grants].sort((a, b) => a.user.localeCompare(b.user));
+  const users = [...grants].sort((a, b) => a.user.localeCompare(b.user)).map(({ user, id }) => ({ user, id }));
   writeFileAtomic(file, `${JSON.stringify({ users }, null, 2)}\n`, { mode: 0o600, owner: { uid: 0, gid: 0 } });
 }
 
 function account(db: Database, user: string): PanelAccount | null {
   return db.query<PanelAccount, [string]>(
-    "SELECT id, user_name, password, mfa, mfa_secret, role, status FROM user WHERE user_name = ?",
+    "SELECT id, mfa, role, status FROM user WHERE user_name = ?",
   ).get(user);
 }
 
-/** Why this grant no longer opens a root shell, or null while it does. */
+/**
+ * Why this grant does not open a root shell now, or null while it does.
+ *
+ * Any administrator can reset another's password in CloudPanel and sign in as
+ * them, but only the account itself can turn its two-factor authentication off
+ * or on, so with it required a reset password alone is not enough.
+ */
 export function grantProblem(db: Database, grant: RootGrant): string | null {
   const found = account(db, grant.user);
-  const again = `; root can run clp-addons terminal root allow ${grant.user} again`;
-  if (!found || found.id !== grant.id) return `${grant.user} is not the account root allowed${again}`;
+  if (!found || found.id !== grant.id) return `${grant.user} is not the account root allowed; root can run clp-addons terminal root allow ${grant.user} again`;
   if (Number(found.status) !== 1) return `${grant.user} is deactivated`;
   if (found.role !== "ROLE_ADMIN") return `${grant.user} is no longer an administrator`;
-  if (credentials(found) !== grant.credentials) return `${grant.user}'s password or two-factor setting changed since root allowed root shells${again}`;
+  if (Number(found.mfa) !== 1) return "Root shells need two-factor authentication: turn it on under Account → Security";
   return null;
 }
 
@@ -191,12 +179,13 @@ export function runTerminalRootCommand(argv: string[]): void {
       if (!found) fatal(`CloudPanel has no user ${user}`);
       if (Number(found.status) !== 1) fatal(`${user} is deactivated`);
       if (found.role !== "ROLE_ADMIN") fatal(`${user} is not an administrator`);
-      writeRootGrants([...others, { user: user!, id: found.id, credentials: credentials(found) }]);
+      writeRootGrants([...others, { user: user!, id: found.id }]);
+      if (Number(found.mfa) !== 1) log.warn(`${user} has two-factor authentication off; root shells open once they turn it on`);
     });
   } finally {
     db.close();
   }
   log.ok(verb === "allow"
-    ? `${user} can open a root shell from Addons → Terminal until their password or two-factor setting changes`
+    ? `${user} can open a root shell from the panel while their two-factor authentication is on`
     : `${user} cannot open a root shell; any open one closes within 15 seconds`);
 }

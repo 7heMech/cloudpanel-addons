@@ -1220,6 +1220,11 @@ function terminalPreview(req: Request, url: URL): Response | null {
     return null;
   }
   if (path.startsWith("/addons/terminal/assets/")) return null;
+  // The header's root shell control shows on a page opened with ?root.
+  if (path === "/addons/terminal/api/root-access") {
+    const granted = new URL(req.headers.get("referer") ?? "http://x/").searchParams.has("root");
+    return Response.json({ ok: true, data: { granted, problem: null } });
+  }
   if (path === "/addons/terminal/api/sessions" && req.method === "POST") {
     if (terminalPreviewState === "refused") {
       return Response.json({ ok: false, error: "www.example.com cannot be opened: its Unix user has no login shell" }, { status: 400 });

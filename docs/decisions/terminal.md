@@ -36,18 +36,29 @@ A root shell is offered only to the administrators root names; see Root.
 
 Root names who may open a root shell with `clp-addons terminal root allow
 <user>` from a shell; `deny` takes it back and `clp-addons terminal root` lists
-them. Nothing in the panel can change the list. Allowed administrators get a
-"This server" card with an Open root shell button; the others get one line
-naming the command, so they know whom to ask.
+them. Nothing in the panel can change the list. An allowed administrator gets a
+terminal icon in both of CloudPanel's headers and in the addons' copy of it,
+just before the account menu, and a "This server" card on Addons → Terminal.
+The others get no icon and one line on that page naming the command, so they
+know whom to ask. The icon stays hidden until the page has asked
+`/addons/terminal/api/root-access`, at most once a minute per tab.
 
 Any administrator can reset another's password in CloudPanel and sign in as
 them, so a grant to a name alone would be a root shell for every
-administrator. Each grant is pinned to CloudPanel's `user.id` and to a hash of
-the account's password hash and two-factor setting as they were when root
-allowed it. A reset password, a two-factor change, a name deleted and created
-again, a demotion or a deactivation stops it until root allows the account
-again; the card says which. A stolen session of the allowed administrator
-itself still gets a root shell for as long as that session lasts.
+administrator. A grant therefore needs the account's two-factor
+authentication on. CloudPanel's user form has no two-factor field: only the
+account turns its own on or off, and only root (`clpctl user:disable:mfa`)
+turns it off for someone else, so a reset password gets no further than the
+code. The gateway already refuses a session whose code is still pending. A
+passkey sign-in through Security Keys skips the code but is two factors
+itself, so a passkey user turns two-factor on once and never types it.
+
+Each grant is also pinned to CloudPanel's `user.id`, so a name deleted and
+created again is not the account root allowed. A deactivation, a demotion or
+two-factor switched off refuses it while it lasts and the card says which;
+switched back on, it works again without root. A password change does not
+touch it. A stolen session of the allowed administrator itself still gets a
+root shell for as long as that session lasts.
 
 The grants are `/etc/clp-addons/terminal-root.json`, root's alone, `0600`, read
 through one descriptor opened without following links. Only a missing file

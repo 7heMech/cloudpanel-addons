@@ -87,6 +87,9 @@ export async function handle(
     });
   }
 
+  // What the header's root shell control asks before it shows itself.
+  if (method === "GET" && path === "/api/root-access") return json({ ok: true, data: await rootAccessOf(panelSessionId(req)) });
+
   if (!path.startsWith("/api/sessions")) return NOT_FOUND();
   // The manager's gate has already decided this is an administrator; a
   // session also belongs to the one sign-in that opened it.

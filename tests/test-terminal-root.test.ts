@@ -8,7 +8,9 @@ import { ActionFailure } from "../cli/action-common";
 import {
   parseTerminalRequest, resolveTerminalTarget, runTerminalAction, runuserCommand, type TerminalActionPaths,
 } from "../addons/terminal/action";
-import { credentials, readRootGrants, rootAccess } from "../addons/terminal/root-access";
+import { readRootGrants, rootAccess } from "../addons/terminal/root-access";
+import { TERMINAL_TARGETS } from "../addons/terminal/inject/targets";
+import { renderLayout } from "../lib/app-ui";
 import { ownerOf, TerminalSessions, type StreamOpener } from "../addons/terminal/app/sessions";
 import { dashboardView, popupPage } from "../addons/terminal/app/views";
 
@@ -33,19 +35,17 @@ beforeEach(() => {
   const panel = db();
   panel.run(`CREATE TABLE user (id INTEGER PRIMARY KEY, user_name TEXT, role TEXT, status INTEGER,
     password TEXT, mfa INTEGER, mfa_secret TEXT)`);
-  panel.run(`INSERT INTO user VALUES (1, 'alice', 'ROLE_ADMIN', 1, '$2y$13$alice', 0, 'a'),
-    (2, 'bob', 'ROLE_ADMIN', 1, '$2y$13$bob', 0, 'b')`);
+  panel.run(`INSERT INTO user VALUES (1, 'alice', 'ROLE_ADMIN', 1, '$2y$13$alice', 1, 'a'),
+    (2, 'bob', 'ROLE_ADMIN', 1, '$2y$13$bob', 1, 'b')`);
   panel.close();
   writeFileSync(paths.passwd, "root:x:0:0:root:/root:/bin/bash\n");
 });
 
 function allow(...users: string[]): void {
   const panel = db();
-  const grants = users.map((user) => {
-    const row = panel.query<{ id: number; password: string; mfa: number; mfa_secret: string }, [string]>(
-      "SELECT id, password, mfa, mfa_secret FROM user WHERE user_name = ?").get(user)!;
-    return { user, id: row.id, credentials: credentials(row) };
-  });
+  const grants = users.map((user) => ({
+    user, id: panel.query<{ id: number }, [string]>("SELECT id FROM user WHERE user_name = ?").get(user)!.id,
+  }));
   panel.close();
   writeFileSync(paths.rootAccess.grants, JSON.stringify({ users: grants }));
   chmodSync(paths.rootAccess.grants, 0o600);
@@ -61,19 +61,23 @@ test("only an administrator root allowed gets a root shell", () => {
   expect(access("bob")).toEqual({ granted: false, problem: null });
 });
 
-test("a reset password or two-factor change ends the grant until root allows it again", () => {
+test("two-factor must be on; switched off it pauses the grant, and back on it works without root", () => {
+  allow("alice");
+  change("UPDATE user SET mfa = 0 WHERE user_name = 'alice'");
+  expect(access("alice")).toEqual({ granted: true, problem: "Root shells need two-factor authentication: turn it on under Account → Security" });
+  change("UPDATE user SET mfa = 1, mfa_secret = 'new' WHERE user_name = 'alice'");
+  expect(access("alice")).toEqual({ granted: true, problem: null });
+});
+
+test("a password change, by the account or by another administrator, leaves the grant alone", () => {
   allow("alice");
   change("UPDATE user SET password = '$2y$13$reset' WHERE user_name = 'alice'");
-  expect(access("alice").problem).toContain("password or two-factor setting changed");
-  allow("alice");
   expect(access("alice").problem).toBeNull();
-  change("UPDATE user SET mfa = 1, mfa_secret = 'new' WHERE user_name = 'alice'");
-  expect(access("alice").problem).toContain("password or two-factor setting changed");
 });
 
 test("a name deleted and created again, a demotion or a deactivation is refused", () => {
   allow("alice");
-  change("DELETE FROM user WHERE user_name = 'alice'; INSERT INTO user VALUES (3, 'alice', 'ROLE_ADMIN', 1, '$2y$13$alice', 0, 'a')");
+  change("DELETE FROM user WHERE user_name = 'alice'; INSERT INTO user VALUES (3, 'alice', 'ROLE_ADMIN', 1, '$2y$13$alice', 1, 'a')");
   expect(access("alice").problem).toContain("is not the account root allowed");
   allow("alice");
   change("UPDATE user SET role = 'ROLE_SITE_MANAGER' WHERE user_name = 'alice'");
@@ -115,11 +119,11 @@ test("an open root shell ends once its grant does", async () => {
     spawn: ((argv: string[]) => { calls.push(argv); return Bun.spawn(["sleep", "30"]); }) as unknown as typeof Bun.spawn,
   });
   await Bun.sleep(60);
-  change("UPDATE user SET password = '$2y$13$reset' WHERE user_name = 'alice'");
+  change("UPDATE user SET mfa = 0 WHERE user_name = 'alice'");
   await running;
   expect(calls).toEqual([runuserCommand(paths, "root")]);
   expect(audit[0]).toBe("alice opened a root shell as root");
-  expect(audit.some((line) => line.includes("root shell ended: alice's password or two-factor setting changed"))).toBe(true);
+  expect(audit.some((line) => line.includes("root shell ended: Root shells need two-factor authentication"))).toBe(true);
   expect(audit.at(-1)).toContain("alice closed a root shell as root");
 });
 
@@ -145,13 +149,29 @@ test("the manager asks for --root, and a ready line must agree on who the shell 
 
 test("the page offers a root shell only to an allowed administrator, and says how to be one", () => {
   expect(dashboardView([], { granted: true, problem: null }, "alice")).toContain("Open root shell");
-  const refused = dashboardView([], { granted: true, problem: "alice's password or two-factor setting changed" }, "alice");
+  const refused = dashboardView([], { granted: true, problem: "Root shells need two-factor authentication: turn it on under Account → Security" }, "alice");
   expect(refused).not.toContain("Open root shell");
-  expect(refused).toContain("password or two-factor setting changed");
+  expect(refused).toContain("turn it on under Account → Security");
   const other = dashboardView([], { granted: false, problem: null }, "bob");
   expect(other).not.toContain("Open root shell");
   expect(other).toContain("clp-addons terminal root allow bob");
   const popup = popupPage(null);
   expect(popup).toContain('data-domain=""');
   expect(popup).toContain('<span class="badge tone-bad">root</span>');
+});
+
+test("the header control is in both of CloudPanel's headers and the addons' own, for administrators, hidden until root answers", () => {
+  const headers = TERMINAL_TARGETS.filter((target) => target.slug.startsWith("root-shell"));
+  expect(headers.map((target) => target.template)).toEqual(["Frontend/Partial/header.html.twig", "Admin/Partial/header.html.twig"]);
+  for (const target of headers) {
+    const snippet = target.snippet("/addons/terminal");
+    expect(snippet).toContain("{% if is_granted('ROLE_ADMIN') %}");
+    expect(snippet).toContain('data-clp-root-shell style="display: none;"');
+    expect(snippet).toContain('fetch("/addons/terminal/api/root-access"');
+    // Twig would read these as its own tags.
+    expect(snippet.replace("{% if is_granted('ROLE_ADMIN') %}", "").replace("{% endif %}", "")).not.toMatch(/\{[{%#]/);
+  }
+  const page = renderLayout("Terminal", "", { brand: "Terminal", base: "/addons/terminal", nav: [], script: "" });
+  expect(page).toContain('id="clp-root-shell" data-clp-root-shell hidden');
+  expect(renderLayout("Terminal", "", { brand: "Terminal", base: "/addons/terminal", nav: [], script: "", admin: false })).not.toContain("clp-root-shell");
 });
