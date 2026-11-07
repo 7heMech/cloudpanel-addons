@@ -313,9 +313,11 @@ Memory settings saved in System Tweaks move to Resource Limits' own files. An
 enabled System Tweaks with a memory protection on enables Resource Limits to
 keep it; the switches of a disabled one stay off. Settings that are invalid or
 differ from Resource Limits' own are dropped from System Tweaks with one warning
-naming them, and Resource Limits keeps its own. Nothing about the move stops an
-update or a repair, and when there is nothing to move it takes no lock. A failed
-update undoes the move for the binary it restores.
+naming them, and Resource Limits keeps its own. Conflicting settings never stop
+an update or a repair, and when there is nothing to move it takes no lock. A
+lock still held after its wait skips the move in a repair, which tries again
+next time, and fails an update, which then undoes the move for the binary it
+restores.
 
 Memory settings and runtime state are root-only regular files. The settings
 lock serialises changes and upkeep; repair and new-site runs leave the memory

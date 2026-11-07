@@ -517,3 +517,17 @@ test("withdrawing waits as long as a memory change can hold the lock", async () 
   const { MEMORY_DEADLINE_MS } = await import("../addons/resource-limits/limits");
   expect(WITHDRAW_LOCK_WAIT_S * 1000).toBeGreaterThan(MEMORY_DEADLINE_MS);
 });
+
+test("a Redis that refuses CONFIG neither holds back OOM protection nor is left recorded as capped", () => {
+  const s = server();
+  const run = s.options.run!;
+  s.options.run = (program, args, ...rest) => (program.endsWith("redis-cli") && args.includes("CONFIG")
+    ? { ok: false, stdout: "", stderr: "ERR unknown command 'CONFIG'" }
+    : run(program, args, ...rest));
+  expect(() => applyMemory(on({ mysql: false }), s.options)).toThrow();
+  expect(score(s, 101)).toBe("-600");
+  const state = existsSync(join(s.dir, "memory.json")) ? readFileSync(join(s.dir, "memory.json"), "utf8") : "{}";
+  expect(JSON.parse(state).redisCapped).not.toBe(true);
+  // Off again, repair no longer asks Redis anything, so OOM protection keeps being kept.
+  expect(() => applyMemory(on({ mysql: false, redis: false }), s.options)).not.toThrow();
+});

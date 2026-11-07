@@ -156,7 +156,14 @@ function disableAddonContents(spec: AddonSpec): void {
   };
   if (spec.name === "wp-tools") withdrawWpTools(removeConfig);
   else removeConfig();
-  spec.withdrawn?.();
+  try {
+    spec.withdrawn?.();
+  } catch (error) {
+    // With the config gone a second disable would say it is done, and repair
+    // skips a disabled addon, so the half-withdrawn addon is enabled again.
+    writeConfig(spec, true);
+    fatal(`${spec.name} could not be disabled and is still enabled: ${error instanceof Error ? error.message : String(error)}. Run clp-addons disable ${spec.name} again`);
+  }
   // Even with no addon left the binary stays, and repair keeps the guard.
   settlePhpGuard();
   // Reconciled after the config file is gone, so the injection set is read

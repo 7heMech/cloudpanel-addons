@@ -450,9 +450,11 @@ function reconcileRedisLive(ctx: Context, settings: MemorySettings, redisUnit: U
     if (settings.redis) throw new Error("Redis has a password in redis.conf, so Resource Limits leaves it alone");
     return false;
   }
-  // Recorded first, so a cap set just before a failure is still taken off later.
-  if (settings.redis && !capped) writeState(ctx, { redisCapped: true });
   const live = redisLive(ctx, conf);
+  // Recorded before any CONFIG SET, so a cap set just before a failure is still
+  // taken off later; but only once Redis answers, so one that never does is
+  // not left looking capped by this addon.
+  if (settings.redis && !capped) writeState(ctx, { redisCapped: true });
   const wanted = settings.redis
     ? { maxmemory: String(memoryPlan(ramMb({ paths: ctx.paths }), settings.profile).redisMb * 1024 * 1024), policy: REDIS_POLICY }
     : { maxmemory: conf.maxmemory, policy: conf.policy };
@@ -541,8 +543,13 @@ export function applyMemory(settings: MemorySettings, options: MemoryOptions = {
   if (mysqlUnit.loaded && put(dropInPath(ctx, mysqlUnit.id, DROP_IN), settings.mysql ? hookDropIn(ctx.paths.bin, "ExecStartPre", "mysql") : null)) reload = true;
   if (redisUnit.loaded && put(dropInPath(ctx, redisUnit.id, DROP_IN), settings.redis ? hookDropIn(ctx.paths.bin, "ExecStartPost", "redis") : null)) reload = true;
   if (reload) daemonReload(ctx);
-  if (redisUnit.loaded && reconcileRedisLive(ctx, settings, redisUnit)) changed.push(settings.redis ? "Redis capped" : "Redis back on its own limit");
+  // A Redis that refuses does not hold back the kill priorities.
+  let redisFailure: unknown = null;
+  try {
+    if (redisUnit.loaded && reconcileRedisLive(ctx, settings, redisUnit)) changed.push(settings.redis ? "Redis capped" : "Redis back on its own limit");
+  } catch (error) { redisFailure = error; }
   if (reconcileOom(ctx, settings.oom, mysqlUnit)) changed.push(settings.oom ? "out-of-memory priorities set" : "out-of-memory priorities removed");
+  if (redisFailure) throw redisFailure;
   return changed;
 }
 
