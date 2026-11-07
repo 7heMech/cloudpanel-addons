@@ -178,7 +178,7 @@ function trustedRead(path: string, uid: number): string | null {
 // Policy
 // ---------------------------------------------------------------------------
 
-/** Produced on read, like PHP Resources' presets, so a read never writes. */
+/** Produced on read, like Resource Limits' presets, so a read never writes. */
 function seededPolicy(): SmtpPolicy {
   return { version: 2, profiles: [{ ...DONT_SEND }], defaultProfileId: null, assignments: {}, grants: {}, knownSiteIds: [] };
 }

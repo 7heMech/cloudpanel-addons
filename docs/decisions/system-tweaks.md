@@ -1,24 +1,21 @@
 # System Tweaks
 
 System Tweaks holds settings for the server rather than for CloudPanel's pages,
-which stay with [Panel Tweaks](panel-tweaks.md). PHP worker limits stay with
-[PHP Resources](php-resources.md). System Tweaks also owns the PHP version
+which stay with [Panel Tweaks](panel-tweaks.md). PHP worker and server memory limits stay with
+[Resource Limits](resource-limits.md). System Tweaks also owns the PHP version
 that runs the panel itself, the protocol of each rule on CloudPanel's own
-Firewall page, optional compression for remote site backups, and memory limits
-for MySQL, Redis and the out-of-memory killer.
+Firewall page and optional compression for remote site backups.
 
 ## The page
 
-Five cards: Automatic updates, which an operator comes back to; Remote backups,
+Four cards: Automatic updates, which an operator comes back to; Remote backups,
 with optional Zstandard compression and its level and worker count; one
 Hardening card for the panel's PHP, the upload-progress mitigation, forged
 visitor IPs, phpMyAdmin, MySQL access, the panel's certificate, nginx config
 injection, PHP pool isolation, File Manager confinement, clpctl injection and
 CloudPanel telemetry; Failed logins, with the two fail2ban jails and the
-addresses they block; and Memory, with the shared MySQL/Redis profile, an
-expandable budget preview and its three switches. MySQL access belongs with
-the protection settings; MySQL and Redis sizing stay together because their
-budgets share the same RAM and profile. Each row says what it does; the
+addresses they block. MySQL access belongs with the protection settings;
+MySQL and Redis sizing belong to Resource Limits alongside PHP worker limits. Each row says what it does; the
 reasons are here. The Nginx, MySQL, CloudPanel and reboot rows appear only once
 System Tweaks' own switch is on, since they change nothing before. The
 repositories and each PHP-FPM's upload-progress value fold into a summary that
@@ -1072,33 +1069,6 @@ a box whose cloud-init manages `/etc/hosts`, and removing the agent's line from
 version and announcement checks send no payload beyond the server's address and
 version, and stay.
 
-## Abandoned temp files
-
-A PHP request stopped by `max_execution_time` or `request_terminate_timeout`
-skips the cleanup that would remove its scratch files, and a CloudPanel box
-empties `/tmp` only at boot. An image too large for ImageMagick's memory limit
-is cached on disk, so a WordPress image job that keeps timing out leaves close
-to a gigabyte in `/tmp` on every try, and has filled a production disk that way.
-Clearing them is upkeep for the server rather than a PHP-FPM limit, so System
-Tweaks owns it, and an install with the installer's defaults has it. PHP
-Resources runs the same pass while System Tweaks is off, since an update never
-enables an addon and a box with PHP Resources alone would otherwise lose it.
-
-The repair timer removes them every 15 minutes, as the first step of System
-Tweaks' upkeep, so a failing update or panel PHP check cannot stop it. It takes
-the PHP sites' users from CloudPanel's own records, reads only the top level of
-`/tmp`, never follows a symlink, and removes a regular file only when a PHP
-site's own user owns it, no process has it open or mapped, and it matches one of
-three names: ImageMagick's `magick-*` after two idle hours, and PHP's
-`php??????` uploads and WordPress's `wp_tempnam()` `*-??????.tmp` files after a
-day, since those are closed between being written and being read.
-
-Cleanup inspects process file descriptors and memory maps before deleting any
-file. A closed descriptor or a process that has exited can be skipped; an
-inspection failure for a process whose directory still exists stops the cleanup,
-and the pass reports it, as it does unlink errors other than a file that has
-already gone. The rest of the upkeep still runs.
-
 ## Login jails
 
 CloudPanel has no limit on failed panel logins, and several of its weaknesses
@@ -1491,140 +1461,6 @@ forms, and injects restart/reload failures to verify recovery and retained data.
 
 Docker does not change this. Its rules sit on `FORWARD` and bypass ufw only for
 ports a container publishes, and the host's MySQL is not one of them.
-
-## Memory limits
-
-CloudPanel sizes its services once, at install, the same on every server: a
-512 MB InnoDB buffer pool, 512 connections with 8 MB sort and join buffers, a
-16 MB `read_rnd_buffer_size` and 128 MB in-memory temporary tables, Redis with
-no limit and `noeviction`, Varnish at 512 MB and Memcached at 64 MB. On a 4 GB
-server MySQL's worst case alone is many times the RAM. Nothing sets an
-out-of-memory priority, so when memory runs out the kernel kills the largest
-process, which is MySQL, and every site loses its database.
-
-### Policy saved, sizes derived
-
-Settings hold a profile (`balanced`, `database` or `cache`) and three switches,
-never a size. Choosing a profile does not enable a service's sizing switch.
-With both sizing switches off, the page says Sizing off and retains the chosen
-profile for previewing. The expandable budget always assumes both sizing
-switches are on; each service's row reports its own state. The Redis row calls
-the cap On only when its switch is enabled and the live values match the
-profile, so an operator's own matching limit does not look like an active
-addon cap. Out-of-memory protection is independent of sizing.
-
-The sizes come from `MemTotal` each time they are applied:
-
-| Profile | Buffer pool | Connection budget | Redis |
-| --- | --- | --- | --- |
-| Balanced | 25% of RAM | 15% | 10% |
-| Database-heavy | 40% | 20% | 5% |
-| Cache-heavy | 15% | 10% | 20% |
-
-A saved size would be wrong after the server is resized: unused RAM after
-scaling up, and after scaling down a buffer pool bigger than the server, which
-runs it out of memory at boot. Most providers resize by stopping the server, so
-the sizes are worked out again when the services start:
-
-- MySQL's unit gets `ExecStartPre=-+clp-addons sync-memory mysql`, which
-  rewrites `zz-clp-addons-memory.cnf` before mysqld reads its options. `+` runs
-  it as root under the unit's `User=mysql`; `-` means a failure starts MySQL on
-  the last file instead of not at all.
-- Redis's unit gets `ExecStartPost=-+clp-addons sync-memory redis`, which sets
-  the cap once the server is ready.
-- Repair, every 15 minutes, catches a resize without a reboot. Redis takes the
-  new cap at once; MySQL's file changes and the page says it applies at the
-  next restart.
-
-Both hooks read the setting without the settings lock, as the PHP-FPM hook does:
-nothing on the page waits for MySQL or Redis to start.
-
-A change from the page has one 120-second deadline for itself and, when a step
-fails, for putting the previous settings back; each command gets what is left
-of it, at most its usual 30 seconds. One change is a few seconds when nothing
-hangs. `set-memory` answers with the saved settings only, and the page the
-browser repaints comes from a separate `state` request, bounded as loading the
-page is. The gateway's timeout for `set-memory` is the deadline, the 15-second
-settings lock wait, the waits on `memory.json`'s lock, and the reply.
-The MySQL switch names the save and validation in its progress message and
-says on success that the sizes apply at the next restart; it does not report
-the running server as resized just because the file was saved.
-
-### MySQL
-
-The option file is read after CloudPanel's `mysqld.cnf`, in the same directory
-as the loopback file (see Database exposure), and overrides it. It sets the
-buffer pool, one instance per GB up to 8 (MySQL itself uses one below 1 GB), and
-rounds the pool down to whole 128 MB chunks per instance, since InnoDB rounds a
-size up to them. `max_connections` is the connection budget divided by 8 MB,
-between 100 and 512, with the per-connection buffers lowered to 2 MB sort and
-join and 1 MB read and read-rnd so that 8 MB holds. In-memory temporary tables
-are capped at 32 MB each, and on MySQL 8 at 5% of RAM together
-(`temptable_max_ram`, between 64 MB and 1 GB). Options MariaDB does not know
-carry `loose-`, so it warns and starts.
-
-System Tweaks never restarts MySQL for this. The file applies at its next start,
-and the page shows Pending while the file is newer than the running server's
-`ExecMainStartTimestamp`, read with `TZ=UTC` rather than `--timestamp=unix`,
-which needs systemd 251 and Ubuntu 22.04 has 249. Restarting would take every site's database away for
-a few seconds on a click, and nothing here is urgent enough for that. The
-dynamic `SET GLOBAL innodb_buffer_pool_size` is not used either: it needs a
-login, and System Tweaks does not decrypt the root password the panel stores
-(see Database exposure).
-
-When the file changes, `mysqld --verbose --help` reads back the buffer pool and
-`max_connections` it would start with. A later file or a startup option that
-overrides them refuses the change and puts the previous file back, so the next
-restart is not quietly ignoring the setting. A file of that name without the
-marker belongs to someone else and is refused, as the loopback one is.
-
-### Redis
-
-Redis is capped with `CONFIG SET maxmemory` and `maxmemory-policy allkeys-lru`,
-never `CONFIG REWRITE`: `redis.conf` is a conffile of the `redis-server`
-package, and an edited conffile makes the next package upgrade stop at a prompt,
-which unattended-upgrades handles by skipping the package, so Redis's security
-updates would stop. Debian's `redis.conf` has no include directory, and an
-`ExecStart=` override would have to copy the package's command line, so the
-start hook is the remaining place. Switching off sets both back to what
-`redis.conf` says, or Redis's defaults where it says nothing, but only when the
-running Redis holds a cap System Tweaks set: `memory.json` in its state
-directory records that, and a Redis restart, which drops it, clears the record.
-The page, repair and Redis's start hook all rewrite that file, so each holds
-its own lock while it reads and rewrites it, and none loses the other's field.
-With the switch off and no such record, repair does not even read Redis's
-settings, so values an operator set with `CONFIG SET` stay.
-
-`allkeys-lru` suits a cache, which is what sites on CloudPanel use Redis for.
-A site that keeps a job queue or other data it cannot lose in Redis would lose
-keys at the cap, so the switch is off by default and its description says so.
-A `redis.conf` with `requirepass` is left alone and the page says why; reading
-the password to pass it to `redis-cli` would put it on a command line.
-
-### The out-of-memory killer
-
-`OOMScoreAdjust=` drop-ins give MySQL -600, nginx -500 and every site PHP-FPM
-unit +300. When memory runs out the kernel then kills a PHP worker, which fails
-one request and is replaced by its master, before MySQL or nginx, either of
-which takes every site down. The panel's own PHP-FPM, Redis, Varnish and
-Memcached keep the default. A unit's processes keep the score they started
-with, so the processes in each unit's cgroup get the new value at once; switching
-off writes back the score systemd shows for the unit without the drop-in. It is
-on by default: it changes nothing until memory runs out, and then only which
-process goes. A PHP version installed later gets its drop-in at the next repair.
-
-No unit gets `MemoryMax=`. A cgroup limit makes the kernel kill inside the
-service when it is reached, which is the outcome this avoids; the services' own
-limits and the kill order do the job.
-
-### The budget
-
-The card adds up what the profile gives MySQL's pool and connections and Redis,
-with Varnish's `-s malloc` size from its unit and Memcached's `-m` from
-`/etc/memcached.conf`, against the RAM, and shows what is left for PHP. MySQL
-and Redis are counted at the profile's sizes whatever their switches, as what
-they use otherwise is not known without logging in. PHP's own worst case,
-workers times `memory_limit`, belongs to [PHP Resources](php-resources.md).
 
 ## Retiring a mitigation
 

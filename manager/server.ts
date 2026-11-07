@@ -92,6 +92,13 @@ export async function handleRequest(req: Request, server: Server<unknown>): Prom
     );
   }
 
+  // Keep already-loaded site Settings cards and bookmarked pages working after the rename.
+  // This runs behind both authentication gates; 308 preserves API methods and query strings.
+  if (path === "/php-resources" || path.startsWith("/php-resources/")) {
+    const query = new URL(req.url).search;
+    return new Response(null, { status: 308, headers: { Location: `/addons/resource-limits${path.slice("/php-resources".length)}${query}` } });
+  }
+
   // Polled while this process restarts; the gateway that validates the session
   // is a separate unit, so it keeps answering across the restart.
   if (path === "/health") {

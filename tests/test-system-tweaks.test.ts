@@ -18,7 +18,6 @@ import { dashboardView } from "../addons/system-tweaks/app/views";
 import { releaseRealIp } from "../addons/system-tweaks/real-ip";
 import WRAPPER_SCRIPT from "../addons/system-tweaks/clpctl-wrapper.sh" with { type: "text" };
 import { DEFAULT_BACKUP_COMPRESSION } from "../addons/system-tweaks/backup-compression";
-import { DEFAULT_MEMORY, memoryPlan } from "../addons/system-tweaks/memory";
 
 // CloudPanel's original /usr/bin/clpctlWrapper (cloudpanel 2.5.4-3), whose SHA-256
 // is in KNOWN_ORIGINAL_SHA256, so the guard treats it as a known original.
@@ -506,7 +505,6 @@ function box(options: { installed?: boolean; timers?: Record<string, string>; fa
       },
       clpctlGuard: { version: null, paths: { wrapper: join(dir, "clpctlWrapper"), backup: join(dir, "clpctlWrapper.orig"), rootUid: uid } },
       telemetry: { run: agentRun, paths: { dropIn: agentDropIn } },
-      tmpCleanup: { paths: { tmpDir: join(tmpRoot, "tmp"), procDir: join(tmpRoot, "proc"), passwd: join(tmpRoot, "passwd") }, panelDb },
       // No fail2ban in this fixture; tests/test-login-jails.test.ts covers it.
       loginJails: {
         run: () => ({ ok: false, stdout: "", stderr: "not installed" }),
@@ -519,14 +517,6 @@ function box(options: { installed?: boolean; timers?: Record<string, string>; fa
       database: {
         run: () => ({ ok: false, stdout: "", stderr: "no MySQL in this fixture" }),
         paths: { confDirs: [join(dir, "mysql.conf.d")], checkFile: join(dir, "database-check.json") },
-      },
-      // No MySQL, Redis, nginx or PHP-FPM units in this fixture; tests/test-system-tweaks-memory.test.ts covers them.
-      memory: {
-        run: noUnits,
-        paths: {
-          meminfo: join(dir, "meminfo"), confDirs: [join(dir, "mysql.conf.d")], systemdDir: join(dir, "systemd"), phpRoot,
-          stateFile: join(dir, "memory.json"), stateLock: join(dir, "memory.lock"), memcachedConf: join(dir, "memcached.conf"), redisConf: join(dir, "redis.conf"),
-        },
       },
       // No ufw in this fixture; tests/test-firewall.test.ts covers it.
       firewall: {
@@ -755,7 +745,7 @@ function systemTweaksClient() {
     },
   };
   const client = new Function("call", "busy", "notify", "clearNotice", "repaintView", "CLP_ROOT", "clpFlashTimer", "document",
-    `${source}\nreturn { installUpdates, setUpdates, setPanelPhp, setMemory };`)(
+    `${source}\nreturn { installUpdates, setUpdates, setPanelPhp };`)(
     (path: string, options: { body: string }) => new Promise((answer) => {
       events.push(`POST ${path} ${options.body}`);
       replies.push({ path, body: options.body, answer });
@@ -767,7 +757,7 @@ function systemTweaksClient() {
     { getElementById: () => ({}), querySelector: () => null, querySelectorAll: () => [] },
     0,
     document,
-  ) as Record<"installUpdates" | "setUpdates" | "setPanelPhp" | "setMemory", (control: unknown) => Promise<void>>;
+  ) as Record<"installUpdates" | "setUpdates" | "setPanelPhp", (control: unknown) => Promise<void>>;
   return { client, control, events, replies, lines };
 }
 
@@ -783,28 +773,7 @@ test("a change says it is running on its own row, and repaints the page from its
   expect(readFileSync(join(import.meta.dir, "../addons/system-tweaks/app/views.client.js"), "utf8")).not.toContain("location.reload");
 });
 
-test("MySQL sizing keeps progress visible until the reply and explains that a restart is still needed", async () => {
-  for (const checked of [true, false]) {
-    const { client, control, events, replies, lines } = systemTweaksClient();
-    const input = { ...control("Size MySQL to this server"), dataset: { setting: "memory-mysql" }, checked };
-    const pending = client.setMemory(input);
-    await Bun.sleep(0);
-    expect(replies.map(({ path, body }) => ({ path, body }))).toEqual([
-      { path: "/api/memory", body: JSON.stringify({ mysql: checked }) },
-    ]);
-    expect(events).toContain(checked ? "working: Saving and checking MySQL sizes…" : "working: Restoring CloudPanel’s MySQL sizes…");
-    expect(events).not.toContain("idle");
-    expect(lines).toHaveLength(1);
-    expect(lines[0]!.removed).toBe(false);
-    replies[0]!.answer({ ok: true, html: "<p>Pending restart</p>" });
-    await pending;
-    expect(lines[0]!.removed).toBe(true);
-    expect(events.slice(-3)).toEqual([
-      "idle", "repaint: <p>Pending restart</p>",
-      checked ? "ok: Saved. MySQL uses these sizes at its next restart." : "ok: Saved. CloudPanel’s MySQL sizes return at its next restart.",
-    ]);
-  }
-});
+
 
 // Switching updates on and then the panel's PHP, before the first answered, let
 // the first reply repaint the PHP picker back as if its change had stopped.
@@ -1283,7 +1252,7 @@ test("a withdrawal that fails after restoring the wrapper puts the hardened wrap
 test("the page shows the vhost guard as on, waiting for repair, or off", () => {
   const html = (partial: Omit<SystemTweaksState["vhostGuard"], "homeLogs" | "ownLogrotate"> & { homeLogs?: string[]; ownLogrotate?: string[] }) => dashboardView({
     updates: updatesStatus({ run: () => ({ ok: false, stdout: "", stderr: "" }) }), settings: { ...DEFAULT_UPDATE_SETTINGS },
-    uploadProgress: { guard: true, fpms: [] }, realIp: { blockForged: true, trustsAnyAddress: false, problem: "" }, phpMyAdmin: { enabled: true, active: true, problem: "" }, vhostGuard: { homeLogs: [], ownLogrotate: [], ...partial }, phpPools: { enabled: true, active: true, problem: "" }, fileManagerGuard: { enabled: true, active: true }, panelCert: { kind: "generated" as const, replace: true }, backupCompression: { enabled: false, level: 3, threads: 1, active: false, supported: true, installed: true, problem: "" }, telemetry: { enabled: true, agent: true, blocked: true, problem: "" }, clpctlGuard: { error: "" }, panelPhp: { error: "" }, firewall: { error: "" }, loginJails: { error: "" }, database: { error: "" }, memory: { error: "" },
+    uploadProgress: { guard: true, fpms: [] }, realIp: { blockForged: true, trustsAnyAddress: false, problem: "" }, phpMyAdmin: { enabled: true, active: true, problem: "" }, vhostGuard: { homeLogs: [], ownLogrotate: [], ...partial }, phpPools: { enabled: true, active: true, problem: "" }, fileManagerGuard: { enabled: true, active: true }, panelCert: { kind: "generated" as const, replace: true }, backupCompression: { enabled: false, level: 3, threads: 1, active: false, supported: true, installed: true, problem: "" }, telemetry: { enabled: true, agent: true, blocked: true, problem: "" }, clpctlGuard: { error: "" }, panelPhp: { error: "" }, firewall: { error: "" }, loginJails: { error: "" }, database: { error: "" },
   });
   expect(html({ enabled: true, active: true, stored: [] })).toContain("Panel input is checked before CloudPanel writes it into a vhost.");
   expect(html({ enabled: true, active: false, stored: [] })).toContain("Not applied");
@@ -1295,65 +1264,9 @@ test("the page shows the vhost guard as on, waiting for repair, or off", () => {
   expect(html({ enabled: true, active: true, stored: { error: "panel database is not readable" } })).toContain("Stored site settings could not be checked: panel database is not readable");
 });
 
-test("the memory switches save the change, and a change that fails leaves the saved settings as they were", async () => {
-  const b = box();
-  const memory = b.options.memory!;
-  mkdirSync(memory.paths!.confDirs![0]!, { recursive: true });
-  writeFileSync(memory.paths!.redisConf!, "port 6379\nrequirepass secret\n");
-  // MySQL and Redis installed and stopped; tests/test-system-tweaks-memory.test.ts runs them.
-  memory.paths = { ...memory.paths, servers: [] };
-  memory.run = (command, args) => {
-    if (command !== "env" || args[2] !== "show") return { ok: true, stdout: "", stderr: "" };
-    const names = args.slice(3).filter((arg, index, all) => !arg.startsWith("-") && all[index - 1] !== "-p");
-    return { ok: true, stdout: names.map((name) => ["mysql.service", "redis-server.service"].includes(name)
-      ? `Id=${name}\nLoadState=loaded\nActiveState=inactive\n` : `Id=${name}\nLoadState=not-found\nActiveState=inactive\n`).join("\n"), stderr: "" };
-  };
-  // The reply is the saved settings; the page comes from its own state request.
-  expect(await act(b, ["set-memory"], { mysql: true, profile: "database" }) as unknown)
-    .toEqual({ memory: { profile: "database", mysql: true, redis: false, oom: true } });
-  const state = await act(b, ["state"]);
-  expect(state.memory).toMatchObject({ settings: { profile: "database", mysql: true, redis: false, oom: true }, mysql: { inPlace: true } });
-  expect(readSettings(b.options.paths as SystemTweaksPaths).memory).toEqual({ profile: "database", mysql: true, redis: false, oom: true });
 
-  // The password is found only once Redis is running, so make it running.
-  const show = memory.run;
-  memory.run = (command, args, timeoutMs) => {
-    const shown = show!(command, args, timeoutMs);
-    return { ...shown, stdout: shown.stdout.replace("Id=redis-server.service\nLoadState=loaded\nActiveState=inactive", "Id=redis-server.service\nLoadState=loaded\nActiveState=active") };
-  };
-  await expect(act(b, ["set-memory"], { redis: true })).rejects.toThrow("has a password");
-  expect(readSettings(b.options.paths as SystemTweaksPaths).memory.redis).toBe(false);
-  await expect(act(b, ["set-memory"], { profile: "huge" })).rejects.toThrow("profile must be");
 
-  // Turning both sizing switches off persists; choosing another profile is only a preview.
-  await act(b, ["set-memory"], { mysql: false, redis: false });
-  await act(b, ["set-memory"], { profile: "cache" });
-  expect(readSettings(b.options.paths as SystemTweaksPaths).memory).toEqual({ profile: "cache", mysql: false, redis: false, oom: true });
-  expect(existsSync(join(memory.paths!.confDirs![0]!, "zz-clp-addons-memory.cnf"))).toBe(false);
-});
 
-test("memory sizing can be off while its profile is saved and Redis has its own matching limit", async () => {
-  const base = await act(box(), ["state"]);
-  const plan = memoryPlan(3819, "balanced");
-  const memory = {
-    settings: { ...DEFAULT_MEMORY }, plan,
-    mysql: { installed: true, inPlace: false, pending: true },
-    redis: { installed: true, maxmemoryMb: plan.redisMb, policy: "allkeys-lru", usedMb: 1, capped: true, problem: "" },
-    oom: { inPlace: true }, varnishMb: 512, memcachedMb: 64,
-  };
-  const html = dashboardView({ ...base, memory });
-  expect(html).toContain("Sizing off</span>");
-  expect(html).toContain("The profile is saved; MySQL sizing and Cap Redis are both off.");
-  expect(html).toContain("CloudPanel's values come back at MySQL's next restart.");
-  expect(html).toContain(`with Redis's own limit of ${plan.redisMb} MB`);
-  expect(html).toMatch(/data-setting="memory-oom"[^>]* checked/);
-  expect(html).not.toMatch(/data-setting="memory-(?:mysql|redis)"[^>]* checked/);
-
-  const enabled = dashboardView({ ...base, memory: { ...memory, settings: { ...memory.settings, redis: true } } });
-  expect(enabled).not.toContain("Sizing off</span>");
-  expect(enabled).toContain(`Using 1 MB of ${plan.redisMb} MB`);
-  expect(enabled).not.toContain("with Redis's own limit");
-});
 
 test("PHP pool isolation switches from the page, repair puts it back, and the PHP-FPM hook follows the setting", async () => {
   const b = box();
@@ -1380,7 +1293,7 @@ test("the page shows PHP pool isolation as on, waiting for repair, or off", () =
   const html = (phpPools: SystemTweaksState["phpPools"]) => dashboardView({
     updates: updatesStatus({ run: () => ({ ok: false, stdout: "", stderr: "" }) }), settings: { ...DEFAULT_UPDATE_SETTINGS },
     uploadProgress: { guard: true, fpms: [] }, realIp: { blockForged: true, trustsAnyAddress: false, problem: "" },
-    phpMyAdmin: { enabled: true, active: true, problem: "" }, vhostGuard: { enabled: true, active: true, stored: [], homeLogs: [], ownLogrotate: [] }, phpPools, fileManagerGuard: { enabled: true, active: true }, panelCert: { kind: "generated" as const, replace: true }, backupCompression: { enabled: false, level: 3, threads: 1, active: false, supported: true, installed: true, problem: "" }, telemetry: { enabled: true, agent: true, blocked: true, problem: "" }, clpctlGuard: { error: "" }, panelPhp: { error: "" }, firewall: { error: "" }, loginJails: { error: "" }, database: { error: "" }, memory: { error: "" },
+    phpMyAdmin: { enabled: true, active: true, problem: "" }, vhostGuard: { enabled: true, active: true, stored: [], homeLogs: [], ownLogrotate: [] }, phpPools, fileManagerGuard: { enabled: true, active: true }, panelCert: { kind: "generated" as const, replace: true }, backupCompression: { enabled: false, level: 3, threads: 1, active: false, supported: true, installed: true, problem: "" }, telemetry: { enabled: true, agent: true, blocked: true, problem: "" }, clpctlGuard: { error: "" }, panelPhp: { error: "" }, firewall: { error: "" }, loginJails: { error: "" }, database: { error: "" },
   });
   expect(html({ enabled: true, active: true, problem: "" })).toContain("Each pool's port answers only nginx and the pool's own user.");
   expect(html({ enabled: true, active: false, problem: "" })).toContain("Run clp-addons repair.");
@@ -1455,7 +1368,7 @@ test("the page shows telemetry as blocked, waiting for repair, sending, or witho
   const html = (telemetry: SystemTweaksState["telemetry"]) => dashboardView({
     updates: updatesStatus({ run: () => ({ ok: false, stdout: "", stderr: "" }) }), settings: { ...DEFAULT_UPDATE_SETTINGS },
     uploadProgress: { guard: true, fpms: [] }, realIp: { blockForged: true, trustsAnyAddress: false, problem: "" },
-    phpMyAdmin: { enabled: true, active: true, problem: "" }, vhostGuard: { enabled: true, active: true, stored: [], homeLogs: [], ownLogrotate: [] }, phpPools: { enabled: true, active: true, problem: "" }, fileManagerGuard: { enabled: true, active: true }, panelCert: { kind: "generated" as const, replace: true }, backupCompression: { enabled: false, level: 3, threads: 1, active: false, supported: true, installed: true, problem: "" }, telemetry, clpctlGuard: { error: "" }, panelPhp: { error: "" }, firewall: { error: "" }, loginJails: { error: "" }, database: { error: "" }, memory: { error: "" },
+    phpMyAdmin: { enabled: true, active: true, problem: "" }, vhostGuard: { enabled: true, active: true, stored: [], homeLogs: [], ownLogrotate: [] }, phpPools: { enabled: true, active: true, problem: "" }, fileManagerGuard: { enabled: true, active: true }, panelCert: { kind: "generated" as const, replace: true }, backupCompression: { enabled: false, level: 3, threads: 1, active: false, supported: true, installed: true, problem: "" }, telemetry, clpctlGuard: { error: "" }, panelPhp: { error: "" }, firewall: { error: "" }, loginJails: { error: "" }, database: { error: "" },
   });
   expect(html({ enabled: true, agent: true, blocked: true, problem: "" })).toContain("clp-agent can reach only this server.");
   expect(html({ enabled: true, agent: true, blocked: false, problem: "" })).toContain("Not applied");
@@ -1578,7 +1491,7 @@ test("failed downloads retain the package URL in expandable details and escape t
   const updates = updatesStatus(b.options.updates);
   expect(updates.lastRun?.outcome).toBe("failed");
   expect(updates.lastRun?.message).toContain("php8.2-bcmath.deb");
-  const html = dashboardView({ updates, settings: { ...DEFAULT_UPDATE_SETTINGS }, uploadProgress: { guard: true, fpms: [] }, realIp: { blockForged: true, trustsAnyAddress: false, problem: "" }, phpMyAdmin: { enabled: true, active: true, problem: "" }, vhostGuard: { enabled: true, active: true, stored: [], homeLogs: [], ownLogrotate: [] }, phpPools: { enabled: true, active: true, problem: "" }, fileManagerGuard: { enabled: true, active: true }, panelCert: { kind: "generated" as const, replace: true }, backupCompression: { enabled: false, level: 3, threads: 1, active: false, supported: true, installed: true, problem: "" }, telemetry: { enabled: true, agent: true, blocked: true, problem: "" }, clpctlGuard: { error: "" }, panelPhp: { error: "" }, firewall: { error: "" }, loginJails: { error: "" }, database: { error: "" }, memory: { error: "" } });
+  const html = dashboardView({ updates, settings: { ...DEFAULT_UPDATE_SETTINGS }, uploadProgress: { guard: true, fpms: [] }, realIp: { blockForged: true, trustsAnyAddress: false, problem: "" }, phpMyAdmin: { enabled: true, active: true, problem: "" }, vhostGuard: { enabled: true, active: true, stored: [], homeLogs: [], ownLogrotate: [] }, phpPools: { enabled: true, active: true, problem: "" }, fileManagerGuard: { enabled: true, active: true }, panelCert: { kind: "generated" as const, replace: true }, backupCompression: { enabled: false, level: 3, threads: 1, active: false, supported: true, installed: true, problem: "" }, telemetry: { enabled: true, agent: true, blocked: true, problem: "" }, clpctlGuard: { error: "" }, panelPhp: { error: "" }, firewall: { error: "" }, loginJails: { error: "" }, database: { error: "" } });
   expect(html).toContain("A package download failed (HTTP 404).");
   expect(html).toContain('<details class="st-run-details"><summary>Failure details</summary>');
   expect(html).toContain("php8.2-bcmath.deb failed to download, aborting &lt;script&gt;");
@@ -1662,37 +1575,7 @@ test("the reboot-time API validates input and returns replacement HTML from the 
   } finally { systemTweaksService.setUpdates = original; }
 });
 
-test("the memory API saves through set-memory and repaints from a separate state request", async () => {
-  const { handle } = await import("../addons/system-tweaks/app");
-  const { systemTweaksService } = await import("../addons/system-tweaks/app/service");
-  const state = await act(box(), ["state"]);
-  const original = { setMemory: systemTweaksService.setMemory, state: systemTweaksService.state };
-  const calls: string[] = [];
-  systemTweaksService.setMemory = async (change) => {
-    calls.push(`set-memory ${JSON.stringify(change)}`);
-    return change.redis ? { ok: false, error: "Redis has a password in redis.conf" } : { ok: true, data: { memory: { profile: "cache", mysql: false, redis: false, oom: true } } };
-  };
-  systemTweaksService.state = async () => { calls.push("state"); return { ok: true, data: state }; };
-  const request = (body: unknown) => new Request("https://panel.example.com/addons/system-tweaks/api/memory", {
-    method: "POST",
-    headers: { Host: "panel.example.com", Origin: "https://panel.example.com", "Content-Type": "application/json",
-      Cookie: `clp_addons_csrf=${"a".repeat(64)}`, "X-CLP-Addons-CSRF": "a".repeat(64) },
-    body: JSON.stringify(body),
-  });
-  try {
-    expect((await handle(request({ profile: "huge" }), "/api/memory")).status).toBe(400);
-    expect(calls).toEqual([]);
-    const response = await handle(request({ profile: "cache" }), "/api/memory");
-    expect(response.status).toBe(200);
-    expect((await response.json() as { html: string }).html).toBe(dashboardView(state));
-    expect(calls).toEqual(['set-memory {"profile":"cache"}', "state"]);
-    // A refused change answers with its error and reads no state.
-    const refused = await handle(request({ redis: true }), "/api/memory");
-    expect(refused.status).toBe(400);
-    expect(await refused.json()).toMatchObject({ ok: false, error: "Redis has a password in redis.conf" });
-    expect(calls.at(-1)).toBe('set-memory {"redis":true}');
-  } finally { Object.assign(systemTweaksService, original); }
-});
+
 
 test("System Tweaks exposes panel PHP state and validates its change action", async () => {
   const b = box();
@@ -1722,13 +1605,7 @@ test("systemTweaksMaintenance still reconciles panel PHP when upkeep fails", asy
   expect(phpCalled).toBe(true);
 });
 
-test("systemTweaksMaintenance reports a /tmp cleanup that cannot read CloudPanel's sites, and still runs the rest", async () => {
-  const b = box();
-  writeFileSync(b.nginxConf, CLOUDPANEL_NGINX_CONF);
-  b.nginx.fail = true;
-  b.options.tmpCleanup = { ...b.options.tmpCleanup, panelDb: join(b.aptDir, "missing", "db.sq3") };
-  await expect(systemTweaksMaintenance(b.options)).rejects.toThrow(/^\/tmp cleanup: .+; Nginx validation failed: emerg/);
-});
+
 
 test("the page shows update options only once updates are on, and says what silently goes uncovered", () => {
   const updates: UpdatesStatus = {
@@ -1746,7 +1623,7 @@ test("the page shows update options only once updates are on, and says what sile
     uploadProgress: { guard: true, fpms: [{
       label: "PHP 8.2", version: "8.2", enabled: false, setBy: "clp-addons" as const,
       source: "/etc/php/8.2/fpm/conf.d/99-clp-addons-upload-progress.ini", offWithoutGuard: false, poolsOn: ["legacy.example.com"],
-    }] }, realIp: { blockForged: true, trustsAnyAddress: false, problem: "" }, phpMyAdmin: { enabled: true, active: true, problem: "" }, vhostGuard: { enabled: true, active: true, stored: [], homeLogs: [], ownLogrotate: [] }, phpPools: { enabled: true, active: true, problem: "" }, fileManagerGuard: { enabled: true, active: true }, panelCert: { kind: "generated" as const, replace: true }, backupCompression: { enabled: false, level: 3, threads: 1, active: false, supported: true, installed: true, problem: "" }, telemetry: { enabled: true, agent: true, blocked: true, problem: "" }, clpctlGuard: { error: "" }, panelPhp: { error: "" }, firewall: { error: "" }, loginJails: { error: "" }, database: { error: "" }, memory: { error: "" },
+    }] }, realIp: { blockForged: true, trustsAnyAddress: false, problem: "" }, phpMyAdmin: { enabled: true, active: true, problem: "" }, vhostGuard: { enabled: true, active: true, stored: [], homeLogs: [], ownLogrotate: [] }, phpPools: { enabled: true, active: true, problem: "" }, fileManagerGuard: { enabled: true, active: true }, panelCert: { kind: "generated" as const, replace: true }, backupCompression: { enabled: false, level: 3, threads: 1, active: false, supported: true, installed: true, problem: "" }, telemetry: { enabled: true, agent: true, blocked: true, problem: "" }, clpctlGuard: { error: "" }, panelPhp: { error: "" }, firewall: { error: "" }, loginJails: { error: "" }, database: { error: "" },
   };
   const now = Date.parse("2026-10-25T00:00:00Z");
   const outside = dashboardView(state, now);
@@ -1794,7 +1671,7 @@ test("the page names the UDP ports CloudPanel's Firewall page opens, in one line
   const b = box();
   const base = {
     updates: updatesStatus(b.options.updates), settings: { ...DEFAULT_UPDATE_SETTINGS }, uploadProgress: { guard: true, fpms: [] },
-    realIp: { blockForged: true, trustsAnyAddress: false, problem: "" }, phpMyAdmin: { enabled: true, active: true, problem: "" }, vhostGuard: { enabled: true, active: true, stored: [], homeLogs: [], ownLogrotate: [] }, phpPools: { enabled: true, active: true, problem: "" }, fileManagerGuard: { enabled: true, active: true }, panelCert: { kind: "generated" as const, replace: true }, backupCompression: { enabled: false, level: 3, threads: 1, active: false, supported: true, installed: true, problem: "" }, telemetry: { enabled: true, agent: true, blocked: true, problem: "" }, clpctlGuard: { error: "" }, panelPhp: { error: "" }, loginJails: { error: "" }, database: { error: "" }, memory: { error: "" } as const,
+    realIp: { blockForged: true, trustsAnyAddress: false, problem: "" }, phpMyAdmin: { enabled: true, active: true, problem: "" }, vhostGuard: { enabled: true, active: true, stored: [], homeLogs: [], ownLogrotate: [] }, phpPools: { enabled: true, active: true, problem: "" }, fileManagerGuard: { enabled: true, active: true }, panelCert: { kind: "generated" as const, replace: true }, backupCompression: { enabled: false, level: 3, threads: 1, active: false, supported: true, installed: true, problem: "" }, telemetry: { enabled: true, agent: true, blocked: true, problem: "" }, clpctlGuard: { error: "" }, panelPhp: { error: "" }, loginJails: { error: "" }, database: { error: "" } as const,
   };
   const open = dashboardView({ ...base, firewall: { available: true, protocols: { 5: "udp" }, udpPorts: ["53", "3478-3479"] } });
   expect(open).toContain(`<br>UDP ports open from CloudPanel's <a href="/admin/firewall">Firewall</a> page: 53, 3478-3479.</p>`);
@@ -1820,7 +1697,7 @@ test("the Failed logins card lists bans with an Unblock each, and warns about wh
   const b = box();
   const base = {
     updates: updatesStatus(b.options.updates), settings: { ...DEFAULT_UPDATE_SETTINGS }, uploadProgress: { guard: true, fpms: [] },
-    realIp: { blockForged: true, trustsAnyAddress: false, problem: "" }, phpMyAdmin: { enabled: true, active: true, problem: "" }, vhostGuard: { enabled: true, active: true, stored: [], homeLogs: [], ownLogrotate: [] }, phpPools: { enabled: true, active: true, problem: "" }, fileManagerGuard: { enabled: true, active: true }, panelCert: { kind: "generated" as const, replace: true }, backupCompression: { enabled: false, level: 3, threads: 1, active: false, supported: true, installed: true, problem: "" }, telemetry: { enabled: true, agent: true, blocked: true, problem: "" }, clpctlGuard: { error: "" }, panelPhp: { error: "" }, firewall: { error: "" }, database: { error: "" }, memory: { error: "" },
+    realIp: { blockForged: true, trustsAnyAddress: false, problem: "" }, phpMyAdmin: { enabled: true, active: true, problem: "" }, vhostGuard: { enabled: true, active: true, stored: [], homeLogs: [], ownLogrotate: [] }, phpPools: { enabled: true, active: true, problem: "" }, fileManagerGuard: { enabled: true, active: true }, panelCert: { kind: "generated" as const, replace: true }, backupCompression: { enabled: false, level: 3, threads: 1, active: false, supported: true, installed: true, problem: "" }, telemetry: { enabled: true, agent: true, blocked: true, problem: "" }, clpctlGuard: { error: "" }, panelPhp: { error: "" }, firewall: { error: "" }, database: { error: "" },
   };
   const jails = {
     panel: true, ssh: false, missing: [], service: "active" as const, running: ["clp-addons-panel", "clp-addons-domain"], panelLog: true, problem: "",

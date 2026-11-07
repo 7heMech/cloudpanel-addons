@@ -102,12 +102,13 @@ first install. `install` takes no `--version`; changing version is `update`.
 
 ## Default selection
 
-The installer preselects Panel Tweaks and System Tweaks, each marked
+The installer preselects Panel Tweaks, System Tweaks and Resource Limits, each marked
 `preselected` in its addon definition: they work on the panel and the server
 themselves, so they suit any box, need no outside account, and change nothing
 until used unless the change is itself protective. Every other addon is chosen
-by hand. The selection only applies when the installer runs; `update` never
-adds an addon.
+by hand. The selection applies when the installer runs. Updates preserve
+installed choices; a feature moved between addons can enable its new owner
+when needed to keep an existing protection active.
 
 ## Update behavior
 

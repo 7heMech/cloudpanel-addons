@@ -10,7 +10,6 @@ import type { FirewallStatus } from "../firewall";
 import { MAX_BACKUP_LEVEL } from "../backup-compression";
 import { DOMAIN_JAIL, JAIL_LIMITS, PANEL_JAIL, type Ban, type SshLogin } from "../login-jails";
 import type { DatabaseStatus } from "../database";
-import { CONNECTION_MB, type MemoryProfile } from "../memory";
 
 import STYLE from "./views.css" with { type: "text" };
 import SCRIPT from "./views.client.js" with { type: "text" };
@@ -589,139 +588,6 @@ function databaseRow(state: DatabaseState): string {
   });
 }
 
-type Memory = Exclude<SystemTweaksState["memory"], { error: string }>;
-
-const PROFILE_NAMES: Record<MemoryProfile, string> = { balanced: "Balanced", database: "Database-heavy", cache: "Cache-heavy" };
-
-/** Whole GB above 10, one decimal below, MB under 1 GB. */
-export function size(mb: number): string {
-  if (mb < 1024) return `${mb} MB`;
-  const gb = mb / 1024;
-  return `${gb >= 10 ? Math.round(gb) : Math.round(gb * 10) / 10} GB`;
-}
-
-/**
- * What the profile gives each part of the server, and what is left for PHP.
- * MySQL and Redis are counted at the profile's sizes even while their switch
- * is off, since what they use then is not known here.
- */
-function memoryBudget(state: Memory): string {
-  const { plan } = state;
-  const parts: [string, number][] = [
-    ["MySQL buffer pool", state.mysql.installed ? plan.bufferPoolMb : 0],
-    ["MySQL connections, at most", state.mysql.installed ? plan.maxConnections * CONNECTION_MB : 0],
-    ["Redis", state.redis.installed ? plan.redisMb : 0],
-    ["Varnish", state.varnishMb ?? 0],
-    ["Memcached", state.memcachedMb ?? 0],
-  ];
-  const shown = parts.filter(([, mb]) => mb > 0);
-  const left = plan.ramMb - shown.reduce((total, [, mb]) => total + mb, 0);
-  const rows = shown.map(([name, mb]) => `
-          <dt>${esc(name)}</dt><dd>${esc(size(mb))}</dd>`).join("");
-  const rest = left > 0 ? `<dt>Left for PHP and the rest</dt><dd>${esc(size(left))}</dd>`
-    : `<dt>Left for PHP and the rest</dt><dd>${badge("None", "bad")} These add up to more than the server's ${esc(size(plan.ramMb))}.</dd>`;
-  return `
-      <details class="st-fold" id="memory-budget">
-        <summary>Preview this profile's memory budget</summary>
-        <p class="hint st-suggest">Assumes both MySQL sizing and Cap Redis are on.</p>
-        <dl class="kv st-kv">
-          <dt>RAM</dt><dd>${esc(size(plan.ramMb))}</dd>${rows}
-          ${rest}
-        </dl>
-      </details>`;
-}
-
-function mysqlMemoryLine(state: Memory): string {
-  const { plan } = state;
-  const numbers = `${size(plan.bufferPoolMb)} buffer pool, up to ${plan.maxConnections} connections`;
-  if (!state.mysql.installed && !state.settings.mysql) return `${badge("Not installed", "plain")} <span>MySQL is not installed here.</span>`;
-  if (state.settings.mysql && !state.mysql.inPlace) return `${badge("Not applied", "warn")} <span>Run clp-addons repair.</span>`;
-  if (state.settings.mysql && state.mysql.pending) {
-    return `${badge("Pending", "warn")} <span>${esc(numbers)} from MySQL's next restart: systemctl restart mysql.</span>`;
-  }
-  if (state.settings.mysql) return `${badge("On", "ok")} <span>${esc(numbers)}.</span>`;
-  if (state.mysql.pending) return `${badge("Off", "plain")} <span>CloudPanel's values come back at MySQL's next restart.</span>`;
-  return `${badge("Off", "plain")} <span>CloudPanel's fixed values, the same on every server.</span>`;
-}
-
-function redisMemoryLine(state: Memory): string {
-  const redis = state.redis;
-  if (!redis.installed && !state.settings.redis) return `${badge("Not installed", "plain")} <span>Redis is not installed here.</span>`;
-  if (redis.problem) return `${badge("Unknown", "warn")} <span>${esc(redis.problem)}</span>`;
-  const used = redis.usedMb === null ? "" : `Using ${size(redis.usedMb)}`;
-  if (state.settings.redis && redis.capped) return `${badge("On", "ok")} <span>${esc(used)} of ${esc(size(state.plan.redisMb))}.</span>`;
-  if (state.settings.redis) return `${badge("Not applied", "warn")} <span>${redis.maxmemoryMb === null ? "Redis is not running; the cap applies when it starts." : "Run clp-addons repair."}</span>`;
-  if (redis.maxmemoryMb === null) return `${badge("Off", "plain")}`;
-  return `${badge("Off", "plain")} <span>${esc(used)}${redis.maxmemoryMb ? `, with Redis's own limit of ${esc(size(redis.maxmemoryMb))}` : ", with no limit"}.</span>`;
-}
-
-function oomLine(state: Memory): string {
-  if (state.oom.inPlace && state.settings.oom) return `${badge("On", "ok")} <span>A site's PHP is killed first.</span>`;
-  if (state.settings.oom) return `${badge("Not applied", "warn")} <span>Run clp-addons repair.</span>`;
-  return `${badge("Off", "plain")} <span>The kernel usually kills MySQL first, the largest process.</span>`;
-}
-
-function memoryCard(state: SystemTweaksState["memory"]): string {
-  if ("error" in state) {
-    return `
-    <div class="card">
-      <div class="card-header"><h2>Memory</h2></div>
-      <div class="alert st-alert" role="alert">${esc(state.error)}</div>
-    </div>`;
-  }
-  const select = `
-            <select id="memory-profile" aria-label="Memory profile" data-current="${esc(state.settings.profile)}" onchange="setMemory(this)">${(Object.keys(PROFILE_NAMES) as MemoryProfile[])
-    .map((profile) => `<option value="${profile}"${profile === state.settings.profile ? " selected" : ""}>${esc(PROFILE_NAMES[profile])}</option>`).join("")}</select>`;
-  return `
-    <div class="card">
-      <div class="card-header"><h2>Memory</h2></div>
-      <div class="tweak-list">${settingRow({
-        key: "memoryProfile",
-        title: "Memory profile",
-        description: [
-          "How MySQL and Redis share this server's RAM: Balanced, more for the database, or more for the cache. Only the sizing switches enabled below use this profile.",
-          "Only a share is saved. The sizes are worked out again each time MySQL or Redis starts, so a server resized up or down gets new ones at its next boot.",
-        ],
-        control: select,
-        extra: `${!state.settings.mysql && !state.settings.redis
-          ? `<p class="st-status">${badge("Sizing off", "plain")} <span>The profile is saved; MySQL sizing and Cap Redis are both off.</span></p>` : ""}${memoryBudget(state)}`,
-      })}${settingRow({
-        key: "memory-mysql",
-        title: "Size MySQL to this server",
-        description: [
-          "Sets MySQL's buffer pool, connection limit and per-connection buffers from the profile. CloudPanel's fixed values let 512 connections of up to 34 MB each, more than a small server has.",
-          "Applies at MySQL's next restart; System Tweaks never restarts it. More connections at once than the limit get Too many connections.",
-        ],
-        checked: state.settings.mysql,
-        disabled: !state.mysql.installed && !state.settings.mysql,
-        onchange: "setMemory(this)",
-        extra: `<p class="st-status">${mysqlMemoryLine(state)}</p>`,
-      })}${settingRow({
-        key: "memory-redis",
-        title: "Cap Redis",
-        description: [
-          "Limits Redis to the profile's share and, when full, evicts the keys used least recently, so a growing cache cannot run the server out of memory. Applies at once.",
-          "Leave it off if a site keeps data in Redis it cannot lose, such as a job queue.",
-        ],
-        checked: state.settings.redis,
-        disabled: !state.redis.installed && !state.settings.redis,
-        onchange: "setMemory(this)",
-        extra: `<p class="st-status">${redisMemoryLine(state)}</p>`,
-      })}${settingRow({
-        key: "memory-oom",
-        title: "Protect MySQL and nginx when memory runs out",
-        description: [
-          "When the server runs out of memory, the kernel kills a site's PHP worker, which fails one request, instead of MySQL or nginx, which takes every site down.",
-          "Independent of the memory profile and sizing switches above.",
-        ],
-        checked: state.settings.oom,
-        onchange: "setMemory(this)",
-        extra: `<p class="st-status">${oomLine(state)}</p>`,
-      })}
-      </div>
-    </div>`;
-}
-
 /** The protocols are set on CloudPanel's own Firewall page; this page only says where. */
 function firewallLine(status: FirewallStatus | { error: string }): string {
   if ("error" in status || !status.available) return "";
@@ -831,13 +697,13 @@ export function dashboardView(state: SystemTweaksState, now = Date.now()): strin
     <div class="page-heading">
       <div>
         <h1>System Tweaks</h1>
-        <p>Server-wide settings for this machine.</p>
-        <p class="hint">Every 15 minutes it also clears PHP and ImageMagick temp files that timed-out requests left in /tmp.${firewallLine(state.firewall)}</p>
+        <p>Hardening, automatic updates, panel PHP and remote backups.</p>
+        <p class="hint">PHP worker limits, memory sizing and temporary-file cleanup are in <a href="/addons/resource-limits/">Resource Limits</a>.${firewallLine(state.firewall)}</p>
       </div>
     </div>
     <div class="card">
       <div class="card-header"><h2>Automatic updates</h2></div>
       <div class="tweak-list">${updateRows(state.updates, state.settings)}
       </div>${statusList(state.updates, now)}${coverageDetails(state.updates)}
-    </div>${backupCompressionCard(state.backupCompression)}${hardeningCard(state)}${loginJailsCard(state.loginJails)}${memoryCard(state.memory)}`;
+    </div>${backupCompressionCard(state.backupCompression)}${hardeningCard(state)}${loginJailsCard(state.loginJails)}`;
 }

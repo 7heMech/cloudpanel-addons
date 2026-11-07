@@ -16,7 +16,8 @@ curl -fsSL https://github.com/7heMech/cloudpanel-addons/releases/latest/download
 ```
 
 Asks which addons you want, installs dependencies for them if needed and checks
-the download's SHA-256 checksum. Updates also check build provenance.
+the download's SHA-256 checksum. Resource Limits is preselected, with OOM
+protection on; MySQL and Redis sizing are opt-in. Updates also check build provenance.
 
 Requires an x86-64 CloudPanel host.
 
@@ -33,11 +34,11 @@ When it finishes, open the new **Addons** tab in CloudPanel.
 | [Instatic CMS](https://github.com/CoreBunch/Instatic) | Instatic CMS sites on CloudPanel. |
 | Stager | Staging copies of WordPress, PHP, static and Instatic sites, and promotion back to live. Based on [clp-stager](https://github.com/7heMech/clp-stager). |
 | Maintenance Mode | A customizable 503 page per site, with instant toggles and IP bypasses. |
-| PHP Resources | Categories of PHP-FPM worker limits, assigned in bulk and to new sites. |
+| [Resource Limits](docs/resource-limits.md) | PHP worker categories, MySQL and Redis sizing, OOM protection and abandoned temp-file cleanup. |
 | [SMTP Relay](docs/smtp-relay.md) | Send each site's mail through SMTP relay profiles, WordPress and PHP included. |
 | Git Deploy | Deploys from a Git remote, from the panel or from a push. |
 | Panel Tweaks | Site search, columns and CSV download, automatic SSL for native sites, mobile layouts, themes and branding. |
-| [System Tweaks](docs/system-tweaks.md) | Security hardening, automatic updates, the panel's PHP version, remote backup compression, memory limits sized to the server, PHP temp-file cleanup and UDP firewall rules. |
+| [System Tweaks](docs/system-tweaks.md) | Security hardening, automatic updates, the panel's PHP version, remote backup compression and UDP firewall rules. |
 | [WordPress Tools](docs/wordpress-tools.md) | One-click WordPress sign-in, plugins chosen on the new-site form, optional CLP Varnish Cache installation and MainWP Child enrollment. |
 | Terminal | A shell as a site's own user, in its own window, for administrators. |
 | Security Keys | Sign in with a passkey or a hardware key such as a YubiKey instead of a password and two-factor code, for the roles an administrator allows. Needs the panel on a hostname with a valid certificate. |
@@ -61,7 +62,7 @@ security keys under Account → Security, in the roles an administrator allows.
 | `clp-addons uninstall <addon> --yes` | Remove an addon and keep its data. |
 
 Addon names are `cloudflare-ips`, `dns`, `instatic`, `stager`, `maintenance`,
-`php-resources`, `git`, `panel-tweaks`, `system-tweaks`, `wp-tools`, `smtp`, `terminal`
+`resource-limits`, `git`, `panel-tweaks`, `system-tweaks`, `wp-tools`, `smtp`, `terminal`
 and `security-keys`. Run
 `clp-addons --help` for version selection and data removal options.
 

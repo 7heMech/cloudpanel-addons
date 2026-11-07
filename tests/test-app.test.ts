@@ -17,7 +17,7 @@ import { CLIENT_JS as INSTATIC_CLIENT_JS } from "../addons/instatic/app/views";
 import { CLIENT_JS as STAGER_CLIENT_JS } from "../addons/stager/app/views";
 import { CLIENT_JS as GIT_CLIENT_JS } from "../addons/git/app/views";
 import { CLIENT_JS as MAINTENANCE_CLIENT_JS, fleetView as maintenanceFleetView } from "../addons/maintenance/app/views";
-import { CLIENT_JS as PHP_RESOURCES_CLIENT_JS } from "../addons/php-resources/app/views";
+import { CLIENT_JS as RESOURCE_LIMITS_CLIENT_JS } from "../addons/resource-limits/app/views";
 import { dashboardView as cloudflareDashboardView } from "../addons/cloudflare-ips/app/views";
 
 const repo = join(import.meta.dir, "..");
@@ -32,7 +32,7 @@ const SCRIPTS: { name: string; source: string }[] = [
   { name: "stager", source: BASE_CLIENT_JS + STAGER_CLIENT_JS },
   { name: "git", source: BASE_CLIENT_JS + GIT_CLIENT_JS },
   { name: "maintenance", source: BASE_CLIENT_JS + MAINTENANCE_CLIENT_JS },
-  { name: "php-resources", source: BASE_CLIENT_JS + PHP_RESOURCES_CLIENT_JS },
+  { name: "resource-limits", source: BASE_CLIENT_JS + RESOURCE_LIMITS_CLIENT_JS },
   { name: "clp header update notice", source: headerUpdateScript() },
 ];
 
@@ -45,6 +45,7 @@ for (const { name, source } of SCRIPTS) {
   // pointing at the line is more useful than "unexpected token" on a 4KB blob.
   test(`every ${name} client script line closes its strings`, () => {
     for (const [index, line] of source.split("\n").entries()) {
+      if (line.trimStart().startsWith("//")) continue;
       const quotes = (line.match(/'/g) ?? []).length;
       expect(quotes % 2, `line ${index + 1}: ${line.trim()}`).toBe(0);
     }
@@ -160,7 +161,7 @@ test("a rejected request carries the state the route says it reached", async () 
 });
 
 test("converted addon actions repaint without carrying notices through a reload", () => {
-  for (const script of [GIT_CLIENT_JS, INSTATIC_CLIENT_JS, PHP_RESOURCES_CLIENT_JS]) {
+  for (const script of [GIT_CLIENT_JS, INSTATIC_CLIENT_JS, RESOURCE_LIMITS_CLIENT_JS]) {
     expect(script).not.toContain("location.reload");
     expect(script).not.toContain("reloadWithFlash");
     expect(script).toContain("repaintView(");

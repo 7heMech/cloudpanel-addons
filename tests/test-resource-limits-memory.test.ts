@@ -1,3 +1,4 @@
+import { dashboardView } from "../addons/resource-limits/app/views";
 import { afterEach, expect, test } from "bun:test";
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, utimesSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -6,7 +7,7 @@ import type { CommandResult } from "../cli/action-common";
 import {
   DEFAULT_MEMORY, MYSQL_MARKER, applyMemory, memoryChange, memoryPlan, memoryStatus, mysqlOptionFile, syncMemory,
   type MemoryOptions, type MemorySettings,
-} from "../addons/system-tweaks/memory";
+} from "../addons/resource-limits/memory";
 
 const dirs: string[] = [];
 afterEach(() => {
@@ -339,4 +340,113 @@ test("under a deadline each command gets what is left of it, and none runs once 
   expect(() => applyMemory({ ...DEFAULT_MEMORY }, bounded)).toThrow("ran out of time");
   expect(s.calls.length).toBe(calls);
   expect(existsSync(s.file)).toBe(true);
+});
+
+test("memory sizing can be off while its profile is saved and Redis has its own matching limit", async () => {
+  const base = { categories: [], defaultCategoryId: null, sites: [] };
+  const plan = memoryPlan(3819, "balanced");
+  const memory = {
+    settings: { ...DEFAULT_MEMORY }, plan,
+    mysql: { installed: true, inPlace: false, pending: true },
+    redis: { installed: true, maxmemoryMb: plan.redisMb, policy: "allkeys-lru", usedMb: 1, capped: true, problem: "" },
+    oom: { inPlace: true }, varnishMb: 512, memcachedMb: 64,
+  };
+  const html = dashboardView({ ...base, memory });
+  expect(html).toContain("Sizing off</span>");
+  expect(html).toContain("The profile is saved; MySQL sizing and Cap Redis are both off.");
+  expect(html).toContain("CloudPanel's values come back at MySQL's next restart.");
+  expect(html).toContain(`with Redis's own limit of ${plan.redisMb} MB`);
+  expect(html).toMatch(/data-setting="memory-oom"[^>]* checked/);
+  expect(html).not.toMatch(/data-setting="memory-(?:mysql|redis)"[^>]* checked/);
+
+  const enabled = dashboardView({ ...base, memory: { ...memory, settings: { ...memory.settings, redis: true } } });
+  expect(enabled).not.toContain("Sizing off</span>");
+  expect(enabled).toContain(`Using 1 MB of ${plan.redisMb} MB`);
+  expect(enabled).not.toContain("with Redis's own limit");
+});
+
+function resourceOptions(s: ReturnType<typeof server>) {
+  writeFileSync(join(s.dir, "enabled.conf"), "enabled");
+  return {
+    memory: s.options,
+    memorySettings: {
+      settingsFile: join(s.dir, "settings.json"), lockFile: join(s.dir, "settings.lock"),
+      enabledConfig: join(s.dir, "enabled.conf"), rootUid: process.getuid?.() ?? 0,
+    },
+  };
+}
+
+test("memory policy saves partial changes, preserves Off, and rolls back a refused change", async () => {
+  const { executeResourceLimitsAction } = await import("../addons/resource-limits/action");
+  const { readMemorySettings, resourceMemoryState } = await import("../addons/resource-limits/memory-settings");
+  const s = server();
+  const options = resourceOptions(s);
+  const change = (body: unknown) => executeResourceLimitsAction(["set-memory"], { ...options, processUid: 0, input: JSON.stringify(body) });
+  expect(await change({ mysql: true, profile: "database" })).toEqual({ memory: { ...DEFAULT_MEMORY, mysql: true, profile: "database" } });
+  expect(resourceMemoryState(options)).toMatchObject({ settings: { mysql: true, profile: "database" }, mysql: { inPlace: true } });
+  writeFileSync(s.options.paths!.redisConf!, "port 6379\nrequirepass secret\n");
+  await expect(change({ redis: true })).rejects.toThrow("has a password");
+  expect(readMemorySettings(options).redis).toBe(false);
+  await expect(change({ profile: "huge" })).rejects.toThrow("profile must be");
+  await change({ mysql: false, redis: false, oom: false });
+  await change({ profile: "cache" });
+  expect(readMemorySettings(options)).toEqual({ profile: "cache", mysql: false, redis: false, oom: false });
+  expect(existsSync(s.file)).toBe(false);
+});
+
+test("activation, upkeep and new PHP versions retain OOM protection; disabled start hooks do nothing", async () => {
+  const { restoreResourceMemory, withdrawResourceMemory, resourceLimitsMemory } = await import("../addons/resource-limits/memory-settings");
+  const s = server();
+  const options = resourceOptions(s);
+  writeFileSync(options.memorySettings.enabledConfig, "enabled");
+  restoreResourceMemory(options);
+  expect(score(s, 101)).toBe("-600");
+  const phpDir = join(s.options.paths!.phpRoot!, "8.4", "fpm");
+  mkdirSync(phpDir, { recursive: true });
+  s.units["php8.4-fpm.service"] = { loaded: true, active: false, oom: 0, startedAt: 1000, pids: [] };
+  restoreResourceMemory(options);
+  expect(readFileSync(join(s.systemd, "php8.4-fpm.service.d/zz-clp-addons-oom.conf"), "utf8")).toContain("OOMScoreAdjust=300");
+  rmSync(options.memorySettings.enabledConfig);
+  withdrawResourceMemory(options);
+  expect(score(s, 101)).toBe("0");
+  const before = s.calls.length;
+  expect(resourceLimitsMemory("mysql", options)).toBe(false);
+  expect(resourceLimitsMemory("redis", options)).toBe(false);
+  expect(restoreResourceMemory(options)).toEqual([]);
+  expect(s.calls.length).toBe(before);
+  writeFileSync(options.memorySettings.enabledConfig, "enabled");
+  restoreResourceMemory(options);
+  withdrawResourceMemory(options); // A late hook must not undo re-enabling.
+  expect(score(s, 101)).toBe("-600");
+});
+
+test("old MySQL ownership marker is rewritten without restarting the server", () => {
+  const s = server();
+  writeFileSync(s.file, mysqlOptionFile(memoryPlan(3819, "balanced"), "balanced").replace("Resource Limits", "System Tweaks"));
+  utimesSync(s.file, 0, 0);
+  applyMemory(on(), s.options);
+  expect(memoryStatus(on(), s.options).mysql.pending).toBe(false);
+  expect(readFileSync(s.file, "utf8")).toStartWith(MYSQL_MARKER);
+  expect(s.calls.some((call) => call.includes("restart"))).toBe(false);
+});
+
+test("the shared budget counts current PHP workers and flags unlimited or unreadable PHP settings", async () => {
+  const { memoryCard } = await import("../addons/resource-limits/app/memory-view");
+  const { STOCK_PROFILE, phpMemoryLimitMb } = await import("../addons/resource-limits/action");
+  const s = server(8192);
+  const memory = { ...memoryStatus(on(), s.options), settings: on() };
+  const site = {
+    domain: "shop.example.com", siteUser: "shop", phpVersion: "8.3", poolFile: "pool.conf", memoryLimitMb: 256,
+    current: { ...STOCK_PROFILE, maxChildren: 3 }, categoryId: null, categoryName: null, drifted: false,
+  };
+  expect(memoryCard(memory, [site])).toContain("PHP workers × memory_limit</dt><dd>768 MB");
+  expect(memoryCard(memory, [{ ...site, memoryLimitMb: -1 }])).toContain("1 site(s) have unlimited PHP memory");
+  expect(memoryCard(memory, [{ ...site, memoryLimitMb: null }])).toContain("1 have no readable limit");
+  expect(memoryCard(memory, [{ ...site, memoryLimitMb: 4096 }])).toContain("These add up to more");
+  expect(phpMemoryLimitMb("256M")).toBe(256);
+  expect(phpMemoryLimitMb("2G")).toBe(2048);
+  expect(phpMemoryLimitMb("262144K")).toBe(256);
+  expect(phpMemoryLimitMb("268435456")).toBe(256);
+  expect(phpMemoryLimitMb("-1")).toBe(-1);
+  expect(phpMemoryLimitMb("broken")).toBeNull();
 });
