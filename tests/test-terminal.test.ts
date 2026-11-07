@@ -155,7 +155,7 @@ describe("the root worker", () => {
     expect(calls).toHaveLength(1);
     expect(calls[0]!.argv).toEqual(runuserCommand(paths, "example"));
     expect(calls[0]!.argv).toEqual([
-      "/usr/sbin/runuser", "--login", "--whitelist-environment=TERM,CLP_SITE_DIR,CLP_PTY_SIZE",
+      "/usr/sbin/runuser", "--login", "--whitelist-environment=TERM,CLP_SITE_DIR,CLP_PTY_SIZE,CLP_ROOT_SHELL",
       "--command=exec /usr/local/bin/clp-addons terminal-pty", "--", "example",
     ]);
     expect(calls[0]!.options.stdin).toBe("inherit");

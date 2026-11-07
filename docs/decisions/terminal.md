@@ -41,7 +41,9 @@ terminal icon in both of CloudPanel's headers and in the addons' copy of it,
 just before the account menu, and a Root terminal button on Addons → Terminal.
 The others get no icon; their button shows a notice naming the command, so
 they know whom to ask. The icon stays hidden until the page has asked
-`/addons/terminal/api/root-access`, at most once a minute per tab.
+`/addons/terminal/api/root-access`. Every panel page asks, so the manager
+keeps root's answer a minute per user instead of starting a root process for
+each page; the Terminal page asks afresh, and the worker always checks.
 
 Any administrator can reset another's password in CloudPanel and sign in as
 them, so a grant to a name alone would be a root shell for every
@@ -67,7 +69,12 @@ refuses everyone, and `terminal root` then tells root to remove it and allow
 again. The manager learns whether its user is allowed only through the
 own-account `root-access` verb, which root answers from the file; the session
 worker checks again before it starts `runuser --login root` and every 15
-seconds while the shell runs, ending it when the grant stops holding. The
+seconds while the shell runs, ending it when the grant stops holding. A check
+that cannot read the list or CloudPanel's database refuses a new shell, but an
+open one gets three such checks in a row before it ends, so CloudPanel holding
+its database for a moment does not cut it off. A shell that has not hung up
+five seconds after it is told to is killed. The helper runs as root only with
+`CLP_ROOT_SHELL=1`, which the worker passes for a root shell alone. The
 journal gets "opened a root shell" and "closed a root shell" lines like a
 site's. A ready line naming root is accepted only for a root shell, and one
 naming anyone else only for a site.

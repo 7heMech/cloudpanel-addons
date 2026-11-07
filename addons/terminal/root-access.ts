@@ -83,7 +83,10 @@ export function readRootGrants(file = ROOT_GRANTS_FILE, rootUid = 0): RootGrant[
 function writeRootGrants(grants: RootGrant[], file = ROOT_GRANTS_FILE): void {
   // mkdir's mode is masked by root's umask, which could leave a directory
   // readRootGrants refuses, so the mode is set outright.
-  if (mkdirSync(dirname(file), { recursive: true })) chmodSync(dirname(file), 0o755);
+  const dir = dirname(file);
+  if (mkdirSync(dir, { recursive: true })) chmodSync(dir, 0o755);
+  // Written into a directory the reader refuses, the list would lock everyone out.
+  if (!rootsAlone(lstatSync(dir), 0)) fatal(`${dir} must be root's alone to hold the root terminal list: chown root:root and chmod 755 it`);
   const users = [...grants].sort((a, b) => a.user.localeCompare(b.user)).map(({ user, id }) => ({ user, id }));
   writeFileAtomic(file, `${JSON.stringify({ users }, null, 2)}\n`, { mode: 0o600, owner: { uid: 0, gid: 0 } });
 }
@@ -119,29 +122,35 @@ export interface RootAccessPaths {
 
 export const DEFAULT_ROOT_ACCESS_PATHS: RootAccessPaths = { panelDb: PANEL_DB, grants: ROOT_GRANTS_FILE, rootUid: 0 };
 
-/**
- * Whether a panel user may open a root shell now. `granted` is false for one
- * root never allowed, whose page then says nothing; `problem` says why one it
- * did allow is refused.
- */
-export function rootAccess(panelUser: string, paths: RootAccessPaths = DEFAULT_ROOT_ACCESS_PATHS): { granted: boolean; problem: string | null } {
+export interface RootAccess {
+  /** False for an administrator root never allowed. */
+  granted: boolean;
+  /** Why one root allowed is refused now, or null while it is not. */
+  problem: string | null;
+  /** The problem is a read that failed, which may pass, not an answer. */
+  unreadable?: true;
+}
+
+/** Whether a panel user may open a root shell now. Any failure refuses. */
+export function rootAccess(panelUser: string, paths: RootAccessPaths = DEFAULT_ROOT_ACCESS_PATHS): RootAccess {
+  const failed = (what: string, error: unknown): RootAccess =>
+    ({ granted: true, problem: `${what} cannot be read: ${error instanceof Error ? error.message : String(error)}`, unreadable: true });
   let grant: RootGrant | undefined;
   try {
     grant = readRootGrants(paths.grants, paths.rootUid).find((candidate) => candidate.user === panelUser);
   } catch (error) {
-    return { granted: true, problem: `the root shell list cannot be read: ${error instanceof Error ? error.message : String(error)}` };
+    if (error instanceof UntrustedGrants) return { granted: true, problem: `the root terminal list cannot be trusted: ${error.message}` };
+    return failed("the root terminal list", error);
   }
   if (!grant) return { granted: false, problem: null };
-  let db: Database;
+  let db: Database | null = null;
   try {
     db = openPanelDatabase(paths.panelDb, true);
-  } catch (error) {
-    return { granted: true, problem: `CloudPanel's user list cannot be read: ${error instanceof Error ? error.message : String(error)}` };
-  }
-  try {
     return { granted: true, problem: grantProblem(db, grant) };
+  } catch (error) {
+    return failed("CloudPanel's user list", error);
   } finally {
-    db.close();
+    db?.close();
   }
 }
 
@@ -170,8 +179,10 @@ export function runTerminalRootCommand(argv: string[]): void {
       return;
     }
     withFileLockSync(ROOT_GRANTS_LOCK, 15, "another terminal root change is still running", () => {
-      const others = read().filter((grant) => grant.user !== user);
+      const current = read();
+      const others = current.filter((grant) => grant.user !== user);
       if (verb === "deny") {
+        if (others.length === current.length) fatal(`${user} was not allowed a root shell`);
         writeRootGrants(others);
         return;
       }

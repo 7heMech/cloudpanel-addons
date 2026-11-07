@@ -25,7 +25,7 @@ import { DEFAULT_ROOT_ACCESS_PATHS, rootAccess, type RootAccessPaths } from "./r
 
 export const PTY_COMMAND = "terminal-pty";
 /** The only variables `runuser --login` keeps; the helper reads the last two. */
-export const PTY_ENV_NAMES = ["TERM", "CLP_SITE_DIR", "CLP_PTY_SIZE"];
+export const PTY_ENV_NAMES = ["TERM", "CLP_SITE_DIR", "CLP_PTY_SIZE", "CLP_ROOT_SHELL"];
 export const MAX_TERMINAL_SIZE = 1000;
 /** Below this a uid is a system account, never a site's. */
 const MIN_SITE_UID = 1000;
@@ -33,6 +33,10 @@ const MIN_SITE_UID = 1000;
 const MAX_LOGGED_STDERR = 4 * 1024;
 /** How often an open root shell's grant is checked again. */
 const ROOT_RECHECK_MS = 15_000;
+/** Checks in a row that may fail to read before a root shell ends anyway. */
+const ROOT_UNREADABLE_CHECKS = 3;
+/** How long a stopped shell has to hang up before it is killed. */
+const KILL_AFTER_MS = 5_000;
 
 export interface TerminalActionPaths {
   panelDb: string;
@@ -58,6 +62,8 @@ export interface TerminalActionOptions {
   now?: () => number;
   /** Test-only; production checks a root shell's grant every 15 seconds. */
   rootRecheckMs?: number;
+  /** Test-only; production kills a stopped shell after 5 seconds. */
+  killAfterMs?: number;
 }
 
 export const DEFAULT_TERMINAL_PATHS: TerminalActionPaths = {
@@ -255,9 +261,9 @@ export async function runTerminalAction(argv: string[], options: TerminalActionO
   let request: TerminalRequest;
   let target: TerminalTarget;
   const paths = { ...DEFAULT_TERMINAL_PATHS, ...options.paths };
-  if (argv[0] === "root-access") return answerRootAccess(argv.slice(1), paths);
   try {
     if ((options.processUid ?? process.getuid?.()) !== 0) failAction("terminal actions must run as root");
+    if (argv[0] === "root-access") return answerRootAccess(argv.slice(1), paths);
     // Only the gateway's duplex stream, which checked the panel session
     // itself, starts a worker with this set.
     if ((options.env ?? process.env)[DUPLEX_WORKER_MARKER] !== "1") failAction("terminal sessions start only through the gateway's stream");
@@ -292,16 +298,28 @@ export async function runTerminalAction(argv: string[], options: TerminalActionO
       TERM: "xterm-256color",
       CLP_SITE_DIR: target.dir,
       CLP_PTY_SIZE: `${request.cols}x${request.rows}`,
+      // The helper refuses to run as root without it, so only a root shell does.
+      ...(request.domain === null ? { CLP_ROOT_SHELL: "1" } : {}),
     },
   });
   if (stopped) forward();
   // The gateway already ends the stream when the panel session goes; a root
-  // shell also ends when its grant does, such as on a password reset.
+  // shell also ends when its grant does. A read that fails, such as while
+  // CloudPanel holds its database, is given a few more checks first.
+  let unreadable = 0;
+  let killer: ReturnType<typeof setTimeout> | null = null;
   const recheck = request.domain !== null ? null : setInterval(() => {
     const access = rootAccess(request.panelUser, paths.rootAccess);
-    if (access.granted && !access.problem) return;
+    if (access.granted && !access.problem) {
+      unreadable = 0;
+      return;
+    }
+    if (access.unreadable && ++unreadable < ROOT_UNREADABLE_CHECKS) return;
+    clearInterval(recheck!);
     audit(`${request.panelUser}'s root shell ended: ${printable(access.problem ?? "root no longer allows it")}`);
     forward();
+    // A shell that does not hang up is killed; closing the stream then ends the helper.
+    killer = setTimeout(() => { try { child?.kill("SIGKILL"); } catch {} }, options.killAfterMs ?? KILL_AFTER_MS);
   }, options.rootRecheckMs ?? ROOT_RECHECK_MS);
   const stderr = keepStderr(child.stderr);
   try {
@@ -317,6 +335,7 @@ export async function runTerminalAction(argv: string[], options: TerminalActionO
     return typeof code === "number" ? code : 1;
   } finally {
     if (recheck) clearInterval(recheck);
+    if (killer) clearTimeout(killer);
     process.off("SIGTERM", forward);
     process.off("SIGHUP", forward);
     process.off("SIGINT", forward);

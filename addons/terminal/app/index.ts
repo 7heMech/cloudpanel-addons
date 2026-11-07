@@ -37,11 +37,24 @@ const NOT_FOUND = () => json({ ok: false, error: "not found" }, 404);
 
 export interface RootAccessView { granted: boolean; problem: string | null }
 
-/** Asked of root, which reads the grants itself; any failure offers nothing. */
-async function rootAccessOf(sessionId: string | null): Promise<RootAccessView> {
-  if (!sessionId) return { granted: false, problem: null };
+/** How long the header's answer is reused; the worker checks for itself either way. */
+const ROOT_ACCESS_TTL_MS = 60_000;
+const rootAccessCache = new Map<string, { at: number; access: RootAccessView }>();
+
+/**
+ * Asked of root, which reads the grants itself; any failure offers nothing.
+ * Every panel page's header asks, so the answer is kept a minute per user
+ * rather than starting a root process for each page; the Terminal page asks
+ * afresh.
+ */
+async function rootAccessOf(user: string | undefined, sessionId: string | null, fresh = false): Promise<RootAccessView> {
+  if (!user || !sessionId) return { granted: false, problem: null };
+  const cached = rootAccessCache.get(user);
+  if (!fresh && cached && Date.now() - cached.at < ROOT_ACCESS_TTL_MS) return cached.access;
   const reply = await callGatewayAction("terminal", "root-access", [], undefined, { sessionId }) as ActionResult<RootAccessView>;
-  return reply.ok && reply.data ? reply.data : { granted: false, problem: null };
+  const access = reply.ok && reply.data ? { granted: reply.data.granted, problem: reply.data.problem } : { granted: false, problem: null };
+  rootAccessCache.set(user, { at: Date.now(), access });
+  return access;
 }
 
 function size(value: unknown): number | null {
@@ -59,7 +72,7 @@ export async function handle(
 
   if (method === "GET" && path === "/") {
     try {
-      const [info, root] = await Promise.all([fetchPanelInfo(), rootAccessOf(panelSessionId(req))]);
+      const [info, root] = await Promise.all([fetchPanelInfo(), rootAccessOf(auth?.user, panelSessionId(req), true)]);
       const sites = [...info.sites].sort((a, b) => a.domain.localeCompare(b.domain));
       return htmlResponse(layout("Terminal", dashboardView(sites, root, auth?.user ?? ""), updateNotice), { csrf: newCsrfToken() });
     } catch (error) {
@@ -88,7 +101,7 @@ export async function handle(
   }
 
   // What the header's root shell control asks before it shows itself.
-  if (method === "GET" && path === "/api/root-access") return json({ ok: true, data: await rootAccessOf(panelSessionId(req)) });
+  if (method === "GET" && path === "/api/root-access") return json({ ok: true, data: await rootAccessOf(auth?.user, panelSessionId(req)) });
 
   if (!path.startsWith("/api/sessions")) return NOT_FOUND();
   // The manager's gate has already decided this is an administrator; a

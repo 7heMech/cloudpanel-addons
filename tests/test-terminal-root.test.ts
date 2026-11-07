@@ -2,7 +2,7 @@
 // and its sign-in credentials are the ones root allowed.
 import { afterAll, beforeEach, expect, test } from "bun:test";
 import { Database } from "bun:sqlite";
-import { chmodSync, mkdirSync, mkdtempSync, realpathSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
+import { chmodSync, mkdirSync, mkdtempSync, realpathSync, renameSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { ActionFailure } from "../cli/action-common";
 import {
@@ -90,12 +90,13 @@ test("a grants file others could write, or a link, lets nobody in", () => {
   allow("alice");
   chmodSync(paths.rootAccess.grants, 0o666);
   expect(() => readRootGrants(paths.rootAccess.grants, uid)).toThrow("not a trusted regular file");
-  expect(access("alice").problem).toContain("cannot be read");
+  expect(access("alice").problem).toContain("cannot be trusted");
   chmodSync(paths.rootAccess.grants, 0o600);
   const link = `${base}/box/etc/link.json`;
   symlinkSync(paths.rootAccess.grants, link);
-  expect(rootAccess("alice", { ...paths.rootAccess, grants: link }).problem).toContain("cannot be read");
-  expect(rootAccess("alice", { ...paths.rootAccess, rootUid: uid + 1 }).problem).toContain("cannot be read");
+  expect(rootAccess("alice", { ...paths.rootAccess, grants: link }).problem).toContain("cannot be trusted");
+  expect(rootAccess("alice", { ...paths.rootAccess, rootUid: uid + 1 }).problem).toContain("cannot be trusted");
+  expect(rootAccess("alice", { ...paths.rootAccess, rootUid: uid + 1 }).unreadable).toBeUndefined();
 });
 
 test("the worker takes --root in place of a domain, and resolves it only for an allowed administrator", () => {
@@ -125,6 +126,63 @@ test("an open root shell ends once its grant does", async () => {
   expect(audit[0]).toBe("alice opened a root shell as root");
   expect(audit.some((line) => line.includes("root shell ended: A root terminal needs 2FA"))).toBe(true);
   expect(audit.at(-1)).toContain("alice closed a root shell as root");
+});
+
+function rootSession(extra: Record<string, unknown>, child: () => ReturnType<typeof Bun.spawn>) {
+  const audit: string[] = [];
+  const running = runTerminalAction(["session", "--root", "--panel-user=alice", "--cols=80", "--rows=24"], {
+    paths, processUid: 0, env: { CLP_ADDONS_DUPLEX_WORKER: "1" }, rootRecheckMs: 20,
+    audit: (line) => audit.push(line),
+    spawn: child as unknown as typeof Bun.spawn,
+    ...extra,
+  });
+  return { audit, running };
+}
+
+test("a database that cannot be read is refused for a new shell, but an open one gets three checks first", async () => {
+  allow("alice");
+  const away = `${paths.panelDb}.away`;
+  const unreadable = { ...paths, rootAccess: { ...paths.rootAccess, panelDb: away } };
+  expect(rootAccess("alice", unreadable.rootAccess)).toMatchObject({ granted: true, unreadable: true });
+  expect(() => resolveTerminalTarget({ domain: null, panelUser: "alice", cols: 80, rows: 24 }, unreadable)).toThrow("cannot be read");
+  let started = 0;
+  const { audit, running } = rootSession({}, () => {
+    renameSync(paths.panelDb, away);
+    started = Date.now();
+    return Bun.spawn(["sleep", "30"]);
+  });
+  await running;
+  expect(Date.now() - started).toBeGreaterThanOrEqual(55);
+  expect(audit.filter((line) => line.includes("root shell ended"))).toHaveLength(1);
+  expect(audit.some((line) => line.includes("CloudPanel's user list cannot be read"))).toBe(true);
+});
+
+test("a revoked shell that ignores the hangup is killed", async () => {
+  allow("alice");
+  const { audit, running } = rootSession({ killAfterMs: 50 }, () => Bun.spawn(["sh", "-c", "trap '' TERM; sleep 30"]));
+  await Bun.sleep(30);
+  change("UPDATE user SET status = 0 WHERE user_name = 'alice'");
+  await running;
+  expect(audit.at(-1)).toContain("signal SIGKILL");
+});
+
+test("root-access, like every terminal verb, answers only root", async () => {
+  allow("alice");
+  const write = process.stdout.write;
+  const errWrite = process.stderr.write;
+  let printed = "";
+  process.stdout.write = ((chunk: string) => { printed += chunk; return true; }) as typeof process.stdout.write;
+  process.stderr.write = (() => true) as typeof process.stderr.write;
+  try {
+    expect(await runTerminalAction(["root-access", "--panel-user=alice"], { paths, processUid: 1000 })).toBe(1);
+    expect(JSON.parse(printed).error).toBe("terminal actions must run as root");
+    printed = "";
+    expect(await runTerminalAction(["root-access", "--panel-user=alice"], { paths, processUid: 0 })).toBe(0);
+    expect(JSON.parse(printed).data).toEqual({ granted: true, problem: null });
+  } finally {
+    process.stdout.write = write;
+    process.stderr.write = errWrite;
+  }
 });
 
 test("the manager asks for --root, and a ready line must agree on who the shell runs as", async () => {

@@ -91,6 +91,12 @@ export async function runTerminalPty(argv: string[]): Promise<number> {
     process.stderr.write("terminal-pty takes no arguments\n");
     return 2;
   }
+  // Only the worker's root shell runs this as root, and it says so; a site's
+  // shell that somehow resolved to root stops here.
+  if (process.getuid?.() === 0 && process.env.CLP_ROOT_SHELL !== "1") {
+    process.stderr.write("terminal-pty runs as root only for a root shell\n");
+    return 2;
+  }
   const account = userInfo();
   const home = process.env.HOME && existsSync(process.env.HOME) ? process.env.HOME : account.homedir;
   const shell = process.env.SHELL?.startsWith("/") ? process.env.SHELL : "/bin/bash";
