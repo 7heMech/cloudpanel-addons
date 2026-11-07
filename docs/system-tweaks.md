@@ -1,7 +1,22 @@
 # System Tweaks
 
-Hardening, automatic updates, panel PHP, remote backups and firewall rules.
+Hardening, automatic updates, panel PHP, remote backups, firewall rules and the
+SSH login message.
 PHP worker limits and the server memory budget are in [Resource Limits](resource-limits.md).
+
+## Locking the protections
+
+To keep the Hardening and Failed logins switches as they are, even against an
+administrator's account, run `clp-addons lock system-tweaks` as root, from a
+shell or the panel's root terminal. The page then shows them read-only and System Tweaks cannot be disabled
+from it. `clp-addons unlock system-tweaks` hands them back; `clp-addons lock`
+lists what is locked.
+
+If `/etc/clp-addons/locks.json` is damaged or not root's alone, everything
+lockable stays locked and `lock` and `unlock` refuse. Note which addons it
+locked, `rm /etc/clp-addons/locks.json`, then lock those addons again. If
+`/etc/clp-addons` itself is not root's alone, make it so (`chown root:root`,
+`chmod go-w`) and run the command again.
 
 ## Automatic updates
 
@@ -370,6 +385,21 @@ CloudPanel's update and announcement checks still work.
 To check it, `systemctl show clp-agent -p IPAddressDeny` prints
 `IPAddressDeny=::/0 0.0.0.0/0`. Switching it off removes the drop-in and
 restarts the agent.
+
+## SSH login message
+
+**Server info at SSH login** is on by default. In place of CloudPanel's welcome
+banner, SSH logins show uptime, load, memory, disk use, IP addresses, pending
+updates, whether a reboot is required and the panel's address. Site users who
+log in over SSH see it too.
+
+CloudPanel's banner looks up the server's address online at every login. The
+setting turns `/etc/update-motd.d/10-cloudpanel` off and adds
+`/etc/update-motd.d/10-clp-addons-server-info`. A CloudPanel update puts the
+banner back; System Tweaks turns it off again within seconds. Switching it off,
+or disabling System Tweaks, removes the script and turns the banner back on.
+
+To see it without logging in, run `run-parts /etc/update-motd.d`.
 
 ## Abandoned temp files
 

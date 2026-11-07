@@ -21,7 +21,7 @@ import { CLI_BIN, PANEL_DB } from "../../cli/paths";
 import { DUPLEX_WORKER_MARKER, SESSION_2FA_ENV } from "../../lib/gateway-protocol";
 import { PANEL_USER_NAME_RE, panelUserOwnsSite } from "../../lib/panel-users";
 import { readUnixAccounts, siteAccountProblem, splitSharedUids } from "../../lib/site-accounts";
-import { DEFAULT_ROOT_ACCESS_PATHS, rootAccess, type RootAccess, type RootAccessPaths } from "./root-access";
+import { DEFAULT_ROOT_ACCESS_PATHS, rootAccess, type RootAccessPaths } from "./root-access";
 
 export const PTY_COMMAND = "terminal-pty";
 /** The only variables `runuser --login` keeps; the helper reads the last two. */
@@ -140,8 +140,8 @@ function insideHome(path: string, home: string): boolean {
  * The account and directory a shell for this site would run as and in, or a
  * refusal. Every rule is checked here, as root, before anything is started.
  */
-export function resolveTerminalTarget(request: TerminalRequest, paths: TerminalActionPaths, twoFactor = false): TerminalTarget {
-  if (request.domain === null) return rootTarget(request.panelUser, paths, twoFactor);
+export function resolveTerminalTarget(request: TerminalRequest, paths: TerminalActionPaths, session = "0"): TerminalTarget {
+  if (request.domain === null) return rootTarget(request.panelUser, paths, session);
   const db = openPanelDatabase(paths.panelDb, true);
   let rows: SiteRow[];
   try {
@@ -198,20 +198,8 @@ export function resolveTerminalTarget(request: TerminalRequest, paths: TerminalA
 }
 
 /** A root shell, in root's home, for an administrator root allowed. */
-/**
- * A grant, as rootAccess answers it, for one panel session. The account's 2FA
- * being on now is not enough: a session signed in before it was turned on,
- * or by one administrator who reset another's password, never passed it.
- */
-function sessionRootAccess(panelUser: string, paths: TerminalActionPaths, twoFactor: boolean): RootAccess {
-  const access = rootAccess(panelUser, paths.rootAccess);
-  return access.granted && !access.problem && !twoFactor
-    ? { granted: true, problem: "This sign-in did not use your 2FA code: sign out and in again with it to open a root terminal." }
-    : access;
-}
-
-function rootTarget(panelUser: string, paths: TerminalActionPaths, twoFactor: boolean): TerminalTarget {
-  const access = sessionRootAccess(panelUser, paths, twoFactor);
+function rootTarget(panelUser: string, paths: TerminalActionPaths, session: string): TerminalTarget {
+  const access = rootAccess(panelUser, paths.rootAccess, session);
   if (!access.granted) failAction("root has not allowed you a root shell");
   if (access.problem) failAction(access.problem);
   let home = "/root";
@@ -274,15 +262,15 @@ export async function runTerminalAction(argv: string[], options: TerminalActionO
   let target: TerminalTarget;
   const paths = { ...DEFAULT_TERMINAL_PATHS, ...options.paths };
   // Set by the gateway from the panel session the request came with.
-  const twoFactor = (options.env ?? process.env)[SESSION_2FA_ENV] === "1";
+  const session = (options.env ?? process.env)[SESSION_2FA_ENV] ?? "0";
   try {
     if ((options.processUid ?? process.getuid?.()) !== 0) failAction("terminal actions must run as root");
-    if (argv[0] === "root-access") return answerRootAccess(argv.slice(1), paths, twoFactor);
+    if (argv[0] === "root-access") return answerRootAccess(argv.slice(1), paths, session);
     // Only the gateway's duplex stream, which checked the panel session
     // itself, starts a worker with this set.
     if ((options.env ?? process.env)[DUPLEX_WORKER_MARKER] !== "1") failAction("terminal sessions start only through the gateway's stream");
     request = parseTerminalRequest(argv, options);
-    target = resolveTerminalTarget(request, paths, twoFactor);
+    target = resolveTerminalTarget(request, paths, session);
   } catch (error) {
     emitActionError("terminal", printable(errorMessage(error)));
     return 1;
@@ -323,7 +311,7 @@ export async function runTerminalAction(argv: string[], options: TerminalActionO
   let unreadable = 0;
   let killer: ReturnType<typeof setTimeout> | null = null;
   const recheck = request.domain !== null ? null : setInterval(() => {
-    const access = sessionRootAccess(request.panelUser, paths, twoFactor);
+    const access = rootAccess(request.panelUser, paths.rootAccess, session);
     if (access.granted && !access.problem) {
       unreadable = 0;
       return;
@@ -357,13 +345,13 @@ export async function runTerminalAction(argv: string[], options: TerminalActionO
 }
 
 /** Whether the signed-in administrator may open a root shell, for the Terminal page. */
-function answerRootAccess(argv: string[], paths: TerminalActionPaths, twoFactor: boolean): number {
+function answerRootAccess(argv: string[], paths: TerminalActionPaths, session: string): number {
   const panelUser = argv.length === 1 && argv[0]!.startsWith("--panel-user=") ? argv[0]!.slice("--panel-user=".length) : "";
   if (!PANEL_USER_NAME_RE.test(panelUser)) {
     emitActionError("terminal", "missing or invalid --panel-user");
     return 1;
   }
-  emitActionOk(sessionRootAccess(panelUser, paths, twoFactor));
+  emitActionOk(rootAccess(panelUser, paths.rootAccess, session));
   return 0;
 }
 

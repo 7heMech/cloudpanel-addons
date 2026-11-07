@@ -5,7 +5,7 @@
 
 import { esc } from "../../../lib/app-http";
 import {
-  ATTENTION_RANK, FLEET_FOOTER_HTML, FLEET_ROW_SELECTION_JS, JOB_WATCH_JS, fleetFilterHtml, filterWord, valueFilters, jobStateClass,
+  ATTENTION_RANK, FLEET_FOOTER_HTML, FLEET_SELECTION_HTML, FLEET_ROW_SELECTION_JS, JOB_WATCH_JS, fleetFilterHtml, filterWord, valueFilters, jobStateClass,
   renderFragment, renderLayout, sinceText, whenText,
 } from "../../../lib/app-ui";
 import type { EmbedFragment } from "../../../lib/shadow-embed";
@@ -358,8 +358,7 @@ export function fleetView(sites: GitSiteStatus[]): string {
           ? `<div class="git-empty"><h2>Deploy your first site</h2><p>Open a site in CloudPanel, choose the Git tab, and connect your repository.</p><a class="btn btn-primary" href="/">Open sites</a></div>`
           : `<div class="card-header toolbar">
         <h2>Configured sites</h2>
-        <span class="toolbar-note" id="site-selection">No sites selected</span>
-        <button class="btn mobile-select-all" id="select-all-btn" type="button" onclick="toggleAllSites()">Select all</button>
+        ${FLEET_SELECTION_HTML}
         <button class="btn btn-primary toolbar-end" type="button" data-needs-selection disabled onclick="deployGitSelected()">Deploy selected</button>
       </div>
       ${fleetFilterHtml({

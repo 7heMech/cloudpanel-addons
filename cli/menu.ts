@@ -11,13 +11,11 @@ import { cmdRepair } from "./repair";
 import { cmdStatus } from "./status";
 import { applyDisable, applyEnable } from "./toggle";
 import { cmdUpdate } from "./update";
-import { log } from "./util";
+import { log, paint } from "./util";
 import { checkCliUpdate, type CliUpdateInfo } from "../lib/update-check";
 
 const KEYS = "↑/↓ move · Space toggle · Enter apply · s status · r repair · u update · q quit";
 const QUIT_KEYS = ["q", "\x1b", "\x03", "\x04"];
-
-const paint = (code: string, text: string) => `\x1b[${code}m${text}\x1b[0m`;
 
 interface MenuState {
   cursor: number;
@@ -29,21 +27,6 @@ interface MenuState {
 
 function readEnabled(): Set<string> {
   return new Set(ADDON_NAMES.filter((name) => installedConfig(ADDONS[name]!)));
-}
-
-function fit(line: string, width: number): string {
-  // Measured without escapes so a colored line is cut at what shows.
-  let visible = 0;
-  let out = "";
-  for (const part of line.split(/(\x1b\[[0-9;]*m)/)) {
-    if (part.startsWith("\x1b[")) { out += part; continue; }
-    const room = width - visible;
-    if (room <= 0) continue;
-    const chars = [...part];
-    out += chars.slice(0, room).join("");
-    visible += Math.min(chars.length, room);
-  }
-  return out;
 }
 
 /** A checkbox per addon, with its description or, once changed, what will happen to it. */
@@ -104,7 +87,7 @@ function screen({ input, output }: Terminal) {
     get drawn() { return drawn; },
     draw(lines: string[]) {
       const width = Math.max(20, (output.columns ?? 80) - 1);
-      output.write(`${drawn ? `\x1b[${drawn}A\r` : ""}\x1b[J${lines.map((line) => fit(line, width)).join("\n")}\n`);
+      output.write(`${drawn ? `\x1b[${drawn}A\r` : ""}\x1b[J${lines.map((line) => Bun.sliceAnsi(line, 0, width)).join("\n")}\n`);
       drawn = lines.length;
     },
     /** Leaves the block where it is, so the next draw starts a new one below. */

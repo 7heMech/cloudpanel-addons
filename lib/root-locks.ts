@@ -1,0 +1,112 @@
+// Addons root has locked: the gateway refuses their `lock` verbs and the
+// manager refuses to enable or disable them, so only a root shell can change
+// what they protect. See docs/decisions/security.md#root-locks.
+import { chmodSync, closeSync, constants, fstatSync, lstatSync, mkdirSync, openSync, readFileSync, type Stats } from "node:fs";
+import { dirname } from "node:path";
+import { CONFIG_DIR, LOCK_DIR } from "../cli/paths";
+import { ADDON_VERBS, type GatewayAddon } from "./gateway-protocol";
+import { writeFileAtomic } from "./atomic-write";
+
+export const ROOT_LOCKS_FILE = `${CONFIG_DIR}/locks.json`;
+/** Serialises `lock` and `unlock`, which read the list and write it back. */
+export const ROOT_LOCKS_LOCK = `${LOCK_DIR}/locks.lock`;
+
+/** Whether a lock on its addon withholds this verb from the web. */
+export function declaresLock(addon: string, verb: string): boolean {
+  const declared = (ADDON_VERBS as Record<string, Record<string, object>>)[addon]?.[verb];
+  return !!declared && "lock" in declared && declared.lock === true;
+}
+
+/** Addons with at least one verb a lock covers. */
+export const LOCKABLE_ADDONS = (Object.keys(ADDON_VERBS) as GatewayAddon[]).filter((addon) =>
+  Object.keys(ADDON_VERBS[addon]).some((verb) => declaresLock(addon, verb)));
+
+export function isLockable(addon: string): boolean {
+  return (LOCKABLE_ADDONS as string[]).includes(addon);
+}
+
+const rootsAlone = (info: Stats, rootUid: number) => info.uid === rootUid && (info.mode & 0o022) === 0;
+
+const errno = (error: unknown) => (error as NodeJS.ErrnoException)?.code;
+
+/**
+ * The lock file, or with `directory` its directory, is wrong. Root recovers
+ * from a bad file by removing it and locking again, and from a bad directory
+ * by making it root's alone.
+ */
+export class UntrustedLockFile extends Error {
+  constructor(message: string, readonly directory = false) { super(message); }
+}
+
+/**
+ * The locked addons. Only a missing directory or file means none. A file or
+ * directory root does not own alone, or one that does not parse, throws
+ * UntrustedLockFile; any other error is thrown as it is. Either way the caller
+ * fails closed. The file is checked and read through one descriptor.
+ */
+export function lockedAddons(file = ROOT_LOCKS_FILE, rootUid = 0): string[] {
+  const dir = dirname(file);
+  let dirInfo: Stats;
+  try {
+    dirInfo = lstatSync(dir);
+  } catch (error) {
+    if (errno(error) === "ENOENT") return [];
+    throw error;
+  }
+  if (!dirInfo.isDirectory() || !rootsAlone(dirInfo, rootUid)) throw new UntrustedLockFile(`${dir} is not a directory only root can write`, true);
+  let fd: number;
+  try {
+    fd = openSync(file, constants.O_RDONLY | constants.O_NOFOLLOW | constants.O_NONBLOCK);
+  } catch (error) {
+    if (errno(error) === "ENOENT") return [];
+    // O_NOFOLLOW refuses a link with ELOOP.
+    if (errno(error) === "ELOOP") throw new UntrustedLockFile(`${file} is not a trusted regular file`);
+    throw error;
+  }
+  try {
+    const info = fstatSync(fd);
+    if (!info.isFile() || !rootsAlone(info, rootUid)) throw new UntrustedLockFile(`${file} is not a trusted regular file`);
+    let stored: { addons?: unknown } | null;
+    try {
+      stored = JSON.parse(readFileSync(fd, "utf8"));
+    } catch {
+      throw new UntrustedLockFile(`${file} is not valid JSON`);
+    }
+    if (!Array.isArray(stored?.addons)) throw new UntrustedLockFile(`${file} has no addons list`);
+    return stored.addons.filter((addon): addon is string => typeof addon === "string");
+  } finally {
+    closeSync(fd);
+  }
+}
+
+/** "damaged" when the lock file cannot be read or trusted, which locks every lockable addon. */
+export type LockState = "unlocked" | "locked" | "damaged";
+
+/** An addon with nothing to lock is always "unlocked". */
+export function lockState(addon: string, file = ROOT_LOCKS_FILE, rootUid = 0): LockState {
+  if (!isLockable(addon)) return "unlocked";
+  try {
+    return lockedAddons(file, rootUid).includes(addon) ? "locked" : "unlocked";
+  } catch {
+    return "damaged";
+  }
+}
+
+/** Whether a lockable addon is locked, including by a damaged lock file. */
+export function addonLocked(addon: string, file = ROOT_LOCKS_FILE, rootUid = 0): boolean {
+  return lockState(addon, file, rootUid) !== "unlocked";
+}
+
+/** Whether root's lock withholds this verb from the web right now. */
+export function verbLocked(addon: string, verb: string, file = ROOT_LOCKS_FILE, rootUid = 0): boolean {
+  return declaresLock(addon, verb) && addonLocked(addon, file, rootUid);
+}
+
+/** Readable by the manager, which shows the locks; written by root alone. */
+export function writeLockedAddons(addons: string[], file = ROOT_LOCKS_FILE): void {
+  // mkdir's mode is masked by root's umask, which could leave a directory
+  // lockedAddons refuses, so the mode is set outright.
+  if (mkdirSync(dirname(file), { recursive: true })) chmodSync(dirname(file), 0o755);
+  writeFileAtomic(file, `${JSON.stringify({ addons: [...new Set(addons)].sort() }, null, 2)}\n`,
+    { mode: 0o644, owner: { uid: 0, gid: 0 } });
+}

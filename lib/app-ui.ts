@@ -87,8 +87,7 @@ export function valueFilters(group: string, prefix: string, labels: string[]): F
  * `data-domain`, `data-find` and `data-show`; the client half is `filterFleet`.
  * The filter is a menu of checkboxes: within a group a row needs any of the
  * ticked words, across groups all of them. Its sort is the table's headings,
- * each `th[data-sort]`; the Sort select here stands in for them on a phone,
- * where the heading is hidden.
+ * each `th[data-sort]`, which a phone does not show.
  */
 export function fleetFilterHtml(options: {
   count: number;
@@ -113,9 +112,16 @@ export function fleetFilterHtml(options: {
   const placeholder = options.placeholder ?? "Find a site";
   return `<div class="fleet-filter">
       <input type="search" id="fleet-find" data-keep placeholder="${esc(placeholder)}" aria-label="${esc(placeholder)}" oninput="filterFleet()">
-      ${filters}<label class="fleet-sort" hidden>Sort <select id="fleet-sort" onchange="pickFleetSort(this.value)"></select></label><span class="hint" id="fleet-summary" data-all="${esc(options.summary)}">${esc(options.summary)}</span>
+      ${filters}<span class="hint" id="fleet-summary" data-all="${esc(options.summary)}">${esc(options.summary)}</span>
     </div>`;
 }
+
+/**
+ * The selection count and, on a phone, Select all: in a site table's
+ * `.card-header.toolbar`, after its title and before the bulk actions.
+ */
+export const FLEET_SELECTION_HTML = `<div class="fleet-selection"><span class="toolbar-note" id="site-selection">No sites selected</span>
+<button class="btn mobile-select-all" id="select-all-btn" type="button" onclick="toggleAllSites()">Select all</button></div>`;
 
 /**
  * Under the table: the line shown when search or filter leaves no row, and the

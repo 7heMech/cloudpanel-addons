@@ -37,10 +37,11 @@ export type WebAccess =
  * One verb of `clp-addons action <addon>`. A root-only verb says why the web
  * may not reach it. A stream's output is copied to the socket as it comes; a
  * duplex stream also gets the socket's bytes on stdin, and the gateway checks
- * its session itself.
+ * its session itself. A `lock` verb is refused from the web while root has
+ * locked its addon (`clp-addons lock`).
  */
 export type VerbDeclaration =
-  | { readonly web: WebAccess; readonly stream?: "one-way" | "duplex" }
+  | { readonly web: WebAccess; readonly stream?: "one-way" | "duplex"; readonly lock?: true }
   | { readonly web: false; readonly why: string };
 
 /**
@@ -110,7 +111,8 @@ export function callerMay(access: WebAccess, roles: readonly string[] | null): b
 export const DUPLEX_WORKER_MARKER = "CLP_ADDONS_DUPLEX_WORKER";
 /**
  * Set by the gateway on a session verb's worker: "1" when that panel session
- * passed CloudPanel's own two-factor step, "0" otherwise.
+ * passed CloudPanel's own two-factor step, `passkey:<credential id>` when a
+ * Security Keys sign-in opened it, "0" otherwise.
  */
 export const SESSION_2FA_ENV = "CLP_ADDONS_SESSION_2FA";
 

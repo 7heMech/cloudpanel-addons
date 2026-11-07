@@ -1,6 +1,6 @@
 import { esc } from "../../../lib/app-http";
 import {
-  ATTENTION_RANK, FLEET_FOOTER_HTML, FLEET_ROW_SELECTION_JS, JOB_PROGRESS_JS, fleetFilterHtml, jobProgressHtml, renderLayout,
+  ATTENTION_RANK, FLEET_FOOTER_HTML, FLEET_SELECTION_HTML, FLEET_ROW_SELECTION_JS, JOB_PROGRESS_JS, fleetFilterHtml, jobProgressHtml, renderLayout,
 } from "../../../lib/app-ui";
 import { mountPath } from "../../../lib/mount";
 import type { WpJobView, WpSiteView } from "../action";
@@ -157,8 +157,7 @@ function jobsStrip(data: WpDashboard): string {
 function batchToolbar(data: WpDashboard, count: number): string {
   const busy = data.jobs.mainwp ? " disabled" : "";
   return `
-        <span class="toolbar-note" id="site-selection">No sites selected</span>
-        <button class="btn mobile-select-all" id="select-all-btn" type="button" onclick="toggleAllSites()">Select all</button>
+        ${FLEET_SELECTION_HTML}
         <div class="toolbar-end wp-batch">
           <button class="btn" type="button" data-needs-selection disabled onclick="connectMainwpSelected()"><span class="wp-long">Connect selected to MainWP</span><span class="wp-short">Connect selected</span></button>
           <button class="btn" type="button" data-count="${count}"${count && !busy ? "" : " disabled"} onclick="connectMainwpAll(this)"><span class="wp-long">Connect all unconnected (${count})</span><span class="wp-short">Connect all (${count})</span></button>

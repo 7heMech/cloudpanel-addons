@@ -5,12 +5,19 @@ import { mkdtempSync, mkdirSync, readFileSync, readdirSync, rmSync, writeFileSyn
 import { tmpdir } from "node:os";
 import { loadLocal } from "../cli/release";
 import { reconcile, reconcileNginxProxy, type Injection } from "../cli/inject";
-import { have, tryRun } from "../cli/util";
+import { have, paint, tryRun } from "../cli/util";
 import { isNewerThan, listAvailableTags } from "../addons/instatic/app/tags";
 
 test("have finds and rejects commands", () => {
   expect(have("sh")).toBe(true);
   expect(have("clp-addons-command-that-does-not-exist")).toBe(false);
+});
+
+test("paint colors only a terminal stream that wants color", () => {
+  const stream = (isTTY: boolean, colors: boolean) => ({ isTTY, hasColors: () => colors }) as unknown as NodeJS.WriteStream;
+  expect(paint("31", "x", stream(true, true))).toBe("\x1b[31mx\x1b[0m");
+  expect(paint("31", "x", stream(true, false))).toBe("x");
+  expect(paint("31", "x", stream(false, true))).toBe("x");
 });
 
 test("tryRun decodes successful stdout", () => {

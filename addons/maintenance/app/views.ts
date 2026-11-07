@@ -1,6 +1,6 @@
 import { esc, escJs } from "../../../lib/app-http";
 import {
-  ATTENTION_RANK, FLEET_FOOTER_HTML, FLEET_ROW_SELECTION_JS, fleetFilterHtml, filterWord, valueFilters, renderFragment, renderLayout,
+  ATTENTION_RANK, FLEET_FOOTER_HTML, FLEET_SELECTION_HTML, FLEET_ROW_SELECTION_JS, fleetFilterHtml, filterWord, valueFilters, renderFragment, renderLayout,
 } from "../../../lib/app-ui";
 import type { EmbedFragment } from "../../../lib/shadow-embed";
 import { mountPath } from "../../../lib/mount";
@@ -154,8 +154,7 @@ export function fleetView(fleet: MaintenanceFleet, currentIp = ""): string {
   <div class="card card-table">
     <div class="card-header toolbar">
       <div><h2>Sites</h2><div class="hint">${inMaintenance} of ${sites.length} in maintenance</div></div>
-      ${sites.length ? `<span class="toolbar-note" id="site-selection">No sites selected</span>
-      <button class="btn mobile-select-all" id="select-all-btn" type="button" onclick="toggleAllSites()">Select all</button>
+      ${sites.length ? `${FLEET_SELECTION_HTML}
       <div class="toolbar-end actions bulk-actions">
         <button class="btn" type="button" data-needs-selection disabled onclick="toggleSelected(true)">Turn on selected</button>
         <button class="btn" type="button" data-needs-selection disabled onclick="toggleSelected(false)">Turn off selected</button>

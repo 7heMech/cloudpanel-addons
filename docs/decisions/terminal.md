@@ -57,12 +57,22 @@ off and set up again is a new secret, and the grant needs root again. The
 account's setting is not enough on its own either: a session signed in
 before two-factor was turned on stays signed in, and never passed the code.
 So the gateway tells every session verb's worker, in
-`CLP_ADDONS_SESSION_2FA`, whether that session carries CloudPanel's own
-"two-factor passed" marker, and a root shell needs it. A passkey sign-in
-through Security Keys is two factors itself but goes through CloudPanel's
-`/autologin`, which writes no marker and looks the same as such an old
-session, so it does not open a root shell; that administrator signs in with
-the code for one.
+`CLP_ADDONS_SESSION_2FA`, how that session signed in, and a root shell needs
+one of two answers. Either it carries CloudPanel's own "two-factor passed"
+marker, or Security Keys opened it. A passkey sign-in goes through
+CloudPanel's `/autologin`, which writes no marker, so Security Keys records
+each sign-in's user, key and time, and the gateway matches a session without
+the marker to one whose 60-second token was valid when CloudPanel created the
+session; CloudPanel stamps that time again at every sign-in. Security Keys
+also records a digest of the account's 2FA secret, and the sign-in counts only
+while the account still has that secret: with 2FA on, a password sign-in in
+the same minute carries the marker, so the unmarked session is the passkey's.
+A password session from while 2FA was off never counts. `allow` pins the
+passkeys the account has then and lists them by name, since an administrator
+signed in as the account could have added one: a key added later does not
+open a root shell until root allows the account again. A key removed or revoked
+since opens nothing more, even from the session it signed in, as 2FA set up
+again does for the code.
 
 Each grant is also pinned to CloudPanel's `user.id`, so a name deleted and
 created again is not the account root allowed. A deactivation, a demotion or

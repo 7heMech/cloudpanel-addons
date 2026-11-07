@@ -168,7 +168,6 @@ p.dns-dialog-note { margin:20px 0 0; }
 #dns-site-body > h3.dns-section:first-child { margin-top:0; }
 .dns-card-sites { display:none; }
 @media (max-width:940px) {
-  .fleet-table.dns-site-table td.site-select { display:none; }
   /* A site card: the status and its hints get the full width, then the
      profile picker with Details beside it. */
   .fleet-table.dns-site-table td.dns-status { flex-basis:100%; }
@@ -210,8 +209,6 @@ p.dns-dialog-note { margin:20px 0 0; }
   .dns-default-field { flex:1 1 200px; }
   .dns-default-field select { width:100%; min-width:0; }
   .card-header:not(.toolbar):has(> .btn, > .dns-profile-tools, > .dns-redirect-tools) { flex-direction:column; align-items:stretch; }
-  .toolbar #bulk-profile { flex:1 1 100%; }
-  .toolbar .toolbar-end { margin-left:0; }
   .dns-redirect-tools { flex:1 1 100%; }
   .dns-redirect-tools .btn { flex:1 1 auto; }
   .dns-redirect-target { max-width:none; white-space:normal; overflow-wrap:anywhere; }

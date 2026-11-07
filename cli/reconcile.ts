@@ -7,7 +7,7 @@ import {
   panelVersion, reconcile, reconcileNginxMaintenance, reconcileNginxProxy,
 } from "./inject";
 import { ensureMaintenanceData } from "../addons/maintenance/action";
-import { systemTweaksBackupCompression, systemTweaksPhpMyAdmin } from "../addons/system-tweaks/action";
+import { systemTweaksBackupCompression, systemTweaksMotd, systemTweaksPhpMyAdmin } from "../addons/system-tweaks/action";
 import { TEMPLATES } from "../lib/panel-anchors";
 import { adminHeaderTarget, headerTarget, siteLayoutTarget } from "../lib/panel-nav";
 import { ADDONS, ADDON_NAMES } from "./addon-catalog";
@@ -139,5 +139,16 @@ export function reconcileBackupCommand(quiet: boolean): void {
     if (line && !quiet) log.ok(line);
   } catch (error) {
     log.err(`remote backup compression: ${error instanceof Error ? error.message : String(error)}`);
+  }
+}
+
+/** A CloudPanel upgrade empties /etc/update-motd.d and puts its banner back. */
+export function reconcileMotd(quiet: boolean): void {
+  if (!existsSync(ADDONS["system-tweaks"]!.configFile)) return;
+  try {
+    const line = systemTweaksMotd();
+    if (line && !quiet) log.ok(line);
+  } catch (error) {
+    log.err(`SSH login message: ${error instanceof Error ? error.message : String(error)}`);
   }
 }

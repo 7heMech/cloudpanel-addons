@@ -9,13 +9,15 @@ import { dirname } from "node:path";
 import type { Database } from "bun:sqlite";
 import { withFileLockSync } from "../../cli/action-common";
 import { openPanelDatabase } from "../../cli/panel-db";
-import { CONFIG_DIR, LOCK_DIR, PANEL_DB } from "../../cli/paths";
+import { CONFIG_DIR, LOCK_DIR, PANEL_DB, STATE_DIR } from "../../cli/paths";
+import { accountPasskeys } from "../security-keys/sign-ins";
 import { fatal, log, requireRoot } from "../../cli/util";
 import { writeFileAtomic } from "../../lib/atomic-write";
 import { PANEL_USER_NAME_RE } from "../../lib/panel-users";
 
 export const ROOT_GRANTS_FILE = `${CONFIG_DIR}/terminal-root.json`;
 const ROOT_GRANTS_LOCK = `${LOCK_DIR}/terminal-root.lock`;
+const SECURITY_KEYS_DIR = `${STATE_DIR}/security-keys`;
 
 export interface RootGrant {
   user: string;
@@ -23,6 +25,8 @@ export interface RootGrant {
   id: number;
   /** A digest of the account's 2FA secret then: 2FA set up again is not the owner's until root says so. */
   mfa: string;
+  /** The Security Keys passkeys the account had then; one added later does not open a root shell. */
+  keys: string[];
 }
 
 interface PanelAccount {
@@ -77,7 +81,8 @@ export function readRootGrants(file = ROOT_GRANTS_FILE, rootUid = 0): RootGrant[
     return stored.users.filter((grant): grant is RootGrant =>
       !!grant && typeof grant === "object"
       && typeof grant.user === "string" && PANEL_USER_NAME_RE.test(grant.user)
-      && Number.isSafeInteger(grant.id) && typeof grant.mfa === "string" && /^[0-9a-f]{64}$/.test(grant.mfa));
+      && Number.isSafeInteger(grant.id) && typeof grant.mfa === "string" && /^[0-9a-f]{64}$/.test(grant.mfa))
+      .map(({ user, id, mfa, keys }) => ({ user, id, mfa, keys: Array.isArray(keys) ? keys.filter((key) => typeof key === "string") : [] }));
   } finally {
     closeSync(fd);
   }
@@ -90,7 +95,7 @@ function writeRootGrants(grants: RootGrant[], file = ROOT_GRANTS_FILE): void {
   if (mkdirSync(dir, { recursive: true })) chmodSync(dir, 0o755);
   // Written into a directory the reader refuses, the list would lock everyone out.
   if (!rootsAlone(lstatSync(dir), 0)) fatal(`${dir} must be root's alone to hold the root terminal list: chown root:root and chmod 755 it`);
-  const users = [...grants].sort((a, b) => a.user.localeCompare(b.user)).map(({ user, id, mfa }) => ({ user, id, mfa }));
+  const users = [...grants].sort((a, b) => a.user.localeCompare(b.user)).map(({ user, id, mfa, keys }) => ({ user, id, mfa, keys }));
   writeFileAtomic(file, `${JSON.stringify({ users }, null, 2)}\n`, { mode: 0o600, owner: { uid: 0, gid: 0 } });
 }
 
@@ -125,14 +130,33 @@ export function grantProblem(db: Database, grant: RootGrant): string | null {
   return null;
 }
 
+/**
+ * Why this sign-in does not open the grant's root shell. The account having
+ * 2FA on is not enough: a session signed in before it was turned on stays
+ * signed in, and never passed it.
+ */
+function sessionProblem(grant: RootGrant, session: string, paths: RootAccessPaths): string | null {
+  if (session === "1") return null;
+  if (session.startsWith("passkey:")) {
+    const key = session.slice("passkey:".length);
+    if (!grant.keys.includes(key)) return "This passkey was added after root allowed you: sign in with your 2FA code, or ask root to allow you again.";
+    // A key removed or revoked since, perhaps because it was lost, opens nothing more.
+    return accountPasskeys(paths.securityKeys, grant.user, grant.id, paths.rootUid).some((found) => found.id === key) ? null
+      : "This passkey is no longer on your account: sign in with your 2FA code or another passkey to open a root terminal.";
+  }
+  return "This sign-in used neither your 2FA code nor a passkey: sign out and in again with one to open a root terminal.";
+}
+
 export interface RootAccessPaths {
   panelDb: string;
   grants: string;
-  /** Who must own the grants file; root, except in tests. */
+  /** Security Keys' state, for the keys an account has now. */
+  securityKeys: string;
+  /** Who must own the grants file and Security Keys' state; root, except in tests. */
   rootUid: number;
 }
 
-export const DEFAULT_ROOT_ACCESS_PATHS: RootAccessPaths = { panelDb: PANEL_DB, grants: ROOT_GRANTS_FILE, rootUid: 0 };
+export const DEFAULT_ROOT_ACCESS_PATHS: RootAccessPaths = { panelDb: PANEL_DB, grants: ROOT_GRANTS_FILE, securityKeys: SECURITY_KEYS_DIR, rootUid: 0 };
 
 export interface RootAccess {
   /** False for an administrator root never allowed. */
@@ -143,8 +167,11 @@ export interface RootAccess {
   unreadable?: true;
 }
 
-/** Whether a panel user may open a root shell now. Any failure refuses. */
-export function rootAccess(panelUser: string, paths: RootAccessPaths = DEFAULT_ROOT_ACCESS_PATHS): RootAccess {
+/**
+ * Whether a panel user may open a root shell now, from a session whose sign-in
+ * `session` describes (SESSION_2FA_ENV). Any failure refuses.
+ */
+export function rootAccess(panelUser: string, paths: RootAccessPaths, session: string): RootAccess {
   const failed = (what: string, error: unknown): RootAccess =>
     ({ granted: true, problem: `${what} cannot be read: ${error instanceof Error ? error.message : String(error)}`, unreadable: true });
   let grant: RootGrant | undefined;
@@ -158,7 +185,7 @@ export function rootAccess(panelUser: string, paths: RootAccessPaths = DEFAULT_R
   let db: Database | null = null;
   try {
     db = openPanelDatabase(paths.panelDb, true);
-    return { granted: true, problem: grantProblem(db, grant) };
+    return { granted: true, problem: grantProblem(db, grant) ?? sessionProblem(grant, session, paths) };
   } catch (error) {
     return failed("CloudPanel's user list", error);
   } finally {
@@ -203,7 +230,10 @@ export function runTerminalRootCommand(argv: string[]): void {
     // Allowed without it, the first to set it up -- any administrator after a password reset -- would be the owner.
     const mfa = mfaDigest(found);
     if (mfa === null) fatal(`${user} has 2FA off: they turn it on in Account → Security first, then allow them`);
-    grant = { user: user!, id: found.id, mfa };
+    // The passkeys it has now are the ones root trusts; listed so root sees whose they are.
+    const keys = accountPasskeys(SECURITY_KEYS_DIR, user!, found.id);
+    if (keys.length) log.plain(`Passkeys that can open it: ${keys.map((key) => key.name).join(", ")}`);
+    grant = { user: user!, id: found.id, mfa, keys: keys.map((key) => key.id) };
   }
   withFileLockSync(ROOT_GRANTS_LOCK, 15, "another terminal root change is still running", () => {
     const current = read();
@@ -213,6 +243,6 @@ export function runTerminalRootCommand(argv: string[]): void {
     writeRootGrants(others);
   });
   log.ok(verb === "allow"
-    ? `${user} can open a root shell from the panel, signed in with their 2FA code`
+    ? `${user} can open a root shell from the panel, signed in with their 2FA code${grant?.keys.length ? " or one of those passkeys" : ""}`
     : `${user} cannot open a root shell; any open one closes within 15 seconds`);
 }

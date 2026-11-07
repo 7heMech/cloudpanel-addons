@@ -46,7 +46,6 @@
 .git-empty h2 { margin: 0 0 10px; }
 .git-empty p { margin: 0 0 22px; color: var(--muted); }
 @media (max-width: 940px) {
-  .fleet-table.git-fleet-table td.site-select { display: none; }
 }
 @media (max-width: 760px) {
   .git-repo-form .form-grid { grid-template-columns: minmax(0, 1fr); }

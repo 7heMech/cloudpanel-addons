@@ -1,4 +1,5 @@
 import { SECURITY_KEYS_VERBS } from "./verbs";
+import { TOKEN_TTL_SECONDS, mfaMark, recordSignIn } from "./sign-ins";
 import { createHmac, randomBytes } from "node:crypto";
 import {
   chmodSync, closeSync, constants as fs, existsSync, fchmodSync, fchownSync, fstatSync, linkSync, lstatSync, mkdirSync, openSync,
@@ -31,8 +32,6 @@ const OWN_ACCOUNT_VERBS = new Set(VERBS.filter((verb) => SECURITY_KEYS_VERBS[ver
 
 const STORE_VERSION = 1;
 const CHALLENGE_TTL_MS = 5 * 60_000;
-/** How long CloudPanel will honour the sign-in token once it is written. */
-const TOKEN_TTL_SECONDS = 60;
 const TOKEN_FILE_RE = /^\.token_[0-9a-f]{64}$/;
 /** `<expiry in ms>.<random>`: the challenge itself is root's HMAC of this. */
 const CHALLENGE_ID_RE = /^(\d{13})\.[0-9a-f]{32}$/;
@@ -417,6 +416,8 @@ function signIn(paths: SecurityKeysPaths, input: Record<string, unknown>, now: n
     key.signCount = signCount;
     key.lastUsedAt = new Date(now).toISOString();
     writeStore(paths, store);
+    // Recorded before the token exists, so the session it opens always has its record.
+    recordSignIn(paths.stateDir, paths.stateUid, { user, key: key.id, at: Math.floor(now / 1000), mfa: mfaMark(paths.panelDb, user) });
     const token = mintPanelToken(paths, user, now);
     audit(`${user} signed in with the key "${key.name}"`);
     return { token, user };

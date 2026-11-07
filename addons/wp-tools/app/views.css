@@ -34,18 +34,12 @@
   .wp-site-table td.site-cell { flex-basis: 100%; }
   .wp-long { display: none; }
   .wp-short { display: inline; }
-  /* The card each row becomes is its own selection control. */
-  .fleet-table.wp-site-table td.site-select { display: none; }
   .wp-site-table td.action-cell .btn { width: 100%; }
   .wp-section .split-card > .switch { flex-basis: auto; margin-left: auto; }
   .wp-helper { margin: -10px 0 24px; }
   .wp-controls { justify-content: space-between; }
   .mainwp-picker select { max-width: none; flex-basis: 100%; }
   .mainwp-controls .btn { flex: 1 1 auto; }
-  /* The selection count sits under the heading, Select all beside both, and the batch buttons share the next line. */
-  .card-header.toolbar:has(.wp-batch) { display: grid; grid-template-columns: 1fr auto; gap: 2px 12px; }
-  .toolbar:has(.wp-batch) .mobile-select-all { grid-area: 1 / 2 / 3 / 3; align-self: center; }
-  .toolbar .wp-batch { grid-column: 1 / -1; margin: 12px 0 0; }
   .wp-batch .btn { flex: 1 1 0; white-space: nowrap; }
 }
 .wp-jobs { display: grid; gap: 12px; padding: 18px 32px; }

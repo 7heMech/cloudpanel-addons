@@ -62,7 +62,11 @@ writes CloudPanel's own one-time token to `var/.token_<64 hex>` as the panel's
 user, and the browser is sent to `/autologin?token=…`. CloudPanel's
 `AutoLoginAuthenticator` reads the file, deletes it and starts the session; the
 addon never builds a session itself. The token lasts 60 seconds. Expired tokens
-of that shape are removed on the next sign-in.
+of that shape are removed on the next sign-in. Each sign-in's user, key and
+time are recorded first in `sign-ins.json`, root's alone, the newest 20 per
+user for 30 days, so the gateway can tell a session a key opened from one that
+skipped CloudPanel's code: [Terminal](terminal.md#root) lets only the former
+open a root shell.
 
 Every key must verify its user (PIN, biometric or device unlock), so a key on
 its own is still two factors. Keys are discoverable credentials: the login page

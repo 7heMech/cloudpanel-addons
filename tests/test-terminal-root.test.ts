@@ -31,7 +31,7 @@ beforeEach(() => {
   chmodSync(`${base}/box/etc`, 0o755);
   paths = {
     panelDb: `${base}/box/panel.sqlite`, passwd: `${base}/box/passwd`, runuser: "/usr/sbin/runuser", homes: `${base}/box/home`,
-    rootAccess: { panelDb: `${base}/box/panel.sqlite`, grants: `${base}/box/etc/terminal-root.json`, rootUid: uid },
+    rootAccess: { panelDb: `${base}/box/panel.sqlite`, grants: `${base}/box/etc/terminal-root.json`, securityKeys: `${base}/box/security-keys`, rootUid: uid },
   };
   const panel = db();
   panel.run(`CREATE TABLE user (id INTEGER PRIMARY KEY, user_name TEXT, role TEXT, status INTEGER,
@@ -47,7 +47,7 @@ function allow(...users: string[]): void {
   const panel = db();
   const grants = users.map((user) => {
     const { id, mfa_secret } = panel.query<{ id: number; mfa_secret: string }, [string]>("SELECT id, mfa_secret FROM user WHERE user_name = ?").get(user)!;
-    return { user, id, mfa: createHash("sha256").update(`clp-addons terminal root\0${mfa_secret}`).digest("hex") };
+    return { user, id, mfa: createHash("sha256").update(`clp-addons terminal root\0${mfa_secret}`).digest("hex"), keys: ["alice-key"] };
   });
   panel.close();
   writeFileSync(paths.rootAccess.grants, JSON.stringify({ users: grants }));
@@ -55,7 +55,7 @@ function allow(...users: string[]): void {
 }
 
 const change = (sql: string) => { const panel = db(); panel.run(sql); panel.close(); };
-const access = (user: string) => rootAccess(user, paths.rootAccess);
+const access = (user: string, session = "1") => rootAccess(user, paths.rootAccess, session);
 
 test("only an administrator root allowed gets a root shell", () => {
   expect(access("alice")).toEqual({ granted: false, problem: null });
@@ -106,9 +106,9 @@ test("a grants file others could write, or a link, lets nobody in", () => {
   chmodSync(paths.rootAccess.grants, 0o600);
   const link = `${base}/box/etc/link.json`;
   symlinkSync(paths.rootAccess.grants, link);
-  expect(rootAccess("alice", { ...paths.rootAccess, grants: link }).problem).toContain("cannot be trusted");
-  expect(rootAccess("alice", { ...paths.rootAccess, rootUid: uid + 1 }).problem).toContain("cannot be trusted");
-  expect(rootAccess("alice", { ...paths.rootAccess, rootUid: uid + 1 }).unreadable).toBeUndefined();
+  expect(rootAccess("alice", { ...paths.rootAccess, grants: link }, "1").problem).toContain("cannot be trusted");
+  expect(rootAccess("alice", { ...paths.rootAccess, rootUid: uid + 1 }, "1").problem).toContain("cannot be trusted");
+  expect(rootAccess("alice", { ...paths.rootAccess, rootUid: uid + 1 }, "1").unreadable).toBeUndefined();
 });
 
 test("the worker takes --root in place of a domain, and resolves it only for an allowed administrator", () => {
@@ -119,9 +119,9 @@ test("the worker takes --root in place of a domain, and resolves it only for an 
   expect(() => parseTerminalRequest(["session", "--root=yes", "--panel-user=alice", "--cols=1", "--rows=1"])).toThrow(ActionFailure);
   expect(() => resolveTerminalTarget(request, paths)).toThrow("root has not allowed you a root shell");
   allow("alice");
-  expect(resolveTerminalTarget(request, paths, true)).toEqual({ user: "root", dir: "/root" });
+  expect(resolveTerminalTarget(request, paths, "1")).toEqual({ user: "root", dir: "/root" });
   // The account has 2FA on, but this sign-in never passed it.
-  expect(() => resolveTerminalTarget(request, paths, false)).toThrow("This sign-in did not use your 2FA code");
+  expect(() => resolveTerminalTarget(request, paths, "0")).toThrow("This sign-in used neither your 2FA code nor a passkey");
 });
 
 test("an open root shell ends once its grant does", async () => {
@@ -157,7 +157,7 @@ test("a database that cannot be read is refused for a new shell, but an open one
   allow("alice");
   const away = `${paths.panelDb}.away`;
   const unreadable = { ...paths, rootAccess: { ...paths.rootAccess, panelDb: away } };
-  expect(rootAccess("alice", unreadable.rootAccess)).toMatchObject({ granted: true, unreadable: true });
+  expect(rootAccess("alice", unreadable.rootAccess, "1")).toMatchObject({ granted: true, unreadable: true });
   expect(() => resolveTerminalTarget({ domain: null, panelUser: "alice", cols: 80, rows: 24 }, unreadable)).toThrow("cannot be read");
   let started = 0;
   const { audit, running } = rootSession({}, () => {
@@ -274,4 +274,20 @@ test("a root access check that fails says so, rather than that root never allowe
   } finally {
     mock.module("../lib/gateway-client", () => realGateway);
   }
+});
+
+test("a passkey sign-in opens it with a key the account had when root allowed it, and not with a later one", () => {
+  allow("alice");
+  const store = (keys: string[]) => {
+    mkdirSync(paths.rootAccess.securityKeys, { recursive: true });
+    writeFileSync(`${paths.rootAccess.securityKeys}/credentials.json`,
+      JSON.stringify({ users: { alice: { userId: 1, keys: keys.map((id) => ({ id, name: id })) } } }), { mode: 0o600 });
+  };
+  store(["alice-key", "added-later"]);
+  expect(access("alice", "passkey:alice-key")).toEqual({ granted: true, problem: null });
+  expect(access("alice", "passkey:added-later").problem).toBe("This passkey was added after root allowed you: sign in with your 2FA code, or ask root to allow you again.");
+  expect(access("alice", "0").problem).toContain("used neither your 2FA code nor a passkey");
+  // Removed or revoked, the key no longer opens one, even from the session it signed in.
+  store(["added-later"]);
+  expect(access("alice", "passkey:alice-key").problem).toContain("no longer on your account");
 });

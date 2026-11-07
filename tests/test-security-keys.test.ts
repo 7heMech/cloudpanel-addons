@@ -1,5 +1,6 @@
 // Passkey sign-in end to end against a software authenticator: registration,
 // sign-in to CloudPanel's own one-time token, and every refusal that matters.
+import { accountPasskeys, mfaMark, passkeyFor } from "../addons/security-keys/sign-ins";
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import { Database } from "bun:sqlite";
 import { createHash, generateKeyPairSync, randomBytes, sign, type KeyObject } from "node:crypto";
@@ -141,11 +142,11 @@ describe("the root action", () => {
   let paths: SecurityKeysPaths;
   let now = Date.UTC(2026, 9, 22, 12);
 
-  function account(name: string, id: number, status = 1, role = "ROLE_USER"): void {
+  function account(name: string, id: number, status = 1, role = "ROLE_USER", mfaSecret: string | null = null): void {
     const db = new Database(paths.panelDb);
-    db.run("CREATE TABLE IF NOT EXISTS user (id INTEGER, user_name TEXT, role TEXT, status INTEGER)");
+    db.run("CREATE TABLE IF NOT EXISTS user (id INTEGER, user_name TEXT, role TEXT, status INTEGER, mfa INTEGER, mfa_secret TEXT)");
     db.query("DELETE FROM user WHERE user_name = ?").run(name);
-    db.query("INSERT INTO user VALUES (?, ?, ?, ?)").run(id, name, role, status);
+    db.query("INSERT INTO user VALUES (?, ?, ?, ?, ?, ?)").run(id, name, role, status, mfaSecret ? 1 : 0, mfaSecret);
     db.close();
   }
 
@@ -212,6 +213,22 @@ describe("the root action", () => {
 
     const listed = await run(["keys", "--panel-user=alice"]);
     expect(listed.data.keys[0].lastUsedAt).toBe(new Date(now).toISOString());
+
+    // The sign-in is recorded, so the session CloudPanel opens from the token is known to be the key's.
+    const uid = process.getuid?.() ?? 0;
+    const at = Math.floor(now / 1000);
+    // Alice had no 2FA, so a password session in the same minute would look the same.
+    expect(passkeyFor("alice", at + 5, mfaMark(paths.panelDb, "alice"), paths.stateDir, uid)).toBeNull();
+    account("alice", 7, 1, "ROLE_USER", "SECRET1");
+    const mark = mfaMark(paths.panelDb, "alice");
+    expect((await signIn(key)).ok).toBe(true);
+    expect(passkeyFor("alice", at + 5, mark, paths.stateDir, uid)).toBe(b64(key.id));
+    expect(passkeyFor("alice", at + 120, mark, paths.stateDir, uid)).toBeNull();
+    expect(passkeyFor("bob", at + 5, mark, paths.stateDir, uid)).toBeNull();
+    account("alice", 7, 1, "ROLE_USER", "SECRET2");
+    expect(passkeyFor("alice", at + 5, mfaMark(paths.panelDb, "alice"), paths.stateDir, uid)).toBeNull();
+    expect(accountPasskeys(paths.stateDir, "alice", 7, uid)).toEqual([{ id: b64(key.id), name: "YubiKey" }]);
+    expect(accountPasskeys(paths.stateDir, "alice", 8, uid)).toEqual([]);
   });
 
   test("a challenge answers once, and not after it expires", async () => {

@@ -5,6 +5,7 @@ import { CLI_VERSION } from "../cli/release";
 import { esc, escJs, htmlResponse } from "../lib/app-http";
 import { JOB_WATCH_JS, renderLayout } from "../lib/app-ui";
 import { mountPath } from "../lib/mount";
+import { lockState } from "../lib/root-locks";
 import { UPDATE_PATH, changelogUrl } from "../lib/update-ui";
 import type { CliUpdateInfo } from "../lib/update-check";
 import type { ManagerJobView } from "../cli/manager-action";
@@ -22,10 +23,16 @@ function addonRow(name: string, enabled: boolean, job: ManagerJobView | null, ne
   const live = liveManagerJob(job);
   const addonJob = live && live.addon === spec.name ? live : null;
   const heading = enabled && href ? `<a href="${esc(href)}">${esc(title)}</a>` : esc(title);
-  const actions = enabled
-    ? `${href ? `<a class="btn btn-primary" href="${esc(href)}" aria-label="Open ${esc(title)}">Open</a>` : ""}
-      <button class="btn" type="button" onclick="disableAddon('${escJs(spec.name)}', '${escJs(title)}', this)" aria-label="Disable ${esc(title)}">Disable</button>`
-    : `<button class="btn" type="button" onclick="enableAddon('${escJs(spec.name)}', this)" aria-label="Enable ${esc(title)}">Enable</button>`;
+  const lock = lockState(spec.name);
+  const toggle = lock !== "unlocked"
+    ? `<span class="badge" title="${lock === "damaged" ? `The lock file cannot be read or trusted; run clp-addons lock on the server` : `Run clp-addons unlock ${esc(spec.name)} on the server to ${enabled ? "disable" : "enable"} it`}">Locked by root</span>`
+    : enabled
+      ? `<button class="btn" type="button" onclick="disableAddon('${escJs(spec.name)}', '${escJs(title)}', this)" aria-label="Disable ${esc(title)}">Disable</button>`
+      : `<button class="btn" type="button" onclick="enableAddon('${escJs(spec.name)}', this)" aria-label="Enable ${esc(title)}">Enable</button>`;
+  const actions = enabled && href
+    ? `<a class="btn btn-primary" href="${esc(href)}" aria-label="Open ${esc(title)}">Open</a>
+      ${toggle}`
+    : toggle;
   // Opening the addon from this row reads its notice for every administrator.
   const notice = addonNews(spec.name, news.version, news.since, news.seen);
   return `<article class="addon-row" data-manager-job-card="${esc(spec.name)}"${notice ? ` data-news="${esc(notice.keys.join(" "))}"` : ""} data-find="${esc(`${title} ${spec.name} ${spec.description ?? ""}`)}">

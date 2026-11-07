@@ -11,11 +11,10 @@ import { inspectPhpGuard } from "./php-guard";
 import { managerSocketProblem, unitActive, unitPid } from "./provision";
 import { installedInjections } from "./reconcile";
 import { CLI_VERSION } from "./release";
-import { log } from "./util";
+import { log, paint } from "./util";
 import { existsSync } from "node:fs";
 function statusValue(value: string, ok: boolean): string {
-  if (!process.stdout.isTTY) return value;
-  return ok ? `\x1b[32m${value}\x1b[0m` : `\x1b[31m${value}\x1b[0m`;
+  return paint(ok ? "32" : "31", value);
 }
 
 function nginxStatus(status: NginxProxyStatus): string {
