@@ -44,6 +44,7 @@ import {
   type BackupCompressionOptions, type BackupCompressionSettings, type BackupCompressionStatus,
 } from "./backup-compression";
 import { applyTelemetryBlock, telemetryStatus, type TelemetryOptions, type TelemetryStatus } from "./telemetry";
+import { applyMotd, motdStatus, type MotdOptions, type MotdStatus } from "./motd";
 
 const SETTINGS_VERSION = 1;
 const MAX_INPUT_BYTES = 4 * 1024;
@@ -78,6 +79,8 @@ export interface SystemTweaksSettings {
   blockClpctlInjection: boolean;
   /** Deny CloudPanel's clp-agent every address but loopback. */
   blockTelemetry: boolean;
+  /** Show the server's state at SSH login in place of CloudPanel's banner. */
+  serverInfoMotd: boolean;
   backupCompression: BackupCompressionSettings;
 }
 
@@ -98,6 +101,7 @@ export interface SystemTweaksState {
   database: (DatabaseStatus & { loopback: boolean }) | { error: string };
   backupCompression: BackupCompressionStatus;
   telemetry: TelemetryStatus & { enabled: boolean };
+  motd: MotdStatus & { enabled: boolean };
 }
 
 export interface SystemTweaksPaths {
@@ -135,6 +139,7 @@ export interface SystemTweaksOptions {
   database?: DatabaseOptions;
   backupCompression?: BackupCompressionOptions;
   telemetry?: TelemetryOptions;
+  motd?: MotdOptions;
   tmpCleanup?: TmpCleanupOptions;
   now?: () => number;
 }
@@ -159,6 +164,7 @@ export function readSettings(paths: SystemTweaksPaths): SystemTweaksSettings {
     databaseLoopback: false,
     blockClpctlInjection: true,
     blockTelemetry: true,
+    serverInfoMotd: true,
     backupCompression: { ...DEFAULT_BACKUP_COMPRESSION },
   };
   if (!existsSync(paths.settingsFile)) return settings;
@@ -197,6 +203,7 @@ export function readSettings(paths: SystemTweaksPaths): SystemTweaksSettings {
   if (stored.databaseLoopback === true) settings.databaseLoopback = true;
   if (stored.blockClpctlInjection === false) settings.blockClpctlInjection = false;
   if (stored.blockTelemetry === false) settings.blockTelemetry = false;
+  if (stored.serverInfoMotd === false) settings.serverInfoMotd = false;
   if (validBackupCompression(stored.backupCompression)) settings.backupCompression = { ...stored.backupCompression };
   return settings;
 }
@@ -245,6 +252,7 @@ async function stateOf(options: SystemTweaksOptions): Promise<SystemTweaksState>
     database: databaseOrError(settings.databaseLoopback, options.database),
     backupCompression: backupCompressionStatus(settings.backupCompression, options.backupCompression),
     telemetry: { ...telemetryStatus(options.telemetry), enabled: settings.blockTelemetry },
+    motd: { ...motdStatus(options.motd), enabled: settings.serverInfoMotd },
   };
 }
 
@@ -325,51 +333,17 @@ async function setUploadGuard(options: SystemTweaksOptions): Promise<SystemTweak
   return stateOf(options);
 }
 
-async function setRealIp(options: SystemTweaksOptions): Promise<SystemTweaksState> {
-  const paths = pathsFor(options);
-  const body = await requestBody(options);
-  if (typeof body.enabled !== "boolean") failAction("enabled must be true or false");
-  await withFileLock(paths.lockFile, 15, "another system tweaks change is still running", async () => {
-    const settings = readSettings(paths);
-    applyRealIp(body.enabled as boolean, options.realIp);
-    writeSettings(paths, { ...settings, blockForgedRealIp: body.enabled as boolean });
-  });
-  return stateOf(options);
-}
+type SwitchKey = "blockForgedRealIp" | "protectPhpMyAdmin" | "replacePanelCert" | "blockTelemetry" | "serverInfoMotd";
 
-async function setPhpMyAdmin(options: SystemTweaksOptions): Promise<SystemTweaksState> {
+/** A switch whose change is applied before it is saved, so a failed change keeps the old setting. */
+async function setSwitch(options: SystemTweaksOptions, key: SwitchKey, apply: (enabled: boolean) => unknown): Promise<SystemTweaksState> {
   const paths = pathsFor(options);
-  const body = await requestBody(options);
-  if (typeof body.enabled !== "boolean") failAction("enabled must be true or false");
+  const { enabled } = await requestBody(options);
+  if (typeof enabled !== "boolean") failAction("enabled must be true or false");
   await withFileLock(paths.lockFile, 15, "another system tweaks change is still running", async () => {
     const settings = readSettings(paths);
-    applyPhpMyAdmin(body.enabled as boolean, options.phpMyAdmin);
-    writeSettings(paths, { ...settings, protectPhpMyAdmin: body.enabled as boolean });
-  });
-  return stateOf(options);
-}
-
-async function setTelemetry(options: SystemTweaksOptions): Promise<SystemTweaksState> {
-  const paths = pathsFor(options);
-  const body = await requestBody(options);
-  if (typeof body.enabled !== "boolean") failAction("enabled must be true or false");
-  await withFileLock(paths.lockFile, 15, "another system tweaks change is still running", async () => {
-    const settings = readSettings(paths);
-    applyTelemetryBlock(body.enabled as boolean, options.telemetry);
-    writeSettings(paths, { ...settings, blockTelemetry: body.enabled as boolean });
-  });
-  return stateOf(options);
-}
-
-/** Off only stops the replacing: a certificate generated here stays, since the shared key is public. */
-async function setPanelCert(options: SystemTweaksOptions): Promise<SystemTweaksState> {
-  const paths = pathsFor(options);
-  const body = await requestBody(options);
-  if (typeof body.enabled !== "boolean") failAction("enabled must be true or false");
-  await withFileLock(paths.lockFile, 15, "another system tweaks change is still running", async () => {
-    const settings = readSettings(paths);
-    if (body.enabled) replacePanelCert(options.panelCert);
-    writeSettings(paths, { ...settings, replacePanelCert: body.enabled as boolean });
+    apply(enabled);
+    writeSettings(paths, { ...settings, [key]: enabled });
   });
   return stateOf(options);
 }
@@ -542,14 +516,16 @@ export async function executeSystemTweaksAction(argv: string[], options: SystemT
   if (verb === "state") return stateOf(options);
   if (verb === "set-updates") return setUpdates(options);
   if (verb === "set-upload-guard") return setUploadGuard(options);
-  if (verb === "set-real-ip") return setRealIp(options);
+  if (verb === "set-real-ip") return setSwitch(options, "blockForgedRealIp", (on) => applyRealIp(on, options.realIp));
   if (verb === "set-vhost-guard") return setVhostGuard(options);
-  if (verb === "set-phpmyadmin") return setPhpMyAdmin(options);
+  if (verb === "set-phpmyadmin") return setSwitch(options, "protectPhpMyAdmin", (on) => applyPhpMyAdmin(on, options.phpMyAdmin));
   if (verb === "set-file-manager-guard") return setFileManagerGuard(options);
-  if (verb === "set-panel-cert") return setPanelCert(options);
+  // Off only stops the replacing: a certificate generated here stays, since the shared key is public.
+  if (verb === "set-panel-cert") return setSwitch(options, "replacePanelCert", (on) => on && replacePanelCert(options.panelCert));
   if (verb === "set-clpctl-guard") return setClpctlGuard(options);
   if (verb === "set-backup-compression") return setBackupCompression(options);
-  if (verb === "set-telemetry") return setTelemetry(options);
+  if (verb === "set-telemetry") return setSwitch(options, "blockTelemetry", (on) => applyTelemetryBlock(on, options.telemetry));
+  if (verb === "set-motd") return setSwitch(options, "serverInfoMotd", (on) => applyMotd(on, options.motd));
   if (verb === "set-panel-php") return changePanelPhp(options);
   if (verb === "set-php-pools") return setPhpPools(options);
   if (verb === "set-login-jails") return setLoginJails(options);
@@ -702,6 +678,12 @@ export async function systemTweaksMaintenance(options: SystemTweaksOptions = {})
   } catch (error) {
     failures.push(`CloudPanel telemetry: ${errorMessage(error)}`);
   }
+  try {
+    const motd = systemTweaksMotd(options);
+    if (motd) lines.push(motd);
+  } catch (error) {
+    failures.push(`SSH login message: ${errorMessage(error)}`);
+  }
   if (failures.length) throw new Error([...failures, ...lines].join("; "));
   return lines.join("; ") || null;
 }
@@ -710,6 +692,12 @@ export async function systemTweaksMaintenance(options: SystemTweaksOptions = {})
 export function systemTweaksPhpMyAdmin(options: SystemTweaksOptions = {}): string | null {
   return withSettingsLock(options, (_paths, settings) =>
     settings.protectPhpMyAdmin && applyPhpMyAdmin(true, options.phpMyAdmin) ? "phpMyAdmin rules put back" : null);
+}
+
+/** Repair's, and the fast repair's after a CloudPanel upgrade puts its login banner back. */
+export function systemTweaksMotd(options: SystemTweaksOptions = {}): string | null {
+  return withSettingsLock(options, (_paths, settings) =>
+    settings.serverInfoMotd && applyMotd(true, options.motd) ? "server info at SSH login put back" : null);
 }
 
 /** Repair's, and the fast repair's after a CloudPanel update replaces the backup command. */
@@ -814,6 +802,8 @@ export function withdrawSystemTweaks(options: SystemTweaksOptions = {}): void {
   // Like the firewall below, it does not keep the addon on or the protections in place.
   try { applyTelemetryBlock(false, options.telemetry); }
   catch (error) { log.warn(`clp-agent is still blocked from the network: ${errorMessage(error)}; remove /etc/systemd/system/clp-agent.service.d/zz-clp-addons-telemetry.conf`); }
+  try { applyMotd(false, options.motd); }
+  catch (error) { log.warn(`the SSH login message is still System Tweaks': ${errorMessage(error)}`); }
   // A firewall that cannot be put back does not keep the addon on: CloudPanel's
   // next change on its Firewall page rebuilds ufw without these rules anyway.
   try { syncFirewall("withdraw", options.firewall); }
@@ -846,6 +836,10 @@ export function restoreSystemTweaks(options: SystemTweaksOptions = {}): void {
       if (settings.blockTelemetry) {
         try { applyTelemetryBlock(true, options.telemetry); }
         catch (error) { log.warn(`blocking CloudPanel telemetry waits for the next repair: ${errorMessage(error)}`); }
+      }
+      if (settings.serverInfoMotd) {
+        try { applyMotd(true, options.motd); }
+        catch (error) { log.warn(`server info at SSH login waits for the next repair: ${errorMessage(error)}`); }
       }
     });
   } finally {

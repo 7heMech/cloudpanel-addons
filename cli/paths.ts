@@ -119,6 +119,8 @@ export const FIREWALL_SERVICE = "clp-addons-firewall.service";
 export const FIREWALL_PATH = "clp-addons-firewall.path";
 /** ufw's own rule files, which CloudPanel's Firewall page rebuilds. */
 export const UFW_RULE_FILES = ["/etc/ufw/user.rules", "/etc/ufw/user6.rules"];
+/** pam_motd runs these at SSH login; CloudPanel's upgrades empty it and add their banner. */
+export const UPDATE_MOTD_DIR = "/etc/update-motd.d";
 /** Started by `sync-sites` only while a new site's vhost waits for its row, or an addon waits for a new site. */
 export const NEW_SITE_ROWS_PATH = "clp-addons-new-site-rows.path";
 /** The site domains the new-site hooks last ran for. */

@@ -1,6 +1,7 @@
 # System Tweaks
 
-Hardening, automatic updates, panel PHP, remote backups and firewall rules.
+Hardening, automatic updates, panel PHP, remote backups, firewall rules and the
+SSH login message.
 PHP worker limits and the server memory budget are in [Resource Limits](resource-limits.md).
 
 ## Automatic updates
@@ -370,6 +371,21 @@ CloudPanel's update and announcement checks still work.
 To check it, `systemctl show clp-agent -p IPAddressDeny` prints
 `IPAddressDeny=::/0 0.0.0.0/0`. Switching it off removes the drop-in and
 restarts the agent.
+
+## SSH login message
+
+**Server info at SSH login** is on by default. In place of CloudPanel's welcome
+banner, SSH logins show uptime, load, memory, disk use, IP addresses, pending
+updates, whether a reboot is required and the panel's address. Site users who
+log in over SSH see it too.
+
+CloudPanel's banner looks up the server's address online at every login. The
+setting turns `/etc/update-motd.d/10-cloudpanel` off and adds
+`/etc/update-motd.d/10-clp-addons-server-info`. A CloudPanel update puts the
+banner back; System Tweaks turns it off again within seconds. Switching it off,
+or disabling System Tweaks, removes the script and turns the banner back on.
+
+To see it without logging in, run `run-parts /etc/update-motd.d`.
 
 ## Abandoned temp files
 

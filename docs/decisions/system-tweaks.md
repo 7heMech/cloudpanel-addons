@@ -8,13 +8,13 @@ Firewall page and optional compression for remote site backups.
 
 ## The page
 
-Four cards: Automatic updates, which an operator comes back to; Remote backups,
+Five cards: Automatic updates, which an operator comes back to; Remote backups,
 with optional Zstandard compression and its level and worker count; one
 Hardening card for the panel's PHP, the upload-progress mitigation, forged
 visitor IPs, phpMyAdmin, MySQL access, the panel's certificate, nginx config
 injection, PHP pool isolation, File Manager confinement, clpctl injection and
 CloudPanel telemetry; Failed logins, with the two fail2ban jails and the
-addresses they block. MySQL access belongs with the protection settings;
+addresses they block; SSH login, with the login message. MySQL access belongs with the protection settings;
 MySQL and Redis sizing belong to Resource Limits alongside PHP worker limits. Each row says what it does; the
 reasons are here. The Nginx, MySQL, CloudPanel and reboot rows appear only once
 System Tweaks' own switch is on, since they change nothing before. The
@@ -1066,6 +1066,49 @@ a box whose cloud-init manages `/etc/hosts`, and removing the agent's line from
 `/etc/cron.d/clp` lasts only until the package puts it back. The panel's own
 version and announcement checks send no payload beyond the server's address and
 version, and stay.
+
+## SSH login message
+
+CloudPanel's package runs `setupMotd` on every install and upgrade. It deletes
+`/etc/motd` and everything in `/etc/update-motd.d`, which takes the distro's
+own scripts with it (Debian's `10-uname`, Ubuntu's system info, update and
+reboot notices), copies in `10-cloudpanel` and makes it mode 775. That script
+prints CloudPanel's links and a panel URL built from
+`curl https://d3qnd54q8gb3je.cloudfront.net/` with `--connect-timeout 5
+--retry 3`, or from the cloud's metadata service on AWS, DigitalOcean, Hetzner
+and GCE. pam_motd runs it as root for every SSH session, scp, sftp and
+`ssh host command` included, so each one waits for that lookup.
+
+**Server info at SSH login**, on by default (`serverInfoMotd`), clears the
+banner's execute bits, which makes run-parts skip it, and writes
+`10-clp-addons-server-info`, mode 755. Putting the distro's scripts back would
+not help: Debian's default is one `uname` line and the licence notice, and
+CloudPanel has removed Ubuntu's. One script gives the same summary on both. It
+reads only local state. Load is the 1- and 15-minute load average as a share of
+the CPUs, so over 100% means work is waiting. Counting pending updates with
+`apt list --upgradable` takes about 0.3 s, too long for every automated
+session, so the count is kept in `/run/clp-addons-motd-updates` and redone only
+when `/var/lib/dpkg/status` or `/var/lib/apt/lists` is newer than it. The count
+runs under a 3-second timeout and replaces the cache by a rename, so a login
+running beside it never reads half a file. An `apt list` that fails or times
+out leaves the cached count as it was, and the cache's newer time stops the
+next logins trying again until the lists or dpkg's status change.
+`/etc/.clp_custom_domain` is owned by `clp`, so the script reads it only as a
+regular file, through a 1-second timeout, keeping only hostname characters; a
+FIFO or terminal escapes there would otherwise stall or write into root's
+login. Without a custom domain the panel line gives only port 8443: on NAT
+clouds such as AWS and GCE no address on the server is the public one, and
+CloudPanel's banner looked that up online.
+
+The banner is made non-executable rather than deleted, so the package's `prerm`
+and its next upgrade find it where they expect. An upgrade makes it executable
+again and removes the script. `/etc/update-motd.d` is one of the reconcile
+watcher's paths, so `repair --anchors-only` reapplies the setting within
+seconds; the watcher's 2-second delay outlasts `setupMotd`. Turning the banner
+off also writes `/var/lib/clp-addons/system-tweaks/motd-banner-off`. Switching
+off removes the script and gives the banner CloudPanel's mode 775 again only
+while that marker is there, so a banner the operator turned off by hand stays
+off. Deactivation does the same and only warns when it cannot.
 
 ## Abandoned temp files
 

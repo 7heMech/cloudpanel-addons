@@ -429,6 +429,32 @@ function telemetryLine(state: SystemTweaksState["telemetry"]): string {
   return `${badge("Sending", "plain")} <span>clp-agent sends CloudPanel every site's domain and every panel user's name and email once a day.</span>`;
 }
 
+function motdLine(state: SystemTweaksState["motd"]): string {
+  if (state.enabled && state.script && !state.banner) return `${badge("On", "ok")} <span>SSH logins show this server's state.</span>`;
+  if (state.enabled) return `${badge("Not applied", "warn")} <span>Run clp-addons repair.</span>`;
+  if (state.banner) return `${badge("Off", "plain")} <span>SSH logins show CloudPanel's banner.</span>`;
+  return `${badge("Off", "plain")} <span>SSH logins show no message: CloudPanel's banner is turned off. <code>chmod 775 /etc/update-motd.d/10-cloudpanel</code> turns it back on.</span>`;
+}
+
+function motdCard(state: SystemTweaksState["motd"]): string {
+  return `
+    <div class="card">
+      <div class="card-header"><h2>SSH login</h2></div>
+      <div class="tweak-list">${settingRow({
+        key: "serverInfoMotd",
+        title: "Server info at SSH login",
+        description: [
+          "Replaces CloudPanel's welcome banner with uptime, load, memory, disk, IP addresses, pending updates and whether a reboot is required. Site users who log in over SSH see it too.",
+          "CloudPanel's banner looks up the server's address online at every login, which holds the login up when that lookup is slow. Off puts the banner back.",
+        ],
+        checked: state.enabled,
+        onchange: "setSwitch(this, 'motd')",
+        extra: `<p class="st-status">${motdLine(state)}</p>`,
+      })}
+      </div>
+    </div>`;
+}
+
 function hardeningCard(state: SystemTweaksState): string {
   return `
     <div class="card">
@@ -438,7 +464,7 @@ function hardeningCard(state: SystemTweaksState): string {
         title: "PHP upload-progress mitigation",
         description: `Turns PHP's session upload progress, a route into CVE-2026-109619, off on every PHP-FPM with ${PHP_GUARD_INI_NAME}. Off removes only that file.`,
         checked: state.uploadProgress.guard,
-        onchange: "setUploadGuard(this)",
+        onchange: "setSwitch(this, 'upload-guard')",
         extra: uploadProgressDetails(state.uploadProgress.fpms),
       })}${settingRow({
         key: "blockForgedRealIp",
@@ -448,7 +474,7 @@ function hardeningCard(state: SystemTweaksState): string {
           "Local proxies stay trusted, and the panel also trusts Cloudflare. Switch it off only behind another public proxy.",
         ],
         checked: state.realIp.blockForged,
-        onchange: "setRealIp(this)",
+        onchange: "setSwitch(this, 'real-ip')",
         extra: `<p class="st-status">${realIpLine(state.realIp)}</p>`,
       })}${settingRow({
         key: "protectPhpMyAdmin",
@@ -458,7 +484,7 @@ function hardeningCard(state: SystemTweaksState): string {
           "Hides phpMyAdmin's example and setup scripts and the files that show its version. Signing in from the panel still works.",
         ],
         checked: state.phpMyAdmin.enabled,
-        onchange: "setPhpMyAdmin(this)",
+        onchange: "setSwitch(this, 'phpmyadmin')",
         extra: `<p class="st-status">${phpMyAdminLine(state.phpMyAdmin)}</p>`,
       })}${databaseRow(state.database)}${settingRow({
         key: "replacePanelCert",
@@ -468,7 +494,7 @@ function hardeningCard(state: SystemTweaksState): string {
           "A certificate you installed yourself is left alone. Off stops replacing it; a generated one stays.",
         ],
         checked: state.panelCert.replace,
-        onchange: "setPanelCert(this)",
+        onchange: "setSwitch(this, 'panel-cert')",
         extra: `<p class="st-status">${panelCertLine(state.panelCert)}</p>`,
       })}${settingRow({
         key: "blockVhostInjection",
@@ -478,7 +504,7 @@ function hardeningCard(state: SystemTweaksState): string {
           "Only administrators can save the Vhost editor and PageSpeed settings, and site nginx logs move where only root can write.",
         ],
         checked: state.vhostGuard.enabled,
-        onchange: "setVhostGuard(this)",
+        onchange: "setSwitch(this, 'vhost-guard')",
         extra: `<p class="st-status">${vhostGuardLine(state.vhostGuard)}</p>${storedValuesWarning(state.vhostGuard.stored)}${homeLogsWarning(state.vhostGuard.homeLogs)}${ownLogrotateWarning(state.vhostGuard.ownLogrotate)}`,
       })}${settingRow({
         key: "isolatePhpPools",
@@ -488,7 +514,7 @@ function hardeningCard(state: SystemTweaksState): string {
           "A tool that reaches another site's pool from its own account, such as a monitoring agent, stops working.",
         ],
         checked: state.phpPools.enabled,
-        onchange: "setPhpPools(this)",
+        onchange: "setSwitch(this, 'php-pools')",
         extra: `<p class="st-status">${phpPoolsLine(state.phpPools)}</p>`,
       })}${settingRow({
         key: "confineFileManager",
@@ -498,7 +524,7 @@ function hardeningCard(state: SystemTweaksState): string {
           "Only the panel's own nginx can reach the File Manager's PHP.",
         ],
         checked: state.fileManagerGuard.enabled,
-        onchange: "setFileManagerGuard(this)",
+        onchange: "setSwitch(this, 'file-manager-guard')",
         extra: `<p class="st-status">${fileManagerGuardLine(state.fileManagerGuard)}</p>`,
       })}${settingRow({
         key: "blockClpctlInjection",
@@ -508,7 +534,7 @@ function hardeningCard(state: SystemTweaksState): string {
           "Root and the panel are unaffected, and the four commands sites may run still work with ordinary values.",
         ],
         checked: "error" in state.clpctlGuard ? true : state.clpctlGuard.enabled,
-        onchange: "setClpctlGuard(this)",
+        onchange: "setSwitch(this, 'clpctl-guard')",
         extra: `<p class="st-status">${clpctlGuardLine(state.clpctlGuard)}</p>`,
       })}${settingRow({
         key: "blockTelemetry",
@@ -518,7 +544,7 @@ function hardeningCard(state: SystemTweaksState): string {
           "The agent keeps recording the dashboard's graphs.",
         ],
         checked: state.telemetry.enabled,
-        onchange: "setTelemetry(this)",
+        onchange: "setSwitch(this, 'telemetry')",
         extra: `<p class="st-status">${telemetryLine(state.telemetry)}</p>`,
       })}
       </div>
@@ -697,7 +723,7 @@ export function dashboardView(state: SystemTweaksState, now = Date.now()): strin
     <div class="page-heading">
       <div>
         <h1>System Tweaks</h1>
-        <p>Hardening, automatic updates, panel PHP and remote backups.</p>
+        <p>Hardening, automatic updates, panel PHP, remote backups and the SSH login message.</p>
         <p class="hint">Every 15 minutes it also clears PHP and ImageMagick temp files that timed-out requests left in /tmp. PHP worker limits and memory sizing are in <a href="/addons/resource-limits/">Resource Limits</a>.${firewallLine(state.firewall)}</p>
       </div>
     </div>
@@ -705,5 +731,5 @@ export function dashboardView(state: SystemTweaksState, now = Date.now()): strin
       <div class="card-header"><h2>Automatic updates</h2></div>
       <div class="tweak-list">${updateRows(state.updates, state.settings)}
       </div>${statusList(state.updates, now)}${coverageDetails(state.updates)}
-    </div>${backupCompressionCard(state.backupCompression)}${hardeningCard(state)}${loginJailsCard(state.loginJails)}`;
+    </div>${backupCompressionCard(state.backupCompression)}${hardeningCard(state)}${loginJailsCard(state.loginJails)}${motdCard(state.motd)}`;
 }
