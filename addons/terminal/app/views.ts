@@ -53,7 +53,7 @@ function rootLine(root: RootAccess, user: string): string {
         <p><span class="tone-bad">${esc(root.problem)}</span></p>`;
   if (root.granted || !user) return "";
   return `
-        <p class="hint">Root can let you open a root shell here by running <code>clp-addons terminal root allow ${esc(user)}</code> on the server.</p>`;
+        <p class="hint">Root can let you open a root terminal by running <code>clp-addons terminal root allow ${esc(user)}</code> on the server.</p>`;
 }
 
 export function dashboardView(sites: SanitizedSite[], root: RootAccess = { granted: false, problem: null }, user = ""): string {
@@ -76,8 +76,7 @@ export function dashboardView(sites: SanitizedSite[], root: RootAccess = { grant
   return `
     <div class="page-heading">
       <div>
-        <h1>Terminal</h1>
-        <p>A shell as a site's own user, starting in its site directory, in a window of its own.</p>${rootLine(root, user)}
+        <h1>Terminal</h1>${rootLine(root, user)}
       </div>${root.granted && !root.problem ? `
       <button class="btn" type="button" onclick="clpOpenTerminal(CLP_BASE, '', event.shiftKey)">Root terminal</button>` : ""}
     </div>
