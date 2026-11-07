@@ -108,6 +108,11 @@ export function callerMay(access: WebAccess, roles: readonly string[] | null): b
  * after checking its session. A duplex worker refuses to run without it.
  */
 export const DUPLEX_WORKER_MARKER = "CLP_ADDONS_DUPLEX_WORKER";
+/**
+ * Set by the gateway on a session verb's worker: "1" when that panel session
+ * passed CloudPanel's own two-factor step, "0" otherwise.
+ */
+export const SESSION_2FA_ENV = "CLP_ADDONS_SESSION_2FA";
 
 export interface SanitizedSite {
   domain: string;

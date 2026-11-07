@@ -107,7 +107,9 @@ test("the worker takes --root in place of a domain, and resolves it only for an 
   expect(() => parseTerminalRequest(["session", "--root=yes", "--panel-user=alice", "--cols=1", "--rows=1"])).toThrow(ActionFailure);
   expect(() => resolveTerminalTarget(request, paths)).toThrow("root has not allowed you a root shell");
   allow("alice");
-  expect(resolveTerminalTarget(request, paths)).toEqual({ user: "root", dir: "/root" });
+  expect(resolveTerminalTarget(request, paths, true)).toEqual({ user: "root", dir: "/root" });
+  // The account has 2FA on, but this sign-in never passed it.
+  expect(() => resolveTerminalTarget(request, paths, false)).toThrow("This sign-in did not use your 2FA code");
 });
 
 test("an open root shell ends once its grant does", async () => {
@@ -115,7 +117,7 @@ test("an open root shell ends once its grant does", async () => {
   const audit: string[] = [];
   const calls: string[][] = [];
   const running = runTerminalAction(["session", "--root", "--panel-user=alice", "--cols=80", "--rows=24"], {
-    paths, processUid: 0, env: { CLP_ADDONS_DUPLEX_WORKER: "1" }, rootRecheckMs: 20,
+    paths, processUid: 0, env: { CLP_ADDONS_DUPLEX_WORKER: "1", CLP_ADDONS_SESSION_2FA: "1" }, rootRecheckMs: 20,
     audit: (line) => audit.push(line),
     spawn: ((argv: string[]) => { calls.push(argv); return Bun.spawn(["sleep", "30"]); }) as unknown as typeof Bun.spawn,
   });
@@ -131,7 +133,7 @@ test("an open root shell ends once its grant does", async () => {
 function rootSession(extra: Record<string, unknown>, child: () => ReturnType<typeof Bun.spawn>) {
   const audit: string[] = [];
   const running = runTerminalAction(["session", "--root", "--panel-user=alice", "--cols=80", "--rows=24"], {
-    paths, processUid: 0, env: { CLP_ADDONS_DUPLEX_WORKER: "1" }, rootRecheckMs: 20,
+    paths, processUid: 0, env: { CLP_ADDONS_DUPLEX_WORKER: "1", CLP_ADDONS_SESSION_2FA: "1" }, rootRecheckMs: 20,
     audit: (line) => audit.push(line),
     spawn: child as unknown as typeof Bun.spawn,
     ...extra,
@@ -177,7 +179,7 @@ test("root-access, like every terminal verb, answers only root", async () => {
     expect(await runTerminalAction(["root-access", "--panel-user=alice"], { paths, processUid: 1000 })).toBe(1);
     expect(JSON.parse(printed).error).toBe("terminal actions must run as root");
     printed = "";
-    expect(await runTerminalAction(["root-access", "--panel-user=alice"], { paths, processUid: 0 })).toBe(0);
+    expect(await runTerminalAction(["root-access", "--panel-user=alice"], { paths, processUid: 0, env: { CLP_ADDONS_SESSION_2FA: "1" } })).toBe(0);
     expect(JSON.parse(printed).data).toEqual({ granted: true, problem: null });
   } finally {
     process.stdout.write = write;

@@ -51,9 +51,15 @@ administrator. A grant therefore needs the account's two-factor
 authentication on. CloudPanel's user form has no two-factor field: only the
 account turns its own on or off, and only root (`clpctl user:disable:mfa`)
 turns it off for someone else, so a reset password gets no further than the
-code. The gateway already refuses a session whose code is still pending. A
-passkey sign-in through Security Keys skips the code but is two factors
-itself, so a passkey user turns two-factor on once and never types it.
+code. The account's setting is not enough on its own: a session signed in
+before two-factor was turned on stays signed in, and never passed the code.
+So the gateway tells every session verb's worker, in
+`CLP_ADDONS_SESSION_2FA`, whether that session carries CloudPanel's own
+"two-factor passed" marker, and a root shell needs it. A passkey sign-in
+through Security Keys is two factors itself but goes through CloudPanel's
+`/autologin`, which writes no marker and looks the same as such an old
+session, so it does not open a root shell; that administrator signs in with
+the code for one.
 
 Each grant is also pinned to CloudPanel's `user.id`, so a name deleted and
 created again is not the account root allowed. A deactivation, a demotion or
