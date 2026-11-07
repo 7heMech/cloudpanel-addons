@@ -112,9 +112,12 @@ holds the security fixes. `update` never adds an addon.
 The commands that act on one addon are only `enable` and `disable`. Removing
 the installation is `self-uninstall`, named so that it cannot be mistaken for
 removing one addon. It refuses while any addon is enabled, so every addon's own
-withdrawal has already run through disable. It deletes no data: Instatic sites
-are deleted on the Instatic page before disabling it, and `/var/lib/clp-addons`
-is removed by hand.
+withdrawal has already run through disable. It deletes no data and leaves every
+site serving: Instatic containers run under Docker's own restart policy behind
+CloudPanel reverse-proxy sites, and neither disable nor `self-uninstall` stops
+them. Their daily recovery archive stops with Instatic's backup cron.
+`/var/lib/clp-addons` stays, since sites created before 1.1.3 keep their data
+there.
 
 ## Update behavior
 

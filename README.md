@@ -64,7 +64,8 @@ Addon names are `cloudflare-ips`, `dns`, `instatic`, `stager`, `maintenance`,
 and `security-keys`. Run `clp-addons --help` for version selection options.
 
 To remove CloudPanel Addons, disable every addon, then run
-`clp-addons self-uninstall --yes`. Addon data stays in `/var/lib/clp-addons`.
+`clp-addons self-uninstall --yes`. Sites keep running, Instatic sites included,
+and addon data stays in `/var/lib/clp-addons`.
 
 See [Instatic backup and restore](docs/instatic-backups.md) for CloudPanel Remote
 Backups.
