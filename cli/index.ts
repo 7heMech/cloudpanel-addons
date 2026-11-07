@@ -95,8 +95,9 @@ function cmdLock(argv: string[], lock: boolean): void {
       if (!(error instanceof UntrustedLockFile)) {
         fatal(`cannot read ${ROOT_LOCKS_FILE}: ${error instanceof Error ? error.message : String(error)}; every lockable addon counts as locked until it can be`);
       }
-      fatal(`${error.message}, so every lockable addon counts as locked. ` +
-        `Note what it locked, remove it with rm ${ROOT_LOCKS_FILE}, then lock those addons again`);
+      fatal(`${error.message}, so every lockable addon counts as locked. ` + (error.directory
+        ? "Make it owned by root and not writable by group or others, then run this again"
+        : `Note what it locked, remove it with rm ${ROOT_LOCKS_FILE}, then lock those addons again`));
     }
   };
   const locked = read();

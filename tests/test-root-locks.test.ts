@@ -95,6 +95,8 @@ test("a lock directory others can write counts as locking everything", () => {
   const open = mkdtempSync(`${dir}/open-`);
   chmodSync(open, 0o777);
   expect(() => lockedAddons(`${open}/locks.json`, uid)).toThrow("is not a directory only root can write");
+  // So `lock` tells root to fix the directory, not to remove a file that may be sound.
+  expect(() => lockedAddons(`${open}/locks.json`, uid)).toThrow(expect.objectContaining({ directory: true }));
   expect(addonLocked("system-tweaks", `${open}/locks.json`, uid)).toBe(true);
 });
 

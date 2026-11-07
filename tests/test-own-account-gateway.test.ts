@@ -6,6 +6,7 @@ import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "nod
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { createAuthActionServer } from "../cli/auth-action";
+import { mfaMark } from "../addons/security-keys/sign-ins";
 
 let dir = "";
 
@@ -19,9 +20,9 @@ beforeAll(() => {
     .replace('a:2:{s:16:"mfaAuthenticated";b:1;', "a:1:{")
     .replace("\u0000App\\Entity\\User\u0000mfa\";b:1;", "\u0000App\\Entity\\User\u0000mfa\";b:0;"));
   const db = new Database(`${dir}/panel.sqlite`);
-  db.run("CREATE TABLE user (user_name TEXT, role TEXT, status INTEGER)");
+  db.run("CREATE TABLE user (user_name TEXT, role TEXT, status INTEGER, mfa INTEGER, mfa_secret TEXT)");
   // An ordinary panel user: these verbs are for every account, not only admins.
-  db.query("INSERT INTO user VALUES (?, ?, ?)").run("redacted_user", "ROLE_USER", 1);
+  db.query("INSERT INTO user VALUES (?, ?, ?, ?, ?)").run("redacted_user", "ROLE_USER", 1, 1, "SECRET1");
   db.close();
 });
 
@@ -95,13 +96,22 @@ test("a session CloudPanel opened from a passkey sign-in's token names that key"
   const keysDir = join(dir, "security-keys");
   mkdirSync(keysDir, { recursive: true });
   // The fixture session was created at 1893455900.
-  const signIns = (at: number) => writeFileSync(join(keysDir, "sign-ins.json"),
-    JSON.stringify({ signIns: [{ user: "redacted_user", key: "k1", at }] }), { mode: 0o600 });
+  const mark = mfaMark(`${dir}/panel.sqlite`, "redacted_user");
+  const signIns = (at: number, mfa: string | null = mark) => {
+    rmSync(join(keysDir, "sign-ins.json"), { force: true });
+    writeFileSync(join(keysDir, "sign-ins.json"), JSON.stringify({ signIns: [{ user: "redacted_user", key: "k1", at, mfa }] }), { mode: 0o600 });
+  };
   const state = { securityKeys: true, securityKeysState: { dir: keysDir, uid: process.getuid?.() ?? 0 } };
+  const proof = async () => (await ask({ addon: "security-keys", verb: "keys", sessionId: "nomfa" }, state)).env!.CLP_ADDONS_SESSION_2FA;
   signIns(1893455890);
-  expect((await ask({ addon: "security-keys", verb: "keys", sessionId: "nomfa" }, state)).env!.CLP_ADDONS_SESSION_2FA).toBe("passkey:k1");
+  expect(await proof()).toBe("passkey:k1");
+  // Signed in while the account had no 2FA, a password session in the same window would look the same.
+  signIns(1893455890, null);
+  expect(await proof()).toBe("0");
+  // 2FA set up again since the sign-in: it could have been off while this session signed in.
+  signIns(1893455890, "0".repeat(64));
+  expect(await proof()).toBe("0");
   // A sign-in whose token had expired before the session began is not this session's.
-  rmSync(join(keysDir, "sign-ins.json"));
   signIns(1893455700);
   expect((await ask({ addon: "security-keys", verb: "keys", sessionId: "nomfa" }, state)).env!.CLP_ADDONS_SESSION_2FA).toBe("0");
   // Nor is any with Security Keys off.

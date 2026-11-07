@@ -21,7 +21,7 @@ export const log = {
   plain: (m = "") => { endRedraw(); console.log(m); },
   /** Redrawn in a terminal; elsewhere only the last one is written. */
   progress: (m: string, done: boolean) => {
-    if (!process.stdout.isTTY) {
+    if (!process.stdout.isTTY || process.env.TERM === "dumb") {
       if (done) log.step(m);
       return;
     }
