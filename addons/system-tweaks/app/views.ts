@@ -433,7 +433,7 @@ function motdLine(state: SystemTweaksState["motd"]): string {
   if (state.enabled && state.script && !state.banner) return `${badge("On", "ok")} <span>SSH logins show this server's state.</span>`;
   if (state.enabled) return `${badge("Not applied", "warn")} <span>Run clp-addons repair.</span>`;
   if (state.banner) return `${badge("Off", "plain")} <span>SSH logins show CloudPanel's banner.</span>`;
-  return `${badge("Off", "plain")}`;
+  return `${badge("Off", "plain")} <span>SSH logins show no message: CloudPanel's banner is turned off. <code>chmod 775 /etc/update-motd.d/10-cloudpanel</code> turns it back on.</span>`;
 }
 
 function motdCard(state: SystemTweaksState["motd"]): string {

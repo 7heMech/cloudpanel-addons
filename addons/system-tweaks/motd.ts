@@ -39,15 +39,15 @@ done
 addresses=$(ip -o addr show scope global 2>/dev/null | awk '$2 !~ /^(docker|br-|veth|virbr|lxc|cni|podman)/ { sub(/\\/.*/, "", $4); printf "%s%s", sep, $4; sep = " " }')
 [ -n "$addresses" ] && row Addresses "$addresses"
 updates=/run/clp-addons-motd-updates
-if [ ! -s "$updates" ] || [ /var/lib/dpkg/status -nt "$updates" ] || [ /var/lib/apt/lists -nt "$updates" ]; then
-  list=$(timeout 3 apt list --upgradable 2>/dev/null) && printf '%s\\n' "$list" | grep -c upgradable > "$updates"
+if [ ! -e "$updates" ] || [ /var/lib/dpkg/status -nt "$updates" ] || [ /var/lib/apt/lists -nt "$updates" ]; then
+  list=$(timeout 3 apt list --upgradable 2>/dev/null) && printf '%s\\n' "$list" | grep -c upgradable > "$updates.$$"
+  [ -s "$updates.$$" ] && mv -f "$updates.$$" "$updates" || { rm -f "$updates.$$"; touch "$updates"; }
 fi
 [ -s "$updates" ] && row Updates "$(cat "$updates") pending"
 by=$(sort -u /var/run/reboot-required.pkgs 2>/dev/null | paste -sd ' ')
 [ -f /var/run/reboot-required ] && row Reboot "required\${by:+ by $by}"
 domain=$([ -f /etc/.clp_custom_domain ] && timeout 1 head -c 253 /etc/.clp_custom_domain | tr -cd 'A-Za-z0-9.-')
-ipv4=$(printf '%s\\n' $addresses | grep -m 1 -v :)
-if [ -n "$domain" ]; then row Panel "https://$domain/"; elif [ -d /home/clp ] && [ -n "$ipv4" ]; then row Panel "https://$ipv4:8443"; fi
+if [ -n "$domain" ]; then row Panel "https://$domain/"; elif [ -d /home/clp ]; then row Panel "port 8443"; fi
 echo
 `;
 
@@ -73,7 +73,11 @@ function modeOf(path: string): number | null {
 }
 
 const executable = (path: string) => ((modeOf(path) ?? 0) & 0o111) !== 0;
-const scriptInPlace = (path: string) => modeOf(path) === 0o755 && readFileSync(path, "utf8") === MOTD_SCRIPT;
+function scriptInPlace(path: string): boolean {
+  // A CloudPanel upgrade can remove it between the two reads.
+  try { return modeOf(path) === 0o755 && readFileSync(path, "utf8") === MOTD_SCRIPT; }
+  catch { return false; }
+}
 
 export function motdStatus(options: MotdOptions = {}): MotdStatus {
   const paths = pathsOf(options);

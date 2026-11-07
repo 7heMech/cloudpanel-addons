@@ -1449,6 +1449,7 @@ test("the page shows the login message as server info, waiting for repair, or Cl
   expect(html({ enabled: true, script: true, banner: false })).toContain("SSH logins show this server's state.");
   expect(html({ enabled: true, script: true, banner: true })).toContain("Run clp-addons repair.");
   expect(html({ enabled: false, script: false, banner: true })).toContain("SSH logins show CloudPanel's banner.");
+  expect(html({ enabled: false, script: false, banner: false })).toContain("chmod 775 /etc/update-motd.d/10-cloudpanel");
 });
 
 test("the page shows forged IPs as blocked, or as trusted and needing repair", async () => {
