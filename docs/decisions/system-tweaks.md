@@ -1076,8 +1076,8 @@ reboot notices), copies in `10-cloudpanel` and makes it mode 775. That script
 prints CloudPanel's links and a panel URL built from
 `curl https://d3qnd54q8gb3je.cloudfront.net/` with `--connect-timeout 5
 --retry 3`, or from the cloud's metadata service on AWS, DigitalOcean, Hetzner
-and GCE. pam_motd runs it as root at every SSH login, so each login waits for
-that lookup.
+and GCE. pam_motd runs it as root for every SSH session, scp, sftp and
+`ssh host command` included, so each one waits for that lookup.
 
 **Server info at SSH login**, on by default (`serverInfoMotd`), clears the
 banner's execute bits, which makes run-parts skip it, and writes
@@ -1085,8 +1085,12 @@ banner's execute bits, which makes run-parts skip it, and writes
 not help: Debian's default is one `uname` line and the licence notice, and
 CloudPanel has removed Ubuntu's. One script gives the same summary on both. It
 reads only local state. Load is the 1- and 15-minute load average as a share of
-the CPUs, so over 100% means work is waiting. `apt list --upgradable` runs under a 3-second timeout
-(about 0.3 s on staging) and counts what the last `apt update` fetched.
+the CPUs, so over 100% means work is waiting. Counting pending updates with
+`apt list --upgradable` takes about 0.3 s, too long for every automated
+session, so the count is kept in `/run/clp-addons-motd-updates` and redone only
+when `/var/lib/dpkg/status` or `/var/lib/apt/lists` is newer than it. The count
+runs under a 3-second timeout, and a run that fails or times out keeps the old
+count rather than reporting none.
 `/etc/.clp_custom_domain` is owned by `clp`, so the script reads it only as a
 regular file, through a 1-second timeout, keeping only hostname characters; a
 FIFO or terminal escapes there would otherwise stall or write into root's
@@ -1097,10 +1101,11 @@ The banner is made non-executable rather than deleted, so the package's `prerm`
 and its next upgrade find it where they expect. An upgrade makes it executable
 again and removes the script. `/etc/update-motd.d` is one of the reconcile
 watcher's paths, so `repair --anchors-only` reapplies the setting within
-seconds; the watcher's 2-second delay outlasts `setupMotd`. Switching off
-removes the script and makes the banner 755 again, but only when the script was
-there, so a banner the operator turned off by hand stays off. Deactivation does
-the same and only warns when it cannot.
+seconds; the watcher's 2-second delay outlasts `setupMotd`. Turning the banner
+off also writes `/var/lib/clp-addons/system-tweaks/motd-banner-off`. Switching
+off removes the script and gives the banner CloudPanel's mode 775 again only
+while that marker is there, so a banner the operator turned off by hand stays
+off. Deactivation does the same and only warns when it cannot.
 
 ## Abandoned temp files
 

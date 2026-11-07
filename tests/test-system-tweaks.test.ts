@@ -513,7 +513,7 @@ function box(options: { installed?: boolean; timers?: Record<string, string>; fa
       },
       clpctlGuard: { version: null, paths: { wrapper: join(dir, "clpctlWrapper"), backup: join(dir, "clpctlWrapper.orig"), rootUid: uid } },
       telemetry: { run: agentRun, paths: { dropIn: agentDropIn } },
-      motd: { paths: { banner: motdBanner, script: motdScript } },
+      motd: { paths: { banner: motdBanner, script: motdScript, marker: join(dir, "state", "motd-banner-off") } },
       tmpCleanup: { paths: { tmpDir: join(tmpRoot, "tmp"), procDir: join(tmpRoot, "proc"), passwd: join(tmpRoot, "passwd") }, panelDb },
       // No fail2ban in this fixture; tests/test-login-jails.test.ts covers it.
       loginJails: {
@@ -1415,14 +1415,14 @@ test("server info replaces CloudPanel's login banner by default, survives its up
 
   const off = await act(b, ["set-motd"], { enabled: false });
   expect(off.motd).toEqual({ enabled: false, script: false, banner: true });
-  expect(mode(b.motdBanner)).toBe(0o755);
+  expect(mode(b.motdBanner)).toBe(0o775);
   expect(systemTweaksMotd(b.options)).toBeNull();
   expect(existsSync(b.motdScript)).toBe(false);
 
   await act(b, ["set-motd"], { enabled: true });
   withdrawSystemTweaks(b.options);
   expect(existsSync(b.motdScript)).toBe(false);
-  expect(mode(b.motdBanner)).toBe(0o755);
+  expect(mode(b.motdBanner)).toBe(0o775);
   restoreSystemTweaks(b.options);
   expect((await act(b, ["state"])).motd).toEqual({ enabled: true, script: true, banner: false });
 });
@@ -1430,7 +1430,9 @@ test("server info replaces CloudPanel's login banner by default, survives its up
 test("switching server info off leaves a banner the operator turned off alone", () => {
   const b = box();
   chmodSync(b.motdBanner, 0o644);
-  expect(applyMotd(false, b.options.motd)).toBe(false);
+  expect(applyMotd(true, b.options.motd)).toBe(true);
+  expect(applyMotd(false, b.options.motd)).toBe(true);
+  expect(existsSync(b.motdScript)).toBe(false);
   expect(lstatSync(b.motdBanner).mode & 0o777).toBe(0o644);
 });
 

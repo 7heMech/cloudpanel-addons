@@ -7,16 +7,19 @@
  */
 import { chmodSync, existsSync, lstatSync, readFileSync, rmSync } from "node:fs";
 import { writeFileAtomic } from "../../lib/atomic-write";
-import { UPDATE_MOTD_DIR } from "../../cli/paths";
+import { STATE_DIR, UPDATE_MOTD_DIR } from "../../cli/paths";
 
 export const DEFAULT_MOTD_PATHS = {
   banner: `${UPDATE_MOTD_DIR}/10-cloudpanel`,
   script: `${UPDATE_MOTD_DIR}/10-clp-addons-server-info`,
+  /** Present while the banner is off because this turned it off. */
+  marker: `${STATE_DIR}/system-tweaks/motd-banner-off`,
 };
 
-// pam_motd runs it as root with an empty environment at every login, so it
-// reads nothing that can block, and reads the panel's domain file, which the
-// clp user owns, through a timeout and a character filter.
+// pam_motd runs it as root with an empty environment for every SSH session,
+// scp and sftp included, so it reads nothing that can block, counts updates
+// only after apt's lists or dpkg's status change, and reads the panel's domain
+// file, which the clp user owns, through a timeout and a character filter.
 export const MOTD_SCRIPT = `#!/bin/sh
 # clp-addons System Tweaks: Server info at SSH login. Switching it off removes this file.
 row() { printf ' %-10s %s\\n' "$1" "$2"; }
@@ -35,7 +38,11 @@ for mount in / /home; do
 done
 addresses=$(ip -o addr show scope global 2>/dev/null | awk '$2 !~ /^(docker|br-|veth|virbr|lxc|cni|podman)/ { sub(/\\/.*/, "", $4); printf "%s%s", sep, $4; sep = " " }')
 [ -n "$addresses" ] && row Addresses "$addresses"
-command -v apt >/dev/null && row Updates "$(timeout 3 apt list --upgradable 2>/dev/null | grep -c upgradable) pending"
+updates=/run/clp-addons-motd-updates
+if [ ! -e "$updates" ] || [ /var/lib/dpkg/status -nt "$updates" ] || [ /var/lib/apt/lists -nt "$updates" ]; then
+  list=$(timeout 3 apt list --upgradable 2>/dev/null) && printf '%s\\n' "$list" | grep -c upgradable > "$updates"
+fi
+[ -s "$updates" ] && row Updates "$(cat "$updates") pending"
 by=$(sort -u /var/run/reboot-required.pkgs 2>/dev/null | paste -sd ' ')
 [ -f /var/run/reboot-required ] && row Reboot "required\${by:+ by $by}"
 domain=$([ -f /etc/.clp_custom_domain ] && timeout 1 head -c 253 /etc/.clp_custom_domain | tr -cd 'A-Za-z0-9.-')
@@ -75,7 +82,7 @@ export function motdStatus(options: MotdOptions = {}): MotdStatus {
 
 /**
  * Puts the login message in the wanted state; returns whether anything
- * changed. Off turns the banner back on only when the script was there, so a
+ * changed. Off turns the banner back on only when this turned it off, so a
  * banner the operator turned off stays off.
  */
 export function applyMotd(serverInfo: boolean, options: MotdOptions = {}): boolean {
@@ -84,11 +91,17 @@ export function applyMotd(serverInfo: boolean, options: MotdOptions = {}): boole
     const write = !scriptInPlace(paths.script);
     if (write) writeFileAtomic(paths.script, MOTD_SCRIPT, { mode: 0o755, createParent: true });
     const silence = executable(paths.banner);
-    if (silence) chmodSync(paths.banner, 0o644);
+    if (silence) {
+      writeFileAtomic(paths.marker, "", { mode: 0o600, createParent: true });
+      chmodSync(paths.banner, 0o644);
+    }
     return write || silence;
   }
-  if (!existsSync(paths.script)) return false;
+  const script = existsSync(paths.script);
+  const silenced = existsSync(paths.marker);
   rmSync(paths.script, { force: true });
-  if (modeOf(paths.banner) !== null && !executable(paths.banner)) chmodSync(paths.banner, 0o755);
-  return true;
+  // CloudPanel's own mode for it.
+  if (silenced && modeOf(paths.banner) !== null) chmodSync(paths.banner, 0o775);
+  rmSync(paths.marker, { force: true });
+  return script || silenced;
 }
