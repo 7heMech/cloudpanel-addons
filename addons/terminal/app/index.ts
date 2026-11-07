@@ -60,7 +60,8 @@ async function rootAccessOf(user: string | undefined, sessionId: string | null, 
   // A failed check is not an answer: it is not cached, and it does not say root never allowed this account.
   if (!reply.ok || !reply.data) return { granted: false, problem: `Root terminal access could not be checked: ${reply.error ?? "no answer"}` };
   const access = { granted: reply.data.granted, problem: reply.data.problem };
-  rootAccessCache.set(user, { at: Date.now(), access });
+  // Nor is root's own read that failed, such as while CloudPanel holds its database.
+  if (!(reply.data as { unreadable?: boolean }).unreadable) rootAccessCache.set(user, { at: Date.now(), access });
   return access;
 }
 

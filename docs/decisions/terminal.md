@@ -47,11 +47,14 @@ each page; the Terminal page asks afresh, and the worker always checks.
 
 Any administrator can reset another's password in CloudPanel and sign in as
 them, so a grant to a name alone would be a root shell for every
-administrator. A grant therefore needs the account's two-factor
-authentication on. CloudPanel's user form has no two-factor field: only the
-account turns its own on or off, and only root (`clpctl user:disable:mfa`)
-turns it off for someone else, so a reset password gets no further than the
-code. The account's setting is not enough on its own: a session signed in
+administrator. A grant therefore holds the account's two-factor setup:
+`allow` refuses an account with 2FA off, and records a digest of its 2FA
+secret. CloudPanel's user form has no two-factor field: only the account turns
+its own on or off, and only root (`clpctl user:disable:mfa`) turns it off for
+someone else, so a reset password gets no further than the code. But with 2FA
+off, whoever is signed in can set it up with their own phone, so 2FA switched
+off and set up again is a new secret, and the grant needs root again. The
+account's setting is not enough on its own either: a session signed in
 before two-factor was turned on stays signed in, and never passed the code.
 So the gateway tells every session verb's worker, in
 `CLP_ADDONS_SESSION_2FA`, whether that session carries CloudPanel's own
@@ -63,9 +66,9 @@ the code for one.
 
 Each grant is also pinned to CloudPanel's `user.id`, so a name deleted and
 created again is not the account root allowed. A deactivation, a demotion or
-two-factor switched off refuses it while it lasts and the button's notice says which;
-switched back on, it works again without root. A password change does not
-touch it. A stolen session of the allowed administrator itself still gets a
+2FA switched off refuses it while it lasts, and the button's notice says which;
+2FA set up again needs root to allow the account again. A password change does
+not touch it. A stolen session of the allowed administrator itself still gets a
 root shell for as long as that session lasts.
 
 The grants are `/etc/clp-addons/terminal-root.json`, root's alone, `0600`, read
