@@ -513,8 +513,7 @@ start their timers together.
 
 The switch only pauses automation. Disabling leaves the
 connections, as it leaves the Varnish plugin, removes the guards, and refuses
-only while an enrollment stopped before its temporary setting was restored. `--purge`
-forgets which connections the addon made.
+only while an enrollment stopped before its temporary setting was restored.
 
 ## Background jobs
 
