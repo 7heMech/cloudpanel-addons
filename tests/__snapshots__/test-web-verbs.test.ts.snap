@@ -70,6 +70,7 @@ maintenance:sites                  admin
 maintenance:status                 admin
 manager:disable                    admin
 manager:enable                     admin
+manager:holds                      admin
 manager:job                        admin
 manager:mark-news-seen             admin
 manager:news-seen                  admin

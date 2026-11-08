@@ -70,14 +70,13 @@ const mockPrelude = String.raw`
   const __maintenanceNginx0 = await import("./addons/maintenance/nginx.ts");
   mock.module("./addons/maintenance/nginx.ts", () => ({ ...__maintenanceNginx0, reconcileNginxMaintenance: () => ({ state: "missing", changed: false }) }));
   mock.module("./cli/inject.ts", () => ({
-    KNOWN_GOOD_PANEL_VERSIONS: [],
+    inspectTemplates: () => [],
     inspect: () => ({ state: "ok" }),
     inspectNginxMaintenance: () => ({ state: "ok" }),
     inspectNginxProxy: () => ({ state: "ok" }),
     masterVhostHost: () => null,
-    panelVersion: () => "test",
     purgeTwigCache: () => {},
-    reconcile: () => ({ statuses: [], changed: false }),
+    reconcile: () => ({ statuses: [], changed: false, rebaselined: [] }),
     reconcileNginxProxy: () => ({ state: "ok", changed: false }),
   }));
   globalThis.__repairLog = [];
@@ -283,14 +282,13 @@ test.serial("repair runs addon maintenance after the anchors and Nginx, and --an
     const __maintenanceNginx1 = await import("./addons/maintenance/nginx.ts");
     mock.module("./addons/maintenance/nginx.ts", () => ({ ...__maintenanceNginx1, reconcileNginxMaintenance: () => { globalThis.__order.push("maintenance"); return { state: "missing", changed: false }; } }));
     mock.module("./cli/inject.ts", () => ({
-      KNOWN_GOOD_PANEL_VERSIONS: [],
+      inspectTemplates: () => [],
       inspect: () => ({ state: "ok" }),
       inspectNginxMaintenance: () => ({ state: "ok" }),
       inspectNginxProxy: () => ({ state: "ok" }),
       masterVhostHost: () => null,
-      panelVersion: () => "test",
       purgeTwigCache: () => {},
-      reconcile: () => { globalThis.__order.push("anchors"); return { statuses: [], changed: false }; },
+      reconcile: () => { globalThis.__order.push("anchors"); return { statuses: [], changed: false, rebaselined: [] }; },
       reconcileNginxProxy: () => { globalThis.__order.push("nginx"); return { state: "ok", changed: false }; },
     }));
     const realAction = await import("./addons/stager/action.ts");
@@ -322,14 +320,13 @@ test.serial("--anchors-only puts System Tweaks' phpMyAdmin rules and backup comm
     const __maintenanceNginx2 = await import("./addons/maintenance/nginx.ts");
     mock.module("./addons/maintenance/nginx.ts", () => ({ ...__maintenanceNginx2, reconcileNginxMaintenance: () => ({ state: "missing", changed: false }) }));
     mock.module("./cli/inject.ts", () => ({
-      KNOWN_GOOD_PANEL_VERSIONS: [],
+      inspectTemplates: () => [],
       inspect: () => ({ state: "ok" }),
       inspectNginxMaintenance: () => ({ state: "ok" }),
       inspectNginxProxy: () => ({ state: "ok" }),
       masterVhostHost: () => null,
-      panelVersion: () => "test",
       purgeTwigCache: () => {},
-      reconcile: () => ({ statuses: [], changed: false }),
+      reconcile: () => ({ statuses: [], changed: false, rebaselined: [] }),
       reconcileNginxProxy: () => ({ state: "ok", changed: false }),
     }));
     const realTweaks = await import("./addons/system-tweaks/action.ts");
@@ -360,14 +357,13 @@ test.serial("repair leaves Nginx's conffiles alone while an unattended upgrade h
     const __maintenanceNginx3 = await import("./addons/maintenance/nginx.ts");
     mock.module("./addons/maintenance/nginx.ts", () => ({ ...__maintenanceNginx3, reconcileNginxMaintenance: () => { globalThis.__order.push("maintenance"); return { state: "missing", changed: false }; } }));
     mock.module("./cli/inject.ts", () => ({
-      KNOWN_GOOD_PANEL_VERSIONS: [],
+      inspectTemplates: () => [],
       inspect: () => ({ state: "ok" }),
       inspectNginxMaintenance: () => ({ state: "ok" }),
       inspectNginxProxy: () => ({ state: "ok" }),
       masterVhostHost: () => null,
-      panelVersion: () => "test",
       purgeTwigCache: () => {},
-      reconcile: () => { globalThis.__order.push("anchors"); return { statuses: [], changed: false }; },
+      reconcile: () => { globalThis.__order.push("anchors"); return { statuses: [], changed: false, rebaselined: [] }; },
       reconcileNginxProxy: () => { globalThis.__order.push("nginx"); return { state: "ok", changed: false }; },
     }));
     const { cmdRepair } = await import("./cli/repair.ts");

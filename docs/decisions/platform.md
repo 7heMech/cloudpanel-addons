@@ -211,7 +211,8 @@ Nginx and Twig changes are marked and regenerated from a saved pristine copy.
 Before changing Nginx, the reconciler validates the complete configuration and
 restores the original vhost if validation or reload fails. If CloudPanel changes
 the surrounding file, reconciliation stops instead of applying a patch against
-unknown markup.
+unknown markup, unless a package upgrade explains the change and the patch
+provably still fits (below).
 
 `lib/panel-anchors.ts` names every CloudPanel template an addon patches, and the
 anchor lines more than one addon patches against, so a CloudPanel release that
@@ -244,6 +245,96 @@ row of its own, a logo that shrinks, an Admin Area link down to its icon, a
 Dashboard chart that fits -- is the addon's alone, and a switch, because that is
 the panel's own shape being changed rather than room being made for something an
 addon added.
+
+### After a CloudPanel upgrade
+
+Every patched file has a record under `/var/lib/clp-addons` (`lib/baseline.ts`):
+its text without our blocks, that text's SHA-256, the path, and the version of
+the package that installed it. That is `cloudpanel` for the templates and the
+panel's master vhost, and for `global_settings` whichever package `dpkg-query -S`
+names, `nginx-common` on Debian. A file whose unmarked text still matches is
+patched again, whatever version is installed, and its record takes the
+installed version, so a later edit under that version reads as an edit.
+
+A file whose text changed is recorded afresh and patched only when all of these
+hold:
+
+- dpkg reports the package fully installed: current state `i` with no error
+  flag, whether it is wanted (`ii`) or held (`hi`, after `apt-mark hold`). While
+  an upgrade unpacks and configures, the version is already the new one but
+  files are still being replaced, and the anchor watcher fires on every write.
+  A file read then could be half-written, and recording it would turn the
+  finished file into an edit. Nothing is decided until the first repair after
+  dpkg finishes: the 15-minute timer, `apt-hook post` after an unattended run,
+  or a manual `repair`.
+- The version reads the same before and after the file is read. A pass reads
+  it before its first file and again after a changed one; if postinst finished
+  in between, the file may be the half-written one, so it is refused as `busy`
+  and the next pass decides.
+- The installed version differs from the recorded one. The same version with
+  different bytes is someone's edit. A record from before versions were kept
+  cannot tell the two apart, so it refuses too.
+- For a conffile, the new text is the package's own: its MD5 is the one
+  `dpkg-query -W -f='${Conffiles}'` lists. dpkg keeps an operator's edit through
+  an upgrade that ships the same conffile, without asking, so a moved version
+  alone would accept an edit that was refused. Templates and the master vhost
+  are replaced on every upgrade and need no such check.
+- No marker text is left once the complete blocks are taken out.
+- The new text fits. For a template, every anchor of every block wanted in it
+  appears exactly once: missing gives the block nowhere to go, and twice means
+  CloudPanel restructured around it, so the block could land in the wrong
+  place. One block that does not fit holds back the whole file, since its
+  blocks are rendered together. For the master vhost, there is exactly one
+  server block on port 8443 and no `/addons/` location of CloudPanel's own;
+  `nginx -t` and the rollback still guard the write. Maintenance Mode's block is
+  appended rather than anchored, so `global_settings` fits unless it already
+  defines one of the block's variables, its location or a 418 `error_page`; the
+  Nginx transaction still validates it.
+
+Otherwise the file is left exactly as the package wrote it, with a reason:
+`busy`, `edited`, `unrecorded`, `stray-marker`, `anchor-missing`,
+`anchor-repeated` or `conflict`.
+
+The same rule is safe for the master vhost and for `global_settings` because
+neither is ever restored from its record: disabling strips the block from the
+live file, so the record only decides whether the file is the one the block was
+built for, and the structural checks above decide that directly. Both need it.
+The master vhost is a plain file of the `cloudpanel` package, not a conffile, so
+every CloudPanel upgrade writes it back without the proxy; without the rule, a
+release that changed it would take the `/addons/` page away until someone
+deleted the record by hand. `global_settings` is covered by the conffile hook
+for unattended upgrades (below), but an interactive upgrade where the operator
+takes the package's new file would leave Maintenance Mode's check off for good.
+
+The rule is never applied to the mitigations that replace CloudPanel code.
+System Tweaks' `clpctl` wrapper and remote backup compression keep their own
+pinned hash and version sets, which only a release extends after checking a new
+CloudPanel on staging. A wrong guess there is not a missing button but a broken
+or bypassed protection. So CloudPanel code with bytes or a version a release
+does not know is never patched, a hardened wrapper is recognised only by the
+exact bytes some release shipped, and `tests/test-clpctl-guard.test.ts` fails if
+one of those stops being recognised
+([the clpctl wrapper](system-tweaks.md#clpctl-injection),
+[Retiring a mitigation](system-tweaks.md#retiring-a-mitigation)).
+
+Neither CloudPanel's updates nor the addons are held back on an unknown panel
+version. Pinning CloudPanel would keep its security fixes off the box, and
+switching the addons off would drop System Tweaks' hardening exactly when the
+panel has changed under it. A file the rule refuses costs one addon's link or
+button until a release supports the version; everything else keeps running.
+
+`repair --rebaseline` is the operator's way past `edited` and `unrecorded`: it
+drops the version and conffile conditions and nothing else, so the package must be settled, no stray marker may be left and every block
+must still fit.
+
+What is refused is shown, not only logged. The manager's `holds` verb runs as
+root on every load of the Addons page and inspects the live files without
+writing; `clp-addons status` prints the same list. `status` runs only as root,
+since the records keep their text where only root can read it, and as another
+user every patched file would look edited. Both group by file and name
+the addons whose blocks are held, the package version, and what to do, in the
+words of `lib/panel-holds.ts`. Repair logs each file it records afresh. The
+operator procedure is [When CloudPanel updates](../cloudpanel-updates.md).
 
 ### Package conffiles
 

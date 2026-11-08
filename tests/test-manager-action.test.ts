@@ -62,7 +62,7 @@ async function gatewayReply(request: string): Promise<string> {
   }
 }
 
-const NOOP_OPS: ManagerOps = { enable: () => {}, disable: () => {}, update: async () => {}, reconcile: () => {} };
+const NOOP_OPS: ManagerOps = { enable: () => {}, disable: () => {}, update: async () => {}, reconcile: () => {}, holds: () => [] };
 
 describe("the gateway's manager namespace", () => {
   // The runner is started by the transient unit the create path launches, and

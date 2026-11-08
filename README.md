@@ -73,6 +73,8 @@ and addon data stays in `/var/lib/clp-addons`.
 See [Instatic backup and restore](docs/instatic-backups.md) for CloudPanel Remote
 Backups.
 
+[When CloudPanel updates](docs/cloudpanel-updates.md) says what the addons do after a CloudPanel update.
+
 ## Develop
 
 Requires Bun 1.4.4 and ShellCheck.

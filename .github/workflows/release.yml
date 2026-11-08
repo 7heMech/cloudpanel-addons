@@ -68,8 +68,9 @@ jobs:
         run: |
           set -euo pipefail
           mkdir -p dist
-          # tools/build.ts: the compile options, and the browser scripts and
-          # stylesheets minified on the way in.
+          # tools/build.ts: the compile options, the browser scripts and
+          # stylesheets minified on the way in, and cloudpanel.json, the
+          # CloudPanel versions this release supports.
           bun run build
 
       - name: Stage the bootstrap installer
@@ -116,6 +117,7 @@ jobs:
           subject-path: |
             dist/clp-addons-linux-x64
             dist/install.sh
+            dist/cloudpanel.json
 
       - name: Publish the sigstore bundles alongside the artifacts
         # An update verifies against these bundles, and the attestations API
@@ -204,5 +206,6 @@ jobs:
             "${release_args[@]}" \
             dist/clp-addons-linux-x64 \
             dist/install.sh \
+            dist/cloudpanel.json \
             dist/attestations.jsonl \
             dist/SHA256SUMS

@@ -1,5 +1,6 @@
 import type { Server } from "bun";
 import type { AddonTarget } from "./addon-target";
+import type { PanelHold } from "./panel-holds";
 
 export type AddonHandler = (
   req: Request,
@@ -54,10 +55,10 @@ export interface ConffileEdit {
 interface PanelBlock {
   /** Its row in `clp-addons status`. */
   label: string;
-  /** False when it could not be put right, having said why. */
-  reconcile: (enabled: boolean, quiet: boolean) => boolean;
-  /** What `clp-addons status` says of it while the addon is enabled. */
-  inspect: () => { ok: boolean; text: string };
+  /** False when it could not be put right, having said why. `accept` is `repair --rebaseline`. */
+  reconcile: (enabled: boolean, quiet: boolean, accept?: boolean) => boolean;
+  /** What `clp-addons status` says of it while the addon is enabled, and what is held if its file changed under it. */
+  inspect: () => { ok: boolean; text: string; hold?: PanelHold };
 }
 
 /** Paths are derived from `name`, not declared. */

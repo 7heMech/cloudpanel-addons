@@ -34,6 +34,7 @@ import {
 import { ADDONS, ADDON_NAMES, addonNews, addonNoticeKeys, addonEnabled } from "../addons/catalog";
 import { CLI_VERSION } from "../lib/version";
 import { type OnProgress, Fatal, log, requireRoot } from "../lib/log";
+import type { PanelHold } from "../lib/panel-holds";
 
 const MANAGER_STATE_DIR = addonStateDir("manager");
 const MANAGER_JOBS_DIR = `${MANAGER_STATE_DIR}/jobs`;
@@ -61,6 +62,8 @@ export interface ManagerOps {
   ): Promise<void>;
   /** Render every installed addon's block into the panel's templates again. */
   reconcile(): void;
+  /** What the addons are leaving alone in CloudPanel's files, for the Addons page. */
+  holds(): PanelHold[];
 }
 
 export interface ManagerJobView {
@@ -439,6 +442,8 @@ export async function runManagerAction(
           ? reply({ ok: true, data: found }, options.emitReply !== false)
           : failReply(`no such job '${wanted}'`, undefined, options.emitReply !== false);
       }
+      case "holds":
+        return reply({ ok: true, data: ops.holds() }, options.emitReply !== false);
       case "news-seen": {
         const since = readNewsSince(options.sinceFile);
         return reply({ ok: true, data: { since, seen: readNewsSeen(options.newsFile, options.version, since) } }, options.emitReply !== false);

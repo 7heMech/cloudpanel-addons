@@ -470,7 +470,9 @@ after the `/addons/` proxy, and the 15-minute repair does too. Disabling the
 addon removes it.
 
 The `/addons/` proxy's reconciler in `cli/inject.ts` records a hash of the vhost
-without its own block, and refuses to touch a file whose hash changed. It
+without its own block, and refuses to touch a file whose hash changed unless a
+CloudPanel upgrade explains it
+([After a CloudPanel upgrade](platform.md#after-a-cloudpanel-upgrade)). It
 leaves the phpMyAdmin block out of that hash too, so neither reconciler reads
 the other's block as a CloudPanel rewrite. Both preserve the vhost's current
 owner, group and permissions.

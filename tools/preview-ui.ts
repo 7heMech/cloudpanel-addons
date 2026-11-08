@@ -2011,6 +2011,17 @@ const server = Bun.serve({
         job: previewJob,
         csrf: "preview-csrf-token",
         version: "2.0.0",
+        // ?holds shows the notice a CloudPanel upgrade leaves when a page it changed no longer fits.
+        holds: url.searchParams.has("holds") ? [
+          {
+            file: "Frontend/Site/index.html.twig", addons: ["Stager", "WordPress Tools"], reason: "anchor-missing",
+            package: "CloudPanel", recorded: "2.5.4-3+clp-bookworm", installed: "2.5.5-1+clp-bookworm",
+          },
+          {
+            file: "/etc/nginx/global_settings", addons: ["Maintenance Mode"], reason: "edited",
+            package: "nginx-common", recorded: "1.26.3-3", installed: "1.26.3-3",
+          },
+        ] : [],
       });
       // ?confirm=<addon> opens the disable dialog on load: a modal exists only
       // after a click, which the screenshot tool does not make.

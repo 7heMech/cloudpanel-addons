@@ -88,9 +88,12 @@ async function applyRepair(positional: string[], flags: Record<string, string | 
     if (all.some((spec) => spec.certificates)) ensurePathWatching(CERTIFICATES_PATH, quiet);
     if (all.some((spec) => spec.firewall)) ensurePathWatching(FIREWALL_PATH, quiet);
   }
-  reconcileAnchors(quiet);
-  if (!reconcilePanelBlocks(quiet)) log.err(PANEL_BLOCKS_NOT_READY);
-  if (!reconcileNginx(quiet)) log.err("Nginx proxy is not ready; run repair after checking the master vhost");
+  // --rebaseline: the operator has looked at a file CloudPanel's own upgrade
+  // does not explain and vouches for it. It still has to fit.
+  const accept = flags.rebaseline === true;
+  reconcileAnchors(quiet, undefined, true, accept);
+  if (!reconcilePanelBlocks(quiet, undefined, accept)) log.err(PANEL_BLOCKS_NOT_READY);
+  if (!reconcileNginx(quiet, true, accept)) log.err("Nginx proxy is not ready; run repair after checking the master vhost");
   reconcilePhpGuard(true, quiet, { optedOut: phpGuardOptedOut() });
   // After the master-vhost reconciliation: recovering a carried-over vhost does
   // its own `nginx -t` and skips the reload if that fails, so running this

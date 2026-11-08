@@ -3,6 +3,7 @@
 import { callGatewayAction, type ActionResult } from "../lib/gateway-client";
 import type { WebVerb } from "../lib/gateway-protocol";
 import type { ManagerJobView } from "./action";
+import type { PanelHold } from "../lib/panel-holds";
 
 export async function managerAction<T>(verb: WebVerb<"manager">, args: string[] = []): Promise<ActionResult<T>> {
   // The create verbs hand the work to systemd and return; nothing here waits
@@ -13,6 +14,12 @@ export async function managerAction<T>(verb: WebVerb<"manager">, args: string[] 
 export async function latestManagerJobView(): Promise<ManagerJobView | null> {
   const result = await managerAction<{ job: ManagerJobView; log: string } | null>("job");
   return result.ok && result.data ? result.data.job : null;
+}
+
+/** Nothing to show when the gateway cannot say: the page stays usable, and `clp-addons status` has the same list. */
+export async function panelHolds(): Promise<PanelHold[]> {
+  const result = await managerAction<PanelHold[]>("holds");
+  return result.ok && Array.isArray(result.data) ? result.data : [];
 }
 
 export async function seenNews(): Promise<{ since: string; seen: string[] }> {

@@ -1,6 +1,6 @@
 import {
-  purgeTwigCache as purgeInjectCache, type Injection, KNOWN_GOOD_PANEL_VERSIONS, type TargetStatus, panelVersion,
-  reconcile, reconcileNginxProxy,
+  purgeTwigCache as purgeInjectCache, type Injection, type Rebaselined, type TargetStatus, inspectNginxProxy,
+  inspectTemplates, reconcile, reconcileNginxProxy,
 } from "./inject";
 import { TEMPLATES } from "../lib/panel-anchors";
 import { adminHeaderTarget, headerTarget, siteLayoutTarget } from "../lib/panel-nav";
@@ -9,6 +9,7 @@ import type { AddonSpec } from "../lib/addon-definition";
 import { errorMessage } from "../lib/errors";
 import { mountPath } from "../lib/mount";
 import { log } from "../lib/log";
+import { type PanelHold, holdAdvice, holdSummary, rebaselineNote } from "../lib/panel-holds";
 /**
  * `managerNav` is whether the panel keeps its "Addons" entry. It stays with
  * every addon disabled, since the page it leads to is where they are enabled
@@ -45,15 +46,27 @@ function describeTarget(status: TargetStatus): string {
     case "stale-content": return "stale; repair will rewrite it";
     case "template-absent": return "template not found";
     case "anchor-not-found-in-markup": return "anchor markup not found";
-    case "upstream-changed": return `upstream changed (${status.found.slice(0, 12)})`;
+    case "panel-updated": return `CloudPanel ${status.installed} replaced it; repair will patch it again`;
+    case "upstream-changed": {
+      const hold = { file: status.template, addons: [], reason: status.reason, package: "CloudPanel", recorded: status.recorded, installed: status.installed };
+      return `left alone: ${holdSummary(hold)} ${holdAdvice(hold)}`;
+    }
   }
 }
 
-export function reconcileAnchors(quiet: boolean, exclude?: string, managerNav = true): boolean {
+function logRebaselined(rebaselined: Rebaselined[]): void {
+  for (const { file, from, to } of rebaselined) log.ok(rebaselineNote(file, "CloudPanel", from, to));
+}
+
+/** `accept` is `repair --rebaseline`: a changed template that still fits is taken although CloudPanel was not upgraded. */
+export function reconcileAnchors(quiet: boolean, exclude?: string, managerNav = true, accept = false): boolean {
   const injections = installedInjections(exclude, managerNav);
   const wanted = new Map(injections.map((injection) => [`${injection.addon}:${injection.target.slug}`, injection]));
-  const result = reconcile(injections);
+  const result = reconcile(injections, { accept });
+  logRebaselined(result.rebaselined);
   let blocked = false;
+  // One line per template, not per addon block in it.
+  const reported = new Set<string>();
   for (const status of result.statuses) {
     const injection = wanted.get(`${status.addon}:${status.slug}`);
     if (!injection) continue;
@@ -71,11 +84,17 @@ export function reconcileAnchors(quiet: boolean, exclude?: string, managerNav = 
       if (injection.target.required) blocked = true;
       continue;
     }
-    log.err(`${status.addon}/${status.slug}: ${describeTarget(status)}`);
-    if (status.state === "upstream-changed" || status.state === "anchor-not-found-in-markup") {
-      log.err(`CloudPanel ${panelVersion()} changed the target markup; known good: ${KNOWN_GOOD_PANEL_VERSIONS.join(", ")}`);
-    }
     if (injection.target.required) blocked = true;
+    if (status.state === "upstream-changed") {
+      if (reported.has(status.template)) continue;
+      reported.add(status.template);
+      // dpkg is still replacing CloudPanel's files; the run after it finishes decides.
+      if (status.reason === "busy") {
+        if (!quiet) log.warn(`${status.template}: ${describeTarget(status)}`);
+      } else log.err(`${status.template}: ${describeTarget(status)}`);
+      continue;
+    }
+    log.err(`${status.addon}/${status.slug}: ${describeTarget(status)}`);
   }
   if (result.changed) {
     purgeInjectCache();
@@ -84,8 +103,11 @@ export function reconcileAnchors(quiet: boolean, exclude?: string, managerNav = 
   return !blocked;
 }
 
-export function reconcileNginx(quiet: boolean, enabled = true): boolean {
-  const result = reconcileNginxProxy({ enabled });
+export function reconcileNginx(quiet: boolean, enabled = true, accept = false): boolean {
+  const result = reconcileNginxProxy({ enabled, accept });
+  if (result.rebaselined) {
+    log.ok(rebaselineNote(result.vhostPath ?? "the master vhost", "CloudPanel", result.rebaselined.from, result.rebaselined.to));
+  }
   if (result.state === "ok" || (!enabled && result.state === "missing")) {
     if (result.changed && !quiet) log.ok(enabled ? "Nginx proxy injected and verified" : "Nginx proxy removed and verified");
     return true;
@@ -94,10 +116,10 @@ export function reconcileNginx(quiet: boolean, enabled = true): boolean {
   return false;
 }
 
-export function reconcilePanelBlocks(quiet: boolean, enabled: (spec: AddonSpec) => boolean = addonEnabled): boolean {
+export function reconcilePanelBlocks(quiet: boolean, enabled: (spec: AddonSpec) => boolean = addonEnabled, accept = false): boolean {
   let ok = true;
   for (const spec of Object.values(ADDONS)) {
-    if (spec.panelBlock && !spec.panelBlock.reconcile(enabled(spec), quiet)) ok = false;
+    if (spec.panelBlock && !spec.panelBlock.reconcile(enabled(spec), quiet, accept)) ok = false;
   }
   return ok;
 }
@@ -114,4 +136,36 @@ export async function runAnchorWork(quiet: boolean): Promise<void> {
       }
     }
   }
+}
+
+const MANAGER_LABEL = "Addons tab";
+
+/** What `clp-addons status` and the Addons page list as left alone after a CloudPanel or Nginx change. */
+export function panelHolds(): PanelHold[] {
+  const holds: PanelHold[] = [];
+  const injections = installedInjections();
+  const byTemplate = new Map<string, PanelHold>();
+  for (const status of inspectTemplates(injections)) {
+    if (status.state !== "upstream-changed") continue;
+    const label = status.addon === "manager" ? MANAGER_LABEL : ADDONS[status.addon]?.title ?? status.addon;
+    const hold = byTemplate.get(status.template);
+    if (hold) {
+      if (!hold.addons.includes(label)) hold.addons.push(label);
+      continue;
+    }
+    byTemplate.set(status.template, {
+      file: status.template, addons: [label], reason: status.reason, package: "CloudPanel",
+      recorded: status.recorded, installed: status.installed,
+    });
+  }
+  holds.push(...byTemplate.values());
+  const proxy = inspectNginxProxy();
+  if (proxy.refusal) {
+    holds.push({ file: proxy.vhostPath ?? "CloudPanel's master vhost", addons: ["Addons page"], package: "CloudPanel", ...proxy.refusal });
+  }
+  for (const spec of enabledAddons()) {
+    const hold = spec.panelBlock?.inspect().hold;
+    if (hold) holds.push(hold);
+  }
+  return holds;
 }

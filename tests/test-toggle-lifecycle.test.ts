@@ -114,14 +114,13 @@ mock.module("./cli/provision.ts", () => ({
 const __maintenanceNginx0 = await import("./addons/maintenance/nginx.ts");
 mock.module("./addons/maintenance/nginx.ts", () => ({ ...__maintenanceNginx0, reconcileNginxMaintenance: () => { inject.push("maintenance"); return { state: "ok", changed: false }; } }));
 mock.module("./cli/inject.ts", () => ({
-  KNOWN_GOOD_PANEL_VERSIONS: [],
+  inspectTemplates: () => [],
   inspect: () => ({ state: "ok" }),
   inspectNginxMaintenance: () => ({ state: "ok" }),
   inspectNginxProxy: () => ({ state: "ok" }),
   masterVhostHost: () => null,
-  panelVersion: () => "test",
   purgeTwigCache: record(inject, "purgeTwigCache"),
-  reconcile: (injections) => { inject.push("reconcile:" + injections.length); return { statuses: [], changed: false }; },
+  reconcile: (injections) => { inject.push("reconcile:" + injections.length); return { statuses: [], changed: false, rebaselined: [] }; },
   reconcileNginxProxy: () => { inject.push("proxy"); return { state: "ok", changed: false }; },
   findMasterVhost: () => null,
   panelVhostWatchPath: () => null,

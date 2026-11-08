@@ -2,15 +2,17 @@ import { dashboardUrl } from "./addons";
 import { enabledAddons, ADDONS, addonEnabled, addonHandler, phpGuardOptedOut } from "../addons/catalog";
 import type { AddonSpec } from "../lib/addon-definition";
 import { secureRegularFile } from "./artifacts";
-import { type NginxProxyStatus, inspect, inspectNginxProxy } from "./inject";
+import { type NginxProxyStatus, inspectNginxProxy, inspectTemplates } from "./inject";
 import { CLI_BIN, MANAGER_UNIT, SOCKET_PATH } from "../lib/paths";
 import { mountPath } from "../lib/mount";
 import { inspectPhpGuard } from "../lib/php-guard";
 import { managerSocketProblem, unitPid } from "./provision";
 import { unitActive } from "../lib/systemd";
-import { installedInjections } from "./reconcile";
+import { installedInjections, panelHolds } from "./reconcile";
+import { CLOUDPANEL_RANGE, describeRange, panelVersion, rangeFit } from "../lib/cloudpanel-version";
+import { holdAdvice, holdSummary } from "../lib/panel-holds";
 import { CLI_VERSION } from "../lib/version";
-import { log, paint } from "../lib/log";
+import { log, paint, requireRoot } from "../lib/log";
 function statusValue(value: string, ok: boolean): string {
   return paint(ok ? "32" : "31", value);
 }
@@ -35,16 +37,26 @@ function phpGuardStatus(): string {
 }
 
 function anchorStatus(): string {
-  const statuses = installedInjections().map((injection) => inspect(injection));
+  const statuses = inspectTemplates(installedInjections());
   if (statuses.length === 0) return "Not configured";
   const required = statuses.filter((status) => {
     if (status.addon === "manager") return true;
     const spec = ADDONS[status.addon];
     return spec?.targets.find((target) => target.slug === status.slug)?.required;
   });
-  return required.every((status) => status.state === "ok")
-    ? statusValue("Twig Templates Patched ✓", true)
-    : statusValue("Needs repair", false);
+  if (required.every((status) => status.state === "ok")) return statusValue("Twig Templates Patched ✓", true);
+  // Repair cannot put these right; the list below says what can.
+  if (statuses.some((status) => status.state === "upstream-changed")) return statusValue("Some paused; see below", false);
+  return statusValue("Needs repair", false);
+}
+
+function panelStatus(): string {
+  const installed = panelVersion();
+  const fit = rangeFit(installed);
+  const range = `this release supports ${describeRange(CLOUDPANEL_RANGE)}`;
+  if (fit === "within") return statusValue(`${installed} (${range}) ✓`, true);
+  if (fit === "unknown") return statusValue(`version unknown or being updated (${range})`, false);
+  return statusValue(`${installed}, ${fit === "below" ? "older" : "newer"} than this release supports (${describeRange(CLOUDPANEL_RANGE)})`, false);
 }
 
 function socketStatus(): string {
@@ -52,7 +64,13 @@ function socketStatus(): string {
   return statusValue(`UNIX Socket (${SOCKET_PATH}) — ${problem ?? "ready"}`, problem === null);
 }
 
+/**
+ * Root only: the records it checks CloudPanel's files against keep their text
+ * where only root can read it, and as another user every patched file would
+ * look edited.
+ */
 export async function cmdStatus(): Promise<void> {
+  requireRoot("status", "reads records only root can read");
   const specs = enabledAddons();
   const managerState = unitActive(MANAGER_UNIT);
   const active = managerState === "active";
@@ -65,12 +83,22 @@ export async function cmdStatus(): Promise<void> {
   log.plain(`   • Manager unit ${statusValue(managerState, active)}`);
   log.plain(`   • Manager PID  ${statusValue(pid ?? "not available", active && pid !== null)}`);
   log.plain(`   • Socket       ${socketStatus()}`);
+  log.plain(`   • CloudPanel  ${panelStatus()}`);
   log.plain(`   • Nginx       ${nginxStatus(inspectNginxProxy())}`);
   for (const spec of Object.values(ADDONS).filter((item) => item.panelBlock)) {
     log.plain(`   • ${spec.panelBlock!.label.padEnd(11)} ${panelBlockStatus(spec)}`);
   }
   log.plain(`   • Anchors     ${anchorStatus()}`);
   log.plain(`   • PHP guard   ${phpGuardStatus()}`);
+  const holds = panelHolds();
+  if (holds.length) {
+    log.plain();
+    log.plain(" Paused until checked");
+    for (const hold of holds) {
+      log.plain(`   • ${hold.addons.join(", ")}: ${holdSummary(hold)}`);
+      log.plain(`     ${holdAdvice(hold)}`);
+    }
+  }
   log.plain();
   log.plain(" Installed Addons");
   log.plain("   NAME       ROUTE              ACTION        STATE");

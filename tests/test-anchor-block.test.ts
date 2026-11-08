@@ -49,11 +49,10 @@ function probeFor(state: "anchor-not-found-in-markup" | "template-absent"): stri
   }));
 
   mock.module("./cli/inject.ts", () => ({
-    KNOWN_GOOD_PANEL_VERSIONS: ["2.5.4-3+clp-bookworm"],
+    inspectTemplates: () => [],
     inspect: () => ({ state: "ok" }),
     inspectNginxProxy: () => ({ state: "missing" }),
     masterVhostHost: () => null,
-    panelVersion: () => "9.9.9-test",
     purgeTwigCache: () => {},
     // Simulates the actual template for a required target failing to patch:
     // "${state}".
@@ -62,9 +61,9 @@ function probeFor(state: "anchor-not-found-in-markup" | "template-absent"): stri
         addon: injection.addon,
         slug: injection.target.slug,
         state: "${state}",
-        found: '<div class="changed-markup">',
       })),
       changed: false,
+      rebaselined: [],
     }),
     reconcileNginxProxy: () => ({ state: "ok", changed: false }),
   }));

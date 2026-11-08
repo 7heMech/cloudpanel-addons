@@ -3,6 +3,7 @@ import { ensureMaintenanceData, pruneMaintenanceState, runMaintenanceAction } fr
 import { inspectNginxMaintenance, reconcileNginxMaintenance, releaseMaintenanceSettings } from "./nginx";
 import { cmdMaintenance } from "./cli";
 import { log } from "../../lib/log";
+import { rebaselineNote } from "../../lib/panel-holds";
 import { NGINX_GLOBAL_SETTINGS, addonStateDir } from "../../lib/paths";
 import { MAINTENANCE_TARGETS } from "./inject/targets";
 import type { AddonDefinition } from "../../lib/addon-definition";
@@ -11,6 +12,7 @@ export const MAINTENANCE_ADDON: AddonDefinition = {
   name: "maintenance",
   title: "Maintenance Mode",
   description: "Show a per-site maintenance page with instant toggles and IP bypasses.",
+  changed: [{ in: "2.1.0-rc.3", note: "When an Nginx upgrade replaces /etc/nginx/global_settings, the maintenance check is added back on its own. An edit to that file pauses the check and is shown on the Addons page until you run clp-addons repair --rebaseline." }],
   targets: MAINTENANCE_TARGETS,
   // Nginx workers stat its flags and read its pages, without listing which sites have any.
   stateDirMode: 0o711,
@@ -20,9 +22,12 @@ export const MAINTENANCE_ADDON: AddonDefinition = {
   // again under its name would otherwise come back serving the 503 page.
   panelBlock: {
     label: "Maintenance",
-    reconcile: (enabled, quiet) => {
+    reconcile: (enabled, quiet, accept) => {
       if (enabled) ensureMaintenanceData(addonStateDir("maintenance"));
-      const result = reconcileNginxMaintenance({ enabled });
+      const result = reconcileNginxMaintenance({ enabled, accept });
+      if (result.rebaselined) {
+        log.ok(rebaselineNote(result.settingsPath, "its package", result.rebaselined.from, result.rebaselined.to));
+      }
       if (result.state === "ok" || (!enabled && result.state === "missing")) {
         if (result.changed && !quiet) log.ok(enabled ? "Nginx maintenance check injected and verified" : "Nginx maintenance check removed and verified");
         return true;
@@ -32,9 +37,16 @@ export const MAINTENANCE_ADDON: AddonDefinition = {
     },
     inspect: () => {
       const status = inspectNginxMaintenance();
-      return status.state === "ok"
-        ? { ok: true, text: "Site Checks Injected & Verified ✓" }
-        : { ok: false, text: status.detail ?? "Needs repair" };
+      if (status.state === "ok") return { ok: true, text: "Site Checks Injected & Verified ✓" };
+      const refusal = status.refusal;
+      return {
+        ok: false,
+        text: status.detail ?? "Needs repair",
+        hold: refusal && {
+          file: status.settingsPath, addons: ["Maintenance Mode"], reason: refusal.reason,
+          package: refusal.package ?? "its package", recorded: refusal.recorded, installed: refusal.installed,
+        },
+      };
     },
   },
   commands: {

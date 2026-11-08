@@ -9,7 +9,10 @@
 //   2. Hash the pristine template. The panel's PHP is obfuscated and cannot be
 //      diffed, but Twig is plain text. If upstream's copy stops matching the
 //      recorded hash, CloudPanel has touched the file our patch targets, so we
-//      stop and flag rather than applying a patch built for the old markup.
+//      stop and flag rather than applying a patch built for the old markup --
+//      unless the CloudPanel package was upgraded since the snapshot and every
+//      anchor the patching addons need is in the new markup exactly once. Then
+//      the new markup is snapshotted and patched (`rebaselineVerdict`).
 //
 // The snapshot lives outside /home/clp/htdocs/app on purpose: cloudpanel.postinst
 // moves that whole directory aside and extracts a fresh copy on upgrade, so a
@@ -22,7 +25,6 @@
 
 import { writeFileAtomic } from "../lib/atomic-write";
 import { tryRun } from "../lib/command";
-import { execFileSync } from "node:child_process";
 import {
   existsSync, readFileSync, writeFileSync, mkdirSync, rmSync, readdirSync, statSync, realpathSync,
 } from "node:fs";
@@ -30,13 +32,10 @@ import { NGINX_PROXY_STATE_DIR, nginxLayout, TEMPLATE_STATE_DIR, TEMPLATES_DIR, 
 import type { AddonTarget } from "../lib/addon-target";
 import { withoutPhpMyAdminRules } from "../addons/system-tweaks/phpmyadmin";
 import {
-  baselineFiles, hasBaseline, readBaseline, recordBaseline, removeBaseline, sha256,
-} from "../lib/nginx-baseline";
-
-// CloudPanel versions this patch's markup assumptions were verified against.
-// A version outside this list is not fatal, but the hash gate below is what
-// actually stops us on a markup change.
-export const KNOWN_GOOD_PANEL_VERSIONS = ["2.5.4-3+clp-bookworm"];
+  type Refusal, baselineFiles, hasBaseline, occurrences, readBaseline, readBaselineVersion, rebaselineVerdict,
+  recordBaseline, removeBaseline, sha256, writeBaselineVersion,
+} from "../lib/baseline";
+import { panelVersion } from "../lib/cloudpanel-version";
 
 /** The addon supplies markup only; markers are added here so two addons cannot pick the same ones. */
 export interface Injection {
@@ -45,15 +44,51 @@ export interface Injection {
   url: string;
 }
 
+export interface InjectOptions {
+  templatesDir?: string;
+  stateDir?: string;
+  /** The installed CloudPanel version; read from dpkg when left out. Null while dpkg is changing it. */
+  panelVersion?: PanelVersionSource;
+  /** `repair --rebaseline`: take a changed template that still fits even though CloudPanel was not upgraded. */
+  accept?: boolean;
+}
+
+/** A version, or a function asked each time, as dpkg is; dpkg itself when left out. */
+type PanelVersionSource = string | null | (() => string | null);
+
+function versionReader(source: PanelVersionSource | undefined): () => string | null {
+  if (typeof source === "function") return source;
+  return source === undefined ? () => panelVersion() : () => source;
+}
+
+/**
+ * The version read before any file of a pass and the one read after a changed
+ * file must agree. CloudPanel's postinst could finish between a read of a
+ * half-written file and a read of the version, and the anchor watcher fires
+ * exactly during upgrades.
+ */
+function settledVersion(before: string | null, now: () => string | null): string | null {
+  const after = now();
+  return before === after ? after : null;
+}
+
 interface InjectPaths {
   templatesDir: string;
   stateDir: string;
+  /** The version as the pass began, before any file was read. */
+  before: string | null;
+  now: () => string | null;
+  accept: boolean;
 }
 
-function resolvePaths(p?: Partial<InjectPaths>): InjectPaths {
+function resolvePaths(p?: InjectOptions): InjectPaths {
+  const now = versionReader(p?.panelVersion);
   return {
     templatesDir: p?.templatesDir ?? TEMPLATES_DIR,
     stateDir: p?.stateDir ?? TEMPLATE_STATE_DIR,
+    before: now(),
+    now,
+    accept: p?.accept === true,
   };
 }
 
@@ -61,6 +96,8 @@ const startMarker = (addon: string, slug: string) => `{# clp-addons:${addon}:${s
 const endMarker = (addon: string, slug: string) => `{# clp-addons:${addon}:${slug}:end #}`;
 
 const ANY_BLOCK = /\n?[ \t]*\{# clp-addons:[a-z0-9_-]+:[a-z0-9_-]+:start #\}[\s\S]*?\{# clp-addons:[a-z0-9_-]+:[a-z0-9_-]+:end #\}/g;
+/** Marker text a complete block's removal leaves behind: half a block, or one CloudPanel's markup carried over. */
+const STRAY_MARKER = /clp-addons:[a-z0-9_-]+:[a-z0-9_-]+:(?:start|end)/;
 
 function stripAllMarkers(content: string): string {
   return content.replace(ANY_BLOCK, "");
@@ -85,47 +122,112 @@ function wrap(inj: Injection): string {
 function fileKey(file: string, p: InjectPaths): string {
   return file.replace(`${p.templatesDir}/`, "").replace(/[^A-Za-z0-9.]+/g, "_");
 }
-const pristinePath = (f: string, p: InjectPaths) => `${p.stateDir}/${fileKey(f, p)}.pristine`;
-const hashPath = (f: string, p: InjectPaths) => `${p.stateDir}/${fileKey(f, p)}.sha256`;
-const originPath = (f: string, p: InjectPaths) => `${p.stateDir}/${fileKey(f, p)}.path`;
+const recordOf = (file: string, p: InjectPaths) => baselineFiles(p.stateDir, fileKey(file, p));
+const templateOf = (file: string, p: InjectPaths) => file.replace(`${p.templatesDir}/`, "");
+
+const anchorOf = (inj: Injection) => inj.target.anchorBefore ?? inj.target.anchorAfter;
 
 export type TargetStatus =
   | { addon: string; slug: string; state: "ok" }
   | { addon: string; slug: string; state: "missing-anchor" }
   | { addon: string; slug: string; state: "stale-content" }
   | { addon: string; slug: string; state: "template-absent" }
-  | { addon: string; slug: string; state: "upstream-changed"; expected: string; found: string }
+  | { addon: string; slug: string; state: "panel-updated"; installed: string }
+  | {
+    addon: string; slug: string; state: "upstream-changed"; template: string;
+    reason: Refusal; recorded: string | null; installed: string | null;
+  }
   | { addon: string; slug: string; state: "anchor-not-found-in-markup" };
+
+/** A template recorded afresh because CloudPanel's upgrade changed it. */
+export interface Rebaselined {
+  file: string;
+  from: string | null;
+  to: string;
+}
+
+/** Why the new markup cannot take every block, or null when it can. */
+function misfit(upstream: string, list: Injection[]): Refusal | null {
+  for (const inj of list) {
+    const found = occurrences(upstream, anchorOf(inj) ?? "");
+    if (found === 0) return "anchor-missing";
+    if (found > 1) return "anchor-repeated";
+  }
+  return null;
+}
+
+type Assessment =
+  | { kind: "absent" }
+  | { kind: "unrecorded"; onDisk: string; upstream: string }
+  | { kind: "match"; onDisk: string; upstream: string; recorded: string | null }
+  | { kind: "rebaseline"; onDisk: string; upstream: string; recorded: string | null; installed: string }
+  | { kind: "refuse"; onDisk: string; reason: Refusal; recorded: string | null; installed: string | null };
+
+/** What may be done with one template given the blocks wanted in it. Writes nothing. */
+function assess(file: string, list: Injection[], p: InjectPaths): Assessment {
+  if (!existsSync(file)) return { kind: "absent" };
+  const onDisk = readFileSync(file, "utf-8");
+  const upstream = stripAllMarkers(onDisk);
+  const record = recordOf(file, p);
+  if (!hasBaseline(record)) return { kind: "unrecorded", onDisk, upstream };
+  const baseline = readBaseline(record);
+  const recorded = readBaselineVersion(record);
+  if (baseline && baseline.hash === sha256(upstream)) return { kind: "match", onDisk, upstream, recorded };
+  const installed = settledVersion(p.before, p.now);
+  const reason = rebaselineVerdict({
+    recorded, installed, strayMarker: STRAY_MARKER.test(upstream), misfit: misfit(upstream, list), accept: p.accept,
+  });
+  return reason || installed === null
+    ? { kind: "refuse", onDisk, reason: reason ?? "busy", recorded, installed }
+    : { kind: "rebaseline", onDisk, upstream, recorded, installed };
+}
+
+function byTemplate(injections: Injection[], p: InjectPaths): Map<string, Injection[]> {
+  const byFile = new Map<string, Injection[]>();
+  for (const inj of injections) {
+    const file = `${p.templatesDir}/${inj.target.template}`;
+    const list = byFile.get(file) ?? [];
+    list.push(inj);
+    byFile.set(file, list);
+  }
+  return byFile;
+}
 
 /**
  * A marker block whose content no longer matches the snippet counts as stale,
  * not as present, so a snippet that changed (an addon's hostname, say) is
- * rewritten.
+ * rewritten. Anchors are judged per template, against every injection given
+ * for it, as reconcile judges them.
  */
-export function inspect(inj: Injection, paths?: Partial<InjectPaths>): TargetStatus {
+export function inspectTemplates(injections: Injection[], paths?: InjectOptions): TargetStatus[] {
   const p = resolvePaths(paths);
-  const { addon, target } = inj;
-  const id = { addon, slug: target.slug };
-  const file = `${p.templatesDir}/${target.template}`;
-  if (!existsSync(file)) return { ...id, state: "template-absent" };
-
-  const onDisk = readFileSync(file, "utf-8");
-  const upstream = stripAllMarkers(onDisk);
-
-  if (existsSync(hashPath(file, p))) {
-    const expected = readFileSync(hashPath(file, p), "utf-8").trim();
-    const found = sha256(upstream);
-    if (expected !== found) return { ...id, state: "upstream-changed", expected, found };
+  const statuses: TargetStatus[] = [];
+  for (const [file, list] of byTemplate(injections, p)) {
+    const found = assess(file, list, p);
+    for (const inj of list) {
+      const id = { addon: inj.addon, slug: inj.target.slug };
+      if (found.kind === "absent") statuses.push({ ...id, state: "template-absent" });
+      else if (found.kind === "refuse") {
+        statuses.push({
+          ...id, state: "upstream-changed", template: templateOf(file, p),
+          reason: found.reason, recorded: found.recorded, installed: found.installed,
+        });
+      } else if (found.kind === "rebaseline") statuses.push({ ...id, state: "panel-updated", installed: found.installed });
+      else {
+        const anchor = anchorOf(inj);
+        const present = blockOf(found.onDisk, inj.addon, inj.target.slug);
+        if (!anchor || !found.upstream.includes(anchor)) statuses.push({ ...id, state: "anchor-not-found-in-markup" });
+        else if (present === null) statuses.push({ ...id, state: "missing-anchor" });
+        else if (present !== blockOf(wrap(inj), inj.addon, inj.target.slug)) statuses.push({ ...id, state: "stale-content" });
+        else statuses.push({ ...id, state: "ok" });
+      }
+    }
   }
+  return statuses;
+}
 
-  const anchor = target.anchorBefore ?? target.anchorAfter;
-  if (!anchor || !upstream.includes(anchor)) return { ...id, state: "anchor-not-found-in-markup" };
-
-  const present = blockOf(onDisk, addon, target.slug);
-  if (present === null) return { ...id, state: "missing-anchor" };
-  if (present !== blockOf(wrap(inj), addon, target.slug)) return { ...id, state: "stale-content" };
-
-  return { ...id, state: "ok" };
+export function inspect(inj: Injection, paths?: InjectOptions): TargetStatus {
+  return inspectTemplates([inj], paths)[0]!;
 }
 
 /**
@@ -137,30 +239,25 @@ export function inspect(inj: Injection, paths?: Partial<InjectPaths>): TargetSta
  */
 export function reconcile(
   injections: Injection[],
-  paths?: Partial<InjectPaths>
-): { statuses: TargetStatus[]; changed: boolean } {
+  paths?: InjectOptions
+): { statuses: TargetStatus[]; changed: boolean; rebaselined: Rebaselined[] } {
   const p = resolvePaths(paths);
-
-  const byFile = new Map<string, Injection[]>();
-  for (const inj of injections) {
-    const file = `${p.templatesDir}/${inj.target.template}`;
-    const list = byFile.get(file) ?? [];
-    list.push(inj);
-    byFile.set(file, list);
-  }
+  const byFile = byTemplate(injections, p);
 
   // Files that carry a block from an addon no longer in the set still have to
   // be visited, or a disabled addon's markup stays on the page.
   for (const file of patchedFiles(p)) if (!byFile.has(file)) byFile.set(file, []);
 
   const statuses: TargetStatus[] = [];
+  const rebaselined: Rebaselined[] = [];
   let changed = false;
   for (const [file, list] of byFile) {
     const r = renderFile(file, list, p);
     statuses.push(...r.statuses);
+    if (r.rebaselined) rebaselined.push(r.rebaselined);
     changed ||= r.changed;
   }
-  return { statuses, changed };
+  return { statuses, changed, rebaselined };
 }
 
 function patchedFiles(p: InjectPaths): string[] {
@@ -175,40 +272,47 @@ function renderFile(
   file: string,
   list: Injection[],
   p: InjectPaths
-): { statuses: TargetStatus[]; changed: boolean } {
-  if (!existsSync(file)) {
+): { statuses: TargetStatus[]; changed: boolean; rebaselined?: Rebaselined } {
+  const found = assess(file, list, p);
+  if (found.kind === "absent") {
     return {
       statuses: list.map(({ addon, target }) => ({ addon, slug: target.slug, state: "template-absent" as const })),
       changed: false,
     };
   }
 
-  const onDisk = readFileSync(file, "utf-8");
-  const upstream = stripAllMarkers(onDisk);
-
-  mkdirSync(p.stateDir, { recursive: true });
-  if (!existsSync(pristinePath(file, p))) {
-    writeFileSync(pristinePath(file, p), upstream, { mode: 0o600 });
-    writeFileSync(hashPath(file, p), `${sha256(upstream)}\n`, { mode: 0o644 });
-    writeFileSync(originPath(file, p), `${file}\n`, { mode: 0o644 });
-  }
-
-  const expected = readFileSync(hashPath(file, p), "utf-8").trim();
-  const found = sha256(upstream);
-  if (expected !== found) {
-    // CloudPanel changed the file our patches target. Refuse to write markup
-    // built for markup that no longer exists.
+  const record = recordOf(file, p);
+  if (found.kind === "refuse") {
+    // Nothing wanted here and nothing of ours left in the file: the record
+    // has no further purpose, whoever changed the file.
+    if (list.length === 0 && !found.onDisk.includes("clp-addons:")) removeBaseline(record);
+    // CloudPanel changed the file our patches target, and the change does not
+    // prove the patches still fit. Refuse to write markup built for markup
+    // that no longer exists.
     return {
       statuses: list.map(({ addon, target }) => ({
-        addon, slug: target.slug, state: "upstream-changed" as const, expected, found,
+        addon, slug: target.slug, state: "upstream-changed" as const, template: templateOf(file, p),
+        reason: found.reason, recorded: found.recorded, installed: found.installed,
       })),
       changed: false,
     };
   }
 
-  const pristine = readFileSync(pristinePath(file, p), "utf-8");
+  const { onDisk, upstream } = found;
+  let rebaselined: Rebaselined | undefined;
+  if (found.kind === "unrecorded" || found.kind === "rebaseline") {
+    mkdirSync(p.stateDir, { recursive: true });
+    const version = found.kind === "rebaseline" ? found.installed : p.before;
+    recordBaseline(record, upstream, sha256(upstream), file, version);
+    if (found.kind === "rebaseline") rebaselined = { file: templateOf(file, p), from: found.recorded, to: found.installed };
+  } else {
+    // Unchanged under a new CloudPanel: the record now vouches for this
+    // version, so a later edit under it is told apart from an upgrade.
+    if (p.before !== null && p.before !== found.recorded) writeBaselineVersion(record, p.before);
+  }
+
   const statuses: TargetStatus[] = [];
-  let rendered = pristine;
+  let rendered = upstream;
 
   // Stable order, so two addons patching one anchor do not swap places on
   // every reconciliation and produce a file that never settles.
@@ -252,13 +356,9 @@ function renderFile(
 
   // Nothing left patched here, so the snapshot has no further purpose. Keeping
   // it would pin a hash from a CloudPanel version that may since have moved on.
-  if (list.length === 0) {
-    rmSync(pristinePath(file, p), { force: true });
-    rmSync(hashPath(file, p), { force: true });
-    rmSync(originPath(file, p), { force: true });
-  }
+  if (list.length === 0) removeBaseline(record);
 
-  return { statuses, changed };
+  return { statuses, changed, rebaselined };
 }
 
 /**
@@ -269,14 +369,6 @@ export function purgeTwigCache(): void {
   if (!existsSync(TWIG_CACHE_DIR)) return;
   for (const entry of readdirSync(TWIG_CACHE_DIR)) {
     rmSync(`${TWIG_CACHE_DIR}/${entry}`, { recursive: true, force: true });
-  }
-}
-
-export function panelVersion(): string {
-  try {
-    return execFileSync("dpkg-query", ["-W", "-f=${Version}", "cloudpanel"], { encoding: "utf-8" }).trim();
-  } catch {
-    return "unknown";
   }
 }
 
@@ -306,6 +398,12 @@ interface NginxPaths {
   stateDir?: string;
 }
 
+/** As for the templates: the installed CloudPanel version, and the operator's `repair --rebaseline`. */
+interface NginxBaselineOptions {
+  panelVersion?: PanelVersionSource;
+  accept?: boolean;
+}
+
 function cloudpanelMasterVhost(): string {
   return `${nginxLayout().sitesDir}/cloudpanel.conf`;
 }
@@ -316,6 +414,7 @@ type NginxProxyState =
   | "ambiguous"
   | "stale-content"
   | "upstream-changed"
+  | "panel-updated"
   | "conflict"
   | "validation-failed";
 
@@ -323,10 +422,14 @@ export interface NginxProxyStatus {
   state: NginxProxyState;
   vhostPath?: string;
   detail?: string;
+  /** Set with `upstream-changed`: why the changed vhost is left alone, and the versions that decided it. */
+  refusal?: { reason: Refusal; recorded: string | null; installed: string | null };
 }
 
 interface NginxReconcileResult extends NginxProxyStatus {
   changed: boolean;
+  /** The vhost was recorded afresh because CloudPanel's upgrade rewrote it. */
+  rebaselined?: { from: string | null; to: string };
 }
 
 function nginxPaths(options: NginxPaths): Required<NginxPaths> {
@@ -507,21 +610,54 @@ function writeNginxContent(path: string, content: string): void {
   writeFileAtomic(path, content, { mode: stat.mode & 0o777, owner: { uid: stat.uid, gid: stat.gid }, createParent: true });
 }
 
-function upstreamChangedResult(
-  vhostPath: string,
-  expected: string,
-  found: string,
-  detail = "CloudPanel rewrote the master vhost; no changes were made",
-): NginxReconcileResult {
+/** Marker text left once both managed blocks are taken out. */
+const VHOST_STRAY_MARKER = /# clp-addons:(?:proxy|phpmyadmin):(?:start|end)/;
+
+/** Why the vhost as CloudPanel now writes it cannot take the proxy block, or null when it can. */
+function proxyMisfit(upstream: string): Refusal | null {
+  if (/\blocation\s+(?:=\s*)?\/addons\//.test(upstream)) return "conflict";
+  const blocks = listen8443Blocks(upstream).length;
+  return blocks === 0 ? "anchor-missing" : blocks > 1 ? "anchor-repeated" : null;
+}
+
+type VhostCheck =
+  | { kind: "unrecorded" }
+  | { kind: "match"; recorded: string | null }
+  | { kind: "rebaseline"; recorded: string | null; installed: string }
+  | { kind: "refuse"; reason: Refusal; recorded: string | null; installed: string | null };
+
+/** The vhost against its record, by the rule the templates follow. Writes nothing. */
+function checkVhost(
+  upstream: string, files: ReturnType<typeof baselineFiles>, enabled: boolean,
+  version: { before: string | null; now: () => string | null }, accept?: boolean,
+): VhostCheck {
+  if (!hasBaseline(files)) return { kind: "unrecorded" };
+  const baseline = readBaseline(files);
+  const recorded = readBaselineVersion(files);
+  if (baseline?.hash === sha256(upstream)) return { kind: "match", recorded };
+  const installed = settledVersion(version.before, version.now);
+  const reason = rebaselineVerdict({
+    recorded, installed, strayMarker: VHOST_STRAY_MARKER.test(upstream),
+    misfit: enabled ? proxyMisfit(upstream) : null, accept,
+  });
+  return reason || installed === null
+    ? { kind: "refuse", reason: reason ?? "busy", recorded, installed }
+    : { kind: "rebaseline", recorded, installed };
+}
+
+function upstreamChangedResult(vhostPath: string, check: Extract<VhostCheck, { kind: "refuse" }>): NginxReconcileResult {
   return {
     state: "upstream-changed",
     changed: false,
     vhostPath,
-    detail: `${detail} (recorded ${expected.slice(0, 12)}, current ${found.slice(0, 12)})`,
+    detail: "CloudPanel's master vhost changed; no changes were made",
+    refusal: { reason: check.reason, recorded: check.recorded, installed: check.installed },
   };
 }
 
-export function inspectNginxProxy(options: NginxPaths = {}): NginxProxyStatus {
+export function inspectNginxProxy(options: NginxPaths & NginxBaselineOptions = {}): NginxProxyStatus {
+  const now = versionReader(options.panelVersion);
+  const before = now();
   const resolved = resolveMasterVhost(options);
   if (!("content" in resolved)) {
     return { state: resolved.state, vhostPath: resolved.path, detail: resolved.detail };
@@ -529,20 +665,13 @@ export function inspectNginxProxy(options: NginxPaths = {}): NginxProxyStatus {
   const path = resolved.path;
   const content = resolved.content;
   const files = baselineFiles(options.stateDir ?? NGINX_PROXY_STATE_DIR, "vhost");
-  const baseline = readBaseline(files);
-  if (hasBaseline(files) && baseline === null) {
-    return {
-      state: "upstream-changed",
-      vhostPath: path,
-      detail: "managed Nginx baseline is missing or invalid; no changes were made",
-    };
+  const check = checkVhost(panelUpstream(content), files, true, { before, now }, options.accept);
+  if (check.kind === "refuse") {
+    const { changed: _, ...status } = upstreamChangedResult(path, check);
+    return status;
   }
-  if (baseline) {
-    const expected = baseline.hash;
-    const found = sha256(panelUpstream(content));
-    if (expected !== found) {
-      return upstreamChangedResult(path, expected, found);
-    }
+  if (check.kind === "rebaseline") {
+    return { state: "panel-updated", vhostPath: path, detail: `CloudPanel ${check.installed} rewrote the master vhost; repair adds the proxy again` };
   }
   if (!content.includes("# clp-addons:proxy:start")) {
     return { state: "missing", vhostPath: path, detail: "proxy block is not installed" };
@@ -553,9 +682,13 @@ export function inspectNginxProxy(options: NginxPaths = {}): NginxProxyStatus {
   return { state: "ok", vhostPath: path };
 }
 
-export function reconcileNginxProxy(options: NginxPaths & { enabled?: boolean; reload?: boolean } = {}): NginxReconcileResult {
-  const { enabled = true, reload = true, ...paths } = options;
+export function reconcileNginxProxy(
+  options: NginxPaths & NginxBaselineOptions & { enabled?: boolean; reload?: boolean } = {},
+): NginxReconcileResult {
+  const { enabled = true, reload = true, panelVersion: version, accept, ...paths } = options;
   const p = nginxPaths(paths);
+  const now = versionReader(version);
+  const before = now();
   const resolved = resolveMasterVhost(p);
   if (!("content" in resolved)) {
     return { state: resolved.state, changed: false, vhostPath: resolved.path, detail: resolved.detail };
@@ -573,23 +706,16 @@ export function reconcileNginxProxy(options: NginxPaths & { enabled?: boolean; r
 
   const files = baselineFiles(p.stateDir, "vhost");
   const upstream = panelUpstream(onDisk);
-  const found = sha256(upstream);
-  const baseline = readBaseline(files);
-  if (hasBaseline(files) && baseline === null) {
-    return {
-      state: "upstream-changed",
-      changed: false,
-      vhostPath: selectedPath,
-      detail: "managed Nginx baseline is missing or invalid; no changes were made",
-    };
-  }
-  if (baseline && baseline.hash !== found) {
-    return upstreamChangedResult(selectedPath, baseline.hash, found);
-  }
-  if (!baseline) {
+  const check = checkVhost(upstream, files, enabled, { before, now }, accept);
+  if (check.kind === "refuse") return upstreamChangedResult(selectedPath, check);
+  let rebaselined: NginxReconcileResult["rebaselined"];
+  if (check.kind === "match") {
+    if (before !== null && before !== check.recorded) writeBaselineVersion(files, before);
+  } else {
     mkdirSync(p.stateDir, { recursive: true });
-    const pristine = upstream;
-    recordBaseline(files, pristine, found, vhostPath);
+    const installed = check.kind === "rebaseline" ? check.installed : before;
+    recordBaseline(files, upstream, sha256(upstream), vhostPath, installed);
+    if (check.kind === "rebaseline") rebaselined = { from: check.recorded, to: check.installed };
   }
 
   const rendered = renderNginxProxy(onDisk, enabled);
@@ -603,13 +729,13 @@ export function reconcileNginxProxy(options: NginxPaths & { enabled?: boolean; r
   }
   if (rendered.content === onDisk) {
     if (!enabled) removeBaseline(files);
-    return { state: enabled ? "ok" : "missing", changed: false, vhostPath: selectedPath };
+    return { state: enabled ? "ok" : "missing", changed: false, vhostPath: selectedPath, rebaselined };
   }
   writeNginxContent(vhostPath, rendered.content);
 
   if (!reload) {
     if (!enabled) removeBaseline(files);
-    return { state: enabled ? "ok" : "missing", changed: true, vhostPath: selectedPath };
+    return { state: enabled ? "ok" : "missing", changed: true, vhostPath: selectedPath, rebaselined };
   }
 
   // Validate and reload the instance that actually owns the resolved tree: on
@@ -631,5 +757,5 @@ export function reconcileNginxProxy(options: NginxPaths & { enabled?: boolean; r
   if (!enabled) {
     removeBaseline(files);
   }
-  return { state: enabled ? "ok" : "missing", changed: true, vhostPath: selectedPath };
+  return { state: enabled ? "ok" : "missing", changed: true, vhostPath: selectedPath, rebaselined };
 }

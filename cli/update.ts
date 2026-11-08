@@ -25,6 +25,9 @@ import { parseFlags } from "./flags";
 import { run, tryRun } from "../lib/command";
 import { compareSemver, isPrerelease } from "../lib/semver";
 import { lockState } from "../lib/root-locks";
+import {
+  CLOUDPANEL_RANGE_ASSET, describeRange, panelVersion, parseRange, rangeFit,
+} from "../lib/cloudpanel-version";
 function finalizeUpdate(beforeManagerRestart?: () => void): AddonSpec[] {
   // A failure from here on makes the binary that started this update restore
   // itself, and an earlier binary knows the renamed addons only by their old
@@ -55,6 +58,33 @@ function finalizeUpdate(beforeManagerRestart?: () => void): AddonSpec[] {
     revertAddonRenames(renames);
     throw error;
   }
+}
+
+/**
+ * Warns when the installed CloudPanel is outside the release's range, and
+ * never refuses: the release's fixes are wanted on any CloudPanel, and the
+ * template checks hold back any page that changed. A malformed range only
+ * warns too. The range is checksummed here and attested with the binary, and
+ * a release from before ranges has none to check.
+ */
+async function checkPanelRange(
+  release: Awaited<ReturnType<typeof resolveRelease>>,
+  target: string,
+  options: UpdateOptions,
+): Promise<FetchedArtifact[]> {
+  if (!release.assets.has(CLOUDPANEL_RANGE_ASSET)) return [];
+  const installed = panelVersion();
+  const fetched = await fetchVerified(release, [CLOUDPANEL_RANGE_ASSET], options.onStep, options.onProgress);
+  const range = parseRange(fetched[0]!.bytes.toString("utf-8"));
+  if (!range) {
+    log.warn(`${CLOUDPANEL_RANGE_ASSET} in release ${release.tag} is not a CloudPanel version range; updating without checking it`);
+    return fetched;
+  }
+  const fit = rangeFit(installed, range);
+  if (fit === "below") log.warn(`clp-addons ${target} supports CloudPanel ${describeRange(range)}; this server runs ${installed}, so a CloudPanel page the addons were not checked on stays unpatched. Updating CloudPanel with clp-update is recommended`);
+  if (fit === "above") log.warn(`clp-addons ${target} was checked against CloudPanel ${describeRange(range)}; this server runs ${installed}, so a CloudPanel page that changed stays unpatched until a release supports it`);
+  if (fit === "unknown") log.warn(`could not read the CloudPanel version; clp-addons ${target} supports CloudPanel ${describeRange(range)}`);
+  return fetched;
 }
 
 type UpdateOptions = {
@@ -110,8 +140,9 @@ async function applyUpdate(argv: string[], options: UpdateOptions): Promise<void
   }
   let artifacts: FetchedArtifact[] | undefined;
   if (!artifactsCurrent) {
+    const range = await checkPanelRange(release, target, options);
     artifacts = await fetchVerified(release, artifactNames(), options.onStep, options.onProgress);
-    await verifyAttestation(release, artifacts, flags["skip-attestation"] === true);
+    await verifyAttestation(release, [...range, ...artifacts], flags["skip-attestation"] === true);
   }
 
   if (artifacts) {
