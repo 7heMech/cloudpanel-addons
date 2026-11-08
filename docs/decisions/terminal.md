@@ -192,7 +192,7 @@ such as CloudPanel holding its database, reaches the popup as a generic message
 and stays in the journal.
 
 Root serializes challenges, attempts, used TOTP steps and tickets in root-only
-state under `/var/lib/clp-addons/terminal-auth`. Only a wrong code or a
+state under `/var/lib/clp-addons/terminal/root-auth`. Only a wrong code or a
 signature that does not verify counts against the account: five in a rolling
 five minutes, or twenty in a day, stop further prompts until the oldest ages
 out, so a stolen session cannot keep guessing unattended. Successes, malformed

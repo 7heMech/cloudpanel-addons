@@ -4,7 +4,7 @@ import { join } from "node:path";
 import { ActionFailure, failAction } from "../../lib/action";
 import { errorMessage } from "../../lib/errors";
 import { withFileLockSync } from "../../lib/file-lock";
-import { addonConfigFile, LOCK_DIR, STATE_DIR } from "../../lib/paths";
+import { addonConfigFile, addonStateDir, LOCK_DIR } from "../../lib/paths";
 import { openPanelDatabase } from "../../lib/panel-db";
 import { writeFileAtomic } from "../../lib/atomic-write";
 import { DEFAULT_SECURITY_KEYS_PATHS, verifyTerminalKey } from "../security-keys/action";
@@ -13,7 +13,7 @@ import { WebAuthnError } from "../security-keys/webauthn";
 import { allowedGrant, type RootAccessPaths } from "./root-access";
 
 /** `securityKeys` is the addon's enabled marker: passkeys count only while it exists, as at sign-in. */
-export const DEFAULT_ROOT_AUTH_PATHS = { dir: `${STATE_DIR}/terminal-auth`, lock: `${LOCK_DIR}/terminal-auth.lock`, securityKeys: addonConfigFile("security-keys") };
+export const DEFAULT_ROOT_AUTH_PATHS = { dir: `${addonStateDir("terminal")}/root-auth`, lock: `${LOCK_DIR}/terminal-auth.lock`, securityKeys: addonConfigFile("security-keys") };
 interface State {
   attempts: number[];
   usedStep?: number;
