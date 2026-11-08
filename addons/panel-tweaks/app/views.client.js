@@ -4,6 +4,10 @@ async function setTweak(input) {
   const wanted = input.checked;
   clearNotice();
   busy(true);
+  // The Sites page in this tab draws from its last reply until the next one
+  // lands, and that one was given under the old switches. Forgotten before the
+  // save, so a save that half fails forgets it too.
+  try { sessionStorage.removeItem('clp_tweaks_panel'); } catch (e) {}
   try {
     const reply = await call('/api/tweaks', {
       method: 'POST',
@@ -11,9 +15,6 @@ async function setTweak(input) {
       body: JSON.stringify({ [key]: wanted }),
     });
     input.closest('.tweak-row').classList.toggle('is-enabled', wanted);
-    // The Sites page in this tab draws from its last reply until the next one
-    // lands, and that one was given under the old switches.
-    try { sessionStorage.removeItem('clp_tweaks_panel'); } catch (e) {}
     const frame = document.getElementById('preview-frame');
     if (frame) frame.src = CLP_BASE + '/preview?refresh=' + Date.now();
     busy(false);

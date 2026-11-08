@@ -43,12 +43,15 @@ function working(control, text) {
   const after = option ? option.lastElementChild
     : row ? row.querySelector('.tweak-note') : control.closest('.st-fold, .st-install, .card-header');
   after.after(line);
+  // Kept up while the work runs, and taken down with the line when it ends.
+  let warned = null;
   const page = setTimeout(function () {
-    notify(text + ' Other settings wait until it finishes.', 'warn', null, true);
+    warned = notify(text + ' Other settings wait until it finishes.', 'warn', null, true);
   }, 600);
   return function () {
     clearTimeout(page);
     line.remove();
+    if (warned) dropToast(warned);
   };
 }
 
