@@ -52,7 +52,13 @@ shows a notice naming the command, so they know whom to ask. The controls stay
 hidden until the page has asked
 `/addons/terminal/api/root-access`. Every panel page asks, so the manager
 keeps root's answer a minute per user instead of starting a root process for
-each page; the Terminal page asks afresh, and the worker always checks.
+each page; the Terminal page asks afresh, and the worker always checks. The
+browser tab keeps a granted answer in `sessionStorage`, and a page in that tab
+draws the controls before the request returns: the addons' pages paint before
+it does, and would otherwise push the header's tools aside a moment after
+they appear. The request still runs on every page, and an answer that is not
+a grant, or a request that fails, hides the controls and forgets it. The
+stored answer only draws a link; the shell behind it checks for itself.
 
 Any administrator can reset another's password in CloudPanel and sign in as
 them, so a grant to a name alone would be a root shell for every
