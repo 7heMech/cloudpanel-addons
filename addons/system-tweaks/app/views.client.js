@@ -31,30 +31,6 @@ function hold(on) {
   });
 }
 
-function working(control, text) {
-  const option = control.closest('.st-option');
-  const row = option || control.closest('.tweak-row');
-  const line = document.createElement('p');
-  line.className = 'st-status st-working';
-  line.setAttribute('role', 'status');
-  line.innerHTML = '<span class="badge">Working</span> ';
-  line.append(text);
-  // Hardening's Lock settings button says it under that card's header.
-  const after = option ? option.lastElementChild
-    : row ? row.querySelector('.tweak-note') : control.closest('.st-fold, .st-install, .card-header');
-  after.after(line);
-  // Kept up while the work runs, and taken down with the line when it ends.
-  let warned = null;
-  const page = setTimeout(function () {
-    warned = notify(text + ' Other settings wait until it finishes.', 'warn', null, true);
-  }, 600);
-  return function () {
-    clearTimeout(page);
-    line.remove();
-    if (warned) dropToast(warned);
-  };
-}
-
 function change(control, path, body, progress, done) {
   if (control !== stRebootPending.control) flushRebootTime();
   return exclusive(async function () {

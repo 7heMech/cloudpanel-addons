@@ -38,7 +38,7 @@
   var COLUMNS_ON = SITES_TABLE_JSON;
   // The tab's copy of the last reply; see start(). Panel Tweaks' own preview
   // is where the switches change, so it draws from each reply and keeps no copy.
-  var PANEL_KEY = document.getElementById("clp-preview") ? null : "clp_tweaks_panel";
+  var PANEL_KEY = SITES_PREVIEW_JSON ? null : "clp_tweaks_panel";
   var columnStyle = null;
   var tagged = false;
   var chosen = {};
@@ -209,14 +209,24 @@
       if (!PANEL_KEY) return null;
       try { stored = JSON.parse(window.sessionStorage.getItem(PANEL_KEY) || "null"); } catch (error) { return null; }
       if (!stored || !stored.tweaks || !stored.sites || stored.sites.length !== rows.length) return null;
+      // Saving a switch on the addon's page, in any tab, moves the revision
+      // every tab shares, and a copy taken before it would draw the old
+      // switches' columns and toolbar.
+      if (stored.rev !== switchesRevision()) return null;
       var have = {};
       for (var s = 0; s < stored.sites.length; s++) have[stored.sites[s].domain] = true;
       for (var r = 0; r < rows.length; r++) if (!have[rows[r].domain]) return null;
-      return stored;
+      // As cutToRows() gives it, so a reply with nothing new compares equal.
+      return { tweaks: stored.tweaks, sites: stored.sites };
+    }
+
+    function switchesRevision() {
+      try { return window.localStorage.getItem("clp_tweaks_rev") || ""; } catch (error) { return ""; }
     }
 
     function storePanel(data) {
-      if (PANEL_KEY) try { window.sessionStorage.setItem(PANEL_KEY, JSON.stringify(data)); } catch (error) {}
+      var copy = { rev: switchesRevision(), tweaks: data.tweaks, sites: data.sites };
+      if (PANEL_KEY) try { window.sessionStorage.setItem(PANEL_KEY, JSON.stringify(copy)); } catch (error) {}
     }
 
     function forgetPanel() {
@@ -960,7 +970,7 @@
       // (sites.css), and it is held at its widest option as the options below
       // arrive; see select-width.client.js, which targets.ts puts ahead of
       // this script.
-      clpHoldSelectWidths(picker.parentNode, true);
+      clpHoldSelectWidths(picker.parentNode);
 
       var seen = {};
       var kinds = [];

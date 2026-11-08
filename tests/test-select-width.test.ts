@@ -8,9 +8,10 @@ import { minifyScript } from "../tools/browser-assets";
 
 type Fake = { style: Record<string, string>; options: { label: string }[]; attrs: Record<string, string> };
 
-function run(appearance: string, labels: string[], boxSizing = "border-box") {
+function run(appearance: string, labels: string[], boxSizing = "border-box", width = "auto") {
   const select: Fake & Record<string, unknown> = {
     style: {}, options: labels.map((label) => ({ label })), attrs: {},
+    computedStyleMap: () => ({ get: (name: string) => (name === "width" ? { toString: () => width } : null) }),
     getAttribute(name: string) { return this.attrs[name] ?? null; },
     setAttribute(name: string, value: string) { this.attrs[name] = value; },
     removeAttribute(name: string) { delete this.attrs[name]; },
@@ -33,8 +34,9 @@ test("a select drawn like the menus is held at its widest option, padding and bo
   expect(run("base-select", ["All applications"], "content-box").minWidth).toBe("min(128px, 100vw - 32px)");
 });
 
-test("a native select is left alone, and one held before is let go", () => {
+test("a native select, or one given a width such as a form's 100%, is left alone, and one held before is let go", () => {
   expect(run("none", ["All applications", "Static"]).minWidth).toBeUndefined();
+  expect(run("base-select", ["All applications", "Static"], "border-box", "100%").minWidth).toBeUndefined();
   const held = run("base-select", ["All applications", "Static"]);
   held.computed.appearance = "none";
   held.hold(held.select);

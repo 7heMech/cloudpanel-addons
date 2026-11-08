@@ -1,6 +1,8 @@
 
 :root {
   color-scheme: light;
+  /* The check a chosen option is marked with, as a mask painted in its colour. */
+  --clp-check: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'%3E%3Cpath fill='none' stroke='%23000' stroke-width='1.8' stroke-linecap='round' stroke-linejoin='round' d='M3.5 8.4l3 3 6-6.2'/%3E%3C/svg%3E");
   --clp-addon-font-family: "Helvetica Neue", "Segoe UI", Helvetica, Arial, sans-serif;
   --bg: #f9fafb; --panel: #fff; --surface: #fbfcfc;
   --border: #e2e2e2; --card-border: #00000020; --row-border: #eaeaea;
@@ -248,7 +250,7 @@ input::placeholder, textarea::placeholder { color: var(--muted); opacity: 1; }
     select option:checked { background: rgb(38 125 221 / 10%); }
     select option:focus-visible { box-shadow: inset 0 0 0 2px var(--accent); }
     select option::checkmark { order: 1; flex: 0 0 16px; height: 16px; margin-left: auto; content: ""; background: var(--primary);
-      -webkit-mask: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'%3E%3Cpath fill='none' stroke='%23000' stroke-width='1.8' stroke-linecap='round' stroke-linejoin='round' d='M3.5 8.4l3 3 6-6.2'/%3E%3C/svg%3E") center / 16px no-repeat; mask: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'%3E%3Cpath fill='none' stroke='%23000' stroke-width='1.8' stroke-linecap='round' stroke-linejoin='round' d='M3.5 8.4l3 3 6-6.2'/%3E%3C/svg%3E") center / 16px no-repeat; }
+      -webkit-mask: var(--clp-check) center / 16px no-repeat; mask: var(--clp-check) center / 16px no-repeat; }
     select option:disabled { color: var(--muted); cursor: default; }
     select option:disabled:hover { background: none; }
     select option:disabled:checked { background: none; }
@@ -417,8 +419,8 @@ pre { background: var(--bg); border: 1px solid var(--border); border-radius: 4px
 .fleet-show label:has(input:checked) { background: rgb(38 125 221 / 10%); }
 .fleet-show label:has(input:checked) + label:has(input:checked) { margin-top: 1px; }
 .fleet-show label:has(input:checked)::after { background: var(--primary);
-  -webkit-mask: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'%3E%3Cpath fill='none' stroke='%23000' stroke-width='1.8' stroke-linecap='round' stroke-linejoin='round' d='M3.5 8.4l3 3 6-6.2'/%3E%3C/svg%3E") center / 16px no-repeat;
-  mask: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'%3E%3Cpath fill='none' stroke='%23000' stroke-width='1.8' stroke-linecap='round' stroke-linejoin='round' d='M3.5 8.4l3 3 6-6.2'/%3E%3C/svg%3E") center / 16px no-repeat; }
+  -webkit-mask: var(--clp-check) center / 16px no-repeat;
+  mask: var(--clp-check) center / 16px no-repeat; }
 .fleet-show label:has(input:focus-visible) { outline: 2px solid var(--accent); outline-offset: -2px; }
 .fleet-show-clear { display: block; width: 100%; margin-top: 4px; padding: 9px 16px 4px; border: 0; border-top: 1px solid var(--border);
   background: none; color: var(--link); font-size: 14px; text-align: left; cursor: pointer; }

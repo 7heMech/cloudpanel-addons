@@ -4,10 +4,11 @@ async function setTweak(input) {
   const wanted = input.checked;
   clearNotice();
   busy(true);
-  // The Sites page in this tab draws from its last reply until the next one
-  // lands, and that one was given under the old switches. Forgotten before the
-  // save, so a save that half fails forgets it too.
-  try { sessionStorage.removeItem('clp_tweaks_panel'); } catch (e) {}
+  // A Sites page draws from its tab's last reply until the next one lands, and
+  // that one was given under the old switches. Moving the revision every tab
+  // shares tells each one its copy is out of date. Moved before the save, so a
+  // save that half fails moves it too.
+  try { localStorage.setItem('clp_tweaks_rev', String(Date.now())); } catch (e) {}
   try {
     const reply = await call('/api/tweaks', {
       method: 'POST',

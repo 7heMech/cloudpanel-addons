@@ -26,6 +26,7 @@ import { DEFAULT_BACKUP_COMPRESSION } from "../addons/system-tweaks/backup-compr
 import { MOTD_SCRIPT, applyMotd } from "../addons/system-tweaks/motd";
 import { DATABASE_FILE } from "../addons/system-tweaks/database";
 import { SYSTEM_TWEAKS_VERBS } from "../addons/system-tweaks/verbs";
+import { TWEAK_ROW_JS } from "../lib/app-ui";
 import { lockedAddons } from "../lib/root-locks";
 
 // CloudPanel's original /usr/bin/clpctlWrapper (cloudpanel 2.5.4-3), whose SHA-256
@@ -777,7 +778,8 @@ test("the gateway waits for the longest an install can take", async () => {
 
 /** The page's script against a stand-in DOM: each POST waits for `replies` to answer it. */
 function systemTweaksClient() {
-  const source = readFileSync(join(import.meta.dir, "../addons/system-tweaks/app/views.client.js"), "utf8");
+  // As the page has it: working() is shared, in TWEAK_ROW_JS.
+  const source = TWEAK_ROW_JS + readFileSync(join(import.meta.dir, "../addons/system-tweaks/app/views.client.js"), "utf8");
   const events: string[] = [];
   const replies: { path: string; body: string; answer: (body: unknown) => void }[] = [];
   const lines: { textContent: string; removed: boolean }[] = [];

@@ -311,7 +311,7 @@ const DESKTOP_SITE_JS = `if (document.documentElement.clientWidth > screen.width
  * there is no Twig and no administrator test to make: the route that serves it
  * is already behind the same gate as every other route the manager has.
  */
-export function sitesBlock(url: string, tweaks: PanelTweaks = storedTweaks()): string {
+export function sitesBlock(url: string, tweaks: PanelTweaks = storedTweaks(), preview = false): string {
   // The cards' rules are sheets of their own, in the same cascade order, so a
   // phone's desktop mode can switch them off whole: see DESKTOP_SITE_JS.
   const narrow = (css: string) => `<style data-clp-tweaks-narrow>${css}</style>`;
@@ -354,6 +354,7 @@ export function sitesBlock(url: string, tweaks: PanelTweaks = storedTweaks()): s
   .replace("APPLICATION_LABELS_JSON", JSON.stringify(APPLICATION_LABELS))
   .replace("SELF_SIGNED_JSON", JSON.stringify(SELF_SIGNED_CERTIFICATE))
   .replace("SITES_TABLE_JSON", JSON.stringify(tweaks.sitesTable))
+  .replace("SITES_PREVIEW_JSON", JSON.stringify(preview))
   .replace("SITES_MOBILE_JSON", JSON.stringify(tweaks.sitesMobile))}</script>`;
 }
 

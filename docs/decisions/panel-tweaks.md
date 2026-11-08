@@ -66,10 +66,14 @@ therefore keeps the last reply in `sessionStorage`, cut to the sites that page
 listed, and a table listing exactly those sites is built from it when the page
 is parsed, before it is painted. The reply still comes on every page: it
 replaces the stored copy and rebuilds the cells whose facts changed, and a failed
-reply forgets the copy. Saving a switch on the addon's page forgets it too, so
-the next Sites page in that tab is built from the new switches; a switch changed
-from another tab or a shell shows on the page after next there. The preview
-under the switches keeps no copy and is built from each reply. Another account's
+reply forgets the copy. Saving a switch on the addon's page moves a revision in
+`localStorage`, which every tab of the browser shares, and a copy taken under
+an older revision is not built from, so the next Sites page in any tab is built
+from the new switches. The rendered template cannot say which switches hold,
+because the sites table and disk usage are read at request time (below). A
+switch changed from a shell still shows on the page after next. The preview
+under the switches is told it is the preview, keeps no copy and is built from
+each reply. Another account's
 table lists other sites and is not built from it, and following Logout forgets
 it.
 
