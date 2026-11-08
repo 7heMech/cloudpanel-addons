@@ -42,7 +42,7 @@ export const GIT_TARGETS: AddonTarget[] = [
     snippet: (url) => `
         {% if is_granted('ROLE_ADMIN') or is_granted('ROLE_SITE_MANAGER') %}
           <a class="clp-addons-git-row ${ROW_ACTION_CLASS}" data-domain="{{ site.domainName }}" hidden
-            href="${url}?domain={{ site.domainName|url_encode }}" style="margin-right: 0.75rem; white-space: nowrap;">Deploy from Git</a>
+            href="${url}?domain={{ site.domainName|url_encode }}" style="margin-right: 0.75rem; white-space: nowrap;">${LABEL}</a>
         {% endif %}`,
   },
   {
