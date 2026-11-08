@@ -1,10 +1,11 @@
 /**
  * Nginx maps that define `$<prefix>_ip`: the address in `CF-Connecting-IP`
- * when Cloudflare set that header, and `fallback` otherwise. Cloudflare set it
- * when the connection came from one of its ranges, from cloudflared on this
- * server (a loopback peer on 80 or 443), or from CloudPanel's front server (a
- * loopback peer on another port, such as 8080) whose `X-Real-IP` names one of
- * those. Any other client's `CF-Connecting-IP` is ignored.
+ * when Cloudflare set that header, else the client. Cloudflare set it when the
+ * connection came from one of its ranges, from cloudflared on this server (a
+ * loopback peer on 80 or 443), or from CloudPanel's front server (a loopback
+ * peer on another port, such as 8080) whose `X-Real-IP` names one of those.
+ * The client is that `X-Real-IP` on such a hop, and `fallback` otherwise.
+ * Any other client's `CF-Connecting-IP` is ignored.
  */
 export function cloudflareVisitorMaps(prefix: string, ranges: string[], fallback: string): string {
   const v = (name: string) => `$${prefix}_${name}`;
@@ -19,6 +20,10 @@ geo ${v("peer")} ${v("peer_kind")} {
     ::1 local;
 ${ranges.map((range) => `    ${range} cloudflare;`).join("\n")}
 }
+map $http_x_real_ip ${v("real_ip_header")} {
+    default "";
+    ~^[0-9A-Fa-f:.]+$ $http_x_real_ip;
+}
 geo $http_x_real_ip ${v("forwarded_trusted")} {
     default 0;
 ${trusted.map((range) => `    ${range} 1;`).join("\n")}
@@ -29,12 +34,17 @@ map "${v("peer_kind")}:$server_port:${v("forwarded_trusted")}" ${v("cloudflare_s
     ~^local:(80|443): 1;
     ~^local:[0-9]+:1$ 1;
 }
+map "${v("peer_kind")}:$server_port:${v("real_ip_header")}" ${v("client")} {
+    default ${fallback};
+    ~^local:(80|443): ${fallback};
+    ~^local:[0-9]+:.+$ ${v("real_ip_header")};
+}
 map $http_cf_connecting_ip ${v("cf_header")} {
     default "";
     ~^[0-9A-Fa-f:.]+$ $http_cf_connecting_ip;
 }
 map "${v("cloudflare_set")}:${v("cf_header")}" ${v("ip")} {
-    default ${fallback};
+    default ${v("client")};
     ~^1:.+$ ${v("cf_header")};
 }
 `;

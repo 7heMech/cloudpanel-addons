@@ -9,6 +9,8 @@ const dirs: string[] = [];
 afterEach(() => { for (const dir of dirs.splice(0)) rmSync(dir, { recursive: true, force: true }); });
 
 const NGINX = `http {
+    set_real_ip_from 127.0.0.1;
+    set_real_ip_from 10.0.0.0/8;
     log_format main '$remote_addr - $remote_user [$time_local] "$request" '
                     '$status';
     log_format cloudflare '$http_cf_connecting_ip - $remote_user [$time_local] "$request" '
@@ -42,6 +44,7 @@ test("on points the log formats and PHP at the map, and off gives every file bac
   expect(applyVisitorIp(true, b.options)).toBe(true);
   expect(b.nginx.commands).toEqual(["nginx -t", "systemctl reload nginx"]);
   expect(readFileSync(b.paths.nginxConf, "utf8")).toBe(NGINX
+    .replace("    set_real_ip_from 127.0.0.1;", "    #clp-addons:hop set_real_ip_from 127.0.0.1;")
     .replace("main '$remote_addr", "main '$clp_visitor_ip")
     .replace("cloudflare '$http_cf_connecting_ip", "cloudflare '$clp_visitor_ip"));
   expect(readFileSync(b.paths.fastcgiParams, "utf8")).toBe(FASTCGI.replace("\t$remote_addr;", "\t$clp_visitor_ip;"));

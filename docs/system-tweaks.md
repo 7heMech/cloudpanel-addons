@@ -158,7 +158,8 @@ sits in front of this server or its panel.
 **Cloudflare visitor IPs** is on by default. Sites behind Cloudflare's proxy or a
 Cloudflare Tunnel on this server get the visitor's IP in their access logs and
 in PHP, from `CF-Connecting-IP`. The header is believed only from Cloudflare and
-from the tunnel, so nobody else can set it. Error logs and **Allow traffic from
+from the tunnel, so nobody else can set it. Visitors coming through a tunnel
+can no longer set their IP with `X-Real-IP`. Error logs and **Allow traffic from
 Cloudflare only** still see Cloudflare's or the tunnel's address.
 
 ## phpMyAdmin

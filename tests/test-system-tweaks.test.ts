@@ -21,6 +21,7 @@ import { iniBoolean, iniSetting, uploadProgressStatus } from "../addons/system-t
 import { dashboardView } from "../addons/system-tweaks/app/views";
 import { isSwitchVerb } from "../addons/system-tweaks/app/service";
 import { releaseRealIp } from "../addons/system-tweaks/real-ip";
+import { releaseVisitorIp } from "../addons/system-tweaks/visitor-ip";
 import WRAPPER_SCRIPT from "../addons/system-tweaks/clpctl-wrapper.sh" with { type: "text" };
 import { DEFAULT_BACKUP_COMPRESSION } from "../addons/system-tweaks/backup-compression";
 import { MOTD_SCRIPT, applyMotd } from "../addons/system-tweaks/motd";
@@ -730,10 +731,11 @@ test("an upgrade run gets the sites' conffile back unreloaded, and the panel's f
   restoreSystemTweaks(b.options);
   b.nginx.commands.length = 0;
   expect(releaseRealIp(b.options.realIp)).toBe(true);
+  expect(releaseVisitorIp("nginxConf", b.options.visitorIp)).toBe(true);
   expect(readFileSync(b.nginxConf, "utf8")).toBe(CLOUDPANEL_NGINX_CONF);
   expect(readFileSync(b.panelConf, "utf8")).toContain("#clp-addons:untrusted");
   expect(b.nginx.commands).toEqual([]);
-  expect(systemTweaksUpkeep(b.options)).toBe("visitor-IP trust narrowed again");
+  expect(systemTweaksUpkeep(b.options)).toBe("visitor-IP trust narrowed again; Cloudflare visitor IPs reapplied");
   expect(readFileSync(b.nginxConf, "utf8")).toContain("#clp-addons:untrusted");
 });
 
@@ -926,6 +928,7 @@ test("forged visitor IPs are blocked by default and switching off restores Cloud
   const blocked = readFileSync(b.nginxConf, "utf8");
   expect(blocked).toContain("    #clp-addons:untrusted set_real_ip_from 0.0.0.0/0;\n");
   expect(blocked).toContain("    set_real_ip_from 10.0.0.0/8;\n");
+  expect(blocked).toContain("    #clp-addons:hop set_real_ip_from 127.0.0.1;\n");
   expect(readFileSync(b.panelConf, "utf8")).toContain([
     "    #clp-addons:untrusted set_real_ip_from 0.0.0.0/0;",
     "    # clp-addons:cloudflare-proxies:start",
@@ -942,7 +945,8 @@ test("forged visitor IPs are blocked by default and switching off restores Cloud
 
   const off = await act(b, ["set-real-ip"], { enabled: false });
   expect(off.realIp).toEqual({ blockForged: false, trustsAnyAddress: true, problem: "" });
-  expect(readFileSync(b.nginxConf, "utf8")).toBe(CLOUDPANEL_NGINX_CONF);
+  // Cloudflare visitor IPs keeps its own edit.
+  expect(readFileSync(b.nginxConf, "utf8")).toBe(CLOUDPANEL_NGINX_CONF.replace("    set_real_ip_from 127.0.0.1;", "    #clp-addons:hop set_real_ip_from 127.0.0.1;"));
   expect(readFileSync(b.panelConf, "utf8")).toBe(PANEL_NGINX_CONF);
   b.nginx.commands.length = 0;
   expect(systemTweaksUpkeep(b.options)).toBeNull();

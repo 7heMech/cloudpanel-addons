@@ -2,9 +2,11 @@
  * Sites behind Cloudflare, proxied or through a Cloudflare Tunnel on this
  * server, log and hand PHP the edge's or 127.0.0.1's address. This points the
  * sites' log formats and PHP's REMOTE_ADDR at `$clp_visitor_ip`, which
- * `lib/visitor-ip.ts` defines from CF-Connecting-IP when Cloudflare set it and
- * `$remote_addr` otherwise. `$remote_addr` itself stays, so Cloudflare-only
- * access and the error logs still see the connecting address.
+ * `lib/visitor-ip.ts` defines from CF-Connecting-IP when Cloudflare set it.
+ * The map also reads the X-Real-IP CloudPanel's front server sends its local
+ * backend, so 127.0.0.1 stops being trusted for that header, which a visitor
+ * could otherwise send through a tunnel. `$remote_addr` is otherwise left
+ * alone, so Cloudflare-only access still sees the connecting address.
  */
 import { errorMessage } from "../../lib/errors";
 import { readFileSync } from "node:fs";
@@ -37,19 +39,24 @@ export interface VisitorIpOptions {
   run?: (command: string, args: string[]) => CommandResult;
 }
 
-/** The address each file uses as it ships, at the start of a line. */
-const EDITS: Record<"nginxConf" | "fastcgiParams", { lead: RegExp; original: string }[]> = {
+const UNTRUSTED_LOOPBACK = "#clp-addons:hop ";
+
+/** Each edit: what follows `lead` as the file ships, and with the setting on. */
+const EDITS: Record<"nginxConf" | "fastcgiParams", { lead: RegExp; off: string; on: string }[]> = {
   nginxConf: [
-    { lead: /^([ \t]*log_format[ \t]+main[ \t]+')/, original: "$remote_addr" },
-    { lead: /^([ \t]*log_format[ \t]+cloudflare[ \t]+')/, original: "$http_cf_connecting_ip" },
+    { lead: /^([ \t]*log_format[ \t]+main[ \t]+')/, off: "$remote_addr", on: VISITOR_IP },
+    { lead: /^([ \t]*log_format[ \t]+cloudflare[ \t]+')/, off: "$http_cf_connecting_ip", on: VISITOR_IP },
+    { lead: /^([ \t]*)/, off: "set_real_ip_from 127.0.0.1;", on: `${UNTRUSTED_LOOPBACK}set_real_ip_from 127.0.0.1;` },
   ],
-  fastcgiParams: [{ lead: /^([ \t]*fastcgi_param[ \t]+REMOTE_ADDR[ \t]+)/, original: "$remote_addr" }],
+  fastcgiParams: [{ lead: /^([ \t]*fastcgi_param[ \t]+REMOTE_ADDR[ \t]+)/, off: "$remote_addr", on: VISITOR_IP }],
 };
 
+const literal = (text: string) => text.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+
 function swap(content: string, file: keyof typeof EDITS, on: boolean): string {
-  return EDITS[file].reduce((text, { lead, original }) => {
-    const [from, to] = on ? [original, VISITOR_IP] : [VISITOR_IP, original];
-    const line = new RegExp(`${lead.source}${from.replace(/\$/g, "\\$")}(?=[ \\t;'])`, "m");
+  return EDITS[file].reduce((text, edit) => {
+    const [from, to] = on ? [edit.off, edit.on] : [edit.on, edit.off];
+    const line = new RegExp(`${edit.lead.source}${literal(from)}(?=[ \\t;']|$)`, "m");
     return text.replace(line, (_match, start: string) => `${start}${to}`);
   }, content);
 }
@@ -145,7 +152,7 @@ export const VISITOR_IP_TWEAK = tweak<{ cloudflareVisitorIp: boolean }, { visito
     key: "cloudflareVisitorIp",
     title: "Cloudflare visitor IPs",
     description: [
-      "Site access logs and PHP take the visitor's IP from CF-Connecting-IP when Cloudflare's proxy or a Cloudflare Tunnel on this server sent the request. Anyone else's header is ignored.",
+      "Site access logs and PHP take the visitor's IP from CF-Connecting-IP when Cloudflare's proxy or a Cloudflare Tunnel on this server sent the request. Anyone else's header is ignored, and so is an X-Real-IP sent through a tunnel.",
       "Error logs and Cloudflare-only access still see Cloudflare's or the tunnel's address.",
     ],
     checked: visitorIp.enabled,

@@ -64,23 +64,12 @@ const NGINX_MAINTENANCE_BLOCK_RE = /\r?\n?[ \t]*# clp-addons:maintenance:start[\
 const MAINTENANCE_GEO_MARKER = "# clp-addons:maintenance-client-ip";
 
 /**
- * CloudPanel keeps these ranges for its own Cloudflare-only vhost setting.
- * The client is the connection peer, even when CloudPanel's broad real_ip
- * settings replaced $remote_addr from a header, or for a loopback peer, which
- * is CloudPanel's front server for a site with a local backend, the X-Real-IP
- * it passes.
+ * CloudPanel keeps these ranges for its own Cloudflare-only vhost setting. The
+ * fallback is the connection peer, even when CloudPanel's broad real_ip
+ * settings replaced $remote_addr from a header.
  */
 function maintenanceGeoContent(ranges: string[]): string {
-  return `${MAINTENANCE_GEO_MARKER}
-map $http_x_real_ip $clp_maintenance_real_ip_header {
-    default "";
-    ~^[0-9A-Fa-f:.]+$ $http_x_real_ip;
-}
-map "$clp_maintenance_peer_kind:$clp_maintenance_real_ip_header" $clp_maintenance_client {
-    default $clp_maintenance_peer;
-    ~^local:.+$ $clp_maintenance_real_ip_header;
-}
-${cloudflareVisitorMaps("clp_maintenance", ranges, "$clp_maintenance_client")}`;
+  return `${MAINTENANCE_GEO_MARKER}\n${cloudflareVisitorMaps("clp_maintenance", ranges, "$clp_maintenance_peer")}`;
 }
 
 interface MaintenanceNginxPaths {

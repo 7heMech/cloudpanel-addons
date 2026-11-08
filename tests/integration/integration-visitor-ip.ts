@@ -37,6 +37,7 @@ try {
   assert.match(readFileSync(paths.nginxConf, "utf8"), /log_format main '\$clp_visitor_ip - /);
   assert.match(readFileSync(paths.nginxConf, "utf8"), /log_format cloudflare '\$clp_visitor_ip - /);
   assert.match(readFileSync(paths.fastcgiParams, "utf8"), /REMOTE_ADDR\t\t\$clp_visitor_ip;/);
+  assert.match(readFileSync(paths.nginxConf, "utf8"), /#clp-addons:hop set_real_ip_from 127\.0\.0\.1;/);
   for (const file of [paths.nginxConf, paths.fastcgiParams, paths.maps]) chmodSync(file, 0o644);
 
   // A front server on 80 that proxies to a backend on 8080 as CloudPanel's
@@ -84,13 +85,15 @@ both 192.0.2.1 --interface 127.0.0.2 -H 'CF-Connecting-IP: 192.0.2.1'
 both 192.0.2.1 --interface 127.0.0.1 -H 'CF-Connecting-IP: 192.0.2.1'
 both 2001:db8::1 --interface 127.0.0.1 -H 'CF-Connecting-IP: 2001:db8::1'
 both 127.0.0.1 --interface 127.0.0.1
+both 127.0.0.1 --interface 127.0.0.1 -H 'X-Real-IP: 198.51.100.7'
+both 192.0.2.1 --interface 127.0.0.1 -H 'X-Real-IP: 198.51.100.7' -H 'CF-Connecting-IP: 192.0.2.1'
 both 127.0.0.2 --interface 127.0.0.2 -H 'CF-Connecting-IP: 192.0.2.1 x'
 both 127.0.0.3 --interface 127.0.0.3 -H 'CF-Connecting-IP: 192.0.2.1'
 both 127.0.0.3 --interface 127.0.0.3 -H 'CF-Connecting-IP: 192.0.2.1' -H 'X-Real-IP: 127.0.0.2'
 check 127.0.0.3 --interface 127.0.0.3 -H 'CF-Connecting-IP: 192.0.2.1' -H 'X-Real-IP: 127.0.0.2' http://127.0.0.1:8080/
 grep -q '^192.0.2.1 - ' /tmp/access.log
 if grep -v '^192.0.2.1 \\|^2001:db8::1 \\|^127.0.0.[123] ' /tmp/access.log; then exit 1; fi
-echo 'Visitor-IP integration passed: Cloudflare and a tunnel on this server name the visitor in the log and to PHP; anyone else, or a malformed header, keeps the connecting address.'
+echo 'Visitor-IP integration passed: Cloudflare and a tunnel on this server name the visitor in the log and to PHP; anyone else, a malformed header, or an X-Real-IP sent through the tunnel keeps the connecting address.'
 `], { stdout: "pipe", stderr: "pipe", timeout: 60_000 });
   assert.equal(result.exitCode, 0, result.stdout.toString() + result.stderr.toString());
   process.stdout.write(result.stdout);
