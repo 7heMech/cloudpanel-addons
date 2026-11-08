@@ -319,20 +319,29 @@ pre { background: var(--bg); border: 1px solid var(--border); border-radius: 4px
 .mobile-select-all { display: none; }
 .fleet-selection { display: flex; align-items: center; gap: 12px; }
 .alert-ok { color: var(--ok); background: rgb(35 119 75 / 8%); }
-/* A message stays in view however far the page is scrolled: top right under the
-   panel's header, at the bottom on a phone. */
-#clp-flash { position: fixed; z-index: 1050; top: 92px; right: 24px; width: min(440px, calc(100vw - 48px)); margin: 0;
-  display: flex; align-items: flex-start; gap: 12px; box-shadow: 0 8px 28px rgb(0 0 0 / 18%); overflow-wrap: anywhere; }
-#clp-flash[hidden] { display: none; }
-#clp-flash.alert { background: linear-gradient(rgb(248 113 113 / 12%), rgb(248 113 113 / 12%)), var(--panel); }
-#clp-flash.notice { background: linear-gradient(rgb(251 191 36 / 12%), rgb(251 191 36 / 12%)), var(--panel); }
-#clp-flash.alert-ok { background: linear-gradient(rgb(35 119 75 / 10%), rgb(35 119 75 / 10%)), var(--panel); }
-#clp-flash .clp-flash-text { flex: 1 1 auto; min-width: 0; }
-#clp-flash .clp-flash-text a { color: inherit; text-decoration: underline; }
-#clp-flash .clp-flash-close { flex: 0 0 auto; margin: -4px -8px 0 0; padding: 2px 8px; border: 0; background: none;
+/* Messages stay in view however far the page is scrolled: top right under the
+   panel's header, at the bottom on a phone, and at the other end when the
+   pointer is where they would land (data-edge, set by notify()). The holder is
+   a popover, so the browser's own popover box is undone here. */
+#clp-flash { position: fixed; z-index: 1050; inset: auto 24px auto auto; width: min(440px, calc(100vw - 48px));
+  margin: 0; padding: 0; border: 0; background: none; color: inherit; overflow: visible;
+  display: flex; flex-direction: column; gap: 10px; }
+#clp-flash:not(:popover-open) { display: none; }
+#clp-flash[data-edge="top"] { top: 92px; flex-direction: column-reverse; }
+#clp-flash[data-edge="bottom"] { bottom: 24px; }
+.clp-toast { display: flex; align-items: flex-start; gap: 12px; margin: 0; box-shadow: 0 8px 28px rgb(0 0 0 / 18%);
+  overflow-wrap: anywhere; }
+.clp-toast.alert { background: linear-gradient(rgb(248 113 113 / 12%), rgb(248 113 113 / 12%)), var(--panel); }
+.clp-toast.notice { background: linear-gradient(rgb(251 191 36 / 12%), rgb(251 191 36 / 12%)), var(--panel); }
+.clp-toast.alert-ok { background: linear-gradient(rgb(35 119 75 / 10%), rgb(35 119 75 / 10%)), var(--panel); }
+.clp-toast .clp-flash-text { flex: 1 1 auto; min-width: 0; }
+.clp-toast .clp-flash-text a { color: inherit; text-decoration: underline; }
+.clp-toast .clp-flash-close { flex: 0 0 auto; margin: -4px -8px 0 0; padding: 2px 8px; border: 0; background: none;
   color: inherit; font-size: 20px; line-height: 1; cursor: pointer; }
 @media (max-width: 940px) {
-  #clp-flash { top: auto; bottom: 12px; left: 12px; right: 12px; width: auto; }
+  #clp-flash { left: 12px; right: 12px; width: auto; }
+  #clp-flash[data-edge="top"] { top: 12px; }
+  #clp-flash[data-edge="bottom"] { bottom: 12px; }
 }
 #clp-confirm-details { margin: 12px 0 0; padding-left: 20px; color: var(--muted); font-size: 14px; }
 #clp-confirm-text { margin: 0; overflow-wrap: anywhere; }

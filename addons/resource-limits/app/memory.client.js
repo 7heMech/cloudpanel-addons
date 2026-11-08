@@ -25,8 +25,7 @@ function working(control, text) {
     : row ? row.querySelector('.tweak-note') : control.closest('.st-install');
   if (after) after.after(line);
   const page = setTimeout(function () {
-    notify(text + ' Other settings wait until it finishes.', 'warn');
-    clearTimeout(clpFlashTimer);
+    notify(text + ' Other settings wait until it finishes.', 'warn', null, true);
   }, 600);
   return function () {
     clearTimeout(page);

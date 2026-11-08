@@ -44,8 +44,7 @@ function working(control, text) {
     : row ? row.querySelector('.tweak-note') : control.closest('.st-fold, .st-install, .page-heading');
   after.after(line);
   const page = setTimeout(function () {
-    notify(text + ' Other settings wait until it finishes.', 'warn');
-    clearTimeout(clpFlashTimer);
+    notify(text + ' Other settings wait until it finishes.', 'warn', null, true);
   }, 600);
   return function () {
     clearTimeout(page);

@@ -540,8 +540,14 @@ of the words, which the stylesheet sets for each theme. Theme & Branding's
 uploaded logos are still images.
 
 Every addon renders into one shell in `lib/app-ui.ts`: palette, cards, tables,
-badges, switches, toolbars, one confirmation dialog and one inline notice per
-page. A badge names a state rather than being read for itself, so it is set a
+badges, switches, toolbars, one confirmation dialog and one notice holder per
+page. The holder stacks up to three messages, the newest nearest its edge, and
+replaces one already showing rather than repeating it. It is a popover, so it is
+drawn in the top layer over any dialog or menu. It starts top right on a desktop
+and at the bottom on a phone, at the other end when the pointer or the last tap
+is in that corner -- where the switch that was just clicked usually is -- and
+hovering it holds the messages until the pointer leaves. An error stays until it
+is dismissed, as does a message whose caller says it stays. A badge names a state rather than being read for itself, so it is set a
 size below body text, as a tinted chip in one of five tones -- ok, info, warn,
 bad, muted -- and every addon names its states through them (`tone-*`, with the
 job states mapped onto the same five), so one colour means one thing on every
@@ -559,7 +565,7 @@ row comes down to the height of the line beside it, so the control does not set
 the row's height. An addon supplies its mount path, its script and any rule only it
 draws. The manager's own pages use the same two: disabling an addon asks through
 that dialog, naming the addon as its card does and saying that its data is kept,
-and a manager job that fails to start reports through the inline notice. The
+and a manager job that fails to start reports through the notice holder. The
 browser's `confirm` and `alert` survive only as what the shell degrades to where
 there is no `<dialog>` or no notice holder. Below 940px the shell tightens: a fleet table's rows become cards, a dialog
 gives up its desktop padding and its buttons take the row, and the dialog is
