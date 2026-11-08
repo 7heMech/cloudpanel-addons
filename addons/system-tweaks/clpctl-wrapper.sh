@@ -55,10 +55,12 @@ case "$command" in
   *) deny "$caller may not run '$command'" ;;
 esac
 
+# A database name: letters, digits, underscore and hyphen only.
 check_dbname() {
   [[ "$1" =~ ^[A-Za-z0-9_-]{1,64}$ ]] || deny "--databaseName has characters that are not allowed"
 }
 
+# An octal permission mode.
 check_mode() {
   [[ "$1" =~ ^[0-7]{3,4}$ ]] || deny "$2 must be an octal mode such as 770"
 }
@@ -93,6 +95,7 @@ check_reset_path() {
   [ "$resolved" = "$home" ] || deny "--path may only be your home directory, $home"
 }
 
+# A Varnish purge target: all, a tag list, or a plain http(s) URL.
 check_purge() {
   local val="$1"
   [ "$val" = all ] && return 0

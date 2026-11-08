@@ -125,7 +125,7 @@ const OUR_SHA256 = sha256(WRAPPER_SCRIPT);
 const PRIOR_SHIPPED_WRAPPER_SHA256: string[] = [
   // No hardened wrapper has shipped before the current one.
 ];
-const SHIPPED_WRAPPER_SHA256 = new Set<string>([...PRIOR_SHIPPED_WRAPPER_SHA256, OUR_SHA256]);
+export const SHIPPED_WRAPPER_SHA256: ReadonlySet<string> = new Set<string>([...PRIOR_SHIPPED_WRAPPER_SHA256, OUR_SHA256]);
 
 /** A regular file's bytes when only root may write it, else null; a failed read is null too. */
 function trustedBytes(path: string, rootUid: number): string | null {
