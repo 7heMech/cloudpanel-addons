@@ -57,7 +57,10 @@ browser tab keeps a granted answer in `sessionStorage`, and a page in that tab
 draws the controls before the request returns: the addons' pages paint before
 it does, and would otherwise push the header's tools aside a moment after
 they appear. The request still runs on every page, and an answer that is not
-a grant, or a request that fails, hides the controls and forgets it. The
+a grant, or a request that fails, hides the controls and forgets it. Root's
+own read that failed, such as while CloudPanel holds its database, is marked
+`unreadable`; it is neither cached nor taken as an answer, so the tab's last
+one stands. The
 stored answer only draws a link; the shell behind it checks for itself.
 
 Any administrator can reset another's password in CloudPanel and sign in as
