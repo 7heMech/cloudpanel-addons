@@ -13,7 +13,7 @@ import { CLIENT_JS } from "../addons/stager/app/views";
 
 const repo = join(import.meta.dir, "..");
 
-function runAction(paths: Record<string, string>, argv: string[], prelude = ""): string {
+function runAction(paths: Partial<StagerActionPaths>, argv: string[], prelude = ""): string {
   const script = `${prelude}
     Object.defineProperty(process, "getuid", { value: () => 0, configurable: true });
     const { runStagerAction } = await import("./addons/stager/action.ts");
@@ -446,7 +446,7 @@ describe("a site the job adopted is not a site the job created", () => {
       const id = "20260910T120000Z-abcdef";
       const dir = join(paths.jobsDir, id);
       writeJob(dir, { source: "live.example.test", target: "stg.example.test", state: "queued", step: "queued" });
-      expect(() => runAction({ ...paths }, ["run", "--job", id], IDENTITY_STUB)).toThrow();
+      expect(() => runAction(paths, ["run", "--job", id], IDENTITY_STUB)).toThrow();
       expect(readFileSync(join(dir, "state"), "utf8").trim()).toBe("failed");
       expect(readFileSync(join(dir, "error"), "utf8"))
         .toContain("a CloudPanel site for stg.example.test appeared after this clone was queued; nothing was changed");
