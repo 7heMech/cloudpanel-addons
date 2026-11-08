@@ -11,8 +11,9 @@ import { runCommand, type CommandResult } from "../lib/command";
 import { inspectPhpGuard, reconcilePhpGuard, type PhpGuardOptions } from "../lib/php-guard";
 import {
   executeSystemTweaksAction, readSettings, restoreSystemTweaks, systemTweaksMaintenance, systemTweaksMotd, systemTweaksPhpGuardOff, systemTweaksPhpMyAdmin, systemTweaksPhpPools, systemTweaksUpkeep, withdrawSystemTweaks,
-  type SystemTweaksOptions, type SystemTweaksPaths, type SystemTweaksState,
+  type SystemTweaksOptions, type SystemTweaksPaths,
 } from "../addons/system-tweaks/action";
+import { LOCK_SETTINGS, type SystemTweaksState } from "../addons/system-tweaks/registry";
 import {
   allowedPatterns, coverageOf, dropInFor, fnmatch, parseAptConfig, parsePolicy, updatesStatus, DEFAULT_UPDATE_SETTINGS, type UpdatesStatus,
 } from "../addons/system-tweaks/updates";
@@ -1320,6 +1321,60 @@ test("a withdrawal that fails after restoring the wrapper puts the hardened wrap
   expect(readFileSync(guardPaths.backup, "utf8")).toBe(CLPCTL_ORIGINAL);
 });
 
+test("a withdrawal that fails at PHP pool isolation queues the guards back and puts the hardened wrapper back", async () => {
+  const b = box();
+  const guardPaths = { wrapper: join(tempDir(), "clpctlWrapper"), backup: join(tempDir(), "clpctlWrapper.orig"), rootUid: process.getuid!() };
+  b.options.clpctlGuard = { version: "2.5.4-3", paths: guardPaths };
+  writeFileSync(guardPaths.wrapper, WRAPPER_SCRIPT, { mode: 0o700 });
+  writeFileSync(guardPaths.backup, CLPCTL_ORIGINAL, { mode: 0o700 });
+  await act(b, ["set-vhost-guard"], { enabled: true });
+  await act(b, ["set-php-pools"], { enabled: true });
+  const run = b.options.phpPools!.run!;
+  b.options.phpPools = { ...b.options.phpPools, run: (command, args) => command === "nft" && args[0] === "delete" ? { ok: false, stdout: "", stderr: "busy" } : run(command, args) };
+  b.fpm.commands.length = 0;
+  b.fm.commands.length = 0;
+  expect(() => withdrawSystemTweaks(b.options)).toThrow("nft could not remove the PHP pool rules");
+  // Both guards were already removed, so repair runs now rather than at its next turn.
+  expect(existsSync(b.vhostGuardPaths.pool)).toBe(false);
+  expect(b.fpm.commands).toContain("systemctl start --no-block clp-addons-reconcile.service");
+  expect(b.fm.commands).toContain("systemctl start --no-block clp-addons-reconcile.service");
+  expect(readFileSync(guardPaths.wrapper, "utf8")).toBe(WRAPPER_SCRIPT);
+});
+
+test("repair keeps the timers it enables while it reconciles the login jails", async () => {
+  const b = box();
+  await act(b, ["set-updates"], { enabled: true });
+  expect(JSON.parse(readFileSync(b.settingsFile, "utf8")).enabledTimers).toEqual([]);
+  b.timers.set("apt-daily.timer", "disabled");
+  systemTweaksUpkeep(b.options);
+  expect(b.timers.get("apt-daily.timer")).toBe("enabled");
+  expect(JSON.parse(readFileSync(b.settingsFile, "utf8")).enabledTimers).toEqual(["apt-daily.timer"]);
+  // So switching updates off disables it again.
+  await act(b, ["set-updates"], { enabled: false });
+  expect(b.timers.get("apt-daily.timer")).toBe("disabled");
+});
+
+test("settings.json keeps its format and the state names its parts in a fixed order", async () => {
+  const b = box();
+  const state = await act(b, ["set-motd"], { enabled: false });
+  const text = readFileSync(b.settingsFile, "utf8");
+  const saved = JSON.parse(text);
+  expect(text).toBe(`${JSON.stringify(saved, null, 2)}\n`);
+  expect(Object.keys(saved)).toEqual([
+    "version", "updates", "enabledTimers", "uploadProgressGuard", "blockForgedRealIp", "blockVhostInjection", "isolatePhpPools",
+    "protectPhpMyAdmin", "confineFileManager", "replacePanelCert", "loginJails", "fail2banBefore", "databaseLoopback",
+    "blockClpctlInjection", "blockTelemetry", "serverInfoMotd", "backupCompression",
+  ]);
+  expect(saved).toMatchObject({
+    version: 1, enabledTimers: [], uploadProgressGuard: true, loginJails: { panel: true, ssh: false }, fail2banBefore: null,
+    databaseLoopback: false, serverInfoMotd: false, backupCompression: DEFAULT_BACKUP_COMPRESSION,
+  });
+  expect(Object.keys(state)).toEqual([
+    "updates", "settings", "uploadProgress", "realIp", "phpMyAdmin", "panelCert", "vhostGuard", "phpPools", "fileManagerGuard",
+    "clpctlGuard", "panelPhp", "firewall", "loginJails", "database", "backupCompression", "telemetry", "motd",
+  ]);
+});
+
 test("the page shows the vhost guard as on, waiting for repair, or off", () => {
   const html = (partial: Omit<SystemTweaksState["vhostGuard"], "homeLogs" | "ownLogrotate"> & { homeLogs?: string[]; ownLogrotate?: string[] }) => dashboardView({
     updates: updatesStatus({ run: () => ({ ok: false, stdout: "", stderr: "" }) }), settings: { ...DEFAULT_UPDATE_SETTINGS },
@@ -1998,12 +2053,9 @@ test("Lock settings switches every lockable switch on, then locks", async () => 
 });
 
 test("Lock settings covers every switch root's lock holds", () => {
-  const source = readFileSync(new URL("../addons/system-tweaks/action.ts", import.meta.url), "utf8");
-  const switches = source.match(/const SWITCHES = \{([^}]*)\}/)![1]!;
-  for (const [verb, declared] of Object.entries(SYSTEM_TWEAKS_VERBS)) {
-    if ((declared as { lock?: string }).lock !== "on" || verb === "set-login-jails") continue;
-    expect(switches).toContain(`"${verb}":`);
-  }
+  const turnsOn = [...LOCK_SETTINGS.first, ...LOCK_SETTINGS.last].map((tweak): string => "switch" in tweak ? tweak.switch.verb : tweak.lockOn.verb);
+  const held = Object.entries(SYSTEM_TWEAKS_VERBS).filter(([, declared]) => (declared as { lock?: string }).lock === "on").map(([verb]) => verb);
+  expect(turnsOn.sort()).toEqual(held.sort());
 });
 
 test("Lock settings refuses a lock file root cannot trust before it changes anything", async () => {

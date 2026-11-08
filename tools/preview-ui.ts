@@ -74,7 +74,7 @@ import type { UserKeysView } from "../addons/security-keys/action";
 import {
   dashboardView as systemTweaksDashboardView, layout as systemTweaksLayout,
 } from "../addons/system-tweaks/app/views";
-import type { SystemTweaksState } from "../addons/system-tweaks/action";
+import type { SystemTweaksState } from "../addons/system-tweaks/registry";
 import type { LockState } from "../lib/root-locks";
 import { MEMORY_PROFILES, memoryPlan, type MemoryProfile, type MemorySettings } from "../addons/resource-limits/memory";
 

@@ -10,7 +10,10 @@ import { errorMessage } from "../../lib/errors";
 import { existsSync, readFileSync, rmSync } from "node:fs";
 import { runCommand, type CommandResult } from "../../lib/command";
 import { writeFileAtomic } from "../../lib/atomic-write";
-import { COMMAND_MS } from "./limits";
+import { COMMAND_MS, TELEMETRY_GATEWAY_TIMEOUT_MS } from "./limits";
+import { applyThenSave, tweak } from "./tweak";
+import { badge, statusLine, switchRow } from "./app/rows";
+import { esc } from "../../lib/app-http";
 
 const DEFAULT_TELEMETRY_PATHS = {
   dropIn: "/etc/systemd/system/clp-agent.service.d/zz-clp-addons-telemetry.conf",
@@ -132,3 +135,50 @@ export function applyTelemetryBlock(block: boolean, options: TelemetryOptions = 
   reload(ctx);
   return true;
 }
+
+type TelemetryState = TelemetryStatus & { enabled: boolean };
+
+function telemetryLine(state: TelemetryState): string {
+  if (state.problem) return `${badge("Unknown", "warn")} <span>${esc(state.problem)}</span>`;
+  if (!state.agent) return `${badge("No agent", "plain")} <span>CloudPanel's clp-agent is not installed here.</span>`;
+  if (state.blocked) return `${badge("Blocked", "ok")} <span>clp-agent can reach only this server.</span>`;
+  if (state.enabled) return `${badge("Not applied", "warn")} <span>Run clp-addons repair.</span>`;
+  return `${badge("Sending", "plain")} <span>clp-agent sends CloudPanel every site's domain and every panel user's name and email once a day.</span>`;
+}
+
+/** Deny CloudPanel's clp-agent every address but loopback. */
+export const TELEMETRY_TWEAK = tweak<{ blockTelemetry: boolean }, { telemetry?: TelemetryOptions }, { telemetry: TelemetryState }>()({
+  defaults: { blockTelemetry: true },
+  state: ({ options, settings }) => ({ telemetry: { ...telemetryStatus(options.telemetry), enabled: settings.blockTelemetry } }),
+  switch: {
+    verb: "set-telemetry",
+    key: "blockTelemetry",
+    timeout: TELEMETRY_GATEWAY_TIMEOUT_MS,
+    set: applyThenSave("blockTelemetry", (on, options: { telemetry?: TelemetryOptions }) => applyTelemetryBlock(on, options.telemetry)),
+  },
+  repair: {
+    block: {
+      label: "CloudPanel telemetry",
+      locked: true,
+      run: ({ options, settings }) => settings.blockTelemetry && applyTelemetryBlock(true, options.telemetry) && "CloudPanel telemetry blocked again",
+    },
+  },
+  withdraw: {
+    run: ({ options }) => { applyTelemetryBlock(false, options.telemetry); },
+    warning: (error) => `clp-agent is still blocked from the network: ${error}; remove ${DEFAULT_TELEMETRY_PATHS.dropIn}`,
+  },
+  restore: {
+    run: ({ options, settings }) => { if (settings.blockTelemetry) applyTelemetryBlock(true, options.telemetry); },
+    warning: (error) => `blocking CloudPanel telemetry waits for the next repair: ${error}`,
+  },
+  row: ({ telemetry }, locked) => switchRow("set-telemetry", {
+    key: "blockTelemetry",
+    title: "Block CloudPanel telemetry",
+    description: [
+      "Cuts CloudPanel's clp-agent off from the network, so it stops sending the server's ID and hardware, every site's domain and every panel user's name and email.",
+      "The agent keeps recording the dashboard's graphs.",
+    ],
+    checked: telemetry.enabled,
+    extra: statusLine(telemetryLine(telemetry)),
+  }, locked),
+});

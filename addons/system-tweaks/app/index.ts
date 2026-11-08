@@ -4,7 +4,7 @@ import {
 } from "../../../lib/app-http";
 import type { ActionResult } from "../../../lib/gateway-client";
 import { REBOOT_TIME_ERROR, validRebootTime } from "../updates";
-import type { SystemTweaksState } from "../action";
+import type { SystemTweaksState } from "../registry";
 import { BACKUP_COMPRESSION_ERROR, validBackupCompression } from "../backup-compression";
 import { FIREWALL_PROTOCOLS, ruleKey, type FirewallProtocol, type FirewallStatus } from "../firewall";
 import { LOGIN_JAILS } from "../login-jails";

@@ -6,8 +6,7 @@ import {
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { runCommand, type CommandResult } from "../lib/command";
-import { panelCertStatus, replacePanelCert, type PanelCertOptions } from "../addons/system-tweaks/panel-cert";
-import { panelCertLine } from "../addons/system-tweaks/app/views";
+import { panelCertLine, panelCertStatus, replacePanelCert, type PanelCertOptions } from "../addons/system-tweaks/panel-cert";
 
 const dirs: string[] = [];
 afterEach(() => { for (const dir of dirs.splice(0)) rmSync(dir, { recursive: true, force: true }); });

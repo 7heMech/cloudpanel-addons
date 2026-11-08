@@ -1589,6 +1589,51 @@ forms, and injects restart/reload failures to verify recovery and retained data.
 Docker does not change this. Its rules sit on `FORWARD` and bypass ufw only for
 ports a container publishes, and the host's MySQL is not one of them.
 
+## How the code is laid out
+
+Each tweak's module exports one `Tweak` (`tweak.ts`): its settings and their
+defaults, how stored values are read, its part of `state`, its switch (verb,
+the setting it saves, gateway timeout and the change) or its other verbs, its
+repair steps, how it is withdrawn and restored, and its row on the page. The
+login jails, which root's lock covers without a switch, also say how Lock
+settings turns them on, what stops that, and how a locked enable raises them. A tweak declares only what
+it has: Panel PHP and the firewall keep their own state and have no settings,
+and Automatic updates, Remote backups and Failed logins have verbs of their own
+rather than a switch and keep their cards in `app/views.ts`.
+
+`registry.ts` lists the tweaks and, for each phase, the order it runs them in:
+settings.json's keys, the parts of `state`, the Hardening card's rows, repair,
+withdrawal, restoring and Lock settings. The orders differ and each is written out, because
+what a failure leaves behind depends on it;
+`tests/test-system-tweaks-registry.test.ts` pins every one, and that every step
+a tweak declares runs in its phase exactly once. `action.ts` does the rest from
+the registry: one settings file under one lock, each switch's request checked
+and run under that lock, and each phase. A tweak's save writes its own settings
+into the file as it stands, so in a phase that runs several tweaks under one
+lock, a later tweak never puts back an earlier one's settings as they were when
+the lock was taken. Root's lock is asked under the settings lock before each
+change it covers, so a switch goes off only while System Tweaks is unlocked.
+The verbs stay a literal in `verbs.ts`, since the gateway reads them without
+loading the addon and their `lock` marks decide what root's lock covers; the
+action checks at load that its handlers are exactly those verbs.
+
+Withdrawal runs Panel PHP first, outside the settings lock, because it refuses
+when CloudPanel's own PHP would not come back; then, under the lock, the clpctl
+guard, because it refuses when its saved original is gone, and backup
+compression, because it refuses an edited backup command, so either refusal
+leaves every protection in place; then the rest. A failure stops it, the addon
+stays enabled, and each step already done that can put its protection back does
+so, latest first: a repair run for the vhost and File Manager guards, the
+hardened clpctl wrapper, the panel's PHP choice. Telemetry, the login message
+and the firewall come last and only warn, since none of them keeps the addon on.
+Restoring runs under the lock and stops at a failure, except for MySQL, backup
+compression, telemetry and the login message, which warn and wait for repair;
+Panel PHP comes back either way, and the panel certificate and firewall follow,
+warning on failure.
+
+A new tweak is its module with its `Tweak`, an entry in `TWEAKS` and in each
+phase it takes part in, and its verbs in `verbs.ts`.
+
 ## Retiring a mitigation
 
 Each mitigation here answers a specific CloudPanel behaviour. When CloudPanel
@@ -1622,5 +1667,5 @@ the saved original named in the row) to see what CloudPanel itself ships.
 | PHP upload progress (every install) | PHP-FPM defaults `session.upload_progress.enabled` to On, the session path of [CVE-2026-109619](https://github.com/php/php-src/security/advisories/GHSA-6wmf-4rv5-p3rp) | `php -i \| grep session.upload_progress.enabled` is `On` by default and the installed PHP build is not yet patched for the advisory | the `uploadProgressGuard` and `php-guard` wiring — once the PHP packages carry the fix |
 
 Removing any row also means deleting its line from `SECURITY.md`, its row in
-[the operator guide](../system-tweaks.md), and its tests, and dropping the
-setting from `SystemTweaksSettings` and the page.
+[the operator guide](../system-tweaks.md), and its tests, and its tweak from
+`registry.ts` and `verbs.ts`, which takes its setting, state and row with it.

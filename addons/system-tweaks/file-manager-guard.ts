@@ -13,6 +13,9 @@ import {
   FPM_DIR, POOL_GUARD_PATH_DEFAULTS, poolGuard, type PoolGuardContext, type PoolGuardOptions, type PoolGuardPaths,
 } from "./pool-guard";
 import GUARD_SCRIPT from "./file-manager-guard.php" with { type: "text" };
+import { POOL_GUARD_GATEWAY_TIMEOUT_MS } from "./limits";
+import { tweak } from "./tweak";
+import { badge, statusLine, switchRow } from "./app/rows";
 
 interface FileManagerGuardPaths extends PoolGuardPaths {
   /** `clp`'s uid and gid, looked up when null. */
@@ -104,3 +107,81 @@ export const fileManagerGuardStatus = guard.status;
 export const installFileManagerGuard = guard.install;
 export const queueFileManagerGuard = guard.queue;
 export const removeFileManagerGuard = guard.remove;
+
+interface FileManagerGuardState { enabled: boolean; active: boolean }
+
+function fileManagerGuardLine(state: FileManagerGuardState): string {
+  if (state.active) return `${badge("On", "ok")} <span>File Manager access is limited to each site's files.</span>`;
+  if (state.enabled) return `${badge("Not applied", "warn")} <span>Run clp-addons repair.</span>`;
+  return `${badge("Off", "plain")} <span>Any panel account with a site can read and change files anywhere on the server through the File Manager, which runs as root.</span>`;
+}
+
+type Options = { fileManagerGuard?: FileManagerGuardOptions };
+
+/**
+ * After a withdrawal fails, the addon stays enabled, so the guard comes back
+ * now rather than at the next repair, unless it was switched off.
+ */
+function putBack({ options, settings }: { options: Options; settings: { confineFileManager: boolean } }): void {
+  if (settings.confineFileManager) queueFileManagerGuard(options.fileManagerGuard);
+}
+
+/** Refuse File Manager requests that leave the site's home, and leave its socket to clp. */
+export const FILE_MANAGER_GUARD_TWEAK = tweak<{ confineFileManager: boolean }, Options, { fileManagerGuard: FileManagerGuardState }>()({
+  defaults: { confineFileManager: true },
+  state: async ({ options, settings }) => ({
+    fileManagerGuard: { enabled: settings.confineFileManager, active: (await fileManagerGuardStatus(options.fileManagerGuard)).active },
+  }),
+  switch: {
+    verb: "set-file-manager-guard",
+    key: "confineFileManager",
+    timeout: POOL_GUARD_GATEWAY_TIMEOUT_MS,
+    async set({ options, settings, save }, on) {
+      if (on) {
+        await installFileManagerGuard(options.fileManagerGuard);
+        save({ confineFileManager: true });
+      } else {
+        // Record the opt-out first, so repair never puts back a guard the
+        // administrator took away; a removal that fails leaves it in place, so
+        // the setting goes back to on to match.
+        save({ confineFileManager: false });
+        try {
+          removeFileManagerGuard(options.fileManagerGuard);
+        } catch (error) {
+          save({ confineFileManager: settings.confineFileManager });
+          throw error;
+        }
+      }
+    },
+  },
+  repair: {
+    guard: {
+      label: "File Manager guard",
+      locked: true,
+      run: async ({ options, settings }) =>
+        settings.confineFileManager && await installFileManagerGuard({ lockWaitSeconds: 5, ...options.fileManagerGuard }) && "File Manager guard put back",
+    },
+  },
+  withdraw: {
+    run: (ctx) => {
+      try {
+        removeFileManagerGuard(ctx.options.fileManagerGuard);
+      } catch (error) {
+        putBack(ctx);
+        throw error;
+      }
+    },
+    putBack,
+  },
+  restore: { run: ({ options, settings }) => { if (settings.confineFileManager) queueFileManagerGuard(options.fileManagerGuard); } },
+  row: ({ fileManagerGuard }, locked) => switchRow("set-file-manager-guard", {
+    key: "confineFileManager",
+    title: "Restrict File Manager to site files",
+    description: [
+      "Refuses File Manager requests that reach outside the site's home through .. or a symbolic link, and archives that would extract device files or setuid programs.",
+      "Only the panel's own nginx can reach the File Manager's PHP.",
+    ],
+    checked: fileManagerGuard.enabled,
+    extra: statusLine(fileManagerGuardLine(fileManagerGuard)),
+  }, locked),
+});

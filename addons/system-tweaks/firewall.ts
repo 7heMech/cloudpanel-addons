@@ -12,6 +12,8 @@ import { withFileLockSync } from "../../lib/file-lock";
 import { withPanelDb } from "../../lib/panel-db";
 import { writeFileAtomic } from "../../lib/atomic-write";
 import { isTrustedFile } from "../../lib/trusted-file";
+import { errorMessage } from "../../lib/errors";
+import { tweak } from "./tweak";
 
 export type FirewallProtocol = "tcp" | "udp" | "both";
 export const FIREWALL_PROTOCOLS: readonly FirewallProtocol[] = ["tcp", "udp", "both"];
@@ -431,3 +433,41 @@ export function setRuleProtocol(body: Record<string, unknown>, options: Firewall
     writeFirewallState(paths, state);
   });
 }
+
+function firewallOrError(options?: FirewallOptions): FirewallStatus | { error: string } {
+  try { return firewallStatus(options); }
+  catch (error) { return { error: errorMessage(error) }; }
+}
+
+type Options = { firewall?: FirewallOptions };
+
+/** The protocol of each rule on CloudPanel's own Firewall page; its controls are injected there. */
+export const FIREWALL_TWEAK = tweak<{}, Options, { firewall: FirewallStatus | { error: string } }>()({
+  state: ({ options }) => ({ firewall: firewallOrError(options.firewall) }),
+  verbs: {
+    firewall: async ({ options }) => firewallStatus(options.firewall),
+    async "set-firewall-protocol"({ options, body }) {
+      setRuleProtocol(await body(), options.firewall);
+      return firewallStatus(options.firewall);
+    },
+  },
+  repair: {
+    rules: {
+      label: "firewall",
+      locked: false,
+      run: ({ options }) => {
+        const changed = syncFirewall("apply", options.firewall);
+        return changed && `firewall: ${changed}`;
+      },
+    },
+  },
+  withdraw: {
+    run: ({ options }) => { syncFirewall("withdraw", options.firewall); },
+    // CloudPanel's next change on its Firewall page rebuilds ufw without these rules anyway.
+    warning: (error) => `ufw still has UDP rules from System Tweaks: ${error}`,
+  },
+  restore: {
+    run: ({ options }) => { syncFirewall("restore", options.firewall); },
+    warning: (error) => `firewall protocols wait for the next repair: ${error}`,
+  },
+});

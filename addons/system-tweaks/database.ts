@@ -17,7 +17,10 @@ import { isTrustedFile } from "../../lib/trusted-file";
 import { inputVerdict, otherInputHooks, parseFilterTable } from "./input-rules";
 import { writeFileAtomic, writeOrRemove } from "../../lib/atomic-write";
 import { waitHealthy } from "./wait-healthy";
-import { COMMAND_MS, DATABASE_SERVICE_MS } from "./limits";
+import { COMMAND_MS, DATABASE_GATEWAY_TIMEOUT_MS, DATABASE_SERVICE_MS } from "./limits";
+import { applyThenSave, tweak } from "./tweak";
+import { badge, listing, lockableRow, settingRow, statusLine, warning } from "./app/rows";
+import { esc } from "../../lib/app-http";
 import {
   DATABASE_SOCKET_FILE, DATABASE_SOCKET_UNIT, parseSocketBindings, putSocketFile, readSocketFile, renderSocketFile,
   type SocketBindings,
@@ -626,3 +629,90 @@ export function reconcileDatabaseFile(on: boolean, options: DatabaseOptions = {}
   return on ? "MySQL loopback file put back; it applies at MySQL's next restart"
     : "MySQL loopback file removed; MySQL uses its own settings after its next restart";
 }
+
+type DatabaseState = (DatabaseStatus & { loopback: boolean }) | { error: string };
+
+function databaseOrError(loopback: boolean, options?: DatabaseOptions): DatabaseState {
+  try { return { ...databaseStatus(options), loopback }; }
+  catch (error) { return { error: errorMessage(error) }; }
+}
+
+function databaseLine(state: DatabaseStatus & { loopback: boolean }): string {
+  if (state.listenersUnknown) return `${badge("Unknown", "warn")} <span>Where MySQL listens could not be read: ${esc(state.listenersUnknown)}.</span>`;
+  if (!state.running) return `${badge("Not running", "plain")} <span>MySQL is not listening on TCP here.</span>`;
+  if (!state.exposed.length) return `${badge("This server only", "ok")} <span>MySQL accepts connections only from this server.</span>`;
+  const where = `Listens on ${listing(state.exposed)}.`;
+  if (state.loopback && state.fileInPlace) {
+    if (state.socketUnit) return `${badge("Not applied", "warn")} <span>${where} The saved restriction applies when MySQL and ${esc(state.socketUnit)} are stopped and started together.</span>`;
+    return `${badge("Not applied", "warn")} <span>${where} It moves to 127.0.0.1 at MySQL's next restart: systemctl restart mysql.</span>`;
+  }
+  if (state.firewall.state === "off") {
+    return `${badge("Open", "bad")} <span>${where} The firewall rules loaded now let anyone reach it, unless a firewall outside this server blocks it.</span>`;
+  }
+  if (state.firewall.state === "unknown") {
+    return `${badge("Unknown", "warn")} <span>${where} Whether the loaded firewall rules block it is unclear: ${esc(state.firewall.reason ?? "they could not be read")}.</span>`;
+  }
+  if (state.firewall.openTo.length) {
+    return `${badge("Open", "warn")} <span>${where} The loaded firewall rules allow ${listing(state.firewall.openTo)}.</span>`;
+  }
+  return `${badge("Firewalled", "warn")} <span>${where} The loaded firewall rules drop it, so the firewall is all that keeps it private.</span>`;
+}
+
+function defaultPasswordNote(state: DatabaseStatus): string {
+  const found = state.defaultPassword;
+  if ("error" in found) return `<p class="st-status hint">Root's password could not be checked: ${esc(found.error)}</p>`;
+  if (!state.running) return "";
+  if (!found.length) return `<p class="st-status hint">Root does not log in with a default password.</p>`;
+  const what = found.map((hit) => `${hit.password === "root" ? "the password root" : "no password"} from ${hit.from === "loopback" ? "this server" : "other hosts"}`);
+  return warning(`MySQL's root account logs in with ${listing(what)}. Change it in MySQL first, then enter the new password under
+    Admin → Settings → <a href="/admin/database-servers">Database Servers</a> on the 127.0.0.1 server. CloudPanel logs in with the password stored there,
+    so changing it only in MySQL breaks its Databases page.`);
+}
+
+function databaseRow(state: DatabaseState, locked: boolean): string {
+  const description = [
+    "Allows MySQL and MariaDB connections only from this server. Sites and the panel connect over localhost or a Unix socket and keep working. Apps on other machines lose access; reach it over an SSH tunnel instead.",
+    "Off by default: CloudPanel creates every database user for any host, so System Tweaks cannot tell whether something remote uses one. A change restarts MySQL, so sites lose their database for a few seconds.",
+  ];
+  if ("error" in state) {
+    return settingRow({ key: "databaseLoopback", title: "MySQL on this server only", description, control: "",
+      extra: `<div class="alert st-alert" role="alert">${esc(state.error)}</div>` });
+  }
+  const remote = state.remoteClients.length
+    ? warning(`Connected now from ${listing(state.remoteClients)}. ${state.loopback ? "" : "These lose access once MySQL accepts connections from this server only."}`)
+    : "";
+  return lockableRow("set-database-loopback", {
+    key: "databaseLoopback",
+    title: "MySQL on this server only",
+    description,
+    checked: state.loopback,
+    disabled: !state.running && !state.loopback,
+    onchange: "setDatabaseLoopback(this)",
+    extra: `${statusLine(databaseLine(state))}${remote}${defaultPasswordNote(state)}`,
+  }, locked);
+}
+
+type Options = { database?: DatabaseOptions };
+
+/** Have MySQL accept connections from this server only; off unless the operator asks, see above. */
+export const DATABASE_TWEAK = tweak<{ databaseLoopback: boolean }, Options, { database: DatabaseState }>()({
+  defaults: { databaseLoopback: false },
+  state: ({ options, settings }) => ({ database: databaseOrError(settings.databaseLoopback, options.database) }),
+  switch: {
+    verb: "set-database-loopback",
+    key: "databaseLoopback",
+    timeout: DATABASE_GATEWAY_TIMEOUT_MS,
+    // The settings are read first, so a file that cannot be trusted stops the change before MySQL restarts.
+    set: applyThenSave("databaseLoopback", (on, options: Options) => setDatabaseLoopback(on, options.database)),
+  },
+  repair: {
+    upkeep: { label: null, locked: true, run: ({ options, settings }) => reconcileDatabaseFile(settings.databaseLoopback, options.database) },
+  },
+  withdraw: { run: ({ options }) => { reconcileDatabaseFile(false, options.database); } },
+  restore: {
+    // It inspects MySQL's units, which can be mid-restart; the guards after it must still come back.
+    run: ({ options, settings }) => { if (settings.databaseLoopback) reconcileDatabaseFile(true, options.database); },
+    warning: (error) => `MySQL on this server only waits for the next repair: ${error}`,
+  },
+  row: ({ database }, locked) => databaseRow(database, locked),
+});

@@ -25,7 +25,10 @@ import { commandOutput, runCommand, type CommandResult } from "../../lib/command
 import { writeFileAtomic, writeOrRemove } from "../../lib/atomic-write";
 import { daemonReload } from "../../lib/systemd";
 import { regularText } from "../../lib/trusted-file";
-import { COMMAND_MS } from "./limits";
+import { COMMAND_MS, PHP_POOLS_GATEWAY_TIMEOUT_MS } from "./limits";
+import { saveThenApply, tweak } from "./tweak";
+import { badge, statusLine, switchRow } from "./app/rows";
+import { esc } from "../../lib/app-http";
 
 const POOL_TABLE = "clp_addons_php_pools";
 const DROP_IN = "zz-clp-addons-php-pools.conf";
@@ -325,3 +328,46 @@ export function poolIsolationStatus(options: PoolIsolationOptions = {}): PoolIso
   const current = regularText(paths.rulesFile);
   return { active: dropIns && current !== null && current === expectedRuleset(paths, loadedSets(current)) && tableLoaded(run), problem: "" };
 }
+
+type PhpPoolsState = PoolIsolationStatus & { enabled: boolean };
+
+function phpPoolsLine(state: PhpPoolsState): string {
+  if (state.problem) return `${badge("Not applied", "warn")} <span>${esc(state.problem)}</span>`;
+  if (state.active) return `${badge("On", "ok")} <span>Each pool's port answers only nginx and the pool's own user.</span>`;
+  if (state.enabled) return `${badge("Not applied", "warn")} <span>Run clp-addons repair.</span>`;
+  return `${badge("Off", "plain")} <span>Any account on the server can run PHP as any site through its pool's port.</span>`;
+}
+
+type Options = { phpPools?: PoolIsolationOptions };
+
+/** Let only nginx and each pool's own user connect to a site's PHP-FPM port. */
+export const PHP_POOLS_TWEAK = tweak<{ isolatePhpPools: boolean }, Options, { phpPools: PhpPoolsState }>()({
+  defaults: { isolatePhpPools: true },
+  state: ({ options, settings }) => ({ phpPools: { enabled: settings.isolatePhpPools, ...poolIsolationStatus(options.phpPools) } }),
+  switch: {
+    verb: "set-php-pools",
+    key: "isolatePhpPools",
+    timeout: PHP_POOLS_GATEWAY_TIMEOUT_MS,
+    // Saved first, so a PHP-FPM reload meanwhile follows the new setting.
+    set: saveThenApply("isolatePhpPools", (on, options: Options) => on ? installPoolIsolation(options.phpPools) : removePoolIsolation(options.phpPools)),
+  },
+  repair: {
+    rules: {
+      label: "PHP pools",
+      locked: true,
+      run: ({ options, settings }) => settings.isolatePhpPools && installPoolIsolation(options.phpPools) && "PHP pool ports limited to nginx and each pool's own user",
+    },
+  },
+  withdraw: { run: ({ options }) => { removePoolIsolation(options.phpPools); } },
+  restore: { run: ({ options, settings }) => { if (settings.isolatePhpPools) installPoolIsolation(options.phpPools); } },
+  row: ({ phpPools }, locked) => switchRow("set-php-pools", {
+    key: "isolatePhpPools",
+    title: "Isolate PHP pools",
+    description: [
+      "Lets only nginx and each site's own user connect to the site's PHP-FPM port, so one site's user cannot run PHP as another site's.",
+      "A tool that reaches another site's pool from its own account, such as a monitoring agent, stops working.",
+    ],
+    checked: phpPools.enabled,
+    extra: statusLine(phpPoolsLine(phpPools)),
+  }, locked),
+});

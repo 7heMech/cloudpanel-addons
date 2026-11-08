@@ -13,7 +13,10 @@ import { basename, join } from "node:path";
 import { failAction } from "../../lib/action";
 import { commandOutput } from "../../lib/command";
 import { writeFileAtomic, writeOrRemove } from "../../lib/atomic-write";
-import { aptInstall, installedVersion, systemRun, type Run } from "./packages";
+import { aptInstall, installedVersion, systemRun, withDeadline, type Run } from "./packages";
+import { INSTALL_DEADLINE_MS } from "./limits";
+import { tweak } from "./tweak";
+import type { UploadProgressOptions } from "./upload-progress";
 
 const CLOUDPANEL_ORIGIN = "packages-v1.cloudpanel.io";
 const MARKER = "// Managed by clp-addons System Tweaks. Switching automatic updates off there removes this file.";
@@ -538,3 +541,88 @@ export function applyUpdates(settings: UpdateSettings, enabledTimers: string[], 
 export function installUnattendedUpgrades(options: UpdatesOptions = {}): void {
   aptInstall(contextOf(options).run, ["unattended-upgrades"]);
 }
+
+interface Settings {
+  updates: UpdateSettings;
+  /** Timers this addon enabled because they were off, and disables again with the switch. */
+  enabledTimers: string[];
+}
+
+type Options = { updates?: UpdatesOptions; uploadProgress?: UploadProgressOptions; now?: () => number };
+
+/** unattended-upgrades as System Tweaks' drop-in sets it; the page has its own card for it. */
+export const UPDATES_TWEAK = tweak<Settings, Options, { updates: UpdatesStatus; settings: UpdateSettings }>()({
+  defaults: { updates: { ...DEFAULT_UPDATE_SETTINGS }, enabledTimers: [] },
+  read(stored, settings) {
+    const updates = (stored.updates ?? {}) as Record<string, unknown>;
+    for (const key of UPDATE_SETTING_KEYS) if (typeof updates[key] === "boolean") settings.updates[key] = updates[key];
+    if (validRebootTime(updates.rebootTime)) settings.updates.rebootTime = updates.rebootTime;
+    if (Array.isArray(stored.enabledTimers)) {
+      settings.enabledTimers = stored.enabledTimers.filter((timer): timer is string => TIMERS.includes(timer));
+    }
+  },
+  state: ({ options, settings }) => ({ updates: updatesStatus(options.updates), settings: settings.updates }),
+  verbs: {
+    async "set-updates"(ctx) {
+      const body = await ctx.body();
+      await ctx.locked(({ options, settings, save }) => {
+        const wanted = { ...settings.updates };
+        let named = 0;
+        for (const key of UPDATE_SETTING_KEYS) {
+          if (body[key] === undefined) continue;
+          if (typeof body[key] !== "boolean") failAction(`${key} must be true or false`);
+          wanted[key] = body[key];
+          named++;
+        }
+        if (body.rebootTime !== undefined) {
+          if (!validRebootTime(body.rebootTime)) failAction(REBOOT_TIME_ERROR);
+          wanted.rebootTime = body.rebootTime;
+          named++;
+        }
+        if (named === 0) failAction("no setting was named");
+        // The first switch-on keeps the reboot policy the box already had.
+        if (wanted.enabled && !settings.updates.enabled) {
+          const had = effectiveReboot(options.updates);
+          if (body.reboot === undefined) wanted.reboot = had.reboot;
+          if (body.rebootTime === undefined) wanted.rebootTime = had.rebootTime;
+        }
+        const applied = applyUpdates(wanted, settings.enabledTimers, options.updates);
+        save({ updates: wanted, enabledTimers: applied.enabledTimers });
+      });
+      return ctx.state();
+    },
+    // One deadline for the install and the state read that answers it, which
+    // the gateway's timeout is sized from.
+    async "install-updates"(ctx) {
+      const now = ctx.options.now ?? Date.now;
+      const run = withDeadline(ctx.options.updates?.run ?? systemRun, now() + INSTALL_DEADLINE_MS, now);
+      const bounded = { updates: { ...ctx.options.updates, run }, uploadProgress: { ...ctx.options.uploadProgress, run } };
+      await ctx.exclusive(async () => installUnattendedUpgrades(bounded.updates));
+      return ctx.state(bounded);
+    },
+  },
+  repair: {
+    upkeep: {
+      label: null,
+      locked: true,
+      run: ({ options, settings, save }) => {
+        if (!settings.updates.enabled || !unattendedUpgradesInstalled(options.updates)) return null;
+        const applied = applyUpdates(settings.updates, settings.enabledTimers, options.updates);
+        if (applied.enabledTimers.length !== settings.enabledTimers.length) save({ enabledTimers: applied.enabledTimers });
+        return applied.changed ? "automatic updates config restored" : null;
+      },
+    },
+  },
+  withdraw: {
+    run: ({ options, settings, save }) => {
+      applyUpdates({ ...settings.updates, enabled: false }, settings.enabledTimers, options.updates);
+      if (settings.enabledTimers.length) save({ enabledTimers: [] });
+    },
+  },
+  restore: {
+    run: ({ options, settings, save }) => {
+      if (!settings.updates.enabled || !unattendedUpgradesInstalled(options.updates)) return;
+      save({ enabledTimers: applyUpdates(settings.updates, settings.enabledTimers, options.updates).enabledTimers });
+    },
+  },
+});

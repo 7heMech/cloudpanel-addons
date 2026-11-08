@@ -3,6 +3,7 @@ import { readFileSync } from "node:fs";
 import { ADDONS as CATALOG } from "../addons/catalog";
 import { callGatewayAction, gatewayCaller, streamGatewayAction } from "../lib/gateway-client";
 import { ADDON_VERBS, type GatewayAddon, webVerb } from "../lib/gateway-protocol";
+import { SYSTEM_TWEAKS_HANDLERS } from "../addons/system-tweaks/action";
 
 /**
  * Each addon declares its verbs once, in its own `verbs.ts`, and the gateway's
@@ -12,8 +13,9 @@ import { ADDON_VERBS, type GatewayAddon, webVerb } from "../lib/gateway-protocol
  *
  * So the verbs each action dispatches on are read off its source -- the verbs
  * its `switch` cases, the verbs it compares `argv[0]` or `verb` with, verb
- * lists it checks against, and any argument or switch table keyed by verb -- and they
- * must be exactly the declared ones.
+ * lists it checks against, and any argument table keyed by verb -- and they
+ * must be exactly the declared ones. System Tweaks builds a handler table
+ * from its registry instead, so its table's verbs are read.
  */
 const SOURCES: Partial<Record<GatewayAddon, string[]>> = {
   manager: ["manager/action.ts"],
@@ -21,10 +23,11 @@ const SOURCES: Partial<Record<GatewayAddon, string[]>> = {
 };
 
 function dispatchedVerbs(addon: GatewayAddon): string[] {
+  if (addon === "system-tweaks") return Object.keys(SYSTEM_TWEAKS_HANDLERS).sort();
   const verbs = new Set<string>();
   for (const file of SOURCES[addon] ?? [`addons/${addon}/action.ts`]) {
     const source = readFileSync(new URL(`../${file}`, import.meta.url), "utf8");
-    for (const table of source.matchAll(/const (?:ARGUMENTS|SWITCHES)[^=]*= \{([^}]*)\}/g)) {
+    for (const table of source.matchAll(/const ARGUMENTS[^=]*= \{([^}]*)\}/g)) {
       for (const match of table[1]!.matchAll(/"([a-z][a-z0-9-]*)":/g)) verbs.add(match[1]!);
     }
     for (const match of source.matchAll(/case "([a-z][a-z0-9-]*)":/g)) verbs.add(match[1]!);

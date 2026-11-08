@@ -11,6 +11,9 @@ import { existsSync, readFileSync, readdirSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { runCommand, type CommandResult } from "../../lib/command";
 import { PANEL_FPM_UNIT, PHP_FPM_BIN_DIR, PHP_GUARD_INI_NAME, PHP_ROOT } from "../../lib/paths";
+import { reconcilePhpGuard, type PhpGuardOptions } from "../../lib/php-guard";
+import { saveThenApply, tweak } from "./tweak";
+import { badge, stateRow, switchRow } from "./app/rows";
 
 const KEY = "session.upload_progress.enabled";
 const VERSION_RE = /^[0-9]+\.[0-9]+$/;
@@ -194,3 +197,54 @@ export function uploadProgressStatus(options: UploadProgressOptions = {}): FpmUp
   return rows;
 }
 
+
+interface UploadGuardState { guard: boolean; fpms: FpmUploadProgress[] }
+
+function uploadProgressSource(row: FpmUploadProgress): string {
+  const file = row.source.includes("/conf.d/") ? row.source.slice(row.source.lastIndexOf("/") + 1) : row.source;
+  const pools = row.poolsOn.length ? ` On in pool${row.poolsOn.length === 1 ? "" : "s"} ${row.poolsOn.join(", ")}.` : "";
+  if (!row.enabled && row.setBy === "clp-addons") return `Set by clp-addons${row.offWithoutGuard ? " and your own config" : ""}.${pools}`;
+  if (!row.enabled) return `Set by your config in ${file}.${pools}`;
+  return `${row.setBy === "default" ? "PHP's default" : `Set in ${file}`}.${pools}`;
+}
+
+function uploadProgressDetails(fpms: FpmUploadProgress[]): string {
+  if (!fpms.length) return `<p class="st-status hint">No PHP-FPM is installed.</p>`;
+  const on = fpms.filter((row) => row.enabled).length;
+  const pools = fpms.reduce((total, row) => total + row.poolsOn.length, 0);
+  const count = `${fpms.length} PHP-FPM${fpms.length === 1 ? "" : "s"}`;
+  const summary = on === 0 ? `Off on ${fpms.length === 1 ? "its one PHP-FPM" : `all ${count}`}` : `On in ${on} of ${count}`;
+  const poolText = pools ? `, on again in ${pools} pool${pools === 1 ? "" : "s"}` : "";
+  return `
+          <details class="st-fold">
+            <summary>${badge(on || pools ? "Check" : "Off", on || pools ? "warn" : "ok")} ${summary}${poolText}</summary>
+            <div class="table-scroll"><table class="st-table"><thead><tr><th>PHP-FPM</th><th class="st-state">Upload progress</th></tr></thead>
+              <tbody>${fpms.map((row) => stateRow(row.label, uploadProgressSource(row),
+                row.enabled ? badge("On", "bad") : row.poolsOn.length ? badge("Partly", "warn") : badge("Off", "ok"))).join("")}</tbody></table></div>
+          </details>`;
+}
+
+type Options = { uploadProgress?: UploadProgressOptions; phpGuard?: PhpGuardOptions };
+
+/** The platform's PHP upload-progress guard, which every install has; switching it off here is the only opt-out. */
+export const UPLOAD_GUARD_TWEAK = tweak<{ uploadProgressGuard: boolean }, Options, { uploadProgress: UploadGuardState }>()({
+  defaults: { uploadProgressGuard: true },
+  state: ({ options, settings }) => ({ uploadProgress: { guard: settings.uploadProgressGuard, fpms: uploadProgressStatus(options.uploadProgress) } }),
+  switch: {
+    verb: "set-upload-guard",
+    key: "uploadProgressGuard",
+    set: saveThenApply("uploadProgressGuard", (on, options: Options) => reconcilePhpGuard(true, true, { ...options.phpGuard, optedOut: !on })),
+  },
+  restore: {
+    run: ({ options, settings }) => {
+      if (!settings.uploadProgressGuard) reconcilePhpGuard(true, false, { ...options.phpGuard, optedOut: true });
+    },
+  },
+  row: ({ uploadProgress }, locked) => switchRow("set-upload-guard", {
+    key: "uploadProgressGuard",
+    title: "PHP upload-progress mitigation",
+    description: `Turns PHP's session upload progress, a route into CVE-2026-109619, off on every PHP-FPM with ${PHP_GUARD_INI_NAME}. Off removes only that file.`,
+    checked: uploadProgress.guard,
+    extra: uploadProgressDetails(uploadProgress.fpms),
+  }, locked),
+});
