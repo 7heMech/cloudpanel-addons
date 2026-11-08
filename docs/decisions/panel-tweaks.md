@@ -113,7 +113,10 @@ the Back and submit row, whose two buttons stay side by side. The page for
 turning on two-factor sign-in is drawn at a fixed 850px with a 350px code
 field; below 760px it takes the card's width, the manual-entry secret breaks
 anywhere rather than running off the card, and the field shares its row with
-the button.
+the button. Below 576px that row leaves the field too narrow for its own
+placeholder, so the field takes the whole row and the button goes under it.
+At any width the switch also gives that page's links the dark theme's blue:
+CloudPanel's rule for every link in the dark theme outranks the page's own.
 
 The Admin header additionally carries rules for the Admin Area, under the same
 mobile-layout switch and without another template anchor. Below 760px the fixed

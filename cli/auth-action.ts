@@ -208,8 +208,12 @@ const MAX_SEEN_SESSIONS = 10_000;
  */
 const seenSessions = new Map<string, { at: number; expires: number }>();
 
-function sessionSeen(binding: string, session: ParsedPanelSession, now = Date.now()): number {
-  const key = `${binding}:${session.createdAt ?? ""}`;
+function sessionSeen(binding: string, session: ParsedPanelSession, now = Date.now()): number | null {
+  // Without CloudPanel's stamp one sign-in cannot be told from the next on the
+  // same id, so there is no sighting to vouch for; root auth then dates the
+  // sign-in by the prompt's opening.
+  if (session.createdAt === null) return null;
+  const key = `${binding}:${session.createdAt}`;
   const known = seenSessions.get(key);
   if (known) {
     known.expires = session.expiresAt;
@@ -229,7 +233,7 @@ function sessionSeen(binding: string, session: ParsedPanelSession, now = Date.no
 
 const sessionBinding = (sessionId: string) => createHash("sha256").update(sessionId).digest("hex");
 
-async function checkSession(sessionId: string, options: AuthActionOptions): Promise<ParsedPanelSession | null> {
+async function checkSession(sessionId: string, options: AuthActionOptions): Promise<(ParsedPanelSession & { binding: string; seen: number | null }) | null> {
   const sessionDir = options.sessionDir ?? SESSION_DIR;
   const sessionPath = `${sessionDir}/sess_${sessionId}`;
   const sessionBytes = await readPanelSessionFile(sessionPath, {
@@ -247,8 +251,8 @@ async function checkSession(sessionId: string, options: AuthActionOptions): Prom
     session.roles = [dbRole];
   }
   // Every page the panel serves asks the gateway, so this is soon after sign-in.
-  sessionSeen(sessionBinding(sessionId), session);
-  return session;
+  const binding = sessionBinding(sessionId);
+  return { ...session, binding, seen: sessionSeen(binding, session) };
 }
 
 const SESSION_RECHECK_MS = 15_000;
@@ -286,11 +290,10 @@ async function sessionUser(sessionId: string, options: AuthActionOptions, role?:
     if (sessionId.length > 128 || !SESSION_ID_RE.test(sessionId)) return null;
     const session = await checkSession(sessionId, options);
     if (!session || (role !== undefined && !session.roles.includes(role))) return null;
-    const binding = sessionBinding(sessionId);
     return { user: session.user, env: {
-      [SESSION_BINDING_ENV]: binding,
+      [SESSION_BINDING_ENV]: session.binding,
       [SESSION_2FA_ENV]: sessionProof(session, options),
-      [SESSION_SEEN_ENV]: String(sessionSeen(binding, session)),
+      [SESSION_SEEN_ENV]: session.seen === null ? "" : String(session.seen),
     } };
   } catch {
     return null;

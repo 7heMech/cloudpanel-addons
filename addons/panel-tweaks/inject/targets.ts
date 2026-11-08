@@ -182,7 +182,8 @@ body .header .navbar-right > ul > li.user-avatar > a.dropdown-toggle::after { bo
   body .header .nav-link-container > a { padding: 0 15px; }
   /* Terminal's Root control goes at the end of that row, and of the Admin
      Area's row of instance details, pinned and drawn over what scrolls under
-     it; the account menu's copy, there for a header without this row, goes. */
+     it; the account menu's copy, there for a header without this row, goes
+     wherever that control made it into the header. */
   html body .header .clp-root-shell-nav:not([hidden]) { display: flex !important; align-items: center; gap: 8px;
     flex: 0 0 auto; margin: 0 0 0 auto; padding: 0 16px; position: sticky; right: 0; border-left: 1px solid #e2e2e2;
     background: #fff; color: #aaa; font-size: 15px; font-weight: 400; }
@@ -192,7 +193,7 @@ body .header .navbar-right > ul > li.user-avatar > a.dropdown-toggle::after { bo
   html.dark body .header .clp-root-shell-nav:hover { color: var(--clp-text-hover); }
   body .header .header-instance-information-container:has(> .clp-root-shell-nav:not([hidden])) { display: flex; }
   body .header .header-instance-information-container > ul { flex: 1 0 auto; min-width: 0; }
-  html body .header .navbar-right li.clp-root-shell-menu { display: none !important; }
+  html body .header:has(.clp-root-shell-nav) .navbar-right li.clp-root-shell-menu { display: none !important; }
   /* CloudPanel draws its dashboard charts at a fixed 545px, which is wider than
      the phone they are on, and the information boxes at a fixed 240px. The
      container is a flex row of two-chart rows, so widening a chart to its row

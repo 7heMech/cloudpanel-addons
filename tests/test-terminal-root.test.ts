@@ -388,6 +388,10 @@ test("without the gateway's sighting, the prompt's opening stands in for the sig
   expect(() => auth("verify", { challenge, code: totp(SECRET, step + 1) }, now + 30000, binding, null)).toThrow("signed in with");
   const later = (step + 3) * 30000;
   expect(auth("verify", { ...auth("options", {}, now, binding, null), code: totp(SECRET, step + 3) }, later, binding, null).ticket).toBeString();
+  // A prompt opened before the session signed in again on the same id does not vouch for that sign-in's code.
+  const opened = auth("options", {}, later + 30000, binding, 1);
+  const again = later + 150_000;
+  expect(() => auth("verify", { ...opened, code: totp(SECRET, Math.floor(again / 30000)) }, again, binding, again)).toThrow("signed in with");
 });
 
 test("five wrong codes throttle the account across sessions; malformed ones do not count", () => {

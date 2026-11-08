@@ -137,9 +137,12 @@ export function rootAuth(verb: "options" | "verify" | "consume", user: string, {
     let method = "an authenticator code";
     try {
       if (typeof input.code === "string") {
-        // The prompt opened five minutes before its challenge expires, and the session was signed in by then.
+        // The gateway's sighting is of this sign-in; the challenge is bound only
+        // to the session id, which a later sign-in can keep, so the prompt's
+        // opening (five minutes before its challenge expires) stands in only
+        // without a sighting.
         const opened = pending.expires - 300_000;
-        state.usedStep = verifyCode(paths.panelDb, user, input.code, state.usedStep ?? -1, Math.min(seen ?? opened, opened), now);
+        state.usedStep = verifyCode(paths.panelDb, user, input.code, state.usedStep ?? -1, seen ?? opened, now);
       }
       else {
         verifyTerminalKey({ ...DEFAULT_SECURITY_KEYS_PATHS, stateDir: paths.securityKeys, panelDb: paths.panelDb, stateUid: paths.rootUid }, user, pinnedKeys(), challenge, input, now);

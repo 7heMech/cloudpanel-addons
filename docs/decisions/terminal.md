@@ -228,7 +228,7 @@ sighting's step, and only a code from a step after that counts. The code the app
 works at once, except in the minute and a half after signing in, when the
 prompt asks for the next one. The memory is the gateway's alone: after it
 restarts, a session's next sighting stands in, which is later and so only
-makes the wait longer, and with no sighting the prompt's own opening does.
+makes the wait longer, and with no sighting, or a session without the stamp, the prompt's own opening does.
 Passkeys do not wait. Passkeys count only while Security Keys is
 on, as at sign-in, and only pinned keys the account still has are offered, only
 where the browser can use one, so not on an IP address. Passkey verification reuses Security Keys'
