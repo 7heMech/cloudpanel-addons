@@ -1,10 +1,9 @@
 import { expect, test } from "bun:test";
-import { chmodSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { chmodSync, mkdtempSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
-import {
-  ActionFailure, panelIdentityGuardForIdentity, parsePanelIdentity, readPanelIdentity,
-} from "../cli/action-common";
+import { ActionFailure } from "../lib/action";
+import { panelIdentityGuardForIdentity, parsePanelIdentity, readPanelIdentity } from "../lib/panel-identity";
 
 function guardResult(identity: ReturnType<typeof parsePanelIdentity>, candidate: string): string {
   if (!identity) return "INVALID_IDENTITY";
@@ -45,23 +44,26 @@ test("the shared identity parser and guard fail closed for both action ports", (
   expect(parsePanelIdentity("PRIMARY=panel.example.test\nALIASES=www.panel.example.test\nALIASES=other.example.test\n")).toBeNull();
 });
 
-test("the filesystem identity guard requires a regular root-owned non-writable file", () => {
+test("the filesystem identity guard requires a regular owner-only file owned by the expected account", () => {
   const dir = mkdtempSync(join(tmpdir(), "clp-self-domain-test-"));
   const identityPath = join(dir, "panel-identity.conf");
+  const owner = process.getuid!();
   try {
     writeFileSync(identityPath, "PRIMARY=panel.example.test\nALIASES=\n");
     chmodSync(identityPath, 0o600);
-    const parsed = readPanelIdentity(identityPath);
-    if (process.getuid?.() === 0) {
-      expect(parsed).toEqual({ primary: "panel.example.test", aliases: [] });
-    } else {
-      expect(parsed).toBeNull();
-    }
+    expect(readPanelIdentity(identityPath, owner)).toEqual({ primary: "panel.example.test", aliases: [] });
+    expect(readPanelIdentity(identityPath, owner + 1)).toBeNull();
 
     chmodSync(identityPath, 0o620);
-    expect(readPanelIdentity(identityPath)).toBeNull();
+    expect(readPanelIdentity(identityPath, owner)).toBeNull();
+    chmodSync(identityPath, 0o602);
+    expect(readPanelIdentity(identityPath, owner)).toBeNull();
+    chmodSync(identityPath, 0o600);
+    const link = join(dir, "link.conf");
+    symlinkSync(identityPath, link);
+    expect(readPanelIdentity(link, owner)).toBeNull();
     rmSync(identityPath, { force: true });
-    expect(readPanelIdentity(identityPath)).toBeNull();
+    expect(readPanelIdentity(identityPath, owner)).toBeNull();
   } finally {
     rmSync(dir, { recursive: true, force: true });
   }

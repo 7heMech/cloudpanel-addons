@@ -1,3 +1,6 @@
+import { addonStateDir, LOCK_DIR, PANEL_DB, PANEL_VAR_DIR } from "../../lib/paths";
+import { writeFileAtomic } from "../../lib/atomic-write";
+import { isTrustedFile, OWNER_ONLY } from "../../lib/trusted-file";
 import { SECURITY_KEYS_VERBS } from "./verbs";
 import { TOKEN_TTL_SECONDS, mfaMark, recordSignIn } from "./sign-ins";
 import { createHmac, randomBytes } from "node:crypto";
@@ -6,12 +9,11 @@ import {
   readdirSync, readFileSync, readSync, rmSync, writeSync,
 } from "node:fs";
 import { dirname, join } from "node:path";
-import {
-  ActionFailure, emitActionOk, failAction, parseJsonRequest, oneLine, withFileLockSync, errorMessage, reportActionFailure,
-} from "../../cli/action-common";
-import { openPanelDatabase } from "../../cli/panel-db";
-import { writeAtomicOwned } from "../../cli/nginx-transaction";
-import { LOCK_DIR, PANEL_DB, PANEL_VAR_DIR, STATE_DIR } from "../../cli/paths";
+import { ActionFailure, emitActionOk, failAction, parseJsonRequest, reportActionFailure } from "../../lib/action";
+import { oneLine } from "../../lib/validate";
+import { withFileLockSync } from "../../lib/file-lock";
+import { errorMessage } from "../../lib/errors";
+import { openPanelDatabase } from "../../lib/panel-db";
 import { PANEL_USER_NAME_RE } from "../../lib/panel-users";
 import {
   ALGORITHMS, fromB64url, normalizeOrigin, verifyAssertion, verifyRegistration, type StoredPublicKey,
@@ -25,7 +27,7 @@ import {
  * signature is their credential. `users`, `revoke` and `settings` are the
  * administrator's.
  */
-export type SecurityKeysVerb = keyof typeof SECURITY_KEYS_VERBS;
+type SecurityKeysVerb = keyof typeof SECURITY_KEYS_VERBS;
 
 const VERBS = Object.keys(SECURITY_KEYS_VERBS) as SecurityKeysVerb[];
 const OWN_ACCOUNT_VERBS = new Set(VERBS.filter((verb) => SECURITY_KEYS_VERBS[verb].web === "own-account"));
@@ -48,14 +50,14 @@ export interface SecurityKeysPaths {
 }
 
 export const DEFAULT_SECURITY_KEYS_PATHS: SecurityKeysPaths = {
-  stateDir: `${STATE_DIR}/security-keys`,
+  stateDir: addonStateDir("security-keys"),
   lockFile: `${LOCK_DIR}/security-keys.lock`,
   panelDb: PANEL_DB,
   panelVarDir: PANEL_VAR_DIR,
   stateUid: 0,
 };
 
-export interface SecurityKeysActionOptions {
+interface SecurityKeysActionOptions {
   paths?: Partial<SecurityKeysPaths>;
   input?: string;
   emitReply?: boolean;
@@ -86,10 +88,9 @@ interface Store {
   users: Record<string, StoredUser>;
 }
 
-export const PANEL_ROLES = ["ROLE_ADMIN", "ROLE_SITE_MANAGER", "ROLE_USER"] as const;
-export type PanelRole = (typeof PANEL_ROLES)[number];
+const PANEL_ROLES = ["ROLE_ADMIN", "ROLE_SITE_MANAGER", "ROLE_USER"] as const;
+type PanelRole = (typeof PANEL_ROLES)[number];
 
-/** What an administrator decides for the whole panel. */
 export interface Settings {
   /** The CloudPanel roles that may add keys and sign in with them. */
   roles: PanelRole[];
@@ -145,10 +146,7 @@ function storePath(paths: SecurityKeysPaths): string {
 }
 
 function trustedFile(path: string, uid: number): void {
-  const stat = lstatSync(path);
-  if (!stat.isFile() || stat.isSymbolicLink() || stat.uid !== uid || (stat.mode & 0o077) !== 0) {
-    failAction(`${path} is not a trusted root-only file`);
-  }
+  if (!isTrustedFile(lstatSync(path), uid, OWNER_ONLY)) failAction(`${path} is not a trusted root-only file`);
 }
 
 function validKey(value: unknown): value is StoredKey {
@@ -178,7 +176,7 @@ function readStore(paths: SecurityKeysPaths): Store {
 
 function writeStore(paths: SecurityKeysPaths, store: Store): void {
   const users = Object.fromEntries(Object.entries(store.users).filter(([, user]) => user.keys.length > 0).sort());
-  writeAtomicOwned(storePath(paths), `${JSON.stringify({ version: STORE_VERSION, users }, null, 2)}\n`, 0o600, paths.stateUid, process.getgid?.() ?? 0);
+  writeFileAtomic(storePath(paths), `${JSON.stringify({ version: STORE_VERSION, users }, null, 2)}\n`, { mode: 0o600, owner: { uid: paths.stateUid, gid: process.getgid?.() ?? 0 }, createParent: true });
 }
 
 function settingsPath(paths: SecurityKeysPaths): string {
@@ -202,7 +200,7 @@ function readSettings(paths: SecurityKeysPaths): Settings {
 }
 
 function writeSettings(paths: SecurityKeysPaths, settings: Settings): void {
-  writeAtomicOwned(settingsPath(paths), `${JSON.stringify(settings, null, 2)}\n`, 0o600, paths.stateUid, process.getgid?.() ?? 0);
+  writeFileAtomic(settingsPath(paths), `${JSON.stringify(settings, null, 2)}\n`, { mode: 0o600, owner: { uid: paths.stateUid, gid: process.getgid?.() ?? 0 }, createParent: true });
 }
 
 function allowedRole(settings: Settings, account: PanelAccount): boolean {
@@ -295,7 +293,6 @@ function issueChallenge(paths: SecurityKeysPaths, now: number, ...binding: (stri
   return { challengeId, challenge: mac(paths, ...binding, challengeId).toString("base64url") };
 }
 
-/** The challenge a key must have signed for this id and purpose, if the id is still current. */
 function expectedChallenge(paths: SecurityKeysPaths, id: unknown, now: number, ...binding: (string | number)[]): string {
   const match = typeof id === "string" ? CHALLENGE_ID_RE.exec(id) : null;
   if (!match || !(Number(match[1]) > now)) refuse("the sign-in request has expired; try again");
@@ -318,7 +315,7 @@ function spendChallenge<T>(paths: SecurityKeysPaths, id: string, now: number, an
   if (id in live) refuse("the sign-in request has expired; try again");
   const result = answered();
   live[id] = Number(id.split(".")[0]);
-  writeAtomicOwned(path, JSON.stringify(live), 0o600, paths.stateUid, process.getgid?.() ?? 0);
+  writeFileAtomic(path, JSON.stringify(live), { mode: 0o600, owner: { uid: paths.stateUid, gid: process.getgid?.() ?? 0 }, createParent: true });
   return result;
 }
 
@@ -380,6 +377,24 @@ function audit(line: string): void {
   process.stderr.write(`[security-keys] ${line.replace(/\s+/g, " ")}\n`);
 }
 
+function keyProof(key: StoredKey, challenge: string, input: Record<string, unknown>): number {
+  return verifyAssertion({
+    clientDataJSON: fromB64url(input.clientDataJSON, "clientDataJSON"),
+    authenticatorData: fromB64url(input.authenticatorData, "authenticatorData"),
+    signature: fromB64url(input.signature, "signature"),
+    challenge, origin: key.origin, publicKey: key.publicKey, signCount: key.signCount,
+  }).signCount;
+}
+
+/** After keyProof, so only the key's holder learns the settings that refuse it; callers hold the store lock. */
+function acceptKey(paths: SecurityKeysPaths, account: PanelAccount, key: StoredKey, signCount: number, now: number, instead: string): void {
+  const settings = readSettings(paths);
+  if (!allowedRole(settings, account)) refuse(`security keys are turned off for your account; use ${instead}`);
+  if (key.synced && !settings.syncedPasskeys) refuse(`this panel no longer accepts synced passkeys; use a hardware key or ${instead}`);
+  key.signCount = signCount;
+  key.lastUsedAt = new Date(now).toISOString();
+}
+
 function signIn(paths: SecurityKeysPaths, input: Record<string, unknown>, now: number): { token: string; user: string } {
   const challenge = expectedChallenge(paths, input.challengeId, now, "login");
   const credentialId = typeof input.id === "string" && input.id.length <= 1400 ? input.id : refuse("the key sent no credential id");
@@ -398,23 +413,8 @@ function signIn(paths: SecurityKeysPaths, input: Record<string, unknown>, now: n
     const account = activeAccount(paths, user);
     if (account.id !== entry.userId) refuse("this key belongs to a CloudPanel account that no longer exists");
     const key = entry.keys.find((candidate) => candidate.id === credentialId)!;
-    // The signature first, so only the key's holder learns the settings that refuse it.
-    const { signCount } = spendChallenge(paths, input.challengeId as string, now, () => verifyAssertion({
-      clientDataJSON: fromB64url(input.clientDataJSON, "clientDataJSON"),
-      authenticatorData: fromB64url(input.authenticatorData, "authenticatorData"),
-      signature: fromB64url(input.signature, "signature"),
-      challenge,
-      origin: key.origin,
-      publicKey: key.publicKey,
-      signCount: key.signCount,
-    }));
-    const settings = readSettings(paths);
-    if (!allowedRole(settings, account)) refuse("security keys are turned off for your account; sign in with your password");
-    if (key.synced && !settings.syncedPasskeys) {
-      refuse("this panel no longer accepts synced passkeys; use a hardware key or your password");
-    }
-    key.signCount = signCount;
-    key.lastUsedAt = new Date(now).toISOString();
+    // Spent before the settings are read, so an assertion they refuse cannot be replayed once they change.
+    acceptKey(paths, account, key, spendChallenge(paths, input.challengeId as string, now, () => keyProof(key, challenge, input)), now, "your password");
     writeStore(paths, store);
     // Recorded before the token exists, so the session it opens always has its record.
     recordSignIn(paths.stateDir, paths.stateUid, { user, key: key.id, at: Math.floor(now / 1000), mfa: mfaMark(paths.panelDb, user) });
@@ -438,7 +438,6 @@ function registerOptions(paths: SecurityKeysPaths, user: string, now: number) {
   };
 }
 
-/** The handle this account's keys are, or would be, made under. */
 function currentHandle(paths: SecurityKeysPaths, store: Store, user: string, account: PanelAccount): string {
   const entry = store.users[user];
   return entry && entry.userId === account.id ? entry.handle : handleFor(paths, account.id);
@@ -563,12 +562,26 @@ export async function runSecurityKeysAction(argv: string[], options: SecurityKey
     return 0;
   } catch (error) {
     let message = errorMessage(error);
-    // The two verbs anyone who reaches the login page can call.
     const refused = error instanceof SignInRefusal || error instanceof WebAuthnError;
+    // The two verbs anyone who reaches the login page can call.
     if (argv[0] === "login-options" || argv[0] === "sign-in") {
       audit(`sign-in ${refused ? "refused" : "failed"}: ${message}`);
       if (!refused) message = SIGN_IN_UNAVAILABLE;
     }
     return reportActionFailure("security-keys", error, emit, message);
   }
+}
+
+/** Terminal supplies a purpose-bound challenge and the keys pinned by root. */
+export function verifyTerminalKey(paths: SecurityKeysPaths, user: string, ids: string[], challenge: string, input: Record<string, unknown>, now: number): void {
+  withStoreLock(paths, () => {
+    const store = readStore(paths);
+    const entry = store.users[user];
+    const account = activeAccount(paths, user);
+    const key = entry?.keys.find(key => key.id === input.id && ids.includes(key.id));
+    if (!entry || entry.userId !== account.id || !key) failAction("This passkey is not trusted for your root terminal.");
+    if (input.userHandle != null && input.userHandle !== entry.handle) failAction("The passkey belongs to another account.");
+    acceptKey(paths, account, key, keyProof(key, challenge, input), now, "your authenticator code");
+    writeStore(paths, store);
+  });
 }

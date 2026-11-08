@@ -36,3 +36,11 @@
 @media (max-width: 480px) {
   .update-versions { grid-template-columns: minmax(0, 1fr); }
 }
+.panel-holds { color: var(--text); border-color: var(--warn); }
+.panel-holds h2 { margin: 0 0 6px; font-size: 15px; color: var(--warn); }
+.panel-holds p { margin: 0 0 10px; color: var(--muted); }
+.panel-holds ul { margin: 0 0 10px; padding-left: 18px; }
+.panel-holds li { margin-bottom: 6px; overflow-wrap: anywhere; }
+.panel-holds li span { display: block; }
+.panel-holds a { color: var(--accent); }
+.panel-holds code { font-size: 13px; }

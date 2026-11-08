@@ -1,6 +1,8 @@
 import { afterEach, beforeEach, expect, test } from "bun:test";
 import { Database } from "bun:sqlite";
-import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, utimesSync, writeFileSync } from "node:fs";
+import {
+  existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, utimesSync, writeFileSync,
+} from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { deflateRawSync } from "node:zlib";
@@ -9,7 +11,7 @@ import { handle } from "../addons/wp-tools/app/index";
 import { searchDirectory } from "../addons/wp-tools/app/plugin-search";
 import { wpToolsService } from "../addons/wp-tools/app/service";
 import { WP_TOOLS_TARGETS, newSiteDoneSnippet, newSiteFormSnippet } from "../addons/wp-tools/inject/targets";
-import { jobDir, jobGet, jobSet } from "../cli/job-store";
+import { jobDir, jobGet, jobSet, listJobIds, writeJobResult } from "../lib/job-store";
 import { wpJobView, type WpJobView } from "../addons/wp-tools/jobs";
 import {
   MAX_STAGED_UPLOADS, UPLOAD_PART_BYTES, claimUploads, discardUpload, downloadDirectoryPlugin, pruneUploads, stageUploadPart,
@@ -527,9 +529,19 @@ test("a site CloudPanel recorded no creation time for is left alone", async () =
 });
 
 test("every running new-site job is listed, however many finished ones there are", async () => {
-  for (let i = 0; i < 12; i++) await act(["new-site", `--domain=site${i}.example.com`, "--plugins=woocommerce:1"]);
+  for (let i = 0; i < 14; i++) await act(["new-site", `--domain=site${i}.example.com`, "--plugins=woocommerce:1"]);
   const { newSiteJobs } = await import("../addons/wp-tools/jobs");
-  expect(newSiteJobs(join(root, "jobs"))).toHaveLength(12);
+  const jobsDir = join(root, "jobs");
+  const ids = listJobIds(jobsDir);
+  // The two listed last stay running, so a cap on the finished ones that also cut the list short would drop them.
+  const running = ids.slice(-2);
+  for (const id of ids.slice(0, -2)) {
+    jobSet(jobDir(jobsDir, id), "state", "done");
+    writeJobResult(jobDir(jobsDir, id), { outcome: "done", plugins: [] });
+  }
+  const listed = newSiteJobs(jobsDir).map((job) => job.id);
+  expect(listed).toHaveLength(12);
+  expect(listed).toEqual(expect.arrayContaining(running));
 });
 
 test("the WordPress Tools page lists what new sites' jobs did, and not the forms that were sent back", async () => {

@@ -6,10 +6,13 @@
  * server resized up or down picks them up at its next boot. See "Memory
  * limits" in docs/decisions/resource-limits.md.
  */
+import { errorMessage } from "../../lib/errors";
+import { addonStateDir, CLI_BIN, LOCK_DIR, SYSTEMD_DIR } from "../../lib/paths";
 import { existsSync, readdirSync, readFileSync, rmSync, statSync, utimesSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
-import { failAction, runCommand, withFileLockSync, type CommandResult } from "../../cli/action-common";
-import { CLI_BIN, LOCK_DIR, STATE_DIR, SYSTEMD_DIR } from "../../cli/paths";
+import { failAction } from "../../lib/action";
+import { runCommand, type CommandResult } from "../../lib/command";
+import { withFileLockSync } from "../../lib/file-lock";
 import { writeFileAtomic } from "../../lib/atomic-write";
 import { COMMAND_MS } from "./limits";
 
@@ -30,7 +33,6 @@ export const DEFAULT_MEMORY: MemorySettings = { profile: "balanced", mysql: fals
 
 export const MEMORY_ERROR = "profile must be balanced, database or cache, and mysql, redis and oom true or false";
 
-/** A body naming at least one memory setting, each well-formed. */
 export function memoryChange(body: Record<string, unknown>): Partial<MemorySettings> | null {
   const change: Partial<MemorySettings> = {};
   if (body.profile !== undefined) {
@@ -68,7 +70,7 @@ const MAX_CONNECTIONS = 512;
 /** InnoDB grows the pool in 128 MB chunks per instance, and rounds a size up to them. */
 const CHUNK_MB = 128;
 
-export interface MemoryPlan {
+interface MemoryPlan {
   ramMb: number;
   bufferPoolMb: number;
   poolInstances: number;
@@ -78,7 +80,6 @@ export interface MemoryPlan {
   redisMb: number;
 }
 
-/** The numbers a profile gives a server with this much RAM. */
 export function memoryPlan(ramMb: number, profile: MemoryProfile): MemoryPlan {
   const share = SHARES[profile];
   const wanted = Math.max(CHUNK_MB, Math.floor(ramMb * share.pool));
@@ -121,12 +122,12 @@ export function mysqlOptionFile(plan: MemoryPlan, profile: MemoryProfile): strin
 }
 
 /** Lower is killed later; PHP-FPM's site pools go first, so one request fails instead of every site. */
-export const OOM_SCORES = { mysql: -600, nginx: -500, php: 300 } as const;
-export const REDIS_POLICY = "allkeys-lru";
+const OOM_SCORES = { mysql: -600, nginx: -500, php: 300 } as const;
+const REDIS_POLICY = "allkeys-lru";
 
 // --- Context ---------------------------------------------------------------
 
-export const DEFAULT_MEMORY_PATHS = {
+const DEFAULT_MEMORY_PATHS = {
   meminfo: "/proc/meminfo",
   /** The directories MySQL and MariaDB read last on Debian and Ubuntu; the first that exists is used. */
   confDirs: ["/etc/mysql/mariadb.conf.d", "/etc/mysql/mysql.conf.d", "/etc/mysql/conf.d"],
@@ -144,17 +145,16 @@ export const DEFAULT_MEMORY_PATHS = {
   cgroupRoot: "/sys/fs/cgroup",
   procRoot: "/proc",
   /** When this addon last took its MySQL file away, so the page can say the old values are still running. */
-  stateFile: `${STATE_DIR}/resource-limits/memory.json`,
+  stateFile: `${addonStateDir("resource-limits")}/memory.json`,
   /** Held while memory.json is read and rewritten: the page, repair and Redis's start hook all write it. */
   stateLock: `${LOCK_DIR}/resource-limits-memory.lock`,
   bin: CLI_BIN,
 };
 
-export type MemoryPaths = typeof DEFAULT_MEMORY_PATHS;
+type MemoryPaths = typeof DEFAULT_MEMORY_PATHS;
 
 export interface MemoryOptions {
   paths?: Partial<MemoryPaths>;
-  /** Runs one command, killed after `timeoutMs`. */
   run?: (command: string, args: string[], timeoutMs: number) => CommandResult;
   now?: () => number;
   /** When every command must have finished, in ms since the epoch; each one gets what is left, at most COMMAND_MS. */
@@ -475,7 +475,6 @@ function phpUnits(ctx: Context): string[] {
     .map((version) => `php${version}-fpm.service`);
 }
 
-/** Each unit that gets a priority, with its score; units not installed are left out. */
 function oomTargets(ctx: Context, mysqlUnit: Unit): { unit: Unit; score: number }[] {
   const php = phpUnits(ctx);
   const [nginx, ...pools] = units(ctx, [ctx.paths.nginxUnit, ...php]);
@@ -629,7 +628,7 @@ export function memoryStatus(settings: MemorySettings, options: MemoryOptions = 
         redis.capped = live.maxmemory === plan.redisMb * 1048576 && live.policy === REDIS_POLICY;
       }
     } catch (error) {
-      redis.problem = error instanceof Error ? error.message : String(error);
+      redis.problem = errorMessage(error);
     }
   }
   return {

@@ -58,8 +58,6 @@ const EXTERNAL_ICON = '<svg width="12" height="12" aria-hidden="true" focusable=
 const TITLE = "Sign in to WordPress as its first administrator";
 
 /**
- * The Domain box's addition.
- *
  * Signing in from the domain puts a link of our own in place of the panel's,
  * which a rule hides once the script has shown ours: the panel's markup is
  * matched, never rewritten. The two look the same, so the swap does not show.
@@ -81,7 +79,6 @@ import NEW_SITE_SCRIPT from "./new-site.client.js" with { type: "text" };
 import NEW_SITE_DONE_SCRIPT from "./new-site-done.client.js" with { type: "text" };
 import { ANCHORS, TEMPLATES } from "../../../lib/panel-anchors";
 
-/** Who the new-site blocks are drawn for. */
 function choosers(siteManagers: boolean): string {
   return `{% if is_granted('ROLE_ADMIN')${siteManagers ? " or is_granted('ROLE_SITE_MANAGER')" : ""} %}`;
 }

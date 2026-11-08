@@ -22,7 +22,6 @@ export interface UnixAccount {
   shell: string;
 }
 
-/** Every account in a passwd file, by name. Lines that do not parse are left out. */
 export function readUnixAccounts(passwd = "/etc/passwd"): Map<string, UnixAccount> {
   const accounts = new Map<string, UnixAccount>();
   for (const line of readFileSync(passwd, "utf8").split("\n")) {
@@ -33,14 +32,12 @@ export function readUnixAccounts(passwd = "/etc/passwd"): Map<string, UnixAccoun
   return accounts;
 }
 
-/** Why a site's account cannot be acted as, or null when it can. */
 export function siteAccountProblem(site: { user: string; uid: number; gid: number }): string | null {
   if (!SITE_USER_RE.test(site.user) || TRUSTED_LOGINS.includes(site.user)) return `its Unix user ${site.user} cannot be used`;
   if (!Number.isInteger(site.uid) || site.uid < 1 || !Number.isInteger(site.gid) || site.gid < 0) return "its Unix account is invalid";
   return null;
 }
 
-/** Splits sites by whether their uid is theirs alone. */
 export function splitSharedUids<T extends { uid: number }>(sites: T[]): { unique: T[]; shared: T[] } {
   const counts = new Map<number, number>();
   for (const site of sites) counts.set(site.uid, (counts.get(site.uid) ?? 0) + 1);

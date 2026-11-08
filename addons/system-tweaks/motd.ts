@@ -5,15 +5,17 @@
  * that prints the server's own state instead; repair puts both back after a
  * CloudPanel upgrade.
  */
+import { addonStateDir, UPDATE_MOTD_DIR } from "../../lib/paths";
 import { chmodSync, existsSync, lstatSync, readFileSync, rmSync } from "node:fs";
 import { writeFileAtomic } from "../../lib/atomic-write";
-import { STATE_DIR, UPDATE_MOTD_DIR } from "../../cli/paths";
+import { applyThenSave, tweak } from "./tweak";
+import { badge, statusLine, switchRow } from "./app/rows";
 
-export const DEFAULT_MOTD_PATHS = {
+const DEFAULT_MOTD_PATHS = {
   banner: `${UPDATE_MOTD_DIR}/10-cloudpanel`,
   script: `${UPDATE_MOTD_DIR}/10-clp-addons-server-info`,
   /** Present while the banner is off because this turned it off. */
-  marker: `${STATE_DIR}/system-tweaks/motd-banner-off`,
+  marker: `${addonStateDir("system-tweaks")}/motd-banner-off`,
 };
 
 // pam_motd runs it as root with an empty environment for every SSH session,
@@ -70,7 +72,6 @@ function pathsOf(options: MotdOptions): typeof DEFAULT_MOTD_PATHS {
   return { ...DEFAULT_MOTD_PATHS, ...options.paths };
 }
 
-/** A regular file's permission bits, or null when there is none. */
 function modeOf(path: string): number | null {
   const info = lstatSync(path, { throwIfNoEntry: false });
   return info?.isFile() ? info.mode & 0o7777 : null;
@@ -129,3 +130,49 @@ export function applyMotd(serverInfo: boolean, options: MotdOptions = {}): boole
   rmSync(paths.marker, { force: true });
   return script || silenced;
 }
+
+type MotdState = MotdStatus & { enabled: boolean };
+
+function motdLine(state: MotdState): string {
+  if (state.enabled && state.script && !state.banner) return `${badge("On", "ok")} <span>SSH logins show this server's state.</span>`;
+  if (state.enabled) return `${badge("Not applied", "warn")} <span>Run clp-addons repair.</span>`;
+  if (state.banner) return `${badge("Off", "plain")} <span>SSH logins show CloudPanel's banner.</span>`;
+  return `${badge("Off", "plain")} <span>SSH logins show no message: CloudPanel's banner is turned off. <code>chmod 775 /etc/update-motd.d/10-cloudpanel</code> turns it back on.</span>`;
+}
+
+/** Show the server's state at SSH login in place of CloudPanel's banner. */
+export const MOTD_TWEAK = tweak<{ serverInfoMotd: boolean }, { motd?: MotdOptions }, { motd: MotdState }>()({
+  defaults: { serverInfoMotd: true },
+  state: ({ options, settings }) => ({ motd: { ...motdStatus(options.motd), enabled: settings.serverInfoMotd } }),
+  switch: {
+    verb: "set-motd",
+    key: "serverInfoMotd",
+    set: applyThenSave("serverInfoMotd", (on, options: { motd?: MotdOptions }) => applyMotd(on, options.motd)),
+  },
+  repair: {
+    // Also the fast repair's, after a CloudPanel upgrade puts its login banner back.
+    message: {
+      label: "SSH login message",
+      locked: true,
+      run: ({ options, settings }) => settings.serverInfoMotd && applyMotd(true, options.motd) ? "server info at SSH login put back" : null,
+    },
+  },
+  withdraw: {
+    run: ({ options }) => { applyMotd(false, options.motd); },
+    warning: (error) => `System Tweaks' server info is still the SSH login message: ${error}`,
+  },
+  restore: {
+    run: ({ options, settings }) => { if (settings.serverInfoMotd) applyMotd(true, options.motd); },
+    warning: (error) => `server info at SSH login waits for the next repair: ${error}`,
+  },
+  row: ({ motd }, locked) => switchRow("set-motd", {
+    key: "serverInfoMotd",
+    title: "Server info at SSH login",
+    description: [
+      "Replaces CloudPanel's welcome banner with uptime, load, memory, disk, IP addresses, pending updates and whether a reboot is required. Site users who log in over SSH see it too.",
+      "CloudPanel's banner looks up the server's address online at every login, which holds the login up when that lookup is slow. Off puts the banner back.",
+    ],
+    checked: motd.enabled,
+    extra: statusLine(motdLine(motd)),
+  }, locked),
+});

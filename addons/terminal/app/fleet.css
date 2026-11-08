@@ -1,4 +1,8 @@
 .card-header + .fleet-filter { padding-top: 18px; }
+/* The count Panel Tweaks puts beside the Sites page's title. */
+.heading-count { display: inline-flex; align-items: center; justify-content: center; box-sizing: border-box;
+  min-height: 28px; margin: -4px 0 -4px 12px; padding: 0 10px; border: 1px solid currentColor; border-radius: 99px;
+  color: #9bacb6; font-size: 14px; font-weight: 600; line-height: 1; vertical-align: middle; }
 /* A phone keeps each site to one row: the domain and its user, then the button. */
 @media (max-width: 940px) {
   .terminal-site-table tr { flex-wrap: nowrap; align-items: center; }
@@ -22,5 +26,5 @@
   .terminal-site-table tr:has(td[colspan]) { grid-column: 1 / -1; }
   .terminal-site-table td { border-top: 0; min-width: 0; }
   .terminal-site-table td.site-cell { flex: 1 1 auto; padding-right: 0; }
-  .terminal-site-table td.action-cell { flex: 0 0 auto; }
+  .terminal-site-table td.action-cell { flex: 0 0 auto; width: auto; }
 }

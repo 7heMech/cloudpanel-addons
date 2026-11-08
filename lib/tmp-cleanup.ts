@@ -11,7 +11,7 @@ import { withPanelDb } from "./panel-db";
 import { lstatSync, readdirSync, readFileSync, readlinkSync, unlinkSync } from "node:fs";
 import { join } from "node:path";
 import { PANEL_DB } from "./paths";
-import { readUnixAccounts, siteAccountProblem } from "../lib/site-accounts";
+import { readUnixAccounts, siteAccountProblem } from "./site-accounts";
 
 export interface TmpCleanupPaths {
   tmpDir: string;
@@ -19,15 +19,14 @@ export interface TmpCleanupPaths {
   passwd: string;
 }
 
-export const DEFAULT_TMP_CLEANUP_PATHS: TmpCleanupPaths = {
+const DEFAULT_TMP_CLEANUP_PATHS: TmpCleanupPaths = {
   tmpDir: "/tmp",
   procDir: "/proc",
   passwd: "/etc/passwd",
 };
 
-export interface TmpCleanupResult {
+interface TmpCleanupResult {
   removed: number;
-  /** Disk space the removed files held. */
   bytes: number;
 }
 
@@ -52,7 +51,6 @@ const RULES: { name: RegExp; idleMs: number }[] = [
   { name: /-[A-Za-z0-9]{6}(-\d+)?\.tmp$/, idleMs: 24 * HOUR_MS },
 ];
 
-/** Every path under `dir` some process has open or mapped; incomplete scans throw. */
 function openPaths(procDir: string, dir: string): Set<string> {
   const prefix = `${dir}/`;
   const open = new Set<string>();
@@ -87,11 +85,6 @@ function openPaths(procDir: string, dir: string): Set<string> {
   return open;
 }
 
-/**
- * Remove the scratch files above that a PHP site's user owns, that have sat
- * untouched for their rule's idle time, and that no process has open. Only the
- * top level of /tmp is read, and symlinks are never followed.
- */
 export function removeAbandonedTmpFiles(
   siteUsers: string[],
   paths: TmpCleanupPaths = DEFAULT_TMP_CLEANUP_PATHS,
@@ -146,7 +139,6 @@ function sizeText(bytes: number): string {
   return bytes >= 1024 ** 2 ? `${Math.round(bytes / 1024 ** 2)} MB` : `${Math.max(1, Math.round(bytes / 1024))} KB`;
 }
 
-/** One upkeep pass over every PHP site's leftovers; null when there was nothing to remove. */
 export function clearAbandonedTmpFiles(options: TmpCleanupOptions = {}): string | null {
   const paths = { ...DEFAULT_TMP_CLEANUP_PATHS, ...options.paths };
   const { removed, bytes } = removeAbandonedTmpFiles(phpSiteUsers(options.panelDb), paths, options.now);

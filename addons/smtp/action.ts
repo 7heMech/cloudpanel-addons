@@ -11,21 +11,25 @@
  * `sendmail_path` in each PHP version's conf.d, which only rewrites the From
  * header. Postfix cannot fix a From on another domain without a milter.
  */
+import { LOCK_DIR, addonStateDir, CLI_BIN, PANEL_DB } from "../../lib/paths";
 import { SMTP_VERBS } from "./verbs";
-import { chmodSync, existsSync, lstatSync, mkdirSync, readdirSync, readFileSync, readlinkSync, rmSync, symlinkSync } from "node:fs";
-import { dirname, join } from "node:path";
 import {
-  ActionFailure, replyToAction, errorMessage, failAction, readJsonRequest, nameSlug, oneLine, runCommand, withFileLock,
-  type CommandResult,
-} from "../../cli/action-common";
-import { CLI_BIN, PANEL_DB, STATE_DIR } from "../../cli/paths";
-import { withPanelDb, withoutStandIns } from "../../cli/panel-db";
-import { log } from "../../cli/util";
+  chmodSync, existsSync, lstatSync, mkdirSync, readdirSync, readFileSync, readlinkSync, rmSync, symlinkSync,
+} from "node:fs";
+import { dirname, join } from "node:path";
+import { ActionFailure, replyToAction, failAction, readJsonRequest } from "../../lib/action";
+import { errorMessage } from "../../lib/errors";
+import { nameSlug, oneLine } from "../../lib/validate";
+import { runCommand, type CommandResult } from "../../lib/command";
+import { withFileLock } from "../../lib/file-lock";
+import { withPanelDb, withoutStandIns } from "../../lib/panel-db";
+import { log } from "../../lib/log";
 import { writeFileAtomic } from "../../lib/atomic-write";
+import { isTrustedFile } from "../../lib/trusted-file";
 import { readUnixAccounts, siteAccountProblem, splitSharedUids, TRUSTED_LOGINS } from "../../lib/site-accounts";
 import {
   DEFAULT_SENDER, envelopeGrants, FALLBACK_LOCAL, parseRelay, parseSenderTemplate, senderFor, siteName, smtpAddress, smtpDomain,
-  submissionRule, trustedFile, type SmtpProfile, type SmtpRelay, type SmtpRewriteRule, type SmtpSubmissionRule,
+  submissionRule, type SmtpProfile, type SmtpRelay, type SmtpRewriteRule, type SmtpSubmissionRule,
 } from "./config";
 import { prepareSubmission, RULE_DIR, rulePathFor, SENDMAIL } from "./submit";
 
@@ -99,7 +103,7 @@ export interface SmtpState {
   sites: SmtpSiteView[];
   skipped: { domain: string; reason: string }[];
 }
-export interface SmtpDelivery {
+interface SmtpDelivery {
   /** What Postfix's first attempt did, or `queued` when it had not tried within the wait. */
   state: "sent" | "deferred" | "bounced" | "queued";
   detail: string;
@@ -115,7 +119,7 @@ export interface SmtpTestResult {
   delivery: SmtpDelivery | null;
 }
 
-export interface SmtpPaths {
+interface SmtpPaths {
   panelDb: string;
   passwd: string;
   phpRoot: string;
@@ -146,9 +150,9 @@ export const DEFAULT_SMTP_PATHS: SmtpPaths = {
   phpRoot: "/etc/php",
   fpmBinDir: "/usr/sbin",
   phpBinDir: "/usr/bin",
-  stateFile: `${STATE_DIR}/smtp/config.json`,
-  originalFile: `${STATE_DIR}/smtp/postfix-original.json`,
-  lockFile: "/run/lock/clp-addons/smtp.lock",
+  stateFile: `${addonStateDir("smtp")}/config.json`,
+  originalFile: `${addonStateDir("smtp")}/postfix-original.json`,
+  lockFile: `${LOCK_DIR}/smtp.lock`,
   ruleDir: RULE_DIR,
   postfixDir: "/etc/postfix",
   sendmailLink: "/usr/local/bin/sendmail",
@@ -165,7 +169,7 @@ function runChecked(run: Run, command: string, args: string[]): string {
 }
 
 function trustedStat(path: string, uid: number): void {
-  if (!trustedFile(lstatSync(path), uid)) failAction(`refusing untrusted SMTP file: ${path}`);
+  if (!isTrustedFile(lstatSync(path), uid)) failAction(`refusing untrusted SMTP file: ${path}`);
 }
 
 function trustedRead(path: string, uid: number): string | null {
@@ -178,7 +182,7 @@ function trustedRead(path: string, uid: number): string | null {
 // Policy
 // ---------------------------------------------------------------------------
 
-/** Produced on read, like Resource Limits' presets, so a read never writes. */
+/** Produced on read, so a read never writes. */
 function seededPolicy(): SmtpPolicy {
   return { version: 2, profiles: [{ ...DONT_SEND }], defaultProfileId: null, assignments: {}, grants: {}, knownSiteIds: [] };
 }
@@ -275,8 +279,8 @@ export function smtpRelayAccounts(stateFile = DEFAULT_SMTP_PATHS.stateFile, root
 }
 
 /**
- * Discard is `dont-send` and nothing else. 1.5 let any profile discard and let
- * `dont-send` be given a relay: a discard profile's sites move to `dont-send`,
+ * Discard is `dont-send` and nothing else. A 1.5 file may hold other discard
+ * profiles or a `dont-send` with a relay: a discard profile's sites move to `dont-send`,
  * a relay profile holding that id keeps its sites under an id of its own, and
  * a deleted `dont-send` comes back.
  */
@@ -478,7 +482,7 @@ function managedFiles(paths: SmtpPaths) {
 type ManagedMap = keyof ReturnType<typeof managedFiles>;
 const HASH_MAPS: ManagedMap[] = ["canonical", "senders"];
 
-export function postfixMaps(routes: Route[], origin: string): Record<ManagedMap, string> {
+function postfixMaps(routes: Route[], origin: string): Record<ManagedMap, string> {
   const claimed = new Map<string, SmtpProfile>();
   for (const route of routes) {
     if (route.profile) for (const pattern of route.envelopes) claimed.set(pattern, route.profile);
@@ -918,7 +922,6 @@ function sendTest(paths: SmtpPaths, policy: SmtpPolicy, sites: SmtpSiteRow[], bo
   const requested = body.from ? smtpAddress(body.from)
     : php ? `wordpress@${route.rule.site}` : senderFor(route.rule.sender, route.rule.site);
   const path = php ? "PHP's mail()" : "sendmail";
-  // A pool's own sendmail_path would send the site's web requests around the relay.
   const pool = poolSetsSendmail(paths, site);
   if (pool) failAction(`${site.domain}'s PHP-FPM pool sets its own sendmail_path, so its web requests bypass the relay; remove it from ${pool}`);
   const subject = `CloudPanel SMTP relay test for ${site.domain}`;

@@ -1,11 +1,12 @@
 import { describe, expect, it } from "bun:test";
-import { existsSync, mkdirSync, mkdtempSync, readdirSync, rmSync, statSync, utimesSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, statSync, utimesSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
-  createJobDir, createJobLog, jobCommonFields, jobDir, jobGet, jobSet, jobTimestamp,
-  JOB_ID_RE, listJobIds, newJobId, pruneJobs, queueAddonPass, readJobLog, startJobUnit,
-} from "../cli/job-store";
+  createJobDir, createJobLog, diagnostic, failJob, JobFailure, jobCommonFields, jobDir, jobGet, jobSet,
+  jobTimestamp, JOB_ID_RE, listJobIds, newJobId, pruneJobs, queueAddonPass, queueJob, readJobLog,
+  recordJobFailure, setJobStep, startJobTranscript, startJobUnit,
+} from "../lib/job-store";
 
 function withJobsDir<T>(fn: (jobsDir: string) => T): T {
   const dir = mkdtempSync(join(tmpdir(), "clp-jobs-"));
@@ -260,5 +261,67 @@ describe("queueing an addon's periodic pass", () => {
 
   it("reports a pass systemd would not start", () => {
     expect(() => queued([false, false], false)).toThrow("could not queue clp-addon-dns-reconcile");
+  });
+});
+
+function silencingStderr<T>(fn: (written: string[]) => T): T {
+  const written: string[] = [];
+  const origWrite = process.stderr.write;
+  process.stderr.write = ((text: string) => { written.push(text); return true; }) as typeof process.stderr.write;
+  try {
+    return fn(written);
+  } finally {
+    process.stderr.write = origWrite;
+  }
+}
+
+describe("what a runner writes", () => {
+  it("sends diagnostics into the job's log while a transcript is open, and back to stderr after", () => {
+    withJobsDir((jobsDir) => {
+      const dir = createJobDir(jobsDir, "20260911T160031Z-35e759");
+      const log = createJobLog(dir);
+      const written = silencingStderr((written) => {
+        const transcript = startJobTranscript(log);
+        setJobStep("stager", dir, "copying files");
+        transcript.stop();
+        diagnostic("after\n");
+        return written;
+      });
+      expect(readFileSync(log, "utf8")).toBe("[stager] copying files\n");
+      expect(jobGet(dir, "step")).toBe("copying files");
+      expect(written).toEqual(["after\n"]);
+    });
+  });
+
+  it("records a failure, with a finish time only when asked", () => {
+    withJobsDir((jobsDir) => {
+      const plain = createJobDir(jobsDir, "20260911T160031Z-35e759");
+      const stamped = createJobDir(jobsDir, "20260911T160032Z-35e75a");
+      silencingStderr(() => {
+        expect(() => failJob("git", plain, "fetch failed", { finishedAt: false })).toThrow(JobFailure);
+        recordJobFailure("git", stamped, "fetch failed", { finishedAt: true });
+      });
+      expect(jobCommonFields(plain)).toMatchObject({ state: "failed", error: "fetch failed", finishedAt: "" });
+      expect(jobGet(stamped, "state")).toBe("failed");
+      expect(jobGet(stamped, "finishedAt")).not.toBe("");
+    });
+  });
+
+  it("refuses a job that collides with one still queued or running, before writing anything", () => {
+    withJobsDir((jobsDir) => {
+      const done = createJobDir(jobsDir, "20260911T160031Z-35e759");
+      jobSet(done, "domain", "a.example.test");
+      jobSet(done, "state", "done");
+      const options = {
+        addon: "git", jobsDir, fields: { domain: "a.example.test" }, step: "queued",
+        conflict: (dir: string, state: string) => jobGet(dir, "domain") === "a.example.test" ? `already ${state}` : null,
+        description: "test", actionBinary: "/bin/false",
+        start: () => ({ ok: true, stdout: "", stderr: "" }),
+      };
+      const first = queueJob(options);
+      expect(jobCommonFields(jobDir(jobsDir, first))).toMatchObject({ state: "queued", step: "queued" });
+      expect(() => queueJob(options)).toThrow("already queued");
+      expect(listJobIds(jobsDir)).toHaveLength(2);
+    });
   });
 });

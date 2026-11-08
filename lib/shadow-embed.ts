@@ -1,11 +1,7 @@
-// Mounting an addon page inside CloudPanel's own site page.
-//
-// A site-scoped addon page reached from the panel's tab strip used to redraw
-// the panel's chrome from lib/site-context: a reproduction that has to be kept
-// in step with markup we do not own. Here the panel draws its own header, site
-// information and tab strip, and only the content below them comes from the
-// addon -- mounted in a shadow root, so the panel's Bootstrap cannot reach our
-// markup and our stylesheet cannot reach theirs.
+// Mounting an addon page inside CloudPanel's own site page. The panel draws its
+// own header, site information and tab strip, and only the content below them
+// comes from the addon -- mounted in a shadow root, so the panel's Bootstrap
+// cannot reach our markup and our stylesheet cannot reach theirs.
 //
 // The addon serves that content as a fragment: stylesheet, markup and script,
 // with no document around it. A direct visit to the addon's own URL redirects
@@ -42,7 +38,6 @@ export function shadowStyle(css: string): string {
     );
 }
 
-/** What an addon returns for a page that mounts inside the panel. */
 export interface EmbedFragment {
   ok: true;
   title: string;

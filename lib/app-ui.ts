@@ -1,12 +1,3 @@
-// The HTML shell every addon's manager app renders into.
-//
-// Here rather than in an addon because it is chrome, not content: the palette,
-// the table and badge classes, the card and dialog styling. The Instatic addon
-// owned all of it while it was the only addon, which meant a second addon's
-// choices were either "copy 60 lines of CSS" or "look like a different
-// product". An addon supplies its brand, contextual nav, its own script and
-// any extra rules; everything else is shared.
-
 import { esc, escJs } from "./app-http";
 import { panelLogos, type PanelLogos } from "./panel-logos";
 import { shadowStyle, type EmbedFragment } from "./shadow-embed";
@@ -16,25 +7,20 @@ import { mountPath } from "./mount";
 import { rootShellLink, rootShellScript } from "./root-shell";
 
 /**
- * The three of CloudPanel's own pages the shell's header links to.
- *
- * The header reproduces the panel's, so it carries the panel's controls: the
- * Admin Area, and an account menu of Settings and Logout. The avatar is a
- * icons are the panel's own paths, copied rather than approximated, so the same
- * control does not have two shapes depending on which page it is on.
- *
- * The avatar is Gravatar's own default, the image the panel itself shows for an
- * account with no gravatar, carried here as data rather than fetched: the
- * manager serves these pages behind the panel's session without ever being told
- * whose it is, so it has no address to ask about, and asking would tell
- * Gravatar which boxes an operator administers.
+ * Gravatar's own default, the image the panel itself shows for an account with
+ * no gravatar, carried here as data rather than fetched: the manager serves
+ * these pages behind the panel's session without ever being told whose it is,
+ * so it has no address to ask about, and asking would tell Gravatar which boxes
+ * an operator administers.
  */
 const DEFAULT_AVATAR = "data:image/jpeg;base64,/9j/4AAQSkZJRgABAQEAYABgAAD//gA7Q1JFQVRPUjogZ2QtanBlZyB2MS4wICh1c2luZyBJSkcgSlBFRyB2NjIpLCBxdWFsaXR5ID0gOTAK/9sAQwADAgIDAgIDAwMDBAMDBAUIBQUEBAUKBwcGCAwKDAwLCgsLDQ4SEA0OEQ4LCxAWEBETFBUVFQwPFxgWFBgSFBUU/9sAQwEDBAQFBAUJBQUJFA0LDRQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQU/8AAEQgARgBGAwEiAAIRAQMRAf/EAB8AAAEFAQEBAQEBAAAAAAAAAAABAgMEBQYHCAkKC//EALUQAAIBAwMCBAMFBQQEAAABfQECAwAEEQUSITFBBhNRYQcicRQygZGhCCNCscEVUtHwJDNicoIJChYXGBkaJSYnKCkqNDU2Nzg5OkNERUZHSElKU1RVVldYWVpjZGVmZ2hpanN0dXZ3eHl6g4SFhoeIiYqSk5SVlpeYmZqio6Slpqeoqaqys7S1tre4ubrCw8TFxsfIycrS09TV1tfY2drh4uPk5ebn6Onq8fLz9PX29/j5+v/EAB8BAAMBAQEBAQEBAQEAAAAAAAABAgMEBQYHCAkKC//EALURAAIBAgQEAwQHBQQEAAECdwABAgMRBAUhMQYSQVEHYXETIjKBCBRCkaGxwQkjM1LwFWJy0QoWJDThJfEXGBkaJicoKSo1Njc4OTpDREVGR0hJSlNUVVZXWFlaY2RlZmdoaWpzdHV2d3h5eoKDhIWGh4iJipKTlJWWl5iZmqKjpKWmp6ipqrKztLW2t7i5usLDxMXGx8jJytLT1NXW19jZ2uLj5OXm5+jp6vLz9PX29/j5+v/aAAwDAQACEQMRAD8A+uKKKKACiiigAooooAKKKKACiiigAooooAK7Hwx8NrzXYEurmT7FavypZcu49QOw9zVP4feH01/xDGky7raBfOkU9GweB+JI/AGvdQABgcCgDz2b4OaeYsR31ykn95wrD8sD+dcJ4n8G3/heUGcCa2c4S4j+6T6H0Ne/VS1TTYNWsJ7O5TfFKu0j09CPcdaAPnGirOp2D6XqFzaSffgkaMn1wetVqACiiigAooooA9J+DO37Rqufv7Y8fTLZ/pXqVeE+APECeH/EEckrbbaceTKx6KCeD+BA/DNe6BgwBByD0IoAdRRVHVtSg0ewmvLl9kUS7j6k9gPc9KAPFfiHt/4TLUtnTcv57Fz+tc5VnUr6TU9QuLuX/WTSNIfbJziq1ABRRRQAUUV1fgDwgPE2oPJcgixt8GTHG89lz/P/AOvQBh6XoWo6yxWys5bjHBZV+UfU9BXr/gLStc0qyMGqSxmFRiKLO50/4EOMe3P4V09tbRWcCQwRrFEgwqIMACpqACvNfiB4c8Sa1eExbLuwQ7ooYiFK/UE8n3/lXpVFAHzXeWVxYTmG6gkt5R1SRSp/WoK+iNc0Gy8QWbW15EHU/dcfeQ+oPavCPEGizeHtVnsZvmaM/K4HDKehoAzqKKKACvbfhfapbeEbZ1HzTu8jH33bf5KKKKAOuooooAKKKKACvK/jNaIl3plyB88iPGfoCCP/AEI0UUAecUUUUAf/2Q==";
+// The header reproduces CloudPanel's own controls. Their icons are the panel's
+// own paths, copied rather than approximated, so the same control does not
+// have two shapes depending on which page it is on.
 const PANEL_ADMIN_URL = "/admin/users";
 const PANEL_SETTINGS_URL = "/settings";
 const PANEL_LOGOUT_URL = "/logout";
 
-/** How long ago something happened, in the words a status line would use. */
 export function sinceText(iso: string): string {
   const at = Date.parse(iso);
   if (!Number.isFinite(at)) return "never";
@@ -47,53 +33,45 @@ export function sinceText(iso: string): string {
   return `${days} day${days === 1 ? "" : "s"} ago`;
 }
 
-/** The badge class for a job's state. */
 export function jobStateClass(state: string): string {
   return ["queued", "running", "done", "failed"].includes(state) ? `state-${state}` : "state-failed";
 }
 
-/** A job's state as a sentence would put it. */
 export function jobStateLabel(state: string): string {
   return ({ queued: "Queued", running: "Running", done: "Done", failed: "Failed" } as Record<string, string>)[state] ?? state;
 }
 
-/** A recorded time as the job pages print it, `2026-09-10 09:30 UTC`. */
 export function whenText(iso: string): string {
   const at = Date.parse(iso);
   return Number.isFinite(at) ? `${new Date(at).toISOString().slice(0, 16).replace("T", " ")} UTC` : "—";
 }
 
 /** Below this many sites the whole table fits on a screen, so it needs no search. */
-export const FLEET_FILTER_MIN = 6;
+const FLEET_FILTER_MIN = 6;
 
-/** A row's place when its status column is sorted: the tone of its worst status, worst first. */
 export const ATTENTION_RANK = { bad: 0, warn: 1, info: 2, ok: 3, muted: 4 } as const;
 
-export interface FleetFilter { value: string; label: string; group?: string }
+interface FleetFilter { value: string; label: string; group?: string }
 
-/** The `data-show` word a row carries for a value of a filter group such as its type. */
 export function filterWord(prefix: string, label: string): string {
   return `${prefix}-${label.toLowerCase().replace(/[^a-z0-9]+/g, "-")}`;
 }
 
-/** One filter per distinct label, under `group`; none when every row shares one, since it would filter nothing. */
 export function valueFilters(group: string, prefix: string, labels: string[]): FleetFilter[] {
   const distinct = [...new Set(labels.filter(Boolean))].sort((a, b) => a.localeCompare(b, undefined, { numeric: true }));
   return distinct.length < 2 ? [] : distinct.map((label) => ({ value: filterWord(prefix, label), label, group }));
 }
 
 /**
- * Search and an optional filter above a site table whose rows carry
- * `data-domain`, `data-find` and `data-show`; the client half is `filterFleet`.
- * The filter is a menu of checkboxes: within a group a row needs any of the
- * ticked words, across groups all of them. Its sort is the table's headings,
- * each `th[data-sort]`, which a phone does not show.
+ * For a site table whose rows carry `data-domain`, `data-find` and
+ * `data-show`; the client half is `filterFleet`. Within a filter group a row
+ * needs any of the ticked words, across groups all of them.
  */
 export function fleetFilterHtml(options: {
   count: number;
   placeholder?: string;
   filters?: FleetFilter[];
-  summary: string;
+  summary?: string;
 }): string {
   if (options.count < FLEET_FILTER_MIN) return "";
   const groups = new Map<string, FleetFilter[]>();
@@ -112,42 +90,30 @@ export function fleetFilterHtml(options: {
   const placeholder = options.placeholder ?? "Find a site";
   return `<div class="fleet-filter">
       <input type="search" id="fleet-find" data-keep placeholder="${esc(placeholder)}" aria-label="${esc(placeholder)}" oninput="filterFleet()">
-      ${filters}<span class="hint" id="fleet-summary" data-all="${esc(options.summary)}">${esc(options.summary)}</span>
+      ${filters}${options.summary === undefined ? "" : `<span class="hint" id="fleet-summary" data-all="${esc(options.summary)}">${esc(options.summary)}</span>`}
     </div>`;
 }
 
-/**
- * The selection count and, on a phone, Select all: in a site table's
- * `.card-header.toolbar`, after its title and before the bulk actions.
- */
+/** Goes in a site table's `.card-header.toolbar`, after its title and before the bulk actions. */
 export const FLEET_SELECTION_HTML = `<div class="fleet-selection"><span class="toolbar-note" id="site-selection">No sites selected</span>
 <button class="btn mobile-select-all" id="select-all-btn" type="button" onclick="toggleAllSites()">Select all</button></div>`;
 
+export const FLEET_NONE_HTML = `<div class="empty" id="fleet-none" hidden>No site matches.</div>`;
+
 /**
- * Under the table: the line shown when search or filter leaves no row, and the
- * button that shows the rest of a long list on a phone.
+ * A page that ends with its list uses `FLEET_NONE_HTML` alone, and the fleet
+ * script then shows every site on a phone.
  */
-export const FLEET_FOOTER_HTML = `<div class="empty" id="fleet-none" hidden>No site matches.</div>
+export const FLEET_FOOTER_HTML = `${FLEET_NONE_HTML}
 <div class="fleet-more" id="fleet-more" hidden><button class="btn" type="button" onclick="showAllSites()">Show all sites</button></div>`;
 
-/** Rows a phone shows of a long list before its Show all button. */
 export const PHONE_CUT = 10;
 
-/**
- * The Show all button under a second long list, such as DNS's redirects; its
- * `tbody[data-phone-cut]` names the same `id`. The fleet script cuts and shows it.
- */
+/** For a second long list, whose `tbody[data-phone-cut]` names the same `id`. */
 export function phoneMoreHtml(id: string, label: string): string {
   return `<div class="fleet-more" data-phone-more="${esc(id)}" hidden><button class="btn" type="button" onclick="showAllRows('${esc(id)}')">${esc(label)}</button></div>`;
 }
 
-/**
- * Shared selection for the Cloudflare, PHP and SMTP site tables: which rows
- * there are, which are picked, and the mouse and keyboard ways to pick them.
- *
- * Each entry point takes the page's own repaint, because what a selection
- * changes on the page is the one thing the tables do not agree on.
- */
 import FLEET_ROW_SELECTION_JS from "./assets/fleet-row-selection.client.js" with { type: "text" };
 export { FLEET_ROW_SELECTION_JS };
 
@@ -163,53 +129,19 @@ export { BASE_STYLE };
 import THEME_INIT_JS from "./assets/theme-init.client.js" with { type: "text" };
 export { THEME_INIT_JS };
 
-/**
- * The client-side helpers every addon page needs: read the CSRF cookie, echo it
- * back on a mutation, and disable the page while one is in flight.
- *
- * Concatenated into the addon's own script, so a syntax error here takes down
- * every button on the page; tests/test-app.test.ts parses the pair together.
- */
 import BASE_CLIENT_JS from "./assets/app-ui.client.js" with { type: "text" };
 export { BASE_CLIENT_JS };
 
-/** A list of settings, one switch each; the client half opens a setting's wording on a phone. */
 import TWEAK_ROW_JS from "./assets/tweak-rows.client.js" with { type: "text" };
 export { TWEAK_ROW_JS };
 
-/**
- * The client half of the job progress page: paint an update, and follow a job
- * until it reaches a state that will not change again.
- *
- * Appended to an addon's own script, which calls `watchJob(id)` once the page
- * announces a job to follow. A caller can pass a containing element as the
- * second argument when a page has more than one job surface; the manager uses
- * that to keep updates in the card whose action started the job. A third
- * argument overrides the finished job's repaint, for embedded Git views and
- * successful manager updates that replace this page's code. The markup
- * contract is four ids -- `job-state`, `job-step`, `job-log` and a hidden
- * `job-watch` carrying `data-job` -- and an addon that draws only some of them
- * still works: each element is optional.
- *
- * EventSource with a polling fallback rather than polling alone, because a log
- * that appears a second after the line was written reads as a live console,
- * and one that appears five seconds later reads as a hung page. The fallback
- * covers a proxy that will not stream and a browser without EventSource.
- */
 import JOB_WATCH_JS from "./assets/job-watch.client.js" with { type: "text" };
 export { JOB_WATCH_JS };
 
-/**
- * A progress bar for a background job that works through sites, such as
- * WordPress Tools' checks and Panel Tweaks' size measurement. The page draws
- * it with `jobProgressHtml` and the client half follows every one it finds
- * with `followJobProgress(onFinished)`, so a reload picks the job up again.
- */
 import JOB_PROGRESS_JS from "./assets/job-progress.client.js" with { type: "text" };
 export { JOB_PROGRESS_JS };
 
-/** What the bar needs of a job; both addons' job views carry it. */
-export interface SiteJobProgress {
+interface SiteJobProgress {
   id: string;
   state: string;
   step: string;
@@ -218,13 +150,12 @@ export interface SiteJobProgress {
   site: string;
 }
 
-/** "12 of 40: site" beside the title; the client half writes the same. */
-export function jobProgressText(job: SiteJobProgress): string {
+// job-progress.client.js writes the same text.
+function jobProgressText(job: SiteJobProgress): string {
   const count = job.total ? `${Math.min(job.completed + 1, job.total)} of ${job.total}: ` : "";
   return job.state === "queued" ? "Waiting to start" : job.site ? `${count}${job.site}` : job.step;
 }
 
-/** `hidden` draws an empty bar the client fills in when it starts a job. */
 export function jobProgressHtml(job: SiteJobProgress, title: string, hidden = false): string {
   return `<div class="job-progress" data-job="${esc(job.id)}" role="status"${hidden ? " hidden" : ""}>
         <div class="job-progress-head"><strong>${esc(title)}</strong><span class="job-progress-step hint">${esc(jobProgressText(job))}</span></div>
@@ -232,42 +163,29 @@ export function jobProgressHtml(job: SiteJobProgress, title: string, hidden = fa
       </div>`;
 }
 
-export interface Chrome {
-  /** Product name for the contextual navigation, e.g. "Instatic". */
-  brand: string;
-  /** Where this addon is mounted, e.g. "/addons/instatic". */
+export interface AddonChrome {
   base: string;
-  /** Contextual tabs for this addon's manager, below the global shell nav. */
-  nav: { href: string; label: string }[];
-  /** Rules appended after BASE_STYLE, for anything only this addon draws. */
   css?: string;
-  /** The addon's own script. BASE_CLIENT_JS is prepended. */
   script: string;
-  /** Optional header controls if a newer clp-addons release is available. */
+}
+
+interface Chrome extends AddonChrome {
   updateNotice?: { current: string; latest: string } | null;
-  /** Hide administrator navigation for pages reached by a site manager. */
+  /** False for pages reached by a site manager. */
   admin?: boolean;
-  /**
-   * Draw CloudPanel's site information and site tab strip instead of this
-   * addon's own tabs, for a page reached from that strip. `activeSlug` is the
-   * tab this page is; see lib/site-context for the list.
-   */
   site?: SiteContext & { activeSlug: string };
 }
 
-/** The panel's own moon and sun, for a `#theme-switch` button. */
+/** The panel's own moon and sun. */
 export const THEME_SWITCH_ICONS = `<svg class="moon" viewBox="0 0 384 512" fill="currentColor" aria-hidden="true"><path d="M223.5 32C100 32 0 132.3 0 256S100 480 223.5 480c60.6 0 115.5-24.2 155.8-63.4c5-4.9 6.3-12.5 3.1-18.7s-10.1-9.7-17-8.5c-9.8 1.7-19.8 2.6-30.1 2.6c-96.9 0-175.5-78.8-175.5-176c0-65.8 36-123.1 89.3-153.3c6.1-3.5 9.2-10.5 7.7-17.3s-7.3-11.9-14.3-12.5c-6.3-.5-12.6-.8-19-.8z"/></svg>
 <svg class="sun" viewBox="0 0 20 20" fill="currentColor" aria-hidden="true"><path fill-rule="evenodd" d="M10 2a1 1 0 011 1v1a1 1 0 11-2 0V3a1 1 0 011-1zm4 8a4 4 0 11-8 0 4 4 0 018 0zm-.464 4.95l.707.707a1 1 0 001.414-1.414l-.707-.707a1 1 0 00-1.414 1.414zm2.12-10.607a1 1 0 010 1.414l-.706.707a1 1 0 11-1.414-1.414l.707-.707a1 1 0 011.414 0zM17 11a1 1 0 100-2h-1a1 1 0 100 2h1zm-7 4a1 1 0 011 1v1a1 1 0 11-2 0v-1a1 1 0 011-1zM5.05 6.464A1 1 0 106.465 5.05l-.708-.707a1 1 0 00-1.414 1.414l.707.707zm1.414 8.486l-.707.707a1 1 0 01-1.414-1.414l.707-.707a1 1 0 011.414 1.414zM4 11a1 1 0 100-2H3a1 1 0 000 2h1z" clip-rule="evenodd"></path></svg>`;
 
-/** The inline notice holder every page carries, above its content. */
 const FLASH_HTML = '<div id="clp-flash" hidden></div>';
 
-/** What the addon's view drew, in the holder a change repaints in place. */
 function viewRoot(content: string): string {
   return `<div id="clp-content">${content}</div>`;
 }
 
-/** The one confirmation dialog every page carries. */
 const CONFIRM_HTML = `<dialog id="clp-confirm" aria-labelledby="clp-confirm-title">
   <div class="dialog-header"><h2 id="clp-confirm-title">Are you sure?</h2></div>
   <p id="clp-confirm-text"></p>
@@ -283,14 +201,10 @@ const CONFIRM_HTML = `<dialog id="clp-confirm" aria-labelledby="clp-confirm-titl
 </dialog>`;
 
 /**
- * The same page as `renderLayout`, without a document around it, for mounting
- * into CloudPanel's own site page.
- *
- * No header, no footer, no site strip: the panel is already drawing those. The
- * stylesheet is rewritten for a shadow root, and the script is handed back
- * unrun so the loader can give it the root its lookups are relative to.
+ * For mounting into CloudPanel's own site page, which already draws the
+ * header, footer and site strip.
  */
-export function renderFragment(title: string, content: string, chrome: Chrome): EmbedFragment {
+export function renderFragment(title: string, content: string, chrome: AddonChrome): EmbedFragment {
   return {
     ok: true,
     title,
@@ -300,10 +214,6 @@ export function renderFragment(title: string, content: string, chrome: Chrome): 
   };
 }
 
-/**
- * CloudPanel's logo, or Theme & Branding's. The square mark stands in for the
- * header logo on a phone, and for all of it when there is no header logo.
- */
 export function logosHtml(logos: PanelLogos | null): string {
   const header = logos?.header ?? logos?.mark;
   if (!logos || !header) {
@@ -345,14 +255,6 @@ ${siteTabs(chrome.site, chrome.site.activeSlug)
   .join("\n")}
       </nav>`
     : "";
-  const contextualNav = chrome.nav
-    .map((n) => `        <a class="clp-addon-nav-link" href="${esc(n.href)}">${esc(n.label)}</a>`)
-    .join("\n");
-  const contextualHeader = chrome.site || !contextualNav
-    ? siteHeader
-    : `      <nav class="clp-addon-tabs" data-auto-active aria-label="${esc(chrome.brand)} navigation">
-${contextualNav}
-      </nav>`;
   return `<!doctype html>
 <html lang="en">
 <head>
@@ -389,13 +291,14 @@ ${primaryNav}
         </button>
         <div class="clp-addon-account-menu" id="clp-account-menu" hidden>
           <a href="${esc(PANEL_SETTINGS_URL)}">Settings</a>
+          ${chrome.admin !== false ? rootShellLink(mountPath("terminal"), 'class="clp-root-shell-menu" data-clp-root-shell hidden', "Root terminal", false) : ""}
           <a href="${esc(PANEL_LOGOUT_URL)}">Logout</a>
         </div>
       </div>
     </div>
   </div>
 </header>
-<main>${contextualHeader}${FLASH_HTML}${viewRoot(content)}</main>
+<main>${siteHeader}${FLASH_HTML}${viewRoot(content)}</main>
 ${CONFIRM_HTML}
 <footer class="clp-addon-footer">
   <a href="https://github.com/7heMech/cloudpanel-addons/issues" target="_blank" rel="noopener noreferrer">Report an addon issue</a>
@@ -407,11 +310,6 @@ ${BASE_CLIENT_JS}${chrome.admin !== false ? rootShellScript(mountPath("terminal"
 </html>`;
 }
 
-/**
- * A page for a window of its own, such as the terminal popup: the same head as
- * `renderLayout` -- theme, palette, shared script -- without the panel's
- * header, navigation or footer, which a small window has no room for.
- */
 export function renderToolWindow(
   title: string,
   content: string,

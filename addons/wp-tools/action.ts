@@ -17,20 +17,22 @@
  * file content is a plugin zip chosen for a new site, which is staged in root's
  * own storage under an id root picks and handed to the site's user on stdin.
  */
-import { openPanelDatabase } from "../../cli/panel-db";
+import { LOCK_DIR, addonConfigFile, addonStateDir, CLI_BIN, NGINX_CERTIFICATES_DIR, PANEL_DB, DISTRO_NGINX_SITES_DIR } from "../../lib/paths";
+import { openPanelDatabase } from "../../lib/panel-db";
 import { PANEL_USER_NAME_RE, panelUserOwnsSite, panelUserRole } from "../../lib/panel-users";
 import { createHash, randomBytes } from "node:crypto";
 import { isIP } from "node:net";
 import { normalizeMappedIpv4 } from "../../lib/ip-address";
 import { existsSync } from "node:fs";
 import { join } from "node:path";
-import {
-  REPLIED, replyToAction, emitActionOk, errorMessage, failAction, validateDomain, withFileLock, withFileLockSync, type CommandResult,
-} from "../../cli/action-common";
-import { CLI_BIN, CONFIG_DIR, NGINX_CERTIFICATES_DIR, PANEL_DB, STATE_DIR } from "../../cli/paths";
+import { REPLIED, replyToAction, emitActionOk, failAction } from "../../lib/action";
+import { errorMessage } from "../../lib/errors";
+import { validateDomain } from "../../lib/panel-identity";
+import { withFileLock, withFileLockSync } from "../../lib/file-lock";
+import { type CommandResult } from "../../lib/command";
 import {
   jobDir, jobGet, jobIdArgument, jobSet, pruneJobs, readJobLog, validateJobId, watchJobRecord, type startJobUnit,
-} from "../../cli/job-store";
+} from "../../lib/job-store";
 import { readUnixAccounts, siteAccountProblem, splitSharedUids, type UnixAccount } from "../../lib/site-accounts";
 import {
   DEFAULT_MAINTENANCE_ACTION_PATHS, addBypass, maintenanceBlocks, type MaintenanceActionPaths,
@@ -61,7 +63,7 @@ import {
 
 import { basicAuthBlocks, basicAuthRewritable, withBasicAuthBypass, type reloadNginx } from "./basic-auth";
 
-export type WpToolsVerb =
+type WpToolsVerb =
   "sites" | "sign-in" | "site-kind" | "remove" | "sync" | "varnish-settings" | "varnish-install" | "varnish-sync" | "domain-link-settings";
 export type { WpJobs, WpJobView } from "./jobs";
 
@@ -76,9 +78,9 @@ const SECRET_DIR = `${MU_PLUGINS}/clp-addons`;
 const SECRET_FILE = `${SECRET_DIR}/token.php`;
 
 /** The POST field the loader reads the secret from. */
-export const WP_LOGIN_FIELD = "clp_addons_login";
+const WP_LOGIN_FIELD = "clp_addons_login";
 /** How long a minted sign-in is good for. One use, and a minute to make it. */
-export const WP_LOGIN_TTL_SECONDS = 60;
+const WP_LOGIN_TTL_SECONDS = 60;
 
 /**
  * The applications CloudPanel records for a WordPress-family site.
@@ -93,7 +95,6 @@ export const WP_LOGIN_TTL_SECONDS = 60;
  */
 export const WORDPRESS_APPLICATIONS = ["WordPress", "WooCommerce"];
 
-/** What one WordPress site contributes to the addon's page. */
 export interface WpSiteView {
   domain: string;
   user: string;
@@ -148,7 +149,7 @@ export interface WpRemoveResult {
   failed: string[];
 }
 
-export interface WpToolsActionPaths {
+interface WpToolsActionPaths {
   configFile: string;
   panelDb: string;
   passwd: string;
@@ -202,31 +203,31 @@ export interface WpToolsActionOptions extends VarnishOptions, Pick<NewSiteOption
 }
 
 export const DEFAULT_WP_TOOLS_PATHS: WpToolsActionPaths = {
-  configFile: `${CONFIG_DIR}/wp-tools.conf`,
+  configFile: addonConfigFile("wp-tools"),
   panelDb: PANEL_DB,
   passwd: "/etc/passwd",
-  lockFile: "/run/lock/clp-addons/wp-tools.lock",
+  lockFile: `${LOCK_DIR}/wp-tools.lock`,
   runuser: "/usr/sbin/runuser",
-  maintenanceConfig: `${CONFIG_DIR}/maintenance.conf`,
+  maintenanceConfig: addonConfigFile("maintenance"),
   maintenance: DEFAULT_MAINTENANCE_ACTION_PATHS,
-  nginxVhostDir: "/etc/nginx/sites-enabled",
+  nginxVhostDir: DISTRO_NGINX_SITES_DIR,
   nginx: "nginx",
   systemctl: "systemctl",
   vhostUid: 0,
-  varnishState: `${STATE_DIR}/wp-tools/varnish.json`,
-  varnishLockFile: "/run/lock/clp-addons/wp-varnish.lock",
-  domainLinkState: `${STATE_DIR}/wp-tools/domain-link.json`,
-  newSiteAccessState: `${STATE_DIR}/wp-tools/new-site-access.json`,
-  mainwpState: `${STATE_DIR}/wp-tools/mainwp.json`,
-  mainwpLockFile: "/run/lock/clp-addons/wp-mainwp.lock",
-  jobsDir: `${STATE_DIR}/wp-tools/jobs`,
-  jobsLockFile: "/run/lock/clp-addons/wp-jobs.lock",
-  newSitesState: `${STATE_DIR}/wp-tools/new-sites.json`,
-  newSitesLockFile: "/run/lock/clp-addons/wp-new-sites.lock",
+  varnishState: `${addonStateDir("wp-tools")}/varnish.json`,
+  varnishLockFile: `${LOCK_DIR}/wp-varnish.lock`,
+  domainLinkState: `${addonStateDir("wp-tools")}/domain-link.json`,
+  newSiteAccessState: `${addonStateDir("wp-tools")}/new-site-access.json`,
+  mainwpState: `${addonStateDir("wp-tools")}/mainwp.json`,
+  mainwpLockFile: `${LOCK_DIR}/wp-mainwp.lock`,
+  jobsDir: `${addonStateDir("wp-tools")}/jobs`,
+  jobsLockFile: `${LOCK_DIR}/wp-jobs.lock`,
+  newSitesState: `${addonStateDir("wp-tools")}/new-sites.json`,
+  newSitesLockFile: `${LOCK_DIR}/wp-new-sites.lock`,
   certificatesDir: NGINX_CERTIFICATES_DIR,
   actionBinary: CLI_BIN,
-  uploadsDir: `${STATE_DIR}/wp-tools/uploads`,
-  pluginsLockFile: "/run/lock/clp-addons/wp-plugins.lock",
+  uploadsDir: `${addonStateDir("wp-tools")}/uploads`,
+  pluginsLockFile: `${LOCK_DIR}/wp-plugins.lock`,
 };
 
 function pathsFor(options: WpToolsActionOptions): WpToolsActionPaths {
@@ -307,8 +308,8 @@ function asUserArgument(value: string | undefined): string {
 function panelSites(paths: WpToolsActionPaths): PanelSiteRow[] {
   const db = openPanelDatabase(paths.panelDb, true, 1000);
   try {
-    // Older panels have no Varnish column. Their sign-in behavior is unchanged,
-    // and they contribute no eligible sites to plugin installation.
+    // Older panels have no Varnish column; their sites are never eligible for
+    // plugin installation.
     const columns = db.query<{ name: string }, []>("PRAGMA table_info(site);").all();
     const varnish = columns.some((column) => column.name === "varnish_cache") ? "varnish_cache" : "0 AS varnish_cache";
     const phpSettings = db.query("SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'php_settings';").get();
@@ -384,7 +385,6 @@ function resolvedSites(paths: WpToolsActionPaths): { row: PanelSiteRow; account:
   return resolved;
 }
 
-/** Shared discovery and eligibility for the page and plugin installation. */
 function resolvedWordPressSites(paths: WpToolsActionPaths) {
   return resolvedSites(paths)
     .filter((site) => isWordPress(site.root))
@@ -405,7 +405,6 @@ function wordpressSites(paths: WpToolsActionPaths, state: WpVarnishState): WpSit
     }));
 }
 
-/** The sites and the panel's domains a Varnish pass works from. */
 function varnishRun(
   paths: WpToolsActionPaths,
   request: { domain?: string; targets?: string[]; dueOnly?: boolean; deadline?: number } = {},
@@ -459,7 +458,7 @@ export function wpPoliciesActive(options: WpToolsActionOptions = {}): boolean {
 }
 
 /** The queued timer's MainWP pass does not wait for a page's pass. */
-export async function reconcileWpMainwp(options: WpToolsActionOptions = {}): Promise<MainwpResult> {
+async function reconcileWpMainwp(options: WpToolsActionOptions = {}): Promise<MainwpResult> {
   const paths = pathsFor(options);
   return withFileLock(paths.mainwpLockFile, 1, "a MainWP change is still running", async () => {
     if (!existsSync(paths.configFile) || !mainwpNeedsRepair(readMainwpState(paths.mainwpState))) {
@@ -766,11 +765,9 @@ function mintWpLogin(
 }
 
 /**
- * Take the sign-in back out of every site that has it.
- *
- * Disabling the addon runs this: leaving a loader behind in
- * somebody else's site because the addon went away would make it something an
- * operator cannot fully withdraw.
+ * Disabling the addon runs this: leaving a loader behind in somebody else's
+ * site because the addon went away would make it something an operator cannot
+ * fully withdraw.
  */
 export function removeWpLogin(paths: WpToolsActionPaths = DEFAULT_WP_TOOLS_PATHS): WpRemoveResult {
   let removed = 0;
@@ -783,16 +780,15 @@ export function removeWpLogin(paths: WpToolsActionPaths = DEFAULT_WP_TOOLS_PATHS
       runAsSite(paths, site.account, ["rm", "-rf", "--", loader, join(site.root, SECRET_DIR)]);
       removed++;
     } catch (error) {
-      failed.push(`${site.row.domain_name}: ${error instanceof Error ? error.message : String(error)}`);
+      failed.push(`${site.row.domain_name}: ${errorMessage(error)}`);
     }
   }
   return { removed, failed };
 }
 
 /**
- * Take the MainWP guard out of every site that has it. Withdrawing the addon
- * runs this: nothing would enforce the connection any more, and a Child no one
- * can deactivate or see would be left behind.
+ * Withdrawing the addon runs this: nothing would enforce the connection any
+ * more, and a Child no one can deactivate or see would be left behind.
  */
 export function removeMainwpGuards(paths: WpToolsActionPaths = DEFAULT_WP_TOOLS_PATHS): WpRemoveResult {
   let removed = 0;

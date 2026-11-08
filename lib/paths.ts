@@ -1,10 +1,6 @@
 import { existsSync } from "node:fs";
 
-// Read by cli/action-common.ts, which cannot own it: that module opens FFI at
-// import time, and every consumer of this leaf would then pay for it.
 export const PANEL_IDENTITY_PATH = "/etc/clp-addons/panel-identity.conf";
-
-export { mountPath } from "../lib/mount";
 
 export const REPO = "7heMech/cloudpanel-addons";
 export const CLI_ARTIFACT = "clp-addons-linux-x64";
@@ -12,7 +8,7 @@ export const CLI_BIN = "/usr/local/bin/clp-addons";
 export const LIBEXEC_DIR = "/usr/local/libexec/clp-addons";
 /** Sigstore's trusted keys, cached where only root can write. */
 export const SIGSTORE_DIR = `${LIBEXEC_DIR}/sigstore`;
-/** The GitHub CLI that verified updates before the binary did it itself. */
+/** The GitHub CLI that older releases installed to verify updates. */
 export const LEGACY_GH = `${LIBEXEC_DIR}/gh`;
 
 export const SERVICE_USER = "clp-addons";
@@ -49,12 +45,10 @@ export const DISTRO_NGINX_SITES_DIR = "/etc/nginx/sites-enabled";
 export const NGINX_CERTIFICATES_DIR = "/etc/nginx/ssl-certificates";
 const PANEL_NGINX_DIR = "/home/clp/services/nginx";
 
-export interface NginxLayout {
-  /** Directory holding the panel vhost. */
+interface NginxLayout {
   sitesDir: string;
   /** Config root to hand `nginx -t -c`, when the instance has its own. */
   configFile: string | null;
-  /** systemd unit that owns the resolved tree. */
   service: string;
   /** The resolved tree is owned by the panel user rather than by root. */
   panelOwned: boolean;
@@ -80,6 +74,8 @@ export function nginxLayout(panelDir = PANEL_NGINX_DIR): NginxLayout {
 }
 export const NGINX_PROXY_STATE_DIR = "/var/lib/clp-addons/nginx";
 export const NGINX_GLOBAL_SETTINGS = "/etc/nginx/global_settings";
+/** Maintenance Mode's check, which each site vhost includes. */
+export const MAINTENANCE_INCLUDE_PATH = "/etc/nginx/clp-addons-maintenance.conf";
 export const CLOUDFLARE_IPS_PATH = "/etc/nginx/cloudflare/ips";
 export const NGINX_MAINTENANCE_STATE_DIR = "/var/lib/clp-addons/nginx-maintenance";
 
@@ -95,14 +91,20 @@ export const PANEL_CACHE_POOL_DIR = `${PANEL_APP}/var/cache/prod/pools/app`;
 export const ROOT_UID = 0;
 export const CONFIG_DIR = "/etc/clp-addons";
 export const STATE_DIR = "/var/lib/clp-addons";
+/** An addon is enabled while this file exists. */
+export const addonConfigFile = (addon: string) => `${CONFIG_DIR}/${addon}.conf`;
+/** What an addon keeps, which disabling leaves in place. */
+export const addonStateDir = (addon: string) => `${STATE_DIR}/${addon}`;
 export const ARTIFACT_MANIFEST_PATH = `${STATE_DIR}/artifacts.json`;
 export const TEMPLATE_STATE_DIR = `${STATE_DIR}/templates`;
 export const LOCK_DIR = "/run/lock/clp-addons";
 export const SYSTEMD_DIR = "/etc/systemd/system";
 /** Runs `clp-addons apt-hook` around unattended-upgrades' daily run. */
 export const APT_UPGRADE_DROPIN = "apt-daily-upgrade.service.d/50-clp-addons.conf";
-/** Present while edits to package conffiles are given back for an upgrade run. */
-/** Root-only: the manager owns /run/clp-addons, and root writes this flag. */
+/**
+ * Present while edits to package conffiles are given back for an upgrade run.
+ * Root-only: the manager owns /run/clp-addons, and root writes this flag.
+ */
 export const CONFFILES_RELEASED_FLAG = `${LOCK_DIR}/conffiles-released`;
 /** Operator-editable schedule for Instatic's recovery snapshots. */
 export const INSTATIC_BACKUP_CRON = "/etc/cron.d/clp-addons-instatic-backup";
@@ -125,7 +127,6 @@ export const UPDATE_MOTD_DIR = "/etc/update-motd.d";
 export const NEW_SITE_ROWS_PATH = "clp-addons-new-site-rows.path";
 /** The site domains the new-site hooks last ran for. */
 export const NEW_SITES_SEEN_FILE = `${STATE_DIR}/new-sites-seen.json`;
-
 
 export const LEGACY_UNITS = [
   "clp-addons-php-resources.service",

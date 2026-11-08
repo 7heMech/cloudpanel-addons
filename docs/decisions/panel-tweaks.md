@@ -99,7 +99,11 @@ on -- and the new-site pages, whose chooser and forms live in a fixed 800px
 container of two-column cards and unstacking halves. Below 760px the container
 becomes the viewport and the cards become one centred column; below 576px,
 Bootstrap's own stacking point, each form half takes the whole row, except
-the Back and submit row, whose two buttons stay side by side.
+the Back and submit row, whose two buttons stay side by side. The page for
+turning on two-factor sign-in is drawn at a fixed 850px with a 350px code
+field; below 760px it takes the card's width, the manual-entry secret breaks
+anywhere rather than running off the card, and the field shares its row with
+the button.
 
 The Admin header additionally carries rules for the Admin Area, under the same
 mobile-layout switch and without another template anchor. Below 760px the fixed

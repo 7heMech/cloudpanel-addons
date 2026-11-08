@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 // The gateway's one duplex verb. What is pinned here is that root decides the
 // session itself, copies bytes it never reads, and stops the worker when the
 // session or the socket goes -- and that no other stream changed shape.
@@ -106,6 +107,24 @@ test("only the first line is the request; what follows is never parsed as part o
   expect(parseGatewayRequest(terminalRequest() + "garbage")).toMatchObject({ kind: "stream-action", sessionId: "live" });
 });
 
+test("a ticket reaches the worker's environment, never its command line, and only in its own shape", async () => {
+  expect(parseGatewayRequest(terminalRequest({ ticket: "short" }))).not.toHaveProperty("ticket");
+  setRole("ROLE_ADMIN");
+  const gw = await gateway(["cat"]);
+  try {
+    const c = await gw.connect();
+    c.socket.write(terminalRequest({ ticket: "t".repeat(43) }));
+    await until(() => gw.spawned.length === 1);
+    const { argv, options } = gw.spawned[0]!;
+    expect(options.env).toMatchObject({ CLP_ADDONS_TICKET: "t".repeat(43) });
+    expect(argv.join(" ")).not.toContain("t".repeat(43));
+    c.socket.end();
+    await c.done;
+  } finally {
+    await gw.close();
+  }
+});
+
 test("an administrator's session starts the worker as that user and copies bytes both ways in order", async () => {
   setRole("ROLE_ADMIN");
   const gw = await gateway(["cat"]);
@@ -128,6 +147,7 @@ test("an administrator's session starts the worker as that user and copies bytes
       CLP_ADDONS_DUPLEX_WORKER: "1",
       // This session passed CloudPanel's 2FA step.
       CLP_ADDONS_SESSION_2FA: "1",
+      CLP_ADDONS_SESSION_BINDING: createHash("sha256").update("live").digest("hex"),
     });
     // The session id rides on the request, never on a command line.
     expect(argv.join(" ")).not.toContain("live");

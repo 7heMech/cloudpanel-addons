@@ -5,11 +5,16 @@
  * deleting them is the whole undo. The vhost guard and the File Manager guard
  * are two of these.
  */
-import { lstatSync, readFileSync, rmSync } from "node:fs";
+import { errorMessage } from "../../lib/errors";
+import { rmSync } from "node:fs";
 import { dirname } from "node:path";
-import { failAction, runCommand, withFileLock, withFileLockSync, type CommandResult } from "../../cli/action-common";
-import { PANEL_FPM_UNIT, RECONCILE_SERVICE, ROOT_UID } from "../../cli/paths";
-import { writeFileAtomic } from "../../lib/atomic-write";
+import { failAction } from "../../lib/action";
+import { requireSuccess, runCommand, type CommandResult } from "../../lib/command";
+import { withFileLock, withFileLockSync } from "../../lib/file-lock";
+import { PANEL_FPM_UNIT, RECONCILE_SERVICE, ROOT_UID } from "../../lib/paths";
+import { writeFileAtomic, writeOrRemove } from "../../lib/atomic-write";
+import { present, regularText, trustedText } from "../../lib/trusted-file";
+import { waitHealthy } from "./wait-healthy";
 import { fastCgiRequest, type FastCgiResponse } from "../../lib/fastcgi";
 import { DEFAULT_PANEL_PHP_PATHS } from "./panel-php";
 import PANEL_SESSION from "./panel-session.php" with { type: "text" };
@@ -55,7 +60,7 @@ export interface PoolGuardContext<P extends PoolGuardPaths = PoolGuardPaths> {
   healthTimeoutMs: number;
 }
 
-export interface PoolGuardSpec<P extends PoolGuardPaths> {
+interface PoolGuardSpec<P extends PoolGuardPaths> {
   /** As failures name it: "the vhost guard". */
   name: string;
   defaults: P;
@@ -76,48 +81,18 @@ export interface PoolGuardSpec<P extends PoolGuardPaths> {
 const SESSION_INCLUDE = "require __DIR__ . '/panel-session.php'";
 
 /** The guard as installed: the shared session reader in place of its include, so it is one file. */
-export function withPanelSession(script: string): string {
+function withPanelSession(script: string): string {
   if (!script.includes(SESSION_INCLUDE)) throw new Error("a guard script does not include panel-session.php");
   return script.replace(SESSION_INCLUDE, `(static function () {\n${PANEL_SESSION.replace(/^<\?php\n/, "").trimEnd()}\n})()`);
 }
 
-/** The file's text when it is root's and only root can write it, else null. */
+/** The file's text when it is root's and only root can write it, else null; a failed read is null too. */
 function trusted(path: string, rootUid: number): string | null {
   try {
-    const info = lstatSync(path);
-    if (!info.isFile() || info.uid !== rootUid || (info.mode & 0o022) !== 0) return null;
-    return readFileSync(path, "utf8");
+    return trustedText(path, rootUid);
   } catch {
     return null;
   }
-}
-
-/** A regular file's text, whoever owns it, or null. */
-function regularText(path: string): string | null {
-  try {
-    return lstatSync(path).isFile() ? readFileSync(path, "utf8") : null;
-  } catch {
-    return null;
-  }
-}
-
-function present(path: string): boolean {
-  try {
-    lstatSync(path);
-    return true;
-  } catch {
-    return false;
-  }
-}
-
-function check(result: CommandResult, what: string): void {
-  if (!result.ok) failAction(`${what}: ${(result.stderr || result.stdout).trim() || `exit ${result.exitCode ?? "unknown"}`}`);
-}
-
-/** Put `text` at `path`, or remove it when null. */
-function restore(path: string, text: string | null): void {
-  if (text === null) rmSync(path, { force: true });
-  else writeFileAtomic(path, text, { mode: 0o644 });
 }
 
 export function poolGuard<P extends PoolGuardPaths>(spec: PoolGuardSpec<P>) {
@@ -158,8 +133,8 @@ export function poolGuard<P extends PoolGuardPaths>(spec: PoolGuardSpec<P>) {
 
   function testAndReload(ctx: PoolGuardContext<P>): void {
     const [binary, ...args] = fpmCommand(ctx);
-    check(ctx.run(binary!, ["-t", ...args]), "the panel's PHP-FPM rejected its config");
-    check(ctx.run("systemctl", ["reload", ctx.paths.unit]), `reloading ${ctx.paths.unit} failed`);
+    requireSuccess(ctx.run(binary!, ["-t", ...args]), "the panel's PHP-FPM rejected its config");
+    requireSuccess(ctx.run("systemctl", ["reload", ctx.paths.unit]), `reloading ${ctx.paths.unit} failed`);
   }
 
   /** Why the pool is not serving with the guard yet, or null once it is. */
@@ -169,18 +144,8 @@ export function poolGuard<P extends PoolGuardPaths>(spec: PoolGuardSpec<P>) {
       if (problem) return problem;
       return await spec.refusing(ctx) ? null : "the panel's PHP-FPM is not running the guard";
     } catch (error) {
-      return error instanceof Error ? error.message : String(error);
+      return errorMessage(error);
     }
-  }
-
-  async function waitHealthy(ctx: PoolGuardContext<P>): Promise<string | null> {
-    const deadline = ctx.now() + ctx.healthTimeoutMs;
-    let problem = await unhealthy(ctx);
-    while (problem && ctx.now() < deadline) {
-      await ctx.sleep(500);
-      problem = await unhealthy(ctx);
-    }
-    return problem;
   }
 
   return {
@@ -192,8 +157,6 @@ export function poolGuard<P extends PoolGuardPaths>(spec: PoolGuardSpec<P>) {
     },
 
     /**
-     * Put both files in place, reload the panel's FPM and require the pool to
-     * answer and the guard to refuse; a failure puts the previous files back.
      * Files already in place are left alone only while the running pool
      * enforces them, so an install that was interrupted before its reload, or
      * a script OPcache still holds an older copy of, is reloaded. Returns
@@ -214,17 +177,19 @@ export function poolGuard<P extends PoolGuardPaths>(spec: PoolGuardSpec<P>) {
           writeFileAtomic(ctx.paths.pool, pool, { mode: 0o644 });
           testAndReload(ctx);
           spec.socket?.apply(ctx);
-          const problem = await waitHealthy(ctx);
+          const problem = await waitHealthy(() => unhealthy(ctx), {
+            now: ctx.now, sleep: ctx.sleep, timeoutMs: ctx.healthTimeoutMs, intervalMs: 500,
+          });
           if (problem) failAction(`the panel did not come back with ${spec.name}: ${problem}`);
         } catch (error) {
-          restore(ctx.paths.pool, beforePool);
-          restore(ctx.paths.script, beforeScript);
+          writeOrRemove(ctx.paths.pool, beforePool, { mode: 0o644 });
+          writeOrRemove(ctx.paths.script, beforeScript, { mode: 0o644 });
           const undone = beforePool === null ? "it was removed again" : "the previous files were put back";
           const reloaded = ctx.run("systemctl", ["reload", ctx.paths.unit]).ok;
           if (beforePool === null) {
             try { spec.socket?.undo(ctx); } catch { /* the socket goes back to CloudPanel's at FPM's next restart */ }
           }
-          failAction(`${error instanceof Error ? error.message : String(error)}; ${reloaded ? undone : `${undone}, but ${ctx.paths.unit} did not reload`}`);
+          failAction(`${errorMessage(error)}; ${reloaded ? undone : `${undone}, but ${ctx.paths.unit} did not reload`}`);
         }
         return true;
       });
@@ -235,12 +200,7 @@ export function poolGuard<P extends PoolGuardPaths>(spec: PoolGuardSpec<P>) {
       contextOf(options).run("systemctl", ["start", "--no-block", RECONCILE_SERVICE]);
     },
 
-    /**
-     * Remove the pool file and reload, then the script. Synchronous, for
-     * disabling the addon; taking the guard away cannot stop the panel
-     * answering. The script stays until the reload succeeds, since the running
-     * FPM still prepends it.
-     */
+    /** Synchronous, for disabling the addon; taking the guard away cannot stop the panel answering. */
     remove(options: PoolGuardOptions<P> = {}): boolean {
       const ctx = contextOf(options);
       if (!present(ctx.paths.pool) && !present(ctx.paths.script)) return false;

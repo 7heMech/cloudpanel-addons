@@ -1,37 +1,40 @@
-// `clp-addons update`, and the rollback a failed one runs.
-
+import { errorMessage } from "../lib/errors";
 import { rmSync } from "node:fs";
-import { installedAddons, migrateOldAddonNames, revertAddonRenames } from "./addons";
+import { enabledAddons, phpGuardOptedOut } from "../addons/catalog";
+import { migrateOldAddonNames, revertAddonRenames } from "./addons";
 import {
   artifactNames, currentArtifactsMatch, installArtifacts, keepPreviousArtifacts, replaceArtifacts,
   rollbackUpdate,
 } from "./artifacts";
-import { reconcileAnchors, reconcileMaintenanceNginx, reconcileNginx } from "./reconcile";
-import { reconcilePhpGuard } from "./php-guard";
-import { type AddonSpec } from "./addon-catalog";
-import { keepNewsSince, recordNewsSince } from "./manager-action";
+import { reconcileAnchors, reconcileNginx, reconcilePanelBlocks } from "./reconcile";
+import { reconcilePhpGuard } from "../lib/php-guard";
+import { type AddonSpec } from "../lib/addon-definition";
+import { keepNewsSince, recordNewsSince } from "../manager/action";
 import { operationLockEnv, withOperationLock } from "./operation-lock";
-import { CLI_BIN, LEGACY_GH, MANAGER_UNIT, RECONCILE_SERVICE } from "./paths";
+import { CLI_BIN, LEGACY_GH, MANAGER_UNIT, RECONCILE_SERVICE } from "../lib/paths";
 import {
-  ensureAuthHelperReady, ensureDirs, ensureServiceUser, installUnits, reconcilePanelIdentity,
-  removeLegacyUnits, startUnits, unitActive, writeConfig,
+  ensureAuthHelperReady, ensureDirs, ensureServiceUser, installUnits, reconcilePanelIdentity, removeLegacyUnits,
+  startUnits, writeConfig,
 } from "./provision";
-import {
-  CLI_VERSION, type FetchedArtifact, fetchVerified, type OnProgress, resolveRelease, verifyAttestation,
-} from "./release";
-import { fatal, log, parseFlags, requireRoot, run, tryRun } from "./util";
+import { unitActive } from "../lib/systemd";
+import { CLI_VERSION } from "../lib/version";
+import { type FetchedArtifact, fetchVerified, resolveRelease, verifyAttestation } from "./release";
+import type { OnProgress } from "../lib/log";
+import { fatal, log, requireRoot } from "../lib/log";
+import { parseFlags } from "./flags";
+import { run, tryRun } from "../lib/command";
 import { compareSemver, isPrerelease } from "../lib/semver";
-/**
- * Reconcile all provisioning from the binary that owns the definitions.
- * Services restart last, after every generated file reflects this process.
- */
+import { lockState } from "../lib/root-locks";
+import {
+  CLOUDPANEL_RANGE_ASSET, describeRange, panelVersion, parseRange, rangeFit,
+} from "../lib/cloudpanel-version";
 function finalizeUpdate(beforeManagerRestart?: () => void): AddonSpec[] {
   // A failure from here on makes the binary that started this update restore
   // itself, and an earlier binary knows the renamed addons only by their old
   // names, so they go back first.
   const renames = migrateOldAddonNames();
   try {
-    const specs = installedAddons();
+    const specs = enabledAddons();
     ensureServiceUser();
     ensureDirs(specs);
     ensureAuthHelperReady();
@@ -42,9 +45,9 @@ function finalizeUpdate(beforeManagerRestart?: () => void): AddonSpec[] {
     installUnits(specs);
     ensureDirs(specs);
     reconcileAnchors(false);
-    if (!reconcileMaintenanceNginx(false)) log.warn("Nginx maintenance check needs manual repair");
+    if (!reconcilePanelBlocks(false)) log.warn("a change to CloudPanel's Nginx settings needs manual repair");
     if (!reconcileNginx(false)) log.warn("Nginx proxy needs manual repair");
-    reconcilePhpGuard(true);
+    reconcilePhpGuard(true, false, { optedOut: phpGuardOptedOut() });
     startUnits({ beforeManagerRestart });
     // Addon upkeep, such as a changed guard System Tweaks installs, would
     // otherwise wait for the next quarter-hour; it runs once this update lets go of the lock.
@@ -57,19 +60,58 @@ function finalizeUpdate(beforeManagerRestart?: () => void): AddonSpec[] {
   }
 }
 
+/**
+ * Warns when the installed CloudPanel is outside the release's range, and
+ * never refuses: the release's fixes are wanted on any CloudPanel, and the
+ * template checks hold back any page that changed. A malformed range only
+ * warns too. The range is checksummed here and attested with the binary, and
+ * a release from before ranges has none to check.
+ */
+async function checkPanelRange(
+  release: Awaited<ReturnType<typeof resolveRelease>>,
+  target: string,
+  options: UpdateOptions,
+): Promise<FetchedArtifact[]> {
+  if (!release.assets.has(CLOUDPANEL_RANGE_ASSET)) return [];
+  const installed = panelVersion();
+  const fetched = await fetchVerified(release, [CLOUDPANEL_RANGE_ASSET], options.onStep, options.onProgress);
+  const range = parseRange(fetched[0]!.bytes.toString("utf-8"));
+  if (!range) {
+    log.warn(`${CLOUDPANEL_RANGE_ASSET} in release ${release.tag} is not a CloudPanel version range; updating without checking it`);
+    return fetched;
+  }
+  const fit = rangeFit(installed, range);
+  if (fit === "below") log.warn(`clp-addons ${target} supports CloudPanel ${describeRange(range)}; this server runs ${installed}; updating CloudPanel with clp-update is recommended`);
+  if (fit === "above") log.warn(`clp-addons ${target} was checked against CloudPanel ${describeRange(range)}; this server runs ${installed}, so a CloudPanel page that changed in a way the addons no longer fit stays paused until a release supports it`);
+  if (fit === "unknown") log.warn(`could not read the CloudPanel version; clp-addons ${target} supports CloudPanel ${describeRange(range)}`);
+  return fetched;
+}
+
 type UpdateOptions = {
   beforeManagerRestart?: () => void;
   onStep?: (step: string) => void;
   onProgress?: OnProgress;
 };
 
-/**
- * Updates release artifacts when necessary. If the binary moves, re-run this
- * same command as the installed copy and let only that process provision.
- */
+/** If the binary moves, the installed copy re-runs this command and only that process provisions. */
 export async function cmdUpdate(argv: string[], options: UpdateOptions = {}): Promise<void> {
   requireRoot("update");
   return withOperationLock("update", () => applyUpdate(argv, options));
+}
+
+/**
+ * New installs lock System Tweaks; an update never does, since a box's
+ * switches may be off on purpose, so it only says how. Reads, never writes.
+ */
+export function lockHint(enabled: boolean, file?: string, rootUid?: number): string | null {
+  return enabled && lockState("system-tweaks", file, rootUid) === "unlocked"
+    ? "Tip: so the panel can switch System Tweaks' protections on but never off, run clp-addons lock system-tweaks"
+    : null;
+}
+
+function suggestLock(): void {
+  const hint = lockHint(enabledAddons().some((spec) => spec.name === "system-tweaks"));
+  if (hint) log.plain(hint);
 }
 
 async function applyUpdate(argv: string[], options: UpdateOptions): Promise<void> {
@@ -85,6 +127,7 @@ async function applyUpdate(argv: string[], options: UpdateOptions): Promise<void
   // Without --version an update only moves forward, whatever GitHub lists.
   if (typeof flags.version !== "string" && compareSemver(target, current) < 0) {
     log.ok(`clp-addons ${current} is up to date; the newest published release is ${target}`);
+    suggestLock();
     return;
   }
   const upToDate = current === target;
@@ -92,12 +135,14 @@ async function applyUpdate(argv: string[], options: UpdateOptions): Promise<void
   // Nothing to install, and repair is the command that re-applies the panel side.
   if (artifactsCurrent && flags["no-self-update"] !== true) {
     log.ok(`clp-addons ${current} is up to date`);
+    suggestLock();
     return;
   }
   let artifacts: FetchedArtifact[] | undefined;
   if (!artifactsCurrent) {
+    const range = await checkPanelRange(release, target, options);
     artifacts = await fetchVerified(release, artifactNames(), options.onStep, options.onProgress);
-    await verifyAttestation(release, artifacts, flags["skip-attestation"] === true);
+    await verifyAttestation(release, [...range, ...artifacts], flags["skip-attestation"] === true);
   }
 
   if (artifacts) {
@@ -114,18 +159,11 @@ async function applyUpdate(argv: string[], options: UpdateOptions): Promise<void
         "--no-self-update",
         `--updated-from=${current}`,
       ];
-      // Keeping the running binary aside happens before the boundary, because
-      // nothing has been replaced yet: there is no rollback to report, only an
-      // update that never started.
       try {
         keepPreviousArtifacts();
       } catch (error) {
-        fatal(`could not keep the running binary aside, so the update was not started: ${error instanceof Error ? error.message : String(error)}`);
+        fatal(`could not keep the running binary aside, so the update was not started: ${errorMessage(error)}`);
       }
-      // Everything from the replacement onwards is one boundary: the binary
-      // and its manifest are written here, so a failure between them is as
-      // much a half-finished update as a handoff that will not run. The
-      // rollback itself is outside it, so its own failure is not retried.
       let failure: string | null = null;
       const restoreNewsSince = keepNewsSince();
       try {
@@ -135,7 +173,7 @@ async function applyUpdate(argv: string[], options: UpdateOptions): Promise<void
         const state = unitActive(MANAGER_UNIT);
         if (state !== "active") failure = `${MANAGER_UNIT} is ${state} after the update`;
       } catch (error) {
-        failure = error instanceof Error ? error.message : String(error);
+        failure = errorMessage(error);
       }
       if (failure) {
         restoreNewsSince();
@@ -158,7 +196,9 @@ async function applyUpdate(argv: string[], options: UpdateOptions): Promise<void
     log.ok(versionChanged
       ? `clp-addons updated from ${updatedFrom} to ${target}; no addon service is configured`
       : `clp-addons ${current} reinstalled; no addon service is configured`);
+    suggestLock();
     return;
   }
   log.ok(versionChanged ? `clp-addons updated from ${updatedFrom} to ${target}` : `clp-addons ${current} reinstalled`);
+  suggestLock();
 }

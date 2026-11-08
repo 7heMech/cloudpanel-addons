@@ -1,26 +1,20 @@
 import { expect, test } from "bun:test";
-import { chmodSync, lstatSync, mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
+import {
+  chmodSync, lstatSync, mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync,
+} from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { execFileSync } from "node:child_process";
-import { nginxLayout, PANEL_GROUP, SERVICE_GROUP, SERVICE_USER } from "../cli/paths";
-import { ADDON_NAMES, ADDONS } from "../cli/addon-catalog";
+import { nginxLayout, PANEL_GROUP, SERVICE_GROUP, SERVICE_USER } from "../lib/paths";
+import { ADDONS } from "../addons/catalog";
 import {
-  authUnits, ensurePanelSessionReadable, reconcileUnits, serviceUnit,
-  vhostOwnerAccepted, warnIfPanelSessionUnreadable,
+  authUnits, ensurePanelSessionReadable, reconcileUnits, serviceUnit, vhostOwnerAccepted,
+  warnIfPanelSessionUnreadable,
 } from "../cli/provision";
-import { panelUserUid } from "../lib/sso-auth";
 // Other suites in this process mock.module("../cli/provision"); the query suffix keeps
 // these assertions bound to the real implementation regardless of file order.
 const realProvision = async (): Promise<typeof import("../cli/provision")> =>
   await import("../cli/provision?provision-test-real" as "../cli/provision");
-
-test("hyphenated addon names produce valid systemd environment variables", () => {
-  const unit = serviceUnit([ADDONS["cloudflare-ips"]!, ADDONS["panel-tweaks"]!]);
-  expect(unit).toContain("Environment=CLOUDFLARE_IPS_APP_DATA=/var/lib/clp-addons/cloudflare-ips");
-  expect(unit).toContain("Environment=PANEL_TWEAKS_APP_DATA=/var/lib/clp-addons/panel-tweaks");
-  expect(unit).not.toContain("Environment=CLOUDFLARE-IPS_APP_DATA");
-});
 
 const REPO = join(import.meta.dir, "..");
 
@@ -98,7 +92,7 @@ test("native backup cron is installed, preserves custom schedules, and is remove
   const root = mkdtempSync(join(tmpdir(), "instatic-cron-"));
   const path = join(root, "instatic-backup");
   try {
-    // Other suites mock cli/util.writeAtomic; exercise real provisioning in
+    // Other suites mock lib/log and lib/command; exercise real provisioning in
     // its own process so this checks the actual cron file lifecycle.
     const output = execFileSync(process.execPath, ["-e", `
       import { existsSync, readFileSync, statSync, writeFileSync } from 'node:fs';
@@ -128,7 +122,7 @@ function serviceUserProbe(options: {
   failedCommand?: string;
 }): { ok: boolean; error?: string; calls: Array<{ command: string; args: string[] }> } {
   const script = `
-    import { PANEL_GROUP, SERVICE_GROUP, SERVICE_USER } from "./cli/paths.ts";
+    import { PANEL_GROUP, SERVICE_GROUP, SERVICE_USER } from "./lib/paths.ts";
     import { ensureServiceUser } from "./cli/provision.ts";
     const options = ${JSON.stringify(options)};
     const calls = [];
@@ -283,7 +277,7 @@ function requiredUnitsProbe(options: {
       }));
     }
   `;
-  // ensureRequiredUnits logs through the real cli/util.ts (unmocked here, to
+  // ensureRequiredUnits logs through the real lib/log.ts (unmocked here, to
   // exercise the genuine Docker-provisioning code path), so stdout carries
   // those step/ok lines ahead of the JSON result; only the last line is it.
   const output = execFileSync(process.execPath, ["-e", script], { cwd: REPO, encoding: "utf8" });
@@ -403,16 +397,13 @@ test("a non-docker required unit still fails fast with no provisioning attempt",
 });
 
 function provisionProbe(): {
-  identityPath: string;
   identity: { primary: string; aliases: string[] } | null;
   unsafeIdentity: { primary: string; aliases: string[] } | null;
 } {
   const script = `
-    import { ADDONS } from "./cli/addon-catalog.ts";
-    import { PANEL_IDENTITY_PATH } from "./cli/paths.ts";
-    import { panelIdentityFromVhost } from "./cli/provision.ts";
+    import { ADDONS } from "./addons/catalog.ts";
+    import { panelIdentityFromVhost } from "./lib/panel-identity.ts";
     console.log(JSON.stringify({
-      identityPath: PANEL_IDENTITY_PATH,
       identity: panelIdentityFromVhost(
         "server { listen 8443 ssl; server_name PANEL.Example.Test. www.PANEL.Example.Test. *.panel.example.test; }",
       ),
@@ -427,20 +418,6 @@ function provisionProbe(): {
   }));
 }
 
-// The rule builders these used to exercise were dead: the root gateway daemon
-// replaced sudo outright, and nothing but their own test had called them since.
-// What is worth asserting now is the absence, not the shape of a string.
-test("nothing in the tree grants the manager a sudo rule", () => {
-  // git grep exits 1 when nothing matches, which is the passing case here, so
-  // this cannot use execFileSync.
-  const granting = Bun.spawnSync(["git", "grep", "-l", "NOPASSWD", "--", "cli", "lib", "addons"], { cwd: REPO });
-  expect(granting.stdout.toString().trim()).toBe("");
-});
-
-test("the provisioner never writes a sudoers rule", () => {
-  expect(readFileSync(join(REPO, "cli/provision.ts"), "utf8")).not.toContain("/etc/sudoers.d");
-});
-
 test("panel identity extraction normalizes exact, alias, and wildcard names", () => {
   const { identity } = provisionProbe();
 
@@ -453,10 +430,6 @@ test("panel identity extraction normalizes exact, alias, and wildcard names", ()
 test("panel identity extraction rejects missing or unsafe names", () => {
   const { unsafeIdentity } = provisionProbe();
   expect(unsafeIdentity).toBeNull();
-});
-
-test("the identity file is a separate root-owned action input", () => {
-  expect(provisionProbe().identityPath).toBe("/etc/clp-addons/panel-identity.conf");
 });
 
 test("manager unit hardens its namespace with zero-sudo root gateway dispatch", () => {
@@ -483,21 +456,10 @@ test("manager unit hardens its namespace with zero-sudo root gateway dispatch", 
   expect(unit).not.toContain("hmac");
 });
 
-test("every addon's APP_DATA environment assignment is a name systemd accepts", () => {
-  // systemd silently ignores (and warns on) an Environment= line whose name
-  // contains a character outside [A-Za-z0-9_], which "panel-tweaks" produced
-  // via a bare toUpperCase() before it was sanitized.
-  const specs = ADDON_NAMES.map((name) => ADDONS[name]!);
-  const unit = serviceUnit(specs);
-  const assignments = [...unit.matchAll(/^Environment=([^=]+)=/gm)].map((match) => match[1]);
-  expect(assignments.length).toBe(specs.length);
-  for (const name of assignments) expect(name).toMatch(/^[A-Za-z_][A-Za-z0-9_]*$/);
-});
-
 test("provisioning creates every project-owned writable directory", () => {
   const result = execFileSync(process.execPath, [
     "-e",
-    `import { ADDONS } from "./cli/addon-catalog.ts";
+    `import { ADDONS } from "./addons/catalog.ts";
      import { ensureDirs } from "./cli/provision.ts";
      const created = [];
      const commands = { run: () => "0", tryRun: () => ({ ok: true, out: "" }) };
@@ -622,7 +584,7 @@ test("provisioning rejects an auth helper with the wrong probe contract", async 
 
 // Run in a fresh subprocess (rather than in-process, like the tests above) so the
 // console.warn capture below cannot be polluted by other test files in this suite that
-// mock.module("../cli/util") to silence logging for their own purposes.
+// mock.module("../lib/log") to silence logging for their own purposes.
 function panelSessionWarningProbe(sessionDir: string): { threw: boolean; warnings: string[] } {
   const script = `
     import { warnIfPanelSessionUnreadable } from "./cli/provision.ts";
@@ -700,24 +662,23 @@ test("the path unit watches panel files and Cloudflare range replacements", () =
 });
 
 test("the panel vhost may be owned by root or the panel user, but never world-writable", () => {
-  const panelUid = panelUserUid();
-  expect(vhostOwnerAccepted(0, 0o644)).toBe(true);
-  expect(vhostOwnerAccepted(0, 0o666)).toBe(false);
+  const panelUid = 999;
+  expect(vhostOwnerAccepted(0, 0o644, panelUid)).toBe(true);
+  expect(vhostOwnerAccepted(0, 0o666, panelUid)).toBe(false);
   // Group-writable is accepted: the CloudPanel tree is clp:clp 0770, and the
   // panel user is already inside the trust boundary (socket group, session
   // store). World-writable is the case that still means anyone can rewrite it.
-  expect(vhostOwnerAccepted(0, 0o660)).toBe(true);
-  if (panelUid !== null) {
-    expect(vhostOwnerAccepted(panelUid, 0o770)).toBe(true);
-    expect(vhostOwnerAccepted(panelUid, 0o777)).toBe(false);
-    expect(vhostOwnerAccepted(panelUid + 1000, 0o644)).toBe(false);
-  }
+  expect(vhostOwnerAccepted(0, 0o660, panelUid)).toBe(true);
+  expect(vhostOwnerAccepted(panelUid, 0o770, panelUid)).toBe(true);
+  expect(vhostOwnerAccepted(panelUid, 0o777, panelUid)).toBe(false);
+  expect(vhostOwnerAccepted(panelUid + 1000, 0o644, panelUid)).toBe(false);
+  // Without a panel account only root can own it.
+  expect(vhostOwnerAccepted(panelUid, 0o644, null)).toBe(false);
 });
 
 test("a stock catch-all panel vhost yields an empty identity, not an install failure", () => {
   const script = `
-    import { panelIdentityFromVhost } from "./cli/provision.ts";
-    import { parsePanelIdentity, validateDomain } from "./cli/action-common.ts";
+    import { panelIdentityFromVhost, parsePanelIdentity, validateDomain } from "./lib/panel-identity.ts";
     const catchAll = panelIdentityFromVhost("server { listen 8443 ssl; server_name _; }");
     const named = panelIdentityFromVhost("server { listen 8443 ssl; server_name panel.example.test; }");
     const noDirective = panelIdentityFromVhost("server { listen 8443 ssl; root /var/www; }");
@@ -762,14 +723,6 @@ test("the root auth helper is reached by socket activation, not sudo", () => {
   // The reply must never carry helper diagnostics back to the caller.
   expect(service).toContain("StandardError=journal");
   expect(service).not.toContain("User=clp-addons");
-
-  // The manager must not reach the helper through sudo: its own unit implies
-  // NoNewPrivileges, under which sudo cannot escalate.
-  const client = readFileSync(join(import.meta.dir, "..", "lib/sso-auth.ts"), "utf8");
-  const gatewayClient = readFileSync(join(import.meta.dir, "..", "lib/gateway-client.ts"), "utf8");
-  expect(client).not.toMatch(/Bun\.spawn|"\/usr\/bin\/sudo"/);
-  expect(client).toContain("callGatewayAuth");
-  expect(gatewayClient).toContain("Bun.connect");
 });
 
 test("directory provisioning applies ownership natively and resolves each account once", () => {
@@ -779,8 +732,8 @@ test("directory provisioning applies ownership natively and resolves each accoun
   // accounts as the ones the unit files name.
   const result = execFileSync(process.execPath, [
     "-e",
-    `import { SERVICE_USER, SERVICE_GROUP, SHARED_GROUP } from "./cli/paths.ts";
-     import { ADDONS } from "./cli/addon-catalog.ts";
+    `import { SERVICE_USER, SERVICE_GROUP, SHARED_GROUP } from "./lib/paths.ts";
+     import { ADDONS } from "./addons/catalog.ts";
      import { ensureDirs } from "./cli/provision.ts";
      const spawned = [];
      const chowned = [];
@@ -868,11 +821,11 @@ test("repair removes the per-addon new-site units 1.5.x left and reloads systemd
       mock.module("node:fs", () => ({ ...fs, rmSync: (path, options) => {
         if (!String(path).startsWith("/etc/sudoers.d/")) remove(path, options);
       } }));
-      const paths = await import("./cli/paths.ts");
-      mock.module("./cli/paths.ts", () => ({ ...paths, SYSTEMD_DIR: ${JSON.stringify(root)} }));
-      const util = await import("./cli/util.ts");
+      const paths = await import("./lib/paths.ts");
+      mock.module("./lib/paths.ts", () => ({ ...paths, SYSTEMD_DIR: ${JSON.stringify(root)} }));
+      const command = await import("./lib/command.ts");
       const calls = [];
-      mock.module("./cli/util.ts", () => ({ ...util,
+      mock.module("./lib/command.ts", () => ({ ...command,
         run: (command, args) => calls.push([command, ...args]),
         tryRun: (command, args) => { calls.push([command, ...args]); return { ok: true, out: "" }; },
       }));

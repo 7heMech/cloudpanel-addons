@@ -6,8 +6,9 @@
 import { createHash } from "node:crypto";
 import { closeSync, constants, fstatSync, openSync, readFileSync } from "node:fs";
 import { join } from "node:path";
-import { openPanelDatabase } from "../../cli/panel-db";
+import { openPanelDatabase } from "../../lib/panel-db";
 import { writeFileAtomic } from "../../lib/atomic-write";
+import { isTrustedFile, OWNER_ONLY } from "../../lib/trusted-file";
 
 /** How long CloudPanel honours the sign-in token Security Keys writes. */
 export const TOKEN_TTL_SECONDS = 60;
@@ -15,7 +16,7 @@ export const TOKEN_TTL_SECONDS = 60;
 const KEEP_SECONDS = 30 * 24 * 3600;
 const KEEP_PER_USER = 20;
 
-export interface SignIn {
+interface SignIn {
   user: string;
   /** The credential id of the key that signed in. */
   key: string;
@@ -25,10 +26,6 @@ export interface SignIn {
   mfa: string | null;
 }
 
-/**
- * A digest of the account's 2FA secret now, or null while 2FA is off or the
- * database cannot say.
- */
 export function mfaMark(panelDb: string, user: string): string | null {
   try {
     const db = openPanelDatabase(panelDb, true);
@@ -46,12 +43,11 @@ export function mfaMark(panelDb: string, user: string): string | null {
   }
 }
 
-export function signInsPath(stateDir: string): string {
+function signInsPath(stateDir: string): string {
   return join(stateDir, "sign-ins.json");
 }
 
-/** The recorded sign-ins, or none when the file is missing, not root's alone, or unreadable. */
-export function readSignIns(stateDir: string, stateUid = 0): SignIn[] {
+function readSignIns(stateDir: string, stateUid = 0): SignIn[] {
   let fd: number;
   try {
     fd = openSync(signInsPath(stateDir), constants.O_RDONLY | constants.O_NOFOLLOW | constants.O_NONBLOCK);
@@ -60,7 +56,7 @@ export function readSignIns(stateDir: string, stateUid = 0): SignIn[] {
   }
   try {
     const info = fstatSync(fd);
-    if (!info.isFile() || info.uid !== stateUid || (info.mode & 0o077) !== 0) return [];
+    if (!isTrustedFile(info, stateUid, OWNER_ONLY)) return [];
     const stored = JSON.parse(readFileSync(fd, "utf8")) as { signIns?: unknown };
     if (!Array.isArray(stored?.signIns)) return [];
     return stored.signIns.filter((entry): entry is SignIn =>
@@ -119,7 +115,7 @@ export function accountPasskeys(stateDir: string, user: string, userId: number, 
   }
   try {
     const info = fstatSync(fd);
-    if (!info.isFile() || info.uid !== stateUid || (info.mode & 0o077) !== 0) return [];
+    if (!isTrustedFile(info, stateUid, OWNER_ONLY)) return [];
     const stored = JSON.parse(readFileSync(fd, "utf8")) as { users?: Record<string, { userId?: unknown; keys?: unknown }> };
     const entry = stored?.users?.[user];
     if (!entry || entry.userId !== userId || !Array.isArray(entry.keys)) return [];

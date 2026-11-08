@@ -53,8 +53,6 @@ const INSTANCE: InstanceView = {
 
 const PROD_ONLY = [{ domain: "prod.example.com", user: "prod-user", type: "php" }];
 const WITH_STAGING = [...PROD_ONLY, { domain: "stg.example.com", user: "stg-user", type: "php" }];
-const OTHER_ONLY = [{ domain: "other.example.com", user: "other", type: "php" }];
-const WITH_INSTANCE = [...OTHER_ONLY, { domain: "inst.example.com", user: "inst_user", type: "reverse-proxy" }];
 
 describe("a stager job's staging site", () => {
   test("is missing when a newer snapshot does not list it", () => {

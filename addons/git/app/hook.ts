@@ -13,10 +13,10 @@
 // the delivery can be understood; reading the payload here would mean acting on
 // something nobody had authenticated yet.
 
-import { BodyError, jsonResponse, readBoundedText, safeDecodePathSegment } from "../../../lib/app-http";
+import { BodyError, jsonResponse, readBoundedText, safeDecodePathSegment, validateDomain } from "../../../lib/app-http";
 import { ADDONS_BASE_PATH, mountPath } from "../../../lib/mount";
 import { MAX_HOOK_BODY_BYTES, WEBHOOK_TOKEN_RE } from "../action";
-import { gitService, validateDomain } from "./service";
+import { gitService } from "./service";
 
 /**
  * The route as the manager sees it: `internalPath` has taken the `/addons`

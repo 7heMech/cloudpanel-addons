@@ -1,7 +1,10 @@
 import { expect, test } from "bun:test";
 import { Database } from "bun:sqlite";
 import { execFileSync, spawnSync } from "node:child_process";
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, renameSync, rmSync, statSync, symlinkSync, writeFileSync } from "node:fs";
+import {
+  existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, renameSync, rmSync, statSync, symlinkSync,
+  writeFileSync,
+} from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import {
@@ -192,10 +195,10 @@ function action(f: ReturnType<typeof fixture>, argv: string[], extraEnv: Record<
   const script = `
     import { mock } from 'bun:test';
     Object.defineProperty(process, 'getuid', { value: () => 0 });
-    const common = await import('./cli/action-common.ts');
+    const common = await import('./lib/panel-identity.ts');
     // The real domain/identity guard has its own tests. The fixture's identity
     // file cannot be owned by root in an unprivileged CI process.
-    mock.module('./cli/action-common.ts', () => ({ ...common, validateDomain: value => value }));
+    mock.module('./lib/panel-identity.ts', () => ({ ...common, validateDomain: value => value }));
     const { runInstaticAction } = await import('./addons/instatic/action.ts');
     process.exit(await runInstaticAction(${JSON.stringify(argv)}, { paths: ${JSON.stringify(f.paths)} }));
   `;

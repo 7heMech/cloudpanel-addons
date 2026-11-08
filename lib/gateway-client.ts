@@ -1,50 +1,37 @@
-// Client helper for communicating with the root gateway daemon over UNIX socket.
-// Handles both gateway socket IPC and hermetic test runner execution.
-
+import { errorMessage } from "./errors";
+import { AUTH_SOCKET_PATH, CLI_BIN } from "./paths";
 import { AsyncLocalStorage } from "node:async_hooks";
 import { existsSync } from "node:fs";
 import {
-  callerMay,
-  webVerb,
-  GATEWAY_SOCKET_PATH,
-  DEFAULT_CLI_BIN,
-  DEFAULT_GATEWAY_TIMEOUT_MS,
-  MAX_GATEWAY_INPUT_BYTES,
-  type ActionResult,
-  type GatewayAddon,
-  type GatewayRequest,
-  type PanelSnapshot,
-  type StreamVerb,
-  type WebVerb,
+  callerMay, webVerb, DEFAULT_GATEWAY_TIMEOUT_MS, type ActionResult,
+  type GatewayAddon, type GatewayRequest, type PanelSnapshot, type StreamVerb, type WebVerb,
 } from "./gateway-protocol";
 
 export type { ActionResult } from "./gateway-protocol";
 
 /**
- * A reply as root sent it: its data is the action's JSON, which nothing here
- * checks. A caller states the shape it expects by the type it gives the
- * result, such as its own `Promise<ActionResult<T>>`; `never` makes it say so,
- * and keeps the call free of a type argument, which would stop the addon and
- * verb being checked together.
+ * Nothing here checks the action's JSON. A caller states the shape it expects
+ * by the type it gives the result, such as its own `Promise<ActionResult<T>>`;
+ * `never` makes it say so, and keeps the call free of a type argument, which
+ * would stop the addon and verb being checked together.
  */
-export type GatewayReply = ActionResult<never>;
+type GatewayReply = ActionResult<never>;
 
 export interface GatewayClientOptions {
   timeout?: number;
   maxBuffer?: number;
   socketPath?: string;
   /**
-   * For an `own-account` verb: the CloudPanel session the gateway
-   * checks itself. Such an action has no direct-spawn fallback, because that
-   * fallback is the check it would skip.
+   * For an `own-account` verb: the CloudPanel session the gateway checks
+   * itself. Such an action has no direct-spawn fallback, because that fallback
+   * is the check it would skip.
    */
   sessionId?: string;
 }
 
 export interface GatewayStream { close(): void }
 
-export interface DuplexGatewayStream extends GatewayStream {
-  /** Send one line to a duplex stream's worker; ignored by every other stream. */
+interface DuplexGatewayStream extends GatewayStream {
   write(line: string): void;
 }
 
@@ -80,10 +67,6 @@ function parseActionReply<T>(stdout: string): ActionResult<T> | null {
   }
 }
 
-/**
- * Direct process spawn runner used when running as root or under hermetic tests
- * where CLP_ADDONS_ACTION_TEST_BIN is configured.
- */
 async function runCommandDirect<T>(
   cmd: string,
   cmdArgs: string[],
@@ -166,9 +149,6 @@ async function runCommandDirect<T>(
   return reply;
 }
 
-/**
- * Communicates with the root gateway daemon via UNIX domain socket.
- */
 async function callGatewaySocket<T>(
   request: GatewayRequest,
   socketPath: string,
@@ -186,9 +166,7 @@ async function callGatewaySocket<T>(
       clearTimeout(timer);
       try {
         socket?.end();
-      } catch {
-        // already closed
-      }
+      } catch {}
       resolve(reply);
     };
 
@@ -244,11 +222,6 @@ async function callGatewaySocket<T>(
   });
 }
 
-/**
- * Universal action caller for all manager components.
- * If running in test mode with CLP_ADDONS_ACTION_TEST_BIN or running as root without socket,
- * invokes directly. Otherwise dispatches securely through the root gateway daemon over UNIX socket.
- */
 export async function callGatewayAction<A extends GatewayAddon>(
   addon: A,
   verb: WebVerb<A>,
@@ -258,13 +231,12 @@ export async function callGatewayAction<A extends GatewayAddon>(
 ): Promise<GatewayReply> {
   const refused = refusedForCaller(addon, verb);
   if (refused) return { ok: false, error: refused };
-  const socketPath = options.socketPath ?? GATEWAY_SOCKET_PATH;
+  const socketPath = options.socketPath ?? AUTH_SOCKET_PATH;
   const timeoutMs = options.timeout ?? DEFAULT_GATEWAY_TIMEOUT_MS;
 
   const direct = Boolean(process.env.CLP_ADDONS_ACTION_TEST_BIN) || (process.getuid?.() === 0 && !existsSync(socketPath));
   if (direct && options.sessionId !== undefined) return { ok: false, error: "this action needs the root gateway" };
 
-  // 1. Hermetic test runner override
   if (process.env.CLP_ADDONS_ACTION_TEST_BIN) {
     return runCommandDirect<never>(
       process.env.CLP_ADDONS_ACTION_TEST_BIN,
@@ -274,17 +246,15 @@ export async function callGatewayAction<A extends GatewayAddon>(
     );
   }
 
-  // 2. Direct root execution fallback if socket is absent (e.g. offline testing as root)
   if (process.getuid?.() === 0 && !existsSync(socketPath)) {
     return runCommandDirect<never>(
-      DEFAULT_CLI_BIN,
+      CLI_BIN,
       ["action", addon, verb, ...args],
       options,
       input,
     );
   }
 
-  // 3. Production path: Dispatch to root gateway daemon over UNIX domain socket
   const request: GatewayRequest = {
     kind: "action",
     addon,
@@ -307,8 +277,6 @@ function streamReply<T>(line: string): ActionResult<T> | null {
 }
 
 /**
- * Runs one long-lived stream action until its child or gateway socket ends.
- *
  * `sessionId` makes it a duplex stream: the gateway checks that CloudPanel
  * session itself, and `write` reaches the worker's stdin. Such a stream has no
  * direct-spawn fallback, because that fallback is the check it would skip.
@@ -318,11 +286,11 @@ export function streamGatewayAction<A extends GatewayAddon>(options: {
   verb: StreamVerb<A>;
   args?: string[];
   sessionId?: string;
+  /** Handed to a duplex worker in TICKET_ENV. */
+  ticket?: string;
   socketPath?: string;
   timeoutMs?: number;
-  /** The longest line accepted from the stream before it is closed. */
   maxLineBytes?: number;
-  /** Each line as it arrived, for a stream whose lines are not action replies. */
   onLine?: (line: string) => void;
   onReply?: (reply: GatewayReply) => void;
   onClose: (error?: string) => void;
@@ -337,7 +305,6 @@ export function streamGatewayAction<A extends GatewayAddon>(options: {
   const decoder = new TextDecoder();
   let timeoutTimer: ReturnType<typeof setTimeout> | null = null;
   const maxLineBytes = options.maxLineBytes ?? MAX_GATEWAY_STREAM_BUFFER_BYTES;
-  // What the socket has not yet taken, written out again on drain.
   const outbox: Uint8Array[] = [];
   let outboxBytes = 0;
   const encoder = new TextEncoder();
@@ -401,7 +368,6 @@ export function streamGatewayAction<A extends GatewayAddon>(options: {
   const write = (line: string) => {
     if (closed || options.sessionId === undefined) return;
     const bytes = encoder.encode(line.endsWith("\n") ? line : `${line}\n`);
-    // A worker that stops reading must not grow this process without bound.
     if (outboxBytes + bytes.byteLength > MAX_GATEWAY_OUTBOX_BYTES) return finish("the stream stopped taking input");
     outbox.push(bytes);
     outboxBytes += bytes.byteLength;
@@ -420,13 +386,14 @@ export function streamGatewayAction<A extends GatewayAddon>(options: {
   if (options.timeoutMs !== undefined) {
     timeoutTimer = setTimeout(() => finish("gateway stream request timed out"), options.timeoutMs);
   }
-  const socketPath = options.socketPath ?? GATEWAY_SOCKET_PATH;
+  const socketPath = options.socketPath ?? AUTH_SOCKET_PATH;
   const payload = JSON.stringify({
     kind: "stream-action",
     addon: options.addon,
     verb: options.verb,
     args: options.args,
     ...(options.sessionId !== undefined ? { sessionId: options.sessionId } : {}),
+    ...(options.ticket ? { ticket: options.ticket } : {}),
   }) + "\n";
 
   const refused = refusedForCaller(options.addon, options.verb);
@@ -440,7 +407,7 @@ export function streamGatewayAction<A extends GatewayAddon>(options: {
     return stream;
   }
   if (direct) {
-    const command = process.env.CLP_ADDONS_ACTION_TEST_BIN ?? DEFAULT_CLI_BIN;
+    const command = process.env.CLP_ADDONS_ACTION_TEST_BIN ?? CLI_BIN;
     void (async () => {
       try {
         child = Bun.spawn([command, "action", options.addon, options.verb, ...(options.args ?? [])], {
@@ -468,7 +435,7 @@ export function streamGatewayAction<A extends GatewayAddon>(options: {
         await child.exited.then(() => { childExited = true; }, () => undefined);
         if (!finished) finish();
       } catch (error) {
-        finish(error instanceof Error ? error.message : String(error));
+        finish(errorMessage(error));
       }
     })();
     return stream;
@@ -509,40 +476,29 @@ export function streamGatewayAction<A extends GatewayAddon>(options: {
   return stream;
 }
 
-/**
- * Fetches current panel information through the root gateway socket, or directly
- * in a root process when the configured socket is absent. Failures are returned
- * as unsuccessful action results.
- */
 export async function callGatewayPanelInfo(
   options: GatewayClientOptions = {},
 ): Promise<ActionResult<PanelSnapshot>> {
-  const socketPath = options.socketPath ?? GATEWAY_SOCKET_PATH;
+  const socketPath = options.socketPath ?? AUTH_SOCKET_PATH;
   const timeoutMs = options.timeout ?? 5_000;
 
-  // 1. Direct root execution fallback if socket is absent (e.g. offline execution as root)
   if (process.getuid?.() === 0 && !existsSync(socketPath)) {
     try {
       const { getLivePanelInfo } = await import("./panel-snapshot");
       const info = getLivePanelInfo();
       return { ok: true, data: info };
     } catch (error) {
-      return { ok: false, error: error instanceof Error ? error.message : String(error) };
+      return { ok: false, error: errorMessage(error) };
     }
   }
 
-  // 2. Dispatch over UNIX domain socket to root gateway daemon
   const request: GatewayRequest = { kind: "panel-info" };
   return callGatewaySocket<PanelSnapshot>(request, socketPath, timeoutMs);
 }
 
-/**
- * Communicates with the root gateway daemon to validate a session.
- * Used by SSO authentication.
- */
 export async function callGatewayAuth(
   sessionId: string,
-  socketPath: string = GATEWAY_SOCKET_PATH,
+  socketPath: string = AUTH_SOCKET_PATH,
   timeoutMs: number = 5_000,
 ): Promise<string> {
   return new Promise<string>((resolve) => {
@@ -557,9 +513,7 @@ export async function callGatewayAuth(
       clearTimeout(timer);
       try {
         socket?.end();
-      } catch {
-        // already closed
-      }
+      } catch {}
       resolve(reply);
     };
 

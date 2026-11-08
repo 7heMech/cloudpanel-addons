@@ -13,3 +13,8 @@
 .job-alert { margin: 12px 0 0; }
 .card-header .hint { margin: 6px 0 0; }
 .card-table > .fleet-filter:first-child { padding-top: 20px; }
+
+@media (max-width: 940px) {
+  .fleet-table.stager-jobs td:is(.state-cell, .started-cell) { flex: 0 1 auto; align-self: center; }
+  .fleet-table.stager-jobs td:is(.state-cell, .started-cell)::before { display: inline; margin: 0 6px 0 0; }
+}

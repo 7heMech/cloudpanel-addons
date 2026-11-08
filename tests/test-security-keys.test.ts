@@ -8,7 +8,7 @@ import { spawnSync } from "node:child_process";
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, statSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { runSecurityKeysAction, type SecurityKeysPaths } from "../addons/security-keys/action";
+import { verifyTerminalKey, runSecurityKeysAction, type SecurityKeysPaths } from "../addons/security-keys/action";
 import { SECURITY_KEYS_TARGETS } from "../addons/security-keys/inject/targets";
 import { dashboardView } from "../addons/security-keys/app/views";
 import { decodeCbor, verifyAssertion, verifyRegistration } from "../addons/security-keys/webauthn";
@@ -197,6 +197,24 @@ describe("the root action", () => {
   });
 
   afterEach(() => rmSync(dir, { recursive: true, force: true }));
+
+  test("terminal passkey verification requires the trusted account, challenge and user verification", async () => {
+    const key = new SoftKey();
+    expect((await register("alice", key)).ok).toBe(true);
+    const proof = (challenge: string, flags = UP | UV) => {
+      const signed = key.get(challenge, { flags });
+      return { id: b64(key.id), userHandle: key.handle.value,
+        clientDataJSON: b64(signed.clientDataJSON), authenticatorData: b64(signed.authenticatorData), signature: b64(signed.signature) };
+    };
+    const ids = [b64(key.id)];
+    expect(() => verifyTerminalKey(paths, "alice", [], "terminal", proof("terminal"), now)).toThrow("not trusted");
+    expect(() => verifyTerminalKey(paths, "alice", ids, "terminal", proof("login"), now)).toThrow("challenge");
+    expect(() => verifyTerminalKey(paths, "alice", ids, "terminal", proof("terminal", UP), now)).toThrow("verify its user");
+    verifyTerminalKey(paths, "alice", ids, "terminal", proof("terminal"), now);
+    expect(JSON.parse(readFileSync(storePathOf(paths), "utf8")).users.alice.keys[0].signCount).toBe(key.counter);
+    account("alice", 8);
+    expect(() => verifyTerminalKey(paths, "alice", ids, "terminal", proof("terminal"), now)).toThrow("not trusted");
+  });
 
   test("a registered key signs in by writing CloudPanel's own one-time token", async () => {
     const key = new SoftKey();

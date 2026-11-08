@@ -1,9 +1,10 @@
 // The manager's request gate. What is pinned here is an ordering, not a route:
 // authentication runs before any route, the liveness probe included.
-import { expect, test } from "bun:test";
+import { expect, spyOn, test } from "bun:test";
 import { spawnSync } from "node:child_process";
-import { readFileSync } from "node:fs";
 import { join } from "node:path";
+
+import { serveOptions } from "../manager/server";
 
 const repo = join(import.meta.dir, "..");
 
@@ -74,7 +75,7 @@ for (const { path, method, headers, body: requestBody } of ${JSON.stringify(requ
 }
 console.log(JSON.stringify(out));
 `;
-  const run = spawnSync("bun", ["-e", script], { cwd: repo, encoding: "utf-8" });
+  const run = spawnSync(process.execPath, ["-e", script], { cwd: repo, encoding: "utf-8" });
   if (run.status !== 0) throw new Error(run.stderr || "gate probe failed");
   return JSON.parse(run.stdout.trim().split("\n").at(-1)!);
 }
@@ -96,9 +97,9 @@ test("an authenticated non-administrator gets no further than the gate", () => {
   }
 });
 
-// The one carve-out in the blanket gate. The route is not answered here --
-// splitMount is mocked away -- but reaching the dispatch is what says the gate
-// let it past, and the neighbouring wp-tools routes show it is that route only.
+// The one carve-out in the blanket gate. The routes it lets past answer for
+// themselves, whatever they then decide; the neighbouring routes of the same
+// addons show it is those routes only.
 test("a non-administrator reaches only the named self-scoped routes", () => {
   const results = probe({ user: "someone", roles: ["ROLE_USER"] }, [
     { path: "/addons/wp-tools/api/sign-in", method: "POST" },
@@ -127,8 +128,9 @@ test("a non-administrator reaches only the named self-scoped routes", () => {
     { path: "/addons/dns/api/provision-extra", method: "POST" },
     { path: "/addons/panel-tweaks/", method: "GET" },
     { path: "/addons/panel-tweaks/api/tweaks", method: "POST" },
-  ]);
-  const dispatched = results.filter((result) => (result.reached as string[]).includes("addon-dispatch"));
+  ], true);
+  const gated = { ok: false, error: "administrator role required" };
+  const dispatched = results.filter((result) => !Bun.deepEquals(result.body, gated));
   expect(dispatched.map((result) => `${result.method} ${result.path}`)).toEqual([
     "POST /addons/wp-tools/api/sign-in",
     "GET /addons/wp-tools/api/session",
@@ -144,6 +146,8 @@ test("a non-administrator reaches only the named self-scoped routes", () => {
   for (const result of results) {
     // Nothing else the manager does runs for this session, dispatched or not.
     expect(result.reached).not.toContain("update-check");
+  }
+  for (const result of results.filter((item) => !dispatched.includes(item))) {
     expect(result.status).toBe(403);
   }
 });
@@ -329,8 +333,8 @@ mock.module("./lib/gateway-client.ts", () => ({
 }));
 
 // The addon has to look installed; its config file is what the manager reads.
-const realCatalog = await import("./cli/addon-catalog.ts");
-mock.module("./cli/addon-catalog.ts", () => ({
+const realCatalog = await import("./addons/catalog.ts");
+mock.module("./addons/catalog.ts", () => ({
   ...realCatalog,
   ADDONS: { ...realCatalog.ADDONS, git: { ...realCatalog.ADDONS.git, configFile: "./package.json" } },
 }));
@@ -360,7 +364,7 @@ const out = [
 ];
 console.log(JSON.stringify(out));
 `;
-  const run = spawnSync("bun", ["-e", script], { cwd: repo, encoding: "utf-8" });
+  const run = spawnSync(process.execPath, ["-e", script], { cwd: repo, encoding: "utf-8" });
   if (run.status !== 0) throw new Error(run.stderr || "hook probe failed");
   return JSON.parse(run.stdout.trim().split("\n").at(-1)!);
 }
@@ -418,8 +422,8 @@ mock.module("./lib/gateway-client.ts", () => ({
   },
   streamGatewayAction: () => ({ close() {} }),
 }));
-const realCatalog = await import("./cli/addon-catalog.ts");
-mock.module("./cli/addon-catalog.ts", () => ({
+const realCatalog = await import("./addons/catalog.ts");
+mock.module("./addons/catalog.ts", () => ({
   ...realCatalog,
   ADDONS: { ...realCatalog.ADDONS, "security-keys": { ...realCatalog.ADDONS["security-keys"], configFile: ${installed ? '"./package.json"' : '"./absent.conf"'} } },
 }));
@@ -442,7 +446,7 @@ for (const [label, req] of [
 }
 console.log(JSON.stringify(out));
 `;
-  const run = spawnSync("bun", ["-e", script], { cwd: repo, encoding: "utf-8" });
+  const run = spawnSync(process.execPath, ["-e", script], { cwd: repo, encoding: "utf-8" });
   if (run.status !== 0) throw new Error(run.stderr || "sign-in probe failed");
   return JSON.parse(run.stdout.trim().split("\n").at(-1)!);
 }
@@ -467,18 +471,26 @@ test("passkey sign-in does not exist while the addon is not installed", () => {
   }
 });
 
-// The tests above drive real requests through the gate. This one is about an
-// argument to Bun.serve, which no request can reach: with `development` on,
+// The tests above drive real requests through the gate. These are about the
+// arguments to Bun.serve, which no request can reach: with `development` on,
 // Bun answers a handler fault with its own error page, which would put a stack
 // trace in front of whoever tripped it.
-test("a handler fault cannot answer with Bun's error page", () => {
-  const source = readFileSync(join(repo, "manager/server.ts"), "utf8");
-  expect(source.slice(source.indexOf("async function cmdServe"))).toInclude("development: false");
+test("a handler fault cannot answer with Bun's error page", async () => {
+  const options = serveOptions("/run/test.sock") as ReturnType<typeof serveOptions> & { idleTimeout?: number };
+  expect(options.development).toBe(false);
+  const logged = spyOn(console, "error").mockImplementation(() => {});
+  try {
+    const res = options.error(new Error("at secretFunction (/usr/local/src/manager.ts:1:1)"));
+    expect(res.status).toBe(500);
+    expect(await res.text()).toBe('{"ok":false,"error":"internal error"}');
+  } finally {
+    logged.mockRestore();
+  }
 });
 
 test("a slow gateway call is not cut off by Bun's idle timeout", () => {
-  const source = readFileSync(join(repo, "manager/server.ts"), "utf8");
-  expect(source.slice(source.indexOf("async function cmdServe"))).toInclude("idleTimeout: 0");
+  const options = serveOptions("/run/test.sock") as ReturnType<typeof serveOptions> & { idleTimeout?: number };
+  expect(options.idleTimeout).toBe(0);
 });
 
 // Run by hand, serve would replace the live daemon's socket before anything
@@ -486,7 +498,7 @@ test("a slow gateway call is not cut off by Bun's idle timeout", () => {
 test("serve refuses to start outside its systemd unit", () => {
   // Claiming a systemd invocation in the environment is not enough.
   const env = { ...process.env, INVOCATION_ID: "0123456789abcdef0123456789abcdef" };
-  const result = spawnSync("bun", ["cli/index.ts", "serve"], { cwd: repo, env, encoding: "utf8" });
+  const result = spawnSync(process.execPath, ["cli/index.ts", "serve"], { cwd: repo, env, encoding: "utf8" });
   expect(result.status).toBe(1);
   expect(result.stderr).toInclude("systemctl restart clp-addons.service");
 });

@@ -4,7 +4,7 @@ import SCRIPT from "./nameservers.client.js" with { type: "text" };
 import { TEMPLATES } from "../../../lib/panel-anchors";
 
 /** Above the certificates card, where flash messages also sit, on every site's SSL/TLS tab. */
-export function nameserversSnippet(addonUrl: string): string {
+function nameserversSnippet(addonUrl: string): string {
   return `
         <div data-clp-dns-site data-status-url="${addonUrl}/api/site?domain={{ site.domainName|url_encode }}"></div>
         <script>${NAMESERVER_NOTICE_JS}\n${SCRIPT}</script>`;

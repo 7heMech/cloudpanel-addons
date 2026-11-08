@@ -1,24 +1,24 @@
-// `clp-addons repair`.
-
-import { installedAddons, resolveAddon, migrateOldAddonNames } from "./addons";
-import { reconcileAnchors, reconcileBackupCommand, reconcileMaintenanceNginx, reconcileMotd, reconcileNginx, reconcilePhpMyAdminRules } from "./reconcile";
-import { reconcilePhpGuard } from "./php-guard";
-import { runAddonRepairs, runManagerRepair } from "./addon-hooks";
+import { errorMessage } from "../lib/errors";
+import { enabledAddons, phpGuardOptedOut } from "../addons/catalog";
+import { resolveAddon, migrateOldAddonNames } from "./addons";
+import { reconcileAnchors, reconcileNginx, reconcilePanelBlocks, runAnchorWork } from "./reconcile";
+import { reconcilePhpGuard } from "../lib/php-guard";
+import { runAddonRepairs } from "./addon-hooks";
+import { pruneManagerJobs } from "../manager/action";
 import { withOperationLock } from "./operation-lock";
 import { conffilesReleased } from "./conffiles";
-import { CERTIFICATES_PATH, FIREWALL_PATH, MANAGER_UNIT, NEW_SITES_PATH, SYSTEMD_DIR } from "./paths";
+import { CERTIFICATES_PATH, FIREWALL_PATH, MANAGER_UNIT, NEW_SITES_PATH, SYSTEMD_DIR } from "../lib/paths";
 import {
-  ensureAuthHelperReady, ensureDirs, ensurePathWatching, ensureServiceUser, ensureTimerArmed, hardenBackups, installUnits,
-  managerSocketProblem, reconcilePanelIdentity, removeLegacyUnits, startUnits,
-  unitActive, warnIfPanelSessionUnreadable, writeConfig,
+  ensureAuthHelperReady, ensureDirs, ensurePathWatching, ensureServiceUser, ensureTimerArmed, hardenBackups,
+  installUnits, managerSocketProblem, reconcilePanelIdentity, removeLegacyUnits, startUnits,
+  warnIfPanelSessionUnreadable, writeConfig,
 } from "./provision";
-import { fatal, log, parseFlags, requireRoot } from "./util";
+import { unitActive } from "../lib/systemd";
+import { fatal, log, requireRoot } from "../lib/log";
+import { parseFlags } from "./flags";
 import { existsSync } from "node:fs";
-/**
- * Reconciles manager provisioning and enabled addon state, or only injected
- * CloudPanel anchors, the Nginx proxy and System Tweaks' phpMyAdmin rules,
- * backup command and SSH login message when `--anchors-only` is supplied.
- */
+const PANEL_BLOCKS_NOT_READY = "a change to CloudPanel's Nginx settings is not ready; fix the problem above, then run repair again";
+
 export async function cmdRepair(argv: string[]): Promise<void> {
   requireRoot("repair");
   const { positional, flags } = parseFlags(argv);
@@ -35,30 +35,26 @@ async function applyRepair(positional: string[], flags: Record<string, string | 
     return;
   }
   if (flags["anchors-only"] === true) {
-    // The watcher's fast path: reconcile only what this project injected into
-    // panel-owned files. The Nginx proxy belongs here as much as the Twig
-    // anchors do -- the vhost is owned by the panel user on the CloudPanel
-    // layout, so a panel action can drop the /addons/ block at any time, and
-    // waiting up to fifteen minutes for the timer would leave the manager
-    // unreachable in between. Both reconcilers no-op when nothing drifted, so
-    // this stays cheap enough to run on every template write during an upgrade.
+    // The watcher's fast path, for what this project injected into panel-owned
+    // files. The Nginx proxy belongs here as much as the Twig anchors: the
+    // panel user owns the vhost on the CloudPanel layout, so a panel action can
+    // drop the /addons/ block at any time, and waiting up to fifteen minutes for
+    // the timer would leave the manager unreachable in between. This runs on
+    // every template write during a CloudPanel upgrade.
     reconcileAnchors(quiet);
-    if (!reconcileMaintenanceNginx(quiet)) log.err("Nginx maintenance check is not ready; fix the problem above, then run repair again");
+    if (!reconcilePanelBlocks(quiet)) log.err(PANEL_BLOCKS_NOT_READY);
     if (!reconcileNginx(quiet)) log.err("Nginx proxy is not ready; run repair after checking the master vhost");
-    reconcilePhpMyAdminRules(quiet);
-    reconcileBackupCommand(quiet);
-    reconcileMotd(quiet);
+    await runAnchorWork(quiet);
     return;
   }
   try {
     // An earlier version's PHP Resources change is not waited for here; the next repair moves it.
     migrateOldAddonNames(quiet, 0);
   } catch (error) {
-    // Upkeep of everything else does not wait on the move; the next repair tries it again.
-    log.warn(`renamed addons were not moved yet: ${error instanceof Error ? error.message : String(error)}`);
+    log.warn(`renamed addons were not moved yet: ${errorMessage(error)}`);
   }
-  const specs = positional[0] ? [resolveAddon(positional[0])] : installedAddons();
-  const all = installedAddons();
+  const specs = positional[0] ? [resolveAddon(positional[0])] : enabledAddons();
+  const all = enabledAddons();
   // An installation with every addon disabled still needs its timer, its Nginx
   // proxy and the panel's Addons entry reconciled -- that is the state the page
   // offering them back is served from. Only a box with no manager at all has
@@ -75,7 +71,7 @@ async function applyRepair(positional: string[], flags: Record<string, string | 
   try {
     ensureAuthHelperReady();
   } catch (error) {
-    log.warn(`panel auth helper check failed, continuing without it: ${error instanceof Error ? error.message : String(error)}`);
+    log.warn(`panel auth helper check failed, continuing without it: ${errorMessage(error)}`);
   }
   for (const spec of all) {
     writeConfig(spec, true);
@@ -92,16 +88,32 @@ async function applyRepair(positional: string[], flags: Record<string, string | 
     if (all.some((spec) => spec.certificates)) ensurePathWatching(CERTIFICATES_PATH, quiet);
     if (all.some((spec) => spec.firewall)) ensurePathWatching(FIREWALL_PATH, quiet);
   }
-  reconcileAnchors(quiet);
-  if (!reconcileMaintenanceNginx(quiet)) log.err("Nginx maintenance check is not ready; fix the problem above, then run repair again");
-  if (!reconcileNginx(quiet)) log.err("Nginx proxy is not ready; run repair after checking the master vhost");
-  reconcilePhpGuard(true, quiet);
-  // Runs after the master-vhost reconciliation above, not before: recovering
-  // a carried-over vhost also does its own `nginx -t` before reloading, and
-  // skips the reload if that check fails. Running prune first, while the
-  // master vhost might still be broken, would leave a just-restored site
-  // vhost on disk but unloaded until the next 15-minute cycle.
+  // --rebaseline: the operator has looked at a file CloudPanel's own upgrade
+  // does not explain and vouches for it. It still has to fit.
+  const accept = flags.rebaseline === true;
+  reconcileAnchors(quiet, undefined, true, accept);
+  if (!reconcilePanelBlocks(quiet, undefined, accept)) log.err(PANEL_BLOCKS_NOT_READY);
+  if (!reconcileNginx(quiet, true, accept)) log.err("Nginx proxy is not ready; run repair after checking the master vhost");
+  reconcilePhpGuard(true, quiet, { optedOut: phpGuardOptedOut() });
+  // After the master-vhost reconciliation: recovering a carried-over vhost does
+  // its own `nginx -t` and skips the reload if that fails, so running this
+  // while the master vhost might still be broken would leave a just-restored
+  // site vhost on disk but unloaded until the next 15-minute cycle.
   await runAddonRepairs(all);
   runManagerRepair();
   if (!quiet) log.ok(`repair complete (${specs.map((spec) => spec.name).join(", ") || "no addon enabled"})`);
+}
+
+/**
+ * The manager's own job records need the same upkeep the addons' do: a runner
+ * killed part-way (a reboot during an update) otherwise leaves a record that
+ * says "running" forever, and the index page would keep following it.
+ */
+function runManagerRepair(): void {
+  try {
+    const { removed, stuck } = pruneManagerJobs();
+    if (removed || stuck) log.ok(`manager job records: ${removed} expired, ${stuck} marked failed`);
+  } catch (error) {
+    log.warn(`manager (prune) failed: ${errorMessage(error)}`);
+  }
 }

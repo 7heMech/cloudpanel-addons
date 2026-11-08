@@ -6,7 +6,7 @@
 import { esc } from "../../../lib/app-http";
 import {
   ATTENTION_RANK, FLEET_FOOTER_HTML, FLEET_SELECTION_HTML, FLEET_ROW_SELECTION_JS, JOB_WATCH_JS, fleetFilterHtml, filterWord, valueFilters, jobStateClass,
-  renderFragment, renderLayout, sinceText, whenText,
+  renderFragment, renderLayout, sinceText, whenText, type AddonChrome,
 } from "../../../lib/app-ui";
 import type { EmbedFragment } from "../../../lib/shadow-embed";
 import type { SiteContext } from "../../../lib/site-context";
@@ -16,7 +16,7 @@ import {
   MAX_BRANCH_LENGTH, MAX_DIRECTORY_LENGTH, MAX_POST_DEPLOY_LENGTH, MAX_REMOTE_LENGTH, usesDeployKey,
 } from "../action";
 import { gitHookPath } from "./hook";
-import type { GitJobView, GitSiteStatus } from "./service";
+import type { GitSiteStatus } from "./service";
 
 const BASE = mountPath("git");
 
@@ -32,8 +32,7 @@ import STYLE from "./views.css" with { type: "text" };
 import CLIENT_JS from "./views.client.js" with { type: "text" };
 export { CLIENT_JS };
 
-// Built once: nothing here changes between renders.
-const PAGE_SCRIPT = `${JOB_WATCH_JS}\n${FLEET_ROW_SELECTION_JS}\n${CLIENT_JS}`;
+const CHROME: AddonChrome = { base: BASE, css: STYLE, script: `${JOB_WATCH_JS}\n${FLEET_ROW_SELECTION_JS}\n${CLIENT_JS}` };
 
 export function layout(
   title: string,
@@ -43,11 +42,7 @@ export function layout(
   admin = true,
 ): string {
   return renderLayout(title, content, {
-    brand: "Git Deploy",
-    base: BASE,
-    nav: [],
-    css: STYLE,
-    script: PAGE_SCRIPT,
+    ...CHROME,
     updateNotice,
     admin,
     ...(site ? { site: { ...site, activeSlug: "git" } } : {}),
@@ -56,13 +51,7 @@ export function layout(
 
 /** The same page as `layout`, as a fragment mounted in CloudPanel's site page. */
 export function fragment(title: string, content: string): EmbedFragment {
-  return renderFragment(title, content, {
-    brand: "Git Deploy",
-    base: BASE,
-    nav: [],
-    css: STYLE,
-    script: PAGE_SCRIPT,
-  });
+  return renderFragment(title, content, CHROME);
 }
 
 /**
@@ -109,7 +98,6 @@ function relativeTime(iso: string): string {
   return iso ? `<time datetime="${esc(iso)}" title="${esc(whenText(iso))}">${esc(sinceText(iso))}</time>` : "—";
 }
 
-/** What is checked out and what the last deployment did, with the button that starts the next. */
 function statusCard(site: GitSiteStatus, log: string): string {
   const config = site.config;
   const job = site.lastJob;
@@ -144,7 +132,6 @@ function statusCard(site: GitSiteStatus, log: string): string {
     </div>`;
 }
 
-/** Status first for connected sites; the connection form first for new ones. */
 export function siteView(site: GitSiteStatus, log: string): string {
   return `
     <div class="page-heading" data-git-domain="${esc(site.domain)}">
@@ -305,7 +292,6 @@ function attention(site: GitSiteStatus): string {
   return "";
 }
 
-/** The fleet page: every site this addon deploys, and what it last deployed. */
 export function fleetView(sites: GitSiteStatus[]): string {
   const available = (site: GitSiteStatus): boolean => site.configured && !!site.siteType && !running(site);
   const needs = sites.flatMap((site) => {

@@ -18,8 +18,7 @@ interface Field {
   next: number;
 }
 
-/** The common name and organisation an issuer gave, as far as either is there. */
-export interface CertificateIssuer {
+interface CertificateIssuer {
   commonName: string;
   organization: string;
 }
@@ -70,10 +69,9 @@ function objectIdentifier(bytes: Uint8Array, from: Field): string {
 }
 
 /**
- * The issuer of the first certificate in a PEM.
- *
- * A stored certificate is the leaf, and a chain below it is the authority's own
- * certificate, which is not what named the site's.
+ * Only the first certificate in the PEM is read: a stored certificate is the
+ * leaf, and a chain below it is the authority's own certificate, which is not
+ * what named the site's.
  */
 export function certificateIssuer(pem: string): CertificateIssuer | null {
   const base64 = /-----BEGIN CERTIFICATE-----([\s\S]*?)-----END CERTIFICATE-----/.exec(pem)?.[1];

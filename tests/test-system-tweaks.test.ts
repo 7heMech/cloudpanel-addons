@@ -1,15 +1,19 @@
 import { afterEach, expect, mock, test } from "bun:test";
 import { Database } from "bun:sqlite";
-import { chmodSync, existsSync, lstatSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, statSync, writeFileSync } from "node:fs";
+import {
+  chmodSync, existsSync, lstatSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, statSync,
+  writeFileSync,
+} from "node:fs";
 import { X509Certificate } from "node:crypto";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
-import { runCommand, type CommandResult } from "../cli/action-common";
-import { inspectPhpGuard, reconcilePhpGuard, type PhpGuardOptions } from "../cli/php-guard";
+import { runCommand, type CommandResult } from "../lib/command";
+import { inspectPhpGuard, reconcilePhpGuard, type PhpGuardOptions } from "../lib/php-guard";
 import {
-  executeSystemTweaksAction, readSettings, restoreSystemTweaks, systemTweaksMaintenance, systemTweaksMotd, systemTweaksPhpMyAdmin, systemTweaksPhpPools, systemTweaksUpkeep, withdrawSystemTweaks,
-  type SystemTweaksOptions, type SystemTweaksPaths, type SystemTweaksState,
+  executeSystemTweaksAction, lockSettingsStep, readSettings, restoreSystemTweaks, systemTweaksMaintenance, systemTweaksMotd, systemTweaksPhpGuardOff, systemTweaksPhpMyAdmin, systemTweaksPhpPools, systemTweaksUpkeep, withdrawSystemTweaks,
+  type SystemTweaksOptions, type SystemTweaksPaths,
 } from "../addons/system-tweaks/action";
+import { LOCK_SETTINGS, type SystemTweaksState } from "../addons/system-tweaks/registry";
 import {
   allowedPatterns, coverageOf, dropInFor, fnmatch, parseAptConfig, parsePolicy, updatesStatus, DEFAULT_UPDATE_SETTINGS, type UpdatesStatus,
 } from "../addons/system-tweaks/updates";
@@ -20,6 +24,9 @@ import { releaseRealIp } from "../addons/system-tweaks/real-ip";
 import WRAPPER_SCRIPT from "../addons/system-tweaks/clpctl-wrapper.sh" with { type: "text" };
 import { DEFAULT_BACKUP_COMPRESSION } from "../addons/system-tweaks/backup-compression";
 import { MOTD_SCRIPT, applyMotd } from "../addons/system-tweaks/motd";
+import { DATABASE_FILE } from "../addons/system-tweaks/database";
+import { SYSTEM_TWEAKS_VERBS } from "../addons/system-tweaks/verbs";
+import { lockedAddons } from "../lib/root-locks";
 
 // CloudPanel's original /usr/bin/clpctlWrapper (cloudpanel 2.5.4-3), whose SHA-256
 // is in KNOWN_ORIGINAL_SHA256, so the guard treats it as a known original.
@@ -174,6 +181,8 @@ test("fnmatch follows Python's fnmatchcase", () => {
 
 interface Box {
   options: SystemTweaksOptions;
+  /** What started the reconcile service, as a failed withdrawal does. */
+  reconcile: string[];
   pools: { loaded: boolean; loads: number };
   aptDir: string;
   dropIn: string;
@@ -265,13 +274,6 @@ function dumpOf(aptDir: string): string {
   return out.join("\n");
 }
 
-/** `systemctl show` for units none of which are installed. */
-function noUnits(command: string, args: string[]): CommandResult {
-  if (command !== "env" || args[2] !== "show") return { ok: true, stdout: "", stderr: "" };
-  const names = args.slice(3).filter((arg, index, all) => !arg.startsWith("-") && all[index - 1] !== "-p");
-  return { ok: true, stdout: names.map((name) => `Id=${name}\nLoadState=not-found\nActiveState=inactive\n`).join("\n"), stderr: "" };
-}
-
 function box(options: { installed?: boolean; timers?: Record<string, string>; failEnable?: string[]; log?: string } = {}): Box {
   const dir = tempDir();
   const aptDir = join(dir, "apt.conf.d");
@@ -294,6 +296,7 @@ function box(options: { installed?: boolean; timers?: Record<string, string>; fa
   const timers = new Map(Object.entries(options.timers ?? { "apt-daily.timer": "enabled", "apt-daily-upgrade.timer": "enabled" }));
   const installed = { value: options.installed !== false };
   const commands: string[] = [];
+  const reconcile: string[] = [];
   const ok = (stdout = ""): CommandResult => ({ ok: true, stdout, stderr: "" });
   const run = (command: string, args: string[]): CommandResult => {
     commands.push(`${command} ${args.join(" ")}`);
@@ -445,14 +448,15 @@ function box(options: { installed?: boolean; timers?: Record<string, string>; fa
   const phpGuard: PhpGuardOptions = {
     run: () => ({ ok: true, out: "" }),
     isActive: () => false,
-    paths: { phpRoot, fpmBinDir: sbin, rootUid: uid, optOutConfig: guardConfig, optOutSettings: settingsFile },
+    paths: { phpRoot, fpmBinDir: sbin, rootUid: uid },
   };
   return {
-    pools, aptDir, commands, timers, phpRoot, guardConfig, settingsFile, installed, nginxConf, panelConf, cloudflareIps, nginx, fpm, panelVhost, vhostGuardPaths, valuesDb, varnish,
+    reconcile, pools, aptDir, commands, timers, phpRoot, guardConfig, settingsFile, installed, nginxConf, panelConf, cloudflareIps, nginx, fpm, panelVhost, vhostGuardPaths, valuesDb, varnish,
     fm, fileManagerGuardPaths, agent, agentDropIn, motdBanner, motdScript,
     dropIn: join(aptDir, "52clp-addons-unattended-upgrades"),
     options: {
       processUid: 0,
+      reconcile: { run: (command, args) => { reconcile.push(`${command} ${args.join(" ")}`); return ok(); } },
       paths: { settingsFile, lockFile: join(dir, "lock"), rootUid: uid },
       updates: {
         run,
@@ -601,7 +605,7 @@ test("a box whose operator already turned updates on reads as configured outside
   expect(dashboardView(state)).toContain("Configured outside System Tweaks in 20auto-upgrades");
 });
 
-test("root's lock leaves the protections read-only and the rest of the page as it was", async () => {
+test("root's lock keeps the protections that are on, on, and leaves the rest of the page as it was", async () => {
   const state = await act(box(), ["state"]);
   const open = dashboardView(state);
   const locked = dashboardView(state, Date.now(), "locked");
@@ -609,14 +613,29 @@ test("root's lock leaves the protections read-only and the rest of the page as i
   const switchOf = (html: string, key: string) => html.match(new RegExp(`data-setting="${key}"[^>]*>`))![0];
   expect(open).not.toContain("clp-addons unlock system-tweaks");
   expect(locked).toContain("<code>clp-addons unlock system-tweaks</code>");
-  for (const key of ["confineFileManager", "blockVhostInjection", "panel", "ssh"]) {
+  // On by default: read-only under a lock.
+  for (const key of ["confineFileManager", "blockVhostInjection", "panel"]) {
     expect(switchOf(open, key)).not.toContain("disabled");
     expect(switchOf(locked, key)).toContain("disabled");
     expect(switchOf(damaged, key)).toContain("disabled");
   }
+  // Off by default: it can still be switched on.
+  expect(switchOf(locked, "ssh")).not.toContain("disabled");
+  expect(switchOf(damaged, "ssh")).not.toContain("disabled");
   expect(switchOf(locked, "enabled")).not.toContain("disabled");
   expect(damaged).toContain("Root's lock file cannot be trusted");
   expect(damaged).toContain("<code>clp-addons lock</code>");
+});
+
+test("the header offers Lock settings until root's lock is there, then shows it", async () => {
+  const state = await act(box(), ["state"]);
+  const heading = (html: string) => html.slice(html.indexOf('<div class="page-heading">'), html.indexOf('<div class="card">'));
+  expect(heading(dashboardView(state))).toContain('onclick="lockSettings(this)">Lock settings</button>');
+  for (const lock of ["locked", "damaged"] as const) {
+    const html = dashboardView(state, Date.now(), lock);
+    expect(html).not.toContain("lockSettings(this)");
+    expect(html).toContain(">Locked by root</span>");
+  }
 });
 
 test("switching on writes only the drop-in, and switching off restores the operator's own setup", async () => {
@@ -772,8 +791,8 @@ function systemTweaksClient() {
       return line;
     },
   };
-  const client = new Function("call", "busy", "notify", "clearNotice", "repaintView", "CLP_ROOT", "clpFlashTimer", "document",
-    `${source}\nreturn { installUpdates, setUpdates, setPanelPhp, setSwitch };`)(
+  const client = new Function("call", "busy", "notify", "clearNotice", "repaintView", "CLP_ROOT", "clpFlashTimer", "document", "location", "confirmAction",
+    `${source}\nreturn { installUpdates, setUpdates, setPanelPhp, setSwitch, lockSettings };`)(
     (path: string, options: { body: string }) => new Promise((answer) => {
       events.push(`POST ${path} ${options.body}`);
       replies.push({ path, body: options.body, answer });
@@ -785,7 +804,10 @@ function systemTweaksClient() {
     { getElementById: () => ({}), querySelector: () => null, querySelectorAll: () => [] },
     0,
     document,
-  ) as Record<"installUpdates" | "setUpdates" | "setPanelPhp", (control: unknown) => Promise<void>> & { setSwitch: (control: unknown, name: string) => Promise<void> };
+    // The page is repainted from each reply; reloading it would lose the notice.
+    { reload: () => events.push("reload") },
+    async () => true,
+  ) as Record<"installUpdates" | "setUpdates" | "setPanelPhp" | "lockSettings", (control: unknown) => Promise<void>> & { setSwitch: (control: unknown, name: string) => Promise<void> };
   return { client, control, events, replies, lines };
 }
 
@@ -798,7 +820,6 @@ test("a change says it is running on its own row, and repaints the page from its
   await pending;
   expect(events.slice(3)).toEqual(["idle", "repaint: <p>installed</p>", "ok: unattended-upgrades is installed."]);
   expect(lines.every((line) => line.removed)).toBe(true);
-  expect(readFileSync(join(import.meta.dir, "../addons/system-tweaks/app/views.client.js"), "utf8")).not.toContain("location.reload");
 });
 
 
@@ -812,6 +833,20 @@ test("every on/off switch on the page posts to a route that runs its verb", asyn
   expect(replies[0]).toMatchObject({ path: "/api/motd", body: '{"enabled":true}' });
   replies[0]!.answer({ ok: true, html: "" });
   await pending;
+});
+
+// The header button is in no row, so its working line once had nowhere to go:
+// the page froze with every control held and nothing posted.
+test("Lock settings in the page header posts and says it is running under the heading", async () => {
+  const { client, events, replies } = systemTweaksClient();
+  const heading = { after: (line: { textContent: string }) => events.push(`heading: ${line.textContent}`) };
+  const button = { dataset: {}, type: "button", closest: (selector: string) => (selector.includes(".page-heading") ? heading : null) };
+  const pending = client.lockSettings(button);
+  await Bun.sleep(0);
+  expect(events).toEqual(["busy", "heading: Switching everything on, then locking…", "POST /api/lock-settings {}"]);
+  replies[0]!.answer({ ok: true, html: "<p>locked</p>" });
+  await pending;
+  expect(events.slice(3)).toEqual(["idle", "repaint: <p>locked</p>", "ok: Hardening and Failed logins are on and locked."]);
 });
 
 // Switching updates on and then the panel's PHP, before the first answered, let
@@ -1149,7 +1184,9 @@ test("both guards install as one file each, with the shared session reader in pl
   for (const path of [b.vhostGuardPaths.script, b.fileManagerGuardPaths.script]) {
     const text = readFileSync(path, "utf8");
     expect(text).not.toContain("panel-session.php");
-    expect(text).toContain("preg_match('/\\A[A-Za-z0-9,-]{1,128}\\z/', $id)");
+    // One file: nothing beside it left to include, and the cookie is read in place.
+    expect(text).not.toMatch(/\b(require|include)(_once)?\s*\(?\s*__DIR__/);
+    expect(text).toContain("$_COOKIE['cloudpanel']");
   }
 });
 
@@ -1244,16 +1281,17 @@ test("switching the File Manager guard off records the opt-out first, and a remo
   expect(confined()).toBe(true);
 });
 
-test("a withdrawal that fails after the File Manager guard is gone queues it back, unless it was switched off", async () => {
+test("a withdrawal that fails after the File Manager guard is gone starts repair, which puts it back unless it was switched off", async () => {
   for (const confine of [true, false]) {
     const b = box();
     await act(b, ["set-vhost-guard"], { enabled: true });
     await act(b, ["set-file-manager-guard"], { enabled: confine });
     b.varnish.failDaemonReload = true;
-    b.fm.commands.length = 0;
     expect(() => withdrawSystemTweaks(b.options)).toThrow("daemon-reload failed");
     expect(existsSync(b.fileManagerGuardPaths.pool)).toBe(false);
-    expect(b.fm.commands.includes("systemctl start --no-block clp-addons-reconcile.service")).toBe(confine);
+    expect(b.reconcile).toEqual(["systemctl start --no-block clp-addons-reconcile.service"]);
+    await systemTweaksMaintenance(b.options).catch(() => null);
+    expect(existsSync(b.fileManagerGuardPaths.pool)).toBe(confine);
   }
 });
 
@@ -1286,6 +1324,72 @@ test("a withdrawal that fails after restoring the wrapper puts the hardened wrap
   // The wrapper is hardened again, not left as CloudPanel's vulnerable original.
   expect(readFileSync(guardPaths.wrapper, "utf8")).toBe(WRAPPER_SCRIPT);
   expect(readFileSync(guardPaths.backup, "utf8")).toBe(CLPCTL_ORIGINAL);
+});
+
+test("a withdrawal that fails at PHP pool isolation queues the guards back and puts the hardened wrapper back", async () => {
+  const b = box();
+  const guardPaths = { wrapper: join(tempDir(), "clpctlWrapper"), backup: join(tempDir(), "clpctlWrapper.orig"), rootUid: process.getuid!() };
+  b.options.clpctlGuard = { version: "2.5.4-3", paths: guardPaths };
+  writeFileSync(guardPaths.wrapper, WRAPPER_SCRIPT, { mode: 0o700 });
+  writeFileSync(guardPaths.backup, CLPCTL_ORIGINAL, { mode: 0o700 });
+  await act(b, ["set-vhost-guard"], { enabled: true });
+  await act(b, ["set-php-pools"], { enabled: true });
+  const run = b.options.phpPools!.run!;
+  b.options.phpPools = { ...b.options.phpPools, run: (command, args) => command === "nft" && args[0] === "delete" ? { ok: false, stdout: "", stderr: "busy" } : run(command, args) };
+  expect(() => withdrawSystemTweaks(b.options)).toThrow("nft could not remove the PHP pool rules");
+  // Both guards were already removed, so repair runs now rather than at its next turn.
+  expect(existsSync(b.vhostGuardPaths.pool)).toBe(false);
+  expect(b.reconcile).toEqual(["systemctl start --no-block clp-addons-reconcile.service"]);
+  expect(readFileSync(guardPaths.wrapper, "utf8")).toBe(WRAPPER_SCRIPT);
+});
+
+test("a withdrawal that fails at the login jails starts repair for the visitor-IP and phpMyAdmin rules it already removed", async () => {
+  const b = box();
+  await systemTweaksMaintenance(b.options).catch(() => null);
+  expect(readFileSync(b.nginxConf, "utf8")).toContain("#clp-addons:untrusted");
+  // fail2ban ran before System Tweaks, so withdrawing puts it back, which this fixture's systemctl refuses.
+  mkdirSync(dirname(b.settingsFile), { recursive: true, mode: 0o700 });
+  writeFileSync(b.settingsFile, JSON.stringify({ version: 1, fail2banBefore: { enabled: true, active: true } }), { mode: 0o600 });
+  expect(() => withdrawSystemTweaks(b.options)).toThrow("systemctl restart fail2ban");
+  expect(readFileSync(b.nginxConf, "utf8")).not.toContain("#clp-addons:untrusted");
+  expect(b.reconcile).toEqual(["systemctl start --no-block clp-addons-reconcile.service"]);
+  // The repair it starts narrows the trust again.
+  await systemTweaksMaintenance(b.options).catch(() => null);
+  expect(readFileSync(b.nginxConf, "utf8")).toContain("#clp-addons:untrusted");
+});
+
+test("repair keeps the timers it enables while it reconciles the login jails", async () => {
+  const b = box();
+  await act(b, ["set-updates"], { enabled: true });
+  expect(JSON.parse(readFileSync(b.settingsFile, "utf8")).enabledTimers).toEqual([]);
+  b.timers.set("apt-daily.timer", "disabled");
+  systemTweaksUpkeep(b.options);
+  expect(b.timers.get("apt-daily.timer")).toBe("enabled");
+  expect(JSON.parse(readFileSync(b.settingsFile, "utf8")).enabledTimers).toEqual(["apt-daily.timer"]);
+  // So switching updates off disables it again.
+  await act(b, ["set-updates"], { enabled: false });
+  expect(b.timers.get("apt-daily.timer")).toBe("disabled");
+});
+
+test("settings.json keeps its format and the state names its parts in a fixed order", async () => {
+  const b = box();
+  const state = await act(b, ["set-motd"], { enabled: false });
+  const text = readFileSync(b.settingsFile, "utf8");
+  const saved = JSON.parse(text);
+  expect(text).toBe(`${JSON.stringify(saved, null, 2)}\n`);
+  expect(Object.keys(saved)).toEqual([
+    "version", "updates", "enabledTimers", "uploadProgressGuard", "blockForgedRealIp", "blockVhostInjection", "isolatePhpPools",
+    "protectPhpMyAdmin", "confineFileManager", "replacePanelCert", "loginJails", "fail2banBefore", "databaseLoopback",
+    "blockClpctlInjection", "blockTelemetry", "serverInfoMotd", "backupCompression",
+  ]);
+  expect(saved).toMatchObject({
+    version: 1, enabledTimers: [], uploadProgressGuard: true, loginJails: { panel: true, ssh: false }, fail2banBefore: null,
+    databaseLoopback: false, serverInfoMotd: false, backupCompression: DEFAULT_BACKUP_COMPRESSION,
+  });
+  expect(Object.keys(state)).toEqual([
+    "updates", "settings", "uploadProgress", "realIp", "phpMyAdmin", "panelCert", "vhostGuard", "phpPools", "fileManagerGuard",
+    "clpctlGuard", "panelPhp", "firewall", "loginJails", "database", "backupCompression", "telemetry", "motd",
+  ]);
 });
 
 test("the page shows the vhost guard as on, waiting for repair, or off", () => {
@@ -1530,22 +1634,27 @@ function guardFile(b: Box, version: string): string {
   return join(b.phpRoot, version, "fpm", "conf.d", "99-clp-addons-upload-progress.ini");
 }
 
+/** What the platform passes the guard: System Tweaks' switch counts while its config exists, as the catalog asks it. */
+function platformGuard(b: Box): PhpGuardOptions {
+  return { ...b.options.phpGuard, optedOut: existsSync(b.guardConfig) && systemTweaksPhpGuardOff(b.options) };
+}
+
 test("an existing installation keeps the guard without System Tweaks", () => {
   const b = box();
   rmSync(b.guardConfig);
-  reconcilePhpGuard(true, true, b.options.phpGuard);
+  reconcilePhpGuard(true, true, platformGuard(b));
   expect(existsSync(guardFile(b, "8.1"))).toBe(true);
   // A stored opt-out counts for nothing while System Tweaks is not enabled.
   mkdirSync(join(b.settingsFile, ".."), { recursive: true });
   writeFileSync(b.settingsFile, JSON.stringify({ version: 1, uploadProgressGuard: false }), { mode: 0o600 });
-  reconcilePhpGuard(true, true, b.options.phpGuard);
+  reconcilePhpGuard(true, true, platformGuard(b));
   expect(existsSync(guardFile(b, "8.3"))).toBe(true);
-  expect(inspectPhpGuard(b.options.phpGuard).optedOut).toBe(false);
+  expect(inspectPhpGuard(platformGuard(b)).optedOut).toBe(false);
 });
 
 test("opting out in System Tweaks removes the guard, and repair keeps it removed", async () => {
   const b = box();
-  reconcilePhpGuard(true, true, b.options.phpGuard);
+  reconcilePhpGuard(true, true, platformGuard(b));
   writeFileSync(join(b.phpRoot, "8.3", "fpm", "conf.d", "30-custom.ini"), "session.upload_progress.enabled = Off\n");
   const state = await act(b, ["set-upload-guard"], { enabled: false });
   expect(state.uploadProgress.guard).toBe(false);
@@ -1555,13 +1664,13 @@ test("opting out in System Tweaks removes the guard, and repair keeps it removed
     ["PHP 8.3", false, "config"],
     ["CloudPanel (PHP 8.3)", false, "config"],
   ]);
-  reconcilePhpGuard(true, true, b.options.phpGuard);
+  reconcilePhpGuard(true, true, platformGuard(b));
   expect(existsSync(guardFile(b, "8.1"))).toBe(false);
-  expect(inspectPhpGuard(b.options.phpGuard).optedOut).toBe(true);
+  expect(inspectPhpGuard(platformGuard(b)).optedOut).toBe(true);
 
   // Without System Tweaks' config the opt-out no longer counts.
   rmSync(b.guardConfig);
-  reconcilePhpGuard(true, true, b.options.phpGuard);
+  reconcilePhpGuard(true, true, platformGuard(b));
   expect(existsSync(guardFile(b, "8.1"))).toBe(true);
 
   // Enabling it again honours the stored opt-out.
@@ -1819,6 +1928,7 @@ test("the Failed logins card lists bans with an Unblock each, and warns about wh
   const html = dashboardView({ ...base, loginJails: jails });
   expect(html).toContain(`data-jail="clp-addons-panel" data-ip="203.0.113.7" onclick="unban(this)">Unblock</button>`);
   expect(html).toContain("Panel, until 2026-11-04 12:18:24");
+  expect(html).toContain(`<details class="st-fold" id="st-bans">`);
   expect(html).toContain("SSH accepts passwords, and root can log in with a password.");
   expect(html).toContain("fail2ban is watching.");
   const quiet = dashboardView({ ...base, loginJails: { ...jails, bans: [], sshd: { password: false, rootLogin: "prohibit-password" } } });
@@ -1903,4 +2013,144 @@ test("the backup compression API forwards the validated selection and repaints i
     expect((await response.json() as { html: string }).html).toBe(dashboardView(state));
     expect(calls).toEqual([body]);
   } finally { systemTweaksService.setBackupCompression = original; }
+});
+
+// --- root's lock ------------------------------------------------------------------
+
+const ALL_OFF = {
+  version: 1, uploadProgressGuard: false, blockForgedRealIp: false, blockVhostInjection: false, isolatePhpPools: false,
+  protectPhpMyAdmin: false, confineFileManager: false, replacePanelCert: false, loginJails: { panel: false, ssh: false },
+  databaseLoopback: false, blockClpctlInjection: false, blockTelemetry: false, serverInfoMotd: false,
+};
+
+/** The box with root's lock file of its own, and with MySQL already bound to loopback, so switching that on restarts nothing. */
+function lockableBox(): Box & { locks: { file: string; rootUid: number; lockFile: string } } {
+  const b = box();
+  const dir = dirname(b.settingsFile);
+  mkdirSync(dir, { recursive: true });
+  const confDir = b.options.database!.paths!.confDirs![0]!;
+  mkdirSync(confDir, { recursive: true });
+  writeFileSync(join(confDir, "zz-clp-addons-loopback.cnf"), DATABASE_FILE);
+  b.options.database = {
+    ...b.options.database,
+    run: (command, args) => command === "ss" ? { ok: true, stdout: "", stderr: "" }
+      : command === "systemctl" && args[0] === "show" ? { ok: true, stdout: "Id=mysql.service\nMainPID=2000\nTriggeredBy=\nActiveState=active\n", stderr: "" }
+      : { ok: false, stdout: "", stderr: "no MySQL in this fixture" },
+  };
+  // A directory of their own: mkdtemp's is the user's alone, as a lock directory must be.
+  const own = tempDir();
+  const locks = { file: join(own, "etc", "locks.json"), rootUid: process.getuid!(), lockFile: join(own, "locks.lock") };
+  b.options.locks = locks;
+  // fail2ban installed and running, so the jails really come on.
+  for (const sub of ["jail.d", "filter.d"]) mkdirSync(join(b.options.loginJails!.paths!.fail2banDir!, sub), { recursive: true });
+  b.options.loginJails = {
+    ...b.options.loginJails,
+    run: (command, args) => ({
+      ok: true, stderr: "",
+      stdout: command === "dpkg-query" ? "install ok installed\t1.1.0-1" : command === "systemctl" && args[0] === "is-enabled" ? "enabled\n"
+        : command === "systemctl" && args[0] === "is-active" ? "active\n" : command === "fail2ban-client" ? "Jail list:\t\n" : "",
+    }),
+  };
+  writeFileSync(b.settingsFile, JSON.stringify(ALL_OFF), { mode: 0o600 });
+  return Object.assign(b, { locks });
+}
+
+test("Lock settings switches every lockable switch on, then locks", async () => {
+  const b = lockableBox();
+  await act(b, ["lock-settings"]);
+  const settings = readSettings(b.options.paths as SystemTweaksPaths);
+  expect(settings).toMatchObject({
+    uploadProgressGuard: true, blockForgedRealIp: true, blockVhostInjection: true, isolatePhpPools: true, protectPhpMyAdmin: true,
+    confineFileManager: true, replacePanelCert: true, loginJails: { panel: true, ssh: true }, databaseLoopback: true,
+    blockClpctlInjection: true, blockTelemetry: true,
+  });
+  // Not a protection, so not touched.
+  expect(settings.serverInfoMotd).toBe(false);
+  expect(lockedAddons(b.locks.file, b.locks.rootUid)).toEqual(["system-tweaks"]);
+});
+
+test("Lock settings covers every switch root's lock holds", () => {
+  const turnsOn = [...LOCK_SETTINGS.first, ...LOCK_SETTINGS.last].map((tweak): string => lockSettingsStep(tweak).verb);
+  const held = Object.entries(SYSTEM_TWEAKS_VERBS).filter(([, declared]) => (declared as { lock?: string }).lock === "on").map(([verb]) => verb);
+  expect(turnsOn.sort()).toEqual(held.sort());
+});
+
+test("Lock settings refuses a lock file root cannot trust before it changes anything", async () => {
+  const b = lockableBox();
+  mkdirSync(dirname(b.locks.file), { mode: 0o755 });
+  writeFileSync(b.locks.file, JSON.stringify({ addons: [] }), { mode: 0o666 });
+  chmodSync(b.locks.file, 0o666);
+  await expect(act(b, ["lock-settings"])).rejects.toThrow("not a trusted regular file");
+  expect(readSettings(b.options.paths as SystemTweaksPaths).confineFileManager).toBe(false);
+});
+
+test("a switch that does not come on leaves nothing locked", async () => {
+  const b = lockableBox();
+  b.options.database = box().options.database;
+  await expect(act(b, ["lock-settings"])).rejects.toThrow("nothing was locked, because not every setting could be switched on: database-loopback:");
+  expect(existsSync(b.locks.file)).toBe(false);
+  // The rest came on; only the lock waits.
+  expect(readSettings(b.options.paths as SystemTweaksPaths)).toMatchObject({ confineFileManager: true, databaseLoopback: false });
+});
+
+// MySQL's restart cuts remote clients, so it is not spent on a lock that will be refused.
+test("a switch that fails first leaves MySQL alone", async () => {
+  const b = lockableBox();
+  const database: string[] = [];
+  const run = b.options.database!.run!;
+  b.options.database = { ...b.options.database, run: (command, args) => { database.push(command); return run(command, args); } };
+  b.options.telemetry = { ...b.options.telemetry, run: () => ({ ok: false, stdout: "", stderr: "Access denied" }) };
+  await expect(act(b, ["lock-settings"])).rejects.toThrow(/^nothing was locked, because not every setting could be switched on: telemetry:[^;]*$/);
+  expect(database).toEqual([]);
+  expect(existsSync(b.locks.file)).toBe(false);
+  expect(readSettings(b.options.paths as SystemTweaksPaths).databaseLoopback).toBe(false);
+});
+
+// Jails saved without fail2ban run nowhere, so the page would call them on and locked when they are not.
+test("Lock settings without fail2ban changes and locks nothing", async () => {
+  const b = lockableBox();
+  b.options.loginJails = box().options.loginJails;
+  await expect(act(b, ["lock-settings"])).rejects.toThrow("nothing was changed or locked: fail2ban is not installed");
+  expect(existsSync(b.locks.file)).toBe(false);
+  expect(readSettings(b.options.paths as SystemTweaksPaths)).toMatchObject({ confineFileManager: false, loginJails: { panel: false } });
+});
+
+test("under root's lock a switch goes on but not off, even asked at root's action directly", async () => {
+  const b = lockableBox();
+  await act(b, ["lock-settings"]);
+  await expect(act(b, ["set-file-manager-guard"], { enabled: false })).rejects.toThrow("root has locked system-tweaks");
+  await expect(act(b, ["set-login-jails"], { ssh: false })).rejects.toThrow("root has locked system-tweaks");
+  expect(readSettings(b.options.paths as SystemTweaksPaths)).toMatchObject({ confineFileManager: true, loginJails: { ssh: true } });
+  await act(b, ["set-file-manager-guard"], { enabled: true });
+  // The rest of the page is not held.
+  await act(b, ["set-motd"], { enabled: false });
+});
+
+test("System Tweaks enabled under root's lock starts from its defaults", () => {
+  const b = lockableBox();
+  mkdirSync(dirname(b.locks.file), { mode: 0o755 });
+  writeFileSync(b.locks.file, JSON.stringify({ addons: ["system-tweaks"] }), { mode: 0o644 });
+  writeFileSync(b.settingsFile, JSON.stringify({ ...ALL_OFF, databaseLoopback: true }), { mode: 0o600 });
+  restoreSystemTweaks(b.options);
+  expect(readSettings(b.options.paths as SystemTweaksPaths)).toMatchObject({
+    uploadProgressGuard: true, blockForgedRealIp: true, blockVhostInjection: true, isolatePhpPools: true, protectPhpMyAdmin: true,
+    confineFileManager: true, replacePanelCert: true, loginJails: { panel: true, ssh: false },
+    // Off by default, but never switched off by this.
+    databaseLoopback: true,
+    blockClpctlInjection: true, blockTelemetry: true, serverInfoMotd: false,
+  });
+
+  // Unlocked, it keeps what was chosen.
+  const open = lockableBox();
+  restoreSystemTweaks(open.options);
+  expect(readSettings(open.options.paths as SystemTweaksPaths).confineFileManager).toBe(false);
+});
+
+// Re-running the installer activates an addon that is already on; a switch root locked off stays off.
+test("System Tweaks already on under root's lock keeps its switches when activated again", () => {
+  const b = lockableBox();
+  mkdirSync(dirname(b.locks.file), { mode: 0o755 });
+  writeFileSync(b.locks.file, JSON.stringify({ addons: ["system-tweaks"] }), { mode: 0o644 });
+  restoreSystemTweaks(b.options, true);
+  expect(readSettings(b.options.paths as SystemTweaksPaths)).toMatchObject({ confineFileManager: false, isolatePhpPools: false });
 });

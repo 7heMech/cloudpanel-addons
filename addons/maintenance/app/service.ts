@@ -3,20 +3,15 @@ import type { WebVerb } from "../../../lib/gateway-protocol";
 import { fetchPanelInfo } from "../../../lib/snapshot-reader";
 import type { SiteContext } from "../../../lib/site-context";
 import type { GlobalMaintenanceStatus, MaintenanceSiteStatus, MaintenanceStatus } from "../action";
-import { validateDomain } from "../../../lib/app-http";
-
-export { validateDomain };
 
 export type MaintenanceSiteView = MaintenanceSiteStatus;
 
-/** What the fleet page draws: every site and the global override. */
 export interface MaintenanceFleet {
   global: GlobalMaintenanceStatus;
   sites: MaintenanceSiteView[];
 }
 
-/** A site's status together with the panel context its page is drawn in. */
-export interface MaintenanceSitePage {
+interface MaintenanceSitePage {
   site: MaintenanceSiteView;
   context: SiteContext;
 }
@@ -29,7 +24,7 @@ export interface MaintenanceTemplateView {
   removed?: boolean;
 }
 
-export interface BulkToggleResult {
+interface BulkToggleResult {
   enabled: boolean;
   updated: string[];
   failed: { domain: string; error: string }[];

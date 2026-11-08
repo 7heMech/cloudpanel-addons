@@ -47,8 +47,8 @@ const SEEDED_KEY = "clp_addons_device_theme";
 //
 // This one cannot ask the addon whether it is switched on: the login page has
 // no session, and every route the manager serves is behind the administrator
-// gate. So the switch decides whether the markup is there at all, which is why
-// changing it is the one tweak that reconciles the templates again.
+// gate. So the switch decides whether the markup is there at all, and changing
+// it renders the templates again.
 const DEVICE_THEME_SCRIPT = `
           <script>
             (function () {
@@ -71,15 +71,14 @@ const DEVICE_THEME_SCRIPT = `
             })();
           </script>`;
 
-// What the enhanced table looks like on a screen wide enough for a table.
 import SITES_STYLE from "./sites.css" with { type: "text" };
 
 // The narrow-screen half, which is a switch of its own: it is the panel's own
 // table it rearranges, and an operator who prefers to scroll it should be able
 // to. Keyed on CloudPanel's own `table-sites` rather than on a class the script
 // adds, so it is in force the moment the browser parses the page. Keyed on the
-// added class, a phone painted the panel's four-column table first and
-// rearranged it into cards once the fetch came back -- the layout moved under
+// added class, a phone would paint the panel's four-column table first and
+// rearrange it into cards once the fetch came back, moving the layout under
 // the reader for as long as the request took.
 //
 // The native cells are labelled as soon as the table exists; only the added
@@ -232,6 +231,23 @@ const NEW_SITE_STYLE = `
 `;
 
 /**
+ * CloudPanel's page for turning on two-factor sign-in, on a phone.
+ *
+ * Its stylesheet draws the page at a fixed 850px and the code field at 350px,
+ * so a phone scrolls sideways and the manual-entry secret, one unbroken word,
+ * runs off the card. Below 760px the page takes the card's width, the secret
+ * breaks anywhere, and the field shares its row with the button.
+ */
+const ENABLE_MFA_STYLE = `
+@media (max-width: 760px) {
+  body .enable-mfa-container { width: auto; max-width: 850px; overflow-wrap: anywhere; }
+  body .enable-mfa-container .qr-code-container img { max-width: 100%; height: auto; margin-left: 0; }
+  body .mfa-code-form-container .row > .col-auto:first-child { flex: 1 1 0; min-width: 0; }
+  body .mfa-code-form-container input.mfa-code { width: 100%; max-width: 350px; }
+}
+`;
+
+/**
  * The switches as they stood when the templates were last rendered.
  *
  * Root work, and the only place the stored tweaks can be read from. An empty
@@ -242,22 +258,14 @@ function storedTweaks(): PanelTweaks {
   try {
     return readTweaks(DEFAULT_PANEL_TWEAKS_PATHS);
   } catch {
-    // Unreadable state is the default state.
     return DEFAULT_TWEAKS;
   }
 }
 
 /**
- * The whole block, without the Twig that guards it on a panel page.
- *
- * The addon's own page renders this into the preview under its switches, where
- * there is no Twig and no administrator test to make: the route that serves it
- * is already behind the same gate as every other route the manager has.
- */
-/**
  * A phone's "Desktop site" lays the page out about 980px wide, inside the
- * 1100px at which the Sites table becomes cards, so desktop mode used to get the
- * cards it was asked not to. Only then is the page wider than the screen: a
+ * 1100px at which the Sites table becomes cards, though desktop mode asks for
+ * no cards. Only then is the page wider than the screen: a
  * desktop window is at most its screen at any zoom, and a phone in its own mode
  * is exactly as wide. Run before the table is parsed, so it is never drawn as
  * cards first; the script below reads the same answer for its column set.
@@ -267,6 +275,13 @@ const DESKTOP_SITE_JS = `if (document.documentElement.clientWidth > screen.width
   document.querySelectorAll("style[data-clp-tweaks-narrow]").forEach(function (sheet) { sheet.media = "not all"; });
 }`;
 
+/**
+ * The whole block, without the Twig that guards it on a panel page.
+ *
+ * The addon's own page renders this into the preview under its switches, where
+ * there is no Twig and no administrator test to make: the route that serves it
+ * is already behind the same gate as every other route the manager has.
+ */
 export function sitesBlock(url: string, tweaks: PanelTweaks = storedTweaks()): string {
   // The cards' rules are sheets of their own, in the same cascade order, so a
   // phone's desktop mode can switch them off whole: see DESKTOP_SITE_JS.
@@ -282,7 +297,7 @@ export function sitesBlock(url: string, tweaks: PanelTweaks = storedTweaks()): s
     ? `\n          <script>document.documentElement.classList.add("clp-tweaks-menu");</script>`
     : "";
   // Shown from the markup rather than when the reply lands: revealing it later
-  // pushed the table down, which was the largest layout shift on the page. The
+  // would push the table down, the largest layout shift on the page. The
   // script hides it again on a page whose table it does not recognise.
   const toolbarHidden = tweaks.sitesTable ? "" : " hidden";
   return `
@@ -323,24 +338,22 @@ function sitesSnippet(url: string, tweaks: PanelTweaks = storedTweaks()): string
           ${sitesBlock(url, tweaks)}`;
 }
 
-/** The login page's script, or nothing at all. */
 export function deviceThemeSnippet(on: boolean): string {
   return on ? DEVICE_THEME_SCRIPT : "";
 }
 
 /**
- * The narrow-screen rules for the relevant panel header, or nothing at all.
- * The frontend's also turn the tables on a site's own tabs into cards, with the
- * script that labels their cells; the Admin area has its sidebar instead.
+ * The frontend's rules also turn the tables on a site's own tabs into cards,
+ * with the script that labels their cells; the Admin area has its sidebar instead.
  */
 export function panelMobileSnippet(on: boolean, adminArea = false): string {
   if (!on) return "";
   if (adminArea) return `<style>${PANEL_HEADER_STYLE}${NEW_SITE_STYLE}${ADMIN_MOBILE_STYLE}</style>`;
-  return `<style>${PANEL_HEADER_STYLE}${NEW_SITE_STYLE}${SITE_TABLES_STYLE}</style><script>${SITE_TABLES_SCRIPT}</script>`;
+  return `<style>${PANEL_HEADER_STYLE}${NEW_SITE_STYLE}${ENABLE_MFA_STYLE}${SITE_TABLES_STYLE}</style><script>${SITE_TABLES_SCRIPT}</script>`;
 }
 
 /** Both headers carry the same opening tag; only Admin gets the sidebar rules. */
-export const HEADER_TEMPLATES = [TEMPLATES.header, TEMPLATES.adminHeader];
+const HEADER_TEMPLATES = [TEMPLATES.header, TEMPLATES.adminHeader];
 
 export { sitesSnippet };
 

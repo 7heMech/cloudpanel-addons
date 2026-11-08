@@ -6,9 +6,9 @@ import { join } from "node:path";
 import {
   reconcileNewSites, runCloudflareAction, transformVhost, type CloudflareActionPaths,
 } from "../addons/cloudflare-ips/action";
-import { CLIENT_JS, dashboardView, layout } from "../addons/cloudflare-ips/app/views";
-import type { CommandResult } from "../cli/action-common";
-import { trustedVhost, withNginxTransaction } from "../cli/nginx-transaction";
+import { CLIENT_JS, dashboardView } from "../addons/cloudflare-ips/app/views";
+import type { CommandResult } from "../lib/command";
+import { trustedVhost, withNginxTransaction } from "../lib/nginx-transaction";
 
 const realUid = process.getuid?.() ?? 0;
 const originalGetuid = process.getuid;
@@ -111,11 +111,12 @@ test("dashboard puts the sites first, with the summary in their header and the n
   expect(() => new Function(CLIENT_JS)).not.toThrow();
 });
 
-test("six sites bring a search and an Off filter", () => {
+test("six sites bring a search and an Off only toggle", () => {
   const sites = ["a", "b", "c", "d", "e", "f"].map((name, index) => site(`${name}.example.test`, index % 2 === 0));
   const html = dashboardView({ autoEnableNewSites: false, sites });
   expect(html).toContain('id="fleet-find"');
-  expect(html).toContain('<input type="checkbox" value="off" data-group="Status" onchange="pickFleetFilter()"> Off</label>');
+  expect(html).toContain('<label class="btn cf-off-only" id="fleet-show"><input class="visually-hidden" type="checkbox" value="off" data-group="Status" onchange="pickFleetFilter()">Off only</label><span class="hint" id="fleet-summary"');
+  expect(html).not.toContain("fleet-show-menu");
   expect(html).toContain('data-domain="b.example.test" data-enabled="false" data-show="off"');
   expect(html).toContain('data-domain="a.example.test" data-enabled="true" data-show="on"');
   expect(html).toContain('id="fleet-none" hidden');

@@ -1,11 +1,11 @@
 import { afterEach, expect, test } from "bun:test";
-import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
 import {
-  applyClpctlGuard, clpctlGuardStatus, restoreClpctlWrapper, type ClpctlGuardOptions,
+  applyClpctlGuard, clpctlGuardStatus, restoreClpctlWrapper, SHIPPED_WRAPPER_SHA256, type ClpctlGuardOptions,
 } from "../addons/system-tweaks/clpctl-guard";
 import WRAPPER_SCRIPT from "../addons/system-tweaks/clpctl-wrapper.sh" with { type: "text" };
 
@@ -135,6 +135,15 @@ test("restoring does nothing when ours is not installed", () => {
   f.writeWrapper(ORIGINAL);
   expect(restoreClpctlWrapper(f.options)).toBe(false);
   expect(readFileSync(f.wrapper, "utf8")).toBe(ORIGINAL);
+});
+
+// The hardened wrapper every release so far has installed (v2.0.0 to v2.1.0-rc.2).
+// Boxes still run it, so changing a byte of clpctl-wrapper.sh means adding this
+// hash to PRIOR_SHIPPED_WRAPPER_SHA256; otherwise the guard pauses on them.
+const RELEASED_WRAPPER_SHA256 = ["3b7d444ebe36a50ebefd98c2bf477a3a0f29f72ac772f0a0190291ff1e664355"];
+
+test("every hardened wrapper a release installed is still recognised as ours", () => {
+  for (const sha of RELEASED_WRAPPER_SHA256) expect(SHIPPED_WRAPPER_SHA256.has(sha)).toBe(true);
 });
 
 test("an older hardened wrapper from a past release is recognised as ours and upgraded", () => {

@@ -2,7 +2,7 @@ import { afterEach, expect, test } from "bun:test";
 import { chmodSync, mkdtempSync, readFileSync, rmSync, statSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import type { CommandResult } from "../cli/action-common";
+import type { CommandResult } from "../lib/command";
 import { applyRealIp, realIpStatus, type RealIpOptions } from "../addons/system-tweaks/real-ip";
 
 const dirs: string[] = [];

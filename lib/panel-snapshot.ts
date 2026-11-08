@@ -1,22 +1,19 @@
-// Privileged side of decision 2.7.
-//
 // The port-collision check needs the panel's site list, but the panel database
 // also holds password hashes and site credentials, and the app's site user
 // cannot read /home/clp at all. So the root gateway daemon queries the panel
-// database directly in real time, reads non-secret columns only, and returns
-// sanitized data over the UNIX domain socket without writing disk snapshots.
-// The app must never import this file.
+// database, reads non-secret columns only, and returns sanitized data over its
+// UNIX domain socket. The app must never import this file.
 
 import { Database } from "bun:sqlite";
 import { execFileSync } from "node:child_process";
 import { existsSync, mkdtempSync, readdirSync, readFileSync, rmSync, statSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { PANEL_DB } from "../cli/paths";
-import { STAND_INS_FILE, standInDomains } from "../cli/stand-ins";
-import { ADDONS } from "../cli/addon-catalog";
+import { PANEL_DB, STATE_DIR } from "./paths";
+import { STAND_INS_FILE, standInDomains } from "./stand-ins";
 import { PORT_RANGE, type PanelSnapshot, type SanitizedSite } from "./snapshot-reader";
 import { readPanelPublicIp } from "./panel-public-ip";
+import { errorMessage } from "./errors";
 
 const SQLITE_BUSY_TIMEOUT_MS = 5_000;
 
@@ -29,7 +26,7 @@ type SiteRow = {
 
 type ValueRow = { value: string | number | null };
 
-export interface PanelDatabaseSnapshot {
+interface PanelDatabaseSnapshot {
   allocatedPorts: number[];
   sites: SanitizedSite[];
 }
@@ -39,10 +36,6 @@ function emptyPanelDatabaseSnapshot(): PanelDatabaseSnapshot {
 }
 
 export { readPanelPublicIp };
-
-function errorMessage(error: unknown): string {
-  return error instanceof Error ? error.message : String(error);
-}
 
 function errorCode(error: unknown): string | undefined {
   if (typeof error !== "object" || error === null || !("code" in error)) return undefined;
@@ -60,10 +53,6 @@ function databaseExists(databasePath: string): boolean {
   }
 }
 
-/**
- * Runs a panel query, treating an absent optional table as empty while wrapping
- * every other query failure with table context.
- */
 function queryRows<ReturnType>(db: Database, sql: string, table: string, optional = false): ReturnType[] {
   try {
     return db.query<ReturnType, []>(sql).all();
@@ -155,7 +144,6 @@ function openConsistentSnapshot(databasePath: string): IsolatedDatabase {
   }
 }
 
-/** Every site but DNS's stand-ins, which are redirects rather than sites. */
 export function readPanelDatabase(databasePath = PANEL_DB, standInsFile = STAND_INS_FILE, rootUid = 0): PanelDatabaseSnapshot {
   if (!databaseExists(databasePath)) return emptyPanelDatabaseSnapshot();
 
@@ -212,16 +200,6 @@ export function readPanelDatabase(databasePath = PANEL_DB, standInsFile = STAND_
   return { allocatedPorts: [...ports].sort((a, b) => a - b), sites };
 }
 
-/**
- * Returns sanitized panel state from a consistent database copy, addon metadata,
- * and active TCP listeners.
- *
- * Unreadable addon metadata and unavailable listener inspection contribute no
- * ports. Reading the default panel database requires root privileges.
- *
- * @throws If the caller is not root when using the default database, or the
- * panel database cannot be inspected, copied, or queried.
- */
 export function getLivePanelInfo(databasePath = PANEL_DB): PanelSnapshot {
   if (process.getuid && process.getuid() !== 0 && databasePath === PANEL_DB) {
     throw new Error("getLivePanelInfo must run as root; consumers query the root gateway daemon instead");
@@ -232,15 +210,19 @@ export function getLivePanelInfo(databasePath = PANEL_DB): PanelSnapshot {
   const sites = panel.sites;
 
   // Ports the addons have already handed out, which the panel does not know
-  // about. Every installed addon, not one hardcoded directory: the `ss` scan
-  // below catches another addon's *running* instances, so a hardcoded path left
-  // exactly the case this loop exists for -- a stopped instance, whose port is
-  // still spoken for but is not listening -- invisible to the allocator.
-  for (const spec of Object.values(ADDONS)) {
-    if (!existsSync(spec.stateDir)) continue;
+  // about: an addon that runs instances records each one's port in
+  // `<its state directory>/<instance>/meta.json`. A stopped instance still holds
+  // its port but is not listening, so the `ss` scan below would miss it.
+  let addonDirs: string[] = [];
+  try {
+    addonDirs = readdirSync(STATE_DIR).map((name) => `${STATE_DIR}/${name}`);
+  } catch (error) {
+    if (errorCode(error) !== "ENOENT") throw new Error(`cannot read ${STATE_DIR}: ${errorMessage(error)}`, { cause: error });
+  }
+  for (const stateDir of addonDirs) {
     try {
-      for (const entry of readdirSync(spec.stateDir)) {
-        const meta = `${spec.stateDir}/${entry}/meta.json`;
+      for (const entry of readdirSync(stateDir)) {
+        const meta = `${stateDir}/${entry}/meta.json`;
         if (!existsSync(meta)) continue;
         try {
           addPort(ports, String(JSON.parse(readFileSync(meta, "utf-8")).port));
@@ -249,12 +231,11 @@ export function getLivePanelInfo(databasePath = PANEL_DB): PanelSnapshot {
         }
       }
     } catch (error) {
-      if (errorCode(error) === "ENOENT") continue;
-      throw new Error(`cannot read addon state directory ${spec.stateDir}: ${errorMessage(error)}`, { cause: error });
+      if (errorCode(error) === "ENOENT" || errorCode(error) === "ENOTDIR") continue;
+      throw new Error(`cannot read addon state directory ${stateDir}: ${errorMessage(error)}`, { cause: error });
     }
   }
 
-  // Anything currently listening, whoever owns it.
   try {
     const ss = execFileSync("ss", ["-tlnH"], { encoding: "utf-8" });
     for (const m of ss.matchAll(/:(\d{2,5})\s/g)) addPort(ports, m[1] ?? null);

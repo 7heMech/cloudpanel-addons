@@ -1,13 +1,14 @@
 import { afterEach, expect, test } from "bun:test";
-import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
+import {
+  chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync,
+} from "node:fs";
 import { createServer } from "node:net";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
-import type { CommandResult } from "../cli/action-common";
+import type { CommandResult } from "../lib/command";
 import { fastCgiRequest, parseCgiResponse } from "../lib/fastcgi";
-import { panelPhpLine, panelPhpRow } from "../addons/system-tweaks/app/views";
 import {
-  panelPhpStatus, reconcilePanelPhp, restorePanelPhp, setPanelPhp, withdrawPanelPhp, type PanelPhpOptions,
+  panelPhpLine, panelPhpRow, panelPhpStatus, reconcilePanelPhp, restorePanelPhp, setPanelPhp, withdrawPanelPhp, type PanelPhpOptions,
 } from "../addons/system-tweaks/panel-php";
 
 const ARGS = "-R -F -y /home/clp/services/php-fpm/fpm/php-fpm.conf -c /home/clp/services/php-fpm/fpm/php.ini";
@@ -427,4 +428,46 @@ test("after an update replaces the binary the panel runs, repair reloads it, and
   symlinkSync(`${binary} (deleted)`, exe);
   expect(await reconcilePanelPhp(b.options)).toBe("panel PHP reloaded onto its updated binary");
   expect(b.commands.filter((command) => command.startsWith("systemctl reload"))).toHaveLength(1);
+});
+
+test("under root's lock the panel only moves to a newer installed PHP than it runs", async () => {
+  const env = box();
+  const locked = () => "root has locked system-tweaks; run clp-addons unlock system-tweaks on the server";
+  await setPanelPhp("8.3", env.options, locked);
+  expect(panelPhpStatus(env.options).running).toBe("8.3");
+  for (const older of ["8.1", "", "8.3", "7.4"]) {
+    await expect(setPanelPhp(older, env.options, locked)).rejects.toThrow("root has locked system-tweaks");
+  }
+  await expect(setPanelPhp("8.5", env.options, locked)).rejects.toThrow("root has locked system-tweaks");
+  expect(panelPhpStatus(env.options)).toMatchObject({ wanted: "8.3", running: "8.3" });
+  await setPanelPhp("8.4", env.options, locked);
+  expect(panelPhpStatus(env.options).running).toBe("8.4");
+  // Unlocked, it goes back.
+  await setPanelPhp("", env.options, () => null);
+  expect(panelPhpStatus(env.options).running).toBe("8.1");
+});
+
+test("under root's lock the page offers only the version chosen and newer ones", () => {
+  const status = {
+    wanted: "8.3", stock: "8.1", running: "8.3",
+    choices: [{ version: "8.1", installed: "8.1.34" }, { version: "8.3", installed: "8.3.36" }, { version: "8.4", installed: "8.4.25" }],
+  };
+  const page = panelPhpRow(status, true);
+  expect(page).not.toContain("PHP 8.1");
+  expect(page).toContain(`<option value="8.3" selected>PHP 8.3</option>`);
+  expect(page).toContain(`<option value="8.4">PHP 8.4</option>`);
+  expect(page).toContain(`onchange="setPanelPhp(this)">`);
+  // Nothing newer to move to: the picker is read-only.
+  expect(panelPhpRow({ ...status, wanted: "8.4", running: "8.4" }, true)).toContain(`onchange="setPanelPhp(this)" disabled>`);
+});
+
+// The chosen version removed and the panel back on 8.1: one newer choice is left, and set-panel-php accepts it.
+test("under root's lock a single newer version stays choosable after a fallback", () => {
+  const page = panelPhpRow({
+    wanted: "8.2", stock: "8.1", running: "8.1",
+    choices: [{ version: "8.1", installed: "8.1.34" }, { version: "8.3", installed: "8.3.36" }],
+  }, true);
+  expect(page).toContain(`<option value="8.3">PHP 8.3</option>`);
+  expect(page).toContain(`onchange="setPanelPhp(this)">`);
+  expect(page).toContain("PHP 8.2 (unavailable)");
 });

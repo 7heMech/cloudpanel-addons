@@ -22,26 +22,20 @@ describe("provider HTTP bounds", () => {
   });
 
   test("the deadline aborts both an unanswered request and a stalled reply body", async () => {
-    const timer = globalThis.setTimeout;
-    globalThis.setTimeout = ((handler: (...args: unknown[]) => void, delay?: number, ...args: unknown[]) => timer(handler, delay === 15_000 ? 5 : delay, ...args)) as typeof setTimeout;
-    try {
-      for (const stalledBody of [false, true]) {
-        let signal: AbortSignal | null | undefined;
-        const api = new ProviderHttp("Test", "https://provider.test", {}, async (_url, init) => {
-          signal = init.signal;
-          expect(init.redirect).toBe("error");
-          if (!stalledBody) {
-            return new Promise<Response>((_resolve, reject) => signal!.addEventListener("abort", () => reject(new Error("aborted"))));
-          }
-          return new Response(new ReadableStream({
-            start(controller) { signal!.addEventListener("abort", () => controller.error(new Error("aborted"))); },
-          }));
-        });
-        await expect(api.request("/")).rejects.toBeInstanceOf(ProviderError);
-        expect(signal?.aborted).toBe(true);
-      }
-    } finally {
-      globalThis.setTimeout = timer;
+    for (const stalledBody of [false, true]) {
+      let signal: AbortSignal | null | undefined;
+      const api = new ProviderHttp("Test", "https://provider.test", {}, async (_url, init) => {
+        signal = init.signal;
+        expect(init.redirect).toBe("error");
+        if (!stalledBody) {
+          return new Promise<Response>((_resolve, reject) => signal!.addEventListener("abort", () => reject(new Error("aborted"))));
+        }
+        return new Response(new ReadableStream({
+          start(controller) { signal!.addEventListener("abort", () => controller.error(new Error("aborted"))); },
+        }));
+      }, { until: 0 }, 5);
+      await expect(api.request("/")).rejects.toBeInstanceOf(ProviderError);
+      expect(signal?.aborted).toBe(true);
     }
   });
 });
@@ -136,7 +130,7 @@ describe("Cloudflare", () => {
     expect(fake.calls.length).toBe(calls);
   });
 
-  test("a reply that never arrives times out, and a non-JSON reply is an error", async () => {
+  test("a non-JSON reply is an error", async () => {
     const api = new CloudflareApi(USER_TOKEN, async () => new Response("<html>gateway</html>", { status: 502 }));
     await expect(api.zones()).rejects.toThrow("HTTP 502 without a JSON reply");
   });

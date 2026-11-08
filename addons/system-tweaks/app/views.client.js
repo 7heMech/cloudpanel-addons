@@ -6,9 +6,9 @@ async function post(path, body) {
   });
 }
 
-// One change at a time. A second one started while the first ran answered with
-// the page as it stood before the first landed, repainted over it and put the
-// first one's controls back as if it had stopped, so every control waits.
+// One change at a time: a second one started while the first runs would answer
+// with the page as it stood before the first landed, repaint over it and put the
+// first one's controls back as if it had stopped.
 let stQueue = Promise.resolve();
 
 function exclusive(task) {
@@ -31,8 +31,6 @@ function hold(on) {
   });
 }
 
-// What is running, said on the row it belongs to, and once over the page for a
-// change slow enough that the other controls are noticed waiting.
 function working(control, text) {
   const option = control.closest('.st-option');
   const row = option || control.closest('.tweak-row');
@@ -41,8 +39,9 @@ function working(control, text) {
   line.setAttribute('role', 'status');
   line.innerHTML = '<span class="badge">Working</span> ';
   line.append(text);
+  // The header's Lock settings button says it under the page heading.
   const after = option ? option.lastElementChild
-    : row ? row.querySelector('.tweak-note') : control.closest('.st-fold, .st-install');
+    : row ? row.querySelector('.tweak-note') : control.closest('.st-fold, .st-install, .page-heading');
   after.after(line);
   const page = setTimeout(function () {
     notify(text + ' Other settings wait until it finishes.', 'warn');
@@ -91,7 +90,6 @@ function setUpdates(input) {
   return change(input, '/api/updates', { [input.dataset.setting]: input.checked }, switchText(input), 'Saved.');
 }
 
-// Each on/off switch posts to /api/<name>.
 function setSwitch(input, name) {
   return change(input, '/api/' + name, { enabled: input.checked }, switchText(input), 'Saved.');
 }
@@ -120,6 +118,24 @@ function setPanelPhp(select) {
 
 function setLoginJails(input) {
   return change(input, '/api/login-jails', { [input.dataset.setting]: input.checked }, switchText(input), 'Saved.');
+}
+
+// One action on the server: every Hardening and Failed logins switch on, then
+// root's lock, which the panel cannot take off again.
+async function lockSettings(button) {
+  const accepted = await confirmAction({
+    title: 'Turn everything on and lock?',
+    text: 'Every Hardening and Failed logins switch is turned on, then locked: from then on the panel can switch them on but never off.',
+    details: [
+      'MySQL is restarted to accept connections from this server only; apps on other machines lose access.',
+      'SSH login guessing is blocked too: an SSH client that offers several wrong keys can be blocked for an hour.',
+      "The panel's PHP is not changed. While locked it can only move to a newer version.",
+      "Only root can undo it, with clp-addons unlock system-tweaks from a root shell or the panel's root terminal.",
+    ],
+    confirmLabel: 'Lock settings',
+  });
+  if (!accepted) return;
+  return change(button, '/api/lock-settings', {}, 'Switching everything on, then locking…', 'Hardening and Failed logins are on and locked.');
 }
 
 function installFail2ban(button) {

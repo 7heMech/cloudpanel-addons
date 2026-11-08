@@ -17,11 +17,11 @@ maintenance, live, not covered, and the site type) sit above the table, whose
 headings sort. Every fleet change answers
 with the redrawn fleet, which the page repaints.
 
-Below the table one card holds the global override: a switch that decides what
-visitors get for every site at once and changes nothing a site has saved, and
-the global IP bypasses behind a summary that counts them. Its confirmation names
+Above the table one card holds the global override, the page's main control: a
+switch that decides what visitors get for every site at once and changes nothing
+a site has saved, and the global IP bypasses behind a summary that counts them. Its confirmation names
 the site count and how many have maintenance saved off. While it is on, a banner
-above the table says every site serves the maintenance page, and a site whose own
+above both cards says every site serves the maintenance page, and a site whose own
 setting is off, or could not be read, shows a "Maintenance (Global)" badge;
 turning it off returns each site to its saved setting. Turning it on or off
 purges Varnish cache across the fleet. Global bypasses (up to 64) apply to every
@@ -149,8 +149,11 @@ and removes nothing when the panel database cannot be read or lists no site.
 
 ## Reconciliation
 
-The global-settings reconciler records the pristine file and its SHA-256 hash
-and renders only when the unmarked content matches that baseline. Site edits
+The global-settings reconciler records the pristine file, its SHA-256 hash and
+the version of the package that installed it, and renders only when the
+unmarked content matches that baseline, or when that package was upgraded since
+and the new file holds no maintenance construct of its own
+([After a CloudPanel upgrade](platform.md#after-a-cloudpanel-upgrade)). Site edits
 use the same transaction helpers as Cloudflare IPs: an immediate SQLite
 transaction, edits to trusted regular vhosts with preserved ownership and
 permissions, then `nginx -t` and a distro Nginx reload before commit. Failure rolls back the

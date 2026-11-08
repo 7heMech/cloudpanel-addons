@@ -1,8 +1,8 @@
 // What the Terminal addon adds to CloudPanel's own pages: a link in each Sites
 // row, one at the right end of a site's tab strip, and a root shell control in
-// both headers that only an administrator root allowed sees. Neither is a tab -- the
-// terminal opens in a window of its own -- and both are for administrators
-// only, which the manager's gate enforces again.
+// both headers that only an administrator root allowed sees. Neither is a tab
+// -- the terminal opens in a window of its own -- and both are for
+// administrators only, which the manager's gate enforces again.
 //
 // Neither is `required`: a CloudPanel release that moves either anchor should
 // cost the link, not stop the addon from being enabled. Addons → Terminal
@@ -17,6 +17,10 @@ import LINKS_JS from "./links.client.js" with { type: "text" };
 import { ANCHORS, TEMPLATES } from "../../../lib/panel-anchors";
 import { rootShellLink, rootShellScript } from "../../../lib/root-shell";
 import HEADER_STYLE from "./header.css" with { type: "text" };
+
+// The account menu's Logout item, the last in either header's menu.
+const LOGOUT_MENU_ITEM = `            <li>
+              <a class="dropdown-item" href="{{ path('clp_logout') }}"`;
 
 const ADMIN = "{% if is_granted('ROLE_ADMIN') %}";
 
@@ -69,6 +73,18 @@ export const TERMINAL_TARGETS: AddonTarget[] = [
     snippet: (url) => `
         ${ADMIN}
         <li class="clp-root-shell" data-clp-root-shell style="display: none;">${rootShellLink(url, "", '<span class="clp-root-shell-label">Root terminal</span>')}<style>${HEADER_STYLE}</style><script>${rootShellScript(url)}</script></li>
+        {% endif %}`,
+  })),
+  // The same control in the account menu, above Logout, which a phone shows in
+  // place of the header icon; the header item's style and script cover it.
+  ...[TEMPLATES.header, TEMPLATES.adminHeader].map((template, index): AddonTarget => ({
+    slug: index === 0 ? "root-shell-menu" : "root-shell-admin-menu",
+    template,
+    anchorBefore: LOGOUT_MENU_ITEM,
+    required: false,
+    snippet: (url) => `
+        ${ADMIN}
+            <li class="clp-root-shell-menu" data-clp-root-shell style="display: none;">${rootShellLink(url, 'class="dropdown-item"', "Root terminal", false)}</li>
         {% endif %}`,
   })),
 ];

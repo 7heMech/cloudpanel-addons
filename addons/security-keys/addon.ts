@@ -2,7 +2,7 @@ import { handle } from "./app/index";
 import { SIGN_IN_PREFIX, handleSignIn } from "./app/sign-in";
 import { runSecurityKeysAction } from "./action";
 import { SECURITY_KEYS_TARGETS } from "./inject/targets";
-import type { AddonDefinition } from "../../cli/addon-catalog";
+import type { AddonDefinition } from "../../lib/addon-definition";
 
 export const SECURITY_KEYS_ADDON: AddonDefinition = {
   name: "security-keys",

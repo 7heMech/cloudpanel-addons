@@ -21,9 +21,9 @@ gateway call's own deadline bound every request instead.
 
 `manager/` holds that process: `server.ts` owns the socket, the request gate
 and the mount dispatch, and `index.ts`, `service.ts` and `views.ts` are the
-Addons page itself, laid out the way an addon's `app/` is. It is not in `cli/`
-because none of it is a command; `cli/index.ts` calls `cmdServe` and otherwise
-knows nothing about it.
+Addons page itself, laid out the way an addon's `app/` is. `action.ts` is the
+root side of its verbs, as an addon's `action.ts` is; `cli/index.ts` hands it
+the enable, disable, update and reconcile commands it runs.
 
 The Addons page is two lists, Enabled and Available, one row per addon with its
 one-line description and its buttons, so the whole catalog fits on a screen. A
@@ -59,12 +59,29 @@ tracked range, so it never outgrows the catalog.
 
 ## One catalog, compiled in
 
-`cli/addon-catalog.ts` is the only registration seam. An addon declares itself
+`addons/catalog.ts` is the only registration seam. An addon declares itself
 in `addons/<name>/addon.ts` -- title, description, injection targets, required
 systemd units, its manager handler, its privileged action, the routes it opens
 to non-administrators or answers ahead of the gate, and any repair upkeep -- and
-the catalog derives its config file and state directory from its name, so
-a definition cannot name a file provisioning will not look for.
+the catalog derives its config file and state directory from its name
+(`addonConfigFile` and `addonStateDir` in `lib/paths.ts`), so a definition
+cannot name a file provisioning will not look for. An addon is enabled while
+its config file exists; `addonEnabled` and `enabledAddons` in the catalog are
+the only places that ask.
+
+Everything the platform does for one addon is declared there too, so no
+command, reconciler or toggle names an addon:
+
+- `commands`: top-level commands the addon owns, such as `maintenance` or the
+  `sync-*` hooks systemd runs, each with its `help` line if it has one.
+- `panelBlock`: a marked block in a file CloudPanel owns, put in while the
+  addon is enabled and taken out otherwise by install, update, repair, the
+  toggles and self-uninstall, with its row in `status`.
+- `anchors`: work `repair --anchors-only` runs when CloudPanel rewrites a
+  file the anchor watcher sees.
+- `conffiles`: dpkg conffile edits `apt-hook pre` hands back.
+- `withdraw`: disabling under the addon's own locks.
+- `stateDirMode`: a state directory something outside the addon must reach.
 
 Repair upkeep runs inside repair's operation lock, so it stays short. Work that
 waits on the network or on a site's own code is queued with `queueAddonPass`
@@ -78,7 +95,8 @@ An addon's verbs are declared in its `verbs.ts`, which imports nothing, so the
 root gateway can read them without loading the addon. The gateway's allowlist,
 the action's verb type, the services' typed gateway calls and the manager's
 per-caller check all come from that one declaration, and a test reads each
-action's dispatcher to check it handles exactly those verbs.
+action's dispatcher, or System Tweaks' handler table, to check it handles
+exactly those verbs.
 `tests/__snapshots__/test-web-verbs.test.ts.snap` lists every web-reachable verb
 with who may call it, so a change to the gateway's surface shows in review.
 
@@ -86,10 +104,21 @@ The manager and the auth gateway are not in it. They have no config file to
 enable, no mount path of their own and no state to keep, so they are dispatched
 before the catalog is consulted rather than described by it.
 
-`cli/paths.ts` is a leaf again. It held the registry, which meant the module
-owning the project's path constants imported every addon's target list in order
-to describe them; the injection-target shape now lives in `lib/addon-target.ts`,
-which both sides import.
+## Where code lives
+
+Imports point one way, from what changes most to what changes least:
+
+- `cli/` holds the commands: argument handling, install, update, repair,
+  toggles and the platform reconcilers they run. Nothing imports it except
+  its own files and the binary's entry point.
+- `manager/` is the manager process, laid out like an addon.
+- `addons/<name>/` is one addon, and `addons/catalog.ts` lists them all.
+  An addon imports `lib/` and, where it builds on another addon, that
+  addon's exported functions; never `cli/` or `manager/`.
+- `lib/` is what every side shares: paths (`lib/paths.ts`), the action reply
+  protocol, command running, file locks, the panel database, Nginx and job
+  helpers, the addon definition types, and the web pieces. It imports only
+  `lib/`, plus the addons' `verbs.ts` tables, which import nothing.
 
 ## The CLI
 
@@ -98,9 +127,10 @@ addons toggle through the same enable and disable the Addons page runs, and
 status, repair and update run the commands of those names. Without a terminal or
 root it prints the plain overview. Help lists operator commands only. `action`
 is how the gateway runs an addon's root verbs, and `serve`, `smtp-submit` and
-`terminal-pty` are started by systemd, Postfix and the terminal action.
+`terminal-pty` are started by systemd, Postfix and the terminal action. A
+command no platform verb answers is looked up among the addons' `commands`.
 
-Color is decided per stream: `paint` in `cli/util.ts` colors only when the
+Color is decided per stream: `paint` in `lib/log.ts` colors only when the
 stream it writes to is a terminal and `hasColors` allows it, so `NO_COLOR` and
 `TERM=dumb` are honored and journald, pipes and job logs stay plain even under
 `FORCE_COLOR`; a terminal without `TERM` is plain. Bun's `Bun.color` is not
@@ -181,7 +211,8 @@ Nginx and Twig changes are marked and regenerated from a saved pristine copy.
 Before changing Nginx, the reconciler validates the complete configuration and
 restores the original vhost if validation or reload fails. If CloudPanel changes
 the surrounding file, reconciliation stops instead of applying a patch against
-unknown markup.
+unknown markup, unless a package upgrade explains the change and the patch
+provably still fits (below).
 
 `lib/panel-anchors.ts` names every CloudPanel template an addon patches, and the
 anchor lines more than one addon patches against, so a CloudPanel release that
@@ -214,6 +245,108 @@ row of its own, a logo that shrinks, an Admin Area link down to its icon, a
 Dashboard chart that fits -- is the addon's alone, and a switch, because that is
 the panel's own shape being changed rather than room being made for something an
 addon added.
+
+### After a CloudPanel upgrade
+
+Every patched file has a record under `/var/lib/clp-addons` (`lib/baseline.ts`):
+its text without our blocks, that text's SHA-256, the path, and the version of
+the package that installed it. That is `cloudpanel` for the templates and the
+panel's master vhost, and for `global_settings` whichever package `dpkg-query -S`
+names, `nginx-common` on Debian. A file whose unmarked text still matches is
+patched again, whatever version is installed, and its record takes the
+installed version, so a later edit under that version reads as an edit.
+
+A file whose text changed is recorded afresh and patched only when all of these
+hold:
+
+- dpkg reports the package fully installed: current state `i` with no error
+  flag, whether it is wanted (`ii`) or held (`hi`, after `apt-mark hold`). While
+  an upgrade unpacks and configures, the version is already the new one but
+  files are still being replaced, and the anchor watcher fires on every write.
+  A file read then could be half-written, and recording it would turn the
+  finished file into an edit. Nothing is decided until the first repair after
+  dpkg finishes: the 15-minute timer, `apt-hook post` after an unattended run,
+  or a manual `repair`.
+- The version reads the same before and after the file is read. A pass reads
+  it before its first file and again after a changed one; if postinst finished
+  in between, the file may be the half-written one, so it is refused as `busy`
+  and the next pass decides.
+- The installed version differs from the recorded one. The same version with
+  different bytes is someone's edit. A record from before versions were kept
+  cannot tell the two apart, so it refuses too.
+- For a conffile, the new text is the package's own: its MD5 is the one
+  `dpkg-query -W -f='${Conffiles}'` lists. dpkg keeps an operator's edit through
+  an upgrade that ships the same conffile, without asking, so a moved version
+  alone would accept an edit that was refused. Templates and the master vhost
+  are replaced on every upgrade and need no such check.
+- No marker text is left once the complete blocks are taken out.
+- The new text fits. For a template, every anchor of every block wanted in it
+  appears exactly once: missing gives the block nowhere to go, and twice means
+  CloudPanel restructured around it, so the block could land in the wrong
+  place. A required block that does not fit, or any repeated anchor, holds back
+  the whole file, since its blocks are rendered together; an optional block
+  whose anchor is gone is left out and the rest are patched, as on any pass.
+  For the master vhost, there is exactly one server block on port 8443 and no
+  `/addons/` location of CloudPanel's own;
+  `nginx -t` and the rollback still guard the write. Maintenance Mode's block is
+  appended rather than anchored, so `global_settings` fits unless it already
+  defines one of the block's variables, its location or a 418 `error_page`; the
+  Nginx transaction still validates it.
+
+A file with no record yet is not recorded while dpkg is part-way through its
+package (unpacked, half-configured, awaiting triggers): the record would be a
+half-written file with no version to tell the finished one apart by. The next
+pass after dpkg finishes records it. A record is written only once the file it
+vouches for is in place and, for the master vhost and `global_settings`, Nginx
+passed `nginx -t` and reloaded; a change Nginx rejects leaves the old record,
+and the next pass decides again.
+
+Otherwise the file is left exactly as the package wrote it, with a reason:
+`busy`, `edited`, `unrecorded`, `stray-marker`, `anchor-missing`,
+`anchor-repeated` or `conflict`.
+
+The same rule is safe for the master vhost and for `global_settings` because
+neither is ever restored from its record: disabling strips the block from the
+live file, so the record only decides whether the file is the one the block was
+built for, and the structural checks above decide that directly. Both need it.
+The master vhost is a plain file of the `cloudpanel` package, not a conffile, so
+every CloudPanel upgrade writes it back without the proxy; without the rule, a
+release that changed it would take the `/addons/` page away until someone
+deleted the record by hand. `global_settings` is covered by the conffile hook
+for unattended upgrades (below), but an interactive upgrade where the operator
+takes the package's new file would leave Maintenance Mode's check off for good.
+
+The rule is never applied to the mitigations that replace CloudPanel code.
+System Tweaks' `clpctl` wrapper and remote backup compression keep their own
+pinned hash and version sets, which only a release extends after checking a new
+CloudPanel on staging. A wrong guess there is not a missing button but a broken
+or bypassed protection. So CloudPanel code with bytes or a version a release
+does not know is never patched, a hardened wrapper is recognised only by the
+exact bytes some release shipped, and `tests/test-clpctl-guard.test.ts` fails if
+one of those stops being recognised
+([the clpctl wrapper](system-tweaks.md#clpctl-injection),
+[Retiring a mitigation](system-tweaks.md#retiring-a-mitigation)).
+
+Neither CloudPanel's updates nor the addons are held back on an unknown panel
+version. Pinning CloudPanel would keep its security fixes off the box, and
+switching the addons off would drop System Tweaks' hardening exactly when the
+panel has changed under it. A file the rule refuses costs one addon's link or
+button until a release supports the version; everything else keeps running.
+
+`repair --rebaseline` is the operator's way past `edited` and `unrecorded`: it
+drops the version and conffile conditions and nothing else, so the package must be settled, no stray marker may be left and every block
+must still fit.
+
+What is refused is shown, not only logged. The manager's `holds` verb runs as
+root and inspects the live files without writing; the Addons page asks it at
+most every thirty seconds, since each answer queries dpkg and the list changes
+only with an upgrade or `repair --rebaseline`. `clp-addons status` prints the
+same list. `status` runs only as root,
+since the records keep their text where only root can read it, and as another
+user every patched file would look edited. Both group by file and name
+the addons whose blocks are held, the package version, and what to do, in the
+words of `lib/panel-holds.ts`. Repair logs each file it records afresh. The
+operator procedure is [When CloudPanel updates](../cloudpanel-updates.md).
 
 ### Package conffiles
 
@@ -255,7 +388,7 @@ does not skip the next. The units exist while any installed addon declares
 operation lock: each addon's work takes its own. Work that runs a site's own
 code is queued rather than done in the hook, as WordPress Tools hands its checks
 to background jobs (see [WordPress Tools](wp-tools.md#new-sites)). Update and
-repair disable and remove the units listed in `LEGACY_UNITS` in `cli/paths.ts`.
+repair disable and remove the units listed in `LEGACY_UNITS` in `lib/paths.ts`.
 
 The vhost is not the site yet. CloudPanel commits the site's row in its
 database after writing the vhost: half a second later on staging, for a
@@ -345,9 +478,25 @@ path it does -- so the addon's own router still decides what that is, and the
 HTML `/jobs/:id` page stays with each addon, because what a job looks like
 differs and how it is watched does not.
 
+Running a job is shared too, in `lib/job-store.ts`. `queueJob` checks the
+addon's conflict rule against every queued or running job, writes the record,
+releases the caller's lock and hands the job to a transient unit; the manager
+writes its record with the same `recordQueuedJob`. A runner sends its
+diagnostics into the job's log with `startJobTranscript`, and a write there
+that fails is dropped rather than sent to the journal. `setJobStep`,
+`failJob`/`recordJobFailure` and `markJobRunning`/`markJobDone` write the step,
+failure and state, the state last because a watcher stops at it. `emitJob`,
+`watchJob` and `jobViews` answer the `job`, `watch-job` and `jobs` verbs from
+the addon's own view of a record. A queued or running job counts as live while
+its unit is active or for its first five minutes, because `systemd-run` returns
+before the unit is necessarily visible; `pruneJobs` fails the others and the
+manager's one-job-at-a-time check uses the same `jobIsLive`. The addon keeps
+its step texts, its job's name in the failure messages and whether a failure
+records `finishedAt`, which Stager's does not.
+
 A job that works through sites -- WordPress Tools' checks and connections,
 Panel Tweaks' size measurement -- records its progress the same way, through
-`runSiteJob` in `cli/job-store.ts`: how many sites are done of how many, the
+`runSiteJob` in `lib/job-store.ts`: how many sites are done of how many, the
 one it is on, and a step such as `Measuring 12 of 40: site`, then its result.
 The page draws that as `jobProgressHtml` from `lib/app-ui.ts`, and the client
 half, `followJobProgress`, follows every bar on the page through the routes
@@ -355,7 +504,7 @@ above until the job ends. A page drawn while a job runs follows it again, so a
 reload picks it up. The addon keeps only what the job means: its title, what it
 disables meanwhile, and what it says when it ends.
 
-A job id is defined once, in `lib/job-id.ts`, which `cli/job-store.ts`
+A job id is defined once, in `lib/job-id.ts`, which `lib/job-store.ts`
 re-exports. The app services needed the syntax without the CLI's job
 orchestration; three copies of the pattern is how the checking side and the
 creating side drift apart. An id reaches a path join, so it is anchored at both
@@ -398,7 +547,7 @@ line, with the whole name on hover, and the actions column takes only its
 buttons' width, so the status columns keep their room. A switch that
 decides one thing for a whole page keeps its full size; one repeated per table
 row comes down to the height of the line beside it, so the control does not set
-the row's height. An addon supplies its brand, its own tabs, its script and any rule only it
+the row's height. An addon supplies its mount path, its script and any rule only it
 draws. The manager's own pages use the same two: disabling an addon asks through
 that dialog, naming the addon as its card does and saying that its data is kept,
 and a manager job that fails to start reports through the inline notice. The
@@ -420,7 +569,9 @@ actions across the width. On a wide screen a
 list of more than twelve rows with something below its card scrolls in a box of
 its own under a sticky heading; a list that ends the page grows with it. On a
 phone a list longer than ten sites shows the first ten and a button for the rest,
-so the settings below it stay close. Search covers every site, and Select all
+so the settings below it stay close; a page that ends with its list, such as
+Maintenance Mode's, leaves out the button (`FLEET_NONE_HTML` in place of
+`FLEET_FOOTER_HTML`) and shows every site. Search covers every site, and Select all
 and the bulk actions reach the sites past the cut too: those rows are marked
 `data-cut` rather than deselected. A second long list on the page,
 such as DNS's redirects, gets the same cut and button through
@@ -446,7 +597,7 @@ ticked site rows, and the value of every control marked `data-keep` (search and
 filter boxes). Addon clients report outcomes with `notify`, never `alert()`.
 Failed mutations leave the view intact.
 
-A page reached from a site's tab strip is drawn in site mode instead: the shell
+A page reached from a site's tab strip is drawn in site mode: the shell
 shows CloudPanel's site information and the applicable site tabs with the addon's
 tab active, and the page belongs to Sites rather than to Addons. `lib/site-context.ts`
 is the only description of that strip -- order, per-type conditions and routes
@@ -546,7 +697,8 @@ options that each turn on and off, highlighted while on, in groups (a status gro
 wherever the rows hold at least two values): within a group a row needs any
 ticked word of its `data-show`, across groups all of them, so WordPress and PHP
 together with Needs attention shows the WordPress and PHP sites that need
-attention. Sorting is by the headings, as on CloudPanel's Sites page with Panel
+attention. The menu opens over the page, above its button when the window has
+more room there. Sorting is by the headings, as on CloudPanel's Sites page with Panel
 Tweaks: each `th[data-sort]` sorts by its column on a click or Enter, and again
 reverses it. A row's `data-sort-<key>` gives the value where the cell's text
 would not -- a status column ranks by tone, worst first, and a select's text is
@@ -562,7 +714,7 @@ painted.
 
 ## Reading the panel database
 
-Root-side code reads CloudPanel's SQLite database through `cli/panel-db.ts`:
+Root-side code reads CloudPanel's SQLite database through `lib/panel-db.ts`:
 `withPanelDb` opens it read-only with a busy timeout and closes it, and
 `openPanelDatabase` holds it open for a caller that reads across several steps
 or writes. Each caller keeps its own query and says what an unreadable database

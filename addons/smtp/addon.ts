@@ -1,6 +1,7 @@
-import type { AddonDefinition } from "../../cli/addon-catalog";
+import type { AddonDefinition } from "../../lib/addon-definition";
 import { activateSmtp, deactivateSmtp, executeSmtpAction, runSmtpAction, type SmtpActionOptions } from "./action";
 import { handle } from "./app/index";
+import { runSmtpSubmit } from "./submit";
 
 const count = (value: number, word: string) => `${value} ${word}${value === 1 ? "" : "s"}`;
 
@@ -12,6 +13,8 @@ export const SMTP_ADDON: AddonDefinition = {
   targets: [],
   handler: handle,
   action: runSmtpAction,
+  // Postfix's sendmail for every site user, holding each to its own domains.
+  commands: { "smtp-submit": { run: (argv) => runSmtpSubmit(argv) } },
   deactivate: deactivateSmtp,
   activate: activateSmtp,
   newSites: {

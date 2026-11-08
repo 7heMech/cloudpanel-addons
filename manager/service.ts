@@ -2,9 +2,9 @@
 // addons use, so there is no second path to root.
 import { callGatewayAction, type ActionResult } from "../lib/gateway-client";
 import type { WebVerb } from "../lib/gateway-protocol";
-import type { ManagerJobView } from "../cli/manager-action";
+import type { ManagerJobView } from "./action";
+import type { PanelHold } from "../lib/panel-holds";
 
-/** The manager's own privileged verbs go over the same gateway the addons use. */
 export async function managerAction<T>(verb: WebVerb<"manager">, args: string[] = []): Promise<ActionResult<T>> {
   // The create verbs hand the work to systemd and return; nothing here waits
   // for an enable or an update to finish.
@@ -16,10 +16,25 @@ export async function latestManagerJobView(): Promise<ManagerJobView | null> {
   return result.ok && result.data ? result.data.job : null;
 }
 
+const HOLDS_TTL_MS = 30_000;
+let heldAt = 0;
+let held: PanelHold[] = [];
+
 /**
- * The release badges start after and the ones an administrator has opened.
- * When the gateway cannot say, every notice shows rather than hides.
+ * Nothing to show when the gateway cannot say: the page stays usable, and
+ * `clp-addons status` has the same list. Kept for half a minute, since it
+ * changes only with a package upgrade or `repair --rebaseline`, and each
+ * answer has root query dpkg.
  */
+export async function panelHolds(now = Date.now()): Promise<PanelHold[]> {
+  if (now - heldAt < HOLDS_TTL_MS) return held;
+  const result = await managerAction<PanelHold[]>("holds");
+  if (!result.ok || !Array.isArray(result.data)) return [];
+  heldAt = now;
+  held = result.data;
+  return held;
+}
+
 export async function seenNews(): Promise<{ since: string; seen: string[] }> {
   const result = await managerAction<{ since: string; seen: string[] }>("news-seen");
   const data = result.ok ? result.data : null;

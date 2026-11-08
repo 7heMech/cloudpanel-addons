@@ -1,5 +1,6 @@
+import { errorMessage } from "../../../lib/errors";
 import {
-  guardMutation, htmlResponse, jsonResponse, newCsrfToken, policyResponse, policyHeaders, safeDecodePathSegment, SECURITY_HEADERS, validateDomain, readBody, readMutation,
+  contentSecurityPolicy, guardMutation, htmlResponse, jsonResponse, newCsrfToken, policyResponse, policyHeaders, safeDecodePathSegment, validateDomain, readBody, readMutation,
 } from "../../../lib/app-http";
 import { callGatewayAction, type ActionResult } from "../../../lib/gateway-client";
 import { fetchPanelInfo } from "../../../lib/snapshot-reader";
@@ -22,20 +23,14 @@ const ASSET_BODIES: Record<keyof typeof XTERM_ASSETS, string> = {
 // The popup is the one page that loads scripts and a stylesheet from this
 // origin rather than inline: xterm.js is half a megabyte, and cached.
 function popupCsp(): string {
-  return SECURITY_HEADERS["Content-Security-Policy"]!
-    .replace("style-src 'unsafe-inline'", "style-src 'self' 'unsafe-inline'")
-    .replace("script-src 'unsafe-inline'", "script-src 'self' 'unsafe-inline'");
+  return contentSecurityPolicy({ "style-src": "'self' 'unsafe-inline'", "script-src": "'self' 'unsafe-inline'" });
 }
 
-export const terminalSessions = new TerminalSessions();
+const terminalSessions = new TerminalSessions();
 
-function json(body: unknown, status = 200): Response {
-  return jsonResponse(body, { status });
-}
+const NOT_FOUND = () => jsonResponse({ ok: false, error: "not found" }, 404);
 
-const NOT_FOUND = () => json({ ok: false, error: "not found" }, 404);
-
-export interface RootAccessView { granted: boolean; problem: string | null; unreadable?: true }
+interface RootAccessView { granted: boolean; problem: string | null; unreadable?: true }
 
 /** How long the header's answer is reused; the worker checks for itself either way. */
 const ROOT_ACCESS_TTL_MS = 60_000;
@@ -55,7 +50,7 @@ async function rootAccessOf(user: string | undefined, sessionId: string | null, 
   try {
     reply = await callGatewayAction("terminal", "root-access", [], undefined, { sessionId }) as ActionResult<RootAccessView>;
   } catch (error) {
-    reply = { ok: false, error: error instanceof Error ? error.message : String(error) };
+    reply = { ok: false, error: errorMessage(error) };
   }
   // A failed check is not an answer: it is not cached, and it does not say root never allowed this account.
   if (!reply.ok || !reply.data) return { granted: false, problem: `Root terminal access could not be checked: ${reply.error ?? "no answer"}` };
@@ -84,7 +79,7 @@ export async function handle(
       const sites = [...info.sites].sort((a, b) => a.domain.localeCompare(b.domain));
       return htmlResponse(layout("Terminal", dashboardView(sites, root, auth?.user ?? ""), updateNotice), { csrf: newCsrfToken() });
     } catch (error) {
-      const message = error instanceof Error ? error.message : String(error);
+      const message = errorMessage(error);
       return htmlResponse(layout("Terminal", inventoryUnavailableView(message), updateNotice), { status: 500 });
     }
   }
@@ -109,8 +104,16 @@ export async function handle(
   }
 
   // What the header's root shell control asks before it shows itself.
-  if (method === "GET" && path === "/api/root-access") return json({ ok: true, data: await rootAccessOf(auth?.user, panelSessionId(req)) });
+  if (method === "GET" && path === "/api/root-access") return jsonResponse({ ok: true, data: await rootAccessOf(auth?.user, panelSessionId(req)) });
 
+  if (method === "POST" && (path === "/api/root-auth-options" || path === "/api/root-auth-verify")) {
+    const body = await readMutation(req, 16 * 1024);
+    if (body instanceof Response) return body;
+    const sessionId = panelSessionId(req);
+    if (!auth?.user || !sessionId) return NOT_FOUND();
+    const result = await callGatewayAction("terminal", path === "/api/root-auth-options" ? "root-auth-options" : "root-auth-verify", [], JSON.stringify(body), { sessionId });
+    return jsonResponse(result, result.ok ? 200 : 400);
+  }
   if (!path.startsWith("/api/sessions")) return NOT_FOUND();
   // The manager's gate has already decided this is an administrator; a
   // session also belongs to the one sign-in that opened it.
@@ -126,11 +129,11 @@ export async function handle(
     const domain = root ? null : validateDomain(body.domain);
     const cols = size(body.cols);
     const rows = size(body.rows);
-    if ((!root && !domain) || cols === null || rows === null) return json({ ok: false, error: "a domain and a terminal size are required" }, 400);
-    const result = await terminalSessions.open(owner, { domain, cols, rows, sessionId });
+    if ((!root && !domain) || cols === null || rows === null) return jsonResponse({ ok: false, error: "a domain and a terminal size are required" }, 400);
+    const result = await terminalSessions.open(owner, { domain, cols, rows, sessionId, ticket: typeof body.ticket === "string" ? body.ticket : undefined });
     return result.ok
-      ? json({ ok: true, data: { id: result.id, user: result.user } })
-      : json({ ok: false, error: result.error }, 400);
+      ? jsonResponse({ ok: true, data: { id: result.id, user: result.user } })
+      : jsonResponse({ ok: false, error: result.error }, 400);
   }
 
   const match = path.match(/^\/api\/sessions\/([A-Za-z0-9_-]{22})(\/events|\/input)?$/);
@@ -149,18 +152,18 @@ export async function handle(
     if (body instanceof Response) return body;
     const data = body.data;
     const resize = body.size;
-    if (data !== undefined && typeof data !== "string") return json({ ok: false, error: "data must be text" }, 400);
+    if (data !== undefined && typeof data !== "string") return jsonResponse({ ok: false, error: "data must be text" }, 400);
     let dimensions: [number, number] | undefined;
     if (resize !== undefined) {
       const pair = Array.isArray(resize) && resize.length === 2 ? [size(resize[0]), size(resize[1])] : [null, null];
-      if (pair[0] === null || pair[1] === null) return json({ ok: false, error: "size must be [cols, rows]" }, 400);
+      if (pair[0] === null || pair[1] === null) return jsonResponse({ ok: false, error: "size must be [cols, rows]" }, 400);
       dimensions = [pair[0]!, pair[1]!];
     }
     let batch: { writer: string; seq: number } | undefined;
     if (body.writer !== undefined || body.seq !== undefined) {
       if (typeof body.writer !== "string" || !/^[a-z0-9]{1,32}$/.test(body.writer)
         || !Number.isSafeInteger(body.seq) || (body.seq as number) < 1) {
-        return json({ ok: false, error: "writer and seq must name one batch" }, 400);
+        return jsonResponse({ ok: false, error: "writer and seq must name one batch" }, 400);
       }
       batch = { writer: body.writer, seq: body.seq as number };
     }

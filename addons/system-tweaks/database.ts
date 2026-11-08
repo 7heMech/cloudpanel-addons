@@ -5,20 +5,28 @@
  * CloudPanel's own and a restart, undone if the server does not come back.
  * See "Database exposure" in docs/decisions/system-tweaks.md.
  */
-import { existsSync, lstatSync, readFileSync, readlinkSync, rmSync } from "node:fs";
+import { errorMessage } from "../../lib/errors";
+import { addonStateDir, ROOT_UID } from "../../lib/paths";
+import { existsSync, lstatSync, readFileSync, readlinkSync } from "node:fs";
 import { connect } from "node:net";
 import { join } from "node:path";
-import { failAction, runCommand, type CommandResult } from "../../cli/action-common";
-import { ROOT_UID, STATE_DIR } from "../../cli/paths";
+import { failAction } from "../../lib/action";
+import { requireSuccess, runCommand, type CommandResult } from "../../lib/command";
+import { daemonReload } from "../../lib/systemd";
+import { isTrustedFile } from "../../lib/trusted-file";
 import { inputVerdict, otherInputHooks, parseFilterTable } from "./input-rules";
-import { writeFileAtomic } from "../../lib/atomic-write";
-import { COMMAND_MS, DATABASE_SERVICE_MS } from "./limits";
+import { writeFileAtomic, writeOrRemove } from "../../lib/atomic-write";
+import { waitHealthy } from "./wait-healthy";
+import { COMMAND_MS, DATABASE_GATEWAY_TIMEOUT_MS, DATABASE_SERVICE_MS } from "./limits";
+import { applyThenSave, tweak } from "./tweak";
+import { badge, listing, lockableRow, settingRow, statusLine, warning } from "./app/rows";
+import { esc } from "../../lib/app-http";
 import {
   DATABASE_SOCKET_FILE, DATABASE_SOCKET_UNIT, parseSocketBindings, putSocketFile, readSocketFile, renderSocketFile,
   type SocketBindings,
 } from "./database-socket";
 
-export const DATABASE_MARKER = "# Managed by clp-addons System Tweaks: MySQL accepts connections from this server only.";
+const DATABASE_MARKER = "# Managed by clp-addons System Tweaks: MySQL accepts connections from this server only.";
 const LOOPBACK = "127.0.0.1";
 export const DATABASE_FILE = [
   DATABASE_MARKER,
@@ -33,7 +41,7 @@ const CHECK_TTL_MS = 15 * 60_000;
 /** The default passwords looked for: CloudPanel's package install sets root's to `root`. */
 const DEFAULTS = ["root", ""] as const;
 
-export interface DatabasePaths {
+interface DatabasePaths {
   /** The directories MySQL and MariaDB read last on Debian and Ubuntu; the first that exists is used. */
   confDirs: string[];
   fileName: string;
@@ -49,10 +57,10 @@ export interface DatabasePaths {
   rootUid: number;
 }
 
-export const DEFAULT_DATABASE_PATHS: DatabasePaths = {
+const DEFAULT_DATABASE_PATHS: DatabasePaths = {
   confDirs: ["/etc/mysql/mariadb.conf.d", "/etc/mysql/mysql.conf.d", "/etc/mysql/conf.d"],
   fileName: "zz-clp-addons-loopback.cnf",
-  checkFile: `${STATE_DIR}/system-tweaks/database-check.json`,
+  checkFile: `${addonStateDir("system-tweaks")}/database-check.json`,
   clients: ["/usr/bin/mariadb", "/usr/bin/mysql"],
   servers: ["/usr/sbin/mariadbd", "/usr/sbin/mysqld"],
   procRoot: "/proc",
@@ -72,7 +80,7 @@ export interface DatabaseOptions {
 }
 
 /** Where root logged in with a default password: over loopback, or as any other host would. */
-export interface DefaultPassword { from: "loopback" | "other hosts"; password: "root" | "empty" }
+interface DefaultPassword { from: "loopback" | "other hosts"; password: "root" | "empty" }
 
 export interface DatabaseStatus {
   /** Whether a MySQL or MariaDB server is listening on TCP here. */
@@ -227,8 +235,7 @@ interface StoredCheck { at: number; key: string; result: DatabaseStatus["default
 
 function readCheck(ctx: Context, key: string): StoredCheck["result"] | null {
   try {
-    const info = lstatSync(ctx.paths.checkFile);
-    if (!info.isFile() || info.uid !== ctx.paths.rootUid) return null;
+    if (!isTrustedFile(lstatSync(ctx.paths.checkFile), ctx.paths.rootUid, 0)) return null;
     const stored = JSON.parse(readFileSync(ctx.paths.checkFile, "utf8")) as StoredCheck;
     return stored.key === key && ctx.now() - stored.at < CHECK_TTL_MS ? stored.result : null;
   } catch {
@@ -470,33 +477,27 @@ async function unhealthy(ctx: Context, loopbackOnly: boolean, socket?: SocketSta
   return null;
 }
 
-async function waitHealthy(ctx: Context, loopbackOnly: boolean, socket?: SocketState | null): Promise<string | null> {
-  const deadline = ctx.now() + ctx.healthTimeoutMs;
-  let problem = await unhealthy(ctx, loopbackOnly, socket);
-  while (problem && !problem.final && ctx.now() < deadline) {
-    await ctx.sleep(1_000);
-    problem = await unhealthy(ctx, loopbackOnly, socket);
-  }
+async function serving(ctx: Context, loopbackOnly: boolean, socket?: SocketState | null): Promise<string | null> {
+  const problem = await waitHealthy(() => unhealthy(ctx, loopbackOnly, socket), {
+    now: ctx.now, sleep: ctx.sleep, timeoutMs: ctx.healthTimeoutMs, intervalMs: 1_000, final: (found) => found.final === true,
+  });
   return problem?.reason ?? null;
 }
 
 function put(path: string, content: string | null): void {
-  if (content === null) rmSync(path, { force: true });
-  else writeFileAtomic(path, content, { mode: 0o644, createParent: false });
+  writeOrRemove(path, content, { mode: 0o644 });
 }
 
 function restart(ctx: Context): void {
-  const result = ctx.run("systemctl", ["restart", ctx.paths.service]);
-  if (!result.ok) failAction(`restarting ${ctx.paths.service} failed: ${(result.stderr || result.stdout).trim() || `exit ${result.exitCode ?? "unknown"}`}`);
+  requireSuccess(ctx.run("systemctl", ["restart", ctx.paths.service]), `restarting ${ctx.paths.service} failed`);
 }
 
 function socketCommand(ctx: Context, args: string[]): void {
-  const result = ctx.run("systemctl", args);
-  if (!result.ok) failAction(`systemctl ${args.join(" ")} failed: ${(result.stderr || result.stdout).trim() || `exit ${result.exitCode ?? "unknown"}`}`);
+  requireSuccess(ctx.run("systemctl", args), `systemctl ${args.join(" ")} failed`);
 }
 
 function reloadSocket(ctx: Context, socket: SocketState, expected?: string[]): SocketState {
-  socketCommand(ctx, ["daemon-reload"]);
+  daemonReload(ctx.run);
   const updated = socketState(ctx, socket.service, readSocketFile(ctx.paths.socketFile, ctx.paths.rootUid), true)!;
   if (expected && JSON.stringify(updated.bindings.streams) !== JSON.stringify(expected)) {
     failAction(`another ${socket.unit} setting overrides the managed listeners; MySQL has not been restarted`);
@@ -563,7 +564,7 @@ export async function setDatabaseLoopback(on: boolean, options: DatabaseOptions 
       stopSocketAndService(ctx, socket);
       startPreviousUnits(ctx, socket);
     } else restart(ctx);
-    const problem = await waitHealthy(ctx, on, appliedSocket);
+    const problem = await serving(ctx, on, appliedSocket);
     if (problem) failAction(`MySQL did not come back ${on ? "on loopback only" : "on its own settings"}: ${problem}`);
   } catch (error) {
     let restored: string;
@@ -577,13 +578,13 @@ export async function setDatabaseLoopback(on: boolean, options: DatabaseOptions 
         stopSocketAndService(ctx, socket);
         startPreviousUnits(ctx, socket);
       } else restart(ctx);
-      const after = await waitHealthy(ctx, false, restoredSocket);
+      const after = await serving(ctx, false, restoredSocket);
       restored = after ? `the previous settings were put back, but ${after}` : "the previous settings are back";
     } catch (restoreError) {
       if (restoreError === error) throw error;
-      restored = `putting the previous settings back failed: ${restoreError instanceof Error ? restoreError.message : String(restoreError)}`;
+      restored = `putting the previous settings back failed: ${errorMessage(restoreError)}`;
     }
-    failAction(`${error instanceof Error ? error.message : String(error)}; ${restored}`);
+    failAction(`${errorMessage(error)}; ${restored}`);
   }
 }
 
@@ -608,7 +609,7 @@ export function reconcileDatabaseFile(on: boolean, options: DatabaseOptions = {}
     if (socketBefore !== socketAfter) {
       putSocketFile(ctx.paths.socketFile, socketAfter, ctx.paths.rootUid);
       reloaded = true;
-      socketCommand(ctx, ["daemon-reload"]);
+      daemonReload(ctx.run);
       if (socket && on) {
         const checked = socketState(ctx, socket.service, socketAfter)!;
         if (JSON.stringify(checked.bindings.streams) !== JSON.stringify(socket.bindings.loopback)) {
@@ -619,7 +620,7 @@ export function reconcileDatabaseFile(on: boolean, options: DatabaseOptions = {}
   } catch (error) {
     if (file && before !== after) put(file, before);
     if (socketBefore !== socketAfter) putSocketFile(ctx.paths.socketFile, socketBefore, ctx.paths.rootUid);
-    if (reloaded) socketCommand(ctx, ["daemon-reload"]);
+    if (reloaded) daemonReload(ctx.run);
     throw error;
   }
   if (socket || socketBefore !== null) {
@@ -628,3 +629,90 @@ export function reconcileDatabaseFile(on: boolean, options: DatabaseOptions = {}
   return on ? "MySQL loopback file put back; it applies at MySQL's next restart"
     : "MySQL loopback file removed; MySQL uses its own settings after its next restart";
 }
+
+type DatabaseState = (DatabaseStatus & { loopback: boolean }) | { error: string };
+
+function databaseOrError(loopback: boolean, options?: DatabaseOptions): DatabaseState {
+  try { return { ...databaseStatus(options), loopback }; }
+  catch (error) { return { error: errorMessage(error) }; }
+}
+
+function databaseLine(state: DatabaseStatus & { loopback: boolean }): string {
+  if (state.listenersUnknown) return `${badge("Unknown", "warn")} <span>Where MySQL listens could not be read: ${esc(state.listenersUnknown)}.</span>`;
+  if (!state.running) return `${badge("Not running", "plain")} <span>MySQL is not listening on TCP here.</span>`;
+  if (!state.exposed.length) return `${badge("This server only", "ok")} <span>MySQL accepts connections only from this server.</span>`;
+  const where = `Listens on ${listing(state.exposed)}.`;
+  if (state.loopback && state.fileInPlace) {
+    if (state.socketUnit) return `${badge("Not applied", "warn")} <span>${where} The saved restriction applies when MySQL and ${esc(state.socketUnit)} are stopped and started together.</span>`;
+    return `${badge("Not applied", "warn")} <span>${where} It moves to 127.0.0.1 at MySQL's next restart: systemctl restart mysql.</span>`;
+  }
+  if (state.firewall.state === "off") {
+    return `${badge("Open", "bad")} <span>${where} The firewall rules loaded now let anyone reach it, unless a firewall outside this server blocks it.</span>`;
+  }
+  if (state.firewall.state === "unknown") {
+    return `${badge("Unknown", "warn")} <span>${where} Whether the loaded firewall rules block it is unclear: ${esc(state.firewall.reason ?? "they could not be read")}.</span>`;
+  }
+  if (state.firewall.openTo.length) {
+    return `${badge("Open", "warn")} <span>${where} The loaded firewall rules allow ${listing(state.firewall.openTo)}.</span>`;
+  }
+  return `${badge("Firewalled", "warn")} <span>${where} The loaded firewall rules drop it, so the firewall is all that keeps it private.</span>`;
+}
+
+function defaultPasswordNote(state: DatabaseStatus): string {
+  const found = state.defaultPassword;
+  if ("error" in found) return `<p class="st-status hint">Root's password could not be checked: ${esc(found.error)}</p>`;
+  if (!state.running) return "";
+  if (!found.length) return `<p class="st-status hint">Root does not log in with a default password.</p>`;
+  const what = found.map((hit) => `${hit.password === "root" ? "the password root" : "no password"} from ${hit.from === "loopback" ? "this server" : "other hosts"}`);
+  return warning(`MySQL's root account logs in with ${listing(what)}. Change it in MySQL first, then enter the new password under
+    Admin → Settings → <a href="/admin/database-servers">Database Servers</a> on the 127.0.0.1 server. CloudPanel logs in with the password stored there,
+    so changing it only in MySQL breaks its Databases page.`);
+}
+
+function databaseRow(state: DatabaseState, locked: boolean): string {
+  const description = [
+    "Allows MySQL and MariaDB connections only from this server. Sites and the panel connect over localhost or a Unix socket and keep working. Apps on other machines lose access; reach it over an SSH tunnel instead.",
+    "Off by default: CloudPanel creates every database user for any host, so System Tweaks cannot tell whether something remote uses one. A change restarts MySQL, so sites lose their database for a few seconds.",
+  ];
+  if ("error" in state) {
+    return settingRow({ key: "databaseLoopback", title: "MySQL on this server only", description, control: "",
+      extra: `<div class="alert st-alert" role="alert">${esc(state.error)}</div>` });
+  }
+  const remote = state.remoteClients.length
+    ? warning(`Connected now from ${listing(state.remoteClients)}. ${state.loopback ? "" : "These lose access once MySQL accepts connections from this server only."}`)
+    : "";
+  return lockableRow("set-database-loopback", {
+    key: "databaseLoopback",
+    title: "MySQL on this server only",
+    description,
+    checked: state.loopback,
+    disabled: !state.running && !state.loopback,
+    onchange: "setDatabaseLoopback(this)",
+    extra: `${statusLine(databaseLine(state))}${remote}${defaultPasswordNote(state)}`,
+  }, locked);
+}
+
+type Options = { database?: DatabaseOptions };
+
+/** Have MySQL accept connections from this server only; off unless the operator asks, see above. */
+export const DATABASE_TWEAK = tweak<{ databaseLoopback: boolean }, Options, { database: DatabaseState }>()({
+  defaults: { databaseLoopback: false },
+  state: ({ options, settings }) => ({ database: databaseOrError(settings.databaseLoopback, options.database) }),
+  switch: {
+    verb: "set-database-loopback",
+    key: "databaseLoopback",
+    timeout: DATABASE_GATEWAY_TIMEOUT_MS,
+    // The settings are read first, so a file that cannot be trusted stops the change before MySQL restarts.
+    set: applyThenSave("databaseLoopback", (on, options: Options) => setDatabaseLoopback(on, options.database)),
+  },
+  repair: {
+    upkeep: { label: null, locked: true, run: ({ options, settings }) => reconcileDatabaseFile(settings.databaseLoopback, options.database) },
+  },
+  withdraw: { run: ({ options }) => { reconcileDatabaseFile(false, options.database); } },
+  restore: {
+    // It inspects MySQL's units, which can be mid-restart; the guards after it must still come back.
+    run: ({ options, settings }) => { if (settings.databaseLoopback) reconcileDatabaseFile(true, options.database); },
+    warning: (error) => `MySQL on this server only waits for the next repair: ${error}`,
+  },
+  row: ({ database }, locked) => databaseRow(database, locked),
+});

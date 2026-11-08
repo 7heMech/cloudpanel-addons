@@ -16,7 +16,8 @@ import { Database } from "bun:sqlite";
 import {
   runGitAction, validateBranch, validateDirectory, validatePostDeploy, validateRemote, WEBHOOK_TOKEN_RE,
 } from "../addons/git/action";
-import { ActionFailure, acquireFileLock } from "../cli/action-common";
+import { ActionFailure } from "../lib/action";
+import { acquireFileLock } from "../lib/file-lock";
 import { isTerminalJobState } from "../lib/job-id";
 
 const DOMAIN = "app.example.test";
@@ -146,7 +147,8 @@ test("the remote, branch, directory and command validators refuse what they shou
     try {
       run();
     } catch (error) {
-      return error instanceof ActionFailure ? error.message : `unexpected: ${String(error)}`;
+      if (!(error instanceof ActionFailure)) throw error;
+      return error.message;
     }
     return "";
   };

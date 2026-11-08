@@ -9,7 +9,8 @@ site using a lossless encoding of its lowercase domain, so a second click
 focuses the shell already open without confusing dots with hyphens; Shift-click
 opens another. On a phone it is a tab.
 
-Addons → Terminal lists each site with its user under the domain. From six
+Addons → Terminal lists each site with its user under the domain, and counts
+them beside the title the way Panel Tweaks counts the Sites page. From six
 sites a search appears, focused on a desktop, and Enter opens the only match.
 A worker refusal (see below) shows as "Couldn't open a terminal" with Try
 again, not as a session that ended.
@@ -39,8 +40,10 @@ Root names who may open a root shell with `clp-addons terminal root allow
 them. Nothing in the panel can change the list. An allowed administrator gets a
 terminal icon in both of CloudPanel's headers and in the addons' copy of it,
 just before the account menu, and a Root terminal button on Addons → Terminal.
+Below 760px the header has no room for a fourth icon beside the logo, so the
+icon gives way to a Root terminal item in the account menu, above Logout.
 The others get no icon; their button shows a notice naming the command, so
-they know whom to ask. The icon stays hidden until the page has asked
+they know whom to ask. The icon and the menu item stay hidden until the page has asked
 `/addons/terminal/api/root-access`. Every panel page asks, so the manager
 keeps root's answer a minute per user instead of starting a root process for
 each page; the Terminal page asks afresh, and the worker always checks.
@@ -78,8 +81,9 @@ Each grant is also pinned to CloudPanel's `user.id`, so a name deleted and
 created again is not the account root allowed. A deactivation, a demotion or
 2FA switched off refuses it while it lasts, and the button's notice says which;
 2FA set up again needs root to allow the account again. A password change does
-not touch it. A stolen session of the allowed administrator itself still gets a
-root shell for as long as that session lasts.
+not touch it. Opening a new shell also requires a fresh authenticator or trusted
+passkey check; a session cookie alone cannot start one. An existing shell can
+be reattached by the session that opened it.
 
 The grants are `/etc/clp-addons/terminal-root.json`, root's alone, `0600`, read
 through one descriptor opened without following links. Only a missing file
@@ -170,3 +174,44 @@ can start after.
 hash, and served from versioned paths with a year-long cache; the build
 minifies `xterm.css` like every other stylesheet. The popup is the
 one page whose content security policy allows `'self'` scripts and styles.
+
+### Verification when opening root
+
+Each new root shell requires a fresh six-digit authenticator code or a passkey
+pinned in the root grant. Reconnecting to an existing shell does not prompt.
+The popup offers both methods before creating the shell; site shells are unchanged.
+Root issues a random five-minute challenge bound to the gateway-verified session
+hash. Verification consumes the challenge, checks the current grant, and returns
+a one-use ticket valid for sixty seconds, bound to that session and grant.
+The popup sends the ticket with the shell request, the gateway hands it to the
+root worker in its environment rather than on its command line, and the worker
+consumes it before starting the shell. The journal's open line says which code
+or passkey earned it, and each failed verification is journaled with the
+account and the reason. An unexpected error while a code or signature is checked,
+such as CloudPanel holding its database, reaches the popup as a generic message
+and stays in the journal.
+
+Root serializes challenges, attempts, used TOTP steps and tickets in root-only
+state under `/var/lib/clp-addons/terminal/root-auth`. A code that matches no
+current step, and any passkey response Security Keys rejects (a bad signature,
+wrong origin, no user verification, a counter that went back, or data it cannot
+parse), counts against the account: five in a rolling five minutes, or twenty
+in a day, stop further prompts until the oldest ages out, so a stolen session
+cannot keep guessing unattended. The budget is the account's, so someone
+holding its session can spend it and keep its owner out; root ends that with
+`clp-addons terminal root allow <user>` (or `deny`), which clears the account's
+verification state. Successes, codes that are not six digits, codes refused for
+their step (below) and errors on root's side spend nothing.
+Codes use SHA-1 TOTP with thirty-second steps and one step of clock tolerance,
+and only a code from a later step than the prompt opened in counts; a step can
+succeed only once. CloudPanel keeps no record of the code it took at sign-in,
+and stamps the session when the password is accepted rather than when the code
+is (measured on 2.5.4-3), so neither tells a relayed sign-in code apart. A
+phishing proxy holding the session holds that code, but it is older than any
+prompt the session can open afterwards. The cost is a wait of up to thirty
+seconds for the next code each time a root shell is opened with a code;
+passkeys do not wait. Passkeys count only while Security Keys is
+on, as at sign-in, and only pinned keys the account still has are offered, only
+where the browser can use one, so not on an IP address. Passkey verification reuses Security Keys'
+signature, origin, user verification, account and policy checks and updates its
+signature counter. The existing grant and session rechecks remain in force.

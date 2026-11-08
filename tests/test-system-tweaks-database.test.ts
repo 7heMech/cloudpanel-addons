@@ -1,8 +1,10 @@
 import { afterEach, expect, test } from "bun:test";
-import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
+import {
+  chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync,
+} from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import type { CommandResult } from "../cli/action-common";
+import type { CommandResult } from "../lib/command";
 import {
   DATABASE_FILE, databaseStatus, parseListeners, parseRemoteClients, reconcileDatabaseFile, setDatabaseLoopback,
   type DatabaseOptions,
@@ -10,7 +12,8 @@ import {
 import { inputVerdict, otherInputHooks, parseFilterTable } from "../addons/system-tweaks/input-rules";
 import { dashboardView } from "../addons/system-tweaks/app/views";
 import { updatesStatus } from "../addons/system-tweaks/updates";
-import { executeSystemTweaksAction, type SystemTweaksState } from "../addons/system-tweaks/action";
+import { executeSystemTweaksAction } from "../addons/system-tweaks/action";
+import type { SystemTweaksState } from "../addons/system-tweaks/registry";
 import { parseSocketBindings, renderSocketFile } from "../addons/system-tweaks/database-socket";
 
 const dirs: string[] = [];
@@ -497,15 +500,16 @@ test("an operator's writable drop-in directory blocks writing there, not withdra
 });
 
 test("unrelated activation units, Accept=yes and unsupported descriptors leave configuration alone", async () => {
-  for (const setup of [
-    (s: ReturnType<typeof socketServer>) => { s.triggeredBy += " unrelated.socket"; },
-    (s: ReturnType<typeof socketServer>) => { s.socket.accept = "yes"; },
-    (s: ReturnType<typeof socketServer>) => { s.socket.triggers = "other.service"; },
-    (s: ReturnType<typeof socketServer>) => { s.socket.configured = ["vsock:3:3306"]; },
-  ]) {
+  const notExclusive = "mariadb.socket does not exclusively activate mariadb.service with Accept=no; it was left unchanged";
+  for (const [setup, message] of [
+    [(s: ReturnType<typeof socketServer>) => { s.triggeredBy += " unrelated.socket"; }, "MySQL uses unsupported activation socket unrelated.socket; it was left unchanged"],
+    [(s: ReturnType<typeof socketServer>) => { s.socket.accept = "yes"; }, notExclusive],
+    [(s: ReturnType<typeof socketServer>) => { s.socket.triggers = "other.service"; }, notExclusive],
+    [(s: ReturnType<typeof socketServer>) => { s.socket.configured = ["vsock:3:3306"]; }, "unsupported mariadb.socket listener; expected a literal Unix socket or TCP address"],
+  ] as const) {
     const s = socketServer();
     setup(s);
-    await expect(setDatabaseLoopback(true, s.options)).rejects.toThrow();
+    await expect(setDatabaseLoopback(true, s.options)).rejects.toThrow(message);
     expect(existsSync(s.file)).toBe(false);
     expect(existsSync(s.options.paths!.socketFile!)).toBe(false);
     expect(s.calls.some((call) => ["stop", "start", "restart", "daemon-reload"].includes(call[1]!))).toBe(false);

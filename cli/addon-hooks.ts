@@ -1,52 +1,28 @@
-// The upkeep `repair` and the reconcile timer run, per addon and for the manager's own job records.
+import { errorMessage } from "../lib/errors";
+import { type AddonHook, type AddonSpec } from "../lib/addon-definition";
+import { log } from "../lib/log";
 
-import { type AddonHook, type AddonSpec, addonCertificates, addonFirewall, addonRepairs, addonNewSites } from "./addon-catalog";
-import { pruneManagerJobs } from "./manager-action";
-import { log } from "./util";
-/**
- * Run each installed addon's own upkeep, in catalog order.
- *
- * Stager's prune and Instatic's were called by name from `cmdRepair`, which
- * meant repair knew which addons had upkeep and what it was called. An addon
- * now declares its own, and none of it is allowed to fail the rest of repair:
- * this is self-healing, not a precondition for anything.
- */
-export async function runAddonRepairs(
-  installed: AddonSpec[],
-  options?: Record<string, unknown>,
-): Promise<void> {
-  for (const spec of addonRepairs(installed)) {
-    const task = spec.repair!;
-    try {
-      const line = await task.run(options);
-      if (line) log.ok(`${task.label}: ${line}`);
-    } catch (error) {
-      log.warn(`${task.label} failed: ${error instanceof Error ? error.message : String(error)}`);
-    }
-  }
+/** None of it may fail the rest of repair: this is self-healing, not a precondition for anything. */
+export async function runAddonRepairs(installed: AddonSpec[], options?: Record<string, unknown>): Promise<void> {
+  await runHooks(installed.flatMap((spec) => spec.repair ? [spec.repair] : []), options);
 }
 
-/** How long one addon's new-site work runs before the next starts beside it. */
-export const NEW_SITE_HEAD_START_MS = 15_000;
+const NEW_SITE_HEAD_START_MS = 15_000;
 
 /**
- * What the new-site watcher runs: each installed addon's work for sites
- * CloudPanel has just created, in catalog order. Each gets a head start rather
- * than the whole of the one before it, so DNS normally writes first, but DNS
- * waiting on its lock behind a long fleet check does not keep SMTP Relay from
- * binding the site's mail login for minutes. One addon failing does not keep
- * the next from its turn.
+ * Each addon gets a head start rather than the whole of the one before it, so
+ * DNS normally writes first, but DNS waiting on its lock behind a long fleet
+ * check does not keep SMTP Relay from binding the site's mail login for minutes.
  */
 export async function runNewSiteWork(installed: AddonSpec[], headStartMs = NEW_SITE_HEAD_START_MS): Promise<void> {
   const running: Promise<void>[] = [];
-  for (const spec of addonNewSites(installed)) {
-    const task = spec.newSites!;
+  for (const task of installed.flatMap((spec) => spec.newSites ? [spec.newSites] : [])) {
     const done = (async () => {
       try {
         const line = await task.run();
         if (line) log.ok(`${task.label}: ${line}`);
       } catch (error) {
-        log.warn(`${task.label} failed: ${error instanceof Error ? error.message : String(error)}`);
+        log.warn(`${task.label} failed: ${errorMessage(error)}`);
       }
     })();
     running.push(done);
@@ -55,21 +31,16 @@ export async function runNewSiteWork(installed: AddonSpec[], headStartMs = NEW_S
   await Promise.all(running);
 }
 
-/**
- * Run each installed addon's `resumePending`, and say whether any still waits
- * for a new site. One that fails is taken to be waiting, so it runs again.
- */
 export async function resumePendingNewSites(installed: AddonSpec[]): Promise<boolean> {
   let waiting = false;
-  for (const spec of addonNewSites(installed)) {
-    const task = spec.newSites!;
+  for (const task of installed.flatMap((spec) => spec.newSites ? [spec.newSites] : [])) {
     if (!task.resumePending) continue;
     try {
       const result = await task.resumePending();
       if (result.line) log.ok(`${task.label}: ${result.line}`);
       waiting ||= result.waiting;
     } catch (error) {
-      log.warn(`${task.label} failed: ${error instanceof Error ? error.message : String(error)}`);
+      log.warn(`${task.label} failed: ${errorMessage(error)}`);
       waiting = true;
     }
   }
@@ -77,41 +48,24 @@ export async function resumePendingNewSites(installed: AddonSpec[]): Promise<boo
 }
 
 /**
- * What the certificate watcher runs: each installed addon's work for a site
- * whose certificate CloudPanel has just written, in catalog order, one after
- * another. It is for work that waits on a site's HTTPS, and is cheap when there
- * is none, since every renewal wakes it too.
+ * For work that waits on a site's HTTPS. It must be cheap when there is none:
+ * every certificate CloudPanel writes wakes it, renewals included.
  */
 export async function runCertificateWork(installed: AddonSpec[]): Promise<void> {
-  await runHooks(addonCertificates(installed).map((spec) => spec.certificates!));
+  await runHooks(installed.flatMap((spec) => spec.certificates ? [spec.certificates] : []));
 }
 
-/** What the firewall watcher runs: each installed addon's work for ufw's rules, in catalog order. */
 export async function runFirewallWork(installed: AddonSpec[]): Promise<void> {
-  await runHooks(addonFirewall(installed).map((spec) => spec.firewall!));
+  await runHooks(installed.flatMap((spec) => spec.firewall ? [spec.firewall] : []));
 }
 
-async function runHooks(tasks: AddonHook[]): Promise<void> {
+async function runHooks(tasks: AddonHook[], options?: Record<string, unknown>): Promise<void> {
   for (const task of tasks) {
     try {
-      const line = await task.run();
+      const line = await task.run(options);
       if (line) log.ok(`${task.label}: ${line}`);
     } catch (error) {
-      log.warn(`${task.label} failed: ${error instanceof Error ? error.message : String(error)}`);
+      log.warn(`${task.label} failed: ${errorMessage(error)}`);
     }
-  }
-}
-
-/**
- * The manager's own job records need the same upkeep the addons' do: a runner
- * killed part-way (a reboot during an update) otherwise leaves a record that
- * says "running" forever, and the index page would keep following it.
- */
-export function runManagerRepair(): void {
-  try {
-    const { removed, stuck } = pruneManagerJobs();
-    if (removed || stuck) log.ok(`manager job records: ${removed} expired, ${stuck} marked failed`);
-  } catch (error) {
-    log.warn(`manager (prune) failed: ${error instanceof Error ? error.message : String(error)}`);
   }
 }

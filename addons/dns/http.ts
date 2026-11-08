@@ -39,6 +39,7 @@ export class ProviderHttp {
     private readonly fetcher: ApiFetch = fetch,
     /** Shared by every client of one provider in a run, so one 429 stops them all. */
     readonly backoff: { until: number } = { until: 0 },
+    private readonly timeoutMs = TIMEOUT_MS,
   ) {}
 
   /** The parsed JSON body and the status, whatever the status was. */
@@ -48,7 +49,7 @@ export class ProviderHttp {
       throw new ProviderError(this.provider, `asked to wait until ${new Date(this.backoff.until).toISOString()}`, 429, this.backoff.until);
     }
     const controller = new AbortController();
-    const timer = setTimeout(() => controller.abort(), TIMEOUT_MS);
+    const timer = setTimeout(() => controller.abort(), this.timeoutMs);
     let response: Response | undefined;
     try {
       response = await this.fetcher(`${this.base}${path}`, {
@@ -93,7 +94,6 @@ export class ProviderHttp {
   }
 }
 
-/** Removes every secret from text that may reach a page or a log. */
 export function redact(text: string, secrets: string[]): string {
   let clean = text;
   for (const secret of secrets) if (secret) clean = clean.split(secret).join("[redacted]");

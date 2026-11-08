@@ -18,27 +18,32 @@
  * to find the next free port; changing any of it here would make the panel and
  * the running pool disagree about the same site.
  */
-import { resourceMemoryState, setResourceMemory, type ResourceMemoryOptions, type ResourceMemoryState } from "./memory-settings";
-import { openPanelDatabase } from "../../cli/panel-db";
+import { LOCK_DIR, addonConfigFile, addonStateDir, PANEL_DB } from "../../lib/paths";
+import {
+  resourceMemoryState, setResourceMemory, type ResourceMemoryOptions, type ResourceMemoryState,
+} from "./memory-settings";
+import { openPanelDatabase } from "../../lib/panel-db";
 import { RESOURCE_LIMITS_VERBS } from "./verbs";
 import { Database } from "bun:sqlite";
 import { chmodSync, existsSync, lstatSync, mkdirSync, readFileSync } from "node:fs";
 import { dirname, join } from "node:path";
-import {
-  ActionFailure, replyToAction, errorMessage, failAction, readJsonRequest, nameSlug, oneLine, runCommand, validateDomain, withFileLock,
-  type CommandResult,
-} from "../../cli/action-common";
-import { CONFIG_DIR, PANEL_DB, STATE_DIR } from "../../cli/paths";
-import type { TmpCleanupOptions } from "../../cli/tmp-cleanup";
+import { ActionFailure, replyToAction, failAction, readJsonRequest } from "../../lib/action";
+import { errorMessage } from "../../lib/errors";
+import { nameSlug, oneLine } from "../../lib/validate";
+import { runCommand, type CommandResult } from "../../lib/command";
+import { validateDomain } from "../../lib/panel-identity";
+import { withFileLock } from "../../lib/file-lock";
+import type { TmpCleanupOptions } from "../../lib/tmp-cleanup";
 import { writeFileAtomic } from "../../lib/atomic-write";
+import { isTrustedFile } from "../../lib/trusted-file";
 
 const POLICY_VERSION = 1;
 
-export type ResourceLimitsVerb = keyof typeof RESOURCE_LIMITS_VERBS;
+type ResourceLimitsVerb = keyof typeof RESOURCE_LIMITS_VERBS;
 
 /** The process manager modes php-fpm accepts. */
 export const PM_MODES = ["static", "dynamic", "ondemand"] as const;
-export type PmMode = (typeof PM_MODES)[number];
+type PmMode = (typeof PM_MODES)[number];
 
 /**
  * The directives this addon owns. Everything else in a pool file is either
@@ -77,7 +82,6 @@ export const STOCK_PROFILE: PoolProfile = {
   rlimitFiles: 131072,
 };
 
-/** A named set of limits, and the sites assigned to it follow it. */
 export interface PoolCategory {
   id: string;
   name: string;
@@ -118,7 +122,6 @@ export const PRESET_CATEGORIES: PoolCategory[] = [
   },
 ];
 
-/** The safe starting point for an operator-created category. */
 export const DEFAULT_CATEGORY_PROFILE: PoolProfile = { ...PRESET_CATEGORIES[0]!.profile };
 
 export interface PoolSiteState {
@@ -130,7 +133,6 @@ export interface PoolSiteState {
   memoryLimitMb: number | null;
   /** What the pool file holds now. */
   current: PoolProfile;
-  /** The category this site is in, or null when it is in none. */
   categoryId: string | null;
   categoryName: string | null;
   /** A site whose pool file no longer matches the category it is in. */
@@ -202,11 +204,11 @@ export const DEFAULT_RESOURCE_LIMITS_ACTION_PATHS: ResourceLimitsActionPaths = {
   panelDb: PANEL_DB,
   phpRoot: "/etc/php",
   sbinDir: "/usr/sbin",
-  policyFile: `${STATE_DIR}/resource-limits/policy.json`,
-  lockFile: "/run/lock/clp-addons/resource-limits.lock",
+  policyFile: `${addonStateDir("resource-limits")}/policy.json`,
+  lockFile: `${LOCK_DIR}/resource-limits.lock`,
   systemctl: "systemctl",
   rootUid: 0,
-  systemTweaksConfig: `${CONFIG_DIR}/system-tweaks.conf`,
+  systemTweaksConfig: addonConfigFile("system-tweaks"),
 };
 
 function pathsFor(options: ResourceLimitsActionOptions): ResourceLimitsActionPaths {
@@ -260,7 +262,6 @@ function wholeNumber(value: unknown, field: Exclude<keyof PoolProfile, "pm">): n
   return value;
 }
 
-/** Reads one profile out of untrusted JSON, or refuses it with a reason. */
 export function parseProfile(value: unknown): PoolProfile {
   if (typeof value !== "object" || value === null || Array.isArray(value)) {
     failAction("a profile must be a JSON object");
@@ -309,7 +310,7 @@ const NAME_MAX = 40;
 const DESCRIPTION_MAX = 240;
 
 /** A stable category id from the name it was created with; see nameSlug. */
-export function categoryIdFor(name: string): string {
+function categoryIdFor(name: string): string {
   return nameSlug(name, "a category name", NAME_MAX);
 }
 
@@ -344,7 +345,6 @@ const MANAGED_KEYS = [
 
 const MANAGED = new Set<string>(MANAGED_KEYS);
 
-/** The directive a pool-file line sets, or null for a comment or blank. */
 function directiveKey(line: string): string | null {
   const trimmed = line.trim();
   if (!trimmed || trimmed.startsWith(";") || trimmed.startsWith("#") || trimmed.startsWith("[")) return null;
@@ -402,7 +402,7 @@ export function readProfileFromPool(content: string): PoolProfile {
  * `pm.start_servers` under `ondemand`, and a warning in the pool that serves a
  * customer's site is noise the operator did not ask for.
  */
-export function poolDirectives(profile: PoolProfile): Map<string, string> {
+function poolDirectives(profile: PoolProfile): Map<string, string> {
   const out = new Map<string, string>([
     ["pm", profile.pm],
     ["pm.max_children", String(profile.maxChildren)],
@@ -425,7 +425,7 @@ export function poolDirectives(profile: PoolProfile): Map<string, string> {
  * Whether two profiles write the same pool. A category keeps the spare-server
  * numbers it has under `ondemand`, which never reach the file.
  */
-export function sameDirectives(a: PoolProfile, b: PoolProfile): boolean {
+function sameDirectives(a: PoolProfile, b: PoolProfile): boolean {
   const left = poolDirectives(a);
   const right = poolDirectives(b);
   return left.size === right.size && [...left].every(([key, value]) => right.get(key) === value);
@@ -505,7 +505,7 @@ function trustedPoolFile(path: string, expectedUid: number): TrustedFile {
   } catch {
     failAction(`this site has no PHP-FPM pool file: ${path}`);
   }
-  if (!stat.isFile() || stat.isSymbolicLink() || stat.uid !== expectedUid || (stat.mode & 0o022) !== 0) {
+  if (!isTrustedFile(stat, expectedUid)) {
     failAction(`refusing untrusted PHP-FPM pool file ${path}`);
   }
   return {
@@ -627,7 +627,7 @@ function readPolicy(path: string, expectedUid: number): Policy {
   let raw: unknown;
   try {
     const stat = lstatSync(path);
-    if (!stat.isFile() || stat.isSymbolicLink() || stat.uid !== expectedUid || (stat.mode & 0o022) !== 0) {
+    if (!isTrustedFile(stat, expectedUid)) {
       failAction("the Resource limits policy file is not a trusted regular file");
     }
     raw = JSON.parse(readFileSync(path, "utf8"));
@@ -658,7 +658,7 @@ function writePolicy(path: string, policy: Policy, expectedUid: number): void {
   let gid = process.getgid?.() ?? 0;
   if (existsSync(path)) {
     const stat = lstatSync(path);
-    if (!stat.isFile() || stat.isSymbolicLink() || stat.uid !== expectedUid || (stat.mode & 0o022) !== 0) {
+    if (!isTrustedFile(stat, expectedUid)) {
       failAction("the Resource limits policy file is not a trusted regular file");
     }
     uid = stat.uid;
@@ -714,9 +714,7 @@ function applyPhpVersion(
 }
 
 interface ApplyOutcome {
-  /** Domains whose pool file was rewritten. */
   changed: Set<string>;
-  /** Domains left as they were, with the reason. */
   failed: Map<string, string>;
 }
 
@@ -785,7 +783,7 @@ function failureLines(outcome: ApplyOutcome): string[] {
 function readableProfile(poolFile: string, expectedUid: number): PoolProfile {
   try {
     const stat = lstatSync(poolFile);
-    if (!stat.isFile() || stat.isSymbolicLink() || stat.uid !== expectedUid) return { ...STOCK_PROFILE };
+    if (!isTrustedFile(stat, expectedUid, 0)) return { ...STOCK_PROFILE };
     return readProfileFromPool(readFileSync(poolFile, "utf8"));
   } catch {
     return { ...STOCK_PROFILE };
@@ -982,7 +980,7 @@ export interface ReconcileResult {
  * template, so a site in a category silently returns to `pm.max_children = 250`
  * the moment somebody moves it from 8.2 to 8.3.
  */
-export async function reconcileResourceLimits(
+async function reconcileResourceLimits(
   paths: ResourceLimitsActionPaths = DEFAULT_RESOURCE_LIMITS_ACTION_PATHS,
   command: (command: string, args: string[]) => CommandResult = runCommand,
 ): Promise<ReconcileResult> {

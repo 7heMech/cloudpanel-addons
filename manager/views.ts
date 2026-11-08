@@ -1,20 +1,20 @@
 // The Addons page: the card list, the update page, and the job card a
 // mutation leaves behind.
-import { ADDONS, addonHandler, addonNews } from "../cli/addon-catalog";
-import { CLI_VERSION } from "../cli/release";
+import { ADDONS, addonHandler, addonNews } from "../addons/catalog";
+import { CLI_VERSION, DEV_VERSION } from "../lib/version";
 import { esc, escJs, htmlResponse } from "../lib/app-http";
 import { JOB_WATCH_JS, renderLayout } from "../lib/app-ui";
 import { mountPath } from "../lib/mount";
 import { lockState } from "../lib/root-locks";
 import { UPDATE_PATH, changelogUrl } from "../lib/update-ui";
 import type { CliUpdateInfo } from "../lib/update-check";
-import type { ManagerJobView } from "../cli/manager-action";
+import type { ManagerJobView } from "./action";
+import { type PanelHold, UPDATES_GUIDE_URL, holdAdvice, holdSummary } from "../lib/panel-holds";
 
 import MANAGER_INDEX_CSS from "./views.css" with { type: "text" };
 
 import MANAGER_INDEX_JS from "./views.client.js" with { type: "text" };
 
-/** One row of the Enabled or Available list, for a known addon, or nothing for an unknown name. */
 function addonRow(name: string, enabled: boolean, job: ManagerJobView | null, news: { version: string; since: string; seen: string[] }): string {
   const spec = ADDONS[name];
   if (!spec) return "";
@@ -24,11 +24,12 @@ function addonRow(name: string, enabled: boolean, job: ManagerJobView | null, ne
   const addonJob = live && live.addon === spec.name ? live : null;
   const heading = enabled && href ? `<a href="${esc(href)}">${esc(title)}</a>` : esc(title);
   const lock = lockState(spec.name);
-  const toggle = lock !== "unlocked"
-    ? `<span class="badge" title="${lock === "damaged" ? `The lock file cannot be read or trusted; run clp-addons lock on the server` : `Run clp-addons unlock ${esc(spec.name)} on the server to ${enabled ? "disable" : "enable"} it`}">Locked by root</span>`
-    : enabled
-      ? `<button class="btn" type="button" onclick="disableAddon('${escJs(spec.name)}', '${escJs(title)}', this)" aria-label="Disable ${esc(title)}">Disable</button>`
-      : `<button class="btn" type="button" onclick="enableAddon('${escJs(spec.name)}', this)" aria-label="Enable ${esc(title)}">Enable</button>`;
+  // A lock refuses only disabling: enabling a locked addon adds its protection.
+  const toggle = !enabled
+    ? `<button class="btn" type="button" onclick="enableAddon('${escJs(spec.name)}', this)" aria-label="Enable ${esc(title)}">Enable</button>`
+    : lock !== "unlocked"
+      ? `<span class="badge" title="${lock === "damaged" ? `The lock file cannot be read or trusted; run clp-addons lock on the server` : `Run clp-addons unlock ${esc(spec.name)} on the server to disable it`}">Locked by root</span>`
+      : `<button class="btn" type="button" onclick="disableAddon('${escJs(spec.name)}', '${escJs(title)}', this)" aria-label="Disable ${esc(title)}">Disable</button>`;
   const actions = enabled && href
     ? `<a class="btn btn-primary" href="${esc(href)}" aria-label="Open ${esc(title)}">Open</a>
       ${toggle}`
@@ -52,8 +53,6 @@ function liveManagerJob(job: ManagerJobView | null): ManagerJobView | null {
 }
 
 /**
- * Live manager progress stays with the card whose action started the job.
- *
  * The log is behind a summary rather than gone: enabling an addon that has to
  * install Docker spends minutes on one step, and what it is doing is in the
  * log. Closed by default, because the state and the step are what a card has
@@ -86,12 +85,10 @@ function managerJobBlock(job: ManagerJobView | null, homeCard: string | null): s
   return `<article class="card" data-manager-job-card="${esc(managerJobKey(live))}">${managerJobStatus(live)}</article>`;
 }
 
-/** The card a job belongs to: the addon it is about, or the update page's own. */
 function managerJobKey(job: ManagerJobView): string {
   return job.kind === "update" ? "update" : job.addon;
 }
 
-/** Failure details survive navigation without creating a second progress card. */
 function managerJobFailure(job: ManagerJobView | null): string {
   const failure = job && job.state === "failed" ? job : null;
   const failureBlock = failure
@@ -105,11 +102,28 @@ function managerJobFailure(job: ManagerJobView | null): string {
 
 type ManagerPageOptions = { job?: ManagerJobView | null; csrf?: string };
 
-/** The manager index: enabled addons, bundled addons available to enable, and progress. */
+/**
+ * What the addons are leaving alone in CloudPanel's files, and why. A notice
+ * rather than an alert: the panel itself is fine, and nothing is broken that
+ * the addons wrote.
+ */
+function panelHoldsNotice(holds: PanelHold[]): string {
+  if (!holds.length) return "";
+  const command = (text: string) => esc(text).replace(/clp-addons (?:repair --rebaseline|repair|update)/g, "<code>$&</code>");
+  const items = holds.map((hold) => `<li><strong>${esc(hold.addons.join(", "))}</strong>
+    <span>${esc(holdSummary(hold))} ${command(holdAdvice(hold))}</span></li>`).join("");
+  return `<section class="notice panel-holds" aria-label="Paused until checked">
+  <h2>Paused until checked</h2>
+  <p>These files changed in a way the addons cannot prove their additions still fit, so they are left as they are. Everything else keeps working.</p>
+  <ul>${items}</ul>
+  <a href="${esc(UPDATES_GUIDE_URL)}" target="_blank" rel="noopener noreferrer">What happens when CloudPanel updates</a>
+</section>`;
+}
+
 export function indexPage(
   enabled: string[],
   update?: { current: string; latest: string } | null,
-  options: ManagerPageOptions & { available?: string[]; version?: string; since?: string; seen?: string[] } = {},
+  options: ManagerPageOptions & { available?: string[]; version?: string; since?: string; seen?: string[]; holds?: PanelHold[] } = {},
 ): Response {
   const available = options.available ?? [];
   const news = { version: options.version ?? CLI_VERSION, since: options.since ?? "0.0.0", seen: options.seen ?? [] };
@@ -126,6 +140,7 @@ export function indexPage(
   const readAll = unread ? `<button class="btn" type="button" onclick="readAllNews(this)">Mark all read</button>` : "";
   const content = `<div class="page-heading"><h1>Addons</h1><div class="page-actions">${readAll}<a class="btn" href="${UPDATE_PATH}">Updates</a></div></div>` +
     managerJobFailure(options.job ?? null) +
+    panelHoldsNotice(options.holds ?? []) +
     managerJobBlock(options.job ?? null, claimed) +
     search +
     (enabled.length
@@ -147,7 +162,7 @@ export function updatePage(
 ): Response {
   const update = info?.hasUpdate ? info : null;
   const live = liveManagerJob(options.job ?? null);
-  const development = currentVersion === "0.0.0-dev";
+  const development = currentVersion === DEV_VERSION;
   const status = update ? "Update available" : info ? "Up to date" : development ? "Development build" : "Unable to check";
   const message = update
     ? "Install the latest release of CloudPanel Addons. The Addons manager will restart briefly during the update."
@@ -185,9 +200,7 @@ function managerPage(
   const job = options.job;
   const live = liveManagerJob(job ?? null);
   return htmlResponse(renderLayout(title, content, {
-    brand: "CloudPanel Addons",
     base: "/addons",
-    nav: [],
     css: MANAGER_INDEX_CSS,
     script: MANAGER_INDEX_JS + JOB_WATCH_JS + (live ? `
 const managerJobTarget = CLP_ROOT.querySelector('[data-manager-job-status]');
@@ -197,7 +210,6 @@ watchJob('${escJs(live.id)}', managerJobTarget ? managerJobTarget.closest('[data
   }), { csrf: options.csrf });
 }
 
-/** How a job is named in the UI: "Enabling stager", "Updating clp-addons". */
 function describeJob(job: ManagerJobView): string {
   if (job.kind === "update") return "Updating clp-addons";
   const verb = job.kind === "disable" ? "Disabling" : "Enabling";

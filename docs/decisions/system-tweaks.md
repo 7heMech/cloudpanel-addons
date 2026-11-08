@@ -18,8 +18,10 @@ addresses they block; SSH login, with the login message. MySQL access belongs wi
 MySQL and Redis sizing belong to Resource Limits alongside PHP worker limits. Each row says what it does; the
 reasons are here. The Nginx, MySQL, CloudPanel and reboot rows appear only once
 System Tweaks' own switch is on, since they change nothing before. The
-repositories and each PHP-FPM's upload-progress value fold into a summary that
-opens, and the summary says when something needs a look.
+repositories, each PHP-FPM's upload-progress value and the blocked addresses
+fold into a summary that opens, and the summary says when something needs a
+look. They start closed; the blocked addresses, once opened, stay open across an
+Unblock.
 
 Three states would otherwise do nothing visible, so the page calls them out:
 updates that run but leave CloudPanel's PHP uncovered; a reboot required for
@@ -44,6 +46,36 @@ stop short of the switch column, and a long one takes a line per thought.
 
 Failed runs show a short summary with expandable log details, including the
 failed package URL when unattended-upgrades logs one.
+
+### Lock settings
+
+The page header's **Lock settings**, top right like the other addons' header
+actions, is one action on the server, the `lock-settings` verb: every Hardening
+and Failed logins switch on, the two off by default (MySQL on this server only
+and the SSH jail) included, then [root's lock](security.md#root-locks) on System
+Tweaks. Its confirmation says what that does, that MySQL restarts and that only
+`clp-addons unlock system-tweaks`, from a root shell or the panel's root
+terminal, undoes it. The verb holds the settings lock throughout, so no change
+lands between the switches and the lock. Before changing anything it stops if
+root cannot trust the lock file, or if fail2ban is not installed or its unit is
+masked: jails switched on then are only saved for later, and the lock would
+report protections that are not running. It tries every other switch, then
+MySQL only if all of them came on, since its restart cuts remote clients and is
+not spent on a lock that will be refused. It locks only when all came on;
+otherwise it names what failed and locks nothing, leaving on what came on. The
+lock never holds a switch off. While it runs, the Working line sits under the
+page heading. Once locked, the header shows **Locked by root** instead, and a
+notice says how to unlock. It does not touch the panel's PHP; see below.
+
+Enabling System Tweaks under a lock, which a new install has, starts it from
+its defaults: before the activation applies anything, each lockable setting is
+raised to its default, and one already on stays on. MySQL on this server only
+and the SSH jail stay as they were, off unless chosen, and can be switched on
+from the page. Only turning the addon on does this: activating it again while
+it is already on, as a re-run of the installer does, keeps the switches as root
+locked them. The settings raised are those whose verbs declare the lock, each
+`{ enabled }` switch naming the setting it saves, so a new one of those cannot
+be missed; the login jails are raised on their own.
 
 ## Automatic updates
 
@@ -261,6 +293,24 @@ choice only after it holds the lock. A file at the drop-in path that is not
 root's, or that others can write, is never trusted: it is replaced when a
 version is wanted and removed when none is.
 
+Under [root's lock](security.md#root-locks), `set-panel-php` accepts only an
+installed version newer than the one the panel runs now, checked under the
+choice's lock; going back to an older version or to CloudPanel's own gets the
+usual "root has locked" refusal. An empty choice is CloudPanel's own version,
+and it is accepted when that version is the newer one, as after a fallback. The
+row offers only the current choice and newer versions, and stays usable while
+any one of them is newer than what runs, even when the current choice is no
+longer installed. The picker and the action compare versions with the same
+function. **Lock settings** does not move the panel's PHP: the panel is
+CloudPanel's code, untested on 8.2+, the newest version may not be installed,
+and a change that restarts the panel and can roll back after a failed page
+check does not belong inside one action that must either finish or lock
+nothing. Without the newer-only rule, the lock a new install starts with would
+leave the panel on 8.1 with no way to upgrade from the page. Repair's own
+fallbacks still run under a lock, since they keep the panel working: a chosen
+PHP that was removed puts the panel back on CloudPanel's own, and a failed page
+check puts back the previous drop-in.
+
 The choice is stored in `/var/lib/clp-addons/system-tweaks/panel-php.json`.
 The System Tweaks state action includes its status; `set-panel-php` accepts
 `{"php":"8.4"}` (or an empty string for CloudPanel's own version). Its gateway
@@ -273,7 +323,9 @@ The guard stays platform-wide (see [Security](security.md#php-session-upload-pro
 install, update and repair write it whenever any addon is installed. System
 Tweaks is where it is shown and the only place to opt out. The opt-out is
 `uploadProgressGuard: false` in `/var/lib/clp-addons/system-tweaks/settings.json`,
-and `cli/php-guard.ts` honours it only while `system-tweaks.conf` exists.
+which the addon reports through its `phpGuardOff` hook; the catalog asks only
+enabled addons, so it counts only while `system-tweaks.conf` exists, and a
+settings file System Tweaks itself would not trust leaves the guard on.
 The shared disable path reconciles the guard once the config is gone.
 Disabling puts it back even when no addon is left, because the binary stays and
 repair keeps the guard while it is installed; `self-uninstall` removes it with
@@ -418,7 +470,9 @@ after the `/addons/` proxy, and the 15-minute repair does too. Disabling the
 addon removes it.
 
 The `/addons/` proxy's reconciler in `cli/inject.ts` records a hash of the vhost
-without its own block, and refuses to touch a file whose hash changed. It
+without its own block, and refuses to touch a file whose hash changed unless a
+CloudPanel upgrade explains it
+([After a CloudPanel upgrade](platform.md#after-a-cloudpanel-upgrade)). It
 leaves the phpMyAdmin block out of that hash too, so neither reconciler reads
 the other's block as a CloudPanel rewrite. Both preserve the vhost's current
 owner, group and permissions.
@@ -709,7 +763,11 @@ syncs ignore failure so PHP-FPM still reloads, and the 15-minute repair loads
 the table again. A unit whose reload lines cannot be
 read, such as one with a continued line, gets the sync after its reload only.
 The page's "On" compares each drop-in with the unit's current reload lines, so
-a package update that changes them is fixed by the next repair.
+a package update that changes them is fixed by the next repair. Because it
+compares files, a `systemctl daemon-reload` that fails after the drop-ins are
+written puts the previous files back and fails the change, so the next repair
+writes them and reloads again; one that fails after they are removed fails the
+switch-off, since the units would still load the table at their next reload.
 `ExecStartPost=` is not used: the units are `Type=notify` with a `PIDFile=`,
 and with a start-post command systemd waits for a PID file PHP-FPM does not
 write, so the start times out. The sync reads the setting without
@@ -758,8 +816,8 @@ answers it with an empty page, and the guard with a 403. Switching it off saves
 the opt-out before removing the guard, and puts the setting back on if the
 removal fails, so repair never reinstalls a guard the administrator took away
 or leaves one in place that the setting says is off. A withdrawal that fails
-after removing it queues it back while the setting is on, since the addon stays
-enabled.
+after removing it starts repair, which puts it back while the setting is on,
+since the addon stays enabled.
 
 Each installed guard is one file. `panel-session.php` is written into both in
 place of their `require` of it, so the two never depend on a third file and
@@ -936,7 +994,8 @@ than part of the nginx one.
 wrapper with `clpctl-wrapper.sh`. It reads `SUDO_USER` as clpctl does: root, `clp`
 and an empty caller run CloudPanel's original wrapper unchanged, since they are
 already root-equivalent and tightening them only risks breaking the panel. Every
-other caller may run only the four commands. Each option value is first checked
+other caller may run only `db:export`, `system:permissions:reset` and
+`varnish-cache:purge`. Each option value is first checked
 against an allowlist that admits no backslash, quote, backtick, `$`, `;` or
 newline — a `--databaseName` of letters, digits, underscore and hyphen; a
 `--directories`/`--files` octal mode; a `--purge` of `all`, a tag list, or a
@@ -1266,7 +1325,9 @@ or root can log in with one, and how to change it.
 ### The service
 
 The jails need `fail2ban`, `python3-systemd` and `nftables`; the page offers to
-install whichever are missing, and does nothing until they are there. Writing
+install whichever are missing, and does nothing until they are there. A package
+counts as there when dpkg's status ends in `installed`, so one held back with
+`apt-mark hold` counts too. Writing
 the files runs `fail2ban-client -t`, and a refused config puts the files back.
 A running fail2ban is reloaded, a stopped or failed one restarted and enabled
 at boot. A masked unit is left alone.
@@ -1530,6 +1591,53 @@ forms, and injects restart/reload failures to verify recovery and retained data.
 Docker does not change this. Its rules sit on `FORWARD` and bypass ufw only for
 ports a container publishes, and the host's MySQL is not one of them.
 
+## How the code is laid out
+
+Each tweak's module exports one `Tweak` (`tweak.ts`): its settings and their
+defaults, how stored values are read, its part of `state`, its switch (verb,
+the setting it saves, gateway timeout and the change) or its other verbs, its
+repair steps, how it is withdrawn and restored, and its row on the page. The
+login jails, which root's lock covers without a switch, also say how Lock
+settings turns them on, what stops that, and how a locked enable raises them. A tweak declares only what
+it has: Panel PHP and the firewall keep their own state and have no settings,
+and Automatic updates, Remote backups and Failed logins have verbs of their own
+rather than a switch and keep their cards in `app/views.ts`.
+
+`registry.ts` lists the tweaks and, for each phase, the order it runs them in:
+settings.json's keys, the parts of `state`, the Hardening card's rows, repair,
+withdrawal, restoring and Lock settings. The orders differ and each is written out, because
+what a failure leaves behind depends on it;
+`tests/test-system-tweaks-registry.test.ts` pins every one, and that every step
+a tweak declares runs in its phase exactly once. `action.ts` does the rest from
+the registry: one settings file under one lock, each switch's request checked
+and run under that lock, and each phase. A tweak's save writes its own settings
+into the file as it stands, so in a phase that runs several tweaks under one
+lock, a later tweak never puts back an earlier one's settings as they were when
+the lock was taken. Root's lock is asked under the settings lock before each
+change it covers, so a switch goes off only while System Tweaks is unlocked.
+The verbs stay a literal in `verbs.ts`, since the gateway reads them without
+loading the addon and their `lock` marks decide what root's lock covers; the
+action checks at load that its handlers are exactly those verbs.
+
+Withdrawal runs Panel PHP first, outside the settings lock, because it refuses
+when CloudPanel's own PHP would not come back; then, under the lock, the clpctl
+guard, because it refuses when its saved original is gone, and backup
+compression, because it refuses an edited backup command, so either refusal
+leaves every protection in place; then the rest. A failure stops it, the addon
+stays enabled. The hardened clpctl wrapper goes back at once, since
+CloudPanel's is the vulnerable one; a failure under the lock also starts
+repair now, rather than at its next turn, so visitor-IP trust, the phpMyAdmin
+rules, the guards and the rest come back as the settings ask; and the panel's
+PHP choice comes back last. Telemetry, the login message
+and the firewall come last and only warn, since none of them keeps the addon on.
+Restoring runs under the lock and stops at a failure, except for MySQL, backup
+compression, telemetry and the login message, which warn and wait for repair;
+Panel PHP comes back either way, and the panel certificate and firewall follow,
+warning on failure.
+
+A new tweak is its module with its `Tweak`, an entry in `TWEAKS` and in each
+phase it takes part in, and its verbs in `verbs.ts`.
+
 ## Retiring a mitigation
 
 Each mitigation here answers a specific CloudPanel behaviour. When CloudPanel
@@ -1563,5 +1671,5 @@ the saved original named in the row) to see what CloudPanel itself ships.
 | PHP upload progress (every install) | PHP-FPM defaults `session.upload_progress.enabled` to On, the session path of [CVE-2026-109619](https://github.com/php/php-src/security/advisories/GHSA-6wmf-4rv5-p3rp) | `php -i \| grep session.upload_progress.enabled` is `On` by default and the installed PHP build is not yet patched for the advisory | the `uploadProgressGuard` and `php-guard` wiring — once the PHP packages carry the fix |
 
 Removing any row also means deleting its line from `SECURITY.md`, its row in
-[the operator guide](../system-tweaks.md), and its tests, and dropping the
-setting from `SystemTweaksSettings` and the page.
+[the operator guide](../system-tweaks.md), and its tests, and its tweak from
+`registry.ts` and `verbs.ts`, which takes its setting, state and row with it.

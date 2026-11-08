@@ -8,6 +8,7 @@ import FLEET_JS from "./fleet.client.js" with { type: "text" };
 import FLEET_STYLE from "./fleet.css" with { type: "text" };
 import POPUP_JS from "./popup.client.js" with { type: "text" };
 import POPUP_STYLE from "./popup.css" with { type: "text" };
+import WEBAUTHN_JS from "../../security-keys/inject/webauthn.client.js" with { type: "text" };
 
 export { OPEN_JS };
 
@@ -26,9 +27,7 @@ export function layout(
   updateNotice?: { current: string; latest: string } | null,
 ): string {
   return renderLayout(title, content, {
-    brand: "Terminal",
     base: BASE,
-    nav: [],
     css: FLEET_STYLE,
     script: `${OPEN_JS}${FLEET_ROW_SELECTION_JS}\n${FLEET_JS}`,
     updateNotice,
@@ -65,7 +64,7 @@ function rootButton(root: RootAccess, user: string): string {
 export function dashboardView(sites: SanitizedSite[], root: RootAccess = { granted: false, problem: null }, user = ""): string {
   const table = sites.length === 0
     ? '<div class="empty">CloudPanel has no sites yet.</div>'
-    : `${fleetFilterHtml({ count: sites.length, placeholder: "Find a site or user", summary: `${sites.length} sites` })}
+    : `${fleetFilterHtml({ count: sites.length, placeholder: "Find a site or user" })}
       <div class="table-scroll">
         <table class="fleet-table terminal-site-table">
           <thead>
@@ -86,7 +85,7 @@ export function dashboardView(sites: SanitizedSite[], root: RootAccess = { grant
       </div>${rootButton(root, user)}
     </div>
     <div class="card card-table">
-      <div class="card-header"><h2>Sites</h2></div>
+      <div class="card-header"><h2>Sites${sites.length ? `<span class="heading-count" id="fleet-count">${sites.length}</span>` : ""}</h2></div>
       ${table}
     </div>`;
 }
@@ -124,6 +123,18 @@ export function popupPage(domain: string | null): string {
   </div>
 </div>
 <div class="term-main" id="term-main">
+  ${domain === null ? `<div class="term-ended" id="root-auth" hidden>
+    <form class="card" id="root-auth-form" aria-labelledby="root-auth-title">
+      <h2 id="root-auth-title">Verify to open root terminal</h2>
+      <p>Enter the next code your authenticator app shows, or use a trusted passkey.</p>
+      <label for="root-auth-code">Authenticator code</label>
+      <input id="root-auth-code" inputmode="numeric" autocomplete="one-time-code" pattern="[0-9]{6}" maxlength="6" required>
+      <p id="root-auth-error" role="alert"></p>
+      <div class="actions"><button class="btn btn-primary" type="submit">Continue</button>
+      <button class="btn" id="root-auth-key" type="button" hidden>Use passkey</button>
+      <button class="btn" id="root-auth-cancel" type="button">Cancel</button></div>
+    </form>
+  </div>` : ""}
   <div id="terminal" data-domain="${esc(domain ?? "")}"></div>
   <div class="term-select" id="term-select" contenteditable="true" inputmode="none" spellcheck="false" autocorrect="off" autocapitalize="off" aria-label="Terminal text" hidden></div>
   <div class="term-ended" id="term-ended" hidden>
@@ -142,7 +153,7 @@ export function popupPage(domain: string | null): string {
   return renderToolWindow(`${domain ?? "root"} — Terminal`, content, {
     base: BASE,
     css: POPUP_STYLE,
-    script: POPUP_JS,
+    script: domain === null ? `${WEBAUTHN_JS}\n${POPUP_JS}` : POPUP_JS,
     head: `<link rel="stylesheet" href="${assets[1]}">
 <script src="${assets[0]}"></script>
 <script src="${assets[2]}"></script>

@@ -6,13 +6,17 @@ const DOMAIN = "blog.example.com";
 const CERTIFICATES = `/site/${DOMAIN}/certificates`;
 const ISSUE = `/site/${DOMAIN}/certificates/lets-encrypt/new`;
 
-/** Enough of `document.cookie` to see what the script stores and when it expires. */
-function cookieJar(initial = "") {
+/**
+ * Enough of `document.cookie` to see what the script stores and when it expires.
+ * The script catches whatever its callbacks throw, so a fake records what it
+ * objects to in `violations` instead of failing an expect inside the script.
+ */
+function cookieJar(violations: string[], initial = "") {
   let value = initial;
   return {
     get: () => (value ? `__Host-clp_addons_ssl=${value}` : ""),
     set: (raw: string) => {
-      expect(raw).toMatch(/^__Host-clp_addons_ssl=[^;]*; Path=\/; Secure; SameSite=Strict; Max-Age=\d+$/);
+      if (!/^__Host-clp_addons_ssl=[^;]*; Path=\/; Secure; SameSite=Strict; Max-Age=\d+$/.test(raw)) violations.push(`cookie attributes: ${raw}`);
       value = /Max-Age=0$/.test(raw) ? "" : raw.split(";")[0]!.split("=")[1]!;
     },
     domains: () => (value ? decodeURIComponent(value).split(" ") : []),
@@ -37,7 +41,8 @@ function element(tag: string) {
 interface Dns { provision?: unknown; sessionStatus?: number }
 
 function run(options: { cookie?: string; domainInput?: string; box?: boolean; boxDomain?: string; replies?: Reply[]; dns?: Dns }) {
-  const jar = cookieJar(options.cookie ? encodeURIComponent(options.cookie) : "");
+  const violations: string[] = [];
+  const jar = cookieJar(violations, options.cookie ? encodeURIComponent(options.cookie) : "");
   let submit = () => {};
   const form = {
     querySelector: () => ({ value: options.domainInput ?? "" }),
@@ -67,7 +72,7 @@ function run(options: { cookie?: string; domainInput?: string; box?: boolean; bo
   };
   const fetch = async (url: string, init: RequestInit) => {
     // The completion forgets its domain before it asks anything.
-    expect(jar.domains()).not.toContain(DOMAIN);
+    if (jar.domains().includes(DOMAIN)) violations.push(`${url} was fetched while ${DOMAIN} was still pending`);
     if (url.startsWith("/addons/dns/")) {
       dnsCalls.push({ url, init });
       const session = url.endsWith("/session");
@@ -92,7 +97,7 @@ function run(options: { cookie?: string; domainInput?: string; box?: boolean; bo
   class NativeForm extends FormData {
     constructor(form: unknown) {
       super();
-      expect(form).toBe("native form");
+      if (form !== "native form") violations.push("FormData was not built from CloudPanel's form");
       this.append("site_lets_encrypt_certificate[_token]", "csrf");
       this.append("domains[]", DOMAIN);
       this.append("domains[]", `www.${DOMAIN}`);
@@ -104,7 +109,11 @@ function run(options: { cookie?: string; domainInput?: string; box?: boolean; bo
     { dispatchEvent: (event: unknown) => events.push(event) },
     class { constructor(_: string, public init: { detail: string }) {} },
   );
-  return { jar, choice, alert, calls, dnsCalls, events, submit: () => submit(), settled: () => new Promise((r) => setTimeout(r, 20)) };
+  const settled = async () => {
+    await new Promise((r) => setTimeout(r, 20));
+    expect(violations).toEqual([]);
+  };
+  return { jar, choice, alert, calls, dnsCalls, events, violations, submit: () => submit(), settled };
 }
 
 test("the option is withdrawn with its switch and is not a field of CloudPanel's form", () => {
@@ -140,6 +149,7 @@ test("a checked submit remembers the domain, an unchecked one or a rejected crea
   expect(form.jar.domains()).toEqual(["other.example.com"]);
   const rejected = run({ domainInput: DOMAIN, cookie: DOMAIN });
   expect(rejected.jar.domains()).toEqual([]);
+  expect([...form.violations, ...rejected.violations]).toEqual([]);
 });
 
 test("without DNS, completion posts CloudPanel's own form for the created domain alone", async () => {

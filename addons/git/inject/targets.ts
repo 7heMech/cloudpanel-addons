@@ -4,16 +4,11 @@ import { ADDON_SITE_TABS } from "../../../lib/site-context";
 import SITE_LIST_SCRIPT from "./site-list.client.js" with { type: "text" };
 import { ANCHORS, TEMPLATES } from "../../../lib/panel-anchors";
 
-// The label the panel's strip shows and the label the addon's own reproduction
-// of that strip shows are the same string, from lib/site-context.
-//
+const LABEL = ADDON_SITE_TABS.find((tab) => tab.slug === "git")!.label;
+
 // Both roles are named in every condition rather than relying on CloudPanel's
 // role hierarchy, which this addon does not own: a site manager reaches these
 // pages because the manager's gate lets that role into this addon's mount.
-const LABEL = ADDON_SITE_TABS.find((tab) => tab.slug === "git")!.label;
-
-/** CloudPanel's own site list, which this addon adds a row action to. */
-
 export const GIT_TARGETS: AddonTarget[] = [
   {
     // The anchor the Maintenance and Staging tabs use. The injector applies

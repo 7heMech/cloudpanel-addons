@@ -82,6 +82,34 @@ not frozen into the binary: a rotated key would then refuse the very update
 that carries the new one. An update removes the GitHub CLI earlier releases
 kept in `/usr/local/libexec/clp-addons/gh`.
 
+## Supported CloudPanel versions
+
+A release states the CloudPanel versions it supports as `CLOUDPANEL_RANGE` in
+`lib/cloudpanel-version.ts`: `min`, the oldest it was checked against, and
+`max`, the newest. Both are upstream versions (`2.5.4`, without the Debian
+revision), compared numerically. `max` rises when a release is checked on a
+newer CloudPanel.
+
+The range informs and never refuses. `status` shows the installed CloudPanel
+against it, and `install` and `update` warn outside it, below `min` with a
+suggestion to update CloudPanel with `clp-update`, and go on. Refusing would
+keep System Tweaks' fixes and every other change off the boxes that are behind
+or ahead, and the template and vhost checks already keep the addons off any
+page that changed
+([After a CloudPanel upgrade](platform.md#after-a-cloudpanel-upgrade)).
+
+`tools/build.ts` writes the same range to `dist/cloudpanel.json`, which the tag
+workflow publishes beside the binary, lists in `SHA256SUMS` and attests with it.
+`install` reads the range from the binary itself; `update` reads the asset
+before downloading the binary, so it can warn about the release it is about to
+install rather than the one running. The asset is checksummed when it is read
+and its provenance is checked with the binary's before anything is installed.
+A malformed range, a CloudPanel version dpkg cannot give, mid-upgrade or
+otherwise, and a release from before the asset only skip the warning.
+
+Turning `min` into a floor that `update` enforces, for a release that truly
+cannot run on an older CloudPanel, is a separate change made with that release.
+
 ## Installer
 
 `install.sh` checks the host, downloads the binary from
@@ -106,6 +134,15 @@ first install. `install` takes no `--version`; changing version is `update`.
 
 No addon is enabled by default; the installer recommends System Tweaks, which
 holds the security fixes. `update` never adds an addon.
+
+A new install, one with no artifact manifest at all and no addon enabled,
+does lock System Tweaks ([root locks](security.md#root-locks)), before it
+enables any addon, so the panel can switch its protections on but never off,
+and System Tweaks enabled later starts from its defaults. Re-running the installer on an installed box,
+and `update`, never add a lock: that box's switches may be off on purpose.
+A manifest that is there but cannot be read still marks an installed box.
+`update` prints a one-line hint to run `clp-addons lock system-tweaks` while
+System Tweaks is enabled and unlocked.
 
 ## Uninstall
 
@@ -173,7 +210,8 @@ the old process could still write old Twig or unit definitions after installing
 a new release. The manager job records `restarting background services`
 immediately before the manager service is restarted. The browser treats the
 expected SSE disconnect as a reconnecting state, waits for `/addons/health` to
-recover, and then resumes from the on-disk job record. That probe is behind the
+recover (a Stager, Instatic or Git job page waits for its addon's own
+`/health`, the only addon pages that follow a job this way), and then resumes from the on-disk job record. That probe is behind the
 session gate like every other route, so the browser waits for the manager's own
 JSON reply rather than for any 200 -- the login page a lapsed session is sent to
 is also one. The job log therefore remains available across the restart instead

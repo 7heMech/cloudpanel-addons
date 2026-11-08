@@ -5,8 +5,9 @@ import { mkdtempSync, mkdirSync, readFileSync, readdirSync, rmSync, writeFileSyn
 import { tmpdir } from "node:os";
 import { loadLocal } from "../cli/release";
 import { reconcile, reconcileNginxProxy, type Injection } from "../cli/inject";
-import { have, paint, tryRun } from "../cli/util";
-import { isNewerThan, listAvailableTags } from "../addons/instatic/app/tags";
+import { have, tryRun } from "../lib/command";
+import { paint } from "../lib/log";
+import { isNewerThan, listAvailableTags, resetTagCache } from "../addons/instatic/app/tags";
 
 test("have finds and rejects commands", () => {
   expect(have("sh")).toBe(true);
@@ -96,6 +97,7 @@ test("tag comparison remains numeric", () => {
 
 test("registry tags are filtered and sorted descending", async () => {
   const originalFetch = globalThis.fetch;
+  resetTagCache();
   try {
     globalThis.fetch = Object.assign(async (input: string | URL | Request) => {
       if (String(input).includes("/token?")) return new Response(JSON.stringify({ token: "test-token" }));
@@ -105,6 +107,7 @@ test("registry tags are filtered and sorted descending", async () => {
     expect(listed.tags).toEqual(["1.0.18", "1.0.10", "1.0.9"]);
   } finally {
     globalThis.fetch = originalFetch;
+    resetTagCache();
   }
 });
 

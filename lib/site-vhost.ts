@@ -8,11 +8,12 @@
  * rendered vhosts, so a replacement can only use placeholders the panel
  * already fills for that site.
  */
+import { PANEL_DB, DISTRO_NGINX_SITES_DIR } from "./paths";
 import { withPanelDb } from "./panel-db";
 import { chmodSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
-import { writeFileAtomic } from "../lib/atomic-write";
-import { runCommand } from "./action-common";
+import { writeFileAtomic } from "./atomic-write";
+import { runCommand } from "./command";
 
 export interface VhostMapResult {
   map: Map<string, string> | null;
@@ -133,13 +134,13 @@ export interface SiteVhostPaths {
 }
 
 export const DEFAULT_SITE_VHOST_PATHS: SiteVhostPaths = {
-  panelDb: "/home/clp/htdocs/app/data/db.sq3",
+  panelDb: PANEL_DB,
   sqlite3: "/usr/bin/sqlite3",
-  nginxVhostDir: "/etc/nginx/sites-enabled",
+  nginxVhostDir: DISTRO_NGINX_SITES_DIR,
   tempDir: "/tmp",
 };
 
-export function storedVhost(panelDb: string, domain: string): string {
+function storedVhost(panelDb: string, domain: string): string {
   return withPanelDb(panelDb, (db) => {
     const row = db.query<{ vhost_template: string | null }, [string]>("SELECT vhost_template FROM site WHERE domain_name = ?").get(domain);
     if (!row?.vhost_template) throw new Error(`CloudPanel has no vhost stored for ${domain}`);
@@ -153,11 +154,7 @@ function storedRoot(panelDb: string, domain: string): string | undefined {
 
 const sqlLiteral = (value: string): string => `'${value.replaceAll("'", "''")}'`;
 
-/**
- * Writes `body` as the site's vhost, in the panel and on disk; nginx rejecting
- * it, or failing to reload, puts the old one back. `rootDirectory`, relative to
- * the site's `htdocs`, moves the site's root with it.
- */
+/** `rootDirectory`, relative to the site's `htdocs`, moves the site's root with it. */
 export function replaceSiteVhost(paths: SiteVhostPaths, domain: string, body: string, rootDirectory?: string): void {
   const conf = join(paths.nginxVhostDir, `${domain}.conf`);
   const stored = storedVhost(paths.panelDb, domain);

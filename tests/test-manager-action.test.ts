@@ -4,7 +4,7 @@
 // Everything here is about the seam that makes those safe to offer from a web
 // page: which verbs the root gateway will run at all, and the job record that
 // carries the outcome across the manager restart each of them ends with.
-import { describe, test, expect } from "bun:test";
+import { afterEach, beforeEach, describe, test, expect } from "bun:test";
 import { existsSync, mkdirSync, mkdtempSync, rmSync, utimesSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -12,12 +12,12 @@ import { createAuthActionServer } from "../cli/auth-action";
 import {
   activeManagerJob, createJob, type CreateJobOptions, latestManagerJob, markNewsSeen, parseManagerFlags, pruneManagerJobs,
   keepNewsSince, readManagerJob, readNewsSeen, readNewsSince, recordNewsSince, runManagerJob, type ManagerOps,
-} from "../cli/manager-action";
+} from "../manager/action";
 import { installedInjections } from "../cli/reconcile";
 import { handleManagerRoute } from "../manager/index";
 import { indexPage, updatePage } from "../manager/views";
-import { ADDONS, addonNews } from "../cli/addon-catalog";
-import { listJobIds } from "../cli/job-store";
+import { ADDONS, addonNews } from "../addons/catalog";
+import { listJobIds } from "../lib/job-store";
 import { csrfCookieHeader, newCsrfToken, safeDecodePathSegment } from "../lib/app-http";
 
 function makeJobsDir(): string {
@@ -62,7 +62,7 @@ async function gatewayReply(request: string): Promise<string> {
   }
 }
 
-const NOOP_OPS: ManagerOps = { enable: () => {}, disable: () => {}, update: async () => {}, reconcile: () => {} };
+const NOOP_OPS: ManagerOps = { enable: () => {}, disable: () => {}, update: async () => {}, reconcile: () => {}, holds: () => [] };
 
 describe("the gateway's manager namespace", () => {
   // The runner is started by the transient unit the create path launches, and
@@ -293,7 +293,25 @@ describe("the panel's Addons entry", () => {
   });
 });
 
+/**
+ * Notices of a known shape, rather than whatever the catalog declares this
+ * release: a DNS addon that is new in 2.0.0-rc.1 and a Stager that changed in
+ * it. Pruning the catalog's old notices is routine and must not break these.
+ */
+function useFixtureNotices(): void {
+  const original = { dns: ADDONS.dns!, stager: ADDONS.stager! };
+  beforeEach(() => {
+    ADDONS.dns = { ...original.dns, added: "2.0.0-rc.1", changed: [] };
+    ADDONS.stager = { ...original.stager, added: undefined, changed: [{ in: "2.0.0-rc.1", note: "Staging copies no longer send mail." }] };
+  });
+  afterEach(() => {
+    ADDONS.dns = original.dns;
+    ADDONS.stager = original.stager;
+  });
+}
+
 describe("opened badges", () => {
+  useFixtureNotices();
   test("are recorded once per notice, and survive a reinstall", () => {
     const dir = mkdtempSync(join(tmpdir(), "clp-news-"));
     const file = join(dir, "news-seen.json");
@@ -425,6 +443,7 @@ describe("opened badges", () => {
 });
 
 describe("the manager index", () => {
+  useFixtureNotices();
   async function render(...args: Parameters<typeof indexPage>): Promise<string> {
     return indexPage(...args).text();
   }
@@ -703,7 +722,7 @@ describe("manager route decoding and safe segment decoder", () => {
   });
 });
 
-test.skipIf(existsSync(ADDONS["system-tweaks"]!.configFile))("the manager refuses to enable an addon root has locked", async () => {
+test.skipIf(existsSync(ADDONS["system-tweaks"]!.configFile))("the manager enables an addon root has locked, since that only adds protection", async () => {
   const dir = mkdtempSync(join(tmpdir(), "manager-locks-"));
   try {
     const file = join(dir, "locks.json");
@@ -711,6 +730,27 @@ test.skipIf(existsSync(ADDONS["system-tweaks"]!.configFile))("the manager refuse
     const replies: any[] = [];
     let started = false;
     const result = await createJob("enable", "system-tweaks", {
+      jobsDir: join(dir, "jobs"), lockDir: join(dir, "lock"), newsFile: join(dir, "news"), sinceFile: join(dir, "since"), emitReply: false,
+      startUnit: () => { started = true; return { ok: true, stdout: "", stderr: "" }; },
+      onReply: (data) => replies.push(data),
+      locks: { file, rootUid: process.getuid?.() ?? 0 },
+    });
+    expect(replies[0].error).toBeUndefined();
+    expect(result).toBe(0);
+    expect(started).toBe(true);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("the manager refuses to disable an addon root has locked", async () => {
+  const dir = mkdtempSync(join(tmpdir(), "manager-locks-"));
+  try {
+    const file = join(dir, "locks.json");
+    writeFileSync(file, JSON.stringify({ addons: ["system-tweaks"] }));
+    const replies: any[] = [];
+    let started = false;
+    const result = await createJob("disable", "system-tweaks", {
       jobsDir: join(dir, "jobs"), lockDir: join(dir, "lock"), emitReply: false,
       startUnit: () => { started = true; return { ok: true, stdout: "", stderr: "" }; },
       onReply: (data) => replies.push(data),
@@ -719,6 +759,26 @@ test.skipIf(existsSync(ADDONS["system-tweaks"]!.configFile))("the manager refuse
     expect(result).not.toBe(0);
     expect(started).toBe(false);
     expect(replies[0].error).toBe("root has locked system-tweaks; run clp-addons unlock system-tweaks on the server first");
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+// Queued before root locked it, a disable still must not run.
+test("a queued disable is refused when it runs if root has locked the addon since", async () => {
+  const dir = mkdtempSync(join(tmpdir(), "manager-locks-"));
+  try {
+    const file = join(dir, "locks.json");
+    writeFileSync(file, JSON.stringify({ addons: ["system-tweaks"] }));
+    const jobsDir = join(dir, "jobs");
+    mkdirSync(jobsDir);
+    writeJob(jobsDir, "20260908T120000Z-dddddd", { kind: "disable", addon: "system-tweaks", state: "queued" });
+    const disabled: string[] = [];
+    const code = await runManagerJob("20260908T120000Z-dddddd", { ...NOOP_OPS, disable: (a) => { disabled.push(a); } }, jobsDir,
+      { file, rootUid: process.getuid?.() ?? 0 });
+    expect(code).toBe(1);
+    expect(disabled).toEqual([]);
+    expect(readManagerJob("20260908T120000Z-dddddd", jobsDir)?.job.error).toBe("root has locked system-tweaks; run clp-addons unlock system-tweaks on the server first");
   } finally {
     rmSync(dir, { recursive: true, force: true });
   }

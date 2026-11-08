@@ -1,18 +1,21 @@
+import { errorMessage } from "../../lib/errors";
+import {
+  LOCK_DIR, PANEL_DB, addonStateDir, MAINTENANCE_INCLUDE_PATH, DISTRO_NGINX_SITES_DIR, NGINX_GLOBAL_SETTINGS,
+  PANEL_IDENTITY_PATH,
+} from "../../lib/paths";
+import { writeFileAtomic } from "../../lib/atomic-write";
 import { MAINTENANCE_VERBS } from "./verbs";
 import { Database } from "bun:sqlite";
-import { withPanelDb, withoutStandIns } from "../../cli/panel-db";
+import { withPanelDb, withoutStandIns, deletedSites } from "../../lib/panel-db";
 import { isIP } from "node:net";
 import {
   chmodSync, existsSync, lstatSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, renameSync, rmSync, statSync,
 } from "node:fs";
 import { join } from "node:path";
-import {
-  ActionFailure, deletedSites, replyToAction, failAction, normalizeIdentityHostname, withFileLock,
-  validateDomain,
-} from "../../cli/action-common";
-import { MAINTENANCE_INCLUDE_PATH, maintenanceGap, maintenanceGaps } from "../../cli/maintenance-vhosts";
-import { DISTRO_NGINX_SITES_DIR, NGINX_GLOBAL_SETTINGS, PANEL_IDENTITY_PATH } from "../../cli/paths";
-import { writeAtomic } from "../../cli/util";
+import { ActionFailure, replyToAction, failAction } from "../../lib/action";
+import { normalizeIdentityHostname, validateDomain } from "../../lib/panel-identity";
+import { withFileLock } from "../../lib/file-lock";
+import { maintenanceGap, maintenanceGaps } from "./vhosts";
 import DEFAULT_TEMPLATE from "./default.html" with { type: "text" };
 
 const DEFAULT_MAINTENANCE_PAGE = DEFAULT_TEMPLATE as unknown as string;
@@ -51,7 +54,7 @@ export interface MaintenanceActionPaths {
   includePath: string;
 }
 
-export interface MaintenanceActionOptions {
+interface MaintenanceActionOptions {
   paths?: Partial<MaintenanceActionPaths>;
   input?: string;
   emitReply?: boolean;
@@ -60,15 +63,15 @@ export interface MaintenanceActionOptions {
   /** Test-only validator override for fixtures that cannot create root-owned identity files. */
   domainValidator?: (value: string) => string;
   /** Test-only write override used to exercise replacement failure handling. */
-  writeAtomicFn?: typeof writeAtomic;
+  writeAtomicFn?: typeof writeFileAtomic;
   varnishPort?: number;
   fetchFn?: typeof fetch;
 }
 
 export const DEFAULT_MAINTENANCE_ACTION_PATHS: MaintenanceActionPaths = {
-  dataDir: "/var/lib/clp-addons/maintenance",
-  lockDir: "/run/lock/clp-addons",
-  panelDb: "/home/clp/htdocs/app/data/db.sq3",
+  dataDir: addonStateDir("maintenance"),
+  lockDir: LOCK_DIR,
+  panelDb: PANEL_DB,
   panelIdentityFile: PANEL_IDENTITY_PATH,
   nginxVhostDir: DISTRO_NGINX_SITES_DIR,
   nginxSettings: NGINX_GLOBAL_SETTINGS,
@@ -153,7 +156,7 @@ function ensureDataDir(paths: MaintenanceActionPaths): void {
     failAction(`unsafe maintenance default template: ${defaultPath}`);
   }
   if (!existsSync(defaultPath) || readFileSync(defaultPath, "utf8") !== DEFAULT_MAINTENANCE_PAGE) {
-    writeAtomic(defaultPath, DEFAULT_MAINTENANCE_PAGE, 0o644);
+    writeFileAtomic(defaultPath, DEFAULT_MAINTENANCE_PAGE, { mode: 0o644, createParent: true });
   } else {
     chmodSync(defaultPath, 0o644);
   }
@@ -225,7 +228,6 @@ async function replaceBypasses(
   return writeBypasses(paths, domain, options, () => ips);
 }
 
-/** Adds one address to a site's bypasses, keeping the rest. */
 export function addBypass(
   paths: MaintenanceActionPaths, domain: string, ip: string, options: MaintenanceActionOptions = {},
 ): Promise<string[]> {
@@ -273,7 +275,7 @@ function writeBypasses(
       if (ips.length > MAX_BYPASS_IPS) failAction(`at most ${MAX_BYPASS_IPS} bypass addresses are allowed`);
       const stage = mkdtempSync(join(dir, ".bypass-stage-"));
       try {
-        for (const ip of ips) (options.writeAtomicFn ?? writeAtomic)(join(stage, ip), "", 0o600);
+        for (const ip of ips) (options.writeAtomicFn ?? writeFileAtomic)(join(stage, ip), "", { mode: 0o600, createParent: true });
         for (const name of readdirSync(dir)) {
           if (name.startsWith("bypass_")) rmSync(join(dir, name), { force: true });
         }
@@ -302,7 +304,7 @@ function savedStatus(paths: MaintenanceActionPaths, domain: string, uncovered: s
   };
 }
 
-export function maintenanceStatus(paths: MaintenanceActionPaths, domain: string): MaintenanceStatus {
+function maintenanceStatus(paths: MaintenanceActionPaths, domain: string): MaintenanceStatus {
   assertPanelSite(paths, domain);
   let uncovered: string | null = null;
   try {
@@ -335,7 +337,7 @@ function allStatuses(paths: MaintenanceActionPaths): { global: GlobalMaintenance
     } catch (error) {
       return {
         domain: row.domain_name, enabled: false, customTemplate: false, bypasses: [], uncovered, type, user,
-        error: error instanceof Error ? error.message : String(error),
+        error: errorMessage(error),
       };
     }
   });
@@ -404,7 +406,7 @@ export async function purgeVarnish(
  * active markup here makes the stored file safe if an operator serves it by
  * another path later.
  */
-export function sanitizeTemplate(input: string): string {
+function sanitizeTemplate(input: string): string {
   if (Buffer.byteLength(input, "utf8") > MAX_TEMPLATE_BYTES) {
     failAction(`the maintenance template may be at most ${MAX_TEMPLATE_BYTES} bytes`);
   }
@@ -484,11 +486,11 @@ async function toggleMany(
       const domain = options.domainValidator ? options.domainValidator(raw) : validateDomain(raw, paths.panelIdentityFile);
       if (!present.has(domain)) failAction(`CloudPanel site not found: '${domain}'`);
       const flag = join(siteDir(paths, domain, enabled), "on");
-      if (enabled) writeAtomic(flag, "", 0o600);
+      if (enabled) writeFileAtomic(flag, "", { mode: 0o600, createParent: true });
       else rmSync(flag, { force: true });
       updated.push(domain);
     } catch (error) {
-      failed.push({ domain: shown, error: error instanceof Error ? error.message : String(error) });
+      failed.push({ domain: shown, error: errorMessage(error) });
     }
   }
   await purgeVarnishMany(updated, options);
@@ -543,7 +545,7 @@ export async function executeMaintenanceAction(
       "another maintenance update is running for global fleet",
       async () => {
         if (enabled) {
-          writeAtomic(onPath, "", 0o644);
+          writeFileAtomic(onPath, "", { mode: 0o644, createParent: true });
         } else {
           if (existsSync(onPath)) rmSync(onPath, { force: true });
         }
@@ -569,7 +571,7 @@ export async function executeMaintenanceAction(
   if (verb === "enable" || verb === "disable") {
     const dir = siteDir(paths, domain, verb === "enable");
     const flag = join(dir, "on");
-    if (verb === "enable") writeAtomic(flag, "", 0o600);
+    if (verb === "enable") writeFileAtomic(flag, "", { mode: 0o600, createParent: true });
     else rmSync(flag, { force: true });
     await purgeVarnish(domain, options.varnishPort, options.fetchFn);
     return maintenanceStatus(paths, domain);
@@ -588,7 +590,7 @@ export async function executeMaintenanceAction(
   if (verb === "set-template") {
     const input = await readInput(options);
     const html = sanitizeTemplate(input);
-    writeAtomic(join(siteDir(paths, domain, true), "maintenance.html"), html, 0o644);
+    writeFileAtomic(join(siteDir(paths, domain, true), "maintenance.html"), html, { mode: 0o644, createParent: true });
     return { domain, custom: true, html, removed: html.trim() !== input.trim() };
   }
 

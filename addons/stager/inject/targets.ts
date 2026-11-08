@@ -1,49 +1,27 @@
-// What the Stager addon adds to the CloudPanel UI.
-//
-// Markup and placement only. The injector in cli/inject.ts owns the markers,
-// the pristine snapshot, the hash gate and the ordering, so everything here is
-// data.
-//
-// The snippet is Twig rather than plain HTML, which the Instatic addon's are
-// not. That is the point of it: the button has to name the site whose page it
-// is rendered on, and `{{ site.domainName }}` is how the template already does
-// that. It also means this block is only correct where `site` is in scope --
-// the target template sets it as a loop variable, and nothing else may be
-// added here without checking.
+// These snippets use Twig's `site`, so they are only correct in templates that
+// set it as a loop variable; check before adding a target elsewhere.
 
 import type { AddonTarget } from "../../../lib/addon-target";
 import { ADDON_SITE_TABS } from "../../../lib/site-context";
 import { MENU_ONLY_CLASS, MENU_ONLY_STYLE } from "../../../lib/row-actions";
 import { ANCHORS, TEMPLATES } from "../../../lib/panel-anchors";
 
-// The label the panel's strip shows and the label the addon's own reproduction
-// of that strip shows are the same string, from lib/site-context.
 const TAB_LABEL = ADDON_SITE_TABS.find((tab) => tab.slug === "stager")!.label;
 
 /**
- * The site types the action binary will clone, guarded here too so a Node.js
- * or Python site does not show an action that only ever answers with an error.
- * These are the literal `site.type` column values, and they must stay in step
- * with CLONABLE_TYPES in addons/stager/action.ts (enforced by typeIsClonable,
- * called from cmdDescribe, cmdClone and cmdRun) -- that is the thing that
- * actually decides, and which this only mirrors.
- *
- * A reverse-proxy site is clonable only when its backend is an Instatic
- * instance this box manages, and Twig cannot see that: the fact lives in the
- * Instatic addon's own records. So the action appears on every reverse proxy
- * and the action binary refuses the ones that are not, by name. Showing it and
- * explaining the refusal is better than the alternative, which would be
- * teaching the panel's templates about another addon's state directory.
+ * Mirrors CLONABLE_TYPES in addons/stager/action.ts as literal `site.type`
+ * values, so a Node.js or Python site shows no action that only answers with
+ * an error. Twig cannot see whether a reverse proxy fronts an Instatic
+ * instance, so the action shows on every reverse proxy and the action refuses
+ * the others by name.
  */
 const CLONABLE = "{% if site.type in ['php', 'static', 'reverse-proxy'] %}";
 
 export const STAGER_TARGETS: AddonTarget[] = [
   {
-    // The same anchor the Maintenance addon's tab uses. The injector applies
-    // anchorAfter snippets in reverse addon order, so `stager` goes in first
-    // and `maintenance` is then inserted ahead of it: Logs, Maintenance,
-    // Staging -- which is the order ADDON_SITE_TABS gives the reproduced strip
-    // too. It settles on the same file however many times it runs.
+    // Shares the Maintenance tab's anchor. anchorAfter snippets go in in
+    // reverse addon order, giving Logs, Maintenance, Staging, the order
+    // ADDON_SITE_TABS gives the reproduced strip.
     slug: "site-tab",
     template: TEMPLATES.siteTabs,
     anchorAfter: ANCHORS.siteLogsTab,
@@ -55,11 +33,9 @@ export const STAGER_TARGETS: AddonTarget[] = [
           </li>
         {% endif %}{% endif %}`,
   },
-  // Cloning is not an action anyone does daily, so it is menu-only: it appears
-  // in a Sites row's action menu and nowhere else, rather than as a link in
-  // every row of a list read every day. A box without that menu shows it in
-  // neither place, which is why the rule that hides it is emitted here rather
-  // than left to the addon that draws the menu.
+  // Cloning is rare, so it is menu-only. The hiding rule is emitted here, not
+  // by the addon that draws the menu, so a box without that menu shows it in
+  // neither place.
   {
     slug: "site-list-style",
     template: TEMPLATES.sites,

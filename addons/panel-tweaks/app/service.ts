@@ -12,8 +12,6 @@ function call<T>(verb: WebVerb<"panel-tweaks">, args: string[] = [], input?: str
 }
 
 export const panelTweaksService = {
-  // `asUser` narrows the site list to that panel user's own sites; an
-  // administrator's request names nobody and is not narrowed.
   state(asUser?: string): Promise<ActionResult<PanelTweaksState>> {
     return call<PanelTweaksState>("state", asUser ? [`--as-user=${asUser}`] : []);
   },
@@ -35,8 +33,6 @@ export const panelTweaksService = {
     return call("branding-asset", [`--name=${name}`]);
   },
 
-  // A measurement is a background job; the reply is the recorded job, or the
-  // one already running, which the page then follows.
   measure(): Promise<ActionResult<MeasureStarted>> {
     return call<MeasureStarted>("measure");
   },

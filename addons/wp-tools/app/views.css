@@ -7,7 +7,6 @@
 .wp-note { white-space: nowrap; }
 .wp-short { display: none; }
 .wp-error { margin-top: 6px; color: var(--bad); font-size: 12px; white-space: normal; overflow-wrap: anywhere; }
-/* A wide screen keeps a status to one line, so a row is as tall as its tallest status. */
 @media (min-width: 941px) {
   .wp-site-table th:not(:first-child), .wp-site-table td:not(:first-child) { padding-left: 20px; }
   .wp-site-table th:not(:last-child), .wp-site-table td:not(:last-child) { padding-right: 20px; }
@@ -57,6 +56,8 @@
 }
 @media (max-width: 940px) {
   .wp-card-note { padding: 16px 20px; }
+  .wp-new-site-header { flex-wrap: wrap; }
+  .wp-new-site-header > .btn { flex-basis: 100%; }
   .wp-new-site-table td.site-cell, .wp-new-site-table td[data-label="Plugins"] { flex-basis: 100%; }
 }
 /* Each policy's column holds a chip and its button with room to spare, so the

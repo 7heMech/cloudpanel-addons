@@ -5,16 +5,13 @@ import type { WebVerb } from "../../../lib/gateway-protocol";
 import { watchGatewayJob, type JobWatcher } from "../../../lib/job-stream";
 export { type ActionResult };
 
-// clone only writes a job record and hands the work to systemd, so it
-// answers immediately -- the long operation is the job itself, which nothing
-// here waits on.
 const TIMEOUTS: Partial<Record<WebVerb<"stager">, number>> = {
   clone: 60_000,
   promote: 60_000,
 };
 const DEFAULT_TIMEOUT = 30_000;
 
-export interface ActionCallOptions {
+interface ActionCallOptions {
   timeout?: number;
   maxBuffer?: number;
 }
@@ -22,8 +19,7 @@ export interface ActionCallOptions {
 export async function callAction<T = unknown>(
   verb: WebVerb<"stager">,
   args: string[],
-  // On stdin rather than in argv, because the only value that ever needs this
-  // is a password and argv is world-readable through /proc.
+  // Passwords go on stdin: argv is world-readable through /proc.
   input?: string,
   options: ActionCallOptions = {},
 ): Promise<ActionResult<T>> {
@@ -33,27 +29,11 @@ export async function callAction<T = unknown>(
   });
 }
 
-// Mirrors the action binary's own validation. Not a substitute for it: the
-// action binary is the boundary and re-checks everything. This exists so the
-// UI can reject bad input with a useful message instead of a generic error
-// from the action binary.
-const DOMAIN_RE = /^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?(\.[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?)+$/;
-
-
-export function validateDomain(d: unknown): string | null {
-  return typeof d === "string" && d.length <= 253 && DOMAIN_RE.test(d) ? d : null;
-}
-
-export { validateJobId } from "../../../lib/job-id";
-
 /**
- * Expand the shorthand the original wrapper script accepted: a bare label
- * becomes a subdomain of the site being cloned, of `example.com` rather than
- * `www.example.com`.
+ * A bare label becomes a subdomain of the site being cloned, of `example.com`
+ * rather than `www.example.com`.
  *
- * Here rather than in the action binary because it is a convenience, and the
- * action binary must not rewrite its input -- a boundary that silently
- * corrects a value is one that eventually corrects it wrong. What crosses the
+ * Not in the action, which must not rewrite its input: what crosses the
  * boundary is always a complete hostname. The page's script carries this same
  * function, so it is written in the JavaScript a browser runs.
  */
@@ -63,9 +43,8 @@ export function expandTarget(input: string, source: string): string {
   return t.indexOf(".") === -1 ? t + "." + source.replace(/^www\./, "") : t;
 }
 
-/** The `site.type` values the action binary will clone (CLONABLE_TYPES in
- * addons/stager/action.ts). Kept in step with it. */
-export type SiteType = "php" | "static" | "reverse-proxy";
+/** Kept in step with CLONABLE_TYPES in addons/stager/action.ts. */
+type SiteType = "php" | "static" | "reverse-proxy";
 
 export interface SiteSummary {
   domain: string;
@@ -77,7 +56,7 @@ export interface SiteSummary {
   databases: number;
 }
 
-export interface SiteDetail extends Omit<SiteSummary, "databases"> {
+interface SiteDetail extends Omit<SiteSummary, "databases"> {
   /** True when a reverse-proxy source's backend is an Instatic instance of ours. */
   instatic: boolean;
   rootDirectory: string;
@@ -89,13 +68,12 @@ export interface JobResult {
   siteUser: string;
   phpVersion: string;
   vhostTemplate: string;
-  /** Whether the source site's own vhost was reproduced for the clone. */
   vhostCarried: boolean;
   /**
-   * How it was reproduced. `template` is CloudPanel's own vhost-template route,
-   * available only for PHP; `rendered` is the panel-record write plus a rendered
-   * file, which is the only route for every other type; `stock` means it was not
-   * carried and the notes say why.
+   * `template` is CloudPanel's own vhost-template route, available only for
+   * PHP; `rendered` is the panel-record write plus a rendered file, the only
+   * route for every other type; `stock` means it was not carried and the notes
+   * say why.
    */
   vhostCarriedBy: "template" | "rendered" | "stock" | string;
   database: { source: string; name: string; user: string; password: string } | null;
@@ -104,39 +82,23 @@ export interface JobResult {
   notes: string[];
 }
 
-/**
- * What a promote records.
- *
- * Deliberately not a superset of a clone's result: a promote creates no site,
- * no database and no account, so it has no credentials to hand back. What it
- * has instead is where the replaced document root went and what was kept from
- * the live site.
- */
 export interface PromoteResult {
   siteType: SiteType | string;
   siteUser: string;
-  /** The live document root as it was before the switch, kept for the job's retention. */
+  /** Kept for the job's retention. */
   previousRoot: string;
-  /** Paths taken from the live site rather than from the staging copy. */
   preserved: string[];
-  /** Where the pre-switch dump of the live database was written, if it had one. */
   databaseBackup: string | null;
-  /** Where the live Instatic instance's own content export was written. */
   contentBackup: string | null;
   notes: string[];
 }
 
-export function isPromoteResult(job: JobView): job is JobView & { result: PromoteResult | null } {
-  return job.kind === "promote";
-}
-
 export interface JobView {
   id: string;
-  /** `clone` creates a staging site; `promote` moves one back onto its live site. */
   kind: "clone" | "promote" | string;
   source: string;
   target: string;
-  /** The Instatic port this clone reserved, or 0 for a clone that needed none. */
+  /** 0 for a clone that reserved no Instatic port. */
   port: number;
   state: "queued" | "running" | "done" | "failed" | string;
   step: string;
@@ -144,16 +106,14 @@ export interface JobView {
   createdAt: string;
   startedAt: string;
   finishedAt: string;
-  /** Optional one-shot event emitted by the job runner. */
   event?: string;
   result: JobResult | PromoteResult | null;
-  /** Whether the panel still has the job's target, or null when that is unknown. */
+  /** Null when unknown. */
   panelSite?: boolean | null;
-  /** The same for its source. */
   sourcePanelSite?: boolean | null;
 }
 
-/** Why this clone record cannot be the basis of a promote, or "" if it can. */
+/** "" when the clone can be promoted. */
 export function promoteBlocked(job: JobView): string {
   if (job.kind === "promote") return "That job is itself a promote; promote from the clone that created the staging site.";
   if (job.state !== "done") return `That clone is ${job.state}. Only a finished clone can be promoted.`;
@@ -176,23 +136,14 @@ export const stagerService = {
     return res.data?.sites ?? [];
   },
 
-  /** Why a site cannot be cloned, from the action that decides it. */
   async describe(domain: string): Promise<ActionResult<SiteDetail>> {
     return callAction<SiteDetail>("describe", ["--domain", domain]);
   },
 
   /**
-   * Start a clone.
-   *
-   * `instatic` is supplied only when the source is an Instatic site. Its port
-   * is allocated here rather than guessed by the action binary:
-   * `getNextAvailablePort` combines current panel and addon data, so the number
-   * that crosses the boundary is one the action binary only has to re-validate.
-   *
-   * Both secrets travel on stdin, one per line, and neither is ever an
-   * argument. Process arguments are visible to other accounts while the action
-   * runs, and the authentication field may contain a recovery code that does
-   * not expire.
+   * Both secrets travel on stdin, never as arguments: process arguments are
+   * visible to other accounts while the action runs, and the authentication
+   * field may hold a recovery code that does not expire.
    */
   async startClone(
     source: string,
@@ -203,24 +154,17 @@ export const stagerService = {
     const args = ["--source", source, "--target", target, "--tls", tls ? "yes" : "no"];
     if (instatic) args.push("--port", String(instatic.port), "--email", instatic.email);
     const input = instatic
-      // Always two lines, even with no code. A channel whose field count
-      // varies cannot tell a password containing a newline from a password
-      // followed by a code; a fixed count lets the action binary refuse the first.
+      // Always two lines, even with no code, so the action can tell a password
+      // containing a newline from a password followed by a code, and refuse it.
       ? `${instatic.password}\n${instatic.mfaCode ?? ""}\n`
       : undefined;
     return callAction<{ job: string }>("clone", args, input);
   },
 
   /**
-   * Start a promote: put the staging copy's files or content onto the live site.
-   *
-   * `source` is the staging copy and `target` is the live site, which is the
-   * reverse of startClone and the reason neither is called "staging". The live
-   * database is never sent anywhere; see docs/decisions/stager.md for why.
-   *
-   * An Instatic promote signs in to both instances, so the channel carries two
-   * passwords. Four lines, always, for the same reason the clone channel has
-   * exactly two.
+   * `source` is the staging copy and `target` is the live site, the reverse of
+   * startClone. An Instatic promote signs in to both instances: four lines,
+   * always, for the same reason the clone channel has exactly two.
    */
   async startPromote(
     source: string,
@@ -255,34 +199,18 @@ export const stagerService = {
     return res.data?.jobs ?? [];
   },
 
-  /**
-   * The same list, but a call failure is an error rather than an empty one.
-   *
-   * The dashboard can render "no clones yet" and be read by someone who knows
-   * the difference. The port allocator cannot: an empty list means every
-   * in-flight clone's reserved port silently disappears from the calculation,
-   * and the next clone is handed one that is already spoken for. So the two
-   * readers ask different questions.
-   */
+  /** For the port allocator, where an empty list would hand out a port an in-flight clone reserved. */
   async listJobsOrThrow(): Promise<JobView[]> {
     const res = await callAction<{ jobs: JobView[] }>("jobs", []);
     if (!res.ok) throw new Error(res.error ?? "the stager action could not list jobs");
     return res.data?.jobs ?? [];
   },
 
-  /** Fetches current panel information and reports its age at receipt. */
   async snapshot(): Promise<{ snap: PanelSnapshot; ageSeconds: number }> {
     return readPanelSnapshot();
   },
 
-  /**
-   * What the shell needs to keep drawing the panel's site information and tab
-   * strip around this addon's site-scoped page, with the jobs that page shows.
-   *
-   * The panel snapshot is the authority on whether the site exists at all, so
-   * a tab clicked on a site the panel no longer has says so rather than
-   * rendering an empty Staging page for nothing.
-   */
+  /** A tab clicked on a site the panel no longer has says so rather than rendering an empty page. */
   async sitePage(domain: string): Promise<{ context: SiteContext; jobs: JobView[]; clonable: boolean }> {
     const [panel, jobs] = await Promise.all([fetchPanelInfo(), this.listJobs()]);
     const site = panel.sites.find((candidate) => candidate.domain.toLowerCase() === domain.toLowerCase());
@@ -296,10 +224,8 @@ export const stagerService = {
         ...(panel.publicIp ? { publicIp: panel.publicIp } : {}),
       },
       jobs,
-      // Mirrors CLONABLE in the injected Twig and CLONABLE_TYPES in the action.
-      // A reverse proxy is only really clonable when its backend is an Instatic
-      // instance, which the action decides by name; offering it and explaining
-      // the refusal beats hiding it on a guess.
+      // Mirrors CLONABLE in the injected Twig and CLONABLE_TYPES in the action,
+      // which refuses a reverse proxy not backed by an Instatic instance.
       clonable: ["php", "static", "reverse-proxy"].includes(site.type),
     };
   },

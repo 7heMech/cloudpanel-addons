@@ -70,6 +70,7 @@ maintenance:sites                  admin
 maintenance:status                 admin
 manager:disable                    admin
 manager:enable                     admin
+manager:holds                      admin
 manager:job                        admin
 manager:mark-news-seen             admin
 manager:news-seen                  admin
@@ -119,6 +120,7 @@ stager:watch-job                   admin stream
 system-tweaks:firewall             admin
 system-tweaks:install-fail2ban     admin
 system-tweaks:install-updates      admin
+system-tweaks:lock-settings        admin
 system-tweaks:set-backup-compression admin
 system-tweaks:set-clpctl-guard     admin
 system-tweaks:set-database-loopback admin
@@ -138,6 +140,8 @@ system-tweaks:set-vhost-guard      admin
 system-tweaks:state                admin
 system-tweaks:unban                admin
 terminal:root-access               own-account
+terminal:root-auth-options         own-account
+terminal:root-auth-verify          own-account
 terminal:session                   admin duplex
 wp-tools:domain-link-settings      admin
 wp-tools:job                       admin

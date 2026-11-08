@@ -3,29 +3,15 @@
 // The manager router strips the /addons/git prefix before dispatching here, so
 // a request for /addons/git/api/... arrives as /api/... .
 
+import { errorMessage } from "../../../lib/errors";
 import {
-  errorBlock, guardMutation, htmlResponse, jsonResponse, newCsrfToken, redirectResponse, safeDecodePathSegment, readBody, readMutation,
+  errorBlock, guardMutation, validateDomain, htmlResponse, jsonResponse, newCsrfToken, redirectResponse, safeDecodePathSegment, readBody, readMutation,
 } from "../../../lib/app-http";
 import { jobApiRoute } from "../../../lib/job-stream";
 import { embedLandingUrl } from "../../../lib/shadow-embed";
 import { fleetView, fragment, layout, siteView } from "./views";
-import { gitService, validateDomain, type GitSettings } from "./service";
+import { gitService, type GitSettings } from "./service";
 
-function html(body: string, csrf: string, status = 200): Response {
-  return htmlResponse(body, { status, csrf });
-}
-
-function json(body: unknown, status = 200): Response {
-  return jsonResponse(body, { status });
-}
-
-// A fragment is the first thing an operator who came straight from a site page
-// loads from this addon, so it carries the CSRF cookie its own actions echo.
-function fragmentJson(body: unknown, csrf: string, status = 200): Response {
-  return jsonResponse(body, { status, csrf });
-}
-
-/** The site page's content, and the log of whatever it last deployed. */
 async function sitePage(domain: string): Promise<{ title: string; content: string; context: Awaited<ReturnType<typeof gitService.site>>["context"] }> {
   const page = await gitService.site(domain);
   let log = "";
@@ -38,9 +24,9 @@ async function sitePage(domain: string): Promise<{ title: string; content: strin
 
 /** The change has landed even when its view cannot be drawn; the page then asks for the view again. */
 async function change(domain: string, result: { ok: boolean }): Promise<Response> {
-  if (!result.ok) return json(result, 400);
+  if (!result.ok) return jsonResponse(result, 400);
   const html = await sitePage(domain).then((page) => page.content, () => undefined);
-  return json(html === undefined ? result : { ...result, html });
+  return jsonResponse(html === undefined ? result : { ...result, html });
 }
 
 function settingsFrom(body: Record<string, unknown>): GitSettings | string {
@@ -66,7 +52,7 @@ async function readReplaceFlag(req: Request): Promise<boolean | Response> {
   const body = await readBody(req, 1024);
   if (body instanceof Response) return body;
   if (body.replace !== undefined && typeof body.replace !== "boolean") {
-    return json({ ok: false, error: "replace must be a boolean" }, 400);
+    return jsonResponse({ ok: false, error: "replace must be a boolean" }, 400);
   }
   return body.replace === true;
 }
@@ -84,7 +70,8 @@ export async function handle(
   // The reproduced strip draws only the site tabs this role can reach.
   const tabs = auth && !auth.roles.includes("ROLE_ADMIN") ? { addonSlugs: ["git"] } : {};
 
-  if (path === "/health") return json({ ok: true, service: "git-manager" });
+  // What a job page polls while the manager restarts (JOB_WATCH_JS).
+  if (path === "/health") return jsonResponse({ ok: true, service: "git-manager" });
 
   if (method === "GET" && path === "/") {
     const csrf = newCsrfToken();
@@ -97,14 +84,14 @@ export async function handle(
       if (target) return redirectResponse(embedLandingUrl(target, "git"));
     }
     try {
-      if (!selected) return html(layout("Git Deploy", fleetView(await gitService.listSites()), updateNotice, undefined, admin), csrf);
+      if (!selected) return htmlResponse(layout("Git Deploy", fleetView(await gitService.listSites()), updateNotice, undefined, admin), { csrf });
       const domain = validateDomain(selected);
-      if (!domain) return html(layout("Invalid site", '<div class="alert">That is not a valid hostname.</div>', updateNotice, undefined, admin), csrf, 400);
+      if (!domain) return htmlResponse(layout("Invalid site", errorBlock("That is not a valid hostname."), updateNotice, undefined, admin), { status: 400, csrf });
       const page = await sitePage(domain);
-      return html(layout(page.title, page.content, updateNotice, { ...page.context, ...tabs }, admin), csrf);
+      return htmlResponse(layout(page.title, page.content, updateNotice, { ...page.context, ...tabs }, admin), { csrf });
     } catch (error) {
-      const message = error instanceof Error ? error.message : String(error);
-      return html(layout("Git Deploy", errorBlock(error), updateNotice, undefined, admin), csrf, /not found/i.test(message) ? 404 : 500);
+      const message = errorMessage(error);
+      return htmlResponse(layout("Git Deploy", errorBlock(error), updateNotice, undefined, admin), { status: /not found/i.test(message) ? 404 : 500, csrf });
     }
   }
 
@@ -113,25 +100,25 @@ export async function handle(
   if (method === "GET" && path === "/fragment") {
     const csrf = newCsrfToken();
     const domain = validateDomain(url.searchParams.get("domain") ?? "");
-    if (!domain) return json({ ok: false, error: "that is not a valid hostname" }, 400);
+    if (!domain) return jsonResponse({ ok: false, error: "that is not a valid hostname" }, 400);
     try {
       const page = await sitePage(domain);
-      return fragmentJson(fragment(page.title, page.content), csrf);
+      return jsonResponse(fragment(page.title, page.content), { csrf });
     } catch (error) {
-      const message = error instanceof Error ? error.message : String(error);
-      return json({ ok: false, error: message }, /not found/i.test(message) ? 404 : 500);
+      const message = errorMessage(error);
+      return jsonResponse({ ok: false, error: message }, /not found/i.test(message) ? 404 : 500);
     }
   }
 
   if (method === "GET" && path === "/api/view") {
     const selected = url.searchParams.get("domain");
     const domain = selected === null ? null : validateDomain(selected);
-    if (selected !== null && !domain) return json({ ok: false, error: "that is not a valid hostname" }, 400);
+    if (selected !== null && !domain) return jsonResponse({ ok: false, error: "that is not a valid hostname" }, 400);
     try {
       const content = domain ? (await sitePage(domain)).content : fleetView(await gitService.listSites());
-      return json({ ok: true, html: content });
+      return jsonResponse({ ok: true, html: content });
     } catch (error) {
-      return json({ ok: false, error: error instanceof Error ? error.message : String(error) }, 500);
+      return jsonResponse({ ok: false, error: errorMessage(error) }, 500);
     }
   }
 
@@ -139,9 +126,9 @@ export async function handle(
   // which sites this addon deploys, so the rows ask.
   if (method === "GET" && path === "/api/sites") {
     try {
-      return json({ ok: true, domains: await gitService.configuredDomains() });
+      return jsonResponse({ ok: true, domains: await gitService.configuredDomains() });
     } catch (error) {
-      return json({ ok: false, error: error instanceof Error ? error.message : String(error) }, 500);
+      return jsonResponse({ ok: false, error: errorMessage(error) }, 500);
     }
   }
 
@@ -161,13 +148,13 @@ export async function handle(
     if (denied) return denied;
     const decoded = safeDecodePathSegment(siteRoute[1]!);
     const domain = decoded === null ? null : validateDomain(decoded);
-    if (!domain) return json({ ok: false, error: "that is not a valid hostname" }, 400);
+    if (!domain) return jsonResponse({ ok: false, error: "that is not a valid hostname" }, 400);
 
     if (siteRoute[2] === "config" && method === "PUT") {
       const body = await readBody(req, 8 * 1024);
       if (body instanceof Response) return body;
       const settings = settingsFrom(body);
-      if (typeof settings === "string") return json({ ok: false, error: settings }, 400);
+      if (typeof settings === "string") return jsonResponse({ ok: false, error: settings }, 400);
       const result = await gitService.configure(domain, settings);
       return change(domain, result);
     }
@@ -189,24 +176,24 @@ export async function handle(
         : await gitService.generateKey(domain, replace);
       return change(domain, result);
     }
-    return json({ ok: false, error: "method not allowed" }, 405);
+    return jsonResponse({ ok: false, error: "method not allowed" }, 405);
   }
 
   if (path === "/api/deployments") {
-    if (method !== "POST") return json({ ok: false, error: "method not allowed" }, 405);
+    if (method !== "POST") return jsonResponse({ ok: false, error: "method not allowed" }, 405);
     const body = await readMutation(req, 1024);
     if (body instanceof Response) return body;
     const domain = validateDomain(body.domain);
-    if (!domain) return json({ ok: false, error: "that is not a valid hostname" }, 400);
+    if (!domain) return jsonResponse({ ok: false, error: "that is not a valid hostname" }, 400);
     try {
       const result = await gitService.deploy(domain);
-      return json(result, result.ok ? 200 : 400);
+      return jsonResponse(result, result.ok ? 200 : 400);
     } catch (error) {
-      const message = error instanceof Error ? error.message : String(error);
+      const message = errorMessage(error);
       console.error("[git] deployment request failed:", message);
-      return json({ ok: false, error: message }, 500);
+      return jsonResponse({ ok: false, error: message }, 500);
     }
   }
 
-  return json({ ok: false, error: "not found" }, 404);
+  return jsonResponse({ ok: false, error: "not found" }, 404);
 }

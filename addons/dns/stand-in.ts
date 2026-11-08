@@ -6,17 +6,19 @@
  * Each is recorded before CloudPanel creates it, so the new-site work of every
  * addon already knows it is not an ordinary site.
  */
+import { errorMessage } from "../../lib/errors";
 import { randomBytes } from "node:crypto";
-import { panelSiteUserFor, runCommand } from "../../cli/action-common";
-import { replaceSiteVhost, type SiteVhostPaths } from "../../cli/site-vhost";
-import { ownsStandInSite } from "../../cli/stand-ins";
+import { panelSiteUserFor } from "../../lib/site-user";
+import { runCommand } from "../../lib/command";
+import { replaceSiteVhost, type SiteVhostPaths } from "../../lib/site-vhost";
+import { ownsStandInSite } from "../../lib/stand-ins";
 import type { StandIn, StandIns } from "./engine";
 import type { Redirect } from "./model";
 import { standInHosts } from "./redirects";
 import type { Issue } from "./ssl";
 import { readState, writeState } from "./store";
 
-export interface StandInRecord extends StandIn {
+interface StandInRecord extends StandIn {
   siteUser: string;
   /** CloudPanel's id for the site, once it exists. */
   siteId?: number;
@@ -34,7 +36,7 @@ export interface StandInPaths {
 /** Waits after each failed certificate attempt; the last repeats, since the domain may be pointed here any time. */
 const CERTIFICATE_DELAYS = [15 * 60_000, 60 * 60_000, 6 * 60 * 60_000, 24 * 60 * 60_000];
 
-export function standInTarget(redirect: StandIn): string {
+function standInTarget(redirect: StandIn): string {
   const query = redirect.target.includes("?") ? "&$args" : "$is_args$args";
   const path = redirect.keepPath ? (redirect.keepQuery ? "$request_uri" : "$1") : (redirect.keepQuery ? query : "");
   return `${redirect.target}${path}`;
@@ -147,7 +149,7 @@ export function clpctlStandIns(
             clpctl(paths, ["site:delete", `--domainName=${redirect.source}`, "--force"],
               `CloudPanel did not clean up ${redirect.source}; its stand-in record was kept`);
           } catch (cleanupError) {
-            throw new Error(`${error instanceof Error ? error.message : String(error)}; ${cleanupError instanceof Error ? cleanupError.message : String(cleanupError)}`);
+            throw new Error(`${errorMessage(error)}; ${errorMessage(cleanupError)}`);
           }
         }
         const after = readStandIns(paths);

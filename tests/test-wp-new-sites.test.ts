@@ -1,6 +1,8 @@
 import { afterEach, beforeEach, expect, test } from "bun:test";
 import { Database } from "bun:sqlite";
-import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, statSync, utimesSync, writeFileSync } from "node:fs";
+import {
+  existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, statSync, utimesSync, writeFileSync,
+} from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
@@ -10,7 +12,7 @@ import { WP_TOOLS_ADDON } from "../addons/wp-tools/addon";
 import { emptyMainwpState, mainwpOwesSite, saveMainwpState, type MainwpState } from "../addons/wp-tools/mainwp";
 import { NEW_SITE_PENDING_MS, readNewSitesState, type NewSitesState } from "../addons/wp-tools/new-sites";
 import { readVarnishState, type WpCommand } from "../addons/wp-tools/varnish";
-import { ADDONS, addonCertificates, addonNewSites } from "../cli/addon-catalog";
+import { ADDONS } from "../addons/catalog";
 import { certificateUnits } from "../cli/provision";
 
 let root = "";
@@ -288,8 +290,8 @@ test("what MainWP automation still owes a site", () => {
 });
 
 test("the watchers run WP Tools, and the certificate watcher watches CloudPanel's certificates", () => {
-  expect(addonNewSites([ADDONS["wp-tools"]!]).map((spec) => spec.name)).toEqual(["wp-tools"]);
-  expect(addonCertificates(Object.values(ADDONS)).map((spec) => spec.name)).toEqual(["wp-tools"]);
+  expect(ADDONS["wp-tools"]!.newSites).toBeDefined();
+  expect(Object.values(ADDONS).filter((spec) => spec.certificates).map((spec) => spec.name)).toEqual(["wp-tools"]);
   const units = certificateUnits();
   expect(units.path).toContain("PathChanged=/etc/nginx/ssl-certificates");
   expect(units.path).toContain("Unit=clp-addons-certificates.service");

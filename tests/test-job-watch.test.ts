@@ -2,7 +2,7 @@ import { expect, test } from "bun:test";
 import { appendFileSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { jobGet, jobSet, readJobLog, watchJobRecord } from "../cli/job-store";
+import { jobGet, jobSet, readJobLog, watchJobRecord } from "../lib/job-store";
 
 const ID = "20260911T160031Z-35e759";
 

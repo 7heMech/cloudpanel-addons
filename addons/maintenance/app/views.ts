@@ -1,6 +1,6 @@
 import { esc, escJs } from "../../../lib/app-http";
 import {
-  ATTENTION_RANK, FLEET_FOOTER_HTML, FLEET_SELECTION_HTML, FLEET_ROW_SELECTION_JS, fleetFilterHtml, filterWord, valueFilters, renderFragment, renderLayout,
+  ATTENTION_RANK, FLEET_NONE_HTML, FLEET_SELECTION_HTML, FLEET_ROW_SELECTION_JS, fleetFilterHtml, filterWord, valueFilters, renderFragment, renderLayout, type AddonChrome,
 } from "../../../lib/app-ui";
 import type { EmbedFragment } from "../../../lib/shadow-embed";
 import { mountPath } from "../../../lib/mount";
@@ -9,13 +9,13 @@ import type { MaintenanceFleet, MaintenanceSiteView, MaintenanceTemplateView } f
 
 const BASE = mountPath("maintenance");
 
-// Switches, toolbars, the confirmation dialog and the inline notice are in
-// lib/app-ui; only what this addon alone draws is here.
 import STYLE from "./views.css" with { type: "text" };
 
 import CLIENT_BODY from "./views.client.js" with { type: "text" };
 
 export const CLIENT_JS = `${FLEET_ROW_SELECTION_JS}\n${CLIENT_BODY}`;
+
+const CHROME: AddonChrome = { base: BASE, css: STYLE, script: CLIENT_JS };
 
 export function layout(
   title: string,
@@ -24,14 +24,7 @@ export function layout(
   site?: SiteContext,
 ): string {
   return renderLayout(title, content, {
-    brand: "Maintenance Mode",
-    base: BASE,
-    // No tab strip: this addon has one page of its own, so the strip could only
-    // hold a tab for the page already being read. A site-scoped page draws
-    // CloudPanel's own site tabs, which come from the site context below.
-    nav: [],
-    css: STYLE,
-    script: CLIENT_JS,
+    ...CHROME,
     updateNotice,
     ...(site ? { site: { ...site, activeSlug: "maintenance" } } : {}),
   });
@@ -42,13 +35,7 @@ export function layout(
  * site page. No site context: the panel is already drawing it.
  */
 export function fragment(title: string, content: string): EmbedFragment {
-  return renderFragment(title, content, {
-    brand: "Maintenance Mode",
-    base: BASE,
-    nav: [],
-    css: STYLE,
-    script: CLIENT_JS,
-  });
+  return renderFragment(title, content, CHROME);
 }
 
 function plural(count: number, word: string, many = `${word}s`): string {
@@ -147,10 +134,11 @@ export function fleetView(fleet: MaintenanceFleet, currentIp = ""): string {
         <th scope="col" class="site-select"><input id="select-all" type="checkbox" onchange="selectAllSites(this.checked)" aria-label="Select all sites"></th>
         <th scope="col" data-sort="domain">Site</th><th scope="col" data-sort="type">Type</th><th scope="col" data-sort="status">Effective status</th><th scope="col" class="action-cell">Site setting</th>
       </tr></thead><tbody>${sites.map((site) => siteRow(site, globalEnabled)).join("")}</tbody></table></div>
-      ${FLEET_FOOTER_HTML}`
+      ${FLEET_NONE_HTML}`
     : '<div class="empty">No CloudPanel sites were found.</div>';
   return `<div class="page-heading" id="maintenance-fleet"><div><h1>Maintenance Mode</h1><p>Switch sites to a 503 maintenance page without reloading Nginx.</p></div></div>
   ${banner}
+  ${globalCard(globalEnabled, sites.length === 0, fleet.global.bypasses, currentIp)}
   <div class="card card-table">
     <div class="card-header toolbar">
       <div><h2>Sites</h2><div class="hint">${inMaintenance} of ${sites.length} in maintenance</div></div>
@@ -161,8 +149,7 @@ export function fleetView(fleet: MaintenanceFleet, currentIp = ""): string {
       </div>` : ""}
     </div>
     ${table}
-  </div>
-  ${globalCard(globalEnabled, sites.length === 0, fleet.global.bypasses, currentIp)}`;
+  </div>`;
 }
 
 export function siteView(

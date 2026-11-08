@@ -2,14 +2,17 @@
 // and its sign-in credentials are the ones root allowed.
 import { afterAll, beforeEach, expect, test } from "bun:test";
 import { Database } from "bun:sqlite";
-import { chmodSync, mkdirSync, mkdtempSync, realpathSync, renameSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
+import {
+  chmodSync, mkdirSync, mkdtempSync, realpathSync, renameSync, rmSync, symlinkSync, writeFileSync,
+} from "node:fs";
 import { createHash } from "node:crypto";
 import { tmpdir } from "node:os";
-import { ActionFailure } from "../cli/action-common";
+import { ActionFailure } from "../lib/action";
 import {
-  parseTerminalRequest, resolveTerminalTarget, runTerminalAction, runuserCommand, type TerminalActionPaths,
+  parseTerminalRequest, resolveTerminalTarget, runTerminalAction, type TerminalActionPaths,
 } from "../addons/terminal/action";
-import { readRootGrants, rootAccess } from "../addons/terminal/root-access";
+import { rootAuth, totp } from "../addons/terminal/root-auth";
+import { clearRootAuth, readRootGrants, rootAccess } from "../addons/terminal/root-access";
 import { TERMINAL_TARGETS } from "../addons/terminal/inject/targets";
 import { renderLayout } from "../lib/app-ui";
 import { ownerOf, TerminalSessions, type StreamOpener } from "../addons/terminal/app/sessions";
@@ -18,6 +21,29 @@ import { dashboardView, popupPage } from "../addons/terminal/app/views";
 const uid = process.getuid?.() ?? 0;
 const base = realpathSync(mkdtempSync(`${tmpdir()}/terminal-root-`));
 let paths: TerminalActionPaths;
+const binding = "a".repeat(64);
+const authStorage = { dir: `${base}/box/auth`, lock: `${base}/locks/auth.lock`, securityKeys: `${base}/box/security-keys.conf` };
+function auth(verb: "options" | "verify" | "consume", input: Record<string, unknown> = {}, now = Date.now(), session = binding) {
+  return rootAuth(verb, "alice", "1", session, input, paths.rootAccess, now, authStorage) as any;
+}
+/** The code the app shows one step after a prompt opened at `opened`, entered then. */
+function nextCode(opened: number, secret = SECRET) {
+  const at = opened + 30_000;
+  return { at, code: totp(secret, Math.floor(at / 30000)) };
+}
+const SECRET = "JBSWY3DPEHPK3PXP";
+/** A well-formed code that none of the three accepted steps matches. */
+function wrongCode(now: number) {
+  const step = Math.floor(now / 30000);
+  const valid = [step - 1, step, step + 1].map((n) => totp(SECRET, n));
+  return ["000000", "000001", "000002", "000003"].find((code) => !valid.includes(code))!;
+}
+function ticket(now = Date.now()) {
+  change("UPDATE user SET mfa_secret = 'JBSWY3DPEHPK3PXP' WHERE user_name = 'alice'");
+  allow("alice");
+  const next = nextCode(now);
+  return auth("verify", { ...auth("options", {}, now), code: next.code }, next.at).ticket;
+}
 
 afterAll(() => rmSync(base, { recursive: true, force: true }));
 
@@ -129,15 +155,18 @@ test("an open root shell ends once its grant does", async () => {
   const audit: string[] = [];
   const calls: string[][] = [];
   const running = runTerminalAction(["session", "--root", "--panel-user=alice", "--cols=80", "--rows=24"], {
-    paths, processUid: 0, env: { CLP_ADDONS_DUPLEX_WORKER: "1", CLP_ADDONS_SESSION_2FA: "1" }, rootRecheckMs: 20,
+    paths, rootAuthStorage: authStorage, processUid: 0, env: { CLP_ADDONS_TICKET: ticket(), CLP_ADDONS_SESSION_BINDING: binding, CLP_ADDONS_DUPLEX_WORKER: "1", CLP_ADDONS_SESSION_2FA: "1" }, rootRecheckMs: 20,
     audit: (line) => audit.push(line),
     spawn: ((argv: string[]) => { calls.push(argv); return Bun.spawn(["sleep", "30"]); }) as unknown as typeof Bun.spawn,
   });
   await Bun.sleep(60);
   change("UPDATE user SET mfa = 0 WHERE user_name = 'alice'");
   await running;
-  expect(calls).toEqual([runuserCommand(paths, "root")]);
-  expect(audit[0]).toBe("alice opened a root shell as root");
+  expect(calls).toEqual([[
+    "/usr/sbin/runuser", "--login", "--whitelist-environment=TERM,CLP_SITE_DIR,CLP_PTY_SIZE,CLP_ROOT_SHELL",
+    "--command=exec /usr/local/bin/clp-addons terminal-pty", "--", "root",
+  ]]);
+  expect(audit[0]).toBe("alice opened a root shell as root, verified with an authenticator code");
   expect(audit.some((line) => line.includes("root shell ended: A root terminal needs 2FA"))).toBe(true);
   expect(audit.at(-1)).toContain("alice closed a root shell as root");
 });
@@ -145,7 +174,7 @@ test("an open root shell ends once its grant does", async () => {
 function rootSession(extra: Record<string, unknown>, child: () => ReturnType<typeof Bun.spawn>) {
   const audit: string[] = [];
   const running = runTerminalAction(["session", "--root", "--panel-user=alice", "--cols=80", "--rows=24"], {
-    paths, processUid: 0, env: { CLP_ADDONS_DUPLEX_WORKER: "1", CLP_ADDONS_SESSION_2FA: "1" }, rootRecheckMs: 20,
+    paths, rootAuthStorage: authStorage, processUid: 0, env: { CLP_ADDONS_TICKET: ticket(), CLP_ADDONS_SESSION_BINDING: binding, CLP_ADDONS_DUPLEX_WORKER: "1", CLP_ADDONS_SESSION_2FA: "1" }, rootRecheckMs: 20,
     audit: (line) => audit.push(line),
     spawn: child as unknown as typeof Bun.spawn,
     ...extra,
@@ -236,18 +265,24 @@ test("the page's button opens a root shell only for an allowed administrator, an
 
 test("the header control is in both of CloudPanel's headers and the addons' own, for administrators, hidden until root answers", () => {
   const headers = TERMINAL_TARGETS.filter((target) => target.slug.startsWith("root-shell"));
-  expect(headers.map((target) => target.template)).toEqual(["Frontend/Partial/header.html.twig", "Admin/Partial/header.html.twig"]);
+  expect(headers.map((target) => target.template)).toEqual([
+    "Frontend/Partial/header.html.twig", "Admin/Partial/header.html.twig",
+    "Frontend/Partial/header.html.twig", "Admin/Partial/header.html.twig",
+  ]);
   for (const target of headers) {
     const snippet = target.snippet("/addons/terminal");
     expect(snippet).toContain("{% if is_granted('ROLE_ADMIN') %}");
     expect(snippet).toContain('data-clp-root-shell style="display: none;"');
-    expect(snippet).toContain('fetch("/addons/terminal/api/root-access"');
+    // The account menu's copy, for phones, rides on the header item's script.
+    if (target.slug.endsWith("-menu")) expect(snippet).toContain('<a class="dropdown-item" href="/addons/terminal/root"');
+    else expect(snippet).toContain('fetch("/addons/terminal/api/root-access"');
     // Twig would read these as its own tags.
     expect(snippet.replace("{% if is_granted('ROLE_ADMIN') %}", "").replace("{% endif %}", "")).not.toMatch(/\{[{%#]/);
   }
-  const page = renderLayout("Terminal", "", { brand: "Terminal", base: "/addons/terminal", nav: [], script: "" });
+  const page = renderLayout("Terminal", "", { base: "/addons/terminal", script: "" });
   expect(page).toContain('id="clp-root-shell" data-clp-root-shell hidden');
-  expect(renderLayout("Terminal", "", { brand: "Terminal", base: "/addons/terminal", nav: [], script: "", admin: false })).not.toContain("clp-root-shell");
+  expect(page).toContain('class="clp-root-shell-menu" data-clp-root-shell hidden');
+  expect(renderLayout("Terminal", "", { base: "/addons/terminal", script: "", admin: false })).not.toContain("data-clp-root-shell");
 });
 
 test("a root access check that fails says so, rather than that root never allowed the account", async () => {
@@ -290,4 +325,119 @@ test("a passkey sign-in opens it with a key the account had when root allowed it
   // Removed or revoked, the key no longer opens one, even from the session it signed in.
   store(["added-later"]);
   expect(access("alice", "passkey:alice-key").problem).toContain("no longer on your account");
+});
+
+
+test("TOTP matches the RFC 6238 SHA-1 test vector", () => {
+  expect(totp("GEZDGNBVGY3TQOJQGEZDGNBVGY3TQOJQ", 1)).toBe("287082");
+});
+test("root verification tickets are bound to a session and single-use", () => {
+  const proof = ticket();
+  expect(() => auth("consume", { ticket: proof }, Date.now(), "b".repeat(64))).toThrow("Verify with 2FA");
+  auth("consume", { ticket: proof });
+  expect(() => auth("consume", { ticket: proof })).toThrow("Verify with 2FA");
+});
+test("expired tickets and challenges, replayed codes and revoked grants are refused", () => {
+  const now = Date.now();
+  const proof = ticket(now);
+  const used = nextCode(now);
+  expect(() => auth("consume", { ticket: proof }, used.at + 60001)).toThrow("Verify with 2FA");
+  const challenge = auth("options", {}, now).challenge;
+  expect(() => auth("verify", { challenge, code: used.code }, used.at)).toThrow("used already");
+  const expired = auth("options", {}, now).challenge;
+  expect(() => auth("verify", { challenge: expired, code: "123456" }, now + 300001)).toThrow("expired");
+  change("UPDATE user SET mfa = 0 WHERE user_name = 'alice'");
+  expect(() => auth("consume", { ticket: proof })).toThrow("needs 2FA");
+});
+test("only a code from after the prompt opened counts, and an older one spends nothing", () => {
+  change(`UPDATE user SET mfa_secret = '${SECRET}' WHERE user_name = 'alice'`);
+  allow("alice");
+  const now = Date.now();
+  const step = Math.floor(now / 30000);
+  // The code used to sign in, or any other showing when the prompt opened, is refused, however often.
+  for (let i = 0; i < 6; i++) {
+    for (const n of [step - 1, step]) {
+      expect(() => auth("verify", { ...auth("options", {}, now), code: totp(SECRET, n) }, now)).toThrow("Enter the next code");
+    }
+  }
+  // Not one of those spent the budget: the next code still works.
+  const next = nextCode(now);
+  expect(auth("verify", { ...auth("options", {}, now), code: next.code }, next.at).ticket).toBeString();
+});
+
+test("five wrong codes throttle the account across sessions; malformed ones do not count", () => {
+  change(`UPDATE user SET mfa_secret = '${SECRET}' WHERE user_name = 'alice'`);
+  allow("alice");
+  expect(() => auth("verify", { ...auth("options"), code: "bad" })).toThrow("six-digit");
+  for (let i = 0; i < 5; i++) {
+    const now = Date.now();
+    expect(() => auth("verify", { ...auth("options", {}, now), code: wrongCode(now) }, now)).toThrow("Invalid code");
+  }
+  expect(() => auth("options", {}, Date.now(), "b".repeat(64))).toThrow("Too many failed verifications");
+});
+test("a session opening prompt after prompt keeps only its latest, so cancelling never fills the cap", () => {
+  change(`UPDATE user SET mfa_secret = '${SECRET}' WHERE user_name = 'alice'`);
+  allow("alice");
+  const now = Date.now();
+  let first = "";
+  for (let i = 0; i < 25; i++) {
+    const { challenge } = auth("options", {}, now);
+    if (i === 0) first = challenge;
+  }
+  const next = nextCode(now);
+  // The first prompt was replaced; the latest still answers.
+  expect(() => auth("verify", { challenge: first, code: next.code }, next.at)).toThrow("expired");
+  expect(auth("verify", { ...auth("options", {}, now), code: next.code }, next.at).ticket).toBeString();
+});
+
+test("twenty wrong codes in a day throttle the account even when spread out", () => {
+  change(`UPDATE user SET mfa_secret = '${SECRET}' WHERE user_name = 'alice'`);
+  allow("alice");
+  const start = Date.now();
+  for (let i = 0; i < 20; i++) {
+    const now = start + i * 100_000;
+    expect(() => auth("verify", { ...auth("options", {}, now), code: wrongCode(now) }, now)).toThrow("Invalid code");
+  }
+  expect(() => auth("options", {}, start + 20 * 100_000)).toThrow("Too many failed verifications");
+  // Root allowing the account again lets its owner back in.
+  clearRootAuth("alice", authStorage);
+  expect(auth("options", {}, start + 20 * 100_000).challenge).toBeString();
+});
+test("only failed proofs spend the attempt budget", () => {
+  change("UPDATE user SET mfa_secret = 'JBSWY3DPEHPK3PXP' WHERE user_name = 'alice'");
+  allow("alice");
+  const start = Date.now();
+  for (let i = 0; i < 6; i++) {
+    const now = start + i * 30_000;
+    const next = nextCode(now);
+    expect(auth("verify", { ...auth("options", {}, now), code: next.code }, next.at).ticket).toBeString();
+  }
+});
+test("passkeys are offered only while Security Keys is on, and only those the account still has", () => {
+  allow("alice");
+  mkdirSync(paths.rootAccess.securityKeys, { recursive: true });
+  const store = (keys: string[]) => writeFileSync(`${paths.rootAccess.securityKeys}/credentials.json`,
+    JSON.stringify({ users: { alice: { userId: 1, keys: keys.map((id) => ({ id, name: id })) } } }), { mode: 0o600 });
+  store(["alice-key"]);
+  expect(auth("options").keys).toEqual([]);
+  writeFileSync(authStorage.securityKeys, "");
+  expect(auth("options").keys).toEqual(["alice-key"]);
+  store([]);
+  expect(auth("options").keys).toEqual([]);
+});
+test("a challenge cannot be answered from a different session", () => {
+  allow("alice");
+  const challenge = auth("options").challenge;
+  expect(() => auth("verify", { challenge, code: "123456" }, Date.now(), "b".repeat(64))).toThrow("expired");
+});
+test("a root worker refuses a direct request without fresh verification", async () => {
+  allow("alice");
+  let spawned = false;
+  const result = await runTerminalAction(["session", "--root", "--panel-user=alice", "--cols=80", "--rows=24"], {
+    paths, rootAuthStorage: authStorage, processUid: 0,
+    env: { CLP_ADDONS_SESSION_BINDING: binding, CLP_ADDONS_DUPLEX_WORKER: "1", CLP_ADDONS_SESSION_2FA: "1" },
+    spawn: (() => { spawned = true; throw new Error("must not spawn"); }) as any,
+  });
+  expect(result).toBe(1);
+  expect(spawned).toBe(false);
 });

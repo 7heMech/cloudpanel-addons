@@ -9,9 +9,11 @@ import type { CloudflareState } from "./service";
 const BASE = mountPath("cloudflare-ips");
 const plural = (count: number, word: string): string => `${count} ${word}${count === 1 ? "" : "s"}`;
 
-// Switches, the toolbar, the confirmation dialog and the inline notice come
-// from lib/app-ui so this addon looks like the rest of the manager.
 import STYLE from "./views.css" with { type: "text" };
+
+// One criterion, so a toggle rather than a menu; it keeps the shared filter's
+// contract, a checkbox inside #fleet-show, so search, count and selection treat it alike.
+const OFF_ONLY_HTML = `<label class="btn cf-off-only" id="fleet-show"><input class="visually-hidden" type="checkbox" value="off" data-group="Status" onchange="pickFleetFilter()">Off only</label>`;
 
 export const CLIENT_JS = `
 ${FLEET_ROW_SELECTION_JS}
@@ -19,9 +21,7 @@ ${CLIENT_JS_BODY}`;
 
 export function layout(title: string, content: string, updateNotice?: { current: string; latest: string } | null): string {
   return renderLayout(title, content, {
-    brand: "Cloudflare IP Access",
     base: BASE,
-    nav: [],
     css: STYLE,
     script: CLIENT_JS,
     updateNotice,
@@ -56,7 +56,7 @@ export function dashboardView(state: CloudflareState): string {
               <button class="btn" id="disable-selected" type="button" disabled data-needs-selection onclick="setSelectedSites(false)">Disable selected</button>
             </div>
           </div>
-          ${fleetFilterHtml({ count: total, filters: [{ value: "off", label: "Off" }], summary: plural(total, "site") })}
+          ${fleetFilterHtml({ count: total, summary: plural(total, "site") }).replace('<span class="hint" id="fleet-summary"', `${OFF_ONLY_HTML}$&`)}
           <div class="table-scroll"><table class="fleet-table cloudflare-site-table">
             <thead><tr>
               <th scope="col" class="site-select"><input id="select-all" type="checkbox" onchange="selectAllSites(this.checked)" aria-label="Select all sites"></th>

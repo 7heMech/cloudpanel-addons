@@ -6,7 +6,6 @@ import { join } from "node:path";
 import {
   DEFAULT_INSTATIC_ACTION_PATHS, deleteInstaticInstance, type InstaticActionPaths,
 } from "../addons/instatic/action";
-import { ActionFailure } from "../cli/action-common";
 
 const SCENARIOS = ["missing", "present", "archive-fails", "database-fails", "docker-fails", "panel-fails", "changed-site"] as const;
 
@@ -72,8 +71,8 @@ if [ "${scenario}" = panel-fails ]; then exit 1; fi
     try {
       deleteInstaticInstance({ domain: "example.com", confirm: "example.com" }, paths);
       successful = true;
-    } catch (error) {
-      expect(error instanceof ActionFailure || error instanceof Error).toBe(true);
+    } catch {
+      // The outcome assertions below say whether a refusal was right.
     } finally {
       if (oldPath === undefined) delete process.env.PATH;
       else process.env.PATH = oldPath;

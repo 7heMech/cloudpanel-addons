@@ -1,15 +1,15 @@
-import { describe, expect, test } from "bun:test";
-import { readFileSync } from "node:fs";
-import { join } from "node:path";
+import { describe, expect, spyOn, test } from "bun:test";
 import {
-  BodyError, MAX_BODY_BYTES, SECURITY_HEADERS, bodyErrorResponse, clientIp, esc, escJs, guardMutation, htmlResponse,
-  jsonResponse, newCsrfToken, policyHeaders, policyResponse, readJsonObject, redirectResponse,
-  safeDecodePathSegment,
+  BodyError, MAX_BODY_BYTES, SECURITY_HEADERS, bodyErrorResponse, clientIp, contentSecurityPolicy, esc, escJs, guardMutation,
+  htmlResponse, jsonResponse, newCsrfToken, policyHeaders, policyResponse, readJsonObject, redirectResponse,
+  safeDecodePathSegment, validateDomain, validateExactDomain,
 } from "../lib/app-http";
-
-function repoSource(path: string): string {
-  return readFileSync(join(import.meta.dir, "..", path), "utf8");
-}
+import { appRequest } from "./app-request";
+import { handle as instaticHandle } from "../addons/instatic/app/index";
+import { instaticService } from "../addons/instatic/app/service";
+import * as tags from "../addons/instatic/app/tags";
+import { handle as stagerHandle } from "../addons/stager/app/index";
+import { stagerService } from "../addons/stager/app/service";
 
 describe("response policy", () => {
   test("every response carries the content type, no-store and the security headers", () => {
@@ -36,6 +36,22 @@ describe("response policy", () => {
     });
     expect(asset.headers.get("Cache-Control")).toBe("public, max-age=31536000, immutable");
     expect(await asset.text()).toBe("x");
+  });
+
+  test("a bare number is the status and nothing else", () => {
+    const res = jsonResponse({ ok: false }, 404);
+    expect(res.status).toBe(404);
+    expect(res.headers.get("Content-Security-Policy")).toBe(SECURITY_HEADERS["Content-Security-Policy"]!);
+    expect(res.headers.getSetCookie()).toEqual([]);
+    expect(htmlResponse("", 500).status).toBe(500);
+  });
+
+  test("a page's own CSP replaces a directive in place and adds a new one last", () => {
+    const base = SECURITY_HEADERS["Content-Security-Policy"]!;
+    expect(contentSecurityPolicy()).toBe(base);
+    expect(contentSecurityPolicy({ "form-action": "https://shop.example.com" }))
+      .toBe(base.replace("form-action 'none'", "form-action https://shop.example.com"));
+    expect(contentSecurityPolicy({ "frame-src": "'self' blob:" })).toBe(`${base}; frame-src 'self' blob:`);
   });
 
   test("caller headers are merged, not spread", () => {
@@ -196,6 +212,18 @@ describe("repeated Set-Cookie", () => {
   });
 });
 
+describe("domain validation", () => {
+  test("validateDomain rewrites to the canonical form; validateExactDomain only accepts it", () => {
+    expect(validateDomain(" Shop.Example.com. ")).toBe("shop.example.com");
+    expect(validateExactDomain(" Shop.Example.com. ")).toBeNull();
+    expect(validateExactDomain("shop.example.com")).toBe("shop.example.com");
+    for (const bad of [null, 42, "", "localhost", "a..b.com", `${"a".repeat(250)}.com`]) {
+      expect(validateDomain(bad)).toBeNull();
+      expect(validateExactDomain(bad)).toBeNull();
+    }
+  });
+});
+
 describe("path segment decoding", () => {
   test("decodes a segment and refuses malformed encoding", () => {
     expect(safeDecodePathSegment("a%20b")).toBe("a b");
@@ -211,16 +239,33 @@ describe("HTML and JavaScript escaping", () => {
   test("esc encodes HTML rather than removing characters", () => {
     expect(esc(`<tag attr="quoted">&'`)).toBe("&lt;tag attr=&quot;quoted&quot;&gt;&amp;&#x27;");
     expect(esc("<&>")).toBe("&lt;&amp;&gt;");
-    // The helper this replaced deleted the characters instead of encoding them.
-    expect(esc("<unsafe>&")).not.toBe("unsafe");
   });
 
-  test("the addon error paths escape through Bun rather than by hand", () => {
-    // errorBlock escapes through esc(), which is Bun.escapeHTML.
-    expect(repoSource("addons/instatic/app/index.ts")).toInclude("errorBlock(err)");
-    const stager = repoSource("addons/stager/app/index.ts");
-    expect(stager).toInclude("Bun.escapeHTML(");
-    expect(stager).not.toInclude("escapeMinimal");
+  // A root action's error text can carry anything a site or a job wrote.
+  test("the addon error pages encode what the action said", async () => {
+    const markup = "<img src=x onerror=alert(1)>";
+    const spies = [
+      spyOn(instaticService, "listInstancesOrThrow").mockRejectedValue(new Error(markup)),
+      spyOn(instaticService, "listJobs").mockResolvedValue([]),
+      spyOn(tags, "listAvailableTags").mockResolvedValue({ tags: [], latest: "", source: "registry" } as never),
+      spyOn(stagerService, "snapshot").mockRejectedValue(new Error("no snapshot")),
+      spyOn(stagerService, "listJobs").mockRejectedValue(new Error(markup)),
+      spyOn(stagerService, "getJob").mockResolvedValue({ ok: false, error: markup } as never),
+    ];
+    try {
+      const pages = [
+        await instaticHandle(appRequest("/"), "/"),
+        await stagerHandle(appRequest("/"), "/"),
+        await stagerHandle(appRequest("/jobs/20260910T120000Z-abcdef"), "/jobs/20260910T120000Z-abcdef"),
+      ];
+      for (const res of pages) {
+        const html = await res.text();
+        expect(html).toContain("&lt;img src=x onerror=alert(1)&gt;");
+        expect(html).not.toContain(markup);
+      }
+    } finally {
+      for (const spy of spies) spy.mockRestore();
+    }
   });
 
   // escJs writes into a single-quoted JS string that itself sits inside a

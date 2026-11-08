@@ -4,26 +4,30 @@
  * journal. fail2ban bans in its own nftables table, which `ufw reset` does not
  * touch. See "Login jails" in docs/decisions/system-tweaks.md.
  */
-import { existsSync, readFileSync, rmSync } from "node:fs";
+import { errorMessage } from "../../lib/errors";
+import { existsSync, readFileSync } from "node:fs";
 import { isIP } from "node:net";
-import { failAction, type CommandResult } from "../../cli/action-common";
-import { cloudflareRanges, nginxFileChange, trustedVhost, withNginxTransaction } from "../../cli/nginx-transaction";
-import { CLOUDFLARE_IPS_PATH, ROOT_UID, nginxLayout } from "../../cli/paths";
-import { writeFileAtomic } from "../../lib/atomic-write";
+import { failAction } from "../../lib/action";
+import { commandOutput, type CommandResult } from "../../lib/command";
+import { cloudflareRanges, nginxFileChange, trustedVhost, withNginxTransaction } from "../../lib/nginx-transaction";
+import { CLOUDFLARE_IPS_PATH, ROOT_UID, nginxLayout } from "../../lib/paths";
+import { writeOrRemove } from "../../lib/atomic-write";
 import { panelUserGid, panelUserUid } from "../../lib/sso-auth";
-import { systemRun, type Run } from "./updates";
+import { aptInstall, installedVersion, systemRun, withDeadline, type Run } from "./packages";
+import { INSTALL_DEADLINE_MS } from "./limits";
+import { tweak, type TweakContext } from "./tweak";
 
 export const PANEL_JAIL = "clp-addons-panel";
 /** The panel through CloudPanel's custom domain, which the sites' nginx serves on 443. */
 export const DOMAIN_JAIL = "clp-addons-domain";
-export const SSH_JAIL = "sshd";
+const SSH_JAIL = "sshd";
 export const LOGIN_JAILS = [PANEL_JAIL, DOMAIN_JAIL, SSH_JAIL] as const;
 const PANEL_PORT = "8443";
 const DOMAIN_PORT = "443";
 const LOG_TAG = "clp_addons_panel";
 const DOMAIN_TAG = "clp_addons_domain";
 /** fail2ban, its journal reader, and nft for the bans. */
-export const LOGIN_JAIL_PACKAGES = ["fail2ban", "python3-systemd", "nftables"];
+const LOGIN_JAIL_PACKAGES = ["fail2ban", "python3-systemd", "nftables"];
 /** Proxies the panel trusts besides Cloudflare: a ban on one would shut out everyone behind it. */
 const PRIVATE_PROXIES = ["10.0.0.0/8", "172.16.0.0/12", "192.168.0.0/16"];
 export const JAIL_LIMITS = { maxretry: 5, findtime: "1h", bantime: "1h" };
@@ -40,7 +44,7 @@ export interface Fail2banBefore {
   active: boolean;
 }
 
-export const DEFAULT_LOGIN_JAIL_PATHS = {
+const DEFAULT_LOGIN_JAIL_PATHS = {
   fail2banDir: "/etc/fail2ban",
   /** The panel's own nginx.conf; null on a CloudPanel whose panel shares the sites' nginx. */
   panelConf: nginxLayout().configFile as string | null,
@@ -81,7 +85,7 @@ export interface LoginJailsStatus {
   /** Packages the jails need that are missing. */
   missing: string[];
   service: "active" | "inactive" | "masked";
-  /** The jails of these two that fail2ban runs now. */
+  /** The login jails fail2ban runs now. */
   running: string[];
   /** Whether the panel's nginx sends failed logins to the journal; null without a panel nginx. */
   panelLog: boolean | null;
@@ -110,7 +114,7 @@ function files(paths: Context["paths"]) {
 }
 
 function output(result: CommandResult): string {
-  return (result.stderr || result.stdout).trim().split("\n").slice(-3).join(" ");
+  return commandOutput(result, 3);
 }
 
 // --- The panel's nginx -----------------------------------------------------
@@ -168,7 +172,7 @@ function syslogLog(tag: string): string {
 }
 
 /** What takes the place of the panel's http-level `access_log off;`. */
-export function loginLogBlock(indent: string): string {
+function loginLogBlock(indent: string): string {
   const lines = [`${MARK}access_log off;`, "# clp-addons:login-log:start", ...loginMaps(), syslogLog(LOG_TAG), "# clp-addons:login-log:end"];
   return lines.map((line) => `${indent}${line}\n`).join("");
 }
@@ -206,8 +210,7 @@ function panelLogActive(ctx: Context): boolean | null {
   return withLoginLog(content) === content;
 }
 
-/** Adds or removes the block, testing and reloading the panel's nginx and restoring the file on failure. */
-export function applyLoginLog(enabled: boolean, options: LoginJailOptions = {}): boolean {
+function applyLoginLog(enabled: boolean, options: LoginJailOptions = {}): boolean {
   const ctx = contextOf(options);
   const target = panelTarget(ctx);
   if (!target) return false;
@@ -274,8 +277,7 @@ function domainUid(ctx: Context): number | null {
   } catch { return null; }
 }
 
-/** Adds or removes the custom domain's log, testing and reloading the sites' nginx and restoring the file on failure. */
-export function applyDomainLog(enabled: boolean, options: LoginJailOptions = {}): boolean {
+function applyDomainLog(enabled: boolean, options: LoginJailOptions = {}): boolean {
   const ctx = contextOf(options);
   const current = readDomainVhost(ctx);
   if (current === null) return false;
@@ -384,7 +386,7 @@ export function jailFiles(settings: LoginJailSettings, input: {
   };
 }
 
-/** Writes the files and has fail2ban test them; on a refusal they go back as they were. Whether any changed. */
+/** Returns whether any file changed. */
 function writeJailFiles(ctx: Context, settings: LoginJailSettings): boolean {
   const wanted = jailFiles(settings, {
     panelUid: ctx.paths.panelUid ?? panelUserUid(),
@@ -394,10 +396,7 @@ function writeJailFiles(ctx: Context, settings: LoginJailSettings): boolean {
   });
   const paths = files(ctx.paths);
   const previous = new Map<string, string | null>();
-  const put = (path: string, content: string | null) => {
-    if (content === null) rmSync(path, { force: true });
-    else writeFileAtomic(path, content, { mode: 0o644 });
-  };
+  const put = (path: string, content: string | null) => writeOrRemove(path, content, { mode: 0o644 });
   for (const key of ["defaults", "jails", "filter"] as const) {
     const path = paths[key];
     const current = existsSync(path) ? readFileSync(path, "utf8") : null;
@@ -418,10 +417,13 @@ function writeJailFiles(ctx: Context, settings: LoginJailSettings): boolean {
 
 export function missingPackages(options: LoginJailOptions = {}): string[] {
   const { run } = contextOf(options);
-  return LOGIN_JAIL_PACKAGES.filter((name) => {
-    const query = run("dpkg-query", ["-W", "-f=${Status}", name]);
-    return !query.ok || !query.stdout.includes("install ok installed");
-  });
+  return LOGIN_JAIL_PACKAGES.filter((name) => !installedVersion(run, name));
+}
+
+/** Why the jails cannot run here now, or null: switched on, they would only be saved for later. */
+export function loginJailsBlocked(options: LoginJailOptions = {}): string | null {
+  if (missingPackages(options).length) return "fail2ban is not installed; install it under Failed logins first";
+  return unitState(contextOf(options)).masked ? "fail2ban.service is masked" : null;
 }
 
 function unitState(ctx: Context): { enabled: boolean; active: boolean; masked: boolean } {
@@ -488,19 +490,9 @@ export function releaseLoginJails(before: Fail2banBefore | null, options: LoginJ
   return true;
 }
 
-/** apt-get install for whichever packages are missing, with the lists refreshed and tried once more when they are stale. */
 export function installLoginJailPackages(options: LoginJailOptions = {}): void {
-  const { run } = contextOf(options);
   const missing = missingPackages(options);
-  if (!missing.length) return;
-  const env = { DEBIAN_FRONTEND: "noninteractive" };
-  const install = () => run("apt-get", ["install", "-y", "-o", "DPkg::Lock::Timeout=120", ...missing], env);
-  let result = install();
-  if (!result.ok) {
-    run("apt-get", ["update", "-o", "DPkg::Lock::Timeout=120"], env);
-    result = install();
-  }
-  if (!result.ok) failAction(`apt-get could not install ${missing.join(", ")}: ${output(result)}`);
+  if (missing.length) aptInstall(contextOf(options).run, missing);
 }
 
 // --- What the page shows ---------------------------------------------------
@@ -524,7 +516,7 @@ export function loginJailsStatus(options: LoginJailOptions = {}): LoginJailsStat
   const problems: string[] = [];
   let panelLog: boolean | null = null;
   try { panelLog = panelLogActive(ctx); }
-  catch (error) { problems.push(error instanceof Error ? error.message : String(error)); }
+  catch (error) { problems.push(errorMessage(error)); }
   let customDomain: LoginJailsStatus["customDomain"] = null;
   try {
     const vhost = readDomainVhost(ctx);
@@ -533,7 +525,7 @@ export function loginJailsStatus(options: LoginJailOptions = {}): LoginJailsStat
       const wanted = withDomainLog(vhost);
       customDomain = { name: name ?? ctx.paths.domainVhost, logged: wanted === vhost, supported: wanted !== null };
     }
-  } catch (error) { problems.push(error instanceof Error ? error.message : String(error)); }
+  } catch (error) { problems.push(errorMessage(error)); }
   const sshd = sshLogin(sshdConfig(ctx));
   const missing = missingPackages(options);
   if (missing.includes("fail2ban")) {
@@ -558,3 +550,91 @@ export function unban(body: Record<string, unknown>, options: LoginJailOptions =
   const result = contextOf(options).run("fail2ban-client", ["set", jail as string, "unbanip", ip]);
   if (!result.ok) failAction(`fail2ban could not unban ${ip}: ${output(result)}`);
 }
+
+interface Settings {
+  /** fail2ban jails for the panel login and for SSH. */
+  loginJails: LoginJailSettings;
+  /** fail2ban.service before System Tweaks first started it, which turning both jails off puts back. */
+  fail2banBefore: Fail2banBefore | null;
+}
+
+type Options = { loginJails?: LoginJailOptions; now?: () => number };
+
+/** Applies the jails `wanted` asks for and saves what fail2ban was before them; returns whether fail2ban changed. */
+function settle(ctx: TweakContext<Settings, Options>, wanted: Settings, options = ctx.options.loginJails): boolean {
+  const applied = applyLoginJails(wanted.loginJails, wanted.fail2banBefore, options);
+  const next = { loginJails: { ...wanted.loginJails, ssh: applied.ssh }, fail2banBefore: applied.before };
+  const saved = { loginJails: ctx.settings.loginJails, fail2banBefore: ctx.settings.fail2banBefore };
+  if (JSON.stringify(next) !== JSON.stringify(saved)) ctx.save(next);
+  return applied.changed;
+}
+
+function loginJailsOrError(settings: LoginJailSettings, options?: LoginJailOptions): (LoginJailsStatus & LoginJailSettings) | { error: string } {
+  try { return { ...loginJailsStatus(options), ...settings }; }
+  catch (error) { return { error: errorMessage(error) }; }
+}
+
+/** The panel and SSH jails; the page has its own card for them. */
+export const LOGIN_JAILS_TWEAK = tweak<Settings, Options, { loginJails: ReturnType<typeof loginJailsOrError> }>()({
+  defaults: { loginJails: { panel: true, ssh: false }, fail2banBefore: null },
+  read(stored, settings) {
+    const jails = (stored.loginJails ?? {}) as Record<string, unknown>;
+    if (jails.panel === false) settings.loginJails.panel = false;
+    if (jails.ssh === true) settings.loginJails.ssh = true;
+    const before = stored.fail2banBefore as Record<string, unknown> | null | undefined;
+    if (typeof before?.enabled === "boolean" && typeof before.active === "boolean") {
+      settings.fail2banBefore = { enabled: before.enabled, active: before.active };
+    }
+  },
+  state: ({ options, settings }) => ({ loginJails: loginJailsOrError(settings.loginJails, options.loginJails) }),
+  verbs: {
+    async "set-login-jails"(ctx) {
+      const body = await ctx.body();
+      const named = (["panel", "ssh"] as const).filter((key) => body[key] !== undefined);
+      if (!named.length) failAction("no jail was named");
+      for (const key of named) if (typeof body[key] !== "boolean") failAction(`${key} must be true or false`);
+      await ctx.locked((locked) => {
+        settle(locked, { ...locked.settings, loginJails: { ...locked.settings.loginJails, ...Object.fromEntries(named.map((key) => [key, body[key] as boolean])) } });
+      }, { verb: "set-login-jails", values: named.map((key) => body[key]) });
+      return ctx.state();
+    },
+    // One deadline for the install and the state read that answers it, which
+    // the gateway's timeout is sized from.
+    async "install-fail2ban"(ctx) {
+      const now = ctx.options.now ?? Date.now;
+      const run = withDeadline(ctx.options.loginJails?.run ?? systemRun, now() + INSTALL_DEADLINE_MS, now, "fail2ban");
+      const loginJails = { ...ctx.options.loginJails, run };
+      await ctx.locked((locked) => {
+        // Not there before, so not running before: switching the jails off stops and disables it.
+        const before = locked.settings.fail2banBefore ?? (installedVersion(run, "fail2ban") ? null : { enabled: false, active: false });
+        installLoginJailPackages(loginJails);
+        settle(locked, { loginJails: locked.settings.loginJails, fail2banBefore: before }, loginJails);
+      });
+      return ctx.state({ loginJails });
+    },
+    async unban(ctx) {
+      unban(await ctx.body(), ctx.options.loginJails);
+      return ctx.state();
+    },
+  },
+  // Both jails, which is safer than the defaults: Lock settings never leaves one off.
+  lockOn: {
+    verb: "set-login-jails",
+    // Jails without fail2ban are only saved for later, which the lock would call on.
+    blocked: (options) => loginJailsBlocked(options.loginJails),
+    run: (ctx) => { settle(ctx, { ...ctx.settings, loginJails: { ...ctx.settings.loginJails, panel: true, ssh: true } }); },
+  },
+  raise: (settings, defaults) => ({
+    loginJails: { panel: settings.loginJails.panel || defaults.loginJails.panel, ssh: settings.loginJails.ssh || defaults.loginJails.ssh },
+  }),
+  repair: {
+    upkeep: { label: null, locked: true, run: (ctx) => settle(ctx, ctx.settings) && "login jails restored" },
+  },
+  withdraw: {
+    run: ({ options, settings, save }) => {
+      releaseLoginJails(settings.fail2banBefore, options.loginJails);
+      if (settings.fail2banBefore) save({ fail2banBefore: null });
+    },
+  },
+  restore: { run: (ctx) => { settle(ctx, ctx.settings); } },
+});

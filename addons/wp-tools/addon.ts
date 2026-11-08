@@ -1,12 +1,14 @@
+import { errorMessage } from "../../lib/errors";
 import { handle } from "./app/index";
 import {
   pruneWpJobs, reconcileWpNewSites, runWpToolsAction, wpPoliciesActive,
   type WpNewSiteEvent, type WpNewSitesResult, type WpToolsActionOptions,
 } from "./action";
-import { queueAddonPass } from "../../cli/job-store";
+import { queueAddonPass } from "../../lib/job-store";
 import { WP_TOOLS_TARGETS } from "./inject/targets";
-import type { AddonDefinition } from "../../cli/addon-catalog";
-import { log } from "../../cli/util";
+import { withdrawWpTools } from "./withdraw";
+import type { AddonDefinition } from "../../lib/addon-definition";
+import { log } from "../../lib/log";
 
 const CHECKS: Record<string, string> = { "varnish-check": "CLP Varnish Cache", "mainwp-check": "MainWP Child" };
 
@@ -29,6 +31,7 @@ export const WP_TOOLS_ADDON: AddonDefinition = {
   targets: WP_TOOLS_TARGETS,
   handler: handle,
   action: runWpToolsAction,
+  withdraw: withdrawWpTools,
   // The sign-in and site-kind from CloudPanel's site pages, held to the
   // caller's own sites, and plugins chosen on its New WordPress Site form by
   // an administrator or a site manager. The session route hands out the CSRF
@@ -52,13 +55,12 @@ export const WP_TOOLS_ADDON: AddonDefinition = {
     label: "WordPress plugins",
     run: async (options) => {
       const actionOptions = (options ?? {}) as WpToolsActionOptions;
-      // Job records expire, and one whose runner died is marked failed, so the page stops following it.
       pruneWpJobs(actionOptions);
       // Which sites exist now, so that the watcher's first wake does not take them all for new ones.
       try {
         await reconcileWpNewSites(actionOptions, "seed");
       } catch (error) {
-        log.warn(`WordPress Tools new sites: ${error instanceof Error ? error.message : String(error)}`);
+        log.warn(`WordPress Tools new sites: ${errorMessage(error)}`);
       }
       if (!wpPoliciesActive(actionOptions)) return null;
       return queueAddonPass({ addon: "wp-tools", verb: "sync", description: "WordPress plugin policies", runtime: 180 })

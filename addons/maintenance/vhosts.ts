@@ -1,11 +1,11 @@
-import { nginxServers, type NginxBlock } from "./nginx-config";
+import { nginxServers, type NginxBlock } from "../../lib/nginx-config";
 import type { Database } from "bun:sqlite";
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
-import { normalizeIdentityHostname } from "./action-common";
-import { trustedVhost, type NginxChange } from "./nginx-transaction";
+import { normalizeIdentityHostname } from "../../lib/panel-identity";
+import { trustedVhost, type NginxChange } from "../../lib/nginx-transaction";
+import { MAINTENANCE_INCLUDE_PATH, NGINX_GLOBAL_SETTINGS } from "../../lib/paths";
 
-export const MAINTENANCE_INCLUDE_PATH = "/etc/nginx/clp-addons-maintenance.conf";
 const START = "# clp-addons:maintenance-include:start";
 const END = "# clp-addons:maintenance-include:end";
 const BLOCK = /\r?\n[ \t]*# clp-addons:maintenance-include:start\r?\n[ \t]*include [^\r\n]+;\r?\n[ \t]*# clp-addons:maintenance-include:end[ \t]*\r?\n/g;
@@ -105,7 +105,7 @@ function siteGap(site: SiteRow, paths: CoveragePaths): { reason: string; optedOu
   try {
     return [rendered, site.vhost_template].every((content) => {
       const block = servingBlock(content, domain);
-      const viaSettings = includes(block, "/etc/nginx/global_settings");
+      const viaSettings = includes(block, NGINX_GLOBAL_SETTINGS);
       return paths.settingsMissing ? !viaSettings && includes(block, paths.includePath) : viaSettings !== includes(block, paths.includePath);
     }) ? null : { reason: "its vhost does not include the check" };
   } catch { return { reason: "its vhost has no single server block for it" }; }

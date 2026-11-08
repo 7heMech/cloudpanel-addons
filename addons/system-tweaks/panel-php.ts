@@ -6,18 +6,31 @@
  * then proven by asking both pools for a page over their sockets, which Nginx's
  * optional basic auth cannot answer for; a failure puts the previous unit back.
  */
-import { existsSync, lstatSync, readFileSync, readdirSync, readlinkSync, rmSync } from "node:fs";
+import { errorMessage } from "../../lib/errors";
+import {
+  LOCK_DIR, addonConfigFile, addonStateDir, PANEL_FPM_UNIT, PHP_FPM_BIN_DIR, RECONCILE_SERVICE, SYSTEMD_DIR,
+} from "../../lib/paths";
+import { existsSync, readdirSync, readlinkSync } from "node:fs";
 import { join } from "node:path";
-import { failAction, runCommand, withFileLock, withFileLockSync, type CommandResult } from "../../cli/action-common";
-import { CONFIG_DIR, PANEL_FPM_UNIT, PHP_FPM_BIN_DIR, RECONCILE_SERVICE, STATE_DIR, SYSTEMD_DIR } from "../../cli/paths";
-import { writeFileAtomic } from "../../lib/atomic-write";
+import { failAction } from "../../lib/action";
+import { requireSuccess, runCommand, type CommandResult } from "../../lib/command";
+import { withFileLock, withFileLockSync } from "../../lib/file-lock";
+import { writeFileAtomic, writeOrRemove } from "../../lib/atomic-write";
 import { fastCgiRequest, type FastCgiResponse } from "../../lib/fastcgi";
+import { daemonReload } from "../../lib/systemd";
+import { present, trustedText } from "../../lib/trusted-file";
+import { waitHealthy } from "./wait-healthy";
+import { newerPhp } from "./php-version";
+import { tweak } from "./tweak";
+import { frozen, settingRow, warning } from "./app/rows";
+import { esc } from "../../lib/app-http";
+import { sinceText } from "../../lib/app-ui";
 
 const STATE_VERSION = 1;
 const VERSION_RE = /^[0-9]+\.[0-9]+$/;
 const MARKER = "# Managed by clp-addons System Tweaks: the PHP version CloudPanel runs on.";
 
-export interface PanelPhpPaths {
+interface PanelPhpPaths {
   unit: string;
   dropInFile: string;
   fpmBinDir: string;
@@ -36,9 +49,9 @@ export const DEFAULT_PANEL_PHP_PATHS: PanelPhpPaths = {
   unit: PANEL_FPM_UNIT,
   dropInFile: `${SYSTEMD_DIR}/${PANEL_FPM_UNIT}.d/clp-addons-php.conf`,
   fpmBinDir: PHP_FPM_BIN_DIR,
-  stateFile: `${STATE_DIR}/system-tweaks/panel-php.json`,
-  lockFile: "/run/lock/clp-addons/panel-php.lock",
-  configFile: `${CONFIG_DIR}/system-tweaks.conf`,
+  stateFile: `${addonStateDir("system-tweaks")}/panel-php.json`,
+  lockFile: `${LOCK_DIR}/panel-php.lock`,
+  configFile: addonConfigFile("system-tweaks"),
   panelRoot: "/home/clp/htdocs/app/files/public",
   panelSocket: "/run/clp-php-fpm.sock",
   fileManagerSocket: "/run/clp-fm-php-fpm.sock",
@@ -65,7 +78,7 @@ export interface PanelPhpChoice {
   available?: string;
 }
 
-export interface PanelPhpFailure {
+interface PanelPhpFailure {
   php: string;
   /** The package release that failed, so an upgrade earns another attempt. */
   release: string;
@@ -120,36 +133,6 @@ function contextOf(options: PanelPhpOptions): Context {
   };
 }
 
-function reason(error: unknown): string {
-  return error instanceof Error ? error.message : String(error);
-}
-
-function newer(a: string, b: string): boolean {
-  const [aMajor = 0, aMinor = 0] = a.split(".").map(Number);
-  const [bMajor = 0, bMinor = 0] = b.split(".").map(Number);
-  return aMajor !== bMajor ? aMajor > bMajor : aMinor > bMinor;
-}
-
-function trustedText(path: string, rootUid: number): string | null {
-  let info;
-  try {
-    info = lstatSync(path);
-  } catch {
-    return null;
-  }
-  if (!info.isFile() || info.uid !== rootUid || (info.mode & 0o022) !== 0) return null;
-  return readFileSync(path, "utf8");
-}
-
-function present(path: string): boolean {
-  try {
-    lstatSync(path);
-    return true;
-  } catch {
-    return false;
-  }
-}
-
 function readChoice(paths: PanelPhpPaths): StoredChoice {
   try {
     const text = trustedText(paths.stateFile, paths.rootUid);
@@ -199,7 +182,7 @@ function installedVersions(ctx: Context): string[] {
   return readdirSync(ctx.paths.fpmBinDir)
     .map((name) => /^php-fpm([0-9]+\.[0-9]+)$/.exec(name)?.[1])
     .filter((version): version is string => Boolean(version))
-    .sort((a, b) => (newer(a, b) ? 1 : newer(b, a) ? -1 : 0));
+    .sort((a, b) => (newerPhp(a, b) ? 1 : newerPhp(b, a) ? -1 : 0));
 }
 
 function release(version: string): string {
@@ -246,7 +229,7 @@ function reloadReplaced(ctx: Context): string | null {
   } catch {
     return null;
   }
-  check(ctx.run("systemctl", ["reload", ctx.paths.unit]), "reloading the panel's PHP onto its updated binary");
+  requireSuccess(ctx.run("systemctl", ["reload", ctx.paths.unit]), "reloading the panel's PHP onto its updated binary");
   return "panel PHP reloaded onto its updated binary";
 }
 
@@ -261,10 +244,6 @@ function dropInFor(ctx: Context, php: string, unit: BaseUnit): string {
     `ExecStart=${join(ctx.paths.fpmBinDir, `php-fpm${php}`)} ${unit.args.join(" ")}`,
     "",
   ].join("\n");
-}
-
-function check(result: CommandResult, what: string): void {
-  if (!result.ok) failAction(`${what}: ${(result.stderr || result.stdout).trim() || `exit ${result.exitCode ?? "unknown"}`}`);
 }
 
 /** FastCGI parameters for a plain GET of one of the panel's pages, as Nginx would send it. */
@@ -302,32 +281,26 @@ async function unhealthy(ctx: Context, php: string): Promise<string | null> {
       const reply = await ctx.request(socket, panelPageParams(ctx.paths.panelRoot, script, uri));
       if (!accept(reply.status)) return `${what} answered ${reply.status}`;
     } catch (error) {
-      return reason(error);
+      return errorMessage(error);
     }
   }
   return null;
 }
 
-async function waitHealthy(ctx: Context, php: string): Promise<string | null> {
-  const deadline = ctx.now().getTime() + ctx.healthTimeoutMs;
-  let problem = await unhealthy(ctx, php);
-  while (problem && ctx.now().getTime() < deadline) {
-    await ctx.sleep(500);
-    problem = await unhealthy(ctx, php);
-  }
-  return problem;
+function servesOn(ctx: Context, php: string): Promise<string | null> {
+  return waitHealthy(() => unhealthy(ctx, php), {
+    now: () => ctx.now().getTime(), sleep: ctx.sleep, timeoutMs: ctx.healthTimeoutMs, intervalMs: 500,
+  });
 }
 
 function install(ctx: Context, content: string | null): void {
-  if (content === null) rmSync(ctx.paths.dropInFile, { force: true });
-  else writeFileAtomic(ctx.paths.dropInFile, content, { mode: 0o644, createParent: true });
-  check(ctx.run("systemctl", ["daemon-reload"]), "systemctl daemon-reload failed");
+  writeOrRemove(ctx.paths.dropInFile, content, { mode: 0o644, createParent: true });
+  daemonReload(ctx.run);
 }
 
 /**
- * Put the unit that `choice` asks for in place, restart the panel's FPM on it
- * and prove it serves. Returns the version now running, or null when nothing
- * had to change. A failure restores the previous drop-in before it is thrown.
+ * Returns the version now running, or null when nothing had to change. A
+ * failure restores the previous drop-in before it is thrown.
  */
 async function apply(ctx: Context, php: string): Promise<string | null> {
   const unit = baseUnit(ctx);
@@ -338,11 +311,11 @@ async function apply(ctx: Context, php: string): Promise<string | null> {
     if (php) failAction(`${override} already sets the panel's PHP; remove it to choose the version here`);
     if (present(ctx.paths.dropInFile)) {
       install(ctx, null);
-      check(ctx.run("systemctl", ["restart", ctx.paths.unit]), `restarting ${ctx.paths.unit} failed`);
+      requireSuccess(ctx.run("systemctl", ["restart", ctx.paths.unit]), `restarting ${ctx.paths.unit} failed`);
     }
     return null;
   }
-  const wanted = php && newer(php, unit.stock) ? php : unit.stock;
+  const wanted = php && newerPhp(php, unit.stock) ? php : unit.stock;
   // A chosen PHP removed since it was set leaves the unit unable to start at
   // its next restart, so the panel goes back to CloudPanel's own before that.
   const missing = wanted !== unit.stock && !existsSync(join(ctx.paths.fpmBinDir, `php-fpm${wanted}`));
@@ -354,13 +327,13 @@ async function apply(ctx: Context, php: string): Promise<string | null> {
   if (desired !== null) {
     const binary = join(ctx.paths.fpmBinDir, `php-fpm${target}`);
     if (!existsSync(binary)) failAction(`PHP ${target} is not installed`);
-    check(ctx.run(binary, ["-t", ...unit.args]), `PHP ${target} rejected CloudPanel's FPM config`);
+    requireSuccess(ctx.run(binary, ["-t", ...unit.args]), `PHP ${target} rejected CloudPanel's FPM config`);
   }
   const previous = before === null ? unit.stock : (/php-fpm([0-9]+\.[0-9]+)/.exec(before)?.[1] ?? unit.stock);
   try {
     install(ctx, desired);
-    check(ctx.run("systemctl", ["restart", ctx.paths.unit]), `restarting ${ctx.paths.unit} failed`);
-    const problem = await waitHealthy(ctx, target);
+    requireSuccess(ctx.run("systemctl", ["restart", ctx.paths.unit]), `restarting ${ctx.paths.unit} failed`);
+    const problem = await servesOn(ctx, target);
     if (problem) failAction(`the panel did not come back on PHP ${target}: ${problem}`);
     if (!missing) return target;
   } catch (error) {
@@ -368,12 +341,12 @@ async function apply(ctx: Context, php: string): Promise<string | null> {
     try {
       install(ctx, before);
       ctx.run("systemctl", ["restart", ctx.paths.unit]);
-      const after = await waitHealthy(ctx, previous);
+      const after = await servesOn(ctx, previous);
       restored = after ? `PHP ${previous} was restored but is not answering either: ${after}` : `the panel is back on PHP ${previous}`;
     } catch (restoreError) {
-      restored = `restoring PHP ${previous} failed: ${reason(restoreError)}`;
+      restored = `restoring PHP ${previous} failed: ${errorMessage(restoreError)}`;
     }
-    failAction(`${reason(error)}; ${restored}`);
+    failAction(`${errorMessage(error)}; ${restored}`);
   }
   failAction(`PHP ${wanted} is no longer installed, so the panel is back on PHP ${unit.stock}`);
 }
@@ -382,7 +355,7 @@ export function panelPhpStatus(options: PanelPhpOptions = {}): PanelPhpStatus {
   const ctx = contextOf(options);
   const choice = readChoice(ctx.paths);
   const unit = baseUnit(ctx);
-  const versions = installedVersions(ctx).filter((version) => unit && !newer(unit.stock, version));
+  const versions = installedVersions(ctx).filter((version) => unit && !newerPhp(unit.stock, version));
   const known = releases(ctx, versions);
   const status: PanelPhpStatus = {
     wanted: choice.php,
@@ -399,13 +372,25 @@ export function panelPhpStatus(options: PanelPhpOptions = {}): PanelPhpStatus {
   return status;
 }
 
-export async function setPanelPhp(php: string, options: PanelPhpOptions = {}): Promise<PanelPhpStatus> {
+/**
+ * `lockRefusal` is asked under the lock, and while it answers, root's lock
+ * holds the panel to an installed version newer than the one it runs now.
+ */
+export async function setPanelPhp(php: string, options: PanelPhpOptions = {}, lockRefusal?: () => string | null): Promise<PanelPhpStatus> {
   const ctx = contextOf(options);
   if (php !== "" && !VERSION_RE.test(php)) failAction("choose a PHP version such as 8.4");
   await withFileLock(ctx.paths.lockFile, 30, "another panel PHP change is still running", async () => {
     // Purging removes the withdrawn mark with the state, but not before the config.
     if (readChoice(ctx.paths).withdrawn || !existsSync(ctx.paths.configFile)) {
       failAction("System Tweaks is disabled; enable it to choose the panel's PHP");
+    }
+    const refusal = lockRefusal?.();
+    if (refusal) {
+      // Empty is CloudPanel's own, which can itself be newer than what runs after a fallback.
+      const stock = baseUnit(ctx)?.stock;
+      const target = php || stock;
+      const now = runningVersion(ctx) ?? (readChoice(ctx.paths).php || stock);
+      if (!target || !now || !installedVersions(ctx).includes(target) || !newerPhp(target, now)) failAction(refusal);
     }
     await apply(ctx, php);
     writeChoice(ctx.paths, { php });
@@ -451,7 +436,7 @@ async function reconcileChoice(ctx: Context): Promise<string | null> {
       if (choice.failure) writeChoice(ctx.paths, { php: choice.php });
       return running ? `panel runs on PHP ${running}` : null;
     } catch (error) {
-      writeChoice(ctx.paths, { php: choice.php, failure: { php: choice.php, release: current, error: reason(error), at: ctx.now().toISOString() } });
+      writeChoice(ctx.paths, { php: choice.php, failure: { php: choice.php, release: current, error: errorMessage(error), at: ctx.now().toISOString() } });
       throw error;
     }
   });
@@ -492,7 +477,7 @@ function withdraw(ctx: Context): void {
   const unit = baseUnit(ctx);
   const next = unit ? withoutDropIn(ctx, unit) : null;
   if (next) {
-    check(ctx.run(next.binary, ["-t", ...next.args]),
+    requireSuccess(ctx.run(next.binary, ["-t", ...next.args]),
       `PHP ${next.version} rejected CloudPanel's FPM config, so the panel keeps its PHP override`);
   }
   const before = trustedText(ctx.paths.dropInFile, ctx.paths.rootUid);
@@ -521,7 +506,7 @@ function withdraw(ctx: Context): void {
         ? "; the override was put back"
         : `; the override was put back, but ${ctx.paths.unit} did not restart on it either`;
     } catch (error) {
-      restored = `; putting the override back failed: ${reason(error)}`;
+      restored = `; putting the override back failed: ${errorMessage(error)}`;
     }
   }
   failAction(`${ctx.paths.unit} did not come back on PHP ${next?.version ?? "CloudPanel's own version"}${restored}`);
@@ -537,3 +522,93 @@ export function restorePanelPhp(options: PanelPhpOptions = {}): void {
   });
   if (choice.php) ctx.run("systemctl", ["start", "--no-block", RECONCILE_SERVICE]);
 }
+
+function panelPhpOrError(options?: PanelPhpOptions): PanelPhpStatus | { error: string } {
+  try { return panelPhpStatus(options); }
+  catch (error) { return { error: errorMessage(error) }; }
+}
+
+function phpOption(choice: PanelPhpChoice, stock: string | null, selected: boolean): string {
+  const label = `PHP ${choice.version}${choice.version === stock ? ", CloudPanel's own" : ""}`;
+  return `<option value="${choice.version === stock ? "" : esc(choice.version)}"${selected ? " selected" : ""}>${esc(label)}</option>`;
+}
+
+export function panelPhpLine(status: PanelPhpStatus): string {
+  const lines: string[] = [];
+  if (status.overriddenBy) lines.push(`${status.overriddenBy} sets this already. Remove it to choose here.`);
+  if (status.running) lines.push(`Running on PHP ${status.running}.`);
+  const chosen = status.choices.find((choice) => choice.version === (status.wanted || status.stock));
+  if (chosen?.available) lines.push(`${chosen.available} is available; run apt upgrade to install it.`);
+  if (status.failure && status.failure.php === status.wanted) {
+    lines.push(`PHP ${status.failure.php} failed ${sinceText(status.failure.at)}: ${status.failure.error}`);
+  }
+  return lines.join(" ");
+}
+
+/**
+ * While root's lock holds, the version chosen now and those newer than the one
+ * running; otherwise every choice. `movable` when one of them is a move
+ * `set-panel-php` accepts.
+ */
+function phpChoices(status: PanelPhpStatus, locked: boolean): { choices: PanelPhpChoice[]; movable: boolean } {
+  if (!locked) return { choices: status.choices, movable: true };
+  const current = status.wanted || status.stock!;
+  const now = status.running ?? current;
+  const choices = status.choices.filter((choice) => choice.version === current || newerPhp(choice.version, now));
+  return { choices, movable: choices.some((choice) => newerPhp(choice.version, now)) };
+}
+
+export function panelPhpRow(status: PanelPhpStatus | { error: string }, locked = false): string {
+  const description = "Runs CloudPanel's pages, phpMyAdmin and the File Manager. CloudPanel has not tested newer versions, so a change is undone if the login page or File Manager stops answering.";
+  if ("error" in status) {
+    return settingRow({ key: "panelPhp", title: "Panel PHP", description, control: "",
+      extra: `<div class="alert st-alert" role="alert">${esc(status.error)}</div>` });
+  }
+  if (status.stock === null) {
+    return settingRow({ key: "panelPhp", title: "Panel PHP", description, control: "",
+      extra: `<p class="st-status hint">CloudPanel's PHP-FPM unit is not one this addon recognises, so the panel keeps the PHP CloudPanel chose.</p>` });
+  }
+  const { choices, movable } = phpChoices(status, locked);
+  const select = `
+            <select id="panel-php" aria-label="Panel PHP" data-current="${esc(status.wanted)}" onchange="setPanelPhp(this)"${status.overriddenBy || !movable ? " disabled" : ""}>${choices
+    .map((choice) => phpOption(choice, status.stock, (status.wanted || status.stock) === choice.version)).join("")}${
+    status.wanted && !status.choices.some((choice) => choice.version === status.wanted)
+      ? `<option value="${esc(status.wanted)}" selected disabled>PHP ${esc(status.wanted)} (unavailable)</option>` : ""}</select>`;
+  const newer = status.choices.some((choice) => choice.version !== status.stock);
+  const eol = status.stock === "8.1" && !status.wanted && !status.overriddenBy
+    ? warning(newer
+      ? "The panel runs on PHP 8.1, which no longer gets security fixes. Choose a newer PHP above."
+      : "The panel runs on PHP 8.1, which no longer gets security fixes. Install a newer PHP-FPM to choose it here.")
+    : "";
+  return settingRow({
+    key: "panelPhp", title: "Panel PHP", description, control: select,
+    extra: `<p class="st-status hint" id="panel-php-status">${esc(panelPhpLine(status))}</p>${eol}`,
+  });
+}
+
+type Options = { panelPhp?: PanelPhpOptions };
+
+/** The PHP that runs the panel itself; it keeps its own state, so it has no settings here. */
+export const PANEL_PHP_TWEAK = tweak<{}, Options, { panelPhp: PanelPhpStatus | { error: string } }>()({
+  state: ({ options }) => ({ panelPhp: panelPhpOrError(options.panelPhp) }),
+  verbs: {
+    async "set-panel-php"(ctx) {
+      const body = await ctx.body();
+      if (typeof body.php !== "string") failAction("php must be a version such as 8.4, or empty for CloudPanel's own");
+      // While root's lock holds, the panel's PHP only moves to a newer version.
+      await setPanelPhp(body.php, ctx.options.panelPhp, ctx.lockRefusal);
+      return ctx.state();
+    },
+  },
+  repair: {
+    choice: { label: "panel PHP", locked: false, run: ({ options }) => reconcilePanelPhp(options.panelPhp) },
+  },
+  withdraw: {
+    // It refuses when CloudPanel's own PHP would not come back.
+    run: ({ options }) => withdrawPanelPhp(options.panelPhp),
+    // The addon stays enabled, so its panel PHP choice comes back with it.
+    putBack: ({ options }) => restorePanelPhp(options.panelPhp),
+  },
+  restore: { run: ({ options }) => restorePanelPhp(options.panelPhp) },
+  row: ({ panelPhp }, locked) => panelPhpRow(panelPhp, frozen("set-panel-php", locked)),
+});

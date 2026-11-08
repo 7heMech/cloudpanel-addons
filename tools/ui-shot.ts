@@ -52,7 +52,7 @@ async function screenshot(chrome: string, url: string, file: string): Promise<vo
     await attempt([]);
   } catch {
     // Distributions that restrict unprivileged user namespaces leave Chromium
-    // with no usable sandbox. Only render pages you trust in that case.
+    // with no usable sandbox.
     console.error("warning: Chromium has no usable sandbox here; rendering without it — only pass targets you trust");
     sandboxless = true;
     await attempt(["--no-sandbox"]);
@@ -140,8 +140,6 @@ mkdirSync(outDir, { recursive: true });
 const taken = new Set<string>();
 for (const target of targets) {
   const url = /^https?:\/\//.test(target) ? target : `http://127.0.0.1:${port}${target}`;
-  // Two targets can normalize to the same name (`/a/b` and `/a?b`), so number
-  // the repeats rather than overwriting the earlier screenshot.
   const name = target.replace(/[^A-Za-z0-9]+/g, "-").replace(/^-|-$/g, "") || "page";
   let unique = name;
   for (let n = 2; taken.has(unique); n++) unique = `${name}-${n}`;

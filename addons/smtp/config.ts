@@ -1,4 +1,4 @@
-import type { Stats } from "node:fs";
+import { HOSTNAME_LABEL, HOSTNAME_RE } from "../../lib/validate";
 
 /** Shared by the root action and the PHP mail wrapper, so nothing here may hold a password for the wrapper. */
 export interface SmtpRelay {
@@ -29,22 +29,15 @@ export interface SmtpSubmissionRule {
 }
 export type SmtpRewriteRule = SmtpSubmissionRule & { sender: string };
 
-const LABEL = "[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?";
-const DOMAIN = new RegExp(`^${LABEL}(?:\\.${LABEL})+$`);
-const ADDRESS = new RegExp(`^[A-Za-z0-9._%+'-]+@(${LABEL}(?:\\.${LABEL})+)$`, "i");
+const ADDRESS = new RegExp(`^[A-Za-z0-9._%+'-]+@(${HOSTNAME_LABEL}(?:\\.${HOSTNAME_LABEL})+)$`, "i");
 
 export const DEFAULT_SENDER = "noreply@{site}";
 export const FALLBACK_LOCAL = "noreply";
 
-/** A regular file, not a link, that only `uid` can have written. */
-export function trustedFile(stat: Stats, uid: number): boolean {
-  return stat.isFile() && stat.uid === uid && (stat.mode & 0o022) === 0;
-}
-
 export function smtpDomain(value: unknown): string {
   if (typeof value !== "string") throw new Error("domain must be a hostname");
   const domain = value.toLowerCase().replace(/\.$/, "");
-  if (domain.length > 253 || !DOMAIN.test(domain)) throw new Error(`invalid domain: ${value}`);
+  if (domain.length > 253 || !HOSTNAME_RE.test(domain)) throw new Error(`invalid domain: ${value}`);
   return domain;
 }
 
@@ -55,7 +48,7 @@ export function smtpAddress(value: unknown): string {
   return value.toLowerCase();
 }
 
-export interface RequestedSender { local: string; domain: string }
+interface RequestedSender { local: string; domain: string }
 
 export function senderFor(template: string, site: string, from?: RequestedSender | null): string {
   return smtpAddress(template

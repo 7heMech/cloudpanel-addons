@@ -14,14 +14,12 @@ import { SITE_USER_RE } from "../../../lib/site-accounts";
 import { stillAuthorized } from "../../../lib/sso-auth";
 
 export const RING_BYTES = 256 * 1024;
-/** How long a session waits for its popup to come back before it ends. */
-export const DETACHED_GRACE_MS = 60_000;
+const DETACHED_GRACE_MS = 60_000;
 /** How long a popup that said it was closing has to come back, as on a reload. */
-export const CLOSING_GRACE_MS = 5_000;
+const CLOSING_GRACE_MS = 5_000;
 const START_TIMEOUT_MS = 20_000;
 const KEEPALIVE_MS = 15_000;
 const AUTH_RECHECK_MS = 15_000;
-/** How long after a failed recheck the sign-in is looked at once more. */
 const AUTH_CONFIRM_MS = 1_000;
 /** The helper's output is coalesced to 32 KiB, which is under 44 KiB as base64. */
 const MAX_LINE_BYTES = 64 * 1024;
@@ -32,7 +30,7 @@ const INPUT_PIECE = 8 * 1024;
 /** A popup this far behind is dropped; it reconnects and replays from the ring. */
 const MAX_CLIENT_BACKLOG = 2 * 1024 * 1024;
 
-export type EndReason = "exit" | "closed" | "detached" | "signed-out" | "protocol" | "disconnected";
+type EndReason = "exit" | "closed" | "detached" | "signed-out" | "protocol" | "disconnected";
 
 export interface Owner {
   user: string;
@@ -45,6 +43,7 @@ export function ownerOf(user: string, sessionId: string): Owner {
 }
 
 export interface OpenRequest {
+  ticket?: string;
   /** Null for a root shell on the server itself. */
   domain: string | null;
   cols: number;
@@ -53,7 +52,7 @@ export interface OpenRequest {
   sessionId: string;
 }
 
-export interface TerminalStream {
+interface TerminalStream {
   write(line: string): void;
   close(): void;
 }
@@ -63,18 +62,19 @@ export type StreamOpener = (
   handlers: { onLine(line: string): void; onClose(error?: string): void },
 ) => TerminalStream;
 
-export const gatewayOpener: StreamOpener = (request, handlers) =>
+const gatewayOpener: StreamOpener = (request, handlers) =>
   streamGatewayAction({
     addon: "terminal",
     verb: "session",
     args: [request.domain === null ? "--root" : `--domain=${request.domain}`, `--cols=${request.cols}`, `--rows=${request.rows}`],
     sessionId: request.sessionId,
+    ticket: request.ticket,
     maxLineBytes: MAX_LINE_BYTES,
     onLine: handlers.onLine,
     onClose: handlers.onClose,
   });
 
-export type HelperMessage =
+type HelperMessage =
   | { kind: "ready"; user: string; dir: string }
   | { kind: "output"; bytes: Buffer; encoded: string }
   | { kind: "exit"; code: number | null; signal: string | null }
@@ -88,7 +88,6 @@ function exactKeys(value: object, keys: string[]): boolean {
   return own.length === keys.length && keys.every((key) => own.includes(key));
 }
 
-/** One line from the stream as a message, or null when it is not exactly one. */
 export function parseHelperLine(line: string): HelperMessage | null {
   if (line.length > MAX_LINE_BYTES) return null;
   let value: unknown;
@@ -140,7 +139,6 @@ interface Session {
   user: string;
   state: "starting" | "open" | "ended";
   stream: TerminalStream | null;
-  /** The last RING_BYTES of output, in the pieces it arrived in. */
   ring: Buffer[];
   ringBytes: number;
   /** Bytes of output ever received; the ring holds the last of them. */
@@ -153,9 +151,9 @@ interface Session {
   ended: { reason: EndReason; code: number | null } | null;
 }
 
-export type OpenResult = { ok: true; id: string; user: string } | { ok: false; error: string };
+type OpenResult = { ok: true; id: string; user: string } | { ok: false; error: string };
 
-export interface SessionStoreOptions {
+interface SessionStoreOptions {
   opener?: StreamOpener;
   authorize?: (req: Request) => Promise<boolean | "unavailable">;
   detachedGraceMs?: number;
@@ -208,7 +206,6 @@ export class TerminalSessions {
     return this.sessions.size;
   }
 
-  /** Start a shell and resolve once it is running, or with why it is not. */
   open(owner: Owner, request: OpenRequest): Promise<OpenResult> {
     const session: Session = {
       id: randomBytes(16).toString("base64url"),
@@ -338,7 +335,6 @@ export class TerminalSessions {
     return session && session.state !== "starting" && sameOwner(session.owner, owner) ? session : null;
   }
 
-  /** Server-sent events for one popup, or null when the session is not this owner's. */
   attach(id: string, owner: Owner, req: Request): Response | null {
     const session = this.find(id, owner);
     if (!session) return null;
