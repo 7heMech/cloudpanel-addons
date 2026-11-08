@@ -1,7 +1,7 @@
 // Root's side of the locks: `lock`, `unlock`, System Tweaks' `lock-settings`
 // and a fresh install change the list here, one at a time. The manager only
 // reads it, through lib/root-locks.ts, which loads no FFI.
-import { withFileLockSync } from "./action-common";
+import { ActionFailure, withFileLockSync } from "./action-common";
 import { ROOT_LOCKS_FILE, ROOT_LOCKS_LOCK, UntrustedLockFile, lockedAddons, writeLockedAddons } from "../lib/root-locks";
 
 /** Tests only: a lock file and its file lock of their own, owned by them. */
@@ -19,6 +19,11 @@ export function lockFileProblem(error: unknown, file = ROOT_LOCKS_FILE): string 
   return `${error.message}, so every lockable addon counts as locked. ` + (error.directory
     ? "Make it owned by root and not writable by group or others, then run this again"
     : `Note what it locked, remove it with rm ${file}, then lock those addons again`);
+}
+
+/** What a failed `changeLock` says: a file lock that timed out says so itself. */
+export function lockFailure(error: unknown, file = ROOT_LOCKS_FILE): string {
+  return error instanceof ActionFailure ? error.message : lockFileProblem(error, file);
 }
 
 /**

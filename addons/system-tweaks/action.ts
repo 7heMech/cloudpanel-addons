@@ -2,9 +2,9 @@
 import { SYSTEM_TWEAKS_VERBS } from "./verbs";
 import { existsSync, lstatSync, readFileSync } from "node:fs";
 import {
-  ActionFailure, replyToAction, errorMessage, failAction, readJsonRequest, withFileLock, withFileLockSync,
+  replyToAction, errorMessage, failAction, readJsonRequest, withFileLock, withFileLockSync,
 } from "../../cli/action-common";
-import { changeLock, lockFileProblem, type LockFiles } from "../../cli/lock-addon";
+import { changeLock, lockFailure, type LockFiles } from "../../cli/lock-addon";
 import { addonLocked, declaresLock, lockRefusal, lockedAddons } from "../../lib/root-locks";
 import { ROOT_UID, STATE_DIR } from "../../cli/paths";
 import { reconcilePhpGuard, type PhpGuardOptions } from "../../cli/php-guard";
@@ -34,7 +34,7 @@ import { storedVhostValues, type StoredVhostValue, type VhostValuesOptions } fro
 import { installPoolIsolation, poolIsolationStatus, removePoolIsolation, syncPoolIsolation, type PoolIsolationOptions, type PoolIsolationStatus } from "./pool-isolation";
 import { installVarnishBackends, removeVarnishBackends, sitesWithHomeLogs, sitesWithOwnLogrotate, varnishBackendsActive, type VarnishBackendOptions } from "./varnish-backend";
 import {
-  applyLoginJails, installLoginJailPackages, loginJailsStatus, releaseLoginJails, unban,
+  applyLoginJails, installLoginJailPackages, loginJailsBlocked, loginJailsStatus, releaseLoginJails, unban,
   type Fail2banBefore, type LoginJailOptions, type LoginJailSettings, type LoginJailsStatus,
 } from "./login-jails";
 import { databaseStatus, reconcileDatabaseFile, setDatabaseLoopback, type DatabaseOptions, type DatabaseStatus } from "./database";
@@ -173,19 +173,17 @@ function defaultSettings(): SystemTweaksSettings {
   };
 }
 
-/** The switches root's lock covers; MySQL on this server only and the SSH jail are off by default. */
-const LOCKED_KEYS = [
-  "uploadProgressGuard", "blockForgedRealIp", "blockVhostInjection", "isolatePhpPools", "protectPhpMyAdmin",
-  "confineFileManager", "replacePanelCert", "databaseLoopback", "blockClpctlInjection", "blockTelemetry",
-] as const satisfies readonly (keyof SystemTweaksSettings)[];
-
-/** Each locked switch at its default or on, whichever is safer: what System Tweaks enabled under a lock starts from. */
+/**
+ * Each locked switch at its default or on, whichever is safer: what System
+ * Tweaks enabled under a lock starts from. MySQL on this server only and the
+ * SSH jail are off by default.
+ */
 export function raisedToDefaults(settings: SystemTweaksSettings): SystemTweaksSettings {
   const defaults = defaultSettings();
   const raised = { ...settings, loginJails: {
     panel: settings.loginJails.panel || defaults.loginJails.panel, ssh: settings.loginJails.ssh || defaults.loginJails.ssh,
   } };
-  for (const key of LOCKED_KEYS) raised[key] = settings[key] || defaults[key];
+  for (const key of lockedKeys()) raised[key] = settings[key] || defaults[key];
   return raised;
 }
 
@@ -488,6 +486,26 @@ const SWITCHES = {
 
 type SwitchVerb = keyof typeof SWITCHES;
 
+/** The setting each switch saves; every switch must name one, so a new one cannot miss the lock. */
+const SWITCH_KEYS = {
+  "set-upload-guard": "uploadProgressGuard",
+  "set-real-ip": "blockForgedRealIp",
+  "set-phpmyadmin": "protectPhpMyAdmin",
+  "set-panel-cert": "replacePanelCert",
+  "set-vhost-guard": "blockVhostInjection",
+  "set-php-pools": "isolatePhpPools",
+  "set-file-manager-guard": "confineFileManager",
+  "set-clpctl-guard": "blockClpctlInjection",
+  "set-telemetry": "blockTelemetry",
+  "set-motd": "serverInfoMotd",
+  "set-database-loopback": "databaseLoopback",
+} as const satisfies Record<SwitchVerb, keyof SystemTweaksSettings>;
+
+/** The switches root's lock covers, as verbs.ts marks them. */
+export function lockedKeys(): (typeof SWITCH_KEYS)[SwitchVerb][] {
+  return (Object.keys(SWITCH_KEYS) as SwitchVerb[]).filter((verb) => declaresLock("system-tweaks", verb)).map((verb) => SWITCH_KEYS[verb]);
+}
+
 function isSwitch(verb: SystemTweaksVerb): verb is SwitchVerb {
   return Object.hasOwn(SWITCHES, verb);
 }
@@ -524,22 +542,27 @@ async function setLoginJails(options: SystemTweaksOptions): Promise<SystemTweaks
 async function lockSettings(options: SystemTweaksOptions): Promise<SystemTweaksState> {
   const paths = pathsFor(options);
   const files = options.locks;
-  const refuse = (error: unknown): never => failAction(error instanceof ActionFailure ? error.message : lockFileProblem(error, files?.file));
   // First, so a lock file root cannot trust stops it before anything changes.
-  try { lockedAddons(files?.file, files?.rootUid); } catch (error) { refuse(error); }
+  try { lockedAddons(files?.file, files?.rootUid); } catch (error) { failAction(lockFailure(error, files?.file)); }
+  // Jails without fail2ban are only saved for later, which the lock would call on.
+  const jails = loginJailsBlocked(options.loginJails);
+  if (jails) failAction(`nothing was changed or locked: ${jails}`);
   await withFileLock(paths.lockFile, 15, BUSY, async () => {
     const failed: string[] = [];
     const steps: [string, () => unknown][] = [
       ...(Object.keys(SWITCHES) as SwitchVerb[]).filter((verb) => declaresLock("system-tweaks", verb) && verb !== "set-database-loopback")
         .map((verb): [string, () => unknown] => [verb, () => (SWITCHES[verb] as SwitchChange)(options, paths, true)]),
       ["set-login-jails", () => loginJailsTo(options, paths, { panel: true, ssh: true })],
-      ["set-database-loopback", () => databaseTo(options, paths, true)],
     ];
     for (const [verb, on] of steps) {
       try { await on(); } catch (error) { failed.push(`${verb.replace(/^set-/, "")}: ${errorMessage(error)}`); }
     }
+    // MySQL restarts only for a lock that will be written.
+    if (!failed.length) {
+      try { await databaseTo(options, paths, true); } catch (error) { failed.push(`database-loopback: ${errorMessage(error)}`); }
+    }
     if (failed.length) failAction(`nothing was locked, because not every setting could be switched on: ${failed.join("; ")}`);
-    try { changeLock("system-tweaks", true, files); } catch (error) { refuse(error); }
+    try { changeLock("system-tweaks", true, files); } catch (error) { failAction(lockFailure(error, files?.file)); }
   });
   return stateOf(options);
 }
@@ -864,11 +887,12 @@ export function withdrawSystemTweaks(options: SystemTweaksOptions = {}): void {
   catch (error) { log.warn(`ufw still has UDP rules from System Tweaks: ${errorMessage(error)}`); }
 }
 
-export function restoreSystemTweaks(options: SystemTweaksOptions = {}): void {
+export function restoreSystemTweaks(options: SystemTweaksOptions = {}, wasEnabled = false): void {
   try {
     withSettingsLock(options, (paths, stored) => {
-      // Enabled under root's lock, it starts from its defaults and nothing it had switched off.
-      const settings = lockedByRoot(options) ? raisedToDefaults(stored) : stored;
+      // Turned on under root's lock, it starts from its defaults and nothing it had switched off.
+      // Already on, as when the installer runs again, the switches stay as root locked them.
+      const settings = !wasEnabled && lockedByRoot(options) ? raisedToDefaults(stored) : stored;
       if (JSON.stringify(settings) !== JSON.stringify(stored)) writeSettings(paths, settings);
       if (settings.updates.enabled && unattendedUpgradesInstalled(options.updates)) {
         const applied = applyUpdates(settings.updates, settings.enabledTimers, options.updates);

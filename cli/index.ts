@@ -17,8 +17,7 @@ import { installedConfig } from "./provision";
 import { reconcile } from "./inject";
 import { fatal, Fatal, log, requireRoot } from "./util";
 import { LOCKABLE_ADDONS, isLockable, lockedAddons } from "../lib/root-locks";
-import { changeLock, lockFileProblem } from "./lock-addon";
-import { ActionFailure } from "./action-common";
+import { changeLock, lockFailure, lockFileProblem } from "./lock-addon";
 import { withOperationLockSync } from "./operation-lock";
 import { runRecon } from "./recon";
 import { cmdServe } from "../manager/server";
@@ -107,8 +106,7 @@ function cmdLock(argv: string[], lock: boolean): void {
   try {
     changed = changeLock(addon, lock);
   } catch (error) {
-    // A file lock that times out says so itself.
-    fatal(error instanceof ActionFailure ? error.message : lockFileProblem(error));
+    fatal(lockFailure(error));
   }
   if (!changed) {
     log.plain(`${addon} is already ${lock ? "locked" : "unlocked"}`);

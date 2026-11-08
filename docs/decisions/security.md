@@ -171,7 +171,7 @@ so an administrator root allowed one unlocks from there.
 
 A new install locks System Tweaks before it enables any addon. `update` never
 adds a lock, because an existing box's switches may be off on purpose; it
-prints a one-line hint while System Tweaks is unlocked.
+prints a one-line hint while System Tweaks is enabled and unlocked.
 
 The locks are `/etc/clp-addons/locks.json`, mode `0644` so the manager can show
 them, read through one descriptor opened without following links. Only a

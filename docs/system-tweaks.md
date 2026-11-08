@@ -13,7 +13,9 @@ version, even from an administrator's account. A new install starts locked.
 - From the panel: choose **Lock settings** at the top right of the page. It
   turns every Hardening and Failed logins switch on, including MySQL on this
   server only (MySQL restarts; apps on other machines lose access) and SSH
-  login guessing, then locks. If one cannot be switched on, nothing is locked.
+  login guessing, then locks. fail2ban must be installed first (**Install
+  fail2ban** under Failed logins). If one cannot be switched on, nothing is
+  locked.
 - From a root shell or the panel's root terminal: `clp-addons lock
   system-tweaks` locks the switches as they are; off ones can still be switched
   on from the page.
@@ -21,7 +23,7 @@ version, even from an administrator's account. A new install starts locked.
 While locked, System Tweaks can be enabled from the Addons page but not
 disabled. `clp-addons unlock system-tweaks`, as root, hands everything back;
 `clp-addons lock` lists what is locked. `clp-addons update` suggests the lock
-on a box that has none, and never adds it.
+when System Tweaks is enabled and unlocked, and never adds it.
 
 If `/etc/clp-addons/locks.json` is damaged or not root's alone, everything
 lockable stays locked and `lock` and `unlock` refuse. Note which addons it

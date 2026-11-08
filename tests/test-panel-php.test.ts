@@ -459,3 +459,14 @@ test("under root's lock the page offers only the version chosen and newer ones",
   // Nothing newer to move to: the picker is read-only.
   expect(panelPhpRow({ ...status, wanted: "8.4", running: "8.4" }, true)).toContain(`onchange="setPanelPhp(this)" disabled>`);
 });
+
+// The chosen version removed and the panel back on 8.1: one newer choice is left, and set-panel-php accepts it.
+test("under root's lock a single newer version stays choosable after a fallback", () => {
+  const page = panelPhpRow({
+    wanted: "8.2", stock: "8.1", running: "8.1",
+    choices: [{ version: "8.1", installed: "8.1.34" }, { version: "8.3", installed: "8.3.36" }],
+  }, true);
+  expect(page).toContain(`<option value="8.3">PHP 8.3</option>`);
+  expect(page).toContain(`onchange="setPanelPhp(this)">`);
+  expect(page).toContain("PHP 8.2 (unavailable)");
+});

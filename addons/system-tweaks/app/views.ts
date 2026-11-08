@@ -8,6 +8,7 @@ import type { SystemTweaksState } from "../action";
 import type { CoverageRow, LastRun, UpdateSettings, UpdatesStatus } from "../updates";
 import type { FpmUploadProgress } from "../upload-progress";
 import type { PanelPhpChoice, PanelPhpStatus } from "../panel-php";
+import { newerPhp } from "../php-version";
 import type { FirewallStatus } from "../firewall";
 import { MAX_BACKUP_LEVEL } from "../backup-compression";
 import { DOMAIN_JAIL, JAIL_LIMITS, PANEL_JAIL, type Ban, type SshLogin } from "../login-jails";
@@ -316,19 +317,17 @@ export function panelPhpLine(status: PanelPhpStatus): string {
   return lines.join(" ");
 }
 
-/** `8.4` is newer than `8.3`; the manager cannot load panel-php.ts, which runs commands. */
-function newerPhp(a: string, b: string): boolean {
-  const [aMajor = 0, aMinor = 0] = a.split(".").map(Number);
-  const [bMajor = 0, bMinor = 0] = b.split(".").map(Number);
-  return aMajor !== bMajor ? aMajor > bMajor : aMinor > bMinor;
-}
-
-/** While root's lock holds, the version chosen now and those newer than the one running; otherwise every choice. */
-function phpChoices(status: PanelPhpStatus, locked: boolean): PanelPhpChoice[] {
-  if (!locked) return status.choices;
+/**
+ * While root's lock holds, the version chosen now and those newer than the one
+ * running; otherwise every choice. `movable` when one of them is a move
+ * `set-panel-php` accepts.
+ */
+function phpChoices(status: PanelPhpStatus, locked: boolean): { choices: PanelPhpChoice[]; movable: boolean } {
+  if (!locked) return { choices: status.choices, movable: true };
   const current = status.wanted || status.stock!;
   const now = status.running ?? current;
-  return status.choices.filter((choice) => choice.version === current || newerPhp(choice.version, now));
+  const choices = status.choices.filter((choice) => choice.version === current || newerPhp(choice.version, now));
+  return { choices, movable: choices.some((choice) => newerPhp(choice.version, now)) };
 }
 
 export function panelPhpRow(status: PanelPhpStatus | { error: string }, locked = false): string {
@@ -341,9 +340,9 @@ export function panelPhpRow(status: PanelPhpStatus | { error: string }, locked =
     return settingRow({ key: "panelPhp", title: "Panel PHP", description, control: "",
       extra: `<p class="st-status hint">CloudPanel's PHP-FPM unit is not one this addon recognises, so the panel keeps the PHP CloudPanel chose.</p>` });
   }
-  const choices = phpChoices(status, locked);
+  const { choices, movable } = phpChoices(status, locked);
   const select = `
-            <select id="panel-php" aria-label="Panel PHP" data-current="${esc(status.wanted)}" onchange="setPanelPhp(this)"${status.overriddenBy || (locked && choices.length < 2) ? " disabled" : ""}>${choices
+            <select id="panel-php" aria-label="Panel PHP" data-current="${esc(status.wanted)}" onchange="setPanelPhp(this)"${status.overriddenBy || !movable ? " disabled" : ""}>${choices
     .map((choice) => phpOption(choice, status.stock, (status.wanted || status.stock) === choice.version)).join("")}${
     status.wanted && !status.choices.some((choice) => choice.version === status.wanted)
       ? `<option value="${esc(status.wanted)}" selected disabled>PHP ${esc(status.wanted)} (unavailable)</option>` : ""}</select>`;

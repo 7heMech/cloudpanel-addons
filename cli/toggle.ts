@@ -60,12 +60,14 @@ export async function applyEnable(name: string): Promise<void> {
 
 async function enableAddon(spec: AddonSpec): Promise<void> {
   ensureRequiredUnits(spec);
-  const before = installedAddons().filter((item) => item.name !== spec.name);
+  const installed = installedAddons();
+  const wasEnabled = installed.some((item) => item.name === spec.name);
+  const before = installed.filter((item) => item.name !== spec.name);
   const specs = [...before, spec];
 
   if (!platformProvisioned()) {
     bootstrapProvision(specs);
-    spec.activate?.();
+    spec.activate?.(wasEnabled);
     log.ok(`${spec.name} enabled`);
     return;
   }
@@ -87,7 +89,7 @@ async function enableAddon(spec: AddonSpec): Promise<void> {
     fatal("could not safely inject the Nginx maintenance check");
   }
   applyToggleUnits(changes);
-  spec.activate?.();
+  spec.activate?.(wasEnabled);
   log.ok(`${spec.name} enabled`);
 }
 

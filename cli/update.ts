@@ -77,14 +77,14 @@ export async function cmdUpdate(argv: string[], options: UpdateOptions = {}): Pr
  * New installs lock System Tweaks; an update never does, since a box's
  * switches may be off on purpose, so it only says how. Reads, never writes.
  */
-export function lockHint(file?: string, rootUid?: number): string | null {
-  return lockState("system-tweaks", file, rootUid) === "unlocked"
+export function lockHint(enabled: boolean, file?: string, rootUid?: number): string | null {
+  return enabled && lockState("system-tweaks", file, rootUid) === "unlocked"
     ? "Tip: so the panel can switch System Tweaks' protections on but never off, run clp-addons lock system-tweaks"
     : null;
 }
 
 function suggestLock(): void {
-  const hint = lockHint();
+  const hint = lockHint(installedAddons().some((spec) => spec.name === "system-tweaks"));
   if (hint) log.plain(hint);
 }
 

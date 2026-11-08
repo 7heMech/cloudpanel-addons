@@ -33,5 +33,5 @@ export const SYSTEM_TWEAKS_ADDON: AddonDefinition = {
     run: () => systemTweaksFirewall(),
   },
   deactivate: () => withdrawSystemTweaks(),
-  activate: () => restoreSystemTweaks(),
+  activate: (wasEnabled) => restoreSystemTweaks({}, wasEnabled),
 };

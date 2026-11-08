@@ -2,10 +2,11 @@
 import { afterAll, beforeAll, expect, test } from "bun:test";
 import { chmodSync, existsSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { createAuthActionServer } from "../cli/auth-action";
 import { LOCKABLE_ADDONS, addonLocked, lockState, lockedAddons, switchesOnOnly } from "../lib/root-locks";
 import { changeLock } from "../cli/lock-addon";
-import { lockNewInstall } from "../cli/install";
+import { freshBox, lockNewInstall } from "../cli/install";
 import { lockHint } from "../cli/update";
 
 const uid = process.getuid?.() ?? 0;
@@ -187,15 +188,28 @@ test("a lock is added under the file lock, and a list root cannot trust is left 
 
 test("a fresh install locks System Tweaks; a re-run of the installer and an update do not", () => {
   const fresh = lockFiles();
-  expect(lockNewInstall(null, fresh)).toBe(true);
+  expect(lockNewInstall(true, fresh)).toBe(true);
   expect(lockState("system-tweaks", fresh.file, uid)).toBe("locked");
 
   const rerun = lockFiles();
-  expect(lockNewInstall("v2.1.0-rc.2", rerun)).toBe(false);
+  expect(lockNewInstall(false, rerun)).toBe(false);
   expect(existsSync(rerun.file)).toBe(false);
 
   // Update only says how: the box stays unlocked.
-  expect(lockHint(rerun.file, uid)).toContain("clp-addons lock system-tweaks");
+  expect(lockHint(true, rerun.file, uid)).toContain("clp-addons lock system-tweaks");
   expect(existsSync(rerun.file)).toBe(false);
-  expect(lockHint(fresh.file, uid)).toBeNull();
+  expect(lockHint(true, fresh.file, uid)).toBeNull();
+  // Nothing to suggest for an addon the box does not use.
+  expect(lockHint(false, rerun.file, uid)).toBeNull();
+});
+
+// A manifest that cannot be read once made a re-run look like a first install.
+test("only a box with no manifest at all and no addon enabled is fresh", () => {
+  const box = mkdtempSync(join(tmpdir(), "clp-fresh-"));
+  const manifest = join(box, "artifacts.json");
+  expect(freshBox(manifest, 0)).toBe(true);
+  expect(freshBox(manifest, 1)).toBe(false);
+  writeFileSync(manifest, "{ truncated");
+  expect(freshBox(manifest, 0)).toBe(false);
+  rmSync(box, { recursive: true, force: true });
 });

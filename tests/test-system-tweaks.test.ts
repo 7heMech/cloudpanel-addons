@@ -790,8 +790,8 @@ function systemTweaksClient() {
       return line;
     },
   };
-  const client = new Function("call", "busy", "notify", "clearNotice", "repaintView", "CLP_ROOT", "clpFlashTimer", "document",
-    `${source}\nreturn { installUpdates, setUpdates, setPanelPhp, setSwitch };`)(
+  const client = new Function("call", "busy", "notify", "clearNotice", "repaintView", "CLP_ROOT", "clpFlashTimer", "document", "confirmAction",
+    `${source}\nreturn { installUpdates, setUpdates, setPanelPhp, setSwitch, lockSettings };`)(
     (path: string, options: { body: string }) => new Promise((answer) => {
       events.push(`POST ${path} ${options.body}`);
       replies.push({ path, body: options.body, answer });
@@ -803,7 +803,8 @@ function systemTweaksClient() {
     { getElementById: () => ({}), querySelector: () => null, querySelectorAll: () => [] },
     0,
     document,
-  ) as Record<"installUpdates" | "setUpdates" | "setPanelPhp", (control: unknown) => Promise<void>> & { setSwitch: (control: unknown, name: string) => Promise<void> };
+    async () => true,
+  ) as Record<"installUpdates" | "setUpdates" | "setPanelPhp" | "lockSettings", (control: unknown) => Promise<void>> & { setSwitch: (control: unknown, name: string) => Promise<void> };
   return { client, control, events, replies, lines };
 }
 
@@ -830,6 +831,20 @@ test("every on/off switch on the page posts to a route that runs its verb", asyn
   expect(replies[0]).toMatchObject({ path: "/api/motd", body: '{"enabled":true}' });
   replies[0]!.answer({ ok: true, html: "" });
   await pending;
+});
+
+// The header button is in no row, so its working line once had nowhere to go:
+// the page froze with every control held and nothing posted.
+test("Lock settings in the page header posts and says it is running under the heading", async () => {
+  const { client, events, replies } = systemTweaksClient();
+  const heading = { after: (line: { textContent: string }) => events.push(`heading: ${line.textContent}`) };
+  const button = { dataset: {}, type: "button", closest: (selector: string) => (selector.includes(".page-heading") ? heading : null) };
+  const pending = client.lockSettings(button);
+  await Bun.sleep(0);
+  expect(events).toEqual(["busy", "heading: Switching everything on, then locking…", "POST /api/lock-settings {}"]);
+  replies[0]!.answer({ ok: true, html: "<p>locked</p>" });
+  await pending;
+  expect(events.slice(3)).toEqual(["idle", "repaint: <p>locked</p>", "ok: Hardening and Failed logins are on and locked."]);
 });
 
 // Switching updates on and then the panel's PHP, before the first answered, let
@@ -1950,6 +1965,16 @@ function lockableBox(): Box & { locks: { file: string; rootUid: number; lockFile
   const own = tempDir();
   const locks = { file: join(own, "etc", "locks.json"), rootUid: process.getuid!(), lockFile: join(own, "locks.lock") };
   b.options.locks = locks;
+  // fail2ban installed and running, so the jails really come on.
+  for (const sub of ["jail.d", "filter.d"]) mkdirSync(join(b.options.loginJails!.paths!.fail2banDir!, sub), { recursive: true });
+  b.options.loginJails = {
+    ...b.options.loginJails,
+    run: (command, args) => ({
+      ok: true, stderr: "",
+      stdout: command === "dpkg-query" ? "install ok installed" : command === "systemctl" && args[0] === "is-enabled" ? "enabled\n"
+        : command === "systemctl" && args[0] === "is-active" ? "active\n" : command === "fail2ban-client" ? "Jail list:\t\n" : "",
+    }),
+  };
   writeFileSync(b.settingsFile, JSON.stringify(ALL_OFF), { mode: 0o600 });
   return Object.assign(b, { locks });
 }
@@ -1995,6 +2020,28 @@ test("a switch that does not come on leaves nothing locked", async () => {
   expect(readSettings(b.options.paths as SystemTweaksPaths)).toMatchObject({ confineFileManager: true, databaseLoopback: false });
 });
 
+// MySQL's restart cuts remote clients, so it is not spent on a lock that will be refused.
+test("a switch that fails first leaves MySQL alone", async () => {
+  const b = lockableBox();
+  const database: string[] = [];
+  const run = b.options.database!.run!;
+  b.options.database = { ...b.options.database, run: (command, args) => { database.push(command); return run(command, args); } };
+  b.options.telemetry = { ...b.options.telemetry, run: () => ({ ok: false, stdout: "", stderr: "Access denied" }) };
+  await expect(act(b, ["lock-settings"])).rejects.toThrow(/^nothing was locked, because not every setting could be switched on: telemetry:[^;]*$/);
+  expect(database).toEqual([]);
+  expect(existsSync(b.locks.file)).toBe(false);
+  expect(readSettings(b.options.paths as SystemTweaksPaths).databaseLoopback).toBe(false);
+});
+
+// Jails saved without fail2ban run nowhere, so the page would call them on and locked when they are not.
+test("Lock settings without fail2ban changes and locks nothing", async () => {
+  const b = lockableBox();
+  b.options.loginJails = box().options.loginJails;
+  await expect(act(b, ["lock-settings"])).rejects.toThrow("nothing was changed or locked: fail2ban is not installed");
+  expect(existsSync(b.locks.file)).toBe(false);
+  expect(readSettings(b.options.paths as SystemTweaksPaths)).toMatchObject({ confineFileManager: false, loginJails: { panel: false } });
+});
+
 test("under root's lock a switch goes on but not off, even asked at root's action directly", async () => {
   const b = lockableBox();
   await act(b, ["lock-settings"]);
@@ -2024,4 +2071,13 @@ test("System Tweaks enabled under root's lock starts from its defaults", () => {
   const open = lockableBox();
   restoreSystemTweaks(open.options);
   expect(readSettings(open.options.paths as SystemTweaksPaths).confineFileManager).toBe(false);
+});
+
+// Re-running the installer activates an addon that is already on; a switch root locked off stays off.
+test("System Tweaks already on under root's lock keeps its switches when activated again", () => {
+  const b = lockableBox();
+  mkdirSync(dirname(b.locks.file), { mode: 0o755 });
+  writeFileSync(b.locks.file, JSON.stringify({ addons: ["system-tweaks"] }), { mode: 0o644 });
+  restoreSystemTweaks(b.options, true);
+  expect(readSettings(b.options.paths as SystemTweaksPaths)).toMatchObject({ confineFileManager: false, isolatePhpPools: false });
 });
