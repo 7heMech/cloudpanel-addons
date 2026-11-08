@@ -18,7 +18,10 @@ import { commandOutput, runCommand, type CommandResult } from "../../lib/command
 import { nginxFileChange, withNginxTransaction } from "../../lib/nginx-transaction";
 import { writeFileAtomic } from "../../lib/atomic-write";
 import { panelUserUid } from "../../lib/sso-auth";
-import { COMMAND_MS } from "./limits";
+import { COMMAND_MS, PANEL_CERT_GATEWAY_TIMEOUT_MS } from "./limits";
+import { applyThenSave, tweak } from "./tweak";
+import { badge, statusLine, switchRow } from "./app/rows";
+import { esc } from "../../lib/app-http";
 
 /** CloudPanel's shared certificate, `CN=cloudpanel.clp`. */
 const SHARED_FINGERPRINT = "6D:13:60:EC:EF:D5:01:F8:F4:91:C3:2D:41:91:48:9C:E1:02:3E:C8:E9:12:5D:96:AE:A7:53:03:FB:62:4F:2B";
@@ -231,3 +234,57 @@ export function replacePanelCert(options: PanelCertOptions = {}): string | null 
   }
   return expiring ? "panel certificate renewed" : "panel's shared certificate replaced";
 }
+
+type PanelCertState = PanelCertStatus & { replace: boolean };
+
+/** Which certificate the panel serves on 8443, and the custom domain's, which the sites' Nginx serves. */
+export function panelCertLine(state: PanelCertState): string {
+  const until = state.expires ? ` It expires on ${state.expires.slice(0, 10)}.` : "";
+  const line = {
+    shared: `${badge("Shared", state.replace ? "bad" : "warn")} <span>The panel uses CloudPanel's default certificate, whose private key is public.${
+      state.replace ? " Run clp-addons repair." : ""}</span>`,
+    generated: `${badge("Generated", "ok")} <span>The panel uses a certificate made on this server for ${esc((state.names ?? []).join(", "))}.${until}</span>`,
+    own: `${badge("Own", "ok")} <span>The panel uses its own certificate${state.subject ? `, ${esc(state.subject)}` : ""}.${until}</span>`,
+    unknown: `${badge("Unknown", "warn")} <span>${esc(state.problem ?? "")}</span>`,
+  }[state.kind];
+  const fingerprint = state.kind === "generated" && state.fingerprint
+    ? `<br><span class="hint">SHA-256 ${esc(state.fingerprint)}: check it against the one your browser shows before you accept it.</span>` : "";
+  const domain = state.customDomain
+    ? `<br><span>Your custom domain ${esc(state.customDomain)} serves its own certificate on port 443 and is not changed.</span>` : "";
+  return line + fingerprint + domain;
+}
+
+/** Replace CloudPanel's shared panel certificate with one generated here. */
+export const PANEL_CERT_TWEAK = tweak<{ replacePanelCert: boolean }, { panelCert?: PanelCertOptions }, { panelCert: PanelCertState }>()({
+  defaults: { replacePanelCert: true },
+  state: ({ options, settings }) => ({ panelCert: { ...panelCertStatus(options.panelCert), replace: settings.replacePanelCert } }),
+  switch: {
+    verb: "set-panel-cert",
+    key: "replacePanelCert",
+    timeout: PANEL_CERT_GATEWAY_TIMEOUT_MS,
+    // Off only stops the replacing: a certificate generated here stays, since the shared key is public.
+    set: applyThenSave("replacePanelCert", (on, options: { panelCert?: PanelCertOptions }) => on && replacePanelCert(options.panelCert)),
+  },
+  repair: {
+    // CloudPanel's shared certificate is replaced again after an update puts it back.
+    replace: {
+      label: "panel certificate",
+      locked: true,
+      run: ({ options, settings }) => settings.replacePanelCert ? replacePanelCert(options.panelCert) : null,
+    },
+  },
+  restore: {
+    run: ({ options, settings }) => { if (settings.replacePanelCert) replacePanelCert(options.panelCert); },
+    warning: (error) => `the panel's shared certificate waits for the next repair: ${error}`,
+  },
+  row: ({ panelCert }, locked) => switchRow("set-panel-cert", {
+    key: "replacePanelCert",
+    title: "Replace the shared panel certificate",
+    description: [
+      "Every CloudPanel install serves port 8443 with the same certificate and private key, so anyone who sees the traffic can decrypt it. This swaps it for one generated on this server.",
+      "A certificate you installed yourself is left alone. Off stops replacing it; a generated one stays.",
+    ],
+    checked: panelCert.replace,
+    extra: statusLine(panelCertLine(panelCert)),
+  }, locked),
+});

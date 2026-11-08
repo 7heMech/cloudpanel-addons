@@ -7,9 +7,8 @@ import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import type { CommandResult } from "../lib/command";
 import { fastCgiRequest, parseCgiResponse } from "../lib/fastcgi";
-import { panelPhpLine, panelPhpRow } from "../addons/system-tweaks/app/views";
 import {
-  panelPhpStatus, reconcilePanelPhp, restorePanelPhp, setPanelPhp, withdrawPanelPhp, type PanelPhpOptions,
+  panelPhpLine, panelPhpRow, panelPhpStatus, reconcilePanelPhp, restorePanelPhp, setPanelPhp, withdrawPanelPhp, type PanelPhpOptions,
 } from "../addons/system-tweaks/panel-php";
 
 const ARGS = "-R -F -y /home/clp/services/php-fpm/fpm/php-fpm.conf -c /home/clp/services/php-fpm/fpm/php.ini";

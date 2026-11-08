@@ -1,18 +1,14 @@
-import { PHP_GUARD_INI_NAME } from "../../../lib/paths";
 import { esc } from "../../../lib/app-http";
-import { TWEAK_ROW_JS, renderLayout, sinceText } from "../../../lib/app-ui";
+import { TWEAK_ROW_JS, renderLayout } from "../../../lib/app-ui";
 import { mountPath } from "../../../lib/mount";
-import type { WebVerb } from "../../../lib/gateway-protocol";
-import { declaresLock, type LockState } from "../../../lib/root-locks";
-import type { SystemTweaksState } from "../action";
+import type { LockState } from "../../../lib/root-locks";
+import { HARDENING, type SystemTweaksState } from "../registry";
 import type { CoverageRow, LastRun, UpdateSettings, UpdatesStatus } from "../updates";
-import type { FpmUploadProgress } from "../upload-progress";
-import type { PanelPhpChoice, PanelPhpStatus } from "../panel-php";
-import { newerPhp } from "../php-version";
 import type { FirewallStatus } from "../firewall";
 import { MAX_BACKUP_LEVEL } from "../backup-compression";
 import { DOMAIN_JAIL, JAIL_LIMITS, PANEL_JAIL, type Ban, type SshLogin } from "../login-jails";
-import type { DatabaseStatus } from "../database";
+import { MOTD_TWEAK } from "../motd";
+import { badge, lockableRow, settingRow, stateRow, warning } from "./rows";
 
 import STYLE from "./views.css" with { type: "text" };
 import SCRIPT from "./views.client.js" with { type: "text" };
@@ -28,11 +24,6 @@ export function layout(
     script: TWEAK_ROW_JS + SCRIPT,
     updateNotice,
   });
-}
-
-function badge(text: string, tone: "ok" | "warn" | "bad" | "plain"): string {
-  const state = { ok: " tone-ok", warn: " tone-warn", bad: " tone-bad", plain: "" }[tone];
-  return `<span class="badge${state}">${esc(text)}</span>`;
 }
 
 function backupCompressionCard(state: SystemTweaksState["backupCompression"]): string {
@@ -62,55 +53,6 @@ function backupCompressionCard(state: SystemTweaksState["backupCompression"]): s
 const DAY_MS = 86_400_000;
 /** How long a required reboot may wait, with automatic reboot off, before the page says so. */
 const REBOOT_OVERDUE_DAYS = 7;
-
-interface Row {
-  key: string;
-  title: string;
-  /** One paragraph, or a line each. */
-  description: string | string[];
-  /** The switch's state; a row with `control` instead has none. */
-  checked?: boolean;
-  disabled?: boolean;
-  onchange?: string;
-  /** What sits where the switch would, such as a select. */
-  control?: string;
-  extra?: string;
-}
-
-function settingRow(row: Row): string {
-  const note = `tweak-note-${row.key}`;
-  const control = row.control ?? `
-            <label class="switch" title="${esc(row.title)}">
-              <input type="checkbox" data-setting="${esc(row.key)}" onchange="${row.onchange}"${row.checked ? " checked" : ""}
-                ${row.disabled ? "disabled " : ""}aria-label="${esc(row.title)}">
-              <span></span>
-            </label>`;
-  return `
-      <div class="tweak-row">
-        <div class="tweak-body">
-          <div class="tweak-heading">
-            <h3>${esc(row.title)}<button class="tweak-more" type="button" aria-expanded="false"
-              aria-controls="${note}" aria-label="What ${esc(row.title.toLowerCase())} does"
-              onclick="toggleNote(this)"></button></h3>${control}
-          </div>
-          <div class="tweak-note" id="${note}">${[row.description].flat().map((line) => `<p>${esc(line)}</p>`).join("")}</div>${row.extra ?? ""}
-        </div>
-      </div>`;
-}
-
-/** A row of a protection root can lock (`clp-addons lock system-tweaks`): while it is, an on switch stays on and an off one can only go on. */
-function lockableRow(verb: WebVerb<"system-tweaks">, row: Row, locked: boolean): string {
-  return settingRow({ ...row, disabled: row.disabled || (frozen(verb, locked) && !!row.checked) });
-}
-
-/** Whether root's lock covers this verb, as `verbs.ts` declares and the gateway enforces. */
-function frozen(verb: WebVerb<"system-tweaks">, locked: boolean): boolean {
-  return locked && declaresLock("system-tweaks", verb);
-}
-
-function warning(text: string): string {
-  return `<p class="notice st-inline-notice">${text}</p>`;
-}
 
 function updatesLine(status: UpdatesStatus): string {
   if (!status.installed) {
@@ -244,13 +186,6 @@ function coverageBadge(row: CoverageRow): string {
   return badge("Not covered", "plain");
 }
 
-function stateRow(name: string, detail: string, state: string): string {
-  const shown = detail && detail.toLowerCase() !== name.toLowerCase();
-  return `
-          <tr><td><span class="st-name">${esc(name)}</span>${shown ? `<span class="hint st-detail">${esc(detail)}</span>` : ""}</td>
-            <td class="st-state">${state}</td></tr>`;
-}
-
 function coverageDetails(status: UpdatesStatus): string {
   if (!status.installed) return "";
   if (!status.coverage.length) return `<p class="hint st-fold">apt lists no repositories.</p>`;
@@ -268,206 +203,11 @@ function coverageDetails(status: UpdatesStatus): string {
       </details>`;
 }
 
-function uploadProgressSource(row: FpmUploadProgress): string {
-  const file = row.source.includes("/conf.d/") ? row.source.slice(row.source.lastIndexOf("/") + 1) : row.source;
-  const pools = row.poolsOn.length ? ` On in pool${row.poolsOn.length === 1 ? "" : "s"} ${row.poolsOn.join(", ")}.` : "";
-  if (!row.enabled && row.setBy === "clp-addons") return `Set by clp-addons${row.offWithoutGuard ? " and your own config" : ""}.${pools}`;
-  if (!row.enabled) return `Set by your config in ${file}.${pools}`;
-  return `${row.setBy === "default" ? "PHP's default" : `Set in ${file}`}.${pools}`;
-}
-
-function uploadProgressDetails(fpms: FpmUploadProgress[]): string {
-  if (!fpms.length) return `<p class="st-status hint">No PHP-FPM is installed.</p>`;
-  const on = fpms.filter((row) => row.enabled).length;
-  const pools = fpms.reduce((total, row) => total + row.poolsOn.length, 0);
-  const count = `${fpms.length} PHP-FPM${fpms.length === 1 ? "" : "s"}`;
-  const summary = on === 0 ? `Off on ${fpms.length === 1 ? "its one PHP-FPM" : `all ${count}`}` : `On in ${on} of ${count}`;
-  const poolText = pools ? `, on again in ${pools} pool${pools === 1 ? "" : "s"}` : "";
-  return `
-          <details class="st-fold">
-            <summary>${badge(on || pools ? "Check" : "Off", on || pools ? "warn" : "ok")} ${summary}${poolText}</summary>
-            <div class="table-scroll"><table class="st-table"><thead><tr><th>PHP-FPM</th><th class="st-state">Upload progress</th></tr></thead>
-              <tbody>${fpms.map((row) => stateRow(row.label, uploadProgressSource(row),
-                row.enabled ? badge("On", "bad") : row.poolsOn.length ? badge("Partly", "warn") : badge("Off", "ok"))).join("")}</tbody></table></div>
-          </details>`;
-}
-
-function phpOption(choice: PanelPhpChoice, stock: string | null, selected: boolean): string {
-  const label = `PHP ${choice.version}${choice.version === stock ? ", CloudPanel's own" : ""}`;
-  return `<option value="${choice.version === stock ? "" : esc(choice.version)}"${selected ? " selected" : ""}>${esc(label)}</option>`;
-}
-
-export function panelPhpLine(status: PanelPhpStatus): string {
-  const lines: string[] = [];
-  if (status.overriddenBy) lines.push(`${status.overriddenBy} sets this already. Remove it to choose here.`);
-  if (status.running) lines.push(`Running on PHP ${status.running}.`);
-  const chosen = status.choices.find((choice) => choice.version === (status.wanted || status.stock));
-  if (chosen?.available) lines.push(`${chosen.available} is available; run apt upgrade to install it.`);
-  if (status.failure && status.failure.php === status.wanted) {
-    lines.push(`PHP ${status.failure.php} failed ${sinceText(status.failure.at)}: ${status.failure.error}`);
-  }
-  return lines.join(" ");
-}
-
-/**
- * While root's lock holds, the version chosen now and those newer than the one
- * running; otherwise every choice. `movable` when one of them is a move
- * `set-panel-php` accepts.
- */
-function phpChoices(status: PanelPhpStatus, locked: boolean): { choices: PanelPhpChoice[]; movable: boolean } {
-  if (!locked) return { choices: status.choices, movable: true };
-  const current = status.wanted || status.stock!;
-  const now = status.running ?? current;
-  const choices = status.choices.filter((choice) => choice.version === current || newerPhp(choice.version, now));
-  return { choices, movable: choices.some((choice) => newerPhp(choice.version, now)) };
-}
-
-export function panelPhpRow(status: PanelPhpStatus | { error: string }, locked = false): string {
-  const description = "Runs CloudPanel's pages, phpMyAdmin and the File Manager. CloudPanel has not tested newer versions, so a change is undone if the login page or File Manager stops answering.";
-  if ("error" in status) {
-    return settingRow({ key: "panelPhp", title: "Panel PHP", description, control: "",
-      extra: `<div class="alert st-alert" role="alert">${esc(status.error)}</div>` });
-  }
-  if (status.stock === null) {
-    return settingRow({ key: "panelPhp", title: "Panel PHP", description, control: "",
-      extra: `<p class="st-status hint">CloudPanel's PHP-FPM unit is not one this addon recognises, so the panel keeps the PHP CloudPanel chose.</p>` });
-  }
-  const { choices, movable } = phpChoices(status, locked);
-  const select = `
-            <select id="panel-php" aria-label="Panel PHP" data-current="${esc(status.wanted)}" onchange="setPanelPhp(this)"${status.overriddenBy || !movable ? " disabled" : ""}>${choices
-    .map((choice) => phpOption(choice, status.stock, (status.wanted || status.stock) === choice.version)).join("")}${
-    status.wanted && !status.choices.some((choice) => choice.version === status.wanted)
-      ? `<option value="${esc(status.wanted)}" selected disabled>PHP ${esc(status.wanted)} (unavailable)</option>` : ""}</select>`;
-  const newer = status.choices.some((choice) => choice.version !== status.stock);
-  const eol = status.stock === "8.1" && !status.wanted && !status.overriddenBy
-    ? warning(newer
-      ? "The panel runs on PHP 8.1, which no longer gets security fixes. Choose a newer PHP above."
-      : "The panel runs on PHP 8.1, which no longer gets security fixes. Install a newer PHP-FPM to choose it here.")
-    : "";
-  return settingRow({
-    key: "panelPhp", title: "Panel PHP", description, control: select,
-    extra: `<p class="st-status hint" id="panel-php-status">${esc(panelPhpLine(status))}</p>${eol}`,
-  });
-}
-
-function realIpLine(state: SystemTweaksState["realIp"]): string {
-  if (state.problem) return `${badge("Unknown", "warn")} <span>${esc(state.problem)}</span>`;
-  if (!state.trustsAnyAddress) return `${badge("Blocked", "ok")} <span>Only local and private-network proxies can set the visitor IP.</span>`;
-  return `${badge("Trusted", state.blockForged ? "warn" : "plain")} <span>Any client can set its own IP with a header.${
-    state.blockForged ? " Run clp-addons repair." : ""}</span>`;
-}
-
-function phpMyAdminLine(state: SystemTweaksState["phpMyAdmin"]): string {
-  if (state.problem) return `${badge("Unknown", "warn")} <span>${esc(state.problem)}</span>`;
-  if (state.active) return `${badge("On", "ok")} <span>Basic auth covers every panel URL outside phpMyAdmin.</span>`;
-  if (state.enabled) return `${badge("Not applied", "warn")} <span>Run clp-addons repair.</span>`;
-  return `${badge("Off", "plain")} <span>phpMyAdmin's example sign-on script lets anyone make this server try MySQL logins on other hosts.</span>`;
-}
-
-/** Which certificate the panel serves on 8443, and the custom domain's, which the sites' Nginx serves. */
-export function panelCertLine(state: SystemTweaksState["panelCert"]): string {
-  const until = state.expires ? ` It expires on ${state.expires.slice(0, 10)}.` : "";
-  const line = {
-    shared: `${badge("Shared", state.replace ? "bad" : "warn")} <span>The panel uses CloudPanel's default certificate, whose private key is public.${
-      state.replace ? " Run clp-addons repair." : ""}</span>`,
-    generated: `${badge("Generated", "ok")} <span>The panel uses a certificate made on this server for ${esc((state.names ?? []).join(", "))}.${until}</span>`,
-    own: `${badge("Own", "ok")} <span>The panel uses its own certificate${state.subject ? `, ${esc(state.subject)}` : ""}.${until}</span>`,
-    unknown: `${badge("Unknown", "warn")} <span>${esc(state.problem ?? "")}</span>`,
-  }[state.kind];
-  const fingerprint = state.kind === "generated" && state.fingerprint
-    ? `<br><span class="hint">SHA-256 ${esc(state.fingerprint)}: check it against the one your browser shows before you accept it.</span>` : "";
-  const domain = state.customDomain
-    ? `<br><span>Your custom domain ${esc(state.customDomain)} serves its own certificate on port 443 and is not changed.</span>` : "";
-  return line + fingerprint + domain;
-}
-
-/** Site settings saved before the guard, or by a site's own user, that it would refuse now. */
-function storedValuesWarning(stored: SystemTweaksState["vhostGuard"]["stored"]): string {
-  if ("error" in stored) return `<p class="st-status hint">Stored site settings could not be checked: ${esc(stored.error)}</p>`;
-  if (!stored.length) return "";
-  const listed = stored.slice(0, 10).map((value) => `${esc(value.domain)}: ${esc(value.field)}`).join("; ");
-  return warning(`These saved site settings would be refused now, so they may hold nginx directives: ${listed}${
-    stored.length > 10 ? `; and ${stored.length - 10} more` : ""}. Check each one and the site's vhost.`);
-}
-
-/** Sites whose vhost the sync leaves alone, so nginx still opens their logs in the user's home. */
-function homeLogsWarning(domains: string[]): string {
-  if (!domains.length) return "";
-  const listed = domains.slice(0, 10).map(esc).join(", ");
-  return warning(`These sites' vhosts still write nginx logs in the site user's home, where that user can point them at any file: ${listed}${
-    domains.length > 10 ? ` and ${domains.length - 10} more` : ""}. clp-addons rewrites a vhost only when root alone can write it: make each one in /etc/nginx/sites-enabled owned by root with mode 644, then run clp-addons repair.`);
-}
-
-/** Sites whose logrotate file was edited by hand, so the sync left it as it is. */
-function ownLogrotateWarning(domains: string[]): string {
-  if (!domains.length) return "";
-  const listed = domains.slice(0, 10).map(esc).join(", ");
-  return warning(`These sites' files in /etc/logrotate.d were edited by hand, so clp-addons left them as they are: ${listed}${
-    domains.length > 10 ? ` and ${domains.length - 10} more` : ""}. A file that rotates the site's home as root lets its user have root rotate files it links there. Rotate the home with su set to the site's user.`);
-}
-
-function phpPoolsLine(state: SystemTweaksState["phpPools"]): string {
-  if (state.problem) return `${badge("Not applied", "warn")} <span>${esc(state.problem)}</span>`;
-  if (state.active) return `${badge("On", "ok")} <span>Each pool's port answers only nginx and the pool's own user.</span>`;
-  if (state.enabled) return `${badge("Not applied", "warn")} <span>Run clp-addons repair.</span>`;
-  return `${badge("Off", "plain")} <span>Any account on the server can run PHP as any site through its pool's port.</span>`;
-}
-
-function vhostGuardLine(state: SystemTweaksState["vhostGuard"]): string {
-  if (state.active) return `${badge("On", "ok")} <span>Panel input is checked before CloudPanel writes it into a vhost.</span>`;
-  if (state.enabled) return `${badge("Not applied", "warn")} <span>Run clp-addons repair.</span>`;
-  return `${badge("Off", "plain")} <span>Any panel account with a site can write nginx config, and nginx runs as root.</span>`;
-}
-
-function fileManagerGuardLine(state: SystemTweaksState["fileManagerGuard"]): string {
-  if (state.active) return `${badge("On", "ok")} <span>File Manager access is limited to each site's files.</span>`;
-  if (state.enabled) return `${badge("Not applied", "warn")} <span>Run clp-addons repair.</span>`;
-  return `${badge("Off", "plain")} <span>Any panel account with a site can read and change files anywhere on the server through the File Manager, which runs as root.</span>`;
-}
-
-function clpctlGuardLine(state: SystemTweaksState["clpctlGuard"]): string {
-  if ("error" in state) return `${badge("Unknown", "warn")} <span>${esc(state.error)}</span>`;
-  const where = state.version ? ` (CloudPanel ${esc(state.version)})` : "";
-  if (state.active) return `${badge("On", "ok")} <span>The clpctlWrapper is the hardened one${where}.</span>`;
-  if (state.enabled && state.wrapper === "ours") {
-    return `${badge("Action needed", "bad")} <span>${esc(state.reason ?? "the saved original is missing")}, so clpctl cannot run. Restore CloudPanel's clpctlWrapper, then run clp-addons repair.</span>`;
-  }
-  if (state.enabled) {
-    return `${badge("Paused", "warn")} <span>${esc(state.reason ?? "the wrapper was left in place")}. CloudPanel's own wrapper is untouched.</span>`;
-  }
-  return `${badge("Off", "plain")} <span>A site's own user can reach root through clpctlWrapper${where}.</span>`;
-}
-
-function telemetryLine(state: SystemTweaksState["telemetry"]): string {
-  if (state.problem) return `${badge("Unknown", "warn")} <span>${esc(state.problem)}</span>`;
-  if (!state.agent) return `${badge("No agent", "plain")} <span>CloudPanel's clp-agent is not installed here.</span>`;
-  if (state.blocked) return `${badge("Blocked", "ok")} <span>clp-agent can reach only this server.</span>`;
-  if (state.enabled) return `${badge("Not applied", "warn")} <span>Run clp-addons repair.</span>`;
-  return `${badge("Sending", "plain")} <span>clp-agent sends CloudPanel every site's domain and every panel user's name and email once a day.</span>`;
-}
-
-function motdLine(state: SystemTweaksState["motd"]): string {
-  if (state.enabled && state.script && !state.banner) return `${badge("On", "ok")} <span>SSH logins show this server's state.</span>`;
-  if (state.enabled) return `${badge("Not applied", "warn")} <span>Run clp-addons repair.</span>`;
-  if (state.banner) return `${badge("Off", "plain")} <span>SSH logins show CloudPanel's banner.</span>`;
-  return `${badge("Off", "plain")} <span>SSH logins show no message: CloudPanel's banner is turned off. <code>chmod 775 /etc/update-motd.d/10-cloudpanel</code> turns it back on.</span>`;
-}
-
-function motdCard(state: SystemTweaksState["motd"]): string {
+function motdCard(state: SystemTweaksState, locked: boolean): string {
   return `
     <div class="card">
       <div class="card-header"><h2>SSH login</h2></div>
-      <div class="tweak-list">${settingRow({
-        key: "serverInfoMotd",
-        title: "Server info at SSH login",
-        description: [
-          "Replaces CloudPanel's welcome banner with uptime, load, memory, disk, IP addresses, pending updates and whether a reboot is required. Site users who log in over SSH see it too.",
-          "CloudPanel's banner looks up the server's address online at every login, which holds the login up when that lookup is slow. Off puts the banner back.",
-        ],
-        checked: state.enabled,
-        onchange: "setSwitch(this, 'motd')",
-        extra: `<p class="st-status">${motdLine(state)}</p>`,
-      })}
+      <div class="tweak-list">${MOTD_TWEAK.row(state, locked)}
       </div>
     </div>`;
 }
@@ -476,157 +216,9 @@ function hardeningCard(state: SystemTweaksState, locked: boolean): string {
   return `
     <div class="card">
       <div class="card-header"><h2>Hardening</h2></div>
-      <div class="tweak-list">${panelPhpRow(state.panelPhp, frozen("set-panel-php", locked))}${lockableRow("set-upload-guard", {
-        key: "uploadProgressGuard",
-        title: "PHP upload-progress mitigation",
-        description: `Turns PHP's session upload progress, a route into CVE-2026-109619, off on every PHP-FPM with ${PHP_GUARD_INI_NAME}. Off removes only that file.`,
-        checked: state.uploadProgress.guard,
-        onchange: "setSwitch(this, 'upload-guard')",
-        extra: uploadProgressDetails(state.uploadProgress.fpms),
-      }, locked)}${lockableRow("set-real-ip", {
-        key: "blockForgedRealIp",
-        title: "Block forged visitor IPs",
-        description: [
-          "Stops any client from naming its own IP with a header to PHP, logs, basic auth and Cloudflare-only access.",
-          "Local proxies stay trusted, and the panel also trusts Cloudflare. Switch it off only behind another public proxy.",
-        ],
-        checked: state.realIp.blockForged,
-        onchange: "setSwitch(this, 'real-ip')",
-        extra: `<p class="st-status">${realIpLine(state.realIp)}</p>`,
-      }, locked)}${lockableRow("set-phpmyadmin", {
-        key: "protectPhpMyAdmin",
-        title: "Lock down phpMyAdmin",
-        description: [
-          "Keeps the panel's basic auth on URLs that only start with /phpmyadmin, such as /phpmyadmin/../file-manager/.",
-          "Hides phpMyAdmin's example and setup scripts and the files that show its version. Signing in from the panel still works.",
-        ],
-        checked: state.phpMyAdmin.enabled,
-        onchange: "setSwitch(this, 'phpmyadmin')",
-        extra: `<p class="st-status">${phpMyAdminLine(state.phpMyAdmin)}</p>`,
-      }, locked)}${databaseRow(state.database, locked)}${lockableRow("set-panel-cert", {
-        key: "replacePanelCert",
-        title: "Replace the shared panel certificate",
-        description: [
-          "Every CloudPanel install serves port 8443 with the same certificate and private key, so anyone who sees the traffic can decrypt it. This swaps it for one generated on this server.",
-          "A certificate you installed yourself is left alone. Off stops replacing it; a generated one stays.",
-        ],
-        checked: state.panelCert.replace,
-        onchange: "setSwitch(this, 'panel-cert')",
-        extra: `<p class="st-status">${panelCertLine(state.panelCert)}</p>`,
-      }, locked)}${lockableRow("set-vhost-guard", {
-        key: "blockVhostInjection",
-        title: "Block nginx config injection",
-        description: [
-          "Refuses site settings CloudPanel would write into a vhost unchecked, such as a Root Directory or Varnish server holding nginx directives.",
-          "Only administrators can save the Vhost editor and PageSpeed settings, and site nginx logs move where only root can write.",
-        ],
-        checked: state.vhostGuard.enabled,
-        onchange: "setSwitch(this, 'vhost-guard')",
-        extra: `<p class="st-status">${vhostGuardLine(state.vhostGuard)}</p>${storedValuesWarning(state.vhostGuard.stored)}${homeLogsWarning(state.vhostGuard.homeLogs)}${ownLogrotateWarning(state.vhostGuard.ownLogrotate)}`,
-      }, locked)}${lockableRow("set-php-pools", {
-        key: "isolatePhpPools",
-        title: "Isolate PHP pools",
-        description: [
-          "Lets only nginx and each site's own user connect to the site's PHP-FPM port, so one site's user cannot run PHP as another site's.",
-          "A tool that reaches another site's pool from its own account, such as a monitoring agent, stops working.",
-        ],
-        checked: state.phpPools.enabled,
-        onchange: "setSwitch(this, 'php-pools')",
-        extra: `<p class="st-status">${phpPoolsLine(state.phpPools)}</p>`,
-      }, locked)}${lockableRow("set-file-manager-guard", {
-        key: "confineFileManager",
-        title: "Restrict File Manager to site files",
-        description: [
-          "Refuses File Manager requests that reach outside the site's home through .. or a symbolic link, and archives that would extract device files or setuid programs.",
-          "Only the panel's own nginx can reach the File Manager's PHP.",
-        ],
-        checked: state.fileManagerGuard.enabled,
-        onchange: "setSwitch(this, 'file-manager-guard')",
-        extra: `<p class="st-status">${fileManagerGuardLine(state.fileManagerGuard)}</p>`,
-      }, locked)}${lockableRow("set-clpctl-guard", {
-        key: "blockClpctlInjection",
-        title: "Block clpctl injection",
-        description: [
-          "Replaces CloudPanel's clpctlWrapper so a site's own Unix user cannot break out of clpctl's shell and run commands as root.",
-          "Root and the panel are unaffected. Sites can still export their database, reset their own permissions and purge Varnish with ordinary values; they import with their own database user.",
-        ],
-        checked: "error" in state.clpctlGuard ? true : state.clpctlGuard.enabled,
-        onchange: "setSwitch(this, 'clpctl-guard')",
-        extra: `<p class="st-status">${clpctlGuardLine(state.clpctlGuard)}</p>`,
-      }, locked)}${lockableRow("set-telemetry", {
-        key: "blockTelemetry",
-        title: "Block CloudPanel telemetry",
-        description: [
-          "Cuts CloudPanel's clp-agent off from the network, so it stops sending the server's ID and hardware, every site's domain and every panel user's name and email.",
-          "The agent keeps recording the dashboard's graphs.",
-        ],
-        checked: state.telemetry.enabled,
-        onchange: "setSwitch(this, 'telemetry')",
-        extra: `<p class="st-status">${telemetryLine(state.telemetry)}</p>`,
-      }, locked)}
+      <div class="tweak-list">${HARDENING.map((tweak) => tweak.row(state, locked)).join("")}
       </div>
     </div>`;
-}
-
-type DatabaseState = SystemTweaksState["database"];
-
-function listing(items: string[]): string {
-  return esc(items.length > 1 ? `${items.slice(0, -1).join(", ")} and ${items.at(-1)}` : items[0] ?? "");
-}
-
-function databaseLine(state: DatabaseStatus & { loopback: boolean }): string {
-  if (state.listenersUnknown) return `${badge("Unknown", "warn")} <span>Where MySQL listens could not be read: ${esc(state.listenersUnknown)}.</span>`;
-  if (!state.running) return `${badge("Not running", "plain")} <span>MySQL is not listening on TCP here.</span>`;
-  if (!state.exposed.length) return `${badge("This server only", "ok")} <span>MySQL accepts connections only from this server.</span>`;
-  const where = `Listens on ${listing(state.exposed)}.`;
-  if (state.loopback && state.fileInPlace) {
-    if (state.socketUnit) return `${badge("Not applied", "warn")} <span>${where} The saved restriction applies when MySQL and ${esc(state.socketUnit)} are stopped and started together.</span>`;
-    return `${badge("Not applied", "warn")} <span>${where} It moves to 127.0.0.1 at MySQL's next restart: systemctl restart mysql.</span>`;
-  }
-  if (state.firewall.state === "off") {
-    return `${badge("Open", "bad")} <span>${where} The firewall rules loaded now let anyone reach it, unless a firewall outside this server blocks it.</span>`;
-  }
-  if (state.firewall.state === "unknown") {
-    return `${badge("Unknown", "warn")} <span>${where} Whether the loaded firewall rules block it is unclear: ${esc(state.firewall.reason ?? "they could not be read")}.</span>`;
-  }
-  if (state.firewall.openTo.length) {
-    return `${badge("Open", "warn")} <span>${where} The loaded firewall rules allow ${listing(state.firewall.openTo)}.</span>`;
-  }
-  return `${badge("Firewalled", "warn")} <span>${where} The loaded firewall rules drop it, so the firewall is all that keeps it private.</span>`;
-}
-
-function defaultPasswordNote(state: DatabaseStatus): string {
-  const found = state.defaultPassword;
-  if ("error" in found) return `<p class="st-status hint">Root's password could not be checked: ${esc(found.error)}</p>`;
-  if (!state.running) return "";
-  if (!found.length) return `<p class="st-status hint">Root does not log in with a default password.</p>`;
-  const what = found.map((hit) => `${hit.password === "root" ? "the password root" : "no password"} from ${hit.from === "loopback" ? "this server" : "other hosts"}`);
-  return warning(`MySQL's root account logs in with ${listing(what)}. Change it in MySQL first, then enter the new password under
-    Admin → Settings → <a href="/admin/database-servers">Database Servers</a> on the 127.0.0.1 server. CloudPanel logs in with the password stored there,
-    so changing it only in MySQL breaks its Databases page.`);
-}
-
-function databaseRow(state: DatabaseState, locked: boolean): string {
-  const description = [
-    "Allows MySQL and MariaDB connections only from this server. Sites and the panel connect over localhost or a Unix socket and keep working. Apps on other machines lose access; reach it over an SSH tunnel instead.",
-    "Off by default: CloudPanel creates every database user for any host, so System Tweaks cannot tell whether something remote uses one. A change restarts MySQL, so sites lose their database for a few seconds.",
-  ];
-  if ("error" in state) {
-    return settingRow({ key: "databaseLoopback", title: "MySQL on this server only", description, control: "",
-      extra: `<div class="alert st-alert" role="alert">${esc(state.error)}</div>` });
-  }
-  const remote = state.remoteClients.length
-    ? warning(`Connected now from ${listing(state.remoteClients)}. ${state.loopback ? "" : "These lose access once MySQL accepts connections from this server only."}`)
-    : "";
-  return lockableRow("set-database-loopback", {
-    key: "databaseLoopback",
-    title: "MySQL on this server only",
-    description,
-    checked: state.loopback,
-    disabled: !state.running && !state.loopback,
-    onchange: "setDatabaseLoopback(this)",
-    extra: `<p class="st-status">${databaseLine(state)}</p>${remote}${defaultPasswordNote(state)}`,
-  }, locked);
 }
 
 /** The protocols are set on CloudPanel's own Firewall page; this page only says where. */
@@ -763,5 +355,5 @@ export function dashboardView(state: SystemTweaksState, now = Date.now(), lock: 
       <div class="card-header"><h2>Automatic updates</h2></div>
       <div class="tweak-list">${updateRows(state.updates, state.settings)}
       </div>${statusList(state.updates, now)}${coverageDetails(state.updates)}
-    </div>${backupCompressionCard(state.backupCompression)}${hardeningCard(state, locked)}${loginJailsCard(state.loginJails, locked)}${motdCard(state.motd)}`;
+    </div>${backupCompressionCard(state.backupCompression)}${hardeningCard(state, locked)}${loginJailsCard(state.loginJails, locked)}${motdCard(state, locked)}`;
 }

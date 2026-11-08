@@ -14,7 +14,10 @@ import { runCommand, type CommandResult } from "../../lib/command";
 import { nginxFileChange, trustedVhost, withNginxTransaction } from "../../lib/nginx-transaction";
 import { ROOT_UID, nginxLayout } from "../../lib/paths";
 import { panelUserGid, panelUserUid } from "../../lib/sso-auth";
-import { COMMAND_MS } from "./limits";
+import { COMMAND_MS, REAL_IP_GATEWAY_TIMEOUT_MS } from "./limits";
+import { applyThenSave, tweak } from "./tweak";
+import { badge, statusLine, switchRow } from "./app/rows";
+import { esc } from "../../lib/app-http";
 
 // The /addons/ proxy's baseline in cli/inject.ts leaves this block out with withoutPhpMyAdminRules.
 const BLOCK_RE = /^[ \t]*# clp-addons:phpmyadmin:start\n(?:.*\n)*?[ \t]*# clp-addons:phpmyadmin:end\n/gm;
@@ -139,3 +142,44 @@ export function applyPhpMyAdmin(enabled: boolean, options: PhpMyAdminOptions = {
     changes.push(change);
   }).changed;
 }
+
+type PhpMyAdminState = PhpMyAdminStatus & { enabled: boolean };
+
+function phpMyAdminLine(state: PhpMyAdminState): string {
+  if (state.problem) return `${badge("Unknown", "warn")} <span>${esc(state.problem)}</span>`;
+  if (state.active) return `${badge("On", "ok")} <span>Basic auth covers every panel URL outside phpMyAdmin.</span>`;
+  if (state.enabled) return `${badge("Not applied", "warn")} <span>Run clp-addons repair.</span>`;
+  return `${badge("Off", "plain")} <span>phpMyAdmin's example sign-on script lets anyone make this server try MySQL logins on other hosts.</span>`;
+}
+
+/** Keep basic auth outside phpMyAdmin and hide its example, setup and version files. */
+export const PHPMYADMIN_TWEAK = tweak<{ protectPhpMyAdmin: boolean }, { phpMyAdmin?: PhpMyAdminOptions }, { phpMyAdmin: PhpMyAdminState }>()({
+  defaults: { protectPhpMyAdmin: true },
+  state: ({ options, settings }) => ({ phpMyAdmin: { ...phpMyAdminStatus(options.phpMyAdmin), enabled: settings.protectPhpMyAdmin } }),
+  switch: {
+    verb: "set-phpmyadmin",
+    key: "protectPhpMyAdmin",
+    timeout: REAL_IP_GATEWAY_TIMEOUT_MS,
+    set: applyThenSave("protectPhpMyAdmin", (on, options: { phpMyAdmin?: PhpMyAdminOptions }) => applyPhpMyAdmin(on, options.phpMyAdmin)),
+  },
+  repair: {
+    // Also the fast repair's, when CloudPanel rewrites its vhost.
+    rules: {
+      label: "phpMyAdmin rules",
+      locked: true,
+      run: ({ options, settings }) => settings.protectPhpMyAdmin && applyPhpMyAdmin(true, options.phpMyAdmin) ? "phpMyAdmin rules put back" : null,
+    },
+  },
+  withdraw: { run: ({ options }) => { applyPhpMyAdmin(false, options.phpMyAdmin); } },
+  restore: { run: ({ options, settings }) => { if (settings.protectPhpMyAdmin) applyPhpMyAdmin(true, options.phpMyAdmin); } },
+  row: ({ phpMyAdmin }, locked) => switchRow("set-phpmyadmin", {
+    key: "protectPhpMyAdmin",
+    title: "Lock down phpMyAdmin",
+    description: [
+      "Keeps the panel's basic auth on URLs that only start with /phpmyadmin, such as /phpmyadmin/../file-manager/.",
+      "Hides phpMyAdmin's example and setup scripts and the files that show its version. Signing in from the panel still works.",
+    ],
+    checked: phpMyAdmin.enabled,
+    extra: statusLine(phpMyAdminLine(phpMyAdmin)),
+  }, locked),
+});

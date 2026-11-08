@@ -12,7 +12,8 @@ import {
 import { inputVerdict, otherInputHooks, parseFilterTable } from "../addons/system-tweaks/input-rules";
 import { dashboardView } from "../addons/system-tweaks/app/views";
 import { updatesStatus } from "../addons/system-tweaks/updates";
-import { executeSystemTweaksAction, type SystemTweaksState } from "../addons/system-tweaks/action";
+import { executeSystemTweaksAction } from "../addons/system-tweaks/action";
+import type { SystemTweaksState } from "../addons/system-tweaks/registry";
 import { parseSocketBindings, renderSocketFile } from "../addons/system-tweaks/database-socket";
 
 const dirs: string[] = [];

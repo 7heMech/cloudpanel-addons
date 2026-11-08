@@ -16,6 +16,8 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { runCommand, type CommandResult } from "../../lib/command";
 import { writeFileAtomic } from "../../lib/atomic-write";
+import { failAction } from "../../lib/action";
+import { tweak } from "./tweak";
 
 export interface BackupCompressionSettings { enabled: boolean; level: number; threads: number }
 export const DEFAULT_BACKUP_COMPRESSION: BackupCompressionSettings = { enabled: false, level: 3, threads: 1 };
@@ -181,3 +183,44 @@ export function reconcileBackupCompression(settings: BackupCompressionSettings, 
   replaceSource(ctx, next);
   return true;
 }
+
+type Options = { backupCompression?: BackupCompressionOptions };
+
+/** Zstandard for CloudPanel's remote backups; the page has its own card for it. */
+export const BACKUP_COMPRESSION_TWEAK = tweak<{ backupCompression: BackupCompressionSettings }, Options, { backupCompression: BackupCompressionStatus }>()({
+  defaults: { backupCompression: { ...DEFAULT_BACKUP_COMPRESSION } },
+  read(stored, settings) {
+    if (validBackupCompression(stored.backupCompression)) settings.backupCompression = { ...stored.backupCompression };
+  },
+  state: ({ options, settings }) => ({ backupCompression: backupCompressionStatus(settings.backupCompression, options.backupCompression) }),
+  verbs: {
+    async "set-backup-compression"(ctx) {
+      const body = await ctx.body();
+      if (!validBackupCompression(body)) failAction(BACKUP_COMPRESSION_ERROR);
+      await ctx.locked(({ options, settings, save }) => {
+        save({ backupCompression: { ...body } });
+        try { reconcileBackupCompression(body, options.backupCompression); }
+        catch (error) { save({ backupCompression: settings.backupCompression }); throw error; }
+      });
+      return ctx.state();
+    },
+  },
+  repair: {
+    // Also the fast repair's, after a CloudPanel update replaces the backup command.
+    command: {
+      label: "remote backup compression",
+      locked: true,
+      run: ({ options, settings }) =>
+        reconcileBackupCompression(settings.backupCompression, options.backupCompression) ? "remote backup compression reconciled" : null,
+    },
+  },
+  withdraw: {
+    // It refuses an edited backup command.
+    run: ({ options, settings }) => { reconcileBackupCompression({ ...settings.backupCompression, enabled: false }, options.backupCompression); },
+  },
+  restore: {
+    // It refuses once CloudPanel moves past the supported version; activation must still finish.
+    run: ({ options, settings }) => { reconcileBackupCompression(settings.backupCompression, options.backupCompression); },
+    warning: (error) => `remote backup compression waits for the next repair: ${error}`,
+  },
+});

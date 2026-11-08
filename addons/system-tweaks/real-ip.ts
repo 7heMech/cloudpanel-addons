@@ -15,7 +15,10 @@ import {
 } from "../../lib/nginx-transaction";
 import { CLOUDFLARE_IPS_PATH, ROOT_UID, nginxLayout } from "../../lib/paths";
 import { panelUserGid, panelUserUid } from "../../lib/sso-auth";
-import { COMMAND_MS } from "./limits";
+import { COMMAND_MS, REAL_IP_GATEWAY_TIMEOUT_MS } from "./limits";
+import { applyThenSave, tweak } from "./tweak";
+import { badge, statusLine, switchRow } from "./app/rows";
+import { esc } from "../../lib/app-http";
 
 export const REAL_IP_MARKER = "#clp-addons:untrusted ";
 const ANY = /^([ \t]*)(set_real_ip_from[ \t]+(?:0\.0\.0\.0\/0|::\/0)[ \t]*;)[ \t]*$/gm;
@@ -152,3 +155,43 @@ export function applyRealIp(blockForged: boolean, options: RealIpOptions = {}): 
 export function releaseRealIp(options: RealIpOptions = {}): boolean {
   return applyTo(instances(options).sites, withAnyAddress, options, false);
 }
+
+type RealIpState = RealIpStatus & { blockForged: boolean };
+
+function realIpLine(state: RealIpState): string {
+  if (state.problem) return `${badge("Unknown", "warn")} <span>${esc(state.problem)}</span>`;
+  if (!state.trustsAnyAddress) return `${badge("Blocked", "ok")} <span>Only local and private-network proxies can set the visitor IP.</span>`;
+  return `${badge("Trusted", state.blockForged ? "warn" : "plain")} <span>Any client can set its own IP with a header.${
+    state.blockForged ? " Run clp-addons repair." : ""}</span>`;
+}
+
+/** Stop nginx.conf trusting X-Real-IP from every address. */
+export const REAL_IP_TWEAK = tweak<{ blockForgedRealIp: boolean }, { realIp?: RealIpOptions }, { realIp: RealIpState }>()({
+  defaults: { blockForgedRealIp: true },
+  state: ({ options, settings }) => ({ realIp: { ...realIpStatus(options.realIp), blockForged: settings.blockForgedRealIp } }),
+  switch: {
+    verb: "set-real-ip",
+    key: "blockForgedRealIp",
+    timeout: REAL_IP_GATEWAY_TIMEOUT_MS,
+    set: applyThenSave("blockForgedRealIp", (on, options: { realIp?: RealIpOptions }) => applyRealIp(on, options.realIp)),
+  },
+  repair: {
+    upkeep: {
+      label: null,
+      locked: true,
+      run: ({ options, settings }) => settings.blockForgedRealIp && applyRealIp(true, options.realIp) && "visitor-IP trust narrowed again",
+    },
+  },
+  withdraw: { run: ({ options }) => { applyRealIp(false, options.realIp); } },
+  restore: { run: ({ options, settings }) => { if (settings.blockForgedRealIp) applyRealIp(true, options.realIp); } },
+  row: ({ realIp }, locked) => switchRow("set-real-ip", {
+    key: "blockForgedRealIp",
+    title: "Block forged visitor IPs",
+    description: [
+      "Stops any client from naming its own IP with a header to PHP, logs, basic auth and Cloudflare-only access.",
+      "Local proxies stay trusted, and the panel also trusts Cloudflare. Switch it off only behind another public proxy.",
+    ],
+    checked: realIp.blockForged,
+    extra: statusLine(realIpLine(realIp)),
+  }, locked),
+});

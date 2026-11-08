@@ -95,7 +95,8 @@ An addon's verbs are declared in its `verbs.ts`, which imports nothing, so the
 root gateway can read them without loading the addon. The gateway's allowlist,
 the action's verb type, the services' typed gateway calls and the manager's
 per-caller check all come from that one declaration, and a test reads each
-action's dispatcher to check it handles exactly those verbs.
+action's dispatcher, or System Tweaks' handler table, to check it handles
+exactly those verbs.
 `tests/__snapshots__/test-web-verbs.test.ts.snap` lists every web-reachable verb
 with who may call it, so a change to the gateway's surface shows in review.
 

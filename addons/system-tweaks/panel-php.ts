@@ -21,6 +21,10 @@ import { daemonReload } from "../../lib/systemd";
 import { present, trustedText } from "../../lib/trusted-file";
 import { waitHealthy } from "./wait-healthy";
 import { newerPhp } from "./php-version";
+import { tweak } from "./tweak";
+import { frozen, settingRow, warning } from "./app/rows";
+import { esc } from "../../lib/app-http";
+import { sinceText } from "../../lib/app-ui";
 
 const STATE_VERSION = 1;
 const VERSION_RE = /^[0-9]+\.[0-9]+$/;
@@ -518,3 +522,93 @@ export function restorePanelPhp(options: PanelPhpOptions = {}): void {
   });
   if (choice.php) ctx.run("systemctl", ["start", "--no-block", RECONCILE_SERVICE]);
 }
+
+function panelPhpOrError(options?: PanelPhpOptions): PanelPhpStatus | { error: string } {
+  try { return panelPhpStatus(options); }
+  catch (error) { return { error: errorMessage(error) }; }
+}
+
+function phpOption(choice: PanelPhpChoice, stock: string | null, selected: boolean): string {
+  const label = `PHP ${choice.version}${choice.version === stock ? ", CloudPanel's own" : ""}`;
+  return `<option value="${choice.version === stock ? "" : esc(choice.version)}"${selected ? " selected" : ""}>${esc(label)}</option>`;
+}
+
+export function panelPhpLine(status: PanelPhpStatus): string {
+  const lines: string[] = [];
+  if (status.overriddenBy) lines.push(`${status.overriddenBy} sets this already. Remove it to choose here.`);
+  if (status.running) lines.push(`Running on PHP ${status.running}.`);
+  const chosen = status.choices.find((choice) => choice.version === (status.wanted || status.stock));
+  if (chosen?.available) lines.push(`${chosen.available} is available; run apt upgrade to install it.`);
+  if (status.failure && status.failure.php === status.wanted) {
+    lines.push(`PHP ${status.failure.php} failed ${sinceText(status.failure.at)}: ${status.failure.error}`);
+  }
+  return lines.join(" ");
+}
+
+/**
+ * While root's lock holds, the version chosen now and those newer than the one
+ * running; otherwise every choice. `movable` when one of them is a move
+ * `set-panel-php` accepts.
+ */
+function phpChoices(status: PanelPhpStatus, locked: boolean): { choices: PanelPhpChoice[]; movable: boolean } {
+  if (!locked) return { choices: status.choices, movable: true };
+  const current = status.wanted || status.stock!;
+  const now = status.running ?? current;
+  const choices = status.choices.filter((choice) => choice.version === current || newerPhp(choice.version, now));
+  return { choices, movable: choices.some((choice) => newerPhp(choice.version, now)) };
+}
+
+export function panelPhpRow(status: PanelPhpStatus | { error: string }, locked = false): string {
+  const description = "Runs CloudPanel's pages, phpMyAdmin and the File Manager. CloudPanel has not tested newer versions, so a change is undone if the login page or File Manager stops answering.";
+  if ("error" in status) {
+    return settingRow({ key: "panelPhp", title: "Panel PHP", description, control: "",
+      extra: `<div class="alert st-alert" role="alert">${esc(status.error)}</div>` });
+  }
+  if (status.stock === null) {
+    return settingRow({ key: "panelPhp", title: "Panel PHP", description, control: "",
+      extra: `<p class="st-status hint">CloudPanel's PHP-FPM unit is not one this addon recognises, so the panel keeps the PHP CloudPanel chose.</p>` });
+  }
+  const { choices, movable } = phpChoices(status, locked);
+  const select = `
+            <select id="panel-php" aria-label="Panel PHP" data-current="${esc(status.wanted)}" onchange="setPanelPhp(this)"${status.overriddenBy || !movable ? " disabled" : ""}>${choices
+    .map((choice) => phpOption(choice, status.stock, (status.wanted || status.stock) === choice.version)).join("")}${
+    status.wanted && !status.choices.some((choice) => choice.version === status.wanted)
+      ? `<option value="${esc(status.wanted)}" selected disabled>PHP ${esc(status.wanted)} (unavailable)</option>` : ""}</select>`;
+  const newer = status.choices.some((choice) => choice.version !== status.stock);
+  const eol = status.stock === "8.1" && !status.wanted && !status.overriddenBy
+    ? warning(newer
+      ? "The panel runs on PHP 8.1, which no longer gets security fixes. Choose a newer PHP above."
+      : "The panel runs on PHP 8.1, which no longer gets security fixes. Install a newer PHP-FPM to choose it here.")
+    : "";
+  return settingRow({
+    key: "panelPhp", title: "Panel PHP", description, control: select,
+    extra: `<p class="st-status hint" id="panel-php-status">${esc(panelPhpLine(status))}</p>${eol}`,
+  });
+}
+
+type Options = { panelPhp?: PanelPhpOptions };
+
+/** The PHP that runs the panel itself; it keeps its own state, so it has no settings here. */
+export const PANEL_PHP_TWEAK = tweak<{}, Options, { panelPhp: PanelPhpStatus | { error: string } }>()({
+  state: ({ options }) => ({ panelPhp: panelPhpOrError(options.panelPhp) }),
+  verbs: {
+    async "set-panel-php"(ctx) {
+      const body = await ctx.body();
+      if (typeof body.php !== "string") failAction("php must be a version such as 8.4, or empty for CloudPanel's own");
+      // While root's lock holds, the panel's PHP only moves to a newer version.
+      await setPanelPhp(body.php, ctx.options.panelPhp, ctx.lockRefusal);
+      return ctx.state();
+    },
+  },
+  repair: {
+    choice: { label: "panel PHP", locked: false, run: ({ options }) => reconcilePanelPhp(options.panelPhp) },
+  },
+  withdraw: {
+    // It refuses when CloudPanel's own PHP would not come back.
+    run: ({ options }) => withdrawPanelPhp(options.panelPhp),
+    // The addon stays enabled, so its panel PHP choice comes back with it.
+    putBack: ({ options }) => restorePanelPhp(options.panelPhp),
+  },
+  restore: { run: ({ options }) => restorePanelPhp(options.panelPhp) },
+  row: ({ panelPhp }, locked) => panelPhpRow(panelPhp, frozen("set-panel-php", locked)),
+});
