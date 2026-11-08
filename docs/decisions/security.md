@@ -149,7 +149,9 @@ under the settings lock, so a request admitted before `lock-settings` took that
 lock cannot switch off what it just switched on. A `"newer"` verb, the panel's
 PHP, reaches the action, which alone knows the version the panel runs and
 accepts only a newer installed one. The manager refuses to disable a locked
-addon and lets it be enabled, since enabling only adds protection. System
+addon, when the job is asked for and again when it starts, so one queued before
+a lock does not run; it lets a locked addon be enabled, since enabling only
+adds protection. System
 Tweaks declares its Hardening and Failed logins switches and the panel's PHP;
 updates, backups, unblocking, the firewall and the SSH login message stay with
 administrators.

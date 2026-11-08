@@ -468,7 +468,7 @@ function loginJailsTo(options: SystemTweaksOptions, paths: SystemTweaksPaths, wa
 
 type SwitchChange = (options: SystemTweaksOptions, paths: SystemTweaksPaths, enabled: boolean) => unknown;
 
-/** Every switch that takes `{ enabled }`, by verb. MySQL is last, so `lock-settings` restarts it only once the rest are on. */
+/** Every switch that takes `{ enabled }`, by verb. */
 const SWITCHES = {
   "set-upload-guard": uploadGuardTo,
   "set-real-ip": (options, paths, on) => switchTo(paths, "blockForgedRealIp", on, () => applyRealIp(on, options.realIp)),
@@ -486,7 +486,7 @@ const SWITCHES = {
 
 type SwitchVerb = keyof typeof SWITCHES;
 
-/** The setting each switch saves; every switch must name one, so a new one cannot miss the lock. */
+/** The setting each `{ enabled }` switch saves; every one must name it, so a new one cannot miss the lock. */
 const SWITCH_KEYS = {
   "set-upload-guard": "uploadProgressGuard",
   "set-real-ip": "blockForgedRealIp",

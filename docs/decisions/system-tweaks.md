@@ -74,7 +74,8 @@ and the SSH jail stay as they were, off unless chosen, and can be switched on
 from the page. Only turning the addon on does this: activating it again while
 it is already on, as a re-run of the installer does, keeps the switches as root
 locked them. The settings raised are those whose verbs declare the lock, each
-switch naming the setting it saves, so a new lockable switch cannot be missed.
+`{ enabled }` switch naming the setting it saves, so a new one of those cannot
+be missed; the login jails are raised on their own.
 
 ## Automatic updates
 
