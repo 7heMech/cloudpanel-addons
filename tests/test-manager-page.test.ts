@@ -76,7 +76,11 @@ describe("acting on a card", () => {
     };
     const names = ["managerJobCard", "describeManagerJob", "startManagerJob", "disableAddon"];
     const source = names.map(fnSource).join("\n");
-    const fns = new Function(...Object.keys(globals), `${source}\nreturn { ${names.join(", ")} };`)(...Object.values(globals));
+    const fns = new Function(...Object.keys(globals), `${source}\nreturn { ${names.join(", ")} };`)(...Object.values(globals)) as {
+      managerJobCard: (source: unknown, key: string, standalone?: boolean) => { attributes: Record<string, string> };
+      startManagerJob: (path: string, title: string, source: unknown, key: string) => Promise<void>;
+      disableAddon: (name: string, title: string, source: unknown) => Promise<void>;
+    };
     return { ...fns, calls, named: (name: string) => calls.filter((item) => item.name === name) };
   };
 
