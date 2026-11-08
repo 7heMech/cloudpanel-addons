@@ -446,23 +446,29 @@ well-formed `CF-Connecting-IP` when Cloudflare set the header, and
 
 On such a hop, `$clp_visitor_ip` falls back to that `X-Real-IP`. The front
 server always sets it from its own `$remote_addr`, so the sites' `nginx.conf`
-no longer needs to trust `127.0.0.1`, and the setting comments that line out as
-`#clp-addons:hop `. Before, a visitor coming through a tunnel could send
-`X-Real-IP` and the front server took it as their address. Now that header is
-ignored on 80 and 443.
+no longer needs to trust `127.0.0.1`, and the setting comments that line out
+with the `#clp-addons:hop` marker followed by a space. A tunnel visitor's
+`X-Real-IP` is ignored on 80 and 443.
 
 The setting points the `main` and `cloudflare` log formats in `nginx.conf` and
 `REMOTE_ADDR` in `fastcgi_params` at it. Nginx's error logs, `allow`/`deny`,
 basic auth and rate limits keep `$remote_addr`. In the backend, that is now
-`127.0.0.1`, which only its error log lines show. CloudPanel's vhosts use
-`$remote_addr` only in the front server's `proxy_set_header` lines.
+`127.0.0.1` for every visitor. CloudPanel's vhosts use `$remote_addr` only in
+the front server: in its `proxy_set_header` lines, and in the blocked IPs,
+basic-auth allowlist and Cloudflare-only rules that fill `{{settings}}`. A rule
+an administrator adds by address to the backend server sees `127.0.0.1`, so the
+operator guide says to keep such rules in the front server.
 
 Both files are `nginx-common` conffiles, released for an upgrade the same way
-as the real-IP edit, one at a time and without a reload. The map stays while
+as the real-IP edit, one at a time and without a reload. `nginx.conf` counts as
+edited when it has either `$clp_visitor_ip` or the hop marker, since a file
+whose log formats did not match can have only the latter. Every matching line
+is edited, so a repeated directive is never left half done. The map stays while
 either still names it. Activation and the 15-minute repair put the edits back,
 and rebuild the map when CloudPanel's list changes. Switching off restores the
 lines and removes the map. Switching on refuses a map file clp-addons did not
-write; switching off leaves such a file alone. A line the setting does not
+write, and the row then names that file instead of asking for a repair;
+switching off leaves such a file alone. A line the setting does not
 recognise, such as a log format wrapped onto two lines, is shown as a problem
 rather than as on. Root's lock covers the switch, and Lock settings turns it on,
 since switching it off reopens the tunnel forgery.
@@ -1692,8 +1698,9 @@ repair now, rather than at its next turn, so visitor-IP trust, the phpMyAdmin
 rules, the guards and the rest come back as the settings ask; and the panel's
 PHP choice comes back last. Telemetry, the login message
 and the firewall come last and only warn, since none of them keeps the addon on.
-Restoring runs under the lock and stops at a failure, except for MySQL, backup
-compression, telemetry and the login message, which warn and wait for repair;
+Restoring runs under the lock and stops at a failure, except for Cloudflare
+visitor IPs, MySQL, backup compression, telemetry and the login message, which
+warn and wait for repair;
 Panel PHP comes back either way, and the panel certificate and firewall follow,
 warning on failure.
 

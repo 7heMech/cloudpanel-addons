@@ -41,8 +41,8 @@ interface AddonCommand {
 /** An edit the addon makes to a dpkg conffile, which an unattended upgrade must find as the package left it. */
 export interface ConffileEdit {
   path: string;
-  /** Text only this project's edit leaves in the file. */
-  marker: string;
+  /** Text only this project's edits leave in the file; any one of them marks it edited. */
+  marker: string | readonly string[];
   /** Restores the package text without a reload; whether it wrote anything. */
   release: () => boolean;
 }

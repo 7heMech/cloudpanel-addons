@@ -1,5 +1,6 @@
 // Every System Tweaks tweak, and the order each phase runs them in. The orders
 // differ on purpose and are written out, not derived: see the comment on each.
+import { errorMessage } from "../../lib/errors";
 import { clearAbandonedTmpFiles, type TmpCleanupOptions } from "../../lib/tmp-cleanup";
 import { BACKUP_COMPRESSION_TWEAK } from "./backup-compression";
 import { CLPCTL_GUARD_TWEAK } from "./clpctl-guard";
@@ -54,11 +55,24 @@ export const HARDENING = [
 
 const UPKEEP_STEPS = [UPDATES_TWEAK.repair.upkeep, REAL_IP_TWEAK.repair.upkeep, VISITOR_IP_TWEAK.repair.upkeep, LOGIN_JAILS_TWEAK.repair.upkeep, DATABASE_TWEAK.repair.upkeep];
 
-/** The quick reconciliations, under one lock: a failure stops the ones after it and is reported as it is. */
+/** The quick reconciliations, under one lock: each runs even when one before it fails, and the failures are reported together. */
 export const UPKEEP = {
   label: null,
   locked: true,
-  run: (ctx: Context) => UPKEEP_STEPS.map((step) => step.run(ctx)).filter(Boolean).join("; ") || null,
+  run: (ctx: Context) => {
+    const lines: string[] = [];
+    const failures: string[] = [];
+    for (const step of UPKEEP_STEPS) {
+      try {
+        const line = step.run(ctx);
+        if (line) lines.push(line);
+      } catch (error) {
+        failures.push(errorMessage(error));
+      }
+    }
+    if (failures.length) throw new Error([...failures, ...lines].join("; "));
+    return lines.join("; ") || null;
+  },
 } satisfies RepairStep<SystemTweaksSettings, TweakOptions>;
 
 const TMP_CLEANUP: RepairStep<{}, { tmpCleanup?: TmpCleanupOptions }> = {

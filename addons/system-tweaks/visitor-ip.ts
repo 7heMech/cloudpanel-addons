@@ -39,7 +39,7 @@ export interface VisitorIpOptions {
   run?: (command: string, args: string[]) => CommandResult;
 }
 
-const UNTRUSTED_LOOPBACK = "#clp-addons:hop ";
+export const UNTRUSTED_LOOPBACK = "#clp-addons:hop ";
 
 /** Each edit: what follows `lead` as the file ships, and with the setting on. */
 const EDITS: Record<"nginxConf" | "fastcgiParams", { lead: RegExp; off: string; on: string }[]> = {
@@ -55,12 +55,13 @@ const literal = (text: string) => text.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 
 type Edit = (typeof EDITS)[keyof typeof EDITS][number];
 
-const line = (edit: Edit, text: string) => new RegExp(`${edit.lead.source}${literal(text)}(?=[ \\t;']|$)`, "m");
+const line = (edit: Edit, text: string, flags = "m") => new RegExp(`${edit.lead.source}${literal(text)}(?=[ \\t;']|$)`, flags);
 
+/** Every matching line, so a directive the file repeats is never left half edited. */
 function swap(content: string, file: keyof typeof EDITS, on: boolean): string {
   return EDITS[file].reduce((text, edit) => {
     const [from, to] = on ? [edit.off, edit.on] : [edit.on, edit.off];
-    return text.replace(line(edit, from), (_match, start: string) => `${start}${to}`);
+    return text.replace(line(edit, from, "gm"), (_match, start: string) => `${start}${to}`);
   }, content);
 }
 
@@ -85,7 +86,9 @@ export interface VisitorIpStatus {
 export function visitorIpStatus(options: VisitorIpOptions = {}): VisitorIpStatus {
   const paths = { ...DEFAULT_VISITOR_IP_PATHS, ...options.paths };
   try {
-    let applied = read(paths.maps) === mapsContent(paths);
+    const maps = read(paths.maps);
+    if (maps !== null && !maps.startsWith(`${MAPS_MARKER}\n`)) return { applied: false, problem: `${paths.maps} was not written by clp-addons; move it away, then run clp-addons repair` };
+    let applied = maps === mapsContent(paths);
     const unknown: string[] = [];
     for (const file of ["nginxConf", "fastcgiParams"] as const) {
       const { content } = trustedVhost(paths[file], paths.rootUid);
@@ -106,10 +109,13 @@ function apply(on: boolean, options: VisitorIpOptions, reload: boolean, files: r
   const existing = read(paths.maps);
   const foreign = existing !== null && !existing.startsWith(`${MAPS_MARKER}\n`);
   if (on && foreign) throw new Error(`refusing ${paths.maps}: clp-addons did not write it`);
-  const present = files.filter((file) => read(paths[file]) !== null);
-  const edited = present.filter((file) => { const content = read(paths[file])!; return swap(content, file, on) !== content; });
+  const swapped = files.flatMap((file) => {
+    const content = read(paths[file]);
+    return content === null ? [] : [{ file, content, result: swap(content, file, on) }];
+  });
+  const edited = swapped.filter(({ content, result }) => result !== content).map(({ file }) => file);
   // Off keeps the map while a file still names it, so Nginx can load it.
-  const named = !on && present.some((file) => swap(read(paths[file])!, file, false).includes(VISITOR_IP));
+  const named = !on && swapped.some(({ result }) => result.includes(VISITOR_IP));
   const maps = on || named ? mapsContent(paths) : null;
   const mapsChange = reload && !foreign && maps !== existing;
   // Nothing to change opens no transaction, so a file it would not touch is never checked.
@@ -160,13 +166,17 @@ export const VISITOR_IP_TWEAK = tweak<{ cloudflareVisitorIp: boolean }, { visito
     },
   },
   withdraw: { run: ({ options }) => { applyVisitorIp(false, options.visitorIp); } },
-  restore: { run: ({ options, settings }) => { if (settings.cloudflareVisitorIp) applyVisitorIp(true, options.visitorIp); } },
+  restore: {
+    run: ({ options, settings }) => { if (settings.cloudflareVisitorIp) applyVisitorIp(true, options.visitorIp); },
+    // Visitor addresses wait for the next repair; the guards after it must still come back.
+    warning: (error) => `Cloudflare visitor IPs only wait for the next repair: ${error}`,
+  },
   row: ({ visitorIp }, locked) => switchRow("set-visitor-ip", {
     key: "cloudflareVisitorIp",
     title: "Cloudflare visitor IPs",
     description: [
       "Site access logs and PHP take the visitor's IP from CF-Connecting-IP when Cloudflare's proxy or a Cloudflare Tunnel on this server sent the request. Anyone else's header is ignored, and so is an X-Real-IP sent through a tunnel.",
-      "Error logs and Cloudflare-only access still see Cloudflare's or the tunnel's address.",
+      "Error logs, Cloudflare-only access and CloudPanel's IP rules still see the connecting address. In a vhost's port 8080 server that is 127.0.0.1, so keep rules you add by IP in its first server.",
     ],
     checked: visitorIp.enabled,
     extra: statusLine(visitorIpLine(visitorIp)),

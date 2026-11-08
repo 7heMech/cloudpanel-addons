@@ -964,6 +964,18 @@ test("repair narrows the trust again after CloudPanel rewrites nginx.conf, and d
   expect(readFileSync(b.nginxConf, "utf8")).toBe(CLOUDPANEL_NGINX_CONF);
 });
 
+test("a map file clp-addons did not write fails its own upkeep step only, and enabling the addon only warns", () => {
+  const b = box();
+  restoreSystemTweaks(b.options);
+  const maps = b.options.visitorIp!.paths!.maps!;
+  writeFileSync(maps, "map $a $b {}\n");
+  writeFileSync(b.nginxConf, CLOUDPANEL_NGINX_CONF);
+  // The steps after it still run, and real-IP's line is reported beside the failure.
+  expect(() => systemTweaksUpkeep(b.options)).toThrow(/did not write it.*; visitor-IP trust narrowed again/);
+  expect(readFileSync(b.nginxConf, "utf8")).toContain("#clp-addons:untrusted set_real_ip_from 0.0.0.0/0;");
+  expect(() => restoreSystemTweaks(b.options, true)).not.toThrow();
+});
+
 test("the panel follows CloudPanel's Cloudflare list, keeping only well-formed entries", async () => {
   const b = box();
   restoreSystemTweaks(b.options);
@@ -1601,7 +1613,7 @@ test("the page shows forged IPs as blocked, or as trusted and needing repair", a
   const state = await act(b, ["state"]);
   expect(dashboardView(state)).toContain("Any client can set its own IP with a header. Run clp-addons repair.");
   restoreSystemTweaks(b.options);
-  expect(dashboardView(await act(b, ["state"]))).toContain("Only local and private-network proxies can set the visitor IP.");
+  expect(dashboardView(await act(b, ["state"]))).toContain("Only CloudPanel's own proxying and private-network proxies can set the visitor IP.");
 });
 
 // --- upload progress ----------------------------------------------------------
@@ -1825,7 +1837,7 @@ test("systemTweaksMaintenance still reconciles panel PHP when upkeep fails", asy
     },
   };
   await expect(systemTweaksMaintenance(b.options)).rejects.toThrow(
-    "Nginx validation failed: emerg; panel PHP: clp-php-fpm.service is not the CloudPanel PHP-FPM unit this addon knows",
+    "Nginx validation failed: emerg; Cloudflare visitor IPs reapplied; panel PHP: clp-php-fpm.service is not the CloudPanel PHP-FPM unit this addon knows",
   );
   expect(phpCalled).toBe(true);
 });
