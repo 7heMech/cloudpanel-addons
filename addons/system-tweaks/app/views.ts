@@ -533,7 +533,7 @@ function hardeningCard(state: SystemTweaksState, locked: boolean): string {
         title: "Block clpctl injection",
         description: [
           "Replaces CloudPanel's clpctlWrapper so a site's own Unix user cannot break out of clpctl's shell and run commands as root.",
-          "Root and the panel are unaffected, and the four commands sites may run still work with ordinary values.",
+          "Root and the panel are unaffected. Sites can still export their database, reset their own permissions and purge Varnish with ordinary values; they import with their own database user.",
         ],
         checked: "error" in state.clpctlGuard ? true : state.clpctlGuard.enabled,
         onchange: "setSwitch(this, 'clpctl-guard')",

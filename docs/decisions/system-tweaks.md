@@ -944,7 +944,8 @@ than part of the nginx one.
 wrapper with `clpctl-wrapper.sh`. It reads `SUDO_USER` as clpctl does: root, `clp`
 and an empty caller run CloudPanel's original wrapper unchanged, since they are
 already root-equivalent and tightening them only risks breaking the panel. Every
-other caller may run only the four commands. Each option value is first checked
+other caller may run only `db:export`, `system:permissions:reset` and
+`varnish-cache:purge`. Each option value is first checked
 against an allowlist that admits no backslash, quote, backtick, `$`, `;` or
 newline — a `--databaseName` of letters, digits, underscore and hyphen; a
 `--directories`/`--files` octal mode; a `--purge` of `all`, a tag list, or a
