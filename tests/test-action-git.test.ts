@@ -147,7 +147,8 @@ test("the remote, branch, directory and command validators refuse what they shou
     try {
       run();
     } catch (error) {
-      return error instanceof ActionFailure ? error.message : `unexpected: ${String(error)}`;
+      if (!(error instanceof ActionFailure)) throw error;
+      return error.message;
     }
     return "";
   };
