@@ -34,8 +34,8 @@ export async function callAction<T = unknown>(
  * rather than `www.example.com`.
  *
  * Not in the action, which must not rewrite its input: what crosses the
- * boundary is always a complete hostname. The page's script carries this same
- * function, so it is written in the JavaScript a browser runs.
+ * boundary is always a complete hostname. The page's script carries its own
+ * copy, expand-target.client.js, which a test holds to this one's answers.
  */
 export function expandTarget(input: string, source: string): string {
   const t = String(input || "").trim().toLowerCase().replace(/\.$/, "");
