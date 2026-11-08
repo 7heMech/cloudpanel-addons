@@ -1,7 +1,32 @@
 
+/* The check a chosen column or option is marked with, as a mask painted in
+   its colour; the Columns menu and the filter's list are both in the toolbar. */
+.clp-tweaks-toolbar { --clp-check: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'%3E%3Cpath fill='none' stroke='%23000' stroke-width='1.8' stroke-linecap='round' stroke-linejoin='round' d='M3.5 8.4l3 3 6-6.2'/%3E%3C/svg%3E"); }
 .clp-tweaks-toolbar { display: flex; flex-wrap: wrap; align-items: center; gap: 12px; margin-bottom: 20px; }
 .clp-tweaks-toolbar input[type="search"] { flex: 1 1 260px; min-width: 0; max-width: 420px; }
 .clp-tweaks-toolbar select { flex: 0 0 auto; width: auto; }
+/* With a mouse, the application filter's list is drawn like the Columns menu,
+   the chosen one tinted and checked; the button keeps CloudPanel's chevron. A
+   phone keeps its own picker, as do browsers that cannot style the list. */
+@supports (appearance: base-select) {
+  @media (hover: hover) and (pointer: fine) {
+    .clp-tweaks-toolbar select, .clp-tweaks-toolbar select::picker(select) { appearance: base-select; }
+    .clp-tweaks-toolbar select { display: inline-flex; align-items: center; }
+    .clp-tweaks-toolbar select::picker-icon { display: none; }
+    .clp-tweaks-toolbar select::picker(select) { min-width: anchor-size(width); max-height: 60vh; margin: 4px 0; padding: 6px 0;
+      border: 1px solid #eaeaea; border-radius: 6px; background: #fff; color: inherit; box-shadow: 0 8px 28px rgba(0, 0, 0, .16); }
+    .clp-tweaks-toolbar select option { display: flex; align-items: center; gap: 10px; padding: 9px 16px; font-size: 14px;
+      white-space: nowrap; cursor: pointer; }
+    .clp-tweaks-toolbar select option:hover, .clp-tweaks-toolbar select option:focus-visible { background: rgba(127, 143, 153, .14); outline: 0; }
+    .clp-tweaks-toolbar select option:checked { background: rgba(38, 125, 221, .08); }
+    .clp-tweaks-toolbar select option:focus-visible { box-shadow: inset 0 0 0 2px #267ddd; }
+    .clp-tweaks-toolbar select option::checkmark { order: 1; flex: 0 0 16px; height: 16px; margin-left: auto; content: "";
+      background: #267ddd; -webkit-mask: var(--clp-check) center / 16px no-repeat; mask: var(--clp-check) center / 16px no-repeat; }
+    html.dark .clp-tweaks-toolbar select::picker(select) { border-color: var(--clp-border-color, #a8b3cf33);
+      background: var(--clp-bg-secondary, #1c1f26); color: var(--clp-text, #fff); }
+    html.dark .clp-tweaks-toolbar select option:checked { background: rgba(38, 125, 221, .10); }
+  }
+}
 .clp-tweaks-toolbar .clp-tweaks-summary { margin-left: auto; color: #9bacb6; font-size: 14px; }
 /* The button is one of the panel's own form controls, so it matches the search
    and the filter it stands beside in both themes. The list hangs off it rather
@@ -25,23 +50,43 @@
 @media (hover: hover) {
   .clp-tweaks-columns-menu label:hover { background: rgba(127, 143, 153, .14); }
 }
-/* The box is drawn here rather than by the browser because CloudPanel sets
-   -webkit-appearance: none on every input it is hovered, focused or held,
-   which leaves a native checkbox with nothing to draw -- and on a phone, where
-   the hover stays behind, it would stay gone. */
-.clp-tweaks-columns-menu input { appearance: none; -webkit-appearance: none; width: 16px; height: 16px;
-  flex: 0 0 auto; margin: 0; padding: 0; border: 1px solid #b6bfc7; border-radius: 3px;
-  background: #fff; cursor: pointer; }
-.clp-tweaks-columns-menu input:checked { border-color: #0078d4; background-color: #0078d4;
-  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'%3E%3Cpath fill='none' stroke='%23fff' stroke-width='2.4' stroke-linecap='round' stroke-linejoin='round' d='M3.5 8.4l3 3 6-6'/%3E%3C/svg%3E");
-  background-repeat: no-repeat; background-size: 100% 100%; }
-/* The panel clears the outline and the shadow on any focused input, so a
-   keyboard's place in the list has to be drawn over the top of that. */
-.clp-tweaks-columns-menu input:focus-visible { box-shadow: 0 0 0 3px rgba(0, 120, 212, .35) !important; }
+/* As in the addons' own menus, a column that is on is tinted and checked at
+   the end of its row, and the rows stay a pixel apart, so a run of them reads
+   as separate toggles rather than one block. The marks are masks painted in
+   the text's colour, because CloudPanel fills every svg with it. The box stays
+   in the label, unseen, so a keyboard and a screen reader still turn it on and
+   off; the panel clears the outline on any focused input, so the keyboard's
+   place is drawn on the row instead. Domain and Action cannot be turned off,
+   so they are listed greyed with a lock. */
+.clp-tweaks-columns-menu input { position: absolute; width: 1px; height: 1px; margin: 0; padding: 0;
+  opacity: 0; pointer-events: none; }
+.clp-tweaks-columns-menu label::after { content: ""; flex: 0 0 16px; height: 16px; margin-left: auto; }
+.clp-tweaks-columns-menu label:not(.clp-tweaks-locked):has(input:checked) { background: rgba(38, 125, 221, .08); }
+.clp-tweaks-columns-menu label:not(.clp-tweaks-locked):has(input:checked) + label:not(.clp-tweaks-locked):has(input:checked) { margin-top: 1px; }
+.clp-tweaks-columns-menu label:not(.clp-tweaks-locked):has(input:checked)::after { background: #267ddd;
+  -webkit-mask: var(--clp-check) center / 16px no-repeat;
+  mask: var(--clp-check) center / 16px no-repeat; }
+.clp-tweaks-columns-menu label:has(input:focus-visible) { outline: 2px solid #267ddd; outline-offset: -2px; }
+.clp-tweaks-columns-menu label.clp-tweaks-locked { color: #b0b8bf; cursor: default; }
+@media (hover: hover) {
+  .clp-tweaks-columns-menu label.clp-tweaks-locked:hover { background: none; }
+}
+.clp-tweaks-columns-menu label.clp-tweaks-locked::after { background: currentColor;
+  -webkit-mask: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'%3E%3Cg fill='none' stroke='%23000' stroke-width='1.4' stroke-linecap='round' stroke-linejoin='round'%3E%3Crect x='3.5' y='7' width='9' height='6.5' rx='1.5'/%3E%3Cpath d='M5.5 7V5.2a2.5 2.5 0 0 1 5 0V7'/%3E%3C/g%3E%3C/svg%3E") center / 14px no-repeat;
+  mask: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'%3E%3Cg fill='none' stroke='%23000' stroke-width='1.4' stroke-linecap='round' stroke-linejoin='round'%3E%3Crect x='3.5' y='7' width='9' height='6.5' rx='1.5'/%3E%3Cpath d='M5.5 7V5.2a2.5 2.5 0 0 1 5 0V7'/%3E%3C/g%3E%3C/svg%3E") center / 14px no-repeat; }
+.clp-tweaks-columns-reset { display: block; width: 100%; margin-top: 6px; padding: 9px 16px 3px; border: 0;
+  border-top: 1px solid #eaeaea; background: none; color: #267ddd; font-size: 14px; text-align: left; cursor: pointer; }
+.clp-tweaks-columns-reset:focus-visible { outline: 2px solid #267ddd; outline-offset: -2px; }
+/* What the button says: how many of the columns are shown. */
+.clp-tweaks-columns-count { display: inline-flex; align-items: center; height: 18px; margin-left: 8px; padding: 0 7px;
+  border: 1px solid #dfe3e8; border-radius: 99px; color: #5f6b75; font-size: 11px; line-height: 1; vertical-align: 1px; }
+.clp-tweaks-columns-count:empty { display: none; }
+html.dark .clp-tweaks-columns-count { border-color: #3a3f47; color: #c9ccd1; }
+html.dark .clp-tweaks-columns-menu label:not(.clp-tweaks-locked):has(input:checked) { background: rgba(38, 125, 221, .10); }
+html.dark .clp-tweaks-columns-menu label.clp-tweaks-locked { color: #6b7078; }
+html.dark .clp-tweaks-columns-reset { border-top-color: var(--clp-border-color, #2c3036); }
 html.dark .clp-tweaks-columns-menu { border-color: var(--clp-border-color, #a8b3cf33);
   background: var(--clp-bg-secondary, #1c1f26); color: var(--clp-text, #fff); }
-html.dark .clp-tweaks-columns-menu input { border-color: #6b7787; background-color: transparent; }
-html.dark .clp-tweaks-columns-menu input:checked { border-color: #0078d4; background-color: #0078d4; }
 .clp-tweaks-count { display: inline-flex; align-items: center; justify-content: center; box-sizing: border-box;
   min-height: 28px; margin-left: 12px; padding: 0 10px; border: 1px solid currentColor; border-radius: 99px;
   color: #9bacb6; font-size: 14px; font-weight: 600; line-height: 1; vertical-align: bottom; }

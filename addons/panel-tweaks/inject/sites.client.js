@@ -36,8 +36,9 @@
   var desktopSite = document.documentElement.classList.contains("clp-tweaks-desktop-site");
   var NARROW_QUERY = SITES_MOBILE_JSON && !desktopSite ? "(max-width: 1100px)" : "not all";
   var COLUMNS_ON = SITES_TABLE_JSON;
-  // The tab's copy of the last reply; see start().
-  var PANEL_KEY = "clp_tweaks_panel";
+  // The tab's copy of the last reply; see start(). Panel Tweaks' own preview
+  // is where the switches change, so it draws from each reply and keeps no copy.
+  var PANEL_KEY = SITES_PREVIEW_JSON ? null : "clp_tweaks_panel";
   var columnStyle = null;
   var tagged = false;
   var chosen = {};
@@ -205,20 +206,31 @@
 
     function storedPanel(rows) {
       var stored = null;
+      if (!PANEL_KEY) return null;
       try { stored = JSON.parse(window.sessionStorage.getItem(PANEL_KEY) || "null"); } catch (error) { return null; }
       if (!stored || !stored.tweaks || !stored.sites || stored.sites.length !== rows.length) return null;
+      // Saving a switch on the addon's page, in any tab, moves the revision
+      // every tab shares, and a copy taken before it would draw the old
+      // switches' columns and toolbar.
+      if (stored.rev !== switchesRevision()) return null;
       var have = {};
       for (var s = 0; s < stored.sites.length; s++) have[stored.sites[s].domain] = true;
       for (var r = 0; r < rows.length; r++) if (!have[rows[r].domain]) return null;
-      return stored;
+      // As cutToRows() gives it, so a reply with nothing new compares equal.
+      return { tweaks: stored.tweaks, sites: stored.sites };
+    }
+
+    function switchesRevision() {
+      try { return window.localStorage.getItem("clp_tweaks_rev") || ""; } catch (error) { return ""; }
     }
 
     function storePanel(data) {
-      try { window.sessionStorage.setItem(PANEL_KEY, JSON.stringify(data)); } catch (error) {}
+      var copy = { rev: switchesRevision(), tweaks: data.tweaks, sites: data.sites };
+      if (PANEL_KEY) try { window.sessionStorage.setItem(PANEL_KEY, JSON.stringify(copy)); } catch (error) {}
     }
 
     function forgetPanel() {
-      try { window.sessionStorage.removeItem(PANEL_KEY); } catch (error) {}
+      if (PANEL_KEY) try { window.sessionStorage.removeItem(PANEL_KEY); } catch (error) {}
     }
 
     // The same cells, built again from the reply, where the stored copy had
@@ -639,7 +651,23 @@
       var menu = document.getElementById("clp-tweaks-columns-menu");
       if (!holder || !button || !menu) return;
 
+      var count = document.getElementById("clp-tweaks-columns-count");
       var boxes = [];
+      // Domain and Action are always shown; they are listed so the menu
+      // accounts for every column, but cannot be turned off.
+      function locked(text) {
+        var label = document.createElement("label");
+        label.className = "clp-tweaks-locked";
+        label.title = text + " is always shown";
+        var box = document.createElement("input");
+        box.type = "checkbox";
+        box.checked = true;
+        box.disabled = true;
+        label.appendChild(box);
+        label.appendChild(document.createTextNode(text));
+        return label;
+      }
+      menu.appendChild(locked("Domain"));
       for (var i = 0; i < COLUMNS.length; i++) {
         var column = COLUMNS[i];
         if (column.key === "disk" && !withDisk) continue;
@@ -654,6 +682,37 @@
         boxes.push(box);
         bindBox(box, column.key);
       }
+      menu.appendChild(locked("Action"));
+      var reset = document.createElement("button");
+      reset.type = "button";
+      reset.className = "clp-tweaks-columns-reset";
+      reset.textContent = "Reset to default";
+      menu.appendChild(reset);
+      // The default is the screen's, as for a browser that never chose.
+      reset.addEventListener("click", function () {
+        var narrow = narrowNow();
+        try { window.localStorage.removeItem(storeKey(narrow)); } catch (e) {}
+        repaint(readChoice(narrow));
+      });
+
+      function paintCount() {
+        if (!count) return;
+        var on = 0;
+        for (var b = 0; b < boxes.length; b++) if (boxes[b].checked) on++;
+        count.textContent = on + "/" + boxes.length;
+        button.setAttribute("aria-label", "Columns, " + on + " of " + boxes.length + " shown");
+      }
+      paintCount();
+
+      function repaint(picked) {
+        chosen = picked;
+        for (var b = 0; b < boxes.length; b++) {
+          boxes[b].checked = chosen[boxes[b].getAttribute("data-column")] !== false;
+        }
+        paintColumns(chosen);
+        placeTypes(rows);
+        paintCount();
+      }
 
       function bindBox(box, key) {
         box.addEventListener("change", function () {
@@ -661,6 +720,7 @@
           writeChoice(narrowNow(), chosen);
           paintColumns(chosen);
           placeTypes(rows);
+          paintCount();
         });
       }
 
@@ -693,14 +753,7 @@
       // different answer, so the other one is read back and the boxes follow.
       if (window.matchMedia) {
         var query = window.matchMedia(NARROW_QUERY);
-        var moved = function () {
-          chosen = readChoice(query.matches);
-          for (var b = 0; b < boxes.length; b++) {
-            boxes[b].checked = chosen[boxes[b].getAttribute("data-column")] !== false;
-          }
-          paintColumns(chosen);
-          placeTypes(rows);
-        };
+        var moved = function () { repaint(readChoice(query.matches)); };
         if (query.addEventListener) query.addEventListener("change", moved);
         else if (query.addListener) query.addListener(moved);
       }
@@ -908,10 +961,16 @@
 
     // --- search and filter -----------------------------------------------
 
+
     function buildToolbar(rows) {
       var search = document.getElementById("clp-tweaks-search");
       var picker = document.getElementById("clp-tweaks-type");
       if (!search || !picker) return;
+      // With a mouse, the filter's list is drawn like the Columns menu
+      // (sites.css), and it is held at its widest option as the options below
+      // arrive; see select-width.client.js, which targets.ts puts ahead of
+      // this script.
+      clpHoldSelectWidths(picker.parentNode);
 
       var seen = {};
       var kinds = [];

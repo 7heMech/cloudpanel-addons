@@ -1,6 +1,8 @@
 
 :root {
   color-scheme: light;
+  /* The check a chosen option is marked with, as a mask painted in its colour. */
+  --clp-check: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'%3E%3Cpath fill='none' stroke='%23000' stroke-width='1.8' stroke-linecap='round' stroke-linejoin='round' d='M3.5 8.4l3 3 6-6.2'/%3E%3C/svg%3E");
   --clp-addon-font-family: "Helvetica Neue", "Segoe UI", Helvetica, Arial, sans-serif;
   --bg: #f9fafb; --panel: #fff; --surface: #fbfcfc;
   --border: #e2e2e2; --card-border: #00000020; --row-border: #eaeaea;
@@ -230,6 +232,31 @@ select {
   background-size: 16px 16px; padding-right: 40px; cursor: pointer;
 }
 input::placeholder, textarea::placeholder { color: var(--muted); opacity: 1; }
+/* With a mouse, the list a select opens is drawn like the filter menus: the
+   chosen option tinted and checked at the end of its row. Its button keeps the
+   chevron above, so the browser's own is dropped. A phone keeps its own
+   picker, which is the better one there, as do browsers that cannot style the
+   list. */
+@supports (appearance: base-select) {
+  @media (hover: hover) and (pointer: fine) {
+    select, select::picker(select) { appearance: base-select; }
+    select { display: inline-flex; align-items: center; }
+    select::picker-icon { display: none; }
+    select::picker(select) { min-width: anchor-size(width); max-height: min(60vh, 420px); margin: 4px 0; padding: 6px 0;
+      background: var(--panel); color: var(--text); border: 1px solid var(--border); border-radius: 4px;
+      box-shadow: 0 6px 18px rgb(0 0 0 / 14%); font-weight: 400; }
+    select option { display: flex; align-items: center; gap: 10px; padding: 7px 16px; font-size: 15px; white-space: nowrap; cursor: pointer; }
+    select option:hover, select option:focus-visible { background: var(--surface); outline: 0; }
+    select option:checked { background: rgb(38 125 221 / 10%); }
+    select option:focus-visible { box-shadow: inset 0 0 0 2px var(--accent); }
+    select option::checkmark { order: 1; flex: 0 0 16px; height: 16px; margin-left: auto; content: ""; background: var(--primary);
+      -webkit-mask: var(--clp-check) center / 16px no-repeat; mask: var(--clp-check) center / 16px no-repeat; }
+    select option:disabled { color: var(--muted); cursor: default; }
+    select option:disabled:hover { background: none; }
+    select option:disabled:checked { background: none; }
+    select option:disabled::checkmark { visibility: hidden; }
+  }
+}
 input:read-only:not([type="checkbox"]) { background: var(--readonly-bg); }
 input:focus, select:focus, textarea:focus { border-color: #86b7fe; box-shadow: 0 0 0 3px rgb(38 125 221 / 15%); outline: 0; }
 .check-field { margin-top: 24px; }
@@ -318,21 +345,34 @@ pre { background: var(--bg); border: 1px solid var(--border); border-radius: 4px
 .toolbar-note { color: var(--muted); font-size: 14px; font-weight: 400; }
 .mobile-select-all { display: none; }
 .fleet-selection { display: flex; align-items: center; gap: 12px; }
+/* The count is about the selection the buttons act on, so it sits beside them
+   at the right of a site table's header, not under the title. */
+.card-header.toolbar > .fleet-selection { margin-left: auto; }
+.card-header.toolbar > .fleet-selection ~ * { margin-left: 0; }
 .alert-ok { color: var(--ok); background: rgb(35 119 75 / 8%); }
-/* A message stays in view however far the page is scrolled: top right under the
-   panel's header, at the bottom on a phone. */
-#clp-flash { position: fixed; z-index: 1050; top: 92px; right: 24px; width: min(440px, calc(100vw - 48px)); margin: 0;
-  display: flex; align-items: flex-start; gap: 12px; box-shadow: 0 8px 28px rgb(0 0 0 / 18%); overflow-wrap: anywhere; }
-#clp-flash[hidden] { display: none; }
-#clp-flash.alert { background: linear-gradient(rgb(248 113 113 / 12%), rgb(248 113 113 / 12%)), var(--panel); }
-#clp-flash.notice { background: linear-gradient(rgb(251 191 36 / 12%), rgb(251 191 36 / 12%)), var(--panel); }
-#clp-flash.alert-ok { background: linear-gradient(rgb(35 119 75 / 10%), rgb(35 119 75 / 10%)), var(--panel); }
-#clp-flash .clp-flash-text { flex: 1 1 auto; min-width: 0; }
-#clp-flash .clp-flash-text a { color: inherit; text-decoration: underline; }
-#clp-flash .clp-flash-close { flex: 0 0 auto; margin: -4px -8px 0 0; padding: 2px 8px; border: 0; background: none;
+/* Messages stay in view however far the page is scrolled: top right under the
+   panel's header, at the bottom on a phone, and at the other end when the
+   pointer is where they would land (data-edge, set by notify()). The holder is
+   a popover, so the browser's own popover box is undone here. */
+#clp-flash { position: fixed; z-index: 1050; inset: auto 24px auto auto; width: min(440px, calc(100vw - 48px));
+  margin: 0; padding: 0; border: 0; background: none; color: inherit; overflow: visible;
+  display: flex; flex-direction: column; gap: 10px; }
+#clp-flash:not(:popover-open) { display: none; }
+#clp-flash[data-edge="top"] { top: 92px; flex-direction: column-reverse; }
+#clp-flash[data-edge="bottom"] { bottom: 24px; }
+.clp-toast { display: flex; align-items: flex-start; gap: 12px; margin: 0; box-shadow: 0 8px 28px rgb(0 0 0 / 18%);
+  overflow-wrap: anywhere; }
+.clp-toast.alert { background: linear-gradient(rgb(248 113 113 / 12%), rgb(248 113 113 / 12%)), var(--panel); }
+.clp-toast.notice { background: linear-gradient(rgb(251 191 36 / 12%), rgb(251 191 36 / 12%)), var(--panel); }
+.clp-toast.alert-ok { background: linear-gradient(rgb(35 119 75 / 10%), rgb(35 119 75 / 10%)), var(--panel); }
+.clp-toast .clp-flash-text { flex: 1 1 auto; min-width: 0; }
+.clp-toast .clp-flash-text a { color: inherit; text-decoration: underline; }
+.clp-toast .clp-flash-close { flex: 0 0 auto; margin: -4px -8px 0 0; padding: 2px 8px; border: 0; background: none;
   color: inherit; font-size: 20px; line-height: 1; cursor: pointer; }
 @media (max-width: 940px) {
-  #clp-flash { top: auto; bottom: 12px; left: 12px; right: 12px; width: auto; }
+  #clp-flash { left: 12px; right: 12px; width: auto; }
+  #clp-flash[data-edge="top"] { top: 12px; }
+  #clp-flash[data-edge="bottom"] { bottom: 12px; }
 }
 #clp-confirm-details { margin: 12px 0 0; padding-left: 20px; color: var(--muted); font-size: 14px; }
 #clp-confirm-text { margin: 0; overflow-wrap: anywhere; }
@@ -357,7 +397,8 @@ pre { background: var(--bg); border: 1px solid var(--border); border-radius: 4px
 .fleet-filter > input { flex: 1 1 220px; max-width: 320px; }
 .fleet-filter select { width: auto; }
 /* The filter reads as a select, but opens a menu of options that each turn on
-   and off, highlighted while on like a selected row; it is drawn over the page
+   and off, tinted and checked at the end of the row while on, a pixel apart so
+   a run of them reads as separate toggles; it is drawn over the page
    (app-ui.client.js places it) so the card cannot clip it. */
 .fleet-show > summary { display: flex; align-items: center; min-height: 42px; padding: 8px 40px 8px 16px; list-style: none;
   border: 1px solid var(--input-border); border-radius: 4px; color: var(--text); font-size: 16px; white-space: nowrap; cursor: pointer;
@@ -374,7 +415,12 @@ pre { background: var(--bg); border: 1px solid var(--border); border-radius: 4px
 .fleet-show label { clear: left; display: flex; align-items: center; gap: 10px; margin: 0; padding: 7px 16px; font-size: 15px; white-space: nowrap; cursor: pointer; }
 .fleet-show label:hover { background: var(--surface); }
 .fleet-show label input { position: absolute; opacity: 0; pointer-events: none; }
-.fleet-show label:has(input:checked) { background: rgb(38 125 221 / 12%); box-shadow: inset 4px 0 var(--primary); color: var(--heading); font-weight: 600; }
+.fleet-show label::after { content: ""; flex: 0 0 16px; height: 16px; margin-left: auto; }
+.fleet-show label:has(input:checked) { background: rgb(38 125 221 / 10%); }
+.fleet-show label:has(input:checked) + label:has(input:checked) { margin-top: 1px; }
+.fleet-show label:has(input:checked)::after { background: var(--primary);
+  -webkit-mask: var(--clp-check) center / 16px no-repeat;
+  mask: var(--clp-check) center / 16px no-repeat; }
 .fleet-show label:has(input:focus-visible) { outline: 2px solid var(--accent); outline-offset: -2px; }
 .fleet-show-clear { display: block; width: 100%; margin-top: 4px; padding: 9px 16px 4px; border: 0; border-top: 1px solid var(--border);
   background: none; color: var(--link); font-size: 14px; text-align: left; cursor: pointer; }

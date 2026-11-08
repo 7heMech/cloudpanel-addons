@@ -13,6 +13,7 @@ import {
 } from "../addons/terminal/action";
 import { rootAuth, totp } from "../addons/terminal/root-auth";
 import { clearRootAuth, readRootGrants, rootAccess } from "../addons/terminal/root-access";
+import { rootShellScript } from "../lib/root-shell";
 import { TERMINAL_TARGETS } from "../addons/terminal/inject/targets";
 import { renderLayout } from "../lib/app-ui";
 import { ownerOf, TerminalSessions, type StreamOpener } from "../addons/terminal/app/sessions";
@@ -312,14 +313,40 @@ test("a root access check that fails says so, rather than that root never allowe
   try {
     const { handle } = await import("../addons/terminal/app/index");
     const ask = async () => (await (await handle(new Request("http://x/api/root-access", { headers: { cookie: "cloudpanel=abcdef0123456789abcdef01" } }),
-      "/api/root-access", null, undefined, { user: "carol", roles: ["ROLE_ADMIN"] })).json() as { data: { granted: boolean; problem: string | null } }).data;
+      "/api/root-access", null, undefined, { user: "carol", roles: ["ROLE_ADMIN"] })).json() as { data: { granted: boolean; problem: string | null; unreadable?: true } }).data;
     expect(await ask()).toEqual({ granted: false, problem: "Root terminal access could not be checked: gateway unavailable" });
     // Neither failure is cached: each next look asks again.
-    expect((await ask()).problem).toContain("cannot be read");
+    // Root's own read that failed says so, which the header takes as no answer.
+    expect(await ask()).toEqual({ granted: true, problem: "CloudPanel's user list cannot be read: database is locked", unreadable: true });
     expect(await ask()).toEqual({ granted: true, problem: null });
   } finally {
     mock.module("../lib/gateway-client", () => realGateway);
   }
+});
+
+test("the header keeps the tab's grant through a check that could not read, and drops it on a refusal", async () => {
+  const run = async (stored: string | null, reply: unknown) => {
+    const items = [{ hidden: true, style: { display: "none" } }];
+    const store = new Map<string, string>(stored === null ? [] : [["clp-root-shell", stored]]);
+    const sessionStorage = {
+      getItem: (key: string) => store.get(key) ?? null,
+      setItem: (key: string, value: string) => void store.set(key, value),
+      removeItem: (key: string) => void store.delete(key),
+    };
+    const document = { readyState: "complete", querySelector: () => items[0], querySelectorAll: () => items, addEventListener: () => {} };
+    const fetch = async () => reply instanceof Error ? Promise.reject(reply) : { ok: true, json: async () => reply };
+    new Function("document", "sessionStorage", "fetch", rootShellScript("/addons/terminal"))(document, sessionStorage, fetch);
+    await Bun.sleep(0);
+    return { shown: !items[0]!.hidden, remembered: store.has("clp-root-shell") };
+  };
+  const unreadable = { ok: true, data: { granted: true, problem: "CloudPanel's user list cannot be read: database is locked", unreadable: true } };
+  expect(await run("1", unreadable)).toEqual({ shown: true, remembered: true });
+  expect(await run(null, unreadable)).toEqual({ shown: false, remembered: false });
+  expect(await run(null, { ok: true, data: { granted: true, problem: null } })).toEqual({ shown: true, remembered: true });
+  expect(await run("1", { ok: true, data: { granted: true, problem: "This passkey is no longer on your account." } })).toEqual({ shown: false, remembered: false });
+  expect(await run("1", { ok: true, data: { granted: false, problem: null } })).toEqual({ shown: false, remembered: false });
+  // A request that fails can be a session that signed out, so the grant goes.
+  expect(await run("1", new Error("offline"))).toEqual({ shown: false, remembered: false });
 });
 
 test("a passkey sign-in opens it with a key the account had when root allowed it, and not with a later one", () => {

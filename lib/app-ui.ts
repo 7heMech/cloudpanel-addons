@@ -22,9 +22,11 @@ const DEFAULT_AVATAR = "data:image/jpeg;base64,/9j/4AAQSkZJRgABAQEAYABgAAD//gA7Q
  * the page rather than linked: an image comes from the cache a frame after the
  * page is drawn, so going from a panel page to an addon page showed the header
  * without its logo first. The two files the panel ships differ only in the
- * colour of the words, which the stylesheet sets for each theme.
+ * colour of the words, which the stylesheet sets for each theme. The files
+ * have no viewBox, so the panel's 155x31 box stretches them a little wider
+ * than their own proportions, and this one is stretched the same way.
  */
-const PANEL_LOGO = `<svg class="clp-addon-logo clp-addon-logo-panel" viewBox="0 0 556 112" width="155" height="31" role="img" aria-label="CloudPanel" style="fill-rule:evenodd;clip-rule:evenodd;stroke-linejoin:round;stroke-miterlimit:2"><g transform="matrix(5.55556,0,0,5.55556,0,0)"><g transform="matrix(0.994976,0,0,0.994976,-86.4326,-4.27105)"><path fill="#0178d4" d="M102.86,13.634C102.253,12.863 101.43,12.289 100.497,11.985L100.497,11.925C100.497,9.102 98.289,6.801 95.567,6.801C92.843,6.801 90.634,9.097 90.634,11.926L90.634,11.996C88.64,12.649 87.184,14.591 87.184,16.882C87.184,19.705 89.394,22.007 92.116,22.007C93.422,22.004 94.673,21.472 95.581,20.532C96.487,21.472 97.737,22.005 99.042,22.007C101.759,22.007 103.975,19.711 103.975,16.882C103.975,15.702 103.575,14.548 102.86,13.634ZM99.042,20.711C97.011,20.711 95.357,18.993 95.357,16.881C95.362,16.533 95.082,16.243 94.734,16.235C94.39,16.24 94.11,16.525 94.11,16.869C94.11,16.873 94.11,16.878 94.11,16.882C94.11,17.839 94.367,18.737 94.806,19.504C94.124,20.273 93.144,20.715 92.116,20.717C90.084,20.717 88.429,18.998 88.429,16.887C88.429,14.777 90.084,13.058 92.116,13.058C92.556,13.058 92.984,13.14 93.394,13.292C93.399,13.292 93.403,13.297 93.408,13.297C93.55,13.347 93.75,13.444 93.812,13.498C93.922,13.599 94.067,13.655 94.216,13.655C94.399,13.655 94.572,13.571 94.686,13.428C94.91,13.157 94.879,12.753 94.618,12.518C94.346,12.279 93.922,12.116 93.818,12.078C93.276,11.872 92.701,11.767 92.121,11.768C92.042,11.768 91.964,11.768 91.885,11.773C91.969,9.733 93.587,8.102 95.572,8.102C97.603,8.102 99.257,9.82 99.257,11.932C99.261,13.158 98.686,14.316 97.707,15.054C97.429,15.266 97.365,15.663 97.56,15.952C97.68,16.126 97.875,16.224 98.069,16.224C98.194,16.224 98.319,16.186 98.43,16.104C99.36,15.407 100.028,14.416 100.325,13.292C101.749,13.841 102.738,15.271 102.738,16.887C102.733,18.993 101.079,20.711 99.042,20.711Z"/></g><g transform="matrix(1.25766,-0.000448747,0.000448747,1.25766,-13.8924,-2.88425)" font-family="ArialMT, Arial, sans-serif" font-size="12" aria-hidden="true"><text class="clp-logo-cloud" x="28.821" y="15.08">Cloud</text><text class="clp-logo-panel" x="60.174" y="15.08">Panel</text></g></g></svg>`;
+const PANEL_LOGO = `<svg class="clp-addon-logo clp-addon-logo-panel" viewBox="0 0 556 112" width="155" height="31" preserveAspectRatio="none" role="img" aria-label="CloudPanel" style="fill-rule:evenodd;clip-rule:evenodd;stroke-linejoin:round;stroke-miterlimit:2"><g transform="matrix(5.55556,0,0,5.55556,0,0)"><g transform="matrix(0.994976,0,0,0.994976,-86.4326,-4.27105)"><path fill="#0178d4" d="M102.86,13.634C102.253,12.863 101.43,12.289 100.497,11.985L100.497,11.925C100.497,9.102 98.289,6.801 95.567,6.801C92.843,6.801 90.634,9.097 90.634,11.926L90.634,11.996C88.64,12.649 87.184,14.591 87.184,16.882C87.184,19.705 89.394,22.007 92.116,22.007C93.422,22.004 94.673,21.472 95.581,20.532C96.487,21.472 97.737,22.005 99.042,22.007C101.759,22.007 103.975,19.711 103.975,16.882C103.975,15.702 103.575,14.548 102.86,13.634ZM99.042,20.711C97.011,20.711 95.357,18.993 95.357,16.881C95.362,16.533 95.082,16.243 94.734,16.235C94.39,16.24 94.11,16.525 94.11,16.869C94.11,16.873 94.11,16.878 94.11,16.882C94.11,17.839 94.367,18.737 94.806,19.504C94.124,20.273 93.144,20.715 92.116,20.717C90.084,20.717 88.429,18.998 88.429,16.887C88.429,14.777 90.084,13.058 92.116,13.058C92.556,13.058 92.984,13.14 93.394,13.292C93.399,13.292 93.403,13.297 93.408,13.297C93.55,13.347 93.75,13.444 93.812,13.498C93.922,13.599 94.067,13.655 94.216,13.655C94.399,13.655 94.572,13.571 94.686,13.428C94.91,13.157 94.879,12.753 94.618,12.518C94.346,12.279 93.922,12.116 93.818,12.078C93.276,11.872 92.701,11.767 92.121,11.768C92.042,11.768 91.964,11.768 91.885,11.773C91.969,9.733 93.587,8.102 95.572,8.102C97.603,8.102 99.257,9.82 99.257,11.932C99.261,13.158 98.686,14.316 97.707,15.054C97.429,15.266 97.365,15.663 97.56,15.952C97.68,16.126 97.875,16.224 98.069,16.224C98.194,16.224 98.319,16.186 98.43,16.104C99.36,15.407 100.028,14.416 100.325,13.292C101.749,13.841 102.738,15.271 102.738,16.887C102.733,18.993 101.079,20.711 99.042,20.711Z"/></g><g transform="matrix(1.25766,-0.000448747,0.000448747,1.25766,-13.8924,-2.88425)" font-family="ArialMT, Arial, sans-serif" font-size="12" aria-hidden="true"><text class="clp-logo-cloud" x="28.821" y="15.08">Cloud</text><text class="clp-logo-panel" x="60.174" y="15.08">Panel</text></g></g></svg>`;
 const PANEL_ADMIN_URL = "/admin/users";
 const PANEL_SETTINGS_URL = "/settings";
 const PANEL_LOGOUT_URL = "/logout";
@@ -137,8 +139,11 @@ export { BASE_STYLE };
 import THEME_INIT_JS from "./assets/theme-init.client.js" with { type: "text" };
 export { THEME_INIT_JS };
 
-import BASE_CLIENT_JS from "./assets/app-ui.client.js" with { type: "text" };
-export { BASE_CLIENT_JS };
+import BASE_CLIENT_SOURCE from "./assets/app-ui.client.js" with { type: "text" };
+import { SELECT_WIDTH_JS } from "./select-width";
+// Joined rather than spliced in at a marker: the build minifies both, and a
+// comment marker would not survive it.
+export const BASE_CLIENT_JS = `${SELECT_WIDTH_JS}\n${BASE_CLIENT_SOURCE}`;
 
 import TWEAK_ROW_JS from "./assets/tweak-rows.client.js" with { type: "text" };
 export { TWEAK_ROW_JS };
@@ -188,7 +193,7 @@ interface Chrome extends AddonChrome {
 export const THEME_SWITCH_ICONS = `<svg class="moon" viewBox="0 0 384 512" fill="currentColor" aria-hidden="true"><path d="M223.5 32C100 32 0 132.3 0 256S100 480 223.5 480c60.6 0 115.5-24.2 155.8-63.4c5-4.9 6.3-12.5 3.1-18.7s-10.1-9.7-17-8.5c-9.8 1.7-19.8 2.6-30.1 2.6c-96.9 0-175.5-78.8-175.5-176c0-65.8 36-123.1 89.3-153.3c6.1-3.5 9.2-10.5 7.7-17.3s-7.3-11.9-14.3-12.5c-6.3-.5-12.6-.8-19-.8z"/></svg>
 <svg class="sun" viewBox="0 0 20 20" fill="currentColor" aria-hidden="true"><path fill-rule="evenodd" d="M10 2a1 1 0 011 1v1a1 1 0 11-2 0V3a1 1 0 011-1zm4 8a4 4 0 11-8 0 4 4 0 018 0zm-.464 4.95l.707.707a1 1 0 001.414-1.414l-.707-.707a1 1 0 00-1.414 1.414zm2.12-10.607a1 1 0 010 1.414l-.706.707a1 1 0 11-1.414-1.414l.707-.707a1 1 0 011.414 0zM17 11a1 1 0 100-2h-1a1 1 0 100 2h1zm-7 4a1 1 0 011 1v1a1 1 0 11-2 0v-1a1 1 0 011-1zM5.05 6.464A1 1 0 106.465 5.05l-.708-.707a1 1 0 00-1.414 1.414l.707.707zm1.414 8.486l-.707.707a1 1 0 01-1.414-1.414l.707-.707a1 1 0 011.414 1.414zM4 11a1 1 0 100-2H3a1 1 0 000 2h1z" clip-rule="evenodd"></path></svg>`;
 
-const FLASH_HTML = '<div id="clp-flash" hidden></div>';
+const FLASH_HTML = '<div id="clp-flash" popover="manual"></div>';
 
 function viewRoot(content: string): string {
   return `<div id="clp-content">${content}</div>`;

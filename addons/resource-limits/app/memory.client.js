@@ -11,30 +11,6 @@ function hold(on) {
   });
 }
 
-// What is running, said on the row it belongs to, and once over the page for a
-// change slow enough that the other controls are noticed waiting.
-function working(control, text) {
-  const option = control.closest('.st-option');
-  const row = option || control.closest('.tweak-row');
-  const line = document.createElement('p');
-  line.className = 'st-status st-working';
-  line.setAttribute('role', 'status');
-  line.innerHTML = '<span class="badge">Working</span> ';
-  line.append(text);
-  const after = option ? option.lastElementChild
-    : row ? row.querySelector('.tweak-note') : control.closest('.st-install');
-  if (after) after.after(line);
-  const page = setTimeout(function () {
-    notify(text + ' Other settings wait until it finishes.', 'warn');
-    clearTimeout(clpFlashTimer);
-  }, 600);
-  return function () {
-    clearTimeout(page);
-    line.remove();
-  };
-}
-
-
 function switchText(input) {
   const label = input.id && CLP_ROOT.querySelector('label[for="' + input.id + '"]');
   const name = label ? label.textContent : input.getAttribute('aria-label');

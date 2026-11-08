@@ -1,9 +1,11 @@
 import { expect, test } from "bun:test";
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
+import { TWEAK_ROW_JS } from "../lib/app-ui";
 
 function resourceMemoryClient() {
-  const source = ["memory.client.js", "views.client.js"].map((name) => readFileSync(join(import.meta.dir, "../addons/resource-limits/app", name), "utf8")).join("\n");
+  // As the page has it: working() is shared, in TWEAK_ROW_JS.
+  const source = TWEAK_ROW_JS + ["memory.client.js", "views.client.js"].map((name) => readFileSync(join(import.meta.dir, "../addons/resource-limits/app", name), "utf8")).join("\n");
   const events: string[] = [];
   const replies: { path: string; body: string; answer: (body: unknown) => void }[] = [];
   const lines: { textContent: string; removed: boolean }[] = [];

@@ -116,9 +116,9 @@ from six sites a search and filters (needs attention, deploying, site type) sit
 above the table, whose headings sort. Connect a site links to CloudPanel's site list, where each site's Git tab
 starts setup.
 
-CloudPanel's own site list carries a "Deploy from Git" link, left of the
-panel's own "Manage" and marked with `ROW_ACTION_CLASS` so Panel Tweaks' row
-menu can collect it -- that list is the fleet page an operator is already on,
+CloudPanel's own site list carries a "Git" link, named as the site's tab it
+opens, left of the panel's own "Manage" and marked with `ROW_ACTION_CLASS` so
+Panel Tweaks' row menu can collect it -- that list is the fleet page an operator is already on,
 and a link on a site with no repository would be an invitation rather than an
 action. Which sites those are is in this addon's own records, which Twig cannot
 see, so the link is rendered hidden and one script after the table asks

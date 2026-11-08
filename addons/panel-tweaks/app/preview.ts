@@ -76,7 +76,7 @@ export function previewPage(state: PanelTweaksState): string {
 <div id="clp-preview" class="container-fluid container-limited-width">
   <div class="page-header">
     <div class="page-title"><h1>Sites</h1></div>
-  </div>${sitesBlock(mountPath("panel-tweaks"), state.tweaks)}
+  </div>${sitesBlock(mountPath("panel-tweaks"), state.tweaks, true)}
   ${body}
   ${more > 0 ? `<p class="preview-note">${more} more site${more === 1 ? "" : "s"} on the real page.</p>` : ""}
 </div>

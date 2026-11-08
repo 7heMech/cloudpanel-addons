@@ -212,10 +212,17 @@ function motdCard(state: SystemTweaksState, locked: boolean): string {
     </div>`;
 }
 
-function hardeningCard(state: SystemTweaksState, locked: boolean): string {
+/**
+ * Root's lock covers this card and Failed logins, which follows it, so its
+ * control and its notice are here rather than at the top of a page whose other
+ * settings it leaves alone.
+ */
+function hardeningCard(state: SystemTweaksState, lock: LockState): string {
+  const locked = lock !== "unlocked";
   return `
     <div class="card">
-      <div class="card-header"><h2>Hardening</h2></div>
+      <div class="card-header"><h2>Hardening</h2>${lockControl(lock)}</div>${locked ? `
+      <p class="notice st-lock-notice">${LOCK_NOTICE[lock as keyof typeof LOCK_NOTICE]}</p>` : ""}
       <div class="tweak-list">${HARDENING.map((tweak) => tweak.row(state, locked)).join("")}
       </div>
     </div>`;
@@ -330,7 +337,7 @@ const LOCK_NOTICE: Record<Exclude<LockState, "unlocked">, string> = {
   damaged: "Root's lock file cannot be trusted, so Hardening and Failed logins can be switched on here but not off. Run <code>clp-addons lock</code> in a root terminal to see how to fix it.",
 };
 
-/** Top right of the page: the button that switches everything on and locks, or the lock once there is one. */
+/** In Hardening's header: the button that switches everything on and locks, or the lock once there is one. */
 function lockControl(lock: LockState): string {
   if (lock === "unlocked") return `<button class="btn" type="button" onclick="lockSettings(this)">Lock settings</button>`;
   const title = lock === "damaged"
@@ -348,12 +355,10 @@ export function dashboardView(state: SystemTweaksState, now = Date.now(), lock: 
         <p>Hardening, automatic updates, panel PHP, remote backups and the SSH login message.</p>
         <p class="hint">Every 15 minutes it also clears PHP and ImageMagick temp files that timed-out requests left in /tmp. PHP worker limits and memory sizing are in <a href="/addons/resource-limits/">Resource Limits</a>.${firewallLine(state.firewall)}</p>
       </div>
-      ${lockControl(lock)}
-    </div>${locked ? `
-    <p class="notice">${LOCK_NOTICE[lock as keyof typeof LOCK_NOTICE]}</p>` : ""}
+    </div>
     <div class="card">
       <div class="card-header"><h2>Automatic updates</h2></div>
       <div class="tweak-list">${updateRows(state.updates, state.settings)}
       </div>${statusList(state.updates, now)}${coverageDetails(state.updates)}
-    </div>${backupCompressionCard(state.backupCompression)}${hardeningCard(state, locked)}${loginJailsCard(state.loginJails, locked)}${motdCard(state, locked)}`;
+    </div>${backupCompressionCard(state.backupCompression)}${hardeningCard(state, lock)}${loginJailsCard(state.loginJails, locked)}${motdCard(state, locked)}`;
 }

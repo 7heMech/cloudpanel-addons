@@ -15,6 +15,7 @@ export const SYSTEM_TWEAKS_ADDON: AddonDefinition = {
   description: "Server security, automatic updates, panel PHP, remote backup compression, SSH login message.",
   added: "2.0.0-rc.1",
   changed: [
+    { in: "2.1.0-rc.4", note: "Lock settings, and Locked by root once it is locked, moved from the top of the page to the Hardening card's header: the lock covers Hardening and Failed logins only." },
     { in: "2.1.0-rc.3", note: "While root has locked System Tweaks, the panel can switch protections on but not off, enable the addon, and move the panel's PHP only to a newer version. Lock settings, at the top of the page, turns every protection on and locks. New installs start locked; updates never lock an existing box." },
     { in: "2.1.0-rc.2", note: "SSH logins show the server's uptime, load, memory, disk, addresses and pending updates in place of CloudPanel's banner. Switch it off under SSH login." },
     { in: "2.1.0-rc.1", note: "Settings is now Hardening and includes MySQL on this server only." },

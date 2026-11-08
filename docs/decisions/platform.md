@@ -540,8 +540,14 @@ of the words, which the stylesheet sets for each theme. Theme & Branding's
 uploaded logos are still images.
 
 Every addon renders into one shell in `lib/app-ui.ts`: palette, cards, tables,
-badges, switches, toolbars, one confirmation dialog and one inline notice per
-page. A badge names a state rather than being read for itself, so it is set a
+badges, switches, toolbars, one confirmation dialog and one notice holder per
+page. The holder stacks up to three messages, the newest nearest its edge, and
+replaces one already showing rather than repeating it. It is a popover, so it is
+drawn in the top layer over any dialog or menu. It starts top right on a desktop
+and at the bottom on a phone, at the other end when the pointer or the last tap
+is in that corner -- where the switch that was just clicked usually is -- and
+hovering it holds the messages until the pointer leaves. An error stays until it
+is dismissed, as does a message whose caller says it stays. A badge names a state rather than being read for itself, so it is set a
 size below body text, as a tinted chip in one of five tones -- ok, info, warn,
 bad, muted -- and every addon names its states through them (`tone-*`, with the
 job states mapped onto the same five), so one colour means one thing on every
@@ -559,7 +565,7 @@ row comes down to the height of the line beside it, so the control does not set
 the row's height. An addon supplies its mount path, its script and any rule only it
 draws. The manager's own pages use the same two: disabling an addon asks through
 that dialog, naming the addon as its card does and saying that its data is kept,
-and a manager job that fails to start reports through the inline notice. The
+and a manager job that fails to start reports through the notice holder. The
 browser's `confirm` and `alert` survive only as what the shell degrades to where
 there is no `<dialog>` or no notice holder. Below 940px the shell tightens: a fleet table's rows become cards, a dialog
 gives up its desktop padding and its buttons take the row, and the dialog is
@@ -574,7 +580,30 @@ and the site and type lead each card. A ticked row is tinted, and clicking
 anywhere on a row but a control or its Manage menu ticks it; a phone shows no
 selection checkboxes, only the tint. The table's header stacks there: its title,
 then the selection count with Select all (`FLEET_SELECTION_HTML`), then the bulk
-actions across the width. On a wide screen a
+actions across the width. On a wide screen the count sits at the right, beside
+the bulk actions it counts for, rather than under the title.
+
+With a mouse, a select opens a list drawn like the filter menus: the chosen
+option tinted and checked at the end of its row. This uses the browser's
+customizable select, so the element and its form value stay native. A phone
+keeps its own picker, which is the better one there, and a browser that cannot
+style the list keeps the native one. A select drawn this way is as wide as its
+chosen option rather than its widest, so choosing would move the controls
+beside it. Only a select as wide as its content changes; one given a width,
+such as a form's 100%, keeps it and is left alone, which the computed width
+tells without a layout. `lib/assets/select-width.client.js` gives each of the
+others its widest option's width as a minimum, as a native select has, capped
+at the window's width less a margin rather than its container's, which would
+be a loop in a container as wide as its contents. The width is the options'
+text measured on a canvas in the select's font, plus its padding and border,
+so no layout is forced, and a select not drawn yet, such as one in a closed
+`<details>`, is held like any other. Each select is watched on its own and
+worked out again when its options or their labels change; a web font arriving
+or a mouse coming or going works them all out again, and a repaint holds what
+it drew. Panel Tweaks draws the Sites page's application filter the same way
+and joins the same file to its script.
+
+On a wide screen a
 list of more than twelve rows with something below its card scrolls in a box of
 its own under a sticky heading; a list that ends the page grows with it. On a
 phone a list longer than ten sites shows the first ten and a button for the rest,

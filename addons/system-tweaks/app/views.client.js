@@ -31,28 +31,6 @@ function hold(on) {
   });
 }
 
-function working(control, text) {
-  const option = control.closest('.st-option');
-  const row = option || control.closest('.tweak-row');
-  const line = document.createElement('p');
-  line.className = 'st-status st-working';
-  line.setAttribute('role', 'status');
-  line.innerHTML = '<span class="badge">Working</span> ';
-  line.append(text);
-  // The header's Lock settings button says it under the page heading.
-  const after = option ? option.lastElementChild
-    : row ? row.querySelector('.tweak-note') : control.closest('.st-fold, .st-install, .page-heading');
-  after.after(line);
-  const page = setTimeout(function () {
-    notify(text + ' Other settings wait until it finishes.', 'warn');
-    clearTimeout(clpFlashTimer);
-  }, 600);
-  return function () {
-    clearTimeout(page);
-    line.remove();
-  };
-}
-
 function change(control, path, body, progress, done) {
   if (control !== stRebootPending.control) flushRebootTime();
   return exclusive(async function () {
