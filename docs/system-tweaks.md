@@ -159,8 +159,14 @@ sits in front of this server or its panel.
 Cloudflare Tunnel on this server get the visitor's IP in their access logs and
 in PHP, from `CF-Connecting-IP`. The header is believed only from Cloudflare and
 from the tunnel, so nobody else can set it. Visitors coming through a tunnel
-can no longer set their IP with `X-Real-IP`. Error logs and **Allow traffic from
-Cloudflare only** still see Cloudflare's or the tunnel's address.
+can no longer set their IP with `X-Real-IP`.
+
+Error logs, **Allow traffic from Cloudflare only**, and CloudPanel's blocked IPs
+and basic-auth allowlist still see the connecting address: Cloudflare's, the
+tunnel's, or a direct visitor's own. In a site's `listen 8080` server block that
+address is now `127.0.0.1` for every visitor, so keep any rule you add to the
+vhost by address, such as `allow`, `deny` or a rate limit, in the first server
+block.
 
 ## phpMyAdmin
 

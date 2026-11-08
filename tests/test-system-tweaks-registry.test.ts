@@ -57,7 +57,7 @@ test("enabling the addon restores panel PHP whatever the rest does, and the pane
   expect(names(RESTORE.always)).toEqual(["panel PHP"]);
   expect(names(RESTORE.after)).toEqual(["panel cert", "firewall"]);
   // These warn and let the rest come back; every other locked step stops it.
-  expect(names(RESTORE.locked.filter((tweak) => tweak.restore.warning))).toEqual(["database", "backup compression", "telemetry", "motd"]);
+  expect(names(RESTORE.locked.filter((tweak) => tweak.restore.warning))).toEqual(["visitor IP", "database", "backup compression", "telemetry", "motd"]);
 });
 
 test("repair runs its steps in a fixed order, the quick ones under one lock", () => {

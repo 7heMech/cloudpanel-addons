@@ -28,7 +28,7 @@ function box() {
   };
   writeFileSync(paths.nginxConf, NGINX, { mode: 0o644 });
   writeFileSync(paths.fastcgiParams, FASTCGI, { mode: 0o644 });
-  writeFileSync(paths.cloudflareIps, "allow 173.245.48.0/20;\nallow 2400:cb00::/32;\nallow 999.1.1.1;\ndeny all;\n");
+  writeFileSync(paths.cloudflareIps, "allow 173.245.48.0/20;\nallow 2400:cb00::/32;\nallow 999.1.1.1;\nallow 1.2.3.4/8/9;\ndeny all;\n");
   const nginx = { fail: false, commands: [] as string[] };
   const run = (command: string, args: string[]): CommandResult => {
     nginx.commands.push(`${command} ${args.join(" ")}`);
@@ -52,6 +52,7 @@ test("on points the log formats and PHP at the map, and off gives every file bac
   expect(maps).toContain("    173.245.48.0/20 cloudflare;\n");
   expect(maps).toContain("    2400:cb00::/32 1;\n");
   expect(maps).not.toContain("999.1.1.1");
+  expect(maps).not.toContain("1.2.3.4");
   expect(maps).toContain("    default $remote_addr;\n");
   expect(visitorIpStatus(b.options)).toEqual({ applied: true, problem: "" });
   expect(applyVisitorIp(true, b.options)).toBe(false);
@@ -98,6 +99,8 @@ test("off keeps the map while a hand edit still names it, and a map clp-addons d
 
   writeFileSync(b.paths.maps, "map $a $b {}\n");
   expect(() => applyVisitorIp(true, b.options)).toThrow("clp-addons did not write it");
+  // The row names the file rather than asking for a repair that would refuse it again.
+  expect(visitorIpStatus(b.options)).toEqual({ applied: false, problem: `${b.paths.maps} was not written by clp-addons; move it away, then run clp-addons repair` });
   // Switching off, as disabling the addon does, still gives the files back and leaves that map alone.
   writeFileSync(b.paths.nginxConf, NGINX.replace("main '$remote_addr", "main '$clp_visitor_ip"));
   applyVisitorIp(false, b.options);
@@ -117,4 +120,17 @@ test("switching off with nothing to undo checks no file, as disabling the addon 
   const options = { ...b.options, paths: { ...b.options.paths, rootUid: process.getuid!() + 1 } };
   expect(applyVisitorIp(false, options)).toBe(false);
   expect(b.nginx.commands).toEqual([]);
+});
+
+test("a directive the file repeats is edited on every line, and off gives each back", () => {
+  const b = box();
+  const twice = NGINX.replace("    set_real_ip_from 10.0.0.0/8;", "    set_real_ip_from 10.0.0.0/8;\n    server {\n        set_real_ip_from 127.0.0.1;\n    }");
+  writeFileSync(b.paths.nginxConf, twice);
+  expect(applyVisitorIp(true, b.options)).toBe(true);
+  const on = readFileSync(b.paths.nginxConf, "utf8");
+  expect(on.match(/#clp-addons:hop set_real_ip_from 127\.0\.0\.1;/g)?.length).toBe(2);
+  expect(visitorIpStatus(b.options)).toEqual({ applied: true, problem: "" });
+  expect(applyVisitorIp(true, b.options)).toBe(false);
+  expect(applyVisitorIp(false, b.options)).toBe(true);
+  expect(readFileSync(b.paths.nginxConf, "utf8")).toBe(twice);
 });

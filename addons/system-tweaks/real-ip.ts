@@ -150,7 +150,7 @@ type RealIpState = RealIpStatus & { blockForged: boolean };
 
 function realIpLine(state: RealIpState): string {
   if (state.problem) return `${badge("Unknown", "warn")} <span>${esc(state.problem)}</span>`;
-  if (!state.trustsAnyAddress) return `${badge("Blocked", "ok")} <span>Only local and private-network proxies can set the visitor IP.</span>`;
+  if (!state.trustsAnyAddress) return `${badge("Blocked", "ok")} <span>Only CloudPanel's own proxying and private-network proxies can set the visitor IP.</span>`;
   return `${badge("Trusted", state.blockForged ? "warn" : "plain")} <span>Any client can set its own IP with a header.${
     state.blockForged ? " Run clp-addons repair." : ""}</span>`;
 }
@@ -179,7 +179,7 @@ export const REAL_IP_TWEAK = tweak<{ blockForgedRealIp: boolean }, { realIp?: Re
     title: "Block forged visitor IPs",
     description: [
       "Stops any client from naming its own IP with a header to PHP, logs, basic auth and Cloudflare-only access.",
-      "Local proxies stay trusted, and the panel also trusts Cloudflare. Switch it off only behind another public proxy.",
+      "CloudPanel's own proxying and private-network proxies stay trusted, and the panel also trusts Cloudflare. Switch it off only behind another public proxy.",
     ],
     checked: realIp.blockForged,
     extra: statusLine(realIpLine(realIp)),

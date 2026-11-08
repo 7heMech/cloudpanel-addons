@@ -21,7 +21,9 @@ export function cloudflareRanges(path: string): string[] {
   return content.split(/\r?\n/).flatMap((line) => {
     const range = line.match(/^\s*allow\s+([0-9a-fA-F.:/]+)\s*;/)?.[1];
     if (!range) return [];
-    const [address = "", prefix] = range.split("/");
+    const parts = range.split("/");
+    if (parts.length > 2) return [];
+    const [address = "", prefix] = parts;
     const family = isIP(address);
     const valid = family !== 0 && (prefix === undefined || (/^\d+$/.test(prefix) && Number(prefix) <= (family === 4 ? 32 : 128)));
     return valid ? [range] : [];

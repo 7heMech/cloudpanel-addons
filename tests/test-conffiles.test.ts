@@ -66,6 +66,14 @@ test("only edited files with an upgrade waiting are released, after the flag hol
   expect(endConffileRelease(flag)).toBe(false);
 });
 
+test("a file counts as edited when it has any one of its markers", () => {
+  const dir = tempDir();
+  const conf = join(dir, "nginx.conf");
+  writeFileSync(conf, "#clp-addons:hop set_real_ip_from 127.0.0.1;\n");
+  const edits = [{ path: conf, marker: ["$clp_visitor_ip", "#clp-addons:hop "], release: () => true }];
+  expect(releaseConffiles(edits, apt("1", "2").run, join(dir, "released"))).toEqual([conf]);
+});
+
 test("the release holds repair off for as long as the upgrade runs, and not after it stopped without post", () => {
   const flag = join(tempDir(), "released");
   writeFileSync(flag, "");

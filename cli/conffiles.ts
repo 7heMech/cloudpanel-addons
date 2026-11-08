@@ -35,8 +35,10 @@ export function upgradePending(path: string, run: Run = defaultRun): boolean {
 }
 
 function edited(edit: ConffileEdit): boolean {
-  try { return readFileSync(edit.path, "utf8").includes(edit.marker); }
-  catch { return false; }
+  try {
+    const content = readFileSync(edit.path, "utf8");
+    return (typeof edit.marker === "string" ? [edit.marker] : edit.marker).some((marker) => content.includes(marker));
+  } catch { return false; }
 }
 
 export function releaseConffiles(edits: ConffileEdit[], run: Run = defaultRun, flag = CONFFILES_RELEASED_FLAG): string[] {
