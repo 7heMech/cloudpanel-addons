@@ -6,19 +6,21 @@
  * is the only client, rather than to everyone in group `clp`.
  */
 import { chmodSync, chownSync, lstatSync } from "node:fs";
-import { failAction } from "../../cli/action-common";
-import { PANEL_USER } from "../../cli/paths";
+import { failAction } from "../../lib/action";
+import { PANEL_USER } from "../../lib/paths";
 import { DEFAULT_PANEL_PHP_PATHS, panelPageParams } from "./panel-php";
-import { FPM_DIR, POOL_GUARD_PATH_DEFAULTS, poolGuard, type PoolGuardContext, type PoolGuardOptions, type PoolGuardPaths } from "./pool-guard";
+import {
+  FPM_DIR, POOL_GUARD_PATH_DEFAULTS, poolGuard, type PoolGuardContext, type PoolGuardOptions, type PoolGuardPaths,
+} from "./pool-guard";
 import GUARD_SCRIPT from "./file-manager-guard.php" with { type: "text" };
 
-export interface FileManagerGuardPaths extends PoolGuardPaths {
+interface FileManagerGuardPaths extends PoolGuardPaths {
   /** `clp`'s uid and gid, looked up when null. */
   panelUid: number | null;
   panelGid: number | null;
 }
 
-export const DEFAULT_FILE_MANAGER_GUARD_PATHS: FileManagerGuardPaths = {
+const DEFAULT_FILE_MANAGER_GUARD_PATHS: FileManagerGuardPaths = {
   ...POOL_GUARD_PATH_DEFAULTS,
   script: `${FPM_DIR}/clp-addons-file-manager-guard.php`,
   pool: `${FPM_DIR}/pool.d/zz-clp-addons-file-manager-guard.conf`,
@@ -30,7 +32,7 @@ export const DEFAULT_FILE_MANAGER_GUARD_PATHS: FileManagerGuardPaths = {
 export type FileManagerGuardOptions = PoolGuardOptions<FileManagerGuardPaths>;
 type Context = PoolGuardContext<FileManagerGuardPaths>;
 
-export function fileManagerGuardPool(script: string): string {
+function fileManagerGuardPool(script: string): string {
   return [
     "; Managed by clp-addons System Tweaks: keeps the File Manager in the site's home, and its socket to clp.",
     "[clp-file-manager]",

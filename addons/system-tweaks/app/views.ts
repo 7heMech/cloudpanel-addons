@@ -1,4 +1,4 @@
-import { PHP_GUARD_INI_NAME } from "../../../cli/paths";
+import { PHP_GUARD_INI_NAME } from "../../../lib/paths";
 import { esc } from "../../../lib/app-http";
 import { TWEAK_ROW_JS, renderLayout, sinceText } from "../../../lib/app-ui";
 import { mountPath } from "../../../lib/mount";
@@ -23,9 +23,7 @@ export function layout(
   updateNotice?: { current: string; latest: string } | null,
 ): string {
   return renderLayout(title, content, {
-    brand: "System Tweaks",
     base: mountPath("system-tweaks"),
-    nav: [],
     css: STYLE,
     script: TWEAK_ROW_JS + SCRIPT,
     updateNotice,
@@ -114,7 +112,6 @@ function warning(text: string): string {
   return `<p class="notice st-inline-notice">${text}</p>`;
 }
 
-/** What the switch leaves on the box, said once, under it. */
 function updatesLine(status: UpdatesStatus): string {
   if (!status.installed) {
     return `${badge("Not installed", "bad")} <span>unattended-upgrades, the distro's package for this, is not installed.</span>`;
@@ -247,7 +244,6 @@ function coverageBadge(row: CoverageRow): string {
   return badge("Not covered", "plain");
 }
 
-/** A name with its detail beneath, and its state at the end of the row. */
 function stateRow(name: string, detail: string, state: string): string {
   const shown = detail && detail.toLowerCase() !== name.toLowerCase();
   return `
@@ -255,7 +251,6 @@ function stateRow(name: string, detail: string, state: string): string {
             <td class="st-state">${state}</td></tr>`;
 }
 
-/** Where updates come from, folded to a count. */
 function coverageDetails(status: UpdatesStatus): string {
   if (!status.installed) return "";
   if (!status.coverage.length) return `<p class="hint st-fold">apt lists no repositories.</p>`;
@@ -273,7 +268,6 @@ function coverageDetails(status: UpdatesStatus): string {
       </details>`;
 }
 
-/** Who decided the value, and any pool that turns it back on. */
 function uploadProgressSource(row: FpmUploadProgress): string {
   const file = row.source.includes("/conf.d/") ? row.source.slice(row.source.lastIndexOf("/") + 1) : row.source;
   const pools = row.poolsOn.length ? ` On in pool${row.poolsOn.length === 1 ? "" : "s"} ${row.poolsOn.join(", ")}.` : "";
@@ -282,7 +276,6 @@ function uploadProgressSource(row: FpmUploadProgress): string {
   return `${row.setBy === "default" ? "PHP's default" : `Set in ${file}`}.${pools}`;
 }
 
-/** Each PHP-FPM's upload progress, folded to what needs a look. */
 function uploadProgressDetails(fpms: FpmUploadProgress[]): string {
   if (!fpms.length) return `<p class="st-status hint">No PHP-FPM is installed.</p>`;
   const on = fpms.filter((row) => row.enabled).length;
@@ -304,7 +297,6 @@ function phpOption(choice: PanelPhpChoice, stock: string | null, selected: boole
   return `<option value="${choice.version === stock ? "" : esc(choice.version)}"${selected ? " selected" : ""}>${esc(label)}</option>`;
 }
 
-/** What the panel runs on now, said once, under the picker. */
 export function panelPhpLine(status: PanelPhpStatus): string {
   const lines: string[] = [];
   if (status.overriddenBy) lines.push(`${status.overriddenBy} sets this already. Remove it to choose here.`);
@@ -438,8 +430,6 @@ function clpctlGuardLine(state: SystemTweaksState["clpctlGuard"]): string {
   const where = state.version ? ` (CloudPanel ${esc(state.version)})` : "";
   if (state.active) return `${badge("On", "ok")} <span>The clpctlWrapper is the hardened one${where}.</span>`;
   if (state.enabled && state.wrapper === "ours") {
-    // Our wrapper is installed but its saved original is gone, so it falls back
-    // to nothing and refuses every caller: clpctl cannot run until it is fixed.
     return `${badge("Action needed", "bad")} <span>${esc(state.reason ?? "the saved original is missing")}, so clpctl cannot run. Restore CloudPanel's clpctlWrapper, then run clp-addons repair.</span>`;
   }
   if (state.enabled) {
@@ -558,7 +548,7 @@ function hardeningCard(state: SystemTweaksState, locked: boolean): string {
         title: "Block clpctl injection",
         description: [
           "Replaces CloudPanel's clpctlWrapper so a site's own Unix user cannot break out of clpctl's shell and run commands as root.",
-          "Root and the panel are unaffected, and the four commands sites may run still work with ordinary values.",
+          "Root and the panel are unaffected. Sites can still export their database, reset their own permissions and purge Varnish with ordinary values; they import with their own database user.",
         ],
         checked: "error" in state.clpctlGuard ? true : state.clpctlGuard.enabled,
         onchange: "setSwitch(this, 'clpctl-guard')",
@@ -584,7 +574,6 @@ function listing(items: string[]): string {
   return esc(items.length > 1 ? `${items.slice(0, -1).join(", ")} and ${items.at(-1)}` : items[0] ?? "");
 }
 
-/** Where MySQL listens, and what stands between it and the internet. */
 function databaseLine(state: DatabaseStatus & { loopback: boolean }): string {
   if (state.listenersUnknown) return `${badge("Unknown", "warn")} <span>Where MySQL listens could not be read: ${esc(state.listenersUnknown)}.</span>`;
   if (!state.running) return `${badge("Not running", "plain")} <span>MySQL is not listening on TCP here.</span>`;
@@ -606,7 +595,6 @@ function databaseLine(state: DatabaseStatus & { loopback: boolean }): string {
   return `${badge("Firewalled", "warn")} <span>${where} The loaded firewall rules drop it, so the firewall is all that keeps it private.</span>`;
 }
 
-/** Root's default password, and how to change it without breaking the panel. */
 function defaultPasswordNote(state: DatabaseStatus): string {
   const found = state.defaultPassword;
   if ("error" in found) return `<p class="st-status hint">Root's password could not be checked: ${esc(found.error)}</p>`;
@@ -669,7 +657,7 @@ function jailLine(jails: LoginJailsReady, jail: string, on: boolean): string {
   return `${badge("On", "ok")} <span>fail2ban is watching.</span>`;
 }
 
-/** What sshd accepts now, and how to stop it. The setting never changes sshd. */
+/** The setting never changes sshd. */
 function sshdWarning(sshd: SshLogin | null): string {
   if (!sshd) return "";
   const open: string[] = [];

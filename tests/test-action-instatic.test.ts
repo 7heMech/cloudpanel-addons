@@ -1,17 +1,19 @@
 import { describe, expect, test } from "bun:test";
 import { Database } from "bun:sqlite";
 import { execFileSync } from "node:child_process";
-import { existsSync, lstatSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, statSync, symlinkSync, utimesSync, writeFileSync } from "node:fs";
+import {
+  existsSync, lstatSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, statSync, symlinkSync,
+  utimesSync, writeFileSync,
+} from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import {
-  DEFAULT_INSTATIC_ACTION_PATHS, makeSnapshot, parseInstaticAction, panelIdentityForInstatic, pruneSnapshots,
-  validateInstaticDomain,
-} from "../addons/instatic/action";
+import { makeSnapshot, parseInstaticAction, pruneSnapshots, validateInstaticDomain } from "../addons/instatic/action";
 import { dashboardView, jobView, newInstanceView, pendingCreations } from "../addons/instatic/app/views";
 import type { InstanceView, InstaticJobView } from "../addons/instatic/app/service";
 import { isNewerThan } from "../addons/instatic/app/tags";
-import { ActionFailure, normalizeIdentityHostname, validateFlag, validatePort, validateTag } from "../cli/action-common";
+import { ActionFailure } from "../lib/action";
+import { normalizeIdentityHostname } from "../lib/panel-identity";
+import { validateFlag, validatePort, validateTag } from "../lib/validate";
 
 function failureMessage(fn: () => unknown): string {
   try {
@@ -52,7 +54,7 @@ test("domain validation is routed through the shared identity guard", () => {
 
 test("action stdout is one JSON object and strips control characters from strings", () => {
   const script = [
-    'import { emitActionOk } from "./cli/action-common.ts";',
+    'import { emitActionOk } from "./lib/action.ts";',
     'emitActionOk({ text: "before\\u001bafter\\u0007\\nnext" });',
   ].join(" ");
   const stdout = execFileSync(process.execPath, ["-e", script], {

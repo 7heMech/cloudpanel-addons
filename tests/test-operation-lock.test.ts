@@ -6,7 +6,7 @@ import { expect, test } from "bun:test";
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { withFileLockSync } from "../cli/action-common";
+import { withFileLockSync } from "../lib/file-lock";
 import { OPERATION_LOCK_ENV, withOperationLock, withOperationLockSync } from "../cli/operation-lock";
 
 const REPO = join(import.meta.dir, "..");

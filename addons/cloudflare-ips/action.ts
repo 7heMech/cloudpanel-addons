@@ -1,26 +1,26 @@
+import { LOCK_DIR, addonStateDir, PANEL_DB, DISTRO_NGINX_SITES_DIR } from "../../lib/paths";
+import { writeFileAtomic } from "../../lib/atomic-write";
 import { Database } from "bun:sqlite";
 import {
   chmodSync, existsSync, lstatSync, mkdirSync, readFileSync, rmSync,
 } from "node:fs";
 import { dirname, join } from "node:path";
+import { errorMessage } from "../../lib/errors";
+import { replyToAction, failAction } from "../../lib/action";
+import { runCommand, type CommandResult } from "../../lib/command";
+import { validateFlag, HOSTNAME_RE } from "../../lib/validate";
+import { withFileLock } from "../../lib/file-lock";
+import { openPanelDatabase, withoutStandIns } from "../../lib/panel-db";
 import {
-  errorMessage, replyToAction, failAction, runCommand, validateFlag, withFileLock,
-  type CommandResult,
-} from "../../cli/action-common";
-import { PANEL_DB, STATE_DIR } from "../../cli/paths";
-import { openPanelDatabase, withoutStandIns } from "../../cli/panel-db";
-import {
-  trustedVhost, withNginxTransaction, withRecoveryFailures, writeAtomicOwned,
-} from "../../cli/nginx-transaction";
+  trustedVhost, withNginxTransaction, withRecoveryFailures,
+} from "../../lib/nginx-transaction";
 import { CLOUDFLARE_IPS_VERBS } from "./verbs";
 
 const POLICY_VERSION = 1;
 const MAX_SITES_PER_REQUEST = 10_000;
-const HOST_LABEL = "[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?";
-const HOST_RE = new RegExp(`^(?:${HOST_LABEL})(?:\\.${HOST_LABEL})+$`);
 const CLOUDFLARE_INCLUDE = "include /etc/nginx/cloudflare/ips;";
 
-export type CloudflareVerb = keyof typeof CLOUDFLARE_IPS_VERBS;
+type CloudflareVerb = keyof typeof CLOUDFLARE_IPS_VERBS;
 
 export interface CloudflareActionPaths {
   panelDb: string;
@@ -33,7 +33,7 @@ export interface CloudflareActionPaths {
   stateUid: number;
 }
 
-export interface CloudflareActionOptions {
+interface CloudflareActionOptions {
   paths?: Partial<CloudflareActionPaths>;
   input?: string;
   emitReply?: boolean;
@@ -72,9 +72,9 @@ interface ParsedAction {
 
 export const DEFAULT_CLOUDFLARE_ACTION_PATHS: CloudflareActionPaths = {
   panelDb: PANEL_DB,
-  nginxVhostDir: "/etc/nginx/sites-enabled",
-  policyFile: `${STATE_DIR}/cloudflare-ips/policy.json`,
-  lockFile: "/run/lock/clp-addons/cloudflare-ips.lock",
+  nginxVhostDir: DISTRO_NGINX_SITES_DIR,
+  policyFile: `${addonStateDir("cloudflare-ips")}/policy.json`,
+  lockFile: `${LOCK_DIR}/cloudflare-ips.lock`,
   nginx: "nginx",
   systemctl: "systemctl",
   vhostUid: 0,
@@ -93,7 +93,7 @@ function normalizeDomain(value: unknown): string | null {
   if (typeof value !== "string" || value.length > 253) return null;
   let domain = value.toLowerCase();
   if (domain.endsWith(".")) domain = domain.slice(0, -1);
-  const match = domain.match(HOST_RE);
+  const match = domain.match(HOSTNAME_RE);
   return match?.[0] === domain ? domain : null;
 }
 
@@ -116,7 +116,7 @@ function readPolicy(path: string, expectedUid: number): Policy {
     }
     raw = JSON.parse(readFileSync(path, "utf8"));
   } catch (error) {
-    failAction(`Cloudflare IP policy could not be read: ${error instanceof Error ? error.message : String(error)}`);
+    failAction(`Cloudflare IP policy could not be read: ${errorMessage(error)}`);
   }
   if (typeof raw !== "object" || raw === null) failAction("Cloudflare IP policy is malformed");
   const policy = raw as Partial<Policy>;
@@ -139,7 +139,7 @@ function writePolicy(path: string, policy: Policy, expectedUid: number): void {
     uid = stat.uid;
     gid = stat.gid;
   }
-  writeAtomicOwned(path, `${JSON.stringify(stablePolicy(policy), null, 2)}\n`, 0o600, uid, gid);
+  writeFileAtomic(path, `${JSON.stringify(stablePolicy(policy), null, 2)}\n`, { mode: 0o600, owner: { uid: uid, gid: gid }, createParent: true });
 }
 
 function siteRows(db: Database): SiteRow[] {
@@ -148,7 +148,7 @@ function siteRows(db: Database): SiteRow[] {
       "SELECT id, domain_name, user, allow_traffic_from_cloudflare_only FROM site ORDER BY domain_name;",
     ).all().map((row) => ({ ...row, id: Number(row.id), domain_name: String(row.domain_name), user: String(row.user) })));
   } catch (error) {
-    failAction(`CloudPanel does not expose the required Cloudflare site setting: ${error instanceof Error ? error.message : String(error)}`);
+    failAction(`CloudPanel does not expose the required Cloudflare site setting: ${errorMessage(error)}`);
   }
 }
 
@@ -202,7 +202,6 @@ export function transformVhost(content: string, siteUser: string, enabled: boole
   return result;
 }
 
-/** Updates selected DB rows and rendered vhosts, validating and reloading once. */
 async function updateSites(
   paths: CloudflareActionPaths,
   domains: string[],
@@ -314,7 +313,7 @@ async function setSelected(
         if (before === null) rmSync(paths.policyFile, { force: true });
         else {
           const stat = lstatSync(paths.policyFile);
-          writeAtomicOwned(paths.policyFile, before, 0o600, stat.uid, stat.gid);
+          writeFileAtomic(paths.policyFile, before, { mode: 0o600, owner: { uid: stat.uid, gid: stat.gid }, createParent: true });
         }
       } catch (rollbackError) {
         rollbackFailures.push(errorMessage(rollbackError));

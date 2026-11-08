@@ -5,35 +5,37 @@
  * does not change it: that domain is served by the sites' Nginx on 443, which
  * proxies to 8443 without verifying it.
  */
+import { addonStateDir, ROOT_UID } from "../../lib/paths";
 import { X509Certificate, createPrivateKey } from "node:crypto";
 import {
   closeSync, constants, existsSync, fstatSync, lstatSync, mkdirSync, mkdtempSync, openSync, readFileSync, rmSync, writeFileSync,
 } from "node:fs";
 import { hostname, networkInterfaces } from "node:os";
 import { join } from "node:path";
-import { errorMessage, failAction, runCommand, type CommandResult } from "../../cli/action-common";
-import { nginxFileChange, withNginxTransaction } from "../../cli/nginx-transaction";
-import { ROOT_UID, STATE_DIR } from "../../cli/paths";
+import { errorMessage } from "../../lib/errors";
+import { failAction } from "../../lib/action";
+import { commandOutput, runCommand, type CommandResult } from "../../lib/command";
+import { nginxFileChange, withNginxTransaction } from "../../lib/nginx-transaction";
 import { writeFileAtomic } from "../../lib/atomic-write";
 import { panelUserUid } from "../../lib/sso-auth";
 import { COMMAND_MS } from "./limits";
 
 /** CloudPanel's shared certificate, `CN=cloudpanel.clp`. */
-export const SHARED_FINGERPRINT = "6D:13:60:EC:EF:D5:01:F8:F4:91:C3:2D:41:91:48:9C:E1:02:3E:C8:E9:12:5D:96:AE:A7:53:03:FB:62:4F:2B";
+const SHARED_FINGERPRINT = "6D:13:60:EC:EF:D5:01:F8:F4:91:C3:2D:41:91:48:9C:E1:02:3E:C8:E9:12:5D:96:AE:A7:53:03:FB:62:4F:2B";
 /** Under Apple's 825-day limit for TLS server certificates. */
 const VALID_DAYS = 800;
 const RENEW_MS = 30 * 86_400_000;
 const MAX_PEM_BYTES = 64 * 1024;
 const PANEL_NGINX = "/home/clp/services/nginx";
 
-export const DEFAULT_PANEL_CERT_PATHS = {
+const DEFAULT_PANEL_CERT_PATHS = {
   vhost: `${PANEL_NGINX}/sites-enabled/cloudpanel.conf`,
   panelConf: `${PANEL_NGINX}/nginx.conf`,
   cert: `${PANEL_NGINX}/ssl-certificates/cert.crt`,
   key: `${PANEL_NGINX}/ssl-certificates/private.key`,
   /** The generated pair, kept so a CloudPanel update gets the same one back. */
-  storedCert: `${STATE_DIR}/system-tweaks/panel-cert.crt`,
-  storedKey: `${STATE_DIR}/system-tweaks/panel-cert.key`,
+  storedCert: `${addonStateDir("system-tweaks")}/panel-cert.crt`,
+  storedKey: `${addonStateDir("system-tweaks")}/panel-cert.key`,
   customDomain: "/etc/.clp_custom_domain",
   customDomainVhost: "/etc/nginx/sites-enabled/custom-domain.conf",
   nginx: "nginx",
@@ -169,7 +171,6 @@ export function panelCertStatus(options: PanelCertOptions = {}): PanelCertStatus
   }
 }
 
-/** This box's global addresses, for the certificate's alternative names. */
 function boxAddresses(): string[] {
   return Object.values(networkInterfaces()).flat().filter((entry) => entry && !entry.internal
     && !/^(?:fe80:|169\.254\.)/i.test(entry.address)).map((entry) => entry!.address);
@@ -198,18 +199,13 @@ function generate(paths: Paths, options: PanelCertOptions): { cert: string; key:
       "-days", String(VALID_DAYS), "-config", join(work, "req.cnf"),
       "-keyout", join(work, "key.pem"), "-out", join(work, "cert.pem"),
     ]);
-    if (!made.ok) failAction(`openssl could not generate a certificate: ${(made.stderr || made.stdout).trim()}`);
+    if (!made.ok) failAction(`openssl could not generate a certificate: ${commandOutput(made)}`);
     return { cert: readFileSync(join(work, "cert.pem"), "utf8"), key: readFileSync(join(work, "key.pem"), "utf8") };
   } finally {
     rmSync(work, { recursive: true, force: true });
   }
 }
 
-/**
- * Puts the generated pair in place of CloudPanel's shared one, or of an expiring
- * generated one, then validates and reloads the panel's Nginx; a failure puts
- * the previous files back. Any other certificate is left alone.
- */
 export function replacePanelCert(options: PanelCertOptions = {}): string | null {
   const paths = pathsOf(options);
   const now = (options.now ?? (() => new Date()))().getTime();
@@ -227,7 +223,6 @@ export function replacePanelCert(options: PanelCertOptions = {}): string | null 
   const nginx = { nginx: paths.nginx, systemctl: paths.systemctl, config: paths.panelConf, service: "clp-nginx" };
   withNginxTransaction(null, nginx, runOf(options), (changes) => {
     changes.push(nginxFileChange(paths.key, pair.key, ownerOf(paths, paths.key), true), nginxFileChange(paths.cert, pair.cert, ownerOf(paths, paths.cert), true));
-    // Written with the files' own mode, less any access for others.
     for (const change of changes) change.backup.mode &= 0o770;
   });
   if (!reuse) {

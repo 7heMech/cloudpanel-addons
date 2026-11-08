@@ -5,7 +5,7 @@
    action menu sits at its top right, and every other cell is labelled with its
    column's heading, which the script beside this copies onto it. Only a
    table with a heading row qualifies: the Logs tab's lines are a table too,
-   with none, and as cards each line was a card titled by its colour bar. */
+   with none, and as cards each line would be a card titled by its colour bar. */
 @media (max-width: 760px) {
   body .site-content .card-table table.table:not(.table-sites):has(> thead),
   body .site-content .card-table table.table:not(.table-sites):has(> thead) > tbody { display: block; }

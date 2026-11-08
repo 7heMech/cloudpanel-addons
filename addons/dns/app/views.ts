@@ -13,14 +13,14 @@ const CLIENT = `${FLEET_ROW_SELECTION_JS}\nconst DNS_CLIPBOARD = ${JSON.stringif
 const NO_PROFILE = "Not managed";
 
 export function layout(title: string, content: string, notice?: { current: string; latest: string } | null): string {
-  return renderLayout(title, content, { brand: "DNS", base: BASE, nav: [], css: STYLE, script: CLIENT, updateNotice: notice });
+  return renderLayout(title, content, { base: BASE, css: STYLE, script: CLIENT, updateNotice: notice });
 }
 
 const TYPE_LABELS: Record<string, string> = {
   wordpress: "WordPress", php: "PHP", static: "Static", nodejs: "Node.js", python: "Python", "reverse-proxy": "Reverse proxy", redirect: "Redirect",
 };
 
-export const REDIRECT_STATUS_LABELS: Record<number, string> = {
+const REDIRECT_STATUS_LABELS: Record<number, string> = {
   301: "301 Moved permanently", 302: "302 Found (temporary)", 307: "307 Temporary, same method", 308: "308 Permanent, same method",
 };
 

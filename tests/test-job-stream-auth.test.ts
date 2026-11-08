@@ -1,12 +1,11 @@
 // A job stream is authorized when it opens and then runs until the job ends,
 // and what it sends includes a clone's generated passwords. It rechecks.
-import { expect, mock, test } from "bun:test";
+import { expect, test } from "bun:test";
+import { jobEventStream as realJobEventStream } from "../lib/job-stream";
 
 let authorized: boolean | "unavailable" = true;
-const realSso = await import("../lib/sso-auth");
-mock.module("../lib/sso-auth", () => ({ ...realSso, stillAuthorized: async () => authorized }));
-
-const { jobEventStream } = await import("../lib/job-stream");
+const jobEventStream: typeof realJobEventStream = (options) =>
+  realJobEventStream({ ...options, stillAuthorized: async () => authorized });
 
 const running = { state: "running", step: "Copying files" };
 const getJob = async () => ({ ok: true, data: { job: { ...running }, log: "working" } });

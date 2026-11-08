@@ -445,7 +445,11 @@ test("the page puts sites first and draws only the controls that do something", 
 });
 
 test("the shared runner does not disclose secret-bearing stderr", async () => {
-  await expect(commandOutput({ argv: ["/bin/sh", "-c", "echo SECRET >&2; exit 1"], cwd: "/", env: {}, timeoutMs: 1000, stdin: "private", sensitive: true })).rejects.toThrow("the WordPress operation failed");
+  const failure = await commandOutput({ argv: ["/bin/sh", "-c", "echo SECRET >&2; cat >&2; exit 1"], cwd: "/", env: {}, timeoutMs: 1000, stdin: "private", sensitive: true })
+    .then(() => null, (error: Error) => error);
+  expect(failure?.message).toContain("the WordPress operation failed");
+  expect(failure?.message).not.toContain("SECRET");
+  expect(failure?.message).not.toContain("private");
 });
 
 test("empty PHP arrays are valid baselines and registration interrupted before readback is recovered", async () => {

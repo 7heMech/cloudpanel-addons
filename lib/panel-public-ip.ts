@@ -1,15 +1,12 @@
 import { readdirSync, readFileSync, statSync } from "node:fs";
 import { isIP } from "node:net";
 import { join } from "node:path";
-import { PANEL_CACHE_POOL_DIR } from "../cli/paths";
+import { PANEL_CACHE_POOL_DIR } from "./paths";
 
 const CACHE_SCAN_MAX_FILES = 512;
 const CACHE_ITEM_MAX_BYTES = 8 * 1024;
 
 /**
- * The address CloudPanel prints in its own site information, read from the
- * panel's cache rather than resolved here.
- *
  * CloudPanel asks an external service for the instance's public IPv4 and caches
  * the answer for an hour; there is no column for it. A site-scoped addon page
  * reproduces the panel's site information, and the only honest value to print

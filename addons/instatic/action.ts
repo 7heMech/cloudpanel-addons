@@ -1,23 +1,27 @@
-import { hasSite, withPanelDb } from "../../cli/panel-db";
+import { errorMessage } from "../../lib/errors";
+import { CLI_BIN, LOCK_DIR, PANEL_DB, addonStateDir, PANEL_IDENTITY_PATH } from "../../lib/paths";
+import { hasSite, withPanelDb } from "../../lib/panel-db";
 import { Database } from "bun:sqlite";
 import { randomBytes } from "node:crypto";
 import {
   chmodSync, closeSync, cpSync, existsSync, lstatSync, mkdirSync, mkdtempSync, constants, openSync, readFileSync, readSync, readdirSync,
-  renameSync, rmSync, statSync, writeFileSync, writeSync,
+  renameSync, rmSync, statSync, writeFileSync,
 } from "node:fs";
 import { tmpdir } from "node:os";
 import { writeFileAtomic } from "../../lib/atomic-write";
 import { dirname, join } from "node:path";
+import { ActionCommandFailure, ActionFailure, emitActionOk, failAction, reportActionFailure } from "../../lib/action";
+import { commandFailure, runCommand } from "../../lib/command";
+import { validateDomain } from "../../lib/panel-identity";
+import { availableSiteUser, siteUserTaken } from "../../lib/site-user";
+import { readable } from "../../lib/files";
+import { validateFlag, validatePort, validateTag } from "../../lib/validate";
+import { withFileLock } from "../../lib/file-lock";
 import {
-  ActionCommandFailure, ActionFailure, commandFailure, emitActionOk, failAction, forwardCommandOutput as defaultForwardCommandOutput,
-  normalizeIdentityHostname, availableSiteUser, readable, runCommand, siteUserTaken,
-  validateDomain, validateFlag, validatePort, validateTag, withFileLock, reportActionFailure,
-} from "../../cli/action-common";
-import { PANEL_IDENTITY_PATH } from "../../cli/paths";
-import {
-  createJobDir, createJobLog, jobCommonFields, jobDir as storeJobDir, jobGet, jobSet, jobTimestamp,
-  JOB_ID_RE, listJobIds, newJobId, pruneJobs, readJobLog, startJobUnit, watchJobRecord, type PruneJobsResult,
-} from "../../cli/job-store";
+  diagnostic, emitJob, forwardCommandOutput, jobCommonFields, jobGet, jobSet, jobTimestamp,
+  JOB_ID_RE, jobViews, markJobDone, markJobRunning, pruneJobs, queueJob, recordJobFailure, requireJobDir,
+  runStdoutAsDiagnostic, setJobStep, startJobTranscript, watchJob, type JobTranscript, type PruneJobsResult,
+} from "../../lib/job-store";
 import { INSTATIC_VERBS } from "./verbs";
 
 const REGISTRY_IMAGE = "ghcr.io/corebunch/instatic";
@@ -33,9 +37,9 @@ export interface InstaticJobView {
   port: number;
   tag: string;
   tls: boolean;
-  /** What came of the certificate; absent on records written before it was kept. */
+  /** Absent on records written before it was kept. */
   certificate?: "issued" | "failed" | "none";
-  /** What the job does; records written before updates were jobs are creations. */
+  /** Records written before updates were jobs are creations. */
   kind: "create" | "update";
   /** The version an update started from. */
   fromTag?: string;
@@ -45,50 +49,6 @@ export interface InstaticJobView {
   startedAt?: string;
   finishedAt?: string;
   error?: string;
-}
-
-let activeTranscript: JobTranscript | null = null;
-
-class JobTranscript {
-  readonly path: string;
-  private fd = -1;
-
-  constructor(path: string) {
-    this.path = path;
-    this.fd = openSync(path, "a", 0o600);
-  }
-
-  write(text: string): void {
-    if (this.fd === -1) return;
-    const buf = Buffer.from(text);
-    let offset = 0;
-    while (offset < buf.length) {
-      try {
-        const written = writeSync(this.fd, buf, offset, buf.length - offset, null);
-        if (written <= 0) break;
-        offset += written;
-      } catch {
-        break;
-      }
-    }
-  }
-
-  close(): void {
-    if (this.fd !== -1) {
-      try { closeSync(this.fd); } catch {}
-      this.fd = -1;
-    }
-  }
-}
-
-function diagnostic(text: string): void {
-  if (activeTranscript) activeTranscript.write(text);
-  else process.stderr.write(text);
-}
-
-function forwardCommandOutput(result: { stdout: string; stderr: string }): void {
-  if (result.stdout) diagnostic(result.stdout);
-  if (result.stderr) diagnostic(result.stderr);
 }
 
 export interface InstaticActionPaths {
@@ -104,20 +64,20 @@ export interface InstaticActionPaths {
 }
 
 export const DEFAULT_INSTATIC_ACTION_PATHS: InstaticActionPaths = {
-  lockDir: "/run/lock/clp-addons",
-  dataBaseDir: "/var/lib/clp-addons/instatic",
+  lockDir: LOCK_DIR,
+  dataBaseDir: addonStateDir("instatic"),
   backupDir: "/var/backups/clp-addons/instatic",
-  jobsDir: "/var/lib/clp-addons/instatic/jobs",
-  actionBinary: "/usr/local/bin/clp-addons",
-  panelDb: "/home/clp/htdocs/app/data/db.sq3",
+  jobsDir: `${addonStateDir("instatic")}/jobs`,
+  actionBinary: CLI_BIN,
+  panelDb: PANEL_DB,
   clpctl: "/usr/bin/clpctl",
   panelIdentityFile: PANEL_IDENTITY_PATH,
   homeDir: "/home",
 };
 
-export type InstaticVerb = keyof typeof INSTATIC_VERBS;
+type InstaticVerb = keyof typeof INSTATIC_VERBS;
 
-export interface ParsedInstaticAction {
+interface ParsedInstaticAction {
   verb: InstaticVerb;
   domain: string;
   port: string;
@@ -129,7 +89,7 @@ export interface ParsedInstaticAction {
   fromBackup?: boolean;
 }
 
-export interface InstaticActionOptions {
+interface InstaticActionOptions {
   paths?: Partial<InstaticActionPaths>;
 }
 
@@ -156,18 +116,12 @@ function validateJobId(id: string): string {
   return id;
 }
 
-// The job record itself lives in cli/job-store; this only supplies the addon's
-// jobs directory so the call sites can stay as they were.
-function jobDir(paths: InstaticActionPaths, id: string): string {
-  return storeJobDir(paths.jobsDir, id);
-}
-
 function certificateOf(dir: string): Pick<InstaticJobView, "certificate"> {
   const value = jobGet(dir, "certificate");
   return value === "issued" || value === "failed" || value === "none" ? { certificate: value } : {};
 }
 
-function jobJson(paths: InstaticActionPaths, dir: string, id: string): InstaticJobView {
+function jobJson(dir: string, id: string): InstaticJobView {
   const common = jobCommonFields(dir);
   const state = (["queued", "running", "done", "failed"].includes(common.state)
     ? common.state
@@ -192,8 +146,7 @@ function jobJson(paths: InstaticActionPaths, dir: string, id: string): InstaticJ
 }
 
 function setStep(dir: string, step: string): void {
-  jobSet(dir, "step", step);
-  diagnostic(`[instatic] ${step}\n`);
+  setJobStep("instatic", dir, step);
 }
 
 function parseAction(argv: string[], paths: InstaticActionPaths): ParsedInstaticAction {
@@ -295,8 +248,7 @@ function parseAction(argv: string[], paths: InstaticActionPaths): ParsedInstatic
       if (port || tag) failAction("delete takes only --domain and --confirm");
       break;
     case "create":
-      // --confirm is accepted and ignored, preserving the original wrapper's
-      // leniency here.
+      // --confirm is accepted and ignored.
       break;
     default:
       if (port || tag || confirm || job) failAction(`${verb} takes only --domain`);
@@ -315,7 +267,7 @@ function instanceDir(domain: string, paths: InstaticActionPaths): string {
   return join(paths.dataBaseDir, domain);
 }
 
-export interface InstanceStorage extends SnapshotSources {
+interface InstanceStorage extends SnapshotSources {
   legacy: boolean;
 }
 
@@ -440,9 +392,6 @@ function panelSiteDomains(paths: InstaticActionPaths): { readable: boolean; doma
       domains: new Set(rows.map((row) => typeof row.domain_name === "string" ? row.domain_name : "")),
     };
   } catch {
-    // Readability was already confirmed before this query ran, so a failed
-    // query here still reports readable: true with an empty domain set (i.e.
-    // panelSite=false downstream) rather than falling back to unreadable/null.
     return { readable: true, domains: new Set() };
   }
 }
@@ -485,9 +434,8 @@ function commandCombinedOutput(command: string, args: string[]): string {
     const output = join(directory, "output");
     fd = openSync(output, "w", 0o600);
     try {
-      // Bash's `2>&1` preserves the relative order of Docker's two streams.
-      // Pointing both descriptors at one open file description retains that
-      // ordering without introducing a shell or exposing output on stdout.
+      // One open file description for both streams keeps Docker's output in
+      // order, as `2>&1` would, without a shell or output on stdout.
       Bun.spawnSync([command, ...args], {
         stdin: "ignore",
         stdout: fd,
@@ -495,9 +443,7 @@ function commandCombinedOutput(command: string, args: string[]): string {
         env: process.env,
       });
     } catch {
-      // Log collection is best effort: an unavailable or failing log command
-      // still contributes whatever output it managed to write before the catch
-      // swallows the error.
+      // Best effort: keep whatever output was written.
     }
     closeSync(fd);
     fd = -1;
@@ -519,12 +465,6 @@ function containerExists(name: string): boolean {
 function runDiagnostic(command: string, args: string[]): boolean {
   const result = runCommand(command, args);
   forwardCommandOutput(result);
-  return result.ok;
-}
-
-function runStdoutAsDiagnostic(command: string, args: string[]): boolean {
-  const result = runCommand(command, args);
-  if (result.stdout) diagnostic(result.stdout);
   return result.ok;
 }
 
@@ -759,7 +699,7 @@ function fileHeader(path: string): string {
   }
 }
 
-export interface SnapshotSources {
+interface SnapshotSources {
   dataDir: string;
   uploadsDir: string;
   envFile: string;
@@ -902,48 +842,27 @@ async function cmdCreate(action: ParsedInstaticAction, paths: InstaticActionPath
   let storage: InstanceStorage | undefined;
 
   if (action.isAsync) {
-    for (const entry of listJobIds(paths.jobsDir)) {
-      const existing = jobDir(paths, entry);
-      if (jobGet(existing, "domain") !== domain) continue;
-      const state = jobGet(existing, "state");
-      if (state === "queued" || state === "running") {
-        failAction(`creation of ${domain} is already ${state}`);
-      }
-    }
-
-    const id = newJobId();
-    const jDir = createJobDir(paths.jobsDir, id);
-    jobSet(jDir, "domain", domain);
-    jobSet(jDir, "port", String(port));
-    jobSet(jDir, "tag", tag);
-    jobSet(jDir, "tls", tls);
-    jobSet(jDir, "createdAt", dateStamp(true));
-    jobSet(jDir, "step", "queued");
-    jobSet(jDir, "state", "queued");
-    createJobLog(jDir);
-
-    const started = startJobUnit({
+    const id = queueJob({
       addon: "instatic",
-      id,
+      jobsDir: paths.jobsDir,
+      fields: { domain, port: String(port), tag, tls },
+      step: "queued",
+      conflict: (dir, state) => jobGet(dir, "domain") === domain ? `creation of ${domain} is already ${state}` : null,
       description: `clp-addons: creating Instatic site ${domain}`,
       actionBinary: paths.actionBinary,
+      name: "creation",
+      forwardOutput: true,
     });
-    forwardCommandOutput(started);
-    if (!started.ok) {
-      jobSet(jDir, "error", "could not start the creation job");
-      jobSet(jDir, "state", "failed");
-      failAction("systemd-run refused to start the creation job");
-    }
-
     emitActionOk({ job: id, domain, port, tag, siteCreatedByAddon: siteCreated, status: "queued" });
     return;
   }
 
+  let transcript: JobTranscript | undefined;
   try {
     mkdirSync(dir, { recursive: true, mode: 0o750 });
     const logPath = join(dir, "create.log");
     writeFileSync(logPath, "", { mode: 0o640 });
-    activeTranscript = new JobTranscript(logPath);
+    transcript = startJobTranscript(logPath, { ownerOnly: false });
 
     const existing = panelSiteExists(domain, paths);
     if (existing.ok && existing.exists) {
@@ -1024,10 +943,7 @@ async function cmdCreate(action: ParsedInstaticAction, paths: InstaticActionPath
     if (cleanupActive) cleanupCreate(name, dir, domain, siteCreated, paths, storage);
     throw error;
   } finally {
-    if (activeTranscript) {
-      activeTranscript.close();
-      activeTranscript = null;
-    }
+    transcript?.stop();
   }
 }
 
@@ -1141,7 +1057,7 @@ async function replaceInstance(
     } catch (rollbackError) {
       failAction(`replacement failed; recovery failed: ${String(rollbackError)}; snapshot: ${snapshot}`, { logs });
     }
-    failAction(`${error instanceof Error ? error.message : String(error)}; previous instance preserved`, { failedTag: tag, restoredTag: previousTag, logs });
+    failAction(`${errorMessage(error)}; previous instance preserved`, { failedTag: tag, restoredTag: previousTag, logs });
   }
 
   const removed = !renamed || runDiagnostic("docker", ["rm", `${name}-prev`]);
@@ -1164,52 +1080,27 @@ async function cmdUpdate(action: ParsedInstaticAction, paths: InstaticActionPath
   if (!isRegularFile(meta)) failAction(`no such instance: ${domain}`);
   const fromTag = validateTag(readMeta("tag", meta));
   if (tag === fromTag) failAction(`already running tag ${tag}`);
-  activeJobFor(domain, paths);
-  const id = newJobId();
-  const jDir = createJobDir(paths.jobsDir, id);
-  jobSet(jDir, "kind", "update");
-  jobSet(jDir, "domain", domain);
-  jobSet(jDir, "port", readMeta("port", meta));
-  jobSet(jDir, "tag", tag);
-  jobSet(jDir, "fromTag", fromTag);
-  jobSet(jDir, "createdAt", dateStamp(true));
-  jobSet(jDir, "step", "queued");
-  jobSet(jDir, "state", "queued");
-  createJobLog(jDir);
-  const started = startJobUnit({
+  const id = queueJob({
     addon: "instatic",
-    id,
+    jobsDir: paths.jobsDir,
+    fields: { kind: "update", domain, port: readMeta("port", meta), tag, fromTag },
+    step: "queued",
+    conflict: (dir, state) => jobGet(dir, "domain") === domain
+      ? `${jobGet(dir, "kind") === "update" ? "an update" : "the creation"} of ${domain} is already ${state}`
+      : null,
     description: `clp-addons: updating Instatic site ${domain} to ${tag}`,
     actionBinary: paths.actionBinary,
+    name: "update",
+    forwardOutput: true,
   });
-  forwardCommandOutput(started);
-  if (!started.ok) {
-    jobSet(jDir, "error", "could not start the update job");
-    jobSet(jDir, "state", "failed");
-    failAction("systemd-run refused to start the update job");
-  }
   emitActionOk({ job: id, domain, tag, status: "queued" });
 }
 
-/** Refuses a second job for a site while one is queued or running. */
-function activeJobFor(domain: string, paths: InstaticActionPaths): void {
-  for (const entry of listJobIds(paths.jobsDir)) {
-    const existing = jobDir(paths, entry);
-    if (jobGet(existing, "domain") !== domain) continue;
-    const state = jobGet(existing, "state");
-    if (state === "queued" || state === "running") {
-      failAction(`${jobGet(existing, "kind") === "update" ? "an update" : "the creation"} of ${domain} is already ${state}`);
-    }
-  }
-}
-
-/** The job half of an update: the same replacement, with its steps and output in the job's log. */
 async function runUpdateJob(jDir: string, paths: InstaticActionPaths): Promise<void> {
   const domain = jobGet(jDir, "domain");
   const tag = validateTag(jobGet(jDir, "tag"));
-  activeTranscript = new JobTranscript(join(jDir, "log"));
-  jobSet(jDir, "state", "running");
-  jobSet(jDir, "startedAt", dateStamp(true));
+  const transcript = startJobTranscript(join(jDir, "log"));
+  markJobRunning(jDir);
   try {
     await replaceInstance(
       { verb: "update", domain, port: "", tag, confirm: "", tls: "no", job: "", isAsync: false },
@@ -1217,22 +1108,14 @@ async function runUpdateJob(jDir: string, paths: InstaticActionPaths): Promise<v
       (text) => setStep(jDir, text),
     );
     setStep(jDir, `updated to ${tag}`);
-    jobSet(jDir, "finishedAt", dateStamp(true));
-    jobSet(jDir, "state", "done");
+    markJobDone(jDir);
   } catch (error) {
     const data = error instanceof ActionFailure ? error.data as { logs?: string } | undefined : undefined;
     if (data?.logs) diagnostic(`[instatic] the new container's output:\n${data.logs}\n`);
-    const msg = error instanceof Error ? error.message : String(error);
-    jobSet(jDir, "finishedAt", dateStamp(true));
-    jobSet(jDir, "error", msg);
-    diagnostic(`[instatic] ERROR: ${msg}\n`);
-    jobSet(jDir, "state", "failed");
+    recordJobFailure("instatic", jDir, errorMessage(error), { finishedAt: true });
     throw error;
   } finally {
-    if (activeTranscript) {
-      activeTranscript.close();
-      activeTranscript = null;
-    }
+    transcript.stop();
   }
 }
 
@@ -1364,7 +1247,7 @@ function initialNativeBackup(domain: string, paths: InstaticActionPaths): void {
   try {
     makeNativeBackup(domain, paths);
   } catch (error) {
-    diagnostic(`[instatic] WARN: ${error instanceof Error ? error.message : String(error)}\n`);
+    diagnostic(`[instatic] WARN: ${errorMessage(error)}\n`);
   }
 }
 
@@ -1380,7 +1263,7 @@ async function cmdBackup(action: ParsedInstaticAction, paths: InstaticActionPath
         backups.push({ domain, snapshot: makeNativeBackup(domain, paths) });
       });
     } catch (error) {
-      const message = error instanceof Error ? error.message : String(error);
+      const message = errorMessage(error);
       failures.push({ domain: entry, error: message });
       diagnostic(`[instatic] backup failed for ${entry}: ${message}\n`);
     }
@@ -1562,8 +1445,7 @@ function cmdLogs(action: ParsedInstaticAction): void {
 
 async function cmdRun(action: ParsedInstaticAction, paths: InstaticActionPaths): Promise<void> {
   const id = action.job;
-  const jDir = jobDir(paths, id);
-  if (!isDirectory(jDir)) failAction(`no such job: ${id}`);
+  const jDir = requireJobDir(paths.jobsDir, id);
   if (jobGet(jDir, "kind") === "update") return runUpdateJob(jDir, paths);
   const domain = jobGet(jDir, "domain");
   const port = Number(jobGet(jDir, "port"));
@@ -1580,10 +1462,8 @@ async function cmdRun(action: ParsedInstaticAction, paths: InstaticActionPaths):
   const holder = portHolder(port, domain, paths);
   if (holder) failAction(`port ${port} is already taken by ${holder}`);
 
-  const logPath = join(jDir, "log");
-  activeTranscript = new JobTranscript(logPath);
-  jobSet(jDir, "state", "running");
-  jobSet(jDir, "startedAt", dateStamp(true));
+  const transcript = startJobTranscript(join(jDir, "log"));
+  markJobRunning(jDir);
 
   let siteCreated = false;
   let cleanupActive = true;
@@ -1667,59 +1547,27 @@ async function cmdRun(action: ParsedInstaticAction, paths: InstaticActionPaths):
     }
 
     setStep(jDir, "instance created successfully");
-    jobSet(jDir, "finishedAt", dateStamp(true));
-    jobSet(jDir, "state", "done");
+    markJobDone(jDir);
 
     emitActionOk({ domain, port, tag, container: name, siteUser: siteUserFinal, siteCreatedByAddon: siteCreated, status: "running" });
   } catch (error) {
     if (cleanupActive) cleanupCreate(name, dir, domain, siteCreated, paths, storage);
-    jobSet(jDir, "finishedAt", dateStamp(true));
-    const msg = error instanceof Error ? error.message : String(error);
-    jobSet(jDir, "error", msg);
-    diagnostic(`[instatic] ERROR: ${msg}\n`);
-    jobSet(jDir, "state", "failed");
+    recordJobFailure("instatic", jDir, errorMessage(error), { finishedAt: true });
     throw error;
   } finally {
-    if (activeTranscript) {
-      activeTranscript.close();
-      activeTranscript = null;
-    }
+    transcript.stop();
   }
 }
 
-function cmdJob(paths: InstaticActionPaths, id: string): void {
-  const dir = jobDir(paths, id);
-  if (!isDirectory(dir)) failAction(`no such job: ${id}`);
-  emitActionOk({ job: jobJson(paths, dir, id), log: readJobLog(dir) });
-}
-
-async function cmdWatchJob(paths: InstaticActionPaths, id: string): Promise<void> {
-  const dir = jobDir(paths, id);
-  if (!isDirectory(dir)) failAction(`no such job: ${id}`);
-  await watchJobRecord({
-    dir,
-    read: () => ({ job: jobJson(paths, dir, id), log: readJobLog(dir) }),
-    emit: (data) => emitActionOk(data),
-  });
-}
-
-function cmdJobs(paths: InstaticActionPaths): void {
-  const jobs = listJobIds(paths.jobsDir).map((id) => jobJson(paths, jobDir(paths, id), id));
-  emitActionOk({ jobs });
-}
-
-// Creation records accumulate one directory per attempt and nothing ever
-// removed them: the stager had this sweep from the start and Instatic, whose
-// job support was written by copying it, did not. Reached from repair, on the
-// reconciliation timer.
+// Creation records accumulate one directory per attempt. Reached from repair,
+// on the reconciliation timer.
 export function pruneInstaticJobs(options?: InstaticActionOptions): PruneJobsResult {
   return pruneJobs({
     addon: "instatic",
     jobsDir: pathsFor(options).jobsDir,
     retentionDays: JOB_RETENTION_DAYS,
     stuckMessage: "the job stopped without recording a result",
-    onStuck: (id, state) =>
-      diagnostic(`[instatic] WARN: job ${id} is recorded as ${state} but nothing is running it; marking it failed\n`),
+    warnStuck: true,
   });
 }
 
@@ -1741,9 +1589,9 @@ async function dispatch(action: ParsedInstaticAction, paths: InstaticActionPaths
     case "backup": await cmdBackup(action, paths); return;
     case "status": cmdStatus(action); return;
     case "logs": cmdLogs(action); return;
-    case "job": cmdJob(paths, action.job); return;
-    case "watch-job": await cmdWatchJob(paths, action.job); return;
-    case "jobs": cmdJobs(paths); return;
+    case "job": emitJob(paths.jobsDir, action.job, jobJson); return;
+    case "watch-job": await watchJob(paths.jobsDir, action.job, jobJson); return;
+    case "jobs": emitActionOk({ jobs: jobViews(paths.jobsDir, jobJson) }); return;
     case "prune": cmdPrune(paths); return;
     case "run": await cmdRun(action, paths); return;
   }
@@ -1751,10 +1599,6 @@ async function dispatch(action: ParsedInstaticAction, paths: InstaticActionPaths
 
 export function validateInstaticDomain(value: string, identityPath = PANEL_IDENTITY_PATH): string {
   return validateDomain(value, identityPath);
-}
-
-export function panelIdentityForInstatic(value: string): string | null {
-  return normalizeIdentityHostname(value);
 }
 
 export function parseInstaticAction(argv: string[], options?: InstaticActionOptions): ParsedInstaticAction {
@@ -1770,18 +1614,14 @@ export async function runInstaticAction(argv: string[], options?: InstaticAction
     chmodSync(paths.lockDir, 0o700);
     mkdirSync(paths.dataBaseDir, { recursive: true });
 
-    // `job` and `watch-job` are reads: they print the record and the log file the running job is
-    // still appending to. It must never take the job lock -- `run` holds that
-    // for the whole creation, so a locked read blocked every log poll and every
-    // page load for the job until the create finished, which is the opposite of
-    // what a progress page is for.
+    // `job` and `watch-job` read a log the running job is still appending to,
+    // so they never take the job lock `run` holds for the whole creation.
     if (action.verb === "list" || action.verb === "jobs" || action.verb === "job" || action.verb === "watch-job" || action.verb === "prune" || action.verb === "backup") {
       await dispatch(action, paths);
     } else if (action.verb === "run") {
       const lock = join(paths.lockDir, `job-${action.job}.lock`);
       await withFileLock(lock, 300, `job ${action.job} is already active`, async () => {
-        const dir = jobDir(paths, action.job);
-        if (!isDirectory(dir)) failAction(`no such job: ${action.job}`);
+        const dir = requireJobDir(paths.jobsDir, action.job);
         const domain = validateDomain(jobGet(dir, "domain"), paths.panelIdentityFile);
         // The job lock prevents duplicate runners; the domain lock also
         // serializes its initial backup with update, restore and deletion.

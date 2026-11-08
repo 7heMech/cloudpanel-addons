@@ -1,38 +1,37 @@
-// `clp-addons update`, and the rollback a failed one runs.
-
+import { errorMessage } from "../lib/errors";
 import { rmSync } from "node:fs";
-import { installedAddons, migrateOldAddonNames, revertAddonRenames } from "./addons";
+import { enabledAddons, phpGuardOptedOut } from "../addons/catalog";
+import { migrateOldAddonNames, revertAddonRenames } from "./addons";
 import {
   artifactNames, currentArtifactsMatch, installArtifacts, keepPreviousArtifacts, replaceArtifacts,
   rollbackUpdate,
 } from "./artifacts";
-import { reconcileAnchors, reconcileMaintenanceNginx, reconcileNginx } from "./reconcile";
-import { reconcilePhpGuard } from "./php-guard";
-import { type AddonSpec } from "./addon-catalog";
-import { keepNewsSince, recordNewsSince } from "./manager-action";
+import { reconcileAnchors, reconcileNginx, reconcilePanelBlocks } from "./reconcile";
+import { reconcilePhpGuard } from "../lib/php-guard";
+import { type AddonSpec } from "../lib/addon-definition";
+import { keepNewsSince, recordNewsSince } from "../manager/action";
 import { operationLockEnv, withOperationLock } from "./operation-lock";
-import { CLI_BIN, LEGACY_GH, MANAGER_UNIT, RECONCILE_SERVICE } from "./paths";
+import { CLI_BIN, LEGACY_GH, MANAGER_UNIT, RECONCILE_SERVICE } from "../lib/paths";
 import {
-  ensureAuthHelperReady, ensureDirs, ensureServiceUser, installUnits, reconcilePanelIdentity,
-  removeLegacyUnits, startUnits, unitActive, writeConfig,
+  ensureAuthHelperReady, ensureDirs, ensureServiceUser, installUnits, reconcilePanelIdentity, removeLegacyUnits,
+  startUnits, writeConfig,
 } from "./provision";
-import {
-  CLI_VERSION, type FetchedArtifact, fetchVerified, type OnProgress, resolveRelease, verifyAttestation,
-} from "./release";
-import { fatal, log, parseFlags, requireRoot, run, tryRun } from "./util";
+import { unitActive } from "../lib/systemd";
+import { CLI_VERSION } from "../lib/version";
+import { type FetchedArtifact, fetchVerified, resolveRelease, verifyAttestation } from "./release";
+import type { OnProgress } from "../lib/log";
+import { fatal, log, requireRoot } from "../lib/log";
+import { parseFlags } from "./flags";
+import { run, tryRun } from "../lib/command";
 import { compareSemver, isPrerelease } from "../lib/semver";
 import { lockState } from "../lib/root-locks";
-/**
- * Reconcile all provisioning from the binary that owns the definitions.
- * Services restart last, after every generated file reflects this process.
- */
 function finalizeUpdate(beforeManagerRestart?: () => void): AddonSpec[] {
   // A failure from here on makes the binary that started this update restore
   // itself, and an earlier binary knows the renamed addons only by their old
   // names, so they go back first.
   const renames = migrateOldAddonNames();
   try {
-    const specs = installedAddons();
+    const specs = enabledAddons();
     ensureServiceUser();
     ensureDirs(specs);
     ensureAuthHelperReady();
@@ -43,9 +42,9 @@ function finalizeUpdate(beforeManagerRestart?: () => void): AddonSpec[] {
     installUnits(specs);
     ensureDirs(specs);
     reconcileAnchors(false);
-    if (!reconcileMaintenanceNginx(false)) log.warn("Nginx maintenance check needs manual repair");
+    if (!reconcilePanelBlocks(false)) log.warn("a change to CloudPanel's Nginx settings needs manual repair");
     if (!reconcileNginx(false)) log.warn("Nginx proxy needs manual repair");
-    reconcilePhpGuard(true);
+    reconcilePhpGuard(true, false, { optedOut: phpGuardOptedOut() });
     startUnits({ beforeManagerRestart });
     // Addon upkeep, such as a changed guard System Tweaks installs, would
     // otherwise wait for the next quarter-hour; it runs once this update lets go of the lock.
@@ -64,10 +63,7 @@ type UpdateOptions = {
   onProgress?: OnProgress;
 };
 
-/**
- * Updates release artifacts when necessary. If the binary moves, re-run this
- * same command as the installed copy and let only that process provision.
- */
+/** If the binary moves, the installed copy re-runs this command and only that process provisions. */
 export async function cmdUpdate(argv: string[], options: UpdateOptions = {}): Promise<void> {
   requireRoot("update");
   return withOperationLock("update", () => applyUpdate(argv, options));
@@ -84,7 +80,7 @@ export function lockHint(enabled: boolean, file?: string, rootUid?: number): str
 }
 
 function suggestLock(): void {
-  const hint = lockHint(installedAddons().some((spec) => spec.name === "system-tweaks"));
+  const hint = lockHint(enabledAddons().some((spec) => spec.name === "system-tweaks"));
   if (hint) log.plain(hint);
 }
 
@@ -132,18 +128,11 @@ async function applyUpdate(argv: string[], options: UpdateOptions): Promise<void
         "--no-self-update",
         `--updated-from=${current}`,
       ];
-      // Keeping the running binary aside happens before the boundary, because
-      // nothing has been replaced yet: there is no rollback to report, only an
-      // update that never started.
       try {
         keepPreviousArtifacts();
       } catch (error) {
-        fatal(`could not keep the running binary aside, so the update was not started: ${error instanceof Error ? error.message : String(error)}`);
+        fatal(`could not keep the running binary aside, so the update was not started: ${errorMessage(error)}`);
       }
-      // Everything from the replacement onwards is one boundary: the binary
-      // and its manifest are written here, so a failure between them is as
-      // much a half-finished update as a handoff that will not run. The
-      // rollback itself is outside it, so its own failure is not retried.
       let failure: string | null = null;
       const restoreNewsSince = keepNewsSince();
       try {
@@ -153,7 +142,7 @@ async function applyUpdate(argv: string[], options: UpdateOptions): Promise<void
         const state = unitActive(MANAGER_UNIT);
         if (state !== "active") failure = `${MANAGER_UNIT} is ${state} after the update`;
       } catch (error) {
-        failure = error instanceof Error ? error.message : String(error);
+        failure = errorMessage(error);
       }
       if (failure) {
         restoreNewsSince();

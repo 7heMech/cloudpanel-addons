@@ -327,7 +327,10 @@ both, and the two ends of the check would read different values.
 sends: content type, `Cache-Control: no-store` and the security headers,
 applied before the caller's own headers so a deliberate override -- Maintenance
 Mode's preview CSP, the year-long cache on the editor mode asset -- is the only
-way to differ from the default. Caller headers are merged through `Headers`
+way to differ from the default. A page that needs another Content-Security-Policy
+builds it with `contentSecurityPolicy`, which replaces or adds directives by
+name, so a change to the default cannot leave an override silently matching
+nothing. Caller headers are merged through `Headers`
 rather than spread, because spreading a `Headers` instance yields nothing and
 silently drops what the caller asked for, and `Set-Cookie` is taken from the
 accessor that keeps repeated cookies apart rather than by name. The CSRF cookie

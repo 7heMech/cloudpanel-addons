@@ -14,8 +14,8 @@ export const MAX_UPLOAD_BYTES = 32 * 1024 * 1024;
 /** A WordPress.org download: some directory plugins are larger than anyone uploads. */
 export const MAX_DOWNLOAD_BYTES = 64 * 1024 * 1024;
 /** Everything in it once extracted, which is what the site's disk pays. */
-export const MAX_EXTRACTED_BYTES = 256 * 1024 * 1024;
-export const MAX_ENTRIES = 30_000;
+const MAX_EXTRACTED_BYTES = 256 * 1024 * 1024;
+const MAX_ENTRIES = 30_000;
 
 /** WordPress.org's own slugs: lowercase words joined by hyphens. */
 export const DIRECTORY_SLUG_RE = /^[a-z0-9](?:[a-z0-9-]{0,98}[a-z0-9])?$/;
@@ -24,7 +24,7 @@ export const DIRECTORY_SLUG_RE = /^[a-z0-9](?:[a-z0-9-]{0,98}[a-z0-9])?$/;
  * the directory's, since commercial plugins use underscores and capitals
  * (`js_composer`), and still a single plain name.
  */
-export const UPLOADED_SLUG_RE = /^[A-Za-z0-9][A-Za-z0-9._-]{0,99}$/;
+const UPLOADED_SLUG_RE = /^[A-Za-z0-9][A-Za-z0-9._-]{0,99}$/;
 
 export interface PluginZip {
   /** The folder the plugin unpacks into. */

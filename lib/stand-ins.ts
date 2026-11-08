@@ -5,15 +5,15 @@
  */
 import { Database } from "bun:sqlite";
 import { existsSync, lstatSync, readFileSync } from "node:fs";
-import { PANEL_DB, STATE_DIR } from "./paths";
+import { PANEL_DB, addonStateDir } from "./paths";
 
-export const STAND_INS_FILE = `${STATE_DIR}/dns/standins.json`;
+export const STAND_INS_FILE = `${addonStateDir("dns")}/standins.json`;
 
 /** Longer than creating a stand-in takes; until it is created its record has no site id. */
 const CREATING_MS = 15 * 60_000;
 
 /** How DNS's record of a stand-in names its site: the user it chose, and CloudPanel's id once the site exists. */
-export interface StandInMark {
+interface StandInMark {
   siteUser?: string;
   siteId?: number;
   createdAt?: number;
@@ -29,7 +29,6 @@ export function isStandInSite(mark: StandInMark | undefined, site: { id: number;
   return mark.siteId !== undefined ? mark.siteId === site.id : now - (mark.createdAt ?? 0) < CREATING_MS;
 }
 
-/** Whether DNS may change or delete the panel site: only once it has recorded the site's id. */
 export function ownsStandInSite(mark: StandInMark | undefined, site: { id: number; user?: string }): boolean {
   return mark?.siteId !== undefined && isStandInSite(mark, site);
 }
@@ -45,10 +44,6 @@ function readMarks(file: string, rootUid: number): Record<string, StandInMark> {
   }
 }
 
-/**
- * The stand-ins' domains; none when DNS has made none, or the record is not root's own.
- * An open database is read as it is, so a caller's snapshot and this agree on the rows.
- */
 export function standInDomains(file = STAND_INS_FILE, rootUid = 0, panelDb: string | Database = PANEL_DB): Set<string> {
   const marks = readMarks(file, rootUid);
   if (Object.keys(marks).length === 0) return new Set();

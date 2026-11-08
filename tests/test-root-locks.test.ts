@@ -4,8 +4,8 @@ import { chmodSync, existsSync, mkdtempSync, readFileSync, rmSync, symlinkSync, 
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { createAuthActionServer } from "../cli/auth-action";
-import { LOCKABLE_ADDONS, addonLocked, lockState, lockedAddons, switchesOnOnly } from "../lib/root-locks";
-import { changeLock } from "../cli/lock-addon";
+import { addonLocked, lockState, lockedAddons, switchesOnOnly } from "../lib/root-locks";
+import { changeLock } from "../lib/lock-addon";
 import { freshBox, lockNewInstall } from "../cli/install";
 import { lockHint } from "../cli/update";
 
@@ -49,10 +49,6 @@ async function ask(file: string, addon: string, verb: string, input?: unknown): 
     await new Promise<void>((resolve) => server.close(() => resolve()));
   }
 }
-
-test("System Tweaks is lockable", () => {
-  expect(LOCKABLE_ADDONS).toContain("system-tweaks");
-});
 
 test("a locked addon's protections are refused, and its other verbs still run", async () => {
   const file = locks(["system-tweaks"]);

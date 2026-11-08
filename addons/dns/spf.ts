@@ -26,7 +26,7 @@ interface ParsedSpf {
   modifiers: Term[];
 }
 
-export type SpfMerge =
+type SpfMerge =
   | { ok: true; value: string; changed: boolean }
   | { ok: false; problem: string };
 

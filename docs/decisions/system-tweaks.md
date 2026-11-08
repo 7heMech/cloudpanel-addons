@@ -323,7 +323,9 @@ The guard stays platform-wide (see [Security](security.md#php-session-upload-pro
 install, update and repair write it whenever any addon is installed. System
 Tweaks is where it is shown and the only place to opt out. The opt-out is
 `uploadProgressGuard: false` in `/var/lib/clp-addons/system-tweaks/settings.json`,
-and `cli/php-guard.ts` honours it only while `system-tweaks.conf` exists.
+which the addon reports through its `phpGuardOff` hook; the catalog asks only
+enabled addons, so it counts only while `system-tweaks.conf` exists, and a
+settings file System Tweaks itself would not trust leaves the guard on.
 The shared disable path reconciles the guard once the config is gone.
 Disabling puts it back even when no addon is left, because the binary stays and
 repair keeps the guard while it is installed; `self-uninstall` removes it with
@@ -759,7 +761,11 @@ syncs ignore failure so PHP-FPM still reloads, and the 15-minute repair loads
 the table again. A unit whose reload lines cannot be
 read, such as one with a continued line, gets the sync after its reload only.
 The page's "On" compares each drop-in with the unit's current reload lines, so
-a package update that changes them is fixed by the next repair.
+a package update that changes them is fixed by the next repair. Because it
+compares files, a `systemctl daemon-reload` that fails after the drop-ins are
+written puts the previous files back and fails the change, so the next repair
+writes them and reloads again; one that fails after they are removed fails the
+switch-off, since the units would still load the table at their next reload.
 `ExecStartPost=` is not used: the units are `Type=notify` with a `PIDFile=`,
 and with a start-post command systemd waits for a PID file PHP-FPM does not
 write, so the start times out. The sync reads the setting without
@@ -986,7 +992,8 @@ than part of the nginx one.
 wrapper with `clpctl-wrapper.sh`. It reads `SUDO_USER` as clpctl does: root, `clp`
 and an empty caller run CloudPanel's original wrapper unchanged, since they are
 already root-equivalent and tightening them only risks breaking the panel. Every
-other caller may run only the four commands. Each option value is first checked
+other caller may run only `db:export`, `system:permissions:reset` and
+`varnish-cache:purge`. Each option value is first checked
 against an allowlist that admits no backslash, quote, backtick, `$`, `;` or
 newline — a `--databaseName` of letters, digits, underscore and hyphen; a
 `--directories`/`--files` octal mode; a `--purge` of `all`, a tag list, or a
@@ -1316,7 +1323,9 @@ or root can log in with one, and how to change it.
 ### The service
 
 The jails need `fail2ban`, `python3-systemd` and `nftables`; the page offers to
-install whichever are missing, and does nothing until they are there. Writing
+install whichever are missing, and does nothing until they are there. A package
+counts as there when dpkg's status ends in `installed`, so one held back with
+`apt-mark hold` counts too. Writing
 the files runs `fail2ban-client -t`, and a refused config puts the files back.
 A running fail2ban is reloaded, a stopped or failed one restarted and enabled
 at boot. A masked unit is left alone.

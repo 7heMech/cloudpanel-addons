@@ -768,8 +768,8 @@
           if (first) first.focus();
         });
         // Whatever the operator picked is now under way; the menu has no more
-        // to say. The event still reaches the document, where the sign-in
-        // addon's own listener is waiting for it.
+        // to say. The event still reaches the document, where WP Tools' and
+        // Terminal's own link listeners wait for it.
         list.addEventListener("click", function () { close(); });
       }
 

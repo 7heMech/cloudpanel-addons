@@ -55,7 +55,6 @@ async function askStop(domain) {
   if (agreed) act(domain, 'stop');
 }
 
-/** True when version a is newer than b; both are x.y.z. */
 function versionNewer(a, b) {
   const x = a.split('.').map(Number);
   const y = b.split('.').map(Number);
@@ -69,7 +68,7 @@ function askUpdate(domain, current) {
   document.getElementById('update-domain').textContent = domain;
   document.getElementById('update-current').textContent = current;
 
-  // Only versions newer than the one running: an update never goes back.
+  // An update never goes back.
   const sel = document.getElementById('update-tag');
   let chosen = '';
   for (let i = 0; i < sel.options.length; i++) {
@@ -79,7 +78,6 @@ function askUpdate(domain, current) {
     opt.disabled = !newer;
     if (newer && !chosen) chosen = opt.value;
   }
-  // Options are newest first, so the first one left is the newest on offer.
   if (!chosen) { notify(domain + ' already runs the newest version.', 'ok'); return; }
   sel.value = chosen;
   document.getElementById('update-dialog').showModal();
@@ -96,7 +94,6 @@ async function confirmUpdate() {
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ tag: tag }),
     });
-    // The update runs as a job; its page streams the log as it goes.
     if (reply.data && reply.data.job) {
       location.href = CLP_BASE + '/jobs/' + encodeURIComponent(reply.data.job);
       return;
@@ -109,7 +106,6 @@ async function confirmUpdate() {
   }
 }
 
-/** Updates or restarts the selected sites; each update is a job of its own, shown on its row. */
 async function bulkInstatic(verb, tag) {
   let rows = selectedRows();
   if (verb === 'update') rows = rows.filter(function (row) { return versionNewer(tag, row.dataset.tag); });
@@ -147,7 +143,6 @@ async function bulkInstatic(verb, tag) {
   }
 }
 
-/** While a job runs, the list is fetched again every few seconds so each row shows where it is. */
 let dashboardTimer = null;
 function watchDashboard() {
   clearTimeout(dashboardTimer);
@@ -161,7 +156,6 @@ function watchDashboard() {
         paintFleetSelection();
       }
     } catch (error) {
-      // The next look tries again.
     }
     watchDashboard();
   }, 4000);

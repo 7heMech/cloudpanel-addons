@@ -1,4 +1,3 @@
-/** Show only the directives the chosen process manager actually reads. */
 function paintProfileModes() {
   const root = CLP_ROOT.getElementById('category-profile');
   if (!root) return;
@@ -8,9 +7,8 @@ function paintProfileModes() {
   });
 }
 
-// Reads the dialog, or reports the first field that is not a whole number and
-// returns null. The server checks all of this again; refusing here is only so
-// an obvious slip does not cost a round trip.
+// The server checks all of this again; refusing here is only so an obvious
+// slip does not cost a round trip.
 function readProfile() {
   const root = CLP_ROOT.getElementById('category-profile');
   if (!root) return null;
@@ -50,7 +48,6 @@ function paintResources(html) {
   hold(false);
 }
 
-/** What to say when a change landed on some sites and not on others. */
 function withFailures(message, failures) {
   if (!failures || !failures.length) return { message: message, kind: 'ok' };
   return {

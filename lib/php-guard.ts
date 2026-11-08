@@ -1,49 +1,48 @@
 // Platform PHP hardening, applied regardless of which addons are enabled.
-// System Tweaks shows it and is the only place to opt out; the opt-out counts
-// only while System Tweaks is enabled.
+// An enabled addon may switch it off (System Tweaks shows it and offers the
+// switch); the caller says whether one has.
 //
 // Session upload progress is one of the confirmed consumers of CVE-2026-109619
 // ("php2shell"), is on by default, and needs no session_start(); PHP's advisory
 // names disabling it as the administrative mitigation and recommends keeping it
 // off even after patching, as a hardly-used, hardly-tested feature. This writes
 // that setting on every installed PHP-FPM, including the end-of-life 8.1 the
-// panel runs on unless System Tweaks moved it. It does not address CVE-2026-109618, whose only
-// real fix is patched PHP; see docs/decisions/security.md.
+// panel runs on unless System Tweaks moved it. It does not address
+// CVE-2026-109618, whose only real fix is patched PHP; see
+// docs/decisions/security.md.
 
-import { existsSync, lstatSync, readFileSync, readdirSync, rmSync } from "node:fs";
+import { existsSync, readdirSync } from "node:fs";
 import { join } from "node:path";
-import { writeFileAtomic } from "../lib/atomic-write";
-import { CONFIG_DIR, PANEL_FPM_UNIT, PHP_FPM_BIN_DIR, PHP_GUARD_INI_NAME, PHP_ROOT, ROOT_UID, STATE_DIR } from "./paths";
-import { errorMessage } from "./action-common";
+import { writeOrRemove } from "./atomic-write";
+import { trustedText } from "./trusted-file";
+import { PANEL_FPM_UNIT, PHP_FPM_BIN_DIR, PHP_GUARD_INI_NAME, PHP_ROOT, ROOT_UID } from "./paths";
+import { errorMessage } from "./errors";
 import { withRecoveryFailures } from "./nginx-transaction";
-import { unitActive } from "./provision";
-import { log, tryRun } from "./util";
+import { unitActive } from "./systemd";
+import { log } from "./log";
+import { tryRun } from "./command";
 
 const INI_BODY = "; Managed by clp-addons: CVE-2026-109619 session upload-progress mitigation\nsession.upload_progress.enabled = Off\n";
 const VERSION_RE = /^[0-9]+\.[0-9]+$/;
 
-export interface PhpGuardPaths {
+interface PhpGuardPaths {
   phpRoot: string;
   fpmBinDir: string;
   panelFpmUnit: string;
   /** The uid a drop-in must belong to for its contents to be trusted. */
   rootUid: number;
-  /** System Tweaks' config file: the opt-out below counts only while it exists. */
-  optOutConfig: string;
-  /** System Tweaks' settings, where `uploadProgressGuard: false` is the opt-out. */
-  optOutSettings: string;
 }
 
-export const DEFAULT_PHP_GUARD_PATHS: PhpGuardPaths = {
+const DEFAULT_PHP_GUARD_PATHS: PhpGuardPaths = {
   phpRoot: PHP_ROOT,
   fpmBinDir: PHP_FPM_BIN_DIR,
   panelFpmUnit: PANEL_FPM_UNIT,
   rootUid: ROOT_UID,
-  optOutConfig: `${CONFIG_DIR}/system-tweaks.conf`,
-  optOutSettings: `${STATE_DIR}/system-tweaks/settings.json`,
 };
 
 export interface PhpGuardOptions {
+  /** An enabled addon has the guard switched off. */
+  optedOut?: boolean;
   paths?: Partial<PhpGuardPaths>;
   run?: (cmd: string, args: string[]) => { ok: boolean; out: string };
   isActive?: (unit: string) => boolean;
@@ -56,7 +55,6 @@ interface FpmTarget {
   present: boolean;
 }
 
-/** Every `<X.Y>/fpm/conf.d` present under the PHP root, with whether its FPM binary is installed. */
 function fpmTargets(paths: PhpGuardPaths): FpmTarget[] {
   if (!existsSync(paths.phpRoot)) return [];
   return readdirSync(paths.phpRoot)
@@ -69,39 +67,16 @@ function fpmTargets(paths: PhpGuardPaths): FpmTarget[] {
     }));
 }
 
-/** Current drop-in contents, or null when absent; a symlink or untrusted file is treated as absent so it is overwritten. */
 function current(path: string, rootUid: number): string | null {
-  let info;
-  try {
-    info = lstatSync(path);
-  } catch {
-    return null;
-  }
   // Owner and mode, not content alone: a drop-in left group- or world-writable,
   // or replaced by a symlink, is one the next reconcile should rewrite to 0644.
-  if (!info.isFile() || info.uid !== rootUid || (info.mode & 0o022) !== 0) return null;
-  return readFileSync(path, "utf8");
+  return trustedText(path, rootUid);
 }
 
-/** Whether an operator turned the guard off in System Tweaks, which must still be enabled. */
-export function phpGuardOptedOut(options: PhpGuardOptions = {}): boolean {
-  const paths = { ...DEFAULT_PHP_GUARD_PATHS, ...options.paths };
-  if (!existsSync(paths.optOutConfig)) return false;
-  const text = current(paths.optOutSettings, paths.rootUid);
-  if (text === null) return false;
-  try {
-    return (JSON.parse(text) as { uploadProgressGuard?: unknown }).uploadProgressGuard === false;
-  } catch {
-    return false;
-  }
-}
-
-export interface PhpGuardStatus {
-  /** Versions whose FPM binary is installed and whose drop-in is in place. */
+interface PhpGuardStatus {
   guarded: string[];
-  /** Installed-FPM versions still missing the drop-in. */
   unguarded: string[];
-  /** Turned off in System Tweaks, so a missing drop-in is wanted. */
+  /** Switched off by an enabled addon, so a missing drop-in is wanted. */
   optedOut: boolean;
 }
 
@@ -113,15 +88,10 @@ export function inspectPhpGuard(options: PhpGuardOptions = {}): PhpGuardStatus {
     if (!target.present) continue;
     (current(target.path, paths.rootUid) === INI_BODY ? guarded : unguarded).push(target.version);
   }
-  return { guarded, unguarded, optedOut: phpGuardOptedOut(options) };
+  return { guarded, unguarded, optedOut: options.optedOut ?? false };
 }
 
-/**
- * Installs or removes the drop-in on every PHP-FPM, testing and reloading each
- * one it changed. Returns how many files changed. Reloads the panel's own FPM
- * too, since it scans the `conf.d` of whichever version runs it. Failures restore written files
- * and reload services that may have picked up the change.
- */
+/** The panel's own FPM is reloaded too: it scans the `conf.d` of whichever version runs it. */
 export function reconcilePhpSessionGuard(install: boolean, options: PhpGuardOptions = {}): number {
   const paths = { ...DEFAULT_PHP_GUARD_PATHS, ...options.paths };
   const run = options.run ?? ((cmd: string, args: string[]) => tryRun(cmd, args));
@@ -134,8 +104,7 @@ export function reconcilePhpSessionGuard(install: boolean, options: PhpGuardOpti
   });
   if (changes.length === 0) return 0;
 
-  const write = (path: string, content: string | null) =>
-    content === null ? rmSync(path, { force: true }) : writeFileAtomic(path, content, { mode: 0o644 });
+  const write = (path: string, content: string | null) => writeOrRemove(path, content, { mode: 0o644 });
   const written: typeof changes = [];
   const attemptedReloads: string[] = [];
   const reload = (unit: string) => {
@@ -176,13 +145,13 @@ export function reconcilePhpSessionGuard(install: boolean, options: PhpGuardOpti
 }
 
 /**
- * After a disable: System Tweaks'
- * opt-out may just have stopped counting. The addon is already gone, so a
- * failure warns and leaves the guard to the repair timer.
+ * After a disable: System Tweaks' opt-out may just have stopped counting. The
+ * addon is already gone, so a failure warns and leaves the guard to the repair
+ * timer.
  */
-export function settlePhpGuard(): void {
+export function settlePhpGuard(options: PhpGuardOptions = {}): void {
   try {
-    reconcilePhpGuard(true);
+    reconcilePhpGuard(true, false, options);
   } catch (error) {
     log.warn(`PHP upload-progress guard not reconciled, repair will retry: ${errorMessage(error)}`);
   }
@@ -190,7 +159,7 @@ export function settlePhpGuard(): void {
 
 /** `install` is whether any addon is installed; System Tweaks' opt-out can still keep it off. */
 export function reconcilePhpGuard(install: boolean, quiet = false, options: PhpGuardOptions = {}): void {
-  const wanted = install && !phpGuardOptedOut(options);
+  const wanted = install && !options.optedOut;
   const changed = reconcilePhpSessionGuard(wanted, options);
   if (changed > 0 && !quiet) {
     log.ok(wanted

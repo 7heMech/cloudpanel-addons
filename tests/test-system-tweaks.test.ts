@@ -1,13 +1,16 @@
 import { afterEach, expect, mock, test } from "bun:test";
 import { Database } from "bun:sqlite";
-import { chmodSync, existsSync, lstatSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, statSync, writeFileSync } from "node:fs";
+import {
+  chmodSync, existsSync, lstatSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, statSync,
+  writeFileSync,
+} from "node:fs";
 import { X509Certificate } from "node:crypto";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
-import { runCommand, type CommandResult } from "../cli/action-common";
-import { inspectPhpGuard, reconcilePhpGuard, type PhpGuardOptions } from "../cli/php-guard";
+import { runCommand, type CommandResult } from "../lib/command";
+import { inspectPhpGuard, reconcilePhpGuard, type PhpGuardOptions } from "../lib/php-guard";
 import {
-  executeSystemTweaksAction, readSettings, restoreSystemTweaks, systemTweaksMaintenance, systemTweaksMotd, systemTweaksPhpMyAdmin, systemTweaksPhpPools, systemTweaksUpkeep, withdrawSystemTweaks,
+  executeSystemTweaksAction, readSettings, restoreSystemTweaks, systemTweaksMaintenance, systemTweaksMotd, systemTweaksPhpGuardOff, systemTweaksPhpMyAdmin, systemTweaksPhpPools, systemTweaksUpkeep, withdrawSystemTweaks,
   type SystemTweaksOptions, type SystemTweaksPaths, type SystemTweaksState,
 } from "../addons/system-tweaks/action";
 import {
@@ -268,13 +271,6 @@ function dumpOf(aptDir: string): string {
   return out.join("\n");
 }
 
-/** `systemctl show` for units none of which are installed. */
-function noUnits(command: string, args: string[]): CommandResult {
-  if (command !== "env" || args[2] !== "show") return { ok: true, stdout: "", stderr: "" };
-  const names = args.slice(3).filter((arg, index, all) => !arg.startsWith("-") && all[index - 1] !== "-p");
-  return { ok: true, stdout: names.map((name) => `Id=${name}\nLoadState=not-found\nActiveState=inactive\n`).join("\n"), stderr: "" };
-}
-
 function box(options: { installed?: boolean; timers?: Record<string, string>; failEnable?: string[]; log?: string } = {}): Box {
   const dir = tempDir();
   const aptDir = join(dir, "apt.conf.d");
@@ -448,7 +444,7 @@ function box(options: { installed?: boolean; timers?: Record<string, string>; fa
   const phpGuard: PhpGuardOptions = {
     run: () => ({ ok: true, out: "" }),
     isActive: () => false,
-    paths: { phpRoot, fpmBinDir: sbin, rootUid: uid, optOutConfig: guardConfig, optOutSettings: settingsFile },
+    paths: { phpRoot, fpmBinDir: sbin, rootUid: uid },
   };
   return {
     pools, aptDir, commands, timers, phpRoot, guardConfig, settingsFile, installed, nginxConf, panelConf, cloudflareIps, nginx, fpm, panelVhost, vhostGuardPaths, valuesDb, varnish,
@@ -790,7 +786,7 @@ function systemTweaksClient() {
       return line;
     },
   };
-  const client = new Function("call", "busy", "notify", "clearNotice", "repaintView", "CLP_ROOT", "clpFlashTimer", "document", "confirmAction",
+  const client = new Function("call", "busy", "notify", "clearNotice", "repaintView", "CLP_ROOT", "clpFlashTimer", "document", "location", "confirmAction",
     `${source}\nreturn { installUpdates, setUpdates, setPanelPhp, setSwitch, lockSettings };`)(
     (path: string, options: { body: string }) => new Promise((answer) => {
       events.push(`POST ${path} ${options.body}`);
@@ -803,6 +799,8 @@ function systemTweaksClient() {
     { getElementById: () => ({}), querySelector: () => null, querySelectorAll: () => [] },
     0,
     document,
+    // The page is repainted from each reply; reloading it would lose the notice.
+    { reload: () => events.push("reload") },
     async () => true,
   ) as Record<"installUpdates" | "setUpdates" | "setPanelPhp" | "lockSettings", (control: unknown) => Promise<void>> & { setSwitch: (control: unknown, name: string) => Promise<void> };
   return { client, control, events, replies, lines };
@@ -817,7 +815,6 @@ test("a change says it is running on its own row, and repaints the page from its
   await pending;
   expect(events.slice(3)).toEqual(["idle", "repaint: <p>installed</p>", "ok: unattended-upgrades is installed."]);
   expect(lines.every((line) => line.removed)).toBe(true);
-  expect(readFileSync(join(import.meta.dir, "../addons/system-tweaks/app/views.client.js"), "utf8")).not.toContain("location.reload");
 });
 
 
@@ -1182,7 +1179,9 @@ test("both guards install as one file each, with the shared session reader in pl
   for (const path of [b.vhostGuardPaths.script, b.fileManagerGuardPaths.script]) {
     const text = readFileSync(path, "utf8");
     expect(text).not.toContain("panel-session.php");
-    expect(text).toContain("preg_match('/\\A[A-Za-z0-9,-]{1,128}\\z/', $id)");
+    // One file: nothing beside it left to include, and the cookie is read in place.
+    expect(text).not.toMatch(/\b(require|include)(_once)?\s*\(?\s*__DIR__/);
+    expect(text).toContain("$_COOKIE['cloudpanel']");
   }
 });
 
@@ -1563,22 +1562,27 @@ function guardFile(b: Box, version: string): string {
   return join(b.phpRoot, version, "fpm", "conf.d", "99-clp-addons-upload-progress.ini");
 }
 
+/** What the platform passes the guard: System Tweaks' switch counts while its config exists, as the catalog asks it. */
+function platformGuard(b: Box): PhpGuardOptions {
+  return { ...b.options.phpGuard, optedOut: existsSync(b.guardConfig) && systemTweaksPhpGuardOff(b.options) };
+}
+
 test("an existing installation keeps the guard without System Tweaks", () => {
   const b = box();
   rmSync(b.guardConfig);
-  reconcilePhpGuard(true, true, b.options.phpGuard);
+  reconcilePhpGuard(true, true, platformGuard(b));
   expect(existsSync(guardFile(b, "8.1"))).toBe(true);
   // A stored opt-out counts for nothing while System Tweaks is not enabled.
   mkdirSync(join(b.settingsFile, ".."), { recursive: true });
   writeFileSync(b.settingsFile, JSON.stringify({ version: 1, uploadProgressGuard: false }), { mode: 0o600 });
-  reconcilePhpGuard(true, true, b.options.phpGuard);
+  reconcilePhpGuard(true, true, platformGuard(b));
   expect(existsSync(guardFile(b, "8.3"))).toBe(true);
-  expect(inspectPhpGuard(b.options.phpGuard).optedOut).toBe(false);
+  expect(inspectPhpGuard(platformGuard(b)).optedOut).toBe(false);
 });
 
 test("opting out in System Tweaks removes the guard, and repair keeps it removed", async () => {
   const b = box();
-  reconcilePhpGuard(true, true, b.options.phpGuard);
+  reconcilePhpGuard(true, true, platformGuard(b));
   writeFileSync(join(b.phpRoot, "8.3", "fpm", "conf.d", "30-custom.ini"), "session.upload_progress.enabled = Off\n");
   const state = await act(b, ["set-upload-guard"], { enabled: false });
   expect(state.uploadProgress.guard).toBe(false);
@@ -1588,13 +1592,13 @@ test("opting out in System Tweaks removes the guard, and repair keeps it removed
     ["PHP 8.3", false, "config"],
     ["CloudPanel (PHP 8.3)", false, "config"],
   ]);
-  reconcilePhpGuard(true, true, b.options.phpGuard);
+  reconcilePhpGuard(true, true, platformGuard(b));
   expect(existsSync(guardFile(b, "8.1"))).toBe(false);
-  expect(inspectPhpGuard(b.options.phpGuard).optedOut).toBe(true);
+  expect(inspectPhpGuard(platformGuard(b)).optedOut).toBe(true);
 
   // Without System Tweaks' config the opt-out no longer counts.
   rmSync(b.guardConfig);
-  reconcilePhpGuard(true, true, b.options.phpGuard);
+  reconcilePhpGuard(true, true, platformGuard(b));
   expect(existsSync(guardFile(b, "8.1"))).toBe(true);
 
   // Enabling it again honours the stored opt-out.
@@ -1971,7 +1975,7 @@ function lockableBox(): Box & { locks: { file: string; rootUid: number; lockFile
     ...b.options.loginJails,
     run: (command, args) => ({
       ok: true, stderr: "",
-      stdout: command === "dpkg-query" ? "install ok installed" : command === "systemctl" && args[0] === "is-enabled" ? "enabled\n"
+      stdout: command === "dpkg-query" ? "install ok installed\t1.1.0-1" : command === "systemctl" && args[0] === "is-enabled" ? "enabled\n"
         : command === "systemctl" && args[0] === "is-active" ? "active\n" : command === "fail2ban-client" ? "Jail list:\t\n" : "",
     }),
   };

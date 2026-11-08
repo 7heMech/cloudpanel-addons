@@ -1,14 +1,27 @@
 // Local UI review with fictional data. Never starts the manager, reads panel
 // state or invokes an action. Supported mutations change fictional data only.
 import { indexPage, updatePage } from "../manager/views";
-import { dashboardView as cloudflareDashboardView, layout as cloudflareLayout } from "../addons/cloudflare-ips/app/views";
-import { dashboardView, layout as instaticLayout, newInstanceView, jobView as instaticJobView } from "../addons/instatic/app/views";
-import { jobsView, jobView, layout as stagerLayout, fragment as stagerFragment, newCloneView, promoteView, siteStagingView } from "../addons/stager/app/views";
-import { fleetView as gitFleetView, fragment as gitFragment, layout as gitLayout, siteView as gitSiteView } from "../addons/git/app/views";
+import {
+  dashboardView as cloudflareDashboardView, layout as cloudflareLayout,
+} from "../addons/cloudflare-ips/app/views";
+import {
+  dashboardView, layout as instaticLayout, newInstanceView, jobView as instaticJobView,
+} from "../addons/instatic/app/views";
+import {
+  jobsView, jobView, layout as stagerLayout, fragment as stagerFragment, newCloneView, promoteView, siteStagingView,
+} from "../addons/stager/app/views";
+import {
+  fleetView as gitFleetView, fragment as gitFragment, layout as gitLayout, siteView as gitSiteView,
+} from "../addons/git/app/views";
 import type { GitSiteStatus } from "../addons/git/app/service";
-import { fleetView as maintenanceFleetView, fragment as maintenanceFragment, layout as maintenanceLayout, siteView as maintenanceSiteView } from "../addons/maintenance/app/views";
+import {
+  fleetView as maintenanceFleetView, fragment as maintenanceFragment, layout as maintenanceLayout,
+  siteView as maintenanceSiteView,
+} from "../addons/maintenance/app/views";
 import type { MaintenanceFleet, MaintenanceSiteView } from "../addons/maintenance/app/service";
-import { dashboardView as resourceLimitsDashboardView, layout as resourceLimitsLayout } from "../addons/resource-limits/app/views";
+import {
+  dashboardView as resourceLimitsDashboardView, layout as resourceLimitsLayout,
+} from "../addons/resource-limits/app/views";
 import { dashboardView as smtpDashboardView, layout as smtpLayout } from "../addons/smtp/app/views";
 import type { SmtpState } from "../addons/smtp/action";
 import { dashboardView as dnsDashboardView, layout as dnsLayout } from "../addons/dns/app/views";
@@ -17,7 +30,9 @@ import type { SitePlan as DnsSitePlan } from "../addons/dns/engine";
 import type { Redirect as DnsRedirect } from "../addons/dns/model";
 import { PRESETS as DNS_PRESETS, seededPolicy as dnsSeededPolicy } from "../addons/dns/presets";
 import { tokenTemplate as dnsTokenTemplate } from "../addons/dns/token";
-import { dashboardView as panelTweaksDashboardView, layout as panelTweaksLayout } from "../addons/panel-tweaks/app/views";
+import {
+  dashboardView as panelTweaksDashboardView, layout as panelTweaksLayout,
+} from "../addons/panel-tweaks/app/views";
 import { siteLayoutTarget } from "../lib/panel-nav";
 import { sitesBlock } from "../addons/panel-tweaks/inject/targets";
 import { previewPage as panelTweaksPreviewPage } from "../addons/panel-tweaks/app/preview";
@@ -30,12 +45,16 @@ import {
   WP_TOOLS_TARGETS, newSiteDoneSnippet as wpToolsNewSiteDone, newSiteFormSnippet as wpToolsNewSiteForm, siteInfoSnippet as wpToolsSiteInfo,
 } from "../addons/wp-tools/inject/targets";
 import type { NewSitePlugin, NewSiteResult } from "../addons/wp-tools/new-site-plugins";
-import { dashboardBody as wpToolsDashboardBody, dashboardView as wpToolsDashboardView, layout as wpToolsLayout } from "../addons/wp-tools/app/views";
+import {
+  dashboardBody as wpToolsDashboardBody, dashboardView as wpToolsDashboardView, layout as wpToolsLayout,
+} from "../addons/wp-tools/app/views";
 import type { MainwpSiteView, MainwpView } from "../addons/wp-tools/mainwp";
 import { WORDPRESS_APPLICATIONS, type WpJobView, type WpSiteView } from "../addons/wp-tools/action";
 import { siteTabs, type SiteContext } from "../lib/site-context";
 import { DEFAULT_MAINTENANCE_TEMPLATE } from "../addons/maintenance/action";
-import { PRESET_CATEGORIES, STOCK_PROFILE, type ResourceLimitsState, type PoolSiteState } from "../addons/resource-limits/action";
+import {
+  PRESET_CATEGORIES, STOCK_PROFILE, type ResourceLimitsState, type PoolSiteState,
+} from "../addons/resource-limits/action";
 import type { MeasureJobView, PanelTweaksState } from "../addons/panel-tweaks/action";
 import { DEFAULT_BRANDING } from "../addons/panel-tweaks/branding";
 import type { PanelPhpStatus } from "../addons/system-tweaks/panel-php";
@@ -47,10 +66,14 @@ import { withCsrfCookie, SECURITY_HEADERS } from "../lib/app-http";
 import { handle as terminalHandle } from "../addons/terminal/app/index";
 import { dashboardView as terminalDashboardView, layout as terminalLayout } from "../addons/terminal/app/views";
 import { TERMINAL_TARGETS } from "../addons/terminal/inject/targets";
-import { dashboardView as securityKeysDashboardView, layout as securityKeysLayout } from "../addons/security-keys/app/views";
+import {
+  dashboardView as securityKeysDashboardView, layout as securityKeysLayout,
+} from "../addons/security-keys/app/views";
 import { SECURITY_KEYS_TARGETS } from "../addons/security-keys/inject/targets";
 import type { UserKeysView } from "../addons/security-keys/action";
-import { dashboardView as systemTweaksDashboardView, layout as systemTweaksLayout } from "../addons/system-tweaks/app/views";
+import {
+  dashboardView as systemTweaksDashboardView, layout as systemTweaksLayout,
+} from "../addons/system-tweaks/app/views";
 import type { SystemTweaksState } from "../addons/system-tweaks/action";
 import type { LockState } from "../lib/root-locks";
 import { MEMORY_PROFILES, memoryPlan, type MemoryProfile, type MemorySettings } from "../addons/resource-limits/memory";
@@ -191,8 +214,11 @@ function dnsPreviewReview(state: DnsState): DnsReview {
   };
 }
 
-/** Profiles and a mixed fleet. ?setup shows a first visit, ?empty a box with no sites. */
-/** ?setup shows a fresh box, ?discard-default a Don't send default, ?many enough sites for search and filter. */
+/**
+ * Profiles and a mixed fleet. ?setup shows a fresh box, ?empty a box with no
+ * sites, ?discard-default a Don't send default, ?many enough sites for search
+ * and filter.
+ */
 function smtpPreviewState(url: URL): SmtpState {
   const setup = url.searchParams.has("setup");
   const dontSend = { id: "dont-send", name: "Don't send", relay: null, sender: "noreply@{site}", sites: setup ? 0 : 1 };
@@ -357,13 +383,6 @@ function maintenancePreviewMutation(path: string, source: URL, body: Record<stri
   });
 }
 
-/**
- * The Staging tab's content for one site.
- *
- * Both ends of a clone, because the page answers two questions and a fixture
- * showing only one would hide half the view: `?staged-from=1` makes this site a
- * clone of another, which is what puts the Promote section on screen.
- */
 function previewSiteStaging(domain: string, siteType: string, url: URL): string {
   const base: JobView = {
     id: "preview-clone", kind: "clone", source: "", target: "", port: 0, state: "done",
@@ -377,7 +396,8 @@ function previewSiteStaging(domain: string, siteType: string, url: URL): string 
     { ...base, id: "preview-clone-1", source: domain, target: `stg.${domain}` },
     { ...base, id: "preview-clone-2", source: domain, target: `qa.${domain}`, state: "running", step: "copying files" },
   ];
-  // ?staged-from draws the site as a staging copy of live.example.com, promoted once.
+  // ?staged-from draws the site as a staging copy of live.example.com, promoted
+  // once, which puts the Promote section on screen.
   if (url.searchParams.has("staged-from")) {
     jobs.push({ ...base, id: "preview-clone-3", source: "live.example.com", target: domain, result: job.result });
     jobs.push({ ...base, id: "preview-promote-1", kind: "promote", source: domain, target: "live.example.com", createdAt: "2026-09-12T14:05:00Z" });
@@ -486,7 +506,6 @@ function resourceLimitsPreviewState(url: URL): ResourceLimitsState {
   };
 }
 
-/** The panel moved to 8.4 with an update waiting; `?off` is CloudPanel's own 8.1. */
 let panelPhpChoice: string | null = null;
 
 let systemTweaksPreview: SystemTweaksState | null = null;
@@ -503,15 +522,16 @@ function previewTheme(html: string, url: URL): string {
 }
 
 /**
- * ?updates=missing|outside|off|on picks how unattended-upgrades stands, and
- * ?guard=off shows the upload-progress mitigation opted out, and ?realip=off
- * leaves X-Real-IP trusted from any address, ?vhost=off leaves panel
- * input unchecked, and ?injected lists stored settings the guard would refuse. ?reboot switches automatic reboot
- * on, ?at=03:30 sets its time, and ?overdue dates the required reboot weeks back.
- * ?fail2ban=missing shows fail2ban not installed, ?bans=0 no blocked addresses, and ?nodomain no custom domain.
- * ?db=open|unknown|local|pending picks where MySQL listens (firewalled by default),
- * ?dbremote shows a client connected from elsewhere and ?dbroot root's default password.
- * ?locked shows root's lock, and ?locked=damaged a lock file that cannot be trusted.
+ * ?updates=missing|outside|off|on picks how unattended-upgrades stands,
+ * ?guard=off shows the upload-progress mitigation opted out, ?realip=off leaves
+ * X-Real-IP trusted from any address, ?vhost=off leaves panel input unchecked,
+ * and ?injected lists stored settings the guard would refuse. ?reboot switches
+ * automatic reboot on, ?at=03:30 sets its time, and ?overdue dates the required
+ * reboot weeks back. ?fail2ban=missing shows fail2ban not installed, ?bans=0 no
+ * blocked addresses, and ?nodomain no custom domain. ?db=open|unknown|local|pending
+ * picks where MySQL listens (firewalled by default), ?dbremote shows a client
+ * connected from elsewhere and ?dbroot root's default password. ?locked shows
+ * root's lock, and ?locked=damaged a lock file that cannot be trusted.
  */
 function databasePreviewState(url: URL): Exclude<SystemTweaksState["database"], { error: string }> {
   const db = url.searchParams.get("db");
@@ -726,6 +746,7 @@ function systemTweaksPreviewMutation(path: string, source: URL, body: Record<str
   return Response.json({ ok: true, html: systemTweaksDashboardView(state, Date.now(), previewLock(source)) });
 }
 
+/** The panel moved to 8.4 with an update waiting; `?off` is CloudPanel's own 8.1. */
 function panelPhpPreviewStatus(url: URL): PanelPhpStatus {
   const wanted = panelPhpChoice ?? (url.searchParams.has("off") ? "" : "8.4");
   return {
@@ -1221,7 +1242,6 @@ const TERMINAL_TRANSCRIPT = [
 
 /** What the next popup shows: `?state=ended|moved|reconnecting|refused` on the popup page sets it. */
 let terminalPreviewState = "";
-/** Whether the last popup opened was the root shell. */
 let terminalPreviewRoot = false;
 
 /**
@@ -1564,7 +1584,7 @@ const finishedPreviewJobs = new Set<string>();
 let previewEnabled: string[] | null = null;
 let phpChanges: ResourceLimitsState | null = null;
 const previewDeployments = new Map<string, GitSiteStatus>();
-let previewManagerJob: import("../cli/manager-action").ManagerJobView | null = null;
+let previewManagerJob: import("../manager/action").ManagerJobView | null = null;
 let previewJobNumber = 0;
 
 /**
@@ -1992,10 +2012,8 @@ const server = Bun.serve({
         csrf: "preview-csrf-token",
         version: "2.0.0",
       });
-      // ?confirm=<addon> opens the disable dialog on load. A modal only exists
-      // after a click, and the screenshot tool does not click; without this the
-      // one dialog an operator sees before turning an addon off cannot be
-      // reviewed the way every other view can.
+      // ?confirm=<addon> opens the disable dialog on load: a modal exists only
+      // after a click, which the screenshot tool does not make.
       const openDialog = url.searchParams.get("confirm");
       const body = previewTheme(await page.text(), url);
       if (!openDialog) return new Response(body, { headers: page.headers });
@@ -2085,11 +2103,10 @@ const server = Bun.serve({
       html = resourceLimitsLayout("Resource Limits", resourceLimitsDashboardView(phpChanges ?? resourceLimitsPreviewState(url)), notice)
         .replace("</body>", () => opener ? `<script>addEventListener("DOMContentLoaded",function(){${opener}})</script></body>` : "</body>");
     } else if (path === "/addons/dns/" || path === "/addons/dns") {
-      // ?dialog=profile|advanced|new|review|site|pending|choose|connection|mailcow|server|redirect|new-redirect|redirect-site|found opens
-      // that dialog on load; ?ask shows DNS
-      // before Automatic is turned on;
-      // ?at=<selector> hides the cards above that one, for a phone screenshot of something below the fold; ?dark
-      // draws the dark theme.
+      // ?dialog=profile|advanced|new|review|site|pending|choose|connection|mailcow|server|redirect|new-redirect|redirect-site|found
+      // opens that dialog on load; ?ask shows DNS before Automatic is turned on;
+      // ?at=<selector> hides the cards above that one, for a phone screenshot of
+      // something below the fold; ?dark draws the dark theme.
       const state = dnsPreviewState(url);
       const dialog = url.searchParams.get("dialog");
       const at = url.searchParams.get("at");

@@ -6,20 +6,23 @@
  * Planning is synchronous over what was read, so the same pass can plan,
  * write, and plan again for its report without reading everything twice.
  */
+import { errorMessage } from "../../lib/errors";
 import { getDomain } from "tldts";
 import type { Addresses } from "./addresses";
 import { CloudflareApi, type CfAccount, type CfRecord, type CfRuleset, type CfZone } from "./cloudflare";
 import { type ApiFetch, ProviderError } from "./http";
 import { aclAllows, MailcowApi, type MailcowDkim } from "./mailcow";
 import type { AccountRef, Policy, Profile, Redirect, Secrets } from "./model";
-import { describeRecord, diffRecords, renderProfile, renderRedirect, type Diff, type RecordOp, type Rendered, type SiteVars } from "./records";
+import {
+  describeRecord, diffRecords, renderProfile, renderRedirect, type Diff, type RecordOp, type Rendered, type SiteVars,
+} from "./records";
 import {
   describeRedirect, foundRedirect, PLACEHOLDER, REDIRECT_PHASE, redirectAction, redirectHosts, redirectRef, redirectRuleState, standInHosts, wantedRedirectRule,
   type FoundRedirect,
 } from "./redirects";
-import { CONFIG_PHASE, FIREWALL_PHASE, ruleState, SSL_LABELS, wantedRules, wantedSettings, zoneWants, type ZoneWants } from "./zone";
+import { ruleState, SSL_LABELS, wantedRules, wantedSettings, zoneWants, type ZoneWants } from "./zone";
 
-export const RECORD_COMMENT = "Managed by CloudPanel DNS";
+const RECORD_COMMENT = "Managed by CloudPanel DNS";
 
 export interface PanelSite {
   id: number;
@@ -65,7 +68,7 @@ interface ZoneRef {
   connectionId: string;
 }
 
-export interface ZoneView {
+interface ZoneView {
   id: string;
   name: string;
   status: string;
@@ -157,7 +160,7 @@ const NOT_REDIRECTING = "A static site that does not redirect yet";
 const MAILCOW_PLACEHOLDER = /\{mailcow\./;
 
 function reason(error: unknown): string {
-  return error instanceof Error ? error.message : String(error);
+  return errorMessage(error);
 }
 
 export class DnsRun {
@@ -275,7 +278,6 @@ export class DnsRun {
     return this.context.policy.connections.length === 0;
   }
 
-  /** The domains a check plans: sites in a profile, and every redirect domain. */
   plannedDomains(): string[] {
     return this.entries.filter((entry) => entry.redirect || this.profileOf(entry.domain)).map((entry) => entry.domain);
   }
@@ -1049,7 +1051,6 @@ export class DnsRun {
   }
 }
 
-/** Whether a new site's certificate can be requested now, and if not, why. */
 /** A record a site CloudPanel just created may write before review: an address at its own name or `www`. */
 function pointsOwnName(domain: string, op: RecordOp): boolean {
   if (op.action === "create") return true;
@@ -1058,6 +1059,7 @@ function pointsOwnName(domain: string, op: RecordOp): boolean {
   return own && address(op.record.type) && (!op.current || address(op.current.type));
 }
 
+/** Whether a new site's certificate can be requested now, and if not, why. */
 export function readiness(plan: SitePlan | undefined): { ready: boolean; reason: string; zone?: string; nameServers?: string[] } {
   if (!plan?.profileId) return { ready: false, reason: "No DNS profile is assigned to this site" };
   if (plan.mode !== "enforce") return { ready: false, reason: "DNS is set to Ask first" };

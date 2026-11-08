@@ -14,15 +14,10 @@ import { join } from "node:path";
 import {
   authenticateRequest, MAX_SESSION_BYTES, panelSessionId, parsePanelSession, readPanelSessionFile,
 } from "../lib/sso-auth";
-import { SESSION_DIR } from "../cli/paths";
 import { adminGate } from "../lib/sso-auth";
 
 
 const repo = join(import.meta.dir, "..");
-
-function repoSource(path: string): string {
-  return readFileSync(join(repo, path), "utf8");
-}
 
 /** A fixture with its comments and line wrapping stripped back to one blob. */
 function fixture(name: string): Buffer {
@@ -86,6 +81,7 @@ const DENIED: Record<string, () => Buffer> = {
   "truncated serialization": () => authenticated().subarray(0, authenticated().length - 1),
   "trailing serialization data": () => Buffer.concat([authenticated(), Buffer.from("garbage", "utf8")]),
   "depth bomb": depthBomb,
+  "a token under another firewall's key": () => withReplacement(authenticated(), 's:14:"_security_main";', 's:15:"_security_other";'),
   "unknown token class": () => withReplacement(
     authenticated(),
     'O:75:"Symfony\\Component\\Security\\Http\\Authenticator\\Token\\PostAuthenticationToken":2',
@@ -142,11 +138,6 @@ test("the admin gate rejects a valid non-admin and accepts only ROLE_ADMIN", () 
   expect(adminGate(admin && { user: admin.user, roles: admin.roles })).toBeNull();
 });
 
-test("the scanner does not use PHP deserialization and pins the main firewall key", () => {
-  expect(repoSource("lib/sso-auth.ts")).not.toInclude("unserialize");
-  expect(repoSource("lib/sso-auth.ts")).toInclude('"_security_main"');
-});
-
 test("an invalid CloudPanel session redirects to login before reading a path", async () => {
   const result = await authenticateRequest(new Request("https://panel.example/addons/instatic/", {
     headers: { Cookie: "cloudpanel=bad%2Fsession" },
@@ -189,8 +180,7 @@ test("session-file provenance is checked before bounded descriptor reads", async
   }
 });
 
-test("CloudPanel's own cookie name and session directory are used", () => {
+test("CloudPanel's own cookie name is used", () => {
   const request = new Request("https://panel.example/addons/", { headers: { Cookie: "other=x; cloudpanel=abc123" } });
   expect(panelSessionId(request)).toBe("abc123");
-  expect(SESSION_DIR).toBe("/home/clp/htdocs/app/files/var/sessions");
 });

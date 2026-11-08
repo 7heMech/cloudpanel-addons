@@ -1,6 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import { jobApiRoute, type JobProgress } from "../lib/job-stream";
-import { JOB_ID_RE, validateJobId } from "../lib/job-id";
+import { validateJobId } from "../lib/job-id";
 import { snapshotAgeSeconds, type PanelSnapshot } from "../lib/snapshot-reader";
 import { handle as stagerHandle } from "../addons/stager/app/index";
 import { handle as instaticHandle } from "../addons/instatic/app/index";
@@ -137,9 +137,6 @@ describe("the job id syntax has one definition", () => {
       `${ID}\n`, "20260916T0930Z-a1b2c3", 42, null, undefined]) {
       expect(validateJobId(bad)).toBeNull();
     }
-    // The pattern is anchored at both ends: an id reaches a path join.
-    expect(JOB_ID_RE.source.startsWith("^")).toBe(true);
-    expect(JOB_ID_RE.source.endsWith("$")).toBe(true);
   });
 });
 

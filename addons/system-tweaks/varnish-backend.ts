@@ -16,22 +16,26 @@ import {
   rmdirSync, rmSync, symlinkSync, unlinkSync, writeFileSync,
 } from "node:fs";
 import { join } from "node:path";
-import { failAction, normalizeIdentityHostname, runCommand, type CommandResult } from "../../cli/action-common";
-import { trustedVhost, withNginxTransaction, type NginxChange } from "../../cli/nginx-transaction";
-import { openPanelDatabase, withPanelDb } from "../../cli/panel-db";
-import { CLI_BIN, DISTRO_NGINX_SITES_DIR, PANEL_DB, ROOT_UID, SYSTEMD_DIR } from "../../cli/paths";
-import { learnVhostMapContent, renderVhostBodyResult } from "../../cli/site-vhost";
+import { failAction } from "../../lib/action";
+import { normalizeIdentityHostname } from "../../lib/panel-identity";
+import { runCommand, type CommandResult } from "../../lib/command";
+import { trustedVhost, withNginxTransaction, type NginxChange } from "../../lib/nginx-transaction";
+import { openPanelDatabase, withPanelDb } from "../../lib/panel-db";
+import { CLI_BIN, DISTRO_NGINX_SITES_DIR, PANEL_DB, ROOT_UID, SYSTEMD_DIR } from "../../lib/paths";
+import { learnVhostMapContent, renderVhostBodyResult } from "../../lib/site-vhost";
 import { writeFileAtomic } from "../../lib/atomic-write";
+import { daemonReload } from "../../lib/systemd";
+import { isTrustedDirectory, present, regularText, trustedText } from "../../lib/trusted-file";
 import { readVarnishSettings, VHOST_VALUE_RULES } from "./vhost-values";
 
-export const VARNISH_PLACEHOLDER = "{{varnish_proxy_pass}}";
-export const ACCESS_LOG_PLACEHOLDER = "{{nginx_access_log}}";
-export const ERROR_LOG_PLACEHOLDER = "{{nginx_error_log}}";
+const VARNISH_PLACEHOLDER = "{{varnish_proxy_pass}}";
+const ACCESS_LOG_PLACEHOLDER = "{{nginx_access_log}}";
+const ERROR_LOG_PLACEHOLDER = "{{nginx_error_log}}";
 /** What CloudPanel renders when Varnish is off for a site. */
 const NO_VARNISH = "proxy_pass http://127.0.0.1:8080;";
 const MAX_LOG_MIGRATE_BYTES = 64 * 1024 * 1024;
 
-export const DEFAULT_VARNISH_BACKEND_PATHS = {
+const DEFAULT_VARNISH_BACKEND_PATHS = {
   panelDb: PANEL_DB,
   homeRoot: "/home",
   passwdFile: "/etc/passwd",
@@ -45,7 +49,7 @@ export const DEFAULT_VARNISH_BACKEND_PATHS = {
   vhostUid: ROOT_UID,
 };
 
-export type VarnishBackendPaths = typeof DEFAULT_VARNISH_BACKEND_PATHS;
+type VarnishBackendPaths = typeof DEFAULT_VARNISH_BACKEND_PATHS;
 
 export interface VarnishBackendOptions {
   paths?: Partial<VarnishBackendPaths>;
@@ -92,15 +96,15 @@ function sites(db: Database): Site[] {
   });
 }
 
-export function varnishIncludeLine(includeDir: string, domain: string): string {
+function varnishIncludeLine(includeDir: string, domain: string): string {
   return `include ${includeDir}/${domain}.conf;`;
 }
 
-export function siteAccessLogLine(logDir: string, user: string, cloudflare: boolean): string {
+function siteAccessLogLine(logDir: string, user: string, cloudflare: boolean): string {
   return `access_log ${logDir}/${user}/access.log ${cloudflare ? "cloudflare" : "main"};`;
 }
 
-export function siteErrorLogLine(logDir: string, user: string): string {
+function siteErrorLogLine(logDir: string, user: string): string {
   return `error_log ${logDir}/${user}/error.log;`;
 }
 
@@ -117,27 +121,9 @@ function includeContent(domain: string, line: string): string {
   return `# Managed by clp-addons System Tweaks: ${domain}'s Varnish backend, rewritten before nginx loads.\n${line ? `${line}\n` : ""}`;
 }
 
-function regularText(path: string): string | null {
-  try {
-    return lstatSync(path).isFile() ? readFileSync(path, "utf8") : null;
-  } catch {
-    return null;
-  }
-}
-
-function present(path: string): boolean {
-  try {
-    lstatSync(path);
-    return true;
-  } catch {
-    return false;
-  }
-}
-
 function isRootDir(path: string, rootUid: number): boolean {
   try {
-    const info = lstatSync(path);
-    return info.isDirectory() && !info.isSymbolicLink() && info.uid === rootUid && (info.mode & 0o022) === 0;
+    return isTrustedDirectory(lstatSync(path), rootUid);
   } catch {
     return false;
   }
@@ -353,7 +339,7 @@ export function cloudpanelLogrotate(user: string): string {
  * user, so a link it puts there gets only its own rights, and nginx's logs
  * rotated as root in root's directory. The reload still runs as root.
  */
-export function addonLogrotate(user: string, logDir: string): string {
+function addonLogrotate(user: string, logDir: string): string {
   const options = `    daily
     missingok
     rotate 7
@@ -378,11 +364,8 @@ ${options}
 
 /** The site's logrotate file when only root can change it, as a regular file. */
 function logrotateText(site: Site, paths: VarnishBackendPaths): string | null {
-  const file = join(paths.logrotateDir, site.user);
   try {
-    const info = lstatSync(file);
-    if (!info.isFile() || info.uid !== paths.vhostUid || (info.mode & 0o022) !== 0) return null;
-    return readFileSync(file, "utf8");
+    return trustedText(join(paths.logrotateDir, site.user), paths.vhostUid);
   } catch {
     return null;
   }
@@ -571,7 +554,7 @@ function unitLines(ctx: Context): { startPre: string; reload: string } {
   return { startPre, reload };
 }
 
-export function varnishDropIn(bin: string, startPre: string, reload: string): string {
+function varnishDropIn(bin: string, startPre: string, reload: string): string {
   return [
     "# Managed by clp-addons System Tweaks: writes each site's checked Varnish backend before nginx loads the vhosts.",
     "[Service]",
@@ -583,11 +566,6 @@ export function varnishDropIn(bin: string, startPre: string, reload: string): st
     reload,
     "",
   ].join("\n");
-}
-
-function daemonReload(ctx: Context): void {
-  const reloaded = ctx.run("systemctl", ["daemon-reload"]);
-  if (!reloaded.ok) failAction(`systemctl daemon-reload failed: ${(reloaded.stderr || reloaded.stdout).trim()}`);
 }
 
 function expectedDropIn(ctx: Context): string {
@@ -708,7 +686,7 @@ export function installVarnishBackends(options: VarnishBackendOptions = {}): boo
   let changed = false;
   if (regularText(ctx.paths.dropIn) !== dropIn) {
     writeFileAtomic(ctx.paths.dropIn, dropIn, { mode: 0o644, createParent: true });
-    daemonReload(ctx);
+    daemonReload(ctx.run);
     changed = true;
   }
   return withVhosts(ctx, true) || changed;
@@ -721,7 +699,7 @@ export function removeVarnishBackends(options: VarnishBackendOptions = {}): bool
   if (dropIn === null && !existsSync(ctx.paths.includeDir) && !existsSync(ctx.paths.logDir)) return false;
   if (dropIn !== null) {
     rmSync(ctx.paths.dropIn, { force: true });
-    daemonReload(ctx);
+    daemonReload(ctx.run);
   }
   const all = withPanelDb(ctx.paths.panelDb, sites);
   const passwd = passwdUsers(ctx.paths.passwdFile);
@@ -732,7 +710,7 @@ export function removeVarnishBackends(options: VarnishBackendOptions = {}): bool
   } catch (error) {
     if (dropIn !== null) {
       writeFileAtomic(ctx.paths.dropIn, dropIn, { mode: 0o644, createParent: true });
-      daemonReload(ctx);
+      daemonReload(ctx.run);
     }
     try { syncVarnishBackends(options); } catch {}
     throw error;
@@ -756,10 +734,6 @@ function renderedHomeLogs(site: Site, paths: VarnishBackendPaths): boolean {
   return regularText(join(paths.vhostDir, `${site.domain}.conf`))?.includes(`/home/${site.user}/logs/nginx/`) ?? false;
 }
 
-/**
- * Sites whose rendered vhost still names a log in the user's home. The sync
- * leaves a vhost alone when root is not the only one who can write it.
- */
 /** Sites whose logrotate file is neither CloudPanel's nor the addon's, so the sync leaves it as it is. */
 export function sitesWithOwnLogrotate(options: VarnishBackendOptions = {}): string[] {
   const { paths } = contextOf(options);
@@ -773,6 +747,10 @@ export function sitesWithOwnLogrotate(options: VarnishBackendOptions = {}): stri
   }
 }
 
+/**
+ * Sites whose rendered vhost still names a log in the user's home. The sync
+ * leaves a vhost alone when root is not the only one who can write it.
+ */
 export function sitesWithHomeLogs(options: VarnishBackendOptions = {}): string[] {
   const { paths } = contextOf(options);
   try {

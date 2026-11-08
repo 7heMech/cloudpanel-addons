@@ -3,23 +3,27 @@
  * `clp-addons terminal root allow`, each pinned to the account and the
  * two-factor setup it had then. See docs/decisions/terminal.md#root.
  */
+import { errorMessage } from "../../lib/errors";
+import { addonStateDir, CONFIG_DIR, LOCK_DIR, PANEL_DB } from "../../lib/paths";
 import { createHash } from "node:crypto";
-import { chmodSync, closeSync, constants, fstatSync, lstatSync, mkdirSync, openSync, readFileSync, type Stats } from "node:fs";
+import {
+  chmodSync, closeSync, constants, fstatSync, lstatSync, mkdirSync, openSync, readFileSync, type Stats,
+} from "node:fs";
 import { dirname } from "node:path";
 import type { Database } from "bun:sqlite";
-import { withFileLockSync } from "../../cli/action-common";
-import { openPanelDatabase } from "../../cli/panel-db";
-import { CONFIG_DIR, LOCK_DIR, PANEL_DB, STATE_DIR } from "../../cli/paths";
+import { withFileLockSync } from "../../lib/file-lock";
+import { openPanelDatabase } from "../../lib/panel-db";
 import { accountPasskeys } from "../security-keys/sign-ins";
-import { fatal, log, requireRoot } from "../../cli/util";
+import { fatal, log, requireRoot } from "../../lib/log";
 import { writeFileAtomic } from "../../lib/atomic-write";
+import { isTrustedDirectory, isTrustedFile } from "../../lib/trusted-file";
 import { PANEL_USER_NAME_RE } from "../../lib/panel-users";
 
-export const ROOT_GRANTS_FILE = `${CONFIG_DIR}/terminal-root.json`;
+const ROOT_GRANTS_FILE = `${CONFIG_DIR}/terminal-root.json`;
 const ROOT_GRANTS_LOCK = `${LOCK_DIR}/terminal-root.lock`;
-const SECURITY_KEYS_DIR = `${STATE_DIR}/security-keys`;
+const SECURITY_KEYS_DIR = addonStateDir("security-keys");
 
-export interface RootGrant {
+interface RootGrant {
   user: string;
   /** CloudPanel's `user.id`: a name deleted and created again is someone else. */
   id: number;
@@ -38,9 +42,8 @@ interface PanelAccount {
 }
 
 /** The file is wrong in itself; root recovers by removing it and allowing again. */
-export class UntrustedGrants extends Error {}
+class UntrustedGrants extends Error {}
 
-const rootsAlone = (info: Stats, rootUid: number) => info.uid === rootUid && (info.mode & 0o022) === 0;
 const errno = (error: unknown) => (error as NodeJS.ErrnoException)?.code;
 
 /**
@@ -58,7 +61,7 @@ export function readRootGrants(file = ROOT_GRANTS_FILE, rootUid = 0): RootGrant[
     if (errno(error) === "ENOENT") return [];
     throw error;
   }
-  if (!dirInfo.isDirectory() || !rootsAlone(dirInfo, rootUid)) throw new UntrustedGrants(`${dir} is not a directory only root can write`);
+  if (!isTrustedDirectory(dirInfo, rootUid)) throw new UntrustedGrants(`${dir} is not a directory only root can write`);
   let fd: number;
   try {
     fd = openSync(file, constants.O_RDONLY | constants.O_NOFOLLOW | constants.O_NONBLOCK);
@@ -70,7 +73,7 @@ export function readRootGrants(file = ROOT_GRANTS_FILE, rootUid = 0): RootGrant[
   }
   try {
     const info = fstatSync(fd);
-    if (!info.isFile() || !rootsAlone(info, rootUid)) throw new UntrustedGrants(`${file} is not a trusted regular file`);
+    if (!isTrustedFile(info, rootUid)) throw new UntrustedGrants(`${file} is not a trusted regular file`);
     let stored: { users?: unknown } | null;
     try {
       stored = JSON.parse(readFileSync(fd, "utf8"));
@@ -94,7 +97,7 @@ function writeRootGrants(grants: RootGrant[], file = ROOT_GRANTS_FILE): void {
   const dir = dirname(file);
   if (mkdirSync(dir, { recursive: true })) chmodSync(dir, 0o755);
   // Written into a directory the reader refuses, the list would lock everyone out.
-  if (!rootsAlone(lstatSync(dir), 0)) fatal(`${dir} must be root's alone to hold the root terminal list: chown root:root and chmod 755 it`);
+  if (!isTrustedDirectory(lstatSync(dir), 0)) fatal(`${dir} must be root's alone to hold the root terminal list: chown root:root and chmod 755 it`);
   const users = [...grants].sort((a, b) => a.user.localeCompare(b.user)).map(({ user, id, mfa, keys }) => ({ user, id, mfa, keys }));
   writeFileAtomic(file, `${JSON.stringify({ users }, null, 2)}\n`, { mode: 0o600, owner: { uid: 0, gid: 0 } });
 }
@@ -105,7 +108,6 @@ function account(db: Database, user: string): PanelAccount | null {
   ).get(user);
 }
 
-/** The account's 2FA secret as a grant keeps it, or null while 2FA is off. */
 function mfaDigest(found: PanelAccount): string | null {
   if (Number(found.mfa) !== 1 || !found.mfa_secret) return null;
   return createHash("sha256").update(`clp-addons terminal root\0${found.mfa_secret}`).digest("hex");
@@ -119,7 +121,7 @@ function mfaDigest(found: PanelAccount): string | null {
  * phone. So a grant holds only the 2FA the owner had when root allowed it:
  * 2FA turned off and set up again needs root again.
  */
-export function grantProblem(db: Database, grant: RootGrant): string | null {
+function grantProblem(db: Database, grant: RootGrant): string | null {
   const found = account(db, grant.user);
   if (!found || found.id !== grant.id) return `${grant.user} is not the account root allowed; root can run clp-addons terminal root allow ${grant.user} again`;
   if (Number(found.status) !== 1) return `${grant.user} is deactivated`;
@@ -173,7 +175,7 @@ export interface RootAccess {
  */
 export function rootAccess(panelUser: string, paths: RootAccessPaths, session: string): RootAccess {
   const failed = (what: string, error: unknown): RootAccess =>
-    ({ granted: true, problem: `${what} cannot be read: ${error instanceof Error ? error.message : String(error)}`, unreadable: true });
+    ({ granted: true, problem: `${what} cannot be read: ${errorMessage(error)}`, unreadable: true });
   let grant: RootGrant | undefined;
   try {
     grant = readRootGrants(paths.grants, paths.rootUid).find((candidate) => candidate.user === panelUser);
@@ -193,7 +195,6 @@ export function rootAccess(panelUser: string, paths: RootAccessPaths, session: s
   }
 }
 
-/** `clp-addons terminal root [allow|deny <user>]`, as root. */
 export function runTerminalRootCommand(argv: string[]): void {
   const [scope, verb, user, ...extra] = argv;
   const usage = "usage: clp-addons terminal root [allow|deny <user>]";
@@ -204,7 +205,7 @@ export function runTerminalRootCommand(argv: string[]): void {
       return readRootGrants();
     } catch (error) {
       if (!(error instanceof UntrustedGrants)) {
-        fatal(`cannot read ${ROOT_GRANTS_FILE}: ${error instanceof Error ? error.message : String(error)}; nobody can open a root shell until it can be`);
+        fatal(`cannot read ${ROOT_GRANTS_FILE}: ${errorMessage(error)}; nobody can open a root shell until it can be`);
       }
       fatal(`${error.message}, so nobody can open a root shell. Note who it allowed, remove it with rm ${ROOT_GRANTS_FILE}, then allow them again`);
     }

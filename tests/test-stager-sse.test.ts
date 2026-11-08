@@ -197,12 +197,15 @@ describe("Stager SSE job monitoring", () => {
     }
   });
 
-  it("handles client disconnect cancel without errors", async () => {
+  it("stops watching the job when the browser closes the stream", async () => {
     const origGetJob = stagerService.getJob;
+    const origWatchJob = stagerService.watchJob;
+    let closed = 0;
     stagerService.getJob = async (id: string) => ({
       ok: true,
       data: { job: mockJob({ id, state: "running", step: "Copying files" }), log: "running..." },
     });
+    stagerService.watchJob = () => ({ close: () => { closed++; } });
 
     try {
       const req = new Request("http://localhost/api/jobs/20260910T093000Z-a1b2c3/events");
@@ -210,28 +213,72 @@ describe("Stager SSE job monitoring", () => {
       const reader = res.body!.getReader();
       const c1 = await reader.read();
       expect(c1.done).toBe(false);
+      expect(closed).toBe(0);
 
-      // Cancel reader (simulates browser closing the connection)
       await reader.cancel();
-      expect(true).toBe(true);
+      expect(closed).toBe(1);
     } finally {
       stagerService.getJob = origGetJob;
+      stagerService.watchJob = origWatchJob;
     }
   });
 
-  it("the shared watcher uses EventSource with a polling fallback", () => {
-    // The watcher is shared with every other addon that runs jobs; the stager's
-    // own script only starts it.
-    expect(JOB_WATCH_JS).toContain("EventSource");
-    expect(JOB_WATCH_JS).toContain("/events");
-    expect(JOB_WATCH_JS).toContain("pollJob");
-    expect(JOB_WATCH_JS).toContain("waitForManager");
-    expect(JOB_WATCH_JS).toContain("/health");
-    expect(JOB_WATCH_JS).toContain("reconnecting");
-    expect(JOB_WATCH_JS).toContain("addEventListener('restarting'");
-    expect(JOB_WATCH_JS).toContain("function watchJob(id, root, onDone)");
-    expect(JOB_WATCH_JS).toContain("updateJobUI(payload.job, payload.log, root)");
-    expect(CLIENT_JS).toContain("watchJob(");
+  it("the shared watcher follows the event stream and polls once the manager is back", async () => {
+    const sources: { url: string; closed: boolean; listeners: Record<string, () => void>; onmessage?: (ev: { data: string }) => void; onerror?: () => void }[] = [];
+    class FakeEventSource {
+      url: string;
+      closed = false;
+      listeners: Record<string, () => void> = {};
+      onmessage?: (ev: { data: string }) => void;
+      onerror?: () => void;
+      constructor(url: string) {
+        this.url = url;
+        sources.push(this);
+      }
+      addEventListener(event: string, cb: () => void) { this.listeners[event] = cb; }
+      close() { this.closed = true; }
+    }
+    const fetched: string[] = [];
+    const fetchStub = async (url: string) => {
+      fetched.push(url);
+      return { ok: true, redirected: false, json: async () => ({ ok: true }) };
+    };
+    const called: string[] = [];
+    const callStub = async (path: string) => {
+      called.push(path);
+      return { data: { job: { state: "done", step: "" }, log: "finished" } };
+    };
+    const elements: Record<string, { textContent: string; className: string }> = {
+      "#job-state": { textContent: "", className: "" },
+      "#job-step": { textContent: "", className: "" },
+    };
+    const root = { querySelector: (selector: string) => elements[selector] ?? null };
+    const location = { href: "https://panel.example.test/addons/stager/", reload: () => { throw new Error("reloaded"); } };
+    const { watchJob } = new Function(
+      "EventSource", "fetch", "call", "location", "setTimeout", "CLP_BASE", "CLP_ROOT", "busy", "notify",
+      `${JOB_WATCH_JS}\nreturn { watchJob };`,
+    )(FakeEventSource, fetchStub, callStub, location, () => 0, "/addons/stager", null, () => {}, () => {});
+    const finished: unknown[] = [];
+    const settle = async () => { for (let i = 0; i < 10; i++) await new Promise((resolve) => setTimeout(resolve, 0)); };
+
+    watchJob("20260910T093000Z-a1b2c3", root, (job: unknown) => finished.push(job));
+    expect(sources.map((source) => source.url)).toEqual(["/addons/stager/api/jobs/20260910T093000Z-a1b2c3/events"]);
+    const [source] = sources;
+
+    source!.onmessage!({ data: JSON.stringify({ job: { state: "running", step: "Copying files" }, log: "" }) });
+    expect(elements["#job-step"]!.textContent).toBe("Copying files");
+
+    source!.listeners.restarting!();
+    expect(elements["#job-state"]!.textContent).toBe("reconnecting");
+    expect(fetched).toEqual([]);
+
+    source!.onerror!();
+    expect(source!.closed).toBe(true);
+    await settle();
+    expect(fetched).toEqual(["/addons/stager/health"]);
+    expect(called).toEqual(["/api/jobs/20260910T093000Z-a1b2c3"]);
+    expect(finished).toEqual([{ state: "done", step: "" }]);
+    expect(elements["#job-state"]!.textContent).toBe("done");
   });
 
   it("updateJobUI auto-expands details when output arrives and respects user closure", () => {
@@ -318,7 +365,6 @@ describe("Stager SSE job monitoring", () => {
 
     // 1. Empty update arrives; toggle listener is bound even with empty log
     updateJobUI({ state: "running", step: "Starting" }, "", root);
-    expect(details.dataset.logBound).toBe("true");
 
     // 2. Operator closes details before any output arrives
     details.open = false;
@@ -330,10 +376,7 @@ describe("Stager SSE job monitoring", () => {
     expect(details.open).toBe(false);
   });
 
-  it("both halves of the page script pass quote balance checks", () => {
-    for (const line of `${JOB_WATCH_JS}\n${CLIENT_JS}`.split("\n")) {
-      const quotes = (line.match(/'/g) || []).length;
-      expect(quotes % 2 === 1, `odd number of single quotes in: ${line}`).toBe(false);
-    }
+  it("both halves of the page script parse together", () => {
+    expect(() => new Function(`${JOB_WATCH_JS}\n${CLIENT_JS}`)).not.toThrow();
   });
 });

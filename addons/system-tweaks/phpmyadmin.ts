@@ -7,10 +7,12 @@
  * give its version away. The panel signs in through /phpmyadmin/login.php,
  * which stays served.
  */
+import { errorMessage } from "../../lib/errors";
 import { readFileSync } from "node:fs";
-import { failAction, runCommand, type CommandResult } from "../../cli/action-common";
-import { nginxFileChange, trustedVhost, withNginxTransaction } from "../../cli/nginx-transaction";
-import { ROOT_UID, nginxLayout } from "../../cli/paths";
+import { failAction } from "../../lib/action";
+import { runCommand, type CommandResult } from "../../lib/command";
+import { nginxFileChange, trustedVhost, withNginxTransaction } from "../../lib/nginx-transaction";
+import { ROOT_UID, nginxLayout } from "../../lib/paths";
 import { panelUserGid, panelUserUid } from "../../lib/sso-auth";
 import { COMMAND_MS } from "./limits";
 
@@ -21,10 +23,9 @@ const USER_FILE_RE = /^[ \t]*auth_basic_user_file[ \t]+(\/[A-Za-z0-9._/-]+)[ \t]
 
 /** Directories phpMyAdmin's pages never load from the browser. */
 const HIDDEN_DIRS = ["examples", "setup", "sql", "vendor", "libraries", "templates", "locale", "tmp"];
-/** Release and package files, dotfiles, and the sample config. */
 const HIDDEN_FILES = String.raw`\.|ChangeLog$|README$|LICENSE$|RELEASE-DATE-|CONTRIBUTING\.md$|composer\.(?:json|lock)$|package\.json$|yarn\.lock$|babel\.config\.json$|config\.sample\.inc\.php$`;
 
-export function phpMyAdminBlock(credentials: string): string {
+function phpMyAdminBlock(credentials: string): string {
   return [
     "  # clp-addons:phpmyadmin:start",
     `  set $clp_addons_auth "";`,
@@ -62,7 +63,7 @@ export function withPhpMyAdminRules(content: string): string | null {
   return `${upstream.slice(0, at)}${phpMyAdminBlock(files[0]![1]!)}${upstream.slice(at)}`;
 }
 
-export const DEFAULT_PHPMYADMIN_PATHS = {
+const DEFAULT_PHPMYADMIN_PATHS = {
   /** Null takes CloudPanel's own panel vhost, as cli/inject.ts finds it. */
   vhost: null as string | null,
   /** Null takes the panel's own nginx.conf when it has one, as CloudPanel 6 does. */
@@ -113,11 +114,10 @@ export function phpMyAdminStatus(options: PhpMyAdminOptions = {}): PhpMyAdminSta
     if (wanted === null) return { active: false, problem: NO_ANCHOR };
     return { active: wanted === content, problem: "" };
   } catch (error) {
-    return { active: false, problem: error instanceof Error ? error.message : String(error) };
+    return { active: false, problem: errorMessage(error) };
   }
 }
 
-/** Adds or removes the block, testing and reloading the panel's Nginx and restoring the file on failure. */
 export function applyPhpMyAdmin(enabled: boolean, options: PhpMyAdminOptions = {}): boolean {
   const { vhost, uid, groupWritable, nginx } = target(options);
   let current: string;

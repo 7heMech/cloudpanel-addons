@@ -8,14 +8,14 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
   availableSiteUser, dbNameFor, dbUserFor, panelSiteUserFor, siteUserFor, siteUserTaken,
-} from "../cli/action-common";
+} from "../lib/site-user";
 
 const DOMAINS = [
   "demo.clp-stg.local",
   "addons.clp-stg.local",
   // Same first ten characters once punctuation is stripped. Under the schemes
   // this replaces, these two produced identical account names.
-  "demo.clp-stg.local",
+  "demo.clp-stg.dev",
   "demo.clp-stg.example.com",
   "a.io",
   "UPPER.Example.COM",

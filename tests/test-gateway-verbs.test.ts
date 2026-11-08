@@ -1,6 +1,6 @@
 import { afterAll, beforeAll, describe, expect, test } from "bun:test";
 import { readFileSync } from "node:fs";
-import { ADDONS as CATALOG } from "../cli/addon-catalog";
+import { ADDONS as CATALOG } from "../addons/catalog";
 import { callGatewayAction, gatewayCaller, streamGatewayAction } from "../lib/gateway-client";
 import { ADDON_VERBS, type GatewayAddon, webVerb } from "../lib/gateway-protocol";
 
@@ -16,7 +16,7 @@ import { ADDON_VERBS, type GatewayAddon, webVerb } from "../lib/gateway-protocol
  * must be exactly the declared ones.
  */
 const SOURCES: Partial<Record<GatewayAddon, string[]>> = {
-  manager: ["cli/manager-action.ts"],
+  manager: ["manager/action.ts"],
   "wp-tools": ["addons/wp-tools/action.ts", "addons/wp-tools/mainwp.ts"],
 };
 

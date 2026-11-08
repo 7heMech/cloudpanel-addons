@@ -7,7 +7,7 @@ import { DEFAULT_PANEL_PHP_PATHS, panelPageParams } from "./panel-php";
 import { FPM_DIR, POOL_GUARD_PATH_DEFAULTS, poolGuard, type PoolGuardContext, type PoolGuardOptions, type PoolGuardPaths } from "./pool-guard";
 import GUARD_SCRIPT from "./vhost-guard.php" with { type: "text" };
 
-export const DEFAULT_VHOST_GUARD_PATHS: PoolGuardPaths = {
+const DEFAULT_VHOST_GUARD_PATHS: PoolGuardPaths = {
   ...POOL_GUARD_PATH_DEFAULTS,
   script: `${FPM_DIR}/clp-addons-vhost-guard.php`,
   pool: `${FPM_DIR}/pool.d/zz-clp-addons-vhost-guard.conf`,
@@ -16,7 +16,7 @@ export const DEFAULT_VHOST_GUARD_PATHS: PoolGuardPaths = {
 
 export type VhostGuardOptions = PoolGuardOptions;
 
-export function vhostGuardPool(script: string): string {
+function vhostGuardPool(script: string): string {
   return [
     "; Managed by clp-addons System Tweaks: checks panel input before CloudPanel writes it into a vhost.",
     "[clp]",

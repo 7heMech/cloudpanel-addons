@@ -9,11 +9,12 @@
  * replacement is reversible without a saved copy: removing our exact block
  * must reproduce the pinned original hash before we write anything.
  */
+import { errorMessage } from "../../lib/errors";
 import { createHash } from "node:crypto";
 import { lstatSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { runCommand, type CommandResult } from "../../cli/action-common";
+import { runCommand, type CommandResult } from "../../lib/command";
 import { writeFileAtomic } from "../../lib/atomic-write";
 
 export interface BackupCompressionSettings { enabled: boolean; level: number; threads: number }
@@ -139,7 +140,7 @@ export function backupCompressionStatus(settings: BackupCompressionSettings, opt
       problem: problem || (installed ? "" : "Install zstd on the server to enable compression"),
     };
   } catch (error) {
-    return { ...settings, installed, active: false, supported: false, problem: error instanceof Error ? error.message : String(error) };
+    return { ...settings, installed, active: false, supported: false, problem: errorMessage(error) };
   }
 }
 
@@ -159,7 +160,7 @@ export function reconcileBackupCompression(settings: BackupCompressionSettings, 
     let problem: string;
     try {
       problem = supportProblem(ctx, options) || (ctx.run("/usr/bin/zstd", ["--version"]).ok ? "" : "Install zstd on the server to enable compression");
-    } catch (error) { problem = error instanceof Error ? error.message : String(error); }
+    } catch (error) { problem = errorMessage(error); }
     if (problem) {
       // A dependency changed while our known block was still installed. Give
       // backups their original command back, retaining the saved preference.

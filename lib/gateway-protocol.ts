@@ -1,5 +1,3 @@
-// Protocol definitions for the root gateway daemon. It imports only the
-// addons' verb tables, which import nothing.
 import { CLOUDFLARE_IPS_VERBS } from "../addons/cloudflare-ips/verbs";
 import { DNS_VERBS } from "../addons/dns/verbs";
 import { GIT_VERBS } from "../addons/git/verbs";
@@ -15,16 +13,14 @@ import { TERMINAL_VERBS } from "../addons/terminal/verbs";
 import { WP_TOOLS_VERBS } from "../addons/wp-tools/verbs";
 import { MANAGER_VERBS } from "../manager/verbs";
 
-export const GATEWAY_SOCKET_PATH = "/run/clp-addons/auth.sock";
-export const DEFAULT_CLI_BIN = "/usr/local/bin/clp-addons";
-export const MAX_GATEWAY_INPUT_BYTES = 1024 * 1024; // 1 MB max input (for clone credentials, etc.)
+export const MAX_GATEWAY_INPUT_BYTES = 1024 * 1024;
 export const DEFAULT_GATEWAY_TIMEOUT_MS = 60_000;
 
 /** What a locked addon's verb may still do from the web: switch on, or move to a newer version. */
 export type LockDirection = "on" | "newer";
 
 /** Who may ask root for a verb from the web. */
-export type WebAccess =
+type WebAccess =
   /** An administrator, behind the manager's gate. */
   | "admin"
   /** An administrator or a site manager; CloudPanel does not narrow a site manager's sites. */
@@ -45,15 +41,11 @@ export type WebAccess =
  * input sets every value it names to true, a `"newer"` verb only as far as the
  * action itself allows, which is a newer version.
  */
-export type VerbDeclaration =
+type VerbDeclaration =
   | { readonly web: WebAccess; readonly stream?: "one-way" | "duplex"; readonly lock?: LockDirection }
   | { readonly web: false; readonly why: string };
 
-/**
- * Every verb, declared once in its addon's own `verbs.ts`. The gateway's
- * allowlist, the action's verb type and the manager's per-caller check are all
- * read from here. Those files import nothing, so neither does the gateway.
- */
+/** The `verbs.ts` files import nothing, so neither does the root gateway. */
 export const ADDON_VERBS = {
   "cloudflare-ips": CLOUDFLARE_IPS_VERBS,
   dns: DNS_VERBS,
@@ -73,13 +65,9 @@ export const ADDON_VERBS = {
 
 export type GatewayAddon = keyof typeof ADDON_VERBS;
 type Verbs<A extends GatewayAddon> = (typeof ADDON_VERBS)[A];
-/** Every verb `clp-addons action <addon>` takes. */
-export type AddonVerb<A extends GatewayAddon> = keyof Verbs<A> & string;
-/** The verbs of an addon the web may ask for; of any addon, when it is not known which. */
 export type WebVerb<A extends GatewayAddon> = A extends GatewayAddon
   ? { [V in keyof Verbs<A>]: Verbs<A>[V] extends { web: false } ? never : V }[keyof Verbs<A>] & string
   : never;
-/** The verbs of an addon whose output is streamed. */
 export type StreamVerb<A extends GatewayAddon> = A extends GatewayAddon
   ? { [V in keyof Verbs<A>]: Verbs<A>[V] extends { stream: string } ? V : never }[keyof Verbs<A>] & string
   : never;
@@ -88,10 +76,7 @@ export function isGatewayAddon(addon: string): addon is GatewayAddon {
   return Object.hasOwn(ADDON_VERBS, addon);
 }
 
-/**
- * How the web may reach `addon verb`, or null when it may not. The names come
- * off the wire, so only own keys count: `{}["constructor"]` is truthy.
- */
+/** The names come off the wire, so only own keys count: `{}["constructor"]` is truthy. */
 export function webVerb(addon: string, verb: string): Exclude<VerbDeclaration, { web: false }> | null {
   if (!isGatewayAddon(addon)) return null;
   const verbs: Record<string, VerbDeclaration> = ADDON_VERBS[addon];
@@ -100,7 +85,6 @@ export function webVerb(addon: string, verb: string): Exclude<VerbDeclaration, {
   return declared.web === false ? null : declared;
 }
 
-/** Whether a caller with these panel roles, or none before the gate, may ask for a verb of this access. */
 export function callerMay(access: WebAccess, roles: readonly string[] | null): boolean {
   if (access === "pre-gate") return true;
   if (roles === null) return false;
@@ -126,10 +110,10 @@ export interface SanitizedSite {
   user: string;
   type: string;
   /**
-   * Whether CloudPanel has Varnish enabled for this site. Optional because it
-   * decides only whether a site-scoped addon page draws the panel's Varnish
-   * Cache tab, and an older gateway that does not send it should leave the tab
-   * out rather than guess it into the strip.
+   * Whether CloudPanel has Varnish enabled for this site, which decides whether
+   * a site-scoped addon page draws the panel's Varnish Cache tab. A gateway
+   * that does not send it leaves the tab out rather than guess it into the
+   * strip.
    */
   varnishCache?: boolean;
 }
@@ -141,8 +125,8 @@ export interface PanelSnapshot {
   sites: SanitizedSite[];
   /**
    * The instance address CloudPanel shows in its own site information, when the
-   * panel has one recorded. Optional for the same reason: an addon omits the
-   * field rather than print an address the panel itself would not.
+   * panel has one recorded. An addon omits the field rather than print an
+   * address the panel itself would not.
    */
   publicIp?: string;
 }
@@ -169,13 +153,7 @@ export interface ActionResult<T = unknown> {
   error?: string;
 }
 
-export type GatewayResponse<T = unknown> = ActionResult<T>;
-
-/**
- * Parses an incoming line from the gateway socket.
- * Requests are JSON frames.
- * Only the first line is the request; what follows it is never parsed here.
- */
+/** Only the first line is the request; what follows it is never parsed here. */
 export function parseGatewayRequest(raw: string): GatewayRequest | null {
   const newline = raw.indexOf("\n");
   const trimmed = (newline < 0 ? raw : raw.slice(0, newline)).trim();

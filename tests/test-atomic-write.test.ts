@@ -1,11 +1,11 @@
 import { afterEach, expect, test } from "bun:test";
 import {
-  chmodSync, existsSync, lstatSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync,
-  symlinkSync, writeFileSync,
+  chmodSync, existsSync, lstatSync, mkdtempSync, readFileSync, readdirSync, rmSync, symlinkSync, writeFileSync,
 } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { writeFileAtomic } from "../lib/atomic-write";
+import { tempSecretFile, writeSecretFile } from "../addons/stager/action";
 
 let root = "";
 const fixture = (): string => {
@@ -41,8 +41,7 @@ test("replacing a loose file does not leave the secret under its old mode", () =
 test("repeated replacement leaves nothing beside the target", () => {
   // The temporary name is deliberately unobservable: every path out of
   // writeFileAtomic, including each failure, removes it. So what a test can see
-  // is the directory afterwards, and that is asserted here; that the name is
-  // unguessable in the first place is asserted against the source below.
+  // is the directory afterwards.
   const dir = fixture();
   const path = join(dir, "secret");
   for (let i = 0; i < 20; i++) {
@@ -55,15 +54,11 @@ test("repeated replacement leaves nothing beside the target", () => {
   expect(readdirSync(dir)).toEqual(["secret"]);
 });
 
-test("the temporary name is random and claimed exclusively", () => {
-  const source = readFileSync(new URL("../lib/atomic-write.ts", import.meta.url), "utf8");
-  // A predictable sibling name is one an unprivileged writer in the same
-  // directory could pre-create as a symlink; "wx" is what refuses to follow it.
-  expect(source).toContain("randomBytes(8).toString(\"hex\")");
-  expect(source).toContain('flag: "wx"');
-});
+const asRoot = process.getuid?.() === 0;
 
-test("a failed write leaves no temporary file and does not touch the target", () => {
+// Root ignores a directory's mode and may chown to any account, so neither
+// failure below can be provoked as root.
+test.skipIf(asRoot)("a failed write leaves no temporary file and does not touch the target", () => {
   const dir = fixture();
   const path = join(dir, "secret");
   writeFileAtomic(path, "original\n", { mode: 0o600 });
@@ -78,7 +73,7 @@ test("a failed write leaves no temporary file and does not touch the target", ()
   expect(readdirSync(dir)).toEqual(["secret"]);
 });
 
-test("a failed ownership change leaves no temporary file either", () => {
+test.skipIf(asRoot)("a failed ownership change leaves no temporary file either", () => {
   // chown to another account fails for an unprivileged process, and it happens
   // after the write -- which is exactly the case the old generic writer left
   // behind, because only the write was inside its try.
@@ -121,14 +116,34 @@ test("ownership is applied when asked and inherited when not", () => {
   expect(readFileSync(path, "utf8")).toBe("y");
 });
 
-test("the stager's secret writer goes through it", () => {
-  // The Instatic request body carries a password. The point of the assertion is
-  // that the addon has no second way to write one.
-  const source = readFileSync(join(import.meta.dir, "..", "addons", "stager", "action.ts"), "utf8");
-  const writer = source.slice(source.indexOf("function writeSecretFile"));
-  expect(writer.slice(0, writer.indexOf("\n}"))).toContain("writeFileAtomic(path, value, { mode: 0o600 })");
-  // And the file a command is about to be pointed at is created exclusively,
-  // so nothing can leave a symlink at that name first.
-  const temp = source.slice(source.indexOf("function tempSecretFile"));
-  expect(temp.slice(0, temp.indexOf("\n}"))).toContain('openSync(path, "wx", 0o600)');
+test("the stager's secret writer replaces a loose file or a symlink with an owner-only one", () => {
+  // The Instatic request body carries a password.
+  const dir = fixture();
+  const elsewhere = join(dir, "elsewhere");
+  writeFileSync(elsewhere, "untouched\n");
+  const loose = join(dir, "loose");
+  writeFileSync(loose, "old", { mode: 0o644 });
+  chmodSync(loose, 0o644);
+  const link = join(dir, "link");
+  symlinkSync(elsewhere, link);
+  for (const path of [loose, link]) {
+    writeSecretFile(path, "password");
+    expect(lstatSync(path).isFile()).toBe(true);
+    expect(modeOf(path)).toBe(0o600);
+    expect(readFileSync(path, "utf8")).toBe("password");
+  }
+  expect(readFileSync(elsewhere, "utf8")).toBe("untouched\n");
+});
+
+test("a file a command is about to be pointed at starts empty, owner-only and not a symlink", () => {
+  const dir = fixture();
+  const elsewhere = join(dir, "elsewhere");
+  writeFileSync(elsewhere, "untouched\n");
+  const link = join(dir, "secret");
+  symlinkSync(elsewhere, link);
+  tempSecretFile(link);
+  expect(lstatSync(link).isFile()).toBe(true);
+  expect(modeOf(link)).toBe(0o600);
+  expect(readFileSync(link, "utf8")).toBe("");
+  expect(readFileSync(elsewhere, "utf8")).toBe("untouched\n");
 });

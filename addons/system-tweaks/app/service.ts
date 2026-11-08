@@ -26,7 +26,7 @@ const SWITCH_TIMEOUTS = {
   "set-motd": undefined,
 } satisfies Partial<Record<WebVerb<"system-tweaks">, number | undefined>>;
 
-export type SwitchVerb = keyof typeof SWITCH_TIMEOUTS;
+type SwitchVerb = keyof typeof SWITCH_TIMEOUTS;
 
 export function isSwitchVerb(verb: string): verb is SwitchVerb {
   return Object.hasOwn(SWITCH_TIMEOUTS, verb);

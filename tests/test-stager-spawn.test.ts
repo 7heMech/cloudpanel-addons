@@ -139,6 +139,9 @@ test("a nonzero exit reports stderr without leaking credentials", async () => {
   expect(failed.value).toEqual({ ok: false, error: "action rejected request" });
   expect(failed.lines.join("\n")).not.toInclude(PASSWORD);
   expect(failed.lines.join("\n")).not.toInclude(MFA_CODE);
+  // A spawn error's message is "Command failed: <full argv>", which this must not log.
+  expect(failed.lines.join("\n")).not.toInclude("--email");
+  expect(failed.lines.join("\n")).not.toInclude("admin@example.com");
 });
 
 test("a nonzero exit carrying JSON reports the action's own error", async () => {

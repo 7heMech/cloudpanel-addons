@@ -1,30 +1,32 @@
+import { errorMessage } from "../lib/errors";
+import { unitActive } from "../lib/systemd";
+import { formatPanelIdentity, panelIdentityFromVhost } from "../lib/panel-identity";
+import { writeFileAtomic } from "../lib/atomic-write";
 import {
   chmodSync, chownSync, existsSync, lstatSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, statSync,
 } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import {
-  ANCHOR_SERVICE, CLI_BIN, DISTRO_NGINX_SITES_DIR,
-  NEW_SITES_PATH, NEW_SITES_SERVICE, CERTIFICATES_PATH, CERTIFICATES_SERVICE, NGINX_CERTIFICATES_DIR,
-  FIREWALL_PATH, FIREWALL_SERVICE, UFW_RULE_FILES,
-  NEW_SITE_ROWS_PATH, PANEL_DB_DIR,
-  CONFIG_DIR, LIBEXEC_DIR, INSTATIC_BACKUP_CRON, LEGACY_UNITS,
-  AUTH_SERVICE_UNIT, AUTH_SOCKET_PATH, AUTH_SOCKET_UNIT, LOCK_DIR, MANAGER_UNIT,
-  PANEL_GROUP, PANEL_USER, RECONCILE_PATH, RECONCILE_SERVICE,
-  RECONCILE_TIMER, SERVICE_GROUP, SERVICE_USER, SESSION_DIR, SHARED_GROUP, SOCKET_DIR, STATE_DIR,
-  SOCKET_PATH, SYSTEMD_DIR, TWIG_CACHE_DIR, PANEL_IDENTITY_PATH, NGINX_GLOBAL_SETTINGS, CLOUDFLARE_IPS_PATH,
-  APT_UPGRADE_DROPIN, UPDATE_MOTD_DIR,
-} from "./paths";
-import { MAINTENANCE_INCLUDE_PATH } from "./maintenance-vhosts";
-import { ADDONS, ADDON_NAMES, templateWatchPaths, type AddonSpec } from "./addon-catalog";
+  ANCHOR_SERVICE, CLI_BIN, DISTRO_NGINX_SITES_DIR, NEW_SITES_PATH, NEW_SITES_SERVICE, CERTIFICATES_PATH,
+  CERTIFICATES_SERVICE, NGINX_CERTIFICATES_DIR, FIREWALL_PATH, FIREWALL_SERVICE, UFW_RULE_FILES, NEW_SITE_ROWS_PATH,
+  PANEL_DB_DIR, CONFIG_DIR, LIBEXEC_DIR, INSTATIC_BACKUP_CRON, LEGACY_UNITS, AUTH_SERVICE_UNIT, AUTH_SOCKET_PATH,
+  AUTH_SOCKET_UNIT, LOCK_DIR, MANAGER_UNIT, PANEL_GROUP, PANEL_USER, RECONCILE_PATH, RECONCILE_SERVICE,
+  RECONCILE_TIMER, SERVICE_GROUP, SERVICE_USER, SESSION_DIR, SHARED_GROUP, SOCKET_DIR, STATE_DIR, SOCKET_PATH,
+  SYSTEMD_DIR, PANEL_IDENTITY_PATH, NGINX_GLOBAL_SETTINGS, CLOUDFLARE_IPS_PATH, APT_UPGRADE_DROPIN, UPDATE_MOTD_DIR,
+  MAINTENANCE_INCLUDE_PATH,
+} from "../lib/paths";
+import { enabledAddons, templateWatchPaths } from "../addons/catalog";
+import { type AddonSpec } from "../lib/addon-definition";
 import { findMasterVhost, panelVhostWatchPath } from "./inject";
 import { panelUserUid } from "../lib/sso-auth";
-import { fatal, log, run, tryRun, writeAtomic } from "./util";
+import { fatal, log } from "../lib/log";
+import { run, tryRun } from "../lib/command";
 
 
 const BACKUP_DIR = "/var/backups/clp-addons";
 
-export function instaticBackupCron(): string {
+function instaticBackupCron(): string {
   return `# Instatic recovery snapshots for CloudPanel Remote Backups.
 # Adjust this schedule to precede your Remote Backup schedule.
 # CloudPanel's 04:15 create_backup.sh backs up the panel application itself.
@@ -42,12 +44,12 @@ export function reconcileInstaticBackupCron(enabled: boolean, path = INSTATIC_BA
     rmSync(path, { force: true });
     return true;
   }
-  if (present) return false;
   // Preserve an operator's schedule across update/repair.
-  writeAtomic(path, instaticBackupCron(), 0o644);
+  if (present) return false;
+  writeFileAtomic(path, instaticBackupCron(), { mode: 0o644, createParent: true });
   return true;
 }
-export interface ProvisionCommandRunner {
+interface ProvisionCommandRunner {
   run(command: string, args: string[]): string;
   tryRun(command: string, args: string[]): { ok: boolean; out: string };
 }
@@ -66,77 +68,22 @@ const directoryOperations: DirectoryOperations = {
   chown: (path, uid, gid) => { chownSync(path, uid, gid); },
 };
 
-const HOSTNAME_LABEL = "[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?";
-const HOSTNAME_RE = new RegExp(`^(?:${HOSTNAME_LABEL})(?:\\.${HOSTNAME_LABEL})+$`);
-const WILDCARD_HOSTNAME_RE = new RegExp(`^\\*\\.(?:${HOSTNAME_LABEL})(?:\\.${HOSTNAME_LABEL})+$`);
-
-export interface PanelIdentity {
-  primary: string;
-  aliases: string[];
-}
-
-function normalizePanelHostname(value: string): string | null {
-  let host = value.trim().toLowerCase();
-  if (host.endsWith(".")) host = host.slice(0, -1);
-  if (!host || host.includes("..")) return null;
-  if (HOSTNAME_RE.test(host) || WILDCARD_HOSTNAME_RE.test(host)) return host;
-  return null;
-}
-
-/** Extract the panel's exact and wildcard server names from a root-owned vhost. */
-export function panelIdentityFromVhost(content: string): PanelIdentity | null {
-  const names = new Set<string>();
-  const uncommented = content.replace(/#[^\r\n]*/g, "");
-  const directive = /(?:^|[;{}])\s*server_name\s+([^;]+);/gim;
-  let match: RegExpExecArray | null;
-  let sawDirective = false;
-  while ((match = directive.exec(uncommented))) {
-    sawDirective = true;
-    for (const raw of match[1]!.trim().split(/\s+/)) {
-      if (raw === "_" || raw.toLowerCase() === "localhost") continue;
-      const name = normalizePanelHostname(raw);
-      if (!name) return null;
-      names.add(name);
-    }
-  }
-
-  const exact = [...names].find((name) => HOSTNAME_RE.test(name));
-  // A stock CloudPanel serves the panel as `server_name _;` and only gains a
-  // hostname once an operator sets one. That is the catch-all panel, not an
-  // unparseable vhost: there is no panel domain, so nothing can collide with
-  // it, and the guard has nothing to refuse. A vhost with no server_name at
-  // all is still rejected -- it is not the file we think it is.
-  if (!exact) return sawDirective && names.size === 0 ? { primary: "", aliases: [] } : null;
-  return { primary: exact, aliases: [...names].filter((name) => name !== exact).sort() };
-}
-
-function installedAddonSpecs(): AddonSpec[] {
-  return ADDON_NAMES.map((name) => ADDONS[name]!).filter((spec) => existsSync(spec.configFile));
-}
-
 /**
  * Who may own the panel vhost we read the identity from, and inject the proxy
  * into.
  *
- * This used to demand root ownership. On the CloudPanel layout that is
- * unsatisfiable by design -- the panel owns its whole Nginx tree, config root
- * included -- and demanding it bought nothing, because the panel user is
- * already inside this project's trust boundary in two load-bearing ways: the
- * manager socket is group `clp` mode 0660 so the panel can reach the daemon
- * without going through Nginx at all, and the session files `action auth`
- * trusts to decide who you are are panel-owned, so the panel user can mint a
- * session that comes back ROLE_ADMIN. A vhost check cannot defend against an
- * actor that already holds both.
- *
- * What is still worth refusing is a vhost any local user can rewrite. That is
- * the check's remaining job; do not re-tighten this to root-only without
- * reading docs/DECISIONS.md first, as it makes the installer refuse every
- * current CloudPanel.
+ * On the CloudPanel layout the panel owns its whole Nginx tree, config root
+ * included, so requiring root would make the installer refuse every current
+ * CloudPanel. Requiring it would also buy nothing: the panel user is already
+ * inside this project's trust boundary, since the manager socket is group
+ * `clp` mode 0660 so the panel can reach the daemon without going through
+ * Nginx, and the session files `action auth` trusts are panel-owned, so the
+ * panel user can mint a session that comes back ROLE_ADMIN. What is worth
+ * refusing is a vhost any local user can rewrite.
  */
-export function vhostOwnerAccepted(uid: number, mode: number): boolean {
+export function vhostOwnerAccepted(uid: number, mode: number, panelUid = panelUserUid()): boolean {
   if ((mode & 0o002) !== 0) return false;
   if (uid === 0) return true;
-  const panelUid = panelUserUid();
   return panelUid !== null && uid === panelUid;
 }
 
@@ -167,12 +114,7 @@ function ensurePanelIdentity(quiet = false): void {
     fatal(`CloudPanel master vhost has no valid panel identity: ${vhostPath}`);
   }
 
-  const aliases = identity.aliases.length ? identity.aliases.join(" ") : "";
-  const body =
-    "# Managed by clp-addons; read by the root action binary.\n" +
-    `PRIMARY=${identity.primary}\n` +
-    `ALIASES=${aliases}\n`;
-  writeAtomic(PANEL_IDENTITY_PATH, body, 0o600);
+  writeFileAtomic(PANEL_IDENTITY_PATH, formatPanelIdentity(identity), { mode: 0o600, createParent: true });
   run("chown", ["root:root", PANEL_IDENTITY_PATH]);
   run("chmod", ["600", PANEL_IDENTITY_PATH]);
   if (!quiet) log.ok(`panel identity recorded from ${vhostPath}`);
@@ -254,10 +196,9 @@ function installDocker(commands: ProvisionCommandRunner): void {
 }
 
 /**
- * `applyEnable`/`cmdInstall` gate on `requiresUnits` before touching any
- * addon state. Docker and Postfix are installed only when their respective
- * addons require them. Postfix is used as a local queue and authenticated
- * outbound relay, not as a listening mail service for customer sites.
+ * Runs before an enable or install touches any addon state. Postfix is set up
+ * as a local queue and authenticated outbound relay, not as a listening mail
+ * service for customer sites.
  */
 export function ensureRequiredUnits(
   spec: AddonSpec,
@@ -356,6 +297,13 @@ export function ensureServiceUser(
   }
 }
 
+/**
+ * A fresh install commonly has no live session file. The root helper checks
+ * each request's regular-file, owner, size and expiry safeguards; this does
+ * not expect the daemon to read the 0600 session files through its
+ * supplementary group. Root traverses 0700, 0750 and 0755 directories alike,
+ * so CloudPanel's permissions and live sessions are left untouched.
+ */
 export function ensurePanelSessionReadable(
   commands: ProvisionCommandRunner = { run, tryRun },
   sessionDir = SESSION_DIR,
@@ -389,13 +337,6 @@ export function ensurePanelSessionReadable(
     const mode = (directory.mode & 0o7777).toString(8).padStart(4, "0");
     fatal(`CloudPanel session directory must be owned by root or ${PANEL_USER} and writable only by root or ${PANEL_GROUP}: ${sessionDir} (found ${directory.uid}:${directory.gid} mode ${mode})`);
   }
-
-  // A fresh install commonly has no live session file. The root helper checks
-  // each request's regular-file, owner, size, and expiry safeguards; this
-  // readiness check intentionally does not pretend the daemon can read 0600
-  // files directly through its supplementary group. Root can also traverse
-  // 0700/0750/0755 directories; requiring exactly clp:clp 0770 broke safe panel
-  // layouts. Leave CloudPanel's permissions and live sessions untouched.
 }
 
 export function ensureAuthHelperReady(
@@ -417,12 +358,6 @@ export function ensureAuthHelperReady(
   }
 }
 
-/**
- * Same check as ensurePanelSessionReadable, but for the unattended repair path: it must
- * never abort the run. Unlike interactive install, nobody is watching the exit code, so a
- * missing session (e.g. no operator currently logged into the panel) can't be fatal -- it
- * can only be logged so the SSO-is-broken signal isn't lost entirely.
- */
 export function warnIfPanelSessionUnreadable(
   commands: ProvisionCommandRunner = { run, tryRun },
   sessionDir = SESSION_DIR,
@@ -432,26 +367,17 @@ export function warnIfPanelSessionUnreadable(
   try {
     ensurePanelSessionReadable(commands, sessionDir, expectedUid, expectedGid);
   } catch (error) {
-    const message = error instanceof Error ? error.message : String(error);
+    const message = errorMessage(error);
     log.warn(`panel session check failed, continuing without it: ${message}`);
   }
 }
 
-/**
- * Creates and permissions shared and addon state directories, removes the
- * obsolete panel snapshot file when present, and optionally verifies access to
- * CloudPanel sessions.
- */
 export function ensureDirs(
   specs: AddonSpec[] = [],
   verifySession = false,
   commands: ProvisionCommandRunner = { run, tryRun },
   fs: DirectoryOperations = directoryOperations,
 ): void {
-  // One `id` lookup per distinct account, not one `chown` process per path.
-  // The names are constants, so the whole of ensureDirs costs at most three
-  // spawns instead of the fourteen-plus it used to, and the ownership it
-  // applies is exactly what the spawned form applied.
   const ids = new Map<string, number>();
   const resolve = (flag: "-u" | "-g", name: string): number => {
     const key = `${flag}${name}`;
@@ -474,16 +400,16 @@ export function ensureDirs(
   fs.chown(CONFIG_DIR, root, root);
   fs.chmod(CONFIG_DIR, 0o755);
   fs.chown(STATE_DIR, root, resolve("-g", SHARED_GROUP));
-  // Nginx workers need traversal (but not listing) to stat maintenance flags
-  // and read the public HTML files. Addon directories retain their own modes.
-  fs.chmod(STATE_DIR, specs.some((spec) => spec.name === "maintenance") ? 0o751 : 0o750);
+  // An addon whose state directory Nginx workers traverse needs them to pass
+  // through this one too; listing stays closed.
+  fs.chmod(STATE_DIR, specs.some((spec) => (spec.stateDirMode ?? 0o750) & 0o001) ? 0o751 : 0o750);
   fs.chown(SOCKET_DIR, resolve("-u", SERVICE_USER), resolve("-g", SERVICE_GROUP));
   fs.chmod(SOCKET_DIR, 0o755);
   fs.chown(BACKUP_DIR, root, root);
   fs.chmod(BACKUP_DIR, 0o755);
   for (const spec of specs) {
     fs.chown(spec.stateDir, root, root);
-    fs.chmod(spec.stateDir, spec.name === "maintenance" ? 0o711 : 0o750);
+    fs.chmod(spec.stateDir, spec.stateDirMode ?? 0o750);
   }
 
   const snapshot = `${STATE_DIR}/snapshot.json`;
@@ -517,7 +443,7 @@ export function hardenBackups(spec: AddonSpec, quiet = false): void {
  * Record who the panel is: the root action binary reads this to refuse
  * operating on the panel's own hostname.
  */
-export function reconcilePanelIdentity(quiet = false, specs: AddonSpec[] = installedAddonSpecs()): void {
+export function reconcilePanelIdentity(quiet = false, specs: AddonSpec[] = enabledAddons()): void {
   if (specs.length > 0) {
     ensurePanelIdentity(quiet);
   } else {
@@ -534,31 +460,21 @@ export function writeConfig(spec: AddonSpec, force = false): void {
   const body = configBody(spec);
   if (existsSync(spec.configFile) && !force) {
     if (readFileSync(spec.configFile, "utf-8") === body) return;
-    writeAtomic(`${spec.configFile}.new`, body, 0o640);
+    writeFileAtomic(`${spec.configFile}.new`, body, { mode: 0o640, createParent: true });
     log.warn(`${spec.configFile} differs; wrote the managed defaults to .new`);
     return;
   }
-  writeAtomic(spec.configFile, body, 0o640);
+  writeFileAtomic(spec.configFile, body, { mode: 0o640, createParent: true });
   run("chown", [`root:${SERVICE_GROUP}`, spec.configFile]);
   rmSync(`${spec.configFile}.new`, { force: true });
-}
-
-export function installedConfig(spec: AddonSpec): boolean {
-  return existsSync(spec.configFile);
 }
 
 export function serviceUnit(specs: AddonSpec[]): string {
   const dependencies = [...new Set(specs.flatMap((spec) => spec.requiresUnits ?? []))];
   const after = ["network-online.target", AUTH_SOCKET_UNIT, ...dependencies.map((unit) => `${unit}.service`)];
-  const env = specs.flatMap((spec) => [
-    // systemd environment variable names may not contain punctuation
-    // (rejected with "Invalid environment assignment, ignoring"), so normalize
-    // every non-alphanumeric character in the addon name.
-    `Environment=${spec.name.toUpperCase().replace(/[^A-Z0-9]/g, "_")}_APP_DATA=${spec.stateDir}`,
-  ]);
-  // Only the root actions use /run/lock/clp-addons, creating it on demand.
-  // Binding it into this service's namespace prevented startup after /run was
-  // cleared by a reboot, before serve could create the manager socket.
+  // /run/lock/clp-addons is left out of ReadWritePaths: only the root actions
+  // use it, creating it on demand, and binding it into this namespace stops
+  // the service from starting after a reboot clears /run.
   return `[Unit]
 Description=CloudPanel Addons manager
 After=${after.join(" ")}
@@ -572,7 +488,6 @@ SupplementaryGroups=${PANEL_GROUP}
 RuntimeDirectory=clp-addons
 RuntimeDirectoryMode=0755
 RuntimeDirectoryPreserve=yes
-${env.join("\n")}
 ProtectSystem=full
 ProtectHome=read-only
 PrivateTmp=yes
@@ -671,6 +586,7 @@ Unit=${ANCHOR_SERVICE}
 [Install]
 WantedBy=paths.target
 `,
+    // The delay lets CloudPanel commit a new site's row after creating its vhost.
     anchor: `[Unit]
 Description=CloudPanel Addons template reconciliation
 
@@ -697,7 +613,7 @@ ExecStart=/usr/local/bin/clp-addons repair --anchors-only --quiet
  * the watcher with it, so the service has none: each start is a read of the
  * database, and a path unit cannot start a service that is still running.
  */
-export function newSiteUnits(): { service: string; path: string; rows: string } {
+function newSiteUnits(): { service: string; path: string; rows: string } {
   return {
     service: `[Unit]
 Description=Apply addons to new CloudPanel sites
@@ -791,11 +707,9 @@ WantedBy=paths.target
 }
 
 /**
- * Everything the watcher's fast repair reconciles: Twig anchors, the panel
- * vhost, site vhosts, global settings, Cloudflare ranges, and the SSH login
- * message CloudPanel's upgrades replace. The service's
- * delay lets CloudPanel commit a new site's row after creating its vhost.
- * Watch the range directory for atomic replacements of the IP list.
+ * CloudPanel's upgrades replace the SSH login message. The Cloudflare range
+ * directory is watched as well as the file, for atomic replacements of the IP
+ * list.
  */
 function reconcileWatchPaths(): string[] {
   const vhost = panelVhostWatchPath();
@@ -807,14 +721,11 @@ function reconcileWatchPaths(): string[] {
 }
 
 /**
- * What one `installUnits` pass actually altered.
- *
- * A caller deciding what to restart needs the difference between them: a
- * toggle that changed no definition should reload nothing and restart nothing,
- * and one that only added the new-site watcher should start that watcher and
- * leave the armed reconcile timer and the auth socket alone.
+ * A toggle that changed no definition should reload nothing and restart
+ * nothing, and one that only added the new-site watcher should start that
+ * watcher and leave the armed reconcile timer and the auth socket alone.
  */
-export interface UnitChanges {
+interface UnitChanges {
   /** The manager unit's own text differs, so its next start will differ. */
   manager: boolean;
   /** Any shared reconcile/anchor definition was written differently. */
@@ -834,26 +745,16 @@ export interface UnitChanges {
 }
 
 /**
- * Whether the file at `path` is already exactly what `writeManaged` would have
- * written: a plain `0644` regular file owned by this process, holding `body`.
- *
- * Content alone is not the question. While `installUnits` rewrote every
- * definition unconditionally, repair converged their mode and ownership as a
- * side effect of that rewrite. Skipping the write on matching text alone would
- * have taken that away: a unit left group-writable, or replaced by a symlink to
- * a file that happens to hold the right text, would survive the repair that
- * exists to undo exactly that. Several managed units carry no `User=`, so
- * systemd runs what they name as root.
+ * Content alone is not enough: a unit left group-writable, or replaced by a
+ * symlink to a file that happens to hold the right text, must not survive
+ * repair. Several managed units carry no `User=`, so systemd runs what they
+ * name as root.
  */
 function managedFileIntact(path: string, body: string): boolean {
   try {
     const info = lstatSync(path);
     if (!info.isFile()) return false;
     if ((info.mode & 0o7777) !== 0o644) return false;
-    // The owner this compares against is the process's own rather than a
-    // literal 0, because that is what writeAtomic produces. Every caller here
-    // is already past requireRoot, so in service it is 0; saying so that way
-    // keeps the check true of what it is actually checking.
     if (info.uid !== process.getuid?.()) return false;
     return readFileSync(path, "utf-8") === body;
   } catch {
@@ -861,25 +762,19 @@ function managedFileIntact(path: string, body: string): boolean {
   }
 }
 
-/** Writes a managed definition unless one is already intact; returns whether it did. */
 function writeManaged(path: string, body: string): boolean {
   if (managedFileIntact(path, body)) return false;
-  writeAtomic(path, body, 0o644);
+  writeFileAtomic(path, body, { mode: 0o644, createParent: true });
   return true;
 }
 
-/** Removes a managed definition; returns whether one was there to remove. */
 function removeManaged(path: string): boolean {
   if (!existsSync(path)) return false;
   rmSync(path, { force: true });
   return true;
 }
 
-/**
- * Writes one addon's own units while it is enabled, and stops and removes them
- * once it is not. `trigger` is the unit that schedules the rest; any other path
- * unit among them is one that is started on demand, and is stopped too.
- */
+/** `trigger` is the unit that schedules the rest; any other path unit among them is started on demand, so it is stopped too. */
 function syncAddonUnits(enabled: boolean, trigger: string, units: [string, string][]): "added" | "removed" | null {
   if (enabled) return units.map(([name, body]) => writeManaged(`${SYSTEMD_DIR}/${name}`, body)).some(Boolean) ? "added" : null;
   if (existsSync(`${SYSTEMD_DIR}/${trigger}`)) tryRun("systemctl", ["disable", "--now", trigger]);
@@ -902,8 +797,6 @@ export function installUnits(specs: AddonSpec[]): UnitChanges {
   const cron = reconcileInstaticBackupCron(specs.some((spec) => spec.name === "instatic"));
   const units = reconcileUnits();
   const manager = writeManaged(`${SYSTEMD_DIR}/${MANAGER_UNIT}`, serviceUnit(specs));
-  // Written one at a time rather than `||`-chained: short-circuiting would skip
-  // the later writes as soon as an earlier one changed.
   const reconcileWrites = [
     writeManaged(`${SYSTEMD_DIR}/${RECONCILE_SERVICE}`, units.service),
     writeManaged(`${SYSTEMD_DIR}/${RECONCILE_TIMER}`, units.timer),
@@ -942,26 +835,18 @@ export function installUnits(specs: AddonSpec[]): UnitChanges {
     cron,
     systemd: manager || reconcileChanged || newSites !== null || certificates !== null || firewall !== null || authWrites.some(Boolean),
   };
-  // systemd only needs telling when a definition it reads actually moved. The
-  // cron file is not systemd's, so it does not count towards this.
   if (changes.systemd) run("systemctl", ["daemon-reload"]);
   return changes;
 }
 
 /**
- * Bring running units in line with definitions a toggle just rewrote.
+ * Not `startUnits`, which restarts everything: restarting the auth socket
+ * drops in-flight authentication, and restarting the reconcile timer disarms
+ * and rearms a schedule the toggle had no opinion about.
  *
- * Deliberately not `startUnits`. That one is the bootstrap and recovery path:
- * it enables and restarts everything, which is right after an install, an
- * update or a repair, and wrong for enabling one addon -- restarting the auth
- * socket drops in-flight authentication, and restarting the reconcile timer
- * disarms and rearms a schedule the toggle had no opinion about. This starts
- * only what the toggle actually created.
- *
- * The manager is not restarted here. Its unit text changes with the addon set,
- * but only `After=`/`Wants=` and unread `Environment=` lines, which matter at
- * the next start; which addons it serves is read per request. `daemon-reload`
- * has already made the new text the one systemd will use.
+ * The manager is not restarted. Its unit text changes with the addon set only
+ * in its `After=`/`Wants=` lines, which matter at the next start; which addons
+ * it serves is read per request.
  */
 export function applyToggleUnits(changes: UnitChanges): void {
   if (changes.newSites === "added") {
@@ -979,36 +864,23 @@ export function applyToggleUnits(changes: UnitChanges): void {
 }
 
 /**
- * Whether this box already went through a full install.
- *
- * A toggle applies a delta, which is only meaningful when there is something to
- * apply it to. An enable on a box where the platform was never set up, or a
- * failed install left it half done, would apply the delta to nothing: no
- * service user, no units, no auth socket. This is the cheap check
- * that tells the two apart, so the toggle path can hand a first install back to
- * the full one instead of half-provisioning a machine.
- *
- * It is not a drift check. Repair is the convergence path and stays so; this
- * only asks whether the install ever happened.
+ * An enable on a box where the platform was never set up, or a failed install
+ * left it half done, gets the full install rather than a toggle's delta
+ * applied to nothing. Not a drift check: repair converges drift.
  */
 export function platformProvisioned(commands: ProvisionCommandRunner = { run, tryRun }): boolean {
   return existsSync(`${SYSTEMD_DIR}/${MANAGER_UNIT}`)
     && existsSync(`${SYSTEMD_DIR}/${AUTH_SOCKET_UNIT}`)
     && existsSync(`${SYSTEMD_DIR}/${AUTH_SERVICE_UNIT}`)
     && commands.tryRun("id", ["-u", SERVICE_USER]).ok
-    // The files exist from the moment `bootstrapProvision` writes them, which
-    // is well before it calls `startUnits`. If it fails in between -- an
-    // unpatchable template, an Nginx block it will not touch -- the files alone
-    // would report a provisioned box, and the delta path never starts anything.
-    // These two are what `startUnits` leaves behind: the manager running and
-    // the reconcile timer armed. Neither is true until it finished, and a box
-    // where either has since stopped is one a full pass should see anyway.
+    // `bootstrapProvision` writes the files well before it calls `startUnits`,
+    // and can fail in between; the manager running and the reconcile timer
+    // armed are what `startUnits` leaves behind.
     && commands.tryRun("systemctl", ["is-active", "--quiet", MANAGER_UNIT]).ok
     && commands.tryRun("systemctl", ["is-active", "--quiet", RECONCILE_TIMER]).ok;
 }
 
-export interface StartUnitsOptions {
-  /** Called after unit files are ready and immediately before manager restart. */
+interface StartUnitsOptions {
   beforeManagerRestart?: () => void;
 }
 
@@ -1033,8 +905,7 @@ export function startUnits(options: StartUnitsOptions = {}): void {
   ensureTimerArmed(RECONCILE_TIMER);
 }
 
-export function stopUnits(keepShared = false): void {
-  if (keepShared) return;
+export function stopUnits(): void {
   reconcileInstaticBackupCron(false);
   for (const unit of [MANAGER_UNIT, RECONCILE_TIMER, RECONCILE_PATH, NEW_SITES_PATH, CERTIFICATES_PATH, FIREWALL_PATH, NEW_SITE_ROWS_PATH,
     AUTH_SOCKET_UNIT, AUTH_SERVICE_UNIT]) {
@@ -1049,14 +920,9 @@ export function stopUnits(keepShared = false): void {
   tryRun("systemctl", ["daemon-reload"]);
 }
 
-export function unitActive(unit: string): string {
-  return tryRun("systemctl", ["is-active", unit]).out || "unknown";
-}
-
 /**
- * Why the manager socket is not the one the unit serves, or null when it is.
- * A `serve` run by hand left a root-owned socket behind while the unit kept
- * running on the one it had replaced, so ownership is part of the answer.
+ * A `serve` run by hand leaves a root-owned socket behind while the unit keeps
+ * running on the one it replaced, so ownership is checked too.
  */
 export function managerSocketProblem(): string | null {
   let socket: ReturnType<typeof lstatSync>;
@@ -1083,7 +949,7 @@ export function unitPid(unit: string): string | null {
   return pid && pid !== "0" ? pid : null;
 }
 
-export function timerNextElapse(unit: string): string | null {
+function timerNextElapse(unit: string): string | null {
   const values = tryRun("systemctl", [
     "show", "-p", "NextElapseUSecRealtime", "-p", "NextElapseUSecMonotonic", "--value", unit,
   ]).out.split(/\r?\n/).map((value) => value.trim());
@@ -1113,13 +979,6 @@ export function ensurePathWatching(unit: string, quiet = false): void {
   if (!quiet) log.warn(`${unit} is not watching; restarting it`);
   tryRun("systemctl", ["restart", unit]);
   if (unitActive(unit) !== "active" && !quiet) log.err(`${unit} still is not watching`);
-}
-
-export function purgeTwigCache(): void {
-  if (!existsSync(TWIG_CACHE_DIR)) return;
-  for (const entry of readdirSync(TWIG_CACHE_DIR)) {
-    rmSync(`${TWIG_CACHE_DIR}/${entry}`, { recursive: true, force: true });
-  }
 }
 
 export function removeLegacyUnits(quiet = false): void {

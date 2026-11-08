@@ -1,16 +1,15 @@
-import { describe, test, expect } from "bun:test";
-import { execFileSync } from "node:child_process";
-import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { describe, test, expect, spyOn } from "bun:test";
+import { execFileSync, spawnSync } from "node:child_process";
+import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import {
-  parseGatewayRequest,
-  type GatewayRequest,
-  webVerb,
-} from "../lib/gateway-protocol";
+import { parseGatewayRequest, webVerb } from "../lib/gateway-protocol";
 import { callGatewayAuth, callGatewayPanelInfo } from "../lib/gateway-client";
 import { createAuthActionServer } from "../cli/auth-action";
 import { panelSessionLifetime, parseAuthHelperReply } from "../lib/sso-auth";
+import { handle as stagerHandle } from "../addons/stager/app/index";
+import { stagerService } from "../addons/stager/app/service";
+import { appRequest } from "./app-request";
 
 describe("Gateway Protocol & Server", () => {
   test("parseGatewayRequest parses structured JSON requests", () => {
@@ -387,7 +386,6 @@ describe("Panel session lifetime", () => {
 // 1 MiB password field took all of them down, 20 times out of 20.
 describe("one request may not kill the manager", () => {
   const repo = join(import.meta.dir, "..");
-  const source = (path: string) => readFileSync(join(repo, path), "utf-8");
 
   // Driven for real: a child that exits before reading, a megabyte written to
   // it, and the question is whether the process is still there afterwards.
@@ -400,7 +398,7 @@ describe("one request may not kill the manager", () => {
     `;
     let out = "";
     try {
-      out = execFileSync("bun", ["-e", driver], {
+      out = execFileSync(process.execPath, ["-e", driver], {
         encoding: "utf-8",
         env: { ...process.env, CLP_ADDONS_ACTION_TEST_BIN: "/bin/true" },
         stdio: ["pipe", "pipe", "pipe"],
@@ -411,23 +409,42 @@ describe("one request may not kill the manager", () => {
     expect(out, out.slice(-400)).toInclude("SURVIVED");
   });
 
-  test("the field is bounded before the write is even attempted", () => {
-    const index = source("addons/stager/app/index.ts");
-    expect(index).toInclude("instaticPassword.length > MAX_PASSWORD");
-    expect(index).toInclude("CONTROL_CHARS.test(instaticPassword)");
+  test("the field is bounded before the write is even attempted", async () => {
+    const spies = [
+      spyOn(stagerService, "listSites").mockResolvedValue([{ domain: "a.example.com", siteType: "reverse-proxy" }] as never),
+    ];
+    const start = spyOn(stagerService, "startClone").mockResolvedValue({ ok: true, data: { id: "x" } } as never);
+    try {
+      for (const password of ["x".repeat(257), "pass\nword", "pass\u0000word"]) {
+        const res = await stagerHandle(appRequest("/api/clones", "POST", {
+          source: "a.example.com", target: "stg.a.example.com", instaticEmail: "a@example.com", instaticPassword: password,
+        }), "/api/clones");
+        expect(res.status, JSON.stringify(password)).toBe(400);
+      }
+      expect(start).not.toHaveBeenCalled();
+    } finally {
+      for (const spy of [...spies, start]) spy.mockRestore();
+    }
   });
 
   // The long-lived process is the one place an unexpected throw should not be
   // fatal: it is the only process, and Restart=always turns a request that can
   // kill it into a request that can hold both addons in a crash loop.
-  test("the manager survives an out-of-band throw, and installs the handler once", () => {
-    const server = source("manager/server.ts");
-    const serve = server.slice(server.indexOf("export async function cmdServe"));
-    expect(serve).toInclude('process.on("uncaughtException"');
-    expect(serve).toInclude('process.on("unhandledRejection"');
-    // One handler, and only the serving process installs it: a second one in
-    // the CLI would swallow a fault in a command that should exit nonzero.
-    expect(server.match(/process\.on\("uncaughtException"/g) ?? []).toHaveLength(1);
-    expect(source("cli/index.ts")).not.toInclude('process.on("uncaughtException"');
+  test("the manager survives an out-of-band throw, and only serving installs the handler", () => {
+    // One handler, and only the serving process installs it: one in the CLI
+    // would swallow a fault in a command that should exit nonzero.
+    const driver = `
+      const { installCrashGuards } = await import("${repo}/manager/server.ts");
+      await import("${repo}/cli/index.ts").catch(() => {});
+      const before = process.listenerCount("uncaughtException") + process.listenerCount("unhandledRejection");
+      installCrashGuards();
+      console.error = () => {};
+      setTimeout(() => { throw new Error("out of band"); }, 0);
+      Promise.reject(new Error("unawaited"));
+      setTimeout(() => console.log("SURVIVED", before), 50);
+    `;
+    const run = spawnSync(process.execPath, ["-e", driver], { encoding: "utf-8", env: { ...process.env, CLP_ADDONS_ACTION_TEST_BIN: "/bin/true" } });
+    expect(run.stdout.trim(), run.stderr.slice(-400)).toBe("SURVIVED 0");
+    expect(run.status).toBe(0);
   });
 });

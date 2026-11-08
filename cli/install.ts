@@ -1,17 +1,18 @@
-// `clp-addons install`.
-
-import { dashboardUrl, installedAddons, migrateOldAddonNames, resolveAddon } from "./addons";
+import { dashboardUrl, migrateOldAddonNames, resolveAddon } from "./addons";
+import { enabledAddons } from "../addons/catalog";
 import { artifactNames, installArtifacts, installedTag } from "./artifacts";
 import { bootstrapProvision, applyEnable } from "./toggle";
-import { type AddonSpec } from "./addon-catalog";
-import { recordNewsSince } from "./manager-action";
+import { type AddonSpec } from "../lib/addon-definition";
+import { recordNewsSince } from "../manager/action";
 import { withOperationLock } from "./operation-lock";
-import { ARTIFACT_MANIFEST_PATH } from "./paths";
+import { ARTIFACT_MANIFEST_PATH } from "../lib/paths";
 import { lstatSync } from "node:fs";
 import { ensureDirs, ensureRequiredUnits, ensureServiceUser } from "./provision";
-import { CLI_VERSION, loadLocal } from "./release";
-import { fatal, log, parseFlags, requireRoot } from "./util";
-import { changeLock, lockFailure, type LockFiles } from "./lock-addon";
+import { CLI_VERSION } from "../lib/version";
+import { loadLocal } from "./release";
+import { fatal, log, requireRoot } from "../lib/log";
+import { parseFlags } from "./flags";
+import { changeLock, lockFailure, type LockFiles } from "../lib/lock-addon";
 
 /**
  * What install.sh runs: `--local` hands over the binary it has just installed,
@@ -35,7 +36,7 @@ export async function cmdInstall(argv: string[]): Promise<void> {
     applyLocal(specs.shift(), local);
     for (const spec of specs) await applyEnable(spec.name);
     log.plain();
-    if (!installedAddons().some((spec) => spec.name === "system-tweaks")) {
+    if (!enabledAddons().some((spec) => spec.name === "system-tweaks")) {
       log.plain("System Tweaks is recommended: it applies the security fixes. Enable it on the Addons page or with: clp-addons enable system-tweaks");
     }
     log.plain(`Dashboard URL: ${dashboardUrl()}`);
@@ -46,7 +47,7 @@ export async function cmdInstall(argv: string[]): Promise<void> {
  * No release was ever installed: no artifact manifest, readable or not, and no
  * addon enabled. A manifest that cannot be read is still an existing box.
  */
-export function freshBox(manifest = ARTIFACT_MANIFEST_PATH, enabled = installedAddons().length): boolean {
+export function freshBox(manifest = ARTIFACT_MANIFEST_PATH, enabled = enabledAddons().length): boolean {
   if (enabled > 0) return false;
   try {
     lstatSync(manifest);
@@ -77,7 +78,7 @@ export function lockNewInstall(fresh: boolean, files?: LockFiles): boolean {
 
 function applyLocal(spec: AddonSpec | undefined, dir: string): void {
   if (spec) ensureRequiredUnits(spec);
-  const installed = installedAddons();
+  const installed = enabledAddons();
   const wasEnabled = installed.some((item) => item.name === spec?.name);
   const specs = [...installed.filter((item) => item.name !== spec?.name), ...(spec ? [spec] : [])];
   const artifacts = loadLocal(dir, artifactNames());

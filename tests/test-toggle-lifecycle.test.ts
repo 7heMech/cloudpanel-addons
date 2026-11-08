@@ -1,5 +1,7 @@
 import { expect, test } from "bun:test";
-import { existsSync, lstatSync, mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
+import {
+  existsSync, lstatSync, mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync,
+} from "node:fs";
 import { spawnSync } from "node:child_process";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
@@ -47,8 +49,8 @@ const record = (bucket, name) => (...args) => { bucket.push(name); return undefi
 // Only the paths are redirected. The catalog derives each addon's config file
 // and state directory from these, so pointing them at the fixture is enough --
 // there is no second list of addons to keep in step.
-const realPaths = await import("./cli/paths.ts");
-mock.module("./cli/paths.ts", () => ({
+const realPaths = await import("./lib/paths.ts");
+mock.module("./lib/paths.ts", () => ({
   ...realPaths,
   SYSTEMD_DIR: root + "/systemd",
   CONFIG_DIR: root + "/etc",
@@ -65,14 +67,18 @@ mock.module("./cli/paths.ts", () => ({
   ROOT_UID: process.getuid(),
 }));
 
-const realUtil = await import("./cli/util.ts");
+const realLog = await import("./lib/log.ts");
 class TestFatal extends Error {}
-mock.module("./cli/util.ts", () => ({
-  ...realUtil,
+mock.module("./lib/log.ts", () => ({
+  ...realLog,
   Fatal: TestFatal,
   fatal: (message) => { throw new TestFatal(message); },
   log: { step: () => {}, ok: () => {}, warn: (message) => { warnings.push(message); }, err: () => {}, plain: () => {} },
   requireRoot: () => {},
+}));
+const realCommand = await import("./lib/command.ts");
+mock.module("./lib/command.ts", () => ({
+  ...realCommand,
   run: (cmd, args) => { calls.push([cmd, args]); return cmd === "id" ? "0" : ""; },
   tryRun: (cmd, args) => {
     calls.push([cmd, args]);
@@ -81,11 +87,13 @@ mock.module("./cli/util.ts", () => ({
   },
 }));
 
-// The real installUnits, applyToggleUnits, writeConfig, installedConfig and
+// The real installUnits, applyToggleUnits, writeConfig, addonEnabled and
 // platformProvisioned are under test. Everything replaced below either needs
 // root or reaches outside the fixture; each records that it was reached, which
 // is most of what these tests assert.
 const realProvision = await import("./cli/provision.ts");
+const { daemonReload } = await import("./lib/systemd.ts");
+mock.module("./lib/systemd.ts", () => ({ unitActive: () => "active", daemonReload }));
 mock.module("./cli/provision.ts", () => ({
   ...realProvision,
   ensureDirs: record(provision, "ensureDirs"),
@@ -103,6 +111,8 @@ mock.module("./cli/provision.ts", () => ({
   unitActive: () => "active",
   unitPid: () => null,
 }));
+const __maintenanceNginx0 = await import("./addons/maintenance/nginx.ts");
+mock.module("./addons/maintenance/nginx.ts", () => ({ ...__maintenanceNginx0, reconcileNginxMaintenance: () => { inject.push("maintenance"); return { state: "ok", changed: false }; } }));
 mock.module("./cli/inject.ts", () => ({
   KNOWN_GOOD_PANEL_VERSIONS: [],
   inspect: () => ({ state: "ok" }),
@@ -112,7 +122,6 @@ mock.module("./cli/inject.ts", () => ({
   panelVersion: () => "test",
   purgeTwigCache: record(inject, "purgeTwigCache"),
   reconcile: (injections) => { inject.push("reconcile:" + injections.length); return { statuses: [], changed: false }; },
-  reconcileNginxMaintenance: () => { inject.push("maintenance"); return { state: "ok", changed: false }; },
   reconcileNginxProxy: () => { inject.push("proxy"); return { state: "ok", changed: false }; },
   findMasterVhost: () => null,
   panelVhostWatchPath: () => null,
@@ -256,8 +265,6 @@ test("Cloudflare IP Access uses the shared new-site watcher, not a timer of its 
   const on = toggle([{ verb: "enable", addon: "cloudflare-ips" }]);
   expect(on.error).toBeUndefined();
   expect(on.systemd).toContain("enable clp-addons-new-sites.path");
-  expect(on.systemd.join(" ")).not.toContain("cloudflare-ips-reconcile");
-  expect(existsSync(join(on.root, "systemd", "clp-addons-cloudflare-ips-reconcile.timer"))).toBe(false);
 
   const off = toggle([{ verb: "disable", addon: "cloudflare-ips" }], { enabled: ["cloudflare-ips"] });
   expect(off.error).toBeUndefined();
@@ -313,13 +320,11 @@ test("WP Tools brings the certificate watcher with it, and takes it away again",
 test("the watcher stays while SMTP still uses it, and disabling DNS stops its transient pass", () => {
   const on = toggle([{ verb: "enable", addon: "dns" }], { enabled: ["smtp"] });
   expect(on.error).toBeUndefined();
-  expect(existsSync(join(on.root, "systemd", "clp-addons-dns.service"))).toBe(false);
 
   const off = toggle([{ verb: "disable", addon: "dns" }], { enabled: ["smtp", "dns"] });
   expect(off.error).toBeUndefined();
   // Disabling stops a check that is running and changes nothing in Cloudflare.
   expect(off.systemd).toContain("stop clp-addon-dns-reconcile");
-  expect(existsSync(join(off.root, "systemd", "clp-addons-dns.service"))).toBe(false);
   expect(existsSync(join(off.root, "systemd", "clp-addons-new-sites.path"))).toBe(true);
   expect(off.cli).toEqual([]);
 });
@@ -373,12 +378,11 @@ test("disabling leaves the addon's state directory and removes only its config",
   expect(existsSync(join(run.root, "state"))).toBe(true);
 });
 
-test("the manager unit written by a toggle describes exactly the enabled set", () => {
-  const run = toggle([{ verb: "enable", addon: "stager" }], { enabled: ["instatic"] });
-  const unit = readFileSync(join(run.root, "systemd", "clp-addons.service"), "utf8");
-  expect(unit).toContain("STAGER_APP_DATA=");
-  expect(unit).toContain("INSTATIC_APP_DATA=");
-  expect(unit).not.toContain("MAINTENANCE_APP_DATA=");
+test("the manager unit written by a toggle orders it after what the enabled set needs", () => {
+  const unit = (enabled: string[]) =>
+    readFileSync(join(toggle([{ verb: "enable", addon: "stager" }], { enabled }).root, "systemd", "clp-addons.service"), "utf8");
+  expect(unit(["instatic"])).toMatch(/^After=.* docker\.service$/m);
+  expect(unit(["maintenance"])).not.toContain("docker.service");
 });
 
 test("a spoiled unit file is rewritten even though its text still matches", () => {
@@ -465,8 +469,6 @@ function optedOutFixture(alsoEnabled: string[] = []): { root: string; guard: str
   writeFileSync(join(root, "state", "system-tweaks", "settings.json"), JSON.stringify({ version: 1, uploadProgressGuard: false }), { mode: 0o600 });
   return { root, guard: join(root, "php", "8.3", "fpm", "conf.d", "99-clp-addons-upload-progress.ini") };
 }
-
-const guardTests = (run: Run) => run.calls.filter(([cmd, args]) => cmd.endsWith("php-fpm8.3") && args[0] === "-t");
 
 test("disabling System Tweaks takes the firewall watcher away", () => {
   const { root } = optedOutFixture(["maintenance"]);

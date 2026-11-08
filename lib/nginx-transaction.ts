@@ -1,9 +1,11 @@
 import { Database } from "bun:sqlite";
 import { lstatSync, readFileSync, rmSync } from "node:fs";
-import { ActionFailure, errorMessage, failAction, type CommandResult } from "./action-common";
-import { writeFileAtomic } from "../lib/atomic-write";
+import { ActionFailure, failAction } from "./action";
+import { errorMessage } from "./errors";
+import { type CommandResult } from "./command";
+import { writeFileAtomic } from "./atomic-write";
 
-export interface NginxFileBackup {
+interface NginxFileBackup {
   path: string;
   content: string | null;
   mode: number;
@@ -11,12 +13,7 @@ export interface NginxFileBackup {
   gid: number;
 }
 
-export function writeAtomicOwned(path: string, content: string, mode: number, uid: number, gid: number): void {
-  // Preserve the panel's ownership so it can still rewrite its files.
-  writeFileAtomic(path, content, { mode, owner: { uid, gid }, createParent: true });
-}
-
-/** The `allow` entries of CloudPanel's Cloudflare list, or none without one. */
+/** The `allow` entries of CloudPanel's Cloudflare list. */
 export function cloudflareRanges(path: string): string[] {
   let content: string;
   try { content = readFileSync(path, "utf8"); } catch { return []; }
@@ -65,7 +62,6 @@ function commandError(label: string, result: CommandResult): string {
   return `${label} failed: ${(result.stderr || result.stdout || `exit ${result.exitCode ?? "unknown"}`).trim()}`;
 }
 
-
 export function withRecoveryFailures(primary: unknown, label: string, failures: string[]): Error {
   const original = primary instanceof Error ? primary : new Error(String(primary));
   if (failures.length === 0) return original;
@@ -79,7 +75,7 @@ function restoreVhosts(backups: NginxFileBackup[]): string[] {
   for (const backup of backups) {
     try {
       if (backup.content === null) rmSync(backup.path, { force: true });
-      else writeAtomicOwned(backup.path, backup.content, backup.mode, backup.uid, backup.gid);
+      else writeFileAtomic(backup.path, backup.content, { mode: backup.mode, owner: { uid: backup.uid, gid: backup.gid }, createParent: true });
     } catch (error) {
       failures.push(`vhost ${backup.path}: ${errorMessage(error)}`);
     }
@@ -105,7 +101,7 @@ export function nginxFileChange(path: string, content: string | null, expectedUi
 }
 
 /** Which Nginx to validate and reload: the sites' by default, or one with its own config and unit. */
-export interface NginxInstance {
+interface NginxInstance {
   nginx: string;
   systemctl: string;
   config?: string;
@@ -148,7 +144,7 @@ class NginxTransaction {
       if (content === backup.content) continue;
       this.written.push(backup);
       if (content === null) rmSync(backup.path, { force: true });
-      else writeAtomicOwned(backup.path, content, backup.mode, backup.uid, backup.gid);
+      else writeFileAtomic(backup.path, content, { mode: backup.mode, owner: { uid: backup.uid, gid: backup.gid }, createParent: true });
     }
     const changed = rowsChanged || this.written.length > 0;
     this.needsReload = this.options.reload !== false && (changed || this.options.alwaysValidate === true);
@@ -188,7 +184,6 @@ class NginxTransaction {
   }
 }
 
-/** Commits panel rows and Nginx files together, recovering both on failure. */
 export function withNginxTransaction<T>(
   db: Database | null,
   paths: NginxInstance,

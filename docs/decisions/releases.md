@@ -182,7 +182,8 @@ the old process could still write old Twig or unit definitions after installing
 a new release. The manager job records `restarting background services`
 immediately before the manager service is restarted. The browser treats the
 expected SSE disconnect as a reconnecting state, waits for `/addons/health` to
-recover, and then resumes from the on-disk job record. That probe is behind the
+recover (a Stager, Instatic or Git job page waits for its addon's own
+`/health`, the only addon pages that follow a job this way), and then resumes from the on-disk job record. That probe is behind the
 session gate like every other route, so the browser waits for the manager's own
 JSON reply rather than for any 200 -- the login page a lapsed session is sent to
 is also one. The job log therefore remains available across the restart instead

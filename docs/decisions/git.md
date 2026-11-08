@@ -59,7 +59,7 @@ fails instead of hanging until the job's ten-minute timeout.
 
 ## Jobs
 
-A deployment is a job in a transient systemd unit, through `cli/job-store.ts`,
+A deployment is a job in a transient systemd unit, through `lib/job-store.ts`,
 so it survives a manager restart, and it is watched through `lib/job-stream.ts`
 like every other job on the platform. One site has at most one deployment
 running: the create path holds the site's lock, refuses a second while one is

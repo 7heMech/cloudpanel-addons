@@ -66,7 +66,6 @@ function editor(id: string, name: "css" | "footerHtml", label: string, value: st
             placeholder="${esc(placeholder)}" oninput="this.closest('.tweak-body').querySelector('.branding-save').disabled = false">${esc(value)}</textarea>`;
 }
 
-/** Shown while the Theme & Branding switch is on; the settings are kept while it is off. */
 export function brandingCard(branding: Branding, on: boolean): string {
   return `
     <div class="card branding-card" id="branding-card"${on ? "" : " hidden"}>

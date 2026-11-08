@@ -1,7 +1,5 @@
-// The entrypoint: argv in, exit code out. Each verb lives in its own module
-// and this one only decides which. `auth` and `manager` are dispatched before
-// the catalog is consulted, because neither is an addon.
-import { dashboardUrl, installedAddons, resolveAddon } from "./addons";
+import { dashboardUrl, resolveAddon } from "./addons";
+import { enabledAddons, ADDONS, ADDON_NAMES, addonEnabled } from "../addons/catalog";
 import { reconcileAnchors } from "./reconcile";
 import { cmdMenu } from "./menu";
 import { cmdStatus } from "./status";
@@ -11,37 +9,26 @@ import { cmdRepair } from "./repair";
 import { applyDisable, applyEnable } from "./toggle";
 import { cmdSelfUninstall } from "./uninstall";
 import { cmdUpdate } from "./update";
-import { ADDONS, ADDON_NAMES } from "./addon-catalog";
-import { CLI_VERSION } from "./release";
-import { installedConfig } from "./provision";
+import { CLI_VERSION } from "../lib/version";
 import { reconcile } from "./inject";
-import { fatal, Fatal, log, requireRoot } from "./util";
+import { fatal, Fatal, log, requireRoot } from "../lib/log";
+import type { AddonSpec } from "../lib/addon-definition";
 import { LOCKABLE_ADDONS, isLockable, lockedAddons } from "../lib/root-locks";
-import { changeLock, lockFailure, lockFileProblem } from "./lock-addon";
+import { changeLock, lockFailure, lockFileProblem } from "../lib/lock-addon";
 import { withOperationLockSync } from "./operation-lock";
 import { runRecon } from "./recon";
 import { cmdServe } from "../manager/server";
-import { executeMaintenanceAction, type MaintenanceStatus } from "../addons/maintenance/action";
 import { runAuthActionStdin } from "./auth-action";
-import { runManagerAction, type ManagerOps } from "./manager-action";
-import { runSmtpSubmit } from "../addons/smtp/submit";
-import { runTerminalPty } from "../addons/terminal/pty";
-import { runTerminalRootCommand } from "../addons/terminal/root-access";
+import { runManagerAction, type ManagerOps } from "../manager/action";
 import { runCertificateWork, runFirewallWork } from "./addon-hooks";
 import { runSyncSites } from "./new-sites";
-import { syncVarnishBackends } from "../addons/system-tweaks/varnish-backend";
-import { resourceLimitsMemory } from "../addons/resource-limits/memory-settings";
-import { systemTweaksPhpPools } from "../addons/system-tweaks/action";
 
 /**
- * The privileged half of the three manager verbs.
- *
- * `update` is `clp-addons update` with no arguments -- the same resolver, the
- * same checksum and provenance verification, the same installer. There is no
- * second download path, which is the point: a button that fetched releases its
- * own way would be a second thing to get right.
+ * `update` is `clp-addons update` with no arguments: the same resolver,
+ * checksum and provenance verification and installer, so the panel's button
+ * has no download path of its own to get right.
  */
-export const MANAGER_OPS: ManagerOps = {
+const MANAGER_OPS: ManagerOps = {
   enable: applyEnable,
   disable: applyDisable,
   update: (beforeManagerRestart, onStep, onProgress) => cmdUpdate([], { beforeManagerRestart, onStep, onProgress }),
@@ -52,6 +39,19 @@ export const MANAGER_OPS: ManagerOps = {
   }, { timeoutSeconds: 15 }),
 };
 
+function addonUsage(): string {
+  return Object.values(ADDONS)
+    .flatMap((spec) => Object.values(spec.commands ?? {}).flatMap((command) => command.usage ? [`  clp-addons ${command.usage}`] : []))
+    .join("\n");
+}
+
+async function runAddonCommand(spec: AddonSpec, name: string, argv: string[]): Promise<number> {
+  const command = spec.commands![name]!;
+  if (command.root) requireRoot(name);
+  if (command.enabledOnly && !addonEnabled(spec)) fatal(`the ${spec.name} addon is not installed`);
+  return (await command.run(argv)) ?? 0;
+}
+
 function usage(): void {
   log.plain(`clp-addons ${CLI_VERSION} — CloudPanel Addons
 
@@ -61,8 +61,7 @@ function usage(): void {
   clp-addons update [--version=vX.Y.Z] [--allow-prerelease] [--skip-attestation]
   clp-addons repair [<addon>] [--quiet] [--anchors-only]
   clp-addons status
-  clp-addons maintenance <domain> [on|off|status]
-  clp-addons terminal root [allow|deny <user>]
+${addonUsage()}
   clp-addons lock [<addon>]
   clp-addons unlock <addon>
   clp-addons self-uninstall --yes
@@ -80,11 +79,10 @@ async function cmdAction(argv: string[]): Promise<number> {
 
   const spec = addon ? ADDONS[addon] : undefined;
   if (!spec?.action) fatal(`unknown action addon '${addon ?? ""}'`);
-  if (!installedConfig(spec)) fatal(`the ${spec.name} addon is not installed`);
+  if (!addonEnabled(spec)) fatal(`the ${spec.name} addon is not installed`);
   return spec.action(rest);
 }
 
-/** With no addon, lists the locks; `lock` alone needs no root, as it only reads. */
 function cmdLock(argv: string[], lock: boolean): void {
   const [addon, ...extra] = argv;
   if (extra.length || (!lock && !addon)) fatal(`usage: clp-addons ${lock ? "lock [<addon>]" : "unlock <addon>"}`);
@@ -117,37 +115,10 @@ function cmdLock(argv: string[], lock: boolean): void {
     : `${addon} is unlocked: administrators can change it from the panel again`);
 }
 
-async function cmdMaintenance(argv: string[]): Promise<void> {
-  requireRoot("maintenance");
-  if (!installedConfig(ADDONS.maintenance!)) fatal("the maintenance addon is not installed");
-  const [rawDomain, operation = "status", ...extra] = argv;
-  if (!rawDomain || extra.length > 0 || !["on", "off", "status"].includes(operation)) {
-    fatal("usage: clp-addons maintenance <domain> [on|off|status]");
-  }
-  const verb = operation === "on" ? "enable" : operation === "off" ? "disable" : "status";
-  try {
-    const result = await executeMaintenanceAction([verb, `--domain=${rawDomain}`]) as MaintenanceStatus;
-    const global = await executeMaintenanceAction(["global-status"]) as { global: boolean; bypasses: string[] };
-    if (operation === "status") {
-      const state = result.uncovered ? "live, not covered" : result.enabled ? "maintenance (503)" : global.global ? "maintenance (503, global)" : "live";
-      log.plain(`${result.domain}: ${state}`);
-      log.plain(`Template: ${result.customTemplate ? "custom" : "default"}`);
-      log.plain(`IP bypasses: ${result.bypasses.length ? result.bypasses.join(", ") : "none"}`);
-      if (global.bypasses.length) log.plain(`Global IP bypasses: ${global.bypasses.join(", ")}`);
-    } else {
-      log.ok(`${result.domain}: maintenance mode ${result.enabled ? "enabled" : "disabled"}`);
-      if (!result.enabled && global.global && !result.uncovered) log.warn("global maintenance is on, so the site still serves 503");
-    }
-    if (result.uncovered) log.warn(`Nginx does not run the maintenance check for ${result.domain} (${result.uncovered}), so visitors get the site whatever is set`);
-  } catch (error) {
-    fatal(error instanceof Error ? error.message : String(error));
-  }
-}
-
 async function cmdOverview(): Promise<void> {
   log.plain(`CloudPanel Addons v${CLI_VERSION.replace(/^v/, "")}`);
   log.plain(`Dashboard: ${dashboardUrl()}`);
-  const specs = installedAddons();
+  const specs = enabledAddons();
   log.plain(specs.length ? `Enabled: ${specs.map((spec) => spec.name).join(", ")}` : "No addons enabled");
   log.plain("Run 'clp-addons status' for service and integration details.");
 }
@@ -172,7 +143,7 @@ async function main(): Promise<number> {
     case "install": await cmdInstall(rest); return 0;
     case "enable":
       for (const spec of addonArgs("enable", rest)) {
-        if (installedConfig(spec)) log.ok(`${spec.name} is already enabled`);
+        if (addonEnabled(spec)) log.ok(`${spec.name} is already enabled`);
         else await applyEnable(spec.name);
       }
       return 0;
@@ -186,54 +157,34 @@ async function main(): Promise<number> {
     case "sync-sites":
       requireRoot("sync-sites");
       if (rest.length) fatal("sync-sites takes no arguments");
-      await runSyncSites(installedAddons());
+      await runSyncSites(enabledAddons());
       return 0;
     case "sync-certificates":
       requireRoot("sync-certificates");
       if (rest.length) fatal("sync-certificates takes no arguments");
-      await runCertificateWork(installedAddons());
+      await runCertificateWork(enabledAddons());
       return 0;
     case "sync-firewall":
       requireRoot("sync-firewall");
       if (rest.length) fatal("sync-firewall takes no arguments");
-      await runFirewallWork(installedAddons());
+      await runFirewallWork(enabledAddons());
       return 0;
-    case "sync-varnish": {
-      // nginx's unit runs this before it loads the vhosts; its failure does not stop the reload.
-      requireRoot("sync-varnish");
-      if (rest.length) fatal("sync-varnish takes no arguments");
-      const refused = syncVarnishBackends();
-      if (refused.length) log.warn(`Varnish server refused, so these sites skip Varnish: ${refused.join(", ")}`);
-      return 0;
-    }
-    case "sync-php-pools": {
-      // Every PHP-FPM unit runs this before it starts, and before and after it reloads; its failure does not stop PHP-FPM.
-      requireRoot("sync-php-pools");
-      if (rest.length > 1 || (rest.length === 1 && rest[0] !== "--before-reload")) fatal("sync-php-pools takes only --before-reload");
-      systemTweaksPhpPools({}, rest[0] === "--before-reload");
-      return 0;
-    }
-    case "sync-memory": {
-      // MySQL's unit runs this before it starts and Redis's after; its failure does not stop either.
-      requireRoot("sync-memory");
-      if (rest.length !== 1 || (rest[0] !== "mysql" && rest[0] !== "redis")) fatal("sync-memory takes mysql or redis");
-      resourceLimitsMemory(rest[0]);
-      return 0;
-    }
     case "status": await cmdStatus(); return 0;
-    case "maintenance": await cmdMaintenance(rest); return 0;
     case "self-uninstall": cmdSelfUninstall(rest); return 0;
     case "lock": cmdLock(rest, true); return 0;
     case "unlock": cmdLock(rest, false); return 0;
     case "action": return await cmdAction(rest);
-    case "smtp-submit": return await runSmtpSubmit(rest);
-    case "terminal-pty": return await runTerminalPty(rest);
-    case "terminal": runTerminalRootCommand(rest); return 0;
     case "serve": return await cmdServe();
     case "help":
     case "--help":
     case "-h": usage(); return 0;
-    default: log.err(`unknown command '${verb}'`); usage(); return 2;
+    default: {
+      const owner = Object.values(ADDONS).find((spec) => spec.commands?.[verb]);
+      if (owner) return await runAddonCommand(owner, verb, rest);
+      log.err(`unknown command '${verb}'`);
+      usage();
+      return 2;
+    }
   }
 }
 

@@ -9,8 +9,6 @@ import type { CloudflareState } from "./service";
 const BASE = mountPath("cloudflare-ips");
 const plural = (count: number, word: string): string => `${count} ${word}${count === 1 ? "" : "s"}`;
 
-// Switches, the toolbar, the confirmation dialog and the inline notice come
-// from lib/app-ui so this addon looks like the rest of the manager.
 import STYLE from "./views.css" with { type: "text" };
 
 // One criterion, so a toggle rather than a menu; it keeps the shared filter's
@@ -23,9 +21,7 @@ ${CLIENT_JS_BODY}`;
 
 export function layout(title: string, content: string, updateNotice?: { current: string; latest: string } | null): string {
   return renderLayout(title, content, {
-    brand: "Cloudflare IP Access",
     base: BASE,
-    nav: [],
     css: STYLE,
     script: CLIENT_JS,
     updateNotice,

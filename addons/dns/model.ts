@@ -4,19 +4,20 @@
  * the same way whether it arrives from the page or from the saved policy.
  */
 import { isIP } from "node:net";
-import { ActionFailure, failAction, oneLine } from "../../cli/action-common";
+import { ActionFailure, failAction } from "../../lib/action";
+import { oneLine } from "../../lib/validate";
 
-export const RECORD_TYPES = ["A", "AAAA", "CNAME", "MX", "TXT", "SRV", "CAA"] as const;
-export type RecordType = (typeof RECORD_TYPES)[number];
+const RECORD_TYPES = ["A", "AAAA", "CNAME", "MX", "TXT", "SRV", "CAA"] as const;
+type RecordType = (typeof RECORD_TYPES)[number];
 
 /** Cloudflare's own TTL choices; 1 is Auto, and the only one a proxied record takes. */
-export const TTLS = [1, 60, 120, 300, 600, 900, 1800, 3600, 7200, 18000, 43200, 86400];
+const TTLS = [1, 60, 120, 300, 600, 900, 1800, 3600, 7200, 18000, 43200, 86400];
 
-export const SSL_MODES = ["off", "flexible", "full", "strict"] as const;
+const SSL_MODES = ["off", "flexible", "full", "strict"] as const;
 export type SslMode = (typeof SSL_MODES)[number];
 
 export const PROXIABLE: readonly RecordType[] = ["A", "AAAA", "CNAME"];
-export const PRIORITISED: readonly RecordType[] = ["MX", "SRV"];
+const PRIORITISED: readonly RecordType[] = ["MX", "SRV"];
 
 const MAX_PROFILES = 24;
 const MAX_RECORDS = 60;
@@ -96,7 +97,7 @@ export interface MailcowSettings {
   sharedMailbox: string;
 }
 
-export interface ZoneChoice {
+interface ZoneChoice {
   connectionId: string;
   zoneId: string;
 }
@@ -153,7 +154,7 @@ export function hostname(value: unknown, what: string): string {
   return name;
 }
 
-export function optionalHostname(value: unknown, what: string): string {
+function optionalHostname(value: unknown, what: string): string {
   return value === "" || value == null ? "" : hostname(value, what);
 }
 
@@ -211,8 +212,8 @@ export function mailbox(value: unknown, what: string): string {
 // ---------------------------------------------------------------------------
 
 /** Placeholders a template may use, and where. Checked again when a template is rendered. */
-export const NAME_PLACEHOLDERS = ["domain", "zone", "sub", "mailcow.selector"];
-export const CONTENT_PLACEHOLDERS = ["domain", "zone", "sub", "ipv4", "ipv6", "mailcow.host", "mailcow.selector", "mailcow.dkim"];
+const NAME_PLACEHOLDERS = ["domain", "zone", "sub", "mailcow.selector"];
+const CONTENT_PLACEHOLDERS = ["domain", "zone", "sub", "ipv4", "ipv6", "mailcow.host", "mailcow.selector", "mailcow.dkim"];
 
 function templateText(value: unknown, what: string, max: number, allowed: string[]): string {
   if (typeof value !== "string") failAction(`${what} must be text`);
@@ -311,7 +312,7 @@ export function dkimSelector(value: unknown): string {
 }
 
 /** Mailcow's HTTPS origin, from either that origin or its bare hostname. */
-export function mailcowOrigin(value: unknown): string {
+function mailcowOrigin(value: unknown): string {
   if (typeof value !== "string") failAction("the Mailcow address must be a hostname or an HTTPS URL");
   const text = value.trim();
   let url: URL;
@@ -326,7 +327,7 @@ export function mailcowOrigin(value: unknown): string {
   return url.origin;
 }
 
-export function parseConnections(value: unknown): Connection[] {
+function parseConnections(value: unknown): Connection[] {
   if (!Array.isArray(value)) failAction("the connections must be a list");
   if (value.length > MAX_CONNECTIONS) failAction(`at most ${MAX_CONNECTIONS} Cloudflare connections can be added`);
   return value.map((entry) => {
@@ -394,7 +395,7 @@ export function parsePolicy(value: unknown): Policy {
 }
 
 /** An absolute http(s) URL with no credentials or fragment; with the path kept, no query either, and no trailing slash. */
-export function redirectTarget(value: unknown, keepPath: boolean): string {
+function redirectTarget(value: unknown, keepPath: boolean): string {
   if (typeof value !== "string") failAction("The target must be a URL, such as https://example.com");
   let url: URL;
   try {

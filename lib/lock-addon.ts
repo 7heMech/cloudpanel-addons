@@ -1,8 +1,10 @@
 // Root's side of the locks: `lock`, `unlock`, System Tweaks' `lock-settings`
 // and a fresh install change the list here, one at a time. The manager only
-// reads it, through lib/root-locks.ts, which loads no FFI.
-import { ActionFailure, withFileLockSync } from "./action-common";
-import { ROOT_LOCKS_FILE, ROOT_LOCKS_LOCK, UntrustedLockFile, lockedAddons, writeLockedAddons } from "../lib/root-locks";
+// reads it, through lib/root-locks.ts, which loads no FFI; the file lock here does.
+import { ActionFailure } from "./action";
+import { errorMessage } from "./errors";
+import { withFileLockSync } from "./file-lock";
+import { ROOT_LOCKS_FILE, ROOT_LOCKS_LOCK, UntrustedLockFile, lockedAddons, writeLockedAddons } from "./root-locks";
 
 /** Tests only: a lock file and its file lock of their own, owned by them. */
 export interface LockFiles {
@@ -11,10 +13,9 @@ export interface LockFiles {
   lockFile?: string;
 }
 
-/** Why the list cannot be read, and what root does about it. */
 export function lockFileProblem(error: unknown, file = ROOT_LOCKS_FILE): string {
   if (!(error instanceof UntrustedLockFile)) {
-    return `cannot read ${file}: ${error instanceof Error ? error.message : String(error)}; every lockable addon counts as locked until it can be`;
+    return `cannot read ${file}: ${errorMessage(error)}; every lockable addon counts as locked until it can be`;
   }
   return `${error.message}, so every lockable addon counts as locked. ` + (error.directory
     ? "Make it owned by root and not writable by group or others, then run this again"

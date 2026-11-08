@@ -1,39 +1,29 @@
 import type { SanitizedSite } from "../../../lib/snapshot-reader";
-// Server-rendered HTML. Every interpolated value goes through esc() or escJs():
-// domains, job steps and the action binary's notes all originate outside this
-// process, and
-// the page is served to an operator whose session can create CloudPanel sites.
+// Every interpolated value goes through esc() or escJs(): domains, job steps
+// and the action's notes all originate outside this process, and the page is
+// served to an operator whose session can create CloudPanel sites.
 
 import { esc } from "../../../lib/app-http";
 import {
   FLEET_FOOTER_HTML, FLEET_ROW_SELECTION_JS, JOB_WATCH_JS, fleetFilterHtml, filterWord, valueFilters, jobStateClass, jobStateLabel, renderFragment, renderLayout,
-  whenText,
+  whenText, type AddonChrome,
 } from "../../../lib/app-ui";
 import type { EmbedFragment } from "../../../lib/shadow-embed";
 import type { SiteContext } from "../../../lib/site-context";
 import { mountPath } from "../../../lib/mount";
 
-/**
- * Where this addon is served. One CloudPanel site carries every addon, so every
- * link this file emits is relative to a mount rather than to the site root.
- * A constant rather than a per-request value: the mount is fixed by the addon's
- * name, so a link that forgets it is a bug at build time, not a routing choice.
- */
 const BASE = mountPath("stager");
 import { expandTarget, promoteBlocked, type JobResult, type JobView, type PromoteResult, type SiteSummary } from "./service";
 
-// Only what the shared shell does not carry.
 import STYLE from "./views.css" with { type: "text" };
 
-/**
- * The pages' inline script.
- *
- * Exported so tests/test-app.test.ts can parse it.
- */
 import VIEWS_JS from "./views.client.js" with { type: "text" };
-// One expandTarget for the route and the hostname preview.
+// One expandTarget for the route and the hostname preview; exported so tests
+// can parse it.
 const CLIENT_JS = `const expandTarget = ${expandTarget.toString()};\n${VIEWS_JS}`;
 export { CLIENT_JS };
+
+const CHROME: AddonChrome = { base: BASE, css: STYLE, script: `${FLEET_ROW_SELECTION_JS}\n${JOB_WATCH_JS}${CLIENT_JS}` };
 
 export function layout(
   title: string,
@@ -42,28 +32,15 @@ export function layout(
   site?: SiteContext,
 ): string {
   return renderLayout(title, content, {
-    brand: "Stager",
-    base: BASE,
-    nav: [],
-    css: STYLE,
-    script: `${FLEET_ROW_SELECTION_JS}\n${JOB_WATCH_JS}${CLIENT_JS}`,
+    ...CHROME,
     updateNotice,
     ...(site ? { site: { ...site, activeSlug: "stager" } } : {}),
   });
 }
 
-/**
- * The same page as `layout`, as a fragment for mounting inside CloudPanel's own
- * site page. No site context: the panel is already drawing it.
- */
+/** No site context: CloudPanel's own site page is already drawing it. */
 export function fragment(title: string, content: string): EmbedFragment {
-  return renderFragment(title, content, {
-    brand: "Stager",
-    base: BASE,
-    nav: [],
-    css: STYLE,
-    script: `${FLEET_ROW_SELECTION_JS}\n${JOB_WATCH_JS}${CLIENT_JS}`,
-  });
+  return renderFragment(title, content, CHROME);
 }
 
 function stateBadge(job: JobView, id = ""): string {
@@ -90,7 +67,6 @@ export function isSiteMissing(
   return !panelSites.some((s) => s.domain === job.target);
 }
 
-/** A finished clone whose two sites are both still there. */
 function canPromote(job: JobView, missing: boolean): boolean {
   return !missing && !promoteBlocked(job);
 }
@@ -141,15 +117,7 @@ export function jobsView(
     </div>`;
 }
 
-/**
- * Staging as it looks from one site's own page in CloudPanel.
- *
- * Two questions, because a site can be either end of a clone and occasionally
- * both: whether this site *is* a staging copy that can go back to the site it
- * came from, and what has been staged *from* it. The fleet view at
- * `/addons/stager/` answers neither -- it lists every clone on the box, which
- * is the wrong altitude for a page reached from one site's tab strip.
- */
+/** A site can be either end of a clone, and occasionally both. */
 export function siteStagingView(
   domain: string,
   jobs: JobView[],
@@ -160,12 +128,10 @@ export function siteStagingView(
 ): string {
   const newest = (a: JobView, b: JobView) => b.createdAt.localeCompare(a.createdAt);
   const clonesFrom = jobs.filter((j) => j.kind !== "promote" && j.source === domain);
-  // The clone that produced this site, if it is one. Newest first, because a
-  // site cloned twice is the second clone.
+  // A site cloned twice is the second clone.
   const cloneOf = jobs
     .filter((j) => j.kind !== "promote" && j.target === domain && j.state === "done" && j.result)
     .sort(newest)[0];
-  // A promote runs from the staging site, so this site is its source.
   const lastPromote = jobs.filter((j) => j.kind === "promote" && j.source === domain).sort(newest)[0];
 
   const row = (j: JobView): string => {
@@ -196,8 +162,6 @@ export function siteStagingView(
       ${cloneAction}
     </div>`;
 
-  // Promoting is the return leg of a clone, so without that record there is no
-  // live site to return to.
   let promote = "";
   if (cloneOf) {
     const blocked = promoteBlocked(cloneOf);
@@ -234,7 +198,6 @@ export function siteStagingView(
   return heading + promote + clones;
 }
 
-/** How a site's `type` column reads to an operator. */
 function typeLabel(t: string): string {
   if (t === "php") return "PHP";
   if (t === "static") return "Static";
@@ -242,7 +205,7 @@ function typeLabel(t: string): string {
   return t;
 }
 
-/** One line on what is being cloned: `WordPress, PHP 8.2, 1 database`. */
+/** `WordPress, PHP 8.2, 1 database`. */
 function sourceSummary(site: SiteSummary): string {
   if (site.siteType === "reverse-proxy") return "Instatic site. Its pages and media go to a new instance of its own.";
   const parts = [site.application || "Generic", site.phpVersion ? `PHP ${site.phpVersion}` : typeLabel(site.siteType)];
@@ -250,7 +213,6 @@ function sourceSummary(site: SiteSummary): string {
   return parts.join(", ");
 }
 
-/** Renders either the source picker or the configuration form for a new clone. */
 export function newCloneView(source: SiteSummary | null, sites: SiteSummary[], error?: string): string {
   if (!source) {
     const options = sites
@@ -282,10 +244,8 @@ export function newCloneView(source: SiteSummary | null, sites: SiteSummary[], e
       </div>`;
   }
 
-  // Only for an Instatic source, because only there is there a second
-  // application to sign into. The password is the source instance's own
-  // administrator credential: it is posted once, reaches the action binary on
-  // stdin, and is deleted the moment the export it exists for has finished.
+  // The source instance's admin password is posted once, reaches the action
+  // on stdin, and is deleted the moment its export has finished.
   const instaticFields = source.siteType === "reverse-proxy"
     ? `
       <div class="credential-fields">
@@ -340,7 +300,6 @@ export function newCloneView(source: SiteSummary | null, sites: SiteSummary[], e
     </div></div>`;
 }
 
-/** The confirmation for one promote: what moves, what does not, and the credentials it needs. */
 export function promoteView(job: JobView, error?: string): string {
   const result = job.result as JobResult | null;
   const isInstatic = result?.siteType === "reverse-proxy";
@@ -424,7 +383,6 @@ export function promoteView(job: JobView, error?: string): string {
     </div></div>`;
 }
 
-/** Renders a clone job's progress, result, credentials, and reconciliation state. */
 export function jobView(
   job: JobView,
   logText: string,
@@ -434,13 +392,11 @@ export function jobView(
 ): string {
   const finished = job.state === "done" || job.state === "failed";
   const promote = job.kind === "promote";
-  // The two job kinds record different things, and the record is what says
-  // which. Nothing below reads a field the other kind never writes.
   const result = promote ? null : (job.result as JobResult | null);
   const promoted = promote ? (job.result as PromoteResult | null) : null;
   const missing = promote ? false : isSiteMissing(job, snapshotAge, panelSites, snapshotTakenAt);
 
-  // What the operator still has to do, so it sits right under the status.
+  // What the operator still has to do sits right under the status.
   const notes = job.result?.notes?.length
     ? `<div class="card">
         <div class="card-header"><h2>${promote ? "Promote notes" : "Clone notes"}</h2></div>
@@ -462,9 +418,8 @@ export function jobView(
       </div>`
     : "";
 
-  // Named for the mechanism, because the two are not equivalent: `template`
-  // means CloudPanel rendered and wrote everything, `rendered` means this addon
-  // wrote the clone's panel record and its vhost file itself, which is the only
+  // `template` means CloudPanel rendered and wrote everything; `rendered`
+  // means this addon wrote the panel record and vhost file itself, the only
   // route for a site type clpctl gives no --vhostTemplate option.
   const vhostNote = !result
     ? ""
@@ -493,9 +448,8 @@ export function jobView(
       </div>`
     : "";
 
-  // The clone's Instatic owner. Kept beside the staging database password and
-  // for the same reason: it is minted by the job, it is the only way into the
-  // clone's admin, and nothing can show it again once this record expires.
+  // Minted by the job and the only way into the clone's admin; nothing can
+  // show it again once this record expires.
   const instatic = result?.instatic
     ? `<div class="card secret">
         <div class="card-header"><h2>Staging Instatic instance</h2></div>

@@ -9,19 +9,20 @@
 import { createHash } from "node:crypto";
 import { existsSync, lstatSync, readdirSync, readFileSync, rmSync } from "node:fs";
 import { join } from "node:path";
-import { ActionFailure, failAction } from "../../cli/action-common";
+import { ActionFailure, failAction } from "../../lib/action";
 import { writeFileAtomic } from "../../lib/atomic-write";
+import { isTrustedFile } from "../../lib/trusted-file";
 
 const BRANDING_VERSION = 1;
 
 /** Each upload, decoded. A logo larger than this is a photograph. */
-export const MAX_ASSET_BYTES = 512 * 1024;
-export const MAX_CSS_BYTES = 64 * 1024;
-export const MAX_FOOTER_BYTES = 16 * 1024;
+const MAX_ASSET_BYTES = 512 * 1024;
+const MAX_CSS_BYTES = 64 * 1024;
+const MAX_FOOTER_BYTES = 16 * 1024;
 /** One upload in base64, the text settings and their JSON. */
 export const MAX_BRANDING_INPUT_BYTES = 900 * 1024;
 
-export const LOGO_SLOTS = ["headerLight", "headerDark", "markLight", "markDark", "favicon"] as const;
+const LOGO_SLOTS = ["headerLight", "headerDark", "markLight", "markDark", "favicon"] as const;
 export type LogoSlot = (typeof LOGO_SLOTS)[number];
 
 export interface Branding {
@@ -53,7 +54,7 @@ const CONTENT_TYPES: Record<string, string> = {
   ico: "image/x-icon",
 };
 
-export function assetContentType(name: string): string {
+function assetContentType(name: string): string {
   return CONTENT_TYPES[name.slice(name.lastIndexOf(".") + 1)] ?? "application/octet-stream";
 }
 
@@ -66,15 +67,10 @@ export function twigSafe(text: string): boolean {
   return !/endverbatim/i.test(text) && !text.includes("\0");
 }
 
-export interface BrandingPaths {
+interface BrandingPaths {
   brandingFile: string;
   brandingDir: string;
   rootUid: number;
-}
-
-function trusted(path: string, uid: number): boolean {
-  const stat = lstatSync(path);
-  return stat.isFile() && stat.uid === uid && (stat.mode & 0o022) === 0;
 }
 
 export function readBranding(paths: BrandingPaths): Branding {
@@ -82,7 +78,7 @@ export function readBranding(paths: BrandingPaths): Branding {
   if (!existsSync(paths.brandingFile)) return branding;
   let stored: Record<string, unknown>;
   try {
-    if (!trusted(paths.brandingFile, paths.rootUid)) failAction("the branding file is not a trusted regular file");
+    if (!isTrustedFile(lstatSync(paths.brandingFile), paths.rootUid)) failAction("the branding file is not a trusted regular file");
     stored = JSON.parse(readFileSync(paths.brandingFile, "utf8"));
   } catch (error) {
     if (error instanceof ActionFailure) throw error;
@@ -148,7 +144,6 @@ function storeAsset(paths: BrandingPaths, slot: LogoSlot, base64: string): strin
   return name;
 }
 
-/** Files no slot names any more. */
 function pruneAssets(paths: BrandingPaths, branding: Branding): void {
   if (!existsSync(paths.brandingDir)) return;
   const kept = new Set(Object.values(branding.logos));
@@ -197,11 +192,10 @@ export function applyBranding(paths: BrandingPaths, body: Record<string, unknown
   return branding;
 }
 
-/** One stored image, only while a slot names it. */
 export function brandingAsset(paths: BrandingPaths, name: string): { type: string; data: string } {
   if (!ASSET_NAME_RE.test(name)) failAction("that is not a branding image");
   if (!Object.values(readBranding(paths).logos).includes(name)) failAction("no such branding image");
   const path = join(paths.brandingDir, name);
-  if (!existsSync(path) || !trusted(path, paths.rootUid)) failAction("no such branding image");
+  if (!existsSync(path) || !isTrustedFile(lstatSync(path), paths.rootUid)) failAction("no such branding image");
   return { type: assetContentType(name), data: readFileSync(path).toString("base64") };
 }

@@ -4,11 +4,14 @@
  * change there, so this keeps the protocols itself and puts them back into ufw
  * whenever ufw's rule files change. See "Firewall" in docs/decisions/system-tweaks.md.
  */
+import { addonStateDir, LOCK_DIR, PANEL_DB, ROOT_UID, UFW_RULE_FILES } from "../../lib/paths";
 import { existsSync, lstatSync, readFileSync, statSync } from "node:fs";
-import { failAction, runCommand, withFileLockSync, type CommandResult } from "../../cli/action-common";
-import { withPanelDb } from "../../cli/panel-db";
-import { LOCK_DIR, PANEL_DB, ROOT_UID, STATE_DIR, UFW_RULE_FILES } from "../../cli/paths";
+import { failAction } from "../../lib/action";
+import { commandOutput, runCommand, type CommandResult } from "../../lib/command";
+import { withFileLockSync } from "../../lib/file-lock";
+import { withPanelDb } from "../../lib/panel-db";
 import { writeFileAtomic } from "../../lib/atomic-write";
+import { isTrustedFile } from "../../lib/trusted-file";
 
 export type FirewallProtocol = "tcp" | "udp" | "both";
 export const FIREWALL_PROTOCOLS: readonly FirewallProtocol[] = ["tcp", "udp", "both"];
@@ -37,7 +40,7 @@ export interface FirewallState {
   withdrawn?: boolean;
 }
 
-export interface FirewallPaths {
+interface FirewallPaths {
   stateFile: string;
   lockFile: string;
   panelDb: string;
@@ -46,8 +49,8 @@ export interface FirewallPaths {
   rootUid: number;
 }
 
-export const DEFAULT_FIREWALL_PATHS: FirewallPaths = {
-  stateFile: `${STATE_DIR}/system-tweaks/firewall.json`,
+const DEFAULT_FIREWALL_PATHS: FirewallPaths = {
+  stateFile: `${addonStateDir("system-tweaks")}/firewall.json`,
   lockFile: `${LOCK_DIR}/system-tweaks-firewall.lock`,
   panelDb: PANEL_DB,
   userRules: UFW_RULE_FILES[0]!,
@@ -149,7 +152,7 @@ export function ruleKey(portRange: string, source: string): string | null {
 
 // --- What is on disk -------------------------------------------------------
 
-export function readPanelRules(panelDb: string): PanelRule[] {
+function readPanelRules(panelDb: string): PanelRule[] {
   if (!existsSync(panelDb)) return [];
   return withPanelDb(panelDb, (db) => db.query("SELECT id, port_range, source FROM firewall_rule ORDER BY id").all()
     .map((row) => {
@@ -180,8 +183,7 @@ function readUfwRules(paths: FirewallPaths): UfwRule[] {
 export function readFirewallState(paths: FirewallPaths): FirewallState {
   const state: FirewallState = { protocols: {}, unmatched: {}, managed: [] };
   if (!existsSync(paths.stateFile)) return state;
-  const info = lstatSync(paths.stateFile);
-  if (!info.isFile() || info.uid !== paths.rootUid || (info.mode & 0o022) !== 0) {
+  if (!isTrustedFile(lstatSync(paths.stateFile), paths.rootUid)) {
     failAction("the firewall protocols file is not a trusted regular file");
   }
   let stored: Record<string, unknown>;
@@ -238,7 +240,7 @@ const PANEL_UDP = new Set(["443 0.0.0.0/0", "443 ::/0"]);
 
 const key = (rule: { proto: string; port: string; src: string }) => `${rule.proto} ${rule.port} ${rule.src}`;
 
-export interface FirewallPlan {
+interface FirewallPlan {
   /** ufw arguments, run in order. */
   commands: string[][];
   /** What this addon holds against CloudPanel's own rules once they have run. */
@@ -350,7 +352,7 @@ export function syncFirewall(mode: "apply" | "withdraw" | "restore", options: Fi
       const failures: string[] = [];
       for (const args of plan.commands) {
         const result = ufw(args);
-        if (!result.ok) failures.push(`ufw ${args.join(" ")}: ${(result.stderr || result.stdout).trim()}`);
+        if (!result.ok) failures.push(`ufw ${args.join(" ")}: ${commandOutput(result)}`);
       }
       // A rule that failed stays managed, so the next pass tries it again.
       const managed = failures.length ? [...plan.managed, ...state.managed.filter((rule) => !plan.managed.some((kept) => key(kept) === key(rule)))] : plan.managed;

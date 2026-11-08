@@ -2,8 +2,6 @@ import type { AddonTarget } from "../../../lib/addon-target";
 import { ADDON_SITE_TABS } from "../../../lib/site-context";
 import { ANCHORS, TEMPLATES } from "../../../lib/panel-anchors";
 
-// The label the panel's strip shows and the label the addon's own reproduction
-// of that strip shows are the same string, from lib/site-context.
 const LABEL = ADDON_SITE_TABS.find((tab) => tab.slug === "maintenance")!.label;
 
 export const MAINTENANCE_TARGETS: AddonTarget[] = [

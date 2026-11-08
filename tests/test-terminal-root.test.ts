@@ -2,12 +2,14 @@
 // and its sign-in credentials are the ones root allowed.
 import { afterAll, beforeEach, expect, test } from "bun:test";
 import { Database } from "bun:sqlite";
-import { chmodSync, mkdirSync, mkdtempSync, realpathSync, renameSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
+import {
+  chmodSync, mkdirSync, mkdtempSync, realpathSync, renameSync, rmSync, symlinkSync, writeFileSync,
+} from "node:fs";
 import { createHash } from "node:crypto";
 import { tmpdir } from "node:os";
-import { ActionFailure } from "../cli/action-common";
+import { ActionFailure } from "../lib/action";
 import {
-  parseTerminalRequest, resolveTerminalTarget, runTerminalAction, runuserCommand, type TerminalActionPaths,
+  parseTerminalRequest, resolveTerminalTarget, runTerminalAction, type TerminalActionPaths,
 } from "../addons/terminal/action";
 import { readRootGrants, rootAccess } from "../addons/terminal/root-access";
 import { TERMINAL_TARGETS } from "../addons/terminal/inject/targets";
@@ -136,7 +138,10 @@ test("an open root shell ends once its grant does", async () => {
   await Bun.sleep(60);
   change("UPDATE user SET mfa = 0 WHERE user_name = 'alice'");
   await running;
-  expect(calls).toEqual([runuserCommand(paths, "root")]);
+  expect(calls).toEqual([[
+    "/usr/sbin/runuser", "--login", "--whitelist-environment=TERM,CLP_SITE_DIR,CLP_PTY_SIZE,CLP_ROOT_SHELL",
+    "--command=exec /usr/local/bin/clp-addons terminal-pty", "--", "root",
+  ]]);
   expect(audit[0]).toBe("alice opened a root shell as root");
   expect(audit.some((line) => line.includes("root shell ended: A root terminal needs 2FA"))).toBe(true);
   expect(audit.at(-1)).toContain("alice closed a root shell as root");
@@ -245,9 +250,9 @@ test("the header control is in both of CloudPanel's headers and the addons' own,
     // Twig would read these as its own tags.
     expect(snippet.replace("{% if is_granted('ROLE_ADMIN') %}", "").replace("{% endif %}", "")).not.toMatch(/\{[{%#]/);
   }
-  const page = renderLayout("Terminal", "", { brand: "Terminal", base: "/addons/terminal", nav: [], script: "" });
+  const page = renderLayout("Terminal", "", { base: "/addons/terminal", script: "" });
   expect(page).toContain('id="clp-root-shell" data-clp-root-shell hidden');
-  expect(renderLayout("Terminal", "", { brand: "Terminal", base: "/addons/terminal", nav: [], script: "", admin: false })).not.toContain("clp-root-shell");
+  expect(renderLayout("Terminal", "", { base: "/addons/terminal", script: "", admin: false })).not.toContain("clp-root-shell");
 });
 
 test("a root access check that fails says so, rather than that root never allowed the account", async () => {

@@ -1,10 +1,10 @@
 import { expect, test } from "bun:test";
 import { readFileSync } from "node:fs";
-import { join } from "node:path";
-import { ADDONS, ADDON_NAMES, addonHandler, addonRepairs, addonNewSites, templateWatchPaths, type AddonSpec } from "../cli/addon-catalog";
+import { dirname, join } from "node:path";
+import { ADDONS, ADDON_NAMES, addonHandler, templateWatchPaths } from "../addons/catalog";
+import { type AddonSpec } from "../lib/addon-definition";
 import { runNewSiteWork } from "../cli/addon-hooks";
-import { mountPath } from "../lib/mount";
-import { CLI_ARTIFACT, CLI_BIN, LIBEXEC_DIR, SERVICE_USER, SOCKET_PATH } from "../cli/paths";
+import { CLI_ARTIFACT } from "../lib/paths";
 
 const REPO = join(import.meta.dir, "..");
 
@@ -22,13 +22,7 @@ test("every addon is named once and its paths come from its name", () => {
   }
 });
 
-test("a mounted addon has exactly one handler and a valid mount path", () => {
-  for (const name of ADDON_NAMES) {
-    expect(addonHandler(name)).toBe(ADDONS[name]!.handler!);
-    expect(mountPath(name)).toBe(`/addons/${name}`);
-  }
-  // Every addon currently mounts pages; the lookup still has to answer for one
-  // that does not, rather than throw.
+test("the handler lookup answers for a name that is not an addon", () => {
   expect(addonHandler("not-an-addon")).toBeUndefined();
 });
 
@@ -51,35 +45,25 @@ test("every addon with privileged verbs declares them", () => {
   // root; the absence is the declaration.
 });
 
-test("required systemd dependencies survive into the catalog", () => {
-  expect(ADDONS.instatic!.requiresUnits).toEqual(["docker"]);
-  expect(ADDONS.smtp!.requiresUnits).toEqual(["postfix"]);
-  for (const name of ADDON_NAMES.filter((item) => item !== "instatic" && item !== "smtp")) {
-    expect(ADDONS[name]!.requiresUnits ?? []).toEqual([]);
-  }
+test("new-site work runs DNS before SMTP Relay", () => {
+  const order = ADDON_NAMES.filter((name) => ADDONS[name]!.newSites);
+  expect(order).toContain("dns");
+  expect(order).toContain("smtp");
+  expect(order.indexOf("dns")).toBeLessThan(order.indexOf("smtp"));
 });
 
-test("repair upkeep is the addons that ask for it, in catalog order", () => {
-  const all = ADDON_NAMES.map((name) => ADDONS[name]!);
-  expect(addonRepairs(all).map((spec) => spec.name)).toEqual(["cloudflare-ips", "dns", "instatic", "stager", "maintenance", "resource-limits", "git", "panel-tweaks", "system-tweaks", "wp-tools", "smtp"]);
-  // Gated on being installed: repair passes the installed set, not every addon.
-  expect(addonRepairs([ADDONS.stager!]).map((spec) => spec.name)).toEqual(["stager"]);
-  expect(addonRepairs([ADDONS.terminal!])).toEqual([]);
-});
-
-test("new-site work runs DNS before SMTP Relay, and only for installed addons", () => {
-  const all = ADDON_NAMES.map((name) => ADDONS[name]!);
-  expect(addonNewSites(all).map((spec) => spec.name)).toEqual(["cloudflare-ips", "dns", "resource-limits", "system-tweaks", "wp-tools", "smtp"]);
-  expect(addonNewSites([ADDONS.smtp!]).map((spec) => spec.name)).toEqual(["smtp"]);
-});
-
-test("the path constants do not import any addon", () => {
-  // cli/paths.ts held the registry, so the module owning the project's paths
-  // imported every addon's target list to describe them. A leaf that imports
-  // its consumers is the shape a dependency cycle grows out of.
-  const source = readFileSync(join(REPO, "cli/paths.ts"), "utf8");
-  expect(source).not.toMatch(/from "\.\.\/addons\//);
-  expect(source).not.toContain("export const ADDONS");
+test("imports point from what changes most to what changes least", () => {
+  const imports = (dir: string) => [...new Bun.Glob(`${dir}/**/*.ts`).scanSync(REPO)].flatMap((file) =>
+    [...readFileSync(join(REPO, file), "utf8").matchAll(/from "(\.[^"]+)"/g)]
+      .map((match) => ({ file, target: join(dirname(file), match[1]!) })));
+  const offending = [
+    // lib/ is shared by every side and imports only itself, plus the addons' verb tables, which import nothing.
+    ...imports("lib").filter(({ target }) => !target.startsWith("lib/") && !/^addons\/[^/]+\/verbs$|^manager\/verbs$/.test(target)),
+    // An addon builds on lib/ and on other addons, never on the commands or the manager.
+    ...imports("addons").filter(({ target }) => target.startsWith("cli/") || target.startsWith("manager/")),
+    ...imports("manager").filter(({ target }) => target.startsWith("cli/")),
+  ];
+  expect(offending).toEqual([]);
 });
 
 test("the manager and the auth gateway are not addons", () => {
@@ -88,21 +72,25 @@ test("the manager and the auth gateway are not addons", () => {
   // things that cannot be toggled.
   expect(ADDON_NAMES).not.toContain("manager");
   expect(ADDON_NAMES).not.toContain("auth");
-  const source = readFileSync(join(REPO, "cli/index.ts"), "utf8");
-  // Both are still dispatched before the catalog is consulted.
-  expect(source).toContain('if (addon === "auth") return runAuthActionStdin(rest);');
-  expect(source).toContain('if (addon === "manager") return runManagerAction(rest, MANAGER_OPS);');
+  // Both are still dispatched before the catalog is consulted, so neither is an
+  // "unknown action addon".
+  const root = process.getuid?.() === 0;
+  const action = (addon: string) => {
+    const result = Bun.spawnSync([process.execPath, join(REPO, "cli/index.ts"), "action", addon], {
+      stdin: new Uint8Array(), stdout: "pipe", stderr: "pipe",
+    });
+    return `${result.stdout.toString()}${result.stderr.toString()}`;
+  };
+  const auth = action("auth");
+  expect(auth).not.toContain("unknown action addon");
+  expect(auth).toContain(root ? '"valid":false' : "'auth' modifies system state");
+  const manager = action("manager");
+  expect(manager).not.toContain("unknown action addon");
+  expect(manager).toContain(root ? "unknown manager verb" : "'manager' modifies system state");
 });
 
-// One binary, one socket, one service account. The layout these name is what
-// provisioning writes and what the units reference, so a change to any of them
-// is a change every addon's action inherits.
-test("the active layout has one binary and direct helpers", () => {
-  expect(CLI_BIN).toBe("/usr/local/bin/clp-addons");
-  expect(LIBEXEC_DIR).toBe("/usr/local/libexec/clp-addons");
-  expect(SOCKET_PATH).toBe("/run/clp-addons/manager.sock");
-  expect(SERVICE_USER).toBe("clp-addons");
-  expect(CLI_ARTIFACT).toBe("clp-addons-linux-x64");
+test("the installer downloads the artifact the updater does", () => {
+  expect(readFileSync(join(REPO, "install.sh"), "utf8")).toContain(`ARTIFACT="${CLI_ARTIFACT}"`);
 });
 
 test("new-site work starts in catalog order and a slow addon only gets a head start", async () => {

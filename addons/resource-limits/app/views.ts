@@ -3,12 +3,13 @@ import { memoryCard } from "./memory-view";
 import CLIENT_JS_BODY from "./views.client.js" with { type: "text" };
 import { esc } from "../../../lib/app-http";
 import {
-  TWEAK_ROW_JS, ATTENTION_RANK, FLEET_FOOTER_HTML, FLEET_SELECTION_HTML, FLEET_ROW_SELECTION_JS, fleetFilterHtml, filterWord, valueFilters, renderLayout,
+  TWEAK_ROW_JS, FLEET_FOOTER_HTML, FLEET_SELECTION_HTML, FLEET_ROW_SELECTION_JS, fleetFilterHtml, filterWord,
+  valueFilters, renderLayout,
 } from "../../../lib/app-ui";
 import { mountPath } from "../../../lib/mount";
 import {
-  DEFAULT_CATEGORY_PROFILE, PM_MODES, STOCK_PROFILE,
-  type ResourceLimitsState, type PoolCategory, type PoolProfile, type PoolSiteState,
+  DEFAULT_CATEGORY_PROFILE, PM_MODES, type ResourceLimitsState, type PoolCategory, type PoolProfile,
+  type PoolSiteState,
 } from "../action";
 
 const BASE = mountPath("resource-limits");
@@ -28,11 +29,9 @@ interface Field {
 const ALL_MODES = PM_MODES;
 
 /**
- * One description of every directive, used by the category dialog and by the
- * read-only block on CloudPanel's own site page. The `modes` list is the same
- * one the action writes by: a field the mode does not use is hidden rather than
- * removed, so switching the mode back finds the number that was typed still
- * there.
+ * The category dialog's directives. The `modes` list is the same one the action
+ * writes by: a field the mode does not use is hidden rather than removed, so
+ * switching the mode back finds the number that was typed still there.
  */
 const FIELDS: Field[] = [
   {
@@ -91,12 +90,11 @@ const PM_LABELS: Record<string, string> = {
   static: "Static",
 };
 
-export function pmLabel(mode: string): string {
+function pmLabel(mode: string): string {
   return PM_LABELS[mode] ?? mode;
 }
 
-/** How a pool's worker settings read in one table cell. */
-export function workerSummary(profile: PoolProfile): string {
+function workerSummary(profile: PoolProfile): string {
   if (profile.pm === "dynamic") {
     return `Dynamic, ${profile.minSpareServers}–${profile.maxSpareServers} spare, up to ${profile.maxChildren}`;
   }
@@ -175,11 +173,7 @@ export function layout(
   updateNotice?: { current: string; latest: string } | null,
 ): string {
   return renderLayout(title, content, {
-    brand: "Resource Limits",
-    // No tab strip of its own: this addon has one page, reached from the
-    // Addons list, and the panel's own site page only reports what it decided.
     base: BASE,
-    nav: [],
     css: STYLE,
     script: CLIENT_JS,
     updateNotice,

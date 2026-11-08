@@ -13,18 +13,11 @@ export function headerUpdateScript(addonsUrl = "/addons/"): string {
 }
 
 /**
- * What lets CloudPanel's header row wrap.
- *
- * The panel lays it out as one non-wrapping flex row of a fixed 75px, sized for
- * the three things in it: a 235px logo, the navigation, and the tools. Nothing
- * else fits, and nothing moves onto a second line. Flattening the right-hand
- * wrapper makes its children items of the header itself, which is what lets the
- * row wrap at all.
- *
- * Both the update notice and Panel Tweaks' narrow-screen header need this,
- * and each wants it under different conditions, so the header's own selector is
- * the argument: the manager asks for it only while a notice is in the row, and
- * the addon asks for it whenever its switch is on.
+ * CloudPanel lays its header out as one non-wrapping flex row of a fixed 75px,
+ * sized for the three things in it: a 235px logo, the navigation, and the
+ * tools. Nothing else fits, and nothing moves onto a second line. Flattening
+ * the right-hand wrapper makes its children items of the header itself, which
+ * is what lets the row wrap at all.
  */
 export function headerWrapStyle(header: string): string {
   return `
@@ -44,8 +37,6 @@ ${header} .navbar-right { flex: 0 0 auto; padding-left: 0; margin-left: auto; }
 // from the header on any other day is a Panel Tweaks switch.
 const PANEL_HEADER_STYLE = headerWrapStyle(".header.clp-addons-has-update");
 
-// Where the update notice sits in that row: beside the tools while there is
-// room for it, and on a line of its own once there is not.
 const PANEL_UPDATE_STYLE = UPDATE_STYLE + PANEL_HEADER_STYLE + `
 .header #clp-addons-update-notice { margin: 0 16px; }
 .header .header-instance-information-container + #clp-addons-update-notice { order: 3; flex: 1 0 100%; margin: 0; padding: 10px 20px;
@@ -77,7 +68,6 @@ function updateSnippet(url: string): string {
       <script>${headerUpdateScript(url)}</script>`;
 }
 
-/** Keep the single manager navigation entry after CloudPanel's native links. */
 export function headerTarget(): AddonTarget {
   return {
     slug: "header-nav",
@@ -92,12 +82,9 @@ export function headerTarget(): AddonTarget {
   };
 }
 
-
-/** The panel partial whose tab strip an addon adds a site-scoped tab to. */
-
 // CloudPanel lays its site tabs out as inline blocks inside a 1200px-limited
 // container, sized for exactly the tabs it ships. An addon's tab is the
-// eleventh, and at 1280px it wrapped onto a second row.
+// eleventh, and at 1280px it would wrap onto a second row.
 //
 // Widening the container only moves the break to the next addon, so the strip
 // becomes one row that scrolls instead. The site-information blocks above it
@@ -131,11 +118,6 @@ function deferred(body: string): string {
 }
 
 /**
- * Keeps CloudPanel's site tab strip on one row once an addon has added a tab
- * to it, lets the site-information blocks above it wrap on a narrow screen, and
- * mounts an addon's page into the panel's own content area when its tab is
- * clicked.
- *
  * Injected by the manager rather than by the addon that adds the tab, so two
  * addons adding tabs cannot emit these rules twice.
  */

@@ -12,12 +12,9 @@ import type { SiteContext } from "../../../lib/site-context";
 import type { GitHookPayload, GitHookResult, GitJobView, GitSiteStatus, GitWebhook } from "../action";
 import { validateDomain } from "../../../lib/app-http";
 
-export { validateDomain };
-
 export type {
   GitCommit, GitDeployResult, GitHookPayload, GitHookResult, GitJobView, GitSiteConfig, GitSiteStatus, GitWebhook,
 } from "../action";
-export { validateJobId } from "../../../lib/job-id";
 
 // keygen shells out to ssh-keygen and deploy only writes a record and hands the
 // work to systemd; neither is slow, and the deployment itself is the job.
@@ -31,8 +28,7 @@ function action<T>(verb: WebVerb<"git">, args: string[] = [], input?: string): P
   });
 }
 
-/** One site's status together with the panel context its page is drawn in. */
-export interface GitSitePage {
+interface GitSitePage {
   site: GitSiteStatus;
   context: SiteContext;
 }

@@ -18,29 +18,31 @@
  * command systemd waits for a PID file PHP-FPM does not write, until the start
  * times out.
  */
-import { existsSync, lstatSync, readdirSync, readFileSync, rmSync } from "node:fs";
+import { addonStateDir, CLI_BIN, PANEL_USER, SYSTEMD_DIR } from "../../lib/paths";
+import { existsSync, readdirSync, readFileSync, rmSync } from "node:fs";
 import { basename, join } from "node:path";
-import { runCommand, type CommandResult } from "../../cli/action-common";
-import { CLI_BIN, PANEL_USER, STATE_DIR, SYSTEMD_DIR } from "../../cli/paths";
-import { writeFileAtomic } from "../../lib/atomic-write";
+import { commandOutput, runCommand, type CommandResult } from "../../lib/command";
+import { writeFileAtomic, writeOrRemove } from "../../lib/atomic-write";
+import { daemonReload } from "../../lib/systemd";
+import { regularText } from "../../lib/trusted-file";
 import { COMMAND_MS } from "./limits";
 
-export const POOL_TABLE = "clp_addons_php_pools";
+const POOL_TABLE = "clp_addons_php_pools";
 const DROP_IN = "zz-clp-addons-php-pools.conf";
 
-export const DEFAULT_POOL_ISOLATION_PATHS = {
+const DEFAULT_POOL_ISOLATION_PATHS = {
   phpRoot: "/etc/php",
   passwdFile: "/etc/passwd",
   nginxConf: "/etc/nginx/nginx.conf",
   systemdDir: SYSTEMD_DIR,
   /** The ruleset last loaded, which is also what `nft -f` reads. */
-  rulesFile: `${STATE_DIR}/system-tweaks/php-pools.nft`,
+  rulesFile: `${addonStateDir("system-tweaks")}/php-pools.nft`,
   procNet: "/proc/net",
   bin: CLI_BIN,
   panelUser: PANEL_USER,
 };
 
-export type PoolIsolationPaths = typeof DEFAULT_POOL_ISOLATION_PATHS;
+type PoolIsolationPaths = typeof DEFAULT_POOL_ISOLATION_PATHS;
 
 export interface PoolIsolationOptions {
   paths?: Partial<PoolIsolationPaths>;
@@ -63,15 +65,6 @@ function context(options: PoolIsolationOptions) {
   };
 }
 
-function regularText(path: string): string | null {
-  try {
-    return lstatSync(path).isFile() ? readFileSync(path, "utf8") : null;
-  } catch {
-    return null;
-  }
-}
-
-/** PHP versions with an FPM pool directory, such as 8.3. */
 function versions(paths: PoolIsolationPaths): string[] {
   if (!existsSync(paths.phpRoot)) return [];
   return readdirSync(paths.phpRoot)
@@ -91,7 +84,6 @@ export function listenPort(value: string): number | null {
   return Number.isInteger(port) && port > 0 && port < 65536 ? port : null;
 }
 
-/** Every pool section of every PHP-FPM, with its port and its user. */
 export function phpPools(options: PoolIsolationOptions = {}): Pool[] {
   const { paths } = context(options);
   const pools: Pool[] = [];
@@ -171,7 +163,7 @@ export function poolRuleset(pools: Pool[], users: Map<string, number>, trusted: 
 }
 
 /** The ports and port-owner pairs of a ruleset {@link poolRuleset} wrote. */
-export interface LoadedSets { ports: number[]; owners: string[] }
+interface LoadedSets { ports: number[]; owners: string[] }
 
 function loadedSets(rules: string): LoadedSets {
   const elements = (set: string) => new RegExp(`^  set ${set} \\{[^{}]*elements = \\{ ([^{}]*) \\}; \\}$`, "m").exec(rules)?.[1]?.split(", ") ?? [];
@@ -195,7 +187,6 @@ function listeningPorts(procNet: string): Set<number> {
   return ports;
 }
 
-/** The loaded sets cut to the ports something still listens on. */
 function stillListening(loaded: LoadedSets, procNet: string): LoadedSets {
   const listening = listeningPorts(procNet);
   return {
@@ -235,7 +226,7 @@ function unitReloadLines(run: (command: string, args: string[]) => CommandResult
  * lines and after them. A unit whose reload lines cannot be read gets the sync
  * after its reload only.
  */
-export function poolDropIn(bin: string, reload: string[] | null): string {
+function poolDropIn(bin: string, reload: string[] | null): string {
   return [
     "# Managed by clp-addons System Tweaks: refreshes which accounts reach each PHP pool's port.",
     "[Service]",
@@ -271,7 +262,7 @@ export function syncPoolIsolation(options: PoolIsolationOptions = {}, beforeRelo
   const loaded = run("nft", ["-f", paths.rulesFile]);
   if (!loaded.ok) {
     rmSync(paths.rulesFile, { force: true });
-    throw new Error(`nft refused the PHP pool rules: ${(loaded.stderr || loaded.stdout).trim()}`);
+    throw new Error(`nft refused the PHP pool rules: ${commandOutput(loaded)}`);
   }
   return true;
 }
@@ -279,19 +270,29 @@ export function syncPoolIsolation(options: PoolIsolationOptions = {}, beforeRelo
 /** The table, and the drop-in on every PHP-FPM unit that keeps it current. Returns whether anything changed. */
 export function installPoolIsolation(options: PoolIsolationOptions = {}): boolean {
   const { paths, run } = context(options);
-  let units = false;
+  const written = new Map<string, string | null>();
   for (const version of versions(paths)) {
     const file = dropInPath(paths, version);
     const content = poolDropIn(paths.bin, unitReloadLines(run, version));
-    if (regularText(file) === content) continue;
+    const before = regularText(file);
+    if (before === content) continue;
     writeFileAtomic(file, content, { mode: 0o644, createParent: true });
-    units = true;
+    written.set(file, before);
   }
-  if (units) run("systemctl", ["daemon-reload"]);
-  return syncPoolIsolation(options) || units;
+  if (written.size) {
+    try {
+      daemonReload(run);
+    } catch (error) {
+      // Each drop-in is compared by its text, so one left in place that systemd
+      // never loaded would pass for applied and its reload never be retried.
+      for (const [file, before] of written) writeOrRemove(file, before, { mode: 0o644 });
+      throw error;
+    }
+  }
+  return syncPoolIsolation(options) || written.size > 0;
 }
 
-/** Remove the drop-ins, then the table. Returns whether anything changed. */
+/** Returns whether anything changed. */
 export function removePoolIsolation(options: PoolIsolationOptions = {}): boolean {
   const { paths, run } = context(options);
   let changed = false;
@@ -302,10 +303,11 @@ export function removePoolIsolation(options: PoolIsolationOptions = {}): boolean
     rmSync(file, { force: true });
     changed = true;
   }
-  if (changed) run("systemctl", ["daemon-reload"]);
+  // A unit systemd still runs with the drop-in would load the table again at its next reload.
+  if (changed) daemonReload(run);
   if (tableLoaded(run)) {
     const deleted = run("nft", ["delete", "table", "inet", POOL_TABLE]);
-    if (!deleted.ok) throw new Error(`nft could not remove the PHP pool rules: ${(deleted.stderr || deleted.stdout).trim()}`);
+    if (!deleted.ok) throw new Error(`nft could not remove the PHP pool rules: ${commandOutput(deleted)}`);
     changed = true;
   }
   if (existsSync(paths.rulesFile)) {

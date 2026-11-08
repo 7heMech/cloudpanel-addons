@@ -1,15 +1,17 @@
-// Root-only action used by the unprivileged manager to validate a CloudPanel
-// session file, authorize against CloudPanel's database, and dispatch privileged
-// addon actions through the root gateway. The CLI entrypoint is the only
-// production caller; optional directory/owner/db/listen arguments exist solely
-// for hermetic unit tests and are never exposed through action argv.
+// The root gateway the unprivileged manager uses to validate a CloudPanel
+// session file, authorize against CloudPanel's database, and dispatch
+// privileged addon actions. The test-only options are never reachable through
+// action argv.
 
+import { errorMessage } from "../lib/errors";
+import {
+  addonConfigFile, addonStateDir, CLI_BIN, PANEL_DB, SERVICE_GROUP, SERVICE_USER, SESSION_DIR,
+} from "../lib/paths";
 import net from "node:net";
 import { existsSync, lstatSync, readFileSync, readlinkSync, realpathSync, statSync } from "node:fs";
 import { dlopen, FFIType } from "bun:ffi";
 import { Database } from "bun:sqlite";
-import { requireRoot } from "./util";
-import { CLI_BIN, CONFIG_DIR, PANEL_DB, SERVICE_GROUP, SERVICE_USER, SESSION_DIR, STATE_DIR } from "./paths";
+import { requireRoot } from "../lib/log";
 import { mfaMark, passkeyFor } from "../addons/security-keys/sign-ins";
 import {
   MAX_SESSION_ID_LENGTH,
@@ -30,13 +32,13 @@ import { getLivePanelInfo } from "../lib/panel-snapshot";
 import { lockDirection, lockRefusal, switchesOnOnly, verbLocked } from "../lib/root-locks";
 
 export const MAX_AUTH_INPUT_BYTES = MAX_SESSION_ID_LENGTH + 1;
-export const MAX_AUTH_REPLY_BYTES = 32 * 1024;
+const MAX_AUTH_REPLY_BYTES = 32 * 1024;
 const AUTH_STDIN_TIMEOUT_MS = 2_000;
 
 const SESSION_ID_RE = /^[a-zA-Z0-9,-]+$/;
 const ROLE_RE = /^ROLE_[A-Z0-9_]{1,120}$/;
 
-export interface AuthActionOptions {
+interface AuthActionOptions {
   /** Test-only fixed-directory override; the CLI always uses SESSION_DIR. */
   sessionDir?: string;
   /** Test-only owner override; production uses readPanelSessionFile's clp UID. */
@@ -94,7 +96,7 @@ function accountId(path: string, name: string, field: number): number | null {
  * root-owned executable that systemd starts for the manager. A copied or
  * unrelated process under the same account therefore fails closed.
  */
-export function trustedManagerPeer(socket: net.Socket): boolean {
+function trustedManagerPeer(socket: net.Socket): boolean {
   if (!peerCredLibc) return false;
   const fd = Number((socket as unknown as { _handle?: { fd?: unknown } })._handle?.fd);
   if (!Number.isInteger(fd) || fd < 0) return false;
@@ -134,12 +136,8 @@ function decodeInput(input: Uint8Array): string | null {
   }
 }
 
-/**
- * Look up a user's active role directly from CloudPanel's SQLite user table.
- * Returns the role string if the user exists, is active (status = 1), and has a valid role.
- * Returns null otherwise.
- */
-export function lookupUserRole(dbPath: string, username: string): string | null {
+/** CloudPanel's user table marks an active account with status 1. */
+function lookupUserRole(dbPath: string, username: string): string | null {
   try {
     if (!existsSync(dbPath)) return null;
     const db = new Database(dbPath, { readonly: true });
@@ -162,12 +160,6 @@ export function lookupUserRole(dbPath: string, username: string): string | null 
   }
 }
 
-/**
- * Validate one bounded request:
- * 1. Read and structurally parse the CloudPanel session file to authenticate the user and expiry.
- * 2. If CloudPanel's database exists, authoritatively check user status and role from the database.
- * 3. Return the bounded JSON contract the manager understands.
- */
 export async function runAuthAction(
   input: Uint8Array | string,
   options: AuthActionOptions = {},
@@ -204,7 +196,6 @@ export async function runAuthAction(
   }
 }
 
-/** One session, with the roles CloudPanel's database gives its user now, or null when it is not valid. */
 async function checkSession(sessionId: string, options: AuthActionOptions): Promise<ParsedPanelSession | null> {
   const sessionDir = options.sessionDir ?? SESSION_DIR;
   const sessionPath = `${sessionDir}/sess_${sessionId}`;
@@ -212,7 +203,7 @@ async function checkSession(sessionId: string, options: AuthActionOptions): Prom
     ownerUid: options.ownerUid,
     warn: () => {},
   });
-  const unmarkedMfa = options.securityKeys ?? existsSync(`${CONFIG_DIR}/security-keys.conf`);
+  const unmarkedMfa = options.securityKeys ?? existsSync(addonConfigFile("security-keys"));
   const session = sessionBytes ? parsePanelSession(sessionBytes, { unmarkedMfa }) : null;
   if (!session) return null;
 
@@ -222,11 +213,9 @@ async function checkSession(sessionId: string, options: AuthActionOptions): Prom
   return dbRole ? { ...session, roles: [dbRole] } : null;
 }
 
-/** How often a duplex stream's panel session is checked again. */
 const SESSION_RECHECK_MS = 15_000;
 /** How long after a failed recheck the session is looked at once more. */
 const SESSION_CONFIRM_MS = 1_000;
-/** How long a stream's worker has after SIGTERM before it is killed. */
 const STREAM_KILL_GRACE_MS = 5_000;
 /** All a duplex worker inherits; it starts nothing that needs more. */
 const DUPLEX_WORKER_ENV = {
@@ -241,9 +230,9 @@ const OUTPUT_AFTER_EXIT_MS = 1_000;
 /** What a session proves of its sign-in beyond the password: see SESSION_2FA_ENV. */
 function sessionProof(session: ParsedPanelSession, options: AuthActionOptions): string {
   if (session.twoFactor) return "1";
-  const securityKeys = options.securityKeys ?? existsSync(`${CONFIG_DIR}/security-keys.conf`);
+  const securityKeys = options.securityKeys ?? existsSync(addonConfigFile("security-keys"));
   if (!securityKeys || session.createdAt === null) return "0";
-  const state = options.securityKeysState ?? { dir: `${STATE_DIR}/security-keys`, uid: 0 };
+  const state = options.securityKeysState ?? { dir: addonStateDir("security-keys"), uid: 0 };
   const key = passkeyFor(session.user, session.createdAt, mfaMark(options.panelDb ?? PANEL_DB, session.user), state.dir, state.uid);
   return key ? `passkey:${key}` : "0";
 }
@@ -254,7 +243,6 @@ interface SessionAccount {
   env: Record<string, string>;
 }
 
-/** The panel user behind a session, when it is an active account's. */
 async function sessionUser(sessionId: string, options: AuthActionOptions, role?: string): Promise<SessionAccount | null> {
   try {
     if (sessionId.length > 128 || !SESSION_ID_RE.test(sessionId)) return null;
@@ -266,7 +254,6 @@ async function sessionUser(sessionId: string, options: AuthActionOptions, role?:
   }
 }
 
-/** The panel user behind a session, when it is an active administrator's. */
 function adminSessionUser(sessionId: string, options: AuthActionOptions): Promise<SessionAccount | null> {
   return sessionUser(sessionId, options, "ROLE_ADMIN");
 }
@@ -283,8 +270,6 @@ interface DuplexInput {
 }
 
 /**
- * Run one stream action and copy its stdout to the socket until either ends.
- *
  * A duplex stream also gets the socket's bytes on the worker's stdin, opaque
  * and in order, with the socket paused while the pipe is full. Its session is
  * checked again on a timer, and the worker is stopped when that check fails:
@@ -422,7 +407,7 @@ async function runStreamAction(
     if (!socket.destroyed) {
       socket.end(JSON.stringify({
         ok: false,
-        error: error instanceof Error ? error.message : String(error),
+        error: errorMessage(error),
       }) + "\n");
     }
   }
@@ -620,7 +605,7 @@ export function createAuthActionServer(options: AuthActionOptions = {}): net.Ser
             socket.end(
               JSON.stringify({
                 ok: false,
-                error: err instanceof Error ? err.message : String(err),
+                error: errorMessage(err),
               }) + "\n",
             );
           }
@@ -647,7 +632,6 @@ export function createAuthActionServer(options: AuthActionOptions = {}): net.Ser
             await runStreamAction(socket, [CLI_BIN, "action", request.addon, request.verb, ...(request.args ?? [])], options, null);
             return;
           }
-          // Held until the worker exists, then handed to it in order.
           const pending: Buffer[] = trailing.byteLength > 0 ? [trailing] : [];
           let held = trailing.byteLength;
           forward = (bytes) => {
@@ -692,11 +676,8 @@ export function createAuthActionServer(options: AuthActionOptions = {}): net.Ser
   });
 }
 
-/**
- * Run the long-lived daemon activated by systemd.
- * When activated by systemd, systemd passes the listening socket as FD 3 (LISTEN_FDS=1).
- */
-export async function runAuthActionDaemon(options: AuthActionOptions = {}): Promise<void> {
+/** systemd passes the listening socket as FD 3 (LISTEN_FDS=1). */
+async function runAuthActionDaemon(options: AuthActionOptions = {}): Promise<void> {
   const server = createAuthActionServer({ ...options, enforcePeer: true });
 
   return new Promise<void>((resolve, reject) => {
@@ -761,7 +742,6 @@ async function readBoundedStdin(): Promise<Uint8Array | null> {
   }
 }
 
-/** CLI entrypoint for `clp-addons action auth`; it accepts no argv fields. */
 export async function runAuthActionStdin(argv: string[] = [], options: AuthActionOptions = {}): Promise<number> {
   requireRoot("auth");
   if (argv.length !== 0) {

@@ -9,19 +9,19 @@
  */
 import { existsSync, readFileSync, readdirSync } from "node:fs";
 import { dirname, join } from "node:path";
-import { runCommand, type CommandResult } from "../../cli/action-common";
-import { PANEL_FPM_UNIT, PHP_FPM_BIN_DIR, PHP_GUARD_INI_NAME, PHP_ROOT } from "../../cli/paths";
+import { runCommand, type CommandResult } from "../../lib/command";
+import { PANEL_FPM_UNIT, PHP_FPM_BIN_DIR, PHP_GUARD_INI_NAME, PHP_ROOT } from "../../lib/paths";
 
 const KEY = "session.upload_progress.enabled";
 const VERSION_RE = /^[0-9]+\.[0-9]+$/;
 
-export interface UploadProgressPaths {
+interface UploadProgressPaths {
   phpRoot: string;
   fpmBinDir: string;
   panelUnit: string;
 }
 
-export const DEFAULT_UPLOAD_PROGRESS_PATHS: UploadProgressPaths = {
+const DEFAULT_UPLOAD_PROGRESS_PATHS: UploadProgressPaths = {
   phpRoot: PHP_ROOT,
   fpmBinDir: PHP_FPM_BIN_DIR,
   panelUnit: PANEL_FPM_UNIT,
@@ -115,8 +115,7 @@ function decide(files: string[]): { value: string | undefined; source: string } 
   return { value, source };
 }
 
-/** Pools whose `php_value`, `php_flag` or admin variant turns the key on. */
-export function poolsTurningOn(poolDir: string): string[] {
+function poolsTurningOn(poolDir: string): string[] {
   let names: string[] = [];
   try {
     names = readdirSync(poolDir).filter((name) => name.endsWith(".conf")).sort();

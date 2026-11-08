@@ -1,14 +1,16 @@
-import { nginxServers, type NginxBlock } from "../../cli/nginx-config";
+import { nginxServers, type NginxBlock } from "../../lib/nginx-config";
 import { Database } from "bun:sqlite";
 import { readFileSync } from "node:fs";
 import { BlockList, isIP } from "node:net";
 import { join } from "node:path";
 import { normalizeMappedIpv4 } from "../../lib/ip-address";
-import { ActionFailure, failAction, runCommand, type CommandResult } from "../../cli/action-common";
-import { openPanelDatabase } from "../../cli/panel-db";
-import { trustedVhost, withNginxTransactionAsync } from "../../cli/nginx-transaction";
+import { ActionFailure, failAction } from "../../lib/action";
+import { runCommand, type CommandResult } from "../../lib/command";
+import { openPanelDatabase } from "../../lib/panel-db";
+import { trustedVhost, withNginxTransactionAsync } from "../../lib/nginx-transaction";
+import { MAINTENANCE_INCLUDE_PATH, NGINX_GLOBAL_SETTINGS } from "../../lib/paths";
 
-export interface BasicAuthPaths {
+interface BasicAuthPaths {
   panelDb: string;
   nginxVhostDir: string;
   nginx: string;
@@ -99,7 +101,7 @@ function escaped(value: string): string {
 }
 
 // Only replace the block CloudPanel renders from basic_auth, preserving the rest of the vhost.
-export function basicAuthVhost(content: string, domain: string, previous: string | null, next: string[]): string {
+function basicAuthVhost(content: string, domain: string, previous: string | null, next: string[]): string {
   const before = entries(previous);
   const block = [
     ...(before.length ? ["satisfy any;", ...before.map((ip) => `allow ${ip};`), "deny all;"] : []),
@@ -126,7 +128,7 @@ export function basicAuthVhost(content: string, domain: string, previous: string
   if (!server.directives.some(({ words, start }) => words[0] === "auth_basic" && start >= blockStart && start < blockEnd)) refuse();
   const accessRules = new Set(["satisfy", "allow", "deny", "auth_basic", "auth_basic_user_file"]);
   const safeIncludes = new Set([
-    "/etc/nginx/global_settings", "/etc/nginx/clp-addons-maintenance.conf",
+    NGINX_GLOBAL_SETTINGS, MAINTENANCE_INCLUDE_PATH,
     "fastcgi_params", "/etc/nginx/fastcgi_params",
   ]);
   const affected = [server];

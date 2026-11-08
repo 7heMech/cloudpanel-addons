@@ -3,8 +3,9 @@ import { createHash } from "node:crypto";
 import { lstatSync, mkdirSync, readFileSync, rmSync } from "node:fs";
 import { isIP } from "node:net";
 import { dirname } from "node:path";
-import { failAction } from "../../cli/action-common";
+import { failAction } from "../../lib/action";
 import { writeFileAtomic } from "../../lib/atomic-write";
+import { isTrustedDirectory, isTrustedFile } from "../../lib/trusted-file";
 
 export const DATABASE_SOCKET_UNIT = "mariadb.socket";
 export const DATABASE_SOCKET_FILE = "/etc/systemd/system/mariadb.socket.d/zz-clp-addons-loopback.conf";
@@ -60,7 +61,7 @@ function trusted(path: string, rootUid: number, directory: boolean): boolean {
     if ((error as NodeJS.ErrnoException).code === "ENOENT") return false;
     throw error;
   }
-  if (info.uid !== rootUid || (info.mode & 0o022) !== 0 || (directory ? !info.isDirectory() : !info.isFile())) {
+  if (!(directory ? isTrustedDirectory(info, rootUid) : isTrustedFile(info, rootUid))) {
     failAction(`${path} is not a trusted ${directory ? "directory" : "regular file"}; it was left unchanged`);
   }
   return true;

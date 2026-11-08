@@ -1,8 +1,10 @@
 import { afterEach, expect, test } from "bun:test";
-import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, statSync, symlinkSync, writeFileSync } from "node:fs";
+import {
+  chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, statSync, symlinkSync, writeFileSync,
+} from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { inspectPhpGuard, reconcilePhpSessionGuard, type PhpGuardOptions } from "../cli/php-guard";
+import { inspectPhpGuard, reconcilePhpSessionGuard, type PhpGuardOptions } from "../lib/php-guard";
 
 const dirs: string[] = [];
 afterEach(() => { for (const dir of dirs.splice(0)) rmSync(dir, { recursive: true, force: true }); });
@@ -34,7 +36,6 @@ function box(fpmVersions: string[], orphanVersions: string[] = [], active = new 
       isActive: (unit) => active.has(unit),
       paths: {
         phpRoot, fpmBinDir, panelFpmUnit: "clp-php-fpm.service", rootUid: process.getuid!(),
-        optOutConfig: join(dir, "system-tweaks.conf"), optOutSettings: join(dir, "settings.json"),
       },
     },
   };
@@ -99,12 +100,14 @@ for (const failedUnit of ["php8.3-fpm.service", "clp-php-fpm.service"]) {
     const b = box(["8.1", "8.3"], [], new Set(units));
     const original = "; previous configuration\nsession.upload_progress.enabled = On\n";
     writeFileSync(b.dropIn("8.1"), original);
+    // A group-writable drop-in counts as absent, so the umask must not decide what is restored.
+    chmodSync(b.dropIn("8.1"), 0o644);
     let failed = false;
+    const seenAtRollbackReload: { dropIn81: string; dropIn83Exists: boolean }[] = [];
     b.options.run = (cmd, args) => {
       b.commands.push(`${cmd} ${args.join(" ")}`);
       if (failed && cmd === "systemctl") {
-        expect(readFileSync(b.dropIn("8.1"), "utf8")).toBe(original);
-        expect(existsSync(b.dropIn("8.3"))).toBe(false);
+        seenAtRollbackReload.push({ dropIn81: readFileSync(b.dropIn("8.1"), "utf8"), dropIn83Exists: existsSync(b.dropIn("8.3")) });
       }
       if (!failed && cmd === "systemctl" && args[1] === failedUnit) {
         failed = true;
@@ -115,6 +118,7 @@ for (const failedUnit of ["php8.3-fpm.service", "clp-php-fpm.service"]) {
     expect(() => reconcilePhpSessionGuard(true, b.options)).toThrow(`${failedUnit} reload failed: reload rejected`);
     const attempted = units.slice(0, units.indexOf(failedUnit) + 1).map((unit) => `systemctl reload ${unit}`);
     expect(b.commands.filter((c) => c.startsWith("systemctl"))).toEqual([...attempted, ...attempted]);
+    expect(seenAtRollbackReload).toEqual(attempted.map(() => ({ dropIn81: original, dropIn83Exists: false })));
     expect(inspectPhpGuard(b.options).unguarded).toEqual(["8.1", "8.3"]);
   });
 }

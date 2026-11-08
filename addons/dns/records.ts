@@ -26,9 +26,9 @@ export interface SiteVars {
   mailcowDkim: string | null;
 }
 
-export type TxtKind = "spf" | "dkim" | "dmarc" | "other";
+type TxtKind = "spf" | "dkim" | "dmarc" | "other";
 
-export interface Claim {
+interface Claim {
   name: string;
   type: string;
   /** For TXT: which values the row speaks for. */
@@ -44,14 +44,14 @@ export interface Rendered {
   problems: string[];
 }
 
-export function txtKind(value: string): TxtKind {
+function txtKind(value: string): TxtKind {
   if (isSpf(value)) return "spf";
   if (/^v=DKIM1(?:;|\s|$)/i.test(value)) return "dkim";
   if (/^v=DMARC1(?:;|\s|$)/i.test(value)) return "dmarc";
   return "other";
 }
 
-export function subdomainPart(domain: string, zone: string): string {
+function subdomainPart(domain: string, zone: string): string {
   return domain === zone ? "" : domain.slice(0, -(zone.length + 1));
 }
 
@@ -206,7 +206,7 @@ export function renderRedirect(profile: Profile | null, hosts: string[], vars: S
 }
 
 /** Whether a published record is one of the records `claims` speak for. */
-export function claimedBy(record: CfRecord, claims: Claim[]): boolean {
+function claimedBy(record: CfRecord, claims: Claim[]): boolean {
   return claims.some((claim) => {
     if (claim.name !== record.name) return false;
     if (claim.type === "CNAME" || record.type === "CNAME") return true;

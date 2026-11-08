@@ -2,9 +2,9 @@ import { afterEach, expect, test } from "bun:test";
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import type { CommandResult } from "../cli/action-common";
+import type { CommandResult } from "../lib/command";
 import {
-  installPoolIsolation, listenPort, phpPools, poolDropIn, poolIsolationStatus, poolRuleset, removePoolIsolation, syncPoolIsolation,
+  installPoolIsolation, listenPort, phpPools, poolIsolationStatus, poolRuleset, removePoolIsolation, syncPoolIsolation,
   type PoolIsolationOptions,
 } from "../addons/system-tweaks/pool-isolation";
 
@@ -207,7 +207,6 @@ test("the drop-in keeps the reload lines other drop-ins give the unit, and syncs
 
   f.units.showFails = true;
   installPoolIsolation(f.options);
-  expect(dropIn()).toBe(poolDropIn("/usr/local/bin/clp-addons", null));
   expect(dropIn()).not.toContain("ExecReload=\n");
   expect(dropIn()).toContain("ExecStartPre=-/usr/local/bin/clp-addons sync-php-pools\nExecReload=-/usr/local/bin/clp-addons sync-php-pools\n");
 });

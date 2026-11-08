@@ -1,15 +1,17 @@
 /** Transfer the unreleased System Tweaks memory policy without rewriting its hardening settings. */
+import { errorMessage } from "../../lib/errors";
+import { addonConfigFile, addonStateDir, SYSTEMD_DIR } from "../../lib/paths";
 import { existsSync, lstatSync, readFileSync, rmSync, rmdirSync } from "node:fs";
-import { CONFIG_DIR, STATE_DIR, SYSTEMD_DIR } from "./paths";
-import { writeFileAtomic } from "../lib/atomic-write";
-import { log } from "./util";
-import { DEFAULT_MEMORY, validMemorySettings, type MemorySettings } from "../addons/resource-limits/memory";
+import { writeFileAtomic } from "../../lib/atomic-write";
+import { isTrustedFile } from "../../lib/trusted-file";
+import { log } from "../../lib/log";
+import { DEFAULT_MEMORY, validMemorySettings, type MemorySettings } from "./memory";
 
 interface SavedFile { path: string; text: string; mode: number; uid: number; gid: number }
 function snapshot(path: string): SavedFile | null {
   if (!existsSync(path)) return null;
   const info = lstatSync(path);
-  if (!info.isFile() || info.uid !== (process.getuid?.() ?? 0) || (info.mode & 0o022)) throw new Error(`refusing untrusted migration file ${path}`);
+  if (!isTrustedFile(info, process.getuid?.() ?? 0)) throw new Error(`refusing untrusted migration file ${path}`);
   return { path, text: readFileSync(path, "utf8"), mode: info.mode & 0o777, uid: info.uid, gid: info.gid };
 }
 function restore(file: SavedFile): void {
@@ -34,10 +36,10 @@ export function migrateResourceMemory(enable: () => void): (() => void) | null {
   let stored: Record<string, unknown> | null = null;
   let runtime: SavedFile | null;
   try {
-    source = snapshot(`${STATE_DIR}/system-tweaks/settings.json`);
-    runtime = snapshot(`${STATE_DIR}/system-tweaks/memory.json`);
+    source = snapshot(`${addonStateDir("system-tweaks")}/settings.json`);
+    runtime = snapshot(`${addonStateDir("system-tweaks")}/memory.json`);
   } catch (error) {
-    return skipped(error instanceof Error ? error.message : String(error));
+    return skipped(errorMessage(error));
   }
   // System Tweaks itself ignores a settings file it cannot parse.
   try { stored = source ? JSON.parse(source.text) as Record<string, unknown> : null; } catch { stored = null; }
@@ -47,16 +49,16 @@ export function migrateResourceMemory(enable: () => void): (() => void) | null {
     .some((path) => existsSync(path) && readFileSync(path, "utf8").includes("clp-addons System Tweaks:"));
   // The policy may already have moved before a restart, with upkeep still to
   // rewrite the old drop-in comment. Do not mistake that for an unsaved default.
-  if (!hasMemory && !runtime && existsSync(`${STATE_DIR}/resource-limits/settings.json`)) return null;
+  if (!hasMemory && !runtime && existsSync(`${addonStateDir("resource-limits")}/settings.json`)) return null;
   if (!hasMemory && !runtime && !defaultOom) return null;
   const valid = !hasMemory || validMemorySettings(stored!.memory);
   const savedMemory = hasMemory && valid ? stored!.memory as MemorySettings : { ...DEFAULT_MEMORY };
-  const targetDir = `${STATE_DIR}/resource-limits`;
+  const targetDir = addonStateDir("resource-limits");
   const directoryExisted = existsSync(targetDir);
   const settingsPath = `${targetDir}/settings.json`;
   const runtimePath = `${targetDir}/memory.json`;
-  const configPath = `${CONFIG_DIR}/resource-limits.conf`;
-  const sourceEnabled = existsSync(`${CONFIG_DIR}/system-tweaks.conf`);
+  const configPath = addonConfigFile("resource-limits");
+  const sourceEnabled = existsSync(addonConfigFile("system-tweaks"));
   // PHP may have been enabled while System Tweaks was off. Combining the addons
   // must not silently reactivate the disabled source's saved memory switches.
   const memory = !sourceEnabled && existsSync(configPath)
@@ -107,6 +109,6 @@ export function migrateResourceMemory(enable: () => void): (() => void) | null {
     return undo;
   } catch (error) {
     undo();
-    return skipped(error instanceof Error ? error.message : String(error));
+    return skipped(errorMessage(error));
   }
 }

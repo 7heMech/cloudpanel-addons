@@ -106,7 +106,7 @@ function mentions(expression: string, host: string): boolean {
   return [...expression.toLowerCase().matchAll(/"((?:[^"\\]|\\.)*)"/g)].some((match) => pattern.test(match[1]!));
 }
 
-export interface RedirectAction {
+interface RedirectAction {
   target: string;
   status: RedirectStatus;
   keepPath: boolean;
@@ -134,7 +134,7 @@ function sameRule(current: CfRule, wanted: RuleWrite): boolean {
     && action !== null && JSON.stringify(action) === JSON.stringify(want);
 }
 
-export type RedirectRuleState =
+type RedirectRuleState =
   | { state: "present"; rule: CfRule }
   | { state: "create" }
   | { state: "update"; rule: CfRule }

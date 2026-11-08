@@ -6,18 +6,20 @@
  * a panel behind Cloudflare keeps its visitors. The sites' X-Real-IP is passed
  * through Cloudflare unchanged, so trusting Cloudflare there would reopen it.
  */
+import { errorMessage } from "../../lib/errors";
 import { existsSync, readFileSync } from "node:fs";
 import { isIP } from "node:net";
-import { runCommand, type CommandResult } from "../../cli/action-common";
-import { cloudflareRanges, nginxFileChange, trustedVhost, withNginxTransaction, type NginxFileOwner, type NginxGroupWrite } from "../../cli/nginx-transaction";
-import { CLOUDFLARE_IPS_PATH, ROOT_UID, nginxLayout } from "../../cli/paths";
+import { runCommand, type CommandResult } from "../../lib/command";
+import {
+  cloudflareRanges, nginxFileChange, trustedVhost, withNginxTransaction, type NginxFileOwner, type NginxGroupWrite,
+} from "../../lib/nginx-transaction";
+import { CLOUDFLARE_IPS_PATH, ROOT_UID, nginxLayout } from "../../lib/paths";
 import { panelUserGid, panelUserUid } from "../../lib/sso-auth";
 import { COMMAND_MS } from "./limits";
 
 export const REAL_IP_MARKER = "#clp-addons:untrusted ";
-const MARK = REAL_IP_MARKER;
 const ANY = /^([ \t]*)(set_real_ip_from[ \t]+(?:0\.0\.0\.0\/0|::\/0)[ \t]*;)[ \t]*$/gm;
-const MARKED = new RegExp(`^([ \\t]*)${MARK}(set_real_ip_from[ \\t]+(?:0\\.0\\.0\\.0\\/0|::\\/0)[ \\t]*;)[ \\t]*$`, "gm");
+const MARKED = new RegExp(`^([ \\t]*)${REAL_IP_MARKER}(set_real_ip_from[ \\t]+(?:0\\.0\\.0\\.0\\/0|::\\/0)[ \\t]*;)[ \\t]*$`, "gm");
 const PROXIES_START = "# clp-addons:cloudflare-proxies:start";
 const PROXIES_END = "# clp-addons:cloudflare-proxies:end";
 const PROXIES = new RegExp(`^[ \\t]*${PROXIES_START}\\n(?:.*\\n)*?[ \\t]*${PROXIES_END}\\n`, "gm");
@@ -60,7 +62,7 @@ interface Instance {
 /** Comments out the trust in every address and, after it, trusts `proxies`. */
 export function withoutAnyAddress(content: string, proxies: string[] = []): string {
   const marked = content.replace(PROXIES, "")
-    .replace(ANY, (_line, indent: string, directive: string) => `${indent}${MARK}${directive}`);
+    .replace(ANY, (_line, indent: string, directive: string) => `${indent}${REAL_IP_MARKER}${directive}`);
   if (proxies.length === 0) return marked;
   return marked.replace(new RegExp(MARKED.source, "m"), (line, indent: string) =>
     [line, `${indent}${PROXIES_START}`, ...proxies.map((proxy) => `${indent}set_real_ip_from ${proxy};`), `${indent}${PROXIES_END}`].join("\n"));
@@ -102,7 +104,7 @@ export function realIpStatus(options: RealIpOptions = {}): RealIpStatus {
       const { content } = trustedVhost(instance.conf, instance.uid, instance.groupWritable);
       if (new RegExp(ANY.source, "m").test(content)) trustsAnyAddress = true;
     } catch (error) {
-      problems.push(error instanceof Error ? error.message : String(error));
+      problems.push(errorMessage(error));
     }
   }
   return { trustsAnyAddress, problem: problems.join("; ") };
@@ -116,7 +118,6 @@ function applyTo(instance: Instance, wanted: (content: string) => string, option
     if ((error as NodeJS.ErrnoException).code === "ENOENT") return false;
     throw error;
   }
-  // Nothing to change needs no trust check, validation or reload.
   if (wanted(current) === current) return false;
   const run = options.run ?? ((command, args) => runCommand(command, args, COMMAND_MS));
   const nginx = { nginx: paths.nginx, systemctl: paths.systemctl, config: instance.config, service: instance.service };
@@ -128,7 +129,6 @@ function applyTo(instance: Instance, wanted: (content: string) => string, option
   }, { reload }).changed;
 }
 
-/** Puts both files in the wanted state, validating and reloading each instance only on a change. */
 export function applyRealIp(blockForged: boolean, options: RealIpOptions = {}): boolean {
   const { sites, panel } = instances(options);
   const wanted = (instance: Instance) => blockForged

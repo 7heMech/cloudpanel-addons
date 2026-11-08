@@ -2,7 +2,7 @@ import { handle } from "./app/index";
 import { GIT_HOOK_PREFIX, handleGitHook } from "./app/hook";
 import { runGitAction } from "./action";
 import { GIT_TARGETS } from "./inject/targets";
-import type { AddonDefinition } from "../../cli/addon-catalog";
+import type { AddonDefinition } from "../../lib/addon-definition";
 
 export const GIT_ADDON: AddonDefinition = {
   name: "git",

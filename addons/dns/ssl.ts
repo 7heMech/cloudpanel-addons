@@ -72,7 +72,6 @@ export async function retryCertificates(
       continue;
     }
     if (now < request.nextAttemptAt) continue;
-    // An attempt is counted before it runs, so one cut short still counts.
     if (request.attempts >= MAX_ATTEMPTS) {
       Object.assign(request, { done: true, state: `No certificate after ${MAX_ATTEMPTS} attempts; request one in the site's SSL/TLS tab` });
       continue;

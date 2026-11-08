@@ -6,9 +6,9 @@ import { join } from "node:path";
 import {
   reconcileNewSites, runCloudflareAction, transformVhost, type CloudflareActionPaths,
 } from "../addons/cloudflare-ips/action";
-import { CLIENT_JS, dashboardView, layout } from "../addons/cloudflare-ips/app/views";
-import type { CommandResult } from "../cli/action-common";
-import { trustedVhost, withNginxTransaction } from "../cli/nginx-transaction";
+import { CLIENT_JS, dashboardView } from "../addons/cloudflare-ips/app/views";
+import type { CommandResult } from "../lib/command";
+import { trustedVhost, withNginxTransaction } from "../lib/nginx-transaction";
 
 const realUid = process.getuid?.() ?? 0;
 const originalGetuid = process.getuid;

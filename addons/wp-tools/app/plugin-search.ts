@@ -6,6 +6,7 @@
 // directory that answered something odd cannot put markup or a slug that would
 // later be refused in front of anyone.
 
+import { errorMessage } from "../../../lib/errors";
 import { readBoundedText } from "../../../lib/app-http";
 import { decodeEntities, type Fetch } from "../new-site-plugins";
 import { DIRECTORY_SLUG_RE, cleanLabel } from "../plugin-zip";
@@ -13,7 +14,7 @@ import { DIRECTORY_SLUG_RE, cleanLabel } from "../plugin-zip";
 const DIRECTORY_API = "https://api.wordpress.org/plugins/info/1.2/";
 const RESULTS = 12;
 
-export interface DirectoryPlugin {
+interface DirectoryPlugin {
   slug: string;
   name: string;
   version: string;
@@ -22,7 +23,6 @@ export interface DirectoryPlugin {
   summary: string;
 }
 
-/** What the form may search for: some words, without anything that is not text. */
 export function searchTerm(value: unknown): string | null {
   if (typeof value !== "string") return null;
   const term = cleanLabel(value).slice(0, 100);
@@ -46,7 +46,7 @@ export async function searchDirectory(term: string, fetchImpl: Fetch = fetch): P
     if (!response.ok) throw new Error(`HTTP ${response.status}`);
     reply = JSON.parse(await readBoundedText(response, 2 * 1024 * 1024));
   } catch (error) {
-    throw new Error(`WordPress.org did not answer the search: ${error instanceof Error ? error.message : String(error)}`);
+    throw new Error(`WordPress.org did not answer the search: ${errorMessage(error)}`);
   }
   const plugins = Array.isArray(reply?.plugins) ? reply.plugins as Record<string, unknown>[] : [];
   return plugins.flatMap((plugin) => {

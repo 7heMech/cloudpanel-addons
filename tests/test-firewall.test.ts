@@ -1,6 +1,6 @@
-import { expect, test } from "bun:test";
+import { afterEach, expect, test } from "bun:test";
 import { Database } from "bun:sqlite";
-import { mkdtempSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { mkdtempSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
@@ -16,10 +16,14 @@ const ANYWHERE: PanelRule[] = [
   { id: 4, portRange: "443", source: "::/0" },
 ];
 
-/** What CloudPanel's rebuild leaves: TCP for every rule, and UDP 443 for HTTP/3. */
+/**
+ * What CloudPanel's rebuild leaves: TCP for every rule, and UDP 443 for HTTP/3.
+ * Written out the way ufw spells it for the plain sources and ranges these
+ * tests use, rather than through the module's own conversions.
+ */
 function panelBuilt(rules: PanelRule[]): UfwRule[] {
   return [
-    ...rules.map((rule) => ({ proto: "tcp" as const, port: ufwPort(rule.portRange)!, src: normalizeSource(rule.source)!.text })),
+    ...rules.map((rule) => ({ proto: "tcp" as const, port: rule.portRange.replace("-", ":"), src: rule.source.replace(/\/(32|128)$/, "") })),
     { proto: "udp", port: "443", src: "0.0.0.0/0" },
     { proto: "udp", port: "443", src: "::/0" },
   ];
@@ -152,8 +156,14 @@ test("switching off puts back CloudPanel's own rules and leaves the operator's a
 
 // --- On disk, with a ufw that keeps its rules in the fixture's files ---------
 
+const boxes: string[] = [];
+afterEach(() => {
+  for (const dir of boxes.splice(0)) rmSync(dir, { recursive: true, force: true });
+});
+
 function box() {
   const dir = mkdtempSync(join(tmpdir(), "clp-firewall-"));
+  boxes.push(dir);
   mkdirSync(join(dir, "ufw"));
   const panelDb = join(dir, "db.sq3");
   const db = new Database(panelDb, { create: true });
@@ -342,9 +352,9 @@ test("a box without ufw is left alone", () => {
 });
 
 test("the firewall watcher runs System Tweaks when ufw's rule files change", async () => {
-  const { ADDONS, addonFirewall } = await import("../cli/addon-catalog");
+  const { ADDONS } = await import("../addons/catalog");
   const { firewallUnits } = await import("../cli/provision");
-  expect(addonFirewall(Object.values(ADDONS)).map((spec) => spec.name)).toEqual(["system-tweaks"]);
+  expect(Object.values(ADDONS).filter((spec) => spec.firewall).map((spec) => spec.name)).toEqual(["system-tweaks"]);
   const units = firewallUnits();
   expect(units.path).toContain("PathChanged=/etc/ufw/user.rules\nPathChanged=/etc/ufw/user6.rules\nUnit=clp-addons-firewall.service");
   expect(units.service).toMatch(/ExecStart=\/\S+ sync-firewall\n/);

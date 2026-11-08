@@ -19,42 +19,37 @@
 // that outlives the restart, and returns a job id. The browser follows that id
 // and reconnects once the manager is back.
 
+import { errorMessage } from "../lib/errors";
+import { addonStateDir, CLI_BIN, LOCK_DIR } from "../lib/paths";
+import { writeFileAtomic } from "../lib/atomic-write";
 import { existsSync, mkdirSync, readFileSync, rmSync } from "node:fs";
 import { join } from "node:path";
-import { withFileLock, withFileLockSync } from "./action-common";
+import { withFileLock, withFileLockSync } from "../lib/file-lock";
 import { addonLocked } from "../lib/root-locks";
 import {
-  createJobDir, createJobLog, findOlderThan, jobCommonFields, jobDir, jobGet, jobSet,
-  jobTimestamp, jobUnitIsActive, listJobIds, newJobId, pruneJobs, readJobLog, startJobUnit,
-  watchJobRecord,
+  jobCommonFields, jobDir, jobGet, jobIsLive, jobSet, jobTimestamp, listJobIds, markJobDone,
+  markJobRunning, pruneJobs, readJobLog, recordQueuedJob, startJobUnit, watchJobRecord,
   type PruneJobsResult,
-} from "./job-store";
-import { CLI_BIN, LOCK_DIR, STATE_DIR } from "./paths";
-import { ADDONS, ADDON_NAMES, addonNews, addonNoticeKeys } from "./addon-catalog";
-import { CLI_VERSION, type OnProgress } from "./release";
-import { Fatal, log, requireRoot, writeAtomic } from "./util";
+} from "../lib/job-store";
+import { ADDONS, ADDON_NAMES, addonNews, addonNoticeKeys, addonEnabled } from "../addons/catalog";
+import { CLI_VERSION } from "../lib/version";
+import { type OnProgress, Fatal, log, requireRoot } from "../lib/log";
 
-/** Where the manager's own job records live, beside each addon's state. */
-export const MANAGER_STATE_DIR = `${STATE_DIR}/manager`;
-export const MANAGER_JOBS_DIR = `${MANAGER_STATE_DIR}/jobs`;
-/** The New and Changed badges somebody has opened, shared by every administrator. */
-export const NEWS_SEEN_FILE = `${MANAGER_STATE_DIR}/news-seen.json`;
+const MANAGER_STATE_DIR = addonStateDir("manager");
+const MANAGER_JOBS_DIR = `${MANAGER_STATE_DIR}/jobs`;
+/** The New and Changed badges opened, shared by every administrator. */
+const NEWS_SEEN_FILE = `${MANAGER_STATE_DIR}/news-seen.json`;
 /** The release this box ran before the installed one; badges cover what came after it. */
 export const NEWS_SINCE_FILE = `${MANAGER_STATE_DIR}/news-since`;
 
 /** Long enough to look at the failure in the UI, short enough not to pile up. */
 const JOB_RETENTION_DAYS = 7;
 
-export type ManagerJobKind = "enable" | "disable" | "update";
+type ManagerJobKind = "enable" | "disable" | "update";
 
 /**
- * The privileged work itself, injected rather than imported.
- *
- * Enabling reinstalls units and reconciles Nginx and the Twig anchors, and
- * updating downloads and verifies a release: all of that lives in
- * cli/toggle.ts and cli/update.ts. Taking the three operations as an argument
- * keeps the dependency pointing one way and lets the job plumbing be tested
- * without provisioning anything.
+ * The privileged work, which lives in cli/toggle.ts and cli/update.ts, injected
+ * rather than imported so the dependency points one way.
  */
 export interface ManagerOps {
   enable(addon: string): Promise<void> | void;
@@ -82,13 +77,8 @@ export interface ManagerJobView {
 }
 
 /**
- * Accept both flag spellings this action is reached by.
- *
- * The manager builds `--addon=stager` the way the CLI's own `parseFlags` reads
- * it; the transient unit that runs a job is built by the shared `startJobUnit`,
- * which spells it `--job <id>` the way every other action's parser reads it.
- * This is the one entry point both forms arrive at, so it understands both
- * rather than either side being made to spell it the other's way.
+ * The web side passes `--addon=stager`; the transient unit `startJobUnit`
+ * builds passes `--job <id>`. Both arrive here.
  */
 export function parseManagerFlags(argv: string[]): Record<string, string> {
   const flags: Record<string, string> = {};
@@ -120,8 +110,8 @@ function failReply(error: string, data?: unknown, emit = true): number {
 }
 
 /**
- * The release badges start after. A box without the record was updated from a
- * release that kept none, so every notice up to the installed one is news.
+ * A box without the record was updated from a release that kept none, so every
+ * notice up to the installed one is news.
  */
 export function readNewsSince(file = NEWS_SINCE_FILE): string {
   return storedNewsSince(file) ?? "0.0.0";
@@ -147,13 +137,12 @@ export function recordNewsSince(previous: string | null, file = NEWS_SINCE_FILE,
   const since = previous === null ? current : previous.replace(/^v/, "");
   if (previous !== null && since === current) return;
   try {
-    writeAtomic(file, `${since}\n`, 0o644);
+    writeFileAtomic(file, `${since}\n`, { mode: 0o644, createParent: true });
   } catch (error) {
-    log.warn(`could not record the release the Addons page badges start after: ${message(error)}`);
+    log.warn(`could not record the release the Addons page badges start after: ${errorMessage(error)}`);
   }
 }
 
-/** Puts the record back as it was now, for an update that rolls back. */
 export function keepNewsSince(file = NEWS_SINCE_FILE): () => void {
   let kept: string | null = null;
   try {
@@ -162,18 +151,13 @@ export function keepNewsSince(file = NEWS_SINCE_FILE): () => void {
   return () => {
     try {
       if (kept === null) rmSync(file, { force: true });
-      else writeAtomic(file, kept, 0o644);
+      else writeFileAtomic(file, kept, { mode: 0o644, createParent: true });
     } catch (error) {
-      log.warn(`could not restore the release the Addons page badges start after: ${message(error)}`);
+      log.warn(`could not restore the release the Addons page badges start after: ${errorMessage(error)}`);
     }
   };
 }
 
-/**
- * The notices already read that still mean something: a key for a notice no
- * longer declared, or a name no longer in the catalog, is dropped, so the file
- * never outgrows the catalog.
- */
 export function readNewsSeen(file = NEWS_SEEN_FILE, version = CLI_VERSION, since = readNewsSince()): string[] {
   let stored: unknown = [];
   try { stored = JSON.parse(readFileSync(file, "utf-8")); } catch { /* none yet */ }
@@ -183,7 +167,6 @@ export function readNewsSeen(file = NEWS_SEEN_FILE, version = CLI_VERSION, since
     typeof key === "string" && addonNoticeKeys(key.split("@")[0]!, current, since).includes(key));
 }
 
-/** Records the badge of the named addons, or of every addon, as read. */
 export function markNewsSeen(addons: string[] = ADDON_NAMES, file = NEWS_SEEN_FILE, version = CLI_VERSION, since = readNewsSince()): string[] {
   const current = version.replace(/^v/, "");
   // Locked so two administrators reading different addons both keep their keys.
@@ -193,42 +176,25 @@ export function markNewsSeen(addons: string[] = ADDON_NAMES, file = NEWS_SEEN_FI
     const fresh = keys.filter((key) => !seen.includes(key));
     if (!fresh.length) return seen;
     seen.push(...fresh);
-    writeAtomic(file, `${JSON.stringify(seen)}\n`, 0o644);
+    writeFileAtomic(file, `${JSON.stringify(seen)}\n`, { mode: 0o644, createParent: true });
     return seen;
   });
 }
 
-function message(error: unknown): string {
-  if (error instanceof Fatal || error instanceof Error) return error.message;
-  return String(error);
-}
-
-/**
- * The job that is still going, if there is one.
- *
- * This is what makes the buttons idempotent: a second click finds the first
- * click's job and follows it rather than starting a second enable. The
- * "recently created" arm matches pruneJobs' stuck rule -- `systemd-run` returns
- * before the unit is necessarily visible to `systemctl is-active`, so a job
- * seconds old is treated as live even when its unit cannot be seen yet.
- */
-/** The lock a manager operation takes before it touches shared state. */
 function withManagerLock<T>(lockDir: string, onTimeout: string, body: () => Promise<T>): Promise<T> {
   mkdirSync(lockDir, { recursive: true, mode: 0o700 });
   return withFileLock(join(lockDir, "manager.lock"), 30, onTimeout, body);
 }
 
+/**
+ * A second click finds the first click's job and follows it rather than
+ * starting a second enable. A job seconds old counts as live even when systemd
+ * cannot show its unit yet.
+ */
 export function activeManagerJob(jobsDir = MANAGER_JOBS_DIR): string | null {
-  for (const id of listJobIds(jobsDir)) {
-    const dir = jobDir(jobsDir, id);
-    const state = jobGet(dir, "state");
-    if (state !== "queued" && state !== "running") continue;
-    if (jobUnitIsActive("manager", id) || !findOlderThan(dir, 60 * 1000, 5)) return id;
-  }
-  return null;
+  return listJobIds(jobsDir).find((id) => jobIsLive("manager", jobsDir, id)) ?? null;
 }
 
-/** The newest job record, whatever its state. */
 export function latestManagerJob(jobsDir = MANAGER_JOBS_DIR): string | null {
   return listJobIds(jobsDir)[0] ?? null;
 }
@@ -248,7 +214,6 @@ export function readManagerJob(id: string, jobsDir = MANAGER_JOBS_DIR): { job: M
   };
 }
 
-/** Expire old records and fail the ones whose runner died. Called by repair. */
 export function pruneManagerJobs(jobsDir = MANAGER_JOBS_DIR): PruneJobsResult {
   return pruneJobs({
     addon: "manager",
@@ -259,13 +224,11 @@ export function pruneManagerJobs(jobsDir = MANAGER_JOBS_DIR): PruneJobsResult {
 }
 
 function enabled(name: string): boolean {
-  return existsSync(ADDONS[name]!.configFile);
+  return addonEnabled(ADDONS[name]!);
 }
 
 /**
- * Reject what the runner would only discover after it had started.
- *
- * Disabling the last addon is not on this list. `serve` keeps running with none
+ * Disabling the last addon is not refused. `serve` keeps running with none
  * enabled, because every addon is compiled in and a manager with none of them
  * on is still the page that offers them back; the panel's Addons entry is kept
  * by `installedInjections` for the same reason. Taking the installation away
@@ -293,15 +256,6 @@ function describe(kind: ManagerJobKind, addon: string): string {
   return kind === "update" ? "clp-addons update" : `clp-addons ${kind} ${addon}`;
 }
 
-/**
- * Record the request, hand it to systemd and answer with the job id.
- *
- * The record is written before the unit is started so that a runner that begins
- * immediately finds a complete record, and the log file is created here for the
- * same reason the unit's StandardOutput= points at it: the runner's progress is
- * whatever `clp-addons` prints, and systemd is what puts that in a file the
- * unprivileged manager can be shown through this action.
- */
 export interface CreateJobOptions {
   jobsDir?: string;
   newsFile?: string;
@@ -316,6 +270,11 @@ export interface CreateJobOptions {
   locks?: { file: string; rootUid: number };
 }
 
+/**
+ * The unit's StandardOutput= points at the job's log: the runner's progress is
+ * whatever `clp-addons` prints, and systemd puts it in a file the unprivileged
+ * manager can be shown through this action.
+ */
 export async function createJob(
   kind: ManagerJobKind,
   addon: string,
@@ -354,14 +313,12 @@ export async function createJob(
       }
 
       mkdirSync(stateDir, { recursive: true, mode: 0o700 });
-      const id = newJobId();
-      const dir = createJobDir(jobsDir, id);
-      const logPath = createJobLog(dir);
-      jobSet(dir, "kind", kind);
-      jobSet(dir, "addon", kind === "update" ? "" : addon);
-      jobSet(dir, "createdAt", jobTimestamp());
-      jobSet(dir, "state", "queued");
-      jobSet(dir, "step", kind === "update" ? "queued" : `queued: ${kind} ${addon}`);
+      const { id, dir } = recordQueuedJob(
+        jobsDir,
+        { kind, addon: kind === "update" ? "" : addon },
+        kind === "update" ? "queued" : `queued: ${kind} ${addon}`,
+      );
+      const logPath = join(dir, "log");
 
       const started = startUnit({
         addon: "manager",
@@ -377,7 +334,7 @@ export async function createJob(
       return emitOk({ ok: true, data: { jobId: id, existing: false } });
     });
   } catch (error) {
-    return emitFail(message(error));
+    return emitFail(errorMessage(error));
   }
 }
 
@@ -399,8 +356,7 @@ export async function runManagerJob(
   const kind = jobGet(dir, "kind");
   const addon = jobGet(dir, "addon");
 
-  jobSet(dir, "startedAt", jobTimestamp());
-  jobSet(dir, "state", "running");
+  markJobRunning(dir);
   try {
     if (kind === "enable") {
       jobSet(dir, "step", `enabling ${addon}`);
@@ -428,15 +384,14 @@ export async function runManagerJob(
     }
   } catch (error) {
     jobSet(dir, "event", "");
-    jobSet(dir, "error", message(error));
+    jobSet(dir, "error", errorMessage(error));
     jobSet(dir, "finishedAt", jobTimestamp());
     jobSet(dir, "state", "failed");
     return 1;
   }
   jobSet(dir, "event", "");
   jobSet(dir, "step", kind === "update" ? "updated" : `${kind}d ${addon}`);
-  jobSet(dir, "finishedAt", jobTimestamp());
-  jobSet(dir, "state", "done");
+  markJobDone(dir);
   return 0;
 }
 
@@ -465,12 +420,9 @@ export async function runManagerAction(
         return await createJob(verb, addon, options);
       case "update":
         return await createJob("update", "", options);
-      // Not a job: rendering the templates writes a few files and restarts
-      // nothing, so the request that asked for it can wait for the answer.
-      // It exists because an addon whose markup depends on a setting has to be
-      // able to put that markup back the moment the setting moves. `reconcile`
-      // takes the operation lock itself, which is what keeps it from crossing
-      // an enable, a repair or an update.
+      // Not a job: rendering the templates restarts nothing, so the request
+      // can wait for the answer. An addon whose markup depends on a setting
+      // calls it the moment the setting moves.
       case "reconcile":
         ops.reconcile();
         return reply({ ok: true, data: { reconciled: true } }, options.emitReply !== false);
@@ -520,6 +472,6 @@ export async function runManagerAction(
         return failReply(`unknown manager verb '${verb ?? ""}'`, undefined, options.emitReply !== false);
     }
   } catch (error) {
-    return failReply(message(error), undefined, options.emitReply !== false);
+    return failReply(errorMessage(error), undefined, options.emitReply !== false);
   }
 }

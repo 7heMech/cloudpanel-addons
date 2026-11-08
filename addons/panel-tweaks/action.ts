@@ -12,21 +12,22 @@
  * shape, and it accepts no path. Automatic SSL submits CloudPanel's own certificate form from the
  * browser; here it is only a switch.
  */
-import { openPanelDatabase } from "../../cli/panel-db";
+import { LOCK_DIR, addonStateDir, CLI_BIN, PANEL_DB } from "../../lib/paths";
+import { openPanelDatabase } from "../../lib/panel-db";
 import { Database } from "bun:sqlite";
 import { existsSync, lstatSync, readFileSync } from "node:fs";
 import { join } from "node:path";
-import {
-  ActionFailure, acquireFileLock, REPLIED, replyToAction, emitActionOk, errorMessage, failAction, readJsonRequest, runCommand, withFileLock,
-  type CommandResult, type FileLockHandle,
-} from "../../cli/action-common";
+import { ActionFailure, REPLIED, replyToAction, emitActionOk, failAction, readJsonRequest } from "../../lib/action";
+import { acquireFileLock, withFileLock, type FileLockHandle } from "../../lib/file-lock";
+import { errorMessage } from "../../lib/errors";
+import { runCommand, type CommandResult } from "../../lib/command";
 import {
   jobCommonFields, jobDir, jobIdArgument, jobSiteProgress, listJobIds, pruneJobs, queueJob, readJobLog,
   readJobResult, runSiteJob, watchJobRecord, type JobCommonFields, type JobSiteProgress, type startJobUnit,
-} from "../../cli/job-store";
-import { CLI_BIN, PANEL_DB, STATE_DIR } from "../../cli/paths";
-import { standInDomains } from "../../cli/stand-ins";
+} from "../../lib/job-store";
+import { standInDomains } from "../../lib/stand-ins";
 import { writeFileAtomic } from "../../lib/atomic-write";
+import { isTrustedFile } from "../../lib/trusted-file";
 import { certificateIssuer, issuerLabel } from "../../lib/certificate-issuer";
 import { PANEL_USER_NAME_RE, panelUserSites } from "../../lib/panel-users";
 import { applyBranding, brandingAsset, MAX_BRANDING_INPUT_BYTES, readBranding, type Branding } from "./branding";
@@ -42,7 +43,7 @@ const MEASURE_LOCK_WAIT_SECONDS = 60 * 60;
 const JOB_RETENTION_DAYS = 7;
 
 /** `scan` is the repair timer's sweep; the page starts a `measure` job instead. */
-export type PanelTweaksVerb = "state" | "set-tweaks" | "scan" | "measure" | "branding" | "set-branding";
+type PanelTweaksVerb = "state" | "set-tweaks" | "scan" | "measure" | "branding" | "set-branding";
 
 /**
  * What the addon does, as independent modes.
@@ -92,10 +93,10 @@ export const DEFAULT_TWEAKS: PanelTweaks = {
  * has no session to ask with, the layout switches decide the first paint, and
  * autoSsl decides whether the creation and completion scripts are present.
  */
-export const TEMPLATE_TWEAK_KEYS: (keyof PanelTweaks)[] =
+const TEMPLATE_TWEAK_KEYS: (keyof PanelTweaks)[] =
   ["deviceTheme", "sitesMobile", "actionMenu", "panelMobile", "autoSsl", "branding"];
 
-export const TWEAK_KEYS = Object.keys(DEFAULT_TWEAKS) as (keyof PanelTweaks)[];
+const TWEAK_KEYS = Object.keys(DEFAULT_TWEAKS) as (keyof PanelTweaks)[];
 
 /**
  * The switches that mean nothing on their own.
@@ -103,12 +104,11 @@ export const TWEAK_KEYS = Object.keys(DEFAULT_TWEAKS) as (keyof PanelTweaks)[];
  * Measured sizes are a column of the enhanced Sites table, so they are turned
  * off with it rather than left on measuring a disk for a column no page draws.
  */
-export const TWEAK_PARENTS: Partial<Record<keyof PanelTweaks, keyof PanelTweaks>> = {
+const TWEAK_PARENTS: Partial<Record<keyof PanelTweaks, keyof PanelTweaks>> = {
   diskUsage: "sitesTable",
 };
 
-/** A switch whose parent is off is off, whichever of the two was just named. */
-export function withTweakDependencies(tweaks: PanelTweaks): PanelTweaks {
+function withTweakDependencies(tweaks: PanelTweaks): PanelTweaks {
   const settled = { ...tweaks };
   for (const [key, parent] of Object.entries(TWEAK_PARENTS) as [keyof PanelTweaks, keyof PanelTweaks][]) {
     if (!settled[parent]) settled[key] = false;
@@ -158,7 +158,7 @@ export const SELF_SIGNED_CERTIFICATE = "1";
  * issuer is read: a Cloudflare origin certificate and a public authority's are
  * both "imported" to it, and they are not the same thing to an operator.
  */
-export const IMPORTED_CERTIFICATE = "3";
+const IMPORTED_CERTIFICATE = "3";
 
 /**
  * The awkward spellings in CloudPanel's `application` column.
@@ -178,11 +178,6 @@ export function applicationLabel(application: string, type: string): string {
   return APPLICATION_LABELS[name] ?? name;
 }
 
-export function certificateLabel(type: string): string {
-  return CERTIFICATE_LABELS[type.trim()] ?? (type.trim() || "Certificate");
-}
-
-/** What one site contributes to the enhanced Sites table. */
 export interface TweakSiteView {
   domain: string;
   user: string;
@@ -222,13 +217,12 @@ export interface ScanResult {
   measuredAt: string;
 }
 
-/** A measurement an operator started, as the page follows it. */
 export interface MeasureJobView extends JobCommonFields, JobSiteProgress {
   id: string;
   result: ScanResult | null;
 }
 
-export interface PanelTweaksActionPaths {
+interface PanelTweaksActionPaths {
   panelDb: string;
   tweaksFile: string;
   diskFile: string;
@@ -263,17 +257,17 @@ export interface PanelTweaksActionOptions {
 
 export const DEFAULT_PANEL_TWEAKS_PATHS: PanelTweaksActionPaths = {
   panelDb: PANEL_DB,
-  tweaksFile: `${STATE_DIR}/panel-tweaks/tweaks.json`,
-  diskFile: `${STATE_DIR}/panel-tweaks/disk-usage.json`,
-  lockFile: "/run/lock/clp-addons/panel-tweaks.lock",
-  scanLockFile: "/run/lock/clp-addons/panel-tweaks-scan.lock",
-  jobsDir: `${STATE_DIR}/panel-tweaks/jobs`,
-  jobsLockFile: "/run/lock/clp-addons/panel-tweaks-jobs.lock",
+  tweaksFile: `${addonStateDir("panel-tweaks")}/tweaks.json`,
+  diskFile: `${addonStateDir("panel-tweaks")}/disk-usage.json`,
+  lockFile: `${LOCK_DIR}/panel-tweaks.lock`,
+  scanLockFile: `${LOCK_DIR}/panel-tweaks-scan.lock`,
+  jobsDir: `${addonStateDir("panel-tweaks")}/jobs`,
+  jobsLockFile: `${LOCK_DIR}/panel-tweaks-jobs.lock`,
   actionBinary: CLI_BIN,
   mysqlDir: "/var/lib/mysql",
   passwd: "/etc/passwd",
-  brandingFile: `${STATE_DIR}/panel-tweaks/branding.json`,
-  brandingDir: `${STATE_DIR}/panel-tweaks/branding`,
+  brandingFile: `${addonStateDir("panel-tweaks")}/branding.json`,
+  brandingDir: `${addonStateDir("panel-tweaks")}/branding`,
   rootUid: 0,
 };
 
@@ -287,15 +281,10 @@ function nowIso(options: PanelTweaksActionOptions): string {
 
 // --- stored state ---------------------------------------------------------
 
-function trustedFile(path: string, expectedUid: number): boolean {
-  const stat = lstatSync(path);
-  return stat.isFile() && !stat.isSymbolicLink() && stat.uid === expectedUid && (stat.mode & 0o022) === 0;
-}
-
 function readJsonFile(path: string, expectedUid: number, what: string): Record<string, unknown> | null {
   if (!existsSync(path)) return null;
   try {
-    if (!trustedFile(path, expectedUid)) failAction(`the ${what} file is not a trusted regular file`);
+    if (!isTrustedFile(lstatSync(path), expectedUid)) failAction(`the ${what} file is not a trusted regular file`);
     const parsed = JSON.parse(readFileSync(path, "utf8"));
     if (typeof parsed !== "object" || parsed === null || Array.isArray(parsed)) return null;
     return parsed as Record<string, unknown>;
@@ -761,7 +750,6 @@ async function setBranding(paths: PanelTweaksActionPaths, options: PanelTweaksAc
   });
 }
 
-/** The logos the addon pages draw: none unless Theme & Branding and its logo section are on. */
 function brandingLogos(paths: PanelTweaksActionPaths): Branding["logos"] | null {
   if (!readTweaks(paths).branding) return null;
   const branding = readBranding(paths);
@@ -781,14 +769,14 @@ function brandingAssetArgument(argv: string[]): string {
 // or another tab finds it again, and pressing Measure now meanwhile follows
 // the one already running rather than starting a second.
 
-export function measureJobView(jobsDir: string, id: string): MeasureJobView | null {
+function measureJobView(jobsDir: string, id: string): MeasureJobView | null {
   const dir = jobDir(jobsDir, id);
   const common = jobCommonFields(dir);
   if (!common.state) return null;
   return { id, ...common, ...jobSiteProgress(dir), result: readJobResult<ScanResult>(dir) };
 }
 
-export function activeMeasurement(jobsDir: string): MeasureJobView | null {
+function activeMeasurement(jobsDir: string): MeasureJobView | null {
   for (const id of listJobIds(jobsDir)) {
     const view = measureJobView(jobsDir, id);
     if (view && (view.state === "queued" || view.state === "running")) return view;
@@ -819,7 +807,6 @@ async function startMeasurement(paths: PanelTweaksActionPaths, options: PanelTwe
   });
 }
 
-/** The disk lock, saying so in the job's step when a scheduled sweep has it. */
 async function scanLock(paths: PanelTweaksActionPaths, wait: (step: string) => void): Promise<FileLockHandle> {
   try {
     return await acquireFileLock(paths.scanLockFile, 0, "the disk is being measured");
@@ -849,7 +836,6 @@ async function runMeasurement(paths: PanelTweaksActionPaths, id: string, options
   return measureJobView(paths.jobsDir, id);
 }
 
-/** Expired measurements go, and one whose runner died is marked failed. */
 function pruneMeasurements(paths: PanelTweaksActionPaths): void {
   pruneJobs({
     addon: "panel-tweaks",
@@ -913,7 +899,6 @@ export async function runPanelTweaksAction(
   });
 }
 
-/** The repair hook: expire old measurements, and sweep the disk when due. */
 export async function panelTweaksUpkeep(options: PanelTweaksActionOptions = {}): Promise<string | null> {
   // One whose runner died is marked failed, so the page stops following it.
   pruneMeasurements(pathsFor(options));

@@ -1,10 +1,8 @@
-// Per-site bookkeeping that the Varnish and MainWP policies share.
-
-export interface FleetState<T> {
+interface FleetState<T> {
   sites: Record<string, T>;
 }
 
-/** Forgets domains the panel no longer has, so a recreated site starts fresh. Returns what it dropped. */
+/** Forgets domains the panel no longer has, so a recreated site starts fresh. */
 export function pruneFleet<T>(state: FleetState<T>, domains: Set<string>): Record<string, T> {
   const dropped: Record<string, T> = {};
   // A panel that lists no site at all is far likelier a bad read than every
@@ -19,8 +17,8 @@ export function pruneFleet<T>(state: FleetState<T>, domains: Set<string>): Recor
 }
 
 /**
- * Least recently checked first. A pass is bounded even when one site's PHP or
- * a download stalls, and the next one carries on from the sites it left.
+ * A pass is bounded even when one site's PHP or a download stalls, so the next
+ * one carries on from the sites it left.
  */
 export function leastRecentlyChecked<S extends { domain: string }>(
   sites: S[],

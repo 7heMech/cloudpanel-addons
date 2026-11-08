@@ -53,7 +53,6 @@ export function saveNewSitesState(path: string, state: NewSitesState): void {
   writeFileAtomic(path, `${JSON.stringify(state)}\n`, { mode: 0o600, createParent: true });
 }
 
-/** Records the panel's domains; returns the ones it did not have last time, now pending. */
 export function noteSites(state: NewSitesState, domains: string[], now: number): string[] {
   const known = new Set(state.known);
   const current = new Set(domains);

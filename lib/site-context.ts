@@ -31,7 +31,7 @@ export interface SiteContext {
   addonSlugs?: string[];
 }
 
-export interface SiteTab {
+interface SiteTab {
   slug: string;
   label: string;
   href: string;
@@ -77,7 +77,6 @@ export const ADDON_SITE_TABS: { slug: string; label: string; url: string; applie
   { slug: "stager", label: "Staging", url: mountPath("stager"), applies: (site) => ["php", "static", "reverse-proxy"].includes(site.type) },
 ];
 
-/** How CloudPanel's stored site `type` reads to an operator. */
 export function siteTypeLabel(type: string): string {
   if (type === "php") return "PHP";
   if (type === "static") return "Static";
@@ -113,15 +112,12 @@ export function siteTabs(site: SiteContext, activeSlug = ""): SiteTab[] {
   return [...native, ...addons];
 }
 
-/**
- * CloudPanel's own site-information block, above the tab strip.
- *
- * The numbers are the panel's, from assets/css/frontend/site.css: a 200px
- * minimum column with a 60px gutter, so the second and third blocks line up
- * where the panel puts them, a 14px/500 label in #aaa and an 18px value. Only
- * the top margin differs -- the panel's own 30px, less the 25px `main` already
- * contributes above the first element on an addon page.
- */
+// CloudPanel's own site-information block, above the tab strip. The numbers
+// are the panel's, from assets/css/frontend/site.css: a 200px minimum column
+// with a 60px gutter, so the second and third blocks line up where the panel
+// puts them, a 14px/500 label in #aaa and an 18px value. Only the top margin
+// differs -- the panel's own 30px, less the 25px `main` already contributes
+// above the first element on an addon page.
 import SITE_CONTEXT_STYLE from "./assets/site-context.css" with { type: "text" };
 export { SITE_CONTEXT_STYLE };
 

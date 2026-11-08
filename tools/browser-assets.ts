@@ -33,7 +33,6 @@ export function stylesheetPaths(): string[] {
   return [...new Bun.Glob("{cli,lib,manager,addons}/**/*.css").scanSync({ cwd: ROOT, absolute: true })];
 }
 
-/** Every stylesheet bundled by Bun, by absolute path, in one pass. */
 export async function bundleStyles(paths: string[], minify: boolean): Promise<Map<string, string>> {
   const bundled = new Map<string, string>();
   if (!paths.length) return bundled;
@@ -49,11 +48,7 @@ export async function bundleStyles(paths: string[], minify: boolean): Promise<Ma
   return bundled;
 }
 
-/**
- * The binary's build: every `.client.js` minified and every `.css` bundled and
- * minified. Stylesheets are done before the build starts, since a build inside a
- * build's loader never finishes.
- */
+/** Stylesheets are bundled before the build starts: a build inside a build's loader never finishes. */
 export async function minifyAssetsPlugin(): Promise<BunPlugin> {
   const styles = await bundleStyles(stylesheetPaths(), true);
   return {

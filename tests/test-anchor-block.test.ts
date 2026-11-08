@@ -33,20 +33,6 @@ function probeFor(state: "anchor-not-found-in-markup" | "template-absent"): stri
 
   class TestFatal extends Error {}
 
-  function parseFlags(argv) {
-    const positional = [];
-    const flags = {};
-    for (const arg of argv) {
-      if (!arg.startsWith("--")) {
-        positional.push(arg);
-        continue;
-      }
-      const equal = arg.indexOf("=");
-      flags[arg.slice(2, equal === -1 ? undefined : equal)] = equal === -1 ? true : arg.slice(equal + 1);
-    }
-    return { positional, flags };
-  }
-
   const realProvision = await import("./cli/provision.ts?anchor-block-test-real");
   mock.module("./cli/provision.ts", () => ({
     ...realProvision,
@@ -83,15 +69,19 @@ function probeFor(state: "anchor-not-found-in-markup" | "template-absent"): stri
     reconcileNginxProxy: () => ({ state: "ok", changed: false }),
   }));
 
-  mock.module("./cli/util.ts", () => ({
+  const __realLog = await import("./lib/log.ts");
+  mock.module("./lib/log.ts", () => ({
+    ...__realLog,
     Fatal: TestFatal,
     fatal: (message) => { throw new TestFatal(message); },
     log: { step: () => {}, ok: () => {}, warn: () => {}, err: () => {}, plain: () => {} },
-    parseFlags,
     requireRoot: () => {},
+  }));
+  const __realCommand = await import("./lib/command.ts");
+  mock.module("./lib/command.ts", () => ({
+    ...__realCommand,
     run: () => "",
     tryRun: () => ({ ok: true, out: "" }),
-    writeAtomic: () => {},
   }));
 
   const { applyEnable } = await import("./cli/toggle.ts");

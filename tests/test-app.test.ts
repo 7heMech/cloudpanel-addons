@@ -10,9 +10,9 @@
 import { expect, test } from "bun:test";
 import { existsSync, readFileSync } from "node:fs";
 import { join } from "node:path";
-import { BASE_CLIENT_JS, THEME_INIT_JS } from "../lib/app-ui";
+import { BASE_CLIENT_JS, FLEET_ROW_SELECTION_JS, THEME_INIT_JS } from "../lib/app-ui";
 import { headerUpdateScript } from "../lib/panel-nav";
-import { ADDON_NAMES } from "../cli/addon-catalog";
+import { ADDON_NAMES } from "../addons/catalog";
 import { CLIENT_JS as INSTATIC_CLIENT_JS } from "../addons/instatic/app/views";
 import { CLIENT_JS as STAGER_CLIENT_JS } from "../addons/stager/app/views";
 import { CLIENT_JS as GIT_CLIENT_JS } from "../addons/git/app/views";
@@ -41,17 +41,7 @@ for (const { name, source } of SCRIPTS) {
     expect(() => new Function(source)).not.toThrow();
   });
 
-  // A bare newline inside a quoted string is the specific way this breaks, and
-  // pointing at the line is more useful than "unexpected token" on a 4KB blob.
-  test(`every ${name} client script line closes its strings`, () => {
-    for (const [index, line] of source.split("\n").entries()) {
-      if (line.trimStart().startsWith("//")) continue;
-      const quotes = (line.match(/'/g) ?? []).length;
-      expect(quotes % 2, `line ${index + 1}: ${line.trim()}`).toBe(0);
-    }
-  });
 }
-
 
 // Native CloudPanel defaults to light and stores only its explicit dark choice.
 // The early script must also recognize the cookie after another cookie and
@@ -160,10 +150,43 @@ test("a rejected request carries the state the route says it reached", async () 
   expect(plain.data).toBeUndefined();
 });
 
-test("converted addon actions repaint without carrying notices through a reload", () => {
-  for (const script of [GIT_CLIENT_JS, INSTATIC_CLIENT_JS, RESOURCE_LIMITS_CLIENT_JS]) {
-    expect(script).not.toContain("location.reload");
-    expect(script).not.toContain("reloadWithFlash");
-    expect(script).toContain("repaintView(");
+// An action that reloaded the page lost the notice it had just shown, so each
+// of these addons paints the reply into the page instead.
+test("converted addon actions repaint without carrying notices through a reload", async () => {
+  const pages = [
+    { name: "instatic", script: FLEET_ROW_SELECTION_JS + INSTATIC_CLIENT_JS, run: "act('example.com', 'restart')" },
+    { name: "git", script: FLEET_ROW_SELECTION_JS + GIT_CLIENT_JS, run: "refreshGit()" },
+    { name: "resource-limits", script: RESOURCE_LIMITS_CLIENT_JS, run: "send('/api/limits', {}, 'Saved.')" },
+  ];
+  for (const page of pages) {
+    const element = () => null;
+    const document = {
+      cookie: "clp_addons_csrf=t",
+      readyState: "complete",
+      body: { style: {} },
+      documentElement: { classList: { toggle: () => {}, contains: () => false } },
+      getElementById: element,
+      querySelector: element,
+      querySelectorAll: () => [],
+      addEventListener: () => {},
+      createElement: () => ({ style: {}, append: () => {}, setAttribute: () => {} }),
+    };
+    const reloads: string[] = [];
+    const location = {
+      pathname: `/addons/${page.name}/`, origin: "https://panel.example.test",
+      reload: () => reloads.push("reload"), assign: (to: string) => reloads.push(to), replace: (to: string) => reloads.push(to),
+    };
+    const painted: string[] = [];
+    const fetch = async () => ({ ok: true, status: 200, json: async () => ({ ok: true, html: "<p>after</p>", data: {} }) });
+    const action = new Function("document", "window", "location", "CLP_BASE", "fetch", "alert", "paint",
+      `${BASE_CLIENT_JS}\n${page.script}\nrepaintView = function (holder, html) { paint(html); };\nreturn function () { return ${page.run}; };`)(
+      document,
+      { addEventListener: () => {}, scrollTo: () => {}, matchMedia: () => ({ matches: false, addEventListener: () => {} }) },
+      location, `/addons/${page.name}`, fetch, (message: string) => { throw new Error(`alert: ${message}`); },
+      (html: string) => painted.push(html),
+    );
+    await action();
+    expect(painted, page.name).toEqual(["<p>after</p>"]);
+    expect(reloads, page.name).toEqual([]);
   }
 });

@@ -6,12 +6,13 @@
  * working and nothing leaves the server. The package ships the unit under
  * /lib, so the drop-in under /etc survives CloudPanel updates.
  */
+import { errorMessage } from "../../lib/errors";
 import { existsSync, readFileSync, rmSync } from "node:fs";
-import { runCommand, type CommandResult } from "../../cli/action-common";
+import { runCommand, type CommandResult } from "../../lib/command";
 import { writeFileAtomic } from "../../lib/atomic-write";
 import { COMMAND_MS } from "./limits";
 
-export const DEFAULT_TELEMETRY_PATHS = {
+const DEFAULT_TELEMETRY_PATHS = {
   dropIn: "/etc/systemd/system/clp-agent.service.d/zz-clp-addons-telemetry.conf",
   unit: "clp-agent.service",
   systemctl: "systemctl",
@@ -19,7 +20,7 @@ export const DEFAULT_TELEMETRY_PATHS = {
   bash: "/bin/bash",
 };
 
-export const TELEMETRY_DROP_IN = `# clp-addons System Tweaks: Block CloudPanel telemetry. Switching it off removes this file.
+const TELEMETRY_DROP_IN = `# clp-addons System Tweaks: Block CloudPanel telemetry. Switching it off removes this file.
 [Service]
 IPAddressDeny=any
 IPAddressAllow=localhost
@@ -100,11 +101,11 @@ export function telemetryStatus(options: TelemetryOptions = {}): TelemetryStatus
     const problem = enforcementProblem(ctx);
     return { agent, blocked: problem === "", problem };
   } catch (error) {
-    return { agent: false, blocked: false, problem: error instanceof Error ? error.message : String(error) };
+    return { agent: false, blocked: false, problem: errorMessage(error) };
   }
 }
 
-/** Reloads systemd and restarts a running agent, since its address filter is set when it starts. */
+/** A running agent takes its address filter only when it starts. */
 function reload(ctx: ReturnType<typeof context>): void {
   const daemon = ctx.run(ctx.paths.systemctl, ["daemon-reload"]);
   if (!daemon.ok) throw new Error(`systemctl daemon-reload failed: ${daemon.stderr.trim()}`);

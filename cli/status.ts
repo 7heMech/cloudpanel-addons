@@ -1,18 +1,16 @@
-// `clp-addons status`: what is installed, injected, running and reachable.
-
-import { dashboardUrl, installedAddons } from "./addons";
+import { dashboardUrl } from "./addons";
+import { enabledAddons, ADDONS, addonEnabled, addonHandler, phpGuardOptedOut } from "../addons/catalog";
+import type { AddonSpec } from "../lib/addon-definition";
 import { secureRegularFile } from "./artifacts";
-import { ADDONS, addonHandler } from "./addon-catalog";
-import {
-  type MaintenanceNginxStatus, type NginxProxyStatus, inspect, inspectNginxMaintenance, inspectNginxProxy,
-} from "./inject";
-import { CLI_BIN, MANAGER_UNIT, SOCKET_PATH, mountPath } from "./paths";
-import { inspectPhpGuard } from "./php-guard";
-import { managerSocketProblem, unitActive, unitPid } from "./provision";
+import { type NginxProxyStatus, inspect, inspectNginxProxy } from "./inject";
+import { CLI_BIN, MANAGER_UNIT, SOCKET_PATH } from "../lib/paths";
+import { mountPath } from "../lib/mount";
+import { inspectPhpGuard } from "../lib/php-guard";
+import { managerSocketProblem, unitPid } from "./provision";
+import { unitActive } from "../lib/systemd";
 import { installedInjections } from "./reconcile";
-import { CLI_VERSION } from "./release";
-import { log, paint } from "./util";
-import { existsSync } from "node:fs";
+import { CLI_VERSION } from "../lib/version";
+import { log, paint } from "../lib/log";
 function statusValue(value: string, ok: boolean): string {
   return paint(ok ? "32" : "31", value);
 }
@@ -22,21 +20,21 @@ function nginxStatus(status: NginxProxyStatus): string {
   return statusValue(status.detail ?? "Needs repair", false);
 }
 
-function maintenanceNginxStatus(status: MaintenanceNginxStatus): string {
-  if (!existsSync(ADDONS.maintenance!.configFile)) return "Not enabled";
-  if (status.state === "ok") return statusValue("Site Checks Injected & Verified ✓", true);
-  return statusValue(status.detail ?? "Needs repair", false);
+function panelBlockStatus(spec: AddonSpec): string {
+  if (!addonEnabled(spec)) return "Not enabled";
+  const { ok, text } = spec.panelBlock!.inspect();
+  return statusValue(text, ok);
 }
 
 function phpGuardStatus(): string {
-  const { guarded, unguarded, optedOut } = inspectPhpGuard();
+  const { guarded, unguarded, optedOut } = inspectPhpGuard({ optedOut: phpGuardOptedOut() });
   if (guarded.length === 0 && unguarded.length === 0) return "No PHP-FPM found";
   if (optedOut) return statusValue("off in System Tweaks", false);
   if (unguarded.length === 0) return statusValue(`upload_progress Off on ${guarded.join(", ")} ✓`, true);
   return statusValue(`missing on ${unguarded.join(", ")}; run repair`, false);
 }
 
-export function anchorStatus(): string {
+function anchorStatus(): string {
   const statuses = installedInjections().map((injection) => inspect(injection));
   if (statuses.length === 0) return "Not configured";
   const required = statuses.filter((status) => {
@@ -55,7 +53,7 @@ function socketStatus(): string {
 }
 
 export async function cmdStatus(): Promise<void> {
-  const specs = installedAddons();
+  const specs = enabledAddons();
   const managerState = unitActive(MANAGER_UNIT);
   const active = managerState === "active";
   const pid = unitPid(MANAGER_UNIT);
@@ -68,7 +66,9 @@ export async function cmdStatus(): Promise<void> {
   log.plain(`   • Manager PID  ${statusValue(pid ?? "not available", active && pid !== null)}`);
   log.plain(`   • Socket       ${socketStatus()}`);
   log.plain(`   • Nginx       ${nginxStatus(inspectNginxProxy())}`);
-  log.plain(`   • Maintenance ${maintenanceNginxStatus(inspectNginxMaintenance())}`);
+  for (const spec of Object.values(ADDONS).filter((item) => item.panelBlock)) {
+    log.plain(`   • ${spec.panelBlock!.label.padEnd(11)} ${panelBlockStatus(spec)}`);
+  }
   log.plain(`   • Anchors     ${anchorStatus()}`);
   log.plain(`   • PHP guard   ${phpGuardStatus()}`);
   log.plain();

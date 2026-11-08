@@ -1,42 +1,28 @@
-// Putting the CloudPanel side back the way the installed addons need it: the
-// Twig anchors, the Nginx proxy and the maintenance check. Install, update,
-// repair, uninstall and the manager's own reconcile verb all come through here.
-
 import {
-  purgeTwigCache as purgeInjectCache, type Injection, KNOWN_GOOD_PANEL_VERSIONS, type TargetStatus,
-  panelVersion, reconcile, reconcileNginxMaintenance, reconcileNginxProxy,
+  purgeTwigCache as purgeInjectCache, type Injection, KNOWN_GOOD_PANEL_VERSIONS, type TargetStatus, panelVersion,
+  reconcile, reconcileNginxProxy,
 } from "./inject";
-import { ensureMaintenanceData } from "../addons/maintenance/action";
-import { systemTweaksBackupCompression, systemTweaksMotd, systemTweaksPhpMyAdmin } from "../addons/system-tweaks/action";
 import { TEMPLATES } from "../lib/panel-anchors";
 import { adminHeaderTarget, headerTarget, siteLayoutTarget } from "../lib/panel-nav";
-import { ADDONS, ADDON_NAMES } from "./addon-catalog";
-import { mountPath } from "./paths";
-import { log } from "./util";
-import { existsSync } from "node:fs";
+import { ADDONS, ADDON_NAMES, addonEnabled, enabledAddons } from "../addons/catalog";
+import type { AddonSpec } from "../lib/addon-definition";
+import { errorMessage } from "../lib/errors";
+import { mountPath } from "../lib/mount";
+import { log } from "../lib/log";
 /**
- * `managerNav` is whether the panel keeps its "Addons" entry.
- *
- * It belongs to the manager, not to any addon, and it used to be derived from
- * "at least one addon is enabled". That was the same thing right up until an
- * addon could be disabled from the page the entry leads to: disabling the last
- * one took the link away, and the only way back to the page that would offer
- * the addons again was to know the URL. The entry now goes when the
- * installation goes, which is `self-uninstall`'s call to make, not this one's.
+ * `managerNav` is whether the panel keeps its "Addons" entry. It stays with
+ * every addon disabled, since the page it leads to is where they are enabled
+ * again, and goes only with `self-uninstall`.
  */
 export function installedInjections(exclude?: string, managerNav = true): Injection[] {
   const injections: Injection[] = [];
-  const installed = ADDON_NAMES.filter((name) => name !== exclude && existsSync(ADDONS[name]!.configFile));
+  const installed = ADDON_NAMES.filter((name) => name !== exclude && addonEnabled(ADDONS[name]!));
 
-  // Kept outside the addon target lists so installing a second addon cannot
-  // emit a second style/script block or replace the first one's marker.
   if (managerNav) {
     injections.push({ addon: "manager", target: headerTarget(), url: "/addons/" });
     injections.push({ addon: "manager", target: adminHeaderTarget(), url: "/addons/" });
   }
 
-  // The site tab strip only needs its one-row rule once some installed addon is
-  // actually adding a tab to it, and it needs it exactly once however many do.
   if (installed.some((name) => ADDONS[name]!.targets.some((target) => target.template === TEMPLATES.siteTabs))) {
     injections.push({ addon: "manager", target: siteLayoutTarget(), url: "/addons/" });
   }
@@ -77,12 +63,11 @@ export function reconcileAnchors(quiet: boolean, exclude?: string, managerNav = 
     }
     if (status.state === "template-absent") {
       if (!quiet) log.warn(`${status.addon}/${status.slug}: ${describeTarget(status)}`);
-      // Left non-fatal for repair/update, which run unattended and may catch
+      // Not logged as an error: repair and update run unattended and may catch
       // the panel mid-upgrade while cloudpanel.postinst has the app directory
-      // moved aside; the next periodic reconcile heals it. install/enable
-      // check this return value and abort, so a target whose template is
-      // simply absent on this panel build (wrong path, unsupported version)
-      // still surfaces as a failure there instead of a silent no-op.
+      // moved aside, and the next periodic reconcile heals it. install and
+      // enable abort on the return value, so a template absent on this panel
+      // build still fails there.
       if (injection.target.required) blocked = true;
       continue;
     }
@@ -109,46 +94,24 @@ export function reconcileNginx(quiet: boolean, enabled = true): boolean {
   return false;
 }
 
-export function reconcileMaintenanceNginx(quiet: boolean, enabled = existsSync(ADDONS.maintenance!.configFile)): boolean {
-  if (enabled) ensureMaintenanceData(ADDONS.maintenance!.stateDir);
-  const result = reconcileNginxMaintenance({ enabled });
-  if (result.state === "ok" || (!enabled && result.state === "missing")) {
-    if (result.changed && !quiet) log.ok(enabled ? "Nginx maintenance check injected and verified" : "Nginx maintenance check removed and verified");
-    return true;
+export function reconcilePanelBlocks(quiet: boolean, enabled: (spec: AddonSpec) => boolean = addonEnabled): boolean {
+  let ok = true;
+  for (const spec of Object.values(ADDONS)) {
+    if (spec.panelBlock && !spec.panelBlock.reconcile(enabled(spec), quiet)) ok = false;
   }
-  log.err(`Nginx maintenance check: ${result.detail ?? result.state}`);
-  return false;
+  return ok;
 }
 
-/** System Tweaks' phpMyAdmin rules, for the fast repair that runs when CloudPanel rewrites its vhost. */
-export function reconcilePhpMyAdminRules(quiet: boolean): void {
-  if (!existsSync(ADDONS["system-tweaks"]!.configFile)) return;
-  try {
-    const line = systemTweaksPhpMyAdmin();
-    if (line && !quiet) log.ok(line);
-  } catch (error) {
-    log.err(`phpMyAdmin rules: ${error instanceof Error ? error.message : String(error)}`);
-  }
-}
-
-/** A CloudPanel update replaces the whole app tree, so System Tweaks' backup command edit goes back with the templates. */
-export function reconcileBackupCommand(quiet: boolean): void {
-  if (!existsSync(ADDONS["system-tweaks"]!.configFile)) return;
-  try {
-    const line = systemTweaksBackupCompression();
-    if (line && !quiet) log.ok(line);
-  } catch (error) {
-    log.err(`remote backup compression: ${error instanceof Error ? error.message : String(error)}`);
-  }
-}
-
-/** A CloudPanel upgrade empties /etc/update-motd.d and puts its banner back. */
-export function reconcileMotd(quiet: boolean): void {
-  if (!existsSync(ADDONS["system-tweaks"]!.configFile)) return;
-  try {
-    const line = systemTweaksMotd();
-    if (line && !quiet) log.ok(line);
-  } catch (error) {
-    log.err(`SSH login message: ${error instanceof Error ? error.message : String(error)}`);
+/** What the enabled addons redo when CloudPanel rewrites a file the anchor watcher sees. */
+export async function runAnchorWork(quiet: boolean): Promise<void> {
+  for (const spec of enabledAddons()) {
+    for (const hook of spec.anchors ?? []) {
+      try {
+        const line = await hook.run();
+        if (line && !quiet) log.ok(line);
+      } catch (error) {
+        log.err(`${hook.label}: ${errorMessage(error)}`);
+      }
+    }
   }
 }

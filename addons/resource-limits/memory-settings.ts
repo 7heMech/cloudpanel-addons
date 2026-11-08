@@ -1,18 +1,21 @@
 /** The saved memory policy and its lifecycle, independent of PHP's category policy. */
+import { addonConfigFile, addonStateDir, LOCK_DIR } from "../../lib/paths";
 import { existsSync, lstatSync, readFileSync } from "node:fs";
-import { errorMessage, failAction, withFileLock, withFileLockSync } from "../../cli/action-common";
-import { CONFIG_DIR, LOCK_DIR, STATE_DIR } from "../../cli/paths";
+import { errorMessage } from "../../lib/errors";
+import { failAction } from "../../lib/action";
+import { withFileLock, withFileLockSync } from "../../lib/file-lock";
 import { writeFileAtomic } from "../../lib/atomic-write";
+import { isTrustedFile } from "../../lib/trusted-file";
 import { MEMORY_DEADLINE_MS } from "./limits";
 import {
   DEFAULT_MEMORY, MEMORY_ERROR, applyMemory, memoryChange, memoryStatus, syncMemory, validMemorySettings,
   type MemoryOptions, type MemorySettings, type MemoryStatus,
 } from "./memory";
 
-export const DEFAULT_MEMORY_SETTINGS_PATHS = {
-  settingsFile: `${STATE_DIR}/resource-limits/settings.json`,
+const DEFAULT_MEMORY_SETTINGS_PATHS = {
+  settingsFile: `${addonStateDir("resource-limits")}/settings.json`,
   lockFile: `${LOCK_DIR}/resource-limits-settings.lock`,
-  enabledConfig: `${CONFIG_DIR}/resource-limits.conf`,
+  enabledConfig: addonConfigFile("resource-limits"),
   rootUid: 0,
 };
 export interface ResourceMemoryOptions {
@@ -24,8 +27,7 @@ export type ResourceMemoryState = (MemoryStatus & { settings: MemorySettings }) 
 export function readMemorySettings(options: ResourceMemoryOptions = {}): MemorySettings {
   const paths = { ...DEFAULT_MEMORY_SETTINGS_PATHS, ...options.memorySettings };
   if (!existsSync(paths.settingsFile)) return { ...DEFAULT_MEMORY };
-  const info = lstatSync(paths.settingsFile);
-  if (!info.isFile() || info.uid !== paths.rootUid || (info.mode & 0o022) !== 0) {
+  if (!isTrustedFile(lstatSync(paths.settingsFile), paths.rootUid)) {
     failAction("the resource limits settings file is not a trusted regular file");
   }
   const saved = JSON.parse(readFileSync(paths.settingsFile, "utf8"));

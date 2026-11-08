@@ -1,4 +1,3 @@
-// Every verb `clp-addons action system-tweaks` takes, and who may ask root for it from the web.
 // `install-updates` installs one fixed package; no verb takes a package name, a path or an apt option.
 // `lock` marks the protections `clp-addons lock system-tweaks` holds: while locked, the web may
 // only switch them on, and move the panel's PHP only to a newer version.

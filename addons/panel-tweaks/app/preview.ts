@@ -21,7 +21,6 @@ import { mountPath } from "../../../lib/mount";
 import { sitesBlock } from "../inject/targets";
 import type { PanelTweaksState, TweakSiteView } from "../action";
 
-/** Enough rows to show a layout, few enough to stay a preview. */
 const ROWS = 5;
 
 import PREVIEW_STYLE from "./preview.css" with { type: "text" };
@@ -42,8 +41,6 @@ function row(site: TweakSiteView): string {
 }
 
 /**
- * The preview document.
- *
  * The theme is the panel's own cookie, read before anything is painted, so the
  * frame is dark exactly when the page around it is.
  */

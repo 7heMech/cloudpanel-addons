@@ -42,7 +42,6 @@ function switchText(input) {
 }
 
 
-// The profile's select, or one of the three switches; MySQL's applies at its next restart.
 function setMemory(control) {
   if (control.tagName === 'SELECT') {
     const label = control.options[control.selectedIndex].textContent;

@@ -6,9 +6,9 @@ async function post(path, body) {
   });
 }
 
-// One change at a time. A second one started while the first ran answered with
-// the page as it stood before the first landed, repainted over it and put the
-// first one's controls back as if it had stopped, so every control waits.
+// One change at a time: a second one started while the first runs would answer
+// with the page as it stood before the first landed, repaint over it and put the
+// first one's controls back as if it had stopped.
 let stQueue = Promise.resolve();
 
 function exclusive(task) {
@@ -31,8 +31,6 @@ function hold(on) {
   });
 }
 
-// What is running, said on the row it belongs to, and once over the page for a
-// change slow enough that the other controls are noticed waiting.
 function working(control, text) {
   const option = control.closest('.st-option');
   const row = option || control.closest('.tweak-row');
@@ -92,7 +90,6 @@ function setUpdates(input) {
   return change(input, '/api/updates', { [input.dataset.setting]: input.checked }, switchText(input), 'Saved.');
 }
 
-// Each on/off switch posts to /api/<name>.
 function setSwitch(input, name) {
   return change(input, '/api/' + name, { enabled: input.checked }, switchText(input), 'Saved.');
 }

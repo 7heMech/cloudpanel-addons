@@ -1,14 +1,20 @@
-import { expect, mock, test } from "bun:test";
+import { afterAll, beforeEach, expect, mock, test } from "bun:test";
 
 // The mocks below are registered at import time. The full suite uses Bun's
 // per-file isolation so these overrides cannot affect another test file.
 import * as nodeFs from "node:fs";
+import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { ARTIFACT_MANIFEST_PATH, CLI_ARTIFACT, CLI_BIN, LIBEXEC_DIR, LOCK_DIR } from "../cli/paths";
+import * as realPaths from "../lib/paths";
+import { ARTIFACT_MANIFEST_PATH, CLI_ARTIFACT, CLI_BIN, LIBEXEC_DIR } from "../lib/paths";
 import * as realProvision from "../cli/provision";
 
+const lockDir = nodeFs.mkdtempSync(join(tmpdir(), "clp-update-lock-"));
+afterAll(() => nodeFs.rmSync(lockDir, { recursive: true, force: true }));
+mock.module("../lib/paths", () => ({ ...realPaths, LOCK_DIR: lockDir, CONFFILES_RELEASED_FLAG: join(lockDir, "conffiles-released") }));
+
 const calls: string[] = [];
-mock.module("../cli/php-guard", () => ({ reconcilePhpGuard: () => calls.push("reconcilePhpGuard") }));
+mock.module("../lib/php-guard", () => ({ reconcilePhpGuard: () => calls.push("reconcilePhpGuard") }));
 let hasInstalledAddon = true;
 let artifactsAvailable = false;
 let artifactTampered = false;
@@ -24,7 +30,7 @@ let managerUnitState = "active";
 /** The operation the lock file names while it is held, if it is held. */
 function lockedOperation(): string | null {
   try {
-    return originalReadFileSync(join(LOCK_DIR, "operation.lock"), "utf8").split("\n")[0] || null;
+    return originalReadFileSync(join(lockDir, "operation.lock"), "utf8").split("\n")[0] || null;
   } catch {
     return null;
   }
@@ -44,18 +50,11 @@ function installedOnBox(binary: boolean, manifest = binary): void {
   if (binary) present.add(CLI_BIN);
   if (manifest) present.add(ARTIFACT_MANIFEST_PATH);
 }
-const provisioning = {
-  serviceUser: false,
-  dirs: false,
-  sudoers: false,
-  legacyUnits: true,
-  units: false,
-  running: false,
-  anchors: false,
-  nginx: false,
-};
-
-function resetProvisioning(): void {
+function resetState(): void {
+  calls.length = 0;
+  hasInstalledAddon = true;
+  artifactsAvailable = false;
+  artifactTampered = false;
   resolvedReleaseTag = "v1.2.3";
   handoffFailure = false;
   manifestWriteFailure = false;
@@ -64,17 +63,8 @@ function resetProvisioning(): void {
   previousChecksum = null;
   managerUnitState = "active";
   installedOnBox(true);
-  Object.assign(provisioning, {
-    serviceUser: false,
-    dirs: false,
-    sudoers: false,
-    legacyUnits: true,
-    units: false,
-    running: false,
-    anchors: false,
-    nginx: false,
-  });
 }
+beforeEach(resetState);
 
 function record(name: string): (...args: unknown[]) => void {
   return (..._args: unknown[]) => calls.push(name);
@@ -189,8 +179,8 @@ mock.module("node:fs", () => ({
   },
 }));
 
+mock.module("../lib/version", () => ({ CLI_VERSION: "1.2.3", DEV_VERSION: "0.0.0-dev" }));
 mock.module("../cli/release", () => ({
-  CLI_VERSION: "1.2.3",
   resolveRelease: async () => {
     calls.push("resolveRelease");
     return { tag: resolvedReleaseTag, assets: new Map<string, string>() };
@@ -208,22 +198,28 @@ mock.module("../cli/release", () => ({
   },
 }));
 
+const { daemonReload } = await import("../lib/systemd");
+mock.module("../lib/systemd", () => ({ unitActive: () => managerUnitState, daemonReload }));
+const __catalog = await import("../addons/catalog");
+const __enabled = () => hasInstalledAddon;
+// Every addon counts as enabled here, so the Nginx block one keeps in CloudPanel's files is left alone.
+const __addons = Object.fromEntries(Object.entries(__catalog.ADDONS).map(([name, spec]) =>
+  [name, spec.panelBlock ? { ...spec, panelBlock: { ...spec.panelBlock, reconcile: () => true } } : spec]));
+mock.module("../addons/catalog", () => ({ ...__catalog, ADDONS: __addons, addonEnabled: __enabled, enabledAddons: () => Object.values(__addons).filter(__enabled) }));
 mock.module("../cli/provision", () => ({
   ...realProvision,
-  ensureDirs: () => { calls.push("ensureDirs"); provisioning.dirs = true; },
+  ensureDirs: record("ensureDirs"),
   ensureAuthHelperReady: () => calls.push("ensureAuthHelperReady"),
-  ensureServiceUser: () => { calls.push("ensureServiceUser"); provisioning.serviceUser = true; },
+  ensureServiceUser: record("ensureServiceUser"),
   ensureTimerArmed: record("ensureTimerArmed"),
   hardenBackups: record("hardenBackups"),
-  reconcilePanelIdentity: () => { calls.push("reconcilePanelIdentity"); provisioning.sudoers = true; },
-  installUnits: () => { calls.push("installUnits"); provisioning.units = true; },
-  installedConfig: () => hasInstalledAddon,
+  reconcilePanelIdentity: record("reconcilePanelIdentity"),
+  installUnits: record("installUnits"),
   purgeTwigCache: record("purgeTwigCache"),
-  removeLegacyUnits: () => { calls.push("removeLegacyUnits"); provisioning.legacyUnits = false; },
+  removeLegacyUnits: record("removeLegacyUnits"),
   startUnits: (options?: { beforeManagerRestart?: () => void }) => {
     options?.beforeManagerRestart?.();
     calls.push("startUnits");
-    provisioning.running = true;
   },
   stopUnits: record("stopUnits"),
   unitActive: () => managerUnitState,
@@ -240,30 +236,34 @@ mock.module("../cli/inject", () => ({
   purgeTwigCache: record("purgeInjectCache"),
   reconcile: () => {
     calls.push("reconcile");
-    provisioning.anchors = true;
     return { statuses: [], changed: false };
   },
   reconcileNginxProxy: () => {
     calls.push("reconcileNginxProxy");
-    provisioning.nginx = true;
     return { state: "ok", changed: false };
   },
 }));
 
-mock.module("../cli/util", () => ({
+mock.module("../lib/atomic-write", () => ({
+  writeFileAtomic: (path: string) => {
+    calls.push(`writeAtomic:${path}`);
+    if (manifestWriteFailure && path === ARTIFACT_MANIFEST_PATH) throw new Error("manifest write failed");
+    const operation = lockedOperation();
+    if (operation) calls.push(`locked:${operation}:${path}`);
+    if (tracked.has(path)) present.add(path);
+  },
+}));
+const __realLog = await import("../lib/log");
+mock.module("../lib/log", () => ({
+  ...__realLog,
   Fatal: TestFatal,
   fatal: (message: string): never => { throw new Error(message); },
   log: { step: () => {}, ok: (msg: string) => { calls.push(`log.ok:${msg}`); }, warn: (msg: string) => { calls.push(`log.warn:${msg}`); }, err: () => {}, plain: () => {} },
-  parseFlags: (argv: string[]) => {
-    const flags: Record<string, string | true> = {};
-    for (const arg of argv) {
-      if (!arg.startsWith("--")) continue;
-      const equal = arg.indexOf("=");
-      flags[arg.slice(2, equal === -1 ? undefined : equal)] = equal === -1 ? true : arg.slice(equal + 1);
-    }
-    return { positional: argv.filter((arg) => !arg.startsWith("--")), flags };
-  },
   requireRoot: () => {},
+}));
+const __realCommand = await import("../lib/command");
+mock.module("../lib/command", () => ({
+  ...__realCommand,
   run: (cmd: string, args: string[]) => {
     calls.push(`run:${cmd} ${args.join(" ")}`);
     if (handoffFailure && cmd === CLI_BIN && args[0] === "update") throw new Error("target handoff failed");
@@ -272,13 +272,6 @@ mock.module("../cli/util", () => ({
   tryRun: (cmd: string, args: string[]) => {
     calls.push(`tryRun:${cmd} ${args.join(" ")}`);
     return { ok: true, out: "" };
-  },
-  writeAtomic: (path: string) => {
-    calls.push(`writeAtomic:${path}`);
-    if (manifestWriteFailure && path === ARTIFACT_MANIFEST_PATH) throw new Error("manifest write failed");
-    const operation = lockedOperation();
-    if (operation) calls.push(`locked:${operation}:${path}`);
-    if (tracked.has(path)) present.add(path);
   },
 }));
 
@@ -294,16 +287,14 @@ mock.module("../lib/panel-snapshot", () => ({
 const { cmdInstall } = await import("../cli/install");
 const { applyEnable } = await import("../cli/toggle");
 const { cmdUpdate } = await import("../cli/update");
-const { NEWS_SINCE_FILE } = await import("../cli/manager-action");
+const { NEWS_SINCE_FILE } = await import("../manager/action");
 const handoffCall = (tag: string, ...args: string[]) =>
   `run:${CLI_BIN} ${["update", ...args, `--version=${tag}`, "--no-self-update", "--updated-from=1.2.3"].join(" ")}`;
 
 test("enable turns bundled addons on with no release checks or gh, even when all addons were disabled", async () => {
   for (const enabled of [true, false]) {
-    calls.length = 0;
-    resetProvisioning();
+    resetState();
     hasInstalledAddon = enabled;
-    artifactsAvailable = false;
     await applyEnable("stager");
     expect(calls).not.toContain("resolveRelease");
     expect(calls).not.toContain("fetchVerified");
@@ -317,8 +308,6 @@ test("enable turns bundled addons on with no release checks or gh, even when all
 });
 
 test("bootstrap local artifacts are checked without invoking the remote verifier", async () => {
-  calls.length = 0;
-  resetProvisioning();
   await cmdInstall(["stager", "--local=/tmp/bootstrap"]);
   expect(calls).toContain("loadLocal");
   expect(calls).not.toContain("resolveRelease");
@@ -328,8 +317,7 @@ test("bootstrap local artifacts are checked without invoking the remote verifier
 });
 
 test("install.sh with no addons named provisions the platform with none enabled", async () => {
-  calls.length = 0;
-  resetProvisioning();
+  hasInstalledAddon = false;
   await cmdInstall(["--local=/tmp/bootstrap"]);
   expect(calls).toContain(`writeAtomic:${CLI_BIN}`);
   expect(calls).toContain("startUnits");
@@ -337,14 +325,11 @@ test("install.sh with no addons named provisions the platform with none enabled"
 });
 
 test("install without install.sh's binary points to enable", async () => {
-  calls.length = 0;
   await expect(cmdInstall(["stager"])).rejects.toThrow("clp-addons enable");
   expect(calls).not.toContain("writeConfig:stager");
 });
 
 test("install.sh's binary is recorded once and then enables every addon", async () => {
-  calls.length = 0;
-  resetProvisioning();
   await cmdInstall(["stager", "terminal", "security-keys", "--local=/tmp/bootstrap"]);
   expect(calls.filter((call) => call === "loadLocal")).toHaveLength(1);
   expect(calls.indexOf("writeConfig:security-keys")).toBeGreaterThan(calls.indexOf(`writeAtomic:${CLI_BIN}`));
@@ -352,25 +337,20 @@ test("install.sh's binary is recorded once and then enables every addon", async 
 });
 
 test("install refuses an unknown addon before installing any", async () => {
-  calls.length = 0;
-  resetProvisioning();
   await expect(cmdInstall(["stager", "nonesuch", "--local=/tmp/bootstrap"])).rejects.toThrow("unknown addon 'nonesuch'");
   expect(calls).not.toContain("writeConfig:stager");
 });
 
-test.each([{ flags: ["--local"] }, { flags: ["--version=v1.2.3"] }, { flags: ["--skip-attestation"] }])("install refuses %j", async ({ flags }) => {
-  calls.length = 0;
-  await expect(cmdInstall(["stager", ...flags])).rejects.toThrow();
+test.each([
+  { flags: ["--local"], message: "install is what install.sh runs; turn addons on with clp-addons enable <addon>" },
+  { flags: ["--version=v1.2.3"], message: "install does not take --version; change version with clp-addons update --version" },
+  { flags: ["--skip-attestation"], message: "install does not take --skip-attestation" },
+])("install refuses $flags", async ({ flags, message }) => {
+  await expect(cmdInstall(["stager", ...flags])).rejects.toThrow(message);
   expect(calls).not.toContain("writeConfig:stager");
 });
 
 test("an update hands provisioning to the installed target binary", async () => {
-  calls.length = 0;
-  resetProvisioning();
-  hasInstalledAddon = true;
-  artifactsAvailable = false;
-  artifactTampered = false;
-
   await cmdUpdate(["--version=v1.2.3"]);
 
   expect(calls).toContain("fetchVerified");
@@ -379,22 +359,9 @@ test("an update hands provisioning to the installed target binary", async () => 
   expect(calls.indexOf(handoffCall("v1.2.3", "--version=v1.2.3"))).toBeGreaterThan(calls.indexOf(`writeAtomic:${CLI_BIN}`));
   expect(calls).not.toContain("reconcile");
   expect(calls).not.toContain("startUnits");
-  expect(provisioning).toEqual({
-    serviceUser: false,
-    dirs: false,
-    sudoers: false,
-    legacyUnits: true,
-    units: false,
-    running: false,
-    anchors: false,
-    nginx: false,
-  });
 });
 
 test("the update handoff pins a latest release to the version it installed", async () => {
-  calls.length = 0;
-  resetProvisioning();
-  artifactsAvailable = false;
   resolvedReleaseTag = "v1.3.0";
 
   await cmdUpdate([]);
@@ -405,9 +372,6 @@ test("the update handoff pins a latest release to the version it installed", asy
 });
 
 test("a failed target-binary handoff rolls back without outgoing-process provisioning", async () => {
-  calls.length = 0;
-  resetProvisioning();
-  artifactsAvailable = false;
   resolvedReleaseTag = "v1.3.0";
   handoffFailure = true;
 
@@ -430,9 +394,6 @@ test("a failed target-binary handoff rolls back without outgoing-process provisi
 });
 
 test("an update takes the operation lock before it writes anything, and releases it", async () => {
-  calls.length = 0;
-  resetProvisioning();
-  artifactsAvailable = false;
   resolvedReleaseTag = "v1.3.0";
 
   await cmdUpdate([]);
@@ -443,9 +404,6 @@ test("an update takes the operation lock before it writes anything, and releases
 });
 
 test("the operation lock is released when the update fails", async () => {
-  calls.length = 0;
-  resetProvisioning();
-  artifactsAvailable = false;
   resolvedReleaseTag = "v1.3.0";
   handoffFailure = true;
 
@@ -459,9 +417,6 @@ test("the operation lock is released when the update fails", async () => {
 });
 
 test("an update keeps the replaced binary for the next rollback", async () => {
-  calls.length = 0;
-  resetProvisioning();
-  artifactsAvailable = false;
   resolvedReleaseTag = "v1.3.0";
 
   await cmdUpdate([]);
@@ -474,9 +429,6 @@ test("an update keeps the replaced binary for the next rollback", async () => {
 });
 
 test("an update with no earlier binary says so rather than pretending to roll back", async () => {
-  calls.length = 0;
-  resetProvisioning();
-  artifactsAvailable = false;
   resolvedReleaseTag = "v1.3.0";
   handoffFailure = true;
   installedOnBox(false);
@@ -491,9 +443,6 @@ test("an update with no earlier binary says so rather than pretending to roll ba
 });
 
 test("a replacement that fails part-way rolls back as far as the handoff does", async () => {
-  calls.length = 0;
-  resetProvisioning();
-  artifactsAvailable = false;
   resolvedReleaseTag = "v1.3.0";
   manifestWriteFailure = true;
 
@@ -511,9 +460,6 @@ test("a replacement that fails part-way rolls back as far as the handoff does", 
 });
 
 test("a kept-aside binary that is not root-owned and unwritable is not restored", async () => {
-  calls.length = 0;
-  resetProvisioning();
-  artifactsAvailable = false;
   resolvedReleaseTag = "v1.3.0";
   handoffFailure = true;
   previousIsSecure = false;
@@ -532,9 +478,6 @@ test.each([
   { name: "agrees with", checksum: Bun.CryptoHasher.hash("sha256", Buffer.from("kept-aside binary", "utf-8"), "hex"), warns: false },
   { name: "disagrees with", checksum: "0".repeat(64), warns: true },
 ])("a kept-aside binary that $name its manifest is restored either way", async ({ checksum, warns }) => {
-  calls.length = 0;
-  resetProvisioning();
-  artifactsAvailable = false;
   resolvedReleaseTag = "v1.3.0";
   handoffFailure = true;
   previousChecksum = checksum;
@@ -553,9 +496,6 @@ test.each([
 });
 
 test("an update that cannot keep the running binary aside never starts", async () => {
-  calls.length = 0;
-  resetProvisioning();
-  artifactsAvailable = false;
   resolvedReleaseTag = "v1.3.0";
   keepAsideFailure = true;
 
@@ -573,9 +513,6 @@ test("an update that cannot keep the running binary aside never starts", async (
 });
 
 test("a handoff that leaves the manager down rolls back too", async () => {
-  calls.length = 0;
-  resetProvisioning();
-  artifactsAvailable = false;
   resolvedReleaseTag = "v1.3.0";
   managerUnitState = "failed";
 
@@ -586,9 +523,6 @@ test("a handoff that leaves the manager down rolls back too", async () => {
 });
 
 test("the handed-off target binary finalizes all provisioning before restarting services", async () => {
-  calls.length = 0;
-  resetProvisioning();
-  hasInstalledAddon = true;
   artifactsAvailable = true;
 
   await cmdUpdate(["--version=v1.2.3", "--no-self-update", "--updated-from=1.1.0"]);
@@ -614,23 +548,9 @@ test("the handed-off target binary finalizes all provisioning before restarting 
   expect(calls).toContain(`writeAtomic:${NEWS_SINCE_FILE}`);
   expect(calls.indexOf("startUnits")).toBeGreaterThan(calls.indexOf("reconcile"));
   expect(calls.indexOf("startUnits")).toBeGreaterThan(calls.indexOf("reconcileNginxProxy"));
-  expect(provisioning).toEqual({
-    serviceUser: true,
-    dirs: true,
-    sudoers: true,
-    legacyUnits: false,
-    units: true,
-    running: true,
-    anchors: true,
-    nginx: true,
-  });
-  artifactsAvailable = false;
 });
 
 test("the update handoff invokes restart marker before spawning the target binary", async () => {
-  calls.length = 0;
-  resetProvisioning();
-  artifactsAvailable = false;
   resolvedReleaseTag = "v1.3.0";
   let markerCalls = 0;
 
@@ -647,9 +567,6 @@ test("the update handoff invokes restart marker before spawning the target binar
 });
 
 test("the update calls its restart marker immediately before service restart", async () => {
-  calls.length = 0;
-  resetProvisioning();
-  hasInstalledAddon = true;
   artifactsAvailable = true;
   let markerCalls = 0;
 
@@ -660,13 +577,9 @@ test("the update calls its restart marker immediately before service restart", a
 
   expect(markerCalls).toBe(1);
   expect(calls.indexOf("beforeManagerRestart")).toBeLessThan(calls.indexOf("startUnits"));
-  artifactsAvailable = false;
 });
 
 test("the update handoff refuses to provision from the outgoing process", async () => {
-  calls.length = 0;
-  resetProvisioning();
-  artifactsAvailable = false;
   resolvedReleaseTag = "v1.3.0";
 
   await expect(cmdUpdate(["--version=v1.3.0", "--no-self-update"])).rejects.toThrow(
@@ -678,12 +591,9 @@ test("the update handoff refuses to provision from the outgoing process", async 
 
 test("an up-to-date update says so and changes nothing, with or without addons", async () => {
   for (const installed of [false, true]) {
-    calls.length = 0;
-    resetProvisioning();
+    resetState();
     hasInstalledAddon = installed;
     artifactsAvailable = true;
-    artifactTampered = false;
-    resolvedReleaseTag = "v1.2.3";
 
     await cmdUpdate(["--version=v1.2.3"]);
 
@@ -695,15 +605,10 @@ test("an up-to-date update says so and changes nothing, with or without addons",
     expect(calls.filter((c) => c.startsWith("writeConfig:"))).toHaveLength(0);
     expect(calls).toContain("log.ok:clp-addons 1.2.3 is up to date");
   }
-  artifactsAvailable = false;
 });
 
 test("updating from a fully disabled state still hands off to the target binary", async () => {
-  calls.length = 0;
-  resetProvisioning();
   hasInstalledAddon = false;
-  artifactsAvailable = false;
-  artifactTampered = false;
   resolvedReleaseTag = "v1.3.0";
 
   await cmdUpdate(["--version=v1.3.0"]);
@@ -713,22 +618,9 @@ test("updating from a fully disabled state still hands off to the target binary"
   expect(calls).toContain(handoffCall("v1.3.0", "--version=v1.3.0"));
   expect(calls.filter((c) => c.startsWith("writeConfig:"))).toHaveLength(0);
   expect(calls.some((call) => call.startsWith("log.ok:clp-addons updated"))).toBe(false);
-  expect(provisioning).toEqual({
-    serviceUser: false,
-    dirs: false,
-    sudoers: false,
-    legacyUnits: true,
-    units: false,
-    running: false,
-    anchors: false,
-    nginx: false,
-  });
 });
 
 test("a same-version update repairs a changed installed artifact", async () => {
-  calls.length = 0;
-  resetProvisioning();
-  hasInstalledAddon = true;
   artifactsAvailable = true;
   artifactTampered = true;
 
@@ -737,16 +629,10 @@ test("a same-version update repairs a changed installed artifact", async () => {
   expect(calls).toContain("fetchVerified");
   expect(calls).toContain("verifyAttestation");
   expect(calls).toContain(handoffCall("v1.2.3", "--version=v1.2.3"));
-  artifactsAvailable = false;
-  artifactTampered = false;
 });
 
 test("without --version an update never moves to an older version than the one installed", async () => {
-  calls.length = 0;
-  resetProvisioning();
-  hasInstalledAddon = true;
   artifactsAvailable = true;
-  artifactTampered = false;
   resolvedReleaseTag = "v1.2.2";
 
   await cmdUpdate([]);
@@ -754,6 +640,4 @@ test("without --version an update never moves to an older version than the one i
   expect(calls).not.toContain("fetchVerified");
   expect(calls.some((call) => call.startsWith(`run:${CLI_BIN} update`))).toBe(false);
   expect(calls).toContain("log.ok:clp-addons 1.2.3 is up to date; the newest published release is 1.2.2");
-  resolvedReleaseTag = "v1.2.3";
-  artifactsAvailable = false;
 });

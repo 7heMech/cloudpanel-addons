@@ -1,7 +1,7 @@
 import { handle } from "./app/index";
 import { pruneInstaticJobs, runInstaticAction } from "./action";
 import { INSTATIC_TARGETS } from "./inject/targets";
-import type { AddonDefinition } from "../../cli/addon-catalog";
+import type { AddonDefinition } from "../../lib/addon-definition";
 
 export const INSTATIC_ADDON: AddonDefinition = {
   name: "instatic",
@@ -19,8 +19,8 @@ export const INSTATIC_ADDON: AddonDefinition = {
   repair: {
     label: "instatic job records",
     run: () => {
-      // Called directly rather than through the verb: the verb prints its
-      // result as JSON for the manager, and repair speaks to a person.
+      // Not through the verb: the verb prints JSON for the manager, and repair
+      // speaks to a person.
       const { removed, stuck } = pruneInstaticJobs();
       return removed || stuck ? `${removed} expired, ${stuck} marked failed` : null;
     },

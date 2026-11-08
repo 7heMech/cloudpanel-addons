@@ -7,25 +7,29 @@
 // operator's post-deploy command itself, so a repository cannot arrive with
 // root's privileges attached to it.
 
+import { LOCK_DIR, PANEL_DB, addonStateDir, CLI_BIN, PANEL_IDENTITY_PATH } from "../../lib/paths";
 import { Database } from "bun:sqlite";
 import { randomBytes } from "node:crypto";
 import {
   existsSync, lstatSync, mkdirSync, openSync, closeSync, fstatSync, readFileSync, readdirSync,
-  rmSync, statSync, chmodSync, writeSync, constants as fsConstants,
+  rmSync, statSync, chmodSync, constants as fsConstants,
 } from "node:fs";
 import { join } from "node:path";
-import { CLI_BIN } from "../../cli/paths";
 import { writeFileAtomic } from "../../lib/atomic-write";
+import { errorMessage } from "../../lib/errors";
 import { secretEquals } from "../../lib/secret-equals";
 import {
-  createJobDir, createJobLog, jobCommonFields, jobDir as storeJobDir, jobGet, jobSet, jobTimestamp,
-  listJobIds, newJobId, pruneJobs, readJobLog, startJobUnit, watchJobRecord,
-} from "../../cli/job-store";
-import {
-  ActionFailure, acquireFileLock, deletedSites, emitActionOk, failAction, readable, runCommand, validateDomain,
-  validateJob, reportActionFailure, type FileLockHandle,
-} from "../../cli/action-common";
-import { PANEL_IDENTITY_PATH } from "../../cli/paths";
+  diagnostic, emitJob, failJob as failStoredJob, JobFailure, jobCommonFields, jobDir, jobGet,
+  jobViews, listJobIds, markJobDone, markJobRunning, pruneJobs, queueJob, readJobResult,
+  jobTimestamp, recordJobFailure, requireJobDir, setJobStep, startJobTranscript, watchJob, writeJobResult,
+} from "../../lib/job-store";
+import { ActionFailure, emitActionOk, failAction, reportActionFailure } from "../../lib/action";
+import { acquireFileLock, type FileLockHandle } from "../../lib/file-lock";
+import { deletedSites } from "../../lib/panel-db";
+import { readable } from "../../lib/files";
+import { runCommand } from "../../lib/command";
+import { validateDomain } from "../../lib/panel-identity";
+import { validateJob } from "../../lib/validate";
 import { GIT_VERBS } from "./verbs";
 
 const JOB_RETENTION_DAYS = 14;
@@ -54,9 +58,9 @@ export const WEBHOOK_TOKEN_RE = /^[A-Za-z0-9_-]{43}$/;
 export const MAX_HOOK_BODY_BYTES = 128 * 1024;
 const MAX_HOOK_INPUT_BYTES = 4 * MAX_HOOK_BODY_BYTES;
 
-export type GitVerb = keyof typeof GIT_VERBS;
+type GitVerb = keyof typeof GIT_VERBS;
 
-export interface GitActionPaths {
+interface GitActionPaths {
   dataDir: string;
   sitesDir: string;
   jobsDir: string;
@@ -71,19 +75,19 @@ export interface GitActionPaths {
   emitReply?: boolean;
 }
 
-export const DEFAULT_GIT_ACTION_PATHS: GitActionPaths = {
-  dataDir: "/var/lib/clp-addons/git",
-  sitesDir: "/var/lib/clp-addons/git/sites",
-  jobsDir: "/var/lib/clp-addons/git/jobs",
-  lockDir: "/run/lock/clp-addons",
-  panelDb: "/home/clp/htdocs/app/data/db.sq3",
+const DEFAULT_GIT_ACTION_PATHS: GitActionPaths = {
+  dataDir: addonStateDir("git"),
+  sitesDir: `${addonStateDir("git")}/sites`,
+  jobsDir: `${addonStateDir("git")}/jobs`,
+  lockDir: LOCK_DIR,
+  panelDb: PANEL_DB,
   panelIdentityFile: PANEL_IDENTITY_PATH,
   actionBinary: CLI_BIN,
   homeDir: "/home",
   runuser: "runuser",
 };
 
-export interface GitActionOptions {
+interface GitActionOptions {
   paths?: Partial<GitActionPaths>;
   emitReply?: boolean;
   /** Test-only process identity override; CLI and gateway callers omit it. */
@@ -334,7 +338,6 @@ export function validateBranch(value: unknown): string {
   return branch;
 }
 
-/** A subdirectory of the site's own directory, or "" for the directory itself. */
 export function validateDirectory(value: unknown): string {
   if (value === undefined || value === null) return "";
   if (typeof value !== "string") failAction("the target directory must be a string");
@@ -495,36 +498,8 @@ function deployPath(paths: GitActionPaths, user: string, domain: string, directo
 
 /* ---------------------------------------------------------------- commands */
 
-let activeTranscript: JobTranscript | null = null;
-
-function diagnostic(value: string): void {
-  if (activeTranscript) activeTranscript.write(value);
-  else process.stderr.write(value);
-}
-
 function logLine(value: string): void {
   diagnostic(`[git] ${value}\n`);
-}
-
-class JobTranscript {
-  private fd: number;
-
-  constructor(readonly path: string) {
-    this.fd = openSync(path, "a", 0o600);
-    chmodSync(path, 0o600);
-  }
-
-  write(value: string): void {
-    try {
-      writeSync(this.fd, Buffer.from(value));
-    } catch {
-      // A transcript write must never put the job's output on the journal.
-    }
-  }
-
-  close(): void {
-    closeSync(this.fd);
-  }
 }
 
 /**
@@ -558,7 +533,6 @@ function runAsSiteUser(
   return runCommand(paths.runuser, asSiteUser(paths, user, command, args, keyPath));
 }
 
-/** Quote one literal for interpolation into the post-deploy shell script. */
 function shellQuote(value: string): string {
   return `'${value.replaceAll("'", "'\\''")}'`;
 }
@@ -601,7 +575,6 @@ async function streamAsSiteUser(
 
 /* --------------------------------------------------------------- deploy key */
 
-/** Whether this remote is fetched with the site's deploy key rather than HTTPS. */
 export function usesDeployKey(remote: string): boolean {
   return !remote.startsWith("https://");
 }
@@ -691,21 +664,6 @@ function readCommit(paths: GitActionPaths, user: string, path: string): GitCommi
 
 /* --------------------------------------------------------------------- jobs */
 
-function jobDir(paths: GitActionPaths, id: string): string {
-  return storeJobDir(paths.jobsDir, id);
-}
-
-function readJobResult(dir: string): GitDeployResult | null {
-  try {
-    const raw = readFileSync(join(dir, "result.json"), "utf8").trim();
-    return raw ? (JSON.parse(raw) as GitDeployResult) : null;
-  } catch {
-    // A killed runner can leave a partial result; the record's state and log
-    // still say what happened.
-    return null;
-  }
-}
-
 function jobJson(dir: string, id: string): GitJobView {
   return {
     id,
@@ -713,12 +671,8 @@ function jobJson(dir: string, id: string): GitJobView {
     domain: jobGet(dir, "domain"),
     startedBy: jobGet(dir, "startedBy") || "operator",
     ...jobCommonFields(dir),
-    result: readJobResult(dir),
+    result: readJobResult<GitDeployResult>(dir),
   };
-}
-
-function jobViews(paths: GitActionPaths): GitJobView[] {
-  return listJobIds(paths.jobsDir).map((id) => jobJson(jobDir(paths, id), id));
 }
 
 /**
@@ -731,7 +685,7 @@ function jobViews(paths: GitActionPaths): GitJobView[] {
 function latestJobs(paths: GitActionPaths): Map<string, GitJobView> {
   const latest = new Map<string, GitJobView>();
   for (const id of listJobIds(paths.jobsDir)) {
-    const dir = jobDir(paths, id);
+    const dir = jobDir(paths.jobsDir, id);
     const domain = jobGet(dir, "domain");
     if (!domain || latest.has(domain)) continue;
     latest.set(domain, jobJson(dir, id));
@@ -883,40 +837,20 @@ function startDeployment(
   const config = readConfig(paths, domain);
   if (!config) failAction(`${domain} has no repository configured yet`);
 
-  for (const id of listJobIds(paths.jobsDir)) {
-    const dir = jobDir(paths, id);
-    if (jobGet(dir, "domain") !== domain) continue;
-    const state = jobGet(dir, "state");
-    if (state === "queued" || state === "running") failAction(`a deployment of ${domain} is already ${state}`);
-  }
-
-  const id = newJobId();
-  const dir = createJobDir(paths.jobsDir, id);
-  jobSet(dir, "kind", "deploy");
-  jobSet(dir, "domain", domain);
-  jobSet(dir, "startedBy", startedBy);
-  jobSet(dir, "createdAt", jobTimestamp());
-  jobSet(dir, "step", "queued");
-  jobSet(dir, "state", "queued");
-  createJobLog(dir);
-
-  // run takes the same per-site lock; releasing it before the unit starts is
-  // what keeps the child from waiting on the process that started it.
-  releaseLock();
-  const started = startJobUnit({
+  return queueJob({
     addon: "git",
-    id,
+    jobsDir: paths.jobsDir,
+    fields: { kind: "deploy", domain, startedBy },
+    step: "queued",
+    conflict: (dir, state) => jobGet(dir, "domain") === domain ? `a deployment of ${domain} is already ${state}` : null,
+    // run takes the same per-site lock; releasing it before the unit starts is
+    // what keeps the child from waiting on the process that started it.
+    beforeStart: releaseLock,
     description: `clp-addons: deploying ${domain} from git`,
     actionBinary: paths.actionBinary,
+    name: "deployment",
+    forwardOutput: true,
   });
-  if (started.stdout) diagnostic(started.stdout);
-  if (started.stderr) diagnostic(started.stderr);
-  if (!started.ok) {
-    jobSet(dir, "error", "could not start the deployment job");
-    jobSet(dir, "state", "failed");
-    failAction("systemd-run refused to start the deployment job");
-  }
-  return id;
 }
 
 function cmdDeploy(paths: GitActionPaths, domain: string, releaseLock: () => void): void {
@@ -940,8 +874,6 @@ function cmdWebhook(paths: GitActionPaths, domain: string, enable: boolean, repl
   const config = readConfig(paths, domain);
   if (!config) failAction(`${domain} has no repository configured yet`);
 
-  // Enabling a site that already has a URL keeps it, the way keygen keeps a key;
-  // only --replace, which is what Rotate sends, mints a second one.
   const keep = enable && config.webhook !== null && !replace;
   const webhook = keep ? config.webhook
     : enable ? { token: newWebhookToken(), lastDeliveryAt: "", lastDelivery: "", lastDeliveryJob: "" }
@@ -1025,29 +957,12 @@ async function cmdHook(
   emitOk(paths, { deployed: job !== "", job, outcome } satisfies GitHookResult);
 }
 
-class JobFailure extends Error {
-  constructor(message: string) {
-    super(message);
-    this.name = "JobFailure";
-  }
-}
-
 function failJob(dir: string, message: string): never {
-  diagnostic(`[git] ERROR: ${message}\n`);
-  try {
-    jobSet(dir, "error", message);
-    jobSet(dir, "state", "failed");
-    jobSet(dir, "finishedAt", jobTimestamp());
-  } catch {
-    // Keep the original failure; a record that cannot be written is already
-    // the larger problem.
-  }
-  throw new JobFailure(message);
+  failStoredJob("git", dir, message, { finishedAt: true });
 }
 
 function setStep(dir: string, value: string): void {
-  jobSet(dir, "step", value);
-  logLine(value);
+  setJobStep("git", dir, value);
 }
 
 /**
@@ -1062,10 +977,8 @@ function setStep(dir: string, value: string): void {
 async function cmdRun(
   paths: GitActionPaths, id: string, options: GitActionOptions, releaseLock: () => void,
 ): Promise<void> {
-  const dir = jobDir(paths, id);
-  if (!isDirectory(dir)) failAction(`no such job: ${id}`);
-  const transcript = new JobTranscript(join(dir, "log"));
-  activeTranscript = transcript;
+  const dir = requireJobDir(paths.jobsDir, id);
+  const transcript = startJobTranscript(join(dir, "log"));
   try {
     const domain = jobGet(dir, "domain");
     if (!domain) failJob(dir, "the job record names no site");
@@ -1092,13 +1005,12 @@ async function cmdRun(
       failJob(dir, error instanceof Error ? error.message : "the saved settings are no longer valid");
     }
 
-    jobSet(dir, "state", "running");
-    jobSet(dir, "startedAt", jobTimestamp());
+    markJobRunning(dir);
     // Held only to settle which runner owns this job; from here the `running`
-    // record is what says so, and the duplicate-job guard reads it. Keeping the
-    // lock for the whole deployment made a second deploy or delivery wait on it
-    // until the gateway gave up, so an operator was told the gateway failed
-    // where the answer was that this site is already deploying.
+    // record is what says so, and the duplicate-job guard reads it. Held for the
+    // whole deployment, it would make a second deploy or delivery wait until the
+    // gateway gave up, and the operator would be told the gateway failed rather
+    // than that this site is already deploying.
     releaseLock();
 
     // The public half is read rather than stat'ed: what decides is whether this
@@ -1160,7 +1072,7 @@ async function cmdRun(
       logLine(`$ ${config.postDeploy}`);
       // A login shell loads the site's configured PATH, which is where user
       // installs such as Bun, Composer or custom toolchains are normally
-      // exposed. The command still runs as the site user in the deploy dir.
+      // exposed.
       const postDeployScript = `cd -- ${shellQuote(target)} && ${config.postDeploy}`;
       if (!await streamAsSiteUser(paths, site.user, "bash", ["-lc", postDeployScript], { cwd: target })) {
         failJob(dir, "the post-deploy command failed; the files are deployed and the command did not finish");
@@ -1175,35 +1087,22 @@ async function cmdRun(
       postDeploy: config.postDeploy,
       postDeployRan,
     };
-    writeFileAtomic(join(dir, "result.json"), `${JSON.stringify(result)}\n`, { mode: 0o600 });
+    writeJobResult(dir, result);
     setStep(dir, "deployed");
-    jobSet(dir, "finishedAt", jobTimestamp());
-    jobSet(dir, "state", "done");
     logLine("deployment finished");
+    markJobDone(dir);
+  } catch (error) {
+    // An error no step expected still ends the job, rather than leaving it
+    // running until the repair pass gives up on it.
+    if (!(error instanceof JobFailure)) recordJobFailure("git", dir, errorMessage(error), { finishedAt: true });
+    throw error;
   } finally {
-    activeTranscript = null;
-    transcript.close();
+    transcript.stop();
   }
 }
 
-function cmdJob(paths: GitActionPaths, id: string): void {
-  const dir = jobDir(paths, id);
-  if (!isDirectory(dir)) failAction(`no such job: ${id}`);
-  emitOk(paths, { job: jobJson(dir, id), log: readJobLog(dir) });
-}
-
-async function cmdWatchJob(paths: GitActionPaths, id: string): Promise<void> {
-  const dir = jobDir(paths, id);
-  if (!isDirectory(dir)) failAction(`no such job: ${id}`);
-  await watchJobRecord({
-    dir,
-    read: () => ({ job: jobJson(dir, id), log: readJobLog(dir) }),
-    emit: (data) => emitOk(paths, data),
-  });
-}
-
 function cmdJobs(paths: GitActionPaths): void {
-  emitOk(paths, { jobs: jobViews(paths) });
+  emitOk(paths, { jobs: jobViews(paths.jobsDir, jobJson) });
 }
 
 /**
@@ -1218,8 +1117,7 @@ function cmdPrune(paths: GitActionPaths): void {
     jobsDir: paths.jobsDir,
     retentionDays: JOB_RETENTION_DAYS,
     stuckMessage: "the deployment stopped without recording a result",
-    onStuck: (id, state) =>
-      diagnostic(`[git] WARN: job ${id} is recorded as ${state} but nothing is running it; marking it failed\n`),
+    warnStuck: true,
   });
   emitOk(paths, { removed, stuck, forgotten });
 }
@@ -1242,9 +1140,9 @@ async function dispatch(
     case "hook": await cmdHook(paths, action.domain, options, lockSite, releaseLock); return;
     case "deploy": cmdDeploy(paths, action.domain, releaseLock); return;
     case "run": await cmdRun(paths, action.job, options, releaseLock); return;
-    case "job": cmdJob(paths, action.job); return;
+    case "job": emitJob(paths.jobsDir, action.job, jobJson, (data) => emitOk(paths, data)); return;
     case "jobs": cmdJobs(paths); return;
-    case "watch-job": await cmdWatchJob(paths, action.job); return;
+    case "watch-job": await watchJob(paths.jobsDir, action.job, jobJson, (data) => emitOk(paths, data)); return;
     case "prune": cmdPrune(paths); return;
   }
 }
@@ -1270,7 +1168,7 @@ export async function runGitAction(argv: string[], options?: GitActionOptions): 
     };
     try {
       const locked = action.verb === "deploy" ? action.domain
-        : action.verb === "run" ? jobGet(jobDir(paths, action.job), "domain")
+        : action.verb === "run" ? jobGet(jobDir(paths.jobsDir, action.job), "domain")
         : "";
       if (locked) await lockSite(locked);
       await dispatch(action, paths, opts, lockSite, releaseLock);

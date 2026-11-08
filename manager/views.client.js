@@ -13,8 +13,7 @@ function managerJobCard(source, key, standalone) {
   const card = document.createElement('article');
   card.className = 'card';
   card.setAttribute('data-manager-job-card', key);
-  // Where the server puts a job no card claims: under the heading and above the
-  // cards, not below everything else the page has to show.
+  // Where the server puts a job no card claims: under the heading, above the cards.
   const heading = CLP_ROOT.querySelector('.page-heading');
   if (heading && heading.parentNode) heading.parentNode.insertBefore(card, heading.nextSibling);
   else {
@@ -68,8 +67,7 @@ async function startManagerJob(path, title, source, key) {
     const res = await call(path, { method: 'POST' });
     const id = res.data && res.data.jobId;
     if (!id) throw new Error('the manager did not start a job');
-    // A duplicate request follows the job that is already running. Its owner
-    // is authoritative; the clicked card is only for a newly created job.
+    // A duplicate request follows the job that is already running, on its own card.
     const existing = res.data.existing === true;
     const running = existing ? res.data.job : null;
     const jobKey = running && running.kind === 'update' ? 'update' : (running && running.addon) || 'manager-job';
@@ -99,7 +97,6 @@ async function managerJobFinished(job) {
   }
 }
 
-// Every word has to appear in the name or description of the addon, in any order.
 function findAddons() {
   const find = CLP_ROOT.getElementById('addon-find');
   if (!find) return;
@@ -124,10 +121,9 @@ function enableAddon(name, source) {
   startManagerJob('/api/addons/' + encodeURIComponent(name) + '/enable', 'Enabling ' + name, source, name);
 }
 
-// The same dialog every addon uses for a decision an operator has to make, so
-// disabling one reads the way turning on global maintenance does. The browser's
-// confirm() said the same words in a box this project does not style, cannot
-// carry a details list in, and which reads as the page having gone wrong.
+// The same dialog every addon uses for an operator's decision, not the
+// browser's confirm(), which cannot be styled or carry a details list and reads
+// as the page having gone wrong.
 async function disableAddon(name, title, source) {
   const accepted = await confirmAction({
     // The name the card shows, not the slug the route takes: an operator
@@ -137,9 +133,6 @@ async function disableAddon(name, title, source) {
     text: 'It stops appearing in CloudPanel and its pages stop answering.',
     details: [
       'Nothing it created is deleted: its data is kept and enabling it again returns the same instances.',
-      // Double-quoted because of the apostrophe: this is JavaScript inside a
-      // TypeScript template literal, where a backslash escape is eaten before
-      // the browser ever sees it.
       "Anything it injected into CloudPanel's own pages is removed.",
     ],
     confirmLabel: 'Disable',
@@ -154,9 +147,8 @@ function updateNow(source) {
   startManagerJob('/api/update', 'Updating clp-addons', source, 'update');
 }
 
-// A failure is worth showing once. Remembering the dismissal by job id keeps it
-// from reappearing on every visit without needing the server to record that
-// somebody has read it.
+// A failure is worth showing once; the dismissal is remembered per browser, by
+// job id, so the server need not record who has read it.
 function dismissFailure(id) {
   try { localStorage.setItem('clp-addons-seen-job', id); } catch (e) {}
   const alertBox = document.getElementById('job-failure');
@@ -187,7 +179,6 @@ document.addEventListener('click', readNews);
 // A middle click opens it in a tab without a click event; a right click opens nothing.
 document.addEventListener('auxclick', (event) => { if (event.button === 1) readNews(event); });
 
-// Reads every notice without opening the addons, available ones included.
 function readAllNews(button) {
   button.disabled = true;
   fetch(CLP_BASE + '/api/addons/news-seen', {

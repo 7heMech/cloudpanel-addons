@@ -538,6 +538,7 @@ function dnsEditConnection(id) {
   CLP_ROOT.getElementById('dns-token-permissions').textContent = dnsState.token.permissions.join(', ');
   CLP_ROOT.getElementById('dns-token-link').href = dnsState.token.url;
   const ips = [dnsState.server.detected.ipv4, dnsState.server.detected.ipv6].filter(Boolean);
+  // Space-separated, as Cloudflare's IP filter takes several addresses at once.
   CLP_ROOT.getElementById('dns-token-ips').textContent = ips.join(' ');
   CLP_ROOT.getElementById('dns-token-ips-hint').hidden = !ips.length;
   CLP_ROOT.getElementById('dns-connection-heading').textContent = connection ? 'Edit ' + connection.label : 'Connect Cloudflare';
@@ -545,7 +546,6 @@ function dnsEditConnection(id) {
   dnsOpen('dns-connection-dialog');
 }
 
-/** Space-separated, as Cloudflare's IP filter takes several addresses at once. */
 function dnsCopyText(text) {
   if (!navigator.clipboard || !navigator.clipboard.writeText) return notify('Select ' + text + ' and copy it.', 'warn');
   navigator.clipboard.writeText(text).then(

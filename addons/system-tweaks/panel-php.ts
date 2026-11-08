@@ -6,19 +6,27 @@
  * then proven by asking both pools for a page over their sockets, which Nginx's
  * optional basic auth cannot answer for; a failure puts the previous unit back.
  */
-import { existsSync, lstatSync, readFileSync, readdirSync, readlinkSync, rmSync } from "node:fs";
+import { errorMessage } from "../../lib/errors";
+import {
+  LOCK_DIR, addonConfigFile, addonStateDir, PANEL_FPM_UNIT, PHP_FPM_BIN_DIR, RECONCILE_SERVICE, SYSTEMD_DIR,
+} from "../../lib/paths";
+import { existsSync, readdirSync, readlinkSync } from "node:fs";
 import { join } from "node:path";
-import { failAction, runCommand, withFileLock, withFileLockSync, type CommandResult } from "../../cli/action-common";
-import { CONFIG_DIR, PANEL_FPM_UNIT, PHP_FPM_BIN_DIR, RECONCILE_SERVICE, STATE_DIR, SYSTEMD_DIR } from "../../cli/paths";
-import { writeFileAtomic } from "../../lib/atomic-write";
-import { newerPhp } from "./php-version";
+import { failAction } from "../../lib/action";
+import { requireSuccess, runCommand, type CommandResult } from "../../lib/command";
+import { withFileLock, withFileLockSync } from "../../lib/file-lock";
+import { writeFileAtomic, writeOrRemove } from "../../lib/atomic-write";
 import { fastCgiRequest, type FastCgiResponse } from "../../lib/fastcgi";
+import { daemonReload } from "../../lib/systemd";
+import { present, trustedText } from "../../lib/trusted-file";
+import { waitHealthy } from "./wait-healthy";
+import { newerPhp } from "./php-version";
 
 const STATE_VERSION = 1;
 const VERSION_RE = /^[0-9]+\.[0-9]+$/;
 const MARKER = "# Managed by clp-addons System Tweaks: the PHP version CloudPanel runs on.";
 
-export interface PanelPhpPaths {
+interface PanelPhpPaths {
   unit: string;
   dropInFile: string;
   fpmBinDir: string;
@@ -37,9 +45,9 @@ export const DEFAULT_PANEL_PHP_PATHS: PanelPhpPaths = {
   unit: PANEL_FPM_UNIT,
   dropInFile: `${SYSTEMD_DIR}/${PANEL_FPM_UNIT}.d/clp-addons-php.conf`,
   fpmBinDir: PHP_FPM_BIN_DIR,
-  stateFile: `${STATE_DIR}/system-tweaks/panel-php.json`,
-  lockFile: "/run/lock/clp-addons/panel-php.lock",
-  configFile: `${CONFIG_DIR}/system-tweaks.conf`,
+  stateFile: `${addonStateDir("system-tweaks")}/panel-php.json`,
+  lockFile: `${LOCK_DIR}/panel-php.lock`,
+  configFile: addonConfigFile("system-tweaks"),
   panelRoot: "/home/clp/htdocs/app/files/public",
   panelSocket: "/run/clp-php-fpm.sock",
   fileManagerSocket: "/run/clp-fm-php-fpm.sock",
@@ -66,7 +74,7 @@ export interface PanelPhpChoice {
   available?: string;
 }
 
-export interface PanelPhpFailure {
+interface PanelPhpFailure {
   php: string;
   /** The package release that failed, so an upgrade earns another attempt. */
   release: string;
@@ -119,30 +127,6 @@ function contextOf(options: PanelPhpOptions): Context {
     now: options.now ?? (() => new Date()),
     healthTimeoutMs: options.healthTimeoutMs ?? 20_000,
   };
-}
-
-function reason(error: unknown): string {
-  return error instanceof Error ? error.message : String(error);
-}
-
-function trustedText(path: string, rootUid: number): string | null {
-  let info;
-  try {
-    info = lstatSync(path);
-  } catch {
-    return null;
-  }
-  if (!info.isFile() || info.uid !== rootUid || (info.mode & 0o022) !== 0) return null;
-  return readFileSync(path, "utf8");
-}
-
-function present(path: string): boolean {
-  try {
-    lstatSync(path);
-    return true;
-  } catch {
-    return false;
-  }
 }
 
 function readChoice(paths: PanelPhpPaths): StoredChoice {
@@ -241,7 +225,7 @@ function reloadReplaced(ctx: Context): string | null {
   } catch {
     return null;
   }
-  check(ctx.run("systemctl", ["reload", ctx.paths.unit]), "reloading the panel's PHP onto its updated binary");
+  requireSuccess(ctx.run("systemctl", ["reload", ctx.paths.unit]), "reloading the panel's PHP onto its updated binary");
   return "panel PHP reloaded onto its updated binary";
 }
 
@@ -256,10 +240,6 @@ function dropInFor(ctx: Context, php: string, unit: BaseUnit): string {
     `ExecStart=${join(ctx.paths.fpmBinDir, `php-fpm${php}`)} ${unit.args.join(" ")}`,
     "",
   ].join("\n");
-}
-
-function check(result: CommandResult, what: string): void {
-  if (!result.ok) failAction(`${what}: ${(result.stderr || result.stdout).trim() || `exit ${result.exitCode ?? "unknown"}`}`);
 }
 
 /** FastCGI parameters for a plain GET of one of the panel's pages, as Nginx would send it. */
@@ -297,32 +277,26 @@ async function unhealthy(ctx: Context, php: string): Promise<string | null> {
       const reply = await ctx.request(socket, panelPageParams(ctx.paths.panelRoot, script, uri));
       if (!accept(reply.status)) return `${what} answered ${reply.status}`;
     } catch (error) {
-      return reason(error);
+      return errorMessage(error);
     }
   }
   return null;
 }
 
-async function waitHealthy(ctx: Context, php: string): Promise<string | null> {
-  const deadline = ctx.now().getTime() + ctx.healthTimeoutMs;
-  let problem = await unhealthy(ctx, php);
-  while (problem && ctx.now().getTime() < deadline) {
-    await ctx.sleep(500);
-    problem = await unhealthy(ctx, php);
-  }
-  return problem;
+function servesOn(ctx: Context, php: string): Promise<string | null> {
+  return waitHealthy(() => unhealthy(ctx, php), {
+    now: () => ctx.now().getTime(), sleep: ctx.sleep, timeoutMs: ctx.healthTimeoutMs, intervalMs: 500,
+  });
 }
 
 function install(ctx: Context, content: string | null): void {
-  if (content === null) rmSync(ctx.paths.dropInFile, { force: true });
-  else writeFileAtomic(ctx.paths.dropInFile, content, { mode: 0o644, createParent: true });
-  check(ctx.run("systemctl", ["daemon-reload"]), "systemctl daemon-reload failed");
+  writeOrRemove(ctx.paths.dropInFile, content, { mode: 0o644, createParent: true });
+  daemonReload(ctx.run);
 }
 
 /**
- * Put the unit that `choice` asks for in place, restart the panel's FPM on it
- * and prove it serves. Returns the version now running, or null when nothing
- * had to change. A failure restores the previous drop-in before it is thrown.
+ * Returns the version now running, or null when nothing had to change. A
+ * failure restores the previous drop-in before it is thrown.
  */
 async function apply(ctx: Context, php: string): Promise<string | null> {
   const unit = baseUnit(ctx);
@@ -333,7 +307,7 @@ async function apply(ctx: Context, php: string): Promise<string | null> {
     if (php) failAction(`${override} already sets the panel's PHP; remove it to choose the version here`);
     if (present(ctx.paths.dropInFile)) {
       install(ctx, null);
-      check(ctx.run("systemctl", ["restart", ctx.paths.unit]), `restarting ${ctx.paths.unit} failed`);
+      requireSuccess(ctx.run("systemctl", ["restart", ctx.paths.unit]), `restarting ${ctx.paths.unit} failed`);
     }
     return null;
   }
@@ -349,13 +323,13 @@ async function apply(ctx: Context, php: string): Promise<string | null> {
   if (desired !== null) {
     const binary = join(ctx.paths.fpmBinDir, `php-fpm${target}`);
     if (!existsSync(binary)) failAction(`PHP ${target} is not installed`);
-    check(ctx.run(binary, ["-t", ...unit.args]), `PHP ${target} rejected CloudPanel's FPM config`);
+    requireSuccess(ctx.run(binary, ["-t", ...unit.args]), `PHP ${target} rejected CloudPanel's FPM config`);
   }
   const previous = before === null ? unit.stock : (/php-fpm([0-9]+\.[0-9]+)/.exec(before)?.[1] ?? unit.stock);
   try {
     install(ctx, desired);
-    check(ctx.run("systemctl", ["restart", ctx.paths.unit]), `restarting ${ctx.paths.unit} failed`);
-    const problem = await waitHealthy(ctx, target);
+    requireSuccess(ctx.run("systemctl", ["restart", ctx.paths.unit]), `restarting ${ctx.paths.unit} failed`);
+    const problem = await servesOn(ctx, target);
     if (problem) failAction(`the panel did not come back on PHP ${target}: ${problem}`);
     if (!missing) return target;
   } catch (error) {
@@ -363,12 +337,12 @@ async function apply(ctx: Context, php: string): Promise<string | null> {
     try {
       install(ctx, before);
       ctx.run("systemctl", ["restart", ctx.paths.unit]);
-      const after = await waitHealthy(ctx, previous);
+      const after = await servesOn(ctx, previous);
       restored = after ? `PHP ${previous} was restored but is not answering either: ${after}` : `the panel is back on PHP ${previous}`;
     } catch (restoreError) {
-      restored = `restoring PHP ${previous} failed: ${reason(restoreError)}`;
+      restored = `restoring PHP ${previous} failed: ${errorMessage(restoreError)}`;
     }
-    failAction(`${reason(error)}; ${restored}`);
+    failAction(`${errorMessage(error)}; ${restored}`);
   }
   failAction(`PHP ${wanted} is no longer installed, so the panel is back on PHP ${unit.stock}`);
 }
@@ -458,7 +432,7 @@ async function reconcileChoice(ctx: Context): Promise<string | null> {
       if (choice.failure) writeChoice(ctx.paths, { php: choice.php });
       return running ? `panel runs on PHP ${running}` : null;
     } catch (error) {
-      writeChoice(ctx.paths, { php: choice.php, failure: { php: choice.php, release: current, error: reason(error), at: ctx.now().toISOString() } });
+      writeChoice(ctx.paths, { php: choice.php, failure: { php: choice.php, release: current, error: errorMessage(error), at: ctx.now().toISOString() } });
       throw error;
     }
   });
@@ -499,7 +473,7 @@ function withdraw(ctx: Context): void {
   const unit = baseUnit(ctx);
   const next = unit ? withoutDropIn(ctx, unit) : null;
   if (next) {
-    check(ctx.run(next.binary, ["-t", ...next.args]),
+    requireSuccess(ctx.run(next.binary, ["-t", ...next.args]),
       `PHP ${next.version} rejected CloudPanel's FPM config, so the panel keeps its PHP override`);
   }
   const before = trustedText(ctx.paths.dropInFile, ctx.paths.rootUid);
@@ -528,7 +502,7 @@ function withdraw(ctx: Context): void {
         ? "; the override was put back"
         : `; the override was put back, but ${ctx.paths.unit} did not restart on it either`;
     } catch (error) {
-      restored = `; putting the override back failed: ${reason(error)}`;
+      restored = `; putting the override back failed: ${errorMessage(error)}`;
     }
   }
   failAction(`${ctx.paths.unit} did not come back on PHP ${next?.version ?? "CloudPanel's own version"}${restored}`);

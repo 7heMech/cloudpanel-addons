@@ -1,16 +1,17 @@
+import { errorMessage } from "../lib/errors";
 import { existsSync, readFileSync } from "node:fs";
 import { bundleFromJSON } from "@sigstore/bundle";
 import type { TrustedRoot } from "@sigstore/protobuf-specs";
 import { getTrustedRoot } from "@sigstore/tuf";
 import { Verifier, toSignedEntity, toTrustMaterial } from "@sigstore/verify";
-import { REPO, SIGSTORE_DIR } from "./paths";
+import { REPO, SIGSTORE_DIR } from "../lib/paths";
 import { VERSION_TAG_RE, newestRelease } from "../lib/semver";
-import { fatal, log } from "./util";
+import { fatal, log, type OnProgress } from "../lib/log";
 
 const API = "https://api.github.com";
 const BUNDLES_ASSET = "attestations.jsonl";
 
-export interface ResolvedRelease {
+interface ResolvedRelease {
   tag: string;
   assets: Map<string, string>;
 }
@@ -92,7 +93,7 @@ function sha256(bytes: Buffer): string {
   return Bun.CryptoHasher.hash("sha256", bytes, "hex");
 }
 
-export function parseSums(text: string): Map<string, string> {
+function parseSums(text: string): Map<string, string> {
   const sums = new Map<string, string>();
   for (const line of text.split("\n")) {
     const match = line.trim().match(/^([0-9a-f]{64})\s+\*?(\S+)$/);
@@ -105,8 +106,6 @@ export interface FetchedArtifact {
   name: string;
   bytes: Buffer;
 }
-
-export type OnProgress = (progress: string, done: boolean) => void;
 
 /** `onProgress` reports each download about once a second, and once more as it ends. */
 export async function fetchVerified(
@@ -195,7 +194,7 @@ export async function verifyAttestation(
   try {
     verifier = new Verifier(toTrustMaterial(await trustedRoot()));
   } catch (error) {
-    fatal(`could not load Sigstore's trusted keys: ${error instanceof Error ? error.message : String(error)}`);
+    fatal(`could not load Sigstore's trusted keys: ${errorMessage(error)}`);
   }
 
   for (const artifact of artifacts) {
@@ -209,7 +208,7 @@ export async function verifyAttestation(
     try {
       verifier.verify(toSignedEntity(bundleFromJSON(bundle)), provenancePolicy(rel.tag));
     } catch (error) {
-      fatal(`provenance verification failed for ${artifact.name}: ${error instanceof Error ? error.message : String(error)}`);
+      fatal(`provenance verification failed for ${artifact.name}: ${errorMessage(error)}`);
     }
     log.ok(`${artifact.name} provenance verified`);
   }
@@ -234,4 +233,3 @@ export function loadLocal(dir: string, names: string[]): FetchedArtifact[] {
   return artifacts;
 }
 
-export const CLI_VERSION: string = process.env.CLP_ADDONS_VERSION || "0.0.0-dev";

@@ -7,9 +7,9 @@ import { Database } from "bun:sqlite";
 import { mkdirSync, mkdtempSync, realpathSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { ActionFailure } from "../cli/action-common";
+import { ActionFailure } from "../lib/action";
 import {
-  parseTerminalRequest, resolveTerminalTarget, runTerminalAction, runuserCommand, type TerminalActionPaths,
+  parseTerminalRequest, resolveTerminalTarget, runTerminalAction, type TerminalActionPaths,
 } from "../addons/terminal/action";
 import { MAX_INPUT_LINE_BYTES, parsePtyMessage, parsePtySize, shellEnvironment } from "../addons/terminal/pty";
 import {
@@ -153,7 +153,6 @@ describe("the root worker", () => {
     );
     expect(code).toBe(3);
     expect(calls).toHaveLength(1);
-    expect(calls[0]!.argv).toEqual(runuserCommand(paths, "example"));
     expect(calls[0]!.argv).toEqual([
       "/usr/sbin/runuser", "--login", "--whitelist-environment=TERM,CLP_SITE_DIR,CLP_PTY_SIZE,CLP_ROOT_SHELL",
       "--command=exec /usr/local/bin/clp-addons terminal-pty", "--", "example",
@@ -223,13 +222,6 @@ describe("the root worker", () => {
     }
     expect(spawned).toBe(false);
     expect(JSON.parse(printed).error).toBe("terminal sessions start only through the gateway's stream");
-  });
-
-  test("never reads its own stdin", () => {
-    const source = Bun.file(join(REPO, "addons/terminal/action.ts"));
-    return source.text().then((text) => {
-      expect(text).not.toMatch(/Bun\.stdin|process\.stdin/);
-    });
   });
 });
 

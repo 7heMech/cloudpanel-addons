@@ -1,14 +1,15 @@
 // Addons root has locked: the gateway lets their `lock` verbs only move toward
 // the safer state and the manager refuses to disable them, so only a root shell
 // can weaken what they protect. See docs/decisions/security.md#root-locks.
-import { chmodSync, closeSync, constants, fstatSync, lstatSync, mkdirSync, openSync, readFileSync, type Stats } from "node:fs";
+import {
+  chmodSync, closeSync, constants, fstatSync, lstatSync, mkdirSync, openSync, readFileSync, type Stats,
+} from "node:fs";
 import { dirname } from "node:path";
-import { CONFIG_DIR, LOCK_DIR } from "../cli/paths";
+import { CONFIG_DIR, LOCK_DIR } from "./paths";
 import { ADDON_VERBS, type GatewayAddon, type LockDirection } from "./gateway-protocol";
 import { writeFileAtomic } from "./atomic-write";
 
 export const ROOT_LOCKS_FILE = `${CONFIG_DIR}/locks.json`;
-/** Serialises `lock` and `unlock`, which read the list and write it back. */
 export const ROOT_LOCKS_LOCK = `${LOCK_DIR}/locks.lock`;
 
 /** Which way a lock on its addon still lets this verb go, or null when the lock does not cover it. */
@@ -18,7 +19,6 @@ export function lockDirection(addon: string, verb: string): LockDirection | null
   return declared?.lock === "on" || declared?.lock === "newer" ? declared.lock : null;
 }
 
-/** Whether a lock on its addon covers this verb. */
 export function declaresLock(addon: string, verb: string): boolean {
   return lockDirection(addon, verb) !== null;
 }
@@ -41,7 +41,6 @@ export function lockRefusal(addon: string): string {
   return `root has locked ${addon}; run clp-addons unlock ${addon} on the server`;
 }
 
-/** Addons with at least one verb a lock covers. */
 export const LOCKABLE_ADDONS = (Object.keys(ADDON_VERBS) as GatewayAddon[]).filter((addon) =>
   Object.keys(ADDON_VERBS[addon]).some((verb) => declaresLock(addon, verb)));
 
@@ -106,7 +105,6 @@ export function lockedAddons(file = ROOT_LOCKS_FILE, rootUid = 0): string[] {
 /** "damaged" when the lock file cannot be read or trusted, which locks every lockable addon. */
 export type LockState = "unlocked" | "locked" | "damaged";
 
-/** An addon with nothing to lock is always "unlocked". */
 export function lockState(addon: string, file = ROOT_LOCKS_FILE, rootUid = 0): LockState {
   if (!isLockable(addon)) return "unlocked";
   try {
@@ -116,12 +114,10 @@ export function lockState(addon: string, file = ROOT_LOCKS_FILE, rootUid = 0): L
   }
 }
 
-/** Whether a lockable addon is locked, including by a damaged lock file. */
 export function addonLocked(addon: string, file = ROOT_LOCKS_FILE, rootUid = 0): boolean {
   return lockState(addon, file, rootUid) !== "unlocked";
 }
 
-/** Whether root's lock withholds this verb from the web right now. */
 export function verbLocked(addon: string, verb: string, file = ROOT_LOCKS_FILE, rootUid = 0): boolean {
   return declaresLock(addon, verb) && addonLocked(addon, file, rootUid);
 }

@@ -7,22 +7,25 @@
  * create, update and delete they would make, and only a confirmation of that
  * same plan saves and applies them.
  */
-import { withPanelDb } from "../../cli/panel-db";
+import { LOCK_DIR, addonConfigFile, addonStateDir, PANEL_DB } from "../../lib/paths";
+import { withPanelDb } from "../../lib/panel-db";
 import { DNS_VERBS } from "./verbs";
 import { Database } from "bun:sqlite";
 import { createHash, randomBytes } from "node:crypto";
 import { existsSync, mkdirSync } from "node:fs";
 import { dirname } from "node:path";
-import {
-  ActionFailure, errorMessage, replyToAction, failAction, readJsonRequest, nameSlug, oneLine, withFileLock,
-} from "../../cli/action-common";
-import { queueAddonPass } from "../../cli/job-store";
-import { CONFIG_DIR, PANEL_DB, STATE_DIR } from "../../cli/paths";
-import { DEFAULT_SITE_VHOST_PATHS } from "../../cli/site-vhost";
+import { ActionFailure, replyToAction, failAction, readJsonRequest } from "../../lib/action";
+import { errorMessage } from "../../lib/errors";
+import { nameSlug, oneLine } from "../../lib/validate";
+import { withFileLock } from "../../lib/file-lock";
+import { DEFAULT_SITE_VHOST_PATHS } from "../../lib/site-vhost";
 import { PANEL_USER_NAME_RE, panelUserOwnsSite } from "../../lib/panel-users";
 import { DEFAULT_SMTP_PATHS, smtpRelayAccounts, type SmtpRelayAccount } from "../smtp/action";
 import { detectAddresses, type Addresses } from "./addresses";
-import { DnsRun, readiness, type ConnectionReport, type LogEntry, type ManagedRecords, type PanelSite, type SitePlan, type StandIns } from "./engine";
+import {
+  DnsRun, readiness, type ConnectionReport, type LogEntry, type ManagedRecords, type PanelSite, type SitePlan,
+  type StandIns,
+} from "./engine";
 import { type ApiFetch, redact } from "./http";
 import { MailcowApi } from "./mailcow";
 import {
@@ -33,13 +36,13 @@ import {
 import { PRESETS, seededPolicy, type Preset } from "./presets";
 import { describeRecord, renderProfile, sameRecord } from "./records";
 import type { FoundRedirect } from "./redirects";
-import { isStandInSite } from "../../cli/stand-ins";
+import { isStandInSite } from "../../lib/stand-ins";
 import { clpctlStandIns, readStandIns, retryStandInCertificates, type StandInPaths } from "./stand-in";
 import { clpctlIssue, NEW_SITE_WINDOW, requestSsl, retryCertificates, type Issue, type SslRequest } from "./ssl";
 import { readState, writeState } from "./store";
 import { tokenTemplate, type TokenTemplate } from "./token";
 
-export type DnsVerb = keyof typeof DNS_VERBS;
+type DnsVerb = keyof typeof DNS_VERBS;
 
 const VERBS = Object.keys(DNS_VERBS) as DnsVerb[];
 const NO_BODY: DnsVerb[] = ["list", "check", "find-redirects", "provision", "site-status", "reconcile", "sync-sites"];
@@ -51,7 +54,7 @@ const PAGE_LOG = 200;
 /** CloudPanel's Certificate::TYPE_SELF_SIGNED. */
 const SELF_SIGNED = "1";
 
-export interface DnsPaths {
+interface DnsPaths {
   configFile: string;
   panelDb: string;
   stateDir: string;
@@ -80,12 +83,12 @@ export interface DnsActionOptions {
   standIns?: () => StandIns;
 }
 
-export const DEFAULT_DNS_PATHS: DnsPaths = {
-  configFile: `${CONFIG_DIR}/dns.conf`,
+const DEFAULT_DNS_PATHS: DnsPaths = {
+  configFile: addonConfigFile("dns"),
   panelDb: PANEL_DB,
-  stateDir: `${STATE_DIR}/dns`,
+  stateDir: addonStateDir("dns"),
   smtpConfig: DEFAULT_SMTP_PATHS.stateFile,
-  lockFile: "/run/lock/clp-addons/dns.lock",
+  lockFile: `${LOCK_DIR}/dns.lock`,
   clpctl: "/usr/bin/clpctl",
   sqlite3: DEFAULT_SITE_VHOST_PATHS.sqlite3,
   nginxVhostDir: DEFAULT_SITE_VHOST_PATHS.nginxVhostDir,
@@ -119,7 +122,7 @@ export interface Review {
 }
 
 /** A write DNS made, and what made it. */
-export type LogLine = LogEntry & { cause: string };
+type LogLine = LogEntry & { cause: string };
 
 export interface DnsState {
   automatic: boolean;
