@@ -106,16 +106,21 @@ function apply(on: boolean, options: VisitorIpOptions, reload: boolean, files: r
   const existing = read(paths.maps);
   const foreign = existing !== null && !existing.startsWith(`${MAPS_MARKER}\n`);
   if (on && foreign) throw new Error(`refusing ${paths.maps}: clp-addons did not write it`);
+  const present = files.filter((file) => read(paths[file]) !== null);
+  const edited = present.filter((file) => { const content = read(paths[file])!; return swap(content, file, on) !== content; });
+  // Off keeps the map while a file still names it, so Nginx can load it.
+  const named = !on && present.some((file) => swap(read(paths[file])!, file, false).includes(VISITOR_IP));
+  const maps = on || named ? mapsContent(paths) : null;
+  const mapsChange = reload && !foreign && maps !== existing;
+  // Nothing to change opens no transaction, so a file it would not touch is never checked.
+  if (edited.length === 0 && !mapsChange) return false;
   return withNginxTransaction(null, { nginx: paths.nginx, systemctl: paths.systemctl }, run, (changes) => {
-    for (const file of files) {
-      if (read(paths[file]) === null) continue;
+    for (const file of edited) {
       const change = nginxFileChange(paths[file], null, paths.rootUid);
       change.content = swap(change.backup.content!, file, on);
       changes.push(change);
     }
-    // Off keeps the map while a file still names it, so Nginx can load it.
-    const named = !on && changes.some((change) => change.content?.includes(VISITOR_IP));
-    if (reload && !foreign) changes.push(nginxFileChange(paths.maps, on || named ? mapsContent(paths) : null, paths.rootUid));
+    if (mapsChange) changes.push(nginxFileChange(paths.maps, maps, paths.rootUid));
   }, { reload }).changed;
 }
 

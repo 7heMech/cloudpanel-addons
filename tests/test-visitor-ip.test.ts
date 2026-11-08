@@ -111,3 +111,10 @@ test("a line the setting does not recognise is reported, not shown as on", () =>
   applyVisitorIp(true, b.options);
   expect(visitorIpStatus(b.options)).toEqual({ applied: false, problem: `${b.paths.nginxConf} has no line with $remote_addr` });
 });
+
+test("switching off with nothing to undo checks no file, as disabling the addon on a box with another owner's nginx does", () => {
+  const b = box();
+  const options = { ...b.options, paths: { ...b.options.paths, rootUid: process.getuid!() + 1 } };
+  expect(applyVisitorIp(false, options)).toBe(false);
+  expect(b.nginx.commands).toEqual([]);
+});
