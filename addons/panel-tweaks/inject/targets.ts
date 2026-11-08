@@ -239,8 +239,13 @@ const NEW_SITE_STYLE = `
  * breaks anywhere, and the field shares its row with the button. Below 576px
  * that row leaves the field too narrow for its own placeholder, so the field
  * takes the whole row and the button goes under it.
+ *
+ * At any width, the dark theme's rule for every link outranks the page's own
+ * blue for its links, so "Try this instead" and the app names read as plain
+ * text. They get the blue the dark theme gives its other inline link.
  */
 const ENABLE_MFA_STYLE = `
+html.dark body .enable-mfa-container a { color: #267ddd; }
 @media (max-width: 760px) {
   body .enable-mfa-container { width: auto; max-width: 850px; overflow-wrap: anywhere; }
   body .enable-mfa-container .qr-code-container img { max-width: 100%; height: auto; margin-left: 0; }
