@@ -154,15 +154,69 @@ function finish(info) {
   showEnded(text);
 }
 
+async function verifyRoot() {
+  const overlay = document.getElementById('root-auth');
+  const form = document.getElementById('root-auth-form');
+  const code = document.getElementById('root-auth-code');
+  const key = document.getElementById('root-auth-key');
+  const errorText = document.getElementById('root-auth-error');
+  // Cancel stays usable, so a passkey prompt with no key nearby can be left.
+  const buttons = form.querySelectorAll('button:not(#root-auth-cancel)');
+  const post = (path, body) => call('/api/root-auth-' + path, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body || {}) });
+  let options = (await post('options')).data;
+  // toB64, fromB64, keysUsable and keyError come from Security Keys' webauthn.client.js.
+  key.hidden = !options.keys.length || !keysUsable();
+  overlay.hidden = false;
+  code.value = '';
+  errorText.textContent = '';
+  code.focus();
+  setStatus('Verification required', 'tone-warn');
+  return new Promise((resolve, reject) => {
+    let busy = false;
+    const submit = async useKey => {
+      if (busy) return;
+      busy = true;
+      for (const button of buttons) button.disabled = true;
+      try {
+        if (!options) options = (await post('options')).data;
+        let proof = { challenge: options.challenge, code: code.value };
+        if (useKey) {
+          const credential = await navigator.credentials.get({ publicKey: { challenge: fromB64(options.challenge), allowCredentials: options.keys.map(id => ({ type: 'public-key', id: fromB64(id) })), userVerification: 'required', timeout: 60000 } });
+          proof = { challenge: options.challenge, id: credential.id, clientDataJSON: toB64(credential.response.clientDataJSON), authenticatorData: toB64(credential.response.authenticatorData), signature: toB64(credential.response.signature), userHandle: credential.response.userHandle ? toB64(credential.response.userHandle) : null };
+        }
+        options = null;
+        const reply = await post('verify', proof);
+        overlay.hidden = true;
+        setStatus('Connecting', 'tone-warn');
+        term.focus();
+        resolve(reply.data.ticket);
+      } catch (error) {
+        errorText.textContent = keyError(error, 'Verification failed. Try again.');
+        code.value = '';
+        code.focus();
+        // A fresh prompt now, not at the next try: root takes only a code from a later step than the prompt's.
+        try { options = (await post('options')).data; } catch { options = null; }
+      } finally {
+        busy = false;
+        for (const button of buttons) button.disabled = false;
+      }
+    };
+    form.onsubmit = event => { event.preventDefault(); submit(false); };
+    key.onclick = () => submit(true);
+    document.getElementById('root-auth-cancel').onclick = () => { overlay.hidden = true; reject(new Error('Verification cancelled.')); };
+  });
+}
+
 async function createSession() {
   setStatus('Connecting', 'tone-warn');
   try {
+    const ticket = TERM_DOMAIN ? undefined : await verifyRoot();
     const reply = await call(SESSIONS, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(TERM_DOMAIN
         ? { domain: TERM_DOMAIN, cols: term.cols, rows: term.rows }
-        : { root: true, cols: term.cols, rows: term.rows }),
+        : { root: true, ticket, cols: term.cols, rows: term.rows }),
     });
     sessionId = reply.data.id;
     sessionStorage.setItem(STORE_KEY, sessionId);

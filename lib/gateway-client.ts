@@ -286,6 +286,8 @@ export function streamGatewayAction<A extends GatewayAddon>(options: {
   verb: StreamVerb<A>;
   args?: string[];
   sessionId?: string;
+  /** Handed to a duplex worker in TICKET_ENV. */
+  ticket?: string;
   socketPath?: string;
   timeoutMs?: number;
   maxLineBytes?: number;
@@ -391,6 +393,7 @@ export function streamGatewayAction<A extends GatewayAddon>(options: {
     verb: options.verb,
     args: options.args,
     ...(options.sessionId !== undefined ? { sessionId: options.sessionId } : {}),
+    ...(options.ticket ? { ticket: options.ticket } : {}),
   }) + "\n";
 
   const refused = refusedForCaller(options.addon, options.verb);

@@ -106,6 +106,14 @@ export async function handle(
   // What the header's root shell control asks before it shows itself.
   if (method === "GET" && path === "/api/root-access") return jsonResponse({ ok: true, data: await rootAccessOf(auth?.user, panelSessionId(req)) });
 
+  if (method === "POST" && (path === "/api/root-auth-options" || path === "/api/root-auth-verify")) {
+    const body = await readMutation(req, 16 * 1024);
+    if (body instanceof Response) return body;
+    const sessionId = panelSessionId(req);
+    if (!auth?.user || !sessionId) return NOT_FOUND();
+    const result = await callGatewayAction("terminal", path === "/api/root-auth-options" ? "root-auth-options" : "root-auth-verify", [], JSON.stringify(body), { sessionId });
+    return jsonResponse(result, result.ok ? 200 : 400);
+  }
   if (!path.startsWith("/api/sessions")) return NOT_FOUND();
   // The manager's gate has already decided this is an administrator; a
   // session also belongs to the one sign-in that opened it.
@@ -122,7 +130,7 @@ export async function handle(
     const cols = size(body.cols);
     const rows = size(body.rows);
     if ((!root && !domain) || cols === null || rows === null) return jsonResponse({ ok: false, error: "a domain and a terminal size are required" }, 400);
-    const result = await terminalSessions.open(owner, { domain, cols, rows, sessionId });
+    const result = await terminalSessions.open(owner, { domain, cols, rows, sessionId, ticket: typeof body.ticket === "string" ? body.ticket : undefined });
     return result.ok
       ? jsonResponse({ ok: true, data: { id: result.id, user: result.user } })
       : jsonResponse({ ok: false, error: result.error }, 400);

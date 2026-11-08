@@ -7,10 +7,11 @@ import { errorMessage } from "../../lib/errors";
 import { addonStateDir, CONFIG_DIR, LOCK_DIR, PANEL_DB } from "../../lib/paths";
 import { createHash } from "node:crypto";
 import {
-  chmodSync, closeSync, constants, fstatSync, lstatSync, mkdirSync, openSync, readFileSync, type Stats,
+  chmodSync, closeSync, constants, fstatSync, lstatSync, mkdirSync, openSync, readFileSync, rmSync, type Stats,
 } from "node:fs";
-import { dirname } from "node:path";
+import { dirname, join } from "node:path";
 import type { Database } from "bun:sqlite";
+import { failAction } from "../../lib/action";
 import { withFileLockSync } from "../../lib/file-lock";
 import { openPanelDatabase } from "../../lib/panel-db";
 import { accountPasskeys } from "../security-keys/sign-ins";
@@ -22,6 +23,18 @@ import { PANEL_USER_NAME_RE } from "../../lib/panel-users";
 const ROOT_GRANTS_FILE = `${CONFIG_DIR}/terminal-root.json`;
 const ROOT_GRANTS_LOCK = `${LOCK_DIR}/terminal-root.lock`;
 const SECURITY_KEYS_DIR = addonStateDir("security-keys");
+/** Root verification's per-account state: attempts, used codes, prompts and tickets (root-auth.ts). */
+export const ROOT_AUTH_DIR = `${addonStateDir("terminal")}/root-auth`;
+export const ROOT_AUTH_LOCK = `${LOCK_DIR}/terminal-auth.lock`;
+export const rootAuthFile = (dir: string, user: string) => join(dir, `${createHash("sha256").update(user).digest("hex")}.json`);
+
+/**
+ * Root deciding again starts the account's verification afresh: a budget
+ * spent by someone holding its session no longer keeps it out.
+ */
+export function clearRootAuth(user: string, storage = { dir: ROOT_AUTH_DIR, lock: ROOT_AUTH_LOCK }): void {
+  withFileLockSync(storage.lock, 15, "a terminal verification is still running", () => rmSync(rootAuthFile(storage.dir, user), { force: true }));
+}
 
 interface RootGrant {
   user: string;
@@ -174,6 +187,19 @@ export interface RootAccess {
  * `session` describes (SESSION_2FA_ENV). Any failure refuses.
  */
 export function rootAccess(panelUser: string, paths: RootAccessPaths, session: string): RootAccess {
+  const { grant: _grant, ...access } = checkAccess(panelUser, paths, session);
+  return access;
+}
+
+/** The grant behind a root shell this session may open now; refuses otherwise. */
+export function allowedGrant(panelUser: string, paths: RootAccessPaths, session: string): RootGrant {
+  const { grant, problem } = checkAccess(panelUser, paths, session);
+  if (!grant || problem) failAction(problem ?? "Root has not allowed you a root shell.");
+  return grant;
+}
+
+/** rootAccess with the grant it read, which holds the account's 2FA digest and so never leaves root. */
+function checkAccess(panelUser: string, paths: RootAccessPaths, session: string): RootAccess & { grant?: RootGrant } {
   const failed = (what: string, error: unknown): RootAccess =>
     ({ granted: true, problem: `${what} cannot be read: ${errorMessage(error)}`, unreadable: true });
   let grant: RootGrant | undefined;
@@ -187,7 +213,7 @@ export function rootAccess(panelUser: string, paths: RootAccessPaths, session: s
   let db: Database | null = null;
   try {
     db = openPanelDatabase(paths.panelDb, true);
-    return { granted: true, problem: grantProblem(db, grant) ?? sessionProblem(grant, session, paths) };
+    return { granted: true, grant, problem: grantProblem(db, grant) ?? sessionProblem(grant, session, paths) };
   } catch (error) {
     return failed("CloudPanel's user list", error);
   } finally {
@@ -243,6 +269,7 @@ export function runTerminalRootCommand(argv: string[]): void {
     if (others.length === current.length) fatal(`${user} was not allowed a root shell`);
     writeRootGrants(others);
   });
+  clearRootAuth(user!);
   log.ok(verb === "allow"
     ? `${user} can open a root shell from the panel, signed in with their 2FA code${grant?.keys.length ? " or one of those passkeys" : ""}`
     : `${user} cannot open a root shell; any open one closes within 15 seconds`);

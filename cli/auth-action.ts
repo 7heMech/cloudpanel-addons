@@ -3,6 +3,7 @@
 // privileged addon actions. The test-only options are never reachable through
 // action argv.
 
+import { createHash } from "node:crypto";
 import { errorMessage } from "../lib/errors";
 import {
   addonConfigFile, addonStateDir, CLI_BIN, PANEL_DB, SERVICE_GROUP, SERVICE_USER, SESSION_DIR,
@@ -27,6 +28,8 @@ import {
   DEFAULT_GATEWAY_TIMEOUT_MS,
   DUPLEX_WORKER_MARKER,
   SESSION_2FA_ENV,
+  SESSION_BINDING_ENV,
+  TICKET_ENV,
 } from "../lib/gateway-protocol";
 import { getLivePanelInfo } from "../lib/panel-snapshot";
 import { lockDirection, lockRefusal, switchesOnOnly, verbLocked } from "../lib/root-locks";
@@ -248,7 +251,7 @@ async function sessionUser(sessionId: string, options: AuthActionOptions, role?:
     if (sessionId.length > 128 || !SESSION_ID_RE.test(sessionId)) return null;
     const session = await checkSession(sessionId, options);
     if (!session || (role !== undefined && !session.roles.includes(role))) return null;
-    return { user: session.user, env: { [SESSION_2FA_ENV]: sessionProof(session, options) } };
+    return { user: session.user, env: { [SESSION_BINDING_ENV]: createHash("sha256").update(sessionId).digest("hex"), [SESSION_2FA_ENV]: sessionProof(session, options) } };
   } catch {
     return null;
   }
@@ -305,7 +308,7 @@ async function runStreamAction(
   try {
     proc = (options.spawn ?? Bun.spawn)(argv, duplex
       ? { stdin: "pipe", stdout: "pipe", stderr: "inherit", env: { ...DUPLEX_WORKER_ENV, ...duplex.env } }
-      : { stdin: "ignore", stdout: "pipe", stderr: "inherit", env: { ...process.env, [SESSION_2FA_ENV]: "0" } });
+      : { stdin: "ignore", stdout: "pipe", stderr: "inherit", env: { ...process.env, [SESSION_BINDING_ENV]: "", [SESSION_2FA_ENV]: "0" } });
     if (stopping || socket.destroyed) stop();
 
     if (duplex) {
@@ -541,7 +544,7 @@ export function createAuthActionServer(options: AuthActionOptions = {}): net.Ser
           }
           let args = request.args ?? [];
           // The gateway's own environment never carries a session's answer.
-          let env: Record<string, string | undefined> = { ...process.env, [SESSION_2FA_ENV]: "0" };
+          let env: Record<string, string | undefined> = { ...process.env, [SESSION_BINDING_ENV]: "", [SESSION_2FA_ENV]: "0" };
           if (ownAccount) {
             if (args.some((arg) => arg.startsWith("--panel-user"))) {
               socket.end(JSON.stringify({ ok: false, error: "invalid arguments" }) + "\n");
@@ -655,7 +658,7 @@ export function createAuthActionServer(options: AuthActionOptions = {}): net.Ser
             options,
             {
               sessionId: request.sessionId!,
-              env: account.env,
+              env: request.ticket ? { ...account.env, [TICKET_ENV]: request.ticket } : account.env,
               pending,
               attach: (write) => { forward = write; },
             },

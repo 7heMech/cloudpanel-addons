@@ -1,5 +1,6 @@
 // The one-shot actions that act on the caller's own panel account. The gateway
 // reads whose account from the session it is sent, never from the manager.
+import { createHash } from "node:crypto";
 import { afterAll, beforeAll, expect, test } from "bun:test";
 import { Database } from "bun:sqlite";
 import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
@@ -90,6 +91,20 @@ test("the worker is told whether the session passed 2FA, which the manager canno
   const unmarked = await ask({ addon: "security-keys", verb: "keys", sessionId: "nomfa" });
   expect(unmarked.argv!.at(-1)).toBe("--panel-user=redacted_user");
   expect(unmarked.env!.CLP_ADDONS_SESSION_2FA).toBe("0");
+});
+
+test("a root verification is bound to the session it came with", async () => {
+  const process_ = process.env;
+  // The gateway's own environment never reaches the worker as a session's.
+  process.env = { ...process_, CLP_ADDONS_SESSION_BINDING: "f".repeat(64) };
+  try {
+    const { env } = await ask({ addon: "terminal", verb: "root-auth-verify", sessionId: "live" });
+    expect(env!.CLP_ADDONS_SESSION_BINDING).toBe(createHash("sha256").update("live").digest("hex"));
+    const { env: sessionless } = await ask({ addon: "security-keys", verb: "login-options" });
+    expect(sessionless!.CLP_ADDONS_SESSION_BINDING).toBe("");
+  } finally {
+    process.env = process_;
+  }
 });
 
 test("a session CloudPanel opened from a passkey sign-in's token names that key", async () => {
