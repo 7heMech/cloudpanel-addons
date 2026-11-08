@@ -49,8 +49,9 @@ failed package URL when unattended-upgrades logs one.
 
 ### Lock settings
 
-The page header's **Lock settings**, top right like the other addons' header
-actions, is one action on the server, the `lock-settings` verb: every Hardening
+**Lock settings** sits in the Hardening card's header rather than at the top of
+the page, because it covers Hardening and Failed logins, the card after it, and
+none of the page's other settings. It is one action on the server, the `lock-settings` verb: every Hardening
 and Failed logins switch on, the two off by default (MySQL on this server only
 and the SSH jail) included, then [root's lock](security.md#root-locks) on System
 Tweaks. Its confirmation says what that does, that MySQL restarts and that only
@@ -63,9 +64,9 @@ report protections that are not running. It tries every other switch, then
 MySQL only if all of them came on, since its restart cuts remote clients and is
 not spent on a lock that will be refused. It locks only when all came on;
 otherwise it names what failed and locks nothing, leaving on what came on. The
-lock never holds a switch off. While it runs, the Working line sits under the
-page heading. Once locked, the header shows **Locked by root** instead, and a
-notice says how to unlock. It does not touch the panel's PHP; see below.
+lock never holds a switch off. While it runs, the Working line sits under that
+header. Once locked, the header shows **Locked by root** instead, and a notice
+under it says how to unlock. It does not touch the panel's PHP; see below.
 
 Enabling System Tweaks under a lock, which a new install has, starts it from
 its defaults: before the activation applies anything, each lockable setting is

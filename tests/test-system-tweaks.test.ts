@@ -627,14 +627,19 @@ test("root's lock keeps the protections that are on, on, and leaves the rest of 
   expect(damaged).toContain("<code>clp-addons lock</code>");
 });
 
-test("the header offers Lock settings until root's lock is there, then shows it", async () => {
+test("Hardening's header offers Lock settings until root's lock is there, then shows it", async () => {
   const state = await act(box(), ["state"]);
-  const heading = (html: string) => html.slice(html.indexOf('<div class="page-heading">'), html.indexOf('<div class="card">'));
-  expect(heading(dashboardView(state))).toContain('onclick="lockSettings(this)">Lock settings</button>');
+  const header = (html: string) => html.slice(html.indexOf("<h2>Hardening</h2>"), html.indexOf("</div>", html.indexOf("<h2>Hardening</h2>")));
+  const pageHeading = (html: string) => html.slice(html.indexOf('<div class="page-heading">'), html.indexOf('<div class="card">'));
+  expect(header(dashboardView(state))).toContain('onclick="lockSettings(this)">Lock settings</button>');
+  // The lock leaves the page's other settings alone, so it is not at the top of the page.
+  expect(pageHeading(dashboardView(state))).not.toContain("lockSettings");
   for (const lock of ["locked", "damaged"] as const) {
     const html = dashboardView(state, Date.now(), lock);
     expect(html).not.toContain("lockSettings(this)");
-    expect(html).toContain(">Locked by root</span>");
+    expect(header(html)).toContain(">Locked by root</span>");
+    expect(pageHeading(html)).not.toContain("notice");
+    expect(html.indexOf('class="notice st-lock-notice"')).toBeGreaterThan(html.indexOf("<h2>Hardening</h2>"));
   }
 });
 
@@ -837,10 +842,10 @@ test("every on/off switch on the page posts to a route that runs its verb", asyn
 
 // The header button is in no row, so its working line once had nowhere to go:
 // the page froze with every control held and nothing posted.
-test("Lock settings in the page header posts and says it is running under the heading", async () => {
+test("Lock settings in Hardening's header posts and says it is running under the header", async () => {
   const { client, events, replies } = systemTweaksClient();
   const heading = { after: (line: { textContent: string }) => events.push(`heading: ${line.textContent}`) };
-  const button = { dataset: {}, type: "button", closest: (selector: string) => (selector.includes(".page-heading") ? heading : null) };
+  const button = { dataset: {}, type: "button", closest: (selector: string) => (selector.includes(".card-header") ? heading : null) };
   const pending = client.lockSettings(button);
   await Bun.sleep(0);
   expect(events).toEqual(["busy", "heading: Switching everything on, then locking…", "POST /api/lock-settings {}"]);

@@ -39,9 +39,9 @@ function working(control, text) {
   line.setAttribute('role', 'status');
   line.innerHTML = '<span class="badge">Working</span> ';
   line.append(text);
-  // The header's Lock settings button says it under the page heading.
+  // Hardening's Lock settings button says it under that card's header.
   const after = option ? option.lastElementChild
-    : row ? row.querySelector('.tweak-note') : control.closest('.st-fold, .st-install, .page-heading');
+    : row ? row.querySelector('.tweak-note') : control.closest('.st-fold, .st-install, .card-header');
   after.after(line);
   const page = setTimeout(function () {
     notify(text + ' Other settings wait until it finishes.', 'warn', null, true);
