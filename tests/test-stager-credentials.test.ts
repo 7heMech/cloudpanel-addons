@@ -4,9 +4,11 @@
 // is written down permanently. `--mfa` put the authentication code there, and
 // the validator deliberately accepts a RECOVERY code, which does not expire.
 import { describe, expect, test } from "bun:test";
-import { readFileSync } from "node:fs";
+import { existsSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { parseCloneCredentials } from "../addons/stager/action";
+import { jobGet, listJobIds, queueJob } from "../lib/job-store";
 
 const repo = join(import.meta.dir, "..");
 
@@ -91,9 +93,31 @@ describe("what a finished or failed job leaves behind", () => {
 
   test("a job systemd-run would not start loses them too", () => {
     const action = source("addons/stager/action.ts");
-    const refused = action.slice(action.indexOf("const started = startJobUnit({"), action.indexOf("const started = startJobUnit({") + 900);
-    expect(refused).toInclude('rmSync(join(dir, "srcPassword")');
-    expect(refused).toInclude('rmSync(join(dir, "mfa")');
+    expect(action).toInclude('secrets: ["srcPassword", "mfa"]');
+    expect(action).toInclude('secrets: ["srcPassword", "dstPassword", "mfa", "targetMfa"]');
+
+    const jobsDir = mkdtempSync(join(tmpdir(), "clp-stager-refused-"));
+    try {
+      expect(() => queueJob({
+        addon: "stager",
+        jobsDir,
+        fields: { source: "a.example.test", target: "b.example.test", srcPassword: "hunter2", mfa: "123456" },
+        step: "queued",
+        description: "test",
+        actionBinary: "/bin/false",
+        name: "clone",
+        secrets: ["srcPassword", "mfa"],
+        start: () => ({ ok: false, stdout: "", stderr: "refused" }),
+      })).toThrow("systemd-run refused to start the clone job");
+      const [id] = listJobIds(jobsDir);
+      const dir = join(jobsDir, id!);
+      expect(existsSync(join(dir, "srcPassword"))).toBe(false);
+      expect(existsSync(join(dir, "mfa"))).toBe(false);
+      expect(jobGet(dir, "state")).toBe("failed");
+      expect(jobGet(dir, "error")).toBe("could not start the clone job");
+    } finally {
+      rmSync(jobsDir, { recursive: true, force: true });
+    }
   });
 
   // curl writes its output and its jar with the process umask, and cmdRun
