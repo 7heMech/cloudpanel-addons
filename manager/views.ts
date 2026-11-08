@@ -15,8 +15,6 @@ import MANAGER_INDEX_CSS from "./views.css" with { type: "text" };
 
 import MANAGER_INDEX_JS from "./views.client.js" with { type: "text" };
 
-const LOCK_ICON = `<svg viewBox="0 0 448 512" width="12" height="12" aria-hidden="true"><path fill="currentColor" d="M144 144v48h160v-48a80 80 0 0 0-160 0zm-64 48v-48a144 144 0 0 1 288 0v48h16c35.3 0 64 28.7 64 64v192c0 35.3-28.7 64-64 64H64c-35.3 0-64-28.7-64-64V256c0-35.3 28.7-64 64-64h16z"/></svg>`;
-
 function addonRow(name: string, enabled: boolean, job: ManagerJobView | null, news: { version: string; since: string; seen: string[] }, locks: (addon: string) => LockState): string {
   const spec = ADDONS[name];
   if (!spec) return "";
@@ -31,7 +29,7 @@ function addonRow(name: string, enabled: boolean, job: ManagerJobView | null, ne
   const toggle = !enabled
     ? `<button class="btn" type="button" onclick="enableAddon('${escJs(spec.name)}', this)" aria-label="Enable ${esc(title)}">Enable</button>`
     : locked
-      ? `<button class="btn addon-locked" type="button" disabled title="${lock === "damaged" ? `The lock file cannot be read or trusted; run clp-addons lock on the server` : `Run clp-addons unlock ${esc(spec.name)} on the server to disable it`}">${LOCK_ICON}Locked by root</button>`
+      ? `<button class="btn addon-locked" type="button" disabled title="${lock === "damaged" ? `The lock file cannot be read or trusted; run clp-addons lock on the server` : `Run clp-addons unlock ${esc(spec.name)} on the server to disable it`}" aria-label="${esc(title)} is locked by root">Locked</button>`
       : `<button class="btn" type="button" onclick="disableAddon('${escJs(spec.name)}', '${escJs(title)}', this)" aria-label="Disable ${esc(title)}">Disable</button>`;
   const actions = enabled && href
     ? `<a class="btn btn-primary" href="${esc(href)}" aria-label="Open ${esc(title)}">Open</a>
