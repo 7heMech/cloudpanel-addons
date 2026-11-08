@@ -334,7 +334,7 @@ export function sitesBlock(url: string, tweaks: PanelTweaks = storedTweaks()): s
             </select>
             <div class="clp-tweaks-columns" id="clp-tweaks-columns"${toolbarHidden}>
               <button type="button" class="form-control clp-tweaks-columns-button" id="clp-tweaks-columns-button"
-                aria-haspopup="true" aria-expanded="false">Columns</button>
+                aria-haspopup="true" aria-expanded="false">Columns<span class="clp-tweaks-columns-count" id="clp-tweaks-columns-count"></span></button>
               <div class="clp-tweaks-columns-menu" id="clp-tweaks-columns-menu" role="group" aria-label="Columns" hidden></div>
             </div>
             <button type="button" class="form-control clp-tweaks-download" id="clp-tweaks-download"

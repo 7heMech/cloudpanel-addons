@@ -280,6 +280,13 @@ scroller when the table layout is active. With it off, a narrow screen keeps the
 desktop table and its column choice: the narrow column set belongs to the cards,
 so the script is told the switch and treats no width as narrow.
 
+The Columns menu lists every column. Domain and Action are greyed with a lock,
+because the table needs both. A shown column is tinted and checked at the end
+of its row, as in the addons' own filter menus, and the rows stay a pixel apart
+so a run of shown columns reads as separate toggles. The button says how many
+of the optional columns are shown, such as 5/8. Reset to default forgets this
+browser's choice for the current width, so the screen's default set returns.
+
 `lib/row-actions.ts` is the whole agreement between the two addons. An addon
 with an action worth a place in the menu but not a link in every row of a list
 read every day marks it `clp-addons-menu-only` and emits the rule that hides it;

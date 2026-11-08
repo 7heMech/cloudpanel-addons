@@ -641,7 +641,23 @@
       var menu = document.getElementById("clp-tweaks-columns-menu");
       if (!holder || !button || !menu) return;
 
+      var count = document.getElementById("clp-tweaks-columns-count");
       var boxes = [];
+      // Domain and Action are always shown; they are listed so the menu
+      // accounts for every column, but cannot be turned off.
+      function locked(text) {
+        var label = document.createElement("label");
+        label.className = "clp-tweaks-locked";
+        label.title = text + " is always shown";
+        var box = document.createElement("input");
+        box.type = "checkbox";
+        box.checked = true;
+        box.disabled = true;
+        label.appendChild(box);
+        label.appendChild(document.createTextNode(text));
+        return label;
+      }
+      menu.appendChild(locked("Domain"));
       for (var i = 0; i < COLUMNS.length; i++) {
         var column = COLUMNS[i];
         if (column.key === "disk" && !withDisk) continue;
@@ -656,6 +672,37 @@
         boxes.push(box);
         bindBox(box, column.key);
       }
+      menu.appendChild(locked("Action"));
+      var reset = document.createElement("button");
+      reset.type = "button";
+      reset.className = "clp-tweaks-columns-reset";
+      reset.textContent = "Reset to default";
+      menu.appendChild(reset);
+      // The default is the screen's, as for a browser that never chose.
+      reset.addEventListener("click", function () {
+        var narrow = narrowNow();
+        try { window.localStorage.removeItem(storeKey(narrow)); } catch (e) {}
+        repaint(readChoice(narrow));
+      });
+
+      function paintCount() {
+        if (!count) return;
+        var on = 0;
+        for (var b = 0; b < boxes.length; b++) if (boxes[b].checked) on++;
+        count.textContent = on + "/" + boxes.length;
+        button.setAttribute("aria-label", "Columns, " + on + " of " + boxes.length + " shown");
+      }
+      paintCount();
+
+      function repaint(picked) {
+        chosen = picked;
+        for (var b = 0; b < boxes.length; b++) {
+          boxes[b].checked = chosen[boxes[b].getAttribute("data-column")] !== false;
+        }
+        paintColumns(chosen);
+        placeTypes(rows);
+        paintCount();
+      }
 
       function bindBox(box, key) {
         box.addEventListener("change", function () {
@@ -663,6 +710,7 @@
           writeChoice(narrowNow(), chosen);
           paintColumns(chosen);
           placeTypes(rows);
+          paintCount();
         });
       }
 
@@ -695,14 +743,7 @@
       // different answer, so the other one is read back and the boxes follow.
       if (window.matchMedia) {
         var query = window.matchMedia(NARROW_QUERY);
-        var moved = function () {
-          chosen = readChoice(query.matches);
-          for (var b = 0; b < boxes.length; b++) {
-            boxes[b].checked = chosen[boxes[b].getAttribute("data-column")] !== false;
-          }
-          paintColumns(chosen);
-          placeTypes(rows);
-        };
+        var moved = function () { repaint(readChoice(query.matches)); };
         if (query.addEventListener) query.addEventListener("change", moved);
         else if (query.addListener) query.addListener(moved);
       }
