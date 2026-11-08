@@ -655,7 +655,7 @@ test("an update to a release whose minimum CloudPanel is newer than the installe
   await cmdUpdate([]);
   expect(calls).toContain("fetchVerified:cloudpanel.json");
   expect(calls).toContain(
-    "log.warn:clp-addons 1.3.0 supports CloudPanel 2.6.0 to 2.6.2; this server runs 2.5.4-3+clp-bookworm, so a CloudPanel page the addons were not checked on stays unpatched. Updating CloudPanel with clp-update is recommended",
+    "log.warn:clp-addons 1.3.0 supports CloudPanel 2.6.0 to 2.6.2; this server runs 2.5.4-3+clp-bookworm; updating CloudPanel with clp-update is recommended",
   );
   expect(calls).toContain(`verifyAttestation:cloudpanel.json,${CLI_ARTIFACT}`);
   expect(calls).toContain(handoffCall("v1.3.0"));

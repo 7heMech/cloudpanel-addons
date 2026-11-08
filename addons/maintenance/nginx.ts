@@ -11,7 +11,7 @@ import {
   rebaselineVerdict, recordBaseline, removeBaseline, sha256, writeBaselineVersion,
 } from "../../lib/baseline";
 import { createHash } from "node:crypto";
-import { conffileMd5, owningPackage, packageVersion } from "../../lib/cloudpanel-version";
+import { conffileMd5, owningPackage, packageBusy, packageVersion } from "../../lib/cloudpanel-version";
 import { cloudflareRanges, nginxFileChange, trustedVhost, withNginxTransaction } from "../../lib/nginx-transaction";
 import { openPanelDatabase } from "../../lib/panel-db";
 import {
@@ -117,6 +117,8 @@ interface MaintenanceNginxPaths {
   packageVersion?: string | null | (() => string | null);
   /** The MD5 that package records for global_settings as a conffile; read from dpkg when left out. */
   conffileMd5?: string | null;
+  /** Whether dpkg is part-way through changing the file's package; asked of dpkg when left out. */
+  packageBusy?: () => boolean;
   /** `repair --rebaseline`: take a changed global_settings even though its package was not upgraded. */
   accept?: boolean;
 }
@@ -170,6 +172,7 @@ interface SettingsPackage {
   version: () => string | null;
   /** The MD5 of the file as the package ships it, when it is one of the package's conffiles. */
   md5: () => string | null;
+  busy: () => boolean;
 }
 
 function settingsPackage(settingsPath: string, options: MaintenanceNginxPaths): SettingsPackage {
@@ -189,6 +192,11 @@ function settingsPackage(settingsPath: string, options: MaintenanceNginxPaths): 
       const pkg = name();
       return pkg ? conffileMd5(pkg, settingsPath) : null;
     },
+    busy: () => {
+      if (options.packageBusy) return options.packageBusy();
+      const pkg = name();
+      return pkg ? packageBusy(pkg) : false;
+    },
   };
 }
 
@@ -207,7 +215,13 @@ function checkSettings(
   upstream: string, files: ReturnType<typeof baselineFiles>, enabled: boolean, options: MaintenanceNginxPaths,
   pkg: SettingsPackage, before: string | null,
 ): SettingsCheck {
-  if (!hasBaseline(files)) return { kind: "unrecorded" };
+  if (!hasBaseline(files)) {
+    // Recorded mid-upgrade, a half-written file would be the record, with no
+    // version to tell the finished one apart by.
+    return before === null && pkg.busy()
+      ? { kind: "refuse", refusal: { reason: "busy", package: pkg.name(), recorded: null, installed: null } }
+      : { kind: "unrecorded" };
+  }
   const baseline = readBaseline(files);
   const recorded = readBaselineVersion(files);
   if (baseline?.hash === sha256(upstream)) return { kind: "match", recorded };
@@ -375,14 +389,17 @@ function reconcileMaintenance(options: ReconcileOptions): MaintenanceNginxResult
     return { state: "conflict", changed: false, settingsPath: selectedPath, detail: "an unowned maintenance server include exists" };
   }
   let rebaselined: MaintenanceNginxResult["rebaselined"];
-  if (check.kind === "match") {
-    if (before !== null && before !== check.recorded) writeBaselineVersion(files, before);
-  } else if (read !== null && (check.kind === "rebaseline" || enabled || read.includes("# clp-addons:maintenance:start"))) {
-    mkdirSync(stateDir, { recursive: true });
-    const installed = check.kind === "rebaseline" ? check.installed : before;
-    recordBaseline(files, upstream, sha256(upstream), settingsPath, installed);
-    if (check.kind === "rebaseline") rebaselined = { from: check.recorded, to: check.installed };
-  }
+  // Kept only once Nginx took the file it vouches for.
+  const record = () => {
+    if (check.kind === "match") {
+      if (before !== null && before !== check.recorded) writeBaselineVersion(files, before);
+    } else if (read !== null && (check.kind === "rebaseline" || enabled || read.includes("# clp-addons:maintenance:start"))) {
+      mkdirSync(stateDir, { recursive: true });
+      const installed = check.kind === "rebaseline" ? check.installed : before;
+      recordBaseline(files, upstream, sha256(upstream), settingsPath, installed);
+      if (check.kind === "rebaseline") rebaselined = { from: check.recorded, to: check.installed };
+    }
+  };
   const rendered = enabled
     ? `${upstream}\n${NGINX_MAINTENANCE_BLOCK}\n`
     : upstream;
@@ -399,6 +416,7 @@ function reconcileMaintenance(options: ReconcileOptions): MaintenanceNginxResult
           nginxFileChange(includePath, enabled ? `${NGINX_MAINTENANCE_BLOCK}\n` : null, paths.vhostUid),
         );
       }, { reload });
+      record();
       if (!enabled || read === null) removeBaseline(files);
       if (enabled && read === null && db) {
         const uncoveredSites = sitesWithoutMaintenance(db, { ...paths, settingsMissing: true });

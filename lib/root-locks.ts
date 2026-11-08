@@ -8,6 +8,7 @@ import { dirname } from "node:path";
 import { CONFIG_DIR, LOCK_DIR } from "./paths";
 import { ADDON_VERBS, type GatewayAddon, type LockDirection } from "./gateway-protocol";
 import { writeFileAtomic } from "./atomic-write";
+import { isTrustedDirectory, isTrustedFile } from "./trusted-file";
 
 export const ROOT_LOCKS_FILE = `${CONFIG_DIR}/locks.json`;
 export const ROOT_LOCKS_LOCK = `${LOCK_DIR}/locks.lock`;
@@ -48,8 +49,6 @@ export function isLockable(addon: string): boolean {
   return (LOCKABLE_ADDONS as string[]).includes(addon);
 }
 
-const rootsAlone = (info: Stats, rootUid: number) => info.uid === rootUid && (info.mode & 0o022) === 0;
-
 const errno = (error: unknown) => (error as NodeJS.ErrnoException)?.code;
 
 /**
@@ -76,7 +75,7 @@ export function lockedAddons(file = ROOT_LOCKS_FILE, rootUid = 0): string[] {
     if (errno(error) === "ENOENT") return [];
     throw error;
   }
-  if (!dirInfo.isDirectory() || !rootsAlone(dirInfo, rootUid)) throw new UntrustedLockFile(`${dir} is not a directory only root can write`, true);
+  if (!isTrustedDirectory(dirInfo, rootUid)) throw new UntrustedLockFile(`${dir} is not a directory only root can write`, true);
   let fd: number;
   try {
     fd = openSync(file, constants.O_RDONLY | constants.O_NOFOLLOW | constants.O_NONBLOCK);
@@ -88,7 +87,7 @@ export function lockedAddons(file = ROOT_LOCKS_FILE, rootUid = 0): string[] {
   }
   try {
     const info = fstatSync(fd);
-    if (!info.isFile() || !rootsAlone(info, rootUid)) throw new UntrustedLockFile(`${file} is not a trusted regular file`);
+    if (!isTrustedFile(info, rootUid)) throw new UntrustedLockFile(`${file} is not a trusted regular file`);
     let stored: { addons?: unknown } | null;
     try {
       stored = JSON.parse(readFileSync(fd, "utf8"));

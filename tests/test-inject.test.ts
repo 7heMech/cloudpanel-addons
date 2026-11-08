@@ -14,7 +14,7 @@
 import { afterEach, expect, test } from "bun:test";
 import { mkdirSync, mkdtempSync, writeFileSync, readFileSync, rmSync, existsSync, readdirSync, symlinkSync, lstatSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { findMasterVhost, inspect, masterVhostHost, NGINX_PROXY_BLOCK, inspectNginxProxy, reconcile, reconcileNginxProxy, type Injection } from "../cli/inject";
+import { findMasterVhost, inspectTemplates, masterVhostHost, NGINX_PROXY_BLOCK, inspectNginxProxy, reconcile, reconcileNginxProxy, type Injection } from "../cli/inject";
 import { STAGER_TARGETS } from "../addons/stager/inject/targets";
 import { WP_TOOLS_TARGETS } from "../addons/wp-tools/inject/targets";
 import { headerTarget, siteLayoutTarget } from "../lib/panel-nav";
@@ -178,13 +178,13 @@ test("the WordPress Tools site action lands before the panel's Manage link, in t
   const { paths, read } = templates(siteActionTarget.template, siteOriginal);
   const injection: Injection = { addon: "wp-tools", target: siteActionTarget, url: "/addons/wp-tools" };
 
-  expect(inspect(injection, paths).state).toBe("missing-anchor");
+  expect(inspectTemplates([injection], paths)[0]!.state).toBe("missing-anchor");
   reconcile([injection], paths);
   const login = read().indexOf("WP Login</a>");
   expect(login).not.toBe(-1);
   expect(login).toBeLessThan(read().indexOf("Manage{% endtrans %}</a>"));
   expect(read()).toContain("{{ site.domainName }}");
-  expect(inspect(injection, paths).state).toBe("ok");
+  expect(inspectTemplates([injection], paths)[0]!.state).toBe("ok");
 
   reconcile([injection], paths);
   expect(count(read(), /WP Login<\/a>/g)).toBe(1);

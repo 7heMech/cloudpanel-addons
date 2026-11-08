@@ -2,7 +2,7 @@ import { dashboardUrl } from "./addons";
 import { enabledAddons, ADDONS, addonEnabled, addonHandler, phpGuardOptedOut } from "../addons/catalog";
 import type { AddonSpec } from "../lib/addon-definition";
 import { secureRegularFile } from "./artifacts";
-import { type NginxProxyStatus, inspectNginxProxy, inspectTemplates } from "./inject";
+import { type NginxProxyStatus, type TargetStatus, inspectNginxProxy, inspectTemplates } from "./inject";
 import { CLI_BIN, MANAGER_UNIT, SOCKET_PATH } from "../lib/paths";
 import { mountPath } from "../lib/mount";
 import { inspectPhpGuard } from "../lib/php-guard";
@@ -36,8 +36,7 @@ function phpGuardStatus(): string {
   return statusValue(`missing on ${unguarded.join(", ")}; run repair`, false);
 }
 
-function anchorStatus(): string {
-  const statuses = inspectTemplates(installedInjections());
+function anchorStatus(statuses: TargetStatus[]): string {
   if (statuses.length === 0) return "Not configured";
   const required = statuses.filter((status) => {
     if (status.addon === "manager") return true;
@@ -84,13 +83,16 @@ export async function cmdStatus(): Promise<void> {
   log.plain(`   • Manager PID  ${statusValue(pid ?? "not available", active && pid !== null)}`);
   log.plain(`   • Socket       ${socketStatus()}`);
   log.plain(`   • CloudPanel  ${panelStatus()}`);
-  log.plain(`   • Nginx       ${nginxStatus(inspectNginxProxy())}`);
+  // Asked once each: the summary lines and the paused list below read the same answers.
+  const templates = inspectTemplates(installedInjections());
+  const proxy = inspectNginxProxy();
+  log.plain(`   • Nginx       ${nginxStatus(proxy)}`);
   for (const spec of Object.values(ADDONS).filter((item) => item.panelBlock)) {
     log.plain(`   • ${spec.panelBlock!.label.padEnd(11)} ${panelBlockStatus(spec)}`);
   }
-  log.plain(`   • Anchors     ${anchorStatus()}`);
+  log.plain(`   • Anchors     ${anchorStatus(templates)}`);
   log.plain(`   • PHP guard   ${phpGuardStatus()}`);
-  const holds = panelHolds();
+  const holds = panelHolds(templates, proxy);
   if (holds.length) {
     log.plain();
     log.plain(" Paused until checked");

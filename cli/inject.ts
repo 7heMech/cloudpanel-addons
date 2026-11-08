@@ -35,7 +35,7 @@ import {
   type Refusal, baselineFiles, hasBaseline, occurrences, readBaseline, readBaselineVersion, rebaselineVerdict,
   recordBaseline, removeBaseline, sha256, writeBaselineVersion,
 } from "../lib/baseline";
-import { panelVersion } from "../lib/cloudpanel-version";
+import { packageBusy, panelVersion } from "../lib/cloudpanel-version";
 
 /** The addon supplies markup only; markers are added here so two addons cannot pick the same ones. */
 export interface Injection {
@@ -51,6 +51,8 @@ export interface InjectOptions {
   panelVersion?: PanelVersionSource;
   /** `repair --rebaseline`: take a changed template that still fits even though CloudPanel was not upgraded. */
   accept?: boolean;
+  /** Whether dpkg is part-way through changing CloudPanel; asked of dpkg when left out. */
+  panelBusy?: () => boolean;
 }
 
 /** A version, or a function asked each time, as dpkg is; dpkg itself when left out. */
@@ -79,6 +81,7 @@ interface InjectPaths {
   before: string | null;
   now: () => string | null;
   accept: boolean;
+  busy: () => boolean;
 }
 
 function resolvePaths(p?: InjectOptions): InjectPaths {
@@ -89,6 +92,7 @@ function resolvePaths(p?: InjectOptions): InjectPaths {
     before: now(),
     now,
     accept: p?.accept === true,
+    busy: p?.panelBusy ?? (() => packageBusy("cloudpanel")),
   };
 }
 
@@ -146,11 +150,16 @@ export interface Rebaselined {
   to: string;
 }
 
-/** Why the new markup cannot take every block, or null when it can. */
+/**
+ * Why the new markup cannot take its blocks, or null when it can. An optional
+ * block whose anchor is gone is only left out, as it would be on any pass; a
+ * repeated anchor refuses the file whoever needs it, since CloudPanel
+ * restructured around it and the block could land in the wrong place.
+ */
 function misfit(upstream: string, list: Injection[]): Refusal | null {
   for (const inj of list) {
     const found = occurrences(upstream, anchorOf(inj) ?? "");
-    if (found === 0) return "anchor-missing";
+    if (found === 0 && inj.target.required) return "anchor-missing";
     if (found > 1) return "anchor-repeated";
   }
   return null;
@@ -169,7 +178,12 @@ function assess(file: string, list: Injection[], p: InjectPaths): Assessment {
   const onDisk = readFileSync(file, "utf-8");
   const upstream = stripAllMarkers(onDisk);
   const record = recordOf(file, p);
-  if (!hasBaseline(record)) return { kind: "unrecorded", onDisk, upstream };
+  if (!hasBaseline(record)) {
+    // Recorded mid-upgrade, a half-written file would be the record, with no
+    // version to tell the finished one apart by.
+    if (p.before === null && p.busy()) return { kind: "refuse", onDisk, reason: "busy", recorded: null, installed: null };
+    return { kind: "unrecorded", onDisk, upstream };
+  }
   const baseline = readBaseline(record);
   const recorded = readBaselineVersion(record);
   if (baseline && baseline.hash === sha256(upstream)) return { kind: "match", onDisk, upstream, recorded };
@@ -224,10 +238,6 @@ export function inspectTemplates(injections: Injection[], paths?: InjectOptions)
     }
   }
   return statuses;
-}
-
-export function inspect(inj: Injection, paths?: InjectOptions): TargetStatus {
-  return inspectTemplates([inj], paths)[0]!;
 }
 
 /**
@@ -402,6 +412,7 @@ interface NginxPaths {
 interface NginxBaselineOptions {
   panelVersion?: PanelVersionSource;
   accept?: boolean;
+  panelBusy?: () => boolean;
 }
 
 function cloudpanelMasterVhost(): string {
@@ -629,9 +640,13 @@ type VhostCheck =
 /** The vhost against its record, by the rule the templates follow. Writes nothing. */
 function checkVhost(
   upstream: string, files: ReturnType<typeof baselineFiles>, enabled: boolean,
-  version: { before: string | null; now: () => string | null }, accept?: boolean,
+  version: { before: string | null; now: () => string | null; busy: () => boolean }, accept?: boolean,
 ): VhostCheck {
-  if (!hasBaseline(files)) return { kind: "unrecorded" };
+  if (!hasBaseline(files)) {
+    return version.before === null && version.busy()
+      ? { kind: "refuse", reason: "busy", recorded: null, installed: null }
+      : { kind: "unrecorded" };
+  }
   const baseline = readBaseline(files);
   const recorded = readBaselineVersion(files);
   if (baseline?.hash === sha256(upstream)) return { kind: "match", recorded };
@@ -665,7 +680,7 @@ export function inspectNginxProxy(options: NginxPaths & NginxBaselineOptions = {
   const path = resolved.path;
   const content = resolved.content;
   const files = baselineFiles(options.stateDir ?? NGINX_PROXY_STATE_DIR, "vhost");
-  const check = checkVhost(panelUpstream(content), files, true, { before, now }, options.accept);
+  const check = checkVhost(panelUpstream(content), files, true, { before, now, busy: options.panelBusy ?? (() => packageBusy("cloudpanel")) }, options.accept);
   if (check.kind === "refuse") {
     const { changed: _, ...status } = upstreamChangedResult(path, check);
     return status;
@@ -685,7 +700,7 @@ export function inspectNginxProxy(options: NginxPaths & NginxBaselineOptions = {
 export function reconcileNginxProxy(
   options: NginxPaths & NginxBaselineOptions & { enabled?: boolean; reload?: boolean } = {},
 ): NginxReconcileResult {
-  const { enabled = true, reload = true, panelVersion: version, accept, ...paths } = options;
+  const { enabled = true, reload = true, panelVersion: version, accept, panelBusy, ...paths } = options;
   const p = nginxPaths(paths);
   const now = versionReader(version);
   const before = now();
@@ -706,17 +721,20 @@ export function reconcileNginxProxy(
 
   const files = baselineFiles(p.stateDir, "vhost");
   const upstream = panelUpstream(onDisk);
-  const check = checkVhost(upstream, files, enabled, { before, now }, accept);
+  const check = checkVhost(upstream, files, enabled, { before, now, busy: panelBusy ?? (() => packageBusy("cloudpanel")) }, accept);
   if (check.kind === "refuse") return upstreamChangedResult(selectedPath, check);
   let rebaselined: NginxReconcileResult["rebaselined"];
-  if (check.kind === "match") {
-    if (before !== null && before !== check.recorded) writeBaselineVersion(files, before);
-  } else {
+  // Kept only once the vhost it vouches for is in place and Nginx took it.
+  const record = () => {
+    if (check.kind === "match") {
+      if (before !== null && before !== check.recorded) writeBaselineVersion(files, before);
+      return;
+    }
     mkdirSync(p.stateDir, { recursive: true });
     const installed = check.kind === "rebaseline" ? check.installed : before;
     recordBaseline(files, upstream, sha256(upstream), vhostPath, installed);
     if (check.kind === "rebaseline") rebaselined = { from: check.recorded, to: check.installed };
-  }
+  };
 
   const rendered = renderNginxProxy(onDisk, enabled);
   if (!rendered.content) {
@@ -728,12 +746,14 @@ export function reconcileNginxProxy(
     };
   }
   if (rendered.content === onDisk) {
+    record();
     if (!enabled) removeBaseline(files);
     return { state: enabled ? "ok" : "missing", changed: false, vhostPath: selectedPath, rebaselined };
   }
   writeNginxContent(vhostPath, rendered.content);
 
   if (!reload) {
+    record();
     if (!enabled) removeBaseline(files);
     return { state: enabled ? "ok" : "missing", changed: true, vhostPath: selectedPath, rebaselined };
   }
@@ -754,6 +774,7 @@ export function reconcileNginxProxy(
     return { state: "validation-failed", changed: false, vhostPath: selectedPath, detail: `nginx reload failed: ${reloaded.out}` };
   }
 
+  record();
   if (!enabled) {
     removeBaseline(files);
   }
