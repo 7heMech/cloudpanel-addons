@@ -1,15 +1,15 @@
-import { describe, expect, test } from "bun:test";
-import { readFileSync } from "node:fs";
-import { join } from "node:path";
+import { describe, expect, spyOn, test } from "bun:test";
 import {
   BodyError, MAX_BODY_BYTES, SECURITY_HEADERS, bodyErrorResponse, clientIp, contentSecurityPolicy, esc, escJs, guardMutation,
   htmlResponse, jsonResponse, newCsrfToken, policyHeaders, policyResponse, readJsonObject, redirectResponse,
   safeDecodePathSegment, validateDomain, validateExactDomain,
 } from "../lib/app-http";
-
-function repoSource(path: string): string {
-  return readFileSync(join(import.meta.dir, "..", path), "utf8");
-}
+import { appRequest } from "./app-request";
+import { handle as instaticHandle } from "../addons/instatic/app/index";
+import { instaticService } from "../addons/instatic/app/service";
+import * as tags from "../addons/instatic/app/tags";
+import { handle as stagerHandle } from "../addons/stager/app/index";
+import { stagerService } from "../addons/stager/app/service";
 
 describe("response policy", () => {
   test("every response carries the content type, no-store and the security headers", () => {
@@ -239,16 +239,33 @@ describe("HTML and JavaScript escaping", () => {
   test("esc encodes HTML rather than removing characters", () => {
     expect(esc(`<tag attr="quoted">&'`)).toBe("&lt;tag attr=&quot;quoted&quot;&gt;&amp;&#x27;");
     expect(esc("<&>")).toBe("&lt;&amp;&gt;");
-    // The helper this replaced deleted the characters instead of encoding them.
-    expect(esc("<unsafe>&")).not.toBe("unsafe");
   });
 
-  test("the addon error paths escape through Bun rather than by hand", () => {
-    // errorBlock escapes through esc(), which is Bun.escapeHTML.
-    expect(repoSource("addons/instatic/app/index.ts")).toInclude("errorBlock(err)");
-    const stager = repoSource("addons/stager/app/index.ts");
-    expect(stager).toInclude("errorBlock(res.error");
-    expect(stager).not.toInclude("escapeMinimal");
+  // A root action's error text can carry anything a site or a job wrote.
+  test("the addon error pages encode what the action said", async () => {
+    const markup = "<img src=x onerror=alert(1)>";
+    const spies = [
+      spyOn(instaticService, "listInstancesOrThrow").mockRejectedValue(new Error(markup)),
+      spyOn(instaticService, "listJobs").mockResolvedValue([]),
+      spyOn(tags, "listAvailableTags").mockResolvedValue({ tags: [], latest: "", source: "registry" } as never),
+      spyOn(stagerService, "snapshot").mockRejectedValue(new Error("no snapshot")),
+      spyOn(stagerService, "listJobs").mockRejectedValue(new Error(markup)),
+      spyOn(stagerService, "getJob").mockResolvedValue({ ok: false, error: markup } as never),
+    ];
+    try {
+      const pages = [
+        await instaticHandle(appRequest("/"), "/"),
+        await stagerHandle(appRequest("/"), "/"),
+        await stagerHandle(appRequest("/jobs/20260910T120000Z-abcdef"), "/jobs/20260910T120000Z-abcdef"),
+      ];
+      for (const res of pages) {
+        const html = await res.text();
+        expect(html).toContain("&lt;img src=x onerror=alert(1)&gt;");
+        expect(html).not.toContain(markup);
+      }
+    } finally {
+      for (const spy of spies) spy.mockRestore();
+    }
   });
 
   // escJs writes into a single-quoted JS string that itself sits inside a
