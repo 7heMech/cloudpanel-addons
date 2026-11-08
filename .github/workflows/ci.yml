@@ -38,10 +38,8 @@ jobs:
           persist-credentials: false
 
       - name: Install Bun
-        uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2.2.0
-        with:
-          # The packageManager pin in package.json, as in release.yml.
-          bun-version-file: package.json
+        # The packageManager pin in package.json, as in release.yml.
+        uses: ./.github/actions/install-bun
 
       - name: Install dependencies
         run: bun install --frozen-lockfile
