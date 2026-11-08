@@ -971,7 +971,7 @@ test("a map file clp-addons did not write fails its own upkeep step only, and en
   writeFileSync(maps, "map $a $b {}\n");
   writeFileSync(b.nginxConf, CLOUDPANEL_NGINX_CONF);
   // The steps after it still run, and real-IP's line is reported beside the failure.
-  expect(() => systemTweaksUpkeep(b.options)).toThrow(/did not write it.*; visitor-IP trust narrowed again/);
+  expect(() => systemTweaksUpkeep(b.options)).toThrow(/^Cloudflare visitor IPs: .*did not write it.*; visitor-IP trust narrowed again/);
   expect(readFileSync(b.nginxConf, "utf8")).toContain("#clp-addons:untrusted set_real_ip_from 0.0.0.0/0;");
   expect(() => restoreSystemTweaks(b.options, true)).not.toThrow();
 });
@@ -1837,7 +1837,7 @@ test("systemTweaksMaintenance still reconciles panel PHP when upkeep fails", asy
     },
   };
   await expect(systemTweaksMaintenance(b.options)).rejects.toThrow(
-    "Nginx validation failed: emerg; Cloudflare visitor IPs reapplied; panel PHP: clp-php-fpm.service is not the CloudPanel PHP-FPM unit this addon knows",
+    "forged visitor IPs: Nginx validation failed: emerg; Cloudflare visitor IPs reapplied; panel PHP: clp-php-fpm.service is not the CloudPanel PHP-FPM unit this addon knows",
   );
   expect(phpCalled).toBe(true);
 });
@@ -1849,7 +1849,7 @@ test("systemTweaksMaintenance reports a /tmp cleanup that cannot read CloudPanel
   writeFileSync(b.nginxConf, CLOUDPANEL_NGINX_CONF);
   b.nginx.fail = true;
   b.options.tmpCleanup = { ...b.options.tmpCleanup, panelDb: join(b.aptDir, "missing", "db.sq3") };
-  await expect(systemTweaksMaintenance(b.options)).rejects.toThrow(/^\/tmp cleanup: .+; Nginx validation failed: emerg/);
+  await expect(systemTweaksMaintenance(b.options)).rejects.toThrow(/^\/tmp cleanup: .+; forged visitor IPs: Nginx validation failed: emerg/);
 });
 
 test("the page shows update options only once updates are on, and says what silently goes uncovered", () => {

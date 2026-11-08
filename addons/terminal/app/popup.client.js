@@ -194,7 +194,7 @@ async function verifyRoot() {
         errorText.textContent = keyError(error, 'Verification failed. Try again.');
         code.value = '';
         code.focus();
-        // A fresh prompt now, not at the next try: root takes only a code from a later step than the prompt's.
+        // A fresh prompt now, not at the next try; root keeps the first one's opening, so retrying never restarts the wait.
         try { options = (await post('options')).data; } catch { options = null; }
       } finally {
         busy = false;

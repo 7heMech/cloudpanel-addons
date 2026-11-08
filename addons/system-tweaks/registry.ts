@@ -53,7 +53,14 @@ export const HARDENING = [
   PHP_POOLS_TWEAK, FILE_MANAGER_GUARD_TWEAK, CLPCTL_GUARD_TWEAK, TELEMETRY_TWEAK,
 ] as const;
 
-const UPKEEP_STEPS = [UPDATES_TWEAK.repair.upkeep, REAL_IP_TWEAK.repair.upkeep, VISITOR_IP_TWEAK.repair.upkeep, LOGIN_JAILS_TWEAK.repair.upkeep, DATABASE_TWEAK.repair.upkeep];
+/** Each with the name its failure is reported under, since none has a label of its own. */
+const UPKEEP_STEPS = [
+  ["automatic updates", UPDATES_TWEAK.repair.upkeep],
+  ["forged visitor IPs", REAL_IP_TWEAK.repair.upkeep],
+  ["Cloudflare visitor IPs", VISITOR_IP_TWEAK.repair.upkeep],
+  ["login jails", LOGIN_JAILS_TWEAK.repair.upkeep],
+  ["MySQL on this server only", DATABASE_TWEAK.repair.upkeep],
+] as const;
 
 /** The quick reconciliations, under one lock: each runs even when one before it fails, and the failures are reported together. */
 export const UPKEEP = {
@@ -62,12 +69,12 @@ export const UPKEEP = {
   run: (ctx: Context) => {
     const lines: string[] = [];
     const failures: string[] = [];
-    for (const step of UPKEEP_STEPS) {
+    for (const [name, step] of UPKEEP_STEPS) {
       try {
         const line = step.run(ctx);
         if (line) lines.push(line);
       } catch (error) {
-        failures.push(errorMessage(error));
+        failures.push(`${name}: ${errorMessage(error)}`);
       }
     }
     if (failures.length) throw new Error([...failures, ...lines].join("; "));

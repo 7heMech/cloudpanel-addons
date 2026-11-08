@@ -450,6 +450,12 @@ no longer needs to trust `127.0.0.1`, and the setting comments that line out
 with the `#clp-addons:hop` marker followed by a space. A tunnel visitor's
 `X-Real-IP` is ignored on 80 and 443.
 
+The map cannot tell CloudPanel's front server from any other local client on
+the backend's port, so a tunnel pointed at `:8080`, or a local user connecting
+there, can still name the visitor with `X-Real-IP`. Before this setting every
+server trusted `127.0.0.1` for that header, so this is no new exposure; the
+operator guide says to point a tunnel at 80 or 443.
+
 The setting points the `main` and `cloudflare` log formats in `nginx.conf` and
 `REMOTE_ADDR` in `fastcgi_params` at it. Nginx's error logs, `allow`/`deny`,
 basic auth and rate limits keep `$remote_addr`. In the backend, that is now

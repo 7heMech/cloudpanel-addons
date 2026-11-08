@@ -9,7 +9,7 @@
  * alone, so Cloudflare-only access still sees the connecting address.
  */
 import { errorMessage } from "../../lib/errors";
-import { readFileSync } from "node:fs";
+import { readIfPresent } from "../../lib/baseline";
 import { runCommand, type CommandResult } from "../../lib/command";
 import { cloudflareRanges, nginxFileChange, trustedVhost, withNginxTransaction } from "../../lib/nginx-transaction";
 import { CLOUDFLARE_IPS_PATH, ROOT_UID } from "../../lib/paths";
@@ -69,13 +69,7 @@ function mapsContent(paths: Paths): string {
   return `${MAPS_MARKER}\n${cloudflareVisitorMaps("clp_visitor", cloudflareRanges(paths.cloudflareIps), "$remote_addr")}`;
 }
 
-function read(path: string): string | null {
-  try { return readFileSync(path, "utf8"); }
-  catch (error) {
-    if ((error as NodeJS.ErrnoException).code === "ENOENT") return null;
-    throw error;
-  }
-}
+const read = readIfPresent;
 
 export interface VisitorIpStatus {
   /** Whether the map is current and nothing that could use it still uses the plain address. */
