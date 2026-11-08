@@ -607,6 +607,7 @@ function systemTweaksPreviewState(url: URL): SystemTweaksState {
     },
     panelPhp: panelPhpPreviewStatus(url),
     realIp: { blockForged: url.searchParams.get("realip") !== "off", trustsAnyAddress: url.searchParams.get("realip") === "off", problem: "" },
+    visitorIp: { enabled: url.searchParams.get("visitorip") !== "off", applied: url.searchParams.get("visitorip") !== "off", problem: "" },
     phpMyAdmin: { enabled: url.searchParams.get("pma") !== "off", active: url.searchParams.get("pma") !== "off", problem: "" },
     panelCert: panelCertPreviewStatus(url.searchParams.get("cert")),
     loginJails: {
@@ -701,6 +702,8 @@ function systemTweaksPreviewMutation(path: string, source: URL, body: Record<str
     state.motd = { enabled: body.enabled === true, script: body.enabled === true, banner: body.enabled !== true };
   } else if (path.endsWith("/real-ip")) {
     state.realIp = { blockForged: body.enabled === true, trustsAnyAddress: body.enabled !== true, problem: "" };
+  } else if (path.endsWith("/visitor-ip")) {
+    state.visitorIp = { enabled: body.enabled === true, applied: body.enabled === true, problem: "" };
   } else if (path.endsWith("/login-jails") && !("error" in state.loginJails)) {
     const jails = state.loginJails as Exclude<SystemTweaksState["loginJails"], { error: string }>;
     Object.assign(jails, body);

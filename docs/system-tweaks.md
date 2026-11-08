@@ -153,6 +153,14 @@ A panel behind Cloudflare keeps its visitors' addresses. Switch the setting off
 only if a load balancer or proxy other than Cloudflare, on a public address,
 sits in front of this server or its panel.
 
+## Cloudflare visitor IPs
+
+**Cloudflare visitor IPs** is on by default. Sites behind Cloudflare's proxy or a
+Cloudflare Tunnel on this server get the visitor's IP in their access logs and
+in PHP, from `CF-Connecting-IP`. The header is believed only from Cloudflare and
+from the tunnel, so nobody else can set it. Error logs and **Allow traffic from
+Cloudflare only** still see Cloudflare's or the tunnel's address.
+
 ## phpMyAdmin
 
 **Lock down phpMyAdmin** is on by default. CloudPanel's own basic auth for the
