@@ -1,10 +1,8 @@
-// Panel-side anchor management, for every installed addon.
-//
 // CloudPanel's Twig templates are proprietary, so none of them are ever stored
-// in this repo (brief section 6). The pristine copy is snapshotted off the
-// running box into /var/lib/clp-addons, patched from there, and hashed there.
+// in this repo. The pristine copy is snapshotted off the running box into
+// /var/lib/clp-addons, patched from there, and hashed there.
 //
-// Two rules from section 8 make re-injection safe to repeat:
+// Two rules make re-injection safe to repeat:
 //
 //   1. Always regenerate from the pristine snapshot. Patching a file that may
 //      already be patched eventually double-applies or corrupts it.
@@ -18,14 +16,9 @@
 // pristine backup kept next to the template is destroyed by the very event it
 // exists to survive.
 //
-// What is new here is that a template is shared. The pristine copy is keyed by
-// the template file, not by the addon patching it, and rendering re-applies
-// every addon's snippet in one pass. Keying it per addon looked equivalent with
-// one addon installed and was not: the second addon to install snapshotted a
-// file that already contained the first addon's block, with that block stripped
-// as if it were ours, so installing it silently deleted the first addon's nav
-// entry -- and then the two reconciliation timers overwrote each other every
-// fifteen minutes, forever.
+// Several addons patch one template, so the pristine copy is keyed by the
+// template file, not by the addon patching it, and rendering re-applies every
+// addon's snippet in one pass.
 
 import { writeFileAtomic } from "../lib/atomic-write";
 import { tryRun } from "../lib/command";
@@ -45,26 +38,13 @@ import {
 // actually stops us on a markup change.
 export const KNOWN_GOOD_PANEL_VERSIONS = ["2.5.4-3+clp-bookworm"];
 
-/**
- * One addon's request to patch one template.
- *
- * The addon supplies markup and nothing else. Markers are added here rather
- * than by the addon, so two addons cannot pick the same ones -- which is how
- * removing one used to strip the other's block as well.
- */
+/** The addon supplies markup only; markers are added here so two addons cannot pick the same ones. */
 export interface Injection {
   addon: string;
   target: AddonTarget;
   url: string;
 }
 
-/**
- * Where the templates and their snapshots live.
- *
- * The only reason this is a parameter rather than two constants is that the
- * tests must never touch the panel's own files, nor need root to write under
- * /var/lib. Production callers pass nothing.
- */
 interface InjectPaths {
   templatesDir: string;
   stateDir: string;
@@ -80,10 +60,8 @@ function resolvePaths(p?: Partial<InjectPaths>): InjectPaths {
 const startMarker = (addon: string, slug: string) => `{# clp-addons:${addon}:${slug}:start #}`;
 const endMarker = (addon: string, slug: string) => `{# clp-addons:${addon}:${slug}:end #}`;
 
-/** Every addon's markers, not just one addon's. */
 const ANY_BLOCK = /\n?[ \t]*\{# clp-addons:[a-z0-9_-]+:[a-z0-9_-]+:start #\}[\s\S]*?\{# clp-addons:[a-z0-9_-]+:[a-z0-9_-]+:end #\}/g;
 
-/** What the file looked like before any addon touched it. */
 function stripAllMarkers(content: string): string {
   return content.replace(ANY_BLOCK, "");
 }
@@ -103,18 +81,12 @@ function wrap(inj: Injection): string {
   return `\n        ${s}${inj.target.snippet(inj.url)}\n        ${e}`;
 }
 
-/**
- * Pristine state is keyed by the template, because the template is shared.
- * The name is the path under the templates directory with separators folded,
- * so an operator can tell at a glance which file a snapshot belongs to.
- */
+/** The path under the templates directory, so an operator can tell which file a snapshot belongs to. */
 function fileKey(file: string, p: InjectPaths): string {
   return file.replace(`${p.templatesDir}/`, "").replace(/[^A-Za-z0-9.]+/g, "_");
 }
 const pristinePath = (f: string, p: InjectPaths) => `${p.stateDir}/${fileKey(f, p)}.pristine`;
 const hashPath = (f: string, p: InjectPaths) => `${p.stateDir}/${fileKey(f, p)}.sha256`;
-// The key folds path separators, so it cannot be turned back into a path
-// unambiguously. Record the original rather than guessing it back.
 const originPath = (f: string, p: InjectPaths) => `${p.stateDir}/${fileKey(f, p)}.path`;
 
 export type TargetStatus =
@@ -126,12 +98,9 @@ export type TargetStatus =
   | { addon: string; slug: string; state: "anchor-not-found-in-markup" };
 
 /**
- * Non-mutating: what is the state of this injection right now?
- *
- * The check is functional rather than a file diff (section 8): a marker block
- * whose content no longer matches the snippet counts as stale, not as present.
- * Without that, changing an addon's hostname leaves the nav pointing at the old
- * one forever.
+ * A marker block whose content no longer matches the snippet counts as stale,
+ * not as present, so a snippet that changed (an addon's hostname, say) is
+ * rewritten.
  */
 export function inspect(inj: Injection, paths?: Partial<InjectPaths>): TargetStatus {
   const p = resolvePaths(paths);
@@ -194,7 +163,6 @@ export function reconcile(
   return { statuses, changed };
 }
 
-/** Templates we have a pristine snapshot for, i.e. ones some addon has patched. */
 function patchedFiles(p: InjectPaths): string[] {
   if (!existsSync(p.stateDir)) return [];
   return readdirSync(p.stateDir)
@@ -243,9 +211,7 @@ function renderFile(
   let rendered = pristine;
 
   // Stable order, so two addons patching one anchor do not swap places on
-  // every reconciliation and produce a file that never settles. Injections with
-  // anchorBefore are applied before the anchor in ascending order, while
-  // injections with anchorAfter are applied after the anchor in reverse order.
+  // every reconciliation and produce a file that never settles.
   const befores = list.filter((inj) => Boolean(inj.target.anchorBefore));
   const afters = list.filter((inj) => !inj.target.anchorBefore);
 
@@ -340,7 +306,6 @@ interface NginxPaths {
   stateDir?: string;
 }
 
-/** The installed CloudPanel panel vhost, unless an operator supplies another absolute path. */
 function cloudpanelMasterVhost(): string {
   return `${nginxLayout().sitesDir}/cloudpanel.conf`;
 }
@@ -476,20 +441,11 @@ function panelUpstream(content: string): string {
 }
 
 /**
- * The one quote- and comment-aware pass every scanner below is built from.
- *
- * `#` comments and `'`/`"` strings can hide braces, and even hide the literal
- * word "server". This used to be split between a brace-matcher that tracked
- * quote/comment state itself and a separate, unaware regex that decided where
- * to start matching -- two ideas of what counts as real config, which is the
- * gap a commented-out `# server { listen 8443; }` fell through: both halves
- * agreed with each other, just not with the truth.
- *
- * So masking is now the only place that decision lives. Every character
- * inside a comment or a string becomes a space, once, before anything else
- * reads the text. Newlines are never consumed, so the masked copy lines up
- * character-for-character with the original and offsets found in one can
- * slice the other. Neither construct survives end of line, matching Nginx.
+ * `#` comments and `'`/`"` strings can hide braces and even the word "server",
+ * as in a commented-out `# server { listen 8443; }`. Every scanner reads the
+ * text with each character inside one blanked to a space. Newlines are kept,
+ * so offsets found in the masked copy slice the original. Neither construct
+ * survives end of line, matching Nginx.
  */
 const NGINX_NOISE_RE = /#[^\n]*|"(?:\\.|[^"\\\n])*(?:"|\\)?|'(?:\\.|[^'\\\n])*(?:'|\\)?/g;
 
@@ -497,7 +453,6 @@ function maskNginxNoise(content: string): string {
   return content.replace(NGINX_NOISE_RE, (noise) => " ".repeat(noise.length));
 }
 
-/** The `}` that closes the `{` at `open`. `masked` must already be noise-masked. */
 function matchingBrace(masked: string, open: number): number | null {
   let depth = 0;
   for (let i = open; i < masked.length; i++) {

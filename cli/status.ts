@@ -1,5 +1,3 @@
-// `clp-addons status`: what is installed, injected, running and reachable.
-
 import { dashboardUrl } from "./addons";
 import { enabledAddons, ADDONS, addonEnabled, addonHandler, phpGuardOptedOut } from "../addons/catalog";
 import type { AddonSpec } from "../lib/addon-definition";

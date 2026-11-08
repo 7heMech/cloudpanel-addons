@@ -1,4 +1,3 @@
-// What an addon declares about itself, and the shape the platform derives from it.
 import type { Server } from "bun";
 import type { AddonTarget } from "./addon-target";
 
@@ -11,7 +10,6 @@ export type AddonHandler = (
   auth?: { user: string; roles: string[] } | null,
 ) => Promise<Response>;
 
-/** Work an addon hands the platform to run at one of its moments. */
 export interface AddonHook {
   /** How it is named when it reports or fails. */
   label: string;
@@ -19,7 +17,6 @@ export interface AddonHook {
   run: (options?: Record<string, unknown>) => string | null | Promise<string | null>;
 }
 
-/** Work for sites CloudPanel has just created. */
 interface AddonNewSites extends AddonHook {
   /**
    * Run on every wake of the new-site watcher for an hour after the sites last
@@ -30,7 +27,6 @@ interface AddonNewSites extends AddonHook {
   resumePending?: (options?: Record<string, unknown>) => Promise<{ waiting: boolean; line: string | null }>;
 }
 
-/** A top-level `clp-addons` command an addon owns. */
 interface AddonCommand {
   /** Its line in `clp-addons help`, after `clp-addons `; none for a command only systemd, Postfix or the gateway runs. */
   usage?: string;
@@ -64,7 +60,7 @@ interface PanelBlock {
   inspect: () => { ok: boolean; text: string };
 }
 
-/** What an addon declares about itself. Paths are derived, not declared. */
+/** Paths are derived from `name`, not declared. */
 export interface AddonDefinition {
   name: string;
   title: string;
@@ -76,9 +72,8 @@ export interface AddonDefinition {
   /** Changes an operator must know about, such as moved settings or new effects on sites, each shown as Changed on the same terms as `added`; not for layout or speed. */
   changed?: { in: string; note: string }[];
   targets: AddonTarget[];
-  /** The manager routes this addon mounts, if it has any. */
   handler?: AddonHandler;
-  /** The privileged verbs this addon runs as root, if it has any. */
+  /** The privileged verbs this addon runs as root. */
   action?: (argv: string[], options?: Record<string, unknown>) => Promise<number> | number;
   /** Whether the operator switched the platform's PHP upload-progress guard off in this addon. */
   phpGuardOff?: () => boolean;
@@ -92,11 +87,8 @@ export interface AddonDefinition {
   activate?: () => void;
   /**
    * Whether a `ROLE_SITE_MANAGER` session reaches this addon's routes.
-   *
    * CloudPanel does not narrow that role's site list, so an addon whose pages
-   * are about sites is already the right page for it. Declared here because
-   * who an addon is for is a fact about the addon, and the gate that reads it
-   * is one place for every addon that says so.
+   * are about sites is already the right page for it.
    */
   siteManager?: boolean;
   /**
@@ -122,7 +114,6 @@ export interface AddonDefinition {
   firewall?: AddonHook;
   /** Work `repair --anchors-only` runs when CloudPanel rewrites a file the anchor watcher sees, each step reported on its own. */
   anchors?: AddonHook[];
-  /** A marked block the addon keeps in a file CloudPanel owns. */
   panelBlock?: PanelBlock;
   /** The conffile edits `apt-hook pre` hands back to dpkg before an unattended upgrade. */
   conffiles?: ConffileEdit[];
@@ -136,11 +127,6 @@ export interface AddonDefinition {
   withdraw?: (removeConfig: () => void) => void;
 }
 
-/**
- * The addon's platform-facing shape: the definition plus the paths the platform
- * derives from its name. Kept as a distinct type because provisioning, repair
- * and disable care about the files, not about the handler.
- */
 export interface AddonSpec extends AddonDefinition {
   configFile: string;
   stateDir: string;

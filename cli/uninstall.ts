@@ -1,6 +1,3 @@
-// `clp-addons self-uninstall`: removes the installation once every addon is
-// disabled. Addon data stays.
-
 import { enabledAddons } from "../addons/catalog";
 import { purgeTwigCache } from "./inject";
 import { withOperationLockSync } from "./operation-lock";

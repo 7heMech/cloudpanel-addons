@@ -18,7 +18,6 @@ type Slots = { headerLight: string; headerDark: string; markLight: string; markD
 const TTL_MS = 60_000;
 let cached: { at: number; logos: PanelLogos | null } | null = null;
 let refreshing: Promise<void> | null = null;
-/** Bumped by a forget, so a refresh that read the old setting cannot store it. */
 let generation = 0;
 
 export function panelLogos(): PanelLogos | null {
@@ -43,7 +42,6 @@ export function logosFromSlots(slots: Slots | null): PanelLogos | null {
   return logos.header || logos.mark || logos.favicon ? logos : null;
 }
 
-/** `enabled`: whether Panel Tweaks is on at all; off, there is no branding to ask for. */
 export async function refreshPanelLogos(enabled: boolean): Promise<void> {
   if (!enabled) {
     forgetPanelLogos();

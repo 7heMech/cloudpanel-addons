@@ -1,17 +1,9 @@
-// Reading CloudPanel's own SQLite database. Every caller asks its own question
-// of it; what is shared is how it is opened and that DNS's stand-ins, rows
-// CloudPanel lists but no operator made, are not taken for sites.
 import { errorMessage } from "./errors";
 import { Database } from "bun:sqlite";
 import { failAction } from "./action";
 import { readable } from "./files";
 import { standInDomains } from "./stand-ins";
 
-/**
- * Read the panel database: opened read-only, waiting out the panel's own
- * writes, and closed afterwards. Throws when it cannot be read; what that
- * means is the caller's to decide.
- */
 export function withPanelDb<T>(path: string, read: (db: Database) => T): T {
   if (!readable(path)) throw new Error("panel database is not readable");
   const db = new Database(path, { readonly: true });
@@ -23,10 +15,6 @@ export function withPanelDb<T>(path: string, read: (db: Database) => T): T {
   }
 }
 
-/**
- * The panel database held open, for a caller that reads it across several
- * steps or writes to it, and closes it itself. Failing to open it fails the action.
- */
 export function openPanelDatabase(path: string, readOnly = false, busyTimeoutMs = 5000): Database {
   try {
     const db = new Database(path, { create: false, ...(readOnly ? { readonly: true } : { readwrite: true }) });
@@ -37,7 +25,6 @@ export function openPanelDatabase(path: string, readOnly = false, busyTimeoutMs 
   }
 }
 
-/** Whether CloudPanel has a site of exactly this domain name. */
 export function hasSite(db: Database, domain: string): boolean {
   return db.query("SELECT 1 FROM site WHERE domain_name = ? LIMIT 1;").get(domain) != null;
 }

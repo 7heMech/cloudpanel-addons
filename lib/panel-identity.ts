@@ -124,7 +124,6 @@ function normalizePanelHostname(value: string): string | null {
   return null;
 }
 
-/** Extract the panel's exact and wildcard server names from a root-owned vhost. */
 export function panelIdentityFromVhost(content: string): PanelIdentity | null {
   const names = new Set<string>();
   const uncommented = content.replace(/#[^\r\n]*/g, "");
@@ -151,7 +150,6 @@ export function panelIdentityFromVhost(content: string): PanelIdentity | null {
   return { primary: exact, aliases: [...names].filter((name) => name !== exact).sort() };
 }
 
-/** The identity file's text, as `parsePanelIdentity` reads it back. */
 export function formatPanelIdentity(identity: PanelIdentity): string {
   return "# Managed by clp-addons; read by the root action binary.\n" +
     `PRIMARY=${identity.primary}\n` +

@@ -1,4 +1,3 @@
-// Exclusive locks on files under /run/lock, shared by root's processes.
 import { dlopen, FFIType } from "bun:ffi";
 import { randomBytes } from "node:crypto";
 import {
@@ -22,12 +21,6 @@ export interface FileLockHandle {
   release(): void;
 }
 
-/**
- * The refusal a waiter gets when the lock does not come free.
- *
- * A function is handed whatever the holder wrote into the lock file, so a
- * refusal can name the operation it waited for rather than only say "busy".
- */
 type LockTimeoutMessage = string | ((holder: string | null) => string);
 
 interface FileLockOptions {
@@ -122,7 +115,6 @@ export async function acquireFileLock(
     handedOff = true;
     return lockHandle(fd, state);
   } finally {
-    // A timeout or another failure before the handle is returned owns the fd.
     if (!handedOff) {
       if (state.locked) libc.symbols.flock(fd, LOCK_UN);
       closeSync(fd);
@@ -130,10 +122,6 @@ export async function acquireFileLock(
   }
 }
 
-/**
- * The same lock for callers that cannot await: disable, self-uninstall and the
- * template reconcile are synchronous from end to end.
- */
 export function acquireFileLockSync(
   path: string,
   timeoutSeconds: number,

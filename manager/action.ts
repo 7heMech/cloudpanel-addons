@@ -35,10 +35,9 @@ import { ADDONS, ADDON_NAMES, addonNews, addonNoticeKeys, addonEnabled } from ".
 import { CLI_VERSION } from "../lib/version";
 import { type OnProgress, Fatal, log, requireRoot } from "../lib/log";
 
-/** Where the manager's own job records live, beside each addon's state. */
 const MANAGER_STATE_DIR = addonStateDir("manager");
 const MANAGER_JOBS_DIR = `${MANAGER_STATE_DIR}/jobs`;
-/** The New and Changed badges somebody has opened, shared by every administrator. */
+/** The New and Changed badges opened, shared by every administrator. */
 const NEWS_SEEN_FILE = `${MANAGER_STATE_DIR}/news-seen.json`;
 /** The release this box ran before the installed one; badges cover what came after it. */
 export const NEWS_SINCE_FILE = `${MANAGER_STATE_DIR}/news-since`;
@@ -49,13 +48,8 @@ const JOB_RETENTION_DAYS = 7;
 type ManagerJobKind = "enable" | "disable" | "update";
 
 /**
- * The privileged work itself, injected rather than imported.
- *
- * Enabling reinstalls units and reconciles Nginx and the Twig anchors, and
- * updating downloads and verifies a release: all of that lives in
- * cli/toggle.ts and cli/update.ts. Taking the three operations as an argument
- * keeps the dependency pointing one way and lets the job plumbing be tested
- * without provisioning anything.
+ * The privileged work, which lives in cli/toggle.ts and cli/update.ts, injected
+ * rather than imported so the dependency points one way.
  */
 export interface ManagerOps {
   enable(addon: string): Promise<void> | void;
@@ -83,13 +77,8 @@ export interface ManagerJobView {
 }
 
 /**
- * Accept both flag spellings this action is reached by.
- *
- * The manager builds `--addon=stager` the way the CLI's own `parseFlags` reads
- * it; the transient unit that runs a job is built by the shared `startJobUnit`,
- * which spells it `--job <id>` the way every other action's parser reads it.
- * This is the one entry point both forms arrive at, so it understands both
- * rather than either side being made to spell it the other's way.
+ * The web side passes `--addon=stager`; the transient unit `startJobUnit`
+ * builds passes `--job <id>`. Both arrive here.
  */
 export function parseManagerFlags(argv: string[]): Record<string, string> {
   const flags: Record<string, string> = {};
@@ -121,8 +110,8 @@ function failReply(error: string, data?: unknown, emit = true): number {
 }
 
 /**
- * The release badges start after. A box without the record was updated from a
- * release that kept none, so every notice up to the installed one is news.
+ * A box without the record was updated from a release that kept none, so every
+ * notice up to the installed one is news.
  */
 export function readNewsSince(file = NEWS_SINCE_FILE): string {
   return storedNewsSince(file) ?? "0.0.0";
@@ -154,7 +143,6 @@ export function recordNewsSince(previous: string | null, file = NEWS_SINCE_FILE,
   }
 }
 
-/** Puts the record back as it was now, for an update that rolls back. */
 export function keepNewsSince(file = NEWS_SINCE_FILE): () => void {
   let kept: string | null = null;
   try {
@@ -170,11 +158,6 @@ export function keepNewsSince(file = NEWS_SINCE_FILE): () => void {
   };
 }
 
-/**
- * The notices already read that still mean something: a key for a notice no
- * longer declared, or a name no longer in the catalog, is dropped, so the file
- * never outgrows the catalog.
- */
 export function readNewsSeen(file = NEWS_SEEN_FILE, version = CLI_VERSION, since = readNewsSince()): string[] {
   let stored: unknown = [];
   try { stored = JSON.parse(readFileSync(file, "utf-8")); } catch { /* none yet */ }
@@ -184,7 +167,6 @@ export function readNewsSeen(file = NEWS_SEEN_FILE, version = CLI_VERSION, since
     typeof key === "string" && addonNoticeKeys(key.split("@")[0]!, current, since).includes(key));
 }
 
-/** Records the badge of the named addons, or of every addon, as read. */
 export function markNewsSeen(addons: string[] = ADDON_NAMES, file = NEWS_SEEN_FILE, version = CLI_VERSION, since = readNewsSince()): string[] {
   const current = version.replace(/^v/, "");
   // Locked so two administrators reading different addons both keep their keys.
@@ -199,26 +181,20 @@ export function markNewsSeen(addons: string[] = ADDON_NAMES, file = NEWS_SEEN_FI
   });
 }
 
-
-/** The lock a manager operation takes before it touches shared state. */
 function withManagerLock<T>(lockDir: string, onTimeout: string, body: () => Promise<T>): Promise<T> {
   mkdirSync(lockDir, { recursive: true, mode: 0o700 });
   return withFileLock(join(lockDir, "manager.lock"), 30, onTimeout, body);
 }
 
 /**
- * The job that is still going, if there is one.
- *
- * This is what makes the buttons idempotent: a second click finds the first
- * click's job and follows it rather than starting a second enable. Live is
- * pruneJobs' rule (`jobIsLive`), so a job seconds old counts even when its unit
- * cannot be seen yet.
+ * A second click finds the first click's job and follows it rather than
+ * starting a second enable. A job seconds old counts as live even when systemd
+ * cannot show its unit yet.
  */
 export function activeManagerJob(jobsDir = MANAGER_JOBS_DIR): string | null {
   return listJobIds(jobsDir).find((id) => jobIsLive("manager", jobsDir, id)) ?? null;
 }
 
-/** The newest job record, whatever its state. */
 export function latestManagerJob(jobsDir = MANAGER_JOBS_DIR): string | null {
   return listJobIds(jobsDir)[0] ?? null;
 }
@@ -238,7 +214,6 @@ export function readManagerJob(id: string, jobsDir = MANAGER_JOBS_DIR): { job: M
   };
 }
 
-/** Expire old records and fail the ones whose runner died. Called by repair. */
 export function pruneManagerJobs(jobsDir = MANAGER_JOBS_DIR): PruneJobsResult {
   return pruneJobs({
     addon: "manager",
@@ -253,9 +228,7 @@ function enabled(name: string): boolean {
 }
 
 /**
- * Reject what the runner would only discover after it had started.
- *
- * Disabling the last addon is not on this list. `serve` keeps running with none
+ * Disabling the last addon is not refused. `serve` keeps running with none
  * enabled, because every addon is compiled in and a manager with none of them
  * on is still the page that offers them back; the panel's Addons entry is kept
  * by `installedInjections` for the same reason. Taking the installation away
@@ -275,15 +248,6 @@ function describe(kind: ManagerJobKind, addon: string): string {
   return kind === "update" ? "clp-addons update" : `clp-addons ${kind} ${addon}`;
 }
 
-/**
- * Record the request, hand it to systemd and answer with the job id.
- *
- * The record is written before the unit is started so that a runner that begins
- * immediately finds a complete record, and the log file is created here for the
- * same reason the unit's StandardOutput= points at it: the runner's progress is
- * whatever `clp-addons` prints, and systemd is what puts that in a file the
- * unprivileged manager can be shown through this action.
- */
 export interface CreateJobOptions {
   jobsDir?: string;
   newsFile?: string;
@@ -298,6 +262,11 @@ export interface CreateJobOptions {
   locks?: { file: string; rootUid: number };
 }
 
+/**
+ * The unit's StandardOutput= points at the job's log: the runner's progress is
+ * whatever `clp-addons` prints, and systemd puts it in a file the unprivileged
+ * manager can be shown through this action.
+ */
 export async function createJob(
   kind: ManagerJobKind,
   addon: string,
@@ -438,12 +407,9 @@ export async function runManagerAction(
         return await createJob(verb, addon, options);
       case "update":
         return await createJob("update", "", options);
-      // Not a job: rendering the templates writes a few files and restarts
-      // nothing, so the request that asked for it can wait for the answer.
-      // It exists because an addon whose markup depends on a setting has to be
-      // able to put that markup back the moment the setting moves. `reconcile`
-      // takes the operation lock itself, which is what keeps it from crossing
-      // an enable, a repair or an update.
+      // Not a job: rendering the templates restarts nothing, so the request
+      // can wait for the answer. An addon whose markup depends on a setting
+      // calls it the moment the setting moves.
       case "reconcile":
         ops.reconcile();
         return reply({ ok: true, data: { reconciled: true } }, options.emitReply !== false);

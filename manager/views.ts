@@ -14,7 +14,6 @@ import MANAGER_INDEX_CSS from "./views.css" with { type: "text" };
 
 import MANAGER_INDEX_JS from "./views.client.js" with { type: "text" };
 
-/** One row of the Enabled or Available list, for a known addon, or nothing for an unknown name. */
 function addonRow(name: string, enabled: boolean, job: ManagerJobView | null, news: { version: string; since: string; seen: string[] }): string {
   const spec = ADDONS[name];
   if (!spec) return "";
@@ -52,8 +51,6 @@ function liveManagerJob(job: ManagerJobView | null): ManagerJobView | null {
 }
 
 /**
- * Live manager progress stays with the card whose action started the job.
- *
  * The log is behind a summary rather than gone: enabling an addon that has to
  * install Docker spends minutes on one step, and what it is doing is in the
  * log. Closed by default, because the state and the step are what a card has
@@ -86,12 +83,10 @@ function managerJobBlock(job: ManagerJobView | null, homeCard: string | null): s
   return `<article class="card" data-manager-job-card="${esc(managerJobKey(live))}">${managerJobStatus(live)}</article>`;
 }
 
-/** The card a job belongs to: the addon it is about, or the update page's own. */
 function managerJobKey(job: ManagerJobView): string {
   return job.kind === "update" ? "update" : job.addon;
 }
 
-/** Failure details survive navigation without creating a second progress card. */
 function managerJobFailure(job: ManagerJobView | null): string {
   const failure = job && job.state === "failed" ? job : null;
   const failureBlock = failure
@@ -105,7 +100,6 @@ function managerJobFailure(job: ManagerJobView | null): string {
 
 type ManagerPageOptions = { job?: ManagerJobView | null; csrf?: string };
 
-/** The manager index: enabled addons, bundled addons available to enable, and progress. */
 export function indexPage(
   enabled: string[],
   update?: { current: string; latest: string } | null,
@@ -195,7 +189,6 @@ watchJob('${escJs(live.id)}', managerJobTarget ? managerJobTarget.closest('[data
   }), { csrf: options.csrf });
 }
 
-/** How a job is named in the UI: "Enabling stager", "Updating clp-addons". */
 function describeJob(job: ManagerJobView): string {
   if (job.kind === "update") return "Updating clp-addons";
   const verb = job.kind === "disable" ? "Disabling" : "Enabling";

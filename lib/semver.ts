@@ -5,11 +5,7 @@ function precedence(value: string): { core: number[]; pre: string[] } {
   return { core, pre: hyphen < 0 ? [] : version.slice(hyphen + 1).split(".") };
 }
 
-/**
- * Compare two semver strings (e.g. "0.9.4" and "0.9.3", or "v0.9.4" and "v0.9.3"),
- * pre-releases in semver's order: 2.0.0-rc.1 < 2.0.0-rc.2 < 2.0.0.
- * Returns > 0 if a > b, < 0 if a < b, 0 if equal.
- */
+/** Pre-releases sort in semver's order: 2.0.0-rc.1 < 2.0.0-rc.2 < 2.0.0. */
 export function compareSemver(a: string, b: string): number {
   const pa = precedence(a);
   const pb = precedence(b);

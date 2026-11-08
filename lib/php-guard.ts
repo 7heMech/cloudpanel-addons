@@ -7,8 +7,9 @@
 // names disabling it as the administrative mitigation and recommends keeping it
 // off even after patching, as a hardly-used, hardly-tested feature. This writes
 // that setting on every installed PHP-FPM, including the end-of-life 8.1 the
-// panel runs on unless System Tweaks moved it. It does not address CVE-2026-109618, whose only
-// real fix is patched PHP; see docs/decisions/security.md.
+// panel runs on unless System Tweaks moved it. It does not address
+// CVE-2026-109618, whose only real fix is patched PHP; see
+// docs/decisions/security.md.
 
 import { existsSync, readdirSync } from "node:fs";
 import { join } from "node:path";
@@ -54,7 +55,6 @@ interface FpmTarget {
   present: boolean;
 }
 
-/** Every `<X.Y>/fpm/conf.d` present under the PHP root, with whether its FPM binary is installed. */
 function fpmTargets(paths: PhpGuardPaths): FpmTarget[] {
   if (!existsSync(paths.phpRoot)) return [];
   return readdirSync(paths.phpRoot)
@@ -67,7 +67,6 @@ function fpmTargets(paths: PhpGuardPaths): FpmTarget[] {
     }));
 }
 
-/** Current drop-in contents, or null when absent; a symlink or untrusted file is treated as absent so it is overwritten. */
 function current(path: string, rootUid: number): string | null {
   // Owner and mode, not content alone: a drop-in left group- or world-writable,
   // or replaced by a symlink, is one the next reconcile should rewrite to 0644.
@@ -75,9 +74,7 @@ function current(path: string, rootUid: number): string | null {
 }
 
 interface PhpGuardStatus {
-  /** Versions whose FPM binary is installed and whose drop-in is in place. */
   guarded: string[];
-  /** Installed-FPM versions still missing the drop-in. */
   unguarded: string[];
   /** Switched off by an enabled addon, so a missing drop-in is wanted. */
   optedOut: boolean;
@@ -94,12 +91,7 @@ export function inspectPhpGuard(options: PhpGuardOptions = {}): PhpGuardStatus {
   return { guarded, unguarded, optedOut: options.optedOut ?? false };
 }
 
-/**
- * Installs or removes the drop-in on every PHP-FPM, testing and reloading each
- * one it changed. Returns how many files changed. Reloads the panel's own FPM
- * too, since it scans the `conf.d` of whichever version runs it. Failures restore written files
- * and reload services that may have picked up the change.
- */
+/** The panel's own FPM is reloaded too: it scans the `conf.d` of whichever version runs it. */
 export function reconcilePhpSessionGuard(install: boolean, options: PhpGuardOptions = {}): number {
   const paths = { ...DEFAULT_PHP_GUARD_PATHS, ...options.paths };
   const run = options.run ?? ((cmd: string, args: string[]) => tryRun(cmd, args));
@@ -153,9 +145,9 @@ export function reconcilePhpSessionGuard(install: boolean, options: PhpGuardOpti
 }
 
 /**
- * After a disable: System Tweaks'
- * opt-out may just have stopped counting. The addon is already gone, so a
- * failure warns and leaves the guard to the repair timer.
+ * After a disable: System Tweaks' opt-out may just have stopped counting. The
+ * addon is already gone, so a failure warns and leaves the guard to the repair
+ * timer.
  */
 export function settlePhpGuard(options: PhpGuardOptions = {}): void {
   try {

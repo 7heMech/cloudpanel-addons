@@ -1,18 +1,13 @@
-// What the CLI and the work it runs print to a terminal or a journal.
-
-/** Colored only when that stream is a terminal that wants color. */
 export function paint(code: string, text: string, stream: NodeJS.WriteStream = process.stdout): string {
   return stream.isTTY && stream.hasColors(16) ? `\x1b[${code}m${text}\x1b[0m` : text;
 }
 
-// A progress line a terminal redraws in place, until the next line ends it.
 let redrawing = false;
 const endRedraw = () => {
   if (redrawing) process.stdout.write("\n");
   redrawing = false;
 };
 
-/** A progress line, redrawn until `done`. */
 export type OnProgress = (progress: string, done: boolean) => void;
 
 export const log = {
@@ -21,7 +16,6 @@ export const log = {
   warn: (m: string) => { endRedraw(); console.warn(`${paint("33", "!", process.stderr)} ${m}`); },
   err: (m: string) => { endRedraw(); console.error(`${paint("31", "✗", process.stderr)} ${m}`); },
   plain: (m = "") => { endRedraw(); console.log(m); },
-  /** Redrawn in a terminal; elsewhere only the last one is written. */
   progress: (m: string, done: boolean) => {
     if (!process.stdout.isTTY || process.env.TERM === "dumb") {
       if (done) log.step(m);

@@ -1,6 +1,3 @@
-// The entrypoint: argv in, exit code out. Each verb lives in its own module
-// and this one only decides which. `auth` and `manager` are dispatched before
-// the catalog is consulted, because neither is an addon.
 import { errorMessage } from "../lib/errors";
 import { dashboardUrl, resolveAddon } from "./addons";
 import { enabledAddons, ADDONS, ADDON_NAMES, addonEnabled } from "../addons/catalog";
@@ -30,12 +27,9 @@ import { runCertificateWork, runFirewallWork } from "./addon-hooks";
 import { runSyncSites } from "./new-sites";
 
 /**
- * The privileged half of the three manager verbs.
- *
- * `update` is `clp-addons update` with no arguments -- the same resolver, the
- * same checksum and provenance verification, the same installer. There is no
- * second download path, which is the point: a button that fetched releases its
- * own way would be a second thing to get right.
+ * `update` is `clp-addons update` with no arguments: the same resolver,
+ * checksum and provenance verification and installer, so the panel's button
+ * has no download path of its own to get right.
  */
 export const MANAGER_OPS: ManagerOps = {
   enable: applyEnable,
@@ -48,7 +42,6 @@ export const MANAGER_OPS: ManagerOps = {
   }, { timeoutSeconds: 15 }),
 };
 
-/** The help lines of the commands addons own, in catalog order. */
 function addonUsage(): string {
   return Object.values(ADDONS)
     .flatMap((spec) => Object.values(spec.commands ?? {}).flatMap((command) => command.usage ? [`  clp-addons ${command.usage}`] : []))
@@ -93,7 +86,6 @@ async function cmdAction(argv: string[]): Promise<number> {
   return spec.action(rest);
 }
 
-/** With no addon, lists the locks; `lock` alone needs no root, as it only reads. */
 function cmdLock(argv: string[], lock: boolean): void {
   const [addon, ...extra] = argv;
   if (extra.length || (!lock && !addon)) fatal(`usage: clp-addons ${lock ? "lock [<addon>]" : "unlock <addon>"}`);

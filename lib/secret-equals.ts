@@ -1,6 +1,5 @@
 // Comparing one secret with another, without telling the caller how much of it
-// was right. Its own module because both halves of the project need it: the
-// CSRF guard in the manager and the webhook token in the Git addon's action.
+// was right.
 
 import { timingSafeEqual } from "node:crypto";
 

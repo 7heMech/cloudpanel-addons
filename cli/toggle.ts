@@ -1,7 +1,3 @@
-// Enabling and disabling an addon, and the one-time platform provisioning an
-// install or a first enable needs. A toggle is not an install: it applies a
-// delta and keeps the addon's state.
-
 import { errorMessage } from "../lib/errors";
 import { enabledAddons, addonEnabled, phpGuardOptedOut } from "../addons/catalog";
 import { resolveAddon } from "./addons";
@@ -16,15 +12,10 @@ import {
 import { fatal, log, requireRoot } from "../lib/log";
 import { rmSync } from "node:fs";
 /**
- * Everything a first install has to put on the box, in the order it has to
- * happen: accounts and directories before files, files before units, units
- * before anything is started.
- *
- * Shared by `install` and by an `enable` that finds nothing provisioned. It is
- * deliberately not what a toggle runs -- re-creating the service user, probing
- * the auth helper are answers to "has this box
- * ever been set up", and asking that on every toggle is most of what made a
- * toggle slow.
+ * Accounts and directories before files, files before units, units before
+ * anything is started. A toggle on a provisioned box does not run this:
+ * re-creating the service user and probing the auth helper are most of what
+ * would make a toggle slow.
  */
 export function bootstrapProvision(specs: AddonSpec[]): void {
   ensureServiceUser();
@@ -42,14 +33,6 @@ export function bootstrapProvision(specs: AddonSpec[]): void {
   startUnits();
 }
 
-/**
- * Turn an addon that already ships in this binary on.
- *
- * This is `cmdInstall` with the download removed, because there is nothing to
- * download: `ADDONS` is compiled in and so are its injection targets. What is
- * left -- the config file, the state directory, the Twig anchors, the units --
- * is the whole of what "installed" ever meant for an individual addon.
- */
 export async function applyEnable(name: string): Promise<void> {
   requireRoot("enable");
   const spec = resolveAddon(name);
@@ -76,8 +59,6 @@ async function enableAddon(spec: AddonSpec): Promise<void> {
   writeConfig(spec, true);
   ensureDirs(specs);
   const changes = installUnits(specs);
-  // An addon with no injection targets changes no panel markup, so there is
-  // nothing to patch and nothing to purge. cloudflare-ips is the current case.
   if (spec.targets.length > 0 && !reconcileAnchors(false)) {
     fatal("could not safely patch the required CloudPanel templates");
   }
@@ -87,13 +68,6 @@ async function enableAddon(spec: AddonSpec): Promise<void> {
   log.ok(`${spec.name} enabled`);
 }
 
-/**
- * Turn one addon off and leave everything it made behind.
- *
- * Disabling withdraws the addon from the panel -- its config, its units'
- * knowledge of it, its Twig markup -- and keeps its state directory, so
- * enabling it again returns the same instances.
- */
 export function applyDisable(name: string): void {
   requireRoot("disable");
   const spec = resolveAddon(name);
@@ -128,10 +102,6 @@ function disableAddon(spec: AddonSpec): void {
   }
   // Even with no addon left the binary stays, and repair keeps the guard.
   settlePhpGuard({ optedOut: phpGuardOptedOut() });
-  // Reconciled after the config file is gone, so the injection set is read
-  // from the state that now exists rather than described by an `exclude`
-  // argument. The Twig cache is purged by the reconciler when the markup
-  // actually changes; disable used to purge it a second time unconditionally.
   if (spec.targets.length > 0) reconcileAnchors(false);
   if (spec.panelBlock && !spec.panelBlock.reconcile(false, false)) fatal("could not safely change CloudPanel's Nginx settings");
   ensureDirs(remaining);

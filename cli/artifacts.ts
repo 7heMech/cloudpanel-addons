@@ -1,6 +1,3 @@
-// The files an update replaces on disk, and the copy it keeps aside so a
-// failed one can be undone. An update is the only thing that writes here.
-
 import { writeFileAtomic } from "../lib/atomic-write";
 import {
   ARTIFACT_MANIFEST_PATH, AUTH_SERVICE_UNIT, AUTH_SOCKET_UNIT, CLI_ARTIFACT, CLI_BIN, LIBEXEC_DIR,
@@ -39,7 +36,6 @@ export function secureRegularFile(path: string, executable = false): boolean {
   }
 }
 
-/** The release the manifest records as installed, or null when nothing has been. */
 export function installedTag(): string | null {
   try {
     const tag = (JSON.parse(readFileSync(ARTIFACT_MANIFEST_PATH, "utf-8")) as { tag?: unknown }).tag;
@@ -84,7 +80,6 @@ function writeArtifactManifest(tag: string, artifacts: FetchedArtifact[]): void 
   tryRun("chown", ["root:root", ARTIFACT_MANIFEST_PATH]);
 }
 
-/** Where the binary this update replaces is kept, in case it has to come back. */
 const PREVIOUS_BIN = `${LIBEXEC_DIR}/clp-addons.previous`;
 const PREVIOUS_MANIFEST = `${LIBEXEC_DIR}/artifacts.previous.json`;
 
@@ -98,11 +93,9 @@ function hardLinkOrCopy(from: string, to: string): void {
 }
 
 /**
- * Keep the running binary and its manifest where a failed update can put them
- * back. Hard-linked rather than copied: it costs nothing and cannot be a
- * partial file. The manifest goes with it because `currentArtifactsMatch`
- * reads it -- restoring one without the other leaves the box claiming a
- * version it is not running.
+ * Hard-linked rather than copied: it costs nothing and cannot be a partial
+ * file. Restoring the binary without its manifest would leave the box claiming
+ * a version it is not running.
  */
 export function keepPreviousArtifacts(): void {
   rmSync(PREVIOUS_BIN, { force: true });
@@ -169,8 +162,6 @@ export function installArtifacts(artifacts: FetchedArtifact[], tag: string): voi
 }
 
 /**
- * Put the box back on the binary it was running.
- *
  * The parent is the old binary and it outlives the child it handed off to, so
  * it is the only process still able to act when the new one will not start,
  * fails part-way through provisioning, or leaves the services down.
@@ -185,9 +176,6 @@ export function rollbackUpdate(previousVersion: string, reason: string): never {
   }
   const restart = tryRun("systemctl", ["restart", AUTH_SOCKET_UNIT, AUTH_SERVICE_UNIT, MANAGER_UNIT]);
   if (!restart.ok) log.err(`the background services did not restart: ${restart.out}`);
-  // Only the two artifacts come back. Whatever the update had already written
-  // -- config files, units, templates, Nginx fragments -- is the new version's
-  // and stays, which is what repair exists to converge.
   fatal(
     `rolled the binary and its manifest back; the box is running clp-addons ${previousVersion}. ` +
     `Run 'clp-addons repair' to reconcile anything the update had already written`,

@@ -1,4 +1,3 @@
-// Names for the Linux account behind a site.
 import { createHash } from "node:crypto";
 import { Database } from "bun:sqlite";
 import { parse as parseDomain } from "tldts";

@@ -1,5 +1,3 @@
-// `clp-addons update`, and the rollback a failed one runs.
-
 import { errorMessage } from "../lib/errors";
 import { rmSync } from "node:fs";
 import { enabledAddons, phpGuardOptedOut } from "../addons/catalog";
@@ -26,10 +24,6 @@ import { fatal, log, requireRoot } from "../lib/log";
 import { parseFlags } from "./flags";
 import { run, tryRun } from "../lib/command";
 import { compareSemver, isPrerelease } from "../lib/semver";
-/**
- * Reconcile all provisioning from the binary that owns the definitions.
- * Services restart last, after every generated file reflects this process.
- */
 function finalizeUpdate(beforeManagerRestart?: () => void): AddonSpec[] {
   // A failure from here on makes the binary that started this update restore
   // itself, and an earlier binary knows the renamed addons only by their old
@@ -68,10 +62,7 @@ type UpdateOptions = {
   onProgress?: OnProgress;
 };
 
-/**
- * Updates release artifacts when necessary. If the binary moves, re-run this
- * same command as the installed copy and let only that process provision.
- */
+/** If the binary moves, the installed copy re-runs this command and only that process provisions. */
 export async function cmdUpdate(argv: string[], options: UpdateOptions = {}): Promise<void> {
   requireRoot("update");
   return withOperationLock("update", () => applyUpdate(argv, options));
@@ -119,18 +110,11 @@ async function applyUpdate(argv: string[], options: UpdateOptions): Promise<void
         "--no-self-update",
         `--updated-from=${current}`,
       ];
-      // Keeping the running binary aside happens before the boundary, because
-      // nothing has been replaced yet: there is no rollback to report, only an
-      // update that never started.
       try {
         keepPreviousArtifacts();
       } catch (error) {
         fatal(`could not keep the running binary aside, so the update was not started: ${errorMessage(error)}`);
       }
-      // Everything from the replacement onwards is one boundary: the binary
-      // and its manifest are written here, so a failure between them is as
-      // much a half-finished update as a handoff that will not run. The
-      // rollback itself is outside it, so its own failure is not retried.
       let failure: string | null = null;
       const restoreNewsSince = keepNewsSince();
       try {
