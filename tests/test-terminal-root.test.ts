@@ -258,8 +258,9 @@ test("the page's button opens a root shell only for an allowed administrator, an
   expect(refused).toContain('data-refusal="A root terminal needs 2FA: turn it on in Account → Security."');
   expect(refused).not.toContain("clpOpenTerminal(");
   const other = dashboardView([], { granted: false, problem: null }, "bob");
-  expect(other).toContain("clp-addons terminal root allow bob on the server.");
-  expect(other).toContain(`onclick="notify(this.dataset.refusal, 'error', { text: 'Account → Security', href: '/security' })"`);
+  expect(other).toContain('<pre class="root-allow-command" id="root-allow-command">clp-addons terminal root allow bob</pre>');
+  expect(other).toContain("copyText('root-allow-command', 'Command')");
+  expect(other).not.toContain("clpOpenTerminal(");
   const popup = popupPage(null);
   expect(popup).toContain('data-domain=""');
   expect(popup).toContain('<span class="badge tone-bad">root</span>');

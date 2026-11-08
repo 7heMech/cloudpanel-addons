@@ -74,26 +74,6 @@ async function generateGitKey(domain, replace) {
   }
 }
 
-function copyGitBlock(id, what) {
-  const block = CLP_ROOT.getElementById(id);
-  if (!block) return;
-  const text = block.textContent || '';
-  if (navigator.clipboard && navigator.clipboard.writeText) {
-    navigator.clipboard.writeText(text).then(
-      function () { notify(what + ' copied.', 'ok'); },
-      function () { notify('Select the ' + what.toLowerCase() + ' and copy it.', 'warn'); }
-    );
-    return;
-  }
-  // No clipboard API: select it so one keystroke finishes the job.
-  const selection = window.getSelection();
-  const range = document.createRange();
-  range.selectNodeContents(block);
-  selection.removeAllRanges();
-  selection.addRange(range);
-  notify('Press Ctrl+C to copy the selection.', 'warn');
-}
-
 // A mode, not an action: no confirmation either way, and the switch goes back
 // where it was if the change did not take.
 async function setGitWebhook(domain, on) {

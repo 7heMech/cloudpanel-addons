@@ -48,7 +48,8 @@ when the row scrolls, with a divider so it does not read as another page. The
 addons' pages always draw that row on a phone; CloudPanel's draw it only with
 Panel Tweaks' phone layout, so without it the control is a Root terminal item
 in the account menu, above Logout. The others get none of these; their button
-shows a notice naming the command, so they know whom to ask. The controls stay
+opens a dialog with the command that allows them and a Copy button, and one
+whose grant does not hold now gets a notice saying why. The controls stay
 hidden until the page has asked
 `/addons/terminal/api/root-access`. Every panel page asks, so the manager
 keeps root's answer a minute per user instead of starting a root process for

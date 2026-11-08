@@ -47,18 +47,30 @@ function siteRow(site: SanitizedSite): string {
 type RootAccess = { granted: boolean; problem: string | null };
 
 /**
- * Every administrator gets the button. One root has not allowed, or whose
- * grant does not hold now, is told why in the page's notice instead of getting
- * a window that fails.
+ * Every administrator gets the button. One root has not allowed is shown the
+ * command that allows them, and one whose grant does not hold now is told why,
+ * instead of getting a window that fails.
  */
 function rootButton(root: RootAccess, user: string): string {
-  const refusal = root.problem
-    ?? (root.granted ? null : `Ask root to run clp-addons terminal root allow ${user} on the server.`);
-  const action = refusal === null
-    ? "clpOpenTerminal(CLP_BASE, '', event.shiftKey)"
-    : "notify(this.dataset.refusal, 'error', { text: 'Account → Security', href: '/security' })";
+  if (root.problem !== null) {
+    return `
+      <button class="btn" type="button" data-refusal="${esc(root.problem)}" onclick="notify(this.dataset.refusal, 'error', { text: 'Account → Security', href: '/security' })">Root terminal</button>`;
+  }
+  if (root.granted) {
+    return `
+      <button class="btn" type="button" onclick="clpOpenTerminal(CLP_BASE, '', event.shiftKey)">Root terminal</button>`;
+  }
   return `
-      <button class="btn" type="button"${refusal === null ? "" : ` data-refusal="${esc(refusal)}"`} onclick="${action}">Root terminal</button>`;
+      <button class="btn" type="button" onclick="CLP_ROOT.getElementById('root-allow-dialog').showModal()">Root terminal</button>
+      <dialog id="root-allow-dialog" aria-labelledby="root-allow-title">
+        <div class="dialog-header"><h2 id="root-allow-title">Ask root for access</h2></div>
+        <p>Root allows you a root terminal by running this on the server:</p>
+        <pre class="root-allow-command" id="root-allow-command">clp-addons terminal root allow ${esc(user)}</pre>
+        <form method="dialog" class="actions dialog-actions">
+          <button class="btn" type="submit">Close</button>
+          <button class="btn btn-primary" type="button" onclick="copyText('root-allow-command', 'Command')">Copy command</button>
+        </form>
+      </dialog>`;
 }
 
 export function dashboardView(sites: SanitizedSite[], root: RootAccess = { granted: false, problem: null }, user = ""): string {

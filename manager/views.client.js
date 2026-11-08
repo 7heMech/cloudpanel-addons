@@ -187,7 +187,7 @@ function readAllNews(button) {
     if (!response.ok) throw new Error('not marked');
     CLP_ROOT.querySelectorAll('[data-news]').forEach((row) => {
       row.removeAttribute('data-news');
-      row.querySelectorAll('.addon-about h3 .badge, .addon-changed').forEach((node) => node.remove());
+      row.querySelectorAll('.addon-news, .addon-changed').forEach((node) => node.remove());
     });
     button.remove();
   }).catch(() => { button.disabled = false; });

@@ -2013,7 +2013,10 @@ const server = Bun.serve({
         available: ["cloudflare-ips", "dns", "instatic", "stager", "maintenance", "resource-limits", "git", "panel-tweaks", "system-tweaks", "wp-tools", "smtp", "terminal", "security-keys"].filter((name) => !enabled.includes(name)),
         job: previewJob,
         csrf: "preview-csrf-token",
-        version: "2.0.0",
+        // ?news shows what changed since 2.0.0, and ?locked root's lock on System Tweaks.
+        version: url.searchParams.has("news") ? "2.1.0-rc.4" : "2.0.0",
+        since: url.searchParams.has("news") ? "2.0.0" : undefined,
+        locks: (addon) => (addon === "system-tweaks" ? previewLock(url) : "unlocked"),
         // ?holds shows the notice a CloudPanel upgrade leaves when a page it changed no longer fits.
         holds: url.searchParams.has("holds") ? [
           {
@@ -2082,6 +2085,8 @@ const server = Bun.serve({
       html = terminalLayout("Terminal", terminalDashboardView(empty ? [] : url.searchParams.has("many")
         ? [...terminalPreviewSites, ...Array.from({ length: 14 }, (_, i) => ({ domain: `site${i + 1}.example.net`, user: `site${i + 1}`, type: "php" }))]
         : terminalPreviewSites, root, "admin"), notice);
+      // ?allow opens the dialog an administrator root has not allowed gets.
+      if (url.searchParams.has("allow")) html = html.replace("</body>", "<script>addEventListener('DOMContentLoaded',function(){document.getElementById('root-allow-dialog').showModal()})</script></body>");
     } else if (path === "/addons/wp-tools/" || path === "/addons/wp-tools") {
       wpToolsPreview = {
         sites: wpToolsPreviewSites(url),

@@ -458,6 +458,12 @@ describe("the manager index", () => {
     expect(html).toContain(`disableAddon('instatic', 'Instatic CMS', this)`);
   });
 
+  test("marks an addon root has locked in its heading, in place of Disable", async () => {
+    const html = await render(["system-tweaks"], null, { locks: () => "locked" });
+    expect(html).toMatch(/<h3>[^]*>Locked by root<\/span><\/h3>/);
+    expect(html).not.toContain("disableAddon('system-tweaks'");
+  });
+
   test("shows new and changed notices declared since the box's previous release", async () => {
     for (const version of ["2.0.0-rc.1", "2.0.0-rc.4", "2.0.0"]) {
       const html = await render(["dns"], null, { available: ["stager"], version, since: "1.5.2" });
@@ -465,7 +471,7 @@ describe("the manager index", () => {
       expect(html.match(/>Changed</g)).toHaveLength(1);
       expect(html).toContain('data-news="dns@2.0.0-rc.1"');
       expect(html).toContain('data-news="stager@2.0.0-rc.1"');
-      expect(html).toContain('<p class="addon-changed">');
+      expect(html).toContain('<ul class="addon-changed">');
       expect(html).toContain("readAllNews(this)");
     }
     // A box that already ran the release, or was installed fresh on a later one, sees none, opened or not.
@@ -474,7 +480,7 @@ describe("the manager index", () => {
       expect(updated).not.toContain(">New<");
       expect(updated).not.toContain(">Changed<");
       expect(updated).not.toContain('data-news="');
-      expect(updated).not.toContain('<p class="addon-changed">');
+      expect(updated).not.toContain('<ul class="addon-changed">');
       expect(updated).not.toContain("readAllNews(this)");
     }
   });

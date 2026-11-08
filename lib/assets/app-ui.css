@@ -114,6 +114,7 @@ html.dark #theme-switch .moon { display: none; }
 /* A phone has the root shell control at the end of the navigation row instead
    of in the header row, which has no room for a fourth tool beside the logo. */
 .clp-addon-primary-nav > .clp-root-shell-nav { display: none; }
+.clp-root-shell-nav:not(:hover) > .clp-root-shell-mark { color: var(--header-icon); }
 @media (max-width: 760px) {
   #clp-root-shell { display: none; }
   /* Pinned to the end and drawn over the links, so a row that scrolls keeps it
