@@ -66,9 +66,10 @@ function withState<T>(user: string, uid: number, now: number, storage: typeof DE
  * CloudPanel keeps no record of the code it took at sign-in, so a phishing
  * proxy holding the session holds that code too. CloudPanel takes a code up
  * to two steps either side of its clock, so every code the session could have
- * signed in with is from no later than two steps after `signedIn`, and only
- * a later one counts here. A code that matches a step at or before `floor`
- * is not a guess, and spends nothing.
+ * signed in with is from no later than two steps after the one `signedIn`
+ * falls in, and only a later one counts here. A code that matches one of those steps, or
+ * one at or before `used`, the last step that succeeded, is not a guess, and
+ * spends nothing.
  */
 function verifyCode(panelDb: string, user: string, code: string, used: number, signedIn: number, now: number): number {
   if (!/^\d{6}$/.test(code)) failAction("Enter a six-digit authenticator code.");

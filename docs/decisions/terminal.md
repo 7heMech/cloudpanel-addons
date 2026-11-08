@@ -202,8 +202,8 @@ holding its session can spend it and keep its owner out; root ends that with
 `clp-addons terminal root allow <user>` (or `deny`), which clears the account's
 verification state. Successes, codes that are not six digits, codes refused for
 their step (below) and errors on root's side spend nothing.
-Codes use SHA-1 TOTP with thirty-second steps and one step of clock tolerance,
-and a step can succeed only once. CloudPanel keeps no record of the code it
+Codes use SHA-1 TOTP with thirty-second steps. Root's check allows one step of
+clock tolerance either side, and a step can succeed only once. CloudPanel keeps no record of the code it
 took at sign-in, and stamps the session when the password is accepted rather
 than when the code is (measured on 2.5.4-3), so neither tells a relayed
 sign-in code apart, and a phishing proxy holding the session holds that code.
@@ -211,8 +211,8 @@ The gateway, which every panel page asks within moments of loading, therefore
 remembers when it first saw each signed-in session, keyed by the session's
 digest and CloudPanel's sign-in stamp, and tells a session verb's worker in
 `CLP_ADDONS_SESSION_SEEN`. CloudPanel takes a code up to two steps either side
-of its clock, so the sign-in code is from no later than two steps after that
-sighting, and only a code from a later step counts. The code the app shows
+of its clock, so the sign-in code is from no later than two steps after the
+sighting's step, and only a code from a step after that counts. The code the app shows
 works at once, except in the minute and a half after signing in, when the
 prompt asks for the next one. The memory is the gateway's alone: after it
 restarts, a session's next sighting stands in, which is later and so only
