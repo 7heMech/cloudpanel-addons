@@ -649,13 +649,16 @@ test("without --version an update never moves to an older version than the one i
   expect(calls).toContain("log.ok:clp-addons 1.2.3 is up to date; the newest published release is 1.2.2");
 });
 
-test("an update refuses a release that needs a newer CloudPanel before downloading it", async () => {
+test("an update to a release whose minimum CloudPanel is newer than the installed one warns and installs", async () => {
   releaseRange = '{"min":"2.6.0","max":"2.6.2"}';
   resolvedReleaseTag = "v1.3.0";
-  await expect(cmdUpdate([])).rejects.toThrow("clp-addons 1.3.0 needs CloudPanel 2.6.0 or newer, and this server runs 2.5.4-3+clp-bookworm");
+  await cmdUpdate([]);
   expect(calls).toContain("fetchVerified:cloudpanel.json");
-  expect(calls).not.toContain("fetchVerified");
-  expect(calls.some((call) => call.startsWith(`run:${CLI_BIN} update`))).toBe(false);
+  expect(calls).toContain(
+    "log.warn:clp-addons 1.3.0 supports CloudPanel 2.6.0 to 2.6.2; this server runs 2.5.4-3+clp-bookworm, so a CloudPanel page the addons were not checked on stays unpatched. Updating CloudPanel with clp-update is recommended",
+  );
+  expect(calls).toContain(`verifyAttestation:cloudpanel.json,${CLI_ARTIFACT}`);
+  expect(calls).toContain(handoffCall("v1.3.0"));
 });
 
 test("an update to a release checked only against older CloudPanel warns and installs, attesting the range with the binary", async () => {
@@ -683,10 +686,12 @@ test("a release without a range, from before ranges, updates as before", async (
   expect(calls).toContain(`verifyAttestation:${CLI_ARTIFACT}`);
 });
 
-test("a malformed range is refused", async () => {
+test("a malformed range only warns, and the update goes on", async () => {
   releaseRange = "{}";
   resolvedReleaseTag = "v1.3.0";
-  await expect(cmdUpdate([])).rejects.toThrow("cloudpanel.json in release v1.3.0 is not a CloudPanel version range");
+  await cmdUpdate([]);
+  expect(calls).toContain("log.warn:cloudpanel.json in release v1.3.0 is not a CloudPanel version range; updating without checking it");
+  expect(calls).toContain(handoffCall("v1.3.0"));
 });
 
 test("install warns on a CloudPanel outside the release's range but installs", async () => {

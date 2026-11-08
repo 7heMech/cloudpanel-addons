@@ -50,9 +50,6 @@ still fits it. It never changes System Tweaks' pinned fixes.
 Each release states which CloudPanel versions it supports; `clp-addons status`
 shows the range next to the installed version.
 
-- `clp-addons update` refuses a release that needs a newer CloudPanel than the
-  one installed. Update CloudPanel first with `clp-update`, then run
-  `clp-addons update` again.
-- On a CloudPanel newer than the release was checked against, installs and
-  updates go ahead with a warning. The checks above keep the addons off any
-  page that changed.
+- On a CloudPanel outside that range, installs and updates go ahead with a
+  warning; on an older one it suggests updating CloudPanel with `clp-update`.
+  The checks above keep the addons off any page that changed.

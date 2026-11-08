@@ -61,12 +61,11 @@ function finalizeUpdate(beforeManagerRestart?: () => void): AddonSpec[] {
 }
 
 /**
- * Refuses a release whose oldest supported CloudPanel is newer than the one
- * installed, before its binary is downloaded; one newer than it was checked
- * against only warns, since its fixes are wanted there too and the template
- * checks hold back any page that changed. The range is checksummed here and
- * attested with the binary, so a refusal is the only thing it can cause
- * unverified. A release from before ranges has none to check.
+ * Warns when the installed CloudPanel is outside the release's range, and
+ * never refuses: the release's fixes are wanted on any CloudPanel, and the
+ * template checks hold back any page that changed. A malformed range only
+ * warns too. The range is checksummed here and attested with the binary, and
+ * a release from before ranges has none to check.
  */
 async function checkPanelRange(
   release: Awaited<ReturnType<typeof resolveRelease>>,
@@ -77,11 +76,12 @@ async function checkPanelRange(
   const installed = panelVersion();
   const fetched = await fetchVerified(release, [CLOUDPANEL_RANGE_ASSET], options.onStep, options.onProgress);
   const range = parseRange(fetched[0]!.bytes.toString("utf-8"));
-  if (!range) fatal(`${CLOUDPANEL_RANGE_ASSET} in release ${release.tag} is not a CloudPanel version range`);
-  const fit = rangeFit(installed, range);
-  if (fit === "below") {
-    fatal(`clp-addons ${target} needs CloudPanel ${range.min} or newer, and this server runs ${installed}; update CloudPanel with clp-update, then run clp-addons update again`);
+  if (!range) {
+    log.warn(`${CLOUDPANEL_RANGE_ASSET} in release ${release.tag} is not a CloudPanel version range; updating without checking it`);
+    return fetched;
   }
+  const fit = rangeFit(installed, range);
+  if (fit === "below") log.warn(`clp-addons ${target} supports CloudPanel ${describeRange(range)}; this server runs ${installed}, so a CloudPanel page the addons were not checked on stays unpatched. Updating CloudPanel with clp-update is recommended`);
   if (fit === "above") log.warn(`clp-addons ${target} was checked against CloudPanel ${describeRange(range)}; this server runs ${installed}, so a CloudPanel page that changed stays unpatched until a release supports it`);
   if (fit === "unknown") log.warn(`could not read the CloudPanel version; clp-addons ${target} supports CloudPanel ${describeRange(range)}`);
   return fetched;

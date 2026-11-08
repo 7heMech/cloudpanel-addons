@@ -20,6 +20,6 @@ await Bun.build({
 });
 
 // The CloudPanel versions this release supports, published beside the binary
-// so `clp-addons update` can refuse a release before downloading it.
+// so `clp-addons update` can warn about a release before downloading it.
 mkdirSync("dist", { recursive: true });
 writeFileSync(`dist/${CLOUDPANEL_RANGE_ASSET}`, `${JSON.stringify(CLOUDPANEL_RANGE)}\n`);

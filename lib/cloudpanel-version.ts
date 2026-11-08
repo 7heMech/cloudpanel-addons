@@ -6,10 +6,10 @@
 import { execFileSync } from "node:child_process";
 
 /**
- * Upstream versions, compared without the Debian revision: `min` is the oldest
- * CloudPanel this release runs on and `max` the newest it was checked against.
- * Raise `max` once a release is checked on a newer CloudPanel; raise `min`
- * only when a release needs something an older one lacks.
+ * Upstream versions, compared without the Debian revision: the oldest and the
+ * newest CloudPanel this release was checked against. Raise `max` once a
+ * release is checked on a newer CloudPanel. Outside the range, install and
+ * update only warn.
  */
 export const CLOUDPANEL_RANGE: CloudPanelRange = { min: "2.5.4", max: "2.5.4" };
 
