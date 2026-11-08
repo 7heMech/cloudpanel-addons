@@ -115,7 +115,7 @@ export interface SystemTweaksState {
   motd: MotdStatus & { enabled: boolean };
 }
 
-export interface SystemTweaksPaths {
+interface SystemTweaksPaths {
   settingsFile: string;
   lockFile: string;
   rootUid: number;

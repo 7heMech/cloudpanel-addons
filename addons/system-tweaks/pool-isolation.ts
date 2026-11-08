@@ -226,7 +226,7 @@ function unitReloadLines(run: (command: string, args: string[]) => CommandResult
  * lines and after them. A unit whose reload lines cannot be read gets the sync
  * after its reload only.
  */
-export function poolDropIn(bin: string, reload: string[] | null): string {
+function poolDropIn(bin: string, reload: string[] | null): string {
   return [
     "# Managed by clp-addons System Tweaks: refreshes which accounts reach each PHP pool's port.",
     "[Service]",

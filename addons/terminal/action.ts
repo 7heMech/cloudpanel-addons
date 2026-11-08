@@ -203,7 +203,7 @@ function rootTarget(panelUser: string, paths: TerminalActionPaths, session: stri
 }
 
 /** The one command a terminal runs as root. Fixed; only the user varies. */
-export function runuserCommand(paths: TerminalActionPaths, user: string): string[] {
+function runuserCommand(paths: TerminalActionPaths, user: string): string[] {
   return [
     paths.runuser,
     "--login",

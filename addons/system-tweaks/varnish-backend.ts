@@ -339,7 +339,7 @@ export function cloudpanelLogrotate(user: string): string {
  * user, so a link it puts there gets only its own rights, and nginx's logs
  * rotated as root in root's directory. The reload still runs as root.
  */
-export function addonLogrotate(user: string, logDir: string): string {
+function addonLogrotate(user: string, logDir: string): string {
   const options = `    daily
     missingok
     rotate 7

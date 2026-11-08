@@ -1082,7 +1082,7 @@ export function carryVhost(ctx: RunContext, type: string, application: string): 
   return { ok: true, reason: "" };
 }
 
-export function jobStateFor(paths: StagerActionPaths, target: string): string {
+function jobStateFor(paths: StagerActionPaths, target: string): string {
   let entries: string[];
   try {
     entries = readdirSync(paths.jobsDir).sort().reverse();

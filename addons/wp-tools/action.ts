@@ -78,7 +78,7 @@ const SECRET_DIR = `${MU_PLUGINS}/clp-addons`;
 const SECRET_FILE = `${SECRET_DIR}/token.php`;
 
 /** The POST field the loader reads the secret from. */
-export const WP_LOGIN_FIELD = "clp_addons_login";
+const WP_LOGIN_FIELD = "clp_addons_login";
 /** How long a minted sign-in is good for. One use, and a minute to make it. */
 const WP_LOGIN_TTL_SECONDS = 60;
 

@@ -31,7 +31,7 @@ import { runSyncSites } from "./new-sites";
  * checksum and provenance verification and installer, so the panel's button
  * has no download path of its own to get right.
  */
-export const MANAGER_OPS: ManagerOps = {
+const MANAGER_OPS: ManagerOps = {
   enable: applyEnable,
   disable: applyDisable,
   update: (beforeManagerRestart, onStep, onProgress) => cmdUpdate([], { beforeManagerRestart, onStep, onProgress }),
