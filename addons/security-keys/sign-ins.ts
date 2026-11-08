@@ -16,7 +16,7 @@ export const TOKEN_TTL_SECONDS = 60;
 const KEEP_SECONDS = 30 * 24 * 3600;
 const KEEP_PER_USER = 20;
 
-export interface SignIn {
+interface SignIn {
   user: string;
   /** The credential id of the key that signed in. */
   key: string;
@@ -47,12 +47,12 @@ export function mfaMark(panelDb: string, user: string): string | null {
   }
 }
 
-export function signInsPath(stateDir: string): string {
+function signInsPath(stateDir: string): string {
   return join(stateDir, "sign-ins.json");
 }
 
 /** The recorded sign-ins, or none when the file is missing, not root's alone, or unreadable. */
-export function readSignIns(stateDir: string, stateUid = 0): SignIn[] {
+function readSignIns(stateDir: string, stateUid = 0): SignIn[] {
   let fd: number;
   try {
     fd = openSync(signInsPath(stateDir), constants.O_RDONLY | constants.O_NOFOLLOW | constants.O_NONBLOCK);

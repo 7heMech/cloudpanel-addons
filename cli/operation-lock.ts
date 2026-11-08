@@ -17,7 +17,7 @@ import { fatal } from "../lib/log";
  */
 
 /** Generous: an enable that installs Docker runs for minutes. */
-export const OPERATION_TIMEOUT_SECONDS = 900;
+const OPERATION_TIMEOUT_SECONDS = 900;
 
 /**
  * Marks a re-exec as running inside its parent's lock.
@@ -30,7 +30,7 @@ export const OPERATION_LOCK_ENV = "CLP_ADDONS_IN_OPERATION";
 
 let held: string | null = process.env[OPERATION_LOCK_ENV] || null;
 
-export interface OperationLockOptions {
+interface OperationLockOptions {
   timeoutSeconds?: number;
   lockDir?: string;
 }

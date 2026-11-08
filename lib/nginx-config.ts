@@ -1,4 +1,4 @@
-export interface NginxDirective {
+interface NginxDirective {
   words: string[];
   start: number;
   end: number;

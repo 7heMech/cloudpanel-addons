@@ -36,7 +36,7 @@ function phpGuardStatus(): string {
   return statusValue(`missing on ${unguarded.join(", ")}; run repair`, false);
 }
 
-export function anchorStatus(): string {
+function anchorStatus(): string {
   const statuses = installedInjections().map((injection) => inspect(injection));
   if (statuses.length === 0) return "Not configured";
   const required = statuses.filter((status) => {

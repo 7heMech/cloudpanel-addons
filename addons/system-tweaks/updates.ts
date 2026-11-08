@@ -15,7 +15,7 @@ import { commandOutput } from "../../lib/command";
 import { writeFileAtomic, writeOrRemove } from "../../lib/atomic-write";
 import { aptInstall, installedVersion, systemRun, type Run } from "./packages";
 
-export const CLOUDPANEL_ORIGIN = "packages-v1.cloudpanel.io";
+const CLOUDPANEL_ORIGIN = "packages-v1.cloudpanel.io";
 const MARKER = "// Managed by clp-addons System Tweaks. Switching automatic updates off there removes this file.";
 const TIMERS = ["apt-daily.timer", "apt-daily-upgrade.timer"];
 
@@ -47,7 +47,7 @@ export function validRebootTime(value: unknown): value is string {
   return value === "now" || (typeof value === "string" && /^(?:[01]\d|2[0-3]):[0-5]\d$/.test(value));
 }
 
-export interface UpdatesPaths {
+interface UpdatesPaths {
   aptConfDir: string;
   aptConf: string;
   dropIn: string;
@@ -56,7 +56,7 @@ export interface UpdatesPaths {
   osRelease: string;
 }
 
-export const DEFAULT_UPDATES_PATHS: UpdatesPaths = {
+const DEFAULT_UPDATES_PATHS: UpdatesPaths = {
   aptConfDir: "/etc/apt/apt.conf.d",
   aptConf: "/etc/apt/apt.conf",
   dropIn: "/etc/apt/apt.conf.d/52clp-addons-unattended-upgrades",
@@ -155,7 +155,7 @@ export function allowedPatterns(config: Map<string, string[]>): string[] {
   return [...legacy, ...(config.get("Unattended-Upgrade::Origins-Pattern") ?? [])];
 }
 
-export interface AptSource {
+interface AptSource {
   origin: string;
   label: string;
   archive: string;
@@ -216,7 +216,7 @@ const MATCH_FIELDS: Record<string, keyof AptSource> = {
 };
 
 /** unattended-upgrades' `match_whitelist_string`, with its `${distro_id}` and `${distro_codename}`. */
-export function matchesPattern(pattern: string, source: AptSource, distro: { id: string; codename: string }): boolean {
+function matchesPattern(pattern: string, source: AptSource, distro: { id: string; codename: string }): boolean {
   const text = pattern.trim();
   if (!text) return false;
   for (const token of text.replace(/\\,/g, "%2C").split(",")) {
@@ -299,7 +299,7 @@ function distroOf(ctx: Context): { id: string; codename: string } {
 }
 
 /** The pattern for the distro's own security pocket, which Debian and Ubuntu label differently. */
-export function securityPattern(distroId: string): string | null {
+function securityPattern(distroId: string): string | null {
   if (distroId === "Debian") return "origin=Debian,codename=${distro_codename}-security,label=Debian-Security";
   if (distroId === "Ubuntu") return "origin=Ubuntu,archive=${distro_codename}-security";
   return null;

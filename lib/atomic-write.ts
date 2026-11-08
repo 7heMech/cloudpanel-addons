@@ -24,7 +24,7 @@ import { dirname } from "node:path";
  * default that is wrong somewhere. Ownership is passed explicitly or not at
  * all; the caller checks the target first if it cares.
  */
-export interface AtomicWriteOptions {
+interface AtomicWriteOptions {
   /** Mode of the finished file. Applied before it becomes visible. */
   mode: number;
   /** Ownership of the finished file, when the caller must not inherit its own. */

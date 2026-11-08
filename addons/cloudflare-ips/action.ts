@@ -20,7 +20,7 @@ const POLICY_VERSION = 1;
 const MAX_SITES_PER_REQUEST = 10_000;
 const CLOUDFLARE_INCLUDE = "include /etc/nginx/cloudflare/ips;";
 
-export type CloudflareVerb = keyof typeof CLOUDFLARE_IPS_VERBS;
+type CloudflareVerb = keyof typeof CLOUDFLARE_IPS_VERBS;
 
 export interface CloudflareActionPaths {
   panelDb: string;
@@ -33,7 +33,7 @@ export interface CloudflareActionPaths {
   stateUid: number;
 }
 
-export interface CloudflareActionOptions {
+interface CloudflareActionOptions {
   paths?: Partial<CloudflareActionPaths>;
   input?: string;
   emitReply?: boolean;

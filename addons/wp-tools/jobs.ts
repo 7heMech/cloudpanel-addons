@@ -16,15 +16,15 @@ import type { WpProgress } from "./wp-cli";
  * verb records it, with the plan it validated and the uploads it claimed.
  */
 export const WP_START_TASKS = ["varnish-check", "varnish-install", "mainwp-check", "mainwp-connect", "mainwp-cleanup"] as const;
-export const WP_JOB_TASKS = [...WP_START_TASKS, "new-site-plugins"] as const;
+const WP_JOB_TASKS = [...WP_START_TASKS, "new-site-plugins"] as const;
 export type WpJobTask = (typeof WP_JOB_TASKS)[number];
-export type WpJobPolicy = "varnish" | "mainwp" | "plugins";
+type WpJobPolicy = "varnish" | "mainwp" | "plugins";
 
 /** More than any box has WordPress sites, and still a short argument. */
 export const MAX_JOB_DOMAINS = 2000;
 
 /** A job's runner unit is stopped after this long; the pass inside stops starting sites a little earlier. */
-export const JOB_RUNTIME_SECONDS = 3600;
+const JOB_RUNTIME_SECONDS = 3600;
 export const JOB_BUDGET_MS = (JOB_RUNTIME_SECONDS - 300) * 1000;
 
 export interface WpJobView {

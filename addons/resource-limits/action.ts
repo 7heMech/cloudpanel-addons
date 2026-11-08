@@ -39,11 +39,11 @@ import { isTrustedFile } from "../../lib/trusted-file";
 
 const POLICY_VERSION = 1;
 
-export type ResourceLimitsVerb = keyof typeof RESOURCE_LIMITS_VERBS;
+type ResourceLimitsVerb = keyof typeof RESOURCE_LIMITS_VERBS;
 
 /** The process manager modes php-fpm accepts. */
 export const PM_MODES = ["static", "dynamic", "ondemand"] as const;
-export type PmMode = (typeof PM_MODES)[number];
+type PmMode = (typeof PM_MODES)[number];
 
 /**
  * The directives this addon owns. Everything else in a pool file is either
@@ -314,7 +314,7 @@ const NAME_MAX = 40;
 const DESCRIPTION_MAX = 240;
 
 /** A stable category id from the name it was created with; see nameSlug. */
-export function categoryIdFor(name: string): string {
+function categoryIdFor(name: string): string {
   return nameSlug(name, "a category name", NAME_MAX);
 }
 
@@ -407,7 +407,7 @@ export function readProfileFromPool(content: string): PoolProfile {
  * `pm.start_servers` under `ondemand`, and a warning in the pool that serves a
  * customer's site is noise the operator did not ask for.
  */
-export function poolDirectives(profile: PoolProfile): Map<string, string> {
+function poolDirectives(profile: PoolProfile): Map<string, string> {
   const out = new Map<string, string>([
     ["pm", profile.pm],
     ["pm.max_children", String(profile.maxChildren)],
@@ -430,7 +430,7 @@ export function poolDirectives(profile: PoolProfile): Map<string, string> {
  * Whether two profiles write the same pool. A category keeps the spare-server
  * numbers it has under `ondemand`, which never reach the file.
  */
-export function sameDirectives(a: PoolProfile, b: PoolProfile): boolean {
+function sameDirectives(a: PoolProfile, b: PoolProfile): boolean {
   const left = poolDirectives(a);
   const right = poolDirectives(b);
   return left.size === right.size && [...left].every(([key, value]) => right.get(key) === value);
@@ -987,7 +987,7 @@ export interface ReconcileResult {
  * template, so a site in a category silently returns to `pm.max_children = 250`
  * the moment somebody moves it from 8.2 to 8.3.
  */
-export async function reconcileResourceLimits(
+async function reconcileResourceLimits(
   paths: ResourceLimitsActionPaths = DEFAULT_RESOURCE_LIMITS_ACTION_PATHS,
   command: (command: string, args: string[]) => CommandResult = runCommand,
 ): Promise<ReconcileResult> {

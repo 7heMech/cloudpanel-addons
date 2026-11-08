@@ -12,7 +12,7 @@ export async function runAddonRepairs(installed: AddonSpec[], options?: Record<s
 }
 
 /** How long one addon's new-site work runs before the next starts beside it. */
-export const NEW_SITE_HEAD_START_MS = 15_000;
+const NEW_SITE_HEAD_START_MS = 15_000;
 
 /**
  * What the new-site watcher runs: each installed addon's work for sites

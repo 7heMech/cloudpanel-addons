@@ -54,7 +54,7 @@ export interface MaintenanceActionPaths {
   includePath: string;
 }
 
-export interface MaintenanceActionOptions {
+interface MaintenanceActionOptions {
   paths?: Partial<MaintenanceActionPaths>;
   input?: string;
   emitReply?: boolean;
@@ -305,7 +305,7 @@ function savedStatus(paths: MaintenanceActionPaths, domain: string, uncovered: s
   };
 }
 
-export function maintenanceStatus(paths: MaintenanceActionPaths, domain: string): MaintenanceStatus {
+function maintenanceStatus(paths: MaintenanceActionPaths, domain: string): MaintenanceStatus {
   assertPanelSite(paths, domain);
   let uncovered: string | null = null;
   try {
@@ -407,7 +407,7 @@ export async function purgeVarnish(
  * active markup here makes the stored file safe if an operator serves it by
  * another path later.
  */
-export function sanitizeTemplate(input: string): string {
+function sanitizeTemplate(input: string): string {
   if (Buffer.byteLength(input, "utf8") > MAX_TEMPLATE_BYTES) {
     failAction(`the maintenance template may be at most ${MAX_TEMPLATE_BYTES} bytes`);
   }

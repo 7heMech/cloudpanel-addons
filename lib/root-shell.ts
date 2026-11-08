@@ -6,7 +6,7 @@ import ROOT_SHELL_JS from "./assets/root-shell.client.js" with { type: "text" };
 
 export { OPEN_JS };
 
-export const ROOT_SHELL_ICON = `<svg aria-hidden="true" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="2" y="4" width="20" height="16" rx="2"></rect><path d="m6 9 3 3-3 3"></path><path d="M12 15h6"></path></svg>`;
+const ROOT_SHELL_ICON = `<svg aria-hidden="true" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="2" y="4" width="20" height="16" rx="2"></rect><path d="m6 9 3 3-3 3"></path><path d="M12 15h6"></path></svg>`;
 
 /** Opens the root window, or with no script goes to it in this tab. */
 export function rootShellLink(base: string, attributes: string, label: string): string {

@@ -24,7 +24,7 @@ const MAX_PAGES = 20;
 const FALLBACK = ["0.0.18"];
 
 /** Where the list came from, because "update available" must not be claimed on a guess. */
-export type TagSource = "registry" | "cache" | "fallback";
+type TagSource = "registry" | "cache" | "fallback";
 
 export interface AvailableTags {
   tags: string[];

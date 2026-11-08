@@ -9,7 +9,7 @@ import { addonStateDir, UPDATE_MOTD_DIR } from "../../lib/paths";
 import { chmodSync, existsSync, lstatSync, readFileSync, rmSync } from "node:fs";
 import { writeFileAtomic } from "../../lib/atomic-write";
 
-export const DEFAULT_MOTD_PATHS = {
+const DEFAULT_MOTD_PATHS = {
   banner: `${UPDATE_MOTD_DIR}/10-cloudpanel`,
   script: `${UPDATE_MOTD_DIR}/10-clp-addons-server-info`,
   /** Present while the banner is off because this turned it off. */

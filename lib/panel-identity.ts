@@ -4,7 +4,7 @@ import { failAction } from "./action";
 import { PANEL_IDENTITY_PATH } from "./paths";
 import { HOSTNAME_RE, WILDCARD_HOSTNAME_RE, matchesEntire } from "./validate";
 
-export interface PanelIdentity {
+interface PanelIdentity {
   primary: string;
   aliases: string[];
 }
@@ -97,7 +97,7 @@ export function panelIdentityGuardForIdentity(domain: string, identity: PanelIde
   }
 }
 
-export function panelIdentityGuard(domain: string, identityPath = PANEL_IDENTITY_PATH): void {
+function panelIdentityGuard(domain: string, identityPath = PANEL_IDENTITY_PATH): void {
   const identity = readPanelIdentity(identityPath);
   if (!identity) failAction("the CloudPanel panel identity is missing or malformed");
   panelIdentityGuardForIdentity(domain, identity);

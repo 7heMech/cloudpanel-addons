@@ -39,7 +39,7 @@ import { isActiveJobState, isTerminalJobState, JOB_ID_RE, validateJobId } from "
 const MAX_FIELD_BYTES = 4096;
 
 /** How many trailing lines of a job log the UI is given. */
-export const JOB_LOG_TAIL_LINES = 400;
+const JOB_LOG_TAIL_LINES = 400;
 const JOB_LOG_CHUNK_BYTES = 64 * 1024;
 const MAX_JOB_LOG_READ_BYTES = 1024 * 1024; // Bounds memory used for a rendered log tail.
 
@@ -394,7 +394,7 @@ export function jobViews<T>(jobsDir: string, view: (dir: string, id: string) => 
   return listJobIds(jobsDir).map((id) => view(jobDir(jobsDir, id), id));
 }
 
-export function jobUnitName(addon: string, id: string): string {
+function jobUnitName(addon: string, id: string): string {
   return `clp-addon-${addon}-job-${id}`;
 }
 
@@ -414,7 +414,7 @@ export function jobUnitName(addon: string, id: string): string {
  * transcript needs none; one whose progress is whatever it prints needs
  * StandardOutput= pointed at the job's log.
  */
-export const BACKGROUND_JOB_PROPERTIES = [
+const BACKGROUND_JOB_PROPERTIES = [
   "Type=exec",
   // 1. CPU: Let the job run fast when idle, but yield immediately to web traffic
   "CPUWeight=20",
@@ -446,7 +446,7 @@ export function startJobUnit(options: {
   ]);
 }
 
-export function jobUnitIsActive(addon: string, id: string): boolean {
+function jobUnitIsActive(addon: string, id: string): boolean {
   return runCommand("systemctl", ["is-active", "--quiet", jobUnitName(addon, id)]).ok;
 }
 
@@ -466,7 +466,7 @@ export function recordQueuedJob(jobsDir: string, fields: Record<string, string>,
   return { id, dir };
 }
 
-export interface QueueJobOptions {
+interface QueueJobOptions {
   addon: string;
   jobsDir: string;
   fields: Record<string, string>;
@@ -670,7 +670,7 @@ export function jobSiteProgress(dir: string): JobSiteProgress {
 }
 
 /** "Measuring 12 of 40: site", or "Measuring site" when there is only the one. */
-export function siteProgressStep(verb: string, progress: JobSiteProgress): string {
+function siteProgressStep(verb: string, progress: JobSiteProgress): string {
   return progress.total > 1
     ? `${verb} ${Math.min(progress.completed + 1, progress.total)} of ${progress.total}: ${progress.site}`
     : `${verb} ${progress.site}`;

@@ -16,13 +16,13 @@ import { isTrustedFile } from "../../lib/trusted-file";
 const BRANDING_VERSION = 1;
 
 /** Each upload, decoded. A logo larger than this is a photograph. */
-export const MAX_ASSET_BYTES = 512 * 1024;
-export const MAX_CSS_BYTES = 64 * 1024;
-export const MAX_FOOTER_BYTES = 16 * 1024;
+const MAX_ASSET_BYTES = 512 * 1024;
+const MAX_CSS_BYTES = 64 * 1024;
+const MAX_FOOTER_BYTES = 16 * 1024;
 /** One upload in base64, the text settings and their JSON. */
 export const MAX_BRANDING_INPUT_BYTES = 900 * 1024;
 
-export const LOGO_SLOTS = ["headerLight", "headerDark", "markLight", "markDark", "favicon"] as const;
+const LOGO_SLOTS = ["headerLight", "headerDark", "markLight", "markDark", "favicon"] as const;
 export type LogoSlot = (typeof LOGO_SLOTS)[number];
 
 export interface Branding {
@@ -54,7 +54,7 @@ const CONTENT_TYPES: Record<string, string> = {
   ico: "image/x-icon",
 };
 
-export function assetContentType(name: string): string {
+function assetContentType(name: string): string {
   return CONTENT_TYPES[name.slice(name.lastIndexOf(".") + 1)] ?? "application/octet-stream";
 }
 
@@ -67,7 +67,7 @@ export function twigSafe(text: string): boolean {
   return !/endverbatim/i.test(text) && !text.includes("\0");
 }
 
-export interface BrandingPaths {
+interface BrandingPaths {
   brandingFile: string;
   brandingDir: string;
   rootUid: number;

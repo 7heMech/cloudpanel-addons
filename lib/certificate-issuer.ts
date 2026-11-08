@@ -19,7 +19,7 @@ interface Field {
 }
 
 /** The common name and organisation an issuer gave, as far as either is there. */
-export interface CertificateIssuer {
+interface CertificateIssuer {
   commonName: string;
   organization: string;
 }

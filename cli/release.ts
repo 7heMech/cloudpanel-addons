@@ -11,7 +11,7 @@ import { fatal, log, type OnProgress } from "../lib/log";
 const API = "https://api.github.com";
 const BUNDLES_ASSET = "attestations.jsonl";
 
-export interface ResolvedRelease {
+interface ResolvedRelease {
   tag: string;
   assets: Map<string, string>;
 }
@@ -93,7 +93,7 @@ function sha256(bytes: Buffer): string {
   return Bun.CryptoHasher.hash("sha256", bytes, "hex");
 }
 
-export function parseSums(text: string): Map<string, string> {
+function parseSums(text: string): Map<string, string> {
   const sums = new Map<string, string>();
   for (const line of text.split("\n")) {
     const match = line.trim().match(/^([0-9a-f]{64})\s+\*?(\S+)$/);

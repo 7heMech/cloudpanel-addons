@@ -34,13 +34,13 @@ export interface NewSiteWatchPaths {
   seenFile: string;
 }
 
-export const DEFAULT_NEW_SITE_WATCH_PATHS: NewSiteWatchPaths = {
+const DEFAULT_NEW_SITE_WATCH_PATHS: NewSiteWatchPaths = {
   panelDb: PANEL_DB,
   vhostDir: DISTRO_NGINX_SITES_DIR,
   seenFile: NEW_SITES_SEEN_FILE,
 };
 
-export interface NewSiteWatchOps {
+interface NewSiteWatchOps {
   /** Every installed addon's `newSites`. */
   runHooks: () => Promise<void>;
   /** Every installed addon's `newSites.resumePending`; whether one still waits for a new site. */

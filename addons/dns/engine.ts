@@ -22,7 +22,7 @@ import {
 } from "./redirects";
 import { ruleState, SSL_LABELS, wantedRules, wantedSettings, zoneWants, type ZoneWants } from "./zone";
 
-export const RECORD_COMMENT = "Managed by CloudPanel DNS";
+const RECORD_COMMENT = "Managed by CloudPanel DNS";
 
 export interface PanelSite {
   id: number;
@@ -68,7 +68,7 @@ interface ZoneRef {
   connectionId: string;
 }
 
-export interface ZoneView {
+interface ZoneView {
   id: string;
   name: string;
   status: string;

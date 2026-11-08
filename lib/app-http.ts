@@ -48,7 +48,7 @@ export function csrfCookieHeader(token: string): string {
  *
  * `csrf` attaches the CSRF cookie `withCsrfCookie` sets.
  */
-export interface ResponsePolicy {
+interface ResponsePolicy {
   status?: number;
   headers?: Headers | Record<string, string> | [string, string][];
   csrf?: string;
@@ -364,7 +364,7 @@ const CSP_DIRECTIVES = {
   "base-uri": "'none'",
 };
 
-export type CspDirective = keyof typeof CSP_DIRECTIVES | "frame-src";
+type CspDirective = keyof typeof CSP_DIRECTIVES | "frame-src";
 
 /**
  * The Content-Security-Policy every page gets, with `changes` replacing a

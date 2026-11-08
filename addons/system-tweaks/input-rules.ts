@@ -7,7 +7,7 @@
  * that could accept makes the answer unknown.
  */
 
-export type InputVerdict =
+type InputVerdict =
   | { verdict: "drop"; openTo: string[] }
   | { verdict: "accept" }
   | { verdict: "unknown"; reason: string };

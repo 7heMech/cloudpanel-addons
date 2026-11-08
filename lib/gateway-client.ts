@@ -19,7 +19,7 @@ export type { ActionResult } from "./gateway-protocol";
  * and keeps the call free of a type argument, which would stop the addon and
  * verb being checked together.
  */
-export type GatewayReply = ActionResult<never>;
+type GatewayReply = ActionResult<never>;
 
 export interface GatewayClientOptions {
   timeout?: number;
@@ -35,7 +35,7 @@ export interface GatewayClientOptions {
 
 export interface GatewayStream { close(): void }
 
-export interface DuplexGatewayStream extends GatewayStream {
+interface DuplexGatewayStream extends GatewayStream {
   /** Send one line to a duplex stream's worker; ignored by every other stream. */
   write(line: string): void;
 }

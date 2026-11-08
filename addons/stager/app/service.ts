@@ -14,7 +14,7 @@ const TIMEOUTS: Partial<Record<WebVerb<"stager">, number>> = {
 };
 const DEFAULT_TIMEOUT = 30_000;
 
-export interface ActionCallOptions {
+interface ActionCallOptions {
   timeout?: number;
   maxBuffer?: number;
 }
@@ -52,7 +52,7 @@ export function expandTarget(input: string, source: string): string {
 
 /** The `site.type` values the action binary will clone (CLONABLE_TYPES in
  * addons/stager/action.ts). Kept in step with it. */
-export type SiteType = "php" | "static" | "reverse-proxy";
+type SiteType = "php" | "static" | "reverse-proxy";
 
 export interface SiteSummary {
   domain: string;
@@ -64,7 +64,7 @@ export interface SiteSummary {
   databases: number;
 }
 
-export interface SiteDetail extends Omit<SiteSummary, "databases"> {
+interface SiteDetail extends Omit<SiteSummary, "databases"> {
   /** True when a reverse-proxy source's backend is an Instatic instance of ours. */
   instatic: boolean;
   rootDirectory: string;
@@ -111,10 +111,6 @@ export interface PromoteResult {
   /** Where the live Instatic instance's own content export was written. */
   contentBackup: string | null;
   notes: string[];
-}
-
-export function isPromoteResult(job: JobView): job is JobView & { result: PromoteResult | null } {
-  return job.kind === "promote";
 }
 
 export interface JobView {

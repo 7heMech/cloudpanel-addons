@@ -28,9 +28,9 @@ export interface FileLockHandle {
  * A function is handed whatever the holder wrote into the lock file, so a
  * refusal can name the operation it waited for rather than only say "busy".
  */
-export type LockTimeoutMessage = string | ((holder: string | null) => string);
+type LockTimeoutMessage = string | ((holder: string | null) => string);
 
-export interface FileLockOptions {
+interface FileLockOptions {
   /** Kept in the lock file while the lock is held, for a waiter to read. */
   note?: string;
 }

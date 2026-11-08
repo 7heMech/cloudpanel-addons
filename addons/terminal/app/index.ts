@@ -26,11 +26,11 @@ function popupCsp(): string {
   return contentSecurityPolicy({ "style-src": "'self' 'unsafe-inline'", "script-src": "'self' 'unsafe-inline'" });
 }
 
-export const terminalSessions = new TerminalSessions();
+const terminalSessions = new TerminalSessions();
 
 const NOT_FOUND = () => jsonResponse({ ok: false, error: "not found" }, 404);
 
-export interface RootAccessView { granted: boolean; problem: string | null; unreadable?: true }
+interface RootAccessView { granted: boolean; problem: string | null; unreadable?: true }
 
 /** How long the header's answer is reused; the worker checks for itself either way. */
 const ROOT_ACCESS_TTL_MS = 60_000;

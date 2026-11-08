@@ -26,7 +26,7 @@ import { run, tryRun } from "../lib/command";
 
 const BACKUP_DIR = "/var/backups/clp-addons";
 
-export function instaticBackupCron(): string {
+function instaticBackupCron(): string {
   return `# Instatic recovery snapshots for CloudPanel Remote Backups.
 # Adjust this schedule to precede your Remote Backup schedule.
 # CloudPanel's 04:15 create_backup.sh backs up the panel application itself.
@@ -49,7 +49,7 @@ export function reconcileInstaticBackupCron(enabled: boolean, path = INSTATIC_BA
   writeFileAtomic(path, instaticBackupCron(), { mode: 0o644, createParent: true });
   return true;
 }
-export interface ProvisionCommandRunner {
+interface ProvisionCommandRunner {
   run(command: string, args: string[]): string;
   tryRun(command: string, args: string[]): { ok: boolean; out: string };
 }
@@ -635,7 +635,7 @@ ExecStart=/usr/local/bin/clp-addons repair --anchors-only --quiet
  * the watcher with it, so the service has none: each start is a read of the
  * database, and a path unit cannot start a service that is still running.
  */
-export function newSiteUnits(): { service: string; path: string; rows: string } {
+function newSiteUnits(): { service: string; path: string; rows: string } {
   return {
     service: `[Unit]
 Description=Apply addons to new CloudPanel sites
@@ -752,7 +752,7 @@ function reconcileWatchPaths(): string[] {
  * and one that only added the new-site watcher should start that watcher and
  * leave the armed reconcile timer and the auth socket alone.
  */
-export interface UnitChanges {
+interface UnitChanges {
   /** The manager unit's own text differs, so its next start will differ. */
   manager: boolean;
   /** Any shared reconcile/anchor definition was written differently. */
@@ -944,7 +944,7 @@ export function platformProvisioned(commands: ProvisionCommandRunner = { run, tr
     && commands.tryRun("systemctl", ["is-active", "--quiet", RECONCILE_TIMER]).ok;
 }
 
-export interface StartUnitsOptions {
+interface StartUnitsOptions {
   /** Called after unit files are ready and immediately before manager restart. */
   beforeManagerRestart?: () => void;
 }
@@ -1015,7 +1015,7 @@ export function unitPid(unit: string): string | null {
   return pid && pid !== "0" ? pid : null;
 }
 
-export function timerNextElapse(unit: string): string | null {
+function timerNextElapse(unit: string): string | null {
   const values = tryRun("systemctl", [
     "show", "-p", "NextElapseUSecRealtime", "-p", "NextElapseUSecMonotonic", "--value", unit,
   ]).out.split(/\r?\n/).map((value) => value.trim());

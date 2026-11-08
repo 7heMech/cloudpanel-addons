@@ -1,6 +1,6 @@
 // Per-site bookkeeping that the Varnish and MainWP policies share.
 
-export interface FleetState<T> {
+interface FleetState<T> {
   sites: Record<string, T>;
 }
 

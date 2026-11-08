@@ -40,7 +40,7 @@ export interface FirewallState {
   withdrawn?: boolean;
 }
 
-export interface FirewallPaths {
+interface FirewallPaths {
   stateFile: string;
   lockFile: string;
   panelDb: string;
@@ -49,7 +49,7 @@ export interface FirewallPaths {
   rootUid: number;
 }
 
-export const DEFAULT_FIREWALL_PATHS: FirewallPaths = {
+const DEFAULT_FIREWALL_PATHS: FirewallPaths = {
   stateFile: `${addonStateDir("system-tweaks")}/firewall.json`,
   lockFile: `${LOCK_DIR}/system-tweaks-firewall.lock`,
   panelDb: PANEL_DB,
@@ -152,7 +152,7 @@ export function ruleKey(portRange: string, source: string): string | null {
 
 // --- What is on disk -------------------------------------------------------
 
-export function readPanelRules(panelDb: string): PanelRule[] {
+function readPanelRules(panelDb: string): PanelRule[] {
   if (!existsSync(panelDb)) return [];
   return withPanelDb(panelDb, (db) => db.query("SELECT id, port_range, source FROM firewall_rule ORDER BY id").all()
     .map((row) => {
@@ -240,7 +240,7 @@ const PANEL_UDP = new Set(["443 0.0.0.0/0", "443 ::/0"]);
 
 const key = (rule: { proto: string; port: string; src: string }) => `${rule.proto} ${rule.port} ${rule.src}`;
 
-export interface FirewallPlan {
+interface FirewallPlan {
   /** ufw arguments, run in order. */
   commands: string[][];
   /** What this addon holds against CloudPanel's own rules once they have run. */

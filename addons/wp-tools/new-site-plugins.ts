@@ -44,7 +44,7 @@ const DIRECTORY_API = "https://api.wordpress.org/plugins/info/1.2/";
 /** The one host and path shape a directory download may come from. */
 const DOWNLOAD_RE = /^https:\/\/downloads\.wordpress\.org\/plugin\/[A-Za-z0-9._-]+\.zip$/;
 
-export type NewSitePluginSource = "wordpress.org" | "upload";
+type NewSitePluginSource = "wordpress.org" | "upload";
 
 export interface NewSitePlugin {
   source: NewSitePluginSource;
@@ -304,7 +304,7 @@ export interface NewSiteLookup {
   creator: string | null;
 }
 
-export interface NewSiteRun {
+interface NewSiteRun {
   runuser: string;
   uploadsDir: string;
   domain: string;

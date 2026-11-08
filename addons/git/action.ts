@@ -58,9 +58,9 @@ export const WEBHOOK_TOKEN_RE = /^[A-Za-z0-9_-]{43}$/;
 export const MAX_HOOK_BODY_BYTES = 128 * 1024;
 const MAX_HOOK_INPUT_BYTES = 4 * MAX_HOOK_BODY_BYTES;
 
-export type GitVerb = keyof typeof GIT_VERBS;
+type GitVerb = keyof typeof GIT_VERBS;
 
-export interface GitActionPaths {
+interface GitActionPaths {
   dataDir: string;
   sitesDir: string;
   jobsDir: string;
@@ -75,7 +75,7 @@ export interface GitActionPaths {
   emitReply?: boolean;
 }
 
-export const DEFAULT_GIT_ACTION_PATHS: GitActionPaths = {
+const DEFAULT_GIT_ACTION_PATHS: GitActionPaths = {
   dataDir: addonStateDir("git"),
   sitesDir: `${addonStateDir("git")}/sites`,
   jobsDir: `${addonStateDir("git")}/jobs`,
@@ -87,7 +87,7 @@ export const DEFAULT_GIT_ACTION_PATHS: GitActionPaths = {
   runuser: "runuser",
 };
 
-export interface GitActionOptions {
+interface GitActionOptions {
   paths?: Partial<GitActionPaths>;
   emitReply?: boolean;
   /** Test-only process identity override; CLI and gateway callers omit it. */

@@ -21,14 +21,14 @@ import { panelUserUid } from "../../lib/sso-auth";
 import { COMMAND_MS } from "./limits";
 
 /** CloudPanel's shared certificate, `CN=cloudpanel.clp`. */
-export const SHARED_FINGERPRINT = "6D:13:60:EC:EF:D5:01:F8:F4:91:C3:2D:41:91:48:9C:E1:02:3E:C8:E9:12:5D:96:AE:A7:53:03:FB:62:4F:2B";
+const SHARED_FINGERPRINT = "6D:13:60:EC:EF:D5:01:F8:F4:91:C3:2D:41:91:48:9C:E1:02:3E:C8:E9:12:5D:96:AE:A7:53:03:FB:62:4F:2B";
 /** Under Apple's 825-day limit for TLS server certificates. */
 const VALID_DAYS = 800;
 const RENEW_MS = 30 * 86_400_000;
 const MAX_PEM_BYTES = 64 * 1024;
 const PANEL_NGINX = "/home/clp/services/nginx";
 
-export const DEFAULT_PANEL_CERT_PATHS = {
+const DEFAULT_PANEL_CERT_PATHS = {
   vhost: `${PANEL_NGINX}/sites-enabled/cloudpanel.conf`,
   panelConf: `${PANEL_NGINX}/nginx.conf`,
   cert: `${PANEL_NGINX}/ssl-certificates/cert.crt`,

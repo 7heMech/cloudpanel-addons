@@ -13,7 +13,7 @@ export const STAND_INS_FILE = `${addonStateDir("dns")}/standins.json`;
 const CREATING_MS = 15 * 60_000;
 
 /** How DNS's record of a stand-in names its site: the user it chose, and CloudPanel's id once the site exists. */
-export interface StandInMark {
+interface StandInMark {
   siteUser?: string;
   siteId?: number;
   createdAt?: number;

@@ -46,7 +46,7 @@ export const DISTRO_NGINX_SITES_DIR = "/etc/nginx/sites-enabled";
 export const NGINX_CERTIFICATES_DIR = "/etc/nginx/ssl-certificates";
 const PANEL_NGINX_DIR = "/home/clp/services/nginx";
 
-export interface NginxLayout {
+interface NginxLayout {
   /** Directory holding the panel vhost. */
   sitesDir: string;
   /** Config root to hand `nginx -t -c`, when the instance has its own. */

@@ -36,7 +36,7 @@ interface Connection {
   key: string;
 }
 
-export interface MainwpRecord {
+interface MainwpRecord {
   status: MainwpStatus;
   /** Once a Child has been observed, automation never installs it again. */
   seen: boolean;

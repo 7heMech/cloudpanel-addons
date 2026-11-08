@@ -64,12 +64,12 @@ export function whenText(iso: string): string {
 }
 
 /** Below this many sites the whole table fits on a screen, so it needs no search. */
-export const FLEET_FILTER_MIN = 6;
+const FLEET_FILTER_MIN = 6;
 
 /** A row's place when its status column is sorted: the tone of its worst status, worst first. */
 export const ATTENTION_RANK = { bad: 0, warn: 1, info: 2, ok: 3, muted: 4 } as const;
 
-export interface FleetFilter { value: string; label: string; group?: string }
+interface FleetFilter { value: string; label: string; group?: string }
 
 /** The `data-show` word a row carries for a value of a filter group such as its type. */
 export function filterWord(prefix: string, label: string): string {
@@ -213,7 +213,7 @@ import JOB_PROGRESS_JS from "./assets/job-progress.client.js" with { type: "text
 export { JOB_PROGRESS_JS };
 
 /** What the bar needs of a job; both addons' job views carry it. */
-export interface SiteJobProgress {
+interface SiteJobProgress {
   id: string;
   state: string;
   step: string;
@@ -223,7 +223,7 @@ export interface SiteJobProgress {
 }
 
 /** "12 of 40: site" beside the title; the client half writes the same. */
-export function jobProgressText(job: SiteJobProgress): string {
+function jobProgressText(job: SiteJobProgress): string {
   const count = job.total ? `${Math.min(job.completed + 1, job.total)} of ${job.total}: ` : "";
   return job.state === "queued" ? "Waiting to start" : job.site ? `${count}${job.site}` : job.step;
 }
@@ -246,7 +246,7 @@ export interface AddonChrome {
   script: string;
 }
 
-export interface Chrome extends AddonChrome {
+interface Chrome extends AddonChrome {
   /** Optional header controls if a newer clp-addons release is available. */
   updateNotice?: { current: string; latest: string } | null;
   /** Hide administrator navigation for pages reached by a site manager. */

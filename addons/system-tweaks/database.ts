@@ -23,7 +23,7 @@ import {
   type SocketBindings,
 } from "./database-socket";
 
-export const DATABASE_MARKER = "# Managed by clp-addons System Tweaks: MySQL accepts connections from this server only.";
+const DATABASE_MARKER = "# Managed by clp-addons System Tweaks: MySQL accepts connections from this server only.";
 const LOOPBACK = "127.0.0.1";
 export const DATABASE_FILE = [
   DATABASE_MARKER,
@@ -38,7 +38,7 @@ const CHECK_TTL_MS = 15 * 60_000;
 /** The default passwords looked for: CloudPanel's package install sets root's to `root`. */
 const DEFAULTS = ["root", ""] as const;
 
-export interface DatabasePaths {
+interface DatabasePaths {
   /** The directories MySQL and MariaDB read last on Debian and Ubuntu; the first that exists is used. */
   confDirs: string[];
   fileName: string;
@@ -54,7 +54,7 @@ export interface DatabasePaths {
   rootUid: number;
 }
 
-export const DEFAULT_DATABASE_PATHS: DatabasePaths = {
+const DEFAULT_DATABASE_PATHS: DatabasePaths = {
   confDirs: ["/etc/mysql/mariadb.conf.d", "/etc/mysql/mysql.conf.d", "/etc/mysql/conf.d"],
   fileName: "zz-clp-addons-loopback.cnf",
   checkFile: `${addonStateDir("system-tweaks")}/database-check.json`,
@@ -77,7 +77,7 @@ export interface DatabaseOptions {
 }
 
 /** Where root logged in with a default password: over loopback, or as any other host would. */
-export interface DefaultPassword { from: "loopback" | "other hosts"; password: "root" | "empty" }
+interface DefaultPassword { from: "loopback" | "other hosts"; password: "root" | "empty" }
 
 export interface DatabaseStatus {
   /** Whether a MySQL or MariaDB server is listening on TCP here. */

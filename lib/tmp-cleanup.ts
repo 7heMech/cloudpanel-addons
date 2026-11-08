@@ -19,13 +19,13 @@ export interface TmpCleanupPaths {
   passwd: string;
 }
 
-export const DEFAULT_TMP_CLEANUP_PATHS: TmpCleanupPaths = {
+const DEFAULT_TMP_CLEANUP_PATHS: TmpCleanupPaths = {
   tmpDir: "/tmp",
   procDir: "/proc",
   passwd: "/etc/passwd",
 };
 
-export interface TmpCleanupResult {
+interface TmpCleanupResult {
   removed: number;
   /** Disk space the removed files held. */
   bytes: number;

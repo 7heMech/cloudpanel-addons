@@ -140,7 +140,7 @@ export const DEFAULT_SITE_VHOST_PATHS: SiteVhostPaths = {
   tempDir: "/tmp",
 };
 
-export function storedVhost(panelDb: string, domain: string): string {
+function storedVhost(panelDb: string, domain: string): string {
   return withPanelDb(panelDb, (db) => {
     const row = db.query<{ vhost_template: string | null }, [string]>("SELECT vhost_template FROM site WHERE domain_name = ?").get(domain);
     if (!row?.vhost_template) throw new Error(`CloudPanel has no vhost stored for ${domain}`);

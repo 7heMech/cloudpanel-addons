@@ -12,7 +12,7 @@ import {
   type MemoryOptions, type MemorySettings, type MemoryStatus,
 } from "./memory";
 
-export const DEFAULT_MEMORY_SETTINGS_PATHS = {
+const DEFAULT_MEMORY_SETTINGS_PATHS = {
   settingsFile: `${addonStateDir("resource-limits")}/settings.json`,
   lockFile: `${LOCK_DIR}/resource-limits-settings.lock`,
   enabledConfig: addonConfigFile("resource-limits"),

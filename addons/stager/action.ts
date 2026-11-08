@@ -29,11 +29,9 @@ import { validateEmail, validateFlag, validateJob, validateMfa, validatePort } f
 export { learnVhostMapContent, renderVhostBodyResult, type VhostMapResult } from "../../lib/site-vhost";
 
 const JOB_RETENTION_DAYS = 14;
-const PORT_MIN = 39000;
-const PORT_MAX = 39999;
 const CLONABLE_TYPES = ["php", "static", "reverse-proxy"] as const;
 
-export type StagerVerb = keyof typeof STAGER_VERBS;
+type StagerVerb = keyof typeof STAGER_VERBS;
 
 /**
  * What a promote leaves behind from the live site rather than taking from the
@@ -78,7 +76,7 @@ export interface StagerActionPaths {
   emitReply?: boolean;
 }
 
-export const DEFAULT_STAGER_ACTION_PATHS: StagerActionPaths = {
+const DEFAULT_STAGER_ACTION_PATHS: StagerActionPaths = {
   lockDir: LOCK_DIR,
   dataBaseDir: addonStateDir("stager"),
   jobsDir: `${addonStateDir("stager")}/jobs`,
@@ -93,7 +91,7 @@ export const DEFAULT_STAGER_ACTION_PATHS: StagerActionPaths = {
   smtpConfigFile: addonConfigFile("smtp"),
 };
 
-export interface ParsedStagerAction {
+interface ParsedStagerAction {
   verb: StagerVerb;
   source: string;
   target: string;
@@ -105,7 +103,7 @@ export interface ParsedStagerAction {
   targetEmail: string;
 }
 
-export interface StagerActionOptions {
+interface StagerActionOptions {
   paths?: Partial<StagerActionPaths>;
   /** Emit the action's JSON reply on stdout. Defaults to true for CLI callers. */
   emitReply?: boolean;
@@ -583,7 +581,7 @@ function stripTrailingNewlines(value: string): string {
   return value.replace(/\n+$/g, "");
 }
 
-export function stripRedirectBlock(body: string): string {
+function stripRedirectBlock(body: string): string {
   const lines = body.split("\n");
   if (lines.length === 0 || !/^server \{/.test(lines[0]!)) return body;
 
@@ -606,7 +604,7 @@ export function stripRedirectBlock(body: string): string {
   return redirect ? lines.slice(index).join("\n") : block.join("") + lines.slice(index).join("\n");
 }
 
-export function takeRedirectBlock(body: string): string {
+function takeRedirectBlock(body: string): string {
   const lines = body.split("\n");
   if (lines.length === 0 || !/^server \{/.test(lines[0]!)) return "";
 
@@ -636,7 +634,7 @@ export function foldServerName(body: string, domain: string, replacement: string
   }).join("\n");
 }
 
-export function generatedServerName(body: string, domain: string): string {
+function generatedServerName(body: string, domain: string): string {
   for (const raw of body.split("\n")) {
     const line = raw.trim();
     if (line === `server_name ${domain};` || line === `server_name ${domain} www1.${domain};`) return line;
@@ -763,7 +761,7 @@ function vhostTemplateOk(file: string, source: string, target: string): boolean 
   return result.ok;
 }
 
-export function serverNameHosts(body: string): string[] {
+function serverNameHosts(body: string): string[] {
   const hosts: string[] = [];
   let token = "";
   let naming = false;
@@ -994,7 +992,7 @@ function panelUpdateSite(ctx: RunContext, type: string, application: string, bod
   }
 }
 
-export function vhostBackupPath(paths: StagerActionPaths, domain: string): string {
+function vhostBackupPath(paths: StagerActionPaths, domain: string): string {
   return join(paths.nginxVhostDir, `${domain}.conf.clp-stager-bak`);
 }
 
@@ -2704,18 +2702,6 @@ async function dispatch(action: ParsedStagerAction, paths: StagerActionPaths, re
     case "job": cmdJob(paths, action.job); return;
     case "watch-job": await cmdWatchJob(paths, action.job); return;
   }
-}
-
-export function validateStagerDomain(value: string, identityPath = PANEL_IDENTITY_PATH): string {
-  return validateDomain(value, identityPath, "domain");
-}
-
-export function normalizeStagerIdentity(value: string): string | null {
-  return normalizeIdentityHostname(value);
-}
-
-export function parseStagerAction(argv: string[], options?: StagerActionOptions): ParsedStagerAction {
-  return parseAction(argv, pathsFor(options));
 }
 
 export async function runStagerAction(argv: string[], options?: StagerActionOptions): Promise<number> {

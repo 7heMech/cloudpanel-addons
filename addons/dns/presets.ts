@@ -62,7 +62,7 @@ export const PRESETS: Preset[] = [
   },
 ];
 
-export const EMPTY_ZONE_OPTIONS: ZoneOptions = {
+const EMPTY_ZONE_OPTIONS: ZoneOptions = {
   ssl: null, alwaysHttps: null, acmeFullSsl: false, webmailFullSsl: false, skipFirewallIps: [],
 };
 

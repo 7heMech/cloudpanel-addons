@@ -103,7 +103,7 @@ export interface SmtpState {
   sites: SmtpSiteView[];
   skipped: { domain: string; reason: string }[];
 }
-export interface SmtpDelivery {
+interface SmtpDelivery {
   /** What Postfix's first attempt did, or `queued` when it had not tried within the wait. */
   state: "sent" | "deferred" | "bounced" | "queued";
   detail: string;
@@ -119,7 +119,7 @@ export interface SmtpTestResult {
   delivery: SmtpDelivery | null;
 }
 
-export interface SmtpPaths {
+interface SmtpPaths {
   panelDb: string;
   passwd: string;
   phpRoot: string;
@@ -482,7 +482,7 @@ function managedFiles(paths: SmtpPaths) {
 type ManagedMap = keyof ReturnType<typeof managedFiles>;
 const HASH_MAPS: ManagedMap[] = ["canonical", "senders"];
 
-export function postfixMaps(routes: Route[], origin: string): Record<ManagedMap, string> {
+function postfixMaps(routes: Route[], origin: string): Record<ManagedMap, string> {
   const claimed = new Map<string, SmtpProfile>();
   for (const route of routes) {
     if (route.profile) for (const pattern of route.envelopes) claimed.set(pattern, route.profile);

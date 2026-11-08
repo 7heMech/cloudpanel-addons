@@ -98,7 +98,7 @@ map "$clp_cf_peer:$clp_cf_header_ip" $clp_maintenance_ip {
 `;
 }
 
-export interface MaintenanceNginxPaths {
+interface MaintenanceNginxPaths {
   settingsPath?: string;
   stateDir?: string;
   geoPath?: string;
@@ -109,7 +109,7 @@ export interface MaintenanceNginxPaths {
   vhostUid?: number;
 }
 
-export type MaintenanceNginxState =
+type MaintenanceNginxState =
   | "ok"
   | "missing"
   | "stale-content"
@@ -118,14 +118,14 @@ export type MaintenanceNginxState =
   | "validation-failed"
   | "uncovered-sites";
 
-export interface MaintenanceNginxStatus {
+interface MaintenanceNginxStatus {
   state: MaintenanceNginxState;
   settingsPath: string;
   uncoveredSites?: string[];
   detail?: string;
 }
 
-export interface MaintenanceNginxResult extends MaintenanceNginxStatus {
+interface MaintenanceNginxResult extends MaintenanceNginxStatus {
   changed: boolean;
 }
 

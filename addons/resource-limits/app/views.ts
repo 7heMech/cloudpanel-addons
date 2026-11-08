@@ -92,12 +92,12 @@ const PM_LABELS: Record<string, string> = {
   static: "Static",
 };
 
-export function pmLabel(mode: string): string {
+function pmLabel(mode: string): string {
   return PM_LABELS[mode] ?? mode;
 }
 
 /** How a pool's worker settings read in one table cell. */
-export function workerSummary(profile: PoolProfile): string {
+function workerSummary(profile: PoolProfile): string {
   if (profile.pm === "dynamic") {
     return `Dynamic, ${profile.minSpareServers}–${profile.maxSpareServers} spare, up to ${profile.maxChildren}`;
   }

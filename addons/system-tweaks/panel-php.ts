@@ -25,7 +25,7 @@ const STATE_VERSION = 1;
 const VERSION_RE = /^[0-9]+\.[0-9]+$/;
 const MARKER = "# Managed by clp-addons System Tweaks: the PHP version CloudPanel runs on.";
 
-export interface PanelPhpPaths {
+interface PanelPhpPaths {
   unit: string;
   dropInFile: string;
   fpmBinDir: string;
@@ -73,7 +73,7 @@ export interface PanelPhpChoice {
   available?: string;
 }
 
-export interface PanelPhpFailure {
+interface PanelPhpFailure {
   php: string;
   /** The package release that failed, so an upgrade earns another attempt. */
   release: string;

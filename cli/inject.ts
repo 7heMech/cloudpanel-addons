@@ -65,7 +65,7 @@ export interface Injection {
  * tests must never touch the panel's own files, nor need root to write under
  * /var/lib. Production callers pass nothing.
  */
-export interface InjectPaths {
+interface InjectPaths {
   templatesDir: string;
   stateDir: string;
 }
@@ -334,18 +334,18 @@ export const NGINX_PROXY_BLOCK = `    # clp-addons:proxy:start
 
 const NGINX_PROXY_BLOCK_RE = /\r?\n?[ \t]*# clp-addons:proxy:start[\s\S]*?[ \t]*# clp-addons:proxy:end\r?\n?/g;
 
-export interface NginxPaths {
+interface NginxPaths {
   vhostPath?: string;
   sitesDir?: string;
   stateDir?: string;
 }
 
 /** The installed CloudPanel panel vhost, unless an operator supplies another absolute path. */
-export function cloudpanelMasterVhost(): string {
+function cloudpanelMasterVhost(): string {
   return `${nginxLayout().sitesDir}/cloudpanel.conf`;
 }
 
-export type NginxProxyState =
+type NginxProxyState =
   | "ok"
   | "missing"
   | "ambiguous"
@@ -360,7 +360,7 @@ export interface NginxProxyStatus {
   detail?: string;
 }
 
-export interface NginxReconcileResult extends NginxProxyStatus {
+interface NginxReconcileResult extends NginxProxyStatus {
   changed: boolean;
 }
 

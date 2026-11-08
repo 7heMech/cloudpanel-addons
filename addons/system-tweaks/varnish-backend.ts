@@ -28,14 +28,14 @@ import { daemonReload } from "../../lib/systemd";
 import { isTrustedDirectory, present, regularText, trustedText } from "../../lib/trusted-file";
 import { readVarnishSettings, VHOST_VALUE_RULES } from "./vhost-values";
 
-export const VARNISH_PLACEHOLDER = "{{varnish_proxy_pass}}";
-export const ACCESS_LOG_PLACEHOLDER = "{{nginx_access_log}}";
-export const ERROR_LOG_PLACEHOLDER = "{{nginx_error_log}}";
+const VARNISH_PLACEHOLDER = "{{varnish_proxy_pass}}";
+const ACCESS_LOG_PLACEHOLDER = "{{nginx_access_log}}";
+const ERROR_LOG_PLACEHOLDER = "{{nginx_error_log}}";
 /** What CloudPanel renders when Varnish is off for a site. */
 const NO_VARNISH = "proxy_pass http://127.0.0.1:8080;";
 const MAX_LOG_MIGRATE_BYTES = 64 * 1024 * 1024;
 
-export const DEFAULT_VARNISH_BACKEND_PATHS = {
+const DEFAULT_VARNISH_BACKEND_PATHS = {
   panelDb: PANEL_DB,
   homeRoot: "/home",
   passwdFile: "/etc/passwd",
@@ -49,7 +49,7 @@ export const DEFAULT_VARNISH_BACKEND_PATHS = {
   vhostUid: ROOT_UID,
 };
 
-export type VarnishBackendPaths = typeof DEFAULT_VARNISH_BACKEND_PATHS;
+type VarnishBackendPaths = typeof DEFAULT_VARNISH_BACKEND_PATHS;
 
 export interface VarnishBackendOptions {
   paths?: Partial<VarnishBackendPaths>;
@@ -96,15 +96,15 @@ function sites(db: Database): Site[] {
   });
 }
 
-export function varnishIncludeLine(includeDir: string, domain: string): string {
+function varnishIncludeLine(includeDir: string, domain: string): string {
   return `include ${includeDir}/${domain}.conf;`;
 }
 
-export function siteAccessLogLine(logDir: string, user: string, cloudflare: boolean): string {
+function siteAccessLogLine(logDir: string, user: string, cloudflare: boolean): string {
   return `access_log ${logDir}/${user}/access.log ${cloudflare ? "cloudflare" : "main"};`;
 }
 
-export function siteErrorLogLine(logDir: string, user: string): string {
+function siteErrorLogLine(logDir: string, user: string): string {
   return `error_log ${logDir}/${user}/error.log;`;
 }
 
@@ -554,7 +554,7 @@ function unitLines(ctx: Context): { startPre: string; reload: string } {
   return { startPre, reload };
 }
 
-export function varnishDropIn(bin: string, startPre: string, reload: string): string {
+function varnishDropIn(bin: string, startPre: string, reload: string): string {
   return [
     "# Managed by clp-addons System Tweaks: writes each site's checked Varnish backend before nginx loads the vhosts.",
     "[Service]",

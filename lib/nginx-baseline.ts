@@ -25,7 +25,7 @@ export function readIfPresent(path: string): string | null {
 }
 
 /** Where the record of one file is kept, as `<stateDir>/<stem>.{pristine,sha256,path}`. */
-export interface BaselineFiles {
+interface BaselineFiles {
   pristine: string;
   hash: string;
   path: string;

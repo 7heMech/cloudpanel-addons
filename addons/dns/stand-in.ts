@@ -18,7 +18,7 @@ import { standInHosts } from "./redirects";
 import type { Issue } from "./ssl";
 import { readState, writeState } from "./store";
 
-export interface StandInRecord extends StandIn {
+interface StandInRecord extends StandIn {
   siteUser: string;
   /** CloudPanel's id for the site, once it exists. */
   siteId?: number;
@@ -36,7 +36,7 @@ export interface StandInPaths {
 /** Waits after each failed certificate attempt; the last repeats, since the domain may be pointed here any time. */
 const CERTIFICATE_DELAYS = [15 * 60_000, 60 * 60_000, 6 * 60 * 60_000, 24 * 60 * 60_000];
 
-export function standInTarget(redirect: StandIn): string {
+function standInTarget(redirect: StandIn): string {
   const query = redirect.target.includes("?") ? "&$args" : "$is_args$args";
   const path = redirect.keepPath ? (redirect.keepQuery ? "$request_uri" : "$1") : (redirect.keepQuery ? query : "");
   return `${redirect.target}${path}`;

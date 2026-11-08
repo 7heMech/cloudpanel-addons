@@ -49,10 +49,10 @@ export function wantedSettings(wants: ZoneWants): { setting: string; value: stri
   return settings;
 }
 
-export const CONFIG_PHASE = "http_config_settings";
-export const FIREWALL_PHASE = "http_request_firewall_custom";
+const CONFIG_PHASE = "http_config_settings";
+const FIREWALL_PHASE = "http_request_firewall_custom";
 
-export interface RuleSpec {
+interface RuleSpec {
   phase: string;
   label: string;
   rule: RuleWrite;
@@ -115,7 +115,7 @@ function sameRule(current: CfRuleset["rules"][number], wanted: RuleWrite): boole
     && JSON.stringify(sorted(current.action_parameters ?? {})) === JSON.stringify(sorted(wanted.action_parameters ?? {}));
 }
 
-export type RuleState =
+type RuleState =
   | { state: "present" }
   | { state: "create" }
   | { state: "update"; ruleId: string };

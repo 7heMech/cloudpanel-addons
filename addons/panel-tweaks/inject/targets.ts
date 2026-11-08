@@ -340,7 +340,7 @@ export function panelMobileSnippet(on: boolean, adminArea = false): string {
 }
 
 /** Both headers carry the same opening tag; only Admin gets the sidebar rules. */
-export const HEADER_TEMPLATES = [TEMPLATES.header, TEMPLATES.adminHeader];
+const HEADER_TEMPLATES = [TEMPLATES.header, TEMPLATES.adminHeader];
 
 export { sitesSnippet };
 

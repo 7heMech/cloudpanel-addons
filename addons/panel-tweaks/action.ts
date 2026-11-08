@@ -43,7 +43,7 @@ const MEASURE_LOCK_WAIT_SECONDS = 60 * 60;
 const JOB_RETENTION_DAYS = 7;
 
 /** `scan` is the repair timer's sweep; the page starts a `measure` job instead. */
-export type PanelTweaksVerb = "state" | "set-tweaks" | "scan" | "measure" | "branding" | "set-branding";
+type PanelTweaksVerb = "state" | "set-tweaks" | "scan" | "measure" | "branding" | "set-branding";
 
 /**
  * What the addon does, as independent modes.
@@ -93,10 +93,10 @@ export const DEFAULT_TWEAKS: PanelTweaks = {
  * has no session to ask with, the layout switches decide the first paint, and
  * autoSsl decides whether the creation and completion scripts are present.
  */
-export const TEMPLATE_TWEAK_KEYS: (keyof PanelTweaks)[] =
+const TEMPLATE_TWEAK_KEYS: (keyof PanelTweaks)[] =
   ["deviceTheme", "sitesMobile", "actionMenu", "panelMobile", "autoSsl", "branding"];
 
-export const TWEAK_KEYS = Object.keys(DEFAULT_TWEAKS) as (keyof PanelTweaks)[];
+const TWEAK_KEYS = Object.keys(DEFAULT_TWEAKS) as (keyof PanelTweaks)[];
 
 /**
  * The switches that mean nothing on their own.
@@ -104,12 +104,12 @@ export const TWEAK_KEYS = Object.keys(DEFAULT_TWEAKS) as (keyof PanelTweaks)[];
  * Measured sizes are a column of the enhanced Sites table, so they are turned
  * off with it rather than left on measuring a disk for a column no page draws.
  */
-export const TWEAK_PARENTS: Partial<Record<keyof PanelTweaks, keyof PanelTweaks>> = {
+const TWEAK_PARENTS: Partial<Record<keyof PanelTweaks, keyof PanelTweaks>> = {
   diskUsage: "sitesTable",
 };
 
 /** A switch whose parent is off is off, whichever of the two was just named. */
-export function withTweakDependencies(tweaks: PanelTweaks): PanelTweaks {
+function withTweakDependencies(tweaks: PanelTweaks): PanelTweaks {
   const settled = { ...tweaks };
   for (const [key, parent] of Object.entries(TWEAK_PARENTS) as [keyof PanelTweaks, keyof PanelTweaks][]) {
     if (!settled[parent]) settled[key] = false;
@@ -159,7 +159,7 @@ export const SELF_SIGNED_CERTIFICATE = "1";
  * issuer is read: a Cloudflare origin certificate and a public authority's are
  * both "imported" to it, and they are not the same thing to an operator.
  */
-export const IMPORTED_CERTIFICATE = "3";
+const IMPORTED_CERTIFICATE = "3";
 
 /**
  * The awkward spellings in CloudPanel's `application` column.
@@ -177,10 +177,6 @@ export function applicationLabel(application: string, type: string): string {
   const name = application.trim();
   if (!name) return type.trim();
   return APPLICATION_LABELS[name] ?? name;
-}
-
-export function certificateLabel(type: string): string {
-  return CERTIFICATE_LABELS[type.trim()] ?? (type.trim() || "Certificate");
 }
 
 /** What one site contributes to the enhanced Sites table. */
@@ -229,7 +225,7 @@ export interface MeasureJobView extends JobCommonFields, JobSiteProgress {
   result: ScanResult | null;
 }
 
-export interface PanelTweaksActionPaths {
+interface PanelTweaksActionPaths {
   panelDb: string;
   tweaksFile: string;
   diskFile: string;
@@ -777,14 +773,14 @@ function brandingAssetArgument(argv: string[]): string {
 // or another tab finds it again, and pressing Measure now meanwhile follows
 // the one already running rather than starting a second.
 
-export function measureJobView(jobsDir: string, id: string): MeasureJobView | null {
+function measureJobView(jobsDir: string, id: string): MeasureJobView | null {
   const dir = jobDir(jobsDir, id);
   const common = jobCommonFields(dir);
   if (!common.state) return null;
   return { id, ...common, ...jobSiteProgress(dir), result: readJobResult<ScanResult>(dir) };
 }
 
-export function activeMeasurement(jobsDir: string): MeasureJobView | null {
+function activeMeasurement(jobsDir: string): MeasureJobView | null {
   for (const id of listJobIds(jobsDir)) {
     const view = measureJobView(jobsDir, id);
     if (view && (view.state === "queued" || view.state === "running")) return view;

@@ -75,9 +75,9 @@ export const DEFAULT_INSTATIC_ACTION_PATHS: InstaticActionPaths = {
   homeDir: "/home",
 };
 
-export type InstaticVerb = keyof typeof INSTATIC_VERBS;
+type InstaticVerb = keyof typeof INSTATIC_VERBS;
 
-export interface ParsedInstaticAction {
+interface ParsedInstaticAction {
   verb: InstaticVerb;
   domain: string;
   port: string;
@@ -89,7 +89,7 @@ export interface ParsedInstaticAction {
   fromBackup?: boolean;
 }
 
-export interface InstaticActionOptions {
+interface InstaticActionOptions {
   paths?: Partial<InstaticActionPaths>;
 }
 
@@ -268,7 +268,7 @@ function instanceDir(domain: string, paths: InstaticActionPaths): string {
   return join(paths.dataBaseDir, domain);
 }
 
-export interface InstanceStorage extends SnapshotSources {
+interface InstanceStorage extends SnapshotSources {
   legacy: boolean;
 }
 
@@ -706,7 +706,7 @@ function fileHeader(path: string): string {
   }
 }
 
-export interface SnapshotSources {
+interface SnapshotSources {
   dataDir: string;
   uploadsDir: string;
   envFile: string;

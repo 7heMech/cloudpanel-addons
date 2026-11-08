@@ -14,13 +14,13 @@ import {
 } from "./pool-guard";
 import GUARD_SCRIPT from "./file-manager-guard.php" with { type: "text" };
 
-export interface FileManagerGuardPaths extends PoolGuardPaths {
+interface FileManagerGuardPaths extends PoolGuardPaths {
   /** `clp`'s uid and gid, looked up when null. */
   panelUid: number | null;
   panelGid: number | null;
 }
 
-export const DEFAULT_FILE_MANAGER_GUARD_PATHS: FileManagerGuardPaths = {
+const DEFAULT_FILE_MANAGER_GUARD_PATHS: FileManagerGuardPaths = {
   ...POOL_GUARD_PATH_DEFAULTS,
   script: `${FPM_DIR}/clp-addons-file-manager-guard.php`,
   pool: `${FPM_DIR}/pool.d/zz-clp-addons-file-manager-guard.conf`,
@@ -32,7 +32,7 @@ export const DEFAULT_FILE_MANAGER_GUARD_PATHS: FileManagerGuardPaths = {
 export type FileManagerGuardOptions = PoolGuardOptions<FileManagerGuardPaths>;
 type Context = PoolGuardContext<FileManagerGuardPaths>;
 
-export function fileManagerGuardPool(script: string): string {
+function fileManagerGuardPool(script: string): string {
   return [
     "; Managed by clp-addons System Tweaks: keeps the File Manager in the site's home, and its socket to clp.",
     "[clp-file-manager]",

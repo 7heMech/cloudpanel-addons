@@ -41,18 +41,18 @@ export interface JobProgress {
   event?: string;
 }
 
-export interface JobSnapshot<J extends JobProgress = JobProgress> {
+interface JobSnapshot<J extends JobProgress = JobProgress> {
   job: J;
   log: string;
 }
 
-export interface JobReadResult<J extends JobProgress> {
+interface JobReadResult<J extends JobProgress> {
   ok: boolean;
   data?: JobSnapshot<J>;
   error?: string;
 }
 
-export type JobReader<J extends JobProgress> = (id: string) => Promise<JobReadResult<J>>;
+type JobReader<J extends JobProgress> = (id: string) => Promise<JobReadResult<J>>;
 
 export type JobWatcher<J extends JobProgress> = (
   id: string,
@@ -72,7 +72,7 @@ export type JobWatcher<J extends JobProgress> = (
  * watcher lives here beside the endpoint that consumes it.
  */
 /** The addons whose jobs can be watched: those that declare a `watch-job` stream. */
-export type JobAddon = { [A in GatewayAddon]: "watch-job" extends StreamVerb<A> ? A : never }[GatewayAddon];
+type JobAddon = { [A in GatewayAddon]: "watch-job" extends StreamVerb<A> ? A : never }[GatewayAddon];
 
 export function watchGatewayJob<J extends JobProgress>(
   addon: JobAddon,
@@ -97,7 +97,7 @@ export function watchGatewayJob<J extends JobProgress>(
   });
 }
 
-export interface JobApiRoute<J extends JobProgress> {
+interface JobApiRoute<J extends JobProgress> {
   req: Request;
   /** Path with the addon's mount prefix already stripped. */
   path: string;

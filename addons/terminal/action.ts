@@ -23,9 +23,9 @@ import { PANEL_USER_NAME_RE, panelUserOwnsSite } from "../../lib/panel-users";
 import { readUnixAccounts, siteAccountProblem, splitSharedUids } from "../../lib/site-accounts";
 import { DEFAULT_ROOT_ACCESS_PATHS, rootAccess, type RootAccessPaths } from "./root-access";
 
-export const PTY_COMMAND = "terminal-pty";
+const PTY_COMMAND = "terminal-pty";
 /** The only variables `runuser --login` keeps; the helper reads the last two. */
-export const PTY_ENV_NAMES = ["TERM", "CLP_SITE_DIR", "CLP_PTY_SIZE", "CLP_ROOT_SHELL"];
+const PTY_ENV_NAMES = ["TERM", "CLP_SITE_DIR", "CLP_PTY_SIZE", "CLP_ROOT_SHELL"];
 export const MAX_TERMINAL_SIZE = 1000;
 /** Below this a uid is a system account, never a site's. */
 const MIN_SITE_UID = 1000;
@@ -48,7 +48,7 @@ export interface TerminalActionPaths {
   rootAccess: RootAccessPaths;
 }
 
-export interface TerminalActionOptions {
+interface TerminalActionOptions {
   paths?: Partial<TerminalActionPaths>;
   processUid?: number;
   /** Test-only; production always guards against the panel's own hostname. */
@@ -66,7 +66,7 @@ export interface TerminalActionOptions {
   killAfterMs?: number;
 }
 
-export const DEFAULT_TERMINAL_PATHS: TerminalActionPaths = {
+const DEFAULT_TERMINAL_PATHS: TerminalActionPaths = {
   panelDb: PANEL_DB,
   passwd: "/etc/passwd",
   runuser: "/usr/sbin/runuser",
@@ -74,7 +74,7 @@ export const DEFAULT_TERMINAL_PATHS: TerminalActionPaths = {
   rootAccess: DEFAULT_ROOT_ACCESS_PATHS,
 };
 
-export interface TerminalRequest {
+interface TerminalRequest {
   /** Null for a root shell on the server itself. */
   domain: string | null;
   panelUser: string;
@@ -82,7 +82,7 @@ export interface TerminalRequest {
   rows: number;
 }
 
-export interface TerminalTarget {
+interface TerminalTarget {
   user: string;
   /** Where the shell starts: the site's root, or the home when that is gone. */
   dir: string;

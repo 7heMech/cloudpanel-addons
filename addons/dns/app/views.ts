@@ -20,7 +20,7 @@ const TYPE_LABELS: Record<string, string> = {
   wordpress: "WordPress", php: "PHP", static: "Static", nodejs: "Node.js", python: "Python", "reverse-proxy": "Reverse proxy", redirect: "Redirect",
 };
 
-export const REDIRECT_STATUS_LABELS: Record<number, string> = {
+const REDIRECT_STATUS_LABELS: Record<number, string> = {
   301: "301 Moved permanently", 302: "302 Found (temporary)", 307: "307 Temporary, same method", 308: "308 Permanent, same method",
 };
 

@@ -19,11 +19,11 @@ import { writeFileAtomic } from "../../lib/atomic-write";
 import { isTrustedDirectory, isTrustedFile } from "../../lib/trusted-file";
 import { PANEL_USER_NAME_RE } from "../../lib/panel-users";
 
-export const ROOT_GRANTS_FILE = `${CONFIG_DIR}/terminal-root.json`;
+const ROOT_GRANTS_FILE = `${CONFIG_DIR}/terminal-root.json`;
 const ROOT_GRANTS_LOCK = `${LOCK_DIR}/terminal-root.lock`;
 const SECURITY_KEYS_DIR = addonStateDir("security-keys");
 
-export interface RootGrant {
+interface RootGrant {
   user: string;
   /** CloudPanel's `user.id`: a name deleted and created again is someone else. */
   id: number;
@@ -42,7 +42,7 @@ interface PanelAccount {
 }
 
 /** The file is wrong in itself; root recovers by removing it and allowing again. */
-export class UntrustedGrants extends Error {}
+class UntrustedGrants extends Error {}
 
 const errno = (error: unknown) => (error as NodeJS.ErrnoException)?.code;
 
@@ -122,7 +122,7 @@ function mfaDigest(found: PanelAccount): string | null {
  * phone. So a grant holds only the 2FA the owner had when root allowed it:
  * 2FA turned off and set up again needs root again.
  */
-export function grantProblem(db: Database, grant: RootGrant): string | null {
+function grantProblem(db: Database, grant: RootGrant): string | null {
   const found = account(db, grant.user);
   if (!found || found.id !== grant.id) return `${grant.user} is not the account root allowed; root can run clp-addons terminal root allow ${grant.user} again`;
   if (Number(found.status) !== 1) return `${grant.user} is deactivated`;

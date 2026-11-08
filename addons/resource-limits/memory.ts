@@ -71,7 +71,7 @@ const MAX_CONNECTIONS = 512;
 /** InnoDB grows the pool in 128 MB chunks per instance, and rounds a size up to them. */
 const CHUNK_MB = 128;
 
-export interface MemoryPlan {
+interface MemoryPlan {
   ramMb: number;
   bufferPoolMb: number;
   poolInstances: number;
@@ -124,12 +124,12 @@ export function mysqlOptionFile(plan: MemoryPlan, profile: MemoryProfile): strin
 }
 
 /** Lower is killed later; PHP-FPM's site pools go first, so one request fails instead of every site. */
-export const OOM_SCORES = { mysql: -600, nginx: -500, php: 300 } as const;
-export const REDIS_POLICY = "allkeys-lru";
+const OOM_SCORES = { mysql: -600, nginx: -500, php: 300 } as const;
+const REDIS_POLICY = "allkeys-lru";
 
 // --- Context ---------------------------------------------------------------
 
-export const DEFAULT_MEMORY_PATHS = {
+const DEFAULT_MEMORY_PATHS = {
   meminfo: "/proc/meminfo",
   /** The directories MySQL and MariaDB read last on Debian and Ubuntu; the first that exists is used. */
   confDirs: ["/etc/mysql/mariadb.conf.d", "/etc/mysql/mysql.conf.d", "/etc/mysql/conf.d"],
@@ -153,7 +153,7 @@ export const DEFAULT_MEMORY_PATHS = {
   bin: CLI_BIN,
 };
 
-export type MemoryPaths = typeof DEFAULT_MEMORY_PATHS;
+type MemoryPaths = typeof DEFAULT_MEMORY_PATHS;
 
 export interface MemoryOptions {
   paths?: Partial<MemoryPaths>;

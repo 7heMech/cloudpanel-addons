@@ -10,7 +10,7 @@ import { createHash, createPublicKey, verify } from "node:crypto";
 import { isIP } from "node:net";
 
 export const ALGORITHMS = [-7, -8, -257] as const;
-export type Algorithm = (typeof ALGORITHMS)[number];
+type Algorithm = (typeof ALGORITHMS)[number];
 
 const FLAG_UP = 0x01;
 const FLAG_UV = 0x04;
@@ -25,7 +25,7 @@ function fail(message: string): never {
   throw new WebAuthnError(message);
 }
 
-export function b64url(bytes: Uint8Array): string {
+function b64url(bytes: Uint8Array): string {
   return Buffer.from(bytes).toString("base64url");
 }
 
@@ -44,7 +44,7 @@ function sameBytes(a: Uint8Array, b: Uint8Array): boolean {
   return a.length === b.length && a.every((byte, index) => byte === b[index]);
 }
 
-export type Cbor = number | string | Uint8Array | boolean | null | undefined | Cbor[] | Map<Cbor, Cbor>;
+type Cbor = number | string | Uint8Array | boolean | null | undefined | Cbor[] | Map<Cbor, Cbor>;
 
 /** One CBOR item from `bytes` at `offset`, and where it ends. */
 export function decodeCbor(bytes: Uint8Array, offset = 0, depth = 0): { value: Cbor; end: number } {
@@ -115,7 +115,7 @@ export function decodeCbor(bytes: Uint8Array, offset = 0, depth = 0): { value: C
   }
 }
 
-export interface PublicJwk {
+interface PublicJwk {
   kty: "EC" | "OKP" | "RSA";
   crv?: string;
   x?: string;
@@ -136,7 +136,7 @@ function coseBytes(key: Map<Cbor, Cbor>, label: number, length?: number): string
 }
 
 /** A COSE public key as a JWK node:crypto can load, for the algorithms allowed. */
-export function coseToJwk(key: Cbor): StoredPublicKey {
+function coseToJwk(key: Cbor): StoredPublicKey {
   if (!(key instanceof Map)) fail("public key is not a COSE map");
   const kty = key.get(1);
   const alg = key.get(3);
@@ -166,7 +166,7 @@ interface AuthenticatorData {
   publicKey?: Cbor;
 }
 
-export function parseAuthenticatorData(bytes: Uint8Array): AuthenticatorData {
+function parseAuthenticatorData(bytes: Uint8Array): AuthenticatorData {
   if (bytes.length < 37) fail("authenticator data is too short");
   const view = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength);
   const parsed: AuthenticatorData = {
@@ -214,7 +214,7 @@ function requireFlags(flags: number): void {
   if (!(flags & FLAG_UV)) fail("the key did not verify its user; set a PIN or use a biometric key");
 }
 
-export interface Registration {
+interface Registration {
   credentialId: string;
   publicKey: StoredPublicKey;
   signCount: number;

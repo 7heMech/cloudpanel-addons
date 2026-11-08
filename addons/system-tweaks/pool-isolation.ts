@@ -27,10 +27,10 @@ import { daemonReload } from "../../lib/systemd";
 import { regularText } from "../../lib/trusted-file";
 import { COMMAND_MS } from "./limits";
 
-export const POOL_TABLE = "clp_addons_php_pools";
+const POOL_TABLE = "clp_addons_php_pools";
 const DROP_IN = "zz-clp-addons-php-pools.conf";
 
-export const DEFAULT_POOL_ISOLATION_PATHS = {
+const DEFAULT_POOL_ISOLATION_PATHS = {
   phpRoot: "/etc/php",
   passwdFile: "/etc/passwd",
   nginxConf: "/etc/nginx/nginx.conf",
@@ -42,7 +42,7 @@ export const DEFAULT_POOL_ISOLATION_PATHS = {
   panelUser: PANEL_USER,
 };
 
-export type PoolIsolationPaths = typeof DEFAULT_POOL_ISOLATION_PATHS;
+type PoolIsolationPaths = typeof DEFAULT_POOL_ISOLATION_PATHS;
 
 export interface PoolIsolationOptions {
   paths?: Partial<PoolIsolationPaths>;
@@ -165,7 +165,7 @@ export function poolRuleset(pools: Pool[], users: Map<string, number>, trusted: 
 }
 
 /** The ports and port-owner pairs of a ruleset {@link poolRuleset} wrote. */
-export interface LoadedSets { ports: number[]; owners: string[] }
+interface LoadedSets { ports: number[]; owners: string[] }
 
 function loadedSets(rules: string): LoadedSets {
   const elements = (set: string) => new RegExp(`^  set ${set} \\{[^{}]*elements = \\{ ([^{}]*) \\}; \\}$`, "m").exec(rules)?.[1]?.split(", ") ?? [];

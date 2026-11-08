@@ -12,7 +12,7 @@ import { runCommand, type CommandResult } from "../../lib/command";
 import { writeFileAtomic } from "../../lib/atomic-write";
 import { COMMAND_MS } from "./limits";
 
-export const DEFAULT_TELEMETRY_PATHS = {
+const DEFAULT_TELEMETRY_PATHS = {
   dropIn: "/etc/systemd/system/clp-agent.service.d/zz-clp-addons-telemetry.conf",
   unit: "clp-agent.service",
   systemctl: "systemctl",
@@ -20,7 +20,7 @@ export const DEFAULT_TELEMETRY_PATHS = {
   bash: "/bin/bash",
 };
 
-export const TELEMETRY_DROP_IN = `# clp-addons System Tweaks: Block CloudPanel telemetry. Switching it off removes this file.
+const TELEMETRY_DROP_IN = `# clp-addons System Tweaks: Block CloudPanel telemetry. Switching it off removes this file.
 [Service]
 IPAddressDeny=any
 IPAddressAllow=localhost

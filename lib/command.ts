@@ -51,11 +51,6 @@ export function requireSuccess(result: CommandResult, what: string): void {
   if (!result.ok) failAction(`${what}: ${commandOutput(result) || `exit ${result.exitCode ?? "unknown"}`}`);
 }
 
-export function forwardCommandOutput(result: CommandResult): void {
-  if (result.stdout) process.stderr.write(result.stdout);
-  if (result.stderr) process.stderr.write(result.stderr);
-}
-
 export function commandFailure(command: string, result: CommandResult): ActionCommandFailure {
   return new ActionCommandFailure(command, result.stderr || result.stdout);
 }

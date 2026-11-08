@@ -14,7 +14,6 @@ const USER_CLASS = "App\\Entity\\User";
 export const MAX_SESSION_BYTES = 256 * 1024;
 export const MAX_SESSION_ID_LENGTH = 128;
 const AUTH_HELPER_TIMEOUT_MS = 2_000;
-const AUTH_HELPER_MAX_OUTPUT_BYTES = 32 * 1024;
 const MAX_SERIALIZATION_DEPTH = 64;
 const MAX_SERIALIZATION_NODES = 20_000;
 const MAX_ARRAY_ITEMS = 20_000;
@@ -67,7 +66,7 @@ export function panelSessionLifetime(iniPath = PANEL_PHP_INI): number {
   return seconds;
 }
 
-export interface AuthenticatedRequest {
+interface AuthenticatedRequest {
   user: string;
   roles: string[];
 }
@@ -119,7 +118,7 @@ export function redirectToLogin(): Response {
   });
 }
 
-export type AuthHelperReply = { kind: "valid"; session: PanelSession } | { kind: "invalid" } | { kind: "unavailable" };
+type AuthHelperReply = { kind: "valid"; session: PanelSession } | { kind: "invalid" } | { kind: "unavailable" };
 
 export function parseAuthHelperReply(stdout: string): AuthHelperReply {
   try {
@@ -191,7 +190,7 @@ export function panelUserGid(): number | null {
   return panelUserId(3);
 }
 
-export interface SessionFileOptions {
+interface SessionFileOptions {
   ownerUid?: number | null;
   maxBytes?: number;
   warn?: (message: string) => void;
@@ -508,7 +507,7 @@ function parseSerializedValue(bytes: Uint8Array): PhpNode | null {
   }
 }
 
-export interface PanelSession {
+interface PanelSession {
   user: string;
   roles: string[];
   expiresAt: number;

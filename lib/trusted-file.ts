@@ -5,7 +5,7 @@
 import { lstatSync, readFileSync, type Stats } from "node:fs";
 
 /** Group and other may not write: the file is its owner's to change. */
-export const NO_OTHERS_WRITE = 0o022;
+const NO_OTHERS_WRITE = 0o022;
 /** Group and other may do nothing: the file is its owner's alone, to read too. */
 export const OWNER_ONLY = 0o077;
 

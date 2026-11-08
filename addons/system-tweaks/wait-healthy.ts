@@ -1,4 +1,4 @@
-export interface HealthWait<P> {
+interface HealthWait<P> {
   now: () => number;
   sleep: (ms: number) => Promise<void>;
   timeoutMs: number;

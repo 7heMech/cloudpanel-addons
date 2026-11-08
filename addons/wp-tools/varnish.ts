@@ -23,7 +23,7 @@ export interface WpVarnishState {
   sites: Record<string, VarnishSiteRecord>;
 }
 
-export interface VarnishSite {
+interface VarnishSite {
   domain: string;
   user: string;
   root: string;

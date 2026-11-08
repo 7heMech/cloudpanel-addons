@@ -19,7 +19,7 @@ export const MAX_GATEWAY_INPUT_BYTES = 1024 * 1024; // 1 MB max input (for clone
 export const DEFAULT_GATEWAY_TIMEOUT_MS = 60_000;
 
 /** Who may ask root for a verb from the web. */
-export type WebAccess =
+type WebAccess =
   /** An administrator, behind the manager's gate. */
   | "admin"
   /** An administrator or a site manager; CloudPanel does not narrow a site manager's sites. */
@@ -38,7 +38,7 @@ export type WebAccess =
  * its session itself. A `lock` verb is refused from the web while root has
  * locked its addon (`clp-addons lock`).
  */
-export type VerbDeclaration =
+type VerbDeclaration =
   | { readonly web: WebAccess; readonly stream?: "one-way" | "duplex"; readonly lock?: true }
   | { readonly web: false; readonly why: string };
 
@@ -66,8 +66,6 @@ export const ADDON_VERBS = {
 
 export type GatewayAddon = keyof typeof ADDON_VERBS;
 type Verbs<A extends GatewayAddon> = (typeof ADDON_VERBS)[A];
-/** Every verb `clp-addons action <addon>` takes. */
-export type AddonVerb<A extends GatewayAddon> = keyof Verbs<A> & string;
 /** The verbs of an addon the web may ask for; of any addon, when it is not known which. */
 export type WebVerb<A extends GatewayAddon> = A extends GatewayAddon
   ? { [V in keyof Verbs<A>]: Verbs<A>[V] extends { web: false } ? never : V }[keyof Verbs<A>] & string
@@ -161,8 +159,6 @@ export interface ActionResult<T = unknown> {
   data?: T;
   error?: string;
 }
-
-export type GatewayResponse<T = unknown> = ActionResult<T>;
 
 /**
  * Parses an incoming line from the gateway socket.

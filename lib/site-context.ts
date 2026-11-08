@@ -31,7 +31,7 @@ export interface SiteContext {
   addonSlugs?: string[];
 }
 
-export interface SiteTab {
+interface SiteTab {
   slug: string;
   label: string;
   href: string;

@@ -33,13 +33,13 @@ import { getLivePanelInfo } from "../lib/panel-snapshot";
 import { verbLocked } from "../lib/root-locks";
 
 export const MAX_AUTH_INPUT_BYTES = MAX_SESSION_ID_LENGTH + 1;
-export const MAX_AUTH_REPLY_BYTES = 32 * 1024;
+const MAX_AUTH_REPLY_BYTES = 32 * 1024;
 const AUTH_STDIN_TIMEOUT_MS = 2_000;
 
 const SESSION_ID_RE = /^[a-zA-Z0-9,-]+$/;
 const ROLE_RE = /^ROLE_[A-Z0-9_]{1,120}$/;
 
-export interface AuthActionOptions {
+interface AuthActionOptions {
   /** Test-only fixed-directory override; the CLI always uses SESSION_DIR. */
   sessionDir?: string;
   /** Test-only owner override; production uses readPanelSessionFile's clp UID. */
@@ -97,7 +97,7 @@ function accountId(path: string, name: string, field: number): number | null {
  * root-owned executable that systemd starts for the manager. A copied or
  * unrelated process under the same account therefore fails closed.
  */
-export function trustedManagerPeer(socket: net.Socket): boolean {
+function trustedManagerPeer(socket: net.Socket): boolean {
   if (!peerCredLibc) return false;
   const fd = Number((socket as unknown as { _handle?: { fd?: unknown } })._handle?.fd);
   if (!Number.isInteger(fd) || fd < 0) return false;
@@ -142,7 +142,7 @@ function decodeInput(input: Uint8Array): string | null {
  * Returns the role string if the user exists, is active (status = 1), and has a valid role.
  * Returns null otherwise.
  */
-export function lookupUserRole(dbPath: string, username: string): string | null {
+function lookupUserRole(dbPath: string, username: string): string | null {
   try {
     if (!existsSync(dbPath)) return null;
     const db = new Database(dbPath, { readonly: true });
@@ -694,7 +694,7 @@ export function createAuthActionServer(options: AuthActionOptions = {}): net.Ser
  * Run the long-lived daemon activated by systemd.
  * When activated by systemd, systemd passes the listening socket as FD 3 (LISTEN_FDS=1).
  */
-export async function runAuthActionDaemon(options: AuthActionOptions = {}): Promise<void> {
+async function runAuthActionDaemon(options: AuthActionOptions = {}): Promise<void> {
   const server = createAuthActionServer({ ...options, enforcePeer: true });
 
   return new Promise<void>((resolve, reject) => {

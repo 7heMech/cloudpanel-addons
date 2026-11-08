@@ -15,9 +15,9 @@ import { stillAuthorized } from "../../../lib/sso-auth";
 
 export const RING_BYTES = 256 * 1024;
 /** How long a session waits for its popup to come back before it ends. */
-export const DETACHED_GRACE_MS = 60_000;
+const DETACHED_GRACE_MS = 60_000;
 /** How long a popup that said it was closing has to come back, as on a reload. */
-export const CLOSING_GRACE_MS = 5_000;
+const CLOSING_GRACE_MS = 5_000;
 const START_TIMEOUT_MS = 20_000;
 const KEEPALIVE_MS = 15_000;
 const AUTH_RECHECK_MS = 15_000;
@@ -32,7 +32,7 @@ const INPUT_PIECE = 8 * 1024;
 /** A popup this far behind is dropped; it reconnects and replays from the ring. */
 const MAX_CLIENT_BACKLOG = 2 * 1024 * 1024;
 
-export type EndReason = "exit" | "closed" | "detached" | "signed-out" | "protocol" | "disconnected";
+type EndReason = "exit" | "closed" | "detached" | "signed-out" | "protocol" | "disconnected";
 
 export interface Owner {
   user: string;
@@ -53,7 +53,7 @@ export interface OpenRequest {
   sessionId: string;
 }
 
-export interface TerminalStream {
+interface TerminalStream {
   write(line: string): void;
   close(): void;
 }
@@ -63,7 +63,7 @@ export type StreamOpener = (
   handlers: { onLine(line: string): void; onClose(error?: string): void },
 ) => TerminalStream;
 
-export const gatewayOpener: StreamOpener = (request, handlers) =>
+const gatewayOpener: StreamOpener = (request, handlers) =>
   streamGatewayAction({
     addon: "terminal",
     verb: "session",
@@ -74,7 +74,7 @@ export const gatewayOpener: StreamOpener = (request, handlers) =>
     onClose: handlers.onClose,
   });
 
-export type HelperMessage =
+type HelperMessage =
   | { kind: "ready"; user: string; dir: string }
   | { kind: "output"; bytes: Buffer; encoded: string }
   | { kind: "exit"; code: number | null; signal: string | null }
@@ -153,9 +153,9 @@ interface Session {
   ended: { reason: EndReason; code: number | null } | null;
 }
 
-export type OpenResult = { ok: true; id: string; user: string } | { ok: false; error: string };
+type OpenResult = { ok: true; id: string; user: string } | { ok: false; error: string };
 
-export interface SessionStoreOptions {
+interface SessionStoreOptions {
   opener?: StreamOpener;
   authorize?: (req: Request) => Promise<boolean | "unavailable">;
   detachedGraceMs?: number;

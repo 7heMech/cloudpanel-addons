@@ -15,7 +15,7 @@ import type { Database } from "bun:sqlite";
  * answer because a session outlives the status change that should have ended
  * it.
  */
-export type PanelUserSites = "all" | Set<string> | null;
+type PanelUserSites = "all" | Set<string> | null;
 
 /** CloudPanel's own user names, as its Add User form limits them. */
 export const PANEL_USER_NAME_RE = /^[A-Za-z0-9._@-]{1,64}$/;

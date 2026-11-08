@@ -27,7 +27,7 @@ import {
  * signature is their credential. `users`, `revoke` and `settings` are the
  * administrator's.
  */
-export type SecurityKeysVerb = keyof typeof SECURITY_KEYS_VERBS;
+type SecurityKeysVerb = keyof typeof SECURITY_KEYS_VERBS;
 
 const VERBS = Object.keys(SECURITY_KEYS_VERBS) as SecurityKeysVerb[];
 const OWN_ACCOUNT_VERBS = new Set(VERBS.filter((verb) => SECURITY_KEYS_VERBS[verb].web === "own-account"));
@@ -49,7 +49,7 @@ export interface SecurityKeysPaths {
   stateUid: number;
 }
 
-export const DEFAULT_SECURITY_KEYS_PATHS: SecurityKeysPaths = {
+const DEFAULT_SECURITY_KEYS_PATHS: SecurityKeysPaths = {
   stateDir: addonStateDir("security-keys"),
   lockFile: `${LOCK_DIR}/security-keys.lock`,
   panelDb: PANEL_DB,
@@ -57,7 +57,7 @@ export const DEFAULT_SECURITY_KEYS_PATHS: SecurityKeysPaths = {
   stateUid: 0,
 };
 
-export interface SecurityKeysActionOptions {
+interface SecurityKeysActionOptions {
   paths?: Partial<SecurityKeysPaths>;
   input?: string;
   emitReply?: boolean;
@@ -88,8 +88,8 @@ interface Store {
   users: Record<string, StoredUser>;
 }
 
-export const PANEL_ROLES = ["ROLE_ADMIN", "ROLE_SITE_MANAGER", "ROLE_USER"] as const;
-export type PanelRole = (typeof PANEL_ROLES)[number];
+const PANEL_ROLES = ["ROLE_ADMIN", "ROLE_SITE_MANAGER", "ROLE_USER"] as const;
+type PanelRole = (typeof PANEL_ROLES)[number];
 
 /** What an administrator decides for the whole panel. */
 export interface Settings {

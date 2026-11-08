@@ -60,7 +60,7 @@ export interface PoolGuardContext<P extends PoolGuardPaths = PoolGuardPaths> {
   healthTimeoutMs: number;
 }
 
-export interface PoolGuardSpec<P extends PoolGuardPaths> {
+interface PoolGuardSpec<P extends PoolGuardPaths> {
   /** As failures name it: "the vhost guard". */
   name: string;
   defaults: P;
@@ -81,7 +81,7 @@ export interface PoolGuardSpec<P extends PoolGuardPaths> {
 const SESSION_INCLUDE = "require __DIR__ . '/panel-session.php'";
 
 /** The guard as installed: the shared session reader in place of its include, so it is one file. */
-export function withPanelSession(script: string): string {
+function withPanelSession(script: string): string {
   if (!script.includes(SESSION_INCLUDE)) throw new Error("a guard script does not include panel-session.php");
   return script.replace(SESSION_INCLUDE, `(static function () {\n${PANEL_SESSION.replace(/^<\?php\n/, "").trimEnd()}\n})()`);
 }

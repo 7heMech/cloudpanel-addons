@@ -10,7 +10,7 @@ import { openPanelDatabase } from "../../lib/panel-db";
 import { trustedVhost, withNginxTransactionAsync } from "../../lib/nginx-transaction";
 import { MAINTENANCE_INCLUDE_PATH, NGINX_GLOBAL_SETTINGS } from "../../lib/paths";
 
-export interface BasicAuthPaths {
+interface BasicAuthPaths {
   panelDb: string;
   nginxVhostDir: string;
   nginx: string;
@@ -101,7 +101,7 @@ function escaped(value: string): string {
 }
 
 // Only replace the block CloudPanel renders from basic_auth, preserving the rest of the vhost.
-export function basicAuthVhost(content: string, domain: string, previous: string | null, next: string[]): string {
+function basicAuthVhost(content: string, domain: string, previous: string | null, next: string[]): string {
   const before = entries(previous);
   const block = [
     ...(before.length ? ["satisfy any;", ...before.map((ip) => `allow ${ip};`), "deny all;"] : []),

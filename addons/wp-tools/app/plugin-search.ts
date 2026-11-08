@@ -14,7 +14,7 @@ import { DIRECTORY_SLUG_RE, cleanLabel } from "../plugin-zip";
 const DIRECTORY_API = "https://api.wordpress.org/plugins/info/1.2/";
 const RESULTS = 12;
 
-export interface DirectoryPlugin {
+interface DirectoryPlugin {
   slug: string;
   name: string;
   version: string;

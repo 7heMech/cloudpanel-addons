@@ -61,9 +61,9 @@ import { applyMotd, motdStatus, type MotdOptions, type MotdStatus } from "./motd
 const SETTINGS_VERSION = 1;
 const MAX_INPUT_BYTES = 4 * 1024;
 
-export type SystemTweaksVerb = keyof typeof SYSTEM_TWEAKS_VERBS;
+type SystemTweaksVerb = keyof typeof SYSTEM_TWEAKS_VERBS;
 
-export interface SystemTweaksSettings {
+interface SystemTweaksSettings {
   updates: UpdateSettings;
   /** Timers this addon enabled because they were off, and disables again with the switch. */
   enabledTimers: string[];
@@ -122,7 +122,7 @@ export interface SystemTweaksPaths {
   rootUid: number;
 }
 
-export const DEFAULT_SYSTEM_TWEAKS_PATHS: SystemTweaksPaths = {
+const DEFAULT_SYSTEM_TWEAKS_PATHS: SystemTweaksPaths = {
   settingsFile: `${addonStateDir("system-tweaks")}/settings.json`,
   lockFile: `${LOCK_DIR}/system-tweaks.lock`,
   rootUid: ROOT_UID,
@@ -737,7 +737,7 @@ export function systemTweaksBackupCompression(options: SystemTweaksOptions = {})
  * reinstalls the original. A version this release does not know leaves the
  * wrapper in place, reported, not as a failure.
  */
-export function systemTweaksClpctlGuard(options: SystemTweaksOptions = {}): string | null {
+function systemTweaksClpctlGuard(options: SystemTweaksOptions = {}): string | null {
   return withSettingsLock(options, (_paths, settings) => {
     if (!settings.blockClpctlInjection) return null;
     const result = applyClpctlGuard(options.clpctlGuard);
@@ -754,7 +754,7 @@ export function systemTweaksVarnish(options: SystemTweaksOptions = {}): string |
 }
 
 /** Repair's: CloudPanel's shared panel certificate is replaced again after an update puts it back. */
-export function systemTweaksPanelCert(options: SystemTweaksOptions = {}): string | null {
+function systemTweaksPanelCert(options: SystemTweaksOptions = {}): string | null {
   return withSettingsLock(options, (_paths, settings) => settings.replacePanelCert ? replacePanelCert(options.panelCert) : null);
 }
 

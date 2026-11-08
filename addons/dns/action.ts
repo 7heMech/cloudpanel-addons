@@ -42,7 +42,7 @@ import { clpctlIssue, NEW_SITE_WINDOW, requestSsl, retryCertificates, type Issue
 import { readState, writeState } from "./store";
 import { tokenTemplate, type TokenTemplate } from "./token";
 
-export type DnsVerb = keyof typeof DNS_VERBS;
+type DnsVerb = keyof typeof DNS_VERBS;
 
 const VERBS = Object.keys(DNS_VERBS) as DnsVerb[];
 const NO_BODY: DnsVerb[] = ["list", "check", "find-redirects", "provision", "site-status", "reconcile", "sync-sites"];
@@ -54,7 +54,7 @@ const PAGE_LOG = 200;
 /** CloudPanel's Certificate::TYPE_SELF_SIGNED. */
 const SELF_SIGNED = "1";
 
-export interface DnsPaths {
+interface DnsPaths {
   configFile: string;
   panelDb: string;
   stateDir: string;
@@ -83,7 +83,7 @@ export interface DnsActionOptions {
   standIns?: () => StandIns;
 }
 
-export const DEFAULT_DNS_PATHS: DnsPaths = {
+const DEFAULT_DNS_PATHS: DnsPaths = {
   configFile: addonConfigFile("dns"),
   panelDb: PANEL_DB,
   stateDir: addonStateDir("dns"),
@@ -122,7 +122,7 @@ export interface Review {
 }
 
 /** A write DNS made, and what made it. */
-export type LogLine = LogEntry & { cause: string };
+type LogLine = LogEntry & { cause: string };
 
 export interface DnsState {
   automatic: boolean;

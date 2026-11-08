@@ -23,7 +23,7 @@ const DRAIN_AFTER_EXIT_MS = 500;
 
 const signalNumbers = constants.signals as Record<string, number>;
 
-export type PtyMessage = { input: string } | { resize: [number, number] };
+type PtyMessage = { input: string } | { resize: [number, number] };
 
 function clamp(value: unknown): number | null {
   if (typeof value !== "number" || !Number.isFinite(value)) return null;

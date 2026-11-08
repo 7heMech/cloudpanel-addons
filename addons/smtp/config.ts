@@ -48,7 +48,7 @@ export function smtpAddress(value: unknown): string {
   return value.toLowerCase();
 }
 
-export interface RequestedSender { local: string; domain: string }
+interface RequestedSender { local: string; domain: string }
 
 export function senderFor(template: string, site: string, from?: RequestedSender | null): string {
   return smtpAddress(template

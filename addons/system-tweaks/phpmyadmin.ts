@@ -26,7 +26,7 @@ const HIDDEN_DIRS = ["examples", "setup", "sql", "vendor", "libraries", "templat
 /** Release and package files, dotfiles, and the sample config. */
 const HIDDEN_FILES = String.raw`\.|ChangeLog$|README$|LICENSE$|RELEASE-DATE-|CONTRIBUTING\.md$|composer\.(?:json|lock)$|package\.json$|yarn\.lock$|babel\.config\.json$|config\.sample\.inc\.php$`;
 
-export function phpMyAdminBlock(credentials: string): string {
+function phpMyAdminBlock(credentials: string): string {
   return [
     "  # clp-addons:phpmyadmin:start",
     `  set $clp_addons_auth "";`,
@@ -64,7 +64,7 @@ export function withPhpMyAdminRules(content: string): string | null {
   return `${upstream.slice(0, at)}${phpMyAdminBlock(files[0]![1]!)}${upstream.slice(at)}`;
 }
 
-export const DEFAULT_PHPMYADMIN_PATHS = {
+const DEFAULT_PHPMYADMIN_PATHS = {
   /** Null takes CloudPanel's own panel vhost, as cli/inject.ts finds it. */
   vhost: null as string | null,
   /** Null takes the panel's own nginx.conf when it has one, as CloudPanel 6 does. */

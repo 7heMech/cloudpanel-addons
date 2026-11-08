@@ -5,7 +5,7 @@ import { errorMessage } from "./errors";
 import { type CommandResult } from "./command";
 import { writeFileAtomic } from "./atomic-write";
 
-export interface NginxFileBackup {
+interface NginxFileBackup {
   path: string;
   content: string | null;
   mode: number;
@@ -102,7 +102,7 @@ export function nginxFileChange(path: string, content: string | null, expectedUi
 }
 
 /** Which Nginx to validate and reload: the sites' by default, or one with its own config and unit. */
-export interface NginxInstance {
+interface NginxInstance {
   nginx: string;
   systemctl: string;
   config?: string;

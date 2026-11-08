@@ -22,7 +22,7 @@ export function resolveAddon(name: string | undefined): AddonSpec {
 const RENAMED_ADDONS: Record<string, string> = { "wp-login": "wp-tools", "php-resources": "resource-limits" };
 
 /** What a rename moved, so a failed update can hand it back to the binary it restores. */
-export interface AddonRename {
+interface AddonRename {
   from: string;
   to: string;
   /** The old config, or null when the addon was disabled. */

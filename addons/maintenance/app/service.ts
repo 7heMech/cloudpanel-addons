@@ -13,7 +13,7 @@ export interface MaintenanceFleet {
 }
 
 /** A site's status together with the panel context its page is drawn in. */
-export interface MaintenanceSitePage {
+interface MaintenanceSitePage {
   site: MaintenanceSiteView;
   context: SiteContext;
 }
@@ -26,7 +26,7 @@ export interface MaintenanceTemplateView {
   removed?: boolean;
 }
 
-export interface BulkToggleResult {
+interface BulkToggleResult {
   enabled: boolean;
   updated: string[];
   failed: { domain: string; error: string }[];

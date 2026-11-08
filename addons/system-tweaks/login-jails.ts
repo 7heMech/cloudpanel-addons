@@ -18,14 +18,14 @@ import { aptInstall, installedVersion, systemRun, type Run } from "./packages";
 export const PANEL_JAIL = "clp-addons-panel";
 /** The panel through CloudPanel's custom domain, which the sites' nginx serves on 443. */
 export const DOMAIN_JAIL = "clp-addons-domain";
-export const SSH_JAIL = "sshd";
+const SSH_JAIL = "sshd";
 export const LOGIN_JAILS = [PANEL_JAIL, DOMAIN_JAIL, SSH_JAIL] as const;
 const PANEL_PORT = "8443";
 const DOMAIN_PORT = "443";
 const LOG_TAG = "clp_addons_panel";
 const DOMAIN_TAG = "clp_addons_domain";
 /** fail2ban, its journal reader, and nft for the bans. */
-export const LOGIN_JAIL_PACKAGES = ["fail2ban", "python3-systemd", "nftables"];
+const LOGIN_JAIL_PACKAGES = ["fail2ban", "python3-systemd", "nftables"];
 /** Proxies the panel trusts besides Cloudflare: a ban on one would shut out everyone behind it. */
 const PRIVATE_PROXIES = ["10.0.0.0/8", "172.16.0.0/12", "192.168.0.0/16"];
 export const JAIL_LIMITS = { maxretry: 5, findtime: "1h", bantime: "1h" };
@@ -42,7 +42,7 @@ export interface Fail2banBefore {
   active: boolean;
 }
 
-export const DEFAULT_LOGIN_JAIL_PATHS = {
+const DEFAULT_LOGIN_JAIL_PATHS = {
   fail2banDir: "/etc/fail2ban",
   /** The panel's own nginx.conf; null on a CloudPanel whose panel shares the sites' nginx. */
   panelConf: nginxLayout().configFile as string | null,
@@ -170,7 +170,7 @@ function syslogLog(tag: string): string {
 }
 
 /** What takes the place of the panel's http-level `access_log off;`. */
-export function loginLogBlock(indent: string): string {
+function loginLogBlock(indent: string): string {
   const lines = [`${MARK}access_log off;`, "# clp-addons:login-log:start", ...loginMaps(), syslogLog(LOG_TAG), "# clp-addons:login-log:end"];
   return lines.map((line) => `${indent}${line}\n`).join("");
 }
@@ -209,7 +209,7 @@ function panelLogActive(ctx: Context): boolean | null {
 }
 
 /** Adds or removes the block, testing and reloading the panel's nginx and restoring the file on failure. */
-export function applyLoginLog(enabled: boolean, options: LoginJailOptions = {}): boolean {
+function applyLoginLog(enabled: boolean, options: LoginJailOptions = {}): boolean {
   const ctx = contextOf(options);
   const target = panelTarget(ctx);
   if (!target) return false;
@@ -277,7 +277,7 @@ function domainUid(ctx: Context): number | null {
 }
 
 /** Adds or removes the custom domain's log, testing and reloading the sites' nginx and restoring the file on failure. */
-export function applyDomainLog(enabled: boolean, options: LoginJailOptions = {}): boolean {
+function applyDomainLog(enabled: boolean, options: LoginJailOptions = {}): boolean {
   const ctx = contextOf(options);
   const current = readDomainVhost(ctx);
   if (current === null) return false;

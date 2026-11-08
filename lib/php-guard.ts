@@ -24,7 +24,7 @@ import { tryRun } from "./command";
 const INI_BODY = "; Managed by clp-addons: CVE-2026-109619 session upload-progress mitigation\nsession.upload_progress.enabled = Off\n";
 const VERSION_RE = /^[0-9]+\.[0-9]+$/;
 
-export interface PhpGuardPaths {
+interface PhpGuardPaths {
   phpRoot: string;
   fpmBinDir: string;
   panelFpmUnit: string;
@@ -32,7 +32,7 @@ export interface PhpGuardPaths {
   rootUid: number;
 }
 
-export const DEFAULT_PHP_GUARD_PATHS: PhpGuardPaths = {
+const DEFAULT_PHP_GUARD_PATHS: PhpGuardPaths = {
   phpRoot: PHP_ROOT,
   fpmBinDir: PHP_FPM_BIN_DIR,
   panelFpmUnit: PANEL_FPM_UNIT,
@@ -74,7 +74,7 @@ function current(path: string, rootUid: number): string | null {
   return trustedText(path, rootUid);
 }
 
-export interface PhpGuardStatus {
+interface PhpGuardStatus {
   /** Versions whose FPM binary is installed and whose drop-in is in place. */
   guarded: string[];
   /** Installed-FPM versions still missing the drop-in. */

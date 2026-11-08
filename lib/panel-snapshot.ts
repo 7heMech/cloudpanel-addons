@@ -29,7 +29,7 @@ type SiteRow = {
 
 type ValueRow = { value: string | number | null };
 
-export interface PanelDatabaseSnapshot {
+interface PanelDatabaseSnapshot {
   allocatedPorts: number[];
   sites: SanitizedSite[];
 }

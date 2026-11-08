@@ -30,7 +30,7 @@ import { regularText, trustedText } from "../../lib/trusted-file";
 import WRAPPER_SCRIPT from "./clpctl-wrapper.sh" with { type: "text" };
 import { COMMAND_MS } from "./limits";
 
-export const DEFAULT_CLPCTL_GUARD_PATHS = {
+const DEFAULT_CLPCTL_GUARD_PATHS = {
   wrapper: "/usr/bin/clpctlWrapper",
   /** Where the original is kept; the script names this path too. */
   backup: `${addonStateDir("system-tweaks")}/clpctlWrapper.orig`,
@@ -50,7 +50,7 @@ export const KNOWN_ORIGINAL_SHA256 = new Set([
 ]);
 
 /** CloudPanel package versions (dpkg, without the distro suffix) this was built against. */
-export const KNOWN_VERSIONS = new Set(["2.5.4-3"]);
+const KNOWN_VERSIONS = new Set(["2.5.4-3"]);
 
 export interface ClpctlGuardOptions {
   paths?: Partial<typeof DEFAULT_CLPCTL_GUARD_PATHS>;
@@ -62,7 +62,7 @@ export interface ClpctlGuardOptions {
 }
 
 /** What the installed wrapper is. */
-export type WrapperKind =
+type WrapperKind =
   | "ours" // our hardened wrapper, over a saved known original
   | "known-original" // CloudPanel's own wrapper, a version we know
   | "unknown" // some other wrapper: do not touch it
@@ -178,7 +178,7 @@ function pausedReason(ctx: Context, wrapper: WrapperKind): string {
     : `CloudPanel ${ctx.version} is newer than this mitigation was built against, so the wrapper is left in place`;
 }
 
-export interface ClpctlGuardResult {
+interface ClpctlGuardResult {
   /** The wrapper was written or removed. */
   changed: boolean;
   active: boolean;

@@ -36,17 +36,17 @@ import { CLI_VERSION } from "../lib/version";
 import { type OnProgress, Fatal, log, requireRoot } from "../lib/log";
 
 /** Where the manager's own job records live, beside each addon's state. */
-export const MANAGER_STATE_DIR = addonStateDir("manager");
-export const MANAGER_JOBS_DIR = `${MANAGER_STATE_DIR}/jobs`;
+const MANAGER_STATE_DIR = addonStateDir("manager");
+const MANAGER_JOBS_DIR = `${MANAGER_STATE_DIR}/jobs`;
 /** The New and Changed badges somebody has opened, shared by every administrator. */
-export const NEWS_SEEN_FILE = `${MANAGER_STATE_DIR}/news-seen.json`;
+const NEWS_SEEN_FILE = `${MANAGER_STATE_DIR}/news-seen.json`;
 /** The release this box ran before the installed one; badges cover what came after it. */
 export const NEWS_SINCE_FILE = `${MANAGER_STATE_DIR}/news-since`;
 
 /** Long enough to look at the failure in the UI, short enough not to pile up. */
 const JOB_RETENTION_DAYS = 7;
 
-export type ManagerJobKind = "enable" | "disable" | "update";
+type ManagerJobKind = "enable" | "disable" | "update";
 
 /**
  * The privileged work itself, injected rather than imported.

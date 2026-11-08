@@ -63,7 +63,7 @@ import {
 
 import { basicAuthBlocks, basicAuthRewritable, withBasicAuthBypass, type reloadNginx } from "./basic-auth";
 
-export type WpToolsVerb =
+type WpToolsVerb =
   "sites" | "sign-in" | "site-kind" | "remove" | "sync" | "varnish-settings" | "varnish-install" | "varnish-sync" | "domain-link-settings";
 export type { WpJobs, WpJobView } from "./jobs";
 
@@ -80,7 +80,7 @@ const SECRET_FILE = `${SECRET_DIR}/token.php`;
 /** The POST field the loader reads the secret from. */
 export const WP_LOGIN_FIELD = "clp_addons_login";
 /** How long a minted sign-in is good for. One use, and a minute to make it. */
-export const WP_LOGIN_TTL_SECONDS = 60;
+const WP_LOGIN_TTL_SECONDS = 60;
 
 /**
  * The applications CloudPanel records for a WordPress-family site.
@@ -150,7 +150,7 @@ export interface WpRemoveResult {
   failed: string[];
 }
 
-export interface WpToolsActionPaths {
+interface WpToolsActionPaths {
   configFile: string;
   panelDb: string;
   passwd: string;
@@ -461,7 +461,7 @@ export function wpPoliciesActive(options: WpToolsActionOptions = {}): boolean {
 }
 
 /** The queued timer's MainWP pass does not wait for a page's pass. */
-export async function reconcileWpMainwp(options: WpToolsActionOptions = {}): Promise<MainwpResult> {
+async function reconcileWpMainwp(options: WpToolsActionOptions = {}): Promise<MainwpResult> {
   const paths = pathsFor(options);
   return withFileLock(paths.mainwpLockFile, 1, "a MainWP change is still running", async () => {
     if (!existsSync(paths.configFile) || !mainwpNeedsRepair(readMainwpState(paths.mainwpState))) {

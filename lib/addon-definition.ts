@@ -20,7 +20,7 @@ export interface AddonHook {
 }
 
 /** Work for sites CloudPanel has just created. */
-export interface AddonNewSites extends AddonHook {
+interface AddonNewSites extends AddonHook {
   /**
    * Run on every wake of the new-site watcher for an hour after the sites last
    * changed: queues what a new site's latest step of creation allows, and says
@@ -31,7 +31,7 @@ export interface AddonNewSites extends AddonHook {
 }
 
 /** A top-level `clp-addons` command an addon owns. */
-export interface AddonCommand {
+interface AddonCommand {
   /** Its line in `clp-addons help`, after `clp-addons `; none for a command only systemd, Postfix or the gateway runs. */
   usage?: string;
   /** Refused to anyone but root, before anything else is checked. */
@@ -55,7 +55,7 @@ export interface ConffileEdit {
  * addon is enabled and taken out when it is not, by install, update, repair,
  * the toggles and self-uninstall.
  */
-export interface PanelBlock {
+interface PanelBlock {
   /** Its row in `clp-addons status`. */
   label: string;
   /** False when it could not be put right, having said why. */
