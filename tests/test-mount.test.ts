@@ -7,10 +7,8 @@ import { describe, expect, test } from "bun:test";
 import { mountPath, splitMount } from "../lib/mount";
 import { ADDON_NAMES } from "../addons/catalog";
 
-const ALL = ["cloudflare-ips", "dns", "instatic", "stager", "maintenance", "resource-limits", "git", "panel-tweaks", "system-tweaks", "wp-tools", "smtp", "terminal", "security-keys"];
-
 function hit(path: string): string {
-  const match = splitMount(path, ALL);
+  const match = splitMount(path, ADDON_NAMES);
   return match ? `${match.addon}:${match.rest}` : "none";
 }
 

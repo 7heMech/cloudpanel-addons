@@ -141,9 +141,11 @@ export async function jobEventStream<J extends JobProgress>(options: {
   watchJob?: JobWatcher<J>;
   recheckMs?: number;
   siteManager?: boolean;
+  stillAuthorized?: typeof stillAuthorized;
 }): Promise<Response> {
   const { id, req, getJob, watchJob } = options;
   const recheckMs = options.recheckMs ?? AUTH_RECHECK_MS;
+  const recheck = options.stillAuthorized ?? stillAuthorized;
 
   const initial = await getJob(id);
   if (!initial.ok || !initial.data) {
@@ -225,7 +227,7 @@ export async function jobEventStream<J extends JobProgress>(options: {
         if (closed || authInFlight) return;
         authInFlight = true;
         try {
-          const auth = await stillAuthorized(req, { siteManager: options.siteManager });
+          const auth = await recheck(req, { siteManager: options.siteManager });
           if (auth === false) {
             send(`event: unauthorized\ndata: ${JSON.stringify({ error: "session is no longer valid" })}\n\n`);
             finish();

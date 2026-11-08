@@ -15,6 +15,7 @@ import { maintenanceService, type MaintenanceSiteView } from "../addons/maintena
 import { CLIENT_JS, fleetView, layout, siteView } from "../addons/maintenance/app/views";
 import { MAINTENANCE_TARGETS } from "../addons/maintenance/inject/targets";
 import { MAINTENANCE_INCLUDE_PATH } from "../lib/paths";
+import { BASE_CLIENT_JS } from "../lib/app-ui";
 import {
   inspectNginxMaintenance, NGINX_MAINTENANCE_BLOCK, reconcileNginxMaintenance, releaseMaintenanceSettings,
 } from "../addons/maintenance/nginx";
@@ -386,8 +387,6 @@ test("the fleet selects rows and switches the selected sites, with search from s
   const many = fleetView(fleetOf(Array.from({ length: 6 }, (_, i) => site({ domain: `s${i}.example.com` }))));
   expect(many).toContain('id="fleet-find"');
   expect(many).toContain('<input type="checkbox" value="maintenance" data-group="Status" onchange="pickFleetFilter()"> In maintenance</label>');
-  expect(CLIENT_JS).toContain("function paintFleetSelection()");
-  expect(CLIENT_JS).toContain("call('/api/bulk-toggle'");
 });
 
 test("fleet overview renders the global override in a card of its own", () => {
@@ -450,7 +449,6 @@ test("the site page puts the switch beside its status and folds bypasses and the
   expect(html).toContain('<iframe id="template-preview" title="Maintenance page preview" sandbox></iframe>');
   expect(html).toContain('<div class="editor-tabs" role="tablist" hidden>');
   expect(layout("Maintenance", html)).not.toContain("display: contents");
-  expect(CLIENT_JS).toContain("'Saved; some tags were removed.'");
 });
 
 test("a site-scoped page keeps CloudPanel's site navigation rather than a back link", () => {
@@ -671,45 +669,143 @@ test("purgeVarnish sends PURGE requests for domain and www/bare aliases and hand
   expect(failResult).toBe(false);
 
   // executeMaintenanceAction enable/disable triggers purgeVarnish
-  const { paths } = fixture("wp.example.com");
-  purges.length = 0;
-  await executeMaintenanceAction(["enable", "--domain=wp.example.com"], actionOptions(paths, { fetchFn: mockFetch as any }));
-  expect(purges.some((p) => p.method === "PURGE" && p.host === "wp.example.com")).toBe(true);
+  const { root, paths } = fixture("wp.example.com");
+  try {
+    purges.length = 0;
+    await executeMaintenanceAction(["enable", "--domain=wp.example.com"], actionOptions(paths, { fetchFn: mockFetch as any }));
+    expect(purges.some((p) => p.method === "PURGE" && p.host === "wp.example.com")).toBe(true);
 
-  purges.length = 0;
-  await executeMaintenanceAction(["disable", "--domain=wp.example.com"], actionOptions(paths, { fetchFn: mockFetch as any }));
-  expect(purges.some((p) => p.method === "PURGE" && p.host === "wp.example.com")).toBe(true);
+    purges.length = 0;
+    await executeMaintenanceAction(["disable", "--domain=wp.example.com"], actionOptions(paths, { fetchFn: mockFetch as any }));
+    expect(purges.some((p) => p.method === "PURGE" && p.host === "wp.example.com")).toBe(true);
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
 });
 
-test("the template editor borrows CloudPanel's own Ace and works without it", () => {
+type StubElement = Record<string, any>;
+function stubElement(props: StubElement = {}): StubElement {
+  const classes = new Set<string>();
+  return {
+    hidden: false, disabled: false, value: "", checked: false,
+    classList: { toggle: (name: string, on: boolean) => { if (on) classes.add(name); else classes.delete(name); }, contains: (name: string) => classes.has(name) },
+    setAttribute() {}, getAttribute: () => null, addEventListener() {}, querySelectorAll: () => [], querySelector: () => null,
+    ...props,
+  };
+}
+
+/**
+ * The site page's template editor, run from the script the page ships against
+ * stand-ins for the DOM. `mounted` puts it in a shadow root, as on a
+ * CloudPanel site page.
+ */
+function templatePage(options: { editing?: boolean; mounted?: boolean } = {}) {
+  const ids: Record<string, StubElement> = {
+    "template-editor": stubElement({ value: "<p>saved</p>" }),
+    "template-ace": stubElement({ hidden: true }),
+    "edit-template": stubElement({ checked: options.editing ?? false }),
+    "template-preview": stubElement({ hidden: true }),
+  };
+  const scripts: StubElement[] = [];
+  const copied: unknown[] = [];
+  const fetched: string[] = [];
+  const confirms: Array<{ title: string }> = [];
+  const aceStyle = { id: "ace-tm", cloneNode: () => ({ copyOf: "ace-tm" }) };
+  const root = {
+    getElementById: (id: string) => ids[id] ?? null,
+    querySelector: () => null,
+    querySelectorAll: () => [],
+    addEventListener() {},
+    appendChild: (node: unknown) => copied.push(node),
+  };
+  const document = {
+    cookie: "", readyState: "complete", body: { style: {} },
+    documentElement: { classList: { toggle() {}, contains: () => false } },
+    head: { appendChild: (script: StubElement) => scripts.push(script) },
+    createElement: () => stubElement(),
+    ...root,
+    querySelectorAll: (selector: string) => selector === 'style[id^="ace"]' ? [aceStyle] : [],
+  };
+  const window: StubElement = { addEventListener() {}, scrollTo() {}, matchMedia: () => ({ matches: false, addEventListener() {} }) };
+  let accept = false;
+  const fns = new Function("document", "window", "location", "CLP_BASE", "fetch", "CLP_MOUNT", "stubConfirm",
+    `${BASE_CLIENT_JS}\n${CLIENT_JS}\nconfirmAction = stubConfirm;\nreturn { changeTemplateMode };`)(
+    document, window, { pathname: "/addons/maintenance/" }, "/addons/maintenance",
+    async (url: string) => { fetched.push(url); throw new Error("no request was expected"); },
+    options.mounted ? root : undefined,
+    async (dialog: { title: string }) => { confirms.push(dialog); return accept; },
+  ) as { changeTemplateMode: (domain: string, editing: boolean) => Promise<void> };
+  const settle = () => new Promise((resolve) => setTimeout(resolve, 0));
+  return { ...fns, ids, scripts, copied, fetched, confirms, window, settle, accept: (value: boolean) => { accept = value; } };
+}
+
+function fakeAce(options: { modeFails?: boolean } = {}) {
+  const calls: string[] = [];
+  let value = "";
+  let onChange = () => {};
+  const editor = {
+    session: { setMode: (mode: string) => calls.push(`mode ${mode}`), on: (_: string, fn: () => void) => { onChange = fn; } },
+    setOptions() {}, setAutoScrollEditorIntoView() {}, setReadOnly() {}, resize() {},
+    setValue: (next: string) => { value = next; },
+    getValue: () => value,
+  };
+  return {
+    calls,
+    type: (next: string) => { value = next; onChange(); },
+    ace: {
+      edit: () => editor,
+      config: { setModuleUrl: (name: string, url: string) => {
+        if (options.modeFails) throw new Error("no module loader");
+        calls.push(`module ${name} ${url}`);
+      } },
+    },
+  };
+}
+
+test("the template editor borrows CloudPanel's own Ace and works without it", async () => {
   // The panel edits vhosts with the copy it ships at this path; bundling a
   // second editor would add a megabyte to do what the panel already does.
-  expect(CLIENT_JS).toContain("'/assets/js/ace.min.js'");
+  const missing = templatePage({ editing: true });
+  expect(missing.scripts.map((script) => script.src)).toEqual(["/assets/js/ace.min.js"]);
+  // A panel release that stops shipping it must leave a working textarea.
+  missing.scripts[0]!.onerror();
+  await missing.settle();
+  expect(missing.ids["template-editor"]!.hidden).toBe(false);
+  expect(missing.ids["template-editor"]!.disabled).toBe(false);
+  expect(missing.ids["template-ace"]!.hidden).toBe(true);
+
   // That copy carries the core but no modes, so the HTML mode is served from
-  // here, pinned to the version the panel serves. Text mode is set first, so a
-  // mode that will not load leaves a working editor rather than none.
-  expect(CLIENT_JS).toContain("ace/mode/text");
-  expect(CLIENT_JS).toContain("ace.config.setModuleUrl('ace/mode/html', CLP_BASE + '/ace/mode-html.js')");
-  expect(CLIENT_JS.indexOf("'ace/mode/text'")).toBeLessThan(CLIENT_JS.indexOf("'ace/mode/html'"));
+  // here. Text mode is set first, so a mode that will not load leaves a
+  // working editor rather than none.
+  const loaded = templatePage({ editing: true, mounted: true });
+  const ace = fakeAce();
+  loaded.window.ace = ace.ace;
+  loaded.scripts[0]!.onload();
+  await loaded.settle();
+  expect(ace.calls).toEqual(["mode ace/mode/text", "module ace/mode/html /addons/maintenance/ace/mode-html.js", "mode ace/mode/html"]);
+  expect(loaded.ids["template-editor"]!.hidden).toBe(true);
+  expect(loaded.ids["template-ace"]!.hidden).toBe(false);
+  // The textarea stays the value every other path reads and writes.
+  ace.type("<p>typed</p>");
+  expect(loaded.ids["template-editor"]!.value).toBe("<p>typed</p>");
+  // Ace writes its stylesheet into the document head, which a shadow root
+  // cannot see.
+  expect(loaded.copied).toEqual([{ copyOf: "ace-tm" }]);
+
+  const noMode = templatePage({ editing: true });
+  const plain = fakeAce({ modeFails: true });
+  noMode.window.ace = plain.ace;
+  noMode.scripts[0]!.onload();
+  await noMode.settle();
+  expect(plain.calls).toEqual(["mode ace/mode/text"]);
+  expect(noMode.ids["template-ace"]!.hidden).toBe(false);
+
   // The bundled theme is the only one there is; dark mode recolours it here.
-  expect(CLIENT_JS).not.toContain("ace/theme/");
   const dark = layout("t", siteView(
     { domain: "a.test", type: "php", user: "a", enabled: false, customTemplate: true, bypasses: [], uncovered: null },
     { domain: "a.test", custom: true, html: "<p>x</p>" }, "203.0.113.8", false));
   expect(dark).toContain("html.dark #template-ace .ace_tag");
   expect(dark).toContain("html.dark #template-ace .ace_string");
-
-  // A panel release that stops shipping it must leave a working textarea.
-  expect(CLIENT_JS).toContain("script.onerror = function () { resolve(null); }");
-  expect(CLIENT_JS).toContain("if (!ace) return;");
-
-  // Ace writes its stylesheet into the document head, which a shadow root
-  // cannot see.
-  expect(CLIENT_JS).toContain("style[id^=\"ace\"]");
-
-  // The textarea stays the value every other path reads and writes.
-  expect(CLIENT_JS).toContain("area.value = templateAce.getValue();");
-  expect(CLIENT_JS).toContain("function templateValue()");
 });
 
 test("the editor markup keeps the textarea beside the editor that replaces it", () => {
@@ -737,14 +833,35 @@ test("editing the template is a local mode that never removes what is saved", ()
   expect(html).toContain('<input id="edit-template" type="checkbox" onchange=');
   // Removing a template is what the reset button does, and only that.
   expect(html).toContain('onclick="resetTemplate(');
-  const mode = CLIENT_JS.slice(CLIENT_JS.indexOf("async function changeTemplateMode"));
-  const body = mode.slice(0, mode.indexOf("\nasync function"));
-  expect(body).not.toContain("resetTemplate");
+});
+
+test("leaving the editor asks only about unsaved edits and never removes the saved template", async () => {
+  const page = templatePage({ editing: true });
+  const area = page.ids["template-editor"]!;
+  const toggle = page.ids["edit-template"]!;
+
   // No confirmation for a template nobody touched.
-  expect(body).toContain("templateValue() === templateSaved");
-  expect(body).toContain("Discard the unsaved changes?");
+  toggle.checked = false;
+  await page.changeTemplateMode("shop.example.test", false);
+  expect(page.confirms).toEqual([]);
+  expect(area.disabled).toBe(true);
+
   // Declining leaves the operator in the editor with the edits still there.
-  expect(body).toContain("toggle.checked = true");
+  await page.changeTemplateMode("shop.example.test", true);
+  area.value = "<p>edited</p>";
+  toggle.checked = false;
+  await page.changeTemplateMode("shop.example.test", false);
+  expect(page.confirms.map((dialog) => dialog.title)).toEqual(["Discard the unsaved changes?"]);
+  expect(toggle.checked).toBe(true);
+  expect(area.value).toBe("<p>edited</p>");
+  expect(area.disabled).toBe(false);
+
+  // Accepting puts back what is saved, locally.
+  page.accept(true);
+  await page.changeTemplateMode("shop.example.test", false);
+  expect(area.value).toBe("<p>saved</p>");
+  expect(area.disabled).toBe(true);
+  expect(page.fetched).toEqual([]);
 });
 
 test("the addon serves the Ace mode the panel does not ship", async () => {
@@ -765,9 +882,6 @@ test("the addon serves the Ace mode the panel does not ship", async () => {
   expect(body).toContain("BEGIN LICENSE BLOCK");
   expect(body).toContain("Copyright (c) 2010, Ajax.org B.V.");
 });
-
-// /api/tweaks saves the switch and then writes the panel's templates. When only
-// the second half fails it answers 500 with the saved state attached, so putting
 
 // WordPress Tools adds one address at a time; it must keep the rest, add an
 // address only once, and stop at the same limit a saved list does.

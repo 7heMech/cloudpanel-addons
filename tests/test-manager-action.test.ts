@@ -4,7 +4,7 @@
 // Everything here is about the seam that makes those safe to offer from a web
 // page: which verbs the root gateway will run at all, and the job record that
 // carries the outcome across the manager restart each of them ends with.
-import { describe, test, expect } from "bun:test";
+import { afterEach, beforeEach, describe, test, expect } from "bun:test";
 import { existsSync, mkdirSync, mkdtempSync, rmSync, utimesSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -293,7 +293,25 @@ describe("the panel's Addons entry", () => {
   });
 });
 
+/**
+ * Notices of a known shape, rather than whatever the catalog declares this
+ * release: a DNS addon that is new in 2.0.0-rc.1 and a Stager that changed in
+ * it. Pruning the catalog's old notices is routine and must not break these.
+ */
+function useFixtureNotices(): void {
+  const original = { dns: ADDONS.dns!, stager: ADDONS.stager! };
+  beforeEach(() => {
+    ADDONS.dns = { ...original.dns, added: "2.0.0-rc.1", changed: [] };
+    ADDONS.stager = { ...original.stager, added: undefined, changed: [{ in: "2.0.0-rc.1", note: "Staging copies no longer send mail." }] };
+  });
+  afterEach(() => {
+    ADDONS.dns = original.dns;
+    ADDONS.stager = original.stager;
+  });
+}
+
 describe("opened badges", () => {
+  useFixtureNotices();
   test("are recorded once per notice, and survive a reinstall", () => {
     const dir = mkdtempSync(join(tmpdir(), "clp-news-"));
     const file = join(dir, "news-seen.json");
@@ -425,6 +443,7 @@ describe("opened badges", () => {
 });
 
 describe("the manager index", () => {
+  useFixtureNotices();
   async function render(...args: Parameters<typeof indexPage>): Promise<string> {
     return indexPage(...args).text();
   }
