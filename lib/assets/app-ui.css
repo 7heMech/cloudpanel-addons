@@ -48,6 +48,12 @@ h2, h3 { font-size: 18px; }
   padding: 20px 0 0 20px; margin-right: 20px; border-right: 1px solid var(--row-border); }
 .clp-addon-logo { display: block; flex: 0 0 auto; width: 155px; height: 31px; }
 .clp-addon-logo-dark { display: none; }
+/* The panel's logo files draw the words black and blue, or both white. The
+   page's own font settings stay out of them, as they would out of an image. */
+.clp-addon-logo-panel text { font-weight: 400; font-style: normal; letter-spacing: normal; word-spacing: normal; }
+.clp-addon-logo-panel .clp-logo-cloud { fill: #000; }
+.clp-addon-logo-panel .clp-logo-panel { fill: #0178d4; }
+html.dark .clp-addon-logo-panel text { fill: #fff; }
 html.dark .clp-addon-logo-light { display: none; }
 html.dark .clp-addon-logo-dark { display: block; }
 .clp-addon-brand picture { min-width: 0; }
