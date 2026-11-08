@@ -12,7 +12,7 @@ import { ADDON_VERBS, type GatewayAddon, webVerb } from "../lib/gateway-protocol
  *
  * So the verbs each action dispatches on are read off its source -- the verbs
  * its `switch` cases, the verbs it compares `argv[0]` or `verb` with, verb
- * lists it checks against, and any argument table keyed by verb -- and they
+ * lists it checks against, and any argument or switch table keyed by verb -- and they
  * must be exactly the declared ones.
  */
 const SOURCES: Partial<Record<GatewayAddon, string[]>> = {
@@ -24,7 +24,7 @@ function dispatchedVerbs(addon: GatewayAddon): string[] {
   const verbs = new Set<string>();
   for (const file of SOURCES[addon] ?? [`addons/${addon}/action.ts`]) {
     const source = readFileSync(new URL(`../${file}`, import.meta.url), "utf8");
-    for (const table of source.matchAll(/const ARGUMENTS[^=]*= \{([^}]*)\}/g)) {
+    for (const table of source.matchAll(/const (?:ARGUMENTS|SWITCHES)[^=]*= \{([^}]*)\}/g)) {
       for (const match of table[1]!.matchAll(/"([a-z][a-z0-9-]*)":/g)) verbs.add(match[1]!);
     }
     for (const match of source.matchAll(/case "([a-z][a-z0-9-]*)":/g)) verbs.add(match[1]!);

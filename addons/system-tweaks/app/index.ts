@@ -53,6 +53,7 @@ export async function handle(
 
   if (path === "/api/install-updates") return repaint(await systemTweaksService.installUpdates());
   if (path === "/api/install-fail2ban") return repaint(await systemTweaksService.installFail2ban());
+  if (path === "/api/lock-settings") return repaint(await systemTweaksService.lockSettings());
 
   const body = await readBody(req, 1024);
   if (body instanceof Response) return body;

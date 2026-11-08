@@ -21,7 +21,7 @@ import {
 import { ActionFailure, actionErrorJson, emitActionOk, failAction, reportActionFailure } from "../../lib/action";
 import { acquireFileLock, type FileLockHandle } from "../../lib/file-lock";
 import { dbNameFor, dbUserFor, siteUserFor, siteUserTaken } from "../../lib/site-user";
-import { normalizeIdentityHostname, readPanelIdentity, validateDomain } from "../../lib/panel-identity";
+import { readPanelIdentity, validateDomain } from "../../lib/panel-identity";
 import { readable } from "../../lib/files";
 import { runCommand, type CommandResult } from "../../lib/command";
 import { validateEmail, validateFlag, validateJob, validateMfa, validatePort } from "../../lib/validate";

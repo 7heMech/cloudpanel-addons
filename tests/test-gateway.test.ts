@@ -3,11 +3,7 @@ import { execFileSync, spawnSync } from "node:child_process";
 import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import {
-  parseGatewayRequest,
-  type GatewayRequest,
-  webVerb,
-} from "../lib/gateway-protocol";
+import { parseGatewayRequest, webVerb } from "../lib/gateway-protocol";
 import { callGatewayAuth, callGatewayPanelInfo } from "../lib/gateway-client";
 import { createAuthActionServer } from "../cli/auth-action";
 import { panelSessionLifetime, parseAuthHelperReply } from "../lib/sso-auth";

@@ -29,7 +29,7 @@ import {
   SESSION_2FA_ENV,
 } from "../lib/gateway-protocol";
 import { getLivePanelInfo } from "../lib/panel-snapshot";
-import { verbLocked } from "../lib/root-locks";
+import { lockDirection, lockRefusal, switchesOnOnly, verbLocked } from "../lib/root-locks";
 
 export const MAX_AUTH_INPUT_BYTES = MAX_SESSION_ID_LENGTH + 1;
 const MAX_AUTH_REPLY_BYTES = 32 * 1024;
@@ -478,10 +478,15 @@ export function createAuthActionServer(options: AuthActionOptions = {}): net.Ser
           return;
         }
 
-        // Root's lock on an addon withholds its `lock` verbs from every path the web has.
-        const refuseLocked = (addon: string, verb: string): boolean => {
+        // Root's lock on an addon holds its `lock` verbs to the safer direction on
+        // every path the web has: an "on" verb passes only when it switches
+        // everything it names on, and a "newer" verb only reaches its action,
+        // which knows the version running now and refuses anything else.
+        const refuseLocked = (addon: string, verb: string, input?: string): boolean => {
           if (!verbLocked(addon, verb, options.locks?.file, options.locks?.rootUid)) return false;
-          socket.end(JSON.stringify({ ok: false, error: `root has locked ${addon}; run clp-addons unlock ${addon} on the server` }) + "\n");
+          const direction = lockDirection(addon, verb);
+          if (direction === "newer" || (direction === "on" && switchesOnOnly(input))) return false;
+          socket.end(JSON.stringify({ ok: false, error: lockRefusal(addon) }) + "\n");
           return true;
         };
 
@@ -525,7 +530,7 @@ export function createAuthActionServer(options: AuthActionOptions = {}): net.Ser
             return;
           }
 
-          if (refuseLocked(request.addon, request.verb)) return;
+          if (refuseLocked(request.addon, request.verb, request.input)) return;
 
           // An own-account verb is told whose account by the session it was
           // sent with, which this checks itself, never by the manager.

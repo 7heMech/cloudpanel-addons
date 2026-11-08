@@ -722,7 +722,7 @@ describe("manager route decoding and safe segment decoder", () => {
   });
 });
 
-test.skipIf(existsSync(ADDONS["system-tweaks"]!.configFile))("the manager refuses to enable an addon root has locked", async () => {
+test.skipIf(existsSync(ADDONS["system-tweaks"]!.configFile))("the manager enables an addon root has locked, since that only adds protection", async () => {
   const dir = mkdtempSync(join(tmpdir(), "manager-locks-"));
   try {
     const file = join(dir, "locks.json");
@@ -730,6 +730,27 @@ test.skipIf(existsSync(ADDONS["system-tweaks"]!.configFile))("the manager refuse
     const replies: any[] = [];
     let started = false;
     const result = await createJob("enable", "system-tweaks", {
+      jobsDir: join(dir, "jobs"), lockDir: join(dir, "lock"), newsFile: join(dir, "news"), sinceFile: join(dir, "since"), emitReply: false,
+      startUnit: () => { started = true; return { ok: true, stdout: "", stderr: "" }; },
+      onReply: (data) => replies.push(data),
+      locks: { file, rootUid: process.getuid?.() ?? 0 },
+    });
+    expect(replies[0].error).toBeUndefined();
+    expect(result).toBe(0);
+    expect(started).toBe(true);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("the manager refuses to disable an addon root has locked", async () => {
+  const dir = mkdtempSync(join(tmpdir(), "manager-locks-"));
+  try {
+    const file = join(dir, "locks.json");
+    writeFileSync(file, JSON.stringify({ addons: ["system-tweaks"] }));
+    const replies: any[] = [];
+    let started = false;
+    const result = await createJob("disable", "system-tweaks", {
       jobsDir: join(dir, "jobs"), lockDir: join(dir, "lock"), emitReply: false,
       startUnit: () => { started = true; return { ok: true, stdout: "", stderr: "" }; },
       onReply: (data) => replies.push(data),
@@ -738,6 +759,26 @@ test.skipIf(existsSync(ADDONS["system-tweaks"]!.configFile))("the manager refuse
     expect(result).not.toBe(0);
     expect(started).toBe(false);
     expect(replies[0].error).toBe("root has locked system-tweaks; run clp-addons unlock system-tweaks on the server first");
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+// Queued before root locked it, a disable still must not run.
+test("a queued disable is refused when it runs if root has locked the addon since", async () => {
+  const dir = mkdtempSync(join(tmpdir(), "manager-locks-"));
+  try {
+    const file = join(dir, "locks.json");
+    writeFileSync(file, JSON.stringify({ addons: ["system-tweaks"] }));
+    const jobsDir = join(dir, "jobs");
+    mkdirSync(jobsDir);
+    writeJob(jobsDir, "20260908T120000Z-dddddd", { kind: "disable", addon: "system-tweaks", state: "queued" });
+    const disabled: string[] = [];
+    const code = await runManagerJob("20260908T120000Z-dddddd", { ...NOOP_OPS, disable: (a) => { disabled.push(a); } }, jobsDir,
+      { file, rootUid: process.getuid?.() ?? 0 });
+    expect(code).toBe(1);
+    expect(disabled).toEqual([]);
+    expect(readManagerJob("20260908T120000Z-dddddd", jobsDir)?.job.error).toBe("root has locked system-tweaks; run clp-addons unlock system-tweaks on the server first");
   } finally {
     rmSync(dir, { recursive: true, force: true });
   }

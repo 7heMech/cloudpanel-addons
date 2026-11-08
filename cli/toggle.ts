@@ -41,12 +41,14 @@ export async function applyEnable(name: string): Promise<void> {
 
 async function enableAddon(spec: AddonSpec): Promise<void> {
   ensureRequiredUnits(spec);
-  const before = enabledAddons().filter((item) => item.name !== spec.name);
+  const installed = enabledAddons();
+  const wasEnabled = installed.some((item) => item.name === spec.name);
+  const before = installed.filter((item) => item.name !== spec.name);
   const specs = [...before, spec];
 
   if (!platformProvisioned()) {
     bootstrapProvision(specs);
-    spec.activate?.();
+    spec.activate?.(wasEnabled);
     log.ok(`${spec.name} enabled`);
     return;
   }
@@ -64,7 +66,7 @@ async function enableAddon(spec: AddonSpec): Promise<void> {
   }
   if (spec.panelBlock && !spec.panelBlock.reconcile(true, false)) fatal("could not safely change CloudPanel's Nginx settings");
   applyToggleUnits(changes);
-  spec.activate?.();
+  spec.activate?.(wasEnabled);
   log.ok(`${spec.name} enabled`);
 }
 

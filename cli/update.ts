@@ -24,6 +24,7 @@ import { fatal, log, requireRoot } from "../lib/log";
 import { parseFlags } from "./flags";
 import { run, tryRun } from "../lib/command";
 import { compareSemver, isPrerelease } from "../lib/semver";
+import { lockState } from "../lib/root-locks";
 function finalizeUpdate(beforeManagerRestart?: () => void): AddonSpec[] {
   // A failure from here on makes the binary that started this update restore
   // itself, and an earlier binary knows the renamed addons only by their old
@@ -68,6 +69,21 @@ export async function cmdUpdate(argv: string[], options: UpdateOptions = {}): Pr
   return withOperationLock("update", () => applyUpdate(argv, options));
 }
 
+/**
+ * New installs lock System Tweaks; an update never does, since a box's
+ * switches may be off on purpose, so it only says how. Reads, never writes.
+ */
+export function lockHint(enabled: boolean, file?: string, rootUid?: number): string | null {
+  return enabled && lockState("system-tweaks", file, rootUid) === "unlocked"
+    ? "Tip: so the panel can switch System Tweaks' protections on but never off, run clp-addons lock system-tweaks"
+    : null;
+}
+
+function suggestLock(): void {
+  const hint = lockHint(enabledAddons().some((spec) => spec.name === "system-tweaks"));
+  if (hint) log.plain(hint);
+}
+
 async function applyUpdate(argv: string[], options: UpdateOptions): Promise<void> {
   const { flags } = parseFlags(argv);
   // A box running a pre-release keeps following them; a release takes it back to releases.
@@ -81,6 +97,7 @@ async function applyUpdate(argv: string[], options: UpdateOptions): Promise<void
   // Without --version an update only moves forward, whatever GitHub lists.
   if (typeof flags.version !== "string" && compareSemver(target, current) < 0) {
     log.ok(`clp-addons ${current} is up to date; the newest published release is ${target}`);
+    suggestLock();
     return;
   }
   const upToDate = current === target;
@@ -88,6 +105,7 @@ async function applyUpdate(argv: string[], options: UpdateOptions): Promise<void
   // Nothing to install, and repair is the command that re-applies the panel side.
   if (artifactsCurrent && flags["no-self-update"] !== true) {
     log.ok(`clp-addons ${current} is up to date`);
+    suggestLock();
     return;
   }
   let artifacts: FetchedArtifact[] | undefined;
@@ -147,7 +165,9 @@ async function applyUpdate(argv: string[], options: UpdateOptions): Promise<void
     log.ok(versionChanged
       ? `clp-addons updated from ${updatedFrom} to ${target}; no addon service is configured`
       : `clp-addons ${current} reinstalled; no addon service is configured`);
+    suggestLock();
     return;
   }
   log.ok(versionChanged ? `clp-addons updated from ${updatedFrom} to ${target}` : `clp-addons ${current} reinstalled`);
+  suggestLock();
 }

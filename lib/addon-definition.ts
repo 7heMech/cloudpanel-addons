@@ -83,8 +83,8 @@ export interface AddonDefinition {
   deactivate?: () => void;
   /** Stop what is still running once the config is gone and nothing new can start. */
   withdrawn?: () => void;
-  /** Reapply the kept state outside addon state once enabled again. */
-  activate?: () => void;
+  /** Reapply the kept state outside addon state once enabled; `wasEnabled` when it already was, as on a re-run of the installer. */
+  activate?: (wasEnabled: boolean) => void;
   /**
    * Whether a `ROLE_SITE_MANAGER` session reaches this addon's routes.
    * CloudPanel does not narrow that role's site list, so an addon whose pages

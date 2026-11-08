@@ -7,10 +7,7 @@ import {
 } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import {
-  DEFAULT_INSTATIC_ACTION_PATHS, makeSnapshot, parseInstaticAction, panelIdentityForInstatic, pruneSnapshots,
-  validateInstaticDomain,
-} from "../addons/instatic/action";
+import { makeSnapshot, parseInstaticAction, pruneSnapshots, validateInstaticDomain } from "../addons/instatic/action";
 import { dashboardView, jobView, newInstanceView, pendingCreations } from "../addons/instatic/app/views";
 import type { InstanceView, InstaticJobView } from "../addons/instatic/app/service";
 import { isNewerThan } from "../addons/instatic/app/tags";

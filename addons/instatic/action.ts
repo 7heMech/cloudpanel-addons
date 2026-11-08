@@ -12,7 +12,7 @@ import { writeFileAtomic } from "../../lib/atomic-write";
 import { dirname, join } from "node:path";
 import { ActionCommandFailure, ActionFailure, emitActionOk, failAction, reportActionFailure } from "../../lib/action";
 import { commandFailure, runCommand } from "../../lib/command";
-import { normalizeIdentityHostname, validateDomain } from "../../lib/panel-identity";
+import { validateDomain } from "../../lib/panel-identity";
 import { availableSiteUser, siteUserTaken } from "../../lib/site-user";
 import { readable } from "../../lib/files";
 import { validateFlag, validatePort, validateTag } from "../../lib/validate";
@@ -1599,10 +1599,6 @@ async function dispatch(action: ParsedInstaticAction, paths: InstaticActionPaths
 
 export function validateInstaticDomain(value: string, identityPath = PANEL_IDENTITY_PATH): string {
   return validateDomain(value, identityPath);
-}
-
-export function panelIdentityForInstatic(value: string): string | null {
-  return normalizeIdentityHostname(value);
 }
 
 export function parseInstaticAction(argv: string[], options?: InstaticActionOptions): ParsedInstaticAction {
