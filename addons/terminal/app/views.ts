@@ -51,6 +51,8 @@ type RootAccess = { granted: boolean; problem: string | null };
  * command that allows them, and one whose grant does not hold now is told why,
  * instead of getting a window that fails.
  */
+const COPY_ICON = `<svg viewBox="0 0 448 512" width="14" height="14" aria-hidden="true"><path fill="currentColor" d="M384 336H192c-8.8 0-16-7.2-16-16V64c0-8.8 7.2-16 16-16h140.1L400 115.9V320c0 8.8-7.2 16-16 16zM192 384h192c35.3 0 64-28.7 64-64V115.9c0-12.7-5.1-24.9-14.1-33.9L366.1 14.1c-9-9-21.2-14.1-33.9-14.1H192c-35.3 0-64 28.7-64 64v256c0 35.3 28.7 64 64 64zM64 128c-35.3 0-64 28.7-64 64v256c0 35.3 28.7 64 64 64h192c35.3 0 64-28.7 64-64v-32h-48v32c0 8.8-7.2 16-16 16H64c-8.8 0-16-7.2-16-16V192c0-8.8 7.2-16 16-16h32v-48H64z"/></svg>`;
+
 function rootButton(root: RootAccess, user: string): string {
   if (root.problem !== null) {
     return `
@@ -64,11 +66,13 @@ function rootButton(root: RootAccess, user: string): string {
       <button class="btn" type="button" onclick="CLP_ROOT.getElementById('root-allow-dialog').showModal()">Root terminal</button>
       <dialog id="root-allow-dialog" aria-labelledby="root-allow-title">
         <div class="dialog-header"><h2 id="root-allow-title">Ask root for access</h2></div>
-        <p>Root allows you a root terminal by running this on the server:</p>
-        <pre class="root-allow-command" id="root-allow-command">clp-addons terminal root allow ${esc(user)}</pre>
+        <p>Root runs this on the server:</p>
+        <div class="copy-block">
+          <pre id="root-allow-command">clp-addons terminal root allow ${esc(user)}</pre>
+          <button class="btn copy-button" type="button" onclick="copyText('root-allow-command', 'Command')" title="Copy command" aria-label="Copy command">${COPY_ICON}</button>
+        </div>
         <form method="dialog" class="actions dialog-actions">
           <button class="btn" type="submit">Close</button>
-          <button class="btn btn-primary" type="button" onclick="copyText('root-allow-command', 'Command')">Copy command</button>
         </form>
       </dialog>`;
 }

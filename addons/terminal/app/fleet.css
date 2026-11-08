@@ -28,4 +28,4 @@
   .terminal-site-table td.site-cell { flex: 1 1 auto; padding-right: 0; }
   .terminal-site-table td.action-cell { flex: 0 0 auto; width: auto; }
 }
-.root-allow-command { margin: 0; white-space: pre-wrap; overflow-wrap: anywhere; }
+#root-allow-dialog { max-width: 480px; }

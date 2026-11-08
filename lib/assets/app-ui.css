@@ -282,6 +282,10 @@ dialog::backdrop { background: rgba(0,0,0,0.5); }
 .dialog-actions { justify-content: flex-end; margin: 25px -30px -30px; padding: 25px 30px; border-top: 1px solid var(--border); }
 pre { background: var(--bg); border: 1px solid var(--border); border-radius: 4px; padding: 16px;
   overflow: auto; max-height: 55vh; font-family: var(--mono); font-size: 13px; }
+/* A one-line value with its Copy control inside the block, at the right. */
+.copy-block { position: relative; }
+.copy-block > pre { margin: 0; padding-right: 52px; white-space: pre-wrap; overflow-wrap: anywhere; }
+.copy-block > .copy-button { position: absolute; top: 50%; right: 8px; transform: translateY(-50%); padding: 6px 9px; }
 .row-actions { min-width: 100px; }
 .row-actions summary { cursor: pointer; color: var(--link); list-style: none; }
 .row-actions summary::-webkit-details-marker { display: none; }

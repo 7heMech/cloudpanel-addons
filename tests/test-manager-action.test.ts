@@ -458,9 +458,9 @@ describe("the manager index", () => {
     expect(html).toContain(`disableAddon('instatic', 'Instatic CMS', this)`);
   });
 
-  test("marks an addon root has locked in its heading, in place of Disable", async () => {
+  test("shows a disabled Locked by root button in place of Disable on an addon root has locked", async () => {
     const html = await render(["system-tweaks"], null, { locks: () => "locked" });
-    expect(html).toMatch(/<h3>[^]*>Locked by root<\/span><\/h3>/);
+    expect(html).toMatch(/<button class="btn addon-locked" type="button" disabled [^>]*>[^]*?Locked by root<\/button>/);
     expect(html).not.toContain("disableAddon('system-tweaks'");
   });
 

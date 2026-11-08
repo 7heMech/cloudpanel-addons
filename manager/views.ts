@@ -15,6 +15,8 @@ import MANAGER_INDEX_CSS from "./views.css" with { type: "text" };
 
 import MANAGER_INDEX_JS from "./views.client.js" with { type: "text" };
 
+const LOCK_ICON = `<svg viewBox="0 0 448 512" width="12" height="12" aria-hidden="true"><path fill="currentColor" d="M144 144v48h160v-48a80 80 0 0 0-160 0zm-64 48v-48a144 144 0 0 1 288 0v48h16c35.3 0 64 28.7 64 64v192c0 35.3-28.7 64-64 64H64c-35.3 0-64-28.7-64-64V256c0-35.3 28.7-64 64-64h16z"/></svg>`;
+
 function addonRow(name: string, enabled: boolean, job: ManagerJobView | null, news: { version: string; since: string; seen: string[] }, locks: (addon: string) => LockState): string {
   const spec = ADDONS[name];
   if (!spec) return "";
@@ -26,13 +28,10 @@ function addonRow(name: string, enabled: boolean, job: ManagerJobView | null, ne
   const lock = locks(spec.name);
   // A lock refuses only disabling: enabling a locked addon adds its protection.
   const locked = enabled && lock !== "unlocked";
-  const lockBadge = locked
-    ? ` <span class="badge" title="${lock === "damaged" ? `The lock file cannot be read or trusted; run clp-addons lock on the server` : `Run clp-addons unlock ${esc(spec.name)} on the server to disable it`}">Locked by root</span>`
-    : "";
   const toggle = !enabled
     ? `<button class="btn" type="button" onclick="enableAddon('${escJs(spec.name)}', this)" aria-label="Enable ${esc(title)}">Enable</button>`
     : locked
-      ? ""
+      ? `<button class="btn addon-locked" type="button" disabled title="${lock === "damaged" ? `The lock file cannot be read or trusted; run clp-addons lock on the server` : `Run clp-addons unlock ${esc(spec.name)} on the server to disable it`}">${LOCK_ICON}Locked by root</button>`
       : `<button class="btn" type="button" onclick="disableAddon('${escJs(spec.name)}', '${escJs(title)}', this)" aria-label="Disable ${esc(title)}">Disable</button>`;
   const actions = enabled && href
     ? `<a class="btn btn-primary" href="${esc(href)}" aria-label="Open ${esc(title)}">Open</a>
@@ -43,7 +42,7 @@ function addonRow(name: string, enabled: boolean, job: ManagerJobView | null, ne
   return `<article class="addon-row" data-manager-job-card="${esc(spec.name)}"${notice ? ` data-news="${esc(notice.keys.join(" "))}"` : ""} data-find="${esc(`${title} ${spec.name} ${spec.description ?? ""}`)}">
   <div class="addon-about">
     <h3>${heading}${notice?.kind === "new" ? ' <span class="badge state-queued addon-news">New</span>'
-      : notice?.kind === "changed" ? ' <span class="badge addon-news">Changed</span>' : ""}${lockBadge}</h3>
+      : notice?.kind === "changed" ? ' <span class="badge addon-news">Changed</span>' : ""}</h3>
     ${spec.description ? `<p>${esc(spec.description)}</p>` : ""}${notice?.notes.length
       ? `<ul class="addon-changed">${notice.notes.map((note) => `<li>${esc(note)}</li>`).join("")}</ul>` : ""}
   </div>
