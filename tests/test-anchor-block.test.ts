@@ -33,20 +33,6 @@ function probeFor(state: "anchor-not-found-in-markup" | "template-absent"): stri
 
   class TestFatal extends Error {}
 
-  function parseFlags(argv) {
-    const positional = [];
-    const flags = {};
-    for (const arg of argv) {
-      if (!arg.startsWith("--")) {
-        positional.push(arg);
-        continue;
-      }
-      const equal = arg.indexOf("=");
-      flags[arg.slice(2, equal === -1 ? undefined : equal)] = equal === -1 ? true : arg.slice(equal + 1);
-    }
-    return { positional, flags };
-  }
-
   const realProvision = await import("./cli/provision.ts?anchor-block-test-real");
   mock.module("./cli/provision.ts", () => ({
     ...realProvision,

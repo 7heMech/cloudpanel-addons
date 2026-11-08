@@ -8,11 +8,11 @@
 // then overwrote each other every fifteen minutes, and uninstalling either one
 // removed both because the markers were a module-level constant.
 //
-// Runs against a throwaway template, never the panel's own.
+// Runs against throwaway templates, never the panel's own.
 
 // The .test.ts suffix keeps this suite in Bun's default discovery set.
-import { expect, test } from "bun:test";
-import { chmodSync, mkdirSync, mkdtempSync, writeFileSync, readFileSync, rmSync, existsSync, readdirSync, symlinkSync, lstatSync } from "node:fs";
+import { afterEach, expect, test } from "bun:test";
+import { mkdirSync, mkdtempSync, writeFileSync, readFileSync, rmSync, existsSync, readdirSync, symlinkSync, lstatSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { findMasterVhost, inspect, masterVhostHost, NGINX_PROXY_BLOCK, inspectNginxProxy, reconcile, reconcileNginxProxy, type Injection } from "../cli/inject";
 import { STAGER_TARGETS } from "../addons/stager/inject/targets";
@@ -21,370 +21,322 @@ import { headerTarget, siteLayoutTarget } from "../lib/panel-nav";
 import { MAINTENANCE_TARGETS } from "../addons/maintenance/inject/targets";
 import type { AddonTarget } from "../lib/addon-target";
 
-function check(label: string, cond: boolean, detail = ""): void {
-  test.serial(label, () => {
-    expect(cond, detail).toBe(true);
-  });
-}
-
-// Everything happens under a temporary directory: this must not touch the
+// Everything happens under temporary directories: this must not touch the
 // panel's templates, must not disturb a real installation's snapshots, and must
 // not need root to write under /var/lib.
-const dir = mkdtempSync(`${tmpdir()}/inject-test-`);
-const stateDir = `${dir}/state`;
-const PATHS = { templatesDir: dir, stateDir };
-const TEMPLATE = "header.html.twig";
-const file = `${dir}/${TEMPLATE}`;
-const ORIGINAL = `<html>\n<div class="nav-link-container w-100">\n</div>\n</html>\n`;
-writeFileSync(file, ORIGINAL);
-
-const target = (slug: string, label: string): AddonTarget => ({
-  slug,
-  template: TEMPLATE,
-  anchorAfter: '<div class="nav-link-container w-100">',
-  required: true,
-  snippet: (url) => `\n  <a href="${url}">${label}</a>`,
+const dirs: string[] = [];
+afterEach(() => {
+  for (const dir of dirs.splice(0)) rmSync(dir, { recursive: true, force: true });
 });
-const A: Injection = { addon: "alpha", target: target("nav", "AlphaNav"), url: "https://a.example.com" };
-const B: Injection = { addon: "bravo", target: target("nav", "BravoNav"), url: "https://b.example.com" };
 
-const body = () => readFileSync(file, "utf-8");
-const hasA = () => body().includes("AlphaNav");
-const hasB = () => body().includes("BravoNav");
-
-reconcile([A], PATHS);
-check("addon A alone is present", hasA() && !hasB());
-
-reconcile([A, B], PATHS);
-check("installing addon B keeps addon A", hasA(), body());
-check("installing addon B adds addon B", hasB());
-
-// The reconciliation timers run independently and repeatedly.
-for (let i = 0; i < 3; i++) reconcile([A, B], PATHS);
-check("repeated reconciliation is idempotent", hasA() && hasB());
-const settled = body();
-reconcile([A, B], PATHS);
-check("the rendered file settles byte-for-byte", body() === settled);
-check("neither addon's block is duplicated",
-  (body().match(/AlphaNav/g) ?? []).length === 1 && (body().match(/BravoNav/g) ?? []).length === 1);
-
-// Uninstalling one addon is reconciling without it.
-reconcile([B], PATHS);
-check("uninstalling addon A removes only addon A", !hasA() && hasB(), body());
-
-reconcile([B], PATHS);
-check("addon B survives a later reconciliation", hasB());
-
-// Uninstalling the last addon restores the template exactly.
-reconcile([], PATHS);
-check("removing the last addon restores the original template", body() === ORIGINAL,
-  JSON.stringify(body()));
-
-const leftover = existsSync(stateDir) ? readdirSync(stateDir) : [];
-check("no snapshot state is left behind", leftover.length === 0, leftover.join(", "));
-
-// The single manager header target preserves native order, uses Addons label, and includes update check.
-const navOriginal = `<div class="nav-link-container w-100"><a>Dashboard</a>${headerTarget().anchorAfter}</div>`;
-writeFileSync(file, navOriginal);
-
-const managerInjection: Injection = {
-  addon: "manager",
-  target: { ...headerTarget(), template: TEMPLATE },
-  url: "/addons/",
-};
-reconcile([managerInjection], PATHS);
-check("native links precede addon navigation", body().indexOf("Dashboard") < body().indexOf("clp_sites") && body().indexOf("clp_sites") < body().indexOf("clp-addon-nav"));
-check("manager link has Addons label and no Bootstrap nav-link class", body().includes(">Addons</a>") && !body().includes('class="nav-link"'));
-check("manager header target contains update badge and script", body().includes("clp-addon-update-badge") && body().includes("window.__clpAddonsUpdateInit"));
-
-// Repeated reconciliation does not duplicate the manager entry
-reconcile([managerInjection], PATHS);
-check("manager navigation is not duplicated on repeat reconciliation", (body().match(/class="clp-addon-nav"/g) ?? []).length === 1);
-
-// Manager injection and multi-addon install/uninstall lifecycle (1 addon and 2 addons).
-const instaticTemplate = "instatic.html.twig";
-const instaticFile = `${dir}/${instaticTemplate}`;
-const instaticOriginal = '<div class="site-list"><!-- instatic-anchor --></div>';
-writeFileSync(instaticFile, instaticOriginal);
-
-const stagerTemplate = "stager.html.twig";
-const stagerFile = `${dir}/${stagerTemplate}`;
-const stagerOriginal = '<div class="actions"><!-- stager-anchor --></div>';
-writeFileSync(stagerFile, stagerOriginal);
-
-function simulateInstalledInjections(installed: string[], exclude?: string): Injection[] {
-  const active = installed.filter((n) => n !== exclude);
-  const injs: Injection[] = [];
-  if (active.length > 0) {
-    injs.push({ addon: "manager", target: { ...headerTarget(), template: TEMPLATE }, url: "/addons/" });
-  }
-  for (const name of active) {
-    if (name === "instatic") {
-      injs.push({ addon: "instatic", target: { slug: "new-site", template: instaticTemplate, anchorAfter: "<!-- instatic-anchor -->", required: false, snippet: (url) => `<span>Instatic at ${url}</span>` }, url: "/addons/instatic" });
-    }
-    if (name === "stager") {
-      injs.push({ addon: "stager", target: { slug: "site-action", template: stagerTemplate, anchorBefore: "<!-- stager-anchor -->", required: false, snippet: (url) => `<span>Stager at ${url}</span>` }, url: "/addons/stager" });
-    }
-  }
-  return injs;
+function tempDir(prefix: string): string {
+  const dir = mkdtempSync(`${tmpdir()}/${prefix}`);
+  dirs.push(dir);
+  return dir;
 }
 
-const readInstatic = () => readFileSync(instaticFile, "utf-8");
-const readStager = () => readFileSync(stagerFile, "utf-8");
+/** A templates directory with one template in it, and a reader for it. */
+function templates(name: string, content: string) {
+  const dir = tempDir("inject-test-");
+  const paths = { templatesDir: dir, stateDir: `${dir}/state` };
+  const file = `${dir}/${name}`;
+  mkdirSync(file.slice(0, file.lastIndexOf("/")), { recursive: true });
+  writeFileSync(file, content);
+  return { dir, paths, read: () => readFileSync(file, "utf-8") };
+}
 
-// 1 addon installed (instatic):
-reconcile(simulateInstalledInjections(["instatic"]), PATHS);
-check("1 addon installed: header has manager nav entry", body().includes(">Addons</a>"));
-check("1 addon installed: addon target is injected", readInstatic().includes("Instatic at /addons/instatic"));
-check("1 addon installed: uninstalled addon is untouched", readStager() === stagerOriginal);
+const count = (text: string, pattern: RegExp) => (text.match(pattern) ?? []).length;
 
-// 2 addons installed (instatic + stager):
-reconcile(simulateInstalledInjections(["instatic", "stager"]), PATHS);
-check("2 addons installed: header still has exactly 1 manager nav entry", (body().match(/class="clp-addon-nav"/g) ?? []).length === 1);
-check("2 addons installed: first addon target is present", readInstatic().includes("Instatic at /addons/instatic"));
-check("2 addons installed: second addon target is present", readStager().includes("Stager at /addons/stager"));
-check("2 addons installed: stager target placed before anchor", readStager().indexOf("Stager at /addons/stager") < readStager().indexOf("<!-- stager-anchor -->"));
+const TEMPLATE = "header.html.twig";
 
-// Uninstall 1 of 2 addons (instatic uninstalled with exclude="instatic"):
-reconcile(simulateInstalledInjections(["instatic", "stager"], "instatic"), PATHS);
-check("uninstall 1 of 2: manager nav entry is retained in header", body().includes(">Addons</a>"));
-check("uninstall 1 of 2: manager nav entry is not duplicated", (body().match(/class="clp-addon-nav"/g) ?? []).length === 1);
-check("uninstall 1 of 2: uninstalled addon target is removed and template restored", readInstatic() === instaticOriginal);
-check("uninstall 1 of 2: remaining addon target is preserved", readStager().includes("Stager at /addons/stager"));
+test("two addons at one anchor keep each other's blocks and restore the template exactly", () => {
+  const ORIGINAL = `<html>\n<div class="nav-link-container w-100">\n</div>\n</html>\n`;
+  const { paths, read } = templates(TEMPLATE, ORIGINAL);
+  const target = (label: string): AddonTarget => ({
+    slug: "nav",
+    template: TEMPLATE,
+    anchorAfter: '<div class="nav-link-container w-100">',
+    required: true,
+    snippet: (url) => `\n  <a href="${url}">${label}</a>`,
+  });
+  const A: Injection = { addon: "alpha", target: target("AlphaNav"), url: "https://a.example.com" };
+  const B: Injection = { addon: "bravo", target: target("BravoNav"), url: "https://b.example.com" };
 
-// Uninstall the remaining addon (stager uninstalled with exclude="stager"):
-reconcile(simulateInstalledInjections(["stager"], "stager"), PATHS);
-check("uninstall last addon: manager nav entry is removed and header restored", body() === navOriginal);
-check("uninstall last addon: remaining addon target is removed and restored", readStager() === stagerOriginal);
+  reconcile([A], paths);
+  expect(read()).toContain("AlphaNav");
+  expect(read()).not.toContain("BravoNav");
 
-// 1 addon alone installed and uninstalled:
-reconcile(simulateInstalledInjections(["stager"]), PATHS);
-check("single addon install: manager nav injected", body().includes(">Addons</a>"));
-check("single addon install: addon target injected", readStager().includes("Stager at /addons/stager"));
-reconcile(simulateInstalledInjections(["stager"], "stager"), PATHS);
-check("single addon uninstall: manager nav removed and header restored", body() === navOriginal);
-check("single addon uninstall: addon target removed and restored", readStager() === stagerOriginal);
+  reconcile([A, B], paths);
+  expect(read()).toContain("AlphaNav");
+  expect(read()).toContain("BravoNav");
+
+  // The reconciliation timers run independently and repeatedly.
+  for (let i = 0; i < 3; i++) reconcile([A, B], paths);
+  const settled = read();
+  reconcile([A, B], paths);
+  expect(read()).toBe(settled);
+  expect(count(read(), /AlphaNav/g)).toBe(1);
+  expect(count(read(), /BravoNav/g)).toBe(1);
+
+  // Uninstalling one addon is reconciling without it.
+  reconcile([B], paths);
+  expect(read()).not.toContain("AlphaNav");
+  expect(read()).toContain("BravoNav");
+  reconcile([B], paths);
+  expect(read()).toContain("BravoNav");
+
+  // Uninstalling the last addon restores the template exactly.
+  reconcile([], paths);
+  expect(read()).toBe(ORIGINAL);
+  expect(existsSync(paths.stateDir) ? readdirSync(paths.stateDir) : []).toEqual([]);
+});
+
+test("the manager's header entry follows the native links, once, with the update notice", () => {
+  const navOriginal = `<div class="nav-link-container w-100"><a>Dashboard</a>${headerTarget().anchorAfter}</div>`;
+  const { paths, read } = templates(TEMPLATE, navOriginal);
+  const manager: Injection = { addon: "manager", target: { ...headerTarget(), template: TEMPLATE }, url: "/addons/" };
+  reconcile([manager], paths);
+  const body = read();
+  expect(body.indexOf("Dashboard")).toBeLessThan(body.indexOf("clp_sites"));
+  expect(body.indexOf("clp_sites")).toBeLessThan(body.indexOf("clp-addon-nav"));
+  expect(body).toContain(">Addons</a>");
+  expect(body).not.toContain('class="nav-link"');
+  expect(body).toContain("clp-addon-update-badge");
+  expect(body).toContain("window.__clpAddonsUpdateInit");
+
+  reconcile([manager], paths);
+  expect(count(read(), /class="clp-addon-nav"/g)).toBe(1);
+});
+
+test("installing and uninstalling addons one and two at a time keeps one manager entry", () => {
+  const navOriginal = `<div class="nav-link-container w-100"><a>Dashboard</a>${headerTarget().anchorAfter}</div>`;
+  const { dir, paths, read: header } = templates(TEMPLATE, navOriginal);
+  const instaticTemplate = "instatic.html.twig";
+  const instaticOriginal = '<div class="site-list"><!-- instatic-anchor --></div>';
+  writeFileSync(`${dir}/${instaticTemplate}`, instaticOriginal);
+  const stagerTemplate = "stager.html.twig";
+  const stagerOriginal = '<div class="actions"><!-- stager-anchor --></div>';
+  writeFileSync(`${dir}/${stagerTemplate}`, stagerOriginal);
+  const instatic = () => readFileSync(`${dir}/${instaticTemplate}`, "utf-8");
+  const stager = () => readFileSync(`${dir}/${stagerTemplate}`, "utf-8");
+  const managerEntries = () => count(header(), /class="clp-addon-nav"/g);
+
+  const installed = (names: string[], exclude?: string): Injection[] => {
+    const active = names.filter((name) => name !== exclude);
+    const injections: Injection[] = [];
+    if (active.length > 0) {
+      injections.push({ addon: "manager", target: { ...headerTarget(), template: TEMPLATE }, url: "/addons/" });
+    }
+    if (active.includes("instatic")) {
+      injections.push({ addon: "instatic", target: { slug: "new-site", template: instaticTemplate, anchorAfter: "<!-- instatic-anchor -->", required: false, snippet: (url) => `<span>Instatic at ${url}</span>` }, url: "/addons/instatic" });
+    }
+    if (active.includes("stager")) {
+      injections.push({ addon: "stager", target: { slug: "site-action", template: stagerTemplate, anchorBefore: "<!-- stager-anchor -->", required: false, snippet: (url) => `<span>Stager at ${url}</span>` }, url: "/addons/stager" });
+    }
+    return injections;
+  };
+
+  reconcile(installed(["instatic"]), paths);
+  expect(header()).toContain(">Addons</a>");
+  expect(instatic()).toContain("Instatic at /addons/instatic");
+  expect(stager()).toBe(stagerOriginal);
+
+  reconcile(installed(["instatic", "stager"]), paths);
+  expect(managerEntries()).toBe(1);
+  expect(instatic()).toContain("Instatic at /addons/instatic");
+  expect(stager()).toContain("Stager at /addons/stager");
+  expect(stager().indexOf("Stager at /addons/stager")).toBeLessThan(stager().indexOf("<!-- stager-anchor -->"));
+
+  reconcile(installed(["instatic", "stager"], "instatic"), paths);
+  expect(managerEntries()).toBe(1);
+  expect(instatic()).toBe(instaticOriginal);
+  expect(stager()).toContain("Stager at /addons/stager");
+
+  reconcile(installed(["stager"], "stager"), paths);
+  expect(header()).toBe(navOriginal);
+  expect(stager()).toBe(stagerOriginal);
+
+  reconcile(installed(["stager"]), paths);
+  expect(header()).toContain(">Addons</a>");
+  expect(stager()).toContain("Stager at /addons/stager");
+  reconcile(installed(["stager"], "stager"), paths);
+  expect(header()).toBe(navOriginal);
+  expect(stager()).toBe(stagerOriginal);
+});
+
 // WP_TOOLS_TARGETS puts its link before the Manage link in the sites table's
 // action cell, which is the project's one anchor inside a Twig loop.
-const siteDir = `${dir}/Frontend/Site`;
-mkdirSync(siteDir, { recursive: true });
-// By slug, not by index: this addon has more than one target and their order
-// in the list is the injector's business, not this fixture's.
-const siteActionTarget = WP_TOOLS_TARGETS.find((target) => target.slug === "sites-action")!;
-const siteFile = `${dir}/${siteActionTarget.template}`;
-const siteOriginal = `
+test("the WordPress Tools site action lands before the panel's Manage link, in the row's own site", () => {
+  // By slug, not by index: this addon has more than one target and their order
+  // in the list is the injector's business, not this fixture's.
+  const siteActionTarget = WP_TOOLS_TARGETS.find((target) => target.slug === "sites-action")!;
+  const siteOriginal = `
                     <td class="text-end">
                       <a href="{{ path('clp_site', {'domainName': site.domainName}) }}">{% trans %}Manage{% endtrans %}</a>
                     </td>
 `;
-writeFileSync(siteFile, siteOriginal);
+  const { paths, read } = templates(siteActionTarget.template, siteOriginal);
+  const injection: Injection = { addon: "wp-tools", target: siteActionTarget, url: "/addons/wp-tools" };
 
-const siteActionInj: Injection = {
-  addon: "wp-tools",
-  target: siteActionTarget,
-  url: "/addons/wp-tools",
-};
+  expect(inspect(injection, paths).state).toBe("missing-anchor");
+  reconcile([injection], paths);
+  const login = read().indexOf("WP Login</a>");
+  expect(login).not.toBe(-1);
+  expect(login).toBeLessThan(read().indexOf("Manage{% endtrans %}</a>"));
+  expect(read()).toContain("{{ site.domainName }}");
+  expect(inspect(injection, paths).state).toBe("ok");
 
-check("a site-action target reports missing-anchor before injection",
-  inspect(siteActionInj, PATHS).state === "missing-anchor");
+  reconcile([injection], paths);
+  expect(count(read(), /WP Login<\/a>/g)).toBe(1);
 
-reconcile([siteActionInj], PATHS);
-const readSite = () => readFileSync(siteFile, "utf-8");
-
-check("a site-action target lands before the panel's own Manage link, which keeps the rightmost place",
-  readSite().indexOf("WP Login</a>") !== -1 &&
-  readSite().indexOf("Manage{% endtrans %}</a>") !== -1 &&
-  readSite().indexOf("WP Login</a>") < readSite().indexOf("Manage{% endtrans %}</a>"));
-
-check("a site-action target names the row's own site",
-  readSite().includes("{{ site.domainName }}"));
-
-check("a site-action target reports ok after reconcile",
-  inspect(siteActionInj, PATHS).state === "ok");
-
-// Idempotent reconciliation
-reconcile([siteActionInj], PATHS);
-check("repeated reconciliation of a site-action target is idempotent",
-  (readSite().match(/WP Login<\/a>/g) ?? []).length === 1);
-
-// Multiple anchorBefore targets preserve stable alphabetical order before anchor
-const multiBeforeTemplate = "multi-before.html.twig";
-const multiBeforeFile = `${dir}/${multiBeforeTemplate}`;
-const multiBeforeOriginal = `<div><!-- anchor --></div>\n`;
-writeFileSync(multiBeforeFile, multiBeforeOriginal);
-
-const multiA: Injection = {
-  addon: "alpha",
-  target: {
-    slug: "btn",
-    template: multiBeforeTemplate,
-    anchorBefore: "<!-- anchor -->",
-    required: false,
-    snippet: () => `<button>Alpha</button>`,
-  },
-  url: "/addons/alpha",
-};
-const multiB: Injection = {
-  addon: "bravo",
-  target: {
-    slug: "btn",
-    template: multiBeforeTemplate,
-    anchorBefore: "<!-- anchor -->",
-    required: false,
-    snippet: () => `<button>Bravo</button>`,
-  },
-  url: "/addons/bravo",
-};
-
-reconcile([multiB, multiA], PATHS);
-const readMultiBefore = () => readFileSync(multiBeforeFile, "utf-8");
-check("multiple anchorBefore injections place in alphabetical order before anchor",
-  readMultiBefore().indexOf("<button>Alpha</button>") !== -1 &&
-  readMultiBefore().indexOf("<button>Bravo</button>") !== -1 &&
-  readMultiBefore().indexOf("<button>Alpha</button>") < readMultiBefore().indexOf("<button>Bravo</button>") &&
-  readMultiBefore().indexOf("<button>Bravo</button>") < readMultiBefore().indexOf("<!-- anchor -->"));
-
-// Reconciling empty removes injection and restores pristine
-reconcile([], PATHS);
-check("uninstalling stager restores site list template exactly", readSite() === siteOriginal);
-check("uninstalling multiBefore restores template exactly", readMultiBefore() === multiBeforeOriginal);
-
-
-const nginxDir = mkdtempSync(`${tmpdir()}/nginx-test-`);
-const nginxSource = `${nginxDir}/cloudpanel.conf`;
-const nginxLink = `${nginxDir}/enabled.conf`;
-const nginxState = `${nginxDir}/state`;
-const nginxOriginal = `server {\n    listen 8443 ssl;\n    server_name panel.example.test;\n}\n`;
-writeFileSync(nginxSource, nginxOriginal);
-symlinkSync(nginxSource, nginxLink);
-const nginxResult = reconcileNginxProxy({ vhostPath: nginxLink, stateDir: nginxState, reload: false });
-check("Nginx reconciliation injects the UNIX-socket proxy", nginxResult.state === "ok" && readFileSync(nginxSource, "utf-8").includes(NGINX_PROXY_BLOCK));
-check("NGINX_PROXY_BLOCK explicitly sanitizes X-Forwarded-Host", NGINX_PROXY_BLOCK.includes("proxy_set_header X-Forwarded-Host $http_host;"));
-// CloudPanel's vhost has a regex location for static file extensions, and nginx
-// tests regex locations before a prefix match wins. Without ^~ every addon URL
-// ending in .js or .css is served from the filesystem as a 404.
-check("NGINX_PROXY_BLOCK outranks the panel's static-file regex", NGINX_PROXY_BLOCK.includes("location ^~ /addons/ {"));
-check("Nginx reconciliation preserves enabled-site symlinks", lstatSync(nginxLink).isSymbolicLink());
-check("Nginx inspection accepts the managed block", inspectNginxProxy({ vhostPath: nginxLink, stateDir: nginxState }).state === "ok");
-const nginxManaged = readFileSync(nginxSource, "utf-8");
-const nginxPristineBeforeDrift = readFileSync(`${nginxState}/vhost.pristine`, "utf-8");
-const nginxHashBeforeDrift = readFileSync(`${nginxState}/vhost.sha256`, "utf-8");
-const nginxPathBeforeDrift = readFileSync(`${nginxState}/vhost.path`, "utf-8");
-const nginxUpdated = nginxOriginal.replace("panel.example.test", "panel-updated.example.test");
-writeFileSync(nginxSource, nginxUpdated);
-const nginxDrift = reconcileNginxProxy({ vhostPath: nginxLink, stateDir: nginxState, reload: false });
-check("Nginx reconciliation refuses upstream drift", nginxDrift.state === "upstream-changed" && !nginxDrift.changed && nginxDrift.detail?.includes("no changes were made") === true);
-check("Nginx upstream drift leaves the vhost untouched", readFileSync(nginxSource, "utf-8") === nginxUpdated);
-check("Nginx upstream drift preserves the pristine baseline",
-  readFileSync(`${nginxState}/vhost.pristine`, "utf-8") === nginxPristineBeforeDrift &&
-  readFileSync(`${nginxState}/vhost.sha256`, "utf-8") === nginxHashBeforeDrift &&
-  readFileSync(`${nginxState}/vhost.path`, "utf-8") === nginxPathBeforeDrift);
-check("Nginx inspection exposes upstream drift", inspectNginxProxy({ vhostPath: nginxLink, stateDir: nginxState }).state === "upstream-changed");
-writeFileSync(nginxSource, nginxManaged);
-const nginxRemoved = reconcileNginxProxy({ vhostPath: nginxLink, stateDir: nginxState, enabled: false, reload: false });
-check("Nginx reconciliation can remove its managed block", nginxRemoved.changed && readFileSync(nginxSource, "utf-8") === nginxOriginal);
-check("removing the Nginx proxy clears its rollback state", !existsSync(`${nginxState}/vhost.pristine`) && !existsSync(`${nginxState}/vhost.sha256`));
-rmSync(nginxDir, { recursive: true, force: true });
-
-const discoveryDir = mkdtempSync(`${tmpdir()}/nginx-discovery-test-`);
-const discoveryState = `${discoveryDir}/state`;
-const discoveryMaster = `${discoveryDir}/cloudpanel.conf`;
-const discoveryCustomer = `${discoveryDir}/customer.conf`;
-const discoveryMasterContent = `server {\n    listen 8443 ssl;\n    server_name panel.example.test;\n}\n`;
-const discoveryCustomerContent = `server {\n    listen 8443 ssl;\n    server_name customer.example.test;\n    root /home/clp/htdocs/customer;\n}\n`;
-writeFileSync(discoveryMaster, discoveryMasterContent);
-writeFileSync(discoveryCustomer, discoveryCustomerContent);
-const savedVhostOverride = process.env.CLP_ADDONS_NGINX_VHOST;
-delete process.env.CLP_ADDONS_NGINX_VHOST;
-try {
-  check("Nginx discovery uses the fixed CloudPanel vhost filename",
-    findMasterVhost({ sitesDir: discoveryDir }) === discoveryMaster);
-  const discoveryResult = reconcileNginxProxy({ sitesDir: discoveryDir, stateDir: discoveryState, reload: false });
-  check("fixed-vhost discovery ignores customer-vhost heuristics",
-    discoveryResult.state === "ok" && readFileSync(discoveryCustomer, "utf-8") === discoveryCustomerContent);
-} finally {
-  if (savedVhostOverride === undefined) delete process.env.CLP_ADDONS_NGINX_VHOST;
-  else process.env.CLP_ADDONS_NGINX_VHOST = savedVhostOverride;
-}
-rmSync(discoveryDir, { recursive: true, force: true });
-
-const ambiguousDir = mkdtempSync(`${tmpdir()}/nginx-ambiguous-test-`);
-const ambiguousState = `${ambiguousDir}/state`;
-const ambiguousVhost = `${ambiguousDir}/cloudpanel.conf`;
-const ambiguousCustomer = `${ambiguousDir}/customer.conf`;
-const ambiguousContent = `${discoveryMasterContent}\n${discoveryMasterContent.replace("panel.example.test", "panel-https.example.test")}`;
-writeFileSync(ambiguousVhost, ambiguousContent);
-writeFileSync(ambiguousCustomer, discoveryCustomerContent);
-const ambiguousBefore = readFileSync(ambiguousVhost, "utf-8");
-const ambiguousCustomerBefore = readFileSync(ambiguousCustomer, "utf-8");
-const savedAmbiguousOverride = process.env.CLP_ADDONS_NGINX_VHOST;
-delete process.env.CLP_ADDONS_NGINX_VHOST;
-try {
-  const ambiguousResult = reconcileNginxProxy({ sitesDir: ambiguousDir, stateDir: ambiguousState, reload: false });
-  check("Nginx discovery refuses an ambiguous master vhost", ambiguousResult.state === "ambiguous" && !ambiguousResult.changed && ambiguousResult.detail?.includes("2 server blocks") === true);
-  check("ambiguous master-vhost refusal makes no vhost changes", readFileSync(ambiguousVhost, "utf-8") === ambiguousBefore);
-  check("ambiguous master-vhost refusal leaves customer vhosts untouched", readFileSync(ambiguousCustomer, "utf-8") === ambiguousCustomerBefore);
-  check("ambiguous master-vhost refusal creates no rollback state", !existsSync(ambiguousState));
-} finally {
-  if (savedAmbiguousOverride === undefined) delete process.env.CLP_ADDONS_NGINX_VHOST;
-  else process.env.CLP_ADDONS_NGINX_VHOST = savedAmbiguousOverride;
-}
-rmSync(ambiguousDir, { recursive: true, force: true });
-
-const missingMasterDir = mkdtempSync(`${tmpdir()}/nginx-missing-master-test-`);
-const missingMasterState = `${missingMasterDir}/state`;
-const missingCustomer = `${missingMasterDir}/customer.conf`;
-writeFileSync(missingCustomer, discoveryCustomerContent);
-const missingCustomerBefore = readFileSync(missingCustomer, "utf-8");
-const savedMissingOverride = process.env.CLP_ADDONS_NGINX_VHOST;
-delete process.env.CLP_ADDONS_NGINX_VHOST;
-try {
-  const missingResult = reconcileNginxProxy({ sitesDir: missingMasterDir, stateDir: missingMasterState, reload: false });
-  check("Nginx discovery fails closed when the fixed master vhost is absent",
-    missingResult.state === "missing" && missingResult.detail?.includes("cloudpanel.conf") === true);
-  check("missing master-vhost refusal does not mutate customer vhosts", readFileSync(missingCustomer, "utf-8") === missingCustomerBefore);
-  check("missing master-vhost refusal creates no rollback state", !existsSync(missingMasterState));
-} finally {
-  if (savedMissingOverride === undefined) delete process.env.CLP_ADDONS_NGINX_VHOST;
-  else process.env.CLP_ADDONS_NGINX_VHOST = savedMissingOverride;
-}
-rmSync(missingMasterDir, { recursive: true, force: true });
-
-const nginxFailureDir = mkdtempSync(`${tmpdir()}/nginx-failure-test-`);
-const nginxFailureVhost = `${nginxFailureDir}/cloudpanel.conf`;
-const nginxFailureState = `${nginxFailureDir}/state`;
-writeFileSync(nginxFailureVhost, nginxOriginal);
-const fakeBin = `${nginxFailureDir}/bin`;
-mkdirSync(fakeBin);
-writeFileSync(`${fakeBin}/nginx`, "#!/bin/sh\nexit 1\n", { mode: 0o755 });
-chmodSync(`${fakeBin}/nginx`, 0o755);
-const oldPath = process.env.PATH;
-process.env.PATH = `${fakeBin}:${oldPath ?? ""}`;
-const nginxFailure = reconcileNginxProxy({ vhostPath: nginxFailureVhost, stateDir: nginxFailureState });
-if (oldPath === undefined) delete process.env.PATH;
-else process.env.PATH = oldPath;
-check("Nginx validation failure restores the pristine vhost", nginxFailure.state === "validation-failed" && readFileSync(nginxFailureVhost, "utf-8") === nginxOriginal);
-rmSync(nginxFailureDir, { recursive: true, force: true });
-
-const nginxDisableFailureDir = mkdtempSync(`${tmpdir()}/nginx-disable-failure-test-`);
-const nginxDisableFailureVhost = `${nginxDisableFailureDir}/cloudpanel.conf`;
-const nginxDisableFailureState = `${nginxDisableFailureDir}/state`;
-const nginxWithProxy = `${nginxOriginal.trimEnd()}\n${NGINX_PROXY_BLOCK}\n`;
-writeFileSync(nginxDisableFailureVhost, nginxWithProxy);
-mkdirSync(`${nginxDisableFailureDir}/bin`);
-writeFileSync(`${nginxDisableFailureDir}/bin/nginx`, "#!/bin/sh\nexit 1\n", { mode: 0o755 });
-const previousPath = process.env.PATH;
-process.env.PATH = `${nginxDisableFailureDir}/bin:${previousPath ?? ""}`;
-const nginxDisableFailure = reconcileNginxProxy({
-  vhostPath: nginxDisableFailureVhost,
-  stateDir: nginxDisableFailureState,
-  enabled: false,
+  reconcile([], paths);
+  expect(read()).toBe(siteOriginal);
 });
-if (previousPath === undefined) delete process.env.PATH;
-else process.env.PATH = previousPath;
-check("Nginx disable failure restores the previously active proxy",
-  nginxDisableFailure.state === "validation-failed" && readFileSync(nginxDisableFailureVhost, "utf-8") === nginxWithProxy);
-rmSync(nginxDisableFailureDir, { recursive: true, force: true });
+
+test("several blocks before one anchor go in alphabetical order and come out exactly", () => {
+  const template = "multi-before.html.twig";
+  const original = `<div><!-- anchor --></div>\n`;
+  const { paths, read } = templates(template, original);
+  const button = (addon: string, label: string): Injection => ({
+    addon,
+    target: { slug: "btn", template, anchorBefore: "<!-- anchor -->", required: false, snippet: () => `<button>${label}</button>` },
+    url: `/addons/${addon}`,
+  });
+  reconcile([button("bravo", "Bravo"), button("alpha", "Alpha")], paths);
+  const alpha = read().indexOf("<button>Alpha</button>");
+  const bravo = read().indexOf("<button>Bravo</button>");
+  expect(alpha).not.toBe(-1);
+  expect(alpha).toBeLessThan(bravo);
+  expect(bravo).toBeLessThan(read().indexOf("<!-- anchor -->"));
+
+  reconcile([], paths);
+  expect(read()).toBe(original);
+});
+
+const NGINX_ORIGINAL = `server {\n    listen 8443 ssl;\n    server_name panel.example.test;\n}\n`;
+
+test("the Nginx proxy goes in through the enabled-site link, refuses drift and comes out cleanly", () => {
+  expect(NGINX_PROXY_BLOCK).toContain("proxy_set_header X-Forwarded-Host $http_host;");
+  // CloudPanel's vhost has a regex location for static file extensions, and
+  // nginx tests regex locations before a prefix match wins. Without ^~ every
+  // addon URL ending in .js or .css is served from the filesystem as a 404.
+  expect(NGINX_PROXY_BLOCK).toContain("location ^~ /addons/ {");
+
+  const dir = tempDir("nginx-test-");
+  const source = `${dir}/cloudpanel.conf`;
+  const link = `${dir}/enabled.conf`;
+  const state = `${dir}/state`;
+  writeFileSync(source, NGINX_ORIGINAL);
+  symlinkSync(source, link);
+
+  const result = reconcileNginxProxy({ vhostPath: link, stateDir: state, reload: false });
+  expect(result.state).toBe("ok");
+  expect(readFileSync(source, "utf-8")).toContain(NGINX_PROXY_BLOCK);
+  expect(lstatSync(link).isSymbolicLink()).toBe(true);
+  expect(inspectNginxProxy({ vhostPath: link, stateDir: state }).state).toBe("ok");
+
+  const managed = readFileSync(source, "utf-8");
+  const rollback = () => ["vhost.pristine", "vhost.sha256", "vhost.path"].map((name) => readFileSync(`${state}/${name}`, "utf-8"));
+  const rollbackBefore = rollback();
+  const updated = NGINX_ORIGINAL.replace("panel.example.test", "panel-updated.example.test");
+  writeFileSync(source, updated);
+  const drift = reconcileNginxProxy({ vhostPath: link, stateDir: state, reload: false });
+  expect(drift.state).toBe("upstream-changed");
+  expect(drift.changed).toBe(false);
+  expect(drift.detail).toContain("no changes were made");
+  expect(readFileSync(source, "utf-8")).toBe(updated);
+  expect(rollback()).toEqual(rollbackBefore);
+  expect(inspectNginxProxy({ vhostPath: link, stateDir: state }).state).toBe("upstream-changed");
+
+  writeFileSync(source, managed);
+  const removed = reconcileNginxProxy({ vhostPath: link, stateDir: state, enabled: false, reload: false });
+  expect(removed.changed).toBe(true);
+  expect(readFileSync(source, "utf-8")).toBe(NGINX_ORIGINAL);
+  expect(existsSync(`${state}/vhost.pristine`)).toBe(false);
+  expect(existsSync(`${state}/vhost.sha256`)).toBe(false);
+});
+
+const CUSTOMER_VHOST = `server {\n    listen 8443 ssl;\n    server_name customer.example.test;\n    root /home/clp/htdocs/customer;\n}\n`;
+
+/** Runs `fn` with no vhost override in the environment, so discovery is what is tested. */
+function withoutVhostOverride<T>(fn: () => T): T {
+  const saved = process.env.CLP_ADDONS_NGINX_VHOST;
+  delete process.env.CLP_ADDONS_NGINX_VHOST;
+  try {
+    return fn();
+  } finally {
+    if (saved === undefined) delete process.env.CLP_ADDONS_NGINX_VHOST;
+    else process.env.CLP_ADDONS_NGINX_VHOST = saved;
+  }
+}
+
+test("Nginx discovery uses CloudPanel's fixed vhost filename and leaves customer vhosts alone", () => {
+  const dir = tempDir("nginx-discovery-test-");
+  writeFileSync(`${dir}/cloudpanel.conf`, NGINX_ORIGINAL);
+  writeFileSync(`${dir}/customer.conf`, CUSTOMER_VHOST);
+  withoutVhostOverride(() => {
+    expect(findMasterVhost({ sitesDir: dir })).toBe(`${dir}/cloudpanel.conf`);
+    expect(reconcileNginxProxy({ sitesDir: dir, stateDir: `${dir}/state`, reload: false }).state).toBe("ok");
+  });
+  expect(readFileSync(`${dir}/customer.conf`, "utf-8")).toBe(CUSTOMER_VHOST);
+});
+
+test("Nginx discovery refuses an ambiguous master vhost and changes nothing", () => {
+  const dir = tempDir("nginx-ambiguous-test-");
+  const ambiguous = `${NGINX_ORIGINAL}\n${NGINX_ORIGINAL.replace("panel.example.test", "panel-https.example.test")}`;
+  writeFileSync(`${dir}/cloudpanel.conf`, ambiguous);
+  writeFileSync(`${dir}/customer.conf`, CUSTOMER_VHOST);
+  const result = withoutVhostOverride(() => reconcileNginxProxy({ sitesDir: dir, stateDir: `${dir}/state`, reload: false }));
+  expect(result.state).toBe("ambiguous");
+  expect(result.changed).toBe(false);
+  expect(result.detail).toContain("2 server blocks");
+  expect(readFileSync(`${dir}/cloudpanel.conf`, "utf-8")).toBe(ambiguous);
+  expect(readFileSync(`${dir}/customer.conf`, "utf-8")).toBe(CUSTOMER_VHOST);
+  expect(existsSync(`${dir}/state`)).toBe(false);
+});
+
+test("Nginx discovery fails closed when the fixed master vhost is absent", () => {
+  const dir = tempDir("nginx-missing-master-test-");
+  writeFileSync(`${dir}/customer.conf`, CUSTOMER_VHOST);
+  const result = withoutVhostOverride(() => reconcileNginxProxy({ sitesDir: dir, stateDir: `${dir}/state`, reload: false }));
+  expect(result.state).toBe("missing");
+  expect(result.detail).toContain("cloudpanel.conf");
+  expect(readFileSync(`${dir}/customer.conf`, "utf-8")).toBe(CUSTOMER_VHOST);
+  expect(existsSync(`${dir}/state`)).toBe(false);
+});
+
+/** Runs `fn` with an `nginx` on PATH whose configuration test always fails. */
+function withFailingNginx<T>(dir: string, fn: () => T): T {
+  mkdirSync(`${dir}/bin`);
+  writeFileSync(`${dir}/bin/nginx`, "#!/bin/sh\nexit 1\n", { mode: 0o755 });
+  const saved = process.env.PATH;
+  process.env.PATH = `${dir}/bin:${saved ?? ""}`;
+  try {
+    return fn();
+  } finally {
+    if (saved === undefined) delete process.env.PATH;
+    else process.env.PATH = saved;
+  }
+}
+
+test("a failed Nginx validation puts back the pristine vhost", () => {
+  const dir = tempDir("nginx-failure-test-");
+  const vhost = `${dir}/cloudpanel.conf`;
+  writeFileSync(vhost, NGINX_ORIGINAL);
+  const result = withFailingNginx(dir, () => reconcileNginxProxy({ vhostPath: vhost, stateDir: `${dir}/state` }));
+  expect(result.state).toBe("validation-failed");
+  expect(readFileSync(vhost, "utf-8")).toBe(NGINX_ORIGINAL);
+});
+
+test("a failed Nginx validation on removal puts back the active proxy", () => {
+  const dir = tempDir("nginx-disable-failure-test-");
+  const vhost = `${dir}/cloudpanel.conf`;
+  const withProxy = `${NGINX_ORIGINAL.trimEnd()}\n${NGINX_PROXY_BLOCK}\n`;
+  writeFileSync(vhost, withProxy);
+  const result = withFailingNginx(dir, () => reconcileNginxProxy({ vhostPath: vhost, stateDir: `${dir}/state`, enabled: false }));
+  expect(result.state).toBe("validation-failed");
+  expect(readFileSync(vhost, "utf-8")).toBe(withProxy);
+});
 
 // Adversarial cases for the master-vhost server-block scanner: a `#` comment
 // or a quoted string can contain characters that look like Nginx structure
@@ -393,147 +345,105 @@ rmSync(nginxDisableFailureDir, { recursive: true, force: true });
 // discovery, brace matching, or the `listen 8443` / `server_name` checks that
 // pick the one real CloudPanel server block out of the file.
 
-// A `}` inside a `#` comment must not close the server block early -- the
-// content after it (here, `server_name`) is still inside the real block.
-const braceCommentDir = mkdtempSync(`${tmpdir()}/nginx-brace-comment-test-`);
-const braceCommentState = `${braceCommentDir}/state`;
-const braceCommentVhost = `${braceCommentDir}/cloudpanel.conf`;
-const braceCommentContent =
-  "server {\n    listen 8443 ssl;\n" +
-  "    # a stray closing brace in a comment: } must not end the block early\n" +
-  "    server_name panel.example.test;\n}\n";
-writeFileSync(braceCommentVhost, braceCommentContent);
-check("a closing brace inside a comment does not end the server block early",
-  masterVhostHost({ vhostPath: braceCommentVhost }) === "panel.example.test");
-const braceCommentResult = reconcileNginxProxy({ vhostPath: braceCommentVhost, stateDir: braceCommentState, reload: false });
-check("a brace inside a comment still lets reconciliation inject at the real end of the block",
-  braceCommentResult.state === "ok" &&
-  readFileSync(braceCommentVhost, "utf-8") ===
-    `${braceCommentContent.slice(0, -2)}\n${NGINX_PROXY_BLOCK}\n}\n`);
-rmSync(braceCommentDir, { recursive: true, force: true });
+/** A master vhost with `content`, the host found in it, and the result of injecting into it. */
+function scanned(content: string) {
+  const dir = tempDir("nginx-scanner-test-");
+  const vhost = `${dir}/cloudpanel.conf`;
+  const state = `${dir}/state`;
+  writeFileSync(vhost, content);
+  const host = masterVhostHost({ vhostPath: vhost });
+  const result = reconcileNginxProxy({ vhostPath: vhost, stateDir: state, reload: false });
+  return { host, result, after: readFileSync(vhost, "utf-8"), stateLeft: existsSync(state) };
+}
 
-// A `}` inside a quoted string must not close the server block early either.
-const braceQuoteDir = mkdtempSync(`${tmpdir()}/nginx-brace-quote-test-`);
-const braceQuoteState = `${braceQuoteDir}/state`;
-const braceQuoteVhost = `${braceQuoteDir}/cloudpanel.conf`;
-const braceQuoteContent =
-  "server {\n    listen 8443 ssl;\n    server_name panel.example.test;\n" +
-  '    add_header X-Note "a brace in a string: } does not close anything";\n}\n';
-writeFileSync(braceQuoteVhost, braceQuoteContent);
-check("a closing brace inside a quoted string does not end the server block early",
-  masterVhostHost({ vhostPath: braceQuoteVhost }) === "panel.example.test");
-const braceQuoteResult = reconcileNginxProxy({ vhostPath: braceQuoteVhost, stateDir: braceQuoteState, reload: false });
-check("a brace inside a quoted string still lets reconciliation inject at the real end of the block",
-  braceQuoteResult.state === "ok" &&
-  readFileSync(braceQuoteVhost, "utf-8") ===
-    `${braceQuoteContent.slice(0, -2)}\n${NGINX_PROXY_BLOCK}\n}\n`);
-rmSync(braceQuoteDir, { recursive: true, force: true });
+const injectedAtEnd = (content: string) => `${content.slice(0, -2)}\n${NGINX_PROXY_BLOCK}\n}\n`;
 
-// Nested `location` blocks inside the server block must not be mistaken for
-// the server block's own closing brace.
-const nestedLocationDir = mkdtempSync(`${tmpdir()}/nginx-nested-location-test-`);
-const nestedLocationState = `${nestedLocationDir}/state`;
-const nestedLocationVhost = `${nestedLocationDir}/cloudpanel.conf`;
-const nestedLocationContent =
-  "server {\n    listen 8443 ssl;\n    server_name panel.example.test;\n" +
-  "    location / {\n        try_files $uri $uri/ =404;\n    }\n" +
-  "    location /api/ {\n        proxy_pass http://127.0.0.1:3000;\n    }\n}\n";
-writeFileSync(nestedLocationVhost, nestedLocationContent);
-check("nested location blocks do not truncate the enclosing server block",
-  masterVhostHost({ vhostPath: nestedLocationVhost }) === "panel.example.test");
-const nestedLocationResult = reconcileNginxProxy({ vhostPath: nestedLocationVhost, stateDir: nestedLocationState, reload: false });
-check("nested location blocks still let reconciliation inject at the real end of the server block",
-  nestedLocationResult.state === "ok" &&
-  readFileSync(nestedLocationVhost, "utf-8") ===
-    `${nestedLocationContent.slice(0, -2)}\n${NGINX_PROXY_BLOCK}\n}\n`);
-rmSync(nestedLocationDir, { recursive: true, force: true });
-
-// A `listen 8443` that only appears because the whole server block is
-// commented out must not count as a match: the master vhost has zero real
-// server blocks listening on 8443, which is ambiguous (fails closed), not a
-// false-positive single match on commented-out text.
-const commentedListenDir = mkdtempSync(`${tmpdir()}/nginx-commented-listen-test-`);
-const commentedListenState = `${commentedListenDir}/state`;
-const commentedListenVhost = `${commentedListenDir}/cloudpanel.conf`;
-const commentedListenContent =
-  "# server {\n#     listen 8443 ssl;\n#     server_name fake.example.test;\n# }\n" +
-  "server {\n    listen 80;\n    server_name real.example.test;\n}\n";
-writeFileSync(commentedListenVhost, commentedListenContent);
-const commentedListenBefore = readFileSync(commentedListenVhost, "utf-8");
-check("a listen 8443 that only exists inside a commented-out server block is not a match",
-  masterVhostHost({ vhostPath: commentedListenVhost }) === null);
-const commentedListenResult = reconcileNginxProxy({ vhostPath: commentedListenVhost, stateDir: commentedListenState, reload: false });
-check("a commented-out listen 8443 leaves the vhost ambiguous rather than falsely resolved",
-  commentedListenResult.state === "ambiguous" &&
-  !commentedListenResult.changed &&
-  commentedListenResult.detail?.includes("no server block listening on port 8443") === true);
-check("refusing a commented-out 8443 match makes no vhost changes",
-  readFileSync(commentedListenVhost, "utf-8") === commentedListenBefore);
-check("refusing a commented-out 8443 match creates no rollback state", !existsSync(commentedListenState));
-rmSync(commentedListenDir, { recursive: true, force: true });
-
-// A quoted string ending in an escaped backslash must still close at its own
-// closing quote. Getting this wrong is not a cosmetic parsing detail: if the
-// string is treated as still open, the next quote on the line looks like an
-// opener, and characters after it -- including a `}` -- leak out as if they
-// were real config. That truncates the server block mid-directive, so
-// `server_name` falls outside it and the proxy block gets spliced into the
-// middle of an `add_header` line.
-const escapedQuoteDir = mkdtempSync(`${tmpdir()}/nginx-escaped-quote-test-`);
-const escapedQuoteState = `${escapedQuoteDir}/state`;
-const escapedQuoteVhost = `${escapedQuoteDir}/cloudpanel.conf`;
-const escapedQuoteContent =
-  "server {\n    listen 8443 ssl;\n" +
-  '    add_header X-Note "C:\\\\" "}";\n' +
-  "    server_name panel.example.test;\n}\n";
-writeFileSync(escapedQuoteVhost, escapedQuoteContent);
-check("an escaped backslash before a closing quote does not leak a brace out of the string",
-  masterVhostHost({ vhostPath: escapedQuoteVhost }) === "panel.example.test");
-const escapedQuoteResult = reconcileNginxProxy({ vhostPath: escapedQuoteVhost, stateDir: escapedQuoteState, reload: false });
-check("an escaped backslash in a string still lets reconciliation inject at the real end of the block",
-  escapedQuoteResult.state === "ok" &&
-  readFileSync(escapedQuoteVhost, "utf-8") ===
-    `${escapedQuoteContent.slice(0, -2)}\n${NGINX_PROXY_BLOCK}\n}\n`);
-rmSync(escapedQuoteDir, { recursive: true, force: true });
+for (const { label, content } of [
+  // A `}` inside a `#` comment must not close the server block early -- the
+  // content after it (here, `server_name`) is still inside the real block.
+  {
+    label: "a closing brace inside a comment",
+    content: "server {\n    listen 8443 ssl;\n" +
+      "    # a stray closing brace in a comment: } must not end the block early\n" +
+      "    server_name panel.example.test;\n}\n",
+  },
+  {
+    label: "a closing brace inside a quoted string",
+    content: "server {\n    listen 8443 ssl;\n    server_name panel.example.test;\n" +
+      '    add_header X-Note "a brace in a string: } does not close anything";\n}\n',
+  },
+  {
+    label: "nested location blocks",
+    content: "server {\n    listen 8443 ssl;\n    server_name panel.example.test;\n" +
+      "    location / {\n        try_files $uri $uri/ =404;\n    }\n" +
+      "    location /api/ {\n        proxy_pass http://127.0.0.1:3000;\n    }\n}\n",
+  },
+  // A quoted string ending in an escaped backslash must still close at its own
+  // closing quote. If the string is treated as still open, the next quote on
+  // the line looks like an opener, and characters after it -- including a `}`
+  // -- leak out as if they were real config. That truncates the server block
+  // mid-directive, so `server_name` falls outside it and the proxy block gets
+  // spliced into the middle of an `add_header` line.
+  {
+    label: "an escaped backslash before a closing quote",
+    content: "server {\n    listen 8443 ssl;\n" +
+      '    add_header X-Note "C:\\\\" "}";\n' +
+      "    server_name panel.example.test;\n}\n",
+  },
+]) {
+  test(`${label} does not end the server block early`, () => {
+    const { host, result, after } = scanned(content);
+    expect(host).toBe("panel.example.test");
+    expect(result.state).toBe("ok");
+    expect(after).toBe(injectedAtEnd(content));
+  });
+}
 
 // An unterminated quote ending in a dangling backslash must not swallow the
 // rest of the file: the string ends at the newline, as Nginx treats it.
-const danglingEscapeDir = mkdtempSync(`${tmpdir()}/nginx-dangling-escape-test-`);
-const danglingEscapeVhost = `${danglingEscapeDir}/cloudpanel.conf`;
-writeFileSync(danglingEscapeVhost,
-  "server {\n    listen 8443 ssl;\n" +
-  '    add_header X-Broken "unterminated \\\\\n' +
-  "    server_name panel.example.test;\n}\n");
-check("an unterminated string ending in a backslash ends at the newline, not at the next quote",
-  masterVhostHost({ vhostPath: danglingEscapeVhost }) === "panel.example.test");
-rmSync(danglingEscapeDir, { recursive: true, force: true });
+test("an unterminated string ending in a backslash ends at the newline, not at the next quote", () => {
+  const { host } = scanned("server {\n    listen 8443 ssl;\n" +
+    '    add_header X-Broken "unterminated \\\\\n' +
+    "    server_name panel.example.test;\n}\n");
+  expect(host).toBe("panel.example.test");
+});
 
-// The masker also hides directive *text*, not just braces: a `listen 8443`
-// that only appears inside a quoted string is not a real listener, so the
-// vhost has zero real 8443 blocks and must fail closed.
-const quotedListenDir = mkdtempSync(`${tmpdir()}/nginx-quoted-listen-test-`);
-const quotedListenState = `${quotedListenDir}/state`;
-const quotedListenVhost = `${quotedListenDir}/cloudpanel.conf`;
-const quotedListenContent =
-  "server {\n    listen 80;\n" +
-  '    add_header X-Note "listen 8443 ssl";\n' +
-  "    server_name real.example.test;\n}\n";
-writeFileSync(quotedListenVhost, quotedListenContent);
-check("a listen 8443 that only exists inside a quoted string is not a match",
-  masterVhostHost({ vhostPath: quotedListenVhost }) === null);
-const quotedListenResult = reconcileNginxProxy({ vhostPath: quotedListenVhost, stateDir: quotedListenState, reload: false });
-check("a quoted listen 8443 leaves the vhost ambiguous and unchanged",
-  quotedListenResult.state === "ambiguous" &&
-  !quotedListenResult.changed &&
-  readFileSync(quotedListenVhost, "utf-8") === quotedListenContent &&
-  !existsSync(quotedListenState));
-rmSync(quotedListenDir, { recursive: true, force: true });
+for (const { label, content, detail } of [
+  // A `listen 8443` that only appears because the whole server block is
+  // commented out must not count as a match: the master vhost has zero real
+  // server blocks listening on 8443, which is ambiguous (fails closed), not a
+  // false-positive single match on commented-out text.
+  {
+    label: "inside a commented-out server block",
+    content: "# server {\n#     listen 8443 ssl;\n#     server_name fake.example.test;\n# }\n" +
+      "server {\n    listen 80;\n    server_name real.example.test;\n}\n",
+    detail: "no server block listening on port 8443",
+  },
+  // The masker also hides directive *text*, not just braces.
+  {
+    label: "inside a quoted string",
+    content: "server {\n    listen 80;\n" +
+      '    add_header X-Note "listen 8443 ssl";\n' +
+      "    server_name real.example.test;\n}\n",
+    detail: "",
+  },
+]) {
+  test(`a listen 8443 that only exists ${label} is not a match, and nothing changes`, () => {
+    const { host, result, after, stateLeft } = scanned(content);
+    expect(host).toBeNull();
+    expect(result.state).toBe("ambiguous");
+    expect(result.changed).toBe(false);
+    if (detail) expect(result.detail).toContain(detail);
+    expect(after).toBe(content);
+    expect(stateLeft).toBe(false);
+  });
+}
 
-// The site tab strip carries two blocks from two owners: the addon's tab, and
-// the manager's rule that keeps the strip on one row once that tab is there.
-const tabTemplate = "tab-container.html.twig";
-const tabFile = `${dir}/${tabTemplate}`;
-const tabOriginal = `<div class="tab-container">
+// The site tab strip carries blocks from several owners: the addons' tabs, and
+// the manager's rule that keeps the strip on one row once a tab is there.
+test("the site tab strip takes the one-row rule and both tabs, in a stable order", () => {
+  const tabTemplate = "tab-container.html.twig";
+  const tabOriginal = `<div class="tab-container">
   <ul>
     <li>
       <a href="{{ path('clp_site_logs', {'domainName': site.domainName}) }}">{% trans %}Logs{% endtrans %}</a>
@@ -541,43 +451,37 @@ const tabOriginal = `<div class="tab-container">
   </ul>
 </div>
 `;
-writeFileSync(tabFile, tabOriginal);
+  const { paths, read } = templates(tabTemplate, tabOriginal);
+  const stagerTabTarget = STAGER_TARGETS.find((target) => target.slug === "site-tab")!;
+  const injections: Injection[] = [
+    { addon: "manager", target: { ...siteLayoutTarget(), template: tabTemplate }, url: "/addons/" },
+    { addon: "maintenance", target: { ...MAINTENANCE_TARGETS[0]!, template: tabTemplate }, url: "/addons/maintenance" },
+    { addon: "stager", target: { ...stagerTabTarget, template: tabTemplate }, url: "/addons/stager" },
+  ];
+  reconcile(injections, paths);
+  const body = read();
+  expect(body).toContain("flex-wrap: nowrap");
+  expect(body).toContain(">Maintenance</a>");
+  expect(body).toContain(">Staging</a>");
+  // The order ADDON_SITE_TABS gives the reproduced strip, so the panel's copy
+  // and the addon's own copy of it read the same left to right.
+  expect(body.indexOf(">Maintenance</a>")).toBeLessThan(body.indexOf(">Staging</a>"));
+  // The one-row rule is applied before the strip it styles.
+  expect(body.indexOf("flex-wrap: nowrap")).toBeLessThan(body.indexOf('<div class="tab-container">'));
+  // The addon tab stays inside the panel's own admin guard.
+  expect(body.indexOf("{% if is_granted('ROLE_ADMIN') %}")).toBeLessThan(body.indexOf(">Maintenance</a>"));
 
-const stagerTabTarget = STAGER_TARGETS.find((target) => target.slug === "site-tab")!;
-// Two addons patching one anchor, which is what the strip now is.
-const tabInjections: Injection[] = [
-  { addon: "manager", target: { ...siteLayoutTarget(), template: tabTemplate }, url: "/addons/" },
-  { addon: "maintenance", target: { ...MAINTENANCE_TARGETS[0]!, template: tabTemplate }, url: "/addons/maintenance" },
-  { addon: "stager", target: { ...stagerTabTarget, template: tabTemplate }, url: "/addons/stager" },
-];
-reconcile(tabInjections, PATHS);
-const tabBody = () => readFileSync(tabFile, "utf-8");
-check("the one-row rule and both addon tabs land in the strip",
-  tabBody().includes("flex-wrap: nowrap") && tabBody().includes(">Maintenance</a>")
-  && tabBody().includes(">Staging</a>"), tabBody());
-// The order ADDON_SITE_TABS gives the reproduced strip, so the panel's copy and
-// the addon's own copy of it read the same left to right.
-check("Maintenance comes before Staging, as it does in the reproduced strip",
-  tabBody().indexOf(">Maintenance</a>") < tabBody().indexOf(">Staging</a>"), tabBody());
-check("the one-row rule is applied before the strip it styles",
-  tabBody().indexOf("flex-wrap: nowrap") < tabBody().indexOf('<div class="tab-container">'), tabBody());
-check("the addon tab stays inside the panel's own admin guard",
-  tabBody().indexOf("{% if is_granted('ROLE_ADMIN') %}") < tabBody().indexOf(">Maintenance</a>"), tabBody());
+  reconcile(injections, paths);
+  const settled = read();
+  expect(count(settled, /flex-wrap: nowrap/g)).toBe(1);
+  expect(count(settled, />Maintenance<\/a>/g)).toBe(1);
+  expect(count(settled, />Staging<\/a>/g)).toBe(1);
+  // Two addons at one anchor must not swap places on every pass, or the file
+  // never settles and the panel's Twig cache is rebuilt forever.
+  reconcile(injections, paths);
+  expect(read()).toBe(settled);
 
-reconcile(tabInjections, PATHS);
-const settledStrip = tabBody();
-check("the strip settles without duplicating any block",
-  (tabBody().match(/flex-wrap: nowrap/g) ?? []).length === 1 &&
-  (tabBody().match(/>Maintenance<\/a>/g) ?? []).length === 1 &&
-  (tabBody().match(/>Staging<\/a>/g) ?? []).length === 1, tabBody());
-// Two addons at one anchor must not swap places on every pass, or the file
-// never settles and the panel's Twig cache is rebuilt forever.
-reconcile(tabInjections, PATHS);
-check("a third pass produces the same file, so the two tabs hold their order",
-  tabBody() === settledStrip, tabBody());
-
-// Removing the addon removes the rule that only existed for its tab.
-reconcile([], PATHS);
-check("removing the addon restores CloudPanel's own strip", tabBody() === tabOriginal, JSON.stringify(tabBody()));
-
-rmSync(dir, { recursive: true, force: true });
+  // Removing the addons removes the rule that only existed for their tabs.
+  reconcile([], paths);
+  expect(read()).toBe(tabOriginal);
+});
