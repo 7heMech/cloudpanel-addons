@@ -19,7 +19,7 @@ these files. Update CloudPanel as usual; the addons never hold it back.
 - **Otherwise the file is left exactly as CloudPanel shipped it.** CloudPanel
   keeps working; only the affected addon's buttons or links are missing. The
   Addons page shows **Paused until checked** with what to do, and so does
-  `clp-addons status`.
+  `clp-addons status`, run as root.
 
 Nothing is decided while the update is still running. The first repair after
 it finishes does that, within 15 minutes; run `clp-addons repair` to do it
@@ -37,7 +37,7 @@ stays in place.
 | The Addons page or `status` says | Do this |
 | --- | --- |
 | a line the addons attach to is gone, appears more than once, or would clash | Nothing for now. That part stays off until a CloudPanel Addons release supports this CloudPanel version; run `clp-addons update` once one is out. |
-| the file changed, but CloudPanel was not updated | Someone edited the file. If the edit is wanted, run `clp-addons repair --rebaseline`; otherwise put the file back. |
+| the file changed, but CloudPanel was not updated, or an update kept an edit | Someone edited the file. If the edit is wanted, run `clp-addons repair --rebaseline`; otherwise put the file back. |
 | there is no record of the version it was patched under | The file was patched before this check existed. Look at the change, then run `clp-addons repair --rebaseline`. |
 | part of an addon block is left in it | Remove the leftover `clp-addons` lines from the file, then run `clp-addons repair`. |
 | CloudPanel is being updated | Nothing. |

@@ -3,6 +3,7 @@
 // every block still fits, and is otherwise left alone. Runs against throwaway
 // files, with the installed package version passed in rather than read from dpkg.
 import { afterEach, expect, test } from "bun:test";
+import { createHash } from "node:crypto";
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -13,7 +14,8 @@ import { NGINX_MAINTENANCE_BLOCK, reconcileNginxMaintenance } from "../addons/ma
 import { applyClpctlGuard } from "../addons/system-tweaks/clpctl-guard";
 import { backupCompressionStatus, reconcileBackupCompression, DEFAULT_BACKUP_COMPRESSION } from "../addons/system-tweaks/backup-compression";
 import { rebaselineVerdict } from "../lib/baseline";
-import { compareUpstream, packageVersion, parseRange, rangeFit, upstreamVersion } from "../lib/cloudpanel-version";
+import { compareUpstream, conffileMd5, packageVersion, parseRange, rangeFit, upstreamVersion } from "../lib/cloudpanel-version";
+import { cmdStatus } from "../cli/status";
 import { holdAdvice, holdSummary } from "../lib/panel-holds";
 
 const OLD = "2.5.4-3+clp-bookworm";
@@ -324,4 +326,77 @@ test("the Addons page lists what is paused, for which addons, and what to run; w
   expect(page).toContain(`${TEMPLATE} changed, but CloudPanel ${OLD} was not updated.`);
   expect(page).toContain("<code>clp-addons repair --rebaseline</code>");
   expect(await indexPage(["stager"], null, { holds: [] }).text()).not.toContain("Paused until checked");
+});
+
+test("a held package is installed, not being updated, so its files are judged like any other", () => {
+  expect(packageVersion("cloudpanel", () => `${NEW}\thi `)).toBe(NEW);
+  expect(packageVersion("cloudpanel", () => `${NEW}\thU `)).toBeNull();
+  expect(packageVersion("cloudpanel", () => `${NEW}\tiiR`)).toBeNull();
+
+  const h = patchedHeader();
+  h.upgrade(`<header class="v2">\n${NAV}\n</div>\n${SITES}\n</div>\n</header>\n`);
+  const held = packageVersion("cloudpanel", () => `${NEW}\thi `);
+  expect(reconcile(h.injections, { ...h.options, panelVersion: held }).rebaselined).toEqual([{ file: TEMPLATE, from: OLD, to: NEW }]);
+});
+
+test("an upgrade that ships the same conffile does not take an edit dpkg kept for the operator", () => {
+  const m = maintenanceFixture();
+  const shipped = createHash("md5").update("client_max_body_size 128m;").digest("hex");
+  writeFileSync(m.settingsPath, "client_max_body_size 256m;");
+  expect(reconcileNginxMaintenance({ ...m.paths, packageVersion: "1.26.3-3", conffileMd5: shipped })).toMatchObject({
+    state: "upstream-changed", refusal: { reason: "edited" },
+  });
+  // nginx-common moves on with the same global_settings: dpkg leaves the edit in place.
+  expect(reconcileNginxMaintenance({ ...m.paths, packageVersion: "1.26.3-4", conffileMd5: shipped })).toMatchObject({
+    state: "upstream-changed", refusal: { reason: "edited", recorded: "1.26.3-3", installed: "1.26.3-4" },
+  });
+  expect(m.read()).toBe("client_max_body_size 256m;");
+  expect(holdSummary({ file: m.settingsPath, addons: [], reason: "edited", package: "nginx-common", recorded: "1.26.3-3", installed: "1.26.3-4" }))
+    .toBe(`${m.settingsPath} was edited, and nginx-common 1.26.3-4 kept the edit rather than ship its own.`);
+  // The operator vouches for it.
+  expect(reconcileNginxMaintenance({ ...m.paths, packageVersion: "1.26.3-4", conffileMd5: shipped, accept: true }).state).toBe("ok");
+
+  // An upgrade that does ship a new global_settings is taken.
+  const n = maintenanceFixture();
+  writeFileSync(n.settingsPath, "client_max_body_size 512m;");
+  const newShipped = createHash("md5").update("client_max_body_size 512m;").digest("hex");
+  expect(reconcileNginxMaintenance({ ...n.paths, packageVersion: "1.26.3-4", conffileMd5: newShipped })).toMatchObject({
+    state: "ok", rebaselined: { from: "1.26.3-3", to: "1.26.3-4" },
+  });
+
+  expect(conffileMd5("nginx-common", "/etc/nginx/global_settings", () =>
+    " /etc/nginx/nginx.conf 0123456789abcdef0123456789abcdef\n /etc/nginx/global_settings 04c005f50ebe00b15658f5c769f12d90\n"))
+    .toBe("04c005f50ebe00b15658f5c769f12d90");
+  expect(conffileMd5("nginx-common", "/etc/nginx/global_settings", () => " /etc/nginx/nginx.conf 0123456789abcdef0123456789abcdef\n")).toBeNull();
+});
+
+test.skipIf(process.getuid?.() === 0)("status refuses to run without root rather than read every record as an edit", async () => {
+  await expect(cmdStatus()).rejects.toThrow("'status' reads records only root can read and must run as root");
+});
+
+test("a version that changes while a file is read means dpkg may have been writing it, so nothing is recorded", () => {
+  const h = patchedHeader();
+  const halfWritten = `<header class="v2">\n${NAV}\n</div>\n${SITES}\n`;
+  h.upgrade(halfWritten);
+  // dpkg is still configuring CloudPanel when the pass starts, and has finished by the time the file is judged.
+  let reads = 0;
+  const dpkg = () => (reads++ === 0 ? null : NEW);
+  const result = reconcile(h.injections, { ...h.options, panelVersion: dpkg });
+  expect(result.rebaselined).toEqual([]);
+  expect(result.statuses.every((status) => status.state === "upstream-changed" && status.reason === "busy")).toBe(true);
+  expect(h.read()).toBe(halfWritten);
+
+  const v = proxied();
+  writeFileSync(v.vhostPath, VHOST.replace("server_name", "client_max_body_size 64m;\n    server_name"));
+  let vhostReads = 0;
+  expect(reconcileNginxProxy({ ...v.options, panelVersion: () => (vhostReads++ === 0 ? OLD : NEW) })).toMatchObject({
+    state: "upstream-changed", refusal: { reason: "busy" },
+  });
+
+  const m = maintenanceFixture();
+  writeFileSync(m.settingsPath, "client_max_body_size 256m;");
+  let settingsReads = 0;
+  expect(reconcileNginxMaintenance({ ...m.paths, packageVersion: () => (settingsReads++ === 0 ? null : "1.26.3-4") })).toMatchObject({
+    state: "upstream-changed", refusal: { reason: "busy" },
+  });
 });

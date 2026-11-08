@@ -12,7 +12,7 @@ import { installedInjections, panelHolds } from "./reconcile";
 import { CLOUDPANEL_RANGE, describeRange, panelVersion, rangeFit } from "../lib/cloudpanel-version";
 import { holdAdvice, holdSummary } from "../lib/panel-holds";
 import { CLI_VERSION } from "../lib/version";
-import { log, paint } from "../lib/log";
+import { log, paint, requireRoot } from "../lib/log";
 function statusValue(value: string, ok: boolean): string {
   return paint(ok ? "32" : "31", value);
 }
@@ -64,7 +64,13 @@ function socketStatus(): string {
   return statusValue(`UNIX Socket (${SOCKET_PATH}) — ${problem ?? "ready"}`, problem === null);
 }
 
+/**
+ * Root only: the records it checks CloudPanel's files against keep their text
+ * where only root can read it, and as another user every patched file would
+ * look edited.
+ */
 export async function cmdStatus(): Promise<void> {
+  requireRoot("status", "reads records only root can read");
   const specs = enabledAddons();
   const managerState = unitActive(MANAGER_UNIT);
   const active = managerState === "active";

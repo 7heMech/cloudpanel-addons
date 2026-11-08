@@ -48,25 +48,46 @@ export interface InjectOptions {
   templatesDir?: string;
   stateDir?: string;
   /** The installed CloudPanel version; read from dpkg when left out. Null while dpkg is changing it. */
-  panelVersion?: string | null;
+  panelVersion?: PanelVersionSource;
   /** `repair --rebaseline`: take a changed template that still fits even though CloudPanel was not upgraded. */
   accept?: boolean;
+}
+
+/** A version, or a function asked each time, as dpkg is; dpkg itself when left out. */
+type PanelVersionSource = string | null | (() => string | null);
+
+function versionReader(source: PanelVersionSource | undefined): () => string | null {
+  if (typeof source === "function") return source;
+  return source === undefined ? () => panelVersion() : () => source;
+}
+
+/**
+ * The version read before any file of a pass and the one read after a changed
+ * file must agree. CloudPanel's postinst could finish between a read of a
+ * half-written file and a read of the version, and the anchor watcher fires
+ * exactly during upgrades.
+ */
+function settledVersion(before: string | null, now: () => string | null): string | null {
+  const after = now();
+  return before === after ? after : null;
 }
 
 interface InjectPaths {
   templatesDir: string;
   stateDir: string;
-  panelVersion: () => string | null;
+  /** The version as the pass began, before any file was read. */
+  before: string | null;
+  now: () => string | null;
   accept: boolean;
 }
 
 function resolvePaths(p?: InjectOptions): InjectPaths {
-  let version: string | null | undefined = p?.panelVersion;
+  const now = versionReader(p?.panelVersion);
   return {
     templatesDir: p?.templatesDir ?? TEMPLATES_DIR,
     stateDir: p?.stateDir ?? TEMPLATE_STATE_DIR,
-    // Asked once per pass, and only when a decision needs it.
-    panelVersion: () => version === undefined ? (version = panelVersion()) : version,
+    before: now(),
+    now,
     accept: p?.accept === true,
   };
 }
@@ -152,7 +173,7 @@ function assess(file: string, list: Injection[], p: InjectPaths): Assessment {
   const baseline = readBaseline(record);
   const recorded = readBaselineVersion(record);
   if (baseline && baseline.hash === sha256(upstream)) return { kind: "match", onDisk, upstream, recorded };
-  const installed = p.panelVersion();
+  const installed = settledVersion(p.before, p.now);
   const reason = rebaselineVerdict({
     recorded, installed, strayMarker: STRAY_MARKER.test(upstream), misfit: misfit(upstream, list), accept: p.accept,
   });
@@ -281,14 +302,13 @@ function renderFile(
   let rebaselined: Rebaselined | undefined;
   if (found.kind === "unrecorded" || found.kind === "rebaseline") {
     mkdirSync(p.stateDir, { recursive: true });
-    const version = found.kind === "rebaseline" ? found.installed : p.panelVersion();
+    const version = found.kind === "rebaseline" ? found.installed : p.before;
     recordBaseline(record, upstream, sha256(upstream), file, version);
     if (found.kind === "rebaseline") rebaselined = { file: templateOf(file, p), from: found.recorded, to: found.installed };
   } else {
     // Unchanged under a new CloudPanel: the record now vouches for this
     // version, so a later edit under it is told apart from an upgrade.
-    const installed = p.panelVersion();
-    if (installed !== null && installed !== found.recorded) writeBaselineVersion(record, installed);
+    if (p.before !== null && p.before !== found.recorded) writeBaselineVersion(record, p.before);
   }
 
   const statuses: TargetStatus[] = [];
@@ -380,7 +400,7 @@ interface NginxPaths {
 
 /** As for the templates: the installed CloudPanel version, and the operator's `repair --rebaseline`. */
 interface NginxBaselineOptions {
-  panelVersion?: string | null;
+  panelVersion?: PanelVersionSource;
   accept?: boolean;
 }
 
@@ -607,15 +627,18 @@ type VhostCheck =
   | { kind: "refuse"; reason: Refusal; recorded: string | null; installed: string | null };
 
 /** The vhost against its record, by the rule the templates follow. Writes nothing. */
-function checkVhost(upstream: string, files: ReturnType<typeof baselineFiles>, enabled: boolean, options: NginxBaselineOptions): VhostCheck {
+function checkVhost(
+  upstream: string, files: ReturnType<typeof baselineFiles>, enabled: boolean,
+  version: { before: string | null; now: () => string | null }, accept?: boolean,
+): VhostCheck {
   if (!hasBaseline(files)) return { kind: "unrecorded" };
   const baseline = readBaseline(files);
   const recorded = readBaselineVersion(files);
   if (baseline?.hash === sha256(upstream)) return { kind: "match", recorded };
-  const installed = options.panelVersion === undefined ? panelVersion() : options.panelVersion;
+  const installed = settledVersion(version.before, version.now);
   const reason = rebaselineVerdict({
     recorded, installed, strayMarker: VHOST_STRAY_MARKER.test(upstream),
-    misfit: enabled ? proxyMisfit(upstream) : null, accept: options.accept,
+    misfit: enabled ? proxyMisfit(upstream) : null, accept,
   });
   return reason || installed === null
     ? { kind: "refuse", reason: reason ?? "busy", recorded, installed }
@@ -633,6 +656,8 @@ function upstreamChangedResult(vhostPath: string, check: Extract<VhostCheck, { k
 }
 
 export function inspectNginxProxy(options: NginxPaths & NginxBaselineOptions = {}): NginxProxyStatus {
+  const now = versionReader(options.panelVersion);
+  const before = now();
   const resolved = resolveMasterVhost(options);
   if (!("content" in resolved)) {
     return { state: resolved.state, vhostPath: resolved.path, detail: resolved.detail };
@@ -640,7 +665,7 @@ export function inspectNginxProxy(options: NginxPaths & NginxBaselineOptions = {
   const path = resolved.path;
   const content = resolved.content;
   const files = baselineFiles(options.stateDir ?? NGINX_PROXY_STATE_DIR, "vhost");
-  const check = checkVhost(panelUpstream(content), files, true, options);
+  const check = checkVhost(panelUpstream(content), files, true, { before, now }, options.accept);
   if (check.kind === "refuse") {
     const { changed: _, ...status } = upstreamChangedResult(path, check);
     return status;
@@ -662,6 +687,8 @@ export function reconcileNginxProxy(
 ): NginxReconcileResult {
   const { enabled = true, reload = true, panelVersion: version, accept, ...paths } = options;
   const p = nginxPaths(paths);
+  const now = versionReader(version);
+  const before = now();
   const resolved = resolveMasterVhost(p);
   if (!("content" in resolved)) {
     return { state: resolved.state, changed: false, vhostPath: resolved.path, detail: resolved.detail };
@@ -679,16 +706,14 @@ export function reconcileNginxProxy(
 
   const files = baselineFiles(p.stateDir, "vhost");
   const upstream = panelUpstream(onDisk);
-  const baselineOptions = { panelVersion: version, accept };
-  const check = checkVhost(upstream, files, enabled, baselineOptions);
+  const check = checkVhost(upstream, files, enabled, { before, now }, accept);
   if (check.kind === "refuse") return upstreamChangedResult(selectedPath, check);
   let rebaselined: NginxReconcileResult["rebaselined"];
   if (check.kind === "match") {
-    const installed = version === undefined ? panelVersion() : version;
-    if (installed !== null && installed !== check.recorded) writeBaselineVersion(files, installed);
+    if (before !== null && before !== check.recorded) writeBaselineVersion(files, before);
   } else {
     mkdirSync(p.stateDir, { recursive: true });
-    const installed = check.kind === "rebaseline" ? check.installed : version === undefined ? panelVersion() : version;
+    const installed = check.kind === "rebaseline" ? check.installed : before;
     recordBaseline(files, upstream, sha256(upstream), vhostPath, installed);
     if (check.kind === "rebaseline") rebaselined = { from: check.recorded, to: check.installed };
   }

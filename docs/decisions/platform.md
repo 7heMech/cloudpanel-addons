@@ -258,15 +258,26 @@ installed version, so a later edit under that version reads as an edit.
 A file whose text changed is recorded afresh and patched only when all of these
 hold:
 
-- dpkg reports the package fully installed (`ii`). While an upgrade unpacks and
-  configures, the version is already the new one but files are still being
-  replaced, and the anchor watcher fires on every write. A file read then could
-  be half-written, and recording it would turn the finished file into an edit.
-  Nothing is decided until the first repair after dpkg finishes: the 15-minute
-  timer, `apt-hook post` after an unattended run, or a manual `repair`.
+- dpkg reports the package fully installed: current state `i` with no error
+  flag, whether it is wanted (`ii`) or held (`hi`, after `apt-mark hold`). While
+  an upgrade unpacks and configures, the version is already the new one but
+  files are still being replaced, and the anchor watcher fires on every write.
+  A file read then could be half-written, and recording it would turn the
+  finished file into an edit. Nothing is decided until the first repair after
+  dpkg finishes: the 15-minute timer, `apt-hook post` after an unattended run,
+  or a manual `repair`.
+- The version reads the same before and after the file is read. A pass reads
+  it before its first file and again after a changed one; if postinst finished
+  in between, the file may be the half-written one, so it is refused as `busy`
+  and the next pass decides.
 - The installed version differs from the recorded one. The same version with
   different bytes is someone's edit. A record from before versions were kept
   cannot tell the two apart, so it refuses too.
+- For a conffile, the new text is the package's own: its MD5 is the one
+  `dpkg-query -W -f='${Conffiles}'` lists. dpkg keeps an operator's edit through
+  an upgrade that ships the same conffile, without asking, so a moved version
+  alone would accept an edit that was refused. Templates and the master vhost
+  are replaced on every upgrade and need no such check.
 - No marker text is left once the complete blocks are taken out.
 - The new text fits. For a template, every anchor of every block wanted in it
   appears exactly once: missing gives the block nowhere to go, and twice means
@@ -312,12 +323,14 @@ panel has changed under it. A file the rule refuses costs one addon's link or
 button until a release supports the version; everything else keeps running.
 
 `repair --rebaseline` is the operator's way past `edited` and `unrecorded`: it
-drops the version condition and nothing else, so the package must be settled, no stray marker may be left and every block
+drops the version and conffile conditions and nothing else, so the package must be settled, no stray marker may be left and every block
 must still fit.
 
 What is refused is shown, not only logged. The manager's `holds` verb runs as
 root on every load of the Addons page and inspects the live files without
-writing; `clp-addons status` prints the same list. Both group by file and name
+writing; `clp-addons status` prints the same list. `status` runs only as root,
+since the records keep their text where only root can read it, and as another
+user every patched file would look edited. Both group by file and name
 the addons whose blocks are held, the package version, and what to do, in the
 words of `lib/panel-holds.ts`. Repair logs each file it records afresh. The
 operator procedure is [When CloudPanel updates](../cloudpanel-updates.md).

@@ -67,6 +67,13 @@ const dpkgQuery: PackageQuery = (args) =>
   execFileSync("dpkg-query", args, { encoding: "utf-8", stdio: ["ignore", "pipe", "ignore"], timeout: 10_000 });
 
 /**
+ * dpkg's abbreviated status is the wanted state, the current state and an
+ * error flag. Only the current state matters: `i` with no error is fully
+ * installed, whether the package is wanted (`ii`) or held (`hi`).
+ */
+const SETTLED_STATUS = /^\Si $/;
+
+/**
  * The installed version of a package, or null when dpkg cannot say or is
  * part-way through changing it: during an upgrade the package's files are
  * still being replaced, and nothing read then is what the upgrade leaves.
@@ -74,10 +81,24 @@ const dpkgQuery: PackageQuery = (args) =>
 export function packageVersion(pkg: string, query: PackageQuery = dpkgQuery): string | null {
   try {
     const [version, status] = query(["-W", "-f=${Version}\t${db:Status-Abbrev}", pkg]).split("\t");
-    return version?.trim() && status?.startsWith("ii") ? version.trim() : null;
+    return version?.trim() && SETTLED_STATUS.test(status ?? "") ? version.trim() : null;
   } catch {
     return null;
   }
+}
+
+/**
+ * The MD5 dpkg records for one of a package's conffiles, as the package ships
+ * it; null when the file is not one of its conffiles or dpkg cannot say.
+ */
+export function conffileMd5(pkg: string, path: string, query: PackageQuery = dpkgQuery): string | null {
+  try {
+    for (const line of query(["-W", "-f=${Conffiles}\n", pkg]).split("\n")) {
+      const [file, md5] = line.trim().split(/\s+/);
+      if (file === path && md5 && /^[0-9a-f]{32}$/.test(md5)) return md5;
+    }
+  } catch { /* not installed, or no dpkg */ }
+  return null;
 }
 
 /** The installed CloudPanel package's version, as `packageVersion` gives it. */

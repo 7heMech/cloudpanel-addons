@@ -91,7 +91,8 @@ export function removeBaseline(files: BaselineFiles): void {
  * Why a changed file is left alone.
  *
  * - `busy`: the owning package is part-way through an install or upgrade.
- * - `edited`: the package version is the one recorded, so someone else changed the file.
+ * - `edited`: the package version is the one recorded, or the file is a conffile
+ *   whose text is not the package's, so someone else changed it.
  * - `unrecorded`: the record predates versions, so there is no telling who changed it.
  * - `stray-marker`: marker text is left over once the managed blocks are taken out.
  * - `anchor-missing` / `anchor-repeated`: a line a block attaches to is not in the new text exactly once.
@@ -107,6 +108,13 @@ export interface UpstreamChange {
   strayMarker: boolean;
   /** Why the new text cannot take the blocks, or null when every one fits. */
   misfit: Refusal | null;
+  /**
+   * For a conffile, whether the new text is the package's own. dpkg keeps a
+   * locally edited conffile through an upgrade that ships the same one, so a
+   * moved version alone does not show the package wrote it. Left out for a
+   * file every upgrade replaces.
+   */
+  packageText?: boolean;
   /** `repair --rebaseline`: the operator vouches for the change, so the version need not have moved. */
   accept?: boolean;
 }
@@ -123,6 +131,7 @@ export function rebaselineVerdict(change: UpstreamChange): Refusal | null {
   if (!change.accept) {
     if (change.recorded === null) return "unrecorded";
     if (change.recorded === change.installed) return "edited";
+    if (change.packageText === false) return "edited";
   }
   return change.misfit;
 }

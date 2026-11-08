@@ -33,8 +33,8 @@ export function fatal(message: string): never {
   throw new Fatal(message);
 }
 
-export function requireRoot(verb: string): void {
+export function requireRoot(verb: string, why = "modifies system state"): void {
   if (process.getuid?.() !== 0) {
-    fatal(`'${verb}' modifies system state and must run as root`);
+    fatal(`'${verb}' ${why} and must run as root`);
   }
 }

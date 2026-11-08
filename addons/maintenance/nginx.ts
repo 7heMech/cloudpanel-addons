@@ -10,7 +10,8 @@ import {
   type Refusal, NginxReadError, baselineFiles, hasBaseline, readBaseline, readBaselineVersion, readIfPresent,
   rebaselineVerdict, recordBaseline, removeBaseline, sha256, writeBaselineVersion,
 } from "../../lib/baseline";
-import { owningPackage, packageVersion } from "../../lib/cloudpanel-version";
+import { createHash } from "node:crypto";
+import { conffileMd5, owningPackage, packageVersion } from "../../lib/cloudpanel-version";
 import { cloudflareRanges, nginxFileChange, trustedVhost, withNginxTransaction } from "../../lib/nginx-transaction";
 import { openPanelDatabase } from "../../lib/panel-db";
 import {
@@ -109,8 +110,13 @@ interface MaintenanceNginxPaths {
   nginxVhostDir?: string;
   includePath?: string;
   vhostUid?: number;
-  /** The installed version of the package global_settings belongs to; read from dpkg when left out. */
-  packageVersion?: string | null;
+  /**
+   * The installed version of the package global_settings belongs to; read
+   * from dpkg when left out. A function is asked each time, as dpkg is.
+   */
+  packageVersion?: string | null | (() => string | null);
+  /** The MD5 that package records for global_settings as a conffile; read from dpkg when left out. */
+  conffileMd5?: string | null;
   /** `repair --rebaseline`: take a changed global_settings even though its package was not upgraded. */
   accept?: boolean;
 }
@@ -158,33 +164,64 @@ type SettingsCheck =
   | { kind: "rebaseline"; recorded: string | null; installed: string }
   | { kind: "refuse"; refusal: MaintenanceRefusal };
 
+/** The package global_settings belongs to, asked of dpkg only when a decision needs it. */
+interface SettingsPackage {
+  name: () => string | null;
+  version: () => string | null;
+  /** The MD5 of the file as the package ships it, when it is one of the package's conffiles. */
+  md5: () => string | null;
+}
+
+function settingsPackage(settingsPath: string, options: MaintenanceNginxPaths): SettingsPackage {
+  let owner: string | null | undefined;
+  const name = () => owner === undefined ? (owner = owningPackage(settingsPath)) : owner;
+  return {
+    name,
+    version: () => {
+      const given = options.packageVersion;
+      if (typeof given === "function") return given();
+      if (given !== undefined) return given;
+      const pkg = name();
+      return pkg ? packageVersion(pkg) : null;
+    },
+    md5: () => {
+      if (options.conffileMd5 !== undefined) return options.conffileMd5;
+      const pkg = name();
+      return pkg ? conffileMd5(pkg, settingsPath) : null;
+    },
+  };
+}
+
 /**
  * global_settings against its record, by the rule CloudPanel's templates
  * follow, keyed on the version of the package the file belongs to. The block
  * is appended rather than anchored, so the new text fits unless it already
  * holds a maintenance construct of its own.
+ *
+ * `before` is the version read before the file was: a package that changed
+ * between the two reads may have been mid-write. And global_settings is a
+ * conffile, which dpkg leaves as the operator edited it through an upgrade
+ * that ships the same one, so the new text must also be the package's own.
  */
 function checkSettings(
-  settingsPath: string, upstream: string, files: ReturnType<typeof baselineFiles>, enabled: boolean, options: MaintenanceNginxPaths,
+  upstream: string, files: ReturnType<typeof baselineFiles>, enabled: boolean, options: MaintenanceNginxPaths,
+  pkg: SettingsPackage, before: string | null,
 ): SettingsCheck {
   if (!hasBaseline(files)) return { kind: "unrecorded" };
   const baseline = readBaseline(files);
   const recorded = readBaselineVersion(files);
   if (baseline?.hash === sha256(upstream)) return { kind: "match", recorded };
-  const pkg = owningPackage(settingsPath);
-  const installed = settingsVersion(settingsPath, options, pkg);
+  const after = pkg.version();
+  const installed = before === after ? after : null;
+  const shipped = pkg.md5();
   const reason = rebaselineVerdict({
     recorded, installed, strayMarker: STRAY_MAINTENANCE_MARKER.test(upstream),
     misfit: enabled && UNMANAGED_MAINTENANCE_RE.test(upstream) ? "conflict" : null, accept: options.accept,
+    packageText: shipped === null ? undefined : createHash("md5").update(upstream).digest("hex") === shipped,
   });
   return reason || installed === null
-    ? { kind: "refuse", refusal: { reason: reason ?? "busy", package: pkg, recorded, installed } }
+    ? { kind: "refuse", refusal: { reason: reason ?? "busy", package: pkg.name(), recorded, installed } }
     : { kind: "rebaseline", recorded, installed };
-}
-
-function settingsVersion(settingsPath: string, options: MaintenanceNginxPaths, pkg = owningPackage(settingsPath)): string | null {
-  if (options.packageVersion !== undefined) return options.packageVersion;
-  return pkg ? packageVersion(pkg) : null;
 }
 
 function stripMaintenanceNginx(content: string): string {
@@ -216,6 +253,8 @@ export function inspectNginxMaintenance(options: MaintenanceNginxPaths = {}): Ma
 function inspectMaintenance(options: MaintenanceNginxPaths): MaintenanceNginxStatus {
   const paths = maintenancePath(options);
   const { settingsPath, stateDir, geoPath, cloudflareIpsPath, includePath, panelDb } = paths;
+  const pkg = settingsPackage(settingsPath, options);
+  const before = pkg.version();
   const content = readIfPresent(settingsPath);
   if (content !== null) {
     const files = baselineFiles(stateDir, "global-settings");
@@ -223,7 +262,7 @@ function inspectMaintenance(options: MaintenanceNginxPaths): MaintenanceNginxSta
     if (!hasBaseline(files) && hasMarker) {
       return { state: "conflict", settingsPath, detail: "an unverified maintenance marker exists" };
     }
-    const check = checkSettings(settingsPath, stripMaintenanceNginx(content), files, true, options);
+    const check = checkSettings(stripMaintenanceNginx(content), files, true, options, pkg, before);
     if (check.kind === "refuse") {
       return { state: "upstream-changed", settingsPath, detail: "Nginx global settings changed", refusal: check.refusal };
     }
@@ -301,6 +340,8 @@ function reconcileMaintenance(options: ReconcileOptions): MaintenanceNginxResult
   const { enabled = true, reload = true, run = runCommand, ...pathOptions } = options;
   const paths = maintenancePath(pathOptions);
   const { settingsPath: selectedPath, stateDir, geoPath, cloudflareIpsPath, includePath, panelDb } = paths;
+  const pkg = settingsPackage(selectedPath, pathOptions);
+  const before = pkg.version();
   const read = readIfPresent(selectedPath);
   const settingsPath = (() => {
     try { return realpathSync(selectedPath); } catch { return selectedPath; }
@@ -314,7 +355,7 @@ function reconcileMaintenance(options: ReconcileOptions): MaintenanceNginxResult
       return { state: "conflict", changed: false, settingsPath: selectedPath, detail: "an unverified maintenance marker exists; no changes were made" };
     }
     upstream = stripMaintenanceNginx(read);
-    check = checkSettings(selectedPath, upstream, files, enabled, pathOptions);
+    check = checkSettings(upstream, files, enabled, pathOptions, pkg, before);
     if (check.kind === "refuse") {
       return {
         state: "upstream-changed", changed: false, settingsPath: selectedPath,
@@ -335,11 +376,10 @@ function reconcileMaintenance(options: ReconcileOptions): MaintenanceNginxResult
   }
   let rebaselined: MaintenanceNginxResult["rebaselined"];
   if (check.kind === "match") {
-    const installed = settingsVersion(selectedPath, pathOptions);
-    if (installed !== null && installed !== check.recorded) writeBaselineVersion(files, installed);
+    if (before !== null && before !== check.recorded) writeBaselineVersion(files, before);
   } else if (read !== null && (check.kind === "rebaseline" || enabled || read.includes("# clp-addons:maintenance:start"))) {
     mkdirSync(stateDir, { recursive: true });
-    const installed = check.kind === "rebaseline" ? check.installed : settingsVersion(selectedPath, pathOptions);
+    const installed = check.kind === "rebaseline" ? check.installed : before;
     recordBaseline(files, upstream, sha256(upstream), settingsPath, installed);
     if (check.kind === "rebaseline") rebaselined = { from: check.recorded, to: check.installed };
   }

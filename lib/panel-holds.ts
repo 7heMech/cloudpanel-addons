@@ -24,7 +24,10 @@ export function holdSummary(hold: PanelHold): string {
   const pkg = hold.installed ? `${hold.package} ${hold.installed}` : hold.package;
   switch (hold.reason) {
     case "busy": return `${hold.package} is being updated.`;
-    case "edited": return `${hold.file} changed, but ${pkg} was not updated.`;
+    case "edited": return hold.recorded !== null && hold.recorded !== hold.installed
+      // A conffile dpkg left as someone edited it through the upgrade.
+      ? `${hold.file} was edited, and ${pkg} kept the edit rather than ship its own.`
+      : `${hold.file} changed, but ${pkg} was not updated.`;
     case "unrecorded": return `${hold.file} changed, and this box has no record of the ${hold.package} version it was patched under.`;
     case "stray-marker": return `${pkg} changed ${hold.file}, and part of an addon block is left in it.`;
     case "anchor-missing": return `${pkg} changed ${hold.file}, and a line the addons attach to is gone.`;
