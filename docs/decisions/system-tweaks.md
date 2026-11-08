@@ -47,6 +47,36 @@ stop short of the switch column, and a long one takes a line per thought.
 Failed runs show a short summary with expandable log details, including the
 failed package URL when unattended-upgrades logs one.
 
+### Lock settings
+
+The page header's **Lock settings**, top right like the other addons' header
+actions, is one action on the server, the `lock-settings` verb: every Hardening
+and Failed logins switch on, the two off by default (MySQL on this server only
+and the SSH jail) included, then [root's lock](security.md#root-locks) on System
+Tweaks. Its confirmation says what that does, that MySQL restarts and that only
+`clp-addons unlock system-tweaks`, from a root shell or the panel's root
+terminal, undoes it. The verb holds the settings lock throughout, so no change
+lands between the switches and the lock. Before changing anything it stops if
+root cannot trust the lock file, or if fail2ban is not installed or its unit is
+masked: jails switched on then are only saved for later, and the lock would
+report protections that are not running. It tries every other switch, then
+MySQL only if all of them came on, since its restart cuts remote clients and is
+not spent on a lock that will be refused. It locks only when all came on;
+otherwise it names what failed and locks nothing, leaving on what came on. The
+lock never holds a switch off. While it runs, the Working line sits under the
+page heading. Once locked, the header shows **Locked by root** instead, and a
+notice says how to unlock. It does not touch the panel's PHP; see below.
+
+Enabling System Tweaks under a lock, which a new install has, starts it from
+its defaults: before the activation applies anything, each lockable setting is
+raised to its default, and one already on stays on. MySQL on this server only
+and the SSH jail stay as they were, off unless chosen, and can be switched on
+from the page. Only turning the addon on does this: activating it again while
+it is already on, as a re-run of the installer does, keeps the switches as root
+locked them. The settings raised are those whose verbs declare the lock, each
+`{ enabled }` switch naming the setting it saves, so a new one of those cannot
+be missed; the login jails are raised on their own.
+
 ## Automatic updates
 
 Updates use the distro's own `unattended-upgrades`. Everything System Tweaks
@@ -262,6 +292,24 @@ A choice and its drop-in change under one lock, and a repair run reads the
 choice only after it holds the lock. A file at the drop-in path that is not
 root's, or that others can write, is never trusted: it is replaced when a
 version is wanted and removed when none is.
+
+Under [root's lock](security.md#root-locks), `set-panel-php` accepts only an
+installed version newer than the one the panel runs now, checked under the
+choice's lock; going back to an older version or to CloudPanel's own gets the
+usual "root has locked" refusal. An empty choice is CloudPanel's own version,
+and it is accepted when that version is the newer one, as after a fallback. The
+row offers only the current choice and newer versions, and stays usable while
+any one of them is newer than what runs, even when the current choice is no
+longer installed. The picker and the action compare versions with the same
+function. **Lock settings** does not move the panel's PHP: the panel is
+CloudPanel's code, untested on 8.2+, the newest version may not be installed,
+and a change that restarts the panel and can roll back after a failed page
+check does not belong inside one action that must either finish or lock
+nothing. Without the newer-only rule, the lock a new install starts with would
+leave the panel on 8.1 with no way to upgrade from the page. Repair's own
+fallbacks still run under a lock, since they keep the panel working: a chosen
+PHP that was removed puts the panel back on CloudPanel's own, and a failed page
+check puts back the previous drop-in.
 
 The choice is stored in `/var/lib/clp-addons/system-tweaks/panel-php.json`.
 The System Tweaks state action includes its status; `set-panel-php` accepts

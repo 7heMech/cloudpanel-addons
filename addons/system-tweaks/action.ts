@@ -4,6 +4,8 @@ import { existsSync, lstatSync, readFileSync } from "node:fs";
 import {
   replyToAction, errorMessage, failAction, readJsonRequest, withFileLock, withFileLockSync,
 } from "../../cli/action-common";
+import { changeLock, lockFailure, type LockFiles } from "../../cli/lock-addon";
+import { addonLocked, declaresLock, lockRefusal, lockedAddons } from "../../lib/root-locks";
 import { ROOT_UID, STATE_DIR } from "../../cli/paths";
 import { reconcilePhpGuard, type PhpGuardOptions } from "../../cli/php-guard";
 import { writeFileAtomic } from "../../lib/atomic-write";
@@ -32,7 +34,7 @@ import { storedVhostValues, type StoredVhostValue, type VhostValuesOptions } fro
 import { installPoolIsolation, poolIsolationStatus, removePoolIsolation, syncPoolIsolation, type PoolIsolationOptions, type PoolIsolationStatus } from "./pool-isolation";
 import { installVarnishBackends, removeVarnishBackends, sitesWithHomeLogs, sitesWithOwnLogrotate, varnishBackendsActive, type VarnishBackendOptions } from "./varnish-backend";
 import {
-  applyLoginJails, installLoginJailPackages, loginJailsStatus, releaseLoginJails, unban,
+  applyLoginJails, installLoginJailPackages, loginJailsBlocked, loginJailsStatus, releaseLoginJails, unban,
   type Fail2banBefore, type LoginJailOptions, type LoginJailSettings, type LoginJailsStatus,
 } from "./login-jails";
 import { databaseStatus, reconcileDatabaseFile, setDatabaseLoopback, type DatabaseOptions, type DatabaseStatus } from "./database";
@@ -142,14 +144,16 @@ export interface SystemTweaksOptions {
   motd?: MotdOptions;
   tmpCleanup?: TmpCleanupOptions;
   now?: () => number;
+  /** Tests only: root's lock file, owned by them; production reads ROOT_LOCKS_FILE. */
+  locks?: LockFiles;
 }
 
 function pathsFor(options: SystemTweaksOptions): SystemTweaksPaths {
   return { ...DEFAULT_SYSTEM_TWEAKS_PATHS, ...options.paths };
 }
 
-export function readSettings(paths: SystemTweaksPaths): SystemTweaksSettings {
-  const settings: SystemTweaksSettings = {
+function defaultSettings(): SystemTweaksSettings {
+  return {
     updates: { ...DEFAULT_UPDATE_SETTINGS },
     enabledTimers: [],
     uploadProgressGuard: true,
@@ -167,6 +171,24 @@ export function readSettings(paths: SystemTweaksPaths): SystemTweaksSettings {
     serverInfoMotd: true,
     backupCompression: { ...DEFAULT_BACKUP_COMPRESSION },
   };
+}
+
+/**
+ * Each locked switch at its default or on, whichever is safer: what System
+ * Tweaks enabled under a lock starts from. MySQL on this server only and the
+ * SSH jail are off by default.
+ */
+export function raisedToDefaults(settings: SystemTweaksSettings): SystemTweaksSettings {
+  const defaults = defaultSettings();
+  const raised = { ...settings, loginJails: {
+    panel: settings.loginJails.panel || defaults.loginJails.panel, ssh: settings.loginJails.ssh || defaults.loginJails.ssh,
+  } };
+  for (const key of lockedKeys()) raised[key] = settings[key] || defaults[key];
+  return raised;
+}
+
+export function readSettings(paths: SystemTweaksPaths): SystemTweaksSettings {
+  const settings = defaultSettings();
   if (!existsSync(paths.settingsFile)) return settings;
   const info = lstatSync(paths.settingsFile);
   if (!info.isFile() || info.uid !== paths.rootUid || (info.mode & 0o022) !== 0) {
@@ -316,133 +338,119 @@ async function setUpdates(options: SystemTweaksOptions): Promise<SystemTweaksSta
   return stateOf(options);
 }
 
-async function setUploadGuard(options: SystemTweaksOptions): Promise<SystemTweaksState> {
-  const paths = pathsFor(options);
-  const body = await requestBody(options);
-  if (typeof body.enabled !== "boolean") failAction("enabled must be true or false");
-  await withFileLock(paths.lockFile, 15, "another system tweaks change is still running", async () => {
-    const settings = readSettings(paths);
-    writeSettings(paths, { ...settings, uploadProgressGuard: body.enabled as boolean });
-    try {
-      reconcilePhpGuard(true, true, guardOptions(options));
-    } catch (error) {
-      writeSettings(paths, settings);
-      throw error;
-    }
-  });
-  return stateOf(options);
+const BUSY = "another system tweaks change is still running";
+
+function lockedByRoot(options: SystemTweaksOptions): boolean {
+  return addonLocked("system-tweaks", options.locks?.file, options.locks?.rootUid);
+}
+
+/** Root's lock lets a lockable switch go on, never off; asked under the settings lock, so `lock-settings` cannot be undone behind it. */
+function holdToLock(options: SystemTweaksOptions, verb: SystemTweaksVerb, values: unknown[]): void {
+  if (declaresLock("system-tweaks", verb) && values.some((value) => value !== true) && lockedByRoot(options)) {
+    failAction(lockRefusal("system-tweaks"));
+  }
+}
+
+// Each switch's change, made under the settings lock its caller holds.
+
+async function uploadGuardTo(options: SystemTweaksOptions, paths: SystemTweaksPaths, enabled: boolean): Promise<void> {
+  const settings = readSettings(paths);
+  writeSettings(paths, { ...settings, uploadProgressGuard: enabled });
+  try {
+    reconcilePhpGuard(true, true, guardOptions(options));
+  } catch (error) {
+    writeSettings(paths, settings);
+    throw error;
+  }
 }
 
 type SwitchKey = "blockForgedRealIp" | "protectPhpMyAdmin" | "replacePanelCert" | "blockTelemetry" | "serverInfoMotd";
 
 /** A switch whose change is applied before it is saved, so a failed change keeps the old setting. */
-async function setSwitch(options: SystemTweaksOptions, key: SwitchKey, apply: (enabled: boolean) => unknown): Promise<SystemTweaksState> {
-  const paths = pathsFor(options);
-  const { enabled } = await requestBody(options);
-  if (typeof enabled !== "boolean") failAction("enabled must be true or false");
-  await withFileLock(paths.lockFile, 15, "another system tweaks change is still running", async () => {
-    const settings = readSettings(paths);
-    apply(enabled);
-    writeSettings(paths, { ...settings, [key]: enabled });
-  });
-  return stateOf(options);
+function switchTo(paths: SystemTweaksPaths, key: SwitchKey, enabled: boolean, apply: () => unknown): void {
+  const settings = readSettings(paths);
+  apply();
+  writeSettings(paths, { ...settings, [key]: enabled });
 }
 
-async function setVhostGuard(options: SystemTweaksOptions): Promise<SystemTweaksState> {
-  const paths = pathsFor(options);
-  const body = await requestBody(options);
-  if (typeof body.enabled !== "boolean") failAction("enabled must be true or false");
-  await withFileLock(paths.lockFile, 15, "another system tweaks change is still running", async () => {
-    const settings = readSettings(paths);
-    if (body.enabled) {
-      await installVhostGuard(options.vhostGuard);
-      // On once the guard is, so repair finishes the includes if they fail here.
-      writeSettings(paths, { ...settings, blockVhostInjection: true });
-      installVarnishBackends(options.varnishBackend);
-    } else {
-      removeVhostGuard(options.vhostGuard);
-      try {
-        removeVarnishBackends(options.varnishBackend);
-      } catch (error) {
-        // Still on, so the guard comes back now rather than at the next repair.
-        await installVhostGuard(options.vhostGuard).catch(() => queueVhostGuard(options.vhostGuard));
-        throw error;
-      }
-      writeSettings(paths, { ...settings, blockVhostInjection: false });
-    }
-  });
-  return stateOf(options);
-}
-
-async function setPhpPools(options: SystemTweaksOptions): Promise<SystemTweaksState> {
-  const paths = pathsFor(options);
-  const body = await requestBody(options);
-  if (typeof body.enabled !== "boolean") failAction("enabled must be true or false");
-  await withFileLock(paths.lockFile, 15, "another system tweaks change is still running", async () => {
-    const settings = readSettings(paths);
-    // Saved first, so a PHP-FPM reload meanwhile follows the new setting.
-    writeSettings(paths, { ...settings, isolatePhpPools: body.enabled as boolean });
+async function vhostGuardTo(options: SystemTweaksOptions, paths: SystemTweaksPaths, enabled: boolean): Promise<void> {
+  const settings = readSettings(paths);
+  if (enabled) {
+    await installVhostGuard(options.vhostGuard);
+    // On once the guard is, so repair finishes the includes if they fail here.
+    writeSettings(paths, { ...settings, blockVhostInjection: true });
+    installVarnishBackends(options.varnishBackend);
+  } else {
+    removeVhostGuard(options.vhostGuard);
     try {
-      if (body.enabled) installPoolIsolation(options.phpPools);
-      else removePoolIsolation(options.phpPools);
+      removeVarnishBackends(options.varnishBackend);
+    } catch (error) {
+      // Still on, so the guard comes back now rather than at the next repair.
+      await installVhostGuard(options.vhostGuard).catch(() => queueVhostGuard(options.vhostGuard));
+      throw error;
+    }
+    writeSettings(paths, { ...settings, blockVhostInjection: false });
+  }
+}
+
+function phpPoolsTo(options: SystemTweaksOptions, paths: SystemTweaksPaths, enabled: boolean): void {
+  const settings = readSettings(paths);
+  // Saved first, so a PHP-FPM reload meanwhile follows the new setting.
+  writeSettings(paths, { ...settings, isolatePhpPools: enabled });
+  try {
+    if (enabled) installPoolIsolation(options.phpPools);
+    else removePoolIsolation(options.phpPools);
+  } catch (error) {
+    writeSettings(paths, settings);
+    throw error;
+  }
+}
+
+async function fileManagerGuardTo(options: SystemTweaksOptions, paths: SystemTweaksPaths, enabled: boolean): Promise<void> {
+  const settings = readSettings(paths);
+  if (enabled) {
+    await installFileManagerGuard(options.fileManagerGuard);
+    writeSettings(paths, { ...settings, confineFileManager: true });
+  } else {
+    // Record the opt-out first, so repair never puts back a guard the
+    // administrator took away; a removal that fails leaves it in place, so
+    // the setting goes back to on to match.
+    writeSettings(paths, { ...settings, confineFileManager: false });
+    try {
+      removeFileManagerGuard(options.fileManagerGuard);
     } catch (error) {
       writeSettings(paths, settings);
       throw error;
     }
-  });
-  return stateOf(options);
+  }
 }
 
-async function setFileManagerGuard(options: SystemTweaksOptions): Promise<SystemTweaksState> {
-  const paths = pathsFor(options);
-  const body = await requestBody(options);
-  if (typeof body.enabled !== "boolean") failAction("enabled must be true or false");
-  await withFileLock(paths.lockFile, 15, "another system tweaks change is still running", async () => {
-    const settings = readSettings(paths);
-    if (body.enabled) {
-      await installFileManagerGuard(options.fileManagerGuard);
-      writeSettings(paths, { ...settings, confineFileManager: true });
-    } else {
-      // Record the opt-out first, so repair never puts back a guard the
-      // administrator took away; a removal that fails leaves it in place, so
-      // the setting goes back to on to match.
-      writeSettings(paths, { ...settings, confineFileManager: false });
-      try {
-        removeFileManagerGuard(options.fileManagerGuard);
-      } catch (error) {
-        writeSettings(paths, settings);
-        throw error;
-      }
+function clpctlGuardTo(options: SystemTweaksOptions, paths: SystemTweaksPaths, enabled: boolean): void {
+  const settings = readSettings(paths);
+  if (enabled) {
+    // On whether or not the wrapper can be swapped now: a CloudPanel version
+    // this release does not know leaves it paused, and repair applies it once
+    // a newer clp-addons knows the version. The page shows which.
+    writeSettings(paths, { ...settings, blockClpctlInjection: true });
+    applyClpctlGuard(options.clpctlGuard);
+  } else {
+    // Record the opt-out first, then restore. A restore that fails leaves the
+    // hardened wrapper in place, so the setting is rolled back to on to match.
+    writeSettings(paths, { ...settings, blockClpctlInjection: false });
+    try {
+      restoreClpctlWrapper(options.clpctlGuard);
+    } catch (error) {
+      writeSettings(paths, settings);
+      throw error;
     }
-  });
-  return stateOf(options);
+  }
 }
 
-async function setClpctlGuard(options: SystemTweaksOptions): Promise<SystemTweaksState> {
-  const paths = pathsFor(options);
-  const body = await requestBody(options);
-  if (typeof body.enabled !== "boolean") failAction("enabled must be true or false");
-  await withFileLock(paths.lockFile, 15, "another system tweaks change is still running", async () => {
-    const settings = readSettings(paths);
-    if (body.enabled) {
-      // On whether or not the wrapper can be swapped now: a CloudPanel version
-      // this release does not know leaves it paused, and repair applies it once
-      // a newer clp-addons knows the version. The page shows which.
-      writeSettings(paths, { ...settings, blockClpctlInjection: true });
-      applyClpctlGuard(options.clpctlGuard);
-    } else {
-      // Record the opt-out first, then restore. A restore that fails leaves the
-      // hardened wrapper in place, so the setting is rolled back to on to match.
-      writeSettings(paths, { ...settings, blockClpctlInjection: false });
-      try {
-        restoreClpctlWrapper(options.clpctlGuard);
-      } catch (error) {
-        writeSettings(paths, settings);
-        throw error;
-      }
-    }
-  });
-  return stateOf(options);
+async function databaseTo(options: SystemTweaksOptions, paths: SystemTweaksPaths, enabled: boolean): Promise<void> {
+  // First, so a settings file it cannot trust stops the change before MySQL restarts.
+  const settings = readSettings(paths);
+  await setDatabaseLoopback(enabled, options.database);
+  writeSettings(paths, { ...settings, databaseLoopback: enabled });
 }
 
 /** Applies the jails and records what fail2ban was before them; the caller holds the settings lock. */
@@ -453,30 +461,108 @@ function settleLoginJails(paths: SystemTweaksPaths, settings: SystemTweaksSettin
   return applied.changed;
 }
 
+function loginJailsTo(options: SystemTweaksOptions, paths: SystemTweaksPaths, wanted: Partial<LoginJailSettings>): void {
+  const settings = readSettings(paths);
+  settleLoginJails(paths, { ...settings, loginJails: { ...settings.loginJails, ...wanted } }, options);
+}
+
+type SwitchChange = (options: SystemTweaksOptions, paths: SystemTweaksPaths, enabled: boolean) => unknown;
+
+/** Every switch that takes `{ enabled }`, by verb. */
+const SWITCHES = {
+  "set-upload-guard": uploadGuardTo,
+  "set-real-ip": (options, paths, on) => switchTo(paths, "blockForgedRealIp", on, () => applyRealIp(on, options.realIp)),
+  "set-phpmyadmin": (options, paths, on) => switchTo(paths, "protectPhpMyAdmin", on, () => applyPhpMyAdmin(on, options.phpMyAdmin)),
+  // Off only stops the replacing: a certificate generated here stays, since the shared key is public.
+  "set-panel-cert": (options, paths, on) => switchTo(paths, "replacePanelCert", on, () => on && replacePanelCert(options.panelCert)),
+  "set-vhost-guard": vhostGuardTo,
+  "set-php-pools": phpPoolsTo,
+  "set-file-manager-guard": fileManagerGuardTo,
+  "set-clpctl-guard": clpctlGuardTo,
+  "set-telemetry": (options, paths, on) => switchTo(paths, "blockTelemetry", on, () => applyTelemetryBlock(on, options.telemetry)),
+  "set-motd": (options, paths, on) => switchTo(paths, "serverInfoMotd", on, () => applyMotd(on, options.motd)),
+  "set-database-loopback": databaseTo,
+} satisfies Partial<Record<SystemTweaksVerb, SwitchChange>>;
+
+type SwitchVerb = keyof typeof SWITCHES;
+
+/** The setting each `{ enabled }` switch saves; every one must name it, so a new one cannot miss the lock. */
+const SWITCH_KEYS = {
+  "set-upload-guard": "uploadProgressGuard",
+  "set-real-ip": "blockForgedRealIp",
+  "set-phpmyadmin": "protectPhpMyAdmin",
+  "set-panel-cert": "replacePanelCert",
+  "set-vhost-guard": "blockVhostInjection",
+  "set-php-pools": "isolatePhpPools",
+  "set-file-manager-guard": "confineFileManager",
+  "set-clpctl-guard": "blockClpctlInjection",
+  "set-telemetry": "blockTelemetry",
+  "set-motd": "serverInfoMotd",
+  "set-database-loopback": "databaseLoopback",
+} as const satisfies Record<SwitchVerb, keyof SystemTweaksSettings>;
+
+/** The switches root's lock covers, as verbs.ts marks them. */
+export function lockedKeys(): (typeof SWITCH_KEYS)[SwitchVerb][] {
+  return (Object.keys(SWITCH_KEYS) as SwitchVerb[]).filter((verb) => declaresLock("system-tweaks", verb)).map((verb) => SWITCH_KEYS[verb]);
+}
+
+function isSwitch(verb: SystemTweaksVerb): verb is SwitchVerb {
+  return Object.hasOwn(SWITCHES, verb);
+}
+
+async function setSwitch(options: SystemTweaksOptions, verb: SwitchVerb): Promise<SystemTweaksState> {
+  const paths = pathsFor(options);
+  const { enabled } = await requestBody(options);
+  if (typeof enabled !== "boolean") failAction("enabled must be true or false");
+  await withFileLock(paths.lockFile, 15, BUSY, async () => {
+    holdToLock(options, verb, [enabled]);
+    await (SWITCHES[verb] as SwitchChange)(options, paths, enabled);
+  });
+  return stateOf(options);
+}
+
 async function setLoginJails(options: SystemTweaksOptions): Promise<SystemTweaksState> {
   const paths = pathsFor(options);
   const body = await requestBody(options);
   const named = (["panel", "ssh"] as const).filter((key) => body[key] !== undefined);
   if (!named.length) failAction("no jail was named");
   for (const key of named) if (typeof body[key] !== "boolean") failAction(`${key} must be true or false`);
-  await withFileLock(paths.lockFile, 15, "another system tweaks change is still running", async () => {
-    const settings = readSettings(paths);
-    const wanted = { ...settings, loginJails: { ...settings.loginJails } };
-    for (const key of named) wanted.loginJails[key] = body[key] as boolean;
-    settleLoginJails(paths, wanted, options);
+  await withFileLock(paths.lockFile, 15, BUSY, async () => {
+    holdToLock(options, "set-login-jails", named.map((key) => body[key]));
+    loginJailsTo(options, paths, Object.fromEntries(named.map((key) => [key, body[key] as boolean])));
   });
   return stateOf(options);
 }
 
-async function setDatabase(options: SystemTweaksOptions): Promise<SystemTweaksState> {
+/**
+ * Every lockable switch on, then root's lock on System Tweaks, under the
+ * settings lock throughout, so no change slips in between. A switch that does
+ * not come on leaves nothing locked: the lock never holds one off.
+ */
+async function lockSettings(options: SystemTweaksOptions): Promise<SystemTweaksState> {
   const paths = pathsFor(options);
-  const body = await requestBody(options);
-  if (typeof body.enabled !== "boolean") failAction("enabled must be true or false");
-  await withFileLock(paths.lockFile, 15, "another system tweaks change is still running", async () => {
-    // First, so a settings file it cannot trust stops the change before MySQL restarts.
-    const settings = readSettings(paths);
-    await setDatabaseLoopback(body.enabled as boolean, options.database);
-    writeSettings(paths, { ...settings, databaseLoopback: body.enabled as boolean });
+  const files = options.locks;
+  // First, so a lock file root cannot trust stops it before anything changes.
+  try { lockedAddons(files?.file, files?.rootUid); } catch (error) { failAction(lockFailure(error, files?.file)); }
+  // Jails without fail2ban are only saved for later, which the lock would call on.
+  const jails = loginJailsBlocked(options.loginJails);
+  if (jails) failAction(`nothing was changed or locked: ${jails}`);
+  await withFileLock(paths.lockFile, 15, BUSY, async () => {
+    const failed: string[] = [];
+    const steps: [string, () => unknown][] = [
+      ...(Object.keys(SWITCHES) as SwitchVerb[]).filter((verb) => declaresLock("system-tweaks", verb) && verb !== "set-database-loopback")
+        .map((verb): [string, () => unknown] => [verb, () => (SWITCHES[verb] as SwitchChange)(options, paths, true)]),
+      ["set-login-jails", () => loginJailsTo(options, paths, { panel: true, ssh: true })],
+    ];
+    for (const [verb, on] of steps) {
+      try { await on(); } catch (error) { failed.push(`${verb.replace(/^set-/, "")}: ${errorMessage(error)}`); }
+    }
+    // MySQL restarts only for a lock that will be written.
+    if (!failed.length) {
+      try { await databaseTo(options, paths, true); } catch (error) { failed.push(`database-loopback: ${errorMessage(error)}`); }
+    }
+    if (failed.length) failAction(`nothing was locked, because not every setting could be switched on: ${failed.join("; ")}`);
+    try { changeLock("system-tweaks", true, files); } catch (error) { failAction(lockFailure(error, files?.file)); }
   });
   return stateOf(options);
 }
@@ -497,7 +583,8 @@ async function setBackupCompression(options: SystemTweaksOptions): Promise<Syste
 async function changePanelPhp(options: SystemTweaksOptions): Promise<SystemTweaksState> {
   const body = await requestBody(options);
   if (typeof body.php !== "string") failAction("php must be a version such as 8.4, or empty for CloudPanel's own");
-  await setPanelPhp(body.php, options.panelPhp);
+  // While root's lock holds, the panel's PHP only moves to a newer version.
+  await setPanelPhp(body.php, options.panelPhp, () => lockedByRoot(options) ? lockRefusal("system-tweaks") : null);
   return stateOf(options);
 }
 
@@ -515,25 +602,15 @@ export async function executeSystemTweaksAction(argv: string[], options: SystemT
   const verb = parseVerb(argv);
   if (verb === "state") return stateOf(options);
   if (verb === "set-updates") return setUpdates(options);
-  if (verb === "set-upload-guard") return setUploadGuard(options);
-  if (verb === "set-real-ip") return setSwitch(options, "blockForgedRealIp", (on) => applyRealIp(on, options.realIp));
-  if (verb === "set-vhost-guard") return setVhostGuard(options);
-  if (verb === "set-phpmyadmin") return setSwitch(options, "protectPhpMyAdmin", (on) => applyPhpMyAdmin(on, options.phpMyAdmin));
-  if (verb === "set-file-manager-guard") return setFileManagerGuard(options);
-  // Off only stops the replacing: a certificate generated here stays, since the shared key is public.
-  if (verb === "set-panel-cert") return setSwitch(options, "replacePanelCert", (on) => on && replacePanelCert(options.panelCert));
-  if (verb === "set-clpctl-guard") return setClpctlGuard(options);
+  if (isSwitch(verb)) return setSwitch(options, verb);
   if (verb === "set-backup-compression") return setBackupCompression(options);
-  if (verb === "set-telemetry") return setSwitch(options, "blockTelemetry", (on) => applyTelemetryBlock(on, options.telemetry));
-  if (verb === "set-motd") return setSwitch(options, "serverInfoMotd", (on) => applyMotd(on, options.motd));
   if (verb === "set-panel-php") return changePanelPhp(options);
-  if (verb === "set-php-pools") return setPhpPools(options);
   if (verb === "set-login-jails") return setLoginJails(options);
+  if (verb === "lock-settings") return lockSettings(options);
   if (verb === "unban") {
     unban(await requestBody(options), options.loginJails);
     return stateOf(options);
   }
-  if (verb === "set-database-loopback") return setDatabase(options);
   if (verb === "firewall") return firewallStatus(options.firewall);
   if (verb === "set-firewall-protocol") {
     setRuleProtocol(await requestBody(options), options.firewall);
@@ -810,9 +887,13 @@ export function withdrawSystemTweaks(options: SystemTweaksOptions = {}): void {
   catch (error) { log.warn(`ufw still has UDP rules from System Tweaks: ${errorMessage(error)}`); }
 }
 
-export function restoreSystemTweaks(options: SystemTweaksOptions = {}): void {
+export function restoreSystemTweaks(options: SystemTweaksOptions = {}, wasEnabled = false): void {
   try {
-    withSettingsLock(options, (paths, settings) => {
+    withSettingsLock(options, (paths, stored) => {
+      // Turned on under root's lock, it starts from its defaults and nothing it had switched off.
+      // Already on, as when the installer runs again, the switches stay as root locked them.
+      const settings = !wasEnabled && lockedByRoot(options) ? raisedToDefaults(stored) : stored;
+      if (JSON.stringify(settings) !== JSON.stringify(stored)) writeSettings(paths, settings);
       if (settings.updates.enabled && unattendedUpgradesInstalled(options.updates)) {
         const applied = applyUpdates(settings.updates, settings.enabledTimers, options.updates);
         writeSettings(paths, { ...settings, enabledTimers: applied.enabledTimers });

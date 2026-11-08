@@ -30,3 +30,7 @@ export const CLPCTL_GUARD_GATEWAY_TIMEOUT_MS = 2 * COMMAND_MS + 30_000;
 export const BACKUP_COMPRESSION_GATEWAY_TIMEOUT_MS = 90_000;
 /** A daemon-reload, two unit queries and the agent's restart, with lock waiting and the reply. */
 export const TELEMETRY_GATEWAY_TIMEOUT_MS = 4 * COMMAND_MS + 30_000;
+/** `lock-settings`: every lockable switch's change in turn, MySQL's restart included. */
+export const LOCK_SETTINGS_GATEWAY_TIMEOUT_MS = COMMAND_MS + 2 * REAL_IP_GATEWAY_TIMEOUT_MS + PANEL_CERT_GATEWAY_TIMEOUT_MS
+  + 2 * POOL_GUARD_GATEWAY_TIMEOUT_MS + PHP_POOLS_GATEWAY_TIMEOUT_MS + CLPCTL_GUARD_GATEWAY_TIMEOUT_MS
+  + TELEMETRY_GATEWAY_TIMEOUT_MS + LOGIN_JAILS_GATEWAY_TIMEOUT_MS + DATABASE_GATEWAY_TIMEOUT_MS;

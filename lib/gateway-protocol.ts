@@ -20,6 +20,9 @@ export const DEFAULT_CLI_BIN = "/usr/local/bin/clp-addons";
 export const MAX_GATEWAY_INPUT_BYTES = 1024 * 1024; // 1 MB max input (for clone credentials, etc.)
 export const DEFAULT_GATEWAY_TIMEOUT_MS = 60_000;
 
+/** What a locked addon's verb may still do from the web: switch on, or move to a newer version. */
+export type LockDirection = "on" | "newer";
+
 /** Who may ask root for a verb from the web. */
 export type WebAccess =
   /** An administrator, behind the manager's gate. */
@@ -37,11 +40,13 @@ export type WebAccess =
  * One verb of `clp-addons action <addon>`. A root-only verb says why the web
  * may not reach it. A stream's output is copied to the socket as it comes; a
  * duplex stream also gets the socket's bytes on stdin, and the gateway checks
- * its session itself. A `lock` verb is refused from the web while root has
- * locked its addon (`clp-addons lock`).
+ * its session itself. A `lock` verb is held to the safer direction while root
+ * has locked its addon (`clp-addons lock`): an `"on"` verb only when its JSON
+ * input sets every value it names to true, a `"newer"` verb only as far as the
+ * action itself allows, which is a newer version.
  */
 export type VerbDeclaration =
-  | { readonly web: WebAccess; readonly stream?: "one-way" | "duplex"; readonly lock?: true }
+  | { readonly web: WebAccess; readonly stream?: "one-way" | "duplex"; readonly lock?: LockDirection }
   | { readonly web: false; readonly why: string };
 
 /**

@@ -274,11 +274,19 @@ function enabled(name: string): boolean {
 function rejectImpossible(kind: ManagerJobKind, addon: string, locks?: CreateJobOptions["locks"]): string | null {
   if (kind === "update") return null;
   if (!ADDON_NAMES.includes(addon)) return `unknown addon '${addon}'`;
+  if (kind === "disable") {
+    const locked = disableLocked(addon, locks);
+    if (locked) return locked;
+  }
   const isEnabled = enabled(addon);
   if (kind === "enable" && isEnabled) return `${addon} is already enabled`;
   if (kind === "disable" && !isEnabled) return `${addon} is already disabled`;
-  if (addonLocked(addon, locks?.file, locks?.rootUid)) return `root has locked ${addon}; run clp-addons unlock ${addon} on the server first`;
   return null;
+}
+
+/** Enabling only adds protection, so a lock refuses disabling alone. */
+function disableLocked(addon: string, locks?: CreateJobOptions["locks"]): string | null {
+  return addonLocked(addon, locks?.file, locks?.rootUid) ? `root has locked ${addon}; run clp-addons unlock ${addon} on the server first` : null;
 }
 
 function describe(kind: ManagerJobKind, addon: string): string {
@@ -383,7 +391,9 @@ export async function createJob(
  *
  * `jobsDir` is a test-only override; production always uses MANAGER_JOBS_DIR.
  */
-export async function runManagerJob(id: string, ops: ManagerOps, jobsDir = MANAGER_JOBS_DIR): Promise<number> {
+export async function runManagerJob(
+  id: string, ops: ManagerOps, jobsDir = MANAGER_JOBS_DIR, locks?: CreateJobOptions["locks"],
+): Promise<number> {
   const dir = jobDir(jobsDir, id);
   if (!existsSync(dir)) return failReply(`no such job '${id}'`);
   const kind = jobGet(dir, "kind");
@@ -396,6 +406,9 @@ export async function runManagerJob(id: string, ops: ManagerOps, jobsDir = MANAG
       jobSet(dir, "step", `enabling ${addon}`);
       await ops.enable(addon);
     } else if (kind === "disable") {
+      // Again here: root may have locked it while the job waited to start.
+      const locked = disableLocked(addon, locks);
+      if (locked) throw new Fatal(locked);
       jobSet(dir, "step", `disabling ${addon}`);
       await ops.disable(addon);
     } else if (kind === "update") {
@@ -500,7 +513,7 @@ export async function runManagerAction(
       case "run": {
         if (!id) return failReply("'run' needs --job", undefined, options.emitReply !== false);
         const jobsDir = options.jobsDir ?? MANAGER_JOBS_DIR;
-        const code = await runManagerJob(id, ops, jobsDir);
+        const code = await runManagerJob(id, ops, jobsDir, options.locks);
         return code === 0 ? reply({ ok: true, data: { jobId: id } }, options.emitReply !== false) : code;
       }
       default:

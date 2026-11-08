@@ -424,6 +424,12 @@ export function missingPackages(options: LoginJailOptions = {}): string[] {
   });
 }
 
+/** Why the jails cannot run here now, or null: switched on, they would only be saved for later. */
+export function loginJailsBlocked(options: LoginJailOptions = {}): string | null {
+  if (missingPackages(options).length) return "fail2ban is not installed; install it under Failed logins first";
+  return unitState(contextOf(options)).masked ? "fail2ban.service is masked" : null;
+}
+
 function unitState(ctx: Context): { enabled: boolean; active: boolean; masked: boolean } {
   const enabled = ctx.run("systemctl", ["is-enabled", "fail2ban"]).stdout.trim();
   const active = ctx.run("systemctl", ["is-active", "fail2ban"]).stdout.trim();

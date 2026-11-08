@@ -11,6 +11,7 @@ import { join } from "node:path";
 import { failAction, runCommand, withFileLock, withFileLockSync, type CommandResult } from "../../cli/action-common";
 import { CONFIG_DIR, PANEL_FPM_UNIT, PHP_FPM_BIN_DIR, RECONCILE_SERVICE, STATE_DIR, SYSTEMD_DIR } from "../../cli/paths";
 import { writeFileAtomic } from "../../lib/atomic-write";
+import { newerPhp } from "./php-version";
 import { fastCgiRequest, type FastCgiResponse } from "../../lib/fastcgi";
 
 const STATE_VERSION = 1;
@@ -124,12 +125,6 @@ function reason(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
 }
 
-function newer(a: string, b: string): boolean {
-  const [aMajor = 0, aMinor = 0] = a.split(".").map(Number);
-  const [bMajor = 0, bMinor = 0] = b.split(".").map(Number);
-  return aMajor !== bMajor ? aMajor > bMajor : aMinor > bMinor;
-}
-
 function trustedText(path: string, rootUid: number): string | null {
   let info;
   try {
@@ -199,7 +194,7 @@ function installedVersions(ctx: Context): string[] {
   return readdirSync(ctx.paths.fpmBinDir)
     .map((name) => /^php-fpm([0-9]+\.[0-9]+)$/.exec(name)?.[1])
     .filter((version): version is string => Boolean(version))
-    .sort((a, b) => (newer(a, b) ? 1 : newer(b, a) ? -1 : 0));
+    .sort((a, b) => (newerPhp(a, b) ? 1 : newerPhp(b, a) ? -1 : 0));
 }
 
 function release(version: string): string {
@@ -342,7 +337,7 @@ async function apply(ctx: Context, php: string): Promise<string | null> {
     }
     return null;
   }
-  const wanted = php && newer(php, unit.stock) ? php : unit.stock;
+  const wanted = php && newerPhp(php, unit.stock) ? php : unit.stock;
   // A chosen PHP removed since it was set leaves the unit unable to start at
   // its next restart, so the panel goes back to CloudPanel's own before that.
   const missing = wanted !== unit.stock && !existsSync(join(ctx.paths.fpmBinDir, `php-fpm${wanted}`));
@@ -382,7 +377,7 @@ export function panelPhpStatus(options: PanelPhpOptions = {}): PanelPhpStatus {
   const ctx = contextOf(options);
   const choice = readChoice(ctx.paths);
   const unit = baseUnit(ctx);
-  const versions = installedVersions(ctx).filter((version) => unit && !newer(unit.stock, version));
+  const versions = installedVersions(ctx).filter((version) => unit && !newerPhp(unit.stock, version));
   const known = releases(ctx, versions);
   const status: PanelPhpStatus = {
     wanted: choice.php,
@@ -399,13 +394,25 @@ export function panelPhpStatus(options: PanelPhpOptions = {}): PanelPhpStatus {
   return status;
 }
 
-export async function setPanelPhp(php: string, options: PanelPhpOptions = {}): Promise<PanelPhpStatus> {
+/**
+ * `lockRefusal` is asked under the lock, and while it answers, root's lock
+ * holds the panel to an installed version newer than the one it runs now.
+ */
+export async function setPanelPhp(php: string, options: PanelPhpOptions = {}, lockRefusal?: () => string | null): Promise<PanelPhpStatus> {
   const ctx = contextOf(options);
   if (php !== "" && !VERSION_RE.test(php)) failAction("choose a PHP version such as 8.4");
   await withFileLock(ctx.paths.lockFile, 30, "another panel PHP change is still running", async () => {
     // Purging removes the withdrawn mark with the state, but not before the config.
     if (readChoice(ctx.paths).withdrawn || !existsSync(ctx.paths.configFile)) {
       failAction("System Tweaks is disabled; enable it to choose the panel's PHP");
+    }
+    const refusal = lockRefusal?.();
+    if (refusal) {
+      // Empty is CloudPanel's own, which can itself be newer than what runs after a fallback.
+      const stock = baseUnit(ctx)?.stock;
+      const target = php || stock;
+      const now = runningVersion(ctx) ?? (readChoice(ctx.paths).php || stock);
+      if (!target || !now || !installedVersions(ctx).includes(target) || !newerPhp(target, now)) failAction(refusal);
     }
     await apply(ctx, php);
     writeChoice(ctx.paths, { php });

@@ -140,27 +140,53 @@ no real-IP trust.
 
 An administrator can switch a protection off from the web, so a stolen
 administrator session could switch them all off. `clp-addons lock <addon>`
-freezes them as they are, on or off: the gateway refuses the verbs the addon
-declares `lock`, on the one-shot and streaming paths alike, and the manager
-refuses to enable or disable the addon. Only root changes a lock, from a
-shell; neither command is a gateway verb, and both hold a file lock so concurrent runs keep
-each other's change. A root shell is not held to it, since it could unlock
-anyway; that includes the panel's root terminal, so an administrator root
-allowed one unlocks from there. System Tweaks declares its Hardening and Failed
-logins switches, the panel's PHP included; updates, backups, unblocking and the
-firewall stay with administrators.
+holds them to the safer state: while it holds, the panel can only switch a
+protection on, never off. The gateway checks the verbs the addon declares
+`lock`, on the one-shot and streaming paths alike. An `"on"` verb passes only
+when its JSON input names at least one setting and sets every one to `true`;
+anything else gets the usual "root has locked" refusal. The action checks again
+under the settings lock, so a request admitted before `lock-settings` took that
+lock cannot switch off what it just switched on. A `"newer"` verb, the panel's
+PHP, reaches the action, which alone knows the version the panel runs and
+accepts only a newer installed one. The manager refuses to disable a locked
+addon, when the job is asked for and again when it starts, so one queued before
+a lock does not run; it lets a locked addon be enabled, since enabling only
+adds protection. System
+Tweaks declares its Hardening and Failed logins switches and the panel's PHP;
+updates, backups, unblocking, the firewall and the SSH login message stay with
+administrators.
+
+So a panel lock can only freeze protections on. While locked, the panel can
+switch a protection on, enable the addon or move the panel's PHP to a newer
+version. A stolen administrator session can at worst push the server toward
+its safer state; it cannot switch protections off, let alone lock them off.
+The one way to lock from the web is System Tweaks' `lock-settings` verb, which
+switches every lockable switch on first and locks only if all of them came on.
+
+Only root removes a lock, from a shell: `unlock` is not a gateway verb, and
+the web can only add one, through `lock-settings`. `lock`, `unlock`, `lock-settings` and a
+fresh install change the list through one function that holds a file lock, so
+concurrent runs keep each other's change, and that makes the same file and
+directory checks as every reader before it writes. A root shell is not held to
+a lock, since it could unlock anyway; that includes the panel's root terminal,
+so an administrator root allowed one unlocks from there.
+
+A new install locks System Tweaks before it enables any addon. `update` never
+adds a lock, because an existing box's switches may be off on purpose; it
+prints a one-line hint while System Tweaks is enabled and unlocked.
 
 The locks are `/etc/clp-addons/locks.json`, mode `0644` so the manager can show
 them, read through one descriptor opened without following links. Only a
 missing file means no locks. A file that cannot be read, is not root's alone,
 is not a regular file or does not parse, or a directory others could remove it
-from, locks every lockable addon; `lock` and `unlock` then refuse, and for an
-untrusted file tell root to remove it and lock again what should stay locked,
-and for an untrusted directory to make it root's alone.
-A read error is reported as it is, so a healthy file is not removed. `lock`
-creates the directory `0755` whatever root's umask. The page leaves a locked switch read-only, taking which switches
-from the verbs' `lock` flag, and names the command to run in a root terminal,
-or `clp-addons lock` when the file is damaged.
+from, locks every lockable addon; `lock`, `unlock` and `lock-settings` then
+refuse, and for an untrusted file tell root to remove it and lock again what
+should stay locked, and for an untrusted directory to make it root's alone.
+A read error is reported as it is, so a healthy file is not removed. A write
+creates the directory `0755` whatever root's umask. The page leaves a locked
+switch that is on read-only and an off one free to switch on, taking which
+switches from the verbs' `lock` flag, and names the command to run in a root
+terminal, or `clp-addons lock` when the file is damaged.
 
 ## CloudPanel authentication
 

@@ -52,6 +52,7 @@ import { SECURITY_KEYS_TARGETS } from "../addons/security-keys/inject/targets";
 import type { UserKeysView } from "../addons/security-keys/action";
 import { dashboardView as systemTweaksDashboardView, layout as systemTweaksLayout } from "../addons/system-tweaks/app/views";
 import type { SystemTweaksState } from "../addons/system-tweaks/action";
+import type { LockState } from "../lib/root-locks";
 import { MEMORY_PROFILES, memoryPlan, type MemoryProfile, type MemorySettings } from "../addons/resource-limits/memory";
 
 const versions: AvailableTags = { tags: ["0.0.19", "0.0.18"], latest: "0.0.19", source: "registry" };
@@ -645,6 +646,10 @@ function panelCertPreviewStatus(kind: string | null): SystemTweaksState["panelCe
   };
 }
 
+function previewLock(url: URL): LockState {
+  return url.searchParams.get("locked") === "damaged" ? "damaged" : url.searchParams.has("locked") ? "locked" : "unlocked";
+}
+
 function systemTweaksPreviewMutation(path: string, source: URL, body: Record<string, any>): Response | null {
   if (!path.startsWith("/addons/system-tweaks/api/")) return null;
   const state = structuredClone(systemTweaksPreviewState(source));
@@ -686,6 +691,16 @@ function systemTweaksPreviewMutation(path: string, source: URL, body: Record<str
     jails.bans = jails.bans.filter((ban) => ban.ip !== body.ip);
   } else if (path.endsWith("/install-fail2ban") && !("error" in state.loginJails)) {
     (state.loginJails as { missing: string[] }).missing = [];
+  } else if (path.endsWith("/lock-settings")) {
+    // Every Hardening and Failed logins switch on, as the verb does, and the answer is the locked page.
+    for (const setting of ["vhost-guard", "phpmyadmin", "file-manager-guard", "panel-cert", "database-loopback", "clpctl-guard", "telemetry", "real-ip", "upload-guard"]) {
+      systemTweaksPreviewMutation(`/addons/system-tweaks/api/${setting}`, source, { enabled: true });
+      Object.assign(state, systemTweaksPreview);
+    }
+    systemTweaksPreviewMutation("/addons/system-tweaks/api/login-jails", source, { panel: true, ssh: true });
+    Object.assign(state, systemTweaksPreview);
+    systemTweaksPreview = state;
+    return Response.json({ ok: true, html: systemTweaksDashboardView(state, Date.now(), "locked") });
   } else if (path.endsWith("/upload-guard")) {
     state.uploadProgress.guard = body.enabled === true;
     for (const row of state.uploadProgress.fpms) {
@@ -708,7 +723,7 @@ function systemTweaksPreviewMutation(path: string, source: URL, body: Record<str
     }
   }
   systemTweaksPreview = state;
-  return Response.json({ ok: true, html: systemTweaksDashboardView(state) });
+  return Response.json({ ok: true, html: systemTweaksDashboardView(state, Date.now(), previewLock(source)) });
 }
 
 function panelPhpPreviewStatus(url: URL): PanelPhpStatus {
@@ -2026,7 +2041,7 @@ const server = Bun.serve({
       }), notice);
     } else if (path === "/addons/system-tweaks/" || path === "/addons/system-tweaks") {
       systemTweaksPreview = null;
-      html = systemTweaksLayout("System Tweaks", systemTweaksDashboardView(systemTweaksPreviewState(url), Date.now(), url.searchParams.get("locked") === "damaged" ? "damaged" : url.searchParams.has("locked") ? "locked" : "unlocked"), notice);
+      html = systemTweaksLayout("System Tweaks", systemTweaksDashboardView(systemTweaksPreviewState(url), Date.now(), previewLock(url)), notice);
     } else if (path === "/addons/terminal/" || path === "/addons/terminal") {
       // ?root shows the root shell's card, ?root=stale one whose password changed; ?many passes the phone's cut.
       const rootGrant = url.searchParams.get("root");
