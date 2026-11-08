@@ -232,6 +232,9 @@ works at once, except in the minute and a half after signing in, when the
 prompt asks for the next one. The memory is the gateway's alone: after it
 restarts, a session's next sighting stands in, which is later and so only
 makes the wait longer, and with no sighting, or a session without the stamp, the prompt's own opening does.
+A retry after a wrong code opens a fresh prompt that keeps the first prompt's
+opening, for as long as the session opens another within five minutes and has
+not verified, so retrying never restarts the wait.
 Passkeys do not wait. Passkeys count only while Security Keys is
 on, as at sign-in, and only pinned keys the account still has are offered, only
 where the browser can use one, so not on an IP address. Passkey verification reuses Security Keys'

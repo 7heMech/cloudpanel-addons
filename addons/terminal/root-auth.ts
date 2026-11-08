@@ -17,7 +17,9 @@ export const DEFAULT_ROOT_AUTH_PATHS = { dir: ROOT_AUTH_DIR, lock: ROOT_AUTH_LOC
 interface State {
   attempts: number[];
   usedStep?: number;
-  challenges: Record<string, { session: string; expires: number }>;
+  challenges: Record<string, { session: string; expires: number; opened?: number }>;
+  /** When each session's first prompt opened, kept while it keeps opening them, so a retry never restarts the wait. */
+  openings?: Record<string, { at: number; expires: number }>;
   tickets: Record<string, { session: string; expires: number; grant: string; method: string }>;
 }
 const digest = (value: string) => createHash("sha256").update(value).digest("hex");
@@ -56,6 +58,7 @@ function withState<T>(user: string, uid: number, now: number, storage: typeof DE
     }
     state.attempts = state.attempts.filter(at => at > now - 86_400_000);
     state.challenges = Object.fromEntries(Object.entries(state.challenges).filter(([, value]) => value.expires > now));
+    state.openings = Object.fromEntries(Object.entries(state.openings ?? {}).filter(([, value]) => value.expires > now));
     state.tickets = Object.fromEntries(Object.entries(state.tickets).filter(([, value]) => value.expires > now));
     const save = () => writeFileAtomic(file, JSON.stringify(state), { mode: 0o600 });
     return use(state, save);
@@ -126,7 +129,10 @@ export function rootAuth(verb: "options" | "verify" | "consume", user: string, {
       state.challenges = Object.fromEntries(Object.entries(state.challenges).filter(([, value]) => value.session !== binding));
       if (Object.keys(state.challenges).length >= 20) failAction("Too many pending prompts. Try again in five minutes.");
       const challenge = randomBytes(32).toString("base64url");
-      state.challenges[challenge] = { session: binding, expires: now + 300_000 };
+      // A retry after a wrong code opens a fresh prompt, which must not restart the wait for a later code.
+      const opened = state.openings![binding]?.at ?? now;
+      state.openings![binding] = { at: opened, expires: now + 300_000 };
+      state.challenges[challenge] = { session: binding, expires: now + 300_000, opened };
       save();
       return { challenge, keys: pinnedKeys() };
     }
@@ -141,7 +147,7 @@ export function rootAuth(verb: "options" | "verify" | "consume", user: string, {
         // to the session id, which a later sign-in can keep, so the prompt's
         // opening (five minutes before its challenge expires) stands in only
         // without a sighting.
-        const opened = pending.expires - 300_000;
+        const opened = pending.opened ?? pending.expires - 300_000;
         state.usedStep = verifyCode(paths.panelDb, user, input.code, state.usedStep ?? -1, seen ?? opened, now);
       }
       else {
@@ -156,6 +162,7 @@ export function rootAuth(verb: "options" | "verify" | "consume", user: string, {
       if (wrong || error instanceof ActionFailure) throw error;
       failAction("Verification is unavailable right now. Try again.");
     }
+    delete state.openings![binding];
     const ticket = randomBytes(32).toString("base64url");
     state.tickets[digest(ticket)] = { session: binding, expires: now + 60_000, grant: fingerprint, method };
     save();

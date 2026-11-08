@@ -187,10 +187,13 @@
       if (JSON.stringify(fresh) === JSON.stringify(shown)) return;
       var was = shown.tweaks || {};
       var now = fresh.tweaks || {};
-      // Other switches mean other columns and toolbar, which the next page
-      // builds; the facts in the cells are corrected now.
+      // Other switches mean other columns and toolbar: the page is drawn again
+      // from the copy just stored, which has them. The facts in the cells are
+      // corrected in place.
       if (Boolean(was.sitesTable) === Boolean(now.sitesTable) && Boolean(was.diskUsage) === Boolean(now.diskUsage)) {
         refresh(fresh, rows);
+      } else {
+        window.location.reload();
       }
     });
 
@@ -257,7 +260,13 @@
       nameApplications(rows);
       copyDetails(rows);
       placeTypes(rows);
+      // The applications, the search and the sort chosen so far follow the new cells.
+      if (refilter) refilter();
+      if (resort) resort();
     }
+
+    var refilter = null;
+    var resort = null;
 
     function apply(data, rows) {
       var tweaks = data.tweaks || {};
@@ -972,21 +981,28 @@
       // this script.
       clpHoldSelectWidths(picker.parentNode);
 
-      var seen = {};
-      var kinds = [];
-      for (var i = 0; i < rows.length; i++) {
-        var label = applicationName(rows[i].site);
-        if (!label || seen[label]) continue;
-        seen[label] = true;
-        kinds.push(label);
+      // Again when a reply corrects the cells, keeping the choice while it is still offered.
+      function fillKinds() {
+        var chosen = picker.value;
+        var seen = {};
+        var kinds = [];
+        for (var i = 0; i < rows.length; i++) {
+          var label = applicationName(rows[i].site);
+          if (!label || seen[label]) continue;
+          seen[label] = true;
+          kinds.push(label);
+        }
+        kinds.sort();
+        for (var o = picker.options.length - 1; o >= 0; o--) if (picker.options[o].value) picker.remove(o);
+        for (var k = 0; k < kinds.length; k++) {
+          var option = document.createElement("option");
+          option.value = kinds[k];
+          option.textContent = kinds[k];
+          picker.appendChild(option);
+        }
+        picker.value = seen[chosen] ? chosen : "";
       }
-      kinds.sort();
-      for (var k = 0; k < kinds.length; k++) {
-        var option = document.createElement("option");
-        option.value = kinds[k];
-        option.textContent = kinds[k];
-        picker.appendChild(option);
-      }
+      fillKinds();
 
       var empty = document.createElement("div");
       empty.className = "clp-tweaks-empty";
@@ -1011,6 +1027,7 @@
 
       search.addEventListener("input", filter);
       picker.addEventListener("change", filter);
+      refilter = function () { fillKinds(); filter(); };
       toolbar.hidden = false;
       paintCount(rows.length, rows.length);
     }
@@ -1042,10 +1059,14 @@
 
       function bind(th, index) {
         function run() {
-          var numeric = th.hasAttribute("data-numeric");
           var direction = order[index] === "asc" ? "desc" : "asc";
           order = {};
           order[index] = direction;
+          sortBy(direction);
+          resort = function () { sortBy(direction); };
+        }
+        function sortBy(direction) {
+          var numeric = th.hasAttribute("data-numeric");
           var sign = direction === "asc" ? 1 : -1;
           var sorted = rows.slice().sort(function (a, b) {
             var left = sortKey(a, index, numeric);

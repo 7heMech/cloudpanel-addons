@@ -159,7 +159,9 @@ sits in front of this server or its panel.
 Cloudflare Tunnel on this server get the visitor's IP in their access logs and
 in PHP, from `CF-Connecting-IP`. The header is believed only from Cloudflare and
 from the tunnel, so nobody else can set it. Visitors coming through a tunnel
-can no longer set their IP with `X-Real-IP`.
+can no longer set their IP with `X-Real-IP`. Point the tunnel at port 80 or 443
+on this server: a tunnel to a site's port 8080 skips CloudPanel's front server,
+and its visitors can still set their IP.
 
 Error logs, **Allow traffic from Cloudflare only**, and CloudPanel's blocked IPs
 and basic-auth allowlist still see the connecting address: Cloudflare's, the

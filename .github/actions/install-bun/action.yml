@@ -8,9 +8,9 @@ description: >-
 # cannot install a pinned canary. npm versions cannot be republished, and the
 # sha512 below pins the exact tarball besides.
 #
-# To change Bun: set packageManager in package.json, then set version and
-# sha512 here to the "integrity" npm gives for @oven/bun-linux-x64 at that
-# version (npm view @oven/bun-linux-x64@<version> dist.integrity).
+# To change Bun: set packageManager in package.json, then set BUN_VERSION here
+# and BUN_INTEGRITY to what npm gives for @oven/bun-linux-x64 at that version,
+# as it prints it (npm view @oven/bun-linux-x64@<version> dist.integrity).
 
 runs:
   using: composite
@@ -19,12 +19,12 @@ runs:
       shell: bash
       env:
         BUN_VERSION: 1.4.4-canary.20261108.1
-        BUN_SHA512: HVu1zy94Q7TUx1BXiVk5dWh5ip/juNkKGsjEJOUPPCMjGFDuJPMC6OkvHW+U5f5wdSDHa3DRkuxQ16IUs1zthA==
+        BUN_INTEGRITY: sha512-HVu1zy94Q7TUx1BXiVk5dWh5ip/juNkKGsjEJOUPPCMjGFDuJPMC6OkvHW+U5f5wdSDHa3DRkuxQ16IUs1zthA==
       run: |
         set -euo pipefail
         pinned="$(jq -r .packageManager package.json)"
         if [ "$pinned" != "bun@$BUN_VERSION" ]; then
-          echo "::error::package.json pins $pinned, but install-bun has the sha512 for bun@$BUN_VERSION"
+          echo "::error::package.json pins $pinned, but install-bun has the integrity for bun@$BUN_VERSION"
           exit 1
         fi
         dir="$RUNNER_TEMP/bun"
@@ -32,9 +32,9 @@ runs:
         tarball="$dir/bun.tgz"
         curl -fsSL --retry 3 -o "$tarball" \
           "https://registry.npmjs.org/@oven/bun-linux-x64/-/bun-linux-x64-$BUN_VERSION.tgz"
-        actual="$(openssl dgst -sha512 -binary "$tarball" | base64 -w0)"
-        if [ "$actual" != "$BUN_SHA512" ]; then
-          echo "::error::bun-linux-x64-$BUN_VERSION.tgz does not match the pinned sha512"
+        actual="sha512-$(openssl dgst -sha512 -binary "$tarball" | base64 -w0)"
+        if [ "$actual" != "$BUN_INTEGRITY" ]; then
+          echo "::error::bun-linux-x64-$BUN_VERSION.tgz does not match the pinned integrity"
           exit 1
         fi
         tar -xzf "$tarball" -C "$dir" package/bin/bun

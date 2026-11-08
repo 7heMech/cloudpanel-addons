@@ -349,6 +349,28 @@ test("the header keeps the tab's grant through a check that could not read, and 
   expect(await run("1", new Error("offline"))).toEqual({ shown: false, remembered: false });
 });
 
+test("signing out forgets the tab's grant, so the next account starts from its own answer", async () => {
+  const store = new Map<string, string>([["clp-root-shell", "1"]]);
+  const sessionStorage = {
+    getItem: (key: string) => store.get(key) ?? null,
+    setItem: (key: string, value: string) => void store.set(key, value),
+    removeItem: (key: string) => void store.delete(key),
+  };
+  const clicks: ((event: unknown) => void)[] = [];
+  const items = [{ hidden: true, style: { display: "none" } }];
+  const document = {
+    readyState: "complete", querySelector: () => items[0], querySelectorAll: () => items,
+    addEventListener: (type: string, handler: (event: unknown) => void) => { if (type === "click") clicks.push(handler); },
+  };
+  const fetch = () => new Promise(() => {});
+  new Function("document", "sessionStorage", "fetch", rootShellScript("/addons/terminal"))(document, sessionStorage, fetch);
+  const link = (href: string) => ({ target: { closest: (selector: string) => selector === 'a[href$="/logout"]' && href.endsWith("/logout") ? {} : null } });
+  for (const handler of clicks) handler(link("/sites"));
+  expect(store.has("clp-root-shell")).toBe(true);
+  for (const handler of clicks) handler(link("/logout"));
+  expect(store.has("clp-root-shell")).toBe(false);
+});
+
 test("a passkey sign-in opens it with a key the account had when root allowed it, and not with a later one", () => {
   allow("alice");
   const store = (keys: string[]) => {
@@ -419,6 +441,21 @@ test("without the gateway's sighting, the prompt's opening stands in for the sig
   const opened = auth("options", {}, later + 30000, binding, 1);
   const again = later + 150_000;
   expect(() => auth("verify", { ...opened, code: totp(SECRET, Math.floor(again / 30000)) }, again, binding, again)).toThrow("signed in with");
+});
+
+test("without a sighting, a retry after a wrong code keeps the first prompt's opening", () => {
+  change(`UPDATE user SET mfa_secret = '${SECRET}' WHERE user_name = 'alice'`);
+  allow("alice");
+  const step = Math.floor(Date.now() / 30000);
+  const t0 = step * 30000;
+  const first = auth("options", {}, t0, binding, null);
+  expect(() => auth("verify", { ...first, code: "000000" }, t0 + 1000, binding, null)).toThrow();
+  // The popup opens a fresh prompt two steps later; a code from three steps after the first still counts.
+  const retry = auth("options", {}, t0 + 60_000, binding, null);
+  expect(auth("verify", { ...retry, code: totp(SECRET, step + 3) }, (step + 3) * 30000, binding, null).ticket).toBeString();
+  // Verified, the next prompt opens afresh.
+  const next = auth("options", {}, (step + 4) * 30000, binding, null);
+  expect(() => auth("verify", { ...next, code: totp(SECRET, step + 5) }, (step + 5) * 30000, binding, null)).toThrow("signed in with");
 });
 
 test("five wrong codes throttle the account across sessions; malformed ones do not count", () => {
