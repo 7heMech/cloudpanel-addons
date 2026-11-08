@@ -176,11 +176,7 @@ export function layout(
   updateNotice?: { current: string; latest: string } | null,
 ): string {
   return renderLayout(title, content, {
-    brand: "Resource Limits",
-    // No tab strip of its own: this addon has one page, reached from the
-    // Addons list, and the panel's own site page only reports what it decided.
     base: BASE,
-    nav: [],
     css: STYLE,
     script: CLIENT_JS,
     updateNotice,

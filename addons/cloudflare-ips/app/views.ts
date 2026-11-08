@@ -23,9 +23,7 @@ ${CLIENT_JS_BODY}`;
 
 export function layout(title: string, content: string, updateNotice?: { current: string; latest: string } | null): string {
   return renderLayout(title, content, {
-    brand: "Cloudflare IP Access",
     base: BASE,
-    nav: [],
     css: STYLE,
     script: CLIENT_JS,
     updateNotice,

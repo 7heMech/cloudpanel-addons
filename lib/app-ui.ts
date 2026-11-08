@@ -4,8 +4,8 @@
 // the table and badge classes, the card and dialog styling. The Instatic addon
 // owned all of it while it was the only addon, which meant a second addon's
 // choices were either "copy 60 lines of CSS" or "look like a different
-// product". An addon supplies its brand, contextual nav, its own script and
-// any extra rules; everything else is shared.
+// product". An addon supplies its mount path, its own script and any extra
+// rules; everything else is shared.
 
 import { esc, escJs } from "./app-http";
 import { panelLogos, type PanelLogos } from "./panel-logos";
@@ -236,25 +236,25 @@ export function jobProgressHtml(job: SiteJobProgress, title: string, hidden = fa
       </div>`;
 }
 
-export interface Chrome {
-  /** Product name for the contextual navigation, e.g. "Instatic". */
-  brand: string;
+/** What every page of one addon carries, whole page or fragment alike. */
+export interface AddonChrome {
   /** Where this addon is mounted, e.g. "/addons/instatic". */
   base: string;
-  /** Contextual tabs for this addon's manager, below the global shell nav. */
-  nav: { href: string; label: string }[];
   /** Rules appended after BASE_STYLE, for anything only this addon draws. */
   css?: string;
   /** The addon's own script. BASE_CLIENT_JS is prepended. */
   script: string;
+}
+
+export interface Chrome extends AddonChrome {
   /** Optional header controls if a newer clp-addons release is available. */
   updateNotice?: { current: string; latest: string } | null;
   /** Hide administrator navigation for pages reached by a site manager. */
   admin?: boolean;
   /**
-   * Draw CloudPanel's site information and site tab strip instead of this
-   * addon's own tabs, for a page reached from that strip. `activeSlug` is the
-   * tab this page is; see lib/site-context for the list.
+   * Draw CloudPanel's site information and site tab strip, for a page reached
+   * from that strip. `activeSlug` is the tab this page is; see
+   * lib/site-context for the list.
    */
   site?: SiteContext & { activeSlug: string };
 }
@@ -294,7 +294,7 @@ const CONFIRM_HTML = `<dialog id="clp-confirm" aria-labelledby="clp-confirm-titl
  * stylesheet is rewritten for a shadow root, and the script is handed back
  * unrun so the loader can give it the root its lookups are relative to.
  */
-export function renderFragment(title: string, content: string, chrome: Chrome): EmbedFragment {
+export function renderFragment(title: string, content: string, chrome: AddonChrome): EmbedFragment {
   return {
     ok: true,
     title,
@@ -349,14 +349,6 @@ ${siteTabs(chrome.site, chrome.site.activeSlug)
   .join("\n")}
       </nav>`
     : "";
-  const contextualNav = chrome.nav
-    .map((n) => `        <a class="clp-addon-nav-link" href="${esc(n.href)}">${esc(n.label)}</a>`)
-    .join("\n");
-  const contextualHeader = chrome.site || !contextualNav
-    ? siteHeader
-    : `      <nav class="clp-addon-tabs" data-auto-active aria-label="${esc(chrome.brand)} navigation">
-${contextualNav}
-      </nav>`;
   return `<!doctype html>
 <html lang="en">
 <head>
@@ -399,7 +391,7 @@ ${primaryNav}
     </div>
   </div>
 </header>
-<main>${contextualHeader}${FLASH_HTML}${viewRoot(content)}</main>
+<main>${siteHeader}${FLASH_HTML}${viewRoot(content)}</main>
 ${CONFIRM_HTML}
 <footer class="clp-addon-footer">
   <a href="https://github.com/7heMech/cloudpanel-addons/issues" target="_blank" rel="noopener noreferrer">Report an addon issue</a>

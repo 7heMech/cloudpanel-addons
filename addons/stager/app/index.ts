@@ -3,11 +3,12 @@
 // The manager router strips the /addons/ prefix before dispatching here.
 
 import { errorMessage } from "../../../lib/errors";
-import { stagerService, validateDomain, validateJobId, expandTarget, promoteBlocked } from "./service";
+import { stagerService, expandTarget, promoteBlocked } from "./service";
+import { validateJobId } from "../../../lib/job-id";
 import type { JobResult, JobView } from "./service";
 import { layout, fragment, jobsView, newCloneView, jobView, promoteView, siteStagingView } from "./views";
 import {
-  errorBlock, guardMutation, htmlResponse, jsonResponse, newCsrfToken, redirectResponse, safeDecodePathSegment, readBody,
+  errorBlock, guardMutation, validateExactDomain, htmlResponse, jsonResponse, newCsrfToken, redirectResponse, safeDecodePathSegment, readBody,
 } from "../../../lib/app-http";
 import { mountPath } from "../../../lib/mount";
 import { getNextAvailablePort, type SanitizedSite } from "../../../lib/snapshot-reader";
@@ -62,20 +63,6 @@ const MAX_MFA = 32;
 /** A newline in a credential would arrive at the action binary as a shorter one. */
 const CONTROL_CHARS = /[\u0000-\u001f\u007f]/;
 
-function html(body: string, csrf: string, status = 200): Response {
-  return htmlResponse(body, { status, csrf });
-}
-
-function json(body: unknown, status = 200): Response {
-  return jsonResponse(body, { status });
-}
-
-// A fragment is the first thing an operator who came straight from a site page
-// loads from this addon, so it carries the CSRF cookie its own actions echo.
-function fragmentJson(body: unknown, csrf: string, status = 200): Response {
-  return jsonResponse(body, { status, csrf });
-}
-
 /**
  * The whole request surface, exported so the one manager process can mount it.
  *
@@ -93,10 +80,10 @@ export async function handle(
   const url = new URL(req.url);
   const method = req.method;
 
-  // Liveness probe for systemd. No auth implications: it reports nothing
-  // about any site.
+  // What a job page polls while the manager restarts (JOB_WATCH_JS). It
+  // reports nothing about any site.
   if (path === "/health") {
-    return json({ ok: true, service: "stager-manager" });
+    return jsonResponse({ ok: true, service: "stager-manager" });
   }
 
   if (method === "GET" && path === "/") {
@@ -107,22 +94,22 @@ export async function handle(
     // before anything is read.
     const selected = url.searchParams.get("domain");
     if (selected && url.searchParams.get("embed") !== "0") {
-      const target = validateDomain(selected);
+      const target = validateExactDomain(selected);
       if (target) {
         return redirectResponse(embedLandingUrl(target, "stager"));
       }
     }
     if (selected) {
-      const domain = validateDomain(selected);
+      const domain = validateExactDomain(selected);
       if (!domain) {
-        return html(layout("Invalid site", '<div class="alert">That is not a valid hostname.</div>', updateNotice), csrf, 400);
+        return htmlResponse(layout("Invalid site", errorBlock("That is not a valid hostname."), updateNotice), { status: 400, csrf });
       }
       try {
         const [page, snapshot] = await Promise.all([
           stagerService.sitePage(domain),
           stagerService.snapshot().catch(() => null),
         ]);
-        return html(
+        return htmlResponse(
           layout(
             `Staging — ${domain}`,
             siteStagingView(page.context.domain, page.jobs, page.clonable,
@@ -130,12 +117,12 @@ export async function handle(
             updateNotice,
             page.context,
           ),
-          csrf,
+          { csrf },
         );
       } catch (err) {
         const message = errorMessage(err);
         const status = /not found/i.test(message) ? 404 : 500;
-        return html(layout("Staging", errorBlock(err), updateNotice), csrf, status);
+        return htmlResponse(layout("Staging", errorBlock(err), updateNotice), { status, csrf });
       }
     }
     try {
@@ -150,16 +137,16 @@ export async function handle(
       } catch {
         // Panel inventory unavailable; render without site-presence checks
       }
-      return html(
+      return htmlResponse(
         layout(
           "Staging clones",
           jobsView(await stagerService.listJobs(), snapshotAge, panelSites, snapshotTakenAt),
           updateNotice
         ),
-        csrf
+        { csrf }
       );
     } catch (err) {
-      return html(layout("Error", errorBlock(err), updateNotice), csrf, 500);
+      return htmlResponse(layout("Error", errorBlock(err), updateNotice), { status: 500, csrf });
     }
   }
 
@@ -167,24 +154,24 @@ export async function handle(
   // loader injected into CloudPanel's site pages.
   if (method === "GET" && path === "/fragment") {
     const csrf = newCsrfToken();
-    const domain = validateDomain(url.searchParams.get("domain") ?? "");
-    if (!domain) return json({ ok: false, error: "that is not a valid hostname" }, 400);
+    const domain = validateExactDomain(url.searchParams.get("domain") ?? "");
+    if (!domain) return jsonResponse({ ok: false, error: "that is not a valid hostname" }, 400);
     try {
       const [page, snapshot] = await Promise.all([
         stagerService.sitePage(domain),
         stagerService.snapshot().catch(() => null),
       ]);
-      return fragmentJson(
+      return jsonResponse(
         fragment(
           `Staging — ${domain}`,
           siteStagingView(page.context.domain, page.jobs, page.clonable,
             snapshot?.ageSeconds ?? Infinity, snapshot?.snap.sites ?? [], snapshot?.snap.updatedAt ?? ""),
         ),
-        csrf,
+        { csrf },
       );
     } catch (err) {
       const message = errorMessage(err);
-      return json({ ok: false, error: message }, /not found/i.test(message) ? 404 : 500);
+      return jsonResponse({ ok: false, error: message }, /not found/i.test(message) ? 404 : 500);
     }
   }
 
@@ -196,15 +183,15 @@ export async function handle(
     try {
       const raw = url.searchParams.get("source");
       if (!raw) {
-        return html(layout("New staging site", newCloneView(null, await stagerService.listSites()), updateNotice), csrf);
+        return htmlResponse(layout("New staging site", newCloneView(null, await stagerService.listSites()), updateNotice), { csrf });
       }
-      const source = validateDomain(raw.toLowerCase());
+      const source = validateExactDomain(raw.toLowerCase());
       if (!source) {
-        return html(
+        return htmlResponse(
           layout("New staging site",
             newCloneView(null, await stagerService.listSites(), "That is not a valid hostname."),
             updateNotice),
-          csrf, 400
+          { status: 400, csrf }
         );
       }
       // The listing applies every gate the action does, so a source it leaves
@@ -213,14 +200,14 @@ export async function handle(
       const summary = sites.find((site) => site.domain === source);
       if (!summary) {
         const detail = await stagerService.describe(source);
-        return html(
+        return htmlResponse(
           layout("New staging site", newCloneView(null, sites, detail.error ?? `Cannot clone ${source}.`), updateNotice),
-          csrf, 400
+          { status: 400, csrf }
         );
       }
-      return html(layout(`Clone ${source}`, newCloneView(summary, []), updateNotice), csrf);
+      return htmlResponse(layout(`Clone ${source}`, newCloneView(summary, []), updateNotice), { csrf });
     } catch (err) {
-      return html(layout("Error", errorBlock(err), updateNotice), csrf, 500);
+      return htmlResponse(layout("Error", errorBlock(err), updateNotice), { status: 500, csrf });
     }
   }
 
@@ -229,13 +216,13 @@ export async function handle(
     const csrf = newCsrfToken();
     const decoded = safeDecodePathSegment(jobPage[1]!);
     if (decoded === null) {
-      return html(layout("Bad request", `<div class="alert">That address is not a valid job link.</div>`, updateNotice), csrf, 400);
+      return htmlResponse(layout("Bad request", errorBlock("That address is not a valid job link."), updateNotice), { status: 400, csrf });
     }
     const id = validateJobId(decoded);
-    if (!id) return html(layout("Not found", `<div class="alert">No such job.</div>`, updateNotice), csrf, 404);
+    if (!id) return htmlResponse(layout("Not found", errorBlock("No such job."), updateNotice), { status: 404, csrf });
     const res = await stagerService.getJob(id);
     if (!res.ok || !res.data) {
-      return html(layout("Not found", `<div class="alert">${Bun.escapeHTML(res.error ?? "No such job.")}</div>`, updateNotice), csrf, 404);
+      return htmlResponse(layout("Not found", errorBlock(res.error ?? "No such job."), updateNotice), { status: 404, csrf });
     }
     let panelSites: SanitizedSite[] = [];
     let snapshotAge = Infinity;
@@ -246,13 +233,13 @@ export async function handle(
       snapshotAge = ageSeconds;
       snapshotTakenAt = snap.updatedAt;
     } catch {}
-    return html(
+    return htmlResponse(
       layout(
         res.data.job.kind === "promote" ? `Promote onto ${res.data.job.target}` : `Clone into ${res.data.job.target}`,
         jobView(res.data.job, res.data.log, snapshotAge, panelSites, snapshotTakenAt),
         updateNotice
       ),
-      csrf
+      { csrf }
     );
   }
 
@@ -267,20 +254,20 @@ export async function handle(
       if (!id) return redirectResponse(`${mountPath("stager")}/`);
       const res = await stagerService.getJob(id);
       if (!res.ok || !res.data) {
-        return html(layout("Not found", `<div class="alert">${Bun.escapeHTML(res.error ?? "No such job.")}</div>`, updateNotice), csrf, 404);
+        return htmlResponse(layout("Not found", errorBlock(res.error ?? "No such job."), updateNotice), { status: 404, csrf });
       }
       const problem = promoteBlocked(res.data.job);
       if (problem) {
-        return html(layout("Promote to live", promoteView(res.data.job, problem), updateNotice), csrf, 400);
+        return htmlResponse(layout("Promote to live", promoteView(res.data.job, problem), updateNotice), { status: 400, csrf });
       }
-      return html(layout(`Promote ${res.data.job.target}`, promoteView(res.data.job), updateNotice), csrf);
+      return htmlResponse(layout(`Promote ${res.data.job.target}`, promoteView(res.data.job), updateNotice), { csrf });
     } catch (err) {
-      return html(layout("Error", errorBlock(err), updateNotice), csrf, 500);
+      return htmlResponse(layout("Error", errorBlock(err), updateNotice), { status: 500, csrf });
     }
   }
 
   if (method === "GET" && path === "/api/sites") {
-    return json({ ok: true, sites: await stagerService.listSites() });
+    return jsonResponse({ ok: true, sites: await stagerService.listSites() });
   }
 
   const jobApi = await jobApiRoute({
@@ -298,7 +285,7 @@ export async function handle(
     } catch (err) {
       const msg = errorMessage(err);
       console.error("[stager] promote request failed:", msg);
-      return json({ ok: false, error: msg }, 500);
+      return jsonResponse({ ok: false, error: msg }, 500);
     }
   }
 
@@ -312,11 +299,11 @@ export async function handle(
     } catch (err) {
       const msg = errorMessage(err);
       console.error("[stager] clone request failed:", msg);
-      return json({ ok: false, error: msg }, 500);
+      return jsonResponse({ ok: false, error: msg }, 500);
     }
   }
 
-  return json({ ok: false, error: "not found" }, 404);
+  return jsonResponse({ ok: false, error: "not found" }, 404);
 }
 
 /**
@@ -335,14 +322,14 @@ async function postClone(req: Request): Promise<Response> {
     instaticEmail, instaticPassword, mfaCode,
   } = body;
 
-  const source = validateDomain(typeof rawSource === "string" ? rawSource.toLowerCase() : null);
-  if (!source) return json({ ok: false, error: "source is not a valid hostname" }, 400);
+  const source = validateExactDomain(typeof rawSource === "string" ? rawSource.toLowerCase() : null);
+  if (!source) return jsonResponse({ ok: false, error: "source is not a valid hostname" }, 400);
 
   // The shorthand is expanded here so the action binary only ever sees a
   // complete hostname; it must reject rather than rewrite.
-  const target = validateDomain(expandTarget(typeof rawTarget === "string" ? rawTarget : "", source));
-  if (!target) return json({ ok: false, error: "target is not a valid hostname" }, 400);
-  if (target === source) return json({ ok: false, error: "the target is the site being cloned" }, 400);
+  const target = validateExactDomain(expandTarget(typeof rawTarget === "string" ? rawTarget : "", source));
+  if (!target) return jsonResponse({ ok: false, error: "target is not a valid hostname" }, 400);
+  if (target === source) return jsonResponse({ ok: false, error: "the target is the site being cloned" }, 400);
 
   // The credential fields are accepted only for a source that really is an
   // Instatic site, and that is settled by asking the action binary rather
@@ -355,18 +342,18 @@ async function postClone(req: Request): Promise<Response> {
   const summary = (await stagerService.listSites()).find((site) => site.domain === source);
   if (!summary) {
     const detail = await stagerService.describe(source);
-    return json({ ok: false, error: detail.error ?? `cannot clone ${source}` }, 400);
+    return jsonResponse({ ok: false, error: detail.error ?? `cannot clone ${source}` }, 400);
   }
   let instatic: { port: number; email: string; password: string; mfaCode?: string } | undefined;
   if (summary.siteType === "reverse-proxy") {
     if (typeof instaticEmail !== "string" || !instaticEmail.trim()) {
-      return json({ ok: false, error: "cloning an Instatic site needs the source's admin email address" }, 400);
+      return jsonResponse({ ok: false, error: "cloning an Instatic site needs the source's admin email address" }, 400);
     }
     if (instaticEmail.length > MAX_EMAIL) {
-      return json({ ok: false, error: "that email address is too long" }, 400);
+      return jsonResponse({ ok: false, error: "that email address is too long" }, 400);
     }
     if (typeof instaticPassword !== "string" || !instaticPassword) {
-      return json({ ok: false, error: "cloning an Instatic site needs the source's admin password" }, 400);
+      return jsonResponse({ ok: false, error: "cloning an Instatic site needs the source's admin password" }, 400);
     }
     // Bounded, and bounded here rather than left to the action binary, because
     // the action binary validates its arguments before it ever reads stdin: an
@@ -377,7 +364,7 @@ async function postClone(req: Request): Promise<Response> {
     // service.ts as well; this is the half that stops the oversized write from
     // being attempted at all.
     if (instaticPassword.length > MAX_PASSWORD) {
-      return json({ ok: false, error: `the password may be at most ${MAX_PASSWORD} characters` }, 400);
+      return jsonResponse({ ok: false, error: `the password may be at most ${MAX_PASSWORD} characters` }, 400);
     }
     // Rejected, not trimmed. The credential crosses to the action binary as one
     // line on stdin, so a newline in it would arrive as a shorter password -- a 401
@@ -385,11 +372,11 @@ async function postClone(req: Request): Promise<Response> {
     // operator never typed. A control character has no business in a password
     // field either.
     if (CONTROL_CHARS.test(instaticPassword)) {
-      return json({ ok: false, error: "the password may not contain a newline or a control character" }, 400);
+      return jsonResponse({ ok: false, error: "the password may not contain a newline or a control character" }, 400);
     }
     const mfa = typeof mfaCode === "string" ? mfaCode.trim() : "";
     if (mfa.length > MAX_MFA) {
-      return json({ ok: false, error: "that authentication code is too long" }, 400);
+      return jsonResponse({ ok: false, error: "that authentication code is too long" }, 400);
     }
     // Allocated here because the app combines panel data with both addons'
     // active jobs. The action binary re-checks the number under its own lock,
@@ -412,11 +399,11 @@ async function postClone(req: Request): Promise<Response> {
       ...(mfa ? { mfaCode: mfa } : {}),
     };
   } else if (instaticEmail !== undefined || instaticPassword !== undefined || mfaCode !== undefined) {
-    return json({ ok: false, error: `${source} is not an Instatic site, so it takes no credentials` }, 400);
+    return jsonResponse({ ok: false, error: `${source} is not an Instatic site, so it takes no credentials` }, 400);
   }
 
   const res = await stagerService.startClone(source, target, tls === true, instatic);
-  return json(res, res.ok ? 200 : 400);
+  return jsonResponse(res, res.ok ? 200 : 400);
 }
 
 /**
@@ -436,7 +423,7 @@ async function postPromote(req: Request): Promise<Response> {
   try {
     body = await req.json();
   } catch {
-    return json({ ok: false, error: "body must be JSON" }, 400);
+    return jsonResponse({ ok: false, error: "body must be JSON" }, 400);
   }
   const {
     job: rawJob, instaticEmail, instaticPassword, mfaCode,
@@ -444,16 +431,16 @@ async function postPromote(req: Request): Promise<Response> {
   } = (body ?? {}) as Record<string, unknown>;
 
   const jobId = validateJobId(typeof rawJob === "string" ? rawJob : null);
-  if (!jobId) return json({ ok: false, error: "that is not a valid job id" }, 400);
+  if (!jobId) return jsonResponse({ ok: false, error: "that is not a valid job id" }, 400);
   const record = await stagerService.getJob(jobId);
-  if (!record.ok || !record.data) return json({ ok: false, error: record.error ?? "no such job" }, 404);
+  if (!record.ok || !record.data) return jsonResponse({ ok: false, error: record.error ?? "no such job" }, 404);
   const clone = record.data.job;
   const problem = promoteBlocked(clone);
-  if (problem) return json({ ok: false, error: problem }, 400);
+  if (problem) return jsonResponse({ ok: false, error: problem }, 400);
 
-  const staging = validateDomain(clone.target);
-  const live = validateDomain(clone.source);
-  if (!staging || !live) return json({ ok: false, error: "that clone record does not name two valid hostnames" }, 400);
+  const staging = validateExactDomain(clone.target);
+  const live = validateExactDomain(clone.source);
+  if (!staging || !live) return jsonResponse({ ok: false, error: "that clone record does not name two valid hostnames" }, 400);
 
   const isInstatic = (clone.result as JobResult | null)?.siteType === "reverse-proxy";
   let instatic:
@@ -469,23 +456,23 @@ async function postPromote(req: Request): Promise<Response> {
     ];
     for (const account of accounts) {
       if (typeof account.email !== "string" || !account.email.trim()) {
-        return json({ ok: false, error: `promoting an Instatic site needs the ${account.what} instance's admin email address` }, 400);
+        return jsonResponse({ ok: false, error: `promoting an Instatic site needs the ${account.what} instance's admin email address` }, 400);
       }
-      if (account.email.length > MAX_EMAIL) return json({ ok: false, error: "that email address is too long" }, 400);
+      if (account.email.length > MAX_EMAIL) return jsonResponse({ ok: false, error: "that email address is too long" }, 400);
       if (typeof account.password !== "string" || !account.password) {
-        return json({ ok: false, error: `promoting an Instatic site needs the ${account.what} instance's admin password` }, 400);
+        return jsonResponse({ ok: false, error: `promoting an Instatic site needs the ${account.what} instance's admin password` }, 400);
       }
       if (account.password.length > MAX_PASSWORD) {
-        return json({ ok: false, error: `the password may be at most ${MAX_PASSWORD} characters` }, 400);
+        return jsonResponse({ ok: false, error: `the password may be at most ${MAX_PASSWORD} characters` }, 400);
       }
       if (CONTROL_CHARS.test(account.password)) {
-        return json({ ok: false, error: "the password may not contain a newline or a control character" }, 400);
+        return jsonResponse({ ok: false, error: "the password may not contain a newline or a control character" }, 400);
       }
       if (account.code !== undefined && typeof account.code !== "string") {
-        return json({ ok: false, error: "that authentication code is not a string" }, 400);
+        return jsonResponse({ ok: false, error: "that authentication code is not a string" }, 400);
       }
       if (typeof account.code === "string" && account.code.trim().length > MAX_MFA) {
-        return json({ ok: false, error: "that authentication code is too long" }, 400);
+        return jsonResponse({ ok: false, error: "that authentication code is too long" }, 400);
       }
     }
     const sourceCode = typeof mfaCode === "string" ? mfaCode.trim() : "";
@@ -502,9 +489,9 @@ async function postPromote(req: Request): Promise<Response> {
     instaticEmail !== undefined || instaticPassword !== undefined || mfaCode !== undefined
     || liveEmail !== undefined || livePassword !== undefined || liveMfaCode !== undefined
   ) {
-    return json({ ok: false, error: `${live} is not an Instatic site, so it takes no credentials` }, 400);
+    return jsonResponse({ ok: false, error: `${live} is not an Instatic site, so it takes no credentials` }, 400);
   }
 
   const res = await stagerService.startPromote(staging, live, instatic);
-  return json(res, res.ok ? 200 : 400);
+  return jsonResponse(res, res.ok ? 200 : 400);
 }

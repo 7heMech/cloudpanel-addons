@@ -3,9 +3,6 @@ import type { WebVerb } from "../../../lib/gateway-protocol";
 import { fetchPanelInfo } from "../../../lib/snapshot-reader";
 import type { SiteContext } from "../../../lib/site-context";
 import type { GlobalMaintenanceStatus, MaintenanceSiteStatus, MaintenanceStatus } from "../action";
-import { validateDomain } from "../../../lib/app-http";
-
-export { validateDomain };
 
 export type MaintenanceSiteView = MaintenanceSiteStatus;
 

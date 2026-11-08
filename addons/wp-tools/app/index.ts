@@ -1,18 +1,15 @@
 import { errorMessage } from "../../../lib/errors";
 import { signInWindow } from "./sign-in-window";
 import {
-  BodyError, bodyErrorResponse, clientIp, guardMutation, htmlResponse, jsonResponse, readBoundedBytes, readJsonObject, newCsrfToken, safeDecodePathSegment, readBody,
+  errorBlock, BodyError, bodyErrorResponse, clientIp, guardMutation, validateDomain, htmlResponse, jsonResponse, readBoundedBytes, readJsonObject, newCsrfToken, safeDecodePathSegment, readBody,
 } from "../../../lib/app-http";
 import { jobApiRoute } from "../../../lib/job-stream";
 import { MAX_NEW_SITE_PLUGINS, UPLOAD_ID_RE } from "../new-site-plugins";
 import { DIRECTORY_SLUG_RE, MAX_UPLOAD_BYTES } from "../plugin-zip";
 import { searchDirectory, searchTerm } from "./plugin-search";
-import { validateDomain, validateJobId, wpToolsService, type NewSiteChoice } from "./service";
+import { wpToolsService, type NewSiteChoice } from "./service";
+import { validateJobId } from "../../../lib/job-id";
 import { dashboardBody, dashboardView, layout } from "./views";
-
-function json(body: unknown, status = 200): Response {
-  return jsonResponse(body, { status });
-}
 
 
 /**
@@ -58,8 +55,6 @@ export async function handle(
 ): Promise<Response> {
   const method = req.method;
 
-  if (method === "GET" && path === "/health") return json({ ok: true, service: "wp-tools-manager" });
-
   // The link injected into CloudPanel's Sites page is on a page this addon did
   // not render, so the browser may have no CSRF cookie yet and a non-adminis-
   // trator can never get one from an addon page. This hands out that pair and
@@ -73,7 +68,7 @@ export async function handle(
   const windowPage = /^\/sign-in\/([^/]+)$/.exec(path);
   if (method === "GET" && windowPage) {
     const domain = validateDomain(safeDecodePathSegment(windowPage[1]!));
-    if (!domain) return json({ ok: false, error: "that is not a valid hostname" }, 400);
+    if (!domain) return jsonResponse({ ok: false, error: "that is not a valid hostname" }, 400);
     return signInWindow(domain);
   }
 
@@ -82,11 +77,11 @@ export async function handle(
   // sign-in is, to the sites the caller's account has.
   if (method === "GET" && path === "/api/site-kind") {
     const domain = validateDomain(new URL(req.url).searchParams.get("domain"));
-    if (!domain) return json({ ok: false, error: "that is not a valid hostname" }, 400);
+    if (!domain) return jsonResponse({ ok: false, error: "that is not a valid hostname" }, 400);
     const admin = auth?.roles.includes("ROLE_ADMIN") ?? false;
-    if (!admin && !auth?.user) return json({ ok: false, error: "not found" }, 404);
+    if (!admin && !auth?.user) return jsonResponse({ ok: false, error: "not found" }, 404);
     const result = await wpToolsService.siteKind(domain, admin ? undefined : auth!.user);
-    return json(result, result.ok ? 200 : 400);
+    return jsonResponse(result, result.ok ? 200 : 400);
   }
 
   if (method === "GET" && path === "/") {
@@ -97,21 +92,21 @@ export async function handle(
       return htmlResponse(layout("WordPress Tools", dashboardView(result.data), updateNotice), { csrf });
     } catch (error) {
       return htmlResponse(
-        layout("WordPress Tools", `<div class="alert" role="alert">${Bun.escapeHTML(errorMessage(error))}</div>`, updateNotice),
+        layout("WordPress Tools", errorBlock(error), updateNotice),
         { status: 500, csrf },
       );
     }
   }
 
   if (method === "GET" && path === "/api/dashboard") {
-    if (!auth?.roles.includes("ROLE_ADMIN")) return json({ ok: false, error: "not found" }, 404);
+    if (!auth?.roles.includes("ROLE_ADMIN")) return jsonResponse({ ok: false, error: "not found" }, 404);
     const result = await wpToolsService.sites();
-    if (!result.ok || !result.data) return json(result, 400);
-    return json({ ok: true, data: { html: dashboardBody(result.data), jobs: result.data.jobs } });
+    if (!result.ok || !result.data) return jsonResponse(result, 400);
+    return jsonResponse({ ok: true, data: { html: dashboardBody(result.data), jobs: result.data.jobs } });
   }
 
   if (method === "GET" && path.startsWith("/api/jobs/")) {
-    if (!auth?.roles.includes("ROLE_ADMIN")) return json({ ok: false, error: "not found" }, 404);
+    if (!auth?.roles.includes("ROLE_ADMIN")) return jsonResponse({ ok: false, error: "not found" }, 404);
     const routed = await jobApiRoute({
       req, path, method,
       getJob: (id) => wpToolsService.getJob(id),
@@ -127,26 +122,26 @@ export async function handle(
   // names the plugins automation installs, which the form does not offer.
   if (method === "GET" && (path === "/api/plugin-search" || path === "/api/new-site-status")) {
     const chooser = newSiteChooser(auth);
-    if (!chooser) return json({ ok: false, error: "not found" }, 404);
+    if (!chooser) return jsonResponse({ ok: false, error: "not found" }, 404);
     const params = new URL(req.url).searchParams;
     if (path === "/api/new-site-status") {
       const id = validateJobId(params.get("job"));
-      if (!id) return json({ ok: false, error: "not a valid job id" }, 400);
+      if (!id) return jsonResponse({ ok: false, error: "not a valid job id" }, 400);
       const result = await wpToolsService.newSiteStatus(id, chooser.asUser);
-      return json(result, result.ok ? 200 : 404);
+      return jsonResponse(result, result.ok ? 200 : 404);
     }
     const term = searchTerm(params.get("q"));
-    if (!term) return json({ ok: false, error: "type at least two characters" }, 400);
+    if (!term) return jsonResponse({ ok: false, error: "type at least two characters" }, 400);
     const allowed = await wpToolsService.newSiteAccess(chooser.asUser);
-    if (!allowed.ok) return json(allowed, 403);
+    if (!allowed.ok) return jsonResponse(allowed, 403);
     try {
-      return json({ ok: true, data: { plugins: await searchDirectory(term), automatic: allowed.data?.automatic ?? [] } });
+      return jsonResponse({ ok: true, data: { plugins: await searchDirectory(term), automatic: allowed.data?.automatic ?? [] } });
     } catch (error) {
-      return json({ ok: false, error: errorMessage(error) }, 502);
+      return jsonResponse({ ok: false, error: errorMessage(error) }, 502);
     }
   }
 
-  if (method !== "POST") return json({ ok: false, error: "not found" }, 404);
+  if (method !== "POST") return jsonResponse({ ok: false, error: "not found" }, 404);
   const denied = guardMutation(req);
   if (denied) return denied;
 
@@ -156,40 +151,40 @@ export async function handle(
   // root refuses a domain CloudPanel already has.
   if (path === "/api/new-site") {
     const chooser = newSiteChooser(auth);
-    if (!chooser) return json({ ok: false, error: "not found" }, 404);
+    if (!chooser) return jsonResponse({ ok: false, error: "not found" }, 404);
     let body: Record<string, unknown>;
     try { body = await readJsonObject(req, 16 * 1024); }
     catch (error) { return bodyErrorResponse(error); }
     const choice = newSiteChoice(body);
-    if (typeof choice === "string") return json({ ok: false, error: choice }, 400);
-    if (chooser.asUser && choice.uploads.length) return json({ ok: false, error: "only an administrator can upload plugins" }, 403);
+    if (typeof choice === "string") return jsonResponse({ ok: false, error: choice }, 400);
+    if (chooser.asUser && choice.uploads.length) return jsonResponse({ ok: false, error: "only an administrator can upload plugins" }, 403);
     const result = await wpToolsService.newSite({ ...choice, ...(chooser.asUser ? { asUser: chooser.asUser } : {}) });
-    return json(result, result.ok ? 200 : 400);
+    return jsonResponse(result, result.ok ? 200 : 400);
   }
 
   // A plugin zip is code that will run as the new site's user, so uploading
   // one stays an administrator's whoever else may pick plugins.
   if (path === "/api/plugin-upload" || path === "/api/plugin-discard") {
-    if (!auth?.roles.includes("ROLE_ADMIN")) return json({ ok: false, error: "not found" }, 404);
+    if (!auth?.roles.includes("ROLE_ADMIN")) return jsonResponse({ ok: false, error: "not found" }, 404);
     if (path === "/api/plugin-upload") {
       let zip: Uint8Array;
       try { zip = await readBoundedBytes(req, MAX_UPLOAD_BYTES); }
       catch (error) {
         if (error instanceof BodyError && error.status === 413) {
-          return json({ ok: false, error: `a plugin zip may be at most ${MAX_UPLOAD_BYTES / 1024 / 1024} MB` }, 413);
+          return jsonResponse({ ok: false, error: `a plugin zip may be at most ${MAX_UPLOAD_BYTES / 1024 / 1024} MB` }, 413);
         }
         return bodyErrorResponse(error);
       }
-      if (zip.byteLength === 0) return json({ ok: false, error: "choose a plugin zip" }, 400);
+      if (zip.byteLength === 0) return jsonResponse({ ok: false, error: "choose a plugin zip" }, 400);
       const result = await wpToolsService.uploadPlugin(zip);
-      return json(result, result.ok ? 200 : 400);
+      return jsonResponse(result, result.ok ? 200 : 400);
     }
     let body: Record<string, unknown>;
     try { body = await readJsonObject(req, 4 * 1024); }
     catch (error) { return bodyErrorResponse(error); }
-    if (typeof body.id !== "string" || !UPLOAD_ID_RE.test(body.id)) return json({ ok: false, error: "that is not an upload" }, 400);
+    if (typeof body.id !== "string" || !UPLOAD_ID_RE.test(body.id)) return jsonResponse({ ok: false, error: "that is not an upload" }, 400);
     const result = await wpToolsService.discardUpload(body.id);
-    return json(result, result.ok ? 200 : 400);
+    return jsonResponse(result, result.ok ? 200 : 400);
   }
 
   // Reached both from this addon's own page and from the link injected into
@@ -199,9 +194,9 @@ export async function handle(
     const body = await readBody(req, 4 * 1024);
     if (body instanceof Response) return body;
     const domain = validateDomain(body.domain);
-    if (!domain) return json({ ok: false, error: "that is not a valid hostname" }, 400);
+    if (!domain) return jsonResponse({ ok: false, error: "that is not a valid hostname" }, 400);
     const admin = auth?.roles.includes("ROLE_ADMIN") ?? false;
-    if (!admin && !auth?.user) return json({ ok: false, error: "not found" }, 404);
+    if (!admin && !auth?.user) return jsonResponse({ ok: false, error: "not found" }, 404);
     // The address comes from the request, never the body: the page can only
     // agree to add the one it is being answered from.
     const result = await wpToolsService.signIn(domain, {
@@ -210,71 +205,71 @@ export async function handle(
       addBypass: body.addBypass === true,
       allowBasicAuth: body.allowBasicAuth === true,
     });
-    return json(result, result.ok ? 200 : 400);
+    return jsonResponse(result, result.ok ? 200 : 400);
   }
 
   if (path === "/api/remove") {
     const result = await wpToolsService.remove();
-    return json(result, result.ok ? 200 : 400);
+    return jsonResponse(result, result.ok ? 200 : 400);
   }
 
   if (path.startsWith("/api/mainwp-") || path.startsWith("/api/varnish-") || path === "/api/domain-link" || path === "/api/new-site-settings") {
     // These are administrators' whatever other WP Tools routes the manager's
     // gate lets through by name. Keep that boundary explicit here as well.
-    if (!auth?.roles.includes("ROLE_ADMIN")) return json({ ok: false, error: "not found" }, 404);
+    if (!auth?.roles.includes("ROLE_ADMIN")) return jsonResponse({ ok: false, error: "not found" }, 404);
     let body: Record<string, unknown>;
     // A batch connection names every site it is for.
     try { body = await readJsonObject(req, path === "/api/mainwp-connect" ? 128 * 1024 : 4 * 1024); }
     catch (error) { return bodyErrorResponse(error); }
     let result;
     if (path === "/api/mainwp-settings") {
-      if (typeof body.enabled !== "boolean") return json({ ok: false, error: "enabled must be true or false" }, 400);
-      if (body.remote !== undefined && body.remote !== true) return json({ ok: false, error: "remote must be true" }, 400);
+      if (typeof body.enabled !== "boolean") return jsonResponse({ ok: false, error: "enabled must be true or false" }, 400);
+      if (body.remote !== undefined && body.remote !== true) return jsonResponse({ ok: false, error: "remote must be true" }, 400);
       const dashboard = body.dashboard === undefined ? undefined : validateDomain(body.dashboard);
-      if (dashboard === null) return json({ ok: false, error: "choose a valid Dashboard hostname" }, 400);
+      if (dashboard === null) return jsonResponse({ ok: false, error: "choose a valid Dashboard hostname" }, 400);
       result = await wpToolsService.mainwpSettings(body.enabled, dashboard, body.remote === true);
     } else if (path === "/api/varnish-settings") {
-      if (typeof body.enabled !== "boolean") return json({ ok: false, error: "enabled must be true or false" }, 400);
+      if (typeof body.enabled !== "boolean") return jsonResponse({ ok: false, error: "enabled must be true or false" }, 400);
       result = await wpToolsService.varnishSettings(body.enabled);
     } else if (path === "/api/domain-link") {
-      if (typeof body.signIn !== "boolean") return json({ ok: false, error: "signIn must be true or false" }, 400);
+      if (typeof body.signIn !== "boolean") return jsonResponse({ ok: false, error: "signIn must be true or false" }, 400);
       result = await wpToolsService.domainLinkSettings(body.signIn);
-      if (!result.ok) return json(result, 400);
+      if (!result.ok) return jsonResponse(result, 400);
       // The setting is saved either way, and the page repaints with it; the
       // error says the panel's pages still show the old link.
       const rendered = await wpToolsService.renderPanelTemplates();
       if (!rendered.ok) {
         const why = rendered.error ?? "the CloudPanel templates could not be updated";
-        return json({ ok: false, error: `Saved, but CloudPanel's site pages still show the old link: ${why}`, data: result.data }, 500);
+        return jsonResponse({ ok: false, error: `Saved, but CloudPanel's site pages still show the old link: ${why}`, data: result.data }, 500);
       }
     } else if (path === "/api/new-site-settings") {
-      if (typeof body.siteManagers !== "boolean") return json({ ok: false, error: "siteManagers must be true or false" }, 400);
+      if (typeof body.siteManagers !== "boolean") return jsonResponse({ ok: false, error: "siteManagers must be true or false" }, 400);
       result = await wpToolsService.newSiteSettings(body.siteManagers);
-      if (!result.ok) return json(result, 400);
+      if (!result.ok) return jsonResponse(result, 400);
       // Who sees the form's Plugins row is decided in the templates, as the
       // domain link is: saved either way, and the page says if they are stale.
       const rendered = await wpToolsService.renderPanelTemplates();
       if (!rendered.ok) {
         const why = rendered.error ?? "the CloudPanel templates could not be updated";
-        return json({ ok: false, error: `Saved, but CloudPanel's new-site form still shows the old choice: ${why}`, data: result.data }, 500);
+        return jsonResponse({ ok: false, error: `Saved, but CloudPanel's new-site form still shows the old choice: ${why}`, data: result.data }, 500);
       }
     } else if (path === "/api/varnish-sync") result = await wpToolsService.startJob("varnish-check");
     else if (path === "/api/mainwp-sync") result = await wpToolsService.startJob("mainwp-check");
     else if (path === "/api/varnish-install") {
       const domain = validateDomain(body.domain);
-      if (!domain) return json({ ok: false, error: "that is not a valid hostname" }, 400);
+      if (!domain) return jsonResponse({ ok: false, error: "that is not a valid hostname" }, 400);
       result = await wpToolsService.startJob("varnish-install", [domain]);
     } else if (path === "/api/mainwp-cleanup") {
-      if (body.confirm !== true) return json({ ok: false, error: "confirm MainWP cleanup" }, 400);
+      if (body.confirm !== true) return jsonResponse({ ok: false, error: "confirm MainWP cleanup" }, 400);
       result = await wpToolsService.startJob("mainwp-cleanup", [], "mainwp");
     } else if (path === "/api/mainwp-connect") {
       const domains = Array.isArray(body.domains) ? body.domains.map(validateDomain) : [];
-      if (!domains.length || domains.some((domain) => !domain)) return json({ ok: false, error: "choose the sites to connect" }, 400);
-      if (body.confirm !== true) return json({ ok: false, error: "confirm the MainWP connection" }, 400);
+      if (!domains.length || domains.some((domain) => !domain)) return jsonResponse({ ok: false, error: "choose the sites to connect" }, 400);
+      if (body.confirm !== true) return jsonResponse({ ok: false, error: "confirm the MainWP connection" }, 400);
       result = await wpToolsService.startJob("mainwp-connect", domains as string[], "connect");
     }
-    return result ? json(result, result.ok ? 200 : 400) : json({ ok: false, error: "not found" }, 404);
+    return result ? jsonResponse(result, result.ok ? 200 : 400) : jsonResponse({ ok: false, error: "not found" }, 404);
   }
 
-  return json({ ok: false, error: "not found" }, 404);
+  return jsonResponse({ ok: false, error: "not found" }, 404);
 }

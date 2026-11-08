@@ -22,9 +22,7 @@ export function layout(
   updateNotice?: { current: string; latest: string } | null,
 ): string {
   return renderLayout(title, content, {
-    brand: "System Tweaks",
     base: mountPath("system-tweaks"),
-    nav: [],
     css: STYLE,
     script: TWEAK_ROW_JS + SCRIPT,
     updateNotice,

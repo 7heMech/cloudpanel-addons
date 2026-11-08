@@ -41,9 +41,7 @@ export function layout(
   admin = true,
 ): string {
   return renderLayout(title, content, {
-    brand: "Instatic CMS",
     base: BASE,
-    nav: [],
     css: STYLE,
     script: JOB_WATCH_JS + FLEET_ROW_SELECTION_JS + CLIENT_JS,
     updateNotice,

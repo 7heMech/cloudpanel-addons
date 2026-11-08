@@ -247,9 +247,9 @@ test("the header control is in both of CloudPanel's headers and the addons' own,
     // Twig would read these as its own tags.
     expect(snippet.replace("{% if is_granted('ROLE_ADMIN') %}", "").replace("{% endif %}", "")).not.toMatch(/\{[{%#]/);
   }
-  const page = renderLayout("Terminal", "", { brand: "Terminal", base: "/addons/terminal", nav: [], script: "" });
+  const page = renderLayout("Terminal", "", { base: "/addons/terminal", script: "" });
   expect(page).toContain('id="clp-root-shell" data-clp-root-shell hidden');
-  expect(renderLayout("Terminal", "", { brand: "Terminal", base: "/addons/terminal", nav: [], script: "", admin: false })).not.toContain("clp-root-shell");
+  expect(renderLayout("Terminal", "", { base: "/addons/terminal", script: "", admin: false })).not.toContain("clp-root-shell");
 });
 
 test("a root access check that fails says so, rather than that root never allowed the account", async () => {

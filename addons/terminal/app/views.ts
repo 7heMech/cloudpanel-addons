@@ -26,9 +26,7 @@ export function layout(
   updateNotice?: { current: string; latest: string } | null,
 ): string {
   return renderLayout(title, content, {
-    brand: "Terminal",
     base: BASE,
-    nav: [],
     css: FLEET_STYLE,
     script: `${OPEN_JS}${FLEET_ROW_SELECTION_JS}\n${FLEET_JS}`,
     updateNotice,

@@ -129,7 +129,7 @@ export async function jobApiRoute<J extends JobProgress>(route: JobApiRoute<J>):
   if (route.method !== "GET") return null;
 
   const id = validateJobId(safeDecodePathSegment((events ?? poll)![1]!));
-  if (!id) return json({ ok: false, error: "not a valid job id" }, 400);
+  if (!id) return jsonResponse({ ok: false, error: "not a valid job id" }, 400);
 
   const stream = events !== null || route.req.headers.get("accept")?.includes("text/event-stream") === true;
   if (stream) {
@@ -143,11 +143,7 @@ export async function jobApiRoute<J extends JobProgress>(route: JobApiRoute<J>):
   }
 
   const result = await route.getJob(id);
-  return json(result, result.ok ? 200 : 404);
-}
-
-function json(body: unknown, status: number): Response {
-  return jsonResponse(body, { status });
+  return jsonResponse(result, result.ok ? 200 : 404);
 }
 
 function sse(body: ReadableStream): Response {
@@ -196,7 +192,7 @@ export async function jobEventStream<J extends JobProgress>(options: {
 
   const initial = await getJob(id);
   if (!initial.ok || !initial.data) {
-    return json({ ok: false, error: initial.error ?? "job not found" }, 404);
+    return jsonResponse({ ok: false, error: initial.error ?? "job not found" }, 404);
   }
 
   const first = initial.data;

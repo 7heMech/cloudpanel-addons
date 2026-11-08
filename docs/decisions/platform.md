@@ -427,7 +427,7 @@ line, with the whole name on hover, and the actions column takes only its
 buttons' width, so the status columns keep their room. A switch that
 decides one thing for a whole page keeps its full size; one repeated per table
 row comes down to the height of the line beside it, so the control does not set
-the row's height. An addon supplies its brand, its own tabs, its script and any rule only it
+the row's height. An addon supplies its mount path, its script and any rule only it
 draws. The manager's own pages use the same two: disabling an addon asks through
 that dialog, naming the addon as its card does and saying that its data is kept,
 and a manager job that fails to start reports through the inline notice. The
@@ -477,7 +477,7 @@ ticked site rows, and the value of every control marked `data-keep` (search and
 filter boxes). Addon clients report outcomes with `notify`, never `alert()`.
 Failed mutations leave the view intact.
 
-A page reached from a site's tab strip is drawn in site mode instead: the shell
+A page reached from a site's tab strip is drawn in site mode: the shell
 shows CloudPanel's site information and the applicable site tabs with the addon's
 tab active, and the page belongs to Sites rather than to Addons. `lib/site-context.ts`
 is the only description of that strip -- order, per-type conditions and routes

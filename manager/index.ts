@@ -9,10 +9,6 @@ import type { ManagerJobView } from "./action";
 import type { CliUpdateInfo } from "../lib/update-check";
 import { managerAction } from "./service";
 
-function managerJson(body: unknown, status = 200): Response {
-  return jsonResponse(body, { status });
-}
-
 /**
  * The manager's own API: update status, enable, disable, update, and following
  * the job each mutation starts.
@@ -31,7 +27,7 @@ export async function handleManagerRoute(
   update: CliUpdateInfo | null = null,
 ): Promise<Response | null> {
   if (path === "/api/update" && req.method === "GET") {
-    return managerJson({ ok: true, data: update });
+    return jsonResponse({ ok: true, data: update });
   }
 
   const addonRoute = path.match(/^\/api\/addons\/([^/]+)\/(enable|disable)$/);
@@ -39,10 +35,10 @@ export async function handleManagerRoute(
     const denied = guardMutation(req);
     if (denied) return denied;
     const name = safeDecodePathSegment(addonRoute[1]!);
-    if (!name) return managerJson({ ok: false, error: "invalid addon name" }, 400);
-    if (!ADDON_NAMES.includes(name)) return managerJson({ ok: false, error: "unknown addon" }, 404);
+    if (!name) return jsonResponse({ ok: false, error: "invalid addon name" }, 400);
+    if (!ADDON_NAMES.includes(name)) return jsonResponse({ ok: false, error: "unknown addon" }, 404);
     const result = await managerAction(addonRoute[2] === "enable" ? "enable" : "disable", [`--addon=${name}`]);
-    return managerJson(result, result.ok ? 200 : 400);
+    return jsonResponse(result, result.ok ? 200 : 400);
   }
 
   const newsRoute = path.match(/^\/api\/addons(?:\/([^/]+))?\/news-seen$/);
@@ -50,22 +46,22 @@ export async function handleManagerRoute(
     const denied = guardMutation(req);
     if (denied) return denied;
     const name = newsRoute[1] === undefined ? "" : safeDecodePathSegment(newsRoute[1]);
-    if (name !== "" && (!name || !ADDON_NAMES.includes(name))) return managerJson({ ok: false, error: "unknown addon" }, 404);
+    if (name !== "" && (!name || !ADDON_NAMES.includes(name))) return jsonResponse({ ok: false, error: "unknown addon" }, 404);
     const result = await managerAction("mark-news-seen", name ? [`--addon=${name}`] : []);
-    return managerJson(result, result.ok ? 200 : 400);
+    return jsonResponse(result, result.ok ? 200 : 400);
   }
 
   if (path === "/api/update" && req.method === "POST") {
     const denied = guardMutation(req);
     if (denied) return denied;
     const result = await managerAction("update");
-    return managerJson(result, result.ok ? 200 : 400);
+    return jsonResponse(result, result.ok ? 200 : 400);
   }
 
   const jobRoute = path.match(/^\/api\/jobs\/([^/]+?)(\/events)?$/);
   if (jobRoute && req.method === "GET") {
     const id = safeDecodePathSegment(jobRoute[1]!);
-    if (!id || !JOB_ID_RE.test(id)) return managerJson({ ok: false, error: "not a valid job id" }, 400);
+    if (!id || !JOB_ID_RE.test(id)) return jsonResponse({ ok: false, error: "not a valid job id" }, 400);
     const getJob = (jobId: string) => managerAction<{ job: ManagerJobView; log: string }>("job", [`--id=${jobId}`]);
     const watchJob = (jobId: string, handlers: Parameters<JobWatcher<ManagerJobView>>[1]) => {
       let ended = false;
@@ -90,7 +86,7 @@ export async function handleManagerRoute(
       return jobEventStream({ id, req, getJob, watchJob });
     }
     const result = await getJob(id);
-    return managerJson(result, result.ok ? 200 : 404);
+    return jsonResponse(result, result.ok ? 200 : 404);
   }
 
   return null;

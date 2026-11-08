@@ -1,4 +1,4 @@
-import { esc, htmlResponse, SECURITY_HEADERS } from "../../../lib/app-http";
+import { contentSecurityPolicy, esc, htmlResponse } from "../../../lib/app-http";
 import { renderToolWindow } from "../../../lib/app-ui";
 import { mountPath } from "../../../lib/mount";
 
@@ -8,7 +8,7 @@ import { mountPath } from "../../../lib/mount";
  * site outgrew the 4 KiB response header the panel's Nginx buffers.
  */
 export function signInWindow(domain: string): Response {
-  const policy = SECURITY_HEADERS["Content-Security-Policy"]!.replace("form-action 'none'", `form-action https://${domain}`);
+  const policy = contentSecurityPolicy({ "form-action": `https://${domain}` });
   const page = renderToolWindow(`Signing in to ${domain}`, `<p class="empty">Signing in to ${esc(domain)}…</p>`, {
     base: mountPath("wp-tools"),
     script: "",

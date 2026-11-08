@@ -5,15 +5,11 @@ import type {
   WpLoginResult, WpMaintenanceReply, WpBasicAuthReply, WpRemoveResult, WpSiteView, NewSiteStatus,
 } from "../action";
 import type { WpJobs, WpJobTask, WpJobView } from "../jobs";
-import { validateDomain } from "../../../lib/app-http";
 import type { MainwpView } from "../mainwp";
 import type { WpVarnishState } from "../varnish";
 import type { WpDomainLink } from "../domain-link";
 import { UPLOAD_PART_BYTES, type StagedUpload } from "../new-site-plugins";
 import type { WpNewSiteAccess } from "../new-site-access";
-
-export { validateDomain };
-export { validateJobId } from "../../../lib/job-id";
 
 /** `varnishError` is set when the Varnish settings cannot be read; sign-in still works. */
 export interface WpDashboard {

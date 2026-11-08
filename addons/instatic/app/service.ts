@@ -1,4 +1,3 @@
-import { HOSTNAME_RE } from "../../../lib/validate";
 import { getNextAvailablePort, readPanelSnapshot, type PanelSnapshot } from "../../../lib/snapshot-reader";
 import { callGatewayAction, type ActionResult, type GatewayStream } from "../../../lib/gateway-client";
 import type { WebVerb } from "../../../lib/gateway-protocol";
@@ -30,16 +29,9 @@ async function callAction<T = unknown>(verb: WebVerb<"instatic">, args: string[]
 // from the action binary.
 const TAG_RE = /^\d+\.\d+\.\d+$/;
 
-
-export function validateDomain(d: unknown): string | null {
-  return typeof d === "string" && d.length <= 253 && HOSTNAME_RE.test(d) ? d : null;
-}
-
 export function validateTag(t: unknown): string | null {
   return typeof t === "string" && TAG_RE.test(t) ? t : null;
 }
-
-export { validateJobId } from "../../../lib/job-id";
 
 /**
  * An instance as the action binary reports it.

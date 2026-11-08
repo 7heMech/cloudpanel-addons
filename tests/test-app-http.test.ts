@@ -2,9 +2,9 @@ import { describe, expect, test } from "bun:test";
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import {
-  BodyError, MAX_BODY_BYTES, SECURITY_HEADERS, bodyErrorResponse, clientIp, esc, escJs, guardMutation, htmlResponse,
-  jsonResponse, newCsrfToken, policyHeaders, policyResponse, readJsonObject, redirectResponse,
-  safeDecodePathSegment,
+  BodyError, MAX_BODY_BYTES, SECURITY_HEADERS, bodyErrorResponse, clientIp, contentSecurityPolicy, esc, escJs, guardMutation,
+  htmlResponse, jsonResponse, newCsrfToken, policyHeaders, policyResponse, readJsonObject, redirectResponse,
+  safeDecodePathSegment, validateDomain, validateExactDomain,
 } from "../lib/app-http";
 
 function repoSource(path: string): string {
@@ -36,6 +36,22 @@ describe("response policy", () => {
     });
     expect(asset.headers.get("Cache-Control")).toBe("public, max-age=31536000, immutable");
     expect(await asset.text()).toBe("x");
+  });
+
+  test("a bare number is the status and nothing else", () => {
+    const res = jsonResponse({ ok: false }, 404);
+    expect(res.status).toBe(404);
+    expect(res.headers.get("Content-Security-Policy")).toBe(SECURITY_HEADERS["Content-Security-Policy"]!);
+    expect(res.headers.getSetCookie()).toEqual([]);
+    expect(htmlResponse("", 500).status).toBe(500);
+  });
+
+  test("a page's own CSP replaces a directive in place and adds a new one last", () => {
+    const base = SECURITY_HEADERS["Content-Security-Policy"]!;
+    expect(contentSecurityPolicy()).toBe(base);
+    expect(contentSecurityPolicy({ "form-action": "https://shop.example.com" }))
+      .toBe(base.replace("form-action 'none'", "form-action https://shop.example.com"));
+    expect(contentSecurityPolicy({ "frame-src": "'self' blob:" })).toBe(`${base}; frame-src 'self' blob:`);
   });
 
   test("caller headers are merged, not spread", () => {
@@ -196,6 +212,18 @@ describe("repeated Set-Cookie", () => {
   });
 });
 
+describe("domain validation", () => {
+  test("validateDomain rewrites to the canonical form; validateExactDomain only accepts it", () => {
+    expect(validateDomain(" Shop.Example.com. ")).toBe("shop.example.com");
+    expect(validateExactDomain(" Shop.Example.com. ")).toBeNull();
+    expect(validateExactDomain("shop.example.com")).toBe("shop.example.com");
+    for (const bad of [null, 42, "", "localhost", "a..b.com", `${"a".repeat(250)}.com`]) {
+      expect(validateDomain(bad)).toBeNull();
+      expect(validateExactDomain(bad)).toBeNull();
+    }
+  });
+});
+
 describe("path segment decoding", () => {
   test("decodes a segment and refuses malformed encoding", () => {
     expect(safeDecodePathSegment("a%20b")).toBe("a b");
@@ -219,7 +247,7 @@ describe("HTML and JavaScript escaping", () => {
     // errorBlock escapes through esc(), which is Bun.escapeHTML.
     expect(repoSource("addons/instatic/app/index.ts")).toInclude("errorBlock(err)");
     const stager = repoSource("addons/stager/app/index.ts");
-    expect(stager).toInclude("Bun.escapeHTML(");
+    expect(stager).toInclude("errorBlock(res.error");
     expect(stager).not.toInclude("escapeMinimal");
   });
 

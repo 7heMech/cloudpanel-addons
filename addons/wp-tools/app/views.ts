@@ -22,9 +22,7 @@ export function layout(
   updateNotice?: { current: string; latest: string } | null,
 ): string {
   return renderLayout(title, content, {
-    brand: "WordPress Tools",
     base: BASE,
-    nav: [],
     css: STYLE,
     script: `${FLEET_ROW_SELECTION_JS}\n${JOB_PROGRESS_JS}\n${SCRIPT}`,
     updateNotice,

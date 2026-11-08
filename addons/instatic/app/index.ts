@@ -3,21 +3,14 @@
 // The manager router strips the /addons/ prefix before dispatching here.
 
 import { errorMessage } from "../../../lib/errors";
-import { instaticService, validateDomain, validateTag, validateJobId } from "./service";
+import { instaticService, validateTag } from "./service";
+import { validateJobId } from "../../../lib/job-id";
 import { layout, dashboardView, newInstanceView, jobView } from "./views";
 import {
-  errorBlock, guardMutation, htmlResponse, jsonResponse, newCsrfToken, safeDecodePathSegment, readBody,
+  errorBlock, guardMutation, validateExactDomain, htmlResponse, jsonResponse, newCsrfToken, safeDecodePathSegment, readBody,
 } from "../../../lib/app-http";
 import { listAvailableTags } from "./tags";
 import { jobApiRoute } from "../../../lib/job-stream";
-
-function html(body: string, csrf: string, status = 200): Response {
-  return htmlResponse(body, { status, csrf });
-}
-
-function json(body: unknown, status = 200): Response {
-  return jsonResponse(body, { status });
-}
 
 async function dashboard(): Promise<string> {
   const [instances, jobs, available] = await Promise.all([
@@ -30,11 +23,11 @@ async function dashboard(): Promise<string> {
 
 /** A change that landed is reported as landed, even when redrawing the list afterwards fails. */
 async function change(result: { ok: boolean }): Promise<Response> {
-  if (!result.ok) return json(result, 400);
+  if (!result.ok) return jsonResponse(result, 400);
   try {
-    return json({ ...result, html: await dashboard() });
+    return jsonResponse({ ...result, html: await dashboard() });
   } catch {
-    return json(result);
+    return jsonResponse(result);
   }
 }
 
@@ -59,22 +52,22 @@ export async function handle(
   const page = (title: string, content: string) =>
     layout(title, content, updateNotice, auth?.roles.includes("ROLE_ADMIN") !== false);
 
-  // Liveness probe for systemd. No auth implications: it reports nothing about
-  // instances.
+  // What a job page polls while the manager restarts (JOB_WATCH_JS). It
+  // reports nothing about instances.
   if (path === "/health") {
-    return json({ ok: true, service: "instatic-manager" });
+    return jsonResponse({ ok: true, service: "instatic-manager" });
   }
 
   if (method === "GET" && (path === "/" || path === "/new")) {
     const csrf = newCsrfToken();
     try {
       if (path === "/") {
-        return html(page("Instatic instances", await dashboard()), csrf);
+        return htmlResponse(page("Instatic instances", await dashboard()), { csrf });
       }
       const fromNewSite = new URL(req.url).searchParams.get("from") === "new-site";
-      return html(page("New Instatic site", newInstanceView(await listAvailableTags(), fromNewSite)), csrf);
+      return htmlResponse(page("New Instatic site", newInstanceView(await listAvailableTags(), fromNewSite)), { csrf });
     } catch (err) {
-      return html(page("Error", errorBlock(err)), csrf, 500);
+      return htmlResponse(page("Error", errorBlock(err)), { status: 500, csrf });
     }
   }
 
@@ -88,11 +81,11 @@ export async function handle(
     if (!res.ok || !res.data) return new Response("Job not found", { status: 404 });
     const csrf = newCsrfToken();
     const job = res.data.job;
-    return html(page(`${job.kind === "update" ? "Updating" : "Creating"} ${job.domain}`, jobView(job, res.data.log)), csrf);
+    return htmlResponse(page(`${job.kind === "update" ? "Updating" : "Creating"} ${job.domain}`, jobView(job, res.data.log)), { csrf });
   }
 
   if (path === "/api/instances" && method === "GET") {
-    return json({ ok: true, instances: await instaticService.listInstances() });
+    return jsonResponse({ ok: true, instances: await instaticService.listInstances() });
   }
 
   if (path === "/api/instances" && method === "POST") {
@@ -102,21 +95,21 @@ export async function handle(
     const body = await readBody(req);
     if (body instanceof Response) return body;
     const { domain: rawDomain, tag: rawTag, tls } = body;
-    const domain = validateDomain(rawDomain);
+    const domain = validateExactDomain(rawDomain);
     const tag = validateTag(rawTag);
-    if (!domain) return json({ ok: false, error: "domain is not a valid hostname" }, 400);
-    if (!tag) return json({ ok: false, error: "tag must be an exact version such as 0.0.18" }, 400);
+    if (!domain) return jsonResponse({ ok: false, error: "domain is not a valid hostname" }, 400);
+    if (!tag) return jsonResponse({ ok: false, error: "tag must be an exact version such as 0.0.18" }, 400);
 
     const res = await instaticService.createInstance(domain, tag, tls === true, true);
-    return json(res, res.ok ? 202 : 400);
+    return jsonResponse(res, res.ok ? 202 : 400);
   }
 
   // The dashboard again, for a page waiting on jobs it started to finish.
   if (path === "/api/dashboard" && method === "GET") {
     try {
-      return json({ ok: true, html: await dashboard() });
+      return jsonResponse({ ok: true, html: await dashboard() });
     } catch (error) {
-      return json({ ok: false, error: errorMessage(error) }, 500);
+      return jsonResponse({ ok: false, error: errorMessage(error) }, 500);
     }
   }
 
@@ -128,14 +121,14 @@ export async function handle(
     const body = await readBody(req);
     if (body instanceof Response) return body;
     const verb = body.verb;
-    if (verb !== "update" && verb !== "restart") return json({ ok: false, error: "verb must be update or restart" }, 400);
+    if (verb !== "update" && verb !== "restart") return jsonResponse({ ok: false, error: "verb must be update or restart" }, 400);
     const tag = verb === "update" ? validateTag(body.tag) : null;
-    if (verb === "update" && !tag) return json({ ok: false, error: "tag must be an exact version such as 0.0.18" }, 400);
+    if (verb === "update" && !tag) return jsonResponse({ ok: false, error: "tag must be an exact version such as 0.0.18" }, 400);
     if (!Array.isArray(body.domains) || body.domains.length === 0 || body.domains.length > 500) {
-      return json({ ok: false, error: "choose between 1 and 500 sites" }, 400);
+      return jsonResponse({ ok: false, error: "choose between 1 and 500 sites" }, 400);
     }
-    const domains = body.domains.map((domain) => validateDomain(domain));
-    if (domains.some((domain) => !domain)) return json({ ok: false, error: "a domain is not a valid hostname" }, 400);
+    const domains = body.domains.map((domain) => validateExactDomain(domain));
+    if (domains.some((domain) => !domain)) return jsonResponse({ ok: false, error: "a domain is not a valid hostname" }, 400);
     const done: string[] = [];
     const failed: { domain: string; error: string }[] = [];
     for (const domain of domains as string[]) {
@@ -147,7 +140,7 @@ export async function handle(
   }
 
   if (path === "/api/jobs" && method === "GET") {
-    return json({ ok: true, jobs: await instaticService.listJobs() });
+    return jsonResponse({ ok: true, jobs: await instaticService.listJobs() });
   }
 
   const jobApi = await jobApiRoute({
@@ -162,13 +155,13 @@ export async function handle(
 
   const m = path.match(/^\/api\/instances\/([^/]+)\/([a-z-]+)$/);
   if (m) {
-    const domain = validateDomain(safeDecodePathSegment(m[1]!));
+    const domain = validateExactDomain(safeDecodePathSegment(m[1]!));
     const verb = m[2]!;
-    if (!domain) return json({ ok: false, error: "domain is not a valid hostname" }, 400);
+    if (!domain) return jsonResponse({ ok: false, error: "domain is not a valid hostname" }, 400);
 
     if (verb === "logs" && method === "GET") {
       const res = await instaticService.getLogs(domain);
-      return json(res, res.ok ? 200 : 400);
+      return jsonResponse(res, res.ok ? 200 : 400);
     }
 
     if (MUTATING_VERBS.has(verb) && method === "POST") {
@@ -185,7 +178,7 @@ export async function handle(
         }
         case "snapshot": {
           const res = await instaticService.snapshotInstance(domain);
-          return json(res, res.ok ? 200 : 400);
+          return jsonResponse(res, res.ok ? 200 : 400);
         }
         case "delete": {
           const res = await instaticService.deleteInstance(domain);
@@ -198,15 +191,15 @@ export async function handle(
           const body = await readBody(req);
           if (body instanceof Response) return body;
           const tag = validateTag(body.tag);
-          if (!tag) return json({ ok: false, error: "tag must be an exact version such as 0.0.18" }, 400);
+          if (!tag) return jsonResponse({ ok: false, error: "tag must be an exact version such as 0.0.18" }, 400);
           const res = await instaticService.updateInstance(domain, tag);
           return change(res);
         }
       }
     }
 
-    return json({ ok: false, error: `unsupported ${method} on ${verb}` }, 405);
+    return jsonResponse({ ok: false, error: `unsupported ${method} on ${verb}` }, 405);
   }
 
-  return json({ ok: false, error: "not found" }, 404);
+  return jsonResponse({ ok: false, error: "not found" }, 404);
 }
