@@ -28,9 +28,6 @@ export const TEMPLATES = {
 export const ANCHORS = {
   /** The card around the Sites table. */
   sitesTable: '<div class="card card-table">',
-  /** The account menu's Logout item, the last in either header's menu. */
-  logoutMenuItem: `            <li>
-              <a class="dropdown-item" href="{{ path('clp_logout') }}"`,
   /** A Sites row's Manage link, the last of its actions. */
   siteManageLink: `<a href="{{ path('clp_site', {'domainName': site.domainName}) }}">{% trans %}Manage{% endtrans %}</a>`,
   /** The Logs tab, the last of a site's own tabs. */

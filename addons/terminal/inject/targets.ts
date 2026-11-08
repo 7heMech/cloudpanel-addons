@@ -18,6 +18,10 @@ import { ANCHORS, TEMPLATES } from "../../../lib/panel-anchors";
 import { rootShellLink, rootShellScript } from "../../../lib/root-shell";
 import HEADER_STYLE from "./header.css" with { type: "text" };
 
+// The account menu's Logout item, the last in either header's menu.
+const LOGOUT_MENU_ITEM = `            <li>
+              <a class="dropdown-item" href="{{ path('clp_logout') }}"`;
+
 const ADMIN = "{% if is_granted('ROLE_ADMIN') %}";
 
 function script(url: string): string {
@@ -76,7 +80,7 @@ export const TERMINAL_TARGETS: AddonTarget[] = [
   ...[TEMPLATES.header, TEMPLATES.adminHeader].map((template, index): AddonTarget => ({
     slug: index === 0 ? "root-shell-menu" : "root-shell-admin-menu",
     template,
-    anchorBefore: ANCHORS.logoutMenuItem,
+    anchorBefore: LOGOUT_MENU_ITEM,
     required: false,
     snippet: (url) => `
         ${ADMIN}
