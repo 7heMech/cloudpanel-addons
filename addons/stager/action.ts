@@ -6,15 +6,17 @@ import { Database } from "bun:sqlite";
 import { randomBytes } from "node:crypto";
 import {
   chmodSync, closeSync, copyFileSync, existsSync, lstatSync, mkdirSync, mkdtempSync, openSync,
-  readFileSync, readdirSync, renameSync, rmSync, statSync, writeFileSync, writeSync,
+  readFileSync, readdirSync, renameSync, rmSync, statSync, writeFileSync,
 } from "node:fs";
 import { dirname, join } from "node:path";
 import { executeSmtpAction } from "../smtp/action";
 import { writeFileAtomic } from "../../lib/atomic-write";
 import { learnVhostMapContent, renderVhostBodyResult } from "../../lib/site-vhost";
 import {
-  createJobDir, createJobLog, findOlderThan, jobCommonFields, jobDir as storeJobDir, jobGet, jobSet,
-  jobTimestamp, listJobIds, newJobId, pruneJobs, readJobLog, startJobUnit, watchJobRecord,
+  diagnostic, emitJob, failJob as failStoredJob, findOlderThan, forwardCommandOutput, isActiveJobState,
+  JobFailure, jobCommonFields, jobDir, jobGet, jobSet, jobTimestamp, listJobIds, markJobRunning, pruneJobs,
+  queueJob, readJobResult, recordJobFailure, requireJobDir, runStdoutAsDiagnostic, setJobStep,
+  startJobTranscript, jobViews, watchJob, writeJobResult,
 } from "../../lib/job-store";
 import { ActionFailure, actionErrorJson, emitActionOk, failAction, reportActionFailure } from "../../lib/action";
 import { acquireFileLock, type FileLockHandle } from "../../lib/file-lock";
@@ -321,12 +323,6 @@ function readFlatField(file: string, field: string): string {
   return "";
 }
 
-// The job record itself lives in cli/job-store; this only supplies the addon's
-// jobs directory so the call sites can stay as they were.
-function jobDir(paths: StagerActionPaths, id: string): string {
-  return storeJobDir(paths.jobsDir, id);
-}
-
 function generatedPassword(): string {
   return `Aa1${randomBytes(24).toString("base64").replace(/[^a-zA-Z0-9]/g, "").slice(0, 16)}!`;
 }
@@ -458,17 +454,6 @@ function instaticBackendOf(paths: StagerActionPaths, domain: string): InstaticBa
   return { port, tag };
 }
 
-function forwardCommandOutput(result: CommandResult): void {
-  if (result.stdout) diagnostic(result.stdout);
-  if (result.stderr) diagnostic(result.stderr);
-}
-
-function runStdoutAsDiagnostic(command: string, args: string[]): boolean {
-  const result = runCommand(command, args);
-  if (result.stdout) diagnostic(result.stdout);
-  return result.ok;
-}
-
 /**
  * Create the empty file a command is about to write a secret into.
  *
@@ -496,13 +481,6 @@ function writeSecretFile(path: string, value: string): void {
 
 function jsonField(path: string, field: string): string {
   return readFlatField(path, field);
-}
-
-let activeTranscript: JobTranscript | null = null;
-
-function diagnostic(value: string): void {
-  if (activeTranscript) activeTranscript.write(value);
-  else process.stderr.write(value);
 }
 
 /** SMTP Relay's seeded profile that discards mail (DONT_SEND in addons/smtp/action.ts). */
@@ -540,35 +518,6 @@ function warnLine(value: string): void {
   diagnostic(`[stager] WARN: ${value}\n`);
 }
 
-class JobTranscript {
-  private fd: number;
-
-  constructor(readonly path: string) {
-    this.fd = openSync(path, "a", 0o600);
-    chmodSync(path, 0o600);
-  }
-
-  write(value: string): void {
-    try {
-      const bytes = Buffer.from(value);
-      writeSync(this.fd, bytes);
-    } catch {
-      // A transcript write must never put a secret back on the system journal.
-    }
-  }
-
-  close(): void {
-    closeSync(this.fd);
-  }
-}
-
-class JobFailure extends Error {
-  constructor(message: string) {
-    super(message);
-    this.name = "JobFailure";
-  }
-}
-
 class RunReplyFailure extends Error {
   constructor(message: string) {
     super(message);
@@ -578,18 +527,7 @@ class RunReplyFailure extends Error {
 
 function failJob(ctx: { dir: string; failed: boolean }, message: string): never {
   ctx.failed = true;
-  try {
-    jobSet(ctx.dir, "error", message);
-  } catch {
-    // Keep the original failure message; the rollback still removes secrets.
-  }
-  diagnostic(`[stager] ERROR: ${message}\n`);
-  try {
-    jobSet(ctx.dir, "state", "failed");
-  } catch {
-    // Keep the original failure message; the rollback still removes secrets.
-  }
-  throw new JobFailure(message);
+  failStoredJob("stager", ctx.dir, message, { finishedAt: false });
 }
 
 interface RunContext {
@@ -634,8 +572,7 @@ interface RunContext {
 
 function setStep(ctx: { dir: string; step: string }, value: string): void {
   ctx.step = value;
-  jobSet(ctx.dir, "step", value);
-  logLine(value);
+  setJobStep("stager", ctx.dir, value);
 }
 
 export function hostnameBoundary(domain: string): RegExp {
@@ -1171,7 +1108,7 @@ export function jobStateFor(paths: StagerActionPaths, target: string): string {
     return "";
   }
   for (const entry of entries) {
-    const dir = jobDir(paths, entry);
+    const dir = jobDir(paths.jobsDir, entry);
     if (!isDirectory(dir)) continue;
     if (jobGet(dir, "target") !== target) continue;
     if (jobGet(dir, "kind") === "promote") continue;
@@ -1193,7 +1130,7 @@ export function recoverCarriedVhosts(paths: StagerActionPaths): number {
     if (!isRegularFile(backup)) continue;
     const domain = entry.slice(0, -".conf.clp-stager-bak".length);
     const state = jobStateFor(paths, domain);
-    if (state === "queued" || state === "running") continue;
+    if (isActiveJobState(state)) continue;
     if (state === "done") {
       rmSync(backup, { force: true });
       continue;
@@ -1380,14 +1317,6 @@ function runWpSearchReplace(user: string, path: string, from: string, to: string
   const result = runCommand("runuser", args);
   forwardCommandOutput(result);
   return result.ok;
-}
-
-function readFileSyncSafe(path: string): string {
-  try {
-    return readFileSync(path, "utf8");
-  } catch {
-    return "";
-  }
 }
 
 /** A `define()` of `name` with a quoted literal value, in either quote and any spacing. */
@@ -1708,50 +1637,27 @@ function cmdClone(action: ParsedStagerAction, paths: StagerActionPaths, releaseL
 
   const stagingUser = siteUserFor(target);
   if (siteUserTaken(stagingUser, paths.panelDb)) failAction(`the site user ${stagingUser} already exists; ${target} may be half-created`);
-  let entries: string[] = [];
-  try {
-    entries = readdirSync(paths.jobsDir);
-  } catch {
-    entries = [];
-  }
-  for (const entry of entries) {
-    const dir = jobDir(paths, entry);
-    if (!isDirectory(dir) || jobGet(dir, "target") !== target) continue;
-    const state = jobGet(dir, "state");
-    if (state === "queued" || state === "running") failAction(`a clone into ${target} is already ${state}`);
-  }
-
-  const id = newJobId();
-  const dir = createJobDir(paths.jobsDir, id);
-  jobSet(dir, "source", source);
-  jobSet(dir, "target", target);
-  jobSet(dir, "tls", tls);
-  if (port) jobSet(dir, "port", port);
-  if (email) jobSet(dir, "email", email);
-  if (mfa) jobSet(dir, "mfa", mfa);
-  if (password) jobSet(dir, "srcPassword", password);
-  jobSet(dir, "createdAt", jobTimestamp());
-  jobSet(dir, "step", "queued");
-  jobSet(dir, "state", "queued");
-  createJobLog(dir);
-
-  // run acquires the same target lock. Releasing it before the unit starts is
-  // the deliberate handoff that prevents the child from waiting on its parent.
-  releaseLock();
-  const started = startJobUnit({
+  const id = queueJob({
     addon: "stager",
-    id,
+    jobsDir: paths.jobsDir,
+    fields: {
+      source, target, tls,
+      ...(port ? { port } : {}),
+      ...(email ? { email } : {}),
+      ...(mfa ? { mfa } : {}),
+      ...(password ? { srcPassword: password } : {}),
+    },
+    step: "queued",
+    conflict: (dir, state) => jobGet(dir, "target") === target ? `a clone into ${target} is already ${state}` : null,
+    // run acquires the same target lock. Releasing it before the unit starts is
+    // the deliberate handoff that prevents the child from waiting on its parent.
+    beforeStart: releaseLock,
     description: `clp-addons: cloning ${source} into ${target}`,
     actionBinary: paths.actionBinary,
+    name: "clone",
+    secrets: ["srcPassword", "mfa"],
+    forwardOutput: true,
   });
-  forwardCommandOutput(started);
-  if (!started.ok) {
-    jobSet(dir, "error", "could not start the clone job");
-    jobSet(dir, "state", "failed");
-    rmSync(join(dir, "srcPassword"), { force: true });
-    rmSync(join(dir, "mfa"), { force: true });
-    failAction("systemd-run refused to start the clone job");
-  }
 
   // Keep the local variables used to establish the preflight visible to the
   // type checker and make it explicit that the source backend is only used for
@@ -1815,50 +1721,29 @@ function cmdPromote(action: ParsedStagerAction, paths: StagerActionPaths, releas
     if (!isDirectory(liveRoot)) failAction(`live directory not found: ${liveRoot}`);
   }
 
-  let entries: string[] = [];
-  try {
-    entries = readdirSync(paths.jobsDir);
-  } catch {
-    entries = [];
-  }
-  for (const entry of entries) {
-    const dir = jobDir(paths, entry);
-    if (!isDirectory(dir)) continue;
-    if (jobGet(dir, "target") !== target && jobGet(dir, "source") !== target) continue;
-    const state = jobGet(dir, "state");
-    if (state === "queued" || state === "running") failAction(`another stager job involving ${target} is already ${state}`);
-  }
-
-  const id = newJobId();
-  const dir = createJobDir(paths.jobsDir, id);
-  jobSet(dir, "kind", "promote");
-  jobSet(dir, "source", source);
-  jobSet(dir, "target", target);
-  if (email) jobSet(dir, "email", email);
-  if (targetEmail) jobSet(dir, "targetEmail", targetEmail);
-  if (mfa) jobSet(dir, "mfa", mfa);
-  if (targetMfa) jobSet(dir, "targetMfa", targetMfa);
-  if (password) jobSet(dir, "srcPassword", password);
-  if (targetPassword) jobSet(dir, "dstPassword", targetPassword);
-  jobSet(dir, "createdAt", jobTimestamp());
-  jobSet(dir, "step", "queued");
-  jobSet(dir, "state", "queued");
-  createJobLog(dir);
-
-  releaseLock();
-  const started = startJobUnit({
+  const id = queueJob({
     addon: "stager",
-    id,
+    jobsDir: paths.jobsDir,
+    fields: {
+      kind: "promote", source, target,
+      ...(email ? { email } : {}),
+      ...(targetEmail ? { targetEmail } : {}),
+      ...(mfa ? { mfa } : {}),
+      ...(targetMfa ? { targetMfa } : {}),
+      ...(password ? { srcPassword: password } : {}),
+      ...(targetPassword ? { dstPassword: targetPassword } : {}),
+    },
+    step: "queued",
+    conflict: (dir, state) => jobGet(dir, "target") === target || jobGet(dir, "source") === target
+      ? `another stager job involving ${target} is already ${state}`
+      : null,
+    beforeStart: releaseLock,
     description: `clp-addons: promoting ${source} onto ${target}`,
     actionBinary: paths.actionBinary,
+    name: "promote",
+    secrets: ["srcPassword", "dstPassword", "mfa", "targetMfa"],
+    forwardOutput: true,
   });
-  forwardCommandOutput(started);
-  if (!started.ok) {
-    jobSet(dir, "error", "could not start the promote job");
-    jobSet(dir, "state", "failed");
-    for (const name of ["srcPassword", "dstPassword", "mfa", "targetMfa"]) rmSync(join(dir, name), { force: true });
-    failAction("systemd-run refused to start the promote job");
-  }
   emitStagerOk(paths, { job: id, source, target });
 }
 
@@ -1925,13 +1810,10 @@ function newRunContext(id: string, dir: string, paths: StagerActionPaths): RunCo
 }
 
 async function cmdRun(id: string, paths: StagerActionPaths): Promise<void> {
-  const dir = jobDir(paths, id);
-  if (!isDirectory(dir)) failAction(`no such job: ${id}`);
+  const dir = requireJobDir(paths.jobsDir, id);
   // Records written before promote existed carry no kind, and they are all clones.
   if (jobGet(dir, "kind") === "promote") return cmdRunPromote(id, dir, paths);
-  const transcript = new JobTranscript(join(dir, "log"));
-  const previousTranscript = activeTranscript;
-  activeTranscript = transcript;
+  const transcript = startJobTranscript(join(dir, "log"));
   const ctx = newRunContext(id, dir, paths);
   try {
     ctx.source = jobGet(dir, "source");
@@ -1960,8 +1842,7 @@ async function cmdRun(id: string, paths: StagerActionPaths): Promise<void> {
       failJob(ctx, `a CloudPanel site for ${ctx.target} appeared after this clone was queued; nothing was changed`);
     }
 
-    jobSet(dir, "state", "running");
-    jobSet(dir, "startedAt", jobTimestamp());
+    markJobRunning(dir);
     ctx.rollbackActive = true;
 
     let row: SiteRow | null;
@@ -2274,8 +2155,7 @@ async function cmdRun(id: string, paths: StagerActionPaths): Promise<void> {
       instatic: ctx.srcType === "reverse-proxy" ? { port: Number(ctx.port), tag: ctx.srcTag, email: instaticEmail, password: instaticPassword } : null,
       notes: ctx.notes,
     };
-    writeFileSync(join(dir, "result.json"), `${JSON.stringify(result)}\n`, { mode: 0o600 });
-    chmodSync(join(dir, "result.json"), 0o600);
+    writeJobResult(dir, result);
     jobSet(dir, "finishedAt", jobTimestamp());
     ctx.rollbackActive = false;
     logLine(`clone complete: ${ctx.target}`);
@@ -2285,23 +2165,12 @@ async function cmdRun(id: string, paths: StagerActionPaths): Promise<void> {
     if (ctx.rollbackActive) rollbackRun(ctx);
     if (!(error instanceof JobFailure) && !ctx.failed) {
       const message = error instanceof Error ? error.message : "clone failed";
-      try {
-        jobSet(dir, "error", message);
-      } catch {
-        // Keep the stderr-only failure contract even if the record is damaged.
-      }
-      diagnostic(`[stager] ERROR: ${message}\n`);
-      try {
-        jobSet(dir, "state", "failed");
-      } catch {
-        // Keep the stderr-only failure contract even if the record is damaged.
-      }
+      recordJobFailure("stager", dir, message, { finishedAt: false });
     }
     if (error instanceof JobFailure) throw error;
     throw new JobFailure(error instanceof Error ? error.message : "clone failed");
   } finally {
-    activeTranscript = previousTranscript;
-    transcript.close();
+    transcript.stop();
   }
 }
 
@@ -2616,9 +2485,7 @@ function promoteInstatic(ctx: PromoteContext, email: string, targetEmail: string
 }
 
 async function cmdRunPromote(id: string, dir: string, paths: StagerActionPaths): Promise<void> {
-  const transcript = new JobTranscript(join(dir, "log"));
-  const previousTranscript = activeTranscript;
-  activeTranscript = transcript;
+  const transcript = startJobTranscript(join(dir, "log"));
   const ctx = newPromoteContext(id, dir, paths);
   try {
     ctx.source = jobGet(dir, "source");
@@ -2642,8 +2509,7 @@ async function cmdRunPromote(id: string, dir: string, paths: StagerActionPaths):
     const state = jobGet(dir, "state");
     if (state !== "queued") failJob(ctx, `job ${id} is ${state}, not queued`);
 
-    jobSet(dir, "state", "running");
-    jobSet(dir, "startedAt", jobTimestamp());
+    markJobRunning(dir);
     ctx.rollbackActive = true;
 
     setStep(ctx, "reading both sites");
@@ -2684,8 +2550,7 @@ async function cmdRunPromote(id: string, dir: string, paths: StagerActionPaths):
       contentBackup: ctx.contentBackup || null,
       notes: ctx.notes,
     };
-    writeFileSync(join(dir, "result.json"), `${JSON.stringify(result)}\n`, { mode: 0o600 });
-    chmodSync(join(dir, "result.json"), 0o600);
+    writeJobResult(dir, result);
     jobSet(dir, "finishedAt", jobTimestamp());
     ctx.rollbackActive = false;
     logLine(`promote complete: ${ctx.source} onto ${ctx.target}`);
@@ -2695,23 +2560,12 @@ async function cmdRunPromote(id: string, dir: string, paths: StagerActionPaths):
     if (ctx.rollbackActive) rollbackPromote(ctx);
     if (!(error instanceof JobFailure) && !ctx.failed) {
       const message = error instanceof Error ? error.message : "promote failed";
-      try {
-        jobSet(dir, "error", message);
-      } catch {
-        // Keep the stderr-only failure contract even if the record is damaged.
-      }
-      diagnostic(`[stager] ERROR: ${message}\n`);
-      try {
-        jobSet(dir, "state", "failed");
-      } catch {
-        // Keep the stderr-only failure contract even if the record is damaged.
-      }
+      recordJobFailure("stager", dir, message, { finishedAt: false });
     }
     if (error instanceof JobFailure) throw error;
     throw new JobFailure(error instanceof Error ? error.message : "promote failed");
   } finally {
-    activeTranscript = previousTranscript;
-    transcript.close();
+    transcript.stop();
   }
 }
 
@@ -2725,10 +2579,9 @@ async function cmdRunPromote(id: string, dir: string, paths: StagerActionPaths):
 export function recoverInterruptedPromotions(paths: StagerActionPaths): number {
   let recovered = 0;
   for (const id of listJobIds(paths.jobsDir)) {
-    const dir = jobDir(paths, id);
+    const dir = jobDir(paths.jobsDir, id);
     if (jobGet(dir, "kind") !== "promote") continue;
-    const state = jobGet(dir, "state");
-    if (state === "queued" || state === "running") continue;
+    if (isActiveJobState(jobGet(dir, "state"))) continue;
     if (jobGet(dir, "swap") !== "moved") continue;
     const liveRoot = jobGet(dir, "liveRoot");
     const prevRoot = jobGet(dir, "prevRoot");
@@ -2757,10 +2610,9 @@ export function recoverInterruptedPromotions(paths: StagerActionPaths): number {
 export function dropExpiredPromoteRoots(paths: StagerActionPaths): number {
   let removed = 0;
   for (const id of listJobIds(paths.jobsDir)) {
-    const dir = jobDir(paths, id);
+    const dir = jobDir(paths.jobsDir, id);
     if (jobGet(dir, "kind") !== "promote") continue;
-    const state = jobGet(dir, "state");
-    if (state === "queued" || state === "running") continue;
+    if (isActiveJobState(jobGet(dir, "state"))) continue;
     if (!findOlderThan(dir, 24 * 60 * 60 * 1000, JOB_RETENTION_DAYS)) continue;
     const prevRoot = jobGet(dir, "prevRoot");
     if (!prevRoot || !prevRoot.includes("/.clp-stager-prev-")) continue;
@@ -2769,19 +2621,6 @@ export function dropExpiredPromoteRoots(paths: StagerActionPaths): number {
     removed++;
   }
   return removed;
-}
-
-function readJobResult(dir: string): unknown {
-  const raw = readFileSyncSafe(join(dir, "result.json")).trim();
-  if (!raw) return null;
-  try {
-    return JSON.parse(raw);
-  } catch {
-    // A killed writer can leave a partial result. Returning null keeps the
-    // outer job reply a single valid JSON object; the failed/incomplete record
-    // remains visible through its state and log.
-    return null;
-  }
 }
 
 function jobJson(paths: StagerActionPaths, dir: string, id: string, hasPanelDb: boolean, panelSites: Set<string>): JobView {
@@ -2805,31 +2644,26 @@ function jobJson(paths: StagerActionPaths, dir: string, id: string, hasPanelDb: 
 }
 
 function cmdJob(paths: StagerActionPaths, id: string): void {
-  const dir = jobDir(paths, id);
-  if (!isDirectory(dir)) failAction(`no such job: ${id}`);
-  const panel = panelDomains(paths);
-  emitStagerOk(paths, { job: jobJson(paths, dir, id, panel.readable, panel.domains), log: readJobLog(dir) });
+  emitJob(paths.jobsDir, id, (dir) => {
+    const panel = panelDomains(paths);
+    return jobJson(paths, dir, id, panel.readable, panel.domains);
+  }, (data) => emitStagerOk(paths, data));
 }
 
 async function cmdWatchJob(paths: StagerActionPaths, id: string): Promise<void> {
-  const dir = jobDir(paths, id);
-  if (!isDirectory(dir)) failAction(`no such job: ${id}`);
-  await watchJobRecord({
-    dir,
-    read: () => {
-      const panel = jobGet(dir, "state") === "done"
-        ? panelDomains(paths)
-        : { readable: false, domains: new Set<string>() };
-      return { job: jobJson(paths, dir, id, panel.readable, panel.domains), log: readJobLog(dir) };
-    },
-    emit: (data) => emitStagerOk(paths, data),
-  });
+  // Only a finished clone is checked against the panel, so a running one
+  // never opens its database.
+  await watchJob(paths.jobsDir, id, (dir) => {
+    const panel = jobGet(dir, "state") === "done"
+      ? panelDomains(paths)
+      : { readable: false, domains: new Set<string>() };
+    return jobJson(paths, dir, id, panel.readable, panel.domains);
+  }, (data) => emitStagerOk(paths, data));
 }
 
 function cmdJobs(paths: StagerActionPaths): void {
   const panel = panelDomains(paths);
-  const jobs = listJobIds(paths.jobsDir).map((id) =>
-    jobJson(paths, jobDir(paths, id), id, panel.readable, panel.domains));
+  const jobs = jobViews(paths.jobsDir, (dir, id) => jobJson(paths, dir, id, panel.readable, panel.domains));
   emitStagerOk(paths, { jobs });
 }
 
@@ -2841,8 +2675,7 @@ function cmdPrune(paths: StagerActionPaths): void {
     jobsDir: paths.jobsDir,
     retentionDays: JOB_RETENTION_DAYS,
     stuckMessage: "the clone job stopped without recording a result",
-    onStuck: (id, state) =>
-      warnLine(`job ${id} is recorded as ${state} but nothing is running it; marking it failed`),
+    warnStuck: true,
   });
 
   const vhostsRecovered = recoverCarriedVhosts(paths);
@@ -2912,7 +2745,7 @@ export async function runStagerAction(argv: string[], options?: StagerActionOpti
           `another operation is already running for ${action.target}`,
         );
       } else if (action.verb === "run") {
-        const target = jobGet(jobDir(paths, action.job), "target");
+        const target = jobGet(jobDir(paths.jobsDir, action.job), "target");
         if (target) {
           const normalized = validateDomain(target, paths.panelIdentityFile, "target");
           lock = await acquireFileLock(

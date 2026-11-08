@@ -374,6 +374,22 @@ path it does -- so the addon's own router still decides what that is, and the
 HTML `/jobs/:id` page stays with each addon, because what a job looks like
 differs and how it is watched does not.
 
+Running a job is shared too, in `lib/job-store.ts`. `queueJob` checks the
+addon's conflict rule against every queued or running job, writes the record,
+releases the caller's lock and hands the job to a transient unit; the manager
+writes its record with the same `recordQueuedJob`. A runner sends its
+diagnostics into the job's log with `startJobTranscript`, and a write there
+that fails is dropped rather than sent to the journal. `setJobStep`,
+`failJob`/`recordJobFailure` and `markJobRunning`/`markJobDone` write the step,
+failure and state, the state last because a watcher stops at it. `emitJob`,
+`watchJob` and `jobViews` answer the `job`, `watch-job` and `jobs` verbs from
+the addon's own view of a record. A queued or running job counts as live while
+its unit is active or for its first five minutes, because `systemd-run` returns
+before the unit is necessarily visible; `pruneJobs` fails the others and the
+manager's one-job-at-a-time check uses the same `jobIsLive`. The addon keeps
+its step texts, its job's name in the failure messages and whether a failure
+records `finishedAt`, which Stager's does not.
+
 A job that works through sites -- WordPress Tools' checks and connections,
 Panel Tweaks' size measurement -- records its progress the same way, through
 `runSiteJob` in `lib/job-store.ts`: how many sites are done of how many, the

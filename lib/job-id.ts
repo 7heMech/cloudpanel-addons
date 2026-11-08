@@ -1,13 +1,10 @@
 /**
- * What a job id looks like, in one place.
+ * What a job id and a job state look like, in one place.
  *
- * The syntax was written out three times: once in `cli/job-store.ts`, which
- * creates the ids, and once in each of the Stager and Instatic app services,
- * which check them. The app copies could not import the first without pulling
- * the CLI's job orchestration -- directory layout, systemd unit naming, pruning
- * -- into a module that only wanted to know whether a string was a job id. So
- * the syntax lives here, where both sides can have it, and `cli/job-store.ts`
- * re-exports it for everything that already names it there.
+ * `lib/job-store.ts` creates the ids and the app services check them. The app
+ * services must not pull in the job orchestration -- directory layout, systemd
+ * unit naming, pruning -- to learn whether a string is a job id, so the syntax
+ * lives here and `lib/job-store.ts` re-exports it.
  *
  * A job id is the UTC timestamp of its creation and six hex characters. It is
  * also a directory name, which is why nothing outside this shape is ever
@@ -23,4 +20,9 @@ export function validateJobId(value: unknown): string | null {
 /** A job in one of these states will never change again. */
 export function isTerminalJobState(state: string): boolean {
   return state === "done" || state === "failed";
+}
+
+/** A job in one of these states has, or is still waiting for, a runner. */
+export function isActiveJobState(state: string): boolean {
+  return state === "queued" || state === "running";
 }
