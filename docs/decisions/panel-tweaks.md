@@ -60,6 +60,16 @@ it pushed the whole table down, which was the largest layout shift on the page.
 The script hides it again on a page whose table it does not recognise and when
 the reply never arrives.
 
+The reply lands after the page is first painted, so the table was drawn as the
+panel's four columns and redrawn with the added ones a frame later. The tab
+therefore keeps the last reply in `sessionStorage`, cut to the sites that page
+listed, and a table listing exactly those sites is built from it when the page
+is parsed, before it is painted. The reply still comes on every page: it
+replaces the stored copy and rebuilds the cells whose facts changed; a change of
+switch takes effect on the next page, and a failed reply forgets the copy.
+Another account's table lists other sites and is not built from it, and
+following Logout forgets it.
+
 ## What is read at request time, and what is not
 
 The injected script asks the addon for the current switches along with the site
