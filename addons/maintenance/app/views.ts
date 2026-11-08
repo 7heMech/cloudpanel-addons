@@ -1,6 +1,6 @@
 import { esc, escJs } from "../../../lib/app-http";
 import {
-  ATTENTION_RANK, FLEET_NONE_HTML, FLEET_SELECTION_HTML, FLEET_ROW_SELECTION_JS, fleetFilterHtml, filterWord, valueFilters, renderFragment, renderLayout,
+  ATTENTION_RANK, FLEET_NONE_HTML, FLEET_SELECTION_HTML, FLEET_ROW_SELECTION_JS, fleetFilterHtml, filterWord, valueFilters, renderFragment, renderLayout, type AddonChrome,
 } from "../../../lib/app-ui";
 import type { EmbedFragment } from "../../../lib/shadow-embed";
 import { mountPath } from "../../../lib/mount";
@@ -17,6 +17,8 @@ import CLIENT_BODY from "./views.client.js" with { type: "text" };
 
 export const CLIENT_JS = `${FLEET_ROW_SELECTION_JS}\n${CLIENT_BODY}`;
 
+const CHROME: AddonChrome = { base: BASE, css: STYLE, script: CLIENT_JS };
+
 export function layout(
   title: string,
   content: string,
@@ -24,14 +26,7 @@ export function layout(
   site?: SiteContext,
 ): string {
   return renderLayout(title, content, {
-    brand: "Maintenance Mode",
-    base: BASE,
-    // No tab strip: this addon has one page of its own, so the strip could only
-    // hold a tab for the page already being read. A site-scoped page draws
-    // CloudPanel's own site tabs, which come from the site context below.
-    nav: [],
-    css: STYLE,
-    script: CLIENT_JS,
+    ...CHROME,
     updateNotice,
     ...(site ? { site: { ...site, activeSlug: "maintenance" } } : {}),
   });
@@ -42,13 +37,7 @@ export function layout(
  * site page. No site context: the panel is already drawing it.
  */
 export function fragment(title: string, content: string): EmbedFragment {
-  return renderFragment(title, content, {
-    brand: "Maintenance Mode",
-    base: BASE,
-    nav: [],
-    css: STYLE,
-    script: CLIENT_JS,
-  });
+  return renderFragment(title, content, CHROME);
 }
 
 function plural(count: number, word: string, many = `${word}s`): string {

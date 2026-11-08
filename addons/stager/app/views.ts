@@ -7,7 +7,7 @@ import type { SanitizedSite } from "../../../lib/snapshot-reader";
 import { esc } from "../../../lib/app-http";
 import {
   FLEET_FOOTER_HTML, FLEET_ROW_SELECTION_JS, JOB_WATCH_JS, fleetFilterHtml, filterWord, valueFilters, jobStateClass, jobStateLabel, renderFragment, renderLayout,
-  whenText,
+  whenText, type AddonChrome,
 } from "../../../lib/app-ui";
 import type { EmbedFragment } from "../../../lib/shadow-embed";
 import type { SiteContext } from "../../../lib/site-context";
@@ -35,6 +35,8 @@ import VIEWS_JS from "./views.client.js" with { type: "text" };
 const CLIENT_JS = `const expandTarget = ${expandTarget.toString()};\n${VIEWS_JS}`;
 export { CLIENT_JS };
 
+const CHROME: AddonChrome = { base: BASE, css: STYLE, script: `${FLEET_ROW_SELECTION_JS}\n${JOB_WATCH_JS}${CLIENT_JS}` };
+
 export function layout(
   title: string,
   content: string,
@@ -42,11 +44,7 @@ export function layout(
   site?: SiteContext,
 ): string {
   return renderLayout(title, content, {
-    brand: "Stager",
-    base: BASE,
-    nav: [],
-    css: STYLE,
-    script: `${FLEET_ROW_SELECTION_JS}\n${JOB_WATCH_JS}${CLIENT_JS}`,
+    ...CHROME,
     updateNotice,
     ...(site ? { site: { ...site, activeSlug: "stager" } } : {}),
   });
@@ -57,13 +55,7 @@ export function layout(
  * site page. No site context: the panel is already drawing it.
  */
 export function fragment(title: string, content: string): EmbedFragment {
-  return renderFragment(title, content, {
-    brand: "Stager",
-    base: BASE,
-    nav: [],
-    css: STYLE,
-    script: `${FLEET_ROW_SELECTION_JS}\n${JOB_WATCH_JS}${CLIENT_JS}`,
-  });
+  return renderFragment(title, content, CHROME);
 }
 
 function stateBadge(job: JobView, id = ""): string {

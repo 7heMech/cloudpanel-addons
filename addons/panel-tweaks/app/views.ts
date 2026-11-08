@@ -22,9 +22,7 @@ export function layout(
   updateNotice?: { current: string; latest: string } | null,
 ): string {
   return renderLayout(title, content, {
-    brand: "Panel Tweaks",
     base: BASE,
-    nav: [],
     css: STYLE,
     script: TWEAK_ROW_JS + JOB_PROGRESS_JS + SCRIPT + BRANDING_SCRIPT,
     updateNotice,

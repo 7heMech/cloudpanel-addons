@@ -131,7 +131,7 @@ describe("version comparison", () => {
 
 describe("the addon's own layout", () => {
   const layout = (updateNotice?: { current: string; latest: string }) =>
-    renderLayout("Test", "<p>Hello</p>", { brand: "Test", base: "/test", nav: [], script: "", updateNotice });
+    renderLayout("Test", "<p>Hello</p>", { base: "/test", script: "", updateNotice });
 
   test("renders no update banner without a notice", () => {
     expect(layout()).not.toInclude('class="notice update-banner"');

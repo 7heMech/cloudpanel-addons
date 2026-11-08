@@ -1,4 +1,4 @@
-import { htmlResponse, jsonResponse, newCsrfToken, validateDomain, readMutation } from "../../../lib/app-http";
+import { errorBlock, htmlResponse, jsonResponse, newCsrfToken, validateDomain, readMutation } from "../../../lib/app-http";
 import { dnsService } from "./service";
 import { dashboardContent, dashboardView, layout } from "./views";
 import type { WebVerb } from "../../../lib/gateway-protocol";
@@ -65,7 +65,7 @@ export async function handle(
     const csrf = newCsrfToken();
     const result = await dnsService.state();
     if (!result.ok || !result.data) {
-      return htmlResponse(layout("DNS", `<div class="alert" role="alert">${Bun.escapeHTML(result.error ?? "DNS state is unavailable")}</div>`, notice), { status: 500, csrf });
+      return htmlResponse(layout("DNS", errorBlock(result.error ?? "DNS state is unavailable"), notice), { status: 500, csrf });
     }
     return htmlResponse(layout("DNS", dashboardView(result.data), notice), { csrf });
   }

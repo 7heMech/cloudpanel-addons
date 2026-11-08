@@ -1,13 +1,14 @@
-import { htmlResponse, jsonResponse, newCsrfToken, readMutation } from "../../../lib/app-http";
+import { errorBlock, htmlResponse, jsonResponse, newCsrfToken, readMutation } from "../../../lib/app-http";
+import type { WebVerb } from "../../../lib/gateway-protocol";
 import { smtpService } from "./service";
 import { dashboardContent, dashboardView, layout } from "./views";
 
-const CHANGES: Record<string, (body: unknown) => ReturnType<typeof smtpService.assign>> = {
-  "/api/profiles": smtpService.saveProfile,
-  "/api/profiles/delete": smtpService.deleteProfile,
-  "/api/assign": smtpService.assign,
-  "/api/default": smtpService.setDefault,
-  "/api/grants": smtpService.saveGrants,
+const CHANGES: Record<string, WebVerb<"smtp">> = {
+  "/api/profiles": "save-profile",
+  "/api/profiles/delete": "delete-profile",
+  "/api/assign": "assign",
+  "/api/default": "set-default",
+  "/api/grants": "save-grants",
 };
 
 export async function handle(req: Request, path: string, notice?: { current: string; latest: string } | null): Promise<Response> {
@@ -15,13 +16,9 @@ export async function handle(req: Request, path: string, notice?: { current: str
     const csrf = newCsrfToken();
     const result = await smtpService.state();
     if (!result.ok || !result.data) {
-      return htmlResponse(layout("SMTP Relay", `<div class="alert" role="alert">${Bun.escapeHTML(result.error ?? "SMTP state is unavailable")}</div>`, notice), { status: 500, csrf });
+      return htmlResponse(layout("SMTP Relay", errorBlock(result.error ?? "SMTP state is unavailable"), notice), { status: 500, csrf });
     }
     return htmlResponse(layout("SMTP Relay", dashboardView(result.data), notice), { csrf });
-  }
-  if (req.method === "GET" && path === "/api/state") {
-    const result = await smtpService.state();
-    return jsonResponse(result, { status: result.ok ? 200 : 500 });
   }
   if (req.method === "POST") {
     const body = await readMutation(req, 256 * 1024);
@@ -30,9 +27,9 @@ export async function handle(req: Request, path: string, notice?: { current: str
       const result = await smtpService.test(body);
       return jsonResponse(result, { status: result.ok ? 200 : 400 });
     }
-    const change = CHANGES[path];
-    if (change) {
-      const result = await change(body);
+    const verb = CHANGES[path];
+    if (verb) {
+      const result = await smtpService.change(verb, body);
       if (result.ok && result.data) return jsonResponse({ ...result, html: dashboardContent(result.data) });
       return jsonResponse(result, { status: 400 });
     }

@@ -7,9 +7,7 @@ import type { KeyView, Settings, UserKeysView } from "./service";
 
 export function layout(title: string, content: string, updateNotice?: { current: string; latest: string } | null): string {
   return renderLayout(title, content, {
-    brand: "Security Keys",
     base: mountPath("security-keys"),
-    nav: [],
     css: STYLE,
     script: CLIENT_JS,
     updateNotice,

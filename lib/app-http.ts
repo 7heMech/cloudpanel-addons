@@ -90,15 +90,18 @@ function buildHeaders(contentType: string | null, policy: ResponsePolicy): Heade
 }
 
 /** A response with this project's header policy and an explicit content type. */
-export function policyResponse(body: string | null, contentType: string, policy: ResponsePolicy = {}): Response {
-  return new Response(body, { status: policy.status ?? 200, headers: buildHeaders(contentType, policy) });
+export function policyResponse(body: string | null, contentType: string, policy: ResponsePolicy | number = {}): Response {
+  const options = typeof policy === "number" ? { status: policy } : policy;
+  return new Response(body, { status: options.status ?? 200, headers: buildHeaders(contentType, options) });
 }
 
-export function htmlResponse(body: string, policy: ResponsePolicy = {}): Response {
+/** `policy` may be a bare status, for a reply that needs nothing else. */
+export function htmlResponse(body: string, policy: ResponsePolicy | number = {}): Response {
   return policyResponse(body, "text/html; charset=utf-8", policy);
 }
 
-export function jsonResponse(body: unknown, policy: ResponsePolicy = {}): Response {
+/** `policy` may be a bare status, for a reply that needs nothing else. */
+export function jsonResponse(body: unknown, policy: ResponsePolicy | number = {}): Response {
   return policyResponse(JSON.stringify(body), "application/json", policy);
 }
 
@@ -316,9 +319,12 @@ export function clientIp(req: Request): string {
 
 /** A hostname from a request, lowercased and without a trailing dot, or null. */
 export function validateDomain(value: unknown): string | null {
-  if (typeof value !== "string") return null;
-  const domain = value.trim().toLowerCase().replace(/\.$/, "");
-  return domain.length <= 253 && HOSTNAME_RE.test(domain) ? domain : null;
+  return typeof value === "string" ? validateExactDomain(value.trim().toLowerCase().replace(/\.$/, "")) : null;
+}
+
+/** The same check without the rewriting: a value not already in that form is refused. */
+export function validateExactDomain(value: unknown): string | null {
+  return typeof value === "string" && value.length <= 253 && HOSTNAME_RE.test(value) ? value : null;
 }
 
 /** Escape for interpolation into HTML text or a double-quoted attribute. */
@@ -347,9 +353,30 @@ export function escJs(value: unknown): string {
     .replaceAll("&", "\\u0026");
 }
 
+const CSP_DIRECTIVES = {
+  "default-src": "'none'",
+  "img-src": "'self' data:",
+  "style-src": "'unsafe-inline'",
+  "script-src": "'unsafe-inline'",
+  "connect-src": "'self'",
+  "form-action": "'none'",
+  "frame-ancestors": "'none'",
+  "base-uri": "'none'",
+};
+
+export type CspDirective = keyof typeof CSP_DIRECTIVES | "frame-src";
+
+/**
+ * The Content-Security-Policy every page gets, with `changes` replacing a
+ * directive's sources or adding a directive. A replaced directive keeps its
+ * place; an added one goes last.
+ */
+export function contentSecurityPolicy(changes: Partial<Record<CspDirective, string>> = {}): string {
+  return Object.entries({ ...CSP_DIRECTIVES, ...changes }).map(([name, sources]) => `${name} ${sources}`).join("; ");
+}
+
 export const SECURITY_HEADERS: Record<string, string> = {
-  "Content-Security-Policy":
-    "default-src 'none'; img-src 'self' data:; style-src 'unsafe-inline'; script-src 'unsafe-inline'; connect-src 'self'; form-action 'none'; frame-ancestors 'none'; base-uri 'none'",
+  "Content-Security-Policy": contentSecurityPolicy(),
   "X-Content-Type-Options": "nosniff",
   "Referrer-Policy": "no-referrer",
   "X-Frame-Options": "DENY",

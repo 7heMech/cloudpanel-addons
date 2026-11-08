@@ -3,9 +3,6 @@ import type { MemorySettings } from "../memory";
 import { callGatewayAction, type ActionResult } from "../../../lib/gateway-client";
 import type { WebVerb } from "../../../lib/gateway-protocol";
 import type { ResourceLimitsResult, ResourceLimitsState, PoolSiteState } from "../action";
-import { validateDomain } from "../../../lib/app-http";
-
-export { validateDomain };
 
 function call<T>(verb: WebVerb<"resource-limits">, args: string[] = [], input?: string): Promise<ActionResult<T>> {
   // Assigning a fleet writes one file per site and reloads each PHP version

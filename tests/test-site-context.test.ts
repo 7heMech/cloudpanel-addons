@@ -51,7 +51,7 @@ test("tab links point at the panel's own routes and mark the active one", () => 
 test("a hostname needing escaping stays escaped in links and site information", () => {
   const hostile = { domain: '"><img src=x>.example.test', user: "<b>user</b>", type: "php" };
   const html = renderLayout("Site", "", {
-    brand: "Test", base: "/addons/test", nav: [], script: "",
+    base: "/addons/test", script: "",
     site: { ...hostile, activeSlug: "maintenance" },
   });
   expect(html).not.toContain("<img src=x>");
@@ -59,16 +59,13 @@ test("a hostname needing escaping stays escaped in links and site information", 
   expect(siteInfoHtml(hostile)).toContain("&lt;b&gt;user&lt;/b&gt;");
 });
 
-test("the site shell replaces the addon's tabs and highlights Sites", () => {
+test("the site shell draws the site's tabs and highlights Sites", () => {
   const html = renderLayout("Site", "<p>content</p>", {
-    brand: "Maintenance Mode",
     base: "/addons/maintenance",
-    nav: [{ href: "/addons/maintenance/", label: "Sites" }],
     script: "",
     site: { ...php, varnishCache: false, publicIp: "203.0.113.10", activeSlug: "maintenance" },
   });
   expect(html).toContain('aria-label="Site navigation"');
-  expect(html).not.toContain('aria-label="Maintenance Mode navigation"');
   expect(html).toContain("<h3>Site User</h3>");
   expect(html).toContain("203.0.113.10");
   const sitesLink = html.slice(html.indexOf('href="/"'), html.indexOf('href="/addons/"'));
@@ -83,38 +80,25 @@ test("site information omits the instance address when the panel has none", () =
   expect(html).not.toContain("IP Address");
 });
 
-test("an addon page without site context keeps its own tabs and highlights Addons", () => {
-  const html = renderLayout("Fleet", "<p>content</p>", {
-    brand: "Maintenance Mode",
-    base: "/addons/maintenance",
-    nav: [{ href: "/addons/maintenance/", label: "Sites" }],
-    script: "",
-  });
-  expect(html).toContain('aria-label="Maintenance Mode navigation"');
-  expect(html).toContain("data-auto-active");
-  expect(html).not.toContain('aria-label="Site navigation"');
+test("an addon page without site context draws no tab strip and highlights Addons", () => {
+  const html = renderLayout("Fleet", "<p>content</p>", { base: "/addons/maintenance", script: "" });
+  expect(html).not.toContain('<nav class="clp-addon-tabs"');
   expect(html).toContain('href="/addons/" aria-current="page"');
 });
 
 test("the shell ships one confirmation dialog and one notice holder for every addon", () => {
-  const html = renderLayout("Fleet", "<p>content</p>", { brand: "Test", base: "/addons/test", nav: [], script: "" });
+  const html = renderLayout("Fleet", "<p>content</p>", { base: "/addons/test", script: "" });
   expect(html.match(/id="clp-confirm"/g)).toHaveLength(1);
   expect(html.match(/id="clp-flash"/g)).toHaveLength(1);
   expect(html).toContain('id="clp-confirm-accept"');
 });
 
-test("a site manager's shell offers its addon tabs without administrator links", () => {
-  const html = renderLayout("Instatic", "<p>content</p>", {
-    brand: "Instatic CMS", base: "/addons/instatic", admin: false,
-    nav: [{ href: "/addons/instatic/new", label: "New site" }], script: "",
-  });
-  expect(html).toContain('href="/addons/instatic/new"');
+test("a site manager's shell leaves out the administrator links", () => {
+  const html = renderLayout("Instatic", "<p>content</p>", { base: "/addons/instatic", admin: false, script: "" });
   expect(html).toContain('href="/"');
   expect(html).not.toContain('href="/addons/"');
   expect(html).not.toContain('id="clp-admin-area"');
-  const admin = renderLayout("Instatic", "", {
-    brand: "Instatic CMS", base: "/addons/instatic", nav: [], script: "",
-  });
+  const admin = renderLayout("Instatic", "", { base: "/addons/instatic", script: "" });
   expect(admin).toContain('href="/addons/"');
   expect(admin).toContain('id="clp-admin-area"');
 });

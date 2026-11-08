@@ -185,9 +185,7 @@ function managerPage(
   const job = options.job;
   const live = liveManagerJob(job ?? null);
   return htmlResponse(renderLayout(title, content, {
-    brand: "CloudPanel Addons",
     base: "/addons",
-    nav: [],
     css: MANAGER_INDEX_CSS,
     script: MANAGER_INDEX_JS + JOB_WATCH_JS + (live ? `
 const managerJobTarget = CLP_ROOT.querySelector('[data-manager-job-status]');
