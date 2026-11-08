@@ -65,10 +65,13 @@ panel's four columns and redrawn with the added ones a frame later. The tab
 therefore keeps the last reply in `sessionStorage`, cut to the sites that page
 listed, and a table listing exactly those sites is built from it when the page
 is parsed, before it is painted. The reply still comes on every page: it
-replaces the stored copy and rebuilds the cells whose facts changed; a change of
-switch takes effect on the next page, and a failed reply forgets the copy.
-Another account's table lists other sites and is not built from it, and
-following Logout forgets it.
+replaces the stored copy and rebuilds the cells whose facts changed, and a failed
+reply forgets the copy. Saving a switch on the addon's page forgets it too, so
+the next Sites page in that tab is built from the new switches; a switch changed
+from another tab or a shell shows on the page after next there. The preview
+under the switches keeps no copy and is built from each reply. Another account's
+table lists other sites and is not built from it, and following Logout forgets
+it.
 
 ## What is read at request time, and what is not
 

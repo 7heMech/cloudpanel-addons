@@ -36,8 +36,9 @@
   var desktopSite = document.documentElement.classList.contains("clp-tweaks-desktop-site");
   var NARROW_QUERY = SITES_MOBILE_JSON && !desktopSite ? "(max-width: 1100px)" : "not all";
   var COLUMNS_ON = SITES_TABLE_JSON;
-  // The tab's copy of the last reply; see start().
-  var PANEL_KEY = "clp_tweaks_panel";
+  // The tab's copy of the last reply; see start(). Panel Tweaks' own preview
+  // is where the switches change, so it draws from each reply and keeps no copy.
+  var PANEL_KEY = document.getElementById("clp-preview") ? null : "clp_tweaks_panel";
   var columnStyle = null;
   var tagged = false;
   var chosen = {};
@@ -205,6 +206,7 @@
 
     function storedPanel(rows) {
       var stored = null;
+      if (!PANEL_KEY) return null;
       try { stored = JSON.parse(window.sessionStorage.getItem(PANEL_KEY) || "null"); } catch (error) { return null; }
       if (!stored || !stored.tweaks || !stored.sites || stored.sites.length !== rows.length) return null;
       var have = {};
@@ -214,11 +216,11 @@
     }
 
     function storePanel(data) {
-      try { window.sessionStorage.setItem(PANEL_KEY, JSON.stringify(data)); } catch (error) {}
+      if (PANEL_KEY) try { window.sessionStorage.setItem(PANEL_KEY, JSON.stringify(data)); } catch (error) {}
     }
 
     function forgetPanel() {
-      try { window.sessionStorage.removeItem(PANEL_KEY); } catch (error) {}
+      if (PANEL_KEY) try { window.sessionStorage.removeItem(PANEL_KEY); } catch (error) {}
     }
 
     // The same cells, built again from the reply, where the stored copy had
