@@ -461,7 +461,11 @@ Both files are `nginx-common` conffiles, released for an upgrade the same way
 as the real-IP edit, one at a time and without a reload. The map stays while
 either still names it. Activation and the 15-minute repair put the edits back,
 and rebuild the map when CloudPanel's list changes. Switching off restores the
-lines and removes the map. A map file clp-addons did not write is refused.
+lines and removes the map. Switching on refuses a map file clp-addons did not
+write; switching off leaves such a file alone. A line the setting does not
+recognise, such as a log format wrapped onto two lines, is shown as a problem
+rather than as on. Root's lock covers the switch, and Lock settings turns it on,
+since switching it off reopens the tunnel forgery.
 Maintenance Mode builds its bypass address from the same `lib/visitor-ip.ts`.
 
 `bun tests/integration/integration-visitor-ip.ts` runs real Nginx in Docker

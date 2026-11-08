@@ -2033,7 +2033,7 @@ test("the backup compression API forwards the validated selection and repaints i
 const ALL_OFF = {
   version: 1, uploadProgressGuard: false, blockForgedRealIp: false, blockVhostInjection: false, isolatePhpPools: false,
   protectPhpMyAdmin: false, confineFileManager: false, replacePanelCert: false, loginJails: { panel: false, ssh: false },
-  databaseLoopback: false, blockClpctlInjection: false, blockTelemetry: false, serverInfoMotd: false,
+  databaseLoopback: false, blockClpctlInjection: false, blockTelemetry: false, serverInfoMotd: false, cloudflareVisitorIp: false,
 };
 
 /** The box with root's lock file of its own, and with MySQL already bound to loopback, so switching that on restarts nothing. */
@@ -2073,8 +2073,8 @@ test("Lock settings switches every lockable switch on, then locks", async () => 
   await act(b, ["lock-settings"]);
   const settings = readSettings(b.options.paths as SystemTweaksPaths);
   expect(settings).toMatchObject({
-    uploadProgressGuard: true, blockForgedRealIp: true, blockVhostInjection: true, isolatePhpPools: true, protectPhpMyAdmin: true,
-    confineFileManager: true, replacePanelCert: true, loginJails: { panel: true, ssh: true }, databaseLoopback: true,
+    uploadProgressGuard: true, blockForgedRealIp: true, cloudflareVisitorIp: true, blockVhostInjection: true, isolatePhpPools: true,
+    protectPhpMyAdmin: true, confineFileManager: true, replacePanelCert: true, loginJails: { panel: true, ssh: true }, databaseLoopback: true,
     blockClpctlInjection: true, blockTelemetry: true,
   });
   // Not a protection, so not touched.

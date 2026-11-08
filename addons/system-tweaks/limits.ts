@@ -18,7 +18,7 @@ export const PHP_POOLS_GATEWAY_TIMEOUT_MS = 4 * COMMAND_MS + 30_000;
 export const DATABASE_SERVICE_MS = 120_000;
 /** Coordinated stop/start, reload and readiness, the same for rollback, queries, lock waiting and the reply. */
 export const DATABASE_GATEWAY_TIMEOUT_MS = 2 * (2 * DATABASE_SERVICE_MS + COMMAND_MS + 60_000) + 8 * COMMAND_MS;
-/** Nginx validation and reload, a rollback of both, lock waiting and the reply; phpMyAdmin's switch uses it too. */
+/** Nginx validation and reload, a rollback of both, lock waiting and the reply; phpMyAdmin's and Cloudflare visitor IPs' switches use it too. */
 export const REAL_IP_GATEWAY_TIMEOUT_MS = 4 * COMMAND_MS + 60_000;
 /** The panel nginx's test and reload and their rollback, a fail2ban config test and reload, and the reply. */
 export const LOGIN_JAILS_GATEWAY_TIMEOUT_MS = 6 * COMMAND_MS + 30_000;
@@ -31,6 +31,6 @@ export const BACKUP_COMPRESSION_GATEWAY_TIMEOUT_MS = 90_000;
 /** A daemon-reload, two unit queries and the agent's restart, with lock waiting and the reply. */
 export const TELEMETRY_GATEWAY_TIMEOUT_MS = 4 * COMMAND_MS + 30_000;
 /** `lock-settings`: every lockable switch's change in turn, MySQL's restart included. */
-export const LOCK_SETTINGS_GATEWAY_TIMEOUT_MS = COMMAND_MS + 2 * REAL_IP_GATEWAY_TIMEOUT_MS + PANEL_CERT_GATEWAY_TIMEOUT_MS
+export const LOCK_SETTINGS_GATEWAY_TIMEOUT_MS = COMMAND_MS + 3 * REAL_IP_GATEWAY_TIMEOUT_MS + PANEL_CERT_GATEWAY_TIMEOUT_MS
   + 2 * POOL_GUARD_GATEWAY_TIMEOUT_MS + PHP_POOLS_GATEWAY_TIMEOUT_MS + CLPCTL_GUARD_GATEWAY_TIMEOUT_MS
   + TELEMETRY_GATEWAY_TIMEOUT_MS + LOGIN_JAILS_GATEWAY_TIMEOUT_MS + DATABASE_GATEWAY_TIMEOUT_MS;

@@ -716,7 +716,7 @@ function systemTweaksPreviewMutation(path: string, source: URL, body: Record<str
     (state.loginJails as { missing: string[] }).missing = [];
   } else if (path.endsWith("/lock-settings")) {
     // Every Hardening and Failed logins switch on, as the verb does, and the answer is the locked page.
-    for (const setting of ["vhost-guard", "phpmyadmin", "file-manager-guard", "panel-cert", "database-loopback", "clpctl-guard", "telemetry", "real-ip", "upload-guard"]) {
+    for (const setting of ["vhost-guard", "phpmyadmin", "file-manager-guard", "panel-cert", "database-loopback", "clpctl-guard", "telemetry", "real-ip", "visitor-ip", "upload-guard"]) {
       systemTweaksPreviewMutation(`/addons/system-tweaks/api/${setting}`, source, { enabled: true });
       Object.assign(state, systemTweaksPreview);
     }

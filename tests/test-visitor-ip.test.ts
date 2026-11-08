@@ -98,4 +98,16 @@ test("off keeps the map while a hand edit still names it, and a map clp-addons d
 
   writeFileSync(b.paths.maps, "map $a $b {}\n");
   expect(() => applyVisitorIp(true, b.options)).toThrow("clp-addons did not write it");
+  // Switching off, as disabling the addon does, still gives the files back and leaves that map alone.
+  writeFileSync(b.paths.nginxConf, NGINX.replace("main '$remote_addr", "main '$clp_visitor_ip"));
+  applyVisitorIp(false, b.options);
+  expect(readFileSync(b.paths.nginxConf, "utf8")).toBe(NGINX);
+  expect(readFileSync(b.paths.maps, "utf8")).toBe("map $a $b {}\n");
+});
+
+test("a line the setting does not recognise is reported, not shown as on", () => {
+  const b = box();
+  writeFileSync(b.paths.nginxConf, NGINX.replace("log_format main '$remote_addr", "log_format main\n    '$remote_addr"));
+  applyVisitorIp(true, b.options);
+  expect(visitorIpStatus(b.options)).toEqual({ applied: false, problem: `${b.paths.nginxConf} has no line with $remote_addr` });
 });

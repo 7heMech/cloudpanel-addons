@@ -72,7 +72,7 @@ test("repair runs its steps in a fixed order, the quick ones under one lock", ()
 
 test("Lock settings turns the protections on in this order, MySQL last", () => {
   expect(names(LOCK_SETTINGS.first)).toEqual([
-    "upload guard", "real IP", "phpMyAdmin", "panel cert", "vhost guard", "PHP pools", "File Manager guard", "clpctl guard",
+    "upload guard", "real IP", "visitor IP", "phpMyAdmin", "panel cert", "vhost guard", "PHP pools", "File Manager guard", "clpctl guard",
     "telemetry", "login jails",
   ]);
   expect(names(LOCK_SETTINGS.last)).toEqual(["database"]);

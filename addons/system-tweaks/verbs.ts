@@ -8,7 +8,7 @@ export const SYSTEM_TWEAKS_VERBS = {
   "install-updates": { web: "admin" },
   "set-upload-guard": { web: "admin", lock: "on" },
   "set-real-ip": { web: "admin", lock: "on" },
-  "set-visitor-ip": { web: "admin" },
+  "set-visitor-ip": { web: "admin", lock: "on" },
   "set-panel-cert": { web: "admin", lock: "on" },
   "set-vhost-guard": { web: "admin", lock: "on" },
   "set-phpmyadmin": { web: "admin", lock: "on" },

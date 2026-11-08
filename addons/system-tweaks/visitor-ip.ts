@@ -53,11 +53,14 @@ const EDITS: Record<"nginxConf" | "fastcgiParams", { lead: RegExp; off: string; 
 
 const literal = (text: string) => text.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 
+type Edit = (typeof EDITS)[keyof typeof EDITS][number];
+
+const line = (edit: Edit, text: string) => new RegExp(`${edit.lead.source}${literal(text)}(?=[ \\t;']|$)`, "m");
+
 function swap(content: string, file: keyof typeof EDITS, on: boolean): string {
   return EDITS[file].reduce((text, edit) => {
     const [from, to] = on ? [edit.off, edit.on] : [edit.on, edit.off];
-    const line = new RegExp(`${edit.lead.source}${literal(from)}(?=[ \\t;']|$)`, "m");
-    return text.replace(line, (_match, start: string) => `${start}${to}`);
+    return text.replace(line(edit, from), (_match, start: string) => `${start}${to}`);
   }, content);
 }
 
@@ -83,11 +86,15 @@ export function visitorIpStatus(options: VisitorIpOptions = {}): VisitorIpStatus
   const paths = { ...DEFAULT_VISITOR_IP_PATHS, ...options.paths };
   try {
     let applied = read(paths.maps) === mapsContent(paths);
+    const unknown: string[] = [];
     for (const file of ["nginxConf", "fastcgiParams"] as const) {
       const { content } = trustedVhost(paths[file], paths.rootUid);
-      if (swap(content, file, true) !== content) applied = false;
+      for (const edit of EDITS[file]) {
+        if (line(edit, edit.off).test(content)) applied = false;
+        else if (!line(edit, edit.on).test(content)) unknown.push(`${paths[file]} has no line with ${edit.off}`);
+      }
     }
-    return { applied, problem: "" };
+    return { applied: applied && unknown.length === 0, problem: unknown.join("; ") };
   } catch (error) {
     return { applied: false, problem: errorMessage(error) };
   }
@@ -97,7 +104,8 @@ function apply(on: boolean, options: VisitorIpOptions, reload: boolean, files: r
   const paths = { ...DEFAULT_VISITOR_IP_PATHS, ...options.paths };
   const run = options.run ?? ((command, args) => runCommand(command, args, COMMAND_MS));
   const existing = read(paths.maps);
-  if (existing !== null && !existing.startsWith(`${MAPS_MARKER}\n`)) throw new Error(`refusing ${paths.maps}: clp-addons did not write it`);
+  const foreign = existing !== null && !existing.startsWith(`${MAPS_MARKER}\n`);
+  if (on && foreign) throw new Error(`refusing ${paths.maps}: clp-addons did not write it`);
   return withNginxTransaction(null, { nginx: paths.nginx, systemctl: paths.systemctl }, run, (changes) => {
     for (const file of files) {
       if (read(paths[file]) === null) continue;
@@ -107,7 +115,7 @@ function apply(on: boolean, options: VisitorIpOptions, reload: boolean, files: r
     }
     // Off keeps the map while a file still names it, so Nginx can load it.
     const named = !on && changes.some((change) => change.content?.includes(VISITOR_IP));
-    if (reload) changes.push(nginxFileChange(paths.maps, on || named ? mapsContent(paths) : null, paths.rootUid));
+    if (reload && !foreign) changes.push(nginxFileChange(paths.maps, on || named ? mapsContent(paths) : null, paths.rootUid));
   }, { reload }).changed;
 }
 
