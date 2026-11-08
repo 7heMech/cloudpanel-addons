@@ -78,7 +78,9 @@ html.dark #theme-switch .sun { display: inline; }
    at vertical-align: middle and the panel's own nudges, rather than centred in
    a flex box: the panel's icons sit where the font's x-height puts them, so
    only the same layout puts these at the same place under every font. The
-   whitespace in the markup is the panel's space between icon and label. */
+   label carries the panel's space before it: shaped apart from the words, the
+   space rounds on its own and the cell comes out a sixty-fourth wider, enough
+   to move its divider a pixel. */
 @media (min-width: 941px) {
   .clp-addon-tool { display: block; line-height: 75px; }
   .clp-addon-tool > svg, #clp-account-button > .clp-addon-avatar { vertical-align: middle; }
