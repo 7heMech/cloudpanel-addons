@@ -231,6 +231,23 @@ const NEW_SITE_STYLE = `
 `;
 
 /**
+ * CloudPanel's page for turning on two-factor sign-in, on a phone.
+ *
+ * Its stylesheet draws the page at a fixed 850px and the code field at 350px,
+ * so a phone scrolls sideways and the manual-entry secret, one unbroken word,
+ * runs off the card. Below 760px the page takes the card's width, the secret
+ * breaks anywhere, and the field shares its row with the button.
+ */
+const ENABLE_MFA_STYLE = `
+@media (max-width: 760px) {
+  body .enable-mfa-container { width: auto; max-width: 850px; overflow-wrap: anywhere; }
+  body .enable-mfa-container .qr-code-container img { max-width: 100%; height: auto; margin-left: 0; }
+  body .mfa-code-form-container .row > .col-auto:first-child { flex: 1 1 0; min-width: 0; }
+  body .mfa-code-form-container input.mfa-code { width: 100%; max-width: 350px; }
+}
+`;
+
+/**
  * The switches as they stood when the templates were last rendered.
  *
  * Root work, and the only place the stored tweaks can be read from. An empty
@@ -332,7 +349,7 @@ export function deviceThemeSnippet(on: boolean): string {
 export function panelMobileSnippet(on: boolean, adminArea = false): string {
   if (!on) return "";
   if (adminArea) return `<style>${PANEL_HEADER_STYLE}${NEW_SITE_STYLE}${ADMIN_MOBILE_STYLE}</style>`;
-  return `<style>${PANEL_HEADER_STYLE}${NEW_SITE_STYLE}${SITE_TABLES_STYLE}</style><script>${SITE_TABLES_SCRIPT}</script>`;
+  return `<style>${PANEL_HEADER_STYLE}${NEW_SITE_STYLE}${ENABLE_MFA_STYLE}${SITE_TABLES_STYLE}</style><script>${SITE_TABLES_SCRIPT}</script>`;
 }
 
 /** Both headers carry the same opening tag; only Admin gets the sidebar rules. */

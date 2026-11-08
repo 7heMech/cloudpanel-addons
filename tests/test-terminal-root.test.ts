@@ -241,18 +241,24 @@ test("the page's button opens a root shell only for an allowed administrator, an
 
 test("the header control is in both of CloudPanel's headers and the addons' own, for administrators, hidden until root answers", () => {
   const headers = TERMINAL_TARGETS.filter((target) => target.slug.startsWith("root-shell"));
-  expect(headers.map((target) => target.template)).toEqual(["Frontend/Partial/header.html.twig", "Admin/Partial/header.html.twig"]);
+  expect(headers.map((target) => target.template)).toEqual([
+    "Frontend/Partial/header.html.twig", "Admin/Partial/header.html.twig",
+    "Frontend/Partial/header.html.twig", "Admin/Partial/header.html.twig",
+  ]);
   for (const target of headers) {
     const snippet = target.snippet("/addons/terminal");
     expect(snippet).toContain("{% if is_granted('ROLE_ADMIN') %}");
     expect(snippet).toContain('data-clp-root-shell style="display: none;"');
-    expect(snippet).toContain('fetch("/addons/terminal/api/root-access"');
+    // The account menu's copy, for phones, rides on the header item's script.
+    if (target.slug.endsWith("-menu")) expect(snippet).toContain('<a class="dropdown-item" href="/addons/terminal/root"');
+    else expect(snippet).toContain('fetch("/addons/terminal/api/root-access"');
     // Twig would read these as its own tags.
     expect(snippet.replace("{% if is_granted('ROLE_ADMIN') %}", "").replace("{% endif %}", "")).not.toMatch(/\{[{%#]/);
   }
   const page = renderLayout("Terminal", "", { base: "/addons/terminal", script: "" });
   expect(page).toContain('id="clp-root-shell" data-clp-root-shell hidden');
-  expect(renderLayout("Terminal", "", { base: "/addons/terminal", script: "", admin: false })).not.toContain("clp-root-shell");
+  expect(page).toContain('class="clp-root-shell-menu" data-clp-root-shell hidden');
+  expect(renderLayout("Terminal", "", { base: "/addons/terminal", script: "", admin: false })).not.toContain("data-clp-root-shell");
 });
 
 test("a root access check that fails says so, rather than that root never allowed the account", async () => {
