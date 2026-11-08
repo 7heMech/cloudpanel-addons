@@ -459,7 +459,7 @@ function instaticBackendOf(paths: StagerActionPaths, domain: string): InstaticBa
  * follow a symlink left at that name, and curl would then write the response --
  * session cookies included -- wherever it pointed.
  */
-function tempSecretFile(path: string): void {
+export function tempSecretFile(path: string): void {
   rmSync(path, { force: true });
   closeSync(openSync(path, "wx", 0o600));
 }
@@ -473,7 +473,7 @@ function tempSecretFile(path: string): void {
  * them ran after the secret was already on disk -- a window, however short, in
  * which the password sat in a file anyone could read.
  */
-function writeSecretFile(path: string, value: string): void {
+export function writeSecretFile(path: string, value: string): void {
   writeFileAtomic(path, value, { mode: 0o600 });
 }
 
@@ -734,7 +734,7 @@ function buildVhostTemplate(ctx: RunContext): boolean {
   return true;
 }
 
-function vhostTemplateExists(paths: StagerActionPaths, name: string): boolean {
+export function vhostTemplateExists(paths: StagerActionPaths, name: string): boolean {
   if (!applicationOk(name)) return false;
   try {
     const count = queryPanel(paths, (db) => {
@@ -920,7 +920,7 @@ function sqlLiteral(value: string): string {
 
 let panelWriteReject = "";
 
-function panelUpdateSite(ctx: RunContext, type: string, application: string, bodyFile = ""): boolean {
+export function panelUpdateSite(ctx: RunContext, type: string, application: string, bodyFile = ""): boolean {
   panelWriteReject = "";
   if (!ctx.siteCreated) {
     panelWriteReject = "refusing to write the panel record of a site this job did not create";
@@ -1751,7 +1751,7 @@ function runReplyError(ctx: RunContext, message: string): never {
   throw new RunReplyFailure(message);
 }
 
-function rollbackRun(ctx: RunContext): void {
+export function rollbackRun(ctx: RunContext): void {
   warnLine(`clone failed during '${ctx.step}', unwinding`);
   if (ctx.dumpFile) rmSync(ctx.dumpFile, { force: true });
 
@@ -1794,7 +1794,7 @@ function rollbackRun(ctx: RunContext): void {
   }
 }
 
-function newRunContext(id: string, dir: string, paths: StagerActionPaths): RunContext {
+export function newRunContext(id: string, dir: string, paths: StagerActionPaths): RunContext {
   return {
     id, dir, paths,
     source: "", target: "", tls: "", port: "", email: "", mfa: "", step: "",

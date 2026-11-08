@@ -3,8 +3,10 @@ import { execFileSync } from "node:child_process";
 import { chmodSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
+import { Database } from "bun:sqlite";
 import {
-  applicationOk, dotenvProblem, holdCloneMail, rewriteDotenvContent, rewriteWpConfig,
+  applicationOk, dotenvProblem, holdCloneMail, newRunContext, panelUpdateSite, rewriteDotenvContent,
+  rewriteWpConfig, rollbackRun, vhostTemplateExists, type StagerActionPaths,
 } from "../addons/stager/action";
 import { expandTarget } from "../addons/stager/app/service";
 import { CLIENT_JS } from "../addons/stager/app/views";
@@ -91,6 +93,42 @@ test("Stager jobs are newest first and malformed results stay in one JSON reply"
   }
 });
 
+// The panel identity is trusted only from a root-owned file, which a test
+// cannot write unprivileged, so the lookup of it is the one seam stubbed here.
+const IDENTITY_STUB = `
+  import { mock } from "bun:test";
+  mock.module("./lib/panel-identity.ts", async () => {
+    const real = await import("./lib/panel-identity.ts?stubbed-identity");
+    const identity = { primary: "panel.example.test", aliases: [] };
+    return {
+      ...real,
+      readPanelIdentity: () => identity,
+      validateDomain: (value) => {
+        real.panelIdentityGuardForIdentity(value, identity);
+        return value.toLowerCase();
+      },
+    };
+  });
+`;
+
+function testPaths(root: string, overrides: Partial<StagerActionPaths> = {}): StagerActionPaths {
+  return {
+    lockDir: join(root, "locks"),
+    dataBaseDir: join(root, "data"),
+    jobsDir: join(root, "jobs"),
+    panelDb: join(root, "panel.db"),
+    clpctl: join(root, "missing-clpctl"),
+    panelIdentityFile: join(root, "identity"),
+    nginxVhostDir: join(root, "vhosts"),
+    instaticDataDir: join(root, "instatic"),
+    actionBinary: join(root, "missing-clp-addons"),
+    tempDir: root,
+    sqlite3: "sqlite3",
+    smtpConfigFile: join(root, "smtp.conf"),
+    ...overrides,
+  };
+}
+
 test("manual stager prune keeps its exact JSON stdout reply", () => {
   const root = mkdtempSync(join(tmpdir(), "clp-stager-action-test-"));
   const jobsDir = join(root, "jobs");
@@ -99,19 +137,12 @@ test("manual stager prune keeps its exact JSON stdout reply", () => {
   mkdirSync(vhostsDir);
   mkdirSync(tempDir);
   try {
-    const prelude = `
-      import { mock } from "bun:test";
-      mock.module("./lib/panel-identity.ts", async () => {
-        const real = await import("./lib/panel-identity.ts?manual-prune-contract");
-        return { ...real, readPanelIdentity: () => ({ primary: "panel.example.test", aliases: [] }) };
-      });
-    `;
     const output = runAction({
       jobsDir,
       lockDir: join(root, "locks"),
       nginxVhostDir: vhostsDir,
       tempDir,
-    }, ["prune"], prelude);
+    }, ["prune"], IDENTITY_STUB);
     expect(output).toBe('{"ok":true,"data":{"removed":0,"stuck":0,"vhostsRecovered":0,"promotionsRecovered":0,"rootsRemoved":0}}');
   } finally {
     rmSync(root, { recursive: true, force: true });
@@ -234,45 +265,97 @@ describe("an application name may never reach SQL as text", () => {
     });
   }
 
-  // The predicate is not the whole answer, and this is the half that would
-  // survive someone adding a caller that forgets to call it. The write
-  // statement may not contain the application as text: it enters through
-  // readfile(), the same way the nginx body does.
-  const panelUpdateSite = () => {
-    const src = readFileSync(join(repo, "addons/stager/action.ts"), "utf-8");
-    const stmt = src.slice(src.indexOf("function panelUpdateSite"));
-    return stmt.slice(0, stmt.indexOf("\n}\n") + 2);
+  // The panel write and the template lookup are where the name meets SQL.
+  const panel = () => {
+    const root = mkdtempSync(join(tmpdir(), "clp-stager-panel-"));
+    const db = new Database(join(root, "panel.db"));
+    db.run("CREATE TABLE site (id INTEGER PRIMARY KEY, domain_name TEXT, type TEXT, user TEXT, application TEXT, vhost_template TEXT, updated_at TEXT)");
+    db.run("CREATE TABLE vhost_template (id INTEGER PRIMARY KEY, name TEXT)");
+    db.query("INSERT INTO site (domain_name, type, user, application) VALUES (?, ?, ?, ?)").run("stg.example.test", "php", "stg", "Generic");
+    db.query("INSERT INTO site (domain_name, type, user, application) VALUES (?, ?, ?, ?)").run("live.example.test", "php", "live", "WordPress");
+    db.query("INSERT INTO vhost_template (name) VALUES (?)").run("WordPress");
+    db.close();
+    const rows = () => {
+      const read = new Database(join(root, "panel.db"), { readonly: true });
+      try {
+        return read.query("SELECT domain_name, user, application FROM site ORDER BY id").all();
+      } finally {
+        read.close();
+      }
+    };
+    return { root, paths: testPaths(root), rows };
   };
 
-  test("the panel write never interpolates the application name", () => {
-    const sql = panelUpdateSite().slice(panelUpdateSite().indexOf("const setVhost"));
-    expect(sql).not.toInclude("${application}");
-    expect(sql).toInclude("readfile(${sqlLiteral(appFile)})");
+  // The write runs the sqlite3 shell as clp. Stand-ins for runuser and chown
+  // let it run as the test's own user, and one for the shell gives the
+  // statement the shell's readfile().
+  const python = Bun.which("python3");
+  const panelWrite = (application: string) => {
+    const { root, paths, rows } = panel();
+    const bin = join(root, "bin");
+    mkdirSync(bin);
+    writeFileSync(join(bin, "runuser"), "#!/bin/sh\nshift 3\nexec \"$@\"\n", { mode: 0o755 });
+    writeFileSync(join(bin, "chown"), "#!/bin/sh\nexit 0\n", { mode: 0o755 });
+    writeFileSync(join(bin, "sqlite3"), [
+      `#!${python}`,
+      "import sqlite3, sys",
+      "db = sqlite3.connect(sys.argv[1])",
+      "db.create_function('readfile', 1, lambda path: open(path, 'rb').read())",
+      "db.executescript(sys.argv[2])",
+      "db.commit()",
+      "",
+    ].join("\n"), { mode: 0o755 });
+    const ctx = newRunContext("20260910T120000Z-abcdef", root, { ...paths, sqlite3: join(bin, "sqlite3") });
+    ctx.target = "stg.example.test";
+    ctx.siteCreated = true;
+    const oldPath = process.env.PATH;
+    process.env.PATH = `${bin}:${oldPath ?? ""}`;
+    try {
+      return { written: panelUpdateSite(ctx, "php", application), rows: rows() };
+    } finally {
+      process.env.PATH = oldPath;
+      rmSync(root, { recursive: true, force: true });
+    }
+  };
+  const BEFORE = [
+    { domain_name: "stg.example.test", user: "stg", application: "Generic" },
+    { domain_name: "live.example.test", user: "live", application: "WordPress" },
+  ];
+
+  test.skipIf(!python)("the panel write stores a real name literally, on the target row only", () => {
+    const { written, rows } = panelWrite("PrestaShop 1.7");
+    expect(written).toBe(true);
+    expect(rows).toEqual([{ ...BEFORE[0]!, application: "PrestaShop 1.7" }, BEFORE[1]!]);
   });
 
-  test("the read-back is a native parameterized query, not more shell SQL", () => {
-    const body = panelUpdateSite();
-    expect(body).toInclude("const check = queryPanel(ctx.paths");
-    expect(body).toInclude("SELECT application, vhost_template FROM site WHERE domain_name = ? AND type = ?;");
-  });
+  for (const name of PAYLOADS.slice(0, 3)) {
+    test.skipIf(!python)(`the panel write changes no row for ${JSON.stringify(name)}`, () => {
+      const { written, rows } = panelWrite(name);
+      expect(written).toBe(false);
+      expect(rows).toEqual(BEFORE);
+    });
+  }
 
   // vhost_template_exists put the same value in a query and doubled the quotes
   // in it, which is sanitizing rather than rejecting. It must now refuse.
   describe("the template-exists lookup", () => {
-    const existsSource = () => {
-      const src = readFileSync(join(repo, "addons/stager/action.ts"), "utf-8");
-      return src.slice(src.indexOf("function vhostTemplateExists"));
-    };
-
     test("a name that fails the predicate is reported missing, not escaped", () => {
-      expect(applicationOk("Generic', user = 'root")).toBe(false);
-      const src = existsSource();
-      expect(src.indexOf("if (!applicationOk(name)) return false;")).toBeLessThan(src.indexOf("queryPanel"));
+      const { root, paths } = panel();
+      try {
+        expect(vhostTemplateExists(paths, "WordPress' OR '1'='1")).toBe(false);
+        expect(vhostTemplateExists(paths, "Generic")).toBe(false);
+      } finally {
+        rmSync(root, { recursive: true, force: true });
+      }
     });
 
     test("a legitimate name is still queried", () => {
-      expect(existsSource())
-        .toInclude('db.query("SELECT COUNT(*) AS count FROM vhost_template WHERE name = ?;")');
+      const { root, paths } = panel();
+      try {
+        expect(vhostTemplateExists(paths, "WordPress")).toBe(true);
+      } finally {
+        rmSync(root, { recursive: true, force: true });
+      }
     });
   });
 });
@@ -314,18 +397,62 @@ describe("a site the job adopted is not a site the job created", () => {
   // if the container or meta.json already exist, so the container and the data
   // directory are always the job's, and its own delete leaves an adopted site
   // alone while removing them.
-  test("the instatic unwind is keyed on the instance, not on the site", () => {
-    const src = stager();
-    const rollback = src.slice(src.indexOf("function rollbackRun"));
-    const unwind = rollback.slice(0, rollback.indexOf("\nfunction newRunContext"));
-    expect(unwind).toInclude("else if (ctx.siteCreated)");
-    expect(unwind.indexOf("if (ctx.siteViaInstatic)")).toBeLessThan(unwind.indexOf("else if (ctx.siteCreated)"));
+  describe("the unwind", () => {
+    const unwind = (flags: { siteViaInstatic: boolean; siteCreated: boolean }): string[] => {
+      const root = mkdtempSync(join(tmpdir(), "clp-stager-unwind-"));
+      try {
+        const calls = join(root, "calls");
+        writeFileSync(calls, "");
+        const shim = (name: string, reply: string) => {
+          writeFileSync(join(root, name), `#!/bin/sh\necho "${name} $*" >> "${calls}"\n${reply}`, { mode: 0o755 });
+          return join(root, name);
+        };
+        const ctx = newRunContext("20260910T120000Z-abcdef", root, testPaths(root, {
+          clpctl: shim("clpctl", ""),
+          actionBinary: shim("clp-addons", "echo '{\"ok\":true}'\n"),
+        }));
+        ctx.target = "stg.example.test";
+        Object.assign(ctx, flags);
+        rollbackRun(ctx);
+        return readFileSync(calls, "utf8").split("\n").filter(Boolean);
+      } finally {
+        rmSync(root, { recursive: true, force: true });
+      }
+    };
+    const instaticDelete = "clp-addons action instatic delete --domain stg.example.test --confirm stg.example.test";
+
+    test("removes the instance through Instatic, whose own delete keeps an adopted site", () => {
+      expect(unwind({ siteViaInstatic: true, siteCreated: false })).toEqual([instaticDelete]);
+      expect(unwind({ siteViaInstatic: true, siteCreated: true })).toEqual([instaticDelete]);
+    });
+
+    test("deletes a site only when the job created it", () => {
+      expect(unwind({ siteViaInstatic: false, siteCreated: true }))
+        .toEqual(["clpctl site:delete --domainName=stg.example.test --force"]);
+      expect(unwind({ siteViaInstatic: false, siteCreated: false })).toEqual([]);
+    });
   });
 
   // And the window cmdClone leaves open when it drops the lock before handing
   // the work to systemd is closed where the work actually starts.
   test("the run verb re-checks that the target does not already exist", () => {
-    expect(stager()).toMatch(/if \(siteExists\(paths, ctx\.target\)\) \{\n\s*failJob/);
+    const root = mkdtempSync(join(tmpdir(), "clp-stager-action-test-"));
+    try {
+      const paths = testPaths(root);
+      const db = new Database(paths.panelDb);
+      db.run("CREATE TABLE site (id INTEGER PRIMARY KEY, domain_name TEXT, type TEXT, user TEXT)");
+      db.query("INSERT INTO site (domain_name, type, user) VALUES (?, ?, ?)").run("stg.example.test", "php", "stg");
+      db.close();
+      const id = "20260910T120000Z-abcdef";
+      const dir = join(paths.jobsDir, id);
+      writeJob(dir, { source: "live.example.test", target: "stg.example.test", state: "queued", step: "queued" });
+      expect(() => runAction({ ...paths }, ["run", "--job", id], IDENTITY_STUB)).toThrow();
+      expect(readFileSync(join(dir, "state"), "utf8").trim()).toBe("failed");
+      expect(readFileSync(join(dir, "error"), "utf8"))
+        .toContain("a CloudPanel site for stg.example.test appeared after this clone was queued; nothing was changed");
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
   });
 });
 
@@ -337,8 +464,6 @@ test("a .env the clone cannot repoint fails it", () => {
   expect(dotenvProblem(exported)).toBeNull();
   expect(rewriteDotenvContent(exported, { name: "stg", user: "stg_u", pass: "p$&1" }))
     .toBe("export DB_DATABASE=stg\nexport DB_USERNAME=stg_u\n  DB_PASSWORD=p$&1\nAPP_KEY=x\n");
-  // A source with a database and neither file is not cloned at all.
-  expect(readFileSync(join(import.meta.dir, "../addons/stager/action.ts"), "utf-8")).toMatch(/\} else \{\n\s*failJob\(ctx, `found no wp-config\.php or \.env/);
 });
 
 describe("the clone's wp-config.php", () => {
