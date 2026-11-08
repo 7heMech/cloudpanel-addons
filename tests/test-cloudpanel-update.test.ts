@@ -34,11 +34,11 @@ const TEMPLATE = "Frontend/Partial/header.html.twig";
 const NAV = '<div class="nav-link-container">';
 const SITES = '<div class="sites">';
 
-function injection(addon: string, anchor: string): Injection {
+function injection(addon: string, anchor: string, required = true): Injection {
   return {
     addon,
     url: `/addons/${addon}`,
-    target: { slug: "link", template: TEMPLATE, anchorAfter: anchor, required: true, snippet: (url) => `<a href="${url}">${addon}</a>` },
+    target: { slug: "link", template: TEMPLATE, anchorAfter: anchor, required, snippet: (url) => `<a href="${url}">${addon}</a>` },
   };
 }
 
@@ -99,6 +99,23 @@ test("a CloudPanel upgrade that removed an anchor leaves the template and its re
   expect(h.read()).toBe(markup);
   expect(h.record("pristine")).toBe(pristine);
   expect(h.record("version").trim()).toBe(OLD);
+});
+
+test("a CloudPanel upgrade that removed only an optional block's anchor patches the rest and leaves that block out", () => {
+  const h = patchedHeader();
+  // The manager's tab is required; the second block is an extra that can go without.
+  const injections = [injection("manager", NAV), injection("terminal", SITES, false)];
+  reconcile(injections, { ...h.options, panelVersion: OLD });
+  const markup = `<header class="v2">\n${NAV}\n</div>\n<div class="sites-v2">\n</div>\n</header>\n`;
+  h.upgrade(markup);
+
+  const result = reconcile(injections, { ...h.options, panelVersion: NEW });
+  expect(result.rebaselined).toEqual([{ file: TEMPLATE, from: OLD, to: NEW }]);
+  expect(Object.fromEntries(result.statuses.map((status) => [status.addon, status.state])))
+    .toEqual({ manager: "ok", terminal: "anchor-not-found-in-markup" });
+  expect(h.read()).toContain(">manager</a>");
+  expect(h.read()).not.toContain(">terminal</a>");
+  expect(h.record("version").trim()).toBe(NEW);
 });
 
 test("a CloudPanel upgrade that repeated an anchor is refused, since the block could land in either place", () => {

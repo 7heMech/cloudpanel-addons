@@ -283,8 +283,9 @@ hold:
 - The new text fits. For a template, every anchor of every block wanted in it
   appears exactly once: missing gives the block nowhere to go, and twice means
   CloudPanel restructured around it, so the block could land in the wrong
-  place. One block that does not fit holds back the whole file, since its
-  blocks are rendered together. For the master vhost, there is exactly one
+  place. A required block that does not fit, or any repeated anchor, holds back
+  the whole file, since its blocks are rendered together; an optional block
+  whose anchor is gone is left out and the rest are patched, as on any pass. For the master vhost, there is exactly one
   server block on port 8443 and no `/addons/` location of CloudPanel's own;
   `nginx -t` and the rollback still guard the write. Maintenance Mode's block is
   appended rather than anchored, so `global_settings` fits unless it already

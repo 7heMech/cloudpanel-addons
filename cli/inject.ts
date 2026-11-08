@@ -146,11 +146,16 @@ export interface Rebaselined {
   to: string;
 }
 
-/** Why the new markup cannot take every block, or null when it can. */
+/**
+ * Why the new markup cannot take its blocks, or null when it can. An optional
+ * block whose anchor is gone is only left out, as it would be on any pass; a
+ * repeated anchor refuses the file whoever needs it, since CloudPanel
+ * restructured around it and the block could land in the wrong place.
+ */
 function misfit(upstream: string, list: Injection[]): Refusal | null {
   for (const inj of list) {
     const found = occurrences(upstream, anchorOf(inj) ?? "");
-    if (found === 0) return "anchor-missing";
+    if (found === 0 && inj.target.required) return "anchor-missing";
     if (found > 1) return "anchor-repeated";
   }
   return null;
