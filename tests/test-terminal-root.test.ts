@@ -11,6 +11,7 @@ import { ActionFailure } from "../lib/action";
 import {
   parseTerminalRequest, resolveTerminalTarget, runTerminalAction, type TerminalActionPaths,
 } from "../addons/terminal/action";
+import { rootAuth, totp } from "../addons/terminal/root-auth";
 import { readRootGrants, rootAccess } from "../addons/terminal/root-access";
 import { TERMINAL_TARGETS } from "../addons/terminal/inject/targets";
 import { renderLayout } from "../lib/app-ui";
@@ -20,6 +21,24 @@ import { dashboardView, popupPage } from "../addons/terminal/app/views";
 const uid = process.getuid?.() ?? 0;
 const base = realpathSync(mkdtempSync(`${tmpdir()}/terminal-root-`));
 let paths: TerminalActionPaths;
+const binding = "a".repeat(64);
+const authStorage = { dir: `${base}/box/auth`, lock: `${base}/locks/auth.lock`, securityKeys: `${base}/box/security-keys.conf` };
+function auth(verb: "options" | "verify" | "consume", input: Record<string, unknown> = {}, now = Date.now(), session = binding) {
+  return rootAuth(verb, "alice", "1", session, input, paths.rootAccess, now, authStorage) as any;
+}
+const SECRET = "JBSWY3DPEHPK3PXP";
+/** A well-formed code that none of the three accepted steps matches. */
+function wrongCode(now: number) {
+  const step = Math.floor(now / 30000);
+  const valid = [step - 1, step, step + 1].map((n) => totp(SECRET, n));
+  return ["000000", "000001", "000002", "000003"].find((code) => !valid.includes(code))!;
+}
+function ticket() {
+  change("UPDATE user SET mfa_secret = 'JBSWY3DPEHPK3PXP' WHERE user_name = 'alice'");
+  allow("alice");
+  const now = Date.now();
+  return auth("verify", { ...auth("options", {}, now), code: totp("JBSWY3DPEHPK3PXP", Math.floor(now / 30000)) }, now).ticket;
+}
 
 afterAll(() => rmSync(base, { recursive: true, force: true }));
 
@@ -131,7 +150,7 @@ test("an open root shell ends once its grant does", async () => {
   const audit: string[] = [];
   const calls: string[][] = [];
   const running = runTerminalAction(["session", "--root", "--panel-user=alice", "--cols=80", "--rows=24"], {
-    paths, processUid: 0, env: { CLP_ADDONS_DUPLEX_WORKER: "1", CLP_ADDONS_SESSION_2FA: "1" }, rootRecheckMs: 20,
+    paths, rootAuthStorage: authStorage, processUid: 0, env: { CLP_ADDONS_TICKET: ticket(), CLP_ADDONS_SESSION_BINDING: binding, CLP_ADDONS_DUPLEX_WORKER: "1", CLP_ADDONS_SESSION_2FA: "1" }, rootRecheckMs: 20,
     audit: (line) => audit.push(line),
     spawn: ((argv: string[]) => { calls.push(argv); return Bun.spawn(["sleep", "30"]); }) as unknown as typeof Bun.spawn,
   });
@@ -142,7 +161,7 @@ test("an open root shell ends once its grant does", async () => {
     "/usr/sbin/runuser", "--login", "--whitelist-environment=TERM,CLP_SITE_DIR,CLP_PTY_SIZE,CLP_ROOT_SHELL",
     "--command=exec /usr/local/bin/clp-addons terminal-pty", "--", "root",
   ]]);
-  expect(audit[0]).toBe("alice opened a root shell as root");
+  expect(audit[0]).toBe("alice opened a root shell as root, verified with an authenticator code");
   expect(audit.some((line) => line.includes("root shell ended: A root terminal needs 2FA"))).toBe(true);
   expect(audit.at(-1)).toContain("alice closed a root shell as root");
 });
@@ -150,7 +169,7 @@ test("an open root shell ends once its grant does", async () => {
 function rootSession(extra: Record<string, unknown>, child: () => ReturnType<typeof Bun.spawn>) {
   const audit: string[] = [];
   const running = runTerminalAction(["session", "--root", "--panel-user=alice", "--cols=80", "--rows=24"], {
-    paths, processUid: 0, env: { CLP_ADDONS_DUPLEX_WORKER: "1", CLP_ADDONS_SESSION_2FA: "1" }, rootRecheckMs: 20,
+    paths, rootAuthStorage: authStorage, processUid: 0, env: { CLP_ADDONS_TICKET: ticket(), CLP_ADDONS_SESSION_BINDING: binding, CLP_ADDONS_DUPLEX_WORKER: "1", CLP_ADDONS_SESSION_2FA: "1" }, rootRecheckMs: 20,
     audit: (line) => audit.push(line),
     spawn: child as unknown as typeof Bun.spawn,
     ...extra,
@@ -301,4 +320,83 @@ test("a passkey sign-in opens it with a key the account had when root allowed it
   // Removed or revoked, the key no longer opens one, even from the session it signed in.
   store(["added-later"]);
   expect(access("alice", "passkey:alice-key").problem).toContain("no longer on your account");
+});
+
+
+test("TOTP matches the RFC 6238 SHA-1 test vector", () => {
+  expect(totp("GEZDGNBVGY3TQOJQGEZDGNBVGY3TQOJQ", 1)).toBe("287082");
+});
+test("root verification tickets are bound to a session and single-use", () => {
+  const proof = ticket();
+  expect(() => auth("consume", { ticket: proof }, Date.now(), "b".repeat(64))).toThrow("Verify with 2FA");
+  auth("consume", { ticket: proof });
+  expect(() => auth("consume", { ticket: proof })).toThrow("Verify with 2FA");
+});
+test("expired tickets and challenges, replayed codes and revoked grants are refused", () => {
+  const proof = ticket();
+  const now = Date.now();
+  expect(() => auth("consume", { ticket: proof }, now + 60001)).toThrow("Verify with 2FA");
+  const challenge = auth("options").challenge;
+  expect(() => auth("verify", { challenge, code: totp("JBSWY3DPEHPK3PXP", Math.floor(now / 30000)) })).toThrow("already used");
+  const expired = auth("options", {}, now).challenge;
+  expect(() => auth("verify", { challenge: expired, code: "123456" }, now + 300001)).toThrow("expired");
+  change("UPDATE user SET mfa = 0 WHERE user_name = 'alice'");
+  expect(() => auth("consume", { ticket: proof })).toThrow("needs 2FA");
+});
+test("five wrong codes throttle the account across sessions; malformed ones do not count", () => {
+  change(`UPDATE user SET mfa_secret = '${SECRET}' WHERE user_name = 'alice'`);
+  allow("alice");
+  expect(() => auth("verify", { ...auth("options"), code: "bad" })).toThrow("six-digit");
+  for (let i = 0; i < 5; i++) {
+    const now = Date.now();
+    expect(() => auth("verify", { ...auth("options", {}, now), code: wrongCode(now) }, now)).toThrow("Invalid or already used");
+  }
+  expect(() => auth("options", {}, Date.now(), "b".repeat(64))).toThrow("Too many failed verifications");
+});
+test("twenty wrong codes in a day throttle the account even when spread out", () => {
+  change(`UPDATE user SET mfa_secret = '${SECRET}' WHERE user_name = 'alice'`);
+  allow("alice");
+  const start = Date.now();
+  for (let i = 0; i < 20; i++) {
+    const now = start + i * 100_000;
+    expect(() => auth("verify", { ...auth("options", {}, now), code: wrongCode(now) }, now)).toThrow("Invalid or already used");
+  }
+  expect(() => auth("options", {}, start + 20 * 100_000)).toThrow("Too many failed verifications");
+});
+test("only failed proofs spend the attempt budget", () => {
+  change("UPDATE user SET mfa_secret = 'JBSWY3DPEHPK3PXP' WHERE user_name = 'alice'");
+  allow("alice");
+  const start = Date.now();
+  for (let i = 0; i < 6; i++) {
+    const now = start + i * 30_000;
+    expect(auth("verify", { ...auth("options", {}, now), code: totp("JBSWY3DPEHPK3PXP", Math.floor(now / 30000)) }, now).ticket).toBeString();
+  }
+});
+test("passkeys are offered only while Security Keys is on, and only those the account still has", () => {
+  allow("alice");
+  mkdirSync(paths.rootAccess.securityKeys, { recursive: true });
+  const store = (keys: string[]) => writeFileSync(`${paths.rootAccess.securityKeys}/credentials.json`,
+    JSON.stringify({ users: { alice: { userId: 1, keys: keys.map((id) => ({ id, name: id })) } } }), { mode: 0o600 });
+  store(["alice-key"]);
+  expect(auth("options").keys).toEqual([]);
+  writeFileSync(authStorage.securityKeys, "");
+  expect(auth("options").keys).toEqual(["alice-key"]);
+  store([]);
+  expect(auth("options").keys).toEqual([]);
+});
+test("a challenge cannot be answered from a different session", () => {
+  allow("alice");
+  const challenge = auth("options").challenge;
+  expect(() => auth("verify", { challenge, code: "123456" }, Date.now(), "b".repeat(64))).toThrow("expired");
+});
+test("a root worker refuses a direct request without fresh verification", async () => {
+  allow("alice");
+  let spawned = false;
+  const result = await runTerminalAction(["session", "--root", "--panel-user=alice", "--cols=80", "--rows=24"], {
+    paths, rootAuthStorage: authStorage, processUid: 0,
+    env: { CLP_ADDONS_SESSION_BINDING: binding, CLP_ADDONS_DUPLEX_WORKER: "1", CLP_ADDONS_SESSION_2FA: "1" },
+    spawn: (() => { spawned = true; throw new Error("must not spawn"); }) as any,
+  });
+  expect(result).toBe(1);
+  expect(spawned).toBe(false);
 });

@@ -43,6 +43,7 @@ export function ownerOf(user: string, sessionId: string): Owner {
 }
 
 export interface OpenRequest {
+  ticket?: string;
   /** Null for a root shell on the server itself. */
   domain: string | null;
   cols: number;
@@ -67,6 +68,7 @@ const gatewayOpener: StreamOpener = (request, handlers) =>
     verb: "session",
     args: [request.domain === null ? "--root" : `--domain=${request.domain}`, `--cols=${request.cols}`, `--rows=${request.rows}`],
     sessionId: request.sessionId,
+    ticket: request.ticket,
     maxLineBytes: MAX_LINE_BYTES,
     onLine: handlers.onLine,
     onClose: handlers.onClose,

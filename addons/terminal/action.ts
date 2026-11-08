@@ -2,7 +2,7 @@
  * The root half of a terminal: decide whether a shell may be opened, record
  * that it was, and hand the gateway's pipes to `runuser`.
  *
- * Nothing typed in the browser reaches this process. Its stdin and stdout are
+ * Shell input never reaches this process. Its stdin and stdout are
  * inherited by `runuser`, which passes them to the helper it starts as the
  * site's user, so the only bytes this side ever writes are its own refusal.
  * The panel user arrives from the gateway, which took it from the CloudPanel
@@ -11,14 +11,15 @@
  * A root shell (`--root`) runs the same way as root, for an administrator root
  * allowed from a shell; see root-access.ts.
  */
+import { DEFAULT_ROOT_AUTH_PATHS, rootAuth } from "./root-auth";
 import { openPanelDatabase } from "../../lib/panel-db";
 import { existsSync, readdirSync, readFileSync, realpathSync } from "node:fs";
 import { join } from "node:path";
-import { ActionFailure, emitActionError, emitActionOk, failAction } from "../../lib/action";
+import { ActionFailure, emitActionError, emitActionOk, failAction, readJsonRequest } from "../../lib/action";
 import { errorMessage } from "../../lib/errors";
 import { validateDomain } from "../../lib/panel-identity";
 import { CLI_BIN, PANEL_DB } from "../../lib/paths";
-import { DUPLEX_WORKER_MARKER, SESSION_2FA_ENV } from "../../lib/gateway-protocol";
+import { DUPLEX_WORKER_MARKER, SESSION_2FA_ENV, SESSION_BINDING_ENV, TICKET_ENV } from "../../lib/gateway-protocol";
 import { PANEL_USER_NAME_RE, panelUserOwnsSite } from "../../lib/panel-users";
 import { readUnixAccounts, siteAccountProblem, splitSharedUids } from "../../lib/site-accounts";
 import { DEFAULT_ROOT_ACCESS_PATHS, rootAccess, type RootAccessPaths } from "./root-access";
@@ -46,6 +47,8 @@ export interface TerminalActionPaths {
 
 interface TerminalActionOptions {
   paths?: Partial<TerminalActionPaths>;
+  /** Test-only state paths; production state is root-owned. */
+  rootAuthStorage?: typeof DEFAULT_ROOT_AUTH_PATHS;
   processUid?: number;
   /** Test-only; production always guards against the panel's own hostname. */
   domainValidator?: (value: string) => string;
@@ -252,15 +255,26 @@ export async function runTerminalAction(argv: string[], options: TerminalActionO
   let target: TerminalTarget;
   const paths = { ...DEFAULT_TERMINAL_PATHS, ...options.paths };
   // Set by the gateway from the panel session the request came with.
-  const session = (options.env ?? process.env)[SESSION_2FA_ENV] ?? "0";
+  const env = options.env ?? process.env;
+  const session = env[SESSION_2FA_ENV] ?? "0";
+  const binding = env[SESSION_BINDING_ENV] ?? "";
+  let verified = "";
   try {
     if ((options.processUid ?? process.getuid?.()) !== 0) failAction("terminal actions must run as root");
     if (argv[0] === "root-access") return answerRootAccess(argv.slice(1), paths, session);
+    if (argv[0] === "root-auth-options" || argv[0] === "root-auth-verify") {
+      const user = argv.length === 2 ? argv[1]!.match(/^--panel-user=(.+)$/)?.[1] : undefined;
+      if (!user || !PANEL_USER_NAME_RE.test(user)) failAction("Missing panel user.");
+      const input = argv[0] === "root-auth-verify" ? await readJsonRequest(undefined, 16 * 1024) : {};
+      emitActionOk(rootAuth(argv[0] === "root-auth-options" ? "options" : "verify", user, session, binding, input, paths.rootAccess, now(), options.rootAuthStorage));
+      return 0;
+    }
     // Only the gateway's duplex stream, which checked the panel session
     // itself, starts a worker with this set.
-    if ((options.env ?? process.env)[DUPLEX_WORKER_MARKER] !== "1") failAction("terminal sessions start only through the gateway's stream");
+    if (env[DUPLEX_WORKER_MARKER] !== "1") failAction("terminal sessions start only through the gateway's stream");
     request = parseTerminalRequest(argv, options);
     target = resolveTerminalTarget(request, paths, session);
+    if (request.domain === null) verified = `, verified with ${rootAuth("consume", request.panelUser, session, binding, { ticket: env[TICKET_ENV] }, paths.rootAccess, now(), options.rootAuthStorage)}`;
   } catch (error) {
     emitActionError("terminal", printable(errorMessage(error)));
     return 1;
@@ -280,7 +294,7 @@ export async function runTerminalAction(argv: string[], options: TerminalActionO
 
   const started = now();
   const what = request.domain ?? "a root shell";
-  audit(`${request.panelUser} opened ${what} as ${target.user}`);
+  audit(`${request.panelUser} opened ${what} as ${target.user}${verified}`);
   child = (options.spawn ?? Bun.spawn)(runuserCommand(paths, target.user), {
     stdin: "inherit",
     stdout: "inherit",

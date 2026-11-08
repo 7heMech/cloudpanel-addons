@@ -139,6 +139,8 @@ system-tweaks:set-vhost-guard      admin
 system-tweaks:state                admin
 system-tweaks:unban                admin
 terminal:root-access               own-account
+terminal:root-auth-options         own-account
+terminal:root-auth-verify          own-account
 terminal:session                   admin duplex
 wp-tools:domain-link-settings      admin
 wp-tools:job                       admin

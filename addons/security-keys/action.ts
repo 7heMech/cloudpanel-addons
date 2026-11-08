@@ -49,7 +49,7 @@ export interface SecurityKeysPaths {
   stateUid: number;
 }
 
-const DEFAULT_SECURITY_KEYS_PATHS: SecurityKeysPaths = {
+export const DEFAULT_SECURITY_KEYS_PATHS: SecurityKeysPaths = {
   stateDir: addonStateDir("security-keys"),
   lockFile: `${LOCK_DIR}/security-keys.lock`,
   panelDb: PANEL_DB,
@@ -377,6 +377,24 @@ function audit(line: string): void {
   process.stderr.write(`[security-keys] ${line.replace(/\s+/g, " ")}\n`);
 }
 
+function keyProof(key: StoredKey, challenge: string, input: Record<string, unknown>): number {
+  return verifyAssertion({
+    clientDataJSON: fromB64url(input.clientDataJSON, "clientDataJSON"),
+    authenticatorData: fromB64url(input.authenticatorData, "authenticatorData"),
+    signature: fromB64url(input.signature, "signature"),
+    challenge, origin: key.origin, publicKey: key.publicKey, signCount: key.signCount,
+  }).signCount;
+}
+
+/** After keyProof, so only the key's holder learns the settings that refuse it; callers hold the store lock. */
+function acceptKey(paths: SecurityKeysPaths, account: PanelAccount, key: StoredKey, signCount: number, now: number, instead: string): void {
+  const settings = readSettings(paths);
+  if (!allowedRole(settings, account)) refuse(`security keys are turned off for your account; use ${instead}`);
+  if (key.synced && !settings.syncedPasskeys) refuse(`this panel no longer accepts synced passkeys; use a hardware key or ${instead}`);
+  key.signCount = signCount;
+  key.lastUsedAt = new Date(now).toISOString();
+}
+
 function signIn(paths: SecurityKeysPaths, input: Record<string, unknown>, now: number): { token: string; user: string } {
   const challenge = expectedChallenge(paths, input.challengeId, now, "login");
   const credentialId = typeof input.id === "string" && input.id.length <= 1400 ? input.id : refuse("the key sent no credential id");
@@ -395,23 +413,8 @@ function signIn(paths: SecurityKeysPaths, input: Record<string, unknown>, now: n
     const account = activeAccount(paths, user);
     if (account.id !== entry.userId) refuse("this key belongs to a CloudPanel account that no longer exists");
     const key = entry.keys.find((candidate) => candidate.id === credentialId)!;
-    // The signature first, so only the key's holder learns the settings that refuse it.
-    const { signCount } = spendChallenge(paths, input.challengeId as string, now, () => verifyAssertion({
-      clientDataJSON: fromB64url(input.clientDataJSON, "clientDataJSON"),
-      authenticatorData: fromB64url(input.authenticatorData, "authenticatorData"),
-      signature: fromB64url(input.signature, "signature"),
-      challenge,
-      origin: key.origin,
-      publicKey: key.publicKey,
-      signCount: key.signCount,
-    }));
-    const settings = readSettings(paths);
-    if (!allowedRole(settings, account)) refuse("security keys are turned off for your account; sign in with your password");
-    if (key.synced && !settings.syncedPasskeys) {
-      refuse("this panel no longer accepts synced passkeys; use a hardware key or your password");
-    }
-    key.signCount = signCount;
-    key.lastUsedAt = new Date(now).toISOString();
+    // Spent before the settings are read, so an assertion they refuse cannot be replayed once they change.
+    acceptKey(paths, account, key, spendChallenge(paths, input.challengeId as string, now, () => keyProof(key, challenge, input)), now, "your password");
     writeStore(paths, store);
     // Recorded before the token exists, so the session it opens always has its record.
     recordSignIn(paths.stateDir, paths.stateUid, { user, key: key.id, at: Math.floor(now / 1000), mfa: mfaMark(paths.panelDb, user) });
@@ -567,4 +570,18 @@ export async function runSecurityKeysAction(argv: string[], options: SecurityKey
     }
     return reportActionFailure("security-keys", error, emit, message);
   }
+}
+
+/** Terminal supplies a purpose-bound challenge and the keys pinned by root. */
+export function verifyTerminalKey(paths: SecurityKeysPaths, user: string, ids: string[], challenge: string, input: Record<string, unknown>, now: number): void {
+  withStoreLock(paths, () => {
+    const store = readStore(paths);
+    const entry = store.users[user];
+    const account = activeAccount(paths, user);
+    const key = entry?.keys.find(key => key.id === input.id && ids.includes(key.id));
+    if (!entry || entry.userId !== account.id || !key) failAction("This passkey is not trusted for your root terminal.");
+    if (input.userHandle != null && input.userHandle !== entry.handle) failAction("The passkey belongs to another account.");
+    acceptKey(paths, account, key, keyProof(key, challenge, input), now, "your authenticator code");
+    writeStore(paths, store);
+  });
 }

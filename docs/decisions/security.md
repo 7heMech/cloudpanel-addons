@@ -50,7 +50,10 @@ refused. The one-shot action path refuses that verb outright, and the worker
 refuses to run without an environment marker only the stream sets, so the check
 cannot be skipped by asking the other way. The gateway checks the session again
 every 15 seconds and stops the worker when that check and another a second
-later both fail. The session id never appears on a command line. Everything after the
+later both fail. The session id never appears on a command line, and neither
+does a root terminal's one-use ticket: the request carries it, and the gateway
+passes it to the worker in `CLP_ADDONS_TICKET`, which only root can read.
+Everything after the
 request line is copied to the worker's stdin unread, and the worker hands both
 pipes to `runuser`, so no root process reads what the browser typed. The worker
 gets a fixed `PATH` and nothing else from the gateway's environment, and the

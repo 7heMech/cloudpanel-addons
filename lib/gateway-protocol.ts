@@ -145,7 +145,7 @@ export type GatewayRequest =
       timeoutMs?: number;
       sessionId?: string;
     }
-  | { kind: "stream-action"; addon: string; verb: string; args?: string[]; sessionId?: string };
+  | { kind: "stream-action"; addon: string; verb: string; args?: string[]; sessionId?: string; ticket?: string };
 
 export interface ActionResult<T = unknown> {
   ok: boolean;
@@ -195,6 +195,7 @@ export function parseGatewayRequest(raw: string): GatewayRequest | null {
           verb: obj.verb,
           args: Array.isArray(obj.args) ? obj.args.filter((a: unknown) => typeof a === "string") : undefined,
           ...(typeof obj.sessionId === "string" ? { sessionId: obj.sessionId } : {}),
+          ...(typeof obj.ticket === "string" && /^[A-Za-z0-9_-]{43}$/.test(obj.ticket) ? { ticket: obj.ticket } : {}),
         };
       }
     } catch {
@@ -204,3 +205,8 @@ export function parseGatewayRequest(raw: string): GatewayRequest | null {
 
   return null;
 }
+
+/** Session binding supplied only by the gateway. */
+export const SESSION_BINDING_ENV = "CLP_ADDONS_SESSION_BINDING";
+/** A duplex request's one-use ticket, kept off the worker's command line, which every local user can read. */
+export const TICKET_ENV = "CLP_ADDONS_TICKET";

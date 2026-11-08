@@ -81,8 +81,9 @@ Each grant is also pinned to CloudPanel's `user.id`, so a name deleted and
 created again is not the account root allowed. A deactivation, a demotion or
 2FA switched off refuses it while it lasts, and the button's notice says which;
 2FA set up again needs root to allow the account again. A password change does
-not touch it. A stolen session of the allowed administrator itself still gets a
-root shell for as long as that session lasts.
+not touch it. Opening a new shell also requires a fresh authenticator or trusted
+passkey check; a session cookie alone cannot start one. An existing shell can
+be reattached by the session that opened it.
 
 The grants are `/etc/clp-addons/terminal-root.json`, root's alone, `0600`, read
 through one descriptor opened without following links. Only a missing file
@@ -173,3 +174,33 @@ can start after.
 hash, and served from versioned paths with a year-long cache; the build
 minifies `xterm.css` like every other stylesheet. The popup is the
 one page whose content security policy allows `'self'` scripts and styles.
+
+### Verification when opening root
+
+Each new root shell requires a fresh six-digit authenticator code or a passkey
+pinned in the root grant. Reconnecting to an existing shell does not prompt.
+The popup offers both methods before creating the shell; site shells are unchanged.
+Root issues a random five-minute challenge bound to the gateway-verified session
+hash. Verification consumes the challenge, checks the current grant, and returns
+a one-use ticket valid for sixty seconds, bound to that session and grant.
+The popup sends the ticket with the shell request, the gateway hands it to the
+root worker in its environment rather than on its command line, and the worker
+consumes it before starting the shell. The journal's open line says which code
+or passkey earned it, and each failed verification is journaled with the
+account and the reason. An unexpected error while a code or signature is checked,
+such as CloudPanel holding its database, reaches the popup as a generic message
+and stays in the journal.
+
+Root serializes challenges, attempts, used TOTP steps and tickets in root-only
+state under `/var/lib/clp-addons/terminal-auth`. Only a wrong code or a
+signature that does not verify counts against the account: five in a rolling
+five minutes, or twenty in a day, stop further prompts until the oldest ages
+out, so a stolen session cannot keep guessing unattended. Successes, malformed
+codes, refused keys and errors spend nothing, so opening shells often is never
+refused.
+Codes use SHA-1 TOTP with thirty-second steps and one step of clock tolerance;
+a code step can succeed only once. Passkeys count only while Security Keys is
+on, as at sign-in, and only pinned keys the account still has are offered, only
+where the browser can use one, so not on an IP address. Passkey verification reuses Security Keys'
+signature, origin, user verification, account and policy checks and updates its
+signature counter. The existing grant and session rechecks remain in force.

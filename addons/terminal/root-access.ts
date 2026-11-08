@@ -11,6 +11,7 @@ import {
 } from "node:fs";
 import { dirname } from "node:path";
 import type { Database } from "bun:sqlite";
+import { failAction } from "../../lib/action";
 import { withFileLockSync } from "../../lib/file-lock";
 import { openPanelDatabase } from "../../lib/panel-db";
 import { accountPasskeys } from "../security-keys/sign-ins";
@@ -174,6 +175,19 @@ export interface RootAccess {
  * `session` describes (SESSION_2FA_ENV). Any failure refuses.
  */
 export function rootAccess(panelUser: string, paths: RootAccessPaths, session: string): RootAccess {
+  const { grant: _grant, ...access } = checkAccess(panelUser, paths, session);
+  return access;
+}
+
+/** The grant behind a root shell this session may open now; refuses otherwise. */
+export function allowedGrant(panelUser: string, paths: RootAccessPaths, session: string): RootGrant {
+  const { grant, problem } = checkAccess(panelUser, paths, session);
+  if (!grant || problem) failAction(problem ?? "Root has not allowed you a root shell.");
+  return grant;
+}
+
+/** rootAccess with the grant it read, which holds the account's 2FA digest and so never leaves root. */
+function checkAccess(panelUser: string, paths: RootAccessPaths, session: string): RootAccess & { grant?: RootGrant } {
   const failed = (what: string, error: unknown): RootAccess =>
     ({ granted: true, problem: `${what} cannot be read: ${errorMessage(error)}`, unreadable: true });
   let grant: RootGrant | undefined;
@@ -187,7 +201,7 @@ export function rootAccess(panelUser: string, paths: RootAccessPaths, session: s
   let db: Database | null = null;
   try {
     db = openPanelDatabase(paths.panelDb, true);
-    return { granted: true, problem: grantProblem(db, grant) ?? sessionProblem(grant, session, paths) };
+    return { granted: true, grant, problem: grantProblem(db, grant) ?? sessionProblem(grant, session, paths) };
   } catch (error) {
     return failed("CloudPanel's user list", error);
   } finally {
