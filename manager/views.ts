@@ -9,6 +9,7 @@ import { lockState } from "../lib/root-locks";
 import { UPDATE_PATH, changelogUrl } from "../lib/update-ui";
 import type { CliUpdateInfo } from "../lib/update-check";
 import type { ManagerJobView } from "./action";
+import { type PanelHold, UPDATES_GUIDE_URL, holdAdvice, holdSummary } from "../lib/panel-holds";
 
 import MANAGER_INDEX_CSS from "./views.css" with { type: "text" };
 
@@ -101,10 +102,28 @@ function managerJobFailure(job: ManagerJobView | null): string {
 
 type ManagerPageOptions = { job?: ManagerJobView | null; csrf?: string };
 
+/**
+ * What the addons are leaving alone in CloudPanel's files, and why. A notice
+ * rather than an alert: the panel itself is fine, and nothing is broken that
+ * the addons wrote.
+ */
+function panelHoldsNotice(holds: PanelHold[]): string {
+  if (!holds.length) return "";
+  const command = (text: string) => esc(text).replace(/clp-addons (?:repair --rebaseline|repair|update)/g, "<code>$&</code>");
+  const items = holds.map((hold) => `<li><strong>${esc(hold.addons.join(", "))}</strong>
+    <span>${esc(holdSummary(hold))} ${command(holdAdvice(hold))}</span></li>`).join("");
+  return `<section class="notice panel-holds" aria-label="Paused until checked">
+  <h2>Paused until checked</h2>
+  <p>These files changed in a way the addons cannot prove their additions still fit, so they are left as they are. Everything else keeps working.</p>
+  <ul>${items}</ul>
+  <a href="${esc(UPDATES_GUIDE_URL)}" target="_blank" rel="noopener noreferrer">What happens when CloudPanel updates</a>
+</section>`;
+}
+
 export function indexPage(
   enabled: string[],
   update?: { current: string; latest: string } | null,
-  options: ManagerPageOptions & { available?: string[]; version?: string; since?: string; seen?: string[] } = {},
+  options: ManagerPageOptions & { available?: string[]; version?: string; since?: string; seen?: string[]; holds?: PanelHold[] } = {},
 ): Response {
   const available = options.available ?? [];
   const news = { version: options.version ?? CLI_VERSION, since: options.since ?? "0.0.0", seen: options.seen ?? [] };
@@ -121,6 +140,7 @@ export function indexPage(
   const readAll = unread ? `<button class="btn" type="button" onclick="readAllNews(this)">Mark all read</button>` : "";
   const content = `<div class="page-heading"><h1>Addons</h1><div class="page-actions">${readAll}<a class="btn" href="${UPDATE_PATH}">Updates</a></div></div>` +
     managerJobFailure(options.job ?? null) +
+    panelHoldsNotice(options.holds ?? []) +
     managerJobBlock(options.job ?? null, claimed) +
     search +
     (enabled.length

@@ -7,8 +7,10 @@ import { writeFileAtomic } from "../../lib/atomic-write";
 import { runCommand, type CommandResult } from "../../lib/command";
 import { errorMessage } from "../../lib/errors";
 import {
-  NginxReadError, baselineFiles, hasBaseline, readBaseline, readIfPresent, recordBaseline, removeBaseline, sha256,
-} from "../../lib/nginx-baseline";
+  type Refusal, NginxReadError, baselineFiles, hasBaseline, readBaseline, readBaselineVersion, readIfPresent,
+  rebaselineVerdict, recordBaseline, removeBaseline, sha256, writeBaselineVersion,
+} from "../../lib/baseline";
+import { owningPackage, packageVersion } from "../../lib/cloudpanel-version";
 import { cloudflareRanges, nginxFileChange, trustedVhost, withNginxTransaction } from "../../lib/nginx-transaction";
 import { openPanelDatabase } from "../../lib/panel-db";
 import {
@@ -107,6 +109,10 @@ interface MaintenanceNginxPaths {
   nginxVhostDir?: string;
   includePath?: string;
   vhostUid?: number;
+  /** The installed version of the package global_settings belongs to; read from dpkg when left out. */
+  packageVersion?: string | null;
+  /** `repair --rebaseline`: take a changed global_settings even though its package was not upgraded. */
+  accept?: boolean;
 }
 
 type MaintenanceNginxState =
@@ -114,6 +120,7 @@ type MaintenanceNginxState =
   | "missing"
   | "stale-content"
   | "upstream-changed"
+  | "panel-updated"
   | "conflict"
   | "validation-failed"
   | "uncovered-sites";
@@ -123,10 +130,61 @@ interface MaintenanceNginxStatus {
   settingsPath: string;
   uncoveredSites?: string[];
   detail?: string;
+  /** Set with `upstream-changed`: why the changed file is left alone, and the versions that decided it. */
+  refusal?: MaintenanceRefusal;
+}
+
+export interface MaintenanceRefusal {
+  reason: Refusal;
+  /** The package global_settings belongs to, such as nginx-common. */
+  package: string | null;
+  recorded: string | null;
+  installed: string | null;
 }
 
 interface MaintenanceNginxResult extends MaintenanceNginxStatus {
   changed: boolean;
+  /** global_settings was recorded afresh because its package's upgrade replaced it. */
+  rebaselined?: { from: string | null; to: string };
+}
+
+/** A maintenance variable, location or 418 page of someone else's, which the block would clash with. */
+const UNMANAGED_MAINTENANCE_RE = /(?:location\s+(?:@clp_maintenance|=\s*\/__clp_addons_maintenance)|\$clp_maintenance\b|error_page\s+[^;]*\b418\b)/m;
+const STRAY_MAINTENANCE_MARKER = /# clp-addons:maintenance:(?:start|end)/;
+
+type SettingsCheck =
+  | { kind: "unrecorded" }
+  | { kind: "match"; recorded: string | null }
+  | { kind: "rebaseline"; recorded: string | null; installed: string }
+  | { kind: "refuse"; refusal: MaintenanceRefusal };
+
+/**
+ * global_settings against its record, by the rule CloudPanel's templates
+ * follow, keyed on the version of the package the file belongs to. The block
+ * is appended rather than anchored, so the new text fits unless it already
+ * holds a maintenance construct of its own.
+ */
+function checkSettings(
+  settingsPath: string, upstream: string, files: ReturnType<typeof baselineFiles>, enabled: boolean, options: MaintenanceNginxPaths,
+): SettingsCheck {
+  if (!hasBaseline(files)) return { kind: "unrecorded" };
+  const baseline = readBaseline(files);
+  const recorded = readBaselineVersion(files);
+  if (baseline?.hash === sha256(upstream)) return { kind: "match", recorded };
+  const pkg = owningPackage(settingsPath);
+  const installed = settingsVersion(settingsPath, options, pkg);
+  const reason = rebaselineVerdict({
+    recorded, installed, strayMarker: STRAY_MAINTENANCE_MARKER.test(upstream),
+    misfit: enabled && UNMANAGED_MAINTENANCE_RE.test(upstream) ? "conflict" : null, accept: options.accept,
+  });
+  return reason || installed === null
+    ? { kind: "refuse", refusal: { reason: reason ?? "busy", package: pkg, recorded, installed } }
+    : { kind: "rebaseline", recorded, installed };
+}
+
+function settingsVersion(settingsPath: string, options: MaintenanceNginxPaths, pkg = owningPackage(settingsPath)): string | null {
+  if (options.packageVersion !== undefined) return options.packageVersion;
+  return pkg ? packageVersion(pkg) : null;
 }
 
 function stripMaintenanceNginx(content: string): string {
@@ -161,24 +219,16 @@ function inspectMaintenance(options: MaintenanceNginxPaths): MaintenanceNginxSta
   const content = readIfPresent(settingsPath);
   if (content !== null) {
     const files = baselineFiles(stateDir, "global-settings");
-    const hasState = hasBaseline(files);
-    const baseline = readBaseline(files);
     const hasMarker = content.includes("# clp-addons:maintenance:start") || content.includes("# clp-addons:maintenance:end");
-    if (!baseline && hasMarker) {
+    if (!hasBaseline(files) && hasMarker) {
       return { state: "conflict", settingsPath, detail: "an unverified maintenance marker exists" };
     }
-    if (hasState && !baseline) {
-      return { state: "upstream-changed", settingsPath, detail: "managed global-settings baseline is missing or invalid" };
+    const check = checkSettings(settingsPath, stripMaintenanceNginx(content), files, true, options);
+    if (check.kind === "refuse") {
+      return { state: "upstream-changed", settingsPath, detail: "Nginx global settings changed", refusal: check.refusal };
     }
-    if (baseline) {
-      const found = sha256(stripMaintenanceNginx(content));
-      if (found !== baseline.hash) {
-        return {
-          state: "upstream-changed",
-          settingsPath,
-          detail: `Nginx global settings changed (recorded ${baseline.hash.slice(0, 12)}, current ${found.slice(0, 12)})`,
-        };
-      }
+    if (check.kind === "rebaseline") {
+      return { state: "panel-updated", settingsPath, detail: `an Nginx upgrade replaced ${settingsPath}; repair adds the check again` };
     }
     try { trustedVhost(settingsPath, statSync(settingsPath).uid); }
     catch (error) { return { state: "validation-failed", settingsPath, detail: errorMessage(error) }; }
@@ -256,29 +306,22 @@ function reconcileMaintenance(options: ReconcileOptions): MaintenanceNginxResult
     try { return realpathSync(selectedPath); } catch { return selectedPath; }
   })();
   const files = baselineFiles(stateDir, "global-settings");
-  const baseline = read === null ? null : readBaseline(files);
   let upstream = "";
-  let found = "";
+  let check: SettingsCheck = { kind: "unrecorded" };
   if (read !== null) {
-    const hasState = hasBaseline(files);
     const hasMarker = read.includes("# clp-addons:maintenance:start") || read.includes("# clp-addons:maintenance:end");
-    if (!baseline && hasMarker) {
+    if (!hasBaseline(files) && hasMarker) {
       return { state: "conflict", changed: false, settingsPath: selectedPath, detail: "an unverified maintenance marker exists; no changes were made" };
     }
-    if (hasState && !baseline) {
-      return { state: "upstream-changed", changed: false, settingsPath: selectedPath, detail: "managed global-settings baseline is missing or invalid; no changes were made" };
-    }
     upstream = stripMaintenanceNginx(read);
-    found = sha256(upstream);
-    if (baseline && baseline.hash !== found) {
+    check = checkSettings(selectedPath, upstream, files, enabled, pathOptions);
+    if (check.kind === "refuse") {
       return {
-        state: "upstream-changed",
-        changed: false,
-        settingsPath: selectedPath,
-        detail: `Nginx global settings changed; no changes were made (recorded ${baseline.hash.slice(0, 12)}, current ${found.slice(0, 12)})`,
+        state: "upstream-changed", changed: false, settingsPath: selectedPath,
+        detail: "Nginx global settings changed; no changes were made", refusal: check.refusal,
       };
     }
-    if (enabled && /(?:location\s+(?:@clp_maintenance|=\s*\/__clp_addons_maintenance)|\$clp_maintenance\b|error_page\s+[^;]*\b418\b)/m.test(upstream)) {
+    if (enabled && UNMANAGED_MAINTENANCE_RE.test(upstream)) {
       return { state: "conflict", changed: false, settingsPath: selectedPath, detail: "an unmanaged maintenance variable or location already exists" };
     }
   }
@@ -290,9 +333,15 @@ function reconcileMaintenance(options: ReconcileOptions): MaintenanceNginxResult
   if (oldInclude !== null && !oldInclude.startsWith("# clp-addons:maintenance:start\n")) {
     return { state: "conflict", changed: false, settingsPath: selectedPath, detail: "an unowned maintenance server include exists" };
   }
-  if (read !== null && !baseline && (enabled || read.includes("# clp-addons:maintenance:start"))) {
+  let rebaselined: MaintenanceNginxResult["rebaselined"];
+  if (check.kind === "match") {
+    const installed = settingsVersion(selectedPath, pathOptions);
+    if (installed !== null && installed !== check.recorded) writeBaselineVersion(files, installed);
+  } else if (read !== null && (check.kind === "rebaseline" || enabled || read.includes("# clp-addons:maintenance:start"))) {
     mkdirSync(stateDir, { recursive: true });
-    recordBaseline(files, upstream, found, settingsPath);
+    const installed = check.kind === "rebaseline" ? check.installed : settingsVersion(selectedPath, pathOptions);
+    recordBaseline(files, upstream, sha256(upstream), settingsPath, installed);
+    if (check.kind === "rebaseline") rebaselined = { from: check.recorded, to: check.installed };
   }
   const rendered = enabled
     ? `${upstream}\n${NGINX_MAINTENANCE_BLOCK}\n`
@@ -318,7 +367,7 @@ function reconcileMaintenance(options: ReconcileOptions): MaintenanceNginxResult
           detail: uncoveredDetail(uncoveredSites, true, selectedPath),
         };
       }
-      return { state: enabled ? "ok" : "missing", changed: result.changed, settingsPath: selectedPath };
+      return { state: enabled ? "ok" : "missing", changed: result.changed, settingsPath: selectedPath, rebaselined };
     } finally { db?.close(); }
   } catch (error) {
     return { state: "validation-failed", changed: false, settingsPath: selectedPath, detail: errorMessage(error) };

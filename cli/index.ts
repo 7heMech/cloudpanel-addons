@@ -1,6 +1,6 @@
 import { dashboardUrl, resolveAddon } from "./addons";
 import { enabledAddons, ADDONS, ADDON_NAMES, addonEnabled } from "../addons/catalog";
-import { reconcileAnchors } from "./reconcile";
+import { panelHolds, reconcileAnchors } from "./reconcile";
 import { cmdMenu } from "./menu";
 import { cmdStatus } from "./status";
 import { cmdInstall } from "./install";
@@ -37,6 +37,7 @@ const MANAGER_OPS: ManagerOps = {
   reconcile: () => withOperationLockSync("reconcile", () => {
     if (!reconcileAnchors(true)) fatal("could not safely patch the CloudPanel templates");
   }, { timeoutSeconds: 15 }),
+  holds: panelHolds,
 };
 
 function addonUsage(): string {
@@ -59,7 +60,7 @@ function usage(): void {
   clp-addons enable <addon>...
   clp-addons disable <addon>...
   clp-addons update [--version=vX.Y.Z] [--allow-prerelease] [--skip-attestation]
-  clp-addons repair [<addon>] [--quiet] [--anchors-only]
+  clp-addons repair [<addon>] [--quiet] [--anchors-only] [--rebaseline]
   clp-addons status
 ${addonUsage()}
   clp-addons lock [<addon>]

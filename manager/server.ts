@@ -15,7 +15,7 @@ import { adminGate, authenticateRequest } from "../lib/sso-auth";
 import { refreshPanelLogos } from "../lib/panel-logos";
 import { checkCliUpdate } from "../lib/update-check";
 import { handleManagerRoute } from "./index";
-import { latestManagerJobView, seenNews } from "./service";
+import { latestManagerJobView, panelHolds, seenNews } from "./service";
 import { indexPage, updatePage } from "./views";
 
 function internalPath(path: string): string {
@@ -99,10 +99,11 @@ export async function handleRequest(req: Request, server: Server<unknown>): Prom
   }
   if (path === "/") {
     const enabled = ADDON_NAMES.filter((name) => addonEnabled(ADDONS[name]!));
-    const [job, news] = await Promise.all([latestManagerJobView(), seenNews()]);
+    const [job, news, holds] = await Promise.all([latestManagerJobView(), seenNews(), panelHolds()]);
     return indexPage(enabled, notice, {
       available: ADDON_NAMES.filter((name) => !enabled.includes(name)),
       job,
+      holds,
       ...news,
       csrf: newCsrfToken(),
     });

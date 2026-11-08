@@ -26,6 +26,9 @@ let keepAsideFailure = false;
 /** null leaves the kept-aside manifest unreadable, as an out-of-band install does. */
 let previousChecksum: string | null = null;
 let managerUnitState = "active";
+/** The release's cloudpanel.json, or null for a release from before ranges. */
+let releaseRange: string | null = null;
+let installedPanel: string | null = "2.5.4-3+clp-bookworm";
 
 /** The operation the lock file names while it is held, if it is held. */
 function lockedOperation(): string | null {
@@ -62,6 +65,8 @@ function resetState(): void {
   keepAsideFailure = false;
   previousChecksum = null;
   managerUnitState = "active";
+  releaseRange = null;
+  installedPanel = "2.5.4-3+clp-bookworm";
   installedOnBox(true);
 }
 beforeEach(resetState);
@@ -180,16 +185,19 @@ mock.module("node:fs", () => ({
 }));
 
 mock.module("../lib/version", () => ({ CLI_VERSION: "1.2.3", DEV_VERSION: "0.0.0-dev" }));
+const __cloudpanelVersion = await import("../lib/cloudpanel-version");
+mock.module("../lib/cloudpanel-version", () => ({ ...__cloudpanelVersion, panelVersion: () => installedPanel }));
 mock.module("../cli/release", () => ({
   resolveRelease: async () => {
     calls.push("resolveRelease");
-    return { tag: resolvedReleaseTag, assets: new Map<string, string>() };
+    return { tag: resolvedReleaseTag, assets: new Map<string, string>(releaseRange === null ? [] : [["cloudpanel.json", "url"]]) };
   },
   fetchVerified: async (_release: unknown, names: string[] = []) => {
-    calls.push("fetchVerified");
-    return names.map((name) => ({ name, bytes: Buffer.from(name, "utf-8") }));
+    calls.push(`fetchVerified${names.includes("cloudpanel.json") ? ":cloudpanel.json" : ""}`);
+    return names.map((name) => ({ name, bytes: Buffer.from(name === "cloudpanel.json" ? releaseRange ?? "" : name, "utf-8") }));
   },
-  verifyAttestation: async () => {
+  verifyAttestation: async (_release: unknown, artifacts: { name: string }[]) => {
+    calls.push(`verifyAttestation:${artifacts.map((artifact) => artifact.name).join(",")}`);
     calls.push("verifyAttestation");
   },
   loadLocal: (_dir: string, names: string[]) => {
@@ -228,15 +236,14 @@ mock.module("../cli/provision", () => ({
 }));
 
 mock.module("../cli/inject", () => ({
-  KNOWN_GOOD_PANEL_VERSIONS: [],
+  inspectTemplates: () => [],
   inspect: () => ({ state: "ok" }),
   inspectNginxProxy: () => ({ state: "missing" }),
   masterVhostHost: () => null,
-  panelVersion: () => "test",
   purgeTwigCache: record("purgeInjectCache"),
   reconcile: () => {
     calls.push("reconcile");
-    return { statuses: [], changed: false };
+    return { statuses: [], changed: false, rebaselined: [] };
   },
   reconcileNginxProxy: () => {
     calls.push("reconcileNginxProxy");
@@ -640,4 +647,51 @@ test("without --version an update never moves to an older version than the one i
   expect(calls).not.toContain("fetchVerified");
   expect(calls.some((call) => call.startsWith(`run:${CLI_BIN} update`))).toBe(false);
   expect(calls).toContain("log.ok:clp-addons 1.2.3 is up to date; the newest published release is 1.2.2");
+});
+
+test("an update refuses a release that needs a newer CloudPanel before downloading it", async () => {
+  releaseRange = '{"min":"2.6.0","max":"2.6.2"}';
+  resolvedReleaseTag = "v1.3.0";
+  await expect(cmdUpdate([])).rejects.toThrow("clp-addons 1.3.0 needs CloudPanel 2.6.0 or newer, and this server runs 2.5.4-3+clp-bookworm");
+  expect(calls).toContain("fetchVerified:cloudpanel.json");
+  expect(calls).not.toContain("fetchVerified");
+  expect(calls.some((call) => call.startsWith(`run:${CLI_BIN} update`))).toBe(false);
+});
+
+test("an update to a release checked only against older CloudPanel warns and installs, attesting the range with the binary", async () => {
+  releaseRange = '{"min":"2.5.0","max":"2.5.3"}';
+  resolvedReleaseTag = "v1.3.0";
+  await cmdUpdate([]);
+  expect(calls.some((call) => call.startsWith("log.warn:clp-addons 1.3.0 was checked against CloudPanel 2.5.0 to 2.5.3"))).toBe(true);
+  expect(calls).toContain(`verifyAttestation:cloudpanel.json,${CLI_ARTIFACT}`);
+  expect(calls).toContain(handoffCall("v1.3.0"));
+});
+
+test("an update cannot tell the CloudPanel version mid-upgrade, so it warns rather than refuses", async () => {
+  releaseRange = '{"min":"2.6.0","max":"2.6.0"}';
+  installedPanel = null;
+  resolvedReleaseTag = "v1.3.0";
+  await cmdUpdate([]);
+  expect(calls.some((call) => call.startsWith("log.warn:could not read the CloudPanel version"))).toBe(true);
+  expect(calls).toContain(handoffCall("v1.3.0"));
+});
+
+test("a release without a range, from before ranges, updates as before", async () => {
+  resolvedReleaseTag = "v1.3.0";
+  await cmdUpdate([]);
+  expect(calls).not.toContain("fetchVerified:cloudpanel.json");
+  expect(calls).toContain(`verifyAttestation:${CLI_ARTIFACT}`);
+});
+
+test("a malformed range is refused", async () => {
+  releaseRange = "{}";
+  resolvedReleaseTag = "v1.3.0";
+  await expect(cmdUpdate([])).rejects.toThrow("cloudpanel.json in release v1.3.0 is not a CloudPanel version range");
+});
+
+test("install warns on a CloudPanel outside the release's range but installs", async () => {
+  installedPanel = "2.6.1-1+clp-bookworm";
+  await cmdInstall(["--local=/tmp/clp-addons-artifacts"]);
+  expect(calls.some((call) => call.startsWith("log.warn:CloudPanel 2.6.1-1+clp-bookworm is newer than this release was checked against"))).toBe(true);
+  expect(calls).toContain("loadLocal");
 });

@@ -82,6 +82,34 @@ not frozen into the binary: a rotated key would then refuse the very update
 that carries the new one. An update removes the GitHub CLI earlier releases
 kept in `/usr/local/libexec/clp-addons/gh`.
 
+## Supported CloudPanel versions
+
+A release states the CloudPanel versions it supports as `CLOUDPANEL_RANGE` in
+`lib/cloudpanel-version.ts`: `min`, the oldest it runs on, and `max`, the newest
+it was checked against. Both are upstream versions (`2.5.4`, without the Debian
+revision), compared numerically. `max` rises when a release is checked on a
+newer CloudPanel; `min` rises only when a release needs something an older one
+lacks.
+
+`tools/build.ts` writes the same range to `dist/cloudpanel.json`, which the tag
+workflow publishes beside the binary, lists in `SHA256SUMS` and attests with it.
+`update` reads it before downloading the binary: below `min` it refuses and
+says to update CloudPanel first with `clp-update`, so a box is never left on a
+release that cannot run there. The asset is checksummed when it is read and its
+provenance is checked with the binary's, before anything is installed; unverified,
+it can only cause a refusal. Above `max` it warns and goes on, and so does a
+CloudPanel version dpkg cannot give, mid-upgrade or otherwise. A release from
+before the asset has no range to check. There is no override flag: an operator
+who cannot update CloudPanel can stay on, or pin with `--version`, a release
+that supports it.
+
+`install` takes the range from the binary itself and only warns outside it.
+Refusing there would keep System Tweaks' fixes off the boxes that are behind
+or ahead, and the template and vhost checks already keep the addons off any
+page that changed
+([After a CloudPanel upgrade](platform.md#after-a-cloudpanel-upgrade)).
+`status` shows the installed CloudPanel against the range.
+
 ## Installer
 
 `install.sh` checks the host, downloads the binary from

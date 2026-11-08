@@ -81,15 +81,14 @@ const PROBE = String.raw`
   }));
 
   mock.module("./cli/inject.ts", () => ({
-    KNOWN_GOOD_PANEL_VERSIONS: [],
+    inspectTemplates: () => [],
     inspect: () => ({ state: "ok" }),
     inspectNginxProxy: () => ({ state: "missing" }),
     masterVhostHost: () => null,
-    panelVersion: () => "test",
     purgeTwigCache: () => calls.push("purgeInjectCache"),
     reconcile: () => {
       calls.push("reconcile");
-      return { statuses: [], changed: false };
+      return { statuses: [], changed: false, rebaselined: [] };
     },
     reconcileNginxProxy: () => {
       calls.push("reconcileNginxProxy");

@@ -149,8 +149,11 @@ and removes nothing when the panel database cannot be read or lists no site.
 
 ## Reconciliation
 
-The global-settings reconciler records the pristine file and its SHA-256 hash
-and renders only when the unmarked content matches that baseline. Site edits
+The global-settings reconciler records the pristine file, its SHA-256 hash and
+the version of the package that installed it, and renders only when the
+unmarked content matches that baseline, or when that package was upgraded since
+and the new file holds no maintenance construct of its own
+([After a CloudPanel upgrade](platform.md#after-a-cloudpanel-upgrade)). Site edits
 use the same transaction helpers as Cloudflare IPs: an immediate SQLite
 transaction, edits to trusted regular vhosts with preserved ownership and
 permissions, then `nginx -t` and a distro Nginx reload before commit. Failure rolls back the
