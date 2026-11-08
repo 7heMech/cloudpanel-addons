@@ -22,10 +22,11 @@
  */
 import { addonStateDir, ROOT_UID } from "../../lib/paths";
 import { createHash } from "node:crypto";
-import { lstatSync, readFileSync, rmSync } from "node:fs";
+import { readFileSync, rmSync } from "node:fs";
 import { errorMessage } from "../../lib/errors";
 import { runCommand, type CommandResult } from "../../lib/command";
 import { writeFileAtomic } from "../../lib/atomic-write";
+import { regularText, trustedText } from "../../lib/trusted-file";
 import WRAPPER_SCRIPT from "./clpctl-wrapper.sh" with { type: "text" };
 import { COMMAND_MS } from "./limits";
 
@@ -126,21 +127,10 @@ const PRIOR_SHIPPED_WRAPPER_SHA256: string[] = [
 ];
 const SHIPPED_WRAPPER_SHA256 = new Set<string>([...PRIOR_SHIPPED_WRAPPER_SHA256, OUR_SHA256]);
 
-/** A regular file's bytes when only root may write it, else null. */
+/** A regular file's bytes when only root may write it, else null; a failed read is null too. */
 function trustedBytes(path: string, rootUid: number): string | null {
   try {
-    const info = lstatSync(path);
-    if (!info.isFile() || info.uid !== rootUid || (info.mode & 0o022) !== 0) return null;
-    return readFileSync(path, "utf8");
-  } catch {
-    return null;
-  }
-}
-
-/** A regular file's bytes whoever owns it, or null. */
-function regularBytes(path: string): string | null {
-  try {
-    return lstatSync(path).isFile() ? readFileSync(path, "utf8") : null;
+    return trustedText(path, rootUid);
   } catch {
     return null;
   }
@@ -154,7 +144,7 @@ function savedOriginalGood(ctx: Context): boolean {
 
 function classify(ctx: Context): WrapperKind {
   const bytes = trustedBytes(ctx.paths.wrapper, ctx.paths.rootUid);
-  if (bytes === null) return regularBytes(ctx.paths.wrapper) === null ? "missing" : "unknown";
+  if (bytes === null) return regularText(ctx.paths.wrapper) === null ? "missing" : "unknown";
   if (ctx.ours.has(sha256(bytes))) return "ours";
   if (KNOWN_ORIGINAL_SHA256.has(sha256(bytes))) return "known-original";
   return "unknown";

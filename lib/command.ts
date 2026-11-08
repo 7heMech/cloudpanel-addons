@@ -1,6 +1,7 @@
 // Running a command without a shell.
 import { execFileSync, type ExecFileSyncOptions } from "node:child_process";
-import { ActionCommandFailure } from "./action";
+import { ActionCommandFailure, failAction } from "./action";
+import { errorMessage } from "./errors";
 
 export interface CommandResult {
   ok: boolean;
@@ -15,13 +16,14 @@ function outputText(value: unknown): string {
   return value == null ? "" : String(value);
 }
 
-export function runCommand(command: string, args: string[], timeoutMs?: number): CommandResult {
+/** `env` is added to this process's environment. */
+export function runCommand(command: string, args: string[], timeoutMs?: number, env?: Record<string, string>): CommandResult {
   try {
     const result = Bun.spawnSync([command, ...args], {
       stdin: "ignore",
       stdout: "pipe",
       stderr: "pipe",
-      env: process.env,
+      env: env ? { ...process.env, ...env } : process.env,
       timeout: timeoutMs,
       killSignal: "SIGKILL",
     });
@@ -32,9 +34,21 @@ export function runCommand(command: string, args: string[], timeoutMs?: number):
       exitCode: result.exitCode,
     };
   } catch (error) {
+    // Bun throws when the command cannot be started at all, such as a missing binary.
     const e = error as { stdout?: unknown; stderr?: unknown };
-    return { ok: false, stdout: outputText(e.stdout), stderr: outputText(e.stderr), exitCode: null };
+    return { ok: false, stdout: outputText(e.stdout), stderr: outputText(e.stderr) || errorMessage(error), exitCode: null };
   }
+}
+
+/** What a command said: its stderr, or its stdout when stderr is empty, trimmed; only its last `lines`, on one line, when given. */
+export function commandOutput(result: CommandResult, lines?: number): string {
+  const said = (result.stderr || result.stdout).trim();
+  return lines === undefined ? said : said.split("\n").slice(-lines).join(" ");
+}
+
+/** Fail the action with `what: <what the command said>`, or its exit code when it said nothing. */
+export function requireSuccess(result: CommandResult, what: string): void {
+  if (!result.ok) failAction(`${what}: ${commandOutput(result) || `exit ${result.exitCode ?? "unknown"}`}`);
 }
 
 export function forwardCommandOutput(result: CommandResult): void {

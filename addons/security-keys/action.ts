@@ -1,5 +1,6 @@
 import { addonStateDir, LOCK_DIR, PANEL_DB, PANEL_VAR_DIR } from "../../lib/paths";
 import { writeFileAtomic } from "../../lib/atomic-write";
+import { isTrustedFile, OWNER_ONLY } from "../../lib/trusted-file";
 import { SECURITY_KEYS_VERBS } from "./verbs";
 import { TOKEN_TTL_SECONDS, mfaMark, recordSignIn } from "./sign-ins";
 import { createHmac, randomBytes } from "node:crypto";
@@ -146,10 +147,7 @@ function storePath(paths: SecurityKeysPaths): string {
 }
 
 function trustedFile(path: string, uid: number): void {
-  const stat = lstatSync(path);
-  if (!stat.isFile() || stat.isSymbolicLink() || stat.uid !== uid || (stat.mode & 0o077) !== 0) {
-    failAction(`${path} is not a trusted root-only file`);
-  }
+  if (!isTrustedFile(lstatSync(path), uid, OWNER_ONLY)) failAction(`${path} is not a trusted root-only file`);
 }
 
 function validKey(value: unknown): value is StoredKey {

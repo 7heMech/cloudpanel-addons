@@ -4,7 +4,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { CommandResult } from "../lib/command";
 import {
-  anySpelling, applyLoginJails, customDomainName, jailFiles, loginJailsStatus, parseBans, releaseLoginJails, sshLogin, unban,
+  anySpelling, applyLoginJails, customDomainName, jailFiles, loginJailsStatus, missingPackages, parseBans, releaseLoginJails, sshLogin, unban,
   withDomainLog, withLoginLog, withoutDomainLog, withoutLoginLog, type LoginJailOptions,
 } from "../addons/system-tweaks/login-jails";
 
@@ -54,10 +54,14 @@ function box(service = { enabled: true, active: false, jails: [] as string[] }) 
   const domainVhost = join(dir, "custom-domain.conf");
   writeFileSync(domainVhost, DOMAIN_VHOST, { mode: 0o644 });
   const uid = process.getuid!();
-  const state = { ...service, missing: [] as string[], testFails: false, commands: [] as string[], bans: "" };
+  const state = { ...service, missing: [] as string[], held: [] as string[], testFails: false, commands: [] as string[], bans: "" };
   const run = (command: string, args: string[]): CommandResult => {
     state.commands.push(`${command} ${args.join(" ")}`);
-    if (command === "dpkg-query") return state.missing.includes(args.at(-1)!) ? fail("not installed") : ok("install ok installed");
+    if (command === "dpkg-query") {
+      const name = args.at(-1)!;
+      if (state.missing.includes(name)) return fail("not installed");
+      return ok(`${state.held.includes(name) ? "hold" : "install"} ok installed\t1.0-1`);
+    }
     if (command === "sshd") return ok("port 22\nport 2222\npasswordauthentication yes\npermitrootlogin yes\nusepam yes\nkbdinteractiveauthentication no\n");
     if (command === "systemctl") {
       if (args[0] === "is-enabled") return ok(state.enabled ? "enabled\n" : "disabled\n");
@@ -197,6 +201,12 @@ test("without fail2ban nothing is written or started", () => {
   expect(readFileSync(b.panelConf, "utf8")).toBe(PANEL_CONF);
   expect(b.state.commands.some((line) => line.startsWith("systemctl"))).toBe(false);
   expect(loginJailsStatus(b.options)).toMatchObject({ missing: ["fail2ban", "python3-systemd"], running: [], bans: [] });
+});
+
+test("a package held back by apt-mark still counts as installed", () => {
+  const b = box();
+  b.state.held = ["fail2ban"];
+  expect(missingPackages(b.options)).toEqual([]);
 });
 
 test("the page reads the bans of both jails and what sshd accepts", () => {

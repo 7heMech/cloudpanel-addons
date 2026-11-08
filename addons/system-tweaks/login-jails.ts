@@ -5,15 +5,15 @@
  * touch. See "Login jails" in docs/decisions/system-tweaks.md.
  */
 import { errorMessage } from "../../lib/errors";
-import { existsSync, readFileSync, rmSync } from "node:fs";
+import { existsSync, readFileSync } from "node:fs";
 import { isIP } from "node:net";
 import { failAction } from "../../lib/action";
-import { type CommandResult } from "../../lib/command";
+import { commandOutput, type CommandResult } from "../../lib/command";
 import { cloudflareRanges, nginxFileChange, trustedVhost, withNginxTransaction } from "../../lib/nginx-transaction";
 import { CLOUDFLARE_IPS_PATH, ROOT_UID, nginxLayout } from "../../lib/paths";
-import { writeFileAtomic } from "../../lib/atomic-write";
+import { writeOrRemove } from "../../lib/atomic-write";
 import { panelUserGid, panelUserUid } from "../../lib/sso-auth";
-import { systemRun, type Run } from "./updates";
+import { aptInstall, installedVersion, systemRun, type Run } from "./packages";
 
 export const PANEL_JAIL = "clp-addons-panel";
 /** The panel through CloudPanel's custom domain, which the sites' nginx serves on 443. */
@@ -112,7 +112,7 @@ function files(paths: Context["paths"]) {
 }
 
 function output(result: CommandResult): string {
-  return (result.stderr || result.stdout).trim().split("\n").slice(-3).join(" ");
+  return commandOutput(result, 3);
 }
 
 // --- The panel's nginx -----------------------------------------------------
@@ -396,10 +396,7 @@ function writeJailFiles(ctx: Context, settings: LoginJailSettings): boolean {
   });
   const paths = files(ctx.paths);
   const previous = new Map<string, string | null>();
-  const put = (path: string, content: string | null) => {
-    if (content === null) rmSync(path, { force: true });
-    else writeFileAtomic(path, content, { mode: 0o644 });
-  };
+  const put = (path: string, content: string | null) => writeOrRemove(path, content, { mode: 0o644 });
   for (const key of ["defaults", "jails", "filter"] as const) {
     const path = paths[key];
     const current = existsSync(path) ? readFileSync(path, "utf8") : null;
@@ -420,10 +417,7 @@ function writeJailFiles(ctx: Context, settings: LoginJailSettings): boolean {
 
 export function missingPackages(options: LoginJailOptions = {}): string[] {
   const { run } = contextOf(options);
-  return LOGIN_JAIL_PACKAGES.filter((name) => {
-    const query = run("dpkg-query", ["-W", "-f=${Status}", name]);
-    return !query.ok || !query.stdout.includes("install ok installed");
-  });
+  return LOGIN_JAIL_PACKAGES.filter((name) => !installedVersion(run, name));
 }
 
 function unitState(ctx: Context): { enabled: boolean; active: boolean; masked: boolean } {
@@ -492,17 +486,8 @@ export function releaseLoginJails(before: Fail2banBefore | null, options: LoginJ
 
 /** apt-get install for whichever packages are missing, with the lists refreshed and tried once more when they are stale. */
 export function installLoginJailPackages(options: LoginJailOptions = {}): void {
-  const { run } = contextOf(options);
   const missing = missingPackages(options);
-  if (!missing.length) return;
-  const env = { DEBIAN_FRONTEND: "noninteractive" };
-  const install = () => run("apt-get", ["install", "-y", "-o", "DPkg::Lock::Timeout=120", ...missing], env);
-  let result = install();
-  if (!result.ok) {
-    run("apt-get", ["update", "-o", "DPkg::Lock::Timeout=120"], env);
-    result = install();
-  }
-  if (!result.ok) failAction(`apt-get could not install ${missing.join(", ")}: ${output(result)}`);
+  if (missing.length) aptInstall(contextOf(options).run, missing);
 }
 
 // --- What the page shows ---------------------------------------------------

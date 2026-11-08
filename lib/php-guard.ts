@@ -10,9 +10,10 @@
 // panel runs on unless System Tweaks moved it. It does not address CVE-2026-109618, whose only
 // real fix is patched PHP; see docs/decisions/security.md.
 
-import { existsSync, lstatSync, readFileSync, readdirSync, rmSync } from "node:fs";
+import { existsSync, readdirSync } from "node:fs";
 import { join } from "node:path";
-import { writeFileAtomic } from "./atomic-write";
+import { writeOrRemove } from "./atomic-write";
+import { trustedText } from "./trusted-file";
 import { PANEL_FPM_UNIT, PHP_FPM_BIN_DIR, PHP_GUARD_INI_NAME, PHP_ROOT, ROOT_UID } from "./paths";
 import { errorMessage } from "./errors";
 import { withRecoveryFailures } from "./nginx-transaction";
@@ -68,16 +69,9 @@ function fpmTargets(paths: PhpGuardPaths): FpmTarget[] {
 
 /** Current drop-in contents, or null when absent; a symlink or untrusted file is treated as absent so it is overwritten. */
 function current(path: string, rootUid: number): string | null {
-  let info;
-  try {
-    info = lstatSync(path);
-  } catch {
-    return null;
-  }
   // Owner and mode, not content alone: a drop-in left group- or world-writable,
   // or replaced by a symlink, is one the next reconcile should rewrite to 0644.
-  if (!info.isFile() || info.uid !== rootUid || (info.mode & 0o022) !== 0) return null;
-  return readFileSync(path, "utf8");
+  return trustedText(path, rootUid);
 }
 
 export interface PhpGuardStatus {
@@ -118,8 +112,7 @@ export function reconcilePhpSessionGuard(install: boolean, options: PhpGuardOpti
   });
   if (changes.length === 0) return 0;
 
-  const write = (path: string, content: string | null) =>
-    content === null ? rmSync(path, { force: true }) : writeFileAtomic(path, content, { mode: 0o644 });
+  const write = (path: string, content: string | null) => writeOrRemove(path, content, { mode: 0o644 });
   const written: typeof changes = [];
   const attemptedReloads: string[] = [];
   const reload = (unit: string) => {

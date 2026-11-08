@@ -27,6 +27,7 @@ import {
 } from "../../lib/job-store";
 import { standInDomains } from "../../lib/stand-ins";
 import { writeFileAtomic } from "../../lib/atomic-write";
+import { isTrustedFile } from "../../lib/trusted-file";
 import { certificateIssuer, issuerLabel } from "../../lib/certificate-issuer";
 import { PANEL_USER_NAME_RE, panelUserSites } from "../../lib/panel-users";
 import { applyBranding, brandingAsset, MAX_BRANDING_INPUT_BYTES, readBranding, type Branding } from "./branding";
@@ -287,15 +288,10 @@ function nowIso(options: PanelTweaksActionOptions): string {
 
 // --- stored state ---------------------------------------------------------
 
-function trustedFile(path: string, expectedUid: number): boolean {
-  const stat = lstatSync(path);
-  return stat.isFile() && !stat.isSymbolicLink() && stat.uid === expectedUid && (stat.mode & 0o022) === 0;
-}
-
 function readJsonFile(path: string, expectedUid: number, what: string): Record<string, unknown> | null {
   if (!existsSync(path)) return null;
   try {
-    if (!trustedFile(path, expectedUid)) failAction(`the ${what} file is not a trusted regular file`);
+    if (!isTrustedFile(lstatSync(path), expectedUid)) failAction(`the ${what} file is not a trusted regular file`);
     const parsed = JSON.parse(readFileSync(path, "utf8"));
     if (typeof parsed !== "object" || parsed === null || Array.isArray(parsed)) return null;
     return parsed as Record<string, unknown>;

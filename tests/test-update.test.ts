@@ -208,7 +208,8 @@ mock.module("../cli/release", () => ({
   },
 }));
 
-mock.module("../lib/systemd", () => ({ unitActive: () => managerUnitState }));
+const { daemonReload } = await import("../lib/systemd");
+mock.module("../lib/systemd", () => ({ unitActive: () => managerUnitState, daemonReload }));
 const __catalog = await import("../addons/catalog");
 const __enabled = () => hasInstalledAddon;
 // Every addon counts as enabled here, so the Nginx block one keeps in CloudPanel's files is left alone.

@@ -24,6 +24,8 @@ import { openPanelDatabase, withPanelDb } from "../../lib/panel-db";
 import { CLI_BIN, DISTRO_NGINX_SITES_DIR, PANEL_DB, ROOT_UID, SYSTEMD_DIR } from "../../lib/paths";
 import { learnVhostMapContent, renderVhostBodyResult } from "../../lib/site-vhost";
 import { writeFileAtomic } from "../../lib/atomic-write";
+import { daemonReload } from "../../lib/systemd";
+import { isTrustedDirectory, present, regularText, trustedText } from "../../lib/trusted-file";
 import { readVarnishSettings, VHOST_VALUE_RULES } from "./vhost-values";
 
 export const VARNISH_PLACEHOLDER = "{{varnish_proxy_pass}}";
@@ -119,27 +121,9 @@ function includeContent(domain: string, line: string): string {
   return `# Managed by clp-addons System Tweaks: ${domain}'s Varnish backend, rewritten before nginx loads.\n${line ? `${line}\n` : ""}`;
 }
 
-function regularText(path: string): string | null {
-  try {
-    return lstatSync(path).isFile() ? readFileSync(path, "utf8") : null;
-  } catch {
-    return null;
-  }
-}
-
-function present(path: string): boolean {
-  try {
-    lstatSync(path);
-    return true;
-  } catch {
-    return false;
-  }
-}
-
 function isRootDir(path: string, rootUid: number): boolean {
   try {
-    const info = lstatSync(path);
-    return info.isDirectory() && !info.isSymbolicLink() && info.uid === rootUid && (info.mode & 0o022) === 0;
+    return isTrustedDirectory(lstatSync(path), rootUid);
   } catch {
     return false;
   }
@@ -380,11 +364,8 @@ ${options}
 
 /** The site's logrotate file when only root can change it, as a regular file. */
 function logrotateText(site: Site, paths: VarnishBackendPaths): string | null {
-  const file = join(paths.logrotateDir, site.user);
   try {
-    const info = lstatSync(file);
-    if (!info.isFile() || info.uid !== paths.vhostUid || (info.mode & 0o022) !== 0) return null;
-    return readFileSync(file, "utf8");
+    return trustedText(join(paths.logrotateDir, site.user), paths.vhostUid);
   } catch {
     return null;
   }
@@ -587,11 +568,6 @@ export function varnishDropIn(bin: string, startPre: string, reload: string): st
   ].join("\n");
 }
 
-function daemonReload(ctx: Context): void {
-  const reloaded = ctx.run("systemctl", ["daemon-reload"]);
-  if (!reloaded.ok) failAction(`systemctl daemon-reload failed: ${(reloaded.stderr || reloaded.stdout).trim()}`);
-}
-
 function expectedDropIn(ctx: Context): string {
   const { startPre, reload } = unitLines(ctx);
   return varnishDropIn(ctx.paths.bin, startPre, reload);
@@ -710,7 +686,7 @@ export function installVarnishBackends(options: VarnishBackendOptions = {}): boo
   let changed = false;
   if (regularText(ctx.paths.dropIn) !== dropIn) {
     writeFileAtomic(ctx.paths.dropIn, dropIn, { mode: 0o644, createParent: true });
-    daemonReload(ctx);
+    daemonReload(ctx.run);
     changed = true;
   }
   return withVhosts(ctx, true) || changed;
@@ -723,7 +699,7 @@ export function removeVarnishBackends(options: VarnishBackendOptions = {}): bool
   if (dropIn === null && !existsSync(ctx.paths.includeDir) && !existsSync(ctx.paths.logDir)) return false;
   if (dropIn !== null) {
     rmSync(ctx.paths.dropIn, { force: true });
-    daemonReload(ctx);
+    daemonReload(ctx.run);
   }
   const all = withPanelDb(ctx.paths.panelDb, sites);
   const passwd = passwdUsers(ctx.paths.passwdFile);
@@ -734,7 +710,7 @@ export function removeVarnishBackends(options: VarnishBackendOptions = {}): bool
   } catch (error) {
     if (dropIn !== null) {
       writeFileAtomic(ctx.paths.dropIn, dropIn, { mode: 0o644, createParent: true });
-      daemonReload(ctx);
+      daemonReload(ctx.run);
     }
     try { syncVarnishBackends(options); } catch {}
     throw error;

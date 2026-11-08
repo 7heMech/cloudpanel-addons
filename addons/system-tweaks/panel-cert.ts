@@ -14,7 +14,7 @@ import { hostname, networkInterfaces } from "node:os";
 import { join } from "node:path";
 import { errorMessage } from "../../lib/errors";
 import { failAction } from "../../lib/action";
-import { runCommand, type CommandResult } from "../../lib/command";
+import { commandOutput, runCommand, type CommandResult } from "../../lib/command";
 import { nginxFileChange, withNginxTransaction } from "../../lib/nginx-transaction";
 import { writeFileAtomic } from "../../lib/atomic-write";
 import { panelUserUid } from "../../lib/sso-auth";
@@ -200,7 +200,7 @@ function generate(paths: Paths, options: PanelCertOptions): { cert: string; key:
       "-days", String(VALID_DAYS), "-config", join(work, "req.cnf"),
       "-keyout", join(work, "key.pem"), "-out", join(work, "cert.pem"),
     ]);
-    if (!made.ok) failAction(`openssl could not generate a certificate: ${(made.stderr || made.stdout).trim()}`);
+    if (!made.ok) failAction(`openssl could not generate a certificate: ${commandOutput(made)}`);
     return { cert: readFileSync(join(work, "cert.pem"), "utf8"), key: readFileSync(join(work, "key.pem"), "utf8") };
   } finally {
     rmSync(work, { recursive: true, force: true });
