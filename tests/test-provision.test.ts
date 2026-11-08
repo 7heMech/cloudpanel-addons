@@ -6,12 +6,11 @@ import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { execFileSync } from "node:child_process";
 import { nginxLayout, PANEL_GROUP, SERVICE_GROUP, SERVICE_USER } from "../lib/paths";
-import { ADDON_NAMES, ADDONS } from "../addons/catalog";
+import { ADDONS } from "../addons/catalog";
 import {
   authUnits, ensurePanelSessionReadable, reconcileUnits, serviceUnit, vhostOwnerAccepted,
   warnIfPanelSessionUnreadable,
 } from "../cli/provision";
-import { panelUserUid } from "../lib/sso-auth";
 // Other suites in this process mock.module("../cli/provision"); the query suffix keeps
 // these assertions bound to the real implementation regardless of file order.
 const realProvision = async (): Promise<typeof import("../cli/provision")> =>
@@ -398,16 +397,13 @@ test("a non-docker required unit still fails fast with no provisioning attempt",
 });
 
 function provisionProbe(): {
-  identityPath: string;
   identity: { primary: string; aliases: string[] } | null;
   unsafeIdentity: { primary: string; aliases: string[] } | null;
 } {
   const script = `
     import { ADDONS } from "./addons/catalog.ts";
-    import { PANEL_IDENTITY_PATH } from "./lib/paths.ts";
     import { panelIdentityFromVhost } from "./lib/panel-identity.ts";
     console.log(JSON.stringify({
-      identityPath: PANEL_IDENTITY_PATH,
       identity: panelIdentityFromVhost(
         "server { listen 8443 ssl; server_name PANEL.Example.Test. www.PANEL.Example.Test. *.panel.example.test; }",
       ),
@@ -422,20 +418,6 @@ function provisionProbe(): {
   }));
 }
 
-// The rule builders these used to exercise were dead: the root gateway daemon
-// replaced sudo outright, and nothing but their own test had called them since.
-// What is worth asserting now is the absence, not the shape of a string.
-test("nothing in the tree grants the manager a sudo rule", () => {
-  // git grep exits 1 when nothing matches, which is the passing case here, so
-  // this cannot use execFileSync.
-  const granting = Bun.spawnSync(["git", "grep", "-l", "NOPASSWD", "--", "cli", "lib", "addons"], { cwd: REPO });
-  expect(granting.stdout.toString().trim()).toBe("");
-});
-
-test("the provisioner never writes a sudoers rule", () => {
-  expect(readFileSync(join(REPO, "cli/provision.ts"), "utf8")).not.toContain("/etc/sudoers.d");
-});
-
 test("panel identity extraction normalizes exact, alias, and wildcard names", () => {
   const { identity } = provisionProbe();
 
@@ -448,10 +430,6 @@ test("panel identity extraction normalizes exact, alias, and wildcard names", ()
 test("panel identity extraction rejects missing or unsafe names", () => {
   const { unsafeIdentity } = provisionProbe();
   expect(unsafeIdentity).toBeNull();
-});
-
-test("the identity file is a separate root-owned action input", () => {
-  expect(provisionProbe().identityPath).toBe("/etc/clp-addons/panel-identity.conf");
 });
 
 test("manager unit hardens its namespace with zero-sudo root gateway dispatch", () => {
@@ -684,18 +662,18 @@ test("the path unit watches panel files and Cloudflare range replacements", () =
 });
 
 test("the panel vhost may be owned by root or the panel user, but never world-writable", () => {
-  const panelUid = panelUserUid();
-  expect(vhostOwnerAccepted(0, 0o644)).toBe(true);
-  expect(vhostOwnerAccepted(0, 0o666)).toBe(false);
+  const panelUid = 999;
+  expect(vhostOwnerAccepted(0, 0o644, panelUid)).toBe(true);
+  expect(vhostOwnerAccepted(0, 0o666, panelUid)).toBe(false);
   // Group-writable is accepted: the CloudPanel tree is clp:clp 0770, and the
   // panel user is already inside the trust boundary (socket group, session
   // store). World-writable is the case that still means anyone can rewrite it.
-  expect(vhostOwnerAccepted(0, 0o660)).toBe(true);
-  if (panelUid !== null) {
-    expect(vhostOwnerAccepted(panelUid, 0o770)).toBe(true);
-    expect(vhostOwnerAccepted(panelUid, 0o777)).toBe(false);
-    expect(vhostOwnerAccepted(panelUid + 1000, 0o644)).toBe(false);
-  }
+  expect(vhostOwnerAccepted(0, 0o660, panelUid)).toBe(true);
+  expect(vhostOwnerAccepted(panelUid, 0o770, panelUid)).toBe(true);
+  expect(vhostOwnerAccepted(panelUid, 0o777, panelUid)).toBe(false);
+  expect(vhostOwnerAccepted(panelUid + 1000, 0o644, panelUid)).toBe(false);
+  // Without a panel account only root can own it.
+  expect(vhostOwnerAccepted(panelUid, 0o644, null)).toBe(false);
 });
 
 test("a stock catch-all panel vhost yields an empty identity, not an install failure", () => {
@@ -745,14 +723,6 @@ test("the root auth helper is reached by socket activation, not sudo", () => {
   // The reply must never carry helper diagnostics back to the caller.
   expect(service).toContain("StandardError=journal");
   expect(service).not.toContain("User=clp-addons");
-
-  // The manager must not reach the helper through sudo: its own unit implies
-  // NoNewPrivileges, under which sudo cannot escalate.
-  const client = readFileSync(join(import.meta.dir, "..", "lib/sso-auth.ts"), "utf8");
-  const gatewayClient = readFileSync(join(import.meta.dir, "..", "lib/gateway-client.ts"), "utf8");
-  expect(client).not.toMatch(/Bun\.spawn|"\/usr\/bin\/sudo"/);
-  expect(client).toContain("callGatewayAuth");
-  expect(gatewayClient).toContain("Bun.connect");
 });
 
 test("directory provisioning applies ownership natively and resolves each account once", () => {

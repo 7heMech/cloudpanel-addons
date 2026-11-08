@@ -10,19 +10,17 @@
 // refusals: the walk must consume the rendered file exactly to EOF, and a
 // placeholder appearing twice must resolve identically both times.
 import { describe, expect, test } from "bun:test";
-import { chmodSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from "node:fs";
+import { execFileSync } from "node:child_process";
+import { chmodSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, utimesSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { Database } from "bun:sqlite";
 import {
-  composeVhostBodyContent, learnVhostMapContent, recoverCarriedVhosts,
-  renderVhostBodyResult, vhostTemplateBodyFromContent,
+  carryVhost, composeVhostBodyContent, learnVhostMapContent, recoverCarriedVhosts,
+  renderVhostBodyResult, vhostBackupPath, vhostTemplateBodyFromContent,
 } from "../addons/stager/action";
 
 const repo = join(import.meta.dir, "..");
-
-function source(path: string): string {
-  return readFileSync(join(repo, path), "utf-8");
-}
 
 /** The learned map, or a one-entry map naming the refusal. */
 function learn(stored: string, rendered: string): Map<string, string> {
@@ -257,40 +255,92 @@ describe("learning what CloudPanel substituted into a vhost", () => {
   });
 
   // So the installer has to stage the two halves the way the panel writes
-  // them. The two writes sit far apart in carryVhost and drifting them apart
-  // would make the panel row and the file disagree.
+  // them: the row without a trailing newline, the file with one. Driven with
+  // chown, nginx, systemctl and CloudPanel's sqlite3 stubbed, against a panel
+  // database and vhost directory in a temporary directory.
   describe("staging the two halves", () => {
-    const carryVhost = () => {
-      const src = source("addons/stager/action.ts");
-      const from = src.indexOf("function carryVhost");
-      return src.slice(from, src.indexOf("\nfunction jobStateFor", from));
-    };
+    const SOURCE_STORED = "server {\n  server_name example.com;\n  {{root}}\n  location /custom { return 204; }\n}";
+    const TARGET_STORED = "server {\n  server_name stg.example.com;\n  {{root}}\n}";
+    const TARGET_RENDERED = "server {\n  server_name stg.example.com;\n  root /home/stg/htdocs/stg.example.com;\n}\n";
+    const COMPOSED = "server {\n  server_name stg.example.com;\n  {{root}}\n  location /custom { return 204; }\n}";
 
-    test("the carried body is staged without a trailing newline, the rendered file with one", () => {
-      const fn = carryVhost();
-      expect(fn).toInclude("writeFileSync(body, composed");
-      expect(fn).not.toInclude("writeFileSync(body, `${composed}\\n`");
-      expect(fn).toInclude("writeFileSync(rendered, `${renderedBody}\\n`");
+    function carry(fail: { nginxTest?: boolean; reload?: boolean } = {}): { ok: boolean; reason: string; row: string; conf: string; leftovers: string[] } {
+      const dir = mkdtempSync(`${tmpdir()}/clp-stager-carry-`);
+      const oldPath = process.env.PATH;
+      try {
+        const bin = `${dir}/bin`;
+        mkdirSync(bin, { recursive: true });
+        const stub = (name: string, body: string) => writeFileSync(`${bin}/${name}`, `#!/bin/sh\n${body}\n`, { mode: 0o755 });
+        stub("chown", "exit 0");
+        stub("nginx", fail.nginxTest ? "exit 1" : "exit 0");
+        stub("systemctl", fail.reload ? "exit 1" : "exit 0");
+        stub("runuser", 'shift 3\nexec "$@"');
+        // CloudPanel's sqlite3 CLI, with its readfile() inlined for bun:sqlite.
+        writeFileSync(`${bin}/sqlite3.ts`, `
+          import { Database } from "bun:sqlite";
+          import { readFileSync } from "node:fs";
+          const [path, statement] = process.argv.slice(2);
+          const sql = statement.replace(/readfile\\('((?:[^']|'')*)'\\)/g, (_, file) => "'" + readFileSync(file.replaceAll("''", "'"), "utf8").replaceAll("'", "''") + "'");
+          new Database(path).exec(sql);
+        `);
+        stub("sqlite3", `exec "${process.execPath}" "${bin}/sqlite3.ts" "$@"`);
+
+        const panelDb = `${dir}/panel.db`;
+        const db = new Database(panelDb);
+        db.run("CREATE TABLE site (domain_name TEXT, type TEXT, application TEXT, vhost_template TEXT, updated_at TEXT)");
+        db.query("INSERT INTO site VALUES (?, 'static', 'Static', ?, '')").run("example.com", SOURCE_STORED);
+        db.query("INSERT INTO site VALUES (?, 'static', 'Static', ?, '')").run("stg.example.com", TARGET_STORED);
+        db.close();
+        mkdirSync(`${dir}/vhosts`);
+        writeFileSync(`${dir}/vhosts/stg.example.com.conf`, TARGET_RENDERED);
+        mkdirSync(`${dir}/tmp`);
+        const paths = {
+          lockDir: `${dir}/lock`, dataBaseDir: `${dir}/data`, jobsDir: `${dir}/jobs`, panelDb,
+          clpctl: `${bin}/clpctl`, panelIdentityFile: `${dir}/identity`, nginxVhostDir: `${dir}/vhosts`,
+          instaticDataDir: `${dir}/instatic`, actionBinary: `${bin}/clp-addons`, tempDir: `${dir}/tmp`, sqlite3: `${bin}/sqlite3`,
+        };
+        process.env.PATH = `${bin}:${oldPath ?? ""}`;
+        const ctx = { paths, source: "example.com", target: "stg.example.com", siteCreated: true, vhostStage: "" };
+        const result = carryVhost(ctx as unknown as Parameters<typeof carryVhost>[0], "static", "Static");
+        const check = new Database(panelDb, { readonly: true });
+        const row = (check.query("SELECT vhost_template FROM site WHERE domain_name = 'stg.example.com'").get() as { vhost_template: string }).vhost_template;
+        check.close();
+        return {
+          ...result,
+          row,
+          conf: readFileSync(`${dir}/vhosts/stg.example.com.conf`, "utf-8"),
+          leftovers: readdirSync(`${dir}/vhosts`).filter((file) => file !== "stg.example.com.conf"),
+        };
+      } finally {
+        if (oldPath === undefined) delete process.env.PATH;
+        else process.env.PATH = oldPath;
+        rmSync(dir, { recursive: true, force: true });
+      }
+    }
+
+    test("the carried body is recorded without a trailing newline, the rendered file with one", () => {
+      expect(carry()).toEqual({
+        ok: true, reason: "", row: COMPOSED,
+        conf: "server {\n  server_name stg.example.com;\n  root /home/stg/htdocs/stg.example.com;\n  location /custom { return 204; }\n}\n",
+        leftovers: [],
+      });
     });
 
-    // Every failure that can run after the UPDATE has to put the row back as
-    // well as the file, and that is more branches than it looks:
-    // panelUpdateSite returning 1 from its *read-back* means the UPDATE
-    // already ran. Leaving the row alone there is the one disagreement the
-    // file-first ordering exists to prevent -- the panel regenerates the file
-    // from the row -- reached by the failure path instead of the success path.
-    test("every restore that can follow the panel write restores the row too", () => {
-      const fn = carryVhost();
-      const writeAt = fn.indexOf("if (!panelUpdateSite");
-      expect(writeAt).not.toBe(-1);
-      const after = [...fn.slice(writeAt).matchAll(/restore\((true|false),/g)].map((match) => match[1]!);
-      expect(after).toEqual(["true", "true"]);
+    test("a config nginx rejects puts the stock file back before the row is touched", () => {
+      expect(carry({ nginxTest: true })).toEqual({
+        ok: false, reason: "nginx rejected the carried config, so the clone keeps the stock one",
+        row: TARGET_STORED, conf: TARGET_RENDERED, leftovers: [],
+      });
     });
 
-    test("and the ones that cannot do not touch the row", () => {
-      const calls = [...carryVhost().matchAll(/restore\((true|false),/g)].map((match) => match[1]!);
-      expect(calls).toHaveLength(4);
-      expect(calls.filter((value) => value === "false")).toHaveLength(2);
+    // A failure after the panel write has to put the row back as well as the
+    // file: the panel regenerates the file from the row, so leaving the row
+    // carried would bring the rejected config back.
+    test("a reload that fails after the panel write puts back both the row and the file", () => {
+      expect(carry({ reload: true })).toEqual({
+        ok: false, reason: "nginx would not reload the carried config, so the clone keeps the stock one",
+        row: TARGET_STORED, conf: TARGET_RENDERED, leftovers: [],
+      });
     });
   });
 });
@@ -403,7 +453,8 @@ describe("composing a clone's vhost from its source's", () => {
 // repair runs every fifteen minutes, is what finds it.
 describe("a killed clone does not leave the box worse off", () => {
   test("the backup is not something nginx's sites-enabled/*.conf glob loads", () => {
-    expect("example.com.conf.clp-stager-bak".endsWith(".conf")).toBe(false);
+    const paths = { nginxVhostDir: "/etc/nginx/sites-enabled" } as Parameters<typeof vhostBackupPath>[0];
+    expect(vhostBackupPath(paths, "example.com").endsWith(".conf")).toBe(false);
   });
 
   // Driven with nginx and systemctl stubbed, because the point is which file
@@ -460,19 +511,65 @@ describe("a killed clone does not leave the box worse off", () => {
   // blocked for good. That is what a killed job leaves, because cmdRun writes
   // `running` and only ever writes `done` or `failed` itself.
   describe("what prune sweeps", () => {
-    const pruneBody = () => {
-      const src = source("addons/stager/action.ts");
-      const prune = src.slice(src.indexOf("function cmdPrune"));
-      return prune.slice(0, prune.indexOf("\nfunction dispatch"));
-    };
+    function prune(): { reply: unknown; conf: string; vhosts: string[]; staged: string[] } {
+      const dir = mkdtempSync(`${tmpdir()}/clp-stager-prune-`);
+      try {
+        const bin = `${dir}/bin`;
+        mkdirSync(bin, { recursive: true });
+        writeFileSync(`${bin}/chown`, "#!/bin/sh\nexit 0\n", { mode: 0o755 });
+        writeFileSync(`${bin}/nginx`, "#!/bin/sh\nexit 0\n", { mode: 0o755 });
+        // No job unit is running, so a job recorded as running was killed.
+        writeFileSync(`${bin}/systemctl`, '#!/bin/sh\n[ "$1" = is-active ] && exit 3\nexit 0\n', { mode: 0o755 });
+        const job = `${dir}/jobs/20260908T120000Z-aaaaaa`;
+        mkdirSync(job, { recursive: true });
+        writeFileSync(`${job}/target`, "stg.example.com\n");
+        writeFileSync(`${job}/state`, "running\n");
+        const tenMinutesAgo = new Date(Date.now() - 10 * 60 * 1000);
+        utimesSync(job, tenMinutesAgo, tenMinutesAgo);
+        mkdirSync(`${dir}/vhosts`);
+        writeFileSync(`${dir}/vhosts/stg.example.com.conf`, "CARRIED\n");
+        writeFileSync(`${dir}/vhosts/stg.example.com.conf.clp-stager-bak`, "STOCK\n");
+        const twoDaysAgo = new Date(Date.now() - 2 * 24 * 60 * 60 * 1000);
+        for (const name of ["clp-stager-stage.stale", "clp-stager-stage.fresh", "other.stale"]) {
+          mkdirSync(`${dir}/tmp/${name}`, { recursive: true });
+          if (name.endsWith(".stale")) utimesSync(`${dir}/tmp/${name}`, twoDaysAgo, twoDaysAgo);
+        }
+        const paths = { lockDir: `${dir}/lock`, jobsDir: `${dir}/jobs`, nginxVhostDir: `${dir}/vhosts`, tempDir: `${dir}/tmp` };
+        const script = `
+          import { mock } from "bun:test";
+          mock.module("./lib/panel-identity.ts", async () => {
+            const real = await import("./lib/panel-identity.ts?prune-sweep");
+            return { ...real, readPanelIdentity: () => ({ primary: "panel.example.test", aliases: [] }) };
+          });
+          Object.defineProperty(process, "getuid", { value: () => 0, configurable: true });
+          const { runStagerAction } = await import("./addons/stager/action.ts");
+          process.exit(await runStagerAction(["prune"], { paths: ${JSON.stringify(paths)} }));
+        `;
+        const stdout = execFileSync(process.execPath, ["-e", script], {
+          cwd: repo, encoding: "utf8", env: { ...process.env, PATH: `${bin}:${process.env.PATH ?? ""}` }, stdio: ["ignore", "pipe", "ignore"],
+        });
+        return {
+          reply: JSON.parse(stdout.trim()),
+          conf: readFileSync(`${dir}/vhosts/stg.example.com.conf`, "utf-8").trim(),
+          vhosts: readdirSync(`${dir}/vhosts`).sort(),
+          staged: readdirSync(`${dir}/tmp`).sort(),
+        };
+      } finally {
+        rmSync(dir, { recursive: true, force: true });
+      }
+    }
 
-    test("it also sweeps a staging directory a killed job left in /tmp", () => {
-      expect(pruneBody()).toInclude('entry.startsWith("clp-stager-stage.")');
+    // The recovery runs after the records are swept: before, the killed job
+    // would still read as running and own its carried vhost.
+    test("a killed job is failed and its stock vhost put back in the same pass", () => {
+      const result = prune();
+      expect(result.reply).toEqual({ ok: true, data: { removed: 0, stuck: 1, vhostsRecovered: 1, promotionsRecovered: 0, rootsRemoved: 0 } });
+      expect(result.conf).toBe("STOCK");
+      expect(result.vhosts).toEqual(["stg.example.com.conf"]);
     });
 
-    test("and runs the vhost recovery after the records, not before", () => {
-      const body = pruneBody();
-      expect(body.indexOf("recoverCarriedVhosts(paths)")).toBeGreaterThan(body.indexOf("pruneJobs({"));
+    test("it also sweeps a staging directory a killed job left in /tmp, and only that", () => {
+      expect(prune().staged).toEqual(["clp-stager-stage.fresh", "other.stale"]);
     });
   });
 });

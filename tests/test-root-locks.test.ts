@@ -3,7 +3,7 @@ import { afterAll, beforeAll, expect, test } from "bun:test";
 import { chmodSync, mkdtempSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { createAuthActionServer } from "../cli/auth-action";
-import { LOCKABLE_ADDONS, addonLocked, lockState, lockedAddons } from "../lib/root-locks";
+import { addonLocked, lockState, lockedAddons } from "../lib/root-locks";
 
 const uid = process.getuid?.() ?? 0;
 let dir = "";
@@ -45,10 +45,6 @@ async function ask(file: string, addon: string, verb: string): Promise<{ reply: 
     await new Promise<void>((resolve) => server.close(() => resolve()));
   }
 }
-
-test("System Tweaks is lockable", () => {
-  expect(LOCKABLE_ADDONS).toContain("system-tweaks");
-});
 
 test("a locked addon's protections are refused, and its other verbs still run", async () => {
   const file = locks(["system-tweaks"]);

@@ -25,19 +25,11 @@ const mockPrelude = String.raw`
   import { mock } from "bun:test";
   Object.defineProperty(process, "getuid", { value: () => 0, configurable: true });
 
-  function parseFlags(argv) {
-    const positional = [];
-    const flags = {};
-    for (const arg of argv) {
-      if (!arg.startsWith("--")) { positional.push(arg); continue; }
-      const equal = arg.indexOf("=");
-      flags[arg.slice(2, equal === -1 ? undefined : equal)] = equal === -1 ? true : arg.slice(equal + 1);
-    }
-    return { positional, flags };
-  }
-
   const realPaths = await import("./lib/paths.ts");
-  mock.module("./lib/paths.ts", () => ({ ...realPaths }));
+  const __fs = await import("node:fs");
+  const __lockDir = __fs.mkdtempSync((await import("node:os")).tmpdir() + "/clp-repair-lock-");
+  process.on("exit", () => __fs.rmSync(__lockDir, { recursive: true, force: true }));
+  mock.module("./lib/paths.ts", () => ({ ...realPaths, LOCK_DIR: __lockDir, CONFFILES_RELEASED_FLAG: __lockDir + "/conffiles-released" }));
   mock.module("./lib/php-guard.ts", () => ({ reconcilePhpGuard: () => {} }));
   mock.module("./lib/version.ts", () => ({ CLI_VERSION: "1.0.0", DEV_VERSION: "0.0.0-dev" }));
   mock.module("./cli/release.ts", () => ({

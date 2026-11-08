@@ -81,10 +81,9 @@ const directoryOperations: DirectoryOperations = {
  * panel user can mint a session that comes back ROLE_ADMIN. What is worth
  * refusing is a vhost any local user can rewrite.
  */
-export function vhostOwnerAccepted(uid: number, mode: number): boolean {
+export function vhostOwnerAccepted(uid: number, mode: number, panelUid = panelUserUid()): boolean {
   if ((mode & 0o002) !== 0) return false;
   if (uid === 0) return true;
-  const panelUid = panelUserUid();
   return panelUid !== null && uid === panelUid;
 }
 

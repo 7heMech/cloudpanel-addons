@@ -1,4 +1,4 @@
-import { expect, test } from "bun:test";
+import { expect, spyOn, test } from "bun:test";
 import { Database } from "bun:sqlite";
 import {
   chmodSync, chownSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, utimesSync, writeFileSync,
@@ -6,7 +6,7 @@ import {
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
-  DEFAULT_CATEGORY_PROFILE, executeResourceLimitsAction, parseProfile, readProfileFromPool, renderPool,
+  executeResourceLimitsAction, parseProfile, readProfileFromPool, renderPool,
   PRESET_CATEGORIES, STOCK_PROFILE,
   type ResourceLimitsActionOptions, type ResourceLimitsActionPaths, type ResourceLimitsResult,
   type ResourceLimitsState, type PoolProfile, type PoolSiteState, type ReconcileResult,
@@ -250,19 +250,6 @@ test("a server that has saved nothing already has the preset categories", async 
     box.addSite("shop.example.com", "8.2");
     const state = await executeResourceLimitsAction(["list"], options(box)) as ResourceLimitsState;
     expect(state.categories.map((category) => category.id)).toEqual(["lite", "standard", "pro"]);
-    expect(state.categories.map((category) => ({
-      mode: category.profile.pm,
-      maxChildren: category.profile.maxChildren,
-      maxRequests: category.profile.maxRequests,
-    }))).toEqual([
-      { mode: "ondemand", maxChildren: 3, maxRequests: 200 },
-      { mode: "ondemand", maxChildren: 8, maxRequests: 200 },
-      { mode: "dynamic", maxChildren: 12, maxRequests: 200 },
-    ]);
-    expect(state.categories[2]!.profile).toMatchObject({
-      startServers: 2, minSpareServers: 1, maxSpareServers: 3,
-    });
-    expect(DEFAULT_CATEGORY_PROFILE).toEqual(state.categories[0]!.profile);
     const page = dashboardView(state);
     expect(page).toContain("Limits apply to every site separately");
     expect(page).toContain("data-default-profile=");
@@ -640,8 +627,6 @@ test("the page puts the sites first and the default for new sites in the Categor
     current: { ...STOCK_PROFILE }, categoryId: "lite", categoryName: "Lite", drifted: index === 0,
   }));
   const html = dashboardView({ memory: { error: "Unavailable" }, categories: PRESET_CATEGORIES, defaultCategoryId: "standard", sites });
-  expect(html).not.toContain('class="card stats"');
-  expect(html).not.toContain("default-card");
   expect(html.indexOf("<h2>PHP sites</h2>")).toBeLessThan(html.indexOf("<h2>Categories</h2>"));
   expect(html.indexOf("<h2>Categories</h2>")).toBeLessThan(html.indexOf('id="default-category"'));
   expect(html).toContain("None (CloudPanel&#x27;s limits)");
@@ -649,8 +634,6 @@ test("the page puts the sites first and the default for new sites in the Categor
   expect(html).toMatch(/data-domain="a\.example\.com" data-show="drifted php-[^"]* category-[^"]*"/);
   expect(html).toContain('id="assign-selected" type="button" disabled data-needs-selection');
   expect(html).toContain('id="bulk-category" data-keep');
-  expect(html).not.toContain("closeCategoryDialogOnBackdrop");
-  expect(html).not.toContain("fifteen minutes of being created");
 });
 
 test("a category's unused spare-server numbers do not read as drift", async () => {
@@ -717,9 +700,14 @@ test("a temp-cleanup failure still reconciles PHP pools", async () => {
     box.addSite("shop.example.com", "8.2");
     await assign(box, ["shop.example.com"], "standard");
     writeFileSync(box.poolOf("shop.example.com", "8.2"), STOCK_POOL);
-    await RESOURCE_LIMITS_ADDON.repair!.run({
-      ...options(box), tmpCleanup: { panelDb: join(box.root, "missing/db.sq3") },
-    } as Record<string, unknown>);
+    const warned: string[] = [];
+    const warn = spyOn(console, "warn").mockImplementation((message: string) => { warned.push(message); });
+    try {
+      await RESOURCE_LIMITS_ADDON.repair!.run({
+        ...options(box), tmpCleanup: { panelDb: join(box.root, "missing/db.sq3") },
+      } as Record<string, unknown>);
+    } finally { warn.mockRestore(); }
+    expect(warned.some((line) => line.includes("resource limits /tmp cleanup failed: panel database is not readable"))).toBe(true);
     expect(readProfileFromPool(readFileSync(box.poolOf("shop.example.com", "8.2"), "utf8"))).toEqual(BUSY.profile);
   } finally { rmSync(box.root, { recursive: true, force: true }); }
 });

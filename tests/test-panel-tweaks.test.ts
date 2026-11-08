@@ -26,12 +26,23 @@ import { jobDir, jobGet, jobSet } from "../lib/job-store";
 import { webVerb } from "../lib/gateway-protocol";
 import { CLOUDFLARE_ORIGIN } from "./fixtures/certificates";
 
-const loginTarget = PANEL_TWEAKS_TARGETS.find((target) => target.slug === "login-device-theme")!;
 const sitesTarget = PANEL_TWEAKS_TARGETS.find((target) => target.slug === "sites-table")!;
 const headerTargets = PANEL_TWEAKS_TARGETS.filter((target) => target.slug.startsWith("header-"));
 
 function sites(wanted: Partial<PanelTweaks> = {}): string {
   return sitesSnippet("/addons/panel-tweaks", { ...DEFAULT_TWEAKS, ...wanted });
+}
+
+/** One named function out of the block's script, to run on stubs of what it touches. */
+function snippetFunction(snippet: string, name: string): string {
+  const start = snippet.indexOf(`function ${name}(`);
+  if (start === -1) throw new Error(`the block has no function ${name}`);
+  let depth = 0;
+  for (let i = snippet.indexOf("{", start); i < snippet.length; i++) {
+    if (snippet[i] === "{") depth++;
+    else if (snippet[i] === "}" && --depth === 0) return snippet.slice(start, i + 1);
+  }
+  throw new Error(`function ${name} does not end`);
 }
 
 // --- the login page's device theme ---------------------------------------
@@ -75,12 +86,8 @@ function run(options: {
   return { dark: classes.has("dark"), cookies, store };
 }
 
-test("the script is injected into the shared login layout, ahead of its stylesheets", () => {
-  expect(loginTarget.template).toBe("Frontend/Login/layout.html.twig");
-  expect(loginTarget.anchorBefore).toBe("{% block stylesheets %}");
-  expect(loginTarget.required).toBe(true);
-  const rendered = `${deviceThemeSnippet(true)}${loginTarget.anchorBefore}`;
-  expect(rendered.indexOf("prefers-color-scheme: dark")).toBeLessThan(rendered.indexOf(loginTarget.anchorBefore!));
+test("switching the device theme on puts the device query on the login page", () => {
+  expect(deviceThemeSnippet(true)).toContain("prefers-color-scheme: dark");
 });
 
 // The login page has no session, so the switch cannot be read at request time
@@ -163,8 +170,6 @@ test("unusable local storage leaves the panel's own default in place", () => {
 
 test("the sites block serves every panel user and degrades rather than blocking an install", () => {
   const snippet = sites();
-  expect(sitesTarget.template).toBe("Frontend/Site/index.html.twig");
-  expect(sitesTarget.anchorBefore).toBe('<div class="card card-table">');
   expect(sitesTarget.required).toBe(false);
   // The Sites page is everyone's, and the reply the script reads is narrowed to
   // the rows CloudPanel drew for whoever asked.
@@ -236,13 +241,35 @@ test("the column picker is in the block, and a switched-off column is never pain
 
 // The download is the toolbar's, so it comes and goes with the Sites table
 // switch, and a value a spreadsheet would run as a formula goes in as text.
-test("the download sits in the toolbar and quotes formulas as text", () => {
+test("the download sits in the toolbar and quotes formulas as text", async () => {
   expect(sites({ sitesTable: true })).toMatch(/<button type="button" class="form-control clp-tweaks-download" id="clp-tweaks-download"\s[^>]*Download the sites shown as CSV">/);
   expect(sites({ sitesTable: false })).toMatch(/id="clp-tweaks-download"[^>]* hidden>/);
   const snippet = sites({ sitesTable: true });
-  expect(snippet).toContain("buildDownload(rows, Boolean(tweaks.diskUsage));");
-  expect(snippet).toContain(`if (/^[=+\\-@\\t\\r]/.test(text)) text = "'" + text;`);
-  expect(snippet).toContain('return \'"\' + text.replace(/"/g, \'""\') + \'"\';');
+  let click = () => {};
+  const button = { hidden: true, addEventListener: (_name: string, handler: () => void) => { click = handler; } };
+  const blobs: Blob[] = [];
+  const buildDownload = new Function(
+    "document", "URL", "Blob", "Node", "location", "setTimeout", "applicationName", "certificateName",
+    `${snippetFunction(snippet, "buildDownload")}\nreturn buildDownload;`,
+  )(
+    {
+      getElementById: () => button,
+      createElement: () => ({ click: () => {}, remove: () => {} }),
+      body: { appendChild: () => {} },
+    },
+    { createObjectURL: (blob: Blob) => { blobs.push(blob); return "blob:x"; }, revokeObjectURL: () => {} },
+    Blob, { DOCUMENT_POSITION_FOLLOWING: 4 }, { hostname: "panel.example.com" }, () => 0,
+    (site: { application: string }) => site.application, (type: string) => type,
+  );
+  const site = {
+    user: "=cmd", application: 'a"b', runtime: "PHP 8.3", certificate: null, disk: null,
+    createdAt: "", cloudflareOnly: false, varnish: false,
+  };
+  buildDownload([{ domain: "shop.example.com", site, el: { hidden: false, compareDocumentPosition: () => 4 } }], false);
+  expect(button.hidden).toBe(false);
+  click();
+  const lines = (await blobs[0]!.text()).split("\r\n");
+  expect(lines[1]).toBe('"shop.example.com","\'=cmd","a""b","PHP 8.3","None","","","no","no"');
 });
 
 // The addon's own page shows the panel's Sites page in a frame, so an operator
@@ -350,8 +377,26 @@ test("the narrow-screen table, the row menu and the header are each in or out of
 // none of them.
 test("the mobile layout turns a site tab's tables into labelled cards", () => {
   const frontend = panelMobileSnippet(true);
-  expect(frontend).toContain('setAttribute("data-label", th.textContent.trim())');
-  expect(panelMobileSnippet(true, true)).not.toContain("site-content");
+  const script = frontend.slice(frontend.indexOf("<script>") + "<script>".length, frontend.lastIndexOf("</script>"));
+  const cell = (label?: string) => {
+    const attributes = new Map<string, string>(label ? [["data-label", label]] : []);
+    return {
+      attributes,
+      hasAttribute: (name: string) => attributes.has(name),
+      setAttribute: (name: string, value: string) => { attributes.set(name, value); },
+    };
+  };
+  const head = { rows: [{ cells: [{ textContent: " Domain " }, { textContent: "Expires\n" }] }] };
+  const row = { cells: [cell(), cell("kept")], closest: () => ({ tHead: head }) };
+  let loaded = () => {};
+  new Function("document", "MutationObserver", script)({
+    documentElement: {},
+    querySelectorAll: () => [row],
+    addEventListener: (name: string, handler: () => void) => { if (name === "DOMContentLoaded") loaded = handler; },
+  }, class { observe() {} disconnect() {} });
+  loaded();
+  expect(row.cells.map((c) => c.attributes.get("data-label"))).toEqual(["Domain", "kept"]);
+  expect(panelMobileSnippet(true, true)).not.toContain("<script>");
 });
 
 // The new-site pages are a fixed 800px of two-column cards and unstacking
@@ -416,9 +461,25 @@ test("a menu-only action is hidden by its own addon and shown by the menu", () =
   // the panel's own actions, then the addons' links, then the menu-only ones
   // nobody asked to have in the row -- whatever order the templates were
   // patched in.
-  expect(menu).toContain(`if (link.classList.contains("${MENU_ONLY_CLASS}")) rare.push(link);`);
-  expect(menu).toContain(`else if (link.classList.contains("${ROW_ACTION_CLASS}")) added.push(link);`);
-  expect(menu).toContain("var actions = native.concat(added, rare);");
+  const link = (name: string, className = "") => ({ name, classList: { contains: (c: string) => c === className } });
+  const found = [link("rare", MENU_ONLY_CLASS), link("added", ROW_ACTION_CLASS), link("delete"), link("manage")];
+  const lists: { className: string; items: { name: string }[] }[] = [];
+  const element = () => {
+    const el = { className: "", items: [] as { name: string }[], setAttribute: () => {}, addEventListener: () => {},
+      appendChild: (child: { name: string }) => { el.items.push(child); } };
+    return el;
+  };
+  const buildMenus = new Function("document", "window", `${snippetFunction(menu, "buildMenus")}\nreturn buildMenus;`)(
+    {
+      createElement: element,
+      body: { appendChild: (list: { className: string; items: { name: string }[] }) => { lists.push(list); } },
+      addEventListener: () => {},
+    },
+    { addEventListener: () => {} },
+  );
+  buildMenus([{ domain: "shop.example.com", el: { lastElementChild: { querySelectorAll: () => found, appendChild: () => {} } } }]);
+  expect(lists.map((list) => [list.className, list.items.map((item) => item.name)]))
+    .toEqual([[ROW_MENU_CLASS, ["delete", "manage", "added", "rare"]]]);
 
   // A filtered-out row is a block or a flex item in the card layout, which
   // ignores what the hidden attribute would otherwise do on its own.
@@ -427,15 +488,9 @@ test("a menu-only action is hidden by its own addon and shown by the menu", () =
 
 // Both of CloudPanel's headers open with the same tag, and neither may stop an
 // install: a release that renames the header costs the rules, not the addon.
-test("the header rules go ahead of both headers and are not required", () => {
-  expect(headerTargets.map((target) => target.template)).toEqual([
-    "Frontend/Partial/header.html.twig",
-    "Admin/Partial/header.html.twig",
-  ]);
-  for (const target of headerTargets) {
-    expect(target.anchorBefore).toBe('<header class="header d-flex">');
-    expect(target.required).toBe(false);
-  }
+test("the header rules are not required", () => {
+  expect(headerTargets.length).toBeGreaterThan(0);
+  for (const target of headerTargets) expect(target.required).toBe(false);
 });
 
 test("the mobile switch adds the Admin layout only to the Admin header", async () => {

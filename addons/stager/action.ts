@@ -976,11 +976,11 @@ export function panelUpdateSite(ctx: RunContext, type: string, application: stri
   }
 }
 
-function vhostBackupPath(paths: StagerActionPaths, domain: string): string {
+export function vhostBackupPath(paths: StagerActionPaths, domain: string): string {
   return join(paths.nginxVhostDir, `${domain}.conf.clp-stager-bak`);
 }
 
-function carryVhost(ctx: RunContext, type: string, application: string): { ok: boolean; reason: string } {
+export function carryVhost(ctx: RunContext, type: string, application: string): { ok: boolean; reason: string } {
   const conf = join(ctx.paths.nginxVhostDir, `${ctx.target}.conf`);
   if (!isRegularFile(conf)) return { ok: false, reason: "CloudPanel wrote no vhost file for the clone" };
 

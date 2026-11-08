@@ -3,6 +3,7 @@
 // here is that a stale notice is cleared as readily as a fresh one is shown.
 import { afterEach, describe, expect, test } from "bun:test";
 import { renderLayout } from "../lib/app-ui";
+import { CLI_VERSION } from "../lib/version";
 import { headerTarget, headerUpdateScript } from "../lib/panel-nav";
 import { isPrerelease } from "../lib/semver";
 import { checkCliUpdate, isNewerVersion, resetUpdateCache } from "../lib/update-check";
@@ -26,8 +27,9 @@ test("native header follows the manager's update state and clears a restored sta
   let releaseHeld: ((response: FakeResponse) => void) | null = null;
   const label = { textContent: "" };
   const badge = { title: "" };
+  const changelog = { href: "" };
   const element = {
-    querySelector: (selector: string) => selector === ".update-label" ? label : badge,
+    querySelector: (selector: string) => ({ ".update-label": label, ".clp-addon-update-badge": badge, ".clp-addon-changelog-link": changelog })[selector],
     remove: () => { notice = null; },
   };
   const classes = new Set<string>();
@@ -65,6 +67,8 @@ test("native header follows the manager's update state and clears a restored sta
   await Bun.sleep(0);
   expect(fetchedUrl).toBe("/addons/api/update");
   expect(label.textContent).toBe("Addons · v1.1.0 available");
+  expect(badge.title).toBe("clp-addons v1.1.0 available");
+  expect(changelog.href).toBe("https://github.com/7heMech/cloudpanel-addons/releases/tag/v1.1.0");
   expect(classes.has("clp-addons-has-update")).toBe(true);
 
   info = { current: "1.1.0", latest: "1.1.0", hasUpdate: false };
@@ -161,7 +165,7 @@ describe("the snippet injected into CloudPanel's header", () => {
   // The snippet is baked into a Twig template the panel caches, so a version
   // in it would outlive the release it names.
   test("embeds no version of its own", () => {
-    expect(snippet()).not.toInclude("0.9.3");
+    expect(snippet()).not.toInclude(CLI_VERSION);
   });
 
   test("links to the manager under the Addons label", () => {
@@ -169,10 +173,8 @@ describe("the snippet injected into CloudPanel's header", () => {
     expect(snippet()).toInclude('href="https://addons.example.com/addons/"');
   });
 
-  test("offers separate changelog and update links", () => {
-    const snip = snippet();
-    expect(snip).toInclude("https://addons.example.com/addons/update");
-    expect(snip).toInclude('.href = "https://github.com/7heMech/cloudpanel-addons/releases/tag/v" + encodeURIComponent(latest)');
+  test("offers an update link beside the changelog", () => {
+    expect(snippet()).toInclude("https://addons.example.com/addons/update");
   });
 
   test("keeps narrow-screen navigation above the update row", () => {

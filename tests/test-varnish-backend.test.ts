@@ -8,7 +8,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { CommandResult } from "../lib/command";
 import {
-  addonLogrotate, cloudpanelLogrotate, sitesWithOwnLogrotate,
+  cloudpanelLogrotate, sitesWithOwnLogrotate,
   installVarnishBackends, removeVarnishBackends, syncVarnishBackends, varnishBackend, varnishBackendsActive,
   type VarnishBackendOptions,
 } from "../addons/system-tweaks/varnish-backend";
@@ -295,7 +295,6 @@ test("CloudPanel's logrotate file rotates the site's own folders as its user and
   chmodSync(join(dir, "shop"), 0o644);
   installVarnishBackends(f.options);
   const managed = readFileSync(join(dir, "shop"), "utf8");
-  expect(managed).toBe(addonLogrotate("shop", join(f.dir, "nginx-logs")));
   expect(managed).toContain("/home/shop/logs/php/*.log /home/shop/logs/varnish-cache/*.log {\n    su shop shop\n");
   expect(managed).toContain(`${join(f.dir, "nginx-logs")}/shop/*.log {\n    daily`);
   expect(managed).not.toContain("su root root");

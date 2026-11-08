@@ -60,11 +60,11 @@ export function parsePanelIdentity(content: string): PanelIdentity | null {
   return seenPrimary && seenAliases ? { primary, aliases } : null;
 }
 
-export function readPanelIdentity(path = PANEL_IDENTITY_PATH): PanelIdentity | null {
+export function readPanelIdentity(path = PANEL_IDENTITY_PATH, ownerUid = 0): PanelIdentity | null {
   let stat;
   try {
     stat = lstatSync(path);
-    if (!stat.isFile() || stat.uid !== 0 || (stat.mode & 0o022) !== 0) return null;
+    if (!stat.isFile() || stat.uid !== ownerUid || (stat.mode & 0o022) !== 0) return null;
   } catch {
     return null;
   }

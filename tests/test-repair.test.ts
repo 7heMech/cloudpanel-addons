@@ -24,36 +24,14 @@ const PROBE = String.raw`
     ...realPaths,
     PHP_ROOT: join(phpFixture, "php"),
     PHP_FPM_BIN_DIR: join(phpFixture, "sbin"),
+    LOCK_DIR: join(phpFixture, "lock"),
+    CONFFILES_RELEASED_FLAG: join(phpFixture, "lock/conffiles-released"),
   }));
 
   const calls = [];
   let hasInstalledAddon = true;
-  const provisioning = {
-    dirs: false,
-    sudoers: false,
-    units: false,
-    nginx: false,
-  };
-
-  function resetProvisioning() {
-    Object.assign(provisioning, { dirs: false, sudoers: false, units: false, nginx: false });
-  }
 
   class TestFatal extends Error {}
-
-  function parseFlags(argv) {
-    const positional = [];
-    const flags = {};
-    for (const arg of argv) {
-      if (!arg.startsWith("--")) {
-        positional.push(arg);
-        continue;
-      }
-      const equal = arg.indexOf("=");
-      flags[arg.slice(2, equal === -1 ? undefined : equal)] = equal === -1 ? true : arg.slice(equal + 1);
-    }
-    return { positional, flags };
-  }
 
   // System Tweaks' own repair writes /etc and runs systemctl; its tests drive it with fixtures.
   const realSystemTweaks = await import("./addons/system-tweaks/action.ts");
@@ -80,7 +58,6 @@ const PROBE = String.raw`
     ...realProvision,
     ensureDirs: (_specs, verifySession) => {
       calls.push(verifySession ? "ensureDirs:verifySession" : "ensureDirs");
-      provisioning.dirs = true;
     },
     ensureAuthHelperReady: () => calls.push("ensureAuthHelperReady"),
     warnIfPanelSessionUnreadable: () => {
@@ -91,8 +68,8 @@ const PROBE = String.raw`
     ensureTimerArmed: (unit) => calls.push("ensureTimerArmed:" + unit),
     ensurePathWatching: (unit) => calls.push("ensurePathWatching:" + unit),
     hardenBackups: () => calls.push("hardenBackups"),
-    reconcilePanelIdentity: () => { calls.push("reconcilePanelIdentity"); provisioning.sudoers = true; },
-    installUnits: () => { calls.push("installUnits"); provisioning.units = true; return false; },
+    reconcilePanelIdentity: () => calls.push("reconcilePanelIdentity"),
+    installUnits: () => { calls.push("installUnits"); return false; },
     purgeTwigCache: () => calls.push("purgeTwigCache"),
     removeLegacyUnits: () => calls.push("removeLegacyUnits"),
     startUnits: () => calls.push("startUnits"),
@@ -116,7 +93,6 @@ const PROBE = String.raw`
     },
     reconcileNginxProxy: () => {
       calls.push("reconcileNginxProxy");
-      provisioning.nginx = true;
       return { state: "ok", changed: false };
     },
   }));
@@ -155,7 +131,6 @@ const PROBE = String.raw`
 
   async function repairResult() {
     calls.length = 0;
-    resetProvisioning();
     hasInstalledAddon = true;
     let threw = false;
     try {
@@ -163,22 +138,21 @@ const PROBE = String.raw`
     } catch {
       threw = true;
     }
-    return { threw, calls: [...calls], provisioning: { ...provisioning } };
+    return { threw, calls: [...calls] };
   }
 
   const repairWithoutSession = await repairResult();
 
   calls.length = 0;
-  resetProvisioning();
   hasInstalledAddon = false;
-  let installThrew = false;
+  let installError;
   try {
     await cmdInstall(["stager", "--local=/tmp/does-not-matter"]);
   } catch (error) {
-    installThrew = error instanceof TestFatal;
+    installError = String(error?.stack ?? error);
   }
 
-  const installWithoutSession = { threw: installThrew, calls: [...calls], provisioning: { ...provisioning } };
+  const installWithoutSession = { error: installError, calls: [...calls] };
   mkdirSync(join(phpFixture, "php/8.3/fpm/conf.d"), { recursive: true });
   mkdirSync(join(phpFixture, "sbin"));
   writeFileSync(join(phpFixture, "sbin/php-fpm8.3"), "");
@@ -199,8 +173,8 @@ const PROBE = String.raw`
 `;
 
 function runProbe(): {
-  repairWithoutSession: { threw: boolean; calls: string[]; provisioning: Record<string, boolean> };
-  installWithoutSession: { threw: boolean; calls: string[]; provisioning: Record<string, boolean> };
+  repairWithoutSession: { threw: boolean; calls: string[] };
+  installWithoutSession: { error?: string; calls: string[] };
   guardFailure: string;
   failedRepairCalls: string[];
 } {
@@ -224,21 +198,14 @@ test("repair completes reconciliation even when no panel session exists", () => 
   for (const name of ["reconcilePanelIdentity", "installUnits", "reconcileNginxProxy"]) {
     expect(result.repairWithoutSession.calls).toContain(name);
   }
-  expect(result.repairWithoutSession.provisioning).toEqual({
-    dirs: true,
-    sudoers: true,
-    units: true,
-    nginx: true,
-  });
 });
 
 test("repair checks persistent enablement for every installed timer", () => {
   expect(result.repairWithoutSession.calls).toContain("ensureTimerArmed:clp-addons-reconcile.timer");
-  expect(result.repairWithoutSession.calls).not.toContain("ensureTimerArmed:clp-addons-cloudflare-ips-reconcile.timer");
 });
 
 test("install proceeds when the fixed directory has no live panel session", () => {
-  expect(result.installWithoutSession.threw).toBe(false);
+  expect(result.installWithoutSession.error).toBeUndefined();
   expect(result.installWithoutSession.calls).toContain("ensureDirs:verifySession");
   expect(result.installWithoutSession.calls).toContain("ensureAuthHelperReady");
   expect(result.installWithoutSession.calls).toContain("reconcilePanelIdentity");

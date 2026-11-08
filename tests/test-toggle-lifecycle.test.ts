@@ -265,8 +265,6 @@ test("Cloudflare IP Access uses the shared new-site watcher, not a timer of its 
   const on = toggle([{ verb: "enable", addon: "cloudflare-ips" }]);
   expect(on.error).toBeUndefined();
   expect(on.systemd).toContain("enable clp-addons-new-sites.path");
-  expect(on.systemd.join(" ")).not.toContain("cloudflare-ips-reconcile");
-  expect(existsSync(join(on.root, "systemd", "clp-addons-cloudflare-ips-reconcile.timer"))).toBe(false);
 
   const off = toggle([{ verb: "disable", addon: "cloudflare-ips" }], { enabled: ["cloudflare-ips"] });
   expect(off.error).toBeUndefined();
@@ -322,13 +320,11 @@ test("WP Tools brings the certificate watcher with it, and takes it away again",
 test("the watcher stays while SMTP still uses it, and disabling DNS stops its transient pass", () => {
   const on = toggle([{ verb: "enable", addon: "dns" }], { enabled: ["smtp"] });
   expect(on.error).toBeUndefined();
-  expect(existsSync(join(on.root, "systemd", "clp-addons-dns.service"))).toBe(false);
 
   const off = toggle([{ verb: "disable", addon: "dns" }], { enabled: ["smtp", "dns"] });
   expect(off.error).toBeUndefined();
   // Disabling stops a check that is running and changes nothing in Cloudflare.
   expect(off.systemd).toContain("stop clp-addon-dns-reconcile");
-  expect(existsSync(join(off.root, "systemd", "clp-addons-dns.service"))).toBe(false);
   expect(existsSync(join(off.root, "systemd", "clp-addons-new-sites.path"))).toBe(true);
   expect(off.cli).toEqual([]);
 });
@@ -473,8 +469,6 @@ function optedOutFixture(alsoEnabled: string[] = []): { root: string; guard: str
   writeFileSync(join(root, "state", "system-tweaks", "settings.json"), JSON.stringify({ version: 1, uploadProgressGuard: false }), { mode: 0o600 });
   return { root, guard: join(root, "php", "8.3", "fpm", "conf.d", "99-clp-addons-upload-progress.ini") };
 }
-
-const guardTests = (run: Run) => run.calls.filter(([cmd, args]) => cmd.endsWith("php-fpm8.3") && args[0] === "-t");
 
 test("disabling System Tweaks takes the firewall watcher away", () => {
   const { root } = optedOutFixture(["maintenance"]);

@@ -9,7 +9,7 @@ import { createHash } from "node:crypto";
 import { tmpdir } from "node:os";
 import { ActionFailure } from "../lib/action";
 import {
-  parseTerminalRequest, resolveTerminalTarget, runTerminalAction, runuserCommand, type TerminalActionPaths,
+  parseTerminalRequest, resolveTerminalTarget, runTerminalAction, type TerminalActionPaths,
 } from "../addons/terminal/action";
 import { readRootGrants, rootAccess } from "../addons/terminal/root-access";
 import { TERMINAL_TARGETS } from "../addons/terminal/inject/targets";
@@ -138,7 +138,10 @@ test("an open root shell ends once its grant does", async () => {
   await Bun.sleep(60);
   change("UPDATE user SET mfa = 0 WHERE user_name = 'alice'");
   await running;
-  expect(calls).toEqual([runuserCommand(paths, "root")]);
+  expect(calls).toEqual([[
+    "/usr/sbin/runuser", "--login", "--whitelist-environment=TERM,CLP_SITE_DIR,CLP_PTY_SIZE,CLP_ROOT_SHELL",
+    "--command=exec /usr/local/bin/clp-addons terminal-pty", "--", "root",
+  ]]);
   expect(audit[0]).toBe("alice opened a root shell as root");
   expect(audit.some((line) => line.includes("root shell ended: A root terminal needs 2FA"))).toBe(true);
   expect(audit.at(-1)).toContain("alice closed a root shell as root");
