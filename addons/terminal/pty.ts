@@ -18,7 +18,6 @@ import { MAX_TERMINAL_SIZE } from "./action";
 export const MAX_INPUT_LINE_BYTES = 64 * 1024;
 const COALESCE_MS = 8;
 const COALESCE_BYTES = 32 * 1024;
-/** How long output still draining from the terminal may follow the shell's exit. */
 const DRAIN_AFTER_EXIT_MS = 500;
 
 const signalNumbers = constants.signals as Record<string, number>;
@@ -30,7 +29,6 @@ function clamp(value: unknown): number | null {
   return Math.min(MAX_TERMINAL_SIZE, Math.max(1, Math.trunc(value)));
 }
 
-/** One line from the manager, or null when it is not a message this accepts. */
 export function parsePtyMessage(line: string): PtyMessage | null {
   if (Buffer.byteLength(line, "utf8") > MAX_INPUT_LINE_BYTES) return null;
   let value: unknown;

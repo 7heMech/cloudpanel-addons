@@ -29,11 +29,9 @@ interface Field {
 const ALL_MODES = PM_MODES;
 
 /**
- * One description of every directive, used by the category dialog and by the
- * read-only block on CloudPanel's own site page. The `modes` list is the same
- * one the action writes by: a field the mode does not use is hidden rather than
- * removed, so switching the mode back finds the number that was typed still
- * there.
+ * The category dialog's directives. The `modes` list is the same one the action
+ * writes by: a field the mode does not use is hidden rather than removed, so
+ * switching the mode back finds the number that was typed still there.
  */
 const FIELDS: Field[] = [
   {
@@ -96,7 +94,6 @@ function pmLabel(mode: string): string {
   return PM_LABELS[mode] ?? mode;
 }
 
-/** How a pool's worker settings read in one table cell. */
 function workerSummary(profile: PoolProfile): string {
   if (profile.pm === "dynamic") {
     return `Dynamic, ${profile.minSpareServers}–${profile.maxSpareServers} spare, up to ${profile.maxChildren}`;

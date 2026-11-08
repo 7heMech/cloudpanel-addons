@@ -91,7 +91,6 @@ interface Store {
 const PANEL_ROLES = ["ROLE_ADMIN", "ROLE_SITE_MANAGER", "ROLE_USER"] as const;
 type PanelRole = (typeof PANEL_ROLES)[number];
 
-/** What an administrator decides for the whole panel. */
 export interface Settings {
   /** The CloudPanel roles that may add keys and sign in with them. */
   roles: PanelRole[];
@@ -294,7 +293,6 @@ function issueChallenge(paths: SecurityKeysPaths, now: number, ...binding: (stri
   return { challengeId, challenge: mac(paths, ...binding, challengeId).toString("base64url") };
 }
 
-/** The challenge a key must have signed for this id and purpose, if the id is still current. */
 function expectedChallenge(paths: SecurityKeysPaths, id: unknown, now: number, ...binding: (string | number)[]): string {
   const match = typeof id === "string" ? CHALLENGE_ID_RE.exec(id) : null;
   if (!match || !(Number(match[1]) > now)) refuse("the sign-in request has expired; try again");
@@ -437,7 +435,6 @@ function registerOptions(paths: SecurityKeysPaths, user: string, now: number) {
   };
 }
 
-/** The handle this account's keys are, or would be, made under. */
 function currentHandle(paths: SecurityKeysPaths, store: Store, user: string, account: PanelAccount): string {
   const entry = store.users[user];
   return entry && entry.userId === account.id ? entry.handle : handleFor(paths, account.id);
@@ -562,8 +559,8 @@ export async function runSecurityKeysAction(argv: string[], options: SecurityKey
     return 0;
   } catch (error) {
     let message = errorMessage(error);
-    // The two verbs anyone who reaches the login page can call.
     const refused = error instanceof SignInRefusal || error instanceof WebAuthnError;
+    // The two verbs anyone who reaches the login page can call.
     if (argv[0] === "login-options" || argv[0] === "sign-in") {
       audit(`sign-in ${refused ? "refused" : "failed"}: ${message}`);
       if (!refused) message = SIGN_IN_UNAVAILABLE;

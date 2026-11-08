@@ -70,7 +70,6 @@ function pathsOf(options: MotdOptions): typeof DEFAULT_MOTD_PATHS {
   return { ...DEFAULT_MOTD_PATHS, ...options.paths };
 }
 
-/** A regular file's permission bits, or null when there is none. */
 function modeOf(path: string): number | null {
   const info = lstatSync(path, { throwIfNoEntry: false });
   return info?.isFile() ? info.mode & 0o7777 : null;

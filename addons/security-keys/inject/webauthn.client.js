@@ -1,5 +1,3 @@
-// Shared by the login button and the account card: base64url both ways, and
-// whether this page can use a key at all.
 function toB64(buffer) {
   var bytes = new Uint8Array(buffer);
   var text = "";

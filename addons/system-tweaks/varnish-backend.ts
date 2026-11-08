@@ -734,10 +734,6 @@ function renderedHomeLogs(site: Site, paths: VarnishBackendPaths): boolean {
   return regularText(join(paths.vhostDir, `${site.domain}.conf`))?.includes(`/home/${site.user}/logs/nginx/`) ?? false;
 }
 
-/**
- * Sites whose rendered vhost still names a log in the user's home. The sync
- * leaves a vhost alone when root is not the only one who can write it.
- */
 /** Sites whose logrotate file is neither CloudPanel's nor the addon's, so the sync leaves it as it is. */
 export function sitesWithOwnLogrotate(options: VarnishBackendOptions = {}): string[] {
   const { paths } = contextOf(options);
@@ -751,6 +747,10 @@ export function sitesWithOwnLogrotate(options: VarnishBackendOptions = {}): stri
   }
 }
 
+/**
+ * Sites whose rendered vhost still names a log in the user's home. The sync
+ * leaves a vhost alone when root is not the only one who can write it.
+ */
 export function sitesWithHomeLogs(options: VarnishBackendOptions = {}): string[] {
   const { paths } = contextOf(options);
   try {

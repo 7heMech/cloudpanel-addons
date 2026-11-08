@@ -115,7 +115,6 @@ function decide(files: string[]): { value: string | undefined; source: string } 
   return { value, source };
 }
 
-/** Pools whose `php_value`, `php_flag` or admin variant turns the key on. */
 function poolsTurningOn(poolDir: string): string[] {
   let names: string[] = [];
   try {

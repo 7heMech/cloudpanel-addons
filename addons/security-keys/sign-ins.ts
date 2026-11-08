@@ -26,10 +26,6 @@ interface SignIn {
   mfa: string | null;
 }
 
-/**
- * A digest of the account's 2FA secret now, or null while 2FA is off or the
- * database cannot say.
- */
 export function mfaMark(panelDb: string, user: string): string | null {
   try {
     const db = openPanelDatabase(panelDb, true);
@@ -51,7 +47,6 @@ function signInsPath(stateDir: string): string {
   return join(stateDir, "sign-ins.json");
 }
 
-/** The recorded sign-ins, or none when the file is missing, not root's alone, or unreadable. */
 function readSignIns(stateDir: string, stateUid = 0): SignIn[] {
   let fd: number;
   try {

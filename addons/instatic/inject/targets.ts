@@ -1,10 +1,3 @@
-// What the Instatic addon adds to the CloudPanel UI.
-//
-// Markup and placement only. The injector in cli/inject.ts owns the markers,
-// the pristine snapshot, the hash gate and the ordering, so everything here is
-// data: a second addon is this file plus a registry entry, not a second copy of
-// the patching machinery.
-
 import type { AddonTarget } from "../../../lib/addon-target";
 import { TEMPLATES } from "../../../lib/panel-anchors";
 

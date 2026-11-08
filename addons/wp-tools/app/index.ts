@@ -188,8 +188,8 @@ export async function handle(
   }
 
   // Reached both from this addon's own page and from the link injected into
-  // CloudPanel's Sites page. This is the one route a non-administrator reaches,
-  // and the only thing this side decides is whose request it is.
+  // CloudPanel's site pages, where a non-administrator reaches it too; the only
+  // thing this side decides is whose request it is.
   if (path === "/api/sign-in") {
     const body = await readBody(req, 4 * 1024);
     if (body instanceof Response) return body;

@@ -132,8 +132,8 @@ export function waitingNewSiteJobs(jobsDir: string, replaced: (view: WpJobView) 
 }
 
 /**
- * Record a job and hand it to systemd. A second job for a policy that has one
- * queued or running is refused; the caller holds a lock across this check.
+ * A second job for a policy that has one queued or running is refused; the
+ * caller holds a lock across this check.
  */
 export function startWpJob(options: {
   jobsDir: string;
@@ -180,7 +180,6 @@ const VERBS: Record<WpJobTask, string> = {
   "new-site-plugins": "Installing",
 };
 
-/** Run a recorded job to its end, writing its progress as it goes. */
 export async function runWpJob(
   jobsDir: string,
   id: string,

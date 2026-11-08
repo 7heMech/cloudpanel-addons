@@ -14,14 +14,12 @@ import { SITE_USER_RE } from "../../../lib/site-accounts";
 import { stillAuthorized } from "../../../lib/sso-auth";
 
 export const RING_BYTES = 256 * 1024;
-/** How long a session waits for its popup to come back before it ends. */
 const DETACHED_GRACE_MS = 60_000;
 /** How long a popup that said it was closing has to come back, as on a reload. */
 const CLOSING_GRACE_MS = 5_000;
 const START_TIMEOUT_MS = 20_000;
 const KEEPALIVE_MS = 15_000;
 const AUTH_RECHECK_MS = 15_000;
-/** How long after a failed recheck the sign-in is looked at once more. */
 const AUTH_CONFIRM_MS = 1_000;
 /** The helper's output is coalesced to 32 KiB, which is under 44 KiB as base64. */
 const MAX_LINE_BYTES = 64 * 1024;
@@ -88,7 +86,6 @@ function exactKeys(value: object, keys: string[]): boolean {
   return own.length === keys.length && keys.every((key) => own.includes(key));
 }
 
-/** One line from the stream as a message, or null when it is not exactly one. */
 export function parseHelperLine(line: string): HelperMessage | null {
   if (line.length > MAX_LINE_BYTES) return null;
   let value: unknown;
@@ -140,7 +137,6 @@ interface Session {
   user: string;
   state: "starting" | "open" | "ended";
   stream: TerminalStream | null;
-  /** The last RING_BYTES of output, in the pieces it arrived in. */
   ring: Buffer[];
   ringBytes: number;
   /** Bytes of output ever received; the ring holds the last of them. */
@@ -208,7 +204,6 @@ export class TerminalSessions {
     return this.sessions.size;
   }
 
-  /** Start a shell and resolve once it is running, or with why it is not. */
   open(owner: Owner, request: OpenRequest): Promise<OpenResult> {
     const session: Session = {
       id: randomBytes(16).toString("base64url"),
@@ -338,7 +333,6 @@ export class TerminalSessions {
     return session && session.state !== "starting" && sameOwner(session.owner, owner) ? session : null;
   }
 
-  /** Server-sent events for one popup, or null when the session is not this owner's. */
   attach(id: string, owner: Owner, req: Request): Response | null {
     const session = this.find(id, owner);
     if (!session) return null;

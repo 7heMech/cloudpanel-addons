@@ -108,7 +108,6 @@ function account(db: Database, user: string): PanelAccount | null {
   ).get(user);
 }
 
-/** The account's 2FA secret as a grant keeps it, or null while 2FA is off. */
 function mfaDigest(found: PanelAccount): string | null {
   if (Number(found.mfa) !== 1 || !found.mfa_secret) return null;
   return createHash("sha256").update(`clp-addons terminal root\0${found.mfa_secret}`).digest("hex");
@@ -196,7 +195,6 @@ export function rootAccess(panelUser: string, paths: RootAccessPaths, session: s
   }
 }
 
-/** `clp-addons terminal root [allow|deny <user>]`, as root. */
 export function runTerminalRootCommand(argv: string[]): void {
   const [scope, verb, user, ...extra] = argv;
   const usage = "usage: clp-addons terminal root [allow|deny <user>]";

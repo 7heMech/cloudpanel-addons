@@ -55,7 +55,6 @@ export const WP_TOOLS_ADDON: AddonDefinition = {
     label: "WordPress plugins",
     run: async (options) => {
       const actionOptions = (options ?? {}) as WpToolsActionOptions;
-      // Job records expire, and one whose runner died is marked failed, so the page stops following it.
       pruneWpJobs(actionOptions);
       // Which sites exist now, so that the watcher's first wake does not take them all for new ones.
       try {

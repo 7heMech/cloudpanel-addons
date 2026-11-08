@@ -144,7 +144,6 @@ function storeAsset(paths: BrandingPaths, slot: LogoSlot, base64: string): strin
   return name;
 }
 
-/** Files no slot names any more. */
 function pruneAssets(paths: BrandingPaths, branding: Branding): void {
   if (!existsSync(paths.brandingDir)) return;
   const kept = new Set(Object.values(branding.logos));
@@ -193,7 +192,6 @@ export function applyBranding(paths: BrandingPaths, body: Record<string, unknown
   return branding;
 }
 
-/** One stored image, only while a slot names it. */
 export function brandingAsset(paths: BrandingPaths, name: string): { type: string; data: string } {
   if (!ASSET_NAME_RE.test(name)) failAction("that is not a branding image");
   if (!Object.values(readBranding(paths).logos).includes(name)) failAction("no such branding image");

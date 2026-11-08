@@ -182,7 +182,7 @@ function trustedRead(path: string, uid: number): string | null {
 // Policy
 // ---------------------------------------------------------------------------
 
-/** Produced on read, like Resource Limits' presets, so a read never writes. */
+/** Produced on read, so a read never writes. */
 function seededPolicy(): SmtpPolicy {
   return { version: 2, profiles: [{ ...DONT_SEND }], defaultProfileId: null, assignments: {}, grants: {}, knownSiteIds: [] };
 }
@@ -279,8 +279,8 @@ export function smtpRelayAccounts(stateFile = DEFAULT_SMTP_PATHS.stateFile, root
 }
 
 /**
- * Discard is `dont-send` and nothing else. 1.5 let any profile discard and let
- * `dont-send` be given a relay: a discard profile's sites move to `dont-send`,
+ * Discard is `dont-send` and nothing else. A 1.5 file may hold other discard
+ * profiles or a `dont-send` with a relay: a discard profile's sites move to `dont-send`,
  * a relay profile holding that id keeps its sites under an id of its own, and
  * a deleted `dont-send` comes back.
  */
@@ -922,7 +922,6 @@ function sendTest(paths: SmtpPaths, policy: SmtpPolicy, sites: SmtpSiteRow[], bo
   const requested = body.from ? smtpAddress(body.from)
     : php ? `wordpress@${route.rule.site}` : senderFor(route.rule.sender, route.rule.site);
   const path = php ? "PHP's mail()" : "sendmail";
-  // A pool's own sendmail_path would send the site's web requests around the relay.
   const pool = poolSetsSendmail(paths, site);
   if (pool) failAction(`${site.domain}'s PHP-FPM pool sets its own sendmail_path, so its web requests bypass the relay; remove it from ${pool}`);
   const subject = `CloudPanel SMTP relay test for ${site.domain}`;

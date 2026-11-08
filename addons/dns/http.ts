@@ -93,7 +93,6 @@ export class ProviderHttp {
   }
 }
 
-/** Removes every secret from text that may reach a page or a log. */
 export function redact(text: string, secrets: string[]): string {
   let clean = text;
   for (const secret of secrets) if (secret) clean = clean.split(secret).join("[redacted]");

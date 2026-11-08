@@ -28,7 +28,6 @@ function action<T>(verb: WebVerb<"git">, args: string[] = [], input?: string): P
   });
 }
 
-/** One site's status together with the panel context its page is drawn in. */
 interface GitSitePage {
   site: GitSiteStatus;
   context: SiteContext;

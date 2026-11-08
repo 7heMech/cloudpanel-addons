@@ -171,7 +171,6 @@ export function panelCertStatus(options: PanelCertOptions = {}): PanelCertStatus
   }
 }
 
-/** This box's global addresses, for the certificate's alternative names. */
 function boxAddresses(): string[] {
   return Object.values(networkInterfaces()).flat().filter((entry) => entry && !entry.internal
     && !/^(?:fe80:|169\.254\.)/i.test(entry.address)).map((entry) => entry!.address);
@@ -207,11 +206,6 @@ function generate(paths: Paths, options: PanelCertOptions): { cert: string; key:
   }
 }
 
-/**
- * Puts the generated pair in place of CloudPanel's shared one, or of an expiring
- * generated one, then validates and reloads the panel's Nginx; a failure puts
- * the previous files back. Any other certificate is left alone.
- */
 export function replacePanelCert(options: PanelCertOptions = {}): string | null {
   const paths = pathsOf(options);
   const now = (options.now ?? (() => new Date()))().getTime();
@@ -229,7 +223,6 @@ export function replacePanelCert(options: PanelCertOptions = {}): string | null 
   const nginx = { nginx: paths.nginx, systemctl: paths.systemctl, config: paths.panelConf, service: "clp-nginx" };
   withNginxTransaction(null, nginx, runOf(options), (changes) => {
     changes.push(nginxFileChange(paths.key, pair.key, ownerOf(paths, paths.key), true), nginxFileChange(paths.cert, pair.cert, ownerOf(paths, paths.cert), true));
-    // Written with the files' own mode, less any access for others.
     for (const change of changes) change.backup.mode &= 0o770;
   });
   if (!reuse) {

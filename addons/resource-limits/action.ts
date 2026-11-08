@@ -82,7 +82,6 @@ export const STOCK_PROFILE: PoolProfile = {
   rlimitFiles: 131072,
 };
 
-/** A named set of limits, and the sites assigned to it follow it. */
 export interface PoolCategory {
   id: string;
   name: string;
@@ -123,7 +122,6 @@ export const PRESET_CATEGORIES: PoolCategory[] = [
   },
 ];
 
-/** The safe starting point for an operator-created category. */
 export const DEFAULT_CATEGORY_PROFILE: PoolProfile = { ...PRESET_CATEGORIES[0]!.profile };
 
 export interface PoolSiteState {
@@ -135,7 +133,6 @@ export interface PoolSiteState {
   memoryLimitMb: number | null;
   /** What the pool file holds now. */
   current: PoolProfile;
-  /** The category this site is in, or null when it is in none. */
   categoryId: string | null;
   categoryName: string | null;
   /** A site whose pool file no longer matches the category it is in. */
@@ -265,7 +262,6 @@ function wholeNumber(value: unknown, field: Exclude<keyof PoolProfile, "pm">): n
   return value;
 }
 
-/** Reads one profile out of untrusted JSON, or refuses it with a reason. */
 export function parseProfile(value: unknown): PoolProfile {
   if (typeof value !== "object" || value === null || Array.isArray(value)) {
     failAction("a profile must be a JSON object");
@@ -349,7 +345,6 @@ const MANAGED_KEYS = [
 
 const MANAGED = new Set<string>(MANAGED_KEYS);
 
-/** The directive a pool-file line sets, or null for a comment or blank. */
 function directiveKey(line: string): string | null {
   const trimmed = line.trim();
   if (!trimmed || trimmed.startsWith(";") || trimmed.startsWith("#") || trimmed.startsWith("[")) return null;
@@ -719,9 +714,7 @@ function applyPhpVersion(
 }
 
 interface ApplyOutcome {
-  /** Domains whose pool file was rewritten. */
   changed: Set<string>;
-  /** Domains left as they were, with the reason. */
   failed: Map<string, string>;
 }
 

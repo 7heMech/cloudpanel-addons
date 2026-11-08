@@ -29,13 +29,10 @@ const PTY_ENV_NAMES = ["TERM", "CLP_SITE_DIR", "CLP_PTY_SIZE", "CLP_ROOT_SHELL"]
 export const MAX_TERMINAL_SIZE = 1000;
 /** Below this a uid is a system account, never a site's. */
 const MIN_SITE_UID = 1000;
-/** How much of what `runuser` and the login wrote to stderr reaches the journal. */
 const MAX_LOGGED_STDERR = 4 * 1024;
-/** How often an open root shell's grant is checked again. */
 const ROOT_RECHECK_MS = 15_000;
 /** Checks in a row that may fail to read before a root shell ends anyway. */
 const ROOT_UNREADABLE_CHECKS = 3;
-/** How long a stopped shell has to hang up before it is killed. */
 const KILL_AFTER_MS = 5_000;
 
 export interface TerminalActionPaths {
@@ -44,7 +41,6 @@ export interface TerminalActionPaths {
   runuser: string;
   /** Where every site's home must be. */
   homes: string;
-  /** Who may open a root shell. */
   rootAccess: RootAccessPaths;
 }
 
@@ -60,9 +56,7 @@ interface TerminalActionOptions {
   /** Test-only audit sink; production writes to the gateway's journal. */
   audit?: (line: string) => void;
   now?: () => number;
-  /** Test-only; production checks a root shell's grant every 15 seconds. */
   rootRecheckMs?: number;
-  /** Test-only; production kills a stopped shell after 5 seconds. */
   killAfterMs?: number;
 }
 
@@ -197,7 +191,6 @@ export function resolveTerminalTarget(request: TerminalRequest, paths: TerminalA
   return { user: row.user, dir: resolved };
 }
 
-/** A root shell, in root's home, for an administrator root allowed. */
 function rootTarget(panelUser: string, paths: TerminalActionPaths, session: string): TerminalTarget {
   const access = rootAccess(panelUser, paths.rootAccess, session);
   if (!access.granted) failAction("root has not allowed you a root shell");
@@ -221,7 +214,6 @@ export function runuserCommand(paths: TerminalActionPaths, user: string): string
   ];
 }
 
-/** Reads a child's stderr as it comes, keeping the first few KiB for when it exits. */
 function keepStderr(stream: unknown): () => Promise<string> {
   if (!(stream instanceof ReadableStream)) return async () => "";
   const reader = (stream as ReadableStream<Uint8Array>).getReader();
@@ -250,8 +242,6 @@ function duration(ms: number): string {
 }
 
 /**
- * Validate, audit, start the shell and wait for it.
- *
  * SIGTERM from the gateway is passed on to `runuser`, which passes it to the
  * helper, which hangs the shell up. The exit status is the shell's.
  */
@@ -344,7 +334,6 @@ export async function runTerminalAction(argv: string[], options: TerminalActionO
   }
 }
 
-/** Whether the signed-in administrator may open a root shell, for the Terminal page. */
 function answerRootAccess(argv: string[], paths: TerminalActionPaths, session: string): number {
   const panelUser = argv.length === 1 && argv[0]!.startsWith("--panel-user=") ? argv[0]!.slice("--panel-user=".length) : "";
   if (!PANEL_USER_NAME_RE.test(panelUser)) {
@@ -357,8 +346,7 @@ function answerRootAccess(argv: string[], paths: TerminalActionPaths, session: s
 
 /**
  * Stop every terminal's root worker, which hangs up its shell. Run when the
- * addon is disabled, so taking it away also takes away the
- * shells it opened.
+ * addon is disabled, so taking it away also takes away the shells it opened.
  */
 export function endAllTerminals(proc = "/proc"): number {
   let ended = 0;

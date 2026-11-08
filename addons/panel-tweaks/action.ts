@@ -108,7 +108,6 @@ const TWEAK_PARENTS: Partial<Record<keyof PanelTweaks, keyof PanelTweaks>> = {
   diskUsage: "sitesTable",
 };
 
-/** A switch whose parent is off is off, whichever of the two was just named. */
 function withTweakDependencies(tweaks: PanelTweaks): PanelTweaks {
   const settled = { ...tweaks };
   for (const [key, parent] of Object.entries(TWEAK_PARENTS) as [keyof PanelTweaks, keyof PanelTweaks][]) {
@@ -179,7 +178,6 @@ export function applicationLabel(application: string, type: string): string {
   return APPLICATION_LABELS[name] ?? name;
 }
 
-/** What one site contributes to the enhanced Sites table. */
 export interface TweakSiteView {
   domain: string;
   user: string;
@@ -219,7 +217,6 @@ export interface ScanResult {
   measuredAt: string;
 }
 
-/** A measurement an operator started, as the page follows it. */
 export interface MeasureJobView extends JobCommonFields, JobSiteProgress {
   id: string;
   result: ScanResult | null;
@@ -753,7 +750,6 @@ async function setBranding(paths: PanelTweaksActionPaths, options: PanelTweaksAc
   });
 }
 
-/** The logos the addon pages draw: none unless Theme & Branding and its logo section are on. */
 function brandingLogos(paths: PanelTweaksActionPaths): Branding["logos"] | null {
   if (!readTweaks(paths).branding) return null;
   const branding = readBranding(paths);
@@ -811,7 +807,6 @@ async function startMeasurement(paths: PanelTweaksActionPaths, options: PanelTwe
   });
 }
 
-/** The disk lock, saying so in the job's step when a scheduled sweep has it. */
 async function scanLock(paths: PanelTweaksActionPaths, wait: (step: string) => void): Promise<FileLockHandle> {
   try {
     return await acquireFileLock(paths.scanLockFile, 0, "the disk is being measured");
@@ -841,7 +836,6 @@ async function runMeasurement(paths: PanelTweaksActionPaths, id: string, options
   return measureJobView(paths.jobsDir, id);
 }
 
-/** Expired measurements go, and one whose runner died is marked failed. */
 function pruneMeasurements(paths: PanelTweaksActionPaths): void {
   pruneJobs({
     addon: "panel-tweaks",
@@ -905,7 +899,6 @@ export async function runPanelTweaksAction(
   });
 }
 
-/** The repair hook: expire old measurements, and sweep the disk when due. */
 export async function panelTweaksUpkeep(options: PanelTweaksActionOptions = {}): Promise<string | null> {
   // One whose runner died is marked failed, so the page stops following it.
   pruneMeasurements(pathsFor(options));

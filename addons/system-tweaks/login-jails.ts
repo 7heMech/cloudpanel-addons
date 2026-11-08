@@ -83,7 +83,7 @@ export interface LoginJailsStatus {
   /** Packages the jails need that are missing. */
   missing: string[];
   service: "active" | "inactive" | "masked";
-  /** The jails of these two that fail2ban runs now. */
+  /** The login jails fail2ban runs now. */
   running: string[];
   /** Whether the panel's nginx sends failed logins to the journal; null without a panel nginx. */
   panelLog: boolean | null;
@@ -208,7 +208,6 @@ function panelLogActive(ctx: Context): boolean | null {
   return withLoginLog(content) === content;
 }
 
-/** Adds or removes the block, testing and reloading the panel's nginx and restoring the file on failure. */
 function applyLoginLog(enabled: boolean, options: LoginJailOptions = {}): boolean {
   const ctx = contextOf(options);
   const target = panelTarget(ctx);
@@ -276,7 +275,6 @@ function domainUid(ctx: Context): number | null {
   } catch { return null; }
 }
 
-/** Adds or removes the custom domain's log, testing and reloading the sites' nginx and restoring the file on failure. */
 function applyDomainLog(enabled: boolean, options: LoginJailOptions = {}): boolean {
   const ctx = contextOf(options);
   const current = readDomainVhost(ctx);
@@ -386,7 +384,7 @@ export function jailFiles(settings: LoginJailSettings, input: {
   };
 }
 
-/** Writes the files and has fail2ban test them; on a refusal they go back as they were. Whether any changed. */
+/** Returns whether any file changed. */
 function writeJailFiles(ctx: Context, settings: LoginJailSettings): boolean {
   const wanted = jailFiles(settings, {
     panelUid: ctx.paths.panelUid ?? panelUserUid(),
@@ -484,7 +482,6 @@ export function releaseLoginJails(before: Fail2banBefore | null, options: LoginJ
   return true;
 }
 
-/** apt-get install for whichever packages are missing, with the lists refreshed and tried once more when they are stale. */
 export function installLoginJailPackages(options: LoginJailOptions = {}): void {
   const missing = missingPackages(options);
   if (missing.length) aptInstall(contextOf(options).run, missing);

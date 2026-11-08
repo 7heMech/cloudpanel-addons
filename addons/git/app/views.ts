@@ -32,7 +32,6 @@ import STYLE from "./views.css" with { type: "text" };
 import CLIENT_JS from "./views.client.js" with { type: "text" };
 export { CLIENT_JS };
 
-// Built once: nothing here changes between renders.
 const CHROME: AddonChrome = { base: BASE, css: STYLE, script: `${JOB_WATCH_JS}\n${FLEET_ROW_SELECTION_JS}\n${CLIENT_JS}` };
 
 export function layout(
@@ -99,7 +98,6 @@ function relativeTime(iso: string): string {
   return iso ? `<time datetime="${esc(iso)}" title="${esc(whenText(iso))}">${esc(sinceText(iso))}</time>` : "—";
 }
 
-/** What is checked out and what the last deployment did, with the button that starts the next. */
 function statusCard(site: GitSiteStatus, log: string): string {
   const config = site.config;
   const job = site.lastJob;
@@ -134,7 +132,6 @@ function statusCard(site: GitSiteStatus, log: string): string {
     </div>`;
 }
 
-/** Status first for connected sites; the connection form first for new ones. */
 export function siteView(site: GitSiteStatus, log: string): string {
   return `
     <div class="page-heading" data-git-domain="${esc(site.domain)}">
@@ -295,7 +292,6 @@ function attention(site: GitSiteStatus): string {
   return "";
 }
 
-/** The fleet page: every site this addon deploys, and what it last deployed. */
 export function fleetView(sites: GitSiteStatus[]): string {
   const available = (site: GitSiteStatus): boolean => site.configured && !!site.siteType && !running(site);
   const needs = sites.flatMap((site) => {

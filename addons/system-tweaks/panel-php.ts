@@ -300,9 +300,8 @@ function install(ctx: Context, content: string | null): void {
 }
 
 /**
- * Put the unit that `choice` asks for in place, restart the panel's FPM on it
- * and prove it serves. Returns the version now running, or null when nothing
- * had to change. A failure restores the previous drop-in before it is thrown.
+ * Returns the version now running, or null when nothing had to change. A
+ * failure restores the previous drop-in before it is thrown.
  */
 async function apply(ctx: Context, php: string): Promise<string | null> {
   const unit = baseUnit(ctx);

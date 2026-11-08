@@ -41,8 +41,6 @@ export async function handle(
   // The Ace module the panel does not ship, matching the core that it does.
   // Immutable: it is one pinned file, and the editor asks for it on every open.
   if (method === "GET" && path === "/ace/mode-html.js") {
-    // Immutable, content-addressed by its route: the one place a no-store
-    // default is deliberately overridden rather than inherited.
     return policyResponse(ACE_MODE_HTML, "text/javascript; charset=utf-8", {
       headers: { "Cache-Control": "public, max-age=31536000, immutable" },
     });

@@ -20,15 +20,15 @@
 .clp-tweaks-download[hidden] { display: none; }
 .clp-tweaks-columns-menu label { display: flex; align-items: center; gap: 10px; margin: 0;
   padding: 9px 16px; font-size: 14px; font-weight: 400; white-space: nowrap; cursor: pointer; }
-/* A finger leaves the hover behind it: a tapped row stayed lit until something
-   else was tapped, which on a list of modes reads as a selection. */
+/* A finger leaves the hover behind it: a tapped row would stay lit until
+   something else was tapped, which on a list of modes reads as a selection. */
 @media (hover: hover) {
   .clp-tweaks-columns-menu label:hover { background: rgba(127, 143, 153, .14); }
 }
 /* The box is drawn here rather than by the browser because CloudPanel sets
    -webkit-appearance: none on every input it is hovered, focused or held,
    which leaves a native checkbox with nothing to draw -- and on a phone, where
-   the hover stays behind, it stayed gone. */
+   the hover stays behind, it would stay gone. */
 .clp-tweaks-columns-menu input { appearance: none; -webkit-appearance: none; width: 16px; height: 16px;
   flex: 0 0 auto; margin: 0; padding: 0; border: 1px solid #b6bfc7; border-radius: 3px;
   background: #fff; cursor: pointer; }

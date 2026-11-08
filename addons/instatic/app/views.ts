@@ -1,7 +1,6 @@
-// Server-rendered HTML. Every interpolated value goes through esc() or escJs():
-// instance domains and container states originate outside this process, and the
-// page is served to an authenticated operator whose session can create and
-// delete sites.
+// Every interpolated value goes through esc() or escJs(): instance domains and
+// container states originate outside this process, and the page is served to
+// an operator whose session can create and delete sites.
 
 import { esc, escJs } from "../../../lib/app-http";
 import {
@@ -10,30 +9,16 @@ import {
 } from "../../../lib/app-ui";
 import { mountPath } from "../../../lib/mount";
 
-/**
- * Where this addon is served. One CloudPanel site carries every addon, so every
- * link this file emits is relative to a mount rather than to the site root.
- * A constant rather than a per-request value: the mount is fixed by the addon's
- * name, so a link that forgets it is a bug at build time, not a routing choice.
- */
 const BASE = mountPath("instatic");
 import type { InstanceView, InstaticJobView } from "./service";
 import { isNewerThan, type AvailableTags } from "./tags";
 
-// Only what the shared shell does not carry. Everything else -- the palette,
-// the cards, the table, the badges -- lives in lib/app-ui.ts, so a second addon
-// does not have to choose between copying it and looking like another product.
 import STYLE from "./views.css" with { type: "text" };
 
-/**
- * The dashboard's inline script.
- *
- * Exported only so tests/test-app.test.ts can parse it.
- */
+// Exported only so tests can parse it.
 import CLIENT_JS from "./views.client.js" with { type: "text" };
 export { CLIENT_JS };
 
-/** Renders Instatic content inside the shared addon manager chrome. */
 export function layout(
   title: string,
   content: string,
@@ -49,12 +34,11 @@ export function layout(
   });
 }
 
-/** A container's state as a tone: a running container is healthy, unlike a running job, which is busy. */
+/** A running container is healthy, unlike a running job, which is busy. */
 function stateClass(state: string): string {
   return ({ running: "tone-ok", exited: "tone-warn", created: "tone-warn", paused: "tone-warn" } as Record<string, string>)[state] ?? "tone-bad";
 }
 
-/** The newest job for each domain. */
 function newestJobs(jobs: InstaticJobView[]): Map<string, InstaticJobView> {
   const newest = new Map<string, InstaticJobView>();
   for (const job of jobs) {
@@ -66,11 +50,7 @@ function newestJobs(jobs: InstaticJobView[]): Map<string, InstaticJobView> {
 
 const active = (job: InstaticJobView | undefined) => job?.state === "queued" || job?.state === "running";
 
-/**
- * Creations still worth a row of their own: the newest job for each domain
- * while it is queued or running, or failed with no instance to show for it.
- * An update shows on its instance's row instead.
- */
+/** An update shows on its instance's row instead. */
 export function pendingCreations(jobs: InstaticJobView[], instances: InstanceView[]): InstaticJobView[] {
   return [...newestJobs(jobs).values()]
     .filter((job) => job.kind !== "update")
@@ -80,15 +60,13 @@ export function pendingCreations(jobs: InstaticJobView[], instances: InstanceVie
 
 const STATE_LABELS: Record<string, string> = { running: "Running", exited: "Stopped", created: "Created", paused: "Paused" };
 
-/** Renders the Instatic dashboard: creations in progress, then every instance. */
 export function dashboardView(
   instances: InstanceView[],
   available: AvailableTags = { tags: [], source: "fallback", latest: null },
   jobs: InstaticJobView[] = [],
 ): string {
-  // Only a list that actually came from the registry may claim an instance is
-  // behind. The offline fallback is one hardcoded version, and badging every
-  // instance against it would invent updates that do not exist.
+  // Badging instances against the one-version offline fallback would invent
+  // updates that do not exist.
   const latest = available.source === "fallback" ? null : available.latest;
   // An instance whose site is gone is only ever deleted, so it is never behind.
   const behindOf = (i: InstanceView) => i.panelSite !== false && latest !== null && isNewerThan(latest, i.tag);
@@ -115,7 +93,7 @@ export function dashboardView(
       const d = escJs(i.domain);
       const job = newest.get(i.domain);
       const updating = job?.kind === "update" && active(job) ? job : null;
-      // A failed update left the instance on its old version; say so until another update replaces the record.
+      // A failed update leaves the instance on its old version.
       const failedUpdate = job?.kind === "update" && job.state === "failed" && job.tag !== i.tag ? job : null;
       const update = updating ? ""
         : latest === null ? `<button class="btn" disabled title="Can't reach ghcr.io">Update</button>`
@@ -135,7 +113,7 @@ export function dashboardView(
     <button class="btn" onclick="act('${d}','recreate')" title="Rebuild the recorded version, preserving data and enabling native backups for older instances">Recreate</button>
     <button class="btn" onclick="showLogs('${d}', '${escJs(String(i.port ?? ""))}')">Logs</button>
     <button class="btn btn-danger" onclick="askDelete('${d}')">Delete</button>`;
-      // A phone has no room for the menu: the buttons sit in the row, without the ones it rarely needs.
+      // A phone has no room for the menu, so the row carries the common buttons.
       const phoneActions = missing ? actions
         : `${i.state === "running"
           ? `<button class="btn" onclick="askStop('${d}')">Stop</button>`
@@ -251,16 +229,14 @@ export function dashboardView(
 </dialog>`;
 }
 
-/** What the job page says about the site's certificate. */
 function certificateText(job: InstaticJobView): string {
   if (job.certificate === "issued") return "Let's Encrypt certificate issued";
   if (job.certificate === "failed") return "Let's Encrypt request failed";
   if (job.certificate === "none") return "Not requested";
-  // Records from before the outcome was kept.
+  // Records written before the outcome was kept.
   return job.tls ? "Let's Encrypt certificate requested" : "Self-signed or custom SSL";
 }
 
-/** Renders the progress and result of an Instatic creation or update job: one status card and the log. */
 export function jobView(job: InstaticJobView, logText: string): string {
   const finished = job.state === "done" || job.state === "failed";
   const done = job.state === "done";
@@ -310,10 +286,8 @@ export function jobView(job: InstaticJobView, logText: string): string {
     ${finished ? "" : `<div id="job-watch" data-job="${esc(job.id)}" hidden></div>`}`;
 }
 
-/** Renders the new-site form, returning to the panel's chooser when opened there. */
 export function newInstanceView(available: AvailableTags, fromNewSite = false): string {
   const backHref = fromNewSite ? "/site/new" : `${BASE}/`;
-  // A fallback list is a guess, so nothing in it is called the latest.
   const options = available.tags.map((t, idx) =>
     `<option value="${esc(t)}"${idx === 0 ? " selected" : ""}>${esc(t)}${idx === 0 && available.source !== "fallback" ? " (latest)" : ""}</option>`
   ).join("");

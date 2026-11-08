@@ -8,7 +8,6 @@ function paintAddresses() {
 }
 paintAddresses();
 
-// Search and the review filter only hide rows; every key is already on the page.
 function filterKeys() {
   const find = CLP_ROOT.getElementById('sk-find').value.trim().toLowerCase();
   const show = CLP_ROOT.getElementById('sk-show').value;
@@ -37,7 +36,6 @@ function filterKeys() {
   CLP_ROOT.getElementById('sk-none').hidden = keys > 0;
 }
 
-// Saved as a whole on every change, and repainted from what root stored.
 async function saveSettings(input) {
   const roles = ['ROLE_ADMIN', 'ROLE_SITE_MANAGER', 'ROLE_USER'].filter(function (role) {
     return CLP_ROOT.getElementById('role-' + role).checked;

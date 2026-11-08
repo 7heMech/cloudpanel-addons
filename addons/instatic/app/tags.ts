@@ -1,9 +1,6 @@
-// Available Instatic versions.
-//
-// Resolved from the registry rather than hardcoded, because a baked-in list
-// goes stale the moment upstream tags a release and then silently offers
-// versions that no longer exist. The registry is the same one the action
-// binary pins; only the tag ever crosses the privilege boundary.
+// Resolved from the registry because a baked-in list goes stale the moment
+// upstream tags a release. The registry is the one the action pins; only the
+// tag crosses the privilege boundary.
 
 const REGISTRY = "https://ghcr.io";
 const REPOSITORY = "corebunch/instatic";
@@ -18,18 +15,17 @@ const FAILURE_TTL_MS = 60 * 1000;
 // open. Far more than Instatic will have for years.
 const MAX_PAGES = 20;
 
-// A last-resort list so the New Site page still renders when the box has no
-// outbound network. Deliberately not the source of truth, and the UI says so
-// when it falls back to this rather than presenting it as the real list.
+// So the New Site page still renders with no outbound network; the UI says
+// when it falls back to this.
 const FALLBACK = ["0.0.18"];
 
-/** Where the list came from, because "update available" must not be claimed on a guess. */
+/** "Update available" must not be claimed on a guess. */
 type TagSource = "registry" | "cache" | "fallback";
 
 export interface AvailableTags {
   tags: string[];
   source: TagSource;
-  /** Newest version the registry knows about, or null when the list is a guess. */
+  /** Null when the list is a guess. */
   latest: string | null;
 }
 
@@ -37,13 +33,10 @@ let cache: { at: number; tags: string[] } | null = null;
 let failedAt = 0;
 
 function unreachable(): AvailableTags {
-  // A stale cache is still a real answer from the registry; FALLBACK is not,
-  // so it never gets to claim a newest version.
   if (cache) return { tags: cache.tags, source: "cache", latest: cache.tags[0] ?? null };
   return { tags: FALLBACK, source: "fallback", latest: null };
 }
 
-/** Forgets every lookup, for tests. */
 export function resetTagCache(): void {
   cache = null;
   failedAt = 0;
@@ -53,21 +46,15 @@ function byVersionDesc(a: string, b: string): number {
   return Bun.semver.order(b, a);
 }
 
-/** True when `candidate` is a newer version than `current`. */
 export function isNewerThan(candidate: string, current: string): boolean {
   if (!VERSION_RE.test(candidate) || !VERSION_RE.test(current)) return false;
   return byVersionDesc(candidate, current) < 0;
 }
 
 /**
- * The next page of a paginated tag listing, from the Link header.
- *
- * This is load-bearing rather than a nicety. The registry returns tags in push
- * order, so page one holds the *oldest* tags: with 20 tags today ghcr.io answers
- * in one response, but the moment the repository crosses the page limit the
- * newest releases move to the last page. Ignoring Link would not produce an
- * obviously broken dropdown -- it would keep offering an old version labelled
- * "(latest)", which is worse.
+ * The registry returns tags in push order, so once the repository crosses the
+ * page limit the newest releases are on the last page. Ignoring Link would
+ * keep offering an old version labelled "(latest)".
  */
 function nextPageUrl(res: Response): string | null {
   const link = res.headers.get("link");

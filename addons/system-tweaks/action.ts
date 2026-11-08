@@ -1,4 +1,3 @@
-/** Root actions and lifecycle hooks for server-wide update and PHP settings. */
 import { LOCK_DIR, addonStateDir, ROOT_UID } from "../../lib/paths";
 import { SYSTEM_TWEAKS_VERBS } from "./verbs";
 import { existsSync, lstatSync, readFileSync } from "node:fs";
@@ -597,7 +596,6 @@ export async function runSystemTweaksAction(argv: string[], options: SystemTweak
 
 const SETTINGS_BUSY = "another system tweaks change is still running";
 
-/** The lock every settings change holds, waited on for 15 seconds. */
 function settingsLock<T>(paths: SystemTweaksPaths, body: () => Promise<T>): Promise<T> {
   return withFileLock(paths.lockFile, 15, SETTINGS_BUSY, body);
 }
@@ -607,10 +605,6 @@ function withSettingsLock<T>(options: SystemTweaksOptions, body: (paths: SystemT
   return withFileLockSync(paths.lockFile, 15, SETTINGS_BUSY, () => body(paths, readSettings(paths)));
 }
 
-/**
- * The repair hook: the box's own settings, then the panel's PHP. A version
- * that failed is not retried until its package release changes.
- */
 export async function systemTweaksMaintenance(options: SystemTweaksOptions = {}): Promise<string | null> {
   const lines: string[] = [];
   const failures: string[] = [];

@@ -23,7 +23,6 @@ const USER_FILE_RE = /^[ \t]*auth_basic_user_file[ \t]+(\/[A-Za-z0-9._/-]+)[ \t]
 
 /** Directories phpMyAdmin's pages never load from the browser. */
 const HIDDEN_DIRS = ["examples", "setup", "sql", "vendor", "libraries", "templates", "locale", "tmp"];
-/** Release and package files, dotfiles, and the sample config. */
 const HIDDEN_FILES = String.raw`\.|ChangeLog$|README$|LICENSE$|RELEASE-DATE-|CONTRIBUTING\.md$|composer\.(?:json|lock)$|package\.json$|yarn\.lock$|babel\.config\.json$|config\.sample\.inc\.php$`;
 
 function phpMyAdminBlock(credentials: string): string {
@@ -119,7 +118,6 @@ export function phpMyAdminStatus(options: PhpMyAdminOptions = {}): PhpMyAdminSta
   }
 }
 
-/** Adds or removes the block, testing and reloading the panel's Nginx and restoring the file on failure. */
 export function applyPhpMyAdmin(enabled: boolean, options: PhpMyAdminOptions = {}): boolean {
   const { vhost, uid, groupWritable, nginx } = target(options);
   let current: string;

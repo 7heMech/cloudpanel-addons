@@ -9,8 +9,6 @@ import { brandingCard } from "./branding";
 
 const BASE = mountPath("panel-tweaks");
 
-// Cards, switches, badges, the switch rows and the fleet table are in lib/app-ui;
-// only what this page alone draws is here.
 import STYLE from "./views.css" with { type: "text" };
 
 import SCRIPT from "./views.client.js" with { type: "text" };
@@ -121,11 +119,6 @@ function switchRow(copy: TweakCopy, tweaks: PanelTweaks, extra = ""): string {
 /** Nothing measuring yet: the bar the page fills in when it starts one. */
 const NO_MEASUREMENT = { id: "", state: "queued", step: "", completed: 0, total: 0, site: "" };
 
-/**
- * The latest measurement and the button that asks for another. While one runs
- * its progress takes the summary's place, and the page follows it until it
- * ends, after a reload too.
- */
 function scanControls(state: PanelTweaksState): string {
   const measured = state.sites.filter((site) => site.disk).length;
   const summary = measured === 0

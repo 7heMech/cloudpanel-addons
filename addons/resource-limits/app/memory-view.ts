@@ -6,7 +6,6 @@ import type { ResourceMemoryState } from "../memory-settings";
 interface Row {
   key: string;
   title: string;
-  /** One paragraph, or a line each. */
   description: string | string[];
   /** The switch's state; a row with `control` instead has none. */
   checked?: boolean;
@@ -47,7 +46,6 @@ type Memory = Exclude<ResourceMemoryState, { error: string }>;
 
 const PROFILE_NAMES: Record<MemoryProfile, string> = { balanced: "Balanced", database: "Database-heavy", cache: "Cache-heavy" };
 
-/** Whole GB above 10, one decimal below, MB under 1 GB. */
 export function size(mb: number): string {
   if (mb < 1024) return `${mb} MB`;
   const gb = mb / 1024;

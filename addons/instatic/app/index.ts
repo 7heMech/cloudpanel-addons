@@ -1,6 +1,3 @@
-// Entry point for the Instatic manager service.
-//
-// The manager router strips the /addons/ prefix before dispatching here.
 
 import { errorMessage } from "../../../lib/errors";
 import { instaticService, validateTag } from "./service";
@@ -33,14 +30,7 @@ async function change(result: { ok: boolean }): Promise<Response> {
 
 const MUTATING_VERBS = new Set(["start", "stop", "restart", "recreate", "delete", "snapshot", "update"]);
 
-/**
- * The whole request surface, exported so the one manager process can mount it.
- *
- * `path` is this addon's own path, with the mount prefix already stripped by the
- * router: a request for /addons/instatic/api/... arrives here as /api/... .
- * Taking it as an argument rather than reading req.url is what keeps every route
- * below written as though this addon owned the site, which it used to.
- */
+/** `path` has the mount prefix stripped: /addons/instatic/api/... arrives as /api/... . */
 export async function handle(
   req: Request,
   path: string,
@@ -104,7 +94,6 @@ export async function handle(
     return jsonResponse(res, res.ok ? 202 : 400);
   }
 
-  // The dashboard again, for a page waiting on jobs it started to finish.
   if (path === "/api/dashboard" && method === "GET") {
     try {
       return jsonResponse({ ok: true, html: await dashboard() });
@@ -113,8 +102,7 @@ export async function handle(
     }
   }
 
-  // Several sites at once: each update starts a job of its own; a restart is done
-  // in turn. A site that fails is named rather than stopping the rest.
+  // A site that fails is named rather than stopping the rest.
   if (path === "/api/bulk" && method === "POST") {
     const blocked = guardMutation(req);
     if (blocked) return blocked;
@@ -185,9 +173,6 @@ export async function handle(
           return change(res);
         }
         case "update": {
-          // Only the read is guarded: an oversized body is a 413 the reader
-          // already decided, and folding it into the tag's 400 would answer a
-          // different question than the caller asked.
           const body = await readBody(req);
           if (body instanceof Response) return body;
           const tag = validateTag(body.tag);

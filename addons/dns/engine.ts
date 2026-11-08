@@ -278,7 +278,6 @@ export class DnsRun {
     return this.context.policy.connections.length === 0;
   }
 
-  /** The domains a check plans: sites in a profile, and every redirect domain. */
   plannedDomains(): string[] {
     return this.entries.filter((entry) => entry.redirect || this.profileOf(entry.domain)).map((entry) => entry.domain);
   }
@@ -1052,7 +1051,6 @@ export class DnsRun {
   }
 }
 
-/** Whether a new site's certificate can be requested now, and if not, why. */
 /** A record a site CloudPanel just created may write before review: an address at its own name or `www`. */
 function pointsOwnName(domain: string, op: RecordOp): boolean {
   if (op.action === "create") return true;
@@ -1061,6 +1059,7 @@ function pointsOwnName(domain: string, op: RecordOp): boolean {
   return own && address(op.record.type) && (!op.current || address(op.current.type));
 }
 
+/** Whether a new site's certificate can be requested now, and if not, why. */
 export function readiness(plan: SitePlan | undefined): { ready: boolean; reason: string; zone?: string; nameServers?: string[] } {
   if (!plan?.profileId) return { ready: false, reason: "No DNS profile is assigned to this site" };
   if (plan.mode !== "enforce") return { ready: false, reason: "DNS is set to Ask first" };

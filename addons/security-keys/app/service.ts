@@ -5,7 +5,6 @@ import type { KeyView, Settings, UserKeysView } from "../action";
 export type { KeyView, Settings, UserKeysView };
 
 type Fleet = { users: UserKeysView[]; settings: Settings };
-/** What one account sees on its own card, and may do there. */
 type OwnKeys = { keys: KeyView[]; canAdd: boolean; syncedPasskeys: boolean };
 
 async function call<T>(verb: WebVerb<"security-keys">, input?: unknown, sessionId?: string): Promise<ActionResult<T>> {

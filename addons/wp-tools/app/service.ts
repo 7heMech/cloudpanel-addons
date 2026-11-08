@@ -31,7 +31,7 @@ export interface WpDashboard {
   newSiteAccessError?: string;
 }
 
-/** One plugin as the new-site form chose it. */
+/** What the new-site form chose for one site. */
 export interface NewSiteChoice {
   domain: string;
   plugins: { slug: string; activate: boolean }[];
