@@ -38,12 +38,18 @@ A root shell is offered only to the administrators root names; see Root.
 Root names who may open a root shell with `clp-addons terminal root allow
 <user>` from a shell; `deny` takes it back and `clp-addons terminal root` lists
 them. Nothing in the panel can change the list. An allowed administrator gets a
-terminal icon in both of CloudPanel's headers and in the addons' copy of it,
-just before the account menu, and a Root terminal button on Addons → Terminal.
-Below 760px the header has no room for a fourth icon beside the logo, so the
-icon gives way to a Root terminal item in the account menu, above Logout.
-The others get no icon; their button shows a notice naming the command, so
-they know whom to ask. The icon and the menu item stay hidden until the page has asked
+`>_ Root terminal` control in both of CloudPanel's headers and in the addons'
+copy of it, just before the account menu, and a Root terminal button on
+Addons → Terminal. `>_` is the mark a site's own Terminal tab has, so every way
+into a shell looks alike. Below 760px the header has no room for a fourth tool
+beside the logo, so the control becomes `>_ Root` at the end of the row under
+it -- the navigation, or the Admin Area's instance details -- pinned there
+when the row scrolls, with a divider so it does not read as another page. The
+addons' pages always draw that row on a phone; CloudPanel's draw it only with
+Panel Tweaks' phone layout, so without it the control is a Root terminal item
+in the account menu, above Logout. The others get none of these; their button
+shows a notice naming the command, so they know whom to ask. The controls stay
+hidden until the page has asked
 `/addons/terminal/api/root-access`. Every panel page asks, so the manager
 keeps root's answer a minute per user instead of starting a root process for
 each page; the Terminal page asks afresh, and the worker always checks.

@@ -272,6 +272,7 @@ ${logosHtml(panelLogos())}
     </a>
     <nav class="clp-addon-primary-nav" aria-label="${esc("CloudPanel navigation")}">
 ${primaryNav}
+      ${chrome.admin !== false ? rootShellLink(mountPath("terminal"), 'class="clp-addon-primary-link clp-root-shell-nav" data-clp-root-shell hidden', "Root") : ""}
     </nav>
     ${chrome.updateNotice ? updateNoticeHtml(chrome.updateNotice.latest) : ""}
     <div class="clp-addon-header-tools">
@@ -291,7 +292,6 @@ ${primaryNav}
         </button>
         <div class="clp-addon-account-menu" id="clp-account-menu" hidden>
           <a href="${esc(PANEL_SETTINGS_URL)}">Settings</a>
-          ${chrome.admin !== false ? rootShellLink(mountPath("terminal"), 'class="clp-root-shell-menu" data-clp-root-shell hidden', "Root terminal", false) : ""}
           <a href="${esc(PANEL_LOGOUT_URL)}">Logout</a>
         </div>
       </div>
