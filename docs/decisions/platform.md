@@ -580,7 +580,20 @@ and the site and type lead each card. A ticked row is tinted, and clicking
 anywhere on a row but a control or its Manage menu ticks it; a phone shows no
 selection checkboxes, only the tint. The table's header stacks there: its title,
 then the selection count with Select all (`FLEET_SELECTION_HTML`), then the bulk
-actions across the width. On a wide screen a
+actions across the width. On a wide screen the count sits at the right, beside
+the bulk actions it counts for, rather than under the title.
+
+With a mouse, a select opens a list drawn like the filter menus: the chosen
+option tinted and checked at the end of its row. This uses the browser's
+customizable select, so the element and its form value stay native. A phone
+keeps its own picker, which is the better one there, and a browser that cannot
+style the list keeps the native one. A select drawn this way is as wide as its
+chosen option rather than its widest, so the shell's script holds one that
+sizes to its content at its widest option, and choosing does not move the
+controls beside it. Panel Tweaks draws the Sites page's application filter the
+same way.
+
+On a wide screen a
 list of more than twelve rows with something below its card scrolls in a box of
 its own under a sticky heading; a list that ends the page grows with it. On a
 phone a list longer than ten sites shows the first ten and a button for the rest,

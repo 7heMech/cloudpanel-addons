@@ -951,6 +951,23 @@
 
     // --- search and filter -----------------------------------------------
 
+    // With a mouse, the filter's list is drawn like the Columns menu (sites.css),
+    // and a select drawn that way is as wide as its chosen option rather than its
+    // widest, so choosing would move the controls beside it. It is held at its
+    // widest.
+    function holdWidth(select) {
+      if (!window.getComputedStyle || getComputedStyle(select).appearance !== "base-select") return;
+      if (select.offsetWidth === 0 || select.options.length < 2) return;
+      var keep = select.selectedIndex;
+      var widest = 0;
+      for (var i = 0; i < select.options.length; i++) {
+        select.selectedIndex = i;
+        widest = Math.max(widest, select.offsetWidth);
+      }
+      select.selectedIndex = keep;
+      select.style.minWidth = widest + "px";
+    }
+
     function buildToolbar(rows) {
       var search = document.getElementById("clp-tweaks-search");
       var picker = document.getElementById("clp-tweaks-type");
@@ -971,6 +988,7 @@
         option.textContent = kinds[k];
         picker.appendChild(option);
       }
+      holdWidth(picker);
 
       var empty = document.createElement("div");
       empty.className = "clp-tweaks-empty";
