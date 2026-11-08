@@ -13,7 +13,7 @@ import {
 import { NGINX_MAINTENANCE_BLOCK, reconcileNginxMaintenance } from "../addons/maintenance/nginx";
 import { applyClpctlGuard } from "../addons/system-tweaks/clpctl-guard";
 import { backupCompressionStatus, reconcileBackupCompression, DEFAULT_BACKUP_COMPRESSION } from "../addons/system-tweaks/backup-compression";
-import { rebaselineVerdict } from "../lib/baseline";
+import { baselineFiles, hasBaseline, readBaselineVersion, rebaselineVerdict } from "../lib/baseline";
 import { compareUpstream, conffileMd5, packageVersion, parseRange, rangeFit, upstreamVersion } from "../lib/cloudpanel-version";
 import { cmdStatus } from "../cli/status";
 import { holdAdvice, holdSummary } from "../lib/panel-holds";
@@ -271,6 +271,52 @@ test("global_settings replaced by an Nginx upgrade gets the maintenance check ba
   const result = reconcileNginxMaintenance({ ...m.paths, packageVersion: "1.26.3-4" });
   expect(result).toMatchObject({ state: "ok", changed: true, rebaselined: { from: "1.26.3-3", to: "1.26.3-4" } });
   expect(m.read()).toBe(`client_max_body_size 256m;\n${NGINX_MAINTENANCE_BLOCK}\n`);
+});
+
+test("a template first seen while dpkg is part-way through CloudPanel is not recorded until it finishes", () => {
+  const dir = tempDir();
+  const file = join(dir, TEMPLATE);
+  mkdirSync(join(dir, "Frontend/Partial"), { recursive: true });
+  writeFileSync(file, `<header>\n${NAV}\n</div>\n</header>\n`);
+  const options = { templatesDir: dir, stateDir: join(dir, "state") };
+  const injections = [injection("manager", NAV)];
+
+  const busy = reconcile(injections, { ...options, panelVersion: null, panelBusy: () => true });
+  expect(busy.changed).toBe(false);
+  expect(busy.statuses).toMatchObject([{ state: "upstream-changed", reason: "busy" }]);
+  expect(existsSync(join(options.stateDir, "Frontend_Partial_header.html.twig.sha256"))).toBe(false);
+
+  const done = reconcile(injections, { ...options, panelVersion: NEW, panelBusy: () => false });
+  expect(done.statuses).toMatchObject([{ state: "ok" }]);
+  expect(readFileSync(join(options.stateDir, "Frontend_Partial_header.html.twig.version"), "utf-8").trim()).toBe(NEW);
+});
+
+test("global_settings first seen while dpkg is part-way through its package is not recorded until it finishes", () => {
+  const m = maintenanceFixture();
+  const files = baselineFiles(m.paths.stateDir, "global-settings");
+  rmSync(m.paths.stateDir, { recursive: true, force: true });
+  writeFileSync(m.settingsPath, "client_max_body_size 128m;");
+  expect(reconcileNginxMaintenance({ ...m.paths, packageVersion: null, packageBusy: () => true }))
+    .toMatchObject({ state: "upstream-changed", refusal: { reason: "busy" } });
+  expect(hasBaseline(files)).toBe(false);
+  expect(reconcileNginxMaintenance({ ...m.paths, packageVersion: "1.26.3-4", packageBusy: () => false }).state).toBe("ok");
+  expect(readBaselineVersion(files)).toBe("1.26.3-4");
+});
+
+test("a rebaseline Nginx rejects keeps the old record, so the next pass decides again and says so", () => {
+  const m = maintenanceFixture();
+  const files = baselineFiles(m.paths.stateDir, "global-settings");
+  writeFileSync(m.settingsPath, "client_max_body_size 256m;");
+  const failing = (command: string, args: string[]) =>
+    command === "nginx" ? { ok: false, stdout: "", stderr: "nginx: [emerg] test failed", exitCode: 1 } : { ok: true, stdout: "", stderr: "", exitCode: 0 };
+  const rejected = reconcileNginxMaintenance({ ...m.paths, reload: true, run: failing as never, packageVersion: "1.26.3-4" });
+  expect(rejected.state).toBe("validation-failed");
+  expect(m.read()).toBe("client_max_body_size 256m;");
+  expect(readBaselineVersion(files)).toBe("1.26.3-3");
+
+  const accepted = reconcileNginxMaintenance({ ...m.paths, packageVersion: "1.26.3-4" });
+  expect(accepted).toMatchObject({ state: "ok", rebaselined: { from: "1.26.3-3", to: "1.26.3-4" } });
+  expect(readBaselineVersion(files)).toBe("1.26.3-4");
 });
 
 test("global_settings that now defines a maintenance location of its own is refused after an upgrade", () => {

@@ -4,6 +4,7 @@ import { ActionFailure, failAction } from "../../lib/action";
 import { errorMessage } from "../../lib/errors";
 import { withFileLockSync } from "../../lib/file-lock";
 import { addonConfigFile } from "../../lib/paths";
+import { isTrustedDirectory } from "../../lib/trusted-file";
 import { openPanelDatabase } from "../../lib/panel-db";
 import { writeFileAtomic } from "../../lib/atomic-write";
 import { DEFAULT_SECURITY_KEYS_PATHS, verifyTerminalKey } from "../security-keys/action";
@@ -44,8 +45,7 @@ export function totp(secret: string, step: number): string {
 function withState<T>(user: string, uid: number, now: number, storage: typeof DEFAULT_ROOT_AUTH_PATHS,
   use: (state: State, save: () => void) => T): T {
   mkdirSync(storage.dir, { recursive: true, mode: 0o700 });
-  const dir = lstatSync(storage.dir);
-  if (!dir.isDirectory() || dir.isSymbolicLink() || dir.uid !== uid || (dir.mode & 0o077)) failAction("Terminal verification state is not root-only.");
+  if (!isTrustedDirectory(lstatSync(storage.dir), uid, 0o077)) failAction("Terminal verification state is not root-only.");
   return withFileLockSync(storage.lock, 15, "Another terminal verification is running.", () => {
     const file = rootAuthFile(storage.dir, user);
     let state: State;
@@ -92,9 +92,11 @@ export function rootAuth(verb: "options" | "verify" | "consume", user: string, s
   if (!/^[a-f0-9]{64}$/.test(binding)) failAction("A verified panel session is required.");
   const grant = allowedGrant(user, paths, session);
   const fingerprint = digest(JSON.stringify(grant));
-  // Pinned keys the account still has, while Security Keys is on.
-  const held = existsSync(storage.securityKeys) ? accountPasskeys(paths.securityKeys, user, grant.id, paths.rootUid).map(key => key.id) : [];
-  const keys = grant.keys.filter(id => held.includes(id));
+  // Pinned keys the account still has, while Security Keys is on; a ticket's consumption needs none.
+  const pinnedKeys = () => {
+    const held = existsSync(storage.securityKeys) ? accountPasskeys(paths.securityKeys, user, grant.id, paths.rootUid).map(key => key.id) : [];
+    return grant.keys.filter(id => held.includes(id));
+  };
   return withState(user, paths.rootUid, now, storage, (state, save) => {
     if (verb === "consume") {
       const id = digest(typeof input.ticket === "string" ? input.ticket : "");
@@ -107,11 +109,13 @@ export function rootAuth(verb: "options" | "verify" | "consume", user: string, s
     // Five in five minutes, and twenty a day, so guessing never runs on unattended.
     if (state.attempts.filter(at => at > now - 300_000).length >= 5 || state.attempts.length >= 20) failAction("Too many failed verifications. Try again later.");
     if (verb === "options") {
+      // A session answers one prompt at a time: a new one replaces any it left open, so cancelling and retrying never fills the cap.
+      state.challenges = Object.fromEntries(Object.entries(state.challenges).filter(([, value]) => value.session !== binding));
       if (Object.keys(state.challenges).length >= 20) failAction("Too many pending prompts. Try again in five minutes.");
       const challenge = randomBytes(32).toString("base64url");
       state.challenges[challenge] = { session: binding, expires: now + 300_000 };
       save();
-      return { challenge, keys };
+      return { challenge, keys: pinnedKeys() };
     }
     const challenge = typeof input.challenge === "string" ? input.challenge : "";
     const pending = state.challenges[challenge];
@@ -125,7 +129,7 @@ export function rootAuth(verb: "options" | "verify" | "consume", user: string, s
         state.usedStep = verifyCode(paths.panelDb, user, input.code, Math.max(state.usedStep ?? -1, opened), now);
       }
       else {
-        verifyTerminalKey({ ...DEFAULT_SECURITY_KEYS_PATHS, stateDir: paths.securityKeys, panelDb: paths.panelDb, stateUid: paths.rootUid }, user, keys, challenge, input, now);
+        verifyTerminalKey({ ...DEFAULT_SECURITY_KEYS_PATHS, stateDir: paths.securityKeys, panelDb: paths.panelDb, stateUid: paths.rootUid }, user, pinnedKeys(), challenge, input, now);
         method = `passkey ${String(input.id)}`;
       }
     } catch (error) {

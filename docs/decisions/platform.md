@@ -285,12 +285,21 @@ hold:
   CloudPanel restructured around it, so the block could land in the wrong
   place. A required block that does not fit, or any repeated anchor, holds back
   the whole file, since its blocks are rendered together; an optional block
-  whose anchor is gone is left out and the rest are patched, as on any pass. For the master vhost, there is exactly one
-  server block on port 8443 and no `/addons/` location of CloudPanel's own;
+  whose anchor is gone is left out and the rest are patched, as on any pass.
+  For the master vhost, there is exactly one server block on port 8443 and no
+  `/addons/` location of CloudPanel's own;
   `nginx -t` and the rollback still guard the write. Maintenance Mode's block is
   appended rather than anchored, so `global_settings` fits unless it already
   defines one of the block's variables, its location or a 418 `error_page`; the
   Nginx transaction still validates it.
+
+A file with no record yet is not recorded while dpkg is part-way through its
+package (unpacked, half-configured, awaiting triggers): the record would be a
+half-written file with no version to tell the finished one apart by. The next
+pass after dpkg finishes records it. A record is written only once the file it
+vouches for is in place and, for the master vhost and `global_settings`, Nginx
+passed `nginx -t` and reloaded; a change Nginx rejects leaves the old record,
+and the next pass decides again.
 
 Otherwise the file is left exactly as the package wrote it, with a reason:
 `busy`, `edited`, `unrecorded`, `stray-marker`, `anchor-missing`,
@@ -329,8 +338,10 @@ drops the version and conffile conditions and nothing else, so the package must 
 must still fit.
 
 What is refused is shown, not only logged. The manager's `holds` verb runs as
-root on every load of the Addons page and inspects the live files without
-writing; `clp-addons status` prints the same list. `status` runs only as root,
+root and inspects the live files without writing; the Addons page asks it at
+most every thirty seconds, since each answer queries dpkg and the list changes
+only with an upgrade or `repair --rebaseline`. `clp-addons status` prints the
+same list. `status` runs only as root,
 since the records keep their text where only root can read it, and as another
 user every patched file would look edited. Both group by file and name
 the addons whose blocks are held, the package version, and what to do, in the

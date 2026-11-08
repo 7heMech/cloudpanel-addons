@@ -16,10 +16,23 @@ export async function latestManagerJobView(): Promise<ManagerJobView | null> {
   return result.ok && result.data ? result.data.job : null;
 }
 
-/** Nothing to show when the gateway cannot say: the page stays usable, and `clp-addons status` has the same list. */
-export async function panelHolds(): Promise<PanelHold[]> {
+const HOLDS_TTL_MS = 30_000;
+let heldAt = 0;
+let held: PanelHold[] = [];
+
+/**
+ * Nothing to show when the gateway cannot say: the page stays usable, and
+ * `clp-addons status` has the same list. Kept for half a minute, since it
+ * changes only with a package upgrade or `repair --rebaseline`, and each
+ * answer has root query dpkg.
+ */
+export async function panelHolds(now = Date.now()): Promise<PanelHold[]> {
+  if (now - heldAt < HOLDS_TTL_MS) return held;
   const result = await managerAction<PanelHold[]>("holds");
-  return result.ok && Array.isArray(result.data) ? result.data : [];
+  if (!result.ok || !Array.isArray(result.data)) return [];
+  heldAt = now;
+  held = result.data;
+  return held;
 }
 
 export async function seenNews(): Promise<{ since: string; seen: string[] }> {

@@ -141,11 +141,12 @@ export async function runAnchorWork(quiet: boolean): Promise<void> {
 const MANAGER_LABEL = "Addons tab";
 
 /** What `clp-addons status` and the Addons page list as left alone after a CloudPanel or Nginx change. */
-export function panelHolds(): PanelHold[] {
+export function panelHolds(
+  templates: TargetStatus[] = inspectTemplates(installedInjections()), proxy = inspectNginxProxy(),
+): PanelHold[] {
   const holds: PanelHold[] = [];
-  const injections = installedInjections();
   const byTemplate = new Map<string, PanelHold>();
-  for (const status of inspectTemplates(injections)) {
+  for (const status of templates) {
     if (status.state !== "upstream-changed") continue;
     const label = status.addon === "manager" ? MANAGER_LABEL : ADDONS[status.addon]?.title ?? status.addon;
     const hold = byTemplate.get(status.template);
@@ -159,7 +160,6 @@ export function panelHolds(): PanelHold[] {
     });
   }
   holds.push(...byTemplate.values());
-  const proxy = inspectNginxProxy();
   if (proxy.refusal) {
     holds.push({ file: proxy.vhostPath ?? "CloudPanel's master vhost", addons: ["Addons page"], package: "CloudPanel", ...proxy.refusal });
   }

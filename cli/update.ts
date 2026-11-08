@@ -81,7 +81,7 @@ async function checkPanelRange(
     return fetched;
   }
   const fit = rangeFit(installed, range);
-  if (fit === "below") log.warn(`clp-addons ${target} supports CloudPanel ${describeRange(range)}; this server runs ${installed}, updating CloudPanel with clp-update is recommended`);
+  if (fit === "below") log.warn(`clp-addons ${target} supports CloudPanel ${describeRange(range)}; this server runs ${installed}; updating CloudPanel with clp-update is recommended`);
   if (fit === "above") log.warn(`clp-addons ${target} was checked against CloudPanel ${describeRange(range)}; this server runs ${installed}, so a CloudPanel page that changed in a way the addons no longer fit stays paused until a release supports it`);
   if (fit === "unknown") log.warn(`could not read the CloudPanel version; clp-addons ${target} supports CloudPanel ${describeRange(range)}`);
   return fetched;

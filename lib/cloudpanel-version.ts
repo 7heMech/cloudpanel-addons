@@ -106,6 +106,19 @@ export function panelVersion(query?: PackageQuery): string | null {
   return packageVersion("cloudpanel", query);
 }
 
+/**
+ * dpkg lists the package but is part-way through changing it: unpacked,
+ * half-installed or half-configured, awaiting or holding triggers, or flagged
+ * for reinstall. Not listed, removed or purged is not busy.
+ */
+export function packageBusy(pkg: string, query: PackageQuery = dpkgQuery): boolean {
+  try {
+    return /^\S[HUFWt]|^\S\SR/.test(query(["-W", "-f=${db:Status-Abbrev}", pkg]));
+  } catch {
+    return false;
+  }
+}
+
 /** The package that installed `path`, such as `nginx-common` for /etc/nginx/global_settings. */
 export function owningPackage(path: string, query: PackageQuery = dpkgQuery): string | null {
   try {

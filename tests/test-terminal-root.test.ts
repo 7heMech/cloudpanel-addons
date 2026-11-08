@@ -375,6 +375,21 @@ test("five wrong codes throttle the account across sessions; malformed ones do n
   }
   expect(() => auth("options", {}, Date.now(), "b".repeat(64))).toThrow("Too many failed verifications");
 });
+test("a session opening prompt after prompt keeps only its latest, so cancelling never fills the cap", () => {
+  change(`UPDATE user SET mfa_secret = '${SECRET}' WHERE user_name = 'alice'`);
+  allow("alice");
+  const now = Date.now();
+  let first = "";
+  for (let i = 0; i < 25; i++) {
+    const { challenge } = auth("options", {}, now);
+    if (i === 0) first = challenge;
+  }
+  const next = nextCode(now);
+  // The first prompt was replaced; the latest still answers.
+  expect(() => auth("verify", { challenge: first, code: next.code }, next.at)).toThrow("expired");
+  expect(auth("verify", { ...auth("options", {}, now), code: next.code }, next.at).ticket).toBeString();
+});
+
 test("twenty wrong codes in a day throttle the account even when spread out", () => {
   change(`UPDATE user SET mfa_secret = '${SECRET}' WHERE user_name = 'alice'`);
   allow("alice");
