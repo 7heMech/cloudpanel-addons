@@ -75,8 +75,22 @@ export const TERMINAL_TARGETS: AddonTarget[] = [
         <li class="clp-root-shell" data-clp-root-shell style="display: none;">${rootShellLink(url, "", '<span class="clp-root-shell-label">Root terminal</span>')}<style>${HEADER_STYLE}</style><script>${rootShellScript(url)}</script></li>
         {% endif %}`,
   })),
+  // At the end of the row under the logo, which Panel Tweaks' phone layout
+  // draws and shows it in: the navigation in the main header, the instance's
+  // details in the Admin Area's. The header item's style and script cover it.
+  ...[TEMPLATES.header, TEMPLATES.adminHeader].map((template, index): AddonTarget => ({
+    slug: index === 0 ? "root-shell-nav" : "root-shell-admin-nav",
+    template,
+    anchorBefore: '    </div>\n    <div class="navbar-right">',
+    required: false,
+    snippet: (url) => `
+      ${ADMIN}
+      ${rootShellLink(url, 'class="clp-root-shell-nav" data-clp-root-shell hidden', "Root")}
+      {% endif %}
+`,
+  })),
   // The same control in the account menu, above Logout, which a phone shows in
-  // place of the header icon; the header item's style and script cover it.
+  // place of the header icon when Panel Tweaks' phone layout is off.
   ...[TEMPLATES.header, TEMPLATES.adminHeader].map((template, index): AddonTarget => ({
     slug: index === 0 ? "root-shell-menu" : "root-shell-admin-menu",
     template,

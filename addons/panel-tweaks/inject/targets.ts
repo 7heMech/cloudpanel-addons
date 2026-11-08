@@ -180,6 +180,20 @@ body .header .navbar-right > ul > li.user-avatar > a.dropdown-toggle::after { bo
   body .header .nav-link-container { padding: 0 5px; border-top: 1px solid #e2e2e2; }
   html.dark body .header .nav-link-container { border-top-color: var(--clp-border-color); }
   body .header .nav-link-container > a { padding: 0 15px; }
+  /* Terminal's Root control goes at the end of that row, and of the Admin
+     Area's row of instance details, pinned and drawn over what scrolls under
+     it; the account menu's copy, there for a header without this row, goes
+     wherever that control made it into the header. */
+  html body .header .clp-root-shell-nav:not([hidden]) { display: flex !important; align-items: center; gap: 8px;
+    flex: 0 0 auto; margin: 0 0 0 auto; padding: 0 16px; position: sticky; right: 0; border-left: 1px solid #e2e2e2;
+    background: #fff; color: #aaa; font-size: 15px; font-weight: 400; }
+  html body .header .clp-root-shell-nav:hover { color: #0078d4; text-decoration: none; }
+  html.dark body .header .clp-root-shell-nav { border-left-color: var(--clp-border-color); background: var(--clp-bg-tertiary);
+    color: var(--clp-text); }
+  html.dark body .header .clp-root-shell-nav:hover { color: var(--clp-text-hover); }
+  body .header .header-instance-information-container:has(> .clp-root-shell-nav:not([hidden])) { display: flex; }
+  body .header .header-instance-information-container > ul { flex: 1 0 auto; min-width: 0; }
+  html body .header:has(.clp-root-shell-nav) .navbar-right li.clp-root-shell-menu { display: none !important; }
   /* CloudPanel draws its dashboard charts at a fixed 545px, which is wider than
      the phone they are on, and the information boxes at a fixed 240px. The
      container is a flex row of two-chart rows, so widening a chart to its row
@@ -236,14 +250,25 @@ const NEW_SITE_STYLE = `
  * Its stylesheet draws the page at a fixed 850px and the code field at 350px,
  * so a phone scrolls sideways and the manual-entry secret, one unbroken word,
  * runs off the card. Below 760px the page takes the card's width, the secret
- * breaks anywhere, and the field shares its row with the button.
+ * breaks anywhere, and the field shares its row with the button. Below 576px
+ * that row leaves the field too narrow for its own placeholder, so the field
+ * takes the whole row and the button goes under it.
+ *
+ * At any width, the dark theme's rule for every link outranks the page's own
+ * blue for its links, so "Try this instead" and the app names read as plain
+ * text. They get the blue the dark theme gives its other inline link.
  */
 const ENABLE_MFA_STYLE = `
+html.dark body .enable-mfa-container a { color: #267ddd; }
 @media (max-width: 760px) {
   body .enable-mfa-container { width: auto; max-width: 850px; overflow-wrap: anywhere; }
   body .enable-mfa-container .qr-code-container img { max-width: 100%; height: auto; margin-left: 0; }
   body .mfa-code-form-container .row > .col-auto:first-child { flex: 1 1 0; min-width: 0; }
   body .mfa-code-form-container input.mfa-code { width: 100%; max-width: 350px; }
+}
+@media (max-width: 576px) {
+  body .mfa-code-form-container .row > .col-auto:first-child { flex: 0 0 100%; }
+  body .mfa-code-form-container input.mfa-code { max-width: none; }
 }
 `;
 

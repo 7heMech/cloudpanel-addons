@@ -36,6 +36,8 @@
   var desktopSite = document.documentElement.classList.contains("clp-tweaks-desktop-site");
   var NARROW_QUERY = SITES_MOBILE_JSON && !desktopSite ? "(max-width: 1100px)" : "not all";
   var COLUMNS_ON = SITES_TABLE_JSON;
+  // The tab's copy of the last reply; see start().
+  var PANEL_KEY = "clp_tweaks_panel";
   var columnStyle = null;
   var tagged = false;
   var chosen = {};
@@ -159,10 +161,91 @@
       });
     });
 
-    wanted.then(function (payload) {
-      if (!payload || payload.ok !== true || !payload.data) return noToolbar();
-      apply(payload.data, rows);
+    // The reply comes after the page is first drawn, so the table was drawn as
+    // the panel's and redrawn with these columns a frame later. The tab keeps
+    // the last reply, cut to the sites it showed, and a table of the same
+    // sites is drawn from it before the first paint; the reply then corrects
+    // whatever has changed since. Another account's table, or another set of
+    // sites, is not drawn from it.
+    // Drawn from at the end of start(), once the tables below are assigned;
+    // the reply is never handled before then.
+    var shown = null;
+    // Signing out leaves the tab, so it leaves nothing of the account in it.
+    document.addEventListener("click", function (event) {
+      var link = event.target && event.target.closest ? event.target.closest('a[href$="/logout"]') : null;
+      if (link) forgetPanel();
     });
+    wanted.then(function (payload) {
+      if (!payload || payload.ok !== true || !payload.data) {
+        forgetPanel();
+        return shown ? undefined : noToolbar();
+      }
+      var fresh = cutToRows(payload.data, rows);
+      storePanel(fresh);
+      if (!shown) return apply(fresh, rows);
+      if (JSON.stringify(fresh) === JSON.stringify(shown)) return;
+      var was = shown.tweaks || {};
+      var now = fresh.tweaks || {};
+      // Other switches mean other columns and toolbar, which the next page
+      // builds; the facts in the cells are corrected now.
+      if (Boolean(was.sitesTable) === Boolean(now.sitesTable) && Boolean(was.diskUsage) === Boolean(now.diskUsage)) {
+        refresh(fresh, rows);
+      }
+    });
+
+    function cutToRows(data, rows) {
+      var wantedDomains = {};
+      for (var i = 0; i < rows.length; i++) wantedDomains[rows[i].domain] = true;
+      var sites = [];
+      for (var s = 0; s < (data.sites || []).length; s++) {
+        if (wantedDomains[data.sites[s].domain]) sites.push(data.sites[s]);
+      }
+      return { tweaks: data.tweaks || {}, sites: sites };
+    }
+
+    function storedPanel(rows) {
+      var stored = null;
+      try { stored = JSON.parse(window.sessionStorage.getItem(PANEL_KEY) || "null"); } catch (error) { return null; }
+      if (!stored || !stored.tweaks || !stored.sites || stored.sites.length !== rows.length) return null;
+      var have = {};
+      for (var s = 0; s < stored.sites.length; s++) have[stored.sites[s].domain] = true;
+      for (var r = 0; r < rows.length; r++) if (!have[rows[r].domain]) return null;
+      return stored;
+    }
+
+    function storePanel(data) {
+      try { window.sessionStorage.setItem(PANEL_KEY, JSON.stringify(data)); } catch (error) {}
+    }
+
+    function forgetPanel() {
+      try { window.sessionStorage.removeItem(PANEL_KEY); } catch (error) {}
+    }
+
+    // The same cells, built again from the reply, where the stored copy had
+    // them; the columns, toolbar and menus stay as they were built.
+    function refresh(data, rows) {
+      var byDomain = {};
+      for (var i = 0; i < data.sites.length; i++) byDomain[data.sites[i].domain] = data.sites[i];
+      for (var r = 0; r < rows.length; r++) {
+        var row = rows[r];
+        row.site = byDomain[row.domain] || null;
+        var builders = {
+          ssl: function () { return sslCell(row.site, row.domain); },
+          runtime: function () { return runtimeCell(row.site); },
+          disk: function () { return diskCell(row.site); },
+          created: function () { return createdCell(row.site); },
+          cloudflare: function () { return switchCell("Cloudflare", "cloudflare", row.site && row.site.cloudflareOnly); },
+          varnish: function () { return switchCell("Varnish", "varnish", row.site && row.site.varnish); }
+        };
+        for (var key in builders) {
+          var current = row.el.querySelector('td[data-col="' + key + '"]');
+          if (current) current.replaceWith(builders[key]());
+        }
+      }
+      nameApplications(rows);
+      copyDetails(rows);
+      placeTypes(rows);
+    }
 
     function apply(data, rows) {
       var tweaks = data.tweaks || {};
@@ -801,10 +884,16 @@
     function addCount(rows) {
       var heading = document.querySelector(".page-title h1");
       if (!heading) return;
+      var pill = document.createElement("span");
+      pill.className = "clp-tweaks-count";
+      // Its own box, trimmed to the digits, so they sit in the middle whatever the font.
       counter = document.createElement("span");
-      counter.className = "clp-tweaks-count";
       counter.textContent = String(rows.length);
-      heading.appendChild(counter);
+      pill.appendChild(counter);
+      heading.appendChild(pill);
+      // The count says what the summary would, so that is left to screen readers.
+      var summary = document.getElementById("clp-tweaks-summary");
+      if (summary) summary.classList.add("clp-tweaks-spoken");
     }
 
     function paintCount(shown, total) {
@@ -924,6 +1013,9 @@
         });
       }
     }
+
+    shown = storedPanel(rows);
+    if (shown) apply(shown, rows);
   }
 
   if (document.readyState === "loading") document.addEventListener("DOMContentLoaded", start, { once: true });

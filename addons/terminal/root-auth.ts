@@ -64,12 +64,14 @@ function withState<T>(user: string, uid: number, now: number, storage: typeof DE
 
 /**
  * CloudPanel keeps no record of the code it took at sign-in, so a phishing
- * proxy holding the session holds that code too. Every code it could have is
- * older than any prompt the session opens afterwards, so only a code from a
- * later step than the prompt's counts. A code that matches an older or used
- * step is not a guess, and spends nothing.
+ * proxy holding the session holds that code too. CloudPanel takes a code up
+ * to two steps either side of its clock, so every code the session could have
+ * signed in with is from no later than two steps after the one `signedIn`
+ * falls in, and only a later one counts here. A code that matches one of those steps, or
+ * one at or before `used`, the last step that succeeded, is not a guess, and
+ * spends nothing.
  */
-function verifyCode(panelDb: string, user: string, code: string, floor: number, now: number): number {
+function verifyCode(panelDb: string, user: string, code: string, used: number, signedIn: number, now: number): number {
   if (!/^\d{6}$/.test(code)) failAction("Enter a six-digit authenticator code.");
   const db = openPanelDatabase(panelDb, true);
   try {
@@ -78,16 +80,27 @@ function verifyCode(panelDb: string, user: string, code: string, floor: number, 
     const step = Math.floor(now / 30_000);
     const matched = [step - 1, step, step + 1].find(n => n >= 0 && timingSafeEqual(Buffer.from(totp(secret, n)), Buffer.from(code)));
     if (matched === undefined) throw new WrongProof("Invalid code. Try the next code.");
-    if (matched <= floor) failAction("Enter the next code your app shows: this one was showing before the prompt opened, or was used already.");
+    if (matched <= used) failAction("This code was used already. Wait for the next code your app shows.");
+    if (matched <= Math.floor(signedIn / 30_000) + 2) failAction("This code could be the one you signed in with. Wait for the next code your app shows.");
     return matched;
   } finally { db.close(); }
+}
+
+/** What the gateway says of the panel session a request came with. */
+export interface PanelSessionInfo {
+  /** How it signed in: see SESSION_2FA_ENV. */
+  proof: string;
+  /** A digest of its id, so a challenge or ticket answers only there. */
+  binding: string;
+  /** When the gateway first saw it signed in, if it said. */
+  seen: number | null;
 }
 
 /**
  * Root-owned, serialized state: failed attempts survive worker exits and
  * tickets are single use. `consume` returns how the ticket was earned.
  */
-export function rootAuth(verb: "options" | "verify" | "consume", user: string, session: string, binding: string,
+export function rootAuth(verb: "options" | "verify" | "consume", user: string, { proof: session, binding, seen }: PanelSessionInfo,
   input: Record<string, unknown>, paths: RootAccessPaths, now = Date.now(), storage = DEFAULT_ROOT_AUTH_PATHS): unknown {
   if (!/^[a-f0-9]{64}$/.test(binding)) failAction("A verified panel session is required.");
   const grant = allowedGrant(user, paths, session);
@@ -124,9 +137,12 @@ export function rootAuth(verb: "options" | "verify" | "consume", user: string, s
     let method = "an authenticator code";
     try {
       if (typeof input.code === "string") {
-        // The prompt opened five minutes before its challenge expires.
-        const opened = Math.floor((pending.expires - 300_000) / 30_000);
-        state.usedStep = verifyCode(paths.panelDb, user, input.code, Math.max(state.usedStep ?? -1, opened), now);
+        // The gateway's sighting is of this sign-in; the challenge is bound only
+        // to the session id, which a later sign-in can keep, so the prompt's
+        // opening (five minutes before its challenge expires) stands in only
+        // without a sighting.
+        const opened = pending.expires - 300_000;
+        state.usedStep = verifyCode(paths.panelDb, user, input.code, state.usedStep ?? -1, seen ?? opened, now);
       }
       else {
         verifyTerminalKey({ ...DEFAULT_SECURITY_KEYS_PATHS, stateDir: paths.securityKeys, panelDb: paths.panelDb, stateUid: paths.rootUid }, user, pinnedKeys(), challenge, input, now);

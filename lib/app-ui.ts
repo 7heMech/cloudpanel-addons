@@ -17,6 +17,14 @@ const DEFAULT_AVATAR = "data:image/jpeg;base64,/9j/4AAQSkZJRgABAQEAYABgAAD//gA7Q
 // The header reproduces CloudPanel's own controls. Their icons are the panel's
 // own paths, copied rather than approximated, so the same control does not
 // have two shapes depending on which page it is on.
+/**
+ * CloudPanel's own logo, its paths copied as the icons' are, drawn as part of
+ * the page rather than linked: an image comes from the cache a frame after the
+ * page is drawn, so going from a panel page to an addon page showed the header
+ * without its logo first. The two files the panel ships differ only in the
+ * colour of the words, which the stylesheet sets for each theme.
+ */
+const PANEL_LOGO = `<svg class="clp-addon-logo clp-addon-logo-panel" viewBox="0 0 556 112" width="155" height="31" role="img" aria-label="CloudPanel" style="fill-rule:evenodd;clip-rule:evenodd;stroke-linejoin:round;stroke-miterlimit:2"><g transform="matrix(5.55556,0,0,5.55556,0,0)"><g transform="matrix(0.994976,0,0,0.994976,-86.4326,-4.27105)"><path fill="#0178d4" d="M102.86,13.634C102.253,12.863 101.43,12.289 100.497,11.985L100.497,11.925C100.497,9.102 98.289,6.801 95.567,6.801C92.843,6.801 90.634,9.097 90.634,11.926L90.634,11.996C88.64,12.649 87.184,14.591 87.184,16.882C87.184,19.705 89.394,22.007 92.116,22.007C93.422,22.004 94.673,21.472 95.581,20.532C96.487,21.472 97.737,22.005 99.042,22.007C101.759,22.007 103.975,19.711 103.975,16.882C103.975,15.702 103.575,14.548 102.86,13.634ZM99.042,20.711C97.011,20.711 95.357,18.993 95.357,16.881C95.362,16.533 95.082,16.243 94.734,16.235C94.39,16.24 94.11,16.525 94.11,16.869C94.11,16.873 94.11,16.878 94.11,16.882C94.11,17.839 94.367,18.737 94.806,19.504C94.124,20.273 93.144,20.715 92.116,20.717C90.084,20.717 88.429,18.998 88.429,16.887C88.429,14.777 90.084,13.058 92.116,13.058C92.556,13.058 92.984,13.14 93.394,13.292C93.399,13.292 93.403,13.297 93.408,13.297C93.55,13.347 93.75,13.444 93.812,13.498C93.922,13.599 94.067,13.655 94.216,13.655C94.399,13.655 94.572,13.571 94.686,13.428C94.91,13.157 94.879,12.753 94.618,12.518C94.346,12.279 93.922,12.116 93.818,12.078C93.276,11.872 92.701,11.767 92.121,11.768C92.042,11.768 91.964,11.768 91.885,11.773C91.969,9.733 93.587,8.102 95.572,8.102C97.603,8.102 99.257,9.82 99.257,11.932C99.261,13.158 98.686,14.316 97.707,15.054C97.429,15.266 97.365,15.663 97.56,15.952C97.68,16.126 97.875,16.224 98.069,16.224C98.194,16.224 98.319,16.186 98.43,16.104C99.36,15.407 100.028,14.416 100.325,13.292C101.749,13.841 102.738,15.271 102.738,16.887C102.733,18.993 101.079,20.711 99.042,20.711Z"/></g><g transform="matrix(1.25766,-0.000448747,0.000448747,1.25766,-13.8924,-2.88425)" font-family="ArialMT, Arial, sans-serif" font-size="12" aria-hidden="true"><text class="clp-logo-cloud" x="28.821" y="15.08">Cloud</text><text class="clp-logo-panel" x="60.174" y="15.08">Panel</text></g></g></svg>`;
 const PANEL_ADMIN_URL = "/admin/users";
 const PANEL_SETTINGS_URL = "/settings";
 const PANEL_LOGOUT_URL = "/logout";
@@ -217,8 +225,7 @@ export function renderFragment(title: string, content: string, chrome: AddonChro
 export function logosHtml(logos: PanelLogos | null): string {
   const header = logos?.header ?? logos?.mark;
   if (!logos || !header) {
-    return `      <img class="clp-addon-logo clp-addon-logo-light" src="/assets/images/logo.svg" alt="CloudPanel" width="155" height="31">
-      <img class="clp-addon-logo clp-addon-logo-dark" src="/assets/images/logo-dark.svg" alt="CloudPanel" width="155" height="31">`;
+    return `      ${PANEL_LOGO}`;
   }
   const mark = logos.header ? logos.mark : null;
   return [0, 1].map((theme) => `      <picture class="clp-addon-logo-${theme ? "dark" : "light"}">${mark
@@ -272,6 +279,7 @@ ${logosHtml(panelLogos())}
     </a>
     <nav class="clp-addon-primary-nav" aria-label="${esc("CloudPanel navigation")}">
 ${primaryNav}
+      ${chrome.admin !== false ? rootShellLink(mountPath("terminal"), 'class="clp-addon-primary-link clp-root-shell-nav" data-clp-root-shell hidden', "Root") : ""}
     </nav>
     ${chrome.updateNotice ? updateNoticeHtml(chrome.updateNotice.latest) : ""}
     <div class="clp-addon-header-tools">
@@ -279,8 +287,7 @@ ${primaryNav}
         ${THEME_SWITCH_ICONS}
       </button>
       ${chrome.admin !== false ? `<a class="clp-addon-tool" id="clp-admin-area" href="${esc(PANEL_ADMIN_URL)}" title="Admin Area">
-        <svg viewBox="0 0 640 512" aria-hidden="true"><path fill="currentColor" d="M315.3 255.5c6.8-19 16.4-36.5 28.4-52.2-7.4 3-15.4 4.7-23.8 4.7-35.3 0-64-28.7-64-64s28.7-64 64-64 64 28.7 64 64c0 8.4-1.7 16.4-4.7 23.8 15.7-12 33.2-21.7 52.2-28.4C429 79.7 380.3 32 320 32c-61.9 0-112 50.1-112 112 0 60.3 47.7 109 107.3 111.5zM96 224c44.2 0 80-35.8 80-80s-35.8-80-80-80-80 35.8-80 80 35.8 80 80 80zm0-112c17.6 0 32 14.4 32 32s-14.4 32-32 32-32-14.4-32-32 14.4-32 32-32zm244.3 320H176v-44.8c0-36.4 29.2-66.2 65.4-67.2 20.6 8.6 41.9 13.6 63.4 15.2-.7-9.3-2-24 2.3-48.6-16.8-1.5-33.1-4.9-48-11.2-5.1-2.1-10.4-3.4-15.9-3.4-63.6 0-115.2 51.6-115.2 115.2V432c0 26.5 21.5 48 48 48h214c-19.4-12.9-36.2-29.2-49.7-48zM154.8 270.3c-13.4-9-29.5-14.3-46.8-14.3H84c-46.3 0-84 37.7-84 84 0 13.2 10.8 24 24 24s24-10.8 24-24c0-19.8 16.2-36 36-36h24c4.4 0 8.5 1.1 12.3 2.5 9.3-14 21.1-26.1 34.5-36.2zm455.7 71c2.6-14.1 2.6-28.5 0-42.6l25.8-14.9c3-1.7 4.3-5.2 3.3-8.5-6.7-21.6-18.2-41.2-33.2-57.4-2.3-2.5-6-3.1-9-1.4l-25.8 14.9c-10.9-9.3-23.4-16.5-36.9-21.3v-29.8c0-3.4-2.4-6.4-5.7-7.1-22.3-5-45-4.8-66.2 0-3.3.7-5.7 3.7-5.7 7.1v29.8c-13.5 4.8-26 12-36.9 21.3l-25.8-14.9c-2.9-1.7-6.7-1.1-9 1.4-15 16.2-26.5 35.8-33.2 57.4-1 3.3.4 6.8 3.3 8.5l25.8 14.9c-2.6 14.1-2.6 28.5 0 42.6l-25.8 14.9c-3 1.7-4.3 5.2-3.3 8.5 6.7 21.6 18.2 41.1 33.2 57.4 2.3 2.5 6 3.1 9 1.4l25.8-14.9c10.9 9.3 23.4 16.5 36.9 21.3v29.8c0 3.4 2.4 6.4 5.7 7.1 22.3 5 45 4.8 66.2 0 3.3-.7 5.7-3.7 5.7-7.1v-29.8c13.5-4.8 26-12 36.9-21.3l25.8 14.9c2.9 1.7 6.7 1.1 9-1.4 15-16.2 26.5-35.8 33.2-57.4 1-3.3-.4-6.8-3.3-8.5l-25.8-14.9zM496 368.5c-26.8 0-48.5-21.8-48.5-48.5s21.8-48.5 48.5-48.5 48.5 21.8 48.5 48.5-21.7 48.5-48.5 48.5z"></path></svg>
-        <span class="clp-addon-tool-label">Admin Area</span>
+        <svg viewBox="0 0 640 512" aria-hidden="true"><path fill="currentColor" d="M315.3 255.5c6.8-19 16.4-36.5 28.4-52.2-7.4 3-15.4 4.7-23.8 4.7-35.3 0-64-28.7-64-64s28.7-64 64-64 64 28.7 64 64c0 8.4-1.7 16.4-4.7 23.8 15.7-12 33.2-21.7 52.2-28.4C429 79.7 380.3 32 320 32c-61.9 0-112 50.1-112 112 0 60.3 47.7 109 107.3 111.5zM96 224c44.2 0 80-35.8 80-80s-35.8-80-80-80-80 35.8-80 80 35.8 80 80 80zm0-112c17.6 0 32 14.4 32 32s-14.4 32-32 32-32-14.4-32-32 14.4-32 32-32zm244.3 320H176v-44.8c0-36.4 29.2-66.2 65.4-67.2 20.6 8.6 41.9 13.6 63.4 15.2-.7-9.3-2-24 2.3-48.6-16.8-1.5-33.1-4.9-48-11.2-5.1-2.1-10.4-3.4-15.9-3.4-63.6 0-115.2 51.6-115.2 115.2V432c0 26.5 21.5 48 48 48h214c-19.4-12.9-36.2-29.2-49.7-48zM154.8 270.3c-13.4-9-29.5-14.3-46.8-14.3H84c-46.3 0-84 37.7-84 84 0 13.2 10.8 24 24 24s24-10.8 24-24c0-19.8 16.2-36 36-36h24c4.4 0 8.5 1.1 12.3 2.5 9.3-14 21.1-26.1 34.5-36.2zm455.7 71c2.6-14.1 2.6-28.5 0-42.6l25.8-14.9c3-1.7 4.3-5.2 3.3-8.5-6.7-21.6-18.2-41.2-33.2-57.4-2.3-2.5-6-3.1-9-1.4l-25.8 14.9c-10.9-9.3-23.4-16.5-36.9-21.3v-29.8c0-3.4-2.4-6.4-5.7-7.1-22.3-5-45-4.8-66.2 0-3.3.7-5.7 3.7-5.7 7.1v29.8c-13.5 4.8-26 12-36.9 21.3l-25.8-14.9c-2.9-1.7-6.7-1.1-9 1.4-15 16.2-26.5 35.8-33.2 57.4-1 3.3.4 6.8 3.3 8.5l25.8 14.9c-2.6 14.1-2.6 28.5 0 42.6l-25.8 14.9c-3 1.7-4.3 5.2-3.3 8.5 6.7 21.6 18.2 41.1 33.2 57.4 2.3 2.5 6 3.1 9 1.4l25.8-14.9c10.9 9.3 23.4 16.5 36.9 21.3v29.8c0 3.4 2.4 6.4 5.7 7.1 22.3 5 45 4.8 66.2 0 3.3-.7 5.7-3.7 5.7-7.1v-29.8c13.5-4.8 26-12 36.9-21.3l25.8 14.9c2.9 1.7 6.7 1.1 9-1.4 15-16.2 26.5-35.8 33.2-57.4 1-3.3-.4-6.8-3.3-8.5l-25.8-14.9zM496 368.5c-26.8 0-48.5-21.8-48.5-48.5s21.8-48.5 48.5-48.5 48.5 21.8 48.5 48.5-21.7 48.5-48.5 48.5z"></path></svg><span class="clp-addon-tool-label"> Admin Area</span>
       </a>` : ""}
       ${chrome.admin !== false ? rootShellLink(mountPath("terminal"), 'class="clp-addon-tool" id="clp-root-shell" data-clp-root-shell hidden',
         '<span class="clp-addon-tool-label">Root terminal</span>') : ""}
@@ -291,7 +298,6 @@ ${primaryNav}
         </button>
         <div class="clp-addon-account-menu" id="clp-account-menu" hidden>
           <a href="${esc(PANEL_SETTINGS_URL)}">Settings</a>
-          ${chrome.admin !== false ? rootShellLink(mountPath("terminal"), 'class="clp-root-shell-menu" data-clp-root-shell hidden', "Root terminal", false) : ""}
           <a href="${esc(PANEL_LOGOUT_URL)}">Logout</a>
         </div>
       </div>

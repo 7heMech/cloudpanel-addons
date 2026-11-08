@@ -104,6 +104,12 @@ export const DUPLEX_WORKER_MARKER = "CLP_ADDONS_DUPLEX_WORKER";
  * Security Keys sign-in opened it, "0" otherwise.
  */
 export const SESSION_2FA_ENV = "CLP_ADDONS_SESSION_2FA";
+/**
+ * Set by the gateway on a session verb's worker: when, in Unix milliseconds,
+ * it first saw that panel session signed in. CloudPanel records no time for
+ * its two-factor step, so this is the latest it can have been.
+ */
+export const SESSION_SEEN_ENV = "CLP_ADDONS_SESSION_SEEN";
 
 export interface SanitizedSite {
   domain: string;

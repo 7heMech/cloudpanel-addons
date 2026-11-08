@@ -38,15 +38,27 @@ A root shell is offered only to the administrators root names; see Root.
 Root names who may open a root shell with `clp-addons terminal root allow
 <user>` from a shell; `deny` takes it back and `clp-addons terminal root` lists
 them. Nothing in the panel can change the list. An allowed administrator gets a
-terminal icon in both of CloudPanel's headers and in the addons' copy of it,
-just before the account menu, and a Root terminal button on Addons → Terminal.
-Below 760px the header has no room for a fourth icon beside the logo, so the
-icon gives way to a Root terminal item in the account menu, above Logout.
-The others get no icon; their button shows a notice naming the command, so
-they know whom to ask. The icon and the menu item stay hidden until the page has asked
+`>_ Root terminal` control in both of CloudPanel's headers and in the addons'
+copy of it, just before the account menu, and a Root terminal button on
+Addons → Terminal. `>_` is the mark a site's own Terminal tab has, so every way
+into a shell looks alike. Below 760px the header has no room for a fourth tool
+beside the logo, so the control becomes `>_ Root` at the end of the row under
+it -- the navigation, or the Admin Area's instance details -- pinned there
+when the row scrolls, with a divider so it does not read as another page. The
+addons' pages always draw that row on a phone; CloudPanel's draw it only with
+Panel Tweaks' phone layout, so without it the control is a Root terminal item
+in the account menu, above Logout. The others get none of these; their button
+shows a notice naming the command, so they know whom to ask. The controls stay
+hidden until the page has asked
 `/addons/terminal/api/root-access`. Every panel page asks, so the manager
 keeps root's answer a minute per user instead of starting a root process for
-each page; the Terminal page asks afresh, and the worker always checks.
+each page; the Terminal page asks afresh, and the worker always checks. The
+browser tab keeps a granted answer in `sessionStorage`, and a page in that tab
+draws the controls before the request returns: the addons' pages paint before
+it does, and would otherwise push the header's tools aside a moment after
+they appear. The request still runs on every page, and an answer that is not
+a grant, or a request that fails, hides the controls and forgets it. The
+stored answer only draws a link; the shell behind it checks for itself.
 
 Any administrator can reset another's password in CloudPanel and sign in as
 them, so a grant to a name alone would be a root shell for every
@@ -202,15 +214,22 @@ holding its session can spend it and keep its owner out; root ends that with
 `clp-addons terminal root allow <user>` (or `deny`), which clears the account's
 verification state. Successes, codes that are not six digits, codes refused for
 their step (below) and errors on root's side spend nothing.
-Codes use SHA-1 TOTP with thirty-second steps and one step of clock tolerance,
-and only a code from a later step than the prompt opened in counts; a step can
-succeed only once. CloudPanel keeps no record of the code it took at sign-in,
-and stamps the session when the password is accepted rather than when the code
-is (measured on 2.5.4-3), so neither tells a relayed sign-in code apart. A
-phishing proxy holding the session holds that code, but it is older than any
-prompt the session can open afterwards. The cost is a wait of up to thirty
-seconds for the next code each time a root shell is opened with a code;
-passkeys do not wait. Passkeys count only while Security Keys is
+Codes use SHA-1 TOTP with thirty-second steps. Root's check allows one step of
+clock tolerance either side, and a step can succeed only once. CloudPanel keeps no record of the code it
+took at sign-in, and stamps the session when the password is accepted rather
+than when the code is (measured on 2.5.4-3), so neither tells a relayed
+sign-in code apart, and a phishing proxy holding the session holds that code.
+The gateway, which every panel page asks within moments of loading, therefore
+remembers when it first saw each signed-in session, keyed by the session's
+digest and CloudPanel's sign-in stamp, and tells a session verb's worker in
+`CLP_ADDONS_SESSION_SEEN`. CloudPanel takes a code up to two steps either side
+of its clock, so the sign-in code is from no later than two steps after the
+sighting's step, and only a code from a step after that counts. The code the app shows
+works at once, except in the minute and a half after signing in, when the
+prompt asks for the next one. The memory is the gateway's alone: after it
+restarts, a session's next sighting stands in, which is later and so only
+makes the wait longer, and with no sighting, or a session without the stamp, the prompt's own opening does.
+Passkeys do not wait. Passkeys count only while Security Keys is
 on, as at sign-in, and only pinned keys the account still has are offered, only
 where the browser can use one, so not on an IP address. Passkey verification reuses Security Keys'
 signature, origin, user verification, account and policy checks and updates its
