@@ -194,6 +194,8 @@ async function verifyRoot() {
         errorText.textContent = keyError(error, 'Verification failed. Try again.');
         code.value = '';
         code.focus();
+        // A fresh prompt now, not at the next try: root takes only a code from a later step than the prompt's.
+        try { options = (await post('options')).data; } catch { options = null; }
       } finally {
         busy = false;
         for (const button of buttons) button.disabled = false;

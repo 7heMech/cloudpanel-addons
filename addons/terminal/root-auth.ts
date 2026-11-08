@@ -1,19 +1,18 @@
 import { createHash, createHmac, randomBytes, timingSafeEqual } from "node:crypto";
 import { existsSync, mkdirSync, lstatSync, readFileSync } from "node:fs";
-import { join } from "node:path";
 import { ActionFailure, failAction } from "../../lib/action";
 import { errorMessage } from "../../lib/errors";
 import { withFileLockSync } from "../../lib/file-lock";
-import { addonConfigFile, addonStateDir, LOCK_DIR } from "../../lib/paths";
+import { addonConfigFile } from "../../lib/paths";
 import { openPanelDatabase } from "../../lib/panel-db";
 import { writeFileAtomic } from "../../lib/atomic-write";
 import { DEFAULT_SECURITY_KEYS_PATHS, verifyTerminalKey } from "../security-keys/action";
 import { accountPasskeys } from "../security-keys/sign-ins";
 import { WebAuthnError } from "../security-keys/webauthn";
-import { allowedGrant, type RootAccessPaths } from "./root-access";
+import { allowedGrant, ROOT_AUTH_DIR, ROOT_AUTH_LOCK, rootAuthFile, type RootAccessPaths } from "./root-access";
 
 /** `securityKeys` is the addon's enabled marker: passkeys count only while it exists, as at sign-in. */
-export const DEFAULT_ROOT_AUTH_PATHS = { dir: `${addonStateDir("terminal")}/root-auth`, lock: `${LOCK_DIR}/terminal-auth.lock`, securityKeys: addonConfigFile("security-keys") };
+export const DEFAULT_ROOT_AUTH_PATHS = { dir: ROOT_AUTH_DIR, lock: ROOT_AUTH_LOCK, securityKeys: addonConfigFile("security-keys") };
 interface State {
   attempts: number[];
   usedStep?: number;
@@ -48,7 +47,7 @@ function withState<T>(user: string, uid: number, now: number, storage: typeof DE
   const dir = lstatSync(storage.dir);
   if (!dir.isDirectory() || dir.isSymbolicLink() || dir.uid !== uid || (dir.mode & 0o077)) failAction("Terminal verification state is not root-only.");
   return withFileLockSync(storage.lock, 15, "Another terminal verification is running.", () => {
-    const file = join(storage.dir, digest(user) + ".json");
+    const file = rootAuthFile(storage.dir, user);
     let state: State;
     try { state = JSON.parse(readFileSync(file, "utf8")); }
     catch (error) {
@@ -63,7 +62,14 @@ function withState<T>(user: string, uid: number, now: number, storage: typeof DE
   });
 }
 
-function verifyCode(panelDb: string, user: string, code: string, usedStep: number, now: number): number {
+/**
+ * CloudPanel keeps no record of the code it took at sign-in, so a phishing
+ * proxy holding the session holds that code too. Every code it could have is
+ * older than any prompt the session opens afterwards, so only a code from a
+ * later step than the prompt's counts. A code that matches an older or used
+ * step is not a guess, and spends nothing.
+ */
+function verifyCode(panelDb: string, user: string, code: string, floor: number, now: number): number {
   if (!/^\d{6}$/.test(code)) failAction("Enter a six-digit authenticator code.");
   const db = openPanelDatabase(panelDb, true);
   try {
@@ -71,7 +77,8 @@ function verifyCode(panelDb: string, user: string, code: string, usedStep: numbe
     if (!secret) failAction("Authenticator configuration is unavailable.");
     const step = Math.floor(now / 30_000);
     const matched = [step - 1, step, step + 1].find(n => n >= 0 && timingSafeEqual(Buffer.from(totp(secret, n)), Buffer.from(code)));
-    if (matched === undefined || matched <= usedStep) throw new WrongProof("Invalid or already used code. Try the next code.");
+    if (matched === undefined) throw new WrongProof("Invalid code. Try the next code.");
+    if (matched <= floor) failAction("Enter the next code your app shows: this one was showing before the prompt opened, or was used already.");
     return matched;
   } finally { db.close(); }
 }
@@ -112,7 +119,11 @@ export function rootAuth(verb: "options" | "verify" | "consume", user: string, s
     delete state.challenges[challenge];
     let method = "an authenticator code";
     try {
-      if (typeof input.code === "string") state.usedStep = verifyCode(paths.panelDb, user, input.code, state.usedStep ?? -1, now);
+      if (typeof input.code === "string") {
+        // The prompt opened five minutes before its challenge expires.
+        const opened = Math.floor((pending.expires - 300_000) / 30_000);
+        state.usedStep = verifyCode(paths.panelDb, user, input.code, Math.max(state.usedStep ?? -1, opened), now);
+      }
       else {
         verifyTerminalKey({ ...DEFAULT_SECURITY_KEYS_PATHS, stateDir: paths.securityKeys, panelDb: paths.panelDb, stateUid: paths.rootUid }, user, keys, challenge, input, now);
         method = `passkey ${String(input.id)}`;

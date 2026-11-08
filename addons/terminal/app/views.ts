@@ -126,7 +126,7 @@ export function popupPage(domain: string | null): string {
   ${domain === null ? `<div class="term-ended" id="root-auth" hidden>
     <form class="card" id="root-auth-form" aria-labelledby="root-auth-title">
       <h2 id="root-auth-title">Verify to open root terminal</h2>
-      <p>Use your authenticator code or a trusted passkey.</p>
+      <p>Enter the next code your authenticator app shows, or use a trusted passkey.</p>
       <label for="root-auth-code">Authenticator code</label>
       <input id="root-auth-code" inputmode="numeric" autocomplete="one-time-code" pattern="[0-9]{6}" maxlength="6" required>
       <p id="root-auth-error" role="alert"></p>

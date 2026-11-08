@@ -12,7 +12,7 @@ import {
   parseTerminalRequest, resolveTerminalTarget, runTerminalAction, type TerminalActionPaths,
 } from "../addons/terminal/action";
 import { rootAuth, totp } from "../addons/terminal/root-auth";
-import { readRootGrants, rootAccess } from "../addons/terminal/root-access";
+import { clearRootAuth, readRootGrants, rootAccess } from "../addons/terminal/root-access";
 import { TERMINAL_TARGETS } from "../addons/terminal/inject/targets";
 import { renderLayout } from "../lib/app-ui";
 import { ownerOf, TerminalSessions, type StreamOpener } from "../addons/terminal/app/sessions";
@@ -26,6 +26,11 @@ const authStorage = { dir: `${base}/box/auth`, lock: `${base}/locks/auth.lock`, 
 function auth(verb: "options" | "verify" | "consume", input: Record<string, unknown> = {}, now = Date.now(), session = binding) {
   return rootAuth(verb, "alice", "1", session, input, paths.rootAccess, now, authStorage) as any;
 }
+/** The code the app shows one step after a prompt opened at `opened`, entered then. */
+function nextCode(opened: number, secret = SECRET) {
+  const at = opened + 30_000;
+  return { at, code: totp(secret, Math.floor(at / 30000)) };
+}
 const SECRET = "JBSWY3DPEHPK3PXP";
 /** A well-formed code that none of the three accepted steps matches. */
 function wrongCode(now: number) {
@@ -33,11 +38,11 @@ function wrongCode(now: number) {
   const valid = [step - 1, step, step + 1].map((n) => totp(SECRET, n));
   return ["000000", "000001", "000002", "000003"].find((code) => !valid.includes(code))!;
 }
-function ticket() {
+function ticket(now = Date.now()) {
   change("UPDATE user SET mfa_secret = 'JBSWY3DPEHPK3PXP' WHERE user_name = 'alice'");
   allow("alice");
-  const now = Date.now();
-  return auth("verify", { ...auth("options", {}, now), code: totp("JBSWY3DPEHPK3PXP", Math.floor(now / 30000)) }, now).ticket;
+  const next = nextCode(now);
+  return auth("verify", { ...auth("options", {}, now), code: next.code }, next.at).ticket;
 }
 
 afterAll(() => rmSync(base, { recursive: true, force: true }));
@@ -333,23 +338,40 @@ test("root verification tickets are bound to a session and single-use", () => {
   expect(() => auth("consume", { ticket: proof })).toThrow("Verify with 2FA");
 });
 test("expired tickets and challenges, replayed codes and revoked grants are refused", () => {
-  const proof = ticket();
   const now = Date.now();
-  expect(() => auth("consume", { ticket: proof }, now + 60001)).toThrow("Verify with 2FA");
-  const challenge = auth("options").challenge;
-  expect(() => auth("verify", { challenge, code: totp("JBSWY3DPEHPK3PXP", Math.floor(now / 30000)) })).toThrow("already used");
+  const proof = ticket(now);
+  const used = nextCode(now);
+  expect(() => auth("consume", { ticket: proof }, used.at + 60001)).toThrow("Verify with 2FA");
+  const challenge = auth("options", {}, now).challenge;
+  expect(() => auth("verify", { challenge, code: used.code }, used.at)).toThrow("used already");
   const expired = auth("options", {}, now).challenge;
   expect(() => auth("verify", { challenge: expired, code: "123456" }, now + 300001)).toThrow("expired");
   change("UPDATE user SET mfa = 0 WHERE user_name = 'alice'");
   expect(() => auth("consume", { ticket: proof })).toThrow("needs 2FA");
 });
+test("only a code from after the prompt opened counts, and an older one spends nothing", () => {
+  change(`UPDATE user SET mfa_secret = '${SECRET}' WHERE user_name = 'alice'`);
+  allow("alice");
+  const now = Date.now();
+  const step = Math.floor(now / 30000);
+  // The code used to sign in, or any other showing when the prompt opened, is refused, however often.
+  for (let i = 0; i < 6; i++) {
+    for (const n of [step - 1, step]) {
+      expect(() => auth("verify", { ...auth("options", {}, now), code: totp(SECRET, n) }, now)).toThrow("Enter the next code");
+    }
+  }
+  // Not one of those spent the budget: the next code still works.
+  const next = nextCode(now);
+  expect(auth("verify", { ...auth("options", {}, now), code: next.code }, next.at).ticket).toBeString();
+});
+
 test("five wrong codes throttle the account across sessions; malformed ones do not count", () => {
   change(`UPDATE user SET mfa_secret = '${SECRET}' WHERE user_name = 'alice'`);
   allow("alice");
   expect(() => auth("verify", { ...auth("options"), code: "bad" })).toThrow("six-digit");
   for (let i = 0; i < 5; i++) {
     const now = Date.now();
-    expect(() => auth("verify", { ...auth("options", {}, now), code: wrongCode(now) }, now)).toThrow("Invalid or already used");
+    expect(() => auth("verify", { ...auth("options", {}, now), code: wrongCode(now) }, now)).toThrow("Invalid code");
   }
   expect(() => auth("options", {}, Date.now(), "b".repeat(64))).toThrow("Too many failed verifications");
 });
@@ -359,9 +381,12 @@ test("twenty wrong codes in a day throttle the account even when spread out", ()
   const start = Date.now();
   for (let i = 0; i < 20; i++) {
     const now = start + i * 100_000;
-    expect(() => auth("verify", { ...auth("options", {}, now), code: wrongCode(now) }, now)).toThrow("Invalid or already used");
+    expect(() => auth("verify", { ...auth("options", {}, now), code: wrongCode(now) }, now)).toThrow("Invalid code");
   }
   expect(() => auth("options", {}, start + 20 * 100_000)).toThrow("Too many failed verifications");
+  // Root allowing the account again lets its owner back in.
+  clearRootAuth("alice", authStorage);
+  expect(auth("options", {}, start + 20 * 100_000).challenge).toBeString();
 });
 test("only failed proofs spend the attempt budget", () => {
   change("UPDATE user SET mfa_secret = 'JBSWY3DPEHPK3PXP' WHERE user_name = 'alice'");
@@ -369,7 +394,8 @@ test("only failed proofs spend the attempt budget", () => {
   const start = Date.now();
   for (let i = 0; i < 6; i++) {
     const now = start + i * 30_000;
-    expect(auth("verify", { ...auth("options", {}, now), code: totp("JBSWY3DPEHPK3PXP", Math.floor(now / 30000)) }, now).ticket).toBeString();
+    const next = nextCode(now);
+    expect(auth("verify", { ...auth("options", {}, now), code: next.code }, next.at).ticket).toBeString();
   }
 });
 test("passkeys are offered only while Security Keys is on, and only those the account still has", () => {

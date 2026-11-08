@@ -192,14 +192,25 @@ such as CloudPanel holding its database, reaches the popup as a generic message
 and stays in the journal.
 
 Root serializes challenges, attempts, used TOTP steps and tickets in root-only
-state under `/var/lib/clp-addons/terminal/root-auth`. Only a wrong code or a
-signature that does not verify counts against the account: five in a rolling
-five minutes, or twenty in a day, stop further prompts until the oldest ages
-out, so a stolen session cannot keep guessing unattended. Successes, malformed
-codes, refused keys and errors spend nothing, so opening shells often is never
-refused.
-Codes use SHA-1 TOTP with thirty-second steps and one step of clock tolerance;
-a code step can succeed only once. Passkeys count only while Security Keys is
+state under `/var/lib/clp-addons/terminal/root-auth`. A code that matches no
+current step, and any passkey response Security Keys rejects (a bad signature,
+wrong origin, no user verification, a counter that went back, or data it cannot
+parse), counts against the account: five in a rolling five minutes, or twenty
+in a day, stop further prompts until the oldest ages out, so a stolen session
+cannot keep guessing unattended. The budget is the account's, so someone
+holding its session can spend it and keep its owner out; root ends that with
+`clp-addons terminal root allow <user>` (or `deny`), which clears the account's
+verification state. Successes, codes that are not six digits, codes refused for
+their step (below) and errors on root's side spend nothing.
+Codes use SHA-1 TOTP with thirty-second steps and one step of clock tolerance,
+and only a code from a later step than the prompt opened in counts; a step can
+succeed only once. CloudPanel keeps no record of the code it took at sign-in,
+and stamps the session when the password is accepted rather than when the code
+is (measured on 2.5.4-3), so neither tells a relayed sign-in code apart. A
+phishing proxy holding the session holds that code, but it is older than any
+prompt the session can open afterwards. The cost is a wait of up to thirty
+seconds for the next code each time a root shell is opened with a code;
+passkeys do not wait. Passkeys count only while Security Keys is
 on, as at sign-in, and only pinned keys the account still has are offered, only
 where the browser can use one, so not on an IP address. Passkey verification reuses Security Keys'
 signature, origin, user verification, account and policy checks and updates its
