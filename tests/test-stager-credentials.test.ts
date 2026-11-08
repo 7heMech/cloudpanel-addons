@@ -70,7 +70,7 @@ describe("what a finished or failed job leaves behind", () => {
   const unwind = () => {
     const action = source("addons/stager/action.ts");
     const rollback = action.slice(action.indexOf("function rollbackRun"));
-    return rollback.slice(0, rollback.indexOf("\nfunction newRunContext"));
+    return rollback.slice(0, rollback.indexOf("function newRunContext"));
   };
 
   // Deleted, not merely 0600. The code had no deletion at all and the files
