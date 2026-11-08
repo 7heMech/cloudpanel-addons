@@ -1,15 +1,3 @@
-/**
- * Every fact about an addon, in one place, declared beside the addon.
- *
- * The catalog is explicit and compiled in. There is no filesystem discovery:
- * this ships as a single binary, and a registry that depended on what happened
- * to be on disk would be a registry that could be wrong.
- *
- * What is *not* here: the manager and the auth gateway. They are platform, not
- * addons -- they have no config file to enable, no mount path of their own and
- * no state to keep -- and giving them addon definitions would only make the
- * catalog describe things that cannot be toggled.
- */
 import { existsSync } from "node:fs";
 import { TEMPLATES_DIR, addonConfigFile, addonStateDir } from "../lib/paths";
 import type { AddonDefinition, AddonHandler, AddonNews, AddonSpec } from "../lib/addon-definition";
@@ -62,17 +50,14 @@ export const ADDONS: Record<string, AddonSpec> = Object.fromEntries(
 
 export const ADDON_NAMES: string[] = DEFINITIONS.map((definition) => definition.name);
 
-/** An addon is enabled while its config file exists. */
 export function addonEnabled(spec: AddonSpec): boolean {
   return existsSync(spec.configFile);
 }
 
-/** The enabled addons, in catalog order. */
 export function enabledAddons(): AddonSpec[] {
   return Object.values(ADDONS).filter(addonEnabled);
 }
 
-/** Every notice the addon declared after `since` and no later than `version`, read or not. */
 export function addonNoticeKeys(name: string, version: string, since: string): string[] {
   const spec = ADDONS[name];
   if (!spec) return [];
@@ -82,7 +67,6 @@ export function addonNoticeKeys(name: string, version: string, since: string): s
     .map((release) => `${name}@${release}`);
 }
 
-/** The addon's unread notices; an unread New covers its Changed ones. */
 export function addonNews(name: string, version: string, since: string, seen: readonly string[] = []): AddonNews | null {
   const spec = ADDONS[name];
   const keys = addonNoticeKeys(name, version, since);
@@ -95,17 +79,14 @@ export function addonNews(name: string, version: string, since: string, seen: re
   return { kind: "changed", keys: unread.map((change) => `${name}@${change.in}`), notes: unread.map((change) => change.note) };
 }
 
-/** Whether an enabled addon has the platform's PHP upload-progress guard switched off. */
 export function phpGuardOptedOut(): boolean {
   return enabledAddons().some((spec) => spec.phpGuardOff?.() ?? false);
 }
 
-/** The addon's manager handler, or undefined when it mounts no routes. */
 export function addonHandler(name: string): AddonHandler | undefined {
   return ADDONS[name]?.handler;
 }
 
-/** Every CloudPanel template some addon injects into. */
 export function templateWatchPaths(): string[] {
   const paths = new Set<string>();
   for (const spec of Object.values(ADDONS)) {
