@@ -589,15 +589,19 @@ customizable select, so the element and its form value stay native. A phone
 keeps its own picker, which is the better one there, and a browser that cannot
 style the list keeps the native one. A select drawn this way is as wide as its
 chosen option rather than its widest, so choosing would move the controls
-beside it. `lib/assets/select-width.client.js` therefore gives each one its
-widest option's width as a minimum, as a native select has, capped at the
-window's width less a margin rather than its container's, which would be a
-loop in a container as wide as its contents. The
-width is the options' text measured on a canvas in the select's font, plus its
-padding and border, so no layout is forced, and a select not drawn yet, such
-as one in a closed `<details>`, is held like any other. It is worked out again
-when options are added or changed or a web font arrives. Panel Tweaks draws
-the Sites page's application filter the same way and inlines the same file.
+beside it. Only a select as wide as its content changes; one given a width,
+such as a form's 100%, keeps it and is left alone, which the computed width
+tells without a layout. `lib/assets/select-width.client.js` gives each of the
+others its widest option's width as a minimum, as a native select has, capped
+at the window's width less a margin rather than its container's, which would
+be a loop in a container as wide as its contents. The width is the options'
+text measured on a canvas in the select's font, plus its padding and border,
+so no layout is forced, and a select not drawn yet, such as one in a closed
+`<details>`, is held like any other. Each select is watched on its own and
+worked out again when its options or their labels change; a web font arriving
+or a mouse coming or going works them all out again, and a repaint holds what
+it drew. Panel Tweaks draws the Sites page's application filter the same way
+and joins the same file to its script.
 
 On a wide screen a
 list of more than twelve rows with something below its card scrolls in a box of
