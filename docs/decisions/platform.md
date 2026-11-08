@@ -528,16 +528,7 @@ and Admin Area icons are the panel's own paths rather than approximations of
 them, so one control does not have two shapes depending on the page. Below
 940px the logo and the three controls share one 64px row and the navigation
 takes the row beneath; that shape is what Panel Tweaks gives the panel's own
-header on a phone, so moving between the two does not move the header. Above
-it the controls are laid out as the panel lays out its own, on a 75px line
-with each icon at `vertical-align: middle`, because the panel's icons sit
-where the font puts them and only the same layout matches them under every
-font. CloudPanel's own logo is drawn in the page, its paths copied as the
-icons' are, rather than linked: a linked image, even a cached one or a `data:`
-URI, is drawn a frame after the page, so the header blinked without its logo on
-the way in from a panel page. The panel's two files differ only in the colour
-of the words, which the stylesheet sets for each theme. Theme & Branding's
-uploaded logos are still images.
+header on a phone, so moving between the two does not move the header.
 
 Every addon renders into one shell in `lib/app-ui.ts`: palette, cards, tables,
 badges, switches, toolbars, one confirmation dialog and one inline notice per

@@ -180,9 +180,7 @@ test("the addon pages get the logos only while the switch and the logo section a
 
 test("an addon page's header draws the uploaded logos, the mark on a phone, and CloudPanel's without them", () => {
   const [light, dark, mark] = ["a", "b", "c"].map((c) => `${c.repeat(64)}.png`);
-  // CloudPanel's own is drawn in the page, so it is there in the page's first frame.
-  expect(logosHtml(null)).toContain('<svg class="clp-addon-logo clp-addon-logo-panel"');
-  expect(logosHtml(null)).not.toContain("<img");
+  expect(logosHtml(null)).toContain("/assets/images/logo.svg");
   expect(logosFromSlots({ headerLight: "", headerDark: "", markLight: "", markDark: "", favicon: "" })).toBeNull();
 
   const both = logosHtml(logosFromSlots({ headerLight: light!, headerDark: dark!, markLight: mark!, markDark: "", favicon: "" }));
