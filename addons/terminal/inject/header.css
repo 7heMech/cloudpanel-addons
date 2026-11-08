@@ -1,5 +1,7 @@
 .header .navbar-right > ul > li.clp-root-shell > a:hover { color: #0078d4; }
-.header .navbar-right > ul > li.clp-root-shell > a svg { margin: -3px 5px 0 0; vertical-align: middle; }
+/* CloudPanel fills every svg with currentColor, which would make the outlined
+   window a solid square. */
+.header .navbar-right > ul > li.clp-root-shell > a svg { margin: -3px 5px 0 0; vertical-align: middle; fill: none; }
 /* A phone's header has no room for a fourth icon beside the logo, so the control
    moves into the account menu there. */
 @media (max-width: 760px) { .header .navbar-right > ul > li.clp-root-shell { display: none !important; } }

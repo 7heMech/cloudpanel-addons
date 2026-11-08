@@ -203,14 +203,21 @@ holding its session can spend it and keep its owner out; root ends that with
 verification state. Successes, codes that are not six digits, codes refused for
 their step (below) and errors on root's side spend nothing.
 Codes use SHA-1 TOTP with thirty-second steps and one step of clock tolerance,
-and only a code from a later step than the prompt opened in counts; a step can
-succeed only once. CloudPanel keeps no record of the code it took at sign-in,
-and stamps the session when the password is accepted rather than when the code
-is (measured on 2.5.4-3), so neither tells a relayed sign-in code apart. A
-phishing proxy holding the session holds that code, but it is older than any
-prompt the session can open afterwards. The cost is a wait of up to thirty
-seconds for the next code each time a root shell is opened with a code;
-passkeys do not wait. Passkeys count only while Security Keys is
+and a step can succeed only once. CloudPanel keeps no record of the code it
+took at sign-in, and stamps the session when the password is accepted rather
+than when the code is (measured on 2.5.4-3), so neither tells a relayed
+sign-in code apart, and a phishing proxy holding the session holds that code.
+The gateway, which every panel page asks within moments of loading, therefore
+remembers when it first saw each signed-in session, keyed by the session's
+digest and CloudPanel's sign-in stamp, and tells a session verb's worker in
+`CLP_ADDONS_SESSION_SEEN`. CloudPanel takes a code up to two steps either side
+of its clock, so the sign-in code is from no later than two steps after that
+sighting, and only a code from a later step counts. The code the app shows
+works at once, except in the minute and a half after signing in, when the
+prompt asks for the next one. The memory is the gateway's alone: after it
+restarts, a session's next sighting stands in, which is later and so only
+makes the wait longer, and with no sighting the prompt's own opening does.
+Passkeys do not wait. Passkeys count only while Security Keys is
 on, as at sign-in, and only pinned keys the account still has are offered, only
 where the browser can use one, so not on an IP address. Passkey verification reuses Security Keys'
 signature, origin, user verification, account and policy checks and updates its

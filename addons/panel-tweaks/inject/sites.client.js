@@ -801,10 +801,16 @@
     function addCount(rows) {
       var heading = document.querySelector(".page-title h1");
       if (!heading) return;
+      var pill = document.createElement("span");
+      pill.className = "clp-tweaks-count";
+      // Its own box, trimmed to the digits, so they sit in the middle whatever the font.
       counter = document.createElement("span");
-      counter.className = "clp-tweaks-count";
       counter.textContent = String(rows.length);
-      heading.appendChild(counter);
+      pill.appendChild(counter);
+      heading.appendChild(pill);
+      // The count says what the summary would, so that is left to screen readers.
+      var summary = document.getElementById("clp-tweaks-summary");
+      if (summary) summary.classList.add("clp-tweaks-spoken");
     }
 
     function paintCount(shown, total) {

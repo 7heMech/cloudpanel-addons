@@ -148,6 +148,8 @@ test("an administrator's session starts the worker as that user and copies bytes
       // This session passed CloudPanel's 2FA step.
       CLP_ADDONS_SESSION_2FA: "1",
       CLP_ADDONS_SESSION_BINDING: createHash("sha256").update("live").digest("hex"),
+      // When the gateway first saw it signed in.
+      CLP_ADDONS_SESSION_SEEN: expect.stringMatching(/^\d+$/),
     });
     // The session id rides on the request, never on a command line.
     expect(argv.join(" ")).not.toContain("live");

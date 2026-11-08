@@ -44,7 +44,12 @@ html.dark .clp-tweaks-columns-menu input { border-color: #6b7787; background-col
 html.dark .clp-tweaks-columns-menu input:checked { border-color: #0078d4; background-color: #0078d4; }
 .clp-tweaks-count { display: inline-flex; align-items: center; justify-content: center; box-sizing: border-box;
   min-height: 28px; margin-left: 12px; padding: 0 10px; border: 1px solid currentColor; border-radius: 99px;
-  color: #9bacb6; font-size: 14px; font-weight: 600; line-height: 1; vertical-align: middle; }
+  color: #9bacb6; font-size: 14px; font-weight: 600; line-height: 1; vertical-align: bottom; }
+/* A font's line box holds more room above its digits than below them, more in
+   some fonts than others, so the digits are centred by their own height. */
+.clp-tweaks-count > span { text-box: trim-both cap alphabetic; }
+.clp-tweaks-toolbar .clp-tweaks-summary.clp-tweaks-spoken { position: absolute; width: 1px; height: 1px; overflow: hidden;
+  clip-path: inset(50%); white-space: nowrap; }
 .clp-tweaks-table th.clp-tweaks-sortable { cursor: pointer; user-select: none; white-space: nowrap; }
 .clp-tweaks-table th.clp-tweaks-sortable::after { content: "\2195"; margin-left: 6px; opacity: .35; }
 .clp-tweaks-table th.clp-tweaks-asc::after { content: "\2191"; opacity: 1; }

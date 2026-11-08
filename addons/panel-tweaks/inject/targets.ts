@@ -236,7 +236,9 @@ const NEW_SITE_STYLE = `
  * Its stylesheet draws the page at a fixed 850px and the code field at 350px,
  * so a phone scrolls sideways and the manual-entry secret, one unbroken word,
  * runs off the card. Below 760px the page takes the card's width, the secret
- * breaks anywhere, and the field shares its row with the button.
+ * breaks anywhere, and the field shares its row with the button. Below 576px
+ * that row leaves the field too narrow for its own placeholder, so the field
+ * takes the whole row and the button goes under it.
  */
 const ENABLE_MFA_STYLE = `
 @media (max-width: 760px) {
@@ -244,6 +246,10 @@ const ENABLE_MFA_STYLE = `
   body .enable-mfa-container .qr-code-container img { max-width: 100%; height: auto; margin-left: 0; }
   body .mfa-code-form-container .row > .col-auto:first-child { flex: 1 1 0; min-width: 0; }
   body .mfa-code-form-container input.mfa-code { width: 100%; max-width: 350px; }
+}
+@media (max-width: 576px) {
+  body .mfa-code-form-container .row > .col-auto:first-child { flex: 0 0 100%; }
+  body .mfa-code-form-container input.mfa-code { max-width: none; }
 }
 `;
 

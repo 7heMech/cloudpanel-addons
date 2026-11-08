@@ -23,8 +23,9 @@ const base = realpathSync(mkdtempSync(`${tmpdir()}/terminal-root-`));
 let paths: TerminalActionPaths;
 const binding = "a".repeat(64);
 const authStorage = { dir: `${base}/box/auth`, lock: `${base}/locks/auth.lock`, securityKeys: `${base}/box/security-keys.conf` };
-function auth(verb: "options" | "verify" | "consume", input: Record<string, unknown> = {}, now = Date.now(), session = binding) {
-  return rootAuth(verb, "alice", "1", session, input, paths.rootAccess, now, authStorage) as any;
+/** `seen`, when the gateway first saw the session signed in, defaults to long ago. */
+function auth(verb: "options" | "verify" | "consume", input: Record<string, unknown> = {}, now = Date.now(), session = binding, seen: number | null = 1) {
+  return rootAuth(verb, "alice", { proof: "1", binding: session, seen }, input, paths.rootAccess, now, authStorage) as any;
 }
 /** The code the app shows one step after a prompt opened at `opened`, entered then. */
 function nextCode(opened: number, secret = SECRET) {
@@ -349,20 +350,34 @@ test("expired tickets and challenges, replayed codes and revoked grants are refu
   change("UPDATE user SET mfa = 0 WHERE user_name = 'alice'");
   expect(() => auth("consume", { ticket: proof })).toThrow("needs 2FA");
 });
-test("only a code from after the prompt opened counts, and an older one spends nothing", () => {
+test("the code showing counts at once, unless the session signed in with it", () => {
   change(`UPDATE user SET mfa_secret = '${SECRET}' WHERE user_name = 'alice'`);
   allow("alice");
   const now = Date.now();
   const step = Math.floor(now / 30000);
-  // The code used to sign in, or any other showing when the prompt opened, is refused, however often.
-  for (let i = 0; i < 6; i++) {
-    for (const n of [step - 1, step]) {
-      expect(() => auth("verify", { ...auth("options", {}, now), code: totp(SECRET, n) }, now)).toThrow("Enter the next code");
+  // Signed in long ago: the code the app shows now works on a prompt that just opened.
+  expect(auth("verify", { ...auth("options", {}, now), code: totp(SECRET, step) }, now).ticket).toBeString();
+  clearRootAuth("alice", authStorage);
+  // Signed in just now: any code CloudPanel could have taken, up to two steps ahead, is refused, however often.
+  for (let i = 0; i < 3; i++) {
+    for (const n of [step - 1, step, step + 1]) {
+      expect(() => auth("verify", { ...auth("options", {}, now, binding, now), code: totp(SECRET, n) }, now, binding, now)).toThrow("the one you signed in with");
     }
   }
-  // Not one of those spent the budget: the next code still works.
-  const next = nextCode(now);
-  expect(auth("verify", { ...auth("options", {}, now), code: next.code }, next.at).ticket).toBeString();
+  // Not one of those spent the budget: a code from three steps on works once it shows.
+  const later = (step + 3) * 30000;
+  expect(auth("verify", { ...auth("options", {}, later, binding, now), code: totp(SECRET, step + 3) }, later, binding, now).ticket).toBeString();
+  expect(() => auth("verify", { ...auth("options", {}, later, binding, now), code: totp(SECRET, step + 3) }, later, binding, now)).toThrow("used already");
+});
+test("without the gateway's sighting, the prompt's opening stands in for the sign-in", () => {
+  change(`UPDATE user SET mfa_secret = '${SECRET}' WHERE user_name = 'alice'`);
+  allow("alice");
+  const now = Date.now();
+  const step = Math.floor(now / 30000);
+  const { challenge } = auth("options", {}, now, binding, null);
+  expect(() => auth("verify", { challenge, code: totp(SECRET, step + 1) }, now + 30000, binding, null)).toThrow("signed in with");
+  const later = (step + 3) * 30000;
+  expect(auth("verify", { ...auth("options", {}, now, binding, null), code: totp(SECRET, step + 3) }, later, binding, null).ticket).toBeString();
 });
 
 test("five wrong codes throttle the account across sessions; malformed ones do not count", () => {

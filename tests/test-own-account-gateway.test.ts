@@ -93,6 +93,16 @@ test("the worker is told whether the session passed 2FA, which the manager canno
   expect(unmarked.env!.CLP_ADDONS_SESSION_2FA).toBe("0");
 });
 
+test("the worker is told when the gateway first saw the session, which later requests keep", async () => {
+  const before = Date.now();
+  const first = Number((await ask({ addon: "security-keys", verb: "keys", sessionId: "live" })).env!.CLP_ADDONS_SESSION_SEEN);
+  expect(first).toBeLessThanOrEqual(Date.now());
+  await Bun.sleep(5);
+  expect(Number((await ask({ addon: "security-keys", verb: "keys", sessionId: "live" })).env!.CLP_ADDONS_SESSION_SEEN)).toBe(first);
+  expect(first).toBeGreaterThan(0);
+  expect(before - first).toBeLessThan(60_000);
+});
+
 test("a root verification is bound to the session it came with", async () => {
   const process_ = process.env;
   // The gateway's own environment never reaches the worker as a session's.
