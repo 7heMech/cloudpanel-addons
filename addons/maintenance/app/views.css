@@ -52,5 +52,3 @@ html.dark #template-ace .ace_comment { color:#93a1ad; }
   .bulk-actions { flex:1 1 100%; margin-left:0; flex-wrap:nowrap; }
   .bulk-actions .btn { flex:1 1 0; padding-left:10px; padding-right:10px; }
 }
-@media (max-width:940px) {
-}
