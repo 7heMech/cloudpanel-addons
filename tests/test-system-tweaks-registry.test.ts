@@ -18,9 +18,10 @@ import { UPDATES_TWEAK } from "../addons/system-tweaks/updates";
 import { UPLOAD_GUARD_TWEAK } from "../addons/system-tweaks/upload-progress";
 import { SYSTEM_TWEAKS_VERBS } from "../addons/system-tweaks/verbs";
 import { VHOST_GUARD_TWEAK } from "../addons/system-tweaks/vhost-guard";
+import { VISITOR_IP_TWEAK } from "../addons/system-tweaks/visitor-ip";
 
 const NAMES = new Map<object, string>([
-  [UPDATES_TWEAK, "updates"], [UPLOAD_GUARD_TWEAK, "upload guard"], [REAL_IP_TWEAK, "real IP"], [VHOST_GUARD_TWEAK, "vhost guard"],
+  [UPDATES_TWEAK, "updates"], [UPLOAD_GUARD_TWEAK, "upload guard"], [REAL_IP_TWEAK, "real IP"], [VISITOR_IP_TWEAK, "visitor IP"], [VHOST_GUARD_TWEAK, "vhost guard"],
   [PHP_POOLS_TWEAK, "PHP pools"], [PHPMYADMIN_TWEAK, "phpMyAdmin"], [FILE_MANAGER_GUARD_TWEAK, "File Manager guard"],
   [PANEL_CERT_TWEAK, "panel cert"], [LOGIN_JAILS_TWEAK, "login jails"], [DATABASE_TWEAK, "database"], [CLPCTL_GUARD_TWEAK, "clpctl guard"],
   [TELEMETRY_TWEAK, "telemetry"], [MOTD_TWEAK, "motd"], [BACKUP_COMPRESSION_TWEAK, "backup compression"], [PANEL_PHP_TWEAK, "panel PHP"],
@@ -39,7 +40,7 @@ test("every tweak is in the registry once", () => {
 test("disabling the addon withdraws panel PHP first, the clpctl guard first under the lock, and the best-effort ones last", () => {
   expect(names(WITHDRAW.first)).toEqual(["panel PHP"]);
   expect(names(WITHDRAW.locked)).toEqual([
-    "clpctl guard", "backup compression", "updates", "real IP", "phpMyAdmin", "login jails", "database",
+    "clpctl guard", "backup compression", "updates", "real IP", "visitor IP", "phpMyAdmin", "login jails", "database",
     "File Manager guard", "vhost guard", "PHP pools",
   ]);
   expect(names(WITHDRAW.last)).toEqual(["telemetry", "motd", "firewall"]);
@@ -50,7 +51,7 @@ test("disabling the addon withdraws panel PHP first, the clpctl guard first unde
 
 test("enabling the addon restores panel PHP whatever the rest does, and the panel certificate and firewall after", () => {
   expect(names(RESTORE.locked)).toEqual([
-    "updates", "upload guard", "real IP", "phpMyAdmin", "login jails", "database", "vhost guard", "PHP pools",
+    "updates", "upload guard", "real IP", "visitor IP", "phpMyAdmin", "login jails", "database", "vhost guard", "PHP pools",
     "File Manager guard", "clpctl guard", "backup compression", "telemetry", "motd",
   ]);
   expect(names(RESTORE.always)).toEqual(["panel PHP"]);
@@ -71,7 +72,7 @@ test("repair runs its steps in a fixed order, the quick ones under one lock", ()
 
 test("Lock settings turns the protections on in this order, MySQL last", () => {
   expect(names(LOCK_SETTINGS.first)).toEqual([
-    "upload guard", "real IP", "phpMyAdmin", "panel cert", "vhost guard", "PHP pools", "File Manager guard", "clpctl guard",
+    "upload guard", "real IP", "visitor IP", "phpMyAdmin", "panel cert", "vhost guard", "PHP pools", "File Manager guard", "clpctl guard",
     "telemetry", "login jails",
   ]);
   expect(names(LOCK_SETTINGS.last)).toEqual(["database"]);
@@ -79,7 +80,7 @@ test("Lock settings turns the protections on in this order, MySQL last", () => {
 
 test("every step a tweak declares runs in its phase exactly once", () => {
   const steps = (tweak: (typeof TWEAKS)[number]) => "repair" in tweak ? Object.values(tweak.repair) : [];
-  const upkeep = [UPDATES_TWEAK.repair.upkeep, REAL_IP_TWEAK.repair.upkeep, LOGIN_JAILS_TWEAK.repair.upkeep, DATABASE_TWEAK.repair.upkeep];
+  const upkeep = [UPDATES_TWEAK.repair.upkeep, REAL_IP_TWEAK.repair.upkeep, VISITOR_IP_TWEAK.repair.upkeep, LOGIN_JAILS_TWEAK.repair.upkeep, DATABASE_TWEAK.repair.upkeep];
   const scheduled = [...REPAIR, ...upkeep];
   for (const tweak of TWEAKS) {
     for (const step of steps(tweak)) expect(scheduled.filter((each) => each === step).length, NAMES.get(tweak)).toBe(1);
@@ -93,7 +94,7 @@ test("every step a tweak declares runs in its phase exactly once", () => {
 
 test("the page's Hardening card lists its rows in this order", () => {
   expect(names(HARDENING)).toEqual([
-    "panel PHP", "upload guard", "real IP", "phpMyAdmin", "database", "panel cert", "vhost guard", "PHP pools",
+    "panel PHP", "upload guard", "real IP", "visitor IP", "phpMyAdmin", "database", "panel cert", "vhost guard", "PHP pools",
     "File Manager guard", "clpctl guard", "telemetry",
   ]);
 });
@@ -103,6 +104,6 @@ test("every declared verb has one handler, and each switch is its tweak's", () =
   const switches = TWEAKS.flatMap((tweak) => "switch" in tweak ? [tweak.switch.verb] : []);
   expect(switches.sort()).toEqual([
     "set-clpctl-guard", "set-database-loopback", "set-file-manager-guard", "set-motd", "set-panel-cert", "set-php-pools",
-    "set-phpmyadmin", "set-real-ip", "set-telemetry", "set-upload-guard", "set-vhost-guard",
+    "set-phpmyadmin", "set-real-ip", "set-telemetry", "set-upload-guard", "set-vhost-guard", "set-visitor-ip",
   ]);
 });

@@ -315,12 +315,7 @@ function sshdConfig(ctx: Context): Map<string, string> {
 }
 
 function panelProxies(ctx: Context): string[] {
-  const cloudflare = cloudflareRanges(ctx.paths.cloudflareIps).filter((range) => {
-    const [address = "", prefix] = range.split("/");
-    const family = isIP(address);
-    return family !== 0 && (prefix === undefined || (/^\d+$/.test(prefix) && Number(prefix) <= (family === 4 ? 32 : 128)));
-  });
-  return [...PRIVATE_PROXIES, ...cloudflare];
+  return [...PRIVATE_PROXIES, ...cloudflareRanges(ctx.paths.cloudflareIps)];
 }
 
 function limits(): string[] {

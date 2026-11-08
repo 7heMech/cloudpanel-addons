@@ -84,9 +84,17 @@ PHP-FPM port, so one tenant cannot run PHP as another.
 [Guide](docs/system-tweaks.md#isolate-php-pools)
 
 **Forged visitor IPs.** The setting removes nginx's trust in IP headers from
-arbitrary public clients. Loopback and private proxies remain trusted; the
-panel also trusts Cloudflare.
+arbitrary public clients. Private proxies remain trusted; the panel also trusts
+Cloudflare.
 [Guide](docs/system-tweaks.md#forged-visitor-ips)
+
+**Visitor IPs through Cloudflare.** A Cloudflare Tunnel reaches nginx from
+`127.0.0.1`, which CloudPanel trusts for `X-Real-IP`. Cloudflare passes that
+header through from the visitor, so anyone could set their own IP through a
+tunnel. Sites now stop trusting `127.0.0.1` and take the visitor from
+`CF-Connecting-IP`, but only when Cloudflare or the tunnel set it. CloudPanel's
+`cloudflare` log format no longer records that header from other clients.
+[Guide](docs/system-tweaks.md#cloudflare-visitor-ips)
 
 **PHP upload progress.** Every addon installation sets
 `session.upload_progress.enabled=Off` for PHP-FPM, including the panel. This

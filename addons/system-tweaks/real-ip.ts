@@ -8,7 +8,6 @@
  */
 import { errorMessage } from "../../lib/errors";
 import { existsSync, readFileSync } from "node:fs";
-import { isIP } from "node:net";
 import { runCommand, type CommandResult } from "../../lib/command";
 import {
   cloudflareRanges, nginxFileChange, trustedVhost, withNginxTransaction, type NginxFileOwner, type NginxGroupWrite,
@@ -75,15 +74,6 @@ export function withAnyAddress(content: string): string {
   return content.replace(PROXIES, "").replace(MARKED, (_line, indent: string, directive: string) => `${indent}${directive}`);
 }
 
-/** CloudPanel's own Cloudflare list, each entry checked as an address or a prefix. */
-function cloudflareProxies(path: string): string[] {
-  return cloudflareRanges(path).filter((range) => {
-    const [address = "", prefix] = range.split("/");
-    const family = isIP(address);
-    return family !== 0 && (prefix === undefined || (/^\d+$/.test(prefix) && Number(prefix) <= (family === 4 ? 32 : 128)));
-  });
-}
-
 function instances(options: RealIpOptions): { sites: Instance; panel: Instance | null } {
   const paths = { ...DEFAULT_REAL_IP_PATHS, ...options.paths };
   const sites = { conf: paths.nginxConf, uid: paths.rootUid, groupWritable: false, proxies: [] };
@@ -94,7 +84,7 @@ function instances(options: RealIpOptions): { sites: Instance; panel: Instance |
   return { sites, panel: {
     conf: paths.panelConf, uid: [uid, paths.rootUid], groupWritable: [paths.rootGid, ...(gid === null ? [] : [gid])],
     config: paths.panelConf, service: "clp-nginx",
-    proxies: cloudflareProxies(paths.cloudflareIps),
+    proxies: cloudflareRanges(paths.cloudflareIps),
   } };
 }
 

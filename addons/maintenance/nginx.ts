@@ -14,6 +14,7 @@ import { createHash } from "node:crypto";
 import { conffileMd5, owningPackage, packageBusy, packageVersion } from "../../lib/cloudpanel-version";
 import { cloudflareRanges, nginxFileChange, trustedVhost, withNginxTransaction } from "../../lib/nginx-transaction";
 import { openPanelDatabase } from "../../lib/panel-db";
+import { cloudflareVisitorMaps } from "../../lib/visitor-ip";
 import {
   DISTRO_NGINX_SITES_DIR, NGINX_GLOBAL_SETTINGS, NGINX_MAINTENANCE_STATE_DIR, PANEL_DB, MAINTENANCE_INCLUDE_PATH,
 } from "../../lib/paths";
@@ -62,43 +63,13 @@ const NGINX_MAINTENANCE_BLOCK_RE = /\r?\n?[ \t]*# clp-addons:maintenance:start[\
 
 const MAINTENANCE_GEO_MARKER = "# clp-addons:maintenance-client-ip";
 
-/** CloudPanel keeps these ranges for its own Cloudflare-only vhost setting. */
+/**
+ * CloudPanel keeps these ranges for its own Cloudflare-only vhost setting. The
+ * fallback is the connection peer, even when CloudPanel's broad real_ip
+ * settings replaced $remote_addr from a header.
+ */
 function maintenanceGeoContent(ranges: string[]): string {
-  return `${MAINTENANCE_GEO_MARKER}
-# Preserve the connection peer even if CloudPanel's broad real_ip settings
-# replaced $remote_addr using a request header.
-map $realip_remote_addr $clp_maintenance_peer {
-    "" $remote_addr;
-    default $realip_remote_addr;
-}
-# A loopback peer is CloudPanel's own front server for a site it proxies to a
-# local backend, such as WordPress; it passes its client in X-Real-IP.
-geo $clp_maintenance_peer $clp_local_peer {
-    default 0;
-    127.0.0.0/8 1;
-    ::1/128 1;
-}
-map $http_x_real_ip $clp_real_ip_header {
-    default "";
-    ~^[0-9A-Fa-f:.]+$ $http_x_real_ip;
-}
-map "$clp_local_peer:$clp_real_ip_header" $clp_maintenance_client {
-    default $clp_maintenance_peer;
-    ~^1:.+$ $clp_real_ip_header;
-}
-geo $clp_maintenance_client $clp_cf_peer {
-    default 0;
-${ranges.map((range) => `    ${range} 1;`).join("\n")}
-}
-map $http_cf_connecting_ip $clp_cf_header_ip {
-    default "";
-    ~^[0-9A-Fa-f:.]+$ $http_cf_connecting_ip;
-}
-map "$clp_cf_peer:$clp_cf_header_ip" $clp_maintenance_ip {
-    default $clp_maintenance_client;
-    ~^1:.+$ $clp_cf_header_ip;
-}
-`;
+  return `${MAINTENANCE_GEO_MARKER}\n${cloudflareVisitorMaps("clp_maintenance", ranges, "$clp_maintenance_peer")}`;
 }
 
 interface MaintenanceNginxPaths {

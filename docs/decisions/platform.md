@@ -350,8 +350,9 @@ operator procedure is [When CloudPanel updates](../cloudpanel-updates.md).
 
 ### Package conffiles
 
-`/etc/nginx/global_settings` (Maintenance Mode) and `/etc/nginx/nginx.conf`
-(System Tweaks) are dpkg conffiles of `nginx-common`. unattended-upgrades holds
+`/etc/nginx/global_settings` (Maintenance Mode), and `/etc/nginx/nginx.conf`
+and `/etc/nginx/fastcgi_params` (System Tweaks) are dpkg conffiles of
+`nginx-common`. unattended-upgrades holds
 back a package whose modified conffile the upgrade would replace, because nobody
 is there to answer dpkg's prompt, so these edits could keep an Nginx security
 update out. A drop-in on `apt-daily-upgrade.service`, installed with the binary,
