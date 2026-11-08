@@ -1,7 +1,7 @@
 {
   "name": "cloudpanel-addons",
   "version": "2.0.0",
-  "packageManager": "bun@1.5.0",
+  "packageManager": "bun@1.4.4-canary.20261108.1",
   "devDependencies": {
     "@types/bun": "latest"
   },
@@ -26,5 +26,8 @@
     "@sigstore/tuf": "^5.0.0",
     "@sigstore/verify": "^4.1.2",
     "tldts": "^7.4.18"
+  },
+  "overrides": {
+    "bun-types": "1.4.4-canary.20261108T140904"
   }
 }

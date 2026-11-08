@@ -32,12 +32,10 @@ jobs:
           persist-credentials: false
 
       - name: Install Bun
-        uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2.2.0
-        with:
-          # The packageManager pin in package.json, the one place the version
-          # is set. It must read bun.lock: verify a bump reads the frozen
-          # lockfile before pushing a tag.
-          bun-version-file: package.json
+        # The packageManager pin in package.json, checked against the sha512
+        # in the action. Verify a bump reads the frozen lockfile before
+        # pushing a tag.
+        uses: ./.github/actions/install-bun
 
       - name: Install dependencies
         run: bun install --frozen-lockfile
