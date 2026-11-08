@@ -71,13 +71,22 @@ html.dark .clp-addon-logo-dark { display: block; }
   justify-content: center; gap: 5px; font: inherit; white-space: nowrap; }
 .clp-addon-tool:hover { color: var(--accent); text-decoration: none; }
 .clp-addon-tool > svg { width: 20px; height: 20px; flex: 0 0 auto; }
-/* The panel's own markup leaves a newline between its icon and its label, and
-   between its avatar and its caret, which renders as a space; a flex row throws
-   whitespace between its items away, so the gap carries it instead. */
-#clp-admin-area { gap: 10px; }
 #clp-admin-area > svg { width: 26px; height: 26px; }
 #theme-switch .sun { display: none; }
-html.dark #theme-switch .sun { display: block; }
+html.dark #theme-switch .sun { display: inline; }
+/* A desktop lays the tools out as the panel does, on a 75px line with each icon
+   at vertical-align: middle and the panel's own nudges, rather than centred in
+   a flex box: the panel's icons sit where the font's x-height puts them, so
+   only the same layout puts these at the same place under every font. The
+   whitespace in the markup is the panel's space between icon and label. */
+@media (min-width: 941px) {
+  .clp-addon-tool { display: block; line-height: 75px; }
+  .clp-addon-tool > svg, #clp-account-button > .clp-addon-avatar { vertical-align: middle; }
+  #theme-switch > svg { margin-top: -2px; }
+  #clp-admin-area > svg { margin: -3px 5px 0 0; }
+  #clp-root-shell > .clp-root-shell-mark { margin-right: 6px; }
+  #clp-account-button::after { vertical-align: .255em; }
+}
 html.dark #theme-switch .moon { display: none; }
 /* The account control is the panel's: an avatar, a caret, and a menu of the two
    links its own dropdown carries. */
@@ -86,7 +95,7 @@ html.dark #theme-switch .moon { display: none; }
 /* The same triangle Bootstrap draws for the panel's own avatar, built the same
    way rather than approximated, so the two sit at the same offset. */
 #clp-account-button::after { content: ""; display: inline-block; border-top: 4px solid;
-  border-right: 4px solid transparent; border-left: 4px solid transparent; margin-left: 9px; }
+  border-right: 4px solid transparent; border-left: 4px solid transparent; margin-left: 4px; }
 #clp-account-button > .clp-addon-avatar { width: 35px; height: 35px; border-radius: 50%; }
 .clp-addon-account-menu { position: absolute; top: 100%; right: 6px; z-index: 30; min-width: 160px;
   padding: 6px 0; background: var(--panel); border: 1px solid var(--border); border-radius: 6px;
@@ -413,9 +422,6 @@ pre { background: var(--bg); border: 1px solid var(--border); border-radius: 4px
   .clp-addon-tool-label { display: none; }
   #clp-admin-area > svg { width: 20px; height: 20px; }
   #clp-account-button { width: 67px; }
-  /* No label beside the icons here, and none of the whitespace that came with
-     one: the caret sits at Bootstrap's own margin again. */
-  #clp-account-button::after { margin-left: 4px; }
   #clp-account-button > .clp-addon-avatar { width: 26px; height: 26px; }
   .clp-addon-primary-nav { order: 2; width: 100%; overflow-x: auto; border-top: 1px solid var(--border); padding: 0 5px; gap: 0; }
   /* The first link starts where the logo does, as the panel's own row does. */
