@@ -18,6 +18,7 @@
 
 import MENU_STYLE_SOURCE from "./menu.css" with { type: "text" };
 import SITES_SCRIPT_SOURCE from "./sites.client.js" with { type: "text" };
+import { SELECT_WIDTH_JS } from "../../../lib/select-width";
 import ADMIN_MOBILE_STYLE from "./admin-mobile.css" with { type: "text" };
 import SITE_TABLES_STYLE from "./site-tables.css" with { type: "text" };
 import SITE_TABLES_SCRIPT from "./site-tables.client.js" with { type: "text" };
@@ -109,10 +110,13 @@ const MENU_STYLE = MENU_STYLE_SOURCE.split("ROW_MENU_CLASS").join(ROW_MENU_CLASS
 // reaches here, so this is plain ES5 with its own fetch and its own escaping.
 // Everything it writes into a cell goes in as text or as an element it built,
 // never as markup, because every value in it came out of somebody's database.
-const SITES_SCRIPT = SITES_SCRIPT_SOURCE
+// The select-width helper is joined ahead of it, both inside one function so
+// neither leaves a name on CloudPanel's page; joined rather than spliced in at
+// a marker, because the build minifies both and a comment would not survive.
+const SITES_SCRIPT = `(function () {\n${SELECT_WIDTH_JS}\n${SITES_SCRIPT_SOURCE
   .split("MENU_ONLY_CLASS").join(MENU_ONLY_CLASS)
   .split("ROW_ACTION_CLASS").join(ROW_ACTION_CLASS)
-  .split("ROW_MENU_CLASS").join(ROW_MENU_CLASS);
+  .split("ROW_MENU_CLASS").join(ROW_MENU_CLASS)}\n})();`;
 
 /**
  * CloudPanel's header on a screen narrower than the desktop it was drawn on.

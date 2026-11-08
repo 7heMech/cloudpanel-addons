@@ -139,8 +139,11 @@ export { BASE_STYLE };
 import THEME_INIT_JS from "./assets/theme-init.client.js" with { type: "text" };
 export { THEME_INIT_JS };
 
-import BASE_CLIENT_JS from "./assets/app-ui.client.js" with { type: "text" };
-export { BASE_CLIENT_JS };
+import BASE_CLIENT_SOURCE from "./assets/app-ui.client.js" with { type: "text" };
+import { SELECT_WIDTH_JS } from "./select-width";
+// Joined rather than spliced in at a marker: the build minifies both, and a
+// comment marker would not survive it.
+export const BASE_CLIENT_JS = `${SELECT_WIDTH_JS}\n${BASE_CLIENT_SOURCE}`;
 
 import TWEAK_ROW_JS from "./assets/tweak-rows.client.js" with { type: "text" };
 export { TWEAK_ROW_JS };

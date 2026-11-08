@@ -588,10 +588,16 @@ option tinted and checked at the end of its row. This uses the browser's
 customizable select, so the element and its form value stay native. A phone
 keeps its own picker, which is the better one there, and a browser that cannot
 style the list keeps the native one. A select drawn this way is as wide as its
-chosen option rather than its widest, so the shell's script holds one that
-sizes to its content at its widest option, and choosing does not move the
-controls beside it. Panel Tweaks draws the Sites page's application filter the
-same way.
+chosen option rather than its widest, so choosing would move the controls
+beside it. `lib/assets/select-width.client.js` therefore gives each one its
+widest option's width as a minimum, as a native select has, capped at the
+window's width less a margin rather than its container's, which would be a
+loop in a container as wide as its contents. The
+width is the options' text measured on a canvas in the select's font, plus its
+padding and border, so no layout is forced, and a select not drawn yet, such
+as one in a closed `<details>`, is held like any other. It is worked out again
+when options are added or changed or a web font arrives. Panel Tweaks draws
+the Sites page's application filter the same way and inlines the same file.
 
 On a wide screen a
 list of more than twelve rows with something below its card scrolls in a box of
