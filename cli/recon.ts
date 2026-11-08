@@ -1,9 +1,7 @@
-// Read-only reconnaissance dump for a CloudPanel box under investigation.
-// Ported from the historical tools/recon.sh so operators can scp the single
-// compiled binary onto an uninvestigated panel (which may have no Bun
-// installed) and run `clp-addons recon`. Deliberately absent from usage()
-// and --help: this is a diagnostic for whoever is investigating a panel, not
-// a command an end user should reach for.
+// Read-only reconnaissance dump for a CloudPanel box under investigation:
+// scp the single compiled binary onto a panel, which may have no Bun
+// installed, and run `clp-addons recon`. Left out of `clp-addons help`: it is
+// for whoever is investigating a panel, not an operator command.
 //
 // STRICTLY READ-ONLY. Every probe below only reads: it creates no files or
 // directories, starts nothing, installs nothing, and never touches the
@@ -14,13 +12,6 @@
 import { existsSync } from "node:fs";
 import { PANEL_DB } from "../lib/paths";
 
-/**
- * Run a shell snippet via `sh -c` and return its captured stdout as text.
- * Any stderr redirection (merging into stdout, or discarding) is expected to
- * already be embedded in `cmd` itself, exactly as the original bash script
- * wrote it; unredirected stderr is inherited straight to this process's
- * stderr, matching what an un-redirected command would do under bash.
- */
 async function sh(cmd: string): Promise<string> {
   const proc = Bun.spawn(["sh", "-c", cmd], { stdin: "ignore", stdout: "pipe", stderr: "inherit" });
   const text = await new Response(proc.stdout).text();
@@ -28,7 +19,6 @@ async function sh(cmd: string): Promise<string> {
   return text;
 }
 
-/** Mirrors `sed 's/^/    /'`: prefix every line of output with 4 spaces. */
 function indent(text: string): string {
   if (text === "") return "";
   const trailingNewline = text.endsWith("\n");
@@ -36,30 +26,25 @@ function indent(text: string): string {
   return body.split("\n").map((line) => `    ${line}`).join("\n") + "\n";
 }
 
-/** Mirrors `hr()`: a blank line, a "=== TITLE" header padded with 50 '='. */
 function hr(title: string): string {
   return `\n=== ${title} ${"=".repeat(50)}\n`;
 }
 
-/** Mirrors `note()`: a blank line then an un-indented "[note] ..." line. */
 function note(text: string): string {
   return `\n[note] ${text}\n`;
 }
 
-/** Mirrors `q()`: run a command with stdout+stderr merged, indented output. */
 async function q(cmdLine: string): Promise<string> {
   const out = await sh(`${cmdLine} 2>&1`);
   return `\n--- $ ${cmdLine}\n${indent(out)}`;
 }
 
-/** Mirrors `sq()`: run a read-only sqlite3 query, header + indented output. */
 async function sq(query: string): Promise<string> {
   const escaped = query.replace(/'/g, `'\\''`);
   const out = await sh(`sqlite3 -readonly "${PANEL_DB}" '${escaped}' 2>&1`);
   return `\n--- sqlite: ${query}\n${indent(out)}`;
 }
 
-/** For hand-rolled blocks: a literal header followed by indented output. */
 async function block(header: string, cmd: string): Promise<string> {
   return header + indent(await sh(cmd));
 }

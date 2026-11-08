@@ -1,4 +1,3 @@
-// Running a command without a shell.
 import { execFileSync, type ExecFileSyncOptions } from "node:child_process";
 import { ActionCommandFailure, failAction } from "./action";
 import { errorMessage } from "./errors";
@@ -40,13 +39,11 @@ export function runCommand(command: string, args: string[], timeoutMs?: number, 
   }
 }
 
-/** What a command said: its stderr, or its stdout when stderr is empty, trimmed; only its last `lines`, on one line, when given. */
 export function commandOutput(result: CommandResult, lines?: number): string {
   const said = (result.stderr || result.stdout).trim();
   return lines === undefined ? said : said.split("\n").slice(-lines).join(" ");
 }
 
-/** Fail the action with `what: <what the command said>`, or its exit code when it said nothing. */
 export function requireSuccess(result: CommandResult, what: string): void {
   if (!result.ok) failAction(`${what}: ${commandOutput(result) || `exit ${result.exitCode ?? "unknown"}`}`);
 }
@@ -55,7 +52,6 @@ export function commandFailure(command: string, result: CommandResult): ActionCo
   return new ActionCommandFailure(command, result.stderr || result.stdout);
 }
 
-/** Run a command, capturing output. Never goes through a shell. */
 export function run(cmd: string, args: string[], opts: ExecFileSyncOptions = {}): string {
   return execFileSync(cmd, args, { encoding: "utf-8", stdio: ["ignore", "pipe", "pipe"], ...opts }) as string;
 }
@@ -64,7 +60,6 @@ function commandFailureMessage(cmd: string, args: string[]): string {
   return `Command failed: ${cmd}${args.length ? ` ${args.join(" ")}` : ""}`;
 }
 
-/** Run a command, returning success rather than throwing. */
 export function tryRun(cmd: string, args: string[]): { ok: boolean; out: string } {
   try {
     const result = Bun.spawnSync([cmd, ...args], {

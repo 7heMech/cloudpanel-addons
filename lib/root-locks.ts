@@ -10,16 +10,13 @@ import { ADDON_VERBS, type GatewayAddon } from "./gateway-protocol";
 import { writeFileAtomic } from "./atomic-write";
 
 export const ROOT_LOCKS_FILE = `${CONFIG_DIR}/locks.json`;
-/** Serialises `lock` and `unlock`, which read the list and write it back. */
 export const ROOT_LOCKS_LOCK = `${LOCK_DIR}/locks.lock`;
 
-/** Whether a lock on its addon withholds this verb from the web. */
 export function declaresLock(addon: string, verb: string): boolean {
   const declared = (ADDON_VERBS as Record<string, Record<string, object>>)[addon]?.[verb];
   return !!declared && "lock" in declared && declared.lock === true;
 }
 
-/** Addons with at least one verb a lock covers. */
 export const LOCKABLE_ADDONS = (Object.keys(ADDON_VERBS) as GatewayAddon[]).filter((addon) =>
   Object.keys(ADDON_VERBS[addon]).some((verb) => declaresLock(addon, verb)));
 
@@ -84,7 +81,6 @@ export function lockedAddons(file = ROOT_LOCKS_FILE, rootUid = 0): string[] {
 /** "damaged" when the lock file cannot be read or trusted, which locks every lockable addon. */
 export type LockState = "unlocked" | "locked" | "damaged";
 
-/** An addon with nothing to lock is always "unlocked". */
 export function lockState(addon: string, file = ROOT_LOCKS_FILE, rootUid = 0): LockState {
   if (!isLockable(addon)) return "unlocked";
   try {
@@ -94,12 +90,10 @@ export function lockState(addon: string, file = ROOT_LOCKS_FILE, rootUid = 0): L
   }
 }
 
-/** Whether a lockable addon is locked, including by a damaged lock file. */
 export function addonLocked(addon: string, file = ROOT_LOCKS_FILE, rootUid = 0): boolean {
   return lockState(addon, file, rootUid) !== "unlocked";
 }
 
-/** Whether root's lock withholds this verb from the web right now. */
 export function verbLocked(addon: string, verb: string, file = ROOT_LOCKS_FILE, rootUid = 0): boolean {
   return declaresLock(addon, verb) && addonLocked(addon, file, rootUid);
 }

@@ -1,10 +1,7 @@
-// Checks for values a verb takes on its command line or in its request body.
 import { failAction } from "./action";
 import { JOB_ID_RE } from "./job-id";
 
-/** One label of a lowercase hostname. */
 export const HOSTNAME_LABEL = "[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?";
-/** A lowercase hostname of two or more labels. */
 export const HOSTNAME_RE = new RegExp(`^(?:${HOSTNAME_LABEL})(?:\\.${HOSTNAME_LABEL})+$`);
 export const WILDCARD_HOSTNAME_RE = new RegExp(`^\\*\\.(?:${HOSTNAME_LABEL})(?:\\.${HOSTNAME_LABEL})+$`);
 
@@ -58,7 +55,6 @@ export function validateMfa(value: string): string {
   return value;
 }
 
-/** One line of plain text: no control characters, no runs of whitespace. */
 export function oneLine(value: unknown, what: string, max: number, required: boolean): string {
   if (value == null && !required) return "";
   if (typeof value !== "string") failAction(`${what} must be text`);

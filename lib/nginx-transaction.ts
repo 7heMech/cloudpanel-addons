@@ -13,7 +13,7 @@ interface NginxFileBackup {
   gid: number;
 }
 
-/** The `allow` entries of CloudPanel's Cloudflare list, or none without one. */
+/** The `allow` entries of CloudPanel's Cloudflare list. */
 export function cloudflareRanges(path: string): string[] {
   let content: string;
   try { content = readFileSync(path, "utf8"); } catch { return []; }
@@ -61,7 +61,6 @@ export function trustedVhost(path: string, expectedUid: NginxFileOwner, groupWri
 function commandError(label: string, result: CommandResult): string {
   return `${label} failed: ${(result.stderr || result.stdout || `exit ${result.exitCode ?? "unknown"}`).trim()}`;
 }
-
 
 export function withRecoveryFailures(primary: unknown, label: string, failures: string[]): Error {
   const original = primary instanceof Error ? primary : new Error(String(primary));
@@ -185,7 +184,6 @@ class NginxTransaction {
   }
 }
 
-/** Commits panel rows and Nginx files together, recovering both on failure. */
 export function withNginxTransaction<T>(
   db: Database | null,
   paths: NginxInstance,

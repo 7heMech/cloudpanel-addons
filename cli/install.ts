@@ -1,5 +1,3 @@
-// `clp-addons install`.
-
 import { dashboardUrl, migrateOldAddonNames, resolveAddon } from "./addons";
 import { enabledAddons } from "../addons/catalog";
 import { artifactNames, installArtifacts, installedTag } from "./artifacts";

@@ -1,11 +1,8 @@
-// Privileged side of decision 2.7.
-//
 // The port-collision check needs the panel's site list, but the panel database
 // also holds password hashes and site credentials, and the app's site user
 // cannot read /home/clp at all. So the root gateway daemon queries the panel
-// database directly in real time, reads non-secret columns only, and returns
-// sanitized data over the UNIX domain socket without writing disk snapshots.
-// The app must never import this file.
+// database, reads non-secret columns only, and returns sanitized data over its
+// UNIX domain socket. The app must never import this file.
 
 import { Database } from "bun:sqlite";
 import { execFileSync } from "node:child_process";
@@ -56,10 +53,6 @@ function databaseExists(databasePath: string): boolean {
   }
 }
 
-/**
- * Runs a panel query, treating an absent optional table as empty while wrapping
- * every other query failure with table context.
- */
 function queryRows<ReturnType>(db: Database, sql: string, table: string, optional = false): ReturnType[] {
   try {
     return db.query<ReturnType, []>(sql).all();
@@ -151,7 +144,6 @@ function openConsistentSnapshot(databasePath: string): IsolatedDatabase {
   }
 }
 
-/** Every site but DNS's stand-ins, which are redirects rather than sites. */
 export function readPanelDatabase(databasePath = PANEL_DB, standInsFile = STAND_INS_FILE, rootUid = 0): PanelDatabaseSnapshot {
   if (!databaseExists(databasePath)) return emptyPanelDatabaseSnapshot();
 
@@ -208,16 +200,6 @@ export function readPanelDatabase(databasePath = PANEL_DB, standInsFile = STAND_
   return { allocatedPorts: [...ports].sort((a, b) => a - b), sites };
 }
 
-/**
- * Returns sanitized panel state from a consistent database copy, addon metadata,
- * and active TCP listeners.
- *
- * Unreadable addon metadata and unavailable listener inspection contribute no
- * ports. Reading the default panel database requires root privileges.
- *
- * @throws If the caller is not root when using the default database, or the
- * panel database cannot be inspected, copied, or queried.
- */
 export function getLivePanelInfo(databasePath = PANEL_DB): PanelSnapshot {
   if (process.getuid && process.getuid() !== 0 && databasePath === PANEL_DB) {
     throw new Error("getLivePanelInfo must run as root; consumers query the root gateway daemon instead");
@@ -254,7 +236,6 @@ export function getLivePanelInfo(databasePath = PANEL_DB): PanelSnapshot {
     }
   }
 
-  // Anything currently listening, whoever owns it.
   try {
     const ss = execFileSync("ss", ["-tlnH"], { encoding: "utf-8" });
     for (const m of ss.matchAll(/:(\d{2,5})\s/g)) addPort(ports, m[1] ?? null);

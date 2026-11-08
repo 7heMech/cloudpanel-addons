@@ -1,7 +1,3 @@
-// `clp-addons` with no arguments, in a root terminal: the addons, their
-// state, and the few things an operator does to them, one key each. Toggles go
-// through the same enable and disable the Addons page runs.
-
 import { errorMessage } from "../lib/errors";
 import { dashboardUrl } from "./addons";
 import { ADDONS, ADDON_NAMES, addonEnabled } from "../addons/catalog";
@@ -30,7 +26,6 @@ function readEnabled(): Set<string> {
   return new Set(ADDON_NAMES.filter((name) => addonEnabled(ADDONS[name]!)));
 }
 
-/** A checkbox per addon, with its description or, once changed, what will happen to it. */
 function addonRows(cursor: number, wanted: Set<string>, changed: (name: string) => boolean): string[] {
   const nameWidth = Math.max(...ADDON_NAMES.map((name) => name.length));
   return ADDON_NAMES.map((name, index) => {
@@ -43,7 +38,6 @@ function addonRows(cursor: number, wanted: Set<string>, changed: (name: string) 
   });
 }
 
-/** The cursor after an up or down key, or null for any other key. */
 function moved(key: string, cursor: number): number | null {
   if (key === "\x1b[A" || key === "k") return (cursor + ADDON_NAMES.length - 1) % ADDON_NAMES.length;
   if (key === "\x1b[B" || key === "j") return (cursor + 1) % ADDON_NAMES.length;
@@ -81,7 +75,6 @@ interface Terminal {
 
 const TTY: Terminal = { input: process.stdin, output: process.stdout };
 
-/** A block of lines redrawn in place, with keys read raw while captured. */
 function screen({ input, output }: Terminal) {
   let drawn = 0;
   return {

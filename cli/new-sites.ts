@@ -1,5 +1,3 @@
-// What the new-site watcher runs, and how it knows a site has finished arriving.
-//
 // CloudPanel writes a new site's vhost first and commits its row in the panel
 // database afterwards, half a second later on staging even for a WordPress
 // site, whose files come after the row; later on a busy box, where the panel's
@@ -83,7 +81,6 @@ export function sitesInFlight(vhostDir: string, domains: string[], now: number):
   }
   if (now - dirChanged >= NEW_SITE_ROW_WAIT_MS) return [];
   const rows = new Set(domains);
-  // Domain to file name: the name is matched without case, but read as it is.
   const vhosts = new Map(names.flatMap((name) => {
     const domain = name.endsWith(".conf") ? name.slice(0, -".conf".length).toLowerCase() : "";
     return domain.includes(".") ? [[domain, name] as const] : [];
@@ -111,7 +108,6 @@ function readSeen(file: string): string[] | null {
 const sameSites = (a: string[], b: string[] | null) =>
   b !== null && a.length === b.length && a.every((site, i) => site === b[i]);
 
-/** Whether the hooks last ran, for a change to the sites, within the hour. */
 function sitesChangedRecently(seenFile: string, now: number): boolean {
   try {
     return now - statSync(seenFile).mtimeMs < NEW_SITE_ROW_WAIT_MS;
@@ -121,12 +117,9 @@ function sitesChangedRecently(seenFile: string, now: number): boolean {
 }
 
 /**
- * Run the hooks when the panel's sites differ from the last time they ran, then
- * watch for the row of any site whose vhost has come or gone without it, and
- * keep watching while an addon waits for a new site. Hooks that ran for a set
- * of sites do not run again for it, whether they succeeded or not: the row
- * watcher wakes this on every panel write, and a hook that keeps failing is the
- * 15-minute pass's to retry. Addons that wait are asked again on every wake.
+ * Hooks that ran for a set of sites do not run again for it, whether they
+ * succeeded or not: the row watcher wakes this on every panel write, and a
+ * hook that keeps failing is the 15-minute pass's to retry.
  *
  * A path unit does not start its service again for a change made while the
  * service runs, so after arming the watcher this looks once more: a row that
@@ -140,9 +133,9 @@ export async function syncNewSites(ops: NewSiteWatchOps, paths: NewSiteWatchPath
   for (;;) {
     const sites = panelSites(paths.panelDb);
     if (sites === null) {
-      // Nothing to compare with: run as the watcher always did, and let the hooks
-      // report the problem. Whatever held the database, such as a long write,
-      // ends in a write, which the rows watcher turns into another look.
+      // Nothing to compare with, so the hooks run and report the problem.
+      // Whatever held the database, such as a long write, ends in a write,
+      // which the rows watcher turns into another look.
       await ops.runHooks();
       ops.watchRows(true);
       return;
@@ -163,7 +156,6 @@ export async function syncNewSites(ops: NewSiteWatchOps, paths: NewSiteWatchPath
   }
 }
 
-/** `clp-addons sync-sites`, as the new-site watchers run it. */
 export async function runSyncSites(installed: AddonSpec[]): Promise<void> {
   await syncNewSites({
     runHooks: () => runNewSiteWork(installed),

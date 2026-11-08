@@ -25,35 +25,20 @@ function internalPath(path: string): string {
 }
 
 /**
- * Which addons this manager serves, answered per request.
- *
- * This used to be a list built once at startup, which is why enabling an addon
- * had to restart the manager: until it did, the addon's own pages returned 404
- * from a process that had been told, at boot, that it did not exist. The handler
- * map is still compiled in and still explicit -- nothing is loaded dynamically.
- * What is dynamic is availability, and availability is a config file, so it is
- * read from the config files.
- *
- * Serving nothing is a legitimate state, not a failed start. Every addon is
- * compiled in, so a manager with none of them enabled still has a job: it is
- * the page that offers them back. Exiting instead meant disabling the last
- * addon killed the only surface that could re-enable it.
+ * Read from the config files per request, so enabling an addon needs no
+ * manager restart. Serving nothing is a legitimate state: a manager with no
+ * addon enabled is the page that offers them back.
  */
 function mountedAddons(): string[] {
   return ADDON_NAMES.filter((name) => addonHandler(name) && addonEnabled(ADDONS[name]!));
 }
 
-/**
- * Every request the manager answers, in the order it decides them. Exported so
- * a test can send real requests through the same function the socket does.
- */
 export async function handleRequest(req: Request, server: Server<unknown>): Promise<Response> {
   const path = internalPath(new URL(req.url).pathname);
 
   // An addon's route before the gate answers on a credential root checks, such
   // as a push-to-deploy token or a passkey's signature, and returns null for
-  // anything else, which then meets the gate like any other request. Nothing
-  // is looked up for a request outside its prefix.
+  // anything else, which then meets the gate like any other request.
   for (const name of ADDON_NAMES) {
     const preGate = ADDONS[name]!.preGate;
     if (!preGate || !path.startsWith(preGate.prefix) || !mountedAddons().includes(name)) continue;
@@ -64,19 +49,15 @@ export async function handleRequest(req: Request, server: Server<unknown>): Prom
   // Nothing else is answered before this, not even the liveness probe: a route
   // decided ahead of the gate answers whoever can reach the panel.
   const gate = await authenticateRequest(req);
-  // Sent as the gate built it. The shared header policy used to go over the
-  // top, which is what made a refusal here look unlike the panel's own.
+  // Sent as the gate built it, so a refusal here looks like the panel's own.
   if (gate.response) return gate.response;
   if (req.method === "GET") await refreshPanelLogos(mountedAddons().includes("panel-tweaks"));
 
-  // The manager is an administrative surface. Keep this decision at the
-  // shared socket boundary so every mounted HTML and API route, including
-  // future handlers and the manager index, receives the same gate before
-  // update checks or addon code can run. The exceptions: a signed-in
+  // The manager is an administrative surface, so every route meets this gate
+  // before update checks or addon code can run. The exceptions: a signed-in
   // non-administrator reaches an addon's self-scoped routes, and a site
-  // manager all of an addon that declares `siteManager`. Straight to the addon,
-  // ahead of the update check and the manager's own routes, and only to the
-  // verbs declared for them.
+  // manager all of an addon that declares `siteManager`, and only the verbs
+  // declared for them.
   const denied = adminGate(gate.auth);
   if (denied) {
     const name = path.split("/")[1] ?? "";
@@ -92,8 +73,8 @@ export async function handleRequest(req: Request, server: Server<unknown>): Prom
     );
   }
 
-  // Keep already-loaded site Settings cards and bookmarked pages working after the rename.
-  // This runs behind both authentication gates; 308 preserves API methods and query strings.
+  // Site Settings cards already loaded and bookmarked pages still use the
+  // /php-resources path; 308 preserves API methods and query strings.
   if (path === "/php-resources" || path.startsWith("/php-resources/")) {
     const query = new URL(req.url).search;
     return new Response(null, { status: 308, headers: { Location: `${mountPath("resource-limits")}${path.slice("/php-resources".length)}${query}` } });
@@ -117,10 +98,6 @@ export async function handleRequest(req: Request, server: Server<unknown>): Prom
     return updatePage(update, CLI_VERSION, { job: await latestManagerJobView(), csrf: newCsrfToken() });
   }
   if (path === "/") {
-    // Read at request time rather than from the startup addon list: a job
-    // that has just finished enabling an addon has not yet restarted this
-    // process, and a page that still denied the addon existed would be
-    // wrong for exactly as long as anybody was likely to look at it.
     const enabled = ADDON_NAMES.filter((name) => addonEnabled(ADDONS[name]!));
     const [job, news] = await Promise.all([latestManagerJobView(), seenNews()]);
     return indexPage(enabled, notice, {
@@ -133,15 +110,10 @@ export async function handleRequest(req: Request, server: Server<unknown>): Prom
   return jsonResponse({ ok: false, error: "not found" }, { status: 404 });
 }
 
-/**
- * Starts the manager on its Unix socket and remains pending for the process
- * lifetime. The restrictive socket-creation umask is restored before setup
- * continues or an error escapes.
- */
 export async function cmdServe(): Promise<never> {
-  // Anything else replaces the live daemon's socket with one the auth gateway
-  // will not answer for, which takes every addon page down until a restart.
-  // The unit's cgroup is set by systemd, where an environment variable is not.
+  // Run any other way, serve replaces the live daemon's socket with one the
+  // auth gateway will not answer for, which takes every addon page down until a
+  // restart. systemd sets the unit's cgroup, which an environment variable cannot fake.
   const cgroups = readFileSync("/proc/self/cgroup", "utf-8").split("\n");
   const inUnit = cgroups.some((line) => line.endsWith(`/${MANAGER_UNIT}`));
   if (!inUnit || userInfo().username !== SERVICE_USER) {

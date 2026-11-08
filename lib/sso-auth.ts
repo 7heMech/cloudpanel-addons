@@ -19,21 +19,18 @@ const MAX_SERIALIZATION_NODES = 20_000;
 const MAX_ARRAY_ITEMS = 20_000;
 
 /**
- * How long a session with no cookie lifetime of its own is good for.
- *
  * Symfony records `l: 0` whenever `session.cookie_lifetime` is 0, which is what
  * CloudPanel ships: the cookie lives until the browser closes, and the session
- * file lives until PHP's garbage collector decides it is idle. That collector,
- * not PHP's documented default of 1440 seconds, is the real bound -- CloudPanel
- * sets `session.gc_maxlifetime = 86400` -- and assuming the default logged an
- * operator out of the addon pages twenty-four minutes after their last visit to
- * a panel page, which a long job watched over SSE reaches easily.
+ * file lives until PHP's garbage collector decides it is idle. That collector's
+ * `session.gc_maxlifetime`, which CloudPanel sets to 86400, is the real bound;
+ * PHP's default of 1440 seconds would log an operator out of the addon pages
+ * twenty-four minutes after their last visit to a panel page, which a long job
+ * watched over SSE reaches easily.
  */
 const PHP_DEFAULT_GC_MAXLIFETIME = 1440;
-// Read once per ini, and again whenever the file changes: this is on the path
-// of every authenticated request, but an operator who shortens the panel's
-// session lifetime should not have to restart the gateway for it to count. A
-// file that could not be read or stat'ed is not remembered.
+// Read again whenever the file changes: this is on the path of every
+// authenticated request, but an operator who shortens the panel's session
+// lifetime should not have to restart the gateway for it to count.
 const gcMaxlifetimeByIni = new Map<string, { stamp: string; seconds: number }>();
 
 function iniStamp(path: string): string | null {
@@ -80,8 +77,7 @@ function readCookie(req: Request, name: string): string | null {
  *
  * An anonymous caller should learn nothing from a path under /addons that any
  * other panel path would not tell it. CloudPanel answers one of those with this
- * response; sending the project's own header policy instead was the single
- * thing that told the two apart.
+ * response, headers included.
  */
 const LOGIN_REDIRECT_BODY = [
   "<!DOCTYPE html>",
@@ -145,12 +141,8 @@ export function parseAuthHelperReply(stdout: string): AuthHelperReply {
 }
 
 /**
- * Ask the root helper about one session over its socket.
- *
- * The manager connects to the root gateway activated by
- * `clp-addons-auth.socket`, writes one bounded request, and reads one bounded
- * reply. Every transport failure is "unavailable", which the caller turns into
- * 503 -- never into an authenticated request.
+ * Every transport failure is "unavailable", which the caller turns into 503 --
+ * never into an authenticated request.
  */
 async function callAuthHelper(sessionId: string, socketPath = AUTH_SOCKET_PATH): Promise<AuthHelperReply> {
   try {
@@ -185,7 +177,7 @@ export function panelUserUid(): number | null {
   return panelUserId(2);
 }
 
-/** The panel account's primary group; it need not have the same ID as its user. */
+/** The panel account's primary group need not have the same ID as its user. */
 export function panelUserGid(): number | null {
   return panelUserId(3);
 }
@@ -238,7 +230,7 @@ export async function readPanelSessionFile(
     return null;
   } finally {
     if (fd !== undefined) {
-      try { closeSync(fd); } catch { /* already closed */ }
+      try { closeSync(fd); } catch {}
     }
   }
 }
@@ -513,7 +505,6 @@ interface PanelSession {
   expiresAt: number;
 }
 
-/** A session as the root helper reads it from CloudPanel's session file. */
 export interface ParsedPanelSession extends PanelSession {
   /** It passed CloudPanel's two-factor step, rather than having none to pass. */
   twoFactor: boolean;
@@ -565,7 +556,7 @@ export function parsePanelSession(data: Uint8Array | string, options: { unmarked
     // CloudPanel's own /autologin, which Security Keys uses after a verified
     // passkey and only root can mint a token for, or a login from before MFA
     // was turned on. CloudPanel serves both; this does only while Security
-    // Keys is enabled, and otherwise refuses them as it always did.
+    // Keys is enabled (`unmarkedMfa`).
     const mfaEntries = attributes.entries.filter((entry) => keyText(entry.key) === "mfaAuthenticated");
     if (mfaEntries.length > 1) return null;
     if (mfaEntries.length === 1) {
@@ -581,13 +572,11 @@ export function parsePanelSession(data: Uint8Array | string, options: { unmarked
   }
 }
 
-/** Return the shared manager denial for an authenticated non-administrator. */
 export function adminGate(auth: AuthenticatedRequest | null): Response | null {
   if (auth?.roles.includes("ROLE_ADMIN")) return null;
   return jsonResponse({ ok: false, error: "administrator role required" }, { status: 403 });
 }
 
-/** The CloudPanel session id a request carries, when it is well formed. */
 export function panelSessionId(req: Request): string | null {
   const sessionId = readCookie(req, SESSION_COOKIE);
   if (!sessionId || sessionId.length > MAX_SESSION_ID_LENGTH || !SESSION_ID_RE.test(sessionId)) return null;
@@ -611,11 +600,9 @@ export async function authenticateRequest(req: Request): Promise<{
 }
 
 /**
- * Whether the session behind a request still has the role its stream requires.
- *
- * For a response that outlives the request that opened it. The gateway rechecks
- * status and role against CloudPanel's database, so this also sees a user who
- * was deactivated or demoted rather than only an expired session.
+ * The gateway rechecks status and role against CloudPanel's database, so this
+ * also sees a user who was deactivated or demoted rather than only an expired
+ * session.
  */
 export async function stillAuthorized(
   req: Request,

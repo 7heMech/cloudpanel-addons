@@ -1,15 +1,3 @@
-// The job progress endpoint, shared by every addon that runs work as a
-// background job.
-//
-// Stager and Instatic each had their own byte-identical copy of this. They were
-// identical by accident rather than by contract, which is how one of them ended
-// up polling a job read that took a lock the runner held for the whole job:
-// there was no single place where "how a job is watched" was decided. There is
-// now.
-//
-// The addon supplies a reader and a watcher. Everything about the wire format
-// -- what counts as a change, when the stream closes, and the keepalive -- lives
-// here.
 import { errorMessage } from "./errors";
 import { jsonResponse, policyHeaders, safeDecodePathSegment } from "./app-http";
 import { streamGatewayAction, type ActionResult, type GatewayStream } from "./gateway-client";
@@ -19,13 +7,10 @@ import { stillAuthorized } from "./sso-auth";
 
 export { isTerminalJobState } from "./job-id";
 
-/** How often the reader is asked for a fresh view of the job. */
 const POLL_INTERVAL_MS = 1000;
 const KEEPALIVE_INTERVAL_MS = 15_000;
 
 /**
- * How long a stream may run between re-checks of the session.
- *
  * A stream is authorized once, when it opens, and then runs until the job ends.
  * What it sends is the job record, and a clone's record holds the database and
  * Instatic passwords it generated, so a session revoked mid-job would keep
@@ -33,11 +18,10 @@ const KEEPALIVE_INTERVAL_MS = 15_000;
  */
 const AUTH_RECHECK_MS = 15_000;
 
-/** The fields the stream itself reasons about; addons add their own alongside. */
 export interface JobProgress {
   state: string;
   step: string;
-  /** Optional one-shot SSE event name for client-side state transitions. */
+  /** A one-shot SSE event name for client-side state transitions. */
   event?: string;
 }
 
@@ -62,16 +46,6 @@ export type JobWatcher<J extends JobProgress> = (
   },
 ) => { close(): void };
 
-/**
- * Follow one job through the gateway's streaming mode.
- *
- * The addon half of a watch is the same wherever it is written: one `watch-job`
- * stream, every reply either a snapshot or the end of it, and one close
- * whichever arrives first. Three addons had their own copy and they had already
- * started to differ, which is the drift this module exists to stop -- so the
- * watcher lives here beside the endpoint that consumes it.
- */
-/** The addons whose jobs can be watched: those that declare a `watch-job` stream. */
 type JobAddon = { [A in GatewayAddon]: "watch-job" extends StreamVerb<A> ? A : never }[GatewayAddon];
 
 export function watchGatewayJob<J extends JobProgress>(
@@ -109,18 +83,8 @@ interface JobApiRoute<J extends JobProgress> {
 }
 
 /**
- * Answer the two job-observation routes every addon has, or return null.
- *
- * `/api/jobs/:id/events` streams, `/api/jobs/:id` polls, and `/api/jobs/:id`
- * with `Accept: text/event-stream` streams too -- a client that cannot set a
- * path but can set a header still gets the live view. Choosing between them
- * was written out twice, character for character, in the Stager and Instatic
- * routers, which is how the two ended up with the same answer by coincidence
- * rather than by contract.
- *
- * Returns null for anything else, including a non-GET on these paths, so the
- * addon's own router decides what that is. The HTML `/jobs/:id` page stays with
- * each addon: what a job looks like is theirs, only how it is watched is shared.
+ * `/api/jobs/:id` with `Accept: text/event-stream` streams too: a client that
+ * cannot set a path but can set a header still gets the live view.
  */
 export async function jobApiRoute<J extends JobProgress>(route: JobApiRoute<J>): Promise<Response | null> {
   const events = route.path.match(/^\/api\/jobs\/([^/]+)\/events$/);
@@ -150,13 +114,11 @@ function sse(body: ReadableStream): Response {
   return new Response(body, {
     status: 200,
     headers: policyHeaders("text/event-stream", {
-      // A stream's caching rules are its own: `no-store` would be honest but
-      // `no-cache, no-transform` is what keeps a proxy from rewriting events.
+      // `no-transform` keeps a proxy from rewriting events.
       "Cache-Control": "no-cache, no-transform",
       "Connection": "keep-alive",
-      // Nginx buffers proxied responses by default, which holds every event
-      // until the job finishes -- exactly the symptom streaming exists to
-      // avoid.
+      // Nginx buffers proxied responses by default, which would hold every
+      // event until the job finishes.
       "X-Accel-Buffering": "no",
     }),
   });
@@ -172,19 +134,12 @@ function eventData<J extends JobProgress>(job: J, log: string, event: string | n
   return `${event ? `event: ${event}\n` : ""}data: ${JSON.stringify({ job, log })}\n\n`;
 }
 
-/**
- * Stream one job's state, step and log as server-sent events.
- *
- * Resolves to a JSON error response when the job cannot be read at all, so the
- * caller can return it directly either way.
- */
 export async function jobEventStream<J extends JobProgress>(options: {
   id: string;
   req: Request;
   getJob: JobReader<J>;
   watchJob?: JobWatcher<J>;
   recheckMs?: number;
-  /** Defaults to administrator-only, as do addons without this opt-in. */
   siteManager?: boolean;
 }): Promise<Response> {
   const { id, req, getJob, watchJob } = options;
@@ -304,8 +259,6 @@ export async function jobEventStream<J extends JobProgress>(options: {
       }
 
       pollTimer = setInterval(async () => {
-        // A read can take longer than the interval; overlapping them would
-        // queue up action processes behind a job that is already slow.
         if (closed || inFlight) return;
         inFlight = true;
         try {
@@ -317,9 +270,7 @@ export async function jobEventStream<J extends JobProgress>(options: {
             return;
           }
           sendSnapshot(res.data);
-        } catch {
-          // Transient read error; retry on the next tick.
-        } finally {
+        } catch {} finally {
           inFlight = false;
         }
       }, POLL_INTERVAL_MS);

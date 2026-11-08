@@ -2,14 +2,13 @@ import { existsSync } from "node:fs";
 
 export const PANEL_IDENTITY_PATH = "/etc/clp-addons/panel-identity.conf";
 
-
 export const REPO = "7heMech/cloudpanel-addons";
 export const CLI_ARTIFACT = "clp-addons-linux-x64";
 export const CLI_BIN = "/usr/local/bin/clp-addons";
 export const LIBEXEC_DIR = "/usr/local/libexec/clp-addons";
 /** Sigstore's trusted keys, cached where only root can write. */
 export const SIGSTORE_DIR = `${LIBEXEC_DIR}/sigstore`;
-/** The GitHub CLI that verified updates before the binary did it itself. */
+/** The GitHub CLI that older releases installed to verify updates. */
 export const LEGACY_GH = `${LIBEXEC_DIR}/gh`;
 
 export const SERVICE_USER = "clp-addons";
@@ -47,11 +46,9 @@ export const NGINX_CERTIFICATES_DIR = "/etc/nginx/ssl-certificates";
 const PANEL_NGINX_DIR = "/home/clp/services/nginx";
 
 interface NginxLayout {
-  /** Directory holding the panel vhost. */
   sitesDir: string;
   /** Config root to hand `nginx -t -c`, when the instance has its own. */
   configFile: string | null;
-  /** systemd unit that owns the resolved tree. */
   service: string;
   /** The resolved tree is owned by the panel user rather than by root. */
   panelOwned: boolean;
@@ -104,8 +101,10 @@ export const LOCK_DIR = "/run/lock/clp-addons";
 export const SYSTEMD_DIR = "/etc/systemd/system";
 /** Runs `clp-addons apt-hook` around unattended-upgrades' daily run. */
 export const APT_UPGRADE_DROPIN = "apt-daily-upgrade.service.d/50-clp-addons.conf";
-/** Present while edits to package conffiles are given back for an upgrade run. */
-/** Root-only: the manager owns /run/clp-addons, and root writes this flag. */
+/**
+ * Present while edits to package conffiles are given back for an upgrade run.
+ * Root-only: the manager owns /run/clp-addons, and root writes this flag.
+ */
 export const CONFFILES_RELEASED_FLAG = `${LOCK_DIR}/conffiles-released`;
 /** Operator-editable schedule for Instatic's recovery snapshots. */
 export const INSTATIC_BACKUP_CRON = "/etc/cron.d/clp-addons-instatic-backup";
@@ -128,7 +127,6 @@ export const UPDATE_MOTD_DIR = "/etc/update-motd.d";
 export const NEW_SITE_ROWS_PATH = "clp-addons-new-site-rows.path";
 /** The site domains the new-site hooks last ran for. */
 export const NEW_SITES_SEEN_FILE = `${STATE_DIR}/new-sites-seen.json`;
-
 
 export const LEGACY_UNITS = [
   "clp-addons-php-resources.service",

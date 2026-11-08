@@ -1,5 +1,3 @@
-// The manager's own API: update status, enable, disable, update, the badges
-// an administrator has opened, and following the job each mutation starts.
 import { guardMutation, jsonResponse, safeDecodePathSegment } from "../lib/app-http";
 import { streamGatewayAction, type ActionResult } from "../lib/gateway-client";
 import { jobEventStream, type JobWatcher } from "../lib/job-stream";
@@ -10,15 +8,10 @@ import type { CliUpdateInfo } from "../lib/update-check";
 import { managerAction } from "./service";
 
 /**
- * The manager's own API: update status, enable, disable, update, and following
- * the job each mutation starts.
- *
  * Every route here is already behind the SSO gate and the administrator gate at
  * the socket boundary; `guardMutation` adds the same origin and CSRF check the
  * addons use, so a page on another origin cannot spend an administrator's
  * session on a binary replacement.
- *
- * Returns null when the path is not one of these, so the caller can carry on.
  */
 export async function handleManagerRoute(
   req: Request,

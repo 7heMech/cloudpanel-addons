@@ -5,16 +5,11 @@ import { acquireFileLock, acquireFileLockSync, type FileLockHandle } from "../li
 import { LOCK_DIR } from "../lib/paths";
 import { fatal } from "../lib/log";
 
-/**
- * The lock one clp-addons operation holds from beginning to end.
- *
- * Enabling, disabling, repairing, updating and uninstalling all rewrite the
- * same set of things -- the config files, the units, the Twig templates and
- * the Nginx fragments -- and none of it is atomic across the set, so two of
- * them at once leave the loser's work partly overwritten. The panel serialised
- * only its own jobs; a root shell, the anchor path unit and the reconcile
- * timer went straight in. This is the one lock all of them take.
- */
+// Enabling, disabling, repairing, updating and uninstalling all rewrite the
+// config files, the units, the Twig templates and the Nginx fragments, none of
+// it atomically across the set, and the panel, a root shell, the anchor path
+// unit and the reconcile timer all start them. Each takes this one lock from
+// beginning to end.
 
 /** Generous: an enable that installs Docker runs for minutes. */
 const OPERATION_TIMEOUT_SECONDS = 900;
@@ -35,7 +30,6 @@ interface OperationLockOptions {
   lockDir?: string;
 }
 
-/** The environment a child of the current operation inherits. */
 export function operationLockEnv(): NodeJS.ProcessEnv {
   return { ...process.env, [OPERATION_LOCK_ENV]: held ?? "1" };
 }

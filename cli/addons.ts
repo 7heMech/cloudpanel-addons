@@ -1,7 +1,3 @@
-// Which addons are installed, which name resolves to which, and where the
-// Addons page lives. Every command needs some of this and none of it belongs
-// to one of them.
-
 import { addonStateDir, CONFIG_DIR, LOCK_DIR, STATE_DIR, SYSTEMD_DIR } from "../lib/paths";
 import { withFileLockSync } from "../lib/file-lock";
 import { migrateResourceMemory } from "../addons/resource-limits/migration";
@@ -18,7 +14,6 @@ export function resolveAddon(name: string | undefined): AddonSpec {
   return spec;
 }
 
-/** Shipped addon ids whose saved state and enabled records move with the feature. */
 const RENAMED_ADDONS: Record<string, string> = { "wp-login": "wp-tools", "php-resources": "resource-limits" };
 
 /** What a rename moved, so a failed update can hand it back to the binary it restores. */
@@ -32,7 +27,6 @@ interface AddonRename {
   undo?: () => void;
 }
 
-/** Whether anything is left under an old name, so install, repair and update wait on no lock otherwise. */
 function migrationPending(): boolean {
   if (Object.keys(RENAMED_ADDONS).some((from) =>
     existsSync(`${CONFIG_DIR}/${from}.conf`) || existsSync(`${CONFIG_DIR}/${from}.conf.new`) || existsSync(`${STATE_DIR}/${from}`))) return true;
@@ -68,7 +62,6 @@ function migrateAddonState(quiet: boolean): AddonRename[] {
     for (const [from, to] of Object.entries(RENAMED_ADDONS)) {
       const legacyConfig = `${CONFIG_DIR}/${from}.conf`;
       const legacyState = `${STATE_DIR}/${from}`;
-      // An empty old state directory holds nothing to keep or to conflict with.
       if (existsSync(legacyState) && readdirSync(legacyState).length === 0) rmSync(legacyState, { recursive: true, force: true });
       // A disabled addon has no config but keeps its state for re-enabling.
       if (!existsSync(legacyConfig) && !existsSync(legacyState)) {
@@ -107,7 +100,6 @@ function migrateAddonState(quiet: boolean): AddonRename[] {
   } catch (error) { restoreAddonState(renames); throw error; }
 }
 
-/** Puts renamed addons back under their old names for the earlier binary a rollback restores. */
 export function revertAddonRenames(renames: AddonRename[]): void {
   withFileLockSync(`${LOCK_DIR}/resource-limits-settings.lock`, 15, "a resource limits change is still running", () =>
     withFileLockSync(`${LOCK_DIR}/system-tweaks.lock`, 15, "a system tweaks change is still running", () => restoreAddonState(renames)));

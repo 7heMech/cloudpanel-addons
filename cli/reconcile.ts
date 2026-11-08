@@ -1,7 +1,3 @@
-// Putting the CloudPanel side back the way the installed addons need it: the
-// Twig anchors, the Nginx proxy and the maintenance check. Install, update,
-// repair, uninstall and the manager's own reconcile verb all come through here.
-
 import {
   purgeTwigCache as purgeInjectCache, type Injection, KNOWN_GOOD_PANEL_VERSIONS, type TargetStatus, panelVersion,
   reconcile, reconcileNginxProxy,
@@ -14,28 +10,19 @@ import { errorMessage } from "../lib/errors";
 import { mountPath } from "../lib/mount";
 import { log } from "../lib/log";
 /**
- * `managerNav` is whether the panel keeps its "Addons" entry.
- *
- * It belongs to the manager, not to any addon, and it used to be derived from
- * "at least one addon is enabled". That was the same thing right up until an
- * addon could be disabled from the page the entry leads to: disabling the last
- * one took the link away, and the only way back to the page that would offer
- * the addons again was to know the URL. The entry now goes when the
- * installation goes, which is `self-uninstall`'s call to make, not this one's.
+ * `managerNav` is whether the panel keeps its "Addons" entry. It stays with
+ * every addon disabled, since the page it leads to is where they are enabled
+ * again, and goes only with `self-uninstall`.
  */
 export function installedInjections(exclude?: string, managerNav = true): Injection[] {
   const injections: Injection[] = [];
   const installed = ADDON_NAMES.filter((name) => name !== exclude && addonEnabled(ADDONS[name]!));
 
-  // Kept outside the addon target lists so installing a second addon cannot
-  // emit a second style/script block or replace the first one's marker.
   if (managerNav) {
     injections.push({ addon: "manager", target: headerTarget(), url: "/addons/" });
     injections.push({ addon: "manager", target: adminHeaderTarget(), url: "/addons/" });
   }
 
-  // The site tab strip only needs its one-row rule once some installed addon is
-  // actually adding a tab to it, and it needs it exactly once however many do.
   if (installed.some((name) => ADDONS[name]!.targets.some((target) => target.template === TEMPLATES.siteTabs))) {
     injections.push({ addon: "manager", target: siteLayoutTarget(), url: "/addons/" });
   }
@@ -76,12 +63,11 @@ export function reconcileAnchors(quiet: boolean, exclude?: string, managerNav = 
     }
     if (status.state === "template-absent") {
       if (!quiet) log.warn(`${status.addon}/${status.slug}: ${describeTarget(status)}`);
-      // Left non-fatal for repair/update, which run unattended and may catch
+      // Not logged as an error: repair and update run unattended and may catch
       // the panel mid-upgrade while cloudpanel.postinst has the app directory
-      // moved aside; the next periodic reconcile heals it. install/enable
-      // check this return value and abort, so a target whose template is
-      // simply absent on this panel build (wrong path, unsupported version)
-      // still surfaces as a failure there instead of a silent no-op.
+      // moved aside, and the next periodic reconcile heals it. install and
+      // enable abort on the return value, so a template absent on this panel
+      // build still fails there.
       if (injection.target.required) blocked = true;
       continue;
     }
@@ -108,10 +94,6 @@ export function reconcileNginx(quiet: boolean, enabled = true): boolean {
   return false;
 }
 
-/**
- * Every addon's marked block in a file CloudPanel owns, in while the addon is
- * enabled and out while it is not. False when one could not be put right.
- */
 export function reconcilePanelBlocks(quiet: boolean, enabled: (spec: AddonSpec) => boolean = addonEnabled): boolean {
   let ok = true;
   for (const spec of Object.values(ADDONS)) {

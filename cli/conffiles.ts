@@ -17,12 +17,10 @@ const STALE_MS = 6 * 60 * 60 * 1000;
 const UPGRADE_SERVICE = "apt-daily-upgrade.service";
 const COMMAND_MS = 30_000;
 
-
 type Run = (command: string, args: string[]) => CommandResult;
 
 const defaultRun: Run = (command, args) => runCommand(command, args, COMMAND_MS);
 
-/** Whether apt would upgrade the package that ships `path`. */
 export function upgradePending(path: string, run: Run = defaultRun): boolean {
   const owner = run("dpkg-query", ["-S", path]);
   if (!owner.ok) return false;
@@ -41,7 +39,6 @@ function edited(edit: ConffileEdit): boolean {
   catch { return false; }
 }
 
-/** The paths given back. The flag goes up first, so a watcher woken by the write leaves the file alone. */
 export function releaseConffiles(edits: ConffileEdit[], run: Run = defaultRun, flag = CONFFILES_RELEASED_FLAG): string[] {
   const due = edits.filter((edit) => edited(edit) && upgradePending(edit.path, run));
   if (due.length === 0) return [];
@@ -59,7 +56,6 @@ export function conffilesReleased(flag = CONFFILES_RELEASED_FLAG, run: Run = def
   let raised: number;
   try {
     const stat = lstatSync(flag);
-    // Only a flag this user raised counts.
     if (!stat.isFile() || stat.uid !== (process.geteuid?.() ?? 0)) return false;
     raised = stat.mtimeMs;
   } catch { return false; }
@@ -69,7 +65,6 @@ export function conffilesReleased(flag = CONFFILES_RELEASED_FLAG, run: Run = def
   return now - raised < STALE_MS;
 }
 
-/** Whether a release was outstanding; repair may run again either way. */
 export function endConffileRelease(flag = CONFFILES_RELEASED_FLAG): boolean {
   try { lstatSync(flag); }
   catch { return false; }

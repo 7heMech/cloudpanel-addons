@@ -213,8 +213,11 @@ function dnsPreviewReview(state: DnsState): DnsReview {
   };
 }
 
-/** Profiles and a mixed fleet. ?setup shows a first visit, ?empty a box with no sites. */
-/** ?setup shows a fresh box, ?discard-default a Don't send default, ?many enough sites for search and filter. */
+/**
+ * Profiles and a mixed fleet. ?setup shows a fresh box, ?empty a box with no
+ * sites, ?discard-default a Don't send default, ?many enough sites for search
+ * and filter.
+ */
 function smtpPreviewState(url: URL): SmtpState {
   const setup = url.searchParams.has("setup");
   const dontSend = { id: "dont-send", name: "Don't send", relay: null, sender: "noreply@{site}", sites: setup ? 0 : 1 };
@@ -379,13 +382,6 @@ function maintenancePreviewMutation(path: string, source: URL, body: Record<stri
   });
 }
 
-/**
- * The Staging tab's content for one site.
- *
- * Both ends of a clone, because the page answers two questions and a fixture
- * showing only one would hide half the view: `?staged-from=1` makes this site a
- * clone of another, which is what puts the Promote section on screen.
- */
 function previewSiteStaging(domain: string, siteType: string, url: URL): string {
   const base: JobView = {
     id: "preview-clone", kind: "clone", source: "", target: "", port: 0, state: "done",
@@ -399,7 +395,8 @@ function previewSiteStaging(domain: string, siteType: string, url: URL): string 
     { ...base, id: "preview-clone-1", source: domain, target: `stg.${domain}` },
     { ...base, id: "preview-clone-2", source: domain, target: `qa.${domain}`, state: "running", step: "copying files" },
   ];
-  // ?staged-from draws the site as a staging copy of live.example.com, promoted once.
+  // ?staged-from draws the site as a staging copy of live.example.com, promoted
+  // once, which puts the Promote section on screen.
   if (url.searchParams.has("staged-from")) {
     jobs.push({ ...base, id: "preview-clone-3", source: "live.example.com", target: domain, result: job.result });
     jobs.push({ ...base, id: "preview-promote-1", kind: "promote", source: domain, target: "live.example.com", createdAt: "2026-09-12T14:05:00Z" });
@@ -508,7 +505,6 @@ function resourceLimitsPreviewState(url: URL): ResourceLimitsState {
   };
 }
 
-/** The panel moved to 8.4 with an update waiting; `?off` is CloudPanel's own 8.1. */
 let panelPhpChoice: string | null = null;
 
 let systemTweaksPreview: SystemTweaksState | null = null;
@@ -525,15 +521,16 @@ function previewTheme(html: string, url: URL): string {
 }
 
 /**
- * ?updates=missing|outside|off|on picks how unattended-upgrades stands, and
- * ?guard=off shows the upload-progress mitigation opted out, and ?realip=off
- * leaves X-Real-IP trusted from any address, ?vhost=off leaves panel
- * input unchecked, and ?injected lists stored settings the guard would refuse. ?reboot switches automatic reboot
- * on, ?at=03:30 sets its time, and ?overdue dates the required reboot weeks back.
- * ?fail2ban=missing shows fail2ban not installed, ?bans=0 no blocked addresses, and ?nodomain no custom domain.
- * ?db=open|unknown|local|pending picks where MySQL listens (firewalled by default),
- * ?dbremote shows a client connected from elsewhere and ?dbroot root's default password.
- * ?locked shows root's lock, and ?locked=damaged a lock file that cannot be trusted.
+ * ?updates=missing|outside|off|on picks how unattended-upgrades stands,
+ * ?guard=off shows the upload-progress mitigation opted out, ?realip=off leaves
+ * X-Real-IP trusted from any address, ?vhost=off leaves panel input unchecked,
+ * and ?injected lists stored settings the guard would refuse. ?reboot switches
+ * automatic reboot on, ?at=03:30 sets its time, and ?overdue dates the required
+ * reboot weeks back. ?fail2ban=missing shows fail2ban not installed, ?bans=0 no
+ * blocked addresses, and ?nodomain no custom domain. ?db=open|unknown|local|pending
+ * picks where MySQL listens (firewalled by default), ?dbremote shows a client
+ * connected from elsewhere and ?dbroot root's default password. ?locked shows
+ * root's lock, and ?locked=damaged a lock file that cannot be trusted.
  */
 function databasePreviewState(url: URL): Exclude<SystemTweaksState["database"], { error: string }> {
   const db = url.searchParams.get("db");
@@ -734,6 +731,7 @@ function systemTweaksPreviewMutation(path: string, source: URL, body: Record<str
   return Response.json({ ok: true, html: systemTweaksDashboardView(state) });
 }
 
+/** The panel moved to 8.4 with an update waiting; `?off` is CloudPanel's own 8.1. */
 function panelPhpPreviewStatus(url: URL): PanelPhpStatus {
   const wanted = panelPhpChoice ?? (url.searchParams.has("off") ? "" : "8.4");
   return {
@@ -1229,7 +1227,6 @@ const TERMINAL_TRANSCRIPT = [
 
 /** What the next popup shows: `?state=ended|moved|reconnecting|refused` on the popup page sets it. */
 let terminalPreviewState = "";
-/** Whether the last popup opened was the root shell. */
 let terminalPreviewRoot = false;
 
 /**
@@ -2000,10 +1997,8 @@ const server = Bun.serve({
         csrf: "preview-csrf-token",
         version: "2.0.0",
       });
-      // ?confirm=<addon> opens the disable dialog on load. A modal only exists
-      // after a click, and the screenshot tool does not click; without this the
-      // one dialog an operator sees before turning an addon off cannot be
-      // reviewed the way every other view can.
+      // ?confirm=<addon> opens the disable dialog on load: a modal exists only
+      // after a click, which the screenshot tool does not make.
       const openDialog = url.searchParams.get("confirm");
       const body = previewTheme(await page.text(), url);
       if (!openDialog) return new Response(body, { headers: page.headers });
@@ -2093,11 +2088,10 @@ const server = Bun.serve({
       html = resourceLimitsLayout("Resource Limits", resourceLimitsDashboardView(phpChanges ?? resourceLimitsPreviewState(url)), notice)
         .replace("</body>", () => opener ? `<script>addEventListener("DOMContentLoaded",function(){${opener}})</script></body>` : "</body>");
     } else if (path === "/addons/dns/" || path === "/addons/dns") {
-      // ?dialog=profile|advanced|new|review|site|pending|choose|connection|mailcow|server|redirect|new-redirect|redirect-site|found opens
-      // that dialog on load; ?ask shows DNS
-      // before Automatic is turned on;
-      // ?at=<selector> hides the cards above that one, for a phone screenshot of something below the fold; ?dark
-      // draws the dark theme.
+      // ?dialog=profile|advanced|new|review|site|pending|choose|connection|mailcow|server|redirect|new-redirect|redirect-site|found
+      // opens that dialog on load; ?ask shows DNS before Automatic is turned on;
+      // ?at=<selector> hides the cards above that one, for a phone screenshot of
+      // something below the fold; ?dark draws the dark theme.
       const state = dnsPreviewState(url);
       const dialog = url.searchParams.get("dialog");
       const at = url.searchParams.get("at");

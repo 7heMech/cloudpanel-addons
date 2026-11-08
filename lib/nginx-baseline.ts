@@ -39,7 +39,6 @@ export function baselineFiles(stateDir: string, stem: string): BaselineFiles {
   };
 }
 
-/** The recorded text and its hash, or null when the record is missing or does not hash to itself. */
 export function readBaseline(files: BaselineFiles): { pristine: string; hash: string } | null {
   try {
     const pristine = readFileSync(files.pristine, "utf-8");

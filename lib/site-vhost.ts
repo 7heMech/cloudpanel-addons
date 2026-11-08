@@ -154,11 +154,7 @@ function storedRoot(panelDb: string, domain: string): string | undefined {
 
 const sqlLiteral = (value: string): string => `'${value.replaceAll("'", "''")}'`;
 
-/**
- * Writes `body` as the site's vhost, in the panel and on disk; nginx rejecting
- * it, or failing to reload, puts the old one back. `rootDirectory`, relative to
- * the site's `htdocs`, moves the site's root with it.
- */
+/** `rootDirectory`, relative to the site's `htdocs`, moves the site's root with it. */
 export function replaceSiteVhost(paths: SiteVhostPaths, domain: string, body: string, rootDirectory?: string): void {
   const conf = join(paths.nginxVhostDir, `${domain}.conf`);
   const stored = storedVhost(paths.panelDb, domain);

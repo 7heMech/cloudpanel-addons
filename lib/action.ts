@@ -24,8 +24,7 @@ export function failAction(message: string, data?: unknown): never {
 }
 
 function stripJsonControls(value: string): string {
-  // ESC and the other non-printing controls go; newline, tab and CR stay for
-  // JSON.stringify to escape.
+  // Newline, tab and CR stay: JSON.stringify escapes them.
   return value
     .replaceAll("\u001b", "")
     .replace(/[\u0000-\u0008\u000b\u000c\u000e-\u001f]/g, "");
@@ -57,18 +56,12 @@ export function emitActionError(addon: string, message: string, data?: unknown):
   process.stdout.write(`${actionErrorJson(message, data)}\n`);
 }
 
-/**
- * Report a failed action and return its exit code: a JSON reply on stdout and
- * the message on stderr, where the gateway's journal keeps it. With `emit`
- * false, as when repair runs a verb in-process, only the stderr line.
- */
 export function reportActionFailure(addon: string, error: unknown, emit = true, message = errorMessage(error)): 1 {
   if (emit) emitActionError(addon, message, error instanceof ActionFailure ? error.data : undefined);
   else process.stderr.write(`[${addon}] ERROR: ${message}\n`);
   return 1;
 }
 
-/** A verb's request body: at most `maxBytes`, and a JSON object. */
 export function parseJsonRequest(raw: string, maxBytes: number): Record<string, unknown> {
   if (Buffer.byteLength(raw, "utf8") > maxBytes) failAction("the request is too large");
   let parsed: unknown;
@@ -81,7 +74,6 @@ export function parseJsonRequest(raw: string, maxBytes: number): Record<string, 
   return parsed as Record<string, unknown>;
 }
 
-/** The request body passed in, or else stdin's, as `parseJsonRequest` reads it. */
 export async function readJsonRequest(input: string | undefined, maxBytes: number): Promise<Record<string, unknown>> {
   return parseJsonRequest(input ?? await Bun.stdin.text(), maxBytes);
 }
@@ -89,7 +81,6 @@ export async function readJsonRequest(input: string | undefined, maxBytes: numbe
 /** Returned by a verb that wrote its own replies, such as a stream of job snapshots. */
 export const REPLIED = Symbol("replied");
 
-/** Run one action verb to its JSON reply and exit code. */
 export async function replyToAction(addon: string, emit: boolean, run: () => unknown): Promise<number> {
   try {
     const data = await run();

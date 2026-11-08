@@ -1,5 +1,4 @@
-// The header control that opens a root shell, on CloudPanel's own pages and on
-// the manager's copy of its header alike. Terminal decides who sees it; see
+// Terminal decides who sees the root shell control; see
 // docs/decisions/terminal.md#root.
 import OPEN_JS from "./assets/terminal-open.client.js" with { type: "text" };
 import ROOT_SHELL_JS from "./assets/root-shell.client.js" with { type: "text" };

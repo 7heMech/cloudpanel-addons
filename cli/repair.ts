@@ -1,5 +1,3 @@
-// `clp-addons repair`.
-
 import { errorMessage } from "../lib/errors";
 import { enabledAddons, phpGuardOptedOut } from "../addons/catalog";
 import { resolveAddon, migrateOldAddonNames } from "./addons";
@@ -21,11 +19,6 @@ import { parseFlags } from "./flags";
 import { existsSync } from "node:fs";
 const PANEL_BLOCKS_NOT_READY = "a change to CloudPanel's Nginx settings is not ready; fix the problem above, then run repair again";
 
-/**
- * Reconciles manager provisioning and enabled addon state, or only injected
- * CloudPanel anchors, the Nginx proxy and System Tweaks' phpMyAdmin rules,
- * backup command and SSH login message when `--anchors-only` is supplied.
- */
 export async function cmdRepair(argv: string[]): Promise<void> {
   requireRoot("repair");
   const { positional, flags } = parseFlags(argv);
@@ -42,13 +35,12 @@ async function applyRepair(positional: string[], flags: Record<string, string | 
     return;
   }
   if (flags["anchors-only"] === true) {
-    // The watcher's fast path: reconcile only what this project injected into
-    // panel-owned files. The Nginx proxy belongs here as much as the Twig
-    // anchors do -- the vhost is owned by the panel user on the CloudPanel
-    // layout, so a panel action can drop the /addons/ block at any time, and
-    // waiting up to fifteen minutes for the timer would leave the manager
-    // unreachable in between. Both reconcilers no-op when nothing drifted, so
-    // this stays cheap enough to run on every template write during an upgrade.
+    // The watcher's fast path, for what this project injected into panel-owned
+    // files. The Nginx proxy belongs here as much as the Twig anchors: the
+    // panel user owns the vhost on the CloudPanel layout, so a panel action can
+    // drop the /addons/ block at any time, and waiting up to fifteen minutes for
+    // the timer would leave the manager unreachable in between. This runs on
+    // every template write during a CloudPanel upgrade.
     reconcileAnchors(quiet);
     if (!reconcilePanelBlocks(quiet)) log.err(PANEL_BLOCKS_NOT_READY);
     if (!reconcileNginx(quiet)) log.err("Nginx proxy is not ready; run repair after checking the master vhost");
@@ -59,7 +51,6 @@ async function applyRepair(positional: string[], flags: Record<string, string | 
     // An earlier version's PHP Resources change is not waited for here; the next repair moves it.
     migrateOldAddonNames(quiet, 0);
   } catch (error) {
-    // Upkeep of everything else does not wait on the move; the next repair tries it again.
     log.warn(`renamed addons were not moved yet: ${errorMessage(error)}`);
   }
   const specs = positional[0] ? [resolveAddon(positional[0])] : enabledAddons();
@@ -101,11 +92,10 @@ async function applyRepair(positional: string[], flags: Record<string, string | 
   if (!reconcilePanelBlocks(quiet)) log.err(PANEL_BLOCKS_NOT_READY);
   if (!reconcileNginx(quiet)) log.err("Nginx proxy is not ready; run repair after checking the master vhost");
   reconcilePhpGuard(true, quiet, { optedOut: phpGuardOptedOut() });
-  // Runs after the master-vhost reconciliation above, not before: recovering
-  // a carried-over vhost also does its own `nginx -t` before reloading, and
-  // skips the reload if that check fails. Running prune first, while the
-  // master vhost might still be broken, would leave a just-restored site
-  // vhost on disk but unloaded until the next 15-minute cycle.
+  // After the master-vhost reconciliation: recovering a carried-over vhost does
+  // its own `nginx -t` and skips the reload if that fails, so running this
+  // while the master vhost might still be broken would leave a just-restored
+  // site vhost on disk but unloaded until the next 15-minute cycle.
   await runAddonRepairs(all);
   runManagerRepair();
   if (!quiet) log.ok(`repair complete (${specs.map((spec) => spec.name).join(", ") || "no addon enabled"})`);

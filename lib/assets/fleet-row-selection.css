@@ -1,4 +1,3 @@
-/* Selectable site-table rows: the ones fleet-row-selection.client.js toggles. */
 .fleet-table tbody tr[aria-selected] { cursor: pointer; transition: background-color .15s, box-shadow .15s; }
 .fleet-table tbody tr[aria-selected]:hover { background: rgb(38 125 221 / 6%); }
 .fleet-table tbody tr[aria-selected="true"] { background: rgb(38 125 221 / 12%); box-shadow: inset 4px 0 var(--primary); }
