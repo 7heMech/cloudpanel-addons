@@ -13,6 +13,7 @@ import {
 } from "../addons/terminal/action";
 import { rootAuth, totp } from "../addons/terminal/root-auth";
 import { clearRootAuth, readRootGrants, rootAccess } from "../addons/terminal/root-access";
+import { rootShellScript } from "../lib/root-shell";
 import { TERMINAL_TARGETS } from "../addons/terminal/inject/targets";
 import { renderLayout } from "../lib/app-ui";
 import { ownerOf, TerminalSessions, type StreamOpener } from "../addons/terminal/app/sessions";
@@ -23,8 +24,9 @@ const base = realpathSync(mkdtempSync(`${tmpdir()}/terminal-root-`));
 let paths: TerminalActionPaths;
 const binding = "a".repeat(64);
 const authStorage = { dir: `${base}/box/auth`, lock: `${base}/locks/auth.lock`, securityKeys: `${base}/box/security-keys.conf` };
-function auth(verb: "options" | "verify" | "consume", input: Record<string, unknown> = {}, now = Date.now(), session = binding) {
-  return rootAuth(verb, "alice", "1", session, input, paths.rootAccess, now, authStorage) as any;
+/** `seen`, when the gateway first saw the session signed in, defaults to long ago. */
+function auth(verb: "options" | "verify" | "consume", input: Record<string, unknown> = {}, now = Date.now(), session = binding, seen: number | null = 1) {
+  return rootAuth(verb, "alice", { proof: "1", binding: session, seen }, input, paths.rootAccess, now, authStorage) as any;
 }
 /** The code the app shows one step after a prompt opened at `opened`, entered then. */
 function nextCode(opened: number, secret = SECRET) {
@@ -268,20 +270,30 @@ test("the header control is in both of CloudPanel's headers and the addons' own,
   expect(headers.map((target) => target.template)).toEqual([
     "Frontend/Partial/header.html.twig", "Admin/Partial/header.html.twig",
     "Frontend/Partial/header.html.twig", "Admin/Partial/header.html.twig",
+    "Frontend/Partial/header.html.twig", "Admin/Partial/header.html.twig",
   ]);
   for (const target of headers) {
     const snippet = target.snippet("/addons/terminal");
     expect(snippet).toContain("{% if is_granted('ROLE_ADMIN') %}");
-    expect(snippet).toContain('data-clp-root-shell style="display: none;"');
-    // The account menu's copy, for phones, rides on the header item's script.
-    if (target.slug.endsWith("-menu")) expect(snippet).toContain('<a class="dropdown-item" href="/addons/terminal/root"');
-    else expect(snippet).toContain('fetch("/addons/terminal/api/root-access"');
+    // The account menu's copy, and the one at the end of the row under the
+    // logo, ride on the header item's script.
+    if (target.slug.endsWith("-menu")) {
+      expect(snippet).toContain('data-clp-root-shell style="display: none;"');
+      expect(snippet).toContain('<a class="dropdown-item" href="/addons/terminal/root"');
+    } else if (target.slug.endsWith("-nav")) {
+      expect(snippet).toContain('<a class="clp-root-shell-nav" data-clp-root-shell hidden href="/addons/terminal/root"');
+      expect(snippet).toContain("&gt;_</span>Root</a>");
+    } else {
+      expect(snippet).toContain('data-clp-root-shell style="display: none;"');
+      expect(snippet).toContain('fetch("/addons/terminal/api/root-access"');
+    }
     // Twig would read these as its own tags.
     expect(snippet.replace("{% if is_granted('ROLE_ADMIN') %}", "").replace("{% endif %}", "")).not.toMatch(/\{[{%#]/);
   }
   const page = renderLayout("Terminal", "", { base: "/addons/terminal", script: "" });
   expect(page).toContain('id="clp-root-shell" data-clp-root-shell hidden');
-  expect(page).toContain('class="clp-root-shell-menu" data-clp-root-shell hidden');
+  expect(page).toContain('class="clp-addon-primary-link clp-root-shell-nav" data-clp-root-shell hidden');
+  expect(page).not.toContain("clp-root-shell-menu");
   expect(renderLayout("Terminal", "", { base: "/addons/terminal", script: "", admin: false })).not.toContain("data-clp-root-shell");
 });
 
@@ -301,14 +313,62 @@ test("a root access check that fails says so, rather than that root never allowe
   try {
     const { handle } = await import("../addons/terminal/app/index");
     const ask = async () => (await (await handle(new Request("http://x/api/root-access", { headers: { cookie: "cloudpanel=abcdef0123456789abcdef01" } }),
-      "/api/root-access", null, undefined, { user: "carol", roles: ["ROLE_ADMIN"] })).json() as { data: { granted: boolean; problem: string | null } }).data;
+      "/api/root-access", null, undefined, { user: "carol", roles: ["ROLE_ADMIN"] })).json() as { data: { granted: boolean; problem: string | null; unreadable?: true } }).data;
     expect(await ask()).toEqual({ granted: false, problem: "Root terminal access could not be checked: gateway unavailable" });
     // Neither failure is cached: each next look asks again.
-    expect((await ask()).problem).toContain("cannot be read");
+    // Root's own read that failed says so, which the header takes as no answer.
+    expect(await ask()).toEqual({ granted: true, problem: "CloudPanel's user list cannot be read: database is locked", unreadable: true });
     expect(await ask()).toEqual({ granted: true, problem: null });
   } finally {
     mock.module("../lib/gateway-client", () => realGateway);
   }
+});
+
+test("the header keeps the tab's grant through a check that could not read, and drops it on a refusal", async () => {
+  const run = async (stored: string | null, reply: unknown) => {
+    const items = [{ hidden: true, style: { display: "none" } }];
+    const store = new Map<string, string>(stored === null ? [] : [["clp-root-shell", stored]]);
+    const sessionStorage = {
+      getItem: (key: string) => store.get(key) ?? null,
+      setItem: (key: string, value: string) => void store.set(key, value),
+      removeItem: (key: string) => void store.delete(key),
+    };
+    const document = { readyState: "complete", querySelector: () => items[0], querySelectorAll: () => items, addEventListener: () => {} };
+    const fetch = async () => reply instanceof Error ? Promise.reject(reply) : { ok: true, json: async () => reply };
+    new Function("document", "sessionStorage", "fetch", rootShellScript("/addons/terminal"))(document, sessionStorage, fetch);
+    await Bun.sleep(0);
+    return { shown: !items[0]!.hidden, remembered: store.has("clp-root-shell") };
+  };
+  const unreadable = { ok: true, data: { granted: true, problem: "CloudPanel's user list cannot be read: database is locked", unreadable: true } };
+  expect(await run("1", unreadable)).toEqual({ shown: true, remembered: true });
+  expect(await run(null, unreadable)).toEqual({ shown: false, remembered: false });
+  expect(await run(null, { ok: true, data: { granted: true, problem: null } })).toEqual({ shown: true, remembered: true });
+  expect(await run("1", { ok: true, data: { granted: true, problem: "This passkey is no longer on your account." } })).toEqual({ shown: false, remembered: false });
+  expect(await run("1", { ok: true, data: { granted: false, problem: null } })).toEqual({ shown: false, remembered: false });
+  // A request that fails can be a session that signed out, so the grant goes.
+  expect(await run("1", new Error("offline"))).toEqual({ shown: false, remembered: false });
+});
+
+test("signing out forgets the tab's grant, so the next account starts from its own answer", async () => {
+  const store = new Map<string, string>([["clp-root-shell", "1"]]);
+  const sessionStorage = {
+    getItem: (key: string) => store.get(key) ?? null,
+    setItem: (key: string, value: string) => void store.set(key, value),
+    removeItem: (key: string) => void store.delete(key),
+  };
+  const clicks: ((event: unknown) => void)[] = [];
+  const items = [{ hidden: true, style: { display: "none" } }];
+  const document = {
+    readyState: "complete", querySelector: () => items[0], querySelectorAll: () => items,
+    addEventListener: (type: string, handler: (event: unknown) => void) => { if (type === "click") clicks.push(handler); },
+  };
+  const fetch = () => new Promise(() => {});
+  new Function("document", "sessionStorage", "fetch", rootShellScript("/addons/terminal"))(document, sessionStorage, fetch);
+  const link = (href: string) => ({ target: { closest: (selector: string) => selector === 'a[href$="/logout"]' && href.endsWith("/logout") ? {} : null } });
+  for (const handler of clicks) handler(link("/sites"));
+  expect(store.has("clp-root-shell")).toBe(true);
+  for (const handler of clicks) handler(link("/logout"));
+  expect(store.has("clp-root-shell")).toBe(false);
 });
 
 test("a passkey sign-in opens it with a key the account had when root allowed it, and not with a later one", () => {
@@ -349,20 +409,53 @@ test("expired tickets and challenges, replayed codes and revoked grants are refu
   change("UPDATE user SET mfa = 0 WHERE user_name = 'alice'");
   expect(() => auth("consume", { ticket: proof })).toThrow("needs 2FA");
 });
-test("only a code from after the prompt opened counts, and an older one spends nothing", () => {
+test("the code showing counts at once, unless the session signed in with it", () => {
   change(`UPDATE user SET mfa_secret = '${SECRET}' WHERE user_name = 'alice'`);
   allow("alice");
   const now = Date.now();
   const step = Math.floor(now / 30000);
-  // The code used to sign in, or any other showing when the prompt opened, is refused, however often.
-  for (let i = 0; i < 6; i++) {
-    for (const n of [step - 1, step]) {
-      expect(() => auth("verify", { ...auth("options", {}, now), code: totp(SECRET, n) }, now)).toThrow("Enter the next code");
+  // Signed in long ago: the code the app shows now works on a prompt that just opened.
+  expect(auth("verify", { ...auth("options", {}, now), code: totp(SECRET, step) }, now).ticket).toBeString();
+  clearRootAuth("alice", authStorage);
+  // Signed in just now: any code CloudPanel could have taken, up to two steps ahead, is refused, however often.
+  for (let i = 0; i < 3; i++) {
+    for (const n of [step - 1, step, step + 1]) {
+      expect(() => auth("verify", { ...auth("options", {}, now, binding, now), code: totp(SECRET, n) }, now, binding, now)).toThrow("the one you signed in with");
     }
   }
-  // Not one of those spent the budget: the next code still works.
-  const next = nextCode(now);
-  expect(auth("verify", { ...auth("options", {}, now), code: next.code }, next.at).ticket).toBeString();
+  // Not one of those spent the budget: a code from three steps on works once it shows.
+  const later = (step + 3) * 30000;
+  expect(auth("verify", { ...auth("options", {}, later, binding, now), code: totp(SECRET, step + 3) }, later, binding, now).ticket).toBeString();
+  expect(() => auth("verify", { ...auth("options", {}, later, binding, now), code: totp(SECRET, step + 3) }, later, binding, now)).toThrow("used already");
+});
+test("without the gateway's sighting, the prompt's opening stands in for the sign-in", () => {
+  change(`UPDATE user SET mfa_secret = '${SECRET}' WHERE user_name = 'alice'`);
+  allow("alice");
+  const now = Date.now();
+  const step = Math.floor(now / 30000);
+  const { challenge } = auth("options", {}, now, binding, null);
+  expect(() => auth("verify", { challenge, code: totp(SECRET, step + 1) }, now + 30000, binding, null)).toThrow("signed in with");
+  const later = (step + 3) * 30000;
+  expect(auth("verify", { ...auth("options", {}, now, binding, null), code: totp(SECRET, step + 3) }, later, binding, null).ticket).toBeString();
+  // A prompt opened before the session signed in again on the same id does not vouch for that sign-in's code.
+  const opened = auth("options", {}, later + 30000, binding, 1);
+  const again = later + 150_000;
+  expect(() => auth("verify", { ...opened, code: totp(SECRET, Math.floor(again / 30000)) }, again, binding, again)).toThrow("signed in with");
+});
+
+test("without a sighting, a retry after a wrong code keeps the first prompt's opening", () => {
+  change(`UPDATE user SET mfa_secret = '${SECRET}' WHERE user_name = 'alice'`);
+  allow("alice");
+  const step = Math.floor(Date.now() / 30000);
+  const t0 = step * 30000;
+  const first = auth("options", {}, t0, binding, null);
+  expect(() => auth("verify", { ...first, code: "000000" }, t0 + 1000, binding, null)).toThrow();
+  // The popup opens a fresh prompt two steps later; a code from three steps after the first still counts.
+  const retry = auth("options", {}, t0 + 60_000, binding, null);
+  expect(auth("verify", { ...retry, code: totp(SECRET, step + 3) }, (step + 3) * 30000, binding, null).ticket).toBeString();
+  // Verified, the next prompt opens afresh.
+  const next = auth("options", {}, (step + 4) * 30000, binding, null);
+  expect(() => auth("verify", { ...next, code: totp(SECRET, step + 5) }, (step + 5) * 30000, binding, null)).toThrow("signed in with");
 });
 
 test("five wrong codes throttle the account across sessions; malformed ones do not count", () => {

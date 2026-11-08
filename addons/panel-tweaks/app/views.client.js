@@ -4,6 +4,13 @@ async function setTweak(input) {
   const wanted = input.checked;
   clearNotice();
   busy(true);
+  // A Sites page draws from its tab's last reply until the next one lands, and
+  // that one was given under the old switches. Moving the revision every tab
+  // shares tells each one its copy is out of date. Moved before the save, so a
+  // save that half fails moves it too, and again after it, so a Sites page
+  // that loaded during the save does not keep the old switches as current.
+  const moveRevision = () => { try { localStorage.setItem('clp_tweaks_rev', String(Date.now())); } catch (e) {} };
+  moveRevision();
   try {
     const reply = await call('/api/tweaks', {
       method: 'POST',
@@ -34,6 +41,8 @@ async function setTweak(input) {
       busy(false);
     }
     notify(error.message, 'error');
+  } finally {
+    moveRevision();
   }
 }
 

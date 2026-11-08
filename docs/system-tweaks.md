@@ -153,6 +153,23 @@ A panel behind Cloudflare keeps its visitors' addresses. Switch the setting off
 only if a load balancer or proxy other than Cloudflare, on a public address,
 sits in front of this server or its panel.
 
+## Cloudflare visitor IPs
+
+**Cloudflare visitor IPs** is on by default. Sites behind Cloudflare's proxy or a
+Cloudflare Tunnel on this server get the visitor's IP in their access logs and
+in PHP, from `CF-Connecting-IP`. The header is believed only from Cloudflare and
+from the tunnel, so nobody else can set it. Visitors coming through a tunnel
+can no longer set their IP with `X-Real-IP`. Point the tunnel at port 80 or 443
+on this server: a tunnel to a site's port 8080 skips CloudPanel's front server,
+and its visitors can still set their IP.
+
+Error logs, **Allow traffic from Cloudflare only**, and CloudPanel's blocked IPs
+and basic-auth allowlist still see the connecting address: Cloudflare's, the
+tunnel's, or a direct visitor's own. In a site's `listen 8080` server block that
+address is now `127.0.0.1` for every visitor, so keep any rule you add to the
+vhost by address, such as `allow`, `deny` or a rate limit, in the first server
+block.
+
 ## phpMyAdmin
 
 **Lock down phpMyAdmin** is on by default. CloudPanel's own basic auth for the

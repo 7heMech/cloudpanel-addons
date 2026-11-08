@@ -36,6 +36,9 @@
   var desktopSite = document.documentElement.classList.contains("clp-tweaks-desktop-site");
   var NARROW_QUERY = SITES_MOBILE_JSON && !desktopSite ? "(max-width: 1100px)" : "not all";
   var COLUMNS_ON = SITES_TABLE_JSON;
+  // The tab's copy of the last reply; see start(). Panel Tweaks' own preview
+  // is where the switches change, so it draws from each reply and keeps no copy.
+  var PANEL_KEY = SITES_PREVIEW_JSON ? null : "clp_tweaks_panel";
   var columnStyle = null;
   var tagged = false;
   var chosen = {};
@@ -159,10 +162,111 @@
       });
     });
 
-    wanted.then(function (payload) {
-      if (!payload || payload.ok !== true || !payload.data) return noToolbar();
-      apply(payload.data, rows);
+    // The reply comes after the page is first drawn, so the table was drawn as
+    // the panel's and redrawn with these columns a frame later. The tab keeps
+    // the last reply, cut to the sites it showed, and a table of the same
+    // sites is drawn from it before the first paint; the reply then corrects
+    // whatever has changed since. Another account's table, or another set of
+    // sites, is not drawn from it.
+    // Drawn from at the end of start(), once the tables below are assigned;
+    // the reply is never handled before then.
+    var shown = null;
+    // Signing out leaves the tab, so it leaves nothing of the account in it.
+    document.addEventListener("click", function (event) {
+      var link = event.target && event.target.closest ? event.target.closest('a[href$="/logout"]') : null;
+      if (link) forgetPanel();
     });
+    wanted.then(function (payload) {
+      if (!payload || payload.ok !== true || !payload.data) {
+        forgetPanel();
+        return shown ? undefined : noToolbar();
+      }
+      var fresh = cutToRows(payload.data, rows);
+      storePanel(fresh);
+      if (!shown) return apply(fresh, rows);
+      if (JSON.stringify(fresh) === JSON.stringify(shown)) return;
+      var was = shown.tweaks || {};
+      var now = fresh.tweaks || {};
+      // Other switches mean other columns and toolbar: the page is drawn again
+      // from the copy just stored, which has them. The facts in the cells are
+      // corrected in place.
+      if (Boolean(was.sitesTable) === Boolean(now.sitesTable) && Boolean(was.diskUsage) === Boolean(now.diskUsage)) {
+        refresh(fresh, rows);
+      } else {
+        window.location.reload();
+      }
+    });
+
+    function cutToRows(data, rows) {
+      var wantedDomains = {};
+      for (var i = 0; i < rows.length; i++) wantedDomains[rows[i].domain] = true;
+      var sites = [];
+      for (var s = 0; s < (data.sites || []).length; s++) {
+        if (wantedDomains[data.sites[s].domain]) sites.push(data.sites[s]);
+      }
+      return { tweaks: data.tweaks || {}, sites: sites };
+    }
+
+    function storedPanel(rows) {
+      var stored = null;
+      if (!PANEL_KEY) return null;
+      try { stored = JSON.parse(window.sessionStorage.getItem(PANEL_KEY) || "null"); } catch (error) { return null; }
+      if (!stored || !stored.tweaks || !stored.sites || stored.sites.length !== rows.length) return null;
+      // Saving a switch on the addon's page, in any tab, moves the revision
+      // every tab shares, and a copy taken before it would draw the old
+      // switches' columns and toolbar.
+      if (stored.rev !== switchesRevision()) return null;
+      var have = {};
+      for (var s = 0; s < stored.sites.length; s++) have[stored.sites[s].domain] = true;
+      for (var r = 0; r < rows.length; r++) if (!have[rows[r].domain]) return null;
+      // As cutToRows() gives it, so a reply with nothing new compares equal.
+      return { tweaks: stored.tweaks, sites: stored.sites };
+    }
+
+    function switchesRevision() {
+      try { return window.localStorage.getItem("clp_tweaks_rev") || ""; } catch (error) { return ""; }
+    }
+
+    function storePanel(data) {
+      var copy = { rev: switchesRevision(), tweaks: data.tweaks, sites: data.sites };
+      if (PANEL_KEY) try { window.sessionStorage.setItem(PANEL_KEY, JSON.stringify(copy)); } catch (error) {}
+    }
+
+    function forgetPanel() {
+      if (PANEL_KEY) try { window.sessionStorage.removeItem(PANEL_KEY); } catch (error) {}
+    }
+
+    // The same cells, built again from the reply, where the stored copy had
+    // them; the columns, toolbar and menus stay as they were built.
+    function refresh(data, rows) {
+      var byDomain = {};
+      for (var i = 0; i < data.sites.length; i++) byDomain[data.sites[i].domain] = data.sites[i];
+      for (var r = 0; r < rows.length; r++) {
+        var row = rows[r];
+        row.site = byDomain[row.domain] || null;
+        var builders = {
+          ssl: function () { return sslCell(row.site, row.domain); },
+          runtime: function () { return runtimeCell(row.site); },
+          disk: function () { return diskCell(row.site); },
+          created: function () { return createdCell(row.site); },
+          cloudflare: function () { return switchCell("Cloudflare", "cloudflare", row.site && row.site.cloudflareOnly); },
+          varnish: function () { return switchCell("Varnish", "varnish", row.site && row.site.varnish); }
+        };
+        for (var key in builders) {
+          var current = row.el.querySelector('td[data-col="' + key + '"]');
+          if (current) current.replaceWith(builders[key]());
+        }
+      }
+      nameApplications(rows);
+      copyDetails(rows);
+      placeTypes(rows);
+      // The applications, the search and the sort chosen so far follow the new cells.
+      if (refilter) refilter();
+      if (resort) resort();
+    }
+
+    var refilter = null;
+    var resort = null;
 
     function apply(data, rows) {
       var tweaks = data.tweaks || {};
@@ -556,7 +660,23 @@
       var menu = document.getElementById("clp-tweaks-columns-menu");
       if (!holder || !button || !menu) return;
 
+      var count = document.getElementById("clp-tweaks-columns-count");
       var boxes = [];
+      // Domain and Action are always shown; they are listed so the menu
+      // accounts for every column, but cannot be turned off.
+      function locked(text) {
+        var label = document.createElement("label");
+        label.className = "clp-tweaks-locked";
+        label.title = text + " is always shown";
+        var box = document.createElement("input");
+        box.type = "checkbox";
+        box.checked = true;
+        box.disabled = true;
+        label.appendChild(box);
+        label.appendChild(document.createTextNode(text));
+        return label;
+      }
+      menu.appendChild(locked("Domain"));
       for (var i = 0; i < COLUMNS.length; i++) {
         var column = COLUMNS[i];
         if (column.key === "disk" && !withDisk) continue;
@@ -571,6 +691,37 @@
         boxes.push(box);
         bindBox(box, column.key);
       }
+      menu.appendChild(locked("Action"));
+      var reset = document.createElement("button");
+      reset.type = "button";
+      reset.className = "clp-tweaks-columns-reset";
+      reset.textContent = "Reset to default";
+      menu.appendChild(reset);
+      // The default is the screen's, as for a browser that never chose.
+      reset.addEventListener("click", function () {
+        var narrow = narrowNow();
+        try { window.localStorage.removeItem(storeKey(narrow)); } catch (e) {}
+        repaint(readChoice(narrow));
+      });
+
+      function paintCount() {
+        if (!count) return;
+        var on = 0;
+        for (var b = 0; b < boxes.length; b++) if (boxes[b].checked) on++;
+        count.textContent = on + "/" + boxes.length;
+        button.setAttribute("aria-label", "Columns, " + on + " of " + boxes.length + " shown");
+      }
+      paintCount();
+
+      function repaint(picked) {
+        chosen = picked;
+        for (var b = 0; b < boxes.length; b++) {
+          boxes[b].checked = chosen[boxes[b].getAttribute("data-column")] !== false;
+        }
+        paintColumns(chosen);
+        placeTypes(rows);
+        paintCount();
+      }
 
       function bindBox(box, key) {
         box.addEventListener("change", function () {
@@ -578,6 +729,7 @@
           writeChoice(narrowNow(), chosen);
           paintColumns(chosen);
           placeTypes(rows);
+          paintCount();
         });
       }
 
@@ -610,14 +762,7 @@
       // different answer, so the other one is read back and the boxes follow.
       if (window.matchMedia) {
         var query = window.matchMedia(NARROW_QUERY);
-        var moved = function () {
-          chosen = readChoice(query.matches);
-          for (var b = 0; b < boxes.length; b++) {
-            boxes[b].checked = chosen[boxes[b].getAttribute("data-column")] !== false;
-          }
-          paintColumns(chosen);
-          placeTypes(rows);
-        };
+        var moved = function () { repaint(readChoice(query.matches)); };
         if (query.addEventListener) query.addEventListener("change", moved);
         else if (query.addListener) query.addListener(moved);
       }
@@ -801,10 +946,16 @@
     function addCount(rows) {
       var heading = document.querySelector(".page-title h1");
       if (!heading) return;
+      var pill = document.createElement("span");
+      pill.className = "clp-tweaks-count";
+      // Its own box, trimmed to the digits, so they sit in the middle whatever the font.
       counter = document.createElement("span");
-      counter.className = "clp-tweaks-count";
       counter.textContent = String(rows.length);
-      heading.appendChild(counter);
+      pill.appendChild(counter);
+      heading.appendChild(pill);
+      // The count says what the summary would, so that is left to screen readers.
+      var summary = document.getElementById("clp-tweaks-summary");
+      if (summary) summary.classList.add("clp-tweaks-spoken");
     }
 
     function paintCount(shown, total) {
@@ -819,26 +970,39 @@
 
     // --- search and filter -----------------------------------------------
 
+
     function buildToolbar(rows) {
       var search = document.getElementById("clp-tweaks-search");
       var picker = document.getElementById("clp-tweaks-type");
       if (!search || !picker) return;
+      // With a mouse, the filter's list is drawn like the Columns menu
+      // (sites.css), and it is held at its widest option as the options below
+      // arrive; see select-width.client.js, which targets.ts puts ahead of
+      // this script.
+      clpHoldSelectWidths(picker.parentNode);
 
-      var seen = {};
-      var kinds = [];
-      for (var i = 0; i < rows.length; i++) {
-        var label = applicationName(rows[i].site);
-        if (!label || seen[label]) continue;
-        seen[label] = true;
-        kinds.push(label);
+      // Again when a reply corrects the cells, keeping the choice while it is still offered.
+      function fillKinds() {
+        var chosen = picker.value;
+        var seen = {};
+        var kinds = [];
+        for (var i = 0; i < rows.length; i++) {
+          var label = applicationName(rows[i].site);
+          if (!label || seen[label]) continue;
+          seen[label] = true;
+          kinds.push(label);
+        }
+        kinds.sort();
+        for (var o = picker.options.length - 1; o >= 0; o--) if (picker.options[o].value) picker.remove(o);
+        for (var k = 0; k < kinds.length; k++) {
+          var option = document.createElement("option");
+          option.value = kinds[k];
+          option.textContent = kinds[k];
+          picker.appendChild(option);
+        }
+        picker.value = seen[chosen] ? chosen : "";
       }
-      kinds.sort();
-      for (var k = 0; k < kinds.length; k++) {
-        var option = document.createElement("option");
-        option.value = kinds[k];
-        option.textContent = kinds[k];
-        picker.appendChild(option);
-      }
+      fillKinds();
 
       var empty = document.createElement("div");
       empty.className = "clp-tweaks-empty";
@@ -863,6 +1027,7 @@
 
       search.addEventListener("input", filter);
       picker.addEventListener("change", filter);
+      refilter = function () { fillKinds(); filter(); };
       toolbar.hidden = false;
       paintCount(rows.length, rows.length);
     }
@@ -894,10 +1059,14 @@
 
       function bind(th, index) {
         function run() {
-          var numeric = th.hasAttribute("data-numeric");
           var direction = order[index] === "asc" ? "desc" : "asc";
           order = {};
           order[index] = direction;
+          sortBy(direction);
+          resort = function () { sortBy(direction); };
+        }
+        function sortBy(direction) {
+          var numeric = th.hasAttribute("data-numeric");
           var sign = direction === "asc" ? 1 : -1;
           var sorted = rows.slice().sort(function (a, b) {
             var left = sortKey(a, index, numeric);
@@ -924,6 +1093,9 @@
         });
       }
     }
+
+    shown = storedPanel(rows);
+    if (shown) apply(shown, rows);
   }
 
   if (document.readyState === "loading") document.addEventListener("DOMContentLoaded", start, { once: true });

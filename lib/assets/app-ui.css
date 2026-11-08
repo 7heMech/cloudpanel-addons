@@ -1,6 +1,8 @@
 
 :root {
   color-scheme: light;
+  /* The check a chosen option is marked with, as a mask painted in its colour. */
+  --clp-check: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'%3E%3Cpath fill='none' stroke='%23000' stroke-width='1.8' stroke-linecap='round' stroke-linejoin='round' d='M3.5 8.4l3 3 6-6.2'/%3E%3C/svg%3E");
   --clp-addon-font-family: "Helvetica Neue", "Segoe UI", Helvetica, Arial, sans-serif;
   --bg: #f9fafb; --panel: #fff; --surface: #fbfcfc;
   --border: #e2e2e2; --card-border: #00000020; --row-border: #eaeaea;
@@ -48,6 +50,12 @@ h2, h3 { font-size: 18px; }
   padding: 20px 0 0 20px; margin-right: 20px; border-right: 1px solid var(--row-border); }
 .clp-addon-logo { display: block; flex: 0 0 auto; width: 155px; height: 31px; }
 .clp-addon-logo-dark { display: none; }
+/* The panel's logo files draw the words black and blue, or both white. The
+   page's own font settings stay out of them, as they would out of an image. */
+.clp-addon-logo-panel text { font-weight: 400; font-style: normal; letter-spacing: normal; word-spacing: normal; }
+.clp-addon-logo-panel .clp-logo-cloud { fill: #000; }
+.clp-addon-logo-panel .clp-logo-panel { fill: #0178d4; }
+html.dark .clp-addon-logo-panel text { fill: #fff; }
 html.dark .clp-addon-logo-light { display: none; }
 html.dark .clp-addon-logo-dark { display: block; }
 .clp-addon-brand picture { min-width: 0; }
@@ -71,13 +79,24 @@ html.dark .clp-addon-logo-dark { display: block; }
   justify-content: center; gap: 5px; font: inherit; white-space: nowrap; }
 .clp-addon-tool:hover { color: var(--accent); text-decoration: none; }
 .clp-addon-tool > svg { width: 20px; height: 20px; flex: 0 0 auto; }
-/* The panel's own markup leaves a newline between its icon and its label, and
-   between its avatar and its caret, which renders as a space; a flex row throws
-   whitespace between its items away, so the gap carries it instead. */
-#clp-admin-area { gap: 10px; }
 #clp-admin-area > svg { width: 26px; height: 26px; }
 #theme-switch .sun { display: none; }
-html.dark #theme-switch .sun { display: block; }
+html.dark #theme-switch .sun { display: inline; }
+/* A desktop lays the tools out as the panel does, on a 75px line with each icon
+   at vertical-align: middle and the panel's own nudges, rather than centred in
+   a flex box: the panel's icons sit where the font's x-height puts them, so
+   only the same layout puts these at the same place under every font. The
+   label carries the panel's space before it: shaped apart from the words, the
+   space rounds on its own and the cell comes out a sixty-fourth wider, enough
+   to move its divider a pixel. */
+@media (min-width: 941px) {
+  .clp-addon-tool { display: block; line-height: 75px; }
+  .clp-addon-tool > svg, #clp-account-button > .clp-addon-avatar { vertical-align: middle; }
+  #theme-switch > svg { margin-top: -2px; }
+  #clp-admin-area > svg { margin: -3px 5px 0 0; }
+  #clp-root-shell > .clp-root-shell-mark { margin-right: 6px; }
+  #clp-account-button::after { vertical-align: .255em; }
+}
 html.dark #theme-switch .moon { display: none; }
 /* The account control is the panel's: an avatar, a caret, and a menu of the two
    links its own dropdown carries. */
@@ -86,15 +105,23 @@ html.dark #theme-switch .moon { display: none; }
 /* The same triangle Bootstrap draws for the panel's own avatar, built the same
    way rather than approximated, so the two sit at the same offset. */
 #clp-account-button::after { content: ""; display: inline-block; border-top: 4px solid;
-  border-right: 4px solid transparent; border-left: 4px solid transparent; margin-left: 9px; }
+  border-right: 4px solid transparent; border-left: 4px solid transparent; margin-left: 4px; }
 #clp-account-button > .clp-addon-avatar { width: 35px; height: 35px; border-radius: 50%; }
 .clp-addon-account-menu { position: absolute; top: 100%; right: 6px; z-index: 30; min-width: 160px;
   padding: 6px 0; background: var(--panel); border: 1px solid var(--border); border-radius: 6px;
   box-shadow: 0 8px 28px rgb(0 0 0 / 16%); text-align: left; }
 .clp-addon-account-menu > a { display: block; padding: 9px 18px; color: var(--text); white-space: nowrap; }
-/* A phone has the root shell control here rather than in the header row. */
-@media not all and (max-width: 760px) { .clp-addon-account-menu > a.clp-root-shell-menu { display: none; } }
-@media (max-width: 760px) { #clp-root-shell { display: none; } }
+/* A phone has the root shell control at the end of the navigation row instead
+   of in the header row, which has no room for a fourth tool beside the logo. */
+.clp-addon-primary-nav > .clp-root-shell-nav { display: none; }
+@media (max-width: 760px) {
+  #clp-root-shell { display: none; }
+  /* Pinned to the end and drawn over the links, so a row that scrolls keeps it
+     in view; the divider says it is not another page. */
+  .clp-addon-primary-nav > .clp-root-shell-nav:not([hidden]) { display: flex; gap: 8px; margin-left: auto;
+    position: sticky; right: 0; padding: 0 16px; border-left: 1px solid var(--border);
+    background: var(--header-bg); font-size: 15px; font-weight: 400; }
+}
 .clp-addon-account-menu > a:hover { background: var(--row-hover, rgb(127 143 153 / 14%)); text-decoration: none; }
 main { width: 100%; max-width: 1200px; margin: 0 auto; padding: 25px 12px 40px; flex: 1; min-width: 0; }
 /* The strip scrolls when the tabs outgrow it, but never shows a bar: overflow-x
@@ -205,6 +232,31 @@ select {
   background-size: 16px 16px; padding-right: 40px; cursor: pointer;
 }
 input::placeholder, textarea::placeholder { color: var(--muted); opacity: 1; }
+/* With a mouse, the list a select opens is drawn like the filter menus: the
+   chosen option tinted and checked at the end of its row. Its button keeps the
+   chevron above, so the browser's own is dropped. A phone keeps its own
+   picker, which is the better one there, as do browsers that cannot style the
+   list. */
+@supports (appearance: base-select) {
+  @media (hover: hover) and (pointer: fine) {
+    select, select::picker(select) { appearance: base-select; }
+    select { display: inline-flex; align-items: center; }
+    select::picker-icon { display: none; }
+    select::picker(select) { min-width: anchor-size(width); max-height: min(60vh, 420px); margin: 4px 0; padding: 6px 0;
+      background: var(--panel); color: var(--text); border: 1px solid var(--border); border-radius: 4px;
+      box-shadow: 0 6px 18px rgb(0 0 0 / 14%); font-weight: 400; }
+    select option { display: flex; align-items: center; gap: 10px; padding: 7px 16px; font-size: 15px; white-space: nowrap; cursor: pointer; }
+    select option:hover, select option:focus-visible { background: var(--surface); outline: 0; }
+    select option:checked { background: rgb(38 125 221 / 10%); }
+    select option:focus-visible { box-shadow: inset 0 0 0 2px var(--accent); }
+    select option::checkmark { order: 1; flex: 0 0 16px; height: 16px; margin-left: auto; content: ""; background: var(--primary);
+      -webkit-mask: var(--clp-check) center / 16px no-repeat; mask: var(--clp-check) center / 16px no-repeat; }
+    select option:disabled { color: var(--muted); cursor: default; }
+    select option:disabled:hover { background: none; }
+    select option:disabled:checked { background: none; }
+    select option:disabled::checkmark { visibility: hidden; }
+  }
+}
 input:read-only:not([type="checkbox"]) { background: var(--readonly-bg); }
 input:focus, select:focus, textarea:focus { border-color: #86b7fe; box-shadow: 0 0 0 3px rgb(38 125 221 / 15%); outline: 0; }
 .check-field { margin-top: 24px; }
@@ -293,21 +345,34 @@ pre { background: var(--bg); border: 1px solid var(--border); border-radius: 4px
 .toolbar-note { color: var(--muted); font-size: 14px; font-weight: 400; }
 .mobile-select-all { display: none; }
 .fleet-selection { display: flex; align-items: center; gap: 12px; }
+/* The count is about the selection the buttons act on, so it sits beside them
+   at the right of a site table's header, not under the title. */
+.card-header.toolbar > .fleet-selection { margin-left: auto; }
+.card-header.toolbar > .fleet-selection ~ * { margin-left: 0; }
 .alert-ok { color: var(--ok); background: rgb(35 119 75 / 8%); }
-/* A message stays in view however far the page is scrolled: top right under the
-   panel's header, at the bottom on a phone. */
-#clp-flash { position: fixed; z-index: 1050; top: 92px; right: 24px; width: min(440px, calc(100vw - 48px)); margin: 0;
-  display: flex; align-items: flex-start; gap: 12px; box-shadow: 0 8px 28px rgb(0 0 0 / 18%); overflow-wrap: anywhere; }
-#clp-flash[hidden] { display: none; }
-#clp-flash.alert { background: linear-gradient(rgb(248 113 113 / 12%), rgb(248 113 113 / 12%)), var(--panel); }
-#clp-flash.notice { background: linear-gradient(rgb(251 191 36 / 12%), rgb(251 191 36 / 12%)), var(--panel); }
-#clp-flash.alert-ok { background: linear-gradient(rgb(35 119 75 / 10%), rgb(35 119 75 / 10%)), var(--panel); }
-#clp-flash .clp-flash-text { flex: 1 1 auto; min-width: 0; }
-#clp-flash .clp-flash-text a { color: inherit; text-decoration: underline; }
-#clp-flash .clp-flash-close { flex: 0 0 auto; margin: -4px -8px 0 0; padding: 2px 8px; border: 0; background: none;
+/* Messages stay in view however far the page is scrolled: top right under the
+   panel's header, at the bottom on a phone, and at the other end when the
+   pointer is where they would land (data-edge, set by notify()). The holder is
+   a popover, so the browser's own popover box is undone here. */
+#clp-flash { position: fixed; z-index: 1050; inset: auto 24px auto auto; width: min(440px, calc(100vw - 48px));
+  margin: 0; padding: 0; border: 0; background: none; color: inherit; overflow: visible;
+  display: flex; flex-direction: column; gap: 10px; }
+#clp-flash:not(:popover-open) { display: none; }
+#clp-flash[data-edge="top"] { top: 92px; flex-direction: column-reverse; }
+#clp-flash[data-edge="bottom"] { bottom: 24px; }
+.clp-toast { display: flex; align-items: flex-start; gap: 12px; margin: 0; box-shadow: 0 8px 28px rgb(0 0 0 / 18%);
+  overflow-wrap: anywhere; }
+.clp-toast.alert { background: linear-gradient(rgb(248 113 113 / 12%), rgb(248 113 113 / 12%)), var(--panel); }
+.clp-toast.notice { background: linear-gradient(rgb(251 191 36 / 12%), rgb(251 191 36 / 12%)), var(--panel); }
+.clp-toast.alert-ok { background: linear-gradient(rgb(35 119 75 / 10%), rgb(35 119 75 / 10%)), var(--panel); }
+.clp-toast .clp-flash-text { flex: 1 1 auto; min-width: 0; }
+.clp-toast .clp-flash-text a { color: inherit; text-decoration: underline; }
+.clp-toast .clp-flash-close { flex: 0 0 auto; margin: -4px -8px 0 0; padding: 2px 8px; border: 0; background: none;
   color: inherit; font-size: 20px; line-height: 1; cursor: pointer; }
 @media (max-width: 940px) {
-  #clp-flash { top: auto; bottom: 12px; left: 12px; right: 12px; width: auto; }
+  #clp-flash { left: 12px; right: 12px; width: auto; }
+  #clp-flash[data-edge="top"] { top: 12px; }
+  #clp-flash[data-edge="bottom"] { bottom: 12px; }
 }
 #clp-confirm-details { margin: 12px 0 0; padding-left: 20px; color: var(--muted); font-size: 14px; }
 #clp-confirm-text { margin: 0; overflow-wrap: anywhere; }
@@ -332,7 +397,8 @@ pre { background: var(--bg); border: 1px solid var(--border); border-radius: 4px
 .fleet-filter > input { flex: 1 1 220px; max-width: 320px; }
 .fleet-filter select { width: auto; }
 /* The filter reads as a select, but opens a menu of options that each turn on
-   and off, highlighted while on like a selected row; it is drawn over the page
+   and off, tinted and checked at the end of the row while on, a pixel apart so
+   a run of them reads as separate toggles; it is drawn over the page
    (app-ui.client.js places it) so the card cannot clip it. */
 .fleet-show > summary { display: flex; align-items: center; min-height: 42px; padding: 8px 40px 8px 16px; list-style: none;
   border: 1px solid var(--input-border); border-radius: 4px; color: var(--text); font-size: 16px; white-space: nowrap; cursor: pointer;
@@ -349,7 +415,12 @@ pre { background: var(--bg); border: 1px solid var(--border); border-radius: 4px
 .fleet-show label { clear: left; display: flex; align-items: center; gap: 10px; margin: 0; padding: 7px 16px; font-size: 15px; white-space: nowrap; cursor: pointer; }
 .fleet-show label:hover { background: var(--surface); }
 .fleet-show label input { position: absolute; opacity: 0; pointer-events: none; }
-.fleet-show label:has(input:checked) { background: rgb(38 125 221 / 12%); box-shadow: inset 4px 0 var(--primary); color: var(--heading); font-weight: 600; }
+.fleet-show label::after { content: ""; flex: 0 0 16px; height: 16px; margin-left: auto; }
+.fleet-show label:has(input:checked) { background: rgb(38 125 221 / 10%); }
+.fleet-show label:has(input:checked) + label:has(input:checked) { margin-top: 1px; }
+.fleet-show label:has(input:checked)::after { background: var(--primary);
+  -webkit-mask: var(--clp-check) center / 16px no-repeat;
+  mask: var(--clp-check) center / 16px no-repeat; }
 .fleet-show label:has(input:focus-visible) { outline: 2px solid var(--accent); outline-offset: -2px; }
 .fleet-show-clear { display: block; width: 100%; margin-top: 4px; padding: 9px 16px 4px; border: 0; border-top: 1px solid var(--border);
   background: none; color: var(--link); font-size: 14px; text-align: left; cursor: pointer; }
@@ -405,9 +476,6 @@ pre { background: var(--bg); border: 1px solid var(--border); border-radius: 4px
   .clp-addon-tool-label { display: none; }
   #clp-admin-area > svg { width: 20px; height: 20px; }
   #clp-account-button { width: 67px; }
-  /* No label beside the icons here, and none of the whitespace that came with
-     one: the caret sits at Bootstrap's own margin again. */
-  #clp-account-button::after { margin-left: 4px; }
   #clp-account-button > .clp-addon-avatar { width: 26px; height: 26px; }
   .clp-addon-primary-nav { order: 2; width: 100%; overflow-x: auto; border-top: 1px solid var(--border); padding: 0 5px; gap: 0; }
   /* The first link starts where the logo does, as the panel's own row does. */

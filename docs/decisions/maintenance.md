@@ -90,10 +90,12 @@ the canonical site's state and template. Turning a site on or off is an atomic
 file operation and needs no Nginx reload.
 
 A managed HTTP-level map in `/etc/nginx/sites-enabled/00-clp-addons-maintenance-client-ip.conf`
-uses CloudPanel's `/etc/nginx/cloudflare/ips` ranges to recognize the actual
-connection peer. Only a request from one of those peers can use
-`CF-Connecting-IP` as its bypass address. Other requests use the connection
-peer, even if CloudPanel's broad real-IP setting changed `$remote_addr` from a
+names the bypass address. It is `CF-Connecting-IP` when Cloudflare set that
+header, as `lib/visitor-ip.ts` decides it for [Cloudflare visitor
+IPs](system-tweaks.md#cloudflare-visitor-ips): from CloudPanel's
+`/etc/nginx/cloudflare/ips` ranges, from cloudflared on this server, or through
+CloudPanel's front server from either. Otherwise it is the connection peer,
+even if CloudPanel's broad real-IP setting changed `$remote_addr` from a
 client-supplied header. A site CloudPanel proxies to a local backend, such as
 WordPress, runs the check in that backend, whose peer is CloudPanel's own front
 server; there the map takes the client from the `X-Real-IP` that server sets

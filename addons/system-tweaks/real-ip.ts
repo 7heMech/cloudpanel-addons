@@ -8,7 +8,6 @@
  */
 import { errorMessage } from "../../lib/errors";
 import { existsSync, readFileSync } from "node:fs";
-import { isIP } from "node:net";
 import { runCommand, type CommandResult } from "../../lib/command";
 import {
   cloudflareRanges, nginxFileChange, trustedVhost, withNginxTransaction, type NginxFileOwner, type NginxGroupWrite,
@@ -75,15 +74,6 @@ export function withAnyAddress(content: string): string {
   return content.replace(PROXIES, "").replace(MARKED, (_line, indent: string, directive: string) => `${indent}${directive}`);
 }
 
-/** CloudPanel's own Cloudflare list, each entry checked as an address or a prefix. */
-function cloudflareProxies(path: string): string[] {
-  return cloudflareRanges(path).filter((range) => {
-    const [address = "", prefix] = range.split("/");
-    const family = isIP(address);
-    return family !== 0 && (prefix === undefined || (/^\d+$/.test(prefix) && Number(prefix) <= (family === 4 ? 32 : 128)));
-  });
-}
-
 function instances(options: RealIpOptions): { sites: Instance; panel: Instance | null } {
   const paths = { ...DEFAULT_REAL_IP_PATHS, ...options.paths };
   const sites = { conf: paths.nginxConf, uid: paths.rootUid, groupWritable: false, proxies: [] };
@@ -94,7 +84,7 @@ function instances(options: RealIpOptions): { sites: Instance; panel: Instance |
   return { sites, panel: {
     conf: paths.panelConf, uid: [uid, paths.rootUid], groupWritable: [paths.rootGid, ...(gid === null ? [] : [gid])],
     config: paths.panelConf, service: "clp-nginx",
-    proxies: cloudflareProxies(paths.cloudflareIps),
+    proxies: cloudflareRanges(paths.cloudflareIps),
   } };
 }
 
@@ -160,7 +150,7 @@ type RealIpState = RealIpStatus & { blockForged: boolean };
 
 function realIpLine(state: RealIpState): string {
   if (state.problem) return `${badge("Unknown", "warn")} <span>${esc(state.problem)}</span>`;
-  if (!state.trustsAnyAddress) return `${badge("Blocked", "ok")} <span>Only local and private-network proxies can set the visitor IP.</span>`;
+  if (!state.trustsAnyAddress) return `${badge("Blocked", "ok")} <span>Only CloudPanel's own proxying and private-network proxies can set the visitor IP.</span>`;
   return `${badge("Trusted", state.blockForged ? "warn" : "plain")} <span>Any client can set its own IP with a header.${
     state.blockForged ? " Run clp-addons repair." : ""}</span>`;
 }
@@ -189,7 +179,7 @@ export const REAL_IP_TWEAK = tweak<{ blockForgedRealIp: boolean }, { realIp?: Re
     title: "Block forged visitor IPs",
     description: [
       "Stops any client from naming its own IP with a header to PHP, logs, basic auth and Cloudflare-only access.",
-      "Local proxies stay trusted, and the panel also trusts Cloudflare. Switch it off only behind another public proxy.",
+      "CloudPanel's own proxying and private-network proxies stay trusted, and the panel also trusts Cloudflare. Switch it off only behind another public proxy.",
     ],
     checked: realIp.blockForged,
     extra: statusLine(realIpLine(realIp)),

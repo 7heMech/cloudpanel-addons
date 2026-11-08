@@ -29,6 +29,7 @@ import {
   DUPLEX_WORKER_MARKER,
   SESSION_2FA_ENV,
   SESSION_BINDING_ENV,
+  SESSION_SEEN_ENV,
   TICKET_ENV,
 } from "../lib/gateway-protocol";
 import { getLivePanelInfo } from "../lib/panel-snapshot";
@@ -199,7 +200,40 @@ export async function runAuthAction(
   }
 }
 
-async function checkSession(sessionId: string, options: AuthActionOptions): Promise<ParsedPanelSession | null> {
+const MAX_SEEN_SESSIONS = 10_000;
+/**
+ * When this gateway first saw each signed-in session, by its binding and
+ * CloudPanel's sign-in stamp, until the session expires. A restart forgets,
+ * and the next sighting stands in: later, so never too early.
+ */
+const seenSessions = new Map<string, { at: number; expires: number }>();
+
+function sessionSeen(binding: string, session: ParsedPanelSession, now = Date.now()): number | null {
+  // Without CloudPanel's stamp one sign-in cannot be told from the next on the
+  // same id, so there is no sighting to vouch for; root auth then dates the
+  // sign-in by the prompt's opening.
+  if (session.createdAt === null) return null;
+  const key = `${binding}:${session.createdAt}`;
+  const known = seenSessions.get(key);
+  if (known) {
+    known.expires = session.expiresAt;
+    return known.at;
+  }
+  if (seenSessions.size >= MAX_SEEN_SESSIONS) {
+    for (const [stale, entry] of seenSessions) if (entry.expires * 1000 <= now) seenSessions.delete(stale);
+    // Still full: the oldest go first, and their next sighting counts as their first.
+    for (const stale of seenSessions.keys()) {
+      if (seenSessions.size < MAX_SEEN_SESSIONS) break;
+      seenSessions.delete(stale);
+    }
+  }
+  seenSessions.set(key, { at: now, expires: session.expiresAt });
+  return now;
+}
+
+const sessionBinding = (sessionId: string) => createHash("sha256").update(sessionId).digest("hex");
+
+async function checkSession(sessionId: string, options: AuthActionOptions): Promise<(ParsedPanelSession & { binding: string; seen: number | null }) | null> {
   const sessionDir = options.sessionDir ?? SESSION_DIR;
   const sessionPath = `${sessionDir}/sess_${sessionId}`;
   const sessionBytes = await readPanelSessionFile(sessionPath, {
@@ -211,9 +245,14 @@ async function checkSession(sessionId: string, options: AuthActionOptions): Prom
   if (!session) return null;
 
   const dbPath = options.panelDb ?? PANEL_DB;
-  if (!existsSync(dbPath)) return session;
-  const dbRole = lookupUserRole(dbPath, session.user);
-  return dbRole ? { ...session, roles: [dbRole] } : null;
+  if (existsSync(dbPath)) {
+    const dbRole = lookupUserRole(dbPath, session.user);
+    if (!dbRole) return null;
+    session.roles = [dbRole];
+  }
+  // Every page the panel serves asks the gateway, so this is soon after sign-in.
+  const binding = sessionBinding(sessionId);
+  return { ...session, binding, seen: sessionSeen(binding, session) };
 }
 
 const SESSION_RECHECK_MS = 15_000;
@@ -251,7 +290,11 @@ async function sessionUser(sessionId: string, options: AuthActionOptions, role?:
     if (sessionId.length > 128 || !SESSION_ID_RE.test(sessionId)) return null;
     const session = await checkSession(sessionId, options);
     if (!session || (role !== undefined && !session.roles.includes(role))) return null;
-    return { user: session.user, env: { [SESSION_BINDING_ENV]: createHash("sha256").update(sessionId).digest("hex"), [SESSION_2FA_ENV]: sessionProof(session, options) } };
+    return { user: session.user, env: {
+      [SESSION_BINDING_ENV]: session.binding,
+      [SESSION_2FA_ENV]: sessionProof(session, options),
+      [SESSION_SEEN_ENV]: session.seen === null ? "" : String(session.seen),
+    } };
   } catch {
     return null;
   }
@@ -308,7 +351,7 @@ async function runStreamAction(
   try {
     proc = (options.spawn ?? Bun.spawn)(argv, duplex
       ? { stdin: "pipe", stdout: "pipe", stderr: "inherit", env: { ...DUPLEX_WORKER_ENV, ...duplex.env } }
-      : { stdin: "ignore", stdout: "pipe", stderr: "inherit", env: { ...process.env, [SESSION_BINDING_ENV]: "", [SESSION_2FA_ENV]: "0" } });
+      : { stdin: "ignore", stdout: "pipe", stderr: "inherit", env: { ...process.env, [SESSION_BINDING_ENV]: "", [SESSION_2FA_ENV]: "0", [SESSION_SEEN_ENV]: "" } });
     if (stopping || socket.destroyed) stop();
 
     if (duplex) {
@@ -544,7 +587,7 @@ export function createAuthActionServer(options: AuthActionOptions = {}): net.Ser
           }
           let args = request.args ?? [];
           // The gateway's own environment never carries a session's answer.
-          let env: Record<string, string | undefined> = { ...process.env, [SESSION_BINDING_ENV]: "", [SESSION_2FA_ENV]: "0" };
+          let env: Record<string, string | undefined> = { ...process.env, [SESSION_BINDING_ENV]: "", [SESSION_2FA_ENV]: "0", [SESSION_SEEN_ENV]: "" };
           if (ownAccount) {
             if (args.some((arg) => arg.startsWith("--panel-user"))) {
               socket.end(JSON.stringify({ ok: false, error: "invalid arguments" }) + "\n");

@@ -30,12 +30,26 @@ because the deploy authenticates as root and then runs a command sequence.
 ## Toolchain
 
 Development, CI, staging, and release use the Bun version pinned by
-`packageManager` in `package.json`; the workflows read it from there. Installs
-use the frozen `bun.lock`.
+`packageManager` in `package.json`. The pin is a dated Bun canary,
+`1.4.4-canary.20261108.1`, for the release candidates only: no Bun release
+has the compile options below yet, and the pin moves to Bun 1.5.0 when it ships.
+Until then `bun-types` comes from the same canary through `overrides`. GitHub
+keeps only the newest canary, under a tag that moves, so the workflows install
+Bun with `.github/actions/install-bun` instead of `setup-bun`: it downloads
+`@oven/bun-linux-x64` at the pinned version from npm, where a version cannot be
+republished, checks the tarball against the sha512 recorded in the action, and
+fails if `packageManager` names a different version. Installs use the frozen
+`bun.lock`.
 
-Builds compile minified ESM with bytecode, from `tools/build.ts`. The gateway starts a fresh
-`clp-addons action` process for every request, and bytecode roughly halves that
-startup for about 4% more binary size.
+Builds compile minified ESM from `tools/build.ts`, ahead of time to machine code
+(`aot`), dropping the Bun and Node.js APIs the code never calls (`trim`), and
+embedding no function source (`functionSource: false`). The gateway starts a
+fresh `clp-addons action` process for every request, and the compiled binary
+starts in under half the time of a bytecode build at about half its size. An
+`aot` build only targets the platform it runs on, so releases build on x64
+Linux. With no function source, `fn.toString()` returns `[native code]`; script
+a page runs is shipped as its own `.client.js` text rather than read back from a
+server function.
 
 `bun run typecheck` runs `bun check --project tsconfig.tools.json`, covering
 the CLI, shared libraries, addons, manager, tools, and tests with the existing

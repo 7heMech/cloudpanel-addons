@@ -680,7 +680,7 @@ test("the page says where MySQL listens, what reaches it, and how to change a de
   const state = {
     updates: updatesStatus({ run: () => ({ ok: false, stdout: "", stderr: "" }), paths: { aptConfDir: "/nonexistent", aptConf: "/nonexistent" } }),
     settings: { enabled: false, nginx: true, database: false, panel: false, reboot: false, rebootTime: "now" },
-    uploadProgress: { guard: true, fpms: [] }, realIp: { blockForged: true, trustsAnyAddress: false, problem: "" },
+    uploadProgress: { guard: true, fpms: [] }, realIp: { blockForged: true, trustsAnyAddress: false, problem: "" }, visitorIp: { enabled: true, applied: true, problem: "" },
     phpMyAdmin: { enabled: true, active: true, problem: "" },
     vhostGuard: { enabled: true, active: true, stored: [], homeLogs: [], ownLogrotate: [] }, phpPools: { enabled: true, active: true, problem: "" },
     fileManagerGuard: { enabled: true, active: true }, panelCert: { kind: "generated" as const, replace: true },

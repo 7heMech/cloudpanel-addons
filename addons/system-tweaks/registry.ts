@@ -1,5 +1,6 @@
 // Every System Tweaks tweak, and the order each phase runs them in. The orders
 // differ on purpose and are written out, not derived: see the comment on each.
+import { errorMessage } from "../../lib/errors";
 import { clearAbandonedTmpFiles, type TmpCleanupOptions } from "../../lib/tmp-cleanup";
 import { BACKUP_COMPRESSION_TWEAK } from "./backup-compression";
 import { CLPCTL_GUARD_TWEAK } from "./clpctl-guard";
@@ -18,10 +19,11 @@ import type { RepairStep, RestoreStep, TweakContext, WithdrawStep } from "./twea
 import { UPDATES_TWEAK } from "./updates";
 import { UPLOAD_GUARD_TWEAK } from "./upload-progress";
 import { VHOST_GUARD_TWEAK } from "./vhost-guard";
+import { VISITOR_IP_TWEAK } from "./visitor-ip";
 
 /** Every tweak, in the order settings.json keeps their settings. */
 export const TWEAKS = [
-  UPDATES_TWEAK, UPLOAD_GUARD_TWEAK, REAL_IP_TWEAK, VHOST_GUARD_TWEAK, PHP_POOLS_TWEAK, PHPMYADMIN_TWEAK, FILE_MANAGER_GUARD_TWEAK,
+  UPDATES_TWEAK, UPLOAD_GUARD_TWEAK, REAL_IP_TWEAK, VISITOR_IP_TWEAK, VHOST_GUARD_TWEAK, PHP_POOLS_TWEAK, PHPMYADMIN_TWEAK, FILE_MANAGER_GUARD_TWEAK,
   PANEL_CERT_TWEAK, LOGIN_JAILS_TWEAK, DATABASE_TWEAK, CLPCTL_GUARD_TWEAK, TELEMETRY_TWEAK, MOTD_TWEAK, BACKUP_COMPRESSION_TWEAK,
   PANEL_PHP_TWEAK, FIREWALL_TWEAK,
 ] as const;
@@ -40,24 +42,44 @@ type Tweak = (typeof TWEAKS)[number];
 
 /** The parts of `state`, in the order it reads and names them. */
 export const STATE: readonly Tweak[] = [
-  UPDATES_TWEAK, UPLOAD_GUARD_TWEAK, REAL_IP_TWEAK, PHPMYADMIN_TWEAK, PANEL_CERT_TWEAK, VHOST_GUARD_TWEAK, PHP_POOLS_TWEAK,
-  FILE_MANAGER_GUARD_TWEAK, CLPCTL_GUARD_TWEAK, PANEL_PHP_TWEAK, FIREWALL_TWEAK, LOGIN_JAILS_TWEAK, DATABASE_TWEAK,
+  UPDATES_TWEAK, UPLOAD_GUARD_TWEAK, REAL_IP_TWEAK, VISITOR_IP_TWEAK, PHPMYADMIN_TWEAK, PANEL_CERT_TWEAK, VHOST_GUARD_TWEAK,
+  PHP_POOLS_TWEAK, FILE_MANAGER_GUARD_TWEAK, CLPCTL_GUARD_TWEAK, PANEL_PHP_TWEAK, FIREWALL_TWEAK, LOGIN_JAILS_TWEAK, DATABASE_TWEAK,
   BACKUP_COMPRESSION_TWEAK, TELEMETRY_TWEAK, MOTD_TWEAK,
 ];
 
 /** The Hardening card's rows, in the page's order; the other cards are the page's own. */
 export const HARDENING = [
-  PANEL_PHP_TWEAK, UPLOAD_GUARD_TWEAK, REAL_IP_TWEAK, PHPMYADMIN_TWEAK, DATABASE_TWEAK, PANEL_CERT_TWEAK, VHOST_GUARD_TWEAK,
+  PANEL_PHP_TWEAK, UPLOAD_GUARD_TWEAK, REAL_IP_TWEAK, VISITOR_IP_TWEAK, PHPMYADMIN_TWEAK, DATABASE_TWEAK, PANEL_CERT_TWEAK, VHOST_GUARD_TWEAK,
   PHP_POOLS_TWEAK, FILE_MANAGER_GUARD_TWEAK, CLPCTL_GUARD_TWEAK, TELEMETRY_TWEAK,
 ] as const;
 
-const UPKEEP_STEPS = [UPDATES_TWEAK.repair.upkeep, REAL_IP_TWEAK.repair.upkeep, LOGIN_JAILS_TWEAK.repair.upkeep, DATABASE_TWEAK.repair.upkeep];
+/** Each with the name its failure is reported under, since none has a label of its own. */
+const UPKEEP_STEPS = [
+  ["automatic updates", UPDATES_TWEAK.repair.upkeep],
+  ["forged visitor IPs", REAL_IP_TWEAK.repair.upkeep],
+  ["Cloudflare visitor IPs", VISITOR_IP_TWEAK.repair.upkeep],
+  ["login jails", LOGIN_JAILS_TWEAK.repair.upkeep],
+  ["MySQL on this server only", DATABASE_TWEAK.repair.upkeep],
+] as const;
 
-/** The quick reconciliations, under one lock: a failure stops the ones after it and is reported as it is. */
+/** The quick reconciliations, under one lock: each runs even when one before it fails, and the failures are reported together. */
 export const UPKEEP = {
   label: null,
   locked: true,
-  run: (ctx: Context) => UPKEEP_STEPS.map((step) => step.run(ctx)).filter(Boolean).join("; ") || null,
+  run: (ctx: Context) => {
+    const lines: string[] = [];
+    const failures: string[] = [];
+    for (const [name, step] of UPKEEP_STEPS) {
+      try {
+        const line = step.run(ctx);
+        if (line) lines.push(line);
+      } catch (error) {
+        failures.push(`${name}: ${errorMessage(error)}`);
+      }
+    }
+    if (failures.length) throw new Error([...failures, ...lines].join("; "));
+    return lines.join("; ") || null;
+  },
 } satisfies RepairStep<SystemTweaksSettings, TweakOptions>;
 
 const TMP_CLEANUP: RepairStep<{}, { tmpCleanup?: TmpCleanupOptions }> = {
@@ -111,7 +133,7 @@ export const WITHDRAW: {
     CLPCTL_GUARD_TWEAK,
     // Next: it refuses an edited backup command, and then the protections below stay.
     BACKUP_COMPRESSION_TWEAK,
-    UPDATES_TWEAK, REAL_IP_TWEAK, PHPMYADMIN_TWEAK, LOGIN_JAILS_TWEAK, DATABASE_TWEAK,
+    UPDATES_TWEAK, REAL_IP_TWEAK, VISITOR_IP_TWEAK, PHPMYADMIN_TWEAK, LOGIN_JAILS_TWEAK, DATABASE_TWEAK,
     FILE_MANAGER_GUARD_TWEAK, VHOST_GUARD_TWEAK, PHP_POOLS_TWEAK,
   ],
   // None of these keeps the addon on: each failure is only a warning.
@@ -130,7 +152,7 @@ export const RESTORE: {
   after: readonly (Restoring & { restore: Warning })[];
 } = {
   locked: [
-    UPDATES_TWEAK, UPLOAD_GUARD_TWEAK, REAL_IP_TWEAK, PHPMYADMIN_TWEAK, LOGIN_JAILS_TWEAK,
+    UPDATES_TWEAK, UPLOAD_GUARD_TWEAK, REAL_IP_TWEAK, VISITOR_IP_TWEAK, PHPMYADMIN_TWEAK, LOGIN_JAILS_TWEAK,
     // It inspects MySQL's units, which can be mid-restart, so a failure only warns: the guards after it must still come back.
     DATABASE_TWEAK,
     VHOST_GUARD_TWEAK, PHP_POOLS_TWEAK, FILE_MANAGER_GUARD_TWEAK, CLPCTL_GUARD_TWEAK,
@@ -149,7 +171,7 @@ type Locking = Extract<Tweak, { switch: unknown }> | Extract<Tweak, { lockOn: un
  */
 export const LOCK_SETTINGS: { first: readonly Locking[]; last: readonly Locking[] } = {
   first: [
-    UPLOAD_GUARD_TWEAK, REAL_IP_TWEAK, PHPMYADMIN_TWEAK, PANEL_CERT_TWEAK, VHOST_GUARD_TWEAK, PHP_POOLS_TWEAK,
+    UPLOAD_GUARD_TWEAK, REAL_IP_TWEAK, VISITOR_IP_TWEAK, PHPMYADMIN_TWEAK, PANEL_CERT_TWEAK, VHOST_GUARD_TWEAK, PHP_POOLS_TWEAK,
     FILE_MANAGER_GUARD_TWEAK, CLPCTL_GUARD_TWEAK, TELEMETRY_TWEAK, LOGIN_JAILS_TWEAK,
   ],
   last: [DATABASE_TWEAK],

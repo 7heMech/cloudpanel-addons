@@ -60,6 +60,23 @@ it pushed the whole table down, which was the largest layout shift on the page.
 The script hides it again on a page whose table it does not recognise and when
 the reply never arrives.
 
+The reply lands after the page is first painted, so the table was drawn as the
+panel's four columns and redrawn with the added ones a frame later. The tab
+therefore keeps the last reply in `sessionStorage`, cut to the sites that page
+listed, and a table listing exactly those sites is built from it when the page
+is parsed, before it is painted. The reply still comes on every page: it
+replaces the stored copy and rebuilds the cells whose facts changed, and a failed
+reply forgets the copy. Saving a switch on the addon's page moves a revision in
+`localStorage`, which every tab of the browser shares, and a copy taken under
+an older revision is not built from, so the next Sites page in any tab is built
+from the new switches. The rendered template cannot say which switches hold,
+because the sites table and disk usage are read at request time (below). A
+switch changed from a shell still shows on the page after next. The preview
+under the switches is told it is the preview, keeps no copy and is built from
+each reply. Another account's
+table lists other sites and is not built from it, and following Logout forgets
+it.
+
 ## What is read at request time, and what is not
 
 The injected script asks the addon for the current switches along with the site
@@ -103,7 +120,10 @@ the Back and submit row, whose two buttons stay side by side. The page for
 turning on two-factor sign-in is drawn at a fixed 850px with a 350px code
 field; below 760px it takes the card's width, the manual-entry secret breaks
 anywhere rather than running off the card, and the field shares its row with
-the button.
+the button. Below 576px that row leaves the field too narrow for its own
+placeholder, so the field takes the whole row and the button goes under it.
+At any width the switch also gives that page's links the dark theme's blue:
+CloudPanel's rule for every link in the dark theme outranks the page's own.
 
 The Admin header additionally carries rules for the Admin Area, under the same
 mobile-layout switch and without another template anchor. Below 760px the fixed
@@ -263,6 +283,13 @@ table is parsed, and the script takes the desktop column set there too. Addition
 scroller when the table layout is active. With it off, a narrow screen keeps the
 desktop table and its column choice: the narrow column set belongs to the cards,
 so the script is told the switch and treats no width as narrow.
+
+The Columns menu lists every column. Domain and Action are greyed with a lock,
+because the table needs both. A shown column is tinted and checked at the end
+of its row, as in the addons' own filter menus, and the rows stay a pixel apart
+so a run of shown columns reads as separate toggles. The button says how many
+of the optional columns are shown, such as 5/8. Reset to default forgets this
+browser's choice for the current width, so the screen's default set returns.
 
 `lib/row-actions.ts` is the whole agreement between the two addons. An addon
 with an action worth a place in the menu but not a link in every row of a list

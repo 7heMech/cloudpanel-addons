@@ -21,11 +21,13 @@ import { iniBoolean, iniSetting, uploadProgressStatus } from "../addons/system-t
 import { dashboardView } from "../addons/system-tweaks/app/views";
 import { isSwitchVerb } from "../addons/system-tweaks/app/service";
 import { releaseRealIp } from "../addons/system-tweaks/real-ip";
+import { releaseVisitorIp } from "../addons/system-tweaks/visitor-ip";
 import WRAPPER_SCRIPT from "../addons/system-tweaks/clpctl-wrapper.sh" with { type: "text" };
 import { DEFAULT_BACKUP_COMPRESSION } from "../addons/system-tweaks/backup-compression";
 import { MOTD_SCRIPT, applyMotd } from "../addons/system-tweaks/motd";
 import { DATABASE_FILE } from "../addons/system-tweaks/database";
 import { SYSTEM_TWEAKS_VERBS } from "../addons/system-tweaks/verbs";
+import { TWEAK_ROW_JS } from "../lib/app-ui";
 import { lockedAddons } from "../lib/root-locks";
 
 // CloudPanel's original /usr/bin/clpctlWrapper (cloudpanel 2.5.4-3), whose SHA-256
@@ -477,6 +479,7 @@ function box(options: { installed?: boolean; timers?: Record<string, string>; fa
         },
       },
       realIp: { run: nginxRun, paths: { nginxConf, panelConf, cloudflareIps, panelUid: uid, panelGid: process.getgid!(), rootUid: uid, rootGid: process.getgid!() } },
+      visitorIp: { run: () => ok(), paths: { nginxConf, fastcgiParams: join(dir, "fastcgi_params"), maps: join(dir, "visitor-ip.conf"), cloudflareIps, rootUid: uid } },
       phpMyAdmin: { run: () => ok(), paths: { vhost: panelVhost, panelConf, panelUid: uid, panelGid: process.getgid!(), rootUid: uid, rootGid: process.getgid!() } },
       // No panel server block until a test writes one.
       panelCert: {
@@ -627,14 +630,19 @@ test("root's lock keeps the protections that are on, on, and leaves the rest of 
   expect(damaged).toContain("<code>clp-addons lock</code>");
 });
 
-test("the header offers Lock settings until root's lock is there, then shows it", async () => {
+test("Hardening's header offers Lock settings until root's lock is there, then shows it", async () => {
   const state = await act(box(), ["state"]);
-  const heading = (html: string) => html.slice(html.indexOf('<div class="page-heading">'), html.indexOf('<div class="card">'));
-  expect(heading(dashboardView(state))).toContain('onclick="lockSettings(this)">Lock settings</button>');
+  const header = (html: string) => html.slice(html.indexOf("<h2>Hardening</h2>"), html.indexOf("</div>", html.indexOf("<h2>Hardening</h2>")));
+  const pageHeading = (html: string) => html.slice(html.indexOf('<div class="page-heading">'), html.indexOf('<div class="card">'));
+  expect(header(dashboardView(state))).toContain('onclick="lockSettings(this)">Lock settings</button>');
+  // The lock leaves the page's other settings alone, so it is not at the top of the page.
+  expect(pageHeading(dashboardView(state))).not.toContain("lockSettings");
   for (const lock of ["locked", "damaged"] as const) {
     const html = dashboardView(state, Date.now(), lock);
     expect(html).not.toContain("lockSettings(this)");
-    expect(html).toContain(">Locked by root</span>");
+    expect(header(html)).toContain(">Locked by root</span>");
+    expect(pageHeading(html)).not.toContain("notice");
+    expect(html.indexOf('class="notice st-lock-notice"')).toBeGreaterThan(html.indexOf("<h2>Hardening</h2>"));
   }
 });
 
@@ -723,10 +731,11 @@ test("an upgrade run gets the sites' conffile back unreloaded, and the panel's f
   restoreSystemTweaks(b.options);
   b.nginx.commands.length = 0;
   expect(releaseRealIp(b.options.realIp)).toBe(true);
+  expect(releaseVisitorIp("nginxConf", b.options.visitorIp)).toBe(true);
   expect(readFileSync(b.nginxConf, "utf8")).toBe(CLOUDPANEL_NGINX_CONF);
   expect(readFileSync(b.panelConf, "utf8")).toContain("#clp-addons:untrusted");
   expect(b.nginx.commands).toEqual([]);
-  expect(systemTweaksUpkeep(b.options)).toBe("visitor-IP trust narrowed again");
+  expect(systemTweaksUpkeep(b.options)).toBe("visitor-IP trust narrowed again; Cloudflare visitor IPs reapplied");
   expect(readFileSync(b.nginxConf, "utf8")).toContain("#clp-addons:untrusted");
 });
 
@@ -772,7 +781,8 @@ test("the gateway waits for the longest an install can take", async () => {
 
 /** The page's script against a stand-in DOM: each POST waits for `replies` to answer it. */
 function systemTweaksClient() {
-  const source = readFileSync(join(import.meta.dir, "../addons/system-tweaks/app/views.client.js"), "utf8");
+  // As the page has it: working() is shared, in TWEAK_ROW_JS.
+  const source = TWEAK_ROW_JS + readFileSync(join(import.meta.dir, "../addons/system-tweaks/app/views.client.js"), "utf8");
   const events: string[] = [];
   const replies: { path: string; body: string; answer: (body: unknown) => void }[] = [];
   const lines: { textContent: string; removed: boolean }[] = [];
@@ -837,10 +847,10 @@ test("every on/off switch on the page posts to a route that runs its verb", asyn
 
 // The header button is in no row, so its working line once had nowhere to go:
 // the page froze with every control held and nothing posted.
-test("Lock settings in the page header posts and says it is running under the heading", async () => {
+test("Lock settings in Hardening's header posts and says it is running under the header", async () => {
   const { client, events, replies } = systemTweaksClient();
   const heading = { after: (line: { textContent: string }) => events.push(`heading: ${line.textContent}`) };
-  const button = { dataset: {}, type: "button", closest: (selector: string) => (selector.includes(".page-heading") ? heading : null) };
+  const button = { dataset: {}, type: "button", closest: (selector: string) => (selector.includes(".card-header") ? heading : null) };
   const pending = client.lockSettings(button);
   await Bun.sleep(0);
   expect(events).toEqual(["busy", "heading: Switching everything on, then locking…", "POST /api/lock-settings {}"]);
@@ -918,6 +928,7 @@ test("forged visitor IPs are blocked by default and switching off restores Cloud
   const blocked = readFileSync(b.nginxConf, "utf8");
   expect(blocked).toContain("    #clp-addons:untrusted set_real_ip_from 0.0.0.0/0;\n");
   expect(blocked).toContain("    set_real_ip_from 10.0.0.0/8;\n");
+  expect(blocked).toContain("    #clp-addons:hop set_real_ip_from 127.0.0.1;\n");
   expect(readFileSync(b.panelConf, "utf8")).toContain([
     "    #clp-addons:untrusted set_real_ip_from 0.0.0.0/0;",
     "    # clp-addons:cloudflare-proxies:start",
@@ -934,7 +945,8 @@ test("forged visitor IPs are blocked by default and switching off restores Cloud
 
   const off = await act(b, ["set-real-ip"], { enabled: false });
   expect(off.realIp).toEqual({ blockForged: false, trustsAnyAddress: true, problem: "" });
-  expect(readFileSync(b.nginxConf, "utf8")).toBe(CLOUDPANEL_NGINX_CONF);
+  // Cloudflare visitor IPs keeps its own edit.
+  expect(readFileSync(b.nginxConf, "utf8")).toBe(CLOUDPANEL_NGINX_CONF.replace("    set_real_ip_from 127.0.0.1;", "    #clp-addons:hop set_real_ip_from 127.0.0.1;"));
   expect(readFileSync(b.panelConf, "utf8")).toBe(PANEL_NGINX_CONF);
   b.nginx.commands.length = 0;
   expect(systemTweaksUpkeep(b.options)).toBeNull();
@@ -944,6 +956,7 @@ test("forged visitor IPs are blocked by default and switching off restores Cloud
 test("repair narrows the trust again after CloudPanel rewrites nginx.conf, and disabling the addon puts it back", async () => {
   const b = box();
   await act(b, ["set-real-ip"], { enabled: true });
+  await act(b, ["set-visitor-ip"], { enabled: false });
   writeFileSync(b.nginxConf, CLOUDPANEL_NGINX_CONF);
   expect(systemTweaksUpkeep(b.options)).toBe("visitor-IP trust narrowed again");
   expect(readFileSync(b.nginxConf, "utf8")).toContain("#clp-addons:untrusted set_real_ip_from 0.0.0.0/0;");
@@ -951,11 +964,23 @@ test("repair narrows the trust again after CloudPanel rewrites nginx.conf, and d
   expect(readFileSync(b.nginxConf, "utf8")).toBe(CLOUDPANEL_NGINX_CONF);
 });
 
+test("a map file clp-addons did not write fails its own upkeep step only, and enabling the addon only warns", () => {
+  const b = box();
+  restoreSystemTweaks(b.options);
+  const maps = b.options.visitorIp!.paths!.maps!;
+  writeFileSync(maps, "map $a $b {}\n");
+  writeFileSync(b.nginxConf, CLOUDPANEL_NGINX_CONF);
+  // The steps after it still run, and real-IP's line is reported beside the failure.
+  expect(() => systemTweaksUpkeep(b.options)).toThrow(/^Cloudflare visitor IPs: .*did not write it.*; visitor-IP trust narrowed again/);
+  expect(readFileSync(b.nginxConf, "utf8")).toContain("#clp-addons:untrusted set_real_ip_from 0.0.0.0/0;");
+  expect(() => restoreSystemTweaks(b.options, true)).not.toThrow();
+});
+
 test("the panel follows CloudPanel's Cloudflare list, keeping only well-formed entries", async () => {
   const b = box();
   restoreSystemTweaks(b.options);
   writeFileSync(b.cloudflareIps, "allow 104.16.0.0/13;\nallow 999.1.1.1;\nallow 10.0.0.0/99;\ndeny all;\n");
-  expect(systemTweaksUpkeep(b.options)).toBe("visitor-IP trust narrowed again");
+  expect(systemTweaksUpkeep(b.options)).toBe("visitor-IP trust narrowed again; Cloudflare visitor IPs reapplied");
   const panel = readFileSync(b.panelConf, "utf8");
   expect(panel).toContain("    set_real_ip_from 104.16.0.0/13;\n");
   expect(panel).not.toContain("173.245.48.0/20");
@@ -1378,7 +1403,7 @@ test("settings.json keeps its format and the state names its parts in a fixed or
   const saved = JSON.parse(text);
   expect(text).toBe(`${JSON.stringify(saved, null, 2)}\n`);
   expect(Object.keys(saved)).toEqual([
-    "version", "updates", "enabledTimers", "uploadProgressGuard", "blockForgedRealIp", "blockVhostInjection", "isolatePhpPools",
+    "version", "updates", "enabledTimers", "uploadProgressGuard", "blockForgedRealIp", "cloudflareVisitorIp", "blockVhostInjection", "isolatePhpPools",
     "protectPhpMyAdmin", "confineFileManager", "replacePanelCert", "loginJails", "fail2banBefore", "databaseLoopback",
     "blockClpctlInjection", "blockTelemetry", "serverInfoMotd", "backupCompression",
   ]);
@@ -1387,7 +1412,7 @@ test("settings.json keeps its format and the state names its parts in a fixed or
     databaseLoopback: false, serverInfoMotd: false, backupCompression: DEFAULT_BACKUP_COMPRESSION,
   });
   expect(Object.keys(state)).toEqual([
-    "updates", "settings", "uploadProgress", "realIp", "phpMyAdmin", "panelCert", "vhostGuard", "phpPools", "fileManagerGuard",
+    "updates", "settings", "uploadProgress", "realIp", "visitorIp", "phpMyAdmin", "panelCert", "vhostGuard", "phpPools", "fileManagerGuard",
     "clpctlGuard", "panelPhp", "firewall", "loginJails", "database", "backupCompression", "telemetry", "motd",
   ]);
 });
@@ -1395,7 +1420,7 @@ test("settings.json keeps its format and the state names its parts in a fixed or
 test("the page shows the vhost guard as on, waiting for repair, or off", () => {
   const html = (partial: Omit<SystemTweaksState["vhostGuard"], "homeLogs" | "ownLogrotate"> & { homeLogs?: string[]; ownLogrotate?: string[] }) => dashboardView({
     updates: updatesStatus({ run: () => ({ ok: false, stdout: "", stderr: "" }) }), settings: { ...DEFAULT_UPDATE_SETTINGS },
-    uploadProgress: { guard: true, fpms: [] }, realIp: { blockForged: true, trustsAnyAddress: false, problem: "" }, phpMyAdmin: { enabled: true, active: true, problem: "" }, vhostGuard: { homeLogs: [], ownLogrotate: [], ...partial }, phpPools: { enabled: true, active: true, problem: "" }, fileManagerGuard: { enabled: true, active: true }, panelCert: { kind: "generated" as const, replace: true }, backupCompression: { enabled: false, level: 3, threads: 1, active: false, supported: true, installed: true, problem: "" }, telemetry: { enabled: true, agent: true, blocked: true, problem: "" }, motd: { enabled: true, script: true, banner: false }, clpctlGuard: { error: "" }, panelPhp: { error: "" }, firewall: { error: "" }, loginJails: { error: "" }, database: { error: "" },
+    uploadProgress: { guard: true, fpms: [] }, realIp: { blockForged: true, trustsAnyAddress: false, problem: "" }, visitorIp: { enabled: true, applied: true, problem: "" }, phpMyAdmin: { enabled: true, active: true, problem: "" }, vhostGuard: { homeLogs: [], ownLogrotate: [], ...partial }, phpPools: { enabled: true, active: true, problem: "" }, fileManagerGuard: { enabled: true, active: true }, panelCert: { kind: "generated" as const, replace: true }, backupCompression: { enabled: false, level: 3, threads: 1, active: false, supported: true, installed: true, problem: "" }, telemetry: { enabled: true, agent: true, blocked: true, problem: "" }, motd: { enabled: true, script: true, banner: false }, clpctlGuard: { error: "" }, panelPhp: { error: "" }, firewall: { error: "" }, loginJails: { error: "" }, database: { error: "" },
   });
   expect(html({ enabled: true, active: true, stored: [] })).toContain("Panel input is checked before CloudPanel writes it into a vhost.");
   expect(html({ enabled: true, active: false, stored: [] })).toContain("Not applied");
@@ -1435,7 +1460,7 @@ test("PHP pool isolation switches from the page, repair puts it back, and the PH
 test("the page shows PHP pool isolation as on, waiting for repair, or off", () => {
   const html = (phpPools: SystemTweaksState["phpPools"]) => dashboardView({
     updates: updatesStatus({ run: () => ({ ok: false, stdout: "", stderr: "" }) }), settings: { ...DEFAULT_UPDATE_SETTINGS },
-    uploadProgress: { guard: true, fpms: [] }, realIp: { blockForged: true, trustsAnyAddress: false, problem: "" },
+    uploadProgress: { guard: true, fpms: [] }, realIp: { blockForged: true, trustsAnyAddress: false, problem: "" }, visitorIp: { enabled: true, applied: true, problem: "" },
     phpMyAdmin: { enabled: true, active: true, problem: "" }, vhostGuard: { enabled: true, active: true, stored: [], homeLogs: [], ownLogrotate: [] }, phpPools, fileManagerGuard: { enabled: true, active: true }, panelCert: { kind: "generated" as const, replace: true }, backupCompression: { enabled: false, level: 3, threads: 1, active: false, supported: true, installed: true, problem: "" }, telemetry: { enabled: true, agent: true, blocked: true, problem: "" }, motd: { enabled: true, script: true, banner: false }, clpctlGuard: { error: "" }, panelPhp: { error: "" }, firewall: { error: "" }, loginJails: { error: "" }, database: { error: "" },
   });
   expect(html({ enabled: true, active: true, problem: "" })).toContain("Each pool's port answers only nginx and the pool's own user.");
@@ -1510,7 +1535,7 @@ test("a loaded block the kernel does not enforce is not called blocked, and one 
 test("the page shows telemetry as blocked, waiting for repair, sending, or without an agent", () => {
   const html = (telemetry: SystemTweaksState["telemetry"]) => dashboardView({
     updates: updatesStatus({ run: () => ({ ok: false, stdout: "", stderr: "" }) }), settings: { ...DEFAULT_UPDATE_SETTINGS },
-    uploadProgress: { guard: true, fpms: [] }, realIp: { blockForged: true, trustsAnyAddress: false, problem: "" },
+    uploadProgress: { guard: true, fpms: [] }, realIp: { blockForged: true, trustsAnyAddress: false, problem: "" }, visitorIp: { enabled: true, applied: true, problem: "" },
     phpMyAdmin: { enabled: true, active: true, problem: "" }, vhostGuard: { enabled: true, active: true, stored: [], homeLogs: [], ownLogrotate: [] }, phpPools: { enabled: true, active: true, problem: "" }, fileManagerGuard: { enabled: true, active: true }, panelCert: { kind: "generated" as const, replace: true }, backupCompression: { enabled: false, level: 3, threads: 1, active: false, supported: true, installed: true, problem: "" }, telemetry, motd: { enabled: true, script: true, banner: false }, clpctlGuard: { error: "" }, panelPhp: { error: "" }, firewall: { error: "" }, loginJails: { error: "" }, database: { error: "" },
   });
   expect(html({ enabled: true, agent: true, blocked: true, problem: "" })).toContain("clp-agent can reach only this server.");
@@ -1574,7 +1599,7 @@ test("the server info script is valid sh", () => {
 test("the page shows the login message as server info, waiting for repair, or CloudPanel's banner", () => {
   const html = (motd: SystemTweaksState["motd"]) => dashboardView({
     updates: updatesStatus({ run: () => ({ ok: false, stdout: "", stderr: "" }) }), settings: { ...DEFAULT_UPDATE_SETTINGS },
-    uploadProgress: { guard: true, fpms: [] }, realIp: { blockForged: true, trustsAnyAddress: false, problem: "" },
+    uploadProgress: { guard: true, fpms: [] }, realIp: { blockForged: true, trustsAnyAddress: false, problem: "" }, visitorIp: { enabled: true, applied: true, problem: "" },
     phpMyAdmin: { enabled: true, active: true, problem: "" }, vhostGuard: { enabled: true, active: true, stored: [], homeLogs: [], ownLogrotate: [] }, phpPools: { enabled: true, active: true, problem: "" }, fileManagerGuard: { enabled: true, active: true }, panelCert: { kind: "generated" as const, replace: true }, backupCompression: { enabled: false, level: 3, threads: 1, active: false, supported: true, installed: true, problem: "" }, telemetry: { enabled: true, agent: true, blocked: true, problem: "" }, motd, clpctlGuard: { error: "" }, panelPhp: { error: "" }, firewall: { error: "" }, loginJails: { error: "" }, database: { error: "" },
   });
   expect(html({ enabled: true, script: true, banner: false })).toContain("SSH logins show this server's state.");
@@ -1588,7 +1613,7 @@ test("the page shows forged IPs as blocked, or as trusted and needing repair", a
   const state = await act(b, ["state"]);
   expect(dashboardView(state)).toContain("Any client can set its own IP with a header. Run clp-addons repair.");
   restoreSystemTweaks(b.options);
-  expect(dashboardView(await act(b, ["state"]))).toContain("Only local and private-network proxies can set the visitor IP.");
+  expect(dashboardView(await act(b, ["state"]))).toContain("Only CloudPanel's own proxying and private-network proxies can set the visitor IP.");
 });
 
 // --- upload progress ----------------------------------------------------------
@@ -1703,7 +1728,7 @@ test("failed downloads retain the package URL in expandable details and escape t
   const updates = updatesStatus(b.options.updates);
   expect(updates.lastRun?.outcome).toBe("failed");
   expect(updates.lastRun?.message).toContain("php8.2-bcmath.deb");
-  const html = dashboardView({ updates, settings: { ...DEFAULT_UPDATE_SETTINGS }, uploadProgress: { guard: true, fpms: [] }, realIp: { blockForged: true, trustsAnyAddress: false, problem: "" }, phpMyAdmin: { enabled: true, active: true, problem: "" }, vhostGuard: { enabled: true, active: true, stored: [], homeLogs: [], ownLogrotate: [] }, phpPools: { enabled: true, active: true, problem: "" }, fileManagerGuard: { enabled: true, active: true }, panelCert: { kind: "generated" as const, replace: true }, backupCompression: { enabled: false, level: 3, threads: 1, active: false, supported: true, installed: true, problem: "" }, telemetry: { enabled: true, agent: true, blocked: true, problem: "" }, motd: { enabled: true, script: true, banner: false }, clpctlGuard: { error: "" }, panelPhp: { error: "" }, firewall: { error: "" }, loginJails: { error: "" }, database: { error: "" } });
+  const html = dashboardView({ updates, settings: { ...DEFAULT_UPDATE_SETTINGS }, uploadProgress: { guard: true, fpms: [] }, realIp: { blockForged: true, trustsAnyAddress: false, problem: "" }, visitorIp: { enabled: true, applied: true, problem: "" }, phpMyAdmin: { enabled: true, active: true, problem: "" }, vhostGuard: { enabled: true, active: true, stored: [], homeLogs: [], ownLogrotate: [] }, phpPools: { enabled: true, active: true, problem: "" }, fileManagerGuard: { enabled: true, active: true }, panelCert: { kind: "generated" as const, replace: true }, backupCompression: { enabled: false, level: 3, threads: 1, active: false, supported: true, installed: true, problem: "" }, telemetry: { enabled: true, agent: true, blocked: true, problem: "" }, motd: { enabled: true, script: true, banner: false }, clpctlGuard: { error: "" }, panelPhp: { error: "" }, firewall: { error: "" }, loginJails: { error: "" }, database: { error: "" } });
   expect(html).toContain("A package download failed (HTTP 404).");
   expect(html).toContain('<details class="st-run-details"><summary>Failure details</summary>');
   expect(html).toContain("php8.2-bcmath.deb failed to download, aborting &lt;script&gt;");
@@ -1812,7 +1837,7 @@ test("systemTweaksMaintenance still reconciles panel PHP when upkeep fails", asy
     },
   };
   await expect(systemTweaksMaintenance(b.options)).rejects.toThrow(
-    "Nginx validation failed: emerg; panel PHP: clp-php-fpm.service is not the CloudPanel PHP-FPM unit this addon knows",
+    "forged visitor IPs: Nginx validation failed: emerg; Cloudflare visitor IPs reapplied; panel PHP: clp-php-fpm.service is not the CloudPanel PHP-FPM unit this addon knows",
   );
   expect(phpCalled).toBe(true);
 });
@@ -1824,7 +1849,7 @@ test("systemTweaksMaintenance reports a /tmp cleanup that cannot read CloudPanel
   writeFileSync(b.nginxConf, CLOUDPANEL_NGINX_CONF);
   b.nginx.fail = true;
   b.options.tmpCleanup = { ...b.options.tmpCleanup, panelDb: join(b.aptDir, "missing", "db.sq3") };
-  await expect(systemTweaksMaintenance(b.options)).rejects.toThrow(/^\/tmp cleanup: .+; Nginx validation failed: emerg/);
+  await expect(systemTweaksMaintenance(b.options)).rejects.toThrow(/^\/tmp cleanup: .+; forged visitor IPs: Nginx validation failed: emerg/);
 });
 
 test("the page shows update options only once updates are on, and says what silently goes uncovered", () => {
@@ -1843,7 +1868,7 @@ test("the page shows update options only once updates are on, and says what sile
     uploadProgress: { guard: true, fpms: [{
       label: "PHP 8.2", version: "8.2", enabled: false, setBy: "clp-addons" as const,
       source: "/etc/php/8.2/fpm/conf.d/99-clp-addons-upload-progress.ini", offWithoutGuard: false, poolsOn: ["legacy.example.com"],
-    }] }, realIp: { blockForged: true, trustsAnyAddress: false, problem: "" }, phpMyAdmin: { enabled: true, active: true, problem: "" }, vhostGuard: { enabled: true, active: true, stored: [], homeLogs: [], ownLogrotate: [] }, phpPools: { enabled: true, active: true, problem: "" }, fileManagerGuard: { enabled: true, active: true }, panelCert: { kind: "generated" as const, replace: true }, backupCompression: { enabled: false, level: 3, threads: 1, active: false, supported: true, installed: true, problem: "" }, telemetry: { enabled: true, agent: true, blocked: true, problem: "" }, motd: { enabled: true, script: true, banner: false }, clpctlGuard: { error: "" }, panelPhp: { error: "" }, firewall: { error: "" }, loginJails: { error: "" }, database: { error: "" },
+    }] }, realIp: { blockForged: true, trustsAnyAddress: false, problem: "" }, visitorIp: { enabled: true, applied: true, problem: "" }, phpMyAdmin: { enabled: true, active: true, problem: "" }, vhostGuard: { enabled: true, active: true, stored: [], homeLogs: [], ownLogrotate: [] }, phpPools: { enabled: true, active: true, problem: "" }, fileManagerGuard: { enabled: true, active: true }, panelCert: { kind: "generated" as const, replace: true }, backupCompression: { enabled: false, level: 3, threads: 1, active: false, supported: true, installed: true, problem: "" }, telemetry: { enabled: true, agent: true, blocked: true, problem: "" }, motd: { enabled: true, script: true, banner: false }, clpctlGuard: { error: "" }, panelPhp: { error: "" }, firewall: { error: "" }, loginJails: { error: "" }, database: { error: "" },
   };
   const now = Date.parse("2026-10-25T00:00:00Z");
   const outside = dashboardView(state, now);
@@ -1891,7 +1916,7 @@ test("the page names the UDP ports CloudPanel's Firewall page opens, in one line
   const b = box();
   const base = {
     updates: updatesStatus(b.options.updates), settings: { ...DEFAULT_UPDATE_SETTINGS }, uploadProgress: { guard: true, fpms: [] },
-    realIp: { blockForged: true, trustsAnyAddress: false, problem: "" }, phpMyAdmin: { enabled: true, active: true, problem: "" }, vhostGuard: { enabled: true, active: true, stored: [], homeLogs: [], ownLogrotate: [] }, phpPools: { enabled: true, active: true, problem: "" }, fileManagerGuard: { enabled: true, active: true }, panelCert: { kind: "generated" as const, replace: true }, backupCompression: { enabled: false, level: 3, threads: 1, active: false, supported: true, installed: true, problem: "" }, telemetry: { enabled: true, agent: true, blocked: true, problem: "" }, motd: { enabled: true, script: true, banner: false }, clpctlGuard: { error: "" }, panelPhp: { error: "" }, loginJails: { error: "" }, database: { error: "" } as const,
+    realIp: { blockForged: true, trustsAnyAddress: false, problem: "" }, visitorIp: { enabled: true, applied: true, problem: "" }, phpMyAdmin: { enabled: true, active: true, problem: "" }, vhostGuard: { enabled: true, active: true, stored: [], homeLogs: [], ownLogrotate: [] }, phpPools: { enabled: true, active: true, problem: "" }, fileManagerGuard: { enabled: true, active: true }, panelCert: { kind: "generated" as const, replace: true }, backupCompression: { enabled: false, level: 3, threads: 1, active: false, supported: true, installed: true, problem: "" }, telemetry: { enabled: true, agent: true, blocked: true, problem: "" }, motd: { enabled: true, script: true, banner: false }, clpctlGuard: { error: "" }, panelPhp: { error: "" }, loginJails: { error: "" }, database: { error: "" } as const,
   };
   const open = dashboardView({ ...base, firewall: { available: true, protocols: { 5: "udp" }, udpPorts: ["53", "3478-3479"] } });
   expect(open).toContain(`<br>UDP ports open from CloudPanel's <a href="/admin/firewall">Firewall</a> page: 53, 3478-3479.</p>`);
@@ -1917,7 +1942,7 @@ test("the Failed logins card lists bans with an Unblock each, and warns about wh
   const b = box();
   const base = {
     updates: updatesStatus(b.options.updates), settings: { ...DEFAULT_UPDATE_SETTINGS }, uploadProgress: { guard: true, fpms: [] },
-    realIp: { blockForged: true, trustsAnyAddress: false, problem: "" }, phpMyAdmin: { enabled: true, active: true, problem: "" }, vhostGuard: { enabled: true, active: true, stored: [], homeLogs: [], ownLogrotate: [] }, phpPools: { enabled: true, active: true, problem: "" }, fileManagerGuard: { enabled: true, active: true }, panelCert: { kind: "generated" as const, replace: true }, backupCompression: { enabled: false, level: 3, threads: 1, active: false, supported: true, installed: true, problem: "" }, telemetry: { enabled: true, agent: true, blocked: true, problem: "" }, motd: { enabled: true, script: true, banner: false }, clpctlGuard: { error: "" }, panelPhp: { error: "" }, firewall: { error: "" }, database: { error: "" },
+    realIp: { blockForged: true, trustsAnyAddress: false, problem: "" }, visitorIp: { enabled: true, applied: true, problem: "" }, phpMyAdmin: { enabled: true, active: true, problem: "" }, vhostGuard: { enabled: true, active: true, stored: [], homeLogs: [], ownLogrotate: [] }, phpPools: { enabled: true, active: true, problem: "" }, fileManagerGuard: { enabled: true, active: true }, panelCert: { kind: "generated" as const, replace: true }, backupCompression: { enabled: false, level: 3, threads: 1, active: false, supported: true, installed: true, problem: "" }, telemetry: { enabled: true, agent: true, blocked: true, problem: "" }, motd: { enabled: true, script: true, banner: false }, clpctlGuard: { error: "" }, panelPhp: { error: "" }, firewall: { error: "" }, database: { error: "" },
   };
   const jails = {
     panel: true, ssh: false, missing: [], service: "active" as const, running: ["clp-addons-panel", "clp-addons-domain"], panelLog: true, problem: "",
@@ -2020,7 +2045,7 @@ test("the backup compression API forwards the validated selection and repaints i
 const ALL_OFF = {
   version: 1, uploadProgressGuard: false, blockForgedRealIp: false, blockVhostInjection: false, isolatePhpPools: false,
   protectPhpMyAdmin: false, confineFileManager: false, replacePanelCert: false, loginJails: { panel: false, ssh: false },
-  databaseLoopback: false, blockClpctlInjection: false, blockTelemetry: false, serverInfoMotd: false,
+  databaseLoopback: false, blockClpctlInjection: false, blockTelemetry: false, serverInfoMotd: false, cloudflareVisitorIp: false,
 };
 
 /** The box with root's lock file of its own, and with MySQL already bound to loopback, so switching that on restarts nothing. */
@@ -2060,8 +2085,8 @@ test("Lock settings switches every lockable switch on, then locks", async () => 
   await act(b, ["lock-settings"]);
   const settings = readSettings(b.options.paths as SystemTweaksPaths);
   expect(settings).toMatchObject({
-    uploadProgressGuard: true, blockForgedRealIp: true, blockVhostInjection: true, isolatePhpPools: true, protectPhpMyAdmin: true,
-    confineFileManager: true, replacePanelCert: true, loginJails: { panel: true, ssh: true }, databaseLoopback: true,
+    uploadProgressGuard: true, blockForgedRealIp: true, cloudflareVisitorIp: true, blockVhostInjection: true, isolatePhpPools: true,
+    protectPhpMyAdmin: true, confineFileManager: true, replacePanelCert: true, loginJails: { panel: true, ssh: true }, databaseLoopback: true,
     blockClpctlInjection: true, blockTelemetry: true,
   });
   // Not a protection, so not touched.

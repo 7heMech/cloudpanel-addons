@@ -5,14 +5,15 @@ import ROOT_SHELL_JS from "./assets/root-shell.client.js" with { type: "text" };
 
 export { OPEN_JS };
 
-const ROOT_SHELL_ICON = `<svg aria-hidden="true" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="2" y="4" width="20" height="16" rx="2"></rect><path d="m6 9 3 3-3 3"></path><path d="M12 15h6"></path></svg>`;
+/** The prompt mark a site's own Terminal tab has, so every way into a shell looks alike. */
+const ROOT_SHELL_MARK = `<span class="clp-root-shell-mark" aria-hidden="true" style="font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; font-weight: 700;">&gt;_</span>`;
 
 /**
  * Opens the root window, or with no script goes to it in this tab. The account
- * menu's copy, which phones get instead of the header icon, goes without it.
+ * menu's copy, a fallback on CloudPanel's own pages, goes without the mark.
  */
-export function rootShellLink(base: string, attributes: string, label: string, icon = true): string {
-  return `<a ${attributes} href="${base}/root" title="Root terminal" onclick="clpOpenTerminal('${base}', '', event.shiftKey); return false;">${icon ? ROOT_SHELL_ICON : ""}${label}</a>`;
+export function rootShellLink(base: string, attributes: string, label: string, mark = true): string {
+  return `<a ${attributes} href="${base}/root" title="Root terminal" onclick="clpOpenTerminal('${base}', '', event.shiftKey); return false;">${mark ? ROOT_SHELL_MARK : ""}${label}</a>`;
 }
 
 export function rootShellScript(base: string): string {

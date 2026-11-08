@@ -19,7 +19,7 @@ import { ActionFailure, emitActionError, emitActionOk, failAction, readJsonReque
 import { errorMessage } from "../../lib/errors";
 import { validateDomain } from "../../lib/panel-identity";
 import { CLI_BIN, PANEL_DB } from "../../lib/paths";
-import { DUPLEX_WORKER_MARKER, SESSION_2FA_ENV, SESSION_BINDING_ENV, TICKET_ENV } from "../../lib/gateway-protocol";
+import { DUPLEX_WORKER_MARKER, SESSION_2FA_ENV, SESSION_BINDING_ENV, SESSION_SEEN_ENV, TICKET_ENV } from "../../lib/gateway-protocol";
 import { PANEL_USER_NAME_RE, panelUserOwnsSite } from "../../lib/panel-users";
 import { readUnixAccounts, siteAccountProblem, splitSharedUids } from "../../lib/site-accounts";
 import { DEFAULT_ROOT_ACCESS_PATHS, rootAccess, type RootAccessPaths } from "./root-access";
@@ -257,7 +257,8 @@ export async function runTerminalAction(argv: string[], options: TerminalActionO
   // Set by the gateway from the panel session the request came with.
   const env = options.env ?? process.env;
   const session = env[SESSION_2FA_ENV] ?? "0";
-  const binding = env[SESSION_BINDING_ENV] ?? "";
+  const seen = Number(env[SESSION_SEEN_ENV] || NaN);
+  const panelSession = { proof: session, binding: env[SESSION_BINDING_ENV] ?? "", seen: Number.isSafeInteger(seen) && seen > 0 ? seen : null };
   let verified = "";
   try {
     if ((options.processUid ?? process.getuid?.()) !== 0) failAction("terminal actions must run as root");
@@ -266,7 +267,7 @@ export async function runTerminalAction(argv: string[], options: TerminalActionO
       const user = argv.length === 2 ? argv[1]!.match(/^--panel-user=(.+)$/)?.[1] : undefined;
       if (!user || !PANEL_USER_NAME_RE.test(user)) failAction("Missing panel user.");
       const input = argv[0] === "root-auth-verify" ? await readJsonRequest(undefined, 16 * 1024) : {};
-      emitActionOk(rootAuth(argv[0] === "root-auth-options" ? "options" : "verify", user, session, binding, input, paths.rootAccess, now(), options.rootAuthStorage));
+      emitActionOk(rootAuth(argv[0] === "root-auth-options" ? "options" : "verify", user, panelSession, input, paths.rootAccess, now(), options.rootAuthStorage));
       return 0;
     }
     // Only the gateway's duplex stream, which checked the panel session
@@ -274,7 +275,7 @@ export async function runTerminalAction(argv: string[], options: TerminalActionO
     if (env[DUPLEX_WORKER_MARKER] !== "1") failAction("terminal sessions start only through the gateway's stream");
     request = parseTerminalRequest(argv, options);
     target = resolveTerminalTarget(request, paths, session);
-    if (request.domain === null) verified = `, verified with ${rootAuth("consume", request.panelUser, session, binding, { ticket: env[TICKET_ENV] }, paths.rootAccess, now(), options.rootAuthStorage)}`;
+    if (request.domain === null) verified = `, verified with ${rootAuth("consume", request.panelUser, panelSession, { ticket: env[TICKET_ENV] }, paths.rootAccess, now(), options.rootAuthStorage)}`;
   } catch (error) {
     emitActionError("terminal", printable(errorMessage(error)));
     return 1;

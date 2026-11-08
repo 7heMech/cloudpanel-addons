@@ -6,6 +6,7 @@ import {
 import { SYSTEM_TWEAKS_TARGETS } from "./inject/targets";
 import { DEFAULT_REAL_IP_PATHS, REAL_IP_MARKER, releaseRealIp } from "./real-ip";
 import { syncVarnishBackends } from "./varnish-backend";
+import { DEFAULT_VISITOR_IP_PATHS, UNTRUSTED_LOOPBACK, VISITOR_IP, releaseVisitorIp } from "./visitor-ip";
 import { fatal, log } from "../../lib/log";
 import type { AddonDefinition } from "../../lib/addon-definition";
 
@@ -15,6 +16,8 @@ export const SYSTEM_TWEAKS_ADDON: AddonDefinition = {
   description: "Server security, automatic updates, panel PHP, remote backup compression, SSH login message.",
   added: "2.0.0-rc.1",
   changed: [
+    { in: "2.1.0-rc.4", note: "Lock settings, and Locked by root once it is locked, moved from the top of the page to the Hardening card's header: the lock covers Hardening and Failed logins only." },
+    { in: "2.1.0-rc.4", note: "Sites behind Cloudflare's proxy or a Cloudflare Tunnel now log the visitor's IP and pass it to PHP, from CF-Connecting-IP. An IP rule you added to a vhost's port 8080 server now sees 127.0.0.1, so move it to the first server. Switch it off under Hardening; on a locked box, root runs clp-addons unlock system-tweaks first." },
     { in: "2.1.0-rc.3", note: "While root has locked System Tweaks, the panel can switch protections on but not off, enable the addon, and move the panel's PHP only to a newer version. Lock settings, at the top of the page, turns every protection on and locks. New installs start locked; updates never lock an existing box." },
     { in: "2.1.0-rc.2", note: "SSH logins show the server's uptime, load, memory, disk, addresses and pending updates in place of CloudPanel's banner. Switch it off under SSH login." },
     { in: "2.1.0-rc.1", note: "Settings is now Hardening and includes MySQL on this server only." },
@@ -62,7 +65,11 @@ export const SYSTEM_TWEAKS_ADDON: AddonDefinition = {
       },
     },
   },
-  conffiles: [{ path: DEFAULT_REAL_IP_PATHS.nginxConf, marker: REAL_IP_MARKER, release: () => releaseRealIp() }],
+  conffiles: [
+    { path: DEFAULT_REAL_IP_PATHS.nginxConf, marker: REAL_IP_MARKER, release: () => releaseRealIp() },
+    { path: DEFAULT_VISITOR_IP_PATHS.nginxConf, marker: [VISITOR_IP, UNTRUSTED_LOOPBACK], release: () => releaseVisitorIp("nginxConf") },
+    { path: DEFAULT_VISITOR_IP_PATHS.fastcgiParams, marker: VISITOR_IP, release: () => releaseVisitorIp("fastcgiParams") },
+  ],
   phpGuardOff: () => systemTweaksPhpGuardOff(),
   deactivate: () => withdrawSystemTweaks(),
   activate: (wasEnabled) => restoreSystemTweaks({}, wasEnabled),

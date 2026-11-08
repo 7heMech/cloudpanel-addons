@@ -49,8 +49,9 @@ failed package URL when unattended-upgrades logs one.
 
 ### Lock settings
 
-The page header's **Lock settings**, top right like the other addons' header
-actions, is one action on the server, the `lock-settings` verb: every Hardening
+**Lock settings** sits in the Hardening card's header rather than at the top of
+the page, because it covers Hardening and Failed logins, the card after it, and
+none of the page's other settings. It is one action on the server, the `lock-settings` verb: every Hardening
 and Failed logins switch on, the two off by default (MySQL on this server only
 and the SSH jail) included, then [root's lock](security.md#root-locks) on System
 Tweaks. Its confirmation says what that does, that MySQL restarts and that only
@@ -63,9 +64,9 @@ report protections that are not running. It tries every other switch, then
 MySQL only if all of them came on, since its restart cuts remote clients and is
 not spent on a lock that will be refused. It locks only when all came on;
 otherwise it names what failed and locks nothing, leaving on what came on. The
-lock never holds a switch off. While it runs, the Working line sits under the
-page heading. Once locked, the header shows **Locked by root** instead, and a
-notice says how to unlock. It does not touch the panel's PHP; see below.
+lock never holds a switch off. While it runs, the Working line sits under that
+header. Once locked, the header shows **Locked by root** instead, and a notice
+under it says how to unlock. It does not touch the panel's PHP; see below.
 
 Enabling System Tweaks under a lock, which a new install has, starts it from
 its defaults: before the activation applies anything, each lockable setting is
@@ -372,7 +373,9 @@ that line in both files, and a `::/0` one if present, by prefixing
 `#clp-addons:untrusted `. The other `set_real_ip_from` lines stay: `127.0.0.1`,
 which CloudPanel's front server uses when it proxies to a local backend such as
 WordPress or Varnish, and the private ranges, where a load balancer would sit.
-A peer in those ranges can still set the header.
+A peer in those ranges can still set the header. A Cloudflare Tunnel also
+connects from `127.0.0.1`, so [Cloudflare visitor IPs](#cloudflare-visitor-ips)
+takes over the backend hop and stops trusting it.
 
 The panel also trusts Cloudflare, in a marked block after the commented line
 built from CloudPanel's `/etc/nginx/cloudflare/ips`, with each entry checked as
@@ -383,10 +386,10 @@ Cloudflare keeps its visitors' addresses, and a forged entry sent through
 Cloudflare sits to the left of the real one and is never reached. The sites get
 no Cloudflare trust: Cloudflare passes a client's `X-Real-IP` through unchanged,
 so trusting it would reopen the forgery for every site behind Cloudflare. Their
-Cloudflare requests keep the edge address they have today, and CloudPanel's
-`cloudflare` log format already reads `CF-Connecting-IP`. Only a proxy on a
-public address other than Cloudflare loses its visitors' addresses; switch the
-setting off there.
+`$remote_addr` stays the edge address; [Cloudflare visitor
+IPs](#cloudflare-visitor-ips) gives their logs and PHP the visitor. Only a proxy
+on a public address other than Cloudflare loses its visitors' addresses; switch
+the setting off there.
 
 Switching off removes the prefix and leaves each file byte-for-byte as CloudPanel
 wrote it. Each instance uses the shared Nginx transaction with its own
@@ -412,6 +415,77 @@ whatever the upgrade installed. The panel's file is not a conffile: a
 `bun tests/integration/integration-real-ip.ts` runs real Nginx in Docker: it
 reproduces the bypass on the stock directives, then shows the edited ones reject
 it while Cloudflare peers and loopback proxies keep working.
+
+## Cloudflare visitor IPs
+
+Behind Cloudflare's proxy a site's `$remote_addr` is the edge, and behind a
+Cloudflare Tunnel it is `127.0.0.1` or `::1`, where cloudflared on this server
+connects from. CloudPanel's `main` log format and PHP's `REMOTE_ADDR` use it,
+and its `cloudflare` format logs `CF-Connecting-IP` from any client, even one
+the Cloudflare-only rules refuse.
+
+`$remote_addr` cannot simply come from `CF-Connecting-IP`. Nginx's real-IP
+settings are one header for every server, and CloudPanel's templates proxy PHP
+from the front server on 80/443 to a backend on `127.0.0.1:8080`, passing every
+request header on. A backend that trusted loopback for `CF-Connecting-IP` would
+take a direct visitor's forged one. Nginx also checks the Cloudflare-only
+`allow` list against the rewritten address, so every visitor would be refused.
+
+**Cloudflare visitor IPs**, on by default (`cloudflareVisitorIp`), leaves
+`$remote_addr` alone and defines `$clp_visitor_ip` in
+`/etc/nginx/sites-enabled/00-clp-addons-visitor-ip.conf`, built by
+`lib/visitor-ip.ts` from CloudPanel's `/etc/nginx/cloudflare/ips`. It is a
+well-formed `CF-Connecting-IP` when Cloudflare set the header, and
+`$remote_addr` otherwise. Cloudflare set it when the connection's own address
+(`$realip_remote_addr`) is:
+
+- one of Cloudflare's ranges;
+- loopback on port 80 or 443, which is cloudflared;
+- loopback on another port, which is CloudPanel's front server or Varnish, with
+  an `X-Real-IP` that is one of those addresses.
+
+On such a hop, `$clp_visitor_ip` falls back to that `X-Real-IP`. The front
+server always sets it from its own `$remote_addr`, so the sites' `nginx.conf`
+no longer needs to trust `127.0.0.1`, and the setting comments that line out
+with the `#clp-addons:hop` marker followed by a space. A tunnel visitor's
+`X-Real-IP` is ignored on 80 and 443.
+
+The map cannot tell CloudPanel's front server from any other local client on
+the backend's port, so a tunnel pointed at `:8080`, or a local user connecting
+there, can still name the visitor with `X-Real-IP`. Before this setting every
+server trusted `127.0.0.1` for that header, so this is no new exposure; the
+operator guide says to point a tunnel at 80 or 443.
+
+The setting points the `main` and `cloudflare` log formats in `nginx.conf` and
+`REMOTE_ADDR` in `fastcgi_params` at it. Nginx's error logs, `allow`/`deny`,
+basic auth and rate limits keep `$remote_addr`. In the backend, that is now
+`127.0.0.1` for every visitor. CloudPanel's vhosts use `$remote_addr` only in
+the front server: in its `proxy_set_header` lines, and in the blocked IPs,
+basic-auth allowlist and Cloudflare-only rules that fill `{{settings}}`. A rule
+an administrator adds by address to the backend server sees `127.0.0.1`, so the
+operator guide says to keep such rules in the front server.
+
+Both files are `nginx-common` conffiles, released for an upgrade the same way
+as the real-IP edit, one at a time and without a reload. `nginx.conf` counts as
+edited when it has either `$clp_visitor_ip` or the hop marker, since a file
+whose log formats did not match can have only the latter. Every matching line
+is edited, so a repeated directive is never left half done. The map stays while
+either still names it. Activation and the 15-minute repair put the edits back,
+and rebuild the map when CloudPanel's list changes. Switching off restores the
+lines and removes the map. Switching on refuses a map file clp-addons did not
+write, and the row then names that file instead of asking for a repair;
+switching off leaves such a file alone. A line the setting does not
+recognise, such as a log format wrapped onto two lines, is shown as a problem
+rather than as on. Root's lock covers the switch, and Lock settings turns it on,
+since switching it off reopens the tunnel forgery.
+Maintenance Mode builds its bypass address from the same `lib/visitor-ip.ts`.
+
+`bun tests/integration/integration-visitor-ip.ts` runs real Nginx in Docker
+with the edited files. Through the front server and the backend, it shows:
+
+- Cloudflare and a local tunnel name the visitor;
+- a direct client's header, a malformed one, and an `X-Real-IP` sent through
+  the tunnel all keep the connecting address.
 
 ## phpMyAdmin
 
@@ -1630,8 +1704,9 @@ repair now, rather than at its next turn, so visitor-IP trust, the phpMyAdmin
 rules, the guards and the rest come back as the settings ask; and the panel's
 PHP choice comes back last. Telemetry, the login message
 and the firewall come last and only warn, since none of them keeps the addon on.
-Restoring runs under the lock and stops at a failure, except for MySQL, backup
-compression, telemetry and the login message, which warn and wait for repair;
+Restoring runs under the lock and stops at a failure, except for Cloudflare
+visitor IPs, MySQL, backup compression, telemetry and the login message, which
+warn and wait for repair;
 Panel PHP comes back either way, and the panel certificate and firewall follow,
 warning on failure.
 
@@ -1667,6 +1742,7 @@ the saved original named in the row) to see what CloudPanel itself ships.
 | clpctl injection (`blockClpctlInjection`) | `ALL ALL=(ALL) NOPASSWD: /usr/bin/clpctlWrapper` lets any local account run clpctl as root, clpctl strips runs of three backslashes from each argument and builds `bash -c "…"` strings, and `db:import` runs as the DB administrator | `grep 'clpctlWrapper' /etc/sudoers.d/cloudpanel` shows the `NOPASSWD` rule, and `grep str_replace /home/clp/htdocs/app/files/bin/clpctl` shows `str_replace("\\\\\\", '', $arg)` (with the setting on, the live wrapper is ours; CloudPanel's original is saved at `/var/lib/clp-addons/system-tweaks/clpctlWrapper.orig`) | the setting, `clpctl-guard.ts`, `clpctl-wrapper.sh`, its `SECURITY.md` entry and tests — once clpctl stops stripping backslashes, stops building shell strings, and `db:import` runs as the caller |
 | CloudPanel telemetry (`blockTelemetry`) | `clp-agent` posts every site's domain and every panel user's name and email to `ing.cloudpanel.io` once a day, with no opt-out | `strings /usr/sbin/clp-agent \| grep -E 'ing.cloudpanel.io\|FROM user'` prints both | the setting, `telemetry.ts`, its `SECURITY.md` entry and tests — once the agent stops sending that data or CloudPanel offers an opt-out |
 | Panel PHP / PHP 8.1 (`panelPhp`, opt-in) | Runs the panel, phpMyAdmin and File Manager on PHP 8.1, which has [ended upstream support](https://www.php.net/eol.php) | `php8.1 -v` reports 8.1.x and the panel's own FPM pool is PHP 8.1, while 8.1 is past its php.net EOL date | the Panel PHP setting and `panel-php.ts` — once CloudPanel ships its panel on a supported PHP |
+| Cloudflare visitor IPs (`cloudflareVisitorIp`) | Site logs and PHP see Cloudflare's or the tunnel's address; only the `cloudflare` log format reads `CF-Connecting-IP`, from any client; `127.0.0.1`, where a tunnel connects from, is trusted for `X-Real-IP` | `grep -E "log_format main\|REMOTE_ADDR\|set_real_ip_from 127" /etc/nginx/nginx.conf /etc/nginx/fastcgi_params` shows `$remote_addr` and an uncommented `127.0.0.1` with the setting off | the setting, `visitor-ip.ts`, its `SECURITY.md` entry and tests (keep `lib/visitor-ip.ts` for Maintenance Mode) — once CloudPanel gives sites the visitor behind Cloudflare's proxy and a tunnel without trusting the header from anyone else |
 | Forged visitor IPs (`blockForgedRealIp`) | The panel nginx trusts `set_real_ip_from 0.0.0.0/0;`, so any client can forge its address with an IP header | `grep 'set_real_ip_from 0.0.0.0/0' /home/clp/services/nginx/nginx.conf` shows the line present/uncommented (the guard comments it as `#clp-addons:untrusted …`) | the setting, `real-ip.ts`, its `SECURITY.md` entry and tests — once CloudPanel trusts only loopback, private ranges and Cloudflare |
 | PHP upload progress (every install) | PHP-FPM defaults `session.upload_progress.enabled` to On, the session path of [CVE-2026-109619](https://github.com/php/php-src/security/advisories/GHSA-6wmf-4rv5-p3rp) | `php -i \| grep session.upload_progress.enabled` is `On` by default and the installed PHP build is not yet patched for the advisory | the `uploadProgressGuard` and `php-guard` wiring — once the PHP packages carry the fix |
 

@@ -238,9 +238,9 @@ test("global-settings reconciliation is idempotent, drift-gated, and reversible"
     expect(geo).toContain("173.245.48.0/20 1;");
     expect(geo).toContain("2400:cb00::/32 1;");
     expect(geo).toContain("map $realip_remote_addr $clp_maintenance_peer");
-    expect(geo).toContain("geo $clp_maintenance_client $clp_cf_peer");
-    expect(geo).toContain("default $clp_maintenance_client;");
-    expect(geo).toContain("~^1:.+$ $clp_cf_header_ip;");
+    expect(geo).toContain("173.245.48.0/20 cloudflare;");
+    expect(geo).toContain("default $clp_maintenance_peer;");
+    expect(geo).toContain("~^1:.+$ $clp_maintenance_cf_header;");
     writeFileSync(cloudflareIpsPath, "allow 173.245.48.0/20;\nallow 2400:cb00::/32;\nallow 104.16.0.0/13;\ndeny all;\n");
     expect(inspectNginxMaintenance(paths).state).toBe("stale-content");
     expect(reconcileNginxMaintenance({ ...paths, reload: false }).changed).toBe(true);

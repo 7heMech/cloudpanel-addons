@@ -1,5 +1,6 @@
 import { Database } from "bun:sqlite";
 import { lstatSync, readFileSync, rmSync } from "node:fs";
+import { isIP } from "node:net";
 import { ActionFailure, failAction } from "./action";
 import { errorMessage } from "./errors";
 import { type CommandResult } from "./command";
@@ -13,13 +14,19 @@ interface NginxFileBackup {
   gid: number;
 }
 
-/** The `allow` entries of CloudPanel's Cloudflare list. */
+/** The `allow` entries of CloudPanel's Cloudflare list, each checked as an address or a prefix. */
 export function cloudflareRanges(path: string): string[] {
   let content: string;
   try { content = readFileSync(path, "utf8"); } catch { return []; }
   return content.split(/\r?\n/).flatMap((line) => {
-    const match = line.match(/^\s*allow\s+([0-9a-fA-F.:/]+)\s*;/);
-    return match ? [match[1]!] : [];
+    const range = line.match(/^\s*allow\s+([0-9a-fA-F.:/]+)\s*;/)?.[1];
+    if (!range) return [];
+    const parts = range.split("/");
+    if (parts.length > 2) return [];
+    const [address = "", prefix] = parts;
+    const family = isIP(address);
+    const valid = family !== 0 && (prefix === undefined || (/^\d+$/.test(prefix) && Number(prefix) <= (family === 4 ? 32 : 128)));
+    return valid ? [range] : [];
   });
 }
 
