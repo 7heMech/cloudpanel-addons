@@ -11,7 +11,7 @@ import { runCommand, type CommandResult } from "../lib/command";
 import { inspectPhpGuard, reconcilePhpGuard, type PhpGuardOptions } from "../lib/php-guard";
 import {
   executeSystemTweaksAction, readSettings, restoreSystemTweaks, systemTweaksMaintenance, systemTweaksMotd, systemTweaksPhpGuardOff, systemTweaksPhpMyAdmin, systemTweaksPhpPools, systemTweaksUpkeep, withdrawSystemTweaks,
-  type SystemTweaksOptions, type SystemTweaksPaths, type SystemTweaksState,
+  type SystemTweaksOptions, type SystemTweaksState,
 } from "../addons/system-tweaks/action";
 import {
   allowedPatterns, coverageOf, dropInFor, fnmatch, parseAptConfig, parsePolicy, updatesStatus, DEFAULT_UPDATE_SETTINGS, type UpdatesStatus,
@@ -266,13 +266,6 @@ function dumpOf(aptDir: string): string {
     }
   }
   return out.join("\n");
-}
-
-/** `systemctl show` for units none of which are installed. */
-function noUnits(command: string, args: string[]): CommandResult {
-  if (command !== "env" || args[2] !== "show") return { ok: true, stdout: "", stderr: "" };
-  const names = args.slice(3).filter((arg, index, all) => !arg.startsWith("-") && all[index - 1] !== "-p");
-  return { ok: true, stdout: names.map((name) => `Id=${name}\nLoadState=not-found\nActiveState=inactive\n`).join("\n"), stderr: "" };
 }
 
 function box(options: { installed?: boolean; timers?: Record<string, string>; failEnable?: string[]; log?: string } = {}): Box {
@@ -775,7 +768,7 @@ function systemTweaksClient() {
       return line;
     },
   };
-  const client = new Function("call", "busy", "notify", "clearNotice", "repaintView", "CLP_ROOT", "clpFlashTimer", "document",
+  const client = new Function("call", "busy", "notify", "clearNotice", "repaintView", "CLP_ROOT", "clpFlashTimer", "document", "location",
     `${source}\nreturn { installUpdates, setUpdates, setPanelPhp, setSwitch };`)(
     (path: string, options: { body: string }) => new Promise((answer) => {
       events.push(`POST ${path} ${options.body}`);
@@ -788,6 +781,8 @@ function systemTweaksClient() {
     { getElementById: () => ({}), querySelector: () => null, querySelectorAll: () => [] },
     0,
     document,
+    // The page is repainted from each reply; reloading it would lose the notice.
+    { reload: () => events.push("reload") },
   ) as Record<"installUpdates" | "setUpdates" | "setPanelPhp", (control: unknown) => Promise<void>> & { setSwitch: (control: unknown, name: string) => Promise<void> };
   return { client, control, events, replies, lines };
 }
@@ -801,7 +796,6 @@ test("a change says it is running on its own row, and repaints the page from its
   await pending;
   expect(events.slice(3)).toEqual(["idle", "repaint: <p>installed</p>", "ok: unattended-upgrades is installed."]);
   expect(lines.every((line) => line.removed)).toBe(true);
-  expect(readFileSync(join(import.meta.dir, "../addons/system-tweaks/app/views.client.js"), "utf8")).not.toContain("location.reload");
 });
 
 
@@ -1152,7 +1146,9 @@ test("both guards install as one file each, with the shared session reader in pl
   for (const path of [b.vhostGuardPaths.script, b.fileManagerGuardPaths.script]) {
     const text = readFileSync(path, "utf8");
     expect(text).not.toContain("panel-session.php");
-    expect(text).toContain("preg_match('/\\A[A-Za-z0-9,-]{1,128}\\z/', $id)");
+    // One file: nothing beside it left to include, and the cookie is read in place.
+    expect(text).not.toMatch(/\b(require|include)(_once)?\s*\(?\s*__DIR__/);
+    expect(text).toContain("$_COOKIE['cloudpanel']");
   }
 });
 

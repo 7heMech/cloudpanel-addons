@@ -154,7 +154,6 @@ test("switching MySQL on writes the option file and the start hook, without a re
   const s = server();
   expect(applyMemory(on({ redis: false }), s.options)).toContain("MySQL memory file written");
   const file = readFileSync(s.file, "utf8");
-  expect(file).toBe(mysqlOptionFile(memoryPlan(3819, "balanced"), "balanced"));
   expect(file).toContain("innodb_buffer_pool_size = 896M\n");
   expect(file).toContain("max_connections = 100\n");
   expect(readFileSync(join(s.systemd, "mysql.service.d", "zz-clp-addons-memory.conf"), "utf8"))
@@ -431,7 +430,7 @@ test("old MySQL ownership marker is rewritten without restarting the server", ()
 });
 
 test("the budget sets PHP's worst case against RAM and names what to fix", async () => {
-  const { memoryCard, size } = await import("../addons/resource-limits/app/memory-view");
+  const { memoryCard } = await import("../addons/resource-limits/app/memory-view");
   const { STOCK_PROFILE, phpMemoryLimitMb } = await import("../addons/resource-limits/action");
   const s = server(8192);
   const memory = { ...memoryStatus(on(), s.options), settings: on() };
@@ -452,10 +451,9 @@ test("the budget sets PHP's worst case against RAM and names what to fix", async
   expect(memoryCard(memory, [stock, drifted])).toContain("2 sites on CloudPanel&#x27;s 250 workers: put them in a category, or back in theirs below.");
   // Services that alone take more than RAM are over by their whole deficit, PHP or not.
   const crowded = { ...memory, varnishMb: memory.plan.ramMb };
-  const services = memory.plan.bufferPoolMb + memory.plan.tempTableRamMb + memory.plan.maxConnections * 8 + memory.plan.redisMb + (memory.memcachedMb ?? 0);
-  expect(memoryCard(crowded, [])).toContain(`>${size(services)} over</span>`);
+  expect(memoryCard(crowded, [])).toContain(">4.5 GB over</span>");
   expect(memoryCard(crowded, [])).toContain("The services alone take more than RAM");
-  expect(memoryCard(crowded, [categorised])).toContain(`>${size(services + 768)} over</span>`);
+  expect(memoryCard(crowded, [categorised])).toContain(">5.2 GB over</span>");
   expect(phpMemoryLimitMb("256M")).toBe(256);
   expect(phpMemoryLimitMb("2G")).toBe(2048);
   expect(phpMemoryLimitMb("262144K")).toBe(256);

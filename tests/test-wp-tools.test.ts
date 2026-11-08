@@ -4,7 +4,7 @@ import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, sy
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
-  DEFAULT_WP_TOOLS_PATHS, executeWpToolsAction, removeMainwpGuards, WP_LOGIN_FIELD, WORDPRESS_APPLICATIONS,
+  DEFAULT_WP_TOOLS_PATHS, executeWpToolsAction, removeMainwpGuards, WORDPRESS_APPLICATIONS,
   type WpBasicAuthReply, type WpToolsActionOptions, type WpLoginResult, type WpMaintenanceReply, type WpRemoveResult, type WpSiteView,
 } from "../addons/wp-tools/action";
 import { DEFAULT_MAINTENANCE_ACTION_PATHS } from "../addons/maintenance/action";
@@ -287,11 +287,11 @@ test("a named panel user signs in only to the sites that are theirs", async () =
 test("a sign-in installs the loader, leaves a single-use secret, and names the site's own URL", async () => {
   const result = await act<WpLoginResult>(["sign-in", "--domain=shop.example.com"]);
   expect(result.url).toBe("https://shop.example.com/wp-login.php");
-  expect(result.field).toBe(WP_LOGIN_FIELD);
   expect(result.token).toMatch(/^[0-9a-f]{64}$/);
 
   const site = siteDir("shop", "shop.example.com");
   const loader = readFileSync(join(site, "wp-content/mu-plugins/clp-addons-login.php"), "utf8");
+  expect(loader).toContain(`$_POST['${result.field}']`);
   expect(loader).toContain("wp_set_auth_cookie");
   expect(loader).toContain("hash_equals");
   // Removed before it is compared, so a failed attempt spends the secret too.

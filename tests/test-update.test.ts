@@ -295,7 +295,7 @@ test("enable turns bundled addons on with no release checks or gh, even when all
   for (const enabled of [true, false]) {
     resetState();
     hasInstalledAddon = enabled;
-      await applyEnable("stager");
+    await applyEnable("stager");
     expect(calls).not.toContain("resolveRelease");
     expect(calls).not.toContain("fetchVerified");
     expect(calls).not.toContain("verifyAttestation");
@@ -351,7 +351,6 @@ test.each([
 });
 
 test("an update hands provisioning to the installed target binary", async () => {
-
   await cmdUpdate(["--version=v1.2.3"]);
 
   expect(calls).toContain("fetchVerified");
@@ -595,7 +594,6 @@ test("an up-to-date update says so and changes nothing, with or without addons",
     resetState();
     hasInstalledAddon = installed;
     artifactsAvailable = true;
-      resolvedReleaseTag = "v1.2.3";
 
     await cmdUpdate(["--version=v1.2.3"]);
 

@@ -4,19 +4,18 @@
 // dashboard was invisible to the Stager, both sides offered the same number, and
 // the clone died on `docker run` failing to bind it -- reported as "failed to
 // start container", with nothing naming the port.
-import { describe, expect, test } from "bun:test";
-import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { afterEach, describe, expect, spyOn, test } from "bun:test";
+import { existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { getNextAvailablePort } from "../lib/snapshot-reader";
 import type { PanelSnapshot } from "../lib/snapshot-reader";
 import { portHolder } from "../addons/instatic/action";
+import { instaticService } from "../addons/instatic/app/service";
+import { handle } from "../addons/stager/app/index";
+import { stagerService } from "../addons/stager/app/service";
 
 const repo = join(import.meta.dir, "..");
-
-function source(path: string): string {
-  return readFileSync(join(repo, path), "utf-8");
-}
 
 function snap(allocated: number[]): PanelSnapshot {
   return {
@@ -50,32 +49,109 @@ describe("the next free port", () => {
 });
 
 describe("the two addons allocate against each other", () => {
-  test("the stager counts live Instatic instances, not only its own jobs", () => {
-    const stagerIndex = source("addons/stager/app/index.ts");
-    expect(stagerIndex).toInclude("instaticService.listInstancesOrThrow()");
-    expect(stagerIndex).toInclude("stagerService.listJobsOrThrow()");
+  type Stubbed = { target: object; name: string; original: unknown };
+  const stubbed: Stubbed[] = [];
+  function stub<T extends object>(target: T, name: keyof T & string, value: unknown): void {
+    stubbed.push({ target, name, original: target[name] });
+    (target as Record<string, unknown>)[name] = value;
+  }
+  afterEach(() => {
+    for (const { target, name, original } of stubbed.splice(0).reverse()) (target as Record<string, unknown>)[name] = original;
   });
 
-  test("an unreadable list is an error on the allocation path, not an empty one", () => {
-    expect(source("addons/stager/app/service.ts")).toMatch(/listJobsOrThrow[\s\S]*?throw new Error/);
-    expect(source("addons/instatic/app/service.ts")).toMatch(/listInstancesOrThrow[\s\S]*?throw new Error/);
+  /** A reverse-proxy source and an empty snapshot; returns the port each clone was handed. */
+  function instaticSource(): number[] {
+    const handed: number[] = [];
+    stub(stagerService, "listSites", async () => [{
+      domain: "app.example.com", siteType: "reverse-proxy", siteUser: "app", phpVersion: "", application: "", databases: 0,
+    }]);
+    stub(stagerService, "snapshot", async () => ({ snap: snap([]), ageSeconds: 0 }));
+    stub(stagerService, "startClone", async (_source: string, _target: string, _tls: boolean, instatic?: { port: number }) => {
+      handed.push(instatic!.port);
+      return { ok: true, data: { job: "20260910T093000Z-a1b2c3" } };
+    });
+    // The lenient lists answer "nothing", which is what allocation must never believe.
+    stub(stagerService, "listJobs", async () => []);
+    stub(instaticService, "listInstances", async () => []);
+    return handed;
+  }
+
+  function clone(): Promise<Response> {
+    return handle(new Request("https://panel.example/addons/stager/api/clones", {
+      method: "POST",
+      headers: {
+        Origin: "https://panel.example", Host: "panel.example", "Content-Type": "application/json",
+        Cookie: "clp_addons_csrf=csrf_token", "x-clp-addons-csrf": "csrf_token",
+      },
+      body: JSON.stringify({ source: "app.example.com", target: "stg", instaticEmail: "admin@example.com", instaticPassword: "secret" }),
+    }), "/api/clones");
+  }
+
+  test("the stager counts live Instatic instances, not only its own jobs", async () => {
+    const handed = instaticSource();
+    stub(stagerService, "listJobsOrThrow", async () => []);
+    stub(instaticService, "listInstancesOrThrow", async () => [{
+      domain: "dash.example.com", port: 39000, tag: "latest", container: "instatic-dash", siteUser: "dash", createdAt: "", state: "running",
+    }]);
+    const res = await clone();
+    expect(res.status).toBe(200);
+    expect(handed).toEqual([39001]);
   });
 
-  test("the instatic create no longer allocates against a silent empty list", () => {
-    expect(source("addons/instatic/app/service.ts")).toInclude("const existing = await this.listInstancesOrThrow()");
-  });
+  for (const unreadable of ["the stager's jobs", "Instatic's instances"]) {
+    test(`an unreadable list of ${unreadable} is a JSON error, not an empty list`, async () => {
+      const handed = instaticSource();
+      const fail = async () => { throw new Error(`could not list ${unreadable}`); };
+      stub(stagerService, "listJobsOrThrow", unreadable === "the stager's jobs" ? fail : async () => []);
+      stub(instaticService, "listInstancesOrThrow", unreadable === "Instatic's instances" ? fail : async () => []);
+      const error = spyOn(console, "error").mockImplementation(() => {});
+      try {
+        const res = await clone();
+        expect(res.status).toBe(500);
+        expect(await res.json()).toEqual({ ok: false, error: `could not list ${unreadable}` });
+      } finally { error.mockRestore(); }
+      expect(handed).toEqual([]);
+    });
+  }
 
   // The root action is where the allocation decision is made, under the lock.
   test("the action re-checks the port rather than only its range, and names who has it", () => {
-    const instaticAction = source("addons/instatic/action.ts");
-    const create = instaticAction.slice(instaticAction.indexOf("async function cmdCreate"));
-    expect(create.slice(0, create.indexOf("\nasync function cmdUpdate"))).toInclude("portHolder(port, domain, paths)");
-    expect(instaticAction).toInclude("is already taken by");
-  });
-
-  test("the clone route turns a throw into a message rather than a bare 500", () => {
-    expect(source("addons/stager/app/index.ts"))
-      .toMatch(/path === "\/api\/clones"[\s\S]{0,600}?try \{[\s\S]{0,200}?postClone/);
+    const dir = mkdtempSync(`${tmpdir()}/clp-ports-create-`);
+    try {
+      const bin = `${dir}/bin`;
+      mkdirSync(bin);
+      // No container exists and nothing listens: only the other instance's record holds the port.
+      for (const command of ["docker", "ss"]) writeFileSync(`${bin}/${command}`, "#!/bin/sh\nexit 0\n", { mode: 0o755 });
+      mkdirSync(`${dir}/data/other.test`, { recursive: true });
+      writeFileSync(`${dir}/data/other.test/meta.json`, JSON.stringify({ domain: "other.test", port: 39997 }));
+      const paths = {
+        lockDir: `${dir}/lock`, dataBaseDir: `${dir}/data`, backupDir: `${dir}/backups`, jobsDir: `${dir}/jobs`,
+        actionBinary: `${dir}/clp-addons`, panelDb: `${dir}/panel.db`,
+        clpctl: `${bin}/clpctl`, panelIdentityFile: `${dir}/identity`, homeDir: `${dir}/home`,
+      };
+      const script = `
+        import { mock } from "bun:test";
+        Object.defineProperty(process, "getuid", { value: () => 0 });
+        const common = await import("./lib/panel-identity.ts");
+        mock.module("./lib/panel-identity.ts", () => ({ ...common, validateDomain: (value) => value }));
+        const { runInstaticAction } = await import("./addons/instatic/action.ts");
+        process.exit(await runInstaticAction(
+          ["create", "--domain", "mine.test", "--port", "39997", "--tag", "0.0.18", "--tls", "no"],
+          { paths: ${JSON.stringify(paths)} },
+        ));
+      `;
+      const run = Bun.spawnSync([process.execPath, "-e", script], {
+        cwd: repo, env: { ...process.env, PATH: `${bin}:${process.env.PATH ?? ""}` },
+      });
+      expect(run.exitCode).not.toBe(0);
+      expect(JSON.parse(run.stdout.toString().trim())).toEqual({
+        ok: false,
+        error: "port 39997 is already taken by the instance for other.test; retry, or pick a hostname whose instance can have a port of its own",
+      });
+      expect(existsSync(`${dir}/data/mine.test`)).toBe(false);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
   });
 });
 

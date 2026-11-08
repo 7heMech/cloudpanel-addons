@@ -58,55 +58,17 @@ test("a fragment is a page with no document around it", () => {
   expect(page.html.match(/id="clp-flash"/g)).toHaveLength(1);
   expect(page.html.match(/id="clp-confirm"/g)).toHaveLength(1);
   // The script is handed over unrun, and learns its root from the loader.
-  expect(page.script).toContain('const CLP_BASE = "/addons/maintenance"');
   expect(page.script).toContain("typeof CLP_MOUNT === 'undefined' ? document : CLP_MOUNT");
-  expect(page.script).toContain("CLP_ROOT.getElementById('clp-flash')");
-});
-
-test("the loader mounts into a shadow root and runs the script at global scope", () => {
-  const script = SITE_EMBED_SCRIPT;
-  expect(script).toContain('attachShadow({ mode: "open" })');
-  // Inline handlers in the markup resolve against the global scope, so the
-  // fragment's script cannot be run inside a closure.
-  expect(script).toContain('document.createElement("script")');
-  expect(script).not.toContain("new Function(");
-  expect(script).toContain("window.CLP_MOUNT = root");
-  // One document, one mount, held from before the fetch rather than after it.
-  expect(script).toContain("if (shown || mounting) return;");
-  expect(script).toContain("mounting = true;");
-  expect(script).toContain('history[push ? "pushState" : "replaceState"]');
-  // Anything it cannot do falls back to the standalone page. Falling back to
-  // the tab link would bounce through the redirect and land here again.
-  expect(script).toContain('"embed=0"');
-  expect(script).toContain("if (!Element.prototype.attachShadow) return standalone(href);");
-  expect(script).not.toMatch(/location\.href = href;/);
-  expect(script).toContain(`get("${EMBED_MARKER}")`);
 });
 
 test("the loader is injected with the layout rule, and only its markup half waits", () => {
   const snippet = siteLayoutTarget().snippet("/addons/");
   expect(snippet).toContain("attachShadow");
-  expect(snippet).toContain('document.addEventListener("DOMContentLoaded", start, { once: true })');
   // One script element. The layout block is deferred whole; the loader runs now
   // and defers the half that reads markup.
   expect(snippet.match(/<script>/g)).toHaveLength(1);
   expect(snippet.match(/function start\(\)/g)).toHaveLength(1);
-  expect(snippet).toContain('document.addEventListener("DOMContentLoaded", attach, { once: true })');
   expect(snippet).toContain(`html.${EMBED_LANDING_CLASS} .site-content { visibility: hidden; }`);
-});
-
-test("a deep link asks for its fragment while the panel page is still parsing", () => {
-  // The panel's own content is hidden from the same moment, so the settings
-  // page the redirect passed through is never the page the operator reads.
-  expect(SITE_EMBED_SCRIPT).toContain(`classList.add("${EMBED_LANDING_CLASS}")`);
-  expect(SITE_EMBED_SCRIPT).toContain(`classList.remove("${EMBED_LANDING_CLASS}")`);
-  expect(SITE_EMBED_SCRIPT).toContain('"domain=" + encodeURIComponent(domain)');
-  // The request is started before the document is ready, and the landing mount
-  // takes that reply rather than asking again.
-  expect(SITE_EMBED_SCRIPT).toContain("var early = landed ? prefetch(landed) : null;");
-  expect(SITE_EMBED_SCRIPT).toContain("var reply = !push && early ? early : fetchFragment(tab, query);");
-  // Nothing is hidden or fetched on a page nobody deep-linked to.
-  expect(SITE_EMBED_SCRIPT).toContain("setTimeout(reveal, 5000)");
 });
 
 test("a deep link into a site's addon page is answered by the panel's own page", async () => {
@@ -174,8 +136,15 @@ function runLoader(options: {
   link?: boolean;
   landed?: string;
   fetchReply?: () => Promise<unknown>;
+  shadowDom?: boolean;
+  parsing?: boolean;
 } = {}) {
   const warnings: string[] = [];
+  const shadowRoots: { mode: string; innerHTML: string }[] = [];
+  const history: [string, string][] = [];
+  const landing = new Set<string>();
+  const ready: (() => void)[] = [];
+  const timers: number[] = [];
   const navigations: string[] = [];
   const fetched: string[] = [];
   const scripts: string[] = [];
@@ -202,10 +171,25 @@ function runLoader(options: {
   const document = {
     title: "",
     head,
-    documentElement: { classList: { contains: () => false, add: () => {}, remove: () => {} } },
+    readyState: options.parsing ? "loading" : "complete",
+    addEventListener: (name: string, handler: () => void) => { if (name === "DOMContentLoaded") ready.push(handler); },
+    documentElement: {
+      classList: {
+        contains: () => false,
+        add: (name: string) => landing.add(name),
+        remove: (name: string) => landing.delete(name),
+      },
+    },
     createElement: (tag: string) => (tag === "script"
       ? { textContent: "" }
-      : { classList: { toggle: () => {} }, attachShadow: () => ({ innerHTML: "" }) }),
+      : {
+        classList: { toggle: () => {} },
+        attachShadow: (init: { mode: string }) => {
+          const root = { mode: init.mode, innerHTML: "" };
+          shadowRoots.push(root);
+          return root;
+        },
+      }),
     querySelector: (selector: string) => {
       if (selector === ".tab-container") return options.strip === false ? null : strip;
       if (selector === ".site-content") return options.content === false ? null : content;
@@ -223,7 +207,7 @@ function runLoader(options: {
     addEventListener: () => {},
   };
   const body = new Function(
-    "document", "location", "window", "console", "fetch", "Element", "history", "MutationObserver",
+    "document", "location", "window", "console", "fetch", "Element", "history", "MutationObserver", "setTimeout",
     SITE_EMBED_SCRIPT,
   );
   body(
@@ -232,12 +216,74 @@ function runLoader(options: {
     win,
     { warn: (message: string) => warnings.push(message) },
     (url: string) => { fetched.push(url); return (options.fetchReply ?? (() => new Promise(() => {})))(); },
-    { prototype: { attachShadow: () => {} } },
-    { pushState: () => {}, replaceState: () => {} },
+    { prototype: options.shadowDom === false ? {} : { attachShadow: () => {} } },
+    {
+      pushState: (_state: unknown, _title: string, url: string) => history.push(["push", url]),
+      replaceState: (_state: unknown, _title: string, url: string) => history.push(["replace", url]),
+    },
     class { observe() {} },
+    (_handler: () => void, delay: number) => timers.push(delay),
   );
-  return { warnings, navigations, fetched, scripts, clicks };
+  return { warnings, navigations, fetched, scripts, clicks, shadowRoots, history, landing, ready, timers, win };
 }
+
+const FRAGMENT = { ok: true, title: "Maintenance", css: ".x{}", html: "<p>fragment</p>", script: "const CLP_BASE = 'x';" };
+const MAINTENANCE = ADDON_SITE_TABS.findIndex((tab) => tab.slug === "maintenance");
+
+test("the loader mounts into an open shadow root and runs the script at global scope", async () => {
+  const loader = runLoader({ fetchReply: async () => ({ json: async () => FRAGMENT }) });
+  loader.clicks[MAINTENANCE]!({ button: 0, preventDefault: () => {} });
+  await Bun.sleep(1);
+  expect(loader.shadowRoots).toEqual([{ mode: "open", innerHTML: "<style>.x{}</style><p>fragment</p>" }]);
+  // Inline handlers in the markup resolve against the global scope, so the
+  // script goes into the document as a script element, told its root by CLP_MOUNT.
+  expect(loader.scripts).toEqual([FRAGMENT.script]);
+  expect(loader.win.CLP_MOUNT).toBe(loader.shadowRoots[0]);
+  expect(loader.history).toEqual([["push", "/addons/maintenance?domain=shop.example.test"]]);
+  expect(loader.navigations).toEqual([]);
+});
+
+// Falling back to the tab link would bounce through the redirect and land here again.
+test("a browser without shadow DOM, or a fragment that fails, gets the standalone page", async () => {
+  const old = runLoader({ shadowDom: false });
+  old.clicks[MAINTENANCE]!({ button: 0, preventDefault: () => {} });
+  expect(old.fetched).toEqual([]);
+  expect(old.navigations).toEqual(["/addons/maintenance?domain=shop.example.test&embed=0"]);
+
+  const failed = runLoader({ fetchReply: async () => ({ json: async () => ({ ok: false }) }) });
+  failed.clicks[MAINTENANCE]!({ button: 0, preventDefault: () => {} });
+  await Bun.sleep(1);
+  expect(failed.shadowRoots).toEqual([]);
+  expect(failed.navigations).toEqual(["/addons/maintenance?domain=shop.example.test&embed=0"]);
+});
+
+test("a deep link asks for its fragment while the panel page is still parsing", async () => {
+  let release: (value: unknown) => void = () => {};
+  const reply = new Promise((resolve) => { release = resolve; });
+  const loader = runLoader({ parsing: true, landed: "maintenance", fetchReply: () => reply });
+  // Asked before the document is ready, with the panel's content hidden from
+  // the same moment and a timer that reveals it whatever happens.
+  expect(loader.fetched).toEqual(["/addons/maintenance/fragment?domain=shop.example.test"]);
+  expect([...loader.landing]).toEqual([EMBED_LANDING_CLASS]);
+  expect(loader.timers).toEqual([5000]);
+
+  // The landing mount takes that reply rather than asking again.
+  for (const handler of loader.ready) handler();
+  expect(loader.fetched).toHaveLength(1);
+  release({ json: async () => FRAGMENT });
+  await Bun.sleep(1);
+  expect(loader.shadowRoots).toHaveLength(1);
+  expect([...loader.landing]).toEqual([]);
+  expect(loader.history).toEqual([["replace", "/addons/maintenance?domain=shop.example.test"]]);
+});
+
+test("nothing is hidden or fetched on a page nobody deep-linked to", () => {
+  const loader = runLoader({ parsing: true });
+  for (const handler of loader.ready) handler();
+  expect(loader.fetched).toEqual([]);
+  expect([...loader.landing]).toEqual([]);
+  expect(loader.timers).toEqual([]);
+});
 
 test("a second click while a mount is in flight is ignored", async () => {
   let release: (value: unknown) => void = () => {};

@@ -390,7 +390,31 @@ test("the WordPress Tools page emits a valid script with sign-in and Varnish act
   expect(html).toContain("/api/varnish-settings");
   expect(html).toContain("/api/dashboard");
   expect(html).not.toContain("location.reload");
-  expect(readFileSync(join(import.meta.dir, "../addons/wp-tools/app/views.client.js"), "utf8")).toContain("target.close()");
+});
+
+// The sign-in window is opened inside the click, before the reply is known, so
+// a reply that signs nobody in has to close it again rather than leave a blank tab.
+test("a sign-in that stops at maintenance or fails closes the window it opened", async () => {
+  const source = readFileSync(join(import.meta.dir, "../addons/wp-tools/app/views.client.js"), "utf8");
+  for (const reply of [
+    async () => ({ data: { maintenance: { canBypass: false, message: "shop.example.com is in maintenance" } } }),
+    async () => { throw new Error("the sign-in failed"); },
+  ]) {
+    const opened: { url: string; closed: boolean }[] = [];
+    const notices: string[] = [];
+    const signIn = new Function(
+      "window", "CLP_BASE", "call", "busy", "notify", "clearNotice", "confirmAction", "followJobProgress",
+      `${source}\nreturn signIn;`,
+    )(
+      { open: (url: string) => { const win = { url, closed: false, close: () => { win.closed = true; } }; opened.push(win); return win; } },
+      "/addons/wp-tools", reply, () => {}, (message: string, kind: string) => notices.push(`${kind}: ${message}`), () => {},
+      () => { throw new Error("nothing to confirm"); }, () => {},
+    );
+    await signIn({ dataset: { domain: "shop.example.com" } });
+    expect(opened.map(({ url, closed }) => ({ url, closed }))).toEqual([{ url: "/addons/wp-tools/sign-in/shop.example.com", closed: true }]);
+    expect(notices).toHaveLength(1);
+    expect(notices[0]).toStartWith("error: ");
+  }
 });
 
 test("Check now runs as a background job that the page can find again and follow to its result", async () => {

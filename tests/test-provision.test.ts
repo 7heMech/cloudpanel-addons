@@ -6,7 +6,7 @@ import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { execFileSync } from "node:child_process";
 import { nginxLayout, PANEL_GROUP, SERVICE_GROUP, SERVICE_USER } from "../lib/paths";
-import { ADDON_NAMES, ADDONS } from "../addons/catalog";
+import { ADDONS } from "../addons/catalog";
 import {
   authUnits, ensurePanelSessionReadable, reconcileUnits, serviceUnit, vhostOwnerAccepted,
   warnIfPanelSessionUnreadable,
