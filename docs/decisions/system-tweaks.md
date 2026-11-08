@@ -713,7 +713,11 @@ syncs ignore failure so PHP-FPM still reloads, and the 15-minute repair loads
 the table again. A unit whose reload lines cannot be
 read, such as one with a continued line, gets the sync after its reload only.
 The page's "On" compares each drop-in with the unit's current reload lines, so
-a package update that changes them is fixed by the next repair.
+a package update that changes them is fixed by the next repair. Because it
+compares files, a `systemctl daemon-reload` that fails after the drop-ins are
+written puts the previous files back and fails the change, so the next repair
+writes them and reloads again; one that fails after they are removed fails the
+switch-off, since the units would still load the table at their next reload.
 `ExecStartPost=` is not used: the units are `Type=notify` with a `PIDFile=`,
 and with a start-post command systemd waits for a PID file PHP-FPM does not
 write, so the start times out. The sync reads the setting without
@@ -1270,7 +1274,9 @@ or root can log in with one, and how to change it.
 ### The service
 
 The jails need `fail2ban`, `python3-systemd` and `nftables`; the page offers to
-install whichever are missing, and does nothing until they are there. Writing
+install whichever are missing, and does nothing until they are there. A package
+counts as there when dpkg's status ends in `installed`, so one held back with
+`apt-mark hold` counts too. Writing
 the files runs `fail2ban-client -t`, and a refused config puts the files back.
 A running fail2ban is reloaded, a stopped or failed one restarted and enabled
 at boot. A masked unit is left alone.

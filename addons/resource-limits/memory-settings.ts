@@ -5,6 +5,7 @@ import { errorMessage } from "../../lib/errors";
 import { failAction } from "../../lib/action";
 import { withFileLock, withFileLockSync } from "../../lib/file-lock";
 import { writeFileAtomic } from "../../lib/atomic-write";
+import { isTrustedFile } from "../../lib/trusted-file";
 import { MEMORY_DEADLINE_MS } from "./limits";
 import {
   DEFAULT_MEMORY, MEMORY_ERROR, applyMemory, memoryChange, memoryStatus, syncMemory, validMemorySettings,
@@ -26,8 +27,7 @@ export type ResourceMemoryState = (MemoryStatus & { settings: MemorySettings }) 
 export function readMemorySettings(options: ResourceMemoryOptions = {}): MemorySettings {
   const paths = { ...DEFAULT_MEMORY_SETTINGS_PATHS, ...options.memorySettings };
   if (!existsSync(paths.settingsFile)) return { ...DEFAULT_MEMORY };
-  const info = lstatSync(paths.settingsFile);
-  if (!info.isFile() || info.uid !== paths.rootUid || (info.mode & 0o022) !== 0) {
+  if (!isTrustedFile(lstatSync(paths.settingsFile), paths.rootUid)) {
     failAction("the resource limits settings file is not a trusted regular file");
   }
   const saved = JSON.parse(readFileSync(paths.settingsFile, "utf8"));

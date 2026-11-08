@@ -3,6 +3,7 @@ import { errorMessage } from "../../lib/errors";
 import { addonConfigFile, addonStateDir, SYSTEMD_DIR } from "../../lib/paths";
 import { existsSync, lstatSync, readFileSync, rmSync, rmdirSync } from "node:fs";
 import { writeFileAtomic } from "../../lib/atomic-write";
+import { isTrustedFile } from "../../lib/trusted-file";
 import { log } from "../../lib/log";
 import { DEFAULT_MEMORY, validMemorySettings, type MemorySettings } from "./memory";
 
@@ -10,7 +11,7 @@ interface SavedFile { path: string; text: string; mode: number; uid: number; gid
 function snapshot(path: string): SavedFile | null {
   if (!existsSync(path)) return null;
   const info = lstatSync(path);
-  if (!info.isFile() || info.uid !== (process.getuid?.() ?? 0) || (info.mode & 0o022)) throw new Error(`refusing untrusted migration file ${path}`);
+  if (!isTrustedFile(info, process.getuid?.() ?? 0)) throw new Error(`refusing untrusted migration file ${path}`);
   return { path, text: readFileSync(path, "utf8"), mode: info.mode & 0o777, uid: info.uid, gid: info.gid };
 }
 function restore(file: SavedFile): void {

@@ -92,7 +92,8 @@ mock.module("./lib/command.ts", () => ({
 // root or reaches outside the fixture; each records that it was reached, which
 // is most of what these tests assert.
 const realProvision = await import("./cli/provision.ts");
-mock.module("./lib/systemd.ts", () => ({ unitActive: () => "active" }));
+const { daemonReload } = await import("./lib/systemd.ts");
+mock.module("./lib/systemd.ts", () => ({ unitActive: () => "active", daemonReload }));
 mock.module("./cli/provision.ts", () => ({
   ...realProvision,
   ensureDirs: record(provision, "ensureDirs"),

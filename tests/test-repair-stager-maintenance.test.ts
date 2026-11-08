@@ -46,7 +46,8 @@ const mockPrelude = String.raw`
     resolveRelease: async () => ({ tag: "v1.0.0", assets: new Map() }),
     verifyAttestation: async () => {},
   }));
-  mock.module("./lib/systemd.ts", () => ({ unitActive: () => "active" }));
+  const { daemonReload } = await import("./lib/systemd.ts");
+  mock.module("./lib/systemd.ts", () => ({ unitActive: () => "active", daemonReload }));
   const __catalog = await import("./addons/catalog.ts");
   // Stager is enabled, and an addon whose config a test points at a file it wrote.
   const { existsSync: __exists } = await import("node:fs");

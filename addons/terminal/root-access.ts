@@ -16,6 +16,7 @@ import { openPanelDatabase } from "../../lib/panel-db";
 import { accountPasskeys } from "../security-keys/sign-ins";
 import { fatal, log, requireRoot } from "../../lib/log";
 import { writeFileAtomic } from "../../lib/atomic-write";
+import { isTrustedDirectory, isTrustedFile } from "../../lib/trusted-file";
 import { PANEL_USER_NAME_RE } from "../../lib/panel-users";
 
 export const ROOT_GRANTS_FILE = `${CONFIG_DIR}/terminal-root.json`;
@@ -43,7 +44,6 @@ interface PanelAccount {
 /** The file is wrong in itself; root recovers by removing it and allowing again. */
 export class UntrustedGrants extends Error {}
 
-const rootsAlone = (info: Stats, rootUid: number) => info.uid === rootUid && (info.mode & 0o022) === 0;
 const errno = (error: unknown) => (error as NodeJS.ErrnoException)?.code;
 
 /**
@@ -61,7 +61,7 @@ export function readRootGrants(file = ROOT_GRANTS_FILE, rootUid = 0): RootGrant[
     if (errno(error) === "ENOENT") return [];
     throw error;
   }
-  if (!dirInfo.isDirectory() || !rootsAlone(dirInfo, rootUid)) throw new UntrustedGrants(`${dir} is not a directory only root can write`);
+  if (!isTrustedDirectory(dirInfo, rootUid)) throw new UntrustedGrants(`${dir} is not a directory only root can write`);
   let fd: number;
   try {
     fd = openSync(file, constants.O_RDONLY | constants.O_NOFOLLOW | constants.O_NONBLOCK);
@@ -73,7 +73,7 @@ export function readRootGrants(file = ROOT_GRANTS_FILE, rootUid = 0): RootGrant[
   }
   try {
     const info = fstatSync(fd);
-    if (!info.isFile() || !rootsAlone(info, rootUid)) throw new UntrustedGrants(`${file} is not a trusted regular file`);
+    if (!isTrustedFile(info, rootUid)) throw new UntrustedGrants(`${file} is not a trusted regular file`);
     let stored: { users?: unknown } | null;
     try {
       stored = JSON.parse(readFileSync(fd, "utf8"));
@@ -97,7 +97,7 @@ function writeRootGrants(grants: RootGrant[], file = ROOT_GRANTS_FILE): void {
   const dir = dirname(file);
   if (mkdirSync(dir, { recursive: true })) chmodSync(dir, 0o755);
   // Written into a directory the reader refuses, the list would lock everyone out.
-  if (!rootsAlone(lstatSync(dir), 0)) fatal(`${dir} must be root's alone to hold the root terminal list: chown root:root and chmod 755 it`);
+  if (!isTrustedDirectory(lstatSync(dir), 0)) fatal(`${dir} must be root's alone to hold the root terminal list: chown root:root and chmod 755 it`);
   const users = [...grants].sort((a, b) => a.user.localeCompare(b.user)).map(({ user, id, mfa, keys }) => ({ user, id, mfa, keys }));
   writeFileAtomic(file, `${JSON.stringify({ users }, null, 2)}\n`, { mode: 0o600, owner: { uid: 0, gid: 0 } });
 }

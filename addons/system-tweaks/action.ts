@@ -7,10 +7,12 @@ import { errorMessage } from "../../lib/errors";
 import { withFileLock, withFileLockSync } from "../../lib/file-lock";
 import { reconcilePhpGuard, type PhpGuardOptions } from "../../lib/php-guard";
 import { writeFileAtomic } from "../../lib/atomic-write";
+import { isTrustedFile } from "../../lib/trusted-file";
 import {
-  DEFAULT_UPDATE_SETTINGS, REBOOT_TIME_ERROR, UPDATE_SETTING_KEYS, applyUpdates, validRebootTime, effectiveReboot, installUnattendedUpgrades, systemRun, unattendedUpgradesInstalled, updatesStatus, withDeadline,
+  DEFAULT_UPDATE_SETTINGS, REBOOT_TIME_ERROR, UPDATE_SETTING_KEYS, applyUpdates, validRebootTime, effectiveReboot, installUnattendedUpgrades, unattendedUpgradesInstalled, updatesStatus,
   type UpdateSettings, type UpdatesOptions, type UpdatesStatus,
 } from "./updates";
+import { installedVersion, systemRun, withDeadline } from "./packages";
 import { INSTALL_DEADLINE_MS } from "./limits";
 import { uploadProgressStatus, type FpmUploadProgress, type UploadProgressOptions } from "./upload-progress";
 import { applyRealIp, realIpStatus, type RealIpOptions, type RealIpStatus } from "./real-ip";
@@ -178,8 +180,7 @@ export function readSettings(paths: SystemTweaksPaths): SystemTweaksSettings {
     backupCompression: { ...DEFAULT_BACKUP_COMPRESSION },
   };
   if (!existsSync(paths.settingsFile)) return settings;
-  const info = lstatSync(paths.settingsFile);
-  if (!info.isFile() || info.uid !== paths.rootUid || (info.mode & 0o022) !== 0) {
+  if (!isTrustedFile(lstatSync(paths.settingsFile), paths.rootUid)) {
     failAction("the system tweaks settings file is not a trusted regular file");
   }
   let stored: Record<string, unknown>;
@@ -306,7 +307,7 @@ function requestBody(options: SystemTweaksOptions): Promise<Record<string, unkno
 async function setUpdates(options: SystemTweaksOptions): Promise<SystemTweaksState> {
   const paths = pathsFor(options);
   const body = await requestBody(options);
-  await withFileLock(paths.lockFile, 15, "another system tweaks change is still running", async () => {
+  await settingsLock(paths, async () => {
     const settings = readSettings(paths);
     const wanted = { ...settings.updates };
     let named = 0;
@@ -338,7 +339,7 @@ async function setUploadGuard(options: SystemTweaksOptions): Promise<SystemTweak
   const paths = pathsFor(options);
   const body = await requestBody(options);
   if (typeof body.enabled !== "boolean") failAction("enabled must be true or false");
-  await withFileLock(paths.lockFile, 15, "another system tweaks change is still running", async () => {
+  await settingsLock(paths, async () => {
     const settings = readSettings(paths);
     const changed = { ...settings, uploadProgressGuard: body.enabled as boolean };
     writeSettings(paths, changed);
@@ -359,7 +360,7 @@ async function setSwitch(options: SystemTweaksOptions, key: SwitchKey, apply: (e
   const paths = pathsFor(options);
   const { enabled } = await requestBody(options);
   if (typeof enabled !== "boolean") failAction("enabled must be true or false");
-  await withFileLock(paths.lockFile, 15, "another system tweaks change is still running", async () => {
+  await settingsLock(paths, async () => {
     const settings = readSettings(paths);
     apply(enabled);
     writeSettings(paths, { ...settings, [key]: enabled });
@@ -371,7 +372,7 @@ async function setVhostGuard(options: SystemTweaksOptions): Promise<SystemTweaks
   const paths = pathsFor(options);
   const body = await requestBody(options);
   if (typeof body.enabled !== "boolean") failAction("enabled must be true or false");
-  await withFileLock(paths.lockFile, 15, "another system tweaks change is still running", async () => {
+  await settingsLock(paths, async () => {
     const settings = readSettings(paths);
     if (body.enabled) {
       await installVhostGuard(options.vhostGuard);
@@ -397,7 +398,7 @@ async function setPhpPools(options: SystemTweaksOptions): Promise<SystemTweaksSt
   const paths = pathsFor(options);
   const body = await requestBody(options);
   if (typeof body.enabled !== "boolean") failAction("enabled must be true or false");
-  await withFileLock(paths.lockFile, 15, "another system tweaks change is still running", async () => {
+  await settingsLock(paths, async () => {
     const settings = readSettings(paths);
     // Saved first, so a PHP-FPM reload meanwhile follows the new setting.
     writeSettings(paths, { ...settings, isolatePhpPools: body.enabled as boolean });
@@ -416,7 +417,7 @@ async function setFileManagerGuard(options: SystemTweaksOptions): Promise<System
   const paths = pathsFor(options);
   const body = await requestBody(options);
   if (typeof body.enabled !== "boolean") failAction("enabled must be true or false");
-  await withFileLock(paths.lockFile, 15, "another system tweaks change is still running", async () => {
+  await settingsLock(paths, async () => {
     const settings = readSettings(paths);
     if (body.enabled) {
       await installFileManagerGuard(options.fileManagerGuard);
@@ -441,7 +442,7 @@ async function setClpctlGuard(options: SystemTweaksOptions): Promise<SystemTweak
   const paths = pathsFor(options);
   const body = await requestBody(options);
   if (typeof body.enabled !== "boolean") failAction("enabled must be true or false");
-  await withFileLock(paths.lockFile, 15, "another system tweaks change is still running", async () => {
+  await settingsLock(paths, async () => {
     const settings = readSettings(paths);
     if (body.enabled) {
       // On whether or not the wrapper can be swapped now: a CloudPanel version
@@ -478,7 +479,7 @@ async function setLoginJails(options: SystemTweaksOptions): Promise<SystemTweaks
   const named = (["panel", "ssh"] as const).filter((key) => body[key] !== undefined);
   if (!named.length) failAction("no jail was named");
   for (const key of named) if (typeof body[key] !== "boolean") failAction(`${key} must be true or false`);
-  await withFileLock(paths.lockFile, 15, "another system tweaks change is still running", async () => {
+  await settingsLock(paths, async () => {
     const settings = readSettings(paths);
     const wanted = { ...settings, loginJails: { ...settings.loginJails } };
     for (const key of named) wanted.loginJails[key] = body[key] as boolean;
@@ -491,7 +492,7 @@ async function setDatabase(options: SystemTweaksOptions): Promise<SystemTweaksSt
   const paths = pathsFor(options);
   const body = await requestBody(options);
   if (typeof body.enabled !== "boolean") failAction("enabled must be true or false");
-  await withFileLock(paths.lockFile, 15, "another system tweaks change is still running", async () => {
+  await settingsLock(paths, async () => {
     // First, so a settings file it cannot trust stops the change before MySQL restarts.
     const settings = readSettings(paths);
     await setDatabaseLoopback(body.enabled as boolean, options.database);
@@ -504,7 +505,7 @@ async function setBackupCompression(options: SystemTweaksOptions): Promise<Syste
   const body = await requestBody(options);
   if (!validBackupCompression(body)) failAction(BACKUP_COMPRESSION_ERROR);
   const paths = pathsFor(options);
-  await withFileLock(paths.lockFile, 15, "another system tweaks change is still running", async () => {
+  await settingsLock(paths, async () => {
     const settings = readSettings(paths);
     writeSettings(paths, { ...settings, backupCompression: { ...body } });
     try { reconcileBackupCompression(body, options.backupCompression); }
@@ -569,7 +570,7 @@ export async function executeSystemTweaksAction(argv: string[], options: SystemT
   if (verb === "install-fail2ban") {
     const run = withDeadline(options.loginJails?.run ?? systemRun, deadline, now, "fail2ban");
     const bounded = { ...options, loginJails: { ...options.loginJails, run } };
-    await withFileLock(pathsFor(options).lockFile, 15, "another system tweaks change is still running", async () => {
+    await settingsLock(pathsFor(options), async () => {
       const paths = pathsFor(options);
       const settings = readSettings(paths);
       // Not there before, so not running before: switching the jails off stops and disables it.
@@ -581,23 +582,29 @@ export async function executeSystemTweaksAction(argv: string[], options: SystemT
   }
   const run = withDeadline(options.updates?.run ?? systemRun, deadline, now);
   const bounded = { ...options, updates: { ...options.updates, run }, uploadProgress: { ...options.uploadProgress, run } };
-  await withFileLock(pathsFor(options).lockFile, 15, "another system tweaks change is still running", async () =>
+  await settingsLock(pathsFor(options), async () =>
     installUnattendedUpgrades(bounded.updates));
   return stateOf(bounded);
 }
 
 function missingFail2ban(options: SystemTweaksOptions): boolean {
-  const run = options.loginJails?.run ?? systemRun;
-  return !run("dpkg-query", ["-W", "-f=${Status}", "fail2ban"]).stdout.includes("install ok installed");
+  return !installedVersion(options.loginJails?.run ?? systemRun, "fail2ban");
 }
 
 export async function runSystemTweaksAction(argv: string[], options: SystemTweaksOptions = {}): Promise<number> {
   return replyToAction("system-tweaks", options.emitReply !== false, () => executeSystemTweaksAction(argv, options));
 }
 
+const SETTINGS_BUSY = "another system tweaks change is still running";
+
+/** The lock every settings change holds, waited on for 15 seconds. */
+function settingsLock<T>(paths: SystemTweaksPaths, body: () => Promise<T>): Promise<T> {
+  return withFileLock(paths.lockFile, 15, SETTINGS_BUSY, body);
+}
+
 function withSettingsLock<T>(options: SystemTweaksOptions, body: (paths: SystemTweaksPaths, settings: SystemTweaksSettings) => T): T {
   const paths = pathsFor(options);
-  return withFileLockSync(paths.lockFile, 15, "another system tweaks change is still running", () => body(paths, readSettings(paths)));
+  return withFileLockSync(paths.lockFile, 15, SETTINGS_BUSY, () => body(paths, readSettings(paths)));
 }
 
 /**
@@ -635,7 +642,7 @@ export async function systemTweaksMaintenance(options: SystemTweaksOptions = {})
     // Read under the lock, so a switch-off running beside it is not undone.
     const paths = pathsFor(options);
     // A short wait for Panel PHP's lock, so this does not hold the page's switches behind one.
-    const putBack = await withFileLock(paths.lockFile, 15, "another system tweaks change is still running", async () =>
+    const putBack = await settingsLock(paths, async () =>
       readSettings(paths).blockVhostInjection && await installVhostGuard({ lockWaitSeconds: 5, ...options.vhostGuard }));
     if (putBack) lines.push("vhost guard put back");
   } catch (error) {
@@ -649,7 +656,7 @@ export async function systemTweaksMaintenance(options: SystemTweaksOptions = {})
   }
   try {
     const paths = pathsFor(options);
-    const putBack = await withFileLock(paths.lockFile, 15, "another system tweaks change is still running", async () =>
+    const putBack = await settingsLock(paths, async () =>
       readSettings(paths).confineFileManager && await installFileManagerGuard({ lockWaitSeconds: 5, ...options.fileManagerGuard }));
     if (putBack) lines.push("File Manager guard put back");
   } catch (error) {

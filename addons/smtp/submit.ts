@@ -1,7 +1,8 @@
 import { errorMessage } from "../../lib/errors";
 import { lstatSync, readFileSync } from "node:fs";
 import { CONFIG_DIR } from "../../lib/paths";
-import { senderFor, smtpAddress, trustedFile, type SmtpRewriteRule, type SmtpSubmissionRule } from "./config";
+import { isTrustedFile } from "../../lib/trusted-file";
+import { senderFor, smtpAddress, type SmtpRewriteRule, type SmtpSubmissionRule } from "./config";
 
 /** One rule file per site uid, readable only by that site's group. */
 export const RULE_DIR = `${CONFIG_DIR}/smtp`;
@@ -16,7 +17,7 @@ export function rulePathFor(uid: number, dir = RULE_DIR): string {
 /** The site's rule, or null when there is none to apply: Postfix still enforces the envelope either way. */
 function trustedRule(path: string, rootUid: number): SmtpSubmissionRule | null {
   try {
-    if (!trustedFile(lstatSync(path), rootUid)) return null;
+    if (!isTrustedFile(lstatSync(path), rootUid)) return null;
     const value = JSON.parse(readFileSync(path, "utf8")) as Partial<SmtpSubmissionRule>;
     if (value.version !== 1 || typeof value.site !== "string" || (value.sender !== null && typeof value.sender !== "string") ||
         !Array.isArray(value.allowed) || !value.allowed.every((domain) => typeof domain === "string")) return null;

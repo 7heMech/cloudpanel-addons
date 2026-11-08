@@ -25,10 +25,11 @@ import { withFileLock } from "../../lib/file-lock";
 import { withPanelDb, withoutStandIns } from "../../lib/panel-db";
 import { log } from "../../lib/log";
 import { writeFileAtomic } from "../../lib/atomic-write";
+import { isTrustedFile } from "../../lib/trusted-file";
 import { readUnixAccounts, siteAccountProblem, splitSharedUids, TRUSTED_LOGINS } from "../../lib/site-accounts";
 import {
   DEFAULT_SENDER, envelopeGrants, FALLBACK_LOCAL, parseRelay, parseSenderTemplate, senderFor, siteName, smtpAddress, smtpDomain,
-  submissionRule, trustedFile, type SmtpProfile, type SmtpRelay, type SmtpRewriteRule, type SmtpSubmissionRule,
+  submissionRule, type SmtpProfile, type SmtpRelay, type SmtpRewriteRule, type SmtpSubmissionRule,
 } from "./config";
 import { prepareSubmission, RULE_DIR, rulePathFor, SENDMAIL } from "./submit";
 
@@ -168,7 +169,7 @@ function runChecked(run: Run, command: string, args: string[]): string {
 }
 
 function trustedStat(path: string, uid: number): void {
-  if (!trustedFile(lstatSync(path), uid)) failAction(`refusing untrusted SMTP file: ${path}`);
+  if (!isTrustedFile(lstatSync(path), uid)) failAction(`refusing untrusted SMTP file: ${path}`);
 }
 
 function trustedRead(path: string, uid: number): string | null {

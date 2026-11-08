@@ -7,10 +7,11 @@
 import { addonStateDir, LOCK_DIR, PANEL_DB, ROOT_UID, UFW_RULE_FILES } from "../../lib/paths";
 import { existsSync, lstatSync, readFileSync, statSync } from "node:fs";
 import { failAction } from "../../lib/action";
-import { runCommand, type CommandResult } from "../../lib/command";
+import { commandOutput, runCommand, type CommandResult } from "../../lib/command";
 import { withFileLockSync } from "../../lib/file-lock";
 import { withPanelDb } from "../../lib/panel-db";
 import { writeFileAtomic } from "../../lib/atomic-write";
+import { isTrustedFile } from "../../lib/trusted-file";
 
 export type FirewallProtocol = "tcp" | "udp" | "both";
 export const FIREWALL_PROTOCOLS: readonly FirewallProtocol[] = ["tcp", "udp", "both"];
@@ -182,8 +183,7 @@ function readUfwRules(paths: FirewallPaths): UfwRule[] {
 export function readFirewallState(paths: FirewallPaths): FirewallState {
   const state: FirewallState = { protocols: {}, unmatched: {}, managed: [] };
   if (!existsSync(paths.stateFile)) return state;
-  const info = lstatSync(paths.stateFile);
-  if (!info.isFile() || info.uid !== paths.rootUid || (info.mode & 0o022) !== 0) {
+  if (!isTrustedFile(lstatSync(paths.stateFile), paths.rootUid)) {
     failAction("the firewall protocols file is not a trusted regular file");
   }
   let stored: Record<string, unknown>;
@@ -352,7 +352,7 @@ export function syncFirewall(mode: "apply" | "withdraw" | "restore", options: Fi
       const failures: string[] = [];
       for (const args of plan.commands) {
         const result = ufw(args);
-        if (!result.ok) failures.push(`ufw ${args.join(" ")}: ${(result.stderr || result.stdout).trim()}`);
+        if (!result.ok) failures.push(`ufw ${args.join(" ")}: ${commandOutput(result)}`);
       }
       // A rule that failed stays managed, so the next pass tries it again.
       const managed = failures.length ? [...plan.managed, ...state.managed.filter((rule) => !plan.managed.some((kept) => key(kept) === key(rule)))] : plan.managed;

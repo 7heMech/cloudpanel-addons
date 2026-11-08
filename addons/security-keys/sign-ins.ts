@@ -8,6 +8,7 @@ import { closeSync, constants, fstatSync, openSync, readFileSync } from "node:fs
 import { join } from "node:path";
 import { openPanelDatabase } from "../../lib/panel-db";
 import { writeFileAtomic } from "../../lib/atomic-write";
+import { isTrustedFile, OWNER_ONLY } from "../../lib/trusted-file";
 
 /** How long CloudPanel honours the sign-in token Security Keys writes. */
 export const TOKEN_TTL_SECONDS = 60;
@@ -60,7 +61,7 @@ export function readSignIns(stateDir: string, stateUid = 0): SignIn[] {
   }
   try {
     const info = fstatSync(fd);
-    if (!info.isFile() || info.uid !== stateUid || (info.mode & 0o077) !== 0) return [];
+    if (!isTrustedFile(info, stateUid, OWNER_ONLY)) return [];
     const stored = JSON.parse(readFileSync(fd, "utf8")) as { signIns?: unknown };
     if (!Array.isArray(stored?.signIns)) return [];
     return stored.signIns.filter((entry): entry is SignIn =>
@@ -119,7 +120,7 @@ export function accountPasskeys(stateDir: string, user: string, userId: number, 
   }
   try {
     const info = fstatSync(fd);
-    if (!info.isFile() || info.uid !== stateUid || (info.mode & 0o077) !== 0) return [];
+    if (!isTrustedFile(info, stateUid, OWNER_ONLY)) return [];
     const stored = JSON.parse(readFileSync(fd, "utf8")) as { users?: Record<string, { userId?: unknown; keys?: unknown }> };
     const entry = stored?.users?.[user];
     if (!entry || entry.userId !== userId || !Array.isArray(entry.keys)) return [];

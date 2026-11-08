@@ -11,6 +11,7 @@ import { existsSync, lstatSync, readdirSync, readFileSync, rmSync } from "node:f
 import { join } from "node:path";
 import { ActionFailure, failAction } from "../../lib/action";
 import { writeFileAtomic } from "../../lib/atomic-write";
+import { isTrustedFile } from "../../lib/trusted-file";
 
 const BRANDING_VERSION = 1;
 
@@ -72,17 +73,12 @@ export interface BrandingPaths {
   rootUid: number;
 }
 
-function trusted(path: string, uid: number): boolean {
-  const stat = lstatSync(path);
-  return stat.isFile() && stat.uid === uid && (stat.mode & 0o022) === 0;
-}
-
 export function readBranding(paths: BrandingPaths): Branding {
   const branding: Branding = { ...DEFAULT_BRANDING, logos: { ...DEFAULT_BRANDING.logos } };
   if (!existsSync(paths.brandingFile)) return branding;
   let stored: Record<string, unknown>;
   try {
-    if (!trusted(paths.brandingFile, paths.rootUid)) failAction("the branding file is not a trusted regular file");
+    if (!isTrustedFile(lstatSync(paths.brandingFile), paths.rootUid)) failAction("the branding file is not a trusted regular file");
     stored = JSON.parse(readFileSync(paths.brandingFile, "utf8"));
   } catch (error) {
     if (error instanceof ActionFailure) throw error;
@@ -202,6 +198,6 @@ export function brandingAsset(paths: BrandingPaths, name: string): { type: strin
   if (!ASSET_NAME_RE.test(name)) failAction("that is not a branding image");
   if (!Object.values(readBranding(paths).logos).includes(name)) failAction("no such branding image");
   const path = join(paths.brandingDir, name);
-  if (!existsSync(path) || !trusted(path, paths.rootUid)) failAction("no such branding image");
+  if (!existsSync(path) || !isTrustedFile(lstatSync(path), paths.rootUid)) failAction("no such branding image");
   return { type: assetContentType(name), data: readFileSync(path).toString("base64") };
 }

@@ -8,13 +8,12 @@
  * is the whole undo. What the page reports is read back from `apt-config dump`
  * and `apt-cache policy`, never from what this file meant to say.
  */
-import { errorMessage } from "../../lib/errors";
 import { existsSync, lstatSync, readFileSync, readdirSync, rmSync, statSync } from "node:fs";
 import { basename, join } from "node:path";
 import { failAction } from "../../lib/action";
-import { type CommandResult } from "../../lib/command";
-import { writeFileAtomic } from "../../lib/atomic-write";
-import { APT_STEP_MS, COMMAND_MS } from "./limits";
+import { commandOutput } from "../../lib/command";
+import { writeFileAtomic, writeOrRemove } from "../../lib/atomic-write";
+import { aptInstall, installedVersion, systemRun, type Run } from "./packages";
 
 export const CLOUDPANEL_ORIGIN = "packages-v1.cloudpanel.io";
 const MARKER = "// Managed by clp-addons System Tweaks. Switching automatic updates off there removes this file.";
@@ -65,9 +64,6 @@ export const DEFAULT_UPDATES_PATHS: UpdatesPaths = {
   logFile: "/var/log/unattended-upgrades/unattended-upgrades.log",
   osRelease: "/etc/os-release",
 };
-
-/** A command runner; `timeoutMs` overrides the command's own guard. */
-export type Run = (command: string, args: string[], env?: Record<string, string>, timeoutMs?: number) => CommandResult;
 
 export interface UpdatesOptions {
   paths?: Partial<UpdatesPaths>;
@@ -124,38 +120,6 @@ function contextOf(options: UpdatesOptions): Context {
     paths: { ...DEFAULT_UPDATES_PATHS, ...options.paths },
     run: options.run ?? systemRun,
   };
-}
-
-function guardOf(command: string): number {
-  return command === "apt-get" ? APT_STEP_MS : COMMAND_MS;
-}
-
-/**
- * A runner that holds every command to one deadline: each gets its own guard
- * or what is left, whichever is shorter, and none starts once it has passed.
- */
-export function withDeadline(run: Run, deadline: number, now: () => number = Date.now, what = "unattended-upgrades"): Run {
-  return (command, args, env) => {
-    const remaining = deadline - now();
-    if (remaining <= 0) failAction(`the install ran out of time; try again, or install ${what} with apt`);
-    return run(command, args, env, Math.min(guardOf(command), remaining));
-  };
-}
-
-export function systemRun(command: string, args: string[], env?: Record<string, string>, timeoutMs?: number): CommandResult {
-  try {
-    const result = Bun.spawnSync([command, ...args], {
-      stdin: "ignore",
-      stdout: "pipe",
-      stderr: "pipe",
-      env: { ...process.env, ...env },
-      timeout: timeoutMs ?? guardOf(command),
-      killSignal: "SIGKILL",
-    });
-    return { ok: result.success, stdout: result.stdout.toString(), stderr: result.stderr.toString(), exitCode: result.exitCode };
-  } catch (error) {
-    return { ok: false, stdout: "", stderr: errorMessage(error), exitCode: null };
-  }
 }
 
 // --- reading apt's own view ------------------------------------------------
@@ -456,9 +420,7 @@ function timerState(ctx: Context): { state: string; next: string } {
 }
 
 function packageVersion(ctx: Context): string {
-  const query = ctx.run("dpkg-query", ["-W", "-f=${Status}\t${Version}", "unattended-upgrades"]);
-  const [status = "", version = ""] = query.stdout.split("\t");
-  return query.ok && status.endsWith(" installed") ? version.trim() : "";
+  return installedVersion(ctx.run, "unattended-upgrades");
 }
 
 export function unattendedUpgradesInstalled(options: UpdatesOptions = {}): boolean {
@@ -551,16 +513,14 @@ export function applyUpdates(settings: UpdateSettings, enabledTimers: string[], 
 
   const after = dropInFor(settings, distroOf(ctx).id);
   const restore = () => {
-    if (before === after) return;
-    if (before === null) rmSync(ctx.paths.dropIn, { force: true });
-    else writeFileAtomic(ctx.paths.dropIn, before, { mode: 0o644 });
+    if (before !== after) writeOrRemove(ctx.paths.dropIn, before, { mode: 0o644 });
   };
   if (before !== after) {
     writeFileAtomic(ctx.paths.dropIn, after, { mode: 0o644 });
     const check = ctx.run("apt-config", ["dump"]);
     if (!check.ok) {
       restore();
-      failAction(`apt rejected the configuration: ${(check.stderr || check.stdout).trim()}`);
+      failAction(`apt rejected the configuration: ${commandOutput(check)}`);
     }
   }
   const enabledNow: string[] = [];
@@ -578,18 +538,6 @@ export function applyUpdates(settings: UpdateSettings, enabledTimers: string[], 
   return { changed: before !== after || timers.length !== enabledTimers.length, enabledTimers: timers };
 }
 
-/** apt-get install, with the lists refreshed and tried once more when they are stale. */
 export function installUnattendedUpgrades(options: UpdatesOptions = {}): void {
-  const ctx = contextOf(options);
-  const env = { DEBIAN_FRONTEND: "noninteractive" };
-  const install = () => ctx.run("apt-get", ["install", "-y", "-o", "DPkg::Lock::Timeout=120", "unattended-upgrades"], env);
-  let result = install();
-  if (!result.ok) {
-    ctx.run("apt-get", ["update", "-o", "DPkg::Lock::Timeout=120"], env);
-    result = install();
-  }
-  if (!result.ok) {
-    const lines = (result.stderr || result.stdout).trim().split("\n");
-    failAction(`apt-get could not install unattended-upgrades: ${lines.slice(-3).join(" ")}`);
-  }
+  aptInstall(contextOf(options).run, ["unattended-upgrades"]);
 }

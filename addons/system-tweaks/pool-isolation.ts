@@ -19,10 +19,12 @@
  * times out.
  */
 import { addonStateDir, CLI_BIN, PANEL_USER, SYSTEMD_DIR } from "../../lib/paths";
-import { existsSync, lstatSync, readdirSync, readFileSync, rmSync } from "node:fs";
+import { existsSync, readdirSync, readFileSync, rmSync } from "node:fs";
 import { basename, join } from "node:path";
-import { runCommand, type CommandResult } from "../../lib/command";
-import { writeFileAtomic } from "../../lib/atomic-write";
+import { commandOutput, runCommand, type CommandResult } from "../../lib/command";
+import { writeFileAtomic, writeOrRemove } from "../../lib/atomic-write";
+import { daemonReload } from "../../lib/systemd";
+import { regularText } from "../../lib/trusted-file";
 import { COMMAND_MS } from "./limits";
 
 export const POOL_TABLE = "clp_addons_php_pools";
@@ -61,14 +63,6 @@ function context(options: PoolIsolationOptions) {
     paths: { ...DEFAULT_POOL_ISOLATION_PATHS, ...options.paths },
     run: options.run ?? ((command: string, args: string[]) => runCommand(command, args, COMMAND_MS)),
   };
-}
-
-function regularText(path: string): string | null {
-  try {
-    return lstatSync(path).isFile() ? readFileSync(path, "utf8") : null;
-  } catch {
-    return null;
-  }
 }
 
 /** PHP versions with an FPM pool directory, such as 8.3. */
@@ -271,7 +265,7 @@ export function syncPoolIsolation(options: PoolIsolationOptions = {}, beforeRelo
   const loaded = run("nft", ["-f", paths.rulesFile]);
   if (!loaded.ok) {
     rmSync(paths.rulesFile, { force: true });
-    throw new Error(`nft refused the PHP pool rules: ${(loaded.stderr || loaded.stdout).trim()}`);
+    throw new Error(`nft refused the PHP pool rules: ${commandOutput(loaded)}`);
   }
   return true;
 }
@@ -279,16 +273,26 @@ export function syncPoolIsolation(options: PoolIsolationOptions = {}, beforeRelo
 /** The table, and the drop-in on every PHP-FPM unit that keeps it current. Returns whether anything changed. */
 export function installPoolIsolation(options: PoolIsolationOptions = {}): boolean {
   const { paths, run } = context(options);
-  let units = false;
+  const written = new Map<string, string | null>();
   for (const version of versions(paths)) {
     const file = dropInPath(paths, version);
     const content = poolDropIn(paths.bin, unitReloadLines(run, version));
-    if (regularText(file) === content) continue;
+    const before = regularText(file);
+    if (before === content) continue;
     writeFileAtomic(file, content, { mode: 0o644, createParent: true });
-    units = true;
+    written.set(file, before);
   }
-  if (units) run("systemctl", ["daemon-reload"]);
-  return syncPoolIsolation(options) || units;
+  if (written.size) {
+    try {
+      daemonReload(run);
+    } catch (error) {
+      // Each drop-in is compared by its text, so one left in place that systemd
+      // never loaded would pass for applied and its reload never be retried.
+      for (const [file, before] of written) writeOrRemove(file, before, { mode: 0o644 });
+      throw error;
+    }
+  }
+  return syncPoolIsolation(options) || written.size > 0;
 }
 
 /** Remove the drop-ins, then the table. Returns whether anything changed. */
@@ -302,10 +306,11 @@ export function removePoolIsolation(options: PoolIsolationOptions = {}): boolean
     rmSync(file, { force: true });
     changed = true;
   }
-  if (changed) run("systemctl", ["daemon-reload"]);
+  // A unit systemd still runs with the drop-in would load the table again at its next reload.
+  if (changed) daemonReload(run);
   if (tableLoaded(run)) {
     const deleted = run("nft", ["delete", "table", "inet", POOL_TABLE]);
-    if (!deleted.ok) throw new Error(`nft could not remove the PHP pool rules: ${(deleted.stderr || deleted.stdout).trim()}`);
+    if (!deleted.ok) throw new Error(`nft could not remove the PHP pool rules: ${commandOutput(deleted)}`);
     changed = true;
   }
   if (existsSync(paths.rulesFile)) {

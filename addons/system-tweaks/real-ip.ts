@@ -18,9 +18,8 @@ import { panelUserGid, panelUserUid } from "../../lib/sso-auth";
 import { COMMAND_MS } from "./limits";
 
 export const REAL_IP_MARKER = "#clp-addons:untrusted ";
-const MARK = REAL_IP_MARKER;
 const ANY = /^([ \t]*)(set_real_ip_from[ \t]+(?:0\.0\.0\.0\/0|::\/0)[ \t]*;)[ \t]*$/gm;
-const MARKED = new RegExp(`^([ \\t]*)${MARK}(set_real_ip_from[ \\t]+(?:0\\.0\\.0\\.0\\/0|::\\/0)[ \\t]*;)[ \\t]*$`, "gm");
+const MARKED = new RegExp(`^([ \\t]*)${REAL_IP_MARKER}(set_real_ip_from[ \\t]+(?:0\\.0\\.0\\.0\\/0|::\\/0)[ \\t]*;)[ \\t]*$`, "gm");
 const PROXIES_START = "# clp-addons:cloudflare-proxies:start";
 const PROXIES_END = "# clp-addons:cloudflare-proxies:end";
 const PROXIES = new RegExp(`^[ \\t]*${PROXIES_START}\\n(?:.*\\n)*?[ \\t]*${PROXIES_END}\\n`, "gm");
@@ -63,7 +62,7 @@ interface Instance {
 /** Comments out the trust in every address and, after it, trusts `proxies`. */
 export function withoutAnyAddress(content: string, proxies: string[] = []): string {
   const marked = content.replace(PROXIES, "")
-    .replace(ANY, (_line, indent: string, directive: string) => `${indent}${MARK}${directive}`);
+    .replace(ANY, (_line, indent: string, directive: string) => `${indent}${REAL_IP_MARKER}${directive}`);
   if (proxies.length === 0) return marked;
   return marked.replace(new RegExp(MARKED.source, "m"), (line, indent: string) =>
     [line, `${indent}${PROXIES_START}`, ...proxies.map((proxy) => `${indent}set_real_ip_from ${proxy};`), `${indent}${PROXIES_END}`].join("\n"));

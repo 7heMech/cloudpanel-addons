@@ -35,6 +35,7 @@ import { validateDomain } from "../../lib/panel-identity";
 import { withFileLock } from "../../lib/file-lock";
 import type { TmpCleanupOptions } from "../../lib/tmp-cleanup";
 import { writeFileAtomic } from "../../lib/atomic-write";
+import { isTrustedFile } from "../../lib/trusted-file";
 
 const POLICY_VERSION = 1;
 
@@ -509,7 +510,7 @@ function trustedPoolFile(path: string, expectedUid: number): TrustedFile {
   } catch {
     failAction(`this site has no PHP-FPM pool file: ${path}`);
   }
-  if (!stat.isFile() || stat.isSymbolicLink() || stat.uid !== expectedUid || (stat.mode & 0o022) !== 0) {
+  if (!isTrustedFile(stat, expectedUid)) {
     failAction(`refusing untrusted PHP-FPM pool file ${path}`);
   }
   return {
@@ -631,7 +632,7 @@ function readPolicy(path: string, expectedUid: number): Policy {
   let raw: unknown;
   try {
     const stat = lstatSync(path);
-    if (!stat.isFile() || stat.isSymbolicLink() || stat.uid !== expectedUid || (stat.mode & 0o022) !== 0) {
+    if (!isTrustedFile(stat, expectedUid)) {
       failAction("the Resource limits policy file is not a trusted regular file");
     }
     raw = JSON.parse(readFileSync(path, "utf8"));
@@ -662,7 +663,7 @@ function writePolicy(path: string, policy: Policy, expectedUid: number): void {
   let gid = process.getgid?.() ?? 0;
   if (existsSync(path)) {
     const stat = lstatSync(path);
-    if (!stat.isFile() || stat.isSymbolicLink() || stat.uid !== expectedUid || (stat.mode & 0o022) !== 0) {
+    if (!isTrustedFile(stat, expectedUid)) {
       failAction("the Resource limits policy file is not a trusted regular file");
     }
     uid = stat.uid;
@@ -789,7 +790,7 @@ function failureLines(outcome: ApplyOutcome): string[] {
 function readableProfile(poolFile: string, expectedUid: number): PoolProfile {
   try {
     const stat = lstatSync(poolFile);
-    if (!stat.isFile() || stat.isSymbolicLink() || stat.uid !== expectedUid) return { ...STOCK_PROFILE };
+    if (!isTrustedFile(stat, expectedUid, 0)) return { ...STOCK_PROFILE };
     return readProfileFromPool(readFileSync(poolFile, "utf8"));
   } catch {
     return { ...STOCK_PROFILE };

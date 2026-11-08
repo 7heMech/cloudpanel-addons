@@ -59,3 +59,9 @@ export function writeFileAtomic(
     throw error;
   }
 }
+
+/** Put `content` at `path`, or remove whatever is there when it is null. */
+export function writeOrRemove(path: string, content: string | null, options: AtomicWriteOptions): void {
+  if (content === null) rmSync(path, { force: true });
+  else writeFileAtomic(path, content, options);
+}

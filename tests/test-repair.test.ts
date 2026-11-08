@@ -68,7 +68,8 @@ const PROBE = String.raw`
     loadLocal: (_dir, names = []) => names.map((name) => ({ name, bytes: Buffer.from(name, "utf-8") })),
   }));
 
-  mock.module("./lib/systemd.ts", () => ({ unitActive: () => "active" }));
+  const { daemonReload } = await import("./lib/systemd.ts");
+  mock.module("./lib/systemd.ts", () => ({ unitActive: () => "active", daemonReload }));
   const __catalog = await import("./addons/catalog.ts");
   const __enabled = () => hasInstalledAddon;
   // Every addon counts as enabled here, so the Nginx block one keeps in CloudPanel's files is left alone.

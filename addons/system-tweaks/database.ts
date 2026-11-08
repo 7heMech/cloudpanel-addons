@@ -7,13 +7,16 @@
  */
 import { errorMessage } from "../../lib/errors";
 import { addonStateDir, ROOT_UID } from "../../lib/paths";
-import { existsSync, lstatSync, readFileSync, readlinkSync, rmSync } from "node:fs";
+import { existsSync, lstatSync, readFileSync, readlinkSync } from "node:fs";
 import { connect } from "node:net";
 import { join } from "node:path";
 import { failAction } from "../../lib/action";
-import { runCommand, type CommandResult } from "../../lib/command";
+import { requireSuccess, runCommand, type CommandResult } from "../../lib/command";
+import { daemonReload } from "../../lib/systemd";
+import { isTrustedFile } from "../../lib/trusted-file";
 import { inputVerdict, otherInputHooks, parseFilterTable } from "./input-rules";
-import { writeFileAtomic } from "../../lib/atomic-write";
+import { writeFileAtomic, writeOrRemove } from "../../lib/atomic-write";
+import { waitHealthy } from "./wait-healthy";
 import { COMMAND_MS, DATABASE_SERVICE_MS } from "./limits";
 import {
   DATABASE_SOCKET_FILE, DATABASE_SOCKET_UNIT, parseSocketBindings, putSocketFile, readSocketFile, renderSocketFile,
@@ -229,8 +232,7 @@ interface StoredCheck { at: number; key: string; result: DatabaseStatus["default
 
 function readCheck(ctx: Context, key: string): StoredCheck["result"] | null {
   try {
-    const info = lstatSync(ctx.paths.checkFile);
-    if (!info.isFile() || info.uid !== ctx.paths.rootUid) return null;
+    if (!isTrustedFile(lstatSync(ctx.paths.checkFile), ctx.paths.rootUid, 0)) return null;
     const stored = JSON.parse(readFileSync(ctx.paths.checkFile, "utf8")) as StoredCheck;
     return stored.key === key && ctx.now() - stored.at < CHECK_TTL_MS ? stored.result : null;
   } catch {
@@ -472,33 +474,27 @@ async function unhealthy(ctx: Context, loopbackOnly: boolean, socket?: SocketSta
   return null;
 }
 
-async function waitHealthy(ctx: Context, loopbackOnly: boolean, socket?: SocketState | null): Promise<string | null> {
-  const deadline = ctx.now() + ctx.healthTimeoutMs;
-  let problem = await unhealthy(ctx, loopbackOnly, socket);
-  while (problem && !problem.final && ctx.now() < deadline) {
-    await ctx.sleep(1_000);
-    problem = await unhealthy(ctx, loopbackOnly, socket);
-  }
+async function serving(ctx: Context, loopbackOnly: boolean, socket?: SocketState | null): Promise<string | null> {
+  const problem = await waitHealthy(() => unhealthy(ctx, loopbackOnly, socket), {
+    now: ctx.now, sleep: ctx.sleep, timeoutMs: ctx.healthTimeoutMs, intervalMs: 1_000, final: (found) => found.final === true,
+  });
   return problem?.reason ?? null;
 }
 
 function put(path: string, content: string | null): void {
-  if (content === null) rmSync(path, { force: true });
-  else writeFileAtomic(path, content, { mode: 0o644, createParent: false });
+  writeOrRemove(path, content, { mode: 0o644 });
 }
 
 function restart(ctx: Context): void {
-  const result = ctx.run("systemctl", ["restart", ctx.paths.service]);
-  if (!result.ok) failAction(`restarting ${ctx.paths.service} failed: ${(result.stderr || result.stdout).trim() || `exit ${result.exitCode ?? "unknown"}`}`);
+  requireSuccess(ctx.run("systemctl", ["restart", ctx.paths.service]), `restarting ${ctx.paths.service} failed`);
 }
 
 function socketCommand(ctx: Context, args: string[]): void {
-  const result = ctx.run("systemctl", args);
-  if (!result.ok) failAction(`systemctl ${args.join(" ")} failed: ${(result.stderr || result.stdout).trim() || `exit ${result.exitCode ?? "unknown"}`}`);
+  requireSuccess(ctx.run("systemctl", args), `systemctl ${args.join(" ")} failed`);
 }
 
 function reloadSocket(ctx: Context, socket: SocketState, expected?: string[]): SocketState {
-  socketCommand(ctx, ["daemon-reload"]);
+  daemonReload(ctx.run);
   const updated = socketState(ctx, socket.service, readSocketFile(ctx.paths.socketFile, ctx.paths.rootUid), true)!;
   if (expected && JSON.stringify(updated.bindings.streams) !== JSON.stringify(expected)) {
     failAction(`another ${socket.unit} setting overrides the managed listeners; MySQL has not been restarted`);
@@ -565,7 +561,7 @@ export async function setDatabaseLoopback(on: boolean, options: DatabaseOptions 
       stopSocketAndService(ctx, socket);
       startPreviousUnits(ctx, socket);
     } else restart(ctx);
-    const problem = await waitHealthy(ctx, on, appliedSocket);
+    const problem = await serving(ctx, on, appliedSocket);
     if (problem) failAction(`MySQL did not come back ${on ? "on loopback only" : "on its own settings"}: ${problem}`);
   } catch (error) {
     let restored: string;
@@ -579,7 +575,7 @@ export async function setDatabaseLoopback(on: boolean, options: DatabaseOptions 
         stopSocketAndService(ctx, socket);
         startPreviousUnits(ctx, socket);
       } else restart(ctx);
-      const after = await waitHealthy(ctx, false, restoredSocket);
+      const after = await serving(ctx, false, restoredSocket);
       restored = after ? `the previous settings were put back, but ${after}` : "the previous settings are back";
     } catch (restoreError) {
       if (restoreError === error) throw error;
@@ -610,7 +606,7 @@ export function reconcileDatabaseFile(on: boolean, options: DatabaseOptions = {}
     if (socketBefore !== socketAfter) {
       putSocketFile(ctx.paths.socketFile, socketAfter, ctx.paths.rootUid);
       reloaded = true;
-      socketCommand(ctx, ["daemon-reload"]);
+      daemonReload(ctx.run);
       if (socket && on) {
         const checked = socketState(ctx, socket.service, socketAfter)!;
         if (JSON.stringify(checked.bindings.streams) !== JSON.stringify(socket.bindings.loopback)) {
@@ -621,7 +617,7 @@ export function reconcileDatabaseFile(on: boolean, options: DatabaseOptions = {}
   } catch (error) {
     if (file && before !== after) put(file, before);
     if (socketBefore !== socketAfter) putSocketFile(ctx.paths.socketFile, socketBefore, ctx.paths.rootUid);
-    if (reloaded) socketCommand(ctx, ["daemon-reload"]);
+    if (reloaded) daemonReload(ctx.run);
     throw error;
   }
   if (socket || socketBefore !== null) {
