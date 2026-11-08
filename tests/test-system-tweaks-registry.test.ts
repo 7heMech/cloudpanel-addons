@@ -43,9 +43,9 @@ test("disabling the addon withdraws panel PHP first, the clpctl guard first unde
     "File Manager guard", "vhost guard", "PHP pools",
   ]);
   expect(names(WITHDRAW.last)).toEqual(["telemetry", "motd", "firewall"]);
-  // What a later failure puts back, since the addon then stays enabled.
+  // What a later failure puts back at once, since the addon then stays enabled; repair is queued for the rest.
   const putBack = [...WITHDRAW.first, ...WITHDRAW.locked].filter((tweak) => tweak.withdraw.putBack);
-  expect(names(putBack)).toEqual(["panel PHP", "clpctl guard", "File Manager guard", "vhost guard"]);
+  expect(names(putBack)).toEqual(["panel PHP", "clpctl guard"]);
 });
 
 test("enabling the addon restores panel PHP whatever the rest does, and the panel certificate and firewall after", () => {

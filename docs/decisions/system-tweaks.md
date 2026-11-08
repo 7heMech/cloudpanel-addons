@@ -814,8 +814,8 @@ answers it with an empty page, and the guard with a 403. Switching it off saves
 the opt-out before removing the guard, and puts the setting back on if the
 removal fails, so repair never reinstalls a guard the administrator took away
 or leaves one in place that the setting says is off. A withdrawal that fails
-after removing it queues it back while the setting is on, since the addon stays
-enabled.
+after removing it starts repair, which puts it back while the setting is on,
+since the addon stays enabled.
 
 Each installed guard is one file. `panel-session.php` is written into both in
 place of their `require` of it, so the two never depend on a third file and
@@ -1622,9 +1622,11 @@ when CloudPanel's own PHP would not come back; then, under the lock, the clpctl
 guard, because it refuses when its saved original is gone, and backup
 compression, because it refuses an edited backup command, so either refusal
 leaves every protection in place; then the rest. A failure stops it, the addon
-stays enabled, and each step already done that can put its protection back does
-so, latest first: a repair run for the vhost and File Manager guards, the
-hardened clpctl wrapper, the panel's PHP choice. Telemetry, the login message
+stays enabled. The hardened clpctl wrapper goes back at once, since
+CloudPanel's is the vulnerable one; a failure under the lock also starts
+repair now, rather than at its next turn, so visitor-IP trust, the phpMyAdmin
+rules, the guards and the rest come back as the settings ask; and the panel's
+PHP choice comes back last. Telemetry, the login message
 and the firewall come last and only warn, since none of them keeps the addon on.
 Restoring runs under the lock and stops at a failure, except for MySQL, backup
 compression, telemetry and the login message, which warn and wait for repair;

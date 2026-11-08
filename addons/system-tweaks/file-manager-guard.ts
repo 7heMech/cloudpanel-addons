@@ -118,14 +118,6 @@ function fileManagerGuardLine(state: FileManagerGuardState): string {
 
 type Options = { fileManagerGuard?: FileManagerGuardOptions };
 
-/**
- * After a withdrawal fails, the addon stays enabled, so the guard comes back
- * now rather than at the next repair, unless it was switched off.
- */
-function putBack({ options, settings }: { options: Options; settings: { confineFileManager: boolean } }): void {
-  if (settings.confineFileManager) queueFileManagerGuard(options.fileManagerGuard);
-}
-
 /** Refuse File Manager requests that leave the site's home, and leave its socket to clp. */
 export const FILE_MANAGER_GUARD_TWEAK = tweak<{ confineFileManager: boolean }, Options, { fileManagerGuard: FileManagerGuardState }>()({
   defaults: { confineFileManager: true },
@@ -162,17 +154,7 @@ export const FILE_MANAGER_GUARD_TWEAK = tweak<{ confineFileManager: boolean }, O
         settings.confineFileManager && await installFileManagerGuard({ lockWaitSeconds: 5, ...options.fileManagerGuard }) && "File Manager guard put back",
     },
   },
-  withdraw: {
-    run: (ctx) => {
-      try {
-        removeFileManagerGuard(ctx.options.fileManagerGuard);
-      } catch (error) {
-        putBack(ctx);
-        throw error;
-      }
-    },
-    putBack,
-  },
+  withdraw: { run: ({ options }) => { removeFileManagerGuard(options.fileManagerGuard); } },
   restore: { run: ({ options, settings }) => { if (settings.confineFileManager) queueFileManagerGuard(options.fileManagerGuard); } },
   row: ({ fileManagerGuard }, locked) => switchRow("set-file-manager-guard", {
     key: "confineFileManager",

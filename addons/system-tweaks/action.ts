@@ -7,6 +7,9 @@ import { withFileLock, withFileLockSync } from "../../lib/file-lock";
 import { writeFileAtomic } from "../../lib/atomic-write";
 import { isTrustedFile } from "../../lib/trusted-file";
 import { log } from "../../lib/log";
+import { runCommand, type CommandResult } from "../../lib/command";
+import { RECONCILE_SERVICE } from "../../lib/paths";
+import { COMMAND_MS } from "./limits";
 import { changeLock, lockFailure, type LockFiles } from "../../lib/lock-addon";
 import { addonLocked, declaresLock, lockRefusal, lockedAddons } from "../../lib/root-locks";
 import { removePoolIsolation, syncPoolIsolation } from "./pool-isolation";
@@ -42,6 +45,8 @@ export type SystemTweaksOptions = TweakOptions & {
   processUid?: number;
   /** Tests only: root's lock file, owned by them; production reads ROOT_LOCKS_FILE. */
   locks?: LockFiles;
+  /** How a failed withdrawal starts repair. */
+  reconcile?: { run?: (command: string, args: string[]) => CommandResult };
 };
 
 type Context = TweakContext<SystemTweaksSettings, TweakOptions>;
@@ -178,7 +183,7 @@ function verbContext(options: SystemTweaksOptions): VerbContext<SystemTweaksSett
 type Handler = (ctx: VerbContext<SystemTweaksSettings, TweakOptions>) => Promise<unknown>;
 
 /** How Lock settings turns a tweak on: its own way, or its switch. */
-function lockOn(tweak: (typeof LOCK_SETTINGS.first)[number]): { verb: SystemTweaksVerb; blocked?(options: TweakOptions): string | null; run(ctx: Context): unknown } {
+export function lockSettingsStep(tweak: (typeof LOCK_SETTINGS.first)[number]): { verb: SystemTweaksVerb; blocked?(options: TweakOptions): string | null; run(ctx: Context): unknown } {
   if ("lockOn" in tweak) return tweak.lockOn;
   return { verb: tweak.switch.verb, run: (ctx) => tweak.switch.set(ctx, true) };
 }
@@ -194,7 +199,7 @@ async function lockSettings(ctx: VerbContext<SystemTweaksSettings, TweakOptions>
   // First, so a lock file root cannot trust stops it before anything changes.
   try { lockedAddons(files?.file, files?.rootUid); } catch (error) { failAction(lockFailure(error, files?.file)); }
   for (const tweak of [...LOCK_SETTINGS.first, ...LOCK_SETTINGS.last]) {
-    const blocked = lockOn(tweak).blocked?.(options);
+    const blocked = lockSettingsStep(tweak).blocked?.(options);
     if (blocked) failAction(`nothing was changed or locked: ${blocked}`);
   }
   const paths = pathsFor(options);
@@ -202,7 +207,7 @@ async function lockSettings(ctx: VerbContext<SystemTweaksSettings, TweakOptions>
     const failed: string[] = [];
     const turnOn = async (tweaks: readonly (typeof LOCK_SETTINGS.first)[number][]) => {
       for (const tweak of tweaks) {
-        const { verb, run } = lockOn(tweak);
+        const { verb, run } = lockSettingsStep(tweak);
         try { await run(contextFor(options, paths, "now")); } catch (error) { failed.push(`${verb.replace(/^set-/, "")}: ${errorMessage(error)}`); }
       }
     };
@@ -335,11 +340,29 @@ function putBack(done: readonly { withdraw: { putBack?(ctx: Context): void } }[]
   throw thrown;
 }
 
+/**
+ * After a step under the lock fails, the addon stays enabled with some of its
+ * protections already withdrawn, so repair runs now rather than at its next
+ * turn and puts back whatever the settings ask for. Best effort: the timer's
+ * repair still comes, and this must not hide the failure.
+ */
+function queueRepair(options: SystemTweaksOptions): void {
+  const run = options.reconcile?.run ?? ((command, args) => runCommand(command, args, COMMAND_MS));
+  try { run("systemctl", ["start", "--no-block", RECONCILE_SERVICE]); } catch { /* the repair timer runs it */ }
+}
+
 export function withdrawSystemTweaks(options: SystemTweaksOptions = {}): void {
   const outside = contextFor(options, pathsFor(options), "lazily");
   withdrawInOrder(WITHDRAW.first, outside);
   try {
-    lockedSync(options, (ctx) => withdrawInOrder(WITHDRAW.locked, ctx));
+    lockedSync(options, (ctx) => {
+      try {
+        withdrawInOrder(WITHDRAW.locked, ctx);
+      } catch (error) {
+        queueRepair(options);
+        throw error;
+      }
+    });
   } catch (error) {
     putBack(WITHDRAW.first, outside, error);
   }

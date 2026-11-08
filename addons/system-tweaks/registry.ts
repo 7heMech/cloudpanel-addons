@@ -95,7 +95,8 @@ type Warning = { warning(error: string): string };
 /**
  * Disabling the addon. A failure in `first` or `locked` stops the withdrawal,
  * so the addon stays enabled, and each step already done that has a `putBack`
- * puts its protection back, latest first.
+ * puts its protection back at once, latest first. A failure in `locked` also
+ * starts repair, which puts back everything else the settings ask for.
  */
 export const WITHDRAW: {
   first: readonly Withdrawing[];

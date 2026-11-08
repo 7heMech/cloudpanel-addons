@@ -169,14 +169,8 @@ export const VHOST_GUARD_TWEAK = tweak<{ blockVhostInjection: boolean }, Options
   withdraw: {
     run: ({ options }) => {
       removeVhostGuard(options.vhostGuard);
-      try {
-        removeVarnishBackends(options.varnishBackend);
-      } catch (error) {
-        queueVhostGuard(options.vhostGuard);
-        throw error;
-      }
+      removeVarnishBackends(options.varnishBackend);
     },
-    putBack: ({ options }) => queueVhostGuard(options.vhostGuard),
   },
   restore: { run: ({ options, settings }) => { if (settings.blockVhostInjection) queueVhostGuard(options.vhostGuard); } },
   row: ({ vhostGuard }, locked) => switchRow("set-vhost-guard", {
