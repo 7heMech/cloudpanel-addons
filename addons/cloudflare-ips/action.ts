@@ -202,7 +202,6 @@ export function transformVhost(content: string, siteUser: string, enabled: boole
   return result;
 }
 
-/** Updates selected DB rows and rendered vhosts, validating and reloading once. */
 async function updateSites(
   paths: CloudflareActionPaths,
   domains: string[],

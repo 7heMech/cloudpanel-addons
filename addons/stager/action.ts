@@ -34,26 +34,16 @@ const CLONABLE_TYPES = ["php", "static", "reverse-proxy"] as const;
 type StagerVerb = keyof typeof STAGER_VERBS;
 
 /**
- * What a promote leaves behind from the live site rather than taking from the
- * staging copy.
- *
- * The configuration files carry the live database credentials and its key
- * material: taking the staging copy's would point the live site at the staging
- * database, which is worse than any missing edit. The uploads directory is
- * where the live site writes what its visitors send it, and none of that exists
- * on the staging copy.
- */
-/**
  * What the live site owns and a promote must not replace with the staging
  * site's copy.
  *
- * Split by what it costs to have twice. The two configuration files are small
- * and are the ones whose absence is not a cosmetic fault: a document root with
- * no `wp-config.php` is a WordPress that offers its installer to whoever asks.
- * They are copied into the staged root before it goes live, so the root that
- * becomes live is complete at the instant it does. `wp-content/uploads` can be
- * gigabytes, so it is moved onto the new root after the switch; a moment
- * without it costs images, not a site.
+ * The configuration files carry the live database credentials and key
+ * material (the staging copy's would point the live site at the staging
+ * database), and a document root with no `wp-config.php` is a WordPress that
+ * offers its installer to whoever asks, so they are copied into the staged
+ * root before it goes live. `wp-content/uploads` holds what visitors sent the
+ * live site and can be gigabytes, so it is moved onto the new root after the
+ * switch; a moment without it costs images, not a site.
  */
 const PRESERVED_COPIED = ["wp-config.php", ".env"] as const;
 const PRESERVED_MOVED = ["wp-content/uploads"] as const;
@@ -105,7 +95,7 @@ interface ParsedStagerAction {
 
 interface StagerActionOptions {
   paths?: Partial<StagerActionPaths>;
-  /** Emit the action's JSON reply on stdout. Defaults to true for CLI callers. */
+  /** Defaults to true for CLI callers. */
   emitReply?: boolean;
 }
 
@@ -453,8 +443,6 @@ function instaticBackendOf(paths: StagerActionPaths, domain: string): InstaticBa
 }
 
 /**
- * Create the empty file a command is about to write a secret into.
- *
  * Exclusive creation, not "w": between the unlink and the open, "w" would
  * follow a symlink left at that name, and curl would then write the response --
  * session cookies included -- wherever it pointed.
@@ -465,13 +453,9 @@ function tempSecretFile(path: string): void {
 }
 
 /**
- * Persist a secret: an Instatic request body carrying a password.
- *
- * Through the atomic writer rather than a plain write, because writeFileSync
- * applies its mode only when it *creates* the file. Writing over a path that
- * already existed kept that path's old permissions, and the chmod that fixed
- * them ran after the secret was already on disk -- a window, however short, in
- * which the password sat in a file anyone could read.
+ * Through the atomic writer because writeFileSync applies its mode only when it
+ * creates the file: writing over an existing path keeps its old permissions,
+ * and the password would sit in a file anyone could read until a chmod.
  */
 function writeSecretFile(path: string, value: string): void {
   writeFileAtomic(path, value, { mode: 0o600 });
@@ -1416,9 +1400,8 @@ async function runTarCopy(source: string, destination: string, owner: string): P
     if (senderStderr) diagnostic(senderStderr);
     if (receiverStdout) diagnostic(receiverStdout);
     if (receiverStderr) diagnostic(receiverStderr);
-    // tar itself uses exit 1 for a non-fatal warning (a file changed while it was
-    // being read); only 2 or higher is a real failure, so that -- not a plain
-    // nonzero check -- is the threshold here.
+    // tar exits 1 for a non-fatal warning (a file changed while it was read);
+    // only 2 or higher is a real failure.
     if (senderCode >= 2) return senderCode;
     if (receiverCode >= 2) return receiverCode;
     return 0;
@@ -1461,10 +1444,7 @@ function callInstatic(
 
 export function parseCloneCredentials(input: string): { password: string; mfa: string } {
   let supplied = input;
-  // The service always frames the channel with a final newline (see
-  // startClone in addons/stager/app/service.ts). Remove only that one final
-  // framing newline, then require exactly one separator between the password
-  // and the authentication code.
+  // The service frames the channel with one final newline.
   if (supplied.endsWith("\n")) supplied = supplied.slice(0, -1);
   if ((supplied.match(/\n/g) ?? []).length !== 1) failAction("the credential channel takes exactly two lines");
   const separator = supplied.indexOf("\n");
@@ -1487,14 +1467,9 @@ function readCloneCredentials(): { password: string; mfa: string } {
 }
 
 /**
- * The promote credential channel: four lines, always.
- *
- * A promote between Instatic sites signs in twice -- once to export the
- * staging copy and once to import into the live instance -- so the channel
- * carries two passwords and two authentication codes. Fixed field count for
- * the same reason the clone channel has one: a channel whose length varies
- * cannot tell a password containing a newline from a password followed by a
- * code.
+ * Four lines, always: a promote signs in to export the staging copy and to
+ * import into the live instance. A channel whose length varies cannot tell a
+ * password containing a newline from a password followed by a code.
  */
 export function parsePromoteCredentials(input: string): {
   password: string; mfa: string; targetPassword: string; targetMfa: string;
@@ -1577,9 +1552,6 @@ function cmdDescribe(paths: StagerActionPaths, domain: string): void {
     try {
       php = phpVersionOf(paths, domain);
     } catch {
-      // The original bash wrapper terminated under `set -e` when this query
-      // failed, before ever printing a reply. This binary keeps the synchronous
-      // JSON contract instead, and reports the read error explicitly.
       failAction("cannot read the panel database");
     }
   }
@@ -1657,21 +1629,15 @@ function cmdClone(action: ParsedStagerAction, paths: StagerActionPaths, releaseL
     forwardOutput: true,
   });
 
-  // Keep the local variables used to establish the preflight visible to the
-  // type checker and make it explicit that the source backend is only used for
-  // reverse-proxy clones. The stored job is the source of truth for run.
+  // `backend` only gates the preflight; the stored job is the source of truth for run.
   void backend;
   emitStagerOk(paths, { job: id, source, target });
 }
 
 /**
- * Queue a promote: move the staging copy's files or content onto the live site.
- *
- * `source` is the staging copy the edits were made on and `target` is the live
- * site they are going to, which is the opposite direction from clone and the
- * reason both names stay. The live database is never part of this: it holds
- * what the site's visitors created since the clone was taken, and no amount of
- * table selection makes overwriting that safe. See docs/decisions/stager.md.
+ * `source` is the staging copy and `target` is the live site, the opposite
+ * direction from clone. The live database is never part of this: it holds what
+ * the site's visitors created since the clone was taken.
  */
 function cmdPromote(action: ParsedStagerAction, paths: StagerActionPaths, releaseLock: () => void): void {
   const { source, target, email, targetEmail } = action;
@@ -1789,7 +1755,6 @@ function rollbackRun(ctx: RunContext): void {
       jobSet(ctx.dir, "error", `clone failed during '${ctx.step}'`);
       jobSet(ctx.dir, "state", "failed");
     } catch {
-      // Nothing useful can be done if the record itself is no longer writable.
     }
   }
 }
@@ -1982,8 +1947,7 @@ async function cmdRun(id: string, paths: StagerActionPaths): Promise<void> {
       });
       if (user) ctx.stgUser = user;
     } catch {
-      // On failure this falls back to the derived account name computed earlier,
-      // the same degrade the original bash wrapper used.
+      // Falls back to the derived account name.
     }
     const destination = `/home/${ctx.stgUser}/htdocs/${ctx.target}`;
     if (!isDirectory(destination)) failJob(ctx, `CloudPanel did not create ${destination}`);
@@ -2175,13 +2139,10 @@ async function cmdRun(id: string, paths: StagerActionPaths): Promise<void> {
 interface PromoteResult {
   siteType: string;
   siteUser: string;
-  /** The live document root as it was before the switch, kept for the job's retention. */
+  /** Kept for the job's retention. */
   previousRoot: string;
-  /** Paths taken from the live site rather than from the staging copy. */
   preserved: string[];
-  /** The live database dump taken before anything was touched, or null. */
   databaseBackup: string | null;
-  /** The live instance's own content export, taken before the import. */
   contentBackup: string | null;
   notes: string[];
 }
@@ -2190,9 +2151,9 @@ interface PromoteContext {
   id: string;
   dir: string;
   paths: StagerActionPaths;
-  /** The staging copy the edits were made on. */
+  /** The staging copy. */
   source: string;
-  /** The live site they are going to. */
+  /** The live site. */
   target: string;
   step: string;
   failed: boolean;
@@ -2238,14 +2199,9 @@ function pathExists(path: string): boolean {
 }
 
 /**
- * Move one preserved path from `from` into `to`.
- *
- * A rename rather than a copy: both sides are in the same site user's htdocs,
- * so this is instant however large an uploads directory has grown, and it does
- * not need a second copy of it on disk. The consequence is deliberate and
- * documented -- the retained previous root holds the code that was replaced,
- * not a second copy of the live site's user data, which stays on the live site
- * throughout.
+ * A rename, instant however large uploads have grown: both sides are in the
+ * same site user's htdocs. The retained previous root therefore holds the
+ * replaced code, not a second copy of the live site's user data.
  */
 function movePreserved(from: string, to: string, relative: string, user: string): boolean {
   const origin = join(from, relative);
@@ -2295,7 +2251,6 @@ function rollbackPromote(ctx: PromoteContext): void {
       jobSet(ctx.dir, "error", `promote failed during '${ctx.step}'`);
       jobSet(ctx.dir, "state", "failed");
     } catch {
-      // Nothing useful can be done if the record itself is no longer writable.
     }
   }
 }
@@ -2568,11 +2523,9 @@ async function cmdRunPromote(id: string, dir: string, paths: StagerActionPaths):
 }
 
 /**
- * Put back a document root whose promote died between the two renames.
- *
- * The window is one rename wide, but a site with no document root at all is
- * the worst state this addon can leave behind, so the repair pass looks
- * for it explicitly rather than waiting for an operator to notice.
+ * Put back a document root whose promote died between the two renames. The
+ * window is one rename wide, but a site with no document root is the worst
+ * state this addon can leave behind.
  */
 export function recoverInterruptedPromotions(paths: StagerActionPaths): number {
   let recovered = 0;
@@ -2598,12 +2551,8 @@ export function recoverInterruptedPromotions(paths: StagerActionPaths): number {
 }
 
 /**
- * Drop the replaced document roots of jobs whose records are about to expire.
- *
- * Driven from the records rather than from a directory scan, because the
- * record is what says which path this addon put there. It runs before
- * pruneJobs for the same reason: once the record is gone nothing knows the
- * path was ours.
+ * Driven from the records, not a directory scan, because the record is what
+ * says which path this addon put there; so it runs before pruneJobs.
  */
 export function dropExpiredPromoteRoots(paths: StagerActionPaths): number {
   let removed = 0;
@@ -2684,8 +2633,6 @@ function cmdPrune(paths: StagerActionPaths): void {
       if (isDirectory(path) && findOlderThan(path, 60 * 1000, 1440)) rmSync(path, { recursive: true, force: true });
     }
   } catch {
-    // Stale staging cleanup is best effort: a failure here must not fail the
-    // whole prune.
   }
   emitStagerOk(paths, { removed, stuck, vhostsRecovered, promotionsRecovered, rootsRemoved });
 }

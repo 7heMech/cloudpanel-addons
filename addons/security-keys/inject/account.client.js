@@ -15,7 +15,6 @@ if (card) {
     errorBox.textContent = message;
     errorBox.hidden = !message;
   };
-  // This year's dates leave the year out.
   var day = function (iso) {
     var date = new Date(iso);
     return date.getFullYear() === new Date().getFullYear()
@@ -23,7 +22,6 @@ if (card) {
       : date.toLocaleDateString(undefined, { dateStyle: "medium" });
   };
 
-  // What root says this account may do, painted with every reply.
   var applyPolicy = function (data) {
     syncedPasskeys = data.syncedPasskeys;
     card.querySelector(".clp-sk-unsupported").hidden = usable || !data.canAdd;

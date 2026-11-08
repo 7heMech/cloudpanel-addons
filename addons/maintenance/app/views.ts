@@ -9,8 +9,6 @@ import type { MaintenanceFleet, MaintenanceSiteView, MaintenanceTemplateView } f
 
 const BASE = mountPath("maintenance");
 
-// Switches, toolbars, the confirmation dialog and the inline notice are in
-// lib/app-ui; only what this addon alone draws is here.
 import STYLE from "./views.css" with { type: "text" };
 
 import CLIENT_BODY from "./views.client.js" with { type: "text" };

@@ -1,8 +1,8 @@
 // What the Terminal addon adds to CloudPanel's own pages: a link in each Sites
 // row, one at the right end of a site's tab strip, and a root shell control in
-// both headers that only an administrator root allowed sees. Neither is a tab -- the
-// terminal opens in a window of its own -- and both are for administrators
-// only, which the manager's gate enforces again.
+// both headers that only an administrator root allowed sees. Neither is a tab
+// -- the terminal opens in a window of its own -- and both are for
+// administrators only, which the manager's gate enforces again.
 //
 // Neither is `required`: a CloudPanel release that moves either anchor should
 // cost the link, not stop the addon from being enabled. Addons → Terminal

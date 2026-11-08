@@ -37,9 +37,9 @@ export interface InstaticJobView {
   port: number;
   tag: string;
   tls: boolean;
-  /** What came of the certificate; absent on records written before it was kept. */
+  /** Absent on records written before it was kept. */
   certificate?: "issued" | "failed" | "none";
-  /** What the job does; records written before updates were jobs are creations. */
+  /** Records written before updates were jobs are creations. */
   kind: "create" | "update";
   /** The version an update started from. */
   fromTag?: string;
@@ -248,8 +248,7 @@ function parseAction(argv: string[], paths: InstaticActionPaths): ParsedInstatic
       if (port || tag) failAction("delete takes only --domain and --confirm");
       break;
     case "create":
-      // --confirm is accepted and ignored, preserving the original wrapper's
-      // leniency here.
+      // --confirm is accepted and ignored.
       break;
     default:
       if (port || tag || confirm || job) failAction(`${verb} takes only --domain`);
@@ -393,9 +392,6 @@ function panelSiteDomains(paths: InstaticActionPaths): { readable: boolean; doma
       domains: new Set(rows.map((row) => typeof row.domain_name === "string" ? row.domain_name : "")),
     };
   } catch {
-    // Readability was already confirmed before this query ran, so a failed
-    // query here still reports readable: true with an empty domain set (i.e.
-    // panelSite=false downstream) rather than falling back to unreadable/null.
     return { readable: true, domains: new Set() };
   }
 }
@@ -438,9 +434,8 @@ function commandCombinedOutput(command: string, args: string[]): string {
     const output = join(directory, "output");
     fd = openSync(output, "w", 0o600);
     try {
-      // Bash's `2>&1` preserves the relative order of Docker's two streams.
-      // Pointing both descriptors at one open file description retains that
-      // ordering without introducing a shell or exposing output on stdout.
+      // One open file description for both streams keeps Docker's output in
+      // order, as `2>&1` would, without a shell or output on stdout.
       Bun.spawnSync([command, ...args], {
         stdin: "ignore",
         stdout: fd,
@@ -448,9 +443,7 @@ function commandCombinedOutput(command: string, args: string[]): string {
         env: process.env,
       });
     } catch {
-      // Log collection is best effort: an unavailable or failing log command
-      // still contributes whatever output it managed to write before the catch
-      // swallows the error.
+      // Best effort: keep whatever output was written.
     }
     closeSync(fd);
     fd = -1;
@@ -1103,7 +1096,6 @@ async function cmdUpdate(action: ParsedInstaticAction, paths: InstaticActionPath
   emitActionOk({ job: id, domain, tag, status: "queued" });
 }
 
-/** The job half of an update: the same replacement, with its steps and output in the job's log. */
 async function runUpdateJob(jDir: string, paths: InstaticActionPaths): Promise<void> {
   const domain = jobGet(jDir, "domain");
   const tag = validateTag(jobGet(jDir, "tag"));
@@ -1567,10 +1559,8 @@ async function cmdRun(action: ParsedInstaticAction, paths: InstaticActionPaths):
   }
 }
 
-// Creation records accumulate one directory per attempt and nothing ever
-// removed them: the stager had this sweep from the start and Instatic, whose
-// job support was written by copying it, did not. Reached from repair, on the
-// reconciliation timer.
+// Creation records accumulate one directory per attempt. Reached from repair,
+// on the reconciliation timer.
 export function pruneInstaticJobs(options?: InstaticActionOptions): PruneJobsResult {
   return pruneJobs({
     addon: "instatic",
@@ -1628,11 +1618,8 @@ export async function runInstaticAction(argv: string[], options?: InstaticAction
     chmodSync(paths.lockDir, 0o700);
     mkdirSync(paths.dataBaseDir, { recursive: true });
 
-    // `job` and `watch-job` are reads: they print the record and the log file the running job is
-    // still appending to. It must never take the job lock -- `run` holds that
-    // for the whole creation, so a locked read blocked every log poll and every
-    // page load for the job until the create finished, which is the opposite of
-    // what a progress page is for.
+    // `job` and `watch-job` read a log the running job is still appending to,
+    // so they never take the job lock `run` holds for the whole creation.
     if (action.verb === "list" || action.verb === "jobs" || action.verb === "job" || action.verb === "watch-job" || action.verb === "prune" || action.verb === "backup") {
       await dispatch(action, paths);
     } else if (action.verb === "run") {

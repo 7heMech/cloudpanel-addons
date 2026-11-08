@@ -5,7 +5,6 @@ import { panelSessionId } from "../../../lib/sso-auth";
 import { securityKeysService, type Settings } from "./service";
 import { dashboardView, layout } from "./views";
 
-/** The routes every panel user reaches, for their own account only. */
 const OWN_ACCOUNT_ROUTES = new Set(["/api/keys", "/api/register-options", "/api/register", "/api/remove"]);
 
 export async function handle(

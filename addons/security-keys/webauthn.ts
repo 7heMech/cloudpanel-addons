@@ -46,7 +46,6 @@ function sameBytes(a: Uint8Array, b: Uint8Array): boolean {
 
 type Cbor = number | string | Uint8Array | boolean | null | undefined | Cbor[] | Map<Cbor, Cbor>;
 
-/** One CBOR item from `bytes` at `offset`, and where it ends. */
 export function decodeCbor(bytes: Uint8Array, offset = 0, depth = 0): { value: Cbor; end: number } {
   if (depth > MAX_CBOR_DEPTH) fail("CBOR nests too deeply");
   if (offset >= bytes.length) fail("CBOR ends early");
@@ -135,7 +134,6 @@ function coseBytes(key: Map<Cbor, Cbor>, label: number, length?: number): string
   return b64url(value);
 }
 
-/** A COSE public key as a JWK node:crypto can load, for the algorithms allowed. */
 function coseToJwk(key: Cbor): StoredPublicKey {
   if (!(key instanceof Map)) fail("public key is not a COSE map");
   const kty = key.get(1);

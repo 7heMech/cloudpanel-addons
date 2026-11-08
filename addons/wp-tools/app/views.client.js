@@ -146,9 +146,6 @@ function syncSummary(data) {
   return { text: text, kind: data.failed.length || data.pending ? 'warn' : 'ok' };
 }
 
-// Checks, installations, connections and cleanup run as background jobs, whose
-// bars the shared job progress script follows; the site being worked on also
-// says so in its own row.
 function followJobs() {
   followJobProgress(jobFinished, markWorkingSite);
 }

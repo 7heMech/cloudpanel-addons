@@ -105,7 +105,7 @@ export function telemetryStatus(options: TelemetryOptions = {}): TelemetryStatus
   }
 }
 
-/** Reloads systemd and restarts a running agent, since its address filter is set when it starts. */
+/** A running agent takes its address filter only when it starts. */
 function reload(ctx: ReturnType<typeof context>): void {
   const daemon = ctx.run(ctx.paths.systemctl, ["daemon-reload"]);
   if (!daemon.ok) throw new Error(`systemctl daemon-reload failed: ${daemon.stderr.trim()}`);

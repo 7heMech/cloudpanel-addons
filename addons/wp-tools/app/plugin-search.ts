@@ -23,7 +23,6 @@ interface DirectoryPlugin {
   summary: string;
 }
 
-/** What the form may search for: some words, without anything that is not text. */
 export function searchTerm(value: unknown): string | null {
   if (typeof value !== "string") return null;
   const term = cleanLabel(value).slice(0, 100);

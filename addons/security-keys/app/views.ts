@@ -42,7 +42,6 @@ const ROLE_LABELS: [Settings["roles"][number], string][] = [
   ["ROLE_USER", "Users"],
 ];
 
-/** Until anyone has a key: the steps from an empty list to a key that signs in. */
 function setupCard(): string {
   const step = (id: string, title: string, hint: string) =>
     `<li${id ? ` id="${id}"` : ""}><div><strong>${title}</strong><span class="hint">${hint}</span></div></li>`;
@@ -92,7 +91,6 @@ function settingsCard(settings: Settings, users: UserKeysView[]): string {
     </div>`;
 }
 
-/** Why an account's keys cannot sign in, or "" when they can. */
 function blocked(entry: UserKeysView, settings: Settings): string {
   if (!entry.active) return "No longer signs in";
   if (!(settings.roles as string[]).includes(entry.role ?? "")) return "Role is off";

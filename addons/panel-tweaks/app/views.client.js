@@ -49,10 +49,6 @@ function syncDependents(key, on) {
   }
 }
 
-// A measurement runs as a background job. Its progress takes the summary's
-// place in the row, and the shared job progress script follows it until it
-// ends, after a reload too. Pressing the button while one runs, in another tab
-// say, follows that one.
 async function measureNow(button) {
   clearNotice();
   button.disabled = true;

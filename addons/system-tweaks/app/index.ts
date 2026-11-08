@@ -57,7 +57,6 @@ export async function handle(
   const body = await readBody(req, 1024);
   if (body instanceof Response) return body;
 
-  // Each on/off switch posts to /api/<name> and runs set-<name>.
   const verb = `set-${path.replace(/^\/api\//, "")}`;
   if (isSwitchVerb(verb)) {
     if (typeof body.enabled !== "boolean") return jsonResponse({ ok: false, error: "enabled must be true or false" }, 400);

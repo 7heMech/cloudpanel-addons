@@ -6,7 +6,6 @@ function rowState(row) {
   };
 }
 
-/** The state the server holds now, or why it could not be read. */
 async function readState() {
   try {
     const reply = await call('/api/sites');

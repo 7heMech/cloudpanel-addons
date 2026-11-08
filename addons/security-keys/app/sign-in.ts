@@ -10,7 +10,6 @@ import { guardOrigin, jsonResponse, readBody } from "../../../lib/app-http";
 import { ADDONS_BASE_PATH, mountPath } from "../../../lib/mount";
 import { securityKeysService } from "./service";
 
-/** The routes as the manager sees them, with `/addons` already taken off. */
 export const SIGN_IN_PREFIX = `${mountPath("security-keys").slice(ADDONS_BASE_PATH.length)}/login/`;
 
 const CHALLENGE_COOKIE = "clp_addons_passkey";

@@ -95,7 +95,6 @@ const WP_LOGIN_TTL_SECONDS = 60;
  */
 export const WORDPRESS_APPLICATIONS = ["WordPress", "WooCommerce"];
 
-/** What one WordPress site contributes to the addon's page. */
 export interface WpSiteView {
   domain: string;
   user: string;
@@ -309,8 +308,8 @@ function asUserArgument(value: string | undefined): string {
 function panelSites(paths: WpToolsActionPaths): PanelSiteRow[] {
   const db = openPanelDatabase(paths.panelDb, true, 1000);
   try {
-    // Older panels have no Varnish column. Their sign-in behavior is unchanged,
-    // and they contribute no eligible sites to plugin installation.
+    // Older panels have no Varnish column; their sites are never eligible for
+    // plugin installation.
     const columns = db.query<{ name: string }, []>("PRAGMA table_info(site);").all();
     const varnish = columns.some((column) => column.name === "varnish_cache") ? "varnish_cache" : "0 AS varnish_cache";
     const phpSettings = db.query("SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'php_settings';").get();
@@ -386,7 +385,6 @@ function resolvedSites(paths: WpToolsActionPaths): { row: PanelSiteRow; account:
   return resolved;
 }
 
-/** Shared discovery and eligibility for the page and plugin installation. */
 function resolvedWordPressSites(paths: WpToolsActionPaths) {
   return resolvedSites(paths)
     .filter((site) => isWordPress(site.root))
@@ -407,7 +405,6 @@ function wordpressSites(paths: WpToolsActionPaths, state: WpVarnishState): WpSit
     }));
 }
 
-/** The sites and the panel's domains a Varnish pass works from. */
 function varnishRun(
   paths: WpToolsActionPaths,
   request: { domain?: string; targets?: string[]; dueOnly?: boolean; deadline?: number } = {},
@@ -768,11 +765,9 @@ function mintWpLogin(
 }
 
 /**
- * Take the sign-in back out of every site that has it.
- *
- * Disabling the addon runs this: leaving a loader behind in
- * somebody else's site because the addon went away would make it something an
- * operator cannot fully withdraw.
+ * Disabling the addon runs this: leaving a loader behind in somebody else's
+ * site because the addon went away would make it something an operator cannot
+ * fully withdraw.
  */
 export function removeWpLogin(paths: WpToolsActionPaths = DEFAULT_WP_TOOLS_PATHS): WpRemoveResult {
   let removed = 0;
@@ -792,9 +787,8 @@ export function removeWpLogin(paths: WpToolsActionPaths = DEFAULT_WP_TOOLS_PATHS
 }
 
 /**
- * Take the MainWP guard out of every site that has it. Withdrawing the addon
- * runs this: nothing would enforce the connection any more, and a Child no one
- * can deactivate or see would be left behind.
+ * Withdrawing the addon runs this: nothing would enforce the connection any
+ * more, and a Child no one can deactivate or see would be left behind.
  */
 export function removeMainwpGuards(paths: WpToolsActionPaths = DEFAULT_WP_TOOLS_PATHS): WpRemoveResult {
   let removed = 0;

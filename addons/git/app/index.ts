@@ -12,7 +12,6 @@ import { embedLandingUrl } from "../../../lib/shadow-embed";
 import { fleetView, fragment, layout, siteView } from "./views";
 import { gitService, type GitSettings } from "./service";
 
-/** The site page's content, and the log of whatever it last deployed. */
 async function sitePage(domain: string): Promise<{ title: string; content: string; context: Awaited<ReturnType<typeof gitService.site>>["context"] }> {
   const page = await gitService.site(domain);
   let log = "";

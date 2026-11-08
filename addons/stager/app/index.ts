@@ -1,7 +1,3 @@
-// Entry point for the Stager manager service.
-//
-// The manager router strips the /addons/ prefix before dispatching here.
-
 import { errorMessage } from "../../../lib/errors";
 import { stagerService, expandTarget, promoteBlocked } from "./service";
 import { validateJobId } from "../../../lib/job-id";
@@ -12,22 +8,14 @@ import {
 } from "../../../lib/app-http";
 import { mountPath } from "../../../lib/mount";
 import { getNextAvailablePort, type SanitizedSite } from "../../../lib/snapshot-reader";
-// The Stager already depends on the Instatic addon: cloning a reverse-proxy
-// site means driving its action binary, and this addon refuses one whose backend is
-// not an instance that addon manages. The dependency runs one way only -- the
-// Instatic addon knows nothing about this one -- so importing its service here
-// closes no cycle.
+// One way only: the Instatic addon knows nothing about this one.
 import { instaticService } from "../../instatic/app/service";
 import { jobApiRoute } from "../../../lib/job-stream";
 import { embedLandingUrl } from "../../../lib/shadow-embed";
 
 /**
- * Ports this addon has handed out that a panel-data request can race with.
- *
- * The gateway responds with live panel and addon data, but a clone may reserve
- * a port while that request is running. Include active jobs and jobs completed
- * after the response timestamp. A failed clone was rolled back, so its port is
- * free.
+ * A clone may reserve a port while the panel-data request runs. A failed clone
+ * was rolled back, so its port is free.
  */
 function portsSinceSnapshot(jobs: JobView[], snapshotTakenAt: string): number[] {
   const taken = Date.parse(snapshotTakenAt);
@@ -42,19 +30,14 @@ function portsSinceSnapshot(jobs: JobView[], snapshotTakenAt: string): number[] 
 }
 
 /**
- * Bounds on the credential fields, because the action binary cannot be the one to
- * enforce them.
+ * The action validates its arguments before it reads stdin, so an oversized
+ * field would be written into an unread pipe; anything past the 64 KiB pipe
+ * buffer then fails the write with EPIPE on a stream tick no request promise
+ * can catch, killing the process that serves every addon.
  *
- * The action binary receives them on a line-buffered stdin stream under a
- * 120-second timeout; if the payload has an unescaped newline or exceeds the pipe
- * buffer, the action binary fails after the child process has already started
- * writing over the site. Validating here catches that before the action binary is
- * invoked at all.
- *
- * Sized against RFC 5321 and what the fields actually carry: 254 is the longest
- * email address and what `validateEmail` allows, 32 is the top of
- * `validateMfa`'s range, and 256 is generous for a password while staying four
- * orders of magnitude clear of the buffer.
+ * 254 is the longest email address (RFC 5321) and what `validateEmail` allows,
+ * 32 is the top of `validateMfa`'s range, and 256 is generous for a password
+ * while staying far clear of the buffer.
  */
 const MAX_EMAIL = 254;
 const MAX_PASSWORD = 256;
@@ -63,14 +46,7 @@ const MAX_MFA = 32;
 /** A newline in a credential would arrive at the action binary as a shorter one. */
 const CONTROL_CHARS = /[\u0000-\u001f\u007f]/;
 
-/**
- * The whole request surface, exported so the one manager process can mount it.
- *
- * `path` is this addon's own path, with the mount prefix already stripped by the
- * router: a request for /addons/stager/api/... arrives here as /api/... .
- * Taking it as an argument rather than reading req.url is what keeps every route
- * below written as though this addon owned the site, which it used to.
- */
+/** `path` has the mount prefix stripped: /addons/stager/api/... arrives as /api/... . */
 export async function handle(
   req: Request,
   path: string,
@@ -88,10 +64,8 @@ export async function handle(
 
   if (method === "GET" && path === "/") {
     const csrf = newCsrfToken();
-    // A site-scoped page belongs to the panel's site page. Send a direct visit
-    // there and let the injected loader pull this page into it; ?embed=0 keeps
-    // the standalone page. Deciding this needs no panel state, so it happens
-    // before anything is read.
+    // A site-scoped page belongs to the panel's site page, where the injected
+    // loader pulls it in; ?embed=0 keeps the standalone page.
     const selected = url.searchParams.get("domain");
     if (selected && url.searchParams.get("embed") !== "0") {
       const target = validateExactDomain(selected);
@@ -135,7 +109,6 @@ export async function handle(
         snapshotAge = ageSeconds;
         snapshotTakenAt = snap.updatedAt;
       } catch {
-        // Panel inventory unavailable; render without site-presence checks
       }
       return htmlResponse(
         layout(
@@ -150,8 +123,7 @@ export async function handle(
     }
   }
 
-  // The same page as GET /?domain=, without a document around it, for the
-  // loader injected into CloudPanel's site pages.
+  // For the loader injected into CloudPanel's site pages.
   if (method === "GET" && path === "/fragment") {
     const csrf = newCsrfToken();
     const domain = validateExactDomain(url.searchParams.get("domain") ?? "");
@@ -175,9 +147,8 @@ export async function handle(
     }
   }
 
-  // The button injected into every CloudPanel site page lands here with the
-  // site it was rendered on. Nothing is trusted about it: it is validated,
-  // and then the action binary looks it up in the panel's own site table.
+  // The injected button lands here with its site, which is untrusted: the
+  // action looks it up in the panel's own site table.
   if (method === "GET" && path === "/new") {
     const csrf = newCsrfToken();
     try {
@@ -243,13 +214,11 @@ export async function handle(
     );
   }
 
-  // The return leg of a clone. The pair of sites comes from this addon's own
-  // clone record rather than from the request, so a promote can only ever put
-  // a staging site back onto the site it was cloned from.
+  // The pair of sites comes from the clone record, not the request, so a
+  // promote can only put a staging site back onto the site it was cloned from.
   if (method === "GET" && path === "/promote") {
     const csrf = newCsrfToken();
     try {
-      // The list of clones is where a promote is chosen.
       const id = validateJobId(url.searchParams.get("job") ?? "");
       if (!id) return redirectResponse(`${mountPath("stager")}/`);
       const res = await stagerService.getJob(id);
@@ -290,10 +259,6 @@ export async function handle(
   }
 
   if (method === "POST" && path === "/api/clones") {
-    // The one mutating route, and the only one that had no try/catch while
-    // every GET branch has one. A panel-data request or port allocation can
-    // fail, and the strict list calls below throw when an action cannot answer --
-    // all of which surfaced as a bare 500 with nothing said.
     try {
       return await postClone(req);
     } catch (err) {
@@ -306,11 +271,6 @@ export async function handle(
   return jsonResponse({ ok: false, error: "not found" }, 404);
 }
 
-/**
- * Validates a clone request and forwards it to the Stager action process.
- * Reverse-proxy clones receive a port selected from live panel, clone-job, and
- * Instatic instance data.
- */
 async function postClone(req: Request): Promise<Response> {
   const blocked = guardMutation(req);
   if (blocked) return blocked;
@@ -325,20 +285,13 @@ async function postClone(req: Request): Promise<Response> {
   const source = validateExactDomain(typeof rawSource === "string" ? rawSource.toLowerCase() : null);
   if (!source) return jsonResponse({ ok: false, error: "source is not a valid hostname" }, 400);
 
-  // The shorthand is expanded here so the action binary only ever sees a
-  // complete hostname; it must reject rather than rewrite.
   const target = validateExactDomain(expandTarget(typeof rawTarget === "string" ? rawTarget : "", source));
   if (!target) return jsonResponse({ ok: false, error: "target is not a valid hostname" }, 400);
   if (target === source) return jsonResponse({ ok: false, error: "the target is the site being cloned" }, 400);
 
-  // The credential fields are accepted only for a source that really is an
-  // Instatic site, and that is settled by asking the action binary rather
-  // than by trusting the body. Nothing here is ever logged.
-  //
-  // The listing applies the same gates as a clone, including leaving out a
-  // reverse proxy whose backend is not an instance this box manages, so a
-  // source missing from it is one the action binary would refuse; `describe`
-  // is asked once after that, for the sentence saying which condition applied.
+  // Whether the source is an Instatic site is settled by the action, not the
+  // body; the listing applies every gate a clone does, and `describe` says
+  // which one applied. Nothing here is ever logged.
   const summary = (await stagerService.listSites()).find((site) => site.domain === source);
   if (!summary) {
     const detail = await stagerService.describe(source);
@@ -355,22 +308,11 @@ async function postClone(req: Request): Promise<Response> {
     if (typeof instaticPassword !== "string" || !instaticPassword) {
       return jsonResponse({ ok: false, error: "cloning an Instatic site needs the source's admin password" }, 400);
     }
-    // Bounded, and bounded here rather than left to the action binary, because
-    // the action binary validates its arguments before it ever reads stdin: an
-    // over-long password is refused with the pipe unread, and anything past
-    // the 64 KiB pipe buffer then fails the write with EPIPE on a stream tick
-    // no request promise can catch. One 1 MiB field killed the process that
-    // serves every addon, 20 times out of 20. The stream error is handled in
-    // service.ts as well; this is the half that stops the oversized write from
-    // being attempted at all.
     if (instaticPassword.length > MAX_PASSWORD) {
       return jsonResponse({ ok: false, error: `the password may be at most ${MAX_PASSWORD} characters` }, 400);
     }
-    // Rejected, not trimmed. The credential crosses to the action binary as one
-    // line on stdin, so a newline in it would arrive as a shorter password -- a 401
-    // that spends the production account's lockout budget on a value the
-    // operator never typed. A control character has no business in a password
-    // field either.
+    // Rejected, not trimmed: a newline would arrive on stdin as a shorter
+    // password, a 401 that spends the production account's lockout budget.
     if (CONTROL_CHARS.test(instaticPassword)) {
       return jsonResponse({ ok: false, error: "the password may not contain a newline or a control character" }, 400);
     }
@@ -378,12 +320,9 @@ async function postClone(req: Request): Promise<Response> {
     if (mfa.length > MAX_MFA) {
       return jsonResponse({ ok: false, error: "that authentication code is too long" }, 400);
     }
-    // Allocated here because the app combines panel data with both addons'
-    // active jobs. The action binary re-checks the number under its own lock,
-    // so this is a proposal rather than a reservation.
-    //
-    // Neither list may fail quietly here: an empty result would mean "nothing
-    // is using any port" and could produce a collision.
+    // A proposal, not a reservation: the action re-checks it under its lock.
+    // Neither list may fail quietly, or an empty result would hand out a port
+    // in use.
     const [jobs, instances, { snap: snapshot }] = await Promise.all([
       stagerService.listJobsOrThrow(),
       instaticService.listInstancesOrThrow(),
@@ -407,13 +346,8 @@ async function postClone(req: Request): Promise<Response> {
 }
 
 /**
- * Validates a promote request and forwards it to the Stager action process.
- *
- * The request names a clone job, not two sites: `target` becomes the staging
- * copy the files come from and `source` becomes the live site they go to,
- * which is the clone read backwards. Accepting two free hostnames instead
- * would make this a general site-to-site overwrite, which is a different and
- * much sharper tool than the one being built here.
+ * The request names a clone job, not two sites: accepting two free hostnames
+ * would make this a general site-to-site overwrite.
  */
 async function postPromote(req: Request): Promise<Response> {
   const blocked = guardMutation(req);
@@ -447,9 +381,6 @@ async function postPromote(req: Request): Promise<Response> {
     | { email: string; password: string; mfaCode?: string; targetEmail: string; targetPassword: string; targetMfaCode?: string }
     | undefined;
   if (isInstatic) {
-    // Two accounts, and the same bounds on both as a clone puts on its one:
-    // the action binary validates its arguments before it reads stdin, so an
-    // oversized field would be written into a pipe nobody is reading.
     const accounts = [
       { what: "staging", email: instaticEmail, password: instaticPassword, code: mfaCode },
       { what: "live", email: liveEmail, password: livePassword, code: liveMfaCode },

@@ -5,8 +5,6 @@ import {
 import { resourceLimitsService } from "./service";
 import { dashboardView, layout, siteCardHtml } from "./views";
 
-
-/** Every change answers with the whole state, so they all reply the same way. */
 async function change(result: Awaited<ReturnType<typeof resourceLimitsService.assign>>): Promise<Response> {
   if (!result.ok || !result.data) return jsonResponse(result, 400);
   return jsonResponse({ ...result, html: dashboardView(result.data) });

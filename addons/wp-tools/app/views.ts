@@ -51,7 +51,6 @@ function checkedTitle(checkedAt: string): string {
   return checked ? ` title="Checked ${esc(checked)} UTC"` : "";
 }
 
-/** The plugin's chip on a site with Varnish on. */
 function varnishBadge(site: WpSiteView): [label: string, tone: string] {
   const record = site.varnishPlugin;
   return !record ? ["Not checked", ""]
@@ -81,7 +80,6 @@ function connectable(site: WpSiteView, state: MainwpView): boolean {
     && status !== "connected" && status !== "unsupported";
 }
 
-/** The Child's chip on a site other than the Dashboard. */
 function mainwpBadge(site: WpSiteView, state: MainwpView): [label: string, tone: string] {
   const record = state.sites[site.domain];
   return !record ? ["Not checked", ""]
@@ -248,7 +246,6 @@ function newSiteRow(job: WpJobView): string {
               </tr>`;
 }
 
-/** What the new-site form's choices did, and the ones still waiting for their site. */
 function newSitesCard(jobs: WpJobView[]): string {
   const running = jobs.filter((job) => job.state === "queued" || job.state === "running");
   const finished = jobs.filter((job) => !running.includes(job));

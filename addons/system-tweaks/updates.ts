@@ -491,10 +491,7 @@ function readDropIn(ctx: Context): string | null {
   }
 }
 
-/**
- * Write or remove the drop-in, and have apt parse the result before keeping
- * it. Returns the timers this enabled, which switching off disables again.
- */
+/** Returns the timers this enabled, which switching off disables again. */
 export function applyUpdates(settings: UpdateSettings, enabledTimers: string[], options: UpdatesOptions = {}): {
   changed: boolean;
   enabledTimers: string[];

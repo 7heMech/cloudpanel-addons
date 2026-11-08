@@ -10,8 +10,10 @@
  *
  * `blockClpctlInjection`, on by default, replaces the wrapper with our own
  * (`clpctl-wrapper.sh`). It passes root and clp straight through to the saved
- * original, and for every other caller admits only the four commands with each
- * option value checked against an allowlist that holds no shell metacharacter.
+ * original, and for every other caller admits only `db:export`,
+ * `system:permissions:reset` and `varnish-cache:purge`, with each option value
+ * checked against an allowlist that holds no shell metacharacter. `db:import`
+ * is refused, since clpctl runs its SQL as the database administrator.
  * Legitimate commands still reach CloudPanel's original wrapper unchanged, so
  * clpctl behaves exactly as before.
  *
@@ -61,7 +63,6 @@ export interface ClpctlGuardOptions {
   shippedSha256?: Iterable<string>;
 }
 
-/** What the installed wrapper is. */
 type WrapperKind =
   | "ours" // our hardened wrapper, over a saved known original
   | "known-original" // CloudPanel's own wrapper, a version we know
@@ -69,7 +70,6 @@ type WrapperKind =
   | "missing"; // no wrapper file at all
 
 export interface ClpctlGuardStatus {
-  /** The setting's value. */
   enabled: boolean;
   /** Our hardened wrapper is installed and its saved original is intact. */
   active: boolean;
@@ -136,7 +136,6 @@ function trustedBytes(path: string, rootUid: number): string | null {
   }
 }
 
-/** Whether the saved original is present and a wrapper we know. */
 function savedOriginalGood(ctx: Context): boolean {
   const bytes = trustedBytes(ctx.paths.backup, ctx.paths.rootUid);
   return bytes !== null && KNOWN_ORIGINAL_SHA256.has(sha256(bytes));
@@ -170,8 +169,6 @@ function pausedReason(ctx: Context, wrapper: WrapperKind): string {
   if (wrapper === "unknown") {
     return `${ctx.paths.wrapper} is not a CloudPanel wrapper this version was built against, so it is left in place`;
   }
-  // A known original that we have not replaced. When the version is known too it
-  // is simply not applied; otherwise the version is the gate.
   if (versionKnown(ctx)) return "CloudPanel's original wrapper is in place";
   return ctx.version === null
     ? "CloudPanel's version could not be read, so the wrapper is left in place"
@@ -186,10 +183,9 @@ interface ClpctlGuardResult {
 }
 
 /**
- * Put our hardened wrapper in place when it is safe to. Installs only over our
- * own wrapper or a known original on a known CloudPanel version, saving that
- * original first; anything else is left untouched and reported. Never throws
- * for the fail-safe case, so repair can call it every cycle.
+ * Anything but our own wrapper or a known original on a known CloudPanel
+ * version is left untouched and reported, never thrown, so repair can call it
+ * every cycle.
  */
 export function applyClpctlGuard(options: ClpctlGuardOptions = {}): ClpctlGuardResult {
   const ctx = contextOf(options);
@@ -211,7 +207,6 @@ export function applyClpctlGuard(options: ClpctlGuardOptions = {}): ClpctlGuardR
     return { changed: false, active: false, reason: pausedReason(ctx, wrapper) };
   }
 
-  // A known original is what is installed: save its exact bytes, then replace it.
   const original = readFileSync(ctx.paths.wrapper, "utf8");
   writeFileAtomic(ctx.paths.backup, original, { mode: 0o700, createParent: true });
   writeFileAtomic(ctx.paths.wrapper, WRAPPER_SCRIPT, { mode: 0o700 });
@@ -242,7 +237,6 @@ export function restoreClpctlWrapper(options: ClpctlGuardOptions = {}): boolean 
   return true;
 }
 
-/** The status read's error wrapper, matching the rest of System Tweaks. */
 export function clpctlGuardOrError(enabled: boolean, options?: ClpctlGuardOptions): ClpctlGuardStatus | { error: string } {
   try { return clpctlGuardStatus(enabled, options); }
   catch (error) { return { error: errorMessage(error) }; }

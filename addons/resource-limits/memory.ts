@@ -33,7 +33,6 @@ export const DEFAULT_MEMORY: MemorySettings = { profile: "balanced", mysql: fals
 
 export const MEMORY_ERROR = "profile must be balanced, database or cache, and mysql, redis and oom true or false";
 
-/** A body naming at least one memory setting, each well-formed. */
 export function memoryChange(body: Record<string, unknown>): Partial<MemorySettings> | null {
   const change: Partial<MemorySettings> = {};
   if (body.profile !== undefined) {
@@ -81,7 +80,6 @@ interface MemoryPlan {
   redisMb: number;
 }
 
-/** The numbers a profile gives a server with this much RAM. */
 export function memoryPlan(ramMb: number, profile: MemoryProfile): MemoryPlan {
   const share = SHARES[profile];
   const wanted = Math.max(CHUNK_MB, Math.floor(ramMb * share.pool));
@@ -157,7 +155,6 @@ type MemoryPaths = typeof DEFAULT_MEMORY_PATHS;
 
 export interface MemoryOptions {
   paths?: Partial<MemoryPaths>;
-  /** Runs one command, killed after `timeoutMs`. */
   run?: (command: string, args: string[], timeoutMs: number) => CommandResult;
   now?: () => number;
   /** When every command must have finished, in ms since the epoch; each one gets what is left, at most COMMAND_MS. */
@@ -478,7 +475,6 @@ function phpUnits(ctx: Context): string[] {
     .map((version) => `php${version}-fpm.service`);
 }
 
-/** Each unit that gets a priority, with its score; units not installed are left out. */
 function oomTargets(ctx: Context, mysqlUnit: Unit): { unit: Unit; score: number }[] {
   const php = phpUnits(ctx);
   const [nginx, ...pools] = units(ctx, [ctx.paths.nginxUnit, ...php]);

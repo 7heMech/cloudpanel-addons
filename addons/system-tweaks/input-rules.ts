@@ -144,7 +144,6 @@ function walk(table: Table, chain: string, port: number, label: string | null, o
       return { unknown: `the loaded rule "${rule.text}" could not be read` };
     }
     const scope = [label, match.label].filter(Boolean).join(" ") || null;
-    // Applies to only part of the group: some sources or interfaces, or some packets.
     const partial = match.kind === "some" || match.label !== null;
     if (target === "ACCEPT") {
       // Accepted even sometimes from anywhere is open.
@@ -181,7 +180,6 @@ function walk(table: Table, chain: string, port: number, label: string | null, o
   return "drop";
 }
 
-/** The loaded ruleset's verdict on a new TCP connection to `port` from outside. */
 export function inputVerdict(table: Table, port: number): InputVerdict {
   const openTo = new Set<string>();
   const result = walk(table, "INPUT", port, null, openTo, 0);

@@ -15,8 +15,7 @@ async function startClone() {
   const tls = document.getElementById('tls').checked;
   if (!target) { notify('Enter a hostname for the staging site.', 'error'); return false; }
   const payload = { source: source, target: target, tls: tls };
-  // Present only when the source is an Instatic site. Read straight into the
-  // request. The root job keeps it only until the source login succeeds.
+  // Present only when the source is an Instatic site.
   const email = document.getElementById('instatic-email');
   if (email) {
     const password = document.getElementById('instatic-password');
@@ -85,9 +84,8 @@ async function startPromote(form) {
   return false;
 }
 
-// Wired here rather than from an inline <script> inside the page body: the
-// shell puts this script after <main>, so a call written next to the markup
-// would run before any of these functions exist.
+// The shell puts this script after <main>, so an inline call in the markup
+// would run before these functions exist.
 function initStager() {
   if (document.getElementById('target')) previewTarget();
   const watch = document.getElementById('job-watch');

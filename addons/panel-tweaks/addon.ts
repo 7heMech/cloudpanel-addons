@@ -17,9 +17,7 @@ export const PANEL_TWEAKS_ADDON: AddonDefinition = {
   action: runPanelTweaksAction,
   preGate: { prefix: BRANDING_ASSET_PREFIX, handle: handleBrandingAsset },
   // Measured site sizes ride the fifteen-minute repair timer rather than a
-  // timer of their own. The hook uses the stored measurement
-  // time to do the expensive sweep about every six hours, and returns nothing
-  // for a tweak that is off.
+  // timer of their own; the sweep itself runs about every six hours.
   repair: {
     label: "panel tweaks",
     run: (options) => panelTweaksUpkeep((options ?? {}) as PanelTweaksActionOptions),

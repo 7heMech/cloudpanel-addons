@@ -11,8 +11,8 @@ import { runWp, wpReply, type WpOptions, type WpSite } from "./wp-cli";
 import PHP from "./mainwp.php" with { type: "text" };
 import GUARD from "./mainwp-guard.php" with { type: "text" };
 
-/** Where the guard lives in a site, which withdrawing the addon removes without WordPress. */
 export const MAINWP_CHILD_PLUGIN = "mainwp-child";
+/** Where the guard lives in a site, which withdrawing the addon removes without WordPress. */
 export const MAINWP_GUARD_FILE = "wp-content/mu-plugins/clp-addons-mainwp.php";
 const GUARD_HASH = createHash("sha256").update(GUARD).digest("hex");
 
@@ -94,7 +94,6 @@ export interface MainwpRun {
   /** Every domain the panel has; state for any other is dropped. */
   domains: Set<string>;
   domain?: string;
-  /** Only these sites. */
   targets?: string[];
   /** The operator chose `targets` to connect, as `domain` is for one site. */
   connect?: boolean;
@@ -226,7 +225,7 @@ export function readMainwpState(path: string): MainwpState {
   }
   // Automation works for a Dashboard, here or on another server, so without one it is off.
   if (!state.dashboard && !state.remote) state.enabled = false;
-  // Sites can no longer be excluded; the next save drops an old list.
+  // Nothing reads an `excluded` list; the next save drops it.
   delete state.excluded;
   return state;
 }

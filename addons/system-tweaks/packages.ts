@@ -1,4 +1,3 @@
-/** Running apt and dpkg for the settings that install or query packages. */
 import { failAction } from "../../lib/action";
 import { commandOutput, runCommand, type CommandResult } from "../../lib/command";
 import { APT_STEP_MS, COMMAND_MS } from "./limits";
@@ -14,10 +13,6 @@ export function systemRun(command: string, args: string[], env?: Record<string, 
   return runCommand(command, args, timeoutMs ?? guardOf(command), env);
 }
 
-/**
- * A runner that holds every command to one deadline: each gets its own guard
- * or what is left, whichever is shorter, and none starts once it has passed.
- */
 export function withDeadline(run: Run, deadline: number, now: () => number = Date.now, what = "unattended-upgrades"): Run {
   return (command, args, env) => {
     const remaining = deadline - now();
@@ -37,7 +32,6 @@ export function installedVersion(run: Run, name: string): string {
   return query.ok && status.endsWith(" installed") ? version.trim() : "";
 }
 
-/** apt-get install, with the lists refreshed and tried once more when they are stale. */
 export function aptInstall(run: Run, packages: string[]): void {
   const env = { DEBIAN_FRONTEND: "noninteractive" };
   const install = () => run("apt-get", ["install", "-y", "-o", "DPkg::Lock::Timeout=120", ...packages], env);

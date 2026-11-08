@@ -76,16 +76,15 @@ export function readVarnishState(path: string): WpVarnishState {
       || (record.network !== undefined && typeof record.network !== "boolean")) {
       throw new Error("the WordPress Varnish site record is invalid");
     }
-    // Earlier versions skipped multisite networks without trying anything, so
-    // the next check starts them afresh.
+    // An `unsupported` record marks a multisite network that was skipped
+    // untried; the next check starts it afresh.
     if ((record.status as string) === "unsupported") delete state.sites[domain];
   }
-  // Sites can no longer be excluded; the next save drops an old list.
+  // Nothing reads an `excluded` list; the next save drops it.
   delete state.excluded;
   return state;
 }
 
-/** Forgets domains the panel no longer has, so a recreated site starts fresh. */
 export function pruneVarnishState(state: WpVarnishState, domains: Set<string>): boolean {
   return Object.keys(pruneFleet(state, domains)).length > 0;
 }
@@ -120,7 +119,7 @@ interface PluginStatus {
 async function status(run: VarnishRun, site: VarnishSite, options: VarnishOptions, deadline: number): Promise<PluginStatus> {
   const line = (await wp(run, site, ["eval", STATUS_PHP], options, deadline)).split("\n").findLast((text) => text.startsWith(STATUS_MARKER));
   let reply: { multisite?: unknown; status?: unknown } = {};
-  try { reply = JSON.parse(line?.slice(STATUS_MARKER.length) ?? ""); } catch { /* reported below */ }
+  try { reply = JSON.parse(line?.slice(STATUS_MARKER.length) ?? ""); } catch {}
   if (typeof reply.multisite !== "boolean" || typeof reply.status !== "string" || !["active", "inactive", "missing"].includes(reply.status)) {
     throw new Error("WP-CLI returned no plugin status; check that the site loads in WordPress");
   }

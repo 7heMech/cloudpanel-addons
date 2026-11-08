@@ -157,8 +157,6 @@ export function poolGuard<P extends PoolGuardPaths>(spec: PoolGuardSpec<P>) {
     },
 
     /**
-     * Put both files in place, reload the panel's FPM and require the pool to
-     * answer and the guard to refuse; a failure puts the previous files back.
      * Files already in place are left alone only while the running pool
      * enforces them, so an install that was interrupted before its reload, or
      * a script OPcache still holds an older copy of, is reloaded. Returns
@@ -202,12 +200,7 @@ export function poolGuard<P extends PoolGuardPaths>(spec: PoolGuardSpec<P>) {
       contextOf(options).run("systemctl", ["start", "--no-block", RECONCILE_SERVICE]);
     },
 
-    /**
-     * Remove the pool file and reload, then the script. Synchronous, for
-     * disabling the addon; taking the guard away cannot stop the panel
-     * answering. The script stays until the reload succeeds, since the running
-     * FPM still prepends it.
-     */
+    /** Synchronous, for disabling the addon; taking the guard away cannot stop the panel answering. */
     remove(options: PoolGuardOptions<P> = {}): boolean {
       const ctx = contextOf(options);
       if (!present(ctx.paths.pool) && !present(ctx.paths.script)) return false;

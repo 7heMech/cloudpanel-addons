@@ -65,7 +65,6 @@ function context(options: PoolIsolationOptions) {
   };
 }
 
-/** PHP versions with an FPM pool directory, such as 8.3. */
 function versions(paths: PoolIsolationPaths): string[] {
   if (!existsSync(paths.phpRoot)) return [];
   return readdirSync(paths.phpRoot)
@@ -85,7 +84,6 @@ export function listenPort(value: string): number | null {
   return Number.isInteger(port) && port > 0 && port < 65536 ? port : null;
 }
 
-/** Every pool section of every PHP-FPM, with its port and its user. */
 export function phpPools(options: PoolIsolationOptions = {}): Pool[] {
   const { paths } = context(options);
   const pools: Pool[] = [];
@@ -189,7 +187,6 @@ function listeningPorts(procNet: string): Set<number> {
   return ports;
 }
 
-/** The loaded sets cut to the ports something still listens on. */
 function stillListening(loaded: LoadedSets, procNet: string): LoadedSets {
   const listening = listeningPorts(procNet);
   return {
@@ -295,7 +292,7 @@ export function installPoolIsolation(options: PoolIsolationOptions = {}): boolea
   return syncPoolIsolation(options) || written.size > 0;
 }
 
-/** Remove the drop-ins, then the table. Returns whether anything changed. */
+/** Returns whether anything changed. */
 export function removePoolIsolation(options: PoolIsolationOptions = {}): boolean {
   const { paths, run } = context(options);
   let changed = false;

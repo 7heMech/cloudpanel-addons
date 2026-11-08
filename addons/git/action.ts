@@ -338,7 +338,6 @@ export function validateBranch(value: unknown): string {
   return branch;
 }
 
-/** A subdirectory of the site's own directory, or "" for the directory itself. */
 export function validateDirectory(value: unknown): string {
   if (value === undefined || value === null) return "";
   if (typeof value !== "string") failAction("the target directory must be a string");
@@ -534,7 +533,6 @@ function runAsSiteUser(
   return runCommand(paths.runuser, asSiteUser(paths, user, command, args, keyPath));
 }
 
-/** Quote one literal for interpolation into the post-deploy shell script. */
 function shellQuote(value: string): string {
   return `'${value.replaceAll("'", "'\\''")}'`;
 }
@@ -577,7 +575,6 @@ async function streamAsSiteUser(
 
 /* --------------------------------------------------------------- deploy key */
 
-/** Whether this remote is fetched with the site's deploy key rather than HTTPS. */
 export function usesDeployKey(remote: string): boolean {
   return !remote.startsWith("https://");
 }
@@ -877,8 +874,6 @@ function cmdWebhook(paths: GitActionPaths, domain: string, enable: boolean, repl
   const config = readConfig(paths, domain);
   if (!config) failAction(`${domain} has no repository configured yet`);
 
-  // Enabling a site that already has a URL keeps it, the way keygen keeps a key;
-  // only --replace, which is what Rotate sends, mints a second one.
   const keep = enable && config.webhook !== null && !replace;
   const webhook = keep ? config.webhook
     : enable ? { token: newWebhookToken(), lastDeliveryAt: "", lastDelivery: "", lastDeliveryJob: "" }
@@ -1012,10 +1007,10 @@ async function cmdRun(
 
     markJobRunning(dir);
     // Held only to settle which runner owns this job; from here the `running`
-    // record is what says so, and the duplicate-job guard reads it. Keeping the
-    // lock for the whole deployment made a second deploy or delivery wait on it
-    // until the gateway gave up, so an operator was told the gateway failed
-    // where the answer was that this site is already deploying.
+    // record is what says so, and the duplicate-job guard reads it. Held for the
+    // whole deployment, it would make a second deploy or delivery wait until the
+    // gateway gave up, and the operator would be told the gateway failed rather
+    // than that this site is already deploying.
     releaseLock();
 
     // The public half is read rather than stat'ed: what decides is whether this
@@ -1077,7 +1072,7 @@ async function cmdRun(
       logLine(`$ ${config.postDeploy}`);
       // A login shell loads the site's configured PATH, which is where user
       // installs such as Bun, Composer or custom toolchains are normally
-      // exposed. The command still runs as the site user in the deploy dir.
+      // exposed.
       const postDeployScript = `cd -- ${shellQuote(target)} && ${config.postDeploy}`;
       if (!await streamAsSiteUser(paths, site.user, "bash", ["-lc", postDeployScript], { cwd: target })) {
         failJob(dir, "the post-deploy command failed; the files are deployed and the command did not finish");

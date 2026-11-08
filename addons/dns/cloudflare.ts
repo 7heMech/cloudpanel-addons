@@ -171,7 +171,6 @@ function parseRuleset(value: unknown): CfRuleset {
   return { id: id(raw.id), rules };
 }
 
-/** The body Cloudflare is sent for a record. */
 function recordBody(record: RecordWrite): Record<string, unknown> {
   const body: Record<string, unknown> = { type: record.type, name: record.name, ttl: record.ttl };
   if (record.type === "A" || record.type === "AAAA" || record.type === "CNAME") body.proxied = record.proxied;
@@ -188,7 +187,6 @@ function recordBody(record: RecordWrite): Record<string, unknown> {
   return body;
 }
 
-/** The token permission each ruleset phase this addon writes needs. */
 const PHASE_PERMISSIONS: Record<string, string> = {
   http_config_settings: "Config Rules: Edit",
   http_request_firewall_custom: "Zone WAF: Edit",

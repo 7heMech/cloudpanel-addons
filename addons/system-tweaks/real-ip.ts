@@ -118,7 +118,6 @@ function applyTo(instance: Instance, wanted: (content: string) => string, option
     if ((error as NodeJS.ErrnoException).code === "ENOENT") return false;
     throw error;
   }
-  // Nothing to change needs no trust check, validation or reload.
   if (wanted(current) === current) return false;
   const run = options.run ?? ((command, args) => runCommand(command, args, COMMAND_MS));
   const nginx = { nginx: paths.nginx, systemctl: paths.systemctl, config: instance.config, service: instance.service };
@@ -130,7 +129,6 @@ function applyTo(instance: Instance, wanted: (content: string) => string, option
   }, { reload }).changed;
 }
 
-/** Puts both files in the wanted state, validating and reloading each instance only on a change. */
 export function applyRealIp(blockForged: boolean, options: RealIpOptions = {}): boolean {
   const { sites, panel } = instances(options);
   const wanted = (instance: Instance) => blockForged

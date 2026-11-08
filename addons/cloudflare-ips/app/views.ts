@@ -9,8 +9,6 @@ import type { CloudflareState } from "./service";
 const BASE = mountPath("cloudflare-ips");
 const plural = (count: number, word: string): string => `${count} ${word}${count === 1 ? "" : "s"}`;
 
-// Switches, the toolbar, the confirmation dialog and the inline notice come
-// from lib/app-ui so this addon looks like the rest of the manager.
 import STYLE from "./views.css" with { type: "text" };
 
 // One criterion, so a toggle rather than a menu; it keeps the shared filter's

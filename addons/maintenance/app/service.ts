@@ -6,13 +6,11 @@ import type { GlobalMaintenanceStatus, MaintenanceSiteStatus, MaintenanceStatus 
 
 export type MaintenanceSiteView = MaintenanceSiteStatus;
 
-/** What the fleet page draws: every site and the global override. */
 export interface MaintenanceFleet {
   global: GlobalMaintenanceStatus;
   sites: MaintenanceSiteView[];
 }
 
-/** A site's status together with the panel context its page is drawn in. */
 interface MaintenanceSitePage {
   site: MaintenanceSiteView;
   context: SiteContext;

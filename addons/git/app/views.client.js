@@ -206,7 +206,6 @@ function paintGit(html) {
   initGit();
 }
 
-// The site page names its site; the fleet page names none.
 async function refreshGit() {
   const site = CLP_ROOT.querySelector('[data-git-domain]');
   const domain = site ? site.getAttribute('data-git-domain') : '';
@@ -214,7 +213,6 @@ async function refreshGit() {
   paintGit(reply.html);
 }
 
-// A change that landed is reported as done, with a warning if the page could not be redrawn.
 async function showGitChange(reply, done) {
   try {
     if (reply.html) paintGit(reply.html);

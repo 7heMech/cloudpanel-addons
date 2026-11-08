@@ -4,8 +4,7 @@ import type { WebVerb } from "../../../lib/gateway-protocol";
 import { watchGatewayJob, type JobWatcher } from "../../../lib/job-stream";
 export { type ActionResult };
 
-// create pulls an image and waits on a health check, so it needs the longest
-// budget. Everything else is quick.
+// create pulls an image and waits on a health check.
 const TIMEOUTS: Partial<Record<WebVerb<"instatic">, number>> = {
   create: 300_000,
   update: 300_000,
@@ -23,27 +22,15 @@ async function callAction<T = unknown>(verb: WebVerb<"instatic">, args: string[]
   });
 }
 
-// Mirrors the action binary's own validation. Not a substitute for it: the
-// action binary is the boundary and re-checks everything. This exists so the
-// UI can reject bad input with a useful message instead of a generic error
-// from the action binary.
+// Mirrors the action's validation for a useful UI message; the action is the
+// boundary and re-checks.
 const TAG_RE = /^\d+\.\d+\.\d+$/;
 
 export function validateTag(t: unknown): string | null {
   return typeof t === "string" && TAG_RE.test(t) ? t : null;
 }
 
-/**
- * An instance as the action binary reports it.
- *
- * There is no second copy of this anywhere. The manager used to keep its own
- * SQLite table beside the action binary's meta.json files, and the two drifted
- * whenever anything touched an instance without going through the manager --
- * an instance created by calling the action binary directly never showed up
- * here, and a delete that failed part-way left a row describing something that no longer
- * existed. The files on disk and the container are the state; this is a view of
- * them.
- */
+/** A view of the action's meta.json files and container; the manager keeps no copy. */
 export interface InstanceView {
   domain: string;
   port: number;
@@ -72,12 +59,10 @@ export interface InstaticJobView {
   startedAt?: string;
   finishedAt?: string;
   error?: string;
-  /** Optional one-shot event emitted by the job runner. */
   event?: string;
 }
 
 export const instaticService = {
-  /** Fetches current panel information and reports its age at receipt. */
   async snapshot(): Promise<{ snap: PanelSnapshot; ageSeconds: number }> {
     return readPanelSnapshot();
   },
@@ -91,14 +76,7 @@ export const instaticService = {
     return res.data?.instances ?? [];
   },
 
-  /**
-   * The same list, but a call failure is an error rather than an empty one.
-   *
-   * A dashboard can render "no instances" and be read by someone who knows the
-   * difference. An allocator cannot: an empty list means every port in use
-   * silently disappears from the calculation, and the next create is handed one
-   * that is already spoken for. So the two readers ask different questions.
-   */
+  /** For the port allocator, where an empty list would hand out a port already in use. */
   async listInstancesOrThrow(): Promise<InstanceView[]> {
     const res = await callAction<{ instances: InstanceView[] }>("list", []);
     if (!res.ok) throw new Error(res.error ?? "the Instatic action could not list instances");
@@ -106,11 +84,6 @@ export const instaticService = {
   },
 
   /**
-   * Proposes a live-data-checked port and asks the action process to create an
-   * instance, optionally as a background job.
-   *
-   * A duplicate domain is returned as a failed action result.
-   *
    * @throws If existing instances or panel allocations cannot be read, or no
    * reserved port is free.
    */
@@ -125,10 +98,7 @@ export const instaticService = {
       return { ok: false, error: `an instance for ${domain} already exists` };
     }
 
-    // Nothing is recorded afterwards: the action binary writes meta.json, which is
-    // what the next list reads. The action binary re-checks the port too, and holds
-    // a lock while it does, so this allocation is a proposal rather than a
-    // reservation.
+    // A proposal, not a reservation: the action re-checks the port under a lock.
     const { snap } = await this.snapshot();
     const port = getNextAvailablePort(snap, existing.map((i) => i.port));
     const args = [
@@ -158,25 +128,20 @@ export const instaticService = {
     return res.data?.jobs ?? [];
   },
 
-  /** Starts the update as a job, whose log the job page streams; answers its id. */
   async updateInstance(domain: string, tag: string): Promise<ActionResult<{ job?: string }>> {
     return callAction<{ job?: string }>("update", ["--domain", domain, "--tag", tag, "--async"]);
   },
 
   /**
-   * `recreate` is in here rather than beside `update` because it changes no
-   * version: it rebuilds the container from the tag already recorded. Docker
-   * bakes a container's configuration in at creation, so an instance created
-   * by an older release keeps that configuration through any number of
-   * restarts, and rebuilding is the only way to pick up a change such as the
-   * uid the container runs as.
+   * `recreate` rebuilds the container from the recorded tag: Docker bakes a
+   * container's configuration in at creation, so that is the only way to pick
+   * up a change such as the uid it runs as.
    */
   async lifecycle(domain: string, verb: "start" | "stop" | "restart" | "recreate"): Promise<ActionResult> {
     return callAction(verb, ["--domain", domain]);
   },
 
   async deleteInstance(domain: string): Promise<ActionResult> {
-    // --confirm must equal --domain; the action binary enforces it too.
     return callAction("delete", ["--domain", domain, "--confirm", domain]);
   },
 

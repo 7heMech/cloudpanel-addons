@@ -228,7 +228,6 @@ async function replaceBypasses(
   return writeBypasses(paths, domain, options, () => ips);
 }
 
-/** Adds one address to a site's bypasses, keeping the rest. */
 export function addBypass(
   paths: MaintenanceActionPaths, domain: string, ip: string, options: MaintenanceActionOptions = {},
 ): Promise<string[]> {
