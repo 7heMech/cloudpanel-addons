@@ -554,23 +554,6 @@ function dnsCopyText(text) {
   );
 }
 
-function dnsCopyIps() {
-  const block = CLP_ROOT.getElementById('dns-token-ips');
-  if (navigator.clipboard && navigator.clipboard.writeText) {
-    navigator.clipboard.writeText(block.textContent).then(
-      function () { notify('Addresses copied.', 'ok'); },
-      function () { notify('Select the addresses and copy them.', 'warn'); }
-    );
-    return;
-  }
-  // No clipboard API: select them so one keystroke finishes the job.
-  const range = document.createRange();
-  range.selectNodeContents(block);
-  window.getSelection().removeAllRanges();
-  window.getSelection().addRange(range);
-  notify('Press Ctrl+C to copy the selection.', 'warn');
-}
-
 function dnsSaveConnection(event) {
   event.preventDefault();
   const form = event.currentTarget;

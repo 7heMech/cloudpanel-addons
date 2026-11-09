@@ -105,7 +105,7 @@ export function fleetFilterHtml(options: {
 }
 
 /** Goes in a site table's `.card-header.toolbar`, after its title and before the bulk actions. */
-export const FLEET_SELECTION_HTML = `<div class="fleet-selection"><span class="toolbar-note" id="site-selection">No sites selected</span>
+export const FLEET_SELECTION_HTML = `<div class="fleet-selection"><span class="toolbar-note" id="site-selection" data-short="">No sites selected</span>
 <button class="btn mobile-select-all" id="select-all-btn" type="button" onclick="toggleAllSites()">Select all</button></div>`;
 
 export const FLEET_NONE_HTML = `<div class="empty" id="fleet-none" hidden>No site matches.</div>`;

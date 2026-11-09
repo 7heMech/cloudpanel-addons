@@ -27,7 +27,7 @@ export const WP_TOOLS_ADDON: AddonDefinition = {
   name: "wp-tools",
   title: "WordPress Tools",
   description: "One-click WordPress sign-in, plugins chosen while creating a site, and optional automatic installation of CLP Varnish Cache and MainWP Child on eligible sites.",
-  changed: [{ in: "2.0.0-rc.1", note: "Renamed from WordPress Sign-In; installs CLP Varnish Cache and MainWP Child for you." }],
+  changed: [{ in: "2.0.0-rc.1", note: "Renamed from WordPress Sign-In; installs CLP Varnish Cache and MainWP Child." }],
   targets: WP_TOOLS_TARGETS,
   handler: handle,
   action: runWpToolsAction,

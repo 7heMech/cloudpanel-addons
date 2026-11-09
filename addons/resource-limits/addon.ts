@@ -18,8 +18,9 @@ export const RESOURCE_LIMITS_ADDON: AddonDefinition = {
   title: "Resource Limits",
   description: "PHP worker limits and a shared memory budget for PHP, MySQL and Redis.",
   changed: [
-    { in: "2.1.0-rc.1", note: "PHP Resources is now Resource Limits. PHP categories are kept, and memory settings move here from System Tweaks." },
-    { in: "2.1.0-rc.1", note: "When the server runs out of memory, the kernel now kills a site's PHP worker before MySQL or nginx. A new Memory card can also size MySQL and cap Redis to the server's RAM; both are off until you switch them on." },
+    { in: "2.1.0-rc.5", note: "Pending MySQL sizes show Restart MySQL; any administrator can restart it for every site." },
+    { in: "2.1.0-rc.1", note: "PHP Resources is now Resource Limits, with memory settings from System Tweaks." },
+    { in: "2.1.0-rc.1", note: "Out of memory, the kernel kills PHP workers before MySQL or nginx. A Memory card can size MySQL and Redis; both start off." },
   ],
   activate: () => { restoreResourceMemory(); },
   withdrawn: () => { withdrawResourceMemory(); },

@@ -33,6 +33,17 @@ function setMemory(control) {
 }
 
 
+async function restartMysql(button) {
+  const agreed = await confirmAction({
+    title: 'Restart MySQL?',
+    text: 'Every site loses its database for a few seconds while MySQL restarts. Any other MySQL setting waiting for a restart applies too.',
+    confirmLabel: 'Restart MySQL',
+    danger: true,
+  });
+  if (!agreed) return;
+  send('/api/mysql-restart', {}, 'MySQL restarted.', button, 'Restarting MySQL…');
+}
+
 function change(control, path, body, progress, done) {
   return send(path, body, done, control, progress);
 }

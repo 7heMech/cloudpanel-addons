@@ -14,7 +14,7 @@ import { failAction } from "../../lib/action";
 import { runCommand, type CommandResult } from "../../lib/command";
 import { withFileLockSync } from "../../lib/file-lock";
 import { writeFileAtomic } from "../../lib/atomic-write";
-import { COMMAND_MS } from "./limits";
+import { COMMAND_MS, MYSQL_RESTART_MS } from "./limits";
 
 export const MEMORY_PROFILES = ["balanced", "database", "cache"] as const;
 export type MemoryProfile = typeof MEMORY_PROFILES[number];
@@ -564,6 +564,31 @@ export function syncMemory(kind: "mysql" | "redis", settings: MemorySettings, op
 
 // --- Status ------------------------------------------------------------------
 
+/**
+ * Restarts a running MySQL onto its option file, when an administrator asks
+ * from the page and its settings are pending; nothing restarts it on its own.
+ * A stopped one is left stopped: it reads the file when it starts.
+ */
+export function restartMysql(settings: MemorySettings, options: MemoryOptions = {}): void {
+  const ctx = contextOf(options);
+  const before = unit(ctx, ctx.paths.mysqlUnit);
+  if (!before.loaded) failAction("MySQL is not installed here");
+  if (before.activating) failAction("MySQL is still starting; try again once it runs");
+  if (!before.active) failAction(`MySQL is not running; it reads its new settings when it starts. See journalctl -u ${before.id}`);
+  // A second tab, or a second administrator, still shows the button after the first restart.
+  // Files only, so the restart's time budget holds whatever Redis or the PHP units are doing.
+  const plan = memoryPlan(ramMb(options), settings.profile);
+  if (!mysqlFileState(ctx, settings, plan, before).pending) failAction("MySQL already runs its current settings, so it was not restarted");
+  const restarted = (options.run ?? runCommand)("systemctl", ["restart", before.id], MYSQL_RESTART_MS);
+  const after = unit(ctx, ctx.paths.mysqlUnit);
+  if (restarted.ok && after.active) return;
+  // A unit that crashed on start and waits to be started again shows as starting: systemctl's error says which.
+  const why = restarted.ok ? "" : `: ${commandError(restarted)}`;
+  failAction(after.activating
+    ? `MySQL is still starting after the restart${why}; see journalctl -u ${before.id}`
+    : `MySQL did not come back after the restart${why}; see journalctl -u ${before.id}`);
+}
+
 export interface MemoryStatus {
   plan: MemoryPlan;
   mysql: {
@@ -605,16 +630,25 @@ function memcachedMb(ctx: Context): number | null {
   return size ? Number(size) : 64;
 }
 
-export function memoryStatus(settings: MemorySettings, options: MemoryOptions = {}): MemoryStatus {
-  const ctx = contextOf(options);
-  const plan = memoryPlan(ramMb(options), settings.profile);
-  const [mysqlUnit, redisUnit] = units(ctx, [ctx.paths.mysqlUnit, ctx.paths.redisUnit]) as [Unit, Unit];
+/**
+ * Whether MySQL's option file matches the settings, and whether the running
+ * server started before it changed: reads files only, no commands.
+ */
+function mysqlFileState(ctx: Context, settings: MemorySettings, plan: MemoryPlan, mysqlUnit: Unit): { inPlace: boolean; pending: boolean } {
   const file = optionFile(ctx);
   const inPlace = file !== null && text(file) === mysqlOptionFile(plan, settings.profile);
   // On: the file is newer than the running server. Off: the file went after it started. In whole
   // seconds, as systemd shows the start: the start hook writes the file in the second MySQL starts.
   const changedAt = settings.mysql ? (inPlace && file ? modifiedAt(file) : null) : (file && !existsSync(file) ? removedAt(ctx) : null);
   const pending = mysqlUnit.active && mysqlUnit.startedAt !== null && changedAt !== null && Math.floor(changedAt / 1000) > mysqlUnit.startedAt;
+  return { inPlace, pending };
+}
+
+export function memoryStatus(settings: MemorySettings, options: MemoryOptions = {}): MemoryStatus {
+  const ctx = contextOf(options);
+  const plan = memoryPlan(ramMb(options), settings.profile);
+  const [mysqlUnit, redisUnit] = units(ctx, [ctx.paths.mysqlUnit, ctx.paths.redisUnit]) as [Unit, Unit];
+  const { inPlace, pending } = mysqlFileState(ctx, settings, plan, mysqlUnit);
   const redis: MemoryStatus["redis"] = { installed: redisUnit.loaded, maxmemoryMb: null, policy: "", usedMb: null, capped: false, problem: "" };
   if (redisUnit.active) {
     try {

@@ -30,12 +30,10 @@ what the kernel kills first when memory runs out.
    values with the profile's buffer pool, connection limit and smaller
    per-connection buffers. It writes `zz-clp-addons-memory.cnf` next to
    CloudPanel's `mysqld.cnf`. A **Working** indicator beside the setting shows
-   while it saves and checks the sizes. It never restarts MySQL: the card shows
-   **Pending** until the next restart, which you can do when it suits you:
-
-   ```bash
-   systemctl restart mysql
-   ```
+   while it saves and checks the sizes. It never restarts MySQL by itself: the
+   card shows **Pending** with a **Restart MySQL** button until the next
+   restart. Press it when it suits you; every site loses its database for a few
+   seconds while MySQL restarts.
 
    More connections at once than the limit get *Too many connections*.
 3. Switch on **Cap Redis** to limit Redis to the profile's share. When it is

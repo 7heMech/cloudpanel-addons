@@ -32,6 +32,38 @@ describe("Resource Limits dashboard replies", () => {
   });
 });
 
+test("Restart MySQL asks root to restart, then repaints from a separate state request", async () => {
+  const { handle } = await import("../addons/resource-limits/app");
+  const { resourceLimitsService } = await import("../addons/resource-limits/app/service");
+  const state = { categories: [], defaultCategoryId: null, sites: [], memory: { error: "Unavailable" } };
+  const original = { restartMysql: resourceLimitsService.restartMysql, state: resourceLimitsService.state };
+  const calls: string[] = [];
+  let refuse = false;
+  resourceLimitsService.restartMysql = async () => {
+    calls.push("restart-mysql");
+    return refuse ? { ok: false, error: "MySQL is not running" } : { ok: true, data: { restarted: true } };
+  };
+  resourceLimitsService.state = async () => { calls.push("state"); return { ok: true, data: state }; };
+  const request = () => new Request("https://panel.example.com/addons/resource-limits/api/mysql-restart", {
+    method: "POST",
+    headers: { Host: "panel.example.com", Origin: "https://panel.example.com", "Content-Type": "application/json",
+      Cookie: `clp_addons_csrf=${"a".repeat(64)}`, "X-CLP-Addons-CSRF": "a".repeat(64) },
+    body: "{}",
+  });
+  try {
+    const response = await handle(request(), "/api/mysql-restart");
+    expect(response.status).toBe(200);
+    expect((await response.json() as { html: string }).html).toBe(phpView(state));
+    expect(calls).toEqual(["restart-mysql", "state"]);
+    refuse = true;
+    const refused = await handle(request(), "/api/mysql-restart");
+    expect(refused.status).toBe(400);
+    // Refused, the card is drawn again so it shows what MySQL is doing now.
+    expect(await refused.json()).toEqual({ ok: false, error: "MySQL is not running", data: { html: phpView(state) } });
+    expect(calls.slice(-2)).toEqual(["restart-mysql", "state"]);
+  } finally { Object.assign(resourceLimitsService, original); }
+});
+
 test("the memory API saves through set-memory and repaints from a separate state request", async () => {
   const { handle } = await import("../addons/resource-limits/app");
   const { resourceLimitsService } = await import("../addons/resource-limits/app/service");

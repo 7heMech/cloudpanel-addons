@@ -76,6 +76,8 @@ async function send(path, body, done, control, progress) {
     if (control && control.type === 'checkbox') control.checked = !control.checked;
     if (control && control.dataset.current !== undefined) control.value = control.dataset.current;
     notify(error.message, 'error');
+    // A refusal may carry the page as it is now.
+    if (error.data && error.data.html) paintResources(error.data.html);
     hold(false);
     return false;
   }

@@ -195,6 +195,7 @@ body .header .navbar-right > ul > li.user-avatar > a.dropdown-toggle::after { bo
   html.dark body .header .clp-root-shell-nav { border-left-color: var(--clp-border-color); background: var(--clp-bg-tertiary);
     color: var(--clp-text); }
   html.dark body .header .clp-root-shell-nav:hover { color: var(--clp-text-hover); }
+  html.dark body .header .clp-root-shell-nav:not(:hover) > .clp-root-shell-mark { color: #aaa; }
   body .header .header-instance-information-container:has(> .clp-root-shell-nav:not([hidden])) { display: flex; }
   body .header .header-instance-information-container > ul { flex: 1 0 auto; min-width: 0; }
   html body .header:has(.clp-root-shell-nav) .navbar-right li.clp-root-shell-menu { display: none !important; }

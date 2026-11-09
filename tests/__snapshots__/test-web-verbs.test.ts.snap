@@ -89,6 +89,7 @@ panel-tweaks:watch-job             admin stream
 resource-limits:assign             admin
 resource-limits:delete-category    admin
 resource-limits:list               admin
+resource-limits:restart-mysql      admin
 resource-limits:save-category      admin
 resource-limits:set-default        admin
 resource-limits:set-memory         admin

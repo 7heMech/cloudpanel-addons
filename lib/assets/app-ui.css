@@ -114,6 +114,7 @@ html.dark #theme-switch .moon { display: none; }
 /* A phone has the root shell control at the end of the navigation row instead
    of in the header row, which has no room for a fourth tool beside the logo. */
 .clp-addon-primary-nav > .clp-root-shell-nav { display: none; }
+.clp-root-shell-nav:not(:hover) > .clp-root-shell-mark { color: var(--header-icon); }
 @media (max-width: 760px) {
   #clp-root-shell { display: none; }
   /* Pinned to the end and drawn over the links, so a row that scrolls keeps it
@@ -281,6 +282,10 @@ dialog::backdrop { background: rgba(0,0,0,0.5); }
 .dialog-actions { justify-content: flex-end; margin: 25px -30px -30px; padding: 25px 30px; border-top: 1px solid var(--border); }
 pre { background: var(--bg); border: 1px solid var(--border); border-radius: 4px; padding: 16px;
   overflow: auto; max-height: 55vh; font-family: var(--mono); font-size: 13px; }
+/* A one-line value with its Copy control inside the block, at the right. */
+.copy-block { position: relative; }
+.copy-block > pre { margin: 0; padding: 9px 46px 9px 10px; line-height: 1.5; white-space: pre-wrap; overflow-wrap: anywhere; }
+.copy-block > .copy-button { position: absolute; top: 4px; right: 4px; padding: 6px 9px; }
 .row-actions { min-width: 100px; }
 .row-actions summary { cursor: pointer; color: var(--link); list-style: none; }
 .row-actions summary::-webkit-details-marker { display: none; }
@@ -515,7 +520,14 @@ pre { background: var(--bg); border: 1px solid var(--border); border-radius: 4px
   .split-card { flex-wrap: wrap; }
   .split-card > :last-child { flex-basis: 100%; }
   .card-header.toolbar > :first-child { flex: 1 1 100%; }
-  .card-header.toolbar > .fleet-selection { flex: 1 1 100%; justify-content: space-between; }
+  /* The count and Select all share the title's line, at its right; a title too
+     wide for both sends them to the next line, still at the right. */
+  .card-header.toolbar > :first-child:has(+ .fleet-selection) { flex: 0 0 auto; max-width: 100%; }
+  .card-header.toolbar > .fleet-selection { flex: 0 0 auto; margin-left: auto; }
+  #site-selection[data-short=""] { display: none; }
+  /* The full count stays the text a screen reader reads; the short form is only drawn. */
+  #site-selection { font-size: 0; }
+  #site-selection::after { content: attr(data-short); content: attr(data-short) / ""; font-size: 14px; }
   .card-header.toolbar > .fleet-selection ~ * { flex: 1 1 100%; margin-left: 0; }
   .card-header.toolbar > .fleet-selection ~ .actions > .btn { flex: 1 1 0; }
   .mobile-select-all { display: inline-flex; padding: 6px 14px; font-size: 13px; white-space: nowrap; }

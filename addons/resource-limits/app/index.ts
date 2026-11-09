@@ -56,6 +56,17 @@ export async function handle(
     if (!result.ok || !result.data) return jsonResponse(result, 400);
     return jsonResponse({ ...result, html: dashboardView(result.data) });
   }
+  if (path === "/api/mysql-restart") {
+    const restarted = await resourceLimitsService.restartMysql();
+    // Refused or failed, the card is drawn again too, so it shows what MySQL is doing now.
+    if (!restarted.ok) {
+      const now = await resourceLimitsService.state();
+      return jsonResponse({ ...restarted, data: now.ok && now.data ? { html: dashboardView(now.data) } : undefined }, 400);
+    }
+    const result = await resourceLimitsService.state();
+    if (!result.ok || !result.data) return jsonResponse(result, 400);
+    return jsonResponse({ ...result, html: dashboardView(result.data) });
+  }
   if (path === "/api/categories") return change(await resourceLimitsService.saveCategory(body));
   if (path === "/api/categories/delete") return change(await resourceLimitsService.deleteCategory(body.id));
   if (path === "/api/assign") return change(await resourceLimitsService.assign(body.domains, body.categoryId));
