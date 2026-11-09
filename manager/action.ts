@@ -26,6 +26,7 @@ import { existsSync, mkdirSync, readFileSync, rmSync } from "node:fs";
 import { join } from "node:path";
 import { withFileLock, withFileLockSync } from "../lib/file-lock";
 import { addonLocked } from "../lib/root-locks";
+import { JOB_ID_RE } from "../lib/job-id";
 import {
   jobCommonFields, jobDir, jobGet, jobIsLive, jobSet, jobTimestamp, listJobIds, markJobDone,
   markJobRunning, pruneJobs, readJobLog, recordQueuedJob, startJobUnit, watchJobRecord,
@@ -414,6 +415,8 @@ export async function runManagerAction(
   const flags = parseManagerFlags(rest);
   const addon = flags.addon ?? "";
   const id = flags.job ?? flags.id ?? "";
+  // Joined onto the jobs directory, so checked here too, not only by the web side.
+  if (id && !JOB_ID_RE.test(id)) return failReply("not a valid job id", undefined, options.emitReply !== false);
 
   try {
     switch (verb) {

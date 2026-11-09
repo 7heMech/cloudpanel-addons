@@ -23,7 +23,7 @@ import type { OnProgress } from "../lib/log";
 import { fatal, log, requireRoot } from "../lib/log";
 import { parseFlags } from "./flags";
 import { run, tryRun } from "../lib/command";
-import { compareSemver, isPrerelease } from "../lib/semver";
+import { compareSemver, isPrerelease, VERSION_TAG_RE } from "../lib/semver";
 import { lockState } from "../lib/root-locks";
 import {
   CLOUDPANEL_RANGE_ASSET, describeRange, panelVersion, parseRange, rangeFit,
@@ -114,15 +114,36 @@ function suggestLock(): void {
   if (hint) log.plain(hint);
 }
 
+/** The release Resource Limits came in, as PHP Resources renamed. */
+const RESOURCE_LIMITS_SINCE = "2.1.0-rc.1";
+
+/**
+ * Why going from `current` to `target` must wait, or null. A release before
+ * Resource Limits knows neither its config nor the MySQL, Redis and OOM
+ * drop-ins it leaves, so they would stay with nothing to change or remove them.
+ */
+export function downgradeRefusal(current: string, target: string, enabled: string[]): string | null {
+  return compareSemver(current, RESOURCE_LIMITS_SINCE) >= 0 && compareSemver(target, RESOURCE_LIMITS_SINCE) < 0
+    && enabled.includes("resource-limits")
+    ? `clp-addons ${target} predates Resource Limits, which would leave its MySQL, Redis and OOM settings behind; run clp-addons disable resource-limits first`
+    : null;
+}
+
 async function applyUpdate(argv: string[], options: UpdateOptions): Promise<void> {
   const { flags } = parseFlags(argv);
+  const requested = typeof flags.version === "string" ? flags.version : "latest";
   // A box running a pre-release keeps following them; a release takes it back to releases.
-  const release = await resolveRelease(
-    typeof flags.version === "string" ? flags.version : "latest",
-    flags["allow-prerelease"] === true || isPrerelease(CLI_VERSION),
+  let resolved: Awaited<ReturnType<typeof resolveRelease>> | null = null;
+  const resolve = async () => resolved ??= await resolveRelease(
+    requested, flags["allow-prerelease"] === true || isPrerelease(CLI_VERSION),
   );
+  // The handoff: the parent resolved and verified this release and installed
+  // its files, so asking GitHub again could only fail the update, and roll it
+  // back, on a rate limit or a network blip. Files that do not match still ask.
+  const handedOff = flags["no-self-update"] === true && typeof flags["updated-from"] === "string" && VERSION_TAG_RE.test(requested)
+    && currentArtifactsMatch(requested.replace(/^v/, ""));
   const current = CLI_VERSION.replace(/^v/, "");
-  const target = release.tag.replace(/^v/, "");
+  const target = (handedOff ? requested : (await resolve()).tag).replace(/^v/, "");
 
   // Without --version an update only moves forward, whatever GitHub lists.
   if (typeof flags.version !== "string" && compareSemver(target, current) < 0) {
@@ -130,6 +151,8 @@ async function applyUpdate(argv: string[], options: UpdateOptions): Promise<void
     suggestLock();
     return;
   }
+  const refusal = handedOff ? null : downgradeRefusal(current, target, enabledAddons().map((spec) => spec.name));
+  if (refusal) fatal(refusal);
   const upToDate = current === target;
   const artifactsCurrent = upToDate && currentArtifactsMatch(target);
   // Nothing to install, and repair is the command that re-applies the panel side.
@@ -140,6 +163,7 @@ async function applyUpdate(argv: string[], options: UpdateOptions): Promise<void
   }
   let artifacts: FetchedArtifact[] | undefined;
   if (!artifactsCurrent) {
+    const release = await resolve();
     const range = await checkPanelRange(release, target, options);
     artifacts = await fetchVerified(release, artifactNames(), options.onStep, options.onProgress);
     await verifyAttestation(release, [...range, ...artifacts], flags["skip-attestation"] === true);
@@ -155,7 +179,7 @@ async function applyUpdate(argv: string[], options: UpdateOptions): Promise<void
       const handoff = [
         "update",
         ...argv,
-        `--version=${release.tag}`,
+        `--version=${(await resolve()).tag}`,
         "--no-self-update",
         `--updated-from=${current}`,
       ];

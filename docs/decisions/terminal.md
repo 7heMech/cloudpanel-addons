@@ -52,8 +52,9 @@ opens a dialog with the command that allows them, a Copy button and a note
 that `allow` needs their 2FA on, and one whose grant does not hold now gets a
 notice saying why. The controls stay hidden until the page has asked
 `/addons/terminal/api/root-access`. Every panel page asks, so the manager
-keeps root's answer a minute per user instead of starting a root process for
-each page; the Terminal page asks afresh, and the worker always checks. The
+keeps root's answer a minute per session instead of starting a root process
+for each page; per session because part of it is how that session signed in.
+The Terminal page asks afresh, and the worker always checks. The
 browser tab keeps a granted answer in `sessionStorage`, and a page in that tab
 draws the controls before the request returns: the addons' pages paint before
 it does, and would otherwise push the header's tools aside a moment after

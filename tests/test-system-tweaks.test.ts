@@ -1061,6 +1061,10 @@ test("the shared panel certificate is replaced on activation and repair, and off
   expect(await systemTweaksMaintenance(b.options) ?? "").not.toContain("certificate");
   expect(readFileSync(certFile, "utf8")).toBe(shared.cert);
 
+  // Withdrawn, a change from the panel is refused, even one that waited on the settings lock; enabling again clears that.
+  await expect(act(b, ["set-panel-cert"], { enabled: true })).rejects.toThrow("System Tweaks is disabled");
+  expect(readFileSync(certFile, "utf8")).toBe(shared.cert);
+  restoreSystemTweaks(b.options, true);
   expect((await act(b, ["set-panel-cert"], { enabled: true })).panelCert).toMatchObject({ kind: "generated", replace: true });
   expect(readFileSync(certFile, "utf8")).toBe(generated);
 });

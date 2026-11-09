@@ -217,9 +217,15 @@ converges them.
 After replacement, the outgoing process performs no provisioning. It re-runs
 the same update command through the installed binary with an internal flag that
 bounds the handoff. That process generates configuration, units and panel
-integrations from its own definitions, then restarts services last. Re-entering
+integrations from its own definitions, then restarts services last. It does not
+ask GitHub for the release again when the installed files already match the
+version it was handed: the outgoing process resolved and verified it, and a
+rate limit or a network blip there would roll the whole update back. Re-entering
 the stable update command also preserves explicit downgrades to releases from
-before the handoff existed. Merely moving the restart would not be sufficient:
+before the handoff existed. A downgrade from 2.1 to an earlier release waits
+until Resource Limits is disabled: those releases know neither its config nor
+the MySQL, Redis and OOM drop-ins it leaves, so nothing could change or remove
+them. Merely moving the restart would not be sufficient:
 the old process could still write old Twig or unit definitions after installing
 a new release. The manager job records `restarting background services`
 immediately before the manager service is restarted. The browser treats the

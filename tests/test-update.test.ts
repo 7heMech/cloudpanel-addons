@@ -529,10 +529,22 @@ test("a handoff that leaves the manager down rolls back too", async () => {
   expect(calls).toContain(`rename:${CLI_BIN}.rollback->${CLI_BIN}`);
 });
 
+test("a downgrade below 2.1 waits until Resource Limits is disabled", async () => {
+  const { downgradeRefusal } = await import("../cli/update");
+  expect(downgradeRefusal("2.1.0", "2.0.0", ["resource-limits"])).toContain("run clp-addons disable resource-limits first");
+  expect(downgradeRefusal("2.1.0-rc.5", "2.0.0", ["dns", "resource-limits"])).not.toBeNull();
+  // Disabled, between 2.1 releases, or an older box moving among older releases: nothing to leave behind.
+  expect(downgradeRefusal("2.1.0", "2.0.0", ["dns"])).toBeNull();
+  expect(downgradeRefusal("2.1.0", "2.1.0-rc.4", ["resource-limits"])).toBeNull();
+  expect(downgradeRefusal("1.2.3", "1.3.0", ["resource-limits"])).toBeNull();
+});
+
 test("the handed-off target binary finalizes all provisioning before restarting services", async () => {
   artifactsAvailable = true;
 
   await cmdUpdate(["--version=v1.2.3", "--no-self-update", "--updated-from=1.1.0"]);
+  // The parent resolved and verified the release; asking GitHub again could only fail the update.
+  expect(calls).not.toContain("resolveRelease");
 
   for (const name of [
     "ensureServiceUser",

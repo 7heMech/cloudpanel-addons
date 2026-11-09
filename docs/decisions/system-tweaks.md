@@ -47,6 +47,14 @@ stop short of the switch column, and a long one takes a line per thought.
 Failed runs show a short summary with expandable log details, including the
 failed package URL when unattended-upgrades logs one.
 
+Disabling withdraws under the settings lock, and the addon's config goes only
+after that lock is let go, so a change from the page that was waiting on the
+lock would otherwise run on an addon nothing maintains or withdraws. Withdrawal
+writes a `withdrawn` mark beside `settings.json` before it lets the lock go;
+every change from the page, Lock settings included, refuses while the mark is
+there, and enabling removes it. Repair is not refused, so a disable that fails
+after withdrawing still has its protections put back.
+
 ### Lock settings
 
 **Lock settings** sits in the Hardening card's header rather than at the top of
