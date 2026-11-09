@@ -1266,6 +1266,13 @@ function terminalPreview(req: Request, url: URL): Response | null {
     const granted = new URL(req.headers.get("referer") ?? "http://x/").searchParams.has("root");
     return Response.json({ ok: true, data: { granted, problem: null } });
   }
+  // The root popup's verification: `?state=passkey` offers a passkey too.
+  if (path === "/addons/terminal/api/root-auth-options") {
+    return Response.json({ ok: true, data: { challenge: "cHJldmlldw", keys: terminalPreviewState === "passkey" ? ["cHJldmlldw"] : [] } });
+  }
+  if (path === "/addons/terminal/api/root-auth-verify") {
+    return Response.json({ ok: true, data: { ticket: "preview-ticket" } });
+  }
   if (path === "/addons/terminal/api/sessions" && req.method === "POST") {
     if (terminalPreviewState === "refused") {
       return Response.json({ ok: false, error: "www.example.com cannot be opened: its Unix user has no login shell" }, { status: 400 });

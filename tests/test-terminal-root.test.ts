@@ -263,7 +263,7 @@ test("the page's button opens a root shell only for an allowed administrator, an
   expect(other).not.toContain("clpOpenTerminal(");
   const popup = popupPage(null);
   expect(popup).toContain('data-domain=""');
-  expect(popup).toContain('<span class="badge tone-bad">root</span>');
+  expect(popup).toContain('<span class="term-user is-root" id="term-user">as root</span>');
 });
 
 test("the header control is in both of CloudPanel's headers and the addons' own, for administrators, hidden until root answers", () => {

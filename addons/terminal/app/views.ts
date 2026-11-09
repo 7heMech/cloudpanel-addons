@@ -125,9 +125,8 @@ export function popupPage(domain: string | null): string {
   const content = `<div class="term-bar">
   <img class="term-logo clp-addon-logo-light" src="/assets/images/logo.svg" alt="CloudPanel" width="100" height="20">
   <img class="term-logo clp-addon-logo-dark" src="/assets/images/logo-dark.svg" alt="CloudPanel" width="100" height="20">
-  <span class="term-domain" title="${esc(domain ?? "This server")}">${esc(domain ?? "This server")}</span>${domain === null ? `
-  <span class="badge tone-bad">root</span>` : ""}
-  <span class="term-user" id="term-user" hidden></span>
+  <span class="term-domain" title="${esc(domain ?? "This server")}">${esc(domain ?? "This server")}</span>
+  ${domain === null ? '<span class="term-user is-root" id="term-user">as root</span>' : '<span class="term-user" id="term-user" hidden></span>'}
   <span class="badge tone-warn" id="term-status" role="status">Connecting</span>
   <div class="term-tools">
     <button class="term-tool" type="button" onclick="changeFont(-1)" aria-label="Smaller text" title="Smaller text">A−</button>
@@ -142,13 +141,18 @@ export function popupPage(domain: string | null): string {
   ${domain === null ? `<div class="term-ended" id="root-auth" hidden>
     <form class="card" id="root-auth-form" aria-labelledby="root-auth-title">
       <h2 id="root-auth-title">Verify to open root terminal</h2>
-      <p>Enter the code your authenticator app shows, or use a trusted passkey.</p>
-      <label for="root-auth-code">Authenticator code</label>
-      <input id="root-auth-code" inputmode="numeric" autocomplete="one-time-code" pattern="[0-9]{6}" maxlength="6" required>
+      <p>Enter the 6-digit code from your authenticator app.</p>
+      <div class="root-auth-boxes">
+        <input id="root-auth-code" inputmode="numeric" autocomplete="one-time-code" pattern="[0-9]{6}" maxlength="6" required aria-label="Authenticator code">
+        <span aria-hidden="true"></span><span aria-hidden="true"></span><span aria-hidden="true"></span><span aria-hidden="true"></span><span aria-hidden="true"></span><span aria-hidden="true"></span>
+      </div>
       <p id="root-auth-error" role="alert"></p>
-      <div class="actions"><button class="btn btn-primary" type="submit">Continue</button>
-      <button class="btn" id="root-auth-key" type="button" hidden>Use passkey</button>
-      <button class="btn" id="root-auth-cancel" type="button">Cancel</button></div>
+      <button class="btn btn-primary" type="submit">Continue</button>
+      <div id="root-auth-passkey" hidden>
+        <div class="root-auth-or">or</div>
+        <button class="btn" id="root-auth-key" type="button">Use a passkey</button>
+      </div>
+      <button class="root-auth-cancel" id="root-auth-cancel" type="button">Cancel</button>
     </form>
   </div>` : ""}
   <div id="terminal" data-domain="${esc(domain ?? "")}"></div>

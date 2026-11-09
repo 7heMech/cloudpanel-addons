@@ -101,7 +101,9 @@ function resetFont() {
 
 fontReset.disabled = term.options.fontSize === DEFAULT_FONT_SIZE;
 
+// An empty label hides the badge, for while a dialog already says what is happening.
 function setStatus(label, kind) {
+  statusBadge.hidden = !label;
   statusBadge.textContent = label;
   statusBadge.className = 'badge' + (kind ? ' ' + kind : '');
 }
@@ -160,17 +162,29 @@ async function verifyRoot() {
   const code = document.getElementById('root-auth-code');
   const key = document.getElementById('root-auth-key');
   const errorText = document.getElementById('root-auth-error');
+  const boxes = form.querySelectorAll('.root-auth-boxes span');
   // Cancel stays usable, so a passkey prompt with no key nearby can be left.
   const buttons = form.querySelectorAll('button:not(#root-auth-cancel)');
   const post = (path, body) => call('/api/root-auth-' + path, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body || {}) });
+  // Digits only, shown one per box, with the next box to fill marked.
+  const paint = () => {
+    const digits = code.value.replace(/\D/g, '').slice(0, 6);
+    if (code.value !== digits) code.value = digits;
+    boxes.forEach((box, i) => {
+      box.textContent = digits[i] || '';
+      box.classList.toggle('is-next', i === Math.min(digits.length, 5));
+    });
+  };
+  code.oninput = paint;
   let options = (await post('options')).data;
   // toB64, fromB64, keysUsable and keyError come from Security Keys' webauthn.client.js.
-  key.hidden = !options.keys.length || !keysUsable();
+  document.getElementById('root-auth-passkey').hidden = !options.keys.length || !keysUsable();
   overlay.hidden = false;
   code.value = '';
+  paint();
   errorText.textContent = '';
   code.focus();
-  setStatus('Verification required', 'tone-warn');
+  setStatus('');
   return new Promise((resolve, reject) => {
     let busy = false;
     const submit = async useKey => {
@@ -193,6 +207,7 @@ async function verifyRoot() {
       } catch (error) {
         errorText.textContent = keyError(error, 'Verification failed. Try again.');
         code.value = '';
+        paint();
         code.focus();
         // A fresh prompt now, not at the next try; root keeps the first one's opening, so retrying never restarts the wait.
         try { options = (await post('options')).data; } catch { options = null; }
@@ -270,7 +285,8 @@ function newSession() {
   ended = false;
   endedCard.hidden = true;
   termMain.classList.remove('is-ended');
-  userLabel.hidden = true;
+  // A root shell is always root's; a site's user comes with the session.
+  if (TERM_DOMAIN) userLabel.hidden = true;
   term.reset();
   term.focus();
   createSession();
