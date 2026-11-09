@@ -58,8 +58,9 @@ test("Restart MySQL asks root to restart, then repaints from a separate state re
     refuse = true;
     const refused = await handle(request(), "/api/mysql-restart");
     expect(refused.status).toBe(400);
-    expect(await refused.json()).toMatchObject({ ok: false, error: "MySQL is not running" });
-    expect(calls.at(-1)).toBe("restart-mysql");
+    // Refused, the card is drawn again so it shows what MySQL is doing now.
+    expect(await refused.json()).toEqual({ ok: false, error: "MySQL is not running", data: { html: phpView(state) } });
+    expect(calls.slice(-2)).toEqual(["restart-mysql", "state"]);
   } finally { Object.assign(resourceLimitsService, original); }
 });
 

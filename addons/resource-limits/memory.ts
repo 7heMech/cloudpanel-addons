@@ -566,16 +566,20 @@ export function syncMemory(kind: "mysql" | "redis", settings: MemorySettings, op
 
 /**
  * Restarts a running MySQL onto its option file, when an administrator asks
- * from the page; nothing restarts it on its own. A stopped one is left
- * stopped: it reads the file when it starts.
+ * from the page and its settings are pending; nothing restarts it on its own.
+ * A stopped one is left stopped: it reads the file when it starts.
  */
-export function restartMysql(options: MemoryOptions = {}): void {
+export function restartMysql(settings: MemorySettings, options: MemoryOptions = {}): void {
   const ctx = contextOf(options);
   const before = unit(ctx, ctx.paths.mysqlUnit);
   if (!before.loaded) failAction("MySQL is not installed here");
-  if (!before.active) failAction("MySQL is not running; it uses these sizes when it starts");
+  if (before.activating) failAction("MySQL is still starting; try again once it runs");
+  if (!before.active) failAction(`MySQL is not running; it reads its new settings when it starts. See journalctl -u ${before.id}`);
+  // A second tab, or a second administrator, still shows the button after the first restart.
+  if (!memoryStatus(settings, options).mysql.pending) failAction("MySQL already runs its current settings, so it was not restarted");
   const restarted = (options.run ?? runCommand)("systemctl", ["restart", before.id], MYSQL_RESTART_MS);
   const after = unit(ctx, ctx.paths.mysqlUnit);
+  if (after.activating) failAction(`MySQL is still starting after the restart; see journalctl -u ${before.id}`);
   if (!restarted.ok || !after.active) {
     failAction(`MySQL did not come back after the restart${restarted.ok ? "" : `: ${commandError(restarted)}`}; see journalctl -u ${before.id}`);
   }

@@ -234,9 +234,13 @@ which needs systemd 251 and Ubuntu 22.04 has 249. Restarting would take every si
 a few seconds on a switch, and nothing here is urgent enough for that. Pending
 offers **Restart MySQL** instead, behind a confirmation that says so:
 `restart-mysql` runs `systemctl restart` on a running server under the
-settings lock, so it never lands inside a change, and fails naming
-`journalctl` if the unit is not active afterwards. A stopped server is left
-stopped. Only the service restarts: a memory change does not touch MariaDB's
+settings lock, so it never lands inside a change, and only while the file is
+still pending, so a second tab's button does not restart it again. It fails
+naming `journalctl` if the unit is not active afterwards, and the page is drawn
+again either way. A stopped server is left stopped. The restart applies any
+other pending MySQL configuration too, such as System Tweaks' loopback file,
+which the confirmation says. Disabling the addon waits for a restart as long
+as it holds the lock. Only the service restarts: a memory change does not touch MariaDB's
 activation socket, whose listeners System Tweaks restarts with it. The
 dynamic `SET GLOBAL innodb_buffer_pool_size` is not used either: it needs a
 login, and Resource Limits does not decrypt the root password the panel stores
