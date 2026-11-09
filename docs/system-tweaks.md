@@ -10,7 +10,7 @@ A locked System Tweaks lets the panel switch the Hardening and Failed logins
 protections on, but never off, and move the panel's PHP only to a newer
 version, even from an administrator's account. A new install starts locked.
 
-- From the panel: choose **Lock settings** at the top right of the page. It
+- From the panel: choose **Lock settings** in the Hardening card's header. It
   turns every Hardening and Failed logins switch on, including MySQL on this
   server only (MySQL restarts; apps on other machines lose access) and SSH
   login guessing, then locks. fail2ban must be installed first (**Install

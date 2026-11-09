@@ -167,9 +167,11 @@ async function verifyRoot() {
   const buttons = form.querySelectorAll('button:not(#root-auth-cancel)');
   const post = (path, body) => call('/api/root-auth-' + path, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body || {}) });
   // Digits only, shown one per box, with the next box to fill marked.
-  const paint = () => {
-    // The last six, so a code pasted after a few typed digits wins.
-    const digits = code.value.replace(/\D/g, '').slice(-6);
+  const paint = event => {
+    // A paste keeps its last six, so a code pasted after a few typed digits
+    // wins; typing past six is ignored, as a six-character field would.
+    const all = code.value.replace(/\D/g, '');
+    const digits = event && event.inputType === 'insertFromPaste' ? all.slice(-6) : all.slice(0, 6);
     if (code.value !== digits) code.value = digits;
     boxes.forEach((box, i) => {
       box.textContent = digits[i] || '';
