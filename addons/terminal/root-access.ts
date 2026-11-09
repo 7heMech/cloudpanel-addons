@@ -198,6 +198,24 @@ export function allowedGrant(panelUser: string, paths: RootAccessPaths, session:
   return grant;
 }
 
+/**
+ * Why root could not allow this administrator yet: `allow` refuses an account
+ * with 2FA off, so it is told to turn 2FA on rather than to ask root. A read
+ * that fails says nothing, since asking root is right either way.
+ */
+function noGrantProblem(panelUser: string, paths: RootAccessPaths): string | null {
+  let db: Database | null = null;
+  try {
+    db = openPanelDatabase(paths.panelDb, true);
+    const found = account(db, panelUser);
+    return found && mfaDigest(found) === null ? "A root terminal needs 2FA: turn it on in Account → Security, then ask root to allow you." : null;
+  } catch {
+    return null;
+  } finally {
+    db?.close();
+  }
+}
+
 /** rootAccess with the grant it read, which holds the account's 2FA digest and so never leaves root. */
 function checkAccess(panelUser: string, paths: RootAccessPaths, session: string): RootAccess & { grant?: RootGrant } {
   const failed = (what: string, error: unknown): RootAccess =>
@@ -209,7 +227,7 @@ function checkAccess(panelUser: string, paths: RootAccessPaths, session: string)
     if (error instanceof UntrustedGrants) return { granted: true, problem: `the root terminal list cannot be trusted: ${error.message}` };
     return failed("the root terminal list", error);
   }
-  if (!grant) return { granted: false, problem: null };
+  if (!grant) return { granted: false, problem: noGrantProblem(panelUser, paths) };
   let db: Database | null = null;
   try {
     db = openPanelDatabase(paths.panelDb, true);

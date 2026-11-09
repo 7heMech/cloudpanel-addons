@@ -92,6 +92,11 @@ test("only an administrator root allowed gets a root shell", () => {
   expect(access("bob")).toEqual({ granted: false, problem: null });
 });
 
+test("an administrator root has not allowed, with 2FA off, is told to turn it on before asking root", () => {
+  change("UPDATE user SET mfa = 0 WHERE user_name = 'bob'");
+  expect(access("bob")).toEqual({ granted: false, problem: "A root terminal needs 2FA: turn it on in Account → Security, then ask root to allow you." });
+});
+
 test("a grant holds the 2FA the owner had: switched off it stops, and set up again it needs root again", () => {
   allow("alice");
   change("UPDATE user SET mfa = 0 WHERE user_name = 'alice'");

@@ -9,7 +9,7 @@ export const TERMINAL_ADDON: AddonDefinition = {
   name: "terminal",
   title: "Terminal",
   description: "A shell as any site's own user, in a window opened from the panel's Sites page, the site page, or Addons; and a root shell for administrators root allows.",
-  changed: [{ in: "2.1.0-rc.4", note: "On a phone, Root terminal is now >_ Root under the logo." }, { in: "2.1.0-rc.4", note: "A root terminal takes the code your app shows, except just after sign-in." }, { in: "2.1.0-rc.3", note: "A root terminal needs a 2FA code or a passkey trusted by root." }, { in: "2.1.0-rc.1", note: "Root can let administrators open a root terminal: clp-addons terminal root allow <user>." }],
+  changed: [{ in: "2.1.0-rc.4", note: "On a phone, Root terminal is now >_ Root under the logo." }, { in: "2.1.0-rc.4", note: "A root terminal takes the code your app shows; just after sign-in, the next one." }, { in: "2.1.0-rc.3", note: "A root terminal needs a 2FA code or a passkey trusted by root." }, { in: "2.1.0-rc.1", note: "Root can let administrators open a root terminal: clp-addons terminal root allow <user>." }],
   targets: TERMINAL_TARGETS,
   handler: handle,
   action: runTerminalAction,

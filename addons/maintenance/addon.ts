@@ -12,7 +12,7 @@ export const MAINTENANCE_ADDON: AddonDefinition = {
   name: "maintenance",
   title: "Maintenance Mode",
   description: "Show a per-site maintenance page with instant toggles and IP bypasses.",
-  changed: [{ in: "2.1.0-rc.4", note: "Bypass addresses match visitors behind Cloudflare by their own IP." }, { in: "2.1.0-rc.3", note: "An edit to /etc/nginx/global_settings pauses the maintenance check until clp-addons repair --rebaseline." }],
+  changed: [{ in: "2.1.0-rc.4", note: "Bypasses match visitors behind Cloudflare by their own IP; a tunnel's 127.0.0.1 no longer bypasses." }, { in: "2.1.0-rc.3", note: "An edit to /etc/nginx/global_settings holds maintenance updates until clp-addons repair --rebaseline." }],
   targets: MAINTENANCE_TARGETS,
   // Nginx workers stat its flags and read its pages, without listing which sites have any.
   stateDirMode: 0o711,

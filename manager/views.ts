@@ -25,11 +25,14 @@ function addonRow(name: string, enabled: boolean, job: ManagerJobView | null, ne
   const heading = enabled && href ? `<a href="${esc(href)}">${esc(title)}</a>` : esc(title);
   const lock = locks(spec.name);
   // A lock refuses only disabling: enabling a locked addon adds its protection.
-  const locked = enabled && lock !== "unlocked";
+  // Focusable rather than disabled, so a keyboard or a tap can show how to unlock it.
+  const unlock = lock === "damaged"
+    ? "Root's lock file cannot be read or trusted; root runs clp-addons lock on the server."
+    : `Locked by root; root runs clp-addons unlock ${spec.name} on the server to disable it.`;
   const toggle = !enabled
     ? `<button class="btn" type="button" onclick="enableAddon('${escJs(spec.name)}', this)" aria-label="Enable ${esc(title)}">Enable</button>`
-    : locked
-      ? `<button class="btn addon-locked" type="button" disabled title="${lock === "damaged" ? `The lock file cannot be read or trusted; run clp-addons lock on the server` : `Run clp-addons unlock ${esc(spec.name)} on the server to disable it`}" aria-label="${esc(title)} is locked by root">Locked</button>`
+    : lock !== "unlocked"
+      ? `<button class="btn addon-locked" type="button" aria-disabled="true" title="${esc(unlock)}" data-unlock="${esc(unlock)}" onclick="notify(this.dataset.unlock, 'warn')" aria-label="${esc(title)} is locked by root">Locked</button>`
       : `<button class="btn" type="button" onclick="disableAddon('${escJs(spec.name)}', '${escJs(title)}', this)" aria-label="Disable ${esc(title)}">Disable</button>`;
   const actions = enabled && href
     ? `<a class="btn btn-primary" href="${esc(href)}" aria-label="Open ${esc(title)}">Open</a>
@@ -128,7 +131,8 @@ export function indexPage(
 ): Response {
   const available = options.available ?? [];
   const news = { version: options.version ?? CLI_VERSION, since: options.since ?? "0.0.0", seen: options.seen ?? [] };
-  const rows = (names: string[], on: boolean) => names.map((name) => addonRow(name, on, options.job ?? null, news, options.locks ?? ((addon) => lockState(addon)))).join("");
+  const locks = options.locks ?? lockState;
+  const rows = (names: string[], on: boolean) => names.map((name) => addonRow(name, on, options.job ?? null, news, locks)).join("");
   const list = (title: string, names: string[], on: boolean) =>
     `<section class="card addon-list"><h2>${title} <span class="hint">${names.length}</span></h2>${rows(names, on)}</section>`;
 

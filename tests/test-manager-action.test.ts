@@ -458,9 +458,10 @@ describe("the manager index", () => {
     expect(html).toContain(`disableAddon('instatic', 'Instatic CMS', this)`);
   });
 
-  test("shows a disabled Locked button in place of Disable on an addon root has locked", async () => {
+  test("shows a Locked button that tells how to unlock in place of Disable on an addon root has locked", async () => {
     const html = await render(["system-tweaks"], null, { locks: () => "locked" });
-    expect(html).toMatch(/<button class="btn addon-locked" type="button" disabled [^>]*>Locked<\/button>/);
+    expect(html).toMatch(/<button class="btn addon-locked" type="button" aria-disabled="true" [^>]*>Locked<\/button>/);
+    expect(html).toContain('data-unlock="Locked by root; root runs clp-addons unlock system-tweaks on the server to disable it."');
     expect(html).not.toContain("disableAddon('system-tweaks'");
   });
 

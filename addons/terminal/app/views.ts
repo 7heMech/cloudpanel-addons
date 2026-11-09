@@ -46,13 +46,13 @@ function siteRow(site: SanitizedSite): string {
 
 type RootAccess = { granted: boolean; problem: string | null };
 
-/**
- * Every administrator gets the button. One root has not allowed is shown the
- * command that allows them, and one whose grant does not hold now is told why,
- * instead of getting a window that fails.
- */
 const COPY_ICON = `<svg viewBox="0 0 448 512" width="14" height="14" aria-hidden="true"><path fill="currentColor" d="M384 336H192c-8.8 0-16-7.2-16-16V64c0-8.8 7.2-16 16-16h140.1L400 115.9V320c0 8.8-7.2 16-16 16zM192 384h192c35.3 0 64-28.7 64-64V115.9c0-12.7-5.1-24.9-14.1-33.9L366.1 14.1c-9-9-21.2-14.1-33.9-14.1H192c-35.3 0-64 28.7-64 64v256c0 35.3 28.7 64 64 64zM64 128c-35.3 0-64 28.7-64 64v256c0 35.3 28.7 64 64 64h192c35.3 0 64-28.7 64-64v-32h-48v32c0 8.8-7.2 16-16 16H64c-8.8 0-16-7.2-16-16V192c0-8.8 7.2-16 16-16h32v-48H64z"/></svg>`;
 
+/**
+ * Every administrator gets the button. One root has not allowed is shown the
+ * command that allows them, and one with 2FA off or whose grant does not hold
+ * now is told why, instead of getting a window that fails.
+ */
 function rootButton(root: RootAccess, user: string): string {
   if (root.problem !== null) {
     return `
@@ -143,7 +143,7 @@ export function popupPage(domain: string | null): string {
       <h2 id="root-auth-title">Verify to open root terminal</h2>
       <p>Enter the 6-digit code from your authenticator app.</p>
       <div class="root-auth-boxes">
-        <input id="root-auth-code" inputmode="numeric" autocomplete="one-time-code" pattern="[0-9]{6}" maxlength="6" required aria-label="Authenticator code">
+        <input id="root-auth-code" inputmode="numeric" autocomplete="one-time-code" pattern="[0-9]{6}" required aria-label="Authenticator code">
         <span aria-hidden="true"></span><span aria-hidden="true"></span><span aria-hidden="true"></span><span aria-hidden="true"></span><span aria-hidden="true"></span><span aria-hidden="true"></span>
       </div>
       <p id="root-auth-error" role="alert"></p>

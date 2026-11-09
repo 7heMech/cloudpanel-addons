@@ -176,6 +176,12 @@ async function verifyRoot() {
     });
   };
   code.oninput = paint;
+  // The input lies unseen over the boxes, so a click must not move its caret
+  // off the end, where the boxes show it.
+  code.onclick = code.onkeyup = code.onselect = () => {
+    const end = code.value.length;
+    if (code.selectionStart !== end || code.selectionEnd !== end) code.setSelectionRange(end, end);
+  };
   let options = (await post('options')).data;
   // toB64, fromB64, keysUsable and keyError come from Security Keys' webauthn.client.js.
   document.getElementById('root-auth-passkey').hidden = !options.keys.length || !keysUsable();

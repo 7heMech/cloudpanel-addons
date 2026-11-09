@@ -16,8 +16,9 @@
 .addon-changed { margin: 8px 0 0; padding-left: 18px; font-size: 13px; }
 .addon-changed li + li { margin-top: 2px; }
 .addon-actions { display: flex; gap: 8px; }
-.addon-actions .addon-locked:disabled { opacity: 0.65; }
-html.dark .addon-actions .addon-locked:disabled { opacity: 1; color: var(--muted); }
+.addon-actions .addon-locked { opacity: 0.65; cursor: not-allowed; }
+.addon-actions .addon-locked:hover { background: var(--button-bg); }
+html.dark .addon-actions .addon-locked { opacity: 1; color: var(--muted); }
 .addon-row .manager-job-status { grid-column: 1 / -1; margin-top: 8px; }
 @media (max-width: 575px) {
   .addon-find input { max-width: none; }

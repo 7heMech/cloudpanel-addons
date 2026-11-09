@@ -17,10 +17,10 @@ export const SYSTEM_TWEAKS_ADDON: AddonDefinition = {
   added: "2.0.0-rc.1",
   changed: [
     { in: "2.1.0-rc.4", note: "Lock settings moved into the Hardening card." },
-    { in: "2.1.0-rc.4", note: "Sites behind Cloudflare see the visitor's IP; a vhost's port 8080 server now sees 127.0.0.1." },
-    { in: "2.1.0-rc.3", note: "Root can lock Hardening so the panel can only switch protections on. New installs start locked." },
+    { in: "2.1.0-rc.4", note: "Sites behind Cloudflare see the visitor's IP; move a vhost's port 8080 IP rules to its first server." },
+    { in: "2.1.0-rc.3", note: "Lock settings turns every Hardening protection on, and only root can unlock. New installs start locked." },
     { in: "2.1.0-rc.2", note: "SSH logins show a server summary instead of CloudPanel's banner." },
-    { in: "2.1.0-rc.1", note: "Settings is now Hardening, with MySQL on this server only." },
+    { in: "2.1.0-rc.1", note: "Settings is now Hardening, and adds MySQL on this server only, off by default." },
     { in: "2.1.0-rc.1", note: "clp-agent no longer sends CloudPanel your domains and panel users." },
     { in: "2.0.0", note: "Mitigates several CloudPanel weaknesses; accept the panel's new certificate once." },
   ],
