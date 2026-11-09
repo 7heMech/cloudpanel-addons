@@ -227,11 +227,17 @@ are capped at 32 MB each, and on MySQL 8 at 5% of RAM together
 (`temptable_max_ram`, between 64 MB and 1 GB). Options MariaDB does not know
 carry `loose-`, so it warns and starts.
 
-Resource Limits never restarts MySQL for this. The file applies at its next start,
+Changing a setting never restarts MySQL. The file applies at its next start,
 and the page shows Pending while the file is newer than the running server's
 `ExecMainStartTimestamp`, read with `TZ=UTC` rather than `--timestamp=unix`,
 which needs systemd 251 and Ubuntu 22.04 has 249. Restarting would take every site's database away for
-a few seconds on a click, and nothing here is urgent enough for that. The
+a few seconds on a switch, and nothing here is urgent enough for that. Pending
+offers **Restart MySQL** instead, behind a confirmation that says so:
+`restart-mysql` runs `systemctl restart` on a running server under the
+settings lock, so it never lands inside a change, and fails naming
+`journalctl` if the unit is not active afterwards. A stopped server is left
+stopped. Only the service restarts: a memory change does not touch MariaDB's
+activation socket, whose listeners System Tweaks restarts with it. The
 dynamic `SET GLOBAL innodb_buffer_pool_size` is not used either: it needs a
 login, and Resource Limits does not decrypt the root password the panel stores
 (see [Database exposure](system-tweaks.md#database-exposure)).

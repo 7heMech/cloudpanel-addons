@@ -540,7 +540,7 @@ test("the category dialog shows name, process manager and max children, and the 
 });
 
 test("resource-limits site cards and select-all keep selection in sync", () => {
-  const el = (over: any = {}) => ({ textContent: "", className: "", disabled: false, checked: false, indeterminate: false, ...over });
+  const el = (over: any = {}) => ({ textContent: "", dataset: {}, className: "", disabled: false, checked: false, indeterminate: false, ...over });
   const byId: Record<string, any> = {
     "site-selection": el(), "select-all": el(), "select-all-btn": el(), "assign-selected": el({ disabled: true }),
   };

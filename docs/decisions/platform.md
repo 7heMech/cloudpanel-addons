@@ -579,9 +579,10 @@ source and promotion lists use the same fleet rows, with labels on secondary
 cells so their meaning survives the hidden table heading. Empty cells disappear
 and the site and type lead each card. A ticked row is tinted, and clicking
 anywhere on a row but a control or its Manage menu ticks it; a phone shows no
-selection checkboxes, only the tint. The table's header stacks there: its title,
-then the selection count with Select all (`FLEET_SELECTION_HTML`), then the bulk
-actions across the width. On a wide screen the count sits at the right, beside
+selection checkboxes, only the tint. The table's header stacks there: its title
+with Select all (`FLEET_SELECTION_HTML`) at its right, then the bulk actions
+across the width. The count beside Select all is short there, "2 of 9", and
+hidden until a site is ticked; a screen reader still reads the full count. On a wide screen the count sits at the right, beside
 the bulk actions it counts for, rather than under the title.
 
 With a mouse, a select opens a list drawn like the filter menus: the chosen

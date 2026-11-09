@@ -131,6 +131,7 @@ test("the switch column ends where the table ends, as the Maintenance table does
 
 interface FakeElement {
   textContent: string;
+  dataset: Record<string, string>;
   hidden: boolean;
   disabled: boolean;
   checked: boolean;
@@ -155,7 +156,7 @@ interface FakeRow {
  */
 function fakeDashboard(sites: { domain: string; enabled: boolean; selected?: boolean }[]) {
   const el = (over: Partial<FakeElement> = {}): FakeElement => ({
-    textContent: "", hidden: false, disabled: false, checked: false, indeterminate: false, ...over,
+    textContent: "", dataset: {}, hidden: false, disabled: false, checked: false, indeterminate: false, ...over,
   });
   const byId: Record<string, FakeElement> = {
     "clp-content": el(), "site-selection": el(), "select-all": el(),

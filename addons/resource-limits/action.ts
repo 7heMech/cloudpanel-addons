@@ -20,7 +20,7 @@
  */
 import { LOCK_DIR, addonConfigFile, addonStateDir, PANEL_DB } from "../../lib/paths";
 import {
-  resourceMemoryState, setResourceMemory, type ResourceMemoryOptions, type ResourceMemoryState,
+  resourceMemoryState, restartResourceMysql, setResourceMemory, type ResourceMemoryOptions, type ResourceMemoryState,
 } from "./memory-settings";
 import { openPanelDatabase } from "../../lib/panel-db";
 import { RESOURCE_LIMITS_VERBS } from "./verbs";
@@ -1043,7 +1043,7 @@ interface ParsedAction {
 }
 
 const PER_SITE_VERBS: ResourceLimitsVerb[] = ["site"];
-const FLEET_VERBS: ResourceLimitsVerb[] = ["list", "save-category", "delete-category", "assign", "set-default", "reconcile", "set-memory"];
+const FLEET_VERBS: ResourceLimitsVerb[] = ["list", "save-category", "delete-category", "assign", "set-default", "reconcile", "set-memory", "restart-mysql"];
 
 function parseAction(argv: string[], options: ResourceLimitsActionOptions): ParsedAction {
   const normalized = argv.flatMap((arg) => arg.startsWith("--domain=")
@@ -1051,7 +1051,7 @@ function parseAction(argv: string[], options: ResourceLimitsActionOptions): Pars
     : [arg]);
   const verb = normalized[0] as ResourceLimitsVerb | undefined;
   if (!verb || ![...PER_SITE_VERBS, ...FLEET_VERBS].includes(verb)) {
-    failAction("usage: clp-addons action resource-limits {list|save-category|delete-category|assign|set-default|set-memory|reconcile} | site --domain <domain>");
+    failAction("usage: clp-addons action resource-limits {list|save-category|delete-category|assign|set-default|set-memory|restart-mysql|reconcile} | site --domain <domain>");
   }
   if (FLEET_VERBS.includes(verb)) {
     if (normalized.length > 1) failAction(`${verb} takes no arguments`);
@@ -1119,6 +1119,7 @@ export async function executeResourceLimitsAction(
     const policy = readPolicy(paths.policyFile, paths.rootUid);
     return stateFor(paths, requireSite(panelSites(paths), domain), policy);
   }
+  if (verb === "restart-mysql") return restartResourceMysql(options);
   const body = await requestBody(options);
   if (verb === "set-memory") return setResourceMemory(body, options);
   if (verb === "save-category") return complete(await saveCategory(paths, categoryRequest(body), command));

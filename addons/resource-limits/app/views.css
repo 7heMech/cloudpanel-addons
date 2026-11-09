@@ -62,3 +62,4 @@ html.dark .mb { --s1: #3987e5; --s2: #d95926; --s3: #199e70; --s4: #c98500; --ph
 .mb-php { background: var(--php); } .mb-free { background: var(--free); }
 .mb-verdict { margin: 10px 0 0 !important; }
 .mb-verdict .badge { margin-right: 6px; }
+.st-status .mysql-restart { margin-left: 8px; padding: 2px 12px; font-size: 13px; vertical-align: 1px; }
