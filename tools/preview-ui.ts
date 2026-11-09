@@ -2,8 +2,8 @@
 // state or invokes an action. Supported mutations change fictional data only.
 import { indexPage, updatePage } from "../manager/views";
 import {
-  dashboardView as cloudflareDashboardView, layout as cloudflareLayout,
-} from "../addons/cloudflare-ips/app/views";
+  dashboardView as firewallDashboardView, layout as firewallLayout,
+} from "../addons/firewall/app/views";
 import {
   dashboardView, layout as instaticLayout, newInstanceView, jobView as instaticJobView,
 } from "../addons/instatic/app/views";
@@ -440,8 +440,8 @@ const cloudflareSites = [
 const cloudflareMoreSites = ["shop.example.net", "docs.example.org", "status.example.io", "api.example.dev"]
   .map((domain, index) => ({ domain, enabled: index % 2 === 0 }));
 
-/** ?sites=all|none|mixed, ?auto=off and ?many (search and filter) cover the states the controls describe. */
-function cloudflarePreviewState(url: URL) {
+/** ?sites=all|none|mixed, ?auto=off, ?many (search and filter), ?protocols=off and ?noudp cover the states the controls describe. */
+function firewallPreviewState(url: URL) {
   const all = url.searchParams.get("sites");
   const sites = [...cloudflareSites, ...(url.searchParams.has("many") ? cloudflareMoreSites : [])].map((site) => all === "all"
     ? { ...site, enabled: true }
@@ -449,6 +449,10 @@ function cloudflarePreviewState(url: URL) {
   return {
     autoEnableNewSites: url.searchParams.get("auto") !== "off",
     sites: url.searchParams.has("empty") ? [] : sites,
+    protocols: {
+      available: true, enabled: url.searchParams.get("protocols") !== "off",
+      protocols: { 9: "udp" as const, 10: "udp" as const, 11: "both" as const }, udpPorts: url.searchParams.has("noudp") ? [] : ["53", "51820"],
+    },
   };
 }
 
@@ -516,6 +520,10 @@ function previewTheme(html: string, url: URL): string {
   const open = url.searchParams.get("open");
   if (open) {
     html = html.replace("</body>", () => `<script>addEventListener("DOMContentLoaded",function(){${JSON.stringify(open.split(",")).replaceAll("<", "\\u003c")}.forEach(function(id){const d=document.getElementById(id);if(d)d.open=true})})</script></body>`);
+  }
+  // ?select=all ticks every row, so the selection's count and actions can be reviewed.
+  if (url.searchParams.get("select") === "all") {
+    html = html.replace("</body>", () => `<script>addEventListener("load",function(){setTimeout(function(){CLP_ROOT.querySelectorAll(".site-checkbox").forEach(function(b){b.checked=true});paintFleetSelection()},0)})</script></body>`);
   }
   if (!url.searchParams.has("dark")) return html;
   return html.replace("<head>", "<head><script>document.cookie='theme=dark; Path=/'</script>");
@@ -625,7 +633,6 @@ function systemTweaksPreviewState(url: URL): SystemTweaksState {
       level: 3, threads: 1, supported: true, installed: true, problem: "",
     },
     database: databasePreviewState(url),
-    firewall: { available: true, protocols: { 9: "udp", 10: "udp", 11: "both" }, udpPorts: url.searchParams.has("noudp") ? [] : ["53", "51820"] },
     vhostGuard: {
       enabled: url.searchParams.get("vhost") !== "off", active: url.searchParams.get("vhost") !== "off",
       stored: url.searchParams.has("injected") ? [{ domain: "shop.example.com", field: "Root Directory" }, { domain: "blog.example.com", field: "Varnish server" }] : [],
@@ -1730,7 +1737,7 @@ function managerPreviewMutation(path: string, source: URL): Response | null {
   }
   const managerRoute = path.match(/^\/addons\/api\/addons\/([^/]+)\/(enable|disable)$/);
   if (managerRoute) {
-    previewEnabled ??= (source.searchParams.get("enabled") ?? "cloudflare-ips,instatic,stager,maintenance,resource-limits,git").split(",");
+    previewEnabled ??= (source.searchParams.get("enabled") ?? "firewall,instatic,stager,maintenance,resource-limits,git").split(",");
     previewManagerJob = {
       id: "20261021T120000Z-" + (++previewJobNumber).toString(16).padStart(6, "0"), addon: managerRoute[1]!,
       kind: managerRoute[2]!, state: "running", step: "Updating addon", error: "", createdAt: "", startedAt: "", finishedAt: "",
@@ -2009,7 +2016,7 @@ const server = Bun.serve({
     if (path === "/addons/") {
       // ?enabled= picks which addons are on, so the Available section and the
       // enable/disable buttons can be reviewed without a CloudPanel install.
-      const enabled = previewEnabled ?? (empty ? [] : (url.searchParams.get("enabled") ?? "cloudflare-ips,instatic,stager,maintenance,resource-limits,git").split(",").filter(Boolean));
+      const enabled = previewEnabled ?? (empty ? [] : (url.searchParams.get("enabled") ?? "firewall,instatic,stager,maintenance,resource-limits,git").split(",").filter(Boolean));
       const previewJob = state && ["running", "queued", "failed"].includes(state)
         ? {
             id: "20260910T093000Z-abc123", kind: "enable", addon: "stager", state,
@@ -2018,7 +2025,7 @@ const server = Bun.serve({
           }
         : null;
       const page = indexPage(enabled, notice, {
-        available: ["cloudflare-ips", "dns", "instatic", "stager", "maintenance", "resource-limits", "git", "panel-tweaks", "system-tweaks", "wp-tools", "smtp", "terminal", "security-keys"].filter((name) => !enabled.includes(name)),
+        available: ["dns", "firewall", "instatic", "stager", "maintenance", "resource-limits", "git", "panel-tweaks", "system-tweaks", "wp-tools", "smtp", "terminal", "security-keys"].filter((name) => !enabled.includes(name)),
         job: previewJob,
         csrf: "preview-csrf-token",
         // ?news shows what changed since 2.0.0, and ?locked root's lock on System Tweaks.
@@ -2173,8 +2180,8 @@ const server = Bun.serve({
           syncedPasskeys: !url.searchParams.has("hardware-only"),
         },
       }), notice);
-    } else if (path === "/addons/cloudflare-ips/" || path === "/addons/cloudflare-ips") {
-      html = cloudflareLayout("Cloudflare IP Access", cloudflareDashboardView(cloudflarePreviewState(url)), notice);
+    } else if (path === "/addons/firewall/" || path === "/addons/firewall") {
+      html = firewallLayout("Firewall", firewallDashboardView(firewallPreviewState(url)), notice);
     } else if (path === "/addons/instatic/") {
       html = instaticLayout("Instatic sites", empty ? dashboardView([], versions) : instaticDashboard(url), notice);
       // ?dialog=update|delete|stop opens that dialog once the page is up.

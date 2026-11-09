@@ -1,7 +1,7 @@
 # System Tweaks
 
-Hardening, automatic updates, panel PHP, remote backups, firewall rules and the
-SSH login message.
+Hardening, automatic updates, panel PHP, remote backups and the SSH login
+message.
 PHP worker limits and the server memory budget are in [Resource Limits](resource-limits.md).
 
 ## Locking the protections
@@ -444,20 +444,6 @@ timed-out requests left in `/tmp`: ImageMagick's after two idle hours, PHP
 uploads and WordPress downloads after a day. It removes only files a PHP site's
 own user owns and no process has open. There is nothing to set. Resource Limits
 does the same while System Tweaks is off.
-
-## UDP ports
-
-CloudPanel's own **Admin → Security → Firewall** gets a **Protocol** for each
-rule: TCP, UDP, or TCP and UDP. Choose it on **Add Rule** or a rule's edit page,
-after **Port Range**. The rules table shows it in its **Protocol** column, and
-System Tweaks' page lists the UDP ports that are open. A protocol belongs to
-the rule's port range and source. UDP alone is refused for port 8443, which
-would close CloudPanel itself to TCP; choose TCP and UDP there.
-
-The change reaches ufw a few seconds after the page saves, and stays through
-later changes on the Firewall page. Check it with `ufw status`. Disabling
-System Tweaks sets every rule back to TCP in ufw and keeps the choices for
-when it is enabled again.
 
 ## MySQL access
 

@@ -4,7 +4,6 @@ import { BACKUP_COMPRESSION_TWEAK } from "../addons/system-tweaks/backup-compres
 import { CLPCTL_GUARD_TWEAK } from "../addons/system-tweaks/clpctl-guard";
 import { DATABASE_TWEAK } from "../addons/system-tweaks/database";
 import { FILE_MANAGER_GUARD_TWEAK } from "../addons/system-tweaks/file-manager-guard";
-import { FIREWALL_TWEAK } from "../addons/system-tweaks/firewall";
 import { LOGIN_JAILS_TWEAK } from "../addons/system-tweaks/login-jails";
 import { MOTD_TWEAK } from "../addons/system-tweaks/motd";
 import { PANEL_CERT_TWEAK } from "../addons/system-tweaks/panel-cert";
@@ -25,7 +24,6 @@ const NAMES = new Map<object, string>([
   [PHP_POOLS_TWEAK, "PHP pools"], [PHPMYADMIN_TWEAK, "phpMyAdmin"], [FILE_MANAGER_GUARD_TWEAK, "File Manager guard"],
   [PANEL_CERT_TWEAK, "panel cert"], [LOGIN_JAILS_TWEAK, "login jails"], [DATABASE_TWEAK, "database"], [CLPCTL_GUARD_TWEAK, "clpctl guard"],
   [TELEMETRY_TWEAK, "telemetry"], [MOTD_TWEAK, "motd"], [BACKUP_COMPRESSION_TWEAK, "backup compression"], [PANEL_PHP_TWEAK, "panel PHP"],
-  [FIREWALL_TWEAK, "firewall"],
 ]);
 const names = (tweaks: readonly object[]) => tweaks.map((tweak) => NAMES.get(tweak) ?? "unnamed");
 
@@ -43,31 +41,31 @@ test("disabling the addon withdraws panel PHP first, the clpctl guard first unde
     "clpctl guard", "backup compression", "updates", "real IP", "visitor IP", "phpMyAdmin", "login jails", "database",
     "File Manager guard", "vhost guard", "PHP pools",
   ]);
-  expect(names(WITHDRAW.last)).toEqual(["telemetry", "motd", "firewall"]);
+  expect(names(WITHDRAW.last)).toEqual(["telemetry", "motd"]);
   // What a later failure puts back at once, since the addon then stays enabled; repair is queued for the rest.
   const putBack = [...WITHDRAW.first, ...WITHDRAW.locked].filter((tweak) => tweak.withdraw.putBack);
   expect(names(putBack)).toEqual(["panel PHP", "clpctl guard"]);
 });
 
-test("enabling the addon restores panel PHP whatever the rest does, and the panel certificate and firewall after", () => {
+test("enabling the addon restores panel PHP whatever the rest does, and the panel certificate after", () => {
   expect(names(RESTORE.locked)).toEqual([
     "updates", "upload guard", "real IP", "visitor IP", "phpMyAdmin", "login jails", "database", "vhost guard", "PHP pools",
     "File Manager guard", "clpctl guard", "backup compression", "telemetry", "motd",
   ]);
   expect(names(RESTORE.always)).toEqual(["panel PHP"]);
-  expect(names(RESTORE.after)).toEqual(["panel cert", "firewall"]);
+  expect(names(RESTORE.after)).toEqual(["panel cert"]);
   // These warn and let the rest come back; every other locked step stops it.
   expect(names(RESTORE.locked.filter((tweak) => tweak.restore.warning))).toEqual(["visitor IP", "database", "backup compression", "telemetry", "motd"]);
 });
 
 test("repair runs its steps in a fixed order, the quick ones under one lock", () => {
   expect(REPAIR.map((step) => step.label)).toEqual([
-    "/tmp cleanup", null, "phpMyAdmin rules", "firewall", "vhost guard", "PHP pools", "File Manager guard", "panel certificate",
+    "/tmp cleanup", null, "phpMyAdmin rules", "vhost guard", "PHP pools", "File Manager guard", "panel certificate",
     "Varnish backends", "clpctl wrapper guard", "stored site settings", "panel PHP", "remote backup compression",
     "CloudPanel telemetry", "SSH login message",
   ]);
   expect(REPAIR[1]).toBe(UPKEEP);
-  expect(REPAIR.filter((step) => !step.locked).map((step) => step.label)).toEqual(["/tmp cleanup", "firewall", "stored site settings", "panel PHP"]);
+  expect(REPAIR.filter((step) => !step.locked).map((step) => step.label)).toEqual(["/tmp cleanup", "stored site settings", "panel PHP"]);
 });
 
 test("Lock settings turns the protections on in this order, MySQL last", () => {

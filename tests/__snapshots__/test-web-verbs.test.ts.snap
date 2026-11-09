@@ -1,10 +1,7 @@
 // Bun Snapshot v1, https://bun.sh/docs/test/snapshots
 
 exports[`the web-reachable verbs and who may call them 1`] = `
-"cloudflare-ips:list                admin
-cloudflare-ips:policy              admin
-cloudflare-ips:set                 admin
-dns:assign                         admin
+"dns:assign                         admin
 dns:check                          admin
 dns:choose-zone                    admin
 dns:confirm                        admin
@@ -27,6 +24,12 @@ dns:set-default                    admin
 dns:site-status                    panel-user
 dns:take-over                      admin
 dns:zone-account                   admin
+firewall:list                      admin
+firewall:policy                    admin
+firewall:protocols                 admin
+firewall:set                       admin
+firewall:set-protocol              admin
+firewall:set-protocols             admin
 git:configure                      site-manager
 git:deploy                         site-manager
 git:domains                        site-manager
@@ -118,7 +121,6 @@ stager:promote                     admin
 stager:prune                       admin
 stager:sites                       admin
 stager:watch-job                   admin stream
-system-tweaks:firewall             admin
 system-tweaks:install-fail2ban     admin
 system-tweaks:install-updates      admin
 system-tweaks:lock-settings        admin
@@ -126,7 +128,6 @@ system-tweaks:set-backup-compression admin
 system-tweaks:set-clpctl-guard     admin
 system-tweaks:set-database-loopback admin
 system-tweaks:set-file-manager-guard admin
-system-tweaks:set-firewall-protocol admin
 system-tweaks:set-login-jails      admin
 system-tweaks:set-motd             admin
 system-tweaks:set-panel-cert       admin

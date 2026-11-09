@@ -2,7 +2,7 @@
  * A protocol for each rule on CloudPanel's own Firewall page. CloudPanel opens
  * every rule for TCP and rebuilds ufw from its table with `ufw reset` on every
  * change there, so this keeps the protocols itself and puts them back into ufw
- * whenever ufw's rule files change. See "Firewall" in docs/decisions/system-tweaks.md.
+ * whenever ufw's rule files change. See "Protocols" in docs/decisions/firewall.md.
  */
 import { addonStateDir, LOCK_DIR, PANEL_DB, ROOT_UID, UFW_RULE_FILES } from "../../lib/paths";
 import { existsSync, lstatSync, readFileSync, statSync } from "node:fs";
@@ -13,7 +13,6 @@ import { withPanelDb } from "../../lib/panel-db";
 import { writeFileAtomic } from "../../lib/atomic-write";
 import { isTrustedFile } from "../../lib/trusted-file";
 import { errorMessage } from "../../lib/errors";
-import { tweak } from "./tweak";
 
 export type FirewallProtocol = "tcp" | "udp" | "both";
 export const FIREWALL_PROTOCOLS: readonly FirewallProtocol[] = ["tcp", "udp", "both"];
@@ -38,8 +37,10 @@ export interface FirewallState {
   unmatched: Record<string, number>;
   /** The ufw rules this addon added or removed against CloudPanel's own, so it can put them back. */
   managed: UfwRule[];
-  /** Set while System Tweaks is off, so a watcher still running then applies nothing. */
+  /** Set while Firewall or its Protocol switch is off, so a watcher still running then applies nothing. */
   withdrawn?: boolean;
+  /** The Protocol switch is off: enabling Firewall leaves the protocols withdrawn. */
+  off?: boolean;
 }
 
 interface FirewallPaths {
@@ -51,9 +52,9 @@ interface FirewallPaths {
   rootUid: number;
 }
 
-const DEFAULT_FIREWALL_PATHS: FirewallPaths = {
-  stateFile: `${addonStateDir("system-tweaks")}/firewall.json`,
-  lockFile: `${LOCK_DIR}/system-tweaks-firewall.lock`,
+export const DEFAULT_FIREWALL_PATHS: FirewallPaths = {
+  stateFile: `${addonStateDir("firewall")}/protocols.json`,
+  lockFile: `${LOCK_DIR}/firewall-protocols.lock`,
   panelDb: PANEL_DB,
   userRules: UFW_RULE_FILES[0]!,
   user6Rules: UFW_RULE_FILES[1]!,
@@ -192,6 +193,7 @@ export function readFirewallState(paths: FirewallPaths): FirewallState {
   try { stored = JSON.parse(readFileSync(paths.stateFile, "utf8")); } catch { return state; }
   if (stored?.version !== STATE_VERSION) return state;
   if (stored.withdrawn === true) state.withdrawn = true;
+  if (stored.off === true) state.off = true;
   const unmatched = (stored.unmatched ?? {}) as Record<string, unknown>;
   for (const [key, protocol] of Object.entries((stored.protocols ?? {}) as Record<string, unknown>)) {
     const [range = "", source = ""] = key.split(" ");
@@ -252,7 +254,7 @@ interface FirewallPlan {
 /**
  * The ufw commands that make ufw match the protocols, touching only rules a
  * protocol asks for and the ones it asked for before. With no protocols,
- * which is what switching System Tweaks off passes, the rules this addon
+ * which is what withdrawing passes, the rules this addon
  * changed go back to CloudPanel's own: TCP for every rule, and UDP 443.
  */
 export function planFirewall(rules: PanelRule[], protocols: FirewallState["protocols"], managed: UfwRule[], present: UfwRule[]): FirewallPlan {
@@ -323,34 +325,52 @@ function ufwInstalled(paths: FirewallPaths): boolean {
   return existsSync(paths.userRules) || existsSync(paths.user6Rules);
 }
 
+type SyncMode = "apply" | "withdraw" | "restore";
+
+/**
+ * Whether a pass applies the protocols, decided from the state as stored when
+ * it runs: `withdraw` never, `apply` unless withdrawn, `restore` unless the
+ * Protocol switch is off. A pass that does not apply puts back what is still
+ * changed, so one that failed is finished by the next.
+ */
+function applies(mode: SyncMode, state: FirewallState): boolean {
+  if (mode === "withdraw") return false;
+  return mode === "apply" ? !state.withdrawn : !state.off;
+}
+
+/** Nothing to apply, nothing left to put back, and the mark already says so. */
+function settled(on: boolean, state: FirewallState): boolean {
+  if (!on) return Boolean(state.withdrawn) && !state.managed.length;
+  return !state.withdrawn && !Object.keys(state.protocols).length && !state.managed.length;
+}
+
 /**
  * Brings ufw in line with the stored protocols. It repeats until a pass finds
  * nothing to change, because CloudPanel may still be rebuilding when it starts.
- * `withdraw` puts back CloudPanel's own rules and marks the protocols withdrawn,
- * which every later `apply` respects until `restore` clears it.
+ * `withdraw` puts back CloudPanel's own rules and marks the protocols withdrawn;
+ * `restore` clears the mark and applies them, or withdraws them while the
+ * Protocol switch is off. Since each pass reads the switch itself, two switch
+ * changes in a row end in the later one's state whichever pass runs last.
  */
-export function syncFirewall(mode: "apply" | "withdraw" | "restore", options: FirewallOptions = {}): string | null {
+export function syncFirewall(mode: SyncMode, options: FirewallOptions = {}): string | null {
   const paths = pathsOf(options);
-  const enabled = mode !== "withdraw";
   if (!ufwInstalled(paths)) return null;
-  // Nothing chosen and nothing changed: ufw is CloudPanel's alone.
   const held = readFirewallState(paths);
-  const idle = !Object.keys(held.protocols).length && !held.managed.length;
-  if (idle && Boolean(held.withdrawn) === !enabled) return null;
-  if (mode === "apply" && held.withdrawn) return null;
+  if (settled(applies(mode, held), held)) return null;
   const now = options.now ?? Date.now;
   const sleep = options.sleep ?? Bun.sleepSync;
   const ufw = options.ufw ?? systemUfw;
   let changed = 0;
   let previous = "";
   for (let pass = 0; pass < MAX_PASSES; pass++) {
-    if (enabled) waitForQuiet(paths, now, sleep);
+    if (applies(mode, held)) waitForQuiet(paths, now, sleep);
     const commands = withFileLockSync(paths.lockFile, 30, "another firewall change is still running", () => {
       const stored = readFirewallState(paths);
-      if (mode === "apply" && stored.withdrawn) return [];
+      const on = applies(mode, stored);
+      if (settled(on, stored)) return [];
       const rules = readPanelRules(paths.panelDb);
       const state = settleState(stored, rules, now());
-      const plan = planFirewall(rules, enabled ? state.protocols : {}, state.managed, readUfwRules(paths));
+      const plan = planFirewall(rules, on ? state.protocols : {}, state.managed, readUfwRules(paths));
       const failures: string[] = [];
       for (const args of plan.commands) {
         const result = ufw(args);
@@ -359,7 +379,7 @@ export function syncFirewall(mode: "apply" | "withdraw" | "restore", options: Fi
       // A rule that failed stays managed, so the next pass tries it again.
       const managed = failures.length ? [...plan.managed, ...state.managed.filter((rule) => !plan.managed.some((kept) => key(kept) === key(rule)))] : plan.managed;
       const next: FirewallState = { ...state, managed };
-      if (enabled) delete next.withdrawn;
+      if (on) delete next.withdrawn;
       else next.withdrawn = true;
       if (JSON.stringify(next) !== JSON.stringify(stored)) writeFirewallState(paths, next);
       if (failures.length) throw new Error(failures.join("; "));
@@ -380,6 +400,8 @@ export function syncFirewall(mode: "apply" | "withdraw" | "restore", options: Fi
 export interface FirewallStatus {
   /** Whether ufw is on this box at all. */
   available: boolean;
+  /** The Protocol switch; while off, CloudPanel's Firewall pages show no protocol. */
+  enabled: boolean;
   /** By CloudPanel's rule id, for its pages: the rules that are not TCP alone. */
   protocols: Record<string, FirewallProtocol>;
   /** The port ranges open to UDP by a rule's protocol, besides CloudPanel's own 443. */
@@ -388,8 +410,8 @@ export interface FirewallStatus {
 
 export function firewallStatus(options: FirewallOptions = {}): FirewallStatus {
   const paths = pathsOf(options);
-  if (!ufwInstalled(paths)) return { available: false, protocols: {}, udpPorts: [] };
   const state = readFirewallState(paths);
+  if (!ufwInstalled(paths)) return { available: false, enabled: !state.off, protocols: {}, udpPorts: [] };
   const protocols: FirewallStatus["protocols"] = {};
   const udpPorts = new Set<string>();
   for (const rule of readPanelRules(paths.panelDb)) {
@@ -398,7 +420,7 @@ export function firewallStatus(options: FirewallOptions = {}): FirewallStatus {
     protocols[rule.id] = protocol;
     udpPorts.add(rule.portRange);
   }
-  return { available: true, protocols, udpPorts: [...udpPorts].sort((a, b) => parseInt(a, 10) - parseInt(b, 10)) };
+  return { available: true, enabled: !state.off, protocols, udpPorts: [...udpPorts].sort((a, b) => parseInt(a, 10) - parseInt(b, 10)) };
 }
 
 /**
@@ -418,6 +440,7 @@ export function setRuleProtocol(body: Record<string, unknown>, options: Firewall
   const now = (options.now ?? Date.now)();
   withFileLockSync(paths.lockFile, 30, "another firewall change is still running", () => {
     const state = readFirewallState(paths);
+    if (state.off) failAction("protocols are switched off in Firewall");
     if ((state.protocols[key] ?? "tcp") === protocol) return;
     const matching = readPanelRules(paths.panelDb).filter((rule) => ruleKey(rule.portRange, rule.source) === key);
     // Another rule has this port range and source, which this form would change too.
@@ -434,40 +457,22 @@ export function setRuleProtocol(body: Record<string, unknown>, options: Firewall
   });
 }
 
-function firewallOrError(options?: FirewallOptions): FirewallStatus | { error: string } {
-  try { return firewallStatus(options); }
-  catch (error) { return { error: errorMessage(error) }; }
+/**
+ * The Protocol switch. Off puts back CloudPanel's own TCP rules and keeps the
+ * choices; on applies them again.
+ */
+export function setProtocolsEnabled(enabled: boolean, options: FirewallOptions = {}): void {
+  const paths = pathsOf(options);
+  withFileLockSync(paths.lockFile, 30, "another firewall change is still running", () => {
+    const state = readFirewallState(paths);
+    if (!state.off === enabled) return;
+    if (enabled) delete state.off;
+    else state.off = true;
+    writeFirewallState(paths, state);
+  });
+  try {
+    syncFirewall("restore", options);
+  } catch (error) {
+    throw new Error(`the switch is saved, and ufw follows at the next repair: ${errorMessage(error)}`);
+  }
 }
-
-type Options = { firewall?: FirewallOptions };
-
-/** The protocol of each rule on CloudPanel's own Firewall page; its controls are injected there. */
-export const FIREWALL_TWEAK = tweak<{}, Options, { firewall: FirewallStatus | { error: string } }>()({
-  state: ({ options }) => ({ firewall: firewallOrError(options.firewall) }),
-  verbs: {
-    firewall: async ({ options }) => firewallStatus(options.firewall),
-    async "set-firewall-protocol"({ options, body }) {
-      setRuleProtocol(await body(), options.firewall);
-      return firewallStatus(options.firewall);
-    },
-  },
-  repair: {
-    rules: {
-      label: "firewall",
-      locked: false,
-      run: ({ options }) => {
-        const changed = syncFirewall("apply", options.firewall);
-        return changed && `firewall: ${changed}`;
-      },
-    },
-  },
-  withdraw: {
-    run: ({ options }) => { syncFirewall("withdraw", options.firewall); },
-    // CloudPanel's next change on its Firewall page rebuilds ufw without these rules anyway.
-    warning: (error) => `ufw still has UDP rules from System Tweaks: ${error}`,
-  },
-  restore: {
-    run: ({ options }) => { syncFirewall("restore", options.firewall); },
-    warning: (error) => `firewall protocols wait for the next repair: ${error}`,
-  },
-});

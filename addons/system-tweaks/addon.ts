@@ -1,9 +1,8 @@
 import { handle } from "./app/index";
 import {
-  restoreSystemTweaks, runSystemTweaksAction, systemTweaksPhpPools, systemTweaksBackupCompression, systemTweaksFirewall, systemTweaksMaintenance,
+  restoreSystemTweaks, runSystemTweaksAction, systemTweaksPhpPools, systemTweaksBackupCompression, systemTweaksMaintenance,
   systemTweaksMotd, systemTweaksPhpGuardOff, systemTweaksPhpMyAdmin, systemTweaksVarnish, withdrawSystemTweaks,
 } from "./action";
-import { SYSTEM_TWEAKS_TARGETS } from "./inject/targets";
 import { DEFAULT_REAL_IP_PATHS, REAL_IP_MARKER, releaseRealIp } from "./real-ip";
 import { syncVarnishBackends } from "./varnish-backend";
 import { DEFAULT_VISITOR_IP_PATHS, UNTRUSTED_LOOPBACK, VISITOR_IP, releaseVisitorIp } from "./visitor-ip";
@@ -24,7 +23,7 @@ export const SYSTEM_TWEAKS_ADDON: AddonDefinition = {
     { in: "2.1.0-rc.1", note: "clp-agent no longer sends CloudPanel your domains and panel users." },
     { in: "2.0.0", note: "Mitigates several CloudPanel weaknesses; accept the panel's new certificate once." },
   ],
-  targets: SYSTEM_TWEAKS_TARGETS,
+  targets: [],
   handler: handle,
   action: runSystemTweaksAction,
   repair: {
@@ -34,10 +33,6 @@ export const SYSTEM_TWEAKS_ADDON: AddonDefinition = {
   newSites: {
     label: "system tweaks Varnish backends",
     run: () => systemTweaksVarnish(),
-  },
-  firewall: {
-    label: "system tweaks firewall",
-    run: () => systemTweaksFirewall(),
   },
   // CloudPanel rewrites its phpMyAdmin vhost, replaces its app tree on an
   // update, and an upgrade empties /etc/update-motd.d and puts its banner back.

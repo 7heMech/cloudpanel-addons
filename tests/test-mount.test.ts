@@ -24,7 +24,7 @@ describe("a path that names an addon", () => {
   test("a sub-path keeps its leading slash", () => {
     expect(hit("/instatic/api/instances")).toBe("instatic:/api/instances");
     expect(hit("/stager/jobs/abc")).toBe("stager:/jobs/abc");
-    expect(hit("/cloudflare-ips/api/sites")).toBe("cloudflare-ips:/api/sites");
+    expect(hit("/firewall/api/sites")).toBe("firewall:/api/sites");
     expect(hit("/stager/new")).toBe("stager:/new");
   });
 });

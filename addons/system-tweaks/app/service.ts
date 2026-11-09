@@ -2,7 +2,6 @@ import { callGatewayAction, type ActionResult } from "../../../lib/gateway-clien
 import type { WebVerb } from "../../../lib/gateway-protocol";
 import { TWEAKS, type SystemTweaksState } from "../registry";
 import type { BackupCompressionSettings } from "../backup-compression";
-import type { FirewallStatus } from "../firewall";
 import {
   BACKUP_COMPRESSION_GATEWAY_TIMEOUT_MS, INSTALL_GATEWAY_TIMEOUT_MS, LOCK_SETTINGS_GATEWAY_TIMEOUT_MS, LOGIN_JAILS_GATEWAY_TIMEOUT_MS, PANEL_PHP_GATEWAY_TIMEOUT_MS,
 } from "../limits";
@@ -42,14 +41,6 @@ export const systemTweaksService = {
 
   setPanelPhp(php: string): Promise<ActionResult<SystemTweaksState>> {
     return call("set-panel-php", JSON.stringify({ php }), PANEL_PHP_GATEWAY_TIMEOUT_MS);
-  },
-
-  firewall(): Promise<ActionResult<FirewallStatus>> {
-    return callGatewayAction("system-tweaks", "firewall", []);
-  },
-
-  setFirewallProtocol(rule: { portRange: string; source: string; protocol: string; id?: number }): Promise<ActionResult<FirewallStatus>> {
-    return callGatewayAction("system-tweaks", "set-firewall-protocol", [], JSON.stringify(rule));
   },
 
   setLoginJails(wanted: { panel?: boolean; ssh?: boolean }): Promise<ActionResult<SystemTweaksState>> {

@@ -18,7 +18,7 @@ import { CLIENT_JS as STAGER_CLIENT_JS } from "../addons/stager/app/views";
 import { CLIENT_JS as GIT_CLIENT_JS } from "../addons/git/app/views";
 import { CLIENT_JS as MAINTENANCE_CLIENT_JS, fleetView as maintenanceFleetView } from "../addons/maintenance/app/views";
 import { CLIENT_JS as RESOURCE_LIMITS_CLIENT_JS } from "../addons/resource-limits/app/views";
-import { dashboardView as cloudflareDashboardView } from "../addons/cloudflare-ips/app/views";
+import { dashboardView as cloudflareDashboardView } from "../addons/firewall/app/views";
 
 const repo = join(import.meta.dir, "..");
 
@@ -106,6 +106,7 @@ test("a fleet table gives the domain its own line on a phone", () => {
     cloudflareDashboardView({
       autoEnableNewSites: false,
       sites: [{ domain: "a-rather-long-hostname.example.test", enabled: false }],
+      protocols: { available: true, enabled: true, protocols: {}, udpPorts: [] },
     }),
   ]) {
     expect(html).toContain('<table class="fleet-table');

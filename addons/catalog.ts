@@ -2,7 +2,7 @@ import { existsSync } from "node:fs";
 import { TEMPLATES_DIR, addonConfigFile, addonStateDir } from "../lib/paths";
 import type { AddonDefinition, AddonHandler, AddonNews, AddonSpec } from "../lib/addon-definition";
 import { compareSemver } from "../lib/semver";
-import { CLOUDFLARE_IPS_ADDON } from "./cloudflare-ips/addon";
+import { FIREWALL_ADDON } from "./firewall/addon";
 import { DNS_ADDON } from "./dns/addon";
 import { GIT_ADDON } from "./git/addon";
 import { INSTATIC_ADDON } from "./instatic/addon";
@@ -21,7 +21,7 @@ import { SECURITY_KEYS_ADDON } from "./security-keys/addon";
  * new-site work runs in: DNS before SMTP Relay. Keep it deliberate.
  */
 const DEFINITIONS: AddonDefinition[] = [
-  CLOUDFLARE_IPS_ADDON,
+  FIREWALL_ADDON,
   DNS_ADDON,
   INSTATIC_ADDON,
   STAGER_ADDON,

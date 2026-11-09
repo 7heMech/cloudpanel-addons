@@ -34,7 +34,7 @@
     "tests/test-release.test.ts": 950,
     "tests/test-action-instatic.test.ts": 916,
     "tests/test-action-stager.test.ts": 904,
-    "tests/test-cloudflare-ips.test.ts": 887,
+    "tests/test-firewall-sites.test.ts": 887,
     "tests/test-job-store.test.ts": 871,
     "tests/test-addon-catalog.test.ts": 817,
     "tests/test-installer-picker.test.ts": 730,

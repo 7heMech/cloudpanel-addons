@@ -461,7 +461,7 @@ An addon that follows CloudPanel's Firewall page declares `firewall`.
 service runs `clp-addons sync-firewall`, each installed addon's `firewall` in
 catalog order. The units exist, and repair restarts the watcher, on the same
 terms as the certificate one. See
-[System Tweaks](system-tweaks.md#firewall).
+[Firewall](firewall.md#protocols).
 
 ## One way to watch a job
 
@@ -586,7 +586,7 @@ selection checkboxes, only the tint. The table's header stacks there: its title
 with Select all (`FLEET_SELECTION_HTML`) at its right, sized to its Deselect
 all label so the toggle moves nothing, then the bulk actions across the width.
 A bulk choice, such as the profile for Assign selected, shares its row with the
-button that applies it. The count beside Select all is short there, "2 of 9", and
+button that applies it. The count beside Select all is short there, "2 selected", and
 hidden until a site is ticked; a screen reader still reads the full count. On a wide screen the count sits at the right, beside
 the bulk actions it counts for, rather than under the title.
 

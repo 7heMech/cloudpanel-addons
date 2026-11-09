@@ -14,13 +14,14 @@ import { openPanelDatabase, withoutStandIns } from "../../lib/panel-db";
 import {
   trustedVhost, withNginxTransaction, withRecoveryFailures,
 } from "../../lib/nginx-transaction";
-import { CLOUDFLARE_IPS_VERBS } from "./verbs";
+import { FIREWALL_VERBS } from "./verbs";
+import { firewallStatus, setProtocolsEnabled, setRuleProtocol, type FirewallOptions, type FirewallStatus } from "./protocols";
 
 const POLICY_VERSION = 1;
 const MAX_SITES_PER_REQUEST = 10_000;
 const CLOUDFLARE_INCLUDE = "include /etc/nginx/cloudflare/ips;";
 
-type CloudflareVerb = keyof typeof CLOUDFLARE_IPS_VERBS;
+type FirewallVerb = keyof typeof FIREWALL_VERBS;
 
 export interface CloudflareActionPaths {
   panelDb: string;
@@ -33,8 +34,9 @@ export interface CloudflareActionPaths {
   stateUid: number;
 }
 
-interface CloudflareActionOptions {
+interface FirewallActionOptions {
   paths?: Partial<CloudflareActionPaths>;
+  protocols?: FirewallOptions;
   input?: string;
   emitReply?: boolean;
   run?: (command: string, args: string[]) => CommandResult;
@@ -66,22 +68,22 @@ interface Policy {
 }
 
 interface ParsedAction {
-  verb: CloudflareVerb;
+  verb: FirewallVerb;
   enabled: boolean | null;
 }
 
 export const DEFAULT_CLOUDFLARE_ACTION_PATHS: CloudflareActionPaths = {
   panelDb: PANEL_DB,
   nginxVhostDir: DISTRO_NGINX_SITES_DIR,
-  policyFile: `${addonStateDir("cloudflare-ips")}/policy.json`,
-  lockFile: `${LOCK_DIR}/cloudflare-ips.lock`,
+  policyFile: `${addonStateDir("firewall")}/policy.json`,
+  lockFile: `${LOCK_DIR}/firewall-sites.lock`,
   nginx: "nginx",
   systemctl: "systemctl",
   vhostUid: 0,
   stateUid: 0,
 };
 
-function pathsFor(options: CloudflareActionOptions): CloudflareActionPaths {
+function pathsFor(options: FirewallActionOptions): CloudflareActionPaths {
   return { ...DEFAULT_CLOUDFLARE_ACTION_PATHS, ...options.paths };
 }
 
@@ -112,19 +114,19 @@ function readPolicy(path: string, expectedUid: number): Policy {
   try {
     const stat = lstatSync(path);
     if (!stat.isFile() || stat.isSymbolicLink() || stat.uid !== expectedUid || (stat.mode & 0o022) !== 0) {
-      failAction("Cloudflare IP policy file is not a trusted regular file");
+      failAction("the Cloudflare-only policy file is not a trusted regular file");
     }
     raw = JSON.parse(readFileSync(path, "utf8"));
   } catch (error) {
-    failAction(`Cloudflare IP policy could not be read: ${errorMessage(error)}`);
+    failAction(`the Cloudflare-only policy could not be read: ${errorMessage(error)}`);
   }
-  if (typeof raw !== "object" || raw === null) failAction("Cloudflare IP policy is malformed");
+  if (typeof raw !== "object" || raw === null) failAction("the Cloudflare-only policy is malformed");
   const policy = raw as Partial<Policy>;
   if (
     policy.version !== POLICY_VERSION || typeof policy.autoEnableNewSites !== "boolean" ||
     !Array.isArray(policy.knownSiteIds) || !policy.knownSiteIds.every(Number.isInteger) ||
     !Array.isArray(policy.excludedDomains) || !policy.excludedDomains.every((item) => typeof item === "string")
-  ) failAction("Cloudflare IP policy is malformed");
+  ) failAction("the Cloudflare-only policy is malformed");
   return stablePolicy(policy as Policy);
 }
 
@@ -134,7 +136,7 @@ function writePolicy(path: string, policy: Policy, expectedUid: number): void {
   if (existsSync(path)) {
     const stat = lstatSync(path);
     if (!stat.isFile() || stat.isSymbolicLink() || stat.uid !== expectedUid || (stat.mode & 0o022) !== 0) {
-      failAction("Cloudflare IP policy file is not a trusted regular file");
+      failAction("the Cloudflare-only policy file is not a trusted regular file");
     }
     uid = stat.uid;
     gid = stat.gid;
@@ -153,12 +155,12 @@ function siteRows(db: Database): SiteRow[] {
 }
 
 function parseAction(argv: string[]): ParsedAction {
-  const verb = argv[0] as CloudflareVerb | undefined;
-  if (!verb || !["list", "set", "policy", "reconcile"].includes(verb)) {
-    failAction(`unknown Cloudflare IP action '${verb ?? ""}'`);
+  const verb = argv[0] as FirewallVerb | undefined;
+  if (!verb || !Object.hasOwn(FIREWALL_VERBS, verb)) {
+    failAction(`unknown Firewall action '${verb ?? ""}'`);
   }
   let enabled: boolean | null = null;
-  if (verb === "set" || verb === "policy") {
+  if (verb === "set" || verb === "policy" || verb === "set-protocols") {
     if (argv.length !== 3 || argv[1] !== "--enabled") failAction(`${verb} takes only --enabled yes|no`);
     enabled = validateFlag(argv[2]!, "enabled") === "yes";
   } else if (argv.length !== 1) {
@@ -167,13 +169,16 @@ function parseAction(argv: string[]): ParsedAction {
   return { verb, enabled };
 }
 
-function requestedDomains(input: string | undefined): string[] {
-  let raw: unknown;
+function readInput(verb: string, input: string | undefined): unknown {
   try {
-    raw = JSON.parse(input ?? readFileSync(0, "utf8"));
+    return JSON.parse(input ?? readFileSync(0, "utf8"));
   } catch {
-    failAction("set input must be JSON");
+    failAction(`${verb} input must be JSON`);
   }
+}
+
+function requestedDomains(input: string | undefined): string[] {
+  const raw = readInput("set", input);
   const values = (raw as { domains?: unknown } | null)?.domains;
   if (!Array.isArray(values) || values.length === 0 || values.length > MAX_SITES_PER_REQUEST) {
     failAction(`set requires between 1 and ${MAX_SITES_PER_REQUEST} domains`);
@@ -245,7 +250,14 @@ async function updateSites(
   }
 }
 
-function listState(paths: CloudflareActionPaths): { sites: CloudflareSiteView[]; autoEnableNewSites: boolean } {
+function protocolsOrError(options?: FirewallOptions): FirewallStatus | { error: string } {
+  try { return firewallStatus(options); }
+  catch (error) { return { error: errorMessage(error) }; }
+}
+
+function listState(paths: CloudflareActionPaths, protocols?: FirewallOptions): {
+  sites: CloudflareSiteView[]; autoEnableNewSites: boolean; protocols: FirewallStatus | { error: string };
+} {
   const db = openPanelDatabase(paths.panelDb);
   try {
     const policy = readPolicy(paths.policyFile, paths.stateUid);
@@ -255,6 +267,7 @@ function listState(paths: CloudflareActionPaths): { sites: CloudflareSiteView[];
         enabled: Boolean(site.allow_traffic_from_cloudflare_only),
       })),
       autoEnableNewSites: policy.autoEnableNewSites,
+      protocols: protocolsOrError(protocols),
     };
   } finally {
     db.close();
@@ -264,7 +277,7 @@ function listState(paths: CloudflareActionPaths): { sites: CloudflareSiteView[];
 async function withPolicyLock<T>(paths: CloudflareActionPaths, body: () => Promise<T>): Promise<T> {
   mkdirSync(dirname(paths.lockFile), { recursive: true });
   chmodSync(dirname(paths.lockFile), 0o700);
-  return withFileLock(paths.lockFile, 30, "another Cloudflare IP operation is running", body);
+  return withFileLock(paths.lockFile, 30, "another Cloudflare-only change is running", body);
 }
 
 async function setPolicy(paths: CloudflareActionPaths, enabled: boolean): Promise<Policy> {
@@ -362,23 +375,34 @@ export async function reconcileNewSites(
 }
 
 function requireRoot(): void {
-  if (process.getuid?.() !== 0) failAction("Cloudflare IP actions must run as root");
+  if (process.getuid?.() !== 0) failAction("Firewall actions must run as root");
 }
 
-export async function runCloudflareAction(argv: string[], options: CloudflareActionOptions = {}): Promise<number> {
-  return replyToAction("cloudflare-ips", options.emitReply !== false, async () => {
+export async function runFirewallAction(argv: string[], options: FirewallActionOptions = {}): Promise<number> {
+  return replyToAction("firewall", options.emitReply !== false, async () => {
     requireRoot();
     const paths = pathsFor(options);
     const action = parseAction(argv);
     const command = options.run ?? runCommand;
-    if (action.verb === "list") return listState(paths);
+    if (action.verb === "list") return listState(paths, options.protocols);
     if (action.verb === "policy") {
       const policy = await setPolicy(paths, action.enabled!);
       return { autoEnableNewSites: policy.autoEnableNewSites };
     }
     if (action.verb === "set") return setSelected(paths, requestedDomains(options.input), action.enabled!, command);
     if (action.verb === "reconcile") return reconcileNewSites(paths, command);
+    if (action.verb === "protocols") return firewallStatus(options.protocols);
+    if (action.verb === "set-protocol") {
+      const body = readInput("set-protocol", options.input);
+      if (typeof body !== "object" || body === null) failAction("set-protocol input must be a JSON object");
+      setRuleProtocol(body as Record<string, unknown>, options.protocols);
+      return firewallStatus(options.protocols);
+    }
+    if (action.verb === "set-protocols") {
+      setProtocolsEnabled(action.enabled!, options.protocols);
+      return firewallStatus(options.protocols);
+    }
     action.verb satisfies never;
-    failAction(`unknown Cloudflare IP action '${action.verb}'`);
+    failAction(`unknown Firewall action '${action.verb}'`);
   });
 }
