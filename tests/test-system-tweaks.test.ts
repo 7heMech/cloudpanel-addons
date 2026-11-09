@@ -2,7 +2,7 @@ import { afterEach, expect, mock, test } from "bun:test";
 import { Database } from "bun:sqlite";
 import {
   chmodSync, existsSync, lstatSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, statSync,
-  writeFileSync,
+  utimesSync, writeFileSync,
 } from "node:fs";
 import { X509Certificate } from "node:crypto";
 import { tmpdir } from "node:os";
@@ -1064,6 +1064,15 @@ test("the shared panel certificate is replaced on activation and repair, and off
   // Withdrawn, a change from the panel is refused, even one that waited on the settings lock; enabling again clears that.
   await expect(act(b, ["set-panel-cert"], { enabled: true })).rejects.toThrow("System Tweaks is disabled");
   expect(readFileSync(certFile, "utf8")).toBe(shared.cert);
+  // An enable that wrote the config after the mark, then failed before activating, still leaves a working page.
+  const configFile = join(dirname(b.settingsFile), "system-tweaks.conf");
+  b.options.paths = { ...b.options.paths, configFile };
+  writeFileSync(configFile, "enabled\n");
+  const later = new Date(Date.now() + 5_000);
+  utimesSync(configFile, later, later);
+  expect((await act(b, ["set-panel-cert"], { enabled: false })).panelCert).toMatchObject({ replace: false });
+  rmSync(configFile);
+  await expect(act(b, ["set-panel-cert"], { enabled: true })).rejects.toThrow("System Tweaks is disabled");
   restoreSystemTweaks(b.options, true);
   expect((await act(b, ["set-panel-cert"], { enabled: true })).panelCert).toMatchObject({ kind: "generated", replace: true });
   expect(readFileSync(certFile, "utf8")).toBe(generated);

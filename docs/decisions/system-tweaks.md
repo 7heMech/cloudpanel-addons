@@ -52,7 +52,9 @@ after that lock is let go, so a change from the page that was waiting on the
 lock would otherwise run on an addon nothing maintains or withdraws. Withdrawal
 writes a `withdrawn` mark beside `settings.json` before it lets the lock go;
 every change from the page, Lock settings included, refuses while the mark is
-there, and enabling removes it. Repair is not refused, so a disable that fails
+there, and enabling removes it. A mark older than the addon's config does not
+count: every enable writes the config afresh, so one whose activation then
+failed leaves an enabled addon whose page still works. Repair is not refused, so a disable that fails
 after withdrawing still has its protections put back.
 
 ### Lock settings

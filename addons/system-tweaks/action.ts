@@ -1,6 +1,6 @@
-import { LOCK_DIR, addonStateDir, ROOT_UID } from "../../lib/paths";
+import { LOCK_DIR, addonConfigFile, addonStateDir, ROOT_UID } from "../../lib/paths";
 import { SYSTEM_TWEAKS_VERBS } from "./verbs";
-import { existsSync, lstatSync, readFileSync, rmSync } from "node:fs";
+import { existsSync, lstatSync, readFileSync, rmSync, statSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { replyToAction, failAction, readJsonRequest } from "../../lib/action";
 import { errorMessage } from "../../lib/errors";
@@ -30,12 +30,15 @@ const MAX_INPUT_BYTES = 4 * 1024;
 export interface SystemTweaksPaths {
   settingsFile: string;
   lockFile: string;
+  /** The addon's enabled record, which every enable writes afresh. */
+  configFile?: string;
   rootUid: number;
 }
 
 const DEFAULT_SYSTEM_TWEAKS_PATHS: SystemTweaksPaths = {
   settingsFile: `${addonStateDir("system-tweaks")}/settings.json`,
   lockFile: `${LOCK_DIR}/system-tweaks.lock`,
+  configFile: addonConfigFile("system-tweaks"),
   rootUid: ROOT_UID,
 };
 
@@ -163,9 +166,24 @@ function withdrawnMark(paths: SystemTweaksPaths): string {
 /** `web`: a change from the panel, refused once the addon is withdrawn; repair still runs, to put back a disable that failed. */
 function settingsLock<T>(paths: SystemTweaksPaths, body: () => Promise<T>, web = false): Promise<T> {
   return withFileLock(paths.lockFile, 15, SETTINGS_BUSY, async () => {
-    if (web && existsSync(withdrawnMark(paths))) failAction("System Tweaks is disabled");
+    if (web && withdrawn(paths)) failAction("System Tweaks is disabled");
     return body();
   });
+}
+
+/**
+ * The mark, unless an enable wrote the config after it: one whose activation
+ * then failed leaves the addon enabled, and its page must still work.
+ */
+function withdrawn(paths: SystemTweaksPaths): boolean {
+  const mark = mtime(withdrawnMark(paths));
+  if (mark === null) return false;
+  const config = mtime(paths.configFile ?? addonConfigFile("system-tweaks"));
+  return config === null || config <= mark;
+}
+
+function mtime(path: string): number | null {
+  try { return statSync(path).mtimeMs; } catch { return null; }
 }
 
 /** Runs `body` under the settings lock, with the settings read once it is taken; `hold` asks root's lock before that. */
