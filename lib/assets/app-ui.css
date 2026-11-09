@@ -114,6 +114,7 @@ html.dark #theme-switch .moon { display: none; }
 /* A phone has the root shell control at the end of the navigation row instead
    of in the header row, which has no room for a fourth tool beside the logo. */
 .clp-addon-primary-nav > .clp-root-shell-nav { display: none; }
+.clp-root-shell-nav:not(:hover) > .clp-root-shell-mark { color: var(--header-icon); }
 @media (max-width: 760px) {
   #clp-root-shell { display: none; }
   /* Pinned to the end and drawn over the links, so a row that scrolls keeps it
@@ -281,6 +282,10 @@ dialog::backdrop { background: rgba(0,0,0,0.5); }
 .dialog-actions { justify-content: flex-end; margin: 25px -30px -30px; padding: 25px 30px; border-top: 1px solid var(--border); }
 pre { background: var(--bg); border: 1px solid var(--border); border-radius: 4px; padding: 16px;
   overflow: auto; max-height: 55vh; font-family: var(--mono); font-size: 13px; }
+/* A one-line value with its Copy control inside the block, at the right. */
+.copy-block { position: relative; }
+.copy-block > pre { margin: 0; padding: 9px 46px 9px 10px; line-height: 1.5; white-space: pre-wrap; overflow-wrap: anywhere; }
+.copy-block > .copy-button { position: absolute; top: 4px; right: 4px; padding: 6px 9px; }
 .row-actions { min-width: 100px; }
 .row-actions summary { cursor: pointer; color: var(--link); list-style: none; }
 .row-actions summary::-webkit-details-marker { display: none; }

@@ -1,3 +1,4 @@
+import { CLIPBOARD } from "../../../lib/clipboard";
 import { esc } from "../../../lib/app-http";
 import { FLEET_FOOTER_HTML, FLEET_ROW_SELECTION_JS, fleetFilterHtml, renderLayout, renderToolWindow, THEME_SWITCH_ICONS } from "../../../lib/app-ui";
 import { mountPath } from "../../../lib/mount";
@@ -47,18 +48,33 @@ function siteRow(site: SanitizedSite): string {
 type RootAccess = { granted: boolean; problem: string | null };
 
 /**
- * Every administrator gets the button. One root has not allowed, or whose
- * grant does not hold now, is told why in the page's notice instead of getting
- * a window that fails.
+ * Every administrator gets the button. One root has not allowed is shown the
+ * command that allows them, and one whose grant does not hold now is told why,
+ * instead of getting a window that fails.
  */
 function rootButton(root: RootAccess, user: string): string {
-  const refusal = root.problem
-    ?? (root.granted ? null : `Ask root to run clp-addons terminal root allow ${user} on the server.`);
-  const action = refusal === null
-    ? "clpOpenTerminal(CLP_BASE, '', event.shiftKey)"
-    : "notify(this.dataset.refusal, 'error', { text: 'Account → Security', href: '/security' })";
+  if (root.problem !== null) {
+    return `
+      <button class="btn" type="button" data-refusal="${esc(root.problem)}" onclick="notify(this.dataset.refusal, 'error', { text: 'Account → Security', href: '/security' })">Root terminal</button>`;
+  }
+  if (root.granted) {
+    return `
+      <button class="btn" type="button" onclick="clpOpenTerminal(CLP_BASE, '', event.shiftKey)">Root terminal</button>`;
+  }
   return `
-      <button class="btn" type="button"${refusal === null ? "" : ` data-refusal="${esc(refusal)}"`} onclick="${action}">Root terminal</button>`;
+      <button class="btn" type="button" onclick="CLP_ROOT.getElementById('root-allow-dialog').showModal()">Root terminal</button>
+      <dialog id="root-allow-dialog" aria-labelledby="root-allow-title">
+        <div class="dialog-header"><h2 id="root-allow-title">Ask root for access</h2></div>
+        <p>Root runs this on the server:</p>
+        <div class="copy-block">
+          <pre id="root-allow-command">clp-addons terminal root allow ${esc(user)}</pre>
+          <button class="btn copy-button" type="button" onclick="copyText('root-allow-command', 'Command')" title="Copy command" aria-label="Copy command">${CLIPBOARD}</button>
+        </div>
+        <p class="hint">Your account needs 2FA on first.</p>
+        <form method="dialog" class="actions dialog-actions">
+          <button class="btn" type="submit">Close</button>
+        </form>
+      </dialog>`;
 }
 
 export function dashboardView(sites: SanitizedSite[], root: RootAccess = { granted: false, problem: null }, user = ""): string {
@@ -109,9 +125,8 @@ export function popupPage(domain: string | null): string {
   const content = `<div class="term-bar">
   <img class="term-logo clp-addon-logo-light" src="/assets/images/logo.svg" alt="CloudPanel" width="100" height="20">
   <img class="term-logo clp-addon-logo-dark" src="/assets/images/logo-dark.svg" alt="CloudPanel" width="100" height="20">
-  <span class="term-domain" title="${esc(domain ?? "This server")}">${esc(domain ?? "This server")}</span>${domain === null ? `
-  <span class="badge tone-bad">root</span>` : ""}
-  <span class="term-user" id="term-user" hidden></span>
+  <span class="term-domain" title="${esc(domain ?? "This server")}">${esc(domain ?? "This server")}</span>
+  ${domain === null ? '<span class="term-user is-root" id="term-user">as root</span>' : '<span class="term-user" id="term-user" hidden></span>'}
   <span class="badge tone-warn" id="term-status" role="status">Connecting</span>
   <div class="term-tools">
     <button class="term-tool" type="button" onclick="changeFont(-1)" aria-label="Smaller text" title="Smaller text">A−</button>
@@ -126,13 +141,18 @@ export function popupPage(domain: string | null): string {
   ${domain === null ? `<div class="term-ended" id="root-auth" hidden>
     <form class="card" id="root-auth-form" aria-labelledby="root-auth-title">
       <h2 id="root-auth-title">Verify to open root terminal</h2>
-      <p>Enter the code your authenticator app shows, or use a trusted passkey.</p>
-      <label for="root-auth-code">Authenticator code</label>
-      <input id="root-auth-code" inputmode="numeric" autocomplete="one-time-code" pattern="[0-9]{6}" maxlength="6" required>
+      <p>Enter the 6-digit code from your authenticator app.</p>
+      <div class="root-auth-boxes">
+        <input id="root-auth-code" inputmode="numeric" autocomplete="one-time-code" pattern="[0-9]{6}" required aria-label="Authenticator code">
+        <span aria-hidden="true"></span><span aria-hidden="true"></span><span aria-hidden="true"></span><span aria-hidden="true"></span><span aria-hidden="true"></span><span aria-hidden="true"></span>
+      </div>
       <p id="root-auth-error" role="alert"></p>
-      <div class="actions"><button class="btn btn-primary" type="submit">Continue</button>
-      <button class="btn" id="root-auth-key" type="button" hidden>Use passkey</button>
-      <button class="btn" id="root-auth-cancel" type="button">Cancel</button></div>
+      <button class="btn btn-primary" type="submit">Continue</button>
+      <div id="root-auth-passkey" hidden>
+        <div class="root-auth-or">or</div>
+        <button class="btn" id="root-auth-key" type="button">Use a passkey</button>
+      </div>
+      <button class="root-auth-cancel" id="root-auth-cancel" type="button">Cancel</button>
     </form>
   </div>` : ""}
   <div id="terminal" data-domain="${esc(domain ?? "")}"></div>

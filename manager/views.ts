@@ -5,7 +5,7 @@ import { CLI_VERSION, DEV_VERSION } from "../lib/version";
 import { esc, escJs, htmlResponse } from "../lib/app-http";
 import { JOB_WATCH_JS, renderLayout } from "../lib/app-ui";
 import { mountPath } from "../lib/mount";
-import { lockState } from "../lib/root-locks";
+import { type LockState, lockState } from "../lib/root-locks";
 import { UPDATE_PATH, changelogUrl } from "../lib/update-ui";
 import type { CliUpdateInfo } from "../lib/update-check";
 import type { ManagerJobView } from "./action";
@@ -15,7 +15,7 @@ import MANAGER_INDEX_CSS from "./views.css" with { type: "text" };
 
 import MANAGER_INDEX_JS from "./views.client.js" with { type: "text" };
 
-function addonRow(name: string, enabled: boolean, job: ManagerJobView | null, news: { version: string; since: string; seen: string[] }): string {
+function addonRow(name: string, enabled: boolean, job: ManagerJobView | null, news: { version: string; since: string; seen: string[] }, locks: (addon: string) => LockState): string {
   const spec = ADDONS[name];
   if (!spec) return "";
   const title = spec.title ?? spec.name;
@@ -23,12 +23,16 @@ function addonRow(name: string, enabled: boolean, job: ManagerJobView | null, ne
   const live = liveManagerJob(job);
   const addonJob = live && live.addon === spec.name ? live : null;
   const heading = enabled && href ? `<a href="${esc(href)}">${esc(title)}</a>` : esc(title);
-  const lock = lockState(spec.name);
+  const lock = locks(spec.name);
   // A lock refuses only disabling: enabling a locked addon adds its protection.
+  // Focusable rather than disabled, so a keyboard or a tap can show how to unlock it.
+  const unlock = lock === "damaged"
+    ? "Root's lock file cannot be read or trusted; root runs clp-addons lock on the server."
+    : `Locked by root; root runs clp-addons unlock ${spec.name} on the server to disable it.`;
   const toggle = !enabled
     ? `<button class="btn" type="button" onclick="enableAddon('${escJs(spec.name)}', this)" aria-label="Enable ${esc(title)}">Enable</button>`
     : lock !== "unlocked"
-      ? `<span class="badge" title="${lock === "damaged" ? `The lock file cannot be read or trusted; run clp-addons lock on the server` : `Run clp-addons unlock ${esc(spec.name)} on the server to disable it`}">Locked by root</span>`
+      ? `<button class="btn addon-locked" type="button" aria-disabled="true" title="${esc(unlock)}" data-unlock="${esc(unlock)}" onclick="notify(this.dataset.unlock, 'warn')" aria-label="${esc(title)} is locked by root">Locked</button>`
       : `<button class="btn" type="button" onclick="disableAddon('${escJs(spec.name)}', '${escJs(title)}', this)" aria-label="Disable ${esc(title)}">Disable</button>`;
   const actions = enabled && href
     ? `<a class="btn btn-primary" href="${esc(href)}" aria-label="Open ${esc(title)}">Open</a>
@@ -38,10 +42,10 @@ function addonRow(name: string, enabled: boolean, job: ManagerJobView | null, ne
   const notice = addonNews(spec.name, news.version, news.since, news.seen);
   return `<article class="addon-row" data-manager-job-card="${esc(spec.name)}"${notice ? ` data-news="${esc(notice.keys.join(" "))}"` : ""} data-find="${esc(`${title} ${spec.name} ${spec.description ?? ""}`)}">
   <div class="addon-about">
-    <h3>${heading}${notice?.kind === "new" ? ' <span class="badge state-queued">New</span>'
-      : notice?.kind === "changed" ? ' <span class="badge">Changed</span>' : ""}</h3>
-    ${spec.description ? `<p>${esc(spec.description)}</p>` : ""}${
-  (notice?.notes ?? []).map((note) => `<p class="addon-changed">${esc(note)}</p>`).join("")}
+    <h3>${heading}${notice?.kind === "new" ? ' <span class="badge state-queued addon-news">New</span>'
+      : notice?.kind === "changed" ? ' <span class="badge addon-news">Changed</span>' : ""}</h3>
+    ${spec.description ? `<p>${esc(spec.description)}</p>` : ""}${notice?.notes.length
+      ? `<ul class="addon-changed">${notice.notes.map((note) => `<li>${esc(note)}</li>`).join("")}</ul>` : ""}
   </div>
   <div class="addon-actions">${actions}</div>
   ${addonJob ? managerJobStatus(addonJob) : ""}
@@ -123,11 +127,12 @@ function panelHoldsNotice(holds: PanelHold[]): string {
 export function indexPage(
   enabled: string[],
   update?: { current: string; latest: string } | null,
-  options: ManagerPageOptions & { available?: string[]; version?: string; since?: string; seen?: string[]; holds?: PanelHold[] } = {},
+  options: ManagerPageOptions & { available?: string[]; version?: string; since?: string; seen?: string[]; holds?: PanelHold[]; locks?: (addon: string) => LockState } = {},
 ): Response {
   const available = options.available ?? [];
   const news = { version: options.version ?? CLI_VERSION, since: options.since ?? "0.0.0", seen: options.seen ?? [] };
-  const rows = (names: string[], on: boolean) => names.map((name) => addonRow(name, on, options.job ?? null, news)).join("");
+  const locks = options.locks ?? lockState;
+  const rows = (names: string[], on: boolean) => names.map((name) => addonRow(name, on, options.job ?? null, news, locks)).join("");
   const list = (title: string, names: string[], on: boolean) =>
     `<section class="card addon-list"><h2>${title} <span class="hint">${names.length}</span></h2>${rows(names, on)}</section>`;
 

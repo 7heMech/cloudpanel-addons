@@ -217,7 +217,7 @@ function deployKeySection(site: GitSiteStatus, open: boolean): string {
         <div class="key-block">
           <pre id="git-public-key">${esc(site.publicKey)}</pre>
           <div class="actions">
-            <button class="btn" type="button" onclick="copyGitBlock('git-public-key', 'Deploy key')">Copy key</button>
+            <button class="btn" type="button" onclick="copyText('git-public-key', 'Deploy key')">Copy key</button>
             <button class="btn btn-danger" type="button" onclick="generateGitKey('${esc(site.domain)}', true)">Replace key</button>
           </div>
         </div>`
@@ -267,7 +267,7 @@ function webhookSection(site: GitSiteStatus): string {
       <div class="key-block">
         <pre id="git-webhook-url" data-path="${esc(path)}">${esc(path)}</pre>
         <div class="actions">
-          <button class="btn" type="button" onclick="copyGitBlock('git-webhook-url', 'Webhook URL')">Copy URL</button>
+          <button class="btn" type="button" onclick="copyText('git-webhook-url', 'Webhook URL')">Copy URL</button>
           <button class="btn btn-danger" type="button" onclick="rotateGitWebhook('${esc(site.domain)}')">Rotate URL</button>
         </div>
       </div>
@@ -277,7 +277,7 @@ function webhookSection(site: GitSiteStatus): string {
         <summary>Other providers &amp; CI</summary>
         <p class="hint">Send a POST request to deploy the configured branch from your CI job or another service.</p>
         <pre class="hook-curl mono" id="git-webhook-curl">curl -X POST ${esc(path)}</pre>
-        <button class="btn" type="button" onclick="copyGitBlock('git-webhook-curl', 'Command')">Copy command</button>
+        <button class="btn" type="button" onclick="copyText('git-webhook-curl', 'Command')">Copy command</button>
       </details>
     </details>`;
 }
