@@ -461,7 +461,7 @@ An addon that follows CloudPanel's Firewall page declares `firewall`.
 service runs `clp-addons sync-firewall`, each installed addon's `firewall` in
 catalog order. The units exist, and repair restarts the watcher, on the same
 terms as the certificate one. See
-[System Tweaks](system-tweaks.md#firewall).
+[Firewall](firewall.md#protocols).
 
 ## One way to watch a job
 

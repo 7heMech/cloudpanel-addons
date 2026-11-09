@@ -4,9 +4,9 @@ import { chmodSync, mkdirSync, mkdtempSync, readFileSync, rmSync, statSync, writ
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
-  reconcileNewSites, runCloudflareAction, transformVhost, type CloudflareActionPaths,
-} from "../addons/cloudflare-ips/action";
-import { CLIENT_JS, dashboardView } from "../addons/cloudflare-ips/app/views";
+  reconcileNewSites, runFirewallAction, transformVhost, type CloudflareActionPaths,
+} from "../addons/firewall/action";
+import { CLIENT_JS, dashboardView } from "../addons/firewall/app/views";
 import type { CommandResult } from "../lib/command";
 import { trustedVhost, withNginxTransaction } from "../lib/nginx-transaction";
 
@@ -89,11 +89,13 @@ async function captureActionFailure(action: () => Promise<number>): Promise<{ co
 }
 
 const site = (domain: string, enabled: boolean) => ({ domain, enabled });
+const protocols = { available: true, enabled: true, protocols: {}, udpPorts: [] };
 
 test("dashboard puts the sites first, with the summary in their header and the new-site switch below", () => {
   const html = dashboardView({
     autoEnableNewSites: true,
     sites: [site('"><script>alert(1)</script>.example.test', false), site("a.example.test", true), site("b.example.test", true)],
+    protocols,
   });
   expect(html).not.toContain("Enable all sites");
   expect(html).not.toContain("Disable all sites");
@@ -107,13 +109,13 @@ test("dashboard puts the sites first, with the summary in their header and the n
   expect(html).not.toContain("<script>alert(1)</script>");
   // Under six sites the table fits on a screen and needs no search.
   expect(html).not.toContain('id="fleet-find"');
-  expect(dashboardView({ autoEnableNewSites: true, sites: [] })).toContain("No sites found in CloudPanel.");
+  expect(dashboardView({ autoEnableNewSites: true, sites: [], protocols })).toContain("No sites found in CloudPanel.");
   expect(() => new Function(CLIENT_JS)).not.toThrow();
 });
 
 test("six sites bring a search and an Off only toggle", () => {
   const sites = ["a", "b", "c", "d", "e", "f"].map((name, index) => site(`${name}.example.test`, index % 2 === 0));
-  const html = dashboardView({ autoEnableNewSites: false, sites });
+  const html = dashboardView({ autoEnableNewSites: false, sites, protocols });
   expect(html).toContain('id="fleet-find"');
   expect(html).toContain('<label class="btn cf-off-only" id="fleet-show"><input class="visually-hidden" type="checkbox" value="off" data-group="Status" onchange="pickFleetFilter()">Off only</label><span class="hint" id="fleet-summary"');
   expect(html).not.toContain("fleet-show-menu");
@@ -123,10 +125,23 @@ test("six sites bring a search and an Off only toggle", () => {
 });
 
 test("the switch column ends where the table ends, as the Maintenance table does", () => {
-  const html = dashboardView({ autoEnableNewSites: true, sites: [site("a.example.test", true)] });
+  const html = dashboardView({ autoEnableNewSites: true, sites: [site("a.example.test", true)], protocols });
   expect(html).toContain('<th scope="col" class="action-cell" data-sort="enabled">Cloudflare only</th>');
   expect(html).toContain('<td class="action-cell" data-label="Cloudflare only">');
   expect(html).toContain('<button class="btn mobile-select-all" id="select-all-btn" type="button" onclick="toggleAllSites()">Select all</button>');
+});
+
+test("the Protocols card switches the protocols and names the UDP ports they open", () => {
+  const view = (status: Parameters<typeof dashboardView>[0]["protocols"]) => dashboardView({ autoEnableNewSites: false, sites: [], protocols: status });
+  const open = view({ available: true, enabled: true, protocols: { 5: "udp" }, udpPorts: ["53", "3478-3479"] });
+  expect(open).toContain(`CloudPanel's <a href="/admin/firewall">Firewall</a> page`);
+  expect(open).toContain("UDP ports open: 53, 3478-3479.");
+  expect(open).toMatch(/id="protocols-switch"[^>]* checked/);
+  const off = view({ available: true, enabled: false, protocols: {}, udpPorts: ["53"] });
+  expect(off).not.toMatch(/id="protocols-switch"[^>]* checked/);
+  expect(off).not.toContain("UDP ports open");
+  expect(view({ available: false, enabled: true, protocols: {}, udpPorts: [] })).toContain("ufw is not installed on this server.");
+  expect(view({ error: "no" })).toContain("The protocols could not be read: no");
 });
 
 interface FakeElement {
@@ -398,7 +413,7 @@ test("bulk updates change every selected row and reload Nginx once", async () =>
     addSite(f.db, f.paths, "one.example.test", "one");
     addSite(f.db, f.paths, "two.example.test", "two");
     f.db.close();
-    const code = await runCloudflareAction(["set", "--enabled", "yes"], {
+    const code = await runFirewallAction(["set", "--enabled", "yes"], {
       paths: f.paths,
       input: JSON.stringify({ domains: ["one.example.test", "two.example.test"] }),
       emitReply: false,
@@ -429,7 +444,7 @@ test("failed Nginx validation rolls the database and vhost back", async () => {
     addSite(f.db, f.paths, "rollback.example.test", "rollback");
     f.db.close();
     const original = readFileSync(join(f.paths.nginxVhostDir, "rollback.example.test.conf"), "utf8");
-    const code = await runCloudflareAction(["set", "--enabled", "yes"], {
+    const code = await runFirewallAction(["set", "--enabled", "yes"], {
       paths: f.paths,
       input: JSON.stringify({ domains: ["rollback.example.test"] }),
       emitReply: false,
@@ -496,7 +511,7 @@ test.serial("database rollback failures are reported with the original update er
       BEGIN SELECT RAISE(ROLLBACK, 'forced update rollback'); END;`);
     f.db.close();
 
-    const result = await captureActionFailure(() => runCloudflareAction(["set", "--enabled", "yes"], {
+    const result = await captureActionFailure(() => runFirewallAction(["set", "--enabled", "yes"], {
       paths: f.paths,
       input: JSON.stringify({ domains: ["database-rollback.example.test"] }),
       emitReply: false,
@@ -528,7 +543,7 @@ test.serial("vhost and validation recovery failures are collected while every vh
     const restored = join(f.paths.nginxVhostDir, "restored.example.test.conf");
     const restoredOriginal = readFileSync(restored, "utf8");
 
-    const result = await captureActionFailure(() => runCloudflareAction(["set", "--enabled", "yes"], {
+    const result = await captureActionFailure(() => runFirewallAction(["set", "--enabled", "yes"], {
       paths: f.paths,
       input: JSON.stringify({ domains: ["broken.example.test", "restored.example.test"] }),
       emitReply: false,
@@ -568,7 +583,7 @@ test.serial("a failed rollback reload is reported after the original reload erro
     f.db.close();
     const original = readFileSync(join(f.paths.nginxVhostDir, "reload-rollback.example.test.conf"), "utf8");
 
-    const result = await captureActionFailure(() => runCloudflareAction(["set", "--enabled", "yes"], {
+    const result = await captureActionFailure(() => runFirewallAction(["set", "--enabled", "yes"], {
       paths: f.paths,
       input: JSON.stringify({ domains: ["reload-rollback.example.test"] }),
       emitReply: false,
@@ -597,7 +612,7 @@ test.serial("policy rollback failures are reported with the site update error", 
     addSite(f.db, f.paths, "policy-rollback.example.test", "policy-rollback");
     f.db.close();
 
-    const result = await captureActionFailure(() => runCloudflareAction(["set", "--enabled", "yes"], {
+    const result = await captureActionFailure(() => runFirewallAction(["set", "--enabled", "yes"], {
       paths: f.paths,
       input: JSON.stringify({ domains: ["policy-rollback.example.test"] }),
       emitReply: false,
@@ -623,10 +638,10 @@ test("automatic policy enables new site IDs and keeps hostname exceptions off", 
   try {
     addSite(f.db, f.paths, "exception.example.test", "exception");
     f.db.close();
-    expect(await runCloudflareAction(["policy", "--enabled", "yes"], {
+    expect(await runFirewallAction(["policy", "--enabled", "yes"], {
       paths: f.paths, emitReply: false,
     })).toBe(0);
-    expect(await runCloudflareAction(["set", "--enabled", "no"], {
+    expect(await runFirewallAction(["set", "--enabled", "no"], {
       paths: f.paths,
       input: JSON.stringify({ domains: ["exception.example.test"] }),
       emitReply: false,
@@ -662,7 +677,7 @@ test("a hand-edited vhost is skipped by name while the other new sites are prote
   const f = fixture();
   try {
     f.db.close();
-    expect(await runCloudflareAction(["policy", "--enabled", "yes"], { paths: f.paths, emitReply: false })).toBe(0);
+    expect(await runFirewallAction(["policy", "--enabled", "yes"], { paths: f.paths, emitReply: false })).toBe(0);
 
     const changed = new Database(f.paths.panelDb);
     const editedId = addSite(changed, f.paths, "edited.example.test", "edited");
@@ -697,7 +712,7 @@ test("a pass with no new site leaves the policy file alone", async () => {
   try {
     addSite(f.db, f.paths, "one.example.test", "one");
     f.db.close();
-    expect(await runCloudflareAction(["policy", "--enabled", "yes"], { paths: f.paths, emitReply: false })).toBe(0);
+    expect(await runFirewallAction(["policy", "--enabled", "yes"], { paths: f.paths, emitReply: false })).toBe(0);
     const before = statSync(f.paths.policyFile).mtimeMs;
     await Bun.sleep(20);
     expect(await reconcileNewSites(f.paths, successCommand)).toEqual({ discovered: 0, enabled: 0, failed: [] });

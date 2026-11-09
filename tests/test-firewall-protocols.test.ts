@@ -5,9 +5,9 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
   UNMATCHED_GRACE_MS, firewallStatus, normalizePortRange, normalizeSource, parseUfwRules, planFirewall,
-  readFirewallState, ruleKey, setRuleProtocol, settleState, syncFirewall, ufwPort,
+  readFirewallState, ruleKey, setProtocolsEnabled, setRuleProtocol, settleState, syncFirewall, ufwPort,
   type FirewallOptions, type FirewallState, type PanelRule, type UfwRule,
-} from "../addons/system-tweaks/firewall";
+} from "../addons/firewall/protocols";
 
 const ANYWHERE: PanelRule[] = [
   { id: 1, portRange: "22", source: "0.0.0.0/0" },
@@ -245,7 +245,7 @@ test("the forms, CloudPanel's rebuilds and switching off, end to end", () => {
   expect(b.has({ proto: "tcp", port: "51820", src: "0.0.0.0/0" })).toBe(false);
   expect(readFirewallState(b.paths)).toMatchObject({ protocols: { "51820 0.0.0.0/0": "udp" }, unmatched: {} });
   expect(JSON.parse(readFileSync(b.paths.stateFile, "utf8"))).toMatchObject({ version: 2, protocols: { "51820 0.0.0.0/0": "udp" } });
-  expect(firewallStatus(b.options)).toEqual({ available: true, protocols: { 3: "udp" }, udpPorts: ["51820"] });
+  expect(firewallStatus(b.options)).toEqual({ available: true, enabled: true, protocols: { 3: "udp" }, udpPorts: ["51820"] });
 
   // Another rule's change rebuilds ufw from CloudPanel's table; the UDP rule comes back.
   b.addRule("80", "0.0.0.0/0");
@@ -348,13 +348,41 @@ test("a box without ufw is left alone", () => {
   const b = box();
   const options = { ...b.options, paths: { ...b.paths, userRules: join(b.dir, "none"), user6Rules: join(b.dir, "none6") } };
   expect(syncFirewall("apply", options)).toBeNull();
-  expect(firewallStatus(options)).toEqual({ available: false, protocols: {}, udpPorts: [] });
+  expect(firewallStatus(options)).toEqual({ available: false, enabled: true, protocols: {}, udpPorts: [] });
 });
 
-test("the firewall watcher runs System Tweaks when ufw's rule files change", async () => {
+test("the Protocol switch puts back CloudPanel's TCP, keeps the choices, and stays off through enabling Firewall", () => {
+  const b = box();
+  b.addRule("51820", "0.0.0.0/0");
+  b.rebuild();
+  setRuleProtocol({ portRange: "51820", source: "0.0.0.0/0", protocol: "udp", id: 1 }, b.options);
+  syncFirewall("apply", b.options);
+  expect(b.has({ proto: "udp", port: "51820", src: "0.0.0.0/0" })).toBe(true);
+
+  setProtocolsEnabled(false, b.options);
+  expect(b.has({ proto: "udp", port: "51820", src: "0.0.0.0/0" })).toBe(false);
+  expect(b.has({ proto: "tcp", port: "51820", src: "0.0.0.0/0" })).toBe(true);
+  expect(readFirewallState(b.paths)).toMatchObject({ protocols: { "51820 0.0.0.0/0": "udp" }, off: true, withdrawn: true });
+  expect(firewallStatus(b.options)).toMatchObject({ enabled: false });
+  expect(() => setRuleProtocol({ portRange: "53", source: "0.0.0.0/0", protocol: "udp" }, b.options)).toThrow("switched off");
+
+  // Neither the watcher nor enabling Firewall brings them back while the switch is off.
+  b.rebuild();
+  expect(syncFirewall("apply", b.options)).toBeNull();
+  expect(syncFirewall("restore", b.options)).toBeNull();
+  expect(b.has({ proto: "udp", port: "51820", src: "0.0.0.0/0" })).toBe(false);
+
+  setProtocolsEnabled(true, b.options);
+  expect(b.has({ proto: "udp", port: "51820", src: "0.0.0.0/0" })).toBe(true);
+  expect(b.has({ proto: "tcp", port: "51820", src: "0.0.0.0/0" })).toBe(false);
+  expect(readFirewallState(b.paths).off).toBeUndefined();
+  expect(firewallStatus(b.options)).toMatchObject({ enabled: true, udpPorts: ["51820"] });
+});
+
+test("the firewall watcher runs Firewall when ufw's rule files change", async () => {
   const { ADDONS } = await import("../addons/catalog");
   const { firewallUnits } = await import("../cli/provision");
-  expect(Object.values(ADDONS).filter((spec) => spec.firewall).map((spec) => spec.name)).toEqual(["system-tweaks"]);
+  expect(Object.values(ADDONS).filter((spec) => spec.firewall).map((spec) => spec.name)).toEqual(["firewall"]);
   const units = firewallUnits();
   expect(units.path).toContain("PathChanged=/etc/ufw/user.rules\nPathChanged=/etc/ufw/user6.rules\nUnit=clp-addons-firewall.service");
   expect(units.service).toMatch(/ExecStart=\/\S+ sync-firewall\n/);

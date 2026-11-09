@@ -134,7 +134,7 @@ records, so a proxied record never exists without the rule its first
 certificate needs. The addon never deletes a rule.
 
 Proxied records with the ACME rule are the default because they work with
-Cloudflare IP Access: Let's Encrypt's HTTP-01 request reaches the origin through
+Firewall's Cloudflare-only sites: Let's Encrypt's HTTP-01 request reaches the origin through
 Cloudflare with Full SSL while the origin still has CloudPanel's self-signed
 certificate.
 
@@ -228,7 +228,7 @@ the site, and reports both failures. The record stays marked incomplete until
 the vhost is written, so a later pass writes it rather than taking a static
 site that does not redirect for a working stand-in.
 DNS leaves stand-ins out of its site list through `isStandInSite`, and Stager,
-Maintenance, SMTP Relay and Cloudflare IP Access through `withoutStandIns` in
+Maintenance, SMTP Relay and Firewall through `withoutStandIns` in
 `lib/panel-db.ts`. The panel snapshot the Git, Maintenance, Stager and Terminal
 pages read leaves them out too. Resource Limits and WordPress Tools never list a
 static site, and Panel Tweaks shows "Redirect" as its runtime on the Sites page. Global maintenance mode reaches a

@@ -14,7 +14,6 @@ import { COMMAND_MS } from "./limits";
 import { changeLock, lockFailure, type LockFiles } from "../../lib/lock-addon";
 import { addonLocked, declaresLock, lockRefusal, lockedAddons } from "../../lib/root-locks";
 import { removePoolIsolation, syncPoolIsolation } from "./pool-isolation";
-import { syncFirewall } from "./firewall";
 import {
   LOCK_SETTINGS, REPAIR, RESTORE, STATE, TWEAKS, UPKEEP, WITHDRAW, type SystemTweaksSettings, type SystemTweaksState, type TweakOptions,
 } from "./registry";
@@ -436,11 +435,6 @@ export function restoreSystemTweaks(options: SystemTweaksOptions = {}, wasEnable
       log.warn(tweak.restore.warning(errorMessage(error)));
     }
   }
-}
-
-/** What the firewall watcher runs whenever ufw's rule files change. */
-export function systemTweaksFirewall(options: SystemTweaksOptions = {}): string | null {
-  return syncFirewall("apply", options.firewall);
 }
 
 /**

@@ -1,5 +1,5 @@
-import { CLOUDFLARE_IPS_VERBS } from "../addons/cloudflare-ips/verbs";
 import { DNS_VERBS } from "../addons/dns/verbs";
+import { FIREWALL_VERBS } from "../addons/firewall/verbs";
 import { GIT_VERBS } from "../addons/git/verbs";
 import { INSTATIC_VERBS } from "../addons/instatic/verbs";
 import { MAINTENANCE_VERBS } from "../addons/maintenance/verbs";
@@ -47,8 +47,8 @@ type VerbDeclaration =
 
 /** The `verbs.ts` files import nothing, so neither does the root gateway. */
 export const ADDON_VERBS = {
-  "cloudflare-ips": CLOUDFLARE_IPS_VERBS,
   dns: DNS_VERBS,
+  firewall: FIREWALL_VERBS,
   git: GIT_VERBS,
   instatic: INSTATIC_VERBS,
   maintenance: MAINTENANCE_VERBS,

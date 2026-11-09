@@ -95,5 +95,15 @@ async function setAutomatic(input) {
   notify(state.ok ? done : done + ' The page may be out of date: ' + state.error, state.ok ? 'ok' : 'warn');
 }
 
+async function setProtocols(input) {
+  const enabled = input.checked;
+  const state = await change('/api/protocols', { enabled: enabled }, 'Could not switch the protocols: ');
+  if (!state) return;
+  const done = enabled
+    ? 'Rules on CloudPanel\'s Firewall page have a Protocol again.'
+    : 'Every rule on CloudPanel\'s Firewall page is TCP again. The choices are kept.';
+  notify(state.ok ? done : done + ' The page may be out of date: ' + state.error, state.ok ? 'ok' : 'warn');
+}
+
 if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', paintFleetSelection);
 else paintFleetSelection();

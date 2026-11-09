@@ -1,15 +1,16 @@
-// What System Tweaks adds to CloudPanel's own Firewall pages: a Protocol field
+// What Firewall adds to CloudPanel's own Firewall pages: a Protocol field
 // after Port Range on the add and edit forms, and a Protocol column after Port
 // Range in the rules table. CloudPanel's table has no protocol, so both fill
-// themselves from System Tweaks; see "Firewall" in docs/decisions/system-tweaks.md.
+// themselves from Firewall, and stay hidden while its Protocol switch is off;
+// see "Protocols" in docs/decisions/firewall.md.
 //
 // None is `required`: a CloudPanel release that reshapes these pages should
-// cost the field, not stop System Tweaks from being enabled.
+// cost the field, not stop Firewall from being enabled.
 
 import type { AddonTarget } from "../../../lib/addon-target";
 import { TEMPLATES } from "../../../lib/panel-anchors";
-import SCRIPT from "./firewall.client.js" with { type: "text" };
-import STYLE from "./firewall.css" with { type: "text" };
+import SCRIPT from "./protocols.client.js" with { type: "text" };
+import STYLE from "./protocols.css" with { type: "text" };
 
 const PORT_RANGE_FIELD = `              <div class="col-2 {{ (form_errors(form.portRange) ? 'has-error' : '') }}">
                 {{ form_label(form.portRange, null, {'label_attr': {'class': 'form-label'}}) }}
@@ -20,7 +21,7 @@ const script = (url: string) => `<style>${STYLE}</style>
               <script>${SCRIPT.split("ADDON_URL").join(url)}</script>`;
 
 // No `name`: Symfony refuses a field its form does not declare, so the choice
-// goes to System Tweaks just before the form does.
+// goes to Firewall just before the form does.
 const formField = (url: string) => `
               <div class="col-2 clp-fw-protocol" id="clp-fw-protocol" data-rule="{{ form.vars.value.id|default('') }}" hidden>
                 <label class="form-label" for="clp-fw-protocol-select">Protocol</label>
@@ -32,7 +33,7 @@ const formField = (url: string) => `
               </div>
               ${script(url)}`;
 
-export const SYSTEM_TWEAKS_TARGETS: AddonTarget[] = [
+export const FIREWALL_TARGETS: AddonTarget[] = [
   {
     slug: "firewall-add-protocol",
     template: TEMPLATES.firewallAddRule,
@@ -55,7 +56,7 @@ export const SYSTEM_TWEAKS_TARGETS: AddonTarget[] = [
                   </th>`,
     required: false,
     snippet: () => `
-                  <th class="clp-fw-protocol-heading">
+                  <th class="clp-fw-protocol-heading" hidden>
                     Protocol
                   </th>`,
   },
@@ -67,7 +68,7 @@ export const SYSTEM_TWEAKS_TARGETS: AddonTarget[] = [
                   </td>`,
     required: false,
     snippet: () => `
-                  <td class="clp-fw-protocol-cell" data-clp-fw-rule="{{ rule.id }}"></td>`,
+                  <td class="clp-fw-protocol-cell" data-clp-fw-rule="{{ rule.id }}" hidden></td>`,
   },
   {
     slug: "firewall-protocol-script",

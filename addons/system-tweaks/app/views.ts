@@ -4,7 +4,6 @@ import { mountPath } from "../../../lib/mount";
 import type { LockState } from "../../../lib/root-locks";
 import { HARDENING, type SystemTweaksState } from "../registry";
 import type { CoverageRow, LastRun, UpdateSettings, UpdatesStatus } from "../updates";
-import type { FirewallStatus } from "../firewall";
 import { MAX_BACKUP_LEVEL } from "../backup-compression";
 import { DOMAIN_JAIL, JAIL_LIMITS, PANEL_JAIL, type Ban, type SshLogin } from "../login-jails";
 import { MOTD_TWEAK } from "../motd";
@@ -228,15 +227,6 @@ function hardeningCard(state: SystemTweaksState, lock: LockState): string {
     </div>`;
 }
 
-/** The protocols are set on CloudPanel's own Firewall page; this page only says where. */
-function firewallLine(status: FirewallStatus | { error: string }): string {
-  if ("error" in status || !status.available) return "";
-  const link = `<a href="/admin/firewall">Firewall</a>`;
-  return status.udpPorts.length
-    ? `<br>UDP ports open from CloudPanel's ${link} page: ${esc(status.udpPorts.join(", "))}.`
-    : `<br>Rules on CloudPanel's ${link} page can open UDP ports too.`;
-}
-
 type LoginJails = SystemTweaksState["loginJails"];
 type LoginJailsReady = Exclude<LoginJails, { error: string }>;
 
@@ -353,7 +343,7 @@ export function dashboardView(state: SystemTweaksState, now = Date.now(), lock: 
       <div>
         <h1>System Tweaks</h1>
         <p>Hardening, automatic updates, panel PHP, remote backups and the SSH login message.</p>
-        <p class="hint">Every 15 minutes it also clears PHP and ImageMagick temp files that timed-out requests left in /tmp. PHP worker limits and memory sizing are in <a href="/addons/resource-limits/">Resource Limits</a>.${firewallLine(state.firewall)}</p>
+        <p class="hint">Every 15 minutes it also clears PHP and ImageMagick temp files that timed-out requests left in /tmp. PHP worker limits and memory sizing are in <a href="/addons/resource-limits/">Resource Limits</a>.</p>
       </div>
     </div>
     <div class="card">

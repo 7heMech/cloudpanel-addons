@@ -28,8 +28,8 @@ addons you want. System Tweaks is recommended.
 
 | Addon | Description |
 | --- | --- |
-| Cloudflare IP Access | Allow traffic from Cloudflare only, across all sites and for new ones. |
 | [DNS](docs/dns.md) | Each site's Cloudflare records kept to a profile, with Mailcow set up for its mail, and redirect domains. |
+| [Firewall](docs/firewall.md) | Allow traffic from Cloudflare only, across all sites and for new ones, and UDP rules on CloudPanel's Firewall page. |
 | [Instatic CMS](https://github.com/CoreBunch/Instatic) | Instatic CMS sites on CloudPanel. |
 | Stager | Staging copies of WordPress, PHP, static and Instatic sites, and promotion back to live. Based on [clp-stager](https://github.com/7heMech/clp-stager). |
 | Maintenance Mode | A customizable 503 page per site, with instant toggles and IP bypasses. |
@@ -37,7 +37,7 @@ addons you want. System Tweaks is recommended.
 | [SMTP Relay](docs/smtp-relay.md) | Send each site's mail through SMTP relay profiles, WordPress and PHP included. |
 | Git Deploy | Deploys from a Git remote, from the panel or from a push. |
 | Panel Tweaks | Site search, columns and CSV download, automatic SSL for native sites, mobile layouts, themes and branding. |
-| [System Tweaks](docs/system-tweaks.md) | Security hardening, automatic updates, the panel's PHP version, remote backup compression, PHP temp-file cleanup, UDP firewall rules and a server summary at SSH login. |
+| [System Tweaks](docs/system-tweaks.md) | Security hardening, automatic updates, the panel's PHP version, remote backup compression, PHP temp-file cleanup and a server summary at SSH login. |
 | [WordPress Tools](docs/wordpress-tools.md) | One-click WordPress sign-in, plugins chosen on the new-site form, optional CLP Varnish Cache installation and MainWP Child enrollment. |
 | Terminal | A shell as a site's own user, in its own window, for administrators, and a root shell for the ones root allows. |
 | Security Keys | Sign in with a passkey or a hardware key such as a YubiKey instead of a password and two-factor code, for the roles an administrator allows. Needs the panel on a hostname with a valid certificate. |
@@ -62,7 +62,7 @@ security keys under Account → Security, in the roles an administrator allows.
 | `clp-addons terminal root allow <user>` | Let one administrator with 2FA open a root terminal from the panel; `deny` takes it back, and allowing again clears a verification lockout. |
 | `clp-addons lock <addon>` | Let the panel switch an addon's protections on but never off (new installs lock System Tweaks); `unlock` reverses it. |
 
-Addon names are `cloudflare-ips`, `dns`, `instatic`, `stager`, `maintenance`,
+Addon names are `dns`, `firewall`, `instatic`, `stager`, `maintenance`,
 `resource-limits`, `git`, `panel-tweaks`, `system-tweaks`, `wp-tools`, `smtp`, `terminal`
 and `security-keys`. Run `clp-addons --help` for version selection options.
 

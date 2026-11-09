@@ -605,7 +605,7 @@ async function healthCheck(port: number, domain: string): Promise<boolean> {
   }
 
   // Through Nginx, only an answer from the proxy failing to reach the container
-  // counts against it. A site behind Cloudflare IP Access refuses this server's
+  // counts against it. A site that allows Cloudflare only refuses this server's
   // own address with 403, and maintenance mode answers 503, both before proxying.
   for (let i = 0; i < 15; i++) {
     const result = runCommand("curl", ["-sk", "-o", "/dev/null", "-w", "%{http_code}", "--max-time", "5", "--resolve", `${domain}:443:127.0.0.1`, `https://${domain}/`]);

@@ -1,6 +1,6 @@
 // The Protocol field and column on CloudPanel's Firewall pages. Written for the
 // panel's page, so plain ES5 with its own fetch. CloudPanel's own form posts
-// nothing about a protocol: both forms tell System Tweaks the Port Range, Source
+// nothing about a protocol: both forms tell Firewall the Port Range, Source
 // and protocol they hold, then submit as CloudPanel's own form would.
 (function () {
   var url = "ADDON_URL";
@@ -14,7 +14,7 @@
     if (read()) return Promise.resolve(read());
     // A CloudPanel page sets no cookie of ours; this route hands one out.
     return fetch(url + '/api/session', { credentials: 'same-origin' }).then(function () {
-      if (!read()) throw new Error('System Tweaks did not answer');
+      if (!read()) throw new Error('Firewall did not answer');
       return read();
     });
   }
@@ -31,20 +31,24 @@
       }
       return fetch(url + path, options);
     }).then(function (response) {
-      return response.json().catch(function () { return { ok: false, error: 'System Tweaks answered ' + response.status }; });
+      return response.json().catch(function () { return { ok: false, error: 'Firewall answered ' + response.status }; });
     }).then(function (reply) {
-      if (!reply || reply.ok !== true) throw new Error((reply && reply.error) || 'System Tweaks did not answer');
+      if (!reply || reply.ok !== true) throw new Error((reply && reply.error) || 'Firewall did not answer');
       return reply;
     });
   }
 
+  var heading = document.querySelector('th.clp-fw-protocol-heading');
   var cells = document.querySelectorAll('td[data-clp-fw-rule]');
-  if (cells.length) {
-    call('/api/firewall').then(function (reply) {
+  if (heading) {
+    call('/api/protocols').then(function (reply) {
+      if (!reply.enabled) return;
       var protocols = reply.protocols || {};
       Array.prototype.forEach.call(cells, function (cell) {
         cell.textContent = NAMES[protocols[cell.getAttribute('data-clp-fw-rule')] || 'tcp'];
+        cell.hidden = false;
       });
+      heading.hidden = false;
     }).catch(function () {});
     return;
   }
@@ -68,9 +72,10 @@
     box.textContent = text;
   }
 
-  // Shown once System Tweaks answers, so it never offers TCP for a UDP rule,
-  // and without System Tweaks the form is CloudPanel's own.
-  call('/api/firewall').then(function (reply) {
+  // Shown once Firewall answers with its Protocol switch on, so it never offers
+  // TCP for a UDP rule; otherwise the form is CloudPanel's own.
+  call('/api/protocols').then(function (reply) {
+    if (!reply.enabled) return;
     select.value = (rule && (reply.protocols || {})[String(rule)]) || 'tcp';
     field.hidden = false;
   }).catch(function () {});
@@ -84,7 +89,7 @@
     // Read now: this script runs before CloudPanel's Source field exists.
     var value = function (name) { var input = form.querySelector('input[id$="_' + name + '"]'); return input ? input.value : ''; };
     var body = { portRange: value('portRange'), source: value('source'), protocol: select.value, id: rule };
-    call('/api/firewall/rule', body).then(function () {
+    call('/api/protocols/rule', body).then(function () {
       sent = true;
       if (submitter) submitter.disabled = false;
       if (form.requestSubmit) form.requestSubmit(submitter && submitter.form === form ? submitter : undefined); else form.submit();

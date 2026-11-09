@@ -269,3 +269,56 @@ test("the move waits for a PHP Resources change the earlier version is still run
   expect(migrate(root).warnings).toEqual([]);
   expect(existsSync(join(root, "state", "resource-limits", "policy.json"))).toBe(true);
 });
+
+const UDP = { version: 2, protocols: { "51820 0.0.0.0/0": "udp" }, unmatched: {}, managed: [{ proto: "udp", port: "51820", src: "0.0.0.0/0" }] };
+
+test("Cloudflare IP Access becomes Firewall, and System Tweaks' protocols move into it", () => {
+  const root = fixture();
+  writeFileSync(join(root, "etc", "cloudflare-ips.conf"), "# clp-addons: cloudflare-ips\n");
+  writeFileSync(join(root, "etc", "system-tweaks.conf"), "# clp-addons: system-tweaks\n");
+  save(root, "cloudflare-ips/policy.json", { version: 1, autoEnableNewSites: true, knownSiteIds: [1], excludedDomains: [] });
+  save(root, "system-tweaks/firewall.json", UDP);
+  expect(migrate(root).warnings).toEqual([]);
+  expect(existsSync(join(root, "etc", "cloudflare-ips.conf"))).toBe(false);
+  expect(existsSync(join(root, "etc", "firewall.conf"))).toBe(true);
+  expect(JSON.parse(readFileSync(join(root, "state/firewall/policy.json"), "utf8")).autoEnableNewSites).toBe(true);
+  expect(JSON.parse(readFileSync(join(root, "state/firewall/protocols.json"), "utf8"))).toEqual(UDP);
+  expect(existsSync(join(root, "state/system-tweaks/firewall.json"))).toBe(false);
+  expect(migrate(root).warnings).toEqual([]);
+});
+
+test("UDP rules System Tweaks applies enable Firewall, without a new-site policy saved while it was off", () => {
+  const root = fixture();
+  writeFileSync(join(root, "etc", "system-tweaks.conf"), "# clp-addons: system-tweaks\n");
+  save(root, "cloudflare-ips/policy.json", { version: 1, autoEnableNewSites: true, knownSiteIds: [1], excludedDomains: [] });
+  save(root, "system-tweaks/firewall.json", UDP);
+  expect(migrate(root).warnings).toEqual(["Firewall's Enable on new sites was switched off: it was saved while Cloudflare IP Access was disabled"]);
+  expect(existsSync(join(root, "etc", "firewall.conf"))).toBe(true);
+  expect(JSON.parse(readFileSync(join(root, "state/firewall/policy.json"), "utf8"))).toMatchObject({ autoEnableNewSites: false, knownSiteIds: [1] });
+  expect(JSON.parse(readFileSync(join(root, "state/firewall/protocols.json"), "utf8"))).toEqual(UDP);
+});
+
+test("protocols System Tweaks withdrew, or never chose, move without enabling Firewall", () => {
+  for (const [systemTweaks, saved] of [[false, { ...UDP, managed: [], withdrawn: true }], [true, { version: 2, protocols: {}, unmatched: {}, managed: [] }]] as const) {
+    const root = fixture();
+    if (systemTweaks) writeFileSync(join(root, "etc", "system-tweaks.conf"), "# clp-addons: system-tweaks\n");
+    save(root, "system-tweaks/firewall.json", saved);
+    expect(migrate(root).warnings).toEqual([]);
+    expect(existsSync(join(root, "etc", "firewall.conf"))).toBe(false);
+    expect(JSON.parse(readFileSync(join(root, "state/firewall/protocols.json"), "utf8"))).toEqual(saved);
+  }
+});
+
+test("a failed update hands the protocols back to System Tweaks and the sites back to Cloudflare IP Access", () => {
+  const root = fixture();
+  writeFileSync(join(root, "etc", "cloudflare-ips.conf"), "# clp-addons: cloudflare-ips\n");
+  writeFileSync(join(root, "etc", "system-tweaks.conf"), "# clp-addons: system-tweaks\n");
+  save(root, "cloudflare-ips/policy.json", { version: 1, autoEnableNewSites: false, knownSiteIds: [], excludedDomains: [] });
+  save(root, "system-tweaks/firewall.json", UDP);
+  migrate(root, true);
+  expect(existsSync(join(root, "etc", "cloudflare-ips.conf"))).toBe(true);
+  expect(existsSync(join(root, "etc", "firewall.conf"))).toBe(false);
+  expect(JSON.parse(readFileSync(join(root, "state/system-tweaks/firewall.json"), "utf8"))).toEqual(UDP);
+  expect(existsSync(join(root, "state/cloudflare-ips/policy.json"))).toBe(true);
+  expect(existsSync(join(root, "state/firewall"))).toBe(false);
+});

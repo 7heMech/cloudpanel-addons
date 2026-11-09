@@ -356,8 +356,8 @@ describe("Gateway Protocol & Server", () => {
     }
   });
 
-  test("the Cloudflare dashboard cannot invoke the timer-only reconcile verb", () => {
-    expect(webVerb("cloudflare-ips", "reconcile")).toBeNull();
+  test("the Firewall page cannot invoke the timer-only reconcile verb", () => {
+    expect(webVerb("firewall", "reconcile")).toBeNull();
   });
 });
 

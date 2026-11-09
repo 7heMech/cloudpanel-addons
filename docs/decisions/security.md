@@ -156,7 +156,7 @@ addon, when the job is asked for and again when it starts, so one queued before
 a lock does not run; it lets a locked addon be enabled, since enabling only
 adds protection. System
 Tweaks declares its Hardening and Failed logins switches and the panel's PHP;
-updates, backups, unblocking, the firewall and the SSH login message stay with
+updates, backups, unblocking and the SSH login message stay with
 administrators.
 
 So a panel lock can only freeze protections on. While locked, the panel can

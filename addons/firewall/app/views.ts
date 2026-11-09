@@ -4,9 +4,9 @@ import {
   FLEET_FOOTER_HTML, FLEET_SELECTION_HTML, FLEET_ROW_SELECTION_JS, fleetFilterHtml, renderLayout,
 } from "../../../lib/app-ui";
 import { mountPath } from "../../../lib/mount";
-import type { CloudflareState } from "./service";
+import type { FirewallPageState } from "./service";
 
-const BASE = mountPath("cloudflare-ips");
+const BASE = mountPath("firewall");
 const plural = (count: number, word: string): string => `${count} ${word}${count === 1 ? "" : "s"}`;
 
 import STYLE from "./views.css" with { type: "text" };
@@ -28,7 +28,26 @@ export function layout(title: string, content: string, updateNotice?: { current:
   });
 }
 
-export function dashboardView(state: CloudflareState): string {
+/** The Protocol switch, and the UDP ports its choices open. */
+function protocolsCard(status: FirewallPageState["protocols"]): string {
+  const link = `<a href="/admin/firewall">Firewall</a>`;
+  const detail = "error" in status
+    ? `<p class="hint">The protocols could not be read: ${esc(status.error)}</p>`
+    : !status.available
+      ? '<p class="hint">ufw is not installed on this server.</p>'
+      : status.enabled && status.udpPorts.length
+        ? `<p class="hint">UDP ports open: ${esc(status.udpPorts.join(", "))}.</p>`
+        : "";
+  const on = !("error" in status) && status.enabled;
+  return `
+    <div class="card split-card cf-policy">
+      <div><h2>Protocols</h2>
+        <p class="hint">Each rule on CloudPanel's ${link} page gets a Protocol: TCP, UDP or both. Off, every rule is TCP again; the choices are kept.</p>${detail}</div>
+      <label class="switch"><input id="protocols-switch" type="checkbox" aria-label="Protocols on CloudPanel's Firewall page" ${on ? "checked" : ""} ${"error" in status ? "disabled" : ""} onchange="setProtocols(this)"><span></span></label>
+    </div>`;
+}
+
+export function dashboardView(state: FirewallPageState): string {
   const enabled = state.sites.filter((site) => site.enabled).length;
   const total = state.sites.length;
   const summary = `${enabled} of ${plural(total, "site")} allow Cloudflare only`;
@@ -43,7 +62,7 @@ export function dashboardView(state: CloudflareState): string {
 
   return `
     <div class="page-heading">
-      <div><h1>Cloudflare IP Access</h1><p>Control CloudPanel's “Allow traffic from Cloudflare only” setting for every site.</p></div>
+      <div><h1>Firewall</h1><p>CloudPanel's “Allow traffic from Cloudflare only” setting for every site, and a protocol for each rule on its Firewall page.</p></div>
     </div>
     <div class="card card-table">
       ${total === 0
@@ -70,5 +89,5 @@ export function dashboardView(state: CloudflareState): string {
       <div><h2>Enable on new sites</h2>
         <p class="hint">A site created from now on allows Cloudflare only, seconds after CloudPanel creates it. A site you turn off here is never turned back on.</p></div>
       <label class="switch"><input id="automatic-policy" type="checkbox" aria-label="Enable Cloudflare-only access on new sites" ${state.autoEnableNewSites ? "checked" : ""} onchange="setAutomatic(this)"><span></span></label>
-    </div>`;
+    </div>${protocolsCard(state.protocols)}`;
 }
