@@ -6,6 +6,11 @@ PHP worker limits and the server memory budget are in [Resource Limits](resource
 
 ## Locking the protections
 
+Hardening blocks vulnerabilities in CloudPanel that let a panel administrator
+run commands as root. Locking keeps those mitigations on, so an administrator
+account, or someone who takes one over, cannot switch one off and use what it
+blocked to escalate to root.
+
 A locked System Tweaks lets the panel switch the Hardening and Failed logins
 protections on, but never off, and move the panel's PHP only to a newer
 version, even from an administrator's account. A new install starts locked.
