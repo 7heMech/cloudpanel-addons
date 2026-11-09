@@ -529,6 +529,23 @@ test("a handoff that leaves the manager down rolls back too", async () => {
   expect(calls).toContain(`rename:${CLI_BIN}.rollback->${CLI_BIN}`);
 });
 
+test("a handoff whose installed files do not match asks GitHub again and reinstalls", async () => {
+  artifactsAvailable = false;
+
+  await cmdUpdate(["--version=v1.2.3", "--no-self-update", "--updated-from=1.1.0"]);
+
+  expect(calls).toContain("resolveRelease");
+  expect(calls.some((call) => call.startsWith("fetchVerified"))).toBe(true);
+});
+
+test("a handoff from a parent that names no earlier version still asks GitHub", async () => {
+  artifactsAvailable = true;
+
+  await cmdUpdate(["--version=v1.2.3", "--no-self-update"]);
+
+  expect(calls).toContain("resolveRelease");
+});
+
 test("a downgrade below 2.1 waits until Resource Limits is disabled", async () => {
   const { downgradeRefusal } = await import("../cli/update");
   expect(downgradeRefusal("2.1.0", "2.0.0", ["resource-limits"])).toContain("run clp-addons disable resource-limits first");
