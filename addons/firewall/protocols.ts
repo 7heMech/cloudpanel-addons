@@ -12,6 +12,7 @@ import { withFileLockSync } from "../../lib/file-lock";
 import { withPanelDb } from "../../lib/panel-db";
 import { writeFileAtomic } from "../../lib/atomic-write";
 import { isTrustedFile } from "../../lib/trusted-file";
+import { errorMessage } from "../../lib/errors";
 
 export type FirewallProtocol = "tcp" | "udp" | "both";
 export const FIREWALL_PROTOCOLS: readonly FirewallProtocol[] = ["tcp", "udp", "both"];
@@ -452,5 +453,9 @@ export function setProtocolsEnabled(enabled: boolean, options: FirewallOptions =
     else state.off = true;
     writeFirewallState(paths, state);
   });
-  syncFirewall(enabled ? "restore" : "withdraw", options);
+  try {
+    syncFirewall(enabled ? "restore" : "withdraw", options);
+  } catch (error) {
+    throw new Error(`the switch is saved, and ufw follows at the next repair: ${errorMessage(error)}`);
+  }
 }

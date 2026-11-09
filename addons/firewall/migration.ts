@@ -26,6 +26,8 @@ function restore(file: SavedFile): void {
  * Firewall is enabled where System Tweaks was applying a protocol, so those
  * rules keep their UDP. Enabling it then must not start Cloudflare-only on new
  * sites from a policy left behind while Cloudflare IP Access was disabled.
+ * Choices System Tweaks had withdrawn arrive with the Protocol switch off, so
+ * enabling Firewall does not bring them back.
  */
 export function migrateFirewallProtocols(enable: () => void): (() => void) | null {
   let source: SavedFile | null;
@@ -36,17 +38,14 @@ export function migrateFirewallProtocols(enable: () => void): (() => void) | nul
     return null;
   }
   if (!source) return null;
-  const target = DEFAULT_FIREWALL_PATHS.stateFile;
-  if (existsSync(target)) {
-    log.warn(`System Tweaks' firewall protocols were not moved: ${target} exists. Keep the current one, remove ${source.path}, then run 'clp-addons repair'`);
-    return null;
-  }
   let stored: Record<string, unknown> | null = null;
   try { stored = JSON.parse(source.text) as Record<string, unknown>; } catch { stored = null; }
+  if (stored === null || typeof stored !== "object" || Array.isArray(stored)) stored = null;
   const held = (value: unknown) => value !== null && typeof value === "object" && Object.keys(value).length > 0;
-  const applied = existsSync(addonConfigFile("system-tweaks")) && stored?.withdrawn !== true
-    && (held(stored?.protocols) || held(stored?.managed));
+  const chosen = stored?.version === 2 && (held(stored.protocols) || held(stored.managed));
+  const applied = chosen && existsSync(addonConfigFile("system-tweaks")) && stored?.withdrawn !== true;
 
+  const target = DEFAULT_FIREWALL_PATHS.stateFile;
   const targetDir = addonStateDir("firewall");
   const directoryExisted = existsSync(targetDir);
   const configPath = addonConfigFile("firewall");
@@ -60,11 +59,21 @@ export function migrateFirewallProtocols(enable: () => void): (() => void) | nul
     if (!directoryExisted && existsSync(targetDir)) rmdirSync(targetDir);
   };
   try {
-    keep(target);
-    restore({ ...source, path: target });
+    const existing = snapshot(target);
+    if (existing) {
+      if (existing.text !== source.text) {
+        log.warn(`System Tweaks' firewall protocols were dropped, not moved: Firewall keeps its own in ${target}`);
+      }
+    } else if (stored === null) {
+      log.warn(`System Tweaks' firewall protocols file did not parse and was removed; System Tweaks was ignoring it`);
+    } else if (chosen) {
+      keep(target);
+      const text = applied ? source.text : `${JSON.stringify({ ...stored, withdrawn: true, off: true }, null, 2)}\n`;
+      restore({ ...source, path: target, text });
+    }
     keep(source.path);
     rmSync(source.path);
-    if (applied && !existsSync(configPath)) {
+    if (!existing && applied && !existsSync(configPath)) {
       const policy = snapshot(policyPath);
       const parsed = policy ? JSON.parse(policy.text) as Record<string, unknown> : null;
       if (parsed?.autoEnableNewSites === true) {

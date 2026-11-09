@@ -114,19 +114,19 @@ function readPolicy(path: string, expectedUid: number): Policy {
   try {
     const stat = lstatSync(path);
     if (!stat.isFile() || stat.isSymbolicLink() || stat.uid !== expectedUid || (stat.mode & 0o022) !== 0) {
-      failAction("Cloudflare IP policy file is not a trusted regular file");
+      failAction("the Cloudflare-only policy file is not a trusted regular file");
     }
     raw = JSON.parse(readFileSync(path, "utf8"));
   } catch (error) {
-    failAction(`Cloudflare IP policy could not be read: ${errorMessage(error)}`);
+    failAction(`the Cloudflare-only policy could not be read: ${errorMessage(error)}`);
   }
-  if (typeof raw !== "object" || raw === null) failAction("Cloudflare IP policy is malformed");
+  if (typeof raw !== "object" || raw === null) failAction("the Cloudflare-only policy is malformed");
   const policy = raw as Partial<Policy>;
   if (
     policy.version !== POLICY_VERSION || typeof policy.autoEnableNewSites !== "boolean" ||
     !Array.isArray(policy.knownSiteIds) || !policy.knownSiteIds.every(Number.isInteger) ||
     !Array.isArray(policy.excludedDomains) || !policy.excludedDomains.every((item) => typeof item === "string")
-  ) failAction("Cloudflare IP policy is malformed");
+  ) failAction("the Cloudflare-only policy is malformed");
   return stablePolicy(policy as Policy);
 }
 
@@ -136,7 +136,7 @@ function writePolicy(path: string, policy: Policy, expectedUid: number): void {
   if (existsSync(path)) {
     const stat = lstatSync(path);
     if (!stat.isFile() || stat.isSymbolicLink() || stat.uid !== expectedUid || (stat.mode & 0o022) !== 0) {
-      failAction("Cloudflare IP policy file is not a trusted regular file");
+      failAction("the Cloudflare-only policy file is not a trusted regular file");
     }
     uid = stat.uid;
     gid = stat.gid;
@@ -277,7 +277,7 @@ function listState(paths: CloudflareActionPaths, protocols?: FirewallOptions): {
 async function withPolicyLock<T>(paths: CloudflareActionPaths, body: () => Promise<T>): Promise<T> {
   mkdirSync(dirname(paths.lockFile), { recursive: true });
   chmodSync(dirname(paths.lockFile), 0o700);
-  return withFileLock(paths.lockFile, 30, "another Cloudflare IP operation is running", body);
+  return withFileLock(paths.lockFile, 30, "another Cloudflare-only change is running", body);
 }
 
 async function setPolicy(paths: CloudflareActionPaths, enabled: boolean): Promise<Policy> {

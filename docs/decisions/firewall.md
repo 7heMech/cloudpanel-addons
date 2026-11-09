@@ -143,10 +143,8 @@ on clears both and applies them. The switch is on by default: it only offers
 the field, and every rule stays TCP until someone picks UDP.
 
 CloudPanel v3: CloudPanel's own migration carries the rules, and keying by
-port range and source is what lets the choices follow them. Nothing for v3 is
-built yet. If v3 has a protocol of its own, the plan is to write each stored
-choice onto the v3 rule with the same port range and source, then retire this
-file and the page patch. Without the addon, a UDP rule comes back as TCP.
+port range and source is what lets the choices follow them. Without the addon,
+a UDP rule comes back as TCP.
 
 ## Taking over from earlier releases
 
@@ -159,4 +157,8 @@ holding the earlier version's locks. Where System Tweaks is enabled and was
 applying a protocol, Firewall is enabled too, so a UDP rule does not fall back
 to TCP; enabling it that way switches off an "Enable on new sites" saved while
 Cloudflare IP Access was disabled, which would otherwise protect every site
-created since. A failed update moves both back.
+created since. Choices System Tweaks had withdrawn arrive with the Protocol
+switch off, so neither an enabled Firewall nor enabling it brings them back. A
+file with no choices, or one that does not parse, is removed rather than moved;
+one beside an existing `protocols.json` is dropped with a warning, so the move
+is not retried on every repair. A failed update moves both back.

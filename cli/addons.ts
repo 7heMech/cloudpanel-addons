@@ -116,7 +116,8 @@ function migrateAddonState(quiet: boolean): AddonRename[] {
 
 export function revertAddonRenames(renames: AddonRename[]): void {
   withFileLockSync(`${LOCK_DIR}/resource-limits-settings.lock`, 15, "a resource limits change is still running", () =>
-    withFileLockSync(`${LOCK_DIR}/system-tweaks.lock`, 15, "a system tweaks change is still running", () => restoreAddonState(renames)));
+    withFileLockSync(`${LOCK_DIR}/system-tweaks.lock`, 15, "a system tweaks change is still running", () =>
+      withLegacyLocks(LEGACY_LOCKS, () => restoreAddonState(renames))));
 }
 
 function restoreAddonState(renames: AddonRename[]): void {
