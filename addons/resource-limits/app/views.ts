@@ -251,8 +251,10 @@ export function dashboardView(state: ResourceLimitsState): string {
     ? `<div class="card-header toolbar">
         <h2>PHP sites</h2>
         ${FLEET_SELECTION_HTML}
-        <select class="toolbar-end" id="bulk-category" data-keep aria-label="Category to put the selected sites in">${bulkOptions(state.categories)}</select>
-        <button class="btn" id="assign-selected" type="button" disabled data-needs-selection onclick="assignSelected()">Assign selected</button>
+        <div class="toolbar-end actions bulk-assign">
+          <select id="bulk-category" data-keep aria-label="Category to put the selected sites in">${bulkOptions(state.categories)}</select>
+          <button class="btn" id="assign-selected" type="button" disabled data-needs-selection onclick="assignSelected()">Assign selected</button>
+        </div>
       </div>
       ${fleetFilterHtml({ count: total, filters: [
         { value: "drifted", label: "Drifted" },

@@ -347,6 +347,9 @@ pre { background: var(--bg); border: 1px solid var(--border); border-radius: 4px
 .switch-row { display: flex; align-items: center; justify-content: space-between; gap: 20px; }
 .toolbar { display: flex; align-items: center; flex-wrap: wrap; gap: 12px; }
 .toolbar .toolbar-end { margin-left: auto; }
+/* A bulk choice, such as a profile, and the button that applies it. */
+.bulk-assign { gap: 12px; flex-wrap: nowrap; }
+.bulk-assign > select { width: auto; min-width: 200px; max-width: 100%; }
 .toolbar-note { color: var(--muted); font-size: 14px; font-weight: 400; }
 .mobile-select-all { display: none; }
 .fleet-selection { display: flex; align-items: center; gap: 12px; }
@@ -530,7 +533,13 @@ pre { background: var(--bg); border: 1px solid var(--border); border-radius: 4px
   #site-selection::after { content: attr(data-short); content: attr(data-short) / ""; font-size: 14px; }
   .card-header.toolbar > .fleet-selection ~ * { flex: 1 1 100%; margin-left: 0; }
   .card-header.toolbar > .fleet-selection ~ .actions > .btn { flex: 1 1 0; }
-  .mobile-select-all { display: inline-flex; padding: 6px 14px; font-size: 13px; white-space: nowrap; }
+  .card-header.toolbar > .fleet-selection ~ .bulk-assign { min-width: 0; }
+  .card-header.toolbar > .fleet-selection ~ .bulk-assign > select { flex: 1 1 0; min-width: 0; text-overflow: ellipsis;
+    padding-left: 12px; padding-right: 34px; background-position: right 10px center; }
+  .card-header.toolbar > .fleet-selection ~ .bulk-assign > .btn { flex: none; padding-left: 14px; padding-right: 14px; }
+  /* Sized to Deselect all, so the label it turns into moves nothing. */
+  .mobile-select-all { display: inline-flex; flex-direction: column; gap: 0; padding: 6px 14px; font-size: 13px; white-space: nowrap; }
+  .mobile-select-all::after { content: "Deselect all"; height: 0; overflow: hidden; visibility: hidden; }
   .fleet-table tr { display: flex; flex-wrap: wrap; align-items: flex-start; gap: 14px 12px;
     padding: 16px 20px; border-top: 1px solid var(--row-border); }
   .fleet-table td { border: 0; padding: 0; max-width: none; text-align: left; white-space: normal; }

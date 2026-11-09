@@ -28,7 +28,7 @@ function addonRow(name: string, enabled: boolean, job: ManagerJobView | null, ne
   // Focusable rather than disabled, so a keyboard or a tap can show how to unlock it.
   const unlock = lock === "damaged"
     ? "Root's lock file cannot be read or trusted; root runs clp-addons lock on the server."
-    : `Locked by root; root runs clp-addons unlock ${spec.name} on the server to disable it.`;
+    : `Root runs clp-addons unlock ${spec.name} on the server to unlock.`;
   const toggle = !enabled
     ? `<button class="btn" type="button" onclick="enableAddon('${escJs(spec.name)}', this)" aria-label="Enable ${esc(title)}">Enable</button>`
     : lock !== "unlocked"
