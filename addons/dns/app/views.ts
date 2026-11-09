@@ -325,9 +325,11 @@ export function dashboardContent(state: DnsState, now = Date.now()): string {
     ${plain.length ? `<div class="card-header toolbar">
         <h2>Sites</h2>
         ${FLEET_SELECTION_HTML}
-        <select class="toolbar-end" id="bulk-profile" aria-label="Profile for the selected sites"><option value="" selected disabled>Choose a profile</option>${state.profiles
-          .map((profile) => `<option value="${esc(profile.id)}">${esc(profile.name)}</option>`).join("")}<option value="-">${NO_PROFILE}</option></select>
-        <button class="btn" id="assign-selected" type="button" disabled data-needs-selection onclick="dnsAssignSelected()">Assign selected</button>
+        <div class="toolbar-end actions bulk-assign">
+          <select id="bulk-profile" aria-label="Profile for the selected sites"><option value="" selected disabled>Choose a profile</option>${state.profiles
+            .map((profile) => `<option value="${esc(profile.id)}">${esc(profile.name)}</option>`).join("")}<option value="-">${NO_PROFILE}</option></select>
+          <button class="btn" id="assign-selected" type="button" disabled data-needs-selection onclick="dnsAssignSelected()">Assign selected</button>
+        </div>
       </div>
       ${fleetFilterHtml({
         count: plain.length,

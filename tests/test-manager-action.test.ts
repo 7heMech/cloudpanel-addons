@@ -461,7 +461,7 @@ describe("the manager index", () => {
   test("shows a Locked button that tells how to unlock in place of Disable on an addon root has locked", async () => {
     const html = await render(["system-tweaks"], null, { locks: () => "locked" });
     expect(html).toMatch(/<button class="btn addon-locked" type="button" aria-disabled="true" [^>]*>Locked<\/button>/);
-    expect(html).toContain('data-unlock="Locked by root; root runs clp-addons unlock system-tweaks on the server to disable it."');
+    expect(html).toContain('data-unlock="Root runs clp-addons unlock system-tweaks on the server to unlock."');
     expect(html).not.toContain("disableAddon('system-tweaks'");
   });
 
