@@ -548,7 +548,10 @@ drawn in the top layer over any dialog or menu. It starts top right on a desktop
 and at the bottom on a phone, at the other end when the pointer or the last tap
 is in that corner -- where the switch that was just clicked usually is -- and
 hovering it holds the messages until the pointer leaves. An error stays until it
-is dismissed, as does a message whose caller says it stays. A badge names a state rather than being read for itself, so it is set a
+is dismissed, as does a message whose caller says it stays. A screen reader
+hears each message from two live regions that stay in the page, a status and an
+alert for errors, since one inserted already filled or inside the closed
+popover is often not read. A badge names a state rather than being read for itself, so it is set a
 size below body text, as a tinted chip in one of five tones -- ok, info, warn,
 bad, muted -- and every addon names its states through them (`tone-*`, with the
 job states mapped onto the same five), so one colour means one thing on every

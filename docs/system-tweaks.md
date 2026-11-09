@@ -335,9 +335,10 @@ Both need fail2ban. If it is missing, choose **Install fail2ban**, which install
 disabling System Tweaks, puts fail2ban back as it was: stopped if it was not
 running before, and still running with your own jails if it was.
 
-Never blocked: loopback, this server's own addresses, private networks and
-Cloudflare. Behind Cloudflare the server sees only Cloudflare's addresses, so
-the panel jail blocks nothing; use Cloudflare's rate limiting there. Add your
+Never blocked: loopback and this server's own addresses; the panel jails also
+never block private networks or Cloudflare; the SSH jail can. Behind
+Cloudflare the server sees only Cloudflare's addresses, so the panel jail blocks
+nothing; use Cloudflare's rate limiting there. Add your
 own addresses to `ignoreip` under `[DEFAULT]` in `/etc/fail2ban/jail.local`,
 keeping `127.0.0.1/8 ::1`, then run `fail2ban-client reload`.
 

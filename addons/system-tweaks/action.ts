@@ -1,6 +1,7 @@
-import { LOCK_DIR, addonStateDir, ROOT_UID } from "../../lib/paths";
+import { LOCK_DIR, addonConfigFile, addonStateDir, ROOT_UID } from "../../lib/paths";
 import { SYSTEM_TWEAKS_VERBS } from "./verbs";
-import { existsSync, lstatSync, readFileSync } from "node:fs";
+import { existsSync, lstatSync, readFileSync, rmSync, statSync } from "node:fs";
+import { dirname, join } from "node:path";
 import { replyToAction, failAction, readJsonRequest } from "../../lib/action";
 import { errorMessage } from "../../lib/errors";
 import { withFileLock, withFileLockSync } from "../../lib/file-lock";
@@ -29,12 +30,15 @@ const MAX_INPUT_BYTES = 4 * 1024;
 export interface SystemTweaksPaths {
   settingsFile: string;
   lockFile: string;
+  /** The addon's enabled record, which every enable writes afresh. */
+  configFile?: string;
   rootUid: number;
 }
 
 const DEFAULT_SYSTEM_TWEAKS_PATHS: SystemTweaksPaths = {
   settingsFile: `${addonStateDir("system-tweaks")}/settings.json`,
   lockFile: `${LOCK_DIR}/system-tweaks.lock`,
+  configFile: addonConfigFile("system-tweaks"),
   rootUid: ROOT_UID,
 };
 
@@ -149,19 +153,48 @@ async function stateOf(options: SystemTweaksOptions): Promise<SystemTweaksState>
 
 const SETTINGS_BUSY = "another system tweaks change is still running";
 
-function settingsLock<T>(paths: SystemTweaksPaths, body: () => Promise<T>): Promise<T> {
-  return withFileLock(paths.lockFile, 15, SETTINGS_BUSY, body);
+/**
+ * Written while withdrawing still holds the settings lock, and removed when
+ * the addon is turned on again. The config goes only after that lock is let
+ * go, so a web change that waited on it would otherwise run on an addon that
+ * nothing maintains or withdraws any more.
+ */
+function withdrawnMark(paths: SystemTweaksPaths): string {
+  return join(dirname(paths.settingsFile), "withdrawn");
+}
+
+/** `web`: a change from the panel, refused once the addon is withdrawn; repair still runs, to put back a disable that failed. */
+function settingsLock<T>(paths: SystemTweaksPaths, body: () => Promise<T>, web = false): Promise<T> {
+  return withFileLock(paths.lockFile, 15, SETTINGS_BUSY, async () => {
+    if (web && withdrawn(paths)) failAction("System Tweaks is disabled");
+    return body();
+  });
+}
+
+/**
+ * The mark, unless an enable wrote the config after it: one whose activation
+ * then failed leaves the addon enabled, and its page must still work.
+ */
+function withdrawn(paths: SystemTweaksPaths): boolean {
+  const mark = mtime(withdrawnMark(paths));
+  if (mark === null) return false;
+  const config = mtime(paths.configFile ?? addonConfigFile("system-tweaks"));
+  return config === null || config <= mark;
+}
+
+function mtime(path: string): number | null {
+  try { return statSync(path).mtimeMs; } catch { return null; }
 }
 
 /** Runs `body` under the settings lock, with the settings read once it is taken; `hold` asks root's lock before that. */
 function locked<T>(
-  options: SystemTweaksOptions, body: (ctx: Context) => T | Promise<T>, hold?: { verb: SystemTweaksVerb; values: unknown[] },
+  options: SystemTweaksOptions, body: (ctx: Context) => T | Promise<T>, hold?: { verb: SystemTweaksVerb; values: unknown[] }, web = false,
 ): Promise<T> {
   const paths = pathsFor(options);
   return settingsLock(paths, async () => {
     if (hold) holdToLock(options, hold.verb, hold.values);
     return body(contextFor(options, paths, "now"));
-  });
+  }, web);
 }
 
 function lockedSync<T>(options: SystemTweaksOptions, body: (ctx: Context) => T): T {
@@ -173,9 +206,9 @@ function verbContext(options: SystemTweaksOptions): VerbContext<SystemTweaksSett
   return {
     options,
     body: () => readJsonRequest(options.input, MAX_INPUT_BYTES),
-    locked: (body, hold) => locked(options, body, hold),
+    locked: (body, hold) => locked(options, body, hold, true),
     lockRefusal: () => lockedByRoot(options) ? lockRefusal("system-tweaks") : null,
-    exclusive: (body) => settingsLock(pathsFor(options), body),
+    exclusive: (body) => settingsLock(pathsFor(options), body, true),
     state: (patch) => stateOf({ ...options, ...patch }),
   };
 }
@@ -215,7 +248,7 @@ async function lockSettings(ctx: VerbContext<SystemTweaksSettings, TweakOptions>
     if (!failed.length) await turnOn(LOCK_SETTINGS.last);
     if (failed.length) failAction(`nothing was locked, because not every setting could be switched on: ${failed.join("; ")}`);
     try { changeLock("system-tweaks", true, files); } catch (error) { failAction(lockFailure(error, files?.file)); }
-  });
+  }, true);
   return ctx.state();
 }
 
@@ -358,6 +391,7 @@ export function withdrawSystemTweaks(options: SystemTweaksOptions = {}): void {
     lockedSync(options, (ctx) => {
       try {
         withdrawInOrder(WITHDRAW.locked, ctx);
+        writeFileAtomic(withdrawnMark(pathsFor(options)), "", { mode: 0o600, createParent: true });
       } catch (error) {
         queueRepair(options);
         throw error;
@@ -376,6 +410,7 @@ export function restoreSystemTweaks(options: SystemTweaksOptions = {}, wasEnable
   const outside = contextFor(options, pathsFor(options), "lazily");
   try {
     lockedSync(options, (stored) => {
+      rmSync(withdrawnMark(pathsFor(options)), { force: true });
       // Turned on under root's lock, it starts from its defaults and nothing it had switched off.
       // Already on, as when the installer runs again, the switches stay as root locked them.
       const settings = !wasEnabled && lockedByRoot(options) ? raisedToDefaults(stored.settings) : stored.settings;
