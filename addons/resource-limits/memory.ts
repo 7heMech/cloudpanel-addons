@@ -14,7 +14,7 @@ import { failAction } from "../../lib/action";
 import { runCommand, type CommandResult } from "../../lib/command";
 import { withFileLockSync } from "../../lib/file-lock";
 import { writeFileAtomic } from "../../lib/atomic-write";
-import { COMMAND_MS } from "./limits";
+import { COMMAND_MS, MYSQL_RESTART_MS } from "./limits";
 
 export const MEMORY_PROFILES = ["balanced", "database", "cache"] as const;
 export type MemoryProfile = typeof MEMORY_PROFILES[number];
@@ -563,6 +563,23 @@ export function syncMemory(kind: "mysql" | "redis", settings: MemorySettings, op
 }
 
 // --- Status ------------------------------------------------------------------
+
+/**
+ * Restarts a running MySQL onto its option file, when an administrator asks
+ * from the page; nothing restarts it on its own. A stopped one is left
+ * stopped: it reads the file when it starts.
+ */
+export function restartMysql(options: MemoryOptions = {}): void {
+  const ctx = contextOf(options);
+  const before = unit(ctx, ctx.paths.mysqlUnit);
+  if (!before.loaded) failAction("MySQL is not installed here");
+  if (!before.active) failAction("MySQL is not running; it uses these sizes when it starts");
+  const restarted = (options.run ?? runCommand)("systemctl", ["restart", before.id], MYSQL_RESTART_MS);
+  const after = unit(ctx, ctx.paths.mysqlUnit);
+  if (!restarted.ok || !after.active) {
+    failAction(`MySQL did not come back after the restart${restarted.ok ? "" : `: ${commandError(restarted)}`}; see journalctl -u ${before.id}`);
+  }
+}
 
 export interface MemoryStatus {
   plan: MemoryPlan;

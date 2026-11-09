@@ -1697,6 +1697,7 @@ function phpPreviewMutation(path: string, source: URL, body: Record<string, any>
   if (path.startsWith("/addons/resource-limits/api/")) {
     const state = phpChanges ?? structuredClone(resourceLimitsPreviewState(source));
     if (path.endsWith("/memory") && !("error" in state.memory)) state.memory = memoryPreviewState(source, { ...state.memory.settings, ...body });
+    else if (path.endsWith("/mysql-restart") && !("error" in state.memory)) state.memory.mysql.pending = false;
     else if (path.endsWith("/default")) state.defaultCategoryId = body.categoryId;
     else if (path.endsWith("/assign")) {
       const category = state.categories.find((category) => category.id === body.categoryId);

@@ -1,4 +1,4 @@
-import { MEMORY_GATEWAY_TIMEOUT_MS } from "../limits";
+import { MEMORY_GATEWAY_TIMEOUT_MS, MYSQL_RESTART_GATEWAY_TIMEOUT_MS } from "../limits";
 import type { MemorySettings } from "../memory";
 import { callGatewayAction, type ActionResult } from "../../../lib/gateway-client";
 import type { WebVerb } from "../../../lib/gateway-protocol";
@@ -14,6 +14,9 @@ function call<T>(verb: WebVerb<"resource-limits">, args: string[] = [], input?: 
 export const resourceLimitsService = {
   setMemory(change: Partial<MemorySettings>): Promise<ActionResult<{ memory: MemorySettings }>> {
     return callGatewayAction("resource-limits", "set-memory", [], JSON.stringify(change), { timeout: MEMORY_GATEWAY_TIMEOUT_MS });
+  },
+  restartMysql(): Promise<ActionResult<{ restarted: true }>> {
+    return callGatewayAction("resource-limits", "restart-mysql", [], undefined, { timeout: MYSQL_RESTART_GATEWAY_TIMEOUT_MS });
   },
   state(): Promise<ActionResult<ResourceLimitsState>> {
     return call<ResourceLimitsState>("list");

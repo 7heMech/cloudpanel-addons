@@ -4,7 +4,7 @@ import { FLEET_ROW_SELECTION_JS } from "../lib/app-ui";
 // A phone shows ten sites of a long list until Show all; Select all and the
 // bulk actions still reach every site the search leaves, not only those ten.
 test("on a phone, Select all reaches the sites past the ten-site cut and search still deselects", () => {
-  const el = (over: Record<string, unknown> = {}) => ({ textContent: "", disabled: false, checked: false, indeterminate: false, hidden: false, ...over });
+  const el = (over: Record<string, unknown> = {}) => ({ textContent: "", dataset: {}, disabled: false, checked: false, indeterminate: false, hidden: false, ...over });
   const more = { ...el(), querySelector: () => el() };
   const find = el({ value: "" }) as ReturnType<typeof el> & { value: string };
   const byId: Record<string, unknown> = { "site-selection": el(), "select-all-btn": el(), "fleet-find": find, "fleet-more": more };
@@ -52,7 +52,7 @@ test("on a phone, Select all reaches the sites past the ten-site cut and search 
 });
 
 test("a page without the Show all button shows every site on a phone", () => {
-  const el = () => ({ textContent: "", disabled: false, checked: false, hidden: false });
+  const el = () => ({ textContent: "", dataset: {}, disabled: false, checked: false, hidden: false });
   const byId: Record<string, unknown> = { "site-selection": el(), "fleet-find": { ...el(), value: "" } };
   const rows = Array.from({ length: 14 }, (_, index) => ({
     hidden: false,

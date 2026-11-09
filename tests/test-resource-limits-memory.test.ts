@@ -1,6 +1,6 @@
 import { dashboardView } from "../addons/resource-limits/app/views";
 import { afterEach, expect, test } from "bun:test";
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, utimesSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, statSync, utimesSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { CommandResult } from "../lib/command";
@@ -391,6 +391,32 @@ test("memory policy saves partial changes, preserves Off, and rolls back a refus
   await change({ profile: "cache" });
   expect(readMemorySettings(options)).toEqual({ profile: "cache", mysql: false, redis: false, oom: false });
   expect(existsSync(s.file)).toBe(false);
+});
+
+test("Restart MySQL restarts a running server onto its file, says when it does not come back, and leaves a stopped one", async () => {
+  const { executeResourceLimitsAction } = await import("../addons/resource-limits/action");
+  const { resourceMemoryState } = await import("../addons/resource-limits/memory-settings");
+  const s = server();
+  const options = resourceOptions(s);
+  const act = (verb: string) => executeResourceLimitsAction([verb], { ...options, processUid: 0, input: JSON.stringify({ mysql: true }) });
+  await act("set-memory");
+  expect(resourceMemoryState(options)).toMatchObject({ mysql: { pending: true } });
+  const mysql = s.units["mysql.service"]!;
+  const inner = s.options.run!;
+  let comesBack = true;
+  s.options.run = (program, args, timeout) => {
+    if (program === "systemctl" && args[0] === "restart") Object.assign(mysql, { active: comesBack, startedAt: statSync(s.file).mtimeMs + 2_000 });
+    return inner(program, args, timeout);
+  };
+  expect(await act("restart-mysql")).toEqual({ restarted: true });
+  expect(s.calls).toContainEqual(["systemctl", "restart", "mysql.service"]);
+  expect(resourceMemoryState(options)).toMatchObject({ mysql: { pending: false } });
+  comesBack = false;
+  await expect(act("restart-mysql")).rejects.toThrow("MySQL did not come back after the restart; see journalctl -u mysql.service");
+  // Stopped now: nothing starts it from here.
+  const restarts = s.calls.filter((call) => call[1] === "restart").length;
+  await expect(act("restart-mysql")).rejects.toThrow("MySQL is not running");
+  expect(s.calls.filter((call) => call[1] === "restart")).toHaveLength(restarts);
 });
 
 test("activation, upkeep and new PHP versions retain OOM protection; disabled start hooks do nothing", async () => {

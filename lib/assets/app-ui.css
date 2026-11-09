@@ -520,7 +520,14 @@ pre { background: var(--bg); border: 1px solid var(--border); border-radius: 4px
   .split-card { flex-wrap: wrap; }
   .split-card > :last-child { flex-basis: 100%; }
   .card-header.toolbar > :first-child { flex: 1 1 100%; }
-  .card-header.toolbar > .fleet-selection { flex: 1 1 100%; justify-content: space-between; }
+  /* The count and Select all share the title's line, at its right; a title too
+     wide for both sends them to the next line, still at the right. */
+  .card-header.toolbar > :first-child:has(+ .fleet-selection) { flex: 0 0 auto; max-width: 100%; }
+  .card-header.toolbar > .fleet-selection { flex: 0 0 auto; margin-left: auto; }
+  #site-selection[data-short=""] { display: none; }
+  /* The full count stays the text a screen reader reads; the short form is only drawn. */
+  #site-selection { font-size: 0; }
+  #site-selection::after { content: attr(data-short); content: attr(data-short) / ""; font-size: 14px; }
   .card-header.toolbar > .fleet-selection ~ * { flex: 1 1 100%; margin-left: 0; }
   .card-header.toolbar > .fleet-selection ~ .actions > .btn { flex: 1 1 0; }
   .mobile-select-all { display: inline-flex; padding: 6px 14px; font-size: 13px; white-space: nowrap; }

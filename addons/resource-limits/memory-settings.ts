@@ -8,7 +8,7 @@ import { writeFileAtomic } from "../../lib/atomic-write";
 import { isTrustedFile } from "../../lib/trusted-file";
 import { MEMORY_DEADLINE_MS } from "./limits";
 import {
-  DEFAULT_MEMORY, MEMORY_ERROR, applyMemory, memoryChange, memoryStatus, syncMemory, validMemorySettings,
+  DEFAULT_MEMORY, MEMORY_ERROR, applyMemory, memoryChange, memoryStatus, restartMysql, syncMemory, validMemorySettings,
   type MemoryOptions, type MemorySettings, type MemoryStatus,
 } from "./memory";
 
@@ -65,6 +65,16 @@ export async function setResourceMemory(body: Record<string, unknown>, options: 
       throw error;
     }
     return { memory: wanted };
+  });
+}
+
+/** Under the settings lock, so the restart never lands in the middle of a memory change. */
+export async function restartResourceMysql(options: ResourceMemoryOptions = {}): Promise<{ restarted: true }> {
+  const paths = { ...DEFAULT_MEMORY_SETTINGS_PATHS, ...options.memorySettings };
+  return withFileLock(paths.lockFile, 15, "another resource limits change is still running", async () => {
+    if (!existsSync(paths.enabledConfig)) failAction("Resource Limits is disabled");
+    restartMysql(options.memory);
+    return { restarted: true as const };
   });
 }
 

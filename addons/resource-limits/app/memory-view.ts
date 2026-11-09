@@ -104,16 +104,18 @@ function memoryBudget(state: Memory, sites: PoolSiteState[]): string {
       </div>`;
 }
 
+const RESTART_BUTTON = `<button class="btn btn-sm mysql-restart" type="button" onclick="restartMysql(this)">Restart MySQL</button>`;
+
 function mysqlMemoryLine(state: Memory): string {
   const { plan } = state;
   const numbers = `${size(plan.bufferPoolMb)} buffer pool, up to ${plan.maxConnections} connections`;
   if (!state.mysql.installed && !state.settings.mysql) return `${badge("Not installed", "plain")} <span>MySQL is not installed here.</span>`;
   if (state.settings.mysql && !state.mysql.inPlace) return `${badge("Not applied", "warn")} <span>Run clp-addons repair.</span>`;
   if (state.settings.mysql && state.mysql.pending) {
-    return `${badge("Pending", "warn")} <span>${esc(numbers)} from MySQL's next restart: systemctl restart mysql.</span>`;
+    return `${badge("Pending", "warn")} <span>${esc(numbers)} from MySQL's next restart.</span> ${RESTART_BUTTON}`;
   }
   if (state.settings.mysql) return `${badge("On", "ok")} <span>${esc(numbers)}.</span>`;
-  if (state.mysql.pending) return `${badge("Off", "plain")} <span>CloudPanel's values come back at MySQL's next restart.</span>`;
+  if (state.mysql.pending) return `${badge("Off", "plain")} <span>CloudPanel's values come back at MySQL's next restart.</span> ${RESTART_BUTTON}`;
   return `${badge("Off", "plain")} <span>CloudPanel's fixed values, the same on every server.</span>`;
 }
 
@@ -163,7 +165,7 @@ export function memoryCard(state: ResourceMemoryState, sites: PoolSiteState[]): 
         title: "Size MySQL to this server",
         description: [
           "Sets MySQL's buffer pool, connection limit and per-connection buffers from the profile. CloudPanel's fixed values let 512 connections of up to 34 MB each, more than a small server has.",
-          "Applies at MySQL's next restart; Resource Limits never restarts it. More connections at once than the limit get Too many connections.",
+          "Applies at MySQL's next restart, which Restart MySQL does when it suits you. More connections at once than the limit get Too many connections.",
         ],
         checked: state.settings.mysql,
         disabled: !state.mysql.installed && !state.settings.mysql,
