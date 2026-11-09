@@ -2,7 +2,7 @@
 // answering in their documented shapes: Cloudflare's success/errors/result
 // envelope with result_info pages and per-token access, and Mailcow's HTTP 200
 // with `type: "danger"` for a refusal and `{}` for nothing found.
-import type { ApiFetch } from "../../addons/dns/http";
+import type { ApiFetch } from "../../lib/provider-http";
 
 export interface FakeToken {
   /** User tokens verify at /user/tokens/verify, account tokens at /accounts/:id/tokens/verify. */

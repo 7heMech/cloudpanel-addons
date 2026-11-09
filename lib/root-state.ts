@@ -5,8 +5,8 @@
  * root-owned regular file of that mode is refused rather than read.
  */
 import { existsSync, lstatSync, readFileSync } from "node:fs";
-import { failAction } from "../../lib/action";
-import { writeFileAtomic } from "../../lib/atomic-write";
+import { failAction } from "./action";
+import { writeFileAtomic } from "./atomic-write";
 
 const MAX_BYTES = 16 * 1024 * 1024;
 
@@ -14,12 +14,12 @@ export function readState<T>(path: string, uid: number, fallback: () => T): T {
   if (!existsSync(path)) return fallback();
   const stat = lstatSync(path);
   if (!stat.isFile() || stat.uid !== uid || (stat.mode & 0o777) !== 0o600 || stat.size > MAX_BYTES) {
-    failAction(`refusing untrusted DNS state: ${path}`);
+    failAction(`refusing untrusted state: ${path}`);
   }
   try {
     return JSON.parse(readFileSync(path, "utf8")) as T;
   } catch {
-    failAction(`DNS state is not valid JSON: ${path}`);
+    failAction(`state is not valid JSON: ${path}`);
   }
 }
 

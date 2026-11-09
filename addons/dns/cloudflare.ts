@@ -3,7 +3,7 @@
  * API documents before anything is decided from it.
  */
 import { isIP } from "node:net";
-import { type ApiFetch, ProviderError, ProviderHttp } from "./http";
+import { type ApiFetch, ProviderError, ProviderHttp } from "../../lib/provider-http";
 import { dnsName } from "./model";
 
 const API = "https://api.cloudflare.com/client/v4";
