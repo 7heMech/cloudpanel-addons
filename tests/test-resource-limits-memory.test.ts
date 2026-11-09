@@ -441,11 +441,26 @@ test("Restart MySQL restarts a running server onto its file, says when it does n
   // Stopped now: nothing starts it from here.
   await expect(act("restart-mysql")).rejects.toThrow("MySQL is not running");
   expect(restarts()).toBe(2);
+  // Starting, before or after a restart, is said as such.
+  Object.assign(mysql, { active: false, activating: true });
+  await expect(act("restart-mysql")).rejects.toThrow("MySQL is still starting; try again once it runs");
+  expect(restarts()).toBe(2);
+  Object.assign(mysql, { active: true, activating: false });
+  const again = new Date(statSync(s.file).mtimeMs + 10_000);
+  utimesSync(s.file, again, again);
+  s.options.run = (program, args, timeout) => {
+    const result = inner(program, args, timeout);
+    if (program !== "systemctl" || args[0] !== "restart") return result;
+    Object.assign(mysql, { active: false, activating: true });
+    return { ok: false, stdout: "", stderr: "Job for mysql.service failed because the control process exited with error code." };
+  };
+  await expect(act("restart-mysql")).rejects.toThrow("MySQL is still starting after the restart: Job for mysql.service failed");
+  expect(restarts()).toBe(3);
   // Nor while the addon is disabled.
-  Object.assign(mysql, { active: true });
+  Object.assign(mysql, { active: true, activating: false });
   rmSync(options.memorySettings.enabledConfig);
   await expect(act("restart-mysql")).rejects.toThrow("Resource Limits is disabled");
-  expect(restarts()).toBe(2);
+  expect(restarts()).toBe(3);
 });
 
 test("activation, upkeep and new PHP versions retain OOM protection; disabled start hooks do nothing", async () => {
