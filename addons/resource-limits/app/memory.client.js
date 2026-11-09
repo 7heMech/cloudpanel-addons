@@ -36,7 +36,7 @@ function setMemory(control) {
 async function restartMysql(button) {
   const agreed = await confirmAction({
     title: 'Restart MySQL?',
-    text: 'Every site loses its database for a few seconds while MySQL restarts onto the new sizes.',
+    text: 'Every site loses its database for a few seconds while MySQL restarts. Any other MySQL setting waiting for a restart applies too.',
     confirmLabel: 'Restart MySQL',
     danger: true,
   });

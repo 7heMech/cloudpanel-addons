@@ -6,7 +6,7 @@ import { failAction } from "../../lib/action";
 import { withFileLock, withFileLockSync } from "../../lib/file-lock";
 import { writeFileAtomic } from "../../lib/atomic-write";
 import { isTrustedFile } from "../../lib/trusted-file";
-import { MEMORY_DEADLINE_MS } from "./limits";
+import { COMMAND_MS, MEMORY_DEADLINE_MS, MYSQL_RESTART_MS } from "./limits";
 import {
   DEFAULT_MEMORY, MEMORY_ERROR, applyMemory, memoryChange, memoryStatus, restartMysql, syncMemory, validMemorySettings,
   type MemoryOptions, type MemorySettings, type MemoryStatus,
@@ -73,7 +73,7 @@ export async function restartResourceMysql(options: ResourceMemoryOptions = {}):
   const paths = { ...DEFAULT_MEMORY_SETTINGS_PATHS, ...options.memorySettings };
   return withFileLock(paths.lockFile, 15, "another resource limits change is still running", async () => {
     if (!existsSync(paths.enabledConfig)) failAction("Resource Limits is disabled");
-    restartMysql(options.memory);
+    restartMysql(readMemorySettings(options), options.memory);
     return { restarted: true as const };
   });
 }
@@ -97,10 +97,10 @@ export function restoreResourceMemory(options: ResourceMemoryOptions = {}, ifIdl
 }
 
 /**
- * How long withdrawing waits for a change to finish. It runs once the enabled
+ * How long withdrawing waits for a change, or a MySQL restart, to finish. It runs once the enabled
  * record is gone, so giving up would leave the limits with nothing to retry.
  */
-export const WITHDRAW_LOCK_WAIT_S = MEMORY_DEADLINE_MS / 1000 + 30;
+export const WITHDRAW_LOCK_WAIT_S = Math.max(MEMORY_DEADLINE_MS, MYSQL_RESTART_MS + 2 * COMMAND_MS) / 1000 + 30;
 
 /** Run after the enabled record is removed, so a service hook cannot put the limits back. */
 export function withdrawResourceMemory(options: ResourceMemoryOptions = {}): void {

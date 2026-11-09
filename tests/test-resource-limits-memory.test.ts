@@ -364,6 +364,24 @@ test("memory sizing can be off while its profile is saved and Redis has its own 
   expect(enabled).not.toContain("with Redis's own limit");
 });
 
+test("Restart MySQL is offered only while MySQL's settings wait for a restart", () => {
+  const base = { categories: [], defaultCategoryId: null, sites: [] };
+  const plan = memoryPlan(3819, "balanced");
+  const view = (mysql: boolean, state: { installed: boolean; inPlace: boolean; pending: boolean }) => dashboardView({ ...base, memory: {
+    settings: { ...DEFAULT_MEMORY, mysql }, plan, mysql: state,
+    redis: { installed: true, maxmemoryMb: 0, policy: "noeviction", usedMb: 1, capped: false, problem: "" },
+    oom: { inPlace: true }, varnishMb: null, memcachedMb: null,
+  } });
+  const button = "restartMysql(this)";
+  expect(view(true, { installed: true, inPlace: true, pending: true })).toContain(button);
+  expect(view(false, { installed: true, inPlace: false, pending: true })).toContain(button);
+  // On and running it, not applied, off with nothing waiting, and not installed.
+  expect(view(true, { installed: true, inPlace: true, pending: false })).not.toContain(button);
+  expect(view(true, { installed: true, inPlace: false, pending: false })).not.toContain(button);
+  expect(view(false, { installed: true, inPlace: false, pending: false })).not.toContain(button);
+  expect(view(false, { installed: false, inPlace: false, pending: false })).not.toContain(button);
+});
+
 function resourceOptions(s: ReturnType<typeof server>) {
   writeFileSync(join(s.dir, "enabled.conf"), "enabled");
   return {
@@ -408,15 +426,41 @@ test("Restart MySQL restarts a running server onto its file, says when it does n
     if (program === "systemctl" && args[0] === "restart") Object.assign(mysql, { active: comesBack, startedAt: statSync(s.file).mtimeMs + 2_000 });
     return inner(program, args, timeout);
   };
+  const restarts = () => s.calls.filter((call) => call[0] === "systemctl" && call[1] === "restart").length;
   expect(await act("restart-mysql")).toEqual({ restarted: true });
   expect(s.calls).toContainEqual(["systemctl", "restart", "mysql.service"]);
   expect(resourceMemoryState(options)).toMatchObject({ mysql: { pending: false } });
+  // A second tab's button: nothing is waiting, so MySQL is not restarted again.
+  await expect(act("restart-mysql")).rejects.toThrow("MySQL already runs its current settings");
+  expect(restarts()).toBe(1);
+  // Pending again, and this time MySQL does not come back.
+  const later = new Date(statSync(s.file).mtimeMs + 10_000);
+  utimesSync(s.file, later, later);
   comesBack = false;
   await expect(act("restart-mysql")).rejects.toThrow("MySQL did not come back after the restart; see journalctl -u mysql.service");
   // Stopped now: nothing starts it from here.
-  const restarts = s.calls.filter((call) => call[1] === "restart").length;
   await expect(act("restart-mysql")).rejects.toThrow("MySQL is not running");
-  expect(s.calls.filter((call) => call[1] === "restart")).toHaveLength(restarts);
+  expect(restarts()).toBe(2);
+  // Starting, before or after a restart, is said as such.
+  Object.assign(mysql, { active: false, activating: true });
+  await expect(act("restart-mysql")).rejects.toThrow("MySQL is still starting; try again once it runs");
+  expect(restarts()).toBe(2);
+  Object.assign(mysql, { active: true, activating: false });
+  const again = new Date(statSync(s.file).mtimeMs + 10_000);
+  utimesSync(s.file, again, again);
+  s.options.run = (program, args, timeout) => {
+    const result = inner(program, args, timeout);
+    if (program !== "systemctl" || args[0] !== "restart") return result;
+    Object.assign(mysql, { active: false, activating: true });
+    return { ok: false, stdout: "", stderr: "Job for mysql.service failed because the control process exited with error code." };
+  };
+  await expect(act("restart-mysql")).rejects.toThrow("MySQL is still starting after the restart: Job for mysql.service failed");
+  expect(restarts()).toBe(3);
+  // Nor while the addon is disabled.
+  Object.assign(mysql, { active: true, activating: false });
+  rmSync(options.memorySettings.enabledConfig);
+  await expect(act("restart-mysql")).rejects.toThrow("Resource Limits is disabled");
+  expect(restarts()).toBe(3);
 });
 
 test("activation, upkeep and new PHP versions retain OOM protection; disabled start hooks do nothing", async () => {
@@ -536,10 +580,11 @@ test("a start hook that applied settings a change replaced meanwhile applies the
   expect(s.redis).toMatchObject({ maxmemory: 0, policy: "noeviction" });
 });
 
-test("withdrawing waits as long as a memory change can hold the lock", async () => {
+test("withdrawing waits as long as a memory change or a MySQL restart can hold the lock", async () => {
   const { WITHDRAW_LOCK_WAIT_S } = await import("../addons/resource-limits/memory-settings");
-  const { MEMORY_DEADLINE_MS } = await import("../addons/resource-limits/limits");
+  const { COMMAND_MS, MEMORY_DEADLINE_MS, MYSQL_RESTART_MS } = await import("../addons/resource-limits/limits");
   expect(WITHDRAW_LOCK_WAIT_S * 1000).toBeGreaterThan(MEMORY_DEADLINE_MS);
+  expect(WITHDRAW_LOCK_WAIT_S * 1000).toBeGreaterThan(MYSQL_RESTART_MS + 2 * COMMAND_MS);
 });
 
 test("a Redis that refuses CONFIG neither holds back OOM protection nor is left recorded as capped", () => {
