@@ -24,6 +24,9 @@ dns:set-default                    admin
 dns:site-status                    panel-user
 dns:take-over                      admin
 dns:zone-account                   admin
+firewall:hetzner-connect           admin
+firewall:hetzner-disconnect        admin
+firewall:hetzner-switch            admin
 firewall:list                      admin
 firewall:policy                    admin
 firewall:protocols                 admin

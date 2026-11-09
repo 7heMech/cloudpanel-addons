@@ -74,13 +74,13 @@ function pathsOf(options: FirewallOptions): FirewallPaths {
 
 // --- Addresses, as ufw writes them in its tuples ---------------------------
 
-function ipv4(text: string): number[] | null {
+export function ipv4(text: string): number[] | null {
   const parts = text.split(".");
   if (parts.length !== 4 || !parts.every((part) => /^\d{1,3}$/.test(part) && Number(part) <= 255)) return null;
   return parts.map(Number);
 }
 
-function ipv6(text: string): number[] | null {
+export function ipv6(text: string): number[] | null {
   if (!/^[0-9a-fA-F:]+$/.test(text) || (text.match(/::/g) ?? []).length > 1) return null;
   const [head = "", tail] = text.split("::");
   const groups = (part: string) => part === "" ? [] : part.split(":");

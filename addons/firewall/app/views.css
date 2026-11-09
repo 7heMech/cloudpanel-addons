@@ -6,6 +6,20 @@
 .cf-off-only:has(input:focus-visible) { outline: 2px solid var(--accent); outline-offset: 1px; }
 .cf-policy { flex-wrap: nowrap; }
 .split-card.cf-policy > .switch { flex-basis: auto; }
+.hz-intro { margin: 0 0 16px; }
+.hz-row { display: flex; align-items: center; justify-content: space-between; gap: 16px 24px; padding: 16px 0; border-top: 1px solid var(--border); }
+.hz-row > :first-child { min-width: 0; }
+.hz-row > .switch { flex-shrink: 0; }
+.hz-row h3 { margin: 0; font-size: 16px; }
+.hz-row .hint { margin: 4px 0 0; }
+.hz-row .hint.tone-warn { color: var(--warn); }
+.hz-token { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 12px 24px; padding-top: 16px; border-top: 1px solid var(--border); }
+.hz-token .hint { margin: 0; }
+.hz-token-actions { flex-wrap: wrap; }
+.hz-token-form { margin-top: 16px; }
+.hz-token-row { display: flex; flex-wrap: wrap; gap: 12px; }
+.hz-token-row input { flex: 1 1 260px; min-width: 0; }
+.hz-absent { margin: 0; }
 /* Where the shared fleet table becomes a card, this row keeps the domain and
    its action on one line instead. */
 @media (max-width: 940px) {

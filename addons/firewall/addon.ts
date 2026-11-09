@@ -4,6 +4,7 @@ import {
 } from "./action";
 import { FIREWALL_TARGETS } from "./inject/targets";
 import { syncFirewall } from "./protocols";
+import { syncHetzner } from "./hetzner";
 import type { AddonDefinition } from "../../lib/addon-definition";
 import { errorMessage } from "../../lib/errors";
 import { log } from "../../lib/log";
@@ -15,7 +16,7 @@ async function protectNewSites(options?: Record<string, unknown>): Promise<strin
   return result.enabled ? `${result.enabled} new site${result.enabled === 1 ? "" : "s"} allow Cloudflare only` : null;
 }
 
-/** Repair: new sites first, then the protocols, each whatever the other does. */
+/** Repair: new sites, the protocols, then the Hetzner firewalls, each whatever the others do. */
 async function repair(options?: Record<string, unknown>): Promise<string | null> {
   const lines: string[] = [];
   const failures: string[] = [];
@@ -27,6 +28,10 @@ async function repair(options?: Record<string, unknown>): Promise<string | null>
     const changed = syncFirewall("apply");
     if (changed) lines.push(`protocols: ${changed}`);
   } catch (error) { failures.push(`protocols: ${errorMessage(error)}`); }
+  try {
+    const changed = await syncHetzner("repair");
+    if (changed) lines.push(changed);
+  } catch (error) { failures.push(errorMessage(error)); }
   if (failures.length) throw new Error([...failures, ...lines].join("; "));
   return lines.join("; ") || null;
 }
@@ -34,9 +39,10 @@ async function repair(options?: Record<string, unknown>): Promise<string | null>
 export const FIREWALL_ADDON: AddonDefinition = {
   name: "firewall",
   title: "Firewall",
-  description: "Cloudflare-only access for every site, and TCP, UDP or both for each rule on CloudPanel's Firewall page.",
+  description: "Cloudflare-only access for every site, Hetzner Cloud Firewalls that admit only Cloudflare, and TCP, UDP or both for each rule on CloudPanel's Firewall page.",
   changed: [
     { in: "2.2.0-rc.1", note: "Cloudflare IP Access is now Firewall, which also sets each firewall rule's protocol: TCP, UDP or both." },
+    { in: "2.2.0-rc.1", note: "On a Hetzner Cloud server, Firewall can attach Hetzner Cloud Firewalls that let only Cloudflare reach the sites (80, 443) and the panel (8443). Both switches are off until you connect a token and turn one on." },
   ],
   targets: FIREWALL_TARGETS,
   handler: handle,
@@ -45,6 +51,8 @@ export const FIREWALL_ADDON: AddonDefinition = {
   // A site whose vhost was not ready when it was created is tried again here.
   repair: { label: "firewall", run: repair },
   firewall: { label: "firewall protocols", run: () => syncFirewall("apply") },
+  // The anchor watcher sees CloudPanel's daily rewrite of /etc/nginx/cloudflare/ips.
+  anchors: [{ label: "Hetzner firewalls", run: () => syncHetzner("ranges") }],
   // CloudPanel's next change on its Firewall page rebuilds ufw without these rules anyway.
   deactivate: () => {
     try { syncFirewall("withdraw"); }

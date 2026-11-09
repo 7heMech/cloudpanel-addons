@@ -16,6 +16,9 @@ import {
 } from "../../lib/nginx-transaction";
 import { FIREWALL_VERBS } from "./verbs";
 import { firewallStatus, setProtocolsEnabled, setRuleProtocol, type FirewallOptions, type FirewallStatus } from "./protocols";
+import {
+  connectHetzner, disconnectHetzner, hetznerView, setHetznerRole, type HetznerOptions, type HetznerRole, type HetznerView,
+} from "./hetzner";
 
 const POLICY_VERSION = 1;
 const MAX_SITES_PER_REQUEST = 10_000;
@@ -37,6 +40,7 @@ export interface CloudflareActionPaths {
 interface FirewallActionOptions {
   paths?: Partial<CloudflareActionPaths>;
   protocols?: FirewallOptions;
+  hetzner?: HetznerOptions;
   input?: string;
   emitReply?: boolean;
   run?: (command: string, args: string[]) => CommandResult;
@@ -70,6 +74,7 @@ interface Policy {
 interface ParsedAction {
   verb: FirewallVerb;
   enabled: boolean | null;
+  role: HetznerRole | null;
 }
 
 export const DEFAULT_CLOUDFLARE_ACTION_PATHS: CloudflareActionPaths = {
@@ -160,13 +165,20 @@ function parseAction(argv: string[]): ParsedAction {
     failAction(`unknown Firewall action '${verb ?? ""}'`);
   }
   let enabled: boolean | null = null;
+  let role: HetznerRole | null = null;
   if (verb === "set" || verb === "policy" || verb === "set-protocols") {
     if (argv.length !== 3 || argv[1] !== "--enabled") failAction(`${verb} takes only --enabled yes|no`);
     enabled = validateFlag(argv[2]!, "enabled") === "yes";
+  } else if (verb === "hetzner-switch") {
+    if (argv.length !== 5 || argv[1] !== "--role" || argv[3] !== "--enabled" || (argv[2] !== "web" && argv[2] !== "panel")) {
+      failAction("hetzner-switch takes --role web|panel --enabled yes|no");
+    }
+    role = argv[2];
+    enabled = validateFlag(argv[4]!, "enabled") === "yes";
   } else if (argv.length !== 1) {
     failAction(`${verb} takes no arguments`);
   }
-  return { verb, enabled };
+  return { verb, enabled, role };
 }
 
 function readInput(verb: string, input: string | undefined): unknown {
@@ -255,9 +267,15 @@ function protocolsOrError(options?: FirewallOptions): FirewallStatus | { error: 
   catch (error) { return { error: errorMessage(error) }; }
 }
 
-function listState(paths: CloudflareActionPaths, protocols?: FirewallOptions): {
-  sites: CloudflareSiteView[]; autoEnableNewSites: boolean; protocols: FirewallStatus | { error: string };
-} {
+async function hetznerOrError(options?: HetznerOptions): Promise<HetznerView> {
+  try { return await hetznerView(options); }
+  catch (error) { return { state: "error", connected: false, error: `Hetzner could not be read: ${errorMessage(error)}` }; }
+}
+
+async function listState(paths: CloudflareActionPaths, protocols?: FirewallOptions, hetzner?: HetznerOptions): Promise<{
+  sites: CloudflareSiteView[]; autoEnableNewSites: boolean; protocols: FirewallStatus | { error: string }; hetzner: HetznerView;
+}> {
+  const hetznerState = hetznerOrError(hetzner);
   const db = openPanelDatabase(paths.panelDb);
   try {
     const policy = readPolicy(paths.policyFile, paths.stateUid);
@@ -268,6 +286,7 @@ function listState(paths: CloudflareActionPaths, protocols?: FirewallOptions): {
       })),
       autoEnableNewSites: policy.autoEnableNewSites,
       protocols: protocolsOrError(protocols),
+      hetzner: await hetznerState,
     };
   } finally {
     db.close();
@@ -384,7 +403,7 @@ export async function runFirewallAction(argv: string[], options: FirewallActionO
     const paths = pathsFor(options);
     const action = parseAction(argv);
     const command = options.run ?? runCommand;
-    if (action.verb === "list") return listState(paths, options.protocols);
+    if (action.verb === "list") return listState(paths, options.protocols, options.hetzner);
     if (action.verb === "policy") {
       const policy = await setPolicy(paths, action.enabled!);
       return { autoEnableNewSites: policy.autoEnableNewSites };
@@ -401,6 +420,17 @@ export async function runFirewallAction(argv: string[], options: FirewallActionO
     if (action.verb === "set-protocols") {
       setProtocolsEnabled(action.enabled!, options.protocols);
       return firewallStatus(options.protocols);
+    }
+    if (action.verb === "hetzner-connect") {
+      const body = readInput("hetzner-connect", options.input);
+      if (typeof body !== "object" || body === null) failAction("hetzner-connect input must be a JSON object");
+      return connectHetzner(body as Record<string, unknown>, options.hetzner);
+    }
+    if (action.verb === "hetzner-disconnect") return disconnectHetzner(options.hetzner);
+    if (action.verb === "hetzner-switch") {
+      const body = readInput("hetzner-switch", options.input);
+      const confirm = typeof body === "object" && body !== null ? (body as { confirm?: unknown }).confirm : undefined;
+      return setHetznerRole(action.role!, action.enabled!, confirm, options.hetzner);
     }
     action.verb satisfies never;
     failAction(`unknown Firewall action '${action.verb}'`);

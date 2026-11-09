@@ -1,7 +1,8 @@
 /**
- * The one way DNS talks to Cloudflare and Mailcow: HTTPS, no redirects, a
- * deadline for every request, a bounded reply, and a provider's 429 kept as
- * the time to try again. Credentials go only into request headers.
+ * How addons talk to a provider's API, such as Cloudflare, Mailcow or
+ * Hetzner: HTTPS, no redirects, a deadline for every request, a bounded reply,
+ * and a provider's 429 kept as the time to try again. Credentials go only into
+ * request headers.
  */
 import { readBoundedText } from "./app-http";
 

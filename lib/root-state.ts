@@ -1,8 +1,7 @@
 /**
- * DNS keeps its state as root-only JSON files: the policy, the credentials,
- * the last check, the records it tracks, a pending review and auto-SSL
- * requests. Each is written atomically with mode 0600, and one that is not a
- * root-owned regular file of that mode is refused rather than read.
+ * Root-only JSON state, such as DNS's policy and credentials or Firewall's
+ * Hetzner token. Each file is written atomically with mode 0600, and one that
+ * is not a root-owned regular file of that mode is refused rather than read.
  */
 import { existsSync, lstatSync, readFileSync } from "node:fs";
 import { failAction } from "./action";

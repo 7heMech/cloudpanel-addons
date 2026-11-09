@@ -5,6 +5,7 @@ import {
 } from "../../../lib/app-ui";
 import { mountPath } from "../../../lib/mount";
 import type { FirewallPageState } from "./service";
+import { HETZNER_ROLES, type HetznerRole } from "../hetzner";
 
 const BASE = mountPath("firewall");
 const plural = (count: number, word: string): string => `${count} ${word}${count === 1 ? "" : "s"}`;
@@ -47,6 +48,63 @@ function protocolsCard(status: FirewallPageState["protocols"]): string {
     </div>`;
 }
 
+const TOKEN_FORM_HINT = "In Hetzner Cloud Console, open the project this server is in, then Security → API tokens → Generate API token, with Read &amp; Write.";
+
+function tokenForm(hidden: boolean): string {
+  return `
+    <form class="hz-token-form form-field" id="hetzner-token-form" onsubmit="connectHetzner(event)"${hidden ? " hidden" : ""}>
+      <label for="hetzner-token">API token</label>
+      <div class="hz-token-row"><input id="hetzner-token" name="token" type="password" autocomplete="new-password" spellcheck="false" required>
+        <button class="btn btn-primary" type="submit">Connect</button></div>
+      <div class="hint">${TOKEN_FORM_HINT}</div>
+    </form>`;
+}
+
+const tokenActions = `
+    <div class="actions hz-token-actions">
+      <button class="btn" type="button" onclick="showHetznerTokenForm()">Replace token</button>
+      <button class="btn btn-danger" type="button" onclick="removeHetznerToken()">Remove token</button>
+    </div>`;
+
+const ROLE_HINTS: Record<HetznerRole, string> = {
+  web: "Ports 80 and 443 answer only Cloudflare, so a site must be proxied through it.",
+  panel: "Port 8443 answers only Cloudflare; CloudPanel answers at its custom domain.",
+};
+
+/** The Hetzner Cloud Firewall card: connect a token, then a switch for the sites and one for the panel. */
+function hetznerCard(view: FirewallPageState["hetzner"]): string {
+  const card = (body: string) => `
+    <div class="card hz-card" id="hetzner-card">
+      <div class="card-header"><h2>Hetzner Cloud Firewall</h2></div>
+      <p class="hint hz-intro">Hetzner drops what these firewalls do not allow before it reaches this server.</p>${body}
+    </div>`;
+  if (view.state === "absent") {
+    return card('<p class="hz-absent">This server is not a Hetzner Cloud server, so there is nothing to set here. Dedicated (Robot) servers are not covered.</p>');
+  }
+  if (view.state === "disconnected") return card(tokenForm(false));
+  if (view.state === "error") {
+    return card(`<div class="alert" role="alert">${esc(view.error)}</div>${view.connected ? `${tokenActions}${tokenForm(true)}` : ""}`);
+  }
+  const rows = (Object.keys(HETZNER_ROLES) as HetznerRole[]).map((role) => {
+    const info = view.roles[role];
+    const notes = [
+      ...info.stillOpen.map((line) => `${line} Until that changes, this firewall has no effect.`),
+      ...(info.current ? [] : ["Its rules differ from Cloudflare's list; the next repair puts them back."]),
+    ].map((line) => `<p class="hint tone-warn">${esc(line)}</p>`).join("");
+    const title = HETZNER_ROLES[role].title;
+    return `
+      <div class="hz-row">
+        <div><h3>${title}</h3><p class="hint">${ROLE_HINTS[role]}${info.firewall && info.on ? ` Firewall ${esc(info.firewall)}.` : ""}</p>${notes}</div>
+        <label class="switch"><input id="hetzner-${role}" type="checkbox" aria-label="${title}" ${info.on ? "checked" : ""} onchange="setHetzner(this, '${role}')"><span></span></label>
+      </div>`;
+  }).join("");
+  const problems = [view.sshProblem && `SSH: ${view.sshProblem}. Attach a firewall that allows it in Hetzner's console.`, view.rangesProblem]
+    .filter(Boolean).map((line) => `<div class="notice" role="status">${esc(line!)}</div>`).join("");
+  const others = view.others.length ? `Other firewalls on this server: ${view.others.map(esc).join(", ")}.` : "No other firewall is attached to this server.";
+  return card(`${problems}${rows}
+    <div class="hz-token"><p class="hint">Connected to the project of ${esc(view.serverName)} (server ${esc(String(view.serverId))}). ${others}</p>${tokenActions}</div>${tokenForm(true)}`);
+}
+
 export function dashboardView(state: FirewallPageState): string {
   const enabled = state.sites.filter((site) => site.enabled).length;
   const total = state.sites.length;
@@ -65,7 +123,7 @@ export function dashboardView(state: FirewallPageState): string {
 
   return `
     <div class="page-heading">
-      <div><h1>Firewall</h1><p>CloudPanel's “Allow traffic from Cloudflare only” setting for every site, and a protocol for each rule on its Firewall page.</p></div>
+      <div><h1>Firewall</h1><p>CloudPanel's “Allow traffic from Cloudflare only” setting for every site, a protocol for each rule on its Firewall page, and Hetzner Cloud Firewalls that admit only Cloudflare.</p></div>
     </div>
     <div class="card card-table">
       ${total === 0
@@ -92,5 +150,5 @@ export function dashboardView(state: FirewallPageState): string {
       <div><h2>Enable on new sites</h2>
         <p class="hint">A site created from now on allows Cloudflare only, seconds after CloudPanel creates it. A site you turn off here is never turned back on.</p></div>
       <label class="switch"><input id="automatic-policy" type="checkbox" aria-label="Enable Cloudflare-only access on new sites" ${state.autoEnableNewSites ? "checked" : ""} onchange="setAutomatic(this)"><span></span></label>
-    </div>${protocolsCard(state.protocols)}`;
+    </div>${protocolsCard(state.protocols)}${hetznerCard(state.hetzner)}`;
 }

@@ -83,5 +83,31 @@ export async function handle(
     return protocolsReply(await firewallService.setProtocol({ portRange, source, protocol: protocol as string, id: id as number | undefined }));
   }
 
+  if (req.method === "POST" && path === "/api/hetzner/token") {
+    const body = await readMutation(req, 1024);
+    if (body instanceof Response) return body;
+    if (typeof body.token !== "string" || !body.token.trim()) return jsonResponse({ ok: false, error: "Paste the API token Hetzner showed you" }, 400);
+    const result = await firewallService.connectHetzner(body.token);
+    return jsonResponse(result, result.ok ? 200 : 400);
+  }
+
+  if (req.method === "POST" && path === "/api/hetzner/token/remove") {
+    const body = await readMutation(req);
+    if (body instanceof Response) return body;
+    const result = await firewallService.disconnectHetzner();
+    return jsonResponse(result, result.ok ? 200 : 400);
+  }
+
+  if (req.method === "POST" && path === "/api/hetzner/switch") {
+    const body = await readMutation(req, 1024);
+    if (body instanceof Response) return body;
+    const { role, enabled, confirm } = body;
+    if ((role !== "web" && role !== "panel") || typeof enabled !== "boolean" || (confirm !== undefined && typeof confirm !== "string")) {
+      return jsonResponse({ ok: false, error: "role must be web or panel, and enabled boolean" }, 400);
+    }
+    const result = await firewallService.setHetzner(role, enabled, confirm as string | undefined);
+    return jsonResponse(result, result.ok ? 200 : 400);
+  }
+
   return jsonResponse({ ok: false, error: "not found" }, 404);
 }

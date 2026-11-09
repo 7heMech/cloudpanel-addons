@@ -107,6 +107,7 @@ test("a fleet table gives the domain its own line on a phone", () => {
       autoEnableNewSites: false,
       sites: [{ domain: "a-rather-long-hostname.example.test", enabled: false }],
       protocols: { available: true, enabled: true, protocols: {}, udpPorts: [] },
+      hetzner: { state: "absent" },
     }),
   ]) {
     expect(html).toContain('<table class="fleet-table');
