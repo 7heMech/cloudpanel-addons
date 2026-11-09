@@ -50,7 +50,7 @@ function protocolsCard(status: FirewallPageState["protocols"]): string {
 export function dashboardView(state: FirewallPageState): string {
   const enabled = state.sites.filter((site) => site.enabled).length;
   const total = state.sites.length;
-  const summary = `${enabled} of ${plural(total, "site")} allow Cloudflare only`;
+  const summary = `${enabled} of ${total} are Cloudflare only`;
   const rows = state.sites.map((site) => `
     <tr data-domain="${esc(site.domain)}" data-enabled="${site.enabled}" data-show="${site.enabled ? "on" : "off"}" data-sort-enabled="${site.enabled ? "on" : "off"}" tabindex="0" aria-selected="false" onclick="toggleSiteSelection(event, this)" onkeydown="toggleSiteSelection(event, this)">
       <td class="site-select"><input class="site-checkbox" type="checkbox" onchange="paintFleetSelection()" aria-label="Select ${esc(site.domain)}"></td>

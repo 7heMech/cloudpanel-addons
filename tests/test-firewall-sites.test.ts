@@ -100,7 +100,7 @@ test("dashboard puts the sites first, with the summary in their header and the n
   expect(html).not.toContain("Enable all sites");
   expect(html).not.toContain("Disable all sites");
   expect(html).not.toContain("type-cell");
-  expect(html).toContain('<p class="hint" id="cf-summary">2 of 3 sites allow Cloudflare only</p>');
+  expect(html).toContain('<p class="hint" id="cf-summary">2 of 3 are Cloudflare only</p>');
   expect(html.indexOf("cloudflare-site-table")).toBeLessThan(html.indexOf('id="automatic-policy"'));
   expect(html).toContain('<div class="card split-card cf-policy">');
   expect(html).toContain('id="enable-selected" type="button" disabled data-needs-selection');
