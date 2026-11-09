@@ -168,7 +168,8 @@ async function verifyRoot() {
   const post = (path, body) => call('/api/root-auth-' + path, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body || {}) });
   // Digits only, shown one per box, with the next box to fill marked.
   const paint = () => {
-    const digits = code.value.replace(/\D/g, '').slice(0, 6);
+    // The last six, so a code pasted after a few typed digits wins.
+    const digits = code.value.replace(/\D/g, '').slice(-6);
     if (code.value !== digits) code.value = digits;
     boxes.forEach((box, i) => {
       box.textContent = digits[i] || '';
@@ -176,11 +177,11 @@ async function verifyRoot() {
     });
   };
   code.oninput = paint;
-  // The input lies unseen over the boxes, so a click must not move its caret
-  // off the end, where the boxes show it.
-  code.onclick = code.onkeyup = code.onselect = () => {
+  // The input lies unseen over the boxes, so a click puts its caret at the
+  // end, where the boxes show it; a selection, as for a paste, is left alone.
+  code.onclick = () => {
     const end = code.value.length;
-    if (code.selectionStart !== end || code.selectionEnd !== end) code.setSelectionRange(end, end);
+    if (code.selectionStart === code.selectionEnd) code.setSelectionRange(end, end);
   };
   let options = (await post('options')).data;
   // toB64, fromB64, keysUsable and keyError come from Security Keys' webauthn.client.js.

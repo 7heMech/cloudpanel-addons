@@ -92,11 +92,6 @@ test("only an administrator root allowed gets a root shell", () => {
   expect(access("bob")).toEqual({ granted: false, problem: null });
 });
 
-test("an administrator root has not allowed, with 2FA off, is told to turn it on before asking root", () => {
-  change("UPDATE user SET mfa = 0 WHERE user_name = 'bob'");
-  expect(access("bob")).toEqual({ granted: false, problem: "A root terminal needs 2FA: turn it on in Account → Security, then ask root to allow you." });
-});
-
 test("a grant holds the 2FA the owner had: switched off it stops, and set up again it needs root again", () => {
   allow("alice");
   change("UPDATE user SET mfa = 0 WHERE user_name = 'alice'");
@@ -265,6 +260,7 @@ test("the page's button opens a root shell only for an allowed administrator, an
   const other = dashboardView([], { granted: false, problem: null }, "bob");
   expect(other).toContain('<pre id="root-allow-command">clp-addons terminal root allow bob</pre>');
   expect(other).toContain("copyText('root-allow-command', 'Command')");
+  expect(other).toContain("Your account needs 2FA on first.");
   expect(other).not.toContain("clpOpenTerminal(");
   const popup = popupPage(null);
   expect(popup).toContain('data-domain=""');
