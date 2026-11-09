@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import { errorMessage } from "../../../lib/errors";
 import {
   contentSecurityPolicy, guardMutation, htmlResponse, jsonResponse, newCsrfToken, policyResponse, policyHeaders, safeDecodePathSegment, validateDomain, readBody, readMutation,
@@ -38,13 +39,15 @@ const rootAccessCache = new Map<string, { at: number; access: RootAccessView }>(
 
 /**
  * Asked of root, which reads the grants itself; any failure offers nothing.
- * Every panel page's header asks, so the answer is kept a minute per user
+ * Every panel page's header asks, so the answer is kept a minute per session
  * rather than starting a root process for each page; the Terminal page asks
- * afresh.
+ * afresh. Per session, not per user: part of the answer is how that session
+ * signed in, so an older session of the same account can get another one.
  */
 async function rootAccessOf(user: string | undefined, sessionId: string | null, fresh = false): Promise<RootAccessView> {
   if (!user || !sessionId) return { granted: false, problem: null };
-  const cached = rootAccessCache.get(user);
+  const key = `${user}\0${createHash("sha256").update(sessionId).digest("hex")}`;
+  const cached = rootAccessCache.get(key);
   if (!fresh && cached && Date.now() - cached.at < ROOT_ACCESS_TTL_MS) return cached.access;
   let reply: ActionResult<RootAccessView>;
   try {
@@ -58,7 +61,10 @@ async function rootAccessOf(user: string | undefined, sessionId: string | null, 
   // database; the header is told, so it keeps the answer the tab had.
   if (reply.data.unreadable) return { granted: reply.data.granted, problem: reply.data.problem, unreadable: true };
   const access = { granted: reply.data.granted, problem: reply.data.problem };
-  rootAccessCache.set(user, { at: Date.now(), access });
+  const now = Date.now();
+  // Signed-out sessions leave their entries behind, so stale ones go as new ones come.
+  for (const [old, entry] of rootAccessCache) if (now - entry.at >= ROOT_ACCESS_TTL_MS) rootAccessCache.delete(old);
+  rootAccessCache.set(key, { at: now, access });
   return access;
 }
 

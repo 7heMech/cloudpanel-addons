@@ -120,8 +120,10 @@ export function dashboardContent(state: SmtpState): string {
     ${total ? `<div class="card-header toolbar">
         <h2>Sites</h2>
         ${FLEET_SELECTION_HTML}
-        <select class="toolbar-end" id="bulk-profile" data-keep aria-label="Where mail from the selected sites goes">${bulkOptions(state.profiles)}</select>
-        <button class="btn" id="assign-selected" type="button" disabled data-needs-selection onclick="smtpAssignSelected()">Assign selected</button>
+        <div class="toolbar-end actions bulk-assign">
+          <select id="bulk-profile" data-keep aria-label="Where mail from the selected sites goes">${bulkOptions(state.profiles)}</select>
+          <button class="btn" id="assign-selected" type="button" disabled data-needs-selection onclick="smtpAssignSelected()">Assign selected</button>
+        </div>
       </div>
       ${fleetFilterHtml({ count: total, filters: [
         { value: "unrelayed", label: "Not handled" }, { value: "discarded", label: "Discarded" }, { value: "blocked", label: "Blocked" },
