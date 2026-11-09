@@ -26,8 +26,10 @@ steps and reports each failure with the original operation error.
 
 ## Dashboard
 
-The site table comes first, with how many are Cloudflare only in its
-header; from six sites a search and an Off only toggle appear, and the headings sort. The toggle
+The site table comes first. From six sites a search and an Off only toggle
+appear, and the headings sort. How many sites are Cloudflare only joins the
+site count beside the search then, "20 sites · 9 Cloudflare only", so the
+header holds only the selection; with fewer it stays under the title. The toggle
 is the shared filter with one criterion, so it is a button highlighted while on
 rather than a one-item menu. Enable selected and
 Disable selected act on the ticked rows, which the filter keeps to rows on

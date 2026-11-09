@@ -51,6 +51,9 @@ export function dashboardView(state: FirewallPageState): string {
   const enabled = state.sites.filter((site) => site.enabled).length;
   const total = state.sites.length;
   const summary = `${enabled} of ${total} are Cloudflare only`;
+  // From six sites the count shares the search's row; below that it stays under the title.
+  const filter = fleetFilterHtml({ count: total, summary: `${plural(total, "site")} · ${enabled} Cloudflare only` })
+    .replace('<span class="hint" id="fleet-summary"', `${OFF_ONLY_HTML}$&`);
   const rows = state.sites.map((site) => `
     <tr data-domain="${esc(site.domain)}" data-enabled="${site.enabled}" data-show="${site.enabled ? "on" : "off"}" data-sort-enabled="${site.enabled ? "on" : "off"}" tabindex="0" aria-selected="false" onclick="toggleSiteSelection(event, this)" onkeydown="toggleSiteSelection(event, this)">
       <td class="site-select"><input class="site-checkbox" type="checkbox" onchange="paintFleetSelection()" aria-label="Select ${esc(site.domain)}"></td>
@@ -68,14 +71,14 @@ export function dashboardView(state: FirewallPageState): string {
       ${total === 0
         ? '<div class="empty">No sites found in CloudPanel.</div>'
         : `<div class="card-header toolbar">
-            <div><h2>Sites</h2><p class="hint" id="cf-summary">${esc(summary)}</p></div>
+            <div><h2>Sites</h2>${filter ? "" : `<p class="hint" id="cf-summary">${esc(summary)}</p>`}</div>
             ${FLEET_SELECTION_HTML}
             <div class="actions toolbar-actions">
               <button class="btn" id="enable-selected" type="button" disabled data-needs-selection onclick="setSelectedSites(true)">Enable selected</button>
               <button class="btn" id="disable-selected" type="button" disabled data-needs-selection onclick="setSelectedSites(false)">Disable selected</button>
             </div>
           </div>
-          ${fleetFilterHtml({ count: total, summary: plural(total, "site") }).replace('<span class="hint" id="fleet-summary"', `${OFF_ONLY_HTML}$&`)}
+          ${filter}
           <div class="table-scroll"><table class="fleet-table cloudflare-site-table">
             <thead><tr>
               <th scope="col" class="site-select"><input id="select-all" type="checkbox" onchange="selectAllSites(this.checked)" aria-label="Select all sites"></th>

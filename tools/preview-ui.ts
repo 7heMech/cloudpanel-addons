@@ -521,6 +521,10 @@ function previewTheme(html: string, url: URL): string {
   if (open) {
     html = html.replace("</body>", () => `<script>addEventListener("DOMContentLoaded",function(){${JSON.stringify(open.split(",")).replaceAll("<", "\\u003c")}.forEach(function(id){const d=document.getElementById(id);if(d)d.open=true})})</script></body>`);
   }
+  // ?select=all ticks every row, so the selection's count and actions can be reviewed.
+  if (url.searchParams.get("select") === "all") {
+    html = html.replace("</body>", () => `<script>addEventListener("load",function(){setTimeout(function(){CLP_ROOT.querySelectorAll(".site-checkbox").forEach(function(b){b.checked=true});paintFleetSelection()},0)})</script></body>`);
+  }
   if (!url.searchParams.has("dark")) return html;
   return html.replace("<head>", "<head><script>document.cookie='theme=dark; Path=/'</script>");
 }

@@ -122,6 +122,9 @@ test("six sites bring a search and an Off only toggle", () => {
   expect(html).toContain('data-domain="b.example.test" data-enabled="false" data-show="off"');
   expect(html).toContain('data-domain="a.example.test" data-enabled="true" data-show="on"');
   expect(html).toContain('id="fleet-none" hidden');
+  // One count per place: the Cloudflare-only count joins the search's row, and the header keeps the selection.
+  expect(html).not.toContain('id="cf-summary"');
+  expect(html).toContain("6 sites · 3 Cloudflare only");
 });
 
 test("the switch column ends where the table ends, as the Maintenance table does", () => {
