@@ -325,35 +325,52 @@ function ufwInstalled(paths: FirewallPaths): boolean {
   return existsSync(paths.userRules) || existsSync(paths.user6Rules);
 }
 
+type SyncMode = "apply" | "withdraw" | "restore";
+
+/**
+ * Whether a pass applies the protocols, decided from the state as stored when
+ * it runs: `withdraw` never, `apply` unless withdrawn, `restore` unless the
+ * Protocol switch is off. A pass that does not apply puts back what is still
+ * changed, so one that failed is finished by the next.
+ */
+function applies(mode: SyncMode, state: FirewallState): boolean {
+  if (mode === "withdraw") return false;
+  return mode === "apply" ? !state.withdrawn : !state.off;
+}
+
+/** Nothing to apply, nothing left to put back, and the mark already says so. */
+function settled(on: boolean, state: FirewallState): boolean {
+  if (!on) return Boolean(state.withdrawn) && !state.managed.length;
+  return !state.withdrawn && !Object.keys(state.protocols).length && !state.managed.length;
+}
+
 /**
  * Brings ufw in line with the stored protocols. It repeats until a pass finds
  * nothing to change, because CloudPanel may still be rebuilding when it starts.
- * `withdraw` puts back CloudPanel's own rules and marks the protocols withdrawn,
- * which every later `apply` respects until `restore` clears it. `restore`
- * does nothing while the Protocol switch is off.
+ * `withdraw` puts back CloudPanel's own rules and marks the protocols withdrawn;
+ * `restore` clears the mark and applies them, or withdraws them while the
+ * Protocol switch is off. Since each pass reads the switch itself, two switch
+ * changes in a row end in the later one's state whichever pass runs last.
  */
-export function syncFirewall(mode: "apply" | "withdraw" | "restore", options: FirewallOptions = {}): string | null {
+export function syncFirewall(mode: SyncMode, options: FirewallOptions = {}): string | null {
   const paths = pathsOf(options);
-  const enabled = mode !== "withdraw";
   if (!ufwInstalled(paths)) return null;
-  // Nothing chosen and nothing changed: ufw is CloudPanel's alone.
   const held = readFirewallState(paths);
-  const idle = !Object.keys(held.protocols).length && !held.managed.length;
-  if (idle && Boolean(held.withdrawn) === !enabled) return null;
-  if ((mode === "apply" && held.withdrawn) || (mode === "restore" && held.off)) return null;
+  if (settled(applies(mode, held), held)) return null;
   const now = options.now ?? Date.now;
   const sleep = options.sleep ?? Bun.sleepSync;
   const ufw = options.ufw ?? systemUfw;
   let changed = 0;
   let previous = "";
   for (let pass = 0; pass < MAX_PASSES; pass++) {
-    if (enabled) waitForQuiet(paths, now, sleep);
+    if (applies(mode, held)) waitForQuiet(paths, now, sleep);
     const commands = withFileLockSync(paths.lockFile, 30, "another firewall change is still running", () => {
       const stored = readFirewallState(paths);
-      if ((mode === "apply" && stored.withdrawn) || (mode === "restore" && stored.off)) return [];
+      const on = applies(mode, stored);
+      if (settled(on, stored)) return [];
       const rules = readPanelRules(paths.panelDb);
       const state = settleState(stored, rules, now());
-      const plan = planFirewall(rules, enabled ? state.protocols : {}, state.managed, readUfwRules(paths));
+      const plan = planFirewall(rules, on ? state.protocols : {}, state.managed, readUfwRules(paths));
       const failures: string[] = [];
       for (const args of plan.commands) {
         const result = ufw(args);
@@ -362,7 +379,7 @@ export function syncFirewall(mode: "apply" | "withdraw" | "restore", options: Fi
       // A rule that failed stays managed, so the next pass tries it again.
       const managed = failures.length ? [...plan.managed, ...state.managed.filter((rule) => !plan.managed.some((kept) => key(kept) === key(rule)))] : plan.managed;
       const next: FirewallState = { ...state, managed };
-      if (enabled) delete next.withdrawn;
+      if (on) delete next.withdrawn;
       else next.withdrawn = true;
       if (JSON.stringify(next) !== JSON.stringify(stored)) writeFirewallState(paths, next);
       if (failures.length) throw new Error(failures.join("; "));
@@ -454,7 +471,7 @@ export function setProtocolsEnabled(enabled: boolean, options: FirewallOptions =
     writeFirewallState(paths, state);
   });
   try {
-    syncFirewall(enabled ? "restore" : "withdraw", options);
+    syncFirewall("restore", options);
   } catch (error) {
     throw new Error(`the switch is saved, and ufw follows at the next repair: ${errorMessage(error)}`);
   }

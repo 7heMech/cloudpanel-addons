@@ -298,6 +298,19 @@ test("UDP rules System Tweaks applies enable Firewall, without a new-site policy
   expect(JSON.parse(readFileSync(join(root, "state/firewall/protocols.json"), "utf8"))).toEqual(UDP);
 });
 
+test("a new-site policy that does not parse does not hold back the protocols", () => {
+  const root = fixture();
+  writeFileSync(join(root, "etc", "system-tweaks.conf"), "# clp-addons: system-tweaks\n");
+  mkdirSync(join(root, "state", "cloudflare-ips"), { recursive: true });
+  writeFileSync(join(root, "state/cloudflare-ips/policy.json"), "{ not json", { mode: 0o600 });
+  save(root, "system-tweaks/firewall.json", UDP);
+  expect(migrate(root).warnings).toEqual([]);
+  expect(existsSync(join(root, "etc", "firewall.conf"))).toBe(true);
+  expect(JSON.parse(readFileSync(join(root, "state/firewall/protocols.json"), "utf8"))).toEqual(UDP);
+  expect(readFileSync(join(root, "state/firewall/policy.json"), "utf8")).toBe("{ not json");
+  expect(existsSync(join(root, "state/system-tweaks/firewall.json"))).toBe(false);
+});
+
 test("protocols System Tweaks withdrew arrive switched off, even into an enabled Firewall", () => {
   for (const firewallOn of [false, true]) {
     const root = fixture();

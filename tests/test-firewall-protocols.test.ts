@@ -379,6 +379,37 @@ test("the Protocol switch puts back CloudPanel's TCP, keeps the choices, and sta
   expect(firewallStatus(b.options)).toMatchObject({ enabled: true, udpPorts: ["51820"] });
 });
 
+test("a withdrawal that failed part way is finished by the next watcher pass", () => {
+  const b = box();
+  b.addRule("51820", "0.0.0.0/0");
+  b.rebuild();
+  setRuleProtocol({ portRange: "51820", source: "0.0.0.0/0", protocol: "udp", id: 1 }, b.options);
+  syncFirewall("apply", b.options);
+  const working = b.options.ufw!;
+  const failing: FirewallOptions = { ...b.options, ufw: (args) => args[0] === "delete" ? { ok: false, stdout: "", stderr: "busy" } : working(args) };
+  expect(() => setProtocolsEnabled(false, failing)).toThrow("the switch is saved");
+  expect(b.has({ proto: "udp", port: "51820", src: "0.0.0.0/0" })).toBe(true);
+  expect(readFirewallState(b.paths)).toMatchObject({ off: true, withdrawn: true });
+  expect(syncFirewall("apply", b.options)).toBe("1 ufw rule changed");
+  expect(b.has({ proto: "udp", port: "51820", src: "0.0.0.0/0" })).toBe(false);
+  expect(b.has({ proto: "tcp", port: "51820", src: "0.0.0.0/0" })).toBe(true);
+  expect(syncFirewall("apply", b.options)).toBeNull();
+});
+
+test("a stale switch-off pass that runs after a switch-on leaves the protocols applied", () => {
+  const b = box();
+  b.addRule("51820", "0.0.0.0/0");
+  b.rebuild();
+  setRuleProtocol({ portRange: "51820", source: "0.0.0.0/0", protocol: "udp", id: 1 }, b.options);
+  syncFirewall("apply", b.options);
+  setProtocolsEnabled(false, b.options);
+  setProtocolsEnabled(true, b.options);
+  // The first request's pass, late: it reads the switch as it is now.
+  syncFirewall("restore", b.options);
+  expect(b.has({ proto: "udp", port: "51820", src: "0.0.0.0/0" })).toBe(true);
+  expect(readFirewallState(b.paths).withdrawn).toBeUndefined();
+});
+
 test("the firewall watcher runs Firewall when ufw's rule files change", async () => {
   const { ADDONS } = await import("../addons/catalog");
   const { firewallUnits } = await import("../cli/provision");

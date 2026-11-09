@@ -137,10 +137,13 @@ port, a range, an address or a CIDR, or the row is skipped.
 Disabling marks the protocols withdrawn under the same lock before putting
 ufw back, because that change wakes the watcher, which must not apply them
 again. A failure there warns and does not keep Firewall on. Enabling clears
-the mark and applies the kept protocols. Switching Protocols off withdraws them
-the same way and records `off`, which enabling Firewall respects; switching it
-on clears both and applies them. The switch is on by default: it only offers
-the field, and every rule stays TCP until someone picks UDP.
+the mark and applies the kept protocols. The switch records `off` under the
+lock, then runs the same pass as enabling, which reads the switch itself: off
+withdraws, on applies. Two quick changes therefore end in the later one's
+state, whichever pass runs last. A withdrawal that failed part way keeps the
+rules it could not put back as changed, and the watcher's and repair's passes
+finish it. The switch is on by default: it only offers the field, and every
+rule stays TCP until someone picks UDP.
 
 CloudPanel v3: CloudPanel's own migration carries the rules, and keying by
 port range and source is what lets the choices follow them. Without the addon,

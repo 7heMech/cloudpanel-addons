@@ -75,7 +75,9 @@ export function migrateFirewallProtocols(enable: () => void): (() => void) | nul
     rmSync(source.path);
     if (!existing && applied && !existsSync(configPath)) {
       const policy = snapshot(policyPath);
-      const parsed = policy ? JSON.parse(policy.text) as Record<string, unknown> : null;
+      // A policy that does not parse is the Firewall page's to report; the move goes ahead.
+      let parsed: Record<string, unknown> | null = null;
+      try { parsed = policy ? JSON.parse(policy.text) as Record<string, unknown> : null; } catch { parsed = null; }
       if (parsed?.autoEnableNewSites === true) {
         keep(policyPath);
         restore({ ...policy!, text: `${JSON.stringify({ ...parsed, autoEnableNewSites: false }, null, 2)}\n` });
