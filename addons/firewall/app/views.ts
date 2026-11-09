@@ -71,7 +71,7 @@ export function dashboardView(state: FirewallPageState): string {
       ${total === 0
         ? '<div class="empty">No sites found in CloudPanel.</div>'
         : `<div class="card-header toolbar">
-            <div><h2>Sites</h2>${filter ? "" : `<p class="hint" id="cf-summary">${esc(summary)}</p>`}</div>
+            <div><h2>Cloudflare-only sites</h2>${filter ? "" : `<p class="hint" id="cf-summary">${esc(summary)}</p>`}</div>
             ${FLEET_SELECTION_HTML}
             <div class="actions toolbar-actions">
               <button class="btn" id="enable-selected" type="button" disabled data-needs-selection onclick="setSelectedSites(true)">Enable selected</button>
