@@ -15,7 +15,8 @@ import { errorMessage } from "../../lib/errors";
 import { withFileLock } from "../../lib/file-lock";
 import { panelCustomDomain, PANEL_CUSTOM_DOMAIN_FILE, PANEL_CUSTOM_DOMAIN_VHOST } from "../../lib/panel-custom-domain";
 import { withPanelDb } from "../../lib/panel-db";
-import { addonStateDir, CLOUDFLARE_IPS_PATH, LOCK_DIR, PANEL_DB, ROOT_UID } from "../../lib/paths";
+import { addonStateDir, CLOUDFLARE_IPS_PATH, DISTRO_NGINX_SITES_DIR, LOCK_DIR, PANEL_DB, ROOT_UID } from "../../lib/paths";
+import { trustedText } from "../../lib/trusted-file";
 import type { ApiFetch } from "../../lib/provider-http";
 import { readState, writeState } from "../../lib/root-state";
 import { panelUserUid } from "../../lib/sso-auth";
@@ -42,6 +43,7 @@ interface HetznerPaths {
   lockFile: string;
   ranges: string;
   panelDb: string;
+  nginxSitesDir: string;
   customDomain: string;
   customDomainVhost: string;
   rootUid: number;
@@ -54,6 +56,7 @@ export const DEFAULT_HETZNER_PATHS: HetznerPaths = {
   lockFile: `${LOCK_DIR}/firewall-hetzner.lock`,
   ranges: CLOUDFLARE_IPS_PATH,
   panelDb: PANEL_DB,
+  nginxSitesDir: DISTRO_NGINX_SITES_DIR,
   customDomain: PANEL_CUSTOM_DOMAIN_FILE,
   customDomainVhost: PANEL_CUSTOM_DOMAIN_VHOST,
   rootUid: ROOT_UID,
@@ -67,6 +70,7 @@ export interface HetznerOptions {
   /** A hostname's A and AAAA addresses; none when it does not resolve. */
   resolve?: (host: string) => Promise<string[]>;
   run?: (command: string, args: string[]) => CommandResult;
+  now?: () => number;
 }
 
 function pathsOf(options: HetznerOptions): HetznerPaths {
@@ -254,10 +258,14 @@ function labelsFor(role: HetznerRole, refreshedAt: number, current: Record<strin
   return { ...current, [OWNER_KEY]: OWNER_VALUE, [ROLE_KEY]: role, [RANGES_KEY]: String(refreshedAt) };
 }
 
-/** Whether a server whose list was refreshed at `refreshedAt` may rewrite this firewall's rules. */
-export function mayRewrite(firewall: HetznerFirewall, refreshedAt: number): boolean {
+/**
+ * Whether a server whose list was refreshed at `refreshedAt` may rewrite this
+ * firewall's rules. A time more than a day ahead of this server's clock is
+ * not believed, so a writer with a wrong clock cannot hold the rules for good.
+ */
+export function mayRewrite(firewall: HetznerFirewall, refreshedAt: number, now = Date.now()): boolean {
   const written = Number(firewall.labels?.[RANGES_KEY]);
-  return !Number.isFinite(written) || written <= refreshedAt;
+  return !Number.isFinite(written) || written <= refreshedAt || written > now / 1000 + 86_400;
 }
 
 // --- This server ------------------------------------------------------------
@@ -299,10 +307,22 @@ async function notThroughCloudflare(host: string, ranges: string[], resolve: (ho
   return outside.length ? `resolves to ${[...new Set(outside)].sort().join(", ")}` : null;
 }
 
-function siteDomains(paths: HetznerPaths): string[] {
+/** Every hostname the sites answer to: each site's domain and the other names its vhost's server_name lists. */
+function siteHostnames(paths: HetznerPaths): string[] {
   if (!existsSync(paths.panelDb)) return [];
-  return withPanelDb(paths.panelDb, (db) => db.query("SELECT domain_name FROM site ORDER BY domain_name").all()
-    .map((row) => String((row as { domain_name: unknown }).domain_name)));
+  const domains = withPanelDb(paths.panelDb, (db) => db.query("SELECT domain_name FROM site ORDER BY domain_name").all()
+    .map((row) => String((row as { domain_name: unknown }).domain_name).toLowerCase()));
+  const hosts = new Set(domains);
+  for (const domain of domains) {
+    const vhost = trustedText(`${paths.nginxSitesDir}/${domain}.conf`, paths.rootUid);
+    for (const match of vhost?.matchAll(/^[ \t]*server_name[ \t]+([^;]+);/gm) ?? []) {
+      for (const name of match[1]!.trim().split(/\s+/)) {
+        const host = name.toLowerCase();
+        if (/^[a-z0-9-]+(\.[a-z0-9-]+)+$/.test(host) && !parseCidr(host)) hosts.add(host);
+      }
+    }
+  }
+  return [...hosts];
 }
 
 function customDomain(paths: HetznerPaths): string | undefined {
@@ -316,8 +336,34 @@ function readToken(paths: HetznerPaths): string | null {
   return validToken(stored?.token) ? stored.token : null;
 }
 
-function readSync(paths: HetznerPaths): { rangesHash?: string } {
-  return readState<{ rangesHash?: string }>(paths.syncFile, paths.rootUid, () => ({}));
+interface SyncState {
+  rangesHash?: string;
+  /** This server's id, kept while a token is saved, for when the metadata service does not answer. */
+  serverId?: number;
+  /** Until when the page treats this server as not on Hetzner Cloud without asking again. */
+  absentUntil?: number;
+}
+
+function readSync(paths: HetznerPaths): SyncState {
+  return readState<SyncState>(paths.syncFile, paths.rootUid, () => ({}));
+}
+
+function writeSync(paths: HetznerPaths, change: Partial<SyncState>): void {
+  writeState(paths.syncFile, { ...readSync(paths), ...change }, paths.rootUid);
+}
+
+/** How long the page believes the metadata service's silence: it is quick to answer on Hetzner Cloud. */
+const ABSENT_FOR_MS = 10 * 60_000;
+
+/**
+ * This server's id: the metadata service's answer, asked twice before giving
+ * up, else the id kept when a token was connected, so a moment's silence
+ * from the service does not look like a server off Hetzner Cloud.
+ */
+async function serverIdOf(paths: HetznerPaths, options: HetznerOptions): Promise<number | null> {
+  const probed = await hetznerServerId(options.fetch) ?? await hetznerServerId(options.fetch);
+  if (probed !== null) return probed;
+  return readToken(paths) ? readSync(paths).serverId ?? null : null;
 }
 
 async function withHetznerLock<T>(paths: HetznerPaths, body: () => Promise<T>): Promise<T> {
@@ -370,9 +416,14 @@ function sshMissing(ports: number[], others: HetznerFirewall[]): string | null {
 
 export async function hetznerView(options: HetznerOptions = {}): Promise<HetznerView> {
   const paths = pathsOf(options);
-  const serverId = await hetznerServerId(options.fetch);
-  if (serverId === null) return { state: "absent" };
+  const now = (options.now ?? Date.now)();
   const token = readToken(paths);
+  if (!token && (readSync(paths).absentUntil ?? 0) > now) return { state: "absent" };
+  const serverId = token ? await serverIdOf(paths, options) : await hetznerServerId(options.fetch);
+  if (serverId === null) {
+    writeSync(paths, { absentUntil: now + ABSENT_FOR_MS });
+    return { state: "absent" };
+  }
   if (!token) return { state: "disconnected", serverId };
   const api = apiFor(token, options);
   try {
@@ -408,7 +459,7 @@ export async function hetznerView(options: HetznerOptions = {}): Promise<Hetzner
 // --- Changes ----------------------------------------------------------------
 
 async function requireServer(options: HetznerOptions): Promise<number> {
-  const serverId = await hetznerServerId(options.fetch);
+  const serverId = await serverIdOf(pathsOf(options), options);
   if (serverId === null) failAction("This server is not a Hetzner Cloud server; Hetzner's metadata service does not answer here");
   return serverId;
 }
@@ -437,6 +488,7 @@ export async function connectHetzner(body: Record<string, unknown>, options: Het
   }
   return withHetznerLock(paths, async () => {
     writeState(paths.tokenFile, { token }, paths.rootUid);
+    writeSync(paths, { serverId, absentUntil: undefined });
     return { notice: `Connected to the Hetzner project of ${name}.` };
   });
 }
@@ -446,7 +498,8 @@ export async function disconnectHetzner(options: HetznerOptions = {}): Promise<{
   return withHetznerLock(paths, async () => {
     const token = readToken(paths);
     if (!token) return { notice: "No Hetzner token is saved." };
-    const serverId = await hetznerServerId(options.fetch);
+    const serverId = await serverIdOf(paths, options);
+    let unchecked = "";
     if (serverId !== null) {
       const api = apiFor(token, options);
       try {
@@ -457,16 +510,16 @@ export async function disconnectHetzner(options: HetznerOptions = {}): Promise<{
           failAction(`Turn both switches off first: ${on.map((firewall) => firewall.name).join(" and ")} would stay attached to this server and no longer follow Cloudflare's list`);
         }
       } catch (error) {
-        // A token Hetzner refuses can always be removed; it could not turn anything off either.
+        if (error instanceof ActionFailure) throw error;
+        // A leaked or revoked token must always be removable; the operator is told what could not be checked.
         if (!(error instanceof HetznerError && (error.code === "unauthorized" || error.code === "forbidden" || error.code === "not_found"))) {
-          if (error instanceof ActionFailure) throw error;
-          failAction(`Could not check what is attached to this server, so the token was kept: ${api.clean(errorMessage(error))}`);
+          unchecked = ` Hetzner could not be asked what is attached to this server (${api.clean(errorMessage(error))}); a clp-addons firewall still attached there stays, and no longer follows Cloudflare's list.`;
         }
       }
     }
     rmSync(paths.tokenFile, { force: true });
     rmSync(paths.syncFile, { force: true });
-    return { notice: "The Hetzner token is removed. It stays valid in Hetzner until you delete it there." };
+    return { notice: `The Hetzner token is removed. It stays valid in Hetzner until you delete it there.${unchecked}` };
   });
 }
 
@@ -536,10 +589,11 @@ async function enableReview(role: HetznerRole, ctx: Awaited<ReturnType<typeof co
       details: [], confirmLabel: "Turn on", danger: true,
     });
   }
-  const hosts = [...new Set([...siteDomains(ctx.paths), ...(domain ? [domain] : [])])];
+  const hosts = [...new Set([...siteHostnames(ctx.paths), ...(domain ? [domain] : [])])];
+  // A name that does not resolve answers no one now, so only names that reach this server elsewhere are listed.
   const problems = await Promise.all(hosts.map(async (host) => {
     const problem = await notThroughCloudflare(host, ranges, resolve);
-    return problem ? `${host}${host === domain ? " (CloudPanel)" : ""} ${problem}` : null;
+    return problem && problem !== "does not resolve" ? `${host}${host === domain ? " (CloudPanel)" : ""} ${problem}` : null;
   }));
   const failing = problems.filter((problem): problem is string => problem !== null).sort();
   return reviewOf(role, true, {
@@ -570,10 +624,10 @@ function disableReview(role: HetznerRole, ctx: Awaited<ReturnType<typeof context
 }
 
 /** Rewrites an owned firewall's rules to the list unless they match, or a server with a newer list wrote them. */
-async function bringCurrent(api: HetznerApi, role: HetznerRole, firewall: HetznerFirewall, list: CloudflareRanges): Promise<"current" | "rewritten" | "newer"> {
+async function bringCurrent(api: HetznerApi, role: HetznerRole, firewall: HetznerFirewall, list: CloudflareRanges, now = Date.now()): Promise<"current" | "rewritten" | "newer"> {
   const rules = desiredRules(role, list.ranges);
   if (rulesSignature(firewall.rules) === rulesSignature(rules)) return "current";
-  if (!mayRewrite(firewall, list.refreshedAt)) return "newer";
+  if (!mayRewrite(firewall, list.refreshedAt, now)) return "newer";
   await api.setRules(firewall.id, rules);
   await api.setLabels(firewall.id, labelsFor(role, list.refreshedAt, firewall.labels));
   return "rewritten";
@@ -611,6 +665,7 @@ async function attach(role: HetznerRole, ctx: Awaited<ReturnType<typeof context>
       throw error;
     }
   }
+  failAction(`${HETZNER_ROLES[role].name} was deleted by another server each time it was attached; try again`);
 }
 
 async function detach(ctx: Awaited<ReturnType<typeof context>>, on: HetznerFirewall): Promise<void> {
@@ -665,7 +720,7 @@ export async function setHetznerRole(
     try {
       if (enabled) {
         await attach(role, ctx, list!);
-        writeState(paths.syncFile, { ...readSync(paths), rangesHash: list!.hash }, paths.rootUid);
+        writeSync(paths, { rangesHash: list!.hash });
       } else {
         await detach(ctx, ctx.on!);
       }
@@ -708,14 +763,14 @@ export async function syncHetzner(mode: "repair" | "ranges", options: HetznerOpt
         if (!firewall.applied_to.length) {
           if (await deleteIfUnused(api, firewall.id)) { deleted++; continue; }
         }
-        const result = await bringCurrent(api, role, firewall, list);
+        const result = await bringCurrent(api, role, firewall, list, (options.now ?? Date.now)());
         if (result === "rewritten") rewritten++;
         if (result === "newer") newer++;
       }
     } catch (error) {
       throw new Error(`Hetzner firewalls: ${api.clean(errorMessage(error))}`);
     }
-    if (stored.rangesHash !== list.hash) writeState(paths.syncFile, { ...stored, rangesHash: list.hash }, paths.rootUid);
+    if (stored.rangesHash !== list.hash) writeSync(paths, { rangesHash: list.hash });
     const lines = [
       rewritten ? `${rewritten} Hetzner firewall${rewritten === 1 ? "" : "s"} set to Cloudflare's list` : "",
       deleted ? `${deleted} unused Hetzner firewall${deleted === 1 ? "" : "s"} deleted` : "",

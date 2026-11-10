@@ -17,6 +17,8 @@ export class FakeHetzner {
   serverId: number | null;
   /** An error message that repeats the token, as some providers' do. */
   echoToken = false;
+  /** Answer every apply with not_found, as if another server deleted the firewall each time. */
+  applyNotFound = false;
   private nextId = 1000;
 
   constructor(readonly token: string, serverId: number | null = 166224552) {
@@ -101,6 +103,7 @@ export class FakeHetzner {
       const done = json({ actions: [{ id: 2, status: "success" }] }, 201);
       if (action === "set_rules") { firewall.rules = body.rules; return done; }
       if (action === "apply_to_resources") {
+        if (this.applyNotFound) return refuse(404, "not_found", "firewall not found");
         const id = body.apply_to[0].server.id;
         if (firewall.applied_to.some((entry) => entry.server?.id === id)) return refuse(422, "firewall_already_applied", "already applied");
         firewall.applied_to.push({ type: "server", server: { id } });

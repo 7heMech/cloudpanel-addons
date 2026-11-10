@@ -167,7 +167,12 @@ servers have a different firewall API and are not covered.
 The server's id comes from the metadata service,
 `http://169.254.169.254/hetzner/v1/metadata/instance-id`, with a 1.5-second
 deadline; anything but a number there means this is not a Hetzner Cloud
-server, and the card says so and offers nothing.
+server, and the card says so and offers nothing. Changes ask twice. Once a
+token is connected the id is kept in `hetzner.json`, so a moment's silence
+from the service does not hide the switches or skip the check before the token
+is removed. Without a token the page believes the silence for ten minutes, so
+a server off Hetzner Cloud whose link-local address is filtered does not wait
+on every load.
 
 ### Two firewalls per project
 
@@ -199,16 +204,20 @@ Two servers whose lists differ, for the hours between their daily refreshes,
 must not rewrite each other's rules on every repair. The writer stores its
 list's modification time in the `clp-addons-ranges-at` label, and a server
 whose own list is older leaves the rules alone and says so. Servers whose lists
-agree write nothing.
+agree write nothing. The time says nothing about the content: a server whose
+file is newer but holds an older list, such as a restored copy, wins until the
+others' next daily refresh, which is newer again. A time more than a day ahead
+of the reader's clock is ignored, so a wrong clock cannot hold the rules.
 
 ### Attaching and keeping current
 
 A switch attaches its firewall to this server by server id; label selectors
 are never used. The first server creates the firewall with `apply_to` in the
 same request, so it never exists unused; a later one brings its rules current
-and applies it. A create refused as a duplicate name is read back by label,
-since another server may have created it a moment earlier, and an apply to a
-firewall deleted in between creates it again. Turning a switch off removes the
+and applies it, whichever server's list wrote its rules. A create refused as a
+duplicate name is read back by label, since another server may have created it
+a moment earlier, and an apply to a firewall deleted in between creates it
+again, once; a second deletion fails the switch. Turning a switch off removes the
 firewall from this server and deletes it if nothing else uses it; Hetzner
 refuses to delete one still applied, which covers a server attaching it in
 between. Repair also deletes an owned firewall applied to nothing.
@@ -245,9 +254,11 @@ review that changed in between is shown again.
   8443, so every Cloudflare range must also reach 443 through the firewalls
   attached to this server. The review then says the panel answers only at that
   domain, and that an SSH tunnel to `127.0.0.1:8443` is the way back.
-- Sites: the review lists every site's domain, and the custom domain, whose A
-  or AAAA records include an address outside the list or that do not resolve:
-  those stop answering.
+- Sites: the review lists every hostname the sites answer to, each site's
+  domain and the other names in its vhost's `server_name`, and the custom
+  domain, whose A or AAAA records include an address outside the list: those
+  stop answering. A name that does not resolve answers no one already and is
+  left out.
 - No effect: a source another attached firewall allows to the same ports that
   is not inside the list leaves the addon's firewall without effect. The review,
   the result and the card name the port, the firewall and the sources
@@ -268,7 +279,9 @@ sent only in the Authorization header through `lib/provider-http.ts`, which
 DNS uses too; every message from Hetzner is redacted of it. The page learns
 only whether one is saved. A read cannot tell a read-only token, so the first
 change reports it. Removing the token is refused while one of its firewalls is
-attached to this server, unless Hetzner no longer accepts it.
+attached to this server. When Hetzner cannot be asked, or no longer accepts the
+token, it is removed anyway, since a leaked token must always be removable, and
+the result says what could not be checked.
 
 ## Taking over from earlier releases
 

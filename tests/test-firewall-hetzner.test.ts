@@ -61,6 +61,7 @@ interface Box {
 function box(fake: FakeHetzner, serverId: number | null = SERVER, sites: string[] = ["shop.example.com", "blog.example.com"]): Box {
   const dir = mkdtempSync(join(tmpdir(), "hetzner-test-"));
   dirs.push(dir);
+  mkdirSync(join(dir, "sites"));
   writeFileSync(join(dir, "ips"), CLOUDPANEL_IPS, { mode: 0o644 });
   const db = new Database(join(dir, "panel.db"));
   db.exec("CREATE TABLE site (id INTEGER PRIMARY KEY, domain_name TEXT)");
@@ -76,6 +77,7 @@ function box(fake: FakeHetzner, serverId: number | null = SERVER, sites: string[
         lockFile: join(dir, "locks", "hetzner.lock"),
         ranges: join(dir, "ips"),
         panelDb: join(dir, "panel.db"),
+        nginxSitesDir: join(dir, "sites"),
         customDomain: join(dir, "clp_custom_domain"),
         customDomainVhost: join(dir, "custom-domain.conf"),
         rootUid: uid,
@@ -290,12 +292,20 @@ describe("safeguards", () => {
     expect(fake.writes()).toEqual([]);
   });
 
-  test("the sites switch names every hostname that does not resolve to Cloudflare, the panel's included", async () => {
+  test("the sites switch names every hostname that reaches this server outside Cloudflare, aliases and the panel's included", async () => {
     const fake = new FakeHetzner(TOKEN);
     fake.firewall("office", [ssh()], [SERVER]);
     const server = await connected(fake, SERVER, ["shop.example.com", "blog.example.com", "old.example.org"]);
     server.dns.set("blog.example.com", ["46.225.93.37", CLOUDFLARE_V6]);
     server.dns.set("old.example.org", []);
+    writeFileSync(join(server.dir, "sites", "shop.example.com.conf"), `server {
+  listen 443 ssl;
+  server_name shop.example.com www.shop.example.com  Store.Example.NET 203.0.113.9 *.wild.example.com _;
+  proxy_ssl_server_name on;
+}
+`, { mode: 0o644 });
+    server.dns.set("www.shop.example.com", ["46.225.93.37"]);
+    server.dns.set("store.example.net", [CLOUDFLARE_V4]);
     customDomain(server, "cp.example.com", ["46.225.93.37"]);
     const first = await setHetznerRole("web", true, undefined, server.options);
     if (!("review" in first)) throw new Error("expected a review");
@@ -303,9 +313,18 @@ describe("safeguards", () => {
     expect(first.review.details).toEqual([
       "blog.example.com resolves to 46.225.93.37",
       "cp.example.com (CloudPanel) resolves to 46.225.93.37",
-      "old.example.org does not resolve",
+      "www.shop.example.com resolves to 46.225.93.37",
     ]);
     expect(fake.writes()).toEqual([]);
+  });
+
+  test("a firewall deleted by another server on every attempt fails the switch instead of reporting success", async () => {
+    const fake = new FakeHetzner(TOKEN);
+    fake.firewall("office", [ssh()], [SERVER]);
+    fake.firewall("clp-addons-cloudflare-web", desiredRules("web", RANGES), [7], { "managed-by": "clp-addons", "clp-addons-role": "web" });
+    fake.applyNotFound = true;
+    const server = await connected(fake);
+    expect(await refusal(turn(server, "web", true))).toContain("was deleted by another server each time it was attached");
   });
 
   test("only the review the operator saw makes the change", async () => {
@@ -373,6 +392,29 @@ describe("safeguards", () => {
     expect(mine.applied_to).toEqual([]);
   });
 
+  test("a token is removed even when Hetzner cannot be asked, with a warning", async () => {
+    const fake = new FakeHetzner(TOKEN);
+    const server = await connected(fake);
+    const api = server.options.fetch!;
+    server.options.fetch = async (url, init) => url.startsWith("https://api.hetzner.cloud/")
+      ? new Response(JSON.stringify({ error: { code: "service_error", message: "try again later" } }), { status: 503 })
+      : api(url, init);
+    const { notice } = await disconnectHetzner(server.options);
+    expect(notice).toContain("The Hetzner token is removed");
+    expect(notice).toContain("could not be asked what is attached to this server");
+    expect((await hetznerView(server.options)).state).toBe("disconnected");
+  });
+
+  test("a range time far ahead of this server's clock does not hold the rules", async () => {
+    const fake = new FakeHetzner(TOKEN);
+    const ahead = String(Math.floor(Date.now() / 1000) + 10 * 86_400);
+    const web = fake.firewall("clp-addons-cloudflare-web", [anyone("80")], [SERVER],
+      { "managed-by": "clp-addons", "clp-addons-role": "web", "clp-addons-ranges-at": ahead });
+    const server = await connected(fake);
+    expect(await syncHetzner("repair", server.options)).toBe("1 Hetzner firewall set to Cloudflare's list");
+    expect(rulesSignature(web.rules)).toBe(rulesSignature(desiredRules("web", RANGES)));
+  });
+
   test("the token cannot be removed while one of its firewalls is attached here", async () => {
     const fake = new FakeHetzner(TOKEN);
     fake.firewall("office", [ssh()], [SERVER]);
@@ -423,6 +465,42 @@ describe("the token", () => {
     expect(view.state).toBe("error");
     expect(JSON.stringify(view)).not.toContain(TOKEN);
     expect(JSON.stringify(view)).toContain("[redacted]");
+  });
+});
+
+describe("the metadata service", () => {
+  /** This box's fetch, with the metadata service silent. */
+  const silent = (server: Box) => {
+    const api = server.options.fetch!;
+    let probes = 0;
+    server.options.fetch = async (url, init) => {
+      if (url.startsWith("http://169.254.169.254/")) { probes++; throw new Error("timed out"); }
+      return api(url, init);
+    };
+    return () => probes;
+  };
+
+  test("a moment's silence on a connected server falls back to the id kept at connect", async () => {
+    const fake = new FakeHetzner(TOKEN);
+    fake.firewall("office", [ssh()], [SERVER]);
+    const server = await connected(fake);
+    await turn(server, "web", true);
+    silent(server);
+    expect((await hetznerView(server.options)).state).toBe("connected");
+    expect(await refusal(disconnectHetzner(server.options))).toContain("Turn both switches off first");
+  });
+
+  test("off Hetzner Cloud the page asks the metadata service once per ten minutes", async () => {
+    const server = box(new FakeHetzner(TOKEN, null), null);
+    const probes = silent(server);
+    let now = 1_000_000;
+    server.options.now = () => now;
+    expect(await hetznerView(server.options)).toEqual({ state: "absent" });
+    expect(await hetznerView(server.options)).toEqual({ state: "absent" });
+    expect(probes()).toBe(1);
+    now += 10 * 60_000 + 1;
+    await hetznerView(server.options);
+    expect(probes()).toBe(2);
   });
 });
 
