@@ -201,7 +201,7 @@ function settingsCard(state: DnsState): string {
   const connections = state.connections.length ? state.connections.map(connectionRow).join("") : `<tr>
       <td class="site-cell"><strong>Cloudflare</strong></td><td class="wide-cell"><span class="hint">Not connected</span></td>
       <td data-label="Actions" class="action-cell"><button class="btn" type="button" onclick="dnsEditConnection('')">Connect</button></td></tr>`;
-  return `<div class="card card-table"><div class="card-header"><div><h2>Settings</h2>
+  return `<div class="card card-table"${state.connections.length ? ' id="dns-connection"' : ""}><div class="card-header"><div><h2>Settings</h2>
       <p class="hint">Each Cloudflare connection is one API token. A site is managed in the longest zone any connection reaches.</p></div>
       ${state.connections.length ? '<button class="btn" type="button" onclick="dnsEditConnection(\'\')">Add Cloudflare connection</button>' : ""}</div>
     <div class="table-scroll"><table class="fleet-table dns-settings-table"><tbody>
@@ -219,13 +219,46 @@ function settingsCard(state: DnsState): string {
     </tbody></table></div></div>`;
 }
 
+const PANEL_SETTINGS_URL = "/admin/settings";
+
+/** A name for CloudPanel itself, pointed here and proxied once CloudPanel has its certificate. */
+function panelHostCard(state: DnsState): string {
+  const host = state.panelHost;
+  const form = `<form class="dns-panel-host-form" onsubmit="dnsSavePanelHost(event)">
+      <input id="dns-panel-host-name" name="name" aria-label="Panel hostname" autocomplete="off" spellcheck="false" placeholder="panel.example.com" value="${esc(host?.name ?? "")}">
+      <button class="btn${host ? "" : " btn-primary"}" type="submit">${host ? "Change" : "Save"}</button>
+      ${host ? '<button class="btn btn-danger" type="button" onclick="dnsRemovePanelHost()">Remove</button>' : ""}</form>`;
+  let body = "";
+  if (host) {
+    const status = host.problem
+      ? { label: "Needs attention", tone: "bad", hint: host.problem }
+      : siteStatus({ domain: host.name, type: "panel", profileId: "panel-hostname", plan: host.plan, ssl: null }, state.automatic);
+    const pending = host.plan?.changes.filter((change) => change.action !== "note") ?? [];
+    const settings = `<a href="${PANEL_SETTINGS_URL}">Admin → Settings → Custom Domain</a>`;
+    const custom = host.customDomain;
+    const next = host.problem ? ""
+      : host.proxied ? "CloudPanel's custom domain, proxied through Cloudflare. The zone's Full SSL rule for Let's Encrypt checks keeps its renewals working."
+      : custom?.name === host.name ? "CloudPanel is getting its certificate. DNS proxies it through Cloudflare once that is issued."
+      : pending.length || !host.plan ? (state.automatic ? (pending.length ? "The next check writes these, within 15 minutes." : "") : "DNS asks first, so the record is written once you turn on Automatic.")
+      : `Next: enter ${esc(host.name)} under ${settings} in CloudPanel. DNS proxies it through Cloudflare once CloudPanel has its certificate.${custom ? ` CloudPanel's custom domain is ${esc(custom.name)} now.` : ""}`;
+    body = `<div class="dns-panel-host-status"><span class="badge tone-${status.tone}">${esc(status.label)}</span>${status.hint ? `<span class="hint">${esc(status.hint)}</span>` : ""}</div>
+      ${pending.length && !host.problem ? `<ul class="dns-panel-host-changes">${pending.map((change) =>
+        `<li><span class="badge dns-${esc(change.action)}">${esc(LOG_LABELS[change.action] ?? change.action)}</span> <strong>${esc(change.subject)}</strong> <span class="hint">${esc(change.detail)}</span></li>`).join("")}</ul>` : ""}
+      ${host.plan?.problems.length ? `<ul class="dns-panel-host-changes">${host.plan.problems.map((problem) => `<li class="tone-bad">${esc(problem)}</li>`).join("")}</ul>` : ""}
+      ${next ? `<p class="dns-panel-host-next">${next}</p>` : ""}`;
+  }
+  return `<div class="card" id="dns-panel-host"><div class="card-header"><div><h2>Panel hostname</h2>
+      <p class="hint">A name for CloudPanel itself, such as panel.example.com. DNS points it at this server without Cloudflare's proxy, so CloudPanel can get its certificate, then proxies it.</p></div></div>
+    <div class="dns-panel-host-body">${form}${body}</div></div>`;
+}
+
 /** Until Cloudflare is connected: the three steps that make a new site publish itself. */
 function setupCard(state: DnsState): string {
   if (state.connections.length) return "";
   const fallback = state.profiles.find((profile) => profile.id === state.defaultProfileId);
   const step = (done: boolean, title: string, hint: string, control: string): string =>
     `<li class="${done ? "done" : ""}"><div><strong>${title}</strong><span class="hint">${hint}</span></div><div class="dns-step-control">${control}</div></li>`;
-  return `<div class="card dns-setup"><h2>Set up DNS</h2><ol class="dns-checklist">
+  return `<div class="card dns-setup" id="dns-connection"><h2>Set up DNS</h2><ol class="dns-checklist">
     ${step(false, "Connect Cloudflare", "Cloudflare's own form opens with the permissions filled in; paste the token back.",
       '<button class="btn btn-primary" type="button" onclick="dnsEditConnection(\'\')">Connect Cloudflare</button>')}
     ${step(Boolean(fallback), "Choose the profile for new sites", "A new site joins it seconds after CloudPanel creates it. Existing sites are never moved.",
@@ -239,7 +272,7 @@ function setupCard(state: DnsState): string {
 function modeBar(state: DnsState): string {
   if (!state.connections.length && !state.sites.some((site) => site.redirect)) return "";
   if (state.automatic) {
-    return `<div class="notice dns-mode-bar dns-mode-on"><span><strong>Automatic.</strong> DNS keeps every site's records to its profile, and creates a zone a site is missing.</span>
+    return `<div class="notice dns-mode-bar dns-mode-on" id="dns-mode"><span><strong>Automatic.</strong> DNS keeps every site's records to its profile, and creates a zone a site is missing.</span>
       <button class="btn" type="button" onclick="dnsSetAutomatic(false)">Ask first instead</button></div>`;
   }
   const plans = state.sites.flatMap((site) => site.plan ? [site.plan] : []);
@@ -249,7 +282,7 @@ function modeBar(state: DnsState): string {
   const waiting = changes.length
     ? ` ${plural(changes.length - zones, "change")}${zones ? ` and ${plural(zones, "new zone")}` : ""} across ${plural(busy, "site")} are waiting.`
     : "";
-  return `<div class="notice dns-mode-bar"><span><strong>Ask first.</strong> DNS shows what differs and writes nothing, so new sites get no records.${waiting}</span>
+  return `<div class="notice dns-mode-bar" id="dns-mode"><span><strong>Ask first.</strong> DNS shows what differs and writes nothing, so new sites get no records.${waiting}</span>
     <button class="btn btn-primary" type="button" onclick="dnsSetAutomatic(true)">Review and turn on Automatic</button></div>`;
 }
 
@@ -358,6 +391,7 @@ export function dashboardContent(state: DnsState, now = Date.now()): string {
       ${profiles ? `<div class="table-scroll"><table class="fleet-table dns-profile-table"><thead><tr><th>Profile</th><th>Records</th><th>Zone</th><th class="numeric">Sites</th><th class="action-cell">Actions</th></tr></thead><tbody>${profiles}</tbody></table></div>`
         : '<div class="empty">No profiles yet. Create one from the Web and Mailcow presets.</div>'}
     </div>
+    ${panelHostCard(state)}
     ${settingsCard(state)}
     ${log}`;
 }

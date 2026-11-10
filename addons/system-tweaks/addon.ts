@@ -8,6 +8,7 @@ import { syncVarnishBackends } from "./varnish-backend";
 import { DEFAULT_VISITOR_IP_PATHS, UNTRUSTED_LOOPBACK, VISITOR_IP, releaseVisitorIp } from "./visitor-ip";
 import { fatal, log } from "../../lib/log";
 import type { AddonDefinition } from "../../lib/addon-definition";
+import { SYSTEM_TWEAKS_SETUP } from "./setup";
 
 export const SYSTEM_TWEAKS_ADDON: AddonDefinition = {
   name: "system-tweaks",
@@ -24,6 +25,7 @@ export const SYSTEM_TWEAKS_ADDON: AddonDefinition = {
     { in: "2.0.0", note: "Mitigates several CloudPanel weaknesses; accept the panel's new certificate once." },
   ],
   targets: [],
+  setup: SYSTEM_TWEAKS_SETUP,
   handler: handle,
   action: runSystemTweaksAction,
   repair: {

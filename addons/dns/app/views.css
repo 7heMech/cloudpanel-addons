@@ -234,3 +234,12 @@ p.dns-dialog-note { margin:20px 0 0; }
   .dns-facts dd { margin-bottom:8px; }
   .dns-inline { flex-wrap:wrap; }
 }
+
+.dns-panel-host-body { display:flex; flex-direction:column; gap:12px; }
+.dns-panel-host-form { display:flex; flex-wrap:wrap; gap:8px; }
+.dns-panel-host-form input { flex:0 1 320px; min-width:0; }
+.dns-panel-host-status { display:flex; flex-wrap:wrap; align-items:baseline; gap:4px 10px; }
+.dns-panel-host-status .hint { margin:0; }
+.dns-panel-host-changes { list-style:none; margin:0; padding:0; display:flex; flex-direction:column; gap:6px; }
+.dns-panel-host-changes .hint { margin:0; }
+.dns-panel-host-next { margin:0; }

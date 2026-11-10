@@ -278,6 +278,16 @@ export function smtpRelayAccounts(stateFile = DEFAULT_SMTP_PATHS.stateFile, root
   }
 }
 
+/** The profiles that relay mail, and the one new sites join, for the Setup checklist. */
+export function smtpSetupState(paths: Partial<SmtpPaths> = {}): { relays: string[]; defaultProfile: { name: string; relays: boolean } | null } {
+  const policy = readPolicy({ ...DEFAULT_SMTP_PATHS, ...paths });
+  const chosen = policy.profiles.find((profile) => profile.id === policy.defaultProfileId);
+  return {
+    relays: policy.profiles.filter((profile) => profile.relay).map((profile) => profile.name),
+    defaultProfile: chosen ? { name: chosen.name, relays: Boolean(chosen.relay) } : null,
+  };
+}
+
 /**
  * Discard is `dont-send` and nothing else. A 1.5 file may hold other discard
  * profiles or a `dont-send` with a relay: a discard profile's sites move to `dont-send`,

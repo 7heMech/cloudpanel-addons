@@ -31,7 +31,7 @@ export function settingRow(row: Row): string {
               <span></span>
             </label>`;
   return `
-      <div class="tweak-row">
+      <div class="tweak-row" id="tweak-${esc(row.key)}">
         <div class="tweak-body">
           <div class="tweak-heading">
             <h3>${esc(row.title)}<button class="tweak-more" type="button" aria-expanded="false"

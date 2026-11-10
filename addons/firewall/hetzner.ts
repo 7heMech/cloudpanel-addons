@@ -46,6 +46,8 @@ interface HetznerPaths {
   nginxSitesDir: string;
   customDomain: string;
   customDomainVhost: string;
+  /** The firmware's vendor, which is Hetzner on Hetzner Cloud. */
+  vendor: string;
   rootUid: number;
   panelUid: number | null;
 }
@@ -59,6 +61,7 @@ export const DEFAULT_HETZNER_PATHS: HetznerPaths = {
   nginxSitesDir: DISTRO_NGINX_SITES_DIR,
   customDomain: PANEL_CUSTOM_DOMAIN_FILE,
   customDomainVhost: PANEL_CUSTOM_DOMAIN_VHOST,
+  vendor: "/sys/class/dmi/id/sys_vendor",
   rootUid: ROOT_UID,
   panelUid: null,
 };
@@ -342,6 +345,8 @@ interface SyncState {
   serverId?: number;
   /** Until when the page treats this server as not on Hetzner Cloud without asking again. */
   absentUntil?: number;
+  /** Which switches were on when Hetzner was last asked, for the Setup checklist. */
+  seen?: Partial<Record<HetznerRole, boolean>>;
 }
 
 function readSync(paths: HetznerPaths): SyncState {
@@ -414,6 +419,15 @@ function sshMissing(ports: number[], others: HetznerFirewall[]): string | null {
     : `no other firewall is attached to this server to allow SSH on port ${list}`;
 }
 
+/** What the Setup checklist reads, without asking Hetzner: whether this is Hetzner Cloud, a token, and the switches as last seen. */
+export function hetznerSetupState(options: HetznerOptions = {}): { cloud: boolean; token: boolean; seen: Partial<Record<HetznerRole, boolean>> } {
+  const paths = pathsOf(options);
+  let vendor = "";
+  try { vendor = readFileSync(paths.vendor, "utf8").trim(); } catch { /* not a VM that says */ }
+  const token = readToken(paths) !== null;
+  return { cloud: vendor === "Hetzner" || token, token, seen: token ? readSync(paths).seen ?? {} : {} };
+}
+
 export async function hetznerView(options: HetznerOptions = {}): Promise<HetznerView> {
   const paths = pathsOf(options);
   const now = (options.now ?? Date.now)();
@@ -444,6 +458,8 @@ export async function hetznerView(options: HetznerOptions = {}): Promise<Hetzner
         stillOpen: on && ranges ? describeOpenings(openToOthers(role, others, ranges.ranges)) : [],
       };
     }
+    const seen = { web: roles.web.on, panel: roles.panel.on };
+    if (JSON.stringify(readSync(paths).seen) !== JSON.stringify(seen)) writeSync(paths, { seen });
     const anyOn = roles.web.on || roles.panel.on;
     return {
       state: "connected", serverId, serverName: server.name, roles,
@@ -737,6 +753,7 @@ export async function setHetznerRole(
       if (error instanceof ActionFailure) throw error;
       hetznerFailure(ctx.api, error, enabled ? `attach ${HETZNER_ROLES[role].name}` : `detach ${ctx.on!.name}`);
     }
+    writeSync(paths, { seen: { ...readSync(paths).seen, [role]: enabled } });
     if (!enabled) return { notice: `${title} is off.` };
     const stillOpen = describeOpenings(openToOthers(role, ctx.others, list!.ranges));
     const ports = HETZNER_ROLES[role].ports.join(" and ");

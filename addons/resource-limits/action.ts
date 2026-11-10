@@ -653,6 +653,13 @@ function readPolicy(path: string, expectedUid: number): Policy {
   });
 }
 
+/** The category new sites join, by name, or null for none. */
+export function newSiteCategory(paths: Partial<ResourceLimitsActionPaths> = {}): string | null {
+  const { policyFile, rootUid } = { ...DEFAULT_RESOURCE_LIMITS_ACTION_PATHS, ...paths };
+  const policy = readPolicy(policyFile, rootUid);
+  return policy.categories.find((category) => category.id === policy.defaultCategoryId)?.name ?? null;
+}
+
 function writePolicy(path: string, policy: Policy, expectedUid: number): void {
   let uid = expectedUid;
   let gid = process.getgid?.() ?? 0;

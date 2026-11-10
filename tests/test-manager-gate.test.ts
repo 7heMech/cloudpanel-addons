@@ -534,3 +534,25 @@ test("old PHP Resources URLs redirect behind the administrator gate, including l
   ]);
   expect(redirects.every((result) => (result.reached as string[]).length === 0)).toBe(true);
 });
+
+test("the Setup checklist asks root for the signed-in administrator's own list", () => {
+  const csrf = { Origin: "https://panel.example", Host: "panel.example", Cookie: "clp_addons_csrf=gate-test", "X-CLP-Addons-CSRF": "gate-test" };
+  const view = { ok: true, data: { hidden: false, steps: [] } };
+  const [read, unguarded, skip, junk] = probe({ user: "ops", roles: ["ROLE_ADMIN"] }, [
+    { path: "/addons/api/setup" },
+    { path: "/addons/api/setup", method: "POST", body: JSON.stringify({ skip: "updates" }) },
+    { path: "/addons/api/setup", method: "POST", headers: csrf, body: JSON.stringify({ skip: "updates" }) },
+    { path: "/addons/api/setup", method: "POST", headers: csrf, body: JSON.stringify({ skip: 1 }) },
+  ], false, { "manager:setup": view, "manager:setup-pref": view });
+  expect(read!.status).toBe(200);
+  expect(read!.reached).toContain("gateway manager setup --user=ops");
+  expect(read!.body).toMatchObject({ ok: true, data: { show: false } });
+  expect(unguarded!.status).toBe(403);
+  expect(unguarded!.reached).not.toContain("gateway");
+  expect(skip!.reached).toContain("gateway manager setup-pref --user=ops --skip=updates");
+  expect(junk!.status).toBe(400);
+  expect(junk!.reached).not.toContain("gateway");
+  const [managerRead] = probe({ user: "mea", roles: ["ROLE_SITE_MANAGER"] }, [{ path: "/addons/api/setup" }]);
+  expect(managerRead!.status).toBe(403);
+  expect(managerRead!.reached).toEqual([]);
+});

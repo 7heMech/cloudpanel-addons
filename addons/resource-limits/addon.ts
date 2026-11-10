@@ -10,6 +10,7 @@ import { existsSync } from "node:fs";
 import { clearAbandonedTmpFiles } from "../../lib/tmp-cleanup";
 import { errorMessage } from "../../lib/errors";
 import { fatal, log } from "../../lib/log";
+import { RESOURCE_LIMITS_SETUP } from "./setup";
 
 const count = (value: number, word: string) => `${value} ${word}${value === 1 ? "" : "s"}`;
 
@@ -25,6 +26,7 @@ export const RESOURCE_LIMITS_ADDON: AddonDefinition = {
   activate: () => { restoreResourceMemory(); },
   withdrawn: () => { withdrawResourceMemory(); },
   targets: RESOURCE_LIMITS_TARGETS,
+  setup: RESOURCE_LIMITS_SETUP,
   handler: handle,
   action: runResourceLimitsAction,
   commands: {

@@ -241,6 +241,31 @@ stand-in site is deleted. Deleting a redirect domain deletes its stand-in at
 once unless a Cloudflare rule needs a review first; then confirming the review
 deletes both.
 
+## Panel hostname
+
+The panel hostname is a third kind of entry beside sites and redirect domains,
+planned through the same switch, reviews, log and lock, with a fixed profile:
+A and AAAA at the name, no mail, and the ACME Full SSL rule for its zone. It
+cannot be a site's or a redirect's name; one created later at it stops it with
+a problem. It asks for no certificate, since CloudPanel issues the custom
+domain's own, and its records are tracked like a site's, so removing it lists
+them with the records of deleted sites.
+
+Its records are unproxied until CloudPanel's custom domain is that name and
+serves a certificate a CA issued for it (`lib/panel-custom-domain.ts`), then
+proxied. Saving the custom domain in CloudPanel writes the vhost with a
+placeholder certificate, the Let's Encrypt one about six seconds later, then
+`/etc/.clp_custom_domain`, all from one HTTP-01 check made at once. Direct, the
+check works whatever the zone's settings; proxied, it needs Full SSL, and under
+Flexible the vhost's redirect to HTTPS loops. Renewals come through Cloudflare
+once the name is proxied, which the ACME rule covers. CloudPanel has no
+`clpctl` command for its custom domain, so the operator enters it in the panel.
+
+The certificate watcher runs `sync-panel-host`, which compares the proxy state
+the last plan used with the one the certificate calls for and reaches Cloudflare
+only when they differ, so a renewal costs two file reads; the scheduled check
+covers anything it missed. Under Ask first nothing is written.
+
 ## Cloudflare connections
 
 A connection is one API token. The page links to Cloudflare's user-owned token

@@ -63,6 +63,9 @@ import ACE_MODE_HTML from "../addons/maintenance/app/ace-mode-html.js" with { ty
 import type { InstanceView, InstaticJobView } from "../addons/instatic/app/service";
 import type { JobView, SiteSummary } from "../addons/stager/app/service";
 import type { AvailableTags } from "../addons/instatic/app/tags";
+import { setupPanelHtml, setupSuggests } from "../manager/setup-view";
+import type { SetupItem } from "../manager/setup";
+import { ADDONS } from "../addons/catalog";
 import { withCsrfCookie, SECURITY_HEADERS } from "../lib/app-http";
 import { handle as terminalHandle } from "../addons/terminal/app/index";
 import { dashboardView as terminalDashboardView, layout as terminalLayout } from "../addons/terminal/app/views";
@@ -196,6 +199,25 @@ function dnsPreviewState(url: URL): DnsState {
     token: dnsTokenTemplate([web, mailcow]),
     presets: DNS_PRESETS,
     log,
+    panelHost: dnsPreviewPanelHost(url, setup, plan),
+  };
+}
+
+/** ?panelhost=new|waiting|proxied|clash picks the panel hostname's state; a first visit has none. */
+function dnsPreviewPanelHost(url: URL, setup: boolean, plan: (domain: string, extra: Partial<DnsSitePlan>) => DnsSitePlan): DnsState["panelHost"] {
+  const stage = url.searchParams.get("panelhost") ?? (setup ? null : "new");
+  if (!stage || stage === "none") return null;
+  const name = "panel.example.com";
+  const record = (_type: string, address: string, proxied: boolean) => `${address} · ${proxied ? "proxied" : "DNS only"}`;
+  const changes: DnsSitePlan["changes"] = stage === "new"
+    ? [{ action: "create", subject: `A ${name}`, detail: record("A", "203.0.113.10", false) }, { action: "create", subject: `AAAA ${name}`, detail: record("AAAA", "2001:db8::10", false) }]
+    : stage === "proxied" ? [] : [];
+  return {
+    name,
+    problem: stage === "clash" ? `CloudPanel has a site ${name}; remove the panel hostname or delete the site` : null,
+    plan: stage === "clash" ? null : { ...plan(name, { profileId: "panel-hostname", certificateNames: [] }), panel: true, changes },
+    customDomain: stage === "waiting" ? { name, issued: false } : stage === "proxied" ? { name, issued: true } : null,
+    proxied: stage === "proxied",
   };
 }
 
@@ -539,6 +561,10 @@ let systemTweaksPreview: SystemTweaksState | null = null;
 
 /** ?dark draws a page in the panel's dark theme, from the cookie the panel's own switch sets. */
 function previewTheme(html: string, url: URL): string {
+  // ?setup opens the Setup checklist once it has loaded.
+  if (url.searchParams.has("setup")) {
+    html = html.replace("</body>", () => `<script>addEventListener("load",function(){setTimeout(function(){clpSetupOpen(true)},100)})</script></body>`);
+  }
   // ?open=id,id opens those disclosures, so a section that starts closed can be reviewed.
   const open = url.searchParams.get("open");
   if (open) {
@@ -1750,6 +1776,40 @@ function phpPreviewMutation(path: string, source: URL, body: Record<string, any>
   return null;
 }
 
+const setupPreviewSteps = (["domain", "secure", "sites", "provision"] as const).flatMap((level, index) => ([
+  [["dns-connection", "Connect DNS", "dns", "done", "Cloudflare: Agency"], ["panel-hostname", "Panel hostname", "dns", "todo", "Enter panel.example.com under Admin → Settings → Custom Domain in CloudPanel"]],
+  [["panel-cert", "Panel certificate", "system-tweaks", "done", "The panel serves a certificate made for this server"], ["login-jails", "Login jails", "system-tweaks", "todo", "fail2ban is not installed"],
+    ["real-ip", "Forged visitor IPs", "system-tweaks", "done", "X-Real-IP is trusted only from the proxies that set it"], ["phpmyadmin", "phpMyAdmin rules", "system-tweaks", "done", "phpMyAdmin answers signed-in panel users only"],
+    ["updates", "Automatic updates", "system-tweaks", "todo", "Updates are installed by hand"], ["hetzner-firewall", "Hetzner Cloud Firewall", "firewall", "todo", "No Hetzner token is saved"],
+    ["passkeys", "Passkeys for administrators", "security-keys", "todo", "Security Keys is off"]],
+  [["remote-backups", "Remote backups", null, "todo", "Sites are backed up on this server only"], ["php-limits", "PHP limits for new sites", "resource-limits", "done", "New sites join Standard"],
+    ["smtp-relay", "Outgoing mail relay", "smtp", "done", "Relay: Example Mail"]],
+  [["dns-automatic", "Automatic DNS records", "dns", "todo", "DNS asks before it changes records"], ["auto-ssl", "Certificate at site creation", "panel-tweaks", "todo", "New sites start on a self-signed certificate"],
+    ["smtp-new-sites", "Mail for new sites", "smtp", "na", "Needs a relay first"]],
+][index]!.map(([id, title, addon, state, reason]): SetupItem => ({
+  id: id!, level, title: title!, href: addon ? `/addons/${addon}/` : "/admin/remote-backup", state: state as SetupItem["state"], reason: reason!,
+  addon: addon ? { name: addon, title: ADDONS[addon]!.title, enabled: addon !== "security-keys" } : null,
+}))));
+const setupPreviewPrefs = { skipped: new Set<string>(["updates"]), hidden: false };
+
+/** ?setup=done shows a server with nothing left to suggest. */
+async function setupPreview(req: Request, url: URL): Promise<Response | null> {
+  if (url.pathname !== "/addons/api/setup") return null;
+  if (req.method === "POST") {
+    const body = await req.json().catch(() => ({})) as Record<string, unknown>;
+    if (typeof body.skip === "string") setupPreviewPrefs.skipped.add(body.skip);
+    if (typeof body.unskip === "string") setupPreviewPrefs.skipped.delete(body.unskip);
+    if (typeof body.hidden === "boolean") setupPreviewPrefs.hidden = body.hidden;
+  }
+  const done = new URL(req.headers.get("referer") ?? url.href).searchParams.get("setup") === "done";
+  const steps = setupPreviewSteps.map((step) => ({
+    ...step,
+    state: done && step.state === "todo" ? "done" as const : step.state === "todo" && setupPreviewPrefs.skipped.has(step.id) ? "skipped" as const : step.state,
+  }));
+  const view = { hidden: setupPreviewPrefs.hidden, steps };
+  return Response.json({ ok: true, data: { show: !view.hidden && setupSuggests(view), html: setupPanelHtml(view) } });
+}
+
 function managerPreviewMutation(path: string, source: URL): Response | null {
   if (path === "/addons/api/update") {
     previewManagerJob = {
@@ -1836,6 +1896,8 @@ const server = Bun.serve({
     if (wpToolsApi) return wpToolsApi;
     const panelTweaksApi = panelTweaksPreviewApi(req, path);
     if (panelTweaksApi) return panelTweaksApi;
+    const setupReply = await setupPreview(req, url);
+    if (setupReply) return setupReply;
     const repaintReply = await repaintPreviewMutation(req, url);
     if (repaintReply) return repaintReply;
     if (req.method !== "GET") return Response.json({ ok: false, error: "UI preview only; no changes were made." }, { status: 409 });

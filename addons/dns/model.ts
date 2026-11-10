@@ -122,6 +122,8 @@ export interface Policy {
   /** Overrides for `{ipv4}` and `{ipv6}`; empty uses what was detected. */
   server: { ipv4: string; ipv6: string };
   mailcow: MailcowSettings;
+  /** The name DNS points at this server for CloudPanel's custom domain; null for none. */
+  panelHost: string | null;
 }
 
 /** Root-only, and never part of anything sent to the browser. */
@@ -387,6 +389,7 @@ export function parsePolicy(value: unknown): Policy {
         ipv6: ipAddress(raw.server?.ipv6, 6, "the server IPv6 override"),
       },
       mailcow: parseMailcow(raw.mailcow),
+      panelHost: raw.panelHost == null ? null : hostname(raw.panelHost, "the panel hostname"),
     };
   } catch (error) {
     if (error instanceof ActionFailure) failAction(`the DNS policy is malformed: ${error.message}`);

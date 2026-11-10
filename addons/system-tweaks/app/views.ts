@@ -286,7 +286,7 @@ function customDomainLine(jails: LoginJailsReady): string {
 function loginJailsCard(jails: LoginJails, locked: boolean): string {
   if ("error" in jails) {
     return `
-    <div class="card">
+    <div class="card" id="st-failed-logins">
       <div class="card-header"><h2>Failed logins</h2></div>
       <div class="alert st-alert" role="alert">${esc(jails.error)}</div>
     </div>`;
@@ -295,7 +295,7 @@ function loginJailsCard(jails: LoginJails, locked: boolean): string {
       <p class="st-status">${badge("Not installed", "bad")} <span>${esc(jails.missing.join(", "))} ${jails.missing.length === 1 ? "is" : "are"} not installed.</span></p>
       <div class="st-install"><button class="btn" type="button" onclick="installFail2ban(this)">Install fail2ban</button></div>` : "";
   return `
-    <div class="card">
+    <div class="card" id="st-failed-logins">
       <div class="card-header"><h2>Failed logins</h2></div>
       <div class="tweak-list">${lockableRow("set-login-jails", {
         key: "panel",
@@ -346,7 +346,7 @@ export function dashboardView(state: SystemTweaksState, now = Date.now(), lock: 
         <p class="hint">Every 15 minutes it also clears PHP and ImageMagick temp files that timed-out requests left in /tmp. PHP worker limits and memory sizing are in <a href="/addons/resource-limits/">Resource Limits</a>.</p>
       </div>
     </div>
-    <div class="card">
+    <div class="card" id="st-updates">
       <div class="card-header"><h2>Automatic updates</h2></div>
       <div class="tweak-list">${updateRows(state.updates, state.settings)}
       </div>${statusList(state.updates, now)}${coverageDetails(state.updates)}

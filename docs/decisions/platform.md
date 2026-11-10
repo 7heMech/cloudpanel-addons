@@ -446,7 +446,7 @@ A site's certificate is a later step of its creation, and an addon whose work
 needs the site's HTTPS declares `certificates`. `clp-addons-certificates.path`
 watches `/etc/nginx/ssl-certificates`, where CloudPanel writes each site's
 `<domain>.crt` and key in place, so the vhost, which names that path, is not
-rewritten. Its service runs `clp-addons sync-certificates`: each installed
+rewritten, and its custom domain's certificate. Its service runs `clp-addons sync-certificates`: each installed
 addon's `certificates`, in catalog order, one after another. It is not part of
 the new-site watcher because a certificate changes no domain, so `sync-sites`
 would run no hook for it, and because a path that changes while its service is
@@ -698,6 +698,39 @@ scrollable row and letting the site-information blocks wrap, rather than
 widening the panel's limited-width container, which would only postpone the
 break until the next addon. The rule is injected once, and only while an
 installed addon patches that partial.
+
+## Setup checklist
+
+An administrator's addon pages carry a Setup helper: Setup in the header on a
+desktop, and a pill in the bottom-left corner on a phone, whose header has no
+room for it. It opens suggestions in four levels -- Connect your domain, Secure
+the server, Run sites, Provision automatically -- each ticked from the server's
+state, never from a click. It shows no counts: a step may not fit a server, so
+any step can be skipped, and the helper hides itself once nothing is left to
+suggest. Skips and Hide are kept per administrator; the Addons page's Setup
+button brings it back.
+
+Each addon declares its steps on `AddonDefinition.setup`: an id, a level, a
+title, the page and card that set it up, and a `check` answering done, to do or
+not applicable with a one-line reason. Remote backups, which is CloudPanel's
+own, is the manager's (`manager/setup.ts`). A disabled addon's steps are listed
+with Enable rather than checked, except a step marked `whileOff`, which can be
+done without its addon: a custom domain set up by hand is a panel hostname.
+
+`manager setup` runs every check as root and answers with the list for the
+administrator `--user` names; `setup-pref` records a skip, an undo or Hide. Both
+are admin verbs, and the manager names the user from its session gate, the only
+place that knows it. The manager renders the list and the page fetches it after
+it paints, keeping in the tab whether the helper showed, so the header does not
+move when the answer comes. The checks run on every page an administrator
+opens, so they read local files, the panel database and local services only,
+never Cloudflare, Hetzner or a DNS lookup. What only an API knows is what the
+addon last saw: Firewall records Hetzner's switches whenever its page or a
+switch reads them. A check that fails reads as a suggestion with its error.
+
+CloudPanel's own pages do not show the helper: a pill there would float over
+the panel's controls, and the header slot the Addons link uses has no room on a
+phone.
 
 ## Browser assets are files
 

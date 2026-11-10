@@ -654,6 +654,22 @@ function dnsSaveServer(event) {
   }, CLP_ROOT.getElementById('dns-server-dialog'));
 }
 
+// --- panel hostname ---------------------------------------------------------
+
+function dnsSavePanelHost(event) {
+  event.preventDefault();
+  dnsPost('/api/panel-host', { name: event.currentTarget.elements.namedItem('name').value.trim() });
+}
+
+async function dnsRemovePanelHost() {
+  const accepted = await confirmAction({
+    title: 'Remove the panel hostname?',
+    text: 'DNS stops managing ' + dnsState.panelHost.name + '. Its records stay in Cloudflare, listed with the records of deleted sites, and CloudPanel keeps its custom domain.',
+    confirmLabel: 'Remove', danger: true,
+  });
+  if (accepted) dnsPost('/api/panel-host', { name: null });
+}
+
 CLP_ROOT.getElementById('dns-zone-details').addEventListener('change', dnsSyncProfileSections);
 CLP_ROOT.getElementById('dns-zone-details').addEventListener('input', dnsSyncProfileSections);
 

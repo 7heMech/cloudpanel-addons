@@ -40,12 +40,14 @@ import { isStandInSite } from "../../lib/stand-ins";
 import { clpctlStandIns, readStandIns, retryStandInCertificates, type StandInPaths } from "./stand-in";
 import { clpctlIssue, NEW_SITE_WINDOW, requestSsl, retryCertificates, type Issue, type SslRequest } from "./ssl";
 import { readState, writeState } from "../../lib/root-state";
+import { panelCustomDomainCertificate } from "../../lib/panel-custom-domain";
+import { panelUserUid } from "../../lib/sso-auth";
 import { tokenTemplate, type TokenTemplate } from "./token";
 
 type DnsVerb = keyof typeof DNS_VERBS;
 
 const VERBS = Object.keys(DNS_VERBS) as DnsVerb[];
-const NO_BODY: DnsVerb[] = ["list", "check", "find-redirects", "provision", "site-status", "reconcile", "sync-sites"];
+const NO_BODY: DnsVerb[] = ["list", "check", "find-redirects", "provision", "site-status", "reconcile", "sync-sites", "sync-panel-host"];
 const MAX_BODY = 256 * 1024;
 const REVIEW_LIFETIME = 15 * 60_000;
 /** How many writes the change log keeps, newest first; the page is sent the first PAGE_LOG of them. */
@@ -81,6 +83,8 @@ export interface DnsActionOptions {
   now?: () => number;
   /** Test fixtures may stand in for CloudPanel's stand-in sites. */
   standIns?: () => StandIns;
+  /** Test fixtures may stand in for CloudPanel's custom domain and its certificate. */
+  customDomain?: () => { name: string; issued: boolean } | undefined;
 }
 
 const DEFAULT_DNS_PATHS: DnsPaths = {
@@ -143,6 +147,18 @@ export interface DnsState {
   presets: Preset[];
   /** Newest first. */
   log: LogLine[];
+  panelHost: PanelHostView | null;
+}
+
+export interface PanelHostView {
+  name: string;
+  /** What keeps DNS from managing it, such as a CloudPanel site of the same name. */
+  problem: string | null;
+  plan: SitePlan | null;
+  /** CloudPanel's custom domain, if it has one. */
+  customDomain: { name: string; issued: boolean } | null;
+  /** Whether the next check proxies it: CloudPanel serves an issued certificate for it. */
+  proxied: boolean;
 }
 
 /** Whole-host redirect rules in reachable zones that no redirect domain manages yet. */
@@ -186,6 +202,8 @@ interface Status {
   connections: ConnectionReport[];
   plans: Record<string, SitePlan>;
   backoff: { cloudflare: number; mailcow: number };
+  /** Whether the panel hostname was last planned proxied, so a certificate write that changes nothing is cheap. */
+  panelProxied?: boolean;
 }
 
 interface Pending {
@@ -376,10 +394,22 @@ class Action {
     return mailcowKey === undefined ? secrets : { ...secrets, mailcowKey };
   }
 
+  customDomain(): { name: string; issued: boolean } | undefined {
+    if (this.options.customDomain) return this.options.customDomain();
+    return panelCustomDomainCertificate([this.paths.rootUid, panelUserUid() ?? this.paths.rootUid]);
+  }
+
+  /** CloudPanel serves an issued certificate for the panel hostname, so Cloudflare may proxy it without breaking that certificate's first request. */
+  panelProxied(policy: Policy): boolean {
+    if (!policy.panelHost) return false;
+    const custom = this.customDomain();
+    return custom?.name === policy.panelHost && custom.issued;
+  }
+
   run(policy: Policy, secrets = this.files.secrets()): DnsRun {
     const run = new DnsRun({
       policy, secrets, sites: this.sites(), addresses: this.addresses(), fetch: this.options.fetch,
-      backoff: this.files.status().backoff, standIns: this.standIns(),
+      backoff: this.files.status().backoff, standIns: this.standIns(), panelProxied: this.panelProxied(policy),
     });
     this.runs.push(run);
     return run;
@@ -436,8 +466,10 @@ class Action {
       if (plan.profileId || plan.redirect) plansByDomain[plan.domain] = plan;
       else delete plansByDomain[plan.domain];
     }
+    const panelHost = run.entries.find((entry) => entry.panel)?.domain;
     this.files.saveStatus({
       ...status,
+      ...panelHost && (domains === "all" || domains.includes(panelHost)) && { panelProxied: run.panelProxied },
       checkedAt: domains === "all" ? new Date(this.now).toISOString() : status.checkedAt,
       connections: run.connections.length || domains === "all" ? run.connections : status.connections,
       plans: plansByDomain,
@@ -461,7 +493,7 @@ class Action {
     const status = this.files.status();
     const ssl = this.files.ssl();
     const sites = this.sites();
-    const domains = new Set([...sites.map((site) => site.domain), ...policy.redirects.map((redirect) => redirect.source)]);
+    const domains = new Set([...sites.map((site) => site.domain), ...policy.redirects.map((redirect) => redirect.source), ...policy.panelHost ? [policy.panelHost] : []]);
     const standIns = this.standIns().current;
     const accounts = status.connections.flatMap((connection) => connection.accounts.map((account) => ({
       connectionId: connection.id, accountId: account.id, label: `${account.name || account.id} (${connection.label})`,
@@ -516,6 +548,20 @@ class Action {
       token: tokenTemplate(policy.profiles),
       presets: PRESETS,
       log: this.files.log().slice(0, PAGE_LOG),
+      panelHost: this.panelHostView(policy, status.plans, sites),
+    };
+  }
+
+  private panelHostView(policy: Policy, plans: Record<string, SitePlan>, sites: PanelSite[]): PanelHostView | null {
+    const name = policy.panelHost;
+    if (!name) return null;
+    const custom = this.customDomain() ?? null;
+    const problem = sites.some((site) => site.domain === name) ? `CloudPanel has a site ${name}; remove the panel hostname or delete the site`
+      : policy.redirects.some((redirect) => redirect.source === name) ? `${name} is a redirect domain; remove one of the two` : null;
+    const plan = plans[name];
+    return {
+      name, problem, plan: !problem && plan?.panel ? plan : null, customDomain: custom,
+      proxied: custom?.name === name && custom.issued,
     };
   }
 
@@ -618,6 +664,28 @@ class Action {
     return joined.map((site) => site.domain);
   }
 
+  /**
+   * Run whenever CloudPanel writes a certificate: proxies the panel hostname
+   * once its own certificate is issued, and stops proxying it if that changes.
+   */
+  panelHostDue(): boolean {
+    const policy = this.files.policy();
+    return Boolean(policy.panelHost && policy.automatic && this.files.status().panelProxied !== this.panelProxied(policy));
+  }
+
+  async syncPanelHost(): Promise<string | null> {
+    if (!this.panelHostDue()) return null;
+    const policy = this.files.policy();
+    const host = policy.panelHost!;
+    const run = this.run(policy);
+    if (!run.entries.some((entry) => entry.panel)) return null;
+    await run.discover();
+    await run.load([host]);
+    await run.enforce([host]);
+    this.record(run, run.planAll(), [host]);
+    return run.panelProxied ? `${host} is proxied through Cloudflare` : `${host} is no longer proxied`;
+  }
+
   /** `asUser` names a non-administrator, who is told whether DNS is ready but not why. */
   async provision(domain: string, ssl: boolean, asUser = ""): Promise<ProvisionReply> {
     await this.syncSites();
@@ -698,8 +766,13 @@ class Action {
       const redirect = redirectOf(policy, domain);
       return policy.profiles.find((profile) => profile.id === (redirect ? redirect.profileId : policy.assignments[domain]));
     };
-    const domains = [...this.sites().map((site) => site.domain), ...after.redirects.map((redirect) => redirect.source)];
+    const domains = [...this.sites().map((site) => site.domain), ...after.redirects.map((redirect) => redirect.source), ...after.panelHost ? [after.panelHost] : []];
     return [...new Set(domains)].filter((domain) => {
+      if (domain === after.panelHost && !this.sites().some((site) => site.domain === domain) && !redirectOf(after, domain)) {
+        return !before.automatic || createIn || before.panelHost !== domain || JSON.stringify(before.server) !== JSON.stringify(after.server)
+          || Object.keys({ ...before.zoneChoices, ...after.zoneChoices }).some((zone) =>
+            (domain === zone || domain.endsWith(`.${zone}`)) && JSON.stringify(before.zoneChoices[zone]) !== JSON.stringify(after.zoneChoices[zone]));
+      }
       const redirect = redirectOf(after, domain);
       const next = profileOf(after, domain);
       if (!next && !redirect) return false;
@@ -1069,6 +1142,19 @@ class Action {
     return this.reply({ notice });
   }
 
+  /** Its records stay in Cloudflare, listed with the records of deleted sites. */
+  removePanelHost(next: Policy): DnsReply {
+    const previous = this.files.policy().panelHost;
+    this.savePolicy(next);
+    this.files.savePending(null);
+    if (previous) {
+      const status = this.files.status();
+      delete status.plans[previous];
+      this.files.saveStatus(status);
+    }
+    return this.reply({ notice: "DNS no longer manages the panel hostname. Its records are left in Cloudflare." });
+  }
+
   async findRedirects(): Promise<DnsReply> {
     const policy = this.files.policy();
     if (!policy.connections.length) failAction("Connect Cloudflare first");
@@ -1186,6 +1272,14 @@ async function changeVerb(action: Action, verb: DnsVerb, body: Record<string, un
     const inZone = action.sites().map((site) => site.domain).filter((domain) => domain === zone || domain.endsWith(`.${zone}`));
     return action.change(next, `${zone} is managed through the chosen connection.`, inZone);
   }
+  if (verb === "set-panel-host") {
+    const name = body.name == null || body.name === "" ? null : hostname(body.name, "The panel hostname");
+    if (name && action.sites().some((site) => site.domain === name)) failAction(`${name} is a CloudPanel site; choose another name for the panel`);
+    if (name && policy.redirects.some((redirect) => redirect.source === name)) failAction(`${name} is a redirect domain; choose another name for the panel`);
+    next.panelHost = name;
+    if (!name) return action.removePanelHost(next);
+    return action.change(next, `DNS points ${name} at this server.`, [name]);
+  }
   if (verb === "save-server") {
     next.server = { ipv4: ipAddress(body.ipv4, 4, "The IPv4 address"), ipv6: ipAddress(body.ipv6, 6, "The IPv6 address") };
     return action.change(next, "Server addresses saved.", "all");
@@ -1230,12 +1324,14 @@ export async function executeDnsAction(argv: string[], options: DnsActionOptions
     if (!owns) failAction("That site is not one of yours");
   }
   if (verb === "site-status") return action.siteStatus(provision!.domain);
+  // Every certificate CloudPanel writes wakes this, renewals included, so nothing waits for the lock unless there is work.
+  if (verb === "sync-panel-host" && (!existsSync(paths.configFile) || !action.panelHostDue())) return { line: null };
 
   mkdirSync(dirname(paths.lockFile), { recursive: true, mode: 0o700 });
   // Long enough for a check of the whole fleet; a page action waits less and says so.
-  const wait = verb === "reconcile" || verb === "sync-sites" || verb === "provision" ? 240 : 30;
+  const wait = verb === "reconcile" || verb === "sync-sites" || verb === "sync-panel-host" || verb === "provision" ? 240 : 30;
   return withFileLock(paths.lockFile, wait, "DNS is busy checking Cloudflare; try again in a moment", async () => {
-    if ((verb === "reconcile" || verb === "sync-sites") && !existsSync(paths.configFile)) return { checked: 0, joined: [] };
+    if ((verb === "reconcile" || verb === "sync-sites" || verb === "sync-panel-host") && !existsSync(paths.configFile)) return { checked: 0, joined: [], line: null };
     let failed = false;
     try {
       return await perform(action, verb, body, provision);
@@ -1274,6 +1370,9 @@ async function perform(
     case "sync-sites":
       action.cause = "New site";
       return { joined: await action.syncSites() };
+    case "sync-panel-host":
+      action.cause = "Panel certificate";
+      return { line: await action.syncPanelHost() };
     case "provision":
       action.cause = "New site";
       return action.provision(provision!.domain, provision!.ssl, provision!.asUser);

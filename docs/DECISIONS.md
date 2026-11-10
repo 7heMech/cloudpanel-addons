@@ -2,6 +2,7 @@
 
 - [Platform integration](decisions/platform.md)
   - [After a CloudPanel upgrade](decisions/platform.md#after-a-cloudpanel-upgrade) — when a changed CloudPanel file is patched again or left alone
+  - [Setup checklist](decisions/platform.md#setup-checklist) — how addons declare steps, and why checks read local state only
 - [Security](decisions/security.md)
   - [Root locks](decisions/security.md#root-locks) — protections only root can switch off
 - [DNS](decisions/dns.md)
