@@ -2,6 +2,7 @@ import type { AddonDefinition } from "../../lib/addon-definition";
 import { activateSmtp, deactivateSmtp, executeSmtpAction, runSmtpAction, type SmtpActionOptions } from "./action";
 import { handle } from "./app/index";
 import { runSmtpSubmit } from "./submit";
+import { SMTP_SETUP } from "./setup";
 
 const count = (value: number, word: string) => `${value} ${word}${value === 1 ? "" : "s"}`;
 
@@ -11,6 +12,7 @@ export const SMTP_ADDON: AddonDefinition = {
   description: "Send each site's mail through a relay profile, with Postfix keeping every site to its own domains.",
   requiresUnits: ["postfix"],
   targets: [],
+  setup: SMTP_SETUP,
   handler: handle,
   action: runSmtpAction,
   // Postfix's sendmail for every site user, holding each to its own domains.

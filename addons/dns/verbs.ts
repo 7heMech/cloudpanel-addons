@@ -15,6 +15,7 @@ export const DNS_VERBS = {
   "save-mailcow": { web: "admin" },
   "remove-mailcow": { web: "admin" },
   "save-server": { web: "admin" },
+  "set-panel-host": { web: "admin" },
   "remove-records": { web: "admin" },
   "forget-records": { web: "admin" },
   "save-redirect": { web: "admin" },
@@ -28,4 +29,5 @@ export const DNS_VERBS = {
   "site-status": { web: "panel-user" },
   reconcile: { web: false, why: "the full check, run by the worker repair queues" },
   "sync-sites": { web: false, why: "run by the new-site watcher" },
+  "sync-panel-host": { web: false, why: "run by the certificate watcher" },
 } as const;

@@ -89,7 +89,7 @@ export async function handleRequest(req: Request, server: Server<unknown>): Prom
   const update = await checkCliUpdate(CLI_VERSION);
   const notice = update?.hasUpdate ? { current: update.current, latest: update.latest } : null;
 
-  const managerRoute = await handleManagerRoute(req, path, server, update);
+  const managerRoute = await handleManagerRoute(req, path, server, update, gate.auth ?? null);
   if (managerRoute) return managerRoute;
 
   const hit = splitMount(path, mountedAddons());
