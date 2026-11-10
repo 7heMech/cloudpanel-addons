@@ -7,4 +7,7 @@ export const FIREWALL_VERBS = {
   protocols: { web: "admin" },
   "set-protocol": { web: "admin" },
   "set-protocols": { web: "admin" },
+  "hetzner-connect": { web: "admin" },
+  "hetzner-disconnect": { web: "admin" },
+  "hetzner-switch": { web: "admin" },
 } as const;

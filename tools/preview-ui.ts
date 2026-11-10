@@ -4,6 +4,7 @@ import { indexPage, updatePage } from "../manager/views";
 import {
   dashboardView as firewallDashboardView, layout as firewallLayout,
 } from "../addons/firewall/app/views";
+import type { HetznerView } from "../addons/firewall/hetzner";
 import {
   dashboardView, layout as instaticLayout, newInstanceView, jobView as instaticJobView,
 } from "../addons/instatic/app/views";
@@ -440,6 +441,27 @@ const cloudflareSites = [
 const cloudflareMoreSites = ["shop.example.net", "docs.example.org", "status.example.io", "api.example.dev"]
   .map((domain, index) => ({ domain, enabled: index % 2 === 0 }));
 
+/** ?hetzner=absent|disconnected|error|off|open|ssh: the Hetzner card's states; connected with the sites switch on by default. */
+function hetznerPreviewState(mode: string | null): HetznerView {
+  if (mode === "absent") return { state: "absent" };
+  if (mode === "disconnected") return { state: "disconnected", serverId: 166224552 };
+  if (mode === "error") return { state: "error", connected: true, error: "Hetzner could not be read: Hetzner: unable to authenticate (unauthorized)" };
+  const on = mode !== "off";
+  return {
+    state: "connected", serverId: 166224552, serverName: "cp-fra-1",
+    others: ["ssh-from-office"],
+    roles: {
+      web: {
+        on, firewall: "clp-addons-cloudflare-web", current: true,
+        stillOpen: mode === "open" ? ["443 is still open to anyone through firewall ssh-from-office."] : [],
+      },
+      panel: { on: false, firewall: null, current: true, stillOpen: [] },
+    },
+    sshProblem: mode === "ssh" ? "no other firewall on this server (ssh-from-office) allows SSH on port 2222" : null,
+    rangesProblem: null,
+  };
+}
+
 /** ?sites=all|none|mixed, ?auto=off, ?many (search and filter), ?protocols=off and ?noudp cover the states the controls describe. */
 function firewallPreviewState(url: URL) {
   const all = url.searchParams.get("sites");
@@ -453,6 +475,7 @@ function firewallPreviewState(url: URL) {
       available: true, enabled: url.searchParams.get("protocols") !== "off",
       protocols: { 9: "udp" as const, 10: "udp" as const, 11: "both" as const }, udpPorts: url.searchParams.has("noudp") ? [] : ["53", "51820"],
     },
+    hetzner: hetznerPreviewState(url.searchParams.get("hetzner")),
   };
 }
 

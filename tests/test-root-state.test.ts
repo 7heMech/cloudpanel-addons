@@ -2,7 +2,7 @@ import { afterEach, expect, test } from "bun:test";
 import { chmodSync, mkdtempSync, readFileSync, readdirSync, rmSync, statSync, symlinkSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { readState, writeState } from "../addons/dns/store";
+import { readState, writeState } from "../lib/root-state";
 
 const dirs: string[] = [];
 const uid = process.getuid!();
@@ -32,14 +32,14 @@ test("DNS secrets remain owner-only through atomic replacement", () => {
 test("DNS refuses loose permissions, another owner and symlinks without reading or overwriting them", () => {
   const { dir, path } = fixture();
   chmodSync(path, 0o644);
-  expect(() => readState(path, uid, () => null)).toThrow("untrusted DNS state");
-  expect(() => writeState(path, { mailcowKey: "replacement" }, uid)).toThrow("untrusted DNS state");
+  expect(() => readState(path, uid, () => null)).toThrow("untrusted state");
+  expect(() => writeState(path, { mailcowKey: "replacement" }, uid)).toThrow("untrusted state");
   expect(readFileSync(path, "utf8")).toContain(secrets.mailcowKey);
   chmodSync(path, 0o600);
-  expect(() => readState(path, uid + 1, () => null)).toThrow("untrusted DNS state");
+  expect(() => readState(path, uid + 1, () => null)).toThrow("untrusted state");
   const link = join(dir, "linked.json");
   symlinkSync(path, link);
-  expect(() => readState(link, uid, () => null)).toThrow("untrusted DNS state");
-  expect(() => writeState(link, {}, uid)).toThrow("untrusted DNS state");
+  expect(() => readState(link, uid, () => null)).toThrow("untrusted state");
+  expect(() => writeState(link, {}, uid)).toThrow("untrusted state");
   expect(readState<typeof secrets | null>(path, uid, () => null)).toEqual(secrets);
 });

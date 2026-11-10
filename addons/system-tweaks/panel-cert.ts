@@ -18,6 +18,7 @@ import { commandOutput, runCommand, type CommandResult } from "../../lib/command
 import { nginxFileChange, withNginxTransaction } from "../../lib/nginx-transaction";
 import { writeFileAtomic } from "../../lib/atomic-write";
 import { panelUserUid } from "../../lib/sso-auth";
+import { panelCustomDomain, PANEL_CUSTOM_DOMAIN_FILE, PANEL_CUSTOM_DOMAIN_VHOST } from "../../lib/panel-custom-domain";
 import { COMMAND_MS, PANEL_CERT_GATEWAY_TIMEOUT_MS } from "./limits";
 import { applyThenSave, tweak } from "./tweak";
 import { badge, statusLine, switchRow } from "./app/rows";
@@ -39,8 +40,8 @@ const DEFAULT_PANEL_CERT_PATHS = {
   /** The generated pair, kept so a CloudPanel update gets the same one back. */
   storedCert: `${addonStateDir("system-tweaks")}/panel-cert.crt`,
   storedKey: `${addonStateDir("system-tweaks")}/panel-cert.key`,
-  customDomain: "/etc/.clp_custom_domain",
-  customDomainVhost: "/etc/nginx/sites-enabled/custom-domain.conf",
+  customDomain: PANEL_CUSTOM_DOMAIN_FILE,
+  customDomainVhost: PANEL_CUSTOM_DOMAIN_VHOST,
   nginx: "nginx",
   systemctl: "systemctl",
   openssl: "openssl",
@@ -145,13 +146,7 @@ function storedPair(paths: Paths): { cert: string; key: string; parsed: X509Cert
 }
 
 function customDomain(paths: Paths): string | undefined {
-  try {
-    lstatSync(paths.customDomainVhost);
-    const name = (smallFile(paths.customDomain, [panelUid(paths), paths.rootUid]) ?? "").trim();
-    return /^[A-Za-z0-9.-]{1,253}$/.test(name) ? name : undefined;
-  } catch {
-    return undefined;
-  }
+  return panelCustomDomain([panelUid(paths), paths.rootUid], paths.customDomain, paths.customDomainVhost);
 }
 
 export function panelCertStatus(options: PanelCertOptions = {}): PanelCertStatus {

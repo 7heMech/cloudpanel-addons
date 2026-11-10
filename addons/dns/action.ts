@@ -26,7 +26,7 @@ import {
   DnsRun, readiness, type ConnectionReport, type LogEntry, type ManagedRecords, type PanelSite, type SitePlan,
   type StandIns,
 } from "./engine";
-import { type ApiFetch, redact } from "./http";
+import { type ApiFetch, redact } from "../../lib/provider-http";
 import { MailcowApi } from "./mailcow";
 import {
   connectionId, hostname, parseAccountRef, parseMailcow, parsePolicy, parseProfile, parseRedirect, parseRedirects, parseSecrets, profileEffect,
@@ -39,7 +39,7 @@ import type { FoundRedirect } from "./redirects";
 import { isStandInSite } from "../../lib/stand-ins";
 import { clpctlStandIns, readStandIns, retryStandInCertificates, type StandInPaths } from "./stand-in";
 import { clpctlIssue, NEW_SITE_WINDOW, requestSsl, retryCertificates, type Issue, type SslRequest } from "./ssl";
-import { readState, writeState } from "./store";
+import { readState, writeState } from "../../lib/root-state";
 import { tokenTemplate, type TokenTemplate } from "./token";
 
 type DnsVerb = keyof typeof DNS_VERBS;

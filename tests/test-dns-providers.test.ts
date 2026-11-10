@@ -1,6 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import { CloudflareApi, quoteTxt, unquoteTxt } from "../addons/dns/cloudflare";
-import { ProviderError, ProviderHttp } from "../addons/dns/http";
+import { ProviderError, ProviderHttp } from "../lib/provider-http";
 import { MailcowApi } from "../addons/dns/mailcow";
 import { FakeCloudflare, FakeMailcow, MAILCOW_KEY } from "./fixtures/dns-api";
 

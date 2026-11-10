@@ -25,8 +25,9 @@ async function change(path, body, failedAs) {
   busy(true);
   let failure = '';
   let state;
+  let reply = null;
   try {
-    await call(path, {
+    reply = await call(path, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(body),
@@ -44,6 +45,13 @@ async function change(path, body, failedAs) {
     notify(failedAs + failure, 'error');
     return null;
   }
+  state.reply = reply && reply.data;
+  return state;
+}
+
+async function repaint() {
+  const state = await readState();
+  if (state.ok) repaintView(CLP_ROOT.getElementById('clp-content'), state.html);
   return state;
 }
 
@@ -103,6 +111,82 @@ async function setProtocols(input) {
     ? 'Rules on CloudPanel\'s Firewall page have a Protocol again.'
     : 'Every rule on CloudPanel\'s Firewall page is TCP again. The choices are kept.';
   notify(state.ok ? done : done + ' The page may be out of date: ' + state.error, state.ok ? 'ok' : 'warn');
+}
+
+function hetznerNotice(state) {
+  const done = (state.reply && state.reply.notice) || 'Done.';
+  notify(state.ok ? done : done + ' The page may be out of date: ' + state.error, state.ok ? 'ok' : 'warn');
+}
+
+async function connectHetzner(event) {
+  event.preventDefault();
+  const input = CLP_ROOT.getElementById('hetzner-token');
+  const token = input.value.trim();
+  input.value = '';
+  if (!token) return;
+  const state = await change('/api/hetzner/token', { token: token }, 'Could not connect Hetzner: ');
+  if (state) hetznerNotice(state);
+}
+
+function showHetznerTokenForm() {
+  const form = CLP_ROOT.getElementById('hetzner-token-form');
+  form.hidden = false;
+  CLP_ROOT.getElementById('hetzner-token').focus();
+}
+
+async function removeHetznerToken() {
+  const accepted = await confirmAction({
+    title: 'Remove the Hetzner token?',
+    text: 'Firewall stops reading Hetzner. The token stays valid in Hetzner until you delete it there.',
+    confirmLabel: 'Remove', danger: true,
+  });
+  if (!accepted) return;
+  const state = await change('/api/hetzner/token/remove', {}, 'Could not remove the token: ');
+  if (state) hetznerNotice(state);
+}
+
+// Root answers the first request with what the change would do, or refuses
+// it; only the review it sent, confirmed, makes the change.
+async function setHetzner(input, role) {
+  const enabled = input.checked;
+  input.checked = !enabled;
+  clearNotice();
+  busy(true);
+  let reply = null;
+  let failure = '';
+  try {
+    reply = await call('/api/hetzner/switch', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ role: role, enabled: enabled }),
+    });
+  } catch (error) {
+    failure = error.message;
+  } finally {
+    busy(false);
+  }
+  if (failure) {
+    notify(failure, 'error');
+    return;
+  }
+  const review = reply.data && reply.data.review;
+  if (!review) {
+    const state = await repaint();
+    hetznerNotice(Object.assign(state, { reply: reply.data }));
+    return;
+  }
+  const accepted = await confirmAction({
+    title: review.title, text: review.text, details: review.details,
+    confirmLabel: review.confirmLabel, danger: review.danger,
+  });
+  if (!accepted) return;
+  const state = await change('/api/hetzner/switch', { role: role, enabled: enabled, confirm: review.digest }, 'Could not switch: ');
+  if (!state) return;
+  if (state.reply && state.reply.review) {
+    notify('What this change would do has changed since you confirmed it; switch it again to see the new review.', 'warn');
+    return;
+  }
+  hetznerNotice(state);
 }
 
 if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', paintFleetSelection);
