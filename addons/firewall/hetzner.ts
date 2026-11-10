@@ -512,9 +512,9 @@ export async function disconnectHetzner(options: HetznerOptions = {}): Promise<{
       } catch (error) {
         if (error instanceof ActionFailure) throw error;
         // A leaked or revoked token must always be removable; the operator is told what could not be checked.
-        if (!(error instanceof HetznerError && (error.code === "unauthorized" || error.code === "forbidden" || error.code === "not_found"))) {
-          unchecked = ` Hetzner could not be asked what is attached to this server (${api.clean(errorMessage(error))}); a clp-addons firewall still attached there stays, and no longer follows Cloudflare's list.`;
-        }
+        const refused = error instanceof HetznerError && (error.code === "unauthorized" || error.code === "forbidden" || error.code === "not_found");
+        const why = refused ? "it refuses this token" : api.clean(errorMessage(error));
+        unchecked = ` Hetzner could not be asked what is attached to this server (${why}); a clp-addons firewall still attached there stays, and no longer follows Cloudflare's list.`;
       }
     }
     rmSync(paths.tokenFile, { force: true });
@@ -605,8 +605,17 @@ async function enableReview(role: HetznerRole, ctx: Awaited<ReturnType<typeof co
   });
 }
 
-function disableReview(role: HetznerRole, ctx: Awaited<ReturnType<typeof context>>, on: HetznerFirewall): HetznerReview {
+function disableReview(role: HetznerRole, ctx: Awaited<ReturnType<typeof context>>, on: HetznerFirewall, options: HetznerOptions): HetznerReview {
   const remaining = ctx.attached.filter((firewall) => firewall.id !== on.id);
+  // The panel switch needs Cloudflare to reach 443 for the custom domain; this one may be what lets it.
+  if (role === "web" && remaining.some((firewall) => roleOf(firewall) === "panel")) {
+    let ranges: string[] | null = null;
+    try { ranges = readCloudflareRanges(options).ranges; } catch { /* without the list, any source on 443 counts */ }
+    const cut = ranges ? !reachable(remaining, 443, ranges) : !remaining.some((firewall) => openings(firewall, 443).length);
+    if (cut) {
+      failAction("Refused: with Panel through Cloudflare only on, CloudPanel's custom domain needs Cloudflare to reach 443, and no other firewall on this server allows it. Turn off Panel through Cloudflare only first, or allow 443 in another firewall; otherwise only an SSH tunnel to 127.0.0.1:8443 reaches the panel.");
+    }
+  }
   const ports = HETZNER_ROLES[role].ports;
   const closed = ports.filter((port) => !remaining.some((firewall) => openings(firewall, port).length));
   const portText = (list: number[]) => list.join(" and ");
@@ -715,7 +724,7 @@ export async function setHetznerRole(
     if (enabled) {
       try { list = readCloudflareRanges(options); } catch (error) { failAction(errorMessage(error)); }
     }
-    const review = enabled ? await enableReview(role, ctx, list!.ranges, options) : disableReview(role, ctx, ctx.on!);
+    const review = enabled ? await enableReview(role, ctx, list!.ranges, options) : disableReview(role, ctx, ctx.on!, options);
     if (confirm !== review.digest) return { review };
     try {
       if (enabled) {

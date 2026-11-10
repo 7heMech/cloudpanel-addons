@@ -265,7 +265,8 @@ review that changed in between is shown again.
   ("443 is still open to anyone through firewall X") instead of success.
 - Off: the review says which of the role's ports no remaining firewall allows,
   which then close to everyone, or that nothing is left attached and every port
-  opens.
+  opens. Turning sites off is refused while the panel switch is on and nothing
+  else lets Cloudflare reach 443, which the custom domain needs.
 
 ### The token
 

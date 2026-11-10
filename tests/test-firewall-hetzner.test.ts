@@ -369,6 +369,18 @@ describe("safeguards", () => {
     expect(fake.firewalls.map((firewall) => firewall.name)).toEqual(["office"]);
   });
 
+  test("the sites switch stays on while the panel switch needs it for 443", async () => {
+    const fake = new FakeHetzner(TOKEN);
+    fake.firewall("office", [ssh()], [SERVER]);
+    const server = await connected(fake);
+    customDomain(server, "cp.example.com", [CLOUDFLARE_V4]);
+    await turn(server, "web", true);
+    await turn(server, "panel", true);
+    expect(await refusal(setHetznerRole("web", false, undefined, server.options))).toContain("Turn off Panel through Cloudflare only first");
+    await turn(server, "panel", false);
+    expect(await turn(server, "web", false)).toEqual({ notice: "Sites through Cloudflare only is off." });
+  });
+
   test("an owned firewall another server still uses is detached but kept", async () => {
     const fake = new FakeHetzner(TOKEN);
     fake.servers.set(2, "cp-fra-2");
@@ -403,6 +415,17 @@ describe("safeguards", () => {
     expect(notice).toContain("The Hetzner token is removed");
     expect(notice).toContain("could not be asked what is attached to this server");
     expect((await hetznerView(server.options)).state).toBe("disconnected");
+  });
+
+  test("a token Hetzner refuses is removed, with the same warning", async () => {
+    const fake = new FakeHetzner(TOKEN);
+    const server = await connected(fake);
+    const api = server.options.fetch!;
+    server.options.fetch = async (url, init) => url.startsWith("https://api.hetzner.cloud/")
+      ? new Response(JSON.stringify({ error: { code: "unauthorized", message: "unable to authenticate" } }), { status: 401 })
+      : api(url, init);
+    const { notice } = await disconnectHetzner(server.options);
+    expect(notice).toContain("could not be asked what is attached to this server (it refuses this token)");
   });
 
   test("a range time far ahead of this server's clock does not hold the rules", async () => {
