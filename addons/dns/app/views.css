@@ -235,10 +235,10 @@ p.dns-dialog-note { margin:20px 0 0; }
 
 /* What each connection's token holds */
 .dns-connection-row > td { vertical-align:top; }
-.dns-access-details { margin-top:6px; }
-.dns-access-details > summary { cursor:pointer; list-style:none; font-size:14px; }
+.dns-access-details > summary { cursor:pointer; list-style:none; }
 .dns-access-details > summary::-webkit-details-marker { display:none; }
-.dns-access-toggle { margin-left:8px; color:var(--accent); white-space:nowrap; }
+.dns-access-problems { display:block; margin-top:4px; font-size:14px; }
+.dns-access-toggle { color:var(--accent); white-space:nowrap; }
 .dns-access-toggle::after { content:" ▸"; }
 .dns-access-details[open] .dns-access-toggle::after { content:" ▾"; }
 .dns-access { margin-top:12px; max-width:760px; }
