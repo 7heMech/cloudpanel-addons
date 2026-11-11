@@ -1,7 +1,8 @@
 // A fake of the parts of Hetzner Cloud's API that Firewall uses, answering in
 // its documented shapes: `{ error: { code, message } }` for a refusal, firewalls
 // with `applied_to`, servers with `public_net.firewalls`, and actions that
-// finish at once. The metadata service answers when `serverId` is set.
+// finish at once. The metadata service answers when `serverId` is set, with the
+// server's id or its name as hostname.
 import type { ApiFetch } from "../../lib/provider-http";
 import type { HetznerFirewall, HetznerRule } from "../../addons/firewall/hetzner-api";
 
@@ -49,6 +50,7 @@ export class FakeHetzner {
     return async (url, init) => {
       if (url.startsWith("http://169.254.169.254/")) {
         if (serverId === null) throw new Error("connect ECONNREFUSED");
+        if (url.endsWith("/hostname")) return new Response(this.servers.get(serverId) ?? "");
         return new Response(String(serverId));
       }
       return this.api(url, init);

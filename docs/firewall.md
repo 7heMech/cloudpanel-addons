@@ -30,17 +30,22 @@ On a Hetzner Cloud server, Firewall can block everything but Cloudflare at
 Hetzner, before it reaches the server. Elsewhere the card says the server is
 not a Hetzner Cloud server. Dedicated (Robot) servers are not covered.
 
-Before you start, attach a firewall of your own to the server in Hetzner's
-console that allows SSH. Once any firewall is attached, Hetzner drops whatever
-no attached firewall allows, so Firewall refuses to attach anything until one
-allows the port sshd listens on.
+Choose **Connect Hetzner** on the card:
 
-1. In [Hetzner Cloud Console](https://console.hetzner.cloud/), open the
-   project the server is in, then **Security → API tokens → Generate API
-   token**, with **Read & Write**.
-2. Paste it into **Hetzner Cloud Firewall** on Firewall's page and choose
-   **Connect**. The page never shows it again; **Replace token** and **Remove
-   token** are on the card.
+1. **Open Hetzner Console**, open the project that holds this server (the
+   dialog names it), then **Security → API tokens → Generate API token**, with
+   **Read & Write**. Hetzner has no link that fills the form in, and none that
+   opens one project's tokens without knowing its id.
+2. Paste the token and choose **Connect**. The page never shows it again;
+   **Replace token** and **Remove token** are on the card.
+
+Once any firewall is attached, Hetzner drops whatever no attached firewall
+allows. On a server with no firewall yet, the first switch you turn on
+therefore closes SSH and every other port CloudPanel's Firewall page opens.
+Site users lose SFTP. The review lists those ports, and you type the server's
+name to go ahead. Hetzner's web console still gives a root shell, and so does
+the Terminal addon while the panel answers. To keep SSH, first attach a
+firewall of your own that allows it.
 
 **Sites through Cloudflare only** attaches `clp-addons-cloudflare-web`: ports
 80 and 443 answer only Cloudflare. Before it does, it lists the sites that do
@@ -53,12 +58,18 @@ Cloudflare (the orange cloud), and Cloudflare must reach port 443, through the
 sites switch or a firewall of yours. The panel then answers only at that
 domain.
 
-Both are off by default. If another of your firewalls still lets anyone reach
-those ports, the card says so: the addon's firewall has no effect until you
-change that one. The firewalls follow Cloudflare's list, and a rule changed in
-Hetzner's console is put back within 15 minutes. Several servers in one
-project share the two firewalls. Disabling Firewall leaves them attached and no
-longer kept current; turn the switches off first.
+Both are off by default. Off means anyone can reach those ports: turning a
+switch off, or turning the other one on, attaches `clp-addons-open-web` or
+`clp-addons-open-panel` where no firewall of yours allows the ports. A port
+your own firewall closed on purpose stays closed. With both switches off and no
+firewall of yours, the addon takes all of its firewalls off.
+
+If another of your firewalls still lets anyone reach those ports, the card says
+so: the addon's firewall has no effect until you change that one. The firewalls
+follow Cloudflare's list, and a rule changed in Hetzner's console is put back
+within 15 minutes. Several servers in one project share the addon's firewalls.
+Disabling Firewall leaves them attached and no longer kept current; turn the
+switches off first. Removing the token leaves the open firewalls attached.
 
 If the panel's domain stops working, reach the panel through an SSH tunnel:
 
@@ -66,6 +77,6 @@ If the panel's domain stops working, reach the panel through an SSH tunnel:
 ssh -L 8443:127.0.0.1:8443 root@<server IP>
 ```
 
-then open `https://127.0.0.1:8443`. Locked out of SSH too, remove the
-firewalls from the server under **Firewalls** in Hetzner's console, or use the
-server's web console there.
+then open `https://127.0.0.1:8443`. With SSH closed too, use the server's web
+console in Hetzner's console, or remove the firewalls from the server under
+**Firewalls** there.
