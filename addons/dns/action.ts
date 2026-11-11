@@ -40,7 +40,8 @@ import { isStandInSite } from "../../lib/stand-ins";
 import { clpctlStandIns, readStandIns, retryStandInCertificates, type StandInPaths } from "./stand-in";
 import { clpctlIssue, NEW_SITE_WINDOW, requestSsl, retryCertificates, type Issue, type SslRequest } from "./ssl";
 import { readState, writeState } from "../../lib/root-state";
-import { tokenTemplate, type TokenTemplate } from "./token";
+import { grants, tokenListUrl, type Held, type TokenAccess } from "./access";
+import { neededPermissions, PERMISSIONS, tokenTemplate, type PermissionName, type TokenTemplate } from "./token";
 
 type DnsVerb = keyof typeof DNS_VERBS;
 
@@ -110,6 +111,28 @@ export interface SiteView {
   redirect?: Redirect & { standIn: boolean };
 }
 
+/** What a connection's token holds against what DNS uses, as the page shows it. */
+export interface AccessView {
+  /** The zones its permissions reach; null when the token could not read them, with why in `note`. */
+  reach: string | null;
+  note: string | null;
+  editUrl: string;
+  rows: { label: string; usedFor: string; held: Held | "unknown"; detail?: string }[];
+}
+
+export function accessView(token: TokenAccess | undefined, profiles: Profile[]): AccessView | null {
+  if (!token) return null;
+  const rows = neededPermissions(profiles).map(({ name, permission, usedFor }): AccessView["rows"][number] => {
+    const coverage = token.readable ? token.coverage[name] : undefined;
+    if (!coverage) return { label: permission.label, usedFor, held: "unknown" };
+    const more = (coverage.lackingCount ?? 0) - (coverage.lacking?.length ?? 0);
+    const detail = coverage.held === "some" && coverage.lacking
+      ? `Not on ${coverage.lacking.join(", ")}${more > 0 ? ` and ${more} more` : ""}` : undefined;
+    return { label: permission.label, usedFor, held: coverage.held, ...(detail ? { detail } : {}) };
+  });
+  return { reach: token.readable ? token.reach : null, note: token.readable ? null : token.reason, editUrl: tokenListUrl(token), rows };
+}
+
 export interface Review {
   token: string;
   title: string;
@@ -130,7 +153,7 @@ export interface DnsState {
   profiles: (Profile & { sites: number })[];
   defaultProfileId: string | null;
   sites: SiteView[];
-  connections: (ConnectionReport & { hasToken: boolean })[];
+  connections: (Omit<ConnectionReport, "token"> & { hasToken: boolean; access: AccessView | null })[];
   accounts: { connectionId: string; accountId: string; label: string }[];
   mailcow: MailcowSettings & { hasKey: boolean };
   /** SMTP Relay's accounts, which the Mailcow form can be filled from. */
@@ -497,11 +520,13 @@ class Action {
         }),
       ].sort((a, b) => a.domain.localeCompare(b.domain)),
       connections: policy.connections.map((connection) => {
-        const report = status.connections.find((entry) => entry.id === connection.id);
+        const { token, ...report } = status.connections.find((entry) => entry.id === connection.id)
+          ?? { id: connection.id, active: false, status: "unchecked", accounts: [], zones: 0, error: null };
         return {
-          ...(report ?? { id: connection.id, active: false, status: "unchecked", accounts: [], zones: 0, error: null }),
+          ...report,
           label: connection.label,
           hasToken: Boolean(secrets.cloudflare[connection.id]),
+          access: report.active ? accessView(token, policy.profiles) : null,
         };
       }),
       accounts,
@@ -920,6 +945,8 @@ class Action {
     if (!existing && standIns.length) next.held = [...new Set([...next.held, ...standIns])];
     this.files.saveSecrets({ ...secrets, cloudflare: { ...secrets.cloudflare, [id]: token } });
     this.savePolicy(next);
+    const status = this.files.status();
+    this.files.saveStatus({ ...status, connections: [...status.connections.filter((entry) => entry.id !== id), { ...report, id, label }] });
     await this.tryRefresh("all");
     const zones = `${report.zones} zone${report.zones === 1 ? "" : "s"}`;
     return this.reply({ notice: `${label} reaches ${report.accounts.length} account${report.accounts.length === 1 ? "" : "s"} and ${zones}.` });
@@ -1313,4 +1340,16 @@ async function perform(
 
 export async function runDnsAction(argv: string[], options: DnsActionOptions = {}): Promise<number> {
   return replyToAction("dns", options.emitReply !== false, () => executeDnsAction(argv, options));
+}
+
+/**
+ * Whether a DNS connection's token holds a permission on a zone, from the last
+ * check's read of it, without calling Cloudflare. Null when that is not known:
+ * no such connection, not checked yet, or a token that cannot read itself.
+ */
+export function dnsTokenHolds(connectionId: string, permission: PermissionName, zone: { id: string; accountId: string }, paths: Partial<DnsPaths> = {}): boolean | null {
+  const files = new Files({ ...DEFAULT_DNS_PATHS, ...paths });
+  const token = files.status().connections.find((connection) => connection.id === connectionId)?.token;
+  if (!token?.readable) return null;
+  return grants(token.grants, PERMISSIONS[permission], { accountId: zone.accountId, zoneId: zone.id });
 }

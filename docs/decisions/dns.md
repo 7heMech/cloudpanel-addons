@@ -246,18 +246,18 @@ deletes both.
 A connection is one API token. The page links to Cloudflare's user-owned token
 template (`/profile/api-tokens` with `permissionGroupKeys`, `accountId=*` and
 `zoneId=all`), so the operator chooses accounts and zones on Cloudflare's own
-screen and never types an account ID. The permissions are Account Settings
-Read, Zone Edit, DNS Edit, Single Redirect Edit and API Tokens Read, then the union of what the
+screen and never types an account ID. The permissions are DNS Edit, Zone Edit, Account Settings
+Read, Single Redirect Edit and API Tokens Read, then the union of what the
 saved profiles use: Zone Settings Edit, Config Rules Edit and Zone WAF Edit for
 the features that need them. Single Redirect Edit is asked for before any
 redirect domain exists, so finding the redirects to take over works with the
-token first pasted. API Tokens Read lets the token's own permissions and
-zones be read (`/user/tokens/{id}`); it exposes token metadata, never a secret. Zone Edit is asked for whatever the profiles use, since Automatic creates
+token first pasted. API Tokens Read lets the token read its own permissions
+(below); it exposes token metadata, never a secret. Zone Edit is asked for whatever the profiles use, since Automatic creates
 missing zones; Cloudflare refuses a zone
 create without it by naming an internal permission, `account.zone.create`,
 which the page reports as Zone Edit. The URL uses the keys in Cloudflare's
 [template reference](https://developers.cloudflare.com/fundamentals/api/how-to/account-owned-token-template/),
-plus `config_settings`, `zone_waf` and `dynamic_redirect` (Single Redirect),
+plus `config_settings`, `zone_waf`, `dynamic_redirect` (Single Redirect) and `firewall_services`,
 which the reference leaves out but are the dashboard's own permission names. The dashboard drops an unknown key without saying so, which is
 why the page also lists the permissions. The template has no parameter for
 Client IP Address Filtering, so the page shows the server's detected addresses
@@ -267,6 +267,61 @@ and Single Redirect's is
 [Dynamic URL Redirects Write](https://developers.cloudflare.com/rules/url-forwarding/single-redirects/create-api/).
 Cloudflare refuses a missing permission with a bare "Authentication error", so
 a refused settings or rules read or write is reported with the permission it needs.
+
+`addons/dns/token.ts` is the one list of permissions: each one's dashboard
+label, template key, the API permission group names that grant it, whether it
+is checked per zone, per account or for the token's owner, and what in the
+profiles uses it. The template, the refusal messages and the page's table all
+come from it.
+
+### What a token holds
+
+Each check, and saving a connection, reads the token's own policies after
+verifying it: verify returns the token's ID, then `/user/tokens/{id}`, or
+`/accounts/{account}/tokens/{id}` for an account-owned token. Those need API
+Tokens Read, or Account API Tokens Read for an account-owned token; a token
+without it is still checked as before, and the page asks for that permission
+instead of showing what the token holds. A permission DNS would need is then
+named only when Cloudflare refuses a write, as before.
+[Token details](https://developers.cloudflare.com/api/resources/user/subresources/tokens/methods/get/)
+
+The read is stored with the connection's status, so the page makes no
+Cloudflare call when it loads. The token's policies are kept as allow or deny
+grants of permission group names over resources, and decided locally:
+
+- Permissions are matched by group name ("DNS Write", "Zone WAF Write"), since
+  Cloudflare does not publish group IDs. A Read requirement is met by Read or
+  Write.
+- [Resources](https://developers.cloudflare.com/fundamentals/api/how-to/create-via-api/)
+  are `com.cloudflare.api.account.zone.*` (every zone), `…account.zone.<id>`,
+  `…account.<id>` (an account, and its zones), the same account key nested
+  with zone keys, and `com.cloudflare.api.user.<tag>`. A deny wins over an allow.
+- Zone permissions are checked against every zone the token lists, account
+  permissions (Zone Edit, Account Settings Read) against every account. The
+  page shows a held permission, a missing one, or one missing on some zones,
+  naming up to three. It lists only what the profiles use, and names what is
+  missing, never a count.
+- The zones a token reaches are described from its DNS Write grants: all
+  zones, all zones in named accounts, or a number of chosen zones.
+
+Cloudflare has no address for editing one token, so **Edit in Cloudflare**
+opens the owner's token list: `/profile/api-tokens`, or
+`/{account}/api-tokens` for an account-owned token.
+
+Other addons ask through `dnsTokenHolds(connectionId, permission, zone)` in
+`addons/dns/action.ts`, which answers from the stored read without a network
+call, and returns null when that is not known (no check yet, or a token that
+cannot read itself).
+
+Zone-scoped IP Access rules (`/zones/{zone_id}/firewall/access_rules/rules`)
+need **Zone → Firewall Services → Edit**, API name Firewall Services Write
+(Firewall Services Read only lists them); template key `firewall_services`, as
+the dashboard uses, which the template reference does not list. It is in the
+permission list as `ipAccessRules` but not in the template, since nothing in
+DNS uses it. Cloudflare allows
+[50,000 IP Access rules per account](https://developers.cloudflare.com/waf/tools/ip-access-rules/)
+on every plan, while the Free plan allows only
+[one custom list](https://developers.cloudflare.com/waf/tools/lists/).
 
 A token is verified before it is saved (`/user/tokens/verify`, or the account
 route for an account-owned one, using a zone's account when account listing is

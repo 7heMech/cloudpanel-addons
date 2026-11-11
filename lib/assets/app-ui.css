@@ -182,6 +182,7 @@ td a:hover { color: var(--accent); }
 @media (min-width: 941px) {
   /* The buttons' column takes only their width, so the rest goes to the columns beside the site. */
   .fleet-table td.action-cell { width: 1%; }
+  .fleet-table td.action-cell > .actions { flex-wrap: nowrap; }
   .fleet-table td.site-cell { max-width: 300px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
   .fleet-table td.site-cell > * { overflow: hidden; text-overflow: ellipsis; }
 }

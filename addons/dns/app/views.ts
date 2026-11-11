@@ -156,12 +156,43 @@ function siteRow(site: SiteView, state: DnsState): string {
   </tr>`;
 }
 
+type Access = NonNullable<DnsState["connections"][number]["access"]>;
+
+/** The row's one line: what is missing by name, or that nothing is. */
+function accessSummary(access: Access): string {
+  if (access.reach === null) return `<span class="tone-warn">${esc(access.note ?? "")}.</span>`;
+  const missing = access.rows.filter((row) => row.held === "no").map((row) => row.label);
+  const partial = access.rows.filter((row) => row.held === "some").map((row) => `${row.label} (${row.detail})`);
+  const lines = [missing.length && `Missing: ${missing.join(", ")}`, partial.length && `Not on every zone: ${partial.join(", ")}`].filter(Boolean) as string[];
+  return lines.map((line) => `<span class="tone-bad">${esc(line)}</span>`).join("<br>") || '<span class="tone-ok">✓ Holds every permission DNS uses</span>';
+}
+
+function heldCell(row: Access["rows"][number]): string {
+  if (row.held === "yes") return '<span class="tone-ok" role="img" aria-label="Held">✓</span>';
+  if (row.held === "no") return '<span class="badge tone-bad">Missing</span>';
+  if (row.held === "some") return `<span class="badge tone-warn">${esc(row.detail ?? "Some zones")}</span>`;
+  return '<span class="hint inline" role="img" aria-label="Not known">—</span>';
+}
+
+function accessDetails(id: string, access: Access): string {
+  const rows = access.rows.map((row) => `<div class="dns-access-row" role="row" data-held="${row.held}">
+      <span class="dns-access-perm" role="cell">${esc(row.label)}</span>
+      <span class="dns-access-use" role="cell">${esc(row.usedFor)}</span>
+      <span class="dns-access-held" role="cell">${heldCell(row)}</span></div>`).join("");
+  return `<details class="dns-access-details" id="dns-access-${esc(id)}"><summary>${accessSummary(access)}<span class="dns-access-toggle">Permissions</span></summary>
+    <div class="dns-access"><div class="dns-access-grid" role="table" aria-label="Token permissions">
+      <div class="dns-access-row dns-access-cols" role="row"><span role="columnheader">Permission</span><span role="columnheader">Used for</span><span role="columnheader">This token</span></div>${rows}</div>
+      <p class="dns-access-foot hint"><a href="${esc(access.editUrl)}" target="_blank" rel="noopener noreferrer" referrerpolicy="no-referrer">Edit in Cloudflare ↗</a></p></div></details>`;
+}
+
 function connectionRow(connection: DnsState["connections"][number]): string {
   const accounts = connection.accounts.map((account) => account.name || account.id).join(", ");
   const status = connection.active ? '<span class="tone-ok">Active</span>' : `<span class="tone-bad">${esc(connection.status === "unchecked" ? "Not checked" : "Not working")}</span>`;
-  return `<tr data-connection="${esc(connection.id)}">
+  const { access } = connection;
+  const reach = access?.reach ? `${access.reach} · ${plural(connection.zones, "zone")} now` : plural(connection.zones, "zone");
+  return `<tr data-connection="${esc(connection.id)}" class="dns-connection-row">
     <td class="site-cell"><strong>${esc(connection.label)}</strong><span class="hint">Cloudflare</span></td>
-    <td class="wide-cell">${esc(accounts || "—")}<span class="hint">${esc(plural(connection.zones, "zone"))} · ${status}${connection.error ? ` · ${esc(connection.error)}` : ""}</span></td>
+    <td class="wide-cell">${esc(accounts || "—")}<span class="hint">${esc(reach)} · ${status}${connection.error ? ` · ${esc(connection.error)}` : ""}</span>${access ? accessDetails(connection.id, access) : ""}</td>
     <td data-label="Actions" class="action-cell"><div class="actions">
       <button class="btn" type="button" onclick="dnsEditConnection('${esc(connection.id)}')">Edit</button>
       <button class="btn btn-danger" type="button" onclick="dnsRemoveConnection('${esc(connection.id)}')">Remove</button>
