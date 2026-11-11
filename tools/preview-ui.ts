@@ -63,7 +63,7 @@ import ACE_MODE_HTML from "../addons/maintenance/app/ace-mode-html.js" with { ty
 import type { InstanceView, InstaticJobView } from "../addons/instatic/app/service";
 import type { JobView, SiteSummary } from "../addons/stager/app/service";
 import type { AvailableTags } from "../addons/instatic/app/tags";
-import { setupPanelHtml, setupSuggests } from "../manager/setup-view";
+import { setupPanelHtml, setupShows } from "../manager/setup-view";
 import type { SetupItem } from "../manager/setup";
 import { ADDONS } from "../addons/catalog";
 import { withCsrfCookie, SECURITY_HEADERS } from "../lib/app-http";
@@ -561,8 +561,8 @@ let systemTweaksPreview: SystemTweaksState | null = null;
 
 /** ?dark draws a page in the panel's dark theme, from the cookie the panel's own switch sets. */
 function previewTheme(html: string, url: URL): string {
-  // ?setup opens the Setup checklist once it has loaded.
-  if (url.searchParams.has("setup")) {
+  // ?setup opens the Setup checklist once it has loaded; &closed leaves it shut.
+  if (url.searchParams.has("setup") && !url.searchParams.has("closed")) {
     html = html.replace("</body>", () => `<script>addEventListener("load",function(){setTimeout(function(){clpSetupOpen(true)},100)})</script></body>`);
   }
   // ?open=id,id opens those disclosures, so a section that starts closed can be reviewed.
@@ -1790,9 +1790,14 @@ const setupPreviewSteps = (["domain", "secure", "sites", "provision"] as const).
   id: id!, level, title: title!, href: addon ? `/addons/${addon}/` : "/admin/remote-backup", state: state as SetupItem["state"], reason: reason!,
   addon: addon ? { name: addon, title: ADDONS[addon]!.title, enabled: addon !== "security-keys" } : null,
 }))));
+const SETUP_PREVIEW_DONE: Record<string, string> = {
+  "panel-hostname": "CloudPanel answers at panel.example.com", "login-jails": "Failed panel logins are banned", updates: "Security updates install daily",
+  "hetzner-firewall": "Only Cloudflare reaches the sites and the panel", passkeys: "admin has a security key", "remote-backups": "On, to amazon_s3",
+  "dns-automatic": "New sites get Web's records", "auto-ssl": "New sites get a Let's Encrypt certificate",
+};
 const setupPreviewPrefs = { skipped: new Set<string>(["updates"]), hidden: false };
 
-/** ?setup=done shows a server with nothing left to suggest. */
+/** ?setup=done shows a server with nothing left to suggest, ?setup=fallback one whose DNS token lacks a permission a newer release needs. */
 async function setupPreview(req: Request, url: URL): Promise<Response | null> {
   if (url.pathname !== "/addons/api/setup") return null;
   if (req.method === "POST") {
@@ -1801,13 +1806,16 @@ async function setupPreview(req: Request, url: URL): Promise<Response | null> {
     if (typeof body.unskip === "string") setupPreviewPrefs.skipped.delete(body.unskip);
     if (typeof body.hidden === "boolean") setupPreviewPrefs.hidden = body.hidden;
   }
-  const done = new URL(req.headers.get("referer") ?? url.href).searchParams.get("setup") === "done";
-  const steps = setupPreviewSteps.map((step) => ({
-    ...step,
-    state: done && step.state === "todo" ? "done" as const : step.state === "todo" && setupPreviewPrefs.skipped.has(step.id) ? "skipped" as const : step.state,
-  }));
+  const scenario = new URL(req.headers.get("referer") ?? url.href).searchParams.get("setup");
+  const steps = setupPreviewSteps.map((step): SetupItem => {
+    if (scenario === "fallback" && step.id === "dns-connection") {
+      return { ...step, state: "todo", reason: "Agency's token lacks API Tokens: Read, which DNS now needs to show the token's permissions" };
+    }
+    if ((scenario === "done" || scenario === "fallback") && step.state === "todo") return { ...step, state: "done", reason: SETUP_PREVIEW_DONE[step.id] ?? step.reason };
+    return step.state === "todo" && setupPreviewPrefs.skipped.has(step.id) ? { ...step, state: "skipped" } : step;
+  });
   const view = { hidden: setupPreviewPrefs.hidden, steps };
-  return Response.json({ ok: true, data: { show: !view.hidden && setupSuggests(view), html: setupPanelHtml(view) } });
+  return Response.json({ ok: true, data: { show: setupShows(view), html: setupPanelHtml(view) } });
 }
 
 function managerPreviewMutation(path: string, source: URL): Response | null {

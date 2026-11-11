@@ -8,7 +8,6 @@ import { syncHetzner } from "./hetzner";
 import type { AddonDefinition } from "../../lib/addon-definition";
 import { errorMessage } from "../../lib/errors";
 import { log } from "../../lib/log";
-import { FIREWALL_SETUP } from "./setup";
 
 async function protectNewSites(options?: Record<string, unknown>): Promise<string | null> {
   const paths = { ...DEFAULT_CLOUDFLARE_ACTION_PATHS, ...(options?.paths as Partial<CloudflareActionPaths> | undefined) };
@@ -46,7 +45,6 @@ export const FIREWALL_ADDON: AddonDefinition = {
     { in: "2.2.0-rc.1", note: "On a Hetzner Cloud server, Firewall can attach Hetzner Cloud Firewalls that let only Cloudflare reach the sites (80, 443) and the panel (8443). Both switches are off until you connect a token and turn one on." },
   ],
   targets: FIREWALL_TARGETS,
-  setup: FIREWALL_SETUP,
   handler: handle,
   action: runFirewallAction,
   newSites: { label: "Cloudflare-only sites", run: protectNewSites },

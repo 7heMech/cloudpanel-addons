@@ -9,8 +9,6 @@ import { join } from "node:path";
 import { ADDONS } from "../addons/catalog";
 import { automaticCheck, connectionCheck, panelHostCheck } from "../addons/dns/setup";
 import { seededPolicy } from "../addons/dns/presets";
-import { hetznerSetupState } from "../addons/firewall/hetzner";
-import { hetznerCheck } from "../addons/firewall/setup";
 import { autoSslCheck } from "../addons/panel-tweaks/setup";
 import { newSiteCategoryCheck } from "../addons/resource-limits/setup";
 import { administratorKeys } from "../addons/security-keys/action";
@@ -21,7 +19,7 @@ import type { LoginJailsStatus } from "../addons/system-tweaks/login-jails";
 import type { SetupStep } from "../lib/addon-definition";
 import { issuedFor, panelCustomDomainCertificate } from "../lib/panel-custom-domain";
 import { CORE_SETUP, changeSetupPrefs, readSetupPrefs, remoteBackupsCheck, setupStepIds, setupSteps, setupView } from "../manager/setup";
-import { setupPanelHtml, setupSuggests } from "../manager/setup-view";
+import { setupPanelHtml, setupShows, setupSuggests } from "../manager/setup-view";
 
 const uid = process.getuid!();
 let dir: string;
@@ -90,13 +88,6 @@ describe("each step's verdict", () => {
     expect(remoteBackupsCheck({ remote_backup_enabled: "1", remote_backup_storage_provider: "amazon_s3" })).toEqual({ state: "done", reason: "On, to amazon_s3" });
   });
 
-  test("Hetzner Cloud Firewall, from what Firewall last saw", () => {
-    expect(hetznerCheck({ cloud: false, token: false, seen: {} }).state).toBe("na");
-    expect(hetznerCheck({ cloud: true, token: false, seen: {} }).reason).toBe("No Hetzner token is saved");
-    expect(hetznerCheck({ cloud: true, token: true, seen: {} }).state).toBe("todo");
-    expect(hetznerCheck({ cloud: true, token: true, seen: { web: true, panel: false } }).reason).toBe("Anyone can reach the panel without Cloudflare");
-    expect(hetznerCheck({ cloud: true, token: true, seen: { web: true, panel: true } }).state).toBe("done");
-  });
 
   test("DNS connection, panel hostname and automatic records", () => {
     const policy = { ...seededPolicy(), connections: [{ id: "cf-1", label: "Agency" }] };
@@ -152,15 +143,6 @@ describe("what the steps read", () => {
     expect(administratorKeys({ paths }).allowed).toBe(false);
   });
 
-  test("Hetzner: the firmware vendor, a token, and the switches as last seen", () => {
-    const paths = { vendor: join(dir, "vendor"), tokenFile: join(dir, "token.json"), syncFile: join(dir, "sync.json"), rootUid: uid };
-    expect(hetznerSetupState({ paths })).toEqual({ cloud: false, token: false, seen: {} });
-    writeFileSync(paths.vendor, "Hetzner\n");
-    expect(hetznerSetupState({ paths }).cloud).toBe(true);
-    privateFile(paths.tokenFile, { token: "a".repeat(64) });
-    privateFile(paths.syncFile, { seen: { web: true, panel: true } });
-    expect(hetznerSetupState({ paths })).toEqual({ cloud: true, token: true, seen: { web: true, panel: true } });
-  });
 
   test("a custom domain counts once a CA issued its certificate", () => {
     const openssl = (...args: string[]) => {
@@ -243,6 +225,27 @@ describe("collecting the checklist", () => {
     changeSetupPrefs("admin", { unskip: "one" }, file);
     changeSetupPrefs("admin", { hidden: false }, file);
     expect(readSetupPrefs(file)).toEqual({});
+  });
+
+  test("a done step that falls back shows the helper again, but keeps a skip and a Hide", async () => {
+    const file = join(dir, "setup.json");
+    let tokenHolds = true;
+    const source = { core: [], addons: [{ name: "dns", title: "DNS", enabled: true, steps: [
+      step("dns-connection", "domain", () => tokenHolds
+        ? { state: "done", reason: "Cloudflare: Agency" }
+        : { state: "todo", reason: "Agency's token lacks API Tokens: Read" }),
+      step("other", "secure", () => ({ state: "done", reason: "ok" })),
+    ] }] };
+    expect(setupShows(await setupView("admin", file, source))).toBe(false);
+    tokenHolds = false;
+    const fallen = await setupView("admin", file, source);
+    expect(setupShows(fallen)).toBe(true);
+    expect(setupPanelHtml(fallen)).toContain('href="/dns-connection"');
+    changeSetupPrefs("admin", { hidden: true }, file);
+    expect(setupShows(await setupView("admin", file, source))).toBe(false);
+    changeSetupPrefs("ops", { skip: "dns-connection" }, file);
+    expect(await setupView("ops", file, source)).toMatchObject({ steps: [{ id: "dns-connection", state: "skipped" }, { id: "other" }] });
+    expect(setupShows(await setupView("ops", file, source))).toBe(false);
   });
 
   test("the panel suggests only while a step is left, with no counts", () => {
