@@ -29,13 +29,13 @@
   #clp-setup-chip { width: auto; padding: 0 16px; }
 }
 /* A phone has no room for it beside the logo, so it takes the end of the
-   navigation row, where the root shell goes; whoever is still setting up a
-   server is rarely granted that. */
+   navigation row from the root shell, which comes back once Setup is hidden or
+   has nothing left to suggest. */
 @media (max-width: 760px) {
   #clp-setup-chip { display: none !important; }
   .clp-addon-primary-nav > .clp-setup-nav:not([hidden]) { display: flex; gap: 7px; margin-left: auto; padding: 0 16px;
     border: 0; border-left: 1px solid var(--border); background: var(--header-bg); color: var(--text); font: inherit;
     font-size: 15px; font-weight: 600; cursor: pointer; }
-  .clp-setup-nav + .clp-root-shell-nav:not([hidden]) { margin-left: 0; }
+  .clp-addon-primary-nav > .clp-setup-nav:not([hidden]) + .clp-root-shell-nav { display: none; }
   #clp-setup-panel { left: 8px; right: 8px; width: auto; }
 }

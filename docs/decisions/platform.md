@@ -703,8 +703,8 @@ installed addon patches that partial.
 
 An administrator's addon pages carry a Setup helper: Setup in the header's tools
 on a desktop, and on a phone, whose header row has no room beside the logo, at
-the end of the navigation row, where the root shell goes; whoever is still
-setting up a server is rarely granted that. It opens suggestions in four levels -- Connect your domain, Secure
+the end of the navigation row in place of the root shell, which comes back once
+Setup is hidden or has nothing left to suggest. It opens suggestions in four levels -- Connect your domain, Secure
 the server, Run sites, Provision automatically -- each ticked from the server's
 state, never from a click. It shows no counts: a step may not fit a server, so
 any step can be skipped, and the helper hides itself once nothing is left to
