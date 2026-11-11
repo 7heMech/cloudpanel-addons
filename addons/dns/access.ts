@@ -82,9 +82,9 @@ export function grants(list: Grant[], permission: PermissionDef, target: Target)
   return relevant.some((grant) => grant.allow) && !relevant.some((grant) => !grant.allow);
 }
 
-/** What a permission is checked against for a zone: the zone, its account, or the token's owner. */
-export function targetFor(permission: PermissionDef, zone: { id: string; accountId: string }): Target {
-  if (permission.scope === "user") return "user";
+/** What a permission is checked against for a zone: the zone, its account, or the token's owner (an account-owned token's account). */
+export function targetFor(permission: PermissionDef, zone: { id: string; accountId: string }, owner: TokenOwner): Target {
+  if (permission.scope === "user") return owner.owner === "account" && owner.accountId ? { accountId: owner.accountId } : "user";
   return permission.scope === "account" ? { accountId: zone.accountId } : { accountId: zone.accountId, zoneId: zone.id };
 }
 
@@ -102,8 +102,11 @@ function coverageOf(list: Grant[], permission: PermissionDef, reached: Reached):
     : permission.scope === "account"
       ? reached.accounts.map((account) => ({ name: account.name || account.id, target: { accountId: account.id } }))
       : [];
-  // Nothing reached to check against: only a grant on every zone or account holds it.
-  if (!targets.length) return { held: grants(list, permission, permission.scope === "zone" ? { accountId: ANY, zoneId: ANY } : { accountId: ANY }) ? "yes" : "no" };
+  // Nothing reached to check against: only a grant on every zone or account, with no deny anywhere, holds it.
+  if (!targets.length) {
+    const every = grants(list, permission, permission.scope === "zone" ? { accountId: ANY, zoneId: ANY } : { accountId: ANY });
+    return { held: every && !list.some((grant) => !grant.allow && namesPermission(grant, permission)) ? "yes" : "no" };
+  }
   const lacking = targets.filter(({ target }) => !grants(list, permission, target)).map(({ name }) => name).sort();
   if (!lacking.length) return { held: "yes" };
   if (lacking.length === targets.length) return { held: "no" };
@@ -125,9 +128,15 @@ function reachOf(list: Grant[], reached: Reached): string {
   const resources = (allow: boolean) => list
     .filter((grant) => grant.allow === allow && namesPermission(grant, PERMISSIONS.dns))
     .flatMap((grant) => grant.resources).filter((resource) => !resource.user);
-  const allowed = describe(resources(true), "All zones").join(" and ");
+  const allows = resources(true);
+  const allowed = describe(allows, "All zones").join(" and ");
   if (!allowed) return "No zones";
-  const denied = describe(resources(false), "the zones").join(" and ");
+  // A deny on a zone whose account is not known is assumed to overlap.
+  const accountOf = new Map(reached.zones.map((zone) => [zone.id, zone.accountId]));
+  const account = (resource: Resource) => resource.account === "*" && resource.zone !== "*" ? accountOf.get(resource.zone) ?? "*" : resource.account;
+  const overlaps = (a: Resource, b: Resource) => matches(account(a), account(b)) || matches(account(b), account(a))
+    ? matches(a.zone, b.zone) || matches(b.zone, a.zone) : false;
+  const denied = describe(resources(false).filter((deny) => allows.some((allow) => overlaps(allow, deny))), "the zones").join(" and ");
   return denied ? `${allowed}, except ${denied === "the zones" ? "all" : denied}` : allowed;
 }
 

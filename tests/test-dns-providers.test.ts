@@ -327,6 +327,11 @@ describe("a token's own permissions", () => {
     const every = readAccess(owner, [{ allow: true, permissions: ["DNS Write"], resources: [{ account: "*", zone: "*" }] }], { zones: [], accounts: [] });
     expect(one.readable && one.coverage.dns).toEqual({ held: "no" });
     expect(every.readable && every.coverage.dns).toEqual({ held: "yes" });
+    const denied = readAccess(owner, [
+      { allow: true, permissions: ["DNS Write"], resources: [{ account: "*", zone: "*" }] },
+      { allow: false, permissions: ["DNS Write"], resources: [{ account: "*", zone: "1".repeat(32) }] },
+    ], { zones: [], accounts: [] });
+    expect(denied.readable && denied.coverage.dns).toEqual({ held: "no" });
   });
 
   test("reach comes from DNS Write alone, less its denies", () => {
@@ -340,5 +345,11 @@ describe("a token's own permissions", () => {
     expect(denied.readable && denied.reach).toBe("All zones, except the zones in Clients and 1 zone");
     const other = readAccess(owner, [{ allow: true, permissions: ["Account Settings Read"], resources: [{ account: "*", zone: "*" }] }], reached);
     expect(other.readable && other.reach).toBe("No zones");
+    const agency = "a".repeat(32);
+    const disjoint = readAccess(owner, [
+      { allow: true, permissions: ["DNS Write"], resources: [{ account: agency, zone: "*" }] },
+      { allow: false, permissions: ["DNS Write"], resources: [{ account: "*", zone: "2".repeat(32) }] },
+    ], { zones: [{ id: "2".repeat(32), name: "example.org", accountId: clients }], accounts: [{ id: agency, name: "Agency" }, { id: clients, name: "Clients" }] });
+    expect(disjoint.readable && disjoint.reach).toBe("All zones in Agency");
   });
 });
