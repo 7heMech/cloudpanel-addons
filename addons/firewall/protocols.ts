@@ -397,6 +397,18 @@ export function syncFirewall(mode: SyncMode, options: FirewallOptions = {}): str
 
 // --- What the panel's pages ask for ----------------------------------------
 
+/** What CloudPanel's Firewall page opens: each rule's port range and the protocols its Protocol gives it. */
+export function panelRulePorts(options: FirewallOptions = {}): { portRange: string; protocols: ("tcp" | "udp")[] }[] {
+  const paths = pathsOf(options);
+  const state = readFirewallState(paths);
+  return readPanelRules(paths.panelDb).flatMap((rule) => {
+    const range = normalizePortRange(rule.portRange);
+    if (!range) return [];
+    const protocol = state.off ? undefined : state.protocols[ruleKey(rule.portRange, rule.source) ?? ""];
+    return [{ portRange: range, protocols: protocol === "udp" ? ["udp" as const] : protocol === "both" ? ["tcp" as const, "udp" as const] : ["tcp" as const] }];
+  });
+}
+
 export interface FirewallStatus {
   /** Whether ufw is on this box at all. */
   available: boolean;

@@ -1,8 +1,9 @@
 /**
  * Hetzner Cloud Firewalls that let only Cloudflare reach this server's web
- * ports and panel. The addon owns two firewalls per Hetzner project, found by
- * label, whose rules are computed from CloudPanel's Cloudflare list the same
- * way on every server; each server attaches them to itself alone. See
+ * ports and panel. The addon owns up to four firewalls per Hetzner project,
+ * found by label: per role, one whose rules are computed from CloudPanel's
+ * Cloudflare list the same way on every server, and one open to anyone for
+ * when the switch is off. Each server attaches them to itself alone. See
  * "Hetzner Cloud Firewall" in docs/decisions/firewall.md.
  */
 import { createHash } from "node:crypto";
@@ -15,26 +16,35 @@ import { errorMessage } from "../../lib/errors";
 import { withFileLock } from "../../lib/file-lock";
 import { panelCustomDomain, PANEL_CUSTOM_DOMAIN_FILE, PANEL_CUSTOM_DOMAIN_VHOST } from "../../lib/panel-custom-domain";
 import { withPanelDb } from "../../lib/panel-db";
-import { addonStateDir, CLOUDFLARE_IPS_PATH, DISTRO_NGINX_SITES_DIR, LOCK_DIR, PANEL_DB, ROOT_UID } from "../../lib/paths";
+import { addonConfigFile, addonStateDir, CLOUDFLARE_IPS_PATH, DISTRO_NGINX_SITES_DIR, LOCK_DIR, PANEL_DB, ROOT_UID } from "../../lib/paths";
 import { trustedText } from "../../lib/trusted-file";
 import type { ApiFetch } from "../../lib/provider-http";
 import { readState, writeState } from "../../lib/root-state";
 import { panelUserUid } from "../../lib/sso-auth";
-import { HetznerApi, HetznerError, hetznerServerId, validToken, type HetznerFirewall, type HetznerRule, type HetznerServer } from "./hetzner-api";
-import { ipv4, ipv6 } from "./protocols";
+import { HetznerApi, HetznerError, hetznerHostname, hetznerServerId, validToken, type HetznerFirewall, type HetznerRule, type HetznerServer } from "./hetzner-api";
+import { DEFAULT_FIREWALL_PATHS, ipv4, ipv6, panelRulePorts } from "./protocols";
 
 export type HetznerRole = "web" | "panel";
-export const HETZNER_ROLES: Record<HetznerRole, { name: string; ports: number[]; title: string }> = {
-  web: { name: "clp-addons-cloudflare-web", ports: [80, 443], title: "Sites through Cloudflare only" },
-  panel: { name: "clp-addons-cloudflare-panel", ports: [8443], title: "Panel through Cloudflare only" },
+/** `name` lets only Cloudflare reach the ports; `open` lets anyone, for while the switch is off. */
+export const HETZNER_ROLES: Record<HetznerRole, { name: string; open: string; ports: number[]; title: string }> = {
+  web: { name: "clp-addons-cloudflare-web", open: "clp-addons-open-web", ports: [80, 443], title: "Sites through Cloudflare only" },
+  panel: { name: "clp-addons-cloudflare-panel", open: "clp-addons-open-panel", ports: [8443], title: "Panel through Cloudflare only" },
 };
+const ROLES = Object.keys(HETZNER_ROLES) as HetznerRole[];
+/** Hetzner applies at most this many firewalls to one server. */
+const MAX_FIREWALLS = 5;
+type Access = "cloudflare" | "open";
 const OWNER_KEY = "managed-by";
 const OWNER_VALUE = "clp-addons";
 export const OWNER_SELECTOR = `${OWNER_KEY}=${OWNER_VALUE}`;
 const ROLE_KEY = "clp-addons-role";
+/** `open` on the firewalls open to anyone; the Cloudflare ones have none. */
+const ACCESS_KEY = "clp-addons-access";
 /** When the writer's Cloudflare list was last refreshed, so a server with an older list leaves a newer one alone. */
 const RANGES_KEY = "clp-addons-ranges-at";
 const RULE_DESCRIPTION = "Cloudflare, kept current by clp-addons";
+const OPEN_DESCRIPTION = "Anyone, kept by clp-addons";
+const ANYONE = ["0.0.0.0/0", "::/0"];
 const MAX_RANGES_BYTES = 64 * 1024;
 
 interface HetznerPaths {
@@ -46,6 +56,12 @@ interface HetznerPaths {
   nginxSitesDir: string;
   customDomain: string;
   customDomainVhost: string;
+  /** CloudPanel's Firewall page protocols, for the ports a change would close. */
+  protocolsFile: string;
+  /** Present while the Terminal addon is enabled, which the page then offers as the way to a shell. */
+  terminalConfig: string;
+  /** The firmware's vendor, which is Hetzner on Hetzner Cloud. */
+  vendor: string;
   rootUid: number;
   panelUid: number | null;
 }
@@ -59,6 +75,9 @@ export const DEFAULT_HETZNER_PATHS: HetznerPaths = {
   nginxSitesDir: DISTRO_NGINX_SITES_DIR,
   customDomain: PANEL_CUSTOM_DOMAIN_FILE,
   customDomainVhost: PANEL_CUSTOM_DOMAIN_VHOST,
+  protocolsFile: DEFAULT_FIREWALL_PATHS.stateFile,
+  terminalConfig: addonConfigFile("terminal"),
+  vendor: "/sys/class/dmi/id/sys_vendor",
   rootUid: ROOT_UID,
   panelUid: null,
 };
@@ -191,6 +210,13 @@ export function desiredRules(role: HetznerRole, ranges: string[]): HetznerRule[]
   }));
 }
 
+/** The rules of a role's firewall open to anyone: fixed, so every server writes the same. */
+export function openRules(role: HetznerRole): HetznerRule[] {
+  return HETZNER_ROLES[role].ports.map((port) => ({
+    direction: "in", protocol: "tcp", port: String(port), source_ips: [...ANYONE], description: OPEN_DESCRIPTION,
+  }));
+}
+
 function canonicalList(list: string[] | undefined): string[] {
   return [...new Set((list ?? []).map((ip) => parseCidr(ip)?.text ?? ip))].sort();
 }
@@ -214,6 +240,13 @@ function openings(firewall: HetznerFirewall, port: number): Cidr[] {
   return firewall.rules
     .filter((rule) => rule.direction === "in" && rule.protocol === "tcp" && portCovers(rule.port, port))
     .flatMap((rule) => (rule.source_ips ?? []).map(parseCidr).filter((cidr): cidr is Cidr => cidr !== null));
+}
+
+/** Whether one inbound rule of these firewalls lets some source of the family reach the whole range. */
+function rangeAllowed(firewalls: HetznerFirewall[], protocol: "tcp" | "udp", from: number, to: number, v6: boolean): boolean {
+  return firewalls.some((firewall) => firewall.rules.some((rule) => rule.direction === "in" && rule.protocol === protocol
+    && portCovers(rule.port, from) && portCovers(rule.port, to)
+    && (rule.source_ips ?? []).some((source) => parseCidr(source)?.v6 === v6)));
 }
 
 /** Whether every range can reach the port through one of the firewalls. */
@@ -250,8 +283,16 @@ function roleOf(firewall: HetznerFirewall): HetznerRole | null {
   return role === "web" || role === "panel" ? role : null;
 }
 
-function owned(firewalls: HetznerFirewall[], role: HetznerRole): HetznerFirewall[] {
-  return firewalls.filter((firewall) => roleOf(firewall) === role).sort((a, b) => a.id - b.id);
+function accessOf(firewall: HetznerFirewall): Access {
+  return firewall.labels?.[ACCESS_KEY] === "open" ? "open" : "cloudflare";
+}
+
+function owned(firewalls: HetznerFirewall[], role: HetznerRole, access: Access = "cloudflare"): HetznerFirewall[] {
+  return firewalls.filter((firewall) => roleOf(firewall) === role && accessOf(firewall) === access).sort((a, b) => a.id - b.id);
+}
+
+function openLabels(role: HetznerRole): Record<string, string> {
+  return { [OWNER_KEY]: OWNER_VALUE, [ROLE_KEY]: role, [ACCESS_KEY]: "open" };
 }
 
 function labelsFor(role: HetznerRole, refreshedAt: number, current: Record<string, string> = {}): Record<string, string> {
@@ -342,6 +383,9 @@ interface SyncState {
   serverId?: number;
   /** Until when the page treats this server as not on Hetzner Cloud without asking again. */
   absentUntil?: number;
+  /** Which switches were on when Hetzner was last read, and when, for the Setup checklist. */
+  seen?: Record<HetznerRole, boolean>;
+  seenAt?: number;
 }
 
 function readSync(paths: HetznerPaths): SyncState {
@@ -350,6 +394,11 @@ function readSync(paths: HetznerPaths): SyncState {
 
 function writeSync(paths: HetznerPaths, change: Partial<SyncState>): void {
   writeState(paths.syncFile, { ...readSync(paths), ...change }, paths.rootUid);
+}
+
+/** Keeps what Hetzner just said about this server's switches, and when. */
+function remember(paths: HetznerPaths, seen: Record<HetznerRole, boolean>, now: number): void {
+  writeSync(paths, { seen, seenAt: now });
 }
 
 /** How long the page believes the metadata service's silence: it is quick to answer on Hetzner Cloud. */
@@ -379,8 +428,12 @@ function apiFor(token: string, options: HetznerOptions): HetznerApi {
 // --- What the page shows ----------------------------------------------------
 
 export interface HetznerRoleView {
+  /** The role's Cloudflare firewall is attached here. */
   on: boolean;
+  /** The role's Cloudflare firewall: the one attached, else the project's. */
   firewall: string | null;
+  /** The role's firewall open to anyone, while it is attached here. */
+  open: string | null;
   /** The rules match the current list. */
   current: boolean;
   /** Set while on: what other firewalls still let reach these ports from outside Cloudflare. */
@@ -389,7 +442,8 @@ export interface HetznerRoleView {
 
 export type HetznerView =
   | { state: "absent" }
-  | { state: "disconnected"; serverId: number }
+  /** `serverName` is the hostname the metadata service reports, the server's name when it was created. */
+  | { state: "disconnected"; serverId: number; serverName: string | null }
   /** `connected` when a token is saved, which the page then offers to replace or remove. */
   | { state: "error"; connected: boolean; error: string }
   | {
@@ -399,19 +453,27 @@ export type HetznerView =
     roles: Record<HetznerRole, HetznerRoleView>;
     /** The other firewalls attached to this server. */
     others: string[];
-    /** Set when a switch is on and no other firewall allows SSH. */
-    sshProblem: string | null;
+    /** The Terminal addon is enabled, so the page offers it for a shell. */
+    terminal: boolean;
+    /** While one of the addon's firewalls is attached: the ports sshd listens on that no other firewall allows. */
+    sshClosed: number[];
     rangesProblem: string | null;
   };
 
-function sshMissing(ports: number[], others: HetznerFirewall[]): string | null {
-  if (!ports.length) return "the port sshd listens on could not be found";
-  const missing = ports.filter((port) => !others.some((firewall) => openings(firewall, port).length));
-  if (!missing.length) return null;
-  const list = missing.join(", ");
-  return others.length
-    ? `no other firewall on this server (${others.map((firewall) => firewall.name).join(", ")}) allows SSH on port ${list}`
-    : `no other firewall is attached to this server to allow SSH on port ${list}`;
+function sshMissing(ports: number[], others: HetznerFirewall[]): number[] {
+  return ports.filter((port) => !others.some((firewall) => openings(firewall, port).length));
+}
+
+/** What the Setup checklist reads, without asking Hetzner: whether this is Hetzner Cloud, a token, and the switches as last seen. */
+export function hetznerSetupState(options: HetznerOptions = {}): {
+  cloud: boolean; token: boolean; seen: Partial<Record<HetznerRole, boolean>>; seenAt: number | null;
+} {
+  const paths = pathsOf(options);
+  let vendor = "";
+  try { vendor = readFileSync(paths.vendor, "utf8").trim(); } catch { /* not a VM that says */ }
+  const token = readToken(paths) !== null;
+  const stored = token ? readSync(paths) : {};
+  return { cloud: vendor === "Hetzner" || token, token, seen: stored.seen ?? {}, seenAt: stored.seenAt ?? null };
 }
 
 export async function hetznerView(options: HetznerOptions = {}): Promise<HetznerView> {
@@ -424,31 +486,34 @@ export async function hetznerView(options: HetznerOptions = {}): Promise<Hetzner
     writeSync(paths, { absentUntil: now + ABSENT_FOR_MS });
     return { state: "absent" };
   }
-  if (!token) return { state: "disconnected", serverId };
+  if (!token) return { state: "disconnected", serverId, serverName: await hetznerHostname(options.fetch) };
   const api = apiFor(token, options);
   try {
     const [server, firewalls] = await Promise.all([api.server(serverId), api.firewalls()]);
-    const attached = new Set(server.firewalls.map((firewall) => firewall.id));
-    const others = firewalls.filter((firewall) => attached.has(firewall.id) && !roleOf(firewall));
+    const attachedIds = new Set(server.firewalls.map((firewall) => firewall.id));
+    const attached = firewalls.filter((firewall) => attachedIds.has(firewall.id));
+    const others = attached.filter((firewall) => !roleOf(firewall));
     let ranges: CloudflareRanges | null = null;
     let rangesProblem: string | null = null;
     try { ranges = readCloudflareRanges(options); } catch (error) { rangesProblem = errorMessage(error); }
     const roles = {} as Record<HetznerRole, HetznerRoleView>;
-    for (const role of Object.keys(HETZNER_ROLES) as HetznerRole[]) {
+    for (const role of ROLES) {
       const mine = owned(firewalls, role);
-      const on = mine.find((firewall) => attached.has(firewall.id));
+      const on = mine.find((firewall) => attachedIds.has(firewall.id));
       roles[role] = {
         on: Boolean(on),
         firewall: (on ?? mine[0])?.name ?? null,
+        open: owned(attached, role, "open")[0]?.name ?? null,
         current: !on || !ranges || rulesSignature(on.rules) === rulesSignature(desiredRules(role, ranges.ranges)),
         stillOpen: on && ranges ? describeOpenings(openToOthers(role, others, ranges.ranges)) : [],
       };
     }
-    const anyOn = roles.web.on || roles.panel.on;
+    remember(paths, { web: roles.web.on, panel: roles.panel.on }, now);
     return {
       state: "connected", serverId, serverName: server.name, roles,
       others: others.map((firewall) => firewall.name),
-      sshProblem: anyOn ? sshMissing(sshPorts(options.run), others) : null,
+      terminal: existsSync(paths.terminalConfig),
+      sshClosed: attached.some((firewall) => roleOf(firewall)) ? sshMissing(sshPorts(options.run), others) : [],
       rangesProblem,
     };
   } catch (error) {
@@ -500,15 +565,20 @@ export async function disconnectHetzner(options: HetznerOptions = {}): Promise<{
     if (!token) return { notice: "No Hetzner token is saved." };
     const serverId = await serverIdOf(paths, options);
     let unchecked = "";
+    let staying = "";
     if (serverId !== null) {
       const api = apiFor(token, options);
       try {
         const [server, firewalls] = await Promise.all([api.server(serverId), api.firewalls(OWNER_SELECTOR)]);
         const attached = new Set(server.firewalls.map((firewall) => firewall.id));
-        const on = firewalls.filter((firewall) => roleOf(firewall) && attached.has(firewall.id));
+        const mine = firewalls.filter((firewall) => roleOf(firewall) && attached.has(firewall.id));
+        const on = mine.filter((firewall) => accessOf(firewall) === "cloudflare");
         if (on.length) {
           failAction(`Turn both switches off first: ${on.map((firewall) => firewall.name).join(" and ")} would stay attached to this server and no longer follow Cloudflare's list`);
         }
+        // Their rules never change, so they need no token; they keep what the switches promised open.
+        const open = mine.map((firewall) => firewall.name);
+        if (open.length) staying = ` ${open.join(" and ")} stay${open.length === 1 ? "s" : ""} attached, so those ports stay open to anyone; detach ${open.length === 1 ? "it" : "them"} in Hetzner Console if you no longer want that.`;
       } catch (error) {
         if (error instanceof ActionFailure) throw error;
         // A leaked or revoked token must always be removable; the operator is told what could not be checked.
@@ -519,14 +589,26 @@ export async function disconnectHetzner(options: HetznerOptions = {}): Promise<{
     }
     rmSync(paths.tokenFile, { force: true });
     rmSync(paths.syncFile, { force: true });
-    return { notice: `The Hetzner token is removed. It stays valid in Hetzner until you delete it there.${unchecked}` };
+    return { notice: `The Hetzner token is removed. It stays valid in Hetzner until you delete it there.${staying}${unchecked}` };
   });
 }
 
 export interface HetznerReview {
   title: string;
+  /** What changes, in a sentence or two. */
   text: string;
+  /** Introduces `details`. */
+  listLabel: string;
+  /** The hostnames that stop answering. */
   details: string[];
+  /** What leaves the change without effect. */
+  warnings: string[];
+  /** What anyone could reach before and nothing lets through afterwards. */
+  closes: string[];
+  /** How to reach the panel or a shell if that goes wrong. */
+  wayBack: string;
+  /** What the operator types to go ahead, when ports close; empty when nothing does. */
+  typed: string;
   confirmLabel: string;
   danger: boolean;
   /** What the page sends back to go ahead; it changes when what the review says changes. */
@@ -539,7 +621,7 @@ function reviewOf(role: HetznerRole, enabled: boolean, fields: Omit<HetznerRevie
 }
 
 /** Everything a switch decides from, read once. */
-async function context(role: HetznerRole, options: HetznerOptions) {
+async function context(options: HetznerOptions) {
   const paths = pathsOf(options);
   const serverId = await requireServer(options);
   const token = readToken(paths);
@@ -554,23 +636,125 @@ async function context(role: HetznerRole, options: HetznerOptions) {
   }
   const attachedIds = new Set(server.firewalls.map((firewall) => firewall.id));
   const attached = firewalls.filter((firewall) => attachedIds.has(firewall.id));
-  const mine = owned(firewalls, role);
+  const byRole = (access: Access) => Object.fromEntries(ROLES.map((role) => [role, owned(attached, role, access)[0] ?? null])) as Record<HetznerRole, HetznerFirewall | null>;
   return {
-    paths, serverId, api, attached, mine,
+    paths, serverId, serverName: server.name, api, firewalls, attached,
     others: attached.filter((firewall) => !roleOf(firewall)),
-    on: mine.find((firewall) => attachedIds.has(firewall.id)) ?? null,
+    cloudflare: byRole("cloudflare"),
+    open: byRole("open"),
   };
 }
+type Context = Awaited<ReturnType<typeof context>>;
 
-async function enableReview(role: HetznerRole, ctx: Awaited<ReturnType<typeof context>>, ranges: string[], options: HetznerOptions): Promise<HetznerReview> {
-  const ssh = sshMissing(sshPorts(options.run), ctx.others);
-  if (ssh) {
-    failAction(`Refused: ${ssh}. Hetzner drops whatever no attached firewall allows, so ${HETZNER_ROLES[role].name} alone would shut SSH out. Attach a firewall that allows SSH to this server in Hetzner's console first.`);
+/** A firewall of the addon's as it will be, for checking a change before the firewall exists. */
+function standIn(role: HetznerRole, access: Access, ranges: string[]): HetznerFirewall {
+  return access === "open"
+    ? { id: 0, name: HETZNER_ROLES[role].open, labels: openLabels(role), rules: openRules(role), applied_to: [] }
+    : { id: 0, name: HETZNER_ROLES[role].name, labels: labelsFor(role, 0), rules: desiredRules(role, ranges), applied_to: [] };
+}
+
+interface Plan {
+  /** The roles whose Cloudflare firewall is on this server afterwards. */
+  cloudflare: Set<HetznerRole>;
+  /** The roles whose open firewall is on this server afterwards. */
+  open: Set<HetznerRole>;
+  /** Every firewall on this server afterwards. */
+  after: HetznerFirewall[];
+}
+
+/**
+ * The addon's firewalls on this server once `role` is switched. A role whose
+ * switch is off gets its open firewall where no other firewall allows any of
+ * its ports and they would otherwise close: when nothing was attached, while its
+ * Cloudflare firewall comes off, or while the open one is already there. A
+ * port another firewall closed on purpose stays closed. With no switch on and
+ * no other firewall, nothing of the addon's stays, and Hetzner lets anyone
+ * reach every port.
+ */
+function planFor(ctx: Context, role: HetznerRole, enabled: boolean, ranges: string[]): Plan {
+  const cloudflare = new Set(ROLES.filter((each) => each === role ? enabled : ctx.cloudflare[each] !== null));
+  const open = new Set<HetznerRole>();
+  if (cloudflare.size || ctx.others.length) {
+    for (const each of ROLES) {
+      if (cloudflare.has(each)) continue;
+      const ports = HETZNER_ROLES[each].ports;
+      // Only when nothing of the operator's allows any of the ports: the open firewall opens them all.
+      const needed = ports.every((port) => !ctx.others.some((firewall) => openings(firewall, port).length));
+      const reachable = !ctx.attached.length || ports.some((port) => ctx.attached.some((firewall) => openings(firewall, port).length));
+      if (needed && (ctx.open[each] || reachable)) open.add(each);
+    }
   }
+  const after = [
+    ...ctx.others,
+    ...[...cloudflare].map((each) => ctx.cloudflare[each] ?? standIn(each, "cloudflare", ranges)),
+    ...[...open].map((each) => ctx.open[each] ?? standIn(each, "open", ranges)),
+  ];
+  return { cloudflare, open, after };
+}
+
+interface Watched { protocol: "tcp" | "udp"; from: number; to: number; ssh: boolean }
+
+/** The ports sshd listens on and those CloudPanel's Firewall page opens. */
+function watchedPorts(paths: HetznerPaths, options: HetznerOptions): Watched[] {
+  const list: Watched[] = sshPorts(options.run).map((port) => ({ protocol: "tcp", from: port, to: port, ssh: true }));
+  const rules = panelRulePorts({ paths: { stateFile: paths.protocolsFile, panelDb: paths.panelDb, rootUid: paths.rootUid } });
+  for (const rule of rules) {
+    const [from = 0, to = from] = rule.portRange.split("-").map(Number);
+    for (const protocol of rule.protocols) {
+      if (!list.some((item) => item.protocol === protocol && item.from <= from && to <= item.to)) list.push({ protocol, from, to, ssh: false });
+    }
+  }
+  return list;
+}
+
+/** What anyone could reach before the change and no firewall lets through after it, in words; IPv4 and IPv6 apart. */
+function closingLines(ctx: Context, plan: Plan, watched: Watched[]): { lines: string[]; ssh: boolean } {
+  const allowed = (firewalls: HetznerFirewall[], item: Watched, v6: boolean) =>
+    !firewalls.length || rangeAllowed(firewalls, item.protocol, item.from, item.to, v6);
+  const closing = watched.flatMap((item) => {
+    const lost = [false, true].filter((v6) => allowed(ctx.attached, item, v6) && !allowed(plan.after, item, v6));
+    return lost.length ? [{ ...item, only: lost.length === 1 ? (lost[0] ? " over IPv6" : " over IPv4") : "" }] : [];
+  });
+  const ports = (items: typeof closing) => {
+    const names = items.map((item) => `${item.from === item.to ? item.from : `${item.from}-${item.to}`}${item.only}`);
+    return names.length === 1 ? names[0]! : `${names.slice(0, -1).join(", ")} and ${names.at(-1)}`;
+  };
+  const ssh = closing.filter((item) => item.ssh);
+  const lines = ssh.length ? [`SSH on port${ssh.length === 1 ? "" : "s"} ${ports(ssh)}: site users can no longer connect over SFTP`] : [];
+  for (const protocol of ["tcp", "udp"] as const) {
+    const rest = closing.filter((item) => !item.ssh && item.protocol === protocol);
+    if (rest.length) lines.push(`${protocol.toUpperCase()} ${ports(rest)}, opened on CloudPanel's Firewall page`);
+  }
+  return { lines, ssh: ssh.length > 0 };
+}
+
+const portsOf = (role: HetznerRole) => {
+  const ports = HETZNER_ROLES[role].ports;
+  return `port${ports.length === 1 ? "" : "s"} ${ports.join(" and ")}`;
+};
+
+/** The open firewalls a change attaches, in words. */
+function opening(ctx: Context, plan: Plan, except?: HetznerRole): string {
+  return [...plan.open].filter((role) => role !== except && !ctx.open[role])
+    .map((role) => ` ${portsOf(role)[0]!.toUpperCase()}${portsOf(role).slice(1)} stay${HETZNER_ROLES[role].ports.length === 1 ? "s" : ""} open to anyone through ${HETZNER_ROLES[role].open}.`).join("");
+}
+
+/** When ports close, what the operator must type, and the way back to a shell. */
+function closingFields(ctx: Context, plan: Plan, options: HetznerOptions) {
+  const closes = closingLines(ctx, plan, watchedPorts(ctx.paths, options));
+  const shell = !closes.ssh ? "" : existsSync(ctx.paths.terminalConfig)
+    ? "Terminal still gives a root shell from this panel, and Hetzner Console's web console always does."
+    : "Hetzner Console's web console still gives a root shell.";
+  return { closes: closes.lines, shell, ssh: closes.ssh, typed: closes.lines.length ? ctx.serverName : "" };
+}
+
+async function enableReview(role: HetznerRole, ctx: Context, plan: Plan, ranges: string[], options: HetznerOptions): Promise<HetznerReview> {
   const resolve = options.resolve ?? systemResolve;
   const domain = customDomain(ctx.paths);
   const stillOpen = describeOpenings(openToOthers(role, ctx.others, ranges));
-  const noEffect = stillOpen.length ? ` It has no effect there until that changes: ${stillOpen.join(" ")}` : "";
+  const warnings = stillOpen.length ? [`No effect yet: ${stillOpen.join(" ")}`] : [];
+  const closing = closingFields(ctx, plan, options);
+  const lead = closing.closes.length ? ["No firewall is attached to this server yet, so Hetzner also closes every port the addon's firewalls do not open:"] : [];
   if (role === "panel") {
     if (!domain) {
       failAction("Refused: CloudPanel has no custom domain. Add one under Admin → Settings in CloudPanel, proxied through Cloudflare (the orange cloud), so the panel still answers once port 8443 is closed to everyone else.");
@@ -580,13 +764,17 @@ async function enableReview(role: HetznerRole, ctx: Awaited<ReturnType<typeof co
       failAction(`Refused: CloudPanel's custom domain ${domain} ${problem}, which is not Cloudflare. Proxy it through Cloudflare (the orange cloud) first, or the panel would answer nowhere.`);
     }
     // CloudPanel serves its custom domain from the sites' Nginx on 443, so Cloudflare must reach 443.
-    if (!reachable(ctx.attached, 443, ranges)) {
+    if (!reachable(plan.after, 443, ranges)) {
       failAction(`Refused: ${domain} is served on port 443, and no firewall on this server lets Cloudflare reach 443. Turn on Sites through Cloudflare only first, or allow 443 in another firewall.`);
     }
     return reviewOf(role, true, {
       title: "Let only Cloudflare reach CloudPanel?",
-      text: `CloudPanel will answer only at https://${domain}; https://<this server's IP>:8443 stops answering. If ${domain} stops working, reach the panel through an SSH tunnel to 127.0.0.1:8443.${noEffect}`,
-      details: [], confirmLabel: "Turn on", danger: true,
+      text: `CloudPanel will answer only at https://${domain}; https://<this server's IP>:8443 stops answering.${opening(ctx, plan, role)}`,
+      listLabel: "", details: [], warnings: [...lead, ...warnings], closes: closing.closes,
+      wayBack: closing.ssh
+        ? `If ${domain} stops working, Hetzner Console's web console still gives a root shell.`
+        : `If ${domain} stops working, reach the panel through an SSH tunnel to 127.0.0.1:8443.`,
+      typed: closing.typed, confirmLabel: "Turn on", danger: true,
     });
   }
   const hosts = [...new Set([...siteHostnames(ctx.paths), ...(domain ? [domain] : [])])];
@@ -598,37 +786,38 @@ async function enableReview(role: HetznerRole, ctx: Awaited<ReturnType<typeof co
   const failing = problems.filter((problem): problem is string => problem !== null).sort();
   return reviewOf(role, true, {
     title: "Let only Cloudflare reach the sites?",
-    text: `Hetzner will drop every connection to ports 80 and 443 that does not come from Cloudflare. ${failing.length
-      ? `${failing.length === 1 ? "This hostname does" : `These ${failing.length} hostnames do`} not resolve to Cloudflare and stop${failing.length === 1 ? "s" : ""} answering:`
-      : "Every site resolves to Cloudflare."}${noEffect}`,
-    details: failing, confirmLabel: "Turn on", danger: true,
+    text: `Hetzner will drop every connection to ports 80 and 443 that does not come from Cloudflare.${failing.length ? "" : " Every site resolves to Cloudflare."}${opening(ctx, plan, role)}`,
+    listLabel: failing.length === 1 ? "This hostname does not resolve to Cloudflare and stops answering"
+      : failing.length ? `These ${failing.length} hostnames do not resolve to Cloudflare and stop answering` : "",
+    details: failing, warnings: [...lead, ...warnings], closes: closing.closes, wayBack: closing.shell,
+    typed: closing.typed, confirmLabel: "Turn on", danger: true,
   });
 }
 
-function disableReview(role: HetznerRole, ctx: Awaited<ReturnType<typeof context>>, on: HetznerFirewall, options: HetznerOptions): HetznerReview {
-  const remaining = ctx.attached.filter((firewall) => firewall.id !== on.id);
+function disableReview(role: HetznerRole, ctx: Context, plan: Plan, ranges: string[] | null, options: HetznerOptions): HetznerReview {
+  const on = ctx.cloudflare[role]!;
   // The panel switch needs Cloudflare to reach 443 for the custom domain; this one may be what lets it.
-  if (role === "web" && remaining.some((firewall) => roleOf(firewall) === "panel")) {
-    let ranges: string[] | null = null;
-    try { ranges = readCloudflareRanges(options).ranges; } catch { /* without the list, any source on 443 counts */ }
-    const cut = ranges ? !reachable(remaining, 443, ranges) : !remaining.some((firewall) => openings(firewall, 443).length);
+  if (role === "web" && plan.cloudflare.has("panel")) {
+    const cut = ranges ? !reachable(plan.after, 443, ranges) : !plan.after.some((firewall) => openings(firewall, 443).length);
     if (cut) {
       failAction("Refused: with Panel through Cloudflare only on, CloudPanel's custom domain needs Cloudflare to reach 443, and no other firewall on this server allows it. Turn off Panel through Cloudflare only first, or allow 443 in another firewall; otherwise only an SSH tunnel to 127.0.0.1:8443 reaches the panel.");
     }
   }
-  const ports = HETZNER_ROLES[role].ports;
-  const closed = ports.filter((port) => !remaining.some((firewall) => openings(firewall, port).length));
-  const portText = (list: number[]) => list.join(" and ");
-  let text: string;
-  if (!remaining.length) text = "No other firewall is attached to this server, so Hetzner lets anyone reach every port again.";
-  else if (closed.length) {
-    text = `No other firewall on this server (${remaining.map((firewall) => firewall.name).join(", ")}) allows ${portText(closed)}, so ${role === "web"
-      ? "every site stops answering, to Cloudflare too" : "port 8443 closes to everyone; the custom domain keeps working"}. Allow ${closed.length === 1 ? "it" : "them"} there first to open ${closed.length === 1 ? "it" : "them"} to anyone.`;
-  } else text = `Ports ${portText(ports)} are then open as ${remaining.map((firewall) => firewall.name).join(", ")} allow${remaining.length === 1 ? "s" : ""}.`;
+  const ports = portsOf(role);
+  const removed = ROLES.filter((each) => ctx.open[each] && !plan.open.has(each)).map((each) => HETZNER_ROLES[each].open);
+  const alsoOff = removed.length ? ` ${removed.join(" and ")} come${removed.length === 1 ? "s" : ""} off too.` : "";
+  const text = plan.open.has(role)
+    ? `Anyone can reach ${ports} again: ${HETZNER_ROLES[role].open} takes the place of ${on.name} on this server.`
+    : !plan.after.length
+      ? `${on.name} comes off, and no firewall stays on this server, so Hetzner lets anyone reach every port again.${alsoOff}`
+      : `${on.name} comes off; ${ports} are then open as ${ctx.others.map((firewall) => firewall.name).join(", ")} allow${ctx.others.length === 1 ? "s" : ""}.${alsoOff}`;
+  const closing = closingFields(ctx, plan, options);
   return reviewOf(role, false, {
     title: `Turn off ${HETZNER_ROLES[role].title}?`,
-    text: `${on.name} is detached from this server. ${text}`,
-    details: [], confirmLabel: "Turn off", danger: closed.length > 0 && role === "web",
+    text: `${text}${opening(ctx, plan, role)}`,
+    listLabel: "", details: [], warnings: closing.closes.length ? ["Nothing on this server lets anyone reach these any more:"] : [],
+    closes: closing.closes, wayBack: closing.shell, typed: closing.typed,
+    confirmLabel: "Turn off", danger: closing.closes.length > 0,
   });
 }
 
@@ -642,28 +831,38 @@ async function bringCurrent(api: HetznerApi, role: HetznerRole, firewall: Hetzne
   return "rewritten";
 }
 
-async function attach(role: HetznerRole, ctx: Awaited<ReturnType<typeof context>>, list: CloudflareRanges): Promise<void> {
+/** Puts an open firewall's fixed rules back unless they match. */
+async function bringOpenCurrent(api: HetznerApi, role: HetznerRole, firewall: HetznerFirewall): Promise<boolean> {
+  if (rulesSignature(firewall.rules) === rulesSignature(openRules(role))) return false;
+  await api.setRules(firewall.id, openRules(role));
+  return true;
+}
+
+async function attach(role: HetznerRole, access: Access, ctx: Context, list: CloudflareRanges | null): Promise<void> {
   const { api, serverId } = ctx;
+  const name = access === "open" ? HETZNER_ROLES[role].open : HETZNER_ROLES[role].name;
   const create = async () => {
     try {
-      await api.create(HETZNER_ROLES[role].name, labelsFor(role, list.refreshedAt), desiredRules(role, list.ranges), serverId);
+      if (access === "open") await api.create(name, openLabels(role), openRules(role), serverId);
+      else await api.create(name, labelsFor(role, list!.refreshedAt), desiredRules(role, list!.ranges), serverId);
       return true;
     } catch (error) {
       if (error instanceof HetznerError && error.code === "uniqueness_error") return false;
       throw error;
     }
   };
-  let existing = ctx.mine[0];
+  let existing = owned(ctx.firewalls, role, access)[0];
   for (let attempt = 0; attempt < 2; attempt++) {
     if (!existing) {
       if (await create()) return;
       // Another server created it a moment ago, or a firewall of that name is not the addon's.
-      existing = owned(await api.firewalls(OWNER_SELECTOR), role)[0];
+      existing = owned(await api.firewalls(OWNER_SELECTOR), role, access)[0];
       if (!existing) {
-        failAction(`A firewall named ${HETZNER_ROLES[role].name} already exists in this Hetzner project without the label ${OWNER_SELECTOR}; rename or delete it in Hetzner's console`);
+        failAction(`A firewall named ${name} already exists in this Hetzner project without the label ${OWNER_SELECTOR}; rename or delete it in Hetzner's console`);
       }
     }
-    await bringCurrent(api, role, existing, list);
+    if (access === "open") await bringOpenCurrent(api, role, existing);
+    else await bringCurrent(api, role, existing, list!);
     try {
       await api.apply(existing.id, serverId);
       return;
@@ -674,10 +873,10 @@ async function attach(role: HetznerRole, ctx: Awaited<ReturnType<typeof context>
       throw error;
     }
   }
-  failAction(`${HETZNER_ROLES[role].name} was deleted by another server each time it was attached; try again`);
+  failAction(`${name} was deleted by another server each time it was attached; try again`);
 }
 
-async function detach(ctx: Awaited<ReturnType<typeof context>>, on: HetznerFirewall): Promise<void> {
+async function detach(ctx: Context, on: HetznerFirewall): Promise<void> {
   const { api, serverId } = ctx;
   try {
     await api.remove(on.id, serverId);
@@ -704,9 +903,12 @@ async function deleteIfUnused(api: HetznerApi, id: number): Promise<boolean> {
 }
 
 /**
- * The two switches. Turning one on attaches the role's firewall to this server
- * after the safeguards pass and the operator confirmed the review; off detaches
- * it, likewise confirmed. Each check runs here, never only in the page.
+ * The two switches. Turning one on attaches the role's Cloudflare firewall to
+ * this server after the safeguards pass and the operator confirmed the
+ * review; off takes it off, likewise confirmed. Either also attaches or takes
+ * off the open firewalls the plan calls for: those go on first, so a port the
+ * plan keeps open is not closed in between. Each check runs here, never only
+ * in the page.
  */
 export async function setHetznerRole(
   role: HetznerRole,
@@ -716,34 +918,52 @@ export async function setHetznerRole(
 ): Promise<{ review: HetznerReview } | { notice: string }> {
   const paths = pathsOf(options);
   return withHetznerLock(paths, async () => {
-    const ctx = await context(role, options);
+    const ctx = await context(options);
     const title = HETZNER_ROLES[role].title;
-    if (enabled && ctx.on) return { notice: `${title} is already on.` };
-    if (!enabled && !ctx.on) return { notice: `${title} is already off.` };
+    const on = ctx.cloudflare[role];
+    const stale = ctx.open[role];
+    if (enabled && on && stale) {
+      // Left by a change that failed half way; with the Cloudflare one attached it only lets everyone else in.
+      try { await detach(ctx, stale); } catch (error) {
+        if (error instanceof ActionFailure) throw error;
+        hetznerFailure(ctx.api, error, `detach ${stale.name}`);
+      }
+      return { notice: `${title} is on; ${stale.name} was still attached and is now off.` };
+    }
+    if (enabled && on) return { notice: `${title} is already on.` };
+    if (!enabled && !on) return { notice: `${title} is already off.` };
     let list: CloudflareRanges | null = null;
     if (enabled) {
       try { list = readCloudflareRanges(options); } catch (error) { failAction(errorMessage(error)); }
+    } else {
+      try { list = readCloudflareRanges(options); } catch { /* turning off needs no list */ }
     }
-    const review = enabled ? await enableReview(role, ctx, list!.ranges, options) : disableReview(role, ctx, ctx.on!, options);
+    const plan = planFor(ctx, role, enabled, list?.ranges ?? []);
+    if (plan.after.length > MAX_FIREWALLS) {
+      failAction(`Refused: Hetzner allows at most ${MAX_FIREWALLS} firewalls on a server, and this change would leave ${plan.after.length}: ${plan.after.map((firewall) => firewall.name).join(", ")}. Detach one of your own in Hetzner Console first.`);
+    }
+    const review = enabled ? await enableReview(role, ctx, plan, list!.ranges, options) : disableReview(role, ctx, plan, list?.ranges ?? null, options);
     if (confirm !== review.digest) return { review };
+    const adds: (() => Promise<void>)[] = [...plan.open].filter((each) => !ctx.open[each]).map((each) => () => attach(each, "open", ctx, list));
+    if (enabled) adds.push(() => attach(role, "cloudflare", ctx, list));
+    const removes: (() => Promise<void>)[] = ROLES.filter((each) => ctx.open[each] && !plan.open.has(each)).map((each) => () => detach(ctx, ctx.open[each]!));
+    if (!enabled) removes.unshift(() => detach(ctx, on!));
+    // Adding first keeps open what the plan keeps open; at Hetzner's limit there is no room for that.
+    const steps = ctx.attached.length + adds.length > MAX_FIREWALLS ? [...removes, ...adds] : [...adds, ...removes];
     try {
-      if (enabled) {
-        await attach(role, ctx, list!);
-        writeSync(paths, { rangesHash: list!.hash });
-      } else {
-        await detach(ctx, ctx.on!);
-      }
+      for (const step of steps) await step();
+      if (enabled) writeSync(paths, { rangesHash: list!.hash });
     } catch (error) {
       if (error instanceof ActionFailure) throw error;
-      hetznerFailure(ctx.api, error, enabled ? `attach ${HETZNER_ROLES[role].name}` : `detach ${ctx.on!.name}`);
+      hetznerFailure(ctx.api, error, enabled ? `attach ${HETZNER_ROLES[role].name}` : `detach ${on!.name}`);
     }
+    remember(paths, { web: plan.cloudflare.has("web"), panel: plan.cloudflare.has("panel") }, (options.now ?? Date.now)());
     if (!enabled) return { notice: `${title} is off.` };
     const stillOpen = describeOpenings(openToOthers(role, ctx.others, list!.ranges));
-    const ports = HETZNER_ROLES[role].ports.join(" and ");
     return {
       notice: stillOpen.length
         ? `${HETZNER_ROLES[role].name} is attached, but has no effect yet: ${stillOpen.join(" ")}`
-        : `Hetzner now lets only Cloudflare reach port${role === "web" ? "s" : ""} ${ports}.`,
+        : `Hetzner now lets only Cloudflare reach ${portsOf(role)}.`,
     };
   });
 }
@@ -752,7 +972,8 @@ export async function setHetznerRole(
  * Keeps the addon's firewalls in this Hetzner project in line with the list,
  * writing only what differs. `ranges` is the list watcher's pass, which asks
  * Hetzner nothing unless the list changed since the last pass; `repair` reads
- * the firewalls every time, so a change made in Hetzner's console is put back.
+ * the firewalls and this server every time, so a change made in Hetzner's
+ * console is put back and the switches as last seen stay current.
  */
 export async function syncHetzner(mode: "repair" | "ranges", options: HetznerOptions = {}): Promise<string | null> {
   const paths = pathsOf(options);
@@ -764,25 +985,49 @@ export async function syncHetzner(mode: "repair" | "ranges", options: HetznerOpt
     const stored = readSync(paths);
     if (mode === "ranges" && stored.rangesHash === list.hash) return null;
     const api = apiFor(token, options);
-    let rewritten = 0, newer = 0, deleted = 0;
+    let rewritten = 0, reopened = 0, newer = 0, deleted = 0, stale = 0;
     try {
-      for (const firewall of await api.firewalls(OWNER_SELECTOR)) {
+      const firewalls = await api.firewalls(OWNER_SELECTOR);
+      for (const firewall of firewalls) {
         const role = roleOf(firewall);
         if (!role) continue;
         if (!firewall.applied_to.length) {
           if (await deleteIfUnused(api, firewall.id)) { deleted++; continue; }
         }
+        if (accessOf(firewall) === "open") {
+          if (await bringOpenCurrent(api, role, firewall)) reopened++;
+          continue;
+        }
         const result = await bringCurrent(api, role, firewall, list, (options.now ?? Date.now)());
         if (result === "rewritten") rewritten++;
         if (result === "newer") newer++;
+      }
+      const serverId = mode === "repair" ? await serverIdOf(paths, options) : null;
+      if (serverId !== null) {
+        const attached = new Set((await api.server(serverId)).firewalls.map((firewall) => firewall.id));
+        const on = (role: HetznerRole) => owned(firewalls, role).some((firewall) => attached.has(firewall.id));
+        // An open firewall beside its role's Cloudflare one, left by a change that failed half way, only lets everyone else in.
+        for (const role of ROLES) {
+          const open = owned(firewalls, role, "open").find((firewall) => attached.has(firewall.id));
+          if (!on(role) || !open) continue;
+          await api.remove(open.id, serverId).catch((error) => {
+            if (!(error instanceof HetznerError && error.code === "firewall_already_removed")) throw error;
+          });
+          await deleteIfUnused(api, open.id);
+          stale++;
+        }
+        remember(paths, { web: on("web"), panel: on("panel") }, (options.now ?? Date.now)());
       }
     } catch (error) {
       throw new Error(`Hetzner firewalls: ${api.clean(errorMessage(error))}`);
     }
     if (stored.rangesHash !== list.hash) writeSync(paths, { rangesHash: list.hash });
+    const count = (n: number, what: string) => `${n} ${what.replace("{s}", n === 1 ? "" : "s")}`;
     const lines = [
-      rewritten ? `${rewritten} Hetzner firewall${rewritten === 1 ? "" : "s"} set to Cloudflare's list` : "",
-      deleted ? `${deleted} unused Hetzner firewall${deleted === 1 ? "" : "s"} deleted` : "",
+      rewritten ? `${count(rewritten, "Hetzner firewall{s}")} set to Cloudflare's list` : "",
+      reopened ? `${count(reopened, "Hetzner firewall{s}")} open to anyone put back` : "",
+      deleted ? `${count(deleted, "unused Hetzner firewall{s}")} deleted` : "",
+      stale ? `${count(stale, "Hetzner firewall{s}")} open to anyone taken off beside a Cloudflare one` : "",
       newer ? `${newer} Hetzner firewall${newer === 1 ? " follows" : "s follow"} a newer Cloudflare list from another server` : "",
     ].filter(Boolean);
     return lines.join("; ") || null;

@@ -441,23 +441,27 @@ const cloudflareSites = [
 const cloudflareMoreSites = ["shop.example.net", "docs.example.org", "status.example.io", "api.example.dev"]
   .map((domain, index) => ({ domain, enabled: index % 2 === 0 }));
 
-/** ?hetzner=absent|disconnected|error|off|open|ssh: the Hetzner card's states; connected with the sites switch on by default. */
+/**
+ * ?hetzner=absent|disconnected|error|off|open|ssh|alone: the Hetzner card's states; connected with the sites
+ * switch on by default. `alone` has no other firewall, so the panel's port stays open through the addon's own.
+ */
 function hetznerPreviewState(mode: string | null): HetznerView {
   if (mode === "absent") return { state: "absent" };
-  if (mode === "disconnected") return { state: "disconnected", serverId: 166224552 };
+  if (mode === "disconnected") return { state: "disconnected", serverId: 166224552, serverName: "cp-fra-1" };
   if (mode === "error") return { state: "error", connected: true, error: "Hetzner could not be read: Hetzner: unable to authenticate (unauthorized)" };
   const on = mode !== "off";
+  const alone = mode === "alone" || mode === "ssh";
   return {
     state: "connected", serverId: 166224552, serverName: "cp-fra-1",
-    others: ["ssh-from-office"],
+    others: alone ? [] : ["ssh-from-office"], terminal: true,
     roles: {
       web: {
-        on, firewall: "clp-addons-cloudflare-web", current: true,
+        on, firewall: "clp-addons-cloudflare-web", open: null, current: true,
         stillOpen: mode === "open" ? ["443 is still open to anyone through firewall ssh-from-office."] : [],
       },
-      panel: { on: false, firewall: null, current: true, stillOpen: [] },
+      panel: { on: false, firewall: null, open: alone ? "clp-addons-open-panel" : null, current: true, stillOpen: [] },
     },
-    sshProblem: mode === "ssh" ? "no other firewall on this server (ssh-from-office) allows SSH on port 2222" : null,
+    sshClosed: mode === "ssh" ? [2222] : [],
     rangesProblem: null,
   };
 }

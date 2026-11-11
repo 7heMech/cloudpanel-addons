@@ -167,29 +167,33 @@ servers have a different firewall API and are not covered.
 The server's id comes from the metadata service,
 `http://169.254.169.254/hetzner/v1/metadata/instance-id`, with a 1.5-second
 deadline; anything but a number there means this is not a Hetzner Cloud
-server, and the card says so and offers nothing. Changes ask twice. Once a
-token is connected the id is kept in `hetzner.json`, so a moment's silence
+server, and the card says so and offers nothing. Before a token, the card
+names the server from `…/metadata/hostname`, its name when it was created, so
+the operator can find its project. Changes ask twice. Once a token is
+connected the id is kept in `hetzner.json`, so a moment's silence
 from the service does not hide the switches or skip the check before the token
 is removed. Without a token the page believes the silence for ten minutes, so
 a server off Hetzner Cloud whose link-local address is filtered does not wait
 on every load.
 
-### Two firewalls per project
+### Four firewalls per project
 
 Several servers may run the addon in one Hetzner project, so each firewall it
 owns is shared, and its content is the same wherever it is computed:
 
 - `clp-addons-cloudflare-web`: inbound TCP 80 and 443 from Cloudflare's ranges.
 - `clp-addons-cloudflare-panel`: inbound TCP 8443 from Cloudflare's ranges.
+- `clp-addons-open-web`: inbound TCP 80 and 443 from anyone.
+- `clp-addons-open-panel`: inbound TCP 8443 from anyone.
 
-Each carries `managed-by=clp-addons` and `clp-addons-role=web|panel`, and is
-found by that label selector, never by name. Only a firewall with the label is
-ever changed; a firewall that has the name but not the label refuses the
-switch. The rules are a pure function of the list: one rule per port, the
-ranges in canonical `network/prefix` form, IPv4 before IPv6, each family by
-address, and a fixed description. They are compared with Hetzner's by a
-signature that ignores order and address spelling, and `set_rules` runs only
-when they differ.
+Each carries `managed-by=clp-addons` and `clp-addons-role=web|panel`, and the
+open ones `clp-addons-access=open`; each is found by those labels, never by
+name. Only a firewall with the label is ever changed; a firewall that has the
+name but not the label refuses the switch. The Cloudflare rules are a pure function of the
+list: one rule per port, the ranges in canonical `network/prefix` form, IPv4
+before IPv6, each family by address, and a fixed description. The open rules
+are fixed. Rules are compared with Hetzner's by a signature that ignores order
+and address spelling, and `set_rules` runs only when they differ.
 
 The list is CloudPanel's own `/etc/nginx/cloudflare/ips`, which CloudPanel
 refreshes daily. It is read only from a regular file root or the panel
@@ -211,20 +215,40 @@ of the reader's clock is ignored, so a wrong clock cannot hold the rules.
 
 ### Attaching and keeping current
 
-A switch attaches its firewall to this server by server id; label selectors
-are never used. The first server creates the firewall with `apply_to` in the
-same request, so it never exists unused; a later one brings its rules current
-and applies it, whichever server's list wrote its rules. A create refused as a
-duplicate name is read back by label, since another server may have created it
-a moment earlier, and an apply to a firewall deleted in between creates it
-again, once; a second deletion fails the switch. Turning a switch off removes the
-firewall from this server and deletes it if nothing else uses it; Hetzner
-refuses to delete one still applied, which covers a server attaching it in
-between. Repair also deletes an owned firewall applied to nothing.
+A switch attaches its Cloudflare firewall to this server by server id; label
+selectors are never used. The first server creates the firewall with
+`apply_to` in the same request, so it never exists unused; a later one brings
+its rules current and applies it, whichever server's list wrote its rules. A
+create refused as a duplicate name is read back by label, since another server
+may have created it a moment earlier, and an apply to a firewall deleted in
+between creates it again, once; a second deletion fails the switch. A firewall
+taken off this server is deleted if nothing else uses it; Hetzner refuses to
+delete one still applied, which covers a server attaching it in between.
+Repair also deletes an owned firewall applied to nothing.
+
+A switch that is off means anyone can reach its ports. Without the open
+firewalls, taking the Cloudflare one off would close the ports to everyone
+whenever the remaining firewalls allow SSH but not them, and attaching the
+first firewall to a server would close 8443. So each change plans the addon's
+firewalls on this server together: a role whose switch is off gets its open
+firewall when no firewall of the operator's allows any of its ports, and the
+ports would otherwise close: no firewall was attached, its Cloudflare firewall
+is coming off, or its open one is already there. The open firewall opens all
+of the role's ports, so where the operator's firewalls allow some of them, a
+port they leave closed stays closed, and the review names it. With no switch on and no firewall of the
+operator's, the plan is empty and Hetzner lets anyone reach every port again.
+Open firewalls go on first and come off last, so for the few seconds a change
+takes nothing the plan keeps open is closed, beyond what the first attach
+closes. Hetzner applies at most five firewalls to a server: a change that would
+leave more is refused, and one with no room to add first takes off first.
+Per role only one of the two is meant to be on a server; an open firewall left
+beside its Cloudflare one by a change that failed half way only lets everyone
+else in, so the card warns, and repair or a request to turn the switch on
+takes it off.
 
 Repair (every 15 minutes) reads the owned firewalls with one paginated
-`GET /firewalls?label_selector=…`, puts back any rule changed in Hetzner's
-console and writes nothing when nothing differs. The anchor watcher, which sees
+`GET /firewalls?label_selector=…` and this server, puts back any rule changed
+in Hetzner's console and writes nothing when nothing differs. The anchor watcher, which sees
 CloudPanel rewrite the list, runs the same pass only when a hash of the parsed
 list differs from the last pass's, so its frequent wakes cost no API call. The
 page reads the server and all firewalls, two requests, on each load. Hetzner
@@ -238,22 +262,33 @@ switches off first.
 ### Safeguards
 
 Every refusal and warning is computed by the root action when the switch is
-used, and again when it is confirmed. A switch first answers with a review
-(title, text, the hostnames concerned) and a digest of it; only a request
-carrying the digest of the review as it stands then makes the change, so a
-review that changed in between is shown again.
+used, and again when it is confirmed. A switch first answers with a review and
+a digest of it; only a request carrying the digest of the review as it stands
+then makes the change, so a review that changed in between is shown again. The
+review comes in parts the page lays out separately: what changes, the
+hostnames that stop answering, what leaves it without effect, the ports that
+close, the way back, and, when ports close, the server's name to type.
 
-- SSH: nothing is attached unless another, non-addon firewall already attached
-  to this server has an inbound TCP rule covering each port sshd listens on,
-  from any source. The ports come from `ss -Htlnp` (processes named `sshd`), or
-  from `sshd -T` when ss shows none, as under socket activation. No port found
-  refuses too. The refusal names the ports and the firewalls checked.
+- Closing ports: the review compares what can be reached before and after the
+  change for the ports sshd listens on, from `ss -Htlnp` (processes named
+  `sshd`) or from `sshd -T` when ss shows none, and for each rule on
+  CloudPanel's Firewall page, with its Protocol. With no firewall attached,
+  everything can be reached; otherwise a port needs one inbound rule covering
+  it, from any source, for IPv4 and for IPv6 apart, and a port that keeps only
+  one family is named for the other. Each port that closes is named, SSH as the loss of SFTP
+  for site users, and the operator types the server's name to go ahead. A
+  refusal would be stricter than needed: the Terminal addon gives a root shell
+  through the panel, its output as server-sent events through both Nginx
+  hops in front of the custom domain, and Hetzner's web console works whatever
+  is attached. SSH another firewall already closed is not the change's doing,
+  so the card shows it instead, with a link to Terminal while it is enabled.
 - Panel: CloudPanel's custom domain (`/etc/.clp_custom_domain`, while its
   vhost exists) must exist and resolve, on A and AAAA, only to addresses inside
   the list. CloudPanel serves that domain from the sites' Nginx on 443, not on
   8443, so every Cloudflare range must also reach 443 through the firewalls
-  attached to this server. The review then says the panel answers only at that
-  domain, and that an SSH tunnel to `127.0.0.1:8443` is the way back.
+  the change leaves on this server. The review then says the panel answers
+  only at that domain, and that an SSH tunnel to `127.0.0.1:8443` is the way
+  back, or Hetzner's web console when SSH closes too.
 - Sites: the review lists every hostname the sites answer to, each site's
   domain and the other names in its vhost's `server_name`, and the custom
   domain, whose A or AAAA records include an address outside the list: those
@@ -263,15 +298,19 @@ review that changed in between is shown again.
   is not inside the list leaves the addon's firewall without effect. The review,
   the result and the card name the port, the firewall and the sources
   ("443 is still open to anyone through firewall X") instead of success.
-- Off: the review says which of the role's ports no remaining firewall allows,
-  which then close to everyone, or that nothing is left attached and every port
-  opens. Turning sites off is refused while the panel switch is on and nothing
-  else lets Cloudflare reach 443, which the custom domain needs.
+- Off: the review says which firewall takes the Cloudflare one's place, or
+  that nothing of the addon's stays. Turning sites off is refused while the
+  panel switch is on and the firewalls left would not let Cloudflare reach
+  443, which the custom domain needs.
 
 ### The token
 
 The token is a Hetzner Cloud API token with Read & Write, scoped to one
-project; it can delete servers. It reaches the root action on stdin, is
+project; it can delete servers. It is pasted into a Connect Hetzner dialog laid
+out like DNS's Connect Cloudflare, whose button opens Hetzner Console's project
+list: Hetzner's token form takes nothing from the link, and a project's token
+page is `/projects/<id>/security/tokens`, whose id neither the metadata
+service nor the API gives. It reaches the root action on stdin, is
 accepted only as 32 to 128 letters and digits, so it can only ever be a header
 value, and is checked with `GET /servers/<id>`, which also proves the project
 holds this server. It is kept in `/var/lib/clp-addons/firewall/hetzner-token.json`
@@ -279,10 +318,19 @@ through `lib/root-state.ts` (root-owned, mode `0600`, replaced atomically), and
 sent only in the Authorization header through `lib/provider-http.ts`, which
 DNS uses too; every message from Hetzner is redacted of it. The page learns
 only whether one is saved. A read cannot tell a read-only token, so the first
-change reports it. Removing the token is refused while one of its firewalls is
-attached to this server. When Hetzner cannot be asked, or no longer accepts the
+change reports it. Removing the token is refused while one of its Cloudflare
+firewalls is attached to this server; the open ones stay, since their rules
+never change, and the result says so. When Hetzner cannot be asked, or no longer accepts the
 token, it is removed anyway, since a leaked token must always be removable, and
 the result says what could not be checked.
+
+### What the Setup checklist reads
+
+`hetzner.json` keeps which switches were on when Hetzner was last read and
+when: the page's read, a switch and repair each write it. `hetznerSetupState`
+returns that, whether a token is saved, and whether this is Hetzner Cloud
+(`/sys/class/dmi/id/sys_vendor` is `Hetzner`, or a token is saved), without
+asking Hetzner, so the checklist costs no request when a page loads.
 
 ## Taking over from earlier releases
 
