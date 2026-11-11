@@ -41,9 +41,10 @@ Choose **Connect Hetzner** on the card:
 
 Once any firewall is attached, Hetzner drops whatever no attached firewall
 allows. On a server with no firewall yet, the first switch you turn on
-therefore closes SSH and every other port CloudPanel's Firewall page opens.
-Site users lose SFTP. The review lists those ports, and you type the server's
-name to go ahead. Hetzner's web console still gives a root shell, and so does
+therefore closes SSH, and the ports CloudPanel's Firewall page opens that the
+addon's firewalls do not; 80, 443 and 8443 stay reachable. Site users lose
+SFTP. The review lists exactly what closes, and you type the server's name to
+go ahead. Hetzner's web console still gives a root shell, and so does
 the Terminal addon while the panel answers. To keep SSH, first attach a
 firewall of your own that allows it.
 

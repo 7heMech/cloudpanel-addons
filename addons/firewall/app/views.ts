@@ -100,8 +100,9 @@ function roleRows(view: ConnectedView): string {
     const notes = [
       ...info.stillOpen.map((line) => `${line} Until that changes, this firewall has no effect.`),
       ...(info.current ? [] : ["Its rules differ from Cloudflare's list; the next repair puts them back."]),
+      ...(info.on && info.open ? [`${info.open} is attached too and lets anyone in; the next repair takes it off.`] : []),
     ].map((line) => `<p class="hint tone-warn">${esc(line)}</p>`).join("");
-    const attached = info.on && info.firewall ? esc(info.firewall) : info.open ? `${esc(info.open)} · open to anyone` : "";
+    const attached = [info.on && info.firewall ? esc(info.firewall) : "", info.open ? `${esc(info.open)} · open to anyone` : ""].filter(Boolean).join("<br>");
     const title = HETZNER_ROLES[role].title;
     return `
       <div class="hz-row">

@@ -231,15 +231,20 @@ firewalls, taking the Cloudflare one off would close the ports to everyone
 whenever the remaining firewalls allow SSH but not them, and attaching the
 first firewall to a server would close 8443. So each change plans the addon's
 firewalls on this server together: a role whose switch is off gets its open
-firewall when no firewall of the operator's allows one of its ports, and the
+firewall when no firewall of the operator's allows any of its ports, and the
 ports would otherwise close: no firewall was attached, its Cloudflare firewall
-is coming off, or its open one is already there. A port an operator's firewall
-closed on purpose stays closed. With no switch on and no firewall of the
+is coming off, or its open one is already there. The open firewall opens all
+of the role's ports, so where the operator's firewalls allow some of them, a
+port they leave closed stays closed, and the review names it. With no switch on and no firewall of the
 operator's, the plan is empty and Hetzner lets anyone reach every port again.
 Open firewalls go on first and come off last, so for the few seconds a change
 takes nothing the plan keeps open is closed, beyond what the first attach
-closes. Per role only one of the two is ever on a server, so the addon takes
-at most two of a server's firewall places.
+closes. Hetzner applies at most five firewalls to a server: a change that would
+leave more is refused, and one with no room to add first takes off first.
+Per role only one of the two is meant to be on a server; an open firewall left
+beside its Cloudflare one by a change that failed half way only lets everyone
+else in, so the card warns, and repair or a request to turn the switch on
+takes it off.
 
 Repair (every 15 minutes) reads the owned firewalls with one paginated
 `GET /firewalls?label_selector=…` and this server, puts back any rule changed
@@ -269,7 +274,8 @@ close, the way back, and, when ports close, the server's name to type.
   `sshd`) or from `sshd -T` when ss shows none, and for each rule on
   CloudPanel's Firewall page, with its Protocol. With no firewall attached,
   everything can be reached; otherwise a port needs one inbound rule covering
-  it, from any source. Each port that closes is named, SSH as the loss of SFTP
+  it, from any source, for IPv4 and for IPv6 apart, and a port that keeps only
+  one family is named for the other. Each port that closes is named, SSH as the loss of SFTP
   for site users, and the operator types the server's name to go ahead. A
   refusal would be stricter than needed: the Terminal addon gives a root shell
   through the panel, its output as server-sent events through both Nginx
