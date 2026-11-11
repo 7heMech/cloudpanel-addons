@@ -533,14 +533,16 @@ describe("what each token holds", () => {
     env.cf.tokens.get(token)!.policies = [policy(["DNS Write", "Account API Tokens Read"], { [`com.cloudflare.api.account.${env.agency}`]: ALL_ZONES })];
     const after = await env.act("check");
     expect(after.connections[0]!.access!.reach).toBe("All zones in Agency");
+    expect(after.connections[0]!.access!.rows.at(-1)).toMatchObject({ label: "Account API Tokens: Read", held: "yes" });
   });
 
   test("another addon can ask whether a token holds a permission on a zone, from the stored read", async () => {
     const env = setup();
     const zone = env.cf.zones[0]!;
     env.cf.tokens.get(TOKEN)!.policies = [
-      policy(["DNS Write", "API Tokens Read"], ALL_ZONES),
-      policy(["Firewall Services Write"], { [`com.cloudflare.api.account.zone.${zone.id}`]: "*" }),
+      policy(["DNS Write"], ALL_ZONES),
+      policy(["Firewall Services Write", "Zone Write"], { [`com.cloudflare.api.account.zone.${zone.id}`]: "*" }),
+      policy(["API Tokens Read"], { "com.cloudflare.api.user.0123": "*" }),
       policy(["Firewall Services Write"], { [`com.cloudflare.api.account.zone.${"9".repeat(32)}`]: "*" }, "deny"),
     ];
     const id = (await env.connect()).connections[0]!.id;
@@ -548,6 +550,9 @@ describe("what each token holds", () => {
     expect(dnsTokenHolds(id, "ipAccessRules", { id: zone.id, accountId: env.agency }, paths(env))).toBe(true);
     expect(dnsTokenHolds(id, "ipAccessRules", { id: "9".repeat(32), accountId: env.agency }, paths(env))).toBe(false);
     expect(dnsTokenHolds(id, "waf", { id: zone.id, accountId: env.agency }, paths(env))).toBe(false);
+    expect(dnsTokenHolds(id, "tokens", { id: zone.id, accountId: env.agency }, paths(env))).toBe(true);
+    // Zone: Edit creates zones, so a grant on one zone does not hold it for the account.
+    expect(dnsTokenHolds(id, "zone", { id: zone.id, accountId: env.agency }, paths(env))).toBe(false);
     expect(dnsTokenHolds("cf-unknown", "dns", { id: zone.id, accountId: env.agency }, paths(env))).toBeNull();
     expect(env.cf.calls.length).toBe(calls);
   });
