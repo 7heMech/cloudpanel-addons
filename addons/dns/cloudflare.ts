@@ -4,7 +4,9 @@
  */
 import { isIP } from "node:net";
 import { type ApiFetch, ProviderError, ProviderHttp } from "../../lib/provider-http";
+import { type Grant, parseResources, type TokenOwner } from "./access";
 import { dnsName } from "./model";
+import { PERMISSIONS } from "./token";
 
 const API = "https://api.cloudflare.com/client/v4";
 const MAX_INVENTORY = 100_000;
@@ -188,9 +190,9 @@ function recordBody(record: RecordWrite): Record<string, unknown> {
 }
 
 const PHASE_PERMISSIONS: Record<string, string> = {
-  http_config_settings: "Config Rules: Edit",
-  http_request_firewall_custom: "Zone WAF: Edit",
-  http_request_dynamic_redirect: "Single Redirect: Edit",
+  http_config_settings: PERMISSIONS.configRules.label,
+  http_request_firewall_custom: PERMISSIONS.waf.label,
+  http_request_dynamic_redirect: PERMISSIONS.redirects.label,
 };
 const rulesPermission = (phase: string) => PHASE_PERMISSIONS[phase] ?? "rules permissions";
 
@@ -203,6 +205,14 @@ async function needs<T>(permission: string, run: () => Promise<T>): Promise<T> {
     const reason = error.message.replace(/^Cloudflare: /, "");
     throw new ProviderError("Cloudflare", `the token lacks ${permission} for this zone; add it to the token in Cloudflare (${reason})`, 403);
   }
+}
+
+export type Verified = TokenOwner & { active: boolean; status: string; id: string | null };
+
+function verified(result: unknown, owner: TokenOwner): Verified {
+  const raw = object(result);
+  const status = text(raw.status, 40);
+  return { ...owner, active: status === "active", status, id: typeof raw.id === "string" && /^[a-f0-9]{32}$/.test(raw.id) ? raw.id : null };
 }
 
 export class CloudflareApi {
@@ -265,12 +275,11 @@ export class CloudflareApi {
     return items;
   }
 
-  /** Whether the token is active. User tokens and account tokens verify at different paths. */
-  async verify(): Promise<{ active: boolean; status: string }> {
+  /** Whether the token is active, and who owns it. User tokens and account tokens verify at different paths. */
+  async verify(): Promise<Verified> {
     try {
       const { result } = await this.call("/user/tokens/verify");
-      const status = text(object(result).status, 40);
-      return { active: status === "active", status };
+      return verified(result, { owner: "user", accountId: null });
     } catch (error) {
       if (!(error instanceof ProviderError) || error.status === 429) throw error;
     }
@@ -282,13 +291,35 @@ export class CloudflareApi {
     for (const account of accounts) {
       try {
         const { result } = await this.call(`/accounts/${account.id}/tokens/verify`);
-        const status = text(object(result).status, 40);
-        return { active: status === "active", status };
+        return verified(result, { owner: "account", accountId: account.id });
       } catch (error) {
         if (!(error instanceof ProviderError) || error.status === 429) throw error;
       }
     }
-    return { active: false, status: "invalid" };
+    return { active: false, status: "invalid", id: null, owner: "user", accountId: null };
+  }
+
+  /** The token's own policies, which it reads only with API Tokens: Read (Account API Tokens: Read for an account token). */
+  async policies(owner: TokenOwner, tokenId: string): Promise<Grant[]> {
+    const base = owner.owner === "account" ? `/accounts/${id(owner.accountId)}` : "/user";
+    const { result } = await this.call(`${base}/tokens/${id(tokenId)}`);
+    const policies = object(result).policies;
+    if (!Array.isArray(policies)) throw new ProviderError("Cloudflare", "returned a token this addon does not understand");
+    return policies.map((entry) => {
+      const policy = object(entry);
+      if (policy.effect !== "allow" && policy.effect !== "deny") throw new ProviderError("Cloudflare", "returned a token policy this addon does not understand");
+      const groups = Array.isArray(policy.permission_groups) ? policy.permission_groups : [];
+      return {
+        allow: policy.effect === "allow",
+        permissions: groups.map((group) => {
+          const name = group && typeof group === "object" ? (group as Record<string, unknown>).name : undefined;
+          // Matched by name: a group without one would read as a permission the token lacks.
+          if (typeof name !== "string" || !name || name.length > 120) throw new ProviderError("Cloudflare", "returned a permission group without a name");
+          return name;
+        }),
+        resources: parseResources(policy.resources),
+      };
+    });
   }
 
   /** The accounts the token can see. A token without account permissions sees none, which is not an error. */
@@ -325,12 +356,12 @@ export class CloudflareApi {
   }
 
   async setting(zoneId: string, setting: string): Promise<string> {
-    const { result } = await needs("Zone Settings: Edit", () => this.call(`/zones/${id(zoneId)}/settings/${setting}`));
+    const { result } = await needs(PERMISSIONS.zoneSettings.label, () => this.call(`/zones/${id(zoneId)}/settings/${setting}`));
     return text(object(result).value, 40);
   }
 
   async setSetting(zoneId: string, setting: string, value: string): Promise<void> {
-    await needs("Zone Settings: Edit", () => this.call(`/zones/${id(zoneId)}/settings/${setting}`, "PATCH", { value }));
+    await needs(PERMISSIONS.zoneSettings.label, () => this.call(`/zones/${id(zoneId)}/settings/${setting}`, "PATCH", { value }));
   }
 
   /** The zone's ruleset for one phase, or null when it has none yet. */

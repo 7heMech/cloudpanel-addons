@@ -10,6 +10,9 @@ export const DNS_ADDON: AddonDefinition = {
   title: "DNS",
   description: "Keep each site's Cloudflare DNS to a profile of records, with Mailcow set up for its mail.",
   added: "2.0.0-rc.1",
+  changed: [
+    { in: "2.2.0-rc.1", note: "Settings shows the permissions each Cloudflare token is missing. A token made before 2.0.0-rc.10 needs API Tokens: Read added to show them." },
+  ],
   targets: DNS_TARGETS,
   handler: handle,
   action: runDnsAction,

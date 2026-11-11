@@ -43,8 +43,12 @@ checklist.
 A new zone goes into the only Cloudflare account your connections reach. With
 more than one, choose it under **Settings**, **New zones**.
 
-If you later turn on a feature that needs another permission, such as skipping
-the firewall, edit the token in Cloudflare to add it.
+Under **Settings**, each connection says which permissions its token is
+missing for what your profiles use; **Permissions** lists them with what uses
+each. If you later turn on a feature that needs another permission, such as
+skipping the firewall, **Edit in Cloudflare** opens your API tokens there; add
+it to this token. A token made before 2.0.0-rc.10 needs **API Tokens: Read**
+(Account API Tokens: Read for an account-owned token) before DNS can show this.
 
 ## Everyday use
 

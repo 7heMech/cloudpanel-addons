@@ -38,7 +38,6 @@
 .dns-status { min-width:220px; }
 .dns-redirect-tools { display:flex; flex-shrink:0; gap:8px; flex-wrap:wrap; }
 .dns-redirect-target { display:block; max-width:240px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; font:14px/1.5 var(--mono); }
-.dns-redirect-table .action-cell .actions { flex-wrap:nowrap; }
 .dns-redirect-profile { white-space:nowrap; }
 .dns-card-target { display:none; }
 .dns-dialog-start { margin-right:auto; }
@@ -47,7 +46,6 @@
 .dns-settings-table td:first-child { width:220px; }
 .dns-settings-table .mono { color:var(--muted); font-size:13px; }
 .dns-profile-table .switch-state { font-weight:400; color:var(--muted); min-width:84px; }
-.dns-profile-table .action-cell .actions { flex-wrap:nowrap; }
 @media (max-width:1200px) {
   .dns-site-table td select { min-width:150px; }
   .dns-status { min-width:0; }
@@ -233,4 +231,29 @@ p.dns-dialog-note { margin:20px 0 0; }
   .dns-facts { grid-template-columns:minmax(0,1fr); gap:0; }
   .dns-facts dd { margin-bottom:8px; }
   .dns-inline { flex-wrap:wrap; }
+}
+
+/* What each connection's token holds */
+.dns-connection-row > td { vertical-align:top; }
+.dns-access-details > summary { cursor:pointer; list-style:none; }
+.dns-access-details > summary::-webkit-details-marker { display:none; }
+.dns-access-problems { display:block; margin-top:4px; font-size:14px; }
+.dns-access-toggle { color:var(--accent); white-space:nowrap; }
+.dns-access-toggle::after { content:" ▸"; }
+.dns-access-details[open] .dns-access-toggle::after { content:" ▾"; }
+.dns-access { margin-top:12px; max-width:760px; }
+.dns-access-foot { margin:8px 0 0; }
+.dns-access-grid { border:1px solid var(--row-border); border-radius:4px; font-size:14px; }
+.dns-access-row { display:grid; grid-template-columns:170px minmax(0,1fr) 150px; gap:2px 16px; padding:8px 12px; border-top:1px solid var(--row-border); align-items:baseline; }
+.dns-access-row:first-child { border-top:0; }
+.dns-access-cols { font-size:12px; font-weight:600; color:var(--muted); padding-top:6px; padding-bottom:6px; }
+.dns-access-perm { font-weight:500; }
+.dns-access-use { color:var(--muted); }
+.dns-access-held { text-align:right; }
+.dns-access-held .tone-ok { font-weight:700; }
+.dns-access-held .badge { white-space:normal; }
+@media (max-width:940px) {
+  .dns-access-row { grid-template-columns:minmax(0,1fr) auto; }
+  .dns-access-use { grid-column:1 / -1; grid-row:2; font-size:13px; }
+  .dns-access-cols { display:none; }
 }
