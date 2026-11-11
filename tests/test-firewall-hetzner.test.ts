@@ -428,6 +428,58 @@ describe("safeguards", () => {
     expect(fake.attachedTo(SERVER).map((firewall) => firewall.name)).toEqual(["office"]);
   });
 
+  test("an operator firewall that allows one of the ports keeps the other closed, and the review says so", async () => {
+    const fake = new FakeHetzner(TOKEN);
+    fake.firewall("office", [ssh(), anyone("80"), anyone("8443")], [SERVER]);
+    const server = await connected(fake);
+    await turn(server, "web", true);
+    const off = await setHetznerRole("web", false, undefined, server.options);
+    if (!("review" in off)) throw new Error("expected a review");
+    expect(off.review.closes).toEqual(["TCP 443, opened on CloudPanel's Firewall page"]);
+    expect(off.review.typed).toBe("cp-fra-1");
+    await turn(server, "web", false);
+    expect(fake.attachedTo(SERVER).map((firewall) => firewall.name)).toEqual(["office"]);
+  });
+
+  test("a port only one address family keeps is reported for the other", async () => {
+    const fake = new FakeHetzner(TOKEN);
+    fake.firewall("office", [ssh(), anyone("8443"), { direction: "in", protocol: "tcp", port: "80-443", source_ips: ["0.0.0.0/0"] }], [SERVER]);
+    const server = await connected(fake);
+    await turn(server, "web", true);
+    const off = await setHetznerRole("web", false, undefined, server.options);
+    expect("review" in off && off.review.closes).toEqual(["TCP 80 over IPv6 and 443 over IPv6, opened on CloudPanel's Firewall page"]);
+  });
+
+  test("at Hetzner's limit of five, the switch takes off before it attaches, and refuses a sixth", async () => {
+    const fake = new FakeHetzner(TOKEN);
+    for (const name of ["one", "two"]) fake.firewall(name, [anyone("25")], [SERVER]);
+    fake.firewall("office", [ssh()], [SERVER]);
+    const server = await connected(fake);
+    await turn(server, "web", true);
+    expect(fake.attachedTo(SERVER)).toHaveLength(4);
+    fake.firewall("three", [anyone("26")], [SERVER]);
+    expect(await turn(server, "web", false)).toEqual({ notice: "Sites through Cloudflare only is off." });
+    const order = fake.writes().map((call) => call.path).slice(-3);
+    expect(order[0]).toContain("remove_from_resources");
+    expect(fake.attachedTo(SERVER).map((firewall) => firewall.name)).toEqual(["one", "two", "office", "three", "clp-addons-open-web"]);
+    fake.firewall("four", [anyone("27")], [SERVER]);
+    expect(await refusal(setHetznerRole("panel", true, undefined, server.options))).toContain("Hetzner allows at most 5 firewalls on a server");
+  });
+
+  test("an open firewall left beside its Cloudflare one is taken off", async () => {
+    const fake = new FakeHetzner(TOKEN);
+    fake.firewall("office", [ssh()], [SERVER]);
+    const server = await connected(fake);
+    await turn(server, "web", true);
+    fake.firewall("clp-addons-open-web", openRules("web"), [SERVER], { "managed-by": "clp-addons", "clp-addons-role": "web", "clp-addons-access": "open" });
+    const view = await hetznerView(server.options);
+    expect(view.state === "connected" && view.roles.web.open).toBe("clp-addons-open-web");
+    expect(await setHetznerRole("web", true, undefined, server.options)).toEqual({ notice: "Sites through Cloudflare only is on; clp-addons-open-web was still attached and is now off." });
+    fake.firewall("clp-addons-open-web", openRules("web"), [SERVER], { "managed-by": "clp-addons", "clp-addons-role": "web", "clp-addons-access": "open" });
+    expect(await syncHetzner("repair", server.options)).toBe("1 Hetzner firewall open to anyone taken off beside a Cloudflare one");
+    expect(fake.attachedTo(SERVER).map((firewall) => firewall.name)).toEqual(["office", "clp-addons-cloudflare-web"]);
+  });
+
   test("the last switch off takes every addon firewall off when nothing else is attached", async () => {
     const fake = new FakeHetzner(TOKEN);
     const server = await connected(fake);
