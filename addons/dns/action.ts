@@ -1353,5 +1353,5 @@ export function dnsTokenHolds(connectionId: string, permission: PermissionName, 
   const files = new Files({ ...DEFAULT_DNS_PATHS, ...paths });
   const token = files.status().connections.find((connection) => connection.id === connectionId)?.token;
   if (!token?.readable) return null;
-  return grants(token.grants, PERMISSIONS[permission], targetFor(PERMISSIONS[permission], zone));
+  return grants(token.grants, PERMISSIONS[permission], targetFor(PERMISSIONS[permission], zone, token));
 }

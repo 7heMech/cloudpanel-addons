@@ -302,10 +302,10 @@ grants of permission group names over resources, and decided locally:
   naming up to three. It lists only what the profiles use, and names what is
   missing, never a count.
 - The zones a token reaches are described from where DNS Write is allowed,
-  less where it is denied: all zones, all zones in named accounts, or a number
+  less the denies that overlap it: all zones, all zones in named accounts, or a number
   of chosen zones.
 - With no zone or account listed to check against, only a grant on every zone
-  or account counts as holding a permission.
+  or account, with no deny for that permission, counts as holding it.
 - A permission group without a name makes the whole read unavailable, rather
   than reading as a permission the token lacks.
 - The token-reading row is API Tokens Read for a user token and Account API
@@ -318,7 +318,7 @@ opens the owner's token list: `/profile/api-tokens`, or
 Other addons ask through `dnsTokenHolds(connectionId, permission, zone)` in
 `addons/dns/action.ts`, which answers from the stored read without a network
 call, checking each permission at its own scope (the zone, its account, or the
-token's owner), and returns null when that is not known (no check yet, or a token that
+token's owner: the user, or an account-owned token's account), and returns null when that is not known (no check yet, or a token that
 cannot read itself).
 
 Zone-scoped IP Access rules (`/zones/{zone_id}/firewall/access_rules/rules`)

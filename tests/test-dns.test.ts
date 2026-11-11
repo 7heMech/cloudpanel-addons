@@ -534,6 +534,9 @@ describe("what each token holds", () => {
     const after = await env.act("check");
     expect(after.connections[0]!.access!.reach).toBe("All zones in Agency");
     expect(after.connections[0]!.access!.rows.at(-1)).toMatchObject({ label: "Account API Tokens: Read", held: "yes" });
+    const zone = { id: env.cf.zones[0]!.id, accountId: env.agency };
+    const paths = { stateDir: join(env.dir, "state"), rootUid: process.getuid!() };
+    expect(dnsTokenHolds(after.connections[0]!.id, "tokens", zone, paths)).toBe(true);
   });
 
   test("another addon can ask whether a token holds a permission on a zone, from the stored read", async () => {
