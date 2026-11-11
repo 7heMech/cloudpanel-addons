@@ -13,13 +13,35 @@
 .hz-row h3 { margin: 0; font-size: 16px; }
 .hz-row .hint { margin: 4px 0 0; }
 .hz-row .hint.tone-warn { color: var(--warn); }
-.hz-token { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 12px 24px; padding-top: 16px; border-top: 1px solid var(--border); }
-.hz-token .hint { margin: 0; }
+.hz-fw-name { font-family: var(--mono, ui-monospace, SFMono-Regular, Menlo, monospace); font-size: 13px; }
 .hz-token-actions { flex-wrap: wrap; }
-.hz-token-form { margin-top: 16px; }
-.hz-token-row { display: flex; flex-wrap: wrap; gap: 12px; }
-.hz-token-row input { flex: 1 1 260px; min-width: 0; }
+.hz-steps { margin: 0; padding-left: 22px; }
+.hz-steps > li { margin-bottom: 24px; }
+.hz-steps > li:last-child { margin-bottom: 0; }
+.hz-steps p { margin: 6px 0 12px; }
+.hz-steps .btn { white-space: normal; }
+.hz-token-field { margin: 12px 0; max-width: 520px; }
+.hz-token-field input { width: 100%; }
 .hz-absent { margin: 0; }
+.hz-connect { display: flex; align-items: center; justify-content: space-between; gap: 16px 24px; flex-wrap: wrap; padding-top: 16px; border-top: 1px solid var(--border); }
+.hz-connect .hint { margin: 0; flex: 1 1 320px; }
+.hz-foot { margin: 0; padding-top: 16px; border-top: 1px solid var(--border); }
+#hz-review p { margin: 0 0 16px; }
+.hz-review-label { margin: 0 0 8px; font-size: 14px; font-weight: 600; }
+.hz-review-list { margin: 0 0 16px; padding: 0; list-style: none; border: 1px solid var(--border); border-radius: 4px; max-height: 240px; overflow: auto; }
+.hz-review-list li { display: flex; flex-wrap: wrap; justify-content: space-between; gap: 2px 16px; padding: 8px 12px; font-size: 14px; }
+.hz-review-list li + li { border-top: 1px solid var(--border); }
+.hz-review-list .hint { margin: 0; }
+.hz-review-warn { margin: 0 0 16px; }
+#hz-review .hz-review-warn p { margin: 0 0 6px; }
+#hz-review .hz-review-warn p:last-child { margin-bottom: 0; }
+.hz-review-warn ul { margin: 6px 0 0; padding-left: 20px; }
+#hz-review-typed-field { margin-top: 4px; }
+#hz-review-typed-field input { width: 100%; }
+#hz-review .btn-danger { background: var(--bad); border-color: var(--bad); color: var(--panel); }
+@media (max-width: 760px) {
+  .hz-card > .card-header { flex-wrap: wrap; }
+}
 /* Where the shared fleet table becomes a card, this row keeps the domain and
    its action on one line instead. */
 @media (max-width: 940px) {

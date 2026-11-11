@@ -48,61 +48,105 @@ function protocolsCard(status: FirewallPageState["protocols"]): string {
     </div>`;
 }
 
-const TOKEN_FORM_HINT = "In Hetzner Cloud Console, open the project this server is in, then Security → API tokens → Generate API token, with Read &amp; Write.";
+/** Hetzner has no prefilled token form, and a project's token page needs the project's id, which neither the API nor the metadata service gives. */
+const HETZNER_CONSOLE = "https://console.hetzner.com/projects";
 
-function tokenForm(hidden: boolean): string {
+type ConnectedView = Extract<FirewallPageState["hetzner"], { state: "connected" }>;
+
+/** DNS's Connect Cloudflare dialog, for Hetzner. */
+function connectDialog(serverName: string | null, replacing: boolean): string {
+  const holder = serverName ? `<strong>${esc(serverName)}</strong>` : "this server";
   return `
-    <form class="hz-token-form form-field" id="hetzner-token-form" onsubmit="connectHetzner(event)"${hidden ? " hidden" : ""}>
-      <label for="hetzner-token">API token</label>
-      <div class="hz-token-row"><input id="hetzner-token" name="token" type="password" autocomplete="new-password" spellcheck="false" required>
-        <button class="btn btn-primary" type="submit">Connect</button></div>
-      <div class="hint">${TOKEN_FORM_HINT}</div>
-    </form>`;
+  <dialog id="hz-connect-dialog" aria-labelledby="hz-connect-heading"><form id="hetzner-token-form" onsubmit="connectHetzner(event)">
+    <div class="dialog-header"><h2 id="hz-connect-heading">${replacing ? "Replace the Hetzner token" : "Connect Hetzner"}</h2></div>
+    <ol class="hz-steps">
+      <li><strong>Create a token in this server's project</strong>
+        <p class="hint">Open the project that holds ${holder}, then Security → API tokens → Generate API token. Choose Read &amp; Write.</p>
+        <a class="btn" href="${HETZNER_CONSOLE}" target="_blank" rel="noopener noreferrer" referrerpolicy="no-referrer">Open Hetzner Console ↗</a></li>
+      <li><strong>Paste it here</strong>
+        <div class="form-field hz-token-field"><label for="hetzner-token">API token</label>
+          <input id="hetzner-token" name="token" type="password" autocomplete="new-password" spellcheck="false" required></div></li>
+    </ol>
+    <div class="actions dialog-actions"><button class="btn" type="button" onclick="this.closest('dialog').close()">Cancel</button><button class="btn btn-primary" type="submit">Connect</button></div>
+  </form></dialog>`;
 }
 
-const tokenActions = `
-    <div class="actions hz-token-actions">
-      <button class="btn" type="button" onclick="showHetznerTokenForm()">Replace token</button>
-      <button class="btn btn-danger" type="button" onclick="removeHetznerToken()">Remove token</button>
-    </div>`;
+/** The review a switch opens, in sections: what changes, the names that stop answering, and what closes. */
+const REVIEW_DIALOG = `
+  <dialog id="hz-review" aria-labelledby="hz-review-title"><form method="dialog">
+    <div class="dialog-header"><h2 id="hz-review-title"></h2></div>
+    <p id="hz-review-text"></p>
+    <div id="hz-review-list-wrap" hidden><h3 class="hz-review-label" id="hz-review-label"></h3><ul class="hz-review-list" id="hz-review-list"></ul></div>
+    <div class="notice hz-review-warn" id="hz-review-warn" hidden></div>
+    <p class="hint" id="hz-review-way-back" hidden></p>
+    <div class="form-field" id="hz-review-typed-field" hidden>
+      <label for="hz-review-typed">Type <strong id="hz-review-typed-word"></strong> to confirm</label>
+      <input id="hz-review-typed" autocomplete="off" autocapitalize="off" spellcheck="false">
+    </div>
+    <div class="actions dialog-actions">
+      <button class="btn" type="button" onclick="this.closest('dialog').close('cancel')">Cancel</button>
+      <button class="btn btn-primary" id="hz-review-accept" value="accept" type="submit">Turn on</button>
+    </div>
+  </form></dialog>`;
 
 const ROLE_HINTS: Record<HetznerRole, string> = {
   web: "Ports 80 and 443 answer only Cloudflare, so a site must be proxied through it.",
   panel: "Port 8443 answers only Cloudflare; CloudPanel answers at its custom domain.",
 };
 
-/** The Hetzner Cloud Firewall card: connect a token, then a switch for the sites and one for the panel. */
-function hetznerCard(view: FirewallPageState["hetzner"]): string {
-  const card = (body: string) => `
-    <div class="card hz-card" id="hetzner-card">
-      <div class="card-header"><h2>Hetzner Cloud Firewall</h2></div>
-      <p class="hint hz-intro">Hetzner drops what these firewalls do not allow before it reaches this server.</p>${body}
-    </div>`;
-  if (view.state === "absent") {
-    return card('<p class="hz-absent">This server is not a Hetzner Cloud server, so there is nothing to set here. Dedicated (Robot) servers are not covered.</p>');
-  }
-  if (view.state === "disconnected") return card(tokenForm(false));
-  if (view.state === "error") {
-    return card(`<div class="alert" role="alert">${esc(view.error)}</div>${view.connected ? `${tokenActions}${tokenForm(true)}` : ""}`);
-  }
-  const rows = (Object.keys(HETZNER_ROLES) as HetznerRole[]).map((role) => {
+function roleRows(view: ConnectedView): string {
+  return (Object.keys(HETZNER_ROLES) as HetznerRole[]).map((role) => {
     const info = view.roles[role];
     const notes = [
       ...info.stillOpen.map((line) => `${line} Until that changes, this firewall has no effect.`),
       ...(info.current ? [] : ["Its rules differ from Cloudflare's list; the next repair puts them back."]),
     ].map((line) => `<p class="hint tone-warn">${esc(line)}</p>`).join("");
+    const attached = info.on && info.firewall ? esc(info.firewall) : info.open ? `${esc(info.open)} · open to anyone` : "";
     const title = HETZNER_ROLES[role].title;
     return `
       <div class="hz-row">
-        <div><h3>${title}</h3><p class="hint">${ROLE_HINTS[role]}${info.firewall && info.on ? ` Firewall ${esc(info.firewall)}.` : ""}</p>${notes}</div>
+        <div><h3>${title}</h3><p class="hint">${ROLE_HINTS[role]}</p>${attached ? `<p class="hint hz-fw-name">${attached}</p>` : ""}${notes}</div>
         <label class="switch"><input id="hetzner-${role}" type="checkbox" aria-label="${title}" ${info.on ? "checked" : ""} onchange="setHetzner(this, '${role}')"><span></span></label>
       </div>`;
   }).join("");
-  const problems = [view.sshProblem && `SSH: ${view.sshProblem}. Attach a firewall that allows it in Hetzner's console.`, view.rangesProblem]
-    .filter(Boolean).map((line) => `<div class="notice" role="status">${esc(line!)}</div>`).join("");
-  const others = view.others.length ? `Other firewalls on this server: ${view.others.map(esc).join(", ")}.` : "No other firewall is attached to this server.";
-  return card(`${problems}${rows}
-    <div class="hz-token"><p class="hint">Connected to the project of ${esc(view.serverName)} (server ${esc(String(view.serverId))}). ${others}</p>${tokenActions}</div>${tokenForm(true)}`);
+}
+
+function problems(view: ConnectedView): string {
+  const ports = view.sshClosed;
+  const ssh = ports.length
+    ? `<div class="notice" role="status">SSH is closed: no firewall on this server allows port ${esc(ports.join(", "))}, so site users cannot connect over SFTP. ${view.terminal
+      ? `For a root shell, use <a href="${mountPath("terminal")}/">Terminal</a>.` : "Allow it in another firewall in Hetzner Console to open it again."}</div>`
+    : "";
+  return ssh + (view.rangesProblem ? `<div class="notice" role="status">${esc(view.rangesProblem)}</div>` : "");
+}
+
+/** The Hetzner Cloud Firewall card: connect a token in a dialog, then a switch for the sites and one for the panel. */
+function hetznerCard(view: FirewallPageState["hetzner"]): string {
+  const openConnect = "CLP_ROOT.getElementById('hz-connect-dialog').showModal()";
+  const tokenButtons = `
+      <div class="actions hz-token-actions">
+        <button class="btn" type="button" onclick="${openConnect}">Replace token</button>
+        <button class="btn btn-danger" type="button" onclick="removeHetznerToken()">Remove token</button>
+      </div>`;
+  const card = (body: string, headerActions = "", dialogs = "") => `
+    <div class="card hz-card" id="hetzner-card">
+      <div class="card-header"><h2>Hetzner Cloud Firewall</h2>${headerActions}</div>
+      <p class="hint hz-intro">Hetzner drops what these firewalls do not allow before it reaches this server.</p>${body}
+    </div>${dialogs}`;
+  if (view.state === "absent") {
+    return card('<p class="hz-absent">This server is not a Hetzner Cloud server, so there is nothing to set here. Dedicated (Robot) servers are not covered.</p>');
+  }
+  if (view.state === "disconnected") {
+    const holder = view.serverName ? `<strong>${esc(view.serverName)}</strong>` : "this server";
+    return card(`<div class="hz-connect"><p class="hint">Connect an API token from the Hetzner project that holds ${holder}; then turn on the firewalls you want.</p>
+        <button class="btn btn-primary" type="button" onclick="${openConnect}">Connect Hetzner</button></div>`, "", connectDialog(view.serverName, false));
+  }
+  if (view.state === "error") {
+    return card(`<div class="alert" role="alert">${esc(view.error)}</div>`, view.connected ? tokenButtons : "", view.connected ? connectDialog(null, true) : "");
+  }
+  const others = view.others.length ? `Also attached to ${esc(view.serverName)}: ${view.others.map(esc).join(", ")}.` : `No other firewall is attached to ${esc(view.serverName)}.`;
+  return card(`${problems(view)}${roleRows(view)}<p class="hint hz-foot">Connected to the project of ${esc(view.serverName)}. ${others}</p>`,
+    tokenButtons, `${connectDialog(view.serverName, true)}${REVIEW_DIALOG}`);
 }
 
 export function dashboardView(state: FirewallPageState): string {

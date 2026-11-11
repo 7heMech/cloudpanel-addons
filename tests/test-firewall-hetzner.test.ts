@@ -4,8 +4,8 @@ import { chmodSync, mkdirSync, mkdtempSync, readFileSync, rmSync, statSync, utim
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
-  connectHetzner, desiredRules, disconnectHetzner, hetznerView, OWNER_SELECTOR, parseCloudflareRanges, readCloudflareRanges,
-  rulesSignature, setHetznerRole, sshPorts, syncHetzner, type HetznerOptions, type HetznerRole,
+  connectHetzner, desiredRules, disconnectHetzner, hetznerSetupState, hetznerView, openRules, OWNER_SELECTOR, parseCloudflareRanges,
+  readCloudflareRanges, rulesSignature, setHetznerRole, sshPorts, syncHetzner, type HetznerOptions, type HetznerRole,
 } from "../addons/firewall/hetzner";
 import { HetznerApi, hetznerServerId } from "../addons/firewall/hetzner-api";
 import type { HetznerRule } from "../addons/firewall/hetzner-api";
@@ -66,6 +66,11 @@ function box(fake: FakeHetzner, serverId: number | null = SERVER, sites: string[
   const db = new Database(join(dir, "panel.db"));
   db.exec("CREATE TABLE site (id INTEGER PRIMARY KEY, domain_name TEXT)");
   for (const site of sites) db.query("INSERT INTO site (domain_name) VALUES (?)").run(site);
+  // CloudPanel's own rules on a new install.
+  db.exec("CREATE TABLE firewall_rule (id INTEGER PRIMARY KEY, port_range TEXT, source TEXT)");
+  for (const port of ["22", "80", "443", "8443"]) {
+    for (const source of ["0.0.0.0/0", "::/0"]) db.query("INSERT INTO firewall_rule (port_range, source) VALUES (?, ?)").run(port, source);
+  }
   db.close();
   const dns = new Map<string, string[]>(sites.map((site) => [site, [CLOUDFLARE_V4, CLOUDFLARE_V6]]));
   const state: Box = {
@@ -80,6 +85,9 @@ function box(fake: FakeHetzner, serverId: number | null = SERVER, sites: string[
         nginxSitesDir: join(dir, "sites"),
         customDomain: join(dir, "clp_custom_domain"),
         customDomainVhost: join(dir, "custom-domain.conf"),
+        protocolsFile: join(dir, "state", "protocols.json"),
+        terminalConfig: join(dir, "terminal.conf"),
+        vendor: join(dir, "sys_vendor"),
         rootUid: uid,
         panelUid: uid,
       },
@@ -238,6 +246,18 @@ describe("rules", () => {
     expect(await syncHetzner("repair", fresh.options)).toBeNull();
   });
 
+  test("repair puts back an open firewall's fixed rules", async () => {
+    const fake = new FakeHetzner(TOKEN);
+    fake.firewall("office", [ssh()], [SERVER]);
+    const server = await connected(fake);
+    await turn(server, "web", true);
+    await turn(server, "web", false);
+    const open = fake.firewalls.find((firewall) => firewall.name === "clp-addons-open-web")!;
+    open.rules = [anyone("80")];
+    expect(await syncHetzner("repair", server.options)).toBe("1 Hetzner firewall open to anyone put back");
+    expect(open.rules).toEqual(openRules("web"));
+  });
+
   test("repair deletes an owned firewall nothing uses, and never one without the label", async () => {
     const fake = new FakeHetzner(TOKEN);
     fake.firewall("clp-addons-cloudflare-panel", desiredRules("panel", RANGES), [], { "managed-by": "clp-addons", "clp-addons-role": "panel" });
@@ -249,21 +269,46 @@ describe("rules", () => {
 });
 
 describe("safeguards", () => {
-  test("nothing is attached unless another firewall on this server allows the port sshd listens on", async () => {
+  test("on a server with no firewall yet, the review names every port that closes and asks for the server's name", async () => {
     const fake = new FakeHetzner(TOKEN);
     const server = await connected(fake);
-    expect(await refusal(setHetznerRole("web", true, undefined, server.options))).toContain("no other firewall is attached to this server to allow SSH on port 22");
-    fake.firewall("office", [ssh()], [SERVER]);
+    const db = new Database(join(server.dir, "panel.db"));
+    db.query("INSERT INTO firewall_rule (port_range, source) VALUES ('51820', '0.0.0.0/0')").run();
+    db.close();
+    writeFileSync(join(server.dir, "state", "protocols.json"), JSON.stringify({ version: 2, protocols: { "51820 0.0.0.0/0": "udp" } }), { mode: 0o600 });
+    const first = await setHetznerRole("web", true, undefined, server.options);
+    if (!("review" in first)) throw new Error("expected a review");
+    expect(first.review.text).toContain("Port 8443 stays open to anyone through clp-addons-open-panel.");
+    expect(first.review.closes).toEqual(["SSH on port 22: site users can no longer connect over SFTP", "UDP 51820, opened on CloudPanel's Firewall page"]);
+    expect(first.review.typed).toBe("cp-fra-1");
+    expect(first.review.wayBack).toBe("Hetzner Console's web console still gives a root shell.");
+    writeFileSync(join(server.dir, "terminal.conf"), "");
+    const again = await setHetznerRole("web", true, undefined, server.options);
+    expect("review" in again && again.review.wayBack).toContain("Terminal still gives a root shell");
+    expect(fake.writes()).toEqual([]);
+
+    await turn(server, "web", true);
+    expect(fake.attachedTo(SERVER).map((firewall) => firewall.name).sort()).toEqual(["clp-addons-cloudflare-web", "clp-addons-open-panel"]);
+    expect(fake.firewalls.find((firewall) => firewall.name === "clp-addons-open-panel")!.rules).toEqual(openRules("panel"));
+    const view = await hetznerView(server.options);
+    expect(view.state === "connected" && view.sshClosed).toEqual([22]);
+    expect(view.state === "connected" && view.roles.panel.open).toBe("clp-addons-open-panel");
+  });
+
+  test("SSH another firewall already closed is not the switch's doing, so nothing asks for a name", async () => {
+    const fake = new FakeHetzner(TOKEN);
+    fake.firewall("office", [ssh(), anyone("8443")], [SERVER]);
+    const server = await connected(fake);
     server.sshdPort = 2222;
-    const message = await refusal(setHetznerRole("panel", true, undefined, server.options));
-    expect(message).toContain("no other firewall on this server (office) allows SSH on port 2222");
-    expect(message).toContain("clp-addons-cloudflare-panel alone would shut SSH out");
+    const first = await setHetznerRole("web", true, undefined, server.options);
+    if (!("review" in first)) throw new Error("expected a review");
+    expect(first.review.closes).toEqual([]);
+    expect(first.review.typed).toBe("");
     // A firewall elsewhere in the project does not count.
     fake.firewall("ssh-2222", [ssh(["203.0.113.7/32"], "2222")], [99]);
-    expect(await refusal(setHetznerRole("web", true, undefined, server.options))).toContain("port 2222");
-    fake.firewalls.at(-1)!.applied_to.push({ type: "server", server: { id: SERVER } });
-    expect("review" in await setHetznerRole("web", true, undefined, server.options)).toBe(true);
-    expect(fake.writes()).toEqual([]);
+    await turn(server, "web", true);
+    const view = await hetznerView(server.options);
+    expect(view.state === "connected" && view.sshClosed).toEqual([2222]);
   });
 
   test("sshd's port comes from ss, else from its configuration", () => {
@@ -288,7 +333,7 @@ describe("safeguards", () => {
     const first = await setHetznerRole("panel", true, undefined, server.options);
     if (!("review" in first)) throw new Error("expected a review");
     expect(first.review.text).toContain("CloudPanel will answer only at https://cp.example.com");
-    expect(first.review.text).toContain("SSH tunnel to 127.0.0.1:8443");
+    expect(first.review.wayBack).toContain("SSH tunnel to 127.0.0.1:8443");
     expect(fake.writes()).toEqual([]);
   });
 
@@ -309,7 +354,7 @@ describe("safeguards", () => {
     customDomain(server, "cp.example.com", ["46.225.93.37"]);
     const first = await setHetznerRole("web", true, undefined, server.options);
     if (!("review" in first)) throw new Error("expected a review");
-    expect(first.review.text).toContain("These 3 hostnames do not resolve to Cloudflare and stop answering");
+    expect(first.review.listLabel).toBe("These 3 hostnames do not resolve to Cloudflare and stop answering");
     expect(first.review.details).toEqual([
       "blog.example.com resolves to 46.225.93.37",
       "cp.example.com (CloudPanel) resolves to 46.225.93.37",
@@ -345,7 +390,7 @@ describe("safeguards", () => {
     fake.firewall("office", [ssh(), anyone("80-443")], [SERVER]);
     const server = await connected(fake);
     const first = await setHetznerRole("web", true, undefined, server.options);
-    expect("review" in first && first.review.text).toContain("80 is still open to anyone through firewall office. 443 is still open to anyone through firewall office.");
+    expect("review" in first && first.review.warnings).toEqual(["No effect yet: 80 is still open to anyone through firewall office. 443 is still open to anyone through firewall office."]);
     const done = await turn(server, "web", true);
     expect("notice" in done && done.notice).toContain("clp-addons-cloudflare-web is attached, but has no effect yet: 80 is still open to anyone");
     const view = await hetznerView(server.options);
@@ -356,22 +401,46 @@ describe("safeguards", () => {
     expect(quiet.state === "connected" && quiet.roles.web.stillOpen).toEqual([]);
   });
 
-  test("turning a switch off says what closes, detaches, and deletes the firewall once nothing uses it", async () => {
+  test("off puts the open firewall in the Cloudflare one's place where nothing else allows the ports", async () => {
     const fake = new FakeHetzner(TOKEN);
-    fake.firewall("office", [ssh()], [SERVER]);
+    fake.firewall("office", [ssh(), anyone("8443")], [SERVER]);
     const server = await connected(fake);
     await turn(server, "web", true);
     const off = await setHetznerRole("web", false, undefined, server.options);
     if (!("review" in off)) throw new Error("expected a review");
-    expect(off.review.text).toContain("No other firewall on this server (office) allows 80 and 443, so every site stops answering");
-    expect(off.review.danger).toBe(true);
+    expect(off.review.text).toBe("Anyone can reach ports 80 and 443 again: clp-addons-open-web takes the place of clp-addons-cloudflare-web on this server.");
+    expect(off.review.danger).toBe(false);
+    expect(off.review.closes).toEqual([]);
     expect(await turn(server, "web", false)).toEqual({ notice: "Sites through Cloudflare only is off." });
-    expect(fake.firewalls.map((firewall) => firewall.name)).toEqual(["office"]);
+    expect(fake.firewalls.map((firewall) => firewall.name)).toEqual(["office", "clp-addons-open-web"]);
+    // On again, the open one comes off and, unused, goes.
+    await turn(server, "web", true);
+    expect(fake.firewalls.map((firewall) => firewall.name)).toEqual(["office", "clp-addons-cloudflare-web"]);
+  });
+
+  test("a port another firewall closed on purpose is not opened, and one it allows needs no open firewall", async () => {
+    const fake = new FakeHetzner(TOKEN);
+    fake.firewall("office", [ssh(), anyone("80"), anyone("443")], [SERVER]);
+    const server = await connected(fake);
+    await turn(server, "web", true);
+    expect(fake.attachedTo(SERVER).map((firewall) => firewall.name)).toEqual(["office", "clp-addons-cloudflare-web"]);
+    await turn(server, "web", false);
+    expect(fake.attachedTo(SERVER).map((firewall) => firewall.name)).toEqual(["office"]);
+  });
+
+  test("the last switch off takes every addon firewall off when nothing else is attached", async () => {
+    const fake = new FakeHetzner(TOKEN);
+    const server = await connected(fake);
+    await turn(server, "web", true);
+    const off = await setHetznerRole("web", false, undefined, server.options);
+    expect("review" in off && off.review.text).toBe("clp-addons-cloudflare-web comes off, and no firewall stays on this server, so Hetzner lets anyone reach every port again. clp-addons-open-panel comes off too.");
+    await turn(server, "web", false);
+    expect(fake.firewalls).toEqual([]);
   });
 
   test("the sites switch stays on while the panel switch needs it for 443", async () => {
     const fake = new FakeHetzner(TOKEN);
-    fake.firewall("office", [ssh()], [SERVER]);
+    fake.firewall("office", [ssh(), { direction: "in", protocol: "tcp", port: "80-443", source_ips: ["203.0.113.7/32"] }, anyone("8443")], [SERVER]);
     const server = await connected(fake);
     customDomain(server, "cp.example.com", [CLOUDFLARE_V4]);
     await turn(server, "web", true);
@@ -379,6 +448,17 @@ describe("safeguards", () => {
     expect(await refusal(setHetznerRole("web", false, undefined, server.options))).toContain("Turn off Panel through Cloudflare only first");
     await turn(server, "panel", false);
     expect(await turn(server, "web", false)).toEqual({ notice: "Sites through Cloudflare only is off." });
+  });
+
+  test("with the open firewall in its place, the sites switch can go off under the panel switch", async () => {
+    const fake = new FakeHetzner(TOKEN);
+    fake.firewall("office", [ssh()], [SERVER]);
+    const server = await connected(fake);
+    customDomain(server, "cp.example.com", [CLOUDFLARE_V4]);
+    await turn(server, "web", true);
+    await turn(server, "panel", true);
+    expect(await turn(server, "web", false)).toEqual({ notice: "Sites through Cloudflare only is off." });
+    expect(fake.attachedTo(SERVER).map((firewall) => firewall.name).sort()).toEqual(["clp-addons-cloudflare-panel", "clp-addons-open-web", "office"]);
   });
 
   test("an owned firewall another server still uses is detached but kept", async () => {
@@ -445,8 +525,39 @@ describe("safeguards", () => {
     await turn(server, "web", true);
     expect(await refusal(disconnectHetzner(server.options))).toContain("Turn both switches off first");
     await turn(server, "web", false);
-    expect((await disconnectHetzner(server.options)).notice).toContain("removed");
+    const { notice } = await disconnectHetzner(server.options);
+    expect(notice).toContain("removed");
+    expect(notice).toContain("clp-addons-open-web stays attached, so those ports stay open to anyone");
     expect((await hetznerView(server.options)).state).toBe("disconnected");
+  });
+});
+
+describe("the Setup checklist's reader", () => {
+  test("reads the switches as the page, a switch or repair last saw them, without asking Hetzner", async () => {
+    const fake = new FakeHetzner(TOKEN);
+    fake.firewall("office", [ssh()], [SERVER]);
+    const server = box(fake);
+    let now = 1_000_000;
+    server.options.now = () => now;
+    expect(hetznerSetupState(server.options)).toEqual({ cloud: false, token: false, seen: {}, seenAt: null });
+    writeFileSync(join(server.dir, "sys_vendor"), "Hetzner\n");
+    expect(hetznerSetupState(server.options).cloud).toBe(true);
+    await connectHetzner({ token: TOKEN }, server.options);
+    expect(hetznerSetupState(server.options)).toEqual({ cloud: true, token: true, seen: {}, seenAt: null });
+    await hetznerView(server.options);
+    expect(hetznerSetupState(server.options)).toEqual({ cloud: true, token: true, seen: { web: false, panel: false }, seenAt: now });
+    now += 1000;
+    await turn(server, "web", true);
+    expect(hetznerSetupState(server.options)).toMatchObject({ seen: { web: true, panel: false }, seenAt: now });
+    // Turned off in Hetzner's console: repair sees it.
+    const web = fake.firewalls.find((firewall) => firewall.name === "clp-addons-cloudflare-web")!;
+    web.applied_to = [];
+    now += 1000;
+    await syncHetzner("repair", server.options);
+    expect(hetznerSetupState(server.options)).toMatchObject({ seen: { web: false, panel: false }, seenAt: now });
+    const calls = fake.calls.length;
+    hetznerSetupState(server.options);
+    expect(fake.calls).toHaveLength(calls);
   });
 });
 
@@ -472,6 +583,11 @@ describe("the token", () => {
     expect(JSON.parse(readFileSync(file, "utf8"))).toEqual({ token: TOKEN });
     const view = await hetznerView(server.options);
     expect(JSON.stringify(view)).not.toContain(TOKEN);
+  });
+
+  test("before a token, the card names the server so the operator finds its project", async () => {
+    const server = box(new FakeHetzner(TOKEN));
+    expect(await hetznerView(server.options)).toEqual({ state: "disconnected", serverId: SERVER, serverName: "cp-fra-1" });
   });
 
   test("a provider message that repeats the token is redacted", async () => {
