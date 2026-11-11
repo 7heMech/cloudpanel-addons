@@ -158,8 +158,8 @@ import SETUP_STYLE from "./assets/setup.css" with { type: "text" };
 import SETUP_JS from "./assets/setup.client.js" with { type: "text" };
 
 const SETUP_CHIP = `<button class="clp-addon-tool" id="clp-setup-chip" type="button" hidden aria-expanded="false" aria-controls="clp-setup-panel" onclick="clpSetupToggle()">Setup<span class="clp-setup-dot" aria-hidden="true"></span></button>`;
-const SETUP_HOLDER = `<button id="clp-setup-pill" type="button" hidden aria-expanded="false" aria-controls="clp-setup-panel" onclick="clpSetupToggle()"><span class="clp-setup-dot" aria-hidden="true"></span>Setup</button>
-<div id="clp-setup-panel" role="dialog" aria-labelledby="clp-setup-title" tabindex="-1" hidden></div>`;
+const SETUP_NAV = `<button class="clp-addon-primary-link clp-setup-nav" id="clp-setup-nav" type="button" hidden aria-expanded="false" aria-controls="clp-setup-panel" onclick="clpSetupToggle()">Setup<span class="clp-setup-dot" aria-hidden="true"></span></button>`;
+const SETUP_PANEL = `<div id="clp-setup-panel" role="dialog" aria-labelledby="clp-setup-title" tabindex="-1" hidden></div>`;
 
 interface SiteJobProgress {
   id: string;
@@ -294,7 +294,7 @@ ${logosHtml(panelLogos())}
     </a>
     <nav class="clp-addon-primary-nav" aria-label="${esc("CloudPanel navigation")}">
 ${primaryNav}
-      ${chrome.admin !== false ? rootShellLink(mountPath("terminal"), 'class="clp-addon-primary-link clp-root-shell-nav" data-clp-root-shell hidden', "Root") : ""}
+      ${chrome.admin !== false ? SETUP_NAV + rootShellLink(mountPath("terminal"), 'class="clp-addon-primary-link clp-root-shell-nav" data-clp-root-shell hidden', "Root") : ""}
     </nav>
     ${chrome.updateNotice ? updateNoticeHtml(chrome.updateNotice.latest) : ""}
     <div class="clp-addon-header-tools">
@@ -322,7 +322,7 @@ ${primaryNav}
 </header>
 <main>${siteHeader}${FLASH_HTML}${viewRoot(content)}</main>
 ${CONFIRM_HTML}
-${chrome.admin !== false ? SETUP_HOLDER : ""}
+${chrome.admin !== false ? SETUP_PANEL : ""}
 <footer class="clp-addon-footer">
   <a href="https://github.com/7heMech/cloudpanel-addons/issues" target="_blank" rel="noopener noreferrer">Report an addon issue</a>
   <a href="https://github.com/7heMech/cloudpanel-addons" target="_blank" rel="noopener noreferrer">Star addons on GitHub</a>
