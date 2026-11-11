@@ -2,7 +2,9 @@ import { describe, expect, test } from "bun:test";
 import { CloudflareApi, quoteTxt, unquoteTxt } from "../addons/dns/cloudflare";
 import { ProviderError, ProviderHttp } from "../lib/provider-http";
 import { MailcowApi } from "../addons/dns/mailcow";
-import { FakeCloudflare, FakeMailcow, MAILCOW_KEY } from "./fixtures/dns-api";
+import { grants, parseResources, readAccess } from "../addons/dns/access";
+import { PERMISSIONS } from "../addons/dns/token";
+import { FakeCloudflare, FakeMailcow, MAILCOW_KEY, policy } from "./fixtures/dns-api";
 
 const USER_TOKEN = "cf-user-token-0123456789abcdef";
 const ACCOUNT_TOKEN = "cf-account-token-0123456789abcdef";
@@ -54,7 +56,7 @@ describe("Cloudflare", () => {
     const { fake, agency, church } = cloudflare();
     for (let n = 0; n < 120; n++) fake.zone(`site${n}.example`, n % 2 ? agency : church);
     const api = new CloudflareApi(USER_TOKEN, fake.fetch);
-    expect(await api.verify()).toEqual({ active: true, status: "active" });
+    expect(await api.verify()).toEqual({ active: true, status: "active", owner: "user", accountId: null, id: fake.tokens.get(USER_TOKEN)!.id! });
     expect((await api.accounts()).map((account) => account.name).sort()).toEqual(["Agency", "Church"]);
     const zones = await api.zones();
     expect(zones).toHaveLength(120);
@@ -69,7 +71,7 @@ describe("Cloudflare", () => {
     const api = new CloudflareApi(ACCOUNT_TOKEN, fake.fetch);
     expect(await api.accounts()).toEqual([]);
     expect((await api.zones()).map((zone) => zone.name)).toEqual(["church.example"]);
-    expect(await api.verify()).toEqual({ active: true, status: "active" });
+    expect(await api.verify()).toEqual({ active: true, status: "active", owner: "account", accountId: church, id: fake.tokens.get(ACCOUNT_TOKEN)!.id! });
     expect(fake.calls.some((call) => call.path === `/accounts/${church}/tokens/verify`)).toBe(true);
   });
 
@@ -221,5 +223,93 @@ describe("Mailcow", () => {
     fake.reportsAcl = false;
     expect(await api.senderAcl("relay@example.net")).toBeNull();
     await expect(api.senderAcl("nobody@example.net")).rejects.toThrow("has no mailbox");
+  });
+});
+
+describe("a token's own permissions", () => {
+  const ZONE = "com.cloudflare.api.account.zone.";
+  const ACCOUNT = "com.cloudflare.api.account.";
+
+  test("a user token reads its policies at /user/tokens/:id", async () => {
+    const { fake, agency } = cloudflare();
+    fake.tokens.get(USER_TOKEN)!.policies = [policy(["DNS Write", "API Tokens Read"], { [`${ZONE}*`]: "*" })];
+    const api = new CloudflareApi(USER_TOKEN, fake.fetch);
+    const verified = await api.verify();
+    const list = await api.policies(verified, verified.id!);
+    expect(fake.calls.at(-1)!.path).toBe(`/user/tokens/${verified.id}`);
+    expect(list).toEqual([{ allow: true, permissions: ["DNS Write", "API Tokens Read"], resources: [{ account: "*", zone: "*" }] }]);
+    expect(grants(list, PERMISSIONS.dns, { accountId: agency, zoneId: "f".repeat(32) })).toBe(true);
+  });
+
+  test("an account-owned token reads them at its account", async () => {
+    const { fake, church } = cloudflare();
+    fake.zone("church.example", church);
+    fake.tokens.get(ACCOUNT_TOKEN)!.policies = [policy(["DNS Write", "Account API Tokens Read"], { [`${ACCOUNT}${church}`]: { [`${ZONE}*`]: "*" } })];
+    const api = new CloudflareApi(ACCOUNT_TOKEN, fake.fetch);
+    const verified = await api.verify();
+    await api.policies(verified, verified.id!);
+    expect(fake.calls.at(-1)!.path).toBe(`/accounts/${church}/tokens/${verified.id}`);
+  });
+
+  test("a token without API Tokens Read is refused its own details", async () => {
+    const { fake } = cloudflare();
+    const api = new CloudflareApi(USER_TOKEN, fake.fetch);
+    const verified = await api.verify();
+    await expect(api.policies(verified, verified.id!)).rejects.toMatchObject({ status: 403 });
+  });
+
+  test("resources are read flat, nested under an account, and for the user", () => {
+    expect(parseResources({
+      [`${ZONE}*`]: "*",
+      [`${ZONE}${"1".repeat(32)}`]: "*",
+      [`${ACCOUNT}${"a".repeat(32)}`]: { [`${ZONE}*`]: "*", [`${ZONE}${"2".repeat(32)}`]: "*" },
+      [`${ACCOUNT}${"b".repeat(32)}`]: "*",
+      "com.cloudflare.api.user.0123": "*",
+      "com.cloudflare.api.something.else": "*",
+    })).toEqual([
+      { account: "*", zone: "*" },
+      { account: "*", zone: "1".repeat(32) },
+      { account: "a".repeat(32), zone: "*" },
+      { account: "a".repeat(32), zone: "2".repeat(32) },
+      { account: "b".repeat(32), zone: "*" },
+      { account: "", zone: "", user: true },
+    ]);
+  });
+
+  test("missing and partial permissions are named, a deny wins, and reach is described", () => {
+    const [agency, clients] = ["a".repeat(32), "b".repeat(32)];
+    const zones = [
+      { id: "1".repeat(32), name: "example.com", accountId: agency },
+      { id: "2".repeat(32), name: "example.org", accountId: clients },
+      { id: "3".repeat(32), name: "example.net", accountId: clients },
+    ];
+    const access = readAccess({ owner: "user", accountId: null }, [
+      { allow: true, permissions: ["DNS Write", "Zone Write", "Config Settings Write"], resources: [{ account: "*", zone: "*" }] },
+      { allow: true, permissions: ["Zone Settings Write"], resources: [{ account: agency, zone: "*" }] },
+      { allow: false, permissions: ["Config Settings Write"], resources: [{ account: "*", zone: "3".repeat(32) }] },
+    ], { zones, accounts: [{ id: agency, name: "Agency" }, { id: clients, name: "Clients" }] });
+    if (!access.readable) throw new Error("readable");
+    expect(access.reach).toBe("All zones");
+    expect(access.coverage.dns).toEqual({ held: "yes" });
+    expect(access.coverage.zone).toEqual({ held: "yes" });
+    expect(access.coverage.waf).toEqual({ held: "no" });
+    expect(access.coverage.zoneSettings).toEqual({ held: "some", lacking: ["example.net", "example.org"], lackingCount: 2 });
+    expect(access.coverage.configRules).toEqual({ held: "some", lacking: ["example.net"], lackingCount: 1 });
+    expect(access.coverage.tokens).toEqual({ held: "yes" });
+  });
+
+  test("a token for chosen zones cannot create zones, and says which zones it reaches", () => {
+    const agency = "a".repeat(32);
+    const access = readAccess({ owner: "user", accountId: null }, [
+      { allow: true, permissions: ["DNS Write", "Zone Write"], resources: [{ account: "*", zone: "1".repeat(32) }, { account: "*", zone: "2".repeat(32) }] },
+    ], { zones: [{ id: "1".repeat(32), name: "example.com", accountId: agency }], accounts: [{ id: agency, name: "Agency" }] });
+    if (!access.readable) throw new Error("readable");
+    expect(access.reach).toBe("2 chosen zones");
+    expect(access.coverage.dns).toEqual({ held: "yes" });
+    expect(access.coverage.zone).toEqual({ held: "no" });
+    const inAccount = readAccess({ owner: "account", accountId: agency }, [
+      { allow: true, permissions: ["DNS Write"], resources: [{ account: agency, zone: "*" }] },
+    ], { zones: [], accounts: [{ id: agency, name: "Agency" }] });
+    expect(inAccount.readable && inAccount.reach).toBe("All zones in Agency");
   });
 });

@@ -9,7 +9,8 @@
 import { errorMessage } from "../../lib/errors";
 import { getDomain } from "tldts";
 import type { Addresses } from "./addresses";
-import { CloudflareApi, type CfAccount, type CfRecord, type CfRuleset, type CfZone } from "./cloudflare";
+import { readAccess, selfReadPermission, type Reached, type TokenAccess } from "./access";
+import { CloudflareApi, type CfAccount, type CfRecord, type CfRuleset, type CfZone, type Verified } from "./cloudflare";
 import { type ApiFetch, ProviderError } from "../../lib/provider-http";
 import { aclAllows, MailcowApi, type MailcowDkim } from "./mailcow";
 import type { AccountRef, Policy, Profile, Redirect, Secrets } from "./model";
@@ -61,6 +62,8 @@ export interface ConnectionReport {
   accounts: CfAccount[];
   zones: number;
   error: string | null;
+  /** What the token holds, read with the check; absent before its first one. */
+  token?: TokenAccess;
 }
 
 interface ZoneRef {
@@ -227,7 +230,8 @@ export class DnsRun {
         const [zones, accounts] = await Promise.all([api.zones(), api.accounts()]);
         const known = new Map(accounts.map((account) => [account.id, account]));
         for (const zone of zones) if (!known.has(zone.account.id)) known.set(zone.account.id, zone.account);
-        return { ...report, active: true, accounts: [...known.values()], zones: zones.length, refs: zones.map((zone) => ({ zone, connectionId: connection.id })) };
+        const token = await this.readToken(api, verified, { zones: zones.map((zone) => ({ id: zone.id, name: zone.name, accountId: zone.account.id })), accounts: [...known.values()] });
+        return { ...report, active: true, accounts: [...known.values()], zones: zones.length, token, refs: zones.map((zone) => ({ zone, connectionId: connection.id })) };
       } catch (error) {
         return { ...report, status: "error", error: reason(error) };
       }
@@ -237,6 +241,19 @@ export class DnsRun {
     for (const { refs, ...report } of reports) {
       if (refs) this.zoneRefs.push(...refs);
       this.connections.push(report);
+    }
+  }
+
+  private async readToken(api: CloudflareApi, verified: Verified, reached: Reached): Promise<TokenAccess> {
+    const owner = { owner: verified.owner, accountId: verified.accountId };
+    if (!verified.id) return { ...owner, readable: false, reason: "Cloudflare did not say which token this is" };
+    try {
+      return readAccess(owner, await api.policies(owner, verified.id), reached);
+    } catch (error) {
+      if (error instanceof ProviderError && (error.status === 401 || error.status === 403)) {
+        return { ...owner, readable: false, reason: `Add ${selfReadPermission(owner.owner)} to this token to see its permissions here` };
+      }
+      return { ...owner, readable: false, reason: `Its permissions could not be read: ${reason(error)}` };
     }
   }
 

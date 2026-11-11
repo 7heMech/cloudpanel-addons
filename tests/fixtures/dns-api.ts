@@ -12,6 +12,20 @@ export interface FakeToken {
   /** Whether it holds Account Settings Read, which /accounts needs. */
   listAccounts?: boolean;
   zoneEdit?: boolean;
+  /** What the token reads at /user/tokens/:id or /accounts/:id/tokens/:id, in Cloudflare's shape; absent without API Tokens Read. */
+  policies?: FakePolicy[];
+  id?: string;
+}
+
+export interface FakePolicy {
+  effect: "allow" | "deny";
+  permission_groups: { id: string; name: string }[];
+  resources: Record<string, string | Record<string, string>>;
+}
+
+/** A policy as Cloudflare returns it: permission groups by name, resources by key. */
+export function policy(names: string[], resources: FakePolicy["resources"], effect: FakePolicy["effect"] = "allow"): FakePolicy {
+  return { effect, permission_groups: names.map((name) => ({ id: hexId(), name })), resources };
 }
 
 interface Zone {
@@ -48,7 +62,7 @@ export class FakeCloudflare {
   }
 
   token(value: string, token: FakeToken): void {
-    this.tokens.set(value, { status: "active", listAccounts: true, ...token });
+    this.tokens.set(value, { status: "active", listAccounts: true, id: hexId(), ...token });
   }
 
   zone(name: string, accountId: string, status = "active"): Zone {
@@ -138,11 +152,18 @@ export class FakeCloudflare {
     if (!token) return this.error(401, 10000, "Authentication error");
 
     if (path === "/user/tokens/verify") {
-      return token.owner === "user" ? this.ok({ id: hexId(), status: token.status }) : this.error(401, 1000, "Invalid API Token");
+      return token.owner === "user" ? this.ok({ id: token.id, status: token.status }) : this.error(401, 1000, "Invalid API Token");
     }
     const accountVerify = /^\/accounts\/([^/]+)\/tokens\/verify$/.exec(path);
     if (accountVerify) {
-      return token.owner === "account" && token.accounts.includes(accountVerify[1]!) ? this.ok({ id: hexId(), status: token.status }) : this.error(401, 1000, "Invalid API Token");
+      return token.owner === "account" && token.accounts.includes(accountVerify[1]!) ? this.ok({ id: token.id, status: token.status }) : this.error(401, 1000, "Invalid API Token");
+    }
+    const details = /^(?:\/user|\/accounts\/([^/]+))\/tokens\/([^/]+)$/.exec(path);
+    if (details && method === "GET") {
+      const owned = token.owner === "user" ? !details[1] : token.accounts.includes(details[1] ?? "");
+      if (!owned || details[2] !== token.id) return this.error(404, 1003, "Token not found");
+      if (!token.policies) return this.error(403, 9109, "Unauthorized to access requested resource");
+      return this.ok({ id: token.id, name: "CloudPanel DNS", status: token.status, policies: token.policies });
     }
     if (path === "/accounts") {
       if (!token.listAccounts) return this.error(403, 9109, "Unauthorized to access requested resource");
