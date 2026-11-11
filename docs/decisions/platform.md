@@ -701,9 +701,10 @@ installed addon patches that partial.
 
 ## Setup checklist
 
-An administrator's addon pages carry a Setup helper: Setup in the header on a
-desktop, and a pill in the bottom-left corner on a phone, whose header has no
-room for it. It opens suggestions in four levels -- Connect your domain, Secure
+An administrator's addon pages carry a Setup helper: Setup in the header's tools
+on a desktop, and on a phone, whose header row has no room beside the logo, at
+the end of the navigation row, where the root shell goes; whoever is still
+setting up a server is rarely granted that. It opens suggestions in four levels -- Connect your domain, Secure
 the server, Run sites, Provision automatically -- each ticked from the server's
 state, never from a click. It shows no counts: a step may not fit a server, so
 any step can be skipped, and the helper hides itself once nothing is left to
@@ -728,9 +729,8 @@ never Cloudflare, Hetzner or a DNS lookup. What only an API knows is what the
 addon last saw: Firewall records Hetzner's switches whenever its page or a
 switch reads them. A check that fails reads as a suggestion with its error.
 
-CloudPanel's own pages do not show the helper: a pill there would float over
-the panel's controls, and the header slot the Addons link uses has no room on a
-phone.
+CloudPanel's own pages do not show the helper; it would need a block of its own
+in the panel's header, beside the Addons link and the update notice.
 
 ## Browser assets are files
 

@@ -1,8 +1,8 @@
 #clp-setup-chip { color: var(--text); font-weight: 600; }
 .clp-setup-dot { display: inline-block; width: 8px; height: 8px; border-radius: 50%; background: var(--primary); vertical-align: middle; }
 #clp-setup-chip .clp-setup-dot { margin: -2px 0 0 7px; }
-#clp-setup-pill { display: none; }
-#clp-setup-panel { position: absolute; z-index: 1031; right: 12px; top: 80px; width: 440px; max-height: calc(100vh - 100px);
+.clp-addon-primary-nav > .clp-setup-nav { display: none; }
+#clp-setup-panel { position: fixed; z-index: 1031; right: 12px; top: var(--clp-setup-top, 80px); width: 440px; max-height: calc(100vh - var(--clp-setup-top, 80px) - 12px);
   display: flex; flex-direction: column; background: var(--panel); color: var(--text); border: 1px solid var(--card-border);
   border-radius: 6px; box-shadow: 0 12px 36px rgb(0 0 0 / 18%); font-size: 15px; }
 #clp-setup-panel[hidden] { display: none; }
@@ -24,13 +24,18 @@
 .clp-setup-step .btn { flex: 0 0 auto; padding: 4px 12px; min-height: 0; font-size: 14px; }
 .clp-setup-skip { border: 0; background: none; color: var(--muted); font: inherit; font-size: 14px; padding: 4px 6px; cursor: pointer; }
 .clp-setup-skip:hover { color: var(--accent); text-decoration: underline; }
-/* A phone has no room in the header, so the chip becomes a pill in the corner
-   and the list a sheet from the bottom. */
+/* Between a tablet and a phone the tools are icon cells, too narrow for the word. */
 @media (max-width: 940px) {
+  #clp-setup-chip { width: auto; padding: 0 16px; }
+}
+/* A phone has no room for it beside the logo, so it takes the end of the
+   navigation row, where the root shell goes; whoever is still setting up a
+   server is rarely granted that. */
+@media (max-width: 760px) {
   #clp-setup-chip { display: none !important; }
-  #clp-setup-pill:not([hidden]) { position: fixed; z-index: 1030; left: 12px; bottom: 12px; display: inline-flex; align-items: center; gap: 8px;
-    padding: 8px 16px; border: 1px solid var(--card-border); border-radius: 999px; background: var(--panel); color: var(--text);
-    box-shadow: 0 6px 20px rgb(0 0 0 / 14%); font: inherit; font-size: 15px; font-weight: 600; cursor: pointer; }
-  body.clp-setup-has-pill main { padding-bottom: 80px; }
-  #clp-setup-panel { position: fixed; left: 0; right: 0; bottom: 0; top: auto; width: auto; max-height: 82vh; border-radius: 12px 12px 0 0; }
+  .clp-addon-primary-nav > .clp-setup-nav:not([hidden]) { display: flex; gap: 7px; margin-left: auto; padding: 0 16px;
+    border: 0; border-left: 1px solid var(--border); background: var(--header-bg); color: var(--text); font: inherit;
+    font-size: 15px; font-weight: 600; cursor: pointer; }
+  .clp-setup-nav + .clp-root-shell-nav:not([hidden]) { margin-left: 0; }
+  #clp-setup-panel { left: 8px; right: 8px; width: auto; }
 }
