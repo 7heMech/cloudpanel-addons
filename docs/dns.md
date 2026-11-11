@@ -90,6 +90,24 @@ a stand-in site on this server, that site stays until you confirm the review,
 then is deleted too. To turn a site into a redirect, delete it in CloudPanel
 first.
 
+## Panel hostname
+
+To reach CloudPanel at a name such as `panel.example.com` through Cloudflare:
+
+1. Enter the name under **Panel hostname** and save. DNS points it at this
+   server, without Cloudflare's proxy.
+2. Enter the same name in CloudPanel under **Admin → Settings → Custom Domain**.
+   CloudPanel gets its Let's Encrypt certificate straight from this server.
+3. DNS proxies the name through Cloudflare seconds after the certificate is
+   issued.
+
+The proxy waits for the certificate because CloudPanel asks Let's Encrypt the
+moment you save, and a check sent through Cloudflare can fail on the zone's SSL
+settings. The zone also gets the Full SSL rule for Let's Encrypt checks, so
+CloudPanel's renewals still reach this server once the name is proxied.
+Removing the panel hostname leaves its records in Cloudflare, listed with the
+records of deleted sites.
+
 ## Leaving Terraform
 
 DNS replaces Terraform or OpenTofu for the records its profiles write. Retire

@@ -4,6 +4,7 @@ import { callGatewayAction, type ActionResult } from "../lib/gateway-client";
 import type { WebVerb } from "../lib/gateway-protocol";
 import type { ManagerJobView } from "./action";
 import type { PanelHold } from "../lib/panel-holds";
+import type { SetupView } from "./setup";
 
 export async function managerAction<T>(verb: WebVerb<"manager">, args: string[] = []): Promise<ActionResult<T>> {
   // The create verbs hand the work to systemd and return; nothing here waits
@@ -39,4 +40,8 @@ export async function seenNews(): Promise<{ since: string; seen: string[] }> {
   const result = await managerAction<{ since: string; seen: string[] }>("news-seen");
   const data = result.ok ? result.data : null;
   return typeof data?.since === "string" && Array.isArray(data.seen) ? data : { since: "0.0.0", seen: [] };
+}
+
+export async function setupAction(user: string, change: string[] = []): Promise<ActionResult<SetupView>> {
+  return managerAction<SetupView>(change.length ? "setup-pref" : "setup", [`--user=${user}`, ...change]);
 }

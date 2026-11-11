@@ -154,6 +154,13 @@ export { JOB_WATCH_JS };
 import JOB_PROGRESS_JS from "./assets/job-progress.client.js" with { type: "text" };
 export { JOB_PROGRESS_JS };
 
+import SETUP_STYLE from "./assets/setup.css" with { type: "text" };
+import SETUP_JS from "./assets/setup.client.js" with { type: "text" };
+
+const SETUP_CHIP = `<button class="clp-addon-tool" id="clp-setup-chip" type="button" hidden aria-expanded="false" aria-controls="clp-setup-panel" onclick="clpSetupToggle()">Setup<span class="clp-setup-dot" aria-hidden="true"></span></button>`;
+const SETUP_NAV = `<button class="clp-addon-primary-link clp-setup-nav" id="clp-setup-nav" type="button" hidden aria-expanded="false" aria-controls="clp-setup-panel" onclick="clpSetupToggle()">Setup<span class="clp-setup-dot" aria-hidden="true"></span></button>`;
+const SETUP_PANEL = `<div id="clp-setup-panel" role="dialog" aria-labelledby="clp-setup-title" tabindex="-1" hidden></div>`;
+
 interface SiteJobProgress {
   id: string;
   state: string;
@@ -277,7 +284,7 @@ ${siteTabs(chrome.site, chrome.site.activeSlug)
 <meta name="viewport" content="width=device-width, initial-scale=1, shrink-to-fit=no">
 <title>${esc(title)}</title>
 ${faviconHtml(panelLogos())}<script>${THEME_INIT_JS}</script>
-<style>${BASE_STYLE}${SITE_CONTEXT_STYLE}${UPDATE_STYLE}${chrome.css ?? ""}</style>
+<style>${BASE_STYLE}${SITE_CONTEXT_STYLE}${UPDATE_STYLE}${chrome.admin !== false ? SETUP_STYLE : ""}${chrome.css ?? ""}</style>
 </head>
 <body>
 <header class="clp-addon-header">
@@ -287,10 +294,11 @@ ${logosHtml(panelLogos())}
     </a>
     <nav class="clp-addon-primary-nav" aria-label="${esc("CloudPanel navigation")}">
 ${primaryNav}
-      ${chrome.admin !== false ? rootShellLink(mountPath("terminal"), 'class="clp-addon-primary-link clp-root-shell-nav" data-clp-root-shell hidden', "Root") : ""}
+      ${chrome.admin !== false ? SETUP_NAV + rootShellLink(mountPath("terminal"), 'class="clp-addon-primary-link clp-root-shell-nav" data-clp-root-shell hidden', "Root") : ""}
     </nav>
     ${chrome.updateNotice ? updateNoticeHtml(chrome.updateNotice.latest) : ""}
     <div class="clp-addon-header-tools">
+      ${chrome.admin !== false ? SETUP_CHIP : ""}
       <button class="clp-addon-tool" id="theme-switch" type="button" onclick="toggleTheme()" aria-label="Switch to dark mode" aria-pressed="false">
         ${THEME_SWITCH_ICONS}
       </button>
@@ -314,12 +322,13 @@ ${primaryNav}
 </header>
 <main>${siteHeader}${FLASH_HTML}${viewRoot(content)}</main>
 ${CONFIRM_HTML}
+${chrome.admin !== false ? SETUP_PANEL : ""}
 <footer class="clp-addon-footer">
   <a href="https://github.com/7heMech/cloudpanel-addons/issues" target="_blank" rel="noopener noreferrer">Report an addon issue</a>
   <a href="https://github.com/7heMech/cloudpanel-addons" target="_blank" rel="noopener noreferrer">Star addons on GitHub</a>
 </footer>
 <script>const CLP_BASE = "${escJs(chrome.base)}";
-${BASE_CLIENT_JS}${chrome.admin !== false ? rootShellScript(mountPath("terminal")) : ""}${chrome.script}</script>
+${BASE_CLIENT_JS}${chrome.admin !== false ? rootShellScript(mountPath("terminal")) + SETUP_JS : ""}${chrome.script}</script>
 </body>
 </html>`;
 }

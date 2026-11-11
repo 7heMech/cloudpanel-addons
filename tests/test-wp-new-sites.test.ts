@@ -289,9 +289,9 @@ test("what MainWP automation still owes a site", () => {
   expect(mainwpOwesSite({ ...waiting, remote: true, sites: {} }, "new.example.com")).toBe(true);
 });
 
-test("the watchers run WP Tools, and the certificate watcher watches CloudPanel's certificates", () => {
+test("the watchers run WP Tools and DNS, and the certificate watcher watches CloudPanel's certificates", () => {
   expect(ADDONS["wp-tools"]!.newSites).toBeDefined();
-  expect(Object.values(ADDONS).filter((spec) => spec.certificates).map((spec) => spec.name)).toEqual(["wp-tools"]);
+  expect(Object.values(ADDONS).filter((spec) => spec.certificates).map((spec) => spec.name)).toEqual(["dns", "wp-tools"]);
   const units = certificateUnits();
   expect(units.path).toContain("PathChanged=/etc/nginx/ssl-certificates");
   expect(units.path).toContain("Unit=clp-addons-certificates.service");

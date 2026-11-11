@@ -166,7 +166,7 @@ export function dashboardView(state: PanelTweaksState, branding: Branding = DEFA
         <p>Optional improvements to CloudPanel's sites, dashboard and login.</p>
       </div>
     </div>
-    <div class="card">
+    <div class="card" id="pt-sites">
       <div class="card-header"><h2>Sites</h2></div>
       <div class="tweak-list">${tweakList(state, "Sites")}
       </div>

@@ -61,6 +61,40 @@ interface PanelBlock {
   inspect: () => { ok: boolean; text: string; hold?: PanelHold };
 }
 
+/** The Setup checklist's groups, in the order it shows them. */
+export const SETUP_LEVELS = {
+  domain: "Connect your domain",
+  secure: "Secure the server",
+  sites: "Run sites",
+  provision: "Provision automatically",
+} as const;
+export type SetupLevel = keyof typeof SETUP_LEVELS;
+
+export interface SetupCheck {
+  state: "done" | "todo" | "na";
+  /** One line: what was found, or what is missing. */
+  reason: string;
+}
+
+/** A step the Setup checklist suggests; an administrator may skip any. */
+export interface SetupStep {
+  /** Unique across addons; a skip is remembered by it. */
+  id: string;
+  level: SetupLevel;
+  title: string;
+  /** The page, and card, that sets it up. */
+  href: string;
+  /**
+   * Run as root on every addon page an administrator opens, so it reads local
+   * state only. To do means the step lacks something it needs, such as a
+   * permission a newer release needs, which can put a done step back to to do;
+   * something merely optional belongs on the addon's page, never here.
+   */
+  check: (options?: Record<string, unknown>) => SetupCheck | Promise<SetupCheck>;
+  /** Also checked while the addon is off, for a step that can be done without it. */
+  whileOff?: true;
+}
+
 /** Paths are derived from `name`, not declared. */
 export interface AddonDefinition {
   name: string;
@@ -116,6 +150,8 @@ export interface AddonDefinition {
   /** Work `repair --anchors-only` runs when CloudPanel rewrites a file the anchor watcher sees, each step reported on its own. */
   anchors?: AddonHook[];
   panelBlock?: PanelBlock;
+  /** What the Setup checklist suggests for this addon; listed with Enable while it is off. */
+  setup?: SetupStep[];
   /** The conffile edits `apt-hook pre` hands back to dpkg before an unattended upgrade. */
   conffiles?: ConffileEdit[];
   /** Top-level commands, by name, such as `maintenance` or ones systemd runs. */

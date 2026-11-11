@@ -36,6 +36,8 @@ import { ADDONS, ADDON_NAMES, addonNews, addonNoticeKeys, addonEnabled } from ".
 import { CLI_VERSION } from "../lib/version";
 import { type OnProgress, Fatal, log, requireRoot } from "../lib/log";
 import type { PanelHold } from "../lib/panel-holds";
+import { changeSetupPrefs, setupStepIds, setupView, type SetupChange } from "./setup";
+import { PANEL_USER_NAME_RE } from "../lib/panel-users";
 
 const MANAGER_STATE_DIR = addonStateDir("manager");
 const MANAGER_JOBS_DIR = `${MANAGER_STATE_DIR}/jobs`;
@@ -263,6 +265,7 @@ function describe(kind: ManagerJobKind, addon: string): string {
 export interface CreateJobOptions {
   jobsDir?: string;
   newsFile?: string;
+  setupFile?: string;
   sinceFile?: string;
   version?: string;
   stateDir?: string;
@@ -454,6 +457,22 @@ export async function runManagerAction(
       case "mark-news-seen":
         if (addon && !ADDONS[addon]) return failReply(`unknown addon '${addon}'`, undefined, options.emitReply !== false);
         return reply({ ok: true, data: markNewsSeen(addon ? [addon] : undefined, options.newsFile, options.version, readNewsSince(options.sinceFile)) }, options.emitReply !== false);
+      case "setup":
+      case "setup-pref": {
+        const user = flags.user ?? "";
+        if (!PANEL_USER_NAME_RE.test(user)) return failReply("not a valid panel user", undefined, options.emitReply !== false);
+        if (verb === "setup-pref") {
+          const step = flags.skip ?? flags.unskip;
+          if (step !== undefined && !setupStepIds().includes(step)) return failReply(`no Setup step '${step}'`, undefined, options.emitReply !== false);
+          const change: SetupChange | null = flags.skip !== undefined ? { skip: flags.skip }
+            : flags.unskip !== undefined ? { unskip: flags.unskip }
+            : flags.hidden === "true" || flags.hidden === "false" ? { hidden: flags.hidden === "true" }
+            : null;
+          if (!change) return failReply("'setup-pref' needs --skip, --unskip or --hidden=true|false", undefined, options.emitReply !== false);
+          changeSetupPrefs(user, change, options.setupFile);
+        }
+        return reply({ ok: true, data: await setupView(user, options.setupFile) }, options.emitReply !== false);
+      }
       case "watch-job": {
         const jobsDir = options.jobsDir ?? MANAGER_JOBS_DIR;
         const wanted = id || latestManagerJob(jobsDir);

@@ -5,7 +5,9 @@ import { ADDON_NAMES } from "../addons/catalog";
 import { JOB_ID_RE } from "../lib/job-store";
 import type { ManagerJobView } from "./action";
 import type { CliUpdateInfo } from "../lib/update-check";
-import { managerAction } from "./service";
+import { managerAction, setupAction } from "./service";
+import { PANEL_USER_NAME_RE } from "../lib/panel-users";
+import { setupPanelHtml, setupShows } from "./setup-view";
 
 /**
  * Every route here is already behind the SSO gate and the administrator gate at
@@ -18,7 +20,30 @@ export async function handleManagerRoute(
   path: string,
   _server: unknown,
   update: CliUpdateInfo | null = null,
+  auth: { user: string; roles: string[] } | null = null,
 ): Promise<Response | null> {
+  if (path === "/api/setup" && (req.method === "GET" || req.method === "POST")) {
+    if (req.method === "POST") {
+      const denied = guardMutation(req);
+      if (denied) return denied;
+    }
+    const user = auth?.user ?? "";
+    if (!PANEL_USER_NAME_RE.test(user)) return jsonResponse({ ok: false, error: "no panel user for this session" }, 400);
+    let change: string[] = [];
+    if (req.method === "POST") {
+      const body = await req.json().catch(() => null) as Record<string, unknown> | null;
+      change = typeof body?.skip === "string" ? [`--skip=${body.skip}`]
+        : typeof body?.unskip === "string" ? [`--unskip=${body.unskip}`]
+        : typeof body?.hidden === "boolean" ? [`--hidden=${body.hidden}`]
+        : [];
+      if (!change.length) return jsonResponse({ ok: false, error: "expected skip, unskip or hidden" }, 400);
+    }
+    const result = await setupAction(user, change);
+    if (!result.ok || !result.data) return jsonResponse({ ok: false, error: result.ok ? "no answer" : result.error }, 502);
+    const view = result.data;
+    return jsonResponse({ ok: true, data: { show: setupShows(view), html: setupPanelHtml(view) } });
+  }
+
   if (path === "/api/update" && req.method === "GET") {
     return jsonResponse({ ok: true, data: update });
   }

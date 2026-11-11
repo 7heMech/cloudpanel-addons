@@ -20,7 +20,9 @@ Requires an x86-64 CloudPanel host with AVX2 (Intel 2013+, AMD 2015+). On a VM,
 set the CPU type to `host`.
 
 When it finishes, open the new **Addons** tab in CloudPanel and enable the
-addons you want. System Tweaks is recommended.
+addons you want. System Tweaks is recommended. **Setup** on the addon pages
+suggests what to set up next, checked against the server; skip any step you
+don't want.
 
 ![CloudPanel Addons Manager](docs/screenshots/addons.png)
 

@@ -143,7 +143,7 @@ export function indexPage(
     : "";
   const unread = [...enabled, ...available].some((name) => addonNews(name, news.version, news.since, news.seen));
   const readAll = unread ? `<button class="btn" type="button" onclick="readAllNews(this)">Mark all read</button>` : "";
-  const content = `<div class="page-heading"><h1>Addons</h1><div class="page-actions">${readAll}<a class="btn" href="${UPDATE_PATH}">Updates</a></div></div>` +
+  const content = `<div class="page-heading"><h1>Addons</h1><div class="page-actions">${readAll}<button class="btn" type="button" onclick="clpSetupReopen()">Setup</button><a class="btn" href="${UPDATE_PATH}">Updates</a></div></div>` +
     managerJobFailure(options.job ?? null) +
     panelHoldsNotice(options.holds ?? []) +
     managerJobBlock(options.job ?? null, claimed) +

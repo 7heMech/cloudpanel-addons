@@ -21,6 +21,7 @@ dns:save-redirect                  admin
 dns:save-server                    admin
 dns:set-automatic                  admin
 dns:set-default                    admin
+dns:set-panel-host                 admin
 dns:site-status                    panel-user
 dns:take-over                      admin
 dns:zone-account                   admin
@@ -81,6 +82,8 @@ manager:job                        admin
 manager:mark-news-seen             admin
 manager:news-seen                  admin
 manager:reconcile                  admin
+manager:setup                      admin
+manager:setup-pref                 admin
 manager:update                     admin
 manager:watch-job                  admin stream
 panel-tweaks:branding              admin

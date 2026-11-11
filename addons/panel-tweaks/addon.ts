@@ -3,6 +3,7 @@ import { BRANDING_ASSET_PREFIX, handleBrandingAsset } from "./app/branding-asset
 import { panelTweaksUpkeep, runPanelTweaksAction, type PanelTweaksActionOptions } from "./action";
 import { PANEL_TWEAKS_TARGETS } from "./inject/targets";
 import type { AddonDefinition } from "../../lib/addon-definition";
+import { PANEL_TWEAKS_SETUP } from "./setup";
 
 export const PANEL_TWEAKS_ADDON: AddonDefinition = {
   name: "panel-tweaks",
@@ -10,6 +11,7 @@ export const PANEL_TWEAKS_ADDON: AddonDefinition = {
   description: "Site search, columns and CSV download, automatic SSL for native sites, mobile layouts, theme improvements and branding.",
   changed: [{ in: "2.0.0-rc.1", note: "The PHP version CloudPanel itself runs on moved to System Tweaks." }],
   targets: PANEL_TWEAKS_TARGETS,
+  setup: PANEL_TWEAKS_SETUP,
   handler: handle,
   // Read by the script on CloudPanel's own Sites page, which every panel user
   // sees; root answers with the rows that page already drew for the caller.

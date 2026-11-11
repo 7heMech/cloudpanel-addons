@@ -138,7 +138,7 @@ export function dashboardContent(state: SmtpState): string {
     ${state.skipped.length ? `<p class="hint skipped-note">Can't be relayed: ${state.skipped
       .map((site) => `${esc(site.domain)} (${esc(site.reason)})`).join("; ")}.</p>` : ""}
     </div>
-    <div class="card card-table"><div class="card-header smtp-profiles-header"><div><h2>Profiles</h2>
+    <div class="card card-table" id="smtp-profiles"><div class="card-header smtp-profiles-header"><div><h2>Profiles</h2>
       <p class="hint">A profile is one SMTP account. Its provider must accept the From addresses its sites send as.</p></div>
       <div class="smtp-profile-tools">
         <div class="smtp-default-field"><label class="hint" for="smtp-default">New sites</label>

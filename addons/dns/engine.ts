@@ -37,6 +37,8 @@ export interface PanelSite {
   cloudflareOnly: boolean;
   /** Set for a redirect domain, which is planned beside the sites but is not one. */
   redirect?: Redirect;
+  /** Set for the panel hostname, planned beside the sites too. */
+  panel?: true;
 }
 
 /** What a stand-in site on this server redirects to now. */
@@ -115,6 +117,8 @@ export interface SitePlan {
   held?: true;
   /** A redirect domain; `zone` is null while it is served by a stand-in site on this server. */
   redirect?: true;
+  /** The panel hostname. */
+  panel?: true;
 }
 
 export interface ManagedRecords {
@@ -133,6 +137,22 @@ export interface RunContext {
   /** When each provider asked to be left alone until, carried between runs. */
   backoff: { cloudflare: number; mailcow: number };
   standIns?: StandIns;
+  /** Whether CloudPanel serves an issued certificate for the panel hostname, so Cloudflare may proxy it. */
+  panelProxied?: boolean;
+}
+
+export const PANEL_PROFILE_ID = "panel-hostname";
+
+/**
+ * What the panel hostname is held to: its addresses here, proxied only once
+ * CloudPanel has its certificate, and the rule that lets the renewals through.
+ */
+export function panelProfile(proxied: boolean): Profile {
+  const row = (type: "A" | "AAAA", content: string) => ({ type, name: "{domain}", content, proxied, ttl: 1, priority: null, apexOnly: false });
+  return {
+    id: PANEL_PROFILE_ID, name: "Panel hostname", records: [row("A", "{ipv4}"), row("AAAA", "{ipv6}")], mailcow: false,
+    zone: { ssl: null, alwaysHttps: null, acmeFullSsl: true, webmailFullSsl: false, skipFirewallIps: [] },
+  };
 }
 
 interface ZoneState {
@@ -184,15 +204,20 @@ export class DnsRun {
   readonly entries: PanelSite[];
   private readonly redirects: Map<string, Redirect>;
   private readonly siteDomains: Set<string>;
+  private readonly panelHost: string | null;
 
   constructor(private readonly context: RunContext) {
     this.redirects = new Map(context.policy.redirects.map((redirect) => [redirect.source, redirect]));
     this.siteDomains = new Set(context.sites.map((site) => site.domain));
+    const host = context.policy.panelHost;
+    // A site or redirect domain of the same name is that entry's, and the panel hostname waits.
+    this.panelHost = host && !this.siteDomains.has(host) && !this.redirects.has(host) ? host : null;
     this.entries = [
       ...context.sites.filter((site) => !this.redirects.has(site.domain)),
       ...context.policy.redirects.map((redirect) => ({
         id: 0, domain: redirect.source, type: "redirect", createdAt: 0, selfSigned: false, cloudflareOnly: false, redirect,
       })),
+      ...this.panelHost ? [{ id: 0, domain: this.panelHost, type: "panel", createdAt: 0, selfSigned: false, cloudflareOnly: false, panel: true as const }] : [],
     ];
     this.cloudflareBackoff = { until: context.backoff.cloudflare };
     this.mailcowBackoff = { until: context.backoff.mailcow };
@@ -205,6 +230,10 @@ export class DnsRun {
     this.mailcow = url && context.secrets.mailcowKey
       ? new MailcowApi(url, context.secrets.mailcowKey, context.fetch, this.mailcowBackoff)
       : null;
+  }
+
+  get panelProxied(): boolean {
+    return this.context.panelProxied === true;
   }
 
   backoff(): { cloudflare: number; mailcow: number } {
@@ -283,6 +312,7 @@ export class DnsRun {
   }
 
   private profileOf(domain: string): Profile | null {
+    if (domain === this.panelHost) return panelProfile(this.context.panelProxied === true);
     const redirect = this.redirects.get(domain);
     const id = redirect ? redirect.profileId : this.context.policy.assignments[domain];
     return this.context.policy.profiles.find((profile) => profile.id === id) ?? null;
@@ -484,6 +514,7 @@ export class DnsRun {
     const plan: SitePlan = {
       domain: site.domain, profileId: profile?.id ?? null, mode: this.context.policy.automatic ? "enforce" : "report", zone: null,
       changes: [], problems: [], zoneChoices: [], certificateNames: [], ...redirect && { redirect: true as const },
+      ...site.panel && { panel: true as const },
     };
     this.diffs.delete(site.domain);
     if (!profile && !redirect) return plan;
@@ -571,6 +602,7 @@ export class DnsRun {
       this.standInChange(redirect.source, resolved.ref.zone.name, resolved.ref.zone.status === "active", plan);
       return plan;
     }
+    if (site.panel) return plan;
     const addresses = diff.wanted.filter((record) => ["A", "AAAA", "CNAME"].includes(record.type));
     plan.certificateNames = [site.domain, `www.${site.domain}`].filter((name) => addresses.some((record) => record.name === name));
     return plan;
