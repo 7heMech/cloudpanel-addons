@@ -7,7 +7,7 @@ import type { ManagerJobView } from "./action";
 import type { CliUpdateInfo } from "../lib/update-check";
 import { managerAction, setupAction } from "./service";
 import { PANEL_USER_NAME_RE } from "../lib/panel-users";
-import { setupPanelHtml, setupSuggests } from "./setup-view";
+import { setupPanelHtml, setupShows } from "./setup-view";
 
 /**
  * Every route here is already behind the SSO gate and the administrator gate at
@@ -41,7 +41,7 @@ export async function handleManagerRoute(
     const result = await setupAction(user, change);
     if (!result.ok || !result.data) return jsonResponse({ ok: false, error: result.ok ? "no answer" : result.error }, 502);
     const view = result.data;
-    return jsonResponse({ ok: true, data: { show: !view.hidden && setupSuggests(view), html: setupPanelHtml(view) } });
+    return jsonResponse({ ok: true, data: { show: setupShows(view), html: setupPanelHtml(view) } });
   }
 
   if (path === "/api/update" && req.method === "GET") {

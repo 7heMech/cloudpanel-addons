@@ -15,6 +15,11 @@ export function setupSuggests(view: SetupView): boolean {
   return view.steps.some((step) => step.state === "todo");
 }
 
+/** Whether the helper shows: a step to do, which a done step falling back counts as, unless this administrator hid it. */
+export function setupShows(view: SetupView): boolean {
+  return !view.hidden && setupSuggests(view);
+}
+
 function actions(step: SetupItem): string {
   if (step.state === "skipped") return `<button class="btn" type="button" data-setup-unskip="${esc(step.id)}" aria-label="Undo skipping ${esc(step.title)}">Undo</button>`;
   if (step.state !== "todo") return "";

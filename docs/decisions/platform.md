@@ -711,6 +711,15 @@ any step can be skipped, and the helper hides itself once nothing is left to
 suggest. Skips and Hide are kept per administrator; the Addons page's Setup
 button brings it back.
 
+A step is checked afresh each time, so a done step can fall back to to do, as
+Connect DNS does when its token lacks a permission a newer release needs. It
+then reads like any suggestion, its reason saying what is missing and Open going
+to the fix, and the helper shows again with its dot even when everything else is
+done. That is how an existing install learns of the change. A skip still
+stands, and Hide is not undone: the addon's own page says it too. A permission
+or setting that is only optional never makes a step to do; it belongs on the
+addon's page.
+
 Each addon declares its steps on `AddonDefinition.setup`: an id, a level, a
 title, the page and card that set it up, and a `check` answering done, to do or
 not applicable with a one-line reason. Remote backups, which is CloudPanel's
@@ -725,9 +734,9 @@ place that knows it. The manager renders the list and the page fetches it after
 it paints, keeping in the tab whether the helper showed, so the header does not
 move when the answer comes. The checks run on every page an administrator
 opens, so they read local files, the panel database and local services only,
-never Cloudflare, Hetzner or a DNS lookup. What only an API knows is what the
-addon last saw: Firewall records Hetzner's switches whenever its page or a
-switch reads them. A check that fails reads as a suggestion with its error.
+never Cloudflare, Hetzner or a DNS lookup. What only an API knows, such as a
+token's permissions, is what the addon recorded when it last asked. A check
+that fails reads as a suggestion with its error.
 
 CloudPanel's own pages do not show the helper; it would need a block of its own
 in the panel's header, beside the Addons link and the update notice.
