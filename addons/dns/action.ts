@@ -40,7 +40,7 @@ import { isStandInSite } from "../../lib/stand-ins";
 import { clpctlStandIns, readStandIns, retryStandInCertificates, type StandInPaths } from "./stand-in";
 import { clpctlIssue, NEW_SITE_WINDOW, requestSsl, retryCertificates, type Issue, type SslRequest } from "./ssl";
 import { readState, writeState } from "../../lib/root-state";
-import { grants, tokenListUrl, type Held, type TokenAccess } from "./access";
+import { grants, selfReadPermission, targetFor, tokenListUrl, type Held, type TokenAccess } from "./access";
 import { neededPermissions, PERMISSIONS, tokenTemplate, type PermissionName, type TokenTemplate } from "./token";
 
 type DnsVerb = keyof typeof DNS_VERBS;
@@ -123,12 +123,14 @@ export interface AccessView {
 export function accessView(token: TokenAccess | undefined, profiles: Profile[]): AccessView | null {
   if (!token) return null;
   const rows = neededPermissions(profiles).map(({ name, permission, usedFor }): AccessView["rows"][number] => {
+    // An account-owned token reads itself with the account's own permission.
+    const label = name === "tokens" ? selfReadPermission(token.owner) : permission.label;
     const coverage = token.readable ? token.coverage[name] : undefined;
-    if (!coverage) return { label: permission.label, usedFor, held: "unknown" };
+    if (!coverage) return { label, usedFor, held: "unknown" };
     const more = (coverage.lackingCount ?? 0) - (coverage.lacking?.length ?? 0);
     const detail = coverage.held === "some" && coverage.lacking
       ? `Not on ${coverage.lacking.join(", ")}${more > 0 ? ` and ${more} more` : ""}` : undefined;
-    return { label: permission.label, usedFor, held: coverage.held, ...(detail ? { detail } : {}) };
+    return { label, usedFor, held: coverage.held, ...(detail ? { detail } : {}) };
   });
   return { reach: token.readable ? token.reach : null, note: token.readable ? null : token.reason, editUrl: tokenListUrl(token), rows };
 }
@@ -1351,5 +1353,5 @@ export function dnsTokenHolds(connectionId: string, permission: PermissionName, 
   const files = new Files({ ...DEFAULT_DNS_PATHS, ...paths });
   const token = files.status().connections.find((connection) => connection.id === connectionId)?.token;
   if (!token?.readable) return null;
-  return grants(token.grants, PERMISSIONS[permission], { accountId: zone.accountId, zoneId: zone.id });
+  return grants(token.grants, PERMISSIONS[permission], targetFor(PERMISSIONS[permission], zone));
 }

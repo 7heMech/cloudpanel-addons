@@ -311,9 +311,11 @@ export class CloudflareApi {
       const groups = Array.isArray(policy.permission_groups) ? policy.permission_groups : [];
       return {
         allow: policy.effect === "allow",
-        permissions: groups.flatMap((group) => {
+        permissions: groups.map((group) => {
           const name = group && typeof group === "object" ? (group as Record<string, unknown>).name : undefined;
-          return typeof name === "string" && name.length <= 120 ? [name] : [];
+          // Matched by name: a group without one would read as a permission the token lacks.
+          if (typeof name !== "string" || !name || name.length > 120) throw new ProviderError("Cloudflare", "returned a permission group without a name");
+          return name;
         }),
         resources: parseResources(policy.resources),
       };

@@ -257,7 +257,7 @@ missing zones; Cloudflare refuses a zone
 create without it by naming an internal permission, `account.zone.create`,
 which the page reports as Zone Edit. The URL uses the keys in Cloudflare's
 [template reference](https://developers.cloudflare.com/fundamentals/api/how-to/account-owned-token-template/),
-plus `config_settings`, `zone_waf`, `dynamic_redirect` (Single Redirect) and `firewall_services`,
+plus `config_settings`, `zone_waf` and `dynamic_redirect` (Single Redirect),
 which the reference leaves out but are the dashboard's own permission names. The dashboard drops an unknown key without saying so, which is
 why the page also lists the permissions. The template has no parameter for
 Client IP Address Filtering, so the page shows the server's detected addresses
@@ -301,8 +301,15 @@ grants of permission group names over resources, and decided locally:
   page shows a held permission, a missing one, or one missing on some zones,
   naming up to three. It lists only what the profiles use, and names what is
   missing, never a count.
-- The zones a token reaches are described from its DNS Write grants: all
-  zones, all zones in named accounts, or a number of chosen zones.
+- The zones a token reaches are described from where DNS Write is allowed,
+  less where it is denied: all zones, all zones in named accounts, or a number
+  of chosen zones.
+- With no zone or account listed to check against, only a grant on every zone
+  or account counts as holding a permission.
+- A permission group without a name makes the whole read unavailable, rather
+  than reading as a permission the token lacks.
+- The token-reading row is API Tokens Read for a user token and Account API
+  Tokens Read for an account-owned one.
 
 Cloudflare has no address for editing one token, so **Edit in Cloudflare**
 opens the owner's token list: `/profile/api-tokens`, or
@@ -310,7 +317,8 @@ opens the owner's token list: `/profile/api-tokens`, or
 
 Other addons ask through `dnsTokenHolds(connectionId, permission, zone)` in
 `addons/dns/action.ts`, which answers from the stored read without a network
-call, and returns null when that is not known (no check yet, or a token that
+call, checking each permission at its own scope (the zone, its account, or the
+token's owner), and returns null when that is not known (no check yet, or a token that
 cannot read itself).
 
 Zone-scoped IP Access rules (`/zones/{zone_id}/firewall/access_rules/rules`)

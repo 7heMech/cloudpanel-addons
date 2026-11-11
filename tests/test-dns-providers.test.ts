@@ -312,4 +312,33 @@ describe("a token's own permissions", () => {
     ], { zones: [], accounts: [{ id: agency, name: "Agency" }] });
     expect(inAccount.readable && inAccount.reach).toBe("All zones in Agency");
   });
+
+  test("a group without a name makes the read unavailable rather than a missing permission", async () => {
+    const { fake } = cloudflare();
+    fake.tokens.get(USER_TOKEN)!.policies = [{ effect: "allow", permission_groups: [{ id: "f".repeat(32) } as { id: string; name: string }], resources: { [`${ZONE}*`]: "*" } }];
+    const api = new CloudflareApi(USER_TOKEN, fake.fetch);
+    const verified = await api.verify();
+    await expect(api.policies(verified, verified.id!)).rejects.toThrow("permission group without a name");
+  });
+
+  test("with nothing reached, only a grant on every zone holds a permission", () => {
+    const owner = { owner: "user" as const, accountId: null };
+    const one = readAccess(owner, [{ allow: true, permissions: ["DNS Write"], resources: [{ account: "*", zone: "1".repeat(32) }] }], { zones: [], accounts: [] });
+    const every = readAccess(owner, [{ allow: true, permissions: ["DNS Write"], resources: [{ account: "*", zone: "*" }] }], { zones: [], accounts: [] });
+    expect(one.readable && one.coverage.dns).toEqual({ held: "no" });
+    expect(every.readable && every.coverage.dns).toEqual({ held: "yes" });
+  });
+
+  test("reach comes from DNS Write alone, less its denies", () => {
+    const owner = { owner: "user" as const, accountId: null };
+    const clients = "b".repeat(32);
+    const reached = { zones: [], accounts: [{ id: clients, name: "Clients" }] };
+    const denied = readAccess(owner, [
+      { allow: true, permissions: ["DNS Write"], resources: [{ account: "*", zone: "*" }] },
+      { allow: false, permissions: ["DNS Write"], resources: [{ account: clients, zone: "*" }, { account: "*", zone: "1".repeat(32) }] },
+    ], reached);
+    expect(denied.readable && denied.reach).toBe("All zones, except the zones in Clients and 1 zone");
+    const other = readAccess(owner, [{ allow: true, permissions: ["Account Settings Read"], resources: [{ account: "*", zone: "*" }] }], reached);
+    expect(other.readable && other.reach).toBe("No zones");
+  });
 });

@@ -68,17 +68,28 @@ export function parseResources(value: unknown): Resource[] {
 const namesPermission = (grant: Grant, permission: PermissionDef) => grant.permissions.some((name) => permission.grantedBy.includes(name));
 const matches = (pattern: string, value: string) => pattern === "*" || pattern === value;
 
-function covers(resource: Resource, target: { accountId: string; zoneId?: string } | "user"): boolean {
+type Target = { accountId: string; zoneId?: string } | "user";
+
+function covers(resource: Resource, target: Target): boolean {
   if (target === "user") return Boolean(resource.user);
   if (resource.user || !matches(resource.account, target.accountId)) return false;
   return target.zoneId ? matches(resource.zone, target.zoneId) : resource.zone === "*";
 }
 
 /** A deny policy wins over an allow, as Cloudflare evaluates them. */
-export function grants(list: Grant[], permission: PermissionDef, target: { accountId: string; zoneId?: string } | "user"): boolean {
+export function grants(list: Grant[], permission: PermissionDef, target: Target): boolean {
   const relevant = list.filter((grant) => namesPermission(grant, permission) && grant.resources.some((resource) => covers(resource, target)));
   return relevant.some((grant) => grant.allow) && !relevant.some((grant) => !grant.allow);
 }
+
+/** What a permission is checked against for a zone: the zone, its account, or the token's owner. */
+export function targetFor(permission: PermissionDef, zone: { id: string; accountId: string }): Target {
+  if (permission.scope === "user") return "user";
+  return permission.scope === "account" ? { accountId: zone.accountId } : { accountId: zone.accountId, zoneId: zone.id };
+}
+
+/** No Cloudflare ID, so only a wildcard grant covers it: a zone or account the token may reach later. */
+const ANY = "-";
 
 export interface Reached {
   zones: { id: string; name: string; accountId: string }[];
@@ -91,27 +102,33 @@ function coverageOf(list: Grant[], permission: PermissionDef, reached: Reached):
     : permission.scope === "account"
       ? reached.accounts.map((account) => ({ name: account.name || account.id, target: { accountId: account.id } }))
       : [];
-  // Nothing reached to check against: whether any policy names it at all.
-  if (!targets.length) return { held: list.some((grant) => grant.allow && namesPermission(grant, permission)) ? "yes" : "no" };
+  // Nothing reached to check against: only a grant on every zone or account holds it.
+  if (!targets.length) return { held: grants(list, permission, permission.scope === "zone" ? { accountId: ANY, zoneId: ANY } : { accountId: ANY }) ? "yes" : "no" };
   const lacking = targets.filter(({ target }) => !grants(list, permission, target)).map(({ name }) => name).sort();
   if (!lacking.length) return { held: "yes" };
   if (lacking.length === targets.length) return { held: "no" };
   return { held: "some", lacking: lacking.slice(0, LACKING_SHOWN), lackingCount: lacking.length };
 }
 
-/** "All zones", "All zones in Agency", "3 chosen zones", from what DNS: Edit was given on. */
+/** "All zones", "All zones in Agency", "3 chosen zones", from where DNS Write is allowed, less where it is denied. */
 function reachOf(list: Grant[], reached: Reached): string {
-  const dns = list.filter((grant) => grant.allow && namesPermission(grant, PERMISSIONS.dns));
-  const resources = (dns.length ? dns : list.filter((grant) => grant.allow)).flatMap((grant) => grant.resources).filter((resource) => !resource.user);
-  if (resources.some((resource) => resource.account === "*" && resource.zone === "*")) return "All zones";
   const names = new Map(reached.accounts.map((account) => [account.id, account.name || account.id]));
-  const accounts = [...new Set(resources.filter((resource) => resource.zone === "*").map((resource) => resource.account))];
-  const zones = new Set(resources.filter((resource) => resource.zone !== "*" && !accounts.includes(resource.account)).map((resource) => resource.zone));
-  const parts = [
-    accounts.length ? `All zones in ${accounts.map((id) => names.get(id) ?? "another account").join(", ")}` : "",
-    zones.size ? `${zones.size} chosen zone${zones.size === 1 ? "" : "s"}` : "",
-  ].filter(Boolean);
-  return parts.join(" and ") || "No zones";
+  const describe = (resources: Resource[], all: string): string[] => {
+    if (resources.some((resource) => resource.account === "*" && resource.zone === "*")) return [all];
+    const accounts = [...new Set(resources.filter((resource) => resource.zone === "*").map((resource) => resource.account))];
+    const zones = new Set(resources.filter((resource) => resource.zone !== "*" && !accounts.includes(resource.account)).map((resource) => resource.zone));
+    return [
+      accounts.length ? `${all} in ${accounts.map((id) => names.get(id) ?? "another account").join(", ")}` : "",
+      zones.size ? `${zones.size} ${all === "All zones" ? "chosen " : ""}zone${zones.size === 1 ? "" : "s"}` : "",
+    ].filter(Boolean);
+  };
+  const resources = (allow: boolean) => list
+    .filter((grant) => grant.allow === allow && namesPermission(grant, PERMISSIONS.dns))
+    .flatMap((grant) => grant.resources).filter((resource) => !resource.user);
+  const allowed = describe(resources(true), "All zones").join(" and ");
+  if (!allowed) return "No zones";
+  const denied = describe(resources(false), "the zones").join(" and ");
+  return denied ? `${allowed}, except ${denied === "the zones" ? "all" : denied}` : allowed;
 }
 
 export function readAccess(owner: TokenOwner, list: Grant[], reached: Reached): TokenAccess {
