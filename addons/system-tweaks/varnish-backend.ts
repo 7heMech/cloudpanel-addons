@@ -16,6 +16,7 @@ import {
   rmdirSync, rmSync, symlinkSync, unlinkSync, writeFileSync,
 } from "node:fs";
 import { join } from "node:path";
+import { at } from "../../lib/no-follow";
 import { failAction } from "../../lib/action";
 import { normalizeIdentityHostname } from "../../lib/panel-identity";
 import { runCommand, type CommandResult } from "../../lib/command";
@@ -177,11 +178,6 @@ function openDirNoFollow(path: string): number | null {
   } catch {
     return null;
   }
-}
-
-/** A path relative to an open directory, like the `*at()` calls: only its last component is looked up. */
-function at(dirFd: number, name: string): string {
-  return `/proc/self/fd/${dirFd}/${name}`;
 }
 
 /**

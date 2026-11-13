@@ -1371,13 +1371,18 @@ function rewriteDotenv(file: string, ctx: RunContext): void {
   if (!writeAsSiteUser(ctx.stgUser, file, content)) failJob(ctx, `could not write the clone's .env`);
 }
 
-/** Read as root, so nothing the source's user cannot read is missed; written as `owner`, who then owns every file. */
-async function runTarCopy(source: string, destination: string, owner: string): Promise<number> {
+/**
+ * Read as the source's user and written as `owner`, who then owns every file.
+ * Root reading by path would follow a site directory its user has replaced
+ * with a link, and hand whatever it points at to `owner`. A file the source's
+ * user cannot read is left out with a warning.
+ */
+async function runTarCopy(source: string, reader: string, destination: string, owner: string): Promise<number> {
   let sender: Bun.Subprocess<"ignore", "pipe", "pipe"> | null = null;
   let receiver: Bun.Subprocess<ReadableStream, "pipe", "pipe"> | null = null;
   try {
     sender = Bun.spawn({
-      cmd: ["tar", "-C", source, "-cf", "-", "."],
+      cmd: ["runuser", "-u", reader, "--", "tar", "--ignore-failed-read", "-C", source, "-cf", "-", "."],
       stdin: "ignore",
       stdout: "pipe",
       stderr: "pipe",
@@ -2013,7 +2018,7 @@ async function cmdRun(id: string, paths: StagerActionPaths): Promise<void> {
     } else {
       setStep(ctx, "copying files");
       const sourceDir = `/home/${ctx.srcUser}/htdocs/${ctx.source}`;
-      const copyCode = await runTarCopy(sourceDir, destination, ctx.stgUser);
+      const copyCode = await runTarCopy(sourceDir, ctx.srcUser, destination, ctx.stgUser);
       if (copyCode >= 2) failJob(ctx, `copying files failed (tar exit ${copyCode})`);
     }
 
@@ -2284,7 +2289,7 @@ async function promoteFiles(ctx: PromoteContext): Promise<void> {
   ctx.stageRoot = join(htdocsOf(ctx.dstUser), `.clp-stager-promote-${ctx.id}`);
   asSiteUser(ctx.dstUser, "rm", ["-rf", "--", ctx.stageRoot]);
   if (!asSiteUser(ctx.dstUser, "mkdir", ["-m", "755", "--", ctx.stageRoot]).ok) failJob(ctx, `could not create ${ctx.stageRoot}; nothing was changed`);
-  const copyCode = await runTarCopy(ctx.srcRoot, ctx.stageRoot, ctx.dstUser);
+  const copyCode = await runTarCopy(ctx.srcRoot, ctx.srcUser, ctx.stageRoot, ctx.dstUser);
   if (copyCode >= 2) failJob(ctx, `copying the staging files failed (tar exit ${copyCode})`);
   // A clone rewrites the configuration in its site directory or in its root
   // directory, such as `public`, so both are the live site's own.
@@ -2660,9 +2665,7 @@ export async function runStagerAction(argv: string[], options?: StagerActionOpti
     if (action.verb === "prune" && !readPanelIdentity(paths.panelIdentityFile)) {
       failAction("the CloudPanel panel identity is missing or malformed");
     }
-    mkdirSync(paths.lockDir, { recursive: true });
     mkdirSync(paths.jobsDir, { recursive: true });
-    chmodSync(paths.lockDir, 0o700);
     chmodSync(paths.jobsDir, 0o700);
 
     let lock: FileLockHandle | null = null;

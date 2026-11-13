@@ -1,10 +1,8 @@
 import { LOCK_DIR, addonStateDir, PANEL_DB, DISTRO_NGINX_SITES_DIR } from "../../lib/paths";
 import { writeFileAtomic } from "../../lib/atomic-write";
 import { Database } from "bun:sqlite";
-import {
-  chmodSync, existsSync, lstatSync, mkdirSync, readFileSync, rmSync,
-} from "node:fs";
-import { dirname, join } from "node:path";
+import { existsSync, lstatSync, readFileSync, rmSync } from "node:fs";
+import { join } from "node:path";
 import { errorMessage } from "../../lib/errors";
 import { replyToAction, failAction } from "../../lib/action";
 import { runCommand, type CommandResult } from "../../lib/command";
@@ -294,8 +292,6 @@ async function listState(paths: CloudflareActionPaths, protocols?: FirewallOptio
 }
 
 async function withPolicyLock<T>(paths: CloudflareActionPaths, body: () => Promise<T>): Promise<T> {
-  mkdirSync(dirname(paths.lockFile), { recursive: true });
-  chmodSync(dirname(paths.lockFile), 0o700);
   return withFileLock(paths.lockFile, 30, "another Cloudflare-only change is running", body);
 }
 

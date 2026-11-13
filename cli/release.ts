@@ -155,7 +155,7 @@ function derUtf8(text: string): Buffer {
 
 interface Statement {
   predicateType?: string;
-  subject?: { digest?: { sha256?: string } }[];
+  subject?: { name?: string; digest?: { sha256?: string } }[];
 }
 
 function statementOf(bundle: { dsseEnvelope?: { payload?: string } }): Statement | null {
@@ -199,17 +199,23 @@ export async function verifyAttestation(
 
   for (const artifact of artifacts) {
     const digest = sha256(artifact.bytes);
-    const bundle = bundles.find((candidate) => {
+    const candidates = bundles.filter((candidate) => {
       const statement = statementOf(candidate);
       return statement?.predicateType === "https://slsa.dev/provenance/v1" &&
-        statement.subject?.some((subject) => subject.digest?.sha256 === digest);
+        statement.subject?.some((subject) => subject.name === artifact.name && subject.digest?.sha256 === digest);
     });
-    if (!bundle) fatal(`provenance verification failed for ${artifact.name}: no attestation names these bytes`);
-    try {
-      verifier.verify(toSignedEntity(bundleFromJSON(bundle)), provenancePolicy(rel.tag));
-    } catch (error) {
-      fatal(`provenance verification failed for ${artifact.name}: ${errorMessage(error)}`);
-    }
+    if (!candidates.length) fatal(`provenance verification failed for ${artifact.name}: no attestation names these bytes under this name`);
+    let failure = "";
+    const verified = candidates.some((bundle) => {
+      try {
+        verifier.verify(toSignedEntity(bundleFromJSON(bundle)), provenancePolicy(rel.tag));
+        return true;
+      } catch (error) {
+        failure = errorMessage(error);
+        return false;
+      }
+    });
+    if (!verified) fatal(`provenance verification failed for ${artifact.name}: ${failure}`);
     log.ok(`${artifact.name} provenance verified`);
   }
 }

@@ -2,12 +2,12 @@ import { describe, expect, test } from "bun:test";
 import { Database } from "bun:sqlite";
 import { execFileSync } from "node:child_process";
 import {
-  existsSync, lstatSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, statSync, symlinkSync,
+  closeSync, existsSync, lstatSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, openSync, rmSync, statSync, symlinkSync,
   utimesSync, writeFileSync,
 } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { makeSnapshot, parseInstaticAction, pruneSnapshots, validateInstaticDomain } from "../addons/instatic/action";
+import { makeSnapshot, parseInstaticAction, pruneSnapshots, sqliteBackup, validateInstaticDomain } from "../addons/instatic/action";
 import { dashboardView, jobView, newInstanceView, pendingCreations } from "../addons/instatic/app/views";
 import type { InstanceView, InstaticJobView } from "../addons/instatic/app/service";
 import { isNewerThan } from "../addons/instatic/app/tags";
@@ -86,6 +86,32 @@ test("makeSnapshot archives non-SQLite regular data files", () => {
     const restoredFile = join(restored, "data", "notes.txt");
     expect(readFileSync(restoredFile, "utf8")).toBe("plain data\n");
     expect(statSync(restoredFile).mtimeMs).toBeCloseTo(mtime.getTime(), -2);
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("a SQLite backup refuses a database it reached through a link", () => {
+  const root = mkdtempSync(join(tmpdir(), "instatic-sqlite-link-"));
+  try {
+    const data = join(root, "data");
+    mkdirSync(data);
+    mkdirSync(join(root, "elsewhere"));
+    for (const file of [join(data, "instatic.db"), join(root, "elsewhere", "panel.db")]) {
+      const db = new Database(file);
+      db.run("CREATE TABLE t (x)");
+      db.close();
+    }
+    // As if the name had been swapped for a link after it was checked.
+    symlinkSync(join(root, "elsewhere", "panel.db"), join(data, "swapped.db"));
+    const dir = openSync(data, "r");
+    try {
+      expect(sqliteBackup(join(data, "swapped.db"), join(root, "out.db"), { dir, name: "instatic.db" })).toBe(false);
+      expect(existsSync(join(root, "out.db"))).toBe(false);
+      expect(sqliteBackup(join(data, "instatic.db"), join(root, "out.db"), { dir, name: "instatic.db" })).toBe(true);
+    } finally {
+      closeSync(dir);
+    }
   } finally {
     rmSync(root, { recursive: true, force: true });
   }

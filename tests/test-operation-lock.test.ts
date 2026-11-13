@@ -3,7 +3,7 @@
 // Twig templates and Nginx fragments, so the second one has to wait and, when
 // it gives up, say what it was waiting for.
 import { expect, test } from "bun:test";
-import { mkdtempSync, rmSync } from "node:fs";
+import { chmodSync, lstatSync, mkdirSync, mkdtempSync, readdirSync, rmSync, statSync, symlinkSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { withFileLockSync } from "../lib/file-lock";
@@ -133,5 +133,21 @@ test("a lock directory others could write is moved aside, and a linked lock file
     expect(readFileSync(victim, "utf8")).toBe("keep");
   } finally {
     rmSync(base, { recursive: true, force: true });
+  }
+});
+
+test("a lock directory planted as a link is moved aside, and what it points at is left alone", () => {
+  const root = mkdtempSync(join(tmpdir(), "clp-lock-link-"));
+  try {
+    const target = join(root, "target");
+    mkdirSync(target, { mode: 0o755 });
+    chmodSync(target, 0o755);
+    symlinkSync(target, join(root, "locks"));
+    withOperationLockSync("test", () => {}, { lockDir: join(root, "locks") });
+    expect(statSync(target).mode & 0o777).toBe(0o755);
+    expect(readdirSync(target)).toEqual([]);
+    expect(lstatSync(join(root, "locks")).isDirectory()).toBe(true);
+  } finally {
+    rmSync(root, { recursive: true, force: true });
   }
 });
