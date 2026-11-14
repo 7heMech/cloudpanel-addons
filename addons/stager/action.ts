@@ -1377,12 +1377,12 @@ function rewriteDotenv(file: string, ctx: RunContext): void {
  * with a link, and hand whatever it points at to `owner`. A file the source's
  * user cannot read is left out, and counted in `unread`.
  */
-async function runTarCopy(source: string, reader: string, destination: string, owner: string): Promise<{ code: number; unread: number }> {
+export async function runTarCopy(source: string, reader: string, destination: string, owner: string): Promise<{ code: number; unread: number }> {
   let sender: Bun.Subprocess<"ignore", "pipe", "pipe"> | null = null;
   let receiver: Bun.Subprocess<ReadableStream, "pipe", "pipe"> | null = null;
   try {
     sender = Bun.spawn({
-      cmd: ["runuser", "-u", reader, "--", "tar", "--ignore-failed-read", "-C", source, "-cf", "-", "."],
+      cmd: ["runuser", "-u", reader, "--", "env", "LC_ALL=C", "tar", "--ignore-failed-read", "-C", source, "-cf", "-", "."],
       stdin: "ignore",
       stdout: "pipe",
       stderr: "pipe",
