@@ -319,10 +319,7 @@ The token cookie is scoped to the whole panel rather than to `/addons`, because
 an addon page mounted into one of CloudPanel's own site pages runs at that
 page's path and has to read it. Path is not what protects it: the panel is a
 single origin, so any panel page could read the cookie at any path, and the
-same-origin check and `SameSite=Strict` are what refuse a forged request. Every
-response that sets it also expires the `/addons`-scoped cookie an earlier
-release set, which it does not otherwise replace: a browser holding both sends
-both, and the two ends of the check would read different values.
+same-origin check and `SameSite=Strict` are what refuse a forged request.
 
 ## One response and one body policy
 

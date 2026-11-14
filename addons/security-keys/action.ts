@@ -5,10 +5,10 @@ import { SECURITY_KEYS_VERBS } from "./verbs";
 import { TOKEN_TTL_SECONDS, mfaMark, recordSignIn } from "./sign-ins";
 import { createHmac, randomBytes } from "node:crypto";
 import {
-  chmodSync, closeSync, constants as fs, existsSync, fchmodSync, fchownSync, fstatSync, linkSync, lstatSync, mkdirSync, openSync,
+  closeSync, constants as fs, existsSync, fchmodSync, fchownSync, fstatSync, linkSync, lstatSync, mkdirSync, openSync,
   readdirSync, readFileSync, readSync, rmSync, writeSync,
 } from "node:fs";
-import { dirname, join } from "node:path";
+import { join } from "node:path";
 import { ActionFailure, emitActionOk, failAction, parseJsonRequest, reportActionFailure } from "../../lib/action";
 import { oneLine } from "../../lib/validate";
 import { withFileLockSync } from "../../lib/file-lock";
@@ -208,8 +208,6 @@ function allowedRole(settings: Settings, account: PanelAccount): boolean {
 }
 
 function withStoreLock<T>(paths: SecurityKeysPaths, body: () => T): T {
-  mkdirSync(dirname(paths.lockFile), { recursive: true });
-  chmodSync(dirname(paths.lockFile), 0o700);
   return withFileLockSync(paths.lockFile, 30, "another security key change is running", body);
 }
 

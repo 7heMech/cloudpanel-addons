@@ -98,11 +98,13 @@ through Instatic's export and import APIs. The live instance's own content is
 exported first and kept with the job. It keeps its container, port, key, users
 and integration secrets; the operator must publish it once afterwards.
 
-Root reads the staging copy, but every write, removal and move inside a site's
-document root runs as that site's user: both trees belong to site users, and
-root acting by path there would follow a link such as a `wp-content` pointing at
-another site. The copy is therefore owned by the site's user as it is written,
-for a clone as for a promote.
+Every read, write, removal and move inside a site's document root runs as that
+site's user: both trees belong to site users, and root acting by path there
+would follow a link such as a `wp-content`, or the document root itself,
+pointing at another site or at root's own files. The copy is read as the source
+site's user, so a file that user cannot read is left out, named in the job's
+log and counted in its notes, and written as the target's, who owns it as it is
+written, for a clone as for a promote.
 
 The replaced document root, the database dump and the content export are kept
 with the job record and expire with it. A promote that dies between the two

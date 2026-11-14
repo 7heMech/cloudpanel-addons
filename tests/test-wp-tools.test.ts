@@ -632,7 +632,9 @@ test("maintenance runs after the native bypass commits, so its failure preserves
   const original = seedBasicAuth();
   writeFileSync(join(root, "maintenance.conf"), "");
   writeFileSync(maintenanceFile("shop.example.com", "on"), "");
-  writeFileSync(join(root, "locks"), "not a directory");
+  // A directory where the site's lock file belongs makes taking the lock fail.
+  mkdirSync(join(root, "locks"), { mode: 0o700 });
+  mkdirSync(join(root, "locks", `maintenance-${Bun.CryptoHasher.hash("sha256", "shop.example.com", "hex")}.lock`));
   await expect(act(["sign-in", SHOP, FROM, ALLOW_BASIC, "--add-bypass"], { run: okCommand })).rejects.toThrow();
   expect(basicAuthIps()).toBe("203.0.113.9");
   expect(readFileSync(join(root, "vhosts", "shop.example.com.conf"), "utf8")).not.toBe(original);

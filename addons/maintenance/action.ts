@@ -262,9 +262,6 @@ function writeBypasses(
   next: (current: string[]) => string[],
 ): Promise<string[]> {
   const dir = siteDir(paths, domain, true);
-  assertDirectory(paths.lockDir);
-  mkdirSync(paths.lockDir, { recursive: true, mode: 0o700 });
-  chmodSync(paths.lockDir, 0o700);
   const lockKey = Bun.CryptoHasher.hash("sha256", domain, "hex");
   return withFileLock(
     join(paths.lockDir, `maintenance-${lockKey}.lock`),
@@ -535,7 +532,6 @@ export async function executeMaintenanceAction(
     assertDirectory(globalDir);
     mkdirSync(globalDir, { recursive: true, mode: 0o711 });
     chmodSync(globalDir, 0o711);
-    mkdirSync(paths.lockDir, { recursive: true, mode: 0o755 });
     const onPath = join(globalDir, "on");
 
     const enabled = verb === "global-enable";

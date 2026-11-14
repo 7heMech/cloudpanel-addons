@@ -229,7 +229,8 @@ test("recreate migrates stopped legacy data and keeps metadata at its original p
     expect(run).toContain(`${storage.dataDir}:/app/data`);
     expect(run).toContain(`${storage.uploadsDir}:/app/uploads`);
     expect(run).toContain(storage.envFile);
-    expect(result.calls).toContainEqual(["chown", "root:1500", storage.envFile]);
+    // By its open descriptor, so no link put in its place is followed.
+    expect(result.calls).toContainEqual(["chown", "root:1500", expect.stringMatching(/^\/proc\/\d+\/fd\/\d+$/)]);
     expect(statSync(storage.envFile).mode & 0o777).toBe(0o600);
     expect(statSync(storage.dataDir).mode & 0o777).toBe(0o750);
     expect(existsSync(nativeBackupPath(domain, f.paths))).toBe(true);
