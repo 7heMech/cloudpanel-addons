@@ -6,8 +6,8 @@
  * calls, and follow no link.
  */
 import {
-  chmodSync, closeSync, constants, copyFileSync, fchmodSync, fstatSync, futimesSync, lstatSync, mkdirSync, openSync,
-  readdirSync, readFileSync, readlinkSync, rmSync, symlinkSync, utimesSync, type Stats,
+  closeSync, constants, copyFileSync, fchmodSync, fstatSync, futimesSync, lstatSync, mkdirSync, openSync,
+  readdirSync, readFileSync, readlinkSync, rmSync, symlinkSync, type Stats,
 } from "node:fs";
 import { basename, dirname } from "node:path";
 
@@ -99,11 +99,21 @@ export function removeNoFollow(path: string): void {
   }
 }
 
-/** Copies the regular file `fd` has open to `name` in `into`, which must not exist, with its mode and times. */
+/**
+ * Copies the regular file `fd` has open to `name` in `into`, which must not
+ * exist, with its mode and times. The copy is made and finished through its
+ * own descriptor: `into` may be a directory the site user can write, where the
+ * name could be swapped for a link once it exists.
+ */
 function copyOpenFile(fd: number, info: Stats, into: number, name: string): void {
-  copyFileSync(at(fd), at(into, name), constants.COPYFILE_EXCL);
-  chmodSync(at(into, name), info.mode & 0o777);
-  utimesSync(at(into, name), info.atime, info.mtime);
+  const out = openSync(at(into, name), constants.O_WRONLY | constants.O_CREAT | constants.O_EXCL | constants.O_NOFOLLOW, 0o600);
+  try {
+    copyFileSync(at(fd), at(out));
+    fchmodSync(out, info.mode & 0o777);
+    futimesSync(out, info.atime, info.mtime);
+  } finally {
+    closeSync(out);
+  }
 }
 
 function copyToPath(fd: number, destination: string): void {

@@ -102,7 +102,8 @@ Every read, write, removal and move inside a site's document root runs as that
 site's user: both trees belong to site users, and root acting by path there
 would follow a link such as a `wp-content`, or the document root itself,
 pointing at another site or at root's own files. The copy is read as the source
-site's user, so a file that user cannot read is left out with a warning, and
+site's user, so a file that user cannot read is left out, named in the job's
+log and counted in its notes, and
 written as the target's, who owns it as it is written, for a clone as for a
 promote.
 
