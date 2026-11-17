@@ -12,9 +12,10 @@ site setting. Enabling it updates the site row, changes the rendered access log
 from `main` to `cloudflare`, and adds
 `include /etc/nginx/cloudflare/ips;` to that site's Nginx vhost. Disabling it
 reverses those rendered-vhost changes. CloudPanel remains the source of the IP
-ranges in `/etc/nginx/cloudflare/ips`. Those rules check `$remote_addr`, which CloudPanel lets
-any client set with `X-Real-IP`; [System Tweaks](system-tweaks.md#forged-visitor-ips)
-closes that by default.
+ranges in `/etc/nginx/cloudflare/ips`. Those rules check `$remote_addr`, which
+CloudPanel's Nginx before `nginx-common` 1.30.6-2 lets any client set with
+`X-Real-IP`; [System Tweaks](system-tweaks.md#forged-visitor-ips) closes that by
+default.
 
 Bulk changes take one exclusive addon lock and one immediate SQLite transaction.
 Every affected vhost must be a trusted regular file. The trust checks, owned

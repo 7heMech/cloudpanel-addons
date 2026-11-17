@@ -374,7 +374,8 @@ CloudPanel's two Nginx instances trust a client IP header from every address
 through `set_real_ip_from 0.0.0.0/0`: the sites' `/etc/nginx/nginx.conf` with the
 default `real_ip_header X-Real-IP`, and the panel's
 `/home/clp/services/nginx/nginx.conf` (CloudPanel 6, `clp-nginx.service`) with
-`X-Forwarded-For`. Any IPv4 client can therefore name its own address. Nginx
+`X-Forwarded-For`. `nginx-common` 1.30.6-2 drops the sites' line; the panel's
+file still has it. Any IPv4 client can therefore name its own address. Nginx
 uses it as `$remote_addr`: in access logs, PHP's `REMOTE_ADDR`, basic-auth and
 Cloudflare-only `allow` rules, IP-based plugins and the panel. A direct request
 with `X-Real-IP` set to a Cloudflare address passes a Cloudflare-only site.
