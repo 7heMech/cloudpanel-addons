@@ -17,6 +17,7 @@ export const SYSTEM_TWEAKS_ADDON: AddonDefinition = {
   description: "Server security, automatic updates, panel PHP, remote backup compression, SSH login message.",
   added: "2.0.0-rc.1",
   changed: [
+    { in: "2.2.0-rc.2", note: "Automatic updates default to hourly, with a schedule choice of every hour, every 6 hours, or once a day." },
     { in: "2.2.0-rc.1", note: "Setup shows Action needed when the sites' Nginx answers hostnames it has no site for." },
     { in: "2.2.0-rc.1", note: "Failed logins through the panel's custom domain count from seconds after you save it, not up to 15 minutes later." },
     { in: "2.1.0-rc.4", note: "Lock settings moved into the Hardening card." },
