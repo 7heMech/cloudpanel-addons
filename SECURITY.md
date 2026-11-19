@@ -99,7 +99,8 @@ tunnel. Sites now stop trusting `127.0.0.1` and take the visitor from
 **PHP upload progress.** Every addon installation sets
 `session.upload_progress.enabled=Off` for PHP-FPM, including the panel. This
 mitigates the session path of
-[CVE-2026-109619](https://github.com/php/php-src/security/advisories/GHSA-6wmf-4rv5-p3rp);
+[CVE-2026-109619](https://github.com/php/php-src/security/advisories/GHSA-6wmf-4rv5-p3rp)
+and [CVE-2026-115560](https://github.com/php/php-src/security/advisories/GHSA-658j-r8rw-q6mx);
 patched PHP packages are still required.
 [Guide](docs/system-tweaks.md#php-upload-progress-mitigation)
 
