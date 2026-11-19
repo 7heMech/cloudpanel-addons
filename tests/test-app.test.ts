@@ -99,7 +99,7 @@ test("a fleet table gives the domain its own line on a phone", () => {
   // the column heading the phone no longer has room to show.
 
   for (const html of [
-    maintenanceFleetView({ global: { global: false, bypasses: [] }, sites: [{
+    maintenanceFleetView({ global: { global: false, bypasses: [] }, defaultPage: { custom: false, html: "" }, sites: [{
       domain: "a-rather-long-hostname.example.test", user: "site-user", type: "php", enabled: false,
       customTemplate: false, bypasses: [], uncovered: null,
     }] }),

@@ -4,8 +4,8 @@
 
 Maintenance Mode is available from the Addons overview and from an
 administrator-only tab in every CloudPanel site view. The overview reads every
-site's saved setting, template, bypasses and Nginx coverage, and the global
-state, in one `sites` action call, which reads the panel database and the state
+site's saved setting, template, bypasses and Nginx coverage, the global
+state and the default page, in one `sites` action call, which reads the panel database and the state
 directory once. The sites table comes first, with "N of M in maintenance" in its
 header counting what visitors get. A site's custom page and bypass count are a
 note under its name. Rows are selected by click or checkbox and "Turn on
@@ -27,7 +27,9 @@ turning it off returns each site to its saved setting. Turning it on or off
 purges Varnish cache across the fleet. Global bypasses (up to 64) apply to every
 site, including sites with their own maintenance setting on, and remain saved
 when the override is off. Both bypass lists keep Save off until the list
-differs from the saved one.
+differs from the saved one. The same card holds the default maintenance page,
+which every site without a page of its own serves; its summary reads
+"Built-in" or "Edited".
 
 A site Nginx runs no check for (see Request handling) is called out rather than
 drawn as in maintenance: its badge reads "Not covered" whenever its setting or
@@ -43,12 +45,16 @@ one row; on a narrow screen the whole row moves below the title, while a phone's
 desktop view lets the description wrap beside it. IP bypasses and the maintenance
 page fold into summaries ("1 bypass", "Default" or "Custom").
 
-The maintenance page section opens on a preview. An Edit switch turns editing
+A site's maintenance page section and the fleet's default page section are one
+editor, drawn by one view function and driven by one client script that reads
+its endpoint and wording from the section. It opens on a preview. An Edit switch turns editing
 on and nothing else, showing the HTML with a Preview tab beside it: turning it
 off restores what is saved, asking first only when there is an unsaved change,
 and never removes a saved template. Reset to default exists only while a custom
-template is saved, and is the only way to remove one. A save whose HTML the
-sanitizer changed says "Saved; some tags were removed".
+template or edited default is saved, and is the only way to remove one. A save whose HTML the
+sanitizer changed says "Saved; some tags were removed". A fleet repaint keeps the
+default page's editor while it has unsaved edits or focus, updating its summary
+and Reset; otherwise the fresh one, with any newer save, replaces it.
 
 The custom template is edited with CloudPanel's own Ace build, the editor the
 panel uses for a vhost, loaded from the panel at `/assets/js/ace.min.js`. That
@@ -114,11 +120,18 @@ keeps its own error handling. `/.well-known/acme-challenge/` is exempted before
 the return so certificate issuance and renewal remain available.
 
 The internal maintenance location serves a site's `maintenance.html` when present
-and otherwise serves the managed `default.html`. Responses include
+and otherwise serves the managed `default.html`. That file is the operator's
+edited default, `default-edited.html`, when one is saved, and otherwise the
+built-in page; install, update, repair and every default-page save or reset
+rewrite it, re-reading the edited default after each write so a run that read
+a since-replaced one does not leave it behind. A default-page save or reset
+purges Varnish for the sites serving it, as a toggle does. A site's `get-template` without a page of its own, and its
+`reset-template`, return the same page, so a site's preview shows what its
+visitors get. Responses include
 `Retry-After: 300`, disable caching, and apply a content security policy that
 blocks scripts, forms, frames, and cross-origin assets.
 
-The shared default is an unbranded, responsive page with neutral colors and
+The built-in default is an unbranded, responsive page with neutral colors and
 automatic light and dark themes. It uses system fonts, inline CSS, and a static
 decorative SVG, so it needs no scripts or external assets and works under the
 maintenance response's content security policy. Its copy describes maintenance
@@ -132,14 +145,19 @@ sign-in save the IPv4 address used by the site's connection.
 
 Only the root gateway changes maintenance state. It accepts a fixed verb set,
 normalizes domains and IP addresses, checks that site-scoped domains are current
-CloudPanel sites, and bounds a custom template at 256 KiB. Each bypass update
+CloudPanel sites, and bounds a custom template at 256 KiB and refuses one that
+is empty once sanitized. The edited default
+goes through the same sanitizer and limit, by the admin-only
+`get-default-template`, `set-default-template` and `reset-default-template`.
+Like a site's page, an edited default that is not a regular file within the
+limit is not served; sites get the built-in page and a reset removes it. Each bypass update
 replaces the complete list for its scope and allows at most 64 addresses.
 WordPress Tools adds one address to a site's list through the same locked
 writer, when an administrator agrees; see [WordPress Tools](wp-tools.md).
 
 The state root, global directory, and per-domain directories are mode `0711`,
 which lets Nginx traverse a known path without listing domains or bypasses.
-Per-site toggle and all bypass files are mode `0600`; the global toggle and
+Per-site toggle, bypass files and the edited default are mode `0600`; the global toggle and
 public HTML files are mode `0644`. Disabling the addon removes the marked
 includes from templates and rendered vhosts, the standalone check, the global
 Nginx block and the client-IP map. Site state remains.

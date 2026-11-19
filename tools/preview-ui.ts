@@ -377,10 +377,24 @@ function gitPreviewSites(url: URL): GitSiteStatus[] {
 
 /**
  * Maintenance across the fleet. ?global turns the override on, ?many adds sites
- * until the search shows, and ?uncovered leaves www without the Nginx check.
- * Switches made on the page are kept until the preview restarts.
+ * until the search shows, ?uncovered leaves www without the Nginx check, and
+ * ?edited starts with an edited default page. Switches and the default page
+ * saved on the page are kept until the preview restarts.
  */
-const maintenanceChanges = { enabled: new Map<string, boolean>(), global: null as boolean | null };
+const maintenanceChanges = {
+  enabled: new Map<string, boolean>(), global: null as boolean | null, defaultPage: undefined as string | null | undefined,
+};
+
+const PREVIEW_EDITED_DEFAULT = DEFAULT_MAINTENANCE_TEMPLATE.replace(/<h1>[^<]*<\/h1>/, "<h1>Example Hosting is updating this site</h1>");
+
+const PREVIEW_CUSTOM_PAGE = "<!doctype html>\n<title>Shop closed</title>\n<h1>The shop is closed for stocktaking</h1>\n";
+
+function maintenancePreviewDefault(url: URL): { custom: boolean; html: string } {
+  const edited = maintenanceChanges.defaultPage === undefined
+    ? (url.searchParams.has("edited") ? PREVIEW_EDITED_DEFAULT : null)
+    : maintenanceChanges.defaultPage;
+  return edited === null ? { custom: false, html: DEFAULT_MAINTENANCE_TEMPLATE } : { custom: true, html: edited };
+}
 
 function maintenancePreviewFleet(url: URL): MaintenanceFleet {
   const extra = url.searchParams.has("many") ? [
@@ -399,10 +413,15 @@ function maintenancePreviewFleet(url: URL): MaintenanceFleet {
   return {
     global: { global: maintenanceChanges.global ?? url.searchParams.has("global"), bypasses: url.searchParams.has("empty") ? [] : ["203.0.113.8"] },
     sites: url.searchParams.has("empty") ? [] : fleetSites,
+    defaultPage: maintenancePreviewDefault(url),
   };
 }
 
 function maintenancePreviewMutation(path: string, source: URL, body: Record<string, any>): Response | null {
+  if (path === "/addons/maintenance/api/default-template") {
+    maintenanceChanges.defaultPage = typeof body.html === "string" ? body.html : null;
+    return Response.json({ ok: true, data: maintenancePreviewDefault(source) });
+  }
   const toggle = path.match(/^\/addons\/maintenance\/api\/sites\/([^/]+)\/toggle$/);
   if (toggle) maintenanceChanges.enabled.set(decodeURIComponent(toggle[1]!), body.enabled === true);
   else if (path === "/addons/maintenance/api/bulk-toggle") {
@@ -1984,7 +2003,7 @@ const server = Bun.serve({
       return Response.json(
         maintenanceFragment(
           `Maintenance — ${domain}`,
-          maintenanceSiteView(view, { domain, custom: false, html: DEFAULT_MAINTENANCE_TEMPLATE }, "203.0.113.8", url.searchParams.has("global")),
+          maintenanceSiteView(view, { domain, custom: false, html: maintenancePreviewDefault(url).html }, "203.0.113.8", url.searchParams.has("global")),
         ),
         { headers: withCsrfCookie({}, "preview-token") },
       );
@@ -2122,7 +2141,10 @@ const server = Bun.serve({
       html = maintenanceLayout(
         site ? `Maintenance — ${site.domain}` : "Maintenance Mode",
         site
-          ? maintenanceSiteView(site, { domain: site.domain, custom: site.customTemplate, html: DEFAULT_MAINTENANCE_TEMPLATE }, "203.0.113.8", globalEnabled)
+          ? maintenanceSiteView(site, {
+              domain: site.domain, custom: site.customTemplate,
+              html: site.customTemplate ? PREVIEW_CUSTOM_PAGE : maintenancePreviewDefault(url).html,
+            }, "203.0.113.8", globalEnabled)
           : maintenanceFleetView(fleet, "203.0.113.8"),
         notice,
         site

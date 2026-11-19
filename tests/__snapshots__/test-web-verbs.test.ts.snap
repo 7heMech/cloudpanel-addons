@@ -64,13 +64,16 @@ maintenance:disable                admin
 maintenance:disable-many           admin
 maintenance:enable                 admin
 maintenance:enable-many            admin
+maintenance:get-default-template   admin
 maintenance:get-template           admin
 maintenance:global-disable         admin
 maintenance:global-enable          admin
 maintenance:global-set-bypass      admin
 maintenance:global-status          admin
+maintenance:reset-default-template admin
 maintenance:reset-template         admin
 maintenance:set-bypass             admin
+maintenance:set-default-template   admin
 maintenance:set-template           admin
 maintenance:sites                  admin
 maintenance:status                 admin
