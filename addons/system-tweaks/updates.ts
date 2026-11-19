@@ -562,7 +562,9 @@ export function applyUpdates(settings: UpdateSettings, enabledTimers: string[], 
   const restoreTimerDropIns = () => {
     if (!timerDropInsChanged) return;
     for (const entry of timerDropIns) {
-      if (entry.before !== entry.after) writeOrRemoveTimerDropIn(entry.path, entry.before);
+      if (entry.before !== entry.after) {
+        try { writeOrRemoveTimerDropIn(entry.path, entry.before); } catch {}
+      }
     }
     ctx.run("systemctl", ["daemon-reload"]);
   };
@@ -602,8 +604,13 @@ export function applyUpdates(settings: UpdateSettings, enabledTimers: string[], 
     }
   }
   if (timerDropInsChanged) {
-    for (const entry of timerDropIns) {
-      if (entry.before !== entry.after) writeOrRemoveTimerDropIn(entry.path, entry.after);
+    try {
+      for (const entry of timerDropIns) {
+        if (entry.before !== entry.after) writeOrRemoveTimerDropIn(entry.path, entry.after);
+      }
+    } catch (error) {
+      restore(true);
+      throw error;
     }
     const reload = ctx.run("systemctl", ["daemon-reload"]);
     if (!reload.ok) {
