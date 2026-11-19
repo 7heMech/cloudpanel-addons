@@ -62,7 +62,7 @@ export const firewallService = {
     return call<HetznerReply>("hetzner-disconnect");
   },
 
-  setHetzner(role: HetznerRole, enabled: boolean, confirm?: string): Promise<ActionResult<HetznerReply>> {
-    return call<HetznerReply>("hetzner-switch", ["--role", role, "--enabled", enabled ? "yes" : "no"], JSON.stringify({ confirm }));
+  setHetzner(role: HetznerRole, enabled: boolean, confirm?: string, typed?: string): Promise<ActionResult<HetznerReply>> {
+    return call<HetznerReply>("hetzner-switch", ["--role", role, "--enabled", enabled ? "yes" : "no"], JSON.stringify({ confirm, typed }));
   },
 };

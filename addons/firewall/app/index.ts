@@ -101,11 +101,12 @@ export async function handle(
   if (req.method === "POST" && path === "/api/hetzner/switch") {
     const body = await readMutation(req, 1024);
     if (body instanceof Response) return body;
-    const { role, enabled, confirm } = body;
-    if ((role !== "web" && role !== "panel") || typeof enabled !== "boolean" || (confirm !== undefined && typeof confirm !== "string")) {
+    const { role, enabled, confirm, typed } = body;
+    if ((role !== "web" && role !== "panel") || typeof enabled !== "boolean" || (confirm !== undefined && typeof confirm !== "string")
+      || (typed !== undefined && typeof typed !== "string")) {
       return jsonResponse({ ok: false, error: "role must be web or panel, and enabled boolean" }, 400);
     }
-    const result = await firewallService.setHetzner(role, enabled, confirm as string | undefined);
+    const result = await firewallService.setHetzner(role, enabled, confirm as string | undefined, typed as string | undefined);
     return jsonResponse(result, result.ok ? 200 : 400);
   }
 

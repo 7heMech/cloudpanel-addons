@@ -7,6 +7,7 @@ import { ProviderError, ProviderHttp, type ApiFetch } from "../../lib/provider-h
 
 export const HETZNER_API = "https://api.hetzner.cloud/v1";
 export const METADATA_INSTANCE_ID = "http://169.254.169.254/hetzner/v1/metadata/instance-id";
+const METADATA_HOSTNAME = "http://169.254.169.254/hetzner/v1/metadata/hostname";
 
 export interface HetznerRule {
   direction: "in" | "out";
@@ -44,20 +45,31 @@ export function validToken(value: unknown): value is string {
   return typeof value === "string" && /^[A-Za-z0-9]{32,128}$/.test(value);
 }
 
-/** This server's id from Hetzner Cloud's metadata service, or null anywhere else. */
-export async function hetznerServerId(fetcher: ApiFetch = fetch, timeoutMs = 1500): Promise<number | null> {
+async function metadata(url: string, fetcher: ApiFetch, timeoutMs: number): Promise<string | null> {
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), timeoutMs);
   try {
-    const response = await fetcher(METADATA_INSTANCE_ID, { signal: controller.signal, redirect: "error" });
+    const response = await fetcher(url, { signal: controller.signal, redirect: "error" });
     const text = response.ok ? (await response.text()).trim() : "";
     if (!response.ok) await response.body?.cancel();
-    return /^[1-9]\d{0,15}$/.test(text) ? Number(text) : null;
+    return response.ok ? text : null;
   } catch {
     return null;
   } finally {
     clearTimeout(timer);
   }
+}
+
+/** This server's id from Hetzner Cloud's metadata service, or null anywhere else. */
+export async function hetznerServerId(fetcher: ApiFetch = fetch, timeoutMs = 1500): Promise<number | null> {
+  const text = await metadata(METADATA_INSTANCE_ID, fetcher, timeoutMs);
+  return text !== null && /^[1-9]\d{0,15}$/.test(text) ? Number(text) : null;
+}
+
+/** This server's hostname from the metadata service: its name in Hetzner when it was created. */
+export async function hetznerHostname(fetcher: ApiFetch = fetch, timeoutMs = 1500): Promise<string | null> {
+  const text = await metadata(METADATA_HOSTNAME, fetcher, timeoutMs);
+  return text !== null && /^[A-Za-z0-9][A-Za-z0-9.-]{0,252}$/.test(text) ? text : null;
 }
 
 export class HetznerApi {

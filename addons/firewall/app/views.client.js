@@ -118,20 +118,49 @@ function hetznerNotice(state) {
   notify(state.ok ? done : done + ' The page may be out of date: ' + state.error, state.ok ? 'ok' : 'warn');
 }
 
+// The dialog stays open, with the token, until Hetzner accepts it; closing it clears both.
 async function connectHetzner(event) {
   event.preventDefault();
   const input = CLP_ROOT.getElementById('hetzner-token');
+  const problem = CLP_ROOT.getElementById('hz-connect-error');
   const token = input.value.trim();
-  input.value = '';
   if (!token) return;
-  const state = await change('/api/hetzner/token', { token: token }, 'Could not connect Hetzner: ');
-  if (state) hetznerNotice(state);
+  clearNotice();
+  problem.hidden = true;
+  busy(true);
+  let reply = null;
+  let failure = '';
+  try {
+    reply = await call('/api/hetzner/token', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ token: token }),
+    });
+  } catch (error) {
+    failure = error.message;
+  } finally {
+    busy(false);
+  }
+  const dialog = CLP_ROOT.getElementById('hz-connect-dialog');
+  if (failure) {
+    // Escape or the backdrop may have closed it meanwhile.
+    if (!dialog.open) {
+      notify('Could not connect Hetzner: ' + failure, 'error');
+      return;
+    }
+    problem.textContent = failure;
+    problem.hidden = false;
+    input.focus();
+    return;
+  }
+  dialog.close();
+  const state = await repaint();
+  hetznerNotice(Object.assign(state, { reply: reply.data }));
 }
 
-function showHetznerTokenForm() {
-  const form = CLP_ROOT.getElementById('hetzner-token-form');
-  form.hidden = false;
-  CLP_ROOT.getElementById('hetzner-token').focus();
+function resetHetznerConnect(dialog) {
+  dialog.querySelector('#hetzner-token').value = '';
+  dialog.querySelector('#hz-connect-error').hidden = true;
 }
 
 async function removeHetznerToken() {
@@ -143,6 +172,69 @@ async function removeHetznerToken() {
   if (!accepted) return;
   const state = await change('/api/hetzner/token/remove', {}, 'Could not remove the token: ');
   if (state) hetznerNotice(state);
+}
+
+// The review in sections: what changes, the names that stop answering, what
+// leaves it without effect or closes, and the way back.
+function showHetznerReview(review) {
+  const byId = function (id) { return CLP_ROOT.getElementById(id); };
+  const dialog = byId('hz-review');
+  byId('hz-review-title').textContent = review.title;
+  byId('hz-review-text').textContent = review.text;
+  const list = byId('hz-review-list');
+  list.textContent = '';
+  review.details.forEach(function (line) {
+    const at = line.indexOf(' resolves to ');
+    const item = document.createElement('li');
+    const host = document.createElement('strong');
+    host.textContent = at < 0 ? line : line.slice(0, at);
+    item.appendChild(host);
+    if (at >= 0) {
+      const where = document.createElement('span');
+      where.className = 'hint';
+      where.textContent = line.slice(at + 1);
+      item.appendChild(where);
+    }
+    list.appendChild(item);
+  });
+  byId('hz-review-label').textContent = review.listLabel;
+  byId('hz-review-list-wrap').hidden = review.details.length === 0;
+  const warn = byId('hz-review-warn');
+  warn.textContent = '';
+  review.warnings.forEach(function (line) {
+    const paragraph = document.createElement('p');
+    paragraph.textContent = line;
+    warn.appendChild(paragraph);
+  });
+  if (review.closes.length) {
+    const closes = document.createElement('ul');
+    review.closes.forEach(function (line) {
+      const item = document.createElement('li');
+      item.textContent = line;
+      closes.appendChild(item);
+    });
+    warn.appendChild(closes);
+  }
+  warn.hidden = warn.childElementCount === 0;
+  const back = byId('hz-review-way-back');
+  back.textContent = review.wayBack;
+  back.hidden = !review.wayBack;
+  const typed = byId('hz-review-typed');
+  typed.value = '';
+  byId('hz-review-typed-field').hidden = !review.typed;
+  byId('hz-review-typed-word').textContent = review.typed;
+  const accept = byId('hz-review-accept');
+  accept.textContent = review.confirmLabel;
+  accept.className = review.danger ? 'btn btn-danger' : 'btn btn-primary';
+  const sync = function () { accept.disabled = Boolean(review.typed) && typed.value.trim() !== review.typed; };
+  typed.oninput = sync;
+  sync();
+  dialog.returnValue = '';
+  dialog.showModal();
+  if (review.typed) typed.focus();
+  return new Promise(function (resolve) {
+    dialog.addEventListener('close', function () { resolve(dialog.returnValue === 'accept'); }, { once: true });
+  });
 }
 
 // Root answers the first request with what the change would do, or refuses
@@ -175,12 +267,9 @@ async function setHetzner(input, role) {
     hetznerNotice(Object.assign(state, { reply: reply.data }));
     return;
   }
-  const accepted = await confirmAction({
-    title: review.title, text: review.text, details: review.details,
-    confirmLabel: review.confirmLabel, danger: review.danger,
-  });
-  if (!accepted) return;
-  const state = await change('/api/hetzner/switch', { role: role, enabled: enabled, confirm: review.digest }, 'Could not switch: ');
+  if (!await showHetznerReview(review)) return;
+  const typed = CLP_ROOT.getElementById('hz-review-typed').value.trim();
+  const state = await change('/api/hetzner/switch', { role: role, enabled: enabled, confirm: review.digest, typed: typed }, 'Could not switch: ');
   if (!state) return;
   if (state.reply && state.reply.review) {
     notify('What this change would do has changed since you confirmed it; switch it again to see the new review.', 'warn');
