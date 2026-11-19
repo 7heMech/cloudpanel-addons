@@ -446,8 +446,9 @@ A site's certificate is a later step of its creation, and an addon whose work
 needs the site's HTTPS declares `certificates`. `clp-addons-certificates.path`
 watches `/etc/nginx/ssl-certificates`, where CloudPanel writes each site's
 `<domain>.crt` and key in place, so the vhost, which names that path, is not
-rewritten, and its custom domain's certificate. Its service runs `clp-addons sync-certificates`: each installed
-addon's `certificates`, in catalog order, one after another. It is not part of
+rewritten; its custom domain's certificate is written there too. Its service
+runs `clp-addons sync-certificates`: each installed addon's `certificates`, in
+catalog order, one after another. It is not part of
 the new-site watcher because a certificate changes no domain, so `sync-sites`
 would run no hook for it, and because a path that changes while its service is
 running starts nothing. This service takes a second and runs again three
@@ -745,9 +746,11 @@ it paints, keeping in the tab whether the helper showed, so the header does not
 move when the answer comes. The checks run on every page an administrator
 opens, so they read local files, the panel database and local services only,
 never Cloudflare, Hetzner or a DNS lookup. Each check has 10 seconds; one that
-takes longer reads as not checked and the others answer without it. A check
-that blocks the process, such as a command run synchronously, holds it until
-that command's own timeout, so checks give their commands one.
+takes longer reads as not checked and the others answer without it. `nginx -T`
+is spawned so the limit can leave it behind; System Tweaks' status readers run
+their commands synchronously, so Setup gives each 5 seconds. The answer, before
+anyone's skips, is kept for a minute in the manager's state, so moving between
+pages does not run every check again; opening Setup asks fresh.
 `clp-addons setup off` (root) writes `/etc/clp-addons/setup-off`, after which
 the verb checks nothing and no page shows Setup; `setup on` removes it. What only an API knows, such as a
 token's permissions, is what the addon recorded when it last asked. A check

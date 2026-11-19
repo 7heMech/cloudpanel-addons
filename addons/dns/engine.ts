@@ -160,6 +160,11 @@ export function panelProfile(proxied: boolean): Profile {
   };
 }
 
+/** The profiles a token is held to: the policy's, and the panel hostname's while one is set. */
+export function tokenProfiles(policy: Pick<Policy, "profiles" | "panelHost">): Profile[] {
+  return policy.panelHost ? [...policy.profiles, panelProfile(false)] : policy.profiles;
+}
+
 interface ZoneState {
   ref: ZoneRef;
   records: CfRecord[] | null;

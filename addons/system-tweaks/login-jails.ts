@@ -256,6 +256,17 @@ export function customDomainName(content: string): string | null {
   return names.length === 1 ? names[0]![2]! : null;
 }
 
+/** Whether CloudPanel's custom-domain vhost lacks the failed-login log, read without the settings lock. */
+export function domainLogMissing(options: LoginJailOptions = {}): boolean {
+  try {
+    const vhost = readDomainVhost(contextOf(options));
+    const wanted = vhost === null ? null : withDomainLog(vhost);
+    return wanted !== null && wanted !== vhost;
+  } catch {
+    return false;
+  }
+}
+
 function readDomainVhost(ctx: Context): string | null {
   if (!existsSync(ctx.paths.domainVhost)) return null;
   return trustedVhost(ctx.paths.domainVhost, ctx.paths.rootUid).content;

@@ -3,7 +3,6 @@
 // 443 that rejects the TLS handshake and returns 444. Without it, the first
 // site's server block answers any name pointed at this server, PHP included.
 import type { ActionNeeded } from "../../lib/addon-definition";
-import { runCommand } from "../../lib/command";
 
 export const DEFAULT_SERVER_GUIDE = "https://github.com/7heMech/cloudpanel-addons/blob/main/docs/system-tweaks.md#unknown-hostnames";
 
@@ -13,6 +12,8 @@ interface ServerBlock {
   listens: { key: string; port: number; defaultServer: boolean }[];
   refuses: boolean;
   rejectsHandshake: boolean;
+  /** At the top of a file no traced `include` brought in, so it may be a stream or mail server. */
+  uncertain: boolean;
 }
 
 /** A quoted string, a comment to the end of the line, a brace or semicolon, or a word. */
@@ -20,19 +21,27 @@ const TOKEN = /"(?:[^"\\]|\\.)*"|'(?:[^'\\]|\\.)*'|#.*$|[{};]|[^\s{};"']+/g;
 
 /**
  * The `server` blocks of `http`, from `nginx -T`, in the order Nginx reads them.
- * It prints each file whole, after the one that includes it, so a vhost's
- * server block is at the top of its own file rather than inside `http`.
+ * It prints each file whole, after the one that includes it, so a file's
+ * context is that of the `include` that matches it: a vhost's server block is
+ * at the top of its own file, in `http` because its `include` is.
  */
 export function serverBlocks(dump: string): ServerBlock[] {
   const blocks: ServerBlock[] = [];
+  const includes: { pattern: string; context: string[] | null }[] = [];
   const stack: string[] = [];
+  let prefix = "/etc/nginx/";
+  let base: string[] | null = [];
   let file = "";
+  let first = true;
   let current: ServerBlock | null = null;
   let words: string[] = [];
   for (const line of dump.split("\n")) {
     const header = /^# configuration file (.+):$/.exec(line);
     if (header) {
       file = header[1]!;
+      if (first) prefix = file.slice(0, file.lastIndexOf("/") + 1);
+      base = first ? [] : includes.find((include) => new Bun.Glob(include.pattern).match(file))?.context ?? null;
+      first = false;
       stack.length = 0;
       current = null;
       words = [];
@@ -42,17 +51,22 @@ export function serverBlocks(dump: string): ServerBlock[] {
       if (token.startsWith("#")) break;
       if (token === "{") {
         const name = words[0] ?? "";
-        stack.push(name);
-        if (name === "server" && (stack.length === 1 || (stack.length === 2 && stack[0] === "http"))) {
-          current = { file, names: [], listens: [], refuses: false, rejectsHandshake: false };
+        const context = base && [...base, ...stack];
+        if (name === "server" && (context ? context.length === 1 && context[0] === "http" : stack.length === 0)) {
+          current = { file, names: [], listens: [], refuses: false, rejectsHandshake: false, uncertain: context === null };
           blocks.push(current);
         }
+        stack.push(name);
         words = [];
       } else if (token === "}") {
-        if (stack.pop() === "server" && stack.length <= 1) current = null;
+        if (stack.pop() === "server") current = null;
         words = [];
       } else if (token === ";") {
         if (current && stack.at(-1) === "server") directive(current, words);
+        else if (words[0] === "include" && words[1]) {
+          const pattern = words[1].replace(/^["']|["']$/g, "");
+          includes.push({ pattern: pattern.startsWith("/") ? pattern : prefix + pattern, context: base && [...base, ...stack] });
+        }
         words = [];
       } else {
         words.push(token);
@@ -80,8 +94,11 @@ function directive(block: ServerBlock, [name, ...args]: string[]): void {
 
 /** For each wildcard listener on 80 and 443, why the server answering unknown names does not refuse them. */
 export function defaultServerProblems(dump: string): string[] {
+  const blocks = serverBlocks(dump);
+  // A file whose context cannot be traced could be a stream or mail server; a false Action needed cannot be cleared.
+  if (blocks.some((block) => block.uncertain && block.listens.some((listen) => listen.port === 80 || listen.port === 443))) return [];
   const groups = new Map<string, { port: number; blocks: ServerBlock[]; chosen: ServerBlock | null }>();
-  for (const block of serverBlocks(dump)) {
+  for (const block of blocks) {
     for (const listen of block.listens) {
       if (listen.port !== 80 && listen.port !== 443) continue;
       const group = groups.get(listen.key) ?? { port: listen.port, blocks: [], chosen: null };
@@ -101,8 +118,8 @@ export function defaultServerProblems(dump: string): string[] {
   return [...problems];
 }
 
-export function defaultServerCheck(options: { dump?: () => string | null } = {}): ActionNeeded[] {
-  const dump = options.dump?.() ?? nginxDump();
+export async function defaultServerCheck(options: { dump?: () => string | null | Promise<string | null> } = {}): Promise<ActionNeeded[]> {
+  const dump = await (options.dump ?? nginxDump)();
   // Nginx's config not loading is louder elsewhere; this check needs the config it would run.
   if (dump === null) return [];
   const problems = defaultServerProblems(dump);
@@ -114,7 +131,13 @@ export function defaultServerCheck(options: { dump?: () => string | null } = {})
   }];
 }
 
-function nginxDump(): string | null {
-  const result = runCommand("nginx", ["-T"], 8000);
-  return result.ok ? result.stdout : null;
+/** Spawned, not run synchronously, so Setup's time limit can leave it behind. */
+async function nginxDump(): Promise<string | null> {
+  try {
+    const proc = Bun.spawn(["nginx", "-T"], { stdin: "ignore", stdout: "pipe", stderr: "ignore", timeout: 8000, killSignal: "SIGKILL" });
+    const [out, code] = await Promise.all([new Response(proc.stdout).text(), proc.exited]);
+    return code === 0 ? out : null;
+  } catch {
+    return null;
+  }
 }

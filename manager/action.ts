@@ -471,7 +471,7 @@ export async function runManagerAction(
           if (!change) return failReply("'setup-pref' needs --skip, --unskip or --hidden=true|false", undefined, options.emitReply !== false);
           changeSetupPrefs(user, change, options.setupFile);
         }
-        return reply({ ok: true, data: await setupView(user, options.setupFile) }, options.emitReply !== false);
+        return reply({ ok: true, data: await setupView(user, options.setupFile, undefined, undefined, undefined, { fresh: flags.fresh === "1" }) }, options.emitReply !== false);
       }
       case "watch-job": {
         const jobsDir = options.jobsDir ?? MANAGER_JOBS_DIR;

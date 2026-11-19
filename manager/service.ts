@@ -42,6 +42,6 @@ export async function seenNews(): Promise<{ since: string; seen: string[] }> {
   return typeof data?.since === "string" && Array.isArray(data.seen) ? data : { since: "0.0.0", seen: [] };
 }
 
-export async function setupAction(user: string, change: string[] = []): Promise<ActionResult<SetupView>> {
-  return managerAction<SetupView>(change.length ? "setup-pref" : "setup", [`--user=${user}`, ...change]);
+export async function setupAction(user: string, change: string[] = [], fresh = false): Promise<ActionResult<SetupView>> {
+  return managerAction<SetupView>(change.length ? "setup-pref" : "setup", [`--user=${user}`, ...change, ...fresh ? ["--fresh=1"] : []]);
 }

@@ -20,7 +20,7 @@ import type { LoginJailsStatus } from "../addons/system-tweaks/login-jails";
 import type { SetupStep } from "../lib/addon-definition";
 import { issuedFor, panelCustomDomainCertificate } from "../lib/panel-custom-domain";
 import {
-  actionItems, CORE_SETUP, changeSetupPrefs, readSetupPrefs, remoteBackupsCheck, setupOff, setupStepIds, setupSteps, setupView, switchSetup,
+  actionItems, cachedChecks, CORE_SETUP, changeSetupPrefs, readSetupPrefs, remoteBackupsCheck, setupOff, setupStepIds, setupSteps, setupView, switchSetup,
 } from "../manager/setup";
 import { setupPanelHtml, setupShows, setupSuggests } from "../manager/setup-view";
 
@@ -277,10 +277,16 @@ describe("Action needed", () => {
         { id: "hung", check: never },
       ] },
       { name: "firewall", title: "Firewall", enabled: false, steps: [], actions: [{ id: "off", check: () => { throw new Error("must not run"); } }] },
+      { name: "panel-gate", title: "Gate", enabled: true, steps: [], actions: [
+        { id: "drift", title: "Panel gate changed", check: () => ["origin pull is off"] },
+        { id: "plain", check: async () => ["something else"] },
+      ] },
     ] }, {}, 50);
     expect(items).toEqual([
       { ...item, id: "perm", addon: { name: "dns", title: "DNS" } },
       { ...item, title: "Second", id: "perm-1", addon: { name: "dns", title: "DNS" } },
+      { title: "Panel gate changed", reason: "origin pull is off", href: "/addons/panel-gate/", id: "drift", addon: { name: "panel-gate", title: "Gate" } },
+      { title: "Action needed", reason: "something else", href: "/addons/panel-gate/", id: "plain", addon: { name: "panel-gate", title: "Gate" } },
     ]);
   });
 
@@ -308,6 +314,17 @@ describe("Action needed", () => {
     expect(open.indexOf("Action needed")).toBeLessThan(open.indexOf(">One<"));
     expect(open).toContain('data-setup-skip="one"');
     expect(setupShows({ ...hidden, actions: [], steps: [] })).toBe(false);
+  });
+
+  test("page loads share the checks' answer for a minute; opening Setup asks fresh", async () => {
+    const file = join(dir, "checks.json");
+    let runs = 0;
+    const compute = async () => ({ actions: [], steps: [{ id: `run-${++runs}`, level: "secure" as const, title: "t", href: "/x/", addon: null, state: "todo" as const, reason: "r" }] });
+    expect((await cachedChecks(compute, { file, now: 1_000 })).steps[0]!.id).toBe("run-1");
+    expect((await cachedChecks(compute, { file, now: 50_000 })).steps[0]!.id).toBe("run-1");
+    expect((await cachedChecks(compute, { file, now: 50_000, fresh: true })).steps[0]!.id).toBe("run-2");
+    expect((await cachedChecks(compute, { file, now: 120_000 })).steps[0]!.id).toBe("run-3");
+    expect(runs).toBe(3);
   });
 
   test("root's switch turns Setup off: nothing is checked and nothing shows", async () => {
@@ -345,10 +362,17 @@ describe("Action needed", () => {
 });
 
 describe("unknown hostnames", () => {
-  const stock = `# configuration file /etc/nginx/nginx.conf:
+  const main = (extra = "") => `# configuration file /etc/nginx/nginx.conf:
+user root;
+events {
+  worker_connections 2000;
+}
 http {
+  log_format main '$remote_addr "$request" {$status};';
   include /etc/nginx/sites-enabled/*;
-# configuration file /etc/nginx/sites-enabled/default.conf:
+}
+${extra}`;
+  const stock = `# configuration file /etc/nginx/sites-enabled/default.conf:
 server {
   listen 80 default_server;
   listen [::]:80 default_server;
@@ -377,26 +401,37 @@ server {
   server_name www.example.com;
 }
 `;
-  const end = "}\n";
+  const answered = ["On port 80, www.example.com answers them", "On port 443, www.example.com answers them"];
 
   test("CloudPanel's own default server refuses them", () => {
-    expect(defaultServerProblems(stock + site() + end)).toEqual([]);
+    expect(defaultServerProblems(main() + stock + site())).toEqual([]);
   });
 
   test("without it, or with a site taking default_server, the site answers them", () => {
-    expect(defaultServerProblems(`http {\n${site()}${end}`)).toEqual(["On port 80, www.example.com answers them", "On port 443, www.example.com answers them"]);
-    expect(defaultServerProblems(stock.replaceAll(" default_server", "") + site(" default_server") + end))
-      .toEqual(["On port 80, www.example.com answers them", "On port 443, www.example.com answers them"]);
+    expect(defaultServerProblems(main() + site())).toEqual(answered);
+    expect(defaultServerProblems(main() + stock.replaceAll(" default_server", "") + site(" default_server"))).toEqual(answered);
   });
 
   test("a default server that answers 443's handshake does not refuse them", () => {
-    expect(defaultServerProblems(stock.replace("  ssl_reject_handshake on;\n", "") + site() + end)).toEqual(["On port 443, _ answers them".replace("_", "/etc/nginx/sites-enabled/default.conf")]);
+    expect(defaultServerProblems(main() + stock.replace("  ssl_reject_handshake on;\n", "") + site()))
+      .toEqual(["On port 443, /etc/nginx/sites-enabled/default.conf answers them"]);
   });
 
-  test("the check raises one item, and nothing when nginx -T cannot run", () => {
-    expect(defaultServerCheck({ dump: () => stock + site() + end })).toEqual([]);
-    expect(defaultServerCheck({ dump: () => null })).toEqual([]);
-    const [found] = defaultServerCheck({ dump: () => `http {\n${site()}${end}` });
+  test("a stream server is not a site, and a file of unknown context raises nothing", () => {
+    const stream = `# configuration file /etc/nginx/streams/tls.conf:
+server {
+  listen 443;
+  proxy_pass backend;
+}
+`;
+    expect(defaultServerProblems(main("stream {\n  include /etc/nginx/streams/*.conf;\n}\n") + stock + site() + stream)).toEqual([]);
+    expect(defaultServerProblems(main() + site() + stream.replace("streams/tls.conf", "elsewhere/tls.conf"))).toEqual([]);
+  });
+
+  test("the check raises one item, and nothing when nginx -T cannot run", async () => {
+    expect(await defaultServerCheck({ dump: () => main() + stock + site() })).toEqual([]);
+    expect(await defaultServerCheck({ dump: () => null })).toEqual([]);
+    const [found] = await defaultServerCheck({ dump: () => main() + site() });
     expect(found!.title).toBe("Unknown hostnames reach a site");
     expect(found!.href).toContain("system-tweaks.md#unknown-hostnames");
   });

@@ -4,8 +4,12 @@ import { panelCertStatus, type PanelCertStatus } from "./panel-cert";
 import { phpMyAdminStatus, type PhpMyAdminStatus } from "./phpmyadmin";
 import { realIpStatus, type RealIpStatus } from "./real-ip";
 import { updatesStatus, type UpdatesStatus } from "./updates";
+import { systemRun, type Run } from "./packages";
 
 const PAGE = "/addons/system-tweaks/";
+
+/** Setup runs on every page an administrator opens, so a command it waits on gets far less than a change does. */
+const quick: Run = (command, args, env) => systemRun(command, args, env, 5_000);
 
 export function panelCertCheck(status: PanelCertStatus): SetupCheck {
   if (status.problem) return { state: "todo", reason: status.problem };
@@ -45,8 +49,8 @@ export function updatesCheck(status: Pick<UpdatesStatus, "installed" | "enabled"
 
 export const SYSTEM_TWEAKS_SETUP: SetupStep[] = [
   { id: "panel-cert", level: "secure", title: "Panel certificate", href: `${PAGE}#tweak-replacePanelCert`, check: () => panelCertCheck(panelCertStatus()) },
-  { id: "login-jails", level: "secure", title: "Login jails", href: `${PAGE}#st-failed-logins`, check: () => loginJailsCheck(loginJailsStatus()) },
+  { id: "login-jails", level: "secure", title: "Login jails", href: `${PAGE}#st-failed-logins`, check: () => loginJailsCheck(loginJailsStatus({ run: quick })) },
   { id: "real-ip", level: "secure", title: "Forged visitor IPs", href: `${PAGE}#tweak-blockForgedRealIp`, check: () => realIpCheck(realIpStatus()) },
   { id: "phpmyadmin", level: "secure", title: "phpMyAdmin rules", href: `${PAGE}#tweak-protectPhpMyAdmin`, check: () => phpMyAdminCheck(phpMyAdminStatus()) },
-  { id: "updates", level: "secure", title: "Automatic updates", href: `${PAGE}#st-updates`, check: () => updatesCheck(updatesStatus()) },
+  { id: "updates", level: "secure", title: "Automatic updates", href: `${PAGE}#st-updates`, check: () => updatesCheck(updatesStatus({ run: quick })) },
 ];

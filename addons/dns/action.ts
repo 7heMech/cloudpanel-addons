@@ -22,7 +22,7 @@ import { PANEL_USER_NAME_RE, panelUserOwnsSite } from "../../lib/panel-users";
 import { DEFAULT_SMTP_PATHS, smtpRelayAccounts, type SmtpRelayAccount } from "../smtp/action";
 import { detectAddresses, type Addresses } from "./addresses";
 import {
-  DnsRun, readiness, type ConnectionReport, type LogEntry, type ManagedRecords, type PanelSite, type SitePlan,
+  DnsRun, readiness, tokenProfiles, type ConnectionReport, type LogEntry, type ManagedRecords, type PanelSite, type SitePlan,
   type StandIns,
 } from "./engine";
 import { type ApiFetch, redact } from "../../lib/provider-http";
@@ -485,9 +485,12 @@ class Action {
       else delete plansByDomain[plan.domain];
     }
     const panelHost = run.entries.find((entry) => entry.panel)?.domain;
+    // Only once Cloudflare holds it: a write that failed or waits for a review leaves the next certificate write to try again.
+    const panelPlan = panelHost && (domains === "all" || domains.includes(panelHost)) ? plans.find((plan) => plan.domain === panelHost) : undefined;
+    const panelSettled = panelPlan && !panelPlan.problems.length && !panelPlan.changes.some((change) => change.action !== "note");
     this.files.saveStatus({
       ...status,
-      ...panelHost && (domains === "all" || domains.includes(panelHost)) && { panelProxied: run.panelProxied },
+      ...panelSettled && { panelProxied: run.panelProxied },
       checkedAt: domains === "all" ? new Date(this.now).toISOString() : status.checkedAt,
       connections: run.connections.length || domains === "all" ? this.withEarlier(run, status.connections, domains) : status.connections,
       plans: plansByDomain,
@@ -553,7 +556,7 @@ class Action {
           ...report,
           label: connection.label,
           hasToken: Boolean(secrets.cloudflare[connection.id]),
-          access: stored?.active ? accessView(stored, policy.profiles) : null,
+          access: stored?.active ? accessView(stored, tokenProfiles(policy)) : null,
         };
       }),
       accounts,
@@ -565,7 +568,7 @@ class Action {
         .map(([domain, entry]) => ({ domain, zone: entry.zoneName, records: entry.records.length })),
       checkedAt: status.checkedAt,
       waitUntil: Math.max(status.backoff.cloudflare, status.backoff.mailcow),
-      token: tokenTemplate(policy.profiles),
+      token: tokenTemplate(tokenProfiles(policy)),
       presets: PRESETS,
       log: this.files.log().slice(0, PAGE_LOG),
       panelHost: this.panelHostView(policy, status.plans, sites),
@@ -690,7 +693,10 @@ class Action {
    */
   panelHostDue(): boolean {
     const policy = this.files.policy();
-    return Boolean(policy.panelHost && policy.automatic && this.files.status().panelProxied !== this.panelProxied(policy));
+    const host = policy.panelHost;
+    if (!host || !policy.automatic || this.files.status().panelProxied === this.panelProxied(policy)) return false;
+    // A site or redirect domain with the name keeps it out of every run, so there is nothing to wait for the lock over.
+    return !policy.redirects.some((redirect) => redirect.source === host) && !this.sites().some((site) => site.domain === host);
   }
 
   async syncPanelHost(): Promise<string | null> {

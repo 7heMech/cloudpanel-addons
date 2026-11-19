@@ -111,8 +111,12 @@ export interface ActionNeeded {
 export interface ActionNeededCheck {
   /** Unique across addons. */
   id: string;
+  /** For a check that answers with bare reasons: their title, "Action needed" if unset. */
+  title?: string;
+  /** For bare reasons: the page that fixes them, the addon's own if unset. */
+  href?: string;
   /** Run as root with the steps, so it reads local state only; empty while nothing is needed. */
-  check: (options?: Record<string, unknown>) => ActionNeeded[] | Promise<ActionNeeded[]>;
+  check: (options?: Record<string, unknown>) => (ActionNeeded | string)[] | Promise<(ActionNeeded | string)[]>;
 }
 
 /** Paths are derived from `name`, not declared. */

@@ -658,7 +658,13 @@ function dnsSaveServer(event) {
 
 function dnsSavePanelHost(event) {
   event.preventDefault();
-  dnsPost('/api/panel-host', { name: event.currentTarget.elements.namedItem('name').value.trim() });
+  const name = event.currentTarget.elements.namedItem('name').value.trim();
+  // An emptied field is Remove, with its confirmation; with nothing set, there is nothing to save.
+  if (!name) {
+    if (dnsState.panelHost) dnsRemovePanelHost();
+    return;
+  }
+  dnsPost('/api/panel-host', { name: name });
 }
 
 async function dnsRemovePanelHost() {

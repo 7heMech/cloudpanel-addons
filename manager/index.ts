@@ -38,7 +38,7 @@ export async function handleManagerRoute(
         : [];
       if (!change.length) return jsonResponse({ ok: false, error: "expected skip, unskip or hidden" }, 400);
     }
-    const result = await setupAction(user, change);
+    const result = await setupAction(user, change, req.method === "GET" && new URL(req.url).searchParams.get("fresh") === "1");
     if (!result.ok || !result.data) return jsonResponse({ ok: false, error: result.ok ? "no answer" : result.error }, 502);
     const view = result.data;
     return jsonResponse({ ok: true, data: { show: setupShows(view), attention: view.actions.length > 0, html: setupPanelHtml(view) } });

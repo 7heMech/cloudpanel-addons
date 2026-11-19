@@ -11,6 +11,9 @@ import { withPanelDb } from "../lib/panel-db";
 import { addonStateDir, CONFIG_DIR, PANEL_DB } from "../lib/paths";
 
 const PREFS_FILE = `${addonStateDir("manager")}/setup.json`;
+/** The checks' last answer, before anyone's skips, so moving between pages does not run them all again. */
+const CACHE_FILE = `${addonStateDir("manager")}/setup-checks.json`;
+export const CACHE_MS = 60_000;
 /** Root's switch for Setup as a whole: while it exists, nothing is checked and no page shows Setup. */
 export const SETUP_OFF_FILE = `${CONFIG_DIR}/setup-off`;
 /** How long one check may take before it reads as not checked; the others go on without it. */
@@ -106,8 +109,11 @@ export async function actionItems(source: SetupSource = catalogSource(), options
   const found = await Promise.all(source.addons.filter((addon) => addon.enabled).flatMap((addon) => (addon.actions ?? []).map(async (action) => {
     const result = await within(() => action.check(options), limitMs);
     if ("error" in result) return [];
-    return result.value.map((item, index): ActionItem => ({
-      ...item, id: index ? `${action.id}-${index}` : action.id, addon: { name: addon.name, title: addon.title },
+    return result.value.map((found, index): ActionItem => ({
+      ...typeof found === "string"
+        ? { title: action.title ?? "Action needed", reason: found, href: action.href ?? `/addons/${addon.name}/` }
+        : found,
+      id: index ? `${action.id}-${index}` : action.id, addon: { name: addon.name, title: addon.title },
     }));
   })));
   return found.flat();
@@ -167,18 +173,53 @@ export function switchSetup(on: boolean, file = SETUP_OFF_FILE): boolean {
   return true;
 }
 
+interface Checked { at: number; actions: ActionItem[]; steps: SetupItem[] }
+
+/**
+ * The checks' answer, from the cache while it is under a minute old unless
+ * `fresh`: opening Setup asks fresh, so what it lists then is current.
+ */
+export async function cachedChecks(
+  compute: () => Promise<Omit<Checked, "at">>,
+  cache: { file?: string; now?: number; fresh?: boolean } = {},
+): Promise<Omit<Checked, "at">> {
+  const file = cache.file ?? CACHE_FILE;
+  const now = cache.now ?? Date.now();
+  if (!cache.fresh) {
+    try {
+      const stored = JSON.parse(readFileSync(file, "utf-8")) as Checked;
+      if (now - stored.at >= 0 && now - stored.at < CACHE_MS && Array.isArray(stored.actions) && Array.isArray(stored.steps)) {
+        return { actions: stored.actions, steps: stored.steps };
+      }
+    } catch { /* none yet, or unreadable: check again */ }
+  }
+  const checked = await compute();
+  try {
+    writeFileAtomic(file, `${JSON.stringify({ at: now, ...checked })}\n`, { mode: 0o600, createParent: true });
+  } catch { /* the answer stands without a cache */ }
+  return checked;
+}
+
 export async function setupView(
   user: string,
   file = PREFS_FILE,
   source?: SetupSource,
   options?: Record<string, unknown>,
   offFile = SETUP_OFF_FILE,
+  cache: { file?: string; now?: number; fresh?: boolean } = {},
 ): Promise<SetupView> {
   const prefs = readSetupPrefs(file)[user] ?? {};
   const hidden = prefs.hidden === true;
   if (setupOff(offFile)) return { off: true, hidden, actions: [], steps: [] };
-  const [actions, steps] = await Promise.all([actionItems(source, options), setupSteps(prefs, source, options)]);
-  return { off: false, hidden, actions, steps };
+  const compute = async () => {
+    const [actions, steps] = await Promise.all([actionItems(source, options), setupSteps({}, source, options)]);
+    return { actions, steps };
+  };
+  // A source given in place of the catalog is a test's, which the shared cache must not answer for.
+  const checked = source ? await compute() : await cachedChecks(compute, cache);
+  const skipped = new Set(prefs.skipped ?? []);
+  const steps = checked.steps.map((step) => step.state === "todo" && skipped.has(step.id) ? { ...step, state: "skipped" as const } : step);
+  return { off: false, hidden, actions: checked.actions, steps };
 }
 
 export type SetupChange = { skip: string } | { unskip: string } | { hidden: boolean };

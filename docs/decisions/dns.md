@@ -264,7 +264,11 @@ once the name is proxied, which the ACME rule covers. CloudPanel has no
 The certificate watcher runs `sync-panel-host`, which compares the proxy state
 the last plan used with the one the certificate calls for and reaches Cloudflare
 only when they differ, so a renewal costs two file reads; the scheduled check
-covers anything it missed. Under Ask first nothing is written.
+covers anything it missed. CloudPanel writes `/etc/.clp_custom_domain` a moment
+after the certificate, and the watcher's second pass three seconds later finds
+it. The state is recorded only once Cloudflare holds the plan, so a write that
+failed is tried again, and a site or redirect domain with the name keeps the
+watcher from waiting on DNS's lock. Under Ask first nothing is written.
 
 ## Cloudflare connections
 
