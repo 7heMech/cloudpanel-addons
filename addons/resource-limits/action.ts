@@ -25,8 +25,8 @@ import {
 import { openPanelDatabase } from "../../lib/panel-db";
 import { RESOURCE_LIMITS_VERBS } from "./verbs";
 import { Database } from "bun:sqlite";
-import { chmodSync, existsSync, lstatSync, mkdirSync, readFileSync } from "node:fs";
-import { dirname, join } from "node:path";
+import { existsSync, lstatSync, readFileSync } from "node:fs";
+import { join } from "node:path";
 import { ActionFailure, replyToAction, failAction, readJsonRequest } from "../../lib/action";
 import { errorMessage } from "../../lib/errors";
 import { nameSlug, oneLine } from "../../lib/validate";
@@ -653,6 +653,13 @@ function readPolicy(path: string, expectedUid: number): Policy {
   });
 }
 
+/** The category new sites join, by name, or null for none. */
+export function newSiteCategory(paths: Partial<ResourceLimitsActionPaths> = {}): string | null {
+  const { policyFile, rootUid } = { ...DEFAULT_RESOURCE_LIMITS_ACTION_PATHS, ...paths };
+  const policy = readPolicy(policyFile, rootUid);
+  return policy.categories.find((category) => category.id === policy.defaultCategoryId)?.name ?? null;
+}
+
 function writePolicy(path: string, policy: Policy, expectedUid: number): void {
   let uid = expectedUid;
   let gid = process.getgid?.() ?? 0;
@@ -672,8 +679,6 @@ function writePolicy(path: string, policy: Policy, expectedUid: number): void {
 }
 
 async function withPolicyLock<T>(paths: ResourceLimitsActionPaths, body: () => Promise<T>): Promise<T> {
-  mkdirSync(dirname(paths.lockFile), { recursive: true });
-  chmodSync(dirname(paths.lockFile), 0o700);
   return withFileLock(paths.lockFile, 30, "another Resource limits operation is running", body);
 }
 

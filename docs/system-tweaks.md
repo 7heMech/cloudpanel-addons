@@ -1,7 +1,7 @@
 # System Tweaks
 
-Hardening, automatic updates, panel PHP, remote backups, firewall rules and the
-SSH login message.
+Hardening, automatic updates, panel PHP, remote backups and the SSH login
+message.
 PHP worker limits and the server memory budget are in [Resource Limits](resource-limits.md).
 
 ## Locking the protections
@@ -147,9 +147,11 @@ removes the override; enabling it again reapplies the saved choice through repai
 ## Forged visitor IPs
 
 **Block forged visitor IPs** is on by default. Without it, any client can claim
-another IP address with a header, and sites, logs, basic auth, the panel and
-**Allow traffic from Cloudflare only** believe it. It comments out
-`set_real_ip_from 0.0.0.0/0` in the sites' and the panel's `nginx.conf`.
+another IP address with a header, and the panel and its logs and basic auth
+believe it. So do sites, their logs, basic auth and **Allow traffic from
+Cloudflare only**, unless Nginx is 1.30.6-2 or later, which already drops the
+sites' line. It comments out `set_real_ip_from 0.0.0.0/0` in the sites' and the
+panel's `nginx.conf`.
 Cloudflare traffic and CloudPanel's own proxying are unaffected. It never holds
 an update back: automatic updates still install Nginx, and CloudPanel when that
 is switched on.
@@ -216,6 +218,32 @@ To see what the panel serves:
 ```bash
 openssl s_client -connect 127.0.0.1:8443 </dev/null 2>/dev/null | openssl x509 -noout -subject -enddate -fingerprint -sha256
 ```
+
+## Unknown hostnames
+
+CloudPanel's `/etc/nginx/sites-enabled/default.conf` makes Nginx refuse any
+hostname it has no site for. Without it, a domain anyone points at this
+server, even through another Cloudflare account, reaches a site's PHP. Setup
+shows **Action needed** when it no longer holds. To put CloudPanel's file back:
+
+```bash
+cat > /etc/nginx/sites-enabled/default.conf <<'EOF'
+server {
+  listen 80 default_server;
+  listen [::]:80 default_server;
+  listen 443 quic reuseport default_server;
+  listen 443 default_server ssl;
+  listen [::]:443 quic reuseport default_server;
+  listen [::]:443 default_server ssl;
+  ssl_reject_handshake on;
+  server_name _;
+  return 444;
+}
+EOF
+nginx -t && systemctl reload nginx
+```
+
+If a site's vhost has `default_server` on 80 or 443, remove it there.
 
 ## Nginx config injection
 
@@ -322,9 +350,10 @@ an hour. Wrong passwords, wrong two-factor codes and wrong basic-auth passwords
 all count. The block covers only the panel, so you can still reach the server
 over SSH.
 
-Logins through CloudPanel's custom domain count too. They pass through the
-sites' nginx on port 443, so an address blocked for them loses HTTPS to every
-site on this server for the hour, not only the panel.
+Logins through CloudPanel's custom domain count too, from seconds after you
+save it. They pass through the sites' nginx on port 443, so an address blocked
+for them loses HTTPS to every site on this server for the hour, not only the
+panel.
 
 **Block SSH login guessing** is off by default. Switched on, it blocks an address
 from SSH for an hour after 5 failed logins within an hour. An SSH client that
@@ -444,20 +473,6 @@ timed-out requests left in `/tmp`: ImageMagick's after two idle hours, PHP
 uploads and WordPress downloads after a day. It removes only files a PHP site's
 own user owns and no process has open. There is nothing to set. Resource Limits
 does the same while System Tweaks is off.
-
-## UDP ports
-
-CloudPanel's own **Admin → Security → Firewall** gets a **Protocol** for each
-rule: TCP, UDP, or TCP and UDP. Choose it on **Add Rule** or a rule's edit page,
-after **Port Range**. The rules table shows it in its **Protocol** column, and
-System Tweaks' page lists the UDP ports that are open. A protocol belongs to
-the rule's port range and source. UDP alone is refused for port 8443, which
-would close CloudPanel itself to TCP; choose TCP and UDP there.
-
-The change reaches ufw a few seconds after the page saves, and stays through
-later changes on the Firewall page. Check it with `ufw status`. Disabling
-System Tweaks sets every rule back to TCP in ufw and keeps the choices for
-when it is enabled again.
 
 ## MySQL access
 

@@ -3,13 +3,15 @@ import { afterEach, describe, expect, test } from "bun:test";
 import { chmodSync, mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { executeDnsAction, panelSites, type DnsReply, type ProvisionReply, type SiteDnsStatus } from "../addons/dns/action";
+import { connectionPermissions } from "../addons/dns/access";
+import { seededPolicy } from "../addons/dns/presets";
+import { dnsTokenHolds, executeDnsAction, panelSites, type DnsReply, type ProvisionReply, type SiteDnsStatus } from "../addons/dns/action";
 import { detectAddresses, type Addresses } from "../addons/dns/addresses";
 import { DNS_ADDON } from "../addons/dns/addon";
 import type { PanelSite, SitePlan } from "../addons/dns/engine";
 import { MAX_ATTEMPTS, retryCertificates, type SslRequest } from "../addons/dns/ssl";
 import { dashboardContent } from "../addons/dns/app/views";
-import { FakeCloudflare, FakeMailcow, MAILCOW_KEY, routed } from "./fixtures/dns-api";
+import { FakeCloudflare, FakeMailcow, MAILCOW_KEY, policy, routed } from "./fixtures/dns-api";
 
 const TOKEN = "cf-agency-token-0123456789abcdef";
 const SECOND_TOKEN = "cf-church-token-0123456789abcdef";
@@ -470,6 +472,195 @@ describe("Mailcow", () => {
     expect(JSON.stringify(state)).not.toContain(relay.password);
     chmodSync(join(env.dir, "smtp.json"), 0o666);
     expect((await env.act("list")).smtpRelays).toEqual([]);
+  });
+});
+
+describe("what each token holds", () => {
+  const ALL_ZONES = { "com.cloudflare.api.account.zone.*": "*" };
+  const paths = (env: ReturnType<typeof setup>) => ({ stateDir: join(env.dir, "state"), rootUid: process.getuid!() });
+
+  test("is read when a connection is saved and shown against what the profiles use, without a call on page load", async () => {
+    const env = setup();
+    env.cf.zone("example.org", env.church);
+    env.cf.tokens.get(SECOND_TOKEN)!.policies = [
+      policy(["DNS Write", "Zone Write", "Account Settings Read", "Dynamic URL Redirects Write", "Config Settings Write", "API Tokens Read"], ALL_ZONES),
+      policy(["Zone Settings Write"], { [`com.cloudflare.api.account.${env.agency}`]: ALL_ZONES }),
+    ];
+    const reply = await env.connect(SECOND_TOKEN);
+    const access = reply.connections[0]!.access!;
+    expect(access.reach).toBe("All zones");
+    expect(access.editUrl).toBe("https://dash.cloudflare.com/profile/api-tokens");
+    const held = Object.fromEntries(access.rows.map((row) => [row.label, row.detail ?? row.held]));
+    expect(held).toMatchObject({ "DNS: Edit": "yes", "Zone: Edit": "yes", "Zone Settings: Edit": "Not on example.org", "Config Rules: Edit": "yes", "API Tokens: Read": "yes" });
+    expect(access.rows.find((row) => row.label === "Zone Settings: Edit")!.usedFor).toContain("“Web”");
+    // Nothing DNS does needs these yet, so they are not listed.
+    expect(held["Zone WAF: Edit"]).toBeUndefined();
+    expect(held["Firewall Services: Edit"]).toBeUndefined();
+    expect(JSON.stringify(reply)).not.toContain("grants");
+
+    const calls = env.cf.calls.length;
+    const page = await env.act("list");
+    expect(env.cf.calls.length).toBe(calls);
+    expect(page.connections[0]!.access).toEqual(access);
+    expect(dashboardContent(page)).toContain("Not on every zone: Zone Settings: Edit (Not on example.org)");
+  });
+
+  test("names a missing permission once a profile uses it", async () => {
+    const env = setup();
+    env.cf.tokens.get(TOKEN)!.policies = [policy(["DNS Write", "API Tokens Read"], ALL_ZONES)];
+    const reply = await env.connect();
+    const missing = reply.connections[0]!.access!.rows.filter((row) => row.held === "no" && !row.optional).map((row) => row.label);
+    expect(missing).toEqual(["Zone: Edit", "Account Settings: Read", "Single Redirect: Edit", "Zone Settings: Edit", "Config Rules: Edit"]);
+    expect(dashboardContent(reply)).toContain("Missing: Zone: Edit, Account Settings: Read, Single Redirect: Edit, Zone Settings: Edit, Config Rules: Edit");
+    const access = reply.connections[0]!.access!;
+    const optional = { label: "Firewall Services: Edit", usedFor: "Cloudflare bans for login jails", held: "no" as const, optional: true as const };
+    const html = dashboardContent({ ...reply, connections: [{ ...reply.connections[0]!, access: { ...access, rows: [...access.rows, optional] } }] });
+    expect(html).toContain('<span role="columnheader">Optional</span><span role="columnheader">Enables</span>');
+    expect(html).toContain("Not added");
+    expect(html).not.toMatch(/Missing:[^<]*Firewall Services/);
+  });
+
+  test("a token made before API Tokens: Read is asked for it, and the check still works", async () => {
+    const env = setup();
+    const reply = await env.connect();
+    expect(reply.connections[0]).toMatchObject({ active: true, zones: 1 });
+    const access = reply.connections[0]!.access!;
+    expect(access.reach).toBeNull();
+    expect(access.note).toBe("Add API Tokens: Read to this token to see its permissions here");
+    expect(access.rows.every((row) => row.held === "unknown")).toBe(true);
+    const optional = { label: "Firewall Services: Edit", usedFor: "Cloudflare bans for login jails", held: "unknown" as const, optional: true as const };
+    const html = dashboardContent({ ...reply, connections: [{ ...reply.connections[0]!, access: { ...access, rows: [...access.rows, optional] } }] });
+    expect(html).not.toContain("Not added");
+    expect(html).toContain("to see its permissions here.</span>");
+    const long = dashboardContent({ ...reply, connections: [{ ...reply.connections[0]!, access: { ...access, note: `Its permissions could not be read: ${"x".repeat(300)}.` } }] });
+    expect(long).toMatch(/x…<\/span>/);
+    expect(long).not.toContain("..");
+    expect(dnsTokenHolds(reply.connections[0]!.id, "dns", { id: env.cf.zones[0]!.id, accountId: env.agency }, paths(env))).toBeNull();
+  });
+
+  test("a token that cannot read itself keeps showing what Cloudflare refused it, and the Setup reader names it", async () => {
+    const env = setup();
+    env.cf.settings.clear();
+    const fetch = env.cf.fetch;
+    // Zone settings refused, as a token without Zone Settings: Edit is.
+    env.cf.fetch = async (address, init) => new URL(address).pathname.includes("/settings/")
+      ? new Response(JSON.stringify({ success: false, errors: [{ code: 10000, message: "Authentication error" }] }), { status: 403 })
+      : fetch(address, init);
+    await env.connect();
+    await env.act("assign", { domains: ["example.com"], profileId: "web" });
+    const reply = await env.act("check");
+    const status = JSON.parse(readFileSync(join(env.dir, "state", "status.json"), "utf8"));
+    expect(status.connections[0].refused).toEqual(["Zone Settings: Edit"]);
+    const access = reply.connections[0]!.access!;
+    expect(access.rows.find((row) => row.label === "Zone Settings: Edit")).toMatchObject({ held: "no", detail: "Refused by Cloudflare" });
+    expect(dashboardContent(reply)).toContain("Refused by Cloudflare: Zone Settings: Edit");
+    expect(connectionPermissions(status.connections[0], seededPolicy().profiles)).toEqual({ readable: false, missing: ["Zone Settings: Edit"] });
+  });
+
+  test("a token is read on a check of every site, and its read stands through checks of some sites and a read Cloudflare cannot answer", async () => {
+    const env = setup();
+    const token = env.cf.tokens.get(TOKEN)!;
+    token.policies = [policy(["DNS Write", "API Tokens Read"], ALL_ZONES)];
+    const reads = () => env.cf.calls.filter((call) => call.path === `/user/tokens/${token.id}`).length;
+    const verifies = () => env.cf.calls.filter((call) => call.path === "/user/tokens/verify").length;
+    await env.connect();
+    const [readsBefore, verifiesBefore] = [reads(), verifies()];
+    await env.act("assign", { domains: ["example.com"], profileId: "web" });
+    expect(verifies()).toBeGreaterThan(verifiesBefore);
+    expect(reads()).toBe(readsBefore);
+    const fetch = env.cf.fetch;
+    env.cf.fetch = async (address, init) => new URL(address).pathname.endsWith(`/tokens/${token.id}`)
+      ? new Response(JSON.stringify({ success: false, errors: [{ code: 10000, message: "Internal error" }] }), { status: 502 })
+      : fetch(address, init);
+    const reply = await env.act("check");
+    expect(reply.connections[0]!.access).toMatchObject({ reach: "All zones", note: null });
+  });
+
+  test("a refusal stays through checks of some sites, and clears on a full check that is not refused", async () => {
+    const env = setup();
+    const fetch = env.cf.fetch;
+    let refuse = true;
+    env.cf.fetch = async (address, init) => refuse && new URL(address).pathname.includes("/settings/")
+      ? new Response(JSON.stringify({ success: false, errors: [{ code: 10000, message: "Authentication error" }] }), { status: 403 })
+      : fetch(address, init);
+    await env.connect();
+    await env.act("assign", { domains: ["example.com"], profileId: "web" });
+    await env.act("check");
+    const refused = () => JSON.parse(readFileSync(join(env.dir, "state", "status.json"), "utf8")).connections[0].refused;
+    expect(refused()).toEqual(["Zone Settings: Edit"]);
+    refuse = false;
+    await env.act("assign", { domains: ["shop.example.com"], profileId: "web" });
+    expect(refused()).toEqual(["Zone Settings: Edit"]);
+    await env.act("check");
+    expect(refused()).toBeUndefined();
+  });
+
+  test("a token no longer active keeps no read, and a read refused for another reason is shown", async () => {
+    const env = setup();
+    const token = env.cf.tokens.get(TOKEN)!;
+    token.policies = [policy(["DNS Write", "API Tokens Read"], ALL_ZONES)];
+    const id = (await env.connect()).connections[0]!.id;
+    const zone = { id: env.cf.zones[0]!.id, accountId: env.agency };
+    const paths = { stateDir: join(env.dir, "state"), rootUid: process.getuid!() };
+    expect(dnsTokenHolds(id, "dns", zone, paths)).toBe(true);
+    const fetch = env.cf.fetch;
+    env.cf.fetch = async (address, init) => new URL(address).pathname.endsWith(`/tokens/${token.id}`)
+      ? new Response(JSON.stringify({ success: false, errors: [{ code: 1003, message: "Token not found" }] }), { status: 404 })
+      : fetch(address, init);
+    const missing = await env.act("check");
+    expect(missing.connections[0]!.access!.note).toContain("Token not found");
+    env.cf.fetch = fetch;
+    token.status = "expired";
+    const expired = await env.act("check");
+    expect(expired.connections[0]!.access).toBeNull();
+    expect(dnsTokenHolds(id, "dns", zone, paths)).toBeNull();
+  });
+
+  test("saving a connection keeps the connections in the policy's order", async () => {
+    const env = setup();
+    const first = (await env.connect()).connections[0]!.id;
+    await env.act("save-connection", { token: SECOND_TOKEN, label: "Church" });
+    await env.act("save-connection", { id: first, label: "Renamed" });
+    const status = JSON.parse(readFileSync(join(env.dir, "state", "status.json"), "utf8"));
+    expect(status.connections.map((connection: { label: string }) => connection.label)).toEqual(["Renamed", "Church"]);
+  });
+
+  test("an account-owned token is asked for Account API Tokens: Read and edited at its account", async () => {
+    const env = setup();
+    const token = "cf-account-owned-0123456789abcdef";
+    env.cf.token(token, { owner: "account", accounts: [env.agency], listAccounts: false });
+    const before = await env.connect(token);
+    expect(before.connections[0]!.access!.note).toBe("Add Account API Tokens: Read to this token to see its permissions here");
+    expect(before.connections[0]!.access!.editUrl).toBe(`https://dash.cloudflare.com/${env.agency}/api-tokens`);
+    env.cf.tokens.get(token)!.policies = [policy(["DNS Write", "Account API Tokens Read"], { [`com.cloudflare.api.account.${env.agency}`]: ALL_ZONES })];
+    const after = await env.act("check");
+    expect(after.connections[0]!.access!.reach).toBe("All zones in Agency");
+    expect(after.connections[0]!.access!.rows.find((row) => row.label === "Account API Tokens: Read")).toMatchObject({ held: "yes" });
+    const zone = { id: env.cf.zones[0]!.id, accountId: env.agency };
+    const paths = { stateDir: join(env.dir, "state"), rootUid: process.getuid!() };
+    expect(dnsTokenHolds(after.connections[0]!.id, "tokens", zone, paths)).toBe(true);
+  });
+
+  test("another addon can ask whether a token holds a permission on a zone, from the stored read", async () => {
+    const env = setup();
+    const zone = env.cf.zones[0]!;
+    env.cf.tokens.get(TOKEN)!.policies = [
+      policy(["DNS Write"], ALL_ZONES),
+      policy(["Zone WAF Write", "Zone Write"], { [`com.cloudflare.api.account.zone.${zone.id}`]: "*" }),
+      policy(["API Tokens Read"], { "com.cloudflare.api.user.0123": "*" }),
+      policy(["DNS Write"], { [`com.cloudflare.api.account.zone.${"9".repeat(32)}`]: "*" }, "deny"),
+    ];
+    const id = (await env.connect()).connections[0]!.id;
+    const calls = env.cf.calls.length;
+    expect(dnsTokenHolds(id, "waf", { id: zone.id, accountId: env.agency }, paths(env))).toBe(true);
+    expect(dnsTokenHolds(id, "waf", { id: "8".repeat(32), accountId: env.agency }, paths(env))).toBe(false);
+    expect(dnsTokenHolds(id, "dns", { id: zone.id, accountId: env.agency }, paths(env))).toBe(true);
+    expect(dnsTokenHolds(id, "dns", { id: "9".repeat(32), accountId: env.agency }, paths(env))).toBe(false);
+    expect(dnsTokenHolds(id, "tokens", { id: zone.id, accountId: env.agency }, paths(env))).toBe(true);
+    // Zone: Edit creates zones, so a grant on one zone does not hold it for the account.
+    expect(dnsTokenHolds(id, "zone", { id: zone.id, accountId: env.agency }, paths(env))).toBe(false);
+    expect(dnsTokenHolds("cf-unknown", "dns", { id: zone.id, accountId: env.agency }, paths(env))).toBeNull();
+    expect(env.cf.calls.length).toBe(calls);
   });
 });
 

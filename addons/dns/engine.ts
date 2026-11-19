@@ -9,8 +9,9 @@
 import { errorMessage } from "../../lib/errors";
 import { getDomain } from "tldts";
 import type { Addresses } from "./addresses";
-import { CloudflareApi, type CfAccount, type CfRecord, type CfRuleset, type CfZone } from "./cloudflare";
-import { type ApiFetch, ProviderError } from "./http";
+import { readAccess, selfReadPermission, type Reached, type TokenAccess } from "./access";
+import { CloudflareApi, UnreadableToken, type CfAccount, type CfRecord, type CfRuleset, type CfZone, type Verified } from "./cloudflare";
+import { type ApiFetch, ProviderError } from "../../lib/provider-http";
 import { aclAllows, MailcowApi, type MailcowDkim } from "./mailcow";
 import type { AccountRef, Policy, Profile, Redirect, Secrets } from "./model";
 import {
@@ -37,6 +38,8 @@ export interface PanelSite {
   cloudflareOnly: boolean;
   /** Set for a redirect domain, which is planned beside the sites but is not one. */
   redirect?: Redirect;
+  /** Set for the panel hostname, planned beside the sites too. */
+  panel?: true;
 }
 
 /** What a stand-in site on this server redirects to now. */
@@ -61,6 +64,10 @@ export interface ConnectionReport {
   accounts: CfAccount[];
   zones: number;
   error: string | null;
+  /** What the token holds, read with the check; absent before its first one. */
+  token?: TokenAccess;
+  /** Permissions Cloudflare refused the token, by label. */
+  refused?: string[];
 }
 
 interface ZoneRef {
@@ -115,6 +122,8 @@ export interface SitePlan {
   held?: true;
   /** A redirect domain; `zone` is null while it is served by a stand-in site on this server. */
   redirect?: true;
+  /** The panel hostname. */
+  panel?: true;
 }
 
 export interface ManagedRecords {
@@ -133,6 +142,27 @@ export interface RunContext {
   /** When each provider asked to be left alone until, carried between runs. */
   backoff: { cloudflare: number; mailcow: number };
   standIns?: StandIns;
+  /** Whether CloudPanel serves an issued certificate for the panel hostname, so Cloudflare may proxy it. */
+  panelProxied?: boolean;
+}
+
+export const PANEL_PROFILE_ID = "panel-hostname";
+
+/**
+ * What the panel hostname is held to: its addresses here, proxied only once
+ * CloudPanel has its certificate, and the rule that lets the renewals through.
+ */
+export function panelProfile(proxied: boolean): Profile {
+  const row = (type: "A" | "AAAA", content: string) => ({ type, name: "{domain}", content, proxied, ttl: 1, priority: null, apexOnly: false });
+  return {
+    id: PANEL_PROFILE_ID, name: "Panel hostname", records: [row("A", "{ipv4}"), row("AAAA", "{ipv6}")], mailcow: false,
+    zone: { ssl: null, alwaysHttps: null, acmeFullSsl: true, webmailFullSsl: false, skipFirewallIps: [] },
+  };
+}
+
+/** The profiles a token is held to: the policy's, and the panel hostname's while one is set. */
+export function tokenProfiles(policy: Pick<Policy, "profiles" | "panelHost">): Profile[] {
+  return policy.panelHost ? [...policy.profiles, panelProfile(false)] : policy.profiles;
 }
 
 interface ZoneState {
@@ -184,15 +214,20 @@ export class DnsRun {
   readonly entries: PanelSite[];
   private readonly redirects: Map<string, Redirect>;
   private readonly siteDomains: Set<string>;
+  private readonly panelHost: string | null;
 
   constructor(private readonly context: RunContext) {
     this.redirects = new Map(context.policy.redirects.map((redirect) => [redirect.source, redirect]));
     this.siteDomains = new Set(context.sites.map((site) => site.domain));
+    const host = context.policy.panelHost;
+    // A site or redirect domain of the same name is that entry's, and the panel hostname waits.
+    this.panelHost = host && !this.siteDomains.has(host) && !this.redirects.has(host) ? host : null;
     this.entries = [
       ...context.sites.filter((site) => !this.redirects.has(site.domain)),
       ...context.policy.redirects.map((redirect) => ({
         id: 0, domain: redirect.source, type: "redirect", createdAt: 0, selfSigned: false, cloudflareOnly: false, redirect,
       })),
+      ...this.panelHost ? [{ id: 0, domain: this.panelHost, type: "panel", createdAt: 0, selfSigned: false, cloudflareOnly: false, panel: true as const }] : [],
     ];
     this.cloudflareBackoff = { until: context.backoff.cloudflare };
     this.mailcowBackoff = { until: context.backoff.mailcow };
@@ -207,6 +242,10 @@ export class DnsRun {
       : null;
   }
 
+  get panelProxied(): boolean {
+    return this.context.panelProxied === true;
+  }
+
   backoff(): { cloudflare: number; mailcow: number } {
     return { cloudflare: this.cloudflareBackoff.until, mailcow: this.mailcowBackoff.until };
   }
@@ -215,7 +254,8 @@ export class DnsRun {
   // What every connection reaches
   // -------------------------------------------------------------------------
 
-  async discover(): Promise<void> {
+  /** `readTokens` also reads each token's own permissions: on a check of every site and when a connection is saved. */
+  async discover(readTokens = false): Promise<void> {
     const reports = await Promise.all(this.context.policy.connections.map(async (connection): Promise<ConnectionReport & { refs?: ZoneRef[] }> => {
       const report: ConnectionReport = { id: connection.id, label: connection.label, active: false, status: "missing", accounts: [], zones: 0, error: null };
       const api = this.cloudflare.get(connection.id);
@@ -227,7 +267,10 @@ export class DnsRun {
         const [zones, accounts] = await Promise.all([api.zones(), api.accounts()]);
         const known = new Map(accounts.map((account) => [account.id, account]));
         for (const zone of zones) if (!known.has(zone.account.id)) known.set(zone.account.id, zone.account);
-        return { ...report, active: true, accounts: [...known.values()], zones: zones.length, refs: zones.map((zone) => ({ zone, connectionId: connection.id })) };
+        const token = readTokens
+          ? await this.readToken(api, verified, { zones: zones.map((zone) => ({ id: zone.id, name: zone.name, accountId: zone.account.id })), accounts: [...known.values()] })
+          : undefined;
+        return { ...report, active: true, accounts: [...known.values()], zones: zones.length, ...(token ? { token } : {}), refs: zones.map((zone) => ({ zone, connectionId: connection.id })) };
       } catch (error) {
         return { ...report, status: "error", error: reason(error) };
       }
@@ -239,6 +282,30 @@ export class DnsRun {
       this.connections.push(report);
     }
   }
+
+  private async readToken(api: CloudflareApi, verified: Verified, reached: Reached): Promise<TokenAccess> {
+    const owner = { owner: verified.owner, accountId: verified.accountId };
+    if (!verified.id) return { ...owner, readable: false, reason: "Cloudflare did not say which token this is" };
+    try {
+      return readAccess(owner, await api.policies(owner, verified.id), reached);
+    } catch (error) {
+      if (error instanceof ProviderError && (error.status === 401 || error.status === 403)) {
+        return { ...owner, readable: false, reason: `Add ${selfReadPermission(owner.owner)} to this token to see its permissions here` };
+      }
+      // Only a reply that never came, a rate limit or Cloudflare's own failure; anything else is shown.
+      const transient = error instanceof ProviderError && !(error instanceof UnreadableToken) && (error.status === 0 || error.status === 429 || error.status >= 500);
+      return { ...owner, readable: false, reason: `Its permissions could not be read: ${reason(error)}`, ...(transient ? { transient: true as const } : {}) };
+    }
+  }
+
+  /** Each connection's report, with the permissions Cloudflare refused it during this run. */
+  reports(): ConnectionReport[] {
+    return this.connections.map((report) => {
+      const refused = [...this.cloudflare.get(report.id)?.refused ?? []];
+      return refused.length ? { ...report, refused } : report;
+    });
+  }
+
 
   private connectionLabel(id: string): string {
     return this.context.policy.connections.find((connection) => connection.id === id)?.label ?? id;
@@ -283,6 +350,7 @@ export class DnsRun {
   }
 
   private profileOf(domain: string): Profile | null {
+    if (domain === this.panelHost) return panelProfile(this.context.panelProxied === true);
     const redirect = this.redirects.get(domain);
     const id = redirect ? redirect.profileId : this.context.policy.assignments[domain];
     return this.context.policy.profiles.find((profile) => profile.id === id) ?? null;
@@ -484,6 +552,7 @@ export class DnsRun {
     const plan: SitePlan = {
       domain: site.domain, profileId: profile?.id ?? null, mode: this.context.policy.automatic ? "enforce" : "report", zone: null,
       changes: [], problems: [], zoneChoices: [], certificateNames: [], ...redirect && { redirect: true as const },
+      ...site.panel && { panel: true as const },
     };
     this.diffs.delete(site.domain);
     if (!profile && !redirect) return plan;
@@ -571,6 +640,7 @@ export class DnsRun {
       this.standInChange(redirect.source, resolved.ref.zone.name, resolved.ref.zone.status === "active", plan);
       return plan;
     }
+    if (site.panel) return plan;
     const addresses = diff.wanted.filter((record) => ["A", "AAAA", "CNAME"].includes(record.type));
     plan.certificateNames = [site.domain, `www.${site.domain}`].filter((name) => addresses.some((record) => record.name === name));
     return plan;

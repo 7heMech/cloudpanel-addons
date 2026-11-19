@@ -1,10 +1,7 @@
 // Bun Snapshot v1, https://bun.sh/docs/test/snapshots
 
 exports[`the web-reachable verbs and who may call them 1`] = `
-"cloudflare-ips:list                admin
-cloudflare-ips:policy              admin
-cloudflare-ips:set                 admin
-dns:assign                         admin
+"dns:assign                         admin
 dns:check                          admin
 dns:choose-zone                    admin
 dns:confirm                        admin
@@ -24,9 +21,21 @@ dns:save-redirect                  admin
 dns:save-server                    admin
 dns:set-automatic                  admin
 dns:set-default                    admin
+dns:set-panel-host                 admin
 dns:site-status                    panel-user
 dns:take-over                      admin
 dns:zone-account                   admin
+firewall:hetzner-connect           admin
+firewall:hetzner-disconnect        admin
+firewall:hetzner-switch            admin
+firewall:list                      admin
+firewall:panel-gate                admin
+firewall:panel-gate-switch         admin
+firewall:policy                    admin
+firewall:protocols                 admin
+firewall:set                       admin
+firewall:set-protocol              admin
+firewall:set-protocols             admin
 git:configure                      site-manager
 git:deploy                         site-manager
 git:domains                        site-manager
@@ -58,13 +67,16 @@ maintenance:disable                admin
 maintenance:disable-many           admin
 maintenance:enable                 admin
 maintenance:enable-many            admin
+maintenance:get-default-template   admin
 maintenance:get-template           admin
 maintenance:global-disable         admin
 maintenance:global-enable          admin
 maintenance:global-set-bypass      admin
 maintenance:global-status          admin
+maintenance:reset-default-template admin
 maintenance:reset-template         admin
 maintenance:set-bypass             admin
+maintenance:set-default-template   admin
 maintenance:set-template           admin
 maintenance:sites                  admin
 maintenance:status                 admin
@@ -75,6 +87,8 @@ manager:job                        admin
 manager:mark-news-seen             admin
 manager:news-seen                  admin
 manager:reconcile                  admin
+manager:setup                      admin
+manager:setup-pref                 admin
 manager:update                     admin
 manager:watch-job                  admin stream
 panel-tweaks:branding              admin
@@ -118,7 +132,6 @@ stager:promote                     admin
 stager:prune                       admin
 stager:sites                       admin
 stager:watch-job                   admin stream
-system-tweaks:firewall             admin
 system-tweaks:install-fail2ban     admin
 system-tweaks:install-updates      admin
 system-tweaks:lock-settings        admin
@@ -126,7 +139,6 @@ system-tweaks:set-backup-compression admin
 system-tweaks:set-clpctl-guard     admin
 system-tweaks:set-database-loopback admin
 system-tweaks:set-file-manager-guard admin
-system-tweaks:set-firewall-protocol admin
 system-tweaks:set-login-jails      admin
 system-tweaks:set-motd             admin
 system-tweaks:set-panel-cert       admin

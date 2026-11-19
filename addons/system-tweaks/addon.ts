@@ -1,14 +1,15 @@
 import { handle } from "./app/index";
 import {
-  restoreSystemTweaks, runSystemTweaksAction, systemTweaksPhpPools, systemTweaksBackupCompression, systemTweaksFirewall, systemTweaksMaintenance,
+  restoreSystemTweaks, runSystemTweaksAction, systemTweaksLoginJails, systemTweaksPhpPools, systemTweaksBackupCompression, systemTweaksMaintenance,
   systemTweaksMotd, systemTweaksPhpGuardOff, systemTweaksPhpMyAdmin, systemTweaksVarnish, withdrawSystemTweaks,
 } from "./action";
-import { SYSTEM_TWEAKS_TARGETS } from "./inject/targets";
 import { DEFAULT_REAL_IP_PATHS, REAL_IP_MARKER, releaseRealIp } from "./real-ip";
 import { syncVarnishBackends } from "./varnish-backend";
 import { DEFAULT_VISITOR_IP_PATHS, UNTRUSTED_LOOPBACK, VISITOR_IP, releaseVisitorIp } from "./visitor-ip";
 import { fatal, log } from "../../lib/log";
 import type { AddonDefinition } from "../../lib/addon-definition";
+import { SYSTEM_TWEAKS_SETUP } from "./setup";
+import { defaultServerCheck } from "./default-server";
 
 export const SYSTEM_TWEAKS_ADDON: AddonDefinition = {
   name: "system-tweaks",
@@ -16,6 +17,8 @@ export const SYSTEM_TWEAKS_ADDON: AddonDefinition = {
   description: "Server security, automatic updates, panel PHP, remote backup compression, SSH login message.",
   added: "2.0.0-rc.1",
   changed: [
+    { in: "2.2.0-rc.1", note: "Setup shows Action needed when the sites' Nginx answers hostnames it has no site for." },
+    { in: "2.2.0-rc.1", note: "Failed logins through the panel's custom domain count from seconds after you save it, not up to 15 minutes later." },
     { in: "2.1.0-rc.4", note: "Lock settings moved into the Hardening card." },
     { in: "2.1.0-rc.4", note: "Sites behind Cloudflare see the visitor's IP; move a vhost's port 8080 IP rules to its first server." },
     { in: "2.1.0-rc.3", note: "Lock settings turns every protection on, and only root can unlock. New installs start locked; updates don't." },
@@ -24,7 +27,9 @@ export const SYSTEM_TWEAKS_ADDON: AddonDefinition = {
     { in: "2.1.0-rc.1", note: "clp-agent no longer sends CloudPanel your domains and panel users." },
     { in: "2.0.0", note: "Mitigates several CloudPanel weaknesses; accept the panel's new certificate once." },
   ],
-  targets: SYSTEM_TWEAKS_TARGETS,
+  targets: [],
+  setup: SYSTEM_TWEAKS_SETUP,
+  actionNeeded: [{ id: "default-server", check: () => defaultServerCheck() }],
   handler: handle,
   action: runSystemTweaksAction,
   repair: {
@@ -35,9 +40,10 @@ export const SYSTEM_TWEAKS_ADDON: AddonDefinition = {
     label: "system tweaks Varnish backends",
     run: () => systemTweaksVarnish(),
   },
-  firewall: {
-    label: "system tweaks firewall",
-    run: () => systemTweaksFirewall(),
+  // Saving the panel's custom domain rewrites its vhost, then writes its certificate.
+  certificates: {
+    label: "login jails",
+    run: () => systemTweaksLoginJails(),
   },
   // CloudPanel rewrites its phpMyAdmin vhost, replaces its app tree on an
   // update, and an upgrade empties /etc/update-motd.d and puts its banner back.

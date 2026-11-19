@@ -4,7 +4,7 @@ import { artifactNames, installArtifacts, installedTag } from "./artifacts";
 import { bootstrapProvision, applyEnable } from "./toggle";
 import { type AddonSpec } from "../lib/addon-definition";
 import { recordNewsSince } from "../manager/action";
-import { withOperationLock } from "./operation-lock";
+import { withOperationLock } from "../lib/operation-lock";
 import { ARTIFACT_MANIFEST_PATH } from "../lib/paths";
 import { lstatSync } from "node:fs";
 import { ensureDirs, ensureRequiredUnits, ensureServiceUser } from "./provision";

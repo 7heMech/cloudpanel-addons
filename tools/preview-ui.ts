@@ -2,8 +2,10 @@
 // state or invokes an action. Supported mutations change fictional data only.
 import { indexPage, updatePage } from "../manager/views";
 import {
-  dashboardView as cloudflareDashboardView, layout as cloudflareLayout,
-} from "../addons/cloudflare-ips/app/views";
+  dashboardView as firewallDashboardView, layout as firewallLayout, panelGateCard as firewallPanelGateCard,
+} from "../addons/firewall/app/views";
+import type { HetznerView } from "../addons/firewall/hetzner";
+import type { PanelGateView } from "../addons/firewall/panel-gate";
 import {
   dashboardView, layout as instaticLayout, newInstanceView, jobView as instaticJobView,
 } from "../addons/instatic/app/views";
@@ -26,6 +28,7 @@ import { dashboardView as smtpDashboardView, layout as smtpLayout } from "../add
 import type { SmtpState } from "../addons/smtp/action";
 import { dashboardView as dnsDashboardView, layout as dnsLayout } from "../addons/dns/app/views";
 import type { DnsState, Review as DnsReview } from "../addons/dns/action";
+import { accessView as dnsAccessView, readAccess as dnsReadAccess, type AccessView as DnsAccessView, type TokenAccess as DnsTokenAccess } from "../addons/dns/access";
 import type { SitePlan as DnsSitePlan } from "../addons/dns/engine";
 import type { Redirect as DnsRedirect } from "../addons/dns/model";
 import { PRESETS as DNS_PRESETS, seededPolicy as dnsSeededPolicy } from "../addons/dns/presets";
@@ -62,6 +65,9 @@ import ACE_MODE_HTML from "../addons/maintenance/app/ace-mode-html.js" with { ty
 import type { InstanceView, InstaticJobView } from "../addons/instatic/app/service";
 import type { JobView, SiteSummary } from "../addons/stager/app/service";
 import type { AvailableTags } from "../addons/instatic/app/tags";
+import { setupPanelHtml, setupShows } from "../manager/setup-view";
+import type { ActionItem, SetupItem, SetupView } from "../manager/setup";
+import { ADDONS } from "../addons/catalog";
 import { withCsrfCookie, SECURITY_HEADERS } from "../lib/app-http";
 import { handle as terminalHandle } from "../addons/terminal/app/index";
 import { dashboardView as terminalDashboardView, layout as terminalLayout } from "../addons/terminal/app/views";
@@ -176,8 +182,12 @@ function dnsPreviewState(url: URL): DnsState {
     defaultProfileId: setup ? null : "web",
     sites,
     connections: setup ? [] : [
-      { id: "cf-1", label: "Agency", active: true, status: "active", accounts: [{ id: "a".repeat(32), name: "Example Agency" }, { id: "b".repeat(32), name: "Clients" }], zones: 42, error: null, hasToken: true },
-      { id: "cf-2", label: "Church", active: true, status: "active", accounts: [{ id: "c".repeat(32), name: "Church account" }], zones: 7, error: null, hasToken: true },
+      { id: "cf-1", label: "Agency", active: true, status: "active", accounts: [{ id: "a".repeat(32), name: "Example Agency" }, { id: "b".repeat(32), name: "Clients" }], zones: 42, error: null, hasToken: true,
+        access: dnsPreviewAccess({ token: DNS_PREVIEW_TOKENS.agency }, [web, mailcow], false) },
+      { id: "cf-2", label: "Church", active: true, status: "active", accounts: [{ id: "c".repeat(32), name: "Church account" }], zones: 7, error: null, hasToken: true,
+        access: dnsPreviewAccess({ token: DNS_PREVIEW_TOKENS.church }, [web, mailcow], true) },
+      { id: "cf-3", label: "Older token", active: true, status: "active", accounts: [{ id: "d".repeat(32), name: "Partner" }], zones: 3, error: null, hasToken: true,
+        access: dnsPreviewAccess({ token: DNS_PREVIEW_TOKENS.older, refused: ["Config Rules: Edit"] }, [web, mailcow], false) },
     ],
     accounts: setup ? [] : [
       { connectionId: "cf-1", accountId: "a".repeat(32), label: "Example Agency (Agency)" },
@@ -195,7 +205,54 @@ function dnsPreviewState(url: URL): DnsState {
     token: dnsTokenTemplate([web, mailcow]),
     presets: DNS_PRESETS,
     log,
+    panelHost: dnsPreviewPanelHost(url, setup, plan),
   };
+}
+
+/** ?panelhost=new|waiting|proxied|clash picks the panel hostname's state; a first visit has none. */
+function dnsPreviewPanelHost(url: URL, setup: boolean, plan: (domain: string, extra: Partial<DnsSitePlan>) => DnsSitePlan): DnsState["panelHost"] {
+  const stage = url.searchParams.get("panelhost") ?? (setup ? null : "new");
+  if (!stage || stage === "none") return null;
+  const name = "panel.example.com";
+  const record = (_type: string, address: string, proxied: boolean) => `${address} · ${proxied ? "proxied" : "DNS only"}`;
+  const changes: DnsSitePlan["changes"] = stage === "new"
+    ? [{ action: "create", subject: `A ${name}`, detail: record("A", "203.0.113.10", false) }, { action: "create", subject: `AAAA ${name}`, detail: record("AAAA", "2001:db8::10", false) }]
+    : stage === "proxied" ? [] : [];
+  return {
+    name,
+    problem: stage === "clash" ? `CloudPanel has a site ${name}; remove the panel hostname or delete the site` : null,
+    plan: stage === "clash" ? null : { ...plan(name, { profileId: "panel-hostname", certificateNames: [] }), panel: true, changes },
+    customDomain: stage === "waiting" ? { name, issued: false } : stage === "proxied" ? { name, issued: true } : null,
+    proxied: stage === "proxied",
+  };
+}
+
+/** Agency lacks Zone WAF and has Zone Settings on one account only; Church has all of it; the older token cannot read itself. */
+const DNS_PREVIEW_TOKENS: Record<"agency" | "church" | "older", DnsTokenAccess> = (() => {
+  const agency = "a".repeat(32);
+  const clients = "b".repeat(32);
+  const church = "c".repeat(32);
+  const zone = (n: number, name: string, accountId: string) => ({ id: String(n).repeat(32).slice(0, 32), name, accountId });
+  const agencyZones = [zone(1, "example.com", agency), zone(2, "example.org", clients), zone(3, "example.net", agency), zone(4, "example-brand.net", agency)];
+  const everything = ["DNS Write", "Zone Write", "Account Settings Read", "Dynamic URL Redirects Write", "Config Settings Write", "API Tokens Read"];
+  const all = [{ account: "*", zone: "*" }];
+  return {
+    agency: dnsReadAccess({ owner: "user", accountId: null }, [
+      { allow: true, permissions: everything, resources: all },
+      { allow: true, permissions: ["Zone Settings Write"], resources: [{ account: agency, zone: "*" }] },
+    ], { zones: agencyZones, accounts: [{ id: agency, name: "Example Agency" }, { id: clients, name: "Clients" }] }),
+    church: dnsReadAccess({ owner: "account", accountId: church }, [
+      { allow: true, permissions: [...everything, "Zone Settings Write", "Zone WAF Write"], resources: [{ account: church, zone: "*" }] },
+    ], { zones: [zone(5, "church.example", church)], accounts: [{ id: church, name: "Church account" }] }),
+    older: { owner: "user", accountId: null, readable: false, reason: "Add API Tokens: Read to this token to see its permissions here" },
+  };
+})();
+/** Until a permission is optional, the preview adds one, held by Church only. */
+function dnsPreviewAccess(stored: Parameters<typeof dnsAccessView>[0], profiles: Parameters<typeof dnsAccessView>[1], held: boolean): DnsAccessView | null {
+  const view = dnsAccessView(stored, profiles);
+  if (!view) return null;
+  const optional = { label: "Firewall Services: Edit", usedFor: "Cloudflare bans for login jails", held: view.reach === null ? "unknown" as const : held ? "yes" as const : "no" as const, optional: true as const };
+  return { ...view, rows: [...view.rows, optional] };
 }
 
 const dnsFoundRule = (source: string, target: string, keepPath = true) => ({ source, zone: source, target, status: 301 as const, keepPath, keepQuery: true });
@@ -343,10 +400,24 @@ function gitPreviewSites(url: URL): GitSiteStatus[] {
 
 /**
  * Maintenance across the fleet. ?global turns the override on, ?many adds sites
- * until the search shows, and ?uncovered leaves www without the Nginx check.
- * Switches made on the page are kept until the preview restarts.
+ * until the search shows, ?uncovered leaves www without the Nginx check, and
+ * ?edited starts with an edited default page. Switches and the default page
+ * saved on the page are kept until the preview restarts.
  */
-const maintenanceChanges = { enabled: new Map<string, boolean>(), global: null as boolean | null };
+const maintenanceChanges = {
+  enabled: new Map<string, boolean>(), global: null as boolean | null, defaultPage: undefined as string | null | undefined,
+};
+
+const PREVIEW_EDITED_DEFAULT = DEFAULT_MAINTENANCE_TEMPLATE.replace(/<h1>[^<]*<\/h1>/, "<h1>Example Hosting is updating this site</h1>");
+
+const PREVIEW_CUSTOM_PAGE = "<!doctype html>\n<title>Shop closed</title>\n<h1>The shop is closed for stocktaking</h1>\n";
+
+function maintenancePreviewDefault(url: URL): { custom: boolean; html: string } {
+  const edited = maintenanceChanges.defaultPage === undefined
+    ? (url.searchParams.has("edited") ? PREVIEW_EDITED_DEFAULT : null)
+    : maintenanceChanges.defaultPage;
+  return edited === null ? { custom: false, html: DEFAULT_MAINTENANCE_TEMPLATE } : { custom: true, html: edited };
+}
 
 function maintenancePreviewFleet(url: URL): MaintenanceFleet {
   const extra = url.searchParams.has("many") ? [
@@ -365,10 +436,15 @@ function maintenancePreviewFleet(url: URL): MaintenanceFleet {
   return {
     global: { global: maintenanceChanges.global ?? url.searchParams.has("global"), bypasses: url.searchParams.has("empty") ? [] : ["203.0.113.8"] },
     sites: url.searchParams.has("empty") ? [] : fleetSites,
+    defaultPage: maintenancePreviewDefault(url),
   };
 }
 
 function maintenancePreviewMutation(path: string, source: URL, body: Record<string, any>): Response | null {
+  if (path === "/addons/maintenance/api/default-template") {
+    maintenanceChanges.defaultPage = typeof body.html === "string" ? body.html : null;
+    return Response.json({ ok: true, data: maintenancePreviewDefault(source) });
+  }
   const toggle = path.match(/^\/addons\/maintenance\/api\/sites\/([^/]+)\/toggle$/);
   if (toggle) maintenanceChanges.enabled.set(decodeURIComponent(toggle[1]!), body.enabled === true);
   else if (path === "/addons/maintenance/api/bulk-toggle") {
@@ -440,8 +516,54 @@ const cloudflareSites = [
 const cloudflareMoreSites = ["shop.example.net", "docs.example.org", "status.example.io", "api.example.dev"]
   .map((domain, index) => ({ domain, enabled: index % 2 === 0 }));
 
-/** ?sites=all|none|mixed, ?auto=off and ?many (search and filter) cover the states the controls describe. */
-function cloudflarePreviewState(url: URL) {
+/**
+ * ?hetzner=absent|disconnected|error|off|open|ssh|alone: the Hetzner card's states; connected with the sites
+ * switch on by default. `alone` has no other firewall, so the panel's port stays open through the addon's own.
+ */
+function hetznerPreviewState(mode: string | null): HetznerView {
+  if (mode === "absent") return { state: "absent" };
+  if (mode === "disconnected") return { state: "disconnected", serverId: 166224552, serverName: "cp-fra-1" };
+  if (mode === "error") return { state: "error", connected: true, error: "Hetzner could not be read: Hetzner: unable to authenticate (unauthorized)" };
+  const on = mode !== "off";
+  const alone = mode === "alone" || mode === "ssh";
+  return {
+    state: "connected", serverId: 166224552, serverName: "cp-fra-1",
+    others: alone ? [] : ["ssh-from-office"], terminal: true,
+    roles: {
+      web: {
+        on, firewall: "clp-addons-cloudflare-web", open: null, current: true,
+        stillOpen: mode === "open" ? ["443 is still open to anyone through firewall ssh-from-office."] : [],
+      },
+      panel: { on: false, firewall: null, open: alone ? "clp-addons-open-panel" : null, current: true, stillOpen: [] },
+    },
+    sshClosed: mode === "ssh" ? [2222] : [],
+    rangesProblem: null,
+  };
+}
+
+/** ?gate=ready|on|drift|leftover|pending|error: the Panel gate card's states; something missing by default. */
+function panelGatePreviewState(mode: string | null): PanelGateView | { error: string } {
+  if (mode === "error") return { error: "The Panel gate could not be read: Cloudflare: asked to wait until 2026-11-19T05:10:00.000Z" };
+  const base = { hostname: "panel.example.com", problems: [], drift: [], checkedAt: null, leftover: false, editUrl: null };
+  if (mode === "on" || mode === "drift") {
+    return {
+      ...base, on: true, checkedAt: "2026-11-19T04:45:12.000Z",
+      drift: mode === "drift" ? [
+        "The Access application for panel.example.com was changed in Cloudflare.",
+        "Port 8443 answers more than loopback; the next repair puts the rule back.",
+      ] : [],
+    };
+  }
+  if (mode === "ready" || mode === "leftover") return { ...base, on: false, leftover: mode === "leftover" };
+  if (mode === "pending") return { ...base, on: false, pending: true };
+  return {
+    ...base, on: false, editUrl: "https://dash.cloudflare.com/profile/api-tokens",
+    problems: ["The token of DNS connection Agency lacks SSL and Certificates: Edit, Access: Organizations, Identity Providers, and Groups: Edit. Add them to the token in Cloudflare."],
+  };
+}
+
+/** ?sites=all|none|mixed, ?auto=off, ?many (search and filter), ?protocols=off and ?noudp cover the states the controls describe. */
+function firewallPreviewState(url: URL) {
   const all = url.searchParams.get("sites");
   const sites = [...cloudflareSites, ...(url.searchParams.has("many") ? cloudflareMoreSites : [])].map((site) => all === "all"
     ? { ...site, enabled: true }
@@ -449,6 +571,12 @@ function cloudflarePreviewState(url: URL) {
   return {
     autoEnableNewSites: url.searchParams.get("auto") !== "off",
     sites: url.searchParams.has("empty") ? [] : sites,
+    protocols: {
+      available: true, enabled: url.searchParams.get("protocols") !== "off",
+      protocols: { 9: "udp" as const, 10: "udp" as const, 11: "both" as const }, udpPorts: url.searchParams.has("noudp") ? [] : ["53", "51820"],
+    },
+    hetzner: hetznerPreviewState(url.searchParams.get("hetzner")),
+    panelGate: panelGatePreviewState(url.searchParams.get("gate")),
   };
 }
 
@@ -512,10 +640,18 @@ let systemTweaksPreview: SystemTweaksState | null = null;
 
 /** ?dark draws a page in the panel's dark theme, from the cookie the panel's own switch sets. */
 function previewTheme(html: string, url: URL): string {
+  // ?setup opens the Setup checklist once it has loaded; &closed leaves it shut.
+  if (url.searchParams.has("setup") && !url.searchParams.has("closed")) {
+    html = html.replace("</body>", () => `<script>addEventListener("load",function(){setTimeout(function(){clpSetupOpen(true)},100)})</script></body>`);
+  }
   // ?open=id,id opens those disclosures, so a section that starts closed can be reviewed.
   const open = url.searchParams.get("open");
   if (open) {
     html = html.replace("</body>", () => `<script>addEventListener("DOMContentLoaded",function(){${JSON.stringify(open.split(",")).replaceAll("<", "\\u003c")}.forEach(function(id){const d=document.getElementById(id);if(d)d.open=true})})</script></body>`);
+  }
+  // ?select=all ticks every row, so the selection's count and actions can be reviewed.
+  if (url.searchParams.get("select") === "all") {
+    html = html.replace("</body>", () => `<script>addEventListener("load",function(){setTimeout(function(){CLP_ROOT.querySelectorAll(".site-checkbox").forEach(function(b){b.checked=true});paintFleetSelection()},0)})</script></body>`);
   }
   if (!url.searchParams.has("dark")) return html;
   return html.replace("<head>", "<head><script>document.cookie='theme=dark; Path=/'</script>");
@@ -625,7 +761,6 @@ function systemTweaksPreviewState(url: URL): SystemTweaksState {
       level: 3, threads: 1, supported: true, installed: true, problem: "",
     },
     database: databasePreviewState(url),
-    firewall: { available: true, protocols: { 9: "udp", 10: "udp", 11: "both" }, udpPorts: url.searchParams.has("noudp") ? [] : ["53", "51820"] },
     vhostGuard: {
       enabled: url.searchParams.get("vhost") !== "off", active: url.searchParams.get("vhost") !== "off",
       stored: url.searchParams.has("injected") ? [{ domain: "shop.example.com", field: "Root Directory" }, { domain: "blog.example.com", field: "Varnish server" }] : [],
@@ -1720,6 +1855,71 @@ function phpPreviewMutation(path: string, source: URL, body: Record<string, any>
   return null;
 }
 
+const setupPreviewSteps = (["domain", "secure", "sites", "provision"] as const).flatMap((level, index) => ([
+  [["dns-connection", "Connect DNS", "dns", "done", "Cloudflare: Agency"], ["panel-hostname", "Panel hostname", "dns", "todo", "Enter panel.example.com under Admin → Settings → Custom Domain in CloudPanel"]],
+  [["panel-cert", "Panel certificate", "system-tweaks", "done", "The panel serves a certificate made for this server"], ["login-jails", "Login jails", "system-tweaks", "todo", "fail2ban is not installed"],
+    ["real-ip", "Forged visitor IPs", "system-tweaks", "done", "X-Real-IP is trusted only from the proxies that set it"], ["phpmyadmin", "phpMyAdmin rules", "system-tweaks", "done", "phpMyAdmin answers signed-in panel users only"],
+    ["updates", "Automatic updates", "system-tweaks", "todo", "Updates are installed by hand"], ["hetzner-firewall", "Hetzner Cloud Firewall", "firewall", "todo", "No Hetzner token is saved"],
+    ["passkeys", "Passkeys for administrators", "security-keys", "todo", "Security Keys is off"]],
+  [["remote-backups", "Remote backups", null, "todo", "Sites are backed up on this server only"], ["php-limits", "PHP limits for new sites", "resource-limits", "done", "New sites join Standard"],
+    ["smtp-relay", "Outgoing mail relay", "smtp", "done", "Relay: Example Mail"]],
+  [["dns-automatic", "Automatic DNS records", "dns", "todo", "DNS asks before it changes records"], ["auto-ssl", "Certificate at site creation", "panel-tweaks", "todo", "New sites start on a self-signed certificate"],
+    ["smtp-new-sites", "Mail for new sites", "smtp", "na", "Needs a relay first"]],
+][index]!.map(([id, title, addon, state, reason]): SetupItem => ({
+  id: id!, level, title: title!, href: addon ? `/addons/${addon}/` : "/admin/remote-backup", state: state as SetupItem["state"], reason: reason!,
+  addon: addon ? { name: addon, title: ADDONS[addon]!.title, enabled: addon !== "security-keys" } : null,
+}))));
+const SETUP_PREVIEW_ACTIONS: ActionItem[] = [
+  {
+    id: "default-server", addon: { name: "system-tweaks", title: "System Tweaks" }, title: "Unknown hostnames reach a site",
+    reason: "No server refuses them on port 443, so a domain pointed at this server reaches a site's PHP",
+    href: "https://github.com/7heMech/cloudpanel-addons/blob/main/docs/system-tweaks.md#unknown-hostnames",
+  },
+  {
+    id: "dns-permissions", addon: { name: "dns", title: "DNS" }, title: "Cloudflare token needs a permission",
+    reason: "Agency's token lacks API Tokens: Read, which this release uses to check what the token may do", href: "/addons/dns/#dns-connection",
+  },
+];
+const SETUP_PREVIEW_DONE: Record<string, string> = {
+  "panel-hostname": "CloudPanel answers at panel.example.com", "login-jails": "Failed panel logins are banned", updates: "Security updates install daily",
+  "hetzner-firewall": "Only Cloudflare reaches the sites and the panel", passkeys: "admin has a security key", "remote-backups": "On, to amazon_s3",
+  "dns-automatic": "New sites get Web's records", "auto-ssl": "New sites get a Let's Encrypt certificate",
+};
+const setupPreviewPrefs = { skipped: new Set<string>(["updates"]), hidden: false };
+
+/**
+ * ?setup=done shows a server with nothing left to suggest, ?setup=fallback one
+ * whose DNS token lacks a permission a newer release needs, and ?setup=off root's
+ * switch off. ?action=mixed adds Action needed, ?action=only with every
+ * suggestion done, ?action=hidden with Setup hidden.
+ */
+async function setupPreview(req: Request, url: URL): Promise<Response | null> {
+  if (url.pathname !== "/addons/api/setup") return null;
+  if (req.method === "POST") {
+    const body = await req.json().catch(() => ({})) as Record<string, unknown>;
+    if (typeof body.skip === "string") setupPreviewPrefs.skipped.add(body.skip);
+    if (typeof body.unskip === "string") setupPreviewPrefs.skipped.delete(body.unskip);
+    if (typeof body.hidden === "boolean") setupPreviewPrefs.hidden = body.hidden;
+  }
+  const page = new URL(req.headers.get("referer") ?? url.href).searchParams;
+  const action = page.get("action");
+  const scenario = action === "only" ? "done" : page.get("setup");
+  const steps = setupPreviewSteps.map((step): SetupItem => {
+    if (scenario === "fallback" && step.id === "dns-connection") {
+      return { ...step, state: "todo", reason: "Agency's token lacks API Tokens: Read, which DNS now needs to show the token's permissions" };
+    }
+    if ((scenario === "done" || scenario === "fallback") && step.state === "todo") return { ...step, state: "done", reason: SETUP_PREVIEW_DONE[step.id] ?? step.reason };
+    return step.state === "todo" && setupPreviewPrefs.skipped.has(step.id) ? { ...step, state: "skipped" } : step;
+  });
+  const view: SetupView = {
+    off: scenario === "off",
+    hidden: action === "hidden" || setupPreviewPrefs.hidden,
+    actions: action ? SETUP_PREVIEW_ACTIONS : [],
+    steps: scenario === "off" ? [] : steps,
+  };
+  return Response.json({ ok: true, data: { show: setupShows(view), attention: view.actions.length > 0, html: setupPanelHtml(view) } });
+}
+
 function managerPreviewMutation(path: string, source: URL): Response | null {
   if (path === "/addons/api/update") {
     previewManagerJob = {
@@ -1730,7 +1930,7 @@ function managerPreviewMutation(path: string, source: URL): Response | null {
   }
   const managerRoute = path.match(/^\/addons\/api\/addons\/([^/]+)\/(enable|disable)$/);
   if (managerRoute) {
-    previewEnabled ??= (source.searchParams.get("enabled") ?? "cloudflare-ips,instatic,stager,maintenance,resource-limits,git").split(",");
+    previewEnabled ??= (source.searchParams.get("enabled") ?? "firewall,instatic,stager,maintenance,resource-limits,git").split(",");
     previewManagerJob = {
       id: "20261021T120000Z-" + (++previewJobNumber).toString(16).padStart(6, "0"), addon: managerRoute[1]!,
       kind: managerRoute[2]!, state: "running", step: "Updating addon", error: "", createdAt: "", startedAt: "", finishedAt: "",
@@ -1802,10 +2002,16 @@ const server = Bun.serve({
     const path = url.pathname;
     const terminalReply = terminalPreview(req, url);
     if (terminalReply) return terminalReply;
+    // ?gate=pending draws the card first and then reads it here, as the real page does.
+    if (path === "/addons/firewall/api/panel-gate" && req.method === "GET") {
+      return Response.json({ ok: true, html: firewallPanelGateCard(panelGatePreviewState(null)) });
+    }
     const wpToolsApi = await wpToolsPreviewApi(req, path);
     if (wpToolsApi) return wpToolsApi;
     const panelTweaksApi = panelTweaksPreviewApi(req, path);
     if (panelTweaksApi) return panelTweaksApi;
+    const setupReply = await setupPreview(req, url);
+    if (setupReply) return setupReply;
     const repaintReply = await repaintPreviewMutation(req, url);
     if (repaintReply) return repaintReply;
     if (req.method !== "GET") return Response.json({ ok: false, error: "UI preview only; no changes were made." }, { status: 409 });
@@ -1917,7 +2123,7 @@ const server = Bun.serve({
       return Response.json(
         maintenanceFragment(
           `Maintenance — ${domain}`,
-          maintenanceSiteView(view, { domain, custom: false, html: DEFAULT_MAINTENANCE_TEMPLATE }, "203.0.113.8", url.searchParams.has("global")),
+          maintenanceSiteView(view, { domain, custom: false, html: maintenancePreviewDefault(url).html }, "203.0.113.8", url.searchParams.has("global")),
         ),
         { headers: withCsrfCookie({}, "preview-token") },
       );
@@ -2009,7 +2215,7 @@ const server = Bun.serve({
     if (path === "/addons/") {
       // ?enabled= picks which addons are on, so the Available section and the
       // enable/disable buttons can be reviewed without a CloudPanel install.
-      const enabled = previewEnabled ?? (empty ? [] : (url.searchParams.get("enabled") ?? "cloudflare-ips,instatic,stager,maintenance,resource-limits,git").split(",").filter(Boolean));
+      const enabled = previewEnabled ?? (empty ? [] : (url.searchParams.get("enabled") ?? "firewall,instatic,stager,maintenance,resource-limits,git").split(",").filter(Boolean));
       const previewJob = state && ["running", "queued", "failed"].includes(state)
         ? {
             id: "20260910T093000Z-abc123", kind: "enable", addon: "stager", state,
@@ -2018,7 +2224,7 @@ const server = Bun.serve({
           }
         : null;
       const page = indexPage(enabled, notice, {
-        available: ["cloudflare-ips", "dns", "instatic", "stager", "maintenance", "resource-limits", "git", "panel-tweaks", "system-tweaks", "wp-tools", "smtp", "terminal", "security-keys"].filter((name) => !enabled.includes(name)),
+        available: ["dns", "firewall", "instatic", "stager", "maintenance", "resource-limits", "git", "panel-tweaks", "system-tweaks", "wp-tools", "smtp", "terminal", "security-keys"].filter((name) => !enabled.includes(name)),
         job: previewJob,
         csrf: "preview-csrf-token",
         // ?news shows what changed since 2.0.0, and ?locked root's lock on System Tweaks.
@@ -2055,7 +2261,10 @@ const server = Bun.serve({
       html = maintenanceLayout(
         site ? `Maintenance — ${site.domain}` : "Maintenance Mode",
         site
-          ? maintenanceSiteView(site, { domain: site.domain, custom: site.customTemplate, html: DEFAULT_MAINTENANCE_TEMPLATE }, "203.0.113.8", globalEnabled)
+          ? maintenanceSiteView(site, {
+              domain: site.domain, custom: site.customTemplate,
+              html: site.customTemplate ? PREVIEW_CUSTOM_PAGE : maintenancePreviewDefault(url).html,
+            }, "203.0.113.8", globalEnabled)
           : maintenanceFleetView(fleet, "203.0.113.8"),
         notice,
         site
@@ -2173,8 +2382,8 @@ const server = Bun.serve({
           syncedPasskeys: !url.searchParams.has("hardware-only"),
         },
       }), notice);
-    } else if (path === "/addons/cloudflare-ips/" || path === "/addons/cloudflare-ips") {
-      html = cloudflareLayout("Cloudflare IP Access", cloudflareDashboardView(cloudflarePreviewState(url)), notice);
+    } else if (path === "/addons/firewall/" || path === "/addons/firewall") {
+      html = firewallLayout("Firewall", firewallDashboardView(firewallPreviewState(url)), notice);
     } else if (path === "/addons/instatic/") {
       html = instaticLayout("Instatic sites", empty ? dashboardView([], versions) : instaticDashboard(url), notice);
       // ?dialog=update|delete|stop opens that dialog once the page is up.

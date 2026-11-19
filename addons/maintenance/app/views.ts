@@ -5,7 +5,7 @@ import {
 import type { EmbedFragment } from "../../../lib/shadow-embed";
 import { mountPath } from "../../../lib/mount";
 import { siteTypeLabel, type SiteContext } from "../../../lib/site-context";
-import type { MaintenanceFleet, MaintenanceSiteView, MaintenanceTemplateView } from "./service";
+import type { MaintenanceFleet, MaintenancePageView, MaintenanceSiteView, MaintenanceTemplateView } from "./service";
 
 const BASE = mountPath("maintenance");
 
@@ -77,11 +77,68 @@ function bypassSummary(id: string, title: string, count: string): string {
   return `<summary><span><span class="summary-title">${title}</span><span class="hint" id="${id}-count">${count}</span></span></summary>`;
 }
 
+interface PageEditorCopy {
+  id: string;
+  endpoint: string;
+  title: string;
+  /** The summary's word for a saved page, then for the page it falls back to. */
+  kinds: [string, string];
+  hint: string;
+  label: string;
+  saved: string;
+  resetTitle: string;
+  resetText: string;
+  resetDone: string;
+  discardText: string;
+}
+
+/**
+ * A maintenance page behind a summary, opening on its preview, with an Edit
+ * switch into the HTML. The client reads its endpoint and wording from here.
+ */
+function pageEditor(page: MaintenancePageView, copy: PageEditorCopy): string {
+  const data = {
+    endpoint: copy.endpoint, "kind-custom": copy.kinds[0], "kind-default": copy.kinds[1], saved: copy.saved,
+    "reset-title": copy.resetTitle, "reset-text": copy.resetText, "reset-done": copy.resetDone, "discard-text": copy.discardText,
+  };
+  const attrs = Object.entries(data).map(([name, value]) => ` data-template-${name}="${esc(value)}"`).join("");
+  return `<details class="disclosure" id="${copy.id}"${attrs}>
+      <summary><span><span class="summary-title">${esc(copy.title)}</span><span class="hint" id="template-kind">${esc(page.custom ? copy.kinds[0] : copy.kinds[1])}</span></span></summary>
+      <p class="hint">${esc(copy.hint)}</p>
+      <div class="toolbar editor-toolbar">
+        <div class="editor-tabs" role="tablist" hidden><button class="btn" type="button" data-editor-tab="editor" aria-selected="false" onclick="showEditorTab('editor')">HTML / CSS</button><button class="btn" type="button" data-editor-tab="preview" aria-selected="true" onclick="showEditorTab('preview')">Preview</button></div>
+        <label class="switch-field toolbar-end" for="edit-template">Edit<span class="switch"><input id="edit-template" type="checkbox" onchange="changeTemplateMode(this.checked)"><span></span></span></label>
+      </div>
+      <textarea id="template-editor" aria-label="${esc(copy.label)}" spellcheck="false" hidden>${esc(page.html)}</textarea>
+      <div id="template-ace" hidden></div>
+      <iframe id="template-preview" title="${esc(copy.title)} preview" sandbox></iframe>
+      <div class="form-actions"><button class="btn btn-danger" id="reset-template" type="button" onclick="resetTemplate()"${page.custom ? "" : " hidden"}>Reset to default</button><button class="btn btn-primary" id="save-template" type="button" onclick="saveTemplate()">Save template</button></div>
+    </details>`;
+}
+
+function defaultPageEditor(page: MaintenancePageView): string {
+  return pageEditor(page, {
+    id: "default-page",
+    endpoint: "/api/default-template",
+    title: "Default maintenance page",
+    kinds: ["Edited", "Built-in"],
+    hint: "Every site without a page of its own serves this one. Active scripts and form controls are removed.",
+    label: "Default maintenance page HTML",
+    saved: "Default maintenance page saved.",
+    resetTitle: "Reset to the built-in maintenance page?",
+    resetText: "The edited default is removed, and every site without a page of its own serves the built-in page again.",
+    resetDone: "Reset to the built-in maintenance page.",
+    discardText: "The default maintenance page goes back to the version that is saved.",
+  });
+}
+
 /**
  * The global override: one switch that decides what visitors get for every
  * site at once while each site keeps the setting it has saved.
  */
-function globalCard(globalEnabled: boolean, disabled: boolean, bypasses: string[], currentIp: string): string {
+function globalCard(
+  globalEnabled: boolean, disabled: boolean, bypasses: string[], currentIp: string, defaultPage: MaintenancePageView,
+): string {
   return `<div class="card">
     <div class="split-card">
       <div>
@@ -96,6 +153,7 @@ function globalCard(globalEnabled: boolean, disabled: boolean, bypasses: string[
       ${bypassSummary("global-bypass-ips", "Global IP bypasses", bypasses.length ? plural(bypasses.length, "address", "addresses") : "None")}
       ${bypassFields("global-bypass-ips", "These skip maintenance on every site.", bypasses, currentIp, "saveGlobalBypasses()")}
     </details>
+    ${defaultPageEditor(defaultPage)}
   </div>`;
 }
 
@@ -138,7 +196,7 @@ export function fleetView(fleet: MaintenanceFleet, currentIp = ""): string {
     : '<div class="empty">No CloudPanel sites were found.</div>';
   return `<div class="page-heading" id="maintenance-fleet"><div><h1>Maintenance Mode</h1><p>Switch sites to a 503 maintenance page without reloading Nginx.</p></div></div>
   ${banner}
-  ${globalCard(globalEnabled, sites.length === 0, fleet.global.bypasses, currentIp)}
+  ${globalCard(globalEnabled, sites.length === 0, fleet.global.bypasses, currentIp, fleet.defaultPage)}
   <div class="card card-table">
     <div class="card-header toolbar">
       <div><h2>Sites</h2><div class="hint">${inMaintenance} of ${sites.length} in maintenance</div></div>
@@ -177,17 +235,18 @@ export function siteView(
       ${bypassSummary("bypass-ips", "IP bypasses", site.bypasses.length ? plural(site.bypasses.length, "bypass", "bypasses") : "None")}
       ${bypassFields("bypass-ips", "These skip maintenance on this site, as do the global bypasses.", site.bypasses, currentIp, `saveBypasses('${domain}')`)}
     </details>
-    <details class="disclosure" id="site-page">
-      <summary><span><span class="summary-title">Maintenance page</span><span class="hint" id="template-kind">${template.custom ? "Custom" : "Default"}</span></span></summary>
-      <p class="hint">Custom HTML and CSS are stored for this site. Active scripts and form controls are removed.</p>
-      <div class="toolbar editor-toolbar">
-        <div class="editor-tabs" role="tablist" hidden><button class="btn" type="button" data-editor-tab="editor" aria-selected="false" onclick="showEditorTab('editor')">HTML / CSS</button><button class="btn" type="button" data-editor-tab="preview" aria-selected="true" onclick="showEditorTab('preview')">Preview</button></div>
-        <label class="switch-field toolbar-end" for="edit-template">Edit<span class="switch"><input id="edit-template" type="checkbox" onchange="changeTemplateMode('${domain}', this.checked)"><span></span></span></label>
-      </div>
-      <textarea id="template-editor" aria-label="Maintenance page HTML" spellcheck="false" hidden>${esc(template.html)}</textarea>
-      <div id="template-ace" hidden></div>
-      <iframe id="template-preview" title="Maintenance page preview" sandbox></iframe>
-      <div class="form-actions"><button class="btn btn-danger" id="reset-template" type="button" onclick="resetTemplate('${domain}')"${template.custom ? "" : " hidden"}>Reset to default</button><button class="btn btn-primary" id="save-template" type="button" onclick="saveTemplate('${domain}')">Save template</button></div>
-    </details>
+    ${pageEditor(template, {
+      id: "site-page",
+      endpoint: `/api/sites/${encodeURIComponent(site.domain)}/template`,
+      title: "Maintenance page",
+      kinds: ["Custom", "Default"],
+      hint: "Custom HTML and CSS are stored for this site. Active scripts and form controls are removed.",
+      label: "Maintenance page HTML",
+      saved: "Custom maintenance page saved.",
+      resetTitle: "Reset to the default maintenance page?",
+      resetText: `The custom template saved for ${site.domain} is removed and cannot be recovered from here.`,
+      resetDone: "Reset to the default maintenance page.",
+      discardText: `The maintenance page for ${site.domain} goes back to the version that is saved.`,
+    })}
   </div>`;
 }

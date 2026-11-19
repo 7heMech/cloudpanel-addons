@@ -1,7 +1,7 @@
 // Hand-written helpers replaced by what Bun and the language already provide:
 // the behaviour callers depend on is pinned here.
 import { expect, test } from "bun:test";
-import { transformVhost } from "../addons/cloudflare-ips/action";
+import { transformVhost } from "../addons/firewall/action";
 import { dateStamp } from "../addons/instatic/action";
 import { foldServerName, hostnameBoundary } from "../addons/stager/action";
 import { provenancePolicy } from "../cli/release";

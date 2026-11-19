@@ -31,7 +31,7 @@ because the deploy authenticates as root and then runs a command sequence.
 
 Development, CI, staging, and release use the Bun version pinned by
 `packageManager` in `package.json`. The pin is a dated Bun canary,
-`1.4.4-canary.20261108.1`: no Bun release has the compile options below yet,
+`1.4.4-canary.20261118.1`: no Bun release has the compile options below yet,
 and the pin moves to Bun 1.5.0 when it ships.
 Until then `bun-types` comes from the same canary through `overrides`. GitHub
 keeps only the newest canary, under a tag that moves, so the workflows install
@@ -86,7 +86,7 @@ checksum and repository-bound attestation before replacing the binary.
 
 The binary checks provenance itself with Sigstore's `@sigstore/verify`, the
 checks `gh attestation verify --repo --signer-workflow` makes: a SLSA
-provenance statement naming the artifact's SHA-256, signed in Sigstore's public
+provenance statement naming the artifact by its file name and SHA-256, signed in Sigstore's public
 log by a GitHub Actions certificate for this repository's `release.yml` on the
 release's own tag, with this repository as its source. An attestation of an
 older tag does not vouch for the same bytes republished under a newer one. Sigstore's trusted keys come through its TUF

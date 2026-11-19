@@ -248,7 +248,7 @@ so one that was waiting cannot put a helper back. The sign-in lock waits up to
 five seconds. Minting as the site user has ten
 seconds and runs before the SQLite write transaction; panel reads and writes
 wait at most one second for database contention. The transaction, shared with
-Cloudflare IP Access and maintenance in `lib/nginx-transaction.ts`, validates
+Firewall's Cloudflare-only sites and maintenance in `lib/nginx-transaction.ts`, validates
 and reloads before commit. Each Nginx command is killed after two seconds, and
 each reload waits at most three more seconds for new workers to accept requests
 and old workers to stop accepting, using `/run/nginx.pid` and `/proc`.

@@ -16,7 +16,7 @@ import type { StandIn, StandIns } from "./engine";
 import type { Redirect } from "./model";
 import { standInHosts } from "./redirects";
 import type { Issue } from "./ssl";
-import { readState, writeState } from "./store";
+import { readState, writeState } from "../../lib/root-state";
 
 interface StandInRecord extends StandIn {
   siteUser: string;

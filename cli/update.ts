@@ -10,7 +10,7 @@ import { reconcileAnchors, reconcileNginx, reconcilePanelBlocks } from "./reconc
 import { reconcilePhpGuard } from "../lib/php-guard";
 import { type AddonSpec } from "../lib/addon-definition";
 import { keepNewsSince, recordNewsSince } from "../manager/action";
-import { operationLockEnv, withOperationLock } from "./operation-lock";
+import { operationLockEnv, withOperationLock } from "../lib/operation-lock";
 import { CLI_BIN, LEGACY_GH, MANAGER_UNIT, RECONCILE_SERVICE } from "../lib/paths";
 import {
   ensureAuthHelperReady, ensureDirs, ensureServiceUser, installUnits, reconcilePanelIdentity, removeLegacyUnits,

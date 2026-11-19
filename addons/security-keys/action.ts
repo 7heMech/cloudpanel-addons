@@ -2,13 +2,13 @@ import { addonStateDir, LOCK_DIR, PANEL_DB, PANEL_VAR_DIR } from "../../lib/path
 import { writeFileAtomic } from "../../lib/atomic-write";
 import { isTrustedFile, OWNER_ONLY } from "../../lib/trusted-file";
 import { SECURITY_KEYS_VERBS } from "./verbs";
-import { TOKEN_TTL_SECONDS, mfaMark, recordSignIn } from "./sign-ins";
+import { TOKEN_TTL_SECONDS, accountPasskeys, mfaMark, recordSignIn } from "./sign-ins";
 import { createHmac, randomBytes } from "node:crypto";
 import {
-  chmodSync, closeSync, constants as fs, existsSync, fchmodSync, fchownSync, fstatSync, linkSync, lstatSync, mkdirSync, openSync,
+  closeSync, constants as fs, existsSync, fchmodSync, fchownSync, fstatSync, linkSync, lstatSync, mkdirSync, openSync,
   readdirSync, readFileSync, readSync, rmSync, writeSync,
 } from "node:fs";
-import { dirname, join } from "node:path";
+import { join } from "node:path";
 import { ActionFailure, emitActionOk, failAction, parseJsonRequest, reportActionFailure } from "../../lib/action";
 import { oneLine } from "../../lib/validate";
 import { withFileLockSync } from "../../lib/file-lock";
@@ -208,8 +208,6 @@ function allowedRole(settings: Settings, account: PanelAccount): boolean {
 }
 
 function withStoreLock<T>(paths: SecurityKeysPaths, body: () => T): T {
-  mkdirSync(dirname(paths.lockFile), { recursive: true });
-  chmodSync(dirname(paths.lockFile), 0o700);
   return withFileLockSync(paths.lockFile, 30, "another security key change is running", body);
 }
 
@@ -229,6 +227,17 @@ function panelAccounts(paths: SecurityKeysPaths): Map<string, PanelAccount> {
   } finally {
     db.close();
   }
+}
+
+/** The active administrators, which of them have a key, and whether administrators may use keys at all. */
+export function administratorKeys(options: { paths?: Partial<SecurityKeysPaths> } = {}): { admins: string[]; keyed: string[]; allowed: boolean } {
+  const paths = { ...DEFAULT_SECURITY_KEYS_PATHS, ...options.paths };
+  const admins = [...panelAccounts(paths)].filter(([, account]) => account.active && account.role === "ROLE_ADMIN");
+  return {
+    admins: admins.map(([name]) => name),
+    keyed: admins.filter(([name, account]) => accountPasskeys(paths.stateDir, name, account.id, paths.stateUid).length > 0).map(([name]) => name),
+    allowed: (readSettings(paths).roles as string[]).includes("ROLE_ADMIN"),
+  };
 }
 
 function activeAccount(paths: SecurityKeysPaths, user: string): PanelAccount {

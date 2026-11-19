@@ -13,6 +13,13 @@ let templateSaved = '';
 function templateArea() { return CLP_ROOT.getElementById('template-editor'); }
 function templateToggle() { return CLP_ROOT.getElementById('edit-template'); }
 
+// The site's page and the fleet's default share this editor; the section
+// says where it saves and what to call things.
+function templateCopy(name) {
+  const section = CLP_ROOT.querySelector('[data-template-endpoint]');
+  return section ? section.getAttribute('data-template-' + name) || '' : '';
+}
+
 function templateValue() {
   const area = templateArea();
   return area ? area.value : '';
@@ -92,9 +99,29 @@ function siteEndpoint(domain, suffix) {
   return '/api/sites/' + encodeURIComponent(domain) + suffix;
 }
 
+// A default page with unsaved edits, or the operator's focus, is carried
+// across the repaint with what the server now says about it; otherwise the
+// fresh one replaces it, so it shows another admin's newer save.
 function repaintFleet(reply, done) {
   if (reply.html) {
+    const editor = CLP_ROOT.getElementById('default-page');
+    const active = clpBusyFocus || CLP_ROOT.activeElement;
+    const keep = Boolean(editor) && (templateValue() !== templateSaved || editor.contains(active));
     repaintView(CLP_ROOT.getElementById('clp-content'), reply.html);
+    const fresh = CLP_ROOT.getElementById('default-page');
+    if (keep && fresh) {
+      const kind = fresh.querySelector('#template-kind');
+      const reset = fresh.querySelector('#reset-template');
+      fresh.replaceWith(editor);
+      if (kind) editor.querySelector('#template-kind').textContent = kind.textContent;
+      if (reset) editor.querySelector('#reset-template').hidden = reset.hidden;
+      if (templateAce) templateAce.resize();
+      if (editor.contains(active)) active.focus({ preventScroll: true });
+    } else if (editor) {
+      if (templateAce) templateAce.destroy();
+      templateAce = null;
+      initTemplateEditor();
+    }
     if (done) notify(done, 'ok');
   } else {
     notify((done ? done + ' ' : '') + 'The page could not be refreshed; reload it to see the change.', 'warn');
@@ -267,18 +294,18 @@ function setTemplateMode(editing) {
 
 function paintTemplateKind(custom) {
   const kind = CLP_ROOT.getElementById('template-kind');
-  if (kind) kind.textContent = custom ? 'Custom' : 'Default';
+  if (kind) kind.textContent = templateCopy(custom ? 'kind-custom' : 'kind-default');
   const reset = CLP_ROOT.getElementById('reset-template');
   if (reset) reset.hidden = !custom;
 }
 
 // Editing is a local mode and nothing else: leaving it never touches what is
 // saved. Removing a template is what the reset button is for.
-async function changeTemplateMode(domain, editing) {
+async function changeTemplateMode(editing) {
   if (editing || templateValue() === templateSaved) { setTemplateMode(editing); return; }
   const accepted = await confirmAction({
     title: 'Discard the unsaved changes?',
-    text: 'The maintenance page for ' + domain + ' goes back to the version that is saved.',
+    text: templateCopy('discard-text'),
     confirmLabel: 'Discard',
     danger: true,
   });
@@ -291,27 +318,27 @@ async function changeTemplateMode(domain, editing) {
   setTemplateMode(false);
 }
 
-async function saveTemplate(domain) {
+async function saveTemplate() {
   if (!templateArea()) return;
   clearNotice();
   busy(true);
   try {
-    const reply = await call(siteEndpoint(domain, '/template'), {
+    const reply = await call(templateCopy('endpoint'), {
       method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ html: templateValue() })
     });
     setTemplateValue(reply.data.html);
     templateSaved = reply.data.html;
     paintTemplateKind(true);
     updateTemplatePreview();
-    notify(reply.data.removed ? 'Saved; some tags were removed.' : 'Custom maintenance page saved.', reply.data.removed ? 'warn' : 'ok');
+    notify(reply.data.removed ? 'Saved; some tags were removed.' : templateCopy('saved'), reply.data.removed ? 'warn' : 'ok');
   } catch (error) { notify('Could not save the template: ' + error.message, 'error'); }
   finally { busy(false); setTemplateEditable(true); }
 }
 
-async function resetTemplate(domain) {
+async function resetTemplate() {
   const accepted = await confirmAction({
-    title: 'Reset to the default maintenance page?',
-    text: 'The custom template saved for ' + domain + ' is removed and cannot be recovered from here.',
+    title: templateCopy('reset-title'),
+    text: templateCopy('reset-text'),
     confirmLabel: 'Reset',
     danger: true,
   });
@@ -319,13 +346,13 @@ async function resetTemplate(domain) {
   clearNotice();
   busy(true);
   try {
-    const reply = await call(siteEndpoint(domain, '/template'), { method: 'DELETE' });
+    const reply = await call(templateCopy('endpoint'), { method: 'DELETE' });
     const toggle = templateToggle();
     setTemplateValue(reply.data.html);
     templateSaved = reply.data.html;
     if (toggle) toggle.checked = false;
     paintTemplateKind(false);
-    notify('Reset to the default maintenance page.', 'ok');
+    notify(templateCopy('reset-done'), 'ok');
   } catch (error) {
     notify('Could not reset the template: ' + error.message, 'error');
   } finally {
@@ -384,7 +411,7 @@ function addCurrentIp(id, ip) {
   syncBypassSave(field);
 }
 
-function initMaintenance() {
+function initTemplateEditor() {
   const editor = templateArea();
   if (editor) {
     editor.addEventListener('input', function () {
@@ -397,5 +424,5 @@ function initMaintenance() {
     setupTemplateEditor();
   }
 }
-if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', initMaintenance);
-else initMaintenance();
+if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', initTemplateEditor);
+else initTemplateEditor();

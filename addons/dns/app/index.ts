@@ -18,6 +18,7 @@ const CHANGES: Record<string, WebVerb<"dns">> = {
   "/api/mailcow": "save-mailcow",
   "/api/mailcow/remove": "remove-mailcow",
   "/api/server": "save-server",
+  "/api/panel-host": "set-panel-host",
   "/api/records/remove": "remove-records",
   "/api/records/forget": "forget-records",
   "/api/redirects": "save-redirect",

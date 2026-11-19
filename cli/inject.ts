@@ -31,6 +31,7 @@ import {
 import { NGINX_PROXY_STATE_DIR, nginxLayout, TEMPLATE_STATE_DIR, TEMPLATES_DIR, TWIG_CACHE_DIR } from "../lib/paths";
 import type { AddonTarget } from "../lib/addon-target";
 import { withoutPhpMyAdminRules } from "../addons/system-tweaks/phpmyadmin";
+import { withoutPanelGate } from "../addons/firewall/panel-gate-nginx";
 import {
   type Refusal, baselineFiles, hasBaseline, occurrences, readBaseline, readBaselineVersion, rebaselineVerdict,
   recordBaseline, removeBaseline, sha256, writeBaselineVersion,
@@ -549,9 +550,9 @@ function stripNginxProxy(content: string): string {
   return content.replace(NGINX_PROXY_BLOCK_RE, "");
 }
 
-/** The vhost as CloudPanel wrote it, without the proxy or System Tweaks' phpMyAdmin rules. */
+/** The vhost as CloudPanel wrote it, without the proxy, System Tweaks' phpMyAdmin rules or Firewall's Panel gate. */
 function panelUpstream(content: string): string {
-  return withoutPhpMyAdminRules(stripNginxProxy(content));
+  return withoutPanelGate(withoutPhpMyAdminRules(stripNginxProxy(content)));
 }
 
 /**
@@ -622,7 +623,7 @@ function writeNginxContent(path: string, content: string): void {
 }
 
 /** Marker text left once both managed blocks are taken out. */
-const VHOST_STRAY_MARKER = /# clp-addons:(?:proxy|phpmyadmin):(?:start|end)/;
+const VHOST_STRAY_MARKER = /# clp-addons:(?:proxy|phpmyadmin|panel-gate):(?:start|end)/;
 
 /** Why the vhost as CloudPanel now writes it cannot take the proxy block, or null when it can. */
 function proxyMisfit(upstream: string): Refusal | null {

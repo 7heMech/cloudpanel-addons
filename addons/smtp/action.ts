@@ -16,7 +16,7 @@ import { SMTP_VERBS } from "./verbs";
 import {
   chmodSync, existsSync, lstatSync, mkdirSync, readdirSync, readFileSync, readlinkSync, rmSync, symlinkSync,
 } from "node:fs";
-import { dirname, join } from "node:path";
+import { join } from "node:path";
 import { ActionFailure, replyToAction, failAction, readJsonRequest } from "../../lib/action";
 import { errorMessage } from "../../lib/errors";
 import { nameSlug, oneLine } from "../../lib/validate";
@@ -276,6 +276,16 @@ export function smtpRelayAccounts(stateFile = DEFAULT_SMTP_PATHS.stateFile, root
   } catch {
     return [];
   }
+}
+
+/** The profiles that relay mail, and the one new sites join, for the Setup checklist. */
+export function smtpSetupState(paths: Partial<SmtpPaths> = {}): { relays: string[]; defaultProfile: { name: string; relays: boolean } | null } {
+  const policy = readPolicy({ ...DEFAULT_SMTP_PATHS, ...paths });
+  const chosen = policy.profiles.find((profile) => profile.id === policy.defaultProfileId);
+  return {
+    relays: policy.profiles.filter((profile) => profile.relay).map((profile) => profile.name),
+    defaultProfile: chosen ? { name: chosen.name, relays: Boolean(chosen.relay) } : null,
+  };
 }
 
 /**
@@ -1012,7 +1022,6 @@ export async function executeSmtpAction(argv: string[], options: SmtpActionOptio
   const target = verb === "delete-profile" ? parseProfileId(body.id)
     : verb === "set-default" ? (body.profileId == null ? null : parseProfileId(body.profileId)) : null;
   if (verb === "test") { smtpDomain(body.domain); smtpAddress(body.recipient); if (body.from) smtpAddress(body.from); }
-  mkdirSync(dirname(paths.lockFile), { recursive: true, mode: 0o700 });
   return withFileLock(paths.lockFile, 30, "SMTP configuration is busy", async () => {
     if (verb === "deactivate") {
       withdrawAll(paths, run);

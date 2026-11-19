@@ -20,3 +20,11 @@ test("a validly signed attestation for another repository is refused by identity
   await expect(verifyAttestation(release, [{ name: "install.sh", bytes: readFileSync(join(fixtures, "install-v1.5.2.sh")) }], false, trustedRoot))
     .rejects.toThrow("certificate identity error");
 });
+
+test("an attestation for these bytes under another name is refused", async () => {
+  globalThis.fetch = (async () => new Response(readFileSync(join(fixtures, "attestations-v1.5.2.jsonl")))) as unknown as typeof fetch;
+  const trustedRoot = async () => TrustedRoot.fromJSON(JSON.parse(readFileSync(join(fixtures, "trusted_root.json"), "utf-8")));
+  const release = { tag: "v1.5.2", assets: new Map([["attestations.jsonl", "https://example.invalid/attestations.jsonl"]]) };
+  await expect(verifyAttestation(release, [{ name: "clp-addons-linux-x64", bytes: readFileSync(join(fixtures, "install-v1.5.2.sh")) }], false, trustedRoot))
+    .rejects.toThrow("under this name");
+});

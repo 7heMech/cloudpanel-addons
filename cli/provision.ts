@@ -680,7 +680,7 @@ WantedBy=paths.target
 /**
  * CloudPanel's Firewall page rebuilds ufw from its own table on every change,
  * with `ufw reset` first. The service waits for the rebuild to settle itself;
- * see `addons/system-tweaks/firewall.ts`.
+ * see `addons/firewall/protocols.ts`.
  */
 export function firewallUnits(): { service: string; path: string } {
   return {

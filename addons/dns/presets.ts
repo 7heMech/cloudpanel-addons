@@ -94,5 +94,6 @@ export function seededPolicy(): Policy {
     zoneChoices: {},
     server: { ipv4: "", ipv6: "" },
     mailcow: { ...EMPTY_MAILCOW },
+    panelHost: null,
   };
 }

@@ -14,7 +14,6 @@ import { COMMAND_MS } from "./limits";
 import { changeLock, lockFailure, type LockFiles } from "../../lib/lock-addon";
 import { addonLocked, declaresLock, lockRefusal, lockedAddons } from "../../lib/root-locks";
 import { removePoolIsolation, syncPoolIsolation } from "./pool-isolation";
-import { syncFirewall } from "./firewall";
 import {
   LOCK_SETTINGS, REPAIR, RESTORE, STATE, TWEAKS, UPKEEP, WITHDRAW, type SystemTweaksSettings, type SystemTweaksState, type TweakOptions,
 } from "./registry";
@@ -22,6 +21,7 @@ import type { SystemTweaksVerb, TweakContext, VerbContext } from "./tweak";
 import { BACKUP_COMPRESSION_TWEAK } from "./backup-compression";
 import { MOTD_TWEAK } from "./motd";
 import { PHPMYADMIN_TWEAK } from "./phpmyadmin";
+import { domainLogMissing, LOGIN_JAILS_TWEAK } from "./login-jails";
 import { VHOST_GUARD_TWEAK } from "./vhost-guard";
 
 const SETTINGS_VERSION = 1;
@@ -327,6 +327,19 @@ export function systemTweaksUpkeep(options: SystemTweaksOptions = {}): string | 
   return repairNow(UPKEEP, options);
 }
 
+/**
+ * Saving the panel's custom domain rewrites its vhost without the failed-login
+ * log, and the certificate CloudPanel writes next brings this. Every renewal
+ * does too, so the lock is taken only when the log is missing.
+ */
+export function systemTweaksLoginJails(options: SystemTweaksOptions = {}): string | null {
+  if (!domainLogMissing(options.loginJails)) return null;
+  try {
+    if (!readSettings(pathsFor(options)).loginJails.panel) return null;
+  } catch { /* the settle reports what it cannot read */ }
+  return repairNow(LOGIN_JAILS_TWEAK.repair.upkeep, options);
+}
+
 /** Also the fast repair's when CloudPanel rewrites its vhost. */
 export function systemTweaksPhpMyAdmin(options: SystemTweaksOptions = {}): string | null {
   return repairNow(PHPMYADMIN_TWEAK.repair.rules, options);
@@ -436,11 +449,6 @@ export function restoreSystemTweaks(options: SystemTweaksOptions = {}, wasEnable
       log.warn(tweak.restore.warning(errorMessage(error)));
     }
   }
-}
-
-/** What the firewall watcher runs whenever ufw's rule files change. */
-export function systemTweaksFirewall(options: SystemTweaksOptions = {}): string | null {
-  return syncFirewall("apply", options.firewall);
 }
 
 /**

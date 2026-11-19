@@ -1,6 +1,6 @@
 import { enabledAddons } from "../addons/catalog";
 import { purgeTwigCache } from "./inject";
-import { withOperationLockSync } from "./operation-lock";
+import { withOperationLockSync } from "../lib/operation-lock";
 import { CLI_BIN, LIBEXEC_DIR, STATE_DIR } from "../lib/paths";
 import { reconcilePhpGuard } from "../lib/php-guard";
 import { reconcilePanelIdentity, stopUnits } from "./provision";

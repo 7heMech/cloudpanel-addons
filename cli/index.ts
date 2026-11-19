@@ -15,11 +15,12 @@ import { fatal, Fatal, log, requireRoot } from "../lib/log";
 import type { AddonSpec } from "../lib/addon-definition";
 import { LOCKABLE_ADDONS, isLockable, lockedAddons } from "../lib/root-locks";
 import { changeLock, lockFailure, lockFileProblem } from "../lib/lock-addon";
-import { withOperationLockSync } from "./operation-lock";
+import { withOperationLockSync } from "../lib/operation-lock";
 import { runRecon } from "./recon";
 import { cmdServe } from "../manager/server";
 import { runAuthActionStdin } from "./auth-action";
 import { runManagerAction, type ManagerOps } from "../manager/action";
+import { switchSetup } from "../manager/setup";
 import { runCertificateWork, runFirewallWork } from "./addon-hooks";
 import { runSyncSites } from "./new-sites";
 
@@ -62,6 +63,7 @@ function usage(): void {
   clp-addons update [--version=vX.Y.Z] [--allow-prerelease] [--skip-attestation]
   clp-addons repair [<addon>] [--quiet] [--anchors-only] [--rebaseline]
   clp-addons status
+  clp-addons setup on|off
 ${addonUsage()}
   clp-addons lock [<addon>]
   clp-addons unlock <addon>
@@ -114,6 +116,15 @@ function cmdLock(argv: string[], lock: boolean): void {
   log.ok(lock
     ? `${addon} is locked: the panel can switch its protections on, but not off, and cannot disable the addon`
     : `${addon} is unlocked: administrators can change it from the panel again`);
+}
+
+function cmdSetup(argv: string[]): void {
+  const [state, ...extra] = argv;
+  if (extra.length || (state !== "on" && state !== "off")) fatal("usage: clp-addons setup on|off");
+  requireRoot("setup");
+  const on = state === "on";
+  if (!switchSetup(on)) log.plain(`Setup is already ${state}`);
+  else log.ok(on ? "Setup is on: administrators see its suggestions and Action needed again" : "Setup is off: nothing is checked and no page shows it");
 }
 
 async function cmdOverview(): Promise<void> {
@@ -171,6 +182,7 @@ async function main(): Promise<number> {
       await runFirewallWork(enabledAddons());
       return 0;
     case "status": await cmdStatus(); return 0;
+    case "setup": cmdSetup(rest); return 0;
     case "self-uninstall": cmdSelfUninstall(rest); return 0;
     case "lock": cmdLock(rest, true); return 0;
     case "unlock": cmdLock(rest, false); return 0;

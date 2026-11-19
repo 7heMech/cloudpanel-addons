@@ -2,7 +2,7 @@
 // answering in their documented shapes: Cloudflare's success/errors/result
 // envelope with result_info pages and per-token access, and Mailcow's HTTP 200
 // with `type: "danger"` for a refusal and `{}` for nothing found.
-import type { ApiFetch } from "../../addons/dns/http";
+import type { ApiFetch } from "../../lib/provider-http";
 
 export interface FakeToken {
   /** User tokens verify at /user/tokens/verify, account tokens at /accounts/:id/tokens/verify. */
@@ -12,6 +12,20 @@ export interface FakeToken {
   /** Whether it holds Account Settings Read, which /accounts needs. */
   listAccounts?: boolean;
   zoneEdit?: boolean;
+  /** What the token reads at /user/tokens/:id or /accounts/:id/tokens/:id, in Cloudflare's shape; absent without API Tokens Read. */
+  policies?: FakePolicy[];
+  id?: string;
+}
+
+export interface FakePolicy {
+  effect: "allow" | "deny";
+  permission_groups: { id: string; name: string }[];
+  resources: Record<string, string | Record<string, string>>;
+}
+
+/** A policy as Cloudflare returns it: permission groups by name, resources by key. */
+export function policy(names: string[], resources: FakePolicy["resources"], effect: FakePolicy["effect"] = "allow"): FakePolicy {
+  return { effect, permission_groups: names.map((name) => ({ id: hexId(), name })), resources };
 }
 
 interface Zone {
@@ -27,6 +41,12 @@ const json = (body: unknown, status = 200, headers: Record<string, string> = {})
 
 let serial = 0;
 export const hexId = (): string => (++serial).toString(16).padStart(32, "a");
+const uuidOf = (): string => hexId().replace(/^(.{8})(.{4})(.{4})(.{4})(.{12})$/, "$1-$2-$3-$4-$5");
+
+/** Whether the token's policies name a permission group; a token without readable policies holds everything. */
+function holds(token: FakeToken, group: string): boolean {
+  return !token.policies || token.policies.some((entry) => entry.effect === "allow" && entry.permission_groups.some((permission) => permission.name === group));
+}
 
 export class FakeCloudflare {
   tokens = new Map<string, FakeToken>();
@@ -40,6 +60,18 @@ export class FakeCloudflare {
   limit: { after: number; retryAfter: string } | null = null;
   /** Refuse an update that changes a rule's ref, in case Cloudflare keeps the one a rule has. */
   keepsRefs = false;
+  /** Per-hostname origin pulls: uploaded certificates, and each hostname's use of one. */
+  originCerts = new Map<string, { id: string; zone: string; status: string; certificate: string }>();
+  originHosts = new Map<string, { hostname: string; cert_id: string; enabled: boolean; status: string; cert_status: string; polls: number }>();
+  /** How many reads of a hostname answer pending_deployment before active. */
+  deployPolls = 0;
+  identityProviders = new Map<string, { id: string; account: string; name: string; type: string }>();
+  accessApps = new Map<string, Record<string, unknown> & { id: string; account: string }>();
+  accessPolicies = new Map<string, Record<string, unknown> & { id: string; account: string }>();
+  /** Answer this request with a 500, once, to test what a failure leaves behind. */
+  failOn: ((method: string, path: string) => boolean) | null = null;
+  /** Carry this request out but answer 504, once, as a reply lost on the way back. */
+  loseReplyOn: ((method: string, path: string) => boolean) | null = null;
 
   account(name: string): string {
     const id = hexId();
@@ -48,7 +80,7 @@ export class FakeCloudflare {
   }
 
   token(value: string, token: FakeToken): void {
-    this.tokens.set(value, { status: "active", listAccounts: true, ...token });
+    this.tokens.set(value, { status: "active", listAccounts: true, id: hexId(), ...token });
   }
 
   zone(name: string, accountId: string, status = "active"): Zone {
@@ -122,7 +154,104 @@ export class FakeCloudflare {
     return this.ok(record);
   }
 
+  private originPulls(token: FakeToken, zone: Zone, method: string, rest: string, body: Record<string, unknown> | undefined): Response {
+    if (!holds(token, "SSL and Certificates Write")) return this.error(403, 10000, "Authentication error");
+    const cert = /^\/origin_tls_client_auth\/hostnames\/certificates(?:\/([^/]+))?$/.exec(rest);
+    if (cert) {
+      if (method === "POST") {
+        if (!String(body!.certificate).includes("BEGIN CERTIFICATE") || !String(body!.private_key).includes("PRIVATE KEY")) return this.error(400, 1406, "invalid certificate");
+        const entry = { id: uuidOf(), zone: zone.id, status: "pending_deployment", certificate: String(body!.certificate) };
+        this.originCerts.set(entry.id, entry);
+        return this.ok({ ...entry, issuer: "clp-addons panel gate" });
+      }
+      if (!cert[1] && method === "GET") {
+        const items = [...this.originCerts.values()].filter((item) => item.zone === zone.id);
+        return this.ok(items, { page: 1, per_page: 1000, count: items.length, total_count: items.length });
+      }
+      const entry = this.originCerts.get(cert[1] ?? "");
+      if (!entry || entry.zone !== zone.id) return this.error(404, 1400, "certificate not found");
+      if (method === "GET") return this.ok(entry);
+      if (method === "DELETE") {
+        if ([...this.originHosts.values()].some((host) => host.cert_id === entry.id)) return this.error(400, 1402, "the certificate is in use");
+        this.originCerts.delete(entry.id);
+        return this.ok(entry);
+      }
+    }
+    if (rest === "/origin_tls_client_auth/hostnames" && method === "PUT") {
+      const result = (body!.config as { hostname: string; cert_id: string; enabled: boolean | null }[]).map((item) => {
+        const key = `${zone.id}:${item.hostname}`;
+        if (!this.originCerts.has(item.cert_id)) return null;
+        if (item.enabled === null) {
+          this.originHosts.delete(key);
+          return { hostname: item.hostname, cert_id: item.cert_id, enabled: null, status: "pending_deletion", cert_status: "active" };
+        }
+        const host = { hostname: item.hostname, cert_id: item.cert_id, enabled: item.enabled, status: "pending_deployment", cert_status: "pending_deployment", polls: 0 };
+        this.originHosts.set(key, host);
+        return host;
+      });
+      if (result.includes(null)) return this.error(400, 1404, "certificate not found");
+      return this.ok(result);
+    }
+    const host = /^\/origin_tls_client_auth\/hostnames\/([^/]+)$/.exec(rest);
+    if (host && method === "GET") {
+      const entry = this.originHosts.get(`${zone.id}:${decodeURIComponent(host[1]!)}`);
+      if (!entry) return this.error(404, 1401, "hostname not found");
+      if (entry.polls++ >= this.deployPolls) {
+        entry.status = "active";
+        entry.cert_status = "active";
+        this.originCerts.get(entry.cert_id)!.status = "active";
+      }
+      const { polls: _, ...shown } = entry;
+      return this.ok(shown);
+    }
+    return this.error(404, 7000, "No route for that URI");
+  }
+
+  private access(token: FakeToken, method: string, account: string, kind: string, id: string | undefined, url: URL, body: Record<string, unknown> | undefined): Response {
+    if (!token.accounts.includes(account)) return this.error(403, 9109, "Unauthorized to access requested resource");
+    const group = kind === "identity_providers" ? "Access: Organizations, Identity Providers, and Groups Write" : "Access: Apps and Policies Write";
+    if (!holds(token, group)) return this.error(403, 10000, "Authentication error");
+    const store = (kind === "identity_providers" ? this.identityProviders : kind === "apps" ? this.accessApps : this.accessPolicies) as Map<string, Record<string, unknown> & { id: string; account: string }>;
+    const strip = ({ account: _, ...rest }: Record<string, unknown>) => rest;
+    if (!id) {
+      if (method === "GET") {
+        const domain = url.searchParams.get("domain");
+        const items = [...store.values()].filter((item) => item.account === account && (!domain || item.domain === domain)).map(strip);
+        return this.ok(items, { page: 1, per_page: 1000, count: items.length, total_count: items.length });
+      }
+      if (method === "POST") {
+        const item = { ...body!, id: uuidOf(), account };
+        store.set(item.id, item);
+        return this.ok(strip(item));
+      }
+    }
+    const item = store.get(id ?? "");
+    if (!item || item.account !== account) return this.error(404, 12130, "not found");
+    if (method === "GET") return this.ok(strip(item));
+    if (method === "PUT") {
+      const next = { ...body!, id: item.id, account };
+      store.set(item.id, next);
+      return this.ok(strip(next));
+    }
+    if (method === "DELETE") {
+      if (kind === "policies" && [...this.accessApps.values()].some((app) => (app.policies as { id: string }[] | undefined)?.some((entry) => entry.id === item.id))) {
+        return this.error(400, 12131, "policy is in use by an application");
+      }
+      store.delete(item.id);
+      return this.ok({ id: item.id });
+    }
+    return this.error(405, 10000, "method not allowed");
+  }
+
   fetch: ApiFetch = async (address, init) => {
+    const lost = this.loseReplyOn?.(init.method ?? "GET", new URL(address).pathname.replace("/client/v4", ""));
+    const response = await this.route(address, init);
+    if (!lost) return response;
+    this.loseReplyOn = null;
+    return this.error(504, 1000, "Gateway timeout");
+  };
+
+  private route: ApiFetch = async (address, init) => {
     const url = new URL(address);
     const method = init.method ?? "GET";
     const body = typeof init.body === "string" ? JSON.parse(init.body) as Record<string, unknown> : undefined;
@@ -136,13 +265,24 @@ export class FakeCloudflare {
     }
     const token = this.tokens.get(bearer);
     if (!token) return this.error(401, 10000, "Authentication error");
+    if (this.failOn?.(method, path)) {
+      this.failOn = null;
+      return this.error(500, 1000, "Internal error");
+    }
 
     if (path === "/user/tokens/verify") {
-      return token.owner === "user" ? this.ok({ id: hexId(), status: token.status }) : this.error(401, 1000, "Invalid API Token");
+      return token.owner === "user" ? this.ok({ id: token.id, status: token.status }) : this.error(401, 1000, "Invalid API Token");
     }
     const accountVerify = /^\/accounts\/([^/]+)\/tokens\/verify$/.exec(path);
     if (accountVerify) {
-      return token.owner === "account" && token.accounts.includes(accountVerify[1]!) ? this.ok({ id: hexId(), status: token.status }) : this.error(401, 1000, "Invalid API Token");
+      return token.owner === "account" && token.accounts.includes(accountVerify[1]!) ? this.ok({ id: token.id, status: token.status }) : this.error(401, 1000, "Invalid API Token");
+    }
+    const details = /^(?:\/user|\/accounts\/([^/]+))\/tokens\/([^/]+)$/.exec(path);
+    if (details && method === "GET") {
+      const owned = token.owner === "user" ? !details[1] : token.accounts.includes(details[1] ?? "");
+      if (!owned || details[2] !== token.id) return this.error(404, 1003, "Token not found");
+      if (!token.policies) return this.error(403, 9109, "Unauthorized to access requested resource");
+      return this.ok({ id: token.id, name: "CloudPanel DNS", status: token.status, policies: token.policies });
     }
     if (path === "/accounts") {
       if (!token.listAccounts) return this.error(403, 9109, "Unauthorized to access requested resource");
@@ -157,6 +297,9 @@ export class FakeCloudflare {
       if (this.zones.some((zone) => zone.name === body!.name && zone.account.id === account)) return this.error(400, 1061, "already exists");
       return this.ok(this.zone(String(body!.name), account, "pending"));
     }
+
+    const access = /^\/accounts\/([^/]+)\/access\/(identity_providers|apps|policies)(?:\/([^/]+))?$/.exec(path);
+    if (access) return this.access(token, method, access[1]!, access[2]!, access[3], url, body);
 
     const zoneMatch = /^\/zones\/([^/]+)(\/.*)$/.exec(path);
     if (!zoneMatch) return this.error(404, 7000, "No route for that URI");
@@ -175,6 +318,7 @@ export class FakeCloudflare {
         return this.ok({ id: record[1] });
       }
     }
+    if (rest.startsWith("/origin_tls_client_auth/")) return this.originPulls(token, zone, method, rest, body);
     const setting = /^\/settings\/([a-z_]+)$/.exec(rest);
     if (setting) {
       const key = `${zone.id}:${setting[1]}`;

@@ -25,6 +25,18 @@ async function fleetHtml(req: Request): Promise<string | undefined> {
   }
 }
 
+/** The HTML of a template save, or the response refusing it. */
+async function templateBody(req: Request): Promise<string | Response> {
+  let body: Record<string, unknown>;
+  try { body = await readJsonObject(req, MAX_TEMPLATE_BYTES * 6 + 1024); }
+  catch (error) { return bodyErrorResponse(error); }
+  if (typeof body.html !== "string") return jsonResponse({ ok: false, error: "html must be a string" }, 400);
+  if (Buffer.byteLength(body.html, "utf8") > MAX_TEMPLATE_BYTES) {
+    return jsonResponse({ ok: false, error: `html may be at most ${MAX_TEMPLATE_BYTES} bytes` }, 400);
+  }
+  return body.html;
+}
+
 function decodedDomain(raw: string): string | null {
   const decoded = safeDecodePathSegment(raw);
   return decoded === null ? null : validateDomain(decoded);
@@ -122,6 +134,20 @@ export async function handle(
     return jsonResponse(result, result.ok ? 200 : 400);
   }
 
+  if (path === "/api/default-template" && (method === "PUT" || method === "DELETE")) {
+    const denied = guardMutation(req);
+    if (denied) return denied;
+    let result;
+    if (method === "PUT") {
+      const body = await templateBody(req);
+      if (body instanceof Response) return body;
+      result = await maintenanceService.setDefaultTemplate(body);
+    } else {
+      result = await maintenanceService.resetDefaultTemplate();
+    }
+    return jsonResponse(result, result.ok ? 200 : 400);
+  }
+
   // The selected sites, switched by one action call; a site that fails is named
   // in the reply rather than stopping the rest.
   if (method === "POST" && path === "/api/bulk-toggle") {
@@ -156,14 +182,9 @@ export async function handle(
       // The fleet page repaints from the reply; the site page paints the one switch it has.
       if (result.ok && body.view === "fleet") return jsonResponse({ ...result, html: await fleetHtml(req) });
     } else if (route[2] === "template" && method === "PUT") {
-      let body: Record<string, unknown>;
-      try { body = await readJsonObject(req, MAX_TEMPLATE_BYTES * 6 + 1024); }
-      catch (error) { return bodyErrorResponse(error); }
-      if (typeof body.html !== "string") return jsonResponse({ ok: false, error: "html must be a string" }, 400);
-      if (Buffer.byteLength(body.html, "utf8") > MAX_TEMPLATE_BYTES) {
-        return jsonResponse({ ok: false, error: `html may be at most ${MAX_TEMPLATE_BYTES} bytes` }, 400);
-      }
-      result = await maintenanceService.setTemplate(domain, body.html);
+      const body = await templateBody(req);
+      if (body instanceof Response) return body;
+      result = await maintenanceService.setTemplate(domain, body);
     } else if (route[2] === "template" && method === "DELETE") {
       result = await maintenanceService.resetTemplate(domain);
     } else if (route[2] === "bypasses" && method === "PUT") {

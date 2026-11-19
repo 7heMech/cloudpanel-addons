@@ -3,7 +3,7 @@
  * 200 and `type: "danger"`, and a missing object with `{}`, so both are read
  * from the body rather than the status.
  */
-import { type ApiFetch, ProviderError, ProviderHttp } from "./http";
+import { type ApiFetch, ProviderError, ProviderHttp } from "../../lib/provider-http";
 
 export interface MailcowDkim {
   selector: string;

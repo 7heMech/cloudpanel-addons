@@ -2,10 +2,11 @@
 
 - [Platform integration](decisions/platform.md)
   - [After a CloudPanel upgrade](decisions/platform.md#after-a-cloudpanel-upgrade) — when a changed CloudPanel file is patched again or left alone
+  - [Setup checklist](decisions/platform.md#setup-checklist) — how addons declare steps, and why checks read local state only
 - [Security](decisions/security.md)
   - [Root locks](decisions/security.md#root-locks) — protections only root can switch off
-- [Cloudflare IP Access](decisions/cloudflare-ips.md)
 - [DNS](decisions/dns.md)
+- [Firewall](decisions/firewall.md)
 - [Releases and updates](decisions/releases.md)
   - [Supported CloudPanel versions](decisions/releases.md#supported-cloudpanel-versions) — the range a release declares, and what update and install do with it
 - [Instatic CMS](decisions/instatic.md)

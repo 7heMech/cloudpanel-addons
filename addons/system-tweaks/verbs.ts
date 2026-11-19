@@ -24,6 +24,4 @@ export const SYSTEM_TWEAKS_VERBS = {
   unban: { web: "admin" },
   "set-database-loopback": { web: "admin", lock: "on" },
   "lock-settings": { web: "admin" },
-  firewall: { web: "admin" },
-  "set-firewall-protocol": { web: "admin" },
 } as const;

@@ -134,7 +134,7 @@ records, so a proxied record never exists without the rule its first
 certificate needs. The addon never deletes a rule.
 
 Proxied records with the ACME rule are the default because they work with
-Cloudflare IP Access: Let's Encrypt's HTTP-01 request reaches the origin through
+Firewall's Cloudflare-only sites: Let's Encrypt's HTTP-01 request reaches the origin through
 Cloudflare with Full SSL while the origin still has CloudPanel's self-signed
 certificate.
 
@@ -228,7 +228,7 @@ the site, and reports both failures. The record stays marked incomplete until
 the vhost is written, so a later pass writes it rather than taking a static
 site that does not redirect for a working stand-in.
 DNS leaves stand-ins out of its site list through `isStandInSite`, and Stager,
-Maintenance, SMTP Relay and Cloudflare IP Access through `withoutStandIns` in
+Maintenance, SMTP Relay and Firewall through `withoutStandIns` in
 `lib/panel-db.ts`. The panel snapshot the Git, Maintenance, Stager and Terminal
 pages read leaves them out too. Resource Limits and WordPress Tools never list a
 static site, and Panel Tweaks shows "Redirect" as its runtime on the Sites page. Global maintenance mode reaches a
@@ -241,18 +241,47 @@ stand-in site is deleted. Deleting a redirect domain deletes its stand-in at
 once unless a Cloudflare rule needs a review first; then confirming the review
 deletes both.
 
+## Panel hostname
+
+The panel hostname is a third kind of entry beside sites and redirect domains,
+planned through the same switch, reviews, log and lock, with a fixed profile:
+A and AAAA at the name, no mail, and the ACME Full SSL rule for its zone. It
+cannot be a site's or a redirect's name; one created later at it stops it with
+a problem. It asks for no certificate, since CloudPanel issues the custom
+domain's own, and its records are tracked like a site's, so removing it lists
+them with the records of deleted sites.
+
+Its records are unproxied until CloudPanel's custom domain is that name and
+serves a certificate a CA issued for it (`lib/panel-custom-domain.ts`), then
+proxied. Saving the custom domain in CloudPanel writes the vhost with a
+placeholder certificate, the Let's Encrypt one about six seconds later, then
+`/etc/.clp_custom_domain`, all from one HTTP-01 check made at once. Direct, the
+check works whatever the zone's settings; proxied, it needs Full SSL, and under
+Flexible the vhost's redirect to HTTPS loops. Renewals come through Cloudflare
+once the name is proxied, which the ACME rule covers. CloudPanel has no
+`clpctl` command for its custom domain, so the operator enters it in the panel.
+
+The certificate watcher runs `sync-panel-host`, which compares the proxy state
+the last plan used with the one the certificate calls for and reaches Cloudflare
+only when they differ, so a renewal costs two file reads; the scheduled check
+covers anything it missed. CloudPanel writes `/etc/.clp_custom_domain` a moment
+after the certificate, and the watcher's second pass three seconds later finds
+it. The state is recorded only once Cloudflare holds the plan, so a write that
+failed is tried again, and a site or redirect domain with the name keeps the
+watcher from waiting on DNS's lock. Under Ask first nothing is written.
+
 ## Cloudflare connections
 
 A connection is one API token. The page links to Cloudflare's user-owned token
 template (`/profile/api-tokens` with `permissionGroupKeys`, `accountId=*` and
 `zoneId=all`), so the operator chooses accounts and zones on Cloudflare's own
-screen and never types an account ID. The permissions are Account Settings
-Read, Zone Edit, DNS Edit, Single Redirect Edit and API Tokens Read, then the union of what the
+screen and never types an account ID. The permissions are DNS Edit, Zone Edit, Account Settings
+Read, Single Redirect Edit and API Tokens Read, then the union of what the
 saved profiles use: Zone Settings Edit, Config Rules Edit and Zone WAF Edit for
 the features that need them. Single Redirect Edit is asked for before any
 redirect domain exists, so finding the redirects to take over works with the
-token first pasted. API Tokens Read lets the token's own permissions and
-zones be read (`/user/tokens/{id}`); it exposes token metadata, never a secret. Zone Edit is asked for whatever the profiles use, since Automatic creates
+token first pasted. API Tokens Read lets the token read its own permissions
+(below); it exposes token metadata, never a secret. Zone Edit is asked for whatever the profiles use, since Automatic creates
 missing zones; Cloudflare refuses a zone
 create without it by naming an internal permission, `account.zone.create`,
 which the page reports as Zone Edit. The URL uses the keys in Cloudflare's
@@ -267,6 +296,97 @@ and Single Redirect's is
 [Dynamic URL Redirects Write](https://developers.cloudflare.com/rules/url-forwarding/single-redirects/create-api/).
 Cloudflare refuses a missing permission with a bare "Authentication error", so
 a refused settings or rules read or write is reported with the permission it needs.
+
+`addons/dns/token.ts` is the one list of permissions: each one's dashboard
+label, template key, the API permission group names that grant it, whether it
+is checked per zone, per account or for the token's owner, and what in the
+profiles uses it. The template, the refusal messages and the page's table all
+come from it.
+
+### What a token holds
+
+A check of every site, and saving a connection, reads the token's own
+policies after verifying it; a check of some sites keeps the last read, as does
+a read Cloudflare could not answer (a 429, a 5xx or no reply): verify returns the token's ID, then `/user/tokens/{id}`, or
+`/accounts/{account}/tokens/{id}` for an account-owned token. Those need API
+Tokens Read, or Account API Tokens Read for an account-owned token; a token
+without it is still checked as before, and the page asks for that permission
+instead of showing what the token holds. Its row then lists the permissions
+Cloudflare refused it: the client records each refusal it names, and the check
+stores them on the connection. A check of some sites adds to what the last full
+check found, and only another full check clears them: a call that succeeded on
+one zone says nothing of another that refused it. A refusal also wins over a permission the policies say the token holds, as an IP
+restriction or a policy read wrongly would refuse it.
+[Token details](https://developers.cloudflare.com/api/resources/user/subresources/tokens/methods/get/)
+
+The read is stored with the connection's status, so the page makes no
+Cloudflare call when it loads. The token's policies are kept as allow or deny
+grants of permission group names over resources, and decided locally:
+
+- Permissions are matched by group name ("DNS Write", "Zone WAF Write"), since
+  Cloudflare does not publish group IDs. A Read requirement is met by Read or
+  Write.
+- [Resources](https://developers.cloudflare.com/fundamentals/api/how-to/create-via-api/)
+  are `com.cloudflare.api.account.zone.*` (every zone), `…account.zone.<id>`,
+  `…account.<id>` (an account, and its zones), the same account key nested
+  with zone keys, and `com.cloudflare.api.user.<tag>`. A deny wins over an allow.
+  A policy on a resource in another form makes only the permissions it names
+  not known, and only where it could change them: an allow where they read as
+  missing, a deny where they read as held.
+- Zone permissions are checked against every zone the token lists, account
+  permissions (Zone Edit, Account Settings Read) against every account. The
+  page shows a held permission, a missing one, or one missing on some zones,
+  naming up to three. It lists only what the profiles use, and names what is
+  missing, never a count.
+- The zones a token reaches are described from where DNS Write is allowed,
+  less the denies that overlap it: all zones, all zones in named accounts, or a number
+  of chosen zones.
+- With no zone or account listed to check against, only a grant on every zone
+  or account, with no deny for that permission, counts as holding it.
+- A permission group without a name makes the whole read unavailable, rather
+  than reading as a permission the token lacks.
+- The token-reading row is API Tokens Read for a user token and Account API
+  Tokens Read for an account-owned one.
+
+A permission can be optional: nothing in the profiles requires it, and
+`enables` says what it would turn on. It is listed after the required ones,
+never as missing, and left out of the template; its row reads "Not added" until
+the token holds it, or "—" when the token cannot read itself. None is optional
+yet; Firewall's login jails and panel gate add theirs when they use them.
+
+`connectionPermissions(stored, profiles)` in `addons/dns/access.ts` gives the
+Setup checklist, from a connection's entry in `status.json`, whether the token
+read itself and the required permissions it is missing (or was refused), by
+name.
+
+Cloudflare has no address for editing one token, so **Edit in Cloudflare**
+opens the owner's token list: `/profile/api-tokens`, or
+`/{account}/api-tokens` for an account-owned token.
+
+Other addons ask through `dnsTokenHolds(connectionId, permission, zone)` in
+`addons/dns/action.ts`, which answers from the stored read without a network
+call, checking each permission at its own scope (the zone, its account, or the
+token's owner: the user, or an account-owned token's account). It returns null
+when that is not known: no check yet, a token no longer active or that cannot
+read itself, or a policy not understood that could change the answer.
+
+Zone-scoped IP Access rules (`/zones/{zone_id}/firewall/access_rules/rules`)
+need **Zone → Firewall Services → Edit**, API name Firewall Services Write
+(Firewall Services Read only lists them); template key `firewall_services`, as
+the dashboard uses, which the template reference does not list. It is not in
+the permission list yet. Cloudflare allows
+[50,000 IP Access rules per account](https://developers.cloudflare.com/waf/tools/ip-access-rules/)
+on every plan, while the Free plan allows only
+[one custom list](https://developers.cloudflare.com/waf/tools/lists/).
+
+Firewall's [Panel gate](firewall.md#panel-gate) needs SSL and Certificates:
+Edit on the custom domain's zone (API name SSL and Certificates Write, key
+`ssl_and_certificates`) and, on its account, Access: Apps and Policies: Edit
+(Access: Apps and Policies Write, `access`) and Access: Organizations, Identity
+Providers, and Groups: Edit (Access: Organizations, Identity Providers, and
+Groups Write, `access_acct`). They are listed as optional, never as missing,
+and stay out of the template: a token without them is fine until the gate is
+turned on, and the gate checks them itself.
 
 A token is verified before it is saved (`/user/tokens/verify`, or the account
 route for an account-owned one, using a zone's account when account listing is

@@ -6,7 +6,7 @@ import {
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import {
-  DEFAULT_MAINTENANCE_TEMPLATE, MAX_BYPASS_IPS, MAX_TEMPLATE_BYTES, addBypass, executeMaintenanceAction,
+  DEFAULT_MAINTENANCE_TEMPLATE, MAX_BYPASS_IPS, MAX_TEMPLATE_BYTES, addBypass, ensureMaintenanceData, executeMaintenanceAction,
   pruneMaintenanceState, purgeVarnish,
   type MaintenanceActionPaths, type MaintenanceSiteStatus, type MaintenanceStatus,
 } from "../addons/maintenance/action";
@@ -149,6 +149,91 @@ test("maintenance actions toggle atomically, manage a passive template, and repl
 
     const disabled = await executeMaintenanceAction(["disable", "--domain=example.com"], actionOptions(paths)) as MaintenanceStatus;
     expect(disabled.enabled).toBe(false);
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("an edited default page is what default.html and every site without its own page serve", async () => {
+  const { root, paths } = fixture();
+  const run = (argv: string[], input?: string) => executeMaintenanceAction(argv, actionOptions(paths, input === undefined ? {} : { input }));
+  const served = () => readFileSync(join(paths.dataDir, "default.html"), "utf8");
+  try {
+    expect(await run(["get-default-template"])).toEqual({ custom: false, html: DEFAULT_MAINTENANCE_TEMPLATE });
+
+    const saved = await run(["set-default-template"], "<h1 onclick=\"x()\">Back soon</h1><script>x()</script>") as { custom: boolean; html: string; removed: boolean };
+    expect(saved).toEqual({ custom: true, html: "<h1>Back soon</h1>\n", removed: true });
+    expect(served()).toBe(saved.html);
+    const edited = join(paths.dataDir, "default-edited.html");
+    expect(lstatSync(edited).mode & 0o777).toBe(0o600);
+    expect(lstatSync(join(paths.dataDir, "default.html")).mode & 0o777).toBe(0o644);
+    expect(await run(["get-default-template"])).toEqual({ custom: true, html: saved.html });
+    await expect(run(["set-default-template"], "x".repeat(MAX_TEMPLATE_BYTES + 1))).rejects.toThrow("at most");
+
+    // Install, update and repair rewrite default.html from the edited default.
+    writeFileSync(join(paths.dataDir, "default.html"), "stale");
+    ensureMaintenanceData(paths.dataDir);
+    expect(served()).toBe(saved.html);
+
+    // A site without a page of its own shows the edited default, and a reset falls back to it.
+    expect(await run(["get-template", "--domain=example.com"])).toEqual({ domain: "example.com", custom: false, html: saved.html });
+    await run(["set-template", "--domain=example.com"], "<p>own</p>");
+    expect(await run(["get-template", "--domain=example.com"])).toMatchObject({ custom: true, html: "<p>own</p>\n" });
+    expect(await run(["reset-template", "--domain=example.com"])).toEqual({ domain: "example.com", custom: false, html: saved.html });
+
+    // An empty page, or one the sanitizer empties, is refused for the default and for a site.
+    for (const empty of ["", "  \n", "<script>x()</script>"]) {
+      await expect(run(["set-default-template"], empty)).rejects.toThrow("the maintenance template is empty");
+      await expect(run(["set-template", "--domain=example.com"], empty)).rejects.toThrow("the maintenance template is empty");
+    }
+    expect(served()).toBe(saved.html);
+
+    // Like a site's page, an unsafe edited default is not served, and does not stop maintenance.
+    rmSync(edited);
+    writeFileSync(edited, "x".repeat(MAX_TEMPLATE_BYTES + 1));
+    expect(await run(["get-default-template"])).toEqual({ custom: false, html: DEFAULT_MAINTENANCE_TEMPLATE });
+    expect((await run(["enable", "--domain=example.com"]) as MaintenanceStatus).enabled).toBe(true);
+    expect(served()).toBe(DEFAULT_MAINTENANCE_TEMPLATE);
+    expect(await run(["reset-default-template"])).toEqual({ custom: false, html: DEFAULT_MAINTENANCE_TEMPLATE });
+    expect(existsSync(edited)).toBe(false);
+    expect(served()).toBe(DEFAULT_MAINTENANCE_TEMPLATE);
+    expect(await run(["get-template", "--domain=example.com"])).toMatchObject({ custom: false, html: DEFAULT_MAINTENANCE_TEMPLATE });
+    await expect(run(["get-default-template", "--domain=example.com"])).rejects.toThrow("takes no arguments");
+
+    // A directory in the edited default's place is refused, not thrown over.
+    mkdirSync(edited);
+    await expect(run(["reset-default-template"])).rejects.toThrow("unsafe maintenance default template");
+    await expect(run(["set-default-template"], "<p>x</p>")).rejects.toThrow();
+    expect(served()).toBe(DEFAULT_MAINTENANCE_TEMPLATE);
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("a default page save purges the sites that serve it, and a repaint reads it in the one sites call", async () => {
+  const { root, paths } = fixture("a.example.com", ["b.example.com", "c.example.com"]);
+  const purged: string[] = [];
+  const fetchFn = (async (_url: string, init: RequestInit) => {
+    purged.push((init.headers as Record<string, string>).Host!);
+    return new Response("", { status: 200 });
+  }) as unknown as typeof fetch;
+  const run = (argv: string[], input?: string) => executeMaintenanceAction(argv, actionOptions(paths, { fetchFn, ...(input === undefined ? {} : { input }) }));
+  try {
+    await run(["enable", "--domain=a.example.com"]);
+    await run(["enable", "--domain=b.example.com"]);
+    await run(["set-template", "--domain=b.example.com"], "<p>own</p>");
+    purged.length = 0;
+    await run(["set-default-template"], "<p>new default</p>");
+    // b serves its own page and c is live, so only a is purged.
+    expect(purged.sort()).toEqual(["a.example.com", "www.a.example.com"]);
+    purged.length = 0;
+    await run(["global-enable"]);
+    purged.length = 0;
+    await run(["reset-default-template"]);
+    expect(purged.sort()).toEqual(["a.example.com", "c.example.com", "www.a.example.com", "www.c.example.com"]);
+
+    const fleet = await run(["sites"]) as { defaultPage: { custom: boolean; html: string } };
+    expect(fleet.defaultPage).toEqual({ custom: false, html: DEFAULT_MAINTENANCE_TEMPLATE });
   } finally {
     rmSync(root, { recursive: true, force: true });
   }
@@ -319,11 +404,46 @@ test("template API accepts JSON escaping overhead and enforces the decoded UTF-8
   }
 });
 
+test("the default page route saves and resets through the admin verbs, with the same size limit", async () => {
+  const token = "maintenance-default-token";
+  const request = (method: string, body?: unknown) => new Request("https://panel.example.test:8443/addons/maintenance/api/default-template", {
+    method,
+    ...(body === undefined ? {} : { body: JSON.stringify(body) }),
+    headers: {
+      "content-type": "application/json",
+      cookie: `clp_addons_csrf=${token}`,
+      host: "panel.example.test:8443",
+      origin: "https://panel.example.test:8443",
+      "x-clp-addons-csrf": token,
+    },
+  });
+  const original = { set: maintenanceService.setDefaultTemplate, reset: maintenanceService.resetDefaultTemplate };
+  const calls: string[] = [];
+  maintenanceService.setDefaultTemplate = async (html) => { calls.push(`set ${html}`); return { ok: true, data: { custom: true, html } }; };
+  maintenanceService.resetDefaultTemplate = async () => { calls.push("reset"); return { ok: true, data: { custom: false, html: "built-in" } }; };
+  try {
+    expect((await handleMaintenance(new Request("https://panel.example.test:8443/addons/maintenance/api/default-template", {
+      method: "DELETE",
+    }), "/api/default-template")).status).toBe(403);
+    expect((await handleMaintenance(request("PUT", { html: "<p>new</p>" }), "/api/default-template")).status).toBe(200);
+    const tooLarge = await handleMaintenance(request("PUT", { html: "x".repeat(MAX_TEMPLATE_BYTES + 1) }), "/api/default-template");
+    expect(tooLarge.status).toBe(400);
+    const reset = await handleMaintenance(request("DELETE"), "/api/default-template");
+    expect(await reset.json()).toMatchObject({ ok: true, data: { custom: false } });
+    expect(calls).toEqual(["set <p>new</p>", "reset"]);
+  } finally {
+    maintenanceService.setDefaultTemplate = original.set;
+    maintenanceService.resetDefaultTemplate = original.reset;
+  }
+});
+
 const site = (extra: Partial<MaintenanceSiteView> = {}): MaintenanceSiteView => ({
   domain: "one.example.com", type: "php", user: "one", enabled: false, customTemplate: false, bypasses: [], uncovered: null,
   ...extra,
 });
-const fleetOf = (sites: MaintenanceSiteView[], global = false, bypasses: string[] = []) => ({ global: { global, bypasses }, sites });
+const fleetOf = (sites: MaintenanceSiteView[], global = false, bypasses: string[] = [], defaultPage = { custom: false, html: "" }) => ({
+  global: { global, bypasses }, sites, defaultPage,
+});
 
 test("the fleet counts what visitors get, in the table's header", () => {
   const rendered = fleetView(fleetOf([
@@ -451,6 +571,62 @@ test("the site page puts the switch beside its status and folds bypasses and the
   expect(layout("Maintenance", html)).not.toContain("display: contents");
 });
 
+test("the global card edits the default page with the site page's editor", () => {
+  const builtIn = fleetView(fleetOf([site()], false, [], { custom: false, html: "<p>built-in</p>" }));
+  expect(builtIn).toContain('<details class="disclosure" id="default-page" data-template-endpoint="/api/default-template"');
+  expect(builtIn).toContain('<span class="summary-title">Default maintenance page</span><span class="hint" id="template-kind">Built-in</span>');
+  expect(builtIn).toContain('<textarea id="template-editor" aria-label="Default maintenance page HTML" spellcheck="false" hidden>&lt;p&gt;built-in&lt;/p&gt;</textarea>');
+  expect(builtIn).toMatch(/id="reset-template"[^>]*hidden>/);
+  expect(builtIn.indexOf('id="default-page"')).toBeLessThan(builtIn.indexOf("<h2>Sites</h2>"));
+  const edited = fleetView(fleetOf([site()], false, [], { custom: true, html: "<p>edited</p>" }));
+  expect(edited).toContain('id="template-kind">Edited</span>');
+  expect(edited).not.toMatch(/id="reset-template"[^>]*hidden>/);
+  // A site still says only whether it has a page of its own.
+  expect(siteView(site(), { domain: "one.example.com", custom: false, html: "<p>edited</p>" }, "", false))
+    .toContain('data-template-endpoint="/api/sites/one.example.com/template"');
+});
+
+function repaintHarness(options: { value: string; focused?: boolean }) {
+  const inner = { focused: false, focus() { inner.focused = true; } };
+  const parts = { "#template-kind": { textContent: "Built-in" }, "#reset-template": { hidden: true } };
+  const freshParts = { "#template-kind": { textContent: "Edited" }, "#reset-template": { hidden: false } };
+  const editor = { contains: (node: unknown) => node === inner, querySelector: (selector: keyof typeof parts) => parts[selector] };
+  let kept = false;
+  const fresh = { querySelector: (selector: keyof typeof freshParts) => freshParts[selector], replaceWith: (node: unknown) => { kept = node === editor; } };
+  let painted = false;
+  let reinitialised = false;
+  const ids: Record<string, unknown> = { "clp-content": {}, "template-editor": { value: options.value } };
+  const root = {
+    getElementById: (id: string) => id === "default-page" ? (painted ? fresh : editor) : ids[id] ?? null,
+    querySelector: () => null, querySelectorAll: () => [], addEventListener() {}, activeElement: options.focused ? inner : null,
+  };
+  const { repaintFleet } = new Function("CLP_ROOT", "repaintView", "notify", "clpBusyFocus", "stubInit",
+    `${CLIENT_JS.replace(/\nif \(document\.readyState[\s\S]*$/, "")}\ninitTemplateEditor = stubInit;\nreturn { repaintFleet };`)(
+    root, () => { painted = true; }, () => {}, null, () => { reinitialised = true; },
+  ) as { repaintFleet: (reply: { html: string }) => void };
+  repaintFleet({ html: "<p>fleet</p>" });
+  return { painted, kept: () => kept, reinitialised, parts, inner };
+}
+
+test("a fleet repaint keeps the default page's editor only while it has unsaved edits or focus", () => {
+  // Unsaved edits survive, told what the server now says about the saved page.
+  const dirty = repaintHarness({ value: "<p>unsaved</p>" });
+  expect(dirty.painted).toBe(true);
+  expect(dirty.kept()).toBe(true);
+  expect(dirty.parts["#template-kind"].textContent).toBe("Edited");
+  expect(dirty.parts["#reset-template"].hidden).toBe(false);
+  expect(dirty.reinitialised).toBe(false);
+
+  const focused = repaintHarness({ value: "", focused: true });
+  expect(focused.kept()).toBe(true);
+  expect(focused.inner.focused).toBe(true);
+
+  // Otherwise the fresh editor shows what is saved now, another admin's save included.
+  const clean = repaintHarness({ value: "" });
+  expect(clean.kept()).toBe(false);
+  expect(clean.reinitialised).toBe(true);
+});
+
 test("a site-scoped page keeps CloudPanel's site navigation rather than a back link", () => {
   const content = siteView(site(), { domain: "one.example.com", custom: false, html: "" }, "", false);
 
@@ -507,7 +683,7 @@ test("global toggle API guards mutations and toggles fleet-wide maintenance mode
   const origSetGlobal = maintenanceService.setGlobalEnabled;
   const origFleet = maintenanceService.fleet;
   try {
-    maintenanceService.fleet = async () => ({ global: { global: true, bypasses: [] }, sites: [] });
+    maintenanceService.fleet = async () => fleetOf([], true);
     let lastEnabled: boolean | undefined;
     maintenanceService.setGlobalEnabled = async (enabled) => {
       lastEnabled = enabled;
@@ -592,14 +768,16 @@ test("the bulk route switches the listed sites and answers with the repainted fl
     expect((await handleMaintenance(request(alias, { enabled: true, domains: ["a.example.com"] }), alias)).status).toBe(404);
   }
 
-  const original = { setManyEnabled: maintenanceService.setManyEnabled, fleet: maintenanceService.fleet };
+  const original = {
+    setManyEnabled: maintenanceService.setManyEnabled, fleet: maintenanceService.fleet,
+  };
   try {
     const switched: string[] = [];
     maintenanceService.setManyEnabled = async (domains, enabled) => {
       switched.push(...domains.filter((domain) => domain !== "bad.example.com"));
       return { enabled, updated: switched, failed: [{ domain: "bad.example.com", error: "root action failed" }] };
     };
-    maintenanceService.fleet = async () => ({ global: { global: false, bypasses: [] }, sites: [] });
+    maintenanceService.fleet = async () => fleetOf([], false, [], { custom: true, html: "<p>edited</p>" });
     const res = await handleMaintenance(request("/api/bulk-toggle", { enabled: true, domains: ["good.example.com", "bad.example.com"] }), "/api/bulk-toggle");
     expect(res.status).toBe(200);
     const reply = await res.json() as { ok: boolean; html: string; data: { updated: string[]; failed: unknown[] } };
@@ -607,6 +785,7 @@ test("the bulk route switches the listed sites and answers with the repainted fl
     expect(reply.data.updated).toEqual(["good.example.com"]);
     expect(reply.data.failed).toEqual([{ domain: "bad.example.com", error: "root action failed" }]);
     expect(reply.html).toContain("Maintenance Mode");
+    expect(reply.html).toContain('id="template-kind">Edited</span>');
   } finally {
     Object.assign(maintenanceService, original);
   }
@@ -734,7 +913,7 @@ function templatePage(options: { editing?: boolean; mounted?: boolean } = {}) {
     async (url: string) => { fetched.push(url); throw new Error("no request was expected"); },
     options.mounted ? root : undefined,
     async (dialog: { title: string }) => { confirms.push(dialog); return accept; },
-  ) as { changeTemplateMode: (domain: string, editing: boolean) => Promise<void> };
+  ) as { changeTemplateMode: (editing: boolean) => Promise<void> };
   const settle = () => new Promise((resolve) => setTimeout(resolve, 0));
   return { ...fns, ids, scripts, copied, fetched, confirms, window, settle, accept: (value: boolean) => { accept = value; } };
 }
@@ -842,15 +1021,15 @@ test("leaving the editor asks only about unsaved edits and never removes the sav
 
   // No confirmation for a template nobody touched.
   toggle.checked = false;
-  await page.changeTemplateMode("shop.example.test", false);
+  await page.changeTemplateMode(false);
   expect(page.confirms).toEqual([]);
   expect(area.disabled).toBe(true);
 
   // Declining leaves the operator in the editor with the edits still there.
-  await page.changeTemplateMode("shop.example.test", true);
+  await page.changeTemplateMode(true);
   area.value = "<p>edited</p>";
   toggle.checked = false;
-  await page.changeTemplateMode("shop.example.test", false);
+  await page.changeTemplateMode(false);
   expect(page.confirms.map((dialog) => dialog.title)).toEqual(["Discard the unsaved changes?"]);
   expect(toggle.checked).toBe(true);
   expect(area.value).toBe("<p>edited</p>");
@@ -858,7 +1037,7 @@ test("leaving the editor asks only about unsaved edits and never removes the sav
 
   // Accepting puts back what is saved, locally.
   page.accept(true);
-  await page.changeTemplateMode("shop.example.test", false);
+  await page.changeTemplateMode(false);
   expect(area.value).toBe("<p>saved</p>");
   expect(area.disabled).toBe(true);
   expect(page.fetched).toEqual([]);

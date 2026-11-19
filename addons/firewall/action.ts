@@ -1,0 +1,451 @@
+import { LOCK_DIR, addonStateDir, PANEL_DB, DISTRO_NGINX_SITES_DIR } from "../../lib/paths";
+import { writeFileAtomic } from "../../lib/atomic-write";
+import { Database } from "bun:sqlite";
+import { existsSync, lstatSync, readFileSync, rmSync } from "node:fs";
+import { join } from "node:path";
+import { errorMessage } from "../../lib/errors";
+import { replyToAction, failAction } from "../../lib/action";
+import { runCommand, type CommandResult } from "../../lib/command";
+import { validateFlag, HOSTNAME_RE } from "../../lib/validate";
+import { withFileLock } from "../../lib/file-lock";
+import { openPanelDatabase, withoutStandIns } from "../../lib/panel-db";
+import {
+  trustedVhost, withNginxTransaction, withRecoveryFailures,
+} from "../../lib/nginx-transaction";
+import { FIREWALL_VERBS } from "./verbs";
+import { firewallStatus, setProtocolsEnabled, setRuleProtocol, type FirewallOptions, type FirewallStatus } from "./protocols";
+import {
+  connectHetzner, disconnectHetzner, hetznerView, setHetznerRole, type HetznerOptions, type HetznerRole, type HetznerView,
+} from "./hetzner";
+import { cleanUpPanelGate, panelGateSummary, panelGateView, setPanelGate, type GateOptions, type PanelGateView } from "./panel-gate";
+
+const POLICY_VERSION = 1;
+const MAX_SITES_PER_REQUEST = 10_000;
+const CLOUDFLARE_INCLUDE = "include /etc/nginx/cloudflare/ips;";
+
+type FirewallVerb = keyof typeof FIREWALL_VERBS;
+
+export interface CloudflareActionPaths {
+  panelDb: string;
+  nginxVhostDir: string;
+  policyFile: string;
+  lockFile: string;
+  nginx: string;
+  systemctl: string;
+  vhostUid: number;
+  stateUid: number;
+}
+
+interface FirewallActionOptions {
+  paths?: Partial<CloudflareActionPaths>;
+  protocols?: FirewallOptions;
+  hetzner?: HetznerOptions;
+  gate?: GateOptions;
+  input?: string;
+  emitReply?: boolean;
+  run?: (command: string, args: string[]) => CommandResult;
+}
+
+export interface CloudflareSiteView {
+  domain: string;
+  enabled: boolean;
+}
+
+export interface ReconcileResult {
+  discovered: number;
+  enabled: number;
+  failed: { domain: string; error: string }[];
+}
+
+interface SiteRow {
+  id: number;
+  domain_name: string;
+  user: string;
+  allow_traffic_from_cloudflare_only: number | boolean;
+}
+
+interface Policy {
+  version: 1;
+  autoEnableNewSites: boolean;
+  knownSiteIds: number[];
+  excludedDomains: string[];
+}
+
+interface ParsedAction {
+  verb: FirewallVerb;
+  enabled: boolean | null;
+  role: HetznerRole | null;
+}
+
+export const DEFAULT_CLOUDFLARE_ACTION_PATHS: CloudflareActionPaths = {
+  panelDb: PANEL_DB,
+  nginxVhostDir: DISTRO_NGINX_SITES_DIR,
+  policyFile: `${addonStateDir("firewall")}/policy.json`,
+  lockFile: `${LOCK_DIR}/firewall-sites.lock`,
+  nginx: "nginx",
+  systemctl: "systemctl",
+  vhostUid: 0,
+  stateUid: 0,
+};
+
+function pathsFor(options: FirewallActionOptions): CloudflareActionPaths {
+  return { ...DEFAULT_CLOUDFLARE_ACTION_PATHS, ...options.paths };
+}
+
+function emptyPolicy(): Policy {
+  return { version: POLICY_VERSION, autoEnableNewSites: false, knownSiteIds: [], excludedDomains: [] };
+}
+
+function normalizeDomain(value: unknown): string | null {
+  if (typeof value !== "string" || value.length > 253) return null;
+  let domain = value.toLowerCase();
+  if (domain.endsWith(".")) domain = domain.slice(0, -1);
+  const match = domain.match(HOSTNAME_RE);
+  return match?.[0] === domain ? domain : null;
+}
+
+function stablePolicy(value: Policy): Policy {
+  return {
+    version: POLICY_VERSION,
+    autoEnableNewSites: value.autoEnableNewSites,
+    knownSiteIds: [...new Set(value.knownSiteIds.filter((id) => Number.isInteger(id) && id > 0))].sort((a, b) => a - b),
+    excludedDomains: [...new Set(value.excludedDomains.map(normalizeDomain).filter((v): v is string => v !== null))].sort(),
+  };
+}
+
+function readPolicy(path: string, expectedUid: number): Policy {
+  if (!existsSync(path)) return emptyPolicy();
+  let raw: unknown;
+  try {
+    const stat = lstatSync(path);
+    if (!stat.isFile() || stat.isSymbolicLink() || stat.uid !== expectedUid || (stat.mode & 0o022) !== 0) {
+      failAction("the Cloudflare-only policy file is not a trusted regular file");
+    }
+    raw = JSON.parse(readFileSync(path, "utf8"));
+  } catch (error) {
+    failAction(`the Cloudflare-only policy could not be read: ${errorMessage(error)}`);
+  }
+  if (typeof raw !== "object" || raw === null) failAction("the Cloudflare-only policy is malformed");
+  const policy = raw as Partial<Policy>;
+  if (
+    policy.version !== POLICY_VERSION || typeof policy.autoEnableNewSites !== "boolean" ||
+    !Array.isArray(policy.knownSiteIds) || !policy.knownSiteIds.every(Number.isInteger) ||
+    !Array.isArray(policy.excludedDomains) || !policy.excludedDomains.every((item) => typeof item === "string")
+  ) failAction("the Cloudflare-only policy is malformed");
+  return stablePolicy(policy as Policy);
+}
+
+function writePolicy(path: string, policy: Policy, expectedUid: number): void {
+  let uid = expectedUid;
+  let gid = process.getgid?.() ?? 0;
+  if (existsSync(path)) {
+    const stat = lstatSync(path);
+    if (!stat.isFile() || stat.isSymbolicLink() || stat.uid !== expectedUid || (stat.mode & 0o022) !== 0) {
+      failAction("the Cloudflare-only policy file is not a trusted regular file");
+    }
+    uid = stat.uid;
+    gid = stat.gid;
+  }
+  writeFileAtomic(path, `${JSON.stringify(stablePolicy(policy), null, 2)}\n`, { mode: 0o600, owner: { uid: uid, gid: gid }, createParent: true });
+}
+
+function siteRows(db: Database): SiteRow[] {
+  try {
+    return withoutStandIns(db.query<SiteRow, []>(
+      "SELECT id, domain_name, user, allow_traffic_from_cloudflare_only FROM site ORDER BY domain_name;",
+    ).all().map((row) => ({ ...row, id: Number(row.id), domain_name: String(row.domain_name), user: String(row.user) })));
+  } catch (error) {
+    failAction(`CloudPanel does not expose the required Cloudflare site setting: ${errorMessage(error)}`);
+  }
+}
+
+function parseAction(argv: string[]): ParsedAction {
+  const verb = argv[0] as FirewallVerb | undefined;
+  if (!verb || !Object.hasOwn(FIREWALL_VERBS, verb)) {
+    failAction(`unknown Firewall action '${verb ?? ""}'`);
+  }
+  let enabled: boolean | null = null;
+  let role: HetznerRole | null = null;
+  if (verb === "set" || verb === "policy" || verb === "set-protocols" || verb === "panel-gate-switch") {
+    if (argv.length !== 3 || argv[1] !== "--enabled") failAction(`${verb} takes only --enabled yes|no`);
+    enabled = validateFlag(argv[2]!, "enabled") === "yes";
+  } else if (verb === "hetzner-switch") {
+    if (argv.length !== 5 || argv[1] !== "--role" || argv[3] !== "--enabled" || (argv[2] !== "web" && argv[2] !== "panel")) {
+      failAction("hetzner-switch takes --role web|panel --enabled yes|no");
+    }
+    role = argv[2];
+    enabled = validateFlag(argv[4]!, "enabled") === "yes";
+  } else if (argv.length !== 1) {
+    failAction(`${verb} takes no arguments`);
+  }
+  return { verb, enabled, role };
+}
+
+function readInput(verb: string, input: string | undefined): unknown {
+  try {
+    return JSON.parse(input ?? readFileSync(0, "utf8"));
+  } catch {
+    failAction(`${verb} input must be JSON`);
+  }
+}
+
+function requestedDomains(input: string | undefined): string[] {
+  const raw = readInput("set", input);
+  const values = (raw as { domains?: unknown } | null)?.domains;
+  if (!Array.isArray(values) || values.length === 0 || values.length > MAX_SITES_PER_REQUEST) {
+    failAction(`set requires between 1 and ${MAX_SITES_PER_REQUEST} domains`);
+  }
+  const domains = values.map(normalizeDomain);
+  if (domains.some((domain) => domain === null)) failAction("set input contains an invalid domain");
+  return [...new Set(domains as string[])];
+}
+
+/** Applies the same two rendered-vhost changes as CloudPanel's own form. */
+export function transformVhost(content: string, siteUser: string, enabled: boolean): string {
+  const access = new RegExp(
+    `^([ \\t]*access_log[ \\t]+(?:/home/${RegExp.escape(siteUser)}/logs/nginx|/var/log/clp-addons-nginx/${RegExp.escape(siteUser)})/access\\.log[ \\t]+)(main|cloudflare)([ \\t]*;[ \\t]*)$`,
+    "gm",
+  );
+  const matches = [...content.matchAll(access)];
+  if (matches.length !== 1) failAction("the site's generated Nginx access-log marker is missing or ambiguous");
+
+  let result = content.replace(access, `$1${enabled ? "cloudflare" : "main"}$3`);
+  const includeLine = new RegExp(`^[ \\t]*${RegExp.escape(CLOUDFLARE_INCLUDE)}[ \\t]*(?:\\r?\\n|$)`, "gm");
+  result = result.replace(includeLine, "");
+  if (enabled) {
+    access.lastIndex = 0;
+    result = result.replace(access, (line) => `${line}\n  ${CLOUDFLARE_INCLUDE}`);
+  }
+  return result;
+}
+
+async function updateSites(
+  paths: CloudflareActionPaths,
+  domains: string[],
+  enabled: boolean,
+  command: (command: string, args: string[]) => CommandResult,
+): Promise<{ changed: number; sites: SiteRow[] }> {
+  const db = openPanelDatabase(paths.panelDb);
+  try {
+    return withNginxTransaction(db, paths, command, (changes) => {
+      const allSites = siteRows(db);
+      const wanted = new Set(domains);
+      const selected = allSites.filter((site) => wanted.has(site.domain_name));
+      const found = new Set(selected.map((site) => site.domain_name));
+      const missing = domains.filter((domain) => !found.has(domain));
+      if (missing.length) failAction(`no CloudPanel site found for: ${missing.join(", ")}`);
+
+      const staged = selected.map((site) => {
+        const domain = normalizeDomain(site.domain_name);
+        if (!domain || domain !== site.domain_name) failAction(`CloudPanel returned an invalid site domain '${site.domain_name}'`);
+        try {
+          const backup = trustedVhost(join(paths.nginxVhostDir, `${domain}.conf`), paths.vhostUid);
+          return { backup, content: transformVhost(backup.content, site.user, enabled) };
+        } catch (error) {
+          failAction(`${domain}: ${errorMessage(error)}`);
+        }
+      });
+
+      const update = db.query("UPDATE site SET allow_traffic_from_cloudflare_only = ?, updated_at = CURRENT_TIMESTAMP WHERE domain_name = ?;");
+      for (const site of selected) update.run(enabled ? 1 : 0, site.domain_name);
+      changes.push(...staged);
+
+      return {
+        changed: selected.filter((site) => Boolean(site.allow_traffic_from_cloudflare_only) !== enabled).length,
+        sites: allSites.map((site) => wanted.has(site.domain_name)
+          ? { ...site, allow_traffic_from_cloudflare_only: enabled ? 1 : 0 }
+          : site),
+      };
+    }, { alwaysValidate: true }).value;
+  } finally {
+    db.close();
+  }
+}
+
+function protocolsOrError(options?: FirewallOptions): FirewallStatus | { error: string } {
+  try { return firewallStatus(options); }
+  catch (error) { return { error: errorMessage(error) }; }
+}
+
+async function hetznerOrError(options?: HetznerOptions): Promise<HetznerView> {
+  try { return await hetznerView(options); }
+  catch (error) { return { state: "error", connected: false, error: `Hetzner could not be read: ${errorMessage(error)}` }; }
+}
+
+function gateOrError(options?: GateOptions): PanelGateView | { error: string } {
+  try { return panelGateSummary(options); }
+  catch (error) { return { error: `The Panel gate could not be read: ${errorMessage(error)}` }; }
+}
+
+async function listState(paths: CloudflareActionPaths, protocols?: FirewallOptions, hetzner?: HetznerOptions, gate?: GateOptions): Promise<{
+  sites: CloudflareSiteView[]; autoEnableNewSites: boolean; protocols: FirewallStatus | { error: string }; hetzner: HetznerView;
+  panelGate: PanelGateView | { error: string };
+}> {
+  const hetznerState = hetznerOrError(hetzner);
+  const gateState = gateOrError(gate);
+  const db = openPanelDatabase(paths.panelDb);
+  try {
+    const policy = readPolicy(paths.policyFile, paths.stateUid);
+    return {
+      sites: siteRows(db).map((site) => ({
+        domain: site.domain_name,
+        enabled: Boolean(site.allow_traffic_from_cloudflare_only),
+      })),
+      autoEnableNewSites: policy.autoEnableNewSites,
+      protocols: protocolsOrError(protocols),
+      hetzner: await hetznerState,
+      panelGate: gateState,
+    };
+  } finally {
+    db.close();
+  }
+}
+
+async function withPolicyLock<T>(paths: CloudflareActionPaths, body: () => Promise<T>): Promise<T> {
+  return withFileLock(paths.lockFile, 30, "another Cloudflare-only change is running", body);
+}
+
+async function setPolicy(paths: CloudflareActionPaths, enabled: boolean): Promise<Policy> {
+  return withPolicyLock(paths, async () => {
+    const policy = readPolicy(paths.policyFile, paths.stateUid);
+    const db = openPanelDatabase(paths.panelDb);
+    try {
+      policy.autoEnableNewSites = enabled;
+      if (enabled) policy.knownSiteIds = siteRows(db).map((site) => site.id);
+      writePolicy(paths.policyFile, policy, paths.stateUid);
+      return stablePolicy(policy);
+    } finally {
+      db.close();
+    }
+  });
+}
+
+async function setSelected(
+  paths: CloudflareActionPaths,
+  domains: string[],
+  enabled: boolean,
+  command: (command: string, args: string[]) => CommandResult,
+): Promise<{ changed: number }> {
+  return withPolicyLock(paths, async () => {
+    const before = existsSync(paths.policyFile) ? readFileSync(paths.policyFile, "utf8") : null;
+    const policy = readPolicy(paths.policyFile, paths.stateUid);
+    const excluded = new Set(policy.excludedDomains);
+    for (const domain of domains) enabled ? excluded.delete(domain) : excluded.add(domain);
+    policy.excludedDomains = [...excluded];
+
+    const db = openPanelDatabase(paths.panelDb);
+    try {
+      const selected = siteRows(db).filter((site) => domains.includes(site.domain_name));
+      policy.knownSiteIds.push(...selected.map((site) => site.id));
+    } finally {
+      db.close();
+    }
+
+    writePolicy(paths.policyFile, policy, paths.stateUid);
+    try {
+      const result = await updateSites(paths, domains, enabled, command);
+      return { changed: result.changed };
+    } catch (error) {
+      const rollbackFailures: string[] = [];
+      try {
+        if (before === null) rmSync(paths.policyFile, { force: true });
+        else {
+          const stat = lstatSync(paths.policyFile);
+          writeFileAtomic(paths.policyFile, before, { mode: 0o600, owner: { uid: stat.uid, gid: stat.gid }, createParent: true });
+        }
+      } catch (rollbackError) {
+        rollbackFailures.push(errorMessage(rollbackError));
+      }
+      throw withRecoveryFailures(error, "policy rollback failed", rollbackFailures);
+    }
+  });
+}
+
+export async function reconcileNewSites(
+  paths: CloudflareActionPaths = DEFAULT_CLOUDFLARE_ACTION_PATHS,
+  command: (command: string, args: string[]) => CommandResult = runCommand,
+): Promise<ReconcileResult> {
+  return withPolicyLock(paths, async () => {
+    const policy = readPolicy(paths.policyFile, paths.stateUid);
+    if (!policy.autoEnableNewSites) return { discovered: 0, enabled: 0, failed: [] };
+
+    const db = openPanelDatabase(paths.panelDb);
+    let sites: SiteRow[];
+    try { sites = siteRows(db); } finally { db.close(); }
+    const currentIds = new Set(sites.map((site) => site.id));
+    const known = new Set(policy.knownSiteIds.filter((id) => currentIds.has(id)));
+    const discovered = sites.filter((site) => !known.has(site.id));
+    const excluded = new Set(policy.excludedDomains);
+    const enable = discovered.filter((site) => !excluded.has(site.domain_name) && !Boolean(site.allow_traffic_from_cloudflare_only));
+
+    // One site at a time, so a vhost edited by hand fails alone. It stays
+    // unknown and is tried again on the next pass; the rest are recorded.
+    const failed: ReconcileResult["failed"] = [];
+    const failedIds = new Set<number>();
+    for (const site of enable) {
+      try {
+        await updateSites(paths, [site.domain_name], true, command);
+      } catch (error) {
+        const message = errorMessage(error);
+        failed.push({ domain: site.domain_name, error: message.includes(site.domain_name) ? message : `${site.domain_name}: ${message}` });
+        failedIds.add(site.id);
+      }
+    }
+    const knownSiteIds = sites.filter((site) => !failedIds.has(site.id)).map((site) => site.id);
+    if (JSON.stringify(stablePolicy({ ...policy, knownSiteIds })) !== JSON.stringify(stablePolicy(policy))) {
+      writePolicy(paths.policyFile, { ...policy, knownSiteIds }, paths.stateUid);
+    }
+    return { discovered: discovered.length, enabled: enable.length - failed.length, failed };
+  });
+}
+
+function requireRoot(): void {
+  if (process.getuid?.() !== 0) failAction("Firewall actions must run as root");
+}
+
+export async function runFirewallAction(argv: string[], options: FirewallActionOptions = {}): Promise<number> {
+  return replyToAction("firewall", options.emitReply !== false, async () => {
+    requireRoot();
+    const paths = pathsFor(options);
+    const action = parseAction(argv);
+    const command = options.run ?? runCommand;
+    if (action.verb === "list") return listState(paths, options.protocols, options.hetzner, options.gate);
+    if (action.verb === "policy") {
+      const policy = await setPolicy(paths, action.enabled!);
+      return { autoEnableNewSites: policy.autoEnableNewSites };
+    }
+    if (action.verb === "set") return setSelected(paths, requestedDomains(options.input), action.enabled!, command);
+    if (action.verb === "reconcile") return reconcileNewSites(paths, command);
+    if (action.verb === "protocols") return firewallStatus(options.protocols);
+    if (action.verb === "set-protocol") {
+      const body = readInput("set-protocol", options.input);
+      if (typeof body !== "object" || body === null) failAction("set-protocol input must be a JSON object");
+      setRuleProtocol(body as Record<string, unknown>, options.protocols);
+      return firewallStatus(options.protocols);
+    }
+    if (action.verb === "set-protocols") {
+      setProtocolsEnabled(action.enabled!, options.protocols);
+      return firewallStatus(options.protocols);
+    }
+    if (action.verb === "hetzner-connect") {
+      const body = readInput("hetzner-connect", options.input);
+      if (typeof body !== "object" || body === null) failAction("hetzner-connect input must be a JSON object");
+      return connectHetzner(body as Record<string, unknown>, options.hetzner);
+    }
+    if (action.verb === "hetzner-disconnect") return disconnectHetzner(options.hetzner);
+    if (action.verb === "hetzner-switch") {
+      const body = readInput("hetzner-switch", options.input);
+      const { confirm, typed } = typeof body === "object" && body !== null ? body as { confirm?: unknown; typed?: unknown } : {};
+      return setHetznerRole(action.role!, action.enabled!, confirm, options.hetzner, typed);
+    }
+    if (action.verb === "panel-gate") return panelGateView(options.gate);
+    if (action.verb === "panel-gate-cleanup") return cleanUpPanelGate(options.gate);
+    if (action.verb === "panel-gate-switch") {
+      const body = readInput("panel-gate-switch", options.input);
+      const confirm = typeof body === "object" && body !== null ? (body as { confirm?: unknown }).confirm : undefined;
+      return setPanelGate(action.enabled!, confirm, options.gate);
+    }
+    action.verb satisfies never;
+    failAction(`unknown Firewall action '${action.verb}'`);
+  });
+}

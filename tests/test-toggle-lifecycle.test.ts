@@ -183,11 +183,12 @@ function fixture(options: { provisioned: boolean; enabled: string[] }): string {
     // An addon's own units are part of "already enabled": a disable has to
     // find them to stop and remove them.
     const units: Record<string, string[]> = {
-      "cloudflare-ips": ["clp-addons-new-sites.path", "clp-addons-new-sites.service", "clp-addons-new-site-rows.path"],
+      firewall: [
+        "clp-addons-new-sites.path", "clp-addons-new-sites.service", "clp-addons-new-site-rows.path", "clp-addons-firewall.path", "clp-addons-firewall.service",
+      ],
       smtp: ["clp-addons-new-sites.path", "clp-addons-new-sites.service", "clp-addons-new-site-rows.path"],
       dns: ["clp-addons-new-sites.path", "clp-addons-new-sites.service", "clp-addons-new-site-rows.path"],
       "wp-tools": ["clp-addons-new-sites.path", "clp-addons-new-sites.service", "clp-addons-certificates.path", "clp-addons-certificates.service"],
-      "system-tweaks": ["clp-addons-firewall.path", "clp-addons-firewall.service"],
     };
     for (const unit of units[name] ?? []) writeFileSync(join(root, "systemd", unit), "# placeholder\n");
   }
@@ -260,15 +261,18 @@ test("re-enabling an addon that is already on changes and reloads nothing", () =
   expect(run.systemd).toEqual(["daemon-reload"]);
 });
 
-test("Cloudflare IP Access uses the shared new-site watcher, not a timer of its own", () => {
-  const on = toggle([{ verb: "enable", addon: "cloudflare-ips" }]);
+test("Firewall uses the shared new-site watcher, not a timer of its own, and brings the firewall watcher", () => {
+  const on = toggle([{ verb: "enable", addon: "firewall" }]);
   expect(on.error).toBeUndefined();
   expect(on.systemd).toContain("enable clp-addons-new-sites.path");
+  expect(on.systemd).toContain("enable clp-addons-firewall.path");
 
-  const off = toggle([{ verb: "disable", addon: "cloudflare-ips" }], { enabled: ["cloudflare-ips"] });
+  const off = toggle([{ verb: "disable", addon: "firewall" }], { enabled: ["firewall"] });
   expect(off.error).toBeUndefined();
   expect(off.systemd).toContain("disable --now clp-addons-new-sites.path");
+  expect(off.systemd).toContain("disable --now clp-addons-firewall.path");
   expect(existsSync(join(off.root, "systemd", "clp-addons-new-sites.path"))).toBe(false);
+  expect(existsSync(join(off.root, "systemd", "clp-addons-firewall.path"))).toBe(false);
 });
 
 test("the shared new-site watcher is started when its units appear and stopped when they go", () => {
@@ -329,9 +333,10 @@ test("the watcher stays while SMTP still uses it, and disabling DNS stops its tr
 });
 
 test("an addon with no panel markup does not touch the panel templates", () => {
-  // cloudflare-ips declares no injection targets, so there is nothing to patch
+  // SMTP Relay declares no injection targets, so there is nothing to patch
   // and no Twig cache to purge.
-  const run = toggle([{ verb: "enable", addon: "cloudflare-ips" }]);
+  const run = toggle([{ verb: "enable", addon: "smtp" }]);
+  expect(run.error).toBeUndefined();
   expect(run.inject).toEqual([]);
 });
 
@@ -468,15 +473,6 @@ function optedOutFixture(alsoEnabled: string[] = []): { root: string; guard: str
   writeFileSync(join(root, "state", "system-tweaks", "settings.json"), JSON.stringify({ version: 1, uploadProgressGuard: false }), { mode: 0o600 });
   return { root, guard: join(root, "php", "8.3", "fpm", "conf.d", "99-clp-addons-upload-progress.ini") };
 }
-
-test("disabling System Tweaks takes the firewall watcher away", () => {
-  const { root } = optedOutFixture(["maintenance"]);
-  const run = toggle([{ verb: "disable", addon: "system-tweaks" }], { root });
-  expect(run.error).toBeUndefined();
-  expect(run.systemd).toContain("disable --now clp-addons-firewall.path");
-  expect(existsSync(join(root, "systemd", "clp-addons-firewall.path"))).toBe(false);
-  expect(existsSync(join(root, "systemd", "clp-addons-firewall.service"))).toBe(false);
-});
 
 test("disabling System Tweaks puts its opted-out guard back, even with no addon left", () => {
   const { root, guard } = optedOutFixture();

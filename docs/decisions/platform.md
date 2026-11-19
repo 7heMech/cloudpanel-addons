@@ -446,8 +446,9 @@ A site's certificate is a later step of its creation, and an addon whose work
 needs the site's HTTPS declares `certificates`. `clp-addons-certificates.path`
 watches `/etc/nginx/ssl-certificates`, where CloudPanel writes each site's
 `<domain>.crt` and key in place, so the vhost, which names that path, is not
-rewritten. Its service runs `clp-addons sync-certificates`: each installed
-addon's `certificates`, in catalog order, one after another. It is not part of
+rewritten; its custom domain's certificate is written there too. Its service
+runs `clp-addons sync-certificates`: each installed addon's `certificates`, in
+catalog order, one after another. It is not part of
 the new-site watcher because a certificate changes no domain, so `sync-sites`
 would run no hook for it, and because a path that changes while its service is
 running starts nothing. This service takes a second and runs again three
@@ -461,7 +462,7 @@ An addon that follows CloudPanel's Firewall page declares `firewall`.
 service runs `clp-addons sync-firewall`, each installed addon's `firewall` in
 catalog order. The units exist, and repair restarts the watcher, on the same
 terms as the certificate one. See
-[System Tweaks](system-tweaks.md#firewall).
+[Firewall](firewall.md#protocols).
 
 ## One way to watch a job
 
@@ -586,7 +587,7 @@ selection checkboxes, only the tint. The table's header stacks there: its title
 with Select all (`FLEET_SELECTION_HTML`) at its right, sized to its Deselect
 all label so the toggle moves nothing, then the bulk actions across the width.
 A bulk choice, such as the profile for Assign selected, shares its row with the
-button that applies it. The count beside Select all is short there, "2 of 9", and
+button that applies it. The count beside Select all is short there, "2 selected", and
 hidden until a site is ticked; a screen reader still reads the full count. On a wide screen the count sits at the right, beside
 the bulk actions it counts for, rather than under the title.
 
@@ -698,6 +699,65 @@ scrollable row and letting the site-information blocks wrap, rather than
 widening the panel's limited-width container, which would only postpone the
 break until the next addon. The rule is injected once, and only while an
 installed addon patches that partial.
+
+## Setup checklist
+
+An administrator's addon pages carry a Setup helper: Setup in the header's tools
+on a desktop, and on a phone, whose header row has no room beside the logo, at
+the end of the navigation row in place of the root shell, which comes back once
+Setup is hidden or has nothing left to suggest. It opens suggestions in four levels -- Connect your domain, Secure
+the server, Run sites, Provision automatically -- each ticked from the server's
+state, never from a click. It shows no counts: a step may not fit a server, so
+any step can be skipped, and the helper hides itself once nothing is left to
+suggest. Skips and Hide are kept per administrator; the Addons page's Setup
+button brings it back.
+
+Above the suggestions, Setup shows **Action needed**: what an enabled addon
+needs fixed now, such as a Cloudflare token without a permission DNS requires,
+or the sites' Nginx answering hostnames it has no site for. An addon declares
+these on `AddonDefinition.actionNeeded`, each check returning the items it
+finds, empty while nothing is wrong. An item cannot be skipped and clears once
+fixed; while there is one, the chip carries an amber badge instead of the dot,
+and Setup shows even to an administrator who hid it, with only those items.
+A check that fails or runs out of time raises nothing: Action needed is for
+what is known to be wrong. A suggestion that fell back stays a suggestion.
+
+A step is checked afresh each time, so a done step can fall back to to do, as
+Connect DNS does when its token stops being accepted. It then reads like any
+suggestion, its reason saying what is missing and Open going to the fix, and
+the helper shows again with its dot even when everything else is done. A skip
+still stands, and Hide is not undone. What a newer release requires, such as a
+token permission, is Action needed instead, so an existing install hears of it
+whatever the administrator skipped or hid. A permission or setting that is only
+optional is neither; it belongs on the addon's page.
+
+Each addon declares its steps on `AddonDefinition.setup`: an id, a level, a
+title, the page and card that set it up, and a `check` answering done, to do or
+not applicable with a one-line reason. Remote backups, which is CloudPanel's
+own, is the manager's (`manager/setup.ts`). A disabled addon's steps are listed
+with Enable rather than checked, except a step marked `whileOff`, which can be
+done without its addon: a custom domain set up by hand is a panel hostname.
+
+`manager setup` runs every check as root and answers with the list for the
+administrator `--user` names; `setup-pref` records a skip, an undo or Hide. Both
+are admin verbs, and the manager names the user from its session gate, the only
+place that knows it. The manager renders the list and the page fetches it after
+it paints, keeping in the tab whether the helper showed, so the header does not
+move when the answer comes. The checks run on every page an administrator
+opens, so they read local files, the panel database and local services only,
+never Cloudflare, Hetzner or a DNS lookup. Each check has 10 seconds; one that
+takes longer reads as not checked and the others answer without it. `nginx -T`
+is spawned so the limit can leave it behind; System Tweaks' status readers run
+their commands synchronously, so Setup gives each 5 seconds. The answer, before
+anyone's skips, is kept for a minute in the manager's state, so moving between
+pages does not run every check again; opening Setup asks fresh.
+`clp-addons setup off` (root) writes `/etc/clp-addons/setup-off`, after which
+the verb checks nothing and no page shows Setup; `setup on` removes it. What only an API knows, such as a
+token's permissions, is what the addon recorded when it last asked. A check
+that fails reads as a suggestion with its error.
+
+CloudPanel's own pages do not show the helper; it would need a block of its own
+in the panel's header, beside the Addons link and the update notice.
 
 ## Browser assets are files
 

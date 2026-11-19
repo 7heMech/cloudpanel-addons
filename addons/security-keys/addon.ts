@@ -3,6 +3,7 @@ import { SIGN_IN_PREFIX, handleSignIn } from "./app/sign-in";
 import { runSecurityKeysAction } from "./action";
 import { SECURITY_KEYS_TARGETS } from "./inject/targets";
 import type { AddonDefinition } from "../../lib/addon-definition";
+import { SECURITY_KEYS_SETUP } from "./setup";
 
 export const SECURITY_KEYS_ADDON: AddonDefinition = {
   name: "security-keys",
@@ -10,6 +11,7 @@ export const SECURITY_KEYS_ADDON: AddonDefinition = {
   description: "Sign in to CloudPanel with a passkey or a hardware key such as a YubiKey, instead of a password.",
   added: "2.0.0-rc.1",
   targets: SECURITY_KEYS_TARGETS,
+  setup: SECURITY_KEYS_SETUP,
   handler: handle,
   action: runSecurityKeysAction,
   // The login page's passkey sign-in: there is no session yet, and the key's

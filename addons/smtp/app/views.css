@@ -25,7 +25,7 @@
 #smtp-grants-dialog > form > p.hint, #smtp-test-dialog > form > p.hint { margin:0 0 20px; }
 :is(.smtp-site-table,.smtp-profile-table) .hint { display:block; }
 .smtp-site-table .mono,.smtp-profile-table .mono { overflow-wrap:anywhere; }
-.smtp-site-table .action-cell .actions { flex-wrap:nowrap; justify-content:flex-end; }
+.smtp-site-table .action-cell .actions { justify-content:flex-end; }
 /* Tables, not cards: a hostname breaks only when it cannot fit its column, and
    a row holding two of them keeps CloudPanel's gutter only at its edges. */
 @media (min-width:941px) {
