@@ -198,6 +198,30 @@ const rulesPermission = (phase: string) => PHASE_PERMISSIONS[phase] ?? "rules pe
 
 export type Verified = TokenOwner & { active: boolean; status: string; id: string | null };
 
+/** A token's own details that cannot be understood: reading them again will not help. */
+export class UnreadableToken extends ProviderError {}
+
+function parsePolicies(policies: unknown): Grant[] {
+  if (!Array.isArray(policies)) throw new ProviderError("Cloudflare", "returned a token this addon does not understand");
+  return policies.map((entry) => {
+    const policy = object(entry);
+    if (policy.effect !== "allow" && policy.effect !== "deny") throw new ProviderError("Cloudflare", "returned a token policy this addon does not understand");
+    const groups = Array.isArray(policy.permission_groups) ? policy.permission_groups : [];
+    const { resources, unknown } = parseResources(policy.resources);
+    return {
+      ...(unknown ? { unknown: true as const } : {}),
+      allow: policy.effect === "allow",
+      permissions: groups.map((group) => {
+        const name = group && typeof group === "object" ? (group as Record<string, unknown>).name : undefined;
+        // Matched by name: a group without one would read as a permission the token lacks.
+        if (typeof name !== "string" || !name || name.length > 120) throw new ProviderError("Cloudflare", "returned a permission group without a name");
+        return name;
+      }),
+      resources,
+    };
+  });
+}
+
 function verified(result: unknown, owner: TokenOwner): Verified {
   const raw = object(result);
   const status = text(raw.status, 40);
@@ -307,23 +331,11 @@ export class CloudflareApi {
   async policies(owner: TokenOwner, tokenId: string): Promise<Grant[]> {
     const base = owner.owner === "account" ? `/accounts/${id(owner.accountId)}` : "/user";
     const { result } = await this.call(`${base}/tokens/${id(tokenId)}`);
-    const policies = object(result).policies;
-    if (!Array.isArray(policies)) throw new ProviderError("Cloudflare", "returned a token this addon does not understand");
-    return policies.map((entry) => {
-      const policy = object(entry);
-      if (policy.effect !== "allow" && policy.effect !== "deny") throw new ProviderError("Cloudflare", "returned a token policy this addon does not understand");
-      const groups = Array.isArray(policy.permission_groups) ? policy.permission_groups : [];
-      return {
-        allow: policy.effect === "allow",
-        permissions: groups.map((group) => {
-          const name = group && typeof group === "object" ? (group as Record<string, unknown>).name : undefined;
-          // Matched by name: a group without one would read as a permission the token lacks.
-          if (typeof name !== "string" || !name || name.length > 120) throw new ProviderError("Cloudflare", "returned a permission group without a name");
-          return name;
-        }),
-        resources: parseResources(policy.resources),
-      };
-    });
+    try {
+      return parsePolicies(object(result).policies);
+    } catch (error) {
+      throw error instanceof ProviderError ? new UnreadableToken("Cloudflare", error.message.replace(/^Cloudflare: /, "")) : error;
+    }
   }
 
   /** The accounts the token can see. A token without account permissions sees none, which is not an error. */

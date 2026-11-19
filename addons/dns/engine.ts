@@ -10,7 +10,7 @@ import { errorMessage } from "../../lib/errors";
 import { getDomain } from "tldts";
 import type { Addresses } from "./addresses";
 import { readAccess, selfReadPermission, type Reached, type TokenAccess } from "./access";
-import { CloudflareApi, type CfAccount, type CfRecord, type CfRuleset, type CfZone, type Verified } from "./cloudflare";
+import { CloudflareApi, UnreadableToken, type CfAccount, type CfRecord, type CfRuleset, type CfZone, type Verified } from "./cloudflare";
 import { type ApiFetch, ProviderError } from "../../lib/provider-http";
 import { aclAllows, MailcowApi, type MailcowDkim } from "./mailcow";
 import type { AccountRef, Policy, Profile, Redirect, Secrets } from "./model";
@@ -220,7 +220,8 @@ export class DnsRun {
   // What every connection reaches
   // -------------------------------------------------------------------------
 
-  async discover(): Promise<void> {
+  /** `readTokens` also reads each token's own permissions: on a check of every site and when a connection is saved. */
+  async discover(readTokens = false): Promise<void> {
     const reports = await Promise.all(this.context.policy.connections.map(async (connection): Promise<ConnectionReport & { refs?: ZoneRef[] }> => {
       const report: ConnectionReport = { id: connection.id, label: connection.label, active: false, status: "missing", accounts: [], zones: 0, error: null };
       const api = this.cloudflare.get(connection.id);
@@ -232,8 +233,10 @@ export class DnsRun {
         const [zones, accounts] = await Promise.all([api.zones(), api.accounts()]);
         const known = new Map(accounts.map((account) => [account.id, account]));
         for (const zone of zones) if (!known.has(zone.account.id)) known.set(zone.account.id, zone.account);
-        const token = await this.readToken(api, verified, { zones: zones.map((zone) => ({ id: zone.id, name: zone.name, accountId: zone.account.id })), accounts: [...known.values()] });
-        return { ...report, active: true, accounts: [...known.values()], zones: zones.length, token, refs: zones.map((zone) => ({ zone, connectionId: connection.id })) };
+        const token = readTokens
+          ? await this.readToken(api, verified, { zones: zones.map((zone) => ({ id: zone.id, name: zone.name, accountId: zone.account.id })), accounts: [...known.values()] })
+          : undefined;
+        return { ...report, active: true, accounts: [...known.values()], zones: zones.length, ...(token ? { token } : {}), refs: zones.map((zone) => ({ zone, connectionId: connection.id })) };
       } catch (error) {
         return { ...report, status: "error", error: reason(error) };
       }
@@ -255,7 +258,9 @@ export class DnsRun {
       if (error instanceof ProviderError && (error.status === 401 || error.status === 403)) {
         return { ...owner, readable: false, reason: `Add ${selfReadPermission(owner.owner)} to this token to see its permissions here` };
       }
-      return { ...owner, readable: false, reason: `Its permissions could not be read: ${reason(error)}` };
+      // Only a reply that never came, a rate limit or Cloudflare's own failure; anything else is shown.
+      const transient = error instanceof ProviderError && !(error instanceof UnreadableToken) && (error.status === 0 || error.status === 429 || error.status >= 500);
+      return { ...owner, readable: false, reason: `Its permissions could not be read: ${reason(error)}`, ...(transient ? { transient: true as const } : {}) };
     }
   }
 
@@ -266,6 +271,7 @@ export class DnsRun {
       return refused.length ? { ...report, refused } : report;
     });
   }
+
 
   private connectionLabel(id: string): string {
     return this.context.policy.connections.find((connection) => connection.id === id)?.label ?? id;

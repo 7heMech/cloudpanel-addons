@@ -158,6 +158,8 @@ function siteRow(site: SiteView, state: DnsState): string {
 
 type Access = NonNullable<DnsState["connections"][number]["access"]>;
 
+const NOTE_MAX = 200;
+
 /** What is missing of what DNS requires, by name; nothing when the token holds all of it. */
 function accessProblems(access: Access): string {
   const required = access.rows.filter((row) => !row.optional);
@@ -167,16 +169,22 @@ function accessProblems(access: Access): string {
   const lines = access.reach === null
     ? [missing.length && `Refused by Cloudflare: ${missing.join(", ")}`]
     : [missing.length && `Missing: ${missing.join(", ")}`, partial.length && `Not on every zone: ${partial.join(", ")}`];
-  const note = access.reach === null ? [`<span class="tone-warn">${esc(access.note ?? "")}.</span>`] : [];
+  const note = access.reach === null ? [`<span class="tone-warn">${esc(sentence(access.note ?? ""))}</span>`] : [];
   return [...note, ...lines.filter(Boolean).map((line) => `<span class="tone-bad">${esc(line as string)}</span>`)].join("<br>");
+}
+
+/** Cloudflare's own error text can be long and end in its own punctuation. */
+function sentence(text: string): string {
+  const short = text.length > NOTE_MAX ? `${text.slice(0, NOTE_MAX - 1).trimEnd()}…` : text;
+  return /[.!?…]$/.test(short) ? short : `${short}.`;
 }
 
 function heldCell(row: Access["rows"][number]): string {
   if (row.held === "yes") return '<span class="tone-ok" role="img" aria-label="Held">✓</span>';
+  if (row.held === "unknown") return '<span class="hint inline" role="img" aria-label="Not known">—</span>';
   if (row.optional && row.held !== "some") return '<span class="hint inline">Not added</span>';
   if (row.held === "no") return `<span class="badge tone-bad">${esc(row.detail ?? "Missing")}</span>`;
-  if (row.held === "some") return `<span class="badge tone-warn">${esc(row.detail ?? "Some zones")}</span>`;
-  return '<span class="hint inline" role="img" aria-label="Not known">—</span>';
+  return `<span class="badge tone-warn">${esc(row.detail ?? "Some zones")}</span>`;
 }
 
 function accessRow(row: Access["rows"][number]): string {

@@ -276,15 +276,18 @@ come from it.
 
 ### What a token holds
 
-Each check, and saving a connection, reads the token's own policies after
-verifying it: verify returns the token's ID, then `/user/tokens/{id}`, or
+A check of every site, and saving a connection, reads the token's own
+policies after verifying it; a check of some sites keeps the last read, as does
+a read Cloudflare could not answer (a 429, a 5xx or no reply): verify returns the token's ID, then `/user/tokens/{id}`, or
 `/accounts/{account}/tokens/{id}` for an account-owned token. Those need API
 Tokens Read, or Account API Tokens Read for an account-owned token; a token
 without it is still checked as before, and the page asks for that permission
 instead of showing what the token holds. Its row then lists the permissions
 Cloudflare refused it: the client records each refusal it names, and the check
-stores them on the connection, a check of some sites adding to what the last
-full check found.
+stores them on the connection. A check of some sites adds to what the last full
+check found, and only another full check clears them: a call that succeeded on
+one zone says nothing of another that refused it. A refusal also wins over a permission the policies say the token holds, as an IP
+restriction or a policy read wrongly would refuse it.
 [Token details](https://developers.cloudflare.com/api/resources/user/subresources/tokens/methods/get/)
 
 The read is stored with the connection's status, so the page makes no
@@ -298,6 +301,9 @@ grants of permission group names over resources, and decided locally:
   are `com.cloudflare.api.account.zone.*` (every zone), `…account.zone.<id>`,
   `…account.<id>` (an account, and its zones), the same account key nested
   with zone keys, and `com.cloudflare.api.user.<tag>`. A deny wins over an allow.
+  A policy on a resource in another form makes only the permissions it names
+  not known, and only where it could change them: an allow where they read as
+  missing, a deny where they read as held.
 - Zone permissions are checked against every zone the token lists, account
   permissions (Zone Edit, Account Settings Read) against every account. The
   page shows a held permission, a missing one, or one missing on some zones,
@@ -315,7 +321,9 @@ grants of permission group names over resources, and decided locally:
 
 A permission can be optional: nothing in the profiles requires it, and
 `enables` says what it would turn on. It is listed after the required ones,
-never as missing, and left out of the template. None is optional yet.
+never as missing, and left out of the template; its row reads "Not added" until
+the token holds it, or "—" when the token cannot read itself. None is optional
+yet; Firewall's login jails and panel gate add theirs when they use them.
 
 `connectionPermissions(stored, profiles)` in `addons/dns/access.ts` gives the
 Setup checklist, from a connection's entry in `status.json`, whether the token
@@ -329,15 +337,15 @@ opens the owner's token list: `/profile/api-tokens`, or
 Other addons ask through `dnsTokenHolds(connectionId, permission, zone)` in
 `addons/dns/action.ts`, which answers from the stored read without a network
 call, checking each permission at its own scope (the zone, its account, or the
-token's owner: the user, or an account-owned token's account), and returns null when that is not known (no check yet, or a token that
-cannot read itself).
+token's owner: the user, or an account-owned token's account). It returns null
+when that is not known: no check yet, a token no longer active or that cannot
+read itself, or a policy not understood that could change the answer.
 
 Zone-scoped IP Access rules (`/zones/{zone_id}/firewall/access_rules/rules`)
 need **Zone → Firewall Services → Edit**, API name Firewall Services Write
 (Firewall Services Read only lists them); template key `firewall_services`, as
-the dashboard uses, which the template reference does not list. It is in the
-permission list as `ipAccessRules` but not in the template, since nothing in
-DNS uses it. Cloudflare allows
+the dashboard uses, which the template reference does not list. It is not in
+the permission list yet. Cloudflare allows
 [50,000 IP Access rules per account](https://developers.cloudflare.com/waf/tools/ip-access-rules/)
 on every plan, while the Free plan allows only
 [one custom list](https://developers.cloudflare.com/waf/tools/lists/).

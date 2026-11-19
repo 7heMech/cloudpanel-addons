@@ -1,5 +1,6 @@
 import { describe, expect, test } from "bun:test";
-import { CloudflareApi, quoteTxt, unquoteTxt } from "../addons/dns/cloudflare";
+import { CloudflareApi, quoteTxt, UnreadableToken, unquoteTxt } from "../addons/dns/cloudflare";
+import { seededPolicy } from "../addons/dns/presets";
 import { ProviderError, ProviderHttp } from "../lib/provider-http";
 import { MailcowApi } from "../addons/dns/mailcow";
 import { accessView, connectionPermissions, grants, parseResources, readAccess } from "../addons/dns/access";
@@ -265,15 +266,39 @@ describe("a token's own permissions", () => {
       [`${ACCOUNT}${"a".repeat(32)}`]: { [`${ZONE}*`]: "*", [`${ZONE}${"2".repeat(32)}`]: "*" },
       [`${ACCOUNT}${"b".repeat(32)}`]: "*",
       "com.cloudflare.api.user.0123": "*",
-      "com.cloudflare.api.something.else": "*",
-    })).toEqual([
+    })).toEqual({ unknown: false, resources: [
       { account: "*", zone: "*" },
       { account: "*", zone: "1".repeat(32) },
       { account: "a".repeat(32), zone: "*" },
       { account: "a".repeat(32), zone: "2".repeat(32) },
       { account: "b".repeat(32), zone: "*" },
       { account: "", zone: "", user: true },
-    ]);
+    ] });
+    for (const odd of [{ "com.cloudflare.api.something.else": "*" }, { [`${ZONE}*`]: { x: "*" } }, { [`${ACCOUNT}${"a".repeat(32)}`]: { "com.cloudflare.edge.r2.bucket.x": "*" } }]) {
+      expect(parseResources(odd).unknown).toBe(true);
+    }
+  });
+
+  test("a policy on resources not understood leaves only the permissions it names not known", async () => {
+    const { fake } = cloudflare();
+    const odd = { "com.cloudflare.edge.r2.bucket.x": "*" };
+    const token = fake.tokens.get(USER_TOKEN)!;
+    const api = new CloudflareApi(USER_TOKEN, fake.fetch);
+    const verified = await api.verify();
+    const owner = { owner: "user" as const, accountId: null };
+    const reached = { zones: [{ id: "1".repeat(32), name: "example.com", accountId: "a".repeat(32) }], accounts: [] };
+    token.policies = [policy(["DNS Write", "Zone WAF Write"], { [`${ZONE}*`]: "*" }), policy(["DNS Write"], odd, "deny"), policy(["Zone Settings Write"], odd)];
+    const list = await api.policies(verified, verified.id!);
+    expect(list[1]).toEqual({ unknown: true, allow: false, permissions: ["DNS Write"], resources: [] });
+    const access = readAccess(owner, list, reached);
+    if (!access.readable) throw new Error("readable");
+    // The deny could take DNS Write away, and the allow could give Zone Settings Write: neither is known.
+    expect(access.coverage.dns).toBeUndefined();
+    expect(access.coverage.zoneSettings).toBeUndefined();
+    expect(access.coverage.waf).toEqual({ held: "yes" });
+    expect(access.coverage.configRules).toEqual({ held: "no" });
+    const [web] = seededPolicy().profiles;
+    expect(connectionPermissions({ token: access }, [web!]).missing).toEqual(["Zone: Edit", "Account Settings: Read", "Single Redirect: Edit", "Config Rules: Edit"]);
   });
 
   test("missing and partial permissions are named, a deny wins, and reach is described", () => {
@@ -354,17 +379,29 @@ describe("a token's own permissions", () => {
   });
 
   test("an optional permission is listed with what it enables, never as missing", () => {
-    const optional = { ...PERMISSIONS.ipAccessRules, enables: () => "Cloudflare bans for login jails" };
-    const saved = PERMISSIONS.ipAccessRules;
-    (PERMISSIONS as Record<string, unknown>).ipAccessRules = optional;
+    const permissions = PERMISSIONS as Record<string, unknown>;
+    permissions.jails = {
+      key: "firewall_services", type: "edit", label: "Firewall Services: Edit", grantedBy: ["Firewall Services Write"], scope: "zone",
+      usedFor: () => null, enables: () => "Cloudflare bans for login jails",
+    };
     try {
       const token = readAccess({ owner: "user", accountId: null }, [{ allow: true, permissions: ["DNS Write"], resources: [{ account: "*", zone: "*" }] }], { zones: [], accounts: [] });
       const view = accessView({ token }, [])!;
       expect(view.rows.at(-1)).toEqual({ label: "Firewall Services: Edit", usedFor: "Cloudflare bans for login jails", held: "no", optional: true });
       expect(connectionPermissions({ token }, []).missing).not.toContain("Firewall Services: Edit");
       expect(tokenTemplate([]).permissions).not.toContain("Firewall Services: Edit");
+      const unreadable = accessView({ token: { owner: "user", accountId: null, readable: false, reason: "no" } }, [])!;
+      expect(unreadable.rows.at(-1)).toMatchObject({ optional: true, held: "unknown" });
     } finally {
-      (PERMISSIONS as Record<string, unknown>).ipAccessRules = saved;
+      delete permissions.jails;
     }
+  });
+
+  test("a refusal wins over a permission the policies say is held", () => {
+    const token = readAccess({ owner: "user", accountId: null }, [{ allow: true, permissions: ["DNS Write", "Zone Settings Write"], resources: [{ account: "*", zone: "*" }] }], { zones: [], accounts: [] });
+    const [web] = seededPolicy().profiles;
+    const view = accessView({ token, refused: ["Zone Settings: Edit"] }, [web!])!;
+    expect(view.rows.find((row) => row.label === "Zone Settings: Edit")).toMatchObject({ held: "no", detail: "Refused by Cloudflare" });
+    expect(connectionPermissions({ token, refused: ["Zone Settings: Edit"] }, [web!]).missing).toContain("Zone Settings: Edit");
   });
 });
