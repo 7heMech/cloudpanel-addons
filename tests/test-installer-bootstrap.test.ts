@@ -4,7 +4,11 @@ import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, 
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
-function bootstrap(version: string, checksum: "good" | "bad" = "good", addons = "instatic stager"): { status: number | null; events: string[]; output: string } {
+const ARTIFACTS = ["clp-addons-linux-x64", "clp-addons-linux-arm64"];
+
+function bootstrap(
+  version: string, checksum: "good" | "bad" = "good", addons = "instatic stager", machine = "x86_64",
+): { status: number | null; events: string[]; output: string } {
   const root = mkdtempSync(`${tmpdir()}/installer-bootstrap-test-`);
   try {
     const bin = join(root, "bin");
@@ -18,23 +22,26 @@ function bootstrap(version: string, checksum: "good" | "bad" = "good", addons = 
     }
     const binary = '#!/bin/sh\nprintf "clp:%s\\n" "$*" >> "$BOOTSTRAP_LOG"\n';
     const sum = checksum === "good" ? Bun.CryptoHasher.hash("sha256", binary, "hex") : "0".repeat(64);
-    writeFileSync(join(fixtures, "clp-addons-linux-x64"), binary);
-    writeFileSync(join(fixtures, "SHA256SUMS"), `${sum}  clp-addons-linux-x64\n`);
+    for (const artifact of ARTIFACTS) writeFileSync(join(fixtures, artifact), binary);
+    writeFileSync(join(fixtures, "SHA256SUMS"), ARTIFACTS.map((artifact) => `${sum}  ${artifact}\n`).join(""));
 
-    // The download and install tail of the real script, with fixture bytes in
-    // place of downloads and install without its owner flags.
+    // The architecture check and the download and install tail of the real
+    // script, with fixture bytes in place of downloads and install without its
+    // owner flags.
     const source = readFileSync(join(import.meta.dir, "..", "install.sh"), "utf8");
+    const archStart = source.indexOf('case "$(uname -m)" in');
+    const archEnd = source.indexOf("esac\n", archStart) + "esac\n".length;
     const start = source.indexOf('if [[ $VERSION == "latest" ]]; then');
-    if (start === -1) throw new Error("installer download step was not found");
+    if (archStart === -1 || start === -1) throw new Error("installer architecture or download step was not found");
     const harness = `set -euo pipefail
 REPO=7heMech/cloudpanel-addons
-ARTIFACT=clp-addons-linux-x64
 CLI_TARGET="$TEST_ROOT/clp-addons"
 VERSION=${version}
 ADDON_LIST=(${addons})
 step() { :; }
 ok() { :; }
 die() { printf '%s\\n' "$*" >&2; exit 1; }
+uname() { printf '%s\\n' "$TEST_MACHINE"; }
 curl() {
   local output= url=
   while (( $# )); do
@@ -57,12 +64,12 @@ install() {
   done
   command install "\${args[@]}"
 }
-` + source.slice(start);
+` + source.slice(archStart, archEnd) + source.slice(start);
     const script = join(root, "bootstrap.sh");
     writeFileSync(script, harness);
     const log = join(root, "events");
     const result = spawnSync("/bin/bash", [script], {
-      env: { PATH: bin, TEST_ROOT: root, BOOTSTRAP_LOG: log },
+      env: { PATH: bin, TEST_ROOT: root, BOOTSTRAP_LOG: log, TEST_MACHINE: machine },
       encoding: "utf8",
       timeout: 10_000,
     });
@@ -104,4 +111,18 @@ test("with no addons named, only the binary and its services are installed", () 
   const result = bootstrap("latest", "good", "");
   expect(result.status, result.output).toBe(0);
   expect(result.events[2]).toStartWith("clp:install --local=");
+});
+
+test("an aarch64 host downloads the arm64 binary", () => {
+  const result = bootstrap("latest", "good", "", "aarch64");
+  expect(result.status, result.output).toBe(0);
+  expect(result.events[1]).toBe("get:https://github.com/7heMech/cloudpanel-addons/releases/latest/download/clp-addons-linux-arm64");
+  expect(result.events[2]).toStartWith("clp:install --local=");
+});
+
+test("an architecture no release is built for stops before downloading", () => {
+  const result = bootstrap("latest", "good", "", "riscv64");
+  expect(result.status).not.toBe(0);
+  expect(result.events).toEqual([]);
+  expect(result.output).toContain("unsupported architecture riscv64");
 });

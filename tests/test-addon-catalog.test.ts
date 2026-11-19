@@ -4,7 +4,7 @@ import { dirname, join } from "node:path";
 import { ADDONS, ADDON_NAMES, addonHandler, templateWatchPaths } from "../addons/catalog";
 import { type AddonSpec } from "../lib/addon-definition";
 import { runNewSiteWork } from "../cli/addon-hooks";
-import { CLI_ARTIFACT } from "../lib/paths";
+import { CLI_ARTIFACT, cliArtifactForArch } from "../lib/paths";
 
 const REPO = join(import.meta.dir, "..");
 
@@ -89,8 +89,13 @@ test("the manager and the auth gateway are not addons", () => {
   expect(manager).toContain(root ? "unknown manager verb" : "'manager' modifies system state");
 });
 
-test("the installer downloads the artifact the updater does", () => {
-  expect(readFileSync(join(REPO, "install.sh"), "utf8")).toContain(`ARTIFACT="${CLI_ARTIFACT}"`);
+test("each release architecture has its own artifact, and the installer downloads the one the updater does", () => {
+  expect(cliArtifactForArch("x64")).toBe("clp-addons-linux-x64");
+  expect(cliArtifactForArch("arm64")).toBe("clp-addons-linux-arm64");
+  expect(() => cliArtifactForArch("ia32")).toThrow("no clp-addons release is built for ia32");
+  expect(CLI_ARTIFACT).toBe(cliArtifactForArch(process.arch));
+  const installer = readFileSync(join(REPO, "install.sh"), "utf8");
+  for (const arch of ["x64", "arm64"]) expect(installer).toContain(`ARTIFACT="${cliArtifactForArch(arch)}"`);
 });
 
 test("new-site work starts in catalog order and a slow addon only gets a head start", async () => {

@@ -11,6 +11,7 @@ import { dirname, join } from "node:path";
 import { homedir, tmpdir } from "node:os";
 import { mkdtempSync, rmSync } from "node:fs";
 import { fileURLToPath } from "node:url";
+import { CLI_ARTIFACT, cliArtifactForArch } from "../lib/paths";
 
 const repo = join(dirname(fileURLToPath(import.meta.url)), "..");
 const host = process.env.STG_HOST || "root@46.225.93.37";
@@ -34,15 +35,27 @@ async function run(cmd: string[]): Promise<void> {
   if ((await proc.exited) !== 0) throw new Error(`${cmd.join(" ")} failed`);
 }
 
+async function output(cmd: string[]): Promise<string> {
+  const proc = Bun.spawn(cmd, { cwd: repo, stdout: "pipe", stderr: "inherit" });
+  const text = await new Response(proc.stdout).text();
+  if ((await proc.exited) !== 0) throw new Error(`${cmd.join(" ")} failed`);
+  return text.trim();
+}
+
+const MACHINE_ARCH: Record<string, string> = { x86_64: "x64", aarch64: "arm64" };
+
 const shellQuote = (parts: string[]) => parts.map((part) => `'${part.replaceAll("'", `'\\''`)}'`).join(" ");
 
 try {
   // The connection is opened while the build runs, so the upload starts on an
   // authenticated channel instead of paying a handshake of its own.
-  const connected = run(["ssh", ...sshOptions, host, "true"]);
+  const machine = output(["ssh", ...sshOptions, host, "uname -m"]);
   await run(["bun", "run", "build"]);
-  await connected;
-  const binary = join(repo, "dist/clp-addons-linux-x64");
+  // The build is for this machine's architecture, so it must be the box's too.
+  const remote = await machine;
+  const wanted = cliArtifactForArch(MACHINE_ARCH[remote] ?? remote);
+  if (wanted !== CLI_ARTIFACT) throw new Error(`${host} needs ${wanted}, but this machine builds ${CLI_ARTIFACT}`);
+  const binary = join(repo, "dist", CLI_ARTIFACT);
   // rsync verifies the reconstructed file, so a partial upload cannot be
   // installed as if it were whole. Somewhere without it still deploys, whole.
   await run(Bun.which("rsync")

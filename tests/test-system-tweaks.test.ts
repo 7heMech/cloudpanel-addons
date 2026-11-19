@@ -122,6 +122,12 @@ test("Debian's own patterns leave every CloudPanel repository uncovered", () => 
   expect(rows.find((row) => row.name === "CloudPanel PHP")!.detail).toBe("8.1, 8.3");
 });
 
+test("an arm64 box's CloudPanel repositories, on their own CDN host, are recognised the same way", () => {
+  const arm64 = DEBIAN_POLICY.replaceAll("d17k9fuiwb52nc", "d2xpdm4jldf31f").replaceAll("amd64", "arm64");
+  const patterns = allowedPatterns(parseAptConfig(DEBIAN_STOCK_DUMP));
+  expect(coverageOf(parsePolicy(arm64), patterns, debian)).toEqual(coverageOf(parsePolicy(DEBIAN_POLICY), patterns, debian));
+});
+
 test("CloudPanel's other repositories get product names and Debian's components keep their own order", () => {
   const source = (component: string, origin = "packages-v1.cloudpanel.io", n = "bookworm") =>
     ({ origin, label: "", archive: "", codename: n, component, site: "" });
