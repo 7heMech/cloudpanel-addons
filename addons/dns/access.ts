@@ -33,7 +33,8 @@ export type TokenOwner = { owner: "user" | "account"; accountId: string | null }
 
 export type TokenAccess = TokenOwner & (
   | { readable: true; grants: Grant[]; coverage: Partial<Record<PermissionName, Coverage>>; reach: string }
-  | { readable: false; reason: string }
+  /** `transient` when Cloudflare could not be asked, rather than refused or misunderstood; the last read stands. */
+  | { readable: false; reason: string; transient?: true }
 );
 
 const ACCOUNT = "com.cloudflare.api.account.";
@@ -44,26 +45,29 @@ const LACKING_SHOWN = 3;
 /**
  * Cloudflare's resource map, flat or one level nested under an account. An
  * account resource also covers its zones: zones sit under their account.
+ * `unknown` is set when a key or value is not one of these forms.
  */
-export function parseResources(value: unknown): Resource[] {
-  if (!value || typeof value !== "object" || Array.isArray(value)) return [];
+export function parseResources(value: unknown): { resources: Resource[]; unknown: boolean } {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return { resources: [], unknown: true };
   const resources: Resource[] = [];
+  let unknown = false;
   for (const [key, inner] of Object.entries(value)) {
-    if (key.startsWith(ZONE)) {
-      if (inner === "*") resources.push({ account: "*", zone: key.slice(ZONE.length) });
-    } else if (key.startsWith(ACCOUNT)) {
-      const account = key.slice(ACCOUNT.length);
-      if (inner === "*") resources.push({ account, zone: "*" });
-      else if (inner && typeof inner === "object" && !Array.isArray(inner)) {
-        for (const [zoneKey, zoneValue] of Object.entries(inner)) {
-          if (zoneKey.startsWith(ZONE) && zoneValue === "*") resources.push({ account, zone: zoneKey.slice(ZONE.length) });
-        }
+    if (key.startsWith(ZONE) && inner === "*") {
+      resources.push({ account: "*", zone: key.slice(ZONE.length) });
+    } else if (key.startsWith(ACCOUNT) && !key.startsWith(ZONE) && inner === "*") {
+      resources.push({ account: key.slice(ACCOUNT.length), zone: "*" });
+    } else if (key.startsWith(ACCOUNT) && !key.startsWith(ZONE) && inner && typeof inner === "object" && !Array.isArray(inner)) {
+      for (const [zoneKey, zoneValue] of Object.entries(inner)) {
+        if (zoneKey.startsWith(ZONE) && zoneValue === "*") resources.push({ account: key.slice(ACCOUNT.length), zone: zoneKey.slice(ZONE.length) });
+        else unknown = true;
       }
     } else if (key.startsWith(USER) && inner === "*") {
       resources.push({ account: "", zone: "", user: true });
+    } else {
+      unknown = true;
     }
   }
-  return resources;
+  return { resources, unknown };
 }
 
 const namesPermission = (grant: Grant, permission: PermissionDef) => grant.permissions.some((name) => permission.grantedBy.includes(name));
@@ -186,8 +190,9 @@ export function accessView(stored: StoredAccess, profiles: Profile[]): AccessVie
     // An account-owned token reads itself with the account's own permission.
     const base = { label: name === "tokens" ? selfReadPermission(token.owner) : permission.label, usedFor, ...(optional ? { optional: true as const } : {}) };
     const coverage = token.readable ? token.coverage[name] : undefined;
-    // Without its own read, what Cloudflare refused it is all that is known.
-    if (!coverage) return refused.has(permission.label) ? { ...base, held: "no", detail: REFUSED } : { ...base, held: "unknown" };
+    // What Cloudflare refused wins over what the policies say, and is all that is known without them.
+    if (refused.has(permission.label) && coverage?.held !== "no" && coverage?.held !== "some") return { ...base, held: "no", detail: REFUSED };
+    if (!coverage) return { ...base, held: "unknown" };
     const more = (coverage.lackingCount ?? 0) - (coverage.lacking?.length ?? 0);
     const detail = coverage.held === "some" && coverage.lacking
       ? `Not on ${coverage.lacking.join(", ")}${more > 0 ? ` and ${more} more` : ""}` : undefined;

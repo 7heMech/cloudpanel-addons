@@ -426,12 +426,21 @@ class Action {
     if (forgot) this.files.saveManaged(managed);
   }
 
-  /** A run over some sites keeps the refusals the others saw; one over every site has seen them all. */
-  private withEarlierRefusals(reports: ConnectionReport[], earlier: ConnectionReport[], domains: string[] | "all"): ConnectionReport[] {
-    if (domains === "all") return reports;
-    return reports.map((report) => {
-      const refused = [...new Set([...earlier.find((entry) => entry.id === report.id)?.refused ?? [], ...report.refused ?? []])];
-      return refused.length ? { ...report, refused } : report;
+  /**
+   * A run without a fresh token read keeps the last one, as does one that
+   * could not reach Cloudflare. A run over some sites keeps the refusals the
+   * others saw, less any its own calls succeeded with; one over every site has
+   * seen them all.
+   */
+  private withEarlier(run: DnsRun, earlier: ConnectionReport[], domains: string[] | "all"): ConnectionReport[] {
+    return run.reports().map((report) => {
+      const before = earlier.find((entry) => entry.id === report.id);
+      const token = (!report.token || (!report.token.readable && report.token.transient)) && before?.token ? before.token : report.token;
+      const granted = run.granted(report.id);
+      const kept = domains === "all" ? [] : (before?.refused ?? []).filter((label) => !granted.has(label));
+      const refused = [...new Set([...kept, ...report.refused ?? []])];
+      const { token: _token, refused: _refused, ...rest } = report;
+      return { ...rest, ...(token ? { token } : {}), ...(refused.length ? { refused } : {}) };
     });
   }
 
@@ -448,7 +457,7 @@ class Action {
     this.files.saveStatus({
       ...status,
       checkedAt: domains === "all" ? new Date(this.now).toISOString() : status.checkedAt,
-      connections: run.connections.length || domains === "all" ? this.withEarlierRefusals(run.reports(), status.connections, domains) : status.connections,
+      connections: run.connections.length || domains === "all" ? this.withEarlier(run, status.connections, domains) : status.connections,
       plans: plansByDomain,
       backoff: run.backoff(),
     });
@@ -546,7 +555,7 @@ class Action {
     const planned = run.plannedDomains();
     const chosen = domains === "all" ? planned : planned.filter((domain) => domains.includes(domain));
     if (!chosen.length && domains !== "all") return;
-    await run.discover();
+    await run.discover(domains === "all");
     await run.load(chosen);
     this.record(run, run.planAll(), domains === "all" ? "all" : chosen);
   }
@@ -556,7 +565,7 @@ class Action {
     const before = this.files.policy();
     const policy = this.adoptNewSites(before);
     const run = this.run(policy);
-    await run.discover();
+    await run.discover(true);
     const planned = run.plannedDomains();
     await run.load(planned);
     this.hold(run, policy, this.joined(before, policy).map((site) => site.domain));
@@ -917,7 +926,7 @@ class Action {
     const id = existing?.id ?? `cf-${randomBytes(4).toString("hex")}`;
     const trial: Policy = { ...structuredClone(policy), connections: [{ id, label: "Checking" }] };
     const run = this.run(trial, { cloudflare: { [id]: token }, mailcowKey: "" });
-    await run.discover();
+    await run.discover(true);
     const report = run.connections[0]!;
     if (!report.active) failAction(redact(`Cloudflare did not accept this token: ${(report.error ?? report.status).replace(/^Cloudflare: /, "")}`, [token]));
     const named = oneLine(body.label, "the connection name", 40, false);
@@ -931,8 +940,10 @@ class Action {
     if (!existing && standIns.length) next.held = [...new Set([...next.held, ...standIns])];
     this.files.saveSecrets({ ...secrets, cloudflare: { ...secrets.cloudflare, [id]: token } });
     this.savePolicy(next);
+    // The token's read, kept if the check below cannot run; in the policy's order, as a check writes them.
     const status = this.files.status();
-    this.files.saveStatus({ ...status, connections: [...status.connections.filter((entry) => entry.id !== id), { ...report, id, label }] });
+    const saved = { ...report, id, label };
+    this.files.saveStatus({ ...status, connections: next.connections.flatMap((connection) => connection.id === id ? [saved] : status.connections.filter((entry) => entry.id === connection.id)) });
     await this.tryRefresh("all");
     const zones = `${report.zones} zone${report.zones === 1 ? "" : "s"}`;
     return this.reply({ notice: `${label} reaches ${report.accounts.length} account${report.accounts.length === 1 ? "" : "s"} and ${zones}.` });

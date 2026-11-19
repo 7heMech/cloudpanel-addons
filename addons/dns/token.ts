@@ -1,9 +1,8 @@
 /**
  * The Cloudflare permissions DNS knows: the dashboard's name, the API's names
  * that grant it, and what DNS uses it for. Cloudflare's token-template URL
- * takes `key`/`type`; `config_settings`, `zone_waf`, `dynamic_redirect` and
- * `firewall_services` are missing from the documented keys but are the
- * dashboard's own. The form drops a key it does not know, so the page lists
+ * takes `key`/`type`; `config_settings`, `zone_waf` and `dynamic_redirect`
+ * are missing from the documented keys but are the dashboard's own. The form drops a key it does not know, so the page lists
  * every permission as well.
  * https://developers.cloudflare.com/fundamentals/api/how-to/account-owned-token-template/
  * https://developers.cloudflare.com/fundamentals/api/reference/permissions/
@@ -73,10 +72,6 @@ export const PERMISSIONS = {
       const names = named(profiles, (profile) => profile.zone.skipFirewallIps.length > 0);
       return names && `Firewall skip in ${names}`;
     },
-  },
-  /** Zone-scoped IP Access rules (`/zones/{id}/firewall/access_rules/rules`); nothing in DNS uses it yet. */
-  ipAccessRules: {
-    key: "firewall_services", type: "edit", label: "Firewall Services: Edit", grantedBy: ["Firewall Services Write"], scope: "zone", usedFor: () => null,
   },
   tokens: {
     key: "api_tokens", type: "read", label: "API Tokens: Read",

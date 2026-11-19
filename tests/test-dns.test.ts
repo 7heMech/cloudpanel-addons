@@ -528,6 +528,13 @@ describe("what each token holds", () => {
     expect(access.reach).toBeNull();
     expect(access.note).toBe("Add API Tokens: Read to this token to see its permissions here");
     expect(access.rows.every((row) => row.held === "unknown")).toBe(true);
+    const optional = { label: "Firewall Services: Edit", usedFor: "Cloudflare bans for login jails", held: "unknown" as const, optional: true as const };
+    const html = dashboardContent({ ...reply, connections: [{ ...reply.connections[0]!, access: { ...access, rows: [...access.rows, optional] } }] });
+    expect(html).not.toContain("Not added");
+    expect(html).toContain("to see its permissions here.</span>");
+    const long = dashboardContent({ ...reply, connections: [{ ...reply.connections[0]!, access: { ...access, note: `Its permissions could not be read: ${"x".repeat(300)}.` } }] });
+    expect(long).toMatch(/x…<\/span>/);
+    expect(long).not.toContain("..");
     expect(dnsTokenHolds(reply.connections[0]!.id, "dns", { id: env.cf.zones[0]!.id, accountId: env.agency }, paths(env))).toBeNull();
   });
 
@@ -548,6 +555,51 @@ describe("what each token holds", () => {
     expect(access.rows.find((row) => row.label === "Zone Settings: Edit")).toMatchObject({ held: "no", detail: "Refused by Cloudflare" });
     expect(dashboardContent(reply)).toContain("Refused by Cloudflare: Zone Settings: Edit");
     expect(connectionPermissions(status.connections[0], seededPolicy().profiles)).toEqual({ readable: false, missing: ["Zone Settings: Edit"] });
+  });
+
+  test("a token is read on a check of every site, and its read stands through checks of some sites and a read Cloudflare cannot answer", async () => {
+    const env = setup();
+    const token = env.cf.tokens.get(TOKEN)!;
+    token.policies = [policy(["DNS Write", "API Tokens Read"], ALL_ZONES)];
+    const reads = () => env.cf.calls.filter((call) => call.path === `/user/tokens/${token.id}`).length;
+    const verifies = () => env.cf.calls.filter((call) => call.path === "/user/tokens/verify").length;
+    await env.connect();
+    const [readsBefore, verifiesBefore] = [reads(), verifies()];
+    await env.act("assign", { domains: ["example.com"], profileId: "web" });
+    expect(verifies()).toBeGreaterThan(verifiesBefore);
+    expect(reads()).toBe(readsBefore);
+    const fetch = env.cf.fetch;
+    env.cf.fetch = async (address, init) => new URL(address).pathname.endsWith(`/tokens/${token.id}`)
+      ? new Response(JSON.stringify({ success: false, errors: [{ code: 10000, message: "Internal error" }] }), { status: 502 })
+      : fetch(address, init);
+    const reply = await env.act("check");
+    expect(reply.connections[0]!.access).toMatchObject({ reach: "All zones", note: null });
+  });
+
+  test("a refusal clears once a call needing that permission succeeds", async () => {
+    const env = setup();
+    const fetch = env.cf.fetch;
+    let refuse = true;
+    env.cf.fetch = async (address, init) => refuse && new URL(address).pathname.includes("/settings/")
+      ? new Response(JSON.stringify({ success: false, errors: [{ code: 10000, message: "Authentication error" }] }), { status: 403 })
+      : fetch(address, init);
+    await env.connect();
+    await env.act("assign", { domains: ["example.com"], profileId: "web" });
+    await env.act("check");
+    const refused = () => JSON.parse(readFileSync(join(env.dir, "state", "status.json"), "utf8")).connections[0].refused;
+    expect(refused()).toEqual(["Zone Settings: Edit"]);
+    refuse = false;
+    await env.act("assign", { domains: ["shop.example.com"], profileId: "web" });
+    expect(refused()).toBeUndefined();
+  });
+
+  test("saving a connection keeps the connections in the policy's order", async () => {
+    const env = setup();
+    const first = (await env.connect()).connections[0]!.id;
+    await env.act("save-connection", { token: SECOND_TOKEN, label: "Church" });
+    await env.act("save-connection", { id: first, label: "Renamed" });
+    const status = JSON.parse(readFileSync(join(env.dir, "state", "status.json"), "utf8"));
+    expect(status.connections.map((connection: { label: string }) => connection.label)).toEqual(["Renamed", "Church"]);
   });
 
   test("an account-owned token is asked for Account API Tokens: Read and edited at its account", async () => {
@@ -571,15 +623,16 @@ describe("what each token holds", () => {
     const zone = env.cf.zones[0]!;
     env.cf.tokens.get(TOKEN)!.policies = [
       policy(["DNS Write"], ALL_ZONES),
-      policy(["Firewall Services Write", "Zone Write"], { [`com.cloudflare.api.account.zone.${zone.id}`]: "*" }),
+      policy(["Zone WAF Write", "Zone Write"], { [`com.cloudflare.api.account.zone.${zone.id}`]: "*" }),
       policy(["API Tokens Read"], { "com.cloudflare.api.user.0123": "*" }),
-      policy(["Firewall Services Write"], { [`com.cloudflare.api.account.zone.${"9".repeat(32)}`]: "*" }, "deny"),
+      policy(["DNS Write"], { [`com.cloudflare.api.account.zone.${"9".repeat(32)}`]: "*" }, "deny"),
     ];
     const id = (await env.connect()).connections[0]!.id;
     const calls = env.cf.calls.length;
-    expect(dnsTokenHolds(id, "ipAccessRules", { id: zone.id, accountId: env.agency }, paths(env))).toBe(true);
-    expect(dnsTokenHolds(id, "ipAccessRules", { id: "9".repeat(32), accountId: env.agency }, paths(env))).toBe(false);
-    expect(dnsTokenHolds(id, "waf", { id: zone.id, accountId: env.agency }, paths(env))).toBe(false);
+    expect(dnsTokenHolds(id, "waf", { id: zone.id, accountId: env.agency }, paths(env))).toBe(true);
+    expect(dnsTokenHolds(id, "waf", { id: "8".repeat(32), accountId: env.agency }, paths(env))).toBe(false);
+    expect(dnsTokenHolds(id, "dns", { id: zone.id, accountId: env.agency }, paths(env))).toBe(true);
+    expect(dnsTokenHolds(id, "dns", { id: "9".repeat(32), accountId: env.agency }, paths(env))).toBe(false);
     expect(dnsTokenHolds(id, "tokens", { id: zone.id, accountId: env.agency }, paths(env))).toBe(true);
     // Zone: Edit creates zones, so a grant on one zone does not hold it for the account.
     expect(dnsTokenHolds(id, "zone", { id: zone.id, accountId: env.agency }, paths(env))).toBe(false);

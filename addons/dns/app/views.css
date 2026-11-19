@@ -45,6 +45,7 @@
 #dns-found-body { margin-bottom:16px; }
 .dns-settings-table td:first-child { width:220px; }
 .dns-settings-table .mono { color:var(--muted); font-size:13px; }
+:is(.dns-redirect-table,.dns-profile-table,.dns-settings-table) .action-cell .actions { flex-wrap:nowrap; }
 .dns-profile-table .switch-state { font-weight:400; color:var(--muted); min-width:84px; }
 @media (max-width:1200px) {
   .dns-site-table td select { min-width:150px; }
