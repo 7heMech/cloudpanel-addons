@@ -1,4 +1,4 @@
-import { dashboardUrl, migrateOldAddonNames, resolveAddon } from "./addons";
+import { dashboardUrl, migrateOldAddonNames, resolveEnableable } from "./addons";
 import { enabledAddons } from "../addons/catalog";
 import { artifactNames, installArtifacts, installedTag } from "./artifacts";
 import { bootstrapProvision, applyEnable } from "./toggle";
@@ -27,7 +27,7 @@ export async function cmdInstall(argv: string[]): Promise<void> {
   if (unknown) fatal(`install does not take --${unknown}${unknown === "version" ? "; change version with clp-addons update --version" : ""}`);
   const local = flags.local;
   if (typeof local !== "string") fatal("install is what install.sh runs; turn addons on with clp-addons enable <addon>");
-  const specs = [...new Set(positional)].map(resolveAddon);
+  const specs = [...new Set(positional)].map((name) => resolveEnableable(name));
   return withOperationLock(`install ${positional.join(", ") || "clp-addons"}`, async () => {
     warnOutsidePanelRange();
     // Read before anything is installed, so a re-run of the installer is not mistaken for a first one.

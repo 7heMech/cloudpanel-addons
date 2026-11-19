@@ -18,6 +18,7 @@ curl -fsSL https://github.com/7heMech/cloudpanel-addons/releases/latest/download
 Checks the download's SHA-256 checksum; updates also check build provenance.
 Requires a CloudPanel host that is either x86-64 with AVX2 (Intel 2013+, AMD
 2015+) or 64-bit Arm (aarch64). On an x86-64 VM, set the CPU type to `host`.
+Instatic CMS is x86-64 only.
 
 When it finishes, open the new **Addons** tab in CloudPanel and enable the
 addons you want. System Tweaks is recommended. **Setup** on the addon pages

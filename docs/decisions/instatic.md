@@ -88,8 +88,9 @@ Addons UI -- provisions Docker itself when it is missing: download
 never fails just because Docker was never installed; it only fails if that
 provisioning itself does not bring the unit up.
 
-Upstream publishes `ghcr.io/corebunch/instatic` for `linux/amd64` only, so on an
-arm64 box creating or updating a site fails at the image pull.
+Upstream publishes `ghcr.io/corebunch/instatic` for `linux/amd64` only, so
+Instatic declares `supportedArches: ["x64"]`: an arm64 box cannot enable it and
+does not list it.
 
 ## Storage and replacement
 

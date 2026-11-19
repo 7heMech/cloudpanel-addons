@@ -102,7 +102,11 @@ still has the last word. The file sets:
 - the distro's security pocket: Debian matches
   `codename=${distro_codename}-security,label=Debian-Security`, and Ubuntu matches
   `archive=${distro_codename}-security`;
-- CloudPanel's origin `packages-v1.cloudpanel.io` for `component=php-*`, always;
+- CloudPanel's repository for `component=php-*`, always. It is the one for the
+  box's architecture, matched twice: by origin (`packages-v1.cloudpanel.io` on
+  x64, `packages-arm-v1.cloudpanel.io` on arm64) and by CDN host
+  (`site=d17k9fuiwb52nc.cloudfront.net` on x64, `site=d2xpdm4jldf31f.cloudfront.net`
+  on arm64), because the Debian 13 (`trixie`) Release files have no `Origin`;
 - `nginx`, on by default; `percona-*`/`mysql-*`/`mariadb-*` and `main`, off by
   default;
 - `Automatic-Reboot` and `Automatic-Reboot-Time`, `now` or a validated 24-hour
@@ -200,7 +204,9 @@ The page never reports what the drop-in meant to do. It reads the result:
   `${distro_codename}` macros. Repositories are grouped by suite. A Debian pocket
   is named by its codename (`bookworm-security`) and an Ubuntu pocket by its
   archive (`jammy-security`), because Ubuntu gives every pocket the release
-  codename. Coverage must match the allowed and not-allowed origins reported by
+  codename. A source is CloudPanel's by either architecture's origin or CDN
+  host, and the host is part of what makes an index distinct, since two
+  origin-less ones differ only by it. Coverage must match the allowed and not-allowed origins reported by
   `unattended-upgrade --dry-run -d`.
 - **Last run**: the last `Starting unattended upgrades script` block in
   `/var/log/unattended-upgrades/unattended-upgrades.log`, or in `.1.gz` just after

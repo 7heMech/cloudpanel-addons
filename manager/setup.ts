@@ -2,7 +2,7 @@
 // now, each enabled addon's steps checked against the server, a disabled
 // addon's steps offered with Enable, and what each administrator skipped or hid.
 import { existsSync, readFileSync, rmSync } from "node:fs";
-import { ADDONS, ADDON_NAMES, addonEnabled } from "../addons/catalog";
+import { ADDONS, addonEnabled, offeredAddonNames } from "../addons/catalog";
 import { SETUP_LEVELS, type ActionNeeded, type ActionNeededCheck, type SetupCheck, type SetupLevel, type SetupStep } from "../lib/addon-definition";
 import { writeFileAtomic } from "../lib/atomic-write";
 import { errorMessage } from "../lib/errors";
@@ -90,9 +90,11 @@ interface SetupSource {
   core: SetupStep[];
 }
 
-function catalogSource(): SetupSource {
+/** Leaves out an addon this box's architecture cannot run, unless it is enabled already. */
+function catalogSource(arch: string = process.arch): SetupSource {
+  const offered = offeredAddonNames(arch);
   return {
-    addons: ADDON_NAMES.flatMap((name) => {
+    addons: offered.flatMap((name) => {
       const spec = ADDONS[name]!;
       if (!spec.setup?.length && !spec.actionNeeded?.length) return [];
       return [{ name, title: spec.title, enabled: addonEnabled(spec), steps: spec.setup ?? [], actions: spec.actionNeeded ?? [] }];

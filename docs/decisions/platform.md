@@ -82,6 +82,11 @@ command, reconciler or toggle names an addon:
 - `conffiles`: dpkg conffile edits `apt-hook pre` hands back.
 - `withdraw`: disabling under the addon's own locks.
 - `stateDirMode`: a state directory something outside the addon must reach.
+- `supportedArches`: the only architectures it can be enabled on, as
+  `process.arch` names them. On any other, `clp-addons enable`, `install` and a
+  manager enable job refuse it (`archRefusal`), and the menu, the Addons
+  page's Available list and Setup leave it out (`offeredAddonNames`). One
+  already enabled stays listed, so it can still be disabled.
 
 Repair upkeep runs inside repair's operation lock, so it stays short. Work that
 waits on the network or on a site's own code is queued with `queueAddonPass`
