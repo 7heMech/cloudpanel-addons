@@ -27,6 +27,7 @@ import { dashboardView as smtpDashboardView, layout as smtpLayout } from "../add
 import type { SmtpState } from "../addons/smtp/action";
 import { dashboardView as dnsDashboardView, layout as dnsLayout } from "../addons/dns/app/views";
 import type { DnsState, Review as DnsReview } from "../addons/dns/action";
+import { accessView as dnsAccessView, readAccess as dnsReadAccess, type AccessView as DnsAccessView, type TokenAccess as DnsTokenAccess } from "../addons/dns/access";
 import type { SitePlan as DnsSitePlan } from "../addons/dns/engine";
 import type { Redirect as DnsRedirect } from "../addons/dns/model";
 import { PRESETS as DNS_PRESETS, seededPolicy as dnsSeededPolicy } from "../addons/dns/presets";
@@ -177,8 +178,12 @@ function dnsPreviewState(url: URL): DnsState {
     defaultProfileId: setup ? null : "web",
     sites,
     connections: setup ? [] : [
-      { id: "cf-1", label: "Agency", active: true, status: "active", accounts: [{ id: "a".repeat(32), name: "Example Agency" }, { id: "b".repeat(32), name: "Clients" }], zones: 42, error: null, hasToken: true },
-      { id: "cf-2", label: "Church", active: true, status: "active", accounts: [{ id: "c".repeat(32), name: "Church account" }], zones: 7, error: null, hasToken: true },
+      { id: "cf-1", label: "Agency", active: true, status: "active", accounts: [{ id: "a".repeat(32), name: "Example Agency" }, { id: "b".repeat(32), name: "Clients" }], zones: 42, error: null, hasToken: true,
+        access: dnsPreviewAccess({ token: DNS_PREVIEW_TOKENS.agency }, [web, mailcow], false) },
+      { id: "cf-2", label: "Church", active: true, status: "active", accounts: [{ id: "c".repeat(32), name: "Church account" }], zones: 7, error: null, hasToken: true,
+        access: dnsPreviewAccess({ token: DNS_PREVIEW_TOKENS.church }, [web, mailcow], true) },
+      { id: "cf-3", label: "Older token", active: true, status: "active", accounts: [{ id: "d".repeat(32), name: "Partner" }], zones: 3, error: null, hasToken: true,
+        access: dnsPreviewAccess({ token: DNS_PREVIEW_TOKENS.older, refused: ["Config Rules: Edit"] }, [web, mailcow], false) },
     ],
     accounts: setup ? [] : [
       { connectionId: "cf-1", accountId: "a".repeat(32), label: "Example Agency (Agency)" },
@@ -197,6 +202,34 @@ function dnsPreviewState(url: URL): DnsState {
     presets: DNS_PRESETS,
     log,
   };
+}
+
+/** Agency lacks Zone WAF and has Zone Settings on one account only; Church has all of it; the older token cannot read itself. */
+const DNS_PREVIEW_TOKENS: Record<"agency" | "church" | "older", DnsTokenAccess> = (() => {
+  const agency = "a".repeat(32);
+  const clients = "b".repeat(32);
+  const church = "c".repeat(32);
+  const zone = (n: number, name: string, accountId: string) => ({ id: String(n).repeat(32).slice(0, 32), name, accountId });
+  const agencyZones = [zone(1, "example.com", agency), zone(2, "example.org", clients), zone(3, "example.net", agency), zone(4, "example-brand.net", agency)];
+  const everything = ["DNS Write", "Zone Write", "Account Settings Read", "Dynamic URL Redirects Write", "Config Settings Write", "API Tokens Read"];
+  const all = [{ account: "*", zone: "*" }];
+  return {
+    agency: dnsReadAccess({ owner: "user", accountId: null }, [
+      { allow: true, permissions: everything, resources: all },
+      { allow: true, permissions: ["Zone Settings Write"], resources: [{ account: agency, zone: "*" }] },
+    ], { zones: agencyZones, accounts: [{ id: agency, name: "Example Agency" }, { id: clients, name: "Clients" }] }),
+    church: dnsReadAccess({ owner: "account", accountId: church }, [
+      { allow: true, permissions: [...everything, "Zone Settings Write", "Zone WAF Write"], resources: [{ account: church, zone: "*" }] },
+    ], { zones: [zone(5, "church.example", church)], accounts: [{ id: church, name: "Church account" }] }),
+    older: { owner: "user", accountId: null, readable: false, reason: "Add API Tokens: Read to this token to see its permissions here" },
+  };
+})();
+/** Until a permission is optional, the preview adds one, held by Church only. */
+function dnsPreviewAccess(stored: Parameters<typeof dnsAccessView>[0], profiles: Parameters<typeof dnsAccessView>[1], held: boolean): DnsAccessView | null {
+  const view = dnsAccessView(stored, profiles);
+  if (!view) return null;
+  const optional = { label: "Firewall Services: Edit", usedFor: "Cloudflare bans for login jails", held: view.reach === null ? "unknown" as const : held ? "yes" as const : "no" as const, optional: true as const };
+  return { ...view, rows: [...view.rows, optional] };
 }
 
 const dnsFoundRule = (source: string, target: string, keepPath = true) => ({ source, zone: source, target, status: 301 as const, keepPath, keepQuery: true });

@@ -39,7 +39,8 @@ import { isStandInSite } from "../../lib/stand-ins";
 import { clpctlStandIns, readStandIns, retryStandInCertificates, type StandInPaths } from "./stand-in";
 import { clpctlIssue, NEW_SITE_WINDOW, requestSsl, retryCertificates, type Issue, type SslRequest } from "./ssl";
 import { readState, writeState } from "../../lib/root-state";
-import { tokenTemplate, type TokenTemplate } from "./token";
+import { accessView, grants, targetFor, type AccessView } from "./access";
+import { PERMISSIONS, tokenTemplate, type PermissionName, type TokenTemplate } from "./token";
 
 type DnsVerb = keyof typeof DNS_VERBS;
 
@@ -129,7 +130,7 @@ export interface DnsState {
   profiles: (Profile & { sites: number })[];
   defaultProfileId: string | null;
   sites: SiteView[];
-  connections: (ConnectionReport & { hasToken: boolean })[];
+  connections: (Omit<ConnectionReport, "token" | "refused"> & { hasToken: boolean; access: AccessView | null })[];
   accounts: { connectionId: string; accountId: string; label: string }[];
   mailcow: MailcowSettings & { hasKey: boolean };
   /** SMTP Relay's accounts, which the Mailcow form can be filled from. */
@@ -425,6 +426,15 @@ class Action {
     if (forgot) this.files.saveManaged(managed);
   }
 
+  /** A run over some sites keeps the refusals the others saw; one over every site has seen them all. */
+  private withEarlierRefusals(reports: ConnectionReport[], earlier: ConnectionReport[], domains: string[] | "all"): ConnectionReport[] {
+    if (domains === "all") return reports;
+    return reports.map((report) => {
+      const refused = [...new Set([...earlier.find((entry) => entry.id === report.id)?.refused ?? [], ...report.refused ?? []])];
+      return refused.length ? { ...report, refused } : report;
+    });
+  }
+
   /** Writes what a run found for `domains`, keeping what it did not look at. */
   record(run: DnsRun, plans: SitePlan[], domains: string[] | "all"): void {
     const status = this.files.status();
@@ -438,7 +448,7 @@ class Action {
     this.files.saveStatus({
       ...status,
       checkedAt: domains === "all" ? new Date(this.now).toISOString() : status.checkedAt,
-      connections: run.connections.length || domains === "all" ? run.connections : status.connections,
+      connections: run.connections.length || domains === "all" ? this.withEarlierRefusals(run.reports(), status.connections, domains) : status.connections,
       plans: plansByDomain,
       backoff: run.backoff(),
     });
@@ -496,11 +506,13 @@ class Action {
         }),
       ].sort((a, b) => a.domain.localeCompare(b.domain)),
       connections: policy.connections.map((connection) => {
-        const report = status.connections.find((entry) => entry.id === connection.id);
+        const stored = status.connections.find((entry) => entry.id === connection.id);
+        const { token: _token, refused: _refused, ...report } = stored ?? { id: connection.id, active: false, status: "unchecked", accounts: [], zones: 0, error: null };
         return {
-          ...(report ?? { id: connection.id, active: false, status: "unchecked", accounts: [], zones: 0, error: null }),
+          ...report,
           label: connection.label,
           hasToken: Boolean(secrets.cloudflare[connection.id]),
+          access: stored?.active ? accessView(stored, policy.profiles) : null,
         };
       }),
       accounts,
@@ -919,6 +931,8 @@ class Action {
     if (!existing && standIns.length) next.held = [...new Set([...next.held, ...standIns])];
     this.files.saveSecrets({ ...secrets, cloudflare: { ...secrets.cloudflare, [id]: token } });
     this.savePolicy(next);
+    const status = this.files.status();
+    this.files.saveStatus({ ...status, connections: [...status.connections.filter((entry) => entry.id !== id), { ...report, id, label }] });
     await this.tryRefresh("all");
     const zones = `${report.zones} zone${report.zones === 1 ? "" : "s"}`;
     return this.reply({ notice: `${label} reaches ${report.accounts.length} account${report.accounts.length === 1 ? "" : "s"} and ${zones}.` });
@@ -1312,3 +1326,17 @@ async function perform(
 export async function runDnsAction(argv: string[], options: DnsActionOptions = {}): Promise<number> {
   return replyToAction("dns", options.emitReply !== false, () => executeDnsAction(argv, options));
 }
+
+/**
+ * Whether a DNS connection's token holds a permission on a zone, from the last
+ * check's read of it, without calling Cloudflare. Null when that is not known:
+ * no such connection, not checked yet, or a token that cannot read itself.
+ */
+export function dnsTokenHolds(connectionId: string, permission: PermissionName, zone: { id: string; accountId: string }, paths: Partial<DnsPaths> = {}): boolean | null {
+  const files = new Files({ ...DEFAULT_DNS_PATHS, ...paths });
+  const token = files.status().connections.find((connection) => connection.id === connectionId)?.token;
+  if (!token?.readable) return null;
+  return grants(token.grants, PERMISSIONS[permission], targetFor(PERMISSIONS[permission], zone, token));
+}
+
+export type { AccessView };

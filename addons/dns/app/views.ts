@@ -156,12 +156,58 @@ function siteRow(site: SiteView, state: DnsState): string {
   </tr>`;
 }
 
+type Access = NonNullable<DnsState["connections"][number]["access"]>;
+
+/** What is missing of what DNS requires, by name; nothing when the token holds all of it. */
+function accessProblems(access: Access): string {
+  const required = access.rows.filter((row) => !row.optional);
+  const missing = required.filter((row) => row.held === "no").map((row) => row.label);
+  const partial = required.filter((row) => row.held === "some").map((row) => `${row.label} (${row.detail})`);
+  // Without its own read, what Cloudflare refused it is all that is known.
+  const lines = access.reach === null
+    ? [missing.length && `Refused by Cloudflare: ${missing.join(", ")}`]
+    : [missing.length && `Missing: ${missing.join(", ")}`, partial.length && `Not on every zone: ${partial.join(", ")}`];
+  const note = access.reach === null ? [`<span class="tone-warn">${esc(access.note ?? "")}.</span>`] : [];
+  return [...note, ...lines.filter(Boolean).map((line) => `<span class="tone-bad">${esc(line as string)}</span>`)].join("<br>");
+}
+
+function heldCell(row: Access["rows"][number]): string {
+  if (row.held === "yes") return '<span class="tone-ok" role="img" aria-label="Held">✓</span>';
+  if (row.optional && row.held !== "some") return '<span class="hint inline">Not added</span>';
+  if (row.held === "no") return `<span class="badge tone-bad">${esc(row.detail ?? "Missing")}</span>`;
+  if (row.held === "some") return `<span class="badge tone-warn">${esc(row.detail ?? "Some zones")}</span>`;
+  return '<span class="hint inline" role="img" aria-label="Not known">—</span>';
+}
+
+function accessRow(row: Access["rows"][number]): string {
+  return `<div class="dns-access-row" role="row" data-held="${row.held}">
+      <span class="dns-access-perm" role="cell">${esc(row.label)}</span>
+      <span class="dns-access-use" role="cell">${esc(row.usedFor)}</span>
+      <span class="dns-access-held" role="cell">${heldCell(row)}</span></div>`;
+}
+
+/** The connection's status line opens the table of what its token holds; optional permissions follow under their own heading. */
+function accessDetails(id: string, access: Access, status: string): string {
+  const optional = access.rows.filter((row) => row.optional);
+  const rows = access.rows.filter((row) => !row.optional).map(accessRow).join("") + (optional.length
+    ? `<div class="dns-access-row dns-access-cols dns-access-section" role="row"><span role="columnheader">Optional</span><span role="columnheader">Enables</span><span></span></div>${optional.map(accessRow).join("")}`
+    : "");
+  const problems = accessProblems(access);
+  return `<details class="dns-access-details" id="dns-access-${esc(id)}"><summary><span class="hint">${status} · <span class="dns-access-toggle">Permissions</span></span>${problems ? `<span class="dns-access-problems">${problems}</span>` : ""}</summary>
+    <div class="dns-access"><div class="dns-access-grid" role="table" aria-label="Token permissions">
+      <div class="dns-access-row dns-access-cols" role="row"><span role="columnheader">Permission</span><span role="columnheader">Used for</span><span role="columnheader">This token</span></div>${rows}</div>
+      <p class="dns-access-foot hint"><a href="${esc(access.editUrl)}" target="_blank" rel="noopener noreferrer" referrerpolicy="no-referrer">Edit in Cloudflare ↗</a></p></div></details>`;
+}
+
 function connectionRow(connection: DnsState["connections"][number]): string {
   const accounts = connection.accounts.map((account) => account.name || account.id).join(", ");
   const status = connection.active ? '<span class="tone-ok">Active</span>' : `<span class="tone-bad">${esc(connection.status === "unchecked" ? "Not checked" : "Not working")}</span>`;
-  return `<tr data-connection="${esc(connection.id)}">
+  const { access } = connection;
+  const reach = access?.reach ? `${access.reach} · ${plural(connection.zones, "zone")} now` : plural(connection.zones, "zone");
+  const line = `${esc(reach)} · ${status}${connection.error ? ` · ${esc(connection.error)}` : ""}`;
+  return `<tr data-connection="${esc(connection.id)}" class="dns-connection-row">
     <td class="site-cell"><strong>${esc(connection.label)}</strong><span class="hint">Cloudflare</span></td>
-    <td class="wide-cell">${esc(accounts || "—")}<span class="hint">${esc(plural(connection.zones, "zone"))} · ${status}${connection.error ? ` · ${esc(connection.error)}` : ""}</span></td>
+    <td class="wide-cell">${esc(accounts || "—")}${access ? accessDetails(connection.id, access, line) : `<span class="hint">${line}</span>`}</td>
     <td data-label="Actions" class="action-cell"><div class="actions">
       <button class="btn" type="button" onclick="dnsEditConnection('${esc(connection.id)}')">Edit</button>
       <button class="btn btn-danger" type="button" onclick="dnsRemoveConnection('${esc(connection.id)}')">Remove</button>

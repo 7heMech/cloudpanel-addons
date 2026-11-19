@@ -178,9 +178,9 @@ describe("the Cloudflare token template", () => {
     expect(url.searchParams.get("accountId")).toBe("*");
     expect(url.searchParams.get("zoneId")).toBe("all");
     expect(JSON.parse(url.searchParams.get("permissionGroupKeys")!)).toEqual([
-      { key: "account_settings", type: "read" }, { key: "zone", type: "edit" }, { key: "dns", type: "edit" },
-      { key: "dynamic_redirect", type: "edit" }, { key: "api_tokens", type: "read" }, { key: "zone_settings", type: "edit" },
-      { key: "config_settings", type: "edit" },
+      { key: "dns", type: "edit" }, { key: "zone", type: "edit" }, { key: "account_settings", type: "read" },
+      { key: "dynamic_redirect", type: "edit" }, { key: "zone_settings", type: "edit" }, { key: "config_settings", type: "edit" },
+      { key: "api_tokens", type: "read" },
     ]);
     expect(template.permissions).toContain("Config Rules: Edit");
     expect(template.permissions).toContain("Single Redirect: Edit");
@@ -194,6 +194,7 @@ describe("the Cloudflare token template", () => {
     expect(keys).toContainEqual({ key: "zone", type: "edit" });
     expect(keys).toContainEqual({ key: "zone_waf", type: "edit" });
     expect(template.permissions).toContain("Zone WAF: Edit");
+    expect(keys).not.toContainEqual({ key: "firewall_services", type: "edit" });
   });
 });
 
