@@ -77,7 +77,7 @@ Backups.
 
 ## Develop
 
-Requires Bun 1.4.4-canary.20261108.1 (`npm install -g bun@1.4.4-canary.20261108.1`) and ShellCheck.
+Requires Bun 1.4.5-canary.20261119.1 (`npm install -g bun@1.4.5-canary.20261119.1`) and ShellCheck.
 
 ```bash
 bun install

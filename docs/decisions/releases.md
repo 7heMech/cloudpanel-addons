@@ -31,7 +31,7 @@ because the deploy authenticates as root and then runs a command sequence.
 
 Development, CI, staging, and release use the Bun version pinned by
 `packageManager` in `package.json`. The pin is a dated Bun canary,
-`1.4.4-canary.20261108.1`: no Bun release has the compile options below yet,
+`1.4.5-canary.20261119.1`: no Bun release has the compile options below yet,
 and the pin moves to Bun 1.5.0 when it ships.
 Until then `bun-types` comes from the same canary through `overrides`. GitHub
 keeps only the newest canary, under a tag that moves, so the workflows install
