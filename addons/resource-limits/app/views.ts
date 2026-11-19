@@ -268,7 +268,7 @@ export function dashboardView(state: ResourceLimitsState): string {
       ${FLEET_FOOTER_HTML}`
     : '<div class="empty">No CloudPanel site runs PHP, so there is no PHP-FPM pool to tune.</div>'}
   </div>
-  <div class="card card-table"><div class="card-header category-header"><div><h2>Categories</h2>
+  <div class="card card-table" id="rl-categories"><div class="card-header category-header"><div><h2>Categories</h2>
       <p class="hint">Limits apply to every site separately: one category on many sites multiplies its workers.</p></div>
     <div class="category-tools">
       <div class="default-field"><label class="hint" for="default-category">New sites join</label>

@@ -219,6 +219,32 @@ To see what the panel serves:
 openssl s_client -connect 127.0.0.1:8443 </dev/null 2>/dev/null | openssl x509 -noout -subject -enddate -fingerprint -sha256
 ```
 
+## Unknown hostnames
+
+CloudPanel's `/etc/nginx/sites-enabled/default.conf` makes Nginx refuse any
+hostname it has no site for. Without it, a domain anyone points at this
+server, even through another Cloudflare account, reaches a site's PHP. Setup
+shows **Action needed** when it no longer holds. To put CloudPanel's file back:
+
+```bash
+cat > /etc/nginx/sites-enabled/default.conf <<'EOF'
+server {
+  listen 80 default_server;
+  listen [::]:80 default_server;
+  listen 443 quic reuseport default_server;
+  listen 443 default_server ssl;
+  listen [::]:443 quic reuseport default_server;
+  listen [::]:443 default_server ssl;
+  ssl_reject_handshake on;
+  server_name _;
+  return 444;
+}
+EOF
+nginx -t && systemctl reload nginx
+```
+
+If a site's vhost has `default_server` on 80 or 443, remove it there.
+
 ## Nginx config injection
 
 **Block nginx config injection** is on by default. CloudPanel writes site
@@ -324,9 +350,10 @@ an hour. Wrong passwords, wrong two-factor codes and wrong basic-auth passwords
 all count. The block covers only the panel, so you can still reach the server
 over SSH.
 
-Logins through CloudPanel's custom domain count too. They pass through the
-sites' nginx on port 443, so an address blocked for them loses HTTPS to every
-site on this server for the hour, not only the panel.
+Logins through CloudPanel's custom domain count too, from seconds after you
+save it. They pass through the sites' nginx on port 443, so an address blocked
+for them loses HTTPS to every site on this server for the hour, not only the
+panel.
 
 **Block SSH login guessing** is off by default. Switched on, it blocks an address
 from SSH for an hour after 5 failed logins within an hour. An SSH client that

@@ -15,5 +15,8 @@ export const MANAGER_VERBS = {
   // Renders every addon's block in the panel's shared templates again; an
   // addon that reconciled only its own would strip the others.
   reconcile: { web: "admin" },
+  // The Setup checklist for the administrator --user names, and their skips and Hide.
+  setup: { web: "admin" },
+  "setup-pref": { web: "admin" },
   run: { web: false, why: "the job runner, started only by the transient unit enable, disable and update launch" },
 } as const;
