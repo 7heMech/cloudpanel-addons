@@ -4,12 +4,14 @@
  * Everything System Tweaks sets is one drop-in under `/etc/apt/apt.conf.d`,
  * named to sort after the distro's `20auto-upgrades` and
  * `50unattended-upgrades`, so it adds origins to their lists and wins their
- * scalars while leaving every later operator file the last word. Deleting it
- * is the whole undo. What the page reports is read back from `apt-config dump`
- * and `apt-cache policy`, never from what this file meant to say.
+ * scalars while leaving every later operator file the last word, plus two
+ * systemd timer drop-ins (`52clp-addons.conf`) that run the timers hourly.
+ * Deleting those drop-ins is the whole undo. What the page reports is read
+ * back from `apt-config dump` and `apt-cache policy`, never from what this
+ * file meant to say.
  */
-import { existsSync, lstatSync, readFileSync, readdirSync, rmSync, statSync } from "node:fs";
-import { basename, join } from "node:path";
+import { existsSync, lstatSync, mkdirSync, readFileSync, readdirSync, rmSync, rmdirSync, statSync } from "node:fs";
+import { basename, dirname, join } from "node:path";
 import { failAction } from "../../lib/action";
 import { commandOutput } from "../../lib/command";
 import { writeFileAtomic, writeOrRemove } from "../../lib/atomic-write";
@@ -20,7 +22,33 @@ import type { UploadProgressOptions } from "./upload-progress";
 
 const CLOUDPANEL_ORIGIN = "packages-v1.cloudpanel.io";
 const MARKER = "// Managed by clp-addons System Tweaks. Switching automatic updates off there removes this file.";
+const TIMER_MARKER = "# Managed by clp-addons System Tweaks. Switching automatic updates off there removes this file.";
+const TIMER_DROP_IN_NAME = "52clp-addons.conf";
 const TIMERS = ["apt-daily.timer", "apt-daily-upgrade.timer"];
+const TIMER_DROP_INS: readonly { timer: string; content: string }[] = [
+  {
+    timer: "apt-daily.timer",
+    content: [
+      TIMER_MARKER,
+      "[Timer]",
+      "OnCalendar=",
+      "OnCalendar=hourly",
+      "RandomizedDelaySec=15m",
+      "",
+    ].join("\n"),
+  },
+  {
+    timer: "apt-daily-upgrade.timer",
+    content: [
+      TIMER_MARKER,
+      "[Timer]",
+      "OnCalendar=",
+      "OnCalendar=*:20",
+      "RandomizedDelaySec=15m",
+      "",
+    ].join("\n"),
+  },
+];
 
 /** What the operator chose. PHP and the distro's security origin are always in. */
 export interface UpdateSettings {
@@ -54,6 +82,7 @@ interface UpdatesPaths {
   aptConfDir: string;
   aptConf: string;
   dropIn: string;
+  systemdDir: string;
   rebootRequired: string;
   logFile: string;
   osRelease: string;
@@ -63,6 +92,7 @@ const DEFAULT_UPDATES_PATHS: UpdatesPaths = {
   aptConfDir: "/etc/apt/apt.conf.d",
   aptConf: "/etc/apt/apt.conf",
   dropIn: "/etc/apt/apt.conf.d/52clp-addons-unattended-upgrades",
+  systemdDir: "/etc/systemd/system",
   rebootRequired: "/var/run/reboot-required",
   logFile: "/var/log/unattended-upgrades/unattended-upgrades.log",
   osRelease: "/etc/os-release",
@@ -320,8 +350,8 @@ export function dropInFor(settings: UpdateSettings, distroId: string): string {
   ].filter((pattern): pattern is string => pattern !== null);
   return [
     MARKER,
-    'APT::Periodic::Update-Package-Lists "1";',
-    'APT::Periodic::Unattended-Upgrade "1";',
+    'APT::Periodic::Update-Package-Lists "always";',
+    'APT::Periodic::Unattended-Upgrade "always";',
     "Unattended-Upgrade::Origins-Pattern {",
     ...patterns.map((pattern) => `\t"${pattern}";`),
     "};",
@@ -486,12 +516,18 @@ export function effectiveReboot(options: UpdatesOptions = {}): Pick<UpdateSettin
 
 // --- changing it -------------------------------------------------------------
 
-function readDropIn(ctx: Context): string | null {
+function readFileOrNull(path: string): string | null {
   try {
-    return readFileSync(ctx.paths.dropIn, "utf8");
+    return readFileSync(path, "utf8");
   } catch {
     return null;
   }
+}
+
+function removeIfEmpty(dir: string): void {
+  try {
+    rmdirSync(dir);
+  } catch {}
 }
 
 /** Returns the timers this enabled, which switching off disables again. */
@@ -500,11 +536,24 @@ export function applyUpdates(settings: UpdateSettings, enabledTimers: string[], 
   enabledTimers: string[];
 } {
   const ctx = contextOf(options);
-  const before = readDropIn(ctx);
+  const before = readFileOrNull(ctx.paths.dropIn);
+  const timerBefore = TIMER_DROP_INS.map(({ timer, content }) => {
+    const path = join(ctx.paths.systemdDir, `${timer}.d`, TIMER_DROP_IN_NAME);
+    return { timer, path, content, before: readFileOrNull(path) };
+  });
   if (!settings.enabled) {
     for (const timer of enabledTimers) ctx.run("systemctl", ["disable", "--now", timer]);
     if (before !== null) rmSync(ctx.paths.dropIn, { force: true });
-    return { changed: before !== null || enabledTimers.length > 0, enabledTimers: [] };
+    let timerDropInsRemoved = false;
+    for (const entry of timerBefore) {
+      if (entry.before !== null) {
+        rmSync(entry.path, { force: true });
+        removeIfEmpty(dirname(entry.path));
+        timerDropInsRemoved = true;
+      }
+    }
+    if (timerDropInsRemoved) ctx.run("systemctl", ["daemon-reload"]);
+    return { changed: before !== null || timerDropInsRemoved || enabledTimers.length > 0, enabledTimers: [] };
   }
   if (!packageVersion(ctx)) failAction("unattended-upgrades is not installed");
   const states = TIMERS.map((timer) => ({ timer, state: ctx.run("systemctl", ["is-enabled", timer]).stdout.trim() }));
@@ -512,15 +561,48 @@ export function applyUpdates(settings: UpdateSettings, enabledTimers: string[], 
   if (masked) failAction(`${masked.timer} is masked; unmask it to use automatic updates`);
 
   const after = dropInFor(settings, distroOf(ctx).id);
+  let aptWritten = false;
+  const writtenTimers: typeof timerBefore = [];
   const restore = () => {
-    if (before !== after) writeOrRemove(ctx.paths.dropIn, before, { mode: 0o644 });
+    if (aptWritten) writeOrRemove(ctx.paths.dropIn, before, { mode: 0o644 });
+    if (writtenTimers.length) {
+      for (const entry of writtenTimers) {
+        if (entry.before === null) {
+          rmSync(entry.path, { force: true });
+          removeIfEmpty(dirname(entry.path));
+        } else {
+          mkdirSync(dirname(entry.path), { recursive: true });
+          writeFileAtomic(entry.path, entry.before, { mode: 0o644 });
+        }
+      }
+      ctx.run("systemctl", ["daemon-reload"]);
+    }
   };
   if (before !== after) {
     writeFileAtomic(ctx.paths.dropIn, after, { mode: 0o644 });
+    aptWritten = true;
     const check = ctx.run("apt-config", ["dump"]);
     if (!check.ok) {
       restore();
       failAction(`apt rejected the configuration: ${commandOutput(check)}`);
+    }
+  }
+  for (const entry of timerBefore) {
+    if (entry.before === entry.content) continue;
+    try {
+      mkdirSync(dirname(entry.path), { recursive: true });
+      writeFileAtomic(entry.path, entry.content, { mode: 0o644 });
+      writtenTimers.push(entry);
+    } catch (error) {
+      restore();
+      throw error;
+    }
+  }
+  if (writtenTimers.length) {
+    const reload = ctx.run("systemctl", ["daemon-reload"]);
+    if (!reload.ok) {
+      restore();
+      failAction(`systemctl daemon-reload failed: ${commandOutput(reload)}`);
     }
   }
   const enabledNow: string[] = [];
@@ -535,7 +617,10 @@ export function applyUpdates(settings: UpdateSettings, enabledTimers: string[], 
     enabledNow.push(timer);
   }
   const timers = [...new Set([...enabledTimers, ...enabledNow])];
-  return { changed: before !== after || timers.length !== enabledTimers.length, enabledTimers: timers };
+  return {
+    changed: before !== after || writtenTimers.length > 0 || timers.length !== enabledTimers.length,
+    enabledTimers: timers,
+  };
 }
 
 export function installUnattendedUpgrades(options: UpdatesOptions = {}): void {

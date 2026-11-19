@@ -41,10 +41,13 @@ locked, `rm /etc/clp-addons/locks.json`, then lock those addons again. If
 1. Open **Addons → System Tweaks**. If `unattended-upgrades` is missing, choose
    **Install unattended-upgrades**. It can take up to ten minutes when apt is
    busy.
-2. Switch on **Install updates automatically**. It runs once a day, from
-   `apt-daily-upgrade.timer`, and installs the distro's security updates and
-   every PHP version CloudPanel ships. Its options appear under it: Nginx is
-   included by default; MySQL and CloudPanel itself only if you switch them on.
+2. Switch on **Install updates automatically**. It runs every hour, through
+   `apt-daily.timer` (on the hour) and `apt-daily-upgrade.timer` (at `:20` past
+   the hour, each with up to 15 minutes random delay) using `"always"` for apt's
+   periodic update and upgrade settings, and installs the distro's security
+   updates and every PHP version CloudPanel ships. Its options appear under it:
+   Nginx is included by default; MySQL and CloudPanel itself only if you switch
+   them on.
 3. Open **Repositories** to see every apt source and whether it is covered. An
    uncovered source still needs `apt upgrade`.
 
@@ -71,8 +74,11 @@ If updates were already on before System Tweaks, the page says **Configured
 outside System Tweaks** and names your file. If that setup leaves out
 CloudPanel's PHP, the page suggests switching on **Install updates
 automatically**, which adds it. Switching off removes only
-`/etc/apt/apt.conf.d/52clp-addons-unattended-upgrades`, so your own setup is
-left as it was. Disabling System Tweaks removes it too.
+`/etc/apt/apt.conf.d/52clp-addons-unattended-upgrades` and the two systemd timer
+drop-ins (`/etc/systemd/system/apt-daily.timer.d/52clp-addons.conf` and
+`/etc/systemd/system/apt-daily-upgrade.timer.d/52clp-addons.conf`), so your own
+apt setup and timer schedules are left as they were. Disabling System Tweaks
+removes them too.
 
 On Ubuntu 22.04, 24.04 and 26.04 this uses Ubuntu's security pocket and preserves
 any existing Ubuntu Pro/ESM update rules. It does not activate Ubuntu Pro. Ubuntu

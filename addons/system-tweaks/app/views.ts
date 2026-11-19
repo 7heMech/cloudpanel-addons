@@ -60,7 +60,7 @@ function updatesLine(status: UpdatesStatus): string {
   }
   if (status.enabled) {
     const next = status.timer.next ? ` Next run ${esc(status.timer.next)}.` : "";
-    if (status.managed) return `${badge("On", "ok")} <span>Runs once a day.${next}</span>`;
+    if (status.managed) return `${badge("On", "ok")} <span>Runs every hour.${next}</span>`;
     const where = status.outsideSource ? ` in ${esc(status.outsideSource)}` : "";
     return `${badge("On", "ok")} <span>Configured outside System Tweaks${where}.${next}</span>`;
   }
@@ -130,7 +130,7 @@ function updateRows(status: UpdatesStatus, settings: UpdateSettings): string {
   return settingRow({
     key: "enabled",
     title: "Install updates automatically",
-    description: "Once a day, with the distro's unattended-upgrades: its security updates and every PHP version CloudPanel ships.",
+    description: "Every hour, with the distro's unattended-upgrades: its security updates and every PHP version CloudPanel ships.",
     checked: status.managed,
     disabled: !status.installed,
     onchange: "setUpdates(this)",

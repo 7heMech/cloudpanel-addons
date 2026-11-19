@@ -678,7 +678,7 @@ test("the page says where MySQL listens, what reaches it, and how to change a de
     remoteClients: ["203.0.113.24"], defaultPassword: [{ from: "other hosts" as const, password: "root" as const }],
   };
   const state = {
-    updates: updatesStatus({ run: () => ({ ok: false, stdout: "", stderr: "" }), paths: { aptConfDir: "/nonexistent", aptConf: "/nonexistent" } }),
+    updates: updatesStatus({ run: () => ({ ok: false, stdout: "", stderr: "" }), paths: { aptConfDir: "/nonexistent", aptConf: "/nonexistent", systemdDir: "/nonexistent" } }),
     settings: { enabled: false, nginx: true, database: false, panel: false, reboot: false, rebootTime: "now" },
     uploadProgress: { guard: true, fpms: [] }, realIp: { blockForged: true, trustsAnyAddress: false, problem: "" }, visitorIp: { enabled: true, applied: true, problem: "" },
     phpMyAdmin: { enabled: true, active: true, problem: "" },

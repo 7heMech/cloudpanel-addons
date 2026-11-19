@@ -147,7 +147,10 @@ test("the drop-in adds PHP and Nginx by default, and the database and panel only
   const everything = covered(coverageOf(sources, patterns({ ...DEFAULT_UPDATE_SETTINGS, enabled: true, database: true, panel: true }), debian));
   expect(everything.MySQL).toBe("all");
   expect(everything.CloudPanel).toBe("all");
-  expect(dropInFor(DEFAULT_UPDATE_SETTINGS, "Debian")).toContain('Unattended-Upgrade::Automatic-Reboot "false";');
+  const generated = dropInFor(DEFAULT_UPDATE_SETTINGS, "Debian");
+  expect(generated).toContain('APT::Periodic::Update-Package-Lists "always";');
+  expect(generated).toContain('APT::Periodic::Unattended-Upgrade "always";');
+  expect(generated).toContain('Unattended-Upgrade::Automatic-Reboot "false";');
 });
 
 test("Ubuntu's Allowed-Origins and the drop-in's Ubuntu pattern both match its security pocket", () => {
@@ -188,6 +191,9 @@ interface Box {
   pools: { loaded: boolean; loads: number };
   aptDir: string;
   dropIn: string;
+  updatesSystemdDir: string;
+  dailyTimerDropIn: string;
+  upgradeTimerDropIn: string;
   commands: string[];
   timers: Map<string, string>;
   phpRoot: string;
@@ -276,9 +282,17 @@ function dumpOf(aptDir: string): string {
   return out.join("\n");
 }
 
-function box(options: { installed?: boolean; timers?: Record<string, string>; failEnable?: string[]; log?: string } = {}): Box {
+function box(options: {
+  installed?: boolean;
+  timers?: Record<string, string>;
+  failEnable?: string[];
+  failAptConfig?: boolean;
+  failDaemonReload?: boolean;
+  log?: string;
+} = {}): Box {
   const dir = tempDir();
   const aptDir = join(dir, "apt.conf.d");
+  const updatesSystemdDir = join(dir, "systemd-updates");
   mkdirSync(aptDir);
   writeFileSync(join(aptDir, "20auto-upgrades"), 'APT::Periodic::Update-Package-Lists "0";\nAPT::Periodic::Unattended-Upgrade "0";\n');
   writeFileSync(join(aptDir, "50unattended-upgrades"), 'Unattended-Upgrade::Origins-Pattern {\n\t"origin=Debian,codename=${distro_codename}-security,label=Debian-Security";\n};\n');
@@ -304,11 +318,14 @@ function box(options: { installed?: boolean; timers?: Record<string, string>; fa
     commands.push(`${command} ${args.join(" ")}`);
     if (command === "dpkg-query") return installed.value ? ok("install ok installed\t2.9.1+nmu3") : { ok: false, stdout: "", stderr: "" };
     if (command === "lsb_release") return ok(args[0] === "-i" ? "Debian\n" : "bookworm\n");
-    if (command === "apt-config") return ok(dumpOf(aptDir));
+    if (command === "apt-config") return options.failAptConfig ? { ok: false, stdout: "", stderr: "Syntax error" } : ok(dumpOf(aptDir));
     if (command === "apt-cache") return ok(DEBIAN_POLICY);
     if (command === "apt-get") {
       if (args[0] === "install") installed.value = true;
       return ok();
+    }
+    if (command === "systemctl" && args[0] === "daemon-reload") {
+      return options.failDaemonReload ? { ok: false, stdout: "", stderr: "Failed to reload daemon" } : ok();
     }
     if (command === "systemctl" && args[0] === "is-enabled") return ok(`${timers.get(args[1]!) ?? ""}\n`);
     if (command === "systemctl" && args[0] === "enable") {
@@ -456,6 +473,9 @@ function box(options: { installed?: boolean; timers?: Record<string, string>; fa
     reconcile, pools, aptDir, commands, timers, phpRoot, guardConfig, settingsFile, installed, nginxConf, panelConf, cloudflareIps, nginx, fpm, panelVhost, vhostGuardPaths, valuesDb, varnish,
     fm, fileManagerGuardPaths, agent, agentDropIn, motdBanner, motdScript,
     dropIn: join(aptDir, "52clp-addons-unattended-upgrades"),
+    updatesSystemdDir,
+    dailyTimerDropIn: join(updatesSystemdDir, "apt-daily.timer.d", "52clp-addons.conf"),
+    upgradeTimerDropIn: join(updatesSystemdDir, "apt-daily-upgrade.timer.d", "52clp-addons.conf"),
     options: {
       processUid: 0,
       reconcile: { run: (command, args) => { reconcile.push(`${command} ${args.join(" ")}`); return ok(); } },
@@ -464,6 +484,7 @@ function box(options: { installed?: boolean; timers?: Record<string, string>; fa
         run,
         paths: {
           aptConfDir: aptDir, aptConf: join(dir, "apt.conf"), dropIn: join(aptDir, "52clp-addons-unattended-upgrades"),
+          systemdDir: updatesSystemdDir,
           rebootRequired: join(dir, "reboot-required"), logFile: join(dir, "log", "unattended-upgrades.log"),
           osRelease: join(dir, "os-release"),
         },
@@ -646,18 +667,52 @@ test("Hardening's header offers Lock settings until root's lock is there, then s
   }
 });
 
-test("switching on writes only the drop-in, and switching off restores the operator's own setup", async () => {
+const EXPECTED_DAILY_TIMER_DROP_IN = [
+  "# Managed by clp-addons System Tweaks. Switching automatic updates off there removes this file.",
+  "[Timer]",
+  "OnCalendar=",
+  "OnCalendar=hourly",
+  "RandomizedDelaySec=15m",
+  "",
+].join("\n");
+
+const EXPECTED_UPGRADE_TIMER_DROP_IN = [
+  "# Managed by clp-addons System Tweaks. Switching automatic updates off there removes this file.",
+  "[Timer]",
+  "OnCalendar=",
+  "OnCalendar=*:20",
+  "RandomizedDelaySec=15m",
+  "",
+].join("\n");
+
+test("switching on writes the apt and timer drop-ins, and switching off restores the operator's own setup", async () => {
   const b = box();
   const before = readFileSync(join(b.aptDir, "20auto-upgrades"), "utf8");
+  const operatorDropIn = join(dirname(b.dailyTimerDropIn), "10-operator.conf");
+  mkdirSync(dirname(operatorDropIn), { recursive: true });
+  writeFileSync(operatorDropIn, "[Timer]\nPersistent=true\n");
+
   let state = await act(b, ["set-updates"], { enabled: true });
   expect(existsSync(b.dropIn)).toBe(true);
+  expect(readFileSync(b.dailyTimerDropIn, "utf8")).toBe(EXPECTED_DAILY_TIMER_DROP_IN);
+  expect(readFileSync(b.upgradeTimerDropIn, "utf8")).toBe(EXPECTED_UPGRADE_TIMER_DROP_IN);
+  expect(statSync(b.dailyTimerDropIn).mode & 0o777).toBe(0o644);
+  expect(statSync(b.upgradeTimerDropIn).mode & 0o777).toBe(0o644);
+  expect(b.commands).toContain("systemctl daemon-reload");
   expect(state.updates.enabled).toBe(true);
   expect(state.updates.managed).toBe(true);
   expect(state.updates.coverage.find((row) => row.name === "CloudPanel PHP")!.covered).toBe("all");
   expect(state.updates.coverage.find((row) => row.name === "MySQL")!.covered).toBe("none");
 
+  b.commands.length = 0;
   state = await act(b, ["set-updates"], { enabled: false });
   expect(existsSync(b.dropIn)).toBe(false);
+  expect(existsSync(b.dailyTimerDropIn)).toBe(false);
+  expect(existsSync(b.upgradeTimerDropIn)).toBe(false);
+  // An empty .d directory is removed; one with another operator file stays intact.
+  expect(existsSync(dirname(b.upgradeTimerDropIn))).toBe(false);
+  expect(existsSync(operatorDropIn)).toBe(true);
+  expect(b.commands).toContain("systemctl daemon-reload");
   expect(state.updates.enabled).toBe(false);
   expect(readFileSync(join(b.aptDir, "20auto-upgrades"), "utf8")).toBe(before);
 });
@@ -694,19 +749,71 @@ test("a masked timer is refused before anything is written or enabled", async ()
   const b = box({ timers: { "apt-daily.timer": "disabled", "apt-daily-upgrade.timer": "masked" } });
   await expect(act(b, ["set-updates"], { enabled: true })).rejects.toThrow("apt-daily-upgrade.timer is masked");
   expect(existsSync(b.dropIn)).toBe(false);
+  expect(existsSync(b.dailyTimerDropIn)).toBe(false);
+  expect(existsSync(b.upgradeTimerDropIn)).toBe(false);
   expect(b.timers.get("apt-daily.timer")).toBe("disabled");
   expect((await act(b, ["state"])).settings.enabled).toBe(false);
 });
 
-test("a timer that cannot be enabled undoes the drop-in and the timers enabled before it", async () => {
+test("a timer that cannot be enabled undoes the apt and timer drop-ins and the timers enabled before it", async () => {
   const b = box({
     timers: { "apt-daily.timer": "disabled", "apt-daily-upgrade.timer": "disabled" },
     failEnable: ["apt-daily-upgrade.timer"],
   });
+  mkdirSync(dirname(b.dailyTimerDropIn), { recursive: true });
+  writeFileSync(b.dailyTimerDropIn, "# prior daily drop-in\n");
   await expect(act(b, ["set-updates"], { enabled: true })).rejects.toThrow("apt-daily-upgrade.timer could not be enabled");
   expect(existsSync(b.dropIn)).toBe(false);
+  expect(readFileSync(b.dailyTimerDropIn, "utf8")).toBe("# prior daily drop-in\n");
+  expect(existsSync(b.upgradeTimerDropIn)).toBe(false);
+  expect(existsSync(dirname(b.upgradeTimerDropIn))).toBe(false);
+  expect(b.commands.filter((command) => command === "systemctl daemon-reload")).toHaveLength(2);
   expect(b.timers.get("apt-daily.timer")).toBe("disabled");
   expect(existsSync(b.settingsFile)).toBe(false);
+});
+
+test("failed apt-config dump or daemon-reload rolls back the apt drop-in and previous timer drop-in state", async () => {
+  const aptFail = box({ failAptConfig: true });
+  mkdirSync(dirname(aptFail.dailyTimerDropIn), { recursive: true });
+  writeFileSync(aptFail.dailyTimerDropIn, "# previous daily\n");
+  await expect(act(aptFail, ["set-updates"], { enabled: true })).rejects.toThrow("apt rejected the configuration");
+  expect(existsSync(aptFail.dropIn)).toBe(false);
+  expect(readFileSync(aptFail.dailyTimerDropIn, "utf8")).toBe("# previous daily\n");
+  expect(existsSync(aptFail.upgradeTimerDropIn)).toBe(false);
+  expect(existsSync(aptFail.settingsFile)).toBe(false);
+
+  const reloadFail = box({ failDaemonReload: true });
+  mkdirSync(dirname(reloadFail.dailyTimerDropIn), { recursive: true });
+  writeFileSync(reloadFail.dailyTimerDropIn, "# previous daily\n");
+  await expect(act(reloadFail, ["set-updates"], { enabled: true })).rejects.toThrow("systemctl daemon-reload failed");
+  expect(existsSync(reloadFail.dropIn)).toBe(false);
+  expect(readFileSync(reloadFail.dailyTimerDropIn, "utf8")).toBe("# previous daily\n");
+  expect(existsSync(reloadFail.upgradeTimerDropIn)).toBe(false);
+  expect(existsSync(dirname(reloadFail.upgradeTimerDropIn))).toBe(false);
+  expect(reloadFail.commands.filter((command) => command === "systemctl daemon-reload")).toHaveLength(2);
+  expect(existsSync(reloadFail.settingsFile)).toBe(false);
+});
+
+test("repair restores missing and drifted timer drop-ins and skips daemon-reload when unchanged", async () => {
+  const b = box();
+  restoreSystemTweaks(b.options);
+  await act(b, ["set-updates"], { enabled: true });
+
+  b.commands.length = 0;
+  expect(systemTweaksUpkeep(b.options)).toBeNull();
+  expect(b.commands).not.toContain("systemctl daemon-reload");
+
+  rmSync(b.dailyTimerDropIn);
+  b.commands.length = 0;
+  expect(systemTweaksUpkeep(b.options)).toBe("automatic updates config restored");
+  expect(readFileSync(b.dailyTimerDropIn, "utf8")).toBe(EXPECTED_DAILY_TIMER_DROP_IN);
+  expect(b.commands).toContain("systemctl daemon-reload");
+
+  writeFileSync(b.upgradeTimerDropIn, "[Timer]\nOnCalendar=daily\n");
+  b.commands.length = 0;
+  expect(systemTweaksUpkeep(b.options)).toBe("automatic updates config restored");
+  expect(readFileSync(b.upgradeTimerDropIn, "utf8")).toBe(EXPECTED_UPGRADE_TIMER_DROP_IN);
+  expect(b.commands).toContain("systemctl daemon-reload");
 });
 
 test("a panel refusal puts a half-edited sites file back exactly, without reopening what was closed", async () => {
@@ -910,13 +1017,22 @@ test("the last run and a pending reboot are read from the log and the flag file"
   expect(status.rebootRequired?.packages).toEqual(["linux-image-6.1.0-53-amd64"]);
 });
 
-test("disabling the addon withdraws the drop-in and enabling it again restores it", async () => {
+test("disabling the addon withdraws the drop-ins and enabling it again restores them", async () => {
   const b = box();
   await act(b, ["set-updates"], { enabled: true, database: true });
+  b.commands.length = 0;
   withdrawSystemTweaks(b.options);
   expect(existsSync(b.dropIn)).toBe(false);
+  expect(existsSync(b.dailyTimerDropIn)).toBe(false);
+  expect(existsSync(b.upgradeTimerDropIn)).toBe(false);
+  expect(b.commands).toContain("systemctl daemon-reload");
+
+  b.commands.length = 0;
   restoreSystemTweaks(b.options);
   expect(readFileSync(b.dropIn, "utf8")).toContain("component=percona-*");
+  expect(readFileSync(b.dailyTimerDropIn, "utf8")).toBe(EXPECTED_DAILY_TIMER_DROP_IN);
+  expect(readFileSync(b.upgradeTimerDropIn, "utf8")).toBe(EXPECTED_UPGRADE_TIMER_DROP_IN);
+  expect(b.commands).toContain("systemctl daemon-reload");
 });
 
 // --- X-Real-IP ---------------------------------------------------------------
@@ -1432,7 +1548,7 @@ test("settings.json keeps its format and the state names its parts in a fixed or
 
 test("the page shows the vhost guard as on, waiting for repair, or off", () => {
   const html = (partial: Omit<SystemTweaksState["vhostGuard"], "homeLogs" | "ownLogrotate"> & { homeLogs?: string[]; ownLogrotate?: string[] }) => dashboardView({
-    updates: updatesStatus({ run: () => ({ ok: false, stdout: "", stderr: "" }) }), settings: { ...DEFAULT_UPDATE_SETTINGS },
+    updates: updatesStatus({ run: () => ({ ok: false, stdout: "", stderr: "" }), paths: { systemdDir: "/nonexistent" } }), settings: { ...DEFAULT_UPDATE_SETTINGS },
     uploadProgress: { guard: true, fpms: [] }, realIp: { blockForged: true, trustsAnyAddress: false, problem: "" }, visitorIp: { enabled: true, applied: true, problem: "" }, phpMyAdmin: { enabled: true, active: true, problem: "" }, vhostGuard: { homeLogs: [], ownLogrotate: [], ...partial }, phpPools: { enabled: true, active: true, problem: "" }, fileManagerGuard: { enabled: true, active: true }, panelCert: { kind: "generated" as const, replace: true }, backupCompression: { enabled: false, level: 3, threads: 1, active: false, supported: true, installed: true, problem: "" }, telemetry: { enabled: true, agent: true, blocked: true, problem: "" }, motd: { enabled: true, script: true, banner: false }, clpctlGuard: { error: "" }, panelPhp: { error: "" }, firewall: { error: "" }, loginJails: { error: "" }, database: { error: "" },
   });
   expect(html({ enabled: true, active: true, stored: [] })).toContain("Panel input is checked before CloudPanel writes it into a vhost.");
@@ -1472,7 +1588,7 @@ test("PHP pool isolation switches from the page, repair puts it back, and the PH
 
 test("the page shows PHP pool isolation as on, waiting for repair, or off", () => {
   const html = (phpPools: SystemTweaksState["phpPools"]) => dashboardView({
-    updates: updatesStatus({ run: () => ({ ok: false, stdout: "", stderr: "" }) }), settings: { ...DEFAULT_UPDATE_SETTINGS },
+    updates: updatesStatus({ run: () => ({ ok: false, stdout: "", stderr: "" }), paths: { systemdDir: "/nonexistent" } }), settings: { ...DEFAULT_UPDATE_SETTINGS },
     uploadProgress: { guard: true, fpms: [] }, realIp: { blockForged: true, trustsAnyAddress: false, problem: "" }, visitorIp: { enabled: true, applied: true, problem: "" },
     phpMyAdmin: { enabled: true, active: true, problem: "" }, vhostGuard: { enabled: true, active: true, stored: [], homeLogs: [], ownLogrotate: [] }, phpPools, fileManagerGuard: { enabled: true, active: true }, panelCert: { kind: "generated" as const, replace: true }, backupCompression: { enabled: false, level: 3, threads: 1, active: false, supported: true, installed: true, problem: "" }, telemetry: { enabled: true, agent: true, blocked: true, problem: "" }, motd: { enabled: true, script: true, banner: false }, clpctlGuard: { error: "" }, panelPhp: { error: "" }, firewall: { error: "" }, loginJails: { error: "" }, database: { error: "" },
   });
@@ -1547,7 +1663,7 @@ test("a loaded block the kernel does not enforce is not called blocked, and one 
 
 test("the page shows telemetry as blocked, waiting for repair, sending, or without an agent", () => {
   const html = (telemetry: SystemTweaksState["telemetry"]) => dashboardView({
-    updates: updatesStatus({ run: () => ({ ok: false, stdout: "", stderr: "" }) }), settings: { ...DEFAULT_UPDATE_SETTINGS },
+    updates: updatesStatus({ run: () => ({ ok: false, stdout: "", stderr: "" }), paths: { systemdDir: "/nonexistent" } }), settings: { ...DEFAULT_UPDATE_SETTINGS },
     uploadProgress: { guard: true, fpms: [] }, realIp: { blockForged: true, trustsAnyAddress: false, problem: "" }, visitorIp: { enabled: true, applied: true, problem: "" },
     phpMyAdmin: { enabled: true, active: true, problem: "" }, vhostGuard: { enabled: true, active: true, stored: [], homeLogs: [], ownLogrotate: [] }, phpPools: { enabled: true, active: true, problem: "" }, fileManagerGuard: { enabled: true, active: true }, panelCert: { kind: "generated" as const, replace: true }, backupCompression: { enabled: false, level: 3, threads: 1, active: false, supported: true, installed: true, problem: "" }, telemetry, motd: { enabled: true, script: true, banner: false }, clpctlGuard: { error: "" }, panelPhp: { error: "" }, firewall: { error: "" }, loginJails: { error: "" }, database: { error: "" },
   });
@@ -1611,7 +1727,7 @@ test("the server info script is valid sh", () => {
 
 test("the page shows the login message as server info, waiting for repair, or CloudPanel's banner", () => {
   const html = (motd: SystemTweaksState["motd"]) => dashboardView({
-    updates: updatesStatus({ run: () => ({ ok: false, stdout: "", stderr: "" }) }), settings: { ...DEFAULT_UPDATE_SETTINGS },
+    updates: updatesStatus({ run: () => ({ ok: false, stdout: "", stderr: "" }), paths: { systemdDir: "/nonexistent" } }), settings: { ...DEFAULT_UPDATE_SETTINGS },
     uploadProgress: { guard: true, fpms: [] }, realIp: { blockForged: true, trustsAnyAddress: false, problem: "" }, visitorIp: { enabled: true, applied: true, problem: "" },
     phpMyAdmin: { enabled: true, active: true, problem: "" }, vhostGuard: { enabled: true, active: true, stored: [], homeLogs: [], ownLogrotate: [] }, phpPools: { enabled: true, active: true, problem: "" }, fileManagerGuard: { enabled: true, active: true }, panelCert: { kind: "generated" as const, replace: true }, backupCompression: { enabled: false, level: 3, threads: 1, active: false, supported: true, installed: true, problem: "" }, telemetry: { enabled: true, agent: true, blocked: true, problem: "" }, motd, clpctlGuard: { error: "" }, panelPhp: { error: "" }, firewall: { error: "" }, loginJails: { error: "" }, database: { error: "" },
   });
@@ -1900,6 +2016,8 @@ test("the page shows update options only once updates are on, and says what sile
     settings: { ...DEFAULT_UPDATE_SETTINGS, enabled: true, reboot: true },
     updates: { ...updates, managed: true, reboot: true, coverage: updates.coverage.map((row) => ({ ...row, covered: "all" as const })) },
   }, now);
+  expect(managed).toContain("Runs every hour.");
+  expect(managed).toContain("Every hour, with the distro&#x27;s unattended-upgrades: its security updates and every PHP version CloudPanel ships.");
   expect(managed).toContain('data-setting="nginx"');
   expect(managed).toContain('<option value="now" selected>Right after the update run</option>');
   expect(managed).not.toContain("skip CloudPanel's PHP");

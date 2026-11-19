@@ -90,14 +90,19 @@ be missed; the login jails are raised on their own.
 
 ## Automatic updates
 
-Updates use the distro's own `unattended-upgrades`. Everything System Tweaks
-sets is one drop-in, `/etc/apt/apt.conf.d/52clp-addons-unattended-upgrades`. It
-sorts after `20auto-upgrades` and `50unattended-upgrades`, so its scalars win
-over those and its `Origins-Pattern` entries add to the distro's list. Any later
-operator file still has the last word. Switching off deletes only that file, so
-the operator's previous setup comes back. The file sets:
+Updates use the distro's own `unattended-upgrades`. System Tweaks writes one apt
+drop-in, `/etc/apt/apt.conf.d/52clp-addons-unattended-upgrades`, and two systemd
+timer drop-ins, `/etc/systemd/system/apt-daily.timer.d/52clp-addons.conf` and
+`/etc/systemd/system/apt-daily-upgrade.timer.d/52clp-addons.conf`. The apt
+drop-in sorts after `20auto-upgrades` and `50unattended-upgrades`, so its
+scalars win over those and its `Origins-Pattern` entries add to the distro's
+list. Any later operator file still has the last word. Switching off deletes
+only those three files (and removes empty `.d` directories), so the operator's
+previous apt setup and systemd timer schedules come back. The apt drop-in sets:
 
-- `APT::Periodic::Update-Package-Lists` and `Unattended-Upgrade` to `1`;
+- `APT::Periodic::Update-Package-Lists` and `Unattended-Upgrade` to `"always"`,
+  so `apt.systemd.daily` runs on every timer trigger rather than skipping runs
+  within a 24-hour window;
 - the distro's security pocket: Debian matches
   `codename=${distro_codename}-security,label=Debian-Security`, and Ubuntu matches
   `archive=${distro_codename}-security`;
@@ -108,6 +113,11 @@ the operator's previous setup comes back. The file sets:
   `HH:MM`. The first switch-on copies the box's effective values, so a policy
   the operator already had stays in place; a time the page cannot offer, such
   as `+15`, becomes `now`.
+
+The two systemd timer drop-ins reset `OnCalendar=` and schedule hourly runs with
+a 15-minute `RandomizedDelaySec`: `OnCalendar=hourly` for `apt-daily.timer` to
+refresh package lists, and `OnCalendar=*:20` for `apt-daily-upgrade.timer` to
+install upgrades twenty minutes past the hour.
 
 PHP is always in because CloudPanel's PHP builds come only from its own
 repository. Debian's security pocket alone would not have patched the php2shell
@@ -129,14 +139,18 @@ drop-in against each release's real `unattended-upgrades` matcher in Docker.
 The containers do not boot systemd; timer ownership and restoration are tested
 separately with the action fixtures.
 
-Each write is parsed with `apt-config dump` before it is kept; a rejected file is
-put back as it was. If `apt-daily.timer` or `apt-daily-upgrade.timer` is
-disabled, switching on enables it and records that in the settings; switching
-off disables only the timers it enabled. Both timers are read before anything
-changes: a masked one is refused, not unmasked, and a timer that will not enable
-undoes the drop-in and any timer that switch-on had enabled. The repair timer rewrites the drop-in when it has drifted from the
-stored choice. Disabling the addon removes the drop-in and those timers, and
-enabling it again restores both.
+Each apt drop-in write is parsed with `apt-config dump` before it is kept, and
+any write or removal of the systemd timer drop-ins runs `systemctl daemon-reload`.
+If `apt-daily.timer` or `apt-daily-upgrade.timer` is disabled, switching on
+enables it and records that in the settings; switching off disables only the
+timers it enabled. Both timers are read before anything changes: a masked one is
+refused, not unmasked. If `apt-config dump`, `systemctl daemon-reload`, or
+`systemctl enable` fails, the apt drop-in, both timer drop-ins (with
+`systemctl daemon-reload` if they were modified), and any timer just enabled are
+rolled back. The repair timer rewrites the apt drop-in and timer drop-ins when
+any of them is missing or has drifted from the stored choice. Disabling the
+addon removes all three drop-ins and those timers, and enabling it again
+restores them.
 
 If `unattended-upgrades` is missing, the page says so and offers an install
 button. That button runs a fixed `apt-get install unattended-upgrades` and

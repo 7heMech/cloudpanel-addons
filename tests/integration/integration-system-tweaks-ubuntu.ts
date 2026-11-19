@@ -34,7 +34,8 @@ assert covered('packages-v1.cloudpanel.io', '', 'php-8.3')
 assert covered('packages-v1.cloudpanel.io', '', 'nginx')
 assert not covered('packages-v1.cloudpanel.io', '', 'main')
 assert not covered('packages-v1.cloudpanel.io', '', 'percona-server-server-8.0')
-assert apt_pkg.config.find('APT::Periodic::Unattended-Upgrade') == '1'
+assert apt_pkg.config.find('APT::Periodic::Update-Package-Lists') == 'always'
+assert apt_pkg.config.find('APT::Periodic::Unattended-Upgrade') == 'always'
 assert not apt_pkg.config.find_b('Unattended-Upgrade::Automatic-Reboot')
 shutil.copyfile('/probe/timed-drop-in', target)
 for key in list(apt_pkg.config.keys()):

@@ -16,6 +16,7 @@ export const SYSTEM_TWEAKS_ADDON: AddonDefinition = {
   description: "Server security, automatic updates, panel PHP, remote backup compression, SSH login message.",
   added: "2.0.0-rc.1",
   changed: [
+    { in: "2.1.1", note: "Automatic updates now check every hour instead of once a day." },
     { in: "2.1.0-rc.4", note: "Lock settings moved into the Hardening card." },
     { in: "2.1.0-rc.4", note: "Sites behind Cloudflare see the visitor's IP; move a vhost's port 8080 IP rules to its first server." },
     { in: "2.1.0-rc.3", note: "Lock settings turns every protection on, and only root can unlock. New installs start locked; updates don't." },
