@@ -484,14 +484,12 @@ export async function hetznerView(options: HetznerOptions = {}): Promise<Hetzner
   const now = (options.now ?? Date.now)();
   const token = readToken(paths);
   if (!token && (readSync(paths).absentUntil ?? 0) > now) return { state: "absent" };
-  const [serverId, hostname] = token
-    ? [await serverIdOf(paths, options), null]
-    : await Promise.all([hetznerServerId(options.fetch), hetznerHostname(options.fetch)]);
+  const serverId = token ? await serverIdOf(paths, options) : await hetznerServerId(options.fetch);
   if (serverId === null) {
     writeSync(paths, { absentUntil: now + ABSENT_FOR_MS });
     return { state: "absent" };
   }
-  if (!token) return { state: "disconnected", serverId, serverName: hostname };
+  if (!token) return { state: "disconnected", serverId, serverName: await hetznerHostname(options.fetch) };
   const api = apiFor(token, options);
   try {
     const [server, firewalls] = await Promise.all([api.server(serverId), api.firewalls()]);
@@ -513,16 +511,17 @@ export async function hetznerView(options: HetznerOptions = {}): Promise<Hetzner
         stillOpen: on && ranges ? describeOpenings(openToOthers(role, others, ranges.ranges)) : [],
       };
     }
-    // Only while no change holds the lock, which records what it sees itself, and only while the token is
-    // still saved, so a page read racing its removal does not bring hetzner.json back.
+    // Only while no change holds the lock, which records what it sees itself; only while the token is still
+    // saved, so a read racing its removal does not bring hetzner.json back; and only when nothing recorded
+    // since this read began, whose view would be newer.
     await withHetznerLock(paths, async () => {
-      if (readToken(paths)) remember(paths, { web: roles.web.on, panel: roles.panel.on }, now);
+      if (readToken(paths) && (readSync(paths).seenAt ?? 0) < now) remember(paths, { web: roles.web.on, panel: roles.panel.on }, now);
     }, 0).catch(() => {});
     return {
       state: "connected", serverId, serverName: server.name, roles,
       others: others.map((firewall) => firewall.name),
       terminal: existsSync(paths.terminalConfig),
-      sshClosed: attached.some((firewall) => roleOf(firewall)) ? sshMissing(sshPortsOr22(options.run), others) : [],
+      sshClosed: attached.some((firewall) => roleOf(firewall)) ? sshMissing(sshPorts(options.run), others) : [],
       rangesProblem,
     };
   } catch (error) {
@@ -936,10 +935,11 @@ interface Step { what: string; run: () => Promise<void>; undo: () => Promise<voi
 
 /**
  * Carries out a plan one firewall at a time. Turning on attaches the role's
- * Cloudflare firewall first, so a refusal there changes nothing; open
- * firewalls go on before any comes off, unless Hetzner's limit leaves no
- * room. A step that fails puts back what the earlier ones did, and the
- * failure says what is attached if that fails too.
+ * Cloudflare firewall first, so a refusal there leaves what is attached as it
+ * was; open firewalls go on before any comes off. At Hetzner's limit there is
+ * no room for that, so firewalls come off first and a refused attach follows
+ * them. A step that fails puts back what the earlier ones did, and the failure
+ * says what is attached if that fails too.
  */
 async function apply(ctx: Context, role: HetznerRole, enabled: boolean, plan: Plan, list: CloudflareRanges | null): Promise<void> {
   const attached = new Set(ctx.attached.map((firewall) => firewall.name));
@@ -974,7 +974,8 @@ async function apply(ctx: Context, role: HetznerRole, enabled: boolean, plan: Pl
       done.push(step);
     } catch (error) {
       const failure = failureText(ctx.api, error, step.what);
-      if (!done.length) failAction(`${failure}. Nothing was changed.`);
+      // attach() may have created or rewritten a firewall it then could not apply; repair deletes one nothing uses.
+      if (!done.length) failAction(`${failure}. Nothing was attached or taken off.`);
       for (const back of done.reverse()) {
         try { await back.undo(); } catch (undoError) {
           failAction(`${failure}. Putting back what the change had done failed too (${failureText(ctx.api, undoError, back.what)}); attached to this server now: ${[...attached].join(", ") || "nothing"}.`);

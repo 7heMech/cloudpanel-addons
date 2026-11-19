@@ -125,6 +125,7 @@ async function connectHetzner(event) {
   const problem = CLP_ROOT.getElementById('hz-connect-error');
   const token = input.value.trim();
   if (!token) return;
+  clearNotice();
   problem.hidden = true;
   busy(true);
   let reply = null;
@@ -140,13 +141,19 @@ async function connectHetzner(event) {
   } finally {
     busy(false);
   }
+  const dialog = CLP_ROOT.getElementById('hz-connect-dialog');
   if (failure) {
+    // Escape or the backdrop may have closed it meanwhile.
+    if (!dialog.open) {
+      notify('Could not connect Hetzner: ' + failure, 'error');
+      return;
+    }
     problem.textContent = failure;
     problem.hidden = false;
     input.focus();
     return;
   }
-  CLP_ROOT.getElementById('hz-connect-dialog').close();
+  dialog.close();
   const state = await repaint();
   hetznerNotice(Object.assign(state, { reply: reply.data }));
 }

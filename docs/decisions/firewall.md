@@ -239,13 +239,14 @@ of the role's ports, so where the operator's firewalls allow some of them, a
 port they leave closed stays closed, and the review names it. With no switch on and no firewall of the
 operator's, the plan is empty and Hetzner lets anyone reach every port again.
 Turning a switch on attaches its Cloudflare firewall first, so a refusal there
-changes nothing. Open firewalls go on before any comes off, so for the few
+leaves what is attached as it was; a firewall it created or rewrote meanwhile
+is tidied by repair. Open firewalls go on before any comes off, so for the few
 seconds a change takes nothing the plan keeps open is closed, beyond what the
 first attach closes. Hetzner applies at most five firewalls to a server: a
 change that would leave more is refused, and one with no room to add first
-takes off first. A firewall taken off is deleted only once every step held; a
-step that fails puts back what the earlier ones did, and if that fails too, the
-error says what is attached.
+takes off first, so a refused attach comes after that. A firewall taken off is
+deleted only once every step held; a step that fails puts back what the earlier
+ones did, and if that fails too, the error says what is attached.
 Per role only one of the two is meant to be on a server; an open firewall left
 beside its Cloudflare one by a change that failed half way only lets everyone
 else in, so the card warns, and repair or a request to turn the switch on
@@ -276,8 +277,8 @@ close, the way back, and, when ports close, the server's name to type.
 
 - Closing ports: the review compares what can be reached before and after the
   change for the ports sshd listens on, from `ss -Htlnp` (processes named
-  `sshd`), from `sshd -T` when ss shows none, or 22 when neither names one,
-  and for each rule on
+  `sshd`), from `sshd -T` when ss shows none, or 22 in a review when neither
+  names one, and for each rule on
   CloudPanel's Firewall page, with its Protocol. With no firewall attached,
   everything can be reached; otherwise a port needs one inbound rule covering
   it, from any source, for IPv4 and for IPv6 apart, and a port that keeps only
@@ -338,7 +339,7 @@ the result says what could not be checked.
 when: the page's read, a switch and repair each write it, under the Hetzner
 lock and only while a token is saved, so a read racing the token's removal
 cannot bring the file back. A page read skips the write while a change holds
-the lock. `hetznerSetupState`
+the lock, and when something recorded after the read began. `hetznerSetupState`
 returns that, whether a token is saved, and whether this is Hetzner Cloud
 (`/sys/class/dmi/id/sys_vendor` is `Hetzner`, or a token is saved), without
 asking Hetzner, so the checklist costs no request when a page loads.

@@ -328,7 +328,7 @@ describe("safeguards", () => {
     const fake = new FakeHetzner(TOKEN);
     fake.firewall("clp-addons-cloudflare-web", [anyone("80")], []);
     const server = await connected(fake);
-    expect(await refusal(turn(server, "web", true))).toContain("without the label managed-by=clp-addons; rename or delete it in Hetzner's console. Nothing was changed.");
+    expect(await refusal(turn(server, "web", true))).toContain("without the label managed-by=clp-addons; rename or delete it in Hetzner's console. Nothing was attached or taken off.");
     expect(fake.attachedTo(SERVER)).toEqual([]);
   });
 
@@ -661,6 +661,11 @@ describe("the Setup checklist's reader", () => {
     const calls = fake.calls.length;
     hetznerSetupState(server.options);
     expect(fake.calls).toHaveLength(calls);
+    // A page read that began before that repair does not put back what it saw.
+    fake.firewall("clp-addons-cloudflare-web", desiredRules("web", RANGES), [SERVER], { "managed-by": "clp-addons", "clp-addons-role": "web" });
+    const stale = { ...server.options, now: () => now - 500 };
+    await hetznerView(stale);
+    expect(hetznerSetupState(server.options)).toMatchObject({ seen: { web: false, panel: false }, seenAt: now });
   });
 });
 
