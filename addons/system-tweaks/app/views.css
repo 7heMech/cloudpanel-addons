@@ -31,6 +31,7 @@
 .st-option-row label:not(.switch) { color: var(--text); font-weight: 500; }
 .st-option-row .hint { margin: 2px 0 0; font-size: 13px; }
 .st-option-row .switch { flex: 0 0 auto; margin: 0; }
+.st-option-row select { flex: 0 1 200px; width: auto; min-width: 0; }
 .st-reboot-time { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 10px; margin-top: 12px; }
 .st-reboot-time select { flex: 0 1 280px; min-width: 0; }
 .st-reboot-time input { flex: 0 1 170px; min-width: 0; }
@@ -46,8 +47,8 @@
 .tweak-heading select { flex: 0 1 260px; width: auto; min-width: 0; }
 #panel-php-status:empty { display: none; }
 @media (max-width: 760px) {
-  .tweak-heading:has(select) { flex-wrap: wrap; }
-  .tweak-heading select { flex: 1 1 100%; }
+  .tweak-heading:has(select), .st-option-row:has(select) { flex-wrap: wrap; }
+  .tweak-heading select, .st-option-row select { flex: 1 1 100%; }
 }
 
 .st-working .badge { animation: st-pulse 1.2s ease-in-out infinite; }

@@ -15,9 +15,10 @@ import {
 } from "../addons/system-tweaks/action";
 import { LOCK_SETTINGS, type SystemTweaksState } from "../addons/system-tweaks/registry";
 import {
-  allowedPatterns, coverageOf, dropInFor, fnmatch, parseAptConfig, parsePolicy, updatesStatus, DEFAULT_UPDATE_SETTINGS, type UpdatesStatus,
+  allowedPatterns, coverageOf, dropInFor, fnmatch, parseAptConfig, parsePolicy, updatesStatus,
+  DEFAULT_UPDATE_SETTINGS, SCHEDULE_ERROR, UPDATE_SCHEDULES, validUpdateSchedule, type UpdatesStatus,
 } from "../addons/system-tweaks/updates";
-import { iniBoolean, iniSetting, uploadProgressStatus } from "../addons/system-tweaks/upload-progress";
+import { iniBoolean, iniSetting, phpDefaultUploadProgress, uploadProgressStatus } from "../addons/system-tweaks/upload-progress";
 import { dashboardView } from "../addons/system-tweaks/app/views";
 import { isSwitchVerb } from "../addons/system-tweaks/app/service";
 import { releaseRealIp } from "../addons/system-tweaks/real-ip";
@@ -188,6 +189,10 @@ interface Box {
   pools: { loaded: boolean; loads: number };
   aptDir: string;
   dropIn: string;
+  systemdDir: string;
+  dailyTimerDropIn: string;
+  upgradeTimerDropIn: string;
+  updatesFail: { aptConfig: boolean; daemonReload: boolean };
   commands: string[];
   timers: Map<string, string>;
   phpRoot: string;
@@ -297,6 +302,7 @@ function box(options: { installed?: boolean; timers?: Record<string, string>; fa
   }
   const timers = new Map(Object.entries(options.timers ?? { "apt-daily.timer": "enabled", "apt-daily-upgrade.timer": "enabled" }));
   const installed = { value: options.installed !== false };
+  const updatesFail = { aptConfig: false, daemonReload: false };
   const commands: string[] = [];
   const reconcile: string[] = [];
   const ok = (stdout = ""): CommandResult => ({ ok: true, stdout, stderr: "" });
@@ -304,10 +310,17 @@ function box(options: { installed?: boolean; timers?: Record<string, string>; fa
     commands.push(`${command} ${args.join(" ")}`);
     if (command === "dpkg-query") return installed.value ? ok("install ok installed\t2.9.1+nmu3") : { ok: false, stdout: "", stderr: "" };
     if (command === "lsb_release") return ok(args[0] === "-i" ? "Debian\n" : "bookworm\n");
-    if (command === "apt-config") return ok(dumpOf(aptDir));
+    if (command === "apt-config") {
+      if (updatesFail.aptConfig) return { ok: false, stdout: "", stderr: "E: Syntax error" };
+      return ok(dumpOf(aptDir));
+    }
     if (command === "apt-cache") return ok(DEBIAN_POLICY);
     if (command === "apt-get") {
       if (args[0] === "install") installed.value = true;
+      return ok();
+    }
+    if (command === "systemctl" && args[0] === "daemon-reload") {
+      if (updatesFail.daemonReload) return { ok: false, stdout: "", stderr: "Failed to reload daemon" };
       return ok();
     }
     if (command === "systemctl" && args[0] === "is-enabled") return ok(`${timers.get(args[1]!) ?? ""}\n`);
@@ -452,10 +465,13 @@ function box(options: { installed?: boolean; timers?: Record<string, string>; fa
     isActive: () => false,
     paths: { phpRoot, fpmBinDir: sbin, rootUid: uid },
   };
+  const systemdDir = join(dir, "systemd");
   return {
-    reconcile, pools, aptDir, commands, timers, phpRoot, guardConfig, settingsFile, installed, nginxConf, panelConf, cloudflareIps, nginx, fpm, panelVhost, vhostGuardPaths, valuesDb, varnish,
+    reconcile, pools, aptDir, systemdDir, updatesFail, commands, timers, phpRoot, guardConfig, settingsFile, installed, nginxConf, panelConf, cloudflareIps, nginx, fpm, panelVhost, vhostGuardPaths, valuesDb, varnish,
     fm, fileManagerGuardPaths, agent, agentDropIn, motdBanner, motdScript,
     dropIn: join(aptDir, "52clp-addons-unattended-upgrades"),
+    dailyTimerDropIn: join(systemdDir, "apt-daily.timer.d", "52clp-addons.conf"),
+    upgradeTimerDropIn: join(systemdDir, "apt-daily-upgrade.timer.d", "52clp-addons.conf"),
     options: {
       processUid: 0,
       reconcile: { run: (command, args) => { reconcile.push(`${command} ${args.join(" ")}`); return ok(); } },
@@ -464,6 +480,7 @@ function box(options: { installed?: boolean; timers?: Record<string, string>; fa
         run,
         paths: {
           aptConfDir: aptDir, aptConf: join(dir, "apt.conf"), dropIn: join(aptDir, "52clp-addons-unattended-upgrades"),
+          systemdDir,
           rebootRequired: join(dir, "reboot-required"), logFile: join(dir, "log", "unattended-upgrades.log"),
           osRelease: join(dir, "os-release"),
         },
@@ -777,7 +794,7 @@ function systemTweaksClient() {
   // As the page has it: working() is shared, in TWEAK_ROW_JS.
   const source = TWEAK_ROW_JS + readFileSync(join(import.meta.dir, "../addons/system-tweaks/app/views.client.js"), "utf8");
   const events: string[] = [];
-  const replies: { path: string; body: string; answer: (body: unknown) => void }[] = [];
+  const replies: { path: string; body: string; answer: (body: unknown) => void; fail: (error: Error) => void }[] = [];
   const lines: { textContent: string; removed: boolean }[] = [];
   const row = {
     querySelector: () => ({ after: (line: { textContent: string }) => events.push(`working: ${line.textContent}`) }),
@@ -795,10 +812,10 @@ function systemTweaksClient() {
     },
   };
   const client = new Function("call", "busy", "notify", "clearNotice", "repaintView", "CLP_ROOT", "clpFlashTimer", "document", "location", "confirmAction",
-    `${source}\nreturn { installUpdates, setUpdates, setPanelPhp, setSwitch, lockSettings };`)(
-    (path: string, options: { body: string }) => new Promise((answer) => {
+    `${source}\nreturn { installUpdates, setUpdates, setUpdateSchedule, setPanelPhp, setSwitch, lockSettings };`)(
+    (path: string, options: { body: string }) => new Promise((answer, fail) => {
       events.push(`POST ${path} ${options.body}`);
-      replies.push({ path, body: options.body, answer });
+      replies.push({ path, body: options.body, answer, fail });
     }),
     (on: boolean) => events.push(on ? "busy" : "idle"),
     (message: string, kind: string) => events.push(`${kind}: ${message}`),
@@ -810,7 +827,7 @@ function systemTweaksClient() {
     // The page is repainted from each reply; reloading it would lose the notice.
     { reload: () => events.push("reload") },
     async () => true,
-  ) as Record<"installUpdates" | "setUpdates" | "setPanelPhp" | "lockSettings", (control: unknown) => Promise<void>> & { setSwitch: (control: unknown, name: string) => Promise<void> };
+  ) as Record<"installUpdates" | "setUpdates" | "setUpdateSchedule" | "setPanelPhp" | "lockSettings", (control: unknown) => Promise<void>> & { setSwitch: (control: unknown, name: string) => Promise<void> };
   return { client, control, events, replies, lines };
 }
 
@@ -1659,6 +1676,210 @@ test("with nothing set anywhere PHP's default leaves it on", () => {
   expect(uploadProgressStatus(b.options.uploadProgress)[0]).toMatchObject({ enabled: true, setBy: "default", offWithoutGuard: false });
 });
 
+test("phpDefaultUploadProgress detects the CVE-2026-115560 built-in default flip and fails safe to On", () => {
+  // Patched releases where PHP flipped the built-in default to Off.
+  for (const version of [
+    "8.2.36-1+clp-bookworm",
+    "1:8.2.36-1+0~20261119.88+debian12~1.gbp123456",
+    "8.2.37~rc1-1+clp-bookworm",
+    "8.3.37-1+clp-bookworm",
+    "8.4.28-1+clp-bookworm",
+    "8.5.13-1+clp-bookworm",
+    "8.6.0-1+clp-bookworm",
+    "8.6.0-1~deb12u1",
+    "8.6.1~rc1-1+clp-bookworm",
+    "8.7.0~alpha1-1+clp-bookworm",
+    "9.0.0-1+clp-bookworm",
+  ]) {
+    expect(phpDefaultUploadProgress(version)).toBe(false);
+  }
+  // Older/EOL, unpatched, pre-release before the flip, or missing/unparseable: fail safe to On.
+  for (const version of [
+    undefined,
+    "",
+    "not-a-version",
+    "8.2",
+    "7.4.33-1+clp-bookworm",
+    "8.0.30-1+clp-bookworm",
+    "8.1.34-2+clp-bookworm",
+    "8.2.35-1+clp-bookworm",
+    "8.2.36~rc1-1+clp-bookworm",
+    "1:8.2.36~rc1-1+0~20261119",
+    "8.3.36-1+clp-bookworm",
+    "8.3.37~rc1-1+clp-bookworm",
+    "8.4.27-1+clp-bookworm",
+    "8.4.28~rc1-1+clp-bookworm",
+    "8.5.12-1+clp-bookworm",
+    "8.5.13~rc1-1+clp-bookworm",
+    "8.6.0~rc7-1+clp-bookworm",
+  ]) {
+    expect(phpDefaultUploadProgress(version)).toBe(true);
+  }
+});
+
+test("patched PHP versions default to Off with guard opted out and render cleanly", async () => {
+  const b = box();
+  const sbin = b.options.uploadProgress!.paths!.fpmBinDir!;
+  for (const version of ["8.2", "8.4", "8.5", "8.6"]) {
+    mkdirSync(join(b.phpRoot, version, "fpm", "conf.d"), { recursive: true });
+    mkdirSync(join(b.phpRoot, version, "fpm", "pool.d"), { recursive: true });
+    writeFileSync(join(b.phpRoot, version, "fpm", "php.ini"), "[Session]\n;session.upload_progress.enabled = On\n");
+    writeFileSync(join(sbin, `php-fpm${version}`), "");
+  }
+  const dpkgCalls: string[][] = [];
+  const pkgLines = [
+    "php8.1-fpm\tinstall ok installed\t8.1.34-2+clp-bookworm",
+    "php8.2-fpm\tinstall ok installed\t1:8.2.36-1+0~20261119.1+debian12~1.gbp000",
+    "php8.3-fpm\tinstall ok installed\t8.3.37-1+clp-bookworm",
+    "php8.4-fpm\tinstall ok installed\t8.4.28-1+clp-bookworm",
+    "php8.5-fpm\tinstall ok installed\t8.5.13-1+clp-bookworm",
+    "php8.6-fpm\tinstall ok installed\t8.6.0-1+clp-bookworm",
+  ].join("\n") + "\n";
+  const baseRun = b.options.uploadProgress!.run!;
+  b.options.uploadProgress = {
+    ...b.options.uploadProgress,
+    run: (command, args) => {
+      if (command === "dpkg-query") {
+        dpkgCalls.push(args);
+        return { ok: true, stdout: pkgLines, stderr: "" };
+      }
+      return baseRun(command, args);
+    },
+  };
+
+  // Guard off: patched 8.2/8.3/8.4/8.5/8.6 and panel (8.3) are Off by PHP's default; EOL 8.1 stays On.
+  const rows = uploadProgressStatus(b.options.uploadProgress);
+  expect(dpkgCalls).toHaveLength(1);
+  expect(dpkgCalls[0]).toEqual([
+    "-W", "-f=${Package}\t${Status}\t${Version}\n",
+    "php8.1-fpm", "php8.2-fpm", "php8.3-fpm", "php8.4-fpm", "php8.5-fpm", "php8.6-fpm",
+  ]);
+  expect(rows.map((row) => [row.label, row.enabled, row.setBy, row.offWithoutGuard])).toEqual([
+    ["PHP 8.1", true, "default", false],
+    ["PHP 8.2", false, "default", true],
+    ["PHP 8.3", false, "default", true],
+    ["PHP 8.4", false, "default", true],
+    ["PHP 8.5", false, "default", true],
+    ["PHP 8.6", false, "default", true],
+    ["CloudPanel (PHP 8.3)", false, "default", true],
+  ]);
+
+  // Dashboard renders "PHP's default." with an Off badge (never "Set by your config in .") and mentions both CVEs.
+  const rowHtml = (name: string, detail: string, stateBadge: string) =>
+    `<tr><td><span class="st-name">${Bun.escapeHTML(name)}</span><span class="hint st-detail">${Bun.escapeHTML(detail)}</span></td>\n            <td class="st-state">${stateBadge}</td></tr>`;
+  const state = await act(b, ["set-upload-guard"], { enabled: false });
+  const html = dashboardView(state);
+  expect(html).toContain("CVE-2026-109619");
+  expect(html).toContain("CVE-2026-115560");
+  expect(html).not.toContain("Set by your config in .");
+  expect(html).toContain(rowHtml("PHP 8.4", "PHP's default.", '<span class="badge tone-ok">Off</span>'));
+  expect(html).toContain(rowHtml("PHP 8.1", "PHP's default.", '<span class="badge tone-bad">On</span>'));
+
+  // Guard on: patched version without operator config does NOT falsely say "and your own config".
+  const guardedState = await act(b, ["set-upload-guard"], { enabled: true });
+  const guardedHtml = dashboardView(guardedState);
+  const php84 = guardedState.uploadProgress.fpms.find((row) => row.label === "PHP 8.4")!;
+  expect(php84).toMatchObject({ enabled: false, setBy: "clp-addons", offWithoutGuard: true, offWithoutGuardBy: "default" });
+  expect(guardedHtml).toContain(rowHtml("PHP 8.4", "Set by clp-addons (also PHP's default).", '<span class="badge tone-ok">Off</span>'));
+  expect(guardedHtml).not.toContain('<span class="st-name">PHP 8.4</span><span class="hint st-detail">Set by clp-addons and your own config.');
+
+  // Operator config explicitly turning it Off on a patched version still says "and your own config".
+  writeFileSync(join(b.phpRoot, "8.4", "fpm", "conf.d", "30-custom.ini"), "session.upload_progress.enabled = Off\n");
+  // Operator php.ini explicitly turning it On before the guard: without guard it would be On, so guard says only "Set by clp-addons.".
+  writeFileSync(join(b.phpRoot, "8.5", "fpm", "php.ini"), "[Session]\nsession.upload_progress.enabled = On\n");
+  const mixedHtml = dashboardView(await act(b, ["state"]));
+  expect(mixedHtml).toContain(rowHtml("PHP 8.4", "Set by clp-addons and your own config.", '<span class="badge tone-ok">Off</span>'));
+  expect(mixedHtml).toContain(rowHtml("PHP 8.5", "Set by clp-addons.", '<span class="badge tone-ok">Off</span>'));
+});
+
+test("patched PHP still reports On when operator ini or pool explicitly enables upload progress", async () => {
+  const b = box();
+  const sbin = b.options.uploadProgress!.paths!.fpmBinDir!;
+  mkdirSync(join(b.phpRoot, "8.6", "fpm", "conf.d"), { recursive: true });
+  mkdirSync(join(b.phpRoot, "8.6", "fpm", "pool.d"), { recursive: true });
+  writeFileSync(join(b.phpRoot, "8.6", "fpm", "php.ini"), "[Session]\nsession.upload_progress.enabled = On\n");
+  writeFileSync(join(sbin, "php-fpm8.6"), "");
+  writeFileSync(join(b.phpRoot, "8.3", "fpm", "pool.d", "legacy.conf"), "[legacy]\nphp_admin_flag[session.upload_progress.enabled] = on\n");
+
+  const baseRun = b.options.uploadProgress!.run!;
+  b.options.uploadProgress = {
+    ...b.options.uploadProgress,
+    run: (command, args) => {
+      if (command === "dpkg-query") {
+        // Non-zero exit (one package missing) with stdout still listing installed packages.
+        return {
+          ok: false,
+          stdout: [
+            "php8.3-fpm\tinstall ok installed\t8.3.37-1+clp-bookworm",
+            "php8.6-fpm\tinstall ok installed\t8.6.0-1+clp-bookworm",
+          ].join("\n") + "\n",
+          stderr: "dpkg-query: no packages found matching php8.1-fpm\n",
+        };
+      }
+      return baseRun(command, args);
+    },
+  };
+
+  const rows = uploadProgressStatus(b.options.uploadProgress);
+  // Missing package (8.1) fails safe to On; 8.3 defaults Off with pool override; 8.6 explicitly On in php.ini.
+  expect(rows.find((row) => row.label === "PHP 8.1")).toMatchObject({ enabled: true, setBy: "default", offWithoutGuard: false });
+  expect(rows.find((row) => row.label === "PHP 8.3")).toMatchObject({ enabled: false, setBy: "default", offWithoutGuard: true, poolsOn: ["legacy"] });
+  expect(rows.find((row) => row.label === "PHP 8.6")).toMatchObject({ enabled: true, setBy: "config", offWithoutGuard: false });
+
+  const state = await act(b, ["set-upload-guard"], { enabled: false });
+  const html = dashboardView(state);
+  expect(html).toContain(
+    `<tr><td><span class="st-name">PHP 8.3</span><span class="hint st-detail">${Bun.escapeHTML("PHP's default. On in pool legacy.")}</span></td>\n            <td class="st-state"><span class="badge tone-warn">Partly</span></td></tr>`,
+  );
+  expect(html).toContain(
+    `<tr><td><span class="st-name">PHP 8.6</span><span class="hint st-detail">Set in ${join(b.phpRoot, "8.6", "fpm", "php.ini")}.</span></td>\n            <td class="st-state"><span class="badge tone-bad">On</span></td></tr>`,
+  );
+});
+
+test("pre-release, unpatched, removed-config, and dpkg-query failure all fail safe to On", () => {
+  const b = box();
+  const sbin = b.options.uploadProgress!.paths!.fpmBinDir!;
+  for (const version of ["8.2", "8.5", "8.6"]) {
+    mkdirSync(join(b.phpRoot, version, "fpm", "conf.d"), { recursive: true });
+    mkdirSync(join(b.phpRoot, version, "fpm", "pool.d"), { recursive: true });
+    writeFileSync(join(b.phpRoot, version, "fpm", "php.ini"), "");
+    writeFileSync(join(sbin, `php-fpm${version}`), "");
+  }
+  const baseRun = b.options.uploadProgress!.run!;
+  b.options.uploadProgress = {
+    ...b.options.uploadProgress,
+    run: (command, args) => {
+      if (command === "dpkg-query") {
+        return {
+          ok: true,
+          stdout: [
+            "php8.1-fpm\tinstall ok installed\t8.1.34-2+clp-bookworm",
+            "php8.2-fpm\tinstall ok installed\t8.2.35-1+clp-bookworm",
+            "php8.3-fpm\tdeinstall ok config-files\t8.3.37-1+clp-bookworm",
+            "php8.5-fpm\tinstall ok installed\t8.5.12-1+clp-bookworm",
+            "php8.6-fpm\tinstall ok installed\t8.6.0~rc7-1+clp-bookworm",
+          ].join("\n") + "\n",
+          stderr: "",
+        };
+      }
+      return baseRun(command, args);
+    },
+  };
+
+  for (const row of uploadProgressStatus(b.options.uploadProgress)) {
+    expect(row).toMatchObject({ enabled: true, setBy: "default", offWithoutGuard: false });
+  }
+
+  // Complete dpkg-query failure also fails safe to On.
+  b.options.uploadProgress = {
+    ...b.options.uploadProgress,
+    run: (command, args) => command === "dpkg-query" ? { ok: false, stdout: "", stderr: "dpkg-query: error" } : baseRun(command, args),
+  };
+  for (const row of uploadProgressStatus(b.options.uploadProgress)) {
+    expect(row).toMatchObject({ enabled: true, setBy: "default", offWithoutGuard: false });
+  }
+});
+
 // --- guard continuity ---------------------------------------------------------
 
 function guardFile(b: Box, version: string): string {
@@ -1816,6 +2037,273 @@ test("the reboot-time API validates input and returns replacement HTML from the 
     }
     expect(calls).toEqual([{ rebootTime: "03:30" }, { rebootTime: "now" }]);
   } finally { systemTweaksService.setUpdates = original; }
+});
+
+test("update schedules map hourly and 6h to always, daily to 1, and reject invalid values", () => {
+  expect(UPDATE_SCHEDULES).toEqual(["hourly", "6h", "daily"]);
+  for (const schedule of UPDATE_SCHEDULES) expect(validUpdateSchedule(schedule)).toBe(true);
+  for (const bad of ["", "weekly", "1h", "12h", null, undefined, 6, true]) expect(validUpdateSchedule(bad)).toBe(false);
+
+  for (const schedule of ["hourly", "6h"] as const) {
+    const dropIn = dropInFor({ ...DEFAULT_UPDATE_SETTINGS, enabled: true, schedule }, "Debian");
+    expect(dropIn).toContain('APT::Periodic::Update-Package-Lists "always";');
+    expect(dropIn).toContain('APT::Periodic::Unattended-Upgrade "always";');
+  }
+  const daily = dropInFor({ ...DEFAULT_UPDATE_SETTINGS, enabled: true, schedule: "daily" }, "Debian");
+  expect(daily).toContain('APT::Periodic::Update-Package-Lists "1";');
+  expect(daily).toContain('APT::Periodic::Unattended-Upgrade "1";');
+  expect(() => dropInFor({ ...DEFAULT_UPDATE_SETTINGS, enabled: true, schedule: "weekly" as never }, "Debian")).toThrow(SCHEDULE_ERROR);
+});
+
+test("enabling automatic updates defaults to hourly, switches cleanly between hourly, 6h and daily, and cleans up on disable", async () => {
+  const b = box();
+  const header = "# Managed by clp-addons System Tweaks. Switching automatic updates off there removes this file.";
+  const dailyDir = dirname(b.dailyTimerDropIn);
+  const upgradeDir = dirname(b.upgradeTimerDropIn);
+
+  let state = await act(b, ["set-updates"], { enabled: true });
+  expect(state.settings.schedule).toBe("hourly");
+  expect(readFileSync(b.dropIn, "utf8")).toContain('APT::Periodic::Update-Package-Lists "always";');
+  expect(readFileSync(b.dropIn, "utf8")).toContain('APT::Periodic::Unattended-Upgrade "always";');
+  expect(readFileSync(b.dailyTimerDropIn, "utf8")).toBe(
+    `${header}\n[Timer]\nOnCalendar=\nOnCalendar=hourly\nRandomizedDelaySec=15m\n`,
+  );
+  expect(readFileSync(b.upgradeTimerDropIn, "utf8")).toBe(
+    `${header}\n[Timer]\nOnCalendar=\nOnCalendar=*:20\nRandomizedDelaySec=15m\n`,
+  );
+  expect(b.commands).toContain("systemctl daemon-reload");
+
+  // Re-applying the same schedule is a no-op for timer drop-ins and does not run daemon-reload.
+  b.commands.length = 0;
+  await act(b, ["set-updates"], { schedule: "hourly" });
+  expect(b.commands).not.toContain("systemctl daemon-reload");
+
+  // Switching to 6h updates both timer drop-ins and keeps APT::Periodic at "always".
+  b.commands.length = 0;
+  state = await act(b, ["set-updates"], { schedule: "6h" });
+  expect(state.settings.schedule).toBe("6h");
+  expect(readFileSync(b.dropIn, "utf8")).toContain('APT::Periodic::Unattended-Upgrade "always";');
+  expect(readFileSync(b.dailyTimerDropIn, "utf8")).toBe(
+    `${header}\n[Timer]\nOnCalendar=\nOnCalendar=0/6:00\nRandomizedDelaySec=15m\n`,
+  );
+  expect(readFileSync(b.upgradeTimerDropIn, "utf8")).toBe(
+    `${header}\n[Timer]\nOnCalendar=\nOnCalendar=0/6:20\nRandomizedDelaySec=15m\n`,
+  );
+  expect(b.commands).toContain("systemctl daemon-reload");
+
+  // Switching to daily restores APT::Periodic to "1" and removes both timer drop-ins and empty .d dirs.
+  b.commands.length = 0;
+  state = await act(b, ["set-updates"], { schedule: "daily" });
+  expect(state.settings.schedule).toBe("daily");
+  expect(readFileSync(b.dropIn, "utf8")).toContain('APT::Periodic::Update-Package-Lists "1";');
+  expect(readFileSync(b.dropIn, "utf8")).toContain('APT::Periodic::Unattended-Upgrade "1";');
+  expect(existsSync(b.dailyTimerDropIn)).toBe(false);
+  expect(existsSync(b.upgradeTimerDropIn)).toBe(false);
+  expect(existsSync(dailyDir)).toBe(false);
+  expect(existsSync(upgradeDir)).toBe(false);
+  expect(b.commands).toContain("systemctl daemon-reload");
+
+  // Switching back to hourly writes them again; another operator file in a .d dir keeps that dir on disable.
+  await act(b, ["set-updates"], { schedule: "hourly" });
+  const operatorDropIn = join(dailyDir, "99operator.conf");
+  writeFileSync(operatorDropIn, "[Timer]\nAccuracySec=5m\n");
+  b.commands.length = 0;
+  await act(b, ["set-updates"], { enabled: false });
+  expect(existsSync(b.dropIn)).toBe(false);
+  expect(existsSync(b.dailyTimerDropIn)).toBe(false);
+  expect(existsSync(b.upgradeTimerDropIn)).toBe(false);
+  expect(existsSync(operatorDropIn)).toBe(true);
+  expect(existsSync(upgradeDir)).toBe(false);
+  expect(b.commands).toContain("systemctl daemon-reload");
+});
+
+test("missing schedule in stored settings defaults to hourly, and withdraw/restore manage timer drop-ins", async () => {
+  const b = box();
+  mkdirSync(dirname(b.settingsFile), { recursive: true });
+  writeFileSync(b.settingsFile, JSON.stringify({
+    version: 1,
+    updates: { enabled: true, nginx: true, database: false, panel: false, reboot: false, rebootTime: "now" },
+  }), { mode: 0o600 });
+  expect((await act(b, ["state"])).settings.schedule).toBe("hourly");
+
+  await act(b, ["set-updates"], { enabled: true, schedule: "6h" });
+  b.commands.length = 0;
+  withdrawSystemTweaks(b.options);
+  expect(existsSync(b.dropIn)).toBe(false);
+  expect(existsSync(b.dailyTimerDropIn)).toBe(false);
+  expect(existsSync(b.upgradeTimerDropIn)).toBe(false);
+  expect(b.commands).toContain("systemctl daemon-reload");
+
+  b.commands.length = 0;
+  restoreSystemTweaks(b.options);
+  expect(readFileSync(b.dailyTimerDropIn, "utf8")).toContain("OnCalendar=0/6:00");
+  expect(readFileSync(b.upgradeTimerDropIn, "utf8")).toContain("OnCalendar=0/6:20");
+  expect(b.commands).toContain("systemctl daemon-reload");
+});
+
+test("apt-config, daemon-reload, or timer enable failures roll back apt and timer drop-ins", async () => {
+  // apt-config dump failure on enable removes all newly written drop-ins and does not save settings.
+  const onAptFail = box();
+  onAptFail.updatesFail.aptConfig = true;
+  await expect(act(onAptFail, ["set-updates"], { enabled: true })).rejects.toThrow("apt rejected the configuration");
+  expect(existsSync(onAptFail.dropIn)).toBe(false);
+  expect(existsSync(onAptFail.dailyTimerDropIn)).toBe(false);
+  expect(existsSync(onAptFail.upgradeTimerDropIn)).toBe(false);
+  expect(existsSync(onAptFail.settingsFile)).toBe(false);
+
+  // daemon-reload failure on enable removes apt and timer drop-ins without saving settings.
+  const onReloadEnable = box();
+  onReloadEnable.updatesFail.daemonReload = true;
+  await expect(act(onReloadEnable, ["set-updates"], { enabled: true })).rejects.toThrow("systemctl daemon-reload failed");
+  expect(existsSync(onReloadEnable.dropIn)).toBe(false);
+  expect(existsSync(onReloadEnable.dailyTimerDropIn)).toBe(false);
+  expect(existsSync(onReloadEnable.upgradeTimerDropIn)).toBe(false);
+  expect(existsSync(onReloadEnable.settingsFile)).toBe(false);
+
+  // daemon-reload failure when switching from hourly to daily puts the hourly apt and timer drop-ins back.
+  const onSwitch = box();
+  await act(onSwitch, ["set-updates"], { enabled: true, schedule: "hourly" });
+  const prevApt = readFileSync(onSwitch.dropIn, "utf8");
+  const prevDaily = readFileSync(onSwitch.dailyTimerDropIn, "utf8");
+  const prevUpgrade = readFileSync(onSwitch.upgradeTimerDropIn, "utf8");
+  onSwitch.updatesFail.daemonReload = true;
+  await expect(act(onSwitch, ["set-updates"], { schedule: "daily" })).rejects.toThrow("systemctl daemon-reload failed");
+  expect(readFileSync(onSwitch.dropIn, "utf8")).toBe(prevApt);
+  expect(readFileSync(onSwitch.dailyTimerDropIn, "utf8")).toBe(prevDaily);
+  expect(readFileSync(onSwitch.upgradeTimerDropIn, "utf8")).toBe(prevUpgrade);
+  expect((await act(onSwitch, ["state"])).settings.schedule).toBe("hourly");
+
+  // daemon-reload failure on disable restores apt and timer drop-ins.
+  await expect(act(onSwitch, ["set-updates"], { enabled: false })).rejects.toThrow("systemctl daemon-reload failed");
+  expect(readFileSync(onSwitch.dropIn, "utf8")).toBe(prevApt);
+  expect(readFileSync(onSwitch.dailyTimerDropIn, "utf8")).toBe(prevDaily);
+  expect(readFileSync(onSwitch.upgradeTimerDropIn, "utf8")).toBe(prevUpgrade);
+  expect((await act(onSwitch, ["state"])).settings.enabled).toBe(true);
+
+  // systemctl enable failure rolls back apt drop-in, timer drop-ins, daemon-reload, and earlier enabled timers.
+  const onEnableFail = box({
+    timers: { "apt-daily.timer": "disabled", "apt-daily-upgrade.timer": "disabled" },
+    failEnable: ["apt-daily-upgrade.timer"],
+  });
+  await expect(act(onEnableFail, ["set-updates"], { enabled: true })).rejects.toThrow("apt-daily-upgrade.timer could not be enabled");
+  expect(existsSync(onEnableFail.dropIn)).toBe(false);
+  expect(existsSync(onEnableFail.dailyTimerDropIn)).toBe(false);
+  expect(existsSync(onEnableFail.upgradeTimerDropIn)).toBe(false);
+  expect(onEnableFail.timers.get("apt-daily.timer")).toBe("disabled");
+  expect(onEnableFail.commands.filter((cmd) => cmd === "systemctl daemon-reload")).toHaveLength(2);
+});
+
+test("repair restores missing or drifted timer drop-ins and removes stale ones on daily", async () => {
+  const b = box();
+  restoreSystemTweaks(b.options);
+  await act(b, ["set-updates"], { enabled: true, schedule: "6h" });
+
+  // No drift: upkeep leaves updates alone.
+  b.commands.length = 0;
+  expect(systemTweaksUpkeep(b.options)).toBeNull();
+  expect(b.commands).not.toContain("systemctl daemon-reload");
+
+  // Missing timer drop-in is restored by upkeep.
+  rmSync(b.upgradeTimerDropIn);
+  b.commands.length = 0;
+  expect(systemTweaksUpkeep(b.options)).toBe("automatic updates config restored");
+  expect(readFileSync(b.upgradeTimerDropIn, "utf8")).toContain("OnCalendar=0/6:20");
+  expect(b.commands).toContain("systemctl daemon-reload");
+
+  // Drifted timer drop-in is rewritten by upkeep.
+  writeFileSync(b.dailyTimerDropIn, "[Timer]\nOnCalendar=daily\n");
+  b.commands.length = 0;
+  expect(systemTweaksUpkeep(b.options)).toBe("automatic updates config restored");
+  expect(readFileSync(b.dailyTimerDropIn, "utf8")).toContain("OnCalendar=0/6:00");
+  expect(b.commands).toContain("systemctl daemon-reload");
+
+  // On daily, a stale timer drop-in is removed by upkeep.
+  await act(b, ["set-updates"], { schedule: "daily" });
+  mkdirSync(dirname(b.dailyTimerDropIn), { recursive: true });
+  writeFileSync(b.dailyTimerDropIn, "[Timer]\nOnCalendar=hourly\n");
+  b.commands.length = 0;
+  expect(systemTweaksUpkeep(b.options)).toBe("automatic updates config restored");
+  expect(existsSync(b.dailyTimerDropIn)).toBe(false);
+  expect(b.commands).toContain("systemctl daemon-reload");
+});
+
+test("invalid update schedules are rejected by the action and /api/updates without changing files", async () => {
+  const b = box();
+  await act(b, ["set-updates"], { enabled: true });
+  const beforeApt = readFileSync(b.dropIn, "utf8");
+  const beforeDaily = readFileSync(b.dailyTimerDropIn, "utf8");
+  const beforeSettings = readFileSync(b.settingsFile, "utf8");
+  for (const schedule of ["", null, "weekly", "2h", false, 60]) {
+    await expect(act(b, ["set-updates"], { schedule })).rejects.toThrow(SCHEDULE_ERROR);
+    expect(readFileSync(b.dropIn, "utf8")).toBe(beforeApt);
+    expect(readFileSync(b.dailyTimerDropIn, "utf8")).toBe(beforeDaily);
+    expect(readFileSync(b.settingsFile, "utf8")).toBe(beforeSettings);
+  }
+
+  const { handle } = await import("../addons/system-tweaks/app");
+  const { systemTweaksService } = await import("../addons/system-tweaks/app/service");
+  const state = await act(b, ["state"]);
+  const original = systemTweaksService.setUpdates;
+  const calls: unknown[] = [];
+  systemTweaksService.setUpdates = async (body) => { calls.push(body); return { ok: true, data: state }; };
+  const request = (schedule: unknown) => new Request("https://panel.example.com/addons/system-tweaks/api/updates", {
+    method: "POST",
+    headers: {
+      Host: "panel.example.com", Origin: "https://panel.example.com", "Content-Type": "application/json",
+      Cookie: `clp_addons_csrf=${"a".repeat(64)}`, "X-CLP-Addons-CSRF": "a".repeat(64),
+    },
+    body: JSON.stringify({ schedule }),
+  });
+  try {
+    for (const bad of ["weekly", "", null, 6]) {
+      const response = await handle(request(bad), "/api/updates");
+      expect(response.status).toBe(400);
+      expect((await response.json() as { error: string }).error).toBe(SCHEDULE_ERROR);
+    }
+    expect(calls).toEqual([]);
+    for (const schedule of UPDATE_SCHEDULES) {
+      const response = await handle(request(schedule), "/api/updates");
+      expect(response.status).toBe(200);
+    }
+    expect(calls).toEqual([{ schedule: "hourly" }, { schedule: "6h" }, { schedule: "daily" }]);
+  } finally { systemTweaksService.setUpdates = original; }
+});
+
+test("the page renders the update schedule control and summary line, and setUpdateSchedule posts and reverts on error", async () => {
+  const b = box();
+  const offHtml = dashboardView(await act(b, ["state"]));
+  expect(offHtml).toContain("With the distro&#x27;s unattended-upgrades: its security updates and every PHP version CloudPanel ships.");
+  expect(offHtml).not.toContain('id="update-schedule"');
+
+  const expected: Record<"hourly" | "6h" | "daily", { line: string; option: string }> = {
+    hourly: { line: "Runs every hour.", option: '<option value="hourly" selected>Every hour</option>' },
+    "6h": { line: "Runs every 6 hours.", option: '<option value="6h" selected>Every 6 hours</option>' },
+    daily: { line: "Runs once a day.", option: '<option value="daily" selected>Once a day</option>' },
+  };
+  for (const schedule of UPDATE_SCHEDULES) {
+    const state = await act(b, ["set-updates"], { enabled: true, schedule });
+    const html = dashboardView(state);
+    expect(html).toContain(expected[schedule].line);
+    expect(html).toContain(`<select id="update-schedule" aria-label="Update schedule" data-current="${schedule}" onchange="setUpdateSchedule(this)">`);
+    expect(html).toContain(expected[schedule].option);
+  }
+
+  const { client, control, events, replies } = systemTweaksClient();
+  const select = { ...control("Update schedule"), type: "select-one", value: "6h", dataset: { current: "hourly" } };
+  const okRun = client.setUpdateSchedule(select);
+  await Bun.sleep(0);
+  expect(events).toEqual(["busy", "working: Saving update schedule\u2026", 'POST /api/updates {"schedule":"6h"}']);
+  replies[0]!.answer({ ok: true, html: "<p>6h</p>" });
+  await okRun;
+  expect(events.slice(3)).toEqual(["idle", "repaint: <p>6h</p>", "ok: Saved."]);
+
+  const errSelect = { ...control("Update schedule"), type: "select-one", value: "daily", dataset: { current: "6h" } };
+  const errRun = client.setUpdateSchedule(errSelect);
+  await Bun.sleep(0);
+  replies[1]!.fail(new Error("daemon-reload failed"));
+  await errRun;
+  expect(errSelect.value).toBe("6h");
+  expect(events.at(-1)).toBe("error: daemon-reload failed");
 });
 
 

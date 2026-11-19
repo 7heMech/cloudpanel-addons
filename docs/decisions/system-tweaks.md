@@ -17,7 +17,7 @@ injection, PHP pool isolation, File Manager confinement, clpctl injection and
 CloudPanel telemetry; Failed logins, with the two fail2ban jails and the
 addresses they block; SSH login, with the login message. MySQL access belongs with the protection settings;
 MySQL and Redis sizing belong to Resource Limits alongside PHP worker limits. Each row says what it does; the
-reasons are here. The Nginx, MySQL, CloudPanel and reboot rows appear only once
+reasons are here. The schedule, Nginx, MySQL, CloudPanel and reboot rows appear only once
 System Tweaks' own switch is on, since they change nothing before. The
 repositories, each PHP-FPM's upload-progress value and the blocked addresses
 fold into a summary that opens, and the summary says when something needs a
@@ -91,14 +91,14 @@ be missed; the login jails are raised on their own.
 
 ## Automatic updates
 
-Updates use the distro's own `unattended-upgrades`. Everything System Tweaks
-sets is one drop-in, `/etc/apt/apt.conf.d/52clp-addons-unattended-upgrades`. It
-sorts after `20auto-upgrades` and `50unattended-upgrades`, so its scalars win
-over those and its `Origins-Pattern` entries add to the distro's list. Any later
-operator file still has the last word. Switching off deletes only that file, so
-the operator's previous setup comes back. The file sets:
+Updates use the distro's own `unattended-upgrades`. System Tweaks writes one apt
+drop-in, `/etc/apt/apt.conf.d/52clp-addons-unattended-upgrades`. It sorts after
+`20auto-upgrades` and `50unattended-upgrades`, so its scalars win over those and
+its `Origins-Pattern` entries add to the distro's list. Any later operator file
+still has the last word. The file sets:
 
-- `APT::Periodic::Update-Package-Lists` and `Unattended-Upgrade` to `1`;
+- `APT::Periodic::Update-Package-Lists` and `Unattended-Upgrade` to `"always"`
+  for the `hourly` (default) and `6h` schedules, or `"1"` for `daily`;
 - the distro's security pocket: Debian matches
   `codename=${distro_codename}-security,label=Debian-Security`, and Ubuntu matches
   `archive=${distro_codename}-security`;
@@ -109,6 +109,22 @@ the operator's previous setup comes back. The file sets:
   `HH:MM`. The first switch-on copies the box's effective values, so a policy
   the operator already had stays in place; a time the page cannot offer, such
   as `+15`, becomes `now`.
+
+The schedule (`hourly`, `6h`, or `daily`, defaulting to `hourly` including when
+missing from stored settings) is validated at both the HTTP boundary
+(`/api/updates`) and the root action (`set-updates`). For `hourly` and `6h`,
+System Tweaks also writes two systemd timer drop-ins:
+`/etc/systemd/system/apt-daily.timer.d/52clp-addons.conf` (`OnCalendar=hourly`
+or `0/6:00`, `RandomizedDelaySec=15m`) and
+`/etc/systemd/system/apt-daily-upgrade.timer.d/52clp-addons.conf`
+(`OnCalendar=*:20` or `0/6:20`, `RandomizedDelaySec=15m`), each clearing the
+distro's `OnCalendar=` first so the upgrade run follows package-list refreshes.
+Because `apt.systemd.daily` enforces a once-per-day timestamp when the periodic
+values are `"1"`, those sub-daily schedules set them to `"always"`. For `daily`
+or when automatic updates are switched off, both timer drop-ins are removed (and
+empty `.d` directories removed when possible), leaving the distro's own daily
+timer schedule in force. Whenever any timer drop-in is created, updated or
+removed, `systemctl daemon-reload` runs.
 
 PHP is always in because CloudPanel's PHP builds come only from its own
 repository. Debian's security pocket alone would not have patched the php2shell
@@ -130,14 +146,17 @@ drop-in against each release's real `unattended-upgrades` matcher in Docker.
 The containers do not boot systemd; timer ownership and restoration are tested
 separately with the action fixtures.
 
-Each write is parsed with `apt-config dump` before it is kept; a rejected file is
-put back as it was. If `apt-daily.timer` or `apt-daily-upgrade.timer` is
-disabled, switching on enables it and records that in the settings; switching
-off disables only the timers it enabled. Both timers are read before anything
-changes: a masked one is refused, not unmasked, and a timer that will not enable
-undoes the drop-in and any timer that switch-on had enabled. The repair timer rewrites the drop-in when it has drifted from the
-stored choice. Disabling the addon removes the drop-in and those timers, and
-enabling it again restores both.
+Each apt drop-in write is parsed with `apt-config dump` before it is kept, and
+timer drop-in changes require `systemctl daemon-reload` to succeed. If
+`apt-daily.timer` or `apt-daily-upgrade.timer` is disabled, switching on enables
+it and records that in the settings; switching off disables only the timers it
+enabled and removes the apt and timer drop-ins. Both timers are read before
+anything changes: a masked one is refused, not unmasked. If `apt-config dump`,
+`systemctl daemon-reload`, or `systemctl enable` fails, the apt drop-in, both
+timer drop-ins (with `daemon-reload` when they changed), and any timer enabled
+during the switch-on are rolled back. The repair timer restores missing or
+drifted apt and timer drop-ins. Disabling the addon removes the apt drop-in,
+timer drop-ins, and timers it enabled, and enabling it again restores them.
 
 If `unattended-upgrades` is missing, the page says so and offers an install
 button. That button runs a fixed `apt-get install unattended-upgrades` and
@@ -347,23 +366,34 @@ keeps its protection after an update without anyone enabling System Tweaks, and
 no box loses the guard because an addon it never had was missing.
 
 An operator who already turned the setting off keeps their own file. The guard is
-still written, because it costs nothing and holds the setting if that file
-changes. The page shows both: "Off, by clp-addons, and by your own config". After
-an opt-out, the same operator sees "Off, by your config".
+still written on every installed PHP-FPM, even on PHP 8.2.36+, 8.3.37+, 8.4.28+,
+8.5.13+ and 8.6.0+ where upstream flipped the built-in default to `Off`
+(CVE-2026-115560 / GHSA-658j-r8rw-q6mx), because it costs nothing, protects EOL
+7.x/8.0/8.1 and unpatched 8.2--8.5 builds, and holds the setting if a `php.ini`
+or operator file enables it. When the guard is on and another config file also
+turns it off, the page shows "Set by clp-addons and your own config."; when only
+PHP's built-in default keeps it off without the guard, it shows "Set by
+clp-addons (also PHP's default).". After an opt-out, the operator sees "Set by
+your config in ..." or "PHP's default." with an `Off` badge on patched versions.
 
 Each installed PHP-FPM's effective value is worked out from the files it reads,
 in its order. First comes its main `php.ini`: `/etc/php/X.Y/fpm/php.ini`, or the
 panel FPM's `-c`. Then come the `*.ini` files in `/etc/php/X.Y/fpm/conf.d` in
 byte order, and the last assignment wins. Sections `[PATH=]` and `[HOST=]` are
 skipped because they do not apply server-wide. Values are read as PHP reads
-booleans. Pools whose `php_value` or `php_admin_value` (or `_flag`) turns the
-setting back on are named per pool. The panel's FPM is read from
-`systemctl show clp-php-fpm -p ExecStart`, so it follows System Tweaks moving it
-to another version.
+booleans. When no file assigns the key, the status view determines PHP's
+built-in default from one batched `dpkg-query` of the installed `php<ver>-fpm`
+packages (parsing optional epoch, upstream `major.minor.patch`, and `~`
+pre-releases such as `8.6.0~rc7` that sort before the release): `Off` for
+8.2.36+, 8.3.37+, 8.4.28+, 8.5.13+, 8.6.0+ and newer minors/majors, and failing
+safe to `On` whenever a package version is unavailable or unparseable. Pools
+whose `php_value` or `php_admin_value` (or `_flag`) turns the setting back on
+are named per pool. The panel's FPM is read from `systemctl show clp-php-fpm -p
+ExecStart`, so it follows System Tweaks moving it to another version.
 
 Reading the files, rather than asking `php-fpm -i`, tells the page which file
-decided the value. That is the difference between "by clp-addons" and "by your
-config". It also needs no process per version on every page load. Like
+decided the value. That is the difference between "Set by clp-addons" and "Set
+by your config". It also needs no process per version on every page load. Like
 `php -i`, it shows the config on disk, which a running FPM picks up on its next
 reload. A site's own `.user.ini` or an Nginx `PHP_VALUE` can still change this
 per-directory setting for that site; neither is read.
@@ -1707,7 +1737,7 @@ the saved original named in the row) to see what CloudPanel itself ships.
 | Panel PHP / PHP 8.1 (`panelPhp`, opt-in) | Runs the panel, phpMyAdmin and File Manager on PHP 8.1, which has [ended upstream support](https://www.php.net/eol.php) | `php8.1 -v` reports 8.1.x and the panel's own FPM pool is PHP 8.1, while 8.1 is past its php.net EOL date | the Panel PHP setting and `panel-php.ts` — once CloudPanel ships its panel on a supported PHP |
 | Cloudflare visitor IPs (`cloudflareVisitorIp`) | Site logs and PHP see Cloudflare's or the tunnel's address; only the `cloudflare` log format reads `CF-Connecting-IP`, from any client; `127.0.0.1`, where a tunnel connects from, is trusted for `X-Real-IP` | `grep -E "log_format main\|REMOTE_ADDR\|set_real_ip_from 127" /etc/nginx/nginx.conf /etc/nginx/fastcgi_params` shows `$remote_addr` and an uncommented `127.0.0.1` with the setting off | the setting, `visitor-ip.ts`, its `SECURITY.md` entry and tests (keep `lib/visitor-ip.ts` for Maintenance Mode) — once CloudPanel gives sites the visitor behind Cloudflare's proxy and a tunnel without trusting the header from anyone else |
 | Forged visitor IPs (`blockForgedRealIp`) | The panel nginx trusts `set_real_ip_from 0.0.0.0/0;`, so any client can forge its address with an IP header | `grep 'set_real_ip_from 0.0.0.0/0' /home/clp/services/nginx/nginx.conf` shows the line present/uncommented (the guard comments it as `#clp-addons:untrusted …`) | the setting, `real-ip.ts`, its `SECURITY.md` entry and tests — once CloudPanel trusts only loopback, private ranges and Cloudflare |
-| PHP upload progress (every install) | PHP-FPM defaults `session.upload_progress.enabled` to On, the session path of [CVE-2026-109619](https://github.com/php/php-src/security/advisories/GHSA-6wmf-4rv5-p3rp) | `php -i \| grep session.upload_progress.enabled` is `On` by default and the installed PHP build is not yet patched for the advisory | the `uploadProgressGuard` and `php-guard` wiring — once the PHP packages carry the fix |
+| PHP upload progress (every install) | Older/EOL PHP-FPM builds default `session.upload_progress.enabled` to On, the session path of [CVE-2026-109619](https://github.com/php/php-src/security/advisories/GHSA-6wmf-4rv5-p3rp) and [CVE-2026-115560](https://github.com/php/php-src/security/advisories/GHSA-658j-r8rw-q6mx); upstream flipped the default to Off in 8.2.36/8.3.37/8.4.28/8.5.13/8.6.0 | `php -i \| grep session.upload_progress.enabled` is `On` by default on any installed PHP-FPM (such as EOL 7.x/8.0/8.1 or unpatched 8.2–8.5) | the `uploadProgressGuard` and `php-guard` wiring — once every supported and CloudPanel-shipped PHP build defaults `Off` and carries the fixes |
 
 Removing any row also means deleting its line from `SECURITY.md`, its row in
 [the operator guide](../system-tweaks.md), and its tests, and its tweak from

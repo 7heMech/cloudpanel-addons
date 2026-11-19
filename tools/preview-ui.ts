@@ -81,6 +81,7 @@ import {
   dashboardView as systemTweaksDashboardView, layout as systemTweaksLayout,
 } from "../addons/system-tweaks/app/views";
 import type { SystemTweaksState } from "../addons/system-tweaks/registry";
+import { SCHEDULE_ERROR, validUpdateSchedule, type UpdateSchedule } from "../addons/system-tweaks/updates";
 import type { LockState } from "../lib/root-locks";
 import { MEMORY_PROFILES, memoryPlan, type MemoryProfile, type MemorySettings } from "../addons/resource-limits/memory";
 
@@ -707,12 +708,14 @@ function memoryPreviewState(url: URL, settings?: MemorySettings): ResourceLimits
 function systemTweaksPreviewState(url: URL): SystemTweaksState {
   if (systemTweaksPreview) return systemTweaksPreview;
   const mode = url.searchParams.get("updates") ?? "outside";
+  const scheduleParam = url.searchParams.get("schedule");
+  const schedule: UpdateSchedule = validUpdateSchedule(scheduleParam) ? scheduleParam : "hourly";
   const guard = url.searchParams.get("guard") !== "off";
   const managed = mode === "on";
   const enabled = mode === "on" || mode === "outside";
   const php = ["7.4", "8.1", "8.2", "8.3", "8.4"];
   return {
-    settings: { enabled: managed, nginx: true, database: false, panel: false, reboot: url.searchParams.has("reboot"), rebootTime: url.searchParams.get("at") ?? "now" },
+    settings: { enabled: managed, schedule, nginx: true, database: false, panel: false, reboot: url.searchParams.has("reboot"), rebootTime: url.searchParams.get("at") ?? "now" },
     updates: {
       installed: mode !== "missing",
       version: mode === "missing" ? "" : "2.9.1+nmu3",
@@ -866,6 +869,9 @@ function systemTweaksPreviewMutation(path: string, source: URL, body: Record<str
       row.setBy = state.uploadProgress.guard ? "clp-addons" : row.offWithoutGuard ? "config" : "default";
     }
   } else {
+    if (body.schedule !== undefined && !validUpdateSchedule(body.schedule)) {
+      return Response.json({ ok: false, error: SCHEDULE_ERROR }, { status: 400 });
+    }
     Object.assign(state.settings, body);
     state.updates.reboot = state.settings.reboot;
     state.updates.rebootTime = state.settings.rebootTime;

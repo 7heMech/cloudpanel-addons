@@ -18,8 +18,8 @@ runs:
     - name: Download and verify Bun
       shell: bash
       env:
-        BUN_VERSION: 1.4.4-canary.20261118.1
-        BUN_INTEGRITY: sha512-GnjVnRZrcnzrDmNQx5PsEGg/GmqYK6ccy2w2E9jsvYt5/hK4WyTpc08CQX7IsDUh5cGXnVRqemh1Da9P96B6iA==
+        BUN_VERSION: 1.4.5-canary.20261119.1
+        BUN_INTEGRITY: sha512-vJbB1ztmmJNeETDB914osXj8hTCv63TRaILXtvFpXV9IQEjdWPYs2UhlHvSCqHtxSxFOJObG1PG+k1UvsDJmUA==
       run: |
         set -euo pipefail
         pinned="$(jq -r .packageManager package.json)"

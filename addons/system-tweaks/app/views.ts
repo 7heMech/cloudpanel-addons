@@ -3,7 +3,7 @@ import { TWEAK_ROW_JS, renderLayout } from "../../../lib/app-ui";
 import { mountPath } from "../../../lib/mount";
 import type { LockState } from "../../../lib/root-locks";
 import { HARDENING, type SystemTweaksState } from "../registry";
-import type { CoverageRow, LastRun, UpdateSettings, UpdatesStatus } from "../updates";
+import type { CoverageRow, LastRun, UpdateSchedule, UpdateSettings, UpdatesStatus } from "../updates";
 import { MAX_BACKUP_LEVEL } from "../backup-compression";
 import { DOMAIN_JAIL, JAIL_LIMITS, PANEL_JAIL, type Ban, type SshLogin } from "../login-jails";
 import { MOTD_TWEAK } from "../motd";
@@ -53,13 +53,19 @@ const DAY_MS = 86_400_000;
 /** How long a required reboot may wait, with automatic reboot off, before the page says so. */
 const REBOOT_OVERDUE_DAYS = 7;
 
-function updatesLine(status: UpdatesStatus): string {
+const SCHEDULE_RUNS: Record<UpdateSchedule, string> = {
+  hourly: "Runs every hour.",
+  "6h": "Runs every 6 hours.",
+  daily: "Runs once a day.",
+};
+
+function updatesLine(status: UpdatesStatus, settings: UpdateSettings): string {
   if (!status.installed) {
     return `${badge("Not installed", "bad")} <span>unattended-upgrades, the distro's package for this, is not installed.</span>`;
   }
   if (status.enabled) {
     const next = status.timer.next ? ` Next run ${esc(status.timer.next)}.` : "";
-    if (status.managed) return `${badge("On", "ok")} <span>Runs once a day.${next}</span>`;
+    if (status.managed) return `${badge("On", "ok")} <span>${SCHEDULE_RUNS[settings.schedule]}${next}</span>`;
     const where = status.outsideSource ? ` in ${esc(status.outsideSource)}` : "";
     return `${badge("On", "ok")} <span>Configured outside System Tweaks${where}.${next}</span>`;
   }
@@ -117,8 +123,20 @@ function updateRows(status: UpdatesStatus, settings: UpdateSettings): string {
                 <label class="switch"><input id="update-${key}" type="checkbox" data-setting="${key}" onchange="setUpdates(this)"${settings[key] ? " checked" : ""}><span></span></label>
               </div>${extra}
             </div>`;
+  const scheduleRow = `
+            <div class="st-option">
+              <div class="st-option-row">
+                <div><label for="update-schedule">Schedule</label><p class="hint">How often apt checks for and installs security updates.</p></div>
+                <select id="update-schedule" aria-label="Update schedule" data-current="${settings.schedule}" onchange="setUpdateSchedule(this)">
+                  <option value="hourly"${settings.schedule === "hourly" ? " selected" : ""}>Every hour</option>
+                  <option value="6h"${settings.schedule === "6h" ? " selected" : ""}>Every 6 hours</option>
+                  <option value="daily"${settings.schedule === "daily" ? " selected" : ""}>Once a day</option>
+                </select>
+              </div>
+            </div>`;
   const options = status.installed && status.managed ? `
           <div class="st-options">${[
+    scheduleRow,
     option("nginx", "Nginx", "CloudPanel's Nginx build. An update reloads it without dropping connections."),
     option("database", "MySQL", "CloudPanel's database server. An update restarts it, so sites lose their database for a moment."),
     option("panel", "CloudPanel", "The panel itself, which clp-update normally updates."),
@@ -129,11 +147,11 @@ function updateRows(status: UpdatesStatus, settings: UpdateSettings): string {
   return settingRow({
     key: "enabled",
     title: "Install updates automatically",
-    description: "Once a day, with the distro's unattended-upgrades: its security updates and every PHP version CloudPanel ships.",
+    description: "With the distro's unattended-upgrades: its security updates and every PHP version CloudPanel ships.",
     checked: status.managed,
     disabled: !status.installed,
     onchange: "setUpdates(this)",
-    extra: `<p class="st-status" id="updates-status">${updatesLine(status)}</p>${phpGap(status)}${lists}${install}${options}`,
+    extra: `<p class="st-status" id="updates-status">${updatesLine(status, settings)}</p>${phpGap(status)}${lists}${install}${options}`,
   });
 }
 
