@@ -17,6 +17,7 @@ import { firewallStatus, setProtocolsEnabled, setRuleProtocol, type FirewallOpti
 import {
   connectHetzner, disconnectHetzner, hetznerView, setHetznerRole, type HetznerOptions, type HetznerRole, type HetznerView,
 } from "./hetzner";
+import { cleanUpPanelGate, panelGateSummary, panelGateView, setPanelGate, type GateOptions, type PanelGateView } from "./panel-gate";
 
 const POLICY_VERSION = 1;
 const MAX_SITES_PER_REQUEST = 10_000;
@@ -39,6 +40,7 @@ interface FirewallActionOptions {
   paths?: Partial<CloudflareActionPaths>;
   protocols?: FirewallOptions;
   hetzner?: HetznerOptions;
+  gate?: GateOptions;
   input?: string;
   emitReply?: boolean;
   run?: (command: string, args: string[]) => CommandResult;
@@ -164,7 +166,7 @@ function parseAction(argv: string[]): ParsedAction {
   }
   let enabled: boolean | null = null;
   let role: HetznerRole | null = null;
-  if (verb === "set" || verb === "policy" || verb === "set-protocols") {
+  if (verb === "set" || verb === "policy" || verb === "set-protocols" || verb === "panel-gate-switch") {
     if (argv.length !== 3 || argv[1] !== "--enabled") failAction(`${verb} takes only --enabled yes|no`);
     enabled = validateFlag(argv[2]!, "enabled") === "yes";
   } else if (verb === "hetzner-switch") {
@@ -270,10 +272,17 @@ async function hetznerOrError(options?: HetznerOptions): Promise<HetznerView> {
   catch (error) { return { state: "error", connected: false, error: `Hetzner could not be read: ${errorMessage(error)}` }; }
 }
 
-async function listState(paths: CloudflareActionPaths, protocols?: FirewallOptions, hetzner?: HetznerOptions): Promise<{
+function gateOrError(options?: GateOptions): PanelGateView | { error: string } {
+  try { return panelGateSummary(options); }
+  catch (error) { return { error: `The Panel gate could not be read: ${errorMessage(error)}` }; }
+}
+
+async function listState(paths: CloudflareActionPaths, protocols?: FirewallOptions, hetzner?: HetznerOptions, gate?: GateOptions): Promise<{
   sites: CloudflareSiteView[]; autoEnableNewSites: boolean; protocols: FirewallStatus | { error: string }; hetzner: HetznerView;
+  panelGate: PanelGateView | { error: string };
 }> {
   const hetznerState = hetznerOrError(hetzner);
+  const gateState = gateOrError(gate);
   const db = openPanelDatabase(paths.panelDb);
   try {
     const policy = readPolicy(paths.policyFile, paths.stateUid);
@@ -285,6 +294,7 @@ async function listState(paths: CloudflareActionPaths, protocols?: FirewallOptio
       autoEnableNewSites: policy.autoEnableNewSites,
       protocols: protocolsOrError(protocols),
       hetzner: await hetznerState,
+      panelGate: gateState,
     };
   } finally {
     db.close();
@@ -399,7 +409,7 @@ export async function runFirewallAction(argv: string[], options: FirewallActionO
     const paths = pathsFor(options);
     const action = parseAction(argv);
     const command = options.run ?? runCommand;
-    if (action.verb === "list") return listState(paths, options.protocols, options.hetzner);
+    if (action.verb === "list") return listState(paths, options.protocols, options.hetzner, options.gate);
     if (action.verb === "policy") {
       const policy = await setPolicy(paths, action.enabled!);
       return { autoEnableNewSites: policy.autoEnableNewSites };
@@ -427,6 +437,13 @@ export async function runFirewallAction(argv: string[], options: FirewallActionO
       const body = readInput("hetzner-switch", options.input);
       const { confirm, typed } = typeof body === "object" && body !== null ? body as { confirm?: unknown; typed?: unknown } : {};
       return setHetznerRole(action.role!, action.enabled!, confirm, options.hetzner, typed);
+    }
+    if (action.verb === "panel-gate") return panelGateView(options.gate);
+    if (action.verb === "panel-gate-cleanup") return cleanUpPanelGate(options.gate);
+    if (action.verb === "panel-gate-switch") {
+      const body = readInput("panel-gate-switch", options.input);
+      const confirm = typeof body === "object" && body !== null ? (body as { confirm?: unknown }).confirm : undefined;
+      return setPanelGate(action.enabled!, confirm, options.gate);
     }
     action.verb satisfies never;
     failAction(`unknown Firewall action '${action.verb}'`);

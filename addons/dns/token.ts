@@ -35,6 +35,7 @@ const named = (profiles: Profile[], uses: (profile: Profile) => boolean): string
 };
 
 const always = (text: string) => () => text;
+const PANEL_GATE = "Firewall's Panel gate";
 
 /**
  * In the order the page lists them. Zone: Edit and Single Redirect are asked
@@ -72,6 +73,20 @@ export const PERMISSIONS = {
       const names = named(profiles, (profile) => profile.zone.skipFirewallIps.length > 0);
       return names && `Firewall skip in ${names}`;
     },
+  },
+  // Optional for DNS; Firewall's Panel gate requires them before it turns on.
+  originPulls: {
+    key: "ssl_and_certificates", type: "edit", label: "SSL and Certificates: Edit", grantedBy: ["SSL and Certificates Write"],
+    scope: "zone", usedFor: () => null, enables: always(PANEL_GATE),
+  },
+  accessApps: {
+    key: "access", type: "edit", label: "Access: Apps and Policies: Edit", grantedBy: ["Access: Apps and Policies Write"],
+    scope: "account", usedFor: () => null, enables: always(PANEL_GATE),
+  },
+  accessIdentity: {
+    key: "access_acct", type: "edit", label: "Access: Organizations, Identity Providers, and Groups: Edit",
+    grantedBy: ["Access: Organizations, Identity Providers, and Groups Write"],
+    scope: "account", usedFor: () => null, enables: always(PANEL_GATE),
   },
   tokens: {
     key: "api_tokens", type: "read", label: "API Tokens: Read",

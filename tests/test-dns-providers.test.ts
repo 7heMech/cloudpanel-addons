@@ -387,7 +387,7 @@ describe("a token's own permissions", () => {
     try {
       const token = readAccess({ owner: "user", accountId: null }, [{ allow: true, permissions: ["DNS Write"], resources: [{ account: "*", zone: "*" }] }], { zones: [], accounts: [] });
       const view = accessView({ token }, [])!;
-      expect(view.rows.at(-1)).toEqual({ label: "Firewall Services: Edit", usedFor: "Cloudflare bans for login jails", held: "no", optional: true });
+      expect(view.rows.find((row) => row.label === "Firewall Services: Edit")).toEqual({ label: "Firewall Services: Edit", usedFor: "Cloudflare bans for login jails", held: "no", optional: true });
       expect(connectionPermissions({ token }, []).missing).not.toContain("Firewall Services: Edit");
       expect(tokenTemplate([]).permissions).not.toContain("Firewall Services: Edit");
       const unreadable = accessView({ token: { owner: "user", accountId: null, readable: false, reason: "no" } }, [])!;
@@ -403,5 +403,18 @@ describe("a token's own permissions", () => {
     const view = accessView({ token, refused: ["Zone Settings: Edit"] }, [web!])!;
     expect(view.rows.find((row) => row.label === "Zone Settings: Edit")).toMatchObject({ held: "no", detail: "Refused by Cloudflare" });
     expect(connectionPermissions({ token, refused: ["Zone Settings: Edit"] }, [web!]).missing).toContain("Zone Settings: Edit");
+  });
+
+  test("the Panel gate's permissions are optional for DNS", () => {
+    const token = readAccess({ owner: "user", accountId: null }, [{ allow: true, permissions: ["DNS Write"], resources: [{ account: "*", zone: "*" }] }], { zones: [], accounts: [] });
+    const gate = accessView({ token }, [])!.rows.filter((row) => row.usedFor === "Firewall's Panel gate");
+    expect(gate.map((row) => [row.label, row.optional])).toEqual([
+      ["SSL and Certificates: Edit", true], ["Access: Apps and Policies: Edit", true], ["Access: Organizations, Identity Providers, and Groups: Edit", true],
+    ]);
+    const missing = connectionPermissions({ token }, []).missing;
+    for (const [label] of gate.map((row) => [row.label])) {
+      expect(missing).not.toContain(label!);
+      expect(tokenTemplate([]).permissions).not.toContain(label!);
+    }
   });
 });

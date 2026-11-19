@@ -31,7 +31,7 @@ don't want.
 | Addon | Description |
 | --- | --- |
 | [DNS](docs/dns.md) | Each site's Cloudflare records kept to a profile, with Mailcow set up for its mail, and redirect domains. |
-| [Firewall](docs/firewall.md) | Allow traffic from Cloudflare only, across all sites and for new ones, at Hetzner Cloud's firewall too, and UDP rules on CloudPanel's Firewall page. |
+| [Firewall](docs/firewall.md) | Allow traffic from Cloudflare only, across all sites and for new ones, at Hetzner Cloud's firewall too, a Cloudflare Access gate in front of the panel, and UDP rules on CloudPanel's Firewall page. |
 | [Instatic CMS](https://github.com/CoreBunch/Instatic) | Instatic CMS sites on CloudPanel. |
 | Stager | Staging copies of WordPress, PHP, static and Instatic sites, and promotion back to live. Based on [clp-stager](https://github.com/7heMech/clp-stager). |
 | Maintenance Mode | A customizable 503 page per site, with instant toggles and IP bypasses. |

@@ -1,5 +1,6 @@
 import type { ActionNeeded, ActionNeededCheck, SetupCheck, SetupStep } from "../../lib/addon-definition";
 import { hetznerSetupState } from "./hetzner";
+import { panelGateActionNeeded, type GateOptions } from "./panel-gate";
 
 const CARD = "/addons/firewall/#hetzner-card";
 /** Repair reads Hetzner every 15 minutes and records when; this many missed in a row is a token Hetzner refuses, or a Hetzner that does not answer. */
@@ -32,4 +33,6 @@ export const FIREWALL_SETUP: SetupStep[] = [
 
 export const FIREWALL_ACTIONS: ActionNeededCheck[] = [
   { id: "hetzner-token", check: () => hetznerActions(hetznerSetupState()) },
+  // Local files and the drift repair recorded; it never calls Cloudflare.
+  { id: "panel-gate", title: "Panel gate needs attention", href: "/addons/firewall/#panel-gate-card", check: (options) => panelGateActionNeeded(options?.gate as GateOptions | undefined) },
 ];

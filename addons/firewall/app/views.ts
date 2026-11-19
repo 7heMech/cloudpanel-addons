@@ -48,6 +48,36 @@ function protocolsCard(status: FirewallPageState["protocols"]): string {
     </div>`;
 }
 
+const WAY_BACK = "Shut out? <code>ssh -L 8443:127.0.0.1:8443 root@&lt;server&gt;</code>, then open https://127.0.0.1:8443, or run <code>clp-addons firewall panel-gate off</code> as root.";
+
+/** The Panel gate: what it needs, or what differs from what it set up. */
+export function panelGateCard(view: FirewallPageState["panelGate"]): string {
+  const pending = !("error" in view) && view.pending;
+  const card = (body: string, on: boolean, ready: boolean) => `
+    <div class="card hz-card" id="panel-gate-card"${pending ? " data-pending" : ""}>
+      <div class="hz-row hz-first">
+        <div><h2>Panel gate</h2>
+          <p class="hint">Only requests through Cloudflare for CloudPanel's custom domain, after a Cloudflare Access sign-in with a code sent to a panel user's email, reach the panel. Opening it at the server's IP on port 8443 stops working.</p></div>
+        <label class="switch"><input id="panel-gate-switch" type="checkbox" aria-label="Panel gate" ${on ? "checked" : ""} ${ready ? "" : "disabled"} onchange="setPanelGate(this)"><span></span></label>
+      </div>${body}
+      <p class="hint pg-way-back">${WAY_BACK}</p>
+    </div>`;
+  if ("error" in view) return card(`<div class="alert" role="alert">${esc(view.error)}</div>`, false, false);
+  const list = (lines: string[]) => `<ul class="pg-list">${lines.map((line) => `<li>${esc(line)}</li>`).join("")}</ul>`;
+  const leftover = view.leftover ? '<div class="notice" role="status">Cloudflare still has the Access application or origin-pull certificate of a gate turned off; the next repair deletes them.</div>' : "";
+  if (view.on) {
+    const checked = view.checkedAt ? ` Cloudflare checked ${esc(view.checkedAt.replace("T", " ").slice(0, 16))} UTC.` : "";
+    const drift = view.drift.length ? `<div class="pg-drift">${list(view.drift)}</div>` : "";
+    return card(`<p class="hint pg-lead">On for <strong>${esc(view.hostname ?? "")}</strong>.${checked}</p>${drift}`, true, true);
+  }
+  if (view.pending) return card(`${leftover}<p class="hint pg-lead" role="status">Checking what it needs in Cloudflare…</p>`, false, false);
+  if (view.problems.length) {
+    const edit = view.editUrl ? ` <a href="${esc(view.editUrl)}" target="_blank" rel="noopener">Edit the token in Cloudflare</a>.` : "";
+    return card(`${leftover}<p class="hint pg-lead">Before it can be turned on:${edit}</p>${list(view.problems)}`, false, false);
+  }
+  return card(`${leftover}<p class="hint pg-lead">Ready for <strong>${esc(view.hostname ?? "")}</strong>.</p>`, false, true);
+}
+
 /** Hetzner has no prefilled token form, and a project's token page needs the project's id, which neither the API nor the metadata service gives. */
 const HETZNER_CONSOLE = "https://console.hetzner.com/projects";
 
@@ -169,7 +199,7 @@ export function dashboardView(state: FirewallPageState): string {
 
   return `
     <div class="page-heading">
-      <div><h1>Firewall</h1><p>CloudPanel's “Allow traffic from Cloudflare only” setting for every site, a protocol for each rule on its Firewall page, and Hetzner Cloud Firewalls that admit only Cloudflare.</p></div>
+      <div><h1>Firewall</h1><p>CloudPanel's “Allow traffic from Cloudflare only” setting for every site, a protocol for each rule on its Firewall page, a gate in front of the panel, and Hetzner Cloud Firewalls that admit only Cloudflare.</p></div>
     </div>
     <div class="card card-table">
       ${total === 0
@@ -196,5 +226,5 @@ export function dashboardView(state: FirewallPageState): string {
       <div><h2>Enable on new sites</h2>
         <p class="hint">A site created from now on allows Cloudflare only, seconds after CloudPanel creates it. A site you turn off here is never turned back on.</p></div>
       <label class="switch"><input id="automatic-policy" type="checkbox" aria-label="Enable Cloudflare-only access on new sites" ${state.autoEnableNewSites ? "checked" : ""} onchange="setAutomatic(this)"><span></span></label>
-    </div>${protocolsCard(state.protocols)}${hetznerCard(state.hetzner)}`;
+    </div>${protocolsCard(state.protocols)}${panelGateCard(state.panelGate)}${hetznerCard(state.hetzner)}`;
 }

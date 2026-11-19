@@ -4,7 +4,7 @@ import {
 import type { ActionResult } from "../../../lib/gateway-client";
 import { FIREWALL_PROTOCOLS, ruleKey, type FirewallProtocol, type FirewallStatus } from "../protocols";
 import { firewallService } from "./service";
-import { dashboardView, layout } from "./views";
+import { dashboardView, layout, panelGateCard } from "./views";
 
 
 function validMutationBody(body: unknown): body is { enabled: boolean } {
@@ -107,6 +107,23 @@ export async function handle(
       return jsonResponse({ ok: false, error: "role must be web or panel, and enabled boolean" }, 400);
     }
     const result = await firewallService.setHetzner(role, enabled, confirm as string | undefined, typed as string | undefined);
+    return jsonResponse(result, result.ok ? 200 : 400);
+  }
+
+  if (req.method === "GET" && path === "/api/panel-gate") {
+    const result = await firewallService.panelGate();
+    const view = result.ok && result.data ? result.data : { error: result.error ?? "the Panel gate could not be read" };
+    return jsonResponse({ ok: true, html: panelGateCard(view) });
+  }
+
+  if (req.method === "POST" && path === "/api/panel-gate") {
+    const body = await readMutation(req, 1024);
+    if (body instanceof Response) return body;
+    const { enabled, confirm } = body;
+    if (typeof enabled !== "boolean" || (confirm !== undefined && typeof confirm !== "string")) {
+      return jsonResponse({ ok: false, error: "enabled must be boolean" }, 400);
+    }
+    const result = await firewallService.setPanelGate(enabled, confirm as string | undefined);
     return jsonResponse(result, result.ok ? 200 : 400);
   }
 
