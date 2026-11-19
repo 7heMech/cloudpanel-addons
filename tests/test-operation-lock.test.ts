@@ -7,12 +7,12 @@ import { chmodSync, lstatSync, mkdirSync, mkdtempSync, readdirSync, rmSync, stat
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { withFileLockSync } from "../lib/file-lock";
-import { OPERATION_LOCK_ENV, withOperationLock, withOperationLockSync } from "../cli/operation-lock";
+import { OPERATION_LOCK_ENV, withOperationLock, withOperationLockSync } from "../lib/operation-lock";
 
 const REPO = join(import.meta.dir, "..");
 
 const HOLDER = String.raw`
-  import { withOperationLockSync } from "./cli/operation-lock.ts";
+  import { withOperationLockSync } from "./lib/operation-lock.ts";
   withOperationLockSync(process.env.CLP_TEST_OP, () => {
     process.stdout.write("held\n");
     Bun.sleepSync(Number(process.env.CLP_TEST_HOLD_MS));

@@ -20,6 +20,7 @@ http {
     location / { return 200 "other site\\n"; }
   }
 ${customDomain}
+${CUSTOM_DOMAIN.replaceAll("cp.example.com", "new.example.com")}
 }
 `;
 
@@ -58,6 +59,7 @@ const PANEL = `server {
   ssl_certificate_key /probe/server.key;
   ssl_certificate /probe/server.crt;
   location / { return 200 "panel for $remote_addr\\n"; }
+  location ~ /.well-known { root /probe; }
   if (-f $request_filename) {
     break;
   }
@@ -74,7 +76,7 @@ const dir = mkdtempSync(join(tmpdir(), "clp-panel-gate-nginx-"));
 try {
   chmodSync(dir, 0o755);
   openssl(dir, ["req", "-x509", "-newkey", "rsa:2048", "-nodes", "-keyout", "server.key", "-out", "server.crt", "-days", "2", "-subj", "/CN=cp.example.com",
-    "-addext", "subjectAltName=DNS:cp.example.com,DNS:other.example.com"]);
+    "-addext", "subjectAltName=DNS:cp.example.com,DNS:other.example.com,DNS:new.example.com"]);
   // The origin-pull pair, made as the gate makes it.
   writeFileSync(join(dir, "client.key"), openssl(dir, ["genpkey", "-algorithm", "RSA", "-pkeyopt", "rsa_keygen_bits:2048"]));
   writeFileSync(join(dir, "client.crt"), openssl(dir, ["req", "-x509", "-new", "-key", "client.key", "-days", "3650", "-subj", "/CN=clp-addons panel gate",
@@ -84,7 +86,7 @@ try {
   writeFileSync(join(dir, "stranger.crt"), openssl(dir, ["req", "-x509", "-new", "-key", "stranger.key", "-days", "3650", "-subj", "/CN=clp-addons panel gate"]));
   for (const file of ["server.key", "client.key", "stranger.key"]) chmodSync(join(dir, file), 0o644);
   const gated = withSitesGate(CUSTOM_DOMAIN, "cp.example.com", "/probe/client.crt");
-  const panel = withPanelGate(PANEL);
+  const panel = withPanelGate(PANEL, "cp.example.com");
   assert.ok(gated && panel);
   writeFileSync(join(dir, "sites.conf"), sites(gated));
   writeFileSync(join(dir, "panel.conf"), panelConf(panel));
@@ -111,7 +113,12 @@ check 301 -o /dev/null -w '%{http_code}' --interface 127.0.0.3 -H 'Host: cp.exam
 check 000 -o /dev/null -w '%{http_code}' --interface 127.0.0.3 https://127.0.0.2:8443/
 check 000 -o /dev/null -w '%{http_code}' --interface 127.0.0.3 -H 'X-Forwarded-For: 127.0.0.1' https://127.0.0.2:8443/
 check 'panel for 127.0.0.1' --interface 127.0.0.1 https://127.0.0.1:8443/
-echo 'Panel gate integration passed: the custom domain needs the origin-pull certificate, another SNI gets 421, port 8443 answers loopback only and proxied visitors keep their address.'
+check 'panel for 127.0.0.1' --http2 --interface 127.0.0.1 https://127.0.0.1:8443/
+check 'panel for 127.0.0.1' --interface 127.0.0.1 -H 'Host: LOCALHOST:8443' https://127.0.0.1:8443/
+check 000 -o /dev/null -w '%{http_code}' --interface 127.0.0.1 -H 'Host: new.example.com' https://127.0.0.1:8443/
+check 502 -o /dev/null -w '%{http_code}' --interface 127.0.0.3 --resolve new.example.com:443:127.0.0.1 https://new.example.com/
+check 404 -o /dev/null -w '%{http_code}' --interface 127.0.0.3 $cp --cert /probe/client.crt --key /probe/client.key https://cp.example.com/.well-known/acme-challenge/token
+echo 'Panel gate integration passed: the custom domain needs the origin-pull certificate, another SNI gets 421, port 8443 answers loopback only, for the gated hostname or a loopback name, a custom domain changed after the gate is refused, and proxied visitors keep their address.'
 `], { stdout: "pipe", stderr: "pipe", timeout: 90_000 });
   assert.equal(result.exitCode, 0, result.stdout.toString() + result.stderr.toString());
   process.stdout.write(result.stdout);

@@ -144,6 +144,7 @@ function box(): Box {
       paths: {
         stateFile: join(dir, "state", "panel-gate.json"),
         lockFile: join(dir, "locks", "panel-gate.lock"),
+        operationLockDir: join(dir, "locks"),
         certDir: join(dir, "certs"),
         dnsDir: join(dir, "dns"),
         panelDb: join(dir, "panel.db"),
@@ -189,10 +190,13 @@ describe("Nginx edits", () => {
   });
 
   test("the panel's loopback rule goes first in its 8443 server, before a rewrite can break out", () => {
-    const gated = withPanelGate(PANEL)!;
-    expect(gated.startsWith('server {\n  # clp-addons:panel-gate:start\n  if ($realip_remote_addr !~ "^(?:127\\.0\\.0\\.1|::1)$") {\n    return 444;\n  }\n  # clp-addons:panel-gate:end\n  server_name _;')).toBe(true);
+    const gated = withPanelGate(PANEL, HOST)!;
+    expect(gated.startsWith('server {\n  # clp-addons:panel-gate:start\n  if ($realip_remote_addr !~ "^(?:127\\.0\\.0\\.1|::1)$") {\n    return 444;\n  }\n')).toBe(true);
+    expect(gated).toContain('  # clp-addons:panel-gate:end\n  server_name _;');
     expect(gated).not.toContain("$remote_addr !~");
-    expect(hasPanelGate(gated)).toBe(true);
+    expect(hasPanelGate(gated, HOST)).toBe(true);
+    expect(gated).toContain('if ($host !~* "^(?:cp\\.example\\.com|127\\.0\\.0\\.1|localhost|\\[?::1\\]?)$") {\n    return 444;');
+    expect(withPanelGate(PANEL, "cp.example.com; return 200")).toBeNull();
     expect(withoutPanelGate(gated)).toBe(PANEL);
     expect(panelGateMisfit(PANEL.replace(/8443/g, "9443"))).toContain("0 server blocks on 8443");
   });
@@ -206,16 +210,16 @@ describe("Nginx edits", () => {
 
     b.commands.length = 0;
     b.failing.add(`nginx -t -c ${join(b.dir, "panel", "nginx.conf")}`);
-    expect(() => applyPanelGate(true, b.options)).toThrow("Nginx validation failed");
+    expect(() => applyPanelGate(true, HOST, b.options)).toThrow("Nginx validation failed");
     expect(panelVhost(b)).toBe(PANEL);
     expect(b.commands.map((command) => command.join(" "))).not.toContain("systemctl reload clp-nginx");
     expect(statSync(join(b.dir, "panel", "cloudpanel.conf")).mode & 0o777).toBe(0o640);
 
     b.failing.clear();
-    expect(applyPanelGate(true, b.options)).toBe(true);
+    expect(applyPanelGate(true, HOST, b.options)).toBe(true);
     expect(b.commands.at(-1)).toEqual(["systemctl", "reload", "clp-nginx"]);
     expect(applySitesGate(false, null, b.options)).toBe(true);
-    expect(applyPanelGate(false, b.options)).toBe(true);
+    expect(applyPanelGate(false, null, b.options)).toBe(true);
     expect(sitesVhost(b)).toBe(CUSTOM_DOMAIN);
     expect(panelVhost(b)).toBe(PANEL);
   });
@@ -250,7 +254,7 @@ describe("turning it on", () => {
     });
 
     expect(hasSitesGate(sitesVhost(b), HOST, certFile(b))).toBe(true);
-    expect(hasPanelGate(panelVhost(b))).toBe(true);
+    expect(hasPanelGate(panelVhost(b), HOST)).toBe(true);
     // Nginx asks for the certificate only once Cloudflare reports it deployed.
     const writes = b.cf.calls.map((call) => `${call.method} ${call.path}`);
     expect(writes.filter((call) => call.startsWith("GET") && call.endsWith(`/hostnames/${HOST}`))).toHaveLength(3);
@@ -325,9 +329,10 @@ describe("turning it on", () => {
     b.failing.add("nginx -t");
     let deletes = 0;
     b.cf.failOn = (method, path) => method === "DELETE" && path.includes("/access/apps/") && deletes++ === 0;
-    await expect(turnOn(b)).rejects.toThrow("rollback failed: Access application");
+    await expect(turnOn(b)).rejects.toThrow("Undoing it did not finish, so this is left: Let's Encrypt bypass application");
     expect(readGateState(b.options)).toMatchObject({ on: false, leftover: true });
     expect(b.cf.accessApps.size).toBe(1);
+    expect(readGateState(b.options).appId).toBeUndefined();
     expect(await repairPanelGate(b.options)).toBe("Panel gate: its Cloudflare objects are deleted");
     expect(b.cf.accessApps.size).toBe(0);
     expect(b.cf.accessPolicies.size).toBe(0);
@@ -360,7 +365,7 @@ describe("keeping it and turning it off", () => {
     expect(line).toContain("Panel gate put back: port 8443 loopback only, cp.example.com asks for Cloudflare's certificate");
     expect(line).toContain("Access policy follows the panel users");
     expect(hasSitesGate(sitesVhost(b), HOST, certFile(b))).toBe(true);
-    expect(hasPanelGate(panelVhost(b))).toBe(true);
+    expect(hasPanelGate(panelVhost(b), HOST)).toBe(true);
     const state = readGateState(b.options);
     expect((b.cf.accessPolicies.get(state.policyId!)!.include as unknown[]).length).toBe(2);
     expect(state.drift).toEqual([]);
@@ -431,7 +436,7 @@ describe("keeping it and turning it off", () => {
     const before = b.cf.calls.length;
     const message = await panelGateOffLocally(b.options);
     expect(message).toContain(`The Panel gate is off on this server: port 8443 answers any address again, and ${HOST} no longer asks`);
-    expect(message).toContain(`Cloudflare still has the gate's Access application, Access policy, origin-pull certificate for ${HOST}`);
+    expect(message).toContain(`Cloudflare still has the gate's Access applications, Access policies, origin-pull certificate for ${HOST}`);
     expect(message).toContain("clp-addons repair firewall");
     expect(message).toContain(`“CloudPanel ${HOST} (clp-addons panel gate)”`);
     expect(await panelGateOffLocally(b.options)).toStartWith("The Panel gate was already off. Cloudflare still has");
@@ -466,9 +471,16 @@ describe("review fixes", () => {
     await turnOn(b);
     const old = readGateState(b.options);
     await panelGateOffLocally(b.options);
+    // The review alone deletes nothing, so cancelling it leaves everything as it was.
+    const writes = b.cf.writes().length;
+    const review = await setPanelGate(true, undefined, b.options);
+    expect("review" in review && review.review.text).toContain("It first deletes the Access applications and origin-pull certificate an earlier gate left");
+    expect(b.cf.writes().length).toBe(writes);
+    expect(b.cf.accessApps.has(old.appId)).toBe(true);
+
     b.cf.failOn = (method, path) => method === "DELETE" && path.includes("/access/apps/");
     await expect(turnOn(b)).rejects.toThrow("Cloudflare still has the Access application or origin-pull certificate of the earlier gate");
-    expect(readGateState(b.options)).toMatchObject({ on: false, leftover: true, appId: old.appId });
+    expect(readGateState(b.options)).toMatchObject({ on: false, leftover: true, acmeAppId: old.acmeAppId });
     expect(sitesVhost(b)).toBe(CUSTOM_DOMAIN);
 
     // The connection that made them was replaced by another reaching the same zone.
@@ -562,4 +574,51 @@ test("Setup raises the gate's drift as Action needed, from local state alone, an
 
   await repairPanelGate(b.options);
   expect(await actionItems(source, { gate: b.options })).toEqual([]);
+});
+
+describe("final review fixes", () => {
+  test("Let's Encrypt's path gets its own Bypass application, which off deletes and repair checks", async () => {
+    const b = box();
+    await turnOn(b);
+    const state = readGateState(b.options);
+    expect(b.cf.accessApps.get(state.acmeAppId)).toMatchObject({
+      domain: `${HOST}/.well-known/acme-challenge`, type: "self_hosted", policies: [{ id: state.acmePolicyId, precedence: 1 }],
+    });
+    expect(b.cf.accessPolicies.get(state.acmePolicyId)).toMatchObject({ decision: "bypass", include: [{ everyone: {} }] });
+
+    b.cf.accessApps.delete(state.acmeAppId);
+    await repairPanelGate(b.options);
+    expect(readGateState(b.options).drift.join(" ")).toContain(`${HOST}'s certificate cannot renew`);
+
+    const first = await setPanelGate(false, undefined, b.options);
+    if (!("review" in first)) throw new Error("expected a review");
+    await setPanelGate(false, first.review.digest, b.options);
+    expect(b.cf.accessPolicies.size + b.cf.accessApps.size).toBe(0);
+  });
+
+  test("a moved custom domain is raised in Setup at once and its proxy is refused by the panel's Host check", async () => {
+    const b = box();
+    await turnOn(b);
+    writeFileSync(join(b.dir, "custom-domain"), "new.example.com\n");
+    const gate = FIREWALL_ACTIONS.filter((action) => action.id === "panel-gate");
+    const items = await actionItems({ core: [], addons: [{ name: "firewall", title: "Firewall", enabled: true, steps: [], actions: gate }] }, { gate: b.options });
+    expect(items[0]!.reason).toContain("new.example.com, which the gate refuses");
+    expect(panelVhost(b)).toContain('if ($host !~* "^(?:cp\\.example\\.com|');
+    expect(panelVhost(b)).not.toContain("new\\.example\\.com");
+  });
+
+  test("a confirmed change waits for the platform's operation lock", async () => {
+    const b = box();
+    const { acquireFileLock } = await import("../lib/file-lock");
+    const held = await acquireFileLock(join(b.dir, "locks", "operation.lock"), 5, () => "busy");
+    const first = await setPanelGate(true, undefined, b.options);
+    if (!("review" in first)) throw new Error("expected a review");
+    let done = false;
+    const pending = setPanelGate(true, first.review.digest, b.options).then(() => { done = true; });
+    await Bun.sleep(300);
+    expect(done).toBe(false);
+    held.release();
+    await pending;
+    expect(readGateState(b.options).on).toBe(true);
+  });
 });

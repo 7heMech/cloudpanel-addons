@@ -11,6 +11,7 @@ import { ActionFailure, failAction } from "../../lib/action";
 import { runCommand, type CommandResult } from "../../lib/command";
 import { errorMessage } from "../../lib/errors";
 import { withFileLock, withFileLockSync } from "../../lib/file-lock";
+import { withOperationLock, withOperationLockSync } from "../../lib/operation-lock";
 import { nginxFileChange, trustedVhost, withNginxTransaction, withRecoveryFailures } from "../../lib/nginx-transaction";
 import { panelCustomDomain, PANEL_CUSTOM_DOMAIN_FILE, PANEL_CUSTOM_DOMAIN_VHOST } from "../../lib/panel-custom-domain";
 import { withPanelDb } from "../../lib/panel-db";
@@ -27,7 +28,7 @@ import {
 } from "./panel-gate-nginx";
 
 /** What Cloudflare must let the token do, beyond DNS's own. */
-export const GATE_PERMISSIONS: PermissionName[] = ["originPulls", "accessApps", "accessIdentity"];
+const GATE_PERMISSIONS: PermissionName[] = ["originPulls", "accessApps", "accessIdentity"];
 /** Names the Access objects the gate owns, so a run that lost its state finds them again; one pair per hostname in an account. */
 const markerFor = (hostname: string) => `CloudPanel ${hostname} (clp-addons panel gate)`;
 const PANEL_ROLES = ["ROLE_ADMIN", "ROLE_SITE_MANAGER", "ROLE_USER"];
@@ -39,6 +40,8 @@ const DEPLOY_POLL_MS = 5_000;
 interface GatePaths {
   stateFile: string;
   lockFile: string;
+  /** Where the platform's operation lock lives, which cli/inject.ts holds while it rewrites the panel's vhost. */
+  operationLockDir: string;
   certDir: string;
   dnsDir: string;
   panelDb: string;
@@ -59,6 +62,7 @@ interface GatePaths {
 export const DEFAULT_GATE_PATHS: GatePaths = {
   stateFile: `${addonStateDir("firewall")}/panel-gate.json`,
   lockFile: `${LOCK_DIR}/firewall-panel-gate.lock`,
+  operationLockDir: LOCK_DIR,
   certDir: "/etc/clp-addons/panel-gate",
   dnsDir: addonStateDir("dns"),
   panelDb: PANEL_DB,
@@ -92,6 +96,9 @@ interface GateState {
   certId?: string;
   policyId?: string;
   appId?: string;
+  /** The application and Bypass policy that let Let's Encrypt reach /.well-known/acme-challenge/ past Access. */
+  acmeAppId?: string;
+  acmePolicyId?: string;
   /** Set while the gate is off but Cloudflare still has objects it made. */
   leftover?: boolean;
   /** What the last look at Cloudflare found wrong, and when. */
@@ -151,7 +158,7 @@ export function applySitesGate(enabled: boolean, hostname: string | null, option
 }
 
 /** Puts the panel's loopback-only rule in or takes it out, tested with the panel's own config and reloaded. */
-export function applyPanelGate(enabled: boolean, options: GateOptions = {}): boolean {
+export function applyPanelGate(enabled: boolean, hostname: string | null, options: GateOptions = {}): boolean {
   const paths = pathsOf(options);
   const target = panelTarget(paths);
   if (!existsSync(target.vhost)) {
@@ -162,7 +169,9 @@ export function applyPanelGate(enabled: boolean, options: GateOptions = {}): boo
     const change = nginxFileChange(target.vhost, null, target.uid, target.groupWritable);
     const content = change.backup.content;
     if (content === null) return;
-    change.content = enabled ? withPanelGate(content) ?? failAction(panelGateMisfit(content) ?? "the panel's vhost cannot take the gate") : withoutPanelGate(content);
+    change.content = enabled
+      ? withPanelGate(content, hostname ?? "") ?? failAction(panelGateMisfit(content) ?? "the panel's vhost cannot take the gate")
+      : withoutPanelGate(content);
     changes.push(change);
   }).changed;
 }
@@ -172,8 +181,8 @@ function nginxDrift(paths: GatePaths, state: GateState, domain: string | undefin
   const drift: string[] = [];
   if (domain !== state.hostname) {
     drift.push(domain
-      ? `CloudPanel's custom domain is now ${domain}, not ${state.hostname}; turn the gate off and on again to move it.`
-      : `CloudPanel no longer has a custom domain; the panel answers only an SSH tunnel to 127.0.0.1:8443.`);
+      ? `CloudPanel's custom domain is now ${domain}, which the gate refuses: the panel answers only at ${state.hostname} and through an SSH tunnel to 127.0.0.1:8443. Turn the gate off and on again to move it to ${domain}.`
+      : `CloudPanel no longer has a custom domain; the panel answers only through an SSH tunnel to 127.0.0.1:8443.`);
   } else {
     try {
       if (!hasSitesGate(trustedVhost(paths.customDomainVhost, paths.rootUid).content, state.hostname!, certPath(paths))) {
@@ -183,7 +192,7 @@ function nginxDrift(paths: GatePaths, state: GateState, domain: string | undefin
   }
   const target = panelTarget(paths);
   try {
-    if (!hasPanelGate(trustedVhost(target.vhost, target.uid, target.groupWritable).content)) {
+    if (!hasPanelGate(trustedVhost(target.vhost, target.uid, target.groupWritable).content, state.hostname!)) {
       drift.push("Port 8443 answers more than loopback; the next repair puts the rule back.");
     }
   } catch (error) { drift.push(`The panel's vhost could not be read: ${errorMessage(error)}`); }
@@ -386,10 +395,13 @@ function reviewOf(enabled: boolean, fields: Omit<GateReview, "digest">): GateRev
 }
 
 /** Where an operator deletes what the gate made, when its token cannot. */
-const LEFTOVER_BY_HAND = (hostname: string | undefined) => `If the DNS connection's token can no longer delete them, delete the Access application and policy named ${hostname ? `“${markerFor(hostname)}”` : "after the gate"} under Zero Trust → Access, and the certificate under SSL/TLS → Origin Server → Authenticated Origin Pulls for that hostname, in Cloudflare's dashboard.`;
+const LEFTOVER_BY_HAND = (hostname: string | undefined) => `If the DNS connection's token can no longer delete them, delete the Access applications and policies named ${hostname ? `“${markerFor(hostname)}” and “${acmeMarkerFor(hostname)}”` : "after the gate"} under Zero Trust → Access, and the certificate under SSL/TLS → Origin Server → Authenticated Origin Pulls for that hostname, in Cloudflare's dashboard.`;
 
 function leftoverText(state: GateState): string {
-  const what = [state.appId ? "Access application" : "", state.policyId ? "Access policy" : "", state.certId ? "origin-pull certificate" : ""].filter(Boolean);
+  const what = [
+    state.appId || state.acmeAppId ? "Access applications" : "", state.policyId || state.acmePolicyId ? "Access policies" : "",
+    state.certId ? "origin-pull certificate" : "",
+  ].filter(Boolean);
   return `Cloudflare still has the gate's ${what.join(", ")}${state.hostname ? ` for ${state.hostname}` : ""}. Access still asks for a sign-in there, which nothing at this server enforces any more. While Firewall is enabled, its next repair (clp-addons repair firewall) deletes them.`;
 }
 
@@ -397,6 +409,23 @@ const WAY_BACK = "If you are shut out, an SSH tunnel to 127.0.0.1:8443 still rea
 
 async function withGateLock<T>(paths: GatePaths, body: () => Promise<T>): Promise<T> {
   return withFileLock(paths.lockFile, 300, "another Panel gate change is running", body);
+}
+
+/**
+ * For anything that edits the Nginx files: the platform's operation lock,
+ * which repair and cli/inject.ts hold while they rewrite the panel's vhost,
+ * then the gate's, in that order. A process already holding the operation
+ * lock, such as repair, goes straight on.
+ */
+async function withNginxLocks<T>(paths: GatePaths, operation: string, body: () => Promise<T>): Promise<T> {
+  return withOperationLock(operation, () => withGateLock(paths, body), { lockDir: paths.operationLockDir, timeoutSeconds: 200 });
+}
+
+function withNginxLocksSync<T>(paths: GatePaths, operation: string, body: () => T): T {
+  return withOperationLockSync(
+    operation, () => withFileLockSync(paths.lockFile, 300, "another Panel gate change is running", body),
+    { lockDir: paths.operationLockDir, timeoutSeconds: 200 },
+  );
 }
 
 /** Waits until Cloudflare presents the certificate for the hostname; Nginx must not ask for it sooner. */
@@ -428,12 +457,26 @@ async function ensureIdentityProvider(api: CloudflareApi, accountId: string): Pr
   return existing?.id ?? api.createIdentityProvider(accountId, "One-time PIN", "onetimepin");
 }
 
+const ACME_PATH = "/.well-known/acme-challenge";
+const acmeMarkerFor = (hostname: string) => `${markerFor(hostname)}: Let's Encrypt`;
+
+function acmeAppBody(hostname: string, policyId: string): Record<string, unknown> {
+  return {
+    name: acmeMarkerFor(hostname), domain: `${hostname}${ACME_PATH}`, type: "self_hosted",
+    app_launcher_visible: false, policies: [{ id: policyId, precedence: 1 }],
+  };
+}
+
 function appBody(hostname: string, idp: string, policyId: string): Record<string, unknown> {
   return {
     name: markerFor(hostname), domain: hostname, type: "self_hosted", session_duration: "24h",
     allowed_idps: [idp], auto_redirect_to_identity: true, app_launcher_visible: false,
     policies: [{ id: policyId, precedence: 1 }],
   };
+}
+
+function leftIn(state: GateState): boolean {
+  return Boolean(state.certId || state.appId || state.policyId || state.acmeAppId || state.acmePolicyId);
 }
 
 type Undo = { label: string; run: () => Promise<unknown> | unknown };
@@ -510,22 +553,59 @@ async function turnOn(paths: GatePaths, found: Found, hostname: string, emails: 
     state.appId = app.id;
     save();
 
+    // Let's Encrypt renews the custom domain's certificate over HTTP-01, which Access would otherwise turn away.
+    const acmeMarker = acmeMarkerFor(hostname);
+    const acmeDomain = `${hostname}${ACME_PATH}`;
+    undo.push({
+      label: "Let's Encrypt bypass policy",
+      run: async () => {
+        const id = state.acmePolicyId ?? (await api.accessPolicies(accountId)).find((entry) => entry.name === acmeMarker)?.id;
+        if (id) await api.deleteAccessPolicy(accountId, id);
+        delete state.acmePolicyId;
+      },
+    });
+    const bypass = (await api.accessPolicies(accountId)).find((entry) => entry.name === acmeMarker && entry.decision === "bypass")
+      ?? await api.createBypassPolicy(accountId, acmeMarker);
+    state.acmePolicyId = bypass.id;
+    save();
+    undo.push({
+      label: "Let's Encrypt bypass application",
+      run: async () => {
+        const id = state.acmeAppId ?? (await api.accessApps(accountId, acmeDomain)).find((entry) => entry.domain === acmeDomain && entry.name === acmeMarker)?.id;
+        if (id) await api.deleteAccessApp(accountId, id);
+        delete state.acmeAppId;
+      },
+    });
+    const acmeExisting = (await api.accessApps(accountId, acmeDomain)).find((entry) => entry.domain === acmeDomain && entry.name === acmeMarker);
+    if (acmeExisting) {
+      state.acmeAppId = acmeExisting.id;
+      save();
+    }
+    const acmeApp = acmeExisting
+      ? await api.updateAccessApp(accountId, acmeExisting.id, acmeAppBody(hostname, bypass.id))
+      : await api.createAccessApp(accountId, acmeAppBody(hostname, bypass.id));
+    state.acmeAppId = acmeApp.id;
+    save();
+
     undo.push({ label: `${hostname}'s vhost`, run: () => applySitesGate(false, null, options) });
     applySitesGate(true, hostname, options);
-    undo.push({ label: "the panel's vhost", run: () => applyPanelGate(false, options) });
-    applyPanelGate(true, options);
+    undo.push({ label: "the panel's vhost", run: () => applyPanelGate(false, null, options) });
+    applyPanelGate(true, hostname, options);
     writeGate(paths, { ...state, on: true, leftover: undefined, drift: [], checkedAt: new Date((options.now ?? Date.now)()).toISOString() });
   } catch (error) {
     const failures = await unwind(undo);
-    state.leftover = Boolean(state.certId || state.appId || state.policyId) || undefined;
+    state.leftover = leftIn(state) || undefined;
     try { writeGate(paths, state); } catch (saveError) { failures.push(`gate state: ${errorMessage(saveError)}`); }
-    throw withRecoveryFailures(error, "rollback failed", failures);
+    const reason = errorMessage(error).replace(/\.$/, "");
+    failAction(failures.length
+      ? `The Panel gate could not be turned on: ${reason}. Undoing it did not finish, so this is left: ${failures.join("; ")}.${state.leftover ? " Repair deletes what Cloudflare still has." : ""} An SSH tunnel to 127.0.0.1:8443 reaches the panel, and clp-addons firewall panel-gate off takes any Nginx line left out.`
+      : `The Panel gate could not be turned on: ${reason}. Everything it had done is undone.`);
   }
 }
 
 /** Deletes what Cloudflare still has of the gate; what fails stays recorded for the next repair. */
 async function cleanUpCloudflare(paths: GatePaths, state: GateState, options: GateOptions, fallback?: Found): Promise<string[]> {
-  if (!state.certId && !state.appId && !state.policyId) {
+  if (!leftIn(state)) {
     if (state.leftover) writeGate(paths, { ...state, leftover: undefined });
     return [];
   }
@@ -538,6 +618,10 @@ async function cleanUpCloudflare(paths: GatePaths, state: GateState, options: Ga
   const step = async (label: string, run: () => Promise<unknown>, done: () => void) => {
     try { await run(); done(); } catch (error) { failures.push(`${label}: ${errorMessage(error)}`); }
   };
+  if (state.acmeAppId) await step("Let's Encrypt bypass application", () => api.deleteAccessApp(state.accountId!, state.acmeAppId!), () => { delete state.acmeAppId; });
+  if (state.acmePolicyId && !state.acmeAppId) {
+    await step("Let's Encrypt bypass policy", () => api.deleteAccessPolicy(state.accountId!, state.acmePolicyId!), () => { delete state.acmePolicyId; });
+  }
   if (state.appId) await step("Access application", () => api.deleteAccessApp(state.accountId!, state.appId!), () => { delete state.appId; });
   if (state.policyId && !state.appId) await step("Access policy", () => api.deleteAccessPolicy(state.accountId!, state.policyId!), () => { delete state.policyId; });
   if (state.certId && state.hostname) {
@@ -547,14 +631,14 @@ async function cleanUpCloudflare(paths: GatePaths, state: GateState, options: Ga
       await api.deleteHostnameCertificate(state.zoneId!, state.certId!);
     }, () => { delete state.certId; });
   }
-  state.leftover = Boolean(state.certId || state.appId || state.policyId) || undefined;
+  state.leftover = leftIn(state) || undefined;
   writeGate(paths, state);
   return failures;
 }
 
 /** Takes the Nginx parts out, panel first, without asking Cloudflare anything. */
 function nginxOff(paths: GatePaths, options: GateOptions): void {
-  applyPanelGate(false, options);
+  applyPanelGate(false, null, options);
   applySitesGate(false, null, options);
   removeCertificate(paths);
 }
@@ -564,68 +648,69 @@ export type GateReply = { review: GateReview } | { notice: string };
 /** The switch. Each refusal is decided here; the page only shows the review and sends back its digest. */
 export async function setPanelGate(enabled: boolean, confirm: unknown, options: GateOptions = {}): Promise<GateReply> {
   const paths = pathsOf(options);
-  return withGateLock(paths, async () => {
-    const state = readGate(paths);
-    if (enabled && state.on) return { notice: "The Panel gate is already on." };
-    if (!enabled && !state.on) return { notice: "The Panel gate is already off." };
-    if (!enabled) {
-      const review = reviewOf(false, {
-        title: "Turn off the Panel gate?",
-        text: `Anyone who can reach this server can open the panel's login page again, ${state.hostname ? `at https://${state.hostname} without Cloudflare Access and ` : ""}at https://<this server's IP>:8443. Firewall then deletes the Access application and the origin-pull certificate from Cloudflare; what it cannot delete is retried by repair.`,
-        details: [], confirmLabel: "Turn off", danger: false,
-      });
-      if (confirm !== review.digest) return { review };
-      nginxOff(paths, options);
-      const next: GateState = { ...state, on: false, leftover: true, drift: undefined, checkedAt: undefined };
-      writeGate(paths, next);
-      const failures = await cleanUpCloudflare(paths, next, options);
-      return {
-        notice: failures.length
-          ? `The Panel gate is off on this server. Cloudflare still has some of it, which the next repair deletes: ${failures.join("; ")}`
-          : "The Panel gate is off.",
-      };
-    }
-    if (state.leftover) nginxOff(paths, options);
-    const found = await check(options);
-    if (found.problems.length) failAction(`The Panel gate cannot be turned on yet. ${found.problems.join(" ")}`);
-    const hostname = found.hostname!;
-    if (state.leftover) {
-      // Turning on starts a new record, so what an earlier gate left must be gone from Cloudflare first.
-      const failures = await cleanUpCloudflare(paths, state, options, found.found!);
-      if (failures.length) {
-        failAction(`Cloudflare still has the Access application or origin-pull certificate of the earlier gate, which could not be deleted: ${failures.join("; ")}. ${LEFTOVER_BY_HAND(state.hostname)}`);
-      }
-    }
-    const review = reviewOf(true, {
-      title: "Turn on the Panel gate?",
-      text: [
-        `CloudPanel will answer only at https://${hostname}, through Cloudflare, after a Cloudflare Access sign-in: Access emails a one-time code to the address you enter, which must be one of the panel users' below.`,
-        `Opening the panel at https://<this server's IP>:8443 stops working.`,
-        WAY_BACK,
-        ...found.notes,
-      ].join(" "),
-      details: found.emails, confirmLabel: "Turn on", danger: true,
+  // The review changes nothing; only a confirmed change takes the operation lock as well.
+  if (typeof confirm !== "string") return withGateLock(paths, () => switchGate(paths, enabled, null, options));
+  return withNginxLocks(paths, "panel gate", () => switchGate(paths, enabled, confirm, options));
+}
+
+async function switchGate(paths: GatePaths, enabled: boolean, confirm: string | null, options: GateOptions): Promise<GateReply> {
+  const state = readGate(paths);
+  if (enabled && state.on) return { notice: "The Panel gate is already on." };
+  if (!enabled && !state.on) return { notice: "The Panel gate is already off." };
+  if (!enabled) {
+    const review = reviewOf(false, {
+      title: "Turn off the Panel gate?",
+      text: `Anyone who can reach this server can open the panel's login page again, ${state.hostname ? `at https://${state.hostname} without Cloudflare Access and ` : ""}at https://<this server's IP>:8443. Firewall then deletes the Access applications and the origin-pull certificate from Cloudflare; what it cannot delete is retried by repair.`,
+      details: [], confirmLabel: "Turn off", danger: false,
     });
     if (confirm !== review.digest) return { review };
-    try {
-      await turnOn(paths, found.found!, hostname, found.emails, options);
-    } catch (error) {
-      if (error instanceof ActionFailure) throw error;
-      failAction(`The Panel gate could not be turned on, and what it had done was undone: ${errorMessage(error)}`);
-    }
-    return { notice: `The Panel gate is on. CloudPanel answers only at https://${hostname}, after a Cloudflare Access sign-in.` };
+    nginxOff(paths, options);
+    const next: GateState = { ...state, on: false, leftover: true, drift: undefined, checkedAt: undefined };
+    writeGate(paths, next);
+    const failures = await cleanUpCloudflare(paths, next, options);
+    return {
+      notice: failures.length
+        ? `The Panel gate is off on this server. Cloudflare still has some of it, which the next repair deletes: ${failures.join("; ")}`
+        : "The Panel gate is off.",
+    };
+  }
+  const found = await check(options);
+  if (found.problems.length) failAction(`The Panel gate cannot be turned on yet. ${found.problems.join(" ")}`);
+  const hostname = found.hostname!;
+  const left = state.leftover && leftIn(state);
+  const review = reviewOf(true, {
+    title: "Turn on the Panel gate?",
+    text: [
+      ...left ? [`It first deletes the Access applications and origin-pull certificate an earlier gate left in Cloudflare${state.hostname ? ` for ${state.hostname}` : ""}.`] : [],
+      `CloudPanel will answer only at https://${hostname}, through Cloudflare, after a Cloudflare Access sign-in: Access emails a one-time code to the address you enter, which must be one of the panel users' below.`,
+      `Opening the panel at https://<this server's IP>:8443 stops working, and so does any other custom domain CloudPanel is later given, until the gate is turned off and on again.`,
+      WAY_BACK,
+      ...found.notes,
+    ].join(" "),
+    details: found.emails, confirmLabel: "Turn on", danger: true,
   });
+  if (confirm !== review.digest) return { review };
+  if (state.leftover) {
+    nginxOff(paths, options);
+    // Turning on starts a new record, so what an earlier gate left must be gone from Cloudflare first.
+    const failures = await cleanUpCloudflare(paths, state, options, found.found!);
+    if (failures.length) {
+      failAction(`Cloudflare still has the Access application or origin-pull certificate of the earlier gate, which could not be deleted: ${failures.join("; ")}. ${LEFTOVER_BY_HAND(state.hostname)}`);
+    }
+  }
+  await turnOn(paths, found.found!, hostname, found.emails, options);
+  return { notice: `The Panel gate is on. CloudPanel answers only at https://${hostname}, after a Cloudflare Access sign-in.` };
 }
 
 /** `clp-addons firewall panel-gate off`: the way back in when Cloudflare is the problem. Leaves Cloudflare's objects for repair to delete. */
 export async function panelGateOffLocally(options: GateOptions = {}): Promise<string> {
   const paths = pathsOf(options);
-  return withGateLock(paths, async () => {
+  return withNginxLocks(paths, "firewall panel-gate off", async () => {
     const state = readGate(paths);
-    const panel = applyPanelGate(false, options);
+    const panel = applyPanelGate(false, null, options);
     const sites = applySitesGate(false, null, options);
     removeCertificate(paths);
-    const left = Boolean(state.certId || state.appId || state.policyId);
+    const left = leftIn(state);
     if (state.on || left) writeGate(paths, { ...state, on: false, leftover: left || undefined, drift: undefined, checkedAt: undefined });
     const cloudflare = left ? ` ${leftoverText(state)} ${LEFTOVER_BY_HAND(state.hostname)}` : "";
     if (state.on) {
@@ -641,11 +726,11 @@ export async function panelGateOffLocally(options: GateOptions = {}): Promise<st
 export function keepPanelGateNginx(options: GateOptions = {}): string | null {
   const paths = pathsOf(options);
   if (!existsSync(paths.stateFile)) return null;
-  return withFileLockSync(paths.lockFile, 300, "another Panel gate change is running", () => {
+  return withNginxLocksSync(paths, "repair --anchors-only", () => {
     const state = readGate(paths);
     if (!state.on) return null;
     const changed: string[] = [];
-    if (applyPanelGate(true, options)) changed.push("port 8443 loopback only");
+    if (applyPanelGate(true, state.hostname!, options)) changed.push("port 8443 loopback only");
     if (customDomain(paths) === state.hostname && existsSync(certPath(paths)) && applySitesGate(true, state.hostname!, options)) {
       changed.push(`${state.hostname} asks for Cloudflare's certificate`);
     }
@@ -684,6 +769,14 @@ async function cloudflareDrift(paths: GatePaths, state: GateState, options: Gate
       }
     }
   } catch (error) { drift.push(`Cloudflare Access could not be read: ${errorMessage(error)}`); }
+  try {
+    const acmeDomain = `${state.hostname}${ACME_PATH}`;
+    const app = state.acmeAppId ? await api.accessApp(state.accountId!, state.acmeAppId) : null;
+    const policy = state.acmePolicyId ? await api.accessPolicy(state.accountId!, state.acmePolicyId) : null;
+    if (!app || app.domain !== acmeDomain || !app.policies.includes(state.acmePolicyId ?? "") || policy?.decision !== "bypass") {
+      drift.push(`The Access application that lets Let's Encrypt reach ${acmeDomain} is missing or changed, so ${state.hostname}'s certificate cannot renew.`);
+    }
+  } catch (error) { drift.push(`Cloudflare Access could not be read: ${errorMessage(error)}`); }
   return { drift, synced };
 }
 
@@ -695,7 +788,7 @@ export async function repairPanelGate(options: GateOptions = {}): Promise<string
   let nginxFailure: string | null = null;
   try { line = keepPanelGateNginx(options); }
   catch (error) { nginxFailure = `The gate's Nginx edits could not be put back: ${errorMessage(error)}`; }
-  return withGateLock(paths, async () => {
+  return withNginxLocks(paths, "repair", async () => {
     const state = readGate(paths);
     if (!state.on) {
       // A run that stopped part way may have left an edit that asks for a certificate Cloudflare is about to forget.
@@ -724,10 +817,10 @@ export async function repairPanelGate(options: GateOptions = {}): Promise<string
 export function withdrawPanelGate(options: GateOptions = {}): boolean {
   const paths = pathsOf(options);
   if (!existsSync(paths.stateFile)) return false;
-  return withFileLockSync(paths.lockFile, 300, "another Panel gate change is running", () => {
+  return withNginxLocksSync(paths, "disable firewall", () => {
     const state = readGate(paths);
     nginxOff(paths, options);
-    const left = Boolean(state.certId || state.appId || state.policyId);
+    const left = leftIn(state);
     if (state.on || left) writeGate(paths, { ...state, on: false, leftover: left || undefined, drift: undefined, checkedAt: undefined });
     return left;
   });

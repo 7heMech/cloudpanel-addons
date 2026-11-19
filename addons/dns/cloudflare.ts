@@ -609,6 +609,12 @@ export class CloudflareApi {
     return parseAccessPolicy(result);
   }
 
+  /** A Bypass policy for everyone, for a path Access must leave open. */
+  async createBypassPolicy(accountId: string, name: string): Promise<CfAccessPolicy> {
+    const { result } = await this.needs(PERMISSIONS.accessApps.label, () => this.call(`/accounts/${id(accountId)}/access/policies`, "POST", { name, decision: "bypass", include: [{ everyone: {} }] }));
+    return parseAccessPolicy(result);
+  }
+
   async updateAccessPolicy(accountId: string, policyId: string, name: string, emails: string[]): Promise<CfAccessPolicy> {
     const { result } = await this.needs(PERMISSIONS.accessApps.label, () => this.call(`/accounts/${id(accountId)}/access/policies/${uuid(policyId)}`, "PUT", accessPolicyBody(name, emails)));
     return parseAccessPolicy(result);

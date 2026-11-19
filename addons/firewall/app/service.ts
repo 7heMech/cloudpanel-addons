@@ -21,7 +21,7 @@ export type HetznerReply = { review: HetznerReview } | { notice: string };
 
 // Hetzner's changes wait for its actions to finish and for each site's DNS lookup.
 // The gate waits for Cloudflare to deploy its certificate.
-const SLOW = new Set<WebVerb<"firewall">>(["list", "hetzner-connect", "hetzner-disconnect", "hetzner-switch", "panel-gate", "panel-gate-switch"]);
+const SLOW = new Set<WebVerb<"firewall">>(["hetzner-connect", "hetzner-disconnect", "hetzner-switch", "panel-gate", "panel-gate-switch"]);
 
 async function call<T>(verb: WebVerb<"firewall">, args: string[] = [], input?: string): Promise<ActionResult<T>> {
   return callGatewayAction("firewall", verb, args, input, SLOW.has(verb) ? { timeout: 240_000 } : undefined);

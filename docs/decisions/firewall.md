@@ -204,8 +204,14 @@ CloudPanel's custom domain is a server block of the sites' Nginx,
   `X-Forwarded-For` for trusted peers, 127.0.0.1 among them, so it is the
   visitor's address on every proxied request. First, because a later
   `if (-f $request_filename) { break; }` stops the server's rewrite directives
-  for existing files. The `/addons/` proxy's baseline (`cli/inject.ts`) leaves
-  the block out, as it does System Tweaks' phpMyAdmin rules.
+  for existing files. A second `if` returns 444 unless `$host` is the gated
+  hostname, `127.0.0.1`, `localhost` or `[::1]`. `$host` is the Host header,
+  or HTTP/2's `:authority`, in lower case and without the port, so the SSH
+  tunnel and on-box requests keep working over either protocol. A custom domain
+  CloudPanel is given after the gate is on proxies from loopback too, without
+  the certificate or Access, and is refused here rather than let in. The
+  `/addons/` proxy's baseline (`cli/inject.ts`) leaves the block out, as it
+  does System Tweaks' phpMyAdmin rules.
 - **Cloudflare Access.** The account's One-time PIN login is used, or created,
   and a reusable allow policy lists the emails of every active panel user
   (`status = 1`; admins, site managers and users). A self-hosted application for
@@ -213,6 +219,20 @@ CloudPanel's custom domain is a server block of the sites' Nginx,
   `CloudPanel <hostname> (clp-addons panel gate)`, so a run that lost its state
   adopts them rather than making another pair; their ids are kept in
   `/var/lib/clp-addons/firewall/panel-gate.json`.
+- **Let's Encrypt.** CloudPanel renews the custom domain's certificate over
+  HTTP-01, which Access would turn away at the edge, and with Full (strict) the
+  panel would then go dark at the only hostname the gate allows. A second
+  self-hosted application, for `<hostname>/.well-known/acme-challenge`, has a
+  Bypass policy for everyone; Access takes the more specific path first. It is
+  named like the first with `: Let's Encrypt`, made, adopted, deleted and
+  checked the same way. The challenge then reaches the server as any other
+  request does: Cloudflare connects to 443 with the origin-pull certificate,
+  which is per hostname rather than per path, and the panel serves
+  `/.well-known` itself. DNS's `clp_dns_acme` rule, Full SSL for that path,
+  keeps that connection working while the certificate is expired or not yet
+  issued; Full still presents the origin-pull certificate. Port 80 is not
+  involved: the custom domain's server only redirects there, and
+  `ssl_verify_client` applies to TLS connections alone.
 
 The Access token is not checked at the origin. A request reaches the
 custom domain's 443 only with the client certificate, which Cloudflare presents
@@ -226,7 +246,8 @@ about remote clients, and loopback is the way back in.
 
 Every check runs in the root action, when the switch is used and again when it
 is confirmed; the page shows the review and sends its digest back, as the
-Hetzner switches do. It refuses unless CloudPanel has a custom domain, both
+Hetzner switches do. The review changes nothing, a clean-up of an earlier
+gate included, so cancelling it leaves everything as it was. It refuses unless CloudPanel has a custom domain, both
 vhosts have the shape the edits expect, an active panel user has an email, a
 DNS connection's token reaches an active zone for the hostname (the longest),
 the hostname has A, AAAA or CNAME records and all are proxied, and the token
@@ -265,9 +286,15 @@ certificate Cloudflare no longer presents.
 Turning off runs the other way: the panel's block, the custom domain's lines
 and the files, then the Access application, its policy and the certificate.
 Cloudflare failures leave the gate off and the objects for repair to delete.
-Turning on again deletes what an earlier gate left first, through its own
-DNS connection or another that reaches the same zone and account, and
-refuses while that fails, so the record of those objects is never dropped.
+Turning on again deletes what an earlier gate left first, once confirmed,
+through its own DNS connection or another that reaches the same zone and
+account, and refuses while that fails, so the record of those objects is
+never dropped. A failure says what undoing it left, if anything.
+
+Every change to the two Nginx files takes the platform's operation lock, which
+repair and `cli/inject.ts` hold while they rewrite the panel's vhost, then the
+gate's own lock, in that order; a confirmed switch, `panel-gate off` and
+repair hold both from start to end.
 
 ### Getting back in
 
@@ -289,8 +316,10 @@ domain, and a `cloudpanel` upgrade rewrites `cloudpanel.conf`. The anchor
 watcher, which follows the panel's vhost and the sites' directory, and the
 15-minute repair put both edits back. Until then the custom domain answers
 without the certificate. A custom domain that changed is not gated: its new
-hostname has no origin pulls, so the check would shut it out. The page says to
-turn the gate off and on again.
+hostname has no origin pulls, so the check would shut it out, and the panel's
+Host check refuses it. Setup raises it as Action needed as soon as CloudPanel
+writes the new name, and the card says the new domain is refused until the
+gate is turned off and on again.
 
 Repair puts the Nginx edits back, reads Cloudflare and syncs the policy as
 separate steps: a failure in one is recorded as drift and the others still

@@ -1,8 +1,8 @@
 import { join } from "node:path";
-import { ActionFailure } from "../lib/action";
-import { acquireFileLock, acquireFileLockSync, type FileLockHandle } from "../lib/file-lock";
-import { LOCK_DIR } from "../lib/paths";
-import { fatal } from "../lib/log";
+import { ActionFailure } from "./action";
+import { acquireFileLock, acquireFileLockSync, type FileLockHandle } from "./file-lock";
+import { LOCK_DIR } from "./paths";
+import { fatal } from "./log";
 
 // Enabling, disabling, repairing, updating and uninstalling all rewrite the
 // config files, the units, the Twig templates and the Nginx fragments, none of

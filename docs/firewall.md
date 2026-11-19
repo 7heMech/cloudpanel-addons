@@ -43,8 +43,11 @@ It is off by default, and the card lists what it still needs:
 - Cloudflare Zero Trust set up on the account (the free plan is enough).
 
 Panel users added, removed or deactivated are kept in the Access policy within
-15 minutes. Disabling Firewall turns the gate off; enabling Firewall again
-leaves it off. The card shows anything changed since: the Access application, origin
+15 minutes. Let's Encrypt still reaches `/.well-known/acme-challenge/` to
+renew the domain's certificate. If you change CloudPanel's custom domain while
+the gate is on, the new one is refused until you turn the gate off and on
+again. Disabling Firewall turns the gate off; enabling Firewall again leaves it
+off. The card shows anything changed since: the Access application, origin
 pulls, the token's permissions, or the Nginx edits.
 
 If you are shut out, reach the panel through an SSH tunnel:

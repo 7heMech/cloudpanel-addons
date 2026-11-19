@@ -15,7 +15,7 @@ import { fatal, Fatal, log, requireRoot } from "../lib/log";
 import type { AddonSpec } from "../lib/addon-definition";
 import { LOCKABLE_ADDONS, isLockable, lockedAddons } from "../lib/root-locks";
 import { changeLock, lockFailure, lockFileProblem } from "../lib/lock-addon";
-import { withOperationLockSync } from "./operation-lock";
+import { withOperationLockSync } from "../lib/operation-lock";
 import { runRecon } from "./recon";
 import { cmdServe } from "../manager/server";
 import { runAuthActionStdin } from "./auth-action";

@@ -8,17 +8,28 @@ import { nginxServers, type NginxBlock } from "../../lib/nginx-config";
 const SITES_TAG = "# clp-addons:panel-gate";
 const SITES_LINE_RE = /^[ \t]*ssl_(?:client_certificate|verify_client)[ \t][^\n]*# clp-addons:panel-gate\n/gm;
 const PANEL_BLOCK_RE = /^[ \t]*# clp-addons:panel-gate:start\n(?:.*\n)*?[ \t]*# clp-addons:panel-gate:end\n/gm;
-export const PANEL_GATE_MARKER = /# clp-addons:panel-gate/;
+const HOSTNAME_RE = /^[a-z0-9-]+(?:\.[a-z0-9-]+)+$/;
 
-// $remote_addr is X-Forwarded-For's address for the panel's trusted peers, 127.0.0.1 among them.
-const PANEL_BLOCK = [
-  "  # clp-addons:panel-gate:start",
-  '  if ($realip_remote_addr !~ "^(?:127\\.0\\.0\\.1|::1)$") {',
-  "    return 444;",
-  "  }",
-  "  # clp-addons:panel-gate:end",
-  "",
-].join("\n");
+/**
+ * Loopback only, and only for the gated hostname or a loopback name, so a
+ * custom domain CloudPanel serves after the gate was turned on is refused
+ * rather than proxied in past the gate. `$remote_addr` is X-Forwarded-For's
+ * address for the panel's trusted peers, 127.0.0.1 among them; `$host` is the
+ * Host header or HTTP/2's :authority, lower case and without the port.
+ */
+function panelBlock(hostname: string): string {
+  return [
+    "  # clp-addons:panel-gate:start",
+    '  if ($realip_remote_addr !~ "^(?:127\\.0\\.0\\.1|::1)$") {',
+    "    return 444;",
+    "  }",
+    `  if ($host !~* "^(?:${hostname.replaceAll(".", "\\.")}|127\\.0\\.0\\.1|localhost|\\[?::1\\]?)$") {`,
+    "    return 444;",
+    "  }",
+    "  # clp-addons:panel-gate:end",
+    "",
+  ].join("\n");
+}
 
 const CERT_PATH_RE = /^\/[A-Za-z0-9._/-]+$/;
 
@@ -90,15 +101,16 @@ export function panelGateMisfit(content: string): string | null {
 }
 
 /** The panel's vhost with the block first in its 8443 server, before any rewrite there can `break`. */
-export function withPanelGate(content: string): string | null {
+export function withPanelGate(content: string, hostname: string): string | null {
+  if (!HOSTNAME_RE.test(hostname)) return null;
   const upstream = withoutPanelGate(content);
   const block = panelServer(upstream);
   if (typeof block === "string") return null;
   const lineEnd = upstream.indexOf("\n", block.open);
   const at = lineEnd === -1 ? upstream.length : lineEnd + 1;
-  return `${upstream.slice(0, at)}${lineEnd === -1 ? "\n" : ""}${PANEL_BLOCK}${upstream.slice(at)}`;
+  return `${upstream.slice(0, at)}${lineEnd === -1 ? "\n" : ""}${panelBlock(hostname)}${upstream.slice(at)}`;
 }
 
-export function hasPanelGate(content: string): boolean {
-  return withPanelGate(content) === content;
+export function hasPanelGate(content: string, hostname: string): boolean {
+  return withPanelGate(content, hostname) === content;
 }

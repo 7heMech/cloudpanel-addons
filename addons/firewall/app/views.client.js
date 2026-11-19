@@ -62,14 +62,25 @@ async function repaint() {
 }
 
 // A gate that is off needs Cloudflare read to say what it lacks, so its card
-// follows the page rather than holding the site table back.
+// follows the page rather than holding the site table back. A repaint within
+// a minute reuses that read; switching the gate drops it.
+let panelGateRead = null;
+
 async function loadPanelGate() {
   const card = CLP_ROOT.getElementById('panel-gate-card');
   if (!card || !card.hasAttribute('data-pending')) return;
+  const swap = function (html) {
+    const current = CLP_ROOT.getElementById('panel-gate-card');
+    if (current && current.hasAttribute('data-pending') && html) current.outerHTML = html;
+  };
+  if (panelGateRead && Date.now() - panelGateRead.at < 60000) {
+    swap(panelGateRead.html);
+    return;
+  }
   try {
     const reply = await call('/api/panel-gate');
-    const current = CLP_ROOT.getElementById('panel-gate-card');
-    if (current && current.hasAttribute('data-pending') && reply.html) current.outerHTML = reply.html;
+    panelGateRead = { at: Date.now(), html: reply.html };
+    swap(reply.html);
   } catch (error) {
     const status = card.querySelector('[role="status"]');
     if (status) status.textContent = 'The Panel gate could not be read: ' + error.message;
@@ -308,6 +319,7 @@ function setHetzner(input, role) {
 }
 
 function setPanelGate(input) {
+  panelGateRead = null;
   return reviewedSwitch(input, '/api/panel-gate', {}, async function (review) {
     const accepted = await confirmAction({
       title: review.title, text: review.text, details: review.details,
