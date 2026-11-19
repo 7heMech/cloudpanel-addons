@@ -152,12 +152,16 @@ function editedDefaultPath(paths: MaintenanceActionPaths): string {
   return join(paths.dataDir, "default-edited.html");
 }
 
-/** The page every site without its own serves: the operator's edited default, or the built-in one. */
+/**
+ * The page every site without its own serves: the operator's edited default,
+ * or the built-in one. Like a site's page, an edited default that is not a
+ * regular file within the limit is not served.
+ */
 function defaultPage(paths: MaintenanceActionPaths): { custom: boolean; html: string } {
   const edited = editedDefaultPath(paths);
-  if (!existsSync(edited)) return { custom: false, html: DEFAULT_MAINTENANCE_PAGE };
-  if (!safeRegularFile(edited)) failAction(`unsafe maintenance default template: ${edited}`);
-  return { custom: true, html: readFileSync(edited, "utf8") };
+  return safeRegularFile(edited)
+    ? { custom: true, html: readFileSync(edited, "utf8") }
+    : { custom: false, html: DEFAULT_MAINTENANCE_PAGE };
 }
 
 function ensureDataDir(paths: MaintenanceActionPaths): void {

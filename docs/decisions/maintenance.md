@@ -145,8 +145,8 @@ normalizes domains and IP addresses, checks that site-scoped domains are current
 CloudPanel sites, and bounds a custom template at 256 KiB. The edited default
 goes through the same sanitizer and limit, by the admin-only
 `get-default-template`, `set-default-template` and `reset-default-template`.
-An edited default that is not a regular file within the limit is refused
-rather than served, and resetting it still works. Each bypass update
+Like a site's page, an edited default that is not a regular file within the
+limit is not served; sites get the built-in page and a reset removes it. Each bypass update
 replaces the complete list for its scope and allows at most 64 addresses.
 WordPress Tools adds one address to a site's list through the same locked
 writer, when an administrator agrees; see [WordPress Tools](wp-tools.md).

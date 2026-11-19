@@ -181,10 +181,12 @@ test("an edited default page is what default.html and every site without its own
     expect(await run(["get-template", "--domain=example.com"])).toMatchObject({ custom: true, html: "<p>own</p>\n" });
     expect(await run(["reset-template", "--domain=example.com"])).toEqual({ domain: "example.com", custom: false, html: saved.html });
 
-    // An unsafe edited default is refused, and reset is still the way out.
+    // Like a site's page, an unsafe edited default is not served, and does not stop maintenance.
     rmSync(edited);
     writeFileSync(edited, "x".repeat(MAX_TEMPLATE_BYTES + 1));
-    await expect(run(["get-default-template"])).rejects.toThrow("unsafe maintenance default template");
+    expect(await run(["get-default-template"])).toEqual({ custom: false, html: DEFAULT_MAINTENANCE_TEMPLATE });
+    expect((await run(["enable", "--domain=example.com"]) as MaintenanceStatus).enabled).toBe(true);
+    expect(served()).toBe(DEFAULT_MAINTENANCE_TEMPLATE);
     expect(await run(["reset-default-template"])).toEqual({ custom: false, html: DEFAULT_MAINTENANCE_TEMPLATE });
     expect(existsSync(edited)).toBe(false);
     expect(served()).toBe(DEFAULT_MAINTENANCE_TEMPLATE);
