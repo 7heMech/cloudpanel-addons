@@ -29,6 +29,8 @@ firewall:hetzner-connect           admin
 firewall:hetzner-disconnect        admin
 firewall:hetzner-switch            admin
 firewall:list                      admin
+firewall:panel-gate                admin
+firewall:panel-gate-switch         admin
 firewall:policy                    admin
 firewall:protocols                 admin
 firewall:set                       admin

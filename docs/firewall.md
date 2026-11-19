@@ -1,7 +1,8 @@
 # Firewall
 
 Cloudflare-only access for your sites, UDP rules on CloudPanel's own
-Firewall page, and Hetzner Cloud Firewalls that admit only Cloudflare.
+Firewall page, a gate in front of the panel, and Hetzner Cloud Firewalls that
+admit only Cloudflare.
 
 ## Cloudflare-only sites
 
@@ -23,6 +24,45 @@ The change reaches ufw a few seconds after the page saves, and stays through
 later changes on the Firewall page. Check it with `ufw status`. Switching
 Protocols off, or disabling Firewall, sets every rule back to TCP in ufw and
 keeps the choices for when it is on again.
+
+## Panel gate
+
+With the **Panel gate** on, CloudPanel answers only at its custom domain,
+through Cloudflare, after a Cloudflare Access sign-in: Access emails a one-time
+code to a panel user's address. `https://<server IP>:8443` stops answering.
+It is off by default, and the card lists what it still needs:
+
+- a custom domain for CloudPanel (**Admin → Settings**), with its record
+  proxied through Cloudflare (the orange cloud) and the zone in SSL mode Full
+  or Full (strict);
+- a DNS connection whose token reaches that zone and holds
+  **SSL and Certificates: Edit**, **Access: Apps and Policies: Edit** and
+  **Access: Organizations, Identity Providers, and Groups: Edit**, besides
+  **API Tokens: Read**. Add them to the token in Cloudflare; DNS lists them as
+  optional;
+- Cloudflare Zero Trust set up on the account (the free plan is enough).
+
+Panel users added, removed or deactivated are kept in the Access policy within
+15 minutes. Let's Encrypt still reaches `/.well-known/acme-challenge/` to
+renew the domain's certificate. If you change CloudPanel's custom domain while
+the gate is on, the new one is refused until you turn the gate off and on
+again. Disabling Firewall turns the gate off; enabling Firewall again leaves it
+off. The card shows anything changed since: the Access application, origin
+pulls, the token's permissions, or the Nginx edits.
+
+If you are shut out, reach the panel through an SSH tunnel:
+
+```sh
+ssh -L 8443:127.0.0.1:8443 root@<server IP>
+```
+
+then open `https://127.0.0.1:8443`. To take the gate off the server without
+Cloudflare, run as root (it says what Cloudflare still has, which the next
+repair deletes):
+
+```sh
+clp-addons firewall panel-gate off
+```
 
 ## Hetzner Cloud Firewall
 

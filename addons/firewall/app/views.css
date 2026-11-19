@@ -43,6 +43,13 @@
 @media (max-width: 760px) {
   .hz-card > .card-header { flex-wrap: wrap; }
 }
+.hz-row.hz-first { padding-top: 0; border-top: 0; }
+.hz-row.hz-first h2 { margin: 0; }
+.pg-list { margin: 8px 0 0; padding-left: 20px; font-size: 14px; color: var(--muted); }
+.pg-list li { margin: 4px 0; overflow-wrap: anywhere; }
+.pg-drift .pg-list { color: var(--warn); }
+p.hint.pg-lead { margin: 0; }
+p.pg-way-back { margin: 16px 0 0; padding-top: 16px; border-top: 1px solid var(--border); overflow-wrap: anywhere; }
 /* Where the shared fleet table becomes a card, this row keeps the domain and
    its action on one line instead. */
 @media (max-width: 940px) {

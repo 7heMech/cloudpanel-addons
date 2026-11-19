@@ -379,6 +379,15 @@ the permission list yet. Cloudflare allows
 on every plan, while the Free plan allows only
 [one custom list](https://developers.cloudflare.com/waf/tools/lists/).
 
+Firewall's [Panel gate](firewall.md#panel-gate) needs SSL and Certificates:
+Edit on the custom domain's zone (API name SSL and Certificates Write, key
+`ssl_and_certificates`) and, on its account, Access: Apps and Policies: Edit
+(Access: Apps and Policies Write, `access`) and Access: Organizations, Identity
+Providers, and Groups: Edit (Access: Organizations, Identity Providers, and
+Groups Write, `access_acct`). They are listed as optional, never as missing,
+and stay out of the template: a token without them is fine until the gate is
+turned on, and the gate checks them itself.
+
 A token is verified before it is saved (`/user/tokens/verify`, or the account
 route for an account-owned one, using a zone's account when account listing is
 not permitted). Each check then lists every account and zone

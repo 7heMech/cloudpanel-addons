@@ -5,7 +5,7 @@ import { reconcileAnchors, reconcileNginx, reconcilePanelBlocks, runAnchorWork }
 import { reconcilePhpGuard } from "../lib/php-guard";
 import { runAddonRepairs } from "./addon-hooks";
 import { pruneManagerJobs } from "../manager/action";
-import { withOperationLock } from "./operation-lock";
+import { withOperationLock } from "../lib/operation-lock";
 import { conffilesReleased } from "./conffiles";
 import { CERTIFICATES_PATH, FIREWALL_PATH, MANAGER_UNIT, NEW_SITES_PATH, SYSTEMD_DIR } from "../lib/paths";
 import {

@@ -2,9 +2,10 @@
 // state or invokes an action. Supported mutations change fictional data only.
 import { indexPage, updatePage } from "../manager/views";
 import {
-  dashboardView as firewallDashboardView, layout as firewallLayout,
+  dashboardView as firewallDashboardView, layout as firewallLayout, panelGateCard as firewallPanelGateCard,
 } from "../addons/firewall/app/views";
 import type { HetznerView } from "../addons/firewall/hetzner";
+import type { PanelGateView } from "../addons/firewall/panel-gate";
 import {
   dashboardView, layout as instaticLayout, newInstanceView, jobView as instaticJobView,
 } from "../addons/instatic/app/views";
@@ -540,6 +541,27 @@ function hetznerPreviewState(mode: string | null): HetznerView {
   };
 }
 
+/** ?gate=ready|on|drift|leftover|pending|error: the Panel gate card's states; something missing by default. */
+function panelGatePreviewState(mode: string | null): PanelGateView | { error: string } {
+  if (mode === "error") return { error: "The Panel gate could not be read: Cloudflare: asked to wait until 2026-11-19T05:10:00.000Z" };
+  const base = { hostname: "panel.example.com", problems: [], drift: [], checkedAt: null, leftover: false, editUrl: null };
+  if (mode === "on" || mode === "drift") {
+    return {
+      ...base, on: true, checkedAt: "2026-11-19T04:45:12.000Z",
+      drift: mode === "drift" ? [
+        "The Access application for panel.example.com was changed in Cloudflare.",
+        "Port 8443 answers more than loopback; the next repair puts the rule back.",
+      ] : [],
+    };
+  }
+  if (mode === "ready" || mode === "leftover") return { ...base, on: false, leftover: mode === "leftover" };
+  if (mode === "pending") return { ...base, on: false, pending: true };
+  return {
+    ...base, on: false, editUrl: "https://dash.cloudflare.com/profile/api-tokens",
+    problems: ["The token of DNS connection Agency lacks SSL and Certificates: Edit, Access: Organizations, Identity Providers, and Groups: Edit. Add them to the token in Cloudflare."],
+  };
+}
+
 /** ?sites=all|none|mixed, ?auto=off, ?many (search and filter), ?protocols=off and ?noudp cover the states the controls describe. */
 function firewallPreviewState(url: URL) {
   const all = url.searchParams.get("sites");
@@ -554,6 +576,7 @@ function firewallPreviewState(url: URL) {
       protocols: { 9: "udp" as const, 10: "udp" as const, 11: "both" as const }, udpPorts: url.searchParams.has("noudp") ? [] : ["53", "51820"],
     },
     hetzner: hetznerPreviewState(url.searchParams.get("hetzner")),
+    panelGate: panelGatePreviewState(url.searchParams.get("gate")),
   };
 }
 
@@ -1979,6 +2002,10 @@ const server = Bun.serve({
     const path = url.pathname;
     const terminalReply = terminalPreview(req, url);
     if (terminalReply) return terminalReply;
+    // ?gate=pending draws the card first and then reads it here, as the real page does.
+    if (path === "/addons/firewall/api/panel-gate" && req.method === "GET") {
+      return Response.json({ ok: true, html: firewallPanelGateCard(panelGatePreviewState(null)) });
+    }
     const wpToolsApi = await wpToolsPreviewApi(req, path);
     if (wpToolsApi) return wpToolsApi;
     const panelTweaksApi = panelTweaksPreviewApi(req, path);

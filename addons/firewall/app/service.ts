@@ -2,6 +2,7 @@ import { callGatewayAction, type ActionResult } from "../../../lib/gateway-clien
 import type { WebVerb } from "../../../lib/gateway-protocol";
 import type { FirewallStatus } from "../protocols";
 import type { HetznerReview, HetznerRole, HetznerView } from "../hetzner";
+import type { GateReply, PanelGateView } from "../panel-gate";
 
 export interface CloudflareSiteView {
   domain: string;
@@ -13,12 +14,14 @@ export interface FirewallPageState {
   autoEnableNewSites: boolean;
   protocols: FirewallStatus | { error: string };
   hetzner: HetznerView;
+  panelGate: PanelGateView | { error: string };
 }
 
 export type HetznerReply = { review: HetznerReview } | { notice: string };
 
 // Hetzner's changes wait for its actions to finish and for each site's DNS lookup.
-const SLOW = new Set<WebVerb<"firewall">>(["hetzner-connect", "hetzner-disconnect", "hetzner-switch"]);
+// The gate waits for Cloudflare to deploy its certificate.
+const SLOW = new Set<WebVerb<"firewall">>(["hetzner-connect", "hetzner-disconnect", "hetzner-switch", "panel-gate", "panel-gate-switch"]);
 
 async function call<T>(verb: WebVerb<"firewall">, args: string[] = [], input?: string): Promise<ActionResult<T>> {
   return callGatewayAction("firewall", verb, args, input, SLOW.has(verb) ? { timeout: 240_000 } : undefined);
@@ -60,6 +63,14 @@ export const firewallService = {
 
   disconnectHetzner(): Promise<ActionResult<HetznerReply>> {
     return call<HetznerReply>("hetzner-disconnect");
+  },
+
+  panelGate(): Promise<ActionResult<PanelGateView>> {
+    return call<PanelGateView>("panel-gate");
+  },
+
+  setPanelGate(enabled: boolean, confirm?: string): Promise<ActionResult<GateReply>> {
+    return call<GateReply>("panel-gate-switch", ["--enabled", enabled ? "yes" : "no"], JSON.stringify({ confirm }));
   },
 
   setHetzner(role: HetznerRole, enabled: boolean, confirm?: string, typed?: string): Promise<ActionResult<HetznerReply>> {

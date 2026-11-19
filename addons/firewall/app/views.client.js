@@ -40,7 +40,10 @@ async function change(path, body, failedAs) {
   } finally {
     busy(false);
   }
-  if (state.ok) repaintView(CLP_ROOT.getElementById('clp-content'), state.html);
+  if (state.ok) {
+    repaintView(CLP_ROOT.getElementById('clp-content'), state.html);
+    loadPanelGate();
+  }
   if (failure) {
     notify(failedAs + failure, 'error');
     return null;
@@ -51,8 +54,37 @@ async function change(path, body, failedAs) {
 
 async function repaint() {
   const state = await readState();
-  if (state.ok) repaintView(CLP_ROOT.getElementById('clp-content'), state.html);
+  if (state.ok) {
+    repaintView(CLP_ROOT.getElementById('clp-content'), state.html);
+    loadPanelGate();
+  }
   return state;
+}
+
+// A gate that is off needs Cloudflare read to say what it lacks, so its card
+// follows the page rather than holding the site table back. A repaint within
+// a minute reuses that read; switching the gate drops it.
+let panelGateRead = null;
+
+async function loadPanelGate() {
+  const card = CLP_ROOT.getElementById('panel-gate-card');
+  if (!card || !card.hasAttribute('data-pending')) return;
+  const swap = function (html) {
+    const current = CLP_ROOT.getElementById('panel-gate-card');
+    if (current && current.hasAttribute('data-pending') && html) current.outerHTML = html;
+  };
+  if (panelGateRead && Date.now() - panelGateRead.at < 60000) {
+    swap(panelGateRead.html);
+    return;
+  }
+  try {
+    const reply = await call('/api/panel-gate');
+    panelGateRead = { at: Date.now(), html: reply.html };
+    swap(reply.html);
+  } catch (error) {
+    const status = card.querySelector('[role="status"]');
+    if (status) status.textContent = 'The Panel gate could not be read: ' + error.message;
+  }
 }
 
 async function setDomains(domains, enabled) {
@@ -238,8 +270,9 @@ function showHetznerReview(review) {
 }
 
 // Root answers the first request with what the change would do, or refuses
-// it; only the review it sent, confirmed, makes the change.
-async function setHetzner(input, role) {
+// it; only the review it sent, confirmed, makes the change. `accept` shows
+// the review and answers what to send with the confirmation, or null.
+async function reviewedSwitch(input, path, body, accept) {
   const enabled = input.checked;
   input.checked = !enabled;
   clearNotice();
@@ -247,10 +280,10 @@ async function setHetzner(input, role) {
   let reply = null;
   let failure = '';
   try {
-    reply = await call('/api/hetzner/switch', {
+    reply = await call(path, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ role: role, enabled: enabled }),
+      body: JSON.stringify(Object.assign({ enabled: enabled }, body)),
     });
   } catch (error) {
     failure = error.message;
@@ -267,9 +300,9 @@ async function setHetzner(input, role) {
     hetznerNotice(Object.assign(state, { reply: reply.data }));
     return;
   }
-  if (!await showHetznerReview(review)) return;
-  const typed = CLP_ROOT.getElementById('hz-review-typed').value.trim();
-  const state = await change('/api/hetzner/switch', { role: role, enabled: enabled, confirm: review.digest, typed: typed }, 'Could not switch: ');
+  const extra = await accept(review);
+  if (!extra) return;
+  const state = await change(path, Object.assign({ enabled: enabled, confirm: review.digest }, body, extra), 'Could not switch: ');
   if (!state) return;
   if (state.reply && state.reply.review) {
     notify('What this change would do has changed since you confirmed it; switch it again to see the new review.', 'warn');
@@ -278,5 +311,28 @@ async function setHetzner(input, role) {
   hetznerNotice(state);
 }
 
-if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', paintFleetSelection);
-else paintFleetSelection();
+function setHetzner(input, role) {
+  return reviewedSwitch(input, '/api/hetzner/switch', { role: role }, async function (review) {
+    if (!await showHetznerReview(review)) return null;
+    return { typed: CLP_ROOT.getElementById('hz-review-typed').value.trim() };
+  });
+}
+
+function setPanelGate(input) {
+  panelGateRead = null;
+  return reviewedSwitch(input, '/api/panel-gate', {}, async function (review) {
+    const accepted = await confirmAction({
+      title: review.title, text: review.text, details: review.details,
+      confirmLabel: review.confirmLabel, danger: review.danger,
+    });
+    return accepted ? {} : null;
+  });
+}
+
+function firewallReady() {
+  paintFleetSelection();
+  loadPanelGate();
+}
+
+if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', firewallReady);
+else firewallReady();

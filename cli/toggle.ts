@@ -4,7 +4,7 @@ import { resolveAddon } from "./addons";
 import { reconcileAnchors, reconcileNginx, reconcilePanelBlocks } from "./reconcile";
 import { reconcilePhpGuard, settlePhpGuard } from "../lib/php-guard";
 import { type AddonSpec } from "../lib/addon-definition";
-import { withOperationLock, withOperationLockSync } from "./operation-lock";
+import { withOperationLock, withOperationLockSync } from "../lib/operation-lock";
 import {
   applyToggleUnits, ensureAuthHelperReady, ensureDirs, ensureRequiredUnits, ensureServiceUser, installUnits,
   platformProvisioned, reconcilePanelIdentity, removeLegacyUnits, startUnits, writeConfig,

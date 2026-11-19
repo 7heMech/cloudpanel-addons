@@ -50,7 +50,7 @@ mock.module("./cli/reconcile.ts", () => ({
 }));
 mock.module("./lib/php-guard.ts", () => ({ reconcilePhpGuard: (wanted) => event("phpGuard " + wanted) }));
 mock.module("./cli/inject.ts", () => ({ purgeTwigCache: () => event("purgeTwigCache") }));
-mock.module("./cli/operation-lock.ts", () => ({ withOperationLockSync: (_name, fn) => fn() }));
+mock.module("./lib/operation-lock.ts", () => ({ withOperationLockSync: (_name, fn) => fn() }));
 class TestFatal extends Error {}
 const realLog = await import("./lib/log.ts");
 mock.module("./lib/log.ts", () => ({

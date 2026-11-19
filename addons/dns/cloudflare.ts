@@ -228,6 +228,82 @@ function verified(result: unknown, owner: TokenOwner): Verified {
   return { ...owner, active: status === "active", status, id: typeof raw.id === "string" && /^[a-f0-9]{32}$/.test(raw.id) ? raw.id : null };
 }
 
+/** Cloudflare's UUIDs, as Access and per-hostname origin pulls name their objects. */
+function uuid(value: unknown): string {
+  if (typeof value !== "string" || !/^[a-f0-9-]{32,36}$/.test(value)) throw new ProviderError("Cloudflare", "returned an identifier this addon does not understand");
+  return value;
+}
+
+/** A per-hostname origin-pull certificate, or a hostname's use of one; `status` is Cloudflare's deployment state. */
+export interface CfHostnameAuth {
+  hostname: string;
+  certId: string | null;
+  enabled: boolean | null;
+  status: string;
+  certStatus: string;
+}
+
+export interface CfAccessApp {
+  id: string;
+  name: string;
+  domain: string;
+  policies: string[];
+  allowedIdps: string[];
+}
+
+export interface CfAccessPolicy {
+  id: string;
+  name: string;
+  decision: string;
+  /** The emails its include rules name, lower case, sorted. */
+  emails: string[];
+  /** Include rules other than an email. */
+  otherRules: number;
+}
+
+function parseAccessApp(value: unknown): CfAccessApp {
+  const raw = object(value);
+  const policies = Array.isArray(raw.policies) ? raw.policies : [];
+  return {
+    id: uuid(raw.id),
+    name: typeof raw.name === "string" ? raw.name.slice(0, 200) : "",
+    domain: typeof raw.domain === "string" ? raw.domain.toLowerCase() : "",
+    policies: policies.flatMap((policy) => {
+      const policyId = typeof policy === "string" ? policy : policy && typeof policy === "object" ? (policy as Record<string, unknown>).id : undefined;
+      return typeof policyId === "string" ? [policyId] : [];
+    }),
+    allowedIdps: Array.isArray(raw.allowed_idps) ? raw.allowed_idps.filter((idp): idp is string => typeof idp === "string") : [],
+  };
+}
+
+function parseAccessPolicy(value: unknown): CfAccessPolicy {
+  const raw = object(value);
+  const include = Array.isArray(raw.include) ? raw.include : [];
+  const emails: string[] = [];
+  let otherRules = 0;
+  for (const rule of include) {
+    const email = rule && typeof rule === "object" ? ((rule as Record<string, unknown>).email as Record<string, unknown> | undefined)?.email : undefined;
+    if (typeof email === "string") emails.push(email.toLowerCase());
+    else otherRules++;
+  }
+  return { id: uuid(raw.id), name: typeof raw.name === "string" ? raw.name : "", decision: typeof raw.decision === "string" ? raw.decision : "", emails: [...new Set(emails)].sort(), otherRules };
+}
+
+function parseHostnameAuth(value: unknown): CfHostnameAuth {
+  const raw = object(value);
+  return {
+    hostname: text(raw.hostname, 253).toLowerCase(),
+    certId: typeof raw.cert_id === "string" && raw.cert_id ? uuid(raw.cert_id) : null,
+    enabled: typeof raw.enabled === "boolean" ? raw.enabled : null,
+    status: typeof raw.status === "string" ? raw.status : "",
+    certStatus: typeof raw.cert_status === "string" ? raw.cert_status : "",
+  };
+}
+
+function accessPolicyBody(name: string, emails: string[]): Record<string, unknown> {
+  return { name, decision: "allow", include: emails.map((email) => ({ email: { email } })) };
+}
+
 export class CloudflareApi {
   readonly http: ProviderHttp;
 
@@ -409,6 +485,143 @@ export class CloudflareApi {
 
   async deleteRule(zoneId: string, phase: string, rulesetId: string, ruleId: string): Promise<void> {
     await this.needs(rulesPermission(phase), () => this.call(`/zones/${id(zoneId)}/rulesets/${id(rulesetId)}/rules/${id(ruleId)}`, "DELETE"));
+  }
+
+  /** The records at one name. */
+  async recordsAt(zoneId: string, name: string): Promise<CfRecord[]> {
+    const records = await this.pages(`/zones/${id(zoneId)}/dns_records?name=${encodeURIComponent(name)}`, 100, parseRecord);
+    return records.filter((record) => record.name === name);
+  }
+
+  private async orNull<T>(run: () => Promise<T>): Promise<T | null> {
+    try {
+      return await run();
+    } catch (error) {
+      if (error instanceof ProviderError && error.status === 404) return null;
+      throw error;
+    }
+  }
+
+  private origin(zoneId: string, rest = ""): string {
+    return `/zones/${id(zoneId)}/origin_tls_client_auth/hostnames${rest}`;
+  }
+
+  async uploadHostnameCertificate(zoneId: string, certificate: string, privateKey: string): Promise<{ id: string; status: string }> {
+    const { result } = await this.needs(PERMISSIONS.originPulls.label, () => this.call(this.origin(zoneId, "/certificates"), "POST", { certificate, private_key: privateKey }));
+    const raw = object(result);
+    return { id: uuid(raw.id), status: typeof raw.status === "string" ? raw.status : "" };
+  }
+
+  async hostnameCertificate(zoneId: string, certId: string): Promise<{ id: string; status: string } | null> {
+    return this.orNull(async () => {
+      const { result } = await this.needs(PERMISSIONS.originPulls.label, () => this.call(this.origin(zoneId, `/certificates/${uuid(certId)}`)));
+      const raw = object(result);
+      return { id: uuid(raw.id), status: typeof raw.status === "string" ? raw.status : "" };
+    });
+  }
+
+  /** The zone's per-hostname certificates, each with its PEM, to find one whose upload's reply was lost. */
+  async hostnameCertificates(zoneId: string): Promise<{ id: string; certificate: string }[]> {
+    const { result } = await this.needs(PERMISSIONS.originPulls.label, () => this.call(this.origin(zoneId, "/certificates?per_page=1000")));
+    if (!Array.isArray(result)) throw new ProviderError("Cloudflare", "returned a list this addon does not understand");
+    return result.map((entry) => {
+      const raw = object(entry);
+      return { id: uuid(raw.id), certificate: typeof raw.certificate === "string" ? raw.certificate : "" };
+    });
+  }
+
+  async deleteHostnameCertificate(zoneId: string, certId: string): Promise<void> {
+    await this.orNull(() => this.needs(PERMISSIONS.originPulls.label, () => this.call(this.origin(zoneId, `/certificates/${uuid(certId)}`), "DELETE")));
+  }
+
+  /** `enabled: null` takes the certificate off the hostname, which Cloudflare requires before deleting it. */
+  async setHostnameAuth(zoneId: string, hostname: string, certId: string, enabled: boolean | null): Promise<CfHostnameAuth | null> {
+    const { result } = await this.needs(PERMISSIONS.originPulls.label, () => this.call(this.origin(zoneId), "PUT", { config: [{ hostname, cert_id: uuid(certId), enabled }] }));
+    const items = Array.isArray(result) ? result.map(parseHostnameAuth) : [];
+    return items.find((item) => item.hostname === hostname) ?? null;
+  }
+
+  async hostnameAuth(zoneId: string, hostname: string): Promise<CfHostnameAuth | null> {
+    return this.orNull(async () => {
+      const { result } = await this.needs(PERMISSIONS.originPulls.label, () => this.call(this.origin(zoneId, `/${encodeURIComponent(hostname)}`)));
+      return parseHostnameAuth(result);
+    });
+  }
+
+  /** One page of up to 1000, which is more Access objects than this addon looks for. */
+  private async accessList(accountId: string, path: string, permission: string): Promise<unknown[]> {
+    const { result } = await this.needs(permission, () => this.call(`/accounts/${id(accountId)}/access/${path}${path.includes("?") ? "&" : "?"}per_page=1000`));
+    if (!Array.isArray(result)) throw new ProviderError("Cloudflare", "returned a list this addon does not understand");
+    return result;
+  }
+
+  async identityProviders(accountId: string): Promise<{ id: string; type: string; name: string }[]> {
+    return (await this.accessList(accountId, "identity_providers", PERMISSIONS.accessIdentity.label)).map((entry) => {
+      const raw = object(entry);
+      return { id: uuid(raw.id), type: typeof raw.type === "string" ? raw.type : "", name: typeof raw.name === "string" ? raw.name : "" };
+    });
+  }
+
+  async createIdentityProvider(accountId: string, name: string, type: string): Promise<string> {
+    const { result } = await this.needs(PERMISSIONS.accessIdentity.label, () => this.call(`/accounts/${id(accountId)}/access/identity_providers`, "POST", { name, type, config: {} }));
+    return uuid(object(result).id);
+  }
+
+  async accessApps(accountId: string, domain: string): Promise<CfAccessApp[]> {
+    return (await this.accessList(accountId, `apps?domain=${encodeURIComponent(domain)}`, PERMISSIONS.accessApps.label)).map(parseAccessApp);
+  }
+
+  async accessApp(accountId: string, appId: string): Promise<CfAccessApp | null> {
+    return this.orNull(async () => {
+      const { result } = await this.needs(PERMISSIONS.accessApps.label, () => this.call(`/accounts/${id(accountId)}/access/apps/${uuid(appId)}`));
+      return parseAccessApp(result);
+    });
+  }
+
+  async createAccessApp(accountId: string, body: Record<string, unknown>): Promise<CfAccessApp> {
+    const { result } = await this.needs(PERMISSIONS.accessApps.label, () => this.call(`/accounts/${id(accountId)}/access/apps`, "POST", body));
+    return parseAccessApp(result);
+  }
+
+  async updateAccessApp(accountId: string, appId: string, body: Record<string, unknown>): Promise<CfAccessApp> {
+    const { result } = await this.needs(PERMISSIONS.accessApps.label, () => this.call(`/accounts/${id(accountId)}/access/apps/${uuid(appId)}`, "PUT", body));
+    return parseAccessApp(result);
+  }
+
+  async deleteAccessApp(accountId: string, appId: string): Promise<void> {
+    await this.orNull(() => this.needs(PERMISSIONS.accessApps.label, () => this.call(`/accounts/${id(accountId)}/access/apps/${uuid(appId)}`, "DELETE")));
+  }
+
+  async accessPolicy(accountId: string, policyId: string): Promise<CfAccessPolicy | null> {
+    return this.orNull(async () => {
+      const { result } = await this.needs(PERMISSIONS.accessApps.label, () => this.call(`/accounts/${id(accountId)}/access/policies/${uuid(policyId)}`));
+      return parseAccessPolicy(result);
+    });
+  }
+
+  async accessPolicies(accountId: string): Promise<CfAccessPolicy[]> {
+    return (await this.accessList(accountId, "policies", PERMISSIONS.accessApps.label)).map(parseAccessPolicy);
+  }
+
+  /** An allow policy for exactly these emails. */
+  async createAccessPolicy(accountId: string, name: string, emails: string[]): Promise<CfAccessPolicy> {
+    const { result } = await this.needs(PERMISSIONS.accessApps.label, () => this.call(`/accounts/${id(accountId)}/access/policies`, "POST", accessPolicyBody(name, emails)));
+    return parseAccessPolicy(result);
+  }
+
+  /** A Bypass policy for everyone, for a path Access must leave open. */
+  async createBypassPolicy(accountId: string, name: string): Promise<CfAccessPolicy> {
+    const { result } = await this.needs(PERMISSIONS.accessApps.label, () => this.call(`/accounts/${id(accountId)}/access/policies`, "POST", { name, decision: "bypass", include: [{ everyone: {} }] }));
+    return parseAccessPolicy(result);
+  }
+
+  async updateAccessPolicy(accountId: string, policyId: string, name: string, emails: string[]): Promise<CfAccessPolicy> {
+    const { result } = await this.needs(PERMISSIONS.accessApps.label, () => this.call(`/accounts/${id(accountId)}/access/policies/${uuid(policyId)}`, "PUT", accessPolicyBody(name, emails)));
+    return parseAccessPolicy(result);
+  }
+
+  async deleteAccessPolicy(accountId: string, policyId: string): Promise<void> {
+    await this.orNull(() => this.needs(PERMISSIONS.accessApps.label, () => this.call(`/accounts/${id(accountId)}/access/policies/${uuid(policyId)}`, "DELETE")));
   }
 
   async createZone(accountId: string, name: string): Promise<CfZone> {

@@ -509,7 +509,7 @@ describe("what each token holds", () => {
     const env = setup();
     env.cf.tokens.get(TOKEN)!.policies = [policy(["DNS Write", "API Tokens Read"], ALL_ZONES)];
     const reply = await env.connect();
-    const missing = reply.connections[0]!.access!.rows.filter((row) => row.held === "no").map((row) => row.label);
+    const missing = reply.connections[0]!.access!.rows.filter((row) => row.held === "no" && !row.optional).map((row) => row.label);
     expect(missing).toEqual(["Zone: Edit", "Account Settings: Read", "Single Redirect: Edit", "Zone Settings: Edit", "Config Rules: Edit"]);
     expect(dashboardContent(reply)).toContain("Missing: Zone: Edit, Account Settings: Read, Single Redirect: Edit, Zone Settings: Edit, Config Rules: Edit");
     const access = reply.connections[0]!.access!;
@@ -635,7 +635,7 @@ describe("what each token holds", () => {
     env.cf.tokens.get(token)!.policies = [policy(["DNS Write", "Account API Tokens Read"], { [`com.cloudflare.api.account.${env.agency}`]: ALL_ZONES })];
     const after = await env.act("check");
     expect(after.connections[0]!.access!.reach).toBe("All zones in Agency");
-    expect(after.connections[0]!.access!.rows.at(-1)).toMatchObject({ label: "Account API Tokens: Read", held: "yes" });
+    expect(after.connections[0]!.access!.rows.find((row) => row.label === "Account API Tokens: Read")).toMatchObject({ held: "yes" });
     const zone = { id: env.cf.zones[0]!.id, accountId: env.agency };
     const paths = { stateDir: join(env.dir, "state"), rootUid: process.getuid!() };
     expect(dnsTokenHolds(after.connections[0]!.id, "tokens", zone, paths)).toBe(true);

@@ -10,4 +10,7 @@ export const FIREWALL_VERBS = {
   "hetzner-connect": { web: "admin" },
   "hetzner-disconnect": { web: "admin" },
   "hetzner-switch": { web: "admin" },
+  "panel-gate": { web: "admin" },
+  "panel-gate-switch": { web: "admin" },
+  "panel-gate-cleanup": { web: false, why: "run by disable for what Cloudflare still has of the gate; repair does the same in-process" },
 } as const;
