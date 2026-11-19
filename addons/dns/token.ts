@@ -25,6 +25,8 @@ export interface PermissionDef {
   scope: "zone" | "account" | "user";
   /** What uses it, given the profiles; null when nothing does. */
   usedFor: (profiles: Profile[]) => string | null;
+  /** What it would enable when nothing requires it; listed as optional, never as missing, and left out of the template. */
+  enables?: (profiles: Profile[]) => string | null;
 }
 
 /** Quoted, since a profile's own name may hold "and". */
@@ -85,16 +87,26 @@ export const PERMISSIONS = {
 
 export type PermissionName = keyof typeof PERMISSIONS;
 
-/** What the profiles use, in the page's order. */
-export function neededPermissions(profiles: Profile[]): { name: PermissionName; permission: PermissionDef; usedFor: string }[] {
-  return (Object.entries(PERMISSIONS) as [PermissionName, PermissionDef][]).flatMap(([name, permission]) => {
-    const usedFor = permission.usedFor(profiles);
-    return usedFor ? [{ name, permission, usedFor }] : [];
+export interface ListedPermission {
+  name: PermissionName;
+  permission: PermissionDef;
+  /** What uses it, or what it would enable when optional. */
+  usedFor: string;
+  optional: boolean;
+}
+
+/** What the profiles use, then what they could, in the page's order. */
+export function listedPermissions(profiles: Profile[]): ListedPermission[] {
+  const all = Object.entries(PERMISSIONS) as [PermissionName, PermissionDef][];
+  const listed = (optional: boolean) => all.flatMap(([name, permission]): ListedPermission[] => {
+    const usedFor = optional ? permission.usedFor(profiles) ? null : permission.enables?.(profiles) ?? null : permission.usedFor(profiles);
+    return usedFor ? [{ name, permission, usedFor, optional }] : [];
   });
+  return [...listed(false), ...listed(true)];
 }
 
 export function tokenTemplate(profiles: Profile[]): TokenTemplate {
-  const permissions = neededPermissions(profiles).map(({ permission }) => permission);
+  const permissions = listedPermissions(profiles).filter(({ optional }) => !optional).map(({ permission }) => permission);
   const keys = encodeURIComponent(JSON.stringify(permissions.map(({ key, type }) => ({ key, type }))));
   return {
     url: `https://dash.cloudflare.com/profile/api-tokens?permissionGroupKeys=${keys}&accountId=%2A&zoneId=all&name=${encodeURIComponent("CloudPanel DNS")}`,

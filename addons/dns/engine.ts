@@ -64,6 +64,8 @@ export interface ConnectionReport {
   error: string | null;
   /** What the token holds, read with the check; absent before its first one. */
   token?: TokenAccess;
+  /** Permissions Cloudflare refused the token, by label. */
+  refused?: string[];
 }
 
 interface ZoneRef {
@@ -255,6 +257,14 @@ export class DnsRun {
       }
       return { ...owner, readable: false, reason: `Its permissions could not be read: ${reason(error)}` };
     }
+  }
+
+  /** Each connection's report, with the permissions Cloudflare refused it during this run. */
+  reports(): ConnectionReport[] {
+    return this.connections.map((report) => {
+      const refused = [...this.cloudflare.get(report.id)?.refused ?? []];
+      return refused.length ? { ...report, refused } : report;
+    });
   }
 
   private connectionLabel(id: string): string {

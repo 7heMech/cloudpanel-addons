@@ -3,6 +3,8 @@ import { afterEach, describe, expect, test } from "bun:test";
 import { chmodSync, mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { connectionPermissions } from "../addons/dns/access";
+import { seededPolicy } from "../addons/dns/presets";
 import { dnsTokenHolds, executeDnsAction, panelSites, type DnsReply, type ProvisionReply, type SiteDnsStatus } from "../addons/dns/action";
 import { detectAddresses, type Addresses } from "../addons/dns/addresses";
 import { DNS_ADDON } from "../addons/dns/addon";
@@ -510,6 +512,12 @@ describe("what each token holds", () => {
     const missing = reply.connections[0]!.access!.rows.filter((row) => row.held === "no").map((row) => row.label);
     expect(missing).toEqual(["Zone: Edit", "Account Settings: Read", "Single Redirect: Edit", "Zone Settings: Edit", "Config Rules: Edit"]);
     expect(dashboardContent(reply)).toContain("Missing: Zone: Edit, Account Settings: Read, Single Redirect: Edit, Zone Settings: Edit, Config Rules: Edit");
+    const access = reply.connections[0]!.access!;
+    const optional = { label: "Firewall Services: Edit", usedFor: "Cloudflare bans for login jails", held: "no" as const, optional: true as const };
+    const html = dashboardContent({ ...reply, connections: [{ ...reply.connections[0]!, access: { ...access, rows: [...access.rows, optional] } }] });
+    expect(html).toContain('<span role="columnheader">Optional</span><span role="columnheader">Enables</span>');
+    expect(html).toContain("Not added");
+    expect(html).not.toMatch(/Missing:[^<]*Firewall Services/);
   });
 
   test("a token made before API Tokens: Read is asked for it, and the check still works", async () => {
@@ -521,6 +529,25 @@ describe("what each token holds", () => {
     expect(access.note).toBe("Add API Tokens: Read to this token to see its permissions here");
     expect(access.rows.every((row) => row.held === "unknown")).toBe(true);
     expect(dnsTokenHolds(reply.connections[0]!.id, "dns", { id: env.cf.zones[0]!.id, accountId: env.agency }, paths(env))).toBeNull();
+  });
+
+  test("a token that cannot read itself keeps showing what Cloudflare refused it, and the Setup reader names it", async () => {
+    const env = setup();
+    env.cf.settings.clear();
+    const fetch = env.cf.fetch;
+    // Zone settings refused, as a token without Zone Settings: Edit is.
+    env.cf.fetch = async (address, init) => new URL(address).pathname.includes("/settings/")
+      ? new Response(JSON.stringify({ success: false, errors: [{ code: 10000, message: "Authentication error" }] }), { status: 403 })
+      : fetch(address, init);
+    await env.connect();
+    await env.act("assign", { domains: ["example.com"], profileId: "web" });
+    const reply = await env.act("check");
+    const status = JSON.parse(readFileSync(join(env.dir, "state", "status.json"), "utf8"));
+    expect(status.connections[0].refused).toEqual(["Zone Settings: Edit"]);
+    const access = reply.connections[0]!.access!;
+    expect(access.rows.find((row) => row.label === "Zone Settings: Edit")).toMatchObject({ held: "no", detail: "Refused by Cloudflare" });
+    expect(dashboardContent(reply)).toContain("Refused by Cloudflare: Zone Settings: Edit");
+    expect(connectionPermissions(status.connections[0], seededPolicy().profiles)).toEqual({ readable: false, missing: ["Zone Settings: Edit"] });
   });
 
   test("an account-owned token is asked for Account API Tokens: Read and edited at its account", async () => {

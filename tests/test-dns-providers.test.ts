@@ -2,8 +2,8 @@ import { describe, expect, test } from "bun:test";
 import { CloudflareApi, quoteTxt, unquoteTxt } from "../addons/dns/cloudflare";
 import { ProviderError, ProviderHttp } from "../lib/provider-http";
 import { MailcowApi } from "../addons/dns/mailcow";
-import { grants, parseResources, readAccess } from "../addons/dns/access";
-import { PERMISSIONS } from "../addons/dns/token";
+import { accessView, connectionPermissions, grants, parseResources, readAccess } from "../addons/dns/access";
+import { PERMISSIONS, tokenTemplate } from "../addons/dns/token";
 import { FakeCloudflare, FakeMailcow, MAILCOW_KEY, policy } from "./fixtures/dns-api";
 
 const USER_TOKEN = "cf-user-token-0123456789abcdef";
@@ -351,5 +351,20 @@ describe("a token's own permissions", () => {
       { allow: false, permissions: ["DNS Write"], resources: [{ account: "*", zone: "2".repeat(32) }] },
     ], { zones: [{ id: "2".repeat(32), name: "example.org", accountId: clients }], accounts: [{ id: agency, name: "Agency" }, { id: clients, name: "Clients" }] });
     expect(disjoint.readable && disjoint.reach).toBe("All zones in Agency");
+  });
+
+  test("an optional permission is listed with what it enables, never as missing", () => {
+    const optional = { ...PERMISSIONS.ipAccessRules, enables: () => "Cloudflare bans for login jails" };
+    const saved = PERMISSIONS.ipAccessRules;
+    (PERMISSIONS as Record<string, unknown>).ipAccessRules = optional;
+    try {
+      const token = readAccess({ owner: "user", accountId: null }, [{ allow: true, permissions: ["DNS Write"], resources: [{ account: "*", zone: "*" }] }], { zones: [], accounts: [] });
+      const view = accessView({ token }, [])!;
+      expect(view.rows.at(-1)).toEqual({ label: "Firewall Services: Edit", usedFor: "Cloudflare bans for login jails", held: "no", optional: true });
+      expect(connectionPermissions({ token }, []).missing).not.toContain("Firewall Services: Edit");
+      expect(tokenTemplate([]).permissions).not.toContain("Firewall Services: Edit");
+    } finally {
+      (PERMISSIONS as Record<string, unknown>).ipAccessRules = saved;
+    }
   });
 });

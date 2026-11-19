@@ -158,28 +158,40 @@ function siteRow(site: SiteView, state: DnsState): string {
 
 type Access = NonNullable<DnsState["connections"][number]["access"]>;
 
-/** What is missing, by name; nothing when the token holds all of it. */
+/** What is missing of what DNS requires, by name; nothing when the token holds all of it. */
 function accessProblems(access: Access): string {
-  if (access.reach === null) return `<span class="tone-warn">${esc(access.note ?? "")}.</span>`;
-  const missing = access.rows.filter((row) => row.held === "no").map((row) => row.label);
-  const partial = access.rows.filter((row) => row.held === "some").map((row) => `${row.label} (${row.detail})`);
-  return [missing.length && `Missing: ${missing.join(", ")}`, partial.length && `Not on every zone: ${partial.join(", ")}`]
-    .filter(Boolean).map((line) => `<span class="tone-bad">${esc(line as string)}</span>`).join("<br>");
+  const required = access.rows.filter((row) => !row.optional);
+  const missing = required.filter((row) => row.held === "no").map((row) => row.label);
+  const partial = required.filter((row) => row.held === "some").map((row) => `${row.label} (${row.detail})`);
+  // Without its own read, what Cloudflare refused it is all that is known.
+  const lines = access.reach === null
+    ? [missing.length && `Refused by Cloudflare: ${missing.join(", ")}`]
+    : [missing.length && `Missing: ${missing.join(", ")}`, partial.length && `Not on every zone: ${partial.join(", ")}`];
+  const note = access.reach === null ? [`<span class="tone-warn">${esc(access.note ?? "")}.</span>`] : [];
+  return [...note, ...lines.filter(Boolean).map((line) => `<span class="tone-bad">${esc(line as string)}</span>`)].join("<br>");
 }
 
 function heldCell(row: Access["rows"][number]): string {
   if (row.held === "yes") return '<span class="tone-ok" role="img" aria-label="Held">✓</span>';
-  if (row.held === "no") return '<span class="badge tone-bad">Missing</span>';
+  if (row.optional && row.held !== "some") return '<span class="hint inline">Not added</span>';
+  if (row.held === "no") return `<span class="badge tone-bad">${esc(row.detail ?? "Missing")}</span>`;
   if (row.held === "some") return `<span class="badge tone-warn">${esc(row.detail ?? "Some zones")}</span>`;
   return '<span class="hint inline" role="img" aria-label="Not known">—</span>';
 }
 
-/** The connection's status line opens the table of what its token holds. */
-function accessDetails(id: string, access: Access, status: string): string {
-  const rows = access.rows.map((row) => `<div class="dns-access-row" role="row" data-held="${row.held}">
+function accessRow(row: Access["rows"][number]): string {
+  return `<div class="dns-access-row" role="row" data-held="${row.held}">
       <span class="dns-access-perm" role="cell">${esc(row.label)}</span>
       <span class="dns-access-use" role="cell">${esc(row.usedFor)}</span>
-      <span class="dns-access-held" role="cell">${heldCell(row)}</span></div>`).join("");
+      <span class="dns-access-held" role="cell">${heldCell(row)}</span></div>`;
+}
+
+/** The connection's status line opens the table of what its token holds; optional permissions follow under their own heading. */
+function accessDetails(id: string, access: Access, status: string): string {
+  const optional = access.rows.filter((row) => row.optional);
+  const rows = access.rows.filter((row) => !row.optional).map(accessRow).join("") + (optional.length
+    ? `<div class="dns-access-row dns-access-cols dns-access-section" role="row"><span role="columnheader">Optional</span><span role="columnheader">Enables</span><span></span></div>${optional.map(accessRow).join("")}`
+    : "");
   const problems = accessProblems(access);
   return `<details class="dns-access-details" id="dns-access-${esc(id)}"><summary><span class="hint">${status} · <span class="dns-access-toggle">Permissions</span></span>${problems ? `<span class="dns-access-problems">${problems}</span>` : ""}</summary>
     <div class="dns-access"><div class="dns-access-grid" role="table" aria-label="Token permissions">

@@ -196,17 +196,6 @@ const PHASE_PERMISSIONS: Record<string, string> = {
 };
 const rulesPermission = (phase: string) => PHASE_PERMISSIONS[phase] ?? "rules permissions";
 
-/** Cloudflare refuses a permission the token lacks with a bare "Authentication error"; name the permission instead. */
-async function needs<T>(permission: string, run: () => Promise<T>): Promise<T> {
-  try {
-    return await run();
-  } catch (error) {
-    if (!(error instanceof ProviderError) || error.status !== 403) throw error;
-    const reason = error.message.replace(/^Cloudflare: /, "");
-    throw new ProviderError("Cloudflare", `the token lacks ${permission} for this zone; add it to the token in Cloudflare (${reason})`, 403);
-  }
-}
-
 export type Verified = TokenOwner & { active: boolean; status: string; id: string | null };
 
 function verified(result: unknown, owner: TokenOwner): Verified {
@@ -218,8 +207,23 @@ function verified(result: unknown, owner: TokenOwner): Verified {
 export class CloudflareApi {
   readonly http: ProviderHttp;
 
+  /** Permissions Cloudflare refused this token, by label. */
+  readonly refused = new Set<string>();
+
   constructor(token: string, fetcher?: ApiFetch, backoff?: { until: number }) {
     this.http = new ProviderHttp("Cloudflare", API, { Authorization: `Bearer ${token}` }, fetcher, backoff);
+  }
+
+  /** Cloudflare refuses a permission the token lacks with a bare "Authentication error"; name the permission instead. */
+  private async needs<T>(permission: string, run: () => Promise<T>): Promise<T> {
+    try {
+      return await run();
+    } catch (error) {
+      if (!(error instanceof ProviderError) || error.status !== 403) throw error;
+      this.refused.add(permission);
+      const reason = error.message.replace(/^Cloudflare: /, "");
+      throw new ProviderError("Cloudflare", `the token lacks ${permission} for this zone; add it to the token in Cloudflare (${reason})`, 403);
+    }
   }
 
   /** The envelope's `result`, or the API's own reason for refusing. */
@@ -356,18 +360,18 @@ export class CloudflareApi {
   }
 
   async setting(zoneId: string, setting: string): Promise<string> {
-    const { result } = await needs(PERMISSIONS.zoneSettings.label, () => this.call(`/zones/${id(zoneId)}/settings/${setting}`));
+    const { result } = await this.needs(PERMISSIONS.zoneSettings.label, () => this.call(`/zones/${id(zoneId)}/settings/${setting}`));
     return text(object(result).value, 40);
   }
 
   async setSetting(zoneId: string, setting: string, value: string): Promise<void> {
-    await needs(PERMISSIONS.zoneSettings.label, () => this.call(`/zones/${id(zoneId)}/settings/${setting}`, "PATCH", { value }));
+    await this.needs(PERMISSIONS.zoneSettings.label, () => this.call(`/zones/${id(zoneId)}/settings/${setting}`, "PATCH", { value }));
   }
 
   /** The zone's ruleset for one phase, or null when it has none yet. */
   async entrypoint(zoneId: string, phase: string): Promise<CfRuleset | null> {
     try {
-      const { result } = await needs(rulesPermission(phase), () => this.call(`/zones/${id(zoneId)}/rulesets/phases/${phase}/entrypoint`));
+      const { result } = await this.needs(rulesPermission(phase), () => this.call(`/zones/${id(zoneId)}/rulesets/phases/${phase}/entrypoint`));
       return parseRuleset(result);
     } catch (error) {
       if (error instanceof ProviderError && error.status === 404) return null;
@@ -376,23 +380,23 @@ export class CloudflareApi {
   }
 
   async createEntrypoint(zoneId: string, phase: string, rules: RuleWrite[]): Promise<CfRuleset> {
-    const { result } = await needs(rulesPermission(phase), () => this.call(`/zones/${id(zoneId)}/rulesets`, "POST", { name: "CloudPanel DNS", kind: "zone", phase, rules }));
+    const { result } = await this.needs(rulesPermission(phase), () => this.call(`/zones/${id(zoneId)}/rulesets`, "POST", { name: "CloudPanel DNS", kind: "zone", phase, rules }));
     return parseRuleset(result);
   }
 
   /** Adds one rule, leaving the phase's other rules alone. */
   async addRule(zoneId: string, phase: string, rulesetId: string, rule: RuleWrite): Promise<CfRuleset> {
-    const { result } = await needs(rulesPermission(phase), () => this.call(`/zones/${id(zoneId)}/rulesets/${rulesetId}/rules`, "POST", rule));
+    const { result } = await this.needs(rulesPermission(phase), () => this.call(`/zones/${id(zoneId)}/rulesets/${rulesetId}/rules`, "POST", rule));
     return parseRuleset(result);
   }
 
   async updateRule(zoneId: string, phase: string, rulesetId: string, ruleId: string, rule: RuleWrite): Promise<CfRuleset> {
-    const { result } = await needs(rulesPermission(phase), () => this.call(`/zones/${id(zoneId)}/rulesets/${rulesetId}/rules/${ruleId}`, "PATCH", rule));
+    const { result } = await this.needs(rulesPermission(phase), () => this.call(`/zones/${id(zoneId)}/rulesets/${rulesetId}/rules/${ruleId}`, "PATCH", rule));
     return parseRuleset(result);
   }
 
   async deleteRule(zoneId: string, phase: string, rulesetId: string, ruleId: string): Promise<void> {
-    await needs(rulesPermission(phase), () => this.call(`/zones/${id(zoneId)}/rulesets/${id(rulesetId)}/rules/${id(ruleId)}`, "DELETE"));
+    await this.needs(rulesPermission(phase), () => this.call(`/zones/${id(zoneId)}/rulesets/${id(rulesetId)}/rules/${id(ruleId)}`, "DELETE"));
   }
 
   async createZone(accountId: string, name: string): Promise<CfZone> {
@@ -402,7 +406,8 @@ export class CloudflareApi {
     } catch (error) {
       // Cloudflare names the internal permission, which the token form does not show.
       if (!(error instanceof ProviderError) || !/account\.zone\.create/.test(error.message)) throw error;
-      throw new ProviderError("Cloudflare", "the token lacks Zone: Edit for this account; edit the token in Cloudflare to add it", 403);
+      this.refused.add(PERMISSIONS.zone.label);
+      throw new ProviderError("Cloudflare", `the token lacks ${PERMISSIONS.zone.label} for this account; edit the token in Cloudflare to add it`, 403);
     }
   }
 }

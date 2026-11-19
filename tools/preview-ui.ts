@@ -26,8 +26,8 @@ import {
 import { dashboardView as smtpDashboardView, layout as smtpLayout } from "../addons/smtp/app/views";
 import type { SmtpState } from "../addons/smtp/action";
 import { dashboardView as dnsDashboardView, layout as dnsLayout } from "../addons/dns/app/views";
-import { accessView as dnsAccessView, type DnsState, type Review as DnsReview } from "../addons/dns/action";
-import { readAccess as dnsReadAccess, type TokenAccess as DnsTokenAccess } from "../addons/dns/access";
+import type { DnsState, Review as DnsReview } from "../addons/dns/action";
+import { accessView as dnsAccessView, readAccess as dnsReadAccess, type AccessView as DnsAccessView, type TokenAccess as DnsTokenAccess } from "../addons/dns/access";
 import type { SitePlan as DnsSitePlan } from "../addons/dns/engine";
 import type { Redirect as DnsRedirect } from "../addons/dns/model";
 import { PRESETS as DNS_PRESETS, seededPolicy as dnsSeededPolicy } from "../addons/dns/presets";
@@ -179,11 +179,11 @@ function dnsPreviewState(url: URL): DnsState {
     sites,
     connections: setup ? [] : [
       { id: "cf-1", label: "Agency", active: true, status: "active", accounts: [{ id: "a".repeat(32), name: "Example Agency" }, { id: "b".repeat(32), name: "Clients" }], zones: 42, error: null, hasToken: true,
-        access: dnsAccessView(DNS_PREVIEW_TOKENS.agency, [web, mailcow]) },
+        access: dnsPreviewAccess({ token: DNS_PREVIEW_TOKENS.agency }, [web, mailcow], false) },
       { id: "cf-2", label: "Church", active: true, status: "active", accounts: [{ id: "c".repeat(32), name: "Church account" }], zones: 7, error: null, hasToken: true,
-        access: dnsAccessView(DNS_PREVIEW_TOKENS.church, [web, mailcow]) },
+        access: dnsPreviewAccess({ token: DNS_PREVIEW_TOKENS.church }, [web, mailcow], true) },
       { id: "cf-3", label: "Older token", active: true, status: "active", accounts: [{ id: "d".repeat(32), name: "Partner" }], zones: 3, error: null, hasToken: true,
-        access: dnsAccessView(DNS_PREVIEW_TOKENS.older, [web, mailcow]) },
+        access: dnsPreviewAccess({ token: DNS_PREVIEW_TOKENS.older, refused: ["Config Rules: Edit"] }, [web, mailcow], false) },
     ],
     accounts: setup ? [] : [
       { connectionId: "cf-1", accountId: "a".repeat(32), label: "Example Agency (Agency)" },
@@ -224,6 +224,14 @@ const DNS_PREVIEW_TOKENS: Record<"agency" | "church" | "older", DnsTokenAccess> 
     older: { owner: "user", accountId: null, readable: false, reason: "Add API Tokens: Read to this token to see its permissions here" },
   };
 })();
+/** Until a permission is optional, the preview adds one, held by Church only. */
+function dnsPreviewAccess(stored: Parameters<typeof dnsAccessView>[0], profiles: Parameters<typeof dnsAccessView>[1], held: boolean): DnsAccessView | null {
+  const view = dnsAccessView(stored, profiles);
+  if (!view) return null;
+  const optional = { label: "Firewall Services: Edit", usedFor: "Cloudflare bans for login jails", held: view.reach === null ? "unknown" as const : held ? "yes" as const : "no" as const, optional: true as const };
+  return { ...view, rows: [...view.rows, optional] };
+}
+
 const dnsFoundRule = (source: string, target: string, keepPath = true) => ({ source, zone: source, target, status: 301 as const, keepPath, keepQuery: true });
 const DNS_PREVIEW_FOUND = {
   redirects: [dnsFoundRule("example-old.org", "https://example.com"), dnsFoundRule("example-press.com", "https://shop.example.org/products/the-example-handbook-second-edition"),

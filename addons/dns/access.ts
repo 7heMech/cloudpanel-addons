@@ -3,7 +3,8 @@
  * calling Cloudflare again.
  * https://developers.cloudflare.com/fundamentals/api/how-to/create-via-api/
  */
-import { PERMISSIONS, type PermissionDef, type PermissionName } from "./token";
+import type { Profile } from "./model";
+import { listedPermissions, PERMISSIONS, type PermissionDef, type PermissionName } from "./token";
 
 /** `"*"` for any. A user resource has neither an account nor a zone. */
 export interface Resource {
@@ -158,4 +159,53 @@ export function tokenListUrl(owner: TokenOwner): string {
   return owner.owner === "account" && owner.accountId
     ? `https://dash.cloudflare.com/${owner.accountId}/api-tokens`
     : "https://dash.cloudflare.com/profile/api-tokens";
+}
+
+/** What a connection's token holds against what DNS uses, as the page shows it. */
+export interface AccessView {
+  /** The zones its permissions reach; null when the token could not read them, with why in `note`. */
+  reach: string | null;
+  note: string | null;
+  editUrl: string;
+  rows: { label: string; usedFor: string; held: Held | "unknown"; detail?: string; optional?: true }[];
+}
+
+/** A connection's last check as status.json keeps it: its own read, and what Cloudflare refused it. */
+export interface StoredAccess {
+  token?: TokenAccess;
+  refused?: string[];
+}
+
+const REFUSED = "Refused by Cloudflare";
+
+export function accessView(stored: StoredAccess, profiles: Profile[]): AccessView | null {
+  const { token } = stored;
+  if (!token) return null;
+  const refused = new Set(stored.refused ?? []);
+  const rows = listedPermissions(profiles).map(({ name, permission, usedFor, optional }): AccessView["rows"][number] => {
+    // An account-owned token reads itself with the account's own permission.
+    const base = { label: name === "tokens" ? selfReadPermission(token.owner) : permission.label, usedFor, ...(optional ? { optional: true as const } : {}) };
+    const coverage = token.readable ? token.coverage[name] : undefined;
+    // Without its own read, what Cloudflare refused it is all that is known.
+    if (!coverage) return refused.has(permission.label) ? { ...base, held: "no", detail: REFUSED } : { ...base, held: "unknown" };
+    const more = (coverage.lackingCount ?? 0) - (coverage.lacking?.length ?? 0);
+    const detail = coverage.held === "some" && coverage.lacking
+      ? `Not on ${coverage.lacking.join(", ")}${more > 0 ? ` and ${more} more` : ""}` : undefined;
+    return { ...base, held: coverage.held, ...(detail ? { detail } : {}) };
+  });
+  return { reach: token.readable ? token.reach : null, note: token.readable ? null : token.reason, editUrl: tokenListUrl(token), rows };
+}
+
+/**
+ * For the Setup checklist: whether the token could read its own permissions,
+ * and the required ones it is missing on any zone, by name. Without its own
+ * read, the missing ones are those Cloudflare refused it.
+ */
+export function connectionPermissions(stored: StoredAccess, profiles: Profile[]): { readable: boolean; missing: string[] } {
+  const view = accessView(stored, profiles);
+  if (!view) return { readable: false, missing: [] };
+  return {
+    readable: view.reach !== null,
+    missing: view.rows.filter((row) => !row.optional && (row.held === "no" || row.held === "some")).map((row) => row.label),
+  };
 }

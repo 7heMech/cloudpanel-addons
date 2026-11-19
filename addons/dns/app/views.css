@@ -243,6 +243,7 @@ p.dns-dialog-note { margin:20px 0 0; }
 .dns-access-details[open] .dns-access-toggle::after { content:" ▾"; }
 .dns-access { margin-top:12px; max-width:760px; }
 .dns-access-foot { margin:8px 0 0; }
+.dns-access-section { border-top-width:2px; }
 .dns-access-grid { border:1px solid var(--row-border); border-radius:4px; font-size:14px; }
 .dns-access-row { display:grid; grid-template-columns:170px minmax(0,1fr) 150px; gap:2px 16px; padding:8px 12px; border-top:1px solid var(--row-border); align-items:baseline; }
 .dns-access-row:first-child { border-top:0; }
@@ -255,5 +256,6 @@ p.dns-dialog-note { margin:20px 0 0; }
 @media (max-width:940px) {
   .dns-access-row { grid-template-columns:minmax(0,1fr) auto; }
   .dns-access-use { grid-column:1 / -1; grid-row:2; font-size:13px; }
-  .dns-access-cols { display:none; }
+  .dns-access-cols:not(.dns-access-section) { display:none; }
+  .dns-access-section > :not(:first-child) { display:none; }
 }

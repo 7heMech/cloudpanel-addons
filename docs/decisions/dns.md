@@ -281,8 +281,10 @@ verifying it: verify returns the token's ID, then `/user/tokens/{id}`, or
 `/accounts/{account}/tokens/{id}` for an account-owned token. Those need API
 Tokens Read, or Account API Tokens Read for an account-owned token; a token
 without it is still checked as before, and the page asks for that permission
-instead of showing what the token holds. A permission DNS would need is then
-named only when Cloudflare refuses a write, as before.
+instead of showing what the token holds. Its row then lists the permissions
+Cloudflare refused it: the client records each refusal it names, and the check
+stores them on the connection, a check of some sites adding to what the last
+full check found.
 [Token details](https://developers.cloudflare.com/api/resources/user/subresources/tokens/methods/get/)
 
 The read is stored with the connection's status, so the page makes no
@@ -310,6 +312,15 @@ grants of permission group names over resources, and decided locally:
   than reading as a permission the token lacks.
 - The token-reading row is API Tokens Read for a user token and Account API
   Tokens Read for an account-owned one.
+
+A permission can be optional: nothing in the profiles requires it, and
+`enables` says what it would turn on. It is listed after the required ones,
+never as missing, and left out of the template. None is optional yet.
+
+`connectionPermissions(stored, profiles)` in `addons/dns/access.ts` gives the
+Setup checklist, from a connection's entry in `status.json`, whether the token
+read itself and the required permissions it is missing (or was refused), by
+name.
 
 Cloudflare has no address for editing one token, so **Edit in Cloudflare**
 opens the owner's token list: `/profile/api-tokens`, or
