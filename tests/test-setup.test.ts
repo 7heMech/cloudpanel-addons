@@ -7,7 +7,8 @@ import { chmodSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync 
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { ADDONS } from "../addons/catalog";
-import { automaticCheck, connectionCheck, panelHostCheck } from "../addons/dns/setup";
+import { automaticCheck, connectionCheck, panelHostCheck, permissionActions } from "../addons/dns/setup";
+import { defaultServerCheck, defaultServerProblems } from "../addons/system-tweaks/default-server";
 import { seededPolicy } from "../addons/dns/presets";
 import { autoSslCheck } from "../addons/panel-tweaks/setup";
 import { newSiteCategoryCheck } from "../addons/resource-limits/setup";
@@ -18,7 +19,9 @@ import { loginJailsCheck, panelCertCheck, phpMyAdminCheck, realIpCheck, updatesC
 import type { LoginJailsStatus } from "../addons/system-tweaks/login-jails";
 import type { SetupStep } from "../lib/addon-definition";
 import { issuedFor, panelCustomDomainCertificate } from "../lib/panel-custom-domain";
-import { CORE_SETUP, changeSetupPrefs, readSetupPrefs, remoteBackupsCheck, setupStepIds, setupSteps, setupView } from "../manager/setup";
+import {
+  actionItems, CORE_SETUP, changeSetupPrefs, readSetupPrefs, remoteBackupsCheck, setupOff, setupStepIds, setupSteps, setupView, switchSetup,
+} from "../manager/setup";
 import { setupPanelHtml, setupShows, setupSuggests } from "../manager/setup-view";
 
 const uid = process.getuid!();
@@ -259,5 +262,142 @@ describe("collecting the checklist", () => {
     const settled = { off: false, hidden: false, actions: [], steps: [{ ...item, state: "skipped" as const }] };
     expect(setupSuggests(settled)).toBe(false);
     expect(setupPanelHtml(settled)).toContain('data-setup-unskip="one"');
+  });
+});
+
+describe("Action needed", () => {
+  const item = { title: "Token needs a permission", reason: "lacks API Tokens: Read", href: "/addons/dns/#dns-connection" };
+  const never = () => new Promise<never>(() => {});
+
+  test("only enabled addons raise it, and a check that fails or outlasts its limit raises nothing", async () => {
+    const items = await actionItems({ core: [], addons: [
+      { name: "dns", title: "DNS", enabled: true, steps: [], actions: [
+        { id: "perm", check: () => [item, { ...item, title: "Second" }] },
+        { id: "broken", check: () => { throw new Error("unreadable"); } },
+        { id: "hung", check: never },
+      ] },
+      { name: "firewall", title: "Firewall", enabled: false, steps: [], actions: [{ id: "off", check: () => { throw new Error("must not run"); } }] },
+    ] }, {}, 50);
+    expect(items).toEqual([
+      { ...item, id: "perm", addon: { name: "dns", title: "DNS" } },
+      { ...item, title: "Second", id: "perm-1", addon: { name: "dns", title: "DNS" } },
+    ]);
+  });
+
+  test("a step that outlasts its limit reads as not checked, and the others still answer", async () => {
+    const step = (id: string, check: SetupStep["check"]): SetupStep => ({ id, level: "secure", title: id, href: "/x/", check });
+    const items = await setupSteps({}, { core: [step("hung", never), step("quick", () => ({ state: "done", reason: "ok" }))], addons: [] }, {}, 50);
+    expect(items.map((each) => [each.id, each.state, each.reason])).toEqual([
+      ["hung", "todo", "Could not be checked: took longer than 0 seconds"],
+      ["quick", "done", "ok"],
+    ]);
+  });
+
+  test("it brings Setup back while hidden, shows only itself there, and has no Skip", () => {
+    const action = { ...item, id: "perm", addon: { name: "dns", title: "DNS" } };
+    const step = { id: "one", level: "secure" as const, title: "One", href: "/addons/x/", addon: null, state: "todo" as const, reason: "r" };
+    const hidden = { off: false, hidden: true, actions: [action], steps: [step] };
+    expect(setupShows(hidden)).toBe(true);
+    const html = setupPanelHtml(hidden);
+    expect(html).toContain("Action needed");
+    expect(html).toContain("data-setup-show");
+    expect(html).not.toContain("data-setup-hide");
+    expect(html).not.toContain("data-setup-skip");
+    expect(html).not.toContain(">One<");
+    const open = setupPanelHtml({ ...hidden, hidden: false });
+    expect(open.indexOf("Action needed")).toBeLessThan(open.indexOf(">One<"));
+    expect(open).toContain('data-setup-skip="one"');
+    expect(setupShows({ ...hidden, actions: [], steps: [] })).toBe(false);
+  });
+
+  test("root's switch turns Setup off: nothing is checked and nothing shows", async () => {
+    const off = join(dir, "setup-off");
+    expect(setupOff(off)).toBe(false);
+    expect(switchSetup(false, off)).toBe(true);
+    expect(switchSetup(false, off)).toBe(false);
+    const view = await setupView("admin", join(dir, "setup.json"), { core: [], addons: [{ name: "dns", title: "DNS", enabled: true,
+      steps: [{ id: "s", level: "domain", title: "s", href: "/x/", check: () => { throw new Error("must not run"); } }],
+      actions: [{ id: "a", check: () => { throw new Error("must not run"); } }] }] }, {}, off);
+    expect(view).toEqual({ off: true, hidden: false, actions: [], steps: [] });
+    expect(setupShows(view)).toBe(false);
+    expect(setupPanelHtml(view)).toContain("clp-addons setup on");
+    expect(switchSetup(true, off)).toBe(true);
+    expect(setupOff(off)).toBe(false);
+  });
+
+  test("DNS raises it per connection for a required permission the token lacks, never for an optional one", () => {
+    const policy = { ...seededPolicy(), connections: [{ id: "cf-1", label: "Agency" }, { id: "cf-2", label: "Shop" }] };
+    const unreadable = { owner: "user" as const, accountId: null, readable: false as const, reason: "refused" };
+    const state = (refused: string[]) => ({
+      policy, tokens: new Set(["cf-1", "cf-2"]),
+      reports: [
+        { id: "cf-1", active: true, error: null, token: unreadable, refused },
+        { id: "cf-2", active: true, error: null },
+      ],
+    });
+    expect(permissionActions(state([]))).toEqual([]);
+    const [action, ...rest] = permissionActions(state(["API Tokens: Read"]));
+    expect(rest).toEqual([]);
+    expect(action).toMatchObject({ title: "Cloudflare token needs a permission", href: "/addons/dns/#dns-connection" });
+    expect(action!.reason).toStartWith("Agency's token lacks API Tokens: Read");
+    expect(permissionActions({ ...state(["API Tokens: Read"]), reports: [{ id: "cf-1", active: false, error: "x", token: unreadable, refused: ["API Tokens: Read"] }] })).toEqual([]);
+  });
+});
+
+describe("unknown hostnames", () => {
+  const stock = `# configuration file /etc/nginx/nginx.conf:
+http {
+  include /etc/nginx/sites-enabled/*;
+# configuration file /etc/nginx/sites-enabled/default.conf:
+server {
+  listen 80 default_server;
+  listen [::]:80 default_server;
+  listen 443 quic reuseport default_server;
+  listen 443 default_server ssl;
+  listen [::]:443 quic reuseport default_server;
+  listen [::]:443 default_server ssl;
+  ssl_reject_handshake on;
+  server_name _;
+  return 444;
+}
+`;
+  const site = (extra = "") => `# configuration file /etc/nginx/sites-enabled/www.example.com.conf:
+server {
+  listen 80${extra};
+  listen [::]:80${extra};
+  listen 443 quic;
+  listen 443 ssl${extra};
+  listen [::]:443 ssl${extra};
+  server_name www.example.com; # a site
+  location / { return 301 https://$host$request_uri; }
+  root /home/example/htdocs/www.example.com;
+}
+server {
+  listen 127.0.0.1:8080 default_server;
+  server_name www.example.com;
+}
+`;
+  const end = "}\n";
+
+  test("CloudPanel's own default server refuses them", () => {
+    expect(defaultServerProblems(stock + site() + end)).toEqual([]);
+  });
+
+  test("without it, or with a site taking default_server, the site answers them", () => {
+    expect(defaultServerProblems(`http {\n${site()}${end}`)).toEqual(["On port 80, www.example.com answers them", "On port 443, www.example.com answers them"]);
+    expect(defaultServerProblems(stock.replaceAll(" default_server", "") + site(" default_server") + end))
+      .toEqual(["On port 80, www.example.com answers them", "On port 443, www.example.com answers them"]);
+  });
+
+  test("a default server that answers 443's handshake does not refuse them", () => {
+    expect(defaultServerProblems(stock.replace("  ssl_reject_handshake on;\n", "") + site() + end)).toEqual(["On port 443, _ answers them".replace("_", "/etc/nginx/sites-enabled/default.conf")]);
+  });
+
+  test("the check raises one item, and nothing when nginx -T cannot run", () => {
+    expect(defaultServerCheck({ dump: () => stock + site() + end })).toEqual([]);
+    expect(defaultServerCheck({ dump: () => null })).toEqual([]);
+    const [found] = defaultServerCheck({ dump: () => `http {\n${site()}${end}` });
+    expect(found!.title).toBe("Unknown hostnames reach a site");
+    expect(found!.href).toContain("system-tweaks.md#unknown-hostnames");
   });
 });

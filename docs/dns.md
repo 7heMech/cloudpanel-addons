@@ -49,7 +49,8 @@ each. If you later turn on a feature that needs another permission, such as
 skipping the firewall, **Edit in Cloudflare** opens your API tokens there; add
 it to this token. A token made before 2.0.0-rc.10 needs **API Tokens: Read**
 (Account API Tokens: Read for an account-owned token) before DNS can show this;
-until then the row lists only what Cloudflare has refused it.
+until then the row lists only what Cloudflare has refused it. While a token
+lacks a permission DNS needs, **Setup** shows it under **Action needed**.
 
 ## Everyday use
 

@@ -4,7 +4,7 @@ import { tryRun } from "../../lib/command";
 import { executeDnsAction, runDnsAction, type DnsActionOptions } from "./action";
 import { handle } from "./app/index";
 import { DNS_TARGETS } from "./inject/nameservers";
-import { DNS_SETUP } from "./setup";
+import { DNS_ACTIONS, DNS_SETUP } from "./setup";
 
 export const DNS_ADDON: AddonDefinition = {
   name: "dns",
@@ -12,10 +12,12 @@ export const DNS_ADDON: AddonDefinition = {
   description: "Keep each site's Cloudflare DNS to a profile of records, with Mailcow set up for its mail.",
   added: "2.0.0-rc.1",
   changed: [
+    { in: "2.2.0-rc.1", note: "Panel hostname: DNS points the name you give CloudPanel's custom domain at this server, and proxies it once CloudPanel has its certificate." },
     { in: "2.2.0-rc.1", note: "Each Cloudflare connection shows its token's permissions. A token made before 2.0.0-rc.10 needs API Tokens: Read added in Cloudflare to show them." },
   ],
   targets: DNS_TARGETS,
   setup: DNS_SETUP,
+  actionNeeded: DNS_ACTIONS,
   handler: handle,
   action: runDnsAction,
   // From the page a new site lands on and from its SSL/TLS page, by whoever

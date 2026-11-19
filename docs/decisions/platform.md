@@ -711,14 +711,24 @@ any step can be skipped, and the helper hides itself once nothing is left to
 suggest. Skips and Hide are kept per administrator; the Addons page's Setup
 button brings it back.
 
+Above the suggestions, Setup shows **Action needed**: what an enabled addon
+needs fixed now, such as a Cloudflare token without a permission DNS requires,
+or the sites' Nginx answering hostnames it has no site for. An addon declares
+these on `AddonDefinition.actionNeeded`, each check returning the items it
+finds, empty while nothing is wrong. An item cannot be skipped and clears once
+fixed; while there is one, the chip carries an amber badge instead of the dot,
+and Setup shows even to an administrator who hid it, with only those items.
+A check that fails or runs out of time raises nothing: Action needed is for
+what is known to be wrong. A suggestion that fell back stays a suggestion.
+
 A step is checked afresh each time, so a done step can fall back to to do, as
-Connect DNS does when its token lacks a permission a newer release needs. It
-then reads like any suggestion, its reason saying what is missing and Open going
-to the fix, and the helper shows again with its dot even when everything else is
-done. That is how an existing install learns of the change. A skip still
-stands, and Hide is not undone: the addon's own page says it too. A permission
-or setting that is only optional never makes a step to do; it belongs on the
-addon's page.
+Connect DNS does when its token stops being accepted. It then reads like any
+suggestion, its reason saying what is missing and Open going to the fix, and
+the helper shows again with its dot even when everything else is done. A skip
+still stands, and Hide is not undone. What a newer release requires, such as a
+token permission, is Action needed instead, so an existing install hears of it
+whatever the administrator skipped or hid. A permission or setting that is only
+optional is neither; it belongs on the addon's page.
 
 Each addon declares its steps on `AddonDefinition.setup`: an id, a level, a
 title, the page and card that set it up, and a `check` answering done, to do or
@@ -734,7 +744,12 @@ place that knows it. The manager renders the list and the page fetches it after
 it paints, keeping in the tab whether the helper showed, so the header does not
 move when the answer comes. The checks run on every page an administrator
 opens, so they read local files, the panel database and local services only,
-never Cloudflare, Hetzner or a DNS lookup. What only an API knows, such as a
+never Cloudflare, Hetzner or a DNS lookup. Each check has 10 seconds; one that
+takes longer reads as not checked and the others answer without it. A check
+that blocks the process, such as a command run synchronously, holds it until
+that command's own timeout, so checks give their commands one.
+`clp-addons setup off` (root) writes `/etc/clp-addons/setup-off`, after which
+the verb checks nothing and no page shows Setup; `setup on` removes it. What only an API knows, such as a
 token's permissions, is what the addon recorded when it last asked. A check
 that fails reads as a suggestion with its error.
 

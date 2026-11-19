@@ -1,8 +1,9 @@
-import type { SetupCheck, SetupStep } from "../../lib/addon-definition";
+import type { ActionNeeded, ActionNeededCheck, SetupCheck, SetupStep } from "../../lib/addon-definition";
 import { panelCustomDomainCertificate } from "../../lib/panel-custom-domain";
 import { addonStateDir } from "../../lib/paths";
 import { readState } from "../../lib/root-state";
 import { panelUserUid } from "../../lib/sso-auth";
+import { connectionPermissions, type StoredAccess } from "./access";
 import { parsePolicy, parseSecrets, type Policy } from "./model";
 import { seededPolicy } from "./presets";
 
@@ -11,8 +12,8 @@ const PAGE = "/addons/dns/";
 interface DnsSetupState {
   policy: Policy;
   tokens: Set<string>;
-  /** Each connection's last check, as the page shows it. */
-  reports: { id: string; active: boolean; error: string | null }[];
+  /** Each connection's last check, with what its token holds. */
+  reports: ({ id: string; active: boolean; error: string | null } & StoredAccess)[];
 }
 
 function dnsState(stateDir = addonStateDir("dns"), rootUid = 0): DnsSetupState {
@@ -50,6 +51,25 @@ export function automaticCheck(state: DnsSetupState): SetupCheck {
     ? { state: "done", reason: `New sites get ${profile.name}'s records` }
     : { state: "todo", reason: "New sites get no profile" };
 }
+
+/** One item per connection whose token lacks a permission DNS requires; optional ones never count. */
+export function permissionActions(state: DnsSetupState): ActionNeeded[] {
+  return state.policy.connections.flatMap((connection) => {
+    const report = state.reports.find((entry) => entry.id === connection.id);
+    if (!report?.active || !state.tokens.has(connection.id)) return [];
+    const { missing } = connectionPermissions(report, state.policy.profiles);
+    if (!missing.length) return [];
+    return [{
+      title: missing.length > 1 ? "Cloudflare token needs permissions" : "Cloudflare token needs a permission",
+      reason: `${connection.label}'s token lacks ${missing.join(", ")}, which DNS needs; add ${missing.length > 1 ? "them" : "it"} to the token in Cloudflare`,
+      href: `${PAGE}#dns-connection`,
+    }];
+  });
+}
+
+export const DNS_ACTIONS: ActionNeededCheck[] = [
+  { id: "dns-permissions", check: () => permissionActions(dnsState()) },
+];
 
 function panelHost(): string | null {
   try { return dnsState().policy.panelHost; } catch { return null; }

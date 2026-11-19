@@ -15,7 +15,14 @@ interface ServerBlock {
   rejectsHandshake: boolean;
 }
 
-/** `server` blocks directly inside `http`, from `nginx -T`, in the order Nginx reads them. */
+/** A quoted string, a comment to the end of the line, a brace or semicolon, or a word. */
+const TOKEN = /"(?:[^"\\]|\\.)*"|'(?:[^'\\]|\\.)*'|#.*$|[{};]|[^\s{};"']+/g;
+
+/**
+ * The `server` blocks of `http`, from `nginx -T`, in the order Nginx reads them.
+ * It prints each file whole, after the one that includes it, so a vhost's
+ * server block is at the top of its own file rather than inside `http`.
+ */
 export function serverBlocks(dump: string): ServerBlock[] {
   const blocks: ServerBlock[] = [];
   const stack: string[] = [];
@@ -26,22 +33,26 @@ export function serverBlocks(dump: string): ServerBlock[] {
     const header = /^# configuration file (.+):$/.exec(line);
     if (header) {
       file = header[1]!;
+      stack.length = 0;
+      current = null;
+      words = [];
       continue;
     }
-    for (const token of line.replace(/#.*$/, "").match(/[{};]|[^\s{};]+/g) ?? []) {
+    for (const token of line.match(TOKEN) ?? []) {
+      if (token.startsWith("#")) break;
       if (token === "{") {
         const name = words[0] ?? "";
         stack.push(name);
-        if (name === "server" && stack.length === 2 && stack[0] === "http") {
+        if (name === "server" && (stack.length === 1 || (stack.length === 2 && stack[0] === "http"))) {
           current = { file, names: [], listens: [], refuses: false, rejectsHandshake: false };
           blocks.push(current);
         }
         words = [];
       } else if (token === "}") {
-        if (stack.pop() === "server" && stack.length === 1) current = null;
+        if (stack.pop() === "server" && stack.length <= 1) current = null;
         words = [];
       } else if (token === ";") {
-        if (current && stack.length === 2) directive(current, words);
+        if (current && stack.at(-1) === "server") directive(current, words);
         words = [];
       } else {
         words.push(token);

@@ -1361,8 +1361,9 @@ the page says so. The jail has the panel jail's `ignoreip`, so a custom domain
 behind Cloudflare is not throttled either.
 
 CloudPanel rewrites the vhost whenever an administrator saves the custom
-domain, and the 15-minute repair puts the log back, so logins through a newly
-saved domain can go uncounted for up to 15 minutes. The new-site watcher wakes
+domain, without the log, and writes the domain's certificate seconds later. The
+certificate watcher's `certificates` hook puts the log back then, and the
+15-minute repair does if that missed. The new-site watcher wakes
 on that write too, but runs its hooks only when the list of sites changes. A vhost with more than one server block or
 `server_name` is left alone, and the page says that logins through it are not
 counted. The edit uses the shared nginx transaction for the sites' nginx: `nginx
@@ -1605,6 +1606,27 @@ forms, and injects restart/reload failures to verify recovery and retained data.
 
 Docker does not change this. Its rules sit on `FORWARD` and bypass ufw only for
 ports a container publishes, and the host's MySQL is not one of them.
+
+## Unknown hostnames
+
+The sites' Nginx needs a default server on 80 and 443 that refuses hostnames
+it has no site for. CloudPanel ships it as
+`/etc/nginx/sites-enabled/default.conf`: `default_server` on both, with
+`ssl_reject_handshake on` and `return 444`. Without it, Nginx hands an unknown
+name to the first server block on the port, a site, so any domain pointed at
+this IP, another Cloudflare account's included, reaches that site's PHP.
+
+Nothing here writes that file; Setup raises Action needed when it stops
+holding. The check reads `nginx -T`, the configuration Nginx would load, rather
+than the file: another vhost can take `default_server`, or an include can come
+first. `nginx -T` prints each file whole after the one including it, so a
+vhost's server block sits at the top of its own file. For each wildcard
+listener on 80 and 443 (IPv4 and IPv6, QUIC on its own) the check finds the
+server Nginx answers with, the `default_server` one or else the first, and
+needs `return 444` there, and on 443 `ssl_reject_handshake on`. A listener on
+one address is a group of its own and is left out. When `nginx -T` fails it
+raises nothing, since a configuration that does not load is reported louder
+elsewhere.
 
 ## How the code is laid out
 
