@@ -65,7 +65,7 @@ import type { InstanceView, InstaticJobView } from "../addons/instatic/app/servi
 import type { JobView, SiteSummary } from "../addons/stager/app/service";
 import type { AvailableTags } from "../addons/instatic/app/tags";
 import { setupPanelHtml, setupShows } from "../manager/setup-view";
-import type { SetupItem } from "../manager/setup";
+import type { ActionItem, SetupItem, SetupView } from "../manager/setup";
 import { ADDONS } from "../addons/catalog";
 import { withCsrfCookie, SECURITY_HEADERS } from "../lib/app-http";
 import { handle as terminalHandle } from "../addons/terminal/app/index";
@@ -1846,6 +1846,17 @@ const setupPreviewSteps = (["domain", "secure", "sites", "provision"] as const).
   id: id!, level, title: title!, href: addon ? `/addons/${addon}/` : "/admin/remote-backup", state: state as SetupItem["state"], reason: reason!,
   addon: addon ? { name: addon, title: ADDONS[addon]!.title, enabled: addon !== "security-keys" } : null,
 }))));
+const SETUP_PREVIEW_ACTIONS: ActionItem[] = [
+  {
+    id: "default-server", addon: { name: "system-tweaks", title: "System Tweaks" }, title: "Unknown hostnames reach a site",
+    reason: "No server refuses them on port 443, so a domain pointed at this server reaches a site's PHP",
+    href: "https://github.com/7heMech/cloudpanel-addons/blob/main/docs/system-tweaks.md#unknown-hostnames",
+  },
+  {
+    id: "dns-permissions", addon: { name: "dns", title: "DNS" }, title: "Cloudflare token needs a permission",
+    reason: "Agency's token lacks API Tokens: Read, which this release uses to check what the token may do", href: "/addons/dns/#dns-connection",
+  },
+];
 const SETUP_PREVIEW_DONE: Record<string, string> = {
   "panel-hostname": "CloudPanel answers at panel.example.com", "login-jails": "Failed panel logins are banned", updates: "Security updates install daily",
   "hetzner-firewall": "Only Cloudflare reaches the sites and the panel", passkeys: "admin has a security key", "remote-backups": "On, to amazon_s3",
@@ -1853,7 +1864,12 @@ const SETUP_PREVIEW_DONE: Record<string, string> = {
 };
 const setupPreviewPrefs = { skipped: new Set<string>(["updates"]), hidden: false };
 
-/** ?setup=done shows a server with nothing left to suggest, ?setup=fallback one whose DNS token lacks a permission a newer release needs. */
+/**
+ * ?setup=done shows a server with nothing left to suggest, ?setup=fallback one
+ * whose DNS token lacks a permission a newer release needs, and ?setup=off root's
+ * switch off. ?action=mixed adds Action needed, ?action=only with every
+ * suggestion done, ?action=hidden with Setup hidden.
+ */
 async function setupPreview(req: Request, url: URL): Promise<Response | null> {
   if (url.pathname !== "/addons/api/setup") return null;
   if (req.method === "POST") {
@@ -1862,7 +1878,9 @@ async function setupPreview(req: Request, url: URL): Promise<Response | null> {
     if (typeof body.unskip === "string") setupPreviewPrefs.skipped.delete(body.unskip);
     if (typeof body.hidden === "boolean") setupPreviewPrefs.hidden = body.hidden;
   }
-  const scenario = new URL(req.headers.get("referer") ?? url.href).searchParams.get("setup");
+  const page = new URL(req.headers.get("referer") ?? url.href).searchParams;
+  const action = page.get("action");
+  const scenario = action === "only" ? "done" : page.get("setup");
   const steps = setupPreviewSteps.map((step): SetupItem => {
     if (scenario === "fallback" && step.id === "dns-connection") {
       return { ...step, state: "todo", reason: "Agency's token lacks API Tokens: Read, which DNS now needs to show the token's permissions" };
@@ -1870,8 +1888,13 @@ async function setupPreview(req: Request, url: URL): Promise<Response | null> {
     if ((scenario === "done" || scenario === "fallback") && step.state === "todo") return { ...step, state: "done", reason: SETUP_PREVIEW_DONE[step.id] ?? step.reason };
     return step.state === "todo" && setupPreviewPrefs.skipped.has(step.id) ? { ...step, state: "skipped" } : step;
   });
-  const view = { hidden: setupPreviewPrefs.hidden, steps };
-  return Response.json({ ok: true, data: { show: setupShows(view), html: setupPanelHtml(view) } });
+  const view: SetupView = {
+    off: scenario === "off",
+    hidden: action === "hidden" || setupPreviewPrefs.hidden,
+    actions: action ? SETUP_PREVIEW_ACTIONS : [],
+    steps: scenario === "off" ? [] : steps,
+  };
+  return Response.json({ ok: true, data: { show: setupShows(view), attention: view.actions.length > 0, html: setupPanelHtml(view) } });
 }
 
 function managerPreviewMutation(path: string, source: URL): Response | null {

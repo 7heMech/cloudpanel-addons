@@ -95,6 +95,26 @@ export interface SetupStep {
   whileOff?: true;
 }
 
+/** Something an administrator must fix now, such as a token missing a permission a release needs. */
+export interface ActionNeeded {
+  title: string;
+  /** One line: what is wrong and what it stops. */
+  reason: string;
+  /** The page, and card, that fixes it. */
+  href: string;
+}
+
+/**
+ * A check that raises Action needed in Setup: never skipped, shown even while
+ * an administrator hid Setup, and gone once fixed.
+ */
+export interface ActionNeededCheck {
+  /** Unique across addons. */
+  id: string;
+  /** Run as root with the steps, so it reads local state only; empty while nothing is needed. */
+  check: (options?: Record<string, unknown>) => ActionNeeded[] | Promise<ActionNeeded[]>;
+}
+
 /** Paths are derived from `name`, not declared. */
 export interface AddonDefinition {
   name: string;
@@ -152,6 +172,8 @@ export interface AddonDefinition {
   panelBlock?: PanelBlock;
   /** What the Setup checklist suggests for this addon; listed with Enable while it is off. */
   setup?: SetupStep[];
+  /** What Setup raises as Action needed while this addon is on. */
+  actionNeeded?: ActionNeededCheck[];
   /** The conffile edits `apt-hook pre` hands back to dpkg before an unattended upgrade. */
   conffiles?: ConffileEdit[];
   /** Top-level commands, by name, such as `maintenance` or ones systemd runs. */

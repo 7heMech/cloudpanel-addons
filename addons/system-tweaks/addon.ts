@@ -1,6 +1,6 @@
 import { handle } from "./app/index";
 import {
-  restoreSystemTweaks, runSystemTweaksAction, systemTweaksPhpPools, systemTweaksBackupCompression, systemTweaksMaintenance,
+  restoreSystemTweaks, runSystemTweaksAction, systemTweaksLoginJails, systemTweaksPhpPools, systemTweaksBackupCompression, systemTweaksMaintenance,
   systemTweaksMotd, systemTweaksPhpGuardOff, systemTweaksPhpMyAdmin, systemTweaksVarnish, withdrawSystemTweaks,
 } from "./action";
 import { DEFAULT_REAL_IP_PATHS, REAL_IP_MARKER, releaseRealIp } from "./real-ip";
@@ -9,6 +9,7 @@ import { DEFAULT_VISITOR_IP_PATHS, UNTRUSTED_LOOPBACK, VISITOR_IP, releaseVisito
 import { fatal, log } from "../../lib/log";
 import type { AddonDefinition } from "../../lib/addon-definition";
 import { SYSTEM_TWEAKS_SETUP } from "./setup";
+import { defaultServerCheck } from "./default-server";
 
 export const SYSTEM_TWEAKS_ADDON: AddonDefinition = {
   name: "system-tweaks",
@@ -26,6 +27,7 @@ export const SYSTEM_TWEAKS_ADDON: AddonDefinition = {
   ],
   targets: [],
   setup: SYSTEM_TWEAKS_SETUP,
+  actionNeeded: [{ id: "default-server", check: () => defaultServerCheck() }],
   handler: handle,
   action: runSystemTweaksAction,
   repair: {
@@ -35,6 +37,11 @@ export const SYSTEM_TWEAKS_ADDON: AddonDefinition = {
   newSites: {
     label: "system tweaks Varnish backends",
     run: () => systemTweaksVarnish(),
+  },
+  // Saving the panel's custom domain rewrites its vhost, then writes its certificate.
+  certificates: {
+    label: "login jails",
+    run: () => systemTweaksLoginJails(),
   },
   // CloudPanel rewrites its phpMyAdmin vhost, replaces its app tree on an
   // update, and an upgrade empties /etc/update-motd.d and puts its banner back.

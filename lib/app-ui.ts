@@ -157,8 +157,8 @@ export { JOB_PROGRESS_JS };
 import SETUP_STYLE from "./assets/setup.css" with { type: "text" };
 import SETUP_JS from "./assets/setup.client.js" with { type: "text" };
 
-const SETUP_CHIP = `<button class="clp-addon-tool" id="clp-setup-chip" type="button" hidden aria-expanded="false" aria-controls="clp-setup-panel" onclick="clpSetupToggle()">Setup<span class="clp-setup-dot" aria-hidden="true"></span></button>`;
-const SETUP_NAV = `<button class="clp-addon-primary-link clp-setup-nav" id="clp-setup-nav" type="button" hidden aria-expanded="false" aria-controls="clp-setup-panel" onclick="clpSetupToggle()">Setup<span class="clp-setup-dot" aria-hidden="true"></span></button>`;
+const SETUP_CHIP = `<button class="clp-addon-tool" id="clp-setup-chip" type="button" hidden aria-expanded="false" aria-controls="clp-setup-panel" onclick="clpSetupToggle(this)">Setup<span class="clp-setup-dot" aria-hidden="true"></span><span class="clp-setup-badge" aria-hidden="true">!</span><span class="visually-hidden clp-setup-badge-text">: action needed</span></button>`;
+const SETUP_NAV = `<button class="clp-addon-primary-link clp-setup-nav" id="clp-setup-nav" type="button" hidden aria-expanded="false" aria-controls="clp-setup-panel" onclick="clpSetupToggle(this)">Setup<span class="clp-setup-dot" aria-hidden="true"></span><span class="clp-setup-badge" aria-hidden="true">!</span><span class="visually-hidden clp-setup-badge-text">: action needed</span></button>`;
 const SETUP_PANEL = `<div id="clp-setup-panel" role="dialog" aria-labelledby="clp-setup-title" tabindex="-1" hidden></div>`;
 
 interface SiteJobProgress {

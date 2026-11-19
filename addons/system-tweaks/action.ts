@@ -21,6 +21,7 @@ import type { SystemTweaksVerb, TweakContext, VerbContext } from "./tweak";
 import { BACKUP_COMPRESSION_TWEAK } from "./backup-compression";
 import { MOTD_TWEAK } from "./motd";
 import { PHPMYADMIN_TWEAK } from "./phpmyadmin";
+import { LOGIN_JAILS_TWEAK } from "./login-jails";
 import { VHOST_GUARD_TWEAK } from "./vhost-guard";
 
 const SETTINGS_VERSION = 1;
@@ -327,6 +328,11 @@ export function systemTweaksUpkeep(options: SystemTweaksOptions = {}): string | 
 }
 
 /** Also the fast repair's when CloudPanel rewrites its vhost. */
+/** Saving the panel's custom domain rewrites its vhost without the failed-login log; the certificate CloudPanel writes next brings this. */
+export function systemTweaksLoginJails(options: SystemTweaksOptions = {}): string | null {
+  return repairNow(LOGIN_JAILS_TWEAK.repair.upkeep, options);
+}
+
 export function systemTweaksPhpMyAdmin(options: SystemTweaksOptions = {}): string | null {
   return repairNow(PHPMYADMIN_TWEAK.repair.rules, options);
 }

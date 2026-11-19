@@ -250,13 +250,13 @@ describe("collecting the checklist", () => {
 
   test("the panel suggests only while a step is left, with no counts", () => {
     const item = { id: "one", level: "secure" as const, title: "One <b>", href: "/addons/x/", addon: { name: "x", title: "X", enabled: false }, reason: "r" };
-    const open = { hidden: false, steps: [{ ...item, state: "todo" as const }] };
+    const open = { off: false, hidden: false, actions: [], steps: [{ ...item, state: "todo" as const }] };
     expect(setupSuggests(open)).toBe(true);
     const html = setupPanelHtml(open);
     expect(html).toContain('data-setup-enable="x"');
     expect(html).toContain("One &lt;b&gt;");
     expect(html).not.toMatch(/\d+ of \d+|\d+\/\d+/);
-    const settled = { hidden: false, steps: [{ ...item, state: "skipped" as const }] };
+    const settled = { off: false, hidden: false, actions: [], steps: [{ ...item, state: "skipped" as const }] };
     expect(setupSuggests(settled)).toBe(false);
     expect(setupPanelHtml(settled)).toContain('data-setup-unskip="one"');
   });

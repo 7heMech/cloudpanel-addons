@@ -1,16 +1,20 @@
-// The Setup checklist, as root reads it: each enabled addon's steps checked
-// against the server, a disabled addon's steps offered with Enable, and what
-// each administrator skipped or hid.
-import { readFileSync } from "node:fs";
+// The Setup checklist, as root reads it: what the enabled addons need fixed
+// now, each enabled addon's steps checked against the server, a disabled
+// addon's steps offered with Enable, and what each administrator skipped or hid.
+import { existsSync, readFileSync, rmSync } from "node:fs";
 import { ADDONS, ADDON_NAMES, addonEnabled } from "../addons/catalog";
-import { SETUP_LEVELS, type SetupCheck, type SetupLevel, type SetupStep } from "../lib/addon-definition";
+import { SETUP_LEVELS, type ActionNeeded, type ActionNeededCheck, type SetupCheck, type SetupLevel, type SetupStep } from "../lib/addon-definition";
 import { writeFileAtomic } from "../lib/atomic-write";
 import { errorMessage } from "../lib/errors";
 import { withFileLockSync } from "../lib/file-lock";
 import { withPanelDb } from "../lib/panel-db";
-import { addonStateDir, PANEL_DB } from "../lib/paths";
+import { addonStateDir, CONFIG_DIR, PANEL_DB } from "../lib/paths";
 
 const PREFS_FILE = `${addonStateDir("manager")}/setup.json`;
+/** Root's switch for Setup as a whole: while it exists, nothing is checked and no page shows Setup. */
+export const SETUP_OFF_FILE = `${CONFIG_DIR}/setup-off`;
+/** How long one check may take before it reads as not checked; the others go on without it. */
+export const CHECK_LIMIT_MS = 10_000;
 
 export interface SetupItem {
   id: string;
@@ -23,8 +27,16 @@ export interface SetupItem {
   reason: string;
 }
 
+export interface ActionItem extends ActionNeeded {
+  id: string;
+  addon: { name: string; title: string } | null;
+}
+
 export interface SetupView {
+  /** Root switched Setup off; nothing was checked. */
+  off: boolean;
   hidden: boolean;
+  actions: ActionItem[];
   steps: SetupItem[];
 }
 
@@ -56,17 +68,22 @@ export const CORE_SETUP: SetupStep[] = [
   },
 ];
 
-async function checked(step: SetupStep, options: Record<string, unknown>): Promise<SetupCheck> {
+/** A check's answer, or why there is none: it threw, or it outlasted the limit. */
+async function within<T>(run: () => T | Promise<T>, limitMs: number): Promise<{ value: T } | { error: string }> {
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  const late = new Promise<{ error: string }>((resolve) => {
+    timer = setTimeout(() => resolve({ error: `took longer than ${Math.round(limitMs / 1000)} seconds` }), limitMs);
+  });
   try {
-    return await step.check(options);
-  } catch (error) {
-    return { state: "todo", reason: `Could not be checked: ${errorMessage(error)}` };
+    return await Promise.race([Promise.resolve().then(run).then((value) => ({ value }), (error) => ({ error: errorMessage(error) })), late]);
+  } finally {
+    clearTimeout(timer);
   }
 }
 
 interface SetupSource {
-  /** Each addon's steps, in catalog order, and whether it is on. */
-  addons: { name: string; title: string; enabled: boolean; steps: SetupStep[] }[];
+  /** Each addon's steps and Action needed checks, in catalog order, and whether it is on. */
+  addons: { name: string; title: string; enabled: boolean; steps: SetupStep[]; actions?: ActionNeededCheck[] }[];
   core: SetupStep[];
 }
 
@@ -74,10 +91,26 @@ function catalogSource(): SetupSource {
   return {
     addons: ADDON_NAMES.flatMap((name) => {
       const spec = ADDONS[name]!;
-      return spec.setup?.length ? [{ name, title: spec.title, enabled: addonEnabled(spec), steps: spec.setup }] : [];
+      if (!spec.setup?.length && !spec.actionNeeded?.length) return [];
+      return [{ name, title: spec.title, enabled: addonEnabled(spec), steps: spec.setup ?? [], actions: spec.actionNeeded ?? [] }];
     }),
     core: CORE_SETUP,
   };
+}
+
+/**
+ * What the enabled addons need fixed now. A check that fails or outlasts the
+ * limit raises nothing: Action needed is for what is known to be wrong.
+ */
+export async function actionItems(source: SetupSource = catalogSource(), options: Record<string, unknown> = {}, limitMs = CHECK_LIMIT_MS): Promise<ActionItem[]> {
+  const found = await Promise.all(source.addons.filter((addon) => addon.enabled).flatMap((addon) => (addon.actions ?? []).map(async (action) => {
+    const result = await within(() => action.check(options), limitMs);
+    if ("error" in result) return [];
+    return result.value.map((item, index): ActionItem => ({
+      ...item, id: index ? `${action.id}-${index}` : action.id, addon: { name: addon.name, title: addon.title },
+    }));
+  })));
+  return found.flat();
 }
 
 /** Every step, by level: CloudPanel's own first, then the addons' in catalog order. */
@@ -85,6 +118,7 @@ export async function setupSteps(
   prefs: UserPrefs,
   source: SetupSource = catalogSource(),
   options: Record<string, unknown> = {},
+  limitMs = CHECK_LIMIT_MS,
 ): Promise<SetupItem[]> {
   const skipped = new Set(prefs.skipped ?? []);
   const entries = [
@@ -93,7 +127,11 @@ export async function setupSteps(
   ];
   const items = await Promise.all(entries.map(async ({ step, addon }): Promise<SetupItem> => {
     const off: SetupCheck | null = addon && !addon.enabled ? { state: "todo", reason: `${addon.title} is off` } : null;
-    const found = off && !step.whileOff ? off : await checked(step, options);
+    const checked = async (): Promise<SetupCheck> => {
+      const result = await within(() => step.check(options), limitMs);
+      return "error" in result ? { state: "todo", reason: `Could not be checked: ${result.error}` } : result.value;
+    };
+    const found = off && !step.whileOff ? off : await checked();
     const result = off && found.state === "todo" ? off : found;
     return {
       id: step.id, level: step.level, title: step.title, href: step.href,
@@ -117,9 +155,30 @@ export function readSetupPrefs(file = PREFS_FILE): Prefs {
   }
 }
 
-export async function setupView(user: string, file = PREFS_FILE, source?: SetupSource, options?: Record<string, unknown>): Promise<SetupView> {
+export function setupOff(file = SETUP_OFF_FILE): boolean {
+  return existsSync(file);
+}
+
+/** `clp-addons setup on|off`: whether it changed anything. */
+export function switchSetup(on: boolean, file = SETUP_OFF_FILE): boolean {
+  if (on !== setupOff(file)) return false;
+  if (on) rmSync(file, { force: true });
+  else writeFileAtomic(file, "Setup is off; clp-addons setup on turns it back on.\n", { mode: 0o644, createParent: true });
+  return true;
+}
+
+export async function setupView(
+  user: string,
+  file = PREFS_FILE,
+  source?: SetupSource,
+  options?: Record<string, unknown>,
+  offFile = SETUP_OFF_FILE,
+): Promise<SetupView> {
   const prefs = readSetupPrefs(file)[user] ?? {};
-  return { hidden: prefs.hidden === true, steps: await setupSteps(prefs, source, options) };
+  const hidden = prefs.hidden === true;
+  if (setupOff(offFile)) return { off: true, hidden, actions: [], steps: [] };
+  const [actions, steps] = await Promise.all([actionItems(source, options), setupSteps(prefs, source, options)]);
+  return { off: false, hidden, actions, steps };
 }
 
 export type SetupChange = { skip: string } | { unskip: string } | { hidden: boolean };

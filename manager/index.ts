@@ -41,7 +41,7 @@ export async function handleManagerRoute(
     const result = await setupAction(user, change);
     if (!result.ok || !result.data) return jsonResponse({ ok: false, error: result.ok ? "no answer" : result.error }, 502);
     const view = result.data;
-    return jsonResponse({ ok: true, data: { show: setupShows(view), html: setupPanelHtml(view) } });
+    return jsonResponse({ ok: true, data: { show: setupShows(view), attention: view.actions.length > 0, html: setupPanelHtml(view) } });
   }
 
   if (path === "/api/update" && req.method === "GET") {
