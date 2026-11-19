@@ -16,13 +16,31 @@ function html(body: string, csrf: string, status = 200): Response {
   return htmlResponse(body, { status, csrf, headers: { "Content-Security-Policy": csp } });
 }
 
+async function fleetContent(req: Request): Promise<string> {
+  const [fleet, page] = await Promise.all([maintenanceService.fleet(), maintenanceService.defaultTemplate()]);
+  if (!page.ok || !page.data) throw new Error(page.error ?? "the default maintenance page could not be read");
+  return fleetView(fleet, clientIp(req), page.data);
+}
+
 /** The fleet page as it now stands, for a fleet change to repaint from; undefined if it cannot be read. */
 async function fleetHtml(req: Request): Promise<string | undefined> {
   try {
-    return fleetView(await maintenanceService.fleet(), clientIp(req));
+    return await fleetContent(req);
   } catch {
     return undefined;
   }
+}
+
+/** The HTML of a template save, or the response refusing it. */
+async function templateBody(req: Request): Promise<string | Response> {
+  let body: Record<string, unknown>;
+  try { body = await readJsonObject(req, MAX_TEMPLATE_BYTES * 6 + 1024); }
+  catch (error) { return bodyErrorResponse(error); }
+  if (typeof body.html !== "string") return jsonResponse({ ok: false, error: "html must be a string" }, 400);
+  if (Buffer.byteLength(body.html, "utf8") > MAX_TEMPLATE_BYTES) {
+    return jsonResponse({ ok: false, error: `html may be at most ${MAX_TEMPLATE_BYTES} bytes` }, 400);
+  }
+  return body.html;
 }
 
 function decodedDomain(raw: string): string | null {
@@ -60,7 +78,7 @@ export async function handle(
       }
     }
     try {
-      if (!selected) return html(layout("Maintenance Mode", fleetView(await maintenanceService.fleet(), clientIp(req)), updateNotice), csrf);
+      if (!selected) return html(layout("Maintenance Mode", await fleetContent(req), updateNotice), csrf);
       const globalStatus = await maintenanceService.globalStatus();
       const domain = validateDomain(selected);
       if (!domain) return html(layout("Invalid site", errorBlock("That is not a valid hostname."), updateNotice), csrf, 400);
@@ -122,6 +140,20 @@ export async function handle(
     return jsonResponse(result, result.ok ? 200 : 400);
   }
 
+  if (path === "/api/default-template" && (method === "PUT" || method === "DELETE")) {
+    const denied = guardMutation(req);
+    if (denied) return denied;
+    let result;
+    if (method === "PUT") {
+      const body = await templateBody(req);
+      if (body instanceof Response) return body;
+      result = await maintenanceService.setDefaultTemplate(body);
+    } else {
+      result = await maintenanceService.resetDefaultTemplate();
+    }
+    return jsonResponse(result, result.ok ? 200 : 400);
+  }
+
   // The selected sites, switched by one action call; a site that fails is named
   // in the reply rather than stopping the rest.
   if (method === "POST" && path === "/api/bulk-toggle") {
@@ -156,14 +188,9 @@ export async function handle(
       // The fleet page repaints from the reply; the site page paints the one switch it has.
       if (result.ok && body.view === "fleet") return jsonResponse({ ...result, html: await fleetHtml(req) });
     } else if (route[2] === "template" && method === "PUT") {
-      let body: Record<string, unknown>;
-      try { body = await readJsonObject(req, MAX_TEMPLATE_BYTES * 6 + 1024); }
-      catch (error) { return bodyErrorResponse(error); }
-      if (typeof body.html !== "string") return jsonResponse({ ok: false, error: "html must be a string" }, 400);
-      if (Buffer.byteLength(body.html, "utf8") > MAX_TEMPLATE_BYTES) {
-        return jsonResponse({ ok: false, error: `html may be at most ${MAX_TEMPLATE_BYTES} bytes` }, 400);
-      }
-      result = await maintenanceService.setTemplate(domain, body.html);
+      const body = await templateBody(req);
+      if (body instanceof Response) return body;
+      result = await maintenanceService.setTemplate(domain, body);
     } else if (route[2] === "template" && method === "DELETE") {
       result = await maintenanceService.resetTemplate(domain);
     } else if (route[2] === "bypasses" && method === "PUT") {

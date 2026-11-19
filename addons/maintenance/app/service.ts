@@ -16,12 +16,16 @@ interface MaintenanceSitePage {
   context: SiteContext;
 }
 
-export interface MaintenanceTemplateView {
-  domain: string;
+/** A maintenance page: a site's own, or the default; `custom` when the operator saved it. */
+export interface MaintenancePageView {
   custom: boolean;
   html: string;
   /** Set by a save whose HTML the sanitizer had to change. */
   removed?: boolean;
+}
+
+export interface MaintenanceTemplateView extends MaintenancePageView {
+  domain: string;
 }
 
 interface BulkToggleResult {
@@ -110,6 +114,18 @@ export const maintenanceService = {
 
   resetTemplate(domain: string): Promise<ActionResult<MaintenanceTemplateView>> {
     return action("reset-template", domain);
+  },
+
+  defaultTemplate(): Promise<ActionResult<MaintenancePageView>> {
+    return globalAction("get-default-template");
+  },
+
+  setDefaultTemplate(html: string): Promise<ActionResult<MaintenancePageView>> {
+    return globalAction("set-default-template", html);
+  },
+
+  resetDefaultTemplate(): Promise<ActionResult<MaintenancePageView>> {
+    return globalAction("reset-default-template");
   },
 
   setBypasses(domain: string, ips: string[]): Promise<ActionResult<MaintenanceStatus>> {

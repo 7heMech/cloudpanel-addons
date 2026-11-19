@@ -103,13 +103,14 @@ function parseAction(argv: string[], paths: MaintenanceActionPaths, options: Mai
   ];
   const globalAllowed: MaintenanceVerb[] = [
     "sites", "enable-many", "disable-many", "global-status", "global-enable", "global-disable", "global-set-bypass",
+    "get-default-template", "set-default-template", "reset-default-template",
   ];
   if (verb && globalAllowed.includes(verb)) {
     if (argv.length > 1) failAction(`action ${verb} takes no arguments`);
     return { verb, domain: "" };
   }
   if (!verb || !siteAllowed.includes(verb)) {
-    failAction("usage: clp-addons action maintenance {status|enable|disable|get-template|set-template|reset-template|set-bypass} --domain <domain> | {sites|enable-many|disable-many|global-status|global-enable|global-disable|global-set-bypass}");
+    failAction("usage: clp-addons action maintenance {status|enable|disable|get-template|set-template|reset-template|set-bypass} --domain <domain> | {sites|enable-many|disable-many|global-status|global-enable|global-disable|global-set-bypass|get-default-template|set-default-template|reset-default-template}");
   }
   let domain = "";
   for (let i = 1; i < argv.length; i++) {
@@ -147,6 +148,18 @@ function assertDirectory(path: string): void {
   if (!stat.isDirectory() || stat.isSymbolicLink()) failAction(`unsafe maintenance state path: ${path}`);
 }
 
+function editedDefaultPath(paths: MaintenanceActionPaths): string {
+  return join(paths.dataDir, "default-edited.html");
+}
+
+/** The page every site without its own serves: the operator's edited default, or the built-in one. */
+function defaultPage(paths: MaintenanceActionPaths): { custom: boolean; html: string } {
+  const edited = editedDefaultPath(paths);
+  if (!existsSync(edited)) return { custom: false, html: DEFAULT_MAINTENANCE_PAGE };
+  if (!safeRegularFile(edited)) failAction(`unsafe maintenance default template: ${edited}`);
+  return { custom: true, html: readFileSync(edited, "utf8") };
+}
+
 function ensureDataDir(paths: MaintenanceActionPaths): void {
   assertDirectory(paths.dataDir);
   mkdirSync(paths.dataDir, { recursive: true, mode: 0o711 });
@@ -155,8 +168,9 @@ function ensureDataDir(paths: MaintenanceActionPaths): void {
   if (existsSync(defaultPath) && !safeRegularFile(defaultPath)) {
     failAction(`unsafe maintenance default template: ${defaultPath}`);
   }
-  if (!existsSync(defaultPath) || readFileSync(defaultPath, "utf8") !== DEFAULT_MAINTENANCE_PAGE) {
-    writeFileAtomic(defaultPath, DEFAULT_MAINTENANCE_PAGE, { mode: 0o644, createParent: true });
+  const { html } = defaultPage(paths);
+  if (!existsSync(defaultPath) || readFileSync(defaultPath, "utf8") !== html) {
+    writeFileAtomic(defaultPath, html, { mode: 0o644, createParent: true });
   } else {
     chmodSync(defaultPath, 0o644);
   }
@@ -526,6 +540,24 @@ export async function executeMaintenanceAction(
     return { global: safeRegularFile(join(paths.dataDir, "_global", "on"), 0), bypasses: updated };
   }
 
+  if (verb === "get-default-template") return defaultPage(paths);
+
+  if (verb === "set-default-template") {
+    const input = await readInput(options);
+    const html = sanitizeTemplate(input);
+    assertDirectory(paths.dataDir);
+    writeFileAtomic(editedDefaultPath(paths), html, { mode: 0o600, createParent: true });
+    ensureDataDir(paths);
+    return { custom: true, html, removed: html.trim() !== input.trim() };
+  }
+
+  if (verb === "reset-default-template") {
+    assertDirectory(paths.dataDir);
+    rmSync(editedDefaultPath(paths), { force: true });
+    ensureDataDir(paths);
+    return defaultPage(paths);
+  }
+
   if (verb === "global-enable" || verb === "global-disable") {
     ensureDataDir(paths);
     const globalDir = join(paths.dataDir, "_global");
@@ -576,11 +608,9 @@ export async function executeMaintenanceAction(
   if (verb === "get-template") {
     ensureDataDir(paths);
     const custom = join(siteDir(paths, domain), "maintenance.html");
-    return {
-      domain,
-      custom: safeRegularFile(custom),
-      html: safeRegularFile(custom) ? readFileSync(custom, "utf8") : DEFAULT_MAINTENANCE_PAGE,
-    };
+    return safeRegularFile(custom)
+      ? { domain, custom: true, html: readFileSync(custom, "utf8") }
+      : { domain, custom: false, html: defaultPage(paths).html };
   }
 
   if (verb === "set-template") {
@@ -593,7 +623,7 @@ export async function executeMaintenanceAction(
   if (verb === "reset-template") {
     rmSync(join(siteDir(paths, domain), "maintenance.html"), { force: true });
     ensureDataDir(paths);
-    return { domain, custom: false, html: DEFAULT_MAINTENANCE_PAGE };
+    return { domain, custom: false, html: defaultPage(paths).html };
   }
 
   if (verb === "set-bypass") {

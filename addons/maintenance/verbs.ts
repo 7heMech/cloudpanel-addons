@@ -14,4 +14,7 @@ export const MAINTENANCE_VERBS = {
   "global-enable": { web: "admin" },
   "global-disable": { web: "admin" },
   "global-set-bypass": { web: "admin" },
+  "get-default-template": { web: "admin" },
+  "set-default-template": { web: "admin" },
+  "reset-default-template": { web: "admin" },
 } as const;
