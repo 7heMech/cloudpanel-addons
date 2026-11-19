@@ -128,6 +128,8 @@ export async function cmdMenu(): Promise<void> {
       log.err(errorMessage(error));
     }
     out.write("\n");
+    state.names = offeredAddonNames();
+    state.cursor = Math.min(state.cursor, Math.max(0, state.names.length - 1));
     state.enabled = readEnabled(state.names);
     state.wanted = new Set(state.enabled);
     state.manager = unitActive(MANAGER_UNIT);
