@@ -33,9 +33,9 @@ export function bootstrapProvision(specs: AddonSpec[]): void {
   startUnits();
 }
 
-export async function applyEnable(name: string): Promise<void> {
+export async function applyEnable(name: string, arch?: string): Promise<void> {
   requireRoot("enable");
-  const spec = resolveEnableable(name);
+  const spec = resolveEnableable(name, arch);
   return withOperationLock(`enable ${spec.name}`, () => enableAddon(spec));
 }
 

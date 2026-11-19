@@ -528,6 +528,7 @@ function box(options: { installed?: boolean; timers?: Record<string, string>; fa
       paths: { settingsFile, lockFile: join(dir, "lock"), rootUid: uid },
       updates: {
         run,
+        arch: "x64",
         paths: {
           aptConfDir: aptDir, aptConf: join(dir, "apt.conf"), dropIn: join(aptDir, "52clp-addons-unattended-upgrades"),
           systemdDir,
