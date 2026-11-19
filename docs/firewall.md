@@ -82,3 +82,6 @@ ssh -L 8443:127.0.0.1:8443 root@<server IP>
 then open `https://127.0.0.1:8443`. With SSH closed too, use the server's web
 console in Hetzner's console, or remove the firewalls from the server under
 **Firewalls** there.
+
+Setup suggests turning the switches on, and shows **Action needed** when
+Firewall has not been able to read Hetzner with the saved token for an hour.

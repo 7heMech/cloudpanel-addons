@@ -342,7 +342,12 @@ cannot bring the file back. A page read skips the write while a change holds
 the lock, and when something recorded after the read began. `hetznerSetupState`
 returns that, whether a token is saved, and whether this is Hetzner Cloud
 (`/sys/class/dmi/id/sys_vendor` is `Hetzner`, or a token is saved), without
-asking Hetzner, so the checklist costs no request when a page loads.
+asking Hetzner, so the checklist costs no request when a page loads. Setup
+suggests the switches from it, and raises Action needed once a saved token's
+`seenAt` is an hour old: repair reads Hetzner every 15 minutes and records only
+when that works, so four misses in a row are a token Hetzner refuses or a
+Hetzner that does not answer. A null `seenAt` has not been read yet and raises
+nothing.
 
 ## Taking over from earlier releases
 

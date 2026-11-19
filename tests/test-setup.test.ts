@@ -11,6 +11,8 @@ import { automaticCheck, connectionCheck, panelHostCheck, permissionActions } fr
 import { defaultServerCheck, defaultServerProblems } from "../addons/system-tweaks/default-server";
 import { seededPolicy } from "../addons/dns/presets";
 import { autoSslCheck } from "../addons/panel-tweaks/setup";
+import { hetznerSetupState } from "../addons/firewall/hetzner";
+import { HETZNER_QUIET_MS, hetznerActions, hetznerCheck } from "../addons/firewall/setup";
 import { newSiteCategoryCheck } from "../addons/resource-limits/setup";
 import { administratorKeys } from "../addons/security-keys/action";
 import { passkeysCheck } from "../addons/security-keys/setup";
@@ -434,5 +436,35 @@ server {
     const [found] = await defaultServerCheck({ dump: () => main() + site() });
     expect(found!.title).toBe("Unknown hostnames reach a site");
     expect(found!.href).toContain("system-tweaks.md#unknown-hostnames");
+  });
+});
+
+describe("Hetzner", () => {
+  test("the step, from the switches Firewall last saw", () => {
+    expect(hetznerCheck({ cloud: false, token: false, seen: {}, seenAt: null }).state).toBe("na");
+    expect(hetznerCheck({ cloud: true, token: false, seen: {}, seenAt: null }).reason).toBe("No Hetzner token is saved");
+    expect(hetznerCheck({ cloud: true, token: true, seen: {}, seenAt: null }).state).toBe("todo");
+    expect(hetznerCheck({ cloud: true, token: true, seen: { web: true, panel: false }, seenAt: 1 }).reason).toBe("Anyone can reach the panel without Cloudflare");
+    expect(hetznerCheck({ cloud: true, token: true, seen: { web: true, panel: true }, seenAt: 1 }).state).toBe("done");
+  });
+
+  test("Action needed once repair has not read Hetzner with the saved token for an hour", () => {
+    const now = 10 * HETZNER_QUIET_MS;
+    const state = (seenAt: number | null, token = true) => ({ cloud: true, token, seen: { web: true, panel: true }, seenAt });
+    expect(hetznerActions(state(null), now)).toEqual([]);
+    expect(hetznerActions(state(now - 20 * 60_000), now)).toEqual([]);
+    expect(hetznerActions(state(now - 3 * HETZNER_QUIET_MS, false), now)).toEqual([]);
+    const [item] = hetznerActions(state(now - 3 * HETZNER_QUIET_MS), now);
+    expect(item).toMatchObject({ title: "Hetzner does not answer the saved token", href: "/addons/firewall/#hetzner-card" });
+    expect(item!.reason).toStartWith("Firewall last read Hetzner 3 hours ago");
+  });
+
+  test("what the reader records: the vendor, a token, and the switches with when they were seen", () => {
+    const paths = { vendor: join(dir, "vendor"), tokenFile: join(dir, "token.json"), syncFile: join(dir, "sync.json"), rootUid: uid };
+    expect(hetznerSetupState({ paths })).toEqual({ cloud: false, token: false, seen: {}, seenAt: null });
+    writeFileSync(paths.vendor, "Hetzner\n");
+    privateFile(paths.tokenFile, { token: "a".repeat(64) });
+    privateFile(paths.syncFile, { seen: { web: true, panel: false }, seenAt: 1234 });
+    expect(hetznerSetupState({ paths })).toEqual({ cloud: true, token: true, seen: { web: true, panel: false }, seenAt: 1234 });
   });
 });
