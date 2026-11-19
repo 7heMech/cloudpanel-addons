@@ -12,8 +12,7 @@ import { withPanelDb } from "../../lib/panel-db";
 import { DNS_VERBS } from "./verbs";
 import { Database } from "bun:sqlite";
 import { createHash, randomBytes } from "node:crypto";
-import { existsSync, mkdirSync } from "node:fs";
-import { dirname } from "node:path";
+import { existsSync } from "node:fs";
 import { ActionFailure, replyToAction, failAction, readJsonRequest } from "../../lib/action";
 import { errorMessage } from "../../lib/errors";
 import { nameSlug, oneLine } from "../../lib/validate";
@@ -1231,7 +1230,6 @@ export async function executeDnsAction(argv: string[], options: DnsActionOptions
   }
   if (verb === "site-status") return action.siteStatus(provision!.domain);
 
-  mkdirSync(dirname(paths.lockFile), { recursive: true, mode: 0o700 });
   // Long enough for a check of the whole fleet; a page action waits less and says so.
   const wait = verb === "reconcile" || verb === "sync-sites" || verb === "provision" ? 240 : 30;
   return withFileLock(paths.lockFile, wait, "DNS is busy checking Cloudflare; try again in a moment", async () => {

@@ -4,12 +4,15 @@ import { hasSite, withPanelDb } from "../../lib/panel-db";
 import { Database } from "bun:sqlite";
 import { randomBytes } from "node:crypto";
 import {
-  chmodSync, closeSync, cpSync, existsSync, lstatSync, mkdirSync, mkdtempSync, constants, openSync, readFileSync, readSync, readdirSync,
-  renameSync, rmSync, statSync, writeFileSync,
+  chmodSync, closeSync, copyFileSync, cpSync, existsSync, fchmodSync, fstatSync, lstatSync, mkdirSync, mkdtempSync, constants, openSync,
+  readFileSync, readSync, readdirSync, renameSync, rmSync, statSync, writeFileSync,
 } from "node:fs";
 import { tmpdir } from "node:os";
 import { writeFileAtomic } from "../../lib/atomic-write";
-import { dirname, join } from "node:path";
+import { basename, dirname, join } from "node:path";
+import {
+  at, copyFileAt, copyFileNoFollow, copyTreeNoFollow, mkdirNoFollow, openFileNoFollow, readFileNoFollow, removeNoFollow, withDirNoFollow,
+} from "../../lib/no-follow";
 import { ActionCommandFailure, ActionFailure, emitActionOk, failAction, reportActionFailure } from "../../lib/action";
 import { commandFailure, runCommand } from "../../lib/command";
 import { validateDomain } from "../../lib/panel-identity";
@@ -315,9 +318,7 @@ function checkStorage(storage: SnapshotSources): void {
 
 function removeStorage(storage: SnapshotSources): void {
   checkStorage(storage);
-  rmSync(storage.dataDir, { recursive: true, force: true });
-  rmSync(storage.uploadsDir, { recursive: true, force: true });
-  rmSync(storage.envFile, { force: true });
+  for (const path of [storage.dataDir, storage.uploadsDir, storage.envFile]) removeNoFollow(path);
 }
 
 function requireEmptyStorage(storage: SnapshotSources): void {
@@ -497,7 +498,6 @@ function generatedPassword(): string {
 
 function writeEnvFile(file: string, key: string, port: number, domain: string): void {
   assertSafePath(file);
-  const temporary = `${file}.${randomBytes(8).toString("hex")}.tmp`;
   const content = [
     `PORT=${CONTAINER_PORT}`,
     "NODE_ENV=production",
@@ -508,14 +508,23 @@ function writeEnvFile(file: string, key: string, port: number, domain: string): 
     `VITE_ALLOWED_ORIGIN=https://${domain}`,
     "",
   ].join("\n");
-  withUmask(0o077, () => writeFileSync(temporary, content, { mode: 0o600, flag: "wx" }));
-  chmodSync(temporary, 0o600);
-  renameSync(temporary, file);
+  withDirNoFollow(dirname(file), (dir) => {
+    const temporary = at(dir, `${basename(file)}.${randomBytes(8).toString("hex")}.tmp`);
+    const fd = openSync(temporary, constants.O_WRONLY | constants.O_CREAT | constants.O_EXCL | constants.O_NOFOLLOW, 0o600);
+    try {
+      writeFileSync(fd, content);
+      fchmodSync(fd, 0o600);
+    } finally {
+      closeSync(fd);
+    }
+    renameSync(temporary, at(dir, basename(file)));
+  }, 0o750);
 }
 
 function secretKey(file: string): string {
-  if (!isRegularFile(file)) failAction(`missing encryption key file: ${file}; restore the original key before starting`);
-  const key = readFileSync(file, "utf8").split(/\r?\n/)
+  const content = isRegularFile(file) ? readFileNoFollow(file) : null;
+  if (content === null) failAction(`missing encryption key file: ${file}; restore the original key before starting`);
+  const key = content.split(/\r?\n/)
     .find((line) => line.startsWith("INSTATIC_SECRET_KEY="))?.slice("INSTATIC_SECRET_KEY=".length) ?? "";
   if (!key.trim()) failAction(`${file} has no INSTATIC_SECRET_KEY; refusing to generate a new one over existing data`);
   return key;
@@ -524,7 +533,6 @@ function secretKey(file: string): string {
 function ensureEnvFile(storage: SnapshotSources, port: number, domain: string, fresh = false): void {
   const file = storage.envFile;
   checkStorage(storage);
-  mkdirSync(dirname(file), { recursive: true, mode: 0o750 });
   if (isRegularFile(file)) {
     writeEnvFile(file, secretKey(file), port, domain);
     return;
@@ -553,20 +561,21 @@ function resolveOwner(domain: string, paths: InstaticActionPaths): string {
   return `${uid}:${gid}`;
 }
 
+/** Through open descriptors: the site user owns the directories above uploads and could swap any of them for a link. */
 function enforceOwnership(storage: SnapshotSources, owner: string): void {
   checkStorage(storage);
-  mkdirSync(storage.dataDir, { recursive: true, mode: 0o750 });
-  mkdirSync(storage.uploadsDir, { recursive: true, mode: 0o750 });
-  if (!runDiagnostic("chown", ["-hR", owner, storage.dataDir, storage.uploadsDir])) {
-    throw new ActionCommandFailure("chown");
-  }
-  if (!runDiagnostic("chmod", ["750", storage.dataDir, storage.uploadsDir])) {
-    throw new ActionCommandFailure("chmod");
-  }
-  const env = storage.envFile;
-  if (isRegularFile(env)) {
-    if (!runDiagnostic("chown", [`root:${owner.split(":")[1]}`, env])) throw new ActionCommandFailure("chown");
-    if (!runDiagnostic("chmod", ["600", env])) throw new ActionCommandFailure("chmod");
+  withDirNoFollow(storage.dataDir, (data) => withDirNoFollow(storage.uploadsDir, (uploads) => {
+    if (!runDiagnostic("chown", ["-hR", owner, at(data, "."), at(uploads, ".")])) throw new ActionCommandFailure("chown");
+    fchmodSync(data, 0o750);
+    fchmodSync(uploads, 0o750);
+  }, 0o750), 0o750);
+  const env = openFileNoFollow(storage.envFile);
+  if (env === null) return;
+  try {
+    fchmodSync(env, 0o600);
+    if (!runDiagnostic("chown", [`root:${owner.split(":")[1]}`, at(env)])) throw new ActionCommandFailure("chown");
+  } finally {
+    closeSync(env);
   }
 }
 
@@ -618,15 +627,51 @@ async function healthCheck(port: number, domain: string): Promise<boolean> {
   return false;
 }
 
-function sqliteBackup(source: string, destination: string): boolean {
+/** The regular files this process has open, as descriptor, device and inode. */
+function openFiles(): string[] {
+  return readdirSync("/proc/self/fd").flatMap((fd) => {
+    try {
+      const stat = fstatSync(Number(fd));
+      return stat.isFile() ? [`${fd}:${stat.dev}:${stat.ino}`] : [];
+    } catch {
+      return [];
+    }
+  });
+}
+
+/** Whether every regular file opened since `before` is `name` or its WAL or shared memory in directory `dir`. */
+function openedOnly(before: Set<string>, dir: number, name: string): boolean {
+  const allowed = new Set<string>();
+  for (const file of [name, `${name}-wal`, `${name}-shm`]) {
+    try {
+      const stat = lstatSync(at(dir, file));
+      if (stat.isFile()) allowed.add(`${stat.dev}:${stat.ino}`);
+    } catch {}
+  }
+  return openFiles().every((file) => before.has(file) || allowed.has(file.slice(file.indexOf(":") + 1)));
+}
+
+/**
+ * `within` names a source in a directory the site's container can write.
+ * SQLite opens it, its WAL and its shared memory by name, which a link there
+ * could send elsewhere, so the files it actually opened are checked before
+ * anything is copied.
+ */
+export function sqliteBackup(source: string, destination: string, within?: { dir: number; name: string }): boolean {
   let db: Database | undefined;
   let check: Database | undefined;
   try {
     // VACUUM INTO is SQLite's native consistent-backup operation. Opening the
     // live source read-only keeps the action from writing application state;
     // SQLite includes committed WAL pages in the resulting standalone file.
+    const before = new Set(openFiles());
     db = new Database(source, { readonly: true });
     db.run("PRAGMA busy_timeout=5000");
+    db.query("SELECT count(*) FROM sqlite_master;").get();
+    if (within && !openedOnly(before, within.dir, within.name)) {
+      diagnostic(`[instatic] WARN: ${within.name} led SQLite outside the data directory\n`);
+      return false;
+    }
     db.query("VACUUM INTO ?").run(destination);
     db.close(true);
     db = undefined;
@@ -707,10 +752,44 @@ interface SnapshotSources {
   includeUploads?: boolean;
 }
 
+function snapshotData(dataDir: string, destination: string): boolean {
+  return withDirNoFollow(dataDir, (data) => {
+    for (const name of readdirSync(at(data))) {
+      if (name.startsWith(".") || name.endsWith("-wal") || name.endsWith("-shm")) continue;
+      const source = at(data, name);
+      if (!isRegularFile(source)) continue;
+      if (fileHeader(source) === "SQLite format 3") {
+        if (!sqliteBackup(source, join(destination, name), { dir: data, name })) {
+          diagnostic(`[instatic] WARN: sqlite backup failed for ${name}\n`);
+          return false;
+        }
+      } else {
+        copyFileAt(data, name, join(destination, name));
+      }
+    }
+    return true;
+  });
+}
+
+/** Moves the finished archive into the directory of `out`, which may be the site user's own. */
+function publishSnapshot(archive: string, out: string): void {
+  withDirNoFollow(dirname(out), (dir) => {
+    const temporary = at(dir, `.${basename(out)}.${randomBytes(6).toString("hex")}.tmp`);
+    try {
+      renameSync(archive, temporary);
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== "EXDEV") throw error;
+      copyFileSync(archive, temporary, constants.COPYFILE_EXCL);
+    }
+    renameSync(temporary, at(dir, basename(out)));
+  });
+}
+
+/** Staged under the instance's own root-owned directory `dir`, whatever directory `out` is in. */
 export function makeSnapshot(dir: string, out: string, sources?: SnapshotSources): boolean {
   let stage: string;
   try {
-    stage = mkdtempSync(join(dirname(out), ".instatic-snapshot-"));
+    stage = mkdtempSync(join(dir, ".snapshot-"));
   } catch {
     return false;
   }
@@ -720,50 +799,14 @@ export function makeSnapshot(dir: string, out: string, sources?: SnapshotSources
     const payload = join(stage, "payload");
     mkdirSync(join(payload, "data"), { recursive: true });
     const dataDir = sources?.dataDir ?? join(dir, "data");
-    if (isDirectory(dataDir)) {
-      for (const entry of readdirSync(dataDir, { withFileTypes: true })) {
-        if (entry.name.startsWith(".")) continue;
-        if (!isRegularFile(join(dataDir, entry.name))) continue;
-        if (entry.name.endsWith("-wal") || entry.name.endsWith("-shm")) continue;
-        const source = join(dataDir, entry.name);
-        const destination = join(payload, "data", entry.name);
-        let header = "";
-        try {
-          header = fileHeader(source);
-        } catch {
-          return false;
-        }
-        if (header === "SQLite format 3") {
-          if (!sqliteBackup(source, destination)) {
-            diagnostic(`[instatic] WARN: sqlite backup failed for ${entry.name}\n`);
-            return false;
-          }
-        } else {
-          try {
-            cpSync(source, destination, { recursive: true, preserveTimestamps: true, dereference: false });
-          } catch {
-            return false;
-          }
-        }
-      }
-    }
+    if (isDirectory(dataDir) && !snapshotData(dataDir, join(payload, "data"))) return false;
 
     const uploads = sources?.uploadsDir ?? join(dir, "uploads");
     if (sources?.includeUploads !== false && isDirectory(uploads)) {
-      try {
-        cpSync(uploads, join(payload, "uploads"), { recursive: true, preserveTimestamps: true, dereference: false });
-      } catch {
-        return false;
-      }
+      withDirNoFollow(uploads, (from) => withDirNoFollow(payload, (into) => copyTreeNoFollow(from, into, "uploads")));
     }
     const env = sources?.envFile ?? join(dir, "instatic.env");
-    if (isRegularFile(env)) {
-      try {
-        cpSync(env, join(payload, "instatic.env"), { recursive: true, preserveTimestamps: true, dereference: false });
-      } catch {
-        return false;
-      }
-    }
+    if (isRegularFile(env)) copyFileNoFollow(env, join(payload, "instatic.env"));
 
     if (sources?.metaFile) {
       if (!isRegularFile(sources.metaFile)) return false;
@@ -777,7 +820,7 @@ export function makeSnapshot(dir: string, out: string, sources?: SnapshotSources
       return false;
     }
     chmodSync(temporary, 0o600);
-    renameSync(temporary, out);
+    publishSnapshot(temporary, out);
     return true;
   } catch {
     return false;
@@ -953,11 +996,13 @@ function copyStorage(source: SnapshotSources, destination: SnapshotSources, uplo
   for (const [from, to] of [
     [source.dataDir, destination.dataDir],
     ...(uploads ? [[source.uploadsDir, destination.uploadsDir]] : []),
-    [source.envFile, destination.envFile],
   ] as Array<[string, string]>) {
-    mkdirSync(dirname(to), { recursive: true, mode: 0o750 });
-    if (existsSync(from)) cpSync(from, to, { recursive: true, preserveTimestamps: true, dereference: false, force: false, errorOnExist: true });
+    withDirNoFollow(dirname(to), (into) => {
+      if (isDirectory(from)) withDirNoFollow(from, (fd) => copyTreeNoFollow(fd, into, basename(to)));
+    }, 0o750);
   }
+  mkdirNoFollow(dirname(destination.envFile), 0o750);
+  if (isRegularFile(source.envFile)) copyFileNoFollow(source.envFile, destination.envFile);
 }
 
 function restoreLocalSnapshot(snapshot: string, storage: SnapshotSources, dir: string): void {
@@ -1195,7 +1240,7 @@ export function deleteInstaticInstance(
   removeStorage(storage);
   if (nativeArchive) {
     assertSafePath(nativeArchive);
-    rmSync(nativeArchive, { force: true });
+    removeNoFollow(nativeArchive);
   }
   rmSync(dir, { recursive: true, force: true });
 }
@@ -1238,7 +1283,7 @@ export function makeNativeBackup(domain: string, paths: InstaticActionPaths): st
   if (!isRegularFile(dbFile) || fileHeader(dbFile) !== "SQLite format 3") failAction(`no SQLite database to back up for ${domain}`);
   const backup = nativeBackupPath(domain, paths);
   assertSafePath(backup);
-  mkdirSync(dirname(backup), { recursive: true, mode: 0o750 });
+  mkdirNoFollow(dirname(backup), 0o750);
   if (!makeSnapshot(dir, backup, { ...storage, includeUploads: false })) failAction(`native backup failed for ${domain}; previous backup preserved`);
   return backup;
 }
@@ -1340,8 +1385,8 @@ async function restoreNativeBackup(action: ParsedInstaticAction, paths: Instatic
         renamed = true;
       }
       changed = true;
-      rmSync(storage.dataDir, { recursive: true, force: true });
-      rmSync(storage.envFile, { force: true });
+      removeNoFollow(storage.dataDir);
+      removeNoFollow(storage.envFile);
       copyStorage(incoming, storage, false);
       candidate = true;
       runContainer(name, port, tag, domain, storage, paths);
@@ -1360,8 +1405,8 @@ async function restoreNativeBackup(action: ParsedInstaticAction, paths: Instatic
       try {
         if (changed) {
           checkStorage(storage);
-          rmSync(storage.dataDir, { recursive: true, force: true });
-          rmSync(storage.envFile, { force: true });
+          removeNoFollow(storage.dataDir);
+          removeNoFollow(storage.envFile);
           copyStorage(previous, storage, false);
           enforceOwnership(storage, owner);
         }
@@ -1610,8 +1655,6 @@ export async function runInstaticAction(argv: string[], options?: InstaticAction
     requireRoot();
     const paths = pathsFor(options);
     const action = parseAction(argv, paths);
-    mkdirSync(paths.lockDir, { recursive: true });
-    chmodSync(paths.lockDir, 0o700);
     mkdirSync(paths.dataBaseDir, { recursive: true });
 
     // `job` and `watch-job` read a log the running job is still appending to,

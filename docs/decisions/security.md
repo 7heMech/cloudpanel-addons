@@ -130,7 +130,8 @@ a site. The unattended sweep is the repair timer's and has no gateway verb. See
 [Panel Tweaks](panel-tweaks.md#measure-now-is-a-background-job).
 
 CloudPanel's native basic-auth allowance inherits its global real-IP trust.
-Stock CloudPanel's `set_real_ip_from 0.0.0.0/0` accepts a forged `X-Real-IP` from
+CloudPanel's `set_real_ip_from 0.0.0.0/0`, dropped from the sites' Nginx in
+`nginx-common` 1.30.6-2, accepts a forged `X-Real-IP` from
 any IPv4 peer, so anyone who knows an allowed IP can replay it to bypass
 authentication. [System Tweaks](system-tweaks.md#forged-visitor-ips) removes that
 line by default; a box without it keeps the native trust. Ordinary
@@ -319,10 +320,7 @@ The token cookie is scoped to the whole panel rather than to `/addons`, because
 an addon page mounted into one of CloudPanel's own site pages runs at that
 page's path and has to read it. Path is not what protects it: the panel is a
 single origin, so any panel page could read the cookie at any path, and the
-same-origin check and `SameSite=Strict` are what refuse a forged request. Every
-response that sets it also expires the `/addons`-scoped cookie an earlier
-release set, which it does not otherwise replace: a browser holding both sends
-both, and the two ends of the check would read different values.
+same-origin check and `SameSite=Strict` are what refuse a forged request.
 
 ## One response and one body policy
 

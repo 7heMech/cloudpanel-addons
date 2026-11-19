@@ -7,7 +7,10 @@ export const STAGER_ADDON: AddonDefinition = {
   name: "stager",
   title: "Stager",
   description: "Create staging copies of WordPress, PHP, static, and Instatic sites.",
-  changed: [{ in: "2.0.0-rc.1", note: "Staging copies no longer send mail." }],
+  changed: [
+    { in: "2.0.0-rc.1", note: "Staging copies no longer send mail." },
+    { in: "2.2.0-rc.1", note: "A clone or promote copies only the files the source site's user can read." },
+  ],
   targets: STAGER_TARGETS,
   handler: handle,
   action: runStagerAction,

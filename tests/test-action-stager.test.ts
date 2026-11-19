@@ -6,7 +6,7 @@ import { tmpdir } from "node:os";
 import { Database } from "bun:sqlite";
 import {
   applicationOk, dotenvProblem, holdCloneMail, newRunContext, panelUpdateSite, rewriteDotenvContent,
-  rewriteWpConfig, rollbackRun, vhostTemplateExists, type StagerActionPaths,
+  rewriteWpConfig, rollbackRun, runTarCopy, vhostTemplateExists, type StagerActionPaths,
 } from "../addons/stager/action";
 import { expandTarget, stagerService } from "../addons/stager/app/service";
 import { handle as stagerHandle } from "../addons/stager/app";
@@ -526,4 +526,59 @@ describe("the clone's wp-config.php", () => {
     );
     expect(rewritten).toContain(`'x$&y$1'`);
   });
+});
+
+test("runTarCopy sets LC_ALL=C after runuser so unread counts do not vanish under localized tar", async () => {
+  const realTar = Bun.which("tar");
+  expect(realTar).toBeTruthy();
+  const root = mkdtempSync(join(tmpdir(), "clp-stager-tar-locale-"));
+  const bin = join(root, "bin");
+  const src = join(root, "src");
+  const dst = join(root, "dst");
+  mkdirSync(bin);
+  mkdirSync(src);
+  mkdirSync(dst);
+  writeFileSync(join(src, "index.html"), "ok\n");
+  // Simulate PAM setting a German locale during runuser's privilege switch.
+  writeFileSync(join(bin, "runuser"), [
+    "#!/bin/sh",
+    "shift 3",
+    "export LC_ALL=de_DE.UTF-8 LANG=de_DE.UTF-8",
+    "exec \"$@\"",
+    "",
+  ].join("\n"), { mode: 0o755 });
+  // Stand in for a localized GNU tar whose warning text varies with LC_ALL.
+  writeFileSync(join(bin, "tar"), [
+    "#!/bin/sh",
+    "case \" $* \" in",
+    "  *\" -cf \"*)",
+    "    if [ \"${LC_ALL:-}\" = \"C\" ]; then",
+    "      printf 'tar: ./secret: Warning: Cannot open: Permission denied\\n' >&2",
+    "    else",
+    "      printf 'tar: ./secret: Warnung: Kann nicht oeffnen: Keine Berechtigung\\n' >&2",
+    "    fi",
+    "    ;;",
+    "esac",
+    `exec ${JSON.stringify(realTar)} "$@"`,
+    "",
+  ].join("\n"), { mode: 0o755 });
+
+  const oldPath = process.env.PATH;
+  const oldLcAll = process.env.LC_ALL;
+  const oldLang = process.env.LANG;
+  process.env.PATH = `${bin}:${oldPath ?? ""}`;
+  process.env.LC_ALL = "de_DE.UTF-8";
+  process.env.LANG = "de_DE.UTF-8";
+  try {
+    const result = await runTarCopy(src, "srcuser", dst, "dstuser");
+    expect(result).toEqual({ code: 0, unread: 1 });
+    expect(readFileSync(join(dst, "index.html"), "utf8")).toBe("ok\n");
+  } finally {
+    process.env.PATH = oldPath;
+    if (oldLcAll === undefined) delete process.env.LC_ALL;
+    else process.env.LC_ALL = oldLcAll;
+    if (oldLang === undefined) delete process.env.LANG;
+    else process.env.LANG = oldLang;
+    rmSync(root, { recursive: true, force: true });
+  }
 });

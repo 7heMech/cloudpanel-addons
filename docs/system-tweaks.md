@@ -147,9 +147,11 @@ removes the override; enabling it again reapplies the saved choice through repai
 ## Forged visitor IPs
 
 **Block forged visitor IPs** is on by default. Without it, any client can claim
-another IP address with a header, and sites, logs, basic auth, the panel and
-**Allow traffic from Cloudflare only** believe it. It comments out
-`set_real_ip_from 0.0.0.0/0` in the sites' and the panel's `nginx.conf`.
+another IP address with a header, and the panel and its logs and basic auth
+believe it. So do sites, their logs, basic auth and **Allow traffic from
+Cloudflare only**, unless Nginx is 1.30.6-2 or later, which already drops the
+sites' line. It comments out `set_real_ip_from 0.0.0.0/0` in the sites' and the
+panel's `nginx.conf`.
 Cloudflare traffic and CloudPanel's own proxying are unaffected. It never holds
 an update back: automatic updates still install Nginx, and CloudPanel when that
 is switched on.

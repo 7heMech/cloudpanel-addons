@@ -1,4 +1,3 @@
-import { mkdirSync } from "node:fs";
 import { join } from "node:path";
 import { ActionFailure } from "../lib/action";
 import { acquireFileLock, acquireFileLockSync, type FileLockHandle } from "../lib/file-lock";
@@ -35,7 +34,6 @@ export function operationLockEnv(): NodeJS.ProcessEnv {
 }
 
 function lockPath(lockDir: string): string {
-  mkdirSync(lockDir, { recursive: true, mode: 0o700 });
   return join(lockDir, "operation.lock");
 }
 

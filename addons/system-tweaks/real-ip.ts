@@ -1,6 +1,7 @@
 /**
  * CloudPanel's two nginx.conf files, the sites' and the panel's, trust the
- * client IP header from every address. Commenting out that one line in each
+ * client IP header from every address (the sites' until nginx-common 1.30.6-2,
+ * which drops that line). Commenting out that one line in each
  * leaves loopback and private-network proxies trusted. The panel also trusts
  * Cloudflare: its X-Forwarded-For ends with the address Cloudflare received, so
  * a panel behind Cloudflare keeps its visitors. The sites' X-Real-IP is passed

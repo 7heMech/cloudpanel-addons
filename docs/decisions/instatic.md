@@ -95,6 +95,16 @@ The live SQLite database and environment file are outside the document root at
 directory. This lets CloudPanel back up the complete application while keeping
 private files out of the web root.
 
+The site's user owns every directory above that storage and can swap any of
+them for a link, so root never acts on it by path. `lib/no-follow.ts` opens
+each directory one component at a time without following links, and root then
+copies, removes, `chmod`s and `chown`s through the open descriptor
+(`/proc/<pid>/fd/<n>`). SQLite opens the database, its WAL and its shared
+memory by name, so a backup checks that every file SQLite opened is one of
+those three in the held data directory before copying anything. Snapshots are
+assembled in the instance's root-owned state directory and only the finished
+archive is moved into the site's `backups` directory.
+
 Update and recreate take a clean local snapshot before replacing the container.
 The recorded data and encryption key are retained, and a failed health check
 restores the previous version. The check needs a 2xx or 3xx from the container

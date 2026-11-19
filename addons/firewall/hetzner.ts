@@ -7,8 +7,7 @@
  */
 import { createHash } from "node:crypto";
 import { Resolver } from "node:dns/promises";
-import { chmodSync, closeSync, constants, existsSync, fstatSync, mkdirSync, openSync, readFileSync, rmSync } from "node:fs";
-import { dirname } from "node:path";
+import { closeSync, constants, existsSync, fstatSync, openSync, readFileSync, rmSync } from "node:fs";
 import { ActionFailure, failAction } from "../../lib/action";
 import { runCommand, type CommandResult } from "../../lib/command";
 import { errorMessage } from "../../lib/errors";
@@ -367,8 +366,6 @@ async function serverIdOf(paths: HetznerPaths, options: HetznerOptions): Promise
 }
 
 async function withHetznerLock<T>(paths: HetznerPaths, body: () => Promise<T>): Promise<T> {
-  mkdirSync(dirname(paths.lockFile), { recursive: true });
-  chmodSync(dirname(paths.lockFile), 0o700);
   return withFileLock(paths.lockFile, 120, "another Hetzner firewall change is running", body);
 }
 

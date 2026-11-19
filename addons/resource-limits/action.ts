@@ -25,8 +25,8 @@ import {
 import { openPanelDatabase } from "../../lib/panel-db";
 import { RESOURCE_LIMITS_VERBS } from "./verbs";
 import { Database } from "bun:sqlite";
-import { chmodSync, existsSync, lstatSync, mkdirSync, readFileSync } from "node:fs";
-import { dirname, join } from "node:path";
+import { existsSync, lstatSync, readFileSync } from "node:fs";
+import { join } from "node:path";
 import { ActionFailure, replyToAction, failAction, readJsonRequest } from "../../lib/action";
 import { errorMessage } from "../../lib/errors";
 import { nameSlug, oneLine } from "../../lib/validate";
@@ -672,8 +672,6 @@ function writePolicy(path: string, policy: Policy, expectedUid: number): void {
 }
 
 async function withPolicyLock<T>(paths: ResourceLimitsActionPaths, body: () => Promise<T>): Promise<T> {
-  mkdirSync(dirname(paths.lockFile), { recursive: true });
-  chmodSync(dirname(paths.lockFile), 0o700);
   return withFileLock(paths.lockFile, 30, "another Resource limits operation is running", body);
 }
 

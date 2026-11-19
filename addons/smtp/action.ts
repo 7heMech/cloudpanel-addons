@@ -16,7 +16,7 @@ import { SMTP_VERBS } from "./verbs";
 import {
   chmodSync, existsSync, lstatSync, mkdirSync, readdirSync, readFileSync, readlinkSync, rmSync, symlinkSync,
 } from "node:fs";
-import { dirname, join } from "node:path";
+import { join } from "node:path";
 import { ActionFailure, replyToAction, failAction, readJsonRequest } from "../../lib/action";
 import { errorMessage } from "../../lib/errors";
 import { nameSlug, oneLine } from "../../lib/validate";
@@ -1012,7 +1012,6 @@ export async function executeSmtpAction(argv: string[], options: SmtpActionOptio
   const target = verb === "delete-profile" ? parseProfileId(body.id)
     : verb === "set-default" ? (body.profileId == null ? null : parseProfileId(body.profileId)) : null;
   if (verb === "test") { smtpDomain(body.domain); smtpAddress(body.recipient); if (body.from) smtpAddress(body.from); }
-  mkdirSync(dirname(paths.lockFile), { recursive: true, mode: 0o700 });
   return withFileLock(paths.lockFile, 30, "SMTP configuration is busy", async () => {
     if (verb === "deactivate") {
       withdrawAll(paths, run);
