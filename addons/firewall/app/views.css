@@ -22,6 +22,7 @@
 .hz-steps .btn { white-space: normal; }
 .hz-token-field { margin: 12px 0; max-width: 520px; }
 .hz-token-field input { width: 100%; }
+.hz-connect-error { margin: 16px 0 0; }
 .hz-absent { margin: 0; }
 .hz-connect { display: flex; align-items: center; justify-content: space-between; gap: 16px 24px; flex-wrap: wrap; padding-top: 16px; border-top: 1px solid var(--border); }
 .hz-connect .hint { margin: 0; flex: 1 1 320px; }

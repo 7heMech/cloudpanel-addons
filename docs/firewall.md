@@ -44,9 +44,10 @@ allows. On a server with no firewall yet, the first switch you turn on
 therefore closes SSH, and the ports CloudPanel's Firewall page opens that the
 addon's firewalls do not; 80, 443 and 8443 stay reachable. Site users lose
 SFTP. The review lists exactly what closes, and you type the server's name to
-go ahead. Hetzner's web console still gives a root shell, and so does
-the Terminal addon while the panel answers. To keep SSH, first attach a
-firewall of your own that allows it.
+go ahead. Hetzner's web console still gives a root shell, and so does the
+Terminal addon while the panel answers, for an administrator root allows one
+(`clp-addons terminal root allow <user>`). To keep SSH, first attach a firewall
+of your own that allows it.
 
 **Sites through Cloudflare only** attaches `clp-addons-cloudflare-web`: ports
 80 and 443 answer only Cloudflare. Before it does, it lists the sites that do

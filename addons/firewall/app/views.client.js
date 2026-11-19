@@ -118,15 +118,42 @@ function hetznerNotice(state) {
   notify(state.ok ? done : done + ' The page may be out of date: ' + state.error, state.ok ? 'ok' : 'warn');
 }
 
+// The dialog stays open, with the token, until Hetzner accepts it; closing it clears both.
 async function connectHetzner(event) {
   event.preventDefault();
   const input = CLP_ROOT.getElementById('hetzner-token');
+  const problem = CLP_ROOT.getElementById('hz-connect-error');
   const token = input.value.trim();
-  input.value = '';
   if (!token) return;
+  problem.hidden = true;
+  busy(true);
+  let reply = null;
+  let failure = '';
+  try {
+    reply = await call('/api/hetzner/token', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ token: token }),
+    });
+  } catch (error) {
+    failure = error.message;
+  } finally {
+    busy(false);
+  }
+  if (failure) {
+    problem.textContent = failure;
+    problem.hidden = false;
+    input.focus();
+    return;
+  }
   CLP_ROOT.getElementById('hz-connect-dialog').close();
-  const state = await change('/api/hetzner/token', { token: token }, 'Could not connect Hetzner: ');
-  if (state) hetznerNotice(state);
+  const state = await repaint();
+  hetznerNotice(Object.assign(state, { reply: reply.data }));
+}
+
+function resetHetznerConnect(dialog) {
+  dialog.querySelector('#hetzner-token').value = '';
+  dialog.querySelector('#hz-connect-error').hidden = true;
 }
 
 async function removeHetznerToken() {
@@ -234,7 +261,8 @@ async function setHetzner(input, role) {
     return;
   }
   if (!await showHetznerReview(review)) return;
-  const state = await change('/api/hetzner/switch', { role: role, enabled: enabled, confirm: review.digest }, 'Could not switch: ');
+  const typed = CLP_ROOT.getElementById('hz-review-typed').value.trim();
+  const state = await change('/api/hetzner/switch', { role: role, enabled: enabled, confirm: review.digest, typed: typed }, 'Could not switch: ');
   if (!state) return;
   if (state.reply && state.reply.review) {
     notify('What this change would do has changed since you confirmed it; switch it again to see the new review.', 'warn');

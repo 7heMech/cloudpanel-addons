@@ -118,7 +118,7 @@ async function connected(fake: FakeHetzner, serverId = SERVER, sites?: string[])
 async function turn(server: Box, role: HetznerRole, enabled: boolean) {
   const first = await setHetznerRole(role, enabled, undefined, server.options);
   if (!("review" in first)) return first;
-  return setHetznerRole(role, enabled, first.review.digest, server.options);
+  return setHetznerRole(role, enabled, first.review.digest, server.options, first.review.typed);
 }
 
 async function refusal(promise: Promise<unknown>): Promise<string> {
@@ -284,7 +284,7 @@ describe("safeguards", () => {
     expect(first.review.wayBack).toBe("Hetzner Console's web console still gives a root shell.");
     writeFileSync(join(server.dir, "terminal.conf"), "");
     const again = await setHetznerRole("web", true, undefined, server.options);
-    expect("review" in again && again.review.wayBack).toContain("Terminal still gives a root shell");
+    expect("review" in again && again.review.wayBack).toContain("so does Terminal from this panel, for an administrator root allows one");
     expect(fake.writes()).toEqual([]);
 
     await turn(server, "web", true);
@@ -293,6 +293,57 @@ describe("safeguards", () => {
     const view = await hetznerView(server.options);
     expect(view.state === "connected" && view.sshClosed).toEqual([22]);
     expect(view.state === "connected" && view.roles.panel.open).toBe("clp-addons-open-panel");
+  });
+
+  test("the typed name is checked by the root action, not only the page", async () => {
+    const fake = new FakeHetzner(TOKEN);
+    const server = await connected(fake);
+    const first = await setHetznerRole("web", true, undefined, server.options);
+    if (!("review" in first)) throw new Error("expected a review");
+    expect(await refusal(setHetznerRole("web", true, first.review.digest, server.options))).toBe("Type the server's name, cp-fra-1, to confirm");
+    expect(await refusal(setHetznerRole("web", true, first.review.digest, server.options, "cp-fra-2"))).toContain("Type the server's name");
+    expect(fake.writes()).toEqual([]);
+  });
+
+  test("an sshd port neither ss nor its configuration names counts as 22", async () => {
+    const fake = new FakeHetzner(TOKEN);
+    const server = await connected(fake);
+    server.options.run = () => ({ ok: false, stdout: "", stderr: "" });
+    const first = await setHetznerRole("web", true, undefined, server.options);
+    expect("review" in first && first.review.closes[0]).toBe("SSH on port 22: site users can no longer connect over SFTP");
+  });
+
+  test("CloudPanel's rules that cannot be read leave SSH checked and do not block the switch", async () => {
+    const fake = new FakeHetzner(TOKEN);
+    const server = await connected(fake);
+    writeFileSync(join(server.dir, "state", "protocols.json"), "{}", { mode: 0o666 });
+    chmodSync(join(server.dir, "state", "protocols.json"), 0o666);
+    const first = await setHetznerRole("web", true, undefined, server.options);
+    if (!("review" in first)) throw new Error("expected a review");
+    expect(first.review.warnings[0]).toBe("CloudPanel's Firewall rules could not be read, so only SSH was checked.");
+    expect(first.review.closes).toEqual(["SSH on port 22: site users can no longer connect over SFTP"]);
+  });
+
+  test("a switch whose Cloudflare firewall cannot be attached changes nothing", async () => {
+    const fake = new FakeHetzner(TOKEN);
+    fake.firewall("clp-addons-cloudflare-web", [anyone("80")], []);
+    const server = await connected(fake);
+    expect(await refusal(turn(server, "web", true))).toContain("without the label managed-by=clp-addons; rename or delete it in Hetzner's console. Nothing was changed.");
+    expect(fake.attachedTo(SERVER)).toEqual([]);
+  });
+
+  test("a step that fails puts back what the earlier ones did", async () => {
+    const fake = new FakeHetzner(TOKEN);
+    const server = await connected(fake);
+    const api = server.options.fetch!;
+    server.options.fetch = async (url, init) => init?.method === "POST" && url.endsWith("/firewalls") && String(init.body).includes("clp-addons-open-panel")
+      ? new Response(JSON.stringify({ error: { code: "service_error", message: "try again later" } }), { status: 503 })
+      : api(url, init);
+    const message = await refusal(turn(server, "web", true));
+    expect(message).toContain("Could not attach clp-addons-open-panel");
+    expect(message).toContain("What the change had already done was put back.");
+    expect(fake.attachedTo(SERVER)).toEqual([]);
+    expect(fake.firewalls).toEqual([]);
   });
 
   test("SSH another firewall already closed is not the switch's doing, so nothing asks for a name", async () => {
@@ -665,7 +716,10 @@ describe("the metadata service", () => {
     const api = server.options.fetch!;
     let probes = 0;
     server.options.fetch = async (url, init) => {
-      if (url.startsWith("http://169.254.169.254/")) { probes++; throw new Error("timed out"); }
+      if (url.startsWith("http://169.254.169.254/")) {
+        if (url.endsWith("/instance-id")) probes++;
+        throw new Error("timed out");
+      }
       return api(url, init);
     };
     return () => probes;

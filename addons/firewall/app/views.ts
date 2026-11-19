@@ -57,7 +57,7 @@ type ConnectedView = Extract<FirewallPageState["hetzner"], { state: "connected" 
 function connectDialog(serverName: string | null, replacing: boolean): string {
   const holder = serverName ? `<strong>${esc(serverName)}</strong>` : "this server";
   return `
-  <dialog id="hz-connect-dialog" aria-labelledby="hz-connect-heading"><form id="hetzner-token-form" onsubmit="connectHetzner(event)">
+  <dialog id="hz-connect-dialog" aria-labelledby="hz-connect-heading" onclose="resetHetznerConnect(this)"><form id="hetzner-token-form" onsubmit="connectHetzner(event)">
     <div class="dialog-header"><h2 id="hz-connect-heading">${replacing ? "Replace the Hetzner token" : "Connect Hetzner"}</h2></div>
     <ol class="hz-steps">
       <li><strong>Create a token in this server's project</strong>
@@ -67,6 +67,7 @@ function connectDialog(serverName: string | null, replacing: boolean): string {
         <div class="form-field hz-token-field"><label for="hetzner-token">API token</label>
           <input id="hetzner-token" name="token" type="password" autocomplete="new-password" spellcheck="false" required></div></li>
     </ol>
+    <div class="alert hz-connect-error" id="hz-connect-error" role="alert" hidden></div>
     <div class="actions dialog-actions"><button class="btn" type="button" onclick="this.closest('dialog').close()">Cancel</button><button class="btn btn-primary" type="submit">Connect</button></div>
   </form></dialog>`;
 }
@@ -116,7 +117,7 @@ function problems(view: ConnectedView): string {
   const ports = view.sshClosed;
   const ssh = ports.length
     ? `<div class="notice" role="status">SSH is closed: no firewall on this server allows port ${esc(ports.join(", "))}, so site users cannot connect over SFTP. ${view.terminal
-      ? `For a root shell, use <a href="${mountPath("terminal")}/">Terminal</a>.` : "Allow it in another firewall in Hetzner Console to open it again."}</div>`
+      ? `<a href="${mountPath("terminal")}/">Terminal</a> gives a root shell to an administrator root allows one.` : "Allow it in another firewall in Hetzner Console to open it again."}</div>`
     : "";
   return ssh + (view.rangesProblem ? `<div class="notice" role="status">${esc(view.rangesProblem)}</div>` : "");
 }

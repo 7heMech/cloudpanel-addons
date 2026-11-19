@@ -425,8 +425,8 @@ export async function runFirewallAction(argv: string[], options: FirewallActionO
     if (action.verb === "hetzner-disconnect") return disconnectHetzner(options.hetzner);
     if (action.verb === "hetzner-switch") {
       const body = readInput("hetzner-switch", options.input);
-      const confirm = typeof body === "object" && body !== null ? (body as { confirm?: unknown }).confirm : undefined;
-      return setHetznerRole(action.role!, action.enabled!, confirm, options.hetzner);
+      const { confirm, typed } = typeof body === "object" && body !== null ? body as { confirm?: unknown; typed?: unknown } : {};
+      return setHetznerRole(action.role!, action.enabled!, confirm, options.hetzner, typed);
     }
     action.verb satisfies never;
     failAction(`unknown Firewall action '${action.verb}'`);

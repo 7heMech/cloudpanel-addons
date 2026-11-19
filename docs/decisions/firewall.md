@@ -238,10 +238,14 @@ is coming off, or its open one is already there. The open firewall opens all
 of the role's ports, so where the operator's firewalls allow some of them, a
 port they leave closed stays closed, and the review names it. With no switch on and no firewall of the
 operator's, the plan is empty and Hetzner lets anyone reach every port again.
-Open firewalls go on first and come off last, so for the few seconds a change
-takes nothing the plan keeps open is closed, beyond what the first attach
-closes. Hetzner applies at most five firewalls to a server: a change that would
-leave more is refused, and one with no room to add first takes off first.
+Turning a switch on attaches its Cloudflare firewall first, so a refusal there
+changes nothing. Open firewalls go on before any comes off, so for the few
+seconds a change takes nothing the plan keeps open is closed, beyond what the
+first attach closes. Hetzner applies at most five firewalls to a server: a
+change that would leave more is refused, and one with no room to add first
+takes off first. A firewall taken off is deleted only once every step held; a
+step that fails puts back what the earlier ones did, and if that fails too, the
+error says what is attached.
 Per role only one of the two is meant to be on a server; an open firewall left
 beside its Cloudflare one by a change that failed half way only lets everyone
 else in, so the card warns, and repair or a request to turn the switch on
@@ -272,16 +276,19 @@ close, the way back, and, when ports close, the server's name to type.
 
 - Closing ports: the review compares what can be reached before and after the
   change for the ports sshd listens on, from `ss -Htlnp` (processes named
-  `sshd`) or from `sshd -T` when ss shows none, and for each rule on
+  `sshd`), from `sshd -T` when ss shows none, or 22 when neither names one,
+  and for each rule on
   CloudPanel's Firewall page, with its Protocol. With no firewall attached,
   everything can be reached; otherwise a port needs one inbound rule covering
   it, from any source, for IPv4 and for IPv6 apart, and a port that keeps only
-  one family is named for the other. Each port that closes is named, SSH as the loss of SFTP
-  for site users, and the operator types the server's name to go ahead. A
-  refusal would be stricter than needed: the Terminal addon gives a root shell
-  through the panel, its output as server-sent events through both Nginx
-  hops in front of the custom domain, and Hetzner's web console works whatever
-  is attached. SSH another firewall already closed is not the change's doing,
+  one family is named for the other. Each port that closes is named, SSH as the
+  loss of SFTP for site users, and the operator types the server's name to go
+  ahead, which the root action checks too. CloudPanel's rules that cannot be
+  read leave only SSH checked, and the review says so, rather than blocking
+  the switch. A refusal would be stricter than needed: the Terminal addon gives
+  a root shell through the panel to an administrator root allows, its output
+  as server-sent events through both Nginx hops in front of the custom domain,
+  and Hetzner's web console works whatever is attached. SSH another firewall already closed is not the change's doing,
   so the card shows it instead, with a link to Terminal while it is enabled.
 - Panel: CloudPanel's custom domain (`/etc/.clp_custom_domain`, while its
   vhost exists) must exist and resolve, on A and AAAA, only to addresses inside
@@ -328,7 +335,10 @@ the result says what could not be checked.
 ### What the Setup checklist reads
 
 `hetzner.json` keeps which switches were on when Hetzner was last read and
-when: the page's read, a switch and repair each write it. `hetznerSetupState`
+when: the page's read, a switch and repair each write it, under the Hetzner
+lock and only while a token is saved, so a read racing the token's removal
+cannot bring the file back. A page read skips the write while a change holds
+the lock. `hetznerSetupState`
 returns that, whether a token is saved, and whether this is Hetzner Cloud
 (`/sys/class/dmi/id/sys_vendor` is `Hetzner`, or a token is saved), without
 asking Hetzner, so the checklist costs no request when a page loads.
