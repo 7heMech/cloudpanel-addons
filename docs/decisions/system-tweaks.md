@@ -347,23 +347,34 @@ keeps its protection after an update without anyone enabling System Tweaks, and
 no box loses the guard because an addon it never had was missing.
 
 An operator who already turned the setting off keeps their own file. The guard is
-still written, because it costs nothing and holds the setting if that file
-changes. The page shows both: "Off, by clp-addons, and by your own config". After
-an opt-out, the same operator sees "Off, by your config".
+still written on every installed PHP-FPM, even on PHP 8.2.36+, 8.3.37+, 8.4.28+,
+8.5.13+ and 8.6.0+ where upstream flipped the built-in default to `Off`
+(CVE-2026-115560 / GHSA-658j-r8rw-q6mx), because it costs nothing, protects EOL
+7.x/8.0/8.1 and unpatched 8.2--8.5 builds, and holds the setting if a `php.ini`
+or operator file enables it. When the guard is on and another config file also
+turns it off, the page shows "Set by clp-addons and your own config."; when only
+PHP's built-in default keeps it off without the guard, it shows "Set by
+clp-addons (also PHP's default).". After an opt-out, the operator sees "Set by
+your config in ..." or "PHP's default." with an `Off` badge on patched versions.
 
 Each installed PHP-FPM's effective value is worked out from the files it reads,
 in its order. First comes its main `php.ini`: `/etc/php/X.Y/fpm/php.ini`, or the
 panel FPM's `-c`. Then come the `*.ini` files in `/etc/php/X.Y/fpm/conf.d` in
 byte order, and the last assignment wins. Sections `[PATH=]` and `[HOST=]` are
 skipped because they do not apply server-wide. Values are read as PHP reads
-booleans. Pools whose `php_value` or `php_admin_value` (or `_flag`) turns the
-setting back on are named per pool. The panel's FPM is read from
-`systemctl show clp-php-fpm -p ExecStart`, so it follows System Tweaks moving it
-to another version.
+booleans. When no file assigns the key, the status view determines PHP's
+built-in default from one batched `dpkg-query` of the installed `php<ver>-fpm`
+packages (parsing optional epoch, upstream `major.minor.patch`, and `~`
+pre-releases such as `8.6.0~rc7` that sort before the release): `Off` for
+8.2.36+, 8.3.37+, 8.4.28+, 8.5.13+, 8.6.0+ and newer minors/majors, and failing
+safe to `On` whenever a package version is unavailable or unparseable. Pools
+whose `php_value` or `php_admin_value` (or `_flag`) turns the setting back on
+are named per pool. The panel's FPM is read from `systemctl show clp-php-fpm -p
+ExecStart`, so it follows System Tweaks moving it to another version.
 
 Reading the files, rather than asking `php-fpm -i`, tells the page which file
-decided the value. That is the difference between "by clp-addons" and "by your
-config". It also needs no process per version on every page load. Like
+decided the value. That is the difference between "Set by clp-addons" and "Set
+by your config". It also needs no process per version on every page load. Like
 `php -i`, it shows the config on disk, which a running FPM picks up on its next
 reload. A site's own `.user.ini` or an Nginx `PHP_VALUE` can still change this
 per-directory setting for that site; neither is read.
@@ -1707,7 +1718,7 @@ the saved original named in the row) to see what CloudPanel itself ships.
 | Panel PHP / PHP 8.1 (`panelPhp`, opt-in) | Runs the panel, phpMyAdmin and File Manager on PHP 8.1, which has [ended upstream support](https://www.php.net/eol.php) | `php8.1 -v` reports 8.1.x and the panel's own FPM pool is PHP 8.1, while 8.1 is past its php.net EOL date | the Panel PHP setting and `panel-php.ts` — once CloudPanel ships its panel on a supported PHP |
 | Cloudflare visitor IPs (`cloudflareVisitorIp`) | Site logs and PHP see Cloudflare's or the tunnel's address; only the `cloudflare` log format reads `CF-Connecting-IP`, from any client; `127.0.0.1`, where a tunnel connects from, is trusted for `X-Real-IP` | `grep -E "log_format main\|REMOTE_ADDR\|set_real_ip_from 127" /etc/nginx/nginx.conf /etc/nginx/fastcgi_params` shows `$remote_addr` and an uncommented `127.0.0.1` with the setting off | the setting, `visitor-ip.ts`, its `SECURITY.md` entry and tests (keep `lib/visitor-ip.ts` for Maintenance Mode) — once CloudPanel gives sites the visitor behind Cloudflare's proxy and a tunnel without trusting the header from anyone else |
 | Forged visitor IPs (`blockForgedRealIp`) | The panel nginx trusts `set_real_ip_from 0.0.0.0/0;`, so any client can forge its address with an IP header | `grep 'set_real_ip_from 0.0.0.0/0' /home/clp/services/nginx/nginx.conf` shows the line present/uncommented (the guard comments it as `#clp-addons:untrusted …`) | the setting, `real-ip.ts`, its `SECURITY.md` entry and tests — once CloudPanel trusts only loopback, private ranges and Cloudflare |
-| PHP upload progress (every install) | PHP-FPM defaults `session.upload_progress.enabled` to On, the session path of [CVE-2026-109619](https://github.com/php/php-src/security/advisories/GHSA-6wmf-4rv5-p3rp) | `php -i \| grep session.upload_progress.enabled` is `On` by default and the installed PHP build is not yet patched for the advisory | the `uploadProgressGuard` and `php-guard` wiring — once the PHP packages carry the fix |
+| PHP upload progress (every install) | Older/EOL PHP-FPM builds default `session.upload_progress.enabled` to On, the session path of [CVE-2026-109619](https://github.com/php/php-src/security/advisories/GHSA-6wmf-4rv5-p3rp) and [CVE-2026-115560](https://github.com/php/php-src/security/advisories/GHSA-658j-r8rw-q6mx); upstream flipped the default to Off in 8.2.36/8.3.37/8.4.28/8.5.13/8.6.0 | `php -i \| grep session.upload_progress.enabled` is `On` by default on any installed PHP-FPM (such as EOL 7.x/8.0/8.1 or unpatched 8.2–8.5) | the `uploadProgressGuard` and `php-guard` wiring — once every supported and CloudPanel-shipped PHP build defaults `Off` and carries the fixes |
 
 Removing any row also means deleting its line from `SECURITY.md`, its row in
 [the operator guide](../system-tweaks.md), and its tests, and its tweak from

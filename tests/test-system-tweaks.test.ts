@@ -17,7 +17,7 @@ import { LOCK_SETTINGS, type SystemTweaksState } from "../addons/system-tweaks/r
 import {
   allowedPatterns, coverageOf, dropInFor, fnmatch, parseAptConfig, parsePolicy, updatesStatus, DEFAULT_UPDATE_SETTINGS, type UpdatesStatus,
 } from "../addons/system-tweaks/updates";
-import { iniBoolean, iniSetting, uploadProgressStatus } from "../addons/system-tweaks/upload-progress";
+import { iniBoolean, iniSetting, phpDefaultUploadProgress, uploadProgressStatus } from "../addons/system-tweaks/upload-progress";
 import { dashboardView } from "../addons/system-tweaks/app/views";
 import { isSwitchVerb } from "../addons/system-tweaks/app/service";
 import { releaseRealIp } from "../addons/system-tweaks/real-ip";
@@ -1657,6 +1657,210 @@ test("each FPM's effective state says who set it, the panel's own FPM included",
 test("with nothing set anywhere PHP's default leaves it on", () => {
   const b = box();
   expect(uploadProgressStatus(b.options.uploadProgress)[0]).toMatchObject({ enabled: true, setBy: "default", offWithoutGuard: false });
+});
+
+test("phpDefaultUploadProgress detects the CVE-2026-115560 built-in default flip and fails safe to On", () => {
+  // Patched releases where PHP flipped the built-in default to Off.
+  for (const version of [
+    "8.2.36-1+clp-bookworm",
+    "1:8.2.36-1+0~20261119.88+debian12~1.gbp123456",
+    "8.2.37~rc1-1+clp-bookworm",
+    "8.3.37-1+clp-bookworm",
+    "8.4.28-1+clp-bookworm",
+    "8.5.13-1+clp-bookworm",
+    "8.6.0-1+clp-bookworm",
+    "8.6.0-1~deb12u1",
+    "8.6.1~rc1-1+clp-bookworm",
+    "8.7.0~alpha1-1+clp-bookworm",
+    "9.0.0-1+clp-bookworm",
+  ]) {
+    expect(phpDefaultUploadProgress(version)).toBe(false);
+  }
+  // Older/EOL, unpatched, pre-release before the flip, or missing/unparseable: fail safe to On.
+  for (const version of [
+    undefined,
+    "",
+    "not-a-version",
+    "8.2",
+    "7.4.33-1+clp-bookworm",
+    "8.0.30-1+clp-bookworm",
+    "8.1.34-2+clp-bookworm",
+    "8.2.35-1+clp-bookworm",
+    "8.2.36~rc1-1+clp-bookworm",
+    "1:8.2.36~rc1-1+0~20261119",
+    "8.3.36-1+clp-bookworm",
+    "8.3.37~rc1-1+clp-bookworm",
+    "8.4.27-1+clp-bookworm",
+    "8.4.28~rc1-1+clp-bookworm",
+    "8.5.12-1+clp-bookworm",
+    "8.5.13~rc1-1+clp-bookworm",
+    "8.6.0~rc7-1+clp-bookworm",
+  ]) {
+    expect(phpDefaultUploadProgress(version)).toBe(true);
+  }
+});
+
+test("patched PHP versions default to Off with guard opted out and render cleanly", async () => {
+  const b = box();
+  const sbin = b.options.uploadProgress!.paths!.fpmBinDir!;
+  for (const version of ["8.2", "8.4", "8.5", "8.6"]) {
+    mkdirSync(join(b.phpRoot, version, "fpm", "conf.d"), { recursive: true });
+    mkdirSync(join(b.phpRoot, version, "fpm", "pool.d"), { recursive: true });
+    writeFileSync(join(b.phpRoot, version, "fpm", "php.ini"), "[Session]\n;session.upload_progress.enabled = On\n");
+    writeFileSync(join(sbin, `php-fpm${version}`), "");
+  }
+  const dpkgCalls: string[][] = [];
+  const pkgLines = [
+    "php8.1-fpm\tinstall ok installed\t8.1.34-2+clp-bookworm",
+    "php8.2-fpm\tinstall ok installed\t1:8.2.36-1+0~20261119.1+debian12~1.gbp000",
+    "php8.3-fpm\tinstall ok installed\t8.3.37-1+clp-bookworm",
+    "php8.4-fpm\tinstall ok installed\t8.4.28-1+clp-bookworm",
+    "php8.5-fpm\tinstall ok installed\t8.5.13-1+clp-bookworm",
+    "php8.6-fpm\tinstall ok installed\t8.6.0-1+clp-bookworm",
+  ].join("\n") + "\n";
+  const baseRun = b.options.uploadProgress!.run!;
+  b.options.uploadProgress = {
+    ...b.options.uploadProgress,
+    run: (command, args) => {
+      if (command === "dpkg-query") {
+        dpkgCalls.push(args);
+        return { ok: true, stdout: pkgLines, stderr: "" };
+      }
+      return baseRun(command, args);
+    },
+  };
+
+  // Guard off: patched 8.2/8.3/8.4/8.5/8.6 and panel (8.3) are Off by PHP's default; EOL 8.1 stays On.
+  const rows = uploadProgressStatus(b.options.uploadProgress);
+  expect(dpkgCalls).toHaveLength(1);
+  expect(dpkgCalls[0]).toEqual([
+    "-W", "-f=${Package}\t${Status}\t${Version}\n",
+    "php8.1-fpm", "php8.2-fpm", "php8.3-fpm", "php8.4-fpm", "php8.5-fpm", "php8.6-fpm",
+  ]);
+  expect(rows.map((row) => [row.label, row.enabled, row.setBy, row.offWithoutGuard])).toEqual([
+    ["PHP 8.1", true, "default", false],
+    ["PHP 8.2", false, "default", true],
+    ["PHP 8.3", false, "default", true],
+    ["PHP 8.4", false, "default", true],
+    ["PHP 8.5", false, "default", true],
+    ["PHP 8.6", false, "default", true],
+    ["CloudPanel (PHP 8.3)", false, "default", true],
+  ]);
+
+  // Dashboard renders "PHP's default." with an Off badge (never "Set by your config in .") and mentions both CVEs.
+  const rowHtml = (name: string, detail: string, stateBadge: string) =>
+    `<tr><td><span class="st-name">${Bun.escapeHTML(name)}</span><span class="hint st-detail">${Bun.escapeHTML(detail)}</span></td>\n            <td class="st-state">${stateBadge}</td></tr>`;
+  const state = await act(b, ["set-upload-guard"], { enabled: false });
+  const html = dashboardView(state);
+  expect(html).toContain("CVE-2026-109619");
+  expect(html).toContain("CVE-2026-115560");
+  expect(html).not.toContain("Set by your config in .");
+  expect(html).toContain(rowHtml("PHP 8.4", "PHP's default.", '<span class="badge tone-ok">Off</span>'));
+  expect(html).toContain(rowHtml("PHP 8.1", "PHP's default.", '<span class="badge tone-bad">On</span>'));
+
+  // Guard on: patched version without operator config does NOT falsely say "and your own config".
+  const guardedState = await act(b, ["set-upload-guard"], { enabled: true });
+  const guardedHtml = dashboardView(guardedState);
+  const php84 = guardedState.uploadProgress.fpms.find((row) => row.label === "PHP 8.4")!;
+  expect(php84).toMatchObject({ enabled: false, setBy: "clp-addons", offWithoutGuard: true, offWithoutGuardBy: "default" });
+  expect(guardedHtml).toContain(rowHtml("PHP 8.4", "Set by clp-addons (also PHP's default).", '<span class="badge tone-ok">Off</span>'));
+  expect(guardedHtml).not.toContain('<span class="st-name">PHP 8.4</span><span class="hint st-detail">Set by clp-addons and your own config.');
+
+  // Operator config explicitly turning it Off on a patched version still says "and your own config".
+  writeFileSync(join(b.phpRoot, "8.4", "fpm", "conf.d", "30-custom.ini"), "session.upload_progress.enabled = Off\n");
+  // Operator php.ini explicitly turning it On before the guard: without guard it would be On, so guard says only "Set by clp-addons.".
+  writeFileSync(join(b.phpRoot, "8.5", "fpm", "php.ini"), "[Session]\nsession.upload_progress.enabled = On\n");
+  const mixedHtml = dashboardView(await act(b, ["state"]));
+  expect(mixedHtml).toContain(rowHtml("PHP 8.4", "Set by clp-addons and your own config.", '<span class="badge tone-ok">Off</span>'));
+  expect(mixedHtml).toContain(rowHtml("PHP 8.5", "Set by clp-addons.", '<span class="badge tone-ok">Off</span>'));
+});
+
+test("patched PHP still reports On when operator ini or pool explicitly enables upload progress", async () => {
+  const b = box();
+  const sbin = b.options.uploadProgress!.paths!.fpmBinDir!;
+  mkdirSync(join(b.phpRoot, "8.6", "fpm", "conf.d"), { recursive: true });
+  mkdirSync(join(b.phpRoot, "8.6", "fpm", "pool.d"), { recursive: true });
+  writeFileSync(join(b.phpRoot, "8.6", "fpm", "php.ini"), "[Session]\nsession.upload_progress.enabled = On\n");
+  writeFileSync(join(sbin, "php-fpm8.6"), "");
+  writeFileSync(join(b.phpRoot, "8.3", "fpm", "pool.d", "legacy.conf"), "[legacy]\nphp_admin_flag[session.upload_progress.enabled] = on\n");
+
+  const baseRun = b.options.uploadProgress!.run!;
+  b.options.uploadProgress = {
+    ...b.options.uploadProgress,
+    run: (command, args) => {
+      if (command === "dpkg-query") {
+        // Non-zero exit (one package missing) with stdout still listing installed packages.
+        return {
+          ok: false,
+          stdout: [
+            "php8.3-fpm\tinstall ok installed\t8.3.37-1+clp-bookworm",
+            "php8.6-fpm\tinstall ok installed\t8.6.0-1+clp-bookworm",
+          ].join("\n") + "\n",
+          stderr: "dpkg-query: no packages found matching php8.1-fpm\n",
+        };
+      }
+      return baseRun(command, args);
+    },
+  };
+
+  const rows = uploadProgressStatus(b.options.uploadProgress);
+  // Missing package (8.1) fails safe to On; 8.3 defaults Off with pool override; 8.6 explicitly On in php.ini.
+  expect(rows.find((row) => row.label === "PHP 8.1")).toMatchObject({ enabled: true, setBy: "default", offWithoutGuard: false });
+  expect(rows.find((row) => row.label === "PHP 8.3")).toMatchObject({ enabled: false, setBy: "default", offWithoutGuard: true, poolsOn: ["legacy"] });
+  expect(rows.find((row) => row.label === "PHP 8.6")).toMatchObject({ enabled: true, setBy: "config", offWithoutGuard: false });
+
+  const state = await act(b, ["set-upload-guard"], { enabled: false });
+  const html = dashboardView(state);
+  expect(html).toContain(
+    `<tr><td><span class="st-name">PHP 8.3</span><span class="hint st-detail">${Bun.escapeHTML("PHP's default. On in pool legacy.")}</span></td>\n            <td class="st-state"><span class="badge tone-warn">Partly</span></td></tr>`,
+  );
+  expect(html).toContain(
+    `<tr><td><span class="st-name">PHP 8.6</span><span class="hint st-detail">Set in ${join(b.phpRoot, "8.6", "fpm", "php.ini")}.</span></td>\n            <td class="st-state"><span class="badge tone-bad">On</span></td></tr>`,
+  );
+});
+
+test("pre-release, unpatched, removed-config, and dpkg-query failure all fail safe to On", () => {
+  const b = box();
+  const sbin = b.options.uploadProgress!.paths!.fpmBinDir!;
+  for (const version of ["8.2", "8.5", "8.6"]) {
+    mkdirSync(join(b.phpRoot, version, "fpm", "conf.d"), { recursive: true });
+    mkdirSync(join(b.phpRoot, version, "fpm", "pool.d"), { recursive: true });
+    writeFileSync(join(b.phpRoot, version, "fpm", "php.ini"), "");
+    writeFileSync(join(sbin, `php-fpm${version}`), "");
+  }
+  const baseRun = b.options.uploadProgress!.run!;
+  b.options.uploadProgress = {
+    ...b.options.uploadProgress,
+    run: (command, args) => {
+      if (command === "dpkg-query") {
+        return {
+          ok: true,
+          stdout: [
+            "php8.1-fpm\tinstall ok installed\t8.1.34-2+clp-bookworm",
+            "php8.2-fpm\tinstall ok installed\t8.2.35-1+clp-bookworm",
+            "php8.3-fpm\tdeinstall ok config-files\t8.3.37-1+clp-bookworm",
+            "php8.5-fpm\tinstall ok installed\t8.5.12-1+clp-bookworm",
+            "php8.6-fpm\tinstall ok installed\t8.6.0~rc7-1+clp-bookworm",
+          ].join("\n") + "\n",
+          stderr: "",
+        };
+      }
+      return baseRun(command, args);
+    },
+  };
+
+  for (const row of uploadProgressStatus(b.options.uploadProgress)) {
+    expect(row).toMatchObject({ enabled: true, setBy: "default", offWithoutGuard: false });
+  }
+
+  // Complete dpkg-query failure also fails safe to On.
+  b.options.uploadProgress = {
+    ...b.options.uploadProgress,
+    run: (command, args) => command === "dpkg-query" ? { ok: false, stdout: "", stderr: "dpkg-query: error" } : baseRun(command, args),
+  };
+  for (const row of uploadProgressStatus(b.options.uploadProgress)) {
+    expect(row).toMatchObject({ enabled: true, setBy: "default", offWithoutGuard: false });
+  }
 });
 
 // --- guard continuity ---------------------------------------------------------
