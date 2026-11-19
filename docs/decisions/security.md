@@ -387,15 +387,21 @@ panel's own PHP included -- its FPM scans that version's directory, so one
 drop-in reaches the panel and the root File Manager pool, whether it runs on
 CloudPanel's 8.1 or a version [System Tweaks](system-tweaks.md#the-panels-own-php)
 moved it to. Session upload progress is a
-confirmed consumer of CVE-2026-109619, is on by default, and PHP's advisory
-recommends leaving it off even after patching. This is not a fix: it addresses
-one path of one of the two php2shell CVEs, does nothing for the OOM corruption
+confirmed consumer of CVE-2026-109619 and CVE-2026-115560
+(GHSA-658j-r8rw-q6mx). Upstream PHP flipped the built-in default to `Off` in
+8.2.36, 8.3.37, 8.4.28, 8.5.13 and 8.6.0, and PHP's advisory recommends leaving
+it off even after patching. `clp-addons` still writes the drop-in on every
+installed PHP-FPM so end-of-life 7.x/8.0/8.1, unpatched 8.2--8.5 builds, and
+any `php.ini` that explicitly enables it stay protected. This is not a fix: it
+addresses the upload-progress path, does nothing for the OOM corruption
 in CVE-2026-109618, and the real remedy is patched PHP packages -- a backported
 build for the end-of-life 8.1, or moving the panel off it; System Tweaks'
 [automatic updates](system-tweaks.md#automatic-updates) install CloudPanel's PHP
 builds as they ship. The drop-in is written on install,
 update and repair and removed with the last addon. [System Tweaks](system-tweaks.md#php-upload-progress-mitigation)
-shows each FPM's effective value and is the only opt-out, which counts only while
+shows each FPM's effective value -- checking installed `php<ver>-fpm` package
+versions via `dpkg-query` to know PHP's built-in default, failing safe to `On`
+when unknown -- and is the only opt-out, which counts only while
 it is enabled. Each changed FPM is config-
 tested and reloaded, the panel FPM with it. Config-test and reload failures
 propagate to the caller. Rollback attempts every written file independently;

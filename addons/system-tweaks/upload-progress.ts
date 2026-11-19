@@ -18,6 +18,15 @@ import { badge, stateRow, switchRow } from "./app/rows";
 const KEY = "session.upload_progress.enabled";
 const VERSION_RE = /^[0-9]+\.[0-9]+$/;
 
+/** First PHP 8.x patch release whose built-in `session.upload_progress.enabled` default is Off (CVE-2026-115560). */
+const DEFAULT_OFF_PATCH_8X: Readonly<Record<number, number>> = {
+  2: 36,
+  3: 37,
+  4: 28,
+  5: 13,
+  6: 0,
+};
+
 interface UploadProgressPaths {
   phpRoot: string;
   fpmBinDir: string;
@@ -44,10 +53,32 @@ export interface FpmUploadProgress {
   setBy: "clp-addons" | "config" | "default";
   /** The file that decided it; empty for PHP's default. */
   source: string;
-  /** Whether the operator's own files keep it off without this project's drop-in. */
+  /** Whether the effective value stays off without this project's drop-in (via operator config or PHP's default). */
   offWithoutGuard: boolean;
+  /** When `offWithoutGuard` is true, whether an operator config file or PHP's built-in default keeps it off. */
+  offWithoutGuardBy?: "config" | "default";
   /** Pools that turn it back on for themselves. */
   poolsOn: string[];
+}
+
+/**
+ * PHP's built-in default for `session.upload_progress.enabled` for an installed
+ * Debian `phpX.Y-fpm` package version. Fails safe to `true` (On) when the
+ * package version is missing or unparseable.
+ */
+export function phpDefaultUploadProgress(packageVersion: string | undefined): boolean {
+  if (!packageVersion) return true;
+  const match = /^(?:[0-9]+:)?([0-9]+)\.([0-9]+)\.([0-9]+)(?:(~)|$|[+.-])/.exec(packageVersion.trim());
+  if (!match) return true;
+  const major = Number(match[1]);
+  const minor = Number(match[2]);
+  const patch = Number(match[3]);
+  const prerelease = match[4] === "~";
+  if (major > 8 || (major === 8 && minor >= 7)) return false;
+  if (major < 8) return true;
+  const minPatch = DEFAULT_OFF_PATCH_8X[minor];
+  if (minPatch === undefined) return true;
+  return !(patch > minPatch || (patch === minPatch && !prerelease));
 }
 
 /** PHP's own reading of an ini boolean: on/yes/true, or any non-zero number. */
@@ -138,21 +169,50 @@ function poolsTurningOn(poolDir: string): string[] {
   return pools;
 }
 
-function inspect(label: string, version: string, mainIni: string, scanDir: string, poolDir: string): FpmUploadProgress {
+function inspect(
+  label: string,
+  version: string,
+  mainIni: string,
+  scanDir: string,
+  poolDir: string,
+  defaultEnabled: boolean,
+): FpmUploadProgress {
   const files = iniFiles(mainIni, scanDir);
   const ours = join(scanDir, PHP_GUARD_INI_NAME);
   const all = decide(files);
   const without = decide(files.filter((file) => file !== ours));
-  const enabled = all.value === undefined ? true : iniBoolean(all.value);
+  const enabled = all.value === undefined ? defaultEnabled : iniBoolean(all.value);
+  const offWithoutGuard = without.value === undefined ? !defaultEnabled : !iniBoolean(without.value);
+  const offWithoutGuardBy = offWithoutGuard ? (without.value === undefined ? "default" : "config") : undefined;
   return {
     label,
     version,
     enabled,
     setBy: all.value === undefined ? "default" : all.source === ours ? "clp-addons" : "config",
     source: all.source,
-    offWithoutGuard: without.value !== undefined && !iniBoolean(without.value),
+    offWithoutGuard,
+    ...(offWithoutGuardBy ? { offWithoutGuardBy } : {}),
     poolsOn: poolsTurningOn(poolDir),
   };
+}
+
+/** Installed Debian package versions for each `php<ver>-fpm`, in one `dpkg-query` call. */
+function fpmPackageVersions(versions: string[], run: NonNullable<UploadProgressOptions["run"]>): Map<string, string> {
+  const found = new Map<string, string>();
+  const unique = [...new Set(versions)];
+  if (unique.length === 0) return found;
+  const query = run("dpkg-query", ["-W", "-f=${Package}\t${Status}\t${Version}\n", ...unique.map((version) => `php${version}-fpm`)]);
+  // `dpkg-query` exits non-zero when any requested package is missing, while
+  // still writing every found package to stdout, so parse stdout whenever
+  // present; missing or unparseable entries fail safe to PHP's old default On.
+  if (!query.stdout) return found;
+  for (const line of query.stdout.split(/\r?\n/)) {
+    const [pkg = "", status = "", version = ""] = line.split("\t");
+    const minor = /^php([0-9]+\.[0-9]+)-fpm$/.exec(pkg.trim())?.[1];
+    if (!minor || !status.trim().endsWith(" installed") || !version.trim()) continue;
+    found.set(minor, version.trim());
+  }
+  return found;
 }
 
 /** The binary, `-c` and `-y` of the panel's FPM, from its unit as systemd resolved it. */
@@ -170,6 +230,7 @@ function panelFpm(paths: UploadProgressPaths, run: NonNullable<UploadProgressOpt
 
 export function uploadProgressStatus(options: UploadProgressOptions = {}): FpmUploadProgress[] {
   const paths = { ...DEFAULT_UPLOAD_PROGRESS_PATHS, ...options.paths };
+  const run = options.run ?? ((command, args) => runCommand(command, args, 10_000));
   const versions = existsSync(paths.fpmBinDir)
     ? readdirSync(paths.fpmBinDir)
       .map((name) => /^php-fpm([0-9]+\.[0-9]+)$/.exec(name)?.[1] ?? "")
@@ -180,11 +241,19 @@ export function uploadProgressStatus(options: UploadProgressOptions = {}): FpmUp
         return aMajor - bMajor || aMinor - bMinor;
       })
     : [];
+  const panel = panelFpm(paths, run);
+  const pkgVersions = fpmPackageVersions(panel ? [...versions, panel.version] : versions, run);
   const rows = versions.map((version) => {
     const fpm = join(paths.phpRoot, version, "fpm");
-    return inspect(`PHP ${version}`, version, join(fpm, "php.ini"), join(fpm, "conf.d"), join(fpm, "pool.d"));
+    return inspect(
+      `PHP ${version}`,
+      version,
+      join(fpm, "php.ini"),
+      join(fpm, "conf.d"),
+      join(fpm, "pool.d"),
+      phpDefaultUploadProgress(pkgVersions.get(version)),
+    );
   });
-  const panel = panelFpm(paths, options.run ?? ((command, args) => runCommand(command, args, 10_000)));
   if (panel) {
     rows.push(inspect(
       `CloudPanel (PHP ${panel.version})`,
@@ -192,6 +261,7 @@ export function uploadProgressStatus(options: UploadProgressOptions = {}): FpmUp
       panel.ini,
       join(paths.phpRoot, panel.version, "fpm", "conf.d"),
       panel.conf ? join(dirname(panel.conf), "pool.d") : "",
+      phpDefaultUploadProgress(pkgVersions.get(panel.version)),
     ));
   }
   return rows;
@@ -203,7 +273,13 @@ interface UploadGuardState { guard: boolean; fpms: FpmUploadProgress[] }
 function uploadProgressSource(row: FpmUploadProgress): string {
   const file = row.source.includes("/conf.d/") ? row.source.slice(row.source.lastIndexOf("/") + 1) : row.source;
   const pools = row.poolsOn.length ? ` On in pool${row.poolsOn.length === 1 ? "" : "s"} ${row.poolsOn.join(", ")}.` : "";
-  if (!row.enabled && row.setBy === "clp-addons") return `Set by clp-addons${row.offWithoutGuard ? " and your own config" : ""}.${pools}`;
+  if (!row.enabled && row.setBy === "clp-addons") {
+    const also = !row.offWithoutGuard ? ""
+      : row.offWithoutGuardBy === "default" ? " (also PHP's default)"
+      : " and your own config";
+    return `Set by clp-addons${also}.${pools}`;
+  }
+  if (!row.enabled && row.setBy === "default") return `PHP's default.${pools}`;
   if (!row.enabled) return `Set by your config in ${file}.${pools}`;
   return `${row.setBy === "default" ? "PHP's default" : `Set in ${file}`}.${pools}`;
 }
@@ -243,7 +319,7 @@ export const UPLOAD_GUARD_TWEAK = tweak<{ uploadProgressGuard: boolean }, Option
   row: ({ uploadProgress }, locked) => switchRow("set-upload-guard", {
     key: "uploadProgressGuard",
     title: "PHP upload-progress mitigation",
-    description: `Turns PHP's session upload progress, a route into CVE-2026-109619, off on every PHP-FPM with ${PHP_GUARD_INI_NAME}. Off removes only that file.`,
+    description: `Turns PHP's session upload progress, a route into CVE-2026-109619 and CVE-2026-115560, off on every PHP-FPM with ${PHP_GUARD_INI_NAME}. Off removes only that file.`,
     checked: uploadProgress.guard,
     extra: uploadProgressDetails(uploadProgress.fpms),
   }, locked),

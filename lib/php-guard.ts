@@ -3,13 +3,15 @@
 // switch); the caller says whether one has.
 //
 // Session upload progress is one of the confirmed consumers of CVE-2026-109619
-// ("php2shell"), is on by default, and needs no session_start(); PHP's advisory
-// names disabling it as the administrative mitigation and recommends keeping it
-// off even after patching, as a hardly-used, hardly-tested feature. This writes
-// that setting on every installed PHP-FPM, including the end-of-life 8.1 the
-// panel runs on unless System Tweaks moved it. It does not address
-// CVE-2026-109618, whose only real fix is patched PHP; see
-// docs/decisions/security.md.
+// ("php2shell") and CVE-2026-115560 (GHSA-658j-r8rw-q6mx), and needs no
+// session_start(); PHP's advisories name disabling it as the administrative
+// mitigation and flipped its built-in default to Off in 8.2.36, 8.3.37, 8.4.28,
+// 8.5.13 and 8.6.0. This still writes the drop-in on every installed PHP-FPM so
+// EOL 7.x/8.0/8.1 (including the 8.1 the panel runs on unless System Tweaks
+// moved it), unpatched 8.2-8.5, and any php.ini that explicitly turns it on
+// remain covered. Keep INI_BODY unchanged so upgrades do not rewrite the file
+// and reload every FPM unnecessarily. It does not address CVE-2026-109618,
+// whose only real fix is patched PHP; see docs/decisions/security.md.
 
 import { existsSync, readdirSync } from "node:fs";
 import { join } from "node:path";
