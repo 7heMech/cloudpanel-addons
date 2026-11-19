@@ -18,6 +18,8 @@ export interface Grant {
   /** Permission group names. */
   permissions: string[];
   resources: Resource[];
+  /** Some of its resources are in a form not understood, so what it grants or takes away there is not known. */
+  unknown?: true;
 }
 
 export type Held = "yes" | "no" | "some";
@@ -87,6 +89,15 @@ export function grants(list: Grant[], permission: PermissionDef, target: Target)
   return relevant.some((grant) => grant.allow) && !relevant.some((grant) => !grant.allow);
 }
 
+/**
+ * Whether a policy on resources not understood could change `held`: an allow
+ * could add what reads as missing, a deny take away what reads as held.
+ */
+export function uncertain(list: Grant[], permission: PermissionDef, held: Held): boolean {
+  const odd = list.filter((grant) => grant.unknown && namesPermission(grant, permission));
+  return odd.some((grant) => grant.allow ? held !== "yes" : held !== "no");
+}
+
 /** What a permission is checked against for a zone: the zone, its account, or the token's owner (an account-owned token's account). */
 export function targetFor(permission: PermissionDef, zone: { id: string; accountId: string }, owner: TokenOwner): Target {
   if (permission.scope === "user") return owner.owner === "account" && owner.accountId ? { accountId: owner.accountId } : "user";
@@ -145,10 +156,12 @@ function reachOf(list: Grant[], reached: Reached): string {
   return denied ? `${allowed}, except ${denied === "the zones" ? "all" : denied}` : allowed;
 }
 
+/** A permission a policy on resources not understood could change is left out: the page shows it as not known. */
 export function readAccess(owner: TokenOwner, list: Grant[], reached: Reached): TokenAccess {
   const coverage: Partial<Record<PermissionName, Coverage>> = {};
   for (const [name, permission] of Object.entries(PERMISSIONS) as [PermissionName, PermissionDef][]) {
-    coverage[name] = permission.scope === "user" ? { held: "yes" } : coverageOf(list, permission, reached);
+    const found = permission.scope === "user" ? { held: "yes" as const } : coverageOf(list, permission, reached);
+    if (!uncertain(list, permission, found.held)) coverage[name] = found;
   }
   return { ...owner, readable: true, grants: list, coverage, reach: reachOf(list, reached) };
 }

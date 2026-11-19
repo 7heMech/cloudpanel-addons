@@ -258,7 +258,8 @@ export class DnsRun {
       if (error instanceof ProviderError && (error.status === 401 || error.status === 403)) {
         return { ...owner, readable: false, reason: `Add ${selfReadPermission(owner.owner)} to this token to see its permissions here` };
       }
-      const transient = !(error instanceof UnreadableToken);
+      // Only a reply that never came, a rate limit or Cloudflare's own failure; anything else is shown.
+      const transient = error instanceof ProviderError && !(error instanceof UnreadableToken) && (error.status === 0 || error.status === 429 || error.status >= 500);
       return { ...owner, readable: false, reason: `Its permissions could not be read: ${reason(error)}`, ...(transient ? { transient: true as const } : {}) };
     }
   }
@@ -271,10 +272,6 @@ export class DnsRun {
     });
   }
 
-  /** Permissions a call needing them succeeded with during this run. */
-  granted(connectionId: string): Set<string> {
-    return this.cloudflare.get(connectionId)?.granted ?? new Set();
-  }
 
   private connectionLabel(id: string): string {
     return this.context.policy.connections.find((connection) => connection.id === id)?.label ?? id;

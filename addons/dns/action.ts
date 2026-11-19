@@ -39,7 +39,7 @@ import { isStandInSite } from "../../lib/stand-ins";
 import { clpctlStandIns, readStandIns, retryStandInCertificates, type StandInPaths } from "./stand-in";
 import { clpctlIssue, NEW_SITE_WINDOW, requestSsl, retryCertificates, type Issue, type SslRequest } from "./ssl";
 import { readState, writeState } from "../../lib/root-state";
-import { accessView, grants, targetFor, type AccessView } from "./access";
+import { accessView, grants, targetFor, uncertain, type AccessView } from "./access";
 import { PERMISSIONS, tokenTemplate, type PermissionName, type TokenTemplate } from "./token";
 
 type DnsVerb = keyof typeof DNS_VERBS;
@@ -427,19 +427,19 @@ class Action {
   }
 
   /**
-   * A run without a fresh token read keeps the last one, as does one that
-   * could not reach Cloudflare. A run over some sites keeps the refusals the
-   * others saw, less any its own calls succeeded with; one over every site has
-   * seen them all.
+   * A run that did not read a live token afresh, or could not reach
+   * Cloudflare to, keeps the last read; a token that is no longer active keeps
+   * none. A run over some sites adds its refusals to the ones the last full
+   * check found, which only another full check clears: a call that succeeded
+   * on one zone says nothing of the zones that refused it.
    */
   private withEarlier(run: DnsRun, earlier: ConnectionReport[], domains: string[] | "all"): ConnectionReport[] {
     return run.reports().map((report) => {
       const before = earlier.find((entry) => entry.id === report.id);
-      const token = (!report.token || (!report.token.readable && report.token.transient)) && before?.token ? before.token : report.token;
-      const granted = run.granted(report.id);
-      const kept = domains === "all" ? [] : (before?.refused ?? []).filter((label) => !granted.has(label));
-      const refused = [...new Set([...kept, ...report.refused ?? []])];
-      const { token: _token, refused: _refused, ...rest } = report;
+      const { token: fresh, refused: seen, ...rest } = report;
+      const stale = !fresh || (!fresh.readable && fresh.transient);
+      const token = !report.active ? undefined : stale && before?.token ? before.token : fresh;
+      const refused = [...new Set([...domains === "all" ? [] : before?.refused ?? [], ...seen ?? []])];
       return { ...rest, ...(token ? { token } : {}), ...(refused.length ? { refused } : {}) };
     });
   }
@@ -1341,13 +1341,16 @@ export async function runDnsAction(argv: string[], options: DnsActionOptions = {
 /**
  * Whether a DNS connection's token holds a permission on a zone, from the last
  * check's read of it, without calling Cloudflare. Null when that is not known:
- * no such connection, not checked yet, or a token that cannot read itself.
+ * no such connection, not checked yet, a token no longer active or that cannot
+ * read itself, or a policy not understood that could change the answer.
  */
 export function dnsTokenHolds(connectionId: string, permission: PermissionName, zone: { id: string; accountId: string }, paths: Partial<DnsPaths> = {}): boolean | null {
   const files = new Files({ ...DEFAULT_DNS_PATHS, ...paths });
-  const token = files.status().connections.find((connection) => connection.id === connectionId)?.token;
+  const connection = files.status().connections.find((entry) => entry.id === connectionId);
+  const token = connection?.active ? connection.token : undefined;
   if (!token?.readable) return null;
-  return grants(token.grants, PERMISSIONS[permission], targetFor(PERMISSIONS[permission], zone, token));
+  const held = grants(token.grants, PERMISSIONS[permission], targetFor(PERMISSIONS[permission], zone, token));
+  return uncertain(token.grants, PERMISSIONS[permission], held ? "yes" : "no") ? null : held;
 }
 
 export type { AccessView };

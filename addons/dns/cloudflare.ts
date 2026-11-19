@@ -208,9 +208,8 @@ function parsePolicies(policies: unknown): Grant[] {
     if (policy.effect !== "allow" && policy.effect !== "deny") throw new ProviderError("Cloudflare", "returned a token policy this addon does not understand");
     const groups = Array.isArray(policy.permission_groups) ? policy.permission_groups : [];
     const { resources, unknown } = parseResources(policy.resources);
-    // An allow on resources not understood is left out; a deny cannot be, or what it takes away would read as held.
-    if (unknown && policy.effect === "deny") throw new ProviderError("Cloudflare", "returned a deny policy on resources this addon does not understand");
     return {
+      ...(unknown ? { unknown: true as const } : {}),
       allow: policy.effect === "allow",
       permissions: groups.map((group) => {
         const name = group && typeof group === "object" ? (group as Record<string, unknown>).name : undefined;
@@ -234,8 +233,6 @@ export class CloudflareApi {
 
   /** Permissions Cloudflare refused this token, by label. */
   readonly refused = new Set<string>();
-  /** Permissions a call needing them succeeded with, by label. */
-  readonly granted = new Set<string>();
 
   constructor(token: string, fetcher?: ApiFetch, backoff?: { until: number }) {
     this.http = new ProviderHttp("Cloudflare", API, { Authorization: `Bearer ${token}` }, fetcher, backoff);
@@ -244,9 +241,7 @@ export class CloudflareApi {
   /** Cloudflare refuses a permission the token lacks with a bare "Authentication error"; name the permission instead. */
   private async needs<T>(permission: string, run: () => Promise<T>): Promise<T> {
     try {
-      const result = await run();
-      this.granted.add(permission);
-      return result;
+      return await run();
     } catch (error) {
       if (!(error instanceof ProviderError) || error.status !== 403) throw error;
       this.refused.add(permission);
@@ -419,7 +414,6 @@ export class CloudflareApi {
   async createZone(accountId: string, name: string): Promise<CfZone> {
     try {
       const { result } = await this.call("/zones", "POST", { name, account: { id: id(accountId) }, type: "full" });
-      this.granted.add(PERMISSIONS.zone.label);
       return parseZone(result);
     } catch (error) {
       // Cloudflare names the internal permission, which the token form does not show.

@@ -2,8 +2,8 @@
  * The Cloudflare permissions DNS knows: the dashboard's name, the API's names
  * that grant it, and what DNS uses it for. Cloudflare's token-template URL
  * takes `key`/`type`; `config_settings`, `zone_waf` and `dynamic_redirect`
- * are missing from the documented keys but are the dashboard's own. The form drops a key it does not know, so the page lists
- * every permission as well.
+ * are missing from the documented keys but are the dashboard's own. The form
+ * drops a key it does not know, so the page lists every permission as well.
  * https://developers.cloudflare.com/fundamentals/api/how-to/account-owned-token-template/
  * https://developers.cloudflare.com/fundamentals/api/reference/permissions/
  */

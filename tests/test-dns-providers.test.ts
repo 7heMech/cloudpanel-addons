@@ -279,19 +279,26 @@ describe("a token's own permissions", () => {
     }
   });
 
-  test("a deny on resources not understood makes the read unavailable; an allow on them is left out", async () => {
+  test("a policy on resources not understood leaves only the permissions it names not known", async () => {
     const { fake } = cloudflare();
-    const odd = { "com.cloudflare.api.something.else": "*" };
+    const odd = { "com.cloudflare.edge.r2.bucket.x": "*" };
     const token = fake.tokens.get(USER_TOKEN)!;
     const api = new CloudflareApi(USER_TOKEN, fake.fetch);
     const verified = await api.verify();
-    token.policies = [policy(["DNS Write"], { [`${ZONE}*`]: "*" }), policy(["DNS Write"], odd)];
-    expect(await api.policies(verified, verified.id!)).toEqual([
-      { allow: true, permissions: ["DNS Write"], resources: [{ account: "*", zone: "*" }] },
-      { allow: true, permissions: ["DNS Write"], resources: [] },
-    ]);
-    token.policies = [policy(["DNS Write"], { [`${ZONE}*`]: "*" }), policy(["DNS Write"], odd, "deny")];
-    await expect(api.policies(verified, verified.id!)).rejects.toBeInstanceOf(UnreadableToken);
+    const owner = { owner: "user" as const, accountId: null };
+    const reached = { zones: [{ id: "1".repeat(32), name: "example.com", accountId: "a".repeat(32) }], accounts: [] };
+    token.policies = [policy(["DNS Write", "Zone WAF Write"], { [`${ZONE}*`]: "*" }), policy(["DNS Write"], odd, "deny"), policy(["Zone Settings Write"], odd)];
+    const list = await api.policies(verified, verified.id!);
+    expect(list[1]).toEqual({ unknown: true, allow: false, permissions: ["DNS Write"], resources: [] });
+    const access = readAccess(owner, list, reached);
+    if (!access.readable) throw new Error("readable");
+    // The deny could take DNS Write away, and the allow could give Zone Settings Write: neither is known.
+    expect(access.coverage.dns).toBeUndefined();
+    expect(access.coverage.zoneSettings).toBeUndefined();
+    expect(access.coverage.waf).toEqual({ held: "yes" });
+    expect(access.coverage.configRules).toEqual({ held: "no" });
+    const [web] = seededPolicy().profiles;
+    expect(connectionPermissions({ token: access }, [web!]).missing).toEqual(["Zone: Edit", "Account Settings: Read", "Single Redirect: Edit", "Config Rules: Edit"]);
   });
 
   test("missing and partial permissions are named, a deny wins, and reach is described", () => {

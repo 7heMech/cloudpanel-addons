@@ -576,7 +576,7 @@ describe("what each token holds", () => {
     expect(reply.connections[0]!.access).toMatchObject({ reach: "All zones", note: null });
   });
 
-  test("a refusal clears once a call needing that permission succeeds", async () => {
+  test("a refusal stays through checks of some sites, and clears on a full check that is not refused", async () => {
     const env = setup();
     const fetch = env.cf.fetch;
     let refuse = true;
@@ -590,7 +590,30 @@ describe("what each token holds", () => {
     expect(refused()).toEqual(["Zone Settings: Edit"]);
     refuse = false;
     await env.act("assign", { domains: ["shop.example.com"], profileId: "web" });
+    expect(refused()).toEqual(["Zone Settings: Edit"]);
+    await env.act("check");
     expect(refused()).toBeUndefined();
+  });
+
+  test("a token no longer active keeps no read, and a read refused for another reason is shown", async () => {
+    const env = setup();
+    const token = env.cf.tokens.get(TOKEN)!;
+    token.policies = [policy(["DNS Write", "API Tokens Read"], ALL_ZONES)];
+    const id = (await env.connect()).connections[0]!.id;
+    const zone = { id: env.cf.zones[0]!.id, accountId: env.agency };
+    const paths = { stateDir: join(env.dir, "state"), rootUid: process.getuid!() };
+    expect(dnsTokenHolds(id, "dns", zone, paths)).toBe(true);
+    const fetch = env.cf.fetch;
+    env.cf.fetch = async (address, init) => new URL(address).pathname.endsWith(`/tokens/${token.id}`)
+      ? new Response(JSON.stringify({ success: false, errors: [{ code: 1003, message: "Token not found" }] }), { status: 404 })
+      : fetch(address, init);
+    const missing = await env.act("check");
+    expect(missing.connections[0]!.access!.note).toContain("Token not found");
+    env.cf.fetch = fetch;
+    token.status = "expired";
+    const expired = await env.act("check");
+    expect(expired.connections[0]!.access).toBeNull();
+    expect(dnsTokenHolds(id, "dns", zone, paths)).toBeNull();
   });
 
   test("saving a connection keeps the connections in the policy's order", async () => {
