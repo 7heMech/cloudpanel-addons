@@ -68,6 +68,10 @@ function setUpdates(input) {
   return change(input, '/api/updates', { [input.dataset.setting]: input.checked }, switchText(input), 'Saved.');
 }
 
+function setUpdateSchedule(select) {
+  return change(select, '/api/updates', { schedule: select.value }, 'Saving update schedule…', 'Saved.');
+}
+
 function setSwitch(input, name) {
   return change(input, '/api/' + name, { enabled: input.checked }, switchText(input), 'Saved.');
 }

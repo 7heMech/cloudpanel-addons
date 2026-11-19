@@ -3,7 +3,7 @@ import {
   errorBlock, guardMutation, htmlResponse, jsonResponse, newCsrfToken, readBody,
 } from "../../../lib/app-http";
 import type { ActionResult } from "../../../lib/gateway-client";
-import { REBOOT_TIME_ERROR, validRebootTime } from "../updates";
+import { REBOOT_TIME_ERROR, SCHEDULE_ERROR, validRebootTime, validUpdateSchedule } from "../updates";
 import type { SystemTweaksState } from "../registry";
 import { BACKUP_COMPRESSION_ERROR, validBackupCompression } from "../backup-compression";
 import { LOGIN_JAILS } from "../login-jails";
@@ -57,6 +57,11 @@ export async function handle(
   if (path === "/api/updates") {
     const wanted: Record<string, boolean | string> = {};
     for (const [key, value] of Object.entries(body)) {
+      if (key === "schedule") {
+        if (!validUpdateSchedule(value)) return jsonResponse({ ok: false, error: SCHEDULE_ERROR }, 400);
+        wanted[key] = value;
+        continue;
+      }
       if (key === "rebootTime") {
         if (!validRebootTime(value)) return jsonResponse({ ok: false, error: REBOOT_TIME_ERROR }, 400);
         wanted[key] = value;

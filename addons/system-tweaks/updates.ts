@@ -1,18 +1,22 @@
 /**
  * Automatic updates through the distro's own `unattended-upgrades`.
  *
- * Everything System Tweaks sets is one drop-in under `/etc/apt/apt.conf.d`,
- * named to sort after the distro's `20auto-upgrades` and
- * `50unattended-upgrades`, so it adds origins to their lists and wins their
- * scalars while leaving every later operator file the last word. Deleting it
- * is the whole undo. What the page reports is read back from `apt-config dump`
- * and `apt-cache policy`, never from what this file meant to say.
+ * System Tweaks writes one apt drop-in under `/etc/apt/apt.conf.d`, named to
+ * sort after the distro's `20auto-upgrades` and `50unattended-upgrades`, so it
+ * adds origins to their lists and wins their scalars while leaving every later
+ * operator file the last word. For sub-daily schedules (`hourly` and `6h`) it
+ * also writes systemd drop-ins for `apt-daily.timer` and
+ * `apt-daily-upgrade.timer`; for `daily` or when switched off those drop-ins
+ * are removed so the distro's own schedule applies. What the page reports is
+ * read back from `apt-config dump` and `apt-cache policy`, never from what
+ * this file meant to say.
  */
-import { existsSync, lstatSync, readFileSync, readdirSync, rmSync, statSync } from "node:fs";
-import { basename, join } from "node:path";
+import { existsSync, lstatSync, readFileSync, readdirSync, rmSync, rmdirSync, statSync } from "node:fs";
+import { basename, dirname, join } from "node:path";
 import { failAction } from "../../lib/action";
 import { commandOutput } from "../../lib/command";
 import { writeFileAtomic, writeOrRemove } from "../../lib/atomic-write";
+import { SYSTEMD_DIR } from "../../lib/paths";
 import { aptInstall, installedVersion, systemRun, withDeadline, type Run } from "./packages";
 import { INSTALL_DEADLINE_MS } from "./limits";
 import { tweak } from "./tweak";
@@ -20,11 +24,22 @@ import type { UploadProgressOptions } from "./upload-progress";
 
 const CLOUDPANEL_ORIGIN = "packages-v1.cloudpanel.io";
 const MARKER = "// Managed by clp-addons System Tweaks. Switching automatic updates off there removes this file.";
+const TIMER_MARKER = "# Managed by clp-addons System Tweaks. Switching automatic updates off there removes this file.";
+const TIMER_DROP_IN_NAME = "52clp-addons.conf";
 const TIMERS = ["apt-daily.timer", "apt-daily-upgrade.timer"];
+
+export type UpdateSchedule = "hourly" | "6h" | "daily";
+export const UPDATE_SCHEDULES = ["hourly", "6h", "daily"] as const;
+export const SCHEDULE_ERROR = "schedule must be hourly, 6h or daily";
+
+export function validUpdateSchedule(value: unknown): value is UpdateSchedule {
+  return typeof value === "string" && (UPDATE_SCHEDULES as readonly string[]).includes(value);
+}
 
 /** What the operator chose. PHP and the distro's security origin are always in. */
 export interface UpdateSettings {
   enabled: boolean;
+  schedule: UpdateSchedule;
   nginx: boolean;
   database: boolean;
   panel: boolean;
@@ -35,6 +50,7 @@ export interface UpdateSettings {
 
 export const DEFAULT_UPDATE_SETTINGS: UpdateSettings = {
   enabled: false,
+  schedule: "hourly",
   nginx: true,
   database: false,
   panel: false,
@@ -54,6 +70,7 @@ interface UpdatesPaths {
   aptConfDir: string;
   aptConf: string;
   dropIn: string;
+  systemdDir: string;
   rebootRequired: string;
   logFile: string;
   osRelease: string;
@@ -63,6 +80,7 @@ const DEFAULT_UPDATES_PATHS: UpdatesPaths = {
   aptConfDir: "/etc/apt/apt.conf.d",
   aptConf: "/etc/apt/apt.conf",
   dropIn: "/etc/apt/apt.conf.d/52clp-addons-unattended-upgrades",
+  systemdDir: SYSTEMD_DIR,
   rebootRequired: "/var/run/reboot-required",
   logFile: "/var/log/unattended-upgrades/unattended-upgrades.log",
   osRelease: "/etc/os-release",
@@ -309,7 +327,9 @@ function securityPattern(distroId: string): string | null {
 }
 
 export function dropInFor(settings: UpdateSettings, distroId: string): string {
+  if (!validUpdateSchedule(settings.schedule)) failAction(SCHEDULE_ERROR);
   if (!validRebootTime(settings.rebootTime)) failAction(REBOOT_TIME_ERROR);
+  const periodic = settings.schedule === "daily" ? "1" : "always";
   const cloudpanel = (component: string) => `origin=${CLOUDPANEL_ORIGIN},codename=\${distro_codename},component=${component}`;
   const patterns = [
     securityPattern(distroId),
@@ -320,8 +340,8 @@ export function dropInFor(settings: UpdateSettings, distroId: string): string {
   ].filter((pattern): pattern is string => pattern !== null);
   return [
     MARKER,
-    'APT::Periodic::Update-Package-Lists "1";',
-    'APT::Periodic::Unattended-Upgrade "1";',
+    `APT::Periodic::Update-Package-Lists "${periodic}";`,
+    `APT::Periodic::Unattended-Upgrade "${periodic}";`,
     "Unattended-Upgrade::Origins-Pattern {",
     ...patterns.map((pattern) => `\t"${pattern}";`),
     "};",
@@ -486,11 +506,39 @@ export function effectiveReboot(options: UpdatesOptions = {}): Pick<UpdateSettin
 
 // --- changing it -------------------------------------------------------------
 
-function readDropIn(ctx: Context): string | null {
+function readOptional(path: string): string | null {
   try {
-    return readFileSync(ctx.paths.dropIn, "utf8");
+    return readFileSync(path, "utf8");
   } catch {
     return null;
+  }
+}
+
+function timerDropInPath(ctx: Context, timer: string): string {
+  return join(ctx.paths.systemdDir, `${timer}.d`, TIMER_DROP_IN_NAME);
+}
+
+function timerDropInFor(timer: string, schedule: UpdateSchedule): string | null {
+  if (schedule === "daily") return null;
+  const calendar = timer === "apt-daily.timer"
+    ? (schedule === "hourly" ? "hourly" : "0/6:00")
+    : (schedule === "hourly" ? "*:20" : "0/6:20");
+  return [
+    TIMER_MARKER,
+    "[Timer]",
+    "OnCalendar=",
+    `OnCalendar=${calendar}`,
+    "RandomizedDelaySec=15m",
+    "",
+  ].join("\n");
+}
+
+function writeOrRemoveTimerDropIn(path: string, content: string | null): void {
+  if (content === null) {
+    rmSync(path, { force: true });
+    try { rmdirSync(dirname(path)); } catch {}
+  } else {
+    writeFileAtomic(path, content, { mode: 0o644, createParent: true });
   }
 }
 
@@ -500,27 +548,74 @@ export function applyUpdates(settings: UpdateSettings, enabledTimers: string[], 
   enabledTimers: string[];
 } {
   const ctx = contextOf(options);
-  const before = readDropIn(ctx);
+  if (settings.enabled && !validUpdateSchedule(settings.schedule)) failAction(SCHEDULE_ERROR);
+  const before = readOptional(ctx.paths.dropIn);
+  const timerDropIns = TIMERS.map((timer) => {
+    const path = timerDropInPath(ctx, timer);
+    return {
+      path,
+      before: readOptional(path),
+      after: settings.enabled ? timerDropInFor(timer, settings.schedule) : null,
+    };
+  });
+  const timerDropInsChanged = timerDropIns.some((entry) => entry.before !== entry.after);
+  const restoreTimerDropIns = () => {
+    if (!timerDropInsChanged) return;
+    for (const entry of timerDropIns) {
+      if (entry.before !== entry.after) {
+        try { writeOrRemoveTimerDropIn(entry.path, entry.before); } catch {}
+      }
+    }
+    ctx.run("systemctl", ["daemon-reload"]);
+  };
+
   if (!settings.enabled) {
+    if (timerDropInsChanged) {
+      for (const entry of timerDropIns) {
+        if (entry.before !== entry.after) writeOrRemoveTimerDropIn(entry.path, null);
+      }
+      const reload = ctx.run("systemctl", ["daemon-reload"]);
+      if (!reload.ok) {
+        restoreTimerDropIns();
+        failAction(`systemctl daemon-reload failed: ${commandOutput(reload)}`);
+      }
+    }
     for (const timer of enabledTimers) ctx.run("systemctl", ["disable", "--now", timer]);
     if (before !== null) rmSync(ctx.paths.dropIn, { force: true });
-    return { changed: before !== null || enabledTimers.length > 0, enabledTimers: [] };
+    return { changed: before !== null || timerDropInsChanged || enabledTimers.length > 0, enabledTimers: [] };
   }
+
   if (!packageVersion(ctx)) failAction("unattended-upgrades is not installed");
   const states = TIMERS.map((timer) => ({ timer, state: ctx.run("systemctl", ["is-enabled", timer]).stdout.trim() }));
   const masked = states.find(({ state }) => state === "masked");
   if (masked) failAction(`${masked.timer} is masked; unmask it to use automatic updates`);
 
   const after = dropInFor(settings, distroOf(ctx).id);
-  const restore = () => {
+  const restore = (reloadTimers: boolean) => {
     if (before !== after) writeOrRemove(ctx.paths.dropIn, before, { mode: 0o644 });
+    if (reloadTimers) restoreTimerDropIns();
   };
   if (before !== after) {
     writeFileAtomic(ctx.paths.dropIn, after, { mode: 0o644 });
     const check = ctx.run("apt-config", ["dump"]);
     if (!check.ok) {
-      restore();
+      restore(false);
       failAction(`apt rejected the configuration: ${commandOutput(check)}`);
+    }
+  }
+  if (timerDropInsChanged) {
+    try {
+      for (const entry of timerDropIns) {
+        if (entry.before !== entry.after) writeOrRemoveTimerDropIn(entry.path, entry.after);
+      }
+    } catch (error) {
+      restore(true);
+      throw error;
+    }
+    const reload = ctx.run("systemctl", ["daemon-reload"]);
+    if (!reload.ok) {
+      restore(true);
+      failAction(`systemctl daemon-reload failed: ${commandOutput(reload)}`);
     }
   }
   const enabledNow: string[] = [];
@@ -529,13 +624,16 @@ export function applyUpdates(settings: UpdateSettings, enabledTimers: string[], 
     const enable = ctx.run("systemctl", ["enable", "--now", timer]);
     if (!enable.ok) {
       for (const done of enabledNow) ctx.run("systemctl", ["disable", "--now", done]);
-      restore();
+      restore(timerDropInsChanged);
       failAction(`${timer} could not be enabled: ${enable.stderr.trim()}`);
     }
     enabledNow.push(timer);
   }
   const timers = [...new Set([...enabledTimers, ...enabledNow])];
-  return { changed: before !== after || timers.length !== enabledTimers.length, enabledTimers: timers };
+  return {
+    changed: before !== after || timerDropInsChanged || timers.length !== enabledTimers.length,
+    enabledTimers: timers,
+  };
 }
 
 export function installUnattendedUpgrades(options: UpdatesOptions = {}): void {
@@ -556,6 +654,7 @@ export const UPDATES_TWEAK = tweak<Settings, Options, { updates: UpdatesStatus; 
   read(stored, settings) {
     const updates = (stored.updates ?? {}) as Record<string, unknown>;
     for (const key of UPDATE_SETTING_KEYS) if (typeof updates[key] === "boolean") settings.updates[key] = updates[key];
+    if (validUpdateSchedule(updates.schedule)) settings.updates.schedule = updates.schedule;
     if (validRebootTime(updates.rebootTime)) settings.updates.rebootTime = updates.rebootTime;
     if (Array.isArray(stored.enabledTimers)) {
       settings.enabledTimers = stored.enabledTimers.filter((timer): timer is string => TIMERS.includes(timer));
@@ -572,6 +671,11 @@ export const UPDATES_TWEAK = tweak<Settings, Options, { updates: UpdatesStatus; 
           if (body[key] === undefined) continue;
           if (typeof body[key] !== "boolean") failAction(`${key} must be true or false`);
           wanted[key] = body[key];
+          named++;
+        }
+        if (body.schedule !== undefined) {
+          if (!validUpdateSchedule(body.schedule)) failAction(SCHEDULE_ERROR);
+          wanted.schedule = body.schedule;
           named++;
         }
         if (body.rebootTime !== undefined) {

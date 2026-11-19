@@ -8,7 +8,7 @@ import { DEFAULT_UPDATE_SETTINGS, dropInFor } from "../../addons/system-tweaks/u
 const dir = mkdtempSync(join(tmpdir(), "clp-ubuntu-updates-"));
 try {
   writeFileSync(join(dir, "drop-in"), dropInFor({ ...DEFAULT_UPDATE_SETTINGS, enabled: true }, "Ubuntu"));
-  writeFileSync(join(dir, "timed-drop-in"), dropInFor({ ...DEFAULT_UPDATE_SETTINGS, enabled: true, reboot: true, rebootTime: "03:30" }, "Ubuntu"));
+  writeFileSync(join(dir, "timed-drop-in"), dropInFor({ ...DEFAULT_UPDATE_SETTINGS, enabled: true, schedule: "daily", reboot: true, rebootTime: "03:30" }, "Ubuntu"));
   writeFileSync(join(dir, "probe.py"), `import apt_pkg, os, runpy, shutil, subprocess
 from types import SimpleNamespace
 apt_pkg.init()
@@ -34,12 +34,15 @@ assert covered('packages-v1.cloudpanel.io', '', 'php-8.3')
 assert covered('packages-v1.cloudpanel.io', '', 'nginx')
 assert not covered('packages-v1.cloudpanel.io', '', 'main')
 assert not covered('packages-v1.cloudpanel.io', '', 'percona-server-server-8.0')
-assert apt_pkg.config.find('APT::Periodic::Unattended-Upgrade') == '1'
+assert apt_pkg.config.find('APT::Periodic::Update-Package-Lists') == 'always'
+assert apt_pkg.config.find('APT::Periodic::Unattended-Upgrade') == 'always'
 assert not apt_pkg.config.find_b('Unattended-Upgrade::Automatic-Reboot')
 shutil.copyfile('/probe/timed-drop-in', target)
 for key in list(apt_pkg.config.keys()):
     apt_pkg.config.clear(key)
 apt_pkg.init()
+assert apt_pkg.config.find('APT::Periodic::Update-Package-Lists') == '1'
+assert apt_pkg.config.find('APT::Periodic::Unattended-Upgrade') == '1'
 assert apt_pkg.config.find_b('Unattended-Upgrade::Automatic-Reboot')
 assert apt_pkg.config.find('Unattended-Upgrade::Automatic-Reboot-Time') == '03:30'
 os.unlink(target)
@@ -47,7 +50,7 @@ for key in list(apt_pkg.config.keys()):
     apt_pkg.config.clear(key)
 apt_pkg.init()
 assert uu['get_allowed_origins']() == before
-print(codename + ': real unattended-upgrades origin matching, reboot timing and additive configuration passed')
+print(codename + ': real unattended-upgrades origin matching, schedule, reboot timing and additive configuration passed')
 `);
   for (const release of ["22.04", "24.04", "26.04"]) {
     const proc = Bun.spawn(["docker", "run", "--rm", "--mount", `type=bind,source=${dir},target=/probe,readonly`,
