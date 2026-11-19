@@ -137,7 +137,7 @@ function defaultPageEditor(page: MaintenancePageView): string {
  * site at once while each site keeps the setting it has saved.
  */
 function globalCard(
-  globalEnabled: boolean, disabled: boolean, bypasses: string[], currentIp: string, defaultPage?: MaintenancePageView,
+  globalEnabled: boolean, disabled: boolean, bypasses: string[], currentIp: string, defaultPage: MaintenancePageView,
 ): string {
   return `<div class="card">
     <div class="split-card">
@@ -153,7 +153,7 @@ function globalCard(
       ${bypassSummary("global-bypass-ips", "Global IP bypasses", bypasses.length ? plural(bypasses.length, "address", "addresses") : "None")}
       ${bypassFields("global-bypass-ips", "These skip maintenance on every site.", bypasses, currentIp, "saveGlobalBypasses()")}
     </details>
-    ${defaultPage ? defaultPageEditor(defaultPage) : ""}
+    ${defaultPageEditor(defaultPage)}
   </div>`;
 }
 
@@ -172,7 +172,7 @@ function siteRow(site: MaintenanceSiteView, globalEnabled: boolean): string {
   </tr>`;
 }
 
-export function fleetView(fleet: MaintenanceFleet, currentIp = "", defaultPage?: MaintenancePageView): string {
+export function fleetView(fleet: MaintenanceFleet, currentIp = ""): string {
   const { sites } = fleet;
   const globalEnabled = fleet.global.global;
   const inMaintenance = sites.filter((site) => serving(site, globalEnabled)).length;
@@ -196,7 +196,7 @@ export function fleetView(fleet: MaintenanceFleet, currentIp = "", defaultPage?:
     : '<div class="empty">No CloudPanel sites were found.</div>';
   return `<div class="page-heading" id="maintenance-fleet"><div><h1>Maintenance Mode</h1><p>Switch sites to a 503 maintenance page without reloading Nginx.</p></div></div>
   ${banner}
-  ${globalCard(globalEnabled, sites.length === 0, fleet.global.bypasses, currentIp, defaultPage)}
+  ${globalCard(globalEnabled, sites.length === 0, fleet.global.bypasses, currentIp, fleet.defaultPage)}
   <div class="card card-table">
     <div class="card-header toolbar">
       <div><h2>Sites</h2><div class="hint">${inMaintenance} of ${sites.length} in maintenance</div></div>

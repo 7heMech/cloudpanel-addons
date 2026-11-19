@@ -380,6 +380,7 @@ function maintenancePreviewFleet(url: URL): MaintenanceFleet {
   return {
     global: { global: maintenanceChanges.global ?? url.searchParams.has("global"), bypasses: url.searchParams.has("empty") ? [] : ["203.0.113.8"] },
     sites: url.searchParams.has("empty") ? [] : fleetSites,
+    defaultPage: maintenancePreviewDefault(url),
   };
 }
 
@@ -398,7 +399,7 @@ function maintenancePreviewMutation(path: string, source: URL, body: Record<stri
   return Response.json({
     ok: true,
     data: toggle ? { domain, enabled: body.enabled === true } : { enabled: body.enabled, updated: body.domains ?? [], failed: [], global: body.enabled },
-    html: maintenanceFleetView(maintenancePreviewFleet(source), "203.0.113.8", maintenancePreviewDefault(source)),
+    html: maintenanceFleetView(maintenancePreviewFleet(source), "203.0.113.8"),
   });
 }
 
@@ -2107,7 +2108,7 @@ const server = Bun.serve({
               domain: site.domain, custom: site.customTemplate,
               html: site.customTemplate ? PREVIEW_CUSTOM_PAGE : maintenancePreviewDefault(url).html,
             }, "203.0.113.8", globalEnabled)
-          : maintenanceFleetView(fleet, "203.0.113.8", maintenancePreviewDefault(url)),
+          : maintenanceFleetView(fleet, "203.0.113.8"),
         notice,
         site
           ? {

@@ -99,16 +99,28 @@ function siteEndpoint(domain, suffix) {
   return '/api/sites/' + encodeURIComponent(domain) + suffix;
 }
 
-// The default page's editor is carried across the repaint, so a fleet change
-// keeps its unsaved edits and its Ace instance.
+// A default page with unsaved edits, or the operator's focus, is carried
+// across the repaint with what the server now says about it; otherwise the
+// fresh one replaces it, so it shows another admin's newer save.
 function repaintFleet(reply, done) {
   if (reply.html) {
     const editor = CLP_ROOT.getElementById('default-page');
+    const active = clpBusyFocus || CLP_ROOT.activeElement;
+    const keep = Boolean(editor) && (templateValue() !== templateSaved || editor.contains(active));
     repaintView(CLP_ROOT.getElementById('clp-content'), reply.html);
     const fresh = CLP_ROOT.getElementById('default-page');
-    if (editor && fresh) {
+    if (keep && fresh) {
+      const kind = fresh.querySelector('#template-kind');
+      const reset = fresh.querySelector('#reset-template');
       fresh.replaceWith(editor);
+      if (kind) editor.querySelector('#template-kind').textContent = kind.textContent;
+      if (reset) editor.querySelector('#reset-template').hidden = reset.hidden;
       if (templateAce) templateAce.resize();
+      if (editor.contains(active)) active.focus({ preventScroll: true });
+    } else if (editor) {
+      if (templateAce) templateAce.destroy();
+      templateAce = null;
+      initTemplateEditor();
     }
     if (done) notify(done, 'ok');
   } else {
@@ -399,7 +411,7 @@ function addCurrentIp(id, ip) {
   syncBypassSave(field);
 }
 
-function initMaintenance() {
+function initTemplateEditor() {
   const editor = templateArea();
   if (editor) {
     editor.addEventListener('input', function () {
@@ -412,5 +424,5 @@ function initMaintenance() {
     setupTemplateEditor();
   }
 }
-if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', initMaintenance);
-else initMaintenance();
+if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', initTemplateEditor);
+else initTemplateEditor();

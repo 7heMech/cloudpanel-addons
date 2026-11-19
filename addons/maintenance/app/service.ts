@@ -2,26 +2,21 @@ import { callGatewayAction, type ActionResult } from "../../../lib/gateway-clien
 import type { WebVerb } from "../../../lib/gateway-protocol";
 import { fetchPanelInfo } from "../../../lib/snapshot-reader";
 import type { SiteContext } from "../../../lib/site-context";
-import type { GlobalMaintenanceStatus, MaintenanceSiteStatus, MaintenanceStatus } from "../action";
+import type { GlobalMaintenanceStatus, MaintenancePageView, MaintenanceSiteStatus, MaintenanceStatus } from "../action";
+
+export type { MaintenancePageView };
 
 export type MaintenanceSiteView = MaintenanceSiteStatus;
 
 export interface MaintenanceFleet {
   global: GlobalMaintenanceStatus;
   sites: MaintenanceSiteView[];
+  defaultPage: MaintenancePageView;
 }
 
 interface MaintenanceSitePage {
   site: MaintenanceSiteView;
   context: SiteContext;
-}
-
-/** A maintenance page: a site's own, or the default; `custom` when the operator saved it. */
-export interface MaintenancePageView {
-  custom: boolean;
-  html: string;
-  /** Set by a save whose HTML the sanitizer had to change. */
-  removed?: boolean;
 }
 
 export interface MaintenanceTemplateView extends MaintenancePageView {
@@ -44,7 +39,8 @@ function action<T>(verb: WebVerb<"maintenance">, domain: string, input?: string)
 function globalAction<T>(verb: WebVerb<"maintenance">, input?: string): Promise<ActionResult<T>> {
   return callGatewayAction("maintenance", verb, [], input, {
     timeout: 30_000,
-    maxBuffer: 1024 * 1024,
+    // The sites reply carries the default page, whose 256 KiB can grow when escaped.
+    maxBuffer: 4 * 1024 * 1024,
   });
 }
 
@@ -114,10 +110,6 @@ export const maintenanceService = {
 
   resetTemplate(domain: string): Promise<ActionResult<MaintenanceTemplateView>> {
     return action("reset-template", domain);
-  },
-
-  defaultTemplate(): Promise<ActionResult<MaintenancePageView>> {
-    return globalAction("get-default-template");
   },
 
   setDefaultTemplate(html: string): Promise<ActionResult<MaintenancePageView>> {

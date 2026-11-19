@@ -16,16 +16,10 @@ function html(body: string, csrf: string, status = 200): Response {
   return htmlResponse(body, { status, csrf, headers: { "Content-Security-Policy": csp } });
 }
 
-async function fleetContent(req: Request): Promise<string> {
-  const [fleet, page] = await Promise.all([maintenanceService.fleet(), maintenanceService.defaultTemplate()]);
-  if (!page.ok || !page.data) throw new Error(page.error ?? "the default maintenance page could not be read");
-  return fleetView(fleet, clientIp(req), page.data);
-}
-
 /** The fleet page as it now stands, for a fleet change to repaint from; undefined if it cannot be read. */
 async function fleetHtml(req: Request): Promise<string | undefined> {
   try {
-    return await fleetContent(req);
+    return fleetView(await maintenanceService.fleet(), clientIp(req));
   } catch {
     return undefined;
   }
@@ -78,7 +72,7 @@ export async function handle(
       }
     }
     try {
-      if (!selected) return html(layout("Maintenance Mode", await fleetContent(req), updateNotice), csrf);
+      if (!selected) return html(layout("Maintenance Mode", fleetView(await maintenanceService.fleet(), clientIp(req)), updateNotice), csrf);
       const globalStatus = await maintenanceService.globalStatus();
       const domain = validateDomain(selected);
       if (!domain) return html(layout("Invalid site", errorBlock("That is not a valid hostname."), updateNotice), csrf, 400);

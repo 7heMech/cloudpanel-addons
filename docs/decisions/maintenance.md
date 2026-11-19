@@ -4,8 +4,8 @@
 
 Maintenance Mode is available from the Addons overview and from an
 administrator-only tab in every CloudPanel site view. The overview reads every
-site's saved setting, template, bypasses and Nginx coverage, and the global
-state, in one `sites` action call, which reads the panel database and the state
+site's saved setting, template, bypasses and Nginx coverage, the global
+state and the default page, in one `sites` action call, which reads the panel database and the state
 directory once. The sites table comes first, with "N of M in maintenance" in its
 header counting what visitors get. A site's custom page and bypass count are a
 note under its name. Rows are selected by click or checkbox and "Turn on
@@ -52,8 +52,9 @@ on and nothing else, showing the HTML with a Preview tab beside it: turning it
 off restores what is saved, asking first only when there is an unsaved change,
 and never removes a saved template. Reset to default exists only while a custom
 template or edited default is saved, and is the only way to remove one. A save whose HTML the
-sanitizer changed says "Saved; some tags were removed". A fleet repaint carries
-the default page's editor across, so a toggle does not lose unsaved edits.
+sanitizer changed says "Saved; some tags were removed". A fleet repaint keeps the
+default page's editor while it has unsaved edits or focus, updating its summary
+and Reset; otherwise the fresh one, with any newer save, replaces it.
 
 The custom template is edited with CloudPanel's own Ace build, the editor the
 panel uses for a vhost, loaded from the panel at `/assets/js/ace.min.js`. That
@@ -122,7 +123,9 @@ The internal maintenance location serves a site's `maintenance.html` when presen
 and otherwise serves the managed `default.html`. That file is the operator's
 edited default, `default-edited.html`, when one is saved, and otherwise the
 built-in page; install, update, repair and every default-page save or reset
-rewrite it. A site's `get-template` without a page of its own, and its
+rewrite it, re-reading the edited default after each write so a run that read
+a since-replaced one does not leave it behind. A default-page save or reset
+purges Varnish for the sites serving it, as a toggle does. A site's `get-template` without a page of its own, and its
 `reset-template`, return the same page, so a site's preview shows what its
 visitors get. Responses include
 `Retry-After: 300`, disable caching, and apply a content security policy that
@@ -142,7 +145,8 @@ sign-in save the IPv4 address used by the site's connection.
 
 Only the root gateway changes maintenance state. It accepts a fixed verb set,
 normalizes domains and IP addresses, checks that site-scoped domains are current
-CloudPanel sites, and bounds a custom template at 256 KiB. The edited default
+CloudPanel sites, and bounds a custom template at 256 KiB and refuses one that
+is empty once sanitized. The edited default
 goes through the same sanitizer and limit, by the admin-only
 `get-default-template`, `set-default-template` and `reset-default-template`.
 Like a site's page, an edited default that is not a regular file within the

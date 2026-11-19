@@ -39,6 +39,14 @@ export interface MaintenanceSiteStatus extends MaintenanceStatus {
   error?: string;
 }
 
+/** A maintenance page: a site's own, or the default; `custom` when the operator saved it. */
+export interface MaintenancePageView {
+  custom: boolean;
+  html: string;
+  /** Set by a save whose HTML the sanitizer had to change. */
+  removed?: boolean;
+}
+
 export interface GlobalMaintenanceStatus {
   global: boolean;
   bypasses: string[];
@@ -157,7 +165,7 @@ function editedDefaultPath(paths: MaintenanceActionPaths): string {
  * or the built-in one. Like a site's page, an edited default that is not a
  * regular file within the limit is not served.
  */
-function defaultPage(paths: MaintenanceActionPaths): { custom: boolean; html: string } {
+function defaultPage(paths: MaintenanceActionPaths): MaintenancePageView {
   const edited = editedDefaultPath(paths);
   return safeRegularFile(edited)
     ? { custom: true, html: readFileSync(edited, "utf8") }
@@ -169,14 +177,18 @@ function ensureDataDir(paths: MaintenanceActionPaths): void {
   mkdirSync(paths.dataDir, { recursive: true, mode: 0o711 });
   chmodSync(paths.dataDir, 0o711);
   const defaultPath = join(paths.dataDir, "default.html");
-  if (existsSync(defaultPath) && !safeRegularFile(defaultPath)) {
-    failAction(`unsafe maintenance default template: ${defaultPath}`);
-  }
-  const { html } = defaultPage(paths);
-  if (!existsSync(defaultPath) || readFileSync(defaultPath, "utf8") !== html) {
+  // Re-checked after each write, so a run that read an edited default since
+  // replaced puts the newer one back rather than leave its own stale copy.
+  for (let attempt = 0; attempt < 3; attempt++) {
+    if (existsSync(defaultPath) && !safeRegularFile(defaultPath)) {
+      failAction(`unsafe maintenance default template: ${defaultPath}`);
+    }
+    const { html } = defaultPage(paths);
+    if (existsSync(defaultPath) && readFileSync(defaultPath, "utf8") === html) {
+      chmodSync(defaultPath, 0o644);
+      return;
+    }
     writeFileAtomic(defaultPath, html, { mode: 0o644, createParent: true });
-  } else {
-    chmodSync(defaultPath, 0o644);
   }
 }
 
@@ -331,7 +343,9 @@ function maintenanceStatus(paths: MaintenanceActionPaths, domain: string): Maint
 }
 
 /** Every site's status and Nginx coverage, from one read of the panel and of the state directory. */
-function allStatuses(paths: MaintenanceActionPaths): { global: GlobalMaintenanceStatus; sites: MaintenanceSiteStatus[] } {
+function allStatuses(paths: MaintenanceActionPaths): {
+  global: GlobalMaintenanceStatus; sites: MaintenanceSiteStatus[]; defaultPage: MaintenancePageView;
+} {
   const { rows, gaps } = readPanel(paths, (db) => {
     const rows = withoutStandIns(db.query<{ domain_name: string; type: unknown; user: unknown }, []>(
       "SELECT domain_name, type, user FROM site ORDER BY domain_name",
@@ -356,7 +370,9 @@ function allStatuses(paths: MaintenanceActionPaths): { global: GlobalMaintenance
       };
     }
   });
-  return { global: { global: safeRegularFile(join(globalDir, "on"), 0), bypasses: bypasses(globalDir) }, sites };
+  return {
+    global: { global: safeRegularFile(join(globalDir, "on"), 0), bypasses: bypasses(globalDir) }, sites, defaultPage: defaultPage(paths),
+  };
 }
 
 /**
@@ -467,6 +483,7 @@ function sanitizeTemplate(input: string): string {
       }
     },
   }).transform(input);
+  if (!html.trim()) failAction("the maintenance template is empty");
   return html.trim() + "\n";
 }
 
@@ -481,6 +498,24 @@ async function purgeVarnishMany(domains: string[], options: MaintenanceActionOpt
     }
   };
   await Promise.all(Array.from({ length: Math.min(8, domains.length) }, () => worker()));
+}
+
+/** Purges the sites whose visitors get the default page now: in maintenance, without a page of their own. */
+async function purgeDefaultServers(paths: MaintenanceActionPaths, options: MaintenanceActionOptions): Promise<void> {
+  let names: string[];
+  try {
+    names = withPanelDb(paths.panelDb, (db) => db.query<{ domain_name: string }, []>("SELECT domain_name FROM site").all()
+      .map((row) => row.domain_name));
+  } catch {
+    return;
+  }
+  const global = nginxFile(join(paths.dataDir, "_global", "on"));
+  const served = names.flatMap((name) => {
+    const domain = normalizeIdentityHostname(name);
+    if (!domain || !(global || nginxFile(join(paths.dataDir, domain, "on")))) return [];
+    return safeRegularFile(join(paths.dataDir, domain, "maintenance.html")) ? [] : [domain];
+  });
+  await purgeVarnishMany(served, options);
 }
 
 /** Turns maintenance on or off for many sites in one pass: one database read, one process. */
@@ -549,16 +584,20 @@ export async function executeMaintenanceAction(
   if (verb === "set-default-template") {
     const input = await readInput(options);
     const html = sanitizeTemplate(input);
-    assertDirectory(paths.dataDir);
-    writeFileAtomic(editedDefaultPath(paths), html, { mode: 0o600, createParent: true });
     ensureDataDir(paths);
+    writeFileAtomic(editedDefaultPath(paths), html, { mode: 0o600 });
+    ensureDataDir(paths);
+    await purgeDefaultServers(paths, options);
     return { custom: true, html, removed: html.trim() !== input.trim() };
   }
 
   if (verb === "reset-default-template") {
-    assertDirectory(paths.dataDir);
-    rmSync(editedDefaultPath(paths), { force: true });
     ensureDataDir(paths);
+    const edited = editedDefaultPath(paths);
+    if (existsSync(edited) && lstatSync(edited).isDirectory()) failAction(`unsafe maintenance default template: ${edited}`);
+    rmSync(edited, { force: true });
+    ensureDataDir(paths);
+    await purgeDefaultServers(paths, options);
     return defaultPage(paths);
   }
 
