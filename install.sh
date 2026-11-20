@@ -2,7 +2,6 @@
 set -euo pipefail
 
 REPO="7heMech/cloudpanel-addons"
-ARTIFACT="clp-addons-linux-x64"
 CLI_TARGET="/usr/local/bin/clp-addons"
 VERSION="latest"
 SELECTED=""
@@ -41,7 +40,11 @@ done
 
 step "checking dependencies (root, CloudPanel)"
 [[ $EUID -eq 0 ]] || die "run as root"
-[[ $(uname -m) == "x86_64" ]] || die "releases are linux-x64 only"
+case "$(uname -m)" in
+  x86_64)        ARTIFACT="clp-addons-linux-x64" ;;
+  aarch64|arm64) ARTIFACT="clp-addons-linux-arm64" ;;
+  *)             die "unsupported architecture $(uname -m); releases are built for x86_64 and aarch64" ;;
+esac
 for command_name in curl sha256sum systemctl; do
   command -v "$command_name" >/dev/null || die "required command not found: $command_name"
 done

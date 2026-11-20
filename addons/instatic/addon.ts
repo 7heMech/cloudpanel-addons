@@ -8,6 +8,8 @@ export const INSTATIC_ADDON: AddonDefinition = {
   title: "Instatic CMS",
   description: "Instant static site hosting and staging on CloudPanel.",
   requiresUnits: ["docker"],
+  // ghcr.io/corebunch/instatic publishes linux/amd64 images only.
+  supportedArches: ["x64"],
   targets: INSTATIC_TARGETS,
   handler: handle,
   action: runInstaticAction,

@@ -121,6 +121,56 @@ test("Debian's own patterns leave every CloudPanel repository uncovered", () => 
   expect(rows.find((row) => row.name === "CloudPanel PHP")!.detail).toBe("8.1, 8.3");
 });
 
+// What apt-cache policy shows for CloudPanel's repositories on the other boxes:
+// arm64 has its own origin and CDN host, and Debian 13's Release has no Origin.
+const cloudPanelPolicy = (site: string, origin: string, codename: string, arch: string) =>
+  ["php-8.3", "php-8.1", "nginx", "percona-server-server-8.0", "main"].map((component) =>
+    `1000 https://${site} ${codename}/${component} ${arch} Packages
+     release ${origin ? `o=${origin},` : ""}n=${codename},c=${component},b=${arch}
+     origin ${site}
+`).join("");
+
+const CLOUDPANEL_BOXES = {
+  "x64 Debian 12": { arch: "x64", codename: "bookworm", policy: cloudPanelPolicy("d17k9fuiwb52nc.cloudfront.net", "packages-v1.cloudpanel.io", "bookworm", "amd64") },
+  "x64 Debian 13": { arch: "x64", codename: "trixie", policy: cloudPanelPolicy("d17k9fuiwb52nc.cloudfront.net", "", "trixie", "amd64") },
+  "arm64 Debian 12": { arch: "arm64", codename: "bookworm", policy: cloudPanelPolicy("d2xpdm4jldf31f.cloudfront.net", "packages-arm-v1.cloudpanel.io", "bookworm", "arm64") },
+  "arm64 Debian 13": { arch: "arm64", codename: "trixie", policy: cloudPanelPolicy("d2xpdm4jldf31f.cloudfront.net", "", "trixie", "arm64") },
+};
+
+test("the fixtures carry each box's own CloudPanel Release fields", () => {
+  const [php] = parsePolicy(CLOUDPANEL_BOXES["arm64 Debian 13"].policy);
+  expect(php).toEqual({ origin: "", label: "", archive: "", codename: "trixie", component: "php-8.3", site: "d2xpdm4jldf31f.cloudfront.net" });
+  expect(parsePolicy(CLOUDPANEL_BOXES["arm64 Debian 12"].policy)[0]!.origin).toBe("packages-arm-v1.cloudpanel.io");
+  expect(parsePolicy(CLOUDPANEL_BOXES["x64 Debian 13"].policy)[0]!.site).toBe("d17k9fuiwb52nc.cloudfront.net");
+});
+
+test("CloudPanel's repositories are recognised on every architecture and Debian release, and the drop-in covers them", () => {
+  for (const [box, { arch, codename, policy }] of Object.entries(CLOUDPANEL_BOXES)) {
+    const distro = { id: "Debian", codename };
+    const sources = parsePolicy(policy);
+    const ours = [...dropInFor({ ...DEFAULT_UPDATE_SETTINGS, enabled: true, panel: true }, "Debian", arch).matchAll(/^\t"(.*)";$/gm)].map((match) => match[1]!);
+    expect([box, covered(coverageOf(sources, [], distro))]).toEqual([box, { "CloudPanel PHP": "none", Nginx: "none", CloudPanel: "none", MySQL: "none" }]);
+    expect([box, covered(coverageOf(sources, ours, distro))]).toEqual([box, { "CloudPanel PHP": "all", Nginx: "all", CloudPanel: "all", MySQL: "none" }]);
+  }
+});
+
+test("the drop-in names only the box's own CloudPanel repository", () => {
+  const x64 = dropInFor(DEFAULT_UPDATE_SETTINGS, "Debian", "x64");
+  expect(x64).toContain('\t"origin=packages-v1.cloudpanel.io,codename=${distro_codename},component=php-*";');
+  expect(x64).toContain('\t"site=d17k9fuiwb52nc.cloudfront.net,codename=${distro_codename},component=php-*";');
+  expect(x64).not.toContain("d2xpdm4jldf31f");
+  const arm64 = dropInFor(DEFAULT_UPDATE_SETTINGS, "Debian", "arm64");
+  expect(arm64).toContain('\t"origin=packages-arm-v1.cloudpanel.io,codename=${distro_codename},component=nginx";');
+  expect(arm64).toContain('\t"site=d2xpdm4jldf31f.cloudfront.net,codename=${distro_codename},component=nginx";');
+  expect(arm64).not.toContain("packages-v1.cloudpanel.io");
+  const other = parsePolicy(` 500 https://example.cloudfront.net trixie/main arm64 Packages
+     release n=trixie,c=main,b=arm64
+     origin example.cloudfront.net
+`);
+  const patterns = [...arm64.matchAll(/^\t"(.*)";$/gm)].map((match) => match[1]!);
+  expect(coverageOf(other, patterns, { id: "Debian", codename: "trixie" })).toEqual([{ name: "example.cloudfront.net trixie", detail: "main", covered: "none" }]);
+});
+
 test("CloudPanel's other repositories get product names and Debian's components keep their own order", () => {
   const source = (component: string, origin = "packages-v1.cloudpanel.io", n = "bookworm") =>
     ({ origin, label: "", archive: "", codename: n, component, site: "" });
@@ -136,7 +186,7 @@ test("CloudPanel's other repositories get product names and Debian's components 
 test("the drop-in adds PHP and Nginx by default, and the database and panel only when asked", () => {
   const patterns = (settings: typeof DEFAULT_UPDATE_SETTINGS) => [
     ...allowedPatterns(parseAptConfig(DEBIAN_STOCK_DUMP)),
-    ...[...dropInFor(settings, "Debian").matchAll(/^\t"(.*)";$/gm)].map((match) => match[1]!),
+    ...[...dropInFor(settings, "Debian", "x64").matchAll(/^\t"(.*)";$/gm)].map((match) => match[1]!),
   ];
   const sources = parsePolicy(DEBIAN_POLICY);
   const defaults = covered(coverageOf(sources, patterns({ ...DEFAULT_UPDATE_SETTINGS, enabled: true }), debian));
@@ -482,6 +532,7 @@ function box(options: {
       paths: { settingsFile, lockFile: join(dir, "lock"), rootUid: uid },
       updates: {
         run,
+        arch: "x64",
         paths: {
           aptConfDir: aptDir, aptConf: join(dir, "apt.conf"), dropIn: join(aptDir, "52clp-addons-unattended-upgrades"),
           systemdDir: updatesSystemdDir,
