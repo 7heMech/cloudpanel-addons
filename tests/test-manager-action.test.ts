@@ -750,6 +750,31 @@ test.skipIf(existsSync(ADDONS["system-tweaks"]!.configFile))("the manager enable
   }
 });
 
+test.skipIf(existsSync(ADDONS.instatic!.configFile))("the manager refuses to enable an addon this server's architecture cannot run", async () => {
+  const dir = mkdtempSync(join(tmpdir(), "manager-arch-"));
+  try {
+    for (const arch of ["arm64", "x64"]) {
+      const replies: any[] = [];
+      let started = false;
+      const result = await createJob("enable", "instatic", {
+        jobsDir: join(dir, arch, "jobs"), lockDir: join(dir, arch, "lock"), emitReply: false, arch,
+        startUnit: () => { started = true; return { ok: true, stdout: "", stderr: "" }; },
+        onReply: (data) => replies.push(data),
+      });
+      if (arch === "arm64") {
+        expect(result).not.toBe(0);
+        expect(started).toBe(false);
+        expect(replies[0].error).toBe("instatic is not available on arm64 servers; it runs on x64 only");
+      } else {
+        expect(replies[0].error).toBeUndefined();
+        expect(started).toBe(true);
+      }
+    }
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
 test("the manager refuses to disable an addon root has locked", async () => {
   const dir = mkdtempSync(join(tmpdir(), "manager-locks-"));
   try {

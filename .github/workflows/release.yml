@@ -22,7 +22,16 @@ permissions: {}
 
 jobs:
   build:
-    runs-on: ubuntu-24.04
+    # aot compiles for the machine the build runs on, so each architecture
+    # builds, and is tested, on a runner of its own.
+    strategy:
+      matrix:
+        include:
+          - arch: x64
+            runner: ubuntu-24.04
+          - arch: arm64
+            runner: ubuntu-24.04-arm
+    runs-on: ${{ matrix.runner }}
     permissions:
       contents: read
     steps:
@@ -47,6 +56,7 @@ jobs:
         run: bun run test
 
       - name: Lint shell scripts
+        if: matrix.arch == 'x64'
         # install.sh is the only shell script left in the repo, and a finding
         # here is a release blocker, not a style note: it is the bootstrap a
         # customer runs via `curl ... | bash` before any binary exists on the
@@ -54,6 +64,7 @@ jobs:
         # in it and that customer's shell.
         # ubuntu-24.04 already includes ShellCheck. Refreshing the entire apt
         # index to reinstall it was consistently the slowest setup operation.
+        # The script is the same on both architectures, so it is linted once.
         run: bun run lint:install
 
       - name: Resolve the version from the tag
@@ -79,17 +90,19 @@ jobs:
         # editing a version number into the README after every tag.
         run: install -m 0755 install.sh dist/install.sh
 
-      - name: Generate SHA256SUMS
+      - name: Generate this architecture's checksums
+        env:
+          ARCH: ${{ matrix.arch }}
         run: |
           set -euo pipefail
           cd dist
-          sha256sum -- * > SHA256SUMS
-          cat SHA256SUMS
+          sha256sum -- * > "SHA256SUMS.$ARCH"
+          cat "SHA256SUMS.$ARCH"
 
       - name: Upload the build for the release job
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
-          name: dist
+          name: dist-${{ matrix.arch }}
           path: dist/
           retention-days: 7
           if-no-files-found: error
@@ -102,11 +115,33 @@ jobs:
       id-token: write      # sign the provenance attestation
       attestations: write  # record it
     steps:
-      - name: Download the build
+      - name: Download the builds
+        # Each lands in builds/dist-<arch>.
         uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
         with:
-          name: dist
-          path: dist
+          pattern: dist-*
+          path: builds
+
+      - name: Merge the builds into one SHA256SUMS
+        # Each build is checked against the checksums its own job wrote, which
+        # catches the artifact round-trip altering a byte. install.sh and
+        # cloudpanel.json come from both builds and must be the same bytes, so
+        # a name that appears with two checksums fails the release.
+        run: |
+          set -euo pipefail
+          for arch in x64 arm64; do
+            (cd "builds/dist-$arch" && sha256sum -c "SHA256SUMS.$arch")
+          done
+          mkdir dist
+          sort -u builds/dist-x64/SHA256SUMS.x64 builds/dist-arm64/SHA256SUMS.arm64 | sort -k2,2 > dist/SHA256SUMS
+          disagree=$(awk '{ print $2 }' dist/SHA256SUMS | uniq -d)
+          if [ -n "$disagree" ]; then
+            echo "::error::the x64 and arm64 builds differ on: $disagree"
+            exit 1
+          fi
+          cp builds/dist-x64/clp-addons-linux-x64 builds/dist-x64/install.sh builds/dist-x64/cloudpanel.json \
+            builds/dist-arm64/clp-addons-linux-arm64 dist/
+          cat dist/SHA256SUMS
 
       - name: Attest build provenance
         id: attest
@@ -114,6 +149,7 @@ jobs:
         with:
           subject-path: |
             dist/clp-addons-linux-x64
+            dist/clp-addons-linux-arm64
             dist/install.sh
             dist/cloudpanel.json
 
@@ -203,6 +239,7 @@ jobs:
             "${notes_args[@]}" \
             "${release_args[@]}" \
             dist/clp-addons-linux-x64 \
+            dist/clp-addons-linux-arm64 \
             dist/install.sh \
             dist/cloudpanel.json \
             dist/attestations.jsonl \

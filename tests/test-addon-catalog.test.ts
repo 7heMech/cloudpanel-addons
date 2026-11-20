@@ -1,10 +1,11 @@
 import { expect, test } from "bun:test";
 import { readFileSync } from "node:fs";
 import { dirname, join } from "node:path";
-import { ADDONS, ADDON_NAMES, addonHandler, templateWatchPaths } from "../addons/catalog";
-import { type AddonSpec } from "../lib/addon-definition";
+import { ADDONS, ADDON_NAMES, addonHandler, offeredAddonNames, templateWatchPaths } from "../addons/catalog";
+import { addonSupportsArch, archRefusal, type AddonSpec } from "../lib/addon-definition";
+import { resolveEnableable } from "../cli/addons";
 import { runNewSiteWork } from "../cli/addon-hooks";
-import { CLI_ARTIFACT } from "../lib/paths";
+import { CLI_ARTIFACT, cliArtifactForArch } from "../lib/paths";
 
 const REPO = join(import.meta.dir, "..");
 
@@ -89,8 +90,33 @@ test("the manager and the auth gateway are not addons", () => {
   expect(manager).toContain(root ? "unknown manager verb" : "'manager' modifies system state");
 });
 
-test("the installer downloads the artifact the updater does", () => {
-  expect(readFileSync(join(REPO, "install.sh"), "utf8")).toContain(`ARTIFACT="${CLI_ARTIFACT}"`);
+test("each release architecture has its own artifact, and the installer downloads the one the updater does", () => {
+  expect(cliArtifactForArch("x64")).toBe("clp-addons-linux-x64");
+  expect(cliArtifactForArch("arm64")).toBe("clp-addons-linux-arm64");
+  expect(() => cliArtifactForArch("ia32")).toThrow("no clp-addons release is built for ia32");
+  expect(CLI_ARTIFACT).toBe(cliArtifactForArch(process.arch));
+  const installer = readFileSync(join(REPO, "install.sh"), "utf8");
+  for (const arch of ["x64", "arm64"]) expect(installer).toContain(`ARTIFACT="${cliArtifactForArch(arch)}"`);
+});
+
+test("Instatic, whose image is amd64 only, is refused and left out on arm64 unless already enabled", () => {
+  const instatic = ADDONS.instatic!;
+  expect(addonSupportsArch(instatic, "x64")).toBe(true);
+  expect(addonSupportsArch(instatic, "arm64")).toBe(false);
+  expect(archRefusal(instatic, "x64")).toBeNull();
+  expect(archRefusal(instatic, "arm64")).toBe("instatic is not available on arm64 servers; it runs on x64 only");
+  expect(ADDON_NAMES.filter((name) => !addonSupportsArch(ADDONS[name]!, "arm64"))).toEqual(["instatic"]);
+
+  expect(resolveEnableable("instatic", "x64").name).toBe("instatic");
+  expect(() => resolveEnableable("instatic", "arm64")).toThrow("instatic is not available on arm64 servers");
+  expect(resolveEnableable("stager", "arm64").name).toBe("stager");
+
+  const off = { ...instatic, configFile: join(REPO, "no-such-config") };
+  const on = { ...instatic, configFile: join(REPO, "package.json") };
+  const stager = { ...ADDONS.stager!, configFile: join(REPO, "no-such-config") };
+  expect(offeredAddonNames("x64", [off, stager])).toEqual(["instatic", "stager"]);
+  expect(offeredAddonNames("arm64", [off, stager])).toEqual(["stager"]);
+  expect(offeredAddonNames("arm64", [on, stager])).toEqual(["instatic", "stager"]);
 });
 
 test("new-site work starts in catalog order and a slow addon only gets a head start", async () => {

@@ -8,9 +8,14 @@ description: >-
 # cannot install a pinned canary. npm versions cannot be republished, and the
 # sha512 below pins the exact tarball besides.
 #
+# The runner's architecture picks the package: @oven/bun-linux-x64 on x86_64,
+# @oven/bun-linux-aarch64 on aarch64.
+#
 # To change Bun: set packageManager in package.json, then set BUN_VERSION here
-# and BUN_INTEGRITY to what npm gives for @oven/bun-linux-x64 at that version,
-# as it prints it (npm view @oven/bun-linux-x64@<version> dist.integrity).
+# and BUN_INTEGRITY_X64 and BUN_INTEGRITY_ARM64 to what npm gives for each
+# package at that version, as it prints them
+# (npm view @oven/bun-linux-x64@<version> dist.integrity, and the same for
+# @oven/bun-linux-aarch64).
 
 runs:
   using: composite
@@ -19,7 +24,8 @@ runs:
       shell: bash
       env:
         BUN_VERSION: 1.4.5-canary.20261119.1
-        BUN_INTEGRITY: sha512-vJbB1ztmmJNeETDB914osXj8hTCv63TRaILXtvFpXV9IQEjdWPYs2UhlHvSCqHtxSxFOJObG1PG+k1UvsDJmUA==
+        BUN_INTEGRITY_X64: sha512-vJbB1ztmmJNeETDB914osXj8hTCv63TRaILXtvFpXV9IQEjdWPYs2UhlHvSCqHtxSxFOJObG1PG+k1UvsDJmUA==
+        BUN_INTEGRITY_ARM64: sha512-+xgoAKU8y30Xjy6119Wgrr5WhfPsl/OY6QLZ/+BtxuBPlN7VZ+WoMbbUaXBKvxsMHrmz8V1hxZ7+MavBxrb5zg==
       run: |
         set -euo pipefail
         pinned="$(jq -r .packageManager package.json)"
@@ -27,14 +33,19 @@ runs:
           echo "::error::package.json pins $pinned, but install-bun has the integrity for bun@$BUN_VERSION"
           exit 1
         fi
+        case "$(uname -m)" in
+          x86_64)        package=bun-linux-x64;     integrity=$BUN_INTEGRITY_X64 ;;
+          aarch64|arm64) package=bun-linux-aarch64; integrity=$BUN_INTEGRITY_ARM64 ;;
+          *) echo "::error::no Bun package is pinned for $(uname -m)"; exit 1 ;;
+        esac
         dir="$RUNNER_TEMP/bun"
         mkdir -p "$dir"
         tarball="$dir/bun.tgz"
         curl -fsSL --retry 3 -o "$tarball" \
-          "https://registry.npmjs.org/@oven/bun-linux-x64/-/bun-linux-x64-$BUN_VERSION.tgz"
+          "https://registry.npmjs.org/@oven/$package/-/$package-$BUN_VERSION.tgz"
         actual="sha512-$(openssl dgst -sha512 -binary "$tarball" | base64 -w0)"
-        if [ "$actual" != "$BUN_INTEGRITY" ]; then
-          echo "::error::bun-linux-x64-$BUN_VERSION.tgz does not match the pinned integrity"
+        if [ "$actual" != "$integrity" ]; then
+          echo "::error::$package-$BUN_VERSION.tgz does not match the pinned integrity"
           exit 1
         fi
         tar -xzf "$tarball" -C "$dir" package/bin/bun

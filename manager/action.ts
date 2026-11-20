@@ -32,6 +32,7 @@ import {
   markJobRunning, pruneJobs, readJobLog, recordQueuedJob, startJobUnit, watchJobRecord,
   type PruneJobsResult,
 } from "../lib/job-store";
+import { archRefusal } from "../lib/addon-definition";
 import { ADDONS, ADDON_NAMES, addonNews, addonNoticeKeys, addonEnabled } from "../addons/catalog";
 import { CLI_VERSION } from "../lib/version";
 import { type OnProgress, Fatal, log, requireRoot } from "../lib/log";
@@ -238,16 +239,17 @@ function enabled(name: string): boolean {
  * by `installedInjections` for the same reason. Taking the installation away
  * altogether is `clp-addons self-uninstall`.
  */
-function rejectImpossible(kind: ManagerJobKind, addon: string, locks?: CreateJobOptions["locks"]): string | null {
+function rejectImpossible(kind: ManagerJobKind, addon: string, options: Pick<CreateJobOptions, "locks" | "arch">): string | null {
   if (kind === "update") return null;
   if (!ADDON_NAMES.includes(addon)) return `unknown addon '${addon}'`;
   if (kind === "disable") {
-    const locked = disableLocked(addon, locks);
+    const locked = disableLocked(addon, options.locks);
     if (locked) return locked;
   }
   const isEnabled = enabled(addon);
   if (kind === "enable" && isEnabled) return `${addon} is already enabled`;
   if (kind === "disable" && !isEnabled) return `${addon} is already disabled`;
+  if (kind === "enable") return archRefusal(ADDONS[addon]!, options.arch);
   return null;
 }
 
@@ -272,6 +274,8 @@ export interface CreateJobOptions {
   onReply?: (res: any) => void;
   /** Tests only: a lock file of their own, owned by them. */
   locks?: { file: string; rootUid: number };
+  /** Tests only: the architecture in place of this box's. */
+  arch?: string;
 }
 
 /**
@@ -299,7 +303,7 @@ export async function createJob(
     return failReply(error, data, emit);
   };
 
-  const refusal = rejectImpossible(kind, addon, options.locks);
+  const refusal = rejectImpossible(kind, addon, options);
   if (refusal) return emitFail(refusal);
 
   const running = activeManagerJob(jobsDir);

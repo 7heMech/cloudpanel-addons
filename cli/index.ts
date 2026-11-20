@@ -1,4 +1,4 @@
-import { dashboardUrl, resolveAddon } from "./addons";
+import { dashboardUrl, resolveAddon, resolveEnableable } from "./addons";
 import { enabledAddons, ADDONS, ADDON_NAMES, addonEnabled } from "../addons/catalog";
 import { panelHolds, reconcileAnchors } from "./reconcile";
 import { cmdMenu } from "./menu";
@@ -126,7 +126,7 @@ async function cmdOverview(): Promise<void> {
 
 function addonArgs(verb: string, argv: string[]) {
   if (argv.length === 0 || argv.some((arg) => arg.startsWith("-"))) fatal(`usage: clp-addons ${verb} <addon>...`);
-  return [...new Set(argv)].map(resolveAddon);
+  return [...new Set(argv)].map((name) => verb === "enable" ? resolveEnableable(name) : resolveAddon(name));
 }
 
 async function main(): Promise<number> {

@@ -20,7 +20,15 @@ import { INSTALL_DEADLINE_MS } from "./limits";
 import { tweak } from "./tweak";
 import type { UploadProgressOptions } from "./upload-progress";
 
-const CLOUDPANEL_ORIGIN = "packages-v1.cloudpanel.io";
+/**
+ * CloudPanel's apt repository for each architecture: the origin its Release
+ * names, and the CDN host that serves it. Debian 13's Release has no Origin,
+ * so there the host is all that tells it apart.
+ */
+const CLOUDPANEL_REPOS: Record<string, { origin: string; site: string }> = {
+  x64: { origin: "packages-v1.cloudpanel.io", site: "d17k9fuiwb52nc.cloudfront.net" },
+  arm64: { origin: "packages-arm-v1.cloudpanel.io", site: "d2xpdm4jldf31f.cloudfront.net" },
+};
 const MARKER = "// Managed by clp-addons System Tweaks. Switching automatic updates off there removes this file.";
 const TIMER_MARKER = "# Managed by clp-addons System Tweaks. Switching automatic updates off there removes this file.";
 const TIMER_DROP_IN_NAME = "52clp-addons.conf";
@@ -101,6 +109,8 @@ const DEFAULT_UPDATES_PATHS: UpdatesPaths = {
 export interface UpdatesOptions {
   paths?: Partial<UpdatesPaths>;
   run?: Run;
+  /** As `process.arch` names it; picks CloudPanel's repository for the drop-in. */
+  arch?: string;
 }
 
 export interface CoverageRow {
@@ -264,8 +274,12 @@ function matchesPattern(pattern: string, source: AptSource, distro: { id: string
   return true;
 }
 
+function fromCloudPanel(source: AptSource): boolean {
+  return Object.values(CLOUDPANEL_REPOS).some((repo) => source.origin === repo.origin || source.site === repo.site);
+}
+
 function sourceName(source: AptSource): { key: string; name: string; detail: string } {
-  if (source.origin === CLOUDPANEL_ORIGIN) {
+  if (fromCloudPanel(source)) {
     const component = source.component;
     if (component.startsWith("php-")) return { key: "cp:php", name: "CloudPanel PHP", detail: "" };
     if (component === "main") return { key: "cp:main", name: "CloudPanel", detail: "main" };
@@ -286,7 +300,7 @@ export function coverageOf(sources: AptSource[], patterns: string[], distro: { i
   const groups = new Map<string, { name: string; detail: string; components: Set<string>; covered: number; total: number }>();
   const seen = new Set<string>();
   for (const source of sources) {
-    const id = `${source.origin}|${source.archive}|${source.codename}|${source.component}|${source.label}`;
+    const id = `${source.origin}|${source.site}|${source.archive}|${source.codename}|${source.component}|${source.label}`;
     if (seen.has(id)) continue;
     seen.add(id);
     const { key, name, detail } = sourceName(source);
@@ -338,15 +352,21 @@ function securityPattern(distroId: string): string | null {
   return null;
 }
 
-export function dropInFor(settings: UpdateSettings, distroId: string): string {
+/**
+ * Each CloudPanel component is matched twice: by origin, and by CDN host for
+ * a Release without one, as on Debian 13.
+ */
+export function dropInFor(settings: UpdateSettings, distroId: string, arch: string = process.arch): string {
   if (!validRebootTime(settings.rebootTime)) failAction(REBOOT_TIME_ERROR);
-  const cloudpanel = (component: string) => `origin=${CLOUDPANEL_ORIGIN},codename=\${distro_codename},component=${component}`;
+  const repo = CLOUDPANEL_REPOS[arch] ?? CLOUDPANEL_REPOS.x64!;
+  const cloudpanel = (component: string) => [`origin=${repo.origin}`, `site=${repo.site}`]
+    .map((match) => `${match},codename=\${distro_codename},component=${component}`);
   const patterns = [
     securityPattern(distroId),
-    cloudpanel("php-*"),
-    ...(settings.nginx ? [cloudpanel("nginx")] : []),
-    ...(settings.database ? ["percona-*", "mysql-*", "mariadb-*"].map(cloudpanel) : []),
-    ...(settings.panel ? [cloudpanel("main")] : []),
+    ...cloudpanel("php-*"),
+    ...(settings.nginx ? cloudpanel("nginx") : []),
+    ...(settings.database ? ["percona-*", "mysql-*", "mariadb-*"].flatMap(cloudpanel) : []),
+    ...(settings.panel ? cloudpanel("main") : []),
   ].filter((pattern): pattern is string => pattern !== null);
   return [
     MARKER,
@@ -560,7 +580,7 @@ export function applyUpdates(settings: UpdateSettings, enabledTimers: string[], 
   const masked = states.find(({ state }) => state === "masked");
   if (masked) failAction(`${masked.timer} is masked; unmask it to use automatic updates`);
 
-  const after = dropInFor(settings, distroOf(ctx).id);
+  const after = dropInFor(settings, distroOf(ctx).id, options.arch);
   let aptWritten = false;
   const writtenTimers: typeof timerBefore = [];
   const restore = () => {

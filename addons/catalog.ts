@@ -1,6 +1,6 @@
 import { existsSync } from "node:fs";
 import { TEMPLATES_DIR, addonConfigFile, addonStateDir } from "../lib/paths";
-import type { AddonDefinition, AddonHandler, AddonNews, AddonSpec } from "../lib/addon-definition";
+import { addonSupportsArch, type AddonDefinition, type AddonHandler, type AddonNews, type AddonSpec } from "../lib/addon-definition";
 import { compareSemver } from "../lib/semver";
 import { CLOUDFLARE_IPS_ADDON } from "./cloudflare-ips/addon";
 import { DNS_ADDON } from "./dns/addon";
@@ -52,6 +52,11 @@ export const ADDON_NAMES: string[] = DEFINITIONS.map((definition) => definition.
 
 export function addonEnabled(spec: AddonSpec): boolean {
   return existsSync(spec.configFile);
+}
+
+/** What can be offered on `arch`: those it supports, and any already enabled, which can still be disabled. */
+export function offeredAddonNames(arch: string = process.arch, specs: AddonSpec[] = ADDON_NAMES.map((name) => ADDONS[name]!)): string[] {
+  return specs.filter((spec) => addonSupportsArch(spec, arch) || addonEnabled(spec)).map((spec) => spec.name);
 }
 
 export function enabledAddons(): AddonSpec[] {
