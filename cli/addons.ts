@@ -3,7 +3,7 @@ import { withFileLockSync } from "../lib/file-lock";
 import { migrateResourceMemory } from "../addons/resource-limits/migration";
 import { LEGACY_PROTOCOLS_FILE, migrateFirewallProtocols } from "../addons/firewall/migration";
 import { ADDONS, ADDON_NAMES, addonEnabled } from "../addons/catalog";
-import { type AddonSpec } from "../lib/addon-definition";
+import { archRefusal, type AddonSpec } from "../lib/addon-definition";
 import { masterVhostHost } from "./inject";
 import { writeConfig } from "./provision";
 import { fatal, log } from "../lib/log";
@@ -12,6 +12,14 @@ export function resolveAddon(name: string | undefined): AddonSpec {
   const key = name ?? "";
   const spec = ADDONS[key];
   if (!spec) fatal(`unknown addon '${key}'. Available: ${ADDON_NAMES.join(", ")}`);
+  return spec;
+}
+
+/** An addon to enable: refused on an architecture it does not support. */
+export function resolveEnableable(name: string | undefined, arch: string = process.arch): AddonSpec {
+  const spec = resolveAddon(name);
+  const refusal = archRefusal(spec, arch);
+  if (refusal) fatal(refusal);
   return spec;
 }
 

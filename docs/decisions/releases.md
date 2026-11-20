@@ -36,8 +36,9 @@ and the pin moves to Bun 1.5.0 when it ships.
 Until then `bun-types` comes from the same canary through `overrides`. GitHub
 keeps only the newest canary, under a tag that moves, so the workflows install
 Bun with `.github/actions/install-bun` instead of `setup-bun`: it downloads
-`@oven/bun-linux-x64` at the pinned version from npm, where a version cannot be
-republished, checks the tarball against the sha512 recorded in the action, and
+`@oven/bun-linux-x64` or `@oven/bun-linux-aarch64`, whichever matches the
+runner, at the pinned version from npm, where a version cannot be republished,
+checks the tarball against the sha512 the action records for that package, and
 fails if `packageManager` names a different version. Installs use the frozen
 `bun.lock`.
 
@@ -46,10 +47,12 @@ Builds compile minified ESM from `tools/build.ts`, ahead of time to machine code
 embedding no function source (`functionSource: false`). The gateway starts a
 fresh `clp-addons action` process for every request, and the compiled binary
 starts in under half the time of a bytecode build at about half its size. An
-`aot` build only targets the platform it runs on, so releases build on x64
-Linux. With no function source, `fn.toString()` returns `[native code]`; script
-a page runs is shipped as its own `.client.js` text rather than read back from a
-server function.
+`aot` build only targets the platform it runs on, so `tools/build.ts` builds for
+the host, and CI and releases build, typecheck and test on an x64 and an arm64
+Linux runner (`ubuntu-24.04` and `ubuntu-24.04-arm`). `tools/deploy-stg.ts`
+refuses to install a build whose architecture is not the box's. With no function
+source, `fn.toString()` returns `[native code]`; script a page runs is shipped
+as its own `.client.js` text rather than read back from a server function.
 
 `bun run typecheck` runs `bun check --project tsconfig.tools.json`, covering
 the CLI, shared libraries, addons, manager, tools, and tests with the existing
@@ -79,9 +82,16 @@ a failure returns a nonzero exit code to CI.
 
 ## Verified artifacts
 
-The tag workflow builds one Linux x86-64 binary and publishes it with the
-installer, SHA-256 sums, and GitHub build provenance. Updates verify the
-checksum and repository-bound attestation before replacing the binary.
+The tag workflow builds a Linux binary for each architecture,
+`clp-addons-linux-x64` and `clp-addons-linux-arm64`, and publishes both with the
+installer, SHA-256 sums, and GitHub build provenance. Each build job checksums
+what it built; the release job checks each build against its own sums, refuses
+the release if the two builds differ on `install.sh` or `cloudpanel.json`, and
+merges them into one `SHA256SUMS` that the attestation covers with every file.
+The installer and the binary each pick the asset for the architecture they run
+on; releases from before arm64 builds have no arm64 asset, so an arm64 box
+cannot install them. Updates verify the checksum and repository-bound
+attestation before replacing the binary.
 `--skip-attestation` is an explicit operator override.
 
 The binary checks provenance itself with Sigstore's `@sigstore/verify`, the
@@ -113,7 +123,7 @@ page that changed
 ([After a CloudPanel upgrade](platform.md#after-a-cloudpanel-upgrade)).
 
 `tools/build.ts` writes the same range to `dist/cloudpanel.json`, which the tag
-workflow publishes beside the binary, lists in `SHA256SUMS` and attests with it.
+workflow publishes beside the binaries, lists in `SHA256SUMS` and attests with it.
 `install` reads the range from the binary itself; `update` reads the asset
 before downloading the binary, so it can warn about the release it is about to
 install rather than the one running. The asset is checksummed when it is read
@@ -126,7 +136,7 @@ cannot run on an older CloudPanel, is a separate change made with that release.
 
 ## Installer
 
-`install.sh` checks the host, downloads the binary from
+`install.sh` checks the host, downloads the binary for its architecture from
 `/releases/latest/download` or the `--version` tag, checks it against
 `SHA256SUMS`, and installs it. It makes no GitHub API call. It then runs
 `clp-addons install --local=DIR` with the addons from `--addons`, if any. With

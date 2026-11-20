@@ -1,19 +1,23 @@
 import { mkdirSync, writeFileSync } from "node:fs";
 import { minifyAssetsPlugin } from "./browser-assets";
 import { CLOUDPANEL_RANGE, CLOUDPANEL_RANGE_ASSET } from "../lib/cloudpanel-version";
+import { CLI_ARTIFACT } from "../lib/paths";
 
-// recon showed avx2 on the target CPU, so the standard glibc x64 target
-// applies, not the baseline. aot compiles for the platform the build runs on,
-// which is why releases build on x64 Linux.
+// aot compiles only for the platform the build runs on, so this builds for the
+// host and releases build each architecture on its own runner. recon showed
+// avx2 on the x64 target CPU, so the standard glibc x64 target applies, not
+// the baseline.
 // VERSION, set by the release workflow, is the version the binary reports.
 
 const version = process.env.VERSION;
+const TARGETS = { x64: "bun-linux-x64", arm64: "bun-linux-arm64" } as const;
+const target = TARGETS[process.arch as keyof typeof TARGETS];
 
 await Bun.build({
   entrypoints: ["cli/index.ts"],
   compile: {
-    target: "bun-linux-x64",
-    outfile: "dist/clp-addons-linux-x64",
+    target,
+    outfile: `dist/${CLI_ARTIFACT}`,
     aot: true,
     trim: true,
     functionSource: false,

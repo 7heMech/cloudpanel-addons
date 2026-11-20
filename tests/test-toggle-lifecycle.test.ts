@@ -144,7 +144,7 @@ const cli = await import("./cli/toggle.ts");
 let error;
 try {
   for (const step of JSON.parse(process.env.CLP_TEST_STEPS)) {
-    if (step.verb === "enable") await cli.applyEnable(step.addon);
+    if (step.verb === "enable") await cli.applyEnable(step.addon, process.env.CLP_TEST_ARCH || undefined);
     else if (step.verb === "disable") cli.applyDisable(step.addon);
     else if (step.verb === "uninstall") (await import("./cli/uninstall.ts")).cmdSelfUninstall(["--yes"]);
     // A between-steps nudge, so a test can spoil a unit file the way something
@@ -202,7 +202,7 @@ type Step =
 
 function toggle(
   steps: Step[],
-  options: { provisioned?: boolean; enabled?: string[]; failing?: string[]; root?: string } = {},
+  options: { provisioned?: boolean; enabled?: string[]; failing?: string[]; root?: string; arch?: string } = {},
 ): Run & { root: string } {
   // A caller may hand back a root a previous toggle left, so a test can spoil
   // what that toggle wrote and watch the next one find it.
@@ -216,6 +216,7 @@ function toggle(
       CLP_TEST_ROOT: root,
       CLP_TEST_STEPS: JSON.stringify(steps),
       CLP_TEST_FAILING: JSON.stringify(options.failing ?? []),
+      CLP_TEST_ARCH: options.arch ?? "",
     },
   });
   if (result.status !== 0) throw new Error(`child failed: ${result.stderr}`);
@@ -346,10 +347,17 @@ test("an addon with panel markup reconciles the anchors once", () => {
 });
 
 test("the Instatic backup cron appears with the addon and goes with it", () => {
-  const on = toggle([{ verb: "enable", addon: "instatic" }]);
+  const on = toggle([{ verb: "enable", addon: "instatic" }], { arch: "x64" });
   expect(on.cron).toBe(true);
-  const off = toggle([{ verb: "disable", addon: "instatic" }], { enabled: ["instatic"] });
+  const off = toggle([{ verb: "disable", addon: "instatic" }], { enabled: ["instatic"], arch: "x64" });
   expect(off.cron).toBe(false);
+});
+
+test("enabling an x64-only addon on arm64 is refused before writing anything", () => {
+  const refused = toggle([{ verb: "enable", addon: "instatic" }], { arch: "arm64" });
+  expect(refused.error).toContain("instatic is not available on arm64 servers");
+  expect(refused.cron).toBe(false);
+  expect(existsSync(join(refused.root, "etc", "instatic.conf"))).toBe(false);
 });
 
 test("only the toggled addon's config file is rewritten", () => {

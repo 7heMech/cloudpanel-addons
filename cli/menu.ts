@@ -1,6 +1,6 @@
 import { errorMessage } from "../lib/errors";
 import { dashboardUrl } from "./addons";
-import { ADDONS, ADDON_NAMES, addonEnabled } from "../addons/catalog";
+import { ADDONS, addonEnabled, offeredAddonNames } from "../addons/catalog";
 import { unitActive } from "../lib/systemd";
 import { MANAGER_UNIT } from "../lib/paths";
 import { CLI_VERSION } from "../lib/version";
@@ -15,6 +15,8 @@ const KEYS = "↑/↓ move · Space toggle · Enter apply · s status · r repai
 const QUIT_KEYS = ["q", "\x1b", "\x03", "\x04"];
 
 interface MenuState {
+  /** The addons this box's architecture can run, and any already enabled. */
+  names: string[];
   cursor: number;
   enabled: Set<string>;
   wanted: Set<string>;
@@ -22,13 +24,13 @@ interface MenuState {
   update: CliUpdateInfo | null;
 }
 
-function readEnabled(): Set<string> {
-  return new Set(ADDON_NAMES.filter((name) => addonEnabled(ADDONS[name]!)));
+function readEnabled(names: string[]): Set<string> {
+  return new Set(names.filter((name) => addonEnabled(ADDONS[name]!)));
 }
 
-function addonRows(cursor: number, wanted: Set<string>, changed: (name: string) => boolean): string[] {
-  const nameWidth = Math.max(...ADDON_NAMES.map((name) => name.length));
-  return ADDON_NAMES.map((name, index) => {
+function addonRows(names: string[], cursor: number, wanted: Set<string>, changed: (name: string) => boolean): string[] {
+  const nameWidth = Math.max(...names.map((name) => name.length));
+  return names.map((name, index) => {
     const on = wanted.has(name);
     const mark = on ? "[x]" : "[ ]";
     const pointer = index === cursor ? paint("36", "›") : " ";
@@ -38,9 +40,9 @@ function addonRows(cursor: number, wanted: Set<string>, changed: (name: string) 
   });
 }
 
-function moved(key: string, cursor: number): number | null {
-  if (key === "\x1b[A" || key === "k") return (cursor + ADDON_NAMES.length - 1) % ADDON_NAMES.length;
-  if (key === "\x1b[B" || key === "j") return (cursor + 1) % ADDON_NAMES.length;
+function moved(key: string, cursor: number, count: number): number | null {
+  if (key === "\x1b[A" || key === "k") return (cursor + count - 1) % count;
+  if (key === "\x1b[B" || key === "j") return (cursor + 1) % count;
   return null;
 }
 
@@ -57,12 +59,12 @@ function frame(state: MenuState): string[] {
     state.update?.hasUpdate ? paint("33", `v${state.update.latest} available`) : "",
   ].filter(Boolean).join("  ");
   const changed = (name: string) => state.wanted.has(name) !== state.enabled.has(name);
-  const pending = ADDON_NAMES.filter(changed).length;
+  const pending = state.names.filter(changed).length;
   return [
     ` ${header}`,
     ` ${paint("2", dashboardUrl())}`,
     "",
-    ...addonRows(state.cursor, state.wanted, changed),
+    ...addonRows(state.names, state.cursor, state.wanted, changed),
     "",
     ` ${paint("2", KEYS)}${pending ? paint("33", `  ·  ${pending} pending`) : ""}`,
   ];
@@ -100,9 +102,10 @@ function screen({ input, output }: Terminal) {
 }
 
 export async function cmdMenu(): Promise<void> {
-  const enabled = readEnabled();
+  const names = offeredAddonNames();
+  const enabled = readEnabled(names);
   const state: MenuState = {
-    cursor: 0, enabled, wanted: new Set(enabled), manager: unitActive(MANAGER_UNIT), update: null,
+    names, cursor: 0, enabled, wanted: new Set(enabled), manager: unitActive(MANAGER_UNIT), update: null,
   };
   const input = process.stdin;
   const out = process.stdout;
@@ -125,7 +128,9 @@ export async function cmdMenu(): Promise<void> {
       log.err(errorMessage(error));
     }
     out.write("\n");
-    state.enabled = readEnabled();
+    state.names = offeredAddonNames();
+    state.cursor = Math.min(state.cursor, Math.max(0, state.names.length - 1));
+    state.enabled = readEnabled(state.names);
     state.wanted = new Set(state.enabled);
     state.manager = unitActive(MANAGER_UNIT);
     busy = false;
@@ -134,10 +139,10 @@ export async function cmdMenu(): Promise<void> {
   };
 
   const apply = () => run(async () => {
-    for (const name of ADDON_NAMES) {
+    for (const name of state.names) {
       if (state.wanted.has(name) && !state.enabled.has(name)) await applyEnable(name);
     }
-    for (const name of ADDON_NAMES) {
+    for (const name of state.names) {
       if (!state.wanted.has(name) && state.enabled.has(name)) applyDisable(name);
     }
   });
@@ -153,14 +158,14 @@ export async function cmdMenu(): Promise<void> {
     const onKey = (chunk: Buffer) => {
       if (busy) return;
       const key = chunk.toString("utf-8");
-      const name = ADDON_NAMES[state.cursor]!;
+      const name = state.names[state.cursor]!;
       switch (key) {
         case "\x1b[A": case "k": case "\x1b[B": case "j":
-          state.cursor = moved(key, state.cursor)!; break;
+          state.cursor = moved(key, state.cursor, state.names.length)!; break;
         case " ":
           toggle(state.wanted, name); break;
         case "\r": case "\n":
-          if (ADDON_NAMES.every((item) => state.wanted.has(item) === state.enabled.has(item))) return;
+          if (state.names.every((item) => state.wanted.has(item) === state.enabled.has(item))) return;
           apply().catch(reject); return;
         case "s":
           run(cmdStatus).catch(reject); return;

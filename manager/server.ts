@@ -4,7 +4,7 @@ import type { Server } from "bun";
 import { chmodSync, chownSync, existsSync, readFileSync, unlinkSync } from "node:fs";
 import { execFileSync } from "node:child_process";
 import { userInfo } from "node:os";
-import { ADDONS, ADDON_NAMES, addonHandler, addonEnabled } from "../addons/catalog";
+import { ADDONS, ADDON_NAMES, addonHandler, addonEnabled, offeredAddonNames } from "../addons/catalog";
 import { MANAGER_UNIT, PANEL_GROUP, SERVICE_USER, SOCKET_PATH } from "../lib/paths";
 import { CLI_VERSION } from "../lib/version";
 import { fatal, log } from "../lib/log";
@@ -101,7 +101,7 @@ export async function handleRequest(req: Request, server: Server<unknown>): Prom
     const enabled = ADDON_NAMES.filter((name) => addonEnabled(ADDONS[name]!));
     const [job, news, holds] = await Promise.all([latestManagerJobView(), seenNews(), panelHolds()]);
     return indexPage(enabled, notice, {
-      available: ADDON_NAMES.filter((name) => !enabled.includes(name)),
+      available: offeredAddonNames().filter((name) => !enabled.includes(name)),
       job,
       holds,
       ...news,

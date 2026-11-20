@@ -119,6 +119,9 @@ export interface ActionNeededCheck {
   check: (options?: Record<string, unknown>) => (ActionNeeded | string)[] | Promise<(ActionNeeded | string)[]>;
 }
 
+/** The architectures a release is built for, as `process.arch` names them. */
+export type AddonArch = "x64" | "arm64";
+
 /** Paths are derived from `name`, not declared. */
 export interface AddonDefinition {
   name: string;
@@ -126,6 +129,8 @@ export interface AddonDefinition {
   description: string;
   /** systemd units this addon cannot work without, such as `docker`. */
   requiresUnits?: string[];
+  /** The only architectures it can be enabled on; every one if unset. */
+  supportedArches?: readonly AddonArch[];
   /** The release it first shipped in, such as `2.0.0-rc.1`; the Addons page marks it New for boxes updated past it. */
   added?: string;
   /** Changes an operator must know about, such as moved settings or new effects on sites, each shown as Changed on the same terms as `added`; not for layout or speed. */
@@ -188,6 +193,16 @@ export interface AddonDefinition {
    * waiting on them starts again in a site the addon has just left.
    */
   withdraw?: (removeConfig: () => void) => void;
+}
+
+export function addonSupportsArch(definition: Pick<AddonDefinition, "supportedArches">, arch: string = process.arch): boolean {
+  return !definition.supportedArches || (definition.supportedArches as readonly string[]).includes(arch);
+}
+
+/** Why it cannot be enabled on `arch`, or null when it can. */
+export function archRefusal(definition: Pick<AddonDefinition, "name" | "supportedArches">, arch: string = process.arch): string | null {
+  if (addonSupportsArch(definition, arch)) return null;
+  return `${definition.name} is not available on ${arch} servers; it runs on ${definition.supportedArches!.join(", ")} only`;
 }
 
 export interface AddonSpec extends AddonDefinition {
