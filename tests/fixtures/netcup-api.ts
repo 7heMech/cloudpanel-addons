@@ -18,6 +18,11 @@ interface FakeServer {
   id: number; name: string; nickname: string | null; mac: string; ip: string | null;
   ipv6: { networkPrefix: string; cidr: string } | null;
   firewall: { copied: number[]; user: number[]; active: boolean };
+  /** Failover IPv4 addresses routed to this interface. */
+  routed: string[];
+  disabled: boolean;
+  /** Answer reads of the server's interfaces with this HTTP status instead. */
+  interfacesStatus: number | null;
 }
 
 export class FakeNetcup {
@@ -27,14 +32,18 @@ export class FakeNetcup {
   userId = 4711;
   /** The customer number, which is the SCP username. */
   username = "123456";
-  /** Whether userinfo carries the `id` claim. */
-  userinfoId = true;
+  /** Whether userinfo carries the `id` claim, or a different id to carry. */
+  userinfoId: boolean | number = true;
   /** The state every task reads as after it started. */
   taskState = "FINISHED";
   /** Answer the device poll with this HTTP status instead. */
   pollStatus: number | null = null;
   /** Answer reads of a server's firewall with this HTTP status instead. */
   firewallReadStatus: number | null = null;
+  /** How many task reads to answer with 503 first. */
+  taskReadFailures = 0;
+  /** Answer firewall writes with 204 and no task. */
+  firewallNoTask = false;
   /** Whether the operator granted access to the pending device code. */
   granted = false;
   /** Refused with `access_denied` instead, as when the operator clicks No. */
@@ -58,7 +67,7 @@ export class FakeNetcup {
   }
 
   server(id: number, name: string, nickname: string | null, mac: string, ip: string | null, ipv6: FakeServer["ipv6"] = null): FakeServer {
-    const server = { id, name, nickname, mac, ip, ipv6, firewall: { copied: [], user: [], active: true } };
+    const server = { id, name, nickname, mac, ip, ipv6, firewall: { copied: [], user: [], active: true }, routed: [], disabled: false, interfacesStatus: null };
     this.servers.push(server);
     const mail = this.policies.find((policy) => policy.name === "netcup Mail block");
     if (mail) server.firewall.copied = [mail.id] as never;
@@ -167,7 +176,8 @@ export class FakeNetcup {
       if (path === "/userinfo" && method === "GET") {
         const auth = (init.headers as Record<string, string>).Authorization?.replace("Bearer ", "") ?? "";
         if (!this.accessTokens.has(auth)) return json({ error: "invalid_token" }, 401);
-        return json({ sub: "f3a1c2d4", ...(this.userinfoId ? { id: String(this.userId) } : {}), preferred_username: this.username });
+        const id = typeof this.userinfoId === "number" ? this.userinfoId : this.userId;
+        return json({ sub: "f3a1c2d4", ...(this.userinfoId ? { id: String(id) } : {}), preferred_username: this.username });
       }
       return oauthError("invalid_request", `no route for ${method} ${path}`);
     }
@@ -181,8 +191,8 @@ export class FakeNetcup {
       const ip = searchParams.get("ip");
       const offset = Number(searchParams.get("offset") ?? 0);
       const limit = Number(searchParams.get("limit") ?? 20);
-      return json(this.servers.filter((server) => !ip || (server.ip?.includes(ip) ?? false)).slice(offset, offset + limit)
-        .map(({ id, name, nickname }) => ({ id, name, nickname, hostname: null, disabled: false, template: null })));
+      return json(this.servers.filter((server) => !ip || [server.ip ?? "", ...server.routed].some((each) => each.includes(ip))).slice(offset, offset + limit)
+        .map(({ id, name, nickname, disabled }) => ({ id, name, nickname, hostname: null, disabled, template: null })));
     }
     if (path === "/tasks" && method === "GET") {
       return json([{ uuid: "task-old", name: "Reset password", state: "FINISHED", executingUser: { id: 17, username: "netcup-support" } }]);
@@ -200,9 +210,13 @@ export class FakeNetcup {
     if (match && method === "GET") {
       const server = this.servers.find((each) => each.id === Number(match![1]));
       if (!server) return notFound("Server");
+      if (server.interfacesStatus) return json({ code: "FORBIDDEN", message: "Access denied." }, server.interfacesStatus);
       return json([{
         mac: server.mac, driver: "virtio", speedInMBits: 2500,
-        ipv4Addresses: server.ip ? [{ id: 1, interfaceMac: server.mac, type: "IP", ip: server.ip, cidr: `${server.ip}/22`, gateway: null, rdns: null, destinationIp: null, editable: false }] : [],
+        ipv4Addresses: [
+          ...server.ip ? [{ id: 1, interfaceMac: server.mac, type: "IP", ip: server.ip, cidr: `${server.ip}/22`, gateway: null, rdns: null, destinationIp: null, editable: false }] : [],
+          ...server.routed.map((ip, i) => ({ id: 10 + i, interfaceMac: server.mac, type: "ROUTED_IP", ip, cidr: `${ip}/32`, gateway: null, rdns: null, destinationIp: server.ip, editable: true })),
+        ],
         ipv6Addresses: server.ipv6 ? [{ id: 2, interfaceMac: server.mac, type: "IP", ...server.ipv6, gateway: "fe80::1", linkLocal: false, rdns: {}, destinationIp: null, editable: false }] : [],
       }]);
     }
@@ -216,7 +230,7 @@ export class FakeNetcup {
         const ids = (list: { id: number }[]) => list.map((item) => item.id);
         if (ids(body.userPolicies).some((id) => !this.policies.some((policy) => policy.id === id))) return json({ code: "NOT_FOUND", message: "Firewall policy not found." }, 404);
         server.firewall = { copied: ids(body.copiedPolicies), user: ids(body.userPolicies), active: body.active ?? true } as never;
-        return json(this.task(), 202);
+        return this.firewallNoTask ? new Response(null, { status: 204 }) : json(this.task(), 202);
       }
     }
     match = /^\/users\/(\d+)\/firewall-policies(?:\/(\d+))?$/.exec(path);
@@ -244,6 +258,7 @@ export class FakeNetcup {
     match = /^\/tasks\/([\w-]+)$/.exec(path);
     if (match && method === "GET") {
       if (!this.tasks.has(match[1]!)) return notFound("Task");
+      if (this.taskReadFailures > 0 && this.taskReadFailures--) return json({ code: "UNAVAILABLE", message: "Service unavailable." }, 503);
       return json({ uuid: match[1], name: "Update firewall", state: this.taskState, message: null, responseError: this.taskState === "ERROR" ? { code: "ERROR", message: "The hypervisor did not answer." } : null });
     }
     return json({ code: "NOT_FOUND", message: `no route for ${method} ${path}` }, 404);

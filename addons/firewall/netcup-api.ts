@@ -45,9 +45,16 @@ export interface NetcupFirewall {
   active: boolean;
 }
 
-export interface NetcupServer { id: number; name: string; nickname?: string | null; hostname?: string | null }
+export interface NetcupServer { id: number; name: string; nickname?: string | null; hostname?: string | null; disabled?: boolean }
 
-export interface NetcupInterface { mac: string; ipv4Addresses?: { ip: string }[]; ipv6Addresses?: { networkPrefix: string; cidr?: string }[] }
+/** `ROUTED_IP` with a `destinationIp` is a failover address routed to the interface. */
+interface Assigned { type?: "IP" | "ROUTED_IP"; destinationIp?: string | null }
+
+export interface NetcupInterface {
+  mac: string;
+  ipv4Addresses?: (Assigned & { ip: string })[];
+  ipv6Addresses?: (Assigned & { networkPrefix: string; cidr?: string })[];
+}
 
 interface UserMinimal { id?: number; username?: string }
 
@@ -79,6 +86,7 @@ export function validRefreshToken(value: unknown): value is string {
 }
 
 const MAC = /^[a-fA-F0-9]{2}(:[a-fA-F0-9]{2}){5}$/;
+const SECRET_FIELDS = new Set(["device_code", "refresh_token", "token"]);
 
 /** netcup's Keycloak: the device sign-in, refreshing, revoking, and who signed in. */
 export class NetcupAuth {
@@ -94,7 +102,7 @@ export class NetcupAuth {
   }
 
   private async form<T>(path: string, fields: Record<string, string>): Promise<T> {
-    this.secrets.push(...Object.entries(fields).filter(([key]) => /token|code/.test(key)).map(([, value]) => value));
+    this.secrets.push(...Object.entries(fields).filter(([key]) => SECRET_FIELDS.has(key)).map(([, value]) => value));
     const { status, json } = await this.http.request(path, "POST", new URLSearchParams({ client_id: CLIENT_ID, ...fields }));
     if (status >= 200 && status < 300) return json as T;
     const body = json as { error?: unknown; error_description?: unknown } | null;
@@ -223,10 +231,10 @@ export class NetcupApi {
 
   /** Replaces the policies on the interface, in order, and waits until netcup applied them. */
   async setFirewall(serverId: number, mac: string, userPolicies: number[], copiedPolicies: number[]): Promise<void> {
-    const task = await this.call<TaskInfo>(`/servers/${serverId}/interfaces/${NetcupApi.mac(mac)}/firewall`, "PUT", {
+    const task = await this.call<TaskInfo | null>(`/servers/${serverId}/interfaces/${NetcupApi.mac(mac)}/firewall`, "PUT", {
       userPolicies: userPolicies.map((id) => ({ id })), copiedPolicies: copiedPolicies.map((id) => ({ id })), active: true,
     });
-    await this.settle(task);
+    if (task?.uuid) await this.settle(task);
   }
 
   /** Every policy in the account. The listing may leave out the rules; `policy` has them. */
@@ -252,19 +260,24 @@ export class NetcupApi {
    * Waits for a task netcup started, up to a minute or the action's deadline.
    * netcup took the change once it answered with the task, so every failure
    * from here is `running` or the state the task ended in, never a refusal.
+   * A failed read of the task is asked again until the wait ends.
    */
   private async settle(started: TaskInfo): Promise<void> {
     let task = started;
+    let unread = "";
     const until = Math.min(this.now() + 60_000, this.options.deadline ?? Infinity);
     while ((task.state === "PENDING" || task.state === "RUNNING") && this.now() < until) {
       await this.sleep(1000);
       try {
         task = await this.call<TaskInfo>(`/tasks/${encodeURIComponent(task.uuid)}`);
+        unread = "";
       } catch (error) {
-        throw new NetcupError(`took the change, but could not be asked whether it finished (${this.clean(errorMessage(error))})`, 0, "running");
+        unread = this.clean(errorMessage(error));
       }
     }
-    if (task.state === "PENDING" || task.state === "RUNNING") throw new NetcupError("took the change and is still applying it", 0, "running");
+    if (task.state === "PENDING" || task.state === "RUNNING") {
+      throw new NetcupError(unread ? `took the change, but could not be asked whether it finished (${unread})` : "took the change and is still applying it", 0, "running");
+    }
     if (task.state !== "FINISHED") {
       throw new NetcupError(this.clean(`took the change, but its task ended in ${task.state}: ${task.responseError?.message || task.message || "no reason given"}`), 0, task.state);
     }

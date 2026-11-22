@@ -566,10 +566,15 @@ realm's discovery document lists and netcup's own tools use, and the scopes
 code in `netcup-device.json`, and returns only the user code and netcup's link
 (checked to be on `www.servercontrolpanel.de`). The page shows them and asks
 the root action, at the interval netcup gives, whether access was granted;
-`slow_down` widens the interval; `access_denied`, `expired_token` or
-`invalid_grant` ends the attempt, and any other failure leaves the code for
-the page to ask again until it expires. Only the refresh token is kept, in `netcup-token.json` through
-`lib/root-state.ts`. Each read or change exchanges it for an access token
+`slow_down` widens the interval; `access_denied`, `expired_token`,
+`invalid_grant`, `invalid_client`, `unauthorized_client` or `invalid_request`
+ends the attempt, and any other failure leaves the code for the page to ask
+again until it expires. Once access is granted, the poll looks for this server
+for up to two minutes and takes the netcup lock for at most five seconds, so
+it answers within the gateway's 240 seconds; any failure before the new
+refresh token is saved revokes it. A sign-in already saved stays when the new
+account has no server matching this one, and the new one is revoked. Only the
+refresh token is kept, in `netcup-token.json` through `lib/root-state.ts`. Each read or change exchanges it for an access token
 under its own lock, and saves the token Keycloak returns before using the
 access token, since Keycloak may rotate it on each use and two processes must
 never spend the same one. `invalid_grant`, or a 401 from the API, is a sign-in
@@ -577,44 +582,58 @@ netcup no longer accepts, and the card asks to connect again. Disconnecting
 revokes the refresh token at the realm's revocation endpoint and removes it,
 both under the token's lock, so a refresh running then cannot write a rotated
 token back. It is refused while a Cloudflare policy is on this server, as with
-Hetzner's token, and while netcup cannot be read for any reason but refusing
-the sign-in, since a policy left on the server would stop following
-Cloudflare's list unseen. Messages are redacted of every token and code.
+Hetzner's token, unless netcup's firewall is off (the switches refuse then, so
+the notice names the policy left behind instead), and while netcup cannot be
+read for any reason but refusing the sign-in, since a policy left on the
+server would stop following Cloudflare's list unseen. Messages are redacted of
+every token and code.
 
 The policy endpoints are under `/users/<id>`, the SCP user id, which is not the
 customer number (the SCP username, userinfo's `preferred_username`). It is
 userinfo's `id` claim when present; the discovery document does not list one,
 so otherwise it is a user that `GET /tasks` or this server's
-`GET /servers/<id>/logs` names under that username and `GET /users/<id>`
-answers for. It is kept in `netcup.json`.
+`GET /servers/<id>/logs` names under that username. Either is used only when
+`GET /users/<id>` answers for it with that username. It is kept in
+`netcup.json`.
 
 ### This server
 
 netcup has no metadata service. The card shows when
 `/sys/class/dmi/id/sys_vendor` names netcup, or a sign-in is saved. The server
 is found by what its interfaces carry (netcup routes addresses to the server
-without NAT): the public IPv4 addresses, the global IPv6 ones and the MACs. An
-SCP interface matches by MAC, by listing one of the IPv4 addresses, or by an
-IPv6 prefix (`networkPrefix`/`cidr`) holding one of the IPv6 addresses, since
-SCP lists IPv6 only as prefixes. `GET /servers?ip=<address>` is tried first,
-for each address; the spec does not say it takes IPv6, so with no match every
-server's interfaces are checked, paging through `GET /servers`. An IPv6-only
-server is found that way. Its id, MAC and name are kept in `netcup.json`,
+without NAT): the public IPv4 addresses, the global IPv6 ones and the MACs. A
+server whose interface has one of the MACs is this one. Only when no server
+has one does an address decide: an interface listing one of the IPv4
+addresses, or an IPv6 prefix (`networkPrefix`/`cidr`, a /64 or longer)
+holding one of the IPv6 addresses, since SCP lists IPv6 only as prefixes.
+Failover addresses (`ROUTED_IP`, or with a `destinationIp`) never decide: one
+may have moved to another server while still configured here. Servers from
+`GET /servers?ip=<address>` are looked at first; the spec does not say it
+takes IPv6, so then every server's interfaces are, paging through
+`GET /servers`. An IPv6-only server is found that way. Disabled servers are
+skipped, and a server whose interfaces answer 4xx (other than 401) is not this
+one. The page stops looking after 30 seconds, so the Firewall page answers
+within the gateway's 60. Its id, MAC and name are kept in `netcup.json`,
 written under the netcup lock (a read that finds it busy leaves it to the
 change holding it); when netcup answers 404 for the kept interface, the server
-is looked up again once. No match is shown on the
-card with the addresses it looked for. A server whose firewall is not set up
-in SCP answers 404 and the card says to configure it; a firewall that is off
-makes the switches refuse, since turning it on would also start netcup's
+is looked up again once. No match is kept for 15 minutes before the account is
+searched again, and shown on the card with the addresses it looked for. A
+server whose firewall is not set up in SCP answers 404 and the card says to
+configure it. Either way netcup answered, so the card and repair record the
+switches as off, and Setup does not ask to connect again. A firewall that is
+off makes the switches refuse, since turning it on would also start netcup's
 default policies.
 
 ### Policies
 
 The four policies carry the Hetzner firewalls' names and rules: one inbound
 TCP accept rule per port and address family, sources in canonical form, a
-fixed description. Each also accepts inbound ICMPv6 from anyone: any of them
-makes netcup drop by default, and without neighbour discovery, router
-advertisements and Packet Too Big a server with only IPv6 would be cut off. netcup has no labels, so a policy is the addon's when it
+fixed description. Each also accepts inbound ICMP and ICMPv6 from anyone: any
+of them makes netcup drop by default, and without neighbour discovery, router
+advertisements and Packet Too Big a server with only IPv6 would be cut off;
+ICMP keeps path MTU discovery working over IPv4. A rule limited to
+destinations that hold none of this server's addresses does not count when the
+review reads what the operator's policies let in. netcup has no labels, so a policy is the addon's when it
 has one of the names and its description starts with `Managed by clp-addons`;
 a policy with the name and not that refuses the switch. The writer's list time
 is the end of the description (`; Cloudflare's list of <time>`), read like
@@ -633,16 +652,18 @@ That write replaces the assignment at once, so nothing opens or closes in
 between and a refused write (4xx) changes nothing; a policy created for it
 stays unused. Writes answer with a task, which the addon waits for, up to a
 minute each and three minutes across a switch, with at most a minute for the
-lock, so the page has its answer within the gateway's 240 seconds. netcup took
-a change it answered with a task: one still running when the wait ends is
+lock, so the page has its answer within the gateway's 240 seconds. A failed
+read of the task is asked again until the wait ends. netcup took a change it
+answered with a task, or with no task at all: one still running when the wait
+ends is
 reported as taken and still applying, and one that ends in `ERROR`,
 `ROLLBACK` or `CANCELED` as failed, with SCP named for what the server has.
 Any other failure of the assignment write says netcup may have taken it.
 Policies are never deleted: the spec does not say what deleting one in use
 does to the servers that have it. Repair rewrites drifted policies, takes an
 open policy off beside its role's Cloudflare one, and records the switches.
-The 500-rule limit per interface is netcup's to refuse; the addon's four
-policies on one server hold at most 68 effective rules.
+The 500-rule limit per interface is netcup's to refuse; at most two of the
+addon's policies are on a server at once, holding at most 70 effective rules.
 
 ## Taking over from earlier releases
 

@@ -137,7 +137,8 @@ sign-in: sign in with the customer number of the account that holds this
 server, check that netcup shows the same code, and grant access. The card
 finds this server in the account by its public addresses (IPv4 or IPv6) or its
 network card, and says so when no server there has it. **Connect again** and **Disconnect** are on the card;
-Disconnect also asks netcup to revoke the sign-in.
+Disconnect also asks netcup to revoke the sign-in. Connecting again with an
+account that does not hold this server keeps the current sign-in.
 
 The firewall must be set up and on for the server in SCP (**Firewall →
 Configure**). The switches work as on Hetzner, with policies named
@@ -147,8 +148,8 @@ policies on the server. Once any policy has an inbound rule, netcup drops what
 no policy allows, and the review lists what closes. netcup tracks only TCP, so
 replies to the server's own UDP traffic (NTP, and DNS to resolvers other than
 netcup's) stop arriving too unless one of your policies allows them, such as an
-inbound UDP rule from source port 123. The addon's policies also accept
-ICMPv6 from anyone, which IPv6 needs. With SSH closed, SCP's console still
+inbound UDP rule from source port 123. The addon's policies also accept ICMP
+and ICMPv6 from anyone, which IPv6 and path MTU discovery need. With SSH closed, SCP's console still
 gives a root shell.
 
 Policies are shared by the servers of one account and are never deleted.
