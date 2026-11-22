@@ -27,6 +27,7 @@ export const WP_TOOLS_ADDON: AddonDefinition = {
   name: "wp-tools",
   title: "WordPress Tools",
   description: "One-click WordPress sign-in, plugins chosen while creating a site, and optional automatic installation of CLP Varnish Cache and MainWP Child on eligible sites.",
+  docs: "docs/wordpress-tools.md",
   changed: [
     { in: "2.2.0-rc.3", note: "The New WordPress Site form starts with default plugins: the server's, set on the New sites tab of WordPress Tools, or an account's own, saved from the form by an administrator or, while allowed, a site manager." },
     { in: "2.2.0-rc.3", note: "Sites get one must-use plugin, Hosting Tools (hosting-tools.php), in place of clp-addons-login.php and clp-addons-mainwp.php. MainWP passes replace the old guard; an existing site's old sign-in stays until its next sign-in, or use Remove under the sites table to clear it everywhere now." },

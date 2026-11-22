@@ -324,7 +324,7 @@ administrator, and `clp`'s own `NOPASSWD: ALL`.
 
 **CloudPanel telemetry.** `clp-agent` sends CloudPanel every site's domain and
 every panel user's name and email once a day, with no opt-out. The setting
-denies the agent every address but the server's own, so it keeps drawing the
+denies the agent every address but loopback, so it keeps drawing the
 dashboard's graphs and sends nothing.
 [Guide](docs/system-tweaks.md#cloudpanel-telemetry)
 

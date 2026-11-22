@@ -20,6 +20,7 @@ export const INSTATIC_ADDON: AddonDefinition = {
   name: "instatic",
   title: "Instatic CMS",
   description: "Instant static site hosting and staging on CloudPanel.",
+  docs: "https://github.com/CoreBunch/Instatic",
   changed: [
     { in: "2.2.0-rc.3", note: "Instatic sites send email through the server's Postfix, and so through SMTP Relay. A site whose Instatic has email and no mail setup of its own gets an SMTP connector for it, sending as noreply@ its domain, when it is next created, updated or recreated." },
   ],

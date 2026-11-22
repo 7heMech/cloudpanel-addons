@@ -18,6 +18,7 @@ export const RESOURCE_LIMITS_ADDON: AddonDefinition = {
   name: "resource-limits",
   title: "Resource Limits",
   description: "PHP worker limits and a shared memory budget for PHP, MySQL and Redis.",
+  docs: "docs/resource-limits.md",
   changed: [
     { in: "2.2.0-rc.3", note: "Resource Limits now splits into Sites, Categories and Memory tabs." },
     { in: "2.1.0-rc.5", note: "Pending MySQL sizes show Restart MySQL; any administrator can restart it for every site." },
