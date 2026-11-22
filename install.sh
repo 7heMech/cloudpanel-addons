@@ -53,13 +53,23 @@ ok "dependencies available"
 
 IFS=',' read -r -a ADDON_LIST <<< "$SELECTED"
 
-# /releases/latest is the newest release that is not a prerelease. A
+# The mirror at cp.7he.dev first: IPv6-only servers reach it, and github.com has
+# no IPv6. "latest" is the newest release that is not a prerelease, on both. A
 # prerelease tag carries a hyphen, so --version refuses one too.
+MIRROR="https://cp.7he.dev"
+GITHUB="https://github.com/${REPO}/releases"
+TAG="$VERSION"
+SOURCES=()
 if [[ $VERSION == "latest" ]]; then
-  BASE="https://github.com/${REPO}/releases/latest/download"
+  mirrored=$(curl -fsS --max-time 20 "${MIRROR}/latest" 2>/dev/null || true)
+  if [[ $mirrored =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+    TAG="$mirrored"
+    SOURCES+=("${MIRROR}/releases/${mirrored}")
+  fi
+  SOURCES+=("${GITHUB}/latest/download")
 else
   [[ $VERSION =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]] || die "not a stable release tag: $VERSION"
-  BASE="https://github.com/${REPO}/releases/download/${VERSION}"
+  SOURCES+=("${MIRROR}/releases/${VERSION}" "${GITHUB}/download/${VERSION}")
 fi
 
 TMP=$(mktemp -d)
@@ -69,12 +79,22 @@ trap cleanup EXIT
 # The checksum catches a broken download. Provenance protects updates, which
 # the installed binary verifies; it cannot protect this one, because a
 # substituted binary would come with a substituted install.sh.
-step "downloading clp-addons ${VERSION}"
-curl -fsSL -o "${TMP}/SHA256SUMS" "${BASE}/SHA256SUMS" || die "download failed: SHA256SUMS"
-curl -fSL --progress-bar -o "${TMP}/${ARTIFACT}" "${BASE}/${ARTIFACT}" || die "download failed: ${ARTIFACT}"
-expected=$(awk -v f="$ARTIFACT" '$2 == f || $2 == "*" f { print $1 }' "${TMP}/SHA256SUMS" | head -1)
-[[ -n $expected ]] || die "SHA256SUMS does not list ${ARTIFACT}"
-[[ $(sha256sum "${TMP}/${ARTIFACT}" | awk '{print $1}') == "$expected" ]] || die "checksum mismatch for ${ARTIFACT}"
+fetch_from() {
+  local base=$1 expected
+  curl -fsSL -o "${TMP}/SHA256SUMS" "${base}/SHA256SUMS" || return 1
+  curl -fSL --progress-bar -o "${TMP}/${ARTIFACT}" "${base}/${ARTIFACT}" || return 1
+  expected=$(awk -v f="$ARTIFACT" '$2 == f || $2 == "*" f { print $1 }' "${TMP}/SHA256SUMS" | head -1)
+  [[ -n $expected ]] || { warn "SHA256SUMS does not list ${ARTIFACT}"; return 1; }
+  [[ $(sha256sum "${TMP}/${ARTIFACT}" | awk '{print $1}') == "$expected" ]] || { warn "checksum mismatch for ${ARTIFACT}"; return 1; }
+}
+
+step "downloading clp-addons ${TAG}"
+fetched=""
+for base in "${SOURCES[@]}"; do
+  if fetch_from "$base"; then fetched="$base"; break; fi
+  warn "could not download from ${base%%/releases*}"
+done
+[[ -n $fetched ]] || die "download failed: ${ARTIFACT}"
 ok "checksum verified"
 
 install -o root -g root -m 0755 "${TMP}/${ARTIFACT}" "$CLI_TARGET"

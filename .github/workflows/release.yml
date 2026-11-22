@@ -244,3 +244,59 @@ jobs:
             dist/cloudpanel.json \
             dist/attestations.jsonl \
             dist/SHA256SUMS
+
+  mirror:
+    # A copy of the published release in R2 at cp.7he.dev, which IPv6-only
+    # servers reach; github.com has no IPv6. It downloads what GitHub now
+    # serves, so the mirror holds the published bytes, and runs apart from the
+    # release job so the R2 token never shares a job with id-token: write.
+    # Skipped, with a warning, until the release-mirror environment has the R2
+    # secrets. A failure leaves the GitHub release as it is.
+    needs: release
+    runs-on: ubuntu-24.04
+    environment: release-mirror
+    concurrency:
+      group: release-mirror
+      cancel-in-progress: false
+    permissions:
+      contents: read
+    steps:
+      - name: Check for the R2 secrets
+        id: secrets
+        env:
+          R2_ACCESS_KEY_ID: ${{ secrets.R2_ACCESS_KEY_ID }}
+        run: |
+          if [ -n "$R2_ACCESS_KEY_ID" ]; then
+            echo "set=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "::warning::the release-mirror environment has no R2 secrets; the release is on GitHub only"
+          fi
+
+      - name: Check out the tag
+        if: steps.secrets.outputs.set == 'true'
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Install Bun
+        if: steps.secrets.outputs.set == 'true'
+        uses: ./.github/actions/install-bun
+
+      - name: Download the published release
+        if: steps.secrets.outputs.set == 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ github.ref_name }}
+        run: |
+          gh release download "$TAG" --repo "$GITHUB_REPOSITORY" --dir "$RUNNER_TEMP/release"
+          (cd "$RUNNER_TEMP/release" && sha256sum -c SHA256SUMS)
+
+      - name: Copy it to R2
+        if: steps.secrets.outputs.set == 'true'
+        env:
+          TAG: ${{ github.ref_name }}
+          R2_ENDPOINT: ${{ secrets.R2_ENDPOINT }}
+          R2_BUCKET: ${{ secrets.R2_BUCKET }}
+          R2_ACCESS_KEY_ID: ${{ secrets.R2_ACCESS_KEY_ID }}
+          R2_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
+        run: bun tools/mirror-release.ts "$TAG" "$RUNNER_TEMP/release"

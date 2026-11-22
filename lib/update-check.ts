@@ -3,6 +3,7 @@
 
 import { DEV_VERSION } from "./version";
 import { compareSemver, isPrerelease, newestRelease } from "./semver";
+import { fetchMirrorReleases } from "./release-mirror";
 
 export interface CliUpdateInfo {
   current: string;
@@ -33,18 +34,11 @@ async function fetchLatestRelease(
   try {
     // "latest" is never a pre-release, so a box running one reads the list.
     const prerelease = isPrerelease(currentVersion);
-    const res = await fetch(`https://api.github.com/repos/${repo}/releases${prerelease ? "?per_page=100" : "/latest"}`, {
-      headers: {
-        Accept: "application/vnd.github+json",
-        "User-Agent": "clp-addons",
-      },
-      signal: AbortSignal.timeout(timeoutMs),
-    });
-
-    const data: unknown = res.ok ? await res.json() : null;
-    const tag = prerelease
-      ? newestRelease(Array.isArray(data) ? data as { tag_name: string; draft: boolean }[] : [])?.tag_name
-      : (data as { tag_name?: string } | null)?.tag_name;
+    // Only this repository is mirrored; the mirror is the one IPv6-only boxes reach.
+    const mirrored = repo === DEFAULT_REPO ? await fetchMirrorReleases(timeoutMs) : null;
+    const tag = mirrored
+      ? newestRelease(prerelease ? mirrored : mirrored.filter((release) => !release.prerelease))?.tag_name
+      : await githubTag(repo, prerelease, timeoutMs);
     const remoteTag = (tag ?? "").replace(/^v/, "");
     if (remoteTag) {
       info = {
@@ -58,6 +52,21 @@ async function fetchLatestRelease(
   }
   if (started === generation) cachedUpdate = { at: Date.now(), info };
   return info;
+}
+
+async function githubTag(repo: string, prerelease: boolean, timeoutMs: number): Promise<string | undefined> {
+  const res = await fetch(`https://api.github.com/repos/${repo}/releases${prerelease ? "?per_page=100" : "/latest"}`, {
+    headers: {
+      Accept: "application/vnd.github+json",
+      "User-Agent": "clp-addons",
+    },
+    signal: AbortSignal.timeout(timeoutMs),
+  });
+
+  const data: unknown = res.ok ? await res.json() : null;
+  return prerelease
+    ? newestRelease(Array.isArray(data) ? data as { tag_name: string; draft: boolean }[] : [])?.tag_name
+    : (data as { tag_name?: string } | null)?.tag_name;
 }
 
 export async function checkCliUpdate(
