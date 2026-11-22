@@ -34,11 +34,13 @@ async function fetchLatestRelease(
   try {
     // "latest" is never a pre-release, so a box running one reads the list.
     const prerelease = isPrerelease(currentVersion);
-    // Only this repository is mirrored; the mirror is the one IPv6-only boxes reach.
-    const mirrored = repo === DEFAULT_REPO ? await fetchMirrorReleases(timeoutMs) : null;
-    const tag = mirrored
-      ? newestRelease(prerelease ? mirrored : mirrored.filter((release) => !release.prerelease))?.tag_name
-      : await githubTag(repo, prerelease, timeoutMs);
+    // GitHub first; the mirror, which only holds this repository, when GitHub
+    // cannot answer, as from an IPv6-only server.
+    let tag = await githubTag(repo, prerelease, timeoutMs);
+    if (tag === null && repo === DEFAULT_REPO) {
+      const mirrored = await fetchMirrorReleases(timeoutMs);
+      tag = mirrored && newestRelease(prerelease ? mirrored : mirrored.filter((release) => !release.prerelease))?.tag_name;
+    }
     const remoteTag = (tag ?? "").replace(/^v/, "");
     if (remoteTag) {
       info = {
@@ -54,16 +56,17 @@ async function fetchLatestRelease(
   return info;
 }
 
-async function githubTag(repo: string, prerelease: boolean, timeoutMs: number): Promise<string | undefined> {
+/** null when GitHub cannot answer. */
+async function githubTag(repo: string, prerelease: boolean, timeoutMs: number): Promise<string | null | undefined> {
   const res = await fetch(`https://api.github.com/repos/${repo}/releases${prerelease ? "?per_page=100" : "/latest"}`, {
     headers: {
       Accept: "application/vnd.github+json",
       "User-Agent": "clp-addons",
     },
     signal: AbortSignal.timeout(timeoutMs),
-  });
-
-  const data: unknown = res.ok ? await res.json() : null;
+  }).catch(() => null);
+  if (!res?.ok) return null;
+  const data: unknown = await res.json();
   return prerelease
     ? newestRelease(Array.isArray(data) ? data as { tag_name: string; draft: boolean }[] : [])?.tag_name
     : (data as { tag_name?: string } | null)?.tag_name;

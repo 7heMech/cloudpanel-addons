@@ -54,55 +54,65 @@ describe("resolveRelease", () => {
     tag_name: tag, draft: false, prerelease: false,
     assets: [{ name: "SHA256SUMS", browser_download_url: `https://github.com/x/releases/download/${tag}/SHA256SUMS` }],
   });
-  const github = (asked: string[]) => (async (url: string) => {
+  const github = (asked: string[], status = 200) => (async (url: string) => {
     asked.push(url);
-    return Response.json(githubRelease(url.endsWith("/latest") ? "v2.0.0" : url.split("/").at(-1)!));
+    if (status === 0) throw new TypeError("Network is unreachable");
+    return status === 200 ? Response.json(githubRelease(url.endsWith("/latest") ? "v2.0.0" : url.split("/").at(-1)!)) : new Response("", { status });
   }) as unknown as typeof fetch;
+  const mirror = (asked: string[]) => async () => { asked.push("mirror"); return indexOf("v2.1.0", "v2.2.0-rc.1"); };
 
-  test("reads the mirror and asks GitHub nothing", async () => {
+  test("asks GitHub first and leaves the mirror alone", async () => {
     const asked: string[] = [];
     globalThis.fetch = github(asked);
-    const release = await resolveRelease(undefined, false, async () => indexOf("v2.1.0", "v2.2.0-rc.1"));
-    expect(release.tag).toBe("v2.1.0");
-    expect(release.assets.get("SHA256SUMS")).toBe(`${MIRROR_URL}/releases/v2.1.0/SHA256SUMS`);
-    expect(asked).toEqual([]);
-    expect((await resolveRelease(undefined, true, async () => indexOf("v2.1.0", "v2.2.0-rc.1"))).tag).toBe("v2.2.0-rc.1");
-  });
-
-  test("asks GitHub when the mirror cannot be read", async () => {
-    const asked: string[] = [];
-    globalThis.fetch = github(asked);
-    expect((await resolveRelease(undefined, false, async () => null)).tag).toBe("v2.0.0");
-    expect(asked).toHaveLength(1);
-  });
-
-  test("asks GitHub for a tag the mirror no longer keeps", async () => {
-    const asked: string[] = [];
-    globalThis.fetch = github(asked);
-    const release = await resolveRelease("v1.0.0", false, async () => indexOf("v2.1.0"));
-    expect(release.tag).toBe("v1.0.0");
+    const release = await resolveRelease(undefined, false, mirror(asked));
+    expect(release.tag).toBe("v2.0.0");
     expect(release.assets.get("SHA256SUMS")).toStartWith("https://github.com/");
+    expect(asked).toEqual(["https://api.github.com/repos/7heMech/cloudpanel-addons/releases/latest"]);
+  });
+
+  for (const [why, status] of [["unreachable", 0], ["rate limited", 403], ["failing", 502]] as const) {
+    test(`reads the mirror when GitHub is ${why}`, async () => {
+      const asked: string[] = [];
+      globalThis.fetch = github(asked, status);
+      const release = await resolveRelease(undefined, false, mirror(asked));
+      expect(release.tag).toBe("v2.1.0");
+      expect(release.assets.get("SHA256SUMS")).toBe(`${MIRROR_URL}/releases/v2.1.0/SHA256SUMS`);
+      expect(asked.at(-1)).toBe("mirror");
+    });
+  }
+
+  test("a pre-release box gets the newest pre-release from the mirror", async () => {
+    globalThis.fetch = github([], 0);
+    expect((await resolveRelease(undefined, true, mirror([]))).tag).toBe("v2.2.0-rc.1");
   });
 });
 
 describe("checkCliUpdate", () => {
-  test("reads the mirror for this repository", async () => {
+  test("asks GitHub first", async () => {
     const asked: string[] = [];
     globalThis.fetch = (async (url: string) => {
       asked.push(url);
+      return Response.json({ tag_name: "v2.1.0" });
+    }) as unknown as typeof fetch;
+    expect(await checkCliUpdate("2.0.0")).toEqual({ current: "2.0.0", latest: "2.1.0", hasUpdate: true });
+    expect(asked).toEqual(["https://api.github.com/repos/7heMech/cloudpanel-addons/releases/latest"]);
+  });
+
+  test("reads the mirror when GitHub cannot be reached", async () => {
+    const asked: string[] = [];
+    globalThis.fetch = (async (url: string) => {
+      asked.push(url);
+      if (!url.startsWith(MIRROR_URL)) throw new TypeError("Network is unreachable");
       return Response.json(indexOf("v2.1.0", "v2.2.0-rc.1"));
     }) as unknown as typeof fetch;
     expect(await checkCliUpdate("2.0.0")).toEqual({ current: "2.0.0", latest: "2.1.0", hasUpdate: true });
-    expect(asked).toEqual([`${MIRROR_URL}/releases.json`]);
+    expect(asked).toEqual(["https://api.github.com/repos/7heMech/cloudpanel-addons/releases/latest", `${MIRROR_URL}/releases.json`]);
   });
 
-  test("falls back to GitHub when the mirror fails", async () => {
+  test("another repository never reads the mirror", async () => {
     const asked: string[] = [];
-    globalThis.fetch = (async (url: string) => {
-      asked.push(url);
-      return url.startsWith(MIRROR_URL) ? new Response("", { status: 503 }) : Response.json({ tag_name: "v2.1.0" });
-    }) as unknown as typeof fetch;
-    expect(await checkCliUpdate("2.0.0")).toEqual({ current: "2.0.0", latest: "2.1.0", hasUpdate: true });
-    expect(asked).toEqual([`${MIRROR_URL}/releases.json`, "https://api.github.com/repos/7heMech/cloudpanel-addons/releases/latest"]);
+    globalThis.fetch = (async (url: string) => { asked.push(url); return new Response("", { status: 503 }); }) as unknown as typeof fetch;
+    expect(await checkCliUpdate("2.0.0", "owner/repo")).toBeNull();
+    expect(asked).toEqual(["https://api.github.com/repos/owner/repo/releases/latest"]);
   });
 });

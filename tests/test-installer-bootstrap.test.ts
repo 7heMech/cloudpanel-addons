@@ -7,7 +7,7 @@ import { join } from "node:path";
 const ARTIFACTS = ["clp-addons-linux-x64", "clp-addons-linux-arm64"];
 
 function bootstrap(
-  version: string, checksum: "good" | "bad" = "good", addons = "instatic stager", machine = "x86_64", mirror: "up" | "down" = "down",
+  version: string, checksum: "good" | "bad" = "good", addons = "instatic stager", machine = "x86_64", mirror: "up" | "down" = "down", github: "up" | "down" = "up",
 ): { status: number | null; events: string[]; output: string } {
   const root = mkdtempSync(`${tmpdir()}/installer-bootstrap-test-`);
   try {
@@ -55,6 +55,7 @@ curl() {
   done
   printf 'get:%s\\n' "$url" >> "$BOOTSTRAP_LOG"
   [[ $url != https://cp.7he.dev/* || $TEST_MIRROR == up ]] || return 22
+  [[ $url != https://github.com/* || $TEST_GITHUB == up ]] || return 7
   if [[ -n $output ]]; then command cp "$TEST_ROOT/fixtures/\${url##*/}" "$output"; else command cat "$TEST_ROOT/fixtures/\${url##*/}"; fi
 }
 install() {
@@ -72,7 +73,7 @@ install() {
     writeFileSync(script, harness);
     const log = join(root, "events");
     const result = spawnSync("/bin/bash", [script], {
-      env: { PATH: bin, TEST_ROOT: root, BOOTSTRAP_LOG: log, TEST_MACHINE: machine, TEST_MIRROR: mirror },
+      env: { PATH: bin, TEST_ROOT: root, BOOTSTRAP_LOG: log, TEST_MACHINE: machine, TEST_MIRROR: mirror, TEST_GITHUB: github },
       encoding: "utf8",
       timeout: 10_000,
     });
@@ -87,31 +88,33 @@ const GITHUB = "https://github.com/7heMech/cloudpanel-addons/releases";
 const MIRROR = "https://cp.7he.dev";
 const install = (events: string[]) => events.filter((event) => event.startsWith("clp:"));
 
-test("the latest release comes from the mirror, is checked and handed every addon in one call", () => {
+test("the latest release comes from GitHub, is checked and handed every addon in one call", () => {
   const result = bootstrap("latest", "good", "instatic stager", "x86_64", "up");
   expect(result.status, result.output).toBe(0);
-  const base = `${MIRROR}/releases/v1.2.3`;
-  expect(result.events.slice(0, 3)).toEqual([`get:${MIRROR}/latest`, `get:${base}/SHA256SUMS`, `get:${base}/clp-addons-linux-x64`]);
+  const base = `${GITHUB}/latest/download`;
+  expect(result.events.slice(0, 2)).toEqual([`get:${base}/SHA256SUMS`, `get:${base}/clp-addons-linux-x64`]);
   expect(install(result.events)).toHaveLength(1);
   expect(install(result.events)[0]).toStartWith("clp:install instatic stager --local=");
 });
 
-test("GitHub serves the latest release when the mirror cannot", () => {
-  const result = bootstrap("latest");
+test("the mirror serves the latest release when GitHub cannot", () => {
+  const result = bootstrap("latest", "good", "instatic stager", "x86_64", "up", "down");
   expect(result.status, result.output).toBe(0);
-  const base = `${GITHUB}/latest/download`;
-  expect(result.events.slice(0, 3)).toEqual([`get:${MIRROR}/latest`, `get:${base}/SHA256SUMS`, `get:${base}/clp-addons-linux-x64`]);
+  const base = `${MIRROR}/releases/v1.2.3`;
+  expect(result.events.slice(0, 4)).toEqual([
+    `get:${GITHUB}/latest/download/SHA256SUMS`, `get:${MIRROR}/latest`, `get:${base}/SHA256SUMS`, `get:${base}/clp-addons-linux-x64`,
+  ]);
   expect(install(result.events)).toHaveLength(1);
 });
 
-test("--version downloads that tag, from GitHub when the mirror lacks it, and refuses a prerelease before downloading", () => {
-  const mirrored = bootstrap("v1.2.3", "good", "", "x86_64", "up");
-  expect(mirrored.status, mirrored.output).toBe(0);
-  expect(mirrored.events[0]).toBe(`get:${MIRROR}/releases/v1.2.3/SHA256SUMS`);
-
+test("--version downloads that tag, from the mirror when GitHub cannot, and refuses a prerelease before downloading", () => {
   const pinned = bootstrap("v1.2.3");
   expect(pinned.status, pinned.output).toBe(0);
-  expect(pinned.events.slice(0, 2)).toEqual([`get:${MIRROR}/releases/v1.2.3/SHA256SUMS`, `get:${GITHUB}/download/v1.2.3/SHA256SUMS`]);
+  expect(pinned.events[0]).toBe(`get:${GITHUB}/download/v1.2.3/SHA256SUMS`);
+
+  const mirrored = bootstrap("v1.2.3", "good", "", "x86_64", "up", "down");
+  expect(mirrored.status, mirrored.output).toBe(0);
+  expect(mirrored.events.slice(0, 2)).toEqual([`get:${GITHUB}/download/v1.2.3/SHA256SUMS`, `get:${MIRROR}/releases/v1.2.3/SHA256SUMS`]);
 
   const candidate = bootstrap("v1.3.0-rc.1");
   expect(candidate.status).not.toBe(0);
@@ -123,7 +126,7 @@ test("a binary that does not match SHA256SUMS is never run, from either source",
   const result = bootstrap("latest", "bad", "instatic stager", "x86_64", "up");
   expect(result.status).not.toBe(0);
   expect(install(result.events)).toEqual([]);
-  expect(result.events).toContain(`get:${GITHUB}/latest/download/clp-addons-linux-x64`);
+  expect(result.events).toContain(`get:${MIRROR}/releases/v1.2.3/clp-addons-linux-x64`);
   expect(result.output).toContain("checksum mismatch");
 });
 
@@ -136,7 +139,7 @@ test("with no addons named, only the binary and its services are installed", () 
 test("an aarch64 host downloads the arm64 binary", () => {
   const result = bootstrap("latest", "good", "", "aarch64");
   expect(result.status, result.output).toBe(0);
-  expect(result.events[2]).toBe(`get:${GITHUB}/latest/download/clp-addons-linux-arm64`);
+  expect(result.events[1]).toBe(`get:${GITHUB}/latest/download/clp-addons-linux-arm64`);
   expect(install(result.events)[0]).toStartWith("clp:install --local=");
 });
 

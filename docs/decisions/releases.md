@@ -121,9 +121,10 @@ in the `release-mirror` environment, whose R2 token is limited to that bucket,
 apart from the job that holds `id-token: write`, and is skipped while the
 environment has no secrets.
 
-`install.sh`, `resolveRelease` and the update check read the mirror first and
-GitHub when it cannot be read or no longer has the requested release. The
-mirror changes where bytes come from, not what is trusted: updates check the
+`install.sh`, `resolveRelease` and the update check ask GitHub first, so its
+download counts stay whole, and read the mirror only when GitHub cannot answer:
+unreachable, as from an IPv6-only server, where the connection fails at once,
+rate limited, or failing. The mirror changes where bytes come from, not what is trusted: updates check the
 same checksums and repository-bound provenance, since `attestations.jsonl` is
 mirrored with the binaries and Sigstore's TUF repository has IPv6. An attacker
 who controls the bucket can at most hide newer releases by editing the index,
@@ -164,9 +165,9 @@ cannot run on an older CloudPanel, is a separate change made with that release.
 ## Installer
 
 `install.sh` checks the host, downloads the binary for its architecture from
-the [mirror](#release-mirror), or GitHub's `/releases/latest/download` when it
-cannot, or the `--version` tag from either, checks it against `SHA256SUMS`, and
-installs it. It makes no GitHub API call. It then runs
+GitHub's `/releases/latest/download` or the `--version` tag, or from the
+[mirror](#release-mirror) when GitHub cannot serve it, checks it against
+`SHA256SUMS`, and installs it. It makes no GitHub API call. It then runs
 `clp-addons install --local=DIR` with the addons from `--addons`, if any. With
 none it installs the manager and its CloudPanel hooks with every addon off,
 the state disabling the last addon leaves, and the operator enables addons on
@@ -217,8 +218,8 @@ the binary restarts the manager.
 
 Every request the manager serves asks whether a release is available, so the
 answer is held for fifteen minutes, refreshed by one call at a time, and served
-as it stands while that refresh runs. Only the first check waits for the
-mirror or GitHub; a box with no route there would otherwise pay the timeout on
+as it stands while that refresh runs. Only the first check waits for
+GitHub or the mirror; a box with no route there would otherwise pay the timeout on
 every request.
 
 The native CloudPanel header asks the manager for update state; it does not

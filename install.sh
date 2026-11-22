@@ -53,23 +53,17 @@ ok "dependencies available"
 
 IFS=',' read -r -a ADDON_LIST <<< "$SELECTED"
 
-# The mirror at cp.7he.dev first: IPv6-only servers reach it, and github.com has
-# no IPv6. "latest" is the newest release that is not a prerelease, on both. A
-# prerelease tag carries a hyphen, so --version refuses one too.
+# GitHub first, so its download counts stay whole; the mirror at cp.7he.dev
+# when GitHub cannot be reached, as from an IPv6-only server, since github.com
+# has no IPv6. "latest" is the newest release that is not a prerelease, on both.
+# A prerelease tag carries a hyphen, so --version refuses one too.
 MIRROR="https://cp.7he.dev"
 GITHUB="https://github.com/${REPO}/releases"
-TAG="$VERSION"
-SOURCES=()
 if [[ $VERSION == "latest" ]]; then
-  mirrored=$(curl -fsS --max-time 20 "${MIRROR}/latest" 2>/dev/null || true)
-  if [[ $mirrored =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
-    TAG="$mirrored"
-    SOURCES+=("${MIRROR}/releases/${mirrored}")
-  fi
-  SOURCES+=("${GITHUB}/latest/download")
+  SOURCES=("${GITHUB}/latest/download" "${MIRROR}/releases/latest")
 else
   [[ $VERSION =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]] || die "not a stable release tag: $VERSION"
-  SOURCES+=("${MIRROR}/releases/${VERSION}" "${GITHUB}/download/${VERSION}")
+  SOURCES=("${GITHUB}/download/${VERSION}" "${MIRROR}/releases/${VERSION}")
 fi
 
 TMP=$(mktemp -d)
@@ -88,11 +82,15 @@ fetch_from() {
   [[ $(sha256sum "${TMP}/${ARTIFACT}" | awk '{print $1}') == "$expected" ]] || { warn "checksum mismatch for ${ARTIFACT}"; return 1; }
 }
 
-step "downloading clp-addons ${TAG}"
+step "downloading clp-addons ${VERSION}"
 fetched=""
 for base in "${SOURCES[@]}"; do
-  if fetch_from "$base"; then fetched="$base"; break; fi
-  warn "could not download from ${base%%/releases*}"
+  if [[ $base == "${MIRROR}/releases/latest" ]]; then
+    tag=$(curl -fsS --max-time 20 "${MIRROR}/latest" 2>/dev/null || true)
+    if [[ $tag =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]]; then base="${MIRROR}/releases/${tag}"; else base=""; fi
+  fi
+  if [[ -n $base ]] && fetch_from "$base"; then fetched="$base"; break; fi
+  warn "could not download from ${base:-${MIRROR}}"
 done
 [[ -n $fetched ]] || die "download failed: ${ARTIFACT}"
 ok "checksum verified"
