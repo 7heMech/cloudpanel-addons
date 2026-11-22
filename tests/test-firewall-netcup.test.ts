@@ -6,10 +6,11 @@ import { withFileLock } from "../lib/file-lock";
 import { join } from "node:path";
 import { parseCloudflareRanges, type CloudRole } from "../addons/firewall/cloud-firewall";
 import {
-  connectNetcup, disconnectNetcup, netcupOpenRules, netcupRules, netcupSetupState, netcupSignature, netcupView, pollNetcup, setNetcupRole,
-  syncNetcup, type NetcupOptions,
+  connectNetcup, disconnectNetcup, isPublicAddress, netcupOpenRules, netcupRules, netcupSetupState, netcupSignature, netcupView, pollNetcup,
+  setNetcupRole, syncNetcup, type NetcupOptions,
 } from "../addons/firewall/netcup";
-import type { NetcupRule } from "../addons/firewall/netcup-api";
+import { NetcupAuth, type NetcupRule } from "../addons/firewall/netcup-api";
+import { netcupActions } from "../addons/firewall/setup";
 import { FakeNetcup } from "./fixtures/netcup-api";
 
 const uid = process.getuid!();
@@ -298,9 +299,9 @@ describe("rules", () => {
   test("one rule per port and address family, the same on every server", () => {
     const rules = netcupRules("web", RANGES);
     expect(rules.map((rule) => [rule.protocol, rule.destinationPorts ?? null, rule.sources!.length]))
-      .toEqual([["TCP", "80", 15], ["TCP", "80", 7], ["TCP", "443", 15], ["TCP", "443", 7], ["ICMPv6", null, 0]]);
+      .toEqual([["TCP", "80", 15], ["TCP", "80", 7], ["TCP", "443", 15], ["TCP", "443", 7], ["ICMP", null, 0], ["ICMPv6", null, 0]]);
     expect(netcupRules("panel", RANGES).every((rule) => rule.direction === "INGRESS" && rule.action === "ACCEPT")).toBe(true);
-    expect(netcupOpenRules("panel").map((rule) => rule.protocol)).toEqual(["TCP", "ICMPv6"]);
+    expect(netcupOpenRules("panel").map((rule) => rule.protocol)).toEqual(["TCP", "ICMP", "ICMPv6"]);
     const respelled = [...rules].reverse().map((rule) => ({ ...rule, sourcePorts: null, destinations: [], sources: [...rule.sources!].reverse() }));
     expect(netcupSignature(respelled)).toBe(netcupSignature(rules));
     expect(netcupSignature([...rules, ssh()])).not.toBe(netcupSignature(rules));
@@ -495,6 +496,248 @@ describe("safeguards", () => {
     const secrets = [fake.refreshToken!, "device-code-0123456789abcdefghijklmnopqrstuv"];
     for (const text of [JSON.stringify(await netcupView(server.options)), JSON.stringify(await syncNetcup("repair", server.options))]) {
       for (const secret of secrets) expect(text).not.toContain(secret);
+    }
+  });
+});
+
+describe("review fixes", () => {
+  test("MAC beats address across all candidates, routed IPs and wide IPv6 prefixes never match", async () => {
+    const fake = new FakeNetcup();
+    // Server 512345 has ADDRESS (203.0.113.24) and MAC aa:bb:cc:00:00:01; our real server is 600010 by MAC.
+    fake.server(600010, "v2202411000000010", "real-box", "aa:bb:cc:00:00:10", null, null);
+    const byMac = box(fake, ADDRESS);
+    byMac.options.macs = () => ["aa:bb:cc:00:00:10"];
+    await connectNetcup(byMac.options);
+    fake.granted = true;
+    expect(await pollNetcup(byMac.options)).toEqual({ notice: "Connected to netcup; this server is real-box there." });
+
+    // A failover/routed IPv4 on server B must not match when no MAC matches.
+    const routedFake = new FakeNetcup();
+    routedFake.servers[0]!.ipv4Type = "ROUTED_IP";
+    routedFake.servers[0]!.ipv4DestinationIp = "198.51.100.2";
+    const routedBox = box(routedFake, ADDRESS);
+    await connectNetcup(routedBox.options);
+    routedFake.granted = true;
+    const routedNotice = await pollNetcup(routedBox.options);
+    expect("notice" in routedNotice && routedNotice.notice).toContain("No server in this netcup account");
+
+    // A routed IPv6 or an IPv6 prefix shorter than /64 must not match.
+    const wideFake = new FakeNetcup();
+    wideFake.server(600011, "v2202411000000011", "wide-v6", "aa:bb:cc:00:00:11", null, { networkPrefix: "2a03:4000:2::", cidr: "2a03:4000:2::/48" });
+    wideFake.server(600012, "v2202411000000012", "routed-v6", "aa:bb:cc:00:00:12", null, {
+      networkPrefix: "2a03:4000:2:95a::", cidr: "2a03:4000:2:95a::/64", type: "ROUTED_IP", destinationIp: "2a03:4000:2:95a::1",
+    });
+    const wideBox = box(wideFake, V6_ONLY);
+    await connectNetcup(wideBox.options);
+    wideFake.granted = true;
+    const wideNotice = await pollNetcup(wideBox.options);
+    expect("notice" in wideNotice && wideNotice.notice).toContain("No server in this netcup account");
+  });
+
+  test("unmatched account and unconfigured 404 firewall are non-fatal in repair and keep Setup quiet", async () => {
+    const fake = new FakeNetcup();
+    const unmatchedBox = await connected(fake, "198.51.100.7");
+    const view = await netcupView(unmatchedBox.options);
+    expect(view).toEqual({
+      state: "error", connected: true, error: "No server in this netcup account has this server's address (198.51.100.7); connect the account that holds it.",
+    });
+    expect(netcupSetupState(unmatchedBox.options).seen).toEqual({ web: false, panel: false });
+    expect(netcupSetupState(unmatchedBox.options).seenAt).toBe(unmatchedBox.now.at);
+
+    unmatchedBox.now.at += 2 * 60 * 60_000;
+    const note = await syncNetcup("repair", unmatchedBox.options);
+    expect(note).toBe("No server in this netcup account has this server's address (198.51.100.7); connect the account that holds it");
+    expect(netcupSetupState(unmatchedBox.options).seenAt).toBe(unmatchedBox.now.at);
+    expect(netcupActions(netcupSetupState(unmatchedBox.options), unmatchedBox.now.at)).toEqual([]);
+
+    // Firewall not configured in SCP (404)
+    const noFwFake = new FakeNetcup();
+    const noFwBox = await connected(noFwFake);
+    noFwFake.firewallReadStatus = 404;
+    const noFwView = await netcupView(noFwBox.options);
+    expect(noFwView).toEqual({
+      state: "error", connected: true, error: "netcup's firewall is not set up on cp-nue-1 yet: open Firewall for it in SCP and click Configure.",
+    });
+    noFwBox.now.at += 2 * 60 * 60_000;
+    const noFwNote = await syncNetcup("repair", noFwBox.options);
+    expect(noFwNote).toBe("netcup's firewall is not set up on cp-nue-1 yet: open Firewall for it in SCP and click Configure");
+    expect(netcupSetupState(noFwBox.options).seen).toEqual({ web: false, panel: false });
+    expect(netcupActions(netcupSetupState(noFwBox.options), noFwBox.now.at)).toEqual([]);
+  });
+
+  test("connect again with an account that does not hold this server keeps the old sign-in and revokes the new token", async () => {
+    const fake = new FakeNetcup();
+    const server = await connected(fake);
+    const oldToken = fake.refreshToken!;
+    const oldSync = readFileSync(join(server.dir, "state", "netcup.json"), "utf8");
+
+    const otherFake = new FakeNetcup();
+    otherFake.servers = [];
+    server.options.fetch = otherFake.fetch;
+    await connectNetcup(server.options);
+    otherFake.granted = true;
+    const message = await refusal(pollNetcup(server.options));
+    expect(message).toContain("No server in this netcup account has this server's address");
+    expect(otherFake.revoked).toEqual([otherFake.refreshToken!]);
+    expect(fake.revoked).toEqual([]);
+    expect(JSON.parse(readFileSync(join(server.dir, "state", "netcup-token.json"), "utf8"))).toEqual({ refreshToken: oldToken });
+    expect(readFileSync(join(server.dir, "state", "netcup.json"), "utf8")).toBe(oldSync);
+  });
+
+  test("disabled servers and 4xx /interfaces are skipped, no-match is cached for 15 minutes, and slow scans degrade the card", async () => {
+    const fake = new FakeNetcup();
+    fake.servers[0]!.disabled = true;
+    fake.server(600020, "v2202411000000020", "bad-iface", "aa:bb:cc:00:00:20", null, null);
+    fake.interfaceStatus.set(600020, 403);
+    fake.server(600021, "v2202411000000021", "good-box", "aa:bb:cc:00:00:21", ADDRESS, null);
+    const server = await connected(fake);
+    const view = await netcupView(server.options);
+    expect(view.state === "connected" && view.serverName).toBe("good-box");
+    expect(fake.calls.some((call) => call.path.startsWith(`/scp-core/api/v1/servers/${SERVER}/interfaces`))).toBe(false);
+
+    // 401 on /interfaces is still reported as sign-in refused, not swallowed.
+    const unauthFake = new FakeNetcup();
+    const unauthBox = await connected(unauthFake);
+    writeFileSync(join(unauthBox.dir, "state", "netcup.json"), JSON.stringify({ userId: 4711 }), { mode: 0o600 });
+    unauthFake.interfaceStatus.set(SERVER, 401);
+    expect(await netcupView(unauthBox.options)).toEqual({
+      state: "error", connected: true, error: "netcup no longer accepts the saved sign-in; connect again.",
+    });
+
+    // Unmatched scan is cached for 15 minutes, then rescans.
+    const emptyFake = new FakeNetcup();
+    const emptyBox = await connected(emptyFake, "198.51.100.7");
+    const serverCallsAfterConnect = emptyFake.calls.filter((call) => call.path.startsWith("/scp-core/api/v1/servers")).length;
+    await netcupView(emptyBox.options);
+    expect(emptyFake.calls.filter((call) => call.path.startsWith("/scp-core/api/v1/servers"))).toHaveLength(serverCallsAfterConnect);
+    emptyBox.now.at += 16 * 60_000;
+    await netcupView(emptyBox.options);
+    expect(emptyFake.calls.filter((call) => call.path.startsWith("/scp-core/api/v1/servers")).length).toBeGreaterThan(serverCallsAfterConnect);
+
+    // A scan that exceeds the view budget degrades the card without caching unmatchedAt.
+    const slowFake = new FakeNetcup();
+    for (let i = 0; i < 5; i++) slowFake.server(600030 + i, `s-${i}`, null, `aa:bb:cc:00:01:0${i}`, null, null);
+    const slowBox = await connected(slowFake, "198.51.100.8");
+    writeFileSync(join(slowBox.dir, "state", "netcup.json"), JSON.stringify({ userId: 4711 }), { mode: 0o600 });
+    const realFetch = slowFake.fetch;
+    slowBox.options.fetch = async (url, init) => {
+      if (url.includes("/interfaces")) slowBox.now.at += 10_000;
+      return realFetch(url, init);
+    };
+    const degraded = await netcupView(slowBox.options);
+    expect(degraded.state === "error" && degraded.connected && degraded.error).toContain("timed out");
+    expect(JSON.parse(readFileSync(join(slowBox.dir, "state", "netcup.json"), "utf8")).unmatchedAt).toBeUndefined();
+  });
+
+  test("poll revokes the new refresh token if locking or saving fails after the grant", async () => {
+    const fake = new FakeNetcup();
+    const server = box(fake);
+    await connectNetcup(server.options);
+    fake.granted = true;
+    // Make tokenFile a directory so writeState fails inside the lock after findServer/findUserId succeeded.
+    mkdirSync(join(server.dir, "state", "netcup-token.json"), { recursive: true });
+    expect(await refusal(pollNetcup(server.options))).toBeTruthy();
+    expect(fake.revoked).toEqual([fake.refreshToken!]);
+  });
+
+  test("transient task-poll errors retry until the task finishes or the deadline passes", async () => {
+    const fake = new FakeNetcup();
+    fake.policy("ssh", [ssh()], [SERVER]);
+    const server = await connected(fake);
+    fake.taskFailures = 2;
+    const done = await turn(server, "web", true);
+    expect("notice" in done && done.notice).toContain("only Cloudflare");
+
+    // Persistent errors until the deadline still report running.
+    const first = await setNetcupRole("web", false, undefined, server.options);
+    if (!("review" in first)) throw new Error("expected a review");
+    fake.taskFailures = 100;
+    server.options.sleep = async (ms) => { server.now.at += ms; };
+    expect(await refusal(setNetcupRole("web", false, first.review.digest, server.options))).toContain("could not be asked whether it finished");
+  });
+
+  test("userinfo id is verified with GET /users/{id} and falls back when rejected", async () => {
+    const fake = new FakeNetcup();
+    fake.userinfoId = 9999;
+    const server = await connected(fake);
+    expect(fake.calls.some((call) => call.path === "/scp-core/api/v1/users/9999")).toBe(true);
+    expect(fake.calls.some((call) => call.path === "/scp-core/api/v1/users/4711")).toBe(true);
+    expect(JSON.parse(readFileSync(join(server.dir, "state", "netcup.json"), "utf8")).userId).toBe(4711);
+  });
+
+  test("disconnect succeeds with a warning when netcup's firewall is off even with a Cloudflare policy attached", async () => {
+    const fake = new FakeNetcup();
+    fake.policy("ssh", [ssh()], [SERVER]);
+    const server = await connected(fake);
+    await turn(server, "web", true);
+    fake.servers[0]!.firewall.active = false;
+    const { notice } = await disconnectNetcup(server.options);
+    expect(notice).toContain("The netcup sign-in is removed and revoked.");
+    expect(notice).toContain("clp-addons-cloudflare-web stays on this server while netcup's firewall is off");
+    expect(existsSync(join(server.dir, "state", "netcup-token.json"))).toBe(false);
+  });
+
+  test("setFirewall handles a reply without a task object", async () => {
+    const fake = new FakeNetcup();
+    fake.policy("ssh", [ssh()], [SERVER]);
+    fake.setFirewallNoTask = true;
+    const server = await connected(fake);
+    const done = await turn(server, "web", true);
+    expect("notice" in done && done.notice).toContain("only Cloudflare");
+    expect(fake.userPolicies()).toEqual(["ssh", "clp-addons-cloudflare-web"]);
+  });
+
+  test("redaction hides token values without redacting token_type_hint's value", async () => {
+    const fake = new FakeNetcup();
+    const secret = fake.issue();
+    const auth = new NetcupAuth(fake.fetch);
+    await auth.revoke(secret);
+    expect(auth.clean(`error with ${secret} and refresh_token`)).toBe("error with [redacted] and refresh_token");
+  });
+
+  test("guardOf respects rule destinations so rules for other servers do not count as open here", async () => {
+    const fake = new FakeNetcup();
+    fake.policy("other-server", [
+      { direction: "INGRESS", protocol: "TCP", action: "ACCEPT", sources: [], destinations: ["198.51.100.99"], destinationPorts: "22" },
+      { direction: "INGRESS", protocol: "TCP", action: "ACCEPT", sources: [], destinations: ["198.51.100.99"], destinationPorts: "443" },
+    ], [SERVER]);
+    const server = await connected(fake);
+    const first = await setNetcupRole("web", true, undefined, server.options);
+    if (!("review" in first)) throw new Error("expected a review");
+    expect(first.review.warnings.join(" ")).not.toContain("443 is still open");
+    const done = await turn(server, "web", true);
+    expect("notice" in done && done.notice).toBe("netcup now lets only Cloudflare reach ports 80 and 443.");
+    const view = await netcupView(server.options);
+    expect(view.state === "connected" && view.sshClosed).toEqual([22]);
+
+    // A rule explicitly targeting this server's IPv4 keeps IPv4 SSH open (while not covering IPv6).
+    const thisFake = new FakeNetcup();
+    thisFake.policy("this-ssh", [
+      { direction: "INGRESS", protocol: "TCP", action: "ACCEPT", sources: [], destinations: [ADDRESS], destinationPorts: "22" },
+    ], [SERVER]);
+    const thisBox = await connected(thisFake);
+    await turn(thisBox, "web", true);
+    const thisView = await netcupView(thisBox.options);
+    expect(thisView.state === "connected" && thisView.sshClosed).toEqual([]);
+  });
+
+  test("non-public IPv4 ranges are rejected by isPublicAddress", () => {
+    for (const addr of ["0.0.0.1", "10.0.0.1", "100.64.0.1", "127.0.0.1", "169.254.1.1", "172.16.0.1", "192.0.0.1", "192.168.1.1", "198.18.0.1", "198.19.255.254"]) {
+      expect(isPublicAddress(addr)).toBe(false);
+    }
+    expect(isPublicAddress(ADDRESS)).toBe(true);
+    expect(isPublicAddress(V6_ONLY)).toBe(true);
+    expect(isPublicAddress("fe80::1")).toBe(false);
+  });
+
+  test("permanent OAuth errors end the device poll", async () => {
+    for (const code of ["invalid_client", "unauthorized_client", "invalid_request"]) {
+      const fake = new FakeNetcup();
+      const server = box(fake);
+      await connectNetcup(server.options);
+      fake.pollError = code;
+      expect(await refusal(pollNetcup(server.options))).toContain(code);
+      expect(existsSync(join(server.dir, "state", "netcup-device.json"))).toBe(false);
     }
   });
 });

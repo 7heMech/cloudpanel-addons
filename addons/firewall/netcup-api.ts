@@ -45,9 +45,11 @@ export interface NetcupFirewall {
   active: boolean;
 }
 
-export interface NetcupServer { id: number; name: string; nickname?: string | null; hostname?: string | null }
+export interface NetcupServer { id: number; name: string; nickname?: string | null; hostname?: string | null; disabled?: boolean }
 
-export interface NetcupInterface { mac: string; ipv4Addresses?: { ip: string }[]; ipv6Addresses?: { networkPrefix: string; cidr?: string }[] }
+export interface NetcupIpv4 { ip: string; type?: string | null; destinationIp?: string | null }
+export interface NetcupIpv6 { networkPrefix: string; cidr?: string; type?: string | null; destinationIp?: string | null }
+export interface NetcupInterface { mac: string; ipv4Addresses?: NetcupIpv4[]; ipv6Addresses?: NetcupIpv6[] }
 
 interface UserMinimal { id?: number; username?: string }
 
@@ -79,6 +81,7 @@ export function validRefreshToken(value: unknown): value is string {
 }
 
 const MAC = /^[a-fA-F0-9]{2}(:[a-fA-F0-9]{2}){5}$/;
+const SECRET_FIELDS = new Set(["token", "refresh_token", "device_code", "access_token", "code"]);
 
 /** netcup's Keycloak: the device sign-in, refreshing, revoking, and who signed in. */
 export class NetcupAuth {
@@ -94,7 +97,7 @@ export class NetcupAuth {
   }
 
   private async form<T>(path: string, fields: Record<string, string>): Promise<T> {
-    this.secrets.push(...Object.entries(fields).filter(([key]) => /token|code/.test(key)).map(([, value]) => value));
+    this.secrets.push(...Object.entries(fields).filter(([key]) => SECRET_FIELDS.has(key)).map(([, value]) => value));
     const { status, json } = await this.http.request(path, "POST", new URLSearchParams({ client_id: CLIENT_ID, ...fields }));
     if (status >= 200 && status < 300) return json as T;
     const body = json as { error?: unknown; error_description?: unknown } | null;
@@ -165,7 +168,13 @@ export class NetcupApi {
   }
 
   private async call<T>(path: string, method = "GET", body?: unknown): Promise<T> {
-    const { status, json } = await this.http.request(path, method, body);
+    let timeoutMs = this.options.timeoutMs;
+    if (this.options.deadline !== undefined) {
+      const left = this.options.deadline - this.now();
+      if (left <= 0) throw new NetcupError("the request timed out", 0, "timeout");
+      timeoutMs = timeoutMs === undefined ? Math.min(15_000, left) : Math.min(timeoutMs, left);
+    }
+    const { status, json } = await this.http.request(path, method, body, timeoutMs);
     if (status >= 200 && status < 300) return json as T;
     const error = json as { code?: unknown; message?: unknown; errors?: { field?: unknown; message?: unknown }[] } | null;
     const code = typeof error?.code === "string" ? error.code : "";
@@ -223,10 +232,10 @@ export class NetcupApi {
 
   /** Replaces the policies on the interface, in order, and waits until netcup applied them. */
   async setFirewall(serverId: number, mac: string, userPolicies: number[], copiedPolicies: number[]): Promise<void> {
-    const task = await this.call<TaskInfo>(`/servers/${serverId}/interfaces/${NetcupApi.mac(mac)}/firewall`, "PUT", {
+    const task = await this.call<TaskInfo | null>(`/servers/${serverId}/interfaces/${NetcupApi.mac(mac)}/firewall`, "PUT", {
       userPolicies: userPolicies.map((id) => ({ id })), copiedPolicies: copiedPolicies.map((id) => ({ id })), active: true,
     });
-    await this.settle(task);
+    if (task?.uuid) await this.settle(task);
   }
 
   /** Every policy in the account. The listing may leave out the rules; `policy` has them. */
@@ -244,8 +253,8 @@ export class NetcupApi {
 
   /** Rewrites a policy, and waits until netcup applied it to every server that has it. */
   async updatePolicy(userId: number, id: number, name: string, description: string, rules: NetcupRule[]): Promise<void> {
-    const reply = await this.call<{ taskInfo?: TaskInfo }>(`/users/${userId}/firewall-policies/${id}`, "PUT", { name, description, rules });
-    if (reply?.taskInfo) await this.settle(reply.taskInfo);
+    const reply = await this.call<{ taskInfo?: TaskInfo | null }>(`/users/${userId}/firewall-policies/${id}`, "PUT", { name, description, rules });
+    if (reply?.taskInfo?.uuid) await this.settle(reply.taskInfo);
   }
 
   /**
@@ -255,16 +264,26 @@ export class NetcupApi {
    */
   private async settle(started: TaskInfo): Promise<void> {
     let task = started;
+    let lastError: unknown = null;
     const until = Math.min(this.now() + 60_000, this.options.deadline ?? Infinity);
     while ((task.state === "PENDING" || task.state === "RUNNING") && this.now() < until) {
-      await this.sleep(1000);
+      await this.sleep(Math.min(1000, until - this.now()));
+      if (this.now() >= until) break;
       try {
         task = await this.call<TaskInfo>(`/tasks/${encodeURIComponent(task.uuid)}`);
+        lastError = null;
       } catch (error) {
-        throw new NetcupError(`took the change, but could not be asked whether it finished (${this.clean(errorMessage(error))})`, 0, "running");
+        lastError = error;
+        if (error instanceof NetcupError && (error.status === 401 || error.status === 403)) break;
+        if (error instanceof ProviderError && error.retryAt >= until) break;
       }
     }
-    if (task.state === "PENDING" || task.state === "RUNNING") throw new NetcupError("took the change and is still applying it", 0, "running");
+    if (task.state === "PENDING" || task.state === "RUNNING") {
+      if (lastError) {
+        throw new NetcupError(`took the change, but could not be asked whether it finished (${this.clean(errorMessage(lastError))})`, 0, "running");
+      }
+      throw new NetcupError("took the change and is still applying it", 0, "running");
+    }
     if (task.state !== "FINISHED") {
       throw new NetcupError(this.clean(`took the change, but its task ended in ${task.state}: ${task.responseError?.message || task.message || "no reason given"}`), 0, task.state);
     }

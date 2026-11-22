@@ -44,13 +44,13 @@ export class ProviderHttp {
   ) {}
 
   /** The parsed JSON body and the status, whatever the status was. A `URLSearchParams` body is sent as a form, as OAuth wants. */
-  async request(path: string, method = "GET", body?: unknown): Promise<{ status: number; json: unknown }> {
+  async request(path: string, method = "GET", body?: unknown, timeoutMs = this.timeoutMs): Promise<{ status: number; json: unknown }> {
     const now = Date.now();
     if (now < this.backoff.until) {
       throw new ProviderError(this.provider, `asked to wait until ${new Date(this.backoff.until).toISOString()}`, 429, this.backoff.until);
     }
     const controller = new AbortController();
-    const timer = setTimeout(() => controller.abort(), this.timeoutMs);
+    const timer = setTimeout(() => controller.abort(), timeoutMs);
     let response: Response | undefined;
     try {
       response = await this.fetcher(`${this.base}${path}`, {

@@ -16,7 +16,10 @@ const json = (body: unknown, status = 200) =>
 
 interface FakeServer {
   id: number; name: string; nickname: string | null; mac: string; ip: string | null;
-  ipv6: { networkPrefix: string; cidr: string } | null;
+  ipv6: { networkPrefix: string; cidr: string; type?: string; destinationIp?: string | null } | null;
+  ipv4Type?: string;
+  ipv4DestinationIp?: string | null;
+  disabled?: boolean;
   firewall: { copied: number[]; user: number[]; active: boolean };
 }
 
@@ -27,14 +30,22 @@ export class FakeNetcup {
   userId = 4711;
   /** The customer number, which is the SCP username. */
   username = "123456";
-  /** Whether userinfo carries the `id` claim. */
-  userinfoId = true;
+  /** Whether userinfo carries the `id` claim, or a specific id to return. */
+  userinfoId: boolean | number = true;
   /** The state every task reads as after it started. */
   taskState = "FINISHED";
+  /** Fail this many `GET /tasks/{uuid}` calls with 503 before answering normally. */
+  taskFailures = 0;
+  /** When true, `PUT /firewall` answers 200 `{}` with no task object. */
+  setFirewallNoTask = false;
   /** Answer the device poll with this HTTP status instead. */
   pollStatus: number | null = null;
+  /** Answer the device poll with this OAuth error code instead. */
+  pollError: string | null = null;
   /** Answer reads of a server's firewall with this HTTP status instead. */
   firewallReadStatus: number | null = null;
+  /** Answer `/servers/{id}/interfaces` with this HTTP status for specific server ids. */
+  interfaceStatus = new Map<number, number>();
   /** Whether the operator granted access to the pending device code. */
   granted = false;
   /** Refused with `access_denied` instead, as when the operator clicks No. */
@@ -146,6 +157,7 @@ export class FakeNetcup {
         const grant = form?.get("grant_type");
         if (grant === "urn:ietf:params:oauth:grant-type:device_code") {
           if (this.pollStatus) return json({ error: "temporarily_unavailable" }, this.pollStatus);
+          if (this.pollError) return oauthError(this.pollError, `OAuth error ${this.pollError}`);
           if (this.denied) return oauthError("access_denied", "Access denied");
           if (!this.granted) return oauthError("authorization_pending", "The authorization request is still pending");
           this.granted = false;
@@ -167,7 +179,8 @@ export class FakeNetcup {
       if (path === "/userinfo" && method === "GET") {
         const auth = (init.headers as Record<string, string>).Authorization?.replace("Bearer ", "") ?? "";
         if (!this.accessTokens.has(auth)) return json({ error: "invalid_token" }, 401);
-        return json({ sub: "f3a1c2d4", ...(this.userinfoId ? { id: String(this.userId) } : {}), preferred_username: this.username });
+        const claimed = typeof this.userinfoId === "number" ? String(this.userinfoId) : this.userinfoId ? String(this.userId) : null;
+        return json({ sub: "f3a1c2d4", ...(claimed ? { id: claimed } : {}), preferred_username: this.username });
       }
       return oauthError("invalid_request", `no route for ${method} ${path}`);
     }
@@ -182,7 +195,7 @@ export class FakeNetcup {
       const offset = Number(searchParams.get("offset") ?? 0);
       const limit = Number(searchParams.get("limit") ?? 20);
       return json(this.servers.filter((server) => !ip || (server.ip?.includes(ip) ?? false)).slice(offset, offset + limit)
-        .map(({ id, name, nickname }) => ({ id, name, nickname, hostname: null, disabled: false, template: null })));
+        .map(({ id, name, nickname, disabled }) => ({ id, name, nickname, hostname: null, disabled: Boolean(disabled), template: null })));
     }
     if (path === "/tasks" && method === "GET") {
       return json([{ uuid: "task-old", name: "Reset password", state: "FINISHED", executingUser: { id: 17, username: "netcup-support" } }]);
@@ -198,12 +211,15 @@ export class FakeNetcup {
     }
     match = /^\/servers\/(\d+)\/interfaces$/.exec(path);
     if (match && method === "GET") {
-      const server = this.servers.find((each) => each.id === Number(match![1]));
+      const id = Number(match[1]);
+      const forced = this.interfaceStatus.get(id);
+      if (forced) return json({ code: "ERROR", message: `Interfaces status ${forced}.` }, forced);
+      const server = this.servers.find((each) => each.id === id);
       if (!server) return notFound("Server");
       return json([{
         mac: server.mac, driver: "virtio", speedInMBits: 2500,
-        ipv4Addresses: server.ip ? [{ id: 1, interfaceMac: server.mac, type: "IP", ip: server.ip, cidr: `${server.ip}/22`, gateway: null, rdns: null, destinationIp: null, editable: false }] : [],
-        ipv6Addresses: server.ipv6 ? [{ id: 2, interfaceMac: server.mac, type: "IP", ...server.ipv6, gateway: "fe80::1", linkLocal: false, rdns: {}, destinationIp: null, editable: false }] : [],
+        ipv4Addresses: server.ip ? [{ id: 1, interfaceMac: server.mac, type: server.ipv4Type ?? "IP", ip: server.ip, cidr: `${server.ip}/22`, gateway: null, rdns: null, destinationIp: server.ipv4DestinationIp ?? null, editable: false }] : [],
+        ipv6Addresses: server.ipv6 ? [{ id: 2, interfaceMac: server.mac, type: server.ipv6.type ?? "IP", networkPrefix: server.ipv6.networkPrefix, cidr: server.ipv6.cidr, gateway: "fe80::1", linkLocal: false, rdns: {}, destinationIp: server.ipv6.destinationIp ?? null, editable: false }] : [],
       }]);
     }
     match = /^\/servers\/(\d+)\/interfaces\/([0-9a-f:]+)\/firewall$/.exec(path);
@@ -216,7 +232,7 @@ export class FakeNetcup {
         const ids = (list: { id: number }[]) => list.map((item) => item.id);
         if (ids(body.userPolicies).some((id) => !this.policies.some((policy) => policy.id === id))) return json({ code: "NOT_FOUND", message: "Firewall policy not found." }, 404);
         server.firewall = { copied: ids(body.copiedPolicies), user: ids(body.userPolicies), active: body.active ?? true } as never;
-        return json(this.task(), 202);
+        return this.setFirewallNoTask ? json({}, 200) : json(this.task(), 202);
       }
     }
     match = /^\/users\/(\d+)\/firewall-policies(?:\/(\d+))?$/.exec(path);
@@ -244,6 +260,10 @@ export class FakeNetcup {
     match = /^\/tasks\/([\w-]+)$/.exec(path);
     if (match && method === "GET") {
       if (!this.tasks.has(match[1]!)) return notFound("Task");
+      if (this.taskFailures > 0) {
+        this.taskFailures--;
+        return json({ code: "UNAVAILABLE", message: "Task backend temporarily unavailable." }, 503);
+      }
       return json({ uuid: match[1], name: "Update firewall", state: this.taskState, message: null, responseError: this.taskState === "ERROR" ? { code: "ERROR", message: "The hypervisor did not answer." } : null });
     }
     return json({ code: "NOT_FOUND", message: `no route for ${method} ${path}` }, 404);
