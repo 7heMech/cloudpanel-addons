@@ -90,7 +90,7 @@ const instances: InstanceView[] = [
   { domain: "pages.example.com", port: 39000, tag: "0.0.19", state: "running" },
   { domain: "docs.example.com", port: 39001, tag: "0.0.18", state: "running" },
   { domain: "preview.example.com", port: 39002, tag: "0.0.18", state: "exited" },
-].map((i) => ({ ...i, container: i.domain, siteUser: i.domain.split(".")[0]!, createdAt: "2026-09-10T09:30:00Z", panelSite: true }));
+].map((i) => ({ ...i, container: i.domain, siteUser: i.domain.split(".")[0]!, createdAt: "2026-09-10T09:30:00Z", panelSite: true, mail: i.tag !== "0.0.18" }));
 const sites: SiteSummary[] = [
   { domain: "www.example.com", siteType: "php", siteUser: "example", phpVersion: "8.2", application: "WordPress", databases: 1 },
   { domain: "static.example.com", siteType: "static", siteUser: "static", phpVersion: "", application: "Static HTML", databases: 0 },

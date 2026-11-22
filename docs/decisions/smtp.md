@@ -78,6 +78,10 @@ original arguments, and Postfix still enforces the envelope. The panel's own
 PHP-FPM reads its version's conf.d and passes through this way. Laravel and Symfony
 sendmail transports run `sendmail -bs` themselves and never reach the wrapper.
 
+Instatic sites send through Instatic's SMTP connector, which a bridge hands
+to sendmail as the site's login with the same From rule (see
+[Instatic CMS](instatic.md#email)).
+
 Other apps run sendmail themselves, often by name, as Nodemailer does. The
 default PATH leaves out `/usr/sbin`, so while any site is routed,
 `/usr/local/bin/sendmail` links to `/usr/sbin/sendmail`, unless something else

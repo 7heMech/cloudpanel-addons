@@ -92,6 +92,44 @@ Upstream publishes `ghcr.io/corebunch/instatic` for `linux/amd64` only, so
 Instatic declares `supportedArches: ["x64"]`: an arm64 box cannot enable it and
 does not list it.
 
+## Email
+
+Instatic's SMTP connector takes a host, port and optional login. SMTP Relay
+knows a site by the Unix login postdrop records, which a container's SMTP
+connection does not carry, so the addon bridges the two
+(`addons/instatic/mail-bridge.ts`, `addons/instatic/mail.ts`):
+
+- Containers run on the `clp-instatic` Docker network, whose bridge interface
+  has the same name, with `--add-host smtp-relay:<gateway>` and
+  `MAIL_ALLOW_PRIVATE_HOSTS=1`, which lets Instatic use a private address,
+  without a login or STARTTLS. Instatic still refuses an IP literal without
+  it. Containers started before the network existed join it when they are
+  updated or recreated; the dashboard names them.
+- `clp-addons-instatic-mail.socket` listens on the gateway's port 2525 (Postfix
+  holds 25 on every address) with `Accept=yes`, and each connection runs
+  `clp-addons instatic-mail` as root. The listener knows the container by its
+  source address on that network, and accepts it only when it is an
+  `instatic-<domain>` container with an instance record, labelled
+  `clp-addon=instatic`, and running as that domain's site user now. Any
+  other address is refused at the greeting. A host process cannot borrow a
+  container's address: the replies go to the container.
+- Each message goes to `/usr/sbin/sendmail -i -f <sender> -- <recipients>`
+  through `runuser` as the site user (`deliverAsSite` in
+  `addons/smtp/submit.ts`), so Postfix holds it to the site's senders and
+  routes it like the site's PHP mail. When SMTP Relay has a From rule for the
+  site, the From is rewritten as `smtp-submit` would; without one, an envelope
+  sender outside the site's domains is dropped. With SMTP Relay off, the mail
+  is ordinary local Postfix mail. Sendmail's temporary failure (75) answers
+  451; any other failure 554.
+- ufw drops container traffic to the host, and CloudPanel's Firewall page
+  rebuilds ufw, so the `firewall` hook adds
+  `allow in on clp-instatic to <gateway> port 2525 proto tcp` again after each
+  rebuild. Repair and enabling restore the units and the rule once the network
+  exists; disabling removes them and leaves the network to its containers.
+
+`MAIL_ALLOW_PRIVATE_HOSTS` also lets an Instatic admin point a connector at
+other private addresses, which can probe ports there over SMTP.
+
 ## Storage and replacement
 
 The live SQLite database and environment file are outside the document root at

@@ -1,5 +1,5 @@
 import { errorMessage } from "../../lib/errors";
-import { CLI_BIN, LOCK_DIR, PANEL_DB, addonStateDir, PANEL_IDENTITY_PATH } from "../../lib/paths";
+import { CLI_BIN, LOCK_DIR, PANEL_DB, SYSTEMD_DIR, addonStateDir, PANEL_IDENTITY_PATH } from "../../lib/paths";
 import { hasSite, withPanelDb } from "../../lib/panel-db";
 import { Database } from "bun:sqlite";
 import { randomBytes } from "node:crypto";
@@ -26,6 +26,7 @@ import {
   runStdoutAsDiagnostic, setJobStep, startJobTranscript, watchJob, type JobTranscript, type PruneJobsResult,
 } from "../../lib/job-store";
 import { INSTATIC_VERBS } from "./verbs";
+import { ensureMailBridge, ensureMailNetwork, MAIL_HOST, MAIL_NETWORK } from "./mail-bridge";
 
 const REGISTRY_IMAGE = "ghcr.io/corebunch/instatic";
 const CONTAINER_PORT = 3001;
@@ -64,6 +65,7 @@ export interface InstaticActionPaths {
   clpctl: string;
   panelIdentityFile: string;
   homeDir: string;
+  systemdDir: string;
 }
 
 export const DEFAULT_INSTATIC_ACTION_PATHS: InstaticActionPaths = {
@@ -76,6 +78,7 @@ export const DEFAULT_INSTATIC_ACTION_PATHS: InstaticActionPaths = {
   clpctl: "/usr/bin/clpctl",
   panelIdentityFile: PANEL_IDENTITY_PATH,
   homeDir: "/home",
+  systemdDir: SYSTEMD_DIR,
 };
 
 type InstaticVerb = keyof typeof INSTATIC_VERBS;
@@ -414,7 +417,7 @@ function siteIsOurProxy(domain: string, port: string | number, paths: InstaticAc
   }
 }
 
-function siteUserOf(domain: string, paths: InstaticActionPaths): string | null {
+export function siteUserOf(domain: string, paths: InstaticActionPaths): string | null {
   if (!readable(paths.panelDb)) return null;
   try {
     const user = queryPanel(paths, (db) => {
@@ -506,6 +509,8 @@ function writeEnvFile(file: string, key: string, port: number, domain: string): 
     `INSTATIC_SECRET_KEY=${key}`,
     `PUBLIC_ORIGIN=https://${domain}`,
     `VITE_ALLOWED_ORIGIN=https://${domain}`,
+    // Its SMTP connector may then name the mail bridge, a private address.
+    "MAIL_ALLOW_PRIVATE_HOSTS=1",
     "",
   ].join("\n");
   withDirNoFollow(dirname(file), (dir) => {
@@ -544,7 +549,7 @@ function ensureEnvFile(storage: SnapshotSources, port: number, domain: string, f
   writeEnvFile(file, randomBytes(32).toString("base64"), port, domain);
 }
 
-function resolveOwner(domain: string, paths: InstaticActionPaths): string {
+export function resolveOwner(domain: string, paths: InstaticActionPaths): string {
   const user = siteUserOf(domain, paths);
   if (!user) failAction(`no CloudPanel site user for ${domain}; the site must exist before the instance runs`);
 
@@ -583,12 +588,21 @@ function runContainer(name: string, port: number, tag: string, domain: string, s
   const owner = resolveOwner(domain, paths);
   ensureEnvFile(storage, port, domain, fresh);
   enforceOwnership(storage, owner);
+  let gateway: string;
+  try {
+    gateway = ensureMailBridge({ systemdDir: paths.systemdDir });
+  } catch (error) {
+    diagnostic(`[instatic] WARN: mail from this site cannot reach the server yet: ${errorMessage(error)}\n`);
+    gateway = ensureMailNetwork();
+  }
   const result = runCommand("docker", [
     "run", "-d",
     "--name", name,
     "--user", owner,
     "--restart", "unless-stopped",
     "--label", "clp-addon=instatic",
+    "--network", MAIL_NETWORK,
+    "--add-host", `${MAIL_HOST}:${gateway}`,
     "-p", `127.0.0.1:${port}:${CONTAINER_PORT}`,
     "--env-file", storage.envFile,
     "-v", `${storage.dataDir}:/app/data`,
@@ -1440,6 +1454,13 @@ function containerState(name: string): string {
   return result.stdout.replace(/\s/g, "") || "absent";
 }
 
+/** Its state, and whether it is on the mail network, which a container started before that existed is not. */
+function containerStatus(name: string): { state: string; mail: boolean } {
+  const result = runCommand("docker", ["inspect", "-f", `{{.State.Status}} {{if index .NetworkSettings.Networks "${MAIL_NETWORK}"}}mail{{end}}`, name]);
+  const [state = "", mail = ""] = result.stdout.trim().split(/\s+/);
+  return { state: state || "absent", mail: mail === "mail" };
+}
+
 function cmdStatus(action: ParsedInstaticAction): void {
   const domain = action.domain;
   const name = containerName(domain);
@@ -1473,7 +1494,7 @@ function cmdList(paths: InstaticActionPaths): void {
       container: containerName(domain),
       siteUser: readMeta("siteUser", meta),
       createdAt: readMeta("createdAt", meta),
-      state: containerState(containerName(domain)),
+      ...containerStatus(containerName(domain)),
       panelSite: panel.readable ? panel.domains.has(domain) : null,
     });
   }
