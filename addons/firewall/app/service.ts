@@ -2,6 +2,7 @@ import { callGatewayAction, type ActionResult } from "../../../lib/gateway-clien
 import type { WebVerb } from "../../../lib/gateway-protocol";
 import type { FirewallStatus } from "../protocols";
 import type { HetznerReview, HetznerRole, HetznerView } from "../hetzner";
+import type { NetcupSignIn, NetcupView } from "../netcup";
 import type { GateReply, PanelGateView } from "../panel-gate";
 
 export interface CloudflareSiteView {
@@ -14,14 +15,18 @@ export interface FirewallPageState {
   autoEnableNewSites: boolean;
   protocols: FirewallStatus | { error: string };
   hetzner: HetznerView;
+  netcup: NetcupView;
   panelGate: PanelGateView | { error: string };
 }
 
 export type HetznerReply = { review: HetznerReview } | { notice: string };
+export type NetcupPoll = { pending: true; interval: number } | { notice: string };
 
-// Hetzner's changes wait for its actions to finish and for each site's DNS lookup.
+// Hetzner's and netcup's changes wait for their tasks to finish and for each site's DNS lookup.
 // The gate waits for Cloudflare to deploy its certificate.
-const SLOW = new Set<WebVerb<"firewall">>(["hetzner-connect", "hetzner-disconnect", "hetzner-switch", "panel-gate", "panel-gate-switch"]);
+const SLOW = new Set<WebVerb<"firewall">>([
+  "hetzner-connect", "hetzner-disconnect", "hetzner-switch", "netcup-poll", "netcup-disconnect", "netcup-switch", "panel-gate", "panel-gate-switch",
+]);
 
 async function call<T>(verb: WebVerb<"firewall">, args: string[] = [], input?: string): Promise<ActionResult<T>> {
   return callGatewayAction("firewall", verb, args, input, SLOW.has(verb) ? { timeout: 240_000 } : undefined);
@@ -63,6 +68,22 @@ export const firewallService = {
 
   disconnectHetzner(): Promise<ActionResult<HetznerReply>> {
     return call<HetznerReply>("hetzner-disconnect");
+  },
+
+  connectNetcup(): Promise<ActionResult<NetcupSignIn>> {
+    return call<NetcupSignIn>("netcup-connect");
+  },
+
+  pollNetcup(): Promise<ActionResult<NetcupPoll>> {
+    return call<NetcupPoll>("netcup-poll");
+  },
+
+  disconnectNetcup(): Promise<ActionResult<HetznerReply>> {
+    return call<HetznerReply>("netcup-disconnect");
+  },
+
+  setNetcup(role: HetznerRole, enabled: boolean, confirm?: string, typed?: string): Promise<ActionResult<HetznerReply>> {
+    return call<HetznerReply>("netcup-switch", ["--role", role, "--enabled", enabled ? "yes" : "no"], JSON.stringify({ confirm, typed }));
   },
 
   panelGate(): Promise<ActionResult<PanelGateView>> {

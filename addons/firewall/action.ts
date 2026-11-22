@@ -17,6 +17,9 @@ import { firewallStatus, setProtocolsEnabled, setRuleProtocol, type FirewallOpti
 import {
   connectHetzner, disconnectHetzner, hetznerView, setHetznerRole, type HetznerOptions, type HetznerRole, type HetznerView,
 } from "./hetzner";
+import {
+  connectNetcup, disconnectNetcup, netcupView, pollNetcup, setNetcupRole, type NetcupOptions, type NetcupView,
+} from "./netcup";
 import { cleanUpPanelGate, panelGateSummary, panelGateView, setPanelGate, type GateOptions, type PanelGateView } from "./panel-gate";
 
 const POLICY_VERSION = 1;
@@ -40,6 +43,7 @@ interface FirewallActionOptions {
   paths?: Partial<CloudflareActionPaths>;
   protocols?: FirewallOptions;
   hetzner?: HetznerOptions;
+  netcup?: NetcupOptions;
   gate?: GateOptions;
   input?: string;
   emitReply?: boolean;
@@ -169,9 +173,9 @@ function parseAction(argv: string[]): ParsedAction {
   if (verb === "set" || verb === "policy" || verb === "set-protocols" || verb === "panel-gate-switch") {
     if (argv.length !== 3 || argv[1] !== "--enabled") failAction(`${verb} takes only --enabled yes|no`);
     enabled = validateFlag(argv[2]!, "enabled") === "yes";
-  } else if (verb === "hetzner-switch") {
+  } else if (verb === "hetzner-switch" || verb === "netcup-switch") {
     if (argv.length !== 5 || argv[1] !== "--role" || argv[3] !== "--enabled" || (argv[2] !== "web" && argv[2] !== "panel")) {
-      failAction("hetzner-switch takes --role web|panel --enabled yes|no");
+      failAction(`${verb} takes --role web|panel --enabled yes|no`);
     }
     role = argv[2];
     enabled = validateFlag(argv[4]!, "enabled") === "yes";
@@ -272,16 +276,23 @@ async function hetznerOrError(options?: HetznerOptions): Promise<HetznerView> {
   catch (error) { return { state: "error", connected: false, error: `Hetzner could not be read: ${errorMessage(error)}` }; }
 }
 
+async function netcupOrError(options?: NetcupOptions): Promise<NetcupView> {
+  try { return await netcupView(options); }
+  catch (error) { return { state: "error", connected: false, error: `netcup could not be read: ${errorMessage(error)}` }; }
+}
+
 function gateOrError(options?: GateOptions): PanelGateView | { error: string } {
   try { return panelGateSummary(options); }
   catch (error) { return { error: `The Panel gate could not be read: ${errorMessage(error)}` }; }
 }
 
-async function listState(paths: CloudflareActionPaths, protocols?: FirewallOptions, hetzner?: HetznerOptions, gate?: GateOptions): Promise<{
+async function listState(paths: CloudflareActionPaths, options: FirewallActionOptions): Promise<{
   sites: CloudflareSiteView[]; autoEnableNewSites: boolean; protocols: FirewallStatus | { error: string }; hetzner: HetznerView;
-  panelGate: PanelGateView | { error: string };
+  netcup: NetcupView; panelGate: PanelGateView | { error: string };
 }> {
+  const { protocols, hetzner, gate } = options;
   const hetznerState = hetznerOrError(hetzner);
+  const netcupState = netcupOrError(options.netcup);
   const gateState = gateOrError(gate);
   const db = openPanelDatabase(paths.panelDb);
   try {
@@ -294,6 +305,7 @@ async function listState(paths: CloudflareActionPaths, protocols?: FirewallOptio
       autoEnableNewSites: policy.autoEnableNewSites,
       protocols: protocolsOrError(protocols),
       hetzner: await hetznerState,
+      netcup: await netcupState,
       panelGate: gateState,
     };
   } finally {
@@ -409,7 +421,7 @@ export async function runFirewallAction(argv: string[], options: FirewallActionO
     const paths = pathsFor(options);
     const action = parseAction(argv);
     const command = options.run ?? runCommand;
-    if (action.verb === "list") return listState(paths, options.protocols, options.hetzner, options.gate);
+    if (action.verb === "list") return listState(paths, options);
     if (action.verb === "policy") {
       const policy = await setPolicy(paths, action.enabled!);
       return { autoEnableNewSites: policy.autoEnableNewSites };
@@ -437,6 +449,14 @@ export async function runFirewallAction(argv: string[], options: FirewallActionO
       const body = readInput("hetzner-switch", options.input);
       const { confirm, typed } = typeof body === "object" && body !== null ? body as { confirm?: unknown; typed?: unknown } : {};
       return setHetznerRole(action.role!, action.enabled!, confirm, options.hetzner, typed);
+    }
+    if (action.verb === "netcup-connect") return connectNetcup(options.netcup);
+    if (action.verb === "netcup-poll") return pollNetcup(options.netcup);
+    if (action.verb === "netcup-disconnect") return disconnectNetcup(options.netcup);
+    if (action.verb === "netcup-switch") {
+      const body = readInput("netcup-switch", options.input);
+      const { confirm, typed } = typeof body === "object" && body !== null ? body as { confirm?: unknown; typed?: unknown } : {};
+      return setNetcupRole(action.role!, action.enabled!, confirm, options.netcup, typed);
     }
     if (action.verb === "panel-gate") return panelGateView(options.gate);
     if (action.verb === "panel-gate-cleanup") return cleanUpPanelGate(options.gate);

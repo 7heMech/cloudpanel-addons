@@ -594,16 +594,13 @@ export interface CloudConnectedView {
   blocked?: string | null;
 }
 
-/** What a page shows of one role, from the firewalls attached here and the addon's in the account. */
+/** What a page shows of one role: `firewall` is the Cloudflare one, attached here or not; `open` only while attached here. */
 export function roleView(
-  on: Guard | undefined, owned: Guard | undefined, open: Guard | undefined, current: boolean, role: CloudRole,
+  role: CloudRole, on: boolean, firewall: string | null, open: string | null, current: boolean,
   others: Guard[], ranges: CloudflareRanges | null, noun: string,
 ): CloudRoleView {
   return {
-    on: Boolean(on),
-    firewall: (on ?? owned)?.name ?? null,
-    open: open?.name ?? null,
-    current,
+    on, firewall, open, current,
     stillOpen: on && ranges ? describeOpenings(openToOthers(role, others, ranges.ranges), noun) : [],
   };
 }

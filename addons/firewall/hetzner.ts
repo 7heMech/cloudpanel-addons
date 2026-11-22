@@ -242,7 +242,7 @@ export async function hetznerView(options: HetznerOptions = {}): Promise<Hetzner
       const on = mine.find((firewall) => attachedIds.has(firewall.id));
       const open = owned(attached, role, "open")[0];
       const current = !on || !ranges || rulesSignature(on.rules) === rulesSignature(desiredRules(role, ranges.ranges));
-      roles[role] = roleView(on && guardOf(on), mine[0] && guardOf(mine[0]), open && guardOf(open), current, role, others.map(guardOf), ranges, WORDS.noun);
+      roles[role] = roleView(role, Boolean(on), (on ?? mine[0])?.name ?? null, open?.name ?? null, current, others.map(guardOf), ranges, WORDS.noun);
     }
     // Only while no change holds the lock, which records what it sees itself; only while the token is still
     // saved, so a read racing its removal does not bring hetzner.json back; and only when nothing recorded

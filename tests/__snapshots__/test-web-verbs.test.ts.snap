@@ -29,6 +29,10 @@ firewall:hetzner-connect           admin
 firewall:hetzner-disconnect        admin
 firewall:hetzner-switch            admin
 firewall:list                      admin
+firewall:netcup-connect            admin
+firewall:netcup-disconnect         admin
+firewall:netcup-poll               admin
+firewall:netcup-switch             admin
 firewall:panel-gate                admin
 firewall:panel-gate-switch         admin
 firewall:policy                    admin

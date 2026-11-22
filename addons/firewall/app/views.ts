@@ -5,7 +5,8 @@ import {
 } from "../../../lib/app-ui";
 import { mountPath } from "../../../lib/mount";
 import type { FirewallPageState } from "./service";
-import { HETZNER_ROLES, type HetznerRole } from "../hetzner";
+import { CLOUD_ROLES, ROLES, type CloudConnectedView, type CloudRole } from "../cloud-firewall";
+import { NETCUP_HOST } from "../netcup-api";
 
 const BASE = mountPath("firewall");
 const plural = (count: number, word: string): string => `${count} ${word}${count === 1 ? "" : "s"}`;
@@ -81,7 +82,24 @@ export function panelGateCard(view: FirewallPageState["panelGate"]): string {
 /** Hetzner has no prefilled token form, and a project's token page needs the project's id, which neither the API nor the metadata service gives. */
 const HETZNER_CONSOLE = "https://console.hetzner.com/projects";
 
-type ConnectedView = Extract<FirewallPageState["hetzner"], { state: "connected" }>;
+type ConnectedView = CloudConnectedView;
+type Provider = "hetzner" | "netcup";
+
+/** How a provider's card speaks, where the two differ. */
+const CARD: Record<Provider, { title: string; intro: string; noun: string; on: string; sshFix: string }> = {
+  hetzner: {
+    title: "Hetzner Cloud Firewall",
+    intro: "Hetzner drops what these firewalls do not allow before it reaches this server.",
+    noun: "firewall", on: "is attached too",
+    sshFix: "Allow it in another firewall in Hetzner Console to open it again.",
+  },
+  netcup: {
+    title: "netcup firewall",
+    intro: "netcup drops what these policies do not allow before it reaches this server.",
+    noun: "policy", on: "is on this server too",
+    sshFix: "Allow it in a policy in SCP to open it again.",
+  },
+};
 
 /** DNS's Connect Cloudflare dialog, for Hetzner. */
 function connectDialog(serverName: string | null, replacing: boolean): string {
@@ -102,6 +120,22 @@ function connectDialog(serverName: string | null, replacing: boolean): string {
   </form></dialog>`;
 }
 
+/** netcup's device sign-in: the page fills in the link and the code, then waits for netcup. */
+const NETCUP_DIALOG = `
+  <dialog id="nc-connect-dialog" aria-labelledby="nc-connect-heading" onclose="stopNetcupConnect()"><form method="dialog">
+    <div class="dialog-header"><h2 id="nc-connect-heading">Connect netcup</h2></div>
+    <ol class="hz-steps">
+      <li><strong>Sign in to netcup</strong>
+        <p class="hint">Use the customer number of the account that holds this server.</p>
+        <a class="btn" id="nc-connect-link" href="${NETCUP_HOST}/" target="_blank" rel="noopener noreferrer" referrerpolicy="no-referrer">Open netcup ↗</a></li>
+      <li><strong>Check the code and grant access</strong>
+        <p class="hint">netcup shows <strong class="nc-code" id="nc-connect-code"></strong>.</p></li>
+    </ol>
+    <p class="hint nc-connect-status" id="nc-connect-status" role="status">Waiting for netcup…</p>
+    <div class="alert hz-connect-error" id="nc-connect-error" role="alert" hidden></div>
+    <div class="actions dialog-actions"><button class="btn" type="button" onclick="this.closest('dialog').close()">Cancel</button></div>
+  </form></dialog>`;
+
 /** The review a switch opens, in sections: what changes, the names that stop answering, and what closes. */
 const REVIEW_DIALOG = `
   <dialog id="hz-review" aria-labelledby="hz-review-title"><form method="dialog">
@@ -120,36 +154,46 @@ const REVIEW_DIALOG = `
     </div>
   </form></dialog>`;
 
-const ROLE_HINTS: Record<HetznerRole, string> = {
+const ROLE_HINTS: Record<CloudRole, string> = {
   web: "Ports 80 and 443 answer only Cloudflare, so a site must be proxied through it.",
   panel: "Port 8443 answers only Cloudflare; CloudPanel answers at its custom domain.",
 };
 
-function roleRows(view: ConnectedView): string {
-  return (Object.keys(HETZNER_ROLES) as HetznerRole[]).map((role) => {
+function roleRows(provider: Provider, view: ConnectedView): string {
+  const words = CARD[provider];
+  return ROLES.map((role) => {
     const info = view.roles[role];
     const notes = [
-      ...info.stillOpen.map((line) => `${line} Until that changes, this firewall has no effect.`),
+      ...info.stillOpen.map((line) => `${line} Until that changes, this ${words.noun} has no effect.`),
       ...(info.current ? [] : ["Its rules differ from Cloudflare's list; the next repair puts them back."]),
-      ...(info.on && info.open ? [`${info.open} is attached too and lets anyone in; the next repair takes it off.`] : []),
+      ...(info.on && info.open ? [`${info.open} ${words.on} and lets anyone in; the next repair takes it off.`] : []),
     ].map((line) => `<p class="hint tone-warn">${esc(line)}</p>`).join("");
     const attached = [info.on && info.firewall ? esc(info.firewall) : "", info.open ? `${esc(info.open)} · open to anyone` : ""].filter(Boolean).join("<br>");
-    const title = HETZNER_ROLES[role].title;
+    const title = CLOUD_ROLES[role].title;
     return `
       <div class="hz-row">
         <div><h3>${title}</h3><p class="hint">${ROLE_HINTS[role]}</p>${attached ? `<p class="hint hz-fw-name">${attached}</p>` : ""}${notes}</div>
-        <label class="switch"><input id="hetzner-${role}" type="checkbox" aria-label="${title}" ${info.on ? "checked" : ""} onchange="setHetzner(this, '${role}')"><span></span></label>
+        <label class="switch"><input id="${provider}-${role}" type="checkbox" aria-label="${title}" ${info.on ? "checked" : ""} ${view.blocked ? "disabled" : ""} onchange="setCloud(this, '${provider}', '${role}')"><span></span></label>
       </div>`;
   }).join("");
 }
 
-function problems(view: ConnectedView): string {
+function problems(provider: Provider, view: ConnectedView): string {
   const ports = view.sshClosed;
+  const blocked = view.blocked ? `<div class="notice" role="status">${esc(view.blocked)}</div>` : "";
   const ssh = ports.length
-    ? `<div class="notice" role="status">SSH is closed: no firewall on this server allows port ${esc(ports.join(", "))}, so site users cannot connect over SFTP. ${view.terminal
-      ? `<a href="${mountPath("terminal")}/">Terminal</a> gives a root shell to an administrator root allows one.` : "Allow it in another firewall in Hetzner Console to open it again."}</div>`
+    ? `<div class="notice" role="status">SSH is closed: no ${CARD[provider].noun} on this server allows port ${esc(ports.join(", "))}, so site users cannot connect over SFTP. ${view.terminal
+      ? `<a href="${mountPath("terminal")}/">Terminal</a> gives a root shell to an administrator root allows one.` : CARD[provider].sshFix}</div>`
     : "";
-  return ssh + (view.rangesProblem ? `<div class="notice" role="status">${esc(view.rangesProblem)}</div>` : "");
+  return blocked + ssh + (view.rangesProblem ? `<div class="notice" role="status">${esc(view.rangesProblem)}</div>` : "");
+}
+
+function providerCard(provider: Provider, body: string, headerActions = "", dialogs = ""): string {
+  return `
+    <div class="card hz-card" id="${provider}-card">
+      <div class="card-header"><h2>${CARD[provider].title}</h2>${headerActions}</div>
+      <p class="hint hz-intro">${CARD[provider].intro}</p>${body}
+    </div>${dialogs}`;
 }
 
 /** The Hetzner Cloud Firewall card: connect a token in a dialog, then a switch for the sites and one for the panel. */
@@ -160,11 +204,7 @@ function hetznerCard(view: FirewallPageState["hetzner"]): string {
         <button class="btn" type="button" onclick="${openConnect}">Replace token</button>
         <button class="btn btn-danger" type="button" onclick="removeHetznerToken()">Remove token</button>
       </div>`;
-  const card = (body: string, headerActions = "", dialogs = "") => `
-    <div class="card hz-card" id="hetzner-card">
-      <div class="card-header"><h2>Hetzner Cloud Firewall</h2>${headerActions}</div>
-      <p class="hint hz-intro">Hetzner drops what these firewalls do not allow before it reaches this server.</p>${body}
-    </div>${dialogs}`;
+  const card = (body: string, headerActions = "", dialogs = "") => providerCard("hetzner", body, headerActions, dialogs);
   if (view.state === "absent") {
     return card('<p class="hz-absent">This server is not a Hetzner Cloud server, so there is nothing to set here. Dedicated (Robot) servers are not covered.</p>');
   }
@@ -177,8 +217,35 @@ function hetznerCard(view: FirewallPageState["hetzner"]): string {
     return card(`<div class="alert" role="alert">${esc(view.error)}</div>`, view.connected ? tokenButtons : "", view.connected ? connectDialog(null, true) : "");
   }
   const others = view.others.length ? `Also attached to ${esc(view.serverName)}: ${view.others.map(esc).join(", ")}.` : `No other firewall is attached to ${esc(view.serverName)}.`;
-  return card(`${problems(view)}${roleRows(view)}<p class="hint hz-foot">Connected to the project of ${esc(view.serverName)}. ${others}</p>`,
-    tokenButtons, `${connectDialog(view.serverName, true)}${REVIEW_DIALOG}`);
+  return card(`${problems("hetzner", view)}${roleRows("hetzner", view)}<p class="hint hz-foot">Connected to the project of ${esc(view.serverName)}. ${others}</p>`,
+    tokenButtons, connectDialog(view.serverName, true));
+}
+
+/** The netcup firewall card: sign in with a code netcup shows, then a switch for the sites and one for the panel. */
+function netcupCard(view: FirewallPageState["netcup"]): string {
+  const signInButtons = `
+      <div class="actions hz-token-actions">
+        <button class="btn" type="button" onclick="startNetcupConnect()">Connect again</button>
+        <button class="btn btn-danger" type="button" onclick="removeNetcupSignIn()">Disconnect</button>
+      </div>`;
+  const card = (body: string, headerActions = "") => providerCard("netcup", body, headerActions, NETCUP_DIALOG);
+  if (view.state === "absent") return "";
+  if (view.state === "disconnected") {
+    const address = view.address ? ` (<strong>${esc(view.address)}</strong>)` : "";
+    return card(`<div class="hz-connect"><p class="hint">Sign in to the netcup account that holds this server${address}; then turn on the policies you want.</p>
+        <button class="btn btn-primary" type="button" onclick="startNetcupConnect()">Connect netcup</button></div>`);
+  }
+  if (view.state === "error") return card(`<div class="alert" role="alert">${esc(view.error)}</div>`, view.connected ? signInButtons : "");
+  const others = view.others.length ? `Also on it: ${view.others.map(esc).join(", ")}.` : "No other policy is on it.";
+  return card(`${problems("netcup", view)}${roleRows("netcup", view)}<p class="hint hz-foot">Connected to netcup; this server is ${esc(view.serverName)} there. ${others}</p>`, signInButtons);
+}
+
+/** On a netcup server the Hetzner card has nothing to say, and the other way round. */
+function providerCards(state: FirewallPageState): string {
+  const netcup = netcupCard(state.netcup);
+  const hetzner = netcup && state.hetzner.state === "absent" ? "" : hetznerCard(state.hetzner);
+  const review = state.hetzner.state === "connected" || state.netcup.state === "connected" ? REVIEW_DIALOG : "";
+  return `${netcup}${hetzner}${review}`;
 }
 
 export function dashboardView(state: FirewallPageState): string {
@@ -199,7 +266,7 @@ export function dashboardView(state: FirewallPageState): string {
 
   return `
     <div class="page-heading">
-      <div><h1>Firewall</h1><p>CloudPanel's “Allow traffic from Cloudflare only” setting for every site, a protocol for each rule on its Firewall page, a gate in front of the panel, and Hetzner Cloud Firewalls that admit only Cloudflare.</p></div>
+      <div><h1>Firewall</h1><p>CloudPanel's “Allow traffic from Cloudflare only” setting for every site, a protocol for each rule on its Firewall page, a gate in front of the panel, and Hetzner Cloud or netcup firewalls that admit only Cloudflare.</p></div>
     </div>
     <div class="card card-table">
       ${total === 0
@@ -226,5 +293,5 @@ export function dashboardView(state: FirewallPageState): string {
       <div><h2>Enable on new sites</h2>
         <p class="hint">A site created from now on allows Cloudflare only, seconds after CloudPanel creates it. A site you turn off here is never turned back on.</p></div>
       <label class="switch"><input id="automatic-policy" type="checkbox" aria-label="Enable Cloudflare-only access on new sites" ${state.autoEnableNewSites ? "checked" : ""} onchange="setAutomatic(this)"><span></span></label>
-    </div>${protocolsCard(state.protocols)}${panelGateCard(state.panelGate)}${hetznerCard(state.hetzner)}`;
+    </div>${protocolsCard(state.protocols)}${panelGateCard(state.panelGate)}${providerCards(state)}`;
 }

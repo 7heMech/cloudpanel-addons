@@ -145,7 +145,7 @@ async function setProtocols(input) {
   notify(state.ok ? done : done + ' The page may be out of date: ' + state.error, state.ok ? 'ok' : 'warn');
 }
 
-function hetznerNotice(state) {
+function replyNotice(state) {
   const done = (state.reply && state.reply.notice) || 'Done.';
   notify(state.ok ? done : done + ' The page may be out of date: ' + state.error, state.ok ? 'ok' : 'warn');
 }
@@ -187,7 +187,7 @@ async function connectHetzner(event) {
   }
   dialog.close();
   const state = await repaint();
-  hetznerNotice(Object.assign(state, { reply: reply.data }));
+  replyNotice(Object.assign(state, { reply: reply.data }));
 }
 
 function resetHetznerConnect(dialog) {
@@ -203,7 +203,94 @@ async function removeHetznerToken() {
   });
   if (!accepted) return;
   const state = await change('/api/hetzner/token/remove', {}, 'Could not remove the token: ');
-  if (state) hetznerNotice(state);
+  if (state) replyNotice(state);
+}
+
+// netcup's device sign-in: root asks netcup for a code, the operator grants
+// access at netcup with it, and the page asks root, as often as netcup
+// allows, whether that happened. Closing the dialog stops asking; the code
+// then expires at netcup.
+let netcupSignIn = null;
+
+function stopNetcupConnect() {
+  if (netcupSignIn) netcupSignIn.stopped = true;
+  netcupSignIn = null;
+}
+
+async function startNetcupConnect() {
+  stopNetcupConnect();
+  clearNotice();
+  busy(true);
+  let reply = null;
+  let failure = '';
+  try {
+    reply = await call('/api/netcup/connect', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: '{}' });
+  } catch (error) {
+    failure = error.message;
+  } finally {
+    busy(false);
+  }
+  if (failure) {
+    notify('Could not start netcup\'s sign-in: ' + failure, 'error');
+    return;
+  }
+  const byId = function (id) { return CLP_ROOT.getElementById(id); };
+  const dialog = byId('nc-connect-dialog');
+  const status = byId('nc-connect-status');
+  const problem = byId('nc-connect-error');
+  const sign = reply.data;
+  byId('nc-connect-code').textContent = sign.userCode;
+  byId('nc-connect-link').href = sign.verificationUri;
+  status.textContent = 'Waiting for netcup…';
+  status.hidden = false;
+  problem.hidden = true;
+  const run = { stopped: false };
+  dialog.showModal();
+  netcupSignIn = run;
+  const fail = function (message) {
+    status.hidden = true;
+    problem.textContent = message;
+    problem.hidden = false;
+  };
+  let interval = sign.interval;
+  const deadline = Date.now() + sign.expiresIn * 1000;
+  while (Date.now() < deadline) {
+    await new Promise(function (resolve) { setTimeout(resolve, interval * 1000); });
+    if (run.stopped) return;
+    let polled = null;
+    try {
+      polled = await call('/api/netcup/poll', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: '{}' });
+    } catch (error) {
+      if (!run.stopped) fail(error.message);
+      stopNetcupConnect();
+      return;
+    }
+    const data = polled.data || {};
+    if (data.pending) {
+      if (run.stopped) return;
+      interval = data.interval || interval;
+      continue;
+    }
+    // Granted, even if the dialog was closed meanwhile: the card has to show it.
+    stopNetcupConnect();
+    if (dialog.open) dialog.close();
+    const state = await repaint();
+    replyNotice(Object.assign(state, { reply: data }));
+    return;
+  }
+  if (!run.stopped) fail('The code expired before access was granted; connect again.');
+  stopNetcupConnect();
+}
+
+async function removeNetcupSignIn() {
+  const accepted = await confirmAction({
+    title: 'Disconnect netcup?',
+    text: 'Firewall stops reading netcup, and asks netcup to revoke the sign-in.',
+    confirmLabel: 'Disconnect', danger: true,
+  });
+  if (!accepted) return;
+  const state = await change('/api/netcup/remove', {}, 'Could not disconnect netcup: ');
+  if (state) replyNotice(state);
 }
 
 // The review in sections: what changes, the names that stop answering, what
@@ -297,7 +384,7 @@ async function reviewedSwitch(input, path, body, accept) {
   const review = reply.data && reply.data.review;
   if (!review) {
     const state = await repaint();
-    hetznerNotice(Object.assign(state, { reply: reply.data }));
+    replyNotice(Object.assign(state, { reply: reply.data }));
     return;
   }
   const extra = await accept(review);
@@ -308,11 +395,11 @@ async function reviewedSwitch(input, path, body, accept) {
     notify('What this change would do has changed since you confirmed it; switch it again to see the new review.', 'warn');
     return;
   }
-  hetznerNotice(state);
+  replyNotice(state);
 }
 
-function setHetzner(input, role) {
-  return reviewedSwitch(input, '/api/hetzner/switch', { role: role }, async function (review) {
+function setCloud(input, provider, role) {
+  return reviewedSwitch(input, '/api/' + provider + '/switch', { role: role }, async function (review) {
     if (!await showHetznerReview(review)) return null;
     return { typed: CLP_ROOT.getElementById('hz-review-typed').value.trim() };
   });
