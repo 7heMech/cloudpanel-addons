@@ -313,3 +313,12 @@ older version than the one installed. That is how a release candidate is
 tried on a real box before anyone else gets it. The release is then tagged on
 the candidate's commit, so what was tried is what ships, and versions compare
 with semver's pre-release order, so a box on `2.0.0-rc.1` is offered `2.0.0`.
+
+## Landing page
+
+`wrangler.jsonc` deploys `dist/site`, which `tools/site.ts` writes from the
+addon catalog, `CLOUDPANEL_RANGE` and `REPO`, as an assets-only Worker on the
+route `7he.dev/cloudpanel-addons*`. That route is more specific than anything
+7he.dev's own Worker holds, so it takes only this path. Workers Builds runs
+`bun run site` and deploys from `main`, so the page lists what `main` ships,
+not `dev`.
