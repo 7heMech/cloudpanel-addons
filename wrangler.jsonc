@@ -1,7 +1,6 @@
 // The landing page at 7he.dev/cloudpanel-addons/, built by `bun run site` and
 // deployed by Workers Builds from main. See docs/decisions/releases.md.
 {
-  "$schema": "node_modules/wrangler/config-schema.json",
   "name": "cloudpanel-addons-site",
   "compatibility_date": "2026-11-01",
   "assets": {
