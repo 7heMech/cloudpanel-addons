@@ -33,6 +33,7 @@
   `/tmp/clp-addons-ui` (starts the preview and bootstraps a headless Chromium
   itself); read the files to review a change visually.
 - `bun run deploy:stg` builds and installs the binary on the staging CloudPanel
-  box, whose panel is at `https://46.225.93.37:8443/addons` (SSH as `root` with
+  box, whose panel is at `https://[2a03:4000:2:95a:147b:36ff:fea4:2563]:8443/addons`
+  (IPv6 only; SSH as `root` with
   `~/.ssh/cloudpanel-addons-dev-0bad61aa9144`). Use it for anything the preview
   cannot show, such as real panel data or injection into CloudPanel's own pages.
