@@ -59,9 +59,11 @@ follows a change without the page being told.
 The login page asks the manager for a challenge, the browser asks the key, and
 the manager hands the answer to the root action. Root checks the signature,
 writes CloudPanel's own one-time token to `var/.token_<64 hex>` as the panel's
-user, and the browser is sent to `/autologin?token=…`. CloudPanel's
+user, and the login page fetches `/autologin?token=…`. CloudPanel's
 `AutoLoginAuthenticator` reads the file, deletes it and starts the session; the
-addon never builds a session itself. The token lasts 60 seconds. Expired tokens
+addon never builds a session itself. The page then replaces itself with where
+that request landed, so the spent token is never a page address that a reload,
+or Chrome's "Desktop site" toggle, would send again. The token lasts 60 seconds. Expired tokens
 of that shape are removed on the next sign-in. Each sign-in's user, key and
 time are recorded first in `sign-ins.json`, root's alone, the newest 20 per
 user for 30 days, so the gateway can tell a session a key opened from one that

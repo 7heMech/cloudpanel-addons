@@ -26,7 +26,16 @@ if (box && keysUsable()) {
         },
       });
     }).then(function (reply) {
-      location.href = reply.redirect;
+      // The token is single-use, so /autologin must never be the page's own
+      // address: a reload, or Chrome's "Desktop site" toggle, which reloads
+      // the URL before redirects, would spend it again.
+      return fetch(reply.redirect, { credentials: "same-origin" }).then(function (res) {
+        if (res.ok) return location.replace(res.url);
+        // CloudPanel's refusal is {"message": …} rather than our {"error": …}.
+        return res.json().catch(function () { return null; }).then(function (refusal) {
+          throw new Error((refusal && refusal.message) || "Sign-in failed.");
+        });
+      });
     }).catch(function (error) {
       button.disabled = false;
       show(keyError(error, "Sign-in failed."));
