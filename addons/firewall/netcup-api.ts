@@ -6,6 +6,7 @@
  * discovery document. Tokens go only into the Authorization header or the
  * OAuth form, and every message that leaves here has them redacted.
  */
+import { errorMessage } from "../../lib/errors";
 import { ProviderError, ProviderHttp, redact, type ApiFetch } from "../../lib/provider-http";
 
 export const NETCUP_HOST = "https://www.servercontrolpanel.de";
@@ -48,7 +49,12 @@ export interface NetcupServer { id: number; name: string; nickname?: string | nu
 
 export interface NetcupInterface { mac: string; ipv4Addresses?: { ip: string }[]; ipv6Addresses?: { networkPrefix: string; cidr?: string }[] }
 
-interface TaskInfo { uuid: string; state: string; message?: string | null; responseError?: { message?: string } | null }
+interface UserMinimal { id?: number; username?: string }
+
+interface TaskInfo { uuid: string; state: string; message?: string | null; responseError?: { message?: string } | null; executingUser?: UserMinimal | null }
+
+/** The states a task that did not finish ends in. */
+export const TASK_FAILED = new Set(["ERROR", "CANCELED", "WAITING_FOR_CANCEL", "ROLLBACK"]);
 
 export interface DeviceSignIn {
   device_code: string;
@@ -62,8 +68,8 @@ export interface DeviceSignIn {
 export interface NetcupTokens { access_token: string; refresh_token?: string }
 
 export class NetcupError extends ProviderError {
-  constructor(message: string, status: number, readonly code: string) {
-    super("netcup", message, status);
+  constructor(readonly detail: string, status: number, readonly code: string) {
+    super("netcup", detail, status);
   }
 }
 
@@ -120,31 +126,38 @@ export class NetcupAuth {
     await this.form("/revoke", { token: refreshToken, token_type_hint: "refresh_token" });
   }
 
-  /**
-   * The SCP user id the policy endpoints need: the `id` claim of userinfo,
-   * which is not the customer number one signs in with.
-   */
-  async userId(accessToken: string): Promise<number> {
+  /** Who signed in: the customer number, which is the SCP username, and an `id` claim when the realm adds one. */
+  async userinfo(accessToken: string): Promise<{ id: number | null; username: string | null }> {
     this.secrets.push(accessToken);
     const http = new ProviderHttp("netcup", NETCUP_OIDC, { Authorization: `Bearer ${accessToken}` }, this.fetcher, { until: 0 }, this.timeoutMs);
     const { status, json } = await http.request("/userinfo");
     if (status < 200 || status >= 300) throw new NetcupError(`userinfo answered HTTP ${status}`, status, status === 401 ? "unauthorized" : "");
-    const id = Number((json as { id?: unknown } | null)?.id);
-    if (!Number.isSafeInteger(id) || id <= 0) throw new NetcupError("userinfo did not name an SCP user id", status, "");
-    return id;
+    const claims = json as { id?: unknown; preferred_username?: unknown } | null;
+    const id = Number(claims?.id);
+    return {
+      id: Number.isSafeInteger(id) && id > 0 ? id : null,
+      username: typeof claims?.preferred_username === "string" && claims.preferred_username ? claims.preferred_username : null,
+    };
   }
+}
+
+export interface NetcupApiOptions {
+  sleep?: (ms: number) => Promise<void>;
+  now?: () => number;
+  /** When to stop waiting for tasks, across every write of one action. */
+  deadline?: number;
+  timeoutMs?: number;
 }
 
 export class NetcupApi {
   private readonly http: ProviderHttp;
+  private readonly sleep: (ms: number) => Promise<void>;
+  private readonly now: () => number;
 
-  constructor(
-    accessToken: string,
-    fetcher: ApiFetch = fetch,
-    private readonly sleep: (ms: number) => Promise<void> = (ms) => Bun.sleep(ms),
-    timeoutMs?: number,
-  ) {
-    this.http = new ProviderHttp("netcup", SCP_API, { Authorization: `Bearer ${accessToken}` }, fetcher, { until: 0 }, timeoutMs);
+  constructor(accessToken: string, fetcher: ApiFetch = fetch, private readonly options: NetcupApiOptions = {}) {
+    this.http = new ProviderHttp("netcup", SCP_API, { Authorization: `Bearer ${accessToken}` }, fetcher, { until: 0 }, options.timeoutMs);
+    this.sleep = options.sleep ?? ((ms) => Bun.sleep(ms));
+    this.now = options.now ?? Date.now;
   }
 
   clean(text: string): string {
@@ -167,9 +180,37 @@ export class NetcupApi {
     return mac.toLowerCase();
   }
 
+  /** Every item of a listing, page by page, until a page is empty or brings nothing new. */
+  private async all<T extends { id: number }>(path: string): Promise<T[]> {
+    const found = new Map<number, T>();
+    for (let offset = 0; ;) {
+      const page = await this.call<T[]>(`${path}${path.includes("?") ? "&" : "?"}limit=100&offset=${offset}`);
+      const before = found.size;
+      for (const item of page) found.set(item.id, item);
+      if (!page.length || found.size === before) return [...found.values()];
+      offset += page.length;
+    }
+  }
+
   /** The servers in the account with this address; the filter may match more than the address, so callers check. */
   serversByIp(ip: string): Promise<NetcupServer[]> {
     return this.call<NetcupServer[]>(`/servers?${new URLSearchParams({ ip })}`);
+  }
+
+  servers(): Promise<NetcupServer[]> {
+    return this.all<NetcupServer>("/servers");
+  }
+
+  /** The user, which answers only for the signed-in account's own id. */
+  user(userId: number): Promise<UserMinimal> {
+    return this.call<UserMinimal>(`/users/${userId}`);
+  }
+
+  /** Who ran the account's recent tasks and this server's logged actions: the SCP users that can sign in to it. */
+  async executingUsers(serverId?: number): Promise<UserMinimal[]> {
+    const tasks = await this.call<TaskInfo[]>("/tasks?limit=50");
+    const logs = serverId ? await this.call<{ executingUser?: UserMinimal | null }[]>(`/servers/${serverId}/logs?limit=50`) : [];
+    return [...tasks, ...logs].flatMap((entry) => entry.executingUser ? [entry.executingUser] : []);
   }
 
   interfaces(serverId: number): Promise<NetcupInterface[]> {
@@ -189,14 +230,8 @@ export class NetcupApi {
   }
 
   /** Every policy in the account. The listing may leave out the rules; `policy` has them. */
-  async policies(userId: number): Promise<NetcupPolicy[]> {
-    const all: NetcupPolicy[] = [];
-    const limit = 100;
-    for (let offset = 0; ; offset += limit) {
-      const page = await this.call<NetcupPolicy[]>(`/users/${userId}/firewall-policies?limit=${limit}&offset=${offset}`);
-      all.push(...page);
-      if (page.length < limit) return all;
-    }
+  policies(userId: number): Promise<NetcupPolicy[]> {
+    return this.all<NetcupPolicy>(`/users/${userId}/firewall-policies`);
   }
 
   policy(userId: number, id: number): Promise<NetcupPolicy> {
@@ -213,16 +248,25 @@ export class NetcupApi {
     if (reply?.taskInfo) await this.settle(reply.taskInfo);
   }
 
-  /** Waits for a task netcup started, up to a minute. */
+  /**
+   * Waits for a task netcup started, up to a minute or the action's deadline.
+   * netcup took the change once it answered with the task, so every failure
+   * from here is `running` or the state the task ended in, never a refusal.
+   */
   private async settle(started: TaskInfo): Promise<void> {
     let task = started;
-    for (let tries = 0; (task.state === "PENDING" || task.state === "RUNNING") && tries < 60; tries++) {
+    const until = Math.min(this.now() + 60_000, this.options.deadline ?? Infinity);
+    while ((task.state === "PENDING" || task.state === "RUNNING") && this.now() < until) {
       await this.sleep(1000);
-      task = await this.call<TaskInfo>(`/tasks/${encodeURIComponent(task.uuid)}`);
+      try {
+        task = await this.call<TaskInfo>(`/tasks/${encodeURIComponent(task.uuid)}`);
+      } catch (error) {
+        throw new NetcupError(`took the change, but could not be asked whether it finished (${this.clean(errorMessage(error))})`, 0, "running");
+      }
     }
-    if (task.state === "PENDING" || task.state === "RUNNING") throw new NetcupError("netcup is still applying the change; reload the page in a minute", 0, "running");
+    if (task.state === "PENDING" || task.state === "RUNNING") throw new NetcupError("took the change and is still applying it", 0, "running");
     if (task.state !== "FINISHED") {
-      throw new NetcupError(this.clean(`${task.responseError?.message || task.message || "a task failed"} (${task.state})`), 0, task.state);
+      throw new NetcupError(this.clean(`took the change, but its task ended in ${task.state}: ${task.responseError?.message || task.message || "no reason given"}`), 0, task.state);
     }
   }
 }

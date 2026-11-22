@@ -13,18 +13,18 @@ import { errorMessage } from "../../lib/errors";
 import { withFileLock } from "../../lib/file-lock";
 import { PANEL_CUSTOM_DOMAIN_FILE, PANEL_CUSTOM_DOMAIN_VHOST } from "../../lib/panel-custom-domain";
 import { addonConfigFile, addonStateDir, CLOUDFLARE_IPS_PATH, DISTRO_NGINX_SITES_DIR, LOCK_DIR, PANEL_DB, ROOT_UID } from "../../lib/paths";
-import type { ApiFetch } from "../../lib/provider-http";
+import { ProviderError, type ApiFetch } from "../../lib/provider-http";
 import { readState, writeState } from "../../lib/root-state";
 import {
   canonicalList, CLOUD_ROLES, contains, describeOpenings, disableReview, enableReview, firmwareVendor, mayRewriteAt, OPEN_DESCRIPTION, openToOthers,
   parseCidr, planFor, portsOf, readCloudflareRangesFrom, readSync as readSyncFile, roleView, ROLES, RULE_DESCRIPTION, sshMissing, sshPorts,
   writeSync as writeSyncFile,
-  type Access, type CloudConnectedView, type CloudflareRanges, type CloudReview, type CloudRole, type CloudSetupState, type Guard,
+  type Access, type Cidr, type CloudConnectedView, type CloudflareRanges, type CloudReview, type CloudRole, type CloudSetupState, type Guard,
   type HostPaths, type Plan, type PlanContext, type ProviderWords, type SeenState,
 } from "./cloud-firewall";
 import {
-  NETCUP_HOST, NetcupApi, NetcupAuth, NetcupError, validRefreshToken,
-  type NetcupFirewall, type NetcupPolicy, type NetcupRule,
+  NETCUP_HOST, NetcupApi, NetcupAuth, NetcupError, TASK_FAILED, validRefreshToken,
+  type NetcupFirewall, type NetcupInterface, type NetcupPolicy, type NetcupRule, type NetcupServer,
 } from "./netcup-api";
 import { DEFAULT_FIREWALL_PATHS } from "./protocols";
 
@@ -80,8 +80,10 @@ export interface NetcupOptions {
   resolve?: (host: string) => Promise<string[]>;
   run?: (command: string, args: string[]) => CommandResult;
   now?: () => number;
-  /** This server's public IPv4 addresses. */
+  /** This server's public IPv4 and global IPv6 addresses. */
   addresses?: () => string[];
+  /** The MAC addresses of this server's interfaces. */
+  macs?: () => string[];
 }
 
 function pathsOf(options: NetcupOptions): NetcupPaths {
@@ -89,6 +91,10 @@ function pathsOf(options: NetcupOptions): NetcupPaths {
 }
 
 const nowOf = (options: NetcupOptions) => (options.now ?? Date.now)();
+const addressesOf = (options: NetcupOptions) => (options.addresses ?? publicAddresses)();
+
+/** How long a switch may wait for netcup's tasks, so it answers within the gateway's 240 seconds. */
+const SWITCH_BUDGET_MS = 180_000;
 
 function readCloudflareRanges(options: NetcupOptions): CloudflareRanges {
   return readCloudflareRangesFrom(pathsOf(options), "the netcup policies");
@@ -96,21 +102,30 @@ function readCloudflareRanges(options: NetcupOptions): CloudflareRanges {
 
 // --- Rules ------------------------------------------------------------------
 
+/**
+ * Inbound ICMPv6 from anyone. Each of the addon's policies makes netcup drop by
+ * default, and IPv6 stops working without neighbour discovery, router
+ * advertisements and Packet Too Big, which would cut off a server with no IPv4.
+ */
+const ICMPV6: NetcupRule = {
+  description: "ICMPv6, which IPv6 needs, kept by clp-addons", direction: "INGRESS", protocol: "ICMPv6", action: "ACCEPT", sources: [],
+};
+
 /** The rules of one of the addon's policies: a pure function of the list, one rule per port and address family. */
 export function netcupRules(role: CloudRole, ranges: string[]): NetcupRule[] {
   const families = [ranges.filter((range) => !range.includes(":")), ranges.filter((range) => range.includes(":"))];
-  return CLOUD_ROLES[role].ports.flatMap((port) => families.map((sources) => ({
+  return [...CLOUD_ROLES[role].ports.flatMap((port) => families.map((sources) => ({
     description: RULE_DESCRIPTION, direction: "INGRESS" as const, protocol: "TCP" as const, action: "ACCEPT" as const,
     sources: [...sources], destinationPorts: String(port),
-  })));
+  }))), { ...ICMPV6 }];
 }
 
 /** The rules of a role's policy open to anyone: fixed, so every server writes the same. */
 export function netcupOpenRules(role: CloudRole): NetcupRule[] {
-  return CLOUD_ROLES[role].ports.map((port) => ({
+  return [...CLOUD_ROLES[role].ports.map((port) => ({
     description: OPEN_DESCRIPTION, direction: "INGRESS" as const, protocol: "TCP" as const, action: "ACCEPT" as const,
     sources: [], destinationPorts: String(port),
-  }));
+  })), { ...ICMPV6 }];
 }
 
 /** Two rule sets with the same signature allow the same traffic, whatever order or spelling netcup returns. */
@@ -161,17 +176,27 @@ export function mayRewrite(policy: NetcupPolicy, refreshedAt: number, now = Date
 
 const PRIVATE_V4 = ["10.0.0.0/8", "100.64.0.0/10", "127.0.0.0/8", "169.254.0.0/16", "172.16.0.0/12", "192.168.0.0/16"].map((range) => parseCidr(range)!);
 
-/** The public IPv4 addresses on this server's interfaces: netcup puts them there, with no NAT in between. */
+const GLOBAL_V6 = parseCidr("2000::/3")!;
+
+/** The public IPv4 and global IPv6 addresses on this server's interfaces, IPv4 first: netcup puts them there, with no NAT in between. */
 export function publicAddresses(): string[] {
   const found = new Set<string>();
   for (const list of Object.values(networkInterfaces())) {
     for (const entry of list ?? []) {
-      if (entry.internal || entry.family !== "IPv4") continue;
-      const cidr = parseCidr(entry.address);
-      if (cidr && !PRIVATE_V4.some((range) => contains(range, cidr))) found.add(entry.address);
+      const cidr = entry.internal ? null : parseCidr(entry.address);
+      if (!cidr) continue;
+      if (cidr.v6 ? contains(GLOBAL_V6, cidr) : !PRIVATE_V4.some((range) => contains(range, cidr))) found.add(entry.address);
     }
   }
-  return [...found].sort();
+  return [...found].sort((a, b) => Number(a.includes(":")) - Number(b.includes(":")) || a.localeCompare(b));
+}
+
+export function interfaceMacs(): string[] {
+  const found = new Set<string>();
+  for (const list of Object.values(networkInterfaces())) {
+    for (const entry of list ?? []) if (!entry.internal && entry.mac && entry.mac !== "00:00:00:00:00:00") found.add(entry.mac.toLowerCase());
+  }
+  return [...found];
 }
 
 export function isNetcup(vendorFile: string): boolean {
@@ -224,7 +249,7 @@ function signInRefused(error: unknown): boolean {
  * refresh token on every use, so the new one is saved before the access
  * token is used, under a lock so no two processes spend the same one.
  */
-async function signIn(paths: NetcupPaths, options: NetcupOptions): Promise<{ api: NetcupApi; auth: NetcupAuth; access: string }> {
+async function signIn(paths: NetcupPaths, options: NetcupOptions, deadline?: number): Promise<{ api: NetcupApi; auth: NetcupAuth; access: string }> {
   const auth = new NetcupAuth(options.fetch);
   const access = await withFileLock(paths.tokenLockFile, 30, "another netcup sign-in is being refreshed", async () => {
     const token = readToken(paths);
@@ -235,59 +260,134 @@ async function signIn(paths: NetcupPaths, options: NetcupOptions): Promise<{ api
     }
     return tokens.access_token;
   });
-  return { api: new NetcupApi(access, options.fetch, options.sleep), auth, access };
+  return { api: new NetcupApi(access, options.fetch, { sleep: options.sleep, now: options.now, deadline }), auth, access };
 }
 
-interface Target { userId: number; serverId: number; mac: string; serverName: string }
+interface Target { serverId: number; mac: string; serverName: string }
 
-/** This server in the account: the server and interface netcup lists with one of its public addresses. */
-async function findServer(api: NetcupApi, addresses: string[]): Promise<Omit<Target, "userId"> | null> {
+/** An IPv6 prefix netcup lists for an interface; `cidr` may be the whole prefix or only its length. */
+function prefixOf(entry: { networkPrefix: string; cidr?: string }): Cidr | null {
+  const cidr = entry.cidr ?? "";
+  const prefix = parseCidr(cidr.includes("/") ? cidr : `${entry.networkPrefix}/${/^\d{1,3}$/.test(cidr) ? cidr : "64"}`);
+  return prefix?.v6 && prefix.prefix >= 32 ? prefix : null;
+}
+
+/** Whether netcup's interface is one of this server's: by MAC, by one of its IPv4 addresses, or by an IPv6 address in one of its prefixes. */
+function isOurs(entry: NetcupInterface, addresses: Cidr[], macs: string[]): boolean {
+  if (macs.includes(entry.mac.toLowerCase())) return true;
+  if (entry.ipv4Addresses?.some((ip) => addresses.some((address) => !address.v6 && parseCidr(ip.ip)?.text === address.text))) return true;
+  return (entry.ipv6Addresses ?? []).some((net) => {
+    const prefix = prefixOf(net);
+    return prefix !== null && addresses.some((address) => contains(prefix, address));
+  });
+}
+
+/**
+ * This server in the account. netcup's address filter is tried first; the
+ * spec does not say it takes IPv6, and an interface lists IPv6 only as
+ * prefixes, so an unmatched server is looked for in every server's interfaces.
+ */
+async function findServer(api: NetcupApi, addresses: string[], macs: string[]): Promise<Target | null> {
+  const ours = addresses.map(parseCidr).filter((cidr): cidr is Cidr => cidr !== null);
+  const ourMacs = macs.map((mac) => mac.toLowerCase());
+  const tried = new Set<number>();
+  const check = async (server: NetcupServer): Promise<Target | null> => {
+    if (tried.has(server.id)) return null;
+    tried.add(server.id);
+    const found = (await api.interfaces(server.id)).find((entry) => isOurs(entry, ours, ourMacs));
+    return found ? { serverId: server.id, mac: found.mac.toLowerCase(), serverName: server.nickname || server.name } : null;
+  };
   for (const address of addresses) {
-    for (const server of await api.serversByIp(address)) {
-      const found = (await api.interfaces(server.id)).find((entry) => entry.ipv4Addresses?.some((ip) => ip.ip === address));
-      if (found) return { serverId: server.id, mac: found.mac.toLowerCase(), serverName: server.nickname || server.name };
+    let servers: NetcupServer[];
+    try {
+      servers = await api.serversByIp(address);
+    } catch (error) {
+      if (address.includes(":") && error instanceof NetcupError && (error.status === 400 || error.status === 422)) continue;
+      throw error;
     }
+    for (const server of servers) {
+      const found = await check(server);
+      if (found) return found;
+    }
+  }
+  for (const server of await api.servers()) {
+    const found = await check(server);
+    if (found) return found;
   }
   return null;
 }
 
-/** Where this server is in the account, kept from the last time it was found; null when no server there has its address. */
-async function locate(paths: NetcupPaths, options: NetcupOptions, api: NetcupApi, auth: NetcupAuth, access: string, fresh = false): Promise<Target | null> {
+/** Writes netcup.json, under the netcup lock unless the caller holds it; a change holding it writes its own. */
+async function saveSync(paths: NetcupPaths, change: Partial<NetcupSync>, locked: boolean): Promise<void> {
+  if (locked) return writeSync(paths, change);
+  await withNetcupLock(paths, async () => {
+    if (readToken(paths)) writeSync(paths, change);
+  }, 0).catch(() => {});
+}
+
+/** Where this server is in the account, kept from the last time it was found; null when no server there is this one. */
+async function locate(paths: NetcupPaths, options: NetcupOptions, api: NetcupApi, locked: boolean, fresh = false): Promise<Target | null> {
   const stored = readSync(paths);
-  const userId = stored.userId ?? await auth.userId(access);
-  if (!fresh && stored.serverId && stored.mac && stored.serverName) {
-    if (stored.userId !== userId) writeSync(paths, { userId });
-    return { userId, serverId: stored.serverId, mac: stored.mac, serverName: stored.serverName };
+  if (!fresh && stored.serverId && stored.mac && stored.serverName) return { serverId: stored.serverId, mac: stored.mac, serverName: stored.serverName };
+  const found = await findServer(api, addressesOf(options), (options.macs ?? interfaceMacs)());
+  await saveSync(paths, { serverId: found?.serverId, mac: found?.mac, serverName: found?.serverName }, locked);
+  return found;
+}
+
+/**
+ * The SCP user id the policy endpoints are under, which is not the customer
+ * number: userinfo's `id` claim where the realm adds one, which the discovery
+ * document does not list; else a user that ran this account's tasks or this
+ * server's logged actions under the signed-in username, which `GET /users/<id>`
+ * answers for.
+ */
+async function findUserId(api: NetcupApi, auth: NetcupAuth, access: string, serverId?: number): Promise<number> {
+  const { id, username } = await auth.userinfo(access);
+  if (id) return id;
+  const same = (name?: string) => !username || name?.toLowerCase() === username.toLowerCase();
+  const candidates = new Set((await api.executingUsers(serverId)).filter((user) => user.id && same(user.username)).map((user) => user.id!));
+  for (const candidate of candidates) {
+    try {
+      if (same((await api.user(candidate)).username)) return candidate;
+    } catch (error) {
+      if (!(error instanceof NetcupError && (error.status === 403 || error.status === 404))) throw error;
+    }
   }
-  const found = await findServer(api, (options.addresses ?? publicAddresses)());
-  writeSync(paths, { userId, serverId: found?.serverId, mac: found?.mac, serverName: found?.serverName });
-  return found && { userId, ...found };
+  failAction("netcup did not say which SCP user this sign-in is: userinfo has no id, and no task or log of this account names one");
+}
+
+/** The SCP user id, kept in netcup.json once found; callers hold the netcup lock. */
+async function userIdOf(paths: NetcupPaths, api: NetcupApi, auth: NetcupAuth, access: string, serverId?: number): Promise<number> {
+  const stored = readSync(paths).userId;
+  if (stored) return stored;
+  const userId = await findUserId(api, auth, access, serverId);
+  writeSync(paths, { userId });
+  return userId;
 }
 
 const unmatched = (options: NetcupOptions) => {
-  const addresses = (options.addresses ?? publicAddresses)();
+  const addresses = addressesOf(options);
   return `No server in this netcup account has this server's address${addresses.length ? ` (${addresses.join(", ")})` : ""}; connect the account that holds it`;
 };
 
-/** The interface's firewall, finding the server again once when netcup no longer knows the one kept. */
-async function firewallOf(paths: NetcupPaths, options: NetcupOptions, api: NetcupApi, auth: NetcupAuth, access: string): Promise<{ target: Target; firewall: NetcupFirewall }> {
-  let target = await locate(paths, options, api, auth, access);
-  if (!target) failAction(unmatched(options));
-  try {
-    return { target, firewall: await api.firewall(target.serverId, target.mac) };
-  } catch (error) {
-    if (!(error instanceof NetcupError && error.status === 404)) throw error;
-  }
-  target = await locate(paths, options, api, auth, access, true);
-  if (!target) failAction(unmatched(options));
-  try {
-    return { target, firewall: await api.firewall(target.serverId, target.mac) };
-  } catch (error) {
-    if (error instanceof NetcupError && error.status === 404) {
-      failAction(`netcup's firewall is not set up on ${target.serverName} yet: open Firewall for it in SCP and click Configure`);
+/** The interface's firewall, finding the server again once when netcup no longer knows the one kept; `missing` says why there is none. */
+async function readFirewall(paths: NetcupPaths, options: NetcupOptions, api: NetcupApi, locked: boolean): Promise<{ target: Target; firewall: NetcupFirewall } | { missing: string }> {
+  for (let fresh = false; ; fresh = true) {
+    const target = await locate(paths, options, api, locked, fresh);
+    if (!target) return { missing: unmatched(options) };
+    try {
+      return { target, firewall: await api.firewall(target.serverId, target.mac) };
+    } catch (error) {
+      if (!(error instanceof NetcupError && error.status === 404)) throw error;
+      if (fresh) return { missing: `netcup's firewall is not set up on ${target.serverName} yet: open Firewall for it in SCP and click Configure` };
     }
-    throw error;
   }
+}
+
+async function firewallOf(paths: NetcupPaths, options: NetcupOptions, api: NetcupApi, locked: boolean): Promise<{ target: Target; firewall: NetcupFirewall }> {
+  const read = await readFirewall(paths, options, api, locked);
+  if ("missing" in read) failAction(read.missing);
+  return read;
 }
 
 const OFF = "netcup's firewall is off for this server, so no policy has any effect. Turn it on under Firewall in SCP";
@@ -296,7 +396,7 @@ const OFF = "netcup's firewall is off for this server, so no policy has any effe
 
 export type NetcupView =
   | { state: "absent" }
-  /** `address` is this server's public IPv4, for the operator to find the account that holds it. */
+  /** `address` is this server's public address, IPv4 first, for the operator to find the account that holds it. */
   | { state: "disconnected"; address: string | null }
   /** `connected` when a sign-in is saved, which the page then offers to replace or remove. */
   | { state: "error"; connected: boolean; error: string }
@@ -325,13 +425,13 @@ export async function netcupView(options: NetcupOptions = {}): Promise<NetcupVie
   const now = nowOf(options);
   if (!readToken(paths)) {
     if (!isNetcup(paths.vendor)) return { state: "absent" };
-    return { state: "disconnected", address: (options.addresses ?? publicAddresses)()[0] ?? null };
+    return { state: "disconnected", address: addressesOf(options)[0] ?? null };
   }
   let clean = (text: string) => text;
   try {
-    const { api, auth, access } = await signIn(paths, options);
+    const { api, auth } = await signIn(paths, options);
     clean = (text) => auth.clean(api.clean(text));
-    const { target, firewall } = await firewallOf(paths, options, api, auth, access);
+    const { target, firewall } = await firewallOf(paths, options, api, false);
     const attached = attachedOf(firewall);
     const others = attached.filter((policy) => policy.copied || !ownerOf(policy));
     let ranges: CloudflareRanges | null = null;
@@ -403,10 +503,13 @@ export async function pollNetcup(options: NetcupOptions = {}): Promise<{ pending
   try {
     reply = await auth.pollDevice(device.deviceCode);
   } catch (error) {
+    const code = error instanceof NetcupError ? error.code : "";
+    // Anything else may pass, and the code stays good until it expires, so the page keeps asking.
+    if (code !== "access_denied" && code !== "expired_token" && code !== "invalid_grant") return { pending: true, interval: device.interval };
     rmSync(paths.deviceFile, { force: true });
-    if (error instanceof NetcupError && error.code === "access_denied") failAction("Access was denied in netcup; connect again to retry");
-    if (error instanceof NetcupError && error.code === "expired_token") failAction("The code expired before access was granted; connect again");
-    failAction(`netcup's sign-in failed: ${auth.clean(errorMessage(error))}`);
+    if (code === "access_denied") failAction("Access was denied in netcup; connect again to retry");
+    if (code === "expired_token") failAction("The code expired before access was granted; connect again");
+    failAction(`netcup's sign-in failed: ${auth.clean(errorMessage(error))}; connect again`);
   }
   if ("pending" in reply) {
     const interval = reply.pending === "slow_down" ? Math.min(device.interval + 5, 60) : device.interval;
@@ -416,12 +519,12 @@ export async function pollNetcup(options: NetcupOptions = {}): Promise<{ pending
   rmSync(paths.deviceFile, { force: true });
   if (!validRefreshToken(reply.refresh_token)) failAction("netcup gave no refresh token; connect again and allow offline access");
   const refreshToken = reply.refresh_token;
-  const api = new NetcupApi(reply.access_token, options.fetch, options.sleep);
+  const api = new NetcupApi(reply.access_token, options.fetch, { sleep: options.sleep, now: options.now });
   let userId: number;
-  let found: Awaited<ReturnType<typeof findServer>>;
+  let found: Target | null;
   try {
-    userId = await auth.userId(reply.access_token);
-    found = await findServer(api, (options.addresses ?? publicAddresses)());
+    found = await findServer(api, addressesOf(options), (options.macs ?? interfaceMacs)());
+    userId = await findUserId(api, auth, reply.access_token, found?.serverId);
   } catch (error) {
     await auth.revoke(refreshToken).catch(() => {});
     failAction(`Signed in, but netcup could not be read: ${auth.clean(api.clean(errorMessage(error)))}`);
@@ -448,16 +551,20 @@ export async function disconnectNetcup(options: NetcupOptions = {}): Promise<{ n
     let mine: NetcupPolicy[] = [];
     let auth = new NetcupAuth(options.fetch);
     let clean = (text: string) => auth.clean(text);
+    const uncheckedBecause = (why: string) => ` netcup could not be asked which policies this server has (${why}); a clp-addons policy still there stays, and no longer follows Cloudflare's list.`;
     try {
       const session = await signIn(paths, options);
       auth = session.auth;
       clean = (text) => session.auth.clean(session.api.clean(text));
-      const { firewall } = await firewallOf(paths, options, session.api, session.auth, session.access);
-      mine = (firewall.userPolicies ?? []).filter((policy) => ownerOf(policy));
+      const read = await readFirewall(paths, options, session.api, true);
+      if ("missing" in read) unchecked = uncheckedBecause(read.missing);
+      else mine = (read.firewall.userPolicies ?? []).filter((policy) => ownerOf(policy));
     } catch (error) {
-      // A leaked or revoked sign-in must always be removable; the operator is told what could not be checked.
-      const why = signInRefused(error) ? "it refuses the saved sign-in" : error instanceof ActionFailure ? error.message : clean(errorMessage(error));
-      unchecked = ` netcup could not be asked which policies this server has (${why}); a clp-addons policy still there stays, and no longer follows Cloudflare's list.`;
+      // A leaked or revoked sign-in must always be removable; any other failure may pass, and must not leave a policy behind unseen.
+      if (!signInRefused(error)) {
+        failAction(`Could not ask netcup which policies this server has: ${(error instanceof ActionFailure ? error.message : clean(errorMessage(error))).replace(/\.$/, "")}. Try again; disconnecting now would leave a clp-addons policy on this server that no longer follows Cloudflare's list`);
+      }
+      unchecked = uncheckedBecause("it refuses the saved sign-in");
     }
     const on = mine.filter((policy) => ownerOf(policy)!.access === "cloudflare");
     if (on.length) {
@@ -465,9 +572,12 @@ export async function disconnectNetcup(options: NetcupOptions = {}): Promise<{ n
     }
     const open = mine.map((policy) => policy.name);
     const staying = open.length ? ` ${open.join(" and ")} stay${open.length === 1 ? "s" : ""} on this server, so those ports stay open to anyone; remove ${open.length === 1 ? "it" : "them"} in SCP if you no longer want that.` : "";
-    const current = readToken(paths) ?? token;
-    const revoked = await auth.revoke(current).then(() => true, () => false);
-    rmSync(paths.tokenFile, { force: true });
+    // Under the token lock, so a refresh running now cannot write a rotated token back.
+    const revoked = await withFileLock(paths.tokenLockFile, 30, "another netcup sign-in is being refreshed", async () => {
+      const done = await auth.revoke(readToken(paths) ?? token).then(() => true, () => false);
+      rmSync(paths.tokenFile, { force: true });
+      return done;
+    });
     rmSync(paths.syncFile, { force: true });
     return { notice: `The netcup sign-in is removed${revoked ? " and revoked" : "; netcup could not be asked to revoke it, so it lapses once unused"}.${staying}${unchecked}` };
   });
@@ -481,24 +591,38 @@ function failureText(clean: (text: string) => string, error: unknown, doing: str
   return `Could not ${doing}: ${clean(errorMessage(error))}`;
 }
 
+/** Why a write of this server's policies failed, and what it left: netcup took the change once it answered with a task, and changed nothing when it refused it. */
+function writeFailure(clean: (text: string) => string, error: unknown, doing: string): string {
+  const detail = error instanceof NetcupError ? clean(error.detail).replace(/\.$/, "") : "";
+  if (error instanceof NetcupError && error.code === "running") {
+    return `Could not wait for netcup to ${doing}: netcup ${detail}. Reload the page in a minute to see what this server has.`;
+  }
+  if (error instanceof NetcupError && TASK_FAILED.has(error.code)) return `Could not ${doing}: netcup ${detail}. See Firewall in SCP for what this server has now.`;
+  const refused = error instanceof ActionFailure || (error instanceof ProviderError && error.status >= 400 && error.status < 500);
+  return `${failureText(clean, error, doing)}. ${refused ? "Nothing on this server was changed." : "netcup may have taken it anyway; reload the page to see what this server has."}`;
+}
+
 type Attached = NetcupPolicy & { copied?: boolean };
 
 /** Everything a switch decides from, read once. */
-async function context(options: NetcupOptions) {
+async function context(options: NetcupOptions, deadline: number) {
   const paths = pathsOf(options);
   if (!readToken(paths)) failAction("Connect netcup first");
   let session: Awaited<ReturnType<typeof signIn>>;
   let found: Awaited<ReturnType<typeof firewallOf>>;
+  let userId: number;
   let policies: NetcupPolicy[];
   try {
-    session = await signIn(paths, options);
-    found = await firewallOf(paths, options, session.api, session.auth, session.access);
-    policies = await session.api.policies(found.target.userId);
+    session = await signIn(paths, options, deadline);
+    found = await firewallOf(paths, options, session.api, true);
+    userId = await userIdOf(paths, session.api, session.auth, session.access, found.target.serverId);
+    policies = await session.api.policies(userId);
   } catch (error) {
     failAction(failureText((text) => text, error, "read this server's policies"));
   }
   const { api, auth } = session;
-  const { target, firewall } = found;
+  const target = { ...found.target, userId };
+  const { firewall } = found;
   if (!firewall.active) failAction(`${OFF} first`);
   const attached: Attached[] = attachedOf(firewall);
   const user = firewall.userPolicies ?? [];
@@ -595,8 +719,7 @@ async function apply(ctx: Context, role: CloudRole, enabled: boolean, plan: Plan
   try {
     await ctx.api.setFirewall(ctx.target.serverId, ctx.target.mac, [...operators, ...addons], (ctx.firewall.copiedPolicies ?? []).map((policy) => policy.id));
   } catch (error) {
-    const doing = enabled ? `put ${CLOUD_ROLES[role].name} on this server` : `take ${CLOUD_ROLES[role].name} off this server`;
-    failAction(`${failureText(ctx.clean, error, doing)}. Nothing on this server was changed.`);
+    failAction(writeFailure(ctx.clean, error, enabled ? `put ${CLOUD_ROLES[role].name} on this server` : `take ${CLOUD_ROLES[role].name} off this server`));
   }
 }
 
@@ -615,8 +738,9 @@ export async function setNetcupRole(
   typed?: unknown,
 ): Promise<{ review: CloudReview } | { notice: string }> {
   const paths = pathsOf(options);
+  const deadline = nowOf(options) + SWITCH_BUDGET_MS;
   return withNetcupLock(paths, async () => {
-    const ctx = await context(options);
+    const ctx = await context(options, deadline);
     const title = CLOUD_ROLES[role].title;
     const on = ctx.cloudflare[role];
     const stale = ctx.open[role];
@@ -626,7 +750,7 @@ export async function setNetcupRole(
       try {
         await ctx.api.setFirewall(ctx.target.serverId, ctx.target.mac, user, (ctx.firewall.copiedPolicies ?? []).map((policy) => policy.id));
       } catch (error) {
-        failAction(failureText(ctx.clean, error, `take ${stale.name} off`));
+        failAction(writeFailure(ctx.clean, error, `take ${stale.name} off this server`));
       }
       return { notice: `${title} is on; ${stale.name} was still on this server and is now off.` };
     }
@@ -657,7 +781,7 @@ export async function setNetcupRole(
         ? `${CLOUD_ROLES[role].name} is on this server, but has no effect yet: ${stillOpen.join(" ")}`
         : `netcup now lets only Cloudflare reach ${portsOf(role)}.`,
     };
-  });
+  }, 60);
 }
 
 /**
@@ -682,8 +806,7 @@ export async function syncNetcup(mode: "repair" | "ranges", options: NetcupOptio
     try {
       const { api, auth, access } = await signIn(paths, options);
       clean = (text) => auth.clean(api.clean(text));
-      const userId = stored.userId ?? await auth.userId(access);
-      if (stored.userId !== userId) writeSync(paths, { userId });
+      const userId = await userIdOf(paths, api, auth, access, stored.serverId);
       for (const listed of await api.policies(userId)) {
         const owner = ownerOf(listed);
         if (!owner) continue;
@@ -697,7 +820,7 @@ export async function syncNetcup(mode: "repair" | "ranges", options: NetcupOptio
         if (result === "newer") newer++;
       }
       if (mode === "repair") {
-        const { target, firewall } = await firewallOf(paths, options, api, auth, access);
+        const { target, firewall } = await firewallOf(paths, options, api, true);
         const user = firewall.userPolicies ?? [];
         // An open policy beside its role's Cloudflare one only lets everyone else in.
         const extra = ROLES.flatMap((role) => owned(user, role).length ? owned(user, role, "open") : []);
