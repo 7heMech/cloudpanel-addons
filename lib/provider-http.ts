@@ -43,7 +43,7 @@ export class ProviderHttp {
     private readonly timeoutMs = TIMEOUT_MS,
   ) {}
 
-  /** The parsed JSON body and the status, whatever the status was. */
+  /** The parsed JSON body and the status, whatever the status was. A `URLSearchParams` body is sent as a form, as OAuth wants. */
   async request(path: string, method = "GET", body?: unknown): Promise<{ status: number; json: unknown }> {
     const now = Date.now();
     if (now < this.backoff.until) {
@@ -58,9 +58,9 @@ export class ProviderHttp {
         headers: {
           ...this.headers,
           Accept: "application/json",
-          ...(body === undefined ? {} : { "Content-Type": "application/json" }),
+          ...(body === undefined ? {} : { "Content-Type": body instanceof URLSearchParams ? "application/x-www-form-urlencoded" : "application/json" }),
         },
-        ...(body === undefined ? {} : { body: JSON.stringify(body) }),
+        ...(body === undefined ? {} : { body: body instanceof URLSearchParams ? body.toString() : JSON.stringify(body) }),
         signal: controller.signal,
         redirect: "error",
       });
