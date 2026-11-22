@@ -212,9 +212,10 @@ async function removeHetznerToken() {
 // then expires at netcup.
 let netcupSignIn = null;
 
-function stopNetcupConnect() {
-  if (netcupSignIn) netcupSignIn.stopped = true;
-  netcupSignIn = null;
+function stopNetcupConnect(run) {
+  const stopping = run || netcupSignIn;
+  if (stopping) stopping.stopped = true;
+  if (netcupSignIn === stopping) netcupSignIn = null;
 }
 
 async function startNetcupConnect() {
@@ -262,7 +263,7 @@ async function startNetcupConnect() {
       polled = await call('/api/netcup/poll', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: '{}' });
     } catch (error) {
       if (!run.stopped) fail(error.message);
-      stopNetcupConnect();
+      stopNetcupConnect(run);
       return;
     }
     const data = polled.data || {};
@@ -272,14 +273,14 @@ async function startNetcupConnect() {
       continue;
     }
     // Granted, even if the dialog was closed meanwhile: the card has to show it.
-    stopNetcupConnect();
+    stopNetcupConnect(run);
     if (dialog.open) dialog.close();
     const state = await repaint();
     replyNotice(Object.assign(state, { reply: data }));
     return;
   }
   if (!run.stopped) fail('The code expired before access was granted; connect again.');
-  stopNetcupConnect();
+  stopNetcupConnect(run);
 }
 
 async function removeNetcupSignIn() {

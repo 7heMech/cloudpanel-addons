@@ -369,6 +369,8 @@ describe("safeguards", () => {
     expect(first.review.typed).toBe("cp-nue-1");
     expect(fake.writes()).toEqual([]);
     expect(await refusal(setNetcupRole("web", true, first.review.digest, server.options, "wrong"))).toBe("Type the server's name, cp-nue-1, to confirm");
+    expect(await setNetcupRole("web", true, "not-the-digest", server.options, "cp-nue-1")).toEqual({ review: first.review });
+    expect(fake.writes()).toEqual([]);
 
     await turn(server, "web", true);
     expect(fake.userPolicies()).toEqual(["clp-addons-cloudflare-web", "clp-addons-open-panel"]);
@@ -378,6 +380,18 @@ describe("safeguards", () => {
     expect(view.state === "connected" && view.sshClosed).toEqual([22]);
     expect(view.state === "connected" && view.others).toEqual(["netcup Mail block"]);
     expect(netcupSetupState(server.options).seen).toEqual({ web: true, panel: false });
+  });
+
+  test("a digest from a review that has since changed applies nothing and returns the new review", async () => {
+    const fake = new FakeNetcup();
+    const server = await connected(fake);
+    const first = await setNetcupRole("web", true, undefined, server.options);
+    if (!("review" in first)) throw new Error("expected a review");
+    fake.policy("ssh", [ssh()], [SERVER]);
+    const again = await setNetcupRole("web", true, first.review.digest, server.options, first.review.typed);
+    if (!("review" in again)) throw new Error("expected a fresh review");
+    expect(again.review.digest).not.toBe(first.review.digest);
+    expect(fake.writes()).toEqual([]);
   });
 
   test("the addon's policies go after the operator's, whose order stays", async () => {
