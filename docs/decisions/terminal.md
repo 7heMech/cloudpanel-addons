@@ -196,7 +196,11 @@ one page whose content security policy allows `'self'` scripts and styles.
 
 Each new root shell requires a fresh six-digit authenticator code or a passkey
 pinned in the root grant. Reconnecting to an existing shell does not prompt.
-The popup offers both methods before creating the shell; site shells are unchanged.
+The popup offers both methods before creating the shell; site shells are
+unchanged. The code prompt renders a single visible text input with a label and
+`autocomplete="one-time-code"` before the options request returns, and accepts
+both `input` and `change` events with whitespace stripped on submit so password
+managers can detect and autofill the code.
 Root issues a random five-minute challenge bound to the gateway-verified session
 hash. Verification consumes the challenge, checks the current grant, and returns
 a one-use ticket valid for sixty seconds, bound to that session and grant.

@@ -265,6 +265,12 @@ test("the page's button opens a root shell only for an allowed administrator, an
   const popup = popupPage(null);
   expect(popup).toContain('data-domain=""');
   expect(popup).toContain('<span class="term-user is-root" id="term-user">as root</span>');
+  expect(popup).toContain('<form class="card" id="root-auth-form" aria-labelledby="root-auth-title" novalidate>');
+  expect(popup).toContain('<label class="root-auth-prompt" for="root-auth-code">');
+  expect(popup).toContain('<input type="text" id="root-auth-code" name="totp" inputmode="numeric" autocomplete="one-time-code" pattern="[0-9]{6}" required placeholder="000000"');
+  expect(popup).not.toContain("root-auth-boxes");
+  expect(popup).not.toContain(".root-auth-code");
+  expect(popup).toContain("code.onchange = normalize;");
 });
 
 test("the header control is in both of CloudPanel's headers and the addons' own, for administrators, hidden until root answers", () => {

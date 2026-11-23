@@ -139,13 +139,10 @@ export function popupPage(domain: string | null): string {
 </div>
 <div class="term-main" id="term-main">
   ${domain === null ? `<div class="term-ended" id="root-auth" hidden>
-    <form class="card" id="root-auth-form" aria-labelledby="root-auth-title">
+    <form class="card" id="root-auth-form" aria-labelledby="root-auth-title" novalidate>
       <h2 id="root-auth-title">Verify to open root terminal</h2>
-      <p>Enter the 6-digit code from your authenticator app.</p>
-      <div class="root-auth-boxes">
-        <input id="root-auth-code" inputmode="numeric" autocomplete="one-time-code" pattern="[0-9]{6}" required aria-label="Authenticator code">
-        <span aria-hidden="true"></span><span aria-hidden="true"></span><span aria-hidden="true"></span><span aria-hidden="true"></span><span aria-hidden="true"></span><span aria-hidden="true"></span>
-      </div>
+      <label class="root-auth-prompt" for="root-auth-code">Enter the 6-digit code from your authenticator app.</label>
+      <input type="text" id="root-auth-code" name="totp" inputmode="numeric" autocomplete="one-time-code" pattern="[0-9]{6}" required placeholder="000000" spellcheck="false" autocapitalize="off" autocorrect="off">
       <p id="root-auth-error" role="alert"></p>
       <button class="btn btn-primary" type="submit">Continue</button>
       <div id="root-auth-passkey" hidden>

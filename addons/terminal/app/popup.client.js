@@ -162,45 +162,54 @@ async function verifyRoot() {
   const code = document.getElementById('root-auth-code');
   const key = document.getElementById('root-auth-key');
   const errorText = document.getElementById('root-auth-error');
-  const boxes = form.querySelectorAll('.root-auth-boxes span');
+  const passkeyRow = document.getElementById('root-auth-passkey');
   // Cancel stays usable, so a passkey prompt with no key nearby can be left.
   const buttons = form.querySelectorAll('button:not(#root-auth-cancel)');
   const post = (path, body) => call('/api/root-auth-' + path, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body || {}) });
-  // Digits only, shown one per box, with the next box to fill marked.
+  // Digits only: a paste or autofill with spaces or over partial digits keeps its last six;
+  // one more keystroke past six is ignored, as a six-character field would.
   let shown = '';
-  const paint = () => {
-    // Several digits at once, a paste or an autofilled code, keep their last
-    // six, so they win over a few typed ones; one more keystroke past six is
-    // ignored, as a six-character field would.
+  const normalize = () => {
     const all = code.value.replace(/\D/g, '');
     const digits = all.length - shown.length > 1 ? all.slice(-6) : all.slice(0, 6);
     shown = digits;
     if (code.value !== digits) code.value = digits;
-    boxes.forEach((box, i) => {
-      box.textContent = digits[i] || '';
-      box.classList.toggle('is-next', i === Math.min(digits.length, 5));
-    });
+    return digits;
   };
-  code.oninput = paint;
-  // The input lies unseen over the boxes, so a click puts its caret at the
-  // end, where the boxes show it; a selection, as for a paste, is left alone.
-  code.onclick = () => {
-    const end = code.value.length;
-    if (code.selectionStart === code.selectionEnd) code.setSelectionRange(end, end);
-  };
-  let options = (await post('options')).data;
-  // toB64, fromB64, keysUsable and keyError come from Security Keys' webauthn.client.js.
-  document.getElementById('root-auth-passkey').hidden = !options.keys.length || !keysUsable();
+  code.oninput = normalize;
+  code.onchange = normalize;
+  // Reveal the real input before waiting on options so password managers scanning on load see it right away.
+  passkeyRow.hidden = true;
   overlay.hidden = false;
   code.value = '';
-  paint();
+  shown = '';
   errorText.textContent = '';
   code.focus();
   setStatus('');
+  let options = null;
+  const pendingOptions = post('options').then(reply => {
+    options = reply.data;
+    passkeyRow.hidden = !options.keys.length || !keysUsable();
+    return options;
+  });
+  try {
+    await pendingOptions;
+  } catch (error) {
+    overlay.hidden = true;
+    throw error;
+  }
   return new Promise((resolve, reject) => {
     let busy = false;
     const submit = async useKey => {
       if (busy) return;
+      if (!useKey) {
+        const digits = normalize();
+        if (!/^\d{6}$/.test(digits)) {
+          errorText.textContent = 'Enter a six-digit authenticator code.';
+          code.focus();
+          return;
+        }
+      }
       busy = true;
       for (const button of buttons) button.disabled = true;
       try {
@@ -219,7 +228,7 @@ async function verifyRoot() {
       } catch (error) {
         errorText.textContent = keyError(error, 'Verification failed. Try again.');
         code.value = '';
-        paint();
+        shown = '';
         code.focus();
         // A fresh prompt now, not at the next try; root keeps the first one's opening, so retrying never restarts the wait.
         try { options = (await post('options')).data; } catch { options = null; }
