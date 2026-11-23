@@ -211,6 +211,8 @@ async function removeHetznerToken() {
 // allows, whether that happened. Closing the dialog stops asking; the code
 // then expires at netcup.
 let netcupSignIn = null;
+// The run started last, which stopping leaves in place: a granted run repaints only while it is still this.
+let netcupLatest = null;
 
 function stopNetcupConnect(run) {
   const stopping = run || netcupSignIn;
@@ -222,6 +224,7 @@ async function startNetcupConnect() {
   stopNetcupConnect();
   const run = { stopped: false };
   netcupSignIn = run;
+  netcupLatest = run;
   clearNotice();
   busy(true);
   let reply = null;
@@ -280,7 +283,7 @@ async function startNetcupConnect() {
     stopNetcupConnect(run);
     if (owns && dialog.open) dialog.close();
     const state = await readState();
-    if (netcupSignIn) return;
+    if (netcupSignIn || netcupLatest !== run) return;
     if (state.ok) {
       repaintView(CLP_ROOT.getElementById('clp-content'), state.html);
       loadPanelGate();

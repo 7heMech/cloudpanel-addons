@@ -302,7 +302,7 @@ describe("rules", () => {
     const rules = netcupRules("web", RANGES);
     expect(rules.map((rule) => [rule.protocol, rule.sourcePorts ?? null, rule.destinationPorts ?? null, rule.sources!.length])).toEqual([
       ["TCP", null, "80", 15], ["TCP", null, "80", 7], ["TCP", null, "443", 15], ["TCP", null, "443", 7], ["ICMP", null, null, 0], ["ICMPv6", null, null, 0],
-      ["UDP", "123", "32768-60999", 3], ["UDP", "123", "32768-60999", 3],
+      ["UDP", "123", null, 3], ["UDP", "123", null, 3],
     ]);
     expect(netcupRules("panel", RANGES).every((rule) => rule.direction === "INGRESS" && rule.action === "ACCEPT")).toBe(true);
     expect(netcupOpenRules("panel").map((rule) => rule.protocol)).toEqual(["TCP", "ICMP", "ICMPv6", "UDP", "UDP"]);
@@ -786,6 +786,8 @@ describe("review fixes", () => {
     const makeHarness = () => {
       const events: string[] = [];
       const polls: ((value: unknown) => void)[] = [];
+      const reads: (() => void)[] = [];
+      const hold = { reads: false };
       let connects = 0;
       const dialog = {
         open: false,
@@ -816,7 +818,10 @@ describe("review fixes", () => {
             return Promise.resolve({ data: { userCode: `CODE-${connects}`, verificationUri: "https://www.servercontrolpanel.de/device", interval: 0.001, expiresIn: 60 } });
           }
           if (path === "/api/netcup/poll") return new Promise((resolve) => { polls.push(resolve); });
-          if (path === "/api/sites") return Promise.resolve({ html: "<div>refreshed</div>" });
+          if (path === "/api/sites") {
+            const html = { html: "<div>refreshed</div>" };
+            return hold.reads ? new Promise((resolve) => { reads.push(() => resolve(html)); }) : Promise.resolve(html);
+          }
           return Promise.resolve({});
         },
         () => {},
@@ -827,7 +832,7 @@ describe("review fixes", () => {
         { readyState: "complete", addEventListener() {}, createElement: () => ({}) },
         (fn: () => void) => { queueMicrotask(fn); },
       ) as { startNetcupConnect: () => Promise<void>; stopNetcupConnect: () => void };
-      return { client, dialog, events, polls };
+      return { client, dialog, events, polls, reads, hold };
     };
 
     // Case 1: operator closes run A and starts run B; run A's late grant must not close B or repaint.
@@ -861,6 +866,24 @@ describe("review fixes", () => {
     expect(h2.events.filter((e) => e === "dialog:close")).toHaveLength(closesBeforeGrant);
     expect(h2.events).toContain("repaint");
     expect(h2.events).toContain("notify:ok:Connected late");
+
+    // Case 3: run A is granted and still reading the page when run B starts and finishes; A's late read must not repaint over B.
+    const h3 = makeHarness();
+    const slowA = h3.client.startNetcupConnect();
+    await Bun.sleep(10);
+    h3.hold.reads = true;
+    h3.polls[0]!({ data: { notice: "Connected A" } });
+    await Bun.sleep(10);
+    expect(h3.reads).toHaveLength(1);
+    h3.hold.reads = false;
+    const fastB = h3.client.startNetcupConnect();
+    await Bun.sleep(10);
+    h3.polls[1]!({ data: { notice: "Connected B" } });
+    await fastB;
+    h3.reads[0]!();
+    await slowA;
+    expect(h3.events.filter((e) => e === "repaint")).toHaveLength(1);
+    expect(h3.events.filter((e) => e.startsWith("notify:"))).toEqual(["notify:ok:Connected B"]);
   });
 
   test("closures inside a watched port range are detected at rule boundaries", async () => {
@@ -1074,15 +1097,26 @@ describe("review fixes", () => {
     const oldToken = fake.refreshToken!;
     const syncFile = join(server.dir, "state", "netcup.json");
 
+    const failSyncWrite = async (options: NetcupOptions, file: string) => {
+      const real = rootState.writeState;
+      const spy = spyOn(rootState, "writeState").mockImplementation((path, value, owner) => {
+        if (path === file) throw new Error("disk full");
+        real(path, value, owner);
+      });
+      try {
+        expect(await refusal(pollNetcup(options))).toContain("disk full");
+      } finally {
+        spy.mockRestore();
+      }
+    };
+
     const otherFake = new FakeNetcup();
     otherFake.userId = 9001;
     server.options.fetch = otherFake.fetch;
     await connectNetcup(server.options);
     otherFake.granted = true;
-    // Replace netcup.json with a directory so writeState(syncFile) fails after tokenFile is written.
-    rmSync(syncFile, { force: true });
-    mkdirSync(syncFile, { recursive: true });
-    expect(await refusal(pollNetcup(server.options))).toBeTruthy();
+    await failSyncWrite(server.options, syncFile);
+    expect(otherFake.refreshToken).not.toBe(oldToken);
     expect(JSON.parse(readFileSync(join(server.dir, "state", "netcup-token.json"), "utf8"))).toEqual({ refreshToken: oldToken });
     expect(otherFake.revoked).toEqual([otherFake.refreshToken!]);
     expect(fake.revoked).toEqual([]);
@@ -1092,10 +1126,39 @@ describe("review fixes", () => {
     const fresh = box(freshFake);
     await connectNetcup(fresh.options);
     freshFake.granted = true;
-    mkdirSync(join(fresh.dir, "state", "netcup.json"), { recursive: true });
-    expect(await refusal(pollNetcup(fresh.options))).toBeTruthy();
+    await failSyncWrite(fresh.options, join(fresh.dir, "state", "netcup.json"));
     expect(existsSync(join(fresh.dir, "state", "netcup-token.json"))).toBe(false);
     expect(freshFake.revoked).toEqual([freshFake.refreshToken!]);
+  });
+
+  test("an unreadable netcup.json still lets the sign-in be replaced or removed, and a page read never writes over it", async () => {
+    const fake = new FakeNetcup();
+    const server = await connected(fake);
+    const syncFile = join(server.dir, "state", "netcup.json");
+    const unreadable = () => { rmSync(syncFile, { recursive: true, force: true }); mkdirSync(syncFile); };
+
+    unreadable();
+    await netcupView(server.options);
+    expect(statSync(syncFile).isDirectory()).toBe(true);
+
+    await connectNetcup(server.options);
+    fake.granted = true;
+    expect("notice" in await pollNetcup(server.options)).toBe(true);
+    expect(JSON.parse(readFileSync(syncFile, "utf8")).userId).toBe(fake.userId);
+
+    unreadable();
+    expect((await disconnectNetcup(server.options)).notice).toStartWith("The netcup sign-in is removed and revoked.");
+    expect(existsSync(join(server.dir, "state", "netcup-token.json"))).toBe(false);
+    expect(existsSync(syncFile)).toBe(false);
+  });
+
+  test("a task reply without a state is asked again until the task finishes", async () => {
+    const fake = new FakeNetcup();
+    fake.policy("ssh", [ssh()], [SERVER]);
+    const server = await connected(fake);
+    fake.taskNoState = 2;
+    expect(await turn(server, "web", true)).toEqual({ notice: "netcup now lets only Cloudflare reach ports 80 and 443." });
+    expect(fake.taskNoState).toBe(0);
   });
 
   test("a newer owned policy edited to allow anyone is rewritten, while a newer Cloudflare-only one is kept intact", async () => {
@@ -1139,15 +1202,48 @@ describe("review fixes", () => {
       web.description = `Managed by clp-addons; Cloudflare's list of ${newerAt}`;
       web.rules = [...netcupRules("web", newerRanges).filter((rule) => rule.protocol !== "UDP"), ...udp];
     };
-    const ntp = (sources: string[]): NetcupRule => ({ direction: "INGRESS", protocol: "UDP", action: "ACCEPT", sources, sourcePorts: "123", destinationPorts: "32768-60999" });
+    const ntp = (sources: string[]): NetcupRule => ({ direction: "INGRESS", protocol: "UDP", action: "ACCEPT", sources, sourcePorts: "123" });
+    const pinned = ["162.159.200.1", "162.159.200.123/32", "2606:4700:f1::1", "2606:4700:f1::123/128", "192.53.103.108/32", "2001:638:610:be01::108"];
 
-    newer([ntp(["162.159.200.1", "2606:4700:f1::123/128", "192.53.103.108/32"])]);
+    newer([ntp(pinned)]);
     expect(await syncNetcup("repair", server.options)).toBe("1 netcup policy follows a newer Cloudflare list from another server");
-    for (const udp of [[ntp([])], [ntp(["162.159.200.1/32", "198.51.100.1/32"])], [{ ...ntp(["162.159.200.1/32"]), sourcePorts: "53" }]]) {
+    for (const udp of [[ntp([])], [ntp([...pinned, "198.51.100.1/32"])], [{ ...ntp(pinned), sourcePorts: "53" }], [ntp(pinned.slice(1))],
+      [{ ...ntp(pinned), destinationPorts: "32768-60999" }]]) {
       newer(udp);
       expect(await syncNetcup("repair", server.options)).toBe("1 netcup policy set to Cloudflare's list");
       expect(netcupSignature(web.rules)).toBe(netcupSignature(netcupRules("web", RANGES)));
     }
+  });
+
+  test("a newer policy missing a fixed ICMP or ICMPv6 rule is rewritten", async () => {
+    const fake = new FakeNetcup();
+    fake.policy("ssh", [ssh()], [SERVER]);
+    const server = await connected(fake);
+    await turn(server, "web", true);
+    const web = fake.named("clp-addons-cloudflare-web")[0]!;
+    const newerAt = Math.floor(server.now.at / 1000) + 3600;
+    for (const without of ["ICMP", "ICMPv6"]) {
+      web.description = `Managed by clp-addons; Cloudflare's list of ${newerAt}`;
+      web.rules = netcupRules("web", RANGES).filter((rule) => rule.protocol !== without);
+      expect(await syncNetcup("repair", server.options)).toBe("1 netcup policy set to Cloudflare's list");
+      expect(netcupSignature(web.rules)).toBe(netcupSignature(netcupRules("web", RANGES)));
+    }
+    web.description = `Managed by clp-addons; Cloudflare's list of ${newerAt}`;
+    web.rules = netcupRules("web", RANGES).map((rule) => rule.protocol === "ICMPv6" ? { ...rule, sources: ["2001:db8::/32"] } : rule);
+    expect(await syncNetcup("repair", server.options)).toBe("1 netcup policy set to Cloudflare's list");
+  });
+
+  test("turning on beside an open policy brings a drifted Cloudflare policy back to the list", async () => {
+    const fake = new FakeNetcup();
+    fake.policy("ssh", [ssh()], [SERVER]);
+    const server = await connected(fake);
+    await turn(server, "web", true);
+    const web = fake.named("clp-addons-cloudflare-web")[0]!;
+    web.rules = [...web.rules!, ssh("443")];
+    fake.policy("clp-addons-open-web", netcupOpenRules("web"), [SERVER], "Managed by clp-addons; open to anyone");
+    expect(await turn(server, "web", true)).toEqual({ notice: "netcup now lets only Cloudflare reach ports 80 and 443." });
+    expect(fake.userPolicies()).toEqual(["ssh", "clp-addons-cloudflare-web"]);
+    expect(netcupSignature(web.rules)).toBe(netcupSignature(netcupRules("web", RANGES)));
   });
 
   test("turning on when both Cloudflare and open policies are attached requires review before removing the open policy", async () => {
@@ -1246,6 +1342,31 @@ describe("what a set of policies lets through", () => {
     expect(off.review.closes).toEqual([]);
   });
 
+  test("SSH allowed from one client source port, before and after, is not reported as closing", async () => {
+    const fake = new FakeNetcup();
+    fake.policy("ops", [{ ...ssh(), sourcePorts: "40000" }], [SERVER]);
+    const server = await connected(fake);
+    const review = await setNetcupRole("web", true, undefined, server.options);
+    if (!("review" in review)) throw new Error("expected a review");
+    expect(review.review.closes).toEqual([]);
+  });
+
+  test("an accept of anyone that an earlier drop partly shadows is not reported as open to anyone", async () => {
+    const accept443 = (sources: string[]): NetcupRule => ({ direction: "INGRESS", protocol: "TCP", action: "ACCEPT", sources, destinationPorts: "443" });
+    const drop: NetcupRule = { direction: "INGRESS", protocol: "TCP", action: "DROP", sources: ["198.51.100.0/24"], destinationPorts: "443" };
+    const guard = (rules: NetcupRule[]): Guard => ({ name: "ops", rules: rules.map((rule) => ({ protocol: "tcp", port: rule.destinationPorts!, sources: rule.sources!, accept: rule.action === "ACCEPT" })) });
+    expect(openToOthers("web", [guard([drop, accept443(["0.0.0.0/0"])])], RANGES)).toEqual([{ port: 443, firewall: "ops", sources: ["some of 0.0.0.0/0"] }]);
+
+    const fake = new FakeNetcup();
+    fake.policy("ops", [ssh(), drop, accept443(["0.0.0.0/0"])], [SERVER]);
+    const server = await connected(fake);
+    expect(await turn(server, "web", true)).toEqual({
+      notice: "clp-addons-cloudflare-web is on this server, but has no effect yet: 443 is still open to some of 0.0.0.0/0 through policy ops.",
+    });
+    // Unshadowed, it is still anyone.
+    expect(openToOthers("web", [guard([accept443(["0.0.0.0/0"])])], RANGES)).toEqual([{ port: 443, firewall: "ops", sources: ["0.0.0.0/0"] }]);
+  });
+
   test("closing ports from separate Firewall page rules are listed apart, not merged into one range", async () => {
     const server = await connected(new FakeNetcup());
     const db = new Database(join(server.dir, "panel.db"));
@@ -1280,6 +1401,7 @@ describe("what a set of policies lets through", () => {
       spy.mockRestore();
     }
     expect(existsSync(syncFile)).toBe(false);
+    expect(existsSync(tokenFile)).toBe(false);
     expect(other.revoked).toEqual([other.refreshToken!]);
   });
 });
@@ -1335,6 +1457,22 @@ FallbackNTP=
     await syncNetcup("repair", server.options);
     expect(existsSync(dropIn(server))).toBe(false);
     expect(restarts(calls)).toBe(4);
+  });
+
+  test("a restart that fails puts the earlier drop-in back, so the next repair writes and restarts again", async () => {
+    const fake = new FakeNetcup();
+    fake.policy("ssh", [ssh()], [SERVER]);
+    const server = await connected(fake);
+    const calls = timesyncd(server);
+    await turn(server, "web", true);
+    rmSync(dropIn(server));
+    const working = server.options.run!;
+    server.options.run = (command, args) => args[0] === "try-restart" ? { ok: false, stdout: "", stderr: "Job failed" } : working(command, args);
+    expect(await refusal(syncNetcup("repair", server.options))).toContain("restarting systemd-timesyncd failed");
+    expect(existsSync(dropIn(server))).toBe(false);
+    server.options.run = working;
+    expect(await syncNetcup("repair", server.options)).toBe("systemd-timesyncd pointed at time.cloudflare.com and ptbtime1.ptb.de");
+    expect(restarts(calls)).toBe(2);
   });
 
   test("the drop-in stays while one of the addon's policies may still be on the server", async () => {

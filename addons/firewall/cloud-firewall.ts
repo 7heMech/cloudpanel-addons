@@ -293,6 +293,13 @@ function allowsPort(guards: Guard[], fallsOpen: boolean, protocol: "tcp" | "udp"
   return leanOpen ? slices.some(accepts) : slices.every(accepts);
 }
 
+/** Whether, from some client source port, clients of the family reached the port before and no longer do after. */
+function lostOn(before: Guard[], beforeOpen: boolean, after: Guard[], afterOpen: boolean, protocol: "tcp" | "udp", port: number, v6: boolean): boolean {
+  return portSlices(...CLIENT_SOURCE_PORTS, rangesOf([...before, ...after], protocol, (rule) => rule.sourcePorts)).some(([sport]) =>
+    acceptedOnSlice(before, beforeOpen, protocol, port, sport, v6, true).length > 0
+    && !acceptedOnSlice(after, afterOpen, protocol, port, sport, v6, false).length);
+}
+
 function anyTcpAllowed(guards: Guard[], port: number, leanOpen = false): boolean {
   return allowsPort(guards, false, "tcp", port, false, leanOpen) || allowsPort(guards, false, "tcp", port, true, leanOpen);
 }
@@ -338,7 +345,8 @@ export function openToOthers(role: CloudRole, others: Guard[], ranges: string[])
   }
   const found: Opening[] = [];
   for (const port of CLOUD_ROLES[role].ports) {
-    const byGuard = others.map(() => new Set<string>());
+    // Each source, and whether no earlier drop takes any of it on some source port.
+    const byGuard = others.map(() => new Map<string, boolean>());
     for (const [sport] of portSlices(...ALL_PORTS, rangesOf(others, "tcp", (rule) => rule.sourcePorts))) {
       let droppedV4: IpInterval[] = [];
       let droppedV6: IpInterval[] = [];
@@ -356,14 +364,15 @@ export function openToOthers(role: CloudRole, others: Guard[], ranges: string[])
             const dropped = source.v6 ? droppedV6 : droppedV4;
             const cf = source.v6 ? cfV6 : cfV4;
             if (subtractIntervals(subtractIntervals([cidrInterval(source)], dropped), cf).length > 0) {
-              byGuard[i]!.add(source.text);
+              const whole = !intersectIntervals([cidrInterval(source)], dropped).length;
+              byGuard[i]!.set(source.text, Boolean(byGuard[i]!.get(source.text)) || whole);
             }
           }
         }
       }
     }
     for (let i = 0; i < others.length; i++) {
-      if (byGuard[i]!.size) found.push({ port, firewall: others[i]!.name, sources: [...byGuard[i]!] });
+      if (byGuard[i]!.size) found.push({ port, firewall: others[i]!.name, sources: [...byGuard[i]!].map(([text, whole]) => whole ? text : `some of ${text}`) });
     }
   }
   return found;
@@ -371,7 +380,7 @@ export function openToOthers(role: CloudRole, others: Guard[], ranges: string[])
 
 export function describeOpenings(openings: Opening[], noun = "firewall"): string[] {
   return openings.map((opening) => {
-    const anyone = opening.sources.some((source) => source.endsWith("/0"));
+    const anyone = opening.sources.some((source) => ANYONE.includes(source));
     return `${opening.port} is still open to ${anyone ? "anyone" : opening.sources.join(", ")} through ${noun} ${opening.firewall}.`;
   });
 }
@@ -599,8 +608,7 @@ function closingLines<F>(ctx: PlanContext<F>, plan: Plan<F>, watched: Watched[])
   for (const item of watched) {
     const start = closing.length;
     for (const [from, to] of portSlices(item.from, item.to, rangesOf(both, item.protocol, (rule) => rule.port))) {
-      const lost = [false, true].filter((v6) => allowsPort(before, ctx.fallsOpenNow, item.protocol, from, v6, true)
-        && !allowsPort(after, afterOpen, item.protocol, from, v6));
+      const lost = [false, true].filter((v6) => lostOn(before, ctx.fallsOpenNow, after, afterOpen, item.protocol, from, v6));
       if (!lost.length) continue;
       const only = lost.length === 1 ? (lost[0] ? " over IPv6" : " over IPv4") : "";
       const prev = closing.length > start ? closing.at(-1) : undefined;

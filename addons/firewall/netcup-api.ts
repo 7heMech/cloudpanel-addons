@@ -283,8 +283,10 @@ export class NetcupApi {
       await this.sleep(Math.min(1000, until - this.now()));
       if (this.now() >= until) break;
       try {
-        task = await this.call<TaskInfo>(`/tasks/${encodeURIComponent(task.uuid)}`, "GET", undefined, until);
+        const read = await this.call<TaskInfo | null>(`/tasks/${encodeURIComponent(task.uuid)}`, "GET", undefined, until);
         lastError = null;
+        // A reply without a state says nothing about the task, which is asked again.
+        if (typeof read?.state === "string" && read.state) task = { ...read, uuid: task.uuid };
       } catch (error) {
         lastError = error;
         if (error instanceof NetcupError && (error.status === 401 || error.status === 403)) break;

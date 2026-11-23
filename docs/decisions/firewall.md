@@ -493,7 +493,8 @@ close, the way back, and, when ports close, the server's name to type.
 - No effect: a source another attached firewall allows to the same ports that
   is not inside the list leaves the addon's firewall without effect. The review,
   the result and the card name the port, the firewall and the sources
-  ("443 is still open to anyone through firewall X") instead of success.
+  ("443 is still open to anyone through firewall X") instead of success; a
+  source an earlier drop partly takes is named as "some of" it.
 - Off: the review says which firewall takes the Cloudflare one's place, or
   that nothing of the addon's stays. Turning sites off is refused while the
   panel switch is on and the firewalls left would not let Cloudflare reach
@@ -546,8 +547,9 @@ rules in the order the provider applies them, and says whether it lets in what
 no rule decides, now and after a change. A rule list is read first match wins
 across port subranges, source-port ranges, and address intervals; Hetzner rules
 only allow, so this is the union described above. Whether clients connect is
-asked over their source ports, 1024–65535: a port counts as reachable after a
-change only from every one, and as open before it from any one. What else lets
+asked over their source ports, 1024–65535: a port closes with a change when
+some source port reached it before and does not after, and the way back counts
+only when every source port reaches it. What else lets
 anyone past Cloudflare is asked over every source port. A port of `0` covers no
 connection, so `0-65535` covers all. A port that cannot be read is taken the way
 that errs safe: an unreadable accept matches when asking what is open, and an
@@ -579,8 +581,8 @@ ends the attempt, and any other failure leaves the code for the page to ask
 again until it expires. After the grant, `netcup-token.json` and `netcup.json`
 are written together under the token lock; if writing `netcup.json` fails, the
 previous token is restored (or the new one removed) and the new refresh token
-is revoked. If restoring fails too, `netcup.json` is removed, so the new token,
-now revoked, never sits beside the old account's state. Any failure before both are saved revokes the new token; replacing
+is revoked. If restoring fails too, both files are removed before the token
+lock is released, so no refresh spends the new token before it is revoked. Any failure before both are saved revokes the new token; replacing
 a saved sign-in with an account that does not hold this server keeps the old
 sign-in and state, revokes the new token, and fails. Only the refresh token is
 kept, in `netcup-token.json` through `lib/root-state.ts`. Each read or change
@@ -623,7 +625,9 @@ paging through `GET /servers`. Disabled servers and 4xx replies (other than
 found that way. Its id, MAC and name are kept in `netcup.json`, written under
 the netcup lock (a read that finds it busy leaves it to the change holding it,
 and an unlocked read writes only when `netcup.json` still holds the same SCP
-`userId` that started it);
+`userId` that started it, never when it could not be read);
+a `netcup.json` that cannot be read counts as empty for a sign-in, a change,
+repair and disconnecting, and their writes replace it;
 a no-match result is cached for 15 minutes so page loads do not rescan, and a
 page read is bounded to 25 seconds so a scan degrades the card rather than
 failing the Firewall page. When netcup answers 404 for the kept interface, the
@@ -643,8 +647,8 @@ neighbour discovery, router advertisements and Packet Too Big a server with
 only IPv6 would be cut off.
 
 netcup tracks only TCP, so replies to the server's own UDP queries are new
-inbound traffic. Each policy accepts UDP from source port 123 to Linux's
-default ephemeral ports, 32768-60999, only from the addresses of
+inbound traffic. Each policy accepts UDP from source port 123, to any local
+port since ntpd queries from 123, only from the addresses of
 `time.cloudflare.com` (162.159.200.1, 162.159.200.123, 2606:4700:f1::1,
 2606:4700:f1::123) and `ptbtime1.ptb.de` (192.53.103.108,
 2001:638:610:be01::108; PTB does not smear leap seconds, and no smearing server
@@ -662,7 +666,8 @@ server (an open one makes netcup drop by default too), the addon writes
 `/etc/systemd/timesyncd.conf.d/zz-clp-addons-netcup.conf`, which clears `NTP=`
 and `FallbackNTP=` and sets `NTP=` to those six addresses, so timesyncd never
 falls back to the pool, whose replies would be dropped; it restarts timesyncd
-when the file changes. It is removed only once netcup shows none of the
+when the file changes, and puts the earlier file back when the restart fails,
+so the next repair tries again. It is removed only once netcup shows none of the
 addon's policies on the server, or on disconnecting when none is attached.
 Disabling Firewall, or disconnecting with an open policy left behind, keeps it:
 nothing then says when those policies go, and the pinned servers keep time
@@ -678,7 +683,8 @@ is the end of the description (`; Cloudflare's list of <time>`), read like
 Hetzner's label. A policy claiming a newer list is left alone only while it
 still lets only Cloudflare in: TCP accepts on exactly the role's ports, the same
 sources on each, both address families, every source inside this server's list,
-ICMP, and UDP only as NTP replies from some of the pinned addresses. Otherwise a switch or repair rewrites it to this server's list. A
+ICMP and ICMPv6 from anyone, and UDP only as NTP replies from all of the pinned
+addresses and no others. Otherwise a switch or repair rewrites it to this server's list. A
 newer list that adds a range therefore loses it until this server's list
 catches up; only Cloudflare is let in throughout. The listing may leave out rules, so each owned policy is read
 on its own before it is compared. Listings are paged until a page is empty or
@@ -708,7 +714,8 @@ spec does not say what deleting one in use does to the servers that have it.
 Repair rewrites drifted policies, takes an open policy off beside its role's
 Cloudflare one, and records the switches. Turning a switch on when both the
 Cloudflare and open policies are attached goes through the normal review and
-confirmation before removing the open policy. The 500-rule limit per interface
+confirmation before removing the open policy, and brings the Cloudflare policy
+current first, as the review assumes. The 500-rule limit per interface
 is netcup's to refuse. netcup counts each source as a separate effective rule:
 at most two of the addon's policies sit on a server at once, where each
 Cloudflare policy holds one effective rule per source and port plus eight for

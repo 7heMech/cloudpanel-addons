@@ -19,7 +19,6 @@ import { readState, writeState } from "../../lib/root-state";
 import {
   ANYONE, canonicalList, CLOUD_ROLES, contains, describeOpenings, disableReview, enableReview, firmwareVendor, mayRewriteAt, OPEN_DESCRIPTION, openToOthers,
   parseCidr, planFor, portsOf, readCloudflareRangesFrom, readSync as readSyncFile, roleView, ROLES, RULE_DESCRIPTION, sshMissing, sshPorts,
-  writeSync as writeSyncFile,
   type Access, type Cidr, type CloudConnectedView, type CloudflareRanges, type CloudReview, type CloudRole, type CloudSetupState, type Guard,
   type HostPaths, type Plan, type PlanContext, type ProviderWords, type SeenState,
 } from "./cloud-firewall";
@@ -131,9 +130,9 @@ const ICMPV6: NetcupRule = {
 };
 /**
  * netcup tracks only TCP, so replies to the server's NTP queries are new
- * inbound UDP, landing on Linux's default ephemeral ports. Source port 123 is
- * what NTP reflection floods come from, so only these servers' replies are let
- * in, and timesyncd is pointed at the same addresses. DNS needs no rule:
+ * inbound UDP, to any local port: ntpd queries from port 123. Source port 123
+ * is what NTP reflection floods come from, so only these servers' replies are
+ * let in, and timesyncd is pointed at the same addresses. DNS needs no rule:
  * netcup always lets its own resolvers through.
  */
 export const NTP_SERVERS: Record<string, string[]> = {
@@ -144,11 +143,14 @@ const NTP_ADDRESSES = Object.values(NTP_SERVERS).flat();
 const NTP_SOURCES = NTP_ADDRESSES.map((address) => parseCidr(address)!.text);
 const NTP_REPLIES: NetcupRule[] = [false, true].map((v6) => ({
   description: "NTP replies from the pinned time servers, kept by clp-addons", direction: "INGRESS", protocol: "UDP", action: "ACCEPT",
-  sources: NTP_SOURCES.filter((source) => source.includes(":") === v6), sourcePorts: "123", destinationPorts: "32768-60999",
+  sources: NTP_SOURCES.filter((source) => source.includes(":") === v6), sourcePorts: "123",
 }));
 const FIXED: NetcupRule[] = [ICMPV4, ICMPV6, ...NTP_REPLIES];
-const isNtpReply = (rule: NetcupRule) => rule.protocol === "UDP" && rule.sourcePorts === "123" && rule.destinationPorts === "32768-60999"
+const isNtpReply = (rule: NetcupRule) => rule.protocol === "UDP" && rule.sourcePorts === "123" && !rule.destinationPorts
   && !rule.destinations?.length && Boolean(rule.sources?.length) && canonicalList(rule.sources).every((source) => NTP_SOURCES.includes(source));
+/** Whether a rule admits its protocol from anyone in the family's `/0`, as an empty source list does. */
+const fromAnyone = (rule: NetcupRule, family: string) => !rule.sourcePorts && !rule.destinationPorts && !rule.destinations?.length
+  && (!rule.sources?.length || canonicalList(rule.sources).includes(family));
 
 /** The rules of one of the addon's policies: a pure function of the list, one rule per port and address family. */
 export function netcupRules(role: CloudRole, ranges: string[]): NetcupRule[] {
@@ -297,8 +299,19 @@ function readSync(paths: NetcupPaths): NetcupSync {
   return readSyncFile<NetcupSync>(paths.syncFile, paths.rootUid);
 }
 
+/** netcup.json, or null when it cannot be read; then no unlocked write trusts it, but a sign-in can still be used, replaced or removed. */
+function readSyncOrNull(paths: NetcupPaths): NetcupSync | null {
+  try { return readSync(paths); } catch { return null; }
+}
+
+/** Writes netcup.json whole, first removing one that cannot be read, which would refuse the write. */
+function replaceSync(paths: NetcupPaths, value: NetcupSync): void {
+  if (!readSyncOrNull(paths)) rmSync(paths.syncFile, { recursive: true, force: true });
+  writeState(paths.syncFile, value, paths.rootUid);
+}
+
 function writeSync(paths: NetcupPaths, change: Partial<NetcupSync>): void {
-  writeSyncFile<NetcupSync>(paths.syncFile, paths.rootUid, change);
+  replaceSync(paths, { ...readSyncOrNull(paths), ...change });
 }
 
 async function withNetcupLock<T>(paths: NetcupPaths, body: () => Promise<T>, timeoutSeconds = 120): Promise<T> {
@@ -331,7 +344,10 @@ function setTimeSync(options: NetcupOptions, on: boolean): string | null {
   try { have = readFileSync(file, "utf8"); } catch { /* none yet */ }
   if (have === want) return null;
   writeOrRemove(file, want, { mode: 0o644, createParent: true });
-  requireSuccess(runOf(options)("systemctl", ["try-restart", TIMESYNCD]), `restarting ${TIMESYNCD} failed`);
+  const restarted = runOf(options)("systemctl", ["try-restart", TIMESYNCD]);
+  // Put back what timesyncd still runs with, so the next repair writes and restarts again.
+  if (!restarted.ok) try { writeOrRemove(file, have, { mode: 0o644, createParent: true }); } catch { /* reported below */ }
+  requireSuccess(restarted, `restarting ${TIMESYNCD} failed`);
   const servers = Object.keys(NTP_SERVERS).join(" and ");
   return want ? `${TIMESYNCD} pointed at ${servers}` : `${TIMESYNCD} no longer pointed at ${servers}`;
 }
@@ -368,13 +384,15 @@ function signInRefused(error: unknown): boolean {
  * refresh token on every use, so the new one is saved before the access
  * token is used, under a lock so no two processes spend the same one.
  */
-async function signIn(paths: NetcupPaths, options: NetcupOptions, deadline?: number, tokenLockSeconds = 30): Promise<{ api: NetcupApi; auth: NetcupAuth; access: string; accountId?: number }> {
+async function signIn(paths: NetcupPaths, options: NetcupOptions, deadline?: number, tokenLockSeconds = 30): Promise<{ api: NetcupApi; auth: NetcupAuth; access: string; accountId?: number | null }> {
   let auth = new NetcupAuth(options.fetch);
-  let accountId: number | undefined;
+  let accountId: number | null | undefined;
   const access = await withFileLock(paths.tokenLockFile, tokenLockSeconds, "another netcup sign-in is being refreshed", async () => {
     const token = readToken(paths);
     if (!token) failAction("Connect netcup first");
-    accountId = readSync(paths).userId;
+    const stored = readSyncOrNull(paths);
+    // null when netcup.json cannot be read, which no stored account matches.
+    accountId = stored ? stored.userId : null;
     const left = deadline === undefined ? undefined : deadline - nowOf(options);
     if (left !== undefined && left <= 0) throw new NetcupError("the request timed out", 0, "timeout");
     auth = new NetcupAuth(options.fetch, left === undefined ? undefined : Math.min(15_000, left));
@@ -461,7 +479,7 @@ async function findServer(api: NetcupApi, addresses: string[], macs: string[]): 
 }
 
 /** Writes netcup.json, under the netcup lock unless the caller holds it; an unlocked read writes only for its own account. */
-async function saveSync(paths: NetcupPaths, change: Partial<NetcupSync>, locked: boolean, accountId?: number): Promise<void> {
+async function saveSync(paths: NetcupPaths, change: Partial<NetcupSync>, locked: boolean, accountId?: number | null): Promise<void> {
   if (locked) return writeSync(paths, change);
   await withNetcupLock(paths, async () => {
     if (readToken(paths) && readSync(paths).userId === accountId) writeSync(paths, change);
@@ -469,8 +487,8 @@ async function saveSync(paths: NetcupPaths, change: Partial<NetcupSync>, locked:
 }
 
 /** Where this server is in the account, kept from the last time it was found; null when no server there is this one. */
-async function locate(paths: NetcupPaths, options: NetcupOptions, api: NetcupApi, locked: boolean, fresh = false, accountId?: number): Promise<Target | null> {
-  const stored = readSync(paths);
+async function locate(paths: NetcupPaths, options: NetcupOptions, api: NetcupApi, locked: boolean, fresh = false, accountId?: number | null): Promise<Target | null> {
+  const stored = readSyncOrNull(paths) ?? {};
   const sameAccount = locked || stored.userId === accountId;
   if (!fresh && sameAccount && stored.serverId && stored.mac && stored.serverName) {
     return { serverId: stored.serverId, mac: stored.mac, serverName: stored.serverName };
@@ -511,7 +529,7 @@ async function findUserId(api: NetcupApi, auth: NetcupAuth, access: string, serv
 
 /** The SCP user id, kept in netcup.json once found; callers hold the netcup lock. */
 async function userIdOf(paths: NetcupPaths, api: NetcupApi, auth: NetcupAuth, access: string, serverId?: number): Promise<number> {
-  const stored = readSync(paths).userId;
+  const stored = readSyncOrNull(paths)?.userId;
   if (stored) return stored;
   const userId = await findUserId(api, auth, access, serverId);
   writeSync(paths, { userId });
@@ -524,7 +542,7 @@ const unmatched = (options: NetcupOptions) => {
 };
 
 /** The interface's firewall, finding the server again once when netcup no longer knows the one kept; `missing` says why there is none. */
-async function readFirewall(paths: NetcupPaths, options: NetcupOptions, api: NetcupApi, locked: boolean, accountId?: number): Promise<{ target: Target; firewall: NetcupFirewall } | { missing: string }> {
+async function readFirewall(paths: NetcupPaths, options: NetcupOptions, api: NetcupApi, locked: boolean, accountId?: number | null): Promise<{ target: Target; firewall: NetcupFirewall } | { missing: string }> {
   for (let fresh = false; ; fresh = true) {
     const target = await locate(paths, options, api, locked, fresh, accountId);
     if (!target) return { missing: unmatched(options) };
@@ -702,16 +720,17 @@ export async function pollNetcup(options: NetcupOptions = {}): Promise<{ pending
         if (current && !found) failAction(unmatched(options));
         writeState(paths.tokenFile, { refreshToken }, paths.rootUid);
         try {
-          writeState(paths.syncFile, found
+          replaceSync(paths, found
             ? { userId, serverId: found.serverId, mac: found.mac, serverName: found.serverName }
-            : { userId, unmatchedAt: nowOf(options) }, paths.rootUid);
+            : { userId, unmatchedAt: nowOf(options) });
         } catch (syncError) {
           try {
             if (current) writeState(paths.tokenFile, { refreshToken: current }, paths.rootUid);
             else rmSync(paths.tokenFile, { force: true });
           } catch {
-            // The new token stays saved, revoked below, so it is never used against the old account's state.
-            try { rmSync(paths.syncFile, { force: true }); } catch { /* the revoked token still asks to connect again */ }
+            // Gone before the token lock is released, so no refresh spends it before it is revoked below.
+            try { rmSync(paths.tokenFile, { force: true }); } catch { /* revoked below all the same */ }
+            try { rmSync(paths.syncFile, { recursive: true, force: true }); } catch { /* nothing reads it without a token */ }
           }
           throw syncError;
         }
@@ -770,7 +789,7 @@ export async function disconnectNetcup(options: NetcupOptions = {}): Promise<{ n
     const revoked = await withFileLock(paths.tokenLockFile, 30, "another netcup sign-in is being refreshed", async () => {
       const done = await auth.revoke(readToken(paths) ?? token).then(() => true, () => false);
       rmSync(paths.tokenFile, { force: true });
-      rmSync(paths.syncFile, { force: true });
+      rmSync(paths.syncFile, { recursive: true, force: true });
       return done;
     });
     let timeSync = "";
@@ -868,17 +887,27 @@ async function rewrite(api: NetcupApi, userId: number, policy: NetcupPolicy, des
 /**
  * Whether a policy only lets Cloudflare reach the role's ports: TCP accepts
  * on exactly those ports, each from the same sources, both address families,
- * every source inside this server's list, ICMP, and NTP replies from the pinned
- * servers. A newer list that adds a range fails this until this server's list catches up, and is then rewritten
- * to this server's list for a while; only Cloudflare stays let in throughout.
+ * every source inside this server's list, ICMP and ICMPv6 from anyone, and NTP
+ * replies from every pinned server and no other. A newer list that adds a range
+ * fails this until this server's list catches up, and is then rewritten to this
+ * server's list for a while; only Cloudflare stays let in throughout.
  */
 function cloudflareOnly(role: CloudRole, rules: NetcupRule[] | undefined, ranges: string[]): boolean {
   const cloudflare = ranges.map(parseCidr).filter((cidr): cidr is Cidr => cidr !== null);
   const ports = CLOUD_ROLES[role].ports.map(String);
   const sources = new Map<string, Set<string>>();
+  const icmp = { ICMP: false, ICMPv6: false };
+  const ntp = new Set<string>();
   for (const rule of rules ?? []) {
     if (rule.direction !== "INGRESS" || rule.action !== "ACCEPT") return false;
-    if (rule.protocol === "ICMP" || rule.protocol === "ICMPv6" || isNtpReply(rule)) continue;
+    if (rule.protocol === "ICMP" || rule.protocol === "ICMPv6") {
+      icmp[rule.protocol as keyof typeof icmp] ||= fromAnyone(rule, rule.protocol === "ICMP" ? ANYONE[0]! : ANYONE[1]!);
+      continue;
+    }
+    if (isNtpReply(rule)) {
+      for (const source of canonicalList(rule.sources)) ntp.add(source);
+      continue;
+    }
     if (rule.protocol !== "TCP" || rule.sourcePorts || rule.destinations?.length || !rule.sources?.length) return false;
     if (!ports.includes(rule.destinationPorts ?? "")) return false;
     const set = sources.get(rule.destinationPorts!) ?? new Set<string>();
@@ -891,7 +920,8 @@ function cloudflareOnly(role: CloudRole, rules: NetcupRule[] | undefined, ranges
   }
   const each = ports.map((port) => [...(sources.get(port) ?? [])].sort());
   const first = each[0]!;
-  return each.every((list) => list.join() === first.join()) && first.some((text) => !text.includes(":")) && first.some((text) => text.includes(":"));
+  return each.every((list) => list.join() === first.join()) && first.some((text) => !text.includes(":")) && first.some((text) => text.includes(":"))
+    && icmp.ICMP && icmp.ICMPv6 && NTP_SOURCES.every((source) => ntp.has(source));
 }
 
 /**
@@ -944,6 +974,9 @@ async function apply(ctx: Context, role: CloudRole, enabled: boolean, plan: Plan
     const kept = access === "open" ? ctx.open[each] : ctx.cloudflare[each];
     const name = access === "open" ? CLOUD_ROLES[each].open : CLOUD_ROLES[each].name;
     try {
+      if (kept && enabled && each === role && access === "cloudflare") {
+        await bringCurrent(ctx.api, ctx.target.userId, role, await ctx.api.policy(ctx.target.userId, kept.id), list!, ctx.now);
+      }
       ids.set(name, kept?.id ?? await ensurePolicy(ctx, each, access, list));
     } catch (error) {
       failAction(`${failureText(ctx.clean, error, `prepare ${name}`)}. Nothing on this server was changed.`);
@@ -990,7 +1023,8 @@ export async function setNetcupRole(
     } else {
       try { list = readCloudflareRanges(options); } catch { /* turning off needs no list */ }
     }
-    const planning = planContext(ctx, list?.ranges ?? []);
+    // Turning on reads the role's policy as it will be: an attached one is brought current first.
+    const planning = planContext(enabled ? { ...ctx, cloudflare: { ...ctx.cloudflare, [role]: null } } : ctx, list?.ranges ?? []);
     const plan = planFor(planning, role, enabled);
     const words = timesyncdActive(options) ? WORDS : { ...WORDS, closesMore: `${WORDS.closesMore}${NO_TIMESYNCD}` };
     const review = enabled
@@ -1030,7 +1064,7 @@ export async function syncNetcup(mode: "repair" | "ranges", options: NetcupOptio
   return withNetcupLock(paths, async () => {
     if (!readToken(paths)) return null;
     const list = readCloudflareRanges(options);
-    const stored = readSync(paths);
+    const stored = readSyncOrNull(paths) ?? {};
     if (mode === "ranges" && stored.rangesHash === list.hash) return null;
     let clean = (text: string) => text;
     let rewritten = 0, reopened = 0, newer = 0, stale = 0;

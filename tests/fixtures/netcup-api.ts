@@ -36,6 +36,8 @@ export class FakeNetcup {
   taskState = "FINISHED";
   /** Fail this many `GET /tasks/{uuid}` calls with 503 before answering normally. */
   taskFailures = 0;
+  /** Answer this many `GET /tasks/{uuid}` calls with the uuid and no state, which the spec allows. */
+  taskNoState = 0;
   /** When true, `PUT /firewall` answers 200 `{}` with no task object. */
   setFirewallNoTask = false;
   /** Override the HTTP status returned when `setFirewallNoTask` is true. */
@@ -64,6 +66,9 @@ export class FakeNetcup {
   revoked: string[] = [];
   private accessTokens = new Set<string>();
   private serial = 0;
+  /** Each fake account issues its own tokens, so two of them never issue the same one. */
+  private static accounts = 0;
+  private readonly account = ++FakeNetcup.accounts;
   private nextId = 300;
   private tasks = new Map<string, number>();
 
@@ -93,7 +98,7 @@ export class FakeNetcup {
 
   /** A sign-in Keycloak already issued, as after the device grant. */
   issue(): string {
-    this.refreshToken = `eyJrefresh.${++this.serial}.signature-of-the-refresh-token`;
+    this.refreshToken = `eyJrefresh.${this.account}-${++this.serial}.signature-of-the-refresh-token`;
     this.valid.add(this.refreshToken);
     return this.refreshToken;
   }
@@ -270,6 +275,10 @@ export class FakeNetcup {
       if (this.taskFailures > 0) {
         this.taskFailures--;
         return json({ code: "UNAVAILABLE", message: "Task backend temporarily unavailable." }, 503);
+      }
+      if (this.taskNoState > 0) {
+        this.taskNoState--;
+        return json({ uuid: match[1], name: "Update firewall" });
       }
       return json({ uuid: match[1], name: "Update firewall", state: this.taskState, message: null, responseError: this.taskState === "ERROR" ? { code: "ERROR", message: "The hypervisor did not answer." } : null });
     }
