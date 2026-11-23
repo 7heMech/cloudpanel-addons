@@ -98,7 +98,8 @@ export async function handle(
     return jsonResponse(result, result.ok ? 200 : 400);
   }
 
-  if (req.method === "POST" && path === "/api/hetzner/switch") {
+  const switched = /^\/api\/(hetzner|netcup)\/switch$/.exec(path);
+  if (req.method === "POST" && switched) {
     const body = await readMutation(req, 1024);
     if (body instanceof Response) return body;
     const { role, enabled, confirm, typed } = body;
@@ -106,7 +107,17 @@ export async function handle(
       || (typed !== undefined && typeof typed !== "string")) {
       return jsonResponse({ ok: false, error: "role must be web or panel, and enabled boolean" }, 400);
     }
-    const result = await firewallService.setHetzner(role, enabled, confirm as string | undefined, typed as string | undefined);
+    const set = switched[1] === "netcup" ? firewallService.setNetcup : firewallService.setHetzner;
+    const result = await set(role, enabled, confirm as string | undefined, typed as string | undefined);
+    return jsonResponse(result, result.ok ? 200 : 400);
+  }
+
+  if (req.method === "POST" && (path === "/api/netcup/connect" || path === "/api/netcup/poll" || path === "/api/netcup/remove")) {
+    const body = await readMutation(req);
+    if (body instanceof Response) return body;
+    const result = path === "/api/netcup/connect" ? await firewallService.connectNetcup()
+      : path === "/api/netcup/poll" ? await firewallService.pollNetcup()
+        : await firewallService.disconnectNetcup();
     return jsonResponse(result, result.ok ? 200 : 400);
   }
 

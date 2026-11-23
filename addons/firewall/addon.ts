@@ -5,6 +5,7 @@ import {
 import { FIREWALL_TARGETS } from "./inject/targets";
 import { syncFirewall } from "./protocols";
 import { syncHetzner } from "./hetzner";
+import { keepNetcupTimeSync, syncNetcup } from "./netcup";
 import { FIREWALL_ACTIONS, FIREWALL_SETUP } from "./setup";
 import { keepPanelGateNginx, panelGateOffLocally, repairPanelGate, withdrawPanelGate } from "./panel-gate";
 import { CLI_BIN } from "../../lib/paths";
@@ -35,7 +36,7 @@ function cleanUpPanelGateNow(): void {
   }
 }
 
-/** Repair: new sites, the protocols, the Panel gate, then the Hetzner firewalls, each whatever the others do. */
+/** Repair: new sites, the protocols, the Panel gate, then the Hetzner firewalls and netcup policies, each whatever the others do. */
 async function repair(options?: Record<string, unknown>): Promise<string | null> {
   const lines: string[] = [];
   const failures: string[] = [];
@@ -51,10 +52,12 @@ async function repair(options?: Record<string, unknown>): Promise<string | null>
     const changed = await repairPanelGate();
     if (changed) lines.push(changed);
   } catch (error) { failures.push(errorMessage(error)); }
-  try {
-    const changed = await syncHetzner("repair");
-    if (changed) lines.push(changed);
-  } catch (error) { failures.push(errorMessage(error)); }
+  for (const sync of [syncHetzner, syncNetcup]) {
+    try {
+      const changed = await sync("repair");
+      if (changed) lines.push(changed);
+    } catch (error) { failures.push(errorMessage(error)); }
+  }
   if (failures.length) throw new Error([...failures, ...lines].join("; "));
   return lines.join("; ") || null;
 }
@@ -62,11 +65,12 @@ async function repair(options?: Record<string, unknown>): Promise<string | null>
 export const FIREWALL_ADDON: AddonDefinition = {
   name: "firewall",
   title: "Firewall",
-  description: "Cloudflare-only access for every site, a Cloudflare Access gate in front of the panel, Hetzner Cloud Firewalls that admit only Cloudflare, and TCP, UDP or both for each rule on CloudPanel's Firewall page.",
+  description: "Cloudflare-only access for every site, a Cloudflare Access gate in front of the panel, Hetzner Cloud or netcup firewalls that admit only Cloudflare, and TCP, UDP or both for each rule on CloudPanel's Firewall page.",
   changed: [
     { in: "2.2.0-rc.1", note: "Cloudflare IP Access is now Firewall, which also sets each firewall rule's protocol: TCP, UDP or both." },
     { in: "2.2.0-rc.1", note: "On a Hetzner Cloud server, Firewall can attach Hetzner Cloud Firewalls that let only Cloudflare reach the sites (80, 443) and the panel (8443). Both switches are off until you connect a token and turn one on; off keeps those ports open to anyone." },
     { in: "2.2.0-rc.1", note: "Panel gate, off by default: CloudPanel answers only at its custom domain through Cloudflare, after a Cloudflare Access sign-in, and no longer at the server's IP on port 8443. It needs DNS's token to hold three more permissions. Disabling Firewall turns the gate off." },
+    { in: "2.2.0-rc.3", note: "On a netcup server, Firewall can put netcup firewall policies on it that let only Cloudflare reach the sites (80, 443) and the panel (8443). Both switches are off until you connect netcup and turn one on. While any of its policies is on the server, systemd-timesyncd syncs only with time.cloudflare.com and ptbtime1.ptb.de, the NTP servers whose replies the policies let in." },
   ],
   targets: FIREWALL_TARGETS,
   setup: FIREWALL_SETUP,
@@ -81,6 +85,7 @@ export const FIREWALL_ADDON: AddonDefinition = {
   anchors: [
     { label: "Panel gate", run: () => keepPanelGateNginx() },
     { label: "Hetzner firewalls", run: () => syncHetzner("ranges") },
+    { label: "netcup policies", run: () => syncNetcup("ranges") },
   ],
   commands: {
     firewall: {
@@ -106,5 +111,7 @@ export const FIREWALL_ADDON: AddonDefinition = {
     // Only a gate still on, as on a re-run of the installer; disabling turned it off.
     try { keepPanelGateNginx(); }
     catch (error) { log.warn(`the Panel gate waits for the next repair: ${errorMessage(error)}`); }
+    try { keepNetcupTimeSync(); }
+    catch (error) { log.warn(`netcup time sync waits for the next repair: ${errorMessage(error)}`); }
   },
 };

@@ -60,3 +60,5 @@ p.pg-way-back { margin: 16px 0 0; padding-top: 16px; border-top: 1px solid var(-
   .cloudflare-site-table td.action-cell::before { display: none; }
   .cloudflare-site-table .site-name { display: block; overflow-wrap: anywhere; }
 }
+.nc-code { font-family: var(--mono, ui-monospace, SFMono-Regular, Menlo, monospace); font-size: 18px; letter-spacing: 1px; color: var(--heading); }
+p.nc-connect-status { margin: 16px 0 0; }

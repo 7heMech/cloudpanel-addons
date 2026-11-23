@@ -5,6 +5,7 @@ import {
   dashboardView as firewallDashboardView, layout as firewallLayout, panelGateCard as firewallPanelGateCard,
 } from "../addons/firewall/app/views";
 import type { HetznerView } from "../addons/firewall/hetzner";
+import type { NetcupView } from "../addons/firewall/netcup";
 import type { PanelGateView } from "../addons/firewall/panel-gate";
 import {
   dashboardView, layout as instaticLayout, newInstanceView, jobView as instaticJobView,
@@ -542,6 +543,31 @@ function hetznerPreviewState(mode: string | null): HetznerView {
   };
 }
 
+/**
+ * ?netcup=disconnected|error|unmatched|off|on|blocked|ssh: the netcup card's states, which take the Hetzner
+ * card's place while Hetzner is absent; no card by default. `on` has the sites switch on.
+ */
+function netcupPreviewState(mode: string | null): NetcupView {
+  if (!mode) return { state: "absent" };
+  if (mode === "disconnected") return { state: "disconnected", address: "203.0.113.24" };
+  if (mode === "error") return { state: "error", connected: true, error: "netcup no longer accepts the saved sign-in; connect again." };
+  if (mode === "unmatched") {
+    return { state: "error", connected: true, error: "No server in this netcup account has this server's address (203.0.113.24); connect the account that holds it." };
+  }
+  const on = mode === "on" || mode === "ssh";
+  return {
+    state: "connected", serverId: 512345, serverName: "cp-nue-1",
+    others: mode === "ssh" ? ["netcup Mail block"] : ["netcup Mail block", "ssh-from-office"], terminal: true,
+    roles: {
+      web: { on, firewall: "clp-addons-cloudflare-web", open: null, current: true, stillOpen: [] },
+      panel: { on: false, firewall: "clp-addons-cloudflare-panel", open: on && mode === "ssh" ? "clp-addons-open-panel" : null, current: true, stillOpen: [] },
+    },
+    sshClosed: mode === "ssh" ? [22] : [],
+    rangesProblem: null,
+    blocked: mode === "blocked" ? "netcup's firewall is off for this server, so no policy has any effect. Turn it on under Firewall in SCP." : null,
+  };
+}
+
 /** ?gate=ready|on|drift|leftover|pending|error: the Panel gate card's states; something missing by default. */
 function panelGatePreviewState(mode: string | null): PanelGateView | { error: string } {
   if (mode === "error") return { error: "The Panel gate could not be read: Cloudflare: asked to wait until 2026-11-19T05:10:00.000Z" };
@@ -576,7 +602,8 @@ function firewallPreviewState(url: URL) {
       available: true, enabled: url.searchParams.get("protocols") !== "off",
       protocols: { 9: "udp" as const, 10: "udp" as const, 11: "both" as const }, udpPorts: url.searchParams.has("noudp") ? [] : ["53", "51820"],
     },
-    hetzner: hetznerPreviewState(url.searchParams.get("hetzner")),
+    hetzner: hetznerPreviewState(url.searchParams.has("netcup") && !url.searchParams.has("hetzner") ? "absent" : url.searchParams.get("hetzner")),
+    netcup: netcupPreviewState(url.searchParams.get("netcup")),
     panelGate: panelGatePreviewState(url.searchParams.get("gate")),
   };
 }
