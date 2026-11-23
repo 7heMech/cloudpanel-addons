@@ -232,6 +232,7 @@ function verifyRoot() {
         const active = options;
         let proof = { challenge: active.challenge, code: digits };
         if (useKey) {
+          if (!active.keys.length) throw new Error('No passkey is available for this account.');
           const credential = await navigator.credentials.get({ publicKey: { challenge: fromB64(active.challenge), allowCredentials: active.keys.map(id => ({ type: 'public-key', id: fromB64(id) })), userVerification: 'required', timeout: 60000 } });
           if (settled) return;
           proof = { challenge: active.challenge, id: credential.id, clientDataJSON: toB64(credential.response.clientDataJSON), authenticatorData: toB64(credential.response.authenticatorData), signature: toB64(credential.response.signature), userHandle: credential.response.userHandle ? toB64(credential.response.userHandle) : null };

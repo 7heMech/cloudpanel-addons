@@ -580,9 +580,9 @@ and error text is redacted of them. A saved Mailcow key is kept only for the
 Mailcow address it was saved with.
 
 The records a site DNS writes has as wanted are tracked by id and their full
-record values, including priority, proxy, TTL and comment. A cleanly planned
-enforcing entry with no matched records of its own, such as one handed off to a
-wildcard, clears its tracked entry so it leaves no orphans. A site taken out of
+record values, including priority, proxy, TTL and comment. A settled enforcing
+entry handed off to a wildcard with no pending changes and no matched records of
+its own clears its tracked entry so it leaves no orphans. A site taken out of
 its profile, or every site when DNS goes back to Ask first, is forgotten there
 and then: its records are its own again. When CloudPanel no longer has such a
 site, the page

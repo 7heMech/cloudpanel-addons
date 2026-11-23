@@ -892,7 +892,10 @@ export class DnsRun {
     const diff = this.diffs.get(plan.domain);
     if (!diff) return 3;
     if (diff.wanted.some((record) => record.name.startsWith("*."))) return 0;
-    if (plan.redirect || diff.wanted.some((record) => !ADDRESS_TYPES.has(record.type)) || (diff.wanted.length > 0 && !plan.wildcardBlocked)) return 1;
+    if (plan.wildcard) return 3;
+    const selfNonAddress = diff.wanted.some((record) => !ADDRESS_TYPES.has(record.type)
+      && (record.name === plan.domain || record.name.endsWith(`.${plan.domain}`)));
+    if (plan.redirect || selfNonAddress || (diff.wanted.length > 0 && !plan.wildcardBlocked)) return 1;
     if (diff.wanted.length > 0) return 2;
     return 3;
   }

@@ -504,8 +504,11 @@ class Action {
     const tracked = run.managed(checked);
     for (const plan of checked) {
       if (tracked[plan.domain]) managed[plan.domain] = tracked[plan.domain]!;
-      // A cleanly planned enforcing entry handed off to a wildcard has no explicit records left to track.
-      else if (plan.mode === "enforce" && !plan.redirect && plan.zone && !plan.problems.length && plan.wildcard) delete managed[plan.domain];
+      // A settled enforcing entry handed off to a wildcard has no explicit records left to track.
+      else if (plan.mode === "enforce" && !plan.redirect && plan.zone && !plan.problems.length && plan.wildcard
+        && !plan.changes.some((change) => change.action !== "note")) {
+        delete managed[plan.domain];
+      }
     }
     for (const [domain, entry] of Object.entries(managed)) {
       if (current.has(domain) || !run.zoneGone(entry)) continue;
@@ -741,12 +744,13 @@ class Action {
         const requests = this.files.ssl();
         if (requestSsl(requests, site, this.now)) this.files.saveSsl(requests);
       }
+      const domains = this.wildcardAffected(policy, policy, [domain]);
       const run = this.run(policy);
       await run.discover();
-      await run.load([domain]);
-      await run.enforce([domain]);
-      const plans = run.planAll([domain], true);
-      this.record(run, plans, [domain]);
+      await run.load(domains);
+      await run.enforce(domains);
+      const plans = run.planAll(domains, true);
+      this.record(run, plans, domains);
       plan = plans.find((candidate) => candidate.domain === domain);
     }
     const ready = readiness(plan);
@@ -863,6 +867,7 @@ class Action {
       }
       return list;
     };
+    const directSet = new Set(direct);
     const directIntermediates = new Set(direct.flatMap(intermediateAncestors));
     const domains = [...new Set([...this.sites().map((site) => site.domain), ...after.panelHost ? [after.panelHost] : []])];
     const set = new Set(direct);
@@ -875,7 +880,8 @@ class Action {
         set.add(domain);
         continue;
       }
-      if (direct.some((changed) => changed.endsWith(`.${domain}`)) || intermediateAncestors(domain).some((ancestor) => directIntermediates.has(ancestor))) {
+      if (direct.some((changed) => changed.endsWith(`.${domain}`))
+        || intermediateAncestors(domain).some((ancestor) => directIntermediates.has(ancestor) || directSet.has(ancestor))) {
         set.add(domain);
       }
     }

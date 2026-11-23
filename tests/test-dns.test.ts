@@ -1512,4 +1512,54 @@ describe("wildcard DNS", () => {
     env.sites.splice(env.sites.findIndex((entry) => entry.domain === "shop.example.com"), 1);
     expect((await env.act("list")).orphans).toEqual([{ domain: "shop.example.com", zone: "example.com", records: 2 }]);
   });
+
+  test("wildcardAffected includes descendants of a non-wildcard intermediate ancestor, writeOrder handles zone-level non-address rows, and refresh keeps pending orphans", async () => {
+    const env = setup();
+    env.sites.push(site(3, "a.sub.example.com"));
+    env.cf.record("example.com", { type: "A", name: "*.example.com", content: "203.0.113.10", proxied: true });
+    env.cf.record("example.com", { type: "AAAA", name: "*.example.com", content: "2001:db8::10", proxied: true });
+    await env.connect();
+    await env.act("assign", { domains: ["a.sub.example.com"], profileId: "web" });
+    await env.automatic();
+    expect(env.records().some((record) => record.includes("a.sub.example.com"))).toBe(false);
+
+    // Adding a redirect at intermediate ancestor sub.example.com brings descendant a.sub.example.com into the review.
+    const review = await env.act("save-redirect", { source: "sub.example.com", target: "https://example.com" });
+    expect(review.review!.sites.map((plan) => plan.domain).sort()).toEqual(["a.sub.example.com", "sub.example.com"]);
+    await env.act("confirm", { token: review.review!.token });
+    expect(env.records()).toEqual(expect.arrayContaining([
+      "A a.sub.example.com 203.0.113.10 proxied",
+      "AAAA a.sub.example.com 2001:db8::10 proxied",
+      "AAAA sub.example.com 100:: proxied",
+    ]));
+
+    // Zone-level non-address row (CAA {zone}) on a longer blocked subdomain must not outrank a shorter blocking sibling in writeOrder.
+    const env2 = setup();
+    env2.sites.push(site(3, "longname.sub.example.com"));
+    env2.cf.record("example.com", { type: "A", name: "*.example.com", content: "203.0.113.10", proxied: true });
+    env2.cf.record("example.com", { type: "AAAA", name: "*.example.com", content: "2001:db8::10", proxied: true });
+    await env2.connect();
+    const web = (await env2.act("list")).profiles.find((profile) => profile.id === "web")!;
+    await env2.act("save-profile", { ...web, records: [...web.records, { type: "CAA", name: "{zone}", content: '0 issue "letsencrypt.org"', ttl: 1 }] });
+    await env2.act("assign", { domains: ["longname.sub.example.com"], profileId: "web" });
+    await env2.act("save-redirect", { source: "b.sub.example.com", target: "https://example.com" });
+    await env2.automatic();
+    expect(env2.records()).toEqual(expect.arrayContaining([
+      "A longname.sub.example.com 203.0.113.10 proxied",
+      "AAAA longname.sub.example.com 2001:db8::10 proxied",
+      "AAAA b.sub.example.com 100:: proxied",
+    ]));
+
+    // A read-only refresh after a matching wildcard appears must not drop orphan tracking while explicit records are still pending deletion.
+    const env3 = setup();
+    await env3.connect();
+    await env3.act("assign", { domains: ["shop.example.com"], profileId: "web" });
+    await env3.automatic();
+    env3.cf.record("example.com", { type: "A", name: "*.example.com", content: "203.0.113.10", proxied: true });
+    env3.cf.record("example.com", { type: "AAAA", name: "*.example.com", content: "2001:db8::10", proxied: true });
+    // Trigger a read-only refresh (saving a second connection calls tryRefresh("all") without enforce()).
+    await env3.connect(SECOND_TOKEN);
+    env3.sites.splice(env3.sites.findIndex((entry) => entry.domain === "shop.example.com"), 1);
+    expect((await env3.act("list")).orphans).toEqual([{ domain: "shop.example.com", zone: "example.com", records: 2 }]);
+  });
 });

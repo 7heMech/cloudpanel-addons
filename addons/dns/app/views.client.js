@@ -726,9 +726,10 @@ function dnsSavePanelHost(event) {
 }
 
 async function dnsRemovePanelHost() {
+  const viaWildcard = Boolean(dnsState.panelHost.plan && dnsState.panelHost.plan.wildcard);
   const accepted = await confirmAction({
     title: 'Remove the panel hostname?',
-    text: 'DNS stops managing ' + dnsState.panelHost.name + '. Its records stay in Cloudflare, listed with the records of deleted sites, and CloudPanel keeps its custom domain.',
+    text: 'DNS stops managing ' + dnsState.panelHost.name + '.' + (viaWildcard ? ' ' : ' Any explicit records stay in Cloudflare, listed with the records of deleted sites, and ') + 'CloudPanel keeps its custom domain.',
     confirmLabel: 'Remove', danger: true,
   });
   if (accepted) dnsPost('/api/panel-host', { name: null });
