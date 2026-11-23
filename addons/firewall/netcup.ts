@@ -355,13 +355,14 @@ function setTimeSync(options: NetcupOptions, on: boolean): string | null {
 /**
  * Points timesyncd at the pinned NTP servers while any of the addon's policies
  * was last seen on this server: an open one makes netcup drop by default too.
- * Without a sign-in nothing says whether they are still there, so the drop-in
- * stays as it is; the pinned servers keep time either way.
+ * Without a sign-in or readable state nothing says whether they are still
+ * there, so the drop-in stays as it is; the pinned servers keep time either way.
  */
 export function keepNetcupTimeSync(options: NetcupOptions = {}): string | null {
   const paths = pathsOf(options);
   if (!readToken(paths)) return null;
-  const stored = readSync(paths);
+  const stored = readSyncOrNull(paths);
+  if (!stored) return null;
   return setTimeSync(options, stored.held ?? Boolean(stored.seen?.web || stored.seen?.panel));
 }
 
@@ -754,6 +755,7 @@ export async function disconnectNetcup(options: NetcupOptions = {}): Promise<{ n
     const token = readToken(paths);
     if (!token) return { notice: "No netcup sign-in is saved." };
     let unchecked = "";
+    let refused = false;
     let active = true;
     let mine: NetcupPolicy[] = [];
     let auth = new NetcupAuth(options.fetch);
@@ -775,6 +777,7 @@ export async function disconnectNetcup(options: NetcupOptions = {}): Promise<{ n
         failAction(`Could not ask netcup which policies this server has: ${(error instanceof ActionFailure ? error.message : clean(errorMessage(error))).replace(/\.$/, "")}. Try again; disconnecting now would leave a clp-addons policy on this server that no longer follows Cloudflare's list`);
       }
       unchecked = uncheckedBecause("it refuses the saved sign-in");
+      refused = true;
     }
     const on = mine.filter((policy) => ownerOf(policy)!.access === "cloudflare");
     if (on.length && active) {
@@ -793,8 +796,10 @@ export async function disconnectNetcup(options: NetcupOptions = {}): Promise<{ n
       return done;
     });
     let timeSync = "";
-    if (!open.length && !on.length) {
-      try { withdrawNetcupTimeSync(options); } catch (error) { timeSync = timeSyncFailed(error); }
+    // A refused sign-in shows nothing, and the addon's policies may still be there.
+    if (!refused && !open.length && !on.length) {
+      try { withdrawNetcupTimeSync(options); }
+      catch (error) { timeSync = ` This server's time sync could not be put back (${errorMessage(error).replace(/\.$/, "")}); it stays pointed at time.cloudflare.com and ptbtime1.ptb.de.`; }
     }
     return { notice: `The netcup sign-in is removed${revoked ? " and revoked" : "; netcup could not be asked to revoke it, so it lapses once unused"}.${inactive}${staying}${unchecked}${timeSync}` };
   });

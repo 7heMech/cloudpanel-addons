@@ -1184,7 +1184,13 @@ describe("review fixes", () => {
     expect(await syncNetcup("repair", server.options)).toBe("1 netcup policy follows a newer Cloudflare list from another server");
     expect(netcupSignature(tampered.rules)).toBe(expectedSig);
 
+    // A newer policy whose every port also admits a source outside this server's list is put back.
+    tampered.rules = netcupRules("web", [...newerRanges, "198.51.100.0/24"]);
+    expect(await syncNetcup("repair", server.options)).toBe("1 netcup policy set to Cloudflare's list");
+    expect(netcupSignature(tampered.rules)).toBe(netcupSignature(netcupRules("web", RANGES)));
+
     // On this server too, a newer policy that lets in a source outside Cloudflare's list is put back.
+    tampered.description = `Managed by clp-addons; Cloudflare's list of ${newerAt}`;
     tampered.rules = [...tampered.rules, { ...netcupRules("web", RANGES)[0]!, sources: ["1.0.0.0/8"] }];
     expect(await syncNetcup("repair", server.options)).toBe("1 netcup policy set to Cloudflare's list");
     expect(netcupSignature(tampered.rules)).toBe(netcupSignature(netcupRules("web", RANGES)));
@@ -1490,6 +1496,42 @@ FallbackNTP=
     rmSync(dropIn(server));
     expect(keepNetcupTimeSync(server.options)).toBeNull();
     expect(existsSync(dropIn(server))).toBe(false);
+  });
+
+  test("repair keeps the drop-in while only open policies are attached", async () => {
+    const fake = new FakeNetcup();
+    fake.policy("ssh", [ssh()], [SERVER]);
+    const server = await connected(fake);
+    timesyncd(server);
+    await turn(server, "web", true);
+    await turn(server, "web", false);
+    expect(fake.userPolicies()).toEqual(["ssh", "clp-addons-open-web"]);
+    rmSync(dropIn(server));
+    await syncNetcup("repair", server.options);
+    expect(existsSync(dropIn(server))).toBe(true);
+  });
+
+  test("disconnecting a sign-in netcup refuses keeps the drop-in, since the policies may still be attached", async () => {
+    const fake = new FakeNetcup();
+    fake.policy("ssh", [ssh()], [SERVER]);
+    const server = await connected(fake);
+    timesyncd(server);
+    await turn(server, "web", true);
+    fake.revokeAll();
+    await disconnectNetcup(server.options);
+    expect(fake.userPolicies()).toEqual(["ssh", "clp-addons-cloudflare-web"]);
+    expect(existsSync(dropIn(server))).toBe(true);
+  });
+
+  test("unreadable state leaves the drop-in as it is", async () => {
+    const fake = new FakeNetcup();
+    fake.policy("ssh", [ssh()], [SERVER]);
+    const server = await connected(fake);
+    timesyncd(server);
+    await turn(server, "web", true);
+    writeFileSync(join(server.dir, "state", "netcup.json"), "{not json");
+    expect(keepNetcupTimeSync(server.options)).toBeNull();
+    expect(existsSync(dropIn(server))).toBe(true);
   });
 
   test("disconnecting with none of the addon's policies on the server takes the drop-in away", async () => {

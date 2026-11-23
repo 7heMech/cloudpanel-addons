@@ -669,7 +669,8 @@ falls back to the pool, whose replies would be dropped; it restarts timesyncd
 when the file changes, and puts the earlier file back when the restart fails,
 so the next repair tries again. It is removed only once netcup shows none of the
 addon's policies on the server, or on disconnecting when none is attached.
-Disabling Firewall, or disconnecting with an open policy left behind, keeps it:
+Disabling Firewall, or disconnecting with an open policy left behind or a sign-in
+netcup refuses (which shows nothing), keeps it; so does unreadable state:
 nothing then says when those policies go, and the pinned servers keep time
 either way. Repair and enabling Firewall put it back from what was last seen,
 so a repair that cannot reach netcup still keeps it. Only an
