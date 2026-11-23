@@ -1,9 +1,10 @@
 import { afterEach, expect, test } from "bun:test";
+import { Database } from "bun:sqlite";
 import { chmodSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { instaticSiteAt, smtpSession, type Envelope } from "../addons/instatic/mail";
-import { ensureMailBridge, mailUnits, withdrawMailBridge } from "../addons/instatic/mail-bridge";
+import { ensureMailBridge, mailUnits, seedRelayConnector, withdrawMailBridge } from "../addons/instatic/mail-bridge";
 import { DEFAULT_INSTATIC_ACTION_PATHS } from "../addons/instatic/action";
 import { deliverAsSite } from "../addons/smtp/submit";
 import type { CommandResult } from "../lib/command";
@@ -184,4 +185,42 @@ test("the bridge creates the network, listens on its gateway and lets it through
   withdrawMailBridge({ run: docker.run, systemdDir });
   expect(docker.calls).toContain("systemctl disable --now clp-addons-instatic-mail.socket");
   expect(docker.calls).toContain("ufw delete allow in on clp-instatic to 172.31.0.1 port 2525 proto tcp");
+});
+
+test("an empty Instatic mail setup gets the bridge as its default connector, once", () => {
+  const dir = scratch();
+  const file = join(dir, "instatic.db");
+  const db = new Database(file);
+  db.exec(`create table mail_connectors (id text primary key, kind text not null, label text not null, config_json text not null default '{}',
+    secret_ciphertext blob, secret_iv blob, created_at text not null, updated_at text not null);
+    create table mail_settings (id text primary key, default_connector_id text, from_address text not null default '',
+    from_name text not null default '', reply_to text not null default '', updated_at text not null);`);
+  db.close();
+  // docker exec, run here against the scratch database.
+  const exec = (_: string, args: string[]): CommandResult => {
+    const env: Record<string, string> = { ...process.env as Record<string, string>, DATABASE_URL: `sqlite:${file}` };
+    for (let i = 0; i < args.length; i++) if (args[i] === "-e") { const [key, value] = args[++i]!.split("="); env[key!] = value!; }
+    expect(args.slice(-4, -2)).toEqual(["instatic-blog.example.com", "bun"]);
+    const result = Bun.spawnSync([process.execPath, "-e", args.at(-1)!], { env, stdout: "pipe", stderr: "pipe" });
+    return { ok: result.success, stdout: result.stdout.toString(), stderr: result.stderr.toString() };
+  };
+  expect(seedRelayConnector("instatic-blog.example.com", "blog.example.com", exec)).toBe("seeded");
+  expect(seedRelayConnector("instatic-blog.example.com", "blog.example.com", exec)).toBe("configured");
+  const check = new Database(file);
+  const connector = check.query("select id, kind, config_json, secret_ciphertext from mail_connectors").get() as Record<string, unknown>;
+  expect(connector).toMatchObject({ kind: "smtp", config_json: '{"host":"smtp-relay","port":2525,"username":""}', secret_ciphertext: null });
+  expect(check.query("select default_connector_id, from_address from mail_settings").get())
+    .toEqual({ default_connector_id: connector.id, from_address: "noreply@blog.example.com" });
+  check.close();
+
+  // An Instatic from before email has no mail tables.
+  const older = join(dir, "older.db");
+  new Database(older).close();
+  expect(seedRelayConnector("instatic-blog.example.com", "blog.example.com", (command, args) => {
+    const env: Record<string, string> = { ...process.env as Record<string, string>, DATABASE_URL: `sqlite:${older}` };
+    const result = Bun.spawnSync([process.execPath, "-e", args.at(-1)!], { env, stdout: "pipe", stderr: "pipe" });
+    return { ok: result.success, stdout: result.stdout.toString(), stderr: result.stderr.toString() };
+  })).toBe("no-mail");
+  expect(() => seedRelayConnector("instatic-blog.example.com", "blog.example.com", () => ({ ok: false, stdout: "", stderr: "No such container" })))
+    .toThrow("No such container");
 });

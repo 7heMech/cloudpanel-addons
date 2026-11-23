@@ -130,3 +130,40 @@ export function withdrawMailBridge(options: MailBridgeOptions = {}): void {
   run("systemctl", ["daemon-reload"]);
   if (ufwActive(run)) run("ufw", ["delete", "allow", ...ufwRule(previous)]);
 }
+
+const SEED_SCRIPT = `
+import { Database } from "bun:sqlite";
+const db = new Database(String(process.env.DATABASE_URL ?? "sqlite:/app/data/instatic.db").replace(/^sqlite:/, ""));
+db.exec("PRAGMA busy_timeout = 10000");
+const tables = db.query("select name from sqlite_master where type = 'table' and name in ('mail_connectors', 'mail_settings')").all();
+if (tables.length < 2) { console.log("no-mail"); process.exit(0); }
+if (db.query("select 1 from mail_connectors limit 1").get() || db.query("select 1 from mail_settings limit 1").get()) { console.log("configured"); process.exit(0); }
+const id = crypto.randomUUID();
+const now = new Date().toISOString();
+db.transaction(() => {
+  db.run("insert into mail_connectors (id, kind, label, config_json, created_at, updated_at) values (?, 'smtp', 'SMTP Relay', ?, ?, ?)",
+    [id, JSON.stringify({ host: process.env.CLP_MAIL_HOST, port: Number(process.env.CLP_MAIL_PORT), username: "" }), now, now]);
+  db.run("insert into mail_settings (id, default_connector_id, from_address, from_name, reply_to, updated_at) values ('default', ?, ?, '', '', ?)",
+    [id, process.env.CLP_MAIL_FROM, now]);
+})();
+console.log("seeded");
+`;
+
+export type SeedResult = "seeded" | "configured" | "no-mail";
+
+/**
+ * Inside the running container, as its site user: makes the bridge Instatic's
+ * default connector, sending as noreply@<domain>, unless its mail is already
+ * set up. An Instatic without mail tables answers "no-mail".
+ */
+export function seedRelayConnector(container: string, domain: string, run: Run = systemRun): SeedResult {
+  const result = run("docker", [
+    "exec", "-e", `CLP_MAIL_HOST=${MAIL_HOST}`, "-e", `CLP_MAIL_PORT=${MAIL_PORT}`, "-e", `CLP_MAIL_FROM=noreply@${domain}`,
+    container, "bun", "-e", SEED_SCRIPT,
+  ]);
+  const said = result.stdout.trim().split("\n").at(-1) ?? "";
+  if (!result.ok || !["seeded", "configured", "no-mail"].includes(said)) {
+    throw new Error(commandOutput(result) || "the container did not answer");
+  }
+  return said as SeedResult;
+}

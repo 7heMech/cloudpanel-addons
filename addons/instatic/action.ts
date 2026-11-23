@@ -26,7 +26,7 @@ import {
   runStdoutAsDiagnostic, setJobStep, startJobTranscript, watchJob, type JobTranscript, type PruneJobsResult,
 } from "../../lib/job-store";
 import { INSTATIC_VERBS } from "./verbs";
-import { ensureMailBridge, ensureMailNetwork, MAIL_HOST, MAIL_NETWORK } from "./mail-bridge";
+import { ensureMailBridge, ensureMailNetwork, MAIL_HOST, MAIL_NETWORK, seedRelayConnector } from "./mail-bridge";
 
 const REGISTRY_IMAGE = "ghcr.io/corebunch/instatic";
 const CONTAINER_PORT = 3001;
@@ -613,6 +613,25 @@ function runContainer(name: string, port: number, tag: string, domain: string, s
   if (!result.ok) throw commandFailure("docker", result);
 }
 
+/**
+ * Once per instance: the first time its Instatic has mail tables, an empty
+ * mail setup gets the bridge as its connector. A connector the admin later
+ * removes stays removed.
+ */
+function connectMail(name: string, domain: string, metaFile: string): void {
+  let recorded: Record<string, unknown>;
+  try { recorded = JSON.parse(readFileSync(metaFile, "utf8")); } catch { return; }
+  if (recorded.mailConnected === true) return;
+  try {
+    const result = seedRelayConnector(name, domain);
+    if (result === "no-mail") return;
+    if (result === "seeded") diagnostic(`[instatic] email sends through smtp-relay as noreply@${domain}\n`);
+    writeMetaFile(metaFile, JSON.stringify({ ...recorded, mailConnected: true }, null, 2) + "\n");
+  } catch (error) {
+    diagnostic(`[instatic] WARN: could not set up email for ${domain}: ${errorMessage(error)}\n`);
+  }
+}
+
 async function healthCheck(port: number, domain: string): Promise<boolean> {
   let code = "";
   for (let i = 0; i < HEALTH_TIMEOUT; i++) {
@@ -983,6 +1002,7 @@ async function cmdCreate(action: ParsedInstaticAction, paths: InstaticActionPath
       "",
     ].join("\n");
     writeMetaFile(join(dir, "meta.json"), meta);
+    connectMail(name, domain, join(dir, "meta.json"));
     cleanupActive = false;
     initialNativeBackup(domain, paths);
 
@@ -1100,6 +1120,7 @@ async function replaceInstance(
     if (!(await healthCheck(port, domain))) failAction(`health check failed for ${domain} at ${tag}`);
     const recorded = JSON.parse(readFileSync(meta, "utf8"));
     writeMetaFile(meta, JSON.stringify({ ...recorded, tag, storage: "site-home", siteUser: siteUserOf(domain, paths) }, null, 2) + "\n");
+    connectMail(name, domain, meta);
   } catch (error) {
     const logs = candidate ? commandCombinedOutput("docker", ["logs", "--tail", "200", name]) : "";
     if (candidate && !runDiagnostic("docker", ["rm", "-f", name])) {
@@ -1597,6 +1618,7 @@ async function cmdRun(action: ParsedInstaticAction, paths: InstaticActionPaths):
       "",
     ].join("\n");
     writeMetaFile(join(dir, "meta.json"), meta);
+    connectMail(name, domain, join(dir, "meta.json"));
     cleanupActive = false;
     initialNativeBackup(domain, paths);
 

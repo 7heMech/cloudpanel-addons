@@ -127,6 +127,16 @@ connection does not carry, so the addon bridges the two
   rebuild. Repair and enabling restore the units and the rule once the network
   exists; disabling removes them and leaves the network to its containers.
 
+After a create, update or recreate passes its health check, `docker exec`
+runs a script in the container, as the site user, against Instatic's SQLite
+database. If Instatic has mail tables and neither a connector nor mail
+defaults, the script adds a login-free SMTP connector for `smtp-relay:2525`,
+the row Instatic's own form writes, and makes it the default sender as
+`noreply@<domain>`. The instance record then keeps `mailConnected`, set too
+when the mail setup was already there, so a connector the admin removes is not
+added again. An Instatic without mail tables is tried again at the next
+update. A restore from backup brings its own mail setup.
+
 `MAIL_ALLOW_PRIVATE_HOSTS` also lets an Instatic admin point a connector at
 other private addresses, which can probe ports there over SMTP.
 

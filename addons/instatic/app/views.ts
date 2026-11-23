@@ -64,8 +64,9 @@ const STATE_LABELS: Record<string, string> = { running: "Running", exited: "Stop
 /** How a site's Instatic sends mail through this server's Postfix, and so through SMTP Relay. */
 function mailHint(instances: InstanceView[]): string {
   const behind = instances.filter((i) => i.mail === false).map((i) => i.domain);
-  return `<p class="hint mail-hint">Email: in Instatic's Email settings, add an SMTP connector with host <span class="mono">${MAIL_HOST}</span>,
-  port <span class="mono">${MAIL_PORT}</span> and no login.${behind.length ? ` Update or recreate ${behind.length === 1 ? "this site" : "these sites"} first: ${behind.map(esc).join(", ")}.` : ""}</p>`;
+  return `<p class="hint mail-hint">Email goes through this server's Postfix and SMTP Relay. Instatic gets the connector when a site is
+  created, updated or recreated, unless its email is already set up. By hand: host <span class="mono">${MAIL_HOST}</span>,
+  port <span class="mono">${MAIL_PORT}</span>, no login.${behind.length ? ` Update or recreate ${behind.length === 1 ? "this site" : "these sites"} first: ${behind.map(esc).join(", ")}.` : ""}</p>`;
 }
 
 export function dashboardView(
