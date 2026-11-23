@@ -145,12 +145,21 @@ Configure**). The switches work as on Hetzner, with policies named
 `clp-addons-cloudflare-web`, `clp-addons-cloudflare-panel`,
 `clp-addons-open-web` and `clp-addons-open-panel`; they go after your own
 policies on the server. Once any policy has an inbound rule, netcup drops what
-no policy allows, and the review lists what closes. netcup tracks only TCP, so
-the addon's policies accept replies to the server's own DNS and NTP queries
-(UDP from source ports 53 and 123 to ports 32768-60999), and ICMP and ICMPv6
-from anyone, for path MTU discovery and IPv6. Replies to other UDP traffic the
-server starts need a rule of your own. With SSH closed, SCP's
-console still gives a root shell.
+no policy allows, and the review lists what closes. The addon's policies
+accept ICMP and ICMPv6 from anyone, for path MTU discovery and IPv6. With SSH
+closed, SCP's console still gives a root shell.
+
+netcup tracks only TCP, so replies to UDP the server sends are dropped unless a
+policy allows them. The addon's policies let in NTP replies only from
+`time.cloudflare.com` and `ptbtime1.ptb.de`, not from anyone, since that is how
+NTP reflection floods arrive. While a switch is on, the addon points
+systemd-timesyncd at those two servers
+(`/etc/systemd/timesyncd.conf.d/zz-clp-addons-netcup.conf`) and turns off its
+fallback to the pool; turning both switches off, disconnecting or disabling
+Firewall removes that file. If the server keeps time with chrony or ntpd
+instead, point it at those two servers yourself. DNS to netcup's resolvers is
+always allowed; another resolver needs DNS over TLS or a rule of your own, as
+does any other UDP the server starts.
 
 Policies are shared by the servers of one account and are never deleted.
 Setup shows **Action needed** when Firewall has not been able to read netcup

@@ -7,8 +7,8 @@ import { join } from "node:path";
 import { ANYONE, openToOthers, parseCloudflareRanges, reachable, sshMissing, type CloudRole, type Guard } from "../addons/firewall/cloud-firewall";
 import * as rootState from "../lib/root-state";
 import {
-  connectNetcup, disconnectNetcup, isPublicAddress, netcupOpenRules, netcupRules, netcupSetupState, netcupSignature, netcupView, pollNetcup,
-  setNetcupRole, syncNetcup, type NetcupOptions,
+  connectNetcup, disconnectNetcup, isPublicAddress, keepNetcupTimeSync, netcupOpenRules, netcupRules, netcupSetupState, netcupSignature, netcupView,
+  NTP_SERVERS, pollNetcup, setNetcupRole, syncNetcup, withdrawNetcupTimeSync, type NetcupOptions,
 } from "../addons/firewall/netcup";
 import { NetcupApi, NetcupAuth, NetcupError, type NetcupRule } from "../addons/firewall/netcup-api";
 import { netcupActions } from "../addons/firewall/setup";
@@ -83,6 +83,7 @@ function box(fake: FakeNetcup, address: string | string[] = ADDRESS, vendor = "n
         protocolsFile: join(dir, "state", "protocols.json"),
         terminalConfig: join(dir, "terminal.conf"),
         vendor: join(dir, "sys_vendor"),
+        timeSyncFile: join(dir, "timesyncd.conf.d", "zz-clp-addons-netcup.conf"),
         rootUid: uid,
         panelUid: uid,
       },
@@ -301,13 +302,24 @@ describe("rules", () => {
     const rules = netcupRules("web", RANGES);
     expect(rules.map((rule) => [rule.protocol, rule.sourcePorts ?? null, rule.destinationPorts ?? null, rule.sources!.length])).toEqual([
       ["TCP", null, "80", 15], ["TCP", null, "80", 7], ["TCP", null, "443", 15], ["TCP", null, "443", 7], ["ICMP", null, null, 0], ["ICMPv6", null, null, 0],
-      ["UDP", "53", "32768-60999", 0], ["UDP", "123", "32768-60999", 0],
+      ["UDP", "123", "32768-60999", 3], ["UDP", "123", "32768-60999", 3],
     ]);
     expect(netcupRules("panel", RANGES).every((rule) => rule.direction === "INGRESS" && rule.action === "ACCEPT")).toBe(true);
     expect(netcupOpenRules("panel").map((rule) => rule.protocol)).toEqual(["TCP", "ICMP", "ICMPv6", "UDP", "UDP"]);
     const respelled = [...rules].reverse().map((rule) => ({ ...rule, sourcePorts: rule.sourcePorts ?? null, destinations: [], sources: [...rule.sources!].reverse() }));
     expect(netcupSignature(respelled)).toBe(netcupSignature(rules));
     expect(netcupSignature([...rules, ssh()])).not.toBe(netcupSignature(rules));
+  });
+
+  test("UDP is let in only as NTP replies from the pinned time servers", () => {
+    const all = [...netcupRules("web", RANGES), ...netcupRules("panel", RANGES), ...netcupOpenRules("web"), ...netcupOpenRules("panel")];
+    const udp = all.filter((rule) => rule.protocol === "UDP");
+    expect(udp.length).toBe(8);
+    expect(udp.every((rule) => rule.sources!.length > 0 && rule.sourcePorts === "123")).toBe(true);
+    const pinned = Object.values(NTP_SERVERS).flat().map((ip) => `${ip}/${ip.includes(":") ? 128 : 32}`).sort();
+    expect(pinned).toEqual(["162.159.200.1/32", "162.159.200.123/32", "192.53.103.108/32", "2001:638:610:be01::108/128", "2606:4700:f1::1/128", "2606:4700:f1::123/128"]);
+    expect([...new Set(udp.flatMap((rule) => rule.sources!))].sort()).toEqual(pinned);
+    expect(Object.keys(NTP_SERVERS)).toEqual(["time.cloudflare.com", "ptbtime1.ptb.de"]);
   });
 
   test("two servers in one account share one policy per role, and repair writes nothing when nothing differs", async () => {
@@ -1115,6 +1127,29 @@ describe("review fixes", () => {
     expect(netcupSignature(tampered.rules)).toBe(netcupSignature(netcupRules("web", RANGES)));
   });
 
+  test("a newer policy is kept only while its UDP rules are NTP replies from the pinned servers", async () => {
+    const fake = new FakeNetcup();
+    fake.policy("ssh", [ssh()], [SERVER]);
+    const server = await connected(fake);
+    await turn(server, "web", true);
+    const web = fake.named("clp-addons-cloudflare-web")[0]!;
+    const newerAt = Math.floor(server.now.at / 1000) + 3600;
+    const newerRanges = RANGES.filter((range) => range !== "131.0.72.0/22");
+    const newer = (udp: NetcupRule[]) => {
+      web.description = `Managed by clp-addons; Cloudflare's list of ${newerAt}`;
+      web.rules = [...netcupRules("web", newerRanges).filter((rule) => rule.protocol !== "UDP"), ...udp];
+    };
+    const ntp = (sources: string[]): NetcupRule => ({ direction: "INGRESS", protocol: "UDP", action: "ACCEPT", sources, sourcePorts: "123", destinationPorts: "32768-60999" });
+
+    newer([ntp(["162.159.200.1", "2606:4700:f1::123/128", "192.53.103.108/32"])]);
+    expect(await syncNetcup("repair", server.options)).toBe("1 netcup policy follows a newer Cloudflare list from another server");
+    for (const udp of [[ntp([])], [ntp(["162.159.200.1/32", "198.51.100.1/32"])], [{ ...ntp(["162.159.200.1/32"]), sourcePorts: "53" }]]) {
+      newer(udp);
+      expect(await syncNetcup("repair", server.options)).toBe("1 netcup policy set to Cloudflare's list");
+      expect(netcupSignature(web.rules)).toBe(netcupSignature(netcupRules("web", RANGES)));
+    }
+  });
+
   test("turning on when both Cloudflare and open policies are attached requires review before removing the open policy", async () => {
     const fake = new FakeNetcup();
     fake.policy("ssh", [ssh()], [SERVER]);
@@ -1246,5 +1281,87 @@ describe("what a set of policies lets through", () => {
     }
     expect(existsSync(syncFile)).toBe(false);
     expect(other.revoked).toEqual([other.refreshToken!]);
+  });
+});
+
+describe("time sync", () => {
+  function timesyncd(server: Box, active = true): string[] {
+    const calls: string[] = [];
+    const ss = server.options.run!;
+    server.options.run = (command, args) => {
+      if (command !== "systemctl") return ss(command, args);
+      calls.push(args.join(" "));
+      return args[0] === "is-active" ? { ok: active, stdout: active ? "active\n" : "inactive\n", stderr: "" } : { ok: true, stdout: "", stderr: "" };
+    };
+    return calls;
+  }
+  const dropIn = (server: Box) => join(server.dir, "timesyncd.conf.d", "zz-clp-addons-netcup.conf");
+  const restarts = (calls: string[]) => calls.filter((call) => call === "try-restart systemd-timesyncd").length;
+
+  test("timesyncd syncs only with the pinned servers while a switch is on, and repair puts the drop-in back", async () => {
+    const fake = new FakeNetcup();
+    fake.policy("ssh", [ssh()], [SERVER]);
+    const server = await connected(fake);
+    writeFileSync(join(server.dir, "clp_custom_domain"), "panel.example.com\n");
+    writeFileSync(join(server.dir, "custom-domain.conf"), "server {}\n");
+    server.options.resolve = async () => ["104.16.1.1", "2606:4700::1"];
+    const calls = timesyncd(server);
+    await turn(server, "web", true);
+    expect(readFileSync(dropIn(server), "utf8")).toBe(`# Managed by clp-addons Firewall: netcup's policies let NTP replies in only from these servers.
+[Time]
+NTP=
+NTP=162.159.200.1 162.159.200.123 2606:4700:f1::1 2606:4700:f1::123 192.53.103.108 2001:638:610:be01::108
+FallbackNTP=
+`);
+    expect(statSync(dropIn(server)).mode & 0o777).toBe(0o644);
+    expect(restarts(calls)).toBe(1);
+    await turn(server, "panel", true);
+    expect(restarts(calls)).toBe(1);
+    rmSync(dropIn(server));
+    expect(await syncNetcup("repair", server.options)).toBe("systemd-timesyncd pointed at time.cloudflare.com and ptbtime1.ptb.de");
+    expect(existsSync(dropIn(server))).toBe(true);
+    server.options.fetch = async () => { throw new Error("netcup is down"); };
+    rmSync(dropIn(server));
+    expect(await refusal(syncNetcup("repair", server.options))).toStartWith("netcup policies:");
+    expect(existsSync(dropIn(server))).toBe(true);
+    server.options.fetch = fake.fetch;
+    await turn(server, "panel", false);
+    expect(existsSync(dropIn(server))).toBe(true);
+    await turn(server, "web", false);
+    expect(existsSync(dropIn(server))).toBe(false);
+    expect(restarts(calls)).toBe(4);
+  });
+
+  test("disconnecting and disabling Firewall take the drop-in away; enabling puts it back", async () => {
+    const fake = new FakeNetcup();
+    fake.policy("ssh", [ssh()], [SERVER]);
+    const server = await connected(fake);
+    timesyncd(server);
+    await turn(server, "web", true);
+    expect(withdrawNetcupTimeSync(server.options)).toBe("systemd-timesyncd no longer pointed at time.cloudflare.com and ptbtime1.ptb.de");
+    expect(existsSync(dropIn(server))).toBe(false);
+    expect(keepNetcupTimeSync(server.options)).toBe("systemd-timesyncd pointed at time.cloudflare.com and ptbtime1.ptb.de");
+    expect(keepNetcupTimeSync(server.options)).toBeNull();
+    await turn(server, "web", false);
+    keepNetcupTimeSync(server.options);
+    writeFileSync(dropIn(server), "left behind");
+    await disconnectNetcup(server.options);
+    expect(existsSync(dropIn(server))).toBe(false);
+  });
+
+  test("a server not using timesyncd is left alone, and the review says its NTP client must use the pinned servers", async () => {
+    const fake = new FakeNetcup();
+    const server = await connected(fake);
+    const calls = timesyncd(server, false);
+    const first = await setNetcupRole("web", true, undefined, server.options);
+    if (!("review" in first)) throw new Error("expected a review");
+    expect(first.review.warnings[0]).toBe("netcup tracks only TCP connections: once it drops by default, replies to this server's own UDP traffic other than NTP to time.cloudflare.com and ptbtime1.ptb.de are dropped unless a policy allows them. This server does not keep time with systemd-timesyncd, so point its NTP client at those two servers, or its clock stops syncing.");
+    await setNetcupRole("web", true, first.review.digest, server.options, first.review.typed);
+    expect(existsSync(dropIn(server))).toBe(false);
+    expect(restarts(calls)).toBe(0);
+    const other = await connected(new FakeNetcup());
+    timesyncd(other);
+    const usual = await setNetcupRole("web", true, undefined, other.options);
+    expect("review" in usual && usual.review.warnings[0]).toEndWith("are dropped unless a policy allows them.");
   });
 });

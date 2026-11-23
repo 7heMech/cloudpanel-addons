@@ -6,9 +6,10 @@
  * firewalls. See "netcup firewall" in docs/decisions/firewall.md.
  */
 import { networkInterfaces } from "node:os";
-import { existsSync, rmSync } from "node:fs";
+import { existsSync, readFileSync, rmSync } from "node:fs";
 import { ActionFailure, failAction } from "../../lib/action";
-import type { CommandResult } from "../../lib/command";
+import { writeOrRemove } from "../../lib/atomic-write";
+import { requireSuccess, runCommand, type CommandResult } from "../../lib/command";
 import { errorMessage } from "../../lib/errors";
 import { withFileLock } from "../../lib/file-lock";
 import { PANEL_CUSTOM_DOMAIN_FILE, PANEL_CUSTOM_DOMAIN_VHOST } from "../../lib/panel-custom-domain";
@@ -39,8 +40,9 @@ const WORDS: ProviderWords = {
   console: "netcup's SCP console",
   nothingClosedYet: "No policy on this server has inbound rules yet, so netcup also closes every port the addon's policies do not open:",
   allOpenAgain: "no policy on this server has inbound rules any more, so netcup lets anyone reach every port again",
-  closesMore: "netcup tracks only TCP connections: once it drops by default, replies to this server's own UDP traffic other than DNS and NTP are dropped unless a policy allows them.",
+  closesMore: "netcup tracks only TCP connections: once it drops by default, replies to this server's own UDP traffic other than NTP to time.cloudflare.com and ptbtime1.ptb.de are dropped unless a policy allows them.",
 };
+const NO_TIMESYNCD = " This server does not keep time with systemd-timesyncd, so point its NTP client at those two servers, or its clock stops syncing.";
 
 interface NetcupPaths extends HostPaths {
   tokenFile: string;
@@ -53,6 +55,8 @@ interface NetcupPaths extends HostPaths {
   ranges: string;
   /** The firmware's vendor, which names netcup on its servers. */
   vendor: string;
+  /** systemd-timesyncd's drop-in pointing it at the NTP servers the policies let replies in from. */
+  timeSyncFile: string;
 }
 
 export const DEFAULT_NETCUP_PATHS: NetcupPaths = {
@@ -69,6 +73,7 @@ export const DEFAULT_NETCUP_PATHS: NetcupPaths = {
   protocolsFile: DEFAULT_FIREWALL_PATHS.stateFile,
   terminalConfig: addonConfigFile("terminal"),
   vendor: "/sys/class/dmi/id/sys_vendor",
+  timeSyncFile: "/etc/systemd/timesyncd.conf.d/zz-clp-addons-netcup.conf",
   rootUid: ROOT_UID,
   panelUid: null,
 };
@@ -125,15 +130,25 @@ const ICMPV6: NetcupRule = {
   description: "ICMPv6, which IPv6 needs, kept by clp-addons", direction: "INGRESS", protocol: "ICMPv6", action: "ACCEPT", sources: [],
 };
 /**
- * netcup tracks only TCP, so replies to the server's own DNS and NTP queries
- * are new inbound UDP to it. They land on Linux's default ephemeral ports.
+ * netcup tracks only TCP, so replies to the server's NTP queries are new
+ * inbound UDP, landing on Linux's default ephemeral ports. Source port 123 is
+ * what NTP reflection floods come from, so only these servers' replies are let
+ * in, and timesyncd is pointed at the same addresses. DNS needs no rule:
+ * netcup always lets its own resolvers through.
  */
-const UDP_REPLIES: NetcupRule[] = [["DNS", "53"], ["NTP", "123"]].map(([name, port]) => ({
-  description: `${name} replies, kept by clp-addons`, direction: "INGRESS", protocol: "UDP", action: "ACCEPT", sources: [],
-  sourcePorts: port, destinationPorts: "32768-60999",
+export const NTP_SERVERS: Record<string, string[]> = {
+  "time.cloudflare.com": ["162.159.200.1", "162.159.200.123", "2606:4700:f1::1", "2606:4700:f1::123"],
+  "ptbtime1.ptb.de": ["192.53.103.108", "2001:638:610:be01::108"],
+};
+const NTP_ADDRESSES = Object.values(NTP_SERVERS).flat();
+const NTP_SOURCES = NTP_ADDRESSES.map((address) => parseCidr(address)!.text);
+const NTP_REPLIES: NetcupRule[] = [false, true].map((v6) => ({
+  description: "NTP replies from the pinned time servers, kept by clp-addons", direction: "INGRESS", protocol: "UDP", action: "ACCEPT",
+  sources: NTP_SOURCES.filter((source) => source.includes(":") === v6), sourcePorts: "123", destinationPorts: "32768-60999",
 }));
-const FIXED: NetcupRule[] = [ICMPV4, ICMPV6, ...UDP_REPLIES];
-const isUdpReply = (rule: NetcupRule) => rule.protocol === "UDP" && ["53", "123"].includes(rule.sourcePorts ?? "") && !rule.destinations?.length;
+const FIXED: NetcupRule[] = [ICMPV4, ICMPV6, ...NTP_REPLIES];
+const isNtpReply = (rule: NetcupRule) => rule.protocol === "UDP" && rule.sourcePorts === "123" && rule.destinationPorts === "32768-60999"
+  && !rule.destinations?.length && Boolean(rule.sources?.length) && canonicalList(rule.sources).every((source) => NTP_SOURCES.includes(source));
 
 /** The rules of one of the addon's policies: a pure function of the list, one rule per port and address family. */
 export function netcupRules(role: CloudRole, ranges: string[]): NetcupRule[] {
@@ -141,7 +156,7 @@ export function netcupRules(role: CloudRole, ranges: string[]): NetcupRule[] {
   return [...CLOUD_ROLES[role].ports.flatMap((port) => families.map((sources) => ({
     description: RULE_DESCRIPTION, direction: "INGRESS" as const, protocol: "TCP" as const, action: "ACCEPT" as const,
     sources: [...sources], destinationPorts: String(port),
-  }))), ...FIXED.map((rule) => ({ ...rule }))];
+  }))), ...FIXED.map((rule) => ({ ...rule, sources: [...rule.sources!] }))];
 }
 
 /** The rules of a role's policy open to anyone: fixed, so every server writes the same. */
@@ -149,7 +164,7 @@ export function netcupOpenRules(role: CloudRole): NetcupRule[] {
   return [...CLOUD_ROLES[role].ports.map((port) => ({
     description: OPEN_DESCRIPTION, direction: "INGRESS" as const, protocol: "TCP" as const, action: "ACCEPT" as const,
     sources: [], destinationPorts: String(port),
-  })), ...FIXED.map((rule) => ({ ...rule }))];
+  })), ...FIXED.map((rule) => ({ ...rule, sources: [...rule.sources!] }))];
 }
 
 /** Two rule sets with the same signature allow the same traffic, whatever order or spelling netcup returns. */
@@ -286,6 +301,53 @@ function writeSync(paths: NetcupPaths, change: Partial<NetcupSync>): void {
 
 async function withNetcupLock<T>(paths: NetcupPaths, body: () => Promise<T>, timeoutSeconds = 120): Promise<T> {
   return withFileLock(paths.lockFile, timeoutSeconds, "another netcup firewall change is running", body);
+}
+
+// --- Time sync --------------------------------------------------------------
+
+const TIMESYNCD = "systemd-timesyncd";
+const TIME_SYNC = `# Managed by clp-addons Firewall: netcup's policies let NTP replies in only from these servers.
+[Time]
+NTP=
+NTP=${NTP_ADDRESSES.join(" ")}
+FallbackNTP=
+`;
+
+const runOf = (options: NetcupOptions) => options.run ?? ((command: string, args: string[]) => runCommand(command, args, 30_000));
+const timesyncdActive = (options: NetcupOptions) => runOf(options)("systemctl", ["is-active", TIMESYNCD]).stdout.trim() === "active";
+
+/**
+ * Puts timesyncd's drop-in in place, or takes it away, restarting timesyncd
+ * when that changes it. The empty assignments clear servers set elsewhere,
+ * and keep timesyncd off the pool, whose replies the policies drop. Other NTP
+ * clients are left alone.
+ */
+function setTimeSync(options: NetcupOptions, on: boolean): string | null {
+  const file = pathsOf(options).timeSyncFile;
+  const want = on && timesyncdActive(options) ? TIME_SYNC : null;
+  let have: string | null = null;
+  try { have = readFileSync(file, "utf8"); } catch { /* none yet */ }
+  if (have === want) return null;
+  writeOrRemove(file, want, { mode: 0o644, createParent: true });
+  requireSuccess(runOf(options)("systemctl", ["try-restart", TIMESYNCD]), `restarting ${TIMESYNCD} failed`);
+  const servers = Object.keys(NTP_SERVERS).join(" and ");
+  return want ? `${TIMESYNCD} pointed at ${servers}` : `${TIMESYNCD} no longer pointed at ${servers}`;
+}
+
+/** Points timesyncd at the pinned NTP servers while a Cloudflare policy was last seen on this server, and back otherwise. */
+export function keepNetcupTimeSync(options: NetcupOptions = {}): string | null {
+  const paths = pathsOf(options);
+  const seen = readToken(paths) ? readSync(paths).seen : undefined;
+  return setTimeSync(options, Boolean(seen?.web || seen?.panel));
+}
+
+export function withdrawNetcupTimeSync(options: NetcupOptions = {}): string | null {
+  return setTimeSync(options, false);
+}
+
+/** A notice's last sentence when time sync could not follow a change. */
+function timeSyncFailed(error: unknown): string {
+  return ` This server's time sync could not be changed (${errorMessage(error).replace(/\.$/, "")}); repair tries again.`;
 }
 
 /** Whether netcup refuses the saved sign-in for good, so only signing in again helps. */
@@ -698,7 +760,9 @@ export async function disconnectNetcup(options: NetcupOptions = {}): Promise<{ n
       rmSync(paths.syncFile, { force: true });
       return done;
     });
-    return { notice: `The netcup sign-in is removed${revoked ? " and revoked" : "; netcup could not be asked to revoke it, so it lapses once unused"}.${inactive}${staying}${unchecked}` };
+    let timeSync = "";
+    try { withdrawNetcupTimeSync(options); } catch (error) { timeSync = timeSyncFailed(error); }
+    return { notice: `The netcup sign-in is removed${revoked ? " and revoked" : "; netcup could not be asked to revoke it, so it lapses once unused"}.${inactive}${staying}${unchecked}${timeSync}` };
   });
 }
 
@@ -789,8 +853,8 @@ async function rewrite(api: NetcupApi, userId: number, policy: NetcupPolicy, des
 /**
  * Whether a policy only lets Cloudflare reach the role's ports: TCP accepts
  * on exactly those ports, each from the same sources, both address families,
- * every source inside this server's list, ICMP, and the DNS and NTP replies. A newer list that adds a
- * range fails this until this server's list catches up, and is then rewritten
+ * every source inside this server's list, ICMP, and NTP replies from the pinned
+ * servers. A newer list that adds a range fails this until this server's list catches up, and is then rewritten
  * to this server's list for a while; only Cloudflare stays let in throughout.
  */
 function cloudflareOnly(role: CloudRole, rules: NetcupRule[] | undefined, ranges: string[]): boolean {
@@ -799,7 +863,7 @@ function cloudflareOnly(role: CloudRole, rules: NetcupRule[] | undefined, ranges
   const sources = new Map<string, Set<string>>();
   for (const rule of rules ?? []) {
     if (rule.direction !== "INGRESS" || rule.action !== "ACCEPT") return false;
-    if (rule.protocol === "ICMP" || rule.protocol === "ICMPv6" || isUdpReply(rule)) continue;
+    if (rule.protocol === "ICMP" || rule.protocol === "ICMPv6" || isNtpReply(rule)) continue;
     if (rule.protocol !== "TCP" || rule.sourcePorts || rule.destinations?.length || !rule.sources?.length) return false;
     if (!ports.includes(rule.destinationPorts ?? "")) return false;
     const set = sources.get(rule.destinationPorts!) ?? new Set<string>();
@@ -913,9 +977,10 @@ export async function setNetcupRole(
     }
     const planning = planContext(ctx, list?.ranges ?? []);
     const plan = planFor(planning, role, enabled);
+    const words = timesyncdActive(options) ? WORDS : { ...WORDS, closesMore: `${WORDS.closesMore}${NO_TIMESYNCD}` };
     const review = enabled
-      ? await enableReview(role, planning, plan, list!.ranges, paths, options, WORDS)
-      : disableReview(role, planning, plan, list?.ranges ?? null, paths, options, WORDS);
+      ? await enableReview(role, planning, plan, list!.ranges, paths, options, words)
+      : disableReview(role, planning, plan, list?.ranges ?? null, paths, options, words);
     if (confirm !== review.digest) return { review };
     if (review.typed && (typeof typed !== "string" || typed.trim() !== review.typed)) {
       failAction(`Type the server's name, ${review.typed}, to confirm`);
@@ -923,12 +988,14 @@ export async function setNetcupRole(
     await apply(ctx, role, enabled, plan, list);
     if (enabled) writeSync(paths, { rangesHash: list!.hash });
     writeSync(paths, { seen: { web: plan.cloudflare.has("web"), panel: plan.cloudflare.has("panel") }, seenAt: nowOf(options) });
-    if (!enabled) return { notice: `${title} is off.` };
+    let timeSync = "";
+    try { keepNetcupTimeSync(options); } catch (error) { timeSync = timeSyncFailed(error); }
+    if (!enabled) return { notice: `${title} is off.${timeSync}` };
     const stillOpen = describeOpenings(openToOthers(role, ctx.others.map(ctx.guard), list!.ranges), WORDS.noun);
     return {
-      notice: stillOpen.length
+      notice: `${stillOpen.length
         ? `${CLOUD_ROLES[role].name} is on this server, but has no effect yet: ${stillOpen.join(" ")}`
-        : `netcup now lets only Cloudflare reach ${portsOf(role)}.`,
+        : `netcup now lets only Cloudflare reach ${portsOf(role)}.`}${timeSync}`,
     };
   }, 60);
 }
@@ -953,6 +1020,7 @@ export async function syncNetcup(mode: "repair" | "ranges", options: NetcupOptio
     let clean = (text: string) => text;
     let rewritten = 0, reopened = 0, newer = 0, stale = 0;
     let missing = "";
+    let failure = "";
     try {
       const { api, auth, access } = await signIn(paths, options);
       clean = (text) => auth.clean(api.clean(text));
@@ -988,9 +1056,14 @@ export async function syncNetcup(mode: "repair" | "ranges", options: NetcupOptio
         }
       }
     } catch (error) {
-      if (signInRefused(error)) throw new Error("netcup policies: netcup no longer accepts the saved sign-in; connect again");
-      throw new Error(`netcup policies: ${clean(errorMessage(error))}`);
+      failure = signInRefused(error) ? "netcup policies: netcup no longer accepts the saved sign-in; connect again" : `netcup policies: ${clean(errorMessage(error))}`;
     }
+    // From the switches as last seen, so a repair that cannot reach netcup still puts the drop-in back.
+    let timeSync: string | null = null;
+    if (mode === "repair") {
+      try { timeSync = keepNetcupTimeSync(options); } catch (error) { failure = [failure, `netcup time sync: ${errorMessage(error)}`].filter(Boolean).join("; "); }
+    }
+    if (failure) throw new Error(failure);
     if (stored.rangesHash !== list.hash) writeSync(paths, { rangesHash: list.hash });
     const count = (n: number, what: string) => `${n} ${what.replace("{s}", n === 1 ? "y" : "ies")}`;
     const lines = [
@@ -999,6 +1072,7 @@ export async function syncNetcup(mode: "repair" | "ranges", options: NetcupOptio
       stale ? `${count(stale, "netcup polic{s}")} open to anyone taken off beside a Cloudflare one` : "",
       newer ? `${newer} netcup polic${newer === 1 ? "y follows" : "ies follow"} a newer Cloudflare list from another server` : "",
       missing,
+      timeSync ?? "",
     ].filter(Boolean);
     return lines.join("; ") || null;
   });

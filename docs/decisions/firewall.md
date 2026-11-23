@@ -640,18 +640,41 @@ TCP accept rule per port and address family, sources in canonical form, a
 fixed description. Each also accepts inbound ICMP (for path MTU discovery) and
 ICMPv6 from anyone: any of them makes netcup drop by default, and without
 neighbour discovery, router advertisements and Packet Too Big a server with
-only IPv6 would be cut off. netcup tracks only TCP, so each also accepts UDP
-from source ports 53 and 123 to Linux's default ephemeral ports, 32768-60999:
-the replies to the server's own DNS (to resolvers other than netcup's, which
-netcup always lets through) and NTP queries. Anyone can send from those source
-ports, so a UDP service listening in that range is open to anyone. netcup has no labels, so a policy is the addon's when it
+only IPv6 would be cut off.
+
+netcup tracks only TCP, so replies to the server's own UDP queries are new
+inbound traffic. Each policy accepts UDP from source port 123 to Linux's
+default ephemeral ports, 32768-60999, only from the addresses of
+`time.cloudflare.com` (162.159.200.1, 162.159.200.123, 2606:4700:f1::1,
+2606:4700:f1::123) and `ptbtime1.ptb.de` (192.53.103.108,
+2001:638:610:be01::108; PTB does not smear leap seconds, and no smearing server
+is mixed in), one rule per address family. No rule accepts UDP from anyone:
+anyone can send from source port 53 or 123, and DNS and NTP reflection floods
+do. There is no DNS rule; netcup always lets its own resolvers through. The
+addresses are constants, not resolved when the policy is written: policies are
+shared across the account's servers, so every server must write the same
+rules, and the timesyncd drop-in names the same literal addresses, so the rule
+and the servers timesyncd asks cannot drift apart when DNS changes. If either
+operator renumbers, a release updates both.
+
+While either switch was last seen on, the addon writes
+`/etc/systemd/timesyncd.conf.d/zz-clp-addons-netcup.conf`, which clears `NTP=`
+and `FallbackNTP=` and sets `NTP=` to those six addresses, so timesyncd never
+falls back to the pool, whose replies would be dropped; it restarts timesyncd
+when the file changes. Turning both switches off, disconnecting and disabling
+Firewall remove it; repair and enabling Firewall put it back from the switches
+as last seen, so a repair that cannot reach netcup still keeps it. Only an
+active `systemd-timesyncd` gets the file; chrony and ntpd are left alone, and
+the review then says to point them at the two servers.
+
+netcup has no labels, so a policy is the addon's when it
 has one of the names and its description starts with `Managed by clp-addons`;
 a policy with the name and not that refuses the switch. The writer's list time
 is the end of the description (`; Cloudflare's list of <time>`), read like
 Hetzner's label. A policy claiming a newer list is left alone only while it
 still lets only Cloudflare in: TCP accepts on exactly the role's ports, the same
 sources on each, both address families, every source inside this server's list,
-ICMP, and the DNS and NTP replies. Otherwise a switch or repair rewrites it to this server's list. A
+ICMP, and UDP only as NTP replies from some of the pinned addresses. Otherwise a switch or repair rewrites it to this server's list. A
 newer list that adds a range therefore loses it until this server's list
 catches up; only Cloudflare is let in throughout. The listing may leave out rules, so each owned policy is read
 on its own before it is compared. Listings are paged until a page is empty or
@@ -684,10 +707,11 @@ Cloudflare and open policies are attached goes through the normal review and
 confirmation before removing the open policy. The 500-rule limit per interface
 is netcup's to refuse. netcup counts each source as a separate effective rule:
 at most two of the addon's policies sit on a server at once, where each
-Cloudflare policy holds one effective rule per source and port plus four for
-ICMP, ICMPv6 and the UDP replies (74 effective rules with both switches on and a
-22-range list; three more for each added range), and each open policy holds one
-wildcard TCP rule per port plus those four (6 for web, 5 for panel).
+Cloudflare policy holds one effective rule per source and port plus eight for
+ICMP, ICMPv6 and the six NTP sources (82 effective rules with both switches on
+and a 22-range list; three more for each added range), and each open policy
+holds one wildcard TCP rule per port plus those eight (10 for web, 9 for
+panel).
 
 ## Taking over from earlier releases
 
