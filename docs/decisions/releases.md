@@ -27,7 +27,10 @@ It reads the box from `STG_HOST` and its credentials from `STG_SSH_KEY` and
 `STG_SSH_KNOWN_HOSTS`; the host key is pinned rather than learned on connection,
 because the deploy authenticates as root and then runs a command sequence.
 Staging is IPv6-only and hosted runners have no IPv6, so the workflow reaches
-it through the box's Cloudflare Tunnel with `cloudflared access ssh`.
+it through the box's Cloudflare Tunnel with `cloudflared access ssh`. A
+Cloudflare Access application on the tunnel's SSH hostname admits only the
+service token in `STG_ACCESS_CLIENT_ID` and `STG_ACCESS_CLIENT_SECRET`, so
+nothing else reaches the box's sshd through the tunnel.
 
 ## Toolchain
 
