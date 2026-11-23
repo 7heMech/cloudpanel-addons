@@ -37,7 +37,9 @@ export function ensureMailNetwork(run: Run = systemRun): string {
   if (existing) return existing;
   const created = run("docker", [
     "network", "create", "--driver", "bridge", "--label", "clp-addon=instatic",
-    "--opt", `com.docker.network.bridge.name=${MAIL_NETWORK}`, MAIL_NETWORK,
+    "--opt", `com.docker.network.bridge.name=${MAIL_NETWORK}`,
+    // Instatic containers have no business with each other, and an admin's connector could otherwise reach them.
+    "--opt", "com.docker.network.bridge.enable_icc=false", MAIL_NETWORK,
   ]);
   const gateway = mailGateway(run);
   if (!gateway) throw new Error(`docker could not create the ${MAIL_NETWORK} network: ${commandOutput(created) || "no gateway"}`);
@@ -103,6 +105,10 @@ export function ensureMailBridge(options: MailBridgeOptions = {}): string {
   const run = options.run ?? systemRun;
   const dir = options.systemdDir ?? SYSTEMD_DIR;
   const gateway = ensureMailNetwork(run);
+  const bridge = run("docker", ["network", "inspect", MAIL_NETWORK, "--format", '{{index .Options "com.docker.network.bridge.name"}}']).stdout.trim();
+  if (bridge !== MAIL_NETWORK) {
+    throw new Error(`the ${MAIL_NETWORK} Docker network was not made by clp-addons (its bridge is ${bridge || "unnamed"}); remove it so it can be made again`);
+  }
   const socketFile = join(dir, SOCKET_UNIT);
   const previous = listenedAddress(socketFile);
   if (previous && previous !== gateway && ufwActive(run)) run("ufw", ["delete", "allow", ...ufwRule(previous)]);

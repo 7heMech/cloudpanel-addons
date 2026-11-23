@@ -150,15 +150,17 @@ test("with no From rule, an envelope sender outside the site's domains is droppe
 function fakeDocker(gateway: string | null) {
   const calls: string[] = [];
   let network = gateway;
+  let bridge = "clp-instatic";
   const run = (command: string, args: string[]): CommandResult => {
     calls.push(`${command} ${args.join(" ")}`);
-    if (command === "docker" && args[1] === "inspect") return network ? { ok: true, stdout: `${network} \n`, stderr: "" } : { ok: false, stdout: "", stderr: "no such network" };
+    if (command === "docker" && args[1] === "inspect" && !network) return { ok: false, stdout: "", stderr: "no such network" };
+    if (command === "docker" && args[1] === "inspect") return { ok: true, stdout: args.at(-1)!.includes("bridge.name") ? `${bridge}\n` : `${network} \n`, stderr: "" };
     if (command === "docker" && args[1] === "create") { network = "172.30.0.1"; return { ok: true, stdout: "id\n", stderr: "" }; }
     if (command === "ufw" && args[0] === "status") return { ok: true, stdout: "Status: active\n", stderr: "" };
     if (command === "ufw" && args[0] === "allow") return { ok: true, stdout: "Rule added\n", stderr: "" };
     return { ok: true, stdout: "", stderr: "" };
   };
-  return { run, calls, setGateway: (value: string) => { network = value; } };
+  return { run, calls, setGateway: (value: string) => { network = value; }, setBridge: (value: string) => { bridge = value; } };
 }
 
 test("the bridge creates the network, listens on its gateway and lets it through ufw", () => {
@@ -167,7 +169,7 @@ test("the bridge creates the network, listens on its gateway and lets it through
   expect(ensureMailBridge({ run: docker.run, systemdDir })).toBe("172.30.0.1");
   expect(readFileSync(join(systemdDir, "clp-addons-instatic-mail.socket"), "utf8")).toBe(mailUnits("172.30.0.1").socket);
   expect(readFileSync(join(systemdDir, "clp-addons-instatic-mail.socket"), "utf8")).toContain("ListenStream=172.30.0.1:2525\n");
-  expect(docker.calls).toContain("docker network create --driver bridge --label clp-addon=instatic --opt com.docker.network.bridge.name=clp-instatic clp-instatic");
+  expect(docker.calls).toContain("docker network create --driver bridge --label clp-addon=instatic --opt com.docker.network.bridge.name=clp-instatic --opt com.docker.network.bridge.enable_icc=false clp-instatic");
   expect(docker.calls).toContain("systemctl enable --now clp-addons-instatic-mail.socket");
   expect(docker.calls).toContain("ufw allow in on clp-instatic to 172.30.0.1 port 2525 proto tcp comment clp-addons instatic mail");
 
@@ -180,6 +182,9 @@ test("the bridge creates the network, listens on its gateway and lets it through
   ensureMailBridge({ run: docker.run, systemdDir });
   expect(docker.calls).toContain("ufw delete allow in on clp-instatic to 172.30.0.1 port 2525 proto tcp");
   expect(docker.calls).toContain("systemctl restart clp-addons-instatic-mail.socket");
+
+  docker.setBridge("br-0123456789ab");
+  expect(() => ensureMailBridge({ run: docker.run, systemdDir })).toThrow("was not made by clp-addons (its bridge is br-0123456789ab)");
 
   docker.calls.length = 0;
   withdrawMailBridge({ run: docker.run, systemdDir });

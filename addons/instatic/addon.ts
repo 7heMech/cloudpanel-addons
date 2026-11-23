@@ -4,6 +4,17 @@ import { INSTATIC_TARGETS } from "./inject/targets";
 import { ensureMailBridge, mailGateway, syncMailFirewall, withdrawMailBridge } from "./mail-bridge";
 import { runInstaticMail } from "./mail";
 import type { AddonDefinition } from "../../lib/addon-definition";
+import { errorMessage } from "../../lib/errors";
+import { log } from "../../lib/log";
+
+/** Once a container has made the network. A failure leaves sites running and is reported, as on a container start. */
+function keepMailBridge(): void {
+  try {
+    if (mailGateway()) ensureMailBridge();
+  } catch (error) {
+    log.warn(`Instatic mail cannot reach the server: ${errorMessage(error)}`);
+  }
+}
 
 export const INSTATIC_ADDON: AddonDefinition = {
   name: "instatic",
@@ -23,7 +34,7 @@ export const INSTATIC_ADDON: AddonDefinition = {
   siteManager: true,
   commands: { "instatic-mail": { root: true, enabledOnly: true, run: () => runInstaticMail() } },
   // The network exists once a container has been started on it.
-  activate: () => { if (mailGateway()) ensureMailBridge(); },
+  activate: () => { keepMailBridge(); },
   deactivate: () => withdrawMailBridge(),
   firewall: { label: "instatic mail", run: () => syncMailFirewall() },
   // A creation job killed part-way stays `running` for ever, and `running` is
@@ -34,7 +45,7 @@ export const INSTATIC_ADDON: AddonDefinition = {
       // Not through the verb: the verb prints JSON for the manager, and repair
       // speaks to a person.
       const { removed, stuck } = pruneInstaticJobs();
-      if (mailGateway()) ensureMailBridge();
+      keepMailBridge();
       return removed || stuck ? `job records: ${removed} expired, ${stuck} marked failed` : null;
     },
   },

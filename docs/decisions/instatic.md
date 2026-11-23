@@ -100,7 +100,7 @@ connection does not carry, so the addon bridges the two
 (`addons/instatic/mail-bridge.ts`, `addons/instatic/mail.ts`):
 
 - Containers run on the `clp-instatic` Docker network, whose bridge interface
-  has the same name, with `--add-host smtp-relay:<gateway>` and
+  has the same name and which keeps containers from reaching each other, with `--add-host smtp-relay:<gateway>` and
   `MAIL_ALLOW_PRIVATE_HOSTS=1`, which lets Instatic use a private address,
   without a login or STARTTLS. Instatic still refuses an IP literal without
   it. Containers started before the network existed join it when they are
@@ -117,9 +117,10 @@ connection does not carry, so the addon bridges the two
   through `runuser` as the site user (`deliverAsSite` in
   `addons/smtp/submit.ts`), so Postfix holds it to the site's senders and
   routes it like the site's PHP mail. When SMTP Relay has a From rule for the
-  site, the From is rewritten as `smtp-submit` would; without one, an envelope
-  sender outside the site's domains is dropped. With SMTP Relay off, the mail
-  is ordinary local Postfix mail. Sendmail's temporary failure (75) answers
+  site, the From is rewritten as `smtp-submit` would. A site whose rule has no
+  From, one SMTP Relay does not relay, loses an envelope sender outside its
+  domains. With no rule, as with SMTP Relay off, the sender is passed as given
+  and the mail is ordinary local Postfix mail. Sendmail's temporary failure (75) answers
   451; any other failure 554.
 - ufw drops container traffic to the host, and CloudPanel's Firewall page
   rebuilds ufw, so the `firewall` hook adds
@@ -138,7 +139,9 @@ added again. An Instatic without mail tables is tried again at the next
 update. A restore from backup brings its own mail setup.
 
 `MAIL_ALLOW_PRIVATE_HOSTS` also lets an Instatic admin point a connector at
-other private addresses, which can probe ports there over SMTP.
+other private addresses: the server's own services that ufw lets the network
+reach, and the rest of the server's private networks. A connector only speaks
+SMTP, so that is a port probe, not a way in.
 
 ## Storage and replacement
 
