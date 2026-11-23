@@ -14,7 +14,9 @@ import { fileURLToPath } from "node:url";
 import { CLI_ARTIFACT, cliArtifactForArch } from "../lib/paths";
 
 const repo = join(dirname(fileURLToPath(import.meta.url)), "..");
-const host = process.env.STG_HOST || "root@46.225.93.37";
+const host = process.env.STG_HOST || "root@2a03:4000:2:95a:147b:36ff:fea4:2563";
+// ssh takes a bare IPv6 address, but scp and rsync need it bracketed before `:path`.
+const copyHost = host.replace(/^([^@]+@)?([0-9a-fA-F]*:[0-9a-fA-F:.]+)$/, (_, user = "", address) => `${user}[${address}]`);
 const key = process.env.STG_KEY || join(homedir(), ".ssh/cloudpanel-addons-dev-0bad61aa9144");
 // A workstation already knows this box; a CI runner does not, and learning the
 // host key on connection would let anything answering that address receive a
@@ -59,8 +61,8 @@ try {
   // rsync verifies the reconstructed file, so a partial upload cannot be
   // installed as if it were whole. Somewhere without it still deploys, whole.
   await run(Bun.which("rsync")
-    ? ["rsync", "--inplace", "-e", shellQuote(["ssh", ...sshOptions]), binary, `${host}:/root/clp-addons-new`]
-    : ["scp", ...sshOptions, binary, `${host}:/root/clp-addons-new`]);
+    ? ["rsync", "--inplace", "-e", shellQuote(["ssh", ...sshOptions]), binary, `${copyHost}:/root/clp-addons-new`]
+    : ["scp", ...sshOptions, binary, `${copyHost}:/root/clp-addons-new`]);
   await run(["ssh", ...sshOptions, host, [
     "set -e",
     "install -m 0755 -o root -g root /root/clp-addons-new /usr/local/bin/.clp-addons.new",
