@@ -715,7 +715,7 @@ the server, Run sites, Provision automatically -- each ticked from the server's
 state, never from a click. It shows no counts: a step may not fit a server, so
 any step can be skipped, and the helper hides itself once nothing is left to
 suggest. Skips and Hide are kept per administrator; the Addons page's Setup
-button brings it back.
+button, shown only while the header has no Setup, brings it back.
 
 Above the suggestions, Setup shows **Action needed**: what an enabled addon
 needs fixed now, such as a Cloudflare token without a permission DNS requires,

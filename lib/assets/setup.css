@@ -9,6 +9,7 @@
 .clp-setup-attention .clp-setup-badge-text { display: inline; }
 #clp-setup-chip .clp-setup-badge { margin: -3px 0 0 7px; }
 .clp-addon-primary-nav > .clp-setup-nav { display: none; }
+.clp-setup-shown .clp-setup-reopen { display: none; }
 #clp-setup-panel { position: fixed; z-index: 1031; right: 12px; top: var(--clp-setup-top, 80px); width: 440px; max-height: calc(100vh - var(--clp-setup-top, 80px) - 12px);
   display: flex; flex-direction: column; background: var(--panel); color: var(--text); border: 1px solid var(--card-border);
   border-radius: 6px; box-shadow: 0 12px 36px rgb(0 0 0 / 18%); font-size: 15px; }
