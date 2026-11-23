@@ -141,7 +141,7 @@ there.
 
 ## Limits
 
-The From rewrite covers PHP `mail()` only; a site that calls sendmail directly
+The From rewrite covers PHP `mail()` and Instatic's bridge only; a site that calls sendmail directly
 can put another domain in its From, and Postfix holds only its envelope. The
 provider is the boundary for From, so sites that do not trust each other need
 separate profiles rather than one account allowed to send as all of them. The

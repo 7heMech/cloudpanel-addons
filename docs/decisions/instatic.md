@@ -29,7 +29,8 @@ and every heading sorts. A finished job
 repaints its result view. A site's name is plain text, so clicking it selects
 the row like the rest of it; Manage starts with Open admin and Visit site and
 opens a menu. A phone has no menu: Update, Stop or Start, Snapshot, Logs and
-Delete sit in the row, and the rest stay on a wide screen.
+Delete sit in the row, with Recreate for a site not yet on the mail network,
+and the rest stay on a wide screen.
 
 The dashboard reads instances, jobs and registry tags in parallel. A
 creation that is queued, running, or failed with no instance to show for it is a
@@ -107,7 +108,7 @@ connection does not carry, so the addon bridges the two
   updated or recreated; the dashboard names them.
 - `clp-addons-instatic-mail.socket` listens on the gateway's port 2525 (Postfix
   holds 25 on every address) with `Accept=yes`, and each connection runs
-  `clp-addons instatic-mail` as root. The listener knows the container by its
+  `clp-addons instatic-mail` as root, for at most ten minutes. The listener knows the container by its
   source address on that network, and accepts it only when it is an
   `instatic-<domain>` container with an instance record, labelled
   `clp-addon=instatic`, and running as that domain's site user now. Any

@@ -153,7 +153,7 @@ if (command === 'id') { console.log('1500'); process.exit(0); }
 if (command === 'chown') process.exit(0);
 if (command === 'curl') { console.log('200'); process.exit(0); }
 if (command === 'ss' || command === 'systemctl' || command === 'ufw') process.exit(0);
-if (command === 'docker' && args[0] === 'network') { console.log('172.30.0.1'); process.exit(0); }
+if (command === 'docker' && args[0] === 'network') { console.log(args.at(-1).includes('bridge.name') ? 'clp-instatic' : '172.30.0.1'); process.exit(0); }
 if (command === 'docker') {
   const file = process.env.TEST_CONTAINERS;
   const state = JSON.parse(readFileSync(file, 'utf8'));

@@ -64,9 +64,9 @@ const STATE_LABELS: Record<string, string> = { running: "Running", exited: "Stop
 /** How a site's Instatic sends mail through this server's Postfix, and so through SMTP Relay. */
 function mailHint(instances: InstanceView[]): string {
   const behind = instances.filter((i) => i.mail === false).map((i) => i.domain);
-  return `<p class="hint mail-hint">Email goes through this server's Postfix and SMTP Relay. Instatic gets the connector when a site is
-  created, updated or recreated, unless its email is already set up. By hand: host <span class="mono">${MAIL_HOST}</span>,
-  port <span class="mono">${MAIL_PORT}</span>, no login.${behind.length ? ` Update or recreate ${behind.length === 1 ? "this site" : "these sites"} first: ${behind.map(esc).join(", ")}.` : ""}</p>`;
+  return `<p class="hint mail-hint">Email goes through this server's Postfix and SMTP Relay. Instatic gets the connector once, when a site
+  is first created, updated or recreated with email and has no email setup; a connector removed later stays removed. By hand: host
+  <span class="mono">${MAIL_HOST}</span>, port <span class="mono">${MAIL_PORT}</span>, no login.${behind.length ? ` Update or recreate ${behind.length === 1 ? "this site" : "these sites"} first: ${behind.map(esc).join(", ")}.` : ""}</p>`;
 }
 
 export function dashboardView(
@@ -128,6 +128,7 @@ export function dashboardView(
           ? `<button class="btn" onclick="askStop('${d}')">Stop</button>`
           : `<button class="btn" onclick="act('${d}','start')">Start</button>`}
     <button class="btn" onclick="takeSnapshot('${d}')">Snapshot</button>
+    ${i.mail === false ? `<button class="btn" onclick="act('${d}','recreate')" title="Rebuild the recorded version on the mail network">Recreate</button>` : ""}
     <button class="btn" onclick="showLogs('${d}', '${escJs(String(i.port ?? ""))}')">Logs</button>
     <button class="btn btn-danger" onclick="askDelete('${d}')">Delete</button>`;
       const state = missing

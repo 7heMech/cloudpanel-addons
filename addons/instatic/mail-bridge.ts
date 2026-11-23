@@ -34,7 +34,13 @@ export function mailGateway(run: Run = systemRun): string | null {
 /** Creates the network on first use; its bridge interface has the network's name, which the firewall rule names. */
 export function ensureMailNetwork(run: Run = systemRun): string {
   const existing = mailGateway(run);
-  if (existing) return existing;
+  if (existing) {
+    const bridge = run("docker", ["network", "inspect", MAIL_NETWORK, "--format", '{{index .Options "com.docker.network.bridge.name"}}']).stdout.trim();
+    if (bridge !== MAIL_NETWORK) {
+      throw new Error(`the ${MAIL_NETWORK} Docker network was not made by clp-addons (its bridge is ${bridge || "unnamed"}); remove it so it can be made again`);
+    }
+    return existing;
+  }
   const created = run("docker", [
     "network", "create", "--driver", "bridge", "--label", "clp-addon=instatic",
     "--opt", `com.docker.network.bridge.name=${MAIL_NETWORK}`,
@@ -68,6 +74,8 @@ ExecStart=${CLI_BIN} instatic-mail
 StandardInput=socket
 StandardOutput=socket
 StandardError=journal
+# A session that never ends holds a root process; a 25 MiB message and sendmail's minute fit easily.
+RuntimeMaxSec=600
 `,
   };
 }
@@ -105,10 +113,6 @@ export function ensureMailBridge(options: MailBridgeOptions = {}): string {
   const run = options.run ?? systemRun;
   const dir = options.systemdDir ?? SYSTEMD_DIR;
   const gateway = ensureMailNetwork(run);
-  const bridge = run("docker", ["network", "inspect", MAIL_NETWORK, "--format", '{{index .Options "com.docker.network.bridge.name"}}']).stdout.trim();
-  if (bridge !== MAIL_NETWORK) {
-    throw new Error(`the ${MAIL_NETWORK} Docker network was not made by clp-addons (its bridge is ${bridge || "unnamed"}); remove it so it can be made again`);
-  }
   const socketFile = join(dir, SOCKET_UNIT);
   const previous = listenedAddress(socketFile);
   if (previous && previous !== gateway && ufwActive(run)) run("ufw", ["delete", "allow", ...ufwRule(previous)]);
