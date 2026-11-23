@@ -5,7 +5,7 @@ import {
 import { FIREWALL_TARGETS } from "./inject/targets";
 import { syncFirewall } from "./protocols";
 import { syncHetzner } from "./hetzner";
-import { keepNetcupTimeSync, syncNetcup, withdrawNetcupTimeSync } from "./netcup";
+import { keepNetcupTimeSync, syncNetcup } from "./netcup";
 import { FIREWALL_ACTIONS, FIREWALL_SETUP } from "./setup";
 import { keepPanelGateNginx, panelGateOffLocally, repairPanelGate, withdrawPanelGate } from "./panel-gate";
 import { CLI_BIN } from "../../lib/paths";
@@ -70,7 +70,7 @@ export const FIREWALL_ADDON: AddonDefinition = {
     { in: "2.2.0-rc.1", note: "Cloudflare IP Access is now Firewall, which also sets each firewall rule's protocol: TCP, UDP or both." },
     { in: "2.2.0-rc.1", note: "On a Hetzner Cloud server, Firewall can attach Hetzner Cloud Firewalls that let only Cloudflare reach the sites (80, 443) and the panel (8443). Both switches are off until you connect a token and turn one on; off keeps those ports open to anyone." },
     { in: "2.2.0-rc.1", note: "Panel gate, off by default: CloudPanel answers only at its custom domain through Cloudflare, after a Cloudflare Access sign-in, and no longer at the server's IP on port 8443. It needs DNS's token to hold three more permissions. Disabling Firewall turns the gate off." },
-    { in: "2.2.0-rc.3", note: "On a netcup server, Firewall can put netcup firewall policies on it that let only Cloudflare reach the sites (80, 443) and the panel (8443). Both switches are off until you connect netcup and turn one on. While one is on, systemd-timesyncd syncs only with time.cloudflare.com and ptbtime1.ptb.de, the NTP servers whose replies the policies let in." },
+    { in: "2.2.0-rc.3", note: "On a netcup server, Firewall can put netcup firewall policies on it that let only Cloudflare reach the sites (80, 443) and the panel (8443). Both switches are off until you connect netcup and turn one on. While any of its policies is on the server, systemd-timesyncd syncs only with time.cloudflare.com and ptbtime1.ptb.de, the NTP servers whose replies the policies let in." },
   ],
   targets: FIREWALL_TARGETS,
   setup: FIREWALL_SETUP,
@@ -104,8 +104,6 @@ export const FIREWALL_ADDON: AddonDefinition = {
     try {
       if (withdrawPanelGate()) cleanUpPanelGateNow();
     } catch (error) { log.warn(`the Panel gate's Nginx lines stay; run clp-addons firewall panel-gate off: ${errorMessage(error)}`); }
-    try { withdrawNetcupTimeSync(); }
-    catch (error) { log.warn(`systemd-timesyncd stays pointed at the netcup policies' NTP servers: ${errorMessage(error)}`); }
   },
   activate: () => {
     try { syncFirewall("restore"); }

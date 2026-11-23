@@ -276,6 +276,8 @@ interface NetcupSync extends SeenState {
   serverName?: string;
   /** When the account last had no server matching this one. */
   unmatchedAt?: number;
+  /** Whether one of the addon's policies, Cloudflare or open, was last seen on this server. */
+  held?: boolean;
 }
 
 interface DeviceState {
@@ -334,14 +336,20 @@ function setTimeSync(options: NetcupOptions, on: boolean): string | null {
   return want ? `${TIMESYNCD} pointed at ${servers}` : `${TIMESYNCD} no longer pointed at ${servers}`;
 }
 
-/** Points timesyncd at the pinned NTP servers while a Cloudflare policy was last seen on this server, and back otherwise. */
+/**
+ * Points timesyncd at the pinned NTP servers while any of the addon's policies
+ * was last seen on this server: an open one makes netcup drop by default too.
+ * Without a sign-in nothing says whether they are still there, so the drop-in
+ * stays as it is; the pinned servers keep time either way.
+ */
 export function keepNetcupTimeSync(options: NetcupOptions = {}): string | null {
   const paths = pathsOf(options);
-  const seen = readToken(paths) ? readSync(paths).seen : undefined;
-  return setTimeSync(options, Boolean(seen?.web || seen?.panel));
+  if (!readToken(paths)) return null;
+  const stored = readSync(paths);
+  return setTimeSync(options, stored.held ?? Boolean(stored.seen?.web || stored.seen?.panel));
 }
 
-export function withdrawNetcupTimeSync(options: NetcupOptions = {}): string | null {
+function withdrawNetcupTimeSync(options: NetcupOptions = {}): string | null {
   return setTimeSync(options, false);
 }
 
@@ -565,6 +573,11 @@ function seenOf(firewall: NetcupFirewall): Record<CloudRole, boolean> {
   return { web: owned(user, "web").length > 0, panel: owned(user, "panel").length > 0 };
 }
 
+function heldOf(firewall: NetcupFirewall): boolean {
+  const user = firewall.active ? firewall.userPolicies ?? [] : [];
+  return ROLES.some((role) => owned(user, role).length > 0 || owned(user, role, "open").length > 0);
+}
+
 export async function netcupView(options: NetcupOptions = {}): Promise<NetcupView> {
   const paths = pathsOf(options);
   const now = nowOf(options);
@@ -582,7 +595,7 @@ export async function netcupView(options: NetcupOptions = {}): Promise<NetcupVie
     if ("missing" in read) {
       await withNetcupLock(paths, async () => {
         const stored = readSync(paths);
-        if (readToken(paths) && stored.userId === accountId && (stored.seenAt ?? 0) < now) writeSync(paths, { seen: { web: false, panel: false }, seenAt: now });
+        if (readToken(paths) && stored.userId === accountId && (stored.seenAt ?? 0) < now) writeSync(paths, { seen: { web: false, panel: false }, held: false, seenAt: now });
       }, 0).catch(() => {});
       return { state: "error", connected: true, error: `${read.missing}.` };
     }
@@ -603,7 +616,7 @@ export async function netcupView(options: NetcupOptions = {}): Promise<NetcupVie
     }
     await withNetcupLock(paths, async () => {
       const stored = readSync(paths);
-      if (readToken(paths) && stored.userId === accountId && (stored.seenAt ?? 0) < now) writeSync(paths, { seen: seenOf(firewall), seenAt: now });
+      if (readToken(paths) && stored.userId === accountId && (stored.seenAt ?? 0) < now) writeSync(paths, { seen: seenOf(firewall), held: heldOf(firewall), seenAt: now });
     }, 0).catch(() => {});
     return {
       state: "connected", serverId: target.serverId, serverName: target.serverName, roles,
@@ -761,7 +774,9 @@ export async function disconnectNetcup(options: NetcupOptions = {}): Promise<{ n
       return done;
     });
     let timeSync = "";
-    try { withdrawNetcupTimeSync(options); } catch (error) { timeSync = timeSyncFailed(error); }
+    if (!open.length && !on.length) {
+      try { withdrawNetcupTimeSync(options); } catch (error) { timeSync = timeSyncFailed(error); }
+    }
     return { notice: `The netcup sign-in is removed${revoked ? " and revoked" : "; netcup could not be asked to revoke it, so it lapses once unused"}.${inactive}${staying}${unchecked}${timeSync}` };
   });
 }
@@ -987,7 +1002,7 @@ export async function setNetcupRole(
     }
     await apply(ctx, role, enabled, plan, list);
     if (enabled) writeSync(paths, { rangesHash: list!.hash });
-    writeSync(paths, { seen: { web: plan.cloudflare.has("web"), panel: plan.cloudflare.has("panel") }, seenAt: nowOf(options) });
+    writeSync(paths, { seen: { web: plan.cloudflare.has("web"), panel: plan.cloudflare.has("panel") }, held: plan.cloudflare.size + plan.open.size > 0, seenAt: nowOf(options) });
     let timeSync = "";
     try { keepNetcupTimeSync(options); } catch (error) { timeSync = timeSyncFailed(error); }
     if (!enabled) return { notice: `${title} is off.${timeSync}` };
@@ -1041,7 +1056,7 @@ export async function syncNetcup(mode: "repair" | "ranges", options: NetcupOptio
         const read = await readFirewall(paths, options, api, true);
         if ("missing" in read) {
           missing = read.missing;
-          writeSync(paths, { seen: { web: false, panel: false }, seenAt: nowOf(options) });
+          writeSync(paths, { seen: { web: false, panel: false }, held: false, seenAt: nowOf(options) });
         } else {
           const { target, firewall } = read;
           const user = firewall.userPolicies ?? [];
@@ -1052,7 +1067,7 @@ export async function syncNetcup(mode: "repair" | "ranges", options: NetcupOptio
             await api.setFirewall(target.serverId, target.mac, keep, (firewall.copiedPolicies ?? []).map((policy) => policy.id));
             stale = extra.length;
           }
-          writeSync(paths, { seen: seenOf(firewall), seenAt: nowOf(options) });
+          writeSync(paths, { seen: seenOf(firewall), held: heldOf(firewall), seenAt: nowOf(options) });
         }
       }
     } catch (error) {

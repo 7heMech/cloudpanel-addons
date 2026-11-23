@@ -657,13 +657,17 @@ rules, and the timesyncd drop-in names the same literal addresses, so the rule
 and the servers timesyncd asks cannot drift apart when DNS changes. If either
 operator renumbers, a release updates both.
 
-While either switch was last seen on, the addon writes
+While any of the addon's policies, Cloudflare or open, was last seen on the
+server (an open one makes netcup drop by default too), the addon writes
 `/etc/systemd/timesyncd.conf.d/zz-clp-addons-netcup.conf`, which clears `NTP=`
 and `FallbackNTP=` and sets `NTP=` to those six addresses, so timesyncd never
 falls back to the pool, whose replies would be dropped; it restarts timesyncd
-when the file changes. Turning both switches off, disconnecting and disabling
-Firewall remove it; repair and enabling Firewall put it back from the switches
-as last seen, so a repair that cannot reach netcup still keeps it. Only an
+when the file changes. It is removed only once netcup shows none of the
+addon's policies on the server, or on disconnecting when none is attached.
+Disabling Firewall, or disconnecting with an open policy left behind, keeps it:
+nothing then says when those policies go, and the pinned servers keep time
+either way. Repair and enabling Firewall put it back from what was last seen,
+so a repair that cannot reach netcup still keeps it. Only an
 active `systemd-timesyncd` gets the file; chrony and ntpd are left alone, and
 the review then says to point them at the two servers.
 

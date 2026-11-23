@@ -3,12 +3,12 @@ import { Database } from "bun:sqlite";
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { withFileLock } from "../lib/file-lock";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 import { ANYONE, openToOthers, parseCloudflareRanges, reachable, sshMissing, type CloudRole, type Guard } from "../addons/firewall/cloud-firewall";
 import * as rootState from "../lib/root-state";
 import {
   connectNetcup, disconnectNetcup, isPublicAddress, keepNetcupTimeSync, netcupOpenRules, netcupRules, netcupSetupState, netcupSignature, netcupView,
-  NTP_SERVERS, pollNetcup, setNetcupRole, syncNetcup, withdrawNetcupTimeSync, type NetcupOptions,
+  NTP_SERVERS, pollNetcup, setNetcupRole, syncNetcup, type NetcupOptions,
 } from "../addons/firewall/netcup";
 import { NetcupApi, NetcupAuth, NetcupError, type NetcupRule } from "../addons/firewall/netcup-api";
 import { netcupActions } from "../addons/firewall/setup";
@@ -1328,22 +1328,38 @@ FallbackNTP=
     await turn(server, "panel", false);
     expect(existsSync(dropIn(server))).toBe(true);
     await turn(server, "web", false);
+    expect(fake.userPolicies()).toEqual(["ssh", "clp-addons-open-panel", "clp-addons-open-web"]);
+    expect(existsSync(dropIn(server))).toBe(true);
+    const box = fake.servers.find((entry) => entry.id === SERVER)!;
+    box.firewall.user = (box.firewall.user as number[]).filter((id) => fake.policies.find((policy) => policy.id === id)!.name === "ssh") as never;
+    await syncNetcup("repair", server.options);
     expect(existsSync(dropIn(server))).toBe(false);
     expect(restarts(calls)).toBe(4);
   });
 
-  test("disconnecting and disabling Firewall take the drop-in away; enabling puts it back", async () => {
+  test("the drop-in stays while one of the addon's policies may still be on the server", async () => {
     const fake = new FakeNetcup();
     fake.policy("ssh", [ssh()], [SERVER]);
     const server = await connected(fake);
     timesyncd(server);
     await turn(server, "web", true);
-    expect(withdrawNetcupTimeSync(server.options)).toBe("systemd-timesyncd no longer pointed at time.cloudflare.com and ptbtime1.ptb.de");
-    expect(existsSync(dropIn(server))).toBe(false);
+    rmSync(dropIn(server));
     expect(keepNetcupTimeSync(server.options)).toBe("systemd-timesyncd pointed at time.cloudflare.com and ptbtime1.ptb.de");
     expect(keepNetcupTimeSync(server.options)).toBeNull();
     await turn(server, "web", false);
-    keepNetcupTimeSync(server.options);
+    await disconnectNetcup(server.options);
+    expect(existsSync(dropIn(server))).toBe(true);
+    rmSync(dropIn(server));
+    expect(keepNetcupTimeSync(server.options)).toBeNull();
+    expect(existsSync(dropIn(server))).toBe(false);
+  });
+
+  test("disconnecting with none of the addon's policies on the server takes the drop-in away", async () => {
+    const fake = new FakeNetcup();
+    const server = await connected(fake);
+    timesyncd(server);
+    await syncNetcup("repair", server.options);
+    mkdirSync(dirname(dropIn(server)), { recursive: true });
     writeFileSync(dropIn(server), "left behind");
     await disconnectNetcup(server.options);
     expect(existsSync(dropIn(server))).toBe(false);
