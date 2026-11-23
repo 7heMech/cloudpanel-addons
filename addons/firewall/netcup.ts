@@ -39,7 +39,7 @@ const WORDS: ProviderWords = {
   console: "netcup's SCP console",
   nothingClosedYet: "No policy on this server has inbound rules yet, so netcup also closes every port the addon's policies do not open:",
   allOpenAgain: "no policy on this server has inbound rules any more, so netcup lets anyone reach every port again",
-  closesMore: "netcup tracks only TCP connections: once it drops by default, replies to this server's own UDP traffic, such as NTP and DNS to resolvers other than netcup's, are dropped unless a policy allows them.",
+  closesMore: "netcup tracks only TCP connections: once it drops by default, replies to this server's own UDP traffic other than DNS and NTP are dropped unless a policy allows them.",
 };
 
 interface NetcupPaths extends HostPaths {
@@ -124,7 +124,16 @@ const ICMPV4: NetcupRule = {
 const ICMPV6: NetcupRule = {
   description: "ICMPv6, which IPv6 needs, kept by clp-addons", direction: "INGRESS", protocol: "ICMPv6", action: "ACCEPT", sources: [],
 };
-const ICMP: NetcupRule[] = [ICMPV4, ICMPV6];
+/**
+ * netcup tracks only TCP, so replies to the server's own DNS and NTP queries
+ * are new inbound UDP to it. They land on Linux's default ephemeral ports.
+ */
+const UDP_REPLIES: NetcupRule[] = [["DNS", "53"], ["NTP", "123"]].map(([name, port]) => ({
+  description: `${name} replies, kept by clp-addons`, direction: "INGRESS", protocol: "UDP", action: "ACCEPT", sources: [],
+  sourcePorts: port, destinationPorts: "32768-60999",
+}));
+const FIXED: NetcupRule[] = [ICMPV4, ICMPV6, ...UDP_REPLIES];
+const isUdpReply = (rule: NetcupRule) => rule.protocol === "UDP" && ["53", "123"].includes(rule.sourcePorts ?? "") && !rule.destinations?.length;
 
 /** The rules of one of the addon's policies: a pure function of the list, one rule per port and address family. */
 export function netcupRules(role: CloudRole, ranges: string[]): NetcupRule[] {
@@ -132,7 +141,7 @@ export function netcupRules(role: CloudRole, ranges: string[]): NetcupRule[] {
   return [...CLOUD_ROLES[role].ports.flatMap((port) => families.map((sources) => ({
     description: RULE_DESCRIPTION, direction: "INGRESS" as const, protocol: "TCP" as const, action: "ACCEPT" as const,
     sources: [...sources], destinationPorts: String(port),
-  }))), ...ICMP.map((rule) => ({ ...rule }))];
+  }))), ...FIXED.map((rule) => ({ ...rule }))];
 }
 
 /** The rules of a role's policy open to anyone: fixed, so every server writes the same. */
@@ -140,7 +149,7 @@ export function netcupOpenRules(role: CloudRole): NetcupRule[] {
   return [...CLOUD_ROLES[role].ports.map((port) => ({
     description: OPEN_DESCRIPTION, direction: "INGRESS" as const, protocol: "TCP" as const, action: "ACCEPT" as const,
     sources: [], destinationPorts: String(port),
-  })), ...ICMP.map((rule) => ({ ...rule }))];
+  })), ...FIXED.map((rule) => ({ ...rule }))];
 }
 
 /** Two rule sets with the same signature allow the same traffic, whatever order or spelling netcup returns. */
@@ -780,7 +789,7 @@ async function rewrite(api: NetcupApi, userId: number, policy: NetcupPolicy, des
 /**
  * Whether a policy only lets Cloudflare reach the role's ports: TCP accepts
  * on exactly those ports, each from the same sources, both address families,
- * every source inside this server's list, and ICMP. A newer list that adds a
+ * every source inside this server's list, ICMP, and the DNS and NTP replies. A newer list that adds a
  * range fails this until this server's list catches up, and is then rewritten
  * to this server's list for a while; only Cloudflare stays let in throughout.
  */
@@ -790,7 +799,7 @@ function cloudflareOnly(role: CloudRole, rules: NetcupRule[] | undefined, ranges
   const sources = new Map<string, Set<string>>();
   for (const rule of rules ?? []) {
     if (rule.direction !== "INGRESS" || rule.action !== "ACCEPT") return false;
-    if (rule.protocol === "ICMP" || rule.protocol === "ICMPv6") continue;
+    if (rule.protocol === "ICMP" || rule.protocol === "ICMPv6" || isUdpReply(rule)) continue;
     if (rule.protocol !== "TCP" || rule.sourcePorts || rule.destinations?.length || !rule.sources?.length) return false;
     if (!ports.includes(rule.destinationPorts ?? "")) return false;
     const set = sources.get(rule.destinationPorts!) ?? new Set<string>();

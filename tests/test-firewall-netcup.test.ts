@@ -299,11 +299,13 @@ describe("signing in", () => {
 describe("rules", () => {
   test("one rule per port and address family, the same on every server", () => {
     const rules = netcupRules("web", RANGES);
-    expect(rules.map((rule) => [rule.protocol, rule.destinationPorts ?? null, rule.sources!.length]))
-      .toEqual([["TCP", "80", 15], ["TCP", "80", 7], ["TCP", "443", 15], ["TCP", "443", 7], ["ICMP", null, 0], ["ICMPv6", null, 0]]);
+    expect(rules.map((rule) => [rule.protocol, rule.sourcePorts ?? null, rule.destinationPorts ?? null, rule.sources!.length])).toEqual([
+      ["TCP", null, "80", 15], ["TCP", null, "80", 7], ["TCP", null, "443", 15], ["TCP", null, "443", 7], ["ICMP", null, null, 0], ["ICMPv6", null, null, 0],
+      ["UDP", "53", "32768-60999", 0], ["UDP", "123", "32768-60999", 0],
+    ]);
     expect(netcupRules("panel", RANGES).every((rule) => rule.direction === "INGRESS" && rule.action === "ACCEPT")).toBe(true);
-    expect(netcupOpenRules("panel").map((rule) => rule.protocol)).toEqual(["TCP", "ICMP", "ICMPv6"]);
-    const respelled = [...rules].reverse().map((rule) => ({ ...rule, sourcePorts: null, destinations: [], sources: [...rule.sources!].reverse() }));
+    expect(netcupOpenRules("panel").map((rule) => rule.protocol)).toEqual(["TCP", "ICMP", "ICMPv6", "UDP", "UDP"]);
+    const respelled = [...rules].reverse().map((rule) => ({ ...rule, sourcePorts: rule.sourcePorts ?? null, destinations: [], sources: [...rule.sources!].reverse() }));
     expect(netcupSignature(respelled)).toBe(netcupSignature(rules));
     expect(netcupSignature([...rules, ssh()])).not.toBe(netcupSignature(rules));
   });

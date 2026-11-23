@@ -146,10 +146,10 @@ Configure**). The switches work as on Hetzner, with policies named
 `clp-addons-open-web` and `clp-addons-open-panel`; they go after your own
 policies on the server. Once any policy has an inbound rule, netcup drops what
 no policy allows, and the review lists what closes. netcup tracks only TCP, so
-replies to the server's own UDP traffic (NTP, and DNS to resolvers other than
-netcup's) stop arriving too unless one of your policies allows them, such as an
-inbound UDP rule from source port 123. The addon's policies also accept ICMP
-and ICMPv6 from anyone, for path MTU discovery and IPv6. With SSH closed, SCP's
+the addon's policies accept replies to the server's own DNS and NTP queries
+(UDP from source ports 53 and 123 to ports 32768-60999), and ICMP and ICMPv6
+from anyone, for path MTU discovery and IPv6. Replies to other UDP traffic the
+server starts need a rule of your own. With SSH closed, SCP's
 console still gives a root shell.
 
 Policies are shared by the servers of one account and are never deleted.

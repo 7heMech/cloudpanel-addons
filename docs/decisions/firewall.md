@@ -640,14 +640,18 @@ TCP accept rule per port and address family, sources in canonical form, a
 fixed description. Each also accepts inbound ICMP (for path MTU discovery) and
 ICMPv6 from anyone: any of them makes netcup drop by default, and without
 neighbour discovery, router advertisements and Packet Too Big a server with
-only IPv6 would be cut off. netcup has no labels, so a policy is the addon's when it
+only IPv6 would be cut off. netcup tracks only TCP, so each also accepts UDP
+from source ports 53 and 123 to Linux's default ephemeral ports, 32768-60999:
+the replies to the server's own DNS (to resolvers other than netcup's, which
+netcup always lets through) and NTP queries. Anyone can send from those source
+ports, so a UDP service listening in that range is open to anyone. netcup has no labels, so a policy is the addon's when it
 has one of the names and its description starts with `Managed by clp-addons`;
 a policy with the name and not that refuses the switch. The writer's list time
 is the end of the description (`; Cloudflare's list of <time>`), read like
 Hetzner's label. A policy claiming a newer list is left alone only while it
 still lets only Cloudflare in: TCP accepts on exactly the role's ports, the same
 sources on each, both address families, every source inside this server's list,
-and ICMP. Otherwise a switch or repair rewrites it to this server's list. A
+ICMP, and the DNS and NTP replies. Otherwise a switch or repair rewrites it to this server's list. A
 newer list that adds a range therefore loses it until this server's list
 catches up; only Cloudflare is let in throughout. The listing may leave out rules, so each owned policy is read
 on its own before it is compared. Listings are paged until a page is empty or
@@ -680,10 +684,10 @@ Cloudflare and open policies are attached goes through the normal review and
 confirmation before removing the open policy. The 500-rule limit per interface
 is netcup's to refuse. netcup counts each source as a separate effective rule:
 at most two of the addon's policies sit on a server at once, where each
-Cloudflare policy holds one effective rule per source and port plus two for
-ICMP and ICMPv6 (70 effective rules with both switches on and a 22-range list;
-three more for each added range), and each open policy holds one wildcard TCP
-rule per port plus the two ICMP rules (4 for web, 3 for panel).
+Cloudflare policy holds one effective rule per source and port plus four for
+ICMP, ICMPv6 and the UDP replies (74 effective rules with both switches on and a
+22-range list; three more for each added range), and each open policy holds one
+wildcard TCP rule per port plus those four (6 for web, 5 for panel).
 
 ## Taking over from earlier releases
 
