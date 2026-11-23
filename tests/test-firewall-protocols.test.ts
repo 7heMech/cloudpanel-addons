@@ -413,7 +413,7 @@ test("a stale switch-off pass that runs after a switch-on leaves the protocols a
 test("the firewall watcher runs Firewall when ufw's rule files change", async () => {
   const { ADDONS } = await import("../addons/catalog");
   const { firewallUnits } = await import("../cli/provision");
-  expect(Object.values(ADDONS).filter((spec) => spec.firewall).map((spec) => spec.name)).toEqual(["firewall"]);
+  expect(Object.values(ADDONS).filter((spec) => spec.firewall).map((spec) => spec.name).sort()).toEqual(["firewall", "instatic"]);
   const units = firewallUnits();
   expect(units.path).toContain("PathChanged=/etc/ufw/user.rules\nPathChanged=/etc/ufw/user6.rules\nUnit=clp-addons-firewall.service");
   expect(units.service).toMatch(/ExecStart=\/\S+ sync-firewall\n/);

@@ -29,7 +29,8 @@ and every heading sorts. A finished job
 repaints its result view. A site's name is plain text, so clicking it selects
 the row like the rest of it; Manage starts with Open admin and Visit site and
 opens a menu. A phone has no menu: Update, Stop or Start, Snapshot, Logs and
-Delete sit in the row, and the rest stay on a wide screen.
+Delete sit in the row, with Recreate for a site not yet on the mail network,
+and the rest stay on a wide screen.
 
 The dashboard reads instances, jobs and registry tags in parallel. A
 creation that is queued, running, or failed with no instance to show for it is a
@@ -91,6 +92,57 @@ provisioning itself does not bring the unit up.
 Upstream publishes `ghcr.io/corebunch/instatic` for `linux/amd64` only, so
 Instatic declares `supportedArches: ["x64"]`: an arm64 box cannot enable it and
 does not list it.
+
+## Email
+
+Instatic's SMTP connector takes a host, port and optional login. SMTP Relay
+knows a site by the Unix login postdrop records, which a container's SMTP
+connection does not carry, so the addon bridges the two
+(`addons/instatic/mail-bridge.ts`, `addons/instatic/mail.ts`):
+
+- Containers run on the `clp-instatic` Docker network, whose bridge interface
+  has the same name and which keeps containers from reaching each other, with `--add-host smtp-relay:<gateway>` and
+  `MAIL_ALLOW_PRIVATE_HOSTS=1`, which lets Instatic use a private address,
+  without a login or STARTTLS. Instatic still refuses an IP literal without
+  it. Containers started before the network existed join it when they are
+  updated or recreated; the dashboard names them.
+- `clp-addons-instatic-mail.socket` listens on the gateway's port 2525 (Postfix
+  holds 25 on every address) with `Accept=yes`, and each connection runs
+  `clp-addons instatic-mail` as root, for at most ten minutes. The listener knows the container by its
+  source address on that network, and accepts it only when it is an
+  `instatic-<domain>` container with an instance record, labelled
+  `clp-addon=instatic`, and running as that domain's site user now. Any
+  other address is refused at the greeting. A host process cannot borrow a
+  container's address: the replies go to the container.
+- Each message goes to `/usr/sbin/sendmail -i -f <sender> -- <recipients>`
+  through `runuser` as the site user (`deliverAsSite` in
+  `addons/smtp/submit.ts`), so Postfix holds it to the site's senders and
+  routes it like the site's PHP mail. When SMTP Relay has a From rule for the
+  site, the From is rewritten as `smtp-submit` would. A site whose rule has no
+  From, one SMTP Relay does not relay, loses an envelope sender outside its
+  domains. With no rule, as with SMTP Relay off, the sender is passed as given
+  and the mail is ordinary local Postfix mail. Sendmail's temporary failure (75) answers
+  451; any other failure 554.
+- ufw drops container traffic to the host, and CloudPanel's Firewall page
+  rebuilds ufw, so the `firewall` hook adds
+  `allow in on clp-instatic to <gateway> port 2525 proto tcp` again after each
+  rebuild. Repair and enabling restore the units and the rule once the network
+  exists; disabling removes them and leaves the network to its containers.
+
+After a create, update or recreate passes its health check, `docker exec`
+runs a script in the container, as the site user, against Instatic's SQLite
+database. If Instatic has mail tables and neither a connector nor mail
+defaults, the script adds a login-free SMTP connector for `smtp-relay:2525`,
+the row Instatic's own form writes, and makes it the default sender as
+`noreply@<domain>`. The instance record then keeps `mailConnected`, set too
+when the mail setup was already there, so a connector the admin removes is not
+added again. An Instatic without mail tables is tried again at the next
+update. A restore from backup brings its own mail setup.
+
+`MAIL_ALLOW_PRIVATE_HOSTS` also lets an Instatic admin point a connector at
+other private addresses: the server's own services that ufw lets the network
+reach, and the rest of the server's private networks. A connector only speaks
+SMTP, so that is a port probe, not a way in.
 
 ## Storage and replacement
 

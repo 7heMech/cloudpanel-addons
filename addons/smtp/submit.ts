@@ -182,3 +182,54 @@ export async function runSmtpSubmit(
   }
   return sendmail(path, ["-t", "-i", "-f", prepared.sender], prepared.message);
 }
+
+export interface SiteDelivery {
+  /** The site's Unix login, which postdrop records and Postfix holds to its senders. */
+  user: string;
+  uid: number;
+  /** The SMTP `MAIL FROM`, empty for a bounce. */
+  mailFrom: string;
+  recipients: string[];
+  message: Uint8Array;
+}
+
+export interface SiteDeliveryOptions {
+  ruleDir?: string;
+  rootUid?: number;
+  sendmailPath?: string;
+  runuser?: string;
+}
+
+/**
+ * Root submitting one message for a site that cannot run sendmail itself, such
+ * as a container. The site's rule rewrites the From as `smtp-submit` would,
+ * and sendmail runs as the site's login, so Postfix enforces its envelope.
+ * Returns sendmail's exit code and what it said.
+ */
+export function deliverAsSite(delivery: SiteDelivery, options: SiteDeliveryOptions = {}): { code: number; said: string } {
+  const rule = trustedRule(rulePathFor(delivery.uid, options.ruleDir), options.rootUid ?? 0);
+  // Postfix's sendmail keeps a CR before each LF as part of the line.
+  let message: Uint8Array = Buffer.from(Buffer.from(delivery.message).toString("latin1").replace(/\r\n/g, "\n"), "latin1");
+  let sender: string | null = delivery.mailFrom || null;
+  if (rule?.sender != null) {
+    try {
+      const prepared = prepareSubmission(message, rule as SmtpRewriteRule);
+      message = prepared.message;
+      sender = prepared.sender;
+    } catch {
+      sender = senderFor(rule.sender, rule.site);
+    }
+  } else if (rule && sender) {
+    const at = sender.lastIndexOf("@");
+    if (at < 1 || !rule.allowed.includes(sender.slice(at + 1).toLowerCase())) sender = null;
+  }
+  const argv = [options.runuser ?? "/usr/sbin/runuser", "-u", delivery.user, "--", options.sendmailPath ?? SENDMAIL, "-i",
+    ...(sender ? ["-f", sender] : []), "--", ...delivery.recipients];
+  try {
+    const result = Bun.spawnSync(argv, { stdin: message, stdout: "pipe", stderr: "pipe", timeout: 60_000, killSignal: "SIGKILL" });
+    const said = `${Buffer.from(result.stderr).toString("utf8")}${Buffer.from(result.stdout).toString("utf8")}`.trim();
+    return { code: result.exitCode ?? 75, said };
+  } catch (error) {
+    return { code: 75, said: errorMessage(error) };
+  }
+}

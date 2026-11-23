@@ -39,6 +39,8 @@ export interface InstanceView {
   siteUser: string;
   createdAt: string;
   state: string;
+  /** Whether the container can reach the mail bridge; it cannot until recreated, if it predates it. */
+  mail?: boolean;
   panelSite?: boolean | null;
 }
 
