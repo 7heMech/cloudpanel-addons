@@ -220,6 +220,8 @@ function stopNetcupConnect(run) {
 
 async function startNetcupConnect() {
   stopNetcupConnect();
+  const run = { stopped: false };
+  netcupSignIn = run;
   clearNotice();
   busy(true);
   let reply = null;
@@ -232,9 +234,11 @@ async function startNetcupConnect() {
     busy(false);
   }
   if (failure) {
+    stopNetcupConnect(run);
     notify('Could not start netcup\'s sign-in: ' + failure, 'error');
     return;
   }
+  if (run.stopped) return;
   const byId = function (id) { return CLP_ROOT.getElementById(id); };
   const dialog = byId('nc-connect-dialog');
   const status = byId('nc-connect-status');
@@ -245,9 +249,7 @@ async function startNetcupConnect() {
   status.textContent = 'Waiting for netcup…';
   status.hidden = false;
   problem.hidden = true;
-  const run = { stopped: false };
   dialog.showModal();
-  netcupSignIn = run;
   const fail = function (message) {
     status.hidden = true;
     problem.textContent = message;
@@ -272,10 +274,17 @@ async function startNetcupConnect() {
       interval = data.interval || interval;
       continue;
     }
-    // Granted, even if the dialog was closed meanwhile: the card has to show it.
+    // Granted: refresh unless a newer sign-in now owns the shared dialog.
+    const owns = netcupSignIn === run;
+    if (!owns && netcupSignIn) return;
     stopNetcupConnect(run);
-    if (dialog.open) dialog.close();
-    const state = await repaint();
+    if (owns && dialog.open) dialog.close();
+    const state = await readState();
+    if (netcupSignIn) return;
+    if (state.ok) {
+      repaintView(CLP_ROOT.getElementById('clp-content'), state.html);
+      loadPanelGate();
+    }
     replyNotice(Object.assign(state, { reply: data }));
     return;
   }

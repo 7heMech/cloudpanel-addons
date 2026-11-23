@@ -38,6 +38,10 @@ export class FakeNetcup {
   taskFailures = 0;
   /** When true, `PUT /firewall` answers 200 `{}` with no task object. */
   setFirewallNoTask = false;
+  /** Override the HTTP status returned when `setFirewallNoTask` is true. */
+  setFirewallNoTaskStatus = 200;
+  /** When true, `PUT /firewall-policies/{id}` answers 202 with no taskInfo. */
+  updatePolicyNoTask = false;
   /** Answer the device poll with this HTTP status instead. */
   pollStatus: number | null = null;
   /** Answer the device poll with this OAuth error code instead. */
@@ -64,6 +68,7 @@ export class FakeNetcup {
   constructor() {
     this.server(512345, "v2202411000000001", "cp-nue-1", "aa:bb:cc:00:00:01", "203.0.113.24");
     this.policy("netcup Mail block", [
+      { direction: "INGRESS", protocol: "TCP", action: "DROP", destinationPorts: "25", description: "Block incoming SMTP" },
       { direction: "EGRESS", protocol: "TCP", action: "DROP", destinationPorts: "25", description: "Block outgoing SMTP" },
     ], "copied");
   }
@@ -232,7 +237,7 @@ export class FakeNetcup {
         const ids = (list: { id: number }[]) => list.map((item) => item.id);
         if (ids(body.userPolicies).some((id) => !this.policies.some((policy) => policy.id === id))) return json({ code: "NOT_FOUND", message: "Firewall policy not found." }, 404);
         server.firewall = { copied: ids(body.copiedPolicies), user: ids(body.userPolicies), active: body.active ?? true } as never;
-        return this.setFirewallNoTask ? json({}, 200) : json(this.task(), 202);
+        return this.setFirewallNoTask ? json({}, this.setFirewallNoTaskStatus) : json(this.task(), 202);
       }
     }
     match = /^\/users\/(\d+)\/firewall-policies(?:\/(\d+))?$/.exec(path);
@@ -254,7 +259,7 @@ export class FakeNetcup {
       if (method === "GET") return json(structuredClone({ ...policy, rules: policy.rules!.map((rule) => ({ sourcePorts: null, destinations: [], numberOfEffectiveRules: Math.max(1, rule.sources?.length ?? 0), ...rule })) }));
       if (method === "PUT") {
         Object.assign(policy, { name: body.name, description: body.description ?? null, rules: body.rules ?? [] });
-        return json({ firewallPolicy: structuredClone(policy), taskInfo: this.task() }, 202);
+        return json({ firewallPolicy: structuredClone(policy), ...(this.updatePolicyNoTask ? {} : { taskInfo: this.task() }) }, 202);
       }
     }
     match = /^\/tasks\/([\w-]+)$/.exec(path);

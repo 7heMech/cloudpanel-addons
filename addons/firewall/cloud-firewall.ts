@@ -159,16 +159,133 @@ export function mayRewriteAt(written: number, refreshedAt: number, now = Date.no
 // --- What a set of firewalls lets through -----------------------------------
 
 /** One inbound rule, as every provider's maps to it. `port` is a port, a range, or `any`. */
-export interface InboundRule { protocol: string; port: string; sources: string[]; accept: boolean }
+export interface InboundRule {
+  protocol: string;
+  port: string;
+  sources: string[];
+  accept: boolean;
+  /** Optional client source port or range; omitted or empty matches any source port. */
+  sourcePorts?: string | null;
+}
 
 /** A firewall, or a policy, by what it lets in, in the order the provider applies its rules. */
 export interface Guard { name: string; rules: InboundRule[] }
 
-export function portCovers(port: string, target: number): boolean {
-  if (port === "any") return true;
+type IpInterval = [bigint, bigint];
+const MAX_V4 = (1n << 32n) - 1n;
+const MAX_V6 = (1n << 128n) - 1n;
+const ALL_PORTS: [number, number] = [1, 65535];
+const CLIENT_SOURCE_PORTS: [number, number] = [1024, 65535];
+
+function parsePortRange(port: string): [number, number] | null {
+  if (port === "any") return ALL_PORTS;
   const match = /^(\d{1,5})(?:-(\d{1,5}))?$/.exec(port);
-  if (!match) return false;
-  return Number(match[1]) <= target && target <= Number(match[2] ?? match[1]);
+  if (!match) return null;
+  const from = Number(match[1]);
+  const to = Number(match[2] ?? match[1]);
+  return from >= 1 && to <= 65535 && from <= to ? [from, to] : null;
+}
+
+function sourcePortRange(rule: InboundRule): [number, number] {
+  return (rule.sourcePorts ? parsePortRange(rule.sourcePorts) : null) ?? ALL_PORTS;
+}
+
+export function portCovers(port: string, target: number): boolean {
+  const range = parsePortRange(port);
+  return range !== null && range[0] <= target && target <= range[1];
+}
+
+function portSlices(from: number, to: number, ranges: [number, number][]): [number, number][] {
+  const cuts = new Set<number>([from, to + 1]);
+  for (const [rFrom, rTo] of ranges) {
+    if (rTo < from || rFrom > to) continue;
+    cuts.add(Math.max(from, rFrom));
+    cuts.add(Math.min(to, rTo) + 1);
+  }
+  const sorted = [...cuts].sort((a, b) => a - b);
+  const slices: [number, number][] = [];
+  for (let i = 0; i < sorted.length - 1; i++) slices.push([sorted[i]!, sorted[i + 1]! - 1]);
+  return slices;
+}
+
+function cidrInterval(cidr: Cidr): IpInterval {
+  const width = cidr.v6 ? 128 : 32;
+  return [cidr.bits, cidr.bits + ((1n << BigInt(width - cidr.prefix)) - 1n)];
+}
+
+function subtractIntervals(from: IpInterval[], cut: IpInterval[]): IpInterval[] {
+  let out = from;
+  for (const [cs, ce] of cut) {
+    if (!out.length) break;
+    const next: IpInterval[] = [];
+    for (const [s, e] of out) {
+      if (ce < s || cs > e) { next.push([s, e]); continue; }
+      if (cs > s) next.push([s, cs - 1n]);
+      if (ce < e) next.push([ce + 1n, e]);
+    }
+    out = next;
+  }
+  return out;
+}
+
+function intersectIntervals(a: IpInterval[], b: IpInterval[]): IpInterval[] {
+  const out: IpInterval[] = [];
+  for (const [as, ae] of a) {
+    for (const [bs, be] of b) {
+      const s = as > bs ? as : bs;
+      const e = ae < be ? ae : be;
+      if (s <= e) out.push([s, e]);
+    }
+  }
+  return out;
+}
+
+function ruleIntervals(rule: InboundRule, v6: boolean): IpInterval[] {
+  const out: IpInterval[] = [];
+  for (const raw of rule.sources) {
+    const cidr = parseCidr(raw);
+    if (cidr && cidr.v6 === v6) out.push(cidrInterval(cidr));
+  }
+  return out;
+}
+
+/** First-match-wins accepted IP intervals on one destination port and one source-port slice. */
+function acceptedOnSlice(guards: Guard[], fallsOpen: boolean, protocol: string, port: number, sport: number, v6: boolean): IpInterval[] {
+  let undecided: IpInterval[] = [[0n, v6 ? MAX_V6 : MAX_V4]];
+  const accepted: IpInterval[] = [];
+  for (const guard of guards) {
+    for (const rule of guard.rules) {
+      if (rule.protocol !== protocol || !portCovers(rule.port, port)) continue;
+      const [sFrom, sTo] = sourcePortRange(rule);
+      if (sport < sFrom || sport > sTo) continue;
+      const hit = intersectIntervals(undecided, ruleIntervals(rule, v6));
+      if (!hit.length) continue;
+      if (rule.accept) accepted.push(...hit);
+      undecided = subtractIntervals(undecided, hit);
+      if (!undecided.length) return accepted;
+    }
+  }
+  if (fallsOpen && undecided.length) accepted.push(...undecided);
+  return accepted;
+}
+
+function sourcePortSlicesFor(guards: Guard[], protocol: string, port: number, bounds: [number, number]): [number, number][] {
+  const ranges: [number, number][] = [];
+  for (const guard of guards) {
+    for (const rule of guard.rules) {
+      if (rule.protocol === protocol && portCovers(rule.port, port) && rule.sourcePorts) ranges.push(sourcePortRange(rule));
+    }
+  }
+  return portSlices(bounds[0], bounds[1], ranges);
+}
+
+function allowsPort(guards: Guard[], fallsOpen: boolean, protocol: "tcp" | "udp", port: number, v6: boolean): boolean {
+  return sourcePortSlicesFor(guards, protocol, port, ALL_PORTS)
+    .some(([sport]) => acceptedOnSlice(guards, fallsOpen, protocol, port, sport, v6).length > 0);
+}
+
+function anyTcpAllowed(guards: Guard[], port: number): boolean {
+  return allowsPort(guards, false, "tcp", port, false) || allowsPort(guards, false, "tcp", port, true);
 }
 
 /** The sources a guard lets reach a TCP port. */
@@ -179,37 +296,73 @@ export function openings(guard: Guard, port: number): Cidr[] {
 }
 
 /**
- * Whether some source of the family can reach the whole port range through
- * these guards, rule by rule in order: the first rule for it decides, and a
- * drop decides only when it covers the whole family. `fallsOpen` is what
- * happens when no rule decides.
+ * Whether some source of the family can reach every port in `[from, to]`
+ * through these guards, evaluated in assignment order at rule boundaries.
+ * `fallsOpen` is what happens when no rule decides.
  */
 export function allows(guards: Guard[], fallsOpen: boolean, protocol: "tcp" | "udp", from: number, to: number, v6: boolean): boolean {
-  for (const rule of guards.flatMap((guard) => guard.rules)) {
-    if (rule.protocol !== protocol || !portCovers(rule.port, from) || !portCovers(rule.port, to)) continue;
-    const family = rule.sources.map(parseCidr).filter((cidr): cidr is Cidr => cidr?.v6 === v6);
-    if (rule.accept && family.length) return true;
-    if (!rule.accept && family.some((cidr) => cidr.prefix === 0)) return false;
-  }
-  return fallsOpen;
+  const ranges = guards.flatMap((guard) => guard.rules)
+    .filter((rule) => rule.protocol === protocol)
+    .map((rule) => parsePortRange(rule.port))
+    .filter((range): range is [number, number] => range !== null);
+  return portSlices(from, to, ranges).every(([port]) => allowsPort(guards, fallsOpen, protocol, port, v6));
 }
 
-/** Whether every range can reach the port through one of the guards. */
+/** Whether every range can reach the port through these guards in assignment order across client source ports. */
 export function reachable(guards: Guard[], port: number, ranges: string[]): boolean {
-  const sources = guards.flatMap((guard) => openings(guard, port));
-  return ranges.map(parseCidr).every((range) => range && sources.some((source) => contains(source, range)));
+  const cidrs = ranges.map(parseCidr);
+  if (cidrs.some((cidr) => cidr === null)) return false;
+  const targets = cidrs as Cidr[];
+  for (const [sport] of sourcePortSlicesFor(guards, "tcp", port, CLIENT_SOURCE_PORTS)) {
+    const v4 = acceptedOnSlice(guards, false, "tcp", port, sport, false);
+    const v6 = acceptedOnSlice(guards, false, "tcp", port, sport, true);
+    for (const target of targets) {
+      if (subtractIntervals([cidrInterval(target)], target.v6 ? v6 : v4).length > 0) return false;
+    }
+  }
+  return true;
 }
 
 export interface Opening { port: number; firewall: string; sources: string[] }
 
-/** What another guard still lets reach the role's ports from outside Cloudflare, which leaves the addon's without effect. */
+/** What another guard still lets reach the role's ports from outside Cloudflare, excluding sources shadowed by earlier drops. */
 export function openToOthers(role: CloudRole, others: Guard[], ranges: string[]): Opening[] {
-  const cloudflare = ranges.map(parseCidr).filter((cidr): cidr is Cidr => cidr !== null);
+  const cfV4: IpInterval[] = [];
+  const cfV6: IpInterval[] = [];
+  for (const raw of ranges) {
+    const cidr = parseCidr(raw);
+    if (cidr) (cidr.v6 ? cfV6 : cfV4).push(cidrInterval(cidr));
+  }
   const found: Opening[] = [];
   for (const port of CLOUD_ROLES[role].ports) {
-    for (const guard of others) {
-      const sources = openings(guard, port).filter((source) => !cloudflare.some((range) => contains(range, source)));
-      if (sources.length) found.push({ port, firewall: guard.name, sources: [...new Set(sources.map((source) => source.text))] });
+    const byGuard = others.map(() => new Set<string>());
+    for (const [sport] of sourcePortSlicesFor(others, "tcp", port, ALL_PORTS)) {
+      let droppedV4: IpInterval[] = [];
+      let droppedV6: IpInterval[] = [];
+      for (let i = 0; i < others.length; i++) {
+        for (const rule of others[i]!.rules) {
+          if (rule.protocol !== "tcp" || !portCovers(rule.port, port)) continue;
+          const [sFrom, sTo] = sourcePortRange(rule);
+          if (sport < sFrom || sport > sTo) continue;
+          if (!rule.accept) {
+            droppedV4 = [...droppedV4, ...ruleIntervals(rule, false)];
+            droppedV6 = [...droppedV6, ...ruleIntervals(rule, true)];
+            continue;
+          }
+          for (const raw of rule.sources) {
+            const source = parseCidr(raw);
+            if (!source) continue;
+            const dropped = source.v6 ? droppedV6 : droppedV4;
+            const cf = source.v6 ? cfV6 : cfV4;
+            if (subtractIntervals(subtractIntervals([cidrInterval(source)], dropped), cf).length > 0) {
+              byGuard[i]!.add(source.text);
+            }
+          }
+        }
+      }
+    }
+    for (let i = 0; i < others.length; i++) {
+      if (byGuard[i]!.size) found.push({ port, firewall: others[i]!.name, sources: [...byGuard[i]!] });
     }
   }
   return found;
@@ -224,7 +377,7 @@ export function describeOpenings(openings: Opening[], noun = "firewall"): string
 
 /** The ports sshd listens on that no guard allows from anywhere. */
 export function sshMissing(ports: number[], others: Guard[]): number[] {
-  return ports.filter((port) => !others.some((guard) => openings(guard, port).length));
+  return ports.filter((port) => !anyTcpAllowed(others, port));
 }
 
 // --- This server ------------------------------------------------------------
@@ -381,8 +534,8 @@ export function planFor<F>(ctx: PlanContext<F>, role: CloudRole, enabled: boolea
       if (cloudflare.has(each)) continue;
       const ports = CLOUD_ROLES[each].ports;
       // Only when nothing of the operator's allows any of the ports: the open firewall opens them all.
-      const needed = ports.every((port) => !others.some((guard) => openings(guard, port).length));
-      const reachableNow = ctx.fallsOpenNow || ports.some((port) => attached.some((guard) => openings(guard, port).length));
+      const needed = ports.every((port) => !anyTcpAllowed(others, port));
+      const reachableNow = ctx.fallsOpenNow || ports.some((port) => anyTcpAllowed(attached, port));
       if (needed && (ctx.open[each] || reachableNow)) open.add(each);
     }
   }
@@ -440,11 +593,26 @@ function closingLines<F>(ctx: PlanContext<F>, plan: Plan<F>, watched: Watched[])
   const before = ctx.attached.map(ctx.guard);
   const after = plan.after.map(ctx.guard);
   const afterOpen = ctx.fallsOpenAfter(plan.after);
-  const closing = watched.flatMap((item) => {
-    const lost = [false, true].filter((v6) => allows(before, ctx.fallsOpenNow, item.protocol, item.from, item.to, v6)
-      && !allows(after, afterOpen, item.protocol, item.from, item.to, v6));
-    return lost.length ? [{ ...item, only: lost.length === 1 ? (lost[0] ? " over IPv6" : " over IPv4") : "" }] : [];
-  });
+  const allRules = [...before, ...after].flatMap((guard) => guard.rules);
+  const closing: (Watched & { only: string })[] = [];
+  for (const item of watched) {
+    const ranges = allRules
+      .filter((rule) => rule.protocol === item.protocol)
+      .map((rule) => parsePortRange(rule.port))
+      .filter((range): range is [number, number] => range !== null);
+    for (const [from, to] of portSlices(item.from, item.to, ranges)) {
+      const lost = [false, true].filter((v6) => allowsPort(before, ctx.fallsOpenNow, item.protocol, from, v6)
+        && !allowsPort(after, afterOpen, item.protocol, from, v6));
+      if (!lost.length) continue;
+      const only = lost.length === 1 ? (lost[0] ? " over IPv6" : " over IPv4") : "";
+      const prev = closing.at(-1);
+      if (prev && prev.protocol === item.protocol && prev.ssh === item.ssh && prev.only === only && prev.to + 1 === from) {
+        prev.to = to;
+      } else {
+        closing.push({ protocol: item.protocol, from, to, ssh: item.ssh, only });
+      }
+    }
+  }
   const ports = (items: typeof closing) => {
     const names = items.map((item) => `${item.from === item.to ? item.from : `${item.from}-${item.to}`}${item.only}`);
     return names.length === 1 ? names[0]! : `${names.slice(0, -1).join(", ")} and ${names.at(-1)}`;
@@ -473,14 +641,19 @@ function opening<F>(ctx: PlanContext<F>, plan: Plan<F>, except?: CloudRole): str
 function closingFields<F>(ctx: PlanContext<F>, plan: Plan<F>, paths: HostPaths, options: HostOptions, words: ProviderWords) {
   const watched = watchedPorts(paths, options);
   const closes = closingLines(ctx, plan, watched.list);
+  const after = plan.after.map(ctx.guard);
+  const afterOpen = ctx.fallsOpenAfter(plan.after);
+  const sshReachableAfter = watched.list
+    .filter((item) => item.ssh)
+    .some((item) => allows(after, afterOpen, "tcp", item.from, item.to, false) || allows(after, afterOpen, "tcp", item.from, item.to, true));
   const shell = !closes.ssh ? "" : existsSync(paths.terminalConfig)
     ? `${words.console} still gives a root shell, and so does Terminal from this panel, for an administrator root allows one.`
     : `${words.console} still gives a root shell.`;
   const lead = !closes.lines.length ? []
     : ctx.fallsOpenNow ? [words.nothingClosedYet] : ["Nothing on this server lets anyone reach these any more:"];
   const unread = watched.unread ? ["CloudPanel's Firewall rules could not be read, so only SSH was checked."] : [];
-  const more = words.closesMore && ctx.fallsOpenNow && !ctx.fallsOpenAfter(plan.after) ? [words.closesMore] : [];
-  return { closes: closes.lines, lead: [...unread, ...more, ...lead], shell, ssh: closes.ssh, typed: closes.lines.length ? ctx.serverName : "" };
+  const more = words.closesMore && ctx.fallsOpenNow && !afterOpen ? [words.closesMore] : [];
+  return { closes: closes.lines, lead: [...unread, ...more, ...lead], shell, ssh: closes.ssh, sshReachableAfter, typed: closes.lines.length ? ctx.serverName : "" };
 }
 
 /** Why turning a role on is refused, or what it would do. */
@@ -508,7 +681,7 @@ export async function enableReview<F>(
       title: "Let only Cloudflare reach CloudPanel?",
       text: `CloudPanel will answer only at https://${domain}; https://<this server's IP>:8443 stops answering.${opening(ctx, plan, role)}`,
       listLabel: "", details: [], warnings: [...warnings, ...closing.lead], closes: closing.closes,
-      wayBack: closing.ssh
+      wayBack: closing.ssh || !closing.sshReachableAfter
         ? `If ${domain} stops working, ${words.console} still gives a root shell.`
         : `If ${domain} stops working, reach the panel through an SSH tunnel to 127.0.0.1:8443.`,
       typed: closing.typed, confirmLabel: "Turn on", danger: true,
@@ -516,14 +689,20 @@ export async function enableReview<F>(
   }
   const hosts = [...new Set([...siteHostnames(paths), ...(domain ? [domain] : [])])];
   // A name that does not resolve answers no one now, so only names that reach this server elsewhere are listed.
-  const problems = await Promise.all(hosts.map(async (host) => {
-    const problem = await notThroughCloudflare(host, ranges, resolve);
-    return problem && problem !== "does not resolve" ? `${host}${host === domain ? " (CloudPanel)" : ""} ${problem}` : null;
-  }));
-  const failing = problems.filter((problem): problem is string => problem !== null).sort();
+  const checked = await Promise.all(hosts.map(async (host) => ({ host, problem: await notThroughCloudflare(host, ranges, resolve) })));
+  const failing = checked
+    .filter((entry) => entry.problem && entry.problem !== "does not resolve")
+    .map((entry) => `${entry.host}${entry.host === domain ? " (CloudPanel)" : ""} ${entry.problem}`)
+    .sort();
+  const unresolved = checked.filter((entry) => entry.problem === "does not resolve").map((entry) => entry.host).sort();
+  const dnsSummary = failing.length || !hosts.length ? ""
+    : !unresolved.length ? " Every site resolves to Cloudflare."
+      : unresolved.length === hosts.length
+        ? ` ${unresolved.length === 1 ? `${unresolved[0]} did not resolve` : "No site resolved"}, so Cloudflare DNS could not be confirmed.`
+        : ` Every site that resolved points to Cloudflare; ${unresolved.length === 1 ? `${unresolved[0]} did not resolve` : `${unresolved.length} hostnames did not resolve`}.`;
   return reviewOf(role, true, {
     title: "Let only Cloudflare reach the sites?",
-    text: `${words.provider} will drop every connection to ports 80 and 443 that does not come from Cloudflare.${failing.length ? "" : " Every site resolves to Cloudflare."}${opening(ctx, plan, role)}`,
+    text: `${words.provider} will drop every connection to ports 80 and 443 that does not come from Cloudflare.${dnsSummary}${opening(ctx, plan, role)}`,
     listLabel: failing.length === 1 ? "This hostname does not resolve to Cloudflare and stops answering"
       : failing.length ? `These ${failing.length} hostnames do not resolve to Cloudflare and stop answering` : "",
     details: failing, warnings: [...warnings, ...closing.lead], closes: closing.closes, wayBack: closing.shell,
@@ -539,7 +718,7 @@ export function disableReview<F>(
   const after = plan.after.map(ctx.guard);
   // The panel switch needs Cloudflare to reach 443 for the custom domain; this one may be what lets it.
   if (role === "web" && plan.cloudflare.has("panel")) {
-    const cut = ranges ? !reachable(after, 443, ranges) : !after.some((guard) => openings(guard, 443).length);
+    const cut = ranges ? !reachable(after, 443, ranges) : !anyTcpAllowed(after, 443);
     if (cut) {
       failAction(`Refused: with Panel through Cloudflare only on, CloudPanel's custom domain needs Cloudflare to reach 443, and no other ${words.noun} on this server allows it. Turn off Panel through Cloudflare only first, or allow 443 in another ${words.noun}; otherwise only an SSH tunnel to 127.0.0.1:8443 reaches the panel.`);
     }

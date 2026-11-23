@@ -155,13 +155,13 @@ function descriptionFor(access: Access, refreshedAt: number): string {
   return access === "open" ? `${OWNER_MARK}; open to anyone` : `${OWNER_MARK}; Cloudflare's list of ${refreshedAt}`;
 }
 
-/** A policy by what it lets reach this server, in netcup's order. A rule tied to source ports or another destination lets no client in. */
+/** A policy by what it lets reach this server, in netcup's order. A rule for another destination lets no client in. */
 function guardOf(policy: NetcupPolicy, ours: Cidr[] = []): Guard {
   const hits = (dest: Cidr) => dest.prefix === 0 || ours.some((address) => contains(dest, address));
   return {
     name: policy.name,
     rules: (policy.rules ?? []).flatMap((rule) => {
-      if (rule.direction !== "INGRESS" || rule.sourcePorts) return [];
+      if (rule.direction !== "INGRESS") return [];
       const rawSources = rule.sources?.length ? rule.sources : ANYONE;
       let sources = rawSources;
       if (rule.destinations?.length) {
@@ -179,6 +179,7 @@ function guardOf(policy: NetcupPolicy, ours: Cidr[] = []): Guard {
         port: rule.destinationPorts || "any",
         sources,
         accept: rule.action === "ACCEPT",
+        ...(rule.sourcePorts ? { sourcePorts: rule.sourcePorts } : {}),
       }];
     }),
   };
@@ -288,11 +289,13 @@ function signInRefused(error: unknown): boolean {
  * refresh token on every use, so the new one is saved before the access
  * token is used, under a lock so no two processes spend the same one.
  */
-async function signIn(paths: NetcupPaths, options: NetcupOptions, deadline?: number, tokenLockSeconds = 30): Promise<{ api: NetcupApi; auth: NetcupAuth; access: string }> {
+async function signIn(paths: NetcupPaths, options: NetcupOptions, deadline?: number, tokenLockSeconds = 30): Promise<{ api: NetcupApi; auth: NetcupAuth; access: string; accountId?: number }> {
   let auth = new NetcupAuth(options.fetch);
+  let accountId: number | undefined;
   const access = await withFileLock(paths.tokenLockFile, tokenLockSeconds, "another netcup sign-in is being refreshed", async () => {
     const token = readToken(paths);
     if (!token) failAction("Connect netcup first");
+    accountId = readSync(paths).userId;
     const left = deadline === undefined ? undefined : deadline - nowOf(options);
     if (left !== undefined && left <= 0) throw new NetcupError("the request timed out", 0, "timeout");
     auth = new NetcupAuth(options.fetch, left === undefined ? undefined : Math.min(15_000, left));
@@ -302,7 +305,7 @@ async function signIn(paths: NetcupPaths, options: NetcupOptions, deadline?: num
     }
     return tokens.access_token;
   });
-  return { api: new NetcupApi(access, options.fetch, { sleep: options.sleep, now: options.now, deadline }), auth, access };
+  return { api: new NetcupApi(access, options.fetch, { sleep: options.sleep, now: options.now, deadline }), auth, access, accountId };
 }
 
 interface Target { serverId: number; mac: string; serverName: string }
@@ -378,24 +381,27 @@ async function findServer(api: NetcupApi, addresses: string[], macs: string[]): 
   return byAddress;
 }
 
-/** Writes netcup.json, under the netcup lock unless the caller holds it; a change holding it writes its own. */
-async function saveSync(paths: NetcupPaths, change: Partial<NetcupSync>, locked: boolean): Promise<void> {
+/** Writes netcup.json, under the netcup lock unless the caller holds it; an unlocked read writes only for its own account. */
+async function saveSync(paths: NetcupPaths, change: Partial<NetcupSync>, locked: boolean, accountId?: number): Promise<void> {
   if (locked) return writeSync(paths, change);
   await withNetcupLock(paths, async () => {
-    if (readToken(paths)) writeSync(paths, change);
+    if (readToken(paths) && readSync(paths).userId === accountId) writeSync(paths, change);
   }, 0).catch(() => {});
 }
 
 /** Where this server is in the account, kept from the last time it was found; null when no server there is this one. */
-async function locate(paths: NetcupPaths, options: NetcupOptions, api: NetcupApi, locked: boolean, fresh = false): Promise<Target | null> {
+async function locate(paths: NetcupPaths, options: NetcupOptions, api: NetcupApi, locked: boolean, fresh = false, accountId?: number): Promise<Target | null> {
   const stored = readSync(paths);
-  if (!fresh && stored.serverId && stored.mac && stored.serverName) return { serverId: stored.serverId, mac: stored.mac, serverName: stored.serverName };
+  const sameAccount = locked || stored.userId === accountId;
+  if (!fresh && sameAccount && stored.serverId && stored.mac && stored.serverName) {
+    return { serverId: stored.serverId, mac: stored.mac, serverName: stored.serverName };
+  }
   const now = nowOf(options);
-  if (!fresh && stored.unmatchedAt && now >= stored.unmatchedAt && now - stored.unmatchedAt < UNMATCHED_FOR_MS) return null;
+  if (!fresh && sameAccount && stored.unmatchedAt && now >= stored.unmatchedAt && now - stored.unmatchedAt < UNMATCHED_FOR_MS) return null;
   const found = await findServer(api, addressesOf(options), (options.macs ?? interfaceMacs)());
   await saveSync(paths, found
     ? { serverId: found.serverId, mac: found.mac, serverName: found.serverName, unmatchedAt: undefined }
-    : { serverId: undefined, mac: undefined, serverName: undefined, unmatchedAt: now }, locked);
+    : { serverId: undefined, mac: undefined, serverName: undefined, unmatchedAt: now }, locked, accountId);
   return found;
 }
 
@@ -439,9 +445,9 @@ const unmatched = (options: NetcupOptions) => {
 };
 
 /** The interface's firewall, finding the server again once when netcup no longer knows the one kept; `missing` says why there is none. */
-async function readFirewall(paths: NetcupPaths, options: NetcupOptions, api: NetcupApi, locked: boolean): Promise<{ target: Target; firewall: NetcupFirewall } | { missing: string }> {
+async function readFirewall(paths: NetcupPaths, options: NetcupOptions, api: NetcupApi, locked: boolean, accountId?: number): Promise<{ target: Target; firewall: NetcupFirewall } | { missing: string }> {
   for (let fresh = false; ; fresh = true) {
-    const target = await locate(paths, options, api, locked, fresh);
+    const target = await locate(paths, options, api, locked, fresh, accountId);
     if (!target) return { missing: unmatched(options) };
     try {
       return { target, firewall: await api.firewall(target.serverId, target.mac) };
@@ -499,12 +505,13 @@ export async function netcupView(options: NetcupOptions = {}): Promise<NetcupVie
   const ours = addressesOf(options).map(parseCidr).filter((cidr): cidr is Cidr => cidr !== null);
   let clean = (text: string) => text;
   try {
-    const { api, auth } = await signIn(paths, options, deadline, 5);
+    const { api, auth, accountId } = await signIn(paths, options, deadline, 5);
     clean = (text) => auth.clean(api.clean(text));
-    const read = await readFirewall(paths, options, api, false);
+    const read = await readFirewall(paths, options, api, false, accountId);
     if ("missing" in read) {
       await withNetcupLock(paths, async () => {
-        if (readToken(paths) && (readSync(paths).seenAt ?? 0) < now) writeSync(paths, { seen: { web: false, panel: false }, seenAt: now });
+        const stored = readSync(paths);
+        if (readToken(paths) && stored.userId === accountId && (stored.seenAt ?? 0) < now) writeSync(paths, { seen: { web: false, panel: false }, seenAt: now });
       }, 0).catch(() => {});
       return { state: "error", connected: true, error: `${read.missing}.` };
     }
@@ -524,7 +531,8 @@ export async function netcupView(options: NetcupOptions = {}): Promise<NetcupVie
       roles[role] = roleView(role, Boolean(on), CLOUD_ROLES[role].name, open?.name ?? null, current, otherGuards, ranges, WORDS.noun);
     }
     await withNetcupLock(paths, async () => {
-      if (readToken(paths) && (readSync(paths).seenAt ?? 0) < now) writeSync(paths, { seen: seenOf(firewall), seenAt: now });
+      const stored = readSync(paths);
+      if (readToken(paths) && stored.userId === accountId && (stored.seenAt ?? 0) < now) writeSync(paths, { seen: seenOf(firewall), seenAt: now });
     }, 0).catch(() => {});
     return {
       state: "connected", serverId: target.serverId, serverName: target.serverName, roles,
@@ -605,16 +613,26 @@ export async function pollNetcup(options: NetcupOptions = {}): Promise<{ pending
     if (!found && readToken(paths)) failAction(unmatched(options));
     const userId = await findUserId(api, auth, reply.access_token, found?.serverId);
     return await withNetcupLock(paths, async () => {
-      const previous = readToken(paths);
-      if (previous && !found) failAction(unmatched(options));
-      await withFileLock(paths.tokenLockFile, 15, "another netcup sign-in is being refreshed", async () => {
+      const previous = await withFileLock(paths.tokenLockFile, 15, "another netcup sign-in is being refreshed", async () => {
+        const current = readToken(paths);
+        if (current && !found) failAction(unmatched(options));
         writeState(paths.tokenFile, { refreshToken }, paths.rootUid);
+        try {
+          writeState(paths.syncFile, found
+            ? { userId, serverId: found.serverId, mac: found.mac, serverName: found.serverName }
+            : { userId, unmatchedAt: nowOf(options) }, paths.rootUid);
+        } catch (syncError) {
+          try {
+            if (current) writeState(paths.tokenFile, { refreshToken: current }, paths.rootUid);
+            else rmSync(paths.tokenFile, { force: true });
+          } catch {
+            saved = true;
+          }
+          throw syncError;
+        }
         saved = true;
+        return current;
       });
-      rmSync(paths.syncFile, { force: true });
-      writeSync(paths, found
-        ? { userId, serverId: found.serverId, mac: found.mac, serverName: found.serverName }
-        : { userId, unmatchedAt: nowOf(options) });
       if (previous && previous !== refreshToken) await auth.revoke(previous).catch(() => {});
       return { notice: found ? `Connected to netcup; this server is ${found.serverName} there.` : `Connected to netcup. ${unmatched(options)}.` };
     }, 15);
@@ -667,9 +685,9 @@ export async function disconnectNetcup(options: NetcupOptions = {}): Promise<{ n
     const revoked = await withFileLock(paths.tokenLockFile, 30, "another netcup sign-in is being refreshed", async () => {
       const done = await auth.revoke(readToken(paths) ?? token).then(() => true, () => false);
       rmSync(paths.tokenFile, { force: true });
+      rmSync(paths.syncFile, { force: true });
       return done;
     });
-    rmSync(paths.syncFile, { force: true });
     return { notice: `The netcup sign-in is removed${revoked ? " and revoked" : "; netcup could not be asked to revoke it, so it lapses once unused"}.${inactive}${staying}${unchecked}` };
   });
 }
@@ -723,6 +741,7 @@ async function context(options: NetcupOptions, deadline: number) {
   const ours = addressesOf(options).map(parseCidr).filter((cidr): cidr is Cidr => cidr !== null);
   return {
     paths, api, target, firewall, policies, attached,
+    now: nowOf(options),
     clean: (text: string) => auth.clean(api.clean(text)),
     guard: (policy: NetcupPolicy) => guardOf(policy, ours),
     serverName: target.serverName,
@@ -768,6 +787,23 @@ async function bringOpenCurrent(api: NetcupApi, userId: number, role: CloudRole,
   return true;
 }
 
+/** Whether a policy claiming a newer Cloudflare list still matches the addon's Cloudflare-only rule shape. */
+function validNewerPolicy(role: CloudRole, rules: NetcupRule[] | undefined): boolean {
+  const first = String(CLOUD_ROLES[role].ports[0]);
+  const raw = (rules ?? [])
+    .filter((rule) => rule.direction === "INGRESS" && rule.protocol === "TCP" && rule.action === "ACCEPT" && rule.destinationPorts === first)
+    .flatMap((rule) => rule.sources ?? []);
+  const seen = new Map<string, Cidr>();
+  for (const entry of raw) {
+    const cidr = parseCidr(entry);
+    if (!cidr || cidr.hostBits || cidr.prefix < (cidr.v6 ? 16 : 8)) return false;
+    seen.set(cidr.text, cidr);
+  }
+  const list = [...seen.values()];
+  if (!list.some((cidr) => !cidr.v6) || !list.some((cidr) => cidr.v6)) return false;
+  return netcupSignature(rules) === netcupSignature(netcupRules(role, list.map((cidr) => cidr.text)));
+}
+
 /** The role's policy of that access, current, creating it if the account has none; returns its id. */
 async function ensurePolicy(ctx: Context, role: CloudRole, access: Access, list: CloudflareRanges | null): Promise<number> {
   const { api, target } = ctx;
@@ -782,7 +818,9 @@ async function ensurePolicy(ctx: Context, role: CloudRole, access: Access, list:
   }
   const full = await api.policy(target.userId, existing.id);
   if (access === "open") await bringOpenCurrent(api, target.userId, role, full);
-  else await bringCurrent(api, target.userId, role, full, list!);
+  else if (await bringCurrent(api, target.userId, role, full, list!, ctx.now) === "newer" && !validNewerPolicy(role, full.rules)) {
+    failAction(`${name} says it follows a newer Cloudflare list, but its rules do not match a Cloudflare-only policy; update this server's Cloudflare list or fix ${name} in SCP`);
+  }
   return existing.id;
 }
 
@@ -837,17 +875,7 @@ export async function setNetcupRole(
     const title = CLOUD_ROLES[role].title;
     const on = ctx.cloudflare[role];
     const stale = ctx.open[role];
-    if (enabled && on && stale) {
-      // Left from outside the addon; with the Cloudflare one on it only lets everyone else in.
-      const user = (ctx.firewall.userPolicies ?? []).filter((policy) => policy.id !== stale.id).map((policy) => policy.id);
-      try {
-        await ctx.api.setFirewall(ctx.target.serverId, ctx.target.mac, user, (ctx.firewall.copiedPolicies ?? []).map((policy) => policy.id));
-      } catch (error) {
-        failAction(writeFailure(ctx.clean, error, `take ${stale.name} off this server`));
-      }
-      return { notice: `${title} is on; ${stale.name} was still on this server and is now off.` };
-    }
-    if (enabled && on) return { notice: `${title} is already on.` };
+    if (enabled && on && !stale) return { notice: `${title} is already on.` };
     if (!enabled && !on) return { notice: `${title} is already off.` };
     let list: CloudflareRanges | null = null;
     if (enabled) {

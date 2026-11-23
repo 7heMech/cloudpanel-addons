@@ -167,21 +167,25 @@ export class NetcupApi {
     return this.http.clean(text);
   }
 
-  private async call<T>(path: string, method = "GET", body?: unknown): Promise<T> {
+  private async callWithStatus<T>(path: string, method = "GET", body?: unknown, deadline = this.options.deadline): Promise<{ status: number; data: T }> {
     let timeoutMs = this.options.timeoutMs;
-    if (this.options.deadline !== undefined) {
-      const left = this.options.deadline - this.now();
+    if (deadline !== undefined) {
+      const left = deadline - this.now();
       if (left <= 0) throw new NetcupError("the request timed out", 0, "timeout");
       timeoutMs = timeoutMs === undefined ? Math.min(15_000, left) : Math.min(timeoutMs, left);
     }
     const { status, json } = await this.http.request(path, method, body, timeoutMs);
-    if (status >= 200 && status < 300) return json as T;
+    if (status >= 200 && status < 300) return { status, data: json as T };
     const error = json as { code?: unknown; message?: unknown; errors?: { field?: unknown; message?: unknown }[] } | null;
     const code = typeof error?.code === "string" ? error.code : "";
     const fields = (Array.isArray(error?.errors) ? error.errors : [])
       .map((field) => `${String(field.field ?? "")}: ${String(field.message ?? "")}`).join("; ");
     const message = typeof error?.message === "string" && error.message ? error.message : `HTTP ${status}`;
     throw new NetcupError(this.clean(fields ? `${message} (${fields})` : message), status, code);
+  }
+
+  private async call<T>(path: string, method = "GET", body?: unknown, deadline = this.options.deadline): Promise<T> {
+    return (await this.callWithStatus<T>(path, method, body, deadline)).data;
   }
 
   private static mac(mac: string): string {
@@ -232,10 +236,11 @@ export class NetcupApi {
 
   /** Replaces the policies on the interface, in order, and waits until netcup applied them. */
   async setFirewall(serverId: number, mac: string, userPolicies: number[], copiedPolicies: number[]): Promise<void> {
-    const task = await this.call<TaskInfo | null>(`/servers/${serverId}/interfaces/${NetcupApi.mac(mac)}/firewall`, "PUT", {
+    const { status, data: task } = await this.callWithStatus<TaskInfo | null>(`/servers/${serverId}/interfaces/${NetcupApi.mac(mac)}/firewall`, "PUT", {
       userPolicies: userPolicies.map((id) => ({ id })), copiedPolicies: copiedPolicies.map((id) => ({ id })), active: true,
     });
-    if (task?.uuid) await this.settle(task);
+    if (typeof task?.uuid === "string" && task.uuid.trim()) await this.settle(task);
+    else if (status === 202) throw new NetcupError("took the change, but returned no task to track it", 0, "running");
   }
 
   /** Every policy in the account. The listing may leave out the rules; `policy` has them. */
@@ -253,8 +258,10 @@ export class NetcupApi {
 
   /** Rewrites a policy, and waits until netcup applied it to every server that has it. */
   async updatePolicy(userId: number, id: number, name: string, description: string, rules: NetcupRule[]): Promise<void> {
-    const reply = await this.call<{ taskInfo?: TaskInfo | null }>(`/users/${userId}/firewall-policies/${id}`, "PUT", { name, description, rules });
-    if (reply?.taskInfo?.uuid) await this.settle(reply.taskInfo);
+    const { status, data: reply } = await this.callWithStatus<{ taskInfo?: TaskInfo | null }>(`/users/${userId}/firewall-policies/${id}`, "PUT", { name, description, rules });
+    const task = reply?.taskInfo;
+    if (typeof task?.uuid === "string" && task.uuid.trim()) await this.settle(task);
+    else if (status === 202) throw new NetcupError("took the change, but returned no task to track it", 0, "running");
   }
 
   /**
@@ -263,14 +270,14 @@ export class NetcupApi {
    * from here is `running` or the state the task ended in, never a refusal.
    */
   private async settle(started: TaskInfo): Promise<void> {
-    let task = started;
+    let task: TaskInfo = started.state ? started : { ...started, state: "PENDING" };
     let lastError: unknown = null;
     const until = Math.min(this.now() + 60_000, this.options.deadline ?? Infinity);
     while ((task.state === "PENDING" || task.state === "RUNNING") && this.now() < until) {
       await this.sleep(Math.min(1000, until - this.now()));
       if (this.now() >= until) break;
       try {
-        task = await this.call<TaskInfo>(`/tasks/${encodeURIComponent(task.uuid)}`);
+        task = await this.call<TaskInfo>(`/tasks/${encodeURIComponent(task.uuid)}`, "GET", undefined, until);
         lastError = null;
       } catch (error) {
         lastError = error;

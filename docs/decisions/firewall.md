@@ -483,12 +483,13 @@ close, the way back, and, when ports close, the server's name to type.
   8443, so every Cloudflare range must also reach 443 through the firewalls
   the change leaves on this server. The review then says the panel answers
   only at that domain, and that an SSH tunnel to `127.0.0.1:8443` is the way
-  back, or Hetzner's web console when SSH closes too.
+  back, or Hetzner's web console when SSH is closed or closes too.
 - Sites: the review lists every hostname the sites answer to, each site's
   domain and the other names in its vhost's `server_name`, and the custom
   domain, whose A or AAAA records include an address outside the list: those
   stop answering. A name that does not resolve answers no one already and is
-  left out.
+  left out of the list, and the review does not claim every site resolves to
+  Cloudflare while any hostname did not resolve.
 - No effect: a source another attached firewall allows to the same ports that
   is not inside the list leaves the addon's firewall without effect. The review,
   the result and the card name the port, the firewall and the sources
@@ -542,10 +543,10 @@ checking Cloudflare's list, the two roles and their ports, the plan of which
 open firewalls a change needs, the review and its safeguards, the card's view,
 and the Setup state. Each provider maps its firewalls to a `Guard`, its inbound
 rules in the order the provider applies them, and says whether it lets in what
-no rule decides, now and after a change. A rule list is read first match wins;
-a drop decides only when it covers a whole address family. Hetzner rules only
-allow, so this is the union described above. Each provider keeps its own API
-client, how it finds this server, its credential, and how it carries out a
+no rule decides, now and after a change. A rule list is read first match wins
+across port subranges, source-port ranges, and address intervals; Hetzner rules
+only allow, so this is the union described above. Each provider keeps its own
+API client, how it finds this server, its credential, and how it carries out a
 plan.
 
 ## netcup firewall
@@ -569,21 +570,24 @@ the root action, at the interval netcup gives, whether access was granted;
 `slow_down` widens the interval; `access_denied`, `expired_token`,
 `invalid_grant`, `invalid_client`, `unauthorized_client` or `invalid_request`
 ends the attempt, and any other failure leaves the code for the page to ask
-again until it expires. After the grant, any failure before the new refresh
-token is saved revokes it; replacing a saved sign-in with an account that does
-not hold this server keeps the old sign-in and state, revokes the new token,
-and fails. Only the refresh token is kept, in `netcup-token.json` through
-`lib/root-state.ts`. Each read or change exchanges it for an access token
-under its own lock, and saves the token Keycloak returns before using the
-access token, since Keycloak may rotate it on each use and two processes must
-never spend the same one. `invalid_grant`, or a 401 from the API, is a sign-in
-netcup no longer accepts, and the card asks to connect again. Disconnecting
-revokes the refresh token at the realm's revocation endpoint and removes it,
-both under the token's lock, so a refresh running then cannot write a rotated
-token back. It is refused while netcup's firewall is on and a Cloudflare policy
-is on this server, as with Hetzner's token, and while netcup cannot be read for
-any reason but refusing the sign-in, since a policy left on the server would
-stop following Cloudflare's list unseen. When netcup's firewall is off,
+again until it expires. After the grant, `netcup-token.json` and `netcup.json`
+are written together under the token lock; if writing `netcup.json` fails, the
+previous token is restored (or the new one removed) and the new refresh token
+is revoked. Any failure before both are saved revokes the new token; replacing
+a saved sign-in with an account that does not hold this server keeps the old
+sign-in and state, revokes the new token, and fails. Only the refresh token is
+kept, in `netcup-token.json` through `lib/root-state.ts`. Each read or change
+exchanges it for an access token under its own lock, and saves the token
+Keycloak returns before using the access token, since Keycloak may rotate it
+on each use and two processes must never spend the same one. `invalid_grant`,
+or a 401 from the API, is a sign-in netcup no longer accepts, and the card asks
+to connect again. Disconnecting revokes the refresh token at the realm's
+revocation endpoint and removes both `netcup-token.json` and `netcup.json`
+under the token's lock, so a refresh running then cannot write a rotated token
+back. It is refused while netcup's firewall is on and a Cloudflare policy is on
+this server, as with Hetzner's token, and while netcup cannot be read for any
+reason but refusing the sign-in, since a policy left on the server would stop
+following Cloudflare's list unseen. When netcup's firewall is off,
 disconnecting goes ahead and warns that any Cloudflare policy left on the
 server will no longer follow the list. Messages are redacted of token and code
 values.
@@ -610,7 +614,9 @@ say it takes IPv6, so with no match every server's interfaces are checked,
 paging through `GET /servers`. Disabled servers and 4xx replies (other than
 401) from a single server's `/interfaces` are skipped. An IPv6-only server is
 found that way. Its id, MAC and name are kept in `netcup.json`, written under
-the netcup lock (a read that finds it busy leaves it to the change holding it);
+the netcup lock (a read that finds it busy leaves it to the change holding it,
+and an unlocked read writes only when `netcup.json` still holds the same SCP
+`userId` that started it);
 a no-match result is cached for 15 minutes so page loads do not rescan, and a
 page read is bounded to 25 seconds so a scan degrades the card rather than
 failing the Firewall page. When netcup answers 404 for the kept interface, the
@@ -631,7 +637,9 @@ only IPv6 would be cut off. netcup has no labels, so a policy is the addon's whe
 has one of the names and its description starts with `Managed by clp-addons`;
 a policy with the name and not that refuses the switch. The writer's list time
 is the end of the description (`; Cloudflare's list of <time>`), read like
-Hetzner's label. The listing may leave out rules, so each owned policy is read
+Hetzner's label. When a switch retains a policy claiming a newer list, it checks
+that the policy's rules still match a valid Cloudflare-only policy and refuses
+otherwise. The listing may leave out rules, so each owned policy is read
 on its own before it is compared. Listings are paged until a page is empty or
 brings no new id.
 
@@ -645,18 +653,25 @@ policies in their order, then the addon's, the copied policies unchanged.
 That write replaces the assignment at once, so nothing opens or closes in
 between and a refused write (4xx) changes nothing; a policy created for it
 stays unused. Writes answer with a task, which the addon waits for, retrying
-transient task-poll errors up to a minute each and three minutes across a
-switch, with at most a minute for the lock, so the page has its answer within
-the gateway's 240 seconds. netcup took a change it answered with a task: one
-still running when the wait ends is reported as taken and still applying, and
-one that ends in `ERROR`, `ROLLBACK` or `CANCELED` as failed, with SCP named
-for what the server has. Any other failure of the assignment write says netcup
-may have taken it. Policies are never deleted: the spec does not say what
-deleting one in use does to the servers that have it. Repair rewrites drifted
-policies, takes an open policy off beside its role's Cloudflare one, and
-records the switches. The 500-rule limit per interface is netcup's to refuse;
-at most two of the addon's policies sit on a server at once, holding at most 70
-effective rules.
+transient task-poll errors up to a minute each (with each poll bounded by the
+remaining task wait) and three minutes across a switch, with at most a minute
+for the lock, so the page has its answer within the gateway's 240 seconds.
+netcup took a change it answered with HTTP 202 or a task: a 202 with no usable
+task id or a task still running when the wait ends is reported as taken with
+unknown completion, and one that ends in `ERROR`, `ROLLBACK` or `CANCELED` as
+failed, with SCP named for what the server has. Any other failure of the
+assignment write says netcup may have taken it. Policies are never deleted: the
+spec does not say what deleting one in use does to the servers that have it.
+Repair rewrites drifted policies, takes an open policy off beside its role's
+Cloudflare one, and records the switches. Turning a switch on when both the
+Cloudflare and open policies are attached goes through the normal review and
+confirmation before removing the open policy. The 500-rule limit per interface
+is netcup's to refuse. netcup counts each source as a separate effective rule:
+at most two of the addon's policies sit on a server at once, where each
+Cloudflare policy holds one effective rule per source and port plus two for
+ICMP and ICMPv6 (70 effective rules with both switches on and a 22-range list;
+three more for each added range), and each open policy holds one wildcard TCP
+rule per port plus the two ICMP rules (4 for web, 3 for panel).
 
 ## Taking over from earlier releases
 
