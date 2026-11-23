@@ -313,10 +313,15 @@ function dnsShowReview(review, notice) {
   CLP_ROOT.getElementById('dns-review-heading').textContent = review.title;
   CLP_ROOT.getElementById('dns-review-text').textContent = (notice ? notice + ' ' : '') + review.text;
   const busySites = review.sites.filter(function (plan) { return plan.changes.length || plan.problems.length; });
-  const quiet = review.sites.length - busySites.length;
+  const quietSites = review.sites.filter(function (plan) { return !plan.changes.length && !plan.problems.length; });
+  const quiet = quietSites.length;
+  const quietWildcards = Array.from(new Set(quietSites.map(function (plan) { return plan.wildcard; }).filter(Boolean)));
+  const quietSuffix = quietWildcards.length === 1 && quietSites.every(function (plan) { return plan.wildcard === quietWildcards[0]; })
+    ? ' (covered by ' + quietWildcards[0] + ')' : '';
   CLP_ROOT.getElementById('dns-review-sites').innerHTML = busySites.map(function (plan) {
-    return '<section class="dns-review-site"><h3>' + dnsEsc(plan.domain) + '</h3>' + dnsProblems(plan.problems) + (plan.problems.length ? '' : dnsChanges(plan.changes)) + '</section>';
-  }).join('') + (quiet ? '<p class="hint">' + plural(quiet, 'other site') + ' already ' + (quiet === 1 ? 'matches' : 'match') + '.</p>' : '');
+    const blockedNote = !plan.problems.length && plan.wildcardBlocked ? '<p class="hint dns-wildcard-note">' + dnsEsc(plan.wildcardBlocked) + '.</p>' : '';
+    return '<section class="dns-review-site"><h3>' + dnsEsc(plan.domain) + '</h3>' + dnsProblems(plan.problems) + blockedNote + (plan.problems.length ? '' : dnsChanges(plan.changes)) + '</section>';
+  }).join('') + (quiet ? '<p class="hint">' + plural(quiet, busySites.length ? 'other site' : 'site') + ' already ' + (quiet === 1 ? 'matches' : 'match') + dnsEsc(quietSuffix) + '.</p>' : '');
   const confirm = CLP_ROOT.getElementById('dns-review-confirm');
   confirm.textContent = review.confirmLabel;
   confirm.className = review.danger ? 'btn btn-danger' : 'btn btn-primary';
@@ -365,7 +370,9 @@ function dnsShowSite(domain) {
       html += '<div class="notice">CloudPanel created this site, so its own address records went in straight away. The changes marked below reach further and wait until you review them.</div>';
     }
     if (!plan.problems.length && plan.changes.length) {
-      html += '<h3 class="dns-section">' + (dnsState.automatic ? 'To change' : 'Differences, not changed until DNS is Automatic') + '</h3>' + dnsChanges(plan.changes);
+      html += '<h3 class="dns-section">' + (dnsState.automatic ? 'To change' : 'Differences, not changed until DNS is Automatic') + '</h3>'
+        + (plan.wildcardBlocked ? '<p class="hint dns-wildcard-note">' + dnsEsc(plan.wildcardBlocked) + '.</p>' : '')
+        + dnsChanges(plan.changes);
       // A redirect has no Apply: the next check makes its changes.
       if (dnsState.automatic && site.redirect && !plan.held && plan.changes.some(function (change) { return change.action !== 'note'; })) {
         html += '<p class="hint">The next check makes these, within 15 minutes.</p>';
@@ -385,6 +392,10 @@ function dnsShowSite(domain) {
   if (plan && plan.zone) {
     html += '<dt>Zone</dt><dd>' + dnsEsc(plan.zone.name) + ' · ' + dnsEsc(plan.zone.status) + '</dd>' +
       '<dt>Through</dt><dd>' + dnsEsc(plan.zone.connection) + ' · ' + dnsEsc(plan.zone.account) + '</dd>';
+  }
+  if (plan && plan.wildcard) html += '<dt>Covered by</dt><dd class="mono">' + dnsEsc(plan.wildcard) + '</dd>';
+  else if (plan && !plan.problems.length && !plan.changes.length && plan.wildcardBlocked) {
+    html += '<dt>Wildcard</dt><dd>' + dnsEsc(plan.wildcardBlocked) + '.</dd>';
   }
   if (site.ssl) html += '<dt>Certificate</dt><dd>' + dnsEsc(site.ssl) + '</dd>';
   html += '</dl>';
@@ -656,6 +667,53 @@ function dnsSaveServer(event) {
 
 // --- panel hostname ---------------------------------------------------------
 
+/** Eight unambiguous lowercase characters (~39 bits), starting with a letter, with no wordlist to scan. */
+function dnsRandomLabel() {
+  const first = 'abcdefghjkmnpqrstuvwxyz';
+  const rest = 'abcdefghjkmnpqrstuvwxyz23456789';
+  const pick = function (alphabet) {
+    const limit = Math.floor(256 / alphabet.length) * alphabet.length;
+    const buf = new Uint8Array(1);
+    let n = 256;
+    while (n >= limit) {
+      crypto.getRandomValues(buf);
+      n = buf[0];
+    }
+    return alphabet[n % alphabet.length];
+  };
+  let out = pick(first);
+  for (let i = 1; i < 8; i++) out += pick(rest);
+  return out;
+}
+
+function dnsPanelBase(value, savedBase) {
+  const clean = value.trim().toLowerCase().replace(/\.+$/, '');
+  const zones = (dnsState.zones || []).slice().sort(function (a, b) { return b.length - a.length; });
+  if (clean) {
+    if (!/^[a-z0-9-]+(\.[a-z0-9-]+)+$/.test(clean)) return '';
+    const matched = zones.find(function (zone) { return clean === zone || clean.endsWith('.' + zone); });
+    if (matched) return matched;
+    if (savedBase && (clean === savedBase || clean.endsWith('.' + savedBase))) return savedBase;
+    const planZone = dnsState.panelHost && dnsState.panelHost.plan && dnsState.panelHost.plan.zone && dnsState.panelHost.plan.zone.name;
+    if (planZone && (clean === planZone || clean.endsWith('.' + planZone))) return planZone;
+    return clean;
+  }
+  return zones.length === 1 ? zones[0] : '';
+}
+
+function dnsRandomPanelHost() {
+  const input = CLP_ROOT.getElementById('dns-panel-host-name');
+  const base = dnsPanelBase(input.value, input.dataset.randomBase || '');
+  if (!base) {
+    input.focus();
+    notify('Enter your domain first, such as example.com, then choose Random.', 'warn');
+    return;
+  }
+  input.dataset.randomBase = base;
+  input.value = dnsRandomLabel() + '.' + base;
+  input.focus();
+}
+
 function dnsSavePanelHost(event) {
   event.preventDefault();
   const name = event.currentTarget.elements.namedItem('name').value.trim();
@@ -668,9 +726,10 @@ function dnsSavePanelHost(event) {
 }
 
 async function dnsRemovePanelHost() {
+  const viaWildcard = Boolean(dnsState.panelHost.plan && dnsState.panelHost.plan.wildcard);
   const accepted = await confirmAction({
     title: 'Remove the panel hostname?',
-    text: 'DNS stops managing ' + dnsState.panelHost.name + '. Its records stay in Cloudflare, listed with the records of deleted sites, and CloudPanel keeps its custom domain.',
+    text: 'DNS stops managing ' + dnsState.panelHost.name + '.' + (viaWildcard ? ' ' : ' Any explicit records stay in Cloudflare, listed with the records of deleted sites, and ') + 'CloudPanel keeps its custom domain.',
     confirmLabel: 'Remove', danger: true,
   });
   if (accepted) dnsPost('/api/panel-host', { name: null });

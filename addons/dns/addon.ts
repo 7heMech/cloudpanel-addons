@@ -12,6 +12,7 @@ export const DNS_ADDON: AddonDefinition = {
   description: "Keep each site's Cloudflare DNS to a profile of records, with Mailcow set up for its mail.",
   added: "2.0.0-rc.1",
   changed: [
+    { in: "2.2.0-rc.3", note: "DNS deletes a subdomain site's own A, AAAA and CNAME records once an unobstructed matching wildcard covers the site. New installs' Web preset writes an apex-only *.{domain} wildcard instead of www. Panel hostname offers a random label generator and hands off to a proxied wildcard after the certificate is issued." },
     { in: "2.2.0-rc.1", note: "Panel hostname: DNS points the name you give CloudPanel's custom domain at this server, and proxies it once CloudPanel has its certificate." },
     { in: "2.2.0-rc.1", note: "Each Cloudflare connection shows its token's permissions. A token made before 2.0.0-rc.10 needs API Tokens: Read added in Cloudflare to show them." },
   ],

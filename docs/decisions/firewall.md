@@ -250,7 +250,8 @@ Hetzner switches do. The review changes nothing, a clean-up of an earlier
 gate included, so cancelling it leaves everything as it was. It refuses unless CloudPanel has a custom domain, both
 vhosts have the shape the edits expect, an active panel user has an email, a
 DNS connection's token reaches an active zone for the hostname (the longest),
-the hostname has A, AAAA or CNAME records and all are proxied, and the token
+the hostname has proxied A, AAAA or CNAME records of its own or is covered by an
+unobstructed proxied wildcard in the zone, and the token
 holds SSL and Certificates: Edit on the zone and both Access permissions on
 its account. Those three are in DNS's permission list (`addons/dns/token.ts`)
 as optional, so a DNS token without them is fine until the gate is wanted; the

@@ -621,4 +621,55 @@ describe("final review fixes", () => {
     await pending;
     expect(readGateState(b.options).on).toBe(true);
   });
+
+  test("accepts an unobstructed proxied wildcard and refuses an unproxied or RFC 4592 blocked wildcard", async () => {
+    const b = box();
+    b.cf.records.set(b.zoneId, []);
+    b.cf.record("example.com", { type: "A", name: "*.example.com", content: "203.0.113.10", proxied: true });
+    expect((await panelGateView(b.options)).problems).toEqual([]);
+    expect((await turnOn(b)).reply).toMatchObject({ notice: expect.stringContaining("The Panel gate is on") });
+
+    const unproxied = box();
+    unproxied.cf.records.set(unproxied.zoneId, []);
+    unproxied.cf.record("example.com", { type: "A", name: "*.example.com", content: "203.0.113.10", proxied: false });
+    expect((await panelGateView(unproxied.options)).problems.join(" "))
+      .toContain(`${HOST} is covered by *.example.com, which is not proxied through Cloudflare`);
+
+    const blockedByTxt = box();
+    blockedByTxt.cf.records.set(blockedByTxt.zoneId, []);
+    blockedByTxt.cf.record("example.com", { type: "A", name: "*.example.com", content: "203.0.113.10", proxied: true });
+    blockedByTxt.cf.record("example.com", { type: "TXT", name: HOST, content: "verify=1" });
+    expect((await panelGateView(blockedByTxt.options)).problems).toContain(`${HOST} has no A, AAAA or CNAME record in Cloudflare.`);
+
+    const blockedByEnt = box();
+    blockedByEnt.cf.records.set(blockedByEnt.zoneId, []);
+    blockedByEnt.cf.record("example.com", { type: "A", name: "*.example.com", content: "203.0.113.10", proxied: true });
+    blockedByEnt.cf.record("example.com", { type: "TXT", name: `dkim._domainkey.${HOST}`, content: "v=DKIM1;p=abc" });
+    expect((await panelGateView(blockedByEnt.options)).problems).toContain(`${HOST} has no A, AAAA or CNAME record in Cloudflare.`);
+
+    const mixedProxy = box();
+    mixedProxy.cf.records.set(mixedProxy.zoneId, []);
+    mixedProxy.cf.record("example.com", { type: "A", name: "*.example.com", content: "203.0.113.10", proxied: true });
+    mixedProxy.cf.record("example.com", { type: "AAAA", name: "*.example.com", content: "2001:db8::10", proxied: false });
+    expect((await panelGateView(mixedProxy.options)).problems.join(" "))
+      .toContain(`${HOST} is covered by *.example.com, which is not proxied through Cloudflare`);
+
+    // Intermediate-ancestor ENT and NS zone cut both block wildcard matching for a nested custom domain.
+    const nestedHost = "a.b.example.com";
+    const blockedAncestor = box();
+    writeFileSync(join(blockedAncestor.dir, "custom-domain"), `${nestedHost}\n`);
+    writeFileSync(join(blockedAncestor.dir, "sites", "custom-domain.conf"), CUSTOM_DOMAIN.replaceAll(HOST, nestedHost));
+    blockedAncestor.cf.records.set(blockedAncestor.zoneId, []);
+    blockedAncestor.cf.record("example.com", { type: "A", name: "*.example.com", content: "203.0.113.10", proxied: true });
+    blockedAncestor.cf.record("example.com", { type: "TXT", name: "other.b.example.com", content: "x" });
+    expect((await panelGateView(blockedAncestor.options)).problems).toContain(`${nestedHost} has no A, AAAA or CNAME record in Cloudflare.`);
+
+    const nsCut = box();
+    writeFileSync(join(nsCut.dir, "custom-domain"), `${nestedHost}\n`);
+    writeFileSync(join(nsCut.dir, "sites", "custom-domain.conf"), CUSTOM_DOMAIN.replaceAll(HOST, nestedHost));
+    nsCut.cf.records.set(nsCut.zoneId, []);
+    nsCut.cf.record("example.com", { type: "NS", name: "b.example.com", content: "ns1.elsewhere.example" });
+    nsCut.cf.record("example.com", { type: "A", name: "*.b.example.com", content: "203.0.113.10", proxied: true });
+    expect((await panelGateView(nsCut.options)).problems).toContain(`${nestedHost} has no A, AAAA or CNAME record in Cloudflare.`);
+  });
 });

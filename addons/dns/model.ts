@@ -34,7 +34,7 @@ export interface RecordTemplate {
   ttl: number;
   /** MX and SRV only. */
   priority: number | null;
-  /** Only when the site's domain is its zone's apex, as `www` should be. */
+  /** Only when the site's domain is its zone's apex, such as `*.{domain}` or `webmail.{domain}`. */
   apexOnly: boolean;
 }
 

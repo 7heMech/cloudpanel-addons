@@ -23,7 +23,10 @@ fleet.
 
 A row has a type (A, AAAA, CNAME, MX, TXT, SRV, CAA), a name, content, proxy,
 TTL, a priority for MX and SRV, and "apex only", which skips the row when the
-site is not its zone's apex -- what `www` needs. Names and content take
+site is not its zone's apex. The Web preset uses apex only for `*.{domain}`,
+Mailcow uses it for `autoconfig`, `autodiscover`, `_autodiscover._tcp` and
+`webmail`, and DMARC uses it for `_dmarc`, so subdomain sites inherit the apex
+wildcard and policy without publishing extra names. Names and content take
 `{domain}`, `{zone}`, `{sub}` and `{mailcow.selector}`; content also takes
 `{ipv4}`, `{ipv6}`, `{mailcow.host}` and `{mailcow.dkim}`. A rendered name
 must lie in the site's zone; `{zone}` is how a `www.example.com` site reaches
@@ -54,6 +57,26 @@ keeps its own.
 A name below the zone apex that is delegated by NS records, or an NS or SOA
 record a CNAME row would replace, stops the site. Two sites in one zone whose
 profiles want different records at the same name stop each other.
+
+When a subdomain site wants only A or AAAA records at a name and an unobstructed
+wildcard in the zone matches the exact address set and proxy state under RFC
+4592, DNS omits those explicit records and deletes any redundant A, AAAA or
+CNAME left at that name. Any record at or below the subdomain, or at an
+intermediate ancestor with no wildcard of its own, stops a broader wildcard from
+matching; DNS then writes explicit A and AAAA records and reports which record
+blocked the wildcard. Within a zone, wildcard writers run first, redirects and
+explicit or non-address writers next from deepest name to shallowest, blocked
+explicit subdomain sites after those, and wildcard-covered sites last. Each site
+re-plans against live zone records before writing, so redundant subdomain records
+go only after the wildcard exists and no sibling record blocks it. Pre-enforce
+planning runs two passes over problem-free siblings in scope so reviews preview
+both planned wildcards and non-covered explicit sibling blockers, while
+post-enforce saved plans and orphan checks evaluate strictly against live
+records. Every relied-on wildcard stays in the site's wanted names, so removing
+a deleted apex site's records never deletes a wildcard another managed site
+uses. Changing a site whose profile has or had a wildcard row brings managed
+subdomains in its zone into the same review, and changing a descendant or
+intermediate-ancestor sibling brings affected managed subdomains along as well.
 
 SPF is merged rather than replaced (RFC 7208): the published record keeps its
 senders, their order, its `all` or `redirect=` ending and its modifiers, and the
@@ -160,8 +183,8 @@ written before the placeholders, so a placeholder never answers without it.
 
 Its profile's web rows are left out and every other row applies, so mail and
 its DKIM key follow the profile as they do for a site. A web row is derived,
-not marked: an A, AAAA or CNAME row whose rendered name is the source or its
-`www`. Nothing else could live there, since the placeholder needs the name, so
+not marked: an A, AAAA or CNAME row whose rendered name is the source, its
+`www` or its `*.`. Nothing else could live there, since the placeholder needs the name, so
 no row needs a flag and no profile needs editing. The placeholder claims A and
 AAAA at each host, and so any CNAME there, which is what replaces the A and
 AAAA records a site or Terraform left. Zone options apply as for a site, and a
@@ -245,15 +268,22 @@ deletes both.
 
 The panel hostname is a third kind of entry beside sites and redirect domains,
 planned through the same switch, reviews, log and lock, with a fixed profile:
-A and AAAA at the name, no mail, and the ACME Full SSL rule for its zone. It
-cannot be a site's or a redirect's name; one created later at it stops it with
-a problem. It asks for no certificate, since CloudPanel issues the custom
-domain's own, and its records are tracked like a site's, so removing it lists
-them with the records of deleted sites.
+A and AAAA at the name, no mail, and the ACME Full SSL rule for its zone. The
+page offers a Random button that generates an eight-character unambiguous
+lowercase label starting with a letter from `a-z` and continuing with `a-z` and
+`2-9`, excluding `i`, `l`, `o`, `0` and `1`, and suggests connected zone names,
+while keeping the field editable. Let's Encrypt publishes issued leaf
+certificate names in public Certificate Transparency logs, so a random label
+avoids obvious guessing while Firewall's Panel gate is what blocks access if the
+name is found via CT logs. It cannot be a site's or a redirect's name; one
+created later at it stops it with a problem. It asks for no certificate, since
+CloudPanel issues the custom domain's own, and its records are tracked like a
+site's, so removing it lists them with the records of deleted sites.
 
 Its records are unproxied until CloudPanel's custom domain is that name and
 serves a certificate a CA issued for it (`lib/panel-custom-domain.ts`), then
-proxied. Saving the custom domain in CloudPanel writes the vhost with a
+proxied, or deleted when an unobstructed proxied wildcard in the zone already
+covers the hostname and matches the server's addresses. Saving the custom domain in CloudPanel writes the vhost with a
 placeholder certificate, the Let's Encrypt one about six seconds later, then
 `/etc/.clp_custom_domain`, all from one HTTP-01 check made at once. Direct, the
 check works whatever the zone's settings; proxied, it needs Full SSL, and under
@@ -448,12 +478,14 @@ DNS declares `newSites`, so the shared watcher (see
 profile and, once DNS is Automatic, writes it, normally within seconds and before SMTP Relay, which
 waits at most fifteen seconds for it.
 
-Creating a site points its names at this server, so a new site's records are
-created and its own address records -- A, AAAA or CNAME at the site and `www`
--- are replaced at once, with no review. If its profile would do more, such as
-update or delete other records or change a zone setting, the site is held: its
-rules are still written, but the rest waits, through every later check, until
-an administrator reviews it. Placing the site in a profile by hand, or the
+Creating a site points its names at this server, so a new site's records at
+names with no published records yet, including a missing `*.{domain}` wildcard,
+and its own address records at the site and `www`, are written at once with no
+review. If its profile would do more, such as update, delete or add beside an
+existing record at `*.{domain}` or another name, or change a zone setting, the
+site is held: its rules are still written, but the rest waits, through every
+later check, until an administrator reviews it. While an apex site's wildcard
+waits for review, `www` is left out of its certificate names. Placing the site in a profile by hand, or the
 page's Review changes, runs the usual review and clears the hold. Readiness
 ignores the held changes. One read of the panel that finds no sites changes no
 assignment.
@@ -464,8 +496,9 @@ non-administrators: the action is told the panel user and refuses a site
 `panelUserOwnsSite` does not give them, and answers with readiness, a reason (a
 fixed one when a non-administrator's site has a problem, since a plan's problems
 can name other sites and quote provider errors), a pending zone and its
-nameservers, and the certificate names only -- the site and `www` where the profile writes an
-address there. A site in no profile, or any site while DNS asks first, is not DNS's to hold up.
+nameservers, and the certificate names only: the site and `www` where the
+profile writes an address there, or covers `www` through an unobstructed
+wildcard. A site in no profile, or any site while DNS asks first, is not DNS's to hold up.
 A non-administrator's call checks Cloudflare only for a site created in the last
 fifteen minutes; for an older one it answers from the last check, so repeating
 it cannot keep the DNS lock and the provider's rate limit busy.
@@ -547,12 +580,14 @@ and error text is redacted of them. A saved Mailcow key is kept only for the
 Mailcow address it was saved with.
 
 The records a site DNS writes has as wanted are tracked by id and their full
-record values, including priority, proxy, TTL and comment. A site taken out of
+record values, including priority, proxy, TTL and comment. A settled enforcing
+entry handed off to a wildcard with no pending changes and no matched records of
+its own clears its tracked entry so it leaves no orphans. A site taken out of
 its profile, or every site when DNS goes back to Ask first, is forgotten there
 and then: its records are its own again. When CloudPanel no longer has such a
 site, the page
 lists them; Remove plans the deletion of those
-still unchanged and at no name a current site's profile writes, and deletes
+still unchanged and at no name a current site writes or relies on, and deletes
 them after the same kind of review. It refuses while a site in that zone could
 not be read or planned safely. Keep forgets them. Neither touches the zone or Mailcow.
 When every connection, the one that wrote them among them, lists its zones

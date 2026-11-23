@@ -86,7 +86,7 @@ export function siteStatus(site: SiteView, automatic: boolean): { label: string;
   if (plan.zone && plan.zone.status !== "active") return { label: `Zone ${plan.zone.status}`, tone: "warn", hint: "Set its nameservers at the registrar" };
   if (!plan.zone && pending) return { label: "Zone to create", tone: "warn", hint: "" };
   if (pending) return { label: automatic ? `${plural(pending, "change")} to make` : plural(pending, "difference"), tone: "warn", hint: zone };
-  return { label: "In sync", tone: "ok", hint: zone };
+  return { label: "In sync", tone: "ok", hint: plan.wildcard && plan.zone ? `${plan.wildcard} · ${plan.zone.connection}` : zone };
 }
 
 /** A line under a status, cut to two lines in the table; Details and the tooltip have it whole. */
@@ -278,8 +278,12 @@ const PANEL_SETTINGS_URL = "/admin/settings";
 /** A name for CloudPanel itself, pointed here and proxied once CloudPanel has its certificate. */
 function panelHostCard(state: DnsState): string {
   const host = state.panelHost;
+  const zones = state.zones.length
+    ? `<datalist id="dns-zone-list">${state.zones.map((zone) => `<option value="${esc(zone)}"></option>`).join("")}</datalist>`
+    : "";
   const form = `<form class="dns-panel-host-form" onsubmit="dnsSavePanelHost(event)">
-      <input id="dns-panel-host-name" name="name" aria-label="Panel hostname" autocomplete="off" spellcheck="false" placeholder="panel.example.com" value="${esc(host?.name ?? "")}">
+      <input id="dns-panel-host-name" name="name" aria-label="Panel hostname" autocomplete="off" spellcheck="false" placeholder="k7m2p9x4.example.com"${zones ? ' list="dns-zone-list"' : ""} value="${esc(host?.name ?? "")}">${zones}
+      <button class="btn" type="button" onclick="dnsRandomPanelHost()">Random</button>
       <button class="btn${host ? "" : " btn-primary"}" type="submit">${host ? "Change" : "Save"}</button>
       ${host ? '<button class="btn btn-danger" type="button" onclick="dnsRemovePanelHost()">Remove</button>' : ""}</form>`;
   let body = "";
@@ -291,18 +295,19 @@ function panelHostCard(state: DnsState): string {
     const settings = `<a href="${PANEL_SETTINGS_URL}">Admin → Settings → Custom Domain</a>`;
     const custom = host.customDomain;
     const next = host.problem ? ""
-      : host.proxied ? "CloudPanel's custom domain, proxied through Cloudflare. The zone's Full SSL rule for Let's Encrypt checks keeps its renewals working."
-      : custom?.name === host.name ? "CloudPanel is getting its certificate. DNS proxies it through Cloudflare once that is issued."
+      : host.proxied && !pending.length && host.plan ? `CloudPanel's custom domain, proxied through Cloudflare${host.plan.wildcard ? ` via ${esc(host.plan.wildcard)}` : ""}. The zone's Full SSL rule for Let's Encrypt checks keeps its renewals working.`
+      : !host.proxied && custom?.name === host.name ? "CloudPanel is getting its certificate. DNS proxies it through Cloudflare once that is issued."
       : pending.length || !host.plan ? (state.automatic ? (pending.length ? "The next check writes these, within 15 minutes." : "") : "DNS asks first, so the record is written once you turn on Automatic.")
       : `Next: enter ${esc(host.name)} under ${settings} in CloudPanel. DNS proxies it through Cloudflare once CloudPanel has its certificate.${custom ? ` CloudPanel's custom domain is ${esc(custom.name)} now.` : ""}`;
     body = `<div class="dns-panel-host-status"><span class="badge tone-${status.tone}">${esc(status.label)}</span>${status.hint ? `<span class="hint">${esc(status.hint)}</span>` : ""}</div>
+      ${host.plan?.wildcardBlocked && !host.problem && !host.plan.problems.length ? `<p class="hint dns-wildcard-note">${esc(host.plan.wildcardBlocked)}.</p>` : ""}
       ${pending.length && !host.problem ? `<ul class="dns-panel-host-changes">${pending.map((change) =>
         `<li><span class="badge dns-${esc(change.action)}">${esc(LOG_LABELS[change.action] ?? change.action)}</span> <strong>${esc(change.subject)}</strong> <span class="hint">${esc(change.detail)}</span></li>`).join("")}</ul>` : ""}
       ${host.plan?.problems.length ? `<ul class="dns-panel-host-changes">${host.plan.problems.map((problem) => `<li class="tone-bad">${esc(problem)}</li>`).join("")}</ul>` : ""}
       ${next ? `<p class="dns-panel-host-next">${next}</p>` : ""}`;
   }
   return `<div class="card" id="dns-panel-host"><div class="card-header"><div><h2>Panel hostname</h2>
-      <p class="hint">A name for CloudPanel itself, such as panel.example.com. DNS points it at this server without Cloudflare's proxy, so CloudPanel can get its certificate, then proxies it.</p></div></div>
+      <p class="hint">A name for CloudPanel itself that isn't easy to guess, such as k7m2p9x4.example.com. DNS points it at this server without Cloudflare's proxy so CloudPanel can get its certificate, then proxies it or hands it off to your zone's wildcard.</p></div></div>
     <div class="dns-panel-host-body">${form}${body}</div></div>`;
 }
 

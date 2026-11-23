@@ -13,6 +13,7 @@ import { DNS_VERBS } from "./verbs";
 import { Database } from "bun:sqlite";
 import { createHash, randomBytes } from "node:crypto";
 import { existsSync } from "node:fs";
+import { getDomain } from "tldts";
 import { ActionFailure, replyToAction, failAction, readJsonRequest } from "../../lib/action";
 import { errorMessage } from "../../lib/errors";
 import { nameSlug, oneLine } from "../../lib/validate";
@@ -134,8 +135,10 @@ export interface DnsState {
   profiles: (Profile & { sites: number })[];
   defaultProfileId: string | null;
   sites: SiteView[];
-  connections: (Omit<ConnectionReport, "token" | "refused"> & { hasToken: boolean; access: AccessView | null })[];
+  connections: (Omit<ConnectionReport, "token" | "refused" | "zoneNames"> & { hasToken: boolean; access: AccessView | null })[];
   accounts: { connectionId: string; accountId: string; label: string }[];
+  /** Active or pending zone names the connections reach, for picking a zone on the page. */
+  zones: string[];
   mailcow: MailcowSettings & { hasKey: boolean };
   /** SMTP Relay's accounts, which the Mailcow form can be filled from. */
   smtpRelays: SmtpRelayAccount[];
@@ -497,8 +500,15 @@ class Action {
       backoff: run.backoff(),
     });
     const managed = this.files.managed();
-    for (const [domain, entry] of Object.entries(run.managed(plans.filter((plan) => domains === "all" || domains.includes(plan.domain))))) {
-      managed[domain] = entry;
+    const checked = plans.filter((plan) => domains === "all" || domains.includes(plan.domain));
+    const tracked = run.managed(checked);
+    for (const plan of checked) {
+      if (tracked[plan.domain]) managed[plan.domain] = tracked[plan.domain]!;
+      // A settled enforcing entry handed off to a wildcard has no explicit records left to track.
+      else if (plan.mode === "enforce" && !plan.redirect && plan.zone && !plan.problems.length && plan.wildcard
+        && !plan.changes.some((change) => change.action !== "note")) {
+        delete managed[plan.domain];
+      }
     }
     for (const [domain, entry] of Object.entries(managed)) {
       if (current.has(domain) || !run.zoneGone(entry)) continue;
@@ -551,7 +561,7 @@ class Action {
       ].sort((a, b) => a.domain.localeCompare(b.domain)),
       connections: policy.connections.map((connection) => {
         const stored = status.connections.find((entry) => entry.id === connection.id);
-        const { token: _token, refused: _refused, ...report } = stored ?? { id: connection.id, active: false, status: "unchecked", accounts: [], zones: 0, error: null };
+        const { token: _token, refused: _refused, zoneNames: _zoneNames, ...report } = stored ?? { id: connection.id, active: false, status: "unchecked", accounts: [], zones: 0, error: null };
         return {
           ...report,
           label: connection.label,
@@ -560,6 +570,7 @@ class Action {
         };
       }),
       accounts,
+      zones: [...new Set(status.connections.flatMap((connection) => connection.zoneNames ?? []))].sort(),
       mailcow: { ...policy.mailcow, hasKey: Boolean(secrets.mailcowKey) },
       smtpRelays: smtpRelayAccounts(this.paths.smtpConfig, this.paths.rootUid),
       server: { ...policy.server, detected: this.addresses() },
@@ -606,7 +617,7 @@ class Action {
     if (!chosen.length && domains !== "all") return;
     await run.discover(domains === "all");
     await run.load(chosen);
-    this.record(run, run.planAll(), domains === "all" ? "all" : chosen);
+    this.record(run, run.planAll(domains === "all" ? undefined : chosen, true), domains === "all" ? "all" : chosen);
   }
 
   /** Every site: read, write what Automatic writes, and record the result. */
@@ -624,7 +635,7 @@ class Action {
       this.savePolicy(policy);
     }
     await run.enforce(planned);
-    const plans = run.planAll();
+    const plans = run.planAll(undefined, true);
     this.record(run, plans, "all");
     if (retrySsl) {
       await this.retrySsl(plans);
@@ -678,13 +689,15 @@ class Action {
     const policy = this.adoptNewSites(before);
     const joined = this.joined(before, policy);
     if (!joined.length) return [];
+    const joinedDomains = joined.map((site) => site.domain);
+    const domains = this.wildcardAffected(policy, policy, joinedDomains);
     const run = this.run(policy);
     await run.discover();
-    await run.load(joined.map((site) => site.domain));
-    this.hold(run, policy, joined.map((site) => site.domain));
-    await run.enforce(joined.map((site) => site.domain));
-    this.record(run, run.planAll(), joined.map((site) => site.domain));
-    return joined.map((site) => site.domain);
+    await run.load(domains);
+    this.hold(run, policy, joinedDomains);
+    await run.enforce(domains);
+    this.record(run, run.planAll(domains, true), domains);
+    return joinedDomains;
   }
 
   /**
@@ -708,7 +721,7 @@ class Action {
     await run.discover();
     await run.load([host]);
     await run.enforce([host]);
-    this.record(run, run.planAll(), [host]);
+    this.record(run, run.planAll([host], true), [host]);
     return run.panelProxied ? `${host} is proxied through Cloudflare` : `${host} is no longer proxied`;
   }
 
@@ -731,12 +744,13 @@ class Action {
         const requests = this.files.ssl();
         if (requestSsl(requests, site, this.now)) this.files.saveSsl(requests);
       }
+      const domains = this.wildcardAffected(policy, policy, [domain]);
       const run = this.run(policy);
       await run.discover();
-      await run.load([domain]);
-      await run.enforce([domain]);
-      const plans = run.planAll();
-      this.record(run, plans, [domain]);
+      await run.load(domains);
+      await run.enforce(domains);
+      const plans = run.planAll(domains, true);
+      this.record(run, plans, domains);
       plan = plans.find((candidate) => candidate.domain === domain);
     }
     const ready = readiness(plan);
@@ -792,8 +806,8 @@ class Action {
       const redirect = redirectOf(policy, domain);
       return policy.profiles.find((profile) => profile.id === (redirect ? redirect.profileId : policy.assignments[domain]));
     };
-    const domains = [...this.sites().map((site) => site.domain), ...after.redirects.map((redirect) => redirect.source), ...after.panelHost ? [after.panelHost] : []];
-    return [...new Set(domains)].filter((domain) => {
+    const domains = [...new Set([...this.sites().map((site) => site.domain), ...after.redirects.map((redirect) => redirect.source), ...after.panelHost ? [after.panelHost] : []])];
+    const direct = domains.filter((domain) => {
       if (domain === after.panelHost && !this.sites().some((site) => site.domain === domain) && !redirectOf(after, domain)) {
         return !before.automatic || createIn || before.panelHost !== domain || JSON.stringify(before.server) !== JSON.stringify(after.server)
           || Object.keys({ ...before.zoneChoices, ...after.zoneChoices }).some((zone) =>
@@ -814,6 +828,64 @@ class Action {
       return Object.keys({ ...before.zoneChoices, ...after.zoneChoices }).some((zone) =>
         (domain === zone || domain.endsWith(`.${zone}`)) && JSON.stringify(before.zoneChoices[zone]) !== JSON.stringify(after.zoneChoices[zone]));
     });
+    return this.wildcardAffected(before, after, direct);
+  }
+
+  /**
+   * Expands `direct` with managed subdomains whose wildcard coverage could
+   * change: subdomains under a changed wildcard writer (including `*.{zone}`),
+   * managed subdomain ancestors that a new descendant would turn into an ENT,
+   * and subdomains sharing an intermediate ancestor above the registrable base.
+   */
+  private wildcardAffected(before: Policy, after: Policy, direct: string[]): string[] {
+    if (!direct.length) return [];
+    const profileOf = (policy: Policy, domain: string) => {
+      const redirect = policy.redirects.find((candidate) => candidate.source === domain);
+      return policy.profiles.find((profile) => profile.id === (redirect ? redirect.profileId : policy.assignments[domain]));
+    };
+    const registrable = (domain: string) => getDomain(domain, { allowPrivateDomains: false }) ?? domain;
+    const hasWildcard = (profile: Profile | undefined) => Boolean(profile?.records.some((row) => row.name.startsWith("*.")));
+    const wildcardBases = new Set<string>();
+    const wildcardHosts: string[] = [];
+    for (const domain of direct) {
+      const profiles = [profileOf(before, domain), profileOf(after, domain)];
+      if (!profiles.some(hasWildcard)) continue;
+      wildcardHosts.push(domain);
+      if (profiles.some((profile) => profile?.records.some((row) => row.name.startsWith("*.") && row.name.includes("{zone}")))) {
+        wildcardBases.add(registrable(domain));
+      }
+    }
+    const intermediateAncestors = (domain: string): string[] => {
+      const base = registrable(domain);
+      const list: string[] = [];
+      let current = domain;
+      while (current !== base) {
+        const dot = current.indexOf(".");
+        if (dot < 0) break;
+        current = current.slice(dot + 1);
+        if (current !== base) list.push(current);
+      }
+      return list;
+    };
+    const directSet = new Set(direct);
+    const directIntermediates = new Set(direct.flatMap(intermediateAncestors));
+    const domains = [...new Set([...this.sites().map((site) => site.domain), ...after.panelHost ? [after.panelHost] : []])];
+    const set = new Set(direct);
+    for (const domain of domains) {
+      if (set.has(domain)) continue;
+      if (!profileOf(after, domain) && domain !== after.panelHost) continue;
+      const base = registrable(domain);
+      if (domain === base) continue;
+      if (wildcardHosts.some((root) => domain.endsWith(`.${root}`)) || wildcardBases.has(base)) {
+        set.add(domain);
+        continue;
+      }
+      if (direct.some((changed) => changed.endsWith(`.${domain}`))
+        || intermediateAncestors(domain).some((ancestor) => directIntermediates.has(ancestor) || directSet.has(ancestor))) {
+        set.add(domain);
+      }
+    }
+    return [...set];
   }
 
   private digest(plans: SitePlan[]): string {
@@ -846,7 +918,7 @@ class Action {
     const run = this.run(next, this.secretsWith(mailcowKey));
     await run.discover();
     await run.load(domains);
-    const plans = run.planAll().filter((plan) => domains.includes(plan.domain));
+    const plans = run.planAll(domains).filter((plan) => domains.includes(plan.domain));
     const blocked = plans.some((plan) => plan.problems.length > 0);
     const token = blocked ? "" : randomBytes(24).toString("hex");
     this.files.savePending(blocked ? null : {
@@ -885,7 +957,7 @@ class Action {
     const run = this.run(next, this.secretsWith(pending.mailcowKey));
     await run.discover();
     await run.load(pending.domains);
-    const plans = run.planAll().filter((plan) => pending.domains.includes(plan.domain));
+    const plans = run.planAll(pending.domains).filter((plan) => pending.domains.includes(plan.domain));
     if (this.digest(plans) !== pending.digest) {
       return this.review(current, next, pending.domains, "Cloudflare or Mailcow changed after the plan was shown. This is the plan now.", pending.mailcowKey);
     }
@@ -894,7 +966,7 @@ class Action {
     this.files.savePending(null);
     this.cause = "Confirmed review";
     await run.enforce(pending.domains);
-    this.record(run, run.planAll(), pending.domains);
+    this.record(run, run.planAll(pending.domains, true), pending.domains);
     return this.reply({ notice: `Applied to ${pending.domains.length} site${pending.domains.length === 1 ? "" : "s"}.${current.automatic ? "" : " DNS is Automatic."}` });
   }
 
@@ -908,7 +980,7 @@ class Action {
     await run.discover();
     if (run.zoneGone(entry)) return { run, entry, ids: [], plans: [], gone: true };
     await run.load(run.plannedDomains());
-    const currentPlans = run.planAll();
+    const currentPlans = run.planAll(undefined, true);
     if (run.unread(entry.zoneId)) failAction(`${entry.zoneName} could not be read for the sites in it; check again before removing records`);
     const uncertain = currentPlans.some((plan) => plan.profileId && plan.problems.length
       && (plan.zone ? plan.zone.id === entry.zoneId : plan.domain === entry.zoneName || plan.domain.endsWith(`.${entry.zoneName}`)));
@@ -950,7 +1022,7 @@ class Action {
       review: {
         token,
         title: `Remove ${domain}'s records`,
-        text: `${ids.length} record${ids.length === 1 ? "" : "s"} in ${entry.zoneName} will be deleted.${skipped ? ` ${skipped} other${skipped === 1 ? " was" : "s were"} changed in Cloudflare or ${skipped === 1 ? "is" : "are"} written by another site, and ${skipped === 1 ? "stays" : "stay"}.` : ""} The zone and Mailcow are not touched.`,
+        text: `${ids.length} record${ids.length === 1 ? "" : "s"} in ${entry.zoneName} will be deleted.${skipped ? ` ${skipped} other${skipped === 1 ? " was" : "s were"} changed in Cloudflare or ${skipped === 1 ? "is" : "are"} used by another site, and ${skipped === 1 ? "stays" : "stay"}.` : ""} The zone and Mailcow are not touched.`,
         sites: plans,
         blocked: ids.length === 0,
         confirmLabel: "Remove records",

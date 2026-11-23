@@ -196,6 +196,7 @@ function dnsPreviewState(url: URL): DnsState {
       { connectionId: "cf-1", accountId: "b".repeat(32), label: "Clients (Agency)" },
       { connectionId: "cf-2", accountId: "c".repeat(32), label: "Church account (Church)" },
     ],
+    zones: setup ? [] : ["church.example", "example-brand.net", "example.com", "example.net", "example.org"],
     mailcow: setup
       ? { url: "", host: "", dkimSource: "", dkimSelector: "dkim", dkimBits: 2048, sharedMailbox: "", hasKey: false }
       : { url: "https://mail.example.net", host: "mail.example.net", dkimSource: "example.net", dkimSelector: "dkim", dkimBits: 2048, sharedMailbox: "relay@example.net", hasKey: true },
@@ -215,7 +216,7 @@ function dnsPreviewState(url: URL): DnsState {
 function dnsPreviewPanelHost(url: URL, setup: boolean, plan: (domain: string, extra: Partial<DnsSitePlan>) => DnsSitePlan): DnsState["panelHost"] {
   const stage = url.searchParams.get("panelhost") ?? (setup ? null : "new");
   if (!stage || stage === "none") return null;
-  const name = "panel.example.com";
+  const name = "k7m2p9x4.example.com";
   const record = (_type: string, address: string, proxied: boolean) => `${address} · ${proxied ? "proxied" : "DNS only"}`;
   const changes: DnsSitePlan["changes"] = stage === "new"
     ? [{ action: "create", subject: `A ${name}`, detail: record("A", "203.0.113.10", false) }, { action: "create", subject: `AAAA ${name}`, detail: record("AAAA", "2001:db8::10", false) }]
@@ -223,7 +224,7 @@ function dnsPreviewPanelHost(url: URL, setup: boolean, plan: (domain: string, ex
   return {
     name,
     problem: stage === "clash" ? `CloudPanel has a site ${name}; remove the panel hostname or delete the site` : null,
-    plan: stage === "clash" ? null : { ...plan(name, { profileId: "panel-hostname", certificateNames: [] }), panel: true, changes },
+    plan: stage === "clash" ? null : { ...plan(name, { profileId: "panel-hostname", certificateNames: [], ...(stage === "proxied" ? { wildcard: "*.example.com" } : {}) }), panel: true, changes },
     customDomain: stage === "waiting" ? { name, issued: false } : stage === "proxied" ? { name, issued: true } : null,
     proxied: stage === "proxied",
   };

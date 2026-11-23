@@ -28,7 +28,7 @@ export interface SiteVars {
 
 type TxtKind = "spf" | "dkim" | "dmarc" | "other";
 
-interface Claim {
+export interface Claim {
   name: string;
   type: string;
   /** For TXT: which values the row speaks for. */
@@ -187,15 +187,16 @@ export function renderProfile(profile: Profile, vars: SiteVars, skip?: (name: st
 }
 
 const WEB_TYPES = new Set(["A", "AAAA", "CNAME"]);
+const ADDRESS_TYPES = new Set(["A", "AAAA"]);
 
 /**
  * What a redirect domain wants: its profile's rows, if it has one, without the
- * web rows -- address and CNAME rows at the domain and its `www` -- and a
- * proxied placeholder at each host the redirect answers for, which owns every
- * address and CNAME there. Mail rows and anything else render as for a site.
+ * web rows -- address and CNAME rows at the domain, its `www` and its `*.` --
+ * and a proxied placeholder at each host the redirect answers for, which owns
+ * every address and CNAME there. Mail rows and anything else render as for a site.
  */
 export function renderRedirect(profile: Profile | null, hosts: string[], vars: SiteVars, placeholder: string): Rendered {
-  const own = new Set([vars.domain, `www.${vars.domain}`]);
+  const own = new Set([vars.domain, `www.${vars.domain}`, `*.${vars.domain}`]);
   const web = (name: string, type: string) => own.has(name) && WEB_TYPES.has(type);
   const rendered: Rendered = profile ? renderProfile(profile, vars, web) : { zone: vars.zone, records: [], claims: [], waitingDkim: [], problems: [] };
   for (const host of hosts) {
@@ -206,7 +207,7 @@ export function renderRedirect(profile: Profile | null, hosts: string[], vars: S
 }
 
 /** Whether a published record is one of the records `claims` speak for. */
-function claimedBy(record: CfRecord, claims: Claim[]): boolean {
+function claimedBy(record: Pick<CfRecord, "name" | "type" | "content">, claims: Claim[]): boolean {
   return claims.some((claim) => {
     if (claim.name !== record.name) return false;
     if (claim.type === "CNAME" || record.type === "CNAME") return true;
@@ -216,13 +217,97 @@ function claimedBy(record: CfRecord, claims: Claim[]): boolean {
   });
 }
 
-export function sameRecord(current: CfRecord, wanted: RecordWrite): boolean {
+export function sameRecord(current: Pick<CfRecord, "type" | "name" | "content" | "proxied" | "ttl" | "priority">, wanted: RecordWrite): boolean {
   if (current.type !== wanted.type || current.name !== wanted.name) return false;
   if (canonical(current.type, current.content) !== canonical(wanted.type, wanted.content)) return false;
   if (PROXIABLE.includes(wanted.type as never) && current.proxied !== wanted.proxied) return false;
   // Cloudflare reports a proxied record's TTL as Auto whatever was asked for.
   if (!wanted.proxied && current.ttl !== wanted.ttl) return false;
   return (current.priority ?? null) === (wanted.priority ?? null);
+}
+
+function strictAncestors(name: string, zone: string): string[] {
+  const result: string[] = [];
+  let current = name;
+  while (current !== zone) {
+    const dot = current.indexOf(".");
+    if (dot < 0) break;
+    current = current.slice(dot + 1);
+    result.push(current);
+  }
+  return result;
+}
+
+/**
+ * The RFC 4592 wildcard that synthesises answers for `name` inside `zone`,
+ * given every record in the zone. Any record at or below `name`, or at or below
+ * an intermediate ancestor that has no wildcard of its own, stops a broader
+ * wildcard from matching.
+ */
+export function wildcardSource<T extends Pick<CfRecord, "type" | "name">>(
+  name: string,
+  zone: string,
+  records: readonly T[],
+  ignore?: (record: T) => boolean,
+): { wildcard: string; records: T[] } | null {
+  if (name === zone || !name.endsWith(`.${zone}`) || name.startsWith("*.")) return null;
+  const others = ignore ? records.filter((record) => !ignore(record)) : records;
+  if (others.some((record) => record.name === name || record.name.endsWith(`.${name}`))) return null;
+  const ancestors = strictAncestors(name, zone);
+  // A delegation zone cut above `name` occludes any wildcard in this zone at or below the cut.
+  if (ancestors.some((base) => base !== zone && others.some((record) => record.type === "NS" && record.name === base))) return null;
+  for (const base of ancestors) {
+    const exists = base === zone || others.some((record) => record.name === base || record.name.endsWith(`.${base}`));
+    if (!exists) continue;
+    const wildcard = `*.${base}`;
+    const found = records.filter((record) => record.name === wildcard);
+    return found.length ? { wildcard, records: found } : null;
+  }
+  return null;
+}
+
+/**
+ * When `wildcardSource` returns null because another record blocks an ancestor
+ * wildcard, returns that wildcard and the blocking record so the plan can say why.
+ */
+function wildcardBlocker<T extends Pick<CfRecord, "type" | "name">>(
+  name: string,
+  zone: string,
+  records: readonly T[],
+  ignore?: (record: T) => boolean,
+): { wildcard: string; records: T[]; by: T } | null {
+  if (name === zone || !name.endsWith(`.${zone}`) || name.startsWith("*.")) return null;
+  const others = ignore ? records.filter((record) => !ignore(record)) : records;
+  const ancestors = strictAncestors(name, zone);
+  if (ancestors.some((base) => base !== zone && others.some((record) => record.type === "NS" && record.name === base))) return null;
+  let blocker = others.find((record) => record.name === name || record.name.endsWith(`.${name}`));
+  for (const base of ancestors) {
+    if (!blocker && base !== zone) {
+      const ancestor = others.find((record) => record.name === base || record.name.endsWith(`.${base}`));
+      if (ancestor) {
+        const wildcard = `*.${base}`;
+        if (!records.some((record) => record.name === wildcard)) blocker = ancestor;
+        else return null;
+      }
+    }
+    if (!blocker) continue;
+    const wildcard = `*.${base}`;
+    const found = records.filter((record) => record.name === wildcard);
+    if (found.length) return { wildcard, records: found, by: blocker };
+  }
+  return null;
+}
+
+function wildcardMatchesAddresses(wildcard: string, wildcardRecords: readonly RecordWrite[], wanted: readonly RecordWrite[]): boolean {
+  const candidates = wildcardRecords.filter((record) => WEB_TYPES.has(record.type));
+  if (!candidates.length || candidates.length !== wanted.length) return false;
+  const matched = new Set<number>();
+  for (const record of wanted) {
+    const index = candidates.findIndex((candidate, i) => !matched.has(i) && sameRecord(candidate, { ...record, name: wildcard }));
+    if (index < 0) return false;
+    matched.add(index);
+  }
+  return true;
 }
 
 export interface RecordOp {
@@ -238,16 +323,36 @@ export interface Diff {
   matched: CfRecord[];
   /** The records wanted once SPF is merged, for comparing sites and reporting. */
   wanted: RecordWrite[];
-  /** Every name the profile writes at, wanted or not, which no orphan removal may touch. */
+  /** Every name the profile writes at or relies on, which no orphan removal may touch. */
   names: string[];
+  /** Subdomains whose address records are satisfied by an unobstructed wildcard, mapped to that wildcard. */
+  covered: Record<string, string>;
+  /** Subdomains where a matching wildcard exists in the zone but another record blocks it under RFC 4592. */
+  blockedWildcard: Record<string, { wildcard: string; by: string }>;
   problems: string[];
+}
+
+export interface DiffOptions {
+  /** Whether an unobstructed matching wildcard in the zone satisfies subdomain A/AAAA rows. Defaults to true. */
+  allowWildcard?: boolean;
+  /** Records other sites in the same zone are planning to hold in this run. */
+  zoneRecords?: RecordWrite[];
+  /** Claims of other sites in the same zone, so planned wildcard updates supersede stale published wildcards. */
+  zoneClaims?: Claim[];
 }
 
 const PROTECTED = new Set(["NS", "SOA"]);
 
+function syntheticTxt(name: string): RecordWrite {
+  return { type: "TXT", name, content: "", proxied: false, ttl: 1, priority: null };
+}
+
 /** What it takes to turn `published` into what `rendered` wants, without touching anything it does not claim. */
-export function diffRecords(rendered: Rendered, published: CfRecord[]): Diff {
-  const diff: Diff = { ops: [], matched: [], wanted: [], names: [...new Set(rendered.claims.map((claim) => claim.name))], problems: [...rendered.problems] };
+export function diffRecords(rendered: Rendered, published: CfRecord[], options: DiffOptions = {}): Diff {
+  const diff: Diff = {
+    ops: [], matched: [], wanted: [], names: [...new Set(rendered.claims.map((claim) => claim.name))],
+    covered: {}, blockedWildcard: {}, problems: [...rendered.problems],
+  };
   for (const record of rendered.records) {
     if (record.type !== "TXT" || !isSpf(record.content)) {
       diff.wanted.push(record);
@@ -261,6 +366,41 @@ export function diffRecords(rendered: Rendered, published: CfRecord[]): Diff {
     }
     // An SPF record that already lists every sender the profile needs is left exactly as written.
     diff.wanted.push({ ...record, content: merged.changed ? merged.value : existing[0]!.content });
+  }
+
+  if (options.allowWildcard !== false && !diff.problems.length) {
+    const plannedRecords = [...diff.wanted, ...(options.zoneRecords ?? [])];
+    const wildcardClaims = [...rendered.claims, ...(options.zoneClaims ?? [])].filter((claim) => claim.name.startsWith("*."));
+    // For wildcard names claimed in this plan, use the planned wildcard records in place of stale published ones.
+    const effectiveZone: RecordWrite[] = [
+      ...published.filter((record) => !(record.name.startsWith("*.") && claimedBy(record, wildcardClaims))),
+      ...plannedRecords,
+      ...rendered.waitingDkim.map(syntheticTxt),
+    ];
+    const claimedNames = [...new Set(rendered.claims.map((claim) => claim.name))];
+    const coveredNames = new Set<string>();
+    for (const name of claimedNames) {
+      if (name === rendered.zone || !name.endsWith(`.${rendered.zone}`) || name.startsWith("*.")) continue;
+      const claimsAtName = rendered.claims.filter((claim) => claim.name === name);
+      const addressClaims = claimsAtName.filter((claim) => ADDRESS_TYPES.has(claim.type));
+      if (!addressClaims.length) continue;
+      const wantedAddresses = diff.wanted.filter((record) => record.name === name && ADDRESS_TYPES.has(record.type));
+      if (!wantedAddresses.length) continue;
+      const ignore = (record: RecordWrite) => record.name === name && claimedBy(record, addressClaims);
+      const onlyAddresses = claimsAtName.length === addressClaims.length;
+      const source = onlyAddresses ? wildcardSource(name, rendered.zone, effectiveZone, ignore) : null;
+      if (source && wildcardMatchesAddresses(source.wildcard, source.records, wantedAddresses)) {
+        diff.covered[name] = source.wildcard;
+        if (!diff.names.includes(source.wildcard)) diff.names.push(source.wildcard);
+        coveredNames.add(name);
+      } else if (!source) {
+        const blocked = wildcardBlocker(name, rendered.zone, effectiveZone, ignore);
+        if (blocked && wildcardMatchesAddresses(blocked.wildcard, blocked.records, wantedAddresses)) {
+          diff.blockedWildcard[name] = { wildcard: blocked.wildcard, by: `${blocked.by.type} ${blocked.by.name}` };
+        }
+      }
+    }
+    if (coveredNames.size) diff.wanted = diff.wanted.filter((record) => !(coveredNames.has(record.name) && ADDRESS_TYPES.has(record.type)));
   }
 
   const pool = published.filter((current) => claimedBy(current, rendered.claims) && !rendered.waitingDkim.includes(current.name));
@@ -304,9 +444,11 @@ export function diffRecords(rendered: Rendered, published: CfRecord[]): Diff {
     });
   }
   const creates: RecordOp[] = unmatched.map(({ record }) => ({ action: "create", record }));
-  const deletes: RecordOp[] = pool.filter((current) => !used.has(current)).map((current) => ({ action: "delete", record: current, current }));
-  // In place first, so a merged SPF is saved before its duplicates go; then what blocks a create.
-  diff.ops = [...updates, ...deletes, ...creates];
+  const allDeletes: RecordOp[] = pool.filter((current) => !used.has(current)).map((current) => ({ action: "delete", record: current, current }));
+  const conflictDeletes = allDeletes.filter((op) => !diff.covered[op.record.name]);
+  const coveredDeletes = allDeletes.filter((op) => Boolean(diff.covered[op.record.name]));
+  // In place first, so a merged SPF is saved before its duplicates go; then conflicts blocking creates, then creates, then wildcard-handoff deletes.
+  diff.ops = [...updates, ...conflictDeletes, ...creates, ...coveredDeletes];
   return diff;
 }
 
