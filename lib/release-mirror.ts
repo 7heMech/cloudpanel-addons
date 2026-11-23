@@ -19,7 +19,7 @@ export interface MirroredRelease {
 
 function isRelease(value: unknown): value is MirroredRelease {
   const release = value as MirroredRelease | null;
-  return typeof release?.tag_name === "string" && typeof release.prerelease === "boolean" && Array.isArray(release.assets) &&
+  return typeof release?.tag_name === "string" && release.prerelease === isPrerelease(release.tag_name) && Array.isArray(release.assets) &&
     release.assets.every((asset) => typeof asset?.name === "string" && typeof asset.browser_download_url === "string");
 }
 

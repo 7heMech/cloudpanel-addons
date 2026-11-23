@@ -75,8 +75,10 @@ trap cleanup EXIT
 # substituted binary would come with a substituted install.sh.
 fetch_from() {
   local base=$1 expected
-  curl -fsSL -o "${TMP}/SHA256SUMS" "${base}/SHA256SUMS" || return 1
-  curl -fSL --progress-bar -o "${TMP}/${ARTIFACT}" "${base}/${ARTIFACT}" || return 1
+  # A stalled source gives up after a minute below 1 KB/s, so the next one is tried.
+  local limits=(--connect-timeout 20 --speed-limit 1024 --speed-time 60)
+  curl -fsSL "${limits[@]}" -o "${TMP}/SHA256SUMS" "${base}/SHA256SUMS" || return 1
+  curl -fSL "${limits[@]}" --progress-bar -o "${TMP}/${ARTIFACT}" "${base}/${ARTIFACT}" || return 1
   expected=$(awk -v f="$ARTIFACT" '$2 == f || $2 == "*" f { print $1 }' "${TMP}/SHA256SUMS" | head -1)
   [[ -n $expected ]] || { warn "SHA256SUMS does not list ${ARTIFACT}"; return 1; }
   [[ $(sha256sum "${TMP}/${ARTIFACT}" | awk '{print $1}') == "$expected" ]] || { warn "checksum mismatch for ${ARTIFACT}"; return 1; }

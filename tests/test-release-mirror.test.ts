@@ -46,6 +46,7 @@ describe("planMirror", () => {
 test("parseMirrorIndex refuses anything that is not a release list", () => {
   expect(parseMirrorIndex({ tag_name: "v1.0.0" })).toBeNull();
   expect(parseMirrorIndex([{ tag_name: "v1.0.0", prerelease: false, assets: [{ name: 1 }] }])).toBeNull();
+  expect(parseMirrorIndex([{ tag_name: "v3.0.0-rc.1", draft: false, prerelease: false, assets: [] }])).toBeNull();
   expect(parseMirrorIndex(indexOf("v1.0.0"))).toHaveLength(1);
 });
 
