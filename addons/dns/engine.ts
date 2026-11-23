@@ -199,6 +199,16 @@ function reason(error: unknown): string {
   return errorMessage(error);
 }
 
+interface SiblingPlan {
+  zoneKey: string;
+  records: RecordWrite[];
+  wildcardClaims: Claim[];
+}
+
+type Siblings = Map<string, SiblingPlan>;
+
+const ADDRESS_TYPES = new Set(["A", "AAAA"]);
+
 export class DnsRun {
   readonly connections: ConnectionReport[] = [];
   /** What this run wrote, in the order it was written. */
@@ -546,68 +556,59 @@ export class DnsRun {
   }
 
   /**
-   * Wildcard records and non-address records that sibling entries in the same
-   * zone are planning to hold in this run, so a subdomain site planned beside
-   * its apex sees the wildcard the apex is creating and any sibling record
-   * that would block a wildcard under RFC 4592.
+   * Collects sibling records and wildcard claims for `zoneKey` from `siblings`,
+   * excluding `exclude`, so a subdomain planned beside sibling entries sees
+   * planned wildcards and any sibling record that would block a wildcard.
    */
-  private zoneContext(target: { kind: "zone"; zoneId: string; zoneName: string; published: CfRecord[] } | { kind: "missing"; zoneName: string }, exclude: string, scope?: Set<string>): { zoneRecords: RecordWrite[]; zoneClaims: Claim[] } {
+  private siblingContext(siblings: Siblings | undefined, zoneKey: string, exclude: string): { zoneRecords: RecordWrite[]; zoneClaims: Claim[] } | undefined {
+    if (!siblings) return undefined;
     const zoneRecords: RecordWrite[] = [];
     const zoneClaims: Claim[] = [];
-    if (!this.context.policy.automatic) return { zoneRecords, zoneClaims };
-    const ADDRESS = new Set(["A", "AAAA"]);
-    for (const entry of this.entries) {
-      if (entry.domain === exclude || (scope && !scope.has(entry.domain))) continue;
-      if (this.failures.get(entry.domain)?.length) continue;
-      if (entry.redirect && (this.siteDomains.has(entry.domain) || this.onServer() || this.held.has(entry.domain))) continue;
-      const profile = this.profileOf(entry.domain);
-      if (!profile && !entry.redirect) continue;
-      if (profile && profile.records.some((row) => MAILCOW_PLACEHOLDER.test(row.name + row.content)) && !profile.mailcow) continue;
-      if (profile?.mailcow) {
-        const mail = this.mail.get(entry.domain);
-        if (!this.mailcow || !this.context.policy.mailcow.host || (mail && "error" in mail)) continue;
-      }
-      const resolved = this.resolve(entry.domain);
-      if (target.kind === "zone") {
-        if (resolved.kind !== "zone" || resolved.ref.zone.id !== target.zoneId) continue;
-      } else {
-        if (resolved.kind !== "missing" || resolved.name !== target.zoneName || !resolved.createIn) continue;
-      }
-      const rendered = entry.redirect
-        ? renderRedirect(profile, redirectHosts(entry.redirect.source, target.zoneName), this.vars(entry.domain, target.zoneName, profile), PLACEHOLDER)
-        : renderProfile(profile!, this.vars(entry.domain, target.zoneName, profile));
-      if (rendered.problems.length) continue;
-      const held = this.held.has(entry.domain);
-      for (const record of rendered.records) {
-        if (record.name.startsWith("*.")) {
-          // A held new site creates a missing wildcard, but never overwrites an existing one.
-          if (held && target.kind === "zone" && target.published.some((current) => current.name === record.name)) continue;
-          zoneRecords.push(record);
-        } else if (entry.redirect || !ADDRESS.has(record.type)) {
-          zoneRecords.push(record);
-        }
-      }
-      for (const claim of rendered.claims) {
-        if (!claim.name.startsWith("*.")) continue;
-        if (held && target.kind === "zone" && target.published.some((current) => current.name === claim.name)) continue;
-        zoneClaims.push(claim);
-      }
-      for (const dkim of rendered.waitingDkim) {
-        zoneRecords.push({ type: "TXT", name: dkim, content: "", proxied: false, ttl: 1, priority: null });
-      }
+    for (const [domain, sibling] of siblings) {
+      if (domain === exclude || sibling.zoneKey !== zoneKey) continue;
+      zoneRecords.push(...sibling.records);
+      zoneClaims.push(...sibling.wildcardClaims);
     }
     return { zoneRecords, zoneClaims };
   }
 
+  /** What a problem-free entry contributes to sibling planning in its zone. */
+  private recordSibling(
+    out: Siblings | undefined,
+    site: PanelSite,
+    zoneKey: string,
+    plan: SitePlan,
+    rendered: Rendered,
+    diff: Diff,
+    published: readonly CfRecord[],
+    allWanted: boolean,
+  ): void {
+    if (!out || plan.problems.length || (site.redirect && plan.held)) return;
+    const waitsAt = (name: string) => Boolean(plan.held) && !site.redirect
+      && diff.ops.some((op) => op.record.name === name && !pointsOwnName(site.domain, op, published));
+    const records: RecordWrite[] = [];
+    for (const record of diff.wanted) {
+      if (waitsAt(record.name)) continue;
+      if (record.name.startsWith("*.") || allWanted || site.redirect || !ADDRESS_TYPES.has(record.type)) {
+        records.push(record);
+      }
+    }
+    for (const dkim of rendered.waitingDkim) {
+      records.push({ type: "TXT", name: dkim, content: "", proxied: false, ttl: 1, priority: null });
+    }
+    const wildcardClaims = rendered.claims.filter((claim) => claim.name.startsWith("*.") && !waitsAt(claim.name));
+    out.set(site.domain, { zoneKey, records, wildcardClaims });
+  }
+
   /** The plan for one site, or one redirect domain, from what has been read. */
-  planSite(site: PanelSite, scope?: Set<string>): SitePlan {
-    const plan = this.planEntry(site, scope);
+  planSite(site: PanelSite, siblings?: Siblings, out?: Siblings, allWanted = false): SitePlan {
+    const plan = this.planEntry(site, siblings, out, allWanted);
     // A redirect domain held after a connection arrived waits for its review as a whole.
     if (site.redirect && plan.held) plan.changes = plan.changes.map((change) => change.action === "note" ? change : { ...change, waits: true });
     return plan;
   }
 
-  private planEntry(site: PanelSite, scope?: Set<string>): SitePlan {
+  private planEntry(site: PanelSite, siblings?: Siblings, out?: Siblings, allWanted = false): SitePlan {
     const { redirect } = site;
     const profile = this.profileOf(site.domain);
     const plan: SitePlan = {
@@ -663,13 +664,16 @@ export class DnsRun {
           const hosts = redirectHosts(redirect.source, resolved.name);
           plan.changes.push({ action: "create", subject: "Cloudflare redirect rule", detail: `${hosts.join(" and ")}: ${describeRedirect(redirect)}` });
         }
-        const ctx = redirect ? undefined : this.zoneContext({ kind: "missing", zoneName: resolved.name }, site.domain, scope);
+        const zoneKey = `missing:${resolved.name}`;
+        const rendered = render(resolved.name);
+        const ctx = redirect ? undefined : this.siblingContext(siblings, zoneKey, site.domain);
         // A new zone is empty, so everything the profile wants (other than what a sibling's wildcard covers) is a record to create.
-        const diff = diffRecords(render(resolved.name), [], { allowWildcard: !redirect, ...ctx });
+        const diff = diffRecords(rendered, [], { allowWildcard: !redirect, ...ctx });
         plan.problems.push(...diff.problems);
         this.noteWildcard(plan, diff, site.domain);
         for (const op of diff.ops) plan.changes.push(this.recordChange(op, diff));
         if (redirect) this.standInChange(redirect.source, resolved.name, false, plan);
+        this.recordSibling(out, site, zoneKey, plan, rendered, diff, [], allWanted);
       }
       return plan;
     }
@@ -688,8 +692,9 @@ export class DnsRun {
     this.zoneChanges(state, zoneWants(own).wants, plan);
     if (redirect) this.redirectRuleChange(state, redirect, plan);
 
+    const zoneKey = `zone:${resolved.ref.zone.id}`;
     const rendered = render(resolved.ref.zone.name);
-    const ctx = redirect ? undefined : this.zoneContext({ kind: "zone", zoneId: resolved.ref.zone.id, zoneName: resolved.ref.zone.name, published: state.records }, site.domain, scope);
+    const ctx = redirect ? undefined : this.siblingContext(siblings, zoneKey, site.domain);
     const diff = diffRecords(rendered, state.records, { allowWildcard: !redirect, ...ctx });
     this.diffs.set(site.domain, diff);
     plan.problems.push(...diff.problems);
@@ -699,8 +704,9 @@ export class DnsRun {
     }
     for (const op of diff.ops) {
       const change = this.recordChange(op, diff);
-      plan.changes.push(plan.held && !redirect && !pointsOwnName(site.domain, op) ? { ...change, waits: true } : change);
+      plan.changes.push(plan.held && !redirect && !pointsOwnName(site.domain, op, state.records) ? { ...change, waits: true } : change);
     }
+    this.recordSibling(out, site, zoneKey, plan, rendered, diff, state.records, allWanted);
     if (redirect) {
       this.standInChange(redirect.source, resolved.ref.zone.name, resolved.ref.zone.status === "active", plan);
       return plan;
@@ -709,7 +715,10 @@ export class DnsRun {
     const addresses = diff.wanted.filter((record) => ["A", "AAAA", "CNAME"].includes(record.type));
     const www = `www.${site.domain}`;
     const effective = [...state.records, ...diff.wanted, ...(ctx?.zoneRecords ?? [])];
-    const wwwByOwnWildcard = addresses.some((record) => record.name === `*.${site.domain}`)
+    const wildcardHeld = Boolean(plan.held)
+      && diff.ops.some((op) => op.record.name === `*.${site.domain}` && !pointsOwnName(site.domain, op, state.records!));
+    const wwwByOwnWildcard = !wildcardHeld
+      && addresses.some((record) => record.name === `*.${site.domain}`)
       && wildcardSource(www, resolved.ref.zone.name, effective)?.wildcard === `*.${site.domain}`;
     plan.certificateNames = [
       ...(addresses.some((record) => record.name === site.domain) || diff.covered[site.domain] ? [site.domain] : []),
@@ -778,10 +787,7 @@ export class DnsRun {
     return { action: op.action, subject, detail: covered ? `${describeRecord(op.record)} · covered by ${covered}` : describeRecord(op.record) };
   }
 
-  /** Plans every site and redirect domain, then marks those in one zone whose profiles want different records at one name. */
-  planAll(scope?: string[]): SitePlan[] {
-    const allowed = scope ? new Set(scope) : undefined;
-    const plans = this.entries.map((site) => this.planSite(site, allowed));
+  private markClashes(plans: SitePlan[]): void {
     const byZone = new Map<string, SitePlan[]>();
     for (const plan of plans) {
       if (plan.zone && this.diffs.has(plan.domain)) byZone.set(plan.zone.id, [...byZone.get(plan.zone.id) ?? [], plan]);
@@ -796,6 +802,40 @@ export class DnsRun {
         }
       }
     }
+  }
+
+  /**
+   * Plans every site and redirect domain, then marks those in one zone whose
+   * profiles want different records at one name. With `live` true (or Ask
+   * first), plans strictly against published records in Cloudflare. Otherwise
+   * runs a two-pass sibling context so reviews and pre-enforce plans see both
+   * planned wildcards and any non-covered sibling records that block them.
+   */
+  planAll(scope?: string[], live = false): SitePlan[] {
+    if (live || !this.context.policy.automatic) {
+      const plans = this.entries.map((site) => this.planSite(site));
+      this.markClashes(plans);
+      return plans;
+    }
+    const allowed = scope ? new Set(scope) : null;
+    const pass0Out: Siblings = new Map();
+    const pass0 = this.entries.map((site) => this.planSite(site, undefined, pass0Out, false));
+    this.markClashes(pass0);
+    const eligible = new Set(pass0
+      .filter((plan) => !plan.problems.length && !(plan.redirect && plan.held) && (!allowed || allowed.has(plan.domain)))
+      .map((plan) => plan.domain));
+    const pass1Siblings: Siblings = new Map([...pass0Out].filter(([domain]) => eligible.has(domain)));
+
+    const pass1Out: Siblings = new Map();
+    const pass1 = this.entries.map((site) => this.planSite(site, pass1Siblings, pass1Out, true));
+    this.markClashes(pass1);
+    const pass2Eligible = new Set(pass1
+      .filter((plan) => eligible.has(plan.domain) && !plan.problems.length)
+      .map((plan) => plan.domain));
+    const pass2Siblings: Siblings = new Map([...pass1Out].filter(([domain]) => pass2Eligible.has(domain)));
+
+    const plans = this.entries.map((site) => this.planSite(site, pass2Siblings));
+    this.markClashes(plans);
     return plans;
   }
 
@@ -848,12 +888,13 @@ export class DnsRun {
     });
   }
 
-  private writeOrder(domain: string): number {
-    const diff = this.diffs.get(domain);
-    if (!diff) return 2;
+  private writeOrder(plan: SitePlan): number {
+    const diff = this.diffs.get(plan.domain);
+    if (!diff) return 3;
     if (diff.wanted.some((record) => record.name.startsWith("*."))) return 0;
-    if (diff.wanted.some((record) => record.type !== "A" && record.type !== "AAAA")) return 1;
-    return 2;
+    if (plan.redirect || diff.wanted.some((record) => !ADDRESS_TYPES.has(record.type)) || (diff.wanted.length > 0 && !plan.wildcardBlocked)) return 1;
+    if (diff.wanted.length > 0) return 2;
+    return 3;
   }
 
   /**
@@ -885,19 +926,20 @@ export class DnsRun {
     const after = ready();
     await Promise.all([...new Set(after.map((plan) => plan.zone!.id))].map(async (zoneId) => {
       const state = this.zones.get(zoneId)!;
-      // One zone's writes go in order: wildcard writers first so subdomain sites see the live wildcard, then non-address writers, then subdomain sites.
+      // One zone's writes go in order: wildcard writers first, then redirects and explicit/non-address writers (deepest first),
+      // then wildcard-blocked explicit sites, then wildcard-covered sites that delete redundant records.
       const ordered = after.filter((candidate) => candidate.zone!.id === zoneId)
-        .sort((a, b) => this.writeOrder(a.domain) - this.writeOrder(b.domain));
+        .sort((a, b) => (this.writeOrder(a) - this.writeOrder(b)) || (b.domain.length - a.domain.length));
       for (const plan of ordered) {
         try {
-          // Re-planned against live zone records only: wildcard and non-address writers ran first, so subdomain sites hand off only when a wildcard is already published.
+          // Re-planned against live zone records only so subdomain sites hand off only when a wildcard is already published and unobstructed.
           const entry = this.entries.find((site) => site.domain === plan.domain)!;
-          const fresh = this.planSite(entry, new Set());
+          const fresh = this.planSite(entry);
           if (fresh.problems.length) continue;
           // The redirect before its placeholder, so the placeholder never answers on its own.
           if (entry.redirect) await this.enforceRedirectRule(state, entry.redirect);
           const diff = this.diffs.get(plan.domain)!;
-          const ops = fresh.held ? diff.ops.filter((op) => pointsOwnName(plan.domain, op)) : diff.ops;
+          const ops = fresh.held ? diff.ops.filter((op) => pointsOwnName(plan.domain, op, state.records!)) : diff.ops;
           await this.applyRecords(state, ops, plan.domain, diff);
           if (entry.redirect) await this.retireStandIn(state, entry.redirect);
         } catch (error) {
@@ -1215,10 +1257,14 @@ export class DnsRun {
   }
 }
 
-/** A record a site CloudPanel just created may write before review: an address at its own name or `www`. */
-function pointsOwnName(domain: string, op: RecordOp): boolean {
-  if (op.action === "create") return true;
+/**
+ * A record a site CloudPanel just created may write before review: an address
+ * at its own name or `www`, or a new record at a name that has no published
+ * records yet (such as a missing `*.{domain}` wildcard).
+ */
+function pointsOwnName(domain: string, op: RecordOp, published: readonly CfRecord[]): boolean {
   const own = op.record.name === domain || op.record.name === `www.${domain}`;
+  if (op.action === "create") return own || !published.some((record) => record.name === op.record.name);
   const address = (type: string | undefined) => type === "A" || type === "AAAA" || type === "CNAME";
   return own && address(op.record.type) && (!op.current || address(op.current.type));
 }

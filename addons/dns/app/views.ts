@@ -295,8 +295,8 @@ function panelHostCard(state: DnsState): string {
     const settings = `<a href="${PANEL_SETTINGS_URL}">Admin → Settings → Custom Domain</a>`;
     const custom = host.customDomain;
     const next = host.problem ? ""
-      : host.proxied ? `CloudPanel's custom domain, proxied through Cloudflare${host.plan?.wildcard ? ` via ${esc(host.plan.wildcard)}` : ""}. The zone's Full SSL rule for Let's Encrypt checks keeps its renewals working.`
-      : custom?.name === host.name ? "CloudPanel is getting its certificate. DNS proxies it through Cloudflare once that is issued."
+      : host.proxied && !pending.length && host.plan ? `CloudPanel's custom domain, proxied through Cloudflare${host.plan.wildcard ? ` via ${esc(host.plan.wildcard)}` : ""}. The zone's Full SSL rule for Let's Encrypt checks keeps its renewals working.`
+      : !host.proxied && custom?.name === host.name ? "CloudPanel is getting its certificate. DNS proxies it through Cloudflare once that is issued."
       : pending.length || !host.plan ? (state.automatic ? (pending.length ? "The next check writes these, within 15 minutes." : "") : "DNS asks first, so the record is written once you turn on Automatic.")
       : `Next: enter ${esc(host.name)} under ${settings} in CloudPanel. DNS proxies it through Cloudflare once CloudPanel has its certificate.${custom ? ` CloudPanel's custom domain is ${esc(custom.name)} now.` : ""}`;
     body = `<div class="dns-panel-host-status"><span class="badge tone-${status.tone}">${esc(status.label)}</span>${status.hint ? `<span class="hint">${esc(status.hint)}</span>` : ""}</div>
@@ -307,7 +307,7 @@ function panelHostCard(state: DnsState): string {
       ${next ? `<p class="dns-panel-host-next">${next}</p>` : ""}`;
   }
   return `<div class="card" id="dns-panel-host"><div class="card-header"><div><h2>Panel hostname</h2>
-      <p class="hint">A hard-to-guess name for CloudPanel itself, such as k7m2p9x4.example.com. DNS points it at this server without Cloudflare's proxy so CloudPanel can get its certificate, then proxies it or hands it off to your zone's wildcard.</p></div></div>
+      <p class="hint">A name for CloudPanel itself that isn't easy to guess, such as k7m2p9x4.example.com. DNS points it at this server without Cloudflare's proxy so CloudPanel can get its certificate, then proxies it or hands it off to your zone's wildcard.</p></div></div>
     <div class="dns-panel-host-body">${form}${body}</div></div>`;
 }
 

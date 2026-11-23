@@ -32,9 +32,9 @@ through Cloudflare, after a Cloudflare Access sign-in: Access emails a one-time
 code to a panel user's address. `https://<server IP>:8443` stops answering.
 It is off by default, and the card lists what it still needs:
 
-- a custom domain for CloudPanel (**Admin → Settings**), with its record
-  proxied through Cloudflare (the orange cloud) and the zone in SSL mode Full
-  or Full (strict);
+- a custom domain for CloudPanel (**Admin → Settings**), with its record or an
+  unobstructed wildcard covering it proxied through Cloudflare (the orange
+  cloud), and the zone in SSL mode Full or Full (strict);
 - a DNS connection whose token reaches that zone and holds
   **SSL and Certificates: Edit**, **Access: Apps and Policies: Edit** and
   **Access: Organizations, Identity Providers, and Groups: Edit**, besides

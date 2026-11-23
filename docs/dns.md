@@ -102,7 +102,7 @@ first.
 
 ## Panel hostname
 
-To reach CloudPanel at a hard-to-guess name such as `k7m2p9x4.example.com` through Cloudflare:
+To reach CloudPanel at a name that isn't easy to guess, such as `k7m2p9x4.example.com`, through Cloudflare:
 
 1. Enter a name under **Panel hostname**, or choose **Random** to generate an
    eight-character label on one of your connected zones, and save. DNS points it
@@ -112,6 +112,11 @@ To reach CloudPanel at a hard-to-guess name such as `k7m2p9x4.example.com` throu
 3. Seconds after the certificate is issued, DNS proxies the name through
    Cloudflare, or deletes the temporary records if a proxied wildcard in the
    zone already covers it.
+
+Let's Encrypt publishes issued certificate names in public Certificate
+Transparency logs, so a random name avoids casual guessing rather than hiding
+the panel on its own. Turn on Firewall's **Panel gate** to block requests that
+have not passed Cloudflare Access.
 
 The proxy waits for the certificate because CloudPanel asks Let's Encrypt the
 moment you save, and a check sent through Cloudflare can fail on the zone's SSL

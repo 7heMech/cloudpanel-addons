@@ -1388,4 +1388,128 @@ describe("wildcard DNS", () => {
     await env.act("check");
     expect(env.records()).toEqual(["A shop.example.com 203.0.113.10 proxied", "AAAA shop.example.com 2001:db8::10 proxied"]);
   });
+
+  test("Ask first recognises an existing foreign wildcard without relying on unapplied siblings", async () => {
+    const env = setup();
+    env.cf.record("example.com", { type: "A", name: "*.example.com", content: "203.0.113.10", proxied: true });
+    env.cf.record("example.com", { type: "AAAA", name: "*.example.com", content: "2001:db8::10", proxied: true });
+    await env.connect();
+    await env.act("assign", { domains: ["shop.example.com"], profileId: "web" });
+    const asking = await env.act("check");
+    const plan = asking.sites.find((entry) => entry.domain === "shop.example.com")!.plan!;
+    expect(plan.wildcard).toBe("*.example.com");
+    expect(plan.changes.filter((change) => /^(A|AAAA) /.test(change.subject))).toEqual([]);
+  });
+
+  test("a sibling redirect or unproxied panel hostname below a covered subdomain keeps explicit records on the subdomain", async () => {
+    const env = setup();
+    env.sites.push(site(3, "b.example.com"));
+    await env.connect();
+    await env.act("assign", { domains: ["example.com", "shop.example.com", "b.example.com"], profileId: "web" });
+    await env.act("save-redirect", { source: "sub.shop.example.com", target: "https://example.com" });
+    await env.act("set-panel-host", { name: "k7m2p9x4.b.example.com" });
+
+    const review = await env.act("set-automatic", { automatic: true });
+    const shopReview = review.review!.sites.find((plan) => plan.domain === "shop.example.com")!;
+    const bReview = review.review!.sites.find((plan) => plan.domain === "b.example.com")!;
+    expect(shopReview.wildcardBlocked).toContain("AAAA sub.shop.example.com");
+    expect(bReview.wildcardBlocked).toContain("k7m2p9x4.b.example.com");
+
+    await env.act("confirm", { token: review.review!.token });
+    expect(env.records()).toEqual(expect.arrayContaining([
+      "A *.example.com 203.0.113.10 proxied",
+      "A shop.example.com 203.0.113.10 proxied",
+      "AAAA shop.example.com 2001:db8::10 proxied",
+      "AAAA sub.shop.example.com 100:: proxied",
+      "A b.example.com 203.0.113.10 proxied",
+      "AAAA b.example.com 2001:db8::10 proxied",
+      "A k7m2p9x4.b.example.com 203.0.113.10",
+    ]));
+  });
+
+  test("post-enforce plans stay live when an apex fails with diff problems, keeping orphan tracking and SSL readiness", async () => {
+    const env = setup();
+    // Duplicate SPF records with differing endings give example.com a diff.problem (not a render problem).
+    env.cf.record("example.com", { type: "TXT", name: "example.com", content: '"v=spf1 include:a.example ~all"' });
+    env.cf.record("example.com", { type: "TXT", name: "example.com", content: '"v=spf1 include:b.example -all"' });
+    env.mc.domains.add("example.com");
+    env.mc.key("example.com", "dkim");
+    await env.connect();
+    await env.act("save-mailcow", { url: "mail.example.net", key: MAILCOW_KEY });
+    await env.act("assign", { domains: ["shop.example.com"], profileId: "web" });
+    await env.automatic();
+    // Put example.com in web-mailcow via policy on disk (simulating a pre-existing broken apex during scheduled check).
+    const policyPath = join(env.dir, "state", "policy.json");
+    const saved = JSON.parse(readFileSync(policyPath, "utf8"));
+    saved.assignments["example.com"] = "web-mailcow";
+    writeFileSync(policyPath, JSON.stringify(saved));
+
+    const checked = await env.act("check");
+    const shopPlan = checked.sites.find((entry) => entry.domain === "shop.example.com")!.plan!;
+    expect(shopPlan.wildcard).toBeUndefined();
+    expect(shopPlan.changes).toEqual([]);
+    expect(env.records()).toEqual(expect.arrayContaining(["A shop.example.com 203.0.113.10 proxied", "AAAA shop.example.com 2001:db8::10 proxied"]));
+    expect((await env.act<ProvisionReply>("provision", undefined, ["--domain=shop.example.com"])).ready).toBe(true);
+    // Orphan tracking for shop.example.com was not dropped.
+    env.sites.splice(env.sites.findIndex((entry) => entry.domain === "shop.example.com"), 1);
+    expect((await env.act("list")).orphans).toEqual([{ domain: "shop.example.com", zone: "example.com", records: 2 }]);
+  });
+
+  test("a held new apex site never splits or collides on an existing wildcard, and omits www from certificateNames while held", async () => {
+    const env = setup();
+    env.cf.zone("client.org", env.agency);
+    env.cf.record("client.org", { type: "A", name: "*.client.org", content: "198.51.100.4", proxied: false });
+    env.cf.zone("cname-wild.org", env.agency);
+    env.cf.record("cname-wild.org", { type: "CNAME", name: "*.cname-wild.org", content: "other.example.net" });
+    await env.connect();
+    await env.act("set-default", { profileId: "web" });
+    await env.automatic();
+
+    env.sites.push(site(8, "client.org", { createdAt: START }), site(9, "cname-wild.org", { createdAt: START }));
+    await env.act("sync-sites");
+
+    // Existing A *.client.org stays untouched and no AAAA *.client.org is created beside it.
+    expect(env.records("client.org")).toEqual([
+      "A *.client.org 198.51.100.4",
+      "A client.org 203.0.113.10 proxied",
+      "AAAA client.org 2001:db8::10 proxied",
+    ]);
+    const provision = await env.act<ProvisionReply>("provision", undefined, ["--domain=client.org"]);
+    expect(provision).toEqual({ managed: true, ready: true, reason: "DNS is in place", certificateNames: ["client.org"] });
+
+    // Existing CNAME *.cname-wild.org is left untouched with no 81054 conflict error.
+    expect(env.records("cname-wild.org")).toEqual([
+      "A cname-wild.org 203.0.113.10 proxied",
+      "AAAA cname-wild.org 2001:db8::10 proxied",
+      "CNAME *.cname-wild.org other.example.net",
+    ]);
+    const cnameState = (await env.act("list")).sites.find((entry) => entry.domain === "cname-wild.org")!.plan!;
+    expect(cnameState.problems).toEqual([]);
+    expect(cnameState.held).toBe(true);
+  });
+
+  test("affected() pulls wildcard-covered ancestors when a descendant redirect is added, and keeps orphans when a profile drops rows", async () => {
+    const env = setup();
+    await env.connect();
+    await env.act("assign", { domains: ["example.com", "shop.example.com"], profileId: "web" });
+    await env.automatic();
+    expect(env.records().some((record) => record.includes("shop.example.com"))).toBe(false);
+
+    // Adding a redirect beneath shop.example.com brings shop.example.com into the review so it gets explicit A/AAAA at the same time.
+    const review = await env.act("save-redirect", { source: "sub.shop.example.com", target: "https://example.com" });
+    expect(review.review!.sites.map((plan) => plan.domain).sort()).toEqual(["shop.example.com", "sub.shop.example.com"]);
+    await env.act("confirm", { token: review.review!.token });
+    expect(env.records()).toEqual(expect.arrayContaining([
+      "A shop.example.com 203.0.113.10 proxied",
+      "AAAA shop.example.com 2001:db8::10 proxied",
+      "AAAA sub.shop.example.com 100:: proxied",
+    ]));
+
+    // Removing all rows from a profile stops managing them without wiping orphan tracking for already-written records.
+    const web = (await env.act("list")).profiles.find((profile) => profile.id === "web")!;
+    const cleared = await env.act("save-profile", { ...web, records: [] });
+    await env.act("confirm", { token: cleared.review!.token });
+    env.sites.splice(env.sites.findIndex((entry) => entry.domain === "shop.example.com"), 1);
+    expect((await env.act("list")).orphans).toEqual([{ domain: "shop.example.com", zone: "example.com", records: 2 }]);
+  });
 });

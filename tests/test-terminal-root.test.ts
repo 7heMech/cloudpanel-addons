@@ -3,7 +3,7 @@
 import { afterAll, beforeEach, expect, test } from "bun:test";
 import { Database } from "bun:sqlite";
 import {
-  chmodSync, mkdirSync, mkdtempSync, realpathSync, renameSync, rmSync, symlinkSync, writeFileSync,
+  chmodSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, renameSync, rmSync, symlinkSync, writeFileSync,
 } from "node:fs";
 import { createHash } from "node:crypto";
 import { tmpdir } from "node:os";
@@ -541,4 +541,102 @@ test("a root worker refuses a direct request without fresh verification", async 
   });
   expect(result).toBe(1);
   expect(spawned).toBe(false);
+});
+
+test("verifyRoot binds handlers before options load, normalizes autofilled codes, and ignores stale completions on cancel or retry", async () => {
+  const source = readFileSync(`${import.meta.dir}/../addons/terminal/app/popup.client.js`, "utf8");
+  const body = source.slice(source.indexOf("function verifyRoot()"), source.indexOf("\nasync function createSession()"));
+
+  function harness() {
+    const overlay = { hidden: true };
+    const code = { value: "", readOnly: false, focused: 0, oninput: null as any, onchange: null as any, focus() { this.focused++; } };
+    const key = { onclick: null as any, disabled: false };
+    const submitBtn = { disabled: false };
+    const cancel = { onclick: null as any };
+    const errorText = { textContent: "" };
+    const passkeyRow = { hidden: true };
+    const form = { onsubmit: null as any, querySelectorAll: () => [submitBtn, key] };
+    const elements: Record<string, any> = {
+      "root-auth": overlay, "root-auth-form": form, "root-auth-code": code, "root-auth-key": key,
+      "root-auth-cancel": cancel, "root-auth-error": errorText, "root-auth-passkey": passkeyRow,
+    };
+    const statuses: [string, string | undefined][] = [];
+    const requests: { path: string; body: any; resolve: (v: any) => void; reject: (e: Error) => void }[] = [];
+    const call = (path: string, init: { body: string }) => new Promise((resolve, reject) => {
+      requests.push({ path, body: JSON.parse(init.body), resolve, reject });
+    });
+    const verifyRoot = new Function("document", "call", "setStatus", "term", "keysUsable", "keyError", "fromB64", "toB64", "navigator",
+      `${body}\nreturn verifyRoot;`)(
+      { getElementById: (id: string) => elements[id] },
+      call,
+      (label: string, kind?: string) => statuses.push([label, kind]),
+      { focus() {} },
+      () => false,
+      (err: Error, fallback: string) => err?.message || fallback,
+      () => new Uint8Array(),
+      () => "",
+      {},
+    ) as () => Promise<string>;
+    return { overlay, code, form, cancel, errorText, submitBtn, statuses, requests, verifyRoot };
+  }
+
+  // 1. Submit while /api/root-auth-options is still in flight: prevents native GET, reuses the in-flight options request, normalizes spaces.
+  const early = harness();
+  const ticketPromise = early.verifyRoot();
+  expect(early.overlay.hidden).toBe(false);
+  expect(typeof early.form.onsubmit).toBe("function");
+  expect(typeof early.cancel.onclick).toBe("function");
+  // Normalize behavior: spaced autofill, paste over existing digits, ignoring a 7th typed digit.
+  early.code.value = "123 456";
+  early.code.onchange();
+  expect(early.code.value).toBe("123456");
+  early.code.value = "1234567";
+  early.code.oninput();
+  expect(early.code.value).toBe("123456");
+  early.code.value = "123456987654";
+  early.code.oninput();
+  expect(early.code.value).toBe("987654");
+
+  let prevented = false;
+  early.form.onsubmit({ preventDefault() { prevented = true; } });
+  expect(prevented).toBe(true);
+  expect(early.code.readOnly).toBe(true);
+  expect(early.requests.map((req) => req.path)).toEqual(["/api/root-auth-options"]);
+
+  early.requests[0]!.resolve({ data: { challenge: "chal-1", keys: [] } });
+  await Bun.sleep(0);
+  expect(early.requests.map((req) => req.path)).toEqual(["/api/root-auth-options", "/api/root-auth-verify"]);
+  expect(early.requests[1]!.body).toEqual({ challenge: "chal-1", code: "987654" });
+  early.requests[1]!.resolve({ data: { ticket: "tok-1" } });
+  expect(await ticketPromise).toBe("tok-1");
+  expect(early.overlay.hidden).toBe(true);
+
+  // 2. Cancel while verify is in flight: rejects immediately, and late verify resolution/rejection does not mutate status or fetch fresh options.
+  const cancelled = harness();
+  const cancelPromise = cancelled.verifyRoot();
+  cancelled.requests[0]!.resolve({ data: { challenge: "chal-2", keys: [] } });
+  await Bun.sleep(0);
+  cancelled.code.value = "654321";
+  cancelled.form.onsubmit({ preventDefault() {} });
+  await Bun.sleep(0);
+  expect(cancelled.requests).toHaveLength(2);
+  cancelled.cancel.onclick();
+  await expect(cancelPromise).rejects.toThrow("Verification cancelled.");
+  expect(cancelled.overlay.hidden).toBe(true);
+  const statusCount = cancelled.statuses.length;
+  cancelled.requests[1]!.resolve({ data: { ticket: "late-tok" } });
+  await Bun.sleep(0);
+  expect(cancelled.statuses).toHaveLength(statusCount);
+  expect(cancelled.requests).toHaveLength(2);
+
+  // 3. Second prompt on the same DOM (after retry/newSession): submitting during the second options fetch settles the second promise cleanly.
+  const second = cancelled.verifyRoot();
+  expect(cancelled.overlay.hidden).toBe(false);
+  cancelled.code.value = "111 222";
+  cancelled.form.onsubmit({ preventDefault() {} });
+  cancelled.requests[2]!.resolve({ data: { challenge: "chal-3", keys: [] } });
+  await Bun.sleep(0);
+  expect(cancelled.requests[3]!.body).toEqual({ challenge: "chal-3", code: "111222" });
+  cancelled.requests[3]!.resolve({ data: { ticket: "tok-3" } });
+  expect(await second).toBe("tok-3");
 });

@@ -345,5 +345,25 @@ describe("wildcard coverage (RFC 4592)", () => {
     expect(diffRecords(subRedirect, wild(), { allowWildcard: false }).ops.map((op) => `${op.action} ${op.record.type} ${op.record.name}`))
       .toEqual(["create AAAA shop.example.com"]);
     expect(wildcardSource("example.com", "example.com", wild())).toBeNull();
+
+    // An NS delegation cut at an ancestor occludes any wildcard at or below the cut.
+    expect(wildcardSource("a.b.example.com", "example.com", [
+      published("NS", "b.example.com", "ns1.elsewhere.example"),
+      published("A", "*.b.example.com", "203.0.113.10", { proxied: true }),
+    ])).toBeNull();
+
+    // A single profile with both *.{domain} and www.{domain} creates the wildcard before deleting redundant www records.
+    const both = profile([
+      { type: "A", name: "{domain}", content: "{ipv4}", proxied: true },
+      { type: "A", name: "www.{domain}", content: "{ipv4}", proxied: true },
+      { type: "A", name: "*.{domain}", content: "{ipv4}", proxied: true },
+    ], { mailcow: false });
+    const handoff = diffRecords(renderProfile(both, vars("example.com")), [
+      published("A", "example.com", "203.0.113.10", { proxied: true }),
+      published("A", "www.example.com", "203.0.113.10", { proxied: true }),
+    ]);
+    expect(handoff.ops.map((op) => `${op.action} ${op.record.type} ${op.record.name}`)).toEqual([
+      "create A *.example.com", "delete A www.example.com",
+    ]);
   });
 });

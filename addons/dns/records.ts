@@ -253,7 +253,10 @@ export function wildcardSource<T extends Pick<CfRecord, "type" | "name">>(
   if (name === zone || !name.endsWith(`.${zone}`) || name.startsWith("*.")) return null;
   const others = ignore ? records.filter((record) => !ignore(record)) : records;
   if (others.some((record) => record.name === name || record.name.endsWith(`.${name}`))) return null;
-  for (const base of strictAncestors(name, zone)) {
+  const ancestors = strictAncestors(name, zone);
+  // A delegation zone cut above `name` occludes any wildcard in this zone at or below the cut.
+  if (ancestors.some((base) => base !== zone && others.some((record) => record.type === "NS" && record.name === base))) return null;
+  for (const base of ancestors) {
     const exists = base === zone || others.some((record) => record.name === base || record.name.endsWith(`.${base}`));
     if (!exists) continue;
     const wildcard = `*.${base}`;
@@ -275,8 +278,10 @@ function wildcardBlocker<T extends Pick<CfRecord, "type" | "name">>(
 ): { wildcard: string; records: T[]; by: T } | null {
   if (name === zone || !name.endsWith(`.${zone}`) || name.startsWith("*.")) return null;
   const others = ignore ? records.filter((record) => !ignore(record)) : records;
+  const ancestors = strictAncestors(name, zone);
+  if (ancestors.some((base) => base !== zone && others.some((record) => record.type === "NS" && record.name === base))) return null;
   let blocker = others.find((record) => record.name === name || record.name.endsWith(`.${name}`));
-  for (const base of strictAncestors(name, zone)) {
+  for (const base of ancestors) {
     if (!blocker && base !== zone) {
       const ancestor = others.find((record) => record.name === base || record.name.endsWith(`.${base}`));
       if (ancestor) {
@@ -439,9 +444,11 @@ export function diffRecords(rendered: Rendered, published: CfRecord[], options: 
     });
   }
   const creates: RecordOp[] = unmatched.map(({ record }) => ({ action: "create", record }));
-  const deletes: RecordOp[] = pool.filter((current) => !used.has(current)).map((current) => ({ action: "delete", record: current, current }));
-  // In place first, so a merged SPF is saved before its duplicates go; then what blocks a create.
-  diff.ops = [...updates, ...deletes, ...creates];
+  const allDeletes: RecordOp[] = pool.filter((current) => !used.has(current)).map((current) => ({ action: "delete", record: current, current }));
+  const conflictDeletes = allDeletes.filter((op) => !diff.covered[op.record.name]);
+  const coveredDeletes = allDeletes.filter((op) => Boolean(diff.covered[op.record.name]));
+  // In place first, so a merged SPF is saved before its duplicates go; then conflicts blocking creates, then creates, then wildcard-handoff deletes.
+  diff.ops = [...updates, ...conflictDeletes, ...creates, ...coveredDeletes];
   return diff;
 }
 

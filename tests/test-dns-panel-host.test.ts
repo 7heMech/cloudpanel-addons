@@ -196,7 +196,7 @@ describe("the panel hostname", () => {
     expect(removed.orphans).toEqual([]);
   });
 
-  test("the page offers a Random button, zone suggestions and a hard-to-guess placeholder", async () => {
+  test("the page offers a Random button, zone suggestions, safe base detection and accurate pending copy", async () => {
     const env = setup();
     await env.automatic();
     const state = await env.act("list");
@@ -206,6 +206,43 @@ describe("the panel hostname", () => {
     expect(html).toContain('placeholder="k7m2p9x4.example.com"');
     expect(html).toContain('<datalist id="dns-zone-list"><option value="example.com"></option></datalist>');
     expect(html).toContain('onclick="dnsRandomPanelHost()"');
+
+    // While pending changes remain in Ask first, do not claim the custom domain is already proxied via the wildcard.
+    const pendingHtml = dashboardContent({
+      ...state,
+      automatic: false,
+      panelHost: {
+        name: "k7m2p9x4.example.com", problem: null, customDomain: { name: "k7m2p9x4.example.com", issued: true }, proxied: true,
+        plan: {
+          domain: "k7m2p9x4.example.com", profileId: PANEL_PROFILE_ID, mode: "report",
+          zone: { id: "0".repeat(32), name: "example.com", status: "active", nameServers: [], account: "Agency", connection: "Agency" },
+          changes: [{ action: "delete", subject: "A k7m2p9x4.example.com", detail: "203.0.113.10 · DNS only · covered by *.example.com" }],
+          problems: [], zoneChoices: [], certificateNames: [], panel: true, wildcard: "*.example.com",
+        },
+      },
+    });
+    expect(pendingHtml).not.toContain("proxied through Cloudflare via *.example.com");
+    expect(pendingHtml).toContain("DNS asks first");
+
+    // Verify client-side random label and base domain helpers directly.
+    const clientSource = readFileSync(join(import.meta.dir, "../addons/dns/app/views.client.js"), "utf8");
+    const helperBlock = clientSource.slice(clientSource.indexOf("function dnsRandomLabel()"), clientSource.indexOf("function dnsRandomPanelHost()"));
+    const makeHelpers = (dnsState: Record<string, unknown>) =>
+      new Function("dnsState", "crypto", `${helperBlock}\nreturn { dnsRandomLabel, dnsPanelBase };`)(dnsState, crypto) as {
+        dnsRandomLabel: () => string;
+        dnsPanelBase: (value: string, savedBase: string) => string;
+      };
+    const { dnsRandomLabel, dnsPanelBase } = makeHelpers({ zones: ["example.com", "sub.example.org"], panelHost: null });
+    for (let i = 0; i < 20; i++) expect(dnsRandomLabel()).toMatch(/^[a-hjkmnp-z][a-hjkmnp-z2-9]{7}$/);
+    expect(dnsPanelBase("old.example.com", "")).toBe("example.com");
+    expect(dnsPanelBase("a.sub.example.org", "")).toBe("sub.example.org");
+    // Multi-part TLD without a matching connected zone keeps the full domain instead of dropping to co.uk.
+    expect(dnsPanelBase("example.co.uk", "")).toBe("example.co.uk");
+    expect(dnsPanelBase("k7m2p9x4.example.co.uk", "example.co.uk")).toBe("example.co.uk");
+    expect(dnsPanelBase("https://example.com", "")).toBe("");
+    expect(dnsPanelBase("a..b", "")).toBe("");
+    expect(makeHelpers({ zones: ["only.example"], panelHost: null }).dnsPanelBase("", "")).toBe("only.example");
+    expect(makeHelpers({ zones: ["a.example", "b.example"], panelHost: null }).dnsPanelBase("", "")).toBe("");
   });
 });
 

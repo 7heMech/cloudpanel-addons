@@ -394,6 +394,9 @@ function dnsShowSite(domain) {
       '<dt>Through</dt><dd>' + dnsEsc(plan.zone.connection) + ' · ' + dnsEsc(plan.zone.account) + '</dd>';
   }
   if (plan && plan.wildcard) html += '<dt>Covered by</dt><dd class="mono">' + dnsEsc(plan.wildcard) + '</dd>';
+  else if (plan && !plan.problems.length && !plan.changes.length && plan.wildcardBlocked) {
+    html += '<dt>Wildcard</dt><dd>' + dnsEsc(plan.wildcardBlocked) + '.</dd>';
+  }
   if (site.ssl) html += '<dt>Certificate</dt><dd>' + dnsEsc(site.ssl) + '</dd>';
   html += '</dl>';
   CLP_ROOT.getElementById('dns-site-body').innerHTML = html;
@@ -687,12 +690,13 @@ function dnsPanelBase(value, savedBase) {
   const clean = value.trim().toLowerCase().replace(/\.+$/, '');
   const zones = (dnsState.zones || []).slice().sort(function (a, b) { return b.length - a.length; });
   if (clean) {
+    if (!/^[a-z0-9-]+(\.[a-z0-9-]+)+$/.test(clean)) return '';
     const matched = zones.find(function (zone) { return clean === zone || clean.endsWith('.' + zone); });
     if (matched) return matched;
     if (savedBase && (clean === savedBase || clean.endsWith('.' + savedBase))) return savedBase;
-    if (!clean.includes('.')) return '';
-    const parts = clean.split('.');
-    return parts.length === 2 ? clean : parts.slice(1).join('.');
+    const planZone = dnsState.panelHost && dnsState.panelHost.plan && dnsState.panelHost.plan.zone && dnsState.panelHost.plan.zone.name;
+    if (planZone && (clean === planZone || clean.endsWith('.' + planZone))) return planZone;
+    return clean;
   }
   return zones.length === 1 ? zones[0] : '';
 }

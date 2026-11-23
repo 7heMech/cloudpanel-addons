@@ -156,11 +156,12 @@ function finish(info) {
   showEnded(text);
 }
 
-async function verifyRoot() {
+function verifyRoot() {
   const overlay = document.getElementById('root-auth');
   const form = document.getElementById('root-auth-form');
   const code = document.getElementById('root-auth-code');
   const key = document.getElementById('root-auth-key');
+  const cancel = document.getElementById('root-auth-cancel');
   const errorText = document.getElementById('root-auth-error');
   const passkeyRow = document.getElementById('root-auth-passkey');
   // Cancel stays usable, so a passkey prompt with no key nearby can be left.
@@ -176,34 +177,46 @@ async function verifyRoot() {
     if (code.value !== digits) code.value = digits;
     return digits;
   };
-  code.oninput = normalize;
-  code.onchange = normalize;
-  // Reveal the real input before waiting on options so password managers scanning on load see it right away.
-  passkeyRow.hidden = true;
-  overlay.hidden = false;
-  code.value = '';
-  shown = '';
-  errorText.textContent = '';
-  code.focus();
-  setStatus('');
-  let options = null;
-  const pendingOptions = post('options').then(reply => {
-    options = reply.data;
-    passkeyRow.hidden = !options.keys.length || !keysUsable();
-    return options;
-  });
-  try {
-    await pendingOptions;
-  } catch (error) {
-    overlay.hidden = true;
-    throw error;
-  }
   return new Promise((resolve, reject) => {
+    let settled = false;
     let busy = false;
+    let options = null;
+    let pendingOptions = null;
+
+    const detach = () => {
+      code.oninput = null;
+      code.onchange = null;
+      form.onsubmit = event => event.preventDefault();
+      key.onclick = null;
+      cancel.onclick = null;
+      code.readOnly = false;
+      for (const button of buttons) button.disabled = false;
+    };
+    const finish = (fn, value) => {
+      if (settled) return;
+      settled = true;
+      detach();
+      overlay.hidden = true;
+      fn(value);
+    };
+    const fetchOptions = () => {
+      const request = post('options').then(reply => {
+        if (settled) return null;
+        options = reply.data;
+        passkeyRow.hidden = !options.keys.length || !keysUsable();
+        return options;
+      }).finally(() => {
+        if (pendingOptions === request) pendingOptions = null;
+      });
+      pendingOptions = request;
+      return request;
+    };
+
     const submit = async useKey => {
-      if (busy) return;
+      if (settled || busy) return;
+      let digits = '';
       if (!useKey) {
-        const digits = normalize();
+        digits = normalize();
         if (!/^\d{6}$/.test(digits)) {
           errorText.textContent = 'Enter a six-digit authenticator code.';
           code.focus();
@@ -211,35 +224,63 @@ async function verifyRoot() {
         }
       }
       busy = true;
+      code.readOnly = true;
       for (const button of buttons) button.disabled = true;
       try {
-        if (!options) options = (await post('options')).data;
-        let proof = { challenge: options.challenge, code: code.value };
+        if (!options) options = await (pendingOptions || fetchOptions());
+        if (settled || !options) return;
+        const active = options;
+        let proof = { challenge: active.challenge, code: digits };
         if (useKey) {
-          const credential = await navigator.credentials.get({ publicKey: { challenge: fromB64(options.challenge), allowCredentials: options.keys.map(id => ({ type: 'public-key', id: fromB64(id) })), userVerification: 'required', timeout: 60000 } });
-          proof = { challenge: options.challenge, id: credential.id, clientDataJSON: toB64(credential.response.clientDataJSON), authenticatorData: toB64(credential.response.authenticatorData), signature: toB64(credential.response.signature), userHandle: credential.response.userHandle ? toB64(credential.response.userHandle) : null };
+          const credential = await navigator.credentials.get({ publicKey: { challenge: fromB64(active.challenge), allowCredentials: active.keys.map(id => ({ type: 'public-key', id: fromB64(id) })), userVerification: 'required', timeout: 60000 } });
+          if (settled) return;
+          proof = { challenge: active.challenge, id: credential.id, clientDataJSON: toB64(credential.response.clientDataJSON), authenticatorData: toB64(credential.response.authenticatorData), signature: toB64(credential.response.signature), userHandle: credential.response.userHandle ? toB64(credential.response.userHandle) : null };
         }
         options = null;
         const reply = await post('verify', proof);
-        overlay.hidden = true;
+        if (settled) return;
         setStatus('Connecting', 'tone-warn');
+        finish(resolve, reply.data.ticket);
         term.focus();
-        resolve(reply.data.ticket);
       } catch (error) {
+        if (settled) return;
         errorText.textContent = keyError(error, 'Verification failed. Try again.');
         code.value = '';
         shown = '';
+        code.readOnly = false;
         code.focus();
         // A fresh prompt now, not at the next try; root keeps the first one's opening, so retrying never restarts the wait.
-        try { options = (await post('options')).data; } catch { options = null; }
+        try { await fetchOptions(); } catch { options = null; }
       } finally {
-        busy = false;
-        for (const button of buttons) button.disabled = false;
+        if (!settled) {
+          busy = false;
+          code.readOnly = false;
+          for (const button of buttons) button.disabled = false;
+        }
       }
     };
+
+    // Bind handlers before revealing the prompt so submitting or cancelling while options load never falls through.
+    code.oninput = normalize;
+    code.onchange = normalize;
     form.onsubmit = event => { event.preventDefault(); submit(false); };
     key.onclick = () => submit(true);
-    document.getElementById('root-auth-cancel').onclick = () => { overlay.hidden = true; reject(new Error('Verification cancelled.')); };
+    cancel.onclick = () => finish(reject, new Error('Verification cancelled.'));
+
+    passkeyRow.hidden = true;
+    code.value = '';
+    code.readOnly = false;
+    shown = '';
+    errorText.textContent = '';
+    for (const button of buttons) button.disabled = false;
+    overlay.hidden = false;
+    code.focus();
+    setStatus('');
+
+    fetchOptions().catch(error => {
+      if (settled || busy) return;
+      finish(reject, error);
+    });
   });
 }
 

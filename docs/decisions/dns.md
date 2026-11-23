@@ -64,13 +64,19 @@ wildcard in the zone matches the exact address set and proxy state under RFC
 CNAME left at that name. Any record at or below the subdomain, or at an
 intermediate ancestor with no wildcard of its own, stops a broader wildcard from
 matching; DNS then writes explicit A and AAAA records and reports which record
-blocked the wildcard. Within a zone, wildcard writers run first, non-address
-writers next and subdomain address sites last, and each site re-plans against
-live zone records before writing, so redundant subdomain records go only after
-the wildcard exists. Every relied-on wildcard stays in the site's wanted names,
-so removing a deleted apex site's records never deletes a wildcard another
-managed site uses. Changing a site whose profile has or had a wildcard row
-brings managed subdomains beneath it into the same review.
+blocked the wildcard. Within a zone, wildcard writers run first, redirects and
+explicit or non-address writers next from deepest name to shallowest, blocked
+explicit subdomain sites after those, and wildcard-covered sites last. Each site
+re-plans against live zone records before writing, so redundant subdomain records
+go only after the wildcard exists and no sibling record blocks it. Pre-enforce
+planning runs two passes over problem-free siblings in scope so reviews preview
+both planned wildcards and non-covered explicit sibling blockers, while
+post-enforce saved plans and orphan checks evaluate strictly against live
+records. Every relied-on wildcard stays in the site's wanted names, so removing
+a deleted apex site's records never deletes a wildcard another managed site
+uses. Changing a site whose profile has or had a wildcard row brings managed
+subdomains in its zone into the same review, and changing a descendant or
+intermediate-ancestor sibling brings affected managed subdomains along as well.
 
 SPF is merged rather than replaced (RFC 7208): the published record keeps its
 senders, their order, its `all` or `redirect=` ending and its modifiers, and the
@@ -264,8 +270,12 @@ The panel hostname is a third kind of entry beside sites and redirect domains,
 planned through the same switch, reviews, log and lock, with a fixed profile:
 A and AAAA at the name, no mail, and the ACME Full SSL rule for its zone. The
 page offers a Random button that generates an eight-character unambiguous
-lowercase label matching `[a-z][a-z2-9]{7}` and suggests connected zone names,
-while keeping the field editable. It cannot be a site's or a redirect's name; one
+lowercase label starting with a letter from `a-z` and continuing with `a-z` and
+`2-9`, excluding `i`, `l`, `o`, `0` and `1`, and suggests connected zone names,
+while keeping the field editable. Let's Encrypt publishes issued leaf
+certificate names in public Certificate Transparency logs, so a random label
+avoids obvious guessing while Firewall's Panel gate is what blocks access if the
+name is found via CT logs. It cannot be a site's or a redirect's name; one
 created later at it stops it with a problem. It asks for no certificate, since
 CloudPanel issues the custom domain's own, and its records are tracked like a
 site's, so removing it lists them with the records of deleted sites.
@@ -468,12 +478,14 @@ DNS declares `newSites`, so the shared watcher (see
 profile and, once DNS is Automatic, writes it, normally within seconds and before SMTP Relay, which
 waits at most fifteen seconds for it.
 
-Creating a site points its names at this server, so a new site's records are
-created and its own address records -- A, AAAA or CNAME at the site and `www`
--- are replaced at once, with no review. If its profile would do more, such as
-update or delete other records or change a zone setting, the site is held: its
-rules are still written, but the rest waits, through every later check, until
-an administrator reviews it. Placing the site in a profile by hand, or the
+Creating a site points its names at this server, so a new site's records at
+names with no published records yet, including a missing `*.{domain}` wildcard,
+and its own address records at the site and `www`, are written at once with no
+review. If its profile would do more, such as update, delete or add beside an
+existing record at `*.{domain}` or another name, or change a zone setting, the
+site is held: its rules are still written, but the rest waits, through every
+later check, until an administrator reviews it. While an apex site's wildcard
+waits for review, `www` is left out of its certificate names. Placing the site in a profile by hand, or the
 page's Review changes, runs the usual review and clears the hold. Readiness
 ignores the held changes. One read of the panel that finds no sites changes no
 assignment.
