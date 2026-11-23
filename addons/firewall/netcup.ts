@@ -329,7 +329,9 @@ FallbackNTP=
 `;
 
 const runOf = (options: NetcupOptions) => options.run ?? ((command: string, args: string[]) => runCommand(command, args, 30_000));
-const timesyncdActive = (options: NetcupOptions) => runOf(options)("systemctl", ["is-active", TIMESYNCD]).stdout.trim() === "active";
+const timesyncdState = (options: NetcupOptions) => runOf(options)("systemctl", ["is-active", TIMESYNCD]).stdout.trim();
+// A restart that failed leaves timesyncd "failed"; it is still this server's NTP client.
+const timesyncdInUse = (options: NetcupOptions) => ["active", "failed"].includes(timesyncdState(options));
 
 /**
  * Puts timesyncd's drop-in in place, or takes it away, restarting timesyncd
@@ -339,14 +341,15 @@ const timesyncdActive = (options: NetcupOptions) => runOf(options)("systemctl", 
  */
 function setTimeSync(options: NetcupOptions, on: boolean): string | null {
   const file = pathsOf(options).timeSyncFile;
-  const want = on && timesyncdActive(options) ? TIME_SYNC : null;
+  const state = timesyncdState(options);
+  const want = on && ["active", "failed"].includes(state) ? TIME_SYNC : null;
   let have: string | null = null;
   try { have = readFileSync(file, "utf8"); } catch { /* none yet */ }
-  if (have === want) return null;
-  writeOrRemove(file, want, { mode: 0o644, createParent: true });
-  const restarted = runOf(options)("systemctl", ["try-restart", TIMESYNCD]);
+  if (have === want && !(want && state === "failed")) return null;
+  if (have !== want) writeOrRemove(file, want, { mode: 0o644, createParent: true });
+  const restarted = runOf(options)("systemctl", [state === "failed" ? "restart" : "try-restart", TIMESYNCD]);
   // Put back what timesyncd still runs with, so the next repair writes and restarts again.
-  if (!restarted.ok) try { writeOrRemove(file, have, { mode: 0o644, createParent: true }); } catch { /* reported below */ }
+  if (!restarted.ok && have !== want) try { writeOrRemove(file, have, { mode: 0o644, createParent: true }); } catch { /* reported below */ }
   requireSuccess(restarted, `restarting ${TIMESYNCD} failed`);
   const servers = Object.keys(NTP_SERVERS).join(" and ");
   return want ? `${TIMESYNCD} pointed at ${servers}` : `${TIMESYNCD} no longer pointed at ${servers}`;
@@ -711,6 +714,7 @@ export async function pollNetcup(options: NetcupOptions = {}): Promise<{ pending
   const deadline = nowOf(options) + POLL_BUDGET_MS;
   const api = new NetcupApi(reply.access_token, options.fetch, { sleep: options.sleep, now: options.now, deadline });
   let saved = false;
+  let revoked = false;
   try {
     const found = await findServer(api, addressesOf(options), (options.macs ?? interfaceMacs)());
     if (!found && readToken(paths)) failAction(unmatched(options));
@@ -729,8 +733,9 @@ export async function pollNetcup(options: NetcupOptions = {}): Promise<{ pending
             if (current) writeState(paths.tokenFile, { refreshToken: current }, paths.rootUid);
             else rmSync(paths.tokenFile, { force: true });
           } catch {
-            // Gone before the token lock is released, so no refresh spends it before it is revoked below.
-            try { rmSync(paths.tokenFile, { force: true }); } catch { /* revoked below all the same */ }
+            // Revoked and gone before the token lock is released, so no refresh can spend it.
+            revoked = await auth.revoke(refreshToken).then(() => true, () => false);
+            try { rmSync(paths.tokenFile, { force: true }); } catch { /* already revoked */ }
             try { rmSync(paths.syncFile, { recursive: true, force: true }); } catch { /* nothing reads it without a token */ }
           }
           throw syncError;
@@ -742,7 +747,7 @@ export async function pollNetcup(options: NetcupOptions = {}): Promise<{ pending
       return { notice: found ? `Connected to netcup; this server is ${found.serverName} there.` : `Connected to netcup. ${unmatched(options)}.` };
     }, 15);
   } catch (error) {
-    if (!saved) await auth.revoke(refreshToken).catch(() => {});
+    if (!saved && !revoked) await auth.revoke(refreshToken).catch(() => {});
     if (error instanceof ActionFailure) throw error;
     failAction(`Signed in, but netcup could not be read: ${auth.clean(api.clean(errorMessage(error)))}`);
   }
@@ -1031,7 +1036,7 @@ export async function setNetcupRole(
     // Turning on reads the role's policy as it will be: an attached one is brought current first.
     const planning = planContext(enabled ? { ...ctx, cloudflare: { ...ctx.cloudflare, [role]: null } } : ctx, list?.ranges ?? []);
     const plan = planFor(planning, role, enabled);
-    const words = timesyncdActive(options) ? WORDS : { ...WORDS, closesMore: `${WORDS.closesMore}${NO_TIMESYNCD}` };
+    const words = timesyncdInUse(options) ? WORDS : { ...WORDS, closesMore: `${WORDS.closesMore}${NO_TIMESYNCD}` };
     const review = enabled
       ? await enableReview(role, planning, plan, list!.ranges, paths, options, words)
       : disableReview(role, planning, plan, list?.ranges ?? null, paths, options, words);

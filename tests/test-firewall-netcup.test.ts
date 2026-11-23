@@ -1481,6 +1481,36 @@ FallbackNTP=
     expect(restarts(calls)).toBe(2);
   });
 
+  test("a failed restart that leaves timesyncd failed is retried by the next repair", async () => {
+    const fake = new FakeNetcup();
+    fake.policy("ssh", [ssh()], [SERVER]);
+    const server = await connected(fake);
+    timesyncd(server);
+    await turn(server, "web", true);
+    rmSync(dropIn(server));
+    const working = server.options.run!;
+    let state = "active";
+    const calls: string[] = [];
+    server.options.run = (command, args) => {
+      if (command !== "systemctl") return working(command, args);
+      calls.push(args.join(" "));
+      if (args[0] === "is-active") return { ok: state === "active", stdout: `${state}\n`, stderr: "" };
+      if (args[0] === "try-restart") { state = "failed"; return { ok: false, stdout: "", stderr: "Job failed" }; }
+      state = "active";
+      return { ok: true, stdout: "", stderr: "" };
+    };
+    expect(await refusal(syncNetcup("repair", server.options))).toContain("restarting systemd-timesyncd failed");
+    expect(existsSync(dropIn(server))).toBe(false);
+    expect(await syncNetcup("repair", server.options)).toBe("systemd-timesyncd pointed at time.cloudflare.com and ptbtime1.ptb.de");
+    expect(existsSync(dropIn(server))).toBe(true);
+    expect(calls.filter((call) => call === "restart systemd-timesyncd")).toHaveLength(1);
+    expect(state).toBe("active");
+    // Also when the earlier drop-in could not be put back: the file is right, timesyncd is failed.
+    state = "failed";
+    expect(await syncNetcup("repair", server.options)).toBe("systemd-timesyncd pointed at time.cloudflare.com and ptbtime1.ptb.de");
+    expect(state).toBe("active");
+  });
+
   test("the drop-in stays while one of the addon's policies may still be on the server", async () => {
     const fake = new FakeNetcup();
     fake.policy("ssh", [ssh()], [SERVER]);

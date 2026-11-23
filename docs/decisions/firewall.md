@@ -667,7 +667,8 @@ server (an open one makes netcup drop by default too), the addon writes
 and `FallbackNTP=` and sets `NTP=` to those six addresses, so timesyncd never
 falls back to the pool, whose replies would be dropped; it restarts timesyncd
 when the file changes, and puts the earlier file back when the restart fails,
-so the next repair tries again. It is removed only once netcup shows none of the
+so the next repair tries again; a timesyncd the failed restart left `failed`
+still counts as the server's NTP client, and repair starts it again. It is removed only once netcup shows none of the
 addon's policies on the server, or on disconnecting when none is attached.
 Disabling Firewall, or disconnecting with an open policy left behind or a sign-in
 netcup refuses (which shows nothing), keeps it; so does unreadable state:
