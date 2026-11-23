@@ -53,11 +53,11 @@ ok "dependencies available"
 
 IFS=',' read -r -a ADDON_LIST <<< "$SELECTED"
 
-# GitHub first, so its download counts stay whole; the mirror at cp.7he.dev
+# GitHub first, so its download counts stay whole; the mirror at clp.7he.dev
 # when GitHub cannot be reached, as from an IPv6-only server, since github.com
 # has no IPv6. "latest" is the newest release that is not a prerelease, on both.
 # A prerelease tag carries a hyphen, so --version refuses one too.
-MIRROR="https://cp.7he.dev"
+MIRROR="https://clp.7he.dev"
 GITHUB="https://github.com/${REPO}/releases"
 if [[ $VERSION == "latest" ]]; then
   SOURCES=("${GITHUB}/latest/download" "${MIRROR}/releases/latest")

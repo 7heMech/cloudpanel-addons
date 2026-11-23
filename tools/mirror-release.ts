@@ -1,4 +1,4 @@
-// Copies a published release to the R2 bucket behind cp.7he.dev, which
+// Copies a published release to the R2 bucket behind clp.7he.dev, which
 // release.yml runs after it publishes the GitHub release.
 //
 //   bun tools/mirror-release.ts <tag> <dir>

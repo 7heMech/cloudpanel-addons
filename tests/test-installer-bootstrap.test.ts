@@ -32,7 +32,7 @@ function bootstrap(
     const source = readFileSync(join(import.meta.dir, "..", "install.sh"), "utf8");
     const archStart = source.indexOf('case "$(uname -m)" in');
     const archEnd = source.indexOf("esac\n", archStart) + "esac\n".length;
-    const start = source.indexOf('MIRROR="https://cp.7he.dev"');
+    const start = source.indexOf('MIRROR="https://clp.7he.dev"');
     if (archStart === -1 || start === -1) throw new Error("installer architecture or download step was not found");
     const harness = `set -euo pipefail
 REPO=7heMech/cloudpanel-addons
@@ -54,7 +54,7 @@ curl() {
     esac
   done
   printf 'get:%s\\n' "$url" >> "$BOOTSTRAP_LOG"
-  [[ $url != https://cp.7he.dev/* || $TEST_MIRROR == up ]] || return 22
+  [[ $url != https://clp.7he.dev/* || $TEST_MIRROR == up ]] || return 22
   [[ $url != https://github.com/* || $TEST_GITHUB == up ]] || return 7
   if [[ -n $output ]]; then command cp "$TEST_ROOT/fixtures/\${url##*/}" "$output"; else command cat "$TEST_ROOT/fixtures/\${url##*/}"; fi
 }
@@ -85,7 +85,7 @@ install() {
 }
 
 const GITHUB = "https://github.com/7heMech/cloudpanel-addons/releases";
-const MIRROR = "https://cp.7he.dev";
+const MIRROR = "https://clp.7he.dev";
 const install = (events: string[]) => events.filter((event) => event.startsWith("clp:"));
 
 test("the latest release comes from GitHub, is checked and handed every addon in one call", () => {

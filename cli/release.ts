@@ -102,9 +102,9 @@ export async function resolveRelease(
   let release = await githubRelease(requested, allowPrerelease);
   if (!release) {
     const mirrored = await mirror();
-    if (!mirrored) fatal("neither GitHub nor the mirror at cp.7he.dev could be reached");
+    if (!mirrored) fatal("neither GitHub nor the mirror at clp.7he.dev could be reached");
     const found = pickRelease(mirrored, requested, allowPrerelease);
-    if (!found) fatal(`GitHub could not be reached, and the mirror at cp.7he.dev has no ${requested && requested !== "latest" ? requested : "release"}`);
+    if (!found) fatal(`GitHub could not be reached, and the mirror at clp.7he.dev has no ${requested && requested !== "latest" ? requested : "release"}`);
     release = found;
   }
   if (release.draft) fatal(`release ${release.tag_name} is a draft`);

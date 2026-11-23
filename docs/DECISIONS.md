@@ -8,7 +8,7 @@
 - [DNS](decisions/dns.md)
 - [Firewall](decisions/firewall.md)
 - [Releases and updates](decisions/releases.md)
-  - [Release mirror](decisions/releases.md#release-mirror) — releases copied to R2 at cp.7he.dev for IPv6-only servers
+  - [Release mirror](decisions/releases.md#release-mirror) — releases copied to R2 at clp.7he.dev for IPv6-only servers
   - [Supported CloudPanel versions](decisions/releases.md#supported-cloudpanel-versions) — the range a release declares, and what update and install do with it
 - [Instatic CMS](decisions/instatic.md)
 - [Stager](decisions/stager.md)

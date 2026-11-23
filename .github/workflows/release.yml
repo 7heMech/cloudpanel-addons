@@ -246,7 +246,7 @@ jobs:
             dist/SHA256SUMS
 
   mirror:
-    # A copy of the published release in R2 at cp.7he.dev, which IPv6-only
+    # A copy of the published release in R2 at clp.7he.dev, which IPv6-only
     # servers reach; github.com has no IPv6. It downloads what GitHub now
     # serves, so the mirror holds the published bytes, and runs apart from the
     # release job so the R2 token never shares a job with id-token: write.

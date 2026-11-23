@@ -111,7 +111,7 @@ kept in `/usr/local/libexec/clp-addons/gh`.
 github.com, api.github.com and GitHub's release downloads have no IPv6, so an
 IPv6-only server can neither install nor update from GitHub. After each
 release, the tag workflow's `mirror` job downloads the published release and
-`tools/mirror-release.ts` copies it to an R2 bucket served at `cp.7he.dev`:
+`tools/mirror-release.ts` copies it to an R2 bucket served at `clp.7he.dev`:
 `releases/<tag>/` for its files, then `releases.json`, the mirrored releases
 newest first in the shape of GitHub's release list, and for the newest stable
 release, `latest` (its tag) and `install.sh` at the root. Files go up before

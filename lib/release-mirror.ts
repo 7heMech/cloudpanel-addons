@@ -1,8 +1,8 @@
-// Releases are mirrored to Cloudflare R2, served at cp.7he.dev over IPv4 and
+// Releases are mirrored to Cloudflare R2, served at clp.7he.dev over IPv4 and
 // IPv6; github.com and api.github.com have no IPv6. See docs/decisions/releases.md.
 import { compareSemver, isPrerelease, VERSION_TAG_RE } from "./semver";
 
-export const MIRROR_URL = "https://cp.7he.dev";
+export const MIRROR_URL = "https://clp.7he.dev";
 /** The mirrored releases, newest first, shaped like GitHub's release list. */
 export const MIRROR_INDEX = "releases.json";
 /** The newest stable tag, which install.sh reads. */

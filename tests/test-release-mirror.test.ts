@@ -1,4 +1,4 @@
-// The release mirror at cp.7he.dev: what the release workflow keeps there, and
+// The release mirror at clp.7he.dev: what the release workflow keeps there, and
 // that install and update read it first and fall back to GitHub.
 import { afterEach, describe, expect, test } from "bun:test";
 import { MIRROR_URL, parseMirrorIndex, planMirror, type MirroredRelease } from "../lib/release-mirror";
