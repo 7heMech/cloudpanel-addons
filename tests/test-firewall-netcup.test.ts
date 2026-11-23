@@ -1,10 +1,11 @@
-import { afterEach, describe, expect, test } from "bun:test";
+import { afterEach, describe, expect, spyOn, test } from "bun:test";
 import { Database } from "bun:sqlite";
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { withFileLock } from "../lib/file-lock";
 import { join } from "node:path";
-import { parseCloudflareRanges, type CloudRole } from "../addons/firewall/cloud-firewall";
+import { ANYONE, openToOthers, parseCloudflareRanges, reachable, sshMissing, type CloudRole, type Guard } from "../addons/firewall/cloud-firewall";
+import * as rootState from "../lib/root-state";
 import {
   connectNetcup, disconnectNetcup, isPublicAddress, netcupOpenRules, netcupRules, netcupSetupState, netcupSignature, netcupView, pollNetcup,
   setNetcupRole, syncNetcup, type NetcupOptions,
@@ -935,7 +936,7 @@ describe("review fixes", () => {
     expect(partial.review.text).toContain("missing.example.com did not resolve");
   });
 
-  test("HTTP 202 without a usable task id is reported as unknown completion for firewall and policy PUTs", async () => {
+  test("HTTP 202 without a usable task id is reported as unknown completion for firewall PUTs, and for policy PUTs netcup did not take", async () => {
     const fake = new FakeNetcup();
     fake.policy("ssh", [ssh()], [SERVER]);
     const server = await connected(fake);
@@ -944,11 +945,15 @@ describe("review fixes", () => {
     expect(await refusal(turn(server, "web", true))).toContain("returned no task to track it");
     expect(netcupSetupState(server.options).seen.web).toBeUndefined();
 
-    // Policy PUT returning 202 without taskInfo also fails instead of reporting success.
+    // netcup starts no task for a policy no server has: the policy it answers with says whether it took the change.
     fake.setFirewallNoTask = false;
     const web = fake.named("clp-addons-cloudflare-web")[0]!;
     web.rules = [...web.rules!, ssh("443")];
     fake.updatePolicyNoTask = true;
+    expect(await syncNetcup("repair", server.options)).toBe("1 netcup policy set to Cloudflare's list");
+    expect(netcupSignature(web.rules)).toBe(netcupSignature(netcupRules("web", RANGES)));
+    web.rules = [...web.rules!, ssh("443")];
+    fake.updatePolicyIgnored = true;
     expect(await refusal(syncNetcup("repair", server.options))).toContain("returned no task to track it");
   });
 
@@ -1079,7 +1084,7 @@ describe("review fixes", () => {
     expect(freshFake.revoked).toEqual([freshFake.refreshToken!]);
   });
 
-  test("a newer owned policy edited to allow anyone is refused, while a valid newer policy is kept intact", async () => {
+  test("a newer owned policy edited to allow anyone is rewritten, while a newer Cloudflare-only one is kept intact", async () => {
     const fake = new FakeNetcup();
     fake.policy("ssh", [ssh()], [SERVER]);
     const server = await connected(fake);
@@ -1090,18 +1095,22 @@ describe("review fixes", () => {
       [],
       `Managed by clp-addons; Cloudflare's list of ${newerAt}`,
     );
-    expect(await refusal(turn(server, "web", true))).toContain("do not match a Cloudflare-only policy");
-    expect(fake.userPolicies()).toEqual(["ssh"]);
-    expect(tampered.rules).toHaveLength(netcupRules("web", RANGES).length + 1);
-
-    // Replace with a valid newer Cloudflare-only list (one fewer range) and confirm it attaches without overwriting.
-    const newerRanges = RANGES.filter((range) => range !== "131.0.72.0/22");
-    tampered.rules = netcupRules("web", newerRanges);
-    const expectedSig = netcupSignature(tampered.rules);
-    const done = await turn(server, "web", true);
-    expect("notice" in done && done.notice).toBe("netcup now lets only Cloudflare reach ports 80 and 443.");
+    expect(await turn(server, "web", true)).toEqual({ notice: "netcup now lets only Cloudflare reach ports 80 and 443." });
     expect(fake.userPolicies()).toEqual(["ssh", "clp-addons-cloudflare-web"]);
+    expect(netcupSignature(tampered.rules)).toBe(netcupSignature(netcupRules("web", RANGES)));
+
+    // A newer list with one fewer range, written by a later version with other rule descriptions and order, stays as it is.
+    const newerRanges = RANGES.filter((range) => range !== "131.0.72.0/22");
+    tampered.description = `Managed by clp-addons; Cloudflare's list of ${newerAt}`;
+    tampered.rules = netcupRules("web", newerRanges).map((rule) => ({ ...rule, description: "Cloudflare (v3)" })).reverse();
+    const expectedSig = netcupSignature(tampered.rules);
+    expect(await syncNetcup("repair", server.options)).toBe("1 netcup policy follows a newer Cloudflare list from another server");
     expect(netcupSignature(tampered.rules)).toBe(expectedSig);
+
+    // On this server too, a newer policy that lets in a source outside Cloudflare's list is put back.
+    tampered.rules = [...tampered.rules, { ...netcupRules("web", RANGES)[0]!, sources: ["1.0.0.0/8"] }];
+    expect(await syncNetcup("repair", server.options)).toBe("1 netcup policy set to Cloudflare's list");
+    expect(netcupSignature(tampered.rules)).toBe(netcupSignature(netcupRules("web", RANGES)));
   });
 
   test("turning on when both Cloudflare and open policies are attached requires review before removing the open policy", async () => {
@@ -1151,5 +1160,89 @@ describe("review fixes", () => {
       "SSH on port 22: site users can no longer connect over SFTP",
       "TCP 25, opened on CloudPanel's Firewall page",
     ]);
+  });
+});
+
+describe("what a set of policies lets through", () => {
+  const rule = (port: string, accept: boolean, sourcePorts?: string) => ({ protocol: "tcp", port, sources: ANYONE, accept, ...(sourcePorts ? { sourcePorts } : {}) });
+  const cloudflare443: Guard = { name: "cf", rules: [{ protocol: "tcp", port: "443", sources: RANGES, accept: true }] };
+
+  test("port 0 starts a range, so a drop of 0-65535 shadows what follows it", () => {
+    const dropAll: Guard = { name: "ops", rules: [rule("0-65535", false), rule("22", true)] };
+    expect(sshMissing([22], [dropAll])).toEqual([22]);
+    expect(reachable([dropAll, cloudflare443], 443, RANGES)).toBe(false);
+    expect(sshMissing([22], [{ name: "ops", rules: [rule("0", true), rule("22", true)] }])).toEqual([]);
+  });
+
+  test("a port that cannot be read is taken the way that errs safe for each question", () => {
+    const unreadableDrop: Guard = { name: "ops", rules: [rule("65535-1", false), rule("22", true), rule("443", true)] };
+    expect(sshMissing([22], [unreadableDrop])).toEqual([22]);
+    expect(reachable([unreadableDrop], 443, RANGES)).toBe(false);
+    expect(openToOthers("web", [unreadableDrop], RANGES)).toEqual([{ port: 443, firewall: "ops", sources: ANYONE }]);
+
+    const unreadableAccept: Guard = { name: "ops", rules: [rule("65535-1", true)] };
+    expect(sshMissing([22], [unreadableAccept])).toEqual([22]);
+    expect(reachable([unreadableAccept], 443, RANGES)).toBe(false);
+    expect(openToOthers("web", [unreadableAccept], RANGES).map((opening) => opening.port)).toEqual([80, 443]);
+  });
+
+  test("clients connect from source ports 1024 and up, so a rule limited to lower ones does not count as letting them in", () => {
+    expect(sshMissing([22], [{ name: "ops", rules: [rule("22", true, "0-1023")] }])).toEqual([22]);
+    expect(sshMissing([22], [{ name: "ops", rules: [rule("22", true, "1024-40000")] }])).toEqual([22]);
+    expect(sshMissing([22], [{ name: "ops", rules: [rule("22", true, "1024-40000"), rule("22", true, "40001-65535")] }])).toEqual([]);
+    // Anyone can pick a low source port, so such a rule still lets them past Cloudflare.
+    expect(openToOthers("web", [{ name: "ops", rules: [rule("443", true, "1-1023")] }], RANGES)).toEqual([{ port: 443, firewall: "ops", sources: ANYONE }]);
+  });
+
+  test("turning the sites off keeps 80 and 443 open when the operator's rules admit only low source ports", async () => {
+    const fake = new FakeNetcup();
+    fake.policy("ops", [
+      ssh(),
+      { direction: "INGRESS", protocol: "TCP", action: "ACCEPT", sources: [], sourcePorts: "1-1023", destinationPorts: "80" },
+      { direction: "INGRESS", protocol: "TCP", action: "ACCEPT", sources: [], sourcePorts: "1-1023", destinationPorts: "443" },
+    ], [SERVER]);
+    const server = await connected(fake);
+    await turn(server, "web", true);
+    const off = await setNetcupRole("web", false, undefined, server.options);
+    if (!("review" in off)) throw new Error("expected a review");
+    expect(off.review.text).toStartWith("Anyone can reach ports 80 and 443 again: clp-addons-open-web takes the place of clp-addons-cloudflare-web");
+    expect(off.review.closes).toEqual([]);
+  });
+
+  test("closing ports from separate Firewall page rules are listed apart, not merged into one range", async () => {
+    const server = await connected(new FakeNetcup());
+    const db = new Database(join(server.dir, "panel.db"));
+    for (const port of ["3000", "3001"]) {
+      for (const source of ["0.0.0.0/0", "::/0"]) db.query("INSERT INTO firewall_rule (port_range, source) VALUES (?, ?)").run(port, source);
+    }
+    db.close();
+    const review = await setNetcupRole("web", true, undefined, server.options);
+    if (!("review" in review)) throw new Error("expected a review");
+    expect(review.review.closes).toEqual(["SSH on port 22: site users can no longer connect over SFTP", "TCP 3000 and 3001, opened on CloudPanel's Firewall page"]);
+  });
+
+  test("a sign-in whose state and token restore both fail leaves no netcup.json beside the revoked new token", async () => {
+    const fake = new FakeNetcup();
+    const server = await connected(fake);
+    const syncFile = join(server.dir, "state", "netcup.json");
+    const tokenFile = join(server.dir, "state", "netcup-token.json");
+    const other = new FakeNetcup();
+    other.userId = 9001;
+    server.options.fetch = other.fetch;
+    await connectNetcup(server.options);
+    other.granted = true;
+    const real = rootState.writeState;
+    let tokenWrites = 0;
+    const spy = spyOn(rootState, "writeState").mockImplementation((path, value, owner) => {
+      if (path === syncFile || (path === tokenFile && ++tokenWrites > 1)) throw new Error("disk full");
+      real(path, value, owner);
+    });
+    try {
+      expect(await refusal(pollNetcup(server.options))).toContain("disk full");
+    } finally {
+      spy.mockRestore();
+    }
+    expect(existsSync(syncFile)).toBe(false);
+    expect(other.revoked).toEqual([other.refreshToken!]);
   });
 });

@@ -256,12 +256,18 @@ export class NetcupApi {
     return this.call<NetcupPolicy>(`/users/${userId}/firewall-policies`, "POST", { name, description, rules });
   }
 
-  /** Rewrites a policy, and waits until netcup applied it to every server that has it. */
-  async updatePolicy(userId: number, id: number, name: string, description: string, rules: NetcupRule[]): Promise<void> {
-    const { status, data: reply } = await this.callWithStatus<{ taskInfo?: TaskInfo | null }>(`/users/${userId}/firewall-policies/${id}`, "PUT", { name, description, rules });
+  /**
+   * Rewrites a policy, and waits until netcup applied it to every server that
+   * has it. netcup may start no task, as when no server has the policy; then
+   * the policy it answers with must be what `written` expects.
+   */
+  async updatePolicy(userId: number, id: number, name: string, description: string, rules: NetcupRule[], written: (policy: NetcupPolicy) => boolean): Promise<void> {
+    const { status, data: reply } = await this.callWithStatus<{ firewallPolicy?: NetcupPolicy | null; taskInfo?: TaskInfo | null }>(`/users/${userId}/firewall-policies/${id}`, "PUT", { name, description, rules });
     const task = reply?.taskInfo;
     if (typeof task?.uuid === "string" && task.uuid.trim()) await this.settle(task);
-    else if (status === 202) throw new NetcupError("took the change, but returned no task to track it", 0, "running");
+    else if (status === 202 && !(reply?.firewallPolicy && written(reply.firewallPolicy))) {
+      throw new NetcupError("took the change, but returned no task to track it", 0, "running");
+    }
   }
 
   /**

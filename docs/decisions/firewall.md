@@ -545,7 +545,13 @@ and the Setup state. Each provider maps its firewalls to a `Guard`, its inbound
 rules in the order the provider applies them, and says whether it lets in what
 no rule decides, now and after a change. A rule list is read first match wins
 across port subranges, source-port ranges, and address intervals; Hetzner rules
-only allow, so this is the union described above. Each provider keeps its own
+only allow, so this is the union described above. Whether clients connect is
+asked over their source ports, 1024–65535: a port counts as reachable after a
+change only from every one, and as open before it from any one. What else lets
+anyone past Cloudflare is asked over every source port. A port of `0` covers no
+connection, so `0-65535` covers all. A port that cannot be read is taken the way
+that errs safe: an unreadable accept matches when asking what is open, and an
+unreadable drop when asking what still connects. Each provider keeps its own
 API client, how it finds this server, its credential, and how it carries out a
 plan.
 
@@ -573,7 +579,8 @@ ends the attempt, and any other failure leaves the code for the page to ask
 again until it expires. After the grant, `netcup-token.json` and `netcup.json`
 are written together under the token lock; if writing `netcup.json` fails, the
 previous token is restored (or the new one removed) and the new refresh token
-is revoked. Any failure before both are saved revokes the new token; replacing
+is revoked. If restoring fails too, `netcup.json` is removed, so the new token,
+now revoked, never sits beside the old account's state. Any failure before both are saved revokes the new token; replacing
 a saved sign-in with an account that does not hold this server keeps the old
 sign-in and state, revokes the new token, and fails. Only the refresh token is
 kept, in `netcup-token.json` through `lib/root-state.ts`. Each read or change
@@ -637,9 +644,12 @@ only IPv6 would be cut off. netcup has no labels, so a policy is the addon's whe
 has one of the names and its description starts with `Managed by clp-addons`;
 a policy with the name and not that refuses the switch. The writer's list time
 is the end of the description (`; Cloudflare's list of <time>`), read like
-Hetzner's label. When a switch retains a policy claiming a newer list, it checks
-that the policy's rules still match a valid Cloudflare-only policy and refuses
-otherwise. The listing may leave out rules, so each owned policy is read
+Hetzner's label. A policy claiming a newer list is left alone only while it
+still lets only Cloudflare in: TCP accepts on exactly the role's ports, the same
+sources on each, both address families, every source inside this server's list,
+and ICMP. Otherwise a switch or repair rewrites it to this server's list. A
+newer list that adds a range therefore loses it until this server's list
+catches up; only Cloudflare is let in throughout. The listing may leave out rules, so each owned policy is read
 on its own before it is compared. Listings are paged until a page is empty or
 brings no new id.
 
@@ -656,8 +666,10 @@ stays unused. Writes answer with a task, which the addon waits for, retrying
 transient task-poll errors up to a minute each (with each poll bounded by the
 remaining task wait) and three minutes across a switch, with at most a minute
 for the lock, so the page has its answer within the gateway's 240 seconds.
-netcup took a change it answered with HTTP 202 or a task: a 202 with no usable
-task id or a task still running when the wait ends is reported as taken with
+netcup took a change it answered with HTTP 202 or a task. A policy write
+answers with no task when no server has the policy; it counts as done when the
+policy netcup answers with has the rules and description written. Otherwise a
+202 with no usable task id or a task still running when the wait ends is reported as taken with
 unknown completion, and one that ends in `ERROR`, `ROLLBACK` or `CANCELED` as
 failed, with SCP named for what the server has. Any other failure of the
 assignment write says netcup may have taken it. Policies are never deleted: the

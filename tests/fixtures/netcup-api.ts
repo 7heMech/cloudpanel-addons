@@ -40,8 +40,10 @@ export class FakeNetcup {
   setFirewallNoTask = false;
   /** Override the HTTP status returned when `setFirewallNoTask` is true. */
   setFirewallNoTaskStatus = 200;
-  /** When true, `PUT /firewall-policies/{id}` answers 202 with no taskInfo. */
+  /** When true, `PUT /firewall-policies/{id}` answers 202 with no taskInfo, as netcup does for a policy no server has. */
   updatePolicyNoTask = false;
+  /** When true, a task-less policy PUT also leaves the policy as it was and answers with that. */
+  updatePolicyIgnored = false;
   /** Answer the device poll with this HTTP status instead. */
   pollStatus: number | null = null;
   /** Answer the device poll with this OAuth error code instead. */
@@ -258,7 +260,7 @@ export class FakeNetcup {
       if (!policy) return notFound("Firewall policy");
       if (method === "GET") return json(structuredClone({ ...policy, rules: policy.rules!.map((rule) => ({ sourcePorts: null, destinations: [], numberOfEffectiveRules: Math.max(1, rule.sources?.length ?? 0), ...rule })) }));
       if (method === "PUT") {
-        Object.assign(policy, { name: body.name, description: body.description ?? null, rules: body.rules ?? [] });
+        if (!(this.updatePolicyNoTask && this.updatePolicyIgnored)) Object.assign(policy, { name: body.name, description: body.description ?? null, rules: body.rules ?? [] });
         return json({ firewallPolicy: structuredClone(policy), ...(this.updatePolicyNoTask ? {} : { taskInfo: this.task() }) }, 202);
       }
     }

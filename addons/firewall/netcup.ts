@@ -626,7 +626,8 @@ export async function pollNetcup(options: NetcupOptions = {}): Promise<{ pending
             if (current) writeState(paths.tokenFile, { refreshToken: current }, paths.rootUid);
             else rmSync(paths.tokenFile, { force: true });
           } catch {
-            saved = true;
+            // The new token stays saved, revoked below, so it is never used against the old account's state.
+            try { rmSync(paths.syncFile, { force: true }); } catch { /* the revoked token still asks to connect again */ }
           }
           throw syncError;
         }
@@ -771,37 +772,57 @@ function planContext(ctx: Context, ranges: string[]): PlanContext<Attached> {
   };
 }
 
-/** Rewrites an owned policy's rules to the list unless they match, or a server with a newer list wrote them. */
+async function rewrite(api: NetcupApi, userId: number, policy: NetcupPolicy, description: string, rules: NetcupRule[]): Promise<void> {
+  await api.updatePolicy(userId, policy.id, policy.name, description, rules,
+    (answered) => answered.description === description && netcupSignature(answered.rules) === netcupSignature(rules));
+}
+
+/**
+ * Whether a policy only lets Cloudflare reach the role's ports: TCP accepts
+ * on exactly those ports, each from the same sources, both address families,
+ * every source inside this server's list, and ICMP. A newer list that adds a
+ * range fails this until this server's list catches up, and is then rewritten
+ * to this server's list for a while; only Cloudflare stays let in throughout.
+ */
+function cloudflareOnly(role: CloudRole, rules: NetcupRule[] | undefined, ranges: string[]): boolean {
+  const cloudflare = ranges.map(parseCidr).filter((cidr): cidr is Cidr => cidr !== null);
+  const ports = CLOUD_ROLES[role].ports.map(String);
+  const sources = new Map<string, Set<string>>();
+  for (const rule of rules ?? []) {
+    if (rule.direction !== "INGRESS" || rule.action !== "ACCEPT") return false;
+    if (rule.protocol === "ICMP" || rule.protocol === "ICMPv6") continue;
+    if (rule.protocol !== "TCP" || rule.sourcePorts || rule.destinations?.length || !rule.sources?.length) return false;
+    if (!ports.includes(rule.destinationPorts ?? "")) return false;
+    const set = sources.get(rule.destinationPorts!) ?? new Set<string>();
+    for (const raw of rule.sources) {
+      const cidr = parseCidr(raw);
+      if (!cidr || !cloudflare.some((range) => contains(range, cidr))) return false;
+      set.add(cidr.text);
+    }
+    sources.set(rule.destinationPorts!, set);
+  }
+  const each = ports.map((port) => [...(sources.get(port) ?? [])].sort());
+  const first = each[0]!;
+  return each.every((list) => list.join() === first.join()) && first.some((text) => !text.includes(":")) && first.some((text) => text.includes(":"));
+}
+
+/**
+ * Rewrites an owned policy's rules to the list unless they match, or a server
+ * with a newer list wrote them and they still let only Cloudflare in.
+ */
 async function bringCurrent(api: NetcupApi, userId: number, role: CloudRole, policy: NetcupPolicy, list: CloudflareRanges, now = Date.now()): Promise<"current" | "rewritten" | "newer"> {
   const rules = netcupRules(role, list.ranges);
   if (netcupSignature(policy.rules) === netcupSignature(rules)) return "current";
-  if (!mayRewrite(policy, list.refreshedAt, now)) return "newer";
-  await api.updatePolicy(userId, policy.id, policy.name, descriptionFor("cloudflare", list.refreshedAt), rules);
+  if (!mayRewrite(policy, list.refreshedAt, now) && cloudflareOnly(role, policy.rules, list.ranges)) return "newer";
+  await rewrite(api, userId, policy, descriptionFor("cloudflare", list.refreshedAt), rules);
   return "rewritten";
 }
 
 /** Puts an open policy's fixed rules back unless they match. */
 async function bringOpenCurrent(api: NetcupApi, userId: number, role: CloudRole, policy: NetcupPolicy): Promise<boolean> {
   if (netcupSignature(policy.rules) === netcupSignature(netcupOpenRules(role))) return false;
-  await api.updatePolicy(userId, policy.id, policy.name, descriptionFor("open", 0), netcupOpenRules(role));
+  await rewrite(api, userId, policy, descriptionFor("open", 0), netcupOpenRules(role));
   return true;
-}
-
-/** Whether a policy claiming a newer Cloudflare list still matches the addon's Cloudflare-only rule shape. */
-function validNewerPolicy(role: CloudRole, rules: NetcupRule[] | undefined): boolean {
-  const first = String(CLOUD_ROLES[role].ports[0]);
-  const raw = (rules ?? [])
-    .filter((rule) => rule.direction === "INGRESS" && rule.protocol === "TCP" && rule.action === "ACCEPT" && rule.destinationPorts === first)
-    .flatMap((rule) => rule.sources ?? []);
-  const seen = new Map<string, Cidr>();
-  for (const entry of raw) {
-    const cidr = parseCidr(entry);
-    if (!cidr || cidr.hostBits || cidr.prefix < (cidr.v6 ? 16 : 8)) return false;
-    seen.set(cidr.text, cidr);
-  }
-  const list = [...seen.values()];
-  if (!list.some((cidr) => !cidr.v6) || !list.some((cidr) => cidr.v6)) return false;
-  return netcupSignature(rules) === netcupSignature(netcupRules(role, list.map((cidr) => cidr.text)));
 }
 
 /** The role's policy of that access, current, creating it if the account has none; returns its id. */
@@ -818,9 +839,7 @@ async function ensurePolicy(ctx: Context, role: CloudRole, access: Access, list:
   }
   const full = await api.policy(target.userId, existing.id);
   if (access === "open") await bringOpenCurrent(api, target.userId, role, full);
-  else if (await bringCurrent(api, target.userId, role, full, list!, ctx.now) === "newer" && !validNewerPolicy(role, full.rules)) {
-    failAction(`${name} says it follows a newer Cloudflare list, but its rules do not match a Cloudflare-only policy; update this server's Cloudflare list or fix ${name} in SCP`);
-  }
+  else await bringCurrent(api, target.userId, role, full, list!, ctx.now);
   return existing.id;
 }
 

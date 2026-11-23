@@ -175,24 +175,31 @@ type IpInterval = [bigint, bigint];
 const MAX_V4 = (1n << 32n) - 1n;
 const MAX_V6 = (1n << 128n) - 1n;
 const ALL_PORTS: [number, number] = [1, 65535];
+/** The source ports clients connect from; a rule limited to lower ones lets no ordinary client in. */
 const CLIENT_SOURCE_PORTS: [number, number] = [1024, 65535];
 
+/** A port or a range; no connection uses port 0, so `0` covers nothing and `0-65535` every port. */
 function parsePortRange(port: string): [number, number] | null {
   if (port === "any") return ALL_PORTS;
   const match = /^(\d{1,5})(?:-(\d{1,5}))?$/.exec(port);
   if (!match) return null;
   const from = Number(match[1]);
   const to = Number(match[2] ?? match[1]);
-  return from >= 1 && to <= 65535 && from <= to ? [from, to] : null;
+  return to <= 65535 && from <= to ? [Math.max(from, 1), to] : null;
 }
 
-function sourcePortRange(rule: InboundRule): [number, number] {
-  return (rule.sourcePorts ? parsePortRange(rule.sourcePorts) : null) ?? ALL_PORTS;
-}
-
-export function portCovers(port: string, target: number): boolean {
-  const range = parsePortRange(port);
-  return range !== null && range[0] <= target && target <= range[1];
+/**
+ * Whether a rule decides a connection to `port` from `sport`. A port or range
+ * that cannot be read is taken the way that errs safe: with `leanOpen`, which
+ * asks what is or was open, an unreadable accept matches and an unreadable drop
+ * does not; otherwise, which asks what still connects, the reverse.
+ */
+function decides(rule: InboundRule, protocol: string, port: number, sport: number, leanOpen: boolean): boolean {
+  if (rule.protocol !== protocol) return false;
+  const ports = parsePortRange(rule.port);
+  const sports = rule.sourcePorts ? parsePortRange(rule.sourcePorts) : ALL_PORTS;
+  if ((ports && (port < ports[0] || port > ports[1])) || (sports && (sport < sports[0] || sport > sports[1]))) return false;
+  return ports && sports ? true : rule.accept === leanOpen;
 }
 
 function portSlices(from: number, to: number, ranges: [number, number][]): [number, number][] {
@@ -206,6 +213,14 @@ function portSlices(from: number, to: number, ranges: [number, number][]): [numb
   const slices: [number, number][] = [];
   for (let i = 0; i < sorted.length - 1; i++) slices.push([sorted[i]!, sorted[i + 1]! - 1]);
   return slices;
+}
+
+/** The ranges the rules of a protocol name, as `pick` reads them from each rule, for cutting into slices every rule matches whole or not at all. */
+function rangesOf(guards: Guard[], protocol: string, pick: (rule: InboundRule) => string | null | undefined): [number, number][] {
+  return guards.flatMap((guard) => guard.rules)
+    .filter((rule) => rule.protocol === protocol)
+    .map((rule) => { const text = pick(rule); return text ? parsePortRange(text) : null; })
+    .filter((range): range is [number, number] => range !== null);
 }
 
 function cidrInterval(cidr: Cidr): IpInterval {
@@ -249,15 +264,13 @@ function ruleIntervals(rule: InboundRule, v6: boolean): IpInterval[] {
   return out;
 }
 
-/** First-match-wins accepted IP intervals on one destination port and one source-port slice. */
-function acceptedOnSlice(guards: Guard[], fallsOpen: boolean, protocol: string, port: number, sport: number, v6: boolean): IpInterval[] {
+/** First-match-wins accepted IP intervals on one destination port and one source port. */
+function acceptedOnSlice(guards: Guard[], fallsOpen: boolean, protocol: string, port: number, sport: number, v6: boolean, leanOpen: boolean): IpInterval[] {
   let undecided: IpInterval[] = [[0n, v6 ? MAX_V6 : MAX_V4]];
   const accepted: IpInterval[] = [];
   for (const guard of guards) {
     for (const rule of guard.rules) {
-      if (rule.protocol !== protocol || !portCovers(rule.port, port)) continue;
-      const [sFrom, sTo] = sourcePortRange(rule);
-      if (sport < sFrom || sport > sTo) continue;
+      if (!decides(rule, protocol, port, sport, leanOpen)) continue;
       const hit = intersectIntervals(undecided, ruleIntervals(rule, v6));
       if (!hit.length) continue;
       if (rule.accept) accepted.push(...hit);
@@ -269,30 +282,19 @@ function acceptedOnSlice(guards: Guard[], fallsOpen: boolean, protocol: string, 
   return accepted;
 }
 
-function sourcePortSlicesFor(guards: Guard[], protocol: string, port: number, bounds: [number, number]): [number, number][] {
-  const ranges: [number, number][] = [];
-  for (const guard of guards) {
-    for (const rule of guard.rules) {
-      if (rule.protocol === protocol && portCovers(rule.port, port) && rule.sourcePorts) ranges.push(sourcePortRange(rule));
-    }
-  }
-  return portSlices(bounds[0], bounds[1], ranges);
+/**
+ * Whether clients of the family reach the port: from some client source port
+ * with `leanOpen`, which asks whether it was open, else from every one, which
+ * asks whether it still connects.
+ */
+function allowsPort(guards: Guard[], fallsOpen: boolean, protocol: "tcp" | "udp", port: number, v6: boolean, leanOpen = false): boolean {
+  const slices = portSlices(...CLIENT_SOURCE_PORTS, rangesOf(guards, protocol, (rule) => rule.sourcePorts));
+  const accepts = ([sport]: [number, number]) => acceptedOnSlice(guards, fallsOpen, protocol, port, sport, v6, leanOpen).length > 0;
+  return leanOpen ? slices.some(accepts) : slices.every(accepts);
 }
 
-function allowsPort(guards: Guard[], fallsOpen: boolean, protocol: "tcp" | "udp", port: number, v6: boolean): boolean {
-  return sourcePortSlicesFor(guards, protocol, port, ALL_PORTS)
-    .some(([sport]) => acceptedOnSlice(guards, fallsOpen, protocol, port, sport, v6).length > 0);
-}
-
-function anyTcpAllowed(guards: Guard[], port: number): boolean {
-  return allowsPort(guards, false, "tcp", port, false) || allowsPort(guards, false, "tcp", port, true);
-}
-
-/** The sources a guard lets reach a TCP port. */
-export function openings(guard: Guard, port: number): Cidr[] {
-  return guard.rules
-    .filter((rule) => rule.accept && rule.protocol === "tcp" && portCovers(rule.port, port))
-    .flatMap((rule) => rule.sources.map(parseCidr).filter((cidr): cidr is Cidr => cidr !== null));
+function anyTcpAllowed(guards: Guard[], port: number, leanOpen = false): boolean {
+  return allowsPort(guards, false, "tcp", port, false, leanOpen) || allowsPort(guards, false, "tcp", port, true, leanOpen);
 }
 
 /**
@@ -301,21 +303,17 @@ export function openings(guard: Guard, port: number): Cidr[] {
  * `fallsOpen` is what happens when no rule decides.
  */
 export function allows(guards: Guard[], fallsOpen: boolean, protocol: "tcp" | "udp", from: number, to: number, v6: boolean): boolean {
-  const ranges = guards.flatMap((guard) => guard.rules)
-    .filter((rule) => rule.protocol === protocol)
-    .map((rule) => parsePortRange(rule.port))
-    .filter((range): range is [number, number] => range !== null);
-  return portSlices(from, to, ranges).every(([port]) => allowsPort(guards, fallsOpen, protocol, port, v6));
+  return portSlices(from, to, rangesOf(guards, protocol, (rule) => rule.port)).every(([port]) => allowsPort(guards, fallsOpen, protocol, port, v6));
 }
 
-/** Whether every range can reach the port through these guards in assignment order across client source ports. */
+/** Whether every range can reach the port through these guards in assignment order from every client source port. */
 export function reachable(guards: Guard[], port: number, ranges: string[]): boolean {
   const cidrs = ranges.map(parseCidr);
   if (cidrs.some((cidr) => cidr === null)) return false;
   const targets = cidrs as Cidr[];
-  for (const [sport] of sourcePortSlicesFor(guards, "tcp", port, CLIENT_SOURCE_PORTS)) {
-    const v4 = acceptedOnSlice(guards, false, "tcp", port, sport, false);
-    const v6 = acceptedOnSlice(guards, false, "tcp", port, sport, true);
+  for (const [sport] of portSlices(...CLIENT_SOURCE_PORTS, rangesOf(guards, "tcp", (rule) => rule.sourcePorts))) {
+    const v4 = acceptedOnSlice(guards, false, "tcp", port, sport, false, false);
+    const v6 = acceptedOnSlice(guards, false, "tcp", port, sport, true, false);
     for (const target of targets) {
       if (subtractIntervals([cidrInterval(target)], target.v6 ? v6 : v4).length > 0) return false;
     }
@@ -325,7 +323,12 @@ export function reachable(guards: Guard[], port: number, ranges: string[]): bool
 
 export interface Opening { port: number; firewall: string; sources: string[] }
 
-/** What another guard still lets reach the role's ports from outside Cloudflare, excluding sources shadowed by earlier drops. */
+/**
+ * What another guard still lets reach the role's ports from outside Cloudflare,
+ * from any source port, excluding sources shadowed by earlier drops. Every
+ * guard that lets a source in is named, not only the first, so the operator
+ * sees all there is to change.
+ */
 export function openToOthers(role: CloudRole, others: Guard[], ranges: string[]): Opening[] {
   const cfV4: IpInterval[] = [];
   const cfV6: IpInterval[] = [];
@@ -336,14 +339,12 @@ export function openToOthers(role: CloudRole, others: Guard[], ranges: string[])
   const found: Opening[] = [];
   for (const port of CLOUD_ROLES[role].ports) {
     const byGuard = others.map(() => new Set<string>());
-    for (const [sport] of sourcePortSlicesFor(others, "tcp", port, ALL_PORTS)) {
+    for (const [sport] of portSlices(...ALL_PORTS, rangesOf(others, "tcp", (rule) => rule.sourcePorts))) {
       let droppedV4: IpInterval[] = [];
       let droppedV6: IpInterval[] = [];
       for (let i = 0; i < others.length; i++) {
         for (const rule of others[i]!.rules) {
-          if (rule.protocol !== "tcp" || !portCovers(rule.port, port)) continue;
-          const [sFrom, sTo] = sourcePortRange(rule);
-          if (sport < sFrom || sport > sTo) continue;
+          if (!decides(rule, "tcp", port, sport, true)) continue;
           if (!rule.accept) {
             droppedV4 = [...droppedV4, ...ruleIntervals(rule, false)];
             droppedV6 = [...droppedV6, ...ruleIntervals(rule, true)];
@@ -535,7 +536,7 @@ export function planFor<F>(ctx: PlanContext<F>, role: CloudRole, enabled: boolea
       const ports = CLOUD_ROLES[each].ports;
       // Only when nothing of the operator's allows any of the ports: the open firewall opens them all.
       const needed = ports.every((port) => !anyTcpAllowed(others, port));
-      const reachableNow = ctx.fallsOpenNow || ports.some((port) => anyTcpAllowed(attached, port));
+      const reachableNow = ctx.fallsOpenNow || ports.some((port) => anyTcpAllowed(attached, port, true));
       if (needed && (ctx.open[each] || reachableNow)) open.add(each);
     }
   }
@@ -593,20 +594,17 @@ function closingLines<F>(ctx: PlanContext<F>, plan: Plan<F>, watched: Watched[])
   const before = ctx.attached.map(ctx.guard);
   const after = plan.after.map(ctx.guard);
   const afterOpen = ctx.fallsOpenAfter(plan.after);
-  const allRules = [...before, ...after].flatMap((guard) => guard.rules);
+  const both = [...before, ...after];
   const closing: (Watched & { only: string })[] = [];
   for (const item of watched) {
-    const ranges = allRules
-      .filter((rule) => rule.protocol === item.protocol)
-      .map((rule) => parsePortRange(rule.port))
-      .filter((range): range is [number, number] => range !== null);
-    for (const [from, to] of portSlices(item.from, item.to, ranges)) {
-      const lost = [false, true].filter((v6) => allowsPort(before, ctx.fallsOpenNow, item.protocol, from, v6)
+    const start = closing.length;
+    for (const [from, to] of portSlices(item.from, item.to, rangesOf(both, item.protocol, (rule) => rule.port))) {
+      const lost = [false, true].filter((v6) => allowsPort(before, ctx.fallsOpenNow, item.protocol, from, v6, true)
         && !allowsPort(after, afterOpen, item.protocol, from, v6));
       if (!lost.length) continue;
       const only = lost.length === 1 ? (lost[0] ? " over IPv6" : " over IPv4") : "";
-      const prev = closing.at(-1);
-      if (prev && prev.protocol === item.protocol && prev.ssh === item.ssh && prev.only === only && prev.to + 1 === from) {
+      const prev = closing.length > start ? closing.at(-1) : undefined;
+      if (prev && prev.only === only && prev.to + 1 === from) {
         prev.to = to;
       } else {
         closing.push({ protocol: item.protocol, from, to, ssh: item.ssh, only });
