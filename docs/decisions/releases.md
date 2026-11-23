@@ -26,6 +26,8 @@ that fails puts it back, including on a box deploying for the first time.
 It reads the box from `STG_HOST` and its credentials from `STG_SSH_KEY` and
 `STG_SSH_KNOWN_HOSTS`; the host key is pinned rather than learned on connection,
 because the deploy authenticates as root and then runs a command sequence.
+Staging is IPv6-only and hosted runners have no IPv6, so the workflow reaches
+it through the box's Cloudflare Tunnel with `cloudflared access ssh`.
 
 ## Toolchain
 
