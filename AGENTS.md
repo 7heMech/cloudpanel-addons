@@ -38,3 +38,7 @@
   `2a03:4000:2:95a:147b:36ff:fea4:2563` with
   `~/.ssh/cloudpanel-addons-dev-0bad61aa9144`. Use it for anything the preview
   cannot show, such as real panel data or injection into CloudPanel's own pages.
+  The deploy never accepts an unknown host key. On a new workstation, check that
+  `ssh-keyscan -t ed25519 <address> | ssh-keygen -lf -` prints
+  `SHA256:PRegxgLbD/9CxtJAmUpY1Og7Yd1mm9hylA2qjW5V59o`, then append the
+  `ssh-keyscan` line to `~/.ssh/known_hosts`.
