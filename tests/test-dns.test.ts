@@ -208,8 +208,8 @@ describe("Ask first and Automatic", () => {
     expect(confirmed.log.map((line) => `${line.cause}: ${line.action} ${line.subject}`)).toContain("Confirmed review: create A example.com");
     expect(confirmed.log.find((line) => line.subject === "Zone setting, whole zone")).toMatchObject({ sites: [], zone: "example.com" });
     expect(env.records()).toEqual([
-      "A example.com 203.0.113.10 proxied", "A www.example.com 203.0.113.10 proxied",
-      "AAAA example.com 2001:db8::10 proxied", "AAAA www.example.com 2001:db8::10 proxied",
+      "A *.example.com 203.0.113.10 proxied", "A example.com 203.0.113.10 proxied",
+      "AAAA *.example.com 2001:db8::10 proxied", "AAAA example.com 2001:db8::10 proxied",
     ]);
     const zone = env.cf.zones[0]!;
     expect(env.cf.settings.get(`${zone.id}:ssl`)).toBe("strict");
@@ -235,18 +235,18 @@ describe("Ask first and Automatic", () => {
   test("Automatic deletes conflicting records at the names it writes, and nothing else", async () => {
     const env = setup();
     env.cf.record("example.com", { type: "A", name: "example.com", content: "198.51.100.4" });
-    env.cf.record("example.com", { type: "CNAME", name: "www.example.com", content: "old-host.example.net" });
+    env.cf.record("example.com", { type: "CNAME", name: "*.example.com", content: "old-host.example.net" });
     env.cf.record("example.com", { type: "TXT", name: "example.com", content: '"google-site-verification=abc"' });
     env.cf.record("example.com", { type: "MX", name: "example.com", content: "mx.elsewhere.example", priority: 5 });
     env.cf.record("example.com", { type: "A", name: "legacy.example.com", content: "198.51.100.4" });
     await env.connect();
     await env.act("assign", { domains: ["example.com"], profileId: "web" });
     const review = await env.act("set-automatic", { automatic: true });
-    expect(review.review!.sites[0]!.changes.filter((change) => change.action === "delete").map((change) => change.subject)).toEqual(["CNAME www.example.com"]);
+    expect(review.review!.sites[0]!.changes.filter((change) => change.action === "delete").map((change) => change.subject)).toEqual(["CNAME *.example.com"]);
     await env.act("confirm", { token: review.review!.token });
     expect(env.records()).toEqual([
-      "A example.com 203.0.113.10 proxied", "A legacy.example.com 198.51.100.4", "A www.example.com 203.0.113.10 proxied",
-      "AAAA example.com 2001:db8::10 proxied", "AAAA www.example.com 2001:db8::10 proxied",
+      "A *.example.com 203.0.113.10 proxied", "A example.com 203.0.113.10 proxied", "A legacy.example.com 198.51.100.4",
+      "AAAA *.example.com 2001:db8::10 proxied", "AAAA example.com 2001:db8::10 proxied",
       "MX example.com mx.elsewhere.example", 'TXT example.com "google-site-verification=abc"',
     ]);
   });
@@ -290,15 +290,16 @@ describe("Ask first and Automatic", () => {
 
   test("records another current site writes at are never removed with a deleted site's", async () => {
     const env = setup();
+    env.sites.push(site(3, "blog.example.com"));
     await env.connect();
     const state = await env.act("list");
     const web = state.profiles.find((profile) => profile.id === "web")!;
     // Both sites publish the same verification value at the zone's own name.
     await env.act("save-profile", { ...web, records: [...web.records, { type: "TXT", name: "_verify.{zone}", content: "token=1", ttl: 1 }] });
-    await env.act("assign", { domains: ["example.com", "shop.example.com"], profileId: "web" });
+    await env.act("assign", { domains: ["blog.example.com", "shop.example.com"], profileId: "web" });
     const enforced = await env.automatic();
     // The second site finds the record the first one wrote, rather than creating it again.
-    expect(enforced.sites.flatMap((entry) => entry.plan!.problems)).toEqual([]);
+    expect(enforced.sites.flatMap((entry) => entry.plan?.problems ?? [])).toEqual([]);
     expect(env.records().filter((record) => record.startsWith("TXT _verify."))).toEqual(['TXT _verify.example.com "token=1"']);
     env.sites.splice(env.sites.findIndex((entry) => entry.domain === "shop.example.com"), 1);
     const review = await env.act("remove-records", { domain: "shop.example.com" });
@@ -357,10 +358,10 @@ describe("Ask first and Automatic", () => {
     await env.connect();
     await env.act("assign", { domains: ["example.com"], profileId: "web" });
     const review = await env.act("set-automatic", { automatic: true });
-    env.cf.record("example.com", { type: "CNAME", name: "www.example.com", content: "someone.example.net" });
+    env.cf.record("example.com", { type: "CNAME", name: "*.example.com", content: "someone.example.net" });
     const again = await env.act("confirm", { token: review.review!.token });
     expect(again.notice).toContain("changed after the plan was shown");
-    expect(again.review!.sites[0]!.changes.some((change) => change.subject === "CNAME www.example.com")).toBe(true);
+    expect(again.review!.sites[0]!.changes.some((change) => change.subject === "CNAME *.example.com")).toBe(true);
     expect(env.cf.writes()).toEqual([]);
   });
 
@@ -803,8 +804,10 @@ describe("zones and new sites", () => {
 
   test("a new site joins the default profile and is written at once; existing sites stay where they are", async () => {
     const env = setup();
+    env.cf.zone("example.org", env.agency);
+    env.sites.push(site(6, "example.org"));
     await env.connect();
-    await env.act("assign", { domains: ["example.com"], profileId: "web" });
+    await env.act("assign", { domains: ["example.org"], profileId: "web" });
     await env.automatic();
     await env.act("set-default", { profileId: "web" });
     env.sites.push(site(7, "fresh.example.com", { createdAt: START }));
@@ -1067,7 +1070,7 @@ describe("sites CloudPanel no longer has", () => {
     records.find((record) => record.type === "AAAA" && record.name === "example.com")!.comment = "Keep this record";
     env.sites.splice(0, 1);
     const review = await env.act("remove-records", { domain: "example.com" });
-    expect(review.review!.sites[0]!.changes.map((change) => change.subject)).toEqual(["A www.example.com", "AAAA www.example.com"]);
+    expect(review.review!.sites[0]!.changes.map((change) => change.subject)).toEqual(["A *.example.com", "AAAA *.example.com"]);
   });
 
   test("cleanup refuses while a current site's record names cannot be planned safely", async () => {
@@ -1088,8 +1091,9 @@ describe("sites CloudPanel no longer has", () => {
 
   test("their records are removed only after review, and only the unchanged ones", async () => {
     const env = setup();
+    env.sites.push(site(3, "blog.example.com"));
     await env.connect();
-    await env.act("assign", { domains: ["example.com", "shop.example.com"], profileId: "web" });
+    await env.act("assign", { domains: ["blog.example.com", "shop.example.com"], profileId: "web" });
     await env.automatic();
     env.sites.splice(env.sites.findIndex((entry) => entry.domain === "shop.example.com"), 1);
     expect((await env.act("list")).orphans).toEqual([{ domain: "shop.example.com", zone: "example.com", records: 2 }]);
@@ -1101,7 +1105,7 @@ describe("sites CloudPanel no longer has", () => {
     const done = await env.act("confirm", { token: review.review!.token });
     expect(done.orphans).toEqual([]);
     expect(env.records().filter((record) => record.includes("shop.example.com"))).toEqual(["AAAA shop.example.com 2001:db8::99 proxied"]);
-    expect(env.records()).toContain("A example.com 203.0.113.10 proxied");
+    expect(env.records()).toContain("A blog.example.com 203.0.113.10 proxied");
   });
 
   test("a site owner's provision reaches Cloudflare only for a new site", async () => {
@@ -1135,8 +1139,9 @@ describe("sites CloudPanel no longer has", () => {
   test("a zone deleted in Cloudflare is forgotten with its records, by Remove records or the next check", async () => {
     const deleted = async () => {
       const env = setup();
+      env.sites.push(site(3, "blog.example.com"));
       await env.connect();
-      await env.act("assign", { domains: ["example.com", "shop.example.com"], profileId: "web" });
+      await env.act("assign", { domains: ["blog.example.com", "shop.example.com"], profileId: "web" });
       await env.automatic();
       env.sites.splice(0, env.sites.length);
       env.cf.zones.splice(0, env.cf.zones.length);
@@ -1147,7 +1152,7 @@ describe("sites CloudPanel no longer has", () => {
     const reply = await removed.env.act("remove-records", { domain: "shop.example.com" });
     expect(reply.review).toBeUndefined();
     expect(reply.notice).toBe("example.com is no longer in Cloudflare, so shop.example.com's records went with it.");
-    expect(reply.orphans.map((orphan) => orphan.domain)).toEqual(["example.com"]);
+    expect(reply.orphans.map((orphan) => orphan.domain)).toEqual(["blog.example.com"]);
     expect(reply.log[0]).toMatchObject({ sites: ["shop.example.com"], action: "delete", subject: "Cloudflare zone" });
     expect(removed.env.cf.writes().length).toBe(removed.writes);
 
@@ -1283,4 +1288,104 @@ test("state that cannot be read while redacting does not hide the failure", asyn
   await env.connect();
   chmodSync(join(env.dir, "state", "secrets.json"), 0o666);
   await expect(env.act("set-automatic", { automatic: "sometimes" })).rejects.toThrow("Say whether DNS is Automatic");
+});
+
+describe("wildcard DNS", () => {
+  test("apex and subdomain planned together write *.zone once and leave the subdomain covered", async () => {
+    const env = setup();
+    await env.connect();
+    await env.act("assign", { domains: ["example.com", "shop.example.com"], profileId: "web" });
+    // In Ask first, before *.example.com exists, shop.example.com is not falsely reported as covered.
+    const asking = await env.act("check");
+    const askingShop = asking.sites.find((entry) => entry.domain === "shop.example.com")!.plan!;
+    expect(askingShop.wildcard).toBeUndefined();
+    expect(askingShop.changes.map((change) => change.subject)).toEqual(expect.arrayContaining(["A shop.example.com", "AAAA shop.example.com"]));
+
+    const review = await env.act("set-automatic", { automatic: true });
+    const reviewShop = review.review!.sites.find((plan) => plan.domain === "shop.example.com")!;
+    expect(reviewShop.wildcard).toBe("*.example.com");
+    expect(reviewShop.changes.filter((change) => /^(A|AAAA) /.test(change.subject))).toEqual([]);
+
+    const applied = await env.act("confirm", { token: review.review!.token });
+    expect(env.records()).toEqual([
+      "A *.example.com 203.0.113.10 proxied", "A example.com 203.0.113.10 proxied",
+      "AAAA *.example.com 2001:db8::10 proxied", "AAAA example.com 2001:db8::10 proxied",
+    ]);
+    expect(applied.sites.find((entry) => entry.domain === "shop.example.com")!.plan!.wildcard).toBe("*.example.com");
+    expect(dashboardContent(applied)).toContain("*.example.com · Agency");
+
+    // A new subdomain joining the default profile makes zero record writes and is ready immediately.
+    await env.act("set-default", { profileId: "web" });
+    env.sites.push(site(7, "fresh.example.com", { createdAt: START }));
+    const writes = env.cf.writes().length;
+    await env.act("sync-sites");
+    expect(env.cf.writes().length).toBe(writes);
+    const provision = await env.act<ProvisionReply>("provision", undefined, ["--domain=fresh.example.com"]);
+    expect(provision).toEqual({ managed: true, ready: true, reason: "DNS is in place", certificateNames: ["fresh.example.com"] });
+  });
+
+  test("adding an apex wildcard creates *.zone before deleting redundant subdomain records and clears orphan tracking", async () => {
+    const env = setup();
+    await env.connect();
+    await env.act("assign", { domains: ["shop.example.com"], profileId: "web" });
+    await env.automatic();
+    expect(env.records()).toEqual(["A shop.example.com 203.0.113.10 proxied", "AAAA shop.example.com 2001:db8::10 proxied"]);
+
+    const review = await env.act("assign", { domains: ["example.com"], profileId: "web" });
+    expect(review.review!.sites.map((plan) => plan.domain).sort()).toEqual(["example.com", "shop.example.com"]);
+    const shopReview = review.review!.sites.find((plan) => plan.domain === "shop.example.com")!;
+    expect(shopReview.wildcard).toBe("*.example.com");
+    expect(shopReview.changes.every((change) => change.action === "delete" && change.detail.includes("covered by *.example.com"))).toBe(true);
+
+    const beforeWrites = env.cf.writes().length;
+    await env.act("confirm", { token: review.review!.token });
+    const recordWrites = env.cf.writes().slice(beforeWrites).filter((call) => call.path.includes("/dns_records"));
+    const firstDelete = recordWrites.findIndex((call) => call.method === "DELETE");
+    const lastCreate = recordWrites.map((call) => call.method).lastIndexOf("POST");
+    expect(firstDelete).toBeGreaterThan(lastCreate);
+    expect(env.records()).toEqual([
+      "A *.example.com 203.0.113.10 proxied", "A example.com 203.0.113.10 proxied",
+      "AAAA *.example.com 2001:db8::10 proxied", "AAAA example.com 2001:db8::10 proxied",
+    ]);
+
+    // Deleting the handed-off subdomain leaves no orphans; deleting the apex preserves *.example.com while another site relies on it.
+    env.sites.push(site(3, "blog.example.com"));
+    const blogAssign = await env.act("assign", { domains: ["blog.example.com"], profileId: "web" });
+    await env.act("confirm", { token: blogAssign.review!.token });
+    env.sites.splice(env.sites.findIndex((entry) => entry.domain === "shop.example.com"), 1);
+    expect((await env.act("list")).orphans).toEqual([]);
+
+    env.sites.splice(env.sites.findIndex((entry) => entry.domain === "example.com"), 1);
+    const removal = await env.act("remove-records", { domain: "example.com" });
+    expect(removal.review!.sites[0]!.changes.map((change) => change.subject).sort()).toEqual(["A example.com", "AAAA example.com"]);
+    expect(removal.review!.text).toContain("used by another site");
+  });
+
+  test("an obstructed subdomain falls back to explicit records with a reason, and www is dropped from certificateNames when obstructed", async () => {
+    const env = setup();
+    env.cf.record("example.com", { type: "MX", name: "shop.example.com", content: "mail.example.net", priority: 10 });
+    env.cf.record("example.com", { type: "CNAME", name: "www.example.com", content: "external.example.net" });
+    await env.connect();
+    await env.act("assign", { domains: ["example.com", "shop.example.com"], profileId: "web" });
+    const applied = await env.automatic();
+    const shopPlan = applied.sites.find((entry) => entry.domain === "shop.example.com")!.plan!;
+    expect(shopPlan.wildcard).toBeUndefined();
+    expect(shopPlan.wildcardBlocked).toBe("*.example.com does not match shop.example.com while MX shop.example.com exists, so explicit records are needed");
+    expect(env.records()).toContain("A shop.example.com 203.0.113.10 proxied");
+    expect(env.records()).toContain("AAAA shop.example.com 2001:db8::10 proxied");
+    expect((await env.act<ProvisionReply>("provision", undefined, ["--domain=example.com"])).certificateNames).toEqual(["example.com"]);
+  });
+
+  test("a subdomain still gets explicit records when its apex cannot write the wildcard", async () => {
+    const env = setup();
+    await env.connect();
+    // example.com uses Web and Mailcow without Mailcow configured, so enforce skips example.com.
+    await env.act("assign", { domains: ["shop.example.com"], profileId: "web" });
+    await env.automatic();
+    await env.act("assign", { domains: ["example.com"], profileId: "web-mailcow" });
+    // Clear shop's records to verify reconcile writes explicit records for shop rather than assuming example.com wrote *.example.com.
+    env.cf.records.set(env.cf.zones[0]!.id, []);
+    await env.act("check");
+    expect(env.records()).toEqual(["A shop.example.com 203.0.113.10 proxied", "AAAA shop.example.com 2001:db8::10 proxied"]);
+  });
 });

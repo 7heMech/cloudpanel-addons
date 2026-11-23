@@ -165,6 +165,48 @@ describe("the panel hostname", () => {
     expect(await DNS_ADDON.certificates!.run(env.options)).toBeNull();
     expect(env.cf.calls.length).toBe(calls);
   });
+
+  test("hands off to an unobstructed proxied zone wildcard once CloudPanel's certificate is issued", async () => {
+    const env = setup();
+    env.cf.record("example.com", { type: "A", name: "*.example.com", content: "203.0.113.10", proxied: true });
+    env.cf.record("example.com", { type: "AAAA", name: "*.example.com", content: "2001:db8::10", proxied: true });
+    await env.automatic();
+    const saved = await env.apply("set-panel-host", { name: "k7m2p9x4.example.com" });
+    expect(saved.panelHost!.plan!.wildcard).toBeUndefined();
+    // Unproxied records are created temporarily so Let's Encrypt reaches CloudPanel directly.
+    expect(env.records()).toEqual([
+      "A *.example.com 203.0.113.10 proxied", "A k7m2p9x4.example.com 203.0.113.10",
+      "AAAA *.example.com 2001:db8::10 proxied", "AAAA k7m2p9x4.example.com 2001:db8::10",
+    ]);
+
+    env.custom.current = { name: "k7m2p9x4.example.com", issued: true };
+    expect(await DNS_ADDON.certificates!.run(env.options)).toBe("k7m2p9x4.example.com is proxied through Cloudflare");
+    expect(env.records()).toEqual([
+      "A *.example.com 203.0.113.10 proxied", "AAAA *.example.com 2001:db8::10 proxied",
+    ]);
+    const state = await env.act("list");
+    expect(state.panelHost!.plan!.wildcard).toBe("*.example.com");
+    expect(dashboardContent(state)).toContain("via *.example.com");
+    expect(state.log.filter((line) => line.cause === "Panel certificate" && line.action === "delete").map((line) => line.detail)).toEqual(
+      expect.arrayContaining([expect.stringContaining("covered by *.example.com")]),
+    );
+
+    // Removing panelHost after wildcard handoff leaves no phantom orphans.
+    const removed = await env.act("set-panel-host", { name: null });
+    expect(removed.orphans).toEqual([]);
+  });
+
+  test("the page offers a Random button, zone suggestions and a hard-to-guess placeholder", async () => {
+    const env = setup();
+    await env.automatic();
+    const state = await env.act("list");
+    expect(state.zones).toEqual(["example.com"]);
+    expect("zoneNames" in state.connections[0]!).toBe(false);
+    const html = dashboardContent(state);
+    expect(html).toContain('placeholder="k7m2p9x4.example.com"');
+    expect(html).toContain('<datalist id="dns-zone-list"><option value="example.com"></option></datalist>');
+    expect(html).toContain('onclick="dnsRandomPanelHost()"');
+  });
 });
 
 describe("an issued custom-domain certificate", () => {

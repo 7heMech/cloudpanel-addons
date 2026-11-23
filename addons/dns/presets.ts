@@ -27,8 +27,8 @@ export const PRESETS: Preset[] = [
     records: [
       row({ type: "A", name: "{domain}", content: "{ipv4}", proxied: true }),
       row({ type: "AAAA", name: "{domain}", content: "{ipv6}", proxied: true }),
-      row({ type: "A", name: "www.{domain}", content: "{ipv4}", proxied: true, apexOnly: true }),
-      row({ type: "AAAA", name: "www.{domain}", content: "{ipv6}", proxied: true, apexOnly: true }),
+      row({ type: "A", name: "*.{domain}", content: "{ipv4}", proxied: true, apexOnly: true }),
+      row({ type: "AAAA", name: "*.{domain}", content: "{ipv6}", proxied: true, apexOnly: true }),
     ],
     zone: { ssl: "strict", alwaysHttps: true, acmeFullSsl: true },
   },
@@ -39,9 +39,9 @@ export const PRESETS: Preset[] = [
       row({ type: "MX", name: "{domain}", content: "{mailcow.host}", priority: 10 }),
       row({ type: "TXT", name: "{domain}", content: "v=spf1 mx ~all" }),
       row({ type: "TXT", name: "{mailcow.selector}._domainkey.{domain}", content: "{mailcow.dkim}" }),
-      row({ type: "CNAME", name: "autoconfig.{domain}", content: "{mailcow.host}" }),
-      row({ type: "CNAME", name: "autodiscover.{domain}", content: "{mailcow.host}" }),
-      row({ type: "SRV", name: "_autodiscover._tcp.{domain}", content: "0 443 {mailcow.host}", priority: 0 }),
+      row({ type: "CNAME", name: "autoconfig.{domain}", content: "{mailcow.host}", apexOnly: true }),
+      row({ type: "CNAME", name: "autodiscover.{domain}", content: "{mailcow.host}", apexOnly: true }),
+      row({ type: "SRV", name: "_autodiscover._tcp.{domain}", content: "0 443 {mailcow.host}", priority: 0, apexOnly: true }),
       row({ type: "CNAME", name: "webmail.{domain}", content: "{mailcow.host}", proxied: true, apexOnly: true }),
     ],
     mailcow: true,
@@ -58,7 +58,7 @@ export const PRESETS: Preset[] = [
   {
     id: "dmarc",
     label: "DMARC (monitor)",
-    records: [row({ type: "TXT", name: "_dmarc.{domain}", content: "v=DMARC1; p=none" })],
+    records: [row({ type: "TXT", name: "_dmarc.{domain}", content: "v=DMARC1; p=none", apexOnly: true })],
   },
 ];
 

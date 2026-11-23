@@ -22,6 +22,7 @@ import { panelUserGid, panelUserUid } from "../../lib/sso-auth";
 import { grants, selfReadPermission, targetFor, tokenListUrl, type TokenOwner } from "../dns/access";
 import { CloudflareApi, type CfZone } from "../dns/cloudflare";
 import { parseSecrets } from "../dns/model";
+import { wildcardSource } from "../dns/records";
 import { PERMISSIONS, type PermissionName } from "../dns/token";
 import {
   hasPanelGate, hasSitesGate, panelGateMisfit, sitesGateMisfit, withoutPanelGate, withoutSitesGate, withPanelGate, withSitesGate,
@@ -361,8 +362,23 @@ async function check(options: GateOptions): Promise<GateCheck> {
   if (records.status === "rejected") problems.push(`${hostname}'s records could not be read: ${errorMessage(records.reason)}`);
   else {
     const proxyable = records.value.filter((record) => ["A", "AAAA", "CNAME"].includes(record.type));
-    if (!proxyable.length) problems.push(`${hostname} has no A, AAAA or CNAME record in Cloudflare.`);
-    else if (proxyable.some((record) => !record.proxied)) problems.push(`${hostname} is not proxied through Cloudflare. Turn on the orange cloud for its record.`);
+    if (proxyable.length) {
+      if (proxyable.some((record) => !record.proxied)) problems.push(`${hostname} is not proxied through Cloudflare. Turn on the orange cloud for its record.`);
+    } else if (records.value.length || hostname === zone.name) {
+      // Exact records of another type at this name stop a wildcard from matching it (RFC 4592).
+      problems.push(`${hostname} has no A, AAAA or CNAME record in Cloudflare.`);
+    } else {
+      try {
+        const wildcard = wildcardSource(hostname, zone.name, await api.records(zone.id));
+        const covered = wildcard ? wildcard.records.filter((record) => ["A", "AAAA", "CNAME"].includes(record.type)) : [];
+        if (!covered.length) problems.push(`${hostname} has no A, AAAA or CNAME record in Cloudflare.`);
+        else if (covered.some((record) => !record.proxied)) {
+          problems.push(`${hostname} is covered by ${wildcard!.wildcard}, which is not proxied through Cloudflare. Turn on the orange cloud for its record.`);
+        }
+      } catch (error) {
+        problems.push(`${hostname}'s records could not be read: ${errorMessage(error)}`);
+      }
+    }
   }
   if (permissions.status === "rejected") problems.push(`The token's permissions could not be read: ${errorMessage(permissions.reason)}`);
   else {

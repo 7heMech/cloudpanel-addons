@@ -29,7 +29,11 @@ checklist.
 3. **Profiles.** Edit **Web** or **Web and Mailcow**, or create your own from the
    presets. Each row is a record every site in the profile gets; **TTL and apex
    only** shows the less common columns, and **Cloudflare zone** opens the
-   zone-wide settings.
+   zone-wide settings. By default **Web** writes `*.{domain}` on apex domains,
+   so subdomain sites in the same zone inherit the wildcard and need no `A` or
+   `AAAA` records of their own unless another record at or below the subdomain
+   blocks the wildcard. To keep a subdomain free of mail records, assign it to
+   **Web** and send its transactional mail as the apex domain in SMTP Relay.
 4. **Assign sites** in the table, in bulk if you like. DNS starts in **Ask
    first**: **Check now** shows what differs and changes nothing.
 5. **Turn on Automatic.** Choose **Review and turn on Automatic**, read the
@@ -98,21 +102,23 @@ first.
 
 ## Panel hostname
 
-To reach CloudPanel at a name such as `panel.example.com` through Cloudflare:
+To reach CloudPanel at a hard-to-guess name such as `k7m2p9x4.example.com` through Cloudflare:
 
-1. Enter the name under **Panel hostname** and save. DNS points it at this
-   server, without Cloudflare's proxy.
+1. Enter a name under **Panel hostname**, or choose **Random** to generate an
+   eight-character label on one of your connected zones, and save. DNS points it
+   at this server, without Cloudflare's proxy.
 2. Enter the same name in CloudPanel under **Admin → Settings → Custom Domain**.
    CloudPanel gets its Let's Encrypt certificate straight from this server.
-3. DNS proxies the name through Cloudflare seconds after the certificate is
-   issued.
+3. Seconds after the certificate is issued, DNS proxies the name through
+   Cloudflare, or deletes the temporary records if a proxied wildcard in the
+   zone already covers it.
 
 The proxy waits for the certificate because CloudPanel asks Let's Encrypt the
 moment you save, and a check sent through Cloudflare can fail on the zone's SSL
 settings. The zone also gets the Full SSL rule for Let's Encrypt checks, so
 CloudPanel's renewals still reach this server once the name is proxied.
-Removing the panel hostname leaves its records in Cloudflare, listed with the
-records of deleted sites.
+Removing the panel hostname leaves any explicit records it still has in
+Cloudflare, listed with the records of deleted sites.
 
 ## Leaving Terraform
 

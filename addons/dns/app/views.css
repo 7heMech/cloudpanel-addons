@@ -268,3 +268,4 @@ p.dns-dialog-note { margin:20px 0 0; }
 .dns-panel-host-changes { list-style:none; margin:0; padding:0; display:flex; flex-direction:column; gap:6px; }
 .dns-panel-host-changes .hint { margin:0; }
 .dns-panel-host-next { margin:0; }
+.dns-wildcard-note { margin:0 0 8px; }
