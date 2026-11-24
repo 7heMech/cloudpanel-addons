@@ -1,8 +1,9 @@
 import { afterEach, beforeEach, expect, test } from "bun:test";
 import { Database } from "bun:sqlite";
-import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
+import { chmodSync, existsSync, lstatSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { acquireFileLock } from "../lib/file-lock";
 import {
   DEFAULT_WP_TOOLS_PATHS, executeWpToolsAction, removeMainwpGuards, removeWpLogin, WORDPRESS_APPLICATIONS,
   type WpBasicAuthReply, type WpToolsActionOptions, type WpLoginResult, type WpMaintenanceReply, type WpRemoveResult, type WpSiteView,
@@ -137,6 +138,7 @@ function options(extra: Partial<WpToolsActionOptions> = {}): WpToolsActionOption
       },
       varnishState: join(root, "varnish.json"),
       varnishLockFile: join(root, "wp-varnish.lock"),
+      mainwpLockFile: join(root, "wp-mainwp.lock"),
       domainLinkState: join(root, "domain-link.json"),
     },
     ...extra,
@@ -356,12 +358,12 @@ function legacyFiles(muPlugins: string): void {
   writeFileSync(join(muPlugins, "clp-addons-mainwp.php"), "<?php\n");
 }
 
-test("a sign-in takes an earlier release's must-use plugins out", async () => {
+test("a sign-in takes an earlier release's sign-in out while leaving a legacy MainWP guard in place", async () => {
   const muPlugins = join(siteDir("shop", "shop.example.com"), "wp-content/mu-plugins");
   legacyFiles(muPlugins);
   writeFileSync(join(muPlugins, "someone-elses.php"), "<?php\n");
   await act(["sign-in", "--domain=shop.example.com"]);
-  expect(readdirSync(muPlugins).sort()).toEqual(["hosting-tools", "hosting-tools.php", "someone-elses.php"]);
+  expect(readdirSync(muPlugins).sort()).toEqual(["clp-addons-mainwp.php", "hosting-tools", "hosting-tools.php", "someone-elses.php"]);
   expect(runuserLog()).toEqual(["shop PATH"]);
 });
 
@@ -438,6 +440,76 @@ test("withdrawing the addon takes every module and an earlier release's files ou
   writeFileSync(join(shop, "clp-addons-mainwp.php"), "<?php\n");
   expect(removeMainwpGuards(paths)).toEqual({ removed: 1, failed: [] });
   expect(readdirSync(shop)).toEqual([]);
+});
+
+test("remove and withdrawal leave a site's own hosting-tools files and unrelated loader untouched", async () => {
+  const paths = { ...DEFAULT_WP_TOOLS_PATHS, ...options().paths! };
+  const shop = join(siteDir("shop", "shop.example.com"), "wp-content", "mu-plugins");
+  const blog = join(siteDir("blog", "blog.example.com"), "wp-content", "mu-plugins");
+
+  // A site holding only its own hosting-tools.php is neither touched nor counted.
+  mkdirSync(blog, { recursive: true });
+  writeFileSync(join(blog, "hosting-tools.php"), "<?php // site custom\n");
+  expect(await act<WpRemoveResult>(["remove"])).toEqual({ removed: 0, failed: [] });
+  expect(removeMainwpGuards(paths)).toEqual({ removed: 0, failed: [] });
+  expect(runuserLog()).toEqual([]);
+  expect(readFileSync(join(blog, "hosting-tools.php"), "utf8")).toBe("<?php // site custom\n");
+
+  // Extra files inside hosting-tools/ survive both Remove and guard withdrawal.
+  await act(["sign-in", "--domain=shop.example.com"]);
+  writeFileSync(join(shop, "hosting-tools/custom.php"), "<?php // custom\n");
+  expect(await act<WpRemoveResult>(["remove"])).toEqual({ removed: 1, failed: [] });
+  expect(readdirSync(join(shop, "hosting-tools"))).toEqual(["custom.php"]);
+  expect(readFileSync(join(shop, "hosting-tools/custom.php"), "utf8")).toBe("<?php // custom\n");
+  expect(existsSync(join(shop, "hosting-tools.php"))).toBe(true);
+  expect(await act<WpRemoveResult>(["remove"])).toEqual({ removed: 0, failed: [] });
+
+  writeFileSync(join(shop, "hosting-tools/guard.php"), "<?php\n");
+  expect(removeMainwpGuards(paths)).toEqual({ removed: 1, failed: [] });
+  expect(readdirSync(join(shop, "hosting-tools"))).toEqual(["custom.php"]);
+  expect(existsSync(join(shop, "hosting-tools.php"))).toBe(true);
+
+  // An unrelated hosting-tools.php survives even when hosting-tools/ becomes empty.
+  rmSync(join(shop, "hosting-tools/custom.php"));
+  writeFileSync(join(shop, "hosting-tools/sign-in.php"), "<?php\n");
+  writeFileSync(join(shop, "hosting-tools.php"), "<?php // modified loader\n");
+  expect(await act<WpRemoveResult>(["remove"])).toEqual({ removed: 1, failed: [] });
+  expect(readdirSync(shop)).toEqual(["hosting-tools.php"]);
+  expect(readFileSync(join(shop, "hosting-tools.php"), "utf8")).toBe("<?php // modified loader\n");
+
+  // A symlinked hosting-tools.php is never unlinked even if its target matches our loader.
+  const target = join(root, "loader-target.php");
+  writeFileSync(target, HOSTING_TOOLS_LOADER_PHP);
+  rmSync(join(shop, "hosting-tools.php"));
+  symlinkSync(target, join(shop, "hosting-tools.php"));
+  mkdirSync(join(shop, "hosting-tools"), { recursive: true });
+  writeFileSync(join(shop, "hosting-tools/guard.php"), "<?php\n");
+  expect(removeMainwpGuards(paths)).toEqual({ removed: 1, failed: [] });
+  expect(existsSync(join(shop, "hosting-tools"))).toBe(false);
+  expect(lstatSync(join(shop, "hosting-tools.php")).isSymbolicLink()).toBe(true);
+  expect(readFileSync(target, "utf8")).toBe(HOSTING_TOOLS_LOADER_PHP);
+});
+
+test("remove waits for the MainWP lock so it cannot delete a guard's loader", async () => {
+  const paths = { ...DEFAULT_WP_TOOLS_PATHS, ...options().paths! };
+  const shop = join(siteDir("shop", "shop.example.com"), "wp-content", "mu-plugins");
+  await act(["sign-in", "--domain=shop.example.com"]);
+
+  const mainwpLock = await acquireFileLock(paths.mainwpLockFile, 5, "locked");
+  try {
+    const removing = act<WpRemoveResult>(["remove"]);
+    await Bun.sleep(150);
+    // Still blocked on mainwpLockFile while a MainWP pass installs guard.php.
+    expect(existsSync(join(shop, "hosting-tools/sign-in.php"))).toBe(true);
+    writeFileSync(join(shop, "hosting-tools/guard.php"), "<?php\n");
+    mainwpLock.release();
+    expect(await removing).toEqual({ removed: 1, failed: [] });
+  } finally {
+    mainwpLock.release();
+  }
+
+  expect(readdirSync(shop).sort()).toEqual(["hosting-tools", "hosting-tools.php"]);
+  expect(readdirSync(join(shop, "hosting-tools"))).toEqual(["guard.php"]);
 });
 
 // The site's user controls every name under its root, so a symlink there would

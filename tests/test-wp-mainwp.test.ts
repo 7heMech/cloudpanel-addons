@@ -18,7 +18,7 @@ let commands: WpCommand[];
 const key = "a".repeat(64);
 const snapshot = () => ({ options: {}, meta: { passwordAuth: null }, admin: 1, active: false, cron: {}, tables: [], uploads: false });
 /** The site's must-use files by content: Hosting Tools' loader and modules, and an earlier release's guard and sign-in. */
-interface MuPlugins { loader?: string; guard?: string; signIn?: boolean; legacyGuard?: string; legacySignIn?: boolean }
+interface MuPlugins { loader?: string; guard?: string; signIn?: boolean; extra?: boolean; legacyGuard?: string; legacySignIn?: boolean }
 const status = () => ({ multisite: false, installed: false, files: false, active: false, key: "", securityId: "", admin: "owner", snapshot: snapshot(), auth: true, mu: {} as MuPlugins });
 const sha256 = (text: string) => createHash("sha256").update(text).digest("hex");
 /** As the adapter's clp_mainwp_guard_digest. */
@@ -55,12 +55,16 @@ const options = { runWpCommand: async (command: WpCommand) => {
       if (!child!.key) child!.key = input.options.mainwp_child_pubkey; break;
     case "guard": {
       if (fail === "guard") throw new Error("read-only site");
+      if (typeof input.code !== "string" || typeof input.loader !== "string" || !input.loader) {
+        reply = { error: "invalid-input" };
+        break;
+      }
       const mu = child!.mu;
       if (input.code) {
         mu.guard = input.code; mu.loader = input.loader; delete mu.legacySignIn;
       } else {
         delete mu.guard;
-        if (!mu.signIn) delete mu.loader;
+        if (!mu.signIn && !mu.extra && mu.loader === input.loader) delete mu.loader;
       }
       delete mu.legacyGuard;
       break;
@@ -273,6 +277,61 @@ test("a guard whose loader is gone is written again on the next pass", async () 
   const writes = commands.filter((c) => c.stdin?.includes('"op":"guard"'));
   expect(writes.map((c) => c.argv.find((arg) => arg.startsWith("--url=")))).toEqual(["--url=https://new.test"]);
   expect(children["new.test"]!.mu).toMatchObject({ loader: HOSTING_TOOLS_LOADER_PHP });
+});
+
+test("an outdated guard is repaired even while the Dashboard fails, and written once when connected", async () => {
+  await configured(); await syncMainwp(run, options);
+  delete children["new.test"]!.mu.loader;
+  children["connected.test"]!.mu = { legacyGuard: "<?php // an earlier release" };
+  commands = [];
+  const unavailable = { runWpCommand: async (command: WpCommand) => {
+    if (command.stdin && JSON.parse(command.stdin).op === "dashboard-status") {
+      return 'CLP-ADDONS-MAINWP:{"error":"dashboard-unavailable"}';
+    }
+    return options.runWpCommand(command);
+  } };
+  const failed = await syncMainwp({ ...run, dueOnly: true }, unavailable);
+  expect(failed.failed).toHaveLength(3);
+  expect(children["new.test"]!.mu).toEqual({ guard: expect.any(String), loader: HOSTING_TOOLS_LOADER_PHP });
+  expect(children["connected.test"]!.mu).toEqual({ guard: expect.any(String), loader: HOSTING_TOOLS_LOADER_PHP });
+  const writes = commands.filter((c) => c.stdin?.includes('"op":"guard"'));
+  expect(writes.map((c) => c.argv.find((arg) => arg.startsWith("--url="))).sort()).toEqual(["--url=https://connected.test", "--url=https://new.test"]);
+
+  // On a healthy pass, repairing an existing outdated guard on a connected site writes it only once.
+  children["connected.test"]!.mu = { legacyGuard: "<?php // an earlier release" };
+  commands = [];
+  expect(await syncMainwp({ ...run, domain: "connected.test" }, options)).toMatchObject({ failed: [] });
+  expect(commands.filter((c) => c.stdin?.includes('"op":"guard"'))).toHaveLength(1);
+});
+
+test("unguarding sends the expected loader and leaves custom files and an unrelated loader alone", async () => {
+  await configured(); await syncMainwp(run, options);
+  children["new.test"]!.mu.extra = true;
+  children["manual.test"]!.mu.loader = "<?php // site custom\n";
+  await configureMainwp(run, options, false);
+  commands = [];
+  await syncMainwp({ ...run, dueOnly: true }, options);
+  const unguards = commands.filter((c) => c.stdin?.includes('"op":"guard"')).map((c) => JSON.parse(c.stdin!));
+  expect(unguards).toHaveLength(3);
+  for (const input of unguards) expect(input).toEqual({ op: "guard", code: "", loader: HOSTING_TOOLS_LOADER_PHP });
+  expect(children["connected.test"]!.mu).toEqual({});
+  expect(children["new.test"]!.mu).toEqual({ loader: HOSTING_TOOLS_LOADER_PHP, extra: true });
+  expect(children["manual.test"]!.mu).toEqual({ loader: "<?php // site custom\n" });
+
+  // The adapter removes only empty modules folders and verifies the loader is a regular matching file.
+  const adapter = readFileSync(join(import.meta.dir, "../addons/wp-tools/mainwp.php"), "utf8");
+  expect(adapter).not.toContain("array_push($remove, CLP_MAINWP_LOADER, CLP_MAINWP_MODULES)");
+  expect(adapter).toContain("@rmdir($modules)");
+  expect(adapter).toContain("!is_link($loader) && is_file($loader)");
+  expect(adapter).toContain("file_get_contents($loader) === $input['loader']");
+});
+
+test("invalid-input from the adapter maps to its own error message", async () => {
+  await configured();
+  const invalid = { runWpCommand: async () => 'CLP-ADDONS-MAINWP:{"error":"invalid-input"}' };
+  await expect(syncMainwp({ ...run, domain: "new.test" }, invalid)).resolves.toMatchObject({
+    failed: ["new.test: the MainWP request to WordPress was invalid"],
+  });
 });
 
 test("a new site waits for Dashboard-side HTTPS without intent or a failure, then the timer connects it", async () => {

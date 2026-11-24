@@ -229,7 +229,7 @@ async function installPlugin(button) {
 async function removeHelpers() {
   const agreed = await confirmAction({
     title: 'Remove the sign-in helper?',
-    text: 'The must-use plugin is deleted from every site it is in. The next sign-in puts it back.',
+    text: 'The sign-in is deleted from every site it is in. The next sign-in puts it back.',
     confirmLabel: 'Remove',
   });
   if (!agreed) return;

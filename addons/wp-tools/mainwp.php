@@ -224,14 +224,14 @@ function clp_mainwp_put($file, $code) {
 }
 
 // Written and removed as the site's user; WP-CLI loads them, but nothing in them acts there.
-// The loader goes with the last module, and an earlier release's files with either.
+// The loader goes with the last module only when the folder is empty and the loader is ours;
+// writing the guard removes both earlier releases' files.
 function clp_mainwp_guard($input) {
+    if (!is_string($input['code'] ?? null) || !is_string($input['loader'] ?? null) || $input['loader'] === '') clp_mainwp_fail('invalid-input');
     $remove = array(CLP_MAINWP_LEGACY_GUARD);
-    if (empty($input['code'])) {
+    if ($input['code'] === '') {
         array_unshift($remove, CLP_MAINWP_GUARD);
-        if (!file_exists(ABSPATH . CLP_MAINWP_SIGN_IN)) array_push($remove, CLP_MAINWP_LOADER, CLP_MAINWP_MODULES);
     } else {
-        if (!is_string($input['code']) || !is_string($input['loader'] ?? null) || $input['loader'] === '') clp_mainwp_fail('invalid-input');
         if (wp_normalize_path(untrailingslashit(WPMU_PLUGIN_DIR)) !== wp_normalize_path(dirname(ABSPATH . CLP_MAINWP_LOADER))) clp_mainwp_fail('guard-moved');
         if (!wp_mkdir_p(ABSPATH . CLP_MAINWP_MODULES)) clp_mainwp_fail('guard-failed');
         clp_mainwp_put(ABSPATH . CLP_MAINWP_GUARD, $input['code']);
@@ -240,6 +240,14 @@ function clp_mainwp_guard($input) {
     }
     foreach ($remove as $file) {
         if (!clp_mainwp_remove(ABSPATH . $file)) clp_mainwp_fail('guard-failed');
+    }
+    if ($input['code'] === '' && !file_exists(ABSPATH . CLP_MAINWP_SIGN_IN) && !is_link(ABSPATH . CLP_MAINWP_SIGN_IN)) {
+        $modules = ABSPATH . CLP_MAINWP_MODULES;
+        if (is_dir($modules) && !is_link($modules)) @rmdir($modules);
+        $loader = ABSPATH . CLP_MAINWP_LOADER;
+        if (!file_exists($modules) && !is_link($modules) && !is_link($loader) && is_file($loader) && @file_get_contents($loader) === $input['loader']) {
+            if (!unlink($loader)) clp_mainwp_fail('guard-failed');
+        }
     }
     return array('ok' => true);
 }

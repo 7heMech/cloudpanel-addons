@@ -155,6 +155,7 @@ const ADAPTER = PHP.replace(/^<\?php\s*/, "");
 // The adapter answers with one of these codes. A site's own code can print a
 // reply too, so its text is never repeated: an unknown code gets a fixed message.
 const FAILURES: Record<string, string> = {
+  "invalid-input": "the MainWP request to WordPress was invalid",
   "admin-changed": "the site's first administrator changed during the connection; check again",
   "already-connected": "MainWP Child is already connected to a Dashboard; disconnect it in MainWP first",
   "guard-failed": "the MainWP guard could not be written into the site's mu-plugins folder",
@@ -501,6 +502,9 @@ async function visit(pass: Pass, site: WpSite): Promise<void> {
       // Withdrawing the addon removes guards without WordPress, so one may be gone already.
       if (status.guard) await setGuard(pass, site, record, false);
       else delete record.guard;
+    } else if (status.guard && status.guard !== GUARD_HASH) {
+      // A guard already there is kept current, an earlier release's too, even while the Dashboard is unavailable or the site is not connected.
+      await setGuard(pass, site, record, true);
     }
     // Cleanup restores the child without the Dashboard; only its record there waits.
     if (pass.dashboardError && !pass.state.cleanup) throw new Error(pass.dashboardError);
@@ -508,8 +512,7 @@ async function visit(pass: Pass, site: WpSite): Promise<void> {
     else if (status.multisite) record.status = "unsupported";
     else if (pass.state.remote) await checkChildOnly(pass, site, record, status);
     else await checkSite(pass, site, record, status);
-    // A guard already there is kept current, an earlier release's too, even while the site is not connected.
-    if (enforcing(pass.state) && (record.status === "connected" || status.guard) && status.guard !== GUARD_HASH) {
+    if (enforcing(pass.state) && record.status === "connected" && !status.guard) {
       await setGuard(pass, site, record, true);
     }
   } catch (error) {
@@ -714,7 +717,7 @@ async function downloadChild(pass: Pass, site: WpSite, status: ChildStatus): Pro
 }
 
 async function setGuard(pass: Pass, site: WpSite, record: MainwpRecord, on: boolean): Promise<void> {
-  await bridge(pass, site, on ? { op: "guard", code: GUARD, loader: HOSTING_TOOLS_LOADER_PHP } : { op: "guard", code: "" });
+  await bridge(pass, site, { op: "guard", code: on ? GUARD : "", loader: HOSTING_TOOLS_LOADER_PHP });
   if (on) record.guard = true;
   else delete record.guard;
 }

@@ -705,14 +705,19 @@ shift 6
 rm -rf -- "$@"`;
 
 /**
- * Removes one module's files, `$4` on, and once the other module `$1` is gone
- * too, the loader `$2` and the modules' directory `$3`.
+ * Removes one module's files, `$5` on, and once the other module `$1` is gone
+ * too, removes the modules' directory `$4` only if empty and the loader `$2`
+ * only if it is still a regular file matching `$3`.
  */
 const REMOVE_SCRIPT = `set -eu
-other=$1 loader=$2 dir=$3
-shift 3
+other=$1 loader=$2 code=$3 dir=$4
+shift 4
 rm -rf -- "$@"
-if [ ! -e "$other" ]; then rm -rf -- "$loader" "$dir"; fi`;
+if [ -e "$other" ] || [ -L "$other" ]; then exit 0; fi
+rmdir -- "$dir" 2>/dev/null || true
+if [ ! -e "$dir" ] && [ ! -L "$dir" ] && [ -f "$loader" ] && [ ! -L "$loader" ] && printf %s "$code" | cmp -s - "$loader"; then
+  rm -f -- "$loader"
+fi`;
 
 /** Only `PATH`: whatever else root's environment holds is not the site's to read. */
 const SITE_ENV = { PATH: "/usr/sbin:/usr/bin:/sbin:/bin" };
@@ -760,7 +765,7 @@ function mintWpLogin(
         "/bin/sh", "-c", INSTALL_SCRIPT, "sh",
         join(site.root, MODULE_DIR), join(site.root, LOADER_FILE), HOSTING_TOOLS_LOADER_PHP,
         join(site.root, SIGN_IN_FILE), SIGN_IN_PHP, join(site.root, SECRET_FILE),
-        ...[...LEGACY_SIGN_IN, LEGACY_GUARD].map((file) => join(site.root, file)),
+        ...LEGACY_SIGN_IN.map((file) => join(site.root, file)),
       ],
       `<?php return array('hash' => '${hash}', 'expires' => ${expires});\n`,
       10_000,
@@ -780,17 +785,24 @@ function mintWpLogin(
 
 /**
  * Takes one module, and an earlier release's files for it, out of every site
- * that has them, and the loader with the last module. A site that cannot be
- * cleaned must not stop the sites after it.
+ * that has them, and the loader with the last module if the folder is empty and
+ * the loader is still ours. Callers hold `mainwpLockFile` and `lockFile` in
+ * that order. A site that cannot be cleaned must not stop the sites after it.
  */
 function removeModule(paths: WpToolsActionPaths, files: string[], other: string): WpRemoveResult {
   let removed = 0;
   const failed: string[] = [];
   for (const site of resolvedSites(paths)) {
     const has = (file: string) => existsSync(join(site.root, file));
-    if (!files.some(has) && !(has(LOADER_FILE) && !has(other))) continue;
+    if (!files.some(has)) continue;
     try {
-      const args = [other, LOADER_FILE, MODULE_DIR, ...files].map((file) => join(site.root, file));
+      const args = [
+        join(site.root, other),
+        join(site.root, LOADER_FILE),
+        HOSTING_TOOLS_LOADER_PHP,
+        join(site.root, MODULE_DIR),
+        ...files.map((file) => join(site.root, file)),
+      ];
       runAsSite(paths, site.account, ["/bin/sh", "-c", REMOVE_SCRIPT, "sh", ...args]);
       removed++;
     } catch (error) {
@@ -1341,11 +1353,14 @@ export async function executeWpToolsAction(
     const site = resolvedSites(paths).find((candidate) => candidate.row.domain_name === domain);
     return { wordpress: Boolean(site && isWordPress(site.root)) };
   }
-  // Both writing paths take the lock: a sign-in that ran while the addon was
-  // being withdrawn would put a loader back into a site it had just left.
+  // Both writing paths take the sign-in lock: a sign-in that ran while the
+  // addon was being withdrawn would put a loader back into a site it had just
+  // left. Remove takes the MainWP lock first, matching withdrawal's lock order,
+  // so it cannot remove the shared loader while a MainWP pass writes a guard.
   if (verb === "remove") {
-    return withFileLock(paths.lockFile, 30, "a WordPress sign-in change is still running", async () =>
-      removeWpLogin(paths));
+    return withFileLock(paths.mainwpLockFile, 15, "a MainWP change is still running", () =>
+      withFileLock(paths.lockFile, 30, "a WordPress sign-in change is still running", async () =>
+        removeWpLogin(paths)));
   }
   // An administrator's request arrives without a name and is not narrowed;
   // every other session names itself and is held to the sites CloudPanel shows

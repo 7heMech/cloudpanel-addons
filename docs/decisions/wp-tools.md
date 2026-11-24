@@ -152,15 +152,18 @@ which would follow any symlink the site's user put in the path.
 
 WordPress lists and auto-loads only the PHP files directly inside `mu-plugins`,
 so the loader is the one entry. It includes `sign-in.php` and `guard.php` by
-name when present, never anything else in the folder. Each file exits when
-requested over HTTP rather than loaded by WordPress. The loader is written
-whenever a module is, left alone when unchanged, and removed with the last
-module, so Remove leaves it while the guard is there. Writing a module also
-removes the separate must-use plugins earlier releases wrote,
-`clp-addons-login.php` with its `clp-addons` folder and `clp-addons-mainwp.php`,
-and removing a module removes its own earlier counterpart, so withdrawing the
-addon removes all three from every site. The page counts either sign-in as a
-helper, so Remove cleans both.
+name when present, never anything else in the folder. The loader and both
+modules exit when requested over HTTP rather than loaded by WordPress, and
+`token.php` prints nothing. The loader is written whenever a module is, left
+alone when unchanged, and removed with the last module only when `hosting-tools`
+is empty and `hosting-tools.php` is still our regular loader file, so Remove
+leaves it while the guard is there and leaves any unrelated site files
+untouched. Writing the sign-in removes the earlier sign-in
+(`clp-addons-login.php` and its `clp-addons` folder), writing the guard removes
+both earlier plugins (including `clp-addons-mainwp.php`), and removing a module
+removes its own earlier counterpart, so withdrawing the addon removes all three
+from every site. The page counts either sign-in as a helper, so Remove cleans
+both.
 
 Must-use rather than a normal plugin because it has to be there when the request
 arrives, must not be something a site owner can deactivate by accident, and
@@ -461,9 +464,9 @@ finds its own path in the plugins directory, and WordPress does not update
 must-use plugins, so the Dashboard could no longer update it. Deletion over SSH
 or SFTP is not something WordPress can stop; the next pass puts the Child back.
 The adapter's status digests the guard, the loader and an earlier release's
-guard, so while enforcing a pass rewrites a guard whose loader went, as a
-concurrent Remove can do, and replaces an earlier release's guard, even on a
-site not connected at the time. Once nothing enforces the connection --
+guard, so while enforcing a pass rewrites a guard whose loader went and
+replaces an earlier release's guard before contacting the Dashboard, even while
+the Dashboard is unavailable or the site is not connected. Once nothing enforces the connection --
 automation paused, cleanup, a Dashboard elsewhere or none usable -- the next
 passes remove each guard. Withdrawing the addon removes them without WordPress,
 as it removes the sign-in helper.
@@ -512,7 +515,9 @@ since. Moving to a Dashboard elsewhere requires cleaning up the connections the
 addon made; moving back does not, since an installed Child belongs to no
 Dashboard.
 
-MainWP has its own lock, separate from Varnish and sign-in. While enforcing,
+MainWP has its own lock, separate from Varnish and sign-in; Remove and disable
+take it before the sign-in lock so helper removal cannot race with a guard
+write. While enforcing,
 the queued pass looks at every site, least recently checked first; otherwise
 only at unseen sites, unfinished phases, guards to remove, pending cleanup and
 retired records. It starts sites for 25 seconds; Check now, connections and cleanup

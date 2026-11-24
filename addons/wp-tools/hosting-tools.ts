@@ -13,7 +13,7 @@ export const SIGN_IN_FILE = `${MODULE_DIR}/sign-in.php`;
 export const SECRET_FILE = `${MODULE_DIR}/token.php`;
 export const GUARD_FILE = `${MODULE_DIR}/guard.php`;
 
-/** The separate must-use plugins earlier releases wrote; writing or removing a module takes them out. */
+/** The separate must-use plugins earlier releases wrote; each module cleans up its own, and writing the guard cleans up both. */
 export const LEGACY_SIGN_IN_LOADER = `${MU_PLUGINS}/clp-addons-login.php`;
 export const LEGACY_SIGN_IN = [LEGACY_SIGN_IN_LOADER, `${MU_PLUGINS}/clp-addons`];
 export const LEGACY_GUARD = `${MU_PLUGINS}/clp-addons-mainwp.php`;

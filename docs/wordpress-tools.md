@@ -111,7 +111,7 @@ connected are left as they are. **Retry** repeats a failed connection. The
 Dashboard's own site and multisite networks are left alone.
 
 Turning automation off leaves every connection in place, and the next passes
-take the must-use plugin out. **Turn off and clean up…** removes what WordPress
+take the MainWP guard out. **Turn off and clean up…** removes what WordPress
 Tools added: the Dashboard records it created, with their keys and cookies;
 MainWP Child where it installed it, with its settings, tables, scheduled events
 and an otherwise empty uploads folder; and, on a Child you had installed, the
