@@ -4,6 +4,32 @@ Hardening, automatic updates, panel PHP, remote backups and the SSH login
 message.
 PHP worker limits and the server memory budget are in [Resource Limits](resource-limits.md).
 
+Installing CloudPanel Addons does not enable System Tweaks automatically.
+Enable it from the **Addons** page or with `clp-addons enable system-tweaks`.
+
+When you enable System Tweaks, its default hardening protections turn on: Nginx
+config injection blocking, Varnish backend checks, protected site Nginx logs,
+PHP-FPM pool isolation, forged and Cloudflare visitor IP fixes, phpMyAdmin
+lockdown, File Manager confinement, version-pinned `clpctl` hardening, a
+per-server panel certificate on port 8443, the panel login jail when `fail2ban`
+is installed, `clp-agent` telemetry blocking, and the SSH login summary.
+
+Host-level or potentially disruptive changes stay off by default until you opt
+in:
+
+- **MySQL on this server only.** Restarts MySQL and blocks remote database
+  clients. Pre-checks configuration and rolls back automatically on failure.
+- **Panel PHP.** Moves `clp-php-fpm` to a newer installed PHP. Runs
+  `php-fpm -t`, checks the login page and File Manager over FastCGI, and rolls
+  back automatically on failure.
+- **Block SSH login guessing.** Adds a fail2ban jail for SSH without editing
+  `sshd` configuration.
+- **Install updates automatically.** Configures `unattended-upgrades`. MySQL
+  updates, CloudPanel updates, and automatic reboots are separate opt-in
+  toggles.
+- **Compress remote backups with Zstandard.** Version-pinned to verified
+  CloudPanel source files and leaves existing backups untouched.
+
 ## Locking the protections
 
 Hardening blocks vulnerabilities in CloudPanel that let a panel administrator
@@ -13,7 +39,10 @@ blocked to escalate to root.
 
 A locked System Tweaks lets the panel switch the Hardening and Failed logins
 protections on, but never off, and move the panel's PHP only to a newer
-version, even from an administrator's account. A new install starts locked.
+version, even from an administrator's account. A new install starts with
+`system-tweaks` locked while the addon itself is still disabled. That initial
+lock does not enable System Tweaks or switch on opt-in settings such as
+**MySQL on this server only** or **Block SSH login guessing**.
 
 - From the panel: choose **Lock settings** in the Hardening card's header. It
   turns every Hardening and Failed logins switch on, including MySQL on this
@@ -140,9 +169,11 @@ off removes only that file. It comes back if System Tweaks is disabled.
 
 ## Panel PHP
 
+**Panel PHP** is opt-in and keeps CloudPanel's own PHP version by default.
 Under **Addons → System Tweaks → Hardening**, choose a newer installed version
-in **Panel PHP**. The page warns while the panel is left on PHP 8.1. This changes the PHP used by CloudPanel's pages,
-phpMyAdmin and File Manager. Site PHP versions keep their own settings.
+to move CloudPanel's pages, phpMyAdmin and File Manager off PHP 8.1. The page
+warns while the panel is left on PHP 8.1. Site PHP versions keep their own
+settings.
 
 The change restarts the panel's PHP service and checks its login page and File
 Manager. If either check fails, the previous configuration is restored.
@@ -481,7 +512,8 @@ does the same while System Tweaks is off.
 
 ## MySQL access
 
-Under **Hardening**, **MySQL on this server only** shows where MySQL listens,
+**MySQL on this server only** is off by default, both on install and when System
+Tweaks is enabled. Under **Hardening**, it shows where MySQL listens,
 whether the firewall rules loaded now let anyone reach it (**Firewalled**,
 **Open** or **Unknown**), any client connected from another address, and whether
 its `root` account still logs in with the password `root` or none.
@@ -511,8 +543,8 @@ tunnel instead:
 ssh -L 3306:127.0.0.1:3306 root@your-server
 ```
 
-The setting is off by default, because the page cannot tell whether something
-remote uses the database. Check the **Connected now from** line and your
+It stays off by default because the page cannot tell whether something remote
+uses the database. Check the **Connected now from** line and your
 Firewall page for a rule on port 3306 before switching it on. Switching it off
 removes the addon's configuration and restarts MySQL (and its socket when used).
 Repair and addon activation/deactivation reconcile configuration without
