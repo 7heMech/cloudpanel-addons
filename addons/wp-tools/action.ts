@@ -43,7 +43,7 @@ import {
 } from "./varnish";
 import { DEFAULT_DOMAIN_LINK, readDomainLink, saveDomainLink, type WpDomainLink } from "./domain-link";
 import {
-  MAINWP_CHILD_PLUGIN, MAINWP_GUARD_FILE, emptyMainwpState, mainwpAction, mainwpNeedsRepair, mainwpOwesSite, mainwpView, readMainwpState, syncMainwp, syncMainwpAll,
+  MAINWP_CHILD_PLUGIN, emptyMainwpState, mainwpAction, mainwpNeedsRepair, mainwpOwesSite, mainwpView, readMainwpState, syncMainwp, syncMainwpAll,
   type MainwpResult, type MainwpRun, type MainwpState,
 } from "./mainwp";
 import {
@@ -61,6 +61,9 @@ import {
   type NewSite, type NewSiteCheck, type NewSitesState,
 } from "./new-sites";
 
+import {
+  GUARD_FILE, HOSTING_TOOLS_LOADER_PHP, LEGACY_GUARD, LEGACY_SIGN_IN, LEGACY_SIGN_IN_LOADER, LOADER_FILE, MODULE_DIR, SECRET_FILE, SIGN_IN_FILE,
+} from "./hosting-tools";
 import { basicAuthBlocks, basicAuthRewritable, withBasicAuthBypass, type reloadNginx } from "./basic-auth";
 
 type WpToolsVerb =
@@ -71,14 +74,8 @@ export type { WpJobs, WpJobView } from "./jobs";
 const JOB_LOCK_WAIT_SECONDS = 240;
 const JOB_RETENTION_DAYS = 7;
 
-/** Where the loader and its one-time secret live inside a WordPress site. */
-const MU_PLUGINS = "wp-content/mu-plugins";
-const LOADER_FILE = `${MU_PLUGINS}/clp-addons-login.php`;
-const SECRET_DIR = `${MU_PLUGINS}/clp-addons`;
-const SECRET_FILE = `${SECRET_DIR}/token.php`;
-
-/** The POST field the loader reads the secret from. */
-const WP_LOGIN_FIELD = "clp_addons_login";
+/** The POST field the sign-in module reads the secret from. */
+const WP_LOGIN_FIELD = "hosting_tools_login";
 /** How long a minted sign-in is good for. One use, and a minute to make it. */
 const WP_LOGIN_TTL_SECONDS = 60;
 
@@ -399,7 +396,7 @@ function wordpressSites(paths: WpToolsActionPaths, state: WpVarnishState): WpSit
     .map((site) => ({
       domain: site.row.domain_name,
       user: site.row.user,
-      helper: existsSync(join(site.root, LOADER_FILE)),
+      helper: [SIGN_IN_FILE, LEGACY_SIGN_IN_LOADER].some((file) => existsSync(join(site.root, file))),
       varnishCache: site.varnishCache,
       varnishPlugin: state.sites[site.row.domain_name] ?? null,
     }));
@@ -624,10 +621,11 @@ export async function reconcileWpNewSites(options: WpToolsActionOptions = {}, ev
 // --- the must-use plugin --------------------------------------------------
 
 /**
- * Must-use rather than a normal plugin because it has to be there when the
- * request arrives and must not be something a site owner can deactivate by
- * accident, and because WordPress loads it before the plugins that would
- * otherwise redirect an anonymous request away.
+ * The sign-in module of the Hosting Tools must-use plugin. Must-use rather
+ * than a normal plugin because it has to be there when the request arrives and
+ * must not be something a site owner can deactivate by accident, and because
+ * WordPress loads it before the plugins that would otherwise redirect an
+ * anonymous request away.
  *
  * It is inert on every request but the one. Without a secret file on disk it
  * returns immediately, and the secret file only exists between an operator
@@ -635,22 +633,18 @@ export async function reconcileWpNewSites(options: WpToolsActionOptions = {}, ev
  * removed before it is even checked, so a second attempt with the same value
  * has nothing to compare against.
  *
- * The secret lives in a subdirectory: WordPress auto-loads every PHP file
- * directly inside mu-plugins, and a data file that is also a plugin would be
- * executed on every request. It is a `.php` file rather than plain data so that
- * a request for it over HTTP runs it and prints nothing, instead of serving the
- * hash to whoever asked.
+ * The secret lives beside it in the modules' subdirectory, which WordPress does
+ * not auto-load, and the loader includes modules by name, never the secret. It
+ * is a `.php` file rather than plain data so that a request for it over HTTP
+ * runs it and prints nothing, instead of serving the hash to whoever asked.
  */
-const LOADER_PHP = `<?php
-/*
- * Plugin Name: CloudPanel Addons sign-in
- * Description: Accepts one single-use administrator sign-in minted by CloudPanel. Installed and removed by the WordPress Tools addon.
- */
+const SIGN_IN_PHP = `<?php
+defined('ABSPATH') || exit;
 add_action('init', function () {
     if (empty($_POST['${WP_LOGIN_FIELD}']) || !is_string($_POST['${WP_LOGIN_FIELD}'])) {
         return;
     }
-    $file = __DIR__ . '/clp-addons/token.php';
+    $file = __DIR__ . '/token.php';
     if (!is_readable($file)) {
         return;
     }
@@ -686,21 +680,39 @@ add_action('init', function () {
 `;
 
 /**
- * Creates the secret's directory `$1`, writes the loader `$4` to `$2` and the
- * secret from stdin to `$3`, in one `runuser` call. A loader already holding
- * exactly that is left alone, so its mtime holds and nothing reindexes it.
+ * Creates the modules' directory `$1`, writes the loader `$3` to `$2` and the
+ * sign-in module `$5` to `$4`, the secret from stdin to `$6`, and removes an
+ * earlier release's files, `$7` on, in one `runuser` call. A file already
+ * holding exactly its content is left alone, so its mtime holds and nothing
+ * reindexes it.
  */
 const INSTALL_SCRIPT = `set -eu
 umask 022
 mkdir -p -- "$1"
 trap 'rm -f "\${t:-}"' EXIT
-t=$(mktemp "$2.XXXXXX")
-printf %s "$4" >"$t"
-chmod 644 "$t"
-if cmp -s "$t" "$2"; then rm -f "$t"; else mv -f "$t" "$2"; fi
-t=$(mktemp "$3.XXXXXX")
+put() {
+  t=$(mktemp "$1.XXXXXX")
+  printf %s "$2" >"$t"
+  chmod 644 "$t"
+  if cmp -s "$t" "$1"; then rm -f "$t"; else mv -f "$t" "$1"; fi
+}
+put "$4" "$5"
+put "$2" "$3"
+t=$(mktemp "$6.XXXXXX")
 cat >"$t"
-mv -f "$t" "$3"`;
+mv -f "$t" "$6"
+shift 6
+rm -rf -- "$@"`;
+
+/**
+ * Removes one module's files, `$4` on, and once the other module `$1` is gone
+ * too, the loader `$2` and the modules' directory `$3`.
+ */
+const REMOVE_SCRIPT = `set -eu
+other=$1 loader=$2 dir=$3
+shift 3
+rm -rf -- "$@"
+if [ ! -e "$other" ]; then rm -rf -- "$loader" "$dir"; fi`;
 
 /** Only `PATH`: whatever else root's environment holds is not the site's to read. */
 const SITE_ENV = { PATH: "/usr/sbin:/usr/bin:/sbin:/bin" };
@@ -746,7 +758,9 @@ function mintWpLogin(
       site.account,
       [
         "/bin/sh", "-c", INSTALL_SCRIPT, "sh",
-        join(site.root, SECRET_DIR), join(site.root, LOADER_FILE), join(site.root, SECRET_FILE), LOADER_PHP,
+        join(site.root, MODULE_DIR), join(site.root, LOADER_FILE), HOSTING_TOOLS_LOADER_PHP,
+        join(site.root, SIGN_IN_FILE), SIGN_IN_PHP, join(site.root, SECRET_FILE),
+        ...[...LEGACY_SIGN_IN, LEGACY_GUARD].map((file) => join(site.root, file)),
       ],
       `<?php return array('hash' => '${hash}', 'expires' => ${expires});\n`,
       10_000,
@@ -765,19 +779,19 @@ function mintWpLogin(
 }
 
 /**
- * Disabling the addon runs this: leaving a loader behind in somebody else's
- * site because the addon went away would make it something an operator cannot
- * fully withdraw.
+ * Takes one module, and an earlier release's files for it, out of every site
+ * that has them, and the loader with the last module. A site that cannot be
+ * cleaned must not stop the sites after it.
  */
-export function removeWpLogin(paths: WpToolsActionPaths = DEFAULT_WP_TOOLS_PATHS): WpRemoveResult {
+function removeModule(paths: WpToolsActionPaths, files: string[], other: string): WpRemoveResult {
   let removed = 0;
   const failed: string[] = [];
   for (const site of resolvedSites(paths)) {
-    const loader = join(site.root, LOADER_FILE);
-    if (!existsSync(loader)) continue;
-    // A site that cannot be cleaned must not stop the sites after it.
+    const has = (file: string) => existsSync(join(site.root, file));
+    if (!files.some(has) && !(has(LOADER_FILE) && !has(other))) continue;
     try {
-      runAsSite(paths, site.account, ["rm", "-rf", "--", loader, join(site.root, SECRET_DIR)]);
+      const args = [other, LOADER_FILE, MODULE_DIR, ...files].map((file) => join(site.root, file));
+      runAsSite(paths, site.account, ["/bin/sh", "-c", REMOVE_SCRIPT, "sh", ...args]);
       removed++;
     } catch (error) {
       failed.push(`${site.row.domain_name}: ${errorMessage(error)}`);
@@ -787,23 +801,20 @@ export function removeWpLogin(paths: WpToolsActionPaths = DEFAULT_WP_TOOLS_PATHS
 }
 
 /**
+ * Disabling the addon runs this: leaving the sign-in behind in somebody else's
+ * site because the addon went away would make it something an operator cannot
+ * fully withdraw.
+ */
+export function removeWpLogin(paths: WpToolsActionPaths = DEFAULT_WP_TOOLS_PATHS): WpRemoveResult {
+  return removeModule(paths, [SIGN_IN_FILE, SECRET_FILE, ...LEGACY_SIGN_IN], GUARD_FILE);
+}
+
+/**
  * Withdrawing the addon runs this: nothing would enforce the connection any
  * more, and a Child no one can deactivate or see would be left behind.
  */
 export function removeMainwpGuards(paths: WpToolsActionPaths = DEFAULT_WP_TOOLS_PATHS): WpRemoveResult {
-  let removed = 0;
-  const failed: string[] = [];
-  for (const site of resolvedSites(paths)) {
-    const guard = join(site.root, MAINWP_GUARD_FILE);
-    if (!existsSync(guard)) continue;
-    try {
-      runAsSite(paths, site.account, ["rm", "-f", "--", guard]);
-      removed++;
-    } catch (error) {
-      failed.push(`${site.row.domain_name}: ${errorMessage(error)}`);
-    }
-  }
-  return { removed, failed };
+  return removeModule(paths, [GUARD_FILE, LEGACY_GUARD], SIGN_IN_FILE);
 }
 
 // --- request parsing ------------------------------------------------------

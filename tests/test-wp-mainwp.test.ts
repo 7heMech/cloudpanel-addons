@@ -5,6 +5,9 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { configureMainwp, emptyMainwpState, mainwpAction, mainwpNeedsRepair, mainwpView, readMainwpState, requireMainwpSettled, saveMainwpState, syncMainwp, syncMainwpAll, type MainwpRun } from "../addons/wp-tools/mainwp";
 import type { WpCommand } from "../addons/wp-tools/wp-cli";
+import {
+  GUARD_FILE, HOSTING_TOOLS_LOADER_PHP, LEGACY_GUARD, LEGACY_SIGN_IN, LOADER_FILE, MODULE_DIR, SIGN_IN_FILE,
+} from "../addons/wp-tools/hosting-tools";
 import { commandOutput } from "../addons/wp-tools/wp-cli";
 import { handle } from "../addons/wp-tools/app/index";
 import { dashboardView } from "../addons/wp-tools/app/views";
@@ -14,7 +17,15 @@ let run: MainwpRun;
 let commands: WpCommand[];
 const key = "a".repeat(64);
 const snapshot = () => ({ options: {}, meta: { passwordAuth: null }, admin: 1, active: false, cron: {}, tables: [], uploads: false });
-const status = () => ({ multisite: false, installed: false, files: false, active: false, key: "", securityId: "", admin: "owner", snapshot: snapshot(), auth: true, guard: "" });
+/** The site's must-use files by content: Hosting Tools' loader and modules, and an earlier release's guard and sign-in. */
+interface MuPlugins { loader?: string; guard?: string; signIn?: boolean; legacyGuard?: string; legacySignIn?: boolean }
+const status = () => ({ multisite: false, installed: false, files: false, active: false, key: "", securityId: "", admin: "owner", snapshot: snapshot(), auth: true, mu: {} as MuPlugins });
+const sha256 = (text: string) => createHash("sha256").update(text).digest("hex");
+/** As the adapter's clp_mainwp_guard_digest. */
+function guardDigest(mu: MuPlugins): string {
+  if (mu.guard === undefined && mu.legacyGuard === undefined) return "";
+  return sha256([mu.guard, mu.loader, mu.legacyGuard].map((file) => file === undefined ? "" : sha256(file)).join(" "));
+}
 let children: Record<string, ReturnType<typeof status>>;
 let connections: Record<string, { id: number; key: string } | null>;
 let fail: string;
@@ -32,7 +43,7 @@ const options = { runWpCommand: async (command: WpCommand) => {
   const child = children[domain];
   let reply: unknown = { ok: true };
   switch (input.op) {
-    case "status": reply = { ...structuredClone(child), fingerprint: JSON.stringify([child!.snapshot, child!.auth, child!.securityId]) }; break;
+    case "status": reply = { ...structuredClone(child), fingerprint: JSON.stringify([child!.snapshot, child!.auth, child!.securityId]), guard: guardDigest(child!.mu) }; break;
     case "snapshot": reply = { snapshot: structuredClone(child!.snapshot) }; break;
     case "dashboard-status": reply = { ok: true, sites: Object.fromEntries(input.domains.map((d: string) => [d, connections[d] || null])) }; break;
     case "dashboard-ready": reply = { ready: httpsReady }; break;
@@ -42,9 +53,18 @@ const options = { runWpCommand: async (command: WpCommand) => {
       child!.key = ""; child!.active = true; child!.auth = false; child!.securityId = input.token; break;
     case "give-back":
       if (!child!.key) child!.key = input.options.mainwp_child_pubkey; break;
-    case "guard":
+    case "guard": {
       if (fail === "guard") throw new Error("read-only site");
-      child!.guard = input.code ? createHash("sha256").update(input.code).digest("hex") : ""; break;
+      const mu = child!.mu;
+      if (input.code) {
+        mu.guard = input.code; mu.loader = input.loader; delete mu.legacySignIn;
+      } else {
+        delete mu.guard;
+        if (!mu.signIn) delete mu.loader;
+      }
+      delete mu.legacyGuard;
+      break;
+    }
     case "activate":
       if (fail === "activate") throw new Error("activation unavailable");
       child!.active = true; break;
@@ -94,7 +114,7 @@ async function configured() { await configureMainwp(run, options, true, "dashboa
 /** A Dashboard on this server with automation off: only an explicit Connect connects. */
 async function paused() { await configureMainwp(run, options, false, "dashboard.test"); commands = []; }
 const ops = () => commands.map((command) => command.stdin ? JSON.parse(command.stdin).op : command.argv.find((arg) => arg === "install"));
-const guarded = () => Object.entries(children).filter(([, child]) => child.guard).map(([domain]) => domain).sort();
+const guarded = () => Object.entries(children).filter(([, child]) => child.mu.guard).map(([domain]) => domain).sort();
 
 test("defaults off; automation connects every site and guards it, and an operator's connection stays theirs", async () => {
   expect(readMainwpState(run.statePath).enabled).toBe(false);
@@ -202,7 +222,8 @@ test("an operator's record whose Child lost its connection is reconnected in pla
   // Cleanup leaves it connected, and takes out the guard.
   await syncMainwp(run, options, true);
   expect(connections["connected.test"]).toEqual({ id: 1, key });
-  expect(children["connected.test"]).toMatchObject({ key, guard: "" });
+  expect(children["connected.test"]!.key).toBe(key);
+  expect(children["connected.test"]!.mu).toEqual({});
 });
 
 test("a guard that cannot be written is reported and tried again", async () => {
@@ -213,6 +234,45 @@ test("a guard that cannot be written is reported and tried again", async () => {
   fail = "";
   await syncMainwp({ ...run, dueOnly: true }, options);
   expect(guarded()).toEqual(["connected.test", "manual.test", "new.test"]);
+});
+
+test("the adapter places the guard where the sign-in and withdrawal look for it", () => {
+  const adapter = readFileSync(join(import.meta.dir, "../addons/wp-tools/mainwp.php"), "utf8");
+  for (const path of [LOADER_FILE, MODULE_DIR, GUARD_FILE, SIGN_IN_FILE, LEGACY_GUARD, ...LEGACY_SIGN_IN]) expect(adapter).toContain(`'${path}'`);
+});
+
+test("an earlier release's guard is replaced while enforcing, even on a site not connected, and removed when not", async () => {
+  const legacy = (): MuPlugins => ({ legacyGuard: "<?php // an earlier release", legacySignIn: true });
+  children["connected.test"]!.mu = legacy();
+  children["new.test"]!.mu = legacy();
+  await configured(); httpsReady = false;
+  expect(await syncMainwp(run, options)).toMatchObject({ failed: [] });
+  expect(readMainwpState(run.statePath).sites["new.test"]!.status).toBe("waiting-https");
+  for (const domain of ["connected.test", "new.test"]) {
+    expect(children[domain]!.mu).toEqual({ guard: expect.any(String), loader: HOSTING_TOOLS_LOADER_PHP });
+  }
+  // Once current, a guard is written only where a site newly connects.
+  commands = []; httpsReady = true;
+  await syncMainwp({ ...run, dueOnly: true }, options);
+  const writes = commands.filter((c) => c.stdin?.includes('"op":"guard"'));
+  expect(writes.map((c) => c.argv.find((arg) => arg.startsWith("--url=")))).toEqual(["--url=https://manual.test"]);
+
+  // A site an earlier release guarded that has only that guard left.
+  children["manual.test"]!.mu = { legacyGuard: "<?php // an earlier release" };
+  await configureMainwp(run, options, false);
+  await syncMainwp({ ...run, dueOnly: true }, options);
+  expect(Object.values(children).map((child) => child.mu)).toEqual(Object.values(children).map(() => ({})));
+  expect(Object.values(readMainwpState(run.statePath).sites).some((record) => record.guard)).toBe(false);
+});
+
+test("a guard whose loader is gone is written again on the next pass", async () => {
+  await configured(); await syncMainwp(run, options);
+  delete children["new.test"]!.mu.loader;
+  commands = [];
+  await syncMainwp({ ...run, dueOnly: true }, options);
+  const writes = commands.filter((c) => c.stdin?.includes('"op":"guard"'));
+  expect(writes.map((c) => c.argv.find((arg) => arg.startsWith("--url=")))).toEqual(["--url=https://new.test"]);
+  expect(children["new.test"]!.mu).toMatchObject({ loader: HOSTING_TOOLS_LOADER_PHP });
 });
 
 test("a new site waits for Dashboard-side HTTPS without intent or a failure, then the timer connects it", async () => {

@@ -142,26 +142,41 @@ first load and the page never reloads.
 
 ## What is in the site
 
-A must-use plugin and a one-time secret, both written and removed as the site's
-own user through `runuser`, never by root, which would follow any symlink the
-site's user put in the path.
+One must-use plugin, listed as Hosting Tools, "Automated management and
+security for WordPress.": the loader `mu-plugins/hosting-tools.php` and, in
+`mu-plugins/hosting-tools`, its modules `sign-in.php` and, while MainWP is
+enforced, `guard.php`, with the sign-in's one-time secret `token.php`. The name
+says what it is for, not which tool wrote it. Everything is written and removed
+as the site's own user, through `runuser` or the MainWP adapter, never by root,
+which would follow any symlink the site's user put in the path.
+
+WordPress lists and auto-loads only the PHP files directly inside `mu-plugins`,
+so the loader is the one entry. It includes `sign-in.php` and `guard.php` by
+name when present, never anything else in the folder. Each file exits when
+requested over HTTP rather than loaded by WordPress. The loader is written
+whenever a module is, left alone when unchanged, and removed with the last
+module, so Remove leaves it while the guard is there. Writing a module also
+removes the separate must-use plugins earlier releases wrote,
+`clp-addons-login.php` with its `clp-addons` folder and `clp-addons-mainwp.php`,
+and removing a module removes its own earlier counterpart, so withdrawing the
+addon removes all three from every site. The page counts either sign-in as a
+helper, so Remove cleans both.
 
 Must-use rather than a normal plugin because it has to be there when the request
 arrives, must not be something a site owner can deactivate by accident, and
 because WordPress loads it before the plugins that would otherwise redirect an
 anonymous request away.
 
-The plugin is inert on every request but one: with no secret file on disk it
+The sign-in is inert on every request but one: with no secret file on disk it
 returns immediately. The secret exists only between the operator pressing the
-button and the browser arriving -- at most a minute -- and the plugin removes it
+button and the browser arriving -- at most a minute -- and the module removes it
 before it compares it, so a failed attempt spends it too. It holds a SHA-256 of
 the token, never the token.
 
-It lives in a subdirectory of `mu-plugins`, because WordPress auto-loads every
-PHP file directly inside that directory and a data file that is also a plugin
-would run on every request. It is a `.php` file rather than plain data so that a
-request for it over HTTP executes it and prints nothing, instead of serving its
-contents to whoever asked.
+The secret is in the modules' folder because a data file that is also a plugin
+would run on every request, and the loader never includes it. It is a `.php`
+file rather than plain data so that a request for it over HTTP executes it and
+prints nothing, instead of serving its contents to whoever asked.
 
 The token reaches the site in a POST body to `/wp-login.php`, not a query string
 or the root URL: a single-use secret in a URL is still a secret in the site's
@@ -180,9 +195,9 @@ set no policy, so their links open a blank window. Either way the window's
 `opener` is cut before the form is submitted, so a page on the site cannot send
 the panel's tab elsewhere.
 
-The site user creates `mu-plugins/clp-addons` itself, so every directory it adds
-is that user's. A missing `wp-includes` or `wp-content` is a refusal rather than
-something to invent.
+The site user creates `mu-plugins/hosting-tools` itself, so every directory it
+adds is that user's. A missing `wp-includes` or `wp-content` is a refusal rather
+than something to invent.
 
 The sign-in is for the site's first administrator by user id. Which
 administrator an operator becomes is not a choice this offers, because the
@@ -433,20 +448,25 @@ the next pass or Retry resumes it, undoing first its own registration the
 Dashboard never recorded. With automation off, a phase left by a crash is
 reported as interrupted, after its setting is restored.
 
-A connected site gets a guard, `clp-addons-mainwp.php` in `mu-plugins`, written
-and removed as the site's user through the adapter. It hides MainWP Child from
-the Plugins list, refuses `deactivate_plugin` for it, removes the Child's
-settings page and drops its Disconnect post, so a site administrator cannot
-undo the connection between passes. A site whose `wp-config.php` moves the
-must-use folder reports that instead, since the guard would not load. WP-CLI and the Dashboard's own requests are
-unaffected, so checks see the site as it is. The guard is beside the Child, not
-the Child itself as a must-use plugin: the Child sets itself up in an activation
-hook and finds its own path in the plugins directory, and WordPress does not
-update must-use plugins, so the Dashboard could no longer update it. Deletion
-over SSH or SFTP is not something WordPress can stop; the next pass puts the
-Child back. Once nothing enforces the connection -- automation paused, cleanup,
-a Dashboard elsewhere or none usable -- the next passes remove each guard. Withdrawing the
-addon removes them without WordPress, as it removes the sign-in helper.
+A connected site gets the guard, the Hosting Tools module `guard.php` (see What
+is in the site), written and removed as the site's user through the adapter. It
+hides MainWP Child from the Plugins list, refuses `deactivate_plugin` for it,
+removes the Child's settings page and drops its Disconnect post, so a site
+administrator cannot undo the connection between passes. A site whose
+`wp-config.php` moves the must-use folder reports that instead, since the guard
+would not load. WP-CLI and the Dashboard's own requests are unaffected, so
+checks see the site as it is. The guard is beside the Child, not the Child
+itself as a must-use plugin: the Child sets itself up in an activation hook and
+finds its own path in the plugins directory, and WordPress does not update
+must-use plugins, so the Dashboard could no longer update it. Deletion over SSH
+or SFTP is not something WordPress can stop; the next pass puts the Child back.
+The adapter's status digests the guard, the loader and an earlier release's
+guard, so while enforcing a pass rewrites a guard whose loader went, as a
+concurrent Remove can do, and replaces an earlier release's guard, even on a
+site not connected at the time. Once nothing enforces the connection --
+automation paused, cleanup, a Dashboard elsewhere or none usable -- the next
+passes remove each guard. Withdrawing the addon removes them without WordPress,
+as it removes the sign-in helper.
 
 A connection the addon takes over is never in its snapshot, so cleanup leaves
 that Child disconnected rather than handing it back to the other Dashboard. A
