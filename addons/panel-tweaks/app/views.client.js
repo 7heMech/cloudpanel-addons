@@ -133,6 +133,9 @@ function syncPreviewGutter() {
 
 previewMobileScreen.addEventListener('change', syncPreviewGutter);
 
+let previewObserver = null;
+let previewObservedDoc = null;
+
 // The frame is this origin's, so its document can be measured directly: it
 // grows when the injected script fills the columns, and again whenever a
 // column is switched on inside it.
@@ -150,7 +153,12 @@ function fitPreview() {
     frame.style.height = Math.max(160, Math.ceil(content.getBoundingClientRect().height)) + 'px';
   };
   measure();
-  if (window.ResizeObserver) new ResizeObserver(measure).observe(content);
+  if (window.ResizeObserver && previewObservedDoc !== inner) {
+    if (previewObserver) previewObserver.disconnect();
+    previewObserver = new ResizeObserver(measure);
+    previewObserver.observe(content);
+    previewObservedDoc = inner;
+  }
 }
 
 function setPreviewWidth(button) {

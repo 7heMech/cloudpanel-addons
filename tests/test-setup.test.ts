@@ -355,7 +355,9 @@ describe("collecting the checklist", () => {
   test("an external HTTPS tunnel or reverse proxy satisfies Panel hostname, unblocks Passkeys keeping its own reason, and keeps Panel gate open", () => {
     const req = (headers: Record<string, string>) => new Request("http://unix/setup", { headers });
     expect(proxyHostFromRequest(req({ host: "clp-stg.7he.dev", "x-forwarded-proto": "https" }))).toBe("clp-stg.7he.dev");
+    expect(proxyHostFromRequest(req({ host: "clp-stg.7he.dev:443", "x-forwarded-proto": "https" }))).toBe("clp-stg.7he.dev");
     expect(proxyHostFromRequest(req({ "x-forwarded-host": "clp-stg.7he.dev", "cf-ray": "abc123" }))).toBe("clp-stg.7he.dev");
+    expect(proxyHostFromRequest(req({ "x-forwarded-host": "clp-stg.7he.dev", "x-forwarded-proto": "http", "cf-ray": "abc123" }))).toBeNull();
     expect(proxyHostFromRequest(req({ host: "panel.example.com:8443", "x-forwarded-proto": "https" }))).toBeNull();
     expect(proxyHostFromRequest(req({ host: "203.0.113.10", "x-forwarded-proto": "https" }))).toBeNull();
     expect(proxyHostFromRequest(req({ host: "localhost", "x-forwarded-proto": "https" }))).toBeNull();
@@ -672,7 +674,7 @@ describe("Setup client and route contracts", () => {
         matchMedia: () => ({ matches: false }),
       },
       navigator: { credentials: {} },
-      location: { hostname: "clp.example.com", port: "", origin: "https://clp.example.com", hash: "" },
+      location: { protocol: "https:", hostname: "clp.example.com", port: "", origin: "https://clp.example.com", hash: "" },
       history: { replaceState: () => {} },
       CSS: { escape: (v: string) => v },
       csrf: () => "tok",
@@ -764,8 +766,8 @@ describe("Setup client and route contracts", () => {
     expect(btn3.disabled).toBe(false);
   });
 
-  test("setupApplyPasskeyOrigin keeps the row title visible and skips unlocking when a different customDomain exists", () => {
-    const run = (customDomain: { name: string; issued: boolean } | null) => {
+  test("setupApplyPasskeyOrigin keeps the row title visible, requires https, and skips unlocking when a different customDomain exists", () => {
+    const run = (customDomain: { name: string; issued: boolean } | null, protocol = "https:") => {
       const box = { hidden: false };
       const head = { hidden: true };
       const note = { textContent: "" };
@@ -782,7 +784,7 @@ describe("Setup client and route contracts", () => {
           },
           querySelectorAll: () => [],
         },
-        location: { hostname: "tunnel.example.dev", port: "", origin: "https://tunnel.example.dev", hash: "" },
+        location: { protocol, hostname: "tunnel.example.dev", port: "", origin: `${protocol}//tunnel.example.dev`, hash: "" },
       });
       client.setupApplyPasskeyOrigin();
       return { box, head, blocked, note };
@@ -794,10 +796,55 @@ describe("Setup client and route contracts", () => {
     expect(proxyOnly.blocked.hidden).toBe(false);
     expect(proxyOnly.note.textContent).toContain("https://tunnel.example.dev");
 
+    const plainHttp = run(null, "http:");
+    expect(plainHttp.box.hidden).toBe(false);
+    expect(plainHttp.head.hidden).toBe(true);
+    expect(plainHttp.blocked.hidden).toBe(true);
+
     const mismatched = run({ name: "panel.example.com", issued: false });
     expect(mismatched.box.hidden).toBe(false);
     expect(mismatched.head.hidden).toBe(true);
     expect(mismatched.blocked.hidden).toBe(true);
+  });
+
+  test("hostSpecific checks still omit na steps when their addon is disabled, and blocked steps honor saved skips and partial unlocks", async () => {
+    const step = (id: string, level: SetupStep["level"], check: SetupStep["check"], extra: Partial<SetupStep> = {}): SetupStep =>
+      ({ id, level, title: id, href: `/${id}`, check, ...extra });
+    const source = {
+      core: [],
+      addons: [{
+        name: "firewall", title: "Firewall", enabled: false, steps: [
+          step("absent-cloud", "secure", () => ({ state: "na", reason: "not on cloud" }), { hostSpecific: true }),
+          step("present-cloud", "secure", () => ({ state: "todo", reason: "no token" }), { hostSpecific: true }),
+        ],
+      }, {
+        name: "dns", title: "DNS", enabled: true, steps: [
+          step("a", "domain", () => ({ state: "todo", reason: "a" })),
+          step("b", "domain", () => ({ state: "todo", reason: "b" })),
+          step("c", "domain", () => ({ state: "todo", reason: "c" }), { requires: ["a", "b"] }),
+        ],
+      }],
+    };
+    const items = await setupSteps({}, source);
+    expect(items.find((entry) => entry.id === "absent-cloud")).toBeUndefined();
+    expect(items.find((entry) => entry.id === "present-cloud")).toMatchObject({ state: "todo", reason: "Firewall is off" });
+
+    // Step c requires both a and b: finishing a completes one requirement rather than unlocking c.
+    const htmlPartial = setupPanelHtml({ off: false, hidden: false, actions: [], steps: items });
+    expect(htmlPartial).toContain("completes one requirement for c");
+
+    // Skipping every open step while c stays blocked does not claim everything is done or skipped.
+    const file = join(dir, "setup-blocked-skip.json");
+    changeSetupPrefs("admin", { skip: "present-cloud" }, file);
+    changeSetupPrefs("admin", { skip: "a" }, file);
+    changeSetupPrefs("admin", { skip: "b" }, file);
+    const waitingView = await setupView("admin", file, source);
+    expect(setupPanelHtml(waitingView)).toContain("waiting on skipped prerequisites");
+
+    // A saved skip on a blocked step shows as skipped with Undo.
+    changeSetupPrefs("admin", { skip: "c" }, file);
+    const skippedBlocked = await setupView("admin", file, source);
+    expect(skippedBlocked.steps.find((entry) => entry.id === "c")?.state).toBe("skipped");
   });
 
   test("section-shell resolves direct hashes, inner anchors, and survives repaints", () => {

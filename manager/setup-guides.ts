@@ -41,6 +41,12 @@ export const SETUP_GUIDES: SetupGuide[] = [
         linkLabel: "Go to Connect DNS",
       },
       {
+        title: "Confirm every site record is proxied",
+        detail: "Check in DNS that every site you plan to lock down has its records proxied through Cloudflare before dropping direct origin traffic.",
+        href: "/addons/dns/#sites",
+        linkLabel: "Open DNS sites",
+      },
+      {
         title: "Restrict HTTP and HTTPS to Cloudflare",
         detail: "Allow traffic on ports 80 and 443 from Cloudflare IP ranges only.",
         href: "/addons/firewall/#sites",

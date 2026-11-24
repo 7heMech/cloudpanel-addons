@@ -1949,7 +1949,13 @@ const SETUP_PREVIEW_DONE: Record<string, string> = {
   "dns-automatic": "New sites get Web's records", "auto-ssl": "New sites get a Let's Encrypt certificate",
   "smtp-new-sites": "New sites join Example Mail",
 };
-const setupPreviewPrefs = { skipped: new Set<string>(["updates"]), hidden: false };
+const DEFAULT_PREVIEW_ENABLED = "system-tweaks,firewall,dns,resource-limits,stager,maintenance,git,instatic";
+function initialPreviewEnabled(params: URLSearchParams): string[] {
+  if (params.has("empty")) return [];
+  return (params.get("enabled") ?? DEFAULT_PREVIEW_ENABLED).split(",").filter(Boolean);
+}
+
+const setupPreviewPrefs: { skipped: Set<string>; hidden: boolean | null } = { skipped: new Set<string>(["updates"]), hidden: null };
 
 /**
  * ?setup=fresh shows an unconfigured server with prerequisites blocking later steps,
@@ -1962,30 +1968,36 @@ function setupPreviewView(page: URLSearchParams): SetupView {
   const action = page.get("action");
   const scenario = action === "only" ? "done" : page.get("setup");
   const fresh = scenario === "fresh" || scenario === "tunnel";
+  const enabledAddons = previewEnabled ?? ["system-tweaks", "firewall", "dns", "panel-tweaks", "resource-limits", "smtp", "wp-tools"];
+  const enabledSet = new Set(enabledAddons);
   const steps = setupPreviewSteps.map((step): SetupItem => {
+    const addon = step.addon ? { ...step.addon, enabled: enabledSet.has(step.addon.name) } : null;
+    let mapped: SetupItem = { ...step, addon };
     if (fresh) {
-      if (step.id === "dns-connection") return { ...step, state: "todo", reason: "No Cloudflare connection is saved" };
-      if (step.id === "panel-hostname") return { ...step, state: "todo", href: "/admin/settings", reason: "Point a hostname at this server's IP, then enter it under Admin → Settings → Custom Domain" };
-      if (step.id === "panel-gate") return { ...step, state: "blocked", blockedBy: [{ id: "dns-connection", title: "Connect DNS" }, { id: "panel-hostname", title: "Panel hostname" }], reason: "Needs Connect DNS and Panel hostname first" };
-      if (step.id === "passkeys") return { ...step, state: "blocked", blockedBy: [{ id: "panel-hostname", title: "Panel hostname" }], reason: "Needs Panel hostname first" };
-      if (step.id === "dns-automatic") return { ...step, state: "blocked", blockedBy: [{ id: "dns-connection", title: "Connect DNS" }], reason: "Needs Connect DNS first" };
-      if (step.id === "smtp-new-sites") return { ...step, state: "blocked", blockedBy: [{ id: "smtp-relay", title: "Outgoing mail relay" }], reason: "Needs Outgoing mail relay first" };
-      return { ...step, state: "todo", blockedBy: undefined, reason: step.id === "panel-cert" ? "CloudPanel uses the stock certificate" : step.id === "real-ip" ? "X-Real-IP is trusted from any address" : step.id === "phpmyadmin" ? "phpMyAdmin answers unauthenticated requests" : step.id === "php-limits" ? "New sites use CloudPanel defaults" : step.id === "smtp-relay" ? "No mail relay is configured" : step.reason };
+      if (step.id === "dns-connection") mapped = { ...mapped, state: "todo", reason: "No Cloudflare connection is saved" };
+      else if (step.id === "panel-hostname") mapped = { ...mapped, state: "todo", href: "/admin/settings", reason: "Point a hostname at this server's IP, then enter it under Admin → Settings → Custom Domain" };
+      else if (step.id === "panel-gate") mapped = { ...mapped, state: "blocked", blockedBy: [{ id: "dns-connection", title: "Connect DNS" }, { id: "panel-hostname", title: "Panel hostname" }], reason: "Needs Connect DNS and Panel hostname first" };
+      else if (step.id === "passkeys") mapped = { ...mapped, state: "blocked", blockedBy: [{ id: "panel-hostname", title: "Panel hostname" }], reason: "Needs Panel hostname first" };
+      else if (step.id === "dns-automatic") mapped = { ...mapped, state: "blocked", blockedBy: [{ id: "dns-connection", title: "Connect DNS" }], reason: "Needs Connect DNS first" };
+      else if (step.id === "smtp-new-sites") mapped = { ...mapped, state: "blocked", blockedBy: [{ id: "smtp-relay", title: "Outgoing mail relay" }], reason: "Needs Outgoing mail relay first" };
+      else mapped = { ...mapped, state: "todo", blockedBy: undefined, reason: step.id === "panel-cert" ? "CloudPanel uses the stock certificate" : step.id === "real-ip" ? "X-Real-IP is trusted from any address" : step.id === "phpmyadmin" ? "phpMyAdmin answers unauthenticated requests" : step.id === "php-limits" ? "New sites use CloudPanel defaults" : step.id === "smtp-relay" ? "No mail relay is configured" : step.reason };
+    } else if (scenario === "fallback" && step.id === "dns-connection") {
+      mapped = { ...mapped, state: "todo", reason: "Agency's token lacks API Tokens: Read, which DNS now needs to show the token's permissions" };
+    } else if (scenario === "done" || scenario === "fallback") {
+      mapped = { ...mapped, state: "done", blockedBy: undefined, reason: SETUP_PREVIEW_DONE[step.id] ?? step.reason };
     }
-    if (scenario === "fallback" && step.id === "dns-connection") {
-      return { ...step, state: "todo", reason: "Agency's token lacks API Tokens: Read, which DNS now needs to show the token's permissions" };
+    if ((mapped.state === "todo" || mapped.state === "blocked") && setupPreviewPrefs.skipped.has(mapped.id)) {
+      mapped = { ...mapped, state: "skipped" };
     }
-    if (scenario === "done" || scenario === "fallback") {
-      return { ...step, state: "done", blockedBy: undefined, reason: SETUP_PREVIEW_DONE[step.id] ?? step.reason };
-    }
-    return step.state === "todo" && setupPreviewPrefs.skipped.has(step.id) ? { ...step, state: "skipped" } : step;
+    return mapped;
   });
   const base: SetupView = {
     off: scenario === "off",
-    hidden: action === "hidden" || setupPreviewPrefs.hidden,
+    hidden: setupPreviewPrefs.hidden ?? (action === "hidden"),
     actions: action ? SETUP_PREVIEW_ACTIONS : [],
     steps: scenario === "off" ? [] : steps,
-    enabledAddons: ["system-tweaks", "firewall", "dns", "panel-tweaks", "resource-limits", "smtp", "wp-tools"],
+    enabledAddons,
+    skippedIds: [...setupPreviewPrefs.skipped].sort(),
     context: {
       customDomain: scenario === "done" || scenario === "fallback" ? { name: "panel.example.com", issued: true } : null,
       dnsConnected: !fresh,
@@ -2029,7 +2041,7 @@ function managerPreviewMutation(path: string, source: URL): Response | null {
   }
   const managerRoute = path.match(/^\/addons\/api\/addons\/([^/]+)\/(enable|disable)$/);
   if (managerRoute) {
-    previewEnabled ??= (source.searchParams.get("enabled") ?? "firewall,instatic,stager,maintenance,resource-limits,git").split(",");
+    previewEnabled ??= initialPreviewEnabled(source.searchParams);
     previewManagerJob = {
       id: "20261021T120000Z-" + (++previewJobNumber).toString(16).padStart(6, "0"), addon: managerRoute[1]!,
       kind: managerRoute[2]!, state: "running", step: "Updating addon", error: "", createdAt: "", startedAt: "", finishedAt: "",
@@ -2318,7 +2330,7 @@ const server = Bun.serve({
     if (path === "/addons/") {
       // ?enabled= picks which addons are on, so the Available section and the
       // enable/disable buttons can be reviewed without a CloudPanel install.
-      const enabledSet = new Set(previewEnabled ?? (empty ? [] : (url.searchParams.get("enabled") ?? "system-tweaks,firewall,dns,resource-limits,stager,maintenance,git,instatic").split(",").filter(Boolean)));
+      const enabledSet = new Set(previewEnabled ?? initialPreviewEnabled(url.searchParams));
       const catalogNames = Object.keys(ADDONS);
       const enabled = catalogNames.filter((name) => enabledSet.has(name));
       const previewJob = state && ["running", "queued", "failed"].includes(state)

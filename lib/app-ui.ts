@@ -226,12 +226,14 @@ export function sectionShellHtml(id: string, label: string, tabs: SectionTab[], 
   const initial = activeId && tabs.some((tab) => tab.id === activeId) ? activeId : tabs[0]?.id ?? "";
   const links = tabs.map((tab) => {
     const active = tab.id === initial;
+    const tabDomId = `section-tab-${id}-${tab.id}`;
+    const panelDomId = `section-panel-${id}-${tab.id}`;
     const dot = tab.attention ? `<span class="section-dot tone-${tab.attention}" aria-hidden="true"></span>` : "";
     const count = tab.count !== undefined ? `<span class="section-count">${tab.count}</span>` : "";
-    return `<a class="section-link${active ? " is-active" : ""}" href="#${esc(tab.id)}" data-section-tab="${esc(tab.id)}"${active ? ' aria-current="page"' : ""}>${esc(tab.label)}${dot}${count}</a>`;
+    return `<a class="section-link${active ? " is-active" : ""}" id="${esc(tabDomId)}" role="tab" aria-selected="${active ? "true" : "false"}" aria-controls="${esc(panelDomId)}" tabindex="${active ? "0" : "-1"}" href="#${esc(tab.id)}" data-section-tab="${esc(tab.id)}">${esc(tab.label)}${dot}${count}</a>`;
   }).join("");
-  const panels = tabs.map((tab) => `<section class="section-panel" data-section-panel="${esc(tab.id)}"${tab.id === initial ? "" : " hidden"}>${tab.content}</section>`).join("");
-  return `<div class="section-shell" data-section-shell="${esc(id)}" data-default-section="${esc(initial)}"><nav class="section-nav" aria-label="${esc(label)}">${links}</nav><div class="section-panels">${panels}</div></div>`;
+  const panels = tabs.map((tab) => `<section class="section-panel" id="${esc(`section-panel-${id}-${tab.id}`)}" role="tabpanel" aria-labelledby="${esc(`section-tab-${id}-${tab.id}`)}" data-section-panel="${esc(tab.id)}"${tab.id === initial ? "" : " hidden"}>${tab.content}</section>`).join("");
+  return `<div class="section-shell" data-section-shell="${esc(id)}" data-default-section="${esc(initial)}"><nav class="section-nav" role="tablist" aria-label="${esc(label)}">${links}</nav><div class="section-panels">${panels}</div></div>`;
 }
 
 interface SiteJobProgress {

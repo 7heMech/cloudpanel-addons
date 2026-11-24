@@ -406,13 +406,14 @@ export function dashboardView(state: DnsState): string {
 }
 
 function connectionAttention(state: DnsState): "bad" | "warn" | undefined {
+  let warn = false;
   for (const connection of state.connections) {
     if (!connection.active) return "bad";
     if (connection.access?.rows.some((row) => !row.optional && (row.held === "no" || row.held === "some"))) return "bad";
-    if (connection.access && connection.access.reach === null) return "warn";
+    if (connection.access && connection.access.reach === null) warn = true;
   }
   if (state.panelHost?.problem || state.panelHost?.plan?.problems.length) return "bad";
-  return undefined;
+  return warn ? "warn" : undefined;
 }
 
 /** Everything a change can alter, repainted in place from the action's reply. */
@@ -422,12 +423,12 @@ export function dashboardContent(state: DnsState, now = Date.now()): string {
   const redirects = state.sites.filter((site) => site.redirect);
   const waiting = state.waitUntil > now
     ? `<div class="notice">Cloudflare or Mailcow asked this server to wait until ${esc(new Date(state.waitUntil).toISOString().slice(11, 16))} UTC. Checks resume after that.</div>` : "";
-  const checkAction = state.connections.length || redirects.length
+  const pageAction = state.connections.length || redirects.length
     ? '<div class="page-actions"><button class="btn" type="button" onclick="dnsCheck(this)">Check now</button></div>'
-    : "";
+    : '<div class="page-actions"><button class="btn" type="button" onclick="dnsEditRedirect(\'\')">Add redirect</button></div>';
   const heading = `<script type="application/json" id="dns-state">${data}</script>
     <div class="page-heading"><div><h1>DNS</h1>
-      <p>Keep each site's Cloudflare DNS synced to its profile.</p></div>${checkAction}</div>`;
+      <p>Keep each site's Cloudflare DNS synced to its profile.</p></div>${pageAction}</div>`;
 
   // Before Cloudflare is connected, replace the workspace tables and forms with the focused first-run flow.
   if (!state.connections.length) {

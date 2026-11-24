@@ -1,6 +1,7 @@
 let clpSetupPath = '';
 let clpSetupOpen = {};
 let clpSetupLastFocusCheck = 0;
+let clpSetupRefreshTicket = 0;
 
 const SETUP_MARK_TODO = '<svg viewBox="0 0 16 16"><circle cx="8" cy="8" r="7" fill="none" stroke="var(--muted)" stroke-width="1.6"/></svg>';
 const SETUP_MARK_HERE = '<svg viewBox="0 0 16 16"><circle cx="8" cy="8" r="7" fill="var(--panel)" stroke="var(--accent)" stroke-width="1.8"/><circle cx="8" cy="8" r="3" fill="var(--accent)"/></svg>';
@@ -168,7 +169,7 @@ function setupJumpTo(targetId, fromStepId) {
 function setupApplyPasskeyOrigin() {
   const isIp = /^[\d.]+$|^\[/.test(location.hostname);
   const standardHttpsPort = !location.port || location.port === '443';
-  const usable = Boolean(window.PublicKeyCredential && navigator.credentials && window.isSecureContext && !isIp && standardHttpsPort);
+  const usable = Boolean(window.PublicKeyCredential && navigator.credentials && window.isSecureContext && location.protocol === 'https:' && !isIp && standardHttpsPort);
   const ctx = setupReadContext();
   const configuredDomain = ctx && ctx.customDomain && ctx.customDomain.name ? String(ctx.customDomain.name).toLowerCase() : '';
   // Never unlock on an alternate origin when CloudPanel already has a custom domain waiting on its certificate.
@@ -281,12 +282,22 @@ function setupInitPage(before) {
     defaults[panel.dataset.setupPath] = openRow ? openRow.dataset.setupStep : '';
   });
   if (before) {
-    // Preserve the operator's tab and open step unless that step just completed or was skipped.
+    // Preserve the operator's tab and open/closed step unless step state changed.
     Object.keys(defaults).forEach(function (pathId) {
+      const hasPrev = Object.prototype.hasOwnProperty.call(before.open, pathId);
       const prevOpen = before.open[pathId];
-      const prevRow = prevOpen && workspace.querySelector('[data-setup-step="' + CSS.escape(prevOpen) + '"]');
-      const keepPrev = prevRow && prevRow.dataset.setupState === before.states[prevOpen] && prevRow.dataset.setupState !== 'blocked';
-      clpSetupOpen[pathId] = keepPrev ? prevOpen : defaults[pathId];
+      const panel = workspace.querySelector('[data-setup-path="' + CSS.escape(pathId) + '"]');
+      const pathChanged = panel ? Array.from(panel.querySelectorAll('[data-setup-step]')).some(function (row) {
+        const id = row.dataset.setupStep;
+        return before.states[id] !== row.dataset.setupState;
+      }) : false;
+      if (hasPrev && prevOpen === '' && !pathChanged) {
+        clpSetupOpen[pathId] = '';
+      } else {
+        const prevRow = prevOpen && workspace.querySelector('[data-setup-step="' + CSS.escape(prevOpen) + '"]');
+        const keepPrev = prevRow && prevRow.dataset.setupState === before.states[prevOpen] && prevRow.dataset.setupState !== 'blocked';
+        clpSetupOpen[pathId] = keepPrev ? prevOpen : defaults[pathId];
+      }
       setupSetStepOpen(workspace, pathId, clpSetupOpen[pathId]);
     });
     setupSwitchPath(workspace, before.path || workspace.dataset.initialPath || '', false);
@@ -324,8 +335,10 @@ async function setupApi(body, fresh) {
 async function setupRefresh(body, fresh) {
   const root = CLP_ROOT.getElementById('setup-page-root');
   if (!root) return;
-  const before = setupSnapshotDom();
+  const ticket = ++clpSetupRefreshTicket;
   const data = await setupApi(body, fresh);
+  if (ticket !== clpSetupRefreshTicket) return data;
+  const before = setupSnapshotDom();
   repaintView(root, data.html);
   if (typeof clpSetupShow === 'function') clpSetupShow(data.show, data.attention);
   setupInitPage(before);
@@ -359,10 +372,14 @@ function setupCopyText(value) {
 }
 
 function setupCopyAndOpen(value, url) {
-  if (value && navigator.clipboard && navigator.clipboard.writeText) {
-    navigator.clipboard.writeText(value)
-      .then(function () { notify('Copied ' + value + '. Paste it under Custom Domain.', 'ok'); })
-      .catch(function () {});
+  if (value) {
+    if (navigator.clipboard && navigator.clipboard.writeText) {
+      navigator.clipboard.writeText(value)
+        .then(function () { notify('Copied ' + value + '. Paste it under Custom Domain.', 'ok'); })
+        .catch(function () { notify('Copy ' + value + ' manually for Custom Domain.', 'warn'); });
+    } else {
+      notify('Copy ' + value + ' manually for Custom Domain.', 'warn');
+    }
   }
   window.open(url, '_blank', 'noopener,noreferrer');
 }
@@ -375,7 +392,9 @@ function setupRandomPanelHost() {
   const clean = input.value.trim().toLowerCase().replace(/\.+$/, '');
   let base = '';
   if (clean && /^[a-z0-9-]+(\.[a-z0-9-]+)+$/.test(clean)) {
-    base = zones.find(function (zone) { return clean === zone || clean.endsWith('.' + zone); }) || input.dataset.randomBase || clean;
+    const matchedZone = zones.find(function (zone) { return clean === zone || clean.endsWith('.' + zone); });
+    const reusing = input.dataset.randomBase && input.dataset.randomValue && clean === input.dataset.randomValue;
+    base = matchedZone || (reusing ? input.dataset.randomBase : clean);
   } else if (zones.length === 1) {
     base = zones[0];
   }
@@ -384,8 +403,10 @@ function setupRandomPanelHost() {
     notify('Enter your domain first, such as example.com, then choose Random.', 'warn');
     return;
   }
+  const generated = setupRandomLabel() + '.' + base;
   input.dataset.randomBase = base;
-  input.value = setupRandomLabel() + '.' + base;
+  input.dataset.randomValue = generated;
+  input.value = generated;
   input.focus();
 }
 

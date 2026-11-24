@@ -136,14 +136,20 @@ function panelHostInline(step: SetupItem, ctx: SetupContext | undefined): string
   </ol>`;
 }
 
+function formatDependentList(steps: SetupItem[]): string {
+  if (steps.length === 1) return esc(steps[0]!.title);
+  if (steps.length === 2) return `${esc(steps[0]!.title)} and ${esc(steps[1]!.title)}`;
+  return `${steps.length} dependent steps`;
+}
+
 function unlocksNoteHtml(dependents: SetupItem[]): string {
   if (!dependents.length) return "";
-  const names = dependents.length === 1
-    ? `unlocks ${esc(dependents[0]!.title)}`
-    : dependents.length === 2
-      ? `unlocks ${esc(dependents[0]!.title)} and ${esc(dependents[1]!.title)}`
-      : `unlocks ${dependents.length} dependent steps`;
-  return `<p class="setup-hint">Finishing this step <span class="setup-unlocks">${names}</span>.</p>`;
+  const unlocked = dependents.filter((step) => (step.blockedBy?.length ?? 1) <= 1);
+  const partial = dependents.filter((step) => (step.blockedBy?.length ?? 1) > 1);
+  const parts: string[] = [];
+  if (unlocked.length) parts.push(`unlocks ${formatDependentList(unlocked)}`);
+  if (partial.length) parts.push(`completes one requirement for ${formatDependentList(partial)}`);
+  return `<p class="setup-hint">Finishing this step <span class="setup-unlocks">${parts.join(" and ")}</span>.</p>`;
 }
 
 function stepControlsHtml(step: SetupItem, ctx: SetupContext | undefined, skipBtn: string, unlocksHint: string): string {
@@ -473,7 +479,11 @@ export function setupPanelHtml(view: SetupView): string {
 
   const lead = setupSuggests(view)
     ? "Suggestions checked against this server. Skip any that do not fit."
-    : view.actions.length ? "Something needs your attention." : "Everything suggested is done or skipped. Skipped steps can be undone here.";
+    : view.actions.length
+      ? "Something needs your attention."
+      : count.blocked > 0
+        ? "Remaining steps are waiting on skipped prerequisites. Undo a skip to continue."
+        : "Everything suggested is done or skipped. Skipped steps can be undone here.";
 
   const sheetBody = pathGroups.length
     ? `<div class="setup-tabs" role="tablist" aria-label="Setup paths" style="--setup-cols:${pathGroups.length}">${tabsHtml}</div>${panelsHtml}`

@@ -233,7 +233,7 @@ export async function setupSteps(
       const result = await within(() => step.check(options), limitMs);
       return "error" in result ? { state: "todo", reason: `Could not be checked: ${result.error}` } : result.value;
     };
-    const found = off && !step.whileOff ? off : await checked();
+    const found = off && !step.whileOff && !step.hostSpecific ? off : await checked();
     const result = off && found.state === "todo" ? off : found;
     if (step.hostSpecific && result.state === "na") return null;
     const item: SetupItem = {
@@ -346,7 +346,7 @@ export async function setupView(
   // A source given in place of the catalog is a test's, which the shared cache must not answer for.
   const checked = source ? await compute() : await cachedChecks(compute, cache);
   const skipped = new Set(prefs.skipped ?? []);
-  const steps = checked.steps.map((step) => step.state === "todo" && skipped.has(step.id) ? { ...step, state: "skipped" as const } : step);
+  const steps = checked.steps.map((step) => (step.state === "todo" || step.state === "blocked") && skipped.has(step.id) ? { ...step, state: "skipped" as const } : step);
   return {
     off: false, hidden, actions: checked.actions, steps,
     ...(checked.context ? { context: checked.context } : {}),
@@ -364,13 +364,15 @@ const FQDN_RE = /^[a-z0-9](?:[a-z0-9-]*[a-z0-9])?(?:\.[a-z0-9](?:[a-z0-9-]*[a-z0
  */
 export function proxyHostFromRequest(req: Request): string | null {
   const rawHost = (req.headers.get("x-forwarded-host") || req.headers.get("host") || "").split(",")[0]!.trim().toLowerCase();
-  if (!rawHost || rawHost.includes(":") || rawHost === "localhost" || /^\d+(?:\.\d+){3}$/.test(rawHost) || !FQDN_RE.test(rawHost)) {
+  const host = rawHost.endsWith(":443") ? rawHost.slice(0, -4) : rawHost;
+  if (!host || host.includes(":") || host === "localhost" || /^\d+(?:\.\d+){3}$/.test(host) || !FQDN_RE.test(host)) {
     return null;
   }
   const proto = (req.headers.get("x-forwarded-proto") || "").split(",")[0]!.trim().toLowerCase();
+  if (proto && proto !== "https") return null;
   const cfVisitor = req.headers.get("cf-visitor") || "";
   const isHttps = proto === "https" || cfVisitor.includes('"https"') || Boolean(req.headers.get("cf-ray"));
-  return isHttps ? rawHost : null;
+  return isHttps ? host : null;
 }
 
 /**
