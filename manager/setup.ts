@@ -36,6 +36,8 @@ export interface SetupItem {
   addon: { name: string; title: string; enabled: boolean } | null;
   state: SetupCheck["state"] | "skipped" | "blocked";
   reason: string;
+  /** The check's own reason before prerequisites overrode it with "Needs ... first". */
+  ownReason?: string;
   /** Unmet prerequisite steps when state is `blocked`. */
   blockedBy?: { id: string; title: string }[];
 }
@@ -105,6 +107,8 @@ function readSetupContext(): SetupContext {
   let dnsAutomatic = false;
   let dnsPanelHost: string | null = null;
   let dnsZones: string[] = [];
+  let overrideIpv4 = "";
+  let overrideIpv6 = "";
   try {
     const dir = addonStateDir("dns");
     const raw = readState<unknown>(`${dir}/policy.json`, 0, () => null);
@@ -115,11 +119,14 @@ function readSetupContext(): SetupContext {
       dnsConnected = policy.connections.some((connection) => Boolean(secrets.cloudflare[connection.id]));
       dnsAutomatic = policy.automatic;
       dnsPanelHost = policy.panelHost;
+      overrideIpv4 = policy.server.ipv4.trim();
+      overrideIpv6 = policy.server.ipv6.trim();
       dnsZones = [...new Set((status.connections ?? []).flatMap((connection) => connection.zoneNames ?? []))].sort();
     }
   } catch { /* DNS state unreadable or not initialized */ }
-  let serverIps: { ipv4: string | null; ipv6: string | null } = { ipv4: null, ipv6: null };
-  try { serverIps = detectAddresses(); } catch { /* best-effort */ }
+  let detected: { ipv4: string | null; ipv6: string | null } = { ipv4: null, ipv6: null };
+  try { detected = detectAddresses(); } catch { /* best-effort */ }
+  const serverIps = { ipv4: overrideIpv4 || detected.ipv4, ipv6: overrideIpv6 || detected.ipv6 };
   return { customDomain, dnsConnected, dnsAutomatic, dnsPanelHost, dnsZones, serverIps };
 }
 
@@ -250,6 +257,7 @@ export async function setupSteps(
     return {
       ...item,
       state: "blocked",
+      ownReason: item.reason,
       blockedBy: unmet.map((req) => ({ id: req.id, title: req.title })),
       reason: `Needs ${unmet.map((req) => req.title).join(" and ")} first`,
     };
@@ -279,22 +287,23 @@ export function switchSetup(on: boolean, file = SETUP_OFF_FILE): boolean {
   return true;
 }
 
-interface Checked { at: number; actions: ActionItem[]; steps: SetupItem[]; context?: SetupContext; enabledAddons?: string[] }
+const CACHE_VERSION = 2;
+interface Checked { v?: number; at: number; actions: ActionItem[]; steps: SetupItem[]; context?: SetupContext; enabledAddons?: string[] }
 
 /**
  * The checks' answer, from the cache while it is under a minute old unless
  * `fresh`: opening Setup asks fresh, so what it lists then is current.
  */
 export async function cachedChecks(
-  compute: () => Promise<Omit<Checked, "at">>,
+  compute: () => Promise<Omit<Checked, "at" | "v">>,
   cache: { file?: string; now?: number; fresh?: boolean } = {},
-): Promise<Omit<Checked, "at">> {
+): Promise<Omit<Checked, "at" | "v">> {
   const file = cache.file ?? CACHE_FILE;
   const now = cache.now ?? Date.now();
   if (!cache.fresh) {
     try {
       const stored = JSON.parse(readFileSync(file, "utf-8")) as Checked;
-      if (now - stored.at >= 0 && now - stored.at < CACHE_MS && Array.isArray(stored.actions) && Array.isArray(stored.steps)) {
+      if (stored.v === CACHE_VERSION && now - stored.at >= 0 && now - stored.at < CACHE_MS && Array.isArray(stored.actions) && Array.isArray(stored.steps)) {
         return {
           actions: stored.actions,
           steps: stored.steps,
@@ -306,7 +315,7 @@ export async function cachedChecks(
   }
   const checked = await compute();
   try {
-    writeFileAtomic(file, `${JSON.stringify({ at: now, ...checked })}\n`, { mode: 0o600, createParent: true });
+    writeFileAtomic(file, `${JSON.stringify({ v: CACHE_VERSION, at: now, ...checked })}\n`, { mode: 0o600, createParent: true });
   } catch { /* the answer stands without a cache */ }
   return checked;
 }
@@ -367,7 +376,8 @@ export function proxyHostFromRequest(req: Request): string | null {
 /**
  * When CloudPanel has no built-in Custom Domain but the administrator reached
  * the panel over a trusted HTTPS hostname through a tunnel or reverse proxy,
- * mark Panel hostname done, unblock Passkeys, and mark Panel gate inapplicable.
+ * mark Panel hostname done, unblock Passkeys (keeping its own reason), and keep
+ * Panel gate open with a proxy-specific reminder to confirm port 8443 is closed.
  */
 export function applyRequestOrigin(view: SetupView, proxyHost: string | null): SetupView {
   if (view.off || !proxyHost || view.context?.customDomain) return view;
@@ -377,20 +387,30 @@ export function applyRequestOrigin(view: SetupView, proxyHost: string | null): S
     : { customDomain: null, proxyHost, dnsConnected: false, dnsAutomatic: false, dnsPanelHost: null, dnsZones: [], serverIps: { ipv4: null, ipv6: null } };
   const steps = view.steps.map((step): SetupItem => {
     if (step.id === "panel-hostname" && step.state !== "done") {
-      return { ...step, state: "done", blockedBy: undefined, reason: `CloudPanel answers at ${proxyHost} via a reverse proxy or tunnel` };
+      return { ...step, state: "done", blockedBy: undefined, ownReason: undefined, reason: `CloudPanel answers at ${proxyHost} via a reverse proxy or tunnel` };
     }
     if (step.id === "panel-gate" && step.state !== "done") {
-      return { ...step, state: "na", blockedBy: undefined, reason: `Not needed behind a reverse proxy or tunnel; protect ${proxyHost} at your tunnel or proxy instead` };
+      return {
+        ...step,
+        state: skipped.has(step.id) ? "skipped" : "todo",
+        blockedBy: undefined,
+        ownReason: undefined,
+        reason: `Reached via ${proxyHost}; confirm direct port 8443 is blocked and ${proxyHost} is protected at your proxy or tunnel`,
+      };
     }
     if (step.state === "blocked" && step.blockedBy?.some((req) => req.id === "panel-hostname")) {
       const remaining = step.blockedBy.filter((req) => req.id !== "panel-hostname");
       if (remaining.length) {
         return { ...step, blockedBy: remaining, reason: `Needs ${remaining.map((req) => req.title).join(" and ")} first` };
       }
+      const fallbackPasskeyReason = step.addon && !step.addon.enabled
+        ? `${step.addon.title} is off`
+        : "No administrator has a security key yet";
+      const restored = step.ownReason;
       const reason = step.id === "passkeys"
-        ? (step.addon && !step.addon.enabled ? `${step.addon.title} is off` : "No administrator has a security key yet")
-        : step.reason;
-      return { ...step, state: skipped.has(step.id) ? "skipped" : "todo", blockedBy: undefined, reason };
+        ? (restored && !restored.toLowerCase().includes("panel hostname") ? restored : fallbackPasskeyReason)
+        : (restored ?? step.reason);
+      return { ...step, state: skipped.has(step.id) ? "skipped" : "todo", blockedBy: undefined, ownReason: undefined, reason };
     }
     return step;
   });

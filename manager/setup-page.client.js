@@ -114,6 +114,16 @@ function setupSelectStep(stepId, pushHash) {
 function setupJumpTo(targetId, fromStepId) {
   const workspace = CLP_ROOT.querySelector('[data-setup-workspace]');
   if (!workspace || !targetId) return;
+  const targetRow = workspace.querySelector('[data-setup-step="' + CSS.escape(targetId) + '"]');
+  if (!targetRow) return;
+  // A Guide button pointing to a step that is currently locked forwards to its prerequisite.
+  if (targetRow.dataset.setupState === 'blocked') {
+    const reqBtn = targetRow.querySelector('[data-setup-jump]');
+    if (reqBtn && reqBtn.dataset.setupJump && reqBtn.dataset.setupJump !== targetId) {
+      setupJumpTo(reqBtn.dataset.setupJump, targetId);
+    }
+    return;
+  }
   const toPath = setupPathOf(workspace, targetId);
   if (!toPath) return;
   const fromPath = fromStepId ? setupPathOf(workspace, fromStepId) : '';
@@ -121,8 +131,6 @@ function setupJumpTo(targetId, fromStepId) {
   setupSetStepOpen(workspace, toPath, targetId);
   if (history.replaceState) history.replaceState(null, '', '#' + encodeURIComponent(targetId));
 
-  const targetRow = workspace.querySelector('[data-setup-step="' + CSS.escape(targetId) + '"]');
-  if (!targetRow) return;
   const control = targetRow.querySelector('.setup-host-input')
     || targetRow.querySelector('.setup-step-body .btn-primary')
     || targetRow.querySelector('.setup-step-body .btn')
@@ -161,12 +169,16 @@ function setupApplyPasskeyOrigin() {
   const isIp = /^[\d.]+$|^\[/.test(location.hostname);
   const standardHttpsPort = !location.port || location.port === '443';
   const usable = Boolean(window.PublicKeyCredential && navigator.credentials && window.isSecureContext && !isIp && standardHttpsPort);
-  // If a server runs behind a Cloudflare Tunnel or reverse proxy without
-  // CloudPanel's custom domain file, unlock Passkeys right in Setup.
+  const ctx = setupReadContext();
+  const configuredDomain = ctx && ctx.customDomain && ctx.customDomain.name ? String(ctx.customDomain.name).toLowerCase() : '';
+  // Never unlock on an alternate origin when CloudPanel already has a custom domain waiting on its certificate.
+  const originMatches = !configuredDomain || configuredDomain === location.hostname.toLowerCase();
   const blocked = CLP_ROOT.querySelector('[data-setup-panel="passkeys"] [data-setup-passkey-blocked]');
-  if (blocked && usable) {
+  if (blocked && usable && originMatches) {
     const box = CLP_ROOT.querySelector('[data-setup-panel="passkeys"] [data-setup-blocked-box]');
+    const head = CLP_ROOT.querySelector('[data-setup-panel="passkeys"] [data-setup-passkey-head]');
     if (box) box.hidden = true;
+    if (head) head.hidden = false;
     blocked.hidden = false;
     const note = blocked.querySelector('[data-setup-passkey-note]');
     if (note) note.textContent = 'This browser is already on ' + location.origin + ', which supports passkeys directly.';
@@ -281,7 +293,8 @@ function setupInitPage(before) {
     setupAnimateDiff(before);
   } else {
     clpSetupOpen = defaults;
-    const fromHash = decodeURIComponent((location.hash || '').replace(/^#/, ''));
+    let fromHash = '';
+    try { fromHash = decodeURIComponent((location.hash || '').replace(/^#/, '')); } catch (error) { fromHash = ''; }
     if (fromHash.startsWith('path:')) {
       setupSwitchPath(workspace, fromHash.slice(5), false);
     } else if (fromHash && setupPathOf(workspace, fromHash)) {
@@ -376,6 +389,23 @@ function setupRandomPanelHost() {
   input.focus();
 }
 
+function setupReviewLines(review) {
+  const labels = { create: 'Create', update: 'Update', delete: 'Delete', note: 'Note' };
+  const lines = [];
+  (review.sites || []).forEach(function (plan) {
+    (plan.problems || []).forEach(function (problem) {
+      lines.push((plan.domain ? plan.domain + ': ' : '') + problem);
+    });
+    (plan.changes || []).forEach(function (change) {
+      const verb = labels[change.action] || change.action || 'Change';
+      const detail = change.detail ? ' (' + change.detail + ')' : '';
+      const before = change.before ? ' [now: ' + change.before + ']' : '';
+      lines.push((plan.domain ? plan.domain + ': ' : '') + verb + ' ' + change.subject + detail + before);
+    });
+  });
+  return lines;
+}
+
 async function setupSavePanelHostName(name, source) {
   if (!name) return;
   if (source) source.disabled = true;
@@ -389,16 +419,37 @@ async function setupSavePanelHostName(name, source) {
     let reply = null;
     try { reply = await response.json(); } catch (error) {}
     if (!response.ok || !reply || !reply.ok) throw new Error((reply && reply.error) || 'request failed with ' + response.status);
-    if (reply.data && reply.data.review && reply.data.review.token) {
+    const review = reply.data && reply.data.review;
+    if (review) {
+      const details = setupReviewLines(review);
+      if (review.blocked || !review.token) {
+        const message = [review.text].concat(details).filter(Boolean).join(' ') || ('Could not save ' + name + '.');
+        throw new Error(message);
+      }
+      const promptText = [reply.data.notice, review.text].filter(Boolean).join(' ');
+      const accepted = await confirmAction({
+        title: review.title || ('Apply DNS changes for ' + name + '?'),
+        text: promptText,
+        details: details,
+        confirmLabel: review.confirmLabel || 'Apply changes',
+        danger: Boolean(review.danger),
+      });
+      if (!accepted) {
+        if (source) source.disabled = false;
+        return;
+      }
       const confirm = await fetch('/addons/dns/api/confirm', {
         method: 'POST',
         credentials: 'same-origin',
         headers: { Accept: 'application/json', 'Content-Type': 'application/json', 'X-CLP-Addons-CSRF': csrf() },
-        body: JSON.stringify({ token: reply.data.review.token }),
+        body: JSON.stringify({ token: review.token }),
       });
       let confirmed = null;
       try { confirmed = await confirm.json(); } catch (error) {}
       if (!confirm.ok || !confirmed || !confirmed.ok) throw new Error((confirmed && confirmed.error) || 'Could not apply DNS change');
+      if (confirmed.data && confirmed.data.review) {
+        throw new Error('The DNS plan changed before confirmation. Open DNS to review it.');
+      }
       notify((confirmed.data && confirmed.data.notice) || ('DNS points ' + name + ' at this server.'), 'ok');
     } else {
       notify((reply.data && reply.data.notice) || ('Saved ' + name + '.'), 'ok');
@@ -433,6 +484,9 @@ async function setupRunInline(target) {
     let reply = null;
     try { reply = await response.json(); } catch (error) {}
     if (!response.ok || !reply || !reply.ok) throw new Error((reply && reply.error) || 'request failed with ' + response.status);
+    if (url === '/addons/panel-tweaks/api/tweaks') {
+      try { localStorage.setItem('clp_tweaks_rev', String(Date.now())); } catch (error) {}
+    }
     notify(doneMessage, 'ok');
     await setupRefresh(null, true);
   } catch (error) {
@@ -453,16 +507,23 @@ async function setupEnableAddon(addon, target) {
     let reply = null;
     try { reply = await response.json(); } catch (error) {}
     if (!response.ok || !reply || !reply.ok) throw new Error((reply && reply.error) || 'request failed with ' + response.status);
+    const id = reply.data && reply.data.jobId;
+    if (!id) throw new Error('the manager did not start a job');
+    const existing = reply.data.existing === true;
+    const running = existing ? reply.data.job : null;
+    const title = existing && running && typeof describeManagerJob === 'function'
+      ? describeManagerJob(running)
+      : 'Enabling ' + addon;
     const holder = target.closest('[data-manager-job-card]');
     if (holder && typeof showJob === 'function' && typeof watchJob === 'function') {
-      showJob('Enabling ' + addon, holder);
-      watchJob(reply.data.jobId, holder, async function (job) {
+      showJob(title, holder);
+      watchJob(id, holder, async function (job) {
         if (job.state === 'failed') {
           notify(job.error || ('Enabling ' + addon + ' failed.'), 'error');
           target.disabled = false;
           return;
         }
-        notify('Enabled ' + addon + '.', 'ok');
+        notify('Enabled ' + (job.addon || addon) + '.', 'ok');
         await setupRefresh(null, true);
       });
     } else {
@@ -495,6 +556,26 @@ async function setupHandleClick(event) {
       setupSetStepOpen(workspace, pathId, next);
       if (history.replaceState) history.replaceState(null, '', '#' + encodeURIComponent(next || ('path:' + pathId)));
     }
+    return;
+  }
+  const copyBtn = event.target.closest && event.target.closest('[data-setup-copy]');
+  if (copyBtn) {
+    setupCopyText(copyBtn.dataset.setupCopy);
+    return;
+  }
+  const copyOpen = event.target.closest && event.target.closest('[data-setup-copy-open]');
+  if (copyOpen) {
+    setupCopyAndOpen(copyOpen.dataset.setupCopyOpen, copyOpen.dataset.setupOpenUrl || '/admin/settings');
+    return;
+  }
+  const adopt = event.target.closest && event.target.closest('[data-setup-adopt-host]');
+  if (adopt) {
+    setupSavePanelHostName(adopt.dataset.setupAdoptHost, adopt);
+    return;
+  }
+  const randomHost = event.target.closest && event.target.closest('[data-setup-random-host]');
+  if (randomHost) {
+    setupRandomPanelHost();
     return;
   }
   const inline = event.target.closest && event.target.closest('[data-setup-inline-url]');

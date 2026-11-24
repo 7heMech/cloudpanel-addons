@@ -422,7 +422,7 @@ export function dashboardContent(state: DnsState, now = Date.now()): string {
   const redirects = state.sites.filter((site) => site.redirect);
   const waiting = state.waitUntil > now
     ? `<div class="notice">Cloudflare or Mailcow asked this server to wait until ${esc(new Date(state.waitUntil).toISOString().slice(11, 16))} UTC. Checks resume after that.</div>` : "";
-  const checkAction = state.connections.length
+  const checkAction = state.connections.length || redirects.length
     ? '<div class="page-actions"><button class="btn" type="button" onclick="dnsCheck(this)">Check now</button></div>'
     : "";
   const heading = `<script type="application/json" id="dns-state">${data}</script>
@@ -431,7 +431,7 @@ export function dashboardContent(state: DnsState, now = Date.now()): string {
 
   // Before Cloudflare is connected, replace the workspace tables and forms with the focused first-run flow.
   if (!state.connections.length) {
-    return `${heading}${waiting}${setupCard(state)}${redirects.length ? `${modeBar(state)}${redirectsCard(state, redirects)}` : ""}`;
+    return `${heading}${waiting}${setupCard(state)}${redirects.length ? `${state.automatic ? syncModeCard(state) : modeBar(state)}${redirectsCard(state, redirects)}` : ""}`;
   }
 
   const single = state.connections.length <= 1;

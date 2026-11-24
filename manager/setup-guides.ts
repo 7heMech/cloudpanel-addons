@@ -1,6 +1,8 @@
 // Cross-addon procedures shown below Setup's path card. Each entry links two
 // or more addons into one concrete workflow so operators can discover how
 // newly shipped addons work together without crowding the step paths.
+import { ADDONS } from "../addons/catalog";
+
 export interface SetupGuideStep {
   title: string;
   detail: string;
@@ -20,15 +22,16 @@ export interface SetupGuide {
   steps: SetupGuideStep[];
 }
 
+function addonRef(name: keyof typeof ADDONS): { name: string; title: string } {
+  return { name, title: ADDONS[name]!.title };
+}
+
 export const SETUP_GUIDES: SetupGuide[] = [
   {
     id: "cloudflare-edge-lockdown",
     title: "Cloudflare edge lockdown",
     description: "Proxy every site record through Cloudflare, then drop direct hits on the origin.",
-    addons: [
-      { name: "firewall", title: "Firewall" },
-      { name: "dns", title: "DNS" },
-    ],
+    addons: [addonRef("firewall"), addonRef("dns")],
     steps: [
       {
         title: "Connect Cloudflare DNS",
@@ -40,7 +43,7 @@ export const SETUP_GUIDES: SetupGuide[] = [
       {
         title: "Restrict HTTP and HTTPS to Cloudflare",
         detail: "Allow traffic on ports 80 and 443 from Cloudflare IP ranges only.",
-        href: "/addons/firewall/#fw-cloudflare",
+        href: "/addons/firewall/#sites",
         linkLabel: "Open Firewall",
       },
       {
@@ -56,12 +59,7 @@ export const SETUP_GUIDES: SetupGuide[] = [
     id: "new-wordpress-automation",
     title: "Zero-touch WordPress onboarding",
     description: "New WordPress sites get DNS records, Let's Encrypt SSL, Varnish or MainWP defaults, and outgoing mail automatically.",
-    addons: [
-      { name: "wp-tools", title: "WordPress Tools" },
-      { name: "dns", title: "DNS" },
-      { name: "panel-tweaks", title: "Panel Tweaks" },
-      { name: "smtp", title: "SMTP Relay" },
-    ],
+    addons: [addonRef("wp-tools"), addonRef("dns"), addonRef("panel-tweaks"), addonRef("smtp")],
     steps: [
       {
         title: "Turn on Automatic DNS records",
@@ -80,7 +78,7 @@ export const SETUP_GUIDES: SetupGuide[] = [
       {
         title: "Configure new-site WordPress defaults",
         detail: "Set automatic CLP Varnish Cache installation and MainWP Child enrollment for new WordPress sites.",
-        href: "/addons/wp-tools/#wp-new-sites",
+        href: "/addons/wp-tools/#settings",
         linkLabel: "Open WordPress Tools",
       },
       {
@@ -96,10 +94,7 @@ export const SETUP_GUIDES: SetupGuide[] = [
     id: "staging-clones-live-dns",
     title: "Staging copies with live DNS",
     description: "Clone a production site to a staging subdomain with DNS records written automatically.",
-    addons: [
-      { name: "stager", title: "Stager" },
-      { name: "dns", title: "DNS" },
-    ],
+    addons: [addonRef("stager"), addonRef("dns")],
     steps: [
       {
         title: "Enable Automatic DNS records",

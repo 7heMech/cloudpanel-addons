@@ -17,6 +17,7 @@ import { newSiteCategoryCheck } from "../addons/resource-limits/setup";
 import { administratorKeys } from "../addons/security-keys/action";
 import { passkeysCheck } from "../addons/security-keys/setup";
 import { newSiteMailCheck, relayCheck } from "../addons/smtp/setup";
+import { isSwitchVerb } from "../addons/system-tweaks/app/service";
 import { loginJailsCheck, panelCertCheck, phpMyAdminCheck, realIpCheck, updatesCheck } from "../addons/system-tweaks/setup";
 import type { LoginJailsStatus } from "../addons/system-tweaks/login-jails";
 import type { SetupStep } from "../lib/addon-definition";
@@ -25,7 +26,9 @@ import {
   actionItems, applyRequestOrigin, cachedChecks, CORE_SETUP, changeSetupPrefs, proxyHostFromRequest,
   readSetupPrefs, remoteBackupsCheck, setupOff, setupStepIds, setupSteps, setupView, switchSetup,
 } from "../manager/setup";
-import { setupPanelHtml, setupShows, setupSuggests } from "../manager/setup-view";
+import { SETUP_GUIDES } from "../manager/setup-guides";
+import { INLINE_ACTIONS, setupPanelHtml, setupShows, setupSuggests } from "../manager/setup-view";
+import { setupErrorPage } from "../manager/views";
 
 const uid = process.getuid!();
 let dir: string;
@@ -221,11 +224,40 @@ describe("collecting the checklist", () => {
     expect(items.find((item) => item.id === "core")!.addon).toBeNull();
   });
 
-  test("every step id is unique and every step links somewhere", () => {
+  test("every step id is unique, every requires id exists, and every step links somewhere", () => {
     const ids = setupStepIds();
-    expect(new Set(ids).size).toBe(ids.length);
+    const idSet = new Set(ids);
+    expect(idSet.size).toBe(ids.length);
     for (const spec of Object.values(ADDONS)) {
-      for (const each of spec.setup ?? []) expect(each.href).toMatch(/^\/(addons\/[a-z-]+\/(#[A-Za-z0-9-]+)?|security)$/);
+      for (const each of spec.setup ?? []) {
+        expect(each.href).toMatch(/^\/(addons\/[a-z-]+\/(#[A-Za-z0-9-]+)?|security)$/);
+        for (const reqId of each.requires ?? []) expect(idSet.has(reqId)).toBe(true);
+      }
+    }
+  });
+
+  test("every guide anchor resolves to a real target and every guide addon uses its catalog title", () => {
+    const ids = new Set(setupStepIds());
+    const addonSources = new Map<string, string>();
+    const loadViews = (addon: string) => {
+      if (!addonSources.has(addon)) {
+        addonSources.set(addon, readFileSync(join(import.meta.dir, `../addons/${addon}/app/views.ts`), "utf8"));
+      }
+      return addonSources.get(addon)!;
+    };
+    for (const guide of SETUP_GUIDES) {
+      for (const ref of guide.addons) {
+        expect(ADDONS[ref.name]?.title).toBe(ref.title);
+      }
+      for (const guideStep of guide.steps) {
+        if (guideStep.stepId) expect(ids.has(guideStep.stepId)).toBe(true);
+        const match = guideStep.href.match(/^\/addons\/([a-z-]+)\/#([A-Za-z0-9-]+)$/);
+        if (!match) continue;
+        const [, addon, anchor] = match;
+        const views = loadViews(addon!);
+        const hasAnchor = views.includes(`id="${anchor}"`) || views.includes(`id: "${anchor}"`);
+        expect(hasAnchor).toBe(true);
+      }
     }
   });
 
@@ -320,7 +352,7 @@ describe("collecting the checklist", () => {
     expect(ready.find((entry) => entry.id === "gate")!.blockedBy).toBeUndefined();
   });
 
-  test("an external HTTPS tunnel or reverse proxy satisfies Panel hostname, unblocks Passkeys and skips Panel gate", () => {
+  test("an external HTTPS tunnel or reverse proxy satisfies Panel hostname, unblocks Passkeys keeping its own reason, and keeps Panel gate open", () => {
     const req = (headers: Record<string, string>) => new Request("http://unix/setup", { headers });
     expect(proxyHostFromRequest(req({ host: "clp-stg.7he.dev", "x-forwarded-proto": "https" }))).toBe("clp-stg.7he.dev");
     expect(proxyHostFromRequest(req({ "x-forwarded-host": "clp-stg.7he.dev", "cf-ray": "abc123" }))).toBe("clp-stg.7he.dev");
@@ -336,17 +368,30 @@ describe("collecting the checklist", () => {
         { id: "dns-connection", level: "domain" as const, title: "Connect DNS", href: "/addons/dns/#dns-connection", addon: { name: "dns", title: "DNS", enabled: true }, state: "todo" as const, reason: "No Cloudflare connection" },
         { id: "panel-hostname", level: "domain" as const, title: "Panel hostname", href: "/admin/settings", addon: { name: "dns", title: "DNS", enabled: true }, state: "todo" as const, reason: "CloudPanel has no custom domain" },
         { id: "panel-gate", level: "domain" as const, title: "Panel gate", href: "/addons/firewall/#panel-gate-card", requires: ["dns-connection", "panel-hostname"], addon: { name: "firewall", title: "Firewall", enabled: true }, state: "blocked" as const, blockedBy: [{ id: "dns-connection", title: "Connect DNS" }, { id: "panel-hostname", title: "Panel hostname" }], reason: "Needs Connect DNS and Panel hostname first" },
-        { id: "passkeys", level: "domain" as const, title: "Passkeys for administrators", href: "/security", requires: ["panel-hostname"], addon: { name: "security-keys", title: "Security Keys", enabled: true }, state: "blocked" as const, blockedBy: [{ id: "panel-hostname", title: "Panel hostname" }], reason: "Needs Panel hostname first" },
+        { id: "passkeys", level: "domain" as const, title: "Passkeys for administrators", href: "/security", requires: ["panel-hostname"], addon: { name: "security-keys", title: "Security Keys", enabled: true }, state: "blocked" as const, ownReason: "Set a panel hostname with a trusted certificate first", blockedBy: [{ id: "panel-hostname", title: "Panel hostname" }], reason: "Needs Panel hostname first" },
       ],
     };
     const tunnel = applyRequestOrigin(freshView, "clp-stg.7he.dev");
     expect(tunnel.context?.proxyHost).toBe("clp-stg.7he.dev");
     expect(tunnel.steps.find((step) => step.id === "panel-hostname")).toMatchObject({ state: "done", reason: "CloudPanel answers at clp-stg.7he.dev via a reverse proxy or tunnel" });
     expect(tunnel.steps.find((step) => step.id === "passkeys")).toMatchObject({ state: "todo", reason: "No administrator has a security key yet" });
-    expect(tunnel.steps.find((step) => step.id === "panel-gate")).toMatchObject({ state: "na" });
+    expect(tunnel.steps.find((step) => step.id === "panel-gate")).toMatchObject({ state: "todo" });
+    expect(tunnel.steps.find((step) => step.id === "panel-gate")!.reason).toContain("8443");
     expect(setupPanelHtml(tunnel)).toContain("https://clp-stg.7he.dev");
 
-    // In the guided Cloudflare Panel hostname step, omit the redundant plain-text finding line above step 1 and link straight to /admin/settings with copy.
+    // A non-hostname passkeys blocker (such as administrators disallowed under Settings) survives unblocking.
+    const disallowedPasskeys = applyRequestOrigin({
+      ...freshView,
+      steps: freshView.steps.map((step) => step.id === "passkeys"
+        ? { ...step, ownReason: "Administrators may not use security keys under Settings" }
+        : step),
+    }, "clp-stg.7he.dev");
+    expect(disallowedPasskeys.steps.find((step) => step.id === "passkeys")).toMatchObject({
+      state: "todo",
+      reason: "Administrators may not use security keys under Settings",
+    });
+
+    // In the guided Cloudflare Panel hostname step, omit the redundant plain-text finding line above step 1, preserve typed input with data-keep, and use delegated data-* actions instead of inline string-escaped onclick.
     const guidedHtml = setupPanelHtml({
       ...freshView,
       context: { ...freshView.context, dnsConnected: true, dnsAutomatic: true, dnsPanelHost: "k7m2p9x4.example.com" },
@@ -355,11 +400,15 @@ describe("collecting the checklist", () => {
     const panelCard = guidedHtml.slice(panelStart, guidedHtml.indexOf("data-setup-panel=\"panel-gate\"", panelStart));
     expect(panelCard).toContain("Copy &amp; open Custom Domain");
     expect(panelCard).toContain('href="/admin/settings"');
+    expect(panelCard).toContain('id="setup-panel-host-name" data-keep');
+    expect(panelCard).toContain('data-setup-copy-open="k7m2p9x4.example.com"');
+    expect(panelCard).not.toContain("onclick=\"setupCopy");
     expect(panelCard).not.toContain('class="setup-finding-line"');
 
-    // Skipping Passkeys on a tunnel box stays skipped.
-    const skippedTunnel = applyRequestOrigin({ ...freshView, skippedIds: ["passkeys"] }, "clp-stg.7he.dev");
+    // Skipping Passkeys or Panel gate on a tunnel box stays skipped.
+    const skippedTunnel = applyRequestOrigin({ ...freshView, skippedIds: ["passkeys", "panel-gate"] }, "clp-stg.7he.dev");
     expect(skippedTunnel.steps.find((step) => step.id === "passkeys")!.state).toBe("skipped");
+    expect(skippedTunnel.steps.find((step) => step.id === "panel-gate")!.state).toBe("skipped");
 
     // An existing CloudPanel custom domain (even unissued) takes precedence over proxyHost.
     const withCustom = applyRequestOrigin({
@@ -570,5 +619,250 @@ describe("Hetzner", () => {
     privateFile(paths.tokenFile, { token: "a".repeat(64) });
     privateFile(paths.syncFile, { seen: { web: true, panel: false }, seenAt: 1234 });
     expect(hetznerSetupState({ paths })).toEqual({ cloud: true, token: true, seen: { web: true, panel: false }, seenAt: 1234 });
+  });
+});
+
+describe("Setup client and route contracts", () => {
+  const setupClientSource = readFileSync(join(import.meta.dir, "../manager/setup-page.client.js"), "utf8");
+  const appUiClientSource = readFileSync(join(import.meta.dir, "../lib/assets/app-ui.client.js"), "utf8");
+
+  test("setupErrorPage returns an error status instead of an empty checklist", async () => {
+    const res = setupErrorPage("gateway offline", null, { status: 502 });
+    expect(res.status).toBe(502);
+    const html = await res.text();
+    expect(html).toContain("gateway offline");
+    expect(html).not.toContain("No setup steps apply to this server");
+  });
+
+  test("every INLINE_ACTIONS endpoint matches a real addon route and payload contract", () => {
+    const routeSources = new Map<string, string>();
+    for (const [stepId, spec] of Object.entries(INLINE_ACTIONS)) {
+      expect(setupStepIds()).toContain(stepId);
+      const match = spec.url.match(/^\/addons\/([a-z-]+)(\/api\/[a-z-]+)$/);
+      expect(match).not.toBeNull();
+      const [, addon, route] = match!;
+      if (addon === "system-tweaks") {
+        const verb = `set-${route!.replace(/^\/api\//, "")}`;
+        expect(isSwitchVerb(verb)).toBe(true);
+        expect(typeof spec.body.enabled).toBe("boolean");
+        continue;
+      }
+      if (!routeSources.has(addon!)) {
+        routeSources.set(addon!, readFileSync(join(import.meta.dir, `../addons/${addon}/app/index.ts`), "utf8"));
+      }
+      expect(routeSources.get(addon!)!).toContain(`"${route}"`);
+      if (addon === "panel-tweaks" && route === "/api/tweaks") {
+        expect(typeof spec.body.autoSsl).toBe("boolean");
+      }
+    }
+  });
+
+  function loadSetupClient(stubs: Record<string, unknown>) {
+    const names = ["setupSavePanelHostName", "setupApplyPasskeyOrigin", "setupReviewLines"];
+    const baseGlobals: Record<string, unknown> = {
+      CLP_ROOT: {
+        getElementById: () => null,
+        querySelector: () => null,
+        querySelectorAll: () => [],
+      },
+      window: {
+        addEventListener: () => {},
+        PublicKeyCredential: function () {},
+        isSecureContext: true,
+        matchMedia: () => ({ matches: false }),
+      },
+      navigator: { credentials: {} },
+      location: { hostname: "clp.example.com", port: "", origin: "https://clp.example.com", hash: "" },
+      history: { replaceState: () => {} },
+      CSS: { escape: (v: string) => v },
+      csrf: () => "tok",
+      notify: () => {},
+      confirmAction: async () => false,
+      fetch: async () => new Response(JSON.stringify({ ok: true, data: {} }), { status: 200 }),
+      localStorage: { setItem: () => {} },
+      ...stubs,
+    };
+    const keys = Object.keys(baseGlobals);
+    const fn = new Function(...keys, `${setupClientSource}\nreturn { ${names.join(", ")} };`);
+    return fn(...keys.map((k) => baseGlobals[k])) as {
+      setupSavePanelHostName: (name: string, source?: { disabled: boolean }) => Promise<void>;
+      setupApplyPasskeyOrigin: () => void;
+    };
+  }
+
+  test("setupSavePanelHostName requires explicit confirmation for DNS reviews and rejects blocked plans", async () => {
+    const fetches: { url: string; body: unknown }[] = [];
+    const notices: { msg: string; kind: string }[] = [];
+    const confirms: Record<string, unknown>[] = [];
+    let acceptConfirm = false;
+    let planReply: Record<string, unknown> = {
+      ok: true,
+      data: {
+        review: {
+          token: "rev-1",
+          title: "Review DNS change",
+          text: "Replaces existing A record",
+          confirmLabel: "Apply",
+          danger: true,
+          blocked: false,
+          sites: [{ domain: "panel.example.com", problems: [], changes: [{ action: "update", subject: "A panel.example.com", detail: "203.0.113.10", before: "198.51.100.5" }] }],
+        },
+      },
+    };
+    const client = loadSetupClient({
+      notify: (msg: string, kind: string) => notices.push({ msg, kind }),
+      confirmAction: async (opts: Record<string, unknown>) => { confirms.push(opts); return acceptConfirm; },
+      fetch: async (url: string, init?: { body?: string }) => {
+        fetches.push({ url, body: init?.body ? JSON.parse(init.body) : null });
+        if (url === "/addons/dns/api/panel-host") return new Response(JSON.stringify(planReply), { status: 200 });
+        if (url === "/addons/dns/api/confirm") return new Response(JSON.stringify({ ok: true, data: { notice: "Applied." } }), { status: 200 });
+        return new Response(JSON.stringify({ ok: true, data: { html: "", show: true, attention: false } }), { status: 200 });
+      },
+    });
+
+    // Declining confirmation never posts to /confirm.
+    const btn1 = { disabled: false };
+    await client.setupSavePanelHostName("panel.example.com", btn1);
+    expect(confirms.length).toBe(1);
+    expect(confirms[0]!.danger).toBe(true);
+    expect(fetches.map((entry) => entry.url)).toEqual(["/addons/dns/api/panel-host"]);
+    expect(btn1.disabled).toBe(false);
+    expect(notices).toEqual([]);
+
+    // Accepting confirmation posts the review token.
+    acceptConfirm = true;
+    const btn2 = { disabled: false };
+    await client.setupSavePanelHostName("panel.example.com", btn2);
+    expect(fetches.map((entry) => entry.url)).toEqual(["/addons/dns/api/panel-host", "/addons/dns/api/panel-host", "/addons/dns/api/confirm"]);
+    expect(notices.at(-1)).toEqual({ msg: "Applied.", kind: "ok" });
+
+    // A blocked review reports an error and never confirms or claims Saved.
+    fetches.length = 0;
+    notices.length = 0;
+    confirms.length = 0;
+    planReply = {
+      ok: true,
+      data: {
+        review: {
+          token: "",
+          title: "Cannot apply",
+          text: "Zone not found in Cloudflare.",
+          confirmLabel: "Apply",
+          danger: false,
+          blocked: true,
+          sites: [{ domain: "panel.example.com", problems: ["No matching zone"], changes: [] }],
+        },
+      },
+    };
+    const btn3 = { disabled: false };
+    await client.setupSavePanelHostName("panel.example.com", btn3);
+    expect(confirms.length).toBe(0);
+    expect(fetches.map((entry) => entry.url)).toEqual(["/addons/dns/api/panel-host"]);
+    expect(notices[0]?.kind).toBe("error");
+    expect(notices[0]?.msg).toContain("Zone not found");
+    expect(notices[0]?.msg).not.toContain("Saved");
+    expect(btn3.disabled).toBe(false);
+  });
+
+  test("setupApplyPasskeyOrigin keeps the row title visible and skips unlocking when a different customDomain exists", () => {
+    const run = (customDomain: { name: string; issued: boolean } | null) => {
+      const box = { hidden: false };
+      const head = { hidden: true };
+      const note = { textContent: "" };
+      const blocked = { hidden: true, querySelector: (sel: string) => (sel === "[data-setup-passkey-note]" ? note : null) };
+      const stateNode = { textContent: JSON.stringify({ context: { customDomain } }) };
+      const client = loadSetupClient({
+        CLP_ROOT: {
+          getElementById: (id: string) => (id === "clp-setup-state" ? stateNode : null),
+          querySelector: (sel: string) => {
+            if (sel === '[data-setup-panel="passkeys"] [data-setup-passkey-blocked]') return blocked;
+            if (sel === '[data-setup-panel="passkeys"] [data-setup-blocked-box]') return box;
+            if (sel === '[data-setup-panel="passkeys"] [data-setup-passkey-head]') return head;
+            return null;
+          },
+          querySelectorAll: () => [],
+        },
+        location: { hostname: "tunnel.example.dev", port: "", origin: "https://tunnel.example.dev", hash: "" },
+      });
+      client.setupApplyPasskeyOrigin();
+      return { box, head, blocked, note };
+    };
+
+    const proxyOnly = run(null);
+    expect(proxyOnly.box.hidden).toBe(true);
+    expect(proxyOnly.head.hidden).toBe(false);
+    expect(proxyOnly.blocked.hidden).toBe(false);
+    expect(proxyOnly.note.textContent).toContain("https://tunnel.example.dev");
+
+    const mismatched = run({ name: "panel.example.com", issued: false });
+    expect(mismatched.box.hidden).toBe(false);
+    expect(mismatched.head.hidden).toBe(true);
+    expect(mismatched.blocked.hidden).toBe(true);
+  });
+
+  test("section-shell resolves direct hashes, inner anchors, and survives repaints", () => {
+    const start = appUiClientSource.indexOf("const clpActiveSections = {};");
+    const end = appUiClientSource.indexOf("window.addEventListener('hashchange'", start);
+    const snippet = appUiClientSource.slice(start, end);
+    const attrs = (el: { _attrs: Record<string, string> }) => ({
+      setAttribute: (k: string, v: string) => { el._attrs[k] = v; },
+      removeAttribute: (k: string) => { delete el._attrs[k]; },
+      getAttribute: (k: string) => el._attrs[k] ?? null,
+    });
+    const makePanel = (id: string) => ({ dataset: { sectionPanel: id }, hidden: false });
+    const makeTab = (id: string) => {
+      const classes = new Set<string>();
+      const obj = { dataset: { sectionTab: id }, _attrs: {} as Record<string, string>, classList: { toggle: (c: string, on: boolean) => (on ? classes.add(c) : classes.delete(c)), has: (c: string) => classes.has(c) } };
+      return Object.assign(obj, attrs(obj));
+    };
+    const makeShell = () => {
+      const panels = [makePanel("sites"), makePanel("settings")];
+      const tabs = [makeTab("sites"), makeTab("settings")];
+      const innerAnchor = { id: "dns-panel-host", scrolled: false, scrollIntoView: () => { innerAnchor.scrolled = true; }, closest: () => panels[1] };
+      const shell = {
+        dataset: { sectionShell: "dns", defaultSection: "sites" } as Record<string, string>,
+        querySelector: (sel: string) => {
+          const m = sel.match(/\[data-section-panel="([^"]+)"\]/);
+          return m ? panels.find((p) => p.dataset.sectionPanel === m[1]) ?? null : null;
+        },
+        querySelectorAll: (sel: string) => (sel === "[data-section-panel]" ? panels : sel === "[data-section-tab]" ? tabs : []),
+        contains: (node: unknown) => node === innerAnchor || panels.includes(node as never) || tabs.includes(node as never),
+        addEventListener: () => {},
+        dispatchEvent: () => true,
+      };
+      return { shell, panels, tabs, innerAnchor };
+    };
+
+    let currentHash = "#dns-panel-host";
+    let active = makeShell();
+    const fn = new Function(
+      "CLP_ROOT", "document", "location", "history", "CustomEvent", "clpHoldSelectWidths",
+      `${snippet}\nreturn { clpResolveSection, clpActivateSection, initSectionShells };`,
+    );
+    const api = fn(
+      { querySelectorAll: () => [active.shell] },
+      { getElementById: (id: string) => (id === "dns-panel-host" ? active.innerAnchor : null) },
+      { get hash() { return currentHash; } },
+      { replaceState: (_s: unknown, _t: string, url: string) => { currentHash = url; } },
+      class CustomEvent { constructor(public type: string, public init?: unknown) {} },
+      () => {},
+    ) as {
+      clpResolveSection: (shell: unknown, hash: string) => string;
+      clpActivateSection: (shell: unknown, tabId: string, push: boolean) => void;
+      initSectionShells: (root?: unknown) => void;
+    };
+
+    // Inner anchor activates owning section and scrolls.
+    api.initSectionShells();
+    expect(active.panels[0]!.hidden).toBe(true);
+    expect(active.panels[1]!.hidden).toBe(false);
+    expect(active.innerAnchor.scrolled).toBe(true);
+
+    // Repaint with no hash preserves last active section for that shell key.
+    currentHash = "";
+    active = makeShell();
+    api.initSectionShells();
+    expect(active.panels[0]!.hidden).toBe(true);
+    expect(active.panels[1]!.hidden).toBe(false);
   });
 });

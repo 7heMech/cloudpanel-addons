@@ -91,7 +91,8 @@ every sender is left exactly as written.
 
 Until a Cloudflare connection exists, the page replaces the full workspace with
 a focused first-run setup card that links straight to Connect Cloudflare and,
-when stand-in redirects already exist, the Redirects card and Automatic bar.
+when stand-in redirects already exist, **Check now**, the Redirects card, and
+the Ask-first bar or Automatic sync toggle.
 Once connected, the page uses the shared `.section-shell` navigation to split
 into five sections: Sites, Redirects, Profiles, Settings, and Activity. Deep
 links such as `#dns-connection`, `#dns-panel-host`, and `#dns-mode` open the
@@ -112,8 +113,8 @@ pending nameservers with per-nameserver copy buttons, pending changes, and
 descriptive facts.
 
 The Profiles section holds the record profiles and the default profile selector
-for new sites. The Settings section holds the Automatic mode toggle once
-Automatic is on, Cloudflare connections, the New zones account picker when more
+for new sites. The Settings section holds the Automatic sync toggle,
+Cloudflare connections, the New zones account picker when more
 than one Cloudflare account is reachable, Panel hostname, and closed
 disclosures for Mailcow and Server addresses that open automatically when
 configured or overridden. The Activity section holds the change log.

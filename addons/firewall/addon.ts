@@ -67,6 +67,7 @@ export const FIREWALL_ADDON: AddonDefinition = {
   title: "Firewall",
   description: "Cloudflare-only access for every site, a Cloudflare Access gate in front of the panel, Hetzner Cloud or netcup firewalls that admit only Cloudflare, and TCP, UDP or both for each rule on CloudPanel's Firewall page.",
   changed: [
+    { in: "2.2.0-rc.3", note: "Firewall now splits into Cloudflare only, Panel gate, Protocols and Cloud firewall tabs. Cloud provider cards are hidden when the server is not on that host and has no saved token." },
     { in: "2.2.0-rc.1", note: "Cloudflare IP Access is now Firewall, which also sets each firewall rule's protocol: TCP, UDP or both." },
     { in: "2.2.0-rc.1", note: "On a Hetzner Cloud server, Firewall can attach Hetzner Cloud Firewalls that let only Cloudflare reach the sites (80, 443) and the panel (8443). Both switches are off until you connect a token and turn one on; off keeps those ports open to anyone." },
     { in: "2.2.0-rc.1", note: "Panel gate, off by default: CloudPanel answers only at its custom domain through Cloudflare, after a Cloudflare Access sign-in, and no longer at the server's IP on port 8443. It needs DNS's token to hold three more permissions. Disabling Firewall turns the gate off." },

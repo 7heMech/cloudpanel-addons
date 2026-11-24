@@ -595,8 +595,9 @@ all label so the toggle moves nothing, then the bulk actions across the width.
 A bulk choice, such as the profile for Assign selected, shares its row with the
 button that applies it. The count beside Select all is short there, "2 selected", and
 hidden until a site is ticked; a screen reader still reads the full count. On a wide screen the count sits at the right, beside
-the bulk actions it counts for, rather than under the title, and pages that mark
-the bar `data-hide-empty` hide desktop bulk controls until a row is ticked.
+the bulk actions it counts for, rather than under the title, and DNS hides
+desktop bulk controls until a row is ticked (via
+`.dns-site-card:not(:has(tr[aria-selected="true"]))`).
 
 Multi-concern pages split their content with `sectionShellHtml` in
 `lib/app-ui.ts` instead of stacking every card into one long column. At 1400px
@@ -607,8 +608,9 @@ strip above the active panel. Section selection persists in the URL hash, and
 deep links to inner anchor IDs activate the owning section before scrolling.
 
 Addon pages avoid showing empty configuration walls before first setup. When a
-required connection is missing, the page renders a focused first-run card and
-only the secondary cards that hold existing state. Host-specific provider cards
+required connection is missing, the page renders a focused first-run card and,
+when stand-in redirects already exist on DNS, the Redirects card and Automatic
+controls. Host-specific provider cards
 return nothing when the server is not on that host and has no saved credential.
 
 With a mouse, a select opens a list drawn like the filter menus: the chosen
@@ -798,8 +800,9 @@ valid HTTPS hostname on standard port 443. When an administrator reaches
 or tunnel such as Cloudflare Tunnel without CloudPanel's built-in custom domain
 configured, `applyRequestOrigin` in `manager/setup.ts` detects the forwarded
 standard-port HTTPS hostname, marks Panel hostname done for that session,
-unblocks Passkeys out of Unavailable while honoring skips, and marks Panel gate
-as not applicable because the tunnel or proxy protects the hostname directly.
+unblocks Passkeys out of Waiting while keeping its own reason and honoring
+skips, and keeps Panel gate open with a reminder to confirm direct port 8443 is
+blocked or protected at the proxy or tunnel.
 Returning focus to the Setup tab refreshes the checklist after a short throttle
 so external steps completed in another tab update automatically.
 
@@ -807,7 +810,8 @@ so external steps completed in another tab update automatically.
 administrator named by `--user`, together with local `SetupContext` facts for
 the inline flows. `setup-pref` records a skip, an undo, or Hide. Both are admin
 verbs, and the manager supplies the user from its session gate. Every addon
-page fetches `/addons/api/setup` after paint to toggle the header link, caching
+page fetches `/addons/api/setup?header=1` after paint to toggle the header link
+without rendering the full Setup markup, caching
 whether it showed in `sessionStorage` so the header does not jump on load.
 Checks read local files, the panel database, and local services only, never
 external APIs or DNS lookups. Each check has a 10-second limit. The manager

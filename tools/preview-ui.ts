@@ -2008,7 +2008,15 @@ async function setupPreview(req: Request, url: URL): Promise<Response | null> {
   }
   const page = new URL(req.headers.get("referer") ?? url.href).searchParams;
   const view = setupPreviewView(page);
-  return Response.json({ ok: true, data: { show: setupShows(view), attention: view.actions.length > 0, html: setupPanelHtml(view), view } });
+  const headerOnly = req.method === "GET" && url.searchParams.get("header") === "1";
+  return Response.json({
+    ok: true,
+    data: {
+      show: setupShows(view),
+      attention: view.actions.length > 0,
+      ...(headerOnly ? {} : { html: setupPanelHtml(view) }),
+    },
+  });
 }
 
 function managerPreviewMutation(path: string, source: URL): Response | null {

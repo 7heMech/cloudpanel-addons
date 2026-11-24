@@ -30,9 +30,9 @@ const PATH_INTRO: Record<SetupLevel, string> = {
   sites: "Give new sites DNS, SSL, PHP limits, outgoing mail, and offsite backups.",
 };
 
-interface InlineAction { url: string; body: Record<string, unknown>; label: string; doneMessage: string }
+export interface InlineAction { url: string; body: Record<string, unknown>; label: string; doneMessage: string }
 
-const INLINE_ACTIONS: Record<string, InlineAction> = {
+export const INLINE_ACTIONS: Record<string, InlineAction> = {
   "panel-cert": {
     url: "/addons/system-tweaks/api/panel-cert", body: { enabled: true },
     label: "Generate server certificate", doneMessage: "Generated a unique port 8443 certificate for this server.",
@@ -86,7 +86,7 @@ function panelHostInline(step: SetupItem, ctx: SetupContext | undefined): string
   if (!ctx) return `<div class="setup-controls"><a class="btn btn-primary" href="${esc(step.href)}">Open Panel hostname</a></div>`;
   const ips = [ctx.serverIps.ipv4, ctx.serverIps.ipv6].filter(Boolean);
   if (!ctx.dnsConnected) {
-    const ipCodes = ips.map((ip) => `<button class="btn setup-copy-chip" type="button" onclick="setupCopyText('${esc(ip!)}')" title="Copy ${esc(ip!)}"><code>${esc(ip!)}</code></button>`).join(" ");
+    const ipCodes = ips.map((ip) => `<button class="btn setup-copy-chip" type="button" data-setup-copy="${esc(ip!)}" title="Copy ${esc(ip!)}"><code>${esc(ip!)}</code></button>`).join(" ");
     const ipHint = ips.length
       ? `<p class="setup-body-note">Point an A or AAAA record for your chosen hostname at ${ipCodes} in your DNS provider, then enter it under CloudPanel's <a href="/admin/settings" target="_blank" rel="noopener noreferrer">Admin → Settings → Custom Domain</a>.</p>`
       : `<p class="setup-body-note">Point a hostname at this server's IP in your DNS provider, then enter it under CloudPanel's <a href="/admin/settings" target="_blank" rel="noopener noreferrer">Admin → Settings → Custom Domain</a>.</p>`;
@@ -101,11 +101,11 @@ function panelHostInline(step: SetupItem, ctx: SetupContext | undefined): string
     : "";
   const adopt = !ctx.dnsPanelHost && ctx.customDomain
     ? `<div class="notice setup-adopt-note"><span>CloudPanel already uses <strong>${esc(ctx.customDomain.name)}</strong>.</span>
-        <button class="btn" type="button" onclick="setupSavePanelHostName('${esc(ctx.customDomain.name)}', this)">Manage in Cloudflare</button></div>`
+        <button class="btn" type="button" data-setup-adopt-host="${esc(ctx.customDomain.name)}">Manage in Cloudflare</button></div>`
     : "";
   const customDomainLink = '<a href="/admin/settings" target="_blank" rel="noopener noreferrer">Admin → Settings → Custom Domain</a>';
   const copyOpenBtn = ctx.dnsPanelHost
-    ? `<button class="btn${ctx.dnsAutomatic ? " btn-primary" : ""}" type="button" onclick="setupCopyAndOpen('${esc(ctx.dnsPanelHost)}', '/admin/settings')">Copy &amp; open Custom Domain</button>`
+    ? `<button class="btn${ctx.dnsAutomatic ? " btn-primary" : ""}" type="button" data-setup-copy-open="${esc(ctx.dnsPanelHost)}" data-setup-open-url="/admin/settings">Copy &amp; open Custom Domain</button>`
     : "";
   return `<ol class="setup-substeps">
     <li class="${ctx.dnsPanelHost ? "is-done" : ""}">
@@ -114,10 +114,10 @@ function panelHostInline(step: SetupItem, ctx: SetupContext | undefined): string
         <p class="hint">DNS creates a temporary unproxied record so Let's Encrypt can verify it, then proxies it or hands it off to your zone's wildcard.</p>
         ${adopt}
         <form class="setup-host-form" onsubmit="setupSavePanelHost(event)">
-          <input class="setup-host-input" id="setup-panel-host-name" name="name" aria-label="Panel hostname" autocomplete="off" spellcheck="false" placeholder="k7m2p9x4.example.com"${zones ? ' list="setup-dns-zones"' : ""} value="${esc(ctx.dnsPanelHost ?? "")}">${zones}
-          <button class="btn" type="button" onclick="setupRandomPanelHost()">Random</button>
+          <input class="setup-host-input" id="setup-panel-host-name" data-keep name="name" aria-label="Panel hostname" autocomplete="off" spellcheck="false" placeholder="k7m2p9x4.example.com"${zones ? ' list="setup-dns-zones"' : ""} value="${esc(ctx.dnsPanelHost ?? "")}">${zones}
+          <button class="btn" type="button" data-setup-random-host>Random</button>
           <button class="btn${ctx.dnsPanelHost ? "" : " btn-primary"}" type="submit">${ctx.dnsPanelHost ? "Change" : "Save"}</button>
-          ${ctx.dnsPanelHost ? `<button class="btn" type="button" onclick="setupCopyText('${esc(ctx.dnsPanelHost)}')">Copy</button>` : ""}
+          ${ctx.dnsPanelHost ? `<button class="btn" type="button" data-setup-copy="${esc(ctx.dnsPanelHost)}">Copy</button>` : ""}
         </form>
       </div>
     </li>
@@ -165,9 +165,13 @@ function stepControlsHtml(step: SetupItem, ctx: SetupContext | undefined, skipBt
     return `<p class="setup-hint">This step does not apply on this server.</p>`;
   }
   if (step.addon && !step.addon.enabled) {
+    const manual = step.id === "panel-hostname"
+      ? `<a class="btn" href="/admin/settings" target="_blank" rel="noopener noreferrer">Open Custom Domain</a>`
+      : "";
     return `<div data-manager-job-card="${esc(step.addon.name)}">
       <div class="setup-controls">
         <button class="btn btn-primary" type="button" data-setup-enable="${esc(step.addon.name)}" aria-label="Enable ${esc(step.addon.title)}">Enable ${esc(step.addon.title)}</button>
+        ${manual}
         ${skipBtn}
       </div>
     </div>${unlocksHint}`;
@@ -233,7 +237,14 @@ function stepRowHtml(
     // Browser-origin fallback when Passkeys is blocked server-side but the
     // browser is already on a valid standard-port HTTPS proxy origin.
     const passkeyFallback = step.id === "passkeys"
-      ? `<div class="setup-passkey-origin" data-setup-passkey-blocked hidden${step.addon ? ` data-manager-job-card="${esc(step.addon.name)}"` : ""}>
+      ? `<div class="setup-step-head" data-setup-passkey-head hidden>
+          <span class="setup-mark" aria-hidden="true">${MARK.here}</span>
+          <span class="setup-step-line">
+            <span class="setup-step-title"><span class="sr-only">Open: </span>${esc(step.title)}</span>
+            <span class="setup-step-note">Available on this origin</span>
+          </span>
+        </div>
+        <div class="setup-passkey-origin" data-setup-passkey-blocked hidden${step.addon ? ` data-manager-job-card="${esc(step.addon.name)}"` : ""}>
           <p class="setup-body-note" data-setup-passkey-note></p>
           <div class="setup-controls">${step.addon && !step.addon.enabled
             ? `<button class="btn btn-primary" type="button" data-setup-enable="${esc(step.addon.name)}" aria-label="Enable ${esc(step.addon.title)}">Enable ${esc(step.addon.title)}</button>`

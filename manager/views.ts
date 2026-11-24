@@ -2,7 +2,7 @@
 // mutation leaves behind.
 import { ADDONS, addonHandler, addonNews } from "../addons/catalog";
 import { CLI_VERSION, DEV_VERSION } from "../lib/version";
-import { esc, escJs, htmlResponse } from "../lib/app-http";
+import { errorBlock, esc, escJs, htmlResponse } from "../lib/app-http";
 import { JOB_WATCH_JS, SETUP_PATH, renderLayout } from "../lib/app-ui";
 import { mountPath } from "../lib/mount";
 import { type LockState, lockState } from "../lib/root-locks";
@@ -214,11 +214,24 @@ export function setupPage(
   });
 }
 
+export function setupErrorPage(
+  error: unknown,
+  update?: { current: string; latest: string } | null,
+  options: ManagerPageOptions & { status?: number } = {},
+): Response {
+  const content = `<div class="page-heading"><div><h1>Setup</h1></div></div>${errorBlock(error)}`;
+  return managerPage("Setup · CloudPanel Addons", content, update, {
+    ...options,
+    activeNav: "setup",
+    status: options.status ?? 502,
+  });
+}
+
 function managerPage(
   title: string,
   content: string,
   update: { current: string; latest: string } | null | undefined,
-  options: ManagerPageOptions & { activeNav?: "addons" | "setup"; extraCss?: string; extraScript?: string },
+  options: ManagerPageOptions & { activeNav?: "addons" | "setup"; extraCss?: string; extraScript?: string; status?: number },
 ): Response {
   const job = options.job;
   const live = liveManagerJob(job ?? null);
@@ -231,7 +244,7 @@ const managerJobTarget = CLP_ROOT.querySelector('[data-manager-job-status]');
 watchJob('${escJs(live.id)}', managerJobTarget ? managerJobTarget.closest('[data-manager-job-card]') : null, managerJobFinished);
 ` : ""),
     updateNotice: update,
-  }), { csrf: options.csrf });
+  }), { csrf: options.csrf, ...(options.status ? { status: options.status } : {}) });
 }
 
 function describeJob(job: ManagerJobView): string {
