@@ -27,9 +27,10 @@ Instatic CMS is x86-64 only.
 When it finishes, open the new **Addons** tab in CloudPanel and enable the
 addons you want. System Tweaks is recommended. **Setup** on the addon pages
 suggests what to set up next, checked against the server; skip any step you
-don't want. Installing enables zero addons and leaves existing sites, MySQL,
-and firewall rules untouched. See [FAQ](#faq) and
-[Is CloudPanel Addons safe to use?](SECURITY.md#is-cloudpanel-addons-safe-to-use).
+don't want. Installing enables no addons and leaves site vhosts, MySQL and
+firewall rules untouched. It turns off PHP session upload progress on every
+PHP-FPM version, sites included, with a graceful reload. See the [FAQ](#faq)
+below.
 
 ![CloudPanel Addons Manager](docs/screenshots/addons.png)
 
@@ -88,45 +89,54 @@ Backups.
 
 ### Is CloudPanel Addons safe to use?
 
-Yes. Installing enables zero addons, leaves existing sites, MySQL, and firewall
-rules untouched, runs the web manager as an unprivileged `clp-addons` account
-behind an allowlisted root gateway (zero `sudo` rules), verifies downloads with
-SHA-256 and GitHub build provenance, and uninstalls cleanly. Stable releases run
-in production across 50+ sites, and the maintainer has reported over 8
-vulnerabilities to the CloudPanel team under coordinated disclosure and works
-with them on upstream fixes. See
+Installing enables no addons and leaves site vhosts, MySQL and firewall rules
+untouched. Base install turns off PHP session upload progress on every PHP-FPM
+version, sites included, with a graceful reload. The web manager runs as the
+unprivileged `clp-addons` account with no `sudo` rule of its own behind an
+allowlisted root gateway. First installs verify the binary's SHA-256 checksum,
+and updates verify both SHA-256 and GitHub build provenance. See
 [Is CloudPanel Addons safe to use?](SECURITY.md#is-cloudpanel-addons-safe-to-use)
-for the full technical breakdown.
+for details and trust limits.
 
 ### Does installing change my sites, MySQL, Nginx, or firewall?
 
-No addons are enabled by default. Base install adds the `clp-addons` binary,
-unprivileged web manager, allowlisted root gateway on `/run/clp-addons/auth.sock`,
-the admin-only **Addons** link and `/addons/` proxy block in CloudPanel's panel
-vhost (tested with `nginx -t` and rolled back on failure), and a PHP-FPM drop-in
-(`99-clp-addons-upload-progress.ini`) that turns off
-`session.upload_progress.enabled` for CVE-2026-109619 and CVE-2026-115560
-(tested with `php-fpm -t` before gracefully reloading, rolled back on failure).
-Site vhosts, MySQL, firewall rules, SSH config, Docker, and Postfix stay
-untouched.
+No addons are enabled unless you pass `--addons`. Base install adds the
+`clp-addons` binary, unprivileged web manager, allowlisted root gateway on
+`/run/clp-addons/auth.sock`, the admin-only **Addons** link and `/addons/`
+proxy block in CloudPanel's panel vhost (tested with `nginx -t` and rolled back
+on failure), and `99-clp-addons-upload-progress.ini` in every
+`/etc/php/<ver>/fpm/conf.d` (`session.upload_progress.enabled = Off`,
+mitigating CVE-2026-109619 and CVE-2026-115560, tested with `php-fpm -t` and
+rolled back on failure before a graceful reload). Site vhosts, MySQL, firewall
+rules, SSH config, Docker and Postfix stay untouched.
 
-### Do System Tweaks or other addons restart MySQL or break existing setups?
+### Does System Tweaks or another addon restart MySQL or break existing setups?
 
-Nothing runs until you enable an addon. Even after enabling
-[System Tweaks](docs/system-tweaks.md), host-level settings such as **MySQL on
-this server only**, **Panel PHP**, **Block SSH login guessing**, automatic
-updates, and backup compression stay off by default. Both MySQL loopback binding
-and Panel PHP run pre-checks and roll back automatically if the service fails to
-come back.
+No addon runs until you enable it. After enabling
+[System Tweaks](docs/system-tweaks.md), these stay off until you switch them
+on: **MySQL on this server only**, **Block SSH login guessing**, **Install
+updates automatically**, and **Compress remote backups with Zstandard**.
+**Panel PHP** keeps CloudPanel's current version unless you pick a newer
+installed PHP. Both MySQL loopback binding and Panel PHP run pre-checks and
+roll back automatically if the service fails to come back.
 
-### Can I uninstall cleanly, and what happens when CloudPanel updates?
+System Tweaks' default protections change some behaviour: sites behind a
+non-Cloudflare public proxy lose visitor IPs, site users can no longer run
+`clpctl db:import`, and repeated failed logins on the panel's custom domain
+block an address from HTTPS on every site for an hour (also starting `fail2ban`
+if it is installed but stopped). Read [System Tweaks](docs/system-tweaks.md)
+before enabling it.
 
-Every edited CloudPanel template and vhost keeps a pristine copy and SHA-256
-baseline. Disable any enabled addons (unlocking System Tweaks first if locked)
-and run `clp-addons self-uninstall --yes` to restore CloudPanel's files and
-remove the binary, units, and PHP-FPM drop-in while keeping all sites running.
-CloudPanel updates are never held back; unrecognized upstream file changes pause
-only the affected block until checked.
+### Can I uninstall, and what happens when CloudPanel updates?
+
+CloudPanel's panel templates and master vhost keep pristine copies and SHA-256
+baselines. Disable every addon with `clp-addons disable <addon>` as root (the
+Addons page cannot disable a locked System Tweaks until you run `clp-addons
+unlock system-tweaks`), then run `clp-addons self-uninstall --yes` to restore
+CloudPanel's files and remove the binary, units and PHP-FPM drop-in. Sites keep
+running; the `clp-addons` account, `/etc/clp-addons`, `/var/backups/clp-addons`
+and `/var/lib/clp-addons` stay on disk. CloudPanel updates are never held back;
+unrecognized upstream file changes pause only the affected block until checked.
 
 ## Develop
 

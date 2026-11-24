@@ -4,31 +4,21 @@ Hardening, automatic updates, panel PHP, remote backups and the SSH login
 message.
 PHP worker limits and the server memory budget are in [Resource Limits](resource-limits.md).
 
-Installing CloudPanel Addons does not enable System Tweaks automatically.
-Enable it from the **Addons** page or with `clp-addons enable system-tweaks`.
+Running `install.sh` without `--addons` does not enable System Tweaks
+automatically. Enable it from the **Addons** page or with `clp-addons enable
+system-tweaks`.
 
-When you enable System Tweaks, its default hardening protections turn on: Nginx
-config injection blocking, Varnish backend checks, protected site Nginx logs,
-PHP-FPM pool isolation, forged and Cloudflare visitor IP fixes, phpMyAdmin
-lockdown, File Manager confinement, version-pinned `clpctl` hardening, a
-per-server panel certificate on port 8443, the panel login jail when `fail2ban`
-is installed, `clp-agent` telemetry blocking, and the SSH login summary.
+Enabling System Tweaks turns on its default hardening protections (listed in
+[SECURITY.md](../SECURITY.md#mitigations)). Some defaults change existing
+behaviour: sites behind a non-Cloudflare public proxy lose visitor IPs, site
+users can no longer run `clpctl db:import`, and repeated failed logins on the
+panel's custom domain block an address from HTTPS on every site for an hour
+(also starting `fail2ban` if it is installed but stopped).
 
-Host-level or potentially disruptive changes stay off by default until you opt
-in:
-
-- **MySQL on this server only.** Restarts MySQL and blocks remote database
-  clients. Pre-checks configuration and rolls back automatically on failure.
-- **Panel PHP.** Moves `clp-php-fpm` to a newer installed PHP. Runs
-  `php-fpm -t`, checks the login page and File Manager over FastCGI, and rolls
-  back automatically on failure.
-- **Block SSH login guessing.** Adds a fail2ban jail for SSH without editing
-  `sshd` configuration.
-- **Install updates automatically.** Configures `unattended-upgrades`. MySQL
-  updates, CloudPanel updates, and automatic reboots are separate opt-in
-  toggles.
-- **Compress remote backups with Zstandard.** Version-pinned to verified
-  CloudPanel source files and leaves existing backups untouched.
+**MySQL on this server only**, **Block SSH login guessing**, **Install updates
+automatically**, and **Compress remote backups with Zstandard** stay off until
+you switch them on. **Panel PHP** keeps CloudPanel's current version unless you
+choose a newer installed PHP.
 
 ## Locking the protections
 
@@ -39,10 +29,10 @@ blocked to escalate to root.
 
 A locked System Tweaks lets the panel switch the Hardening and Failed logins
 protections on, but never off, and move the panel's PHP only to a newer
-version, even from an administrator's account. A new install starts with
-`system-tweaks` locked while the addon itself is still disabled. That initial
-lock does not enable System Tweaks or switch on opt-in settings such as
-**MySQL on this server only** or **Block SSH login guessing**.
+version, even from an administrator's account. A new install locks
+`system-tweaks` before enabling any addon. That initial lock does not enable
+System Tweaks or switch on opt-in settings such as **MySQL on this server
+only** or **Block SSH login guessing**.
 
 - From the panel: choose **Lock settings** in the Hardening card's header. It
   turns every Hardening and Failed logins switch on, including MySQL on this
@@ -512,8 +502,8 @@ does the same while System Tweaks is off.
 
 ## MySQL access
 
-**MySQL on this server only** is off by default, both on install and when System
-Tweaks is enabled. Under **Hardening**, it shows where MySQL listens,
+**MySQL on this server only** is off by default; **Lock settings** turns it on.
+Under **Hardening**, it shows where MySQL listens,
 whether the firewall rules loaded now let anyone reach it (**Firewalled**,
 **Open** or **Unknown**), any client connected from another address, and whether
 its `root` account still logs in with the password `root` or none.
