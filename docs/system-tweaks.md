@@ -4,6 +4,22 @@ Hardening, automatic updates, panel PHP, remote backups and the SSH login
 message.
 PHP worker limits and the server memory budget are in [Resource Limits](resource-limits.md).
 
+Running `install.sh` without `--addons` does not enable System Tweaks
+automatically. Enable it from the **Addons** page or with `clp-addons enable
+system-tweaks`.
+
+Enabling System Tweaks turns on its default hardening protections (listed in
+[SECURITY.md](../SECURITY.md#mitigations)). Some defaults change existing
+behaviour: sites behind a non-Cloudflare public proxy lose visitor IPs, site
+users can no longer run `clpctl db:import`, and repeated failed logins on the
+panel's custom domain block an address from HTTPS on every site for an hour
+(also starting `fail2ban` if it is installed but stopped).
+
+**MySQL on this server only**, **Block SSH login guessing**, **Install updates
+automatically**, and **Compress remote backups with Zstandard** stay off until
+you switch them on. **Panel PHP** keeps CloudPanel's current version unless you
+choose a newer installed PHP.
+
 ## Locking the protections
 
 Hardening blocks vulnerabilities in CloudPanel that let a panel administrator
@@ -13,7 +29,10 @@ blocked to escalate to root.
 
 A locked System Tweaks lets the panel switch the Hardening and Failed logins
 protections on, but never off, and move the panel's PHP only to a newer
-version, even from an administrator's account. A new install starts locked.
+version, even from an administrator's account. A new install locks
+`system-tweaks` before enabling any addon. That initial lock does not enable
+System Tweaks or switch on opt-in settings such as **MySQL on this server
+only** or **Block SSH login guessing**.
 
 - From the panel: choose **Lock settings** in the Hardening card's header. It
   turns every Hardening and Failed logins switch on, including MySQL on this
@@ -140,9 +159,11 @@ off removes only that file. It comes back if System Tweaks is disabled.
 
 ## Panel PHP
 
+**Panel PHP** is opt-in and keeps CloudPanel's own PHP version by default.
 Under **Addons → System Tweaks → Hardening**, choose a newer installed version
-in **Panel PHP**. The page warns while the panel is left on PHP 8.1. This changes the PHP used by CloudPanel's pages,
-phpMyAdmin and File Manager. Site PHP versions keep their own settings.
+to move CloudPanel's pages, phpMyAdmin and File Manager off PHP 8.1. The page
+warns while the panel is left on PHP 8.1. Site PHP versions keep their own
+settings.
 
 The change restarts the panel's PHP service and checks its login page and File
 Manager. If either check fails, the previous configuration is restored.
@@ -481,7 +502,8 @@ does the same while System Tweaks is off.
 
 ## MySQL access
 
-Under **Hardening**, **MySQL on this server only** shows where MySQL listens,
+**MySQL on this server only** is off by default; **Lock settings** turns it on.
+Under **Hardening**, it shows where MySQL listens,
 whether the firewall rules loaded now let anyone reach it (**Firewalled**,
 **Open** or **Unknown**), any client connected from another address, and whether
 its `root` account still logs in with the password `root` or none.
@@ -511,8 +533,8 @@ tunnel instead:
 ssh -L 3306:127.0.0.1:3306 root@your-server
 ```
 
-The setting is off by default, because the page cannot tell whether something
-remote uses the database. Check the **Connected now from** line and your
+It stays off by default because the page cannot tell whether something remote
+uses the database. Check the **Connected now from** line and your
 Firewall page for a rule on port 3306 before switching it on. Switching it off
 removes the addon's configuration and restarts MySQL (and its socket when used).
 Repair and addon activation/deactivation reconcile configuration without

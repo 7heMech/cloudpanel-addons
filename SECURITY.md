@@ -4,13 +4,174 @@ CloudPanel Addons limits which requests can reach root and adds protections to
 CloudPanel. These controls address specific risks; they do not make the server
 unhackable. Implementation details are in [Security decisions](docs/decisions/security.md).
 
+## Is CloudPanel Addons safe to use?
+
+CloudPanel Addons is an independent open-source project. A bare install enables
+no addons and leaves site vhosts, MySQL and firewall rules untouched; its only
+site-wide change is turning off PHP session upload progress across every
+PHP-FPM version with a graceful reload. It separates web requests from root
+(see [Security model](#security-model) and
+[Trust and limits](#trust-and-limits)), verifies release downloads, and restores
+CloudPanel's files on uninstall.
+
+### Does installing change my sites, MySQL, Nginx, or firewall?
+
+Running `install.sh` without `--addons` enables no addons. It does not edit
+customer site vhosts or files, restart MySQL or MariaDB, change `ufw` or
+`nftables` rules, edit SSH configuration, or install Docker or Postfix.
+
+The base installation sets up only what the Addons interface needs:
+
+- Installs `/usr/local/bin/clp-addons` and creates the unprivileged `clp-addons`
+  system account and directories under `/etc/clp-addons`, `/var/lib/clp-addons`,
+  `/run/clp-addons`, `/run/lock/clp-addons`, `/usr/local/libexec/clp-addons`,
+  and `/var/backups/clp-addons`.
+- Installs and starts the base systemd units: the unprivileged web manager
+  (`clp-addons.service`), the socket-activated root gateway
+  (`clp-addons-auth.socket` and `clp-addons-auth.service`), the 15-minute repair
+  timer (`clp-addons-reconcile.timer`), the CloudPanel template and vhost
+  watcher (`clp-addons-anchor.path`), and an `apt-daily-upgrade.service` drop-in
+  that yields managed Nginx conffile edits during unattended upgrades. That
+  drop-in does nothing until an addon edits a conffile.
+- Saves pristine snapshots and SHA-256 hashes of CloudPanel's header Twig
+  templates, adds the admin-only **Addons** link and update notice, and purges
+  the Twig cache. It also adds one marked `location ^~ /addons/` proxy block to
+  CloudPanel's master vhost (`cloudpanel.conf` on port 8443), tests the config
+  with `nginx -t` before reloading that Nginx instance, and rolls back
+  automatically if validation or reload fails.
+- Writes `/etc/php/<version>/fpm/conf.d/99-clp-addons-upload-progress.ini` with
+  `session.upload_progress.enabled = Off` to mitigate CVE-2026-109619 and
+  CVE-2026-115560, tests each changed PHP-FPM config with `php-fpm<version> -t`,
+  and gracefully reloads active PHP-FPM units and `clp-php-fpm.service`. Because
+  those pools serve all PHP sites, every PHP site receives this setting on base
+  install. If a config test or reload fails, it restores the previous files and
+  reloads.
+- On a fresh server with no previous install, locks `system-tweaks` in
+  `/etc/clp-addons/locks.json` before enabling any addon. Because System Tweaks
+  is still disabled on a bare install, this lock changes nothing on its own. If
+  you enable System Tweaks later, the lock stops the web panel from switching
+  its hardening protections off or disabling the addon. Root can undo it at any
+  time with `clp-addons unlock system-tweaks`.
+
+### Does System Tweaks or another addon restart MySQL or break existing setups?
+
+No addon runs until you enable it. Enabling [System Tweaks](docs/system-tweaks.md)
+turns on its default hardening protections: Nginx config injection blocking,
+Varnish backend checks, root-owned site Nginx log directories, PHP-FPM pool
+isolation, forged and Cloudflare visitor IP fixes, phpMyAdmin lockdown, File
+Manager confinement, version-pinned `clpctl` hardening, a per-server panel
+certificate on port 8443, the panel login jail when `fail2ban` is already
+installed, `clp-agent` telemetry blocking, and the SSH login summary.
+
+Its default protections change some behaviour: sites behind a non-Cloudflare
+public proxy lose visitor IPs (because `set_real_ip_from 0.0.0.0/0` is
+commented out), site users can no longer run `clpctl db:import`, and repeated
+failed logins on the panel's custom domain block an address from HTTPS on every
+site for an hour. When `fail2ban` is installed but stopped, the panel login
+jail enables and starts it. Read [System Tweaks](docs/system-tweaks.md) before
+enabling it.
+
+These stay off until you switch them on, even after System Tweaks is enabled
+and even when a fresh install starts with System Tweaks locked:
+
+- **MySQL on this server only.** Off by default. It restarts MySQL, and
+  `mariadb.socket` when socket-activated, only if you turn it on or choose
+  **Lock settings** in the Hardening card. Before restarting, it checks startup
+  arguments and effective `bind-address`. After restarting, it waits up to 60
+  seconds for MySQL to answer on `127.0.0.1` and restores the previous config
+  and restarts MySQL if it fails to come back or still listens publicly.
+- **Panel PHP.** Keeps CloudPanel's own PHP version unless you choose a newer
+  installed version. Before restarting `clp-php-fpm.service`, it runs
+  `php-fpm -t`, then probes CloudPanel's login page and File Manager over their
+  FastCGI sockets. If either check fails, it restores the previous PHP version
+  automatically.
+- **SSH login jail, automatic updates, and backup compression.** **Block SSH
+  login guessing**, **Install updates automatically**, and **Compress remote
+  backups with Zstandard** all stay off by default. Choosing **Lock settings**
+  in the Hardening card also turns **Block SSH login guessing** on. System
+  Tweaks never edits `sshd` config, never installs `fail2ban` or
+  `unattended-upgrades` on its own, and keeps the automatic reboot setting your
+  apt files already have. Automatic reboots stay off unless apt already enables
+  them or you switch on **Reboot when required**.
+
+### How can I verify downloads and inspect the code?
+
+The project is open source under the [Apache-2.0](LICENSE) license. Public
+GitHub Actions workflows run typechecking, the full test suite, ShellCheck on
+`install.sh`, and native builds on both `x86_64` and `arm64` Linux runners, with
+third-party actions pinned by commit SHA.
+
+Every tagged release publishes `SHA256SUMS` and GitHub build provenance
+attestations covering the binaries, `install.sh`, and `cloudpanel.json`.
+`install.sh` checks the binary's SHA-256 checksum before installing it. If you
+prefer not to pipe `curl` to `bash`, download `install.sh` first, inspect it,
+optionally verify its attestation with
+`gh attestation verify install.sh --repo 7heMech/cloudpanel-addons --signer-workflow 7heMech/cloudpanel-addons/.github/workflows/release.yml`,
+and run `bash install.sh` as root. On updates, `clp-addons update` verifies
+both the SHA-256 checksum and the Sigstore build provenance attestation bound
+to this repository's `release.yml` workflow and release tag before replacing
+the binary (unless `--skip-attestation` is passed). It also hard-links the
+previous binary aside so a failed update or restart rolls back automatically.
+[Release verification](docs/decisions/releases.md)
+
+### Can I uninstall, and what happens when CloudPanel updates?
+
+Every CloudPanel template and master vhost edit saves a pristine baseline copy
+and SHA-256 hash under `/var/lib/clp-addons`. Every Nginx change runs `nginx -t`
+against the owning Nginx config and rolls back automatically if validation or
+reload fails.
+
+To remove CloudPanel Addons:
+
+1. Disable every enabled addon as root with `clp-addons disable <addon>`.
+   Disabling runs each addon's own withdrawal steps. The Addons page cannot
+   disable a locked System Tweaks until you run `clp-addons unlock
+   system-tweaks` as root.
+2. Run `clp-addons self-uninstall --yes` as root.
+
+`self-uninstall` restores CloudPanel's Twig templates and master vhost, purges
+the Twig cache, stops and removes all `clp-addons` systemd units and drop-ins,
+removes `99-clp-addons-upload-progress.ini` and reloads PHP-FPM, and deletes
+`/usr/local/bin/clp-addons` and `/usr/local/libexec/clp-addons`. All sites keep
+running, including Instatic containers. The `clp-addons` account,
+`/etc/clp-addons` (including `locks.json`), `/var/backups/clp-addons` and
+`/var/lib/clp-addons` stay on disk.
+
+When CloudPanel updates, addons never hold the package back. Files whose anchor
+lines still match cleanly are re-applied automatically. Any file that changed in
+an unexpected way is left as CloudPanel shipped it and marked **Paused until
+checked**. Version-pinned replacements such as the `clpctl` wrapper and
+Zstandard backup compression stay paused if CloudPanel ships unrecognized code.
+See [When CloudPanel updates](docs/cloudpanel-updates.md).
+
+### Who maintains it and how is it tested?
+
+CloudPanel Addons is an independent, unofficial open-source project and is not
+affiliated with or endorsed by CloudPanel. Changes from `dev` and release pull
+requests deploy to a staging CloudPanel server before stable versions are
+tagged.
+
+The maintainer reports CloudPanel security vulnerabilities found during
+development to the CloudPanel team. System Tweaks mitigates the issues listed
+under [Mitigations](#mitigations) while upstream patches are pending or on
+older hosts, but addons complement rather than replace keeping CloudPanel, PHP
+and operating system packages updated.
+
 ## Security model
 
-The web manager runs as the dedicated `clp-addons` account, without sudo or
-Docker access. A separate root gateway accepts requests over a Unix socket.
-It checks the caller's Unix identity and installed executable, accepts only
-declared addon operations, and starts them with an argument array. Root actions
-validate their inputs before changing the host.
+The web manager (`clp-addons.service`) runs as the dedicated `clp-addons`
+system account (`/usr/sbin/nologin`, locked password, `SupplementaryGroups=clp`,
+no `docker` group, no `sudo` rule of its own) under systemd sandboxing
+(`NoNewPrivileges=yes`, `ProtectSystem=full`, `ProtectHome=read-only`,
+`PrivateTmp=yes`, `ProtectKernelTunables=yes`). `NoNewPrivileges=yes` prevents
+`sudo` inside the service, including CloudPanel's own `clpctlWrapper` rule. A
+separate root gateway (`clp-addons-auth.service`) listens on
+`/run/clp-addons/auth.sock` (`0660`, `root:clp-addons`). It checks the caller's
+Unix identity and installed executable, accepts only declared addon operations,
+and starts them with an argument array. Root actions validate their inputs
+before changing the host. Root locks (`clp-addons lock <addon>`) keep even a
+panel administrator from turning protections off from the browser; `unlock` is
+only available from a root shell.
 [Design](docs/decisions/security.md#privileged-actions)
 
 Addon pages use the existing CloudPanel session. A separate authentication
@@ -29,10 +190,9 @@ tooling and Terminal use restricted child environments.
 [Git](docs/decisions/git.md), [WordPress Tools](docs/decisions/wp-tools.md),
 [Terminal](docs/decisions/terminal.md), [secrets](docs/decisions/security.md#files-and-secrets)
 
-Release updates check SHA-256 checksums and GitHub build provenance unless an
-operator explicitly skips provenance verification. The first-install shell
-script checks only the download's checksum.
-[Release verification](docs/decisions/releases.md)
+Release verification details are in
+[How can I verify downloads and inspect the code?](#how-can-i-verify-downloads-and-inspect-the-code)
+and [Release verification](docs/decisions/releases.md).
 
 ## Trust and limits
 
