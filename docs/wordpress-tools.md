@@ -28,6 +28,15 @@ managers choose plugins for new sites** under **CloudPanel's pages**. They get
 WordPress.org plugins only, with no **Upload .zip**, and see only how their own
 choices went. Panel users never get it.
 
+The row starts with default plugins. Set the server's in **Default plugins** on
+the **New sites** tab of WordPress Tools: search WordPress.org to add one, untick
+**Activate** to install it inactive, or **Remove** it. To start your own forms
+differently, change the row and choose **Save as my default**; **Reset to
+server default** goes back to the server's. Defaults are WordPress.org plugins
+only, and each site can still add or remove plugins. While automation installs
+CLP Varnish Cache or MainWP Child, neither can be a default. A site created
+without the form, such as with `clpctl`, gets no default plugins.
+
 WordPress.org plugins are installed first, then uploads, as the site's own user
 once CloudPanel has set up WordPress. The page the new site lands on says how
 each went; **Plugins on new sites** on the WordPress Tools page lists the recent

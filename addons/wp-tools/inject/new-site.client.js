@@ -6,9 +6,11 @@
 //
 // None of these controls has a name: Symfony refuses a field its form does not
 // declare. The choice is sent to WordPress Tools instead, just before the form
-// is, and the job it records waits for the site. It is kept in this tab's
-// session storage as well, so a form CloudPanel sends back with an error still
-// has it, and the page the site lands on can follow the job.
+// is, and the job it records waits for the site. It is left in this tab's
+// session storage as the form goes, and read back once, so a form CloudPanel
+// sends back with an error still has it, and the page the site lands on can
+// follow the job. Any other form starts from the account's own default, or the
+// server's.
 (function () {
   var box = document.getElementById('clp-wp-plugins');
   var form = box && box.closest('form');
@@ -23,27 +25,54 @@
   var list = document.getElementById('clp-wp-plugin-chosen');
   var file = document.getElementById('clp-wp-plugin-file');
   var error = document.getElementById('clp-wp-plugins-error');
+  var defaultsLine = document.getElementById('clp-wp-plugins-defaults');
+  var origin = document.getElementById('clp-wp-plugins-origin');
+  var saveButton = document.getElementById('clp-wp-plugins-save');
+  var resetButton = document.getElementById('clp-wp-plugins-reset');
   var domainInput = form.querySelector('input[id$="_domainName"]');
   // { source: 'wordpress.org' | 'upload', slug, name, activate, id?, pending? }
   var chosen = [];
   var saved = false;
   var timer = null;
   var asked = 0;
+  // Installed on every new site by WordPress Tools' own automation, which owns them.
+  var automatic = [];
+  var AUTOMATIC_LABEL = 'Automatic';
+  var AUTOMATIC_TITLE = "Installed on every new site by WordPress Tools' automation";
+  // { server, account } once WordPress Tools answers; account is null while it follows the server's.
+  var defaults = null;
+  // Whether this form has a choice of its own, which a default no longer replaces.
+  var settled = false;
+  var note = '';
+  // Until the defaults answer, a submit waits for them rather than going without them.
+  var loading = true;
+  var waiting = false;
 
   // Drawn for administrators only: nobody else may hand a site a zip.
   var canUpload = Boolean(file);
   try {
-    chosen = JSON.parse(sessionStorage.getItem(CHOICE) || '[]').filter(function (item) {
-      return !item.pending && (canUpload || item.source !== 'upload');
-    });
+    var kept = sessionStorage.getItem(CHOICE);
+    sessionStorage.removeItem(CHOICE);
+    if (kept !== null) {
+      chosen = JSON.parse(kept).filter(function (item) {
+        return !item.pending && (canUpload || item.source !== 'upload');
+      });
+      settled = true;
+    }
   }
   catch (e) { chosen = []; }
 
   function remember() {
-    try {
-      var kept = chosen.filter(function (item) { return !item.pending; });
-      if (kept.length) sessionStorage.setItem(CHOICE, JSON.stringify(kept)); else sessionStorage.removeItem(CHOICE);
-    } catch (e) {}
+    try { sessionStorage.setItem(CHOICE, JSON.stringify(chosen.filter(function (item) { return !item.pending; }))); } catch (e) {}
+  }
+
+  function touched() {
+    settled = true;
+    note = '';
+  }
+
+  function isAutomatic(item) {
+    return item.source !== 'upload' && automatic.indexOf(item.slug) !== -1;
   }
 
   function showError(text) {
@@ -96,18 +125,26 @@
   function paint() {
     list.textContent = '';
     chosen.forEach(function (item) {
+      var auto = isAutomatic(item);
       var row = element('li', 'clp-wp-plugin-item');
       row.appendChild(element('span', 'clp-wp-plugin-name', item.name));
       row.appendChild(element('span', 'clp-wp-plugin-source', item.pending ? 'Uploading…' : item.source === 'upload' ? 'Uploaded zip' : 'WordPress.org'));
       if (!item.pending) {
-        var label = element('label', 'form-check clp-wp-plugin-activate');
-        var check = element('input', 'form-check-input');
-        check.type = 'checkbox';
-        check.checked = item.activate;
-        check.addEventListener('change', function () { item.activate = check.checked; remember(); });
-        label.appendChild(check);
-        label.appendChild(element('span', 'form-check-label', 'Activate'));
-        row.appendChild(label);
+        // Automation installs it on every new site, so the form leaves it out and has nothing to activate.
+        if (auto) {
+          var automatic = element('span', 'clp-wp-plugin-automatic', AUTOMATIC_LABEL);
+          automatic.title = AUTOMATIC_TITLE;
+          row.appendChild(automatic);
+        } else {
+          var label = element('label', 'form-check clp-wp-plugin-activate');
+          var check = element('input', 'form-check-input');
+          check.type = 'checkbox';
+          check.checked = item.activate;
+          check.addEventListener('change', function () { touched(); item.activate = check.checked; paintDefaults(); });
+          label.appendChild(check);
+          label.appendChild(element('span', 'form-check-label', 'Activate'));
+          row.appendChild(label);
+        }
         var remove = element('button', 'btn-close clp-wp-plugin-remove');
         remove.type = 'button';
         remove.setAttribute('aria-label', 'Remove ' + item.name);
@@ -117,10 +154,11 @@
       list.appendChild(row);
     });
     list.hidden = chosen.length === 0;
-    remember();
+    paintDefaults();
   }
 
   function drop(item) {
+    touched();
     chosen = chosen.filter(function (other) { return other !== item; });
     // Nothing waits on the answer: an upload nobody claims expires on its own.
     if (item.id) call('/api/plugin-discard', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ id: item.id }) }).catch(function () {});
@@ -129,7 +167,7 @@
   }
 
   function full() {
-    if (chosen.length < MAX) return false;
+    if (chosen.filter(function (item) { return !isAutomatic(item); }).length < MAX) return false;
     showError('A new site takes at most ' + MAX + ' plugins.');
     return true;
   }
@@ -137,9 +175,6 @@
   // --- search ---------------------------------------------------------------
 
   var found = [];
-  // Installed on every new site by WordPress Tools' own automation, which owns them.
-  var automatic = [];
-  var AUTOMATIC_LABEL = 'Installed automatically';
   function paintResults() {
     results.textContent = '';
     found.forEach(function (plugin) {
@@ -156,12 +191,15 @@
       if (plugin.summary) pick.appendChild(element('span', 'clp-wp-plugin-summary', plugin.summary));
       var added = has(plugin.slug);
       var auto = automatic.indexOf(plugin.slug) !== -1;
-      pick.appendChild(element('span', 'clp-wp-plugin-add', auto ? AUTOMATIC_LABEL : added ? 'Added' : 'Add'));
+      var state = element('span', 'clp-wp-plugin-add', auto ? AUTOMATIC_LABEL : added ? 'Added' : 'Add');
+      if (auto) state.title = AUTOMATIC_TITLE;
+      pick.appendChild(state);
       pick.disabled = added || auto;
       if (auto) pick.classList.add('is-automatic');
       pick.addEventListener('click', function () {
         if (has(plugin.slug) || full()) return;
         showError('');
+        touched();
         chosen.push({ source: 'wordpress.org', slug: plugin.slug, name: plugin.name, activate: true });
         paint();
         paintResults();
@@ -190,6 +228,7 @@
       found = data.plugins;
       automatic = data.automatic || [];
       if (!found.length) showError('WordPress.org has no plugin matching “' + term + '”.'); else showError('');
+      paint();
       paintResults();
     }, function (failure) {
       if (ticket === asked) showError(failure.message);
@@ -222,6 +261,7 @@
     if (picked.size > MAX_BYTES) { showError(picked.name + ' is larger than 32 MB.'); return; }
     if (full()) return;
     var item = { source: 'upload', slug: '', name: picked.name, activate: true, pending: true };
+    touched();
     chosen.push(item);
     paint();
     call('/api/plugin-upload', { method: 'POST', headers: { 'Content-Type': 'application/octet-stream' }, body: picked }).then(function (data) {
@@ -245,6 +285,103 @@
     });
   }
 
+  // --- defaults --------------------------------------------------------------
+
+  function fromDefault(plugins) {
+    return plugins.map(function (plugin) { return { source: 'wordpress.org', slug: plugin.slug, name: plugin.name, activate: plugin.activate }; });
+  }
+
+  // The WordPress.org plugins on the form: what a default holds, since an uploaded zip is for one site.
+  function directory() {
+    return chosen.filter(function (item) { return !item.pending && item.source !== 'upload'; });
+  }
+
+  // What saving sends: automation installs the others, so a default cannot hold them.
+  function savable() {
+    return directory().filter(function (item) { return !isAutomatic(item); })
+      .map(function (item) { return { slug: item.slug, name: item.name, activate: item.activate }; });
+  }
+
+  function same(plugins, other) {
+    return plugins.length === other.length && plugins.every(function (plugin, index) {
+      return plugin.slug === other[index].slug && plugin.activate === other[index].activate;
+    });
+  }
+
+  function paintDefaults() {
+    if (!defaultsLine) return;
+    if (!defaults) { defaultsLine.hidden = true; return; }
+    var mine = defaults.account;
+    var current = mine || defaults.server;
+    var matches = same(directory(), current);
+    origin.textContent = note || (matches && (mine || current.length) ? (mine ? 'Your default' : 'Server default') : '');
+    saveButton.hidden = matches;
+    resetButton.hidden = !mine;
+    defaultsLine.hidden = !origin.textContent && saveButton.hidden && resetButton.hidden;
+  }
+
+  function takeDefaults(data) {
+    defaults = { server: data.server || [], account: data.account || null };
+    automatic = data.automatic || automatic;
+  }
+
+  function saveDefault(body, done, failed) {
+    saveButton.disabled = resetButton.disabled = true;
+    showError('');
+    call('/api/my-new-site-defaults', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) }).then(function (data) {
+      takeDefaults(data);
+      done();
+    }, function (failure) {
+      showError(failed + ': ' + failure.message.replace(/\.?$/, '.'));
+    }).then(function () {
+      saveButton.disabled = resetButton.disabled = false;
+    });
+  }
+
+  if (saveButton) saveButton.addEventListener('click', function () {
+    saveDefault({ plugins: savable() }, function () {
+      // Left out of the saved default, and of the site, so off the form as well.
+      chosen = chosen.filter(function (item) { return !isAutomatic(item); });
+      note = 'Saved as your default';
+      paint();
+      paintResults();
+    }, 'Your default could not be saved');
+  });
+
+  // The server's default replaces the WordPress.org plugins; an uploaded zip is this site's alone and stays.
+  if (resetButton) resetButton.addEventListener('click', function () {
+    saveDefault({ reset: true }, function () {
+      touched();
+      var uploads = chosen.filter(function (item) { return item.source === 'upload'; });
+      var taken = uploads.map(function (item) { return item.slug.toLowerCase(); });
+      var room = MAX - uploads.length;
+      chosen = fromDefault(defaults.server).filter(function (item) {
+        if (taken.indexOf(item.slug) !== -1) return false;
+        if (isAutomatic(item)) return true;
+        return room-- > 0;
+      }).concat(uploads);
+      paint();
+      paintResults();
+    }, 'Your default could not be reset');
+  });
+
+  call('/api/my-new-site-defaults').then(function (data) {
+    takeDefaults(data);
+    if (!settled) chosen = fromDefault(defaults.account || defaults.server).slice(0, MAX);
+    paint();
+    paintResults();
+  }, function (failure) {
+    // The form works without them; it only starts empty.
+    showError('The default plugins could not be loaded: ' + failure.message.replace(/\.?$/, '.'));
+  }).then(function () {
+    loading = false;
+    if (waiting) { waiting = false; send(); }
+  });
+
+  function send() {
+    if (form.requestSubmit) form.requestSubmit(); else window.jQuery(form).trigger('submit');
+  }
+
   // --- submitting -----------------------------------------------------------
 
   // Ahead of CloudPanel's own handler, which submits the form and starts its
@@ -254,19 +391,29 @@
   // plugin removed still clears the one recorded the first time.
   document.addEventListener('submit', function (event) {
     if (event.target !== form || saved) return;
+    if (loading && !settled) {
+      event.preventDefault();
+      event.stopImmediatePropagation();
+      waiting = true;
+      return;
+    }
     var domain = domainInput ? domainInput.value.trim().toLowerCase() : '';
-    var ready = chosen.filter(function (item) { return !item.pending; });
+    var pending = chosen.some(function (item) { return item.pending; });
+    // A plugin automation installs is left to it.
+    var ready = chosen.filter(function (item) { return !item.pending && !isAutomatic(item); });
     var earlier = null;
     try { earlier = JSON.parse(sessionStorage.getItem(JOB) || 'null'); } catch (e) {}
-    var clearing = !ready.length && earlier && earlier.domain === domain;
+    var nothing = !ready.length && !pending;
+    var clearing = nothing && earlier && earlier.domain === domain;
     // A form CloudPanel will send back anyway, or nothing chosen now or before.
-    if (!domain || (!chosen.length && !clearing)) {
-      if (!chosen.length) try { sessionStorage.removeItem(JOB); } catch (e) {}
+    if (!domain || (nothing && !clearing)) {
+      if (nothing) try { sessionStorage.removeItem(JOB); } catch (e) {}
+      remember();
       return;
     }
     event.preventDefault();
     event.stopImmediatePropagation();
-    if (ready.length !== chosen.length) { showError('Wait for the upload to finish, then create the site.'); return; }
+    if (pending) { showError('Wait for the upload to finish, then create the site.'); return; }
     var buttons = form.querySelectorAll('button[type="submit"], input[type="submit"]');
     var busy = function (on) { Array.prototype.forEach.call(buttons, function (button) { button.disabled = on; }); };
     busy(true);
@@ -286,7 +433,8 @@
       } catch (e) {}
       saved = true;
       busy(false);
-      if (form.requestSubmit) form.requestSubmit(); else window.jQuery(form).trigger('submit');
+      remember();
+      send();
     }, function (failure) {
       busy(false);
       showError(clearing

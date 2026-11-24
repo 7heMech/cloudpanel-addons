@@ -2,7 +2,7 @@ import { callGatewayAction, type ActionResult, type GatewayStream } from "../../
 import type { WebVerb } from "../../../lib/gateway-protocol";
 import { watchGatewayJob, type JobWatcher } from "../../../lib/job-stream";
 import type {
-  WpLoginResult, WpMaintenanceReply, WpBasicAuthReply, WpRemoveResult, WpSiteView, NewSiteStatus,
+  AccountPluginDefaults, WpLoginResult, WpMaintenanceReply, WpBasicAuthReply, WpRemoveResult, WpSiteView, NewSiteStatus,
 } from "../action";
 import type { WpJobs, WpJobTask, WpJobView } from "../jobs";
 import type { MainwpView } from "../mainwp";
@@ -10,6 +10,7 @@ import type { WpVarnishState } from "../varnish";
 import type { WpDomainLink } from "../domain-link";
 import { UPLOAD_PART_BYTES, type StagedUpload } from "../new-site-plugins";
 import type { WpNewSiteAccess } from "../new-site-access";
+import type { DefaultPlugin } from "../new-site-defaults";
 
 /** `varnishError` is set when the Varnish settings cannot be read; sign-in still works. */
 export interface WpDashboard {
@@ -29,6 +30,16 @@ export interface WpDashboard {
   newSiteAccess?: WpNewSiteAccess;
   /** Set when that setting cannot be read; it reads as off. */
   newSiteAccessError?: string;
+  /** What the new-site form starts with for an account without its own default; absent on a page drawn without it. */
+  pluginDefaults?: ServerPluginDefaults;
+  /** Set when the defaults cannot be read; the form then starts empty. */
+  pluginDefaultsError?: string;
+}
+
+export interface ServerPluginDefaults {
+  server: DefaultPlugin[];
+  /** Installed on every new site by an automation policy that is on, so left out of the form. */
+  automatic: string[];
 }
 
 /** What the new-site form chose for one site. */
@@ -151,6 +162,17 @@ export const wpToolsService = {
   },
   newSiteSettings(siteManagers: boolean): Promise<ActionResult<{ newSiteAccess: WpNewSiteAccess }>> {
     return call("new-site-settings", [`--site-managers=${siteManagers}`]);
+  },
+  saveNewSiteDefaults(plugins: DefaultPlugin[]): Promise<ActionResult<{ pluginDefaults: ServerPluginDefaults }>> {
+    return callGatewayAction("wp-tools", "new-site-defaults", [], JSON.stringify({ plugins }));
+  },
+  // Whose default this is, the gateway reads from the panel session itself.
+  myNewSiteDefaults(sessionId: string): Promise<ActionResult<AccountPluginDefaults>> {
+    return callGatewayAction("wp-tools", "my-new-site-defaults", [], undefined, { sessionId });
+  },
+  /** Null follows the server's default again. */
+  saveMyNewSiteDefaults(sessionId: string, plugins: DefaultPlugin[] | null): Promise<ActionResult<AccountPluginDefaults>> {
+    return callGatewayAction("wp-tools", "save-my-new-site-defaults", [], JSON.stringify({ plugins }), { sessionId });
   },
 
   getJob(id: string): Promise<ActionResult<{ job: WpJobView; log: string }>> {

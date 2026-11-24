@@ -28,6 +28,7 @@ export const WP_TOOLS_ADDON: AddonDefinition = {
   title: "WordPress Tools",
   description: "One-click WordPress sign-in, plugins chosen while creating a site, and optional automatic installation of CLP Varnish Cache and MainWP Child on eligible sites.",
   changed: [
+    { in: "2.2.0-rc.3", note: "The New WordPress Site form starts with default plugins: the server's, set on the New sites tab of WordPress Tools, or an account's own, saved from the form by an administrator or, while allowed, a site manager." },
     { in: "2.2.0-rc.3", note: "Sites get one must-use plugin, Hosting Tools (hosting-tools.php), in place of clp-addons-login.php and clp-addons-mainwp.php. MainWP passes replace the old guard; an existing site's old sign-in stays until its next sign-in, or use Remove under the sites table to clear it everywhere now." },
     { in: "2.2.0-rc.3", note: "WordPress Tools now splits into Sites, New sites and Settings tabs." },
     { in: "2.0.0-rc.1", note: "Renamed from WordPress Sign-In; installs CLP Varnish Cache and MainWP Child." },
@@ -38,11 +39,13 @@ export const WP_TOOLS_ADDON: AddonDefinition = {
   withdraw: withdrawWpTools,
   // The sign-in and site-kind from CloudPanel's site pages, held to the
   // caller's own sites, and plugins chosen on its New WordPress Site form by
-  // an administrator or a site manager. The session route hands out the CSRF
-  // pair those callers cannot get from an addon page, and reads nothing.
+  // an administrator or a site manager, with their own default. The session
+  // route hands out the CSRF pair those callers cannot get from an addon page,
+  // and reads nothing.
   selfScopedRoutes: [
     "GET /api/session", "POST /api/sign-in", "GET /api/site-kind",
     "GET /api/plugin-search", "POST /api/new-site", "GET /api/new-site-status",
+    "GET /api/my-new-site-defaults", "POST /api/my-new-site-defaults",
   ],
   // A new site is checked when its row is committed, on each panel write while
   // CloudPanel installs its WordPress, and when its certificate is written.

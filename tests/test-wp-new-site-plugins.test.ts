@@ -825,7 +825,7 @@ test("the new-site blocks are for administrators, and site managers only while a
   }
   // What the form's script calls is what the handler answers.
   const form = newSiteFormSnippet("/addons/wp-tools", true);
-  for (const route of ["/api/plugin-search", "/api/plugin-upload", "/api/plugin-discard", "/api/new-site", "/api/session"]) {
+  for (const route of ["/api/plugin-search", "/api/plugin-upload", "/api/plugin-discard", "/api/new-site", "/api/session", "/api/my-new-site-defaults"]) {
     expect(form).toContain(`'${route}`);
   }
   expect(newSiteDoneSnippet("/addons/wp-tools", true)).toContain("'/api/new-site-status?job='");

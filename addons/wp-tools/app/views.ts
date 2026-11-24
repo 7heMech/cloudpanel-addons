@@ -246,7 +246,41 @@ function newSiteRow(job: WpJobView): string {
               </tr>`;
 }
 
-function newSitesCard(jobs: WpJobView[]): string {
+/**
+ * The plugins the new-site form starts with. Each change saves the whole list;
+ * one that automation now installs is shown as such and left out of the next save.
+ */
+const AUTOMATIC_TITLE = "Installed on every new site by WordPress Tools' automation";
+
+function defaultsCard(data: WpDashboard): string {
+  const defaults = data.pluginDefaults ?? { server: [], automatic: [] };
+  const rows = defaults.server.map((plugin) => {
+    const automatic = defaults.automatic.includes(plugin.slug);
+    const name = esc(plugin.name);
+    return `
+          <li data-slug="${esc(plugin.slug)}" data-name="${name}"${plugin.activate ? " data-activate" : ""}${automatic ? " data-automatic" : ""}>
+            <span class="wp-plugin-name">${name}</span><span class="wp-note">WordPress.org</span>
+            <span class="wp-default-controls">${automatic ? `<span class="wp-note" title="${AUTOMATIC_TITLE}">Automatic</span>` : `<label class="wp-default-activate"><input type="checkbox"${plugin.activate ? " checked" : ""} onchange="setDefaultActivate(this)">Activate</label>`}<button class="wp-link wp-default-remove" type="button" aria-label="Remove ${name}" onclick="removeDefault(this)">Remove</button></span>
+          </li>`;
+  }).join("");
+  return `
+    <div class="card" id="wp-default-plugins">
+      <div class="card-header"><h2>Default plugins</h2></div>
+      <p class="hint wp-defaults-note">The New WordPress Site form starts with these for every account that has not saved its own default there. Plugins can still be added or removed for each site.</p>${
+  data.pluginDefaultsError ? `
+      <div class="alert wp-defaults-alert" role="alert">${esc(data.pluginDefaultsError)}. Adding a plugin below replaces the file, and with it each account's own default.</div>` : ""}
+      <ul class="wp-default-list" id="wp-default-list" aria-label="Default plugins" data-automatic="${esc(defaults.automatic.join(" "))}"${rows ? "" : " hidden"}>${rows}
+      </ul>
+      <div class="wp-default-search">
+        <input type="search" id="wp-default-search" data-keep placeholder="Add a WordPress.org plugin" autocomplete="off" aria-label="Search WordPress.org plugins to add"
+          role="combobox" aria-expanded="false" aria-controls="wp-default-results" oninput="findDefaultSoon()" onkeydown="defaultSearchKey(event)">
+        <ul class="wp-default-results" id="wp-default-results" role="listbox" aria-label="WordPress.org plugins" hidden></ul>
+      </div>
+    </div>`;
+}
+
+function newSitesCard(data: WpDashboard): string {
+  const jobs = data.newSites ?? [];
   const running = jobs.filter((job) => job.state === "queued" || job.state === "running");
   const finished = jobs.filter((job) => !running.includes(job));
   return `
@@ -366,7 +400,7 @@ function panelPagesCard(data: WpDashboard): string {
     "On a WordPress site's pages in CloudPanel, the domain at the top signs in to WordPress instead of opening the site; Ctrl-click still opens it. Off, a WP Login link sits beside the domain instead.",
     data.domainLinkError)}
       ${switchSection("Site managers choose plugins for new sites", "new-site-managers", data.newSiteAccess?.siteManagers ?? false, "setNewSiteManagers",
-    "Site managers get the Plugins row on the New WordPress Site form too, with WordPress.org plugins only. Uploading a zip stays with administrators.",
+    "Site managers get the Plugins row on the New WordPress Site form too, with WordPress.org plugins only, and can save their own default there. Uploading a zip stays with administrators.",
     data.newSiteAccessError ?? "")}
     </div>`;
 }
@@ -398,8 +432,9 @@ function sitesAttention(data: WpDashboard): "bad" | "warn" | undefined {
   return warn ? "warn" : undefined;
 }
 
-function newSitesAttention(jobs: WpJobView[]): "bad" | undefined {
-  for (const job of jobs) {
+function newSitesAttention(data: WpDashboard): "bad" | undefined {
+  if (data.pluginDefaultsError) return "bad";
+  for (const job of data.newSites ?? []) {
     if (job.state === "failed") return "bad";
     const result = job.result as NewSiteResult | null;
     if (result?.plugins.some((plugin) => plugin.status === "failed")) return "bad";
@@ -418,7 +453,7 @@ export function dashboardBody(data: WpDashboard): string {
   const newSites = data.newSites ?? [];
   const tabs: SectionTab[] = [
     { id: "sites", label: "Sites", count: data.sites.length, attention: sitesAttention(data), content: sitesCard(data) },
-    { id: "new-sites", label: "New sites", count: newSites.length || undefined, attention: newSitesAttention(newSites), content: newSitesCard(newSites) },
+    { id: "new-sites", label: "New sites", count: newSites.length || undefined, attention: newSitesAttention(data), content: `${defaultsCard(data)}${newSitesCard(data)}` },
     { id: "settings", label: "Settings", attention: settingsAttention(data), content: `${automationCard(data)}${panelPagesCard(data)}` },
   ];
   return `${jobsStrip(data)}${sectionShellHtml("wp-tools", "WordPress Tools sections", tabs, "sites")}`;

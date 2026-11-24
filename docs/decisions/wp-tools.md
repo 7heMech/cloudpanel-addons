@@ -585,16 +585,18 @@ WordPress Tools' rather than Panel Tweaks' or DNS's because it puts code into a
 customer's site, which is what this addon exists to keep separate, and it is
 built from this addon's parts: the site discovery and account refusals, the
 WP-CLI runner and the job store. It is a choice per site, made where the site
-is made; a set every new site gets would be a policy on this page instead.
+is made. Defaults only fill the row in (see Defaults): a site created without
+the form, such as with `clpctl`, gets nothing from them.
 
 CLP Varnish Cache and MainWP Child are not offered while their automation is
-on: search lists them as installed automatically, and root refuses a choice that
+on: search marks them **Automatic**, and root refuses a choice that
 names either, by slug, when it is recorded. Each then has one owner, so the
 form's job and the policy's check never install it at once, MainWP's cleanup
 still finds the Child its own, and a Varnish plugin chosen inactive is not left
 so by a policy that only installs. MainWP counts as on outside cleanup. Turned
 on after a choice is recorded, a policy finds its plugin already there and
-treats it as it would one installed by hand.
+treats it as it would one installed by hand. Defaults are held to the same
+rule.
 
 ### Recorded before the site exists
 
@@ -697,9 +699,10 @@ that form from its header, and shows every running job with the shared progress 
 failures included, for the seven days a job record is kept.
 
 At most twenty plugins a site. The gateway allows `plugin-upload`,
-`plugin-discard`, `new-site`, `new-site-status`, `new-site-access` and
-`new-site-settings`; `start` does not accept the `new-site-plugins` task, so a
-job can only be recorded with the plan `new-site` validated.
+`plugin-discard`, `new-site`, `new-site-status`, `new-site-access`,
+`new-site-settings` and the three defaults verbs; `start` does not accept the
+`new-site-plugins` task, so a job can only be recorded with the plan
+`new-site` validated.
 
 ### Who may choose
 
@@ -742,8 +745,8 @@ not tell an entry from just before the choice from one just after it. An adminis
 this. The search asks root
 `new-site-access` before it runs, since only root can read the switch and the
 automation policies; an administrator's search asks too, for the policies.
-Uploading, discarding an upload, the switch and every other WP Tools route stay
-behind the gate.
+Uploading, discarding an upload, the switch and every other WP Tools route but
+an account's own defaults (see Defaults) stay behind the gate.
 
 The landing page follows its job through `new-site-status`, which tells a site
 manager only about a job that account recorded, which is the site it just
@@ -757,6 +760,43 @@ account cannot create a site in CloudPanel at all, so for that role plugins woul
 mean installing on an existing site of its own, a different feature with its
 own refusals: root checking `user_sites` as sign-in does, and never this
 form's "a site that does not exist yet".
+
+### Defaults
+
+The row starts from default plugins. The server's default is set in **Default
+plugins** on the **New sites** tab of WordPress Tools. An administrator, or a
+site manager while the switch allows them the row, saves their own from the
+form with **Save as my default**; **Reset to server default** removes it and
+fills the row from the server's. An account's own default is used in place of
+the server's, even an empty one. Both hold WordPress.org plugins only, as slug,
+name and activation, at most twenty: a zip is code chosen for one site, and its
+upload expires in hours. A default changes nothing that is recorded: the form
+still sends a per-site choice, checked as above.
+
+The row's choice is left in the tab's session storage as the form is
+submitted and read back once, so a form CloudPanel sent back keeps what was on
+it, even nothing; any other form starts from the default. A submit made before
+the defaults have answered waits for them, so a form is never sent without
+them.
+
+Both live in root-only `/var/lib/clp-addons/wp-tools/plugin-defaults.json`
+(`0600`, written atomically under the plugins lock). Accounts are a list of
+CloudPanel user names, since a name may be `__proto__`. The administrator's
+`new-site-defaults` saves the server's, and replaces a file that cannot be
+read, losing the accounts' own. `my-new-site-defaults` and
+`save-my-new-site-defaults`, behind `GET` and `POST /api/my-new-site-defaults`
+in `selfScopedRoutes`, are `own-account`: the gateway names the account from
+the panel session itself, never from the manager or the browser, and root
+requires an active administrator, or an active site manager while the switch
+is on, in CloudPanel's own database. Repair's upkeep drops the default of an account
+CloudPanel no longer has, so a new account of that name starts from the
+server's; a panel that lists no account is taken for a bad read.
+
+A default may not name CLP Varnish Cache or MainWP Child while its automation
+is on. One saved before automation was turned on stays saved: the form shows it
+as **Automatic**, as automation stood when the form loaded, and
+leaves it out of the choice it records and of a default it saves; the WordPress
+Tools page drops it with its next save.
 
 ## New sites
 
@@ -834,6 +874,6 @@ them from running alongside a 15-minute pass.
 
 ## Direction
 
-A later change may let the operator choose plugins every new site gets, with
-setup options for predefined ones such as CLP Varnish Cache and MainWP Child,
-or per-plugin setup.
+A later change may install default plugins on sites created without the form,
+with setup options for predefined ones such as CLP Varnish Cache and MainWP
+Child, or per-plugin setup.
