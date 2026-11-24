@@ -248,6 +248,7 @@ function options(extra: Partial<WpToolsActionOptions> = {}): WpToolsActionOption
       mainwpState: join(root, "mainwp.json"), mainwpLockFile: join(root, "wp-mainwp.lock"),
       jobsDir: join(root, "jobs"), jobsLockFile: join(root, "wp-jobs.lock"), actionBinary: "/usr/local/bin/clp-addons",
       uploadsDir: uploads(), pluginsLockFile: join(root, "wp-plugins.lock"), newSiteAccessState: join(root, "new-site-access.json"),
+      pluginDefaultsState: join(root, "plugin-defaults.json"), pluginDefaultsLockFile: join(root, "wp-plugin-defaults.lock"),
     },
     startJob: (unit) => { started.push(unit); return { ok: true, stdout: "", stderr: "" }; },
     domainValidator: (domain) => domain.toLowerCase(),

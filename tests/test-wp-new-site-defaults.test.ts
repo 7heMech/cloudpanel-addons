@@ -8,6 +8,7 @@ import { handle } from "../addons/wp-tools/app/index";
 import { wpToolsService } from "../addons/wp-tools/app/service";
 import { emptyMainwpState } from "../addons/wp-tools/mainwp";
 import { webVerb } from "../lib/gateway-protocol";
+import { acquireFileLockSync } from "../lib/file-lock";
 import { dashboardBody } from "../addons/wp-tools/app/views";
 import type { WpDashboard } from "../addons/wp-tools/app/service";
 import { readPluginDefaults } from "../addons/wp-tools/new-site-defaults";
@@ -23,7 +24,7 @@ function options(extra: Partial<WpToolsActionOptions> = {}): WpToolsActionOption
       mainwpState: join(root, "mainwp.json"), mainwpLockFile: join(root, "wp-mainwp.lock"), domainLinkState: join(root, "domain-link.json"),
       jobsDir: join(root, "jobs"), jobsLockFile: join(root, "wp-jobs.lock"), uploadsDir: join(root, "uploads"),
       pluginsLockFile: join(root, "wp-plugins.lock"), newSiteAccessState: join(root, "new-site-access.json"),
-      pluginDefaultsState: join(root, "plugin-defaults.json"),
+      pluginDefaultsState: join(root, "plugin-defaults.json"), pluginDefaultsLockFile: join(root, "wp-plugin-defaults.lock"),
     },
     ...extra,
   };
@@ -176,6 +177,18 @@ test("repair's upkeep drops the own default of an account CloudPanel no longer h
   expect(readFileSync(join(root, "plugin-defaults.json"), "utf8")).toBe("{");
 });
 
+test("defaults use their own lock file so plugin uploads and choices never contend with them", async () => {
+  const pluginsLock = acquireFileLockSync(join(root, "wp-plugins.lock"), 1, "busy");
+  try {
+    expect(await act<{ pluginDefaults: { server: unknown[] } }>(["new-site-defaults"], { plugins: [yoast] }))
+      .toMatchObject({ pluginDefaults: { server: [yoast] } });
+    expect(await act<AccountPluginDefaults>(["save-my-new-site-defaults", "--panel-user=admin"], { plugins: [forms] }))
+      .toMatchObject({ account: [forms] });
+  } finally {
+    pluginsLock.release();
+  }
+});
+
 test("the WordPress Tools page draws the server's default, escaped, with a plugin automation installs marked as such", () => {
   const data = {
     sites: [], varnish: { enabled: true, sites: {} }, varnishError: "", mainwp: emptyMainwpState() as never, mainwpError: "",
@@ -190,9 +203,12 @@ test("the WordPress Tools page draws the server's default, escaped, with a plugi
   expect(rows[0]).not.toContain('type="checkbox"');
   expect(rows[1]).toContain('type="checkbox" onchange="setDefaultActivate(this)"');
   expect(html).not.toContain("<img src=x");
+  expect(html).toContain('id="wp-default-plugins"');
   expect(html).toContain('data-automatic="clp-varnish-cache"');
+  expect(html).not.toMatch(/data-section-tab="new-sites"[^>]*>[^<]*<span class="section-dot/);
   const broken = dashboardBody({ ...data, pluginDefaults: { server: [], automatic: [] }, pluginDefaultsError: "/var/lib/clp-addons/wp-tools/plugin-defaults.json cannot be read: x" });
   expect(broken).toContain("Adding a plugin below replaces the file, and with it each account's own default.");
+  expect(broken).toMatch(/data-section-tab="new-sites"[^>]*>New sites<span class="section-dot tone-bad"/);
 });
 
 // --- the manager's routes -------------------------------------------------
@@ -295,8 +311,8 @@ function formScript(stored: Record<string, string>, respond: Respond, options: {
     sent.push({ path, body });
     const answer = respond(path, body);
     if (answer === undefined) return new Promise(() => {});
-    const reply = answer instanceof Error ? { ok: false, error: answer.message } : { ok: true, data: answer };
-    return Promise.resolve({ json: () => Promise.resolve(reply) });
+    const wrap = (value: unknown) => ({ json: () => Promise.resolve(value instanceof Error ? { ok: false, error: value.message } : { ok: true, data: value }) });
+    return answer instanceof Promise ? answer.then(wrap) : Promise.resolve(wrap(answer));
   };
   const source = readFileSync(join(import.meta.dir, "../addons/wp-tools/inject/new-site.client.js"), "utf8");
   new Function("document", "sessionStorage", "fetch", source)(document, sessionStorage, fetch);
@@ -390,6 +406,13 @@ test("a submit made before the defaults answer waits for them", async () => {
   await settle();
   expect(failed.nodes["clp-wp-plugins-error"]!.textContent).toBe("The default plugins could not be loaded: the default plugins cannot be read.");
   expect(failed.submit()).toBe(false);
+
+  // Even a malformed reply that throws while applying defaults still clears loading so Create is never stuck.
+  const broken = formScript({}, (path) => path === "/api/my-new-site-defaults" ? { server: "not-a-list", account: null, automatic: [] } : undefined);
+  expect(broken.submit()).toBe(true);
+  await settle();
+  expect(broken.resubmitted()).toBe(1);
+  expect(broken.submit()).toBe(false);
 });
 
 test("a default plugin automation now installs is shown as such, left out of what the form sends, and can be dropped from a default", async () => {
@@ -439,6 +462,30 @@ test("Reset fills the row from the server's default, keeping uploaded zips and n
   expect(form.rows()).toEqual(["Contact Form 7", "Yoast SEO Premium"]);
   expect(form.shown("clp-wp-plugins-reset")).toBe(false);
   expect(form.storage.has(CHOICE)).toBe(false);
+
+  // While a zip is still uploading its slug is unknown, so Reset waits for the upload first.
+  let finishUpload!: (value: unknown) => void;
+  const uploading = formScript({}, (path, body) => {
+    if (path === "/api/plugin-upload") return new Promise((resolve) => { finishUpload = resolve; });
+    return defaultsOf({ server: [yoast, forms], account: [mine], automatic: [] }, () => ({ server: [yoast, forms], account: null, automatic: [] }))(path, body);
+  }, { admin: true });
+  await settle();
+  const file = uploading.nodes["clp-wp-plugin-file"]!;
+  file.files = [{ name: "yoast-premium.zip", size: 1024 }];
+  file.listeners.change[0]();
+  expect(uploading.rows()).toEqual(["WooCommerce", "yoast-premium.zip"]);
+  uploading.click("clp-wp-plugins-reset");
+  await settle();
+  expect(uploading.nodes["clp-wp-plugins-error"]!.textContent).toBe("Wait for the upload to finish, then reset.");
+  expect(uploading.sent.some((call) => call.path === "/api/my-new-site-defaults" && call.body !== undefined)).toBe(false);
+  expect(uploading.rows()).toEqual(["WooCommerce", "yoast-premium.zip"]);
+  // Once the upload finishes, Reset keeps it and drops the server default with the same slug.
+  finishUpload({ upload: { id: "b".repeat(32), slug: "wordpress-seo", name: "Yoast SEO Premium", version: "2.0" } });
+  await settle();
+  uploading.click("clp-wp-plugins-reset");
+  await settle();
+  expect(uploading.rows()).toEqual(["Contact Form 7", "Yoast SEO Premium 2.0"]);
+  expect(uploading.shown("clp-wp-plugins-reset")).toBe(false);
 });
 
 test("Create still waits for an upload in progress when defaults are on the form", async () => {
@@ -451,4 +498,250 @@ test("Create still waits for an upload in progress when defaults are on the form
   expect(form.submit()).toBe(true);
   expect(form.nodes["clp-wp-plugins-error"]!.textContent).toBe("Wait for the upload to finish, then create the site.");
   expect(form.sent.some((call) => call.path === "/api/new-site")).toBe(false);
+});
+
+// --- the admin page's defaults editor -------------------------------------
+
+function dashboardHtml(server: { slug: string; name: string; activate: boolean }[], automatic: string[] = []): string {
+  return dashboardBody({
+    sites: [], varnish: { enabled: automatic.includes("clp-varnish-cache"), sites: {} }, varnishError: "",
+    mainwp: emptyMainwpState() as never, mainwpError: "", domainLink: { signIn: true }, domainLinkError: "",
+    jobs: { varnish: null, mainwp: null }, pluginDefaults: { server, automatic }, pluginDefaultsError: "",
+  } as unknown as WpDashboard);
+}
+
+interface Deferred<T> {
+  promise: Promise<T>;
+  resolve: (value: T) => void;
+  reject: (error: Error) => void;
+}
+
+function deferred<T>(): Deferred<T> {
+  let resolve!: (value: T) => void;
+  let reject!: (error: Error) => void;
+  const promise = new Promise<T>((res, rej) => { resolve = res; reject = rej; });
+  return { promise, resolve, reject };
+}
+
+interface AdminClient {
+  addDefault: (plugin: { slug: string; name: string }) => void;
+  removeDefault: (button: unknown) => void;
+  setDefaultActivate: (input: unknown) => Promise<void>;
+  findDefault: () => Promise<void>;
+  jobFinished: (job: unknown) => Promise<void>;
+  defaultPlugins: () => { slug: string; name: string; activate: boolean; automatic: boolean }[];
+}
+
+function adminScript(
+  initialHtml: string,
+  callImpl: (path: string, options?: { method?: string; body?: string }) => Promise<unknown>,
+) {
+  const node = (): FakeNode => {
+    const el: FakeNode = {
+      hidden: false, textContent: "", value: "", className: "", type: "", title: "", disabled: false,
+      children: [] as FakeNode[], attrs: {} as Record<string, string>, dataset: {} as Record<string, string>,
+      setAttribute(name: string, val: string) { el.attrs[name] = val; },
+      hasAttribute(name: string) { return name in el.attrs; },
+      appendChild(child: FakeNode) { el.children.push(child); return child; },
+      append(...items: FakeNode[]) { el.children.push(...items); },
+      addEventListener(type: string, fn: (event?: unknown) => void) { (el.listeners ??= {})[type] = [...(el.listeners[type] ?? []), fn]; },
+    };
+    return el;
+  };
+  const dashboard = node();
+  const search = Object.assign(node(), { value: "" });
+  const results = Object.assign(node(), { hidden: true });
+  Object.defineProperty(results, "textContent", { set() { results.children = []; }, get: () => "" });
+  let listNode = node();
+  let listRows: FakeNode[] = [];
+
+  const applyHtml = (html: string) => {
+    const autoMatch = /id="wp-default-list"[^>]*data-automatic="([^"]*)"/.exec(html);
+    listNode = Object.assign(node(), { dataset: { automatic: autoMatch?.[1] ?? "" } });
+    listRows = [...html.matchAll(/<li data-slug="([^"]+)" data-name="([^"]+)"([^>]*)>/g)].map((match) => {
+      const attrs: Record<string, string> = {};
+      if (match[3]!.includes("data-activate")) attrs["data-activate"] = "";
+      if (match[3]!.includes("data-automatic")) attrs["data-automatic"] = "";
+      return Object.assign(node(), { dataset: { slug: match[1]!, name: match[2]! }, attrs });
+    });
+    // Replacing #wp-dashboard innerHTML recreates #wp-default-results empty and hidden.
+    results.children = [];
+    results.hidden = true;
+    search.attrs["aria-expanded"] = "false";
+  };
+  applyHtml(initialHtml);
+
+  const byId: Record<string, () => FakeNode> = {
+    "wp-dashboard": () => dashboard,
+    "wp-default-list": () => listNode,
+    "wp-default-search": () => search,
+    "wp-default-results": () => results,
+  };
+  const rootEl = {
+    getElementById: (id: string) => byId[id]?.() ?? null,
+    querySelector: () => null,
+    querySelectorAll: (selector: string) => selector === "#wp-default-list > li[data-slug]" ? listRows : [],
+  };
+  const notifications: { text: string; kind: string }[] = [];
+  const repaints: string[] = [];
+  const source = readFileSync(join(import.meta.dir, "../addons/wp-tools/app/views.client.js"), "utf8");
+  const api = new Function(
+    "CLP_BASE", "CLP_ROOT", "document", "call", "busy", "notify", "clearNotice", "repaintView", "followJobProgress", "plural",
+    `${source}\nreturn { addDefault, removeDefault, setDefaultActivate, findDefault, jobFinished, defaultPlugins };`,
+  )(
+    "/addons/wp-tools",
+    rootEl,
+    { createElement: node },
+    callImpl,
+    () => {},
+    (text: string, kind: string) => notifications.push({ text, kind }),
+    () => {},
+    (_holder: unknown, html: string) => { repaints.push(html); applyHtml(html); },
+    () => {},
+    (count: number, word: string) => `${count} ${word}${count === 1 ? "" : "s"}`,
+  ) as AdminClient;
+  const resultStates = () => results.children.map((row: FakeNode) => {
+    const pick = row.children[0];
+    return { name: pick.children[0].textContent, state: pick.children[2].textContent, disabled: pick.disabled };
+  });
+  const domSlugs = () => listRows.map((row) => row.dataset.slug);
+  return { api, search, results, notifications, repaints, resultStates, domSlugs, listRows: () => listRows };
+}
+
+test("a failed dashboard refresh after saving server defaults keeps the saved list for the next edit", async () => {
+  const posts: unknown[] = [];
+  let failDashboard = true;
+  const admin = adminScript(dashboardHtml([yoast]), async (path, opts) => {
+    if (path.startsWith("/api/plugin-search")) {
+      return { ok: true, data: { plugins: [
+        { slug: yoast.slug, name: yoast.name, author: "Yoast" },
+        { slug: forms.slug, name: forms.name, author: "Takayuki" },
+        { slug: mine.slug, name: mine.name, author: "Automattic" },
+      ] } };
+    }
+    if (path === "/api/new-site-defaults") {
+      const body = JSON.parse(opts!.body!);
+      posts.push(body.plugins);
+      return { ok: true, data: { pluginDefaults: { server: body.plugins, automatic: [] } } };
+    }
+    if (path === "/api/dashboard") {
+      if (failDashboard) throw new Error("gateway unavailable");
+      const current = (posts[posts.length - 1] as typeof yoast[]) ?? [yoast];
+      return { ok: true, data: { html: dashboardHtml(current) } };
+    }
+    throw new Error(`unexpected ${path}`);
+  });
+
+  admin.search.value = "shop";
+  await admin.api.findDefault();
+  expect(admin.resultStates()).toEqual([
+    { name: "Yoast SEO", state: "Added", disabled: true },
+    { name: "Contact Form 7", state: "Add", disabled: false },
+    { name: "WooCommerce", state: "Add", disabled: false },
+  ]);
+
+  // First save succeeds, but /api/dashboard fails so DOM still shows only Yoast SEO.
+  admin.api.addDefault(forms);
+  await settle();
+  expect(posts).toEqual([[yoast, { ...forms, activate: true }]]);
+  expect(admin.domSlugs()).toEqual(["wordpress-seo"]);
+  expect(admin.notifications[admin.notifications.length - 1]).toEqual({
+    text: "Contact Form 7 is a default plugin now. The page may be out of date: gateway unavailable",
+    kind: "warn",
+  });
+  // Search results still reflect the saved plugin as Added.
+  expect(admin.resultStates()[1]).toEqual({ name: "Contact Form 7", state: "Added", disabled: true });
+
+  // Second edit builds on the authoritative saved defaults instead of the stale DOM rows.
+  failDashboard = false;
+  admin.api.addDefault(mine);
+  await settle();
+  expect(posts[1]).toEqual([yoast, { ...forms, activate: true }, mine]);
+  expect(admin.domSlugs()).toEqual(["wordpress-seo", "contact-form-7", "woocommerce"]);
+
+  // After a successful repaint, DOM is authoritative again (removing reads from DOM).
+  const row = admin.listRows()[0]!;
+  admin.api.removeDefault({ closest: () => row });
+  await settle();
+  expect(posts[2]).toEqual([{ ...forms, activate: true }, mine]);
+  expect(admin.domSlugs()).toEqual(["contact-form-7", "woocommerce"]);
+});
+
+test("an older dashboard refresh from jobFinished cannot overwrite a newer defaults save or wipe unsynced defaults", async () => {
+  const dashboards: Deferred<{ ok: boolean; data: { html: string } }>[] = [];
+  const posts: unknown[] = [];
+  const admin = adminScript(dashboardHtml([yoast]), (path, opts) => {
+    if (path === "/api/new-site-defaults") {
+      const body = JSON.parse(opts!.body!);
+      posts.push(body.plugins);
+      return Promise.resolve({ ok: true, data: { pluginDefaults: { server: body.plugins, automatic: [] } } });
+    }
+    if (path === "/api/dashboard") {
+      const next = deferred<{ ok: boolean; data: { html: string } }>();
+      dashboards.push(next);
+      return next.promise;
+    }
+    return Promise.reject(new Error(`unexpected ${path}`));
+  });
+
+  const job = { task: "varnish-check", state: "done", domains: [], result: { checked: 1, installed: 0, pending: 0, failed: [] } };
+  // jobFinished starts an older dashboard read (#0) before the save runs.
+  const firstJob = admin.api.jobFinished(job);
+  expect(dashboards).toHaveLength(1);
+
+  // User adds Contact Form 7; its newer dashboard read (#1) resolves first.
+  admin.api.addDefault(forms);
+  await settle();
+  expect(dashboards).toHaveLength(2);
+  dashboards[1]!.resolve({ ok: true, data: { html: dashboardHtml([yoast, { ...forms, activate: true }]) } });
+  await settle();
+  expect(admin.domSlugs()).toEqual(["wordpress-seo", "contact-form-7"]);
+
+  // The older jobFinished read (#0) now resolves with stale [yoast] HTML and must be ignored.
+  dashboards[0]!.resolve({ ok: true, data: { html: dashboardHtml([yoast]) } });
+  await firstJob;
+  expect(admin.domSlugs()).toEqual(["wordpress-seo", "contact-form-7"]);
+  expect(admin.repaints).toHaveLength(1);
+
+  // Same when the save's own refresh fails: an older jobFinished read still must not clear savedDefaults.
+  const secondJob = admin.api.jobFinished(job);
+  expect(dashboards).toHaveLength(3);
+  admin.api.addDefault(mine);
+  await settle();
+  expect(dashboards).toHaveLength(4);
+  dashboards[3]!.reject(new Error("refresh failed"));
+  await settle();
+  dashboards[2]!.resolve({ ok: true, data: { html: dashboardHtml([yoast]) } });
+  await secondJob;
+  expect(admin.domSlugs()).toEqual(["wordpress-seo", "contact-form-7"]);
+  expect(admin.api.defaultPlugins().map((plugin) => plugin.slug)).toEqual(["wordpress-seo", "contact-form-7", "woocommerce"]);
+});
+
+test("jobFinished repaints open default-plugin search results after replacing the dashboard", async () => {
+  const varnish = { slug: "clp-varnish-cache", name: "CLP Varnish Cache", author: "CloudPanel" };
+  const admin = adminScript(dashboardHtml([yoast]), async (path) => {
+    if (path.startsWith("/api/plugin-search")) {
+      return { ok: true, data: { plugins: [{ slug: yoast.slug, name: yoast.name, author: "Yoast" }, varnish] } };
+    }
+    if (path === "/api/dashboard") {
+      return { ok: true, data: { html: dashboardHtml([yoast], ["clp-varnish-cache"]) } };
+    }
+    throw new Error(`unexpected ${path}`);
+  });
+
+  admin.search.value = "cache";
+  await admin.api.findDefault();
+  expect(admin.results.hidden).toBe(false);
+  expect(admin.resultStates()).toEqual([
+    { name: "Yoast SEO", state: "Added", disabled: true },
+    { name: "CLP Varnish Cache", state: "Add", disabled: false },
+  ]);
+
+  await admin.api.jobFinished({ task: "varnish-check", state: "done", domains: [], result: { checked: 1, installed: 1, pending: 0, failed: [] } });
+  expect(admin.repaints).toHaveLength(1);
+  expect(admin.results.hidden).toBe(false);
+  expect(admin.resultStates()).toEqual([
+    { name: "Yoast SEO", state: "Added", disabled: true },
+    { name: "CLP Varnish Cache", state: "Automatic", disabled: true },
+  ]);
 });

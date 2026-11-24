@@ -81,11 +81,26 @@ function submitToken(target, data) {
   form.submit();
 }
 
+// Each dashboard refresh gets a ticket so an older response cannot replace a newer one.
+let dashboardAsked = 0;
+// Authoritative defaults from the last successful save until a dashboard repaint catches up.
+let savedDefaults = null;
+
+function repaintDashboard(html, ticket) {
+  if (!html || ticket !== dashboardAsked) return false;
+  repaintView(CLP_ROOT.getElementById('wp-dashboard'), html);
+  savedDefaults = null;
+  if (defaultFound.length) paintDefaultResults();
+  return true;
+}
+
 // Make a change, then repaint everything below the heading from the server's
 // answer, so a row that failed or that the change did not reach shows as it is.
 async function change(path, body, describe) {
   clearNotice();
   busy(true);
+  // Any dashboard refresh already in flight predates this change.
+  ++dashboardAsked;
   let reply;
   let failure = '';
   let html = '';
@@ -95,13 +110,17 @@ async function change(path, body, describe) {
   } catch (error) {
     failure = error.message;
   }
+  if (!failure && reply && reply.data && reply.data.pluginDefaults) {
+    savedDefaults = reply.data.pluginDefaults;
+  }
+  const ticket = ++dashboardAsked;
   try {
     html = (await call('/api/dashboard')).data.html;
   } catch (error) {
-    stale = error.message;
+    if (ticket === dashboardAsked) stale = error.message;
   }
   busy(false);
-  if (html) repaintView(CLP_ROOT.getElementById('wp-dashboard'), html);
+  repaintDashboard(html, ticket);
   followJobs();
   if (failure) {
     notify(failure, 'error');
@@ -148,13 +167,25 @@ let defaultAsked = 0;
 // Each save sends the whole list, so a second one waits for the first to repaint it.
 let defaultSaving = false;
 
-// As the page was last drawn, so a repaint after automation changed brings it up to date.
+// As the page was last drawn, or from the last save until a dashboard repaint catches up.
 function defaultAutomatic() {
+  if (savedDefaults) return (savedDefaults.automatic || []).slice();
   const holder = CLP_ROOT.getElementById('wp-default-list');
   return holder ? (holder.dataset.automatic || '').split(' ').filter(Boolean) : [];
 }
 
 function defaultPlugins() {
+  if (savedDefaults) {
+    const automatic = savedDefaults.automatic || [];
+    return (savedDefaults.server || []).map(function (plugin) {
+      return {
+        slug: plugin.slug,
+        name: plugin.name,
+        activate: Boolean(plugin.activate),
+        automatic: automatic.indexOf(plugin.slug) !== -1,
+      };
+    });
+  }
   return Array.prototype.map.call(CLP_ROOT.querySelectorAll('#wp-default-list > li[data-slug]'), function (row) {
     return { slug: row.dataset.slug, name: row.dataset.name, activate: row.hasAttribute('data-activate'), automatic: row.hasAttribute('data-automatic') };
   });
@@ -334,11 +365,12 @@ const JOB_SUMMARIES = {
 };
 
 async function jobFinished(job) {
+  const ticket = ++dashboardAsked;
   let stale = '';
   try {
-    repaintView(CLP_ROOT.getElementById('wp-dashboard'), (await call('/api/dashboard')).data.html);
+    repaintDashboard((await call('/api/dashboard')).data.html, ticket);
   } catch (error) {
-    stale = error.message;
+    if (ticket === dashboardAsked) stale = error.message;
   }
   followJobs();
   if (job.state !== 'done') {

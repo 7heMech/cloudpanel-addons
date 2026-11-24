@@ -780,7 +780,7 @@ the defaults have answered waits for them, so a form is never sent without
 them.
 
 Both live in root-only `/var/lib/clp-addons/wp-tools/plugin-defaults.json`
-(`0600`, written atomically under the plugins lock). Accounts are a list of
+(`0600`, written atomically under its own lock). Accounts are a list of
 CloudPanel user names, since a name may be `__proto__`. The administrator's
 `new-site-defaults` saves the server's, and replaces a file that cannot be
 read, losing the accounts' own. `my-new-site-defaults` and

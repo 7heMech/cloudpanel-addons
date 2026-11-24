@@ -328,14 +328,13 @@
   function saveDefault(body, done, failed) {
     saveButton.disabled = resetButton.disabled = true;
     showError('');
+    function release() { saveButton.disabled = resetButton.disabled = false; }
     call('/api/my-new-site-defaults', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) }).then(function (data) {
       takeDefaults(data);
       done();
     }, function (failure) {
       showError(failed + ': ' + failure.message.replace(/\.?$/, '.'));
-    }).then(function () {
-      saveButton.disabled = resetButton.disabled = false;
-    });
+    }).then(release, release);
   }
 
   if (saveButton) saveButton.addEventListener('click', function () {
@@ -350,6 +349,10 @@
 
   // The server's default replaces the WordPress.org plugins; an uploaded zip is this site's alone and stays.
   if (resetButton) resetButton.addEventListener('click', function () {
+    if (chosen.some(function (item) { return item.pending; })) {
+      showError('Wait for the upload to finish, then reset.');
+      return;
+    }
     saveDefault({ reset: true }, function () {
       touched();
       var uploads = chosen.filter(function (item) { return item.source === 'upload'; });
@@ -365,6 +368,10 @@
     }, 'Your default could not be reset');
   });
 
+  function finishLoading() {
+    loading = false;
+    if (waiting) { waiting = false; send(); }
+  }
   call('/api/my-new-site-defaults').then(function (data) {
     takeDefaults(data);
     if (!settled) chosen = fromDefault(defaults.account || defaults.server).slice(0, MAX);
@@ -373,10 +380,7 @@
   }, function (failure) {
     // The form works without them; it only starts empty.
     showError('The default plugins could not be loaded: ' + failure.message.replace(/\.?$/, '.'));
-  }).then(function () {
-    loading = false;
-    if (waiting) { waiting = false; send(); }
-  });
+  }).then(finishLoading, finishLoading);
 
   function send() {
     if (form.requestSubmit) form.requestSubmit(); else window.jQuery(form).trigger('submit');

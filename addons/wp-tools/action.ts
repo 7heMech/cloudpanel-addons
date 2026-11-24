@@ -169,6 +169,7 @@ interface WpToolsActionPaths {
   newSiteAccessState: string;
   /** The plugins that form starts with: the server's and each account's own. */
   pluginDefaultsState: string;
+  pluginDefaultsLockFile: string;
   mainwpState: string;
   mainwpLockFile: string;
   jobsDir: string;
@@ -221,6 +222,7 @@ export const DEFAULT_WP_TOOLS_PATHS: WpToolsActionPaths = {
   domainLinkState: `${addonStateDir("wp-tools")}/domain-link.json`,
   newSiteAccessState: `${addonStateDir("wp-tools")}/new-site-access.json`,
   pluginDefaultsState: `${addonStateDir("wp-tools")}/plugin-defaults.json`,
+  pluginDefaultsLockFile: `${LOCK_DIR}/wp-plugin-defaults.lock`,
   mainwpState: `${addonStateDir("wp-tools")}/mainwp.json`,
   mainwpLockFile: `${LOCK_DIR}/wp-mainwp.lock`,
   jobsDir: `${addonStateDir("wp-tools")}/jobs`,
@@ -1246,7 +1248,7 @@ function saveMyNewSiteDefaults(paths: WpToolsActionPaths, rest: string[], input:
   const user = defaultsAccount(paths, "save-my-new-site-defaults", rest);
   const body = parseJsonRequest(input, 16 * 1024);
   const plugins = body.plugins === null ? null : defaultsToSave(paths, body.plugins);
-  return withFileLockSync(paths.pluginsLockFile, 15, "another default is being saved", () => {
+  return withFileLockSync(paths.pluginDefaultsLockFile, 15, "another default is being saved", () => {
     const state = withAccountDefault(storedDefaults(paths), user, plugins);
     savePluginDefaults(paths.pluginDefaultsState, state);
     return accountView(paths, state, user);
@@ -1258,7 +1260,7 @@ function saveServerDefaults(paths: WpToolsActionPaths, rest: string[], input: st
   if (rest.length) failAction("'new-site-defaults' takes its plugins on stdin");
   if (!existsSync(paths.configFile)) failAction("WordPress Tools must be enabled before choosing default plugins");
   const plugins = defaultsToSave(paths, parseJsonRequest(input, 16 * 1024).plugins);
-  return withFileLockSync(paths.pluginsLockFile, 15, "another default is being saved", () => {
+  return withFileLockSync(paths.pluginDefaultsLockFile, 15, "another default is being saved", () => {
     // Saving the server's default is also how an administrator replaces a file that cannot be read.
     let accounts: PluginDefaults["accounts"] = [];
     try { accounts = readPluginDefaults(paths.pluginDefaultsState).accounts; } catch { /* replaced below */ }
@@ -1270,7 +1272,7 @@ function saveServerDefaults(paths: WpToolsActionPaths, rest: string[], input: st
 /** Accounts CloudPanel no longer has lose their own default, so a new account of that name starts from the server's. */
 function pruneAccountDefaults(paths: WpToolsActionPaths): void {
   if (!existsSync(paths.pluginDefaultsState)) return;
-  withFileLockSync(paths.pluginsLockFile, 15, "another default is being saved", () => {
+  withFileLockSync(paths.pluginDefaultsLockFile, 15, "another default is being saved", () => {
     const state = readPluginDefaults(paths.pluginDefaultsState);
     if (!state.accounts.length) return;
     const db = openPanelDatabase(paths.panelDb, true, 1000);
