@@ -2,10 +2,11 @@ import type { ActionNeeded, ActionNeededCheck, SetupCheck, SetupStep } from "../
 import type { CloudSetupState } from "./cloud-firewall";
 import { hetznerSetupState } from "./hetzner";
 import { netcupSetupState } from "./netcup";
-import { panelGateActionNeeded, type GateOptions } from "./panel-gate";
+import { panelGateActionNeeded, panelGateSummary, type GateOptions, type PanelGateView } from "./panel-gate";
 
 const CARD = "/addons/firewall/#hetzner-card";
 const NETCUP_CARD = "/addons/firewall/#netcup-card";
+const GATE_CARD = "/addons/firewall/#panel-gate-card";
 /** Repair reads the provider every 15 minutes and records when; this many missed in a row is a credential it refuses, or a provider that does not answer. */
 export const HETZNER_QUIET_MS = 60 * 60_000;
 
@@ -56,14 +57,32 @@ export function netcupActions(state: CloudSetupState, now = Date.now()): ActionN
   }];
 }
 
+export function panelGateCheck(summary: Pick<PanelGateView, "on" | "hostname">): SetupCheck {
+  if (summary.on) return { state: "done", reason: summary.hostname ? `Cloudflare Access sits in front of ${summary.hostname}` : "Cloudflare Access sits in front of CloudPanel" };
+  return { state: "todo", reason: "CloudPanel's login page is directly reachable" };
+}
+
 export const FIREWALL_SETUP: SetupStep[] = [
-  { id: "hetzner-firewall", level: "secure", title: "Hetzner Cloud Firewall", href: CARD, check: () => hetznerCheck(hetznerSetupState()) },
-  { id: "netcup-firewall", level: "secure", title: "netcup firewall", href: NETCUP_CARD, check: () => netcupCheck(netcupSetupState()) },
+  {
+    id: "hetzner-firewall", level: "secure", title: "Hetzner Cloud Firewall", href: CARD, hostSpecific: true,
+    why: "Drops direct traffic to ports 80, 443 and 8443 at Hetzner before packets reach this server.",
+    check: () => hetznerCheck(hetznerSetupState()),
+  },
+  {
+    id: "netcup-firewall", level: "secure", title: "netcup firewall", href: NETCUP_CARD, hostSpecific: true,
+    why: "Drops direct traffic to ports 80, 443 and 8443 at netcup before packets reach this server.",
+    check: () => netcupCheck(netcupSetupState()),
+  },
+  {
+    id: "panel-gate", level: "domain", title: "Panel gate", href: GATE_CARD, requires: ["dns-connection", "panel-hostname"],
+    why: "Requires a Cloudflare Access email sign-in before anyone reaches CloudPanel's login screen and closes direct port 8443.",
+    check: (options) => panelGateCheck(panelGateSummary(options?.gate as GateOptions | undefined)),
+  },
 ];
 
 export const FIREWALL_ACTIONS: ActionNeededCheck[] = [
   { id: "hetzner-token", check: () => hetznerActions(hetznerSetupState()) },
   { id: "netcup-sign-in", check: () => netcupActions(netcupSetupState()) },
   // Local files and the drift repair recorded; it never calls Cloudflare.
-  { id: "panel-gate", title: "Panel gate needs attention", href: "/addons/firewall/#panel-gate-card", check: (options) => panelGateActionNeeded(options?.gate as GateOptions | undefined) },
+  { id: "panel-gate", title: "Panel gate needs attention", href: GATE_CARD, check: (options) => panelGateActionNeeded(options?.gate as GateOptions | undefined) },
 ];

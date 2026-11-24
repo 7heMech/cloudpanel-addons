@@ -517,8 +517,8 @@ test("the budget sets PHP's worst case against RAM and names what to fix", async
   const stock = { ...site, current: { ...STOCK_PROFILE } };
   const drifted = { ...stock, domain: "blog.example.com", categoryId: "lite", categoryName: "Lite", drifted: true };
   expect(memoryCard(memory, [stock])).toContain("63 GB of it is 1 site on CloudPanel&#x27;s 250 workers: put it in a category.");
-  expect(memoryCard(memory, [drifted])).toContain("put it back below.");
-  expect(memoryCard(memory, [stock, drifted])).toContain("2 sites on CloudPanel&#x27;s 250 workers: put them in a category, or back in theirs below.");
+  expect(memoryCard(memory, [drifted])).toContain("put it back in PHP sites.");
+  expect(memoryCard(memory, [stock, drifted])).toContain("2 sites on CloudPanel&#x27;s 250 workers: put them in a category, or back in theirs in PHP sites.");
   // Services that alone take more than RAM are over by their whole deficit, PHP or not.
   const crowded = { ...memory, varnishMb: memory.plan.ramMb };
   expect(memoryCard(crowded, [])).toContain(">4.5 GB over</span>");

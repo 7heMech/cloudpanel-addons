@@ -127,20 +127,47 @@ describe("the panel hostname", () => {
     expect(env.cf.writes()).toEqual([]);
   });
 
+  test("is refused before Cloudflare is connected", async () => {
+    const env = setup();
+    await expect(env.act("set-panel-host", { name: "panel.example.com" })).rejects.toThrow("Add a Cloudflare connection first");
+  });
+
   test("is refused for a name a site or redirect domain has", async () => {
     const env = setup();
+    await env.act("save-connection", { token: TOKEN });
     await expect(env.act("set-panel-host", { name: "shop.example.com" })).rejects.toThrow("shop.example.com is a CloudPanel site");
     await env.act("save-redirect", { source: "old.example.com", target: "https://example.com" });
     await expect(env.act("set-panel-host", { name: "old.example.com" })).rejects.toThrow("old.example.com is a redirect domain");
   });
 
-  test("shows a site that took its name later as a problem", async () => {
+  test("shows a site that took its name later as a problem without repeating it or showing Next", async () => {
     const env = setup();
+    await env.act("save-connection", { token: TOKEN });
     await env.act("set-panel-host", { name: "panel.example.com" });
     env.sites.push(site(2, "panel.example.com"));
     const state = await env.act("list");
     expect(state.panelHost!.problem).toContain("CloudPanel has a site panel.example.com");
     expect(state.panelHost!.plan).toBeNull();
+    const html = dashboardContent(state).replace(/<script[\s\S]*?<\/script>/, "");
+    expect(html.split("CloudPanel has a site panel.example.com").length - 1).toBe(1);
+    expect(html).not.toContain("Next: enter panel.example.com");
+  });
+
+  test("exposes an existing CloudPanel custom domain for one-click adoption and keeps Ask-first notices accurate", async () => {
+    const env = setup();
+    await env.act("save-connection", { token: TOKEN });
+    env.custom.current = { name: "cp.example.com", issued: true };
+    const state = await env.act("list");
+    expect(state.panelHost).toBeNull();
+    expect(state.customDomain).toEqual({ name: "cp.example.com", issued: true });
+    const html = dashboardContent(state);
+    expect(html).toContain("cp.example.com");
+    expect(html).toContain("Manage in Cloudflare");
+    expect(html).toContain("dnsAdoptPanelHost");
+
+    const saved = await env.act("set-panel-host", { name: "panel.example.com" });
+    expect(saved.notice).toContain("Turn on Automatic");
+    expect(saved.notice).not.toContain("point to this server");
   });
 
   test("removing it leaves its records in Cloudflare, listed with the records of deleted sites", async () => {

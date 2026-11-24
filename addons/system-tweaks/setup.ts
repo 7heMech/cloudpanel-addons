@@ -48,9 +48,29 @@ export function updatesCheck(status: Pick<UpdatesStatus, "installed" | "enabled"
 }
 
 export const SYSTEM_TWEAKS_SETUP: SetupStep[] = [
-  { id: "panel-cert", level: "secure", title: "Panel certificate", href: `${PAGE}#tweak-replacePanelCert`, check: () => panelCertCheck(panelCertStatus()) },
-  { id: "login-jails", level: "secure", title: "Login jails", href: `${PAGE}#st-failed-logins`, check: () => loginJailsCheck(loginJailsStatus({ run: quick })) },
-  { id: "real-ip", level: "secure", title: "Forged visitor IPs", href: `${PAGE}#tweak-blockForgedRealIp`, check: () => realIpCheck(realIpStatus()) },
-  { id: "phpmyadmin", level: "secure", title: "phpMyAdmin rules", href: `${PAGE}#tweak-protectPhpMyAdmin`, check: () => phpMyAdminCheck(phpMyAdminStatus()) },
-  { id: "updates", level: "secure", title: "Automatic updates", href: `${PAGE}#st-updates`, check: () => updatesCheck(updatesStatus({ run: quick })) },
+  {
+    id: "panel-cert", level: "secure", title: "Port 8443 certificate", href: `${PAGE}#tweak-replacePanelCert`,
+    why: "Replaces the shared self-signed certificate every CloudPanel install ships with on port 8443.",
+    check: () => panelCertCheck(panelCertStatus()),
+  },
+  {
+    id: "login-jails", level: "secure", title: "Login jails", href: `${PAGE}#st-failed-logins`,
+    why: "Bans repeated failed CloudPanel and SSH login attempts with fail2ban.",
+    check: () => loginJailsCheck(loginJailsStatus({ run: quick })),
+  },
+  {
+    id: "real-ip", level: "secure", title: "Forged visitor IPs", href: `${PAGE}#tweak-blockForgedRealIp`,
+    why: "Prevents visitors from spoofing X-Real-IP headers to bypass basic auth, logs or Cloudflare-only rules.",
+    check: () => realIpCheck(realIpStatus()),
+  },
+  {
+    id: "phpmyadmin", level: "secure", title: "phpMyAdmin rules", href: `${PAGE}#tweak-protectPhpMyAdmin`,
+    why: "Keeps phpMyAdmin behind CloudPanel's signed-in session and hides setup and version endpoints.",
+    check: () => phpMyAdminCheck(phpMyAdminStatus()),
+  },
+  {
+    id: "updates", level: "secure", title: "Automatic updates", href: `${PAGE}#st-updates`,
+    why: "Installs distro and CloudPanel PHP security updates automatically via unattended-upgrades.",
+    check: () => updatesCheck(updatesStatus({ run: quick })),
+  },
 ];

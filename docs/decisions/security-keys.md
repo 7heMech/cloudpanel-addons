@@ -89,7 +89,10 @@ hash, so a key added on `panel.example.com:8443` does not work on another
 address of the same panel. Browsers refuse WebAuthn on an IP address and on a
 certificate error, and the action refuses to store an IP origin, so the panel
 needs a hostname with a valid certificate; both injected blocks say so instead
-of offering a button that cannot work.
+of offering a button that cannot work. Setup declares `panel-hostname` as a
+prerequisite for `passkeys`, warns when the browser is on port 8443 or an IP
+address while a custom domain exists, and unlocks enrollment automatically when
+the browser is already on a valid HTTPS hostname such as a Cloudflare Tunnel.
 
 A signature counter that goes backwards is refused as a cloned key. Synced
 passkeys report 0 every time, which is accepted.

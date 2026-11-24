@@ -41,8 +41,11 @@ enable says that a site not proxied through Cloudflare stops answering; a
 selection that would change nothing is reported and not sent. Nothing is
 restored afterwards. A per-site switch acts immediately without confirmation,
 because turning one site off is the ordinary correction after a bulk change.
-"Enable on new sites" is a switch below the table, then the Protocols card,
-and the Hetzner Cloud Firewall card comes last.
+The page uses the shared `.section-shell` to split Cloudflare only (the site
+table with "Enable on new sites" directly under it), Panel gate, Protocols, and
+Cloud firewall when a matching Hetzner Cloud Firewall or netcup firewall card is
+present. Provider cards appear only on that cloud host or when a credential is
+saved, and the Cloud firewall section is omitted when neither is present.
 
 Selection checkboxes stay separate from the per-site switch, and the
 selected-scope actions are unavailable until something is selected. On desktop,
@@ -336,7 +339,9 @@ most a minute behind through Setup's cache.
 
 The page draws a gate that is off from local files alone and then asks the
 `panel-gate` verb for what it needs, so Cloudflare's replies never hold the
-site table back. Those reads run in parallel.
+site table back. Those reads run in parallel. Setup also lists Panel gate as a
+step that requires `dns-connection` and `panel-hostname`, checking only the
+local gate state file.
 
 `bun tests/integration/integration-panel-gate.ts` runs both edits in real
 Nginx in Docker: the custom domain refuses a request without the gate's
@@ -355,7 +360,7 @@ servers have a different firewall API and are not covered.
 The server's id comes from the metadata service,
 `http://169.254.169.254/hetzner/v1/metadata/instance-id`, with a 1.5-second
 deadline; anything but a number there means this is not a Hetzner Cloud
-server, and the card says so and offers nothing. Before a token, the card
+server, and the page omits the card while no token is saved. Before a token, the card
 names the server from `…/metadata/hostname`, its name when it was created, so
 the operator can find its project. Changes ask twice. Once a token is
 connected the id is kept in `hetzner.json`, so a moment's silence
@@ -531,12 +536,12 @@ cannot bring the file back. A page read skips the write while a change holds
 the lock, and when something recorded after the read began. `hetznerSetupState`
 returns that, whether a token is saved, and whether this is Hetzner Cloud
 (`/sys/class/dmi/id/sys_vendor` is `Hetzner`, or a token is saved), without
-asking Hetzner, so the checklist costs no request when a page loads. Setup
-suggests the switches from it, and raises Action needed once a saved token's
-`seenAt` is an hour old: repair reads Hetzner every 15 minutes and records only
-when that works, so four misses in a row are a token Hetzner refuses or a
-Hetzner that does not answer. A null `seenAt` has not been read yet and raises
-nothing.
+asking Hetzner, so the checklist costs no request when a page loads. Setup suggests the switches from it, marks both `hetzner-firewall` and
+`netcup-firewall` as `hostSpecific` so non-matching hosts omit them, and raises
+Action needed once a saved token's `seenAt` is an hour old: repair reads
+Hetzner every 15 minutes and records only when that works, so four misses in a
+row are a token Hetzner refuses or a Hetzner that does not answer. A null
+`seenAt` has not been read yet and raises nothing.
 
 ## Provider firewalls
 

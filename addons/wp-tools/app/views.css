@@ -42,9 +42,10 @@
   .wp-batch .btn { flex: 1 1 0; white-space: nowrap; }
 }
 .wp-jobs { display: grid; gap: 12px; padding: 18px 32px; }
+.wp-jobs-card .wp-jobs { padding: 0; }
 .wp-jobs + .fleet-filter { padding-top: 0; }
 .wp-jobs > .hint { margin: 0; }
-@media (max-width: 940px) { .wp-jobs { padding: 16px 20px; } }
+@media (max-width: 940px) { .wp-jobs { padding: 16px 20px; } .wp-jobs-card .wp-jobs { padding: 0; } }
 .wp-status.is-working .badge::after { content: " · working…"; }
 .wp-card-note { margin: 0; padding: 18px 32px; }
 .wp-card-note + .wp-jobs { padding-top: 0; }

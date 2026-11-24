@@ -150,6 +150,8 @@ export interface DnsState {
   presets: Preset[];
   /** Newest first. */
   log: LogLine[];
+  /** CloudPanel's custom domain, even when DNS does not manage a panel hostname yet. */
+  customDomain: { name: string; issued: boolean } | null;
   panelHost: PanelHostView | null;
 }
 
@@ -582,6 +584,7 @@ class Action {
       token: tokenTemplate(tokenProfiles(policy)),
       presets: PRESETS,
       log: this.files.log().slice(0, PAGE_LOG),
+      customDomain: this.customDomain() ?? null,
       panelHost: this.panelHostView(policy, status.plans, sites),
     };
   }
@@ -1376,11 +1379,15 @@ async function changeVerb(action: Action, verb: DnsVerb, body: Record<string, un
   }
   if (verb === "set-panel-host") {
     const name = body.name == null || body.name === "" ? null : hostname(body.name, "The panel hostname");
+    if (name && !policy.connections.length) failAction("Add a Cloudflare connection first");
     if (name && action.sites().some((site) => site.domain === name)) failAction(`${name} is a CloudPanel site; choose another name for the panel`);
     if (name && policy.redirects.some((redirect) => redirect.source === name)) failAction(`${name} is a redirect domain; choose another name for the panel`);
     next.panelHost = name;
     if (!name) return action.removePanelHost(next);
-    return action.change(next, `DNS points ${name} at this server.`, [name]);
+    const notice = next.automatic
+      ? `DNS points ${name} at this server.`
+      : `Saved ${name}. Turn on Automatic when you are ready for DNS to write the record.`;
+    return action.change(next, notice, [name]);
   }
   if (verb === "save-server") {
     next.server = { ipv4: ipAddress(body.ipv4, 4, "The IPv4 address"), ipv6: ipAddress(body.ipv6, 6, "The IPv6 address") };

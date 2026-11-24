@@ -61,12 +61,11 @@ interface PanelBlock {
   inspect: () => { ok: boolean; text: string; hold?: PanelHold };
 }
 
-/** The Setup checklist's groups, in the order it shows them. */
+/** The Setup checklist's goal-oriented paths, in the order its tabs show them. */
 export const SETUP_LEVELS = {
-  domain: "Connect your domain",
-  secure: "Secure the server",
-  sites: "Run sites",
-  provision: "Provision automatically",
+  domain: "Panel domain & sign-in",
+  secure: "Secure this server",
+  sites: "Automate & run sites",
 } as const;
 export type SetupLevel = keyof typeof SETUP_LEVELS;
 
@@ -74,6 +73,8 @@ export interface SetupCheck {
   state: "done" | "todo" | "na";
   /** One line: what was found, or what is missing. */
   reason: string;
+  /** Optional destination override when the check routes elsewhere, such as /admin/settings without Cloudflare. */
+  href?: string;
 }
 
 /** A step the Setup checklist suggests; an administrator may skip any. */
@@ -84,6 +85,12 @@ export interface SetupStep {
   title: string;
   /** The page, and card, that sets it up. */
   href: string;
+  /** One short sentence explaining why this step matters, shown on the Setup page. */
+  why?: string;
+  /** Step ids that must be done before this step can run; unmet ones lock it inline behind its prerequisite. */
+  requires?: string[];
+  /** Omit from Setup when the check answers `na`, for host-specific cloud vendors such as Hetzner or netcup. */
+  hostSpecific?: true;
   /**
    * Run as root on every addon page an administrator opens, so it reads local
    * state only. To do means the step lacks something it needs, such as a

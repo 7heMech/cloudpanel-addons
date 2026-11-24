@@ -132,11 +132,24 @@ describe("connecting Cloudflare", () => {
     expect(env.cf.calls).toEqual([]);
   });
 
-  // A missing card read as a log that was never added. Empty, it says why.
-  test("the change log shows before DNS has written anything, and says why it is empty", async () => {
-    const state = await setup().act("list");
-    expect(state.log).toEqual([]);
+  // Unconfigured DNS shows only the focused setup card; once connected, the Activity section shows the Change log empty state.
+  test("first run hides empty sections, and once connected the change log says why it is empty", async () => {
+    const env = setup();
+    const fresh = await env.act("list");
+    expect(fresh.log).toEqual([]);
+    const unconfigured = dashboardContent(fresh);
+    expect(unconfigured).toContain("Set up DNS");
+    expect(unconfigured).not.toContain("<h2>Change log</h2>");
+    expect(unconfigured).not.toContain("section-shell");
+
+    await env.connect();
+    const state = await env.act("list");
     const asking = dashboardContent(state);
+    expect(asking).toContain("section-shell");
+    for (const section of ["sites", "redirects", "profiles", "settings", "activity"]) {
+      expect(asking).toContain(`data-section-panel="${section}"`);
+    }
+    expect(asking).toContain('onclick="dnsCheck(this)">Check now</button>');
     expect(asking).toContain("<h2>Change log</h2>");
     expect(asking).toContain("DNS asks first, so it writes nothing until you turn on Automatic.");
     expect(asking).not.toContain("dns-log-table");
@@ -1312,7 +1325,14 @@ describe("wildcard DNS", () => {
       "AAAA *.example.com 2001:db8::10 proxied", "AAAA example.com 2001:db8::10 proxied",
     ]);
     expect(applied.sites.find((entry) => entry.domain === "shop.example.com")!.plan!.wildcard).toBe("*.example.com");
-    expect(dashboardContent(applied)).toContain("*.example.com · Agency");
+    const singleHtml = dashboardContent(applied);
+    expect(singleHtml).toContain("*.example.com");
+    expect(singleHtml).not.toContain("*.example.com · Agency");
+    const multiHtml = dashboardContent({
+      ...applied,
+      connections: [...applied.connections, { ...applied.connections[0]!, id: "cf-2", label: "Second" }],
+    });
+    expect(multiHtml).toContain("*.example.com · Agency");
 
     // A new subdomain joining the default profile makes zero record writes and is ready immediately.
     await env.act("set-default", { profileId: "web" });

@@ -3,17 +3,21 @@
 import { ADDONS, addonHandler, addonNews } from "../addons/catalog";
 import { CLI_VERSION, DEV_VERSION } from "../lib/version";
 import { esc, escJs, htmlResponse } from "../lib/app-http";
-import { JOB_WATCH_JS, renderLayout } from "../lib/app-ui";
+import { JOB_WATCH_JS, SETUP_PATH, renderLayout } from "../lib/app-ui";
 import { mountPath } from "../lib/mount";
 import { type LockState, lockState } from "../lib/root-locks";
 import { UPDATE_PATH, changelogUrl } from "../lib/update-ui";
 import type { CliUpdateInfo } from "../lib/update-check";
 import type { ManagerJobView } from "./action";
+import type { SetupView } from "./setup";
+import { setupPanelHtml } from "./setup-view";
 import { type PanelHold, UPDATES_GUIDE_URL, holdAdvice, holdSummary } from "../lib/panel-holds";
 
 import MANAGER_INDEX_CSS from "./views.css" with { type: "text" };
+import SETUP_PAGE_CSS from "./setup-page.css" with { type: "text" };
 
 import MANAGER_INDEX_JS from "./views.client.js" with { type: "text" };
+import SETUP_PAGE_JS from "./setup-page.client.js" with { type: "text" };
 
 function addonRow(name: string, enabled: boolean, job: ManagerJobView | null, news: { version: string; since: string; seen: string[] }, locks: (addon: string) => LockState): string {
   const spec = ADDONS[name];
@@ -143,7 +147,7 @@ export function indexPage(
     : "";
   const unread = [...enabled, ...available].some((name) => addonNews(name, news.version, news.since, news.seen));
   const readAll = unread ? `<button class="btn" type="button" onclick="readAllNews(this)">Mark all read</button>` : "";
-  const content = `<div class="page-heading"><h1>Addons</h1><div class="page-actions">${readAll}<button class="btn" type="button" onclick="clpSetupReopen(this)">Setup</button><a class="btn" href="${UPDATE_PATH}">Updates</a></div></div>` +
+  const content = `<div class="page-heading"><h1>Addons</h1><div class="page-actions">${readAll}<a class="btn" id="clp-addons-setup-btn" href="${SETUP_PATH}" hidden>Setup</a><a class="btn" href="${UPDATE_PATH}">Updates</a></div></div>` +
     managerJobFailure(options.job ?? null) +
     panelHoldsNotice(options.holds ?? []) +
     managerJobBlock(options.job ?? null, claimed) +
@@ -196,18 +200,33 @@ export function updatePage(
   return managerPage("Update CloudPanel Addons", content, update, options);
 }
 
+export function setupPage(
+  view: SetupView,
+  update?: { current: string; latest: string } | null,
+  options: ManagerPageOptions = {},
+): Response {
+  const content = `<div id="setup-page-root">${setupPanelHtml(view)}</div>`;
+  return managerPage("Setup · CloudPanel Addons", content, update, {
+    ...options,
+    activeNav: "setup",
+    extraCss: SETUP_PAGE_CSS,
+    extraScript: SETUP_PAGE_JS,
+  });
+}
+
 function managerPage(
   title: string,
   content: string,
   update: { current: string; latest: string } | null | undefined,
-  options: ManagerPageOptions,
+  options: ManagerPageOptions & { activeNav?: "addons" | "setup"; extraCss?: string; extraScript?: string },
 ): Response {
   const job = options.job;
   const live = liveManagerJob(job ?? null);
   return htmlResponse(renderLayout(title, content, {
     base: "/addons",
-    css: MANAGER_INDEX_CSS,
-    script: MANAGER_INDEX_JS + JOB_WATCH_JS + (live ? `
+    activeNav: options.activeNav,
+    css: MANAGER_INDEX_CSS + (options.extraCss ?? ""),
+    script: MANAGER_INDEX_JS + JOB_WATCH_JS + (options.extraScript ?? "") + (live ? `
 const managerJobTarget = CLP_ROOT.querySelector('[data-manager-job-status]');
 watchJob('${escJs(live.id)}', managerJobTarget ? managerJobTarget.closest('[data-manager-job-card]') : null, managerJobFinished);
 ` : ""),

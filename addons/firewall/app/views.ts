@@ -1,7 +1,8 @@
 import CLIENT_JS_BODY from "./views.client.js" with { type: "text" };
 import { esc } from "../../../lib/app-http";
 import {
-  FLEET_FOOTER_HTML, FLEET_SELECTION_HTML, FLEET_ROW_SELECTION_JS, fleetFilterHtml, renderLayout,
+  FLEET_FOOTER_HTML, FLEET_SELECTION_HTML, FLEET_ROW_SELECTION_JS, fleetFilterHtml, renderLayout, sectionShellHtml,
+  type SectionTab,
 } from "../../../lib/app-ui";
 import { mountPath } from "../../../lib/mount";
 import type { FirewallPageState } from "./service";
@@ -205,9 +206,7 @@ function hetznerCard(view: FirewallPageState["hetzner"]): string {
         <button class="btn btn-danger" type="button" onclick="removeHetznerToken()">Remove token</button>
       </div>`;
   const card = (body: string, headerActions = "", dialogs = "") => providerCard("hetzner", body, headerActions, dialogs);
-  if (view.state === "absent") {
-    return card('<p class="hz-absent">This server is not a Hetzner Cloud server, so there is nothing to set here. Dedicated (Robot) servers are not covered.</p>');
-  }
+  if (view.state === "absent") return "";
   if (view.state === "disconnected") {
     const holder = view.serverName ? `<strong>${esc(view.serverName)}</strong>` : "this server";
     return card(`<div class="hz-connect"><p class="hint">Connect an API token from the Hetzner project that holds ${holder}; then turn on the firewalls you want.</p>
@@ -240,12 +239,31 @@ function netcupCard(view: FirewallPageState["netcup"]): string {
   return card(`${problems("netcup", view)}${roleRows("netcup", view)}<p class="hint hz-foot">Connected to netcup; this server is ${esc(view.serverName)} there. ${others}</p>`, signInButtons);
 }
 
-/** On a netcup server the Hetzner card has nothing to say, and the other way round. */
-function providerCards(state: FirewallPageState): string {
-  const netcup = netcupCard(state.netcup);
-  const hetzner = netcup && state.hetzner.state === "absent" ? "" : hetznerCard(state.hetzner);
-  const review = state.hetzner.state === "connected" || state.netcup.state === "connected" ? REVIEW_DIALOG : "";
-  return `${netcup}${hetzner}${review}`;
+function panelGateAttention(view: FirewallPageState["panelGate"]): "bad" | "warn" | undefined {
+  if ("error" in view) return "bad";
+  if ((view.on && view.drift.length > 0) || view.leftover) return "warn";
+  return undefined;
+}
+
+function cloudProviderAttention(view: FirewallPageState["hetzner"] | FirewallPageState["netcup"]): "bad" | "warn" | undefined {
+  if (view.state === "error") return "bad";
+  if (view.state !== "connected") return undefined;
+  if (
+    view.blocked
+    || view.sshClosed.length > 0
+    || view.rangesProblem
+    || ROLES.some((role) => {
+      const info = view.roles[role];
+      return info.stillOpen.length > 0 || !info.current || (info.on && Boolean(info.open));
+    })
+  ) return "warn";
+  return undefined;
+}
+
+function cloudAttention(state: FirewallPageState): "bad" | "warn" | undefined {
+  const tones = [cloudProviderAttention(state.netcup), cloudProviderAttention(state.hetzner)];
+  if (tones.includes("bad")) return "bad";
+  return tones.includes("warn") ? "warn" : undefined;
 }
 
 export function dashboardView(state: FirewallPageState): string {
@@ -264,10 +282,7 @@ export function dashboardView(state: FirewallPageState): string {
       </td>
     </tr>`).join("");
 
-  return `
-    <div class="page-heading">
-      <div><h1>Firewall</h1><p>CloudPanel's “Allow traffic from Cloudflare only” setting for every site, a protocol for each rule on its Firewall page, a gate in front of the panel, and Hetzner Cloud or netcup firewalls that admit only Cloudflare.</p></div>
-    </div>
+  const sitesPanel = `
     <div class="card card-table">
       ${total === 0
         ? '<div class="empty">No sites found in CloudPanel.</div>'
@@ -293,5 +308,23 @@ export function dashboardView(state: FirewallPageState): string {
       <div><h2>Enable on new sites</h2>
         <p class="hint">A site created from now on allows Cloudflare only, seconds after CloudPanel creates it. A site you turn off here is never turned back on.</p></div>
       <label class="switch"><input id="automatic-policy" type="checkbox" aria-label="Enable Cloudflare-only access on new sites" ${state.autoEnableNewSites ? "checked" : ""} onchange="setAutomatic(this)"><span></span></label>
-    </div>${protocolsCard(state.protocols)}${panelGateCard(state.panelGate)}${providerCards(state)}`;
+    </div>`;
+
+  const netcup = netcupCard(state.netcup);
+  const hetzner = hetznerCard(state.hetzner);
+  const cloudPanel = `${netcup}${hetzner}`;
+  const review = state.hetzner.state === "connected" || state.netcup.state === "connected" ? REVIEW_DIALOG : "";
+
+  const tabs: SectionTab[] = [
+    { id: "sites", label: "Cloudflare only", count: total, content: sitesPanel },
+    { id: "panel-gate", label: "Panel gate", attention: panelGateAttention(state.panelGate), content: panelGateCard(state.panelGate) },
+    { id: "protocols", label: "Protocols", attention: "error" in state.protocols ? "bad" : undefined, content: protocolsCard(state.protocols) },
+    ...(cloudPanel ? [{ id: "cloud", label: "Cloud firewall", attention: cloudAttention(state), content: cloudPanel }] : []),
+  ];
+
+  return `
+    <div class="page-heading">
+      <div><h1>Firewall</h1><p>CloudPanel's “Allow traffic from Cloudflare only” setting for every site, a protocol for each rule on its Firewall page, a gate in front of the panel, and Hetzner Cloud or netcup firewalls that admit only Cloudflare.</p></div>
+    </div>
+    ${sectionShellHtml("firewall", "Firewall sections", tabs, "sites")}${review}`;
 }

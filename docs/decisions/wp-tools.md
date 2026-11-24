@@ -109,17 +109,20 @@ time and bounded error text. Pending sites are handled on subsequent passes.
 Every Varnish route remains administrator-only; the sign-in route's role
 exception does not grant plugin-management access.
 
-The page opens with one sites table -- Site, CLP Varnish Cache, MainWP Child,
-Sign in -- since sign-in is the most-used action and the one the addon started
-with; each status has its Install, Activate, Connect or Retry beside it, on one
-line on a wide screen, so the table spreads across the page instead of stacking
-each cell. A site that has not been checked shows Not checked and no button:
-until a check says the plugin is missing or inactive, Install is a guess, and
-the same holds for MainWP's Connect. With a Dashboard on this server the table
-also gets a selection column and **Connect selected to MainWP** and **Connect
-all unconnected** above it, for sites checked or not; see Background jobs. On a
-phone the two batch buttons share a line under shorter labels. The two automation policies are set once, so they share one card
-below the table. A row has no automation switch of its own: Varnish automation
+The page uses the shared `.section-shell` to split Sites, New sites, and
+Settings, with active Varnish and MainWP job progress cards shown above the
+tabs so background work stays visible from any section. Sites opens with one
+sites table -- Site, CLP Varnish Cache, MainWP Child, Sign in -- since sign-in
+is the most-used action and the one the addon started with; each status has its
+Install, Activate, Connect or Retry beside it, on one line on a wide screen, so
+the table spreads across the page instead of stacking each cell. A site that has
+not been checked shows Not checked and no button: until a check says the plugin
+is missing or inactive, Install is a guess, and the same holds for MainWP's
+Connect. With a Dashboard on this server the table also gets a selection column
+and **Connect selected to MainWP** and **Connect all unconnected** above it, for
+sites checked or not; see Background jobs. On a phone the two batch buttons
+share a line under shorter labels. The two automation policies and CloudPanel's
+pages switches live under Settings. A row has no automation switch of its own: Varnish automation
 acts only on a site it has never seen, so a listed site has normally been
 handled by a pass already, and MainWP automation acts on every site. The
 page draws only controls that do something: the MainWP column and switch

@@ -16,6 +16,15 @@ export function newSiteMailCheck(state: SmtpSetupState): SetupCheck {
 }
 
 export const SMTP_SETUP: SetupStep[] = [
-  { id: "smtp-relay", level: "sites", title: "Outgoing mail relay", href: "/addons/smtp/", check: () => relayCheck(smtpSetupState()) },
-  { id: "smtp-new-sites", level: "provision", title: "Mail for new sites", href: "/addons/smtp/#smtp-profiles", check: () => newSiteMailCheck(smtpSetupState()) },
+  {
+    id: "smtp-relay", level: "sites", title: "Outgoing mail relay", href: "/addons/smtp/",
+    why: "Routes transactional mail through a real SMTP relay instead of sending directly from the server IP.",
+    check: () => relayCheck(smtpSetupState()),
+  },
+  {
+    id: "smtp-new-sites", level: "sites", title: "Mail for new sites", href: "/addons/smtp/#smtp-profiles",
+    requires: ["smtp-relay"],
+    why: "Enrolls newly created sites into a default mail relay profile automatically.",
+    check: () => newSiteMailCheck(smtpSetupState()),
+  },
 ];

@@ -53,6 +53,13 @@ test("new-site work runs DNS before SMTP Relay", () => {
   expect(order.indexOf("dns")).toBeLessThan(order.indexOf("smtp"));
 });
 
+test("server and panel addons appear before site tools in catalog order", () => {
+  const foundational = ["system-tweaks", "firewall", "dns", "security-keys", "panel-tweaks", "resource-limits", "smtp"];
+  const siteTools = ["wp-tools", "stager", "maintenance", "git", "instatic", "terminal"];
+  expect(ADDON_NAMES.slice(0, foundational.length)).toEqual(foundational);
+  expect(ADDON_NAMES.slice(foundational.length)).toEqual(siteTools);
+});
+
 test("imports point from what changes most to what changes least", () => {
   const imports = (dir: string) => [...new Bun.Glob(`${dir}/**/*.ts`).scanSync(REPO)].flatMap((file) =>
     [...readFileSync(join(REPO, file), "utf8").matchAll(/from "(\.[^"]+)"/g)]

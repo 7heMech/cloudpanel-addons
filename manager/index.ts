@@ -8,6 +8,7 @@ import type { CliUpdateInfo } from "../lib/update-check";
 import { managerAction, setupAction } from "./service";
 import { PANEL_USER_NAME_RE } from "../lib/panel-users";
 import { setupPanelHtml, setupShows } from "./setup-view";
+import { applyRequestOrigin, proxyHostFromRequest } from "./setup";
 
 /**
  * Every route here is already behind the SSO gate and the administrator gate at
@@ -40,8 +41,8 @@ export async function handleManagerRoute(
     }
     const result = await setupAction(user, change, req.method === "GET" && new URL(req.url).searchParams.get("fresh") === "1");
     if (!result.ok || !result.data) return jsonResponse({ ok: false, error: result.ok ? "no answer" : result.error }, 502);
-    const view = result.data;
-    return jsonResponse({ ok: true, data: { show: setupShows(view), attention: view.actions.length > 0, html: setupPanelHtml(view) } });
+    const view = applyRequestOrigin(result.data, proxyHostFromRequest(req));
+    return jsonResponse({ ok: true, data: { show: setupShows(view), attention: view.actions.length > 0, html: setupPanelHtml(view), view } });
   }
 
   if (path === "/api/update" && req.method === "GET") {

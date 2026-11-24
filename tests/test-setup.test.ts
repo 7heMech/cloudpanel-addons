@@ -12,7 +12,7 @@ import { defaultServerCheck, defaultServerProblems } from "../addons/system-twea
 import { seededPolicy } from "../addons/dns/presets";
 import { autoSslCheck } from "../addons/panel-tweaks/setup";
 import { hetznerSetupState } from "../addons/firewall/hetzner";
-import { HETZNER_QUIET_MS, hetznerActions, hetznerCheck } from "../addons/firewall/setup";
+import { HETZNER_QUIET_MS, hetznerActions, hetznerCheck, panelGateCheck } from "../addons/firewall/setup";
 import { newSiteCategoryCheck } from "../addons/resource-limits/setup";
 import { administratorKeys } from "../addons/security-keys/action";
 import { passkeysCheck } from "../addons/security-keys/setup";
@@ -22,7 +22,8 @@ import type { LoginJailsStatus } from "../addons/system-tweaks/login-jails";
 import type { SetupStep } from "../lib/addon-definition";
 import { issuedFor, panelCustomDomainCertificate } from "../lib/panel-custom-domain";
 import {
-  actionItems, cachedChecks, CORE_SETUP, changeSetupPrefs, readSetupPrefs, remoteBackupsCheck, setupOff, setupStepIds, setupSteps, setupView, switchSetup,
+  actionItems, applyRequestOrigin, cachedChecks, CORE_SETUP, changeSetupPrefs, proxyHostFromRequest,
+  readSetupPrefs, remoteBackupsCheck, setupOff, setupStepIds, setupSteps, setupView, switchSetup,
 } from "../manager/setup";
 import { setupPanelHtml, setupShows, setupSuggests } from "../manager/setup-view";
 
@@ -72,6 +73,13 @@ describe("each step's verdict", () => {
     expect(passkeysCheck({ admins: ["admin", "ops"], keyed: ["ops"], allowed: true })).toEqual({ state: "done", reason: "ops has a security key" });
     expect(passkeysCheck({ admins: ["admin"], keyed: [], allowed: true }).state).toBe("todo");
     expect(passkeysCheck({ admins: ["admin"], keyed: ["admin"], allowed: false }).state).toBe("todo");
+    expect(passkeysCheck({ admins: ["admin"], keyed: [], allowed: true }, null).reason).toContain("panel hostname");
+    expect(passkeysCheck({ admins: ["admin"], keyed: [], allowed: true }, { name: "panel.example.com", issued: false }).reason).toContain("certificate");
+  });
+
+  test("panel gate reports done once active and todo while off", () => {
+    expect(panelGateCheck({ on: true, hostname: "panel.example.com" })).toEqual({ state: "done", reason: "Cloudflare Access sits in front of panel.example.com" });
+    expect(panelGateCheck({ on: false, hostname: null }).state).toBe("todo");
   });
 
   test("mail relay, and mail for new sites", () => {
@@ -102,6 +110,8 @@ describe("each step's verdict", () => {
     expect(connectionCheck(state({ reports: [{ id: "cf-1", active: false, error: "Cloudflare: Invalid access token (9109)" }] })))
       .toEqual({ state: "todo", reason: "Cloudflare: Invalid access token (9109)" });
     expect(panelHostCheck(undefined, null).reason).toBe("CloudPanel has no custom domain");
+    expect(panelHostCheck(undefined, null, false)).toMatchObject({ state: "todo", href: "/admin/settings" });
+    expect(panelHostCheck(undefined, null, false).reason).toContain("Custom Domain");
     expect(panelHostCheck(undefined, "panel.example.com").reason).toContain("Enter panel.example.com");
     expect(panelHostCheck({ name: "panel.example.com", issued: false }, "panel.example.com").state).toBe("todo");
     expect(panelHostCheck({ name: "cp.example.org", issued: true }, null)).toEqual({ state: "done", reason: "CloudPanel answers at cp.example.org" });
@@ -185,7 +195,7 @@ describe("collecting the checklist", () => {
       core: [step("core", "sites", () => ({ state: "todo", reason: "core" }))],
       addons: [
         { name: "a", title: "Addon A", enabled: true, steps: [
-          step("late", "provision", () => ({ state: "done", reason: "ok" })),
+          step("late", "sites", () => ({ state: "done", reason: "ok" })),
           step("skip-me", "secure", () => ({ state: "todo", reason: "x" })),
           step("done-anyway", "secure", () => ({ state: "done", reason: "y" })),
           step("broken", "domain", () => { throw new Error("unreadable"); }),
@@ -264,6 +274,100 @@ describe("collecting the checklist", () => {
     const settled = { off: false, hidden: false, actions: [], steps: [{ ...item, state: "skipped" as const }] };
     expect(setupSuggests(settled)).toBe(false);
     expect(setupPanelHtml(settled)).toContain('data-setup-unskip="one"');
+  });
+
+  test("unmet prerequisites lock steps inline behind their prerequisite and hostSpecific na steps are omitted", async () => {
+    let connected = false;
+    const source = {
+      core: [],
+      addons: [{
+        name: "a", title: "Addon A", enabled: true, steps: [
+          step("same-branch", "domain", () => ({ state: "todo", reason: "off" }), { requires: ["connect"] }),
+          step("connect", "domain", () => connected ? { state: "done", reason: "connected" } : { state: "todo", reason: "not connected" }),
+          step("gate", "secure", () => ({ state: "todo", reason: "off" }), { requires: ["connect"] }),
+          step("cloud-only", "secure", () => ({ state: "na", reason: "not on cloud" }), { hostSpecific: true }),
+          step("normal-na", "sites", () => ({ state: "na", reason: "n/a" })),
+        ],
+      }],
+    };
+    const blocked = await setupSteps({}, source);
+    // Same-path dependent is placed right below its prerequisite regardless of catalog order.
+    expect(blocked.map((entry) => [entry.id, entry.state])).toEqual([
+      ["connect", "todo"],
+      ["same-branch", "blocked"],
+      ["gate", "blocked"],
+      ["normal-na", "na"],
+    ]);
+    expect(blocked.find((entry) => entry.id === "gate")!.blockedBy).toEqual([{ id: "connect", title: "connect" }]);
+    const html = setupPanelHtml({ off: false, hidden: false, actions: [], steps: blocked });
+    expect(html).not.toContain("Unavailable");
+    expect(html).toContain('data-setup-branch-of="connect"');
+    expect(html).toContain('data-setup-jump="connect"');
+    expect(html).toContain("Needs connect");
+    expect(html).toContain("setup-go is-up");
+    expect(html).toContain("setup-go is-out");
+    expect(html).toContain("Guides");
+    expect(html).not.toMatch(/\d+ of \d+|\d+\/\d+/);
+
+    connected = true;
+    const ready = await setupSteps({}, source);
+    expect(ready.map((entry) => [entry.id, entry.state])).toEqual([
+      ["connect", "done"],
+      ["same-branch", "todo"],
+      ["gate", "todo"],
+      ["normal-na", "na"],
+    ]);
+    expect(ready.find((entry) => entry.id === "gate")!.blockedBy).toBeUndefined();
+  });
+
+  test("an external HTTPS tunnel or reverse proxy satisfies Panel hostname, unblocks Passkeys and skips Panel gate", () => {
+    const req = (headers: Record<string, string>) => new Request("http://unix/setup", { headers });
+    expect(proxyHostFromRequest(req({ host: "clp-stg.7he.dev", "x-forwarded-proto": "https" }))).toBe("clp-stg.7he.dev");
+    expect(proxyHostFromRequest(req({ "x-forwarded-host": "clp-stg.7he.dev", "cf-ray": "abc123" }))).toBe("clp-stg.7he.dev");
+    expect(proxyHostFromRequest(req({ host: "panel.example.com:8443", "x-forwarded-proto": "https" }))).toBeNull();
+    expect(proxyHostFromRequest(req({ host: "203.0.113.10", "x-forwarded-proto": "https" }))).toBeNull();
+    expect(proxyHostFromRequest(req({ host: "localhost", "x-forwarded-proto": "https" }))).toBeNull();
+    expect(proxyHostFromRequest(req({ host: "clp-stg.7he.dev", "x-forwarded-proto": "http" }))).toBeNull();
+
+    const freshView = {
+      off: false, hidden: false, actions: [], skippedIds: [],
+      context: { customDomain: null, dnsConnected: false, dnsAutomatic: false, dnsPanelHost: null, dnsZones: [], serverIps: { ipv4: null, ipv6: null } },
+      steps: [
+        { id: "dns-connection", level: "domain" as const, title: "Connect DNS", href: "/addons/dns/#dns-connection", addon: { name: "dns", title: "DNS", enabled: true }, state: "todo" as const, reason: "No Cloudflare connection" },
+        { id: "panel-hostname", level: "domain" as const, title: "Panel hostname", href: "/admin/settings", addon: { name: "dns", title: "DNS", enabled: true }, state: "todo" as const, reason: "CloudPanel has no custom domain" },
+        { id: "panel-gate", level: "domain" as const, title: "Panel gate", href: "/addons/firewall/#panel-gate-card", requires: ["dns-connection", "panel-hostname"], addon: { name: "firewall", title: "Firewall", enabled: true }, state: "blocked" as const, blockedBy: [{ id: "dns-connection", title: "Connect DNS" }, { id: "panel-hostname", title: "Panel hostname" }], reason: "Needs Connect DNS and Panel hostname first" },
+        { id: "passkeys", level: "domain" as const, title: "Passkeys for administrators", href: "/security", requires: ["panel-hostname"], addon: { name: "security-keys", title: "Security Keys", enabled: true }, state: "blocked" as const, blockedBy: [{ id: "panel-hostname", title: "Panel hostname" }], reason: "Needs Panel hostname first" },
+      ],
+    };
+    const tunnel = applyRequestOrigin(freshView, "clp-stg.7he.dev");
+    expect(tunnel.context?.proxyHost).toBe("clp-stg.7he.dev");
+    expect(tunnel.steps.find((step) => step.id === "panel-hostname")).toMatchObject({ state: "done", reason: "CloudPanel answers at clp-stg.7he.dev via a reverse proxy or tunnel" });
+    expect(tunnel.steps.find((step) => step.id === "passkeys")).toMatchObject({ state: "todo", reason: "No administrator has a security key yet" });
+    expect(tunnel.steps.find((step) => step.id === "panel-gate")).toMatchObject({ state: "na" });
+    expect(setupPanelHtml(tunnel)).toContain("https://clp-stg.7he.dev");
+
+    // In the guided Cloudflare Panel hostname step, omit the redundant plain-text finding line above step 1 and link straight to /admin/settings with copy.
+    const guidedHtml = setupPanelHtml({
+      ...freshView,
+      context: { ...freshView.context, dnsConnected: true, dnsAutomatic: true, dnsPanelHost: "k7m2p9x4.example.com" },
+    });
+    const panelStart = guidedHtml.indexOf('data-setup-panel="panel-hostname"');
+    const panelCard = guidedHtml.slice(panelStart, guidedHtml.indexOf("data-setup-panel=\"panel-gate\"", panelStart));
+    expect(panelCard).toContain("Copy &amp; open Custom Domain");
+    expect(panelCard).toContain('href="/admin/settings"');
+    expect(panelCard).not.toContain('class="setup-finding-line"');
+
+    // Skipping Passkeys on a tunnel box stays skipped.
+    const skippedTunnel = applyRequestOrigin({ ...freshView, skippedIds: ["passkeys"] }, "clp-stg.7he.dev");
+    expect(skippedTunnel.steps.find((step) => step.id === "passkeys")!.state).toBe("skipped");
+
+    // An existing CloudPanel custom domain (even unissued) takes precedence over proxyHost.
+    const withCustom = applyRequestOrigin({
+      ...freshView,
+      context: { ...freshView.context, customDomain: { name: "cp.example.com", issued: false } },
+    }, "clp-stg.7he.dev");
+    expect(withCustom.steps.find((step) => step.id === "panel-hostname")!.state).toBe("todo");
+    expect(withCustom.steps.find((step) => step.id === "passkeys")!.state).toBe("blocked");
   });
 });
 

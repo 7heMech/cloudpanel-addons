@@ -1,6 +1,6 @@
 import { esc } from "../../../lib/app-http";
 import {
-  JOB_PROGRESS_JS, TWEAK_ROW_JS, jobProgressHtml, renderLayout, sinceText,
+  JOB_PROGRESS_JS, TWEAK_ROW_JS, jobProgressHtml, renderLayout, sectionShellHtml, sinceText, type SectionTab,
 } from "../../../lib/app-ui";
 import { mountPath } from "../../../lib/mount";
 import type { PanelTweaks, PanelTweaksState } from "../action";
@@ -29,7 +29,7 @@ export function layout(
 
 interface TweakCopy {
   key: keyof PanelTweaks;
-  category: "Sites" | "Panel";
+  category: "Sites" | "Panel" | "Branding";
   title: string;
   description: string;
   /** The switch this one depends on: off with it, and unusable until it is on. */
@@ -87,7 +87,7 @@ const COPY: TweakCopy[] = [
   },
   {
     key: "branding",
-    category: "Panel",
+    category: "Branding",
     title: "Theme & Branding",
     description: "Your own logos, favicon, CSS and footer on every CloudPanel page, the login page included. Switching it off keeps the settings.",
   },
@@ -159,6 +159,28 @@ function previewCard(state: PanelTweaksState): string {
 }
 
 export function dashboardView(state: PanelTweaksState, branding: Branding = DEFAULT_BRANDING): string {
+  const sitesPanel = `
+    <div class="card" id="pt-sites">
+      <div class="card-header"><h2>Sites</h2></div>
+      <div class="tweak-list">${tweakList(state, "Sites")}
+      </div>
+    </div>${previewCard(state)}`;
+  const panelPanel = `
+    <div class="card">
+      <div class="card-header"><h2>Whole panel</h2></div>
+      <div class="tweak-list">${tweakList(state, "Panel")}
+      </div>
+    </div>`;
+  const brandingPanel = `
+    <div class="card" id="pt-branding">
+      <div class="tweak-list">${tweakList(state, "Branding")}
+      </div>
+    </div>${brandingCard(branding, state.tweaks.branding)}`;
+  const tabs: SectionTab[] = [
+    { id: "sites", label: "Sites", content: sitesPanel },
+    { id: "panel", label: "Whole panel", content: panelPanel },
+    { id: "branding", label: "Theme & Branding", content: brandingPanel },
+  ];
   return `
     <div class="page-heading">
       <div>
@@ -166,14 +188,5 @@ export function dashboardView(state: PanelTweaksState, branding: Branding = DEFA
         <p>Optional improvements to CloudPanel's sites, dashboard and login.</p>
       </div>
     </div>
-    <div class="card" id="pt-sites">
-      <div class="card-header"><h2>Sites</h2></div>
-      <div class="tweak-list">${tweakList(state, "Sites")}
-      </div>
-    </div>${previewCard(state)}
-    <div class="card">
-      <div class="card-header"><h2>Whole panel</h2></div>
-      <div class="tweak-list">${tweakList(state, "Panel")}
-      </div>
-    </div>${brandingCard(branding, state.tweaks.branding)}`;
+    ${sectionShellHtml("panel-tweaks", "Panel Tweaks sections", tabs, "sites")}`;
 }

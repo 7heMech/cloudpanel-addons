@@ -725,6 +725,10 @@ function dnsSavePanelHost(event) {
   dnsPost('/api/panel-host', { name: name });
 }
 
+function dnsAdoptPanelHost(name) {
+  dnsPost('/api/panel-host', { name: name });
+}
+
 async function dnsRemovePanelHost() {
   const viaWildcard = Boolean(dnsState.panelHost.plan && dnsState.panelHost.plan.wildcard);
   const accepted = await confirmAction({

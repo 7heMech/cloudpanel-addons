@@ -157,9 +157,82 @@ export { JOB_PROGRESS_JS };
 import SETUP_STYLE from "./assets/setup.css" with { type: "text" };
 import SETUP_JS from "./assets/setup.client.js" with { type: "text" };
 
-const SETUP_CHIP = `<button class="clp-addon-tool" id="clp-setup-chip" type="button" hidden aria-expanded="false" aria-controls="clp-setup-panel" onclick="clpSetupToggle(this)">Setup<span class="clp-setup-dot" aria-hidden="true"></span><span class="clp-setup-badge" aria-hidden="true">!</span><span class="visually-hidden clp-setup-badge-text">: action needed</span></button>`;
-const SETUP_NAV = `<button class="clp-addon-primary-link clp-setup-nav" id="clp-setup-nav" type="button" hidden aria-expanded="false" aria-controls="clp-setup-panel" onclick="clpSetupToggle(this)">Setup<span class="clp-setup-dot" aria-hidden="true"></span><span class="clp-setup-badge" aria-hidden="true">!</span><span class="visually-hidden clp-setup-badge-text">: action needed</span></button>`;
-const SETUP_PANEL = `<div id="clp-setup-panel" role="dialog" aria-labelledby="clp-setup-title" tabindex="-1" hidden></div>`;
+export const SETUP_PATH = "/addons/setup";
+
+function setupLinkHtml(kind: "chip" | "nav", active: boolean): string {
+  const attrs = active ? ' aria-current="page"' : " hidden";
+  const cls = kind === "chip"
+    ? `clp-addon-tool${active ? " is-active" : ""}`
+    : `clp-addon-primary-link clp-setup-nav${active ? " is-active" : ""}`;
+  const id = kind === "chip" ? "clp-setup-chip" : "clp-setup-nav";
+  return `<a class="${cls}" id="${id}" href="${SETUP_PATH}"${attrs}>Setup<span class="clp-setup-dot" aria-hidden="true"></span><span class="clp-setup-badge" aria-hidden="true">!</span><span class="visually-hidden clp-setup-badge-text">: action needed</span></a>`;
+}
+
+export type BadgeTone = "ok" | "warn" | "bad" | "info" | "plain";
+
+export function badgeHtml(text: string, tone: BadgeTone = "plain"): string {
+  const state = tone === "plain" ? "" : ` tone-${tone}`;
+  return `<span class="badge${state}">${esc(text)}</span>`;
+}
+
+export interface SettingRow {
+  key: string;
+  title: string;
+  /** One paragraph, or a line each. */
+  description: string | string[];
+  /** The switch's state; a row with `control` instead has none. */
+  checked?: boolean;
+  disabled?: boolean;
+  onchange?: string;
+  /** What sits where the switch would, such as a select. */
+  control?: string;
+  extra?: string;
+}
+
+export function settingRowHtml(row: SettingRow): string {
+  const note = `tweak-note-${row.key}`;
+  const control = row.control ?? `
+            <label class="switch" title="${esc(row.title)}">
+              <input type="checkbox" data-setting="${esc(row.key)}" onchange="${row.onchange}"${row.checked ? " checked" : ""}
+                ${row.disabled ? "disabled " : ""}aria-label="${esc(row.title)}">
+              <span></span>
+            </label>`;
+  return `
+      <div class="tweak-row" id="tweak-${esc(row.key)}">
+        <div class="tweak-body">
+          <div class="tweak-heading">
+            <h3>${esc(row.title)}<button class="tweak-more" type="button" aria-expanded="false"
+              aria-controls="${note}" aria-label="What ${esc(row.title.toLowerCase())} does"
+              onclick="toggleNote(this)"></button></h3>${control}
+          </div>
+          <div class="tweak-note" id="${note}">${[row.description].flat().map((line) => `<p>${esc(line)}</p>`).join("")}</div>${row.extra ?? ""}
+        </div>
+      </div>`;
+}
+
+export interface SectionTab {
+  id: string;
+  label: string;
+  count?: number;
+  attention?: "warn" | "bad";
+  content: string;
+}
+
+/**
+ * Shared view switcher for multi-section addons: a sticky left rail in the
+ * margin on wide screens (1400px+) and an underline tab strip below that.
+ */
+export function sectionShellHtml(id: string, label: string, tabs: SectionTab[], activeId?: string): string {
+  const initial = activeId && tabs.some((tab) => tab.id === activeId) ? activeId : tabs[0]?.id ?? "";
+  const links = tabs.map((tab) => {
+    const active = tab.id === initial;
+    const dot = tab.attention ? `<span class="section-dot tone-${tab.attention}" aria-hidden="true"></span>` : "";
+    const count = tab.count !== undefined ? `<span class="section-count">${tab.count}</span>` : "";
+    return `<a class="section-link${active ? " is-active" : ""}" href="#${esc(tab.id)}" data-section-tab="${esc(tab.id)}"${active ? ' aria-current="page"' : ""}>${esc(tab.label)}${dot}${count}</a>`;
+  }).join("");
+  const panels = tabs.map((tab) => `<section class="section-panel" data-section-panel="${esc(tab.id)}"${tab.id === initial ? "" : " hidden"}>${tab.content}</section>`).join("");
+  return `<div class="section-shell" data-section-shell="${esc(id)}" data-default-section="${esc(initial)}"><nav class="section-nav" aria-label="${esc(label)}">${links}</nav><div class="section-panels">${panels}</div></div>`;
+}
 
 interface SiteJobProgress {
   id: string;
@@ -193,6 +266,8 @@ interface Chrome extends AddonChrome {
   updateNotice?: { current: string; latest: string } | null;
   /** False for pages reached by a site manager. */
   admin?: boolean;
+  /** Highlights the Setup header link instead of Addons on /addons/setup. */
+  activeNav?: "addons" | "setup";
   site?: SiteContext & { activeSlug: string };
 }
 
@@ -254,7 +329,8 @@ export function faviconHtml(logos: PanelLogos | null): string {
 }
 
 export function renderLayout(title: string, content: string, chrome: Chrome): string {
-  const isAddonsRoute = chrome.base === "/addons" || chrome.base.startsWith("/addons/");
+  const isSetupRoute = chrome.activeNav === "setup";
+  const isAddonsRoute = !isSetupRoute && (chrome.base === "/addons" || chrome.base.startsWith("/addons/"));
   // A site-scoped page belongs to the site, so it highlights Sites; it is not
   // somewhere else in the panel just because an addon renders it.
   const primaryNav = [
@@ -294,11 +370,11 @@ ${logosHtml(panelLogos())}
     </a>
     <nav class="clp-addon-primary-nav" aria-label="${esc("CloudPanel navigation")}">
 ${primaryNav}
-      ${chrome.admin !== false ? SETUP_NAV + rootShellLink(mountPath("terminal"), 'class="clp-addon-primary-link clp-root-shell-nav" data-clp-root-shell hidden', "Root") : ""}
+      ${chrome.admin !== false ? setupLinkHtml("nav", isSetupRoute) + rootShellLink(mountPath("terminal"), 'class="clp-addon-primary-link clp-root-shell-nav" data-clp-root-shell hidden', "Root") : ""}
     </nav>
     ${chrome.updateNotice ? updateNoticeHtml(chrome.updateNotice.latest) : ""}
     <div class="clp-addon-header-tools">
-      ${chrome.admin !== false ? SETUP_CHIP : ""}
+      ${chrome.admin !== false ? setupLinkHtml("chip", isSetupRoute) : ""}
       <button class="clp-addon-tool" id="theme-switch" type="button" onclick="toggleTheme()" aria-label="Switch to dark mode" aria-pressed="false">
         ${THEME_SWITCH_ICONS}
       </button>
@@ -322,7 +398,6 @@ ${primaryNav}
 </header>
 <main>${siteHeader}${FLASH_HTML}${viewRoot(content)}</main>
 ${CONFIRM_HTML}
-${chrome.admin !== false ? SETUP_PANEL : ""}
 <footer class="clp-addon-footer">
   <a href="https://github.com/7heMech/cloudpanel-addons/issues" target="_blank" rel="noopener noreferrer">Report an addon issue</a>
   <a href="https://github.com/7heMech/cloudpanel-addons" target="_blank" rel="noopener noreferrer">Star addons on GitHub</a>

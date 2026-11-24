@@ -6,43 +6,45 @@ Addons, or run `clp-addons enable dns`.
 
 ## Set up
 
-Until Cloudflare is connected, the DNS page opens with these steps as a
-checklist.
+Until Cloudflare is connected, the DNS page opens with a first-run setup card.
+Once connected, the page splits into **Sites**, **Redirects**, **Profiles**,
+**Settings**, and **Activity**.
 
 1. **Connect Cloudflare.** Open DNS and choose **Connect Cloudflare**. **Create
    token in Cloudflare** opens Cloudflare's token form. Check the permissions
-   listed beside the link are there. Pick the accounts and zones there (All zones
-   also covers zones you add later), limit it to the server addresses shown
-   under Client IP Address Filtering (the clipboard icon copies them
-   space-separated, as that field takes them), create the token, and paste it back. DNS
-   finds the accounts and zones it reaches by itself. Add more connections for
+   listed beside the link are there. Pick the accounts and zones there, limit
+   it to the server addresses shown under Client IP Address Filtering using the
+   clipboard icon, create the token, and paste it back. DNS finds the accounts
+   and zones it reaches by itself. Add more connections under **Settings** for
    other Cloudflare logins.
-2. **Mailcow, if you use it.** Under **Settings**, set Mailcow's hostname,
-   such as `mail.example.com` (it is also the MX target), a read-write API key
-   (limit it to this server's IP in Mailcow), how new domains get a DKIM key, and
+2. **Mailcow, if you use it.** Open **Mailcow** under **Settings** and set
+   Mailcow's hostname, such as `mail.example.com`, a read-write API key limited
+   to this server's IP in Mailcow, how new domains get a DKIM key, and
    optionally a shared mailbox. If SMTP Relay already sends through Mailcow,
    **Fill from SMTP Relay** takes its hostname and mailbox; with one SMTP Relay
    profile and Mailcow not yet set up, they are filled in already. **Remove**
    deletes the API key from this server; sites whose profile sets up Mailcow
    then wait until it is set up again, and nothing in Cloudflare or Mailcow is
    deleted.
-3. **Profiles.** Edit **Web** or **Web and Mailcow**, or create your own from the
-   presets. Each row is a record every site in the profile gets; **TTL and apex
-   only** shows the less common columns, and **Cloudflare zone** opens the
-   zone-wide settings. By default **Web** writes `*.{domain}` on apex domains,
-   so subdomain sites in the same zone inherit the wildcard and need no `A` or
-   `AAAA` records of their own unless another record at or below the subdomain
-   blocks the wildcard. To keep a subdomain free of mail records, assign it to
-   **Web** and send its transactional mail as the apex domain in SMTP Relay.
-4. **Assign sites** in the table, in bulk if you like. DNS starts in **Ask
+3. **Profiles.** Open **Profiles** to edit **Web** or **Web and Mailcow**, or
+   create your own from the presets. Each row is a record every site in the
+   profile gets; **TTL and apex only** shows the less common columns, and
+   **Cloudflare zone** opens the zone-wide settings. By default **Web** writes
+   `*.{domain}` on apex domains, so subdomain sites in the same zone inherit
+   the wildcard and need no `A` or `AAAA` records of their own unless another
+   record at or below the subdomain blocks the wildcard. To keep a subdomain
+   free of mail records, assign it to **Web** and send its transactional mail
+   as the apex domain in SMTP Relay.
+4. **Assign sites** under **Sites**, in bulk if you like. DNS starts in **Ask
    first**: **Check now** shows what differs and changes nothing.
 5. **Turn on Automatic.** Choose **Review and turn on Automatic**, read the
    plan, and confirm it. From then on every site's records are kept to its
    profile, conflicting records at the names a profile writes are deleted, and a
    site whose domain is not in Cloudflare gets a new zone. Other names are never
-   touched. **Ask first instead** stops all writing again.
-6. **New sites.** Choose the profile under **New sites join**. Until DNS is
-   Automatic, new sites get no records.
+   touched. Once Automatic is on, you can switch back to **Ask first** under
+   **Settings**.
+6. **New sites.** Under **Profiles**, choose the profile for **New sites
+   join**. Until DNS is Automatic, new sites get no records.
 
 A new zone goes into the only Cloudflare account your connections reach. With
 more than one, choose it under **Settings**, **New zones**.
@@ -51,10 +53,10 @@ Under **Settings**, each connection says which permissions its token is
 missing for what your profiles use; **Permissions** lists them with what uses
 each. If you later turn on a feature that needs another permission, such as
 skipping the firewall, **Edit in Cloudflare** opens your API tokens there; add
-it to this token. A token made before 2.0.0-rc.10 needs **API Tokens: Read**
-(Account API Tokens: Read for an account-owned token) before DNS can show this;
-until then the row lists only what Cloudflare has refused it. While a token
-lacks a permission DNS needs, **Setup** shows it under **Action needed**.
+it to this token. A token made before 2.0.0-rc.10 needs **API Tokens: Read**,
+or Account API Tokens: Read for an account-owned token, before DNS can show
+this; until then the row lists only what Cloudflare has refused it. While a
+token lacks a permission DNS needs, **Setup** shows it under **Action needed**.
 
 ## Everyday use
 
@@ -68,7 +70,7 @@ nameserver or its clipboard icon in either message to copy that one. In the
 site's **Details**, use the clipboard icon beside it.
 
 **Details** on a site shows its zone and every pending change. Drift is
-corrected every 15 minutes, or at once with **Check now**. **Change log** lists
+corrected every 15 minutes, or at once with **Check now**. **Activity** lists
 every record, zone and Mailcow change DNS made, newest first, and what made it.
 When a site is deleted from CloudPanel while DNS manages it, its records stay in
 Cloudflare until you choose **Remove records** or **Keep**; if its zone is deleted
@@ -77,9 +79,9 @@ in Cloudflare, they leave the list on their own. A Mailcow domain is never delet
 ## Redirect domains
 
 A redirect domain sends every request for a domain, and its `www`, or for one
-host such as `tv.example.com`, to another URL. Choose **Add redirect** on the
-**Redirects** card, below the sites. **Keep path** sends `/about` on to `/about` at the target; turn it off
-for a target that is one page.
+host such as `tv.example.com`, to another URL. Open **Redirects** and choose
+**Add redirect**. **Keep path** sends `/about` on to `/about` at the target;
+turn it off for a target that is one page.
 
 With Cloudflare connected, Cloudflare answers the redirect and this server is
 never reached. Give the domain a profile to keep its mail: every row of the
@@ -102,11 +104,13 @@ first.
 
 ## Panel hostname
 
-To reach CloudPanel at a name that isn't easy to guess, such as `k7m2p9x4.example.com`, through Cloudflare:
+To reach CloudPanel at a name that is not easy to guess, such as
+`k7m2p9x4.example.com`, through Cloudflare, connect Cloudflare first and then:
 
-1. Enter a name under **Panel hostname**, or choose **Random** to generate an
-   eight-character label on one of your connected zones, and save. DNS points it
-   at this server, without Cloudflare's proxy.
+1. Under **Settings**, **Panel hostname**, enter a name, choose **Random** to
+   generate an eight-character label on one of your connected zones, or adopt
+   CloudPanel's existing custom domain, and save. DNS points it at this server
+   without Cloudflare's proxy.
 2. Enter the same name in CloudPanel under **Admin → Settings → Custom Domain**.
    CloudPanel gets its Let's Encrypt certificate straight from this server.
 3. Seconds after the certificate is issued, DNS proxies the name through

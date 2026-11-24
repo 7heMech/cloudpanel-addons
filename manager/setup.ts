@@ -3,12 +3,17 @@
 // addon's steps offered with Enable, and what each administrator skipped or hid.
 import { existsSync, readFileSync, rmSync } from "node:fs";
 import { ADDONS, addonEnabled, offeredAddonNames } from "../addons/catalog";
+import { detectAddresses } from "../addons/dns/addresses";
+import { parsePolicy, parseSecrets } from "../addons/dns/model";
 import { SETUP_LEVELS, type ActionNeeded, type ActionNeededCheck, type SetupCheck, type SetupLevel, type SetupStep } from "../lib/addon-definition";
 import { writeFileAtomic } from "../lib/atomic-write";
 import { errorMessage } from "../lib/errors";
 import { withFileLockSync } from "../lib/file-lock";
+import { panelCustomDomainCertificate } from "../lib/panel-custom-domain";
 import { withPanelDb } from "../lib/panel-db";
 import { addonStateDir, CONFIG_DIR, PANEL_DB } from "../lib/paths";
+import { readState } from "../lib/root-state";
+import { panelUserUid } from "../lib/sso-auth";
 
 const PREFS_FILE = `${addonStateDir("manager")}/setup.json`;
 /** The checks' last answer, before anyone's skips, so moving between pages does not run them all again. */
@@ -24,15 +29,32 @@ export interface SetupItem {
   level: SetupLevel;
   title: string;
   href: string;
+  why?: string;
+  /** Declared prerequisite step ids, preserved even after prerequisites complete so path ordering stays stable. */
+  requires?: string[];
   /** The addon the step belongs to, offered with Enable while it is off and the step not done; null for one about CloudPanel itself. */
   addon: { name: string; title: string; enabled: boolean } | null;
-  state: SetupCheck["state"] | "skipped";
+  state: SetupCheck["state"] | "skipped" | "blocked";
   reason: string;
+  /** Unmet prerequisite steps when state is `blocked`. */
+  blockedBy?: { id: string; title: string }[];
 }
 
 export interface ActionItem extends ActionNeeded {
   id: string;
   addon: { name: string; title: string } | null;
+}
+
+/** Local server facts that let /addons/setup render guided inline flows without calling external APIs. */
+export interface SetupContext {
+  customDomain: { name: string; issued: boolean } | null;
+  /** External HTTPS hostname detected on the current request when no CloudPanel custom domain exists, such as a Cloudflare Tunnel. */
+  proxyHost?: string | null;
+  dnsConnected: boolean;
+  dnsAutomatic: boolean;
+  dnsPanelHost: string | null;
+  dnsZones: string[];
+  serverIps: { ipv4: string | null; ipv6: string | null };
 }
 
 export interface SetupView {
@@ -41,6 +63,11 @@ export interface SetupView {
   hidden: boolean;
   actions: ActionItem[];
   steps: SetupItem[];
+  context?: SetupContext;
+  /** Enabled addon names on this server, used to mark inactive addons in cross-addon Guides. */
+  enabledAddons?: string[];
+  /** Step ids this administrator skipped, so request-time unblocking still honors skips. */
+  skippedIds?: string[];
 }
 
 interface UserPrefs { hidden?: true; skipped?: string[] }
@@ -67,9 +94,34 @@ export const CORE_SETUP: SetupStep[] = [
     level: "sites",
     title: "Remote backups",
     href: "/admin/remote-backup",
+    why: "Stores scheduled site backups off this server so a disk or host failure does not lose data.",
     check: (options) => remoteBackupsCheck(panelConfig(String(options?.panelDb ?? PANEL_DB))),
   },
 ];
+
+function readSetupContext(): SetupContext {
+  const customDomain = panelCustomDomainCertificate([0, panelUserUid() ?? 0]) ?? null;
+  let dnsConnected = false;
+  let dnsAutomatic = false;
+  let dnsPanelHost: string | null = null;
+  let dnsZones: string[] = [];
+  try {
+    const dir = addonStateDir("dns");
+    const raw = readState<unknown>(`${dir}/policy.json`, 0, () => null);
+    if (raw !== null) {
+      const policy = parsePolicy(raw);
+      const secrets = parseSecrets(readState(`${dir}/secrets.json`, 0, () => ({})));
+      const status = readState<{ connections?: { zoneNames?: string[] }[] }>(`${dir}/status.json`, 0, () => ({}));
+      dnsConnected = policy.connections.some((connection) => Boolean(secrets.cloudflare[connection.id]));
+      dnsAutomatic = policy.automatic;
+      dnsPanelHost = policy.panelHost;
+      dnsZones = [...new Set((status.connections ?? []).flatMap((connection) => connection.zoneNames ?? []))].sort();
+    }
+  } catch { /* DNS state unreadable or not initialized */ }
+  let serverIps: { ipv4: string | null; ipv6: string | null } = { ipv4: null, ipv6: null };
+  try { serverIps = detectAddresses(); } catch { /* best-effort */ }
+  return { customDomain, dnsConnected, dnsAutomatic, dnsPanelHost, dnsZones, serverIps };
+}
 
 /** A check's answer, or why there is none: it threw, or it outlasted the limit. */
 async function within<T>(run: () => T | Promise<T>, limitMs: number): Promise<{ value: T } | { error: string }> {
@@ -121,7 +173,42 @@ export async function actionItems(source: SetupSource = catalogSource(), options
   return found.flat();
 }
 
-/** Every step, by level: CloudPanel's own first, then the addons' in catalog order. */
+/**
+ * Orders steps within a single path so any step whose prerequisites live in the
+ * same path sits right below its last same-path prerequisite (keeping catalog
+ * order among peers). Keeps causal branches contiguous both while locked and
+ * after unlocking.
+ */
+export function orderPathSteps(steps: SetupItem[]): SetupItem[] {
+  const byId = new Map(steps.map((step) => [step.id, step]));
+  const children = new Map<string, SetupItem[]>();
+  const roots: SetupItem[] = [];
+  for (const step of steps) {
+    const reqIds = (step.requires ?? step.blockedBy?.map((req) => req.id) ?? [])
+      .filter((id) => byId.has(id) && id !== step.id);
+    const parentId = reqIds.length ? reqIds[reqIds.length - 1]! : null;
+    if (parentId) {
+      const list = children.get(parentId) ?? [];
+      list.push(step);
+      children.set(parentId, list);
+    } else {
+      roots.push(step);
+    }
+  }
+  const ordered: SetupItem[] = [];
+  const visited = new Set<string>();
+  const visit = (step: SetupItem) => {
+    if (visited.has(step.id)) return;
+    visited.add(step.id);
+    ordered.push(step);
+    for (const child of children.get(step.id) ?? []) visit(child);
+  };
+  for (const root of roots) visit(root);
+  for (const step of steps) visit(step);
+  return ordered;
+}
+
+/** Every step, by path: CloudPanel's own first, then the addons' in catalog order, with same-path dependents placed under their prerequisite. */
 export async function setupSteps(
   prefs: UserPrefs,
   source: SetupSource = catalogSource(),
@@ -133,7 +220,7 @@ export async function setupSteps(
     ...source.core.map((step) => ({ step, addon: null })),
     ...source.addons.flatMap((addon) => addon.steps.map((step) => ({ step, addon }))),
   ];
-  const items = await Promise.all(entries.map(async ({ step, addon }): Promise<SetupItem> => {
+  const raw = await Promise.all(entries.map(async ({ step, addon }): Promise<{ item: SetupItem; step: SetupStep } | null> => {
     const off: SetupCheck | null = addon && !addon.enabled ? { state: "todo", reason: `${addon.title} is off` } : null;
     const checked = async (): Promise<SetupCheck> => {
       const result = await within(() => step.check(options), limitMs);
@@ -141,17 +228,34 @@ export async function setupSteps(
     };
     const found = off && !step.whileOff ? off : await checked();
     const result = off && found.state === "todo" ? off : found;
-    return {
-      id: step.id, level: step.level, title: step.title, href: step.href,
+    if (step.hostSpecific && result.state === "na") return null;
+    const item: SetupItem = {
+      id: step.id, level: step.level, title: step.title, href: result.href ?? step.href,
+      ...(step.why ? { why: step.why } : {}),
+      ...(step.requires?.length ? { requires: step.requires } : {}),
       addon: addon && { name: addon.name, title: addon.title, enabled: addon.enabled },
       state: result.state === "todo" && skipped.has(step.id) ? "skipped" : result.state,
       reason: result.reason,
     };
+    return { item, step };
   }));
-  const order = Object.keys(SETUP_LEVELS);
-  return items.map((item, index) => ({ item, index }))
-    .sort((a, b) => order.indexOf(a.item.level) - order.indexOf(b.item.level) || a.index - b.index)
-    .map(({ item }) => item);
+  const present = raw.filter((entry): entry is { item: SetupItem; step: SetupStep } => entry !== null);
+  const byId = new Map(present.map((entry) => [entry.item.id, entry.item]));
+  const items = present.map(({ item, step }): SetupItem => {
+    if (!step.requires?.length || item.state === "done") return item;
+    const unmet = step.requires
+      .map((reqId) => byId.get(reqId))
+      .filter((req): req is SetupItem => Boolean(req && req.state !== "done"));
+    if (!unmet.length) return item;
+    return {
+      ...item,
+      state: "blocked",
+      blockedBy: unmet.map((req) => ({ id: req.id, title: req.title })),
+      reason: `Needs ${unmet.map((req) => req.title).join(" and ")} first`,
+    };
+  });
+  const order = Object.keys(SETUP_LEVELS) as SetupLevel[];
+  return order.flatMap((level) => orderPathSteps(items.filter((item) => item.level === level)));
 }
 
 export function readSetupPrefs(file = PREFS_FILE): Prefs {
@@ -175,7 +279,7 @@ export function switchSetup(on: boolean, file = SETUP_OFF_FILE): boolean {
   return true;
 }
 
-interface Checked { at: number; actions: ActionItem[]; steps: SetupItem[] }
+interface Checked { at: number; actions: ActionItem[]; steps: SetupItem[]; context?: SetupContext; enabledAddons?: string[] }
 
 /**
  * The checks' answer, from the cache while it is under a minute old unless
@@ -191,7 +295,12 @@ export async function cachedChecks(
     try {
       const stored = JSON.parse(readFileSync(file, "utf-8")) as Checked;
       if (now - stored.at >= 0 && now - stored.at < CACHE_MS && Array.isArray(stored.actions) && Array.isArray(stored.steps)) {
-        return { actions: stored.actions, steps: stored.steps };
+        return {
+          actions: stored.actions,
+          steps: stored.steps,
+          ...(stored.context ? { context: stored.context } : {}),
+          ...(Array.isArray(stored.enabledAddons) ? { enabledAddons: stored.enabledAddons } : {}),
+        };
       }
     } catch { /* none yet, or unreadable: check again */ }
   }
@@ -215,13 +324,77 @@ export async function setupView(
   if (setupOff(offFile)) return { off: true, hidden, actions: [], steps: [] };
   const compute = async () => {
     const [actions, steps] = await Promise.all([actionItems(source, options), setupSteps({}, source, options)]);
-    return { actions, steps };
+    const enabled = source
+      ? undefined
+      : Object.values(ADDONS).filter((spec) => addonEnabled(spec)).map((spec) => spec.name);
+    return {
+      actions,
+      steps,
+      ...(!source ? { context: readSetupContext() } : {}),
+      ...(enabled ? { enabledAddons: enabled } : {}),
+    };
   };
   // A source given in place of the catalog is a test's, which the shared cache must not answer for.
   const checked = source ? await compute() : await cachedChecks(compute, cache);
   const skipped = new Set(prefs.skipped ?? []);
   const steps = checked.steps.map((step) => step.state === "todo" && skipped.has(step.id) ? { ...step, state: "skipped" as const } : step);
-  return { off: false, hidden, actions: checked.actions, steps };
+  return {
+    off: false, hidden, actions: checked.actions, steps,
+    ...(checked.context ? { context: checked.context } : {}),
+    ...(checked.enabledAddons ? { enabledAddons: checked.enabledAddons } : {}),
+    ...(skipped.size ? { skippedIds: [...skipped].sort() } : {}),
+  };
+}
+
+const FQDN_RE = /^[a-z0-9](?:[a-z0-9-]*[a-z0-9])?(?:\.[a-z0-9](?:[a-z0-9-]*[a-z0-9])?)+$/;
+
+/**
+ * Extracts a standard-port HTTPS hostname from a request arriving through an
+ * external tunnel or reverse proxy (such as Cloudflare Tunnel). Direct access
+ * on port 8443, IP literals, localhost and plain HTTP return null.
+ */
+export function proxyHostFromRequest(req: Request): string | null {
+  const rawHost = (req.headers.get("x-forwarded-host") || req.headers.get("host") || "").split(",")[0]!.trim().toLowerCase();
+  if (!rawHost || rawHost.includes(":") || rawHost === "localhost" || /^\d+(?:\.\d+){3}$/.test(rawHost) || !FQDN_RE.test(rawHost)) {
+    return null;
+  }
+  const proto = (req.headers.get("x-forwarded-proto") || "").split(",")[0]!.trim().toLowerCase();
+  const cfVisitor = req.headers.get("cf-visitor") || "";
+  const isHttps = proto === "https" || cfVisitor.includes('"https"') || Boolean(req.headers.get("cf-ray"));
+  return isHttps ? rawHost : null;
+}
+
+/**
+ * When CloudPanel has no built-in Custom Domain but the administrator reached
+ * the panel over a trusted HTTPS hostname through a tunnel or reverse proxy,
+ * mark Panel hostname done, unblock Passkeys, and mark Panel gate inapplicable.
+ */
+export function applyRequestOrigin(view: SetupView, proxyHost: string | null): SetupView {
+  if (view.off || !proxyHost || view.context?.customDomain) return view;
+  const skipped = new Set(view.skippedIds ?? []);
+  const context: SetupContext = view.context
+    ? { ...view.context, proxyHost }
+    : { customDomain: null, proxyHost, dnsConnected: false, dnsAutomatic: false, dnsPanelHost: null, dnsZones: [], serverIps: { ipv4: null, ipv6: null } };
+  const steps = view.steps.map((step): SetupItem => {
+    if (step.id === "panel-hostname" && step.state !== "done") {
+      return { ...step, state: "done", blockedBy: undefined, reason: `CloudPanel answers at ${proxyHost} via a reverse proxy or tunnel` };
+    }
+    if (step.id === "panel-gate" && step.state !== "done") {
+      return { ...step, state: "na", blockedBy: undefined, reason: `Not needed behind a reverse proxy or tunnel; protect ${proxyHost} at your tunnel or proxy instead` };
+    }
+    if (step.state === "blocked" && step.blockedBy?.some((req) => req.id === "panel-hostname")) {
+      const remaining = step.blockedBy.filter((req) => req.id !== "panel-hostname");
+      if (remaining.length) {
+        return { ...step, blockedBy: remaining, reason: `Needs ${remaining.map((req) => req.title).join(" and ")} first` };
+      }
+      const reason = step.id === "passkeys"
+        ? (step.addon && !step.addon.enabled ? `${step.addon.title} is off` : "No administrator has a security key yet")
+        : step.reason;
+      return { ...step, state: skipped.has(step.id) ? "skipped" : "todo", blockedBy: undefined, reason };
+    }
+    return step;
+  });
+  return { ...view, steps, context };
 }
 
 export type SetupChange = { skip: string } | { unskip: string } | { hidden: boolean };

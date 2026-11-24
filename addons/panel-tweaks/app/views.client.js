@@ -160,5 +160,12 @@ function setPreviewWidth(button) {
   fitPreview();
 }
 
+// Re-measure the preview iframe when the Sites section becomes visible.
+if (document.addEventListener) {
+  document.addEventListener('clp:section-change', function (event) {
+    if (event.detail && event.detail.section === 'sites') fitPreview();
+  });
+}
+
 // A page drawn while a measurement runs follows it from the start.
 followJobProgress(measurementFinished);
