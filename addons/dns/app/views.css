@@ -269,3 +269,26 @@ p.dns-dialog-note { margin:20px 0 0; }
 .dns-panel-host-changes .hint { margin:0; }
 .dns-panel-host-next { margin:0; }
 .dns-wildcard-note { margin:0 0 8px; }
+.dns-adopt-bar { display:flex; align-items:center; justify-content:space-between; gap:12px; margin:0; color:var(--text); background:var(--surface); border-color:var(--border); }
+.dns-adopt-bar .btn { flex-shrink:0; white-space:nowrap; }
+.dns-setting-list { display:flex; flex-direction:column; }
+.dns-setting-row { display:flex; align-items:flex-start; justify-content:space-between; gap:12px 24px; padding:16px 0; border-top:1px solid var(--row-border); }
+.dns-setting-row:first-child { border-top:0; padding-top:0; }
+.dns-setting-row:last-child { padding-bottom:0; }
+.dns-setting-main { flex:1 1 auto; min-width:0; }
+.dns-setting-main > strong { display:block; font-weight:600; }
+.dns-setting-main .hint { display:block; margin-top:2px; }
+.dns-setting-main .mono { color:var(--muted); font-size:13px; }
+.dns-setting-control { flex:0 0 auto; }
+.dns-disclosure-row { padding:0; border-top:0; align-items:center; }
+.dns-setting-row .btn-danger:not(:hover):not(:focus-visible),
+.dns-panel-host-form .btn-danger:not(:hover):not(:focus-visible) { color:var(--button-text); border-color:var(--button-border); }
+/* Keep the Sites header calm on desktop until at least one site is ticked. */
+@media (min-width:941px) {
+  .dns-site-card:not(:has(tr[aria-selected="true"])) .fleet-selection,
+  .dns-site-card:not(:has(tr[aria-selected="true"])) .bulk-assign { display:none; }
+}
+@media (max-width:760px) {
+  .dns-setting-row, .dns-adopt-bar { flex-direction:column; align-items:stretch; }
+  .dns-panel-host-form input { flex:1 1 100%; }
+}

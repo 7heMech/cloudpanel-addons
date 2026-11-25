@@ -1,6 +1,7 @@
 import { esc } from "../../../lib/app-http";
 import {
-  ATTENTION_RANK, FLEET_FOOTER_HTML, FLEET_SELECTION_HTML, FLEET_ROW_SELECTION_JS, JOB_PROGRESS_JS, fleetFilterHtml, jobProgressHtml, renderLayout,
+  ATTENTION_RANK, FLEET_FOOTER_HTML, FLEET_SELECTION_HTML, FLEET_ROW_SELECTION_JS, JOB_PROGRESS_JS, fleetFilterHtml,
+  jobProgressHtml, renderLayout, sectionShellHtml, type SectionTab,
 } from "../../../lib/app-ui";
 import { mountPath } from "../../../lib/mount";
 import type { WpJobView, WpSiteView } from "../action";
@@ -145,9 +146,9 @@ const JOB_TITLES: Record<WpJobView["task"], string> = {
 
 function jobsStrip(data: WpDashboard): string {
   const jobs = [data.jobs.varnish, data.jobs.mainwp].filter((job): job is WpJobView => Boolean(job));
-  return jobs.length ? `<div class="wp-jobs">${jobs.map((job) => `
+  return jobs.length ? `<div class="card wp-jobs-card"><div class="wp-jobs">${jobs.map((job) => `
       ${jobProgressHtml(job, JOB_TITLES[job.task])}`).join("")}
-        <p class="hint">Runs in the background: you can leave or reload this page.</p></div>` : "";
+        <p class="hint">Runs in the background: you can leave or reload this page.</p></div></div>` : "";
 }
 
 function batchToolbar(data: WpDashboard, count: number): string {
@@ -182,7 +183,6 @@ function sitesCard(data: WpDashboard): string {
   return `
     <div class="card card-table">
       <div class="card-header${selectable ? " toolbar" : ""}"><h2>WordPress sites</h2>${selectable ? batchToolbar(data, unconnected) : ""}</div>
-      ${jobsStrip(data)}
       ${fleetFilterHtml({
         count: sites.length,
         placeholder: "Find a site or user",
@@ -380,9 +380,48 @@ function automationCard(data: WpDashboard): string {
     </div>`;
 }
 
+function sitesAttention(data: WpDashboard): "bad" | "warn" | undefined {
+  const mainwp = !data.mainwpError && (Boolean(data.mainwp.dashboard) || data.mainwp.remote);
+  let warn = false;
+  for (const site of data.sites) {
+    if (!data.varnishError && site.varnishCache) {
+      const tone = varnishBadge(site)[1];
+      if (tone === "state-failed") return "bad";
+      if (tone === "tone-warn") warn = true;
+    }
+    if (mainwp && site.domain !== data.mainwp.dashboard) {
+      const tone = mainwpBadge(site, data.mainwp)[1];
+      if (tone === "state-failed") return "bad";
+      if (tone === "tone-warn") warn = true;
+    }
+  }
+  return warn ? "warn" : undefined;
+}
+
+function newSitesAttention(jobs: WpJobView[]): "bad" | undefined {
+  for (const job of jobs) {
+    if (job.state === "failed") return "bad";
+    const result = job.result as NewSiteResult | null;
+    if (result?.plugins.some((plugin) => plugin.status === "failed")) return "bad";
+  }
+  return undefined;
+}
+
+function settingsAttention(data: WpDashboard): "bad" | "warn" | undefined {
+  if (data.varnishError || data.mainwpError || data.domainLinkError || data.newSiteAccessError) return "bad";
+  if (data.mainwp.cleanup) return "warn";
+  return undefined;
+}
+
 /** Everything below the heading; the page repaints it from `/api/dashboard` after a change. */
 export function dashboardBody(data: WpDashboard): string {
-  return `${sitesCard(data)}${newSitesCard(data.newSites ?? [])}${automationCard(data)}${panelPagesCard(data)}`;
+  const newSites = data.newSites ?? [];
+  const tabs: SectionTab[] = [
+    { id: "sites", label: "Sites", count: data.sites.length, attention: sitesAttention(data), content: sitesCard(data) },
+    { id: "new-sites", label: "New sites", count: newSites.length || undefined, attention: newSitesAttention(newSites), content: newSitesCard(newSites) },
+    { id: "settings", label: "Settings", attention: settingsAttention(data), content: `${automationCard(data)}${panelPagesCard(data)}` },
+  ];
+  return `${jobsStrip(data)}${sectionShellHtml("wp-tools", "WordPress Tools sections", tabs, "sites")}`;
 }
 
 export function dashboardView(data: WpDashboard): string {

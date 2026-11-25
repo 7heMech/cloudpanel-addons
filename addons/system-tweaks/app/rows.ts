@@ -1,47 +1,12 @@
 // The pieces a tweak's row on the page is made of; each tweak module renders its own row with them.
 import { esc } from "../../../lib/app-http";
+import { badgeHtml, settingRowHtml, type SettingRow } from "../../../lib/app-ui";
 import { declaresLock } from "../../../lib/root-locks";
 import type { SystemTweaksVerb } from "../tweak";
 
-export function badge(text: string, tone: "ok" | "warn" | "bad" | "plain"): string {
-  const state = { ok: " tone-ok", warn: " tone-warn", bad: " tone-bad", plain: "" }[tone];
-  return `<span class="badge${state}">${esc(text)}</span>`;
-}
-
-export interface Row {
-  key: string;
-  title: string;
-  /** One paragraph, or a line each. */
-  description: string | string[];
-  /** The switch's state; a row with `control` instead has none. */
-  checked?: boolean;
-  disabled?: boolean;
-  onchange?: string;
-  /** What sits where the switch would, such as a select. */
-  control?: string;
-  extra?: string;
-}
-
-export function settingRow(row: Row): string {
-  const note = `tweak-note-${row.key}`;
-  const control = row.control ?? `
-            <label class="switch" title="${esc(row.title)}">
-              <input type="checkbox" data-setting="${esc(row.key)}" onchange="${row.onchange}"${row.checked ? " checked" : ""}
-                ${row.disabled ? "disabled " : ""}aria-label="${esc(row.title)}">
-              <span></span>
-            </label>`;
-  return `
-      <div class="tweak-row" id="tweak-${esc(row.key)}">
-        <div class="tweak-body">
-          <div class="tweak-heading">
-            <h3>${esc(row.title)}<button class="tweak-more" type="button" aria-expanded="false"
-              aria-controls="${note}" aria-label="What ${esc(row.title.toLowerCase())} does"
-              onclick="toggleNote(this)"></button></h3>${control}
-          </div>
-          <div class="tweak-note" id="${note}">${[row.description].flat().map((line) => `<p>${esc(line)}</p>`).join("")}</div>${row.extra ?? ""}
-        </div>
-      </div>`;
-}
+export type Row = SettingRow;
+export const badge = badgeHtml;
+export const settingRow = settingRowHtml;
 
 /** A row of a protection root can lock (`clp-addons lock system-tweaks`): while it is, an on switch stays on and an off one can only go on. */
 export function lockableRow(verb: SystemTweaksVerb, row: Row, locked: boolean): string {

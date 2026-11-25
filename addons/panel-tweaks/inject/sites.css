@@ -1,4 +1,11 @@
 
+/* CloudPanel nests a second .container-fluid.container-limited-width inside
+   layout.html.twig's own wrapper on Sites, shaving 24px off the width, and
+   .sites-container adds 10px of top padding that pushes the heading below
+   Dashboard's. Drop both so Sites matches Dashboard and Addons. */
+body .container-limited-width > .container-limited-width { padding-left: 0; padding-right: 0; }
+body .sites-container { padding-top: 0; }
+
 /* The check a chosen column or option is marked with, as a mask painted in
    its colour; the Columns menu and the filter's list are both in the toolbar. */
 .clp-tweaks-toolbar { --clp-check: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'%3E%3Cpath fill='none' stroke='%23000' stroke-width='1.8' stroke-linecap='round' stroke-linejoin='round' d='M3.5 8.4l3 3 6-6.2'/%3E%3C/svg%3E"); }

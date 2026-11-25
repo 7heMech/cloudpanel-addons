@@ -37,10 +37,23 @@ export function connectionCheck(state: DnsSetupState): SetupCheck {
   return { state: "done", reason: `Cloudflare: ${saved.map((connection) => connection.label).join(", ")}` };
 }
 
-export function panelHostCheck(custom: { name: string; issued: boolean } | undefined, panelHost: string | null): SetupCheck {
+export function panelHostCheck(custom: { name: string; issued: boolean } | undefined, panelHost: string | null, connected = true): SetupCheck {
   if (custom?.issued) return { state: "done", reason: `CloudPanel answers at ${custom.name}` };
-  if (custom) return { state: "todo", reason: `${custom.name} is still on a self-signed certificate` };
-  if (panelHost) return { state: "todo", reason: `Enter ${panelHost} under Admin → Settings → Custom Domain in CloudPanel` };
+  if (custom) {
+    return {
+      state: "todo",
+      reason: `${custom.name} is still on a self-signed certificate`,
+      ...(connected ? {} : { href: "/admin/settings" }),
+    };
+  }
+  if (panelHost && connected) return { state: "todo", reason: `Enter ${panelHost} under Admin → Settings → Custom Domain in CloudPanel` };
+  if (!connected) {
+    return {
+      state: "todo",
+      reason: "Point a hostname at this server in DNS, then set Custom Domain in CloudPanel",
+      href: "/admin/settings",
+    };
+  }
   return { state: "todo", reason: "CloudPanel has no custom domain" };
 }
 
@@ -72,15 +85,36 @@ export const DNS_ACTIONS: ActionNeededCheck[] = [
   { id: "dns-permissions", check: () => permissionActions(dnsState()) },
 ];
 
-function panelHost(): string | null {
-  try { return dnsState().policy.panelHost; } catch { return null; }
+function panelHostContext(): { panelHost: string | null; connected: boolean } {
+  try {
+    const state = dnsState();
+    return {
+      panelHost: state.policy.panelHost,
+      connected: state.policy.connections.some((connection) => state.tokens.has(connection.id)),
+    };
+  } catch {
+    return { panelHost: null, connected: false };
+  }
 }
 
 export const DNS_SETUP: SetupStep[] = [
-  { id: "dns-connection", level: "domain", title: "Connect DNS", href: `${PAGE}#dns-connection`, check: () => connectionCheck(dnsState()) },
+  {
+    id: "dns-connection", level: "domain", title: "Connect DNS", href: `${PAGE}#dns-connection`,
+    why: "Connect Cloudflare once so DNS can manage site records, wildcards and the panel hostname automatically.",
+    check: () => connectionCheck(dnsState()),
+  },
   {
     id: "panel-hostname", level: "domain", title: "Panel hostname", href: `${PAGE}#dns-panel-host`, whileOff: true,
-    check: () => panelHostCheck(panelCustomDomainCertificate([0, panelUserUid() ?? 0]), panelHost()),
+    why: "Gives CloudPanel its own HTTPS hostname on port 443, unlocking passkeys and Cloudflare Access.",
+    check: () => {
+      const { panelHost, connected } = panelHostContext();
+      return panelHostCheck(panelCustomDomainCertificate([0, panelUserUid() ?? 0]), panelHost, connected);
+    },
   },
-  { id: "dns-automatic", level: "provision", title: "Automatic DNS records", href: `${PAGE}#dns-mode`, check: () => automaticCheck(dnsState()) },
+  {
+    id: "dns-automatic", level: "sites", title: "Automatic DNS records", href: `${PAGE}#dns-mode`,
+    requires: ["dns-connection"],
+    why: "Writes new sites' records and corrects drift automatically instead of stopping at Ask first.",
+    check: () => automaticCheck(dnsState()),
+  },
 ];

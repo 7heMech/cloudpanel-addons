@@ -9,13 +9,14 @@ The protocol of each rule on CloudPanel's own Firewall page is
 
 ## The page
 
-Five cards: Automatic updates, which an operator comes back to; Remote backups,
-with optional Zstandard compression and its level and worker count; one
-Hardening card for the panel's PHP, the upload-progress mitigation, forged
-visitor IPs, phpMyAdmin, MySQL access, the panel's certificate, nginx config
-injection, PHP pool isolation, File Manager confinement, clpctl injection and
-CloudPanel telemetry; Failed logins, with the two fail2ban jails and the
-addresses they block; SSH login, with the login message. MySQL access belongs with the protection settings;
+Five sections in the shared `.section-shell` navigation: Updates (Automatic
+updates, which an operator comes back to); Hardening, for the panel's PHP, the
+upload-progress mitigation, forged visitor IPs, phpMyAdmin, MySQL access, the
+panel's certificate, nginx config injection, PHP pool isolation, File Manager
+confinement, clpctl injection and CloudPanel telemetry; Failed logins, with the
+two fail2ban jails and the addresses they block; Remote backups, with optional
+Zstandard compression and its level and worker count; and SSH login, with the
+login message. MySQL access belongs with the protection settings;
 MySQL and Redis sizing belong to Resource Limits alongside PHP worker limits. Each row says what it does; the
 reasons are here. The schedule, Nginx, MySQL, CloudPanel and reboot rows appear only once
 System Tweaks' own switch is on, since they change nothing before. The
@@ -61,8 +62,8 @@ after withdrawing still has its protections put back.
 ### Lock settings
 
 **Lock settings** sits in the Hardening card's header rather than at the top of
-the page, because it covers Hardening and Failed logins, the card after it, and
-none of the page's other settings. It is one action on the server, the `lock-settings` verb: every Hardening
+the page, because it covers Hardening and Failed logins, and none of the page's
+other settings. It is one action on the server, the `lock-settings` verb: every Hardening
 and Failed logins switch on, the two off by default (MySQL on this server only
 and the SSH jail) included, then [root's lock](security.md#root-locks) on System
 Tweaks. Its confirmation says what that does, that MySQL restarts and that only

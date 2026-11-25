@@ -8,5 +8,9 @@ export function newSiteCategoryCheck(category: string | null): SetupCheck {
 }
 
 export const RESOURCE_LIMITS_SETUP: SetupStep[] = [
-  { id: "php-limits", level: "sites", title: "PHP limits for new sites", href: "/addons/resource-limits/#rl-categories", check: () => newSiteCategoryCheck(newSiteCategory()) },
+  {
+    id: "php-limits", level: "sites", title: "PHP limits for new sites", href: "/addons/resource-limits/#rl-categories",
+    why: "Assigns new PHP sites a worker limit category so one traffic spike cannot starve the server.",
+    check: () => newSiteCategoryCheck(newSiteCategory()),
+  },
 ];

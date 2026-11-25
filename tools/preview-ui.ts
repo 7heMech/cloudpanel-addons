@@ -1,6 +1,6 @@
 // Local UI review with fictional data. Never starts the manager, reads panel
 // state or invokes an action. Supported mutations change fictional data only.
-import { indexPage, updatePage } from "../manager/views";
+import { indexPage, setupPage, updatePage } from "../manager/views";
 import {
   dashboardView as firewallDashboardView, layout as firewallLayout, panelGateCard as firewallPanelGateCard,
 } from "../addons/firewall/app/views";
@@ -67,7 +67,7 @@ import type { InstanceView, InstaticJobView } from "../addons/instatic/app/servi
 import type { JobView, SiteSummary } from "../addons/stager/app/service";
 import type { AvailableTags } from "../addons/instatic/app/tags";
 import { setupPanelHtml, setupShows } from "../manager/setup-view";
-import type { ActionItem, SetupItem, SetupView } from "../manager/setup";
+import { applyRequestOrigin, type ActionItem, type SetupItem, type SetupView } from "../manager/setup";
 import { ADDONS } from "../addons/catalog";
 import { withCsrfCookie, SECURITY_HEADERS } from "../lib/app-http";
 import { handle as terminalHandle } from "../addons/terminal/app/index";
@@ -177,21 +177,29 @@ function dnsPreviewState(url: URL): DnsState {
       action: "create" as const, subject: `A site-${n}.example.com`, detail: "203.0.113.10 · proxied" })),
   ];
   const profiles = [web, mailcow].map((profile) => ({ ...profile, sites: sites.filter((site) => site.profileId === profile.id).length }));
-  return {
-    automatic,
-    createIn: null,
-    profiles,
-    defaultProfileId: setup ? null : "web",
-    sites,
-    connections: setup ? [] : [
+  const panelHost = dnsPreviewPanelHost(url, setup, plan);
+  const customDomain = setup ? null
+    : url.searchParams.get("panelhost") === "adopt" ? { name: "panel.example.com", issued: true }
+    : panelHost?.customDomain ?? null;
+  const single = url.searchParams.has("single");
+  const allConnections = setup ? [] : [
       { id: "cf-1", label: "Agency", active: true, status: "active", accounts: [{ id: "a".repeat(32), name: "Example Agency" }, { id: "b".repeat(32), name: "Clients" }], zones: 42, error: null, hasToken: true,
         access: dnsPreviewAccess({ token: DNS_PREVIEW_TOKENS.agency }, [web, mailcow], false) },
       { id: "cf-2", label: "Church", active: true, status: "active", accounts: [{ id: "c".repeat(32), name: "Church account" }], zones: 7, error: null, hasToken: true,
         access: dnsPreviewAccess({ token: DNS_PREVIEW_TOKENS.church }, [web, mailcow], true) },
       { id: "cf-3", label: "Older token", active: true, status: "active", accounts: [{ id: "d".repeat(32), name: "Partner" }], zones: 3, error: null, hasToken: true,
         access: dnsPreviewAccess({ token: DNS_PREVIEW_TOKENS.older, refused: ["Config Rules: Edit"] }, [web, mailcow], false) },
-    ],
-    accounts: setup ? [] : [
+    ];
+  return {
+    automatic,
+    createIn: null,
+    profiles,
+    defaultProfileId: setup ? null : "web",
+    sites,
+    connections: single ? allConnections.slice(0, 1) : allConnections,
+    accounts: setup ? [] : single ? [
+      { connectionId: "cf-1", accountId: "a".repeat(32), label: "Example Agency (Agency)" },
+    ] : [
       { connectionId: "cf-1", accountId: "a".repeat(32), label: "Example Agency (Agency)" },
       { connectionId: "cf-1", accountId: "b".repeat(32), label: "Clients (Agency)" },
       { connectionId: "cf-2", accountId: "c".repeat(32), label: "Church account (Church)" },
@@ -208,14 +216,15 @@ function dnsPreviewState(url: URL): DnsState {
     token: dnsTokenTemplate([web, mailcow]),
     presets: DNS_PRESETS,
     log,
-    panelHost: dnsPreviewPanelHost(url, setup, plan),
+    panelHost,
+    customDomain,
   };
 }
 
-/** ?panelhost=new|waiting|proxied|clash picks the panel hostname's state; a first visit has none. */
+/** ?panelhost=new|waiting|proxied|clash|adopt|none picks the panel hostname's state; a first visit has none. */
 function dnsPreviewPanelHost(url: URL, setup: boolean, plan: (domain: string, extra: Partial<DnsSitePlan>) => DnsSitePlan): DnsState["panelHost"] {
   const stage = url.searchParams.get("panelhost") ?? (setup ? null : "new");
-  if (!stage || stage === "none") return null;
+  if (!stage || stage === "none" || stage === "adopt") return null;
   const name = "k7m2p9x4.example.com";
   const record = (_type: string, address: string, proxied: boolean) => `${address} · ${proxied ? "proxied" : "DNS only"}`;
   const changes: DnsSitePlan["changes"] = stage === "new"
@@ -669,10 +678,6 @@ let systemTweaksPreview: SystemTweaksState | null = null;
 
 /** ?dark draws a page in the panel's dark theme, from the cookie the panel's own switch sets. */
 function previewTheme(html: string, url: URL): string {
-  // ?setup opens the Setup checklist once it has loaded; &closed leaves it shut.
-  if (url.searchParams.has("setup") && !url.searchParams.has("closed")) {
-    html = html.replace("</body>", () => `<script>addEventListener("load",function(){setTimeout(function(){clpSetupOpen(true)},100)})</script></body>`);
-  }
   // ?open=id,id opens those disclosures, so a section that starts closed can be reviewed.
   const open = url.searchParams.get("open");
   if (open) {
@@ -1889,20 +1894,42 @@ function phpPreviewMutation(path: string, source: URL, body: Record<string, any>
   return null;
 }
 
-const setupPreviewSteps = (["domain", "secure", "sites", "provision"] as const).flatMap((level, index) => ([
-  [["dns-connection", "Connect DNS", "dns", "done", "Cloudflare: Agency"], ["panel-hostname", "Panel hostname", "dns", "todo", "Enter panel.example.com under Admin → Settings → Custom Domain in CloudPanel"]],
-  [["panel-cert", "Panel certificate", "system-tweaks", "done", "The panel serves a certificate made for this server"], ["login-jails", "Login jails", "system-tweaks", "todo", "fail2ban is not installed"],
-    ["real-ip", "Forged visitor IPs", "system-tweaks", "done", "X-Real-IP is trusted only from the proxies that set it"], ["phpmyadmin", "phpMyAdmin rules", "system-tweaks", "done", "phpMyAdmin answers signed-in panel users only"],
-    ["updates", "Automatic updates", "system-tweaks", "todo", "Updates are installed by hand"], ["hetzner-firewall", "Hetzner Cloud Firewall", "firewall", "todo", "No Hetzner token is saved"],
-    ["passkeys", "Passkeys for administrators", "security-keys", "todo", "Security Keys is off"]],
-  [["remote-backups", "Remote backups", null, "todo", "Sites are backed up on this server only"], ["php-limits", "PHP limits for new sites", "resource-limits", "done", "New sites join Standard"],
-    ["smtp-relay", "Outgoing mail relay", "smtp", "done", "Relay: Example Mail"]],
-  [["dns-automatic", "Automatic DNS records", "dns", "todo", "DNS asks before it changes records"], ["auto-ssl", "Certificate at site creation", "panel-tweaks", "todo", "New sites start on a self-signed certificate"],
-    ["smtp-new-sites", "Mail for new sites", "smtp", "na", "Needs a relay first"]],
-][index]!.map(([id, title, addon, state, reason]): SetupItem => ({
-  id: id!, level, title: title!, href: addon ? `/addons/${addon}/` : "/admin/remote-backup", state: state as SetupItem["state"], reason: reason!,
+const setupPreviewSteps = (["domain", "secure", "sites"] as const).flatMap((level, index) => ([
+  [
+    ["dns-connection", "Connect DNS", "dns", "done", "Cloudflare: Agency", "Automates DNS records, panel hostname DNS, and Cloudflare proxy protection for CloudPanel and its sites.", undefined],
+    ["panel-hostname", "Panel hostname", "dns", "todo", "Enter k7m2p9x4.example.com under Admin → Settings → Custom Domain in CloudPanel", "Gives CloudPanel a trusted HTTPS hostname so passkeys and Cloudflare proxying work without port 8443.", undefined],
+    ["panel-gate", "Panel gate", "firewall", "blocked", "Needs Panel hostname first", "Limits direct port 8443 access once the panel answers through Cloudflare on its custom hostname.", ["dns-connection", "panel-hostname"]],
+    ["passkeys", "Passkeys for administrators", "security-keys", "blocked", "Needs Panel hostname first", "Adds hardware security keys and passkeys for administrator sign-in.", ["panel-hostname"]],
+  ],
+  [
+    ["panel-cert", "Port 8443 certificate", "system-tweaks", "done", "The panel serves a certificate made for this server", "Replaces the shared self-signed certificate on port 8443 with a fresh key unique to this server.", undefined],
+    ["login-jails", "Login jails", "system-tweaks", "todo", "fail2ban is not installed", "Bans addresses that repeatedly fail SSH or CloudPanel logins.", undefined],
+    ["real-ip", "Forged visitor IPs", "system-tweaks", "done", "X-Real-IP is trusted only from the proxies that set it", "Prevents visitors from spoofing X-Real-IP headers in Nginx logs and rate limits.", undefined],
+    ["phpmyadmin", "phpMyAdmin rules", "system-tweaks", "done", "phpMyAdmin answers signed-in panel users only", "Blocks direct phpMyAdmin requests unless the browser holds an active CloudPanel login.", undefined],
+    ["updates", "Automatic updates", "system-tweaks", "todo", "Updates are installed by hand", "Installs OS security patches automatically on a schedule.", undefined],
+    ["hetzner-firewall", "Hetzner Cloud Firewall", "firewall", "todo", "No Hetzner token is saved", "Drops unwanted traffic at Hetzner's network edge before it reaches this server.", undefined],
+  ],
+  [
+    ["remote-backups", "Remote backups", null, "todo", "Sites are backed up on this server only", "Stores scheduled site backups off this server so a disk or host failure does not lose data.", undefined],
+    ["dns-automatic", "Automatic DNS records", "dns", "todo", "DNS asks before it changes records", "Creates and updates Cloudflare records automatically whenever a site is added or changed.", ["dns-connection"]],
+    ["auto-ssl", "Certificate at site creation", "panel-tweaks", "todo", "New sites start on a self-signed certificate", "Requests a Let's Encrypt certificate immediately when you create a new site.", undefined],
+    ["php-limits", "PHP limits for new sites", "resource-limits", "done", "New sites join Standard", "Assigns a default PHP memory and worker category to every new site.", undefined],
+    ["smtp-relay", "Outgoing mail relay", "smtp", "done", "Relay: Example Mail", "Sends site mail through an authenticated relay instead of the server's raw IP.", undefined],
+    ["smtp-new-sites", "Mail for new sites", "smtp", "todo", "New sites get no outgoing mail relay automatically", "Grants new sites access to your default SMTP relay without manual setup.", ["smtp-relay"]],
+  ],
+] as const)[index]!.map(([id, title, addon, state, reason, why, requires]): SetupItem => ({
+  id, level, title,
+  href: id === "panel-hostname" ? "/addons/dns/#dns-panel-host"
+    : id === "dns-connection" ? "/addons/dns/#dns-connection"
+    : id === "dns-automatic" ? "/addons/dns/#dns-mode"
+    : id === "passkeys" ? "/security"
+    : addon ? `/addons/${addon}/` : "/admin/remote-backup",
+  why,
+  ...(requires ? { requires: [...requires] } : {}),
+  state: state as SetupItem["state"], reason,
+  ...(state === "blocked" ? { blockedBy: [{ id: "panel-hostname", title: "Panel hostname" }] } : {}),
   addon: addon ? { name: addon, title: ADDONS[addon]!.title, enabled: addon !== "security-keys" } : null,
-}))));
+})));
 const SETUP_PREVIEW_ACTIONS: ActionItem[] = [
   {
     id: "default-server", addon: { name: "system-tweaks", title: "System Tweaks" }, title: "Unknown hostnames reach a site",
@@ -1915,18 +1942,74 @@ const SETUP_PREVIEW_ACTIONS: ActionItem[] = [
   },
 ];
 const SETUP_PREVIEW_DONE: Record<string, string> = {
+  "dns-connection": "Cloudflare: Agency",
   "panel-hostname": "CloudPanel answers at panel.example.com", "login-jails": "Failed panel logins are banned", updates: "Security updates install daily",
-  "hetzner-firewall": "Only Cloudflare reaches the sites and the panel", passkeys: "admin has a security key", "remote-backups": "On, to amazon_s3",
+  "hetzner-firewall": "Only Cloudflare reaches the sites and the panel", "panel-gate": "Port 8443 is gated to Cloudflare",
+  passkeys: "admin has a security key", "remote-backups": "On, to amazon_s3",
   "dns-automatic": "New sites get Web's records", "auto-ssl": "New sites get a Let's Encrypt certificate",
+  "smtp-new-sites": "New sites join Example Mail",
 };
-const setupPreviewPrefs = { skipped: new Set<string>(["updates"]), hidden: false };
+const DEFAULT_PREVIEW_ENABLED = "system-tweaks,firewall,dns,resource-limits,stager,maintenance,git,instatic";
+function initialPreviewEnabled(params: URLSearchParams): string[] {
+  if (params.has("empty")) return [];
+  return (params.get("enabled") ?? DEFAULT_PREVIEW_ENABLED).split(",").filter(Boolean);
+}
+
+const setupPreviewPrefs: { skipped: Set<string>; hidden: boolean | null } = { skipped: new Set<string>(["updates"]), hidden: null };
 
 /**
+ * ?setup=fresh shows an unconfigured server with prerequisites blocking later steps,
  * ?setup=done shows a server with nothing left to suggest, ?setup=fallback one
  * whose DNS token lacks a permission a newer release needs, and ?setup=off root's
  * switch off. ?action=mixed adds Action needed, ?action=only with every
  * suggestion done, ?action=hidden with Setup hidden.
  */
+function setupPreviewView(page: URLSearchParams): SetupView {
+  const action = page.get("action");
+  const scenario = action === "only" ? "done" : page.get("setup");
+  const fresh = scenario === "fresh" || scenario === "tunnel";
+  const enabledAddons = previewEnabled ?? ["system-tweaks", "firewall", "dns", "panel-tweaks", "resource-limits", "smtp", "wp-tools"];
+  const enabledSet = new Set(enabledAddons);
+  const steps = setupPreviewSteps.map((step): SetupItem => {
+    const addon = step.addon ? { ...step.addon, enabled: enabledSet.has(step.addon.name) } : null;
+    let mapped: SetupItem = { ...step, addon };
+    if (fresh) {
+      if (step.id === "dns-connection") mapped = { ...mapped, state: "todo", reason: "No Cloudflare connection is saved" };
+      else if (step.id === "panel-hostname") mapped = { ...mapped, state: "todo", href: "/admin/settings", reason: "Point a hostname at this server's IP, then enter it under Admin → Settings → Custom Domain" };
+      else if (step.id === "panel-gate") mapped = { ...mapped, state: "blocked", blockedBy: [{ id: "dns-connection", title: "Connect DNS" }, { id: "panel-hostname", title: "Panel hostname" }], reason: "Needs Connect DNS and Panel hostname first" };
+      else if (step.id === "passkeys") mapped = { ...mapped, state: "blocked", blockedBy: [{ id: "panel-hostname", title: "Panel hostname" }], reason: "Needs Panel hostname first" };
+      else if (step.id === "dns-automatic") mapped = { ...mapped, state: "blocked", blockedBy: [{ id: "dns-connection", title: "Connect DNS" }], reason: "Needs Connect DNS first" };
+      else if (step.id === "smtp-new-sites") mapped = { ...mapped, state: "blocked", blockedBy: [{ id: "smtp-relay", title: "Outgoing mail relay" }], reason: "Needs Outgoing mail relay first" };
+      else mapped = { ...mapped, state: "todo", blockedBy: undefined, reason: step.id === "panel-cert" ? "CloudPanel uses the stock certificate" : step.id === "real-ip" ? "X-Real-IP is trusted from any address" : step.id === "phpmyadmin" ? "phpMyAdmin answers unauthenticated requests" : step.id === "php-limits" ? "New sites use CloudPanel defaults" : step.id === "smtp-relay" ? "No mail relay is configured" : step.reason };
+    } else if (scenario === "fallback" && step.id === "dns-connection") {
+      mapped = { ...mapped, state: "todo", reason: "Agency's token lacks API Tokens: Read, which DNS now needs to show the token's permissions" };
+    } else if (scenario === "done" || scenario === "fallback") {
+      mapped = { ...mapped, state: "done", blockedBy: undefined, reason: SETUP_PREVIEW_DONE[step.id] ?? step.reason };
+    }
+    if ((mapped.state === "todo" || mapped.state === "blocked") && setupPreviewPrefs.skipped.has(mapped.id)) {
+      mapped = { ...mapped, state: "skipped" };
+    }
+    return mapped;
+  });
+  const base: SetupView = {
+    off: scenario === "off",
+    hidden: setupPreviewPrefs.hidden ?? (action === "hidden"),
+    actions: action ? SETUP_PREVIEW_ACTIONS : [],
+    steps: scenario === "off" ? [] : steps,
+    enabledAddons,
+    skippedIds: [...setupPreviewPrefs.skipped].sort(),
+    context: {
+      customDomain: scenario === "done" || scenario === "fallback" ? { name: "panel.example.com", issued: true } : null,
+      dnsConnected: !fresh,
+      dnsAutomatic: scenario === "done" || scenario === "fallback",
+      dnsPanelHost: scenario === "done" || scenario === "fallback" ? "panel.example.com" : fresh ? null : "k7m2p9x4.example.com",
+      dnsZones: fresh ? [] : ["church.example", "example-brand.net", "example.com", "example.net", "example.org"],
+      serverIps: { ipv4: "203.0.113.10", ipv6: "2001:db8::10" },
+    },
+  };
+  return scenario === "tunnel" ? applyRequestOrigin(base, "clp-stg.example.dev") : base;
+}
+
 async function setupPreview(req: Request, url: URL): Promise<Response | null> {
   if (url.pathname !== "/addons/api/setup") return null;
   if (req.method === "POST") {
@@ -1936,22 +2019,16 @@ async function setupPreview(req: Request, url: URL): Promise<Response | null> {
     if (typeof body.hidden === "boolean") setupPreviewPrefs.hidden = body.hidden;
   }
   const page = new URL(req.headers.get("referer") ?? url.href).searchParams;
-  const action = page.get("action");
-  const scenario = action === "only" ? "done" : page.get("setup");
-  const steps = setupPreviewSteps.map((step): SetupItem => {
-    if (scenario === "fallback" && step.id === "dns-connection") {
-      return { ...step, state: "todo", reason: "Agency's token lacks API Tokens: Read, which DNS now needs to show the token's permissions" };
-    }
-    if ((scenario === "done" || scenario === "fallback") && step.state === "todo") return { ...step, state: "done", reason: SETUP_PREVIEW_DONE[step.id] ?? step.reason };
-    return step.state === "todo" && setupPreviewPrefs.skipped.has(step.id) ? { ...step, state: "skipped" } : step;
+  const view = setupPreviewView(page);
+  const headerOnly = req.method === "GET" && url.searchParams.get("header") === "1";
+  return Response.json({
+    ok: true,
+    data: {
+      show: setupShows(view),
+      attention: view.actions.length > 0,
+      ...(headerOnly ? {} : { html: setupPanelHtml(view) }),
+    },
   });
-  const view: SetupView = {
-    off: scenario === "off",
-    hidden: action === "hidden" || setupPreviewPrefs.hidden,
-    actions: action ? SETUP_PREVIEW_ACTIONS : [],
-    steps: scenario === "off" ? [] : steps,
-  };
-  return Response.json({ ok: true, data: { show: setupShows(view), attention: view.actions.length > 0, html: setupPanelHtml(view) } });
 }
 
 function managerPreviewMutation(path: string, source: URL): Response | null {
@@ -1964,7 +2041,7 @@ function managerPreviewMutation(path: string, source: URL): Response | null {
   }
   const managerRoute = path.match(/^\/addons\/api\/addons\/([^/]+)\/(enable|disable)$/);
   if (managerRoute) {
-    previewEnabled ??= (source.searchParams.get("enabled") ?? "firewall,instatic,stager,maintenance,resource-limits,git").split(",");
+    previewEnabled ??= initialPreviewEnabled(source.searchParams);
     previewManagerJob = {
       id: "20261021T120000Z-" + (++previewJobNumber).toString(16).padStart(6, "0"), addon: managerRoute[1]!,
       kind: managerRoute[2]!, state: "running", step: "Updating addon", error: "", createdAt: "", startedAt: "", finishedAt: "",
@@ -2246,10 +2323,16 @@ const server = Bun.serve({
         } : null,
       });
     }
+    if (path === "/addons/setup" || path === "/addons/setup/") {
+      const page = setupPage(setupPreviewView(url.searchParams), notice, { csrf: "preview-csrf-token" });
+      return new Response(previewTheme(await page.text(), url), { headers: page.headers });
+    }
     if (path === "/addons/") {
       // ?enabled= picks which addons are on, so the Available section and the
       // enable/disable buttons can be reviewed without a CloudPanel install.
-      const enabled = previewEnabled ?? (empty ? [] : (url.searchParams.get("enabled") ?? "firewall,instatic,stager,maintenance,resource-limits,git").split(",").filter(Boolean));
+      const enabledSet = new Set(previewEnabled ?? initialPreviewEnabled(url.searchParams));
+      const catalogNames = Object.keys(ADDONS);
+      const enabled = catalogNames.filter((name) => enabledSet.has(name));
       const previewJob = state && ["running", "queued", "failed"].includes(state)
         ? {
             id: "20260910T093000Z-abc123", kind: "enable", addon: "stager", state,
@@ -2258,7 +2341,7 @@ const server = Bun.serve({
           }
         : null;
       const page = indexPage(enabled, notice, {
-        available: ["dns", "firewall", "instatic", "stager", "maintenance", "resource-limits", "git", "panel-tweaks", "system-tweaks", "wp-tools", "smtp", "terminal", "security-keys"].filter((name) => !enabled.includes(name)),
+        available: catalogNames.filter((name) => !enabledSet.has(name)),
         job: previewJob,
         csrf: "preview-csrf-token",
         // ?news shows what changed since 2.0.0, and ?locked root's lock on System Tweaks.

@@ -89,30 +89,35 @@ every sender is left exactly as written.
 
 ## Ask first and Automatic
 
-The page puts the sites first, then the redirect domains, then the profiles
-with the choice of default,
-the connections and settings that are set once, and last the change log, which
-is looked back at rather than worked in. The site
-list has the shared search from six sites and selection, as the other site
-lists do, with filters for needs attention, changes waiting and not managed,
-and by what each site runs; every heading sorts. Redirect domains are planned
-and checked with the sites but are not CloudPanel sites, so they have a
-Redirects card of their own, holding Add redirect and Find redirects in
-Cloudflare: each row has the target, its status and what kept, who serves it,
-the profile its mail rows come from, and the DNS status, with Edit and Details.
-Its rows are not site rows, so the site table's selection, filter and sort
-leave them out, and a redirect's profile is chosen in Edit rather than in the
-row. On a phone each card heads with "domain → target" and its note, then the
-DNS status, then the profile with Edit and Details beside it, as a site card
-does; past ten redirects the rest wait behind a Show all button. A site's Details dialog leads with
-what needs doing: its status chip beside the domain, then problems and, while
-its zone is pending, the nameservers to set at the registrar, each with its own
-copy button; then what will change, with a redirect's pending changes said to
-come at the next check, since it has no Apply; then the facts that only
-describe it. A redirect's Edit sits in the dialog's footer. Until a connection exists it opens with the three steps that make a
-new site publish itself: connect, choose the default, turn on Automatic. The
-bar and the switch are there without a connection too once a redirect domain
-exists, since its stand-in site waits for Automatic.
+Until a Cloudflare connection exists, the page replaces the full workspace with
+a focused first-run setup card that links straight to Connect Cloudflare and,
+when stand-in redirects already exist, **Check now**, the Redirects card, and
+the Ask-first bar or Automatic sync toggle.
+Once connected, the page uses the shared `.section-shell` navigation to split
+into five sections: Sites, Redirects, Profiles, Settings, and Activity. Deep
+links such as `#dns-connection`, `#dns-panel-host`, and `#dns-mode` open the
+matching section automatically.
+
+The Sites section holds the site table, the Ask-first banner while Automatic is
+off, and any deleted-site orphan records. It has the shared search from six
+sites, filters for needs attention, changes waiting, not managed, and site
+runtime, sorting on every heading, and desktop bulk controls that stay hidden
+until at least one row is ticked. When only one Cloudflare connection exists,
+each site's status line omits the redundant connection label. The Redirects
+section holds Add redirect, Find redirects in Cloudflare, and the redirect
+table, keeping redirects out of the site table's selection, filters, and sort.
+On a phone each redirect card leads with source and target, DNS status, and the
+profile with Edit and Details beside it, cutting past ten rows behind a Show
+all button. A site's Details dialog leads with its status chip, problems, any
+pending nameservers with per-nameserver copy buttons, pending changes, and
+descriptive facts.
+
+The Profiles section holds the record profiles and the default profile selector
+for new sites. The Settings section holds the Automatic sync toggle,
+Cloudflare connections, the New zones account picker when more
+than one Cloudflare account is reachable, Panel hostname, and closed
+disclosures for Mailcow and Server addresses that open automatically when
+configured or overridden. The Activity section holds the change log.
 
 There is one switch for the whole addon, not one per profile: the operator
 decides once whether DNS may write, and every profile, zone option and missing
@@ -268,7 +273,13 @@ deletes both.
 
 The panel hostname is a third kind of entry beside sites and redirect domains,
 planned through the same switch, reviews, log and lock, with a fixed profile:
-A and AAAA at the name, no mail, and the ACME Full SSL rule for its zone. The
+A and AAAA at the name, no mail, and the ACME Full SSL rule for its zone.
+Saving a panel hostname requires at least one Cloudflare connection, and `list`
+also exposes CloudPanel's existing custom domain when `panelHost` is unset so
+Settings can offer one-click adoption. While DNS is in Ask first, saving a
+panel hostname reports that records wait until Automatic is turned on. When a
+panel hostname plan has a problem, the card shows the error once and hides the
+next-step CloudPanel prompt. The
 page offers a Random button that generates an eight-character unambiguous
 lowercase label starting with a letter from `a-z` and continuing with `a-z` and
 `2-9`, excluding `i`, `l`, `o`, `0` and `1`, and suggests connected zone names,
@@ -561,10 +572,10 @@ for, the zone, what it was before where that is known, and what made it: a
 scheduled check, Check now, a new site, a confirmed review, Remove records or a
 deleted redirect.
 Each run collects its writes and they are saved before the page's reply and
-again when the action ends, so writes made before a failure are kept. The log
-is the newest thousand writes; the page shows the newest ten and the rest of
-the first two hundred under a disclosure. With nothing logged the card still
-shows, saying so, and while DNS asks first that this is why. Provider errors are not logged: they
+again when the action ends, so writes made before a failure are kept. The log is the newest thousand writes; once Cloudflare is connected, the
+Activity section shows the newest ten and puts the rest of the first two
+hundred under a disclosure. With nothing logged, Activity still shows its empty
+state and explains when Ask first is why. Provider errors are not logged: they
 repeat every check and are already on the site's plan.
 
 ## State, secrets and removal

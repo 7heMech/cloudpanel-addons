@@ -4,7 +4,7 @@ import CLIENT_JS_BODY from "./views.client.js" with { type: "text" };
 import { esc } from "../../../lib/app-http";
 import {
   TWEAK_ROW_JS, FLEET_FOOTER_HTML, FLEET_SELECTION_HTML, FLEET_ROW_SELECTION_JS, fleetFilterHtml, filterWord,
-  valueFilters, renderLayout,
+  valueFilters, renderLayout, sectionShellHtml, type SectionTab,
 } from "../../../lib/app-ui";
 import { mountPath } from "../../../lib/mount";
 import {
@@ -225,6 +225,18 @@ function siteTableRow(site: PoolSiteState, categories: PoolCategory[]): string {
   </tr>`;
 }
 
+function memoryAttention(memory: ResourceLimitsState["memory"]): "bad" | "warn" | undefined {
+  if ("error" in memory) return "bad";
+  if (
+    memory.mysql.pending
+    || (memory.settings.mysql && !memory.mysql.inPlace)
+    || Boolean(memory.redis.problem)
+    || (memory.settings.redis && !memory.redis.capped)
+    || (memory.settings.oom && !memory.oom.inPlace)
+  ) return "warn";
+  return undefined;
+}
+
 export function dashboardView(state: ResourceLimitsState): string {
   const counts = new Map(state.categories.map((category) => [category.id, 0]));
   for (const site of state.sites) {
@@ -236,13 +248,7 @@ export function dashboardView(state: ResourceLimitsState): string {
   const siteRows = state.sites.map((site) => siteTableRow(site, state.categories)).join("");
   const total = state.sites.length;
 
-  return `<div class="page-heading">
-    <div><h1>Resource Limits</h1>
-      <p>Set PHP worker limits and share this server’s memory between PHP, MySQL and Redis.</p>
-      <p class="hint">PHP’s <code>memory_limit</code> and <code>upload_max_filesize</code> stay in CloudPanel’s PHP Settings tab.</p></div>
-  </div>
-  ${memoryCard(state.memory, state.sites)}
-  ${drifted
+  const sitesPanel = `${drifted
     ? `<div class="notice">${drifted} ${drifted === 1 ? "site no longer matches the category it is" : "sites no longer match the category they are"} in, which is what changing a PHP version leaves behind. Repair puts ${drifted === 1 ? "it" : "them"} back within fifteen minutes.
       <div class="actions notice-actions"><button class="btn" type="button" onclick="repairDrifted()">Put them back now</button></div></div>`
     : ""}
@@ -267,8 +273,9 @@ export function dashboardView(state: ResourceLimitsState): string {
       </tr></thead><tbody>${siteRows}</tbody></table></div>
       ${FLEET_FOOTER_HTML}`
     : '<div class="empty">No CloudPanel site runs PHP, so there is no PHP-FPM pool to tune.</div>'}
-  </div>
-  <div class="card card-table" id="rl-categories"><div class="card-header category-header"><div><h2>Categories</h2>
+  </div>`;
+
+  const categoriesPanel = `<div class="card card-table" id="rl-categories"><div class="card-header category-header"><div><h2>Categories</h2>
       <p class="hint">Limits apply to every site separately: one category on many sites multiplies its workers.</p></div>
     <div class="category-tools">
       <div class="default-field"><label class="hint" for="default-category">New sites join</label>
@@ -279,7 +286,20 @@ export function dashboardView(state: ResourceLimitsState): string {
         <th scope="col" class="numeric">Sites</th><th scope="col" class="action-cell">Actions</th></tr></thead>
       <tbody>${categoryRows}</tbody></table></div>`
     : '<div class="empty">No categories yet. Create one to give a group of sites the same PHP-FPM limits.</div>'}
+  </div>`;
+
+  const tabs: SectionTab[] = [
+    { id: "memory", label: "Memory", attention: memoryAttention(state.memory), content: memoryCard(state.memory, state.sites) },
+    { id: "sites", label: "PHP sites", count: total, attention: drifted ? "warn" : undefined, content: sitesPanel },
+    { id: "categories", label: "Categories", count: state.categories.length, content: categoriesPanel },
+  ];
+
+  return `<div class="page-heading">
+    <div><h1>Resource Limits</h1>
+      <p>Set PHP worker limits and share this server’s memory between PHP, MySQL and Redis.</p>
+      <p class="hint">PHP’s <code>memory_limit</code> and <code>upload_max_filesize</code> stay in CloudPanel’s PHP Settings tab.</p></div>
   </div>
+  ${sectionShellHtml("resource-limits", "Resource Limits sections", tabs, "memory")}
   <dialog id="category-dialog" aria-labelledby="category-dialog-title" data-default-profile="${esc(JSON.stringify(DEFAULT_CATEGORY_PROFILE))}">
     <div class="dialog-header"><h2 id="category-dialog-title">New category</h2></div>
     ${categoryForm(DEFAULT_CATEGORY_PROFILE)}

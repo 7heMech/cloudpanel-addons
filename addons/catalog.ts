@@ -18,22 +18,23 @@ import { SECURITY_KEYS_ADDON } from "./security-keys/addon";
 
 /**
  * Order is the order addons are listed and installed, and the order their
- * new-site work runs in: DNS before SMTP Relay. Keep it deliberate.
+ * new-site work runs in: core server and security addons first, with DNS before
+ * SMTP Relay. Keep it deliberate.
  */
 const DEFINITIONS: AddonDefinition[] = [
+  SYSTEM_TWEAKS_ADDON,
   FIREWALL_ADDON,
   DNS_ADDON,
-  INSTATIC_ADDON,
+  SECURITY_KEYS_ADDON,
+  PANEL_TWEAKS_ADDON,
+  RESOURCE_LIMITS_ADDON,
+  SMTP_ADDON,
+  WP_TOOLS_ADDON,
   STAGER_ADDON,
   MAINTENANCE_ADDON,
-  RESOURCE_LIMITS_ADDON,
   GIT_ADDON,
-  PANEL_TWEAKS_ADDON,
-  SYSTEM_TWEAKS_ADDON,
-  WP_TOOLS_ADDON,
-  SMTP_ADDON,
+  INSTATIC_ADDON,
   TERMINAL_ADDON,
-  SECURITY_KEYS_ADDON,
 ];
 
 function specOf(definition: AddonDefinition): AddonSpec {

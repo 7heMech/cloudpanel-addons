@@ -24,6 +24,12 @@
 - Type-check with `bun run typecheck` (`bun check`), not `tsc`: it is what CI
   runs, and it covers `tools/` and `tests/`, which `tsc` on `tsconfig.json`
   leaves out.
+- Follow the layout patterns in `docs/decisions/platform.md` under Shared
+  interface and Setup checklist: replace unconfigured multi-card pages with a
+  focused first-run card, omit absent vendor cards, and split multi-concern
+  pages with `.section-shell` instead of stacking every tool into one scroll.
+- When changing UI, capture and inspect unconfigured, mid-setup, narrow, and
+  dark views with `bun run preview:shot`.
 
 ## Seeing the UI
 

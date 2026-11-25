@@ -291,7 +291,7 @@ test("what MainWP automation still owes a site", () => {
 
 test("the watchers run WP Tools, DNS and System Tweaks, and the certificate watcher watches CloudPanel's certificates", () => {
   expect(ADDONS["wp-tools"]!.newSites).toBeDefined();
-  expect(Object.values(ADDONS).filter((spec) => spec.certificates).map((spec) => spec.name)).toEqual(["dns", "system-tweaks", "wp-tools"]);
+  expect(Object.values(ADDONS).filter((spec) => spec.certificates).map((spec) => spec.name)).toEqual(["system-tweaks", "dns", "wp-tools"]);
   const units = certificateUnits();
   expect(units.path).toContain("PathChanged=/etc/nginx/ssl-certificates");
   expect(units.path).toContain("Unit=clp-addons-certificates.service");

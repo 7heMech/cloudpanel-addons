@@ -1,7 +1,10 @@
 import CLIENT_BODY from "./views.client.js" with { type: "text" };
 import STYLE from "./views.css" with { type: "text" };
 import { esc } from "../../../lib/app-http";
-import { ATTENTION_RANK, FLEET_FOOTER_HTML, FLEET_SELECTION_HTML, FLEET_ROW_SELECTION_JS, PHONE_CUT, fleetFilterHtml, filterWord, phoneMoreHtml, valueFilters, renderLayout } from "../../../lib/app-ui";
+import {
+  ATTENTION_RANK, FLEET_FOOTER_HTML, FLEET_SELECTION_HTML, FLEET_ROW_SELECTION_JS, PHONE_CUT,
+  fleetFilterHtml, filterWord, phoneMoreHtml, renderLayout, sectionShellHtml, valueFilters, type SectionTab,
+} from "../../../lib/app-ui";
 import { mountPath } from "../../../lib/mount";
 import type { DnsState, SiteView } from "../action";
 import type { Profile } from "../model";
@@ -69,7 +72,7 @@ function profileRow(profile: DnsState["profiles"][number]): string {
 }
 
 /** What one site's DNS amounts to, in a word and a line. */
-export function siteStatus(site: SiteView, automatic: boolean): { label: string; tone: string; hint: string } {
+export function siteStatus(site: SiteView, automatic: boolean, singleConnection = false): { label: string; tone: string; hint: string } {
   const plan = site.plan;
   if (!site.profileId && !site.redirect) return { label: "—", tone: "muted", hint: "" };
   if (!plan) return { label: "Not checked yet", tone: "muted", hint: "" };
@@ -78,7 +81,8 @@ export function siteStatus(site: SiteView, automatic: boolean): { label: string;
     if (site.redirect.standIn && !pending) return { label: "On this server", tone: "ok", hint: "Served by a stand-in site until Cloudflare is connected" };
     return { label: site.redirect.standIn ? "Stand-in to update" : "Stand-in to create", tone: "warn", hint: automatic ? "" : "DNS asks first" };
   }
-  const zone = plan.zone ? `${plan.zone.name} · ${plan.zone.connection}` : "";
+  const suffix = plan.zone && !singleConnection ? ` · ${plan.zone.connection}` : "";
+  const zone = plan.zone ? `${plan.zone.name}${suffix}` : "";
   if (plan.problems.length) return { label: "Needs attention", tone: "bad", hint: plan.problems[0]! };
   const waiting = plan.changes.filter((change) => change.waits).length;
   if (waiting) return { label: "Waits for review", tone: "warn", hint: `Its address is in place; ${plural(waiting, "change")} reach${waiting === 1 ? "es" : ""} further` };
@@ -86,7 +90,7 @@ export function siteStatus(site: SiteView, automatic: boolean): { label: string;
   if (plan.zone && plan.zone.status !== "active") return { label: `Zone ${plan.zone.status}`, tone: "warn", hint: "Set its nameservers at the registrar" };
   if (!plan.zone && pending) return { label: "Zone to create", tone: "warn", hint: "" };
   if (pending) return { label: automatic ? `${plural(pending, "change")} to make` : plural(pending, "difference"), tone: "warn", hint: zone };
-  return { label: "In sync", tone: "ok", hint: plan.wildcard && plan.zone ? `${plan.wildcard} · ${plan.zone.connection}` : zone };
+  return { label: "In sync", tone: "ok", hint: plan.wildcard && plan.zone ? `${plan.wildcard}${suffix}` : zone };
 }
 
 /** A line under a status, cut to two lines in the table; Details and the tooltip have it whole. */
@@ -99,8 +103,8 @@ function typeLabel(site: SiteView): string {
 }
 
 /** The status cell both tables share: a chip, then its line and the certificate's, each cut to two lines. */
-function statusCell(site: SiteView, automatic: boolean): string {
-  const status = siteStatus(site, automatic);
+function statusCell(site: SiteView, automatic: boolean, singleConnection = false): string {
+  const status = siteStatus(site, automatic, singleConnection);
   return `${status.label === "—" ? '<span class="tone-muted">—</span>' : `<span class="badge tone-${status.tone}">${esc(status.label)}</span>`}${hintLine(status.hint)}${
     site.ssl ? hintLine(site.ssl.startsWith("Waiting for DNS") ? "Certificate requested; waits for DNS" : `Certificate: ${site.ssl}`) : ""}`;
 }
@@ -129,7 +133,7 @@ function redirectRow(site: SiteView, state: DnsState): string {
     <td data-label="Redirects to" class="dns-redirect-cell"><span class="dns-redirect-target" title="${esc(redirect.target)}">${target}</span>
       <span class="hint">${redirect.status}${kept.length ? ` · keeps ${kept.join(" and ")}` : ""} · ${servedBy(site, state)}</span></td>
     <td data-label="Profile" class="dns-redirect-profile">${profile ? esc(profile.name) : '<span class="tone-muted">No profile</span>'}</td>
-    <td data-label="DNS" class="dns-status">${statusCell(site, state.automatic)}</td>
+    <td data-label="DNS" class="dns-status">${statusCell(site, state.automatic, state.connections.length <= 1)}</td>
     <td class="action-cell"><div class="actions">
       <button class="btn" type="button" onclick="dnsEditRedirect('${domain}')">Edit</button>
       <button class="btn" type="button" onclick="dnsShowSite('${domain}')">Details</button>
@@ -138,7 +142,8 @@ function redirectRow(site: SiteView, state: DnsState): string {
 }
 
 function siteRow(site: SiteView, state: DnsState): string {
-  const status = siteStatus(site, state.automatic);
+  const single = state.connections.length <= 1;
+  const status = siteStatus(site, state.automatic, single);
   const profile = state.profiles.find((candidate) => candidate.id === site.profileId);
   const show = [
     status.tone === "bad" ? "attention" : status.tone === "warn" ? "pending" : "",
@@ -151,7 +156,7 @@ function siteRow(site: SiteView, state: DnsState): string {
     <td class="site-cell"><strong>${esc(site.domain)}</strong></td>
     <td class="type-cell">${esc(typeLabel(site))}</td>
     <td data-label="Profile" class="dns-profile-cell"><select aria-label="Profile for ${esc(site.domain)}" onchange="dnsAssignRow(this)">${profileOptions(state.profiles, site.profileId, NO_PROFILE)}</select></td>
-    <td data-label="DNS" class="dns-status">${statusCell(site, state.automatic)}</td>
+    <td data-label="DNS" class="dns-status">${statusCell(site, state.automatic, single)}</td>
     <td class="action-cell">${site.profileId ? `<button class="btn" type="button" onclick="dnsShowSite('${esc(site.domain)}')">Details</button>` : ""}</td>
   </tr>`;
 }
@@ -213,14 +218,16 @@ function connectionRow(connection: DnsState["connections"][number]): string {
   const { access } = connection;
   const reach = access?.reach ? `${access.reach} · ${plural(connection.zones, "zone")} now` : plural(connection.zones, "zone");
   const line = `${esc(reach)} · ${status}${connection.error ? ` · ${esc(connection.error)}` : ""}`;
-  return `<tr data-connection="${esc(connection.id)}" class="dns-connection-row">
-    <td class="site-cell"><strong>${esc(connection.label)}</strong><span class="hint">Cloudflare</span></td>
-    <td class="wide-cell">${esc(accounts || "—")}${access ? accessDetails(connection.id, access, line) : `<span class="hint">${line}</span>`}</td>
-    <td data-label="Actions" class="action-cell"><div class="actions">
+  return `<div class="dns-setting-row dns-connection-row" data-connection="${esc(connection.id)}">
+    <div class="dns-setting-main">
+      <strong>${esc(connection.label)}</strong>${accounts ? `<span class="hint">${esc(accounts)}</span>` : ""}
+      ${access ? accessDetails(connection.id, access, line) : `<span class="hint">${line}</span>`}
+    </div>
+    <div class="actions">
       <button class="btn" type="button" onclick="dnsEditConnection('${esc(connection.id)}')">Edit</button>
       <button class="btn btn-danger" type="button" onclick="dnsRemoveConnection('${esc(connection.id)}')">Remove</button>
-    </div></td>
-  </tr>`;
+    </div>
+  </div>`;
 }
 
 function address(value: string, detected: string | null, placeholder: string): string {
@@ -230,47 +237,62 @@ function address(value: string, detected: string | null, placeholder: string): s
   return `${name} <span class="tone-warn">${detected === null ? "not detected" : "none"}</span>`;
 }
 
-/** Where a site's missing zone is created: the only account the connections reach, or the one chosen. */
+/** Where a site's missing zone is created; shown only when connections span multiple accounts or a saved choice went missing. */
 function newZonesRow(state: DnsState): string {
   const chosen = state.createIn && state.accounts.find((account) => account.connectionId === state.createIn!.connectionId && account.accountId === state.createIn!.accountId);
-  const value = state.accounts.length > 1 || (state.createIn && !chosen)
-    ? `<select id="dns-zone-account" aria-label="Account for new zones" onchange="dnsSetZoneAccount(this)">
+  if (state.accounts.length <= 1 && !(state.createIn && !chosen)) return "";
+  const value = `<select id="dns-zone-account" aria-label="Account for new zones" onchange="dnsSetZoneAccount(this)">
         <option value=""${chosen ? "" : " selected"}>${chosen ? "Not chosen" : "Choose an account"}</option>${state.accounts.map((account) => {
           const key = `${account.connectionId}/${account.accountId}`;
           return `<option value="${esc(key)}"${chosen === account ? " selected" : ""}>${esc(account.label)}</option>`;
-        }).join("")}</select>`
-    : state.accounts.length ? esc(state.accounts[0]!.label) : '<span class="hint">No connection reaches an account yet.</span>';
-  return `<tr><td class="site-cell"><strong>New zones</strong><span class="hint">For sites not in Cloudflare</span></td>
-        <td class="wide-cell">${value}<span class="hint">Created in this account; its nameservers are shown to set at the registrar.</span></td>
-        <td data-label="Actions" class="action-cell"></td></tr>`;
+        }).join("")}</select>`;
+  return `<div class="dns-setting-row"><div class="dns-setting-main"><strong>New zones</strong>
+        <span class="hint">Account where missing Cloudflare zones are created.</span></div>
+        <div class="dns-setting-control">${value}</div></div>`;
 }
 
-/** What DNS connects to and what the placeholders stand for: set once, rarely touched. */
-function settingsCard(state: DnsState): string {
+function connectionsCard(state: DnsState): string {
+  const rows = state.connections.map(connectionRow).join("");
+  return `<div class="card" id="dns-connection"><div class="card-header"><div><h2>Cloudflare connections</h2>
+      <p class="hint">Each connection is one API token. A site uses the longest matching zone.</p></div>
+      <button class="btn" type="button" onclick="dnsEditConnection('')">Add Cloudflare connection</button></div>
+    <div class="dns-setting-list">${rows}${newZonesRow(state)}</div></div>`;
+}
+
+function syncModeCard(state: DnsState): string {
+  return `<div class="card split-card" id="dns-mode"><div><h2>Automatic sync</h2>
+      <p class="hint">${state.automatic
+        ? "On. DNS keeps every assigned site in sync and creates missing zones."
+        : "Ask first. DNS shows differences without writing to Cloudflare or Mailcow."}</p></div>
+      <button class="btn${state.automatic ? "" : " btn-primary"}" type="button" onclick="dnsSetAutomatic(${state.automatic ? "false" : "true"})">${state.automatic ? "Switch to Ask first" : "Review and turn on Automatic"}</button></div>`;
+}
+
+function integrationsCard(state: DnsState): string {
   const { mailcow, server } = state;
   const dkim = mailcow.dkimSource ? `shares the DKIM key of ${mailcow.dkimSource}` : `${mailcow.dkimBits}-bit DKIM, selector ${mailcow.dkimSelector}`;
-  const mailcowValue = mailcow.url
-    ? `<span class="mono">{mailcow.host}</span> ${esc(mailcow.host)}<span class="hint">${esc([dkim, mailcow.sharedMailbox && `${mailcow.sharedMailbox} may send as each domain`].filter(Boolean).join(" · "))}</span>`
-    : '<span class="hint">Not set up. Profiles that use Mailcow need it.</span>';
-  const connections = state.connections.length ? state.connections.map(connectionRow).join("") : `<tr>
-      <td class="site-cell"><strong>Cloudflare</strong></td><td class="wide-cell"><span class="hint">Not connected</span></td>
-      <td data-label="Actions" class="action-cell"><button class="btn" type="button" onclick="dnsEditConnection('')">Connect</button></td></tr>`;
-  return `<div class="card card-table"${state.connections.length ? ' id="dns-connection"' : ""}><div class="card-header"><div><h2>Settings</h2>
-      <p class="hint">Each Cloudflare connection is one API token. A site is managed in the longest zone any connection reaches.</p></div>
-      ${state.connections.length ? '<button class="btn" type="button" onclick="dnsEditConnection(\'\')">Add Cloudflare connection</button>' : ""}</div>
-    <div class="table-scroll"><table class="fleet-table dns-settings-table"><tbody>
-      ${connections}
-      ${state.connections.length ? newZonesRow(state) : ""}
-      <tr><td class="site-cell"><strong>Server addresses</strong></td>
-        <td class="wide-cell">${address(server.ipv4, server.detected.ipv4, "{ipv4}")}<br>${address(server.ipv6, server.detected.ipv6, "{ipv6}")}</td>
-        <td data-label="Actions" class="action-cell"><button class="btn" type="button" onclick="dnsEditServer()">Edit</button></td></tr>
-      <tr><td class="site-cell"><strong>Mailcow</strong>${mailcow.url ? `<span class="hint">${esc(new URL(mailcow.url).host)}</span>` : ""}</td>
-        <td class="wide-cell">${mailcowValue}</td>
-        <td data-label="Actions" class="action-cell"><div class="actions">
-          <button class="btn" type="button" onclick="dnsEditMailcow()">${mailcow.url ? "Edit" : "Set up"}</button>
-          ${mailcow.url || mailcow.hasKey ? '<button class="btn btn-danger" type="button" onclick="dnsRemoveMailcow()">Remove</button>' : ""}
-        </div></td></tr>
-    </tbody></table></div></div>`;
+  const mailcowSummary = mailcow.url ? new URL(mailcow.url).host : "Optional · not set up";
+  const mailcowOpen = Boolean(mailcow.url || mailcow.hasKey);
+  const serverOverridden = Boolean(server.ipv4 || server.ipv6 || (!server.detected.ipv4 && !server.detected.ipv6));
+  const serverSummary = [server.ipv4 || server.detected.ipv4, server.ipv6 || server.detected.ipv6].filter(Boolean).join(" · ") || "Not detected";
+  return `<div class="card"><div class="card-header"><h2>Integrations &amp; advanced</h2></div>
+    <details class="disclosure" id="dns-mailcow-disclosure"${mailcowOpen ? " open" : ""}>
+      <summary><div><span class="summary-title">Mailcow</span><span class="hint">${esc(mailcowSummary)}</span></div></summary>
+      <div class="dns-setting-row dns-disclosure-row"><div class="dns-setting-main">
+        ${mailcow.url
+          ? `<span class="mono">{mailcow.host}</span> ${esc(mailcow.host)}<span class="hint">${esc([dkim, mailcow.sharedMailbox && `${mailcow.sharedMailbox} may send as each domain`].filter(Boolean).join(" · "))}</span>`
+          : '<span class="hint">Connect Mailcow only if a profile manages mail domains and DKIM keys.</span>'}
+      </div><div class="actions">
+        <button class="btn" type="button" onclick="dnsEditMailcow()">${mailcow.url ? "Edit" : "Set up"}</button>
+        ${mailcow.url || mailcow.hasKey ? '<button class="btn btn-danger" type="button" onclick="dnsRemoveMailcow()">Remove</button>' : ""}
+      </div></div>
+    </details>
+    <details class="disclosure" id="dns-server-disclosure"${serverOverridden ? " open" : ""}>
+      <summary><div><span class="summary-title">Server addresses</span><span class="hint">${esc(serverSummary)}</span></div></summary>
+      <div class="dns-setting-row dns-disclosure-row"><div class="dns-setting-main">
+        ${address(server.ipv4, server.detected.ipv4, "{ipv4}")}<br>${address(server.ipv6, server.detected.ipv6, "{ipv6}")}
+      </div><div class="actions"><button class="btn" type="button" onclick="dnsEditServer()">Edit</button></div></div>
+    </details>
+  </div>`;
 }
 
 const PANEL_SETTINGS_URL = "/admin/settings";
@@ -281,34 +303,42 @@ function panelHostCard(state: DnsState): string {
   const zones = state.zones.length
     ? `<datalist id="dns-zone-list">${state.zones.map((zone) => `<option value="${esc(zone)}"></option>`).join("")}</datalist>`
     : "";
+  const adopt = !host && state.customDomain
+    ? `<div class="notice dns-adopt-bar"><span>CloudPanel already uses <strong>${esc(state.customDomain.name)}</strong>${state.customDomain.issued ? " with a valid certificate" : ""}.</span>
+        <button class="btn" type="button" onclick="dnsAdoptPanelHost('${esc(state.customDomain.name)}')">Manage in Cloudflare</button></div>`
+    : "";
   const form = `<form class="dns-panel-host-form" onsubmit="dnsSavePanelHost(event)">
       <input id="dns-panel-host-name" name="name" aria-label="Panel hostname" autocomplete="off" spellcheck="false" placeholder="k7m2p9x4.example.com"${zones ? ' list="dns-zone-list"' : ""} value="${esc(host?.name ?? "")}">${zones}
       <button class="btn" type="button" onclick="dnsRandomPanelHost()">Random</button>
-      <button class="btn${host ? "" : " btn-primary"}" type="submit">${host ? "Change" : "Save"}</button>
+      <button class="btn" type="submit">${host ? "Change" : "Save"}</button>
       ${host ? '<button class="btn btn-danger" type="button" onclick="dnsRemovePanelHost()">Remove</button>' : ""}</form>`;
   let body = "";
   if (host) {
+    const planProblems = host.plan?.problems ?? [];
+    const hasProblems = Boolean(host.problem || planProblems.length);
     const status = host.problem
       ? { label: "Needs attention", tone: "bad", hint: host.problem }
-      : siteStatus({ domain: host.name, type: "panel", profileId: "panel-hostname", plan: host.plan, ssl: null }, state.automatic);
+      : siteStatus({ domain: host.name, type: "panel", profileId: "panel-hostname", plan: host.plan, ssl: null }, state.automatic, state.connections.length <= 1);
     const pending = host.plan?.changes.filter((change) => change.action !== "note") ?? [];
     const settings = `<a href="${PANEL_SETTINGS_URL}">Admin → Settings → Custom Domain</a>`;
     const custom = host.customDomain;
-    const next = host.problem ? ""
-      : host.proxied && !pending.length && host.plan ? `CloudPanel's custom domain, proxied through Cloudflare${host.plan.wildcard ? ` via ${esc(host.plan.wildcard)}` : ""}. The zone's Full SSL rule for Let's Encrypt checks keeps its renewals working.`
-      : !host.proxied && custom?.name === host.name ? "CloudPanel is getting its certificate. DNS proxies it through Cloudflare once that is issued."
+    const next = hasProblems ? ""
+      : host.proxied && !pending.length && host.plan ? `CloudPanel's custom domain, proxied through Cloudflare${host.plan.wildcard ? ` via ${esc(host.plan.wildcard)}` : ""}. The zone's Full SSL rule keeps Let's Encrypt renewals working.`
+      : !host.proxied && custom?.name === host.name ? "CloudPanel is getting its certificate. DNS proxies it through Cloudflare once issued."
       : pending.length || !host.plan ? (state.automatic ? (pending.length ? "The next check writes these, within 15 minutes." : "") : "DNS asks first, so the record is written once you turn on Automatic.")
       : `Next: enter ${esc(host.name)} under ${settings} in CloudPanel. DNS proxies it through Cloudflare once CloudPanel has its certificate.${custom ? ` CloudPanel's custom domain is ${esc(custom.name)} now.` : ""}`;
+    // Show extra problems only past the first, which is already in the badge hint.
+    const extraProblems = host.problem ? planProblems : planProblems.slice(1);
     body = `<div class="dns-panel-host-status"><span class="badge tone-${status.tone}">${esc(status.label)}</span>${status.hint ? `<span class="hint">${esc(status.hint)}</span>` : ""}</div>
-      ${host.plan?.wildcardBlocked && !host.problem && !host.plan.problems.length ? `<p class="hint dns-wildcard-note">${esc(host.plan.wildcardBlocked)}.</p>` : ""}
-      ${pending.length && !host.problem ? `<ul class="dns-panel-host-changes">${pending.map((change) =>
+      ${host.plan?.wildcardBlocked && !hasProblems ? `<p class="hint dns-wildcard-note">${esc(host.plan.wildcardBlocked)}.</p>` : ""}
+      ${pending.length && !hasProblems ? `<ul class="dns-panel-host-changes">${pending.map((change) =>
         `<li><span class="badge dns-${esc(change.action)}">${esc(LOG_LABELS[change.action] ?? change.action)}</span> <strong>${esc(change.subject)}</strong> <span class="hint">${esc(change.detail)}</span></li>`).join("")}</ul>` : ""}
-      ${host.plan?.problems.length ? `<ul class="dns-panel-host-changes">${host.plan.problems.map((problem) => `<li class="tone-bad">${esc(problem)}</li>`).join("")}</ul>` : ""}
+      ${extraProblems.length ? `<ul class="dns-panel-host-changes">${extraProblems.map((problem) => `<li class="tone-bad">${esc(problem)}</li>`).join("")}</ul>` : ""}
       ${next ? `<p class="dns-panel-host-next">${next}</p>` : ""}`;
   }
   return `<div class="card" id="dns-panel-host"><div class="card-header"><div><h2>Panel hostname</h2>
-      <p class="hint">A name for CloudPanel itself that isn't easy to guess, such as k7m2p9x4.example.com. DNS points it at this server without Cloudflare's proxy so CloudPanel can get its certificate, then proxies it or hands it off to your zone's wildcard.</p></div></div>
-    <div class="dns-panel-host-body">${form}${body}</div></div>`;
+      <p class="hint">Points a hard-to-guess name at this server for CloudPanel's certificate, then proxies it or hands it off to your zone's wildcard.</p></div></div>
+    <div class="dns-panel-host-body">${adopt}${form}${body}</div></div>`;
 }
 
 /** Until Cloudflare is connected: the three steps that make a new site publish itself. */
@@ -322,18 +352,15 @@ function setupCard(state: DnsState): string {
       '<button class="btn btn-primary" type="button" onclick="dnsEditConnection(\'\')">Connect Cloudflare</button>')}
     ${step(Boolean(fallback), "Choose the profile for new sites", "A new site joins it seconds after CloudPanel creates it. Existing sites are never moved.",
       `<select id="dns-setup-default" aria-label="Profile for new sites" onchange="dnsSetDefault(this)">${profileOptions(state.profiles, state.defaultProfileId, "No profile")}</select>`)}
-    ${step(state.automatic, "Turn on Automatic", "Until then DNS asks first: it shows what differs and writes nothing, so new sites get no records.",
+    ${step(state.automatic, "Turn on Automatic", "Until then DNS previews changes and writes nothing.",
       state.automatic ? '<span class="tone-ok">On</span>' : state.sites.some((site) => site.redirect) ? "" : '<span class="hint">After connecting</span>')}
   </ol></div>`;
 }
 
-/** Ask first until the operator says yes once; then Automatic, with the way back. */
+/** Shown on the Sites tab while DNS asks first, or before connecting when stand-in redirects exist. */
 function modeBar(state: DnsState): string {
+  if (state.automatic) return "";
   if (!state.connections.length && !state.sites.some((site) => site.redirect)) return "";
-  if (state.automatic) {
-    return `<div class="notice dns-mode-bar dns-mode-on" id="dns-mode"><span><strong>Automatic.</strong> DNS keeps every site's records to its profile, and creates a zone a site is missing.</span>
-      <button class="btn" type="button" onclick="dnsSetAutomatic(false)">Ask first instead</button></div>`;
-  }
   const plans = state.sites.flatMap((site) => site.plan ? [site.plan] : []);
   const changes = plans.flatMap((plan) => plan.changes.filter((change) => change.action !== "note"));
   const zones = new Set(changes.filter((change) => change.subject === "Cloudflare zone").map((change) => change.detail.split(" ")[0])).size;
@@ -341,7 +368,7 @@ function modeBar(state: DnsState): string {
   const waiting = changes.length
     ? ` ${plural(changes.length - zones, "change")}${zones ? ` and ${plural(zones, "new zone")}` : ""} across ${plural(busy, "site")} are waiting.`
     : "";
-  return `<div class="notice dns-mode-bar" id="dns-mode"><span><strong>Ask first.</strong> DNS shows what differs and writes nothing, so new sites get no records.${waiting}</span>
+  return `<div class="notice dns-mode-bar" id="dns-mode-banner"><span><strong>Ask first.</strong> DNS previews differences and writes nothing until Automatic is on.${waiting}</span>
     <button class="btn btn-primary" type="button" onclick="dnsSetAutomatic(true)">Review and turn on Automatic</button></div>`;
 }
 
@@ -363,14 +390,14 @@ function logRow(line: DnsState["log"][number]): string {
  */
 function redirectsCard(state: DnsState, redirects: SiteView[]): string {
   const tools = `<div class="dns-redirect-tools">${state.connections.length ? '<button class="btn" type="button" onclick="dnsFindRedirects(this)">Find redirects in Cloudflare</button>' : ""}
-    <button class="btn" type="button" onclick="dnsEditRedirect('')">Add redirect</button></div>`;
+    <button class="btn${state.connections.length ? " btn-primary" : ""}" type="button" onclick="dnsEditRedirect('')">Add redirect</button></div>`;
   return `<div class="card card-table"><div class="card-header"><div><h2>Redirects</h2>
-      <p class="hint">Domains with no site here that send every visitor to another address, with their mail kept by a profile.</p></div>${tools}</div>
+      <p class="hint">Domains with no site here forwarded to another address.</p></div>${tools}</div>
     ${redirects.length ? `<div class="table-scroll"><table class="fleet-table dns-redirect-table"><thead><tr>
         <th>Domain</th><th>Redirects to</th><th>Profile</th><th>DNS</th><th class="action-cell"></th>
       </tr></thead><tbody data-phone-cut="dns-redirects">${redirects.map((site) => redirectRow(site, state)).join("")}</tbody></table></div>
       ${redirects.length > PHONE_CUT ? phoneMoreHtml("dns-redirects", `Show all ${plural(redirects.length, "redirect")}`) : ""}`
-      : '<div class="empty">No redirect domains.</div>'}
+      : '<div class="empty">No redirect domains yet.</div>'}
   </div>`;
 }
 
@@ -378,19 +405,42 @@ export function dashboardView(state: DnsState): string {
   return `<div id="dns-root">${dashboardContent(state)}</div>${DIALOGS}`;
 }
 
+function connectionAttention(state: DnsState): "bad" | "warn" | undefined {
+  let warn = false;
+  for (const connection of state.connections) {
+    if (!connection.active) return "bad";
+    if (connection.access?.rows.some((row) => !row.optional && (row.held === "no" || row.held === "some"))) return "bad";
+    if (connection.access && connection.access.reach === null) warn = true;
+  }
+  if (state.panelHost?.problem || state.panelHost?.plan?.problems.length) return "bad";
+  return warn ? "warn" : undefined;
+}
+
 /** Everything a change can alter, repainted in place from the action's reply. */
 export function dashboardContent(state: DnsState, now = Date.now()): string {
   const data = JSON.stringify(state).replaceAll("<", "\\u003c");
-  const profiles = state.profiles.map(profileRow).join("");
   const plain = state.sites.filter((site) => !site.redirect);
   const redirects = state.sites.filter((site) => site.redirect);
-  const sites = plain.map((site) => siteRow(site, state)).join("");
-  const checked = `<div class="card-footer"><span class="hint">${esc(ago(state.checkedAt, now))}. Drift is checked every 15 minutes.</span>
-        <button class="btn" type="button" onclick="dnsCheck(this)"${state.connections.length || redirects.length ? "" : " disabled"}>Check now</button></div>`;
   const waiting = state.waitUntil > now
     ? `<div class="notice">Cloudflare or Mailcow asked this server to wait until ${esc(new Date(state.waitUntil).toISOString().slice(11, 16))} UTC. Checks resume after that.</div>` : "";
+  const pageAction = state.connections.length || redirects.length
+    ? '<div class="page-actions"><button class="btn" type="button" onclick="dnsCheck(this)">Check now</button></div>'
+    : '<div class="page-actions"><button class="btn" type="button" onclick="dnsEditRedirect(\'\')">Add redirect</button></div>';
+  const heading = `<script type="application/json" id="dns-state">${data}</script>
+    <div class="page-heading"><div><h1>DNS</h1>
+      <p>Keep each site's Cloudflare DNS synced to its profile.</p></div>${pageAction}</div>`;
+
+  // Before Cloudflare is connected, replace the workspace tables and forms with the focused first-run flow.
+  if (!state.connections.length) {
+    return `${heading}${waiting}${setupCard(state)}${redirects.length ? `${state.automatic ? syncModeCard(state) : modeBar(state)}${redirectsCard(state, redirects)}` : ""}`;
+  }
+
+  const single = state.connections.length <= 1;
+  const profiles = state.profiles.map(profileRow).join("");
+  const sites = plain.map((site) => siteRow(site, state)).join("");
+  const checked = `<div class="card-footer"><span class="hint">${esc(ago(state.checkedAt, now))}. Drift is checked every 15 minutes.</span></div>`;
   const orphans = state.orphans.length ? `<div class="card card-table"><div class="card-header"><div><h2>Records of deleted sites</h2>
-      <p class="hint">These sites are gone from CloudPanel. Their records are still in Cloudflare until you remove them.</p></div></div>
+      <p class="hint">These sites are gone from CloudPanel. Their records stay in Cloudflare until you remove them.</p></div></div>
       <div class="table-scroll"><table class="fleet-table dns-orphan-table"><tbody>${state.orphans.map((orphan) => `<tr>
         <td class="site-cell"><strong>${esc(orphan.domain)}</strong><span class="hint">${esc(plural(orphan.records, "record"))} in ${esc(orphan.zone)}</span></td>
         <td data-label="Actions" class="action-cell"><div class="actions">
@@ -398,22 +448,8 @@ export function dashboardContent(state: DnsState, now = Date.now()): string {
           <button class="btn btn-danger" type="button" onclick="dnsRemoveRecords('${esc(orphan.domain)}')">Remove records</button>
         </div></td></tr>`).join("")}</tbody></table></div></div>` : "";
 
-  // Shown empty too: a missing card read as a log that was never added, when
-  // the usual reason is that DNS still asks first and so has written nothing.
-  const log = `<div class="card card-table"><div class="card-header"><div><h2>Change log</h2>
-      <p class="hint">Every record, zone and Mailcow change DNS made, newest first.</p></div></div>
-      ${state.log.length ? `<div class="table-scroll"><table class="fleet-table dns-log-table"><tbody>${state.log.slice(0, 10).map(logRow).join("")}</tbody></table></div>
-      ${state.log.length > 10 ? `<details class="dns-log-more"><summary>Show ${plural(state.log.length - 10, "earlier change")}</summary>
-        <div class="table-scroll"><table class="fleet-table dns-log-table"><tbody>${state.log.slice(10).map(logRow).join("")}</tbody></table></div></details>` : ""}`
-    : `<div class="empty">${state.automatic ? "No changes yet."
-      : "No changes yet. DNS asks first, so it writes nothing until you turn on Automatic."}</div>`}
-    </div>`;
-
-  return `<script type="application/json" id="dns-state">${data}</script>
-    <div class="page-heading"><div><h1>DNS</h1>
-      <p>Keep each site's Cloudflare DNS to its profile's records.</p></div></div>
-    ${waiting}${setupCard(state)}${modeBar(state)}
-    <div class="card card-table">
+  const sitesPanel = `${waiting}${modeBar(state)}${orphans}
+    <div class="card card-table dns-site-card">
     ${plain.length ? `<div class="card-header toolbar">
         <h2>Sites</h2>
         ${FLEET_SELECTION_HTML}
@@ -437,22 +473,41 @@ export function dashboardContent(state: DnsState, now = Date.now()): string {
       </tr></thead><tbody>${sites}</tbody></table></div>
       ${FLEET_FOOTER_HTML}
       ${checked}`
-      : `<div class="card-header"><h2>Sites</h2></div><div class="empty">CloudPanel has no sites yet.</div>${redirects.length ? checked : ""}`}
-    </div>
-    ${redirectsCard(state, redirects)}
-    ${orphans}
-    <div class="card card-table"><div class="card-header"><div><h2>Profiles</h2>
-      <p class="hint">A profile is the records each of its sites should have. Records that conflict with them are deleted, at the names the profile writes and nowhere else.</p></div>
+      : `<div class="card-header"><h2>Sites</h2></div><div class="empty">CloudPanel has no sites yet.</div>${checked}`}
+    </div>`;
+
+  const profilesPanel = `<div class="card card-table"><div class="card-header"><div><h2>Profiles</h2>
+      <p class="hint">Record templates kept in sync for assigned sites.</p></div>
       <div class="dns-profile-tools">
         <div class="dns-default-field"><label class="hint" for="dns-default">New sites join</label>
           <select id="dns-default" onchange="dnsSetDefault(this)">${profileOptions(state.profiles, state.defaultProfileId, "No profile")}</select></div>
         <button class="btn btn-primary" type="button" onclick="dnsEditProfile('')">New profile</button></div></div>
       ${profiles ? `<div class="table-scroll"><table class="fleet-table dns-profile-table"><thead><tr><th>Profile</th><th>Records</th><th>Zone</th><th class="numeric">Sites</th><th class="action-cell">Actions</th></tr></thead><tbody>${profiles}</tbody></table></div>`
         : '<div class="empty">No profiles yet. Create one from the Web and Mailcow presets.</div>'}
-    </div>
-    ${panelHostCard(state)}
-    ${settingsCard(state)}
-    ${log}`;
+    </div>`;
+
+  const settingsPanel = `${connectionsCard(state)}${syncModeCard(state)}${panelHostCard(state)}${integrationsCard(state)}`;
+
+  const logPanel = `<div class="card card-table"><div class="card-header"><div><h2>Change log</h2>
+      <p class="hint">Record, zone and Mailcow writes, newest first.</p></div></div>
+      ${state.log.length ? `<div class="table-scroll"><table class="fleet-table dns-log-table"><tbody>${state.log.slice(0, 10).map(logRow).join("")}</tbody></table></div>
+      ${state.log.length > 10 ? `<details class="dns-log-more"><summary>Show ${plural(state.log.length - 10, "earlier change")}</summary>
+        <div class="table-scroll"><table class="fleet-table dns-log-table"><tbody>${state.log.slice(10).map(logRow).join("")}</tbody></table></div></details>` : ""}`
+    : `<div class="empty">${state.automatic ? "No changes yet."
+      : "No changes yet. DNS asks first, so it writes nothing until you turn on Automatic."}</div>`}
+    </div>`;
+
+  const siteTones = plain.map((site) => siteStatus(site, state.automatic, single).tone);
+  const sitesAttention: "bad" | "warn" | undefined = siteTones.includes("bad") ? "bad" : siteTones.includes("warn") || state.orphans.length ? "warn" : undefined;
+  const tabs: SectionTab[] = [
+    { id: "sites", label: "Sites", count: plain.length, attention: sitesAttention, content: sitesPanel },
+    { id: "redirects", label: "Redirects", count: redirects.length || undefined, content: redirectsCard(state, redirects) },
+    { id: "profiles", label: "Profiles", count: state.profiles.length, content: profilesPanel },
+    { id: "settings", label: "Settings", attention: connectionAttention(state), content: settingsPanel },
+    { id: "activity", label: "Activity", content: logPanel },
+  ];
+
+  return `${heading}${sectionShellHtml("dns", "DNS sections", tabs, "sites")}`;
 }
 
 const field = (id: string, label: string, control: string, hint = "", full = false): string =>

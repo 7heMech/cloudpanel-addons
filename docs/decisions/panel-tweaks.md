@@ -25,10 +25,12 @@ panel's own certificate form. An operator who wants a filterable site list
 should not have to install the code that can do that, and a switch is a weaker
 withdrawal than not having it on the box.
 
-The page puts the Sites switches first, since they are the ones an operator
-returns to, with the preview of the Sites page directly under them. The two
-switches that change the whole panel -- its mobile layout and the device theme
-on first visit -- follow as a short group of their own.
+The page uses the shared `.section-shell` to split Sites, Whole panel, and
+Theme & Branding. Sites opens first with its switches and the live preview of
+the Sites page directly under them. Whole panel holds the two switches that
+change the whole panel -- its mobile layout and the device theme on first visit
+-- and Theme & Branding holds its master switch above the logos, CSS, and footer
+editors.
 Measured sizes is nested under the Sites table enhancement
 because the size column is its only visible result. A short branch and smaller
 heading show that relationship, with no divider between the child and parent.
@@ -58,7 +60,10 @@ The toolbar is in that markup rather than created when the reply lands, and it
 is visible from the start whenever the sites-table switch is on. Revealed later
 it pushed the whole table down, which was the largest layout shift on the page.
 The script hides it again on a page whose table it does not recognise and when
-the reply never arrives.
+the reply never arrives. The same stylesheet drops the duplicate horizontal
+padding from CloudPanel's nested `.container-limited-width` on Sites and clears
+`.sites-container`'s top padding so the Sites page matches Dashboard and Addons
+in content width and heading position.
 
 The reply lands after the page is first painted, so the table was drawn as the
 panel's four columns and redrawn with the added ones a frame later. The tab

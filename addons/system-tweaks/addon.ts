@@ -17,6 +17,7 @@ export const SYSTEM_TWEAKS_ADDON: AddonDefinition = {
   description: "Server security, automatic updates, panel PHP, remote backup compression, SSH login message.",
   added: "2.0.0-rc.1",
   changed: [
+    { in: "2.2.0-rc.3", note: "System Tweaks now splits into Hardening, Failed logins, Updates, Panel PHP and Backups & SSH tabs. Setup's port 8443 certificate step is titled Port 8443 certificate." },
     { in: "2.2.0-rc.2", note: "Automatic updates default to hourly, with a schedule choice of every hour, every 6 hours, or once a day." },
     { in: "2.2.0-rc.1", note: "Setup shows Action needed when the sites' Nginx answers hostnames it has no site for." },
     { in: "2.2.0-rc.1", note: "Failed logins through the panel's custom domain count from seconds after you save it, not up to 15 minutes later." },

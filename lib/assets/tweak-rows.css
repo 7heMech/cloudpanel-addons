@@ -1,7 +1,9 @@
+.tweak-list > .tweak-row:first-child { padding-top: 0; border-top: 0; }
 .tweak-row { padding: 22px 0; border-top: 1px solid var(--row-border); }
 .tweak-row > .tweak-body { min-width: 0; }
 .tweak-heading { display: flex; align-items: center; justify-content: space-between; gap: 20px; }
 .tweak-heading h3 { flex: 1 1 auto; min-width: 0; }
+.tweak-heading select { flex: 0 1 260px; width: auto; min-width: 0; }
 .tweak-category + .tweak-category { margin-top: 22px; padding-top: 18px; border-top: 1px solid var(--row-border); }
 .tweak-category-title { margin: 0; color: var(--muted); font-size: 12px; font-weight: 700;
   letter-spacing: .06em; text-transform: uppercase; }
@@ -14,12 +16,23 @@
 .tweak-row.is-nested h3 { font-size: 15px; font-weight: 500; }
 .tweak-row h3 { margin: 0; font-size: 16px; }
 .tweak-note { margin-top: 6px; }
+.tweak-note p + p { margin-top: 2px; }
 .tweak-row p { margin: 0; color: var(--muted); font-size: 14px; }
 .tweak-row .switch { flex: 0 0 auto; margin: 0; }
+.st-status { margin-top: 10px !important; }
+.st-status .badge { margin-right: 6px; }
+.st-alert { margin: 12px 0 0; }
+.st-working .badge { animation: st-pulse 1.2s ease-in-out infinite; }
+@keyframes st-pulse { 50% { opacity: .45; } }
+@media (min-width: 761px) {
+  .tweak-body > .tweak-note { padding-right: 72px; }
+}
 /* Display: none above phone width, so nothing can focus a control that would
    do nothing. */
 .tweak-more { display: none; }
 @media (max-width: 760px) {
+  .tweak-heading:has(select) { flex-wrap: wrap; }
+  .tweak-heading select { flex: 1 1 100%; }
   .tweak-row.is-nested { padding-left: 28px; }
   .tweak-row.is-nested::before { left: 4px; width: 14px; }
   .tweak-row h3 { position: relative; margin: 0; padding-right: 30px; }

@@ -15,8 +15,10 @@ import { adminGate, authenticateRequest } from "../lib/sso-auth";
 import { refreshPanelLogos } from "../lib/panel-logos";
 import { checkCliUpdate } from "../lib/update-check";
 import { handleManagerRoute } from "./index";
-import { latestManagerJobView, panelHolds, seenNews } from "./service";
-import { indexPage, updatePage } from "./views";
+import { latestManagerJobView, panelHolds, seenNews, setupAction } from "./service";
+import { applyRequestOrigin, proxyHostFromRequest } from "./setup";
+import { indexPage, setupErrorPage, setupPage, updatePage } from "./views";
+import { PANEL_USER_NAME_RE } from "../lib/panel-users";
 
 function internalPath(path: string): string {
   if (path === "/addons" || path === "/addons/") return "/";
@@ -96,6 +98,20 @@ export async function handleRequest(req: Request, server: Server<unknown>): Prom
   if (hit) return await addonHandler(hit.addon)!(req, hit.rest, notice, server, gate.auth);
   if (path === "/update" && req.method === "GET") {
     return updatePage(update, CLI_VERSION, { job: await latestManagerJobView(), csrf: newCsrfToken() });
+  }
+  if ((path === "/setup" || path === "/setup/") && req.method === "GET") {
+    const user = gate.auth?.user ?? "";
+    const csrf = newCsrfToken();
+    const job = await latestManagerJobView();
+    if (!PANEL_USER_NAME_RE.test(user)) {
+      return setupErrorPage("No panel user for this session.", notice, { status: 400, job, csrf });
+    }
+    const result = await setupAction(user, [], true);
+    if (!result.ok || !result.data) {
+      return setupErrorPage(result.ok ? "Setup checks returned no answer." : result.error, notice, { status: 502, job, csrf });
+    }
+    const view = applyRequestOrigin(result.data, proxyHostFromRequest(req));
+    return setupPage(view, notice, { job, csrf });
   }
   if (path === "/") {
     const enabled = ADDON_NAMES.filter((name) => addonEnabled(ADDONS[name]!));
