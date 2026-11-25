@@ -5,6 +5,8 @@ import {
 } from "../../../lib/app-http";
 import { jobApiRoute } from "../../../lib/job-stream";
 import { MAX_NEW_SITE_PLUGINS, UPLOAD_ID_RE } from "../new-site-plugins";
+import { defaultPluginList, type DefaultPlugin } from "../new-site-defaults";
+import { panelSessionId } from "../../../lib/sso-auth";
 import { DIRECTORY_SLUG_RE, MAX_UPLOAD_BYTES } from "../plugin-zip";
 import { searchDirectory, searchTerm } from "./plugin-search";
 import { wpToolsService, type NewSiteChoice } from "./service";
@@ -141,6 +143,29 @@ export async function handle(
     }
   }
 
+  // The form's default plugins: the server's, and the caller's own. Whose they
+  // are is the gateway's answer from the panel session, not this process's.
+  if (path === "/api/my-new-site-defaults") {
+    const sessionId = newSiteChooser(auth) ? panelSessionId(req) : null;
+    if (!sessionId || (method !== "GET" && method !== "POST")) return jsonResponse({ ok: false, error: "not found" }, 404);
+    if (method === "GET") {
+      const result = await wpToolsService.myNewSiteDefaults(sessionId);
+      return jsonResponse(result, result.ok ? 200 : 403);
+    }
+    const denied = guardMutation(req);
+    if (denied) return denied;
+    let body: Record<string, unknown>;
+    try { body = await readJsonObject(req, 16 * 1024); }
+    catch (error) { return bodyErrorResponse(error); }
+    let plugins: DefaultPlugin[] | null = null;
+    if (body.reset !== true) {
+      try { plugins = defaultPluginList(body.plugins); }
+      catch (error) { return jsonResponse({ ok: false, error: errorMessage(error) }, 400); }
+    }
+    const result = await wpToolsService.saveMyNewSiteDefaults(sessionId, plugins);
+    return jsonResponse(result, result.ok ? 200 : 400);
+  }
+
   if (method !== "POST") return jsonResponse({ ok: false, error: "not found" }, 404);
   const denied = guardMutation(req);
   if (denied) return denied;
@@ -213,13 +238,14 @@ export async function handle(
     return jsonResponse(result, result.ok ? 200 : 400);
   }
 
-  if (path.startsWith("/api/mainwp-") || path.startsWith("/api/varnish-") || path === "/api/domain-link" || path === "/api/new-site-settings") {
+  if (path.startsWith("/api/mainwp-") || path.startsWith("/api/varnish-") || path === "/api/domain-link" || path === "/api/new-site-settings"
+    || path === "/api/new-site-defaults") {
     // These are administrators' whatever other WP Tools routes the manager's
     // gate lets through by name. Keep that boundary explicit here as well.
     if (!auth?.roles.includes("ROLE_ADMIN")) return jsonResponse({ ok: false, error: "not found" }, 404);
     let body: Record<string, unknown>;
-    // A batch connection names every site it is for.
-    try { body = await readJsonObject(req, path === "/api/mainwp-connect" ? 128 * 1024 : 4 * 1024); }
+    // A batch connection names every site it is for; a default, up to twenty plugins.
+    try { body = await readJsonObject(req, path === "/api/mainwp-connect" ? 128 * 1024 : path === "/api/new-site-defaults" ? 16 * 1024 : 4 * 1024); }
     catch (error) { return bodyErrorResponse(error); }
     let result;
     if (path === "/api/mainwp-settings") {
@@ -253,6 +279,11 @@ export async function handle(
         const why = rendered.error ?? "the CloudPanel templates could not be updated";
         return jsonResponse({ ok: false, error: `Saved, but CloudPanel's new-site form still shows the old choice: ${why}`, data: result.data }, 500);
       }
+    } else if (path === "/api/new-site-defaults") {
+      let plugins: DefaultPlugin[];
+      try { plugins = defaultPluginList(body.plugins); }
+      catch (error) { return jsonResponse({ ok: false, error: errorMessage(error) }, 400); }
+      result = await wpToolsService.saveNewSiteDefaults(plugins);
     } else if (path === "/api/varnish-sync") result = await wpToolsService.startJob("varnish-check");
     else if (path === "/api/mainwp-sync") result = await wpToolsService.startJob("mainwp-check");
     else if (path === "/api/varnish-install") {

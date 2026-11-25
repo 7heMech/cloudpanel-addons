@@ -5,7 +5,7 @@
 // site are named only by a WordPress.org slug of a strict pattern or by the id
 // root gave an upload. A site manager's `new-site*` calls carry --as-user, and
 // root holds them to the administrator's `new-site-settings` switch and to
-// directory plugins.
+// directory plugins. Default plugins are WordPress.org slugs only.
 export const WP_TOOLS_VERBS = {
   sites: { web: "admin" },
   // From CloudPanel's own site pages, for anyone who can open them; a
@@ -25,6 +25,11 @@ export const WP_TOOLS_VERBS = {
   "new-site-status": { web: "site-manager" },
   "new-site-access": { web: "site-manager" },
   "new-site-settings": { web: "admin" },
+  // The server's default plugins for that form, and each account's own, which
+  // the gateway names from the panel session; root holds a site manager to the switch.
+  "new-site-defaults": { web: "admin" },
+  "my-new-site-defaults": { web: "own-account" },
+  "save-my-new-site-defaults": { web: "own-account" },
   run: { web: false, why: "the job runner, started only by the transient unit start launches" },
   sync: { web: false, why: "the policy pass repair queues every 15 minutes" },
   "varnish-install": { web: false, why: "run by hand; the page installs through a start job" },

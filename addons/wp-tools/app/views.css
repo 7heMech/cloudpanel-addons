@@ -49,6 +49,28 @@
 .wp-status.is-working .badge::after { content: " · working…"; }
 .wp-card-note { margin: 0; padding: 18px 32px; }
 .wp-card-note + .wp-jobs { padding-top: 0; }
+.wp-defaults-note { margin: 0 0 14px; }
+.wp-defaults-alert { margin: 0 0 14px; }
+.wp-default-list { margin: 0 0 12px; padding: 0; list-style: none; border-top: 1px solid var(--row-border); }
+.wp-default-list[hidden] { display: none; }
+.wp-default-list li { display: flex; flex-wrap: wrap; align-items: center; gap: 6px 14px; padding: 9px 0; border-bottom: 1px solid var(--row-border); }
+.wp-default-list .wp-plugin-name, .wp-default-result .wp-plugin-name { font-weight: 600; overflow-wrap: anywhere; }
+.wp-default-remove { font-size: 14px; }
+.wp-default-controls { display: inline-flex; align-items: center; gap: 16px; margin-left: auto; white-space: nowrap; }
+.wp-default-activate { display: inline-flex; align-items: center; gap: 8px; font-size: 14px; cursor: pointer; }
+.wp-default-activate input[type="checkbox"] { margin: 0; }
+.wp-default-search { max-width: 560px; }
+.wp-default-results { max-height: 300px; margin: 8px 0 0; padding: 0; overflow-y: auto; list-style: none; border: 1px solid var(--border); border-radius: 4px; }
+.wp-default-results[hidden] { display: none; }
+.wp-default-results li + li { border-top: 1px solid var(--row-border); }
+.wp-default-result { display: grid; grid-template-columns: 1fr auto; gap: 2px 16px; width: 100%; padding: 9px 14px; border: 0; background: none; color: inherit; font: inherit; text-align: left; cursor: pointer; }
+.wp-default-result .wp-note { grid-column: 1; white-space: normal; }
+.wp-default-result:disabled { cursor: default; opacity: .6; }
+.wp-default-add { grid-area: 1 / 2 / 3 / 3; align-self: center; color: var(--accent); font-weight: 600; font-size: 14px; }
+.wp-default-result:disabled .wp-default-add { color: var(--muted); font-weight: 400; }
+@media (hover: hover) {
+  .wp-default-result:not(:disabled):hover { background: var(--surface); }
+}
 .wp-plugin-list { display: grid; gap: 6px; margin: 0; padding: 0; list-style: none; }
 .wp-plugin-list .wp-plugin-name { font-weight: 600; }
 @media (min-width: 941px) {
@@ -57,6 +79,7 @@
 }
 @media (max-width: 940px) {
   .wp-card-note { padding: 16px 20px; }
+  .wp-default-search { max-width: none; }
   .wp-new-site-header { flex-wrap: wrap; }
   .wp-new-site-header > .btn { flex-basis: 100%; }
   .wp-new-site-table td.site-cell, .wp-new-site-table td[data-label="Plugins"] { flex-basis: 100%; }

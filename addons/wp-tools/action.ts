@@ -25,7 +25,7 @@ import { isIP } from "node:net";
 import { normalizeMappedIpv4 } from "../../lib/ip-address";
 import { existsSync } from "node:fs";
 import { join } from "node:path";
-import { REPLIED, replyToAction, emitActionOk, failAction } from "../../lib/action";
+import { REPLIED, replyToAction, emitActionOk, failAction, parseJsonRequest } from "../../lib/action";
 import { errorMessage } from "../../lib/errors";
 import { validateDomain } from "../../lib/panel-identity";
 import { withFileLock, withFileLockSync } from "../../lib/file-lock";
@@ -56,6 +56,9 @@ import {
 } from "./new-site-plugins";
 import { DIRECTORY_SLUG_RE } from "./plugin-zip";
 import { DEFAULT_NEW_SITE_ACCESS, readNewSiteAccess, saveNewSiteAccess, type WpNewSiteAccess } from "./new-site-access";
+import {
+  accountDefault, defaultPluginList, readPluginDefaults, savePluginDefaults, withAccountDefault, type DefaultPlugin, type PluginDefaults,
+} from "./new-site-defaults";
 import {
   NEW_SITE_PENDING_MS, certificateStamp, noteSites, readNewSitesState, saveNewSitesState, wordpressInstalled,
   type NewSite, type NewSiteCheck, type NewSitesState,
@@ -164,6 +167,9 @@ interface WpToolsActionPaths {
   domainLinkState: string;
   /** Whether site managers may choose plugins on the new-site form. */
   newSiteAccessState: string;
+  /** The plugins that form starts with: the server's and each account's own. */
+  pluginDefaultsState: string;
+  pluginDefaultsLockFile: string;
   mainwpState: string;
   mainwpLockFile: string;
   jobsDir: string;
@@ -215,6 +221,8 @@ export const DEFAULT_WP_TOOLS_PATHS: WpToolsActionPaths = {
   varnishLockFile: `${LOCK_DIR}/wp-varnish.lock`,
   domainLinkState: `${addonStateDir("wp-tools")}/domain-link.json`,
   newSiteAccessState: `${addonStateDir("wp-tools")}/new-site-access.json`,
+  pluginDefaultsState: `${addonStateDir("wp-tools")}/plugin-defaults.json`,
+  pluginDefaultsLockFile: `${LOCK_DIR}/wp-plugin-defaults.lock`,
   mainwpState: `${addonStateDir("wp-tools")}/mainwp.json`,
   mainwpLockFile: `${LOCK_DIR}/wp-mainwp.lock`,
   jobsDir: `${addonStateDir("wp-tools")}/jobs`,
@@ -270,16 +278,23 @@ function mayManageSite(paths: WpToolsActionPaths, userName: string, domain: stri
  * Administrators' requests carry no name and are not asked.
  */
 function siteManagerMayChoose(paths: WpToolsActionPaths, userName: string): void {
+  siteManagersAllowed(paths);
+  if (accountRole(paths, userName) !== "ROLE_SITE_MANAGER") failAction("only administrators and site managers choose plugins for new sites");
+}
+
+function siteManagersAllowed(paths: WpToolsActionPaths): void {
   let access: WpNewSiteAccess;
   try { access = readNewSiteAccess(paths.newSiteAccessState); }
   catch { failAction("the new-site plugins setting cannot be read; an administrator can save it again"); }
   if (!access.siteManagers) failAction("an administrator has not let site managers choose plugins for new sites");
+}
+
+/** The account's role in CloudPanel's own database, or null when it is not an active account. */
+function accountRole(paths: WpToolsActionPaths, userName: string): string | null {
   const db = openPanelDatabase(paths.panelDb, true, 1000);
-  let role: string | null;
-  try { role = panelUserRole(db, userName); }
+  try { return panelUserRole(db, userName); }
   catch (error) { failAction(`CloudPanel could not say who you are: ${errorMessage(error)}`); }
   finally { db.close(); }
-  if (role !== "ROLE_SITE_MANAGER") failAction("only administrators and site managers choose plugins for new sites");
 }
 
 /** The newest entry in CloudPanel's event log, which a site manager's job reads past; -1 without a log. */
@@ -1180,6 +1195,97 @@ function automaticPlugins(paths: WpToolsActionPaths): string[] {
   ];
 }
 
+// --- default plugins for the new-site form --------------------------------
+
+/** What one account's form starts with, and the plugins automation installs instead. */
+export interface AccountPluginDefaults {
+  server: DefaultPlugin[];
+  /** The account's own default; null while it follows the server's. */
+  account: DefaultPlugin[] | null;
+  automatic: string[];
+}
+
+function storedDefaults(paths: WpToolsActionPaths): PluginDefaults {
+  try { return readPluginDefaults(paths.pluginDefaultsState); }
+  catch { failAction("the default plugins cannot be read; an administrator can save the server's default again"); }
+}
+
+/** A list to save as a default, without a plugin automation installs on every new site. */
+function defaultsToSave(paths: WpToolsActionPaths, value: unknown): DefaultPlugin[] {
+  let plugins: DefaultPlugin[];
+  try { plugins = defaultPluginList(value); }
+  catch (error) { failAction(errorMessage(error)); }
+  const automatic = automaticPlugins(paths).find((slug) => plugins.some((plugin) => plugin.slug === slug));
+  if (automatic) failAction(`${automatic} is installed on new sites by WordPress Tools' automation, so it cannot be a default while that is on`);
+  return plugins;
+}
+
+/**
+ * The account an own-account verb is for, named by the gateway from the panel
+ * session itself: an active administrator, or an active site manager while an
+ * administrator allows site managers the form's Plugins row.
+ */
+function defaultsAccount(paths: WpToolsActionPaths, verb: string, rest: string[]): string {
+  const user = rest.length === 1 ? /^--panel-user=(.*)$/.exec(rest[0]!)?.[1] : undefined;
+  if (user === undefined || !PANEL_USER_NAME_RE.test(user)) failAction(`'${verb}' takes only --panel-user`);
+  if (!existsSync(paths.configFile)) failAction("WordPress Tools is not enabled");
+  const role = accountRole(paths, user);
+  if (role === "ROLE_SITE_MANAGER") siteManagersAllowed(paths);
+  else if (role !== "ROLE_ADMIN") failAction("only administrators and site managers choose plugins for new sites");
+  return user;
+}
+
+function accountView(paths: WpToolsActionPaths, state: PluginDefaults, user: string): AccountPluginDefaults {
+  return { server: state.server, account: accountDefault(state, user), automatic: automaticPlugins(paths) };
+}
+
+/**
+ * `save-my-new-site-defaults --panel-user=<u>`, with `{"plugins": [...]}` on
+ * stdin for the account's own default, or `{"plugins": null}` to follow the
+ * server's again.
+ */
+function saveMyNewSiteDefaults(paths: WpToolsActionPaths, rest: string[], input: string): AccountPluginDefaults {
+  const user = defaultsAccount(paths, "save-my-new-site-defaults", rest);
+  const body = parseJsonRequest(input, 16 * 1024);
+  const plugins = body.plugins === null ? null : defaultsToSave(paths, body.plugins);
+  return withFileLockSync(paths.pluginDefaultsLockFile, 15, "another default is being saved", () => {
+    const state = withAccountDefault(storedDefaults(paths), user, plugins);
+    savePluginDefaults(paths.pluginDefaultsState, state);
+    return accountView(paths, state, user);
+  });
+}
+
+/** `new-site-defaults`, with `{"plugins": [...]}` on stdin: the server's default, an administrator's. */
+function saveServerDefaults(paths: WpToolsActionPaths, rest: string[], input: string): { pluginDefaults: { server: DefaultPlugin[]; automatic: string[] } } {
+  if (rest.length) failAction("'new-site-defaults' takes its plugins on stdin");
+  if (!existsSync(paths.configFile)) failAction("WordPress Tools must be enabled before choosing default plugins");
+  const plugins = defaultsToSave(paths, parseJsonRequest(input, 16 * 1024).plugins);
+  return withFileLockSync(paths.pluginDefaultsLockFile, 15, "another default is being saved", () => {
+    // Saving the server's default is also how an administrator replaces a file that cannot be read.
+    let accounts: PluginDefaults["accounts"] = [];
+    try { accounts = readPluginDefaults(paths.pluginDefaultsState).accounts; } catch { /* replaced below */ }
+    savePluginDefaults(paths.pluginDefaultsState, { server: plugins, accounts });
+    return { pluginDefaults: { server: plugins, automatic: automaticPlugins(paths) } };
+  });
+}
+
+/** Accounts CloudPanel no longer has lose their own default, so a new account of that name starts from the server's. */
+function pruneAccountDefaults(paths: WpToolsActionPaths): void {
+  if (!existsSync(paths.pluginDefaultsState)) return;
+  withFileLockSync(paths.pluginDefaultsLockFile, 15, "another default is being saved", () => {
+    const state = readPluginDefaults(paths.pluginDefaultsState);
+    if (!state.accounts.length) return;
+    const db = openPanelDatabase(paths.panelDb, true, 1000);
+    let users: Set<string>;
+    try { users = new Set(db.query<{ user_name: string }, []>("SELECT user_name FROM user;").all().map((row) => row.user_name)); }
+    finally { db.close(); }
+    // A panel that lists no account is taken for a bad read.
+    if (!users.size) return;
+    const accounts = state.accounts.filter((entry) => users.has(entry.user));
+    if (accounts.length !== state.accounts.length) savePluginDefaults(paths.pluginDefaultsState, { ...state, accounts });
+  });
+}
+
 function runNewSiteJob(
   paths: WpToolsActionPaths, view: WpJobView, options: WpToolsActionOptions,
   onProgress: (progress: { completed: number; total: number; site: string }) => void, step: (text: string) => void,
@@ -1243,6 +1349,11 @@ async function runJob(paths: WpToolsActionPaths, id: string, options: WpToolsAct
 /** Expired job records and plugin uploads go, and a job whose runner died is marked failed. */
 export function pruneWpJobs(options: WpToolsActionOptions = {}): void {
   pruneUploads(pathsFor(options).uploadsDir);
+  try {
+    pruneAccountDefaults(pathsFor(options));
+  } catch (error) {
+    process.stderr.write(`[wp-tools] WARN: default plugins were not pruned: ${errorMessage(error)}\n`);
+  }
   pruneJobs({
     addon: "wp-tools",
     jobsDir: pathsFor(options).jobsDir,
@@ -1261,6 +1372,12 @@ export async function executeWpToolsAction(
   if (argv[0] === "new-site") return recordNewSite(paths, argv.slice(1), options);
   if (argv[0] === "new-site-status") return newSiteStatus(paths, argv.slice(1));
   if (argv[0] === "new-site-access") return newSiteAccess(paths, argv.slice(1));
+  if (argv[0] === "my-new-site-defaults") {
+    const user = defaultsAccount(paths, "my-new-site-defaults", argv.slice(1));
+    return accountView(paths, storedDefaults(paths), user);
+  }
+  if (argv[0] === "save-my-new-site-defaults") return saveMyNewSiteDefaults(paths, argv.slice(1), options.input ?? await Bun.stdin.text());
+  if (argv[0] === "new-site-defaults") return saveServerDefaults(paths, argv.slice(1), options.input ?? await Bun.stdin.text());
   // An administrator's; the manager renders the templates again once it is saved.
   if (argv[0] === "new-site-settings") {
     const enabled = argv.length === 2 ? /^--site-managers=(true|false)$/.exec(argv[1]!)?.[1] : undefined;
@@ -1326,9 +1443,16 @@ export async function executeWpToolsAction(
     } catch (error) {
       newSiteAccessError = `${paths.newSiteAccessState} cannot be read: ${errorMessage(error)}`;
     }
+    const pluginDefaults = { server: [] as DefaultPlugin[], automatic: automaticPlugins(paths) };
+    let pluginDefaultsError = "";
+    try {
+      pluginDefaults.server = readPluginDefaults(paths.pluginDefaultsState).server;
+    } catch (error) {
+      pluginDefaultsError = `${paths.pluginDefaultsState} cannot be read: ${errorMessage(error)}`;
+    }
     return {
       sites: wordpressSites(paths, varnish), varnish, varnishError, mainwp, mainwpError, domainLink, domainLinkError, jobs, newSites,
-      newSiteAccess, newSiteAccessError,
+      newSiteAccess, newSiteAccessError, pluginDefaults, pluginDefaultsError,
     };
   }
   // The manager renders the templates again once this is saved; nothing here

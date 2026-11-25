@@ -164,13 +164,16 @@ terminal:session                   admin duplex
 wp-tools:domain-link-settings      admin
 wp-tools:job                       admin
 wp-tools:mainwp-settings           admin
+wp-tools:my-new-site-defaults      own-account
 wp-tools:new-site                  site-manager
 wp-tools:new-site-access           site-manager
+wp-tools:new-site-defaults         admin
 wp-tools:new-site-settings         admin
 wp-tools:new-site-status           site-manager
 wp-tools:plugin-discard            admin
 wp-tools:plugin-upload             admin
 wp-tools:remove                    admin
+wp-tools:save-my-new-site-defaults own-account
 wp-tools:sign-in                   panel-user
 wp-tools:site-kind                 panel-user
 wp-tools:sites                     admin
@@ -189,6 +192,7 @@ any panel user: GET /dns/api/session
 any panel user: GET /dns/api/site
 any panel user: GET /panel-tweaks/api/panel
 any panel user: GET /security-keys/api/keys
+any panel user: GET /wp-tools/api/my-new-site-defaults
 any panel user: GET /wp-tools/api/new-site-status
 any panel user: GET /wp-tools/api/plugin-search
 any panel user: GET /wp-tools/api/session
@@ -197,6 +201,7 @@ any panel user: POST /dns/api/provision
 any panel user: POST /security-keys/api/register
 any panel user: POST /security-keys/api/register-options
 any panel user: POST /security-keys/api/remove
+any panel user: POST /wp-tools/api/my-new-site-defaults
 any panel user: POST /wp-tools/api/new-site
 any panel user: POST /wp-tools/api/sign-in"
 `;

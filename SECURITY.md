@@ -200,8 +200,9 @@ Root and CloudPanel administrators can change the host. The installed addon
 binary, the web manager, CloudPanel's authentication and its database are
 trusted. For most operations, the root gateway relies on the manager to
 identify the caller and enforce their role. A compromised manager could request
-those allowed root operations. Terminal and own-account security-key operations
-add a session check in the root gateway itself.
+those allowed root operations. Terminal, own-account security-key operations and
+an account's own default plugins in WordPress Tools add a session check in the
+root gateway itself.
 
 The addons put a guard in front of CloudPanel's root File Manager pool and limit
 its socket to `clp`, but do not change its root user or CloudPanel's root nginx

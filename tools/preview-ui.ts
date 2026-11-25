@@ -49,6 +49,7 @@ import {
   WP_TOOLS_TARGETS, newSiteDoneSnippet as wpToolsNewSiteDone, newSiteFormSnippet as wpToolsNewSiteForm, siteInfoSnippet as wpToolsSiteInfo,
 } from "../addons/wp-tools/inject/targets";
 import type { NewSitePlugin, NewSiteResult } from "../addons/wp-tools/new-site-plugins";
+import type { DefaultPlugin } from "../addons/wp-tools/new-site-defaults";
 import {
   dashboardBody as wpToolsDashboardBody, dashboardView as wpToolsDashboardView, layout as wpToolsLayout,
 } from "../addons/wp-tools/app/views";
@@ -1166,7 +1167,8 @@ function panelNewSiteStub(url: URL, dark: boolean): string {
   // while WP Tools' switch for them is on, and never the upload control.
   const manager = url.searchParams.has("manager");
   // ?chosen starts with three plugins chosen, as a form CloudPanel sent back
-  // would; ?q=woo searches as the page loads. A screenshot wants WAIT=3000.
+  // would, in place of the defaults; ?q=woo searches as the page loads. A
+  // screenshot wants WAIT=3000.
   const seed = url.searchParams.has("chosen") ? `<script>sessionStorage.setItem("clp-addons-new-site-plugins", ${JSON.stringify(JSON.stringify([
     { source: "wordpress.org", slug: "woocommerce", name: "WooCommerce", activate: true },
     { source: "wordpress.org", slug: "wordpress-seo", name: "Yoast SEO", activate: true },
@@ -1547,6 +1549,21 @@ function wpToolsPreviewJob(task: WpJobView["task"], domains: string[], finish: (
 let wpNewSiteJobs: PreviewJob[] = [];
 /** The WP Tools switch that lets site managers use the form's Plugins row. */
 let wpNewSiteManagers = false;
+/** The server's default plugins, and the previewing account's own (null follows the server's). */
+let wpServerDefaults: DefaultPlugin[] = [
+  { slug: "wordpress-seo", name: "Yoast SEO", activate: true },
+  { slug: "wp-mail-smtp", name: "WP Mail SMTP", activate: true },
+  { slug: "contact-form-7", name: "Contact Form 7", activate: false },
+];
+let wpAccountDefault: DefaultPlugin[] | null = null;
+/**
+ * The plugins automation installs. ?auto on the form's page stands in for both
+ * policies being on; ?mine gives the account a default of its own.
+ */
+function wpPreviewAutomatic(referer: string | null): string[] {
+  return referer && new URL(referer).searchParams.has("auto") ? ["clp-varnish-cache", "mainwp-child"]
+    : [...(wpToolsPreview.automatic ? ["clp-varnish-cache"] : []), ...(wpToolsPreview.mainwp.enabled ? ["mainwp-child"] : [])];
+}
 function wpNewSitePreviewJob(domain: string, plugins: NewSitePlugin[], startedMs = Date.now()): PreviewJob {
   const id = `${new Date(startedMs).toISOString().replace(/[-:]/g, "").slice(0, 15)}Z-${Math.random().toString(16).slice(2, 8).padEnd(6, "0")}`;
   const job: PreviewJob = {
@@ -1630,6 +1647,7 @@ const wpToolsPreviewData = () => {
   return {
     newSites: wpNewSiteJobs,
     newSiteAccess: { siteManagers: wpNewSiteManagers },
+    pluginDefaults: { server: wpServerDefaults, automatic: wpPreviewAutomatic(null) }, pluginDefaultsError: "",
     sites: wpToolsPreview.sites,
     varnish: { enabled: wpToolsPreview.automatic, sites: {} },
     varnishError: wpToolsPreview.error,
@@ -1661,9 +1679,7 @@ async function wpToolsPreviewApi(req: Request, path: string): Promise<Response |
       return Response.json({ ok: false, error: "WordPress.org did not answer the search: The operation timed out." }, { status: 502 });
     }
     const words = term.split(/\s+/).filter(Boolean);
-    // ?auto on the form's page stands in for both automation policies being on.
-    const automatic = referer && new URL(referer).searchParams.has("auto") ? ["clp-varnish-cache", "mainwp-child"]
-      : [...(wpToolsPreview.automatic ? ["clp-varnish-cache"] : []), ...(wpToolsPreview.mainwp.enabled ? ["mainwp-child"] : [])];
+    const automatic = wpPreviewAutomatic(referer);
     return ok({ automatic, plugins: PREVIEW_DIRECTORY.filter((plugin) => words.every((word) => `${plugin.name} ${plugin.slug}`.toLowerCase().includes(word))) });
   }
   const started = (job: PreviewJob) => ok({ job });
@@ -1672,7 +1688,21 @@ async function wpToolsPreviewApi(req: Request, path: string): Promise<Response |
     const domain = new URL(req.url).searchParams.get("domain");
     return ok({ wordpress: wpToolsPreview.sites.some((entry) => entry.domain === domain) || domain === "www.example.com" });
   }
+  if (path === "/addons/wp-tools/api/my-new-site-defaults") {
+    const referer = req.headers.get("referer");
+    if (req.method === "POST") wpAccountDefault = body.reset === true ? null : body.plugins as DefaultPlugin[];
+    else if (referer && new URL(referer).searchParams.has("mine") && !wpAccountDefault) {
+      wpAccountDefault = [
+        { slug: "woocommerce", name: "WooCommerce", activate: true }, { slug: "wordpress-seo", name: "Yoast SEO", activate: true },
+        { slug: "mainwp-child", name: "MainWP Child", activate: true },
+      ];
+    }
+    return ok({ server: wpServerDefaults, account: wpAccountDefault, automatic: wpPreviewAutomatic(referer) });
+  }
   switch (path.slice("/addons/wp-tools/api/".length)) {
+    case "new-site-defaults":
+      wpServerDefaults = Array.isArray(body.plugins) ? body.plugins as DefaultPlugin[] : [];
+      return ok({ pluginDefaults: { server: wpServerDefaults, automatic: wpPreviewAutomatic(null) } });
     case "session":
       return Response.json({ ok: true }, { headers: withCsrfCookie({}, "preview-token") });
     case "plugin-upload": {
