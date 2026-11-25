@@ -39,7 +39,11 @@ export function holdSummary(hold: PanelHold): string {
 /** What to do about it, in one sentence. */
 export function holdAdvice(hold: PanelHold): string {
   switch (hold.reason) {
-    case "busy": return "The addons check it again at the next repair. If dpkg -l does not show it as ii and no apt or dpkg run is going, finish it with dpkg --configure -a, and if that fails, reinstall the package with apt-get install --reinstall.";
+    case "busy": {
+      // Debian package names are lower case, so CloudPanel's is its name lowered.
+      const pkg = hold.package.toLowerCase();
+      return `The addons check it again at the next repair. If dpkg -l ${pkg} does not show ii and no apt or dpkg run is going, run dpkg --configure -a; if it still does not show ii, reinstall it with apt-get install --reinstall ${pkg}.`;
+    }
     case "edited":
     case "unrecorded": return "If the change is wanted, run clp-addons repair --rebaseline on the server; otherwise put the file back.";
     case "stray-marker": return "Remove the leftover clp-addons lines from it, then run clp-addons repair.";

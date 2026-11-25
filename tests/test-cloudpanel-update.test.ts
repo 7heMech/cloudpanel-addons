@@ -390,7 +390,8 @@ test("each refusal says what happened and what to do", () => {
   expect(holdAdvice({ ...hold, reason: "edited" })).toContain("clp-addons repair --rebaseline");
   expect(holdSummary({ ...hold, reason: "busy" })).toBe("dpkg did not report a finished install of CloudPanel.");
   expect(holdAdvice({ ...hold, reason: "busy" })).toContain("dpkg --configure -a");
-  expect(holdAdvice({ ...hold, reason: "busy" })).toContain("apt-get install --reinstall");
+  expect(holdAdvice({ ...hold, reason: "busy" })).toContain("apt-get install --reinstall cloudpanel.");
+  expect(holdAdvice({ ...hold, package: "nginx-common", reason: "busy" })).toContain("dpkg -l nginx-common does not show ii");
 });
 
 test("the Addons page lists what is paused, for which addons, and what to run; with nothing held it shows nothing", async () => {
@@ -402,6 +403,10 @@ test("the Addons page lists what is paused, for which addons, and what to run; w
   expect(page).toContain(`${TEMPLATE} changed, but CloudPanel ${OLD} was not updated.`);
   expect(page).toContain("<code>clp-addons repair --rebaseline</code>");
   expect(await indexPage(["stager"], null, { holds: [] }).text()).not.toContain("Paused until checked");
+  const busy = await indexPage(["stager"], null, { holds: [{ ...hold, reason: "busy" as const }] }).text();
+  expect(busy).toContain("<code>dpkg -l cloudpanel</code>");
+  expect(busy).toContain("<code>dpkg --configure -a</code>");
+  expect(busy).toContain("<code>apt-get install --reinstall cloudpanel</code>.");
 });
 
 test("a held package is installed, not being updated, so its files are judged like any other", () => {

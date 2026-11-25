@@ -117,7 +117,7 @@ type ManagerPageOptions = { job?: ManagerJobView | null; csrf?: string };
  */
 function panelHoldsNotice(holds: PanelHold[]): string {
   if (!holds.length) return "";
-  const command = (text: string) => esc(text).replace(/clp-addons (?:repair --rebaseline|repair|update)/g, "<code>$&</code>");
+  const command = (text: string) => esc(text).replace(/clp-addons (?:repair --rebaseline|repair|update)|dpkg --configure -a|(?:dpkg -l|apt-get install --reinstall) [a-z0-9][a-z0-9.+-]*[a-z0-9+]/g, "<code>$&</code>");
   const items = holds.map((hold) => `<li><strong>${esc(hold.addons.join(", "))}</strong>
     <span>${esc(holdSummary(hold))} ${command(holdAdvice(hold))}</span></li>`).join("");
   return `<section class="notice panel-holds" aria-label="Paused until checked">
