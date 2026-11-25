@@ -7,7 +7,7 @@
  * create, update and delete they would make, and only a confirmation of that
  * same plan saves and applies them.
  */
-import { LOCK_DIR, addonConfigFile, addonStateDir, PANEL_DB } from "../../lib/paths";
+import { LOCK_DIR, addonConfigFile, addonStateDir, CLOUDFLARE_STATE_DIR, PANEL_DB } from "../../lib/paths";
 import { withPanelDb } from "../../lib/panel-db";
 import { DNS_VERBS } from "./verbs";
 import { Database } from "bun:sqlite";
@@ -16,12 +16,12 @@ import { existsSync } from "node:fs";
 import { getDomain } from "tldts";
 import { ActionFailure, replyToAction, failAction, readJsonRequest } from "../../lib/action";
 import { errorMessage } from "../../lib/errors";
-import { nameSlug, oneLine } from "../../lib/validate";
+import { nameSlug } from "../../lib/validate";
 import { withFileLock } from "../../lib/file-lock";
 import { DEFAULT_SITE_VHOST_PATHS } from "../../lib/site-vhost";
 import { PANEL_USER_NAME_RE, panelUserOwnsSite } from "../../lib/panel-users";
 import { DEFAULT_SMTP_PATHS, smtpRelayAccounts, type SmtpRelayAccount } from "../smtp/action";
-import { detectAddresses, type Addresses } from "./addresses";
+import { detectAddresses, type Addresses } from "../../lib/addresses";
 import {
   DnsRun, readiness, tokenProfiles, type ConnectionReport, type LogEntry, type ManagedRecords, type PanelSite, type SitePlan,
   type StandIns,
@@ -30,7 +30,7 @@ import { type ApiFetch, redact } from "../../lib/provider-http";
 import { MailcowApi } from "./mailcow";
 import {
   connectionId, hostname, parseAccountRef, parseMailcow, parsePolicy, parseProfile, parseRedirect, parseRedirects, parseSecrets, profileEffect,
-  profileId, secretText, ipAddress, cloudflareId, EMPTY_MAILCOW, MAX_CONNECTIONS, type MailcowSettings, type Policy, type Profile, type Redirect,
+  profileId, secretText, ipAddress, cloudflareId, EMPTY_MAILCOW, type MailcowSettings, type Policy, type Profile, type Redirect,
   type Secrets,
 } from "./model";
 import { PRESETS, seededPolicy, type Preset } from "./presets";
@@ -40,8 +40,13 @@ import { isStandInSite } from "../../lib/stand-ins";
 import { clpctlStandIns, readStandIns, retryStandInCertificates, type StandInPaths } from "./stand-in";
 import { clpctlIssue, NEW_SITE_WINDOW, requestSsl, retryCertificates, type Issue, type SslRequest } from "./ssl";
 import { readState, writeState } from "../../lib/root-state";
-import { accessView, grants, targetFor, uncertain, type AccessView } from "./access";
-import { PERMISSIONS, tokenTemplate, type PermissionName, type TokenTemplate } from "./token";
+import { accessView, type AccessView } from "../../lib/cloudflare/access";
+import {
+  cloudflareTokenHolds, readCloudflareConnections, readCloudflareSecrets, readCloudflareStatus,
+  recordCloudflareReports, removeCloudflareConnection, saveCloudflareConnection,
+  type CloudflareStorePaths,
+} from "../../lib/cloudflare/store";
+import { tokenTemplate, tokenTemplates, type PermissionName, type TokenTemplate, type TokenTemplates } from "../../lib/cloudflare/tokens";
 import { panelCustomDomainCertificate } from "../../lib/panel-custom-domain";
 import { panelUserUid } from "../../lib/sso-auth";
 
@@ -61,6 +66,9 @@ interface DnsPaths {
   configFile: string;
   panelDb: string;
   stateDir: string;
+  /** Shared Cloudflare connection store; defaults to CLOUDFLARE_STATE_DIR in production. */
+  cloudflareDir?: string;
+  cloudflareLockFile?: string;
   /** SMTP Relay's configuration, read only for the relay accounts the Mailcow form offers. */
   smtpConfig: string;
   lockFile: string;
@@ -147,6 +155,8 @@ export interface DnsState {
   checkedAt: string | null;
   waitUntil: number;
   token: TokenTemplate;
+  tokens?: TokenTemplates;
+  firewallEnabled?: boolean;
   presets: Preset[];
   /** Newest first. */
   log: LogLine[];
@@ -229,8 +239,21 @@ interface Pending {
 const emptyStatus = (): Status => ({ checkedAt: null, connections: [], plans: {}, backoff: { cloudflare: 0, mailcow: 0 } });
 const hash = (value: unknown): string => createHash("sha256").update(JSON.stringify(value) ?? "null").digest("hex");
 
+function cloudflarePathsOf(paths: DnsPaths): CloudflareStorePaths {
+  const customState = paths.stateDir !== DEFAULT_DNS_PATHS.stateDir;
+  return {
+    stateDir: paths.cloudflareDir ?? (customState ? `${paths.stateDir}/cloudflare` : CLOUDFLARE_STATE_DIR),
+    lockFile: paths.cloudflareLockFile ?? (customState ? `${paths.lockFile}.cloudflare` : `${LOCK_DIR}/cloudflare.lock`),
+    rootUid: paths.rootUid,
+  };
+}
+
 class Files {
-  constructor(private readonly paths: DnsPaths) {}
+  readonly cfPaths: CloudflareStorePaths;
+
+  constructor(private readonly paths: DnsPaths) {
+    this.cfPaths = cloudflarePathsOf(paths);
+  }
 
   private path(name: string): string {
     return `${this.paths.stateDir}/${name}.json`;
@@ -238,23 +261,44 @@ class Files {
 
   policy(): Policy {
     const raw = readState<unknown>(this.path("policy"), this.paths.rootUid, () => null);
-    return raw === null ? seededPolicy() : parsePolicy(raw);
+    const parsed = raw === null ? seededPolicy() : parsePolicy(raw);
+    const sharedConnections = readCloudflareConnections(this.cfPaths);
+    const connections = sharedConnections.length > 0 ? sharedConnections : parsed.connections;
+    const createIn = parsed.createIn && connections.some((c) => c.id === parsed.createIn!.connectionId) ? parsed.createIn : null;
+    return { ...parsed, connections, createIn };
   }
 
   savePolicy(policy: Policy): void {
-    writeState(this.path("policy"), parsePolicy(policy), this.paths.rootUid);
+    // Cloudflare connections live in the shared store; keep dns/policy.json's legacy list empty.
+    const clean = parsePolicy(policy);
+    writeState(this.path("policy"), { ...clean, connections: [] }, this.paths.rootUid);
   }
 
   secrets(): Secrets {
-    return parseSecrets(readState(this.path("secrets"), this.paths.rootUid, () => ({})));
+    const parsed = parseSecrets(readState(this.path("secrets"), this.paths.rootUid, () => ({})));
+    const sharedTokens = readCloudflareSecrets(this.cfPaths);
+    const cloudflare = Object.keys(sharedTokens).length > 0 ? sharedTokens : parsed.cloudflare;
+    return { cloudflare, mailcowKey: parsed.mailcowKey };
   }
 
   saveSecrets(secrets: Secrets): void {
-    writeState(this.path("secrets"), secrets, this.paths.rootUid);
+    // Cloudflare tokens live in the shared store; keep only Mailcow's key in dns/secrets.json.
+    writeState(this.path("secrets"), { cloudflare: {}, mailcowKey: secrets.mailcowKey }, this.paths.rootUid);
   }
 
   status(): Status {
-    return { ...emptyStatus(), ...readState<Partial<Status>>(this.path("status"), this.paths.rootUid, emptyStatus) };
+    const stored = { ...emptyStatus(), ...readState<Partial<Status>>(this.path("status"), this.paths.rootUid, emptyStatus) };
+    const sharedConnections = readCloudflareConnections(this.cfPaths);
+    const { reports, backoffUntil } = readCloudflareStatus(this.cfPaths);
+    const hasShared = sharedConnections.length > 0 || reports.length > 0 || backoffUntil > 0;
+    return {
+      ...stored,
+      connections: hasShared ? reports : stored.connections,
+      backoff: {
+        cloudflare: Math.max(stored.backoff.cloudflare, backoffUntil),
+        mailcow: stored.backoff.mailcow,
+      },
+    };
   }
 
   saveStatus(status: Status): void {
@@ -425,7 +469,7 @@ class Action {
     this.files.appendLog(this.runs.flatMap((run) => run.log.splice(0).map((entry) => ({ ...entry, cause: this.cause }))));
   }
 
-  rememberBackoff(): void {
+  async rememberBackoff(): Promise<void> {
     if (!this.runs.length && !this.mailcowTrial) return;
     const status = this.files.status();
     const backoff = { ...status.backoff };
@@ -435,7 +479,12 @@ class Action {
       backoff.mailcow = Math.max(backoff.mailcow, observed.mailcow);
     }
     backoff.mailcow = Math.max(backoff.mailcow, this.mailcowTrial?.http.backoff.until ?? 0);
-    if (JSON.stringify(backoff) !== JSON.stringify(status.backoff)) this.files.saveStatus({ ...status, backoff });
+    if (JSON.stringify(backoff) !== JSON.stringify(status.backoff)) {
+      this.files.saveStatus({ ...status, backoff });
+      if (backoff.cloudflare > status.backoff.cloudflare) {
+        await recordCloudflareReports([], backoff.cloudflare, false, this.files.cfPaths);
+      }
+    }
   }
 
   /**
@@ -480,7 +529,7 @@ class Action {
   }
 
   /** Writes what a run found for `domains`, keeping what it did not look at. */
-  record(run: DnsRun, plans: SitePlan[], domains: string[] | "all"): void {
+  async record(run: DnsRun, plans: SitePlan[], domains: string[] | "all"): Promise<void> {
     const status = this.files.status();
     const current = new Set(run.entries.map((site) => site.domain));
     const plansByDomain = domains === "all" ? {} : Object.fromEntries(Object.entries(status.plans).filter(([domain]) => current.has(domain)));
@@ -493,14 +542,18 @@ class Action {
     // Only once Cloudflare holds it: a write that failed or waits for a review leaves the next certificate write to try again.
     const panelPlan = panelHost && (domains === "all" || domains.includes(panelHost)) ? plans.find((plan) => plan.domain === panelHost) : undefined;
     const panelSettled = panelPlan && !panelPlan.problems.length && !panelPlan.changes.some((change) => change.action !== "note");
+    const nextConnections = run.connections.length || domains === "all" ? this.withEarlier(run, status.connections, domains) : status.connections;
     this.files.saveStatus({
       ...status,
       ...panelSettled && { panelProxied: run.panelProxied },
       checkedAt: domains === "all" ? new Date(this.now).toISOString() : status.checkedAt,
-      connections: run.connections.length || domains === "all" ? this.withEarlier(run, status.connections, domains) : status.connections,
+      connections: nextConnections,
       plans: plansByDomain,
       backoff: run.backoff(),
     });
+    if (run.connections.length || domains === "all") {
+      await recordCloudflareReports(run.reports(), run.backoff().cloudflare, domains === "all", this.files.cfPaths);
+    }
     const managed = this.files.managed();
     const checked = plans.filter((plan) => domains === "all" || domains.includes(plan.domain));
     const tracked = run.managed(checked);
@@ -582,6 +635,8 @@ class Action {
       checkedAt: status.checkedAt,
       waitUntil: Math.max(status.backoff.cloudflare, status.backoff.mailcow),
       token: tokenTemplate(tokenProfiles(policy)),
+      tokens: tokenTemplates(tokenProfiles(policy)),
+      firewallEnabled: existsSync(addonConfigFile("firewall")),
       presets: PRESETS,
       log: this.files.log().slice(0, PAGE_LOG),
       customDomain: this.customDomain() ?? null,
@@ -620,7 +675,7 @@ class Action {
     if (!chosen.length && domains !== "all") return;
     await run.discover(domains === "all");
     await run.load(chosen);
-    this.record(run, run.planAll(domains === "all" ? undefined : chosen, true), domains === "all" ? "all" : chosen);
+    await this.record(run, run.planAll(domains === "all" ? undefined : chosen, true), domains === "all" ? "all" : chosen);
   }
 
   /** Every site: read, write what Automatic writes, and record the result. */
@@ -639,7 +694,7 @@ class Action {
     }
     await run.enforce(planned);
     const plans = run.planAll(undefined, true);
-    this.record(run, plans, "all");
+    await this.record(run, plans, "all");
     if (retrySsl) {
       await this.retrySsl(plans);
       await this.retryStandInCertificates();
@@ -699,7 +754,7 @@ class Action {
     await run.load(domains);
     this.hold(run, policy, joinedDomains);
     await run.enforce(domains);
-    this.record(run, run.planAll(domains, true), domains);
+    await this.record(run, run.planAll(domains, true), domains);
     return joinedDomains;
   }
 
@@ -724,7 +779,7 @@ class Action {
     await run.discover();
     await run.load([host]);
     await run.enforce([host]);
-    this.record(run, run.planAll([host], true), [host]);
+    await this.record(run, run.planAll([host], true), [host]);
     return run.panelProxied ? `${host} is proxied through Cloudflare` : `${host} is no longer proxied`;
   }
 
@@ -753,7 +808,7 @@ class Action {
       await run.load(domains);
       await run.enforce(domains);
       const plans = run.planAll(domains, true);
-      this.record(run, plans, domains);
+      await this.record(run, plans, domains);
       plan = plans.find((candidate) => candidate.domain === domain);
     }
     const ready = readiness(plan);
@@ -969,7 +1024,7 @@ class Action {
     this.files.savePending(null);
     this.cause = "Confirmed review";
     await run.enforce(pending.domains);
-    this.record(run, run.planAll(pending.domains, true), pending.domains);
+    await this.record(run, run.planAll(pending.domains, true), pending.domains);
     return this.reply({ notice: `Applied to ${pending.domains.length} site${pending.domains.length === 1 ? "" : "s"}.${current.automatic ? "" : " DNS is Automatic."}` });
   }
 
@@ -1068,58 +1123,32 @@ class Action {
 
   async saveConnection(body: Record<string, unknown>): Promise<DnsReply> {
     const policy = this.files.policy();
-    const secrets = this.files.secrets();
-    const existing = body.id ? policy.connections.find((connection) => connection.id === connectionId(body.id)) : undefined;
-    if (body.id && !existing) failAction("That connection no longer exists");
-    // Before the token is saved, so a refused one is not left behind in the secrets.
-    if (!existing && policy.connections.length >= MAX_CONNECTIONS) failAction(`At most ${MAX_CONNECTIONS} Cloudflare connections can be added`);
-    const token = body.token ? secretText(body.token, "The API token") : existing ? secrets.cloudflare[existing.id] : undefined;
-    if (!token) failAction("Paste the API token Cloudflare showed you");
-    if (Object.entries(secrets.cloudflare).some(([id, saved]) => saved === token && id !== existing?.id)) failAction("That token is already saved as another connection");
-
-    const id = existing?.id ?? `cf-${randomBytes(4).toString("hex")}`;
-    const trial: Policy = { ...structuredClone(policy), connections: [{ id, label: "Checking" }] };
-    const run = this.run(trial, { cloudflare: { [id]: token }, mailcowKey: "" });
-    await run.discover(true);
-    const report = run.connections[0]!;
-    if (!report.active) failAction(redact(`Cloudflare did not accept this token: ${(report.error ?? report.status).replace(/^Cloudflare: /, "")}`, [token]));
-    const named = oneLine(body.label, "the connection name", 40, false);
-    const label = named || report.accounts.map((account) => account.name).filter(Boolean).join(", ").slice(0, 40) || "Cloudflare";
-
-    const next = structuredClone(policy);
-    if (existing) next.connections = next.connections.map((connection) => connection.id === id ? { id, label } : connection);
-    else next.connections.push({ id, label });
+    const saved = await saveCloudflareConnection(body, { paths: this.files.cfPaths, fetch: this.options.fetch });
     // A redirect a stand-in serves moves to Cloudflare through its review, not on the next check.
-    const standIns = Object.keys(this.standIns().current).filter((domain) => next.redirects.some((redirect) => redirect.source === domain));
-    if (!existing && standIns.length) next.held = [...new Set([...next.held, ...standIns])];
-    this.files.saveSecrets({ ...secrets, cloudflare: { ...secrets.cloudflare, [id]: token } });
-    this.savePolicy(next);
-    // The token's read, kept if the check below cannot run; in the policy's order, as a check writes them.
-    const status = this.files.status();
-    const saved = { ...report, id, label };
-    this.files.saveStatus({ ...status, connections: next.connections.flatMap((connection) => connection.id === id ? [saved] : status.connections.filter((entry) => entry.id === connection.id)) });
+    const standIns = Object.keys(this.standIns().current).filter((domain) => policy.redirects.some((redirect) => redirect.source === domain));
+    if (saved.isNew && standIns.length) {
+      const next = structuredClone(policy);
+      next.held = [...new Set([...next.held, ...standIns])];
+      this.savePolicy(next);
+    }
     await this.tryRefresh("all");
-    const zones = `${report.zones} zone${report.zones === 1 ? "" : "s"}`;
-    return this.reply({ notice: `${label} reaches ${report.accounts.length} account${report.accounts.length === 1 ? "" : "s"} and ${zones}.` });
+    return this.reply({ notice: saved.notice });
   }
 
   async removeConnection(id: string): Promise<DnsReply> {
     const policy = this.files.policy();
-    if (!policy.connections.some((connection) => connection.id === id)) failAction("That connection no longer exists");
+    const removed = await removeCloudflareConnection(id, { paths: this.files.cfPaths });
     const next = structuredClone(policy);
     next.connections = next.connections.filter((connection) => connection.id !== id);
     // Moving redirects onto stand-in sites on this server is reviewed first, as moving them to Cloudflare is.
-    if (!next.connections.length) next.held = [...new Set([...next.held, ...next.redirects.map((redirect) => redirect.source)])];
+    if (removed.remaining === 0) next.held = [...new Set([...next.held, ...next.redirects.map((redirect) => redirect.source)])];
     for (const [zone, choice] of Object.entries(next.zoneChoices)) if (choice.connectionId === id) delete next.zoneChoices[zone];
     if (next.createIn?.connectionId === id) next.createIn = null;
-    const secrets = this.files.secrets();
-    delete secrets.cloudflare[id];
-    this.files.saveSecrets(secrets);
     this.savePolicy(next);
     const status = this.files.status();
     this.files.saveStatus({ ...status, connections: status.connections.filter((connection) => connection.id !== id) });
     await this.tryRefresh("all");
-    return this.reply({ notice: "Connection removed. Its token stays valid in Cloudflare until you delete it there." });
+    return this.reply({ notice: removed.notice });
   }
 
   async saveMailcow(body: Record<string, unknown>): Promise<DnsReply> {
@@ -1456,7 +1485,7 @@ export async function executeDnsAction(argv: string[], options: DnsActionOptions
     } finally {
       try {
         action.writeLog();
-        action.rememberBackoff();
+        await action.rememberBackoff();
       } catch (afterError) {
         if (!failed) throw afterError;
       }
@@ -1529,12 +1558,7 @@ export async function runDnsAction(argv: string[], options: DnsActionOptions = {
  * read itself, or a policy not understood that could change the answer.
  */
 export function dnsTokenHolds(connectionId: string, permission: PermissionName, zone: { id: string; accountId: string }, paths: Partial<DnsPaths> = {}): boolean | null {
-  const files = new Files({ ...DEFAULT_DNS_PATHS, ...paths });
-  const connection = files.status().connections.find((entry) => entry.id === connectionId);
-  const token = connection?.active ? connection.token : undefined;
-  if (!token?.readable) return null;
-  const held = grants(token.grants, PERMISSIONS[permission], targetFor(PERMISSIONS[permission], zone, token));
-  return uncertain(token.grants, PERMISSIONS[permission], held ? "yes" : "no") ? null : held;
+  return cloudflareTokenHolds(connectionId, permission, zone, cloudflarePathsOf({ ...DEFAULT_DNS_PATHS, ...paths }));
 }
 
 export type { AccessView };

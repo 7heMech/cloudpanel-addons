@@ -8,6 +8,9 @@ import { syncHetzner } from "./hetzner";
 import { keepNetcupTimeSync, syncNetcup } from "./netcup";
 import { FIREWALL_ACTIONS, FIREWALL_SETUP } from "./setup";
 import { keepPanelGateNginx, panelGateOffLocally, repairPanelGate, withdrawPanelGate } from "./panel-gate";
+import {
+  DEFAULT_VISITOR_IP_PATHS, UNTRUSTED_LOOPBACK, VISITOR_IP, keepVisitorIp, releaseVisitorIp, restoreVisitorIp, withdrawVisitorIp,
+} from "./visitor-ip";
 import { CLI_BIN } from "../../lib/paths";
 import { runCommand } from "../../lib/command";
 import type { AddonDefinition } from "../../lib/addon-definition";
@@ -45,6 +48,10 @@ async function repair(options?: Record<string, unknown>): Promise<string | null>
     if (line) lines.push(line);
   } catch (error) { failures.push(`Cloudflare-only sites: ${errorMessage(error)}`); }
   try {
+    const changed = keepVisitorIp();
+    if (changed) lines.push(changed);
+  } catch (error) { failures.push(`Cloudflare visitor IPs: ${errorMessage(error)}`); }
+  try {
     const changed = syncFirewall("apply");
     if (changed) lines.push(`protocols: ${changed}`);
   } catch (error) { failures.push(`protocols: ${errorMessage(error)}`); }
@@ -65,8 +72,9 @@ async function repair(options?: Record<string, unknown>): Promise<string | null>
 export const FIREWALL_ADDON: AddonDefinition = {
   name: "firewall",
   title: "Firewall",
-  description: "Cloudflare-only access for every site, a Cloudflare Access gate in front of the panel, Hetzner Cloud or netcup firewalls that admit only Cloudflare, and TCP, UDP or both for each rule on CloudPanel's Firewall page.",
+  description: "Cloudflare-only access and real visitor IPs for every site, a Cloudflare Access gate in front of the panel, Hetzner Cloud or netcup firewalls that admit only Cloudflare, and TCP, UDP or both for each rule on CloudPanel's Firewall page.",
   changed: [
+    { in: "2.3.0-rc.1", note: "Cloudflare connections are now shared with DNS and can be managed directly on the Panel gate tab without enabling DNS. Cloudflare visitor IPs moved here from System Tweaks, and Firewall can now be locked by root with clp-addons lock firewall." },
     { in: "2.2.0-rc.3", note: "Firewall now splits into Cloudflare only, Panel gate, Protocols and Cloud firewall tabs. Cloud provider cards are hidden when the server is not on that host and has no saved token." },
     { in: "2.2.0-rc.1", note: "Cloudflare IP Access is now Firewall, which also sets each firewall rule's protocol: TCP, UDP or both." },
     { in: "2.2.0-rc.1", note: "On a Hetzner Cloud server, Firewall can attach Hetzner Cloud Firewalls that let only Cloudflare reach the sites (80, 443) and the panel (8443). Both switches are off until you connect a token and turn one on; off keeps those ports open to anyone." },
@@ -84,9 +92,14 @@ export const FIREWALL_ADDON: AddonDefinition = {
   firewall: { label: "firewall protocols", run: () => syncFirewall("apply") },
   // The anchor watcher sees CloudPanel's daily rewrite of /etc/nginx/cloudflare/ips.
   anchors: [
+    { label: "Cloudflare visitor IPs", run: () => keepVisitorIp() },
     { label: "Panel gate", run: () => keepPanelGateNginx() },
     { label: "Hetzner firewalls", run: () => syncHetzner("ranges") },
     { label: "netcup policies", run: () => syncNetcup("ranges") },
+  ],
+  conffiles: [
+    { path: DEFAULT_VISITOR_IP_PATHS.nginxConf, marker: [VISITOR_IP, UNTRUSTED_LOOPBACK], release: () => releaseVisitorIp("nginxConf") },
+    { path: DEFAULT_VISITOR_IP_PATHS.fastcgiParams, marker: VISITOR_IP, release: () => releaseVisitorIp("fastcgiParams") },
   ],
   commands: {
     firewall: {
@@ -100,6 +113,8 @@ export const FIREWALL_ADDON: AddonDefinition = {
   },
   // CloudPanel's next change on its Firewall page rebuilds ufw without these rules anyway.
   deactivate: () => {
+    try { withdrawVisitorIp(); }
+    catch (error) { log.warn(`Cloudflare visitor IPs could not be withdrawn: ${errorMessage(error)}`); }
     try { syncFirewall("withdraw"); }
     catch (error) { log.warn(`ufw still has UDP rules from Firewall: ${errorMessage(error)}`); }
     try {
@@ -107,6 +122,8 @@ export const FIREWALL_ADDON: AddonDefinition = {
     } catch (error) { log.warn(`the Panel gate's Nginx lines stay; run clp-addons firewall panel-gate off: ${errorMessage(error)}`); }
   },
   activate: () => {
+    try { restoreVisitorIp(); }
+    catch (error) { log.warn(`Cloudflare visitor IPs wait for the next repair: ${errorMessage(error)}`); }
     try { syncFirewall("restore"); }
     catch (error) { log.warn(`firewall protocols wait for the next repair: ${errorMessage(error)}`); }
     // Only a gate still on, as on a re-run of the installer; disabling turned it off.

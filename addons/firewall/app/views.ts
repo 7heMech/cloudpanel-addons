@@ -1,16 +1,21 @@
 import CLIENT_JS_BODY from "./views.client.js" with { type: "text" };
 import { esc } from "../../../lib/app-http";
 import {
-  FLEET_FOOTER_HTML, FLEET_SELECTION_HTML, FLEET_ROW_SELECTION_JS, fleetFilterHtml, renderLayout, sectionShellHtml,
+  badgeHtml, FLEET_FOOTER_HTML, FLEET_SELECTION_HTML, FLEET_ROW_SELECTION_JS, fleetFilterHtml, renderLayout, sectionShellHtml,
   type SectionTab,
 } from "../../../lib/app-ui";
+import {
+  CLOUDFLARE_SCOPE_JS, cloudflareAccessDetailsHtml, cloudflareConnectDialogHtml,
+} from "../../../lib/cloudflare/connect-dialog";
 import { mountPath } from "../../../lib/mount";
+import type { LockState } from "../../../lib/root-locks";
 import type { FirewallPageState } from "./service";
 import { CLOUD_ROLES, ROLES, type CloudConnectedView, type CloudRole } from "../cloud-firewall";
 import { NETCUP_HOST } from "../netcup-api";
 
 const BASE = mountPath("firewall");
 const plural = (count: number, word: string): string => `${count} ${word}${count === 1 ? "" : "s"}`;
+const CLIPBOARD = '<svg width="15" height="15" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="5.5" y="5.5" width="8" height="8.5" rx="1.5"/><path d="M10.5 5.5V3.5a1.5 1.5 0 0 0-1.5-1.5H3.5A1.5 1.5 0 0 0 2 3.5V9a1.5 1.5 0 0 0 1.5 1.5h2"/></svg>';
 
 import STYLE from "./views.css" with { type: "text" };
 
@@ -20,6 +25,7 @@ const OFF_ONLY_HTML = `<label class="btn cf-off-only" id="fleet-show"><input cla
 
 export const CLIENT_JS = `
 ${FLEET_ROW_SELECTION_JS}
+${CLOUDFLARE_SCOPE_JS}
 ${CLIENT_JS_BODY}`;
 
 export function layout(title: string, content: string, updateNotice?: { current: string; latest: string } | null): string {
@@ -266,7 +272,73 @@ function cloudAttention(state: FirewallPageState): "bad" | "warn" | undefined {
   return tones.includes("warn") ? "warn" : undefined;
 }
 
-export function dashboardView(state: FirewallPageState): string {
+function visitorIpCard(state: FirewallPageState["visitorIp"], lock: LockState): string {
+  const line = state.problem
+    ? `${badgeHtml("Unknown", "warn")} <span>${esc(state.problem)}</span>`
+    : state.enabled && state.applied
+      ? `${badgeHtml("On", "ok")} <span>Behind Cloudflare, sites see the visitor's IP.</span>`
+      : state.enabled
+        ? `${badgeHtml("Not applied", "warn")} <span>Run clp-addons repair.</span>`
+        : `${badgeHtml("Off", "plain")} <span>Behind Cloudflare, sites see Cloudflare's or the tunnel's address.</span>`;
+  const locked = lock !== "unlocked" && state.enabled;
+  const lockHint = lock === "damaged"
+    ? '<p class="hint tone-warn">The root lock file cannot be trusted, so this switch can only go on until root fixes /etc/clp-addons/locks.json.</p>'
+    : locked
+      ? '<p class="hint">Locked by root. Run <code>clp-addons unlock firewall</code> on the server to switch it off.</p>'
+      : "";
+  return `
+    <div class="card split-card cf-policy" id="visitor-ip-card">
+      <div><h2>Cloudflare visitor IPs</h2>
+        <p class="hint">Site access logs and PHP take the visitor's IP from CF-Connecting-IP when Cloudflare's proxy or a Cloudflare Tunnel on this server sent the request. Anyone else's header is ignored, and so is an X-Real-IP sent through a tunnel.</p>
+        <p class="hint">Error logs, Cloudflare-only access and CloudPanel's IP rules still see the connecting address. In a vhost's port 8080 server that is 127.0.0.1, so keep rules you add by IP in its first server.</p>
+        <p class="fw-status">${line}</p>${lockHint}</div>
+      <label class="switch"><input id="visitor-ip-switch" type="checkbox" aria-label="Cloudflare visitor IPs" ${state.enabled ? "checked" : ""} ${locked ? "disabled" : ""} onchange="setVisitorIp(this)"><span></span></label>
+    </div>`;
+}
+
+function cloudflareConnectionsCard(cf: FirewallPageState["cloudflare"]): string {
+  const rows = cf.connections.map((connection) => {
+    const accounts = connection.accounts.map((account) => account.name || account.id).join(", ");
+    const status = connection.active ? '<span class="tone-ok">Active</span>' : `<span class="tone-bad">${esc(connection.status === "unchecked" ? "Not checked" : "Not working")}</span>`;
+    const reach = connection.access?.reach ? `${connection.access.reach} · ${plural(connection.zones, "zone")} now` : plural(connection.zones, "zone");
+    const line = `${esc(reach)} · ${status}${connection.error ? ` · ${esc(connection.error)}` : ""}`;
+    return `<div class="dns-setting-row dns-connection-row" data-connection="${esc(connection.id)}">
+      <div class="dns-setting-main">
+        <strong>${esc(connection.label)}</strong>${accounts ? `<span class="hint">${esc(accounts)}</span>` : ""}
+        ${connection.access ? cloudflareAccessDetailsHtml(connection.id, connection.access, line, "fw-cf") : `<span class="hint">${line}</span>`}
+      </div>
+      <div class="actions">
+        <button class="btn" type="button" onclick="fwEditCloudflare('${esc(connection.id)}')">Edit</button>
+        <button class="btn btn-danger" type="button" onclick="fwRemoveCloudflare('${esc(connection.id)}')">Remove</button>
+      </div>
+    </div>`;
+  }).join("");
+  const data = esc(JSON.stringify({ connections: cf.connections.map(({ id, label }) => ({ id, label })), serverIps: cf.serverIps }));
+  const body = cf.connections.length
+    ? `<div class="dns-setting-list">${rows}</div>`
+    : `<div class="hz-connect"><p class="hint">Connect a Cloudflare API token once. DNS and Firewall share the same connections.</p>
+        <button class="btn btn-primary" type="button" onclick="fwEditCloudflare('')">Connect Cloudflare</button></div>`;
+  const headerButton = cf.connections.length
+    ? '<button class="btn" type="button" onclick="fwEditCloudflare(\'\')">Add Cloudflare connection</button>'
+    : "";
+  const dialog = cloudflareConnectDialogHtml({
+    prefix: "fw-cf",
+    onSubmit: "fwSaveCloudflare(event)",
+    copyFn: "fwCopyText",
+    defaultDns: cf.dnsEnabled,
+    defaultPanelGate: true,
+    templates: cf.templates,
+    clipboardIcon: CLIPBOARD,
+  });
+  return `
+    <div class="card hz-card" id="fw-cf-card" data-fw-cf="${data}">
+      <div class="card-header"><div><h2>Cloudflare connections</h2>
+        <p class="hint">Shared with DNS. Panel gate uses the connection whose token reaches CloudPanel's custom domain.</p></div>${headerButton}</div>
+      ${body}
+    </div>${dialog}`;
+}
+
+export function dashboardView(state: FirewallPageState, lock: LockState = "unlocked"): string {
   const enabled = state.sites.filter((site) => site.enabled).length;
   const total = state.sites.length;
   const summary = `${enabled} of ${total} are Cloudflare only`;
@@ -308,23 +380,25 @@ export function dashboardView(state: FirewallPageState): string {
       <div><h2>Enable on new sites</h2>
         <p class="hint">A site created from now on allows Cloudflare only, seconds after CloudPanel creates it. A site you turn off here is never turned back on.</p></div>
       <label class="switch"><input id="automatic-policy" type="checkbox" aria-label="Enable Cloudflare-only access on new sites" ${state.autoEnableNewSites ? "checked" : ""} onchange="setAutomatic(this)"><span></span></label>
-    </div>`;
+    </div>
+    ${visitorIpCard(state.visitorIp, lock)}`;
 
   const netcup = netcupCard(state.netcup);
   const hetzner = hetznerCard(state.hetzner);
   const cloudPanel = `${netcup}${hetzner}`;
   const review = state.hetzner.state === "connected" || state.netcup.state === "connected" ? REVIEW_DIALOG : "";
+  const panelGatePanel = `${panelGateCard(state.panelGate)}${cloudflareConnectionsCard(state.cloudflare)}`;
 
   const tabs: SectionTab[] = [
-    { id: "sites", label: "Cloudflare only", count: total, content: sitesPanel },
-    { id: "panel-gate", label: "Panel gate", attention: panelGateAttention(state.panelGate), content: panelGateCard(state.panelGate) },
+    { id: "sites", label: "Cloudflare only", count: total, attention: state.visitorIp.problem || (state.visitorIp.enabled && !state.visitorIp.applied) ? "warn" : undefined, content: sitesPanel },
+    { id: "panel-gate", label: "Panel gate", attention: panelGateAttention(state.panelGate), content: panelGatePanel },
     { id: "protocols", label: "Protocols", attention: "error" in state.protocols ? "bad" : undefined, content: protocolsCard(state.protocols) },
     ...(cloudPanel ? [{ id: "cloud", label: "Cloud firewall", attention: cloudAttention(state), content: cloudPanel }] : []),
   ];
 
   return `
     <div class="page-heading">
-      <div><h1>Firewall</h1><p>CloudPanel's “Allow traffic from Cloudflare only” setting for every site, a protocol for each rule on its Firewall page, a gate in front of the panel, and Hetzner Cloud or netcup firewalls that admit only Cloudflare.</p></div>
+      <div><h1>Firewall</h1><p>Cloudflare-only access and real visitor IPs for every site, a protocol for each rule on CloudPanel's Firewall page, a gate in front of the panel, and Hetzner Cloud or netcup firewalls that admit only Cloudflare.</p></div>
     </div>
     ${sectionShellHtml("firewall", "Firewall sections", tabs, "sites")}${review}`;
 }

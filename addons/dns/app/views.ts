@@ -9,10 +9,11 @@ import { mountPath } from "../../../lib/mount";
 import type { DnsState, SiteView } from "../action";
 import type { Profile } from "../model";
 import { CLIPBOARD } from "../../../lib/clipboard";
+import { CLOUDFLARE_SCOPE_JS } from "../../../lib/cloudflare/connect-dialog";
 import { SSL_LABELS } from "../zone";
 
 const BASE = mountPath("dns");
-const CLIENT = `${FLEET_ROW_SELECTION_JS}\nconst DNS_CLIPBOARD = ${JSON.stringify(CLIPBOARD)};\n${CLIENT_BODY}`;
+const CLIENT = `${FLEET_ROW_SELECTION_JS}\n${CLOUDFLARE_SCOPE_JS}\nconst DNS_CLIPBOARD = ${JSON.stringify(CLIPBOARD)};\n${CLIENT_BODY}`;
 const NO_PROFILE = "Not managed";
 
 export function layout(title: string, content: string, notice?: { current: string; latest: string } | null): string {
@@ -254,7 +255,7 @@ function newZonesRow(state: DnsState): string {
 function connectionsCard(state: DnsState): string {
   const rows = state.connections.map(connectionRow).join("");
   return `<div class="card" id="dns-connection"><div class="card-header"><div><h2>Cloudflare connections</h2>
-      <p class="hint">Each connection is one API token. A site uses the longest matching zone.</p></div>
+      <p class="hint">Shared with Firewall. Each connection is one API token; a site uses the longest matching zone.</p></div>
       <button class="btn" type="button" onclick="dnsEditConnection('')">Add Cloudflare connection</button></div>
     <div class="dns-setting-list">${rows}${newZonesRow(state)}</div></div>`;
 }
@@ -592,6 +593,10 @@ const DIALOGS = `
     <input type="hidden" name="id">
     <ol class="dns-steps">
       <li id="dns-token-step"><strong>Create a token in Cloudflare</strong>
+        <div class="cf-scope-picks" role="group" aria-label="Token scopes">
+          <label class="cf-scope-pick"><input type="checkbox" id="dns-scope-dns" checked onchange="cfSyncScope('dns', this)"><span>DNS records and zones</span></label>
+          <label class="cf-scope-pick"><input type="checkbox" id="dns-scope-gate" onchange="cfSyncScope('dns', this)"><span>Panel gate (Cloudflare Access and origin pulls)</span></label>
+        </div>
         <p class="hint">Check these permissions: <span id="dns-token-permissions"></span>. Choose the accounts and zones there; All zones also covers zones you add later.</p>
         <div id="dns-token-ips-hint"><p class="hint">Under Client IP Address Filtering, allow only this server:</p>
           <div class="dns-copy"><code id="dns-token-ips"></code><button class="dns-clip" type="button" title="Copy" aria-label="Copy the addresses" onclick="copyText('dns-token-ips', 'Addresses')">${CLIPBOARD}</button></div></div>

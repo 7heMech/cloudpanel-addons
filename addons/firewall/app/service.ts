@@ -1,9 +1,11 @@
 import { callGatewayAction, type ActionResult } from "../../../lib/gateway-client";
 import type { WebVerb } from "../../../lib/gateway-protocol";
 import type { FirewallStatus } from "../protocols";
+import type { FirewallCloudflareView } from "../action";
 import type { HetznerReview, HetznerRole, HetznerView } from "../hetzner";
 import type { NetcupSignIn, NetcupView } from "../netcup";
 import type { GateReply, PanelGateView } from "../panel-gate";
+import type { VisitorIpState } from "../visitor-ip";
 
 export interface CloudflareSiteView {
   domain: string;
@@ -13,10 +15,12 @@ export interface CloudflareSiteView {
 export interface FirewallPageState {
   sites: CloudflareSiteView[];
   autoEnableNewSites: boolean;
+  visitorIp: VisitorIpState;
   protocols: FirewallStatus | { error: string };
   hetzner: HetznerView;
   netcup: NetcupView;
   panelGate: PanelGateView | { error: string };
+  cloudflare: FirewallCloudflareView;
 }
 
 export type HetznerReply = { review: HetznerReview } | { notice: string };
@@ -47,6 +51,10 @@ export const firewallService = {
 
   async setAutomatic(enabled: boolean): Promise<ActionResult<{ autoEnableNewSites: boolean }>> {
     return call<{ autoEnableNewSites: boolean }>("policy", ["--enabled", enabled ? "yes" : "no"]);
+  },
+
+  setVisitorIp(enabled: boolean): Promise<ActionResult<VisitorIpState>> {
+    return call<VisitorIpState>("set-visitor-ip", [], JSON.stringify({ enabled }));
   },
 
   protocols(): Promise<ActionResult<FirewallStatus>> {

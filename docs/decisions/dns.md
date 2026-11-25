@@ -313,36 +313,43 @@ watcher from waiting on DNS's lock. Under Ask first nothing is written.
 
 ## Cloudflare connections
 
-A connection is one API token. The page links to Cloudflare's user-owned token
+Cloudflare connections are shared across DNS and Firewall in the root-owned
+`/var/lib/clp-addons/cloudflare/` store (`lib/cloudflare/store.ts`), managed by
+the manager's `/addons/api/cloudflare` routes as well as DNS's Settings tab.
+Both addons use the same Connect Cloudflare dialog
+(`lib/cloudflare/connect-dialog.ts`), where the operator selects scopes for DNS
+records, Panel gate, or both, and the template link updates live.
+
+A connection is one API token. The dialog links to Cloudflare's user-owned token
 template (`/profile/api-tokens` with `permissionGroupKeys`, `accountId=*` and
 `zoneId=all`), so the operator chooses accounts and zones on Cloudflare's own
-screen and never types an account ID. The permissions are DNS Edit, Zone Edit, Account Settings
-Read, Single Redirect Edit and API Tokens Read, then the union of what the
-saved profiles use: Zone Settings Edit, Config Rules Edit and Zone WAF Edit for
-the features that need them. Single Redirect Edit is asked for before any
-redirect domain exists, so finding the redirects to take over works with the
-token first pasted. API Tokens Read lets the token read its own permissions
-(below); it exposes token metadata, never a secret. Zone Edit is asked for whatever the profiles use, since Automatic creates
-missing zones; Cloudflare refuses a zone
-create without it by naming an internal permission, `account.zone.create`,
-which the page reports as Zone Edit. The URL uses the keys in Cloudflare's
+screen and never types an account ID. For DNS records the permissions are DNS
+Edit, Zone Edit, Account Settings Read, Single Redirect Edit and API Tokens
+Read, then the union of what the saved profiles use: Zone Settings Edit, Config
+Rules Edit and Zone WAF Edit. Single Redirect Edit is included before any
+redirect domain exists so finding redirects to take over works with the first
+token. API Tokens Read lets the token read its own permissions; it exposes token
+metadata, never a secret. Zone Edit is included for Automatic zone creation;
+Cloudflare refuses a zone create without it by naming `account.zone.create`,
+which the page reports as Zone Edit. Selecting Panel gate adds SSL and
+Certificates Edit, Access: Apps and Policies Edit, and Access: Organizations,
+Identity Providers, and Groups Edit. The URL uses the keys in Cloudflare's
 [template reference](https://developers.cloudflare.com/fundamentals/api/how-to/account-owned-token-template/),
-plus `config_settings`, `zone_waf` and `dynamic_redirect` (Single Redirect),
-which the reference leaves out but are the dashboard's own permission names. The dashboard drops an unknown key without saying so, which is
-why the page also lists the permissions. The template has no parameter for
-Client IP Address Filtering, so the page shows the server's detected addresses
-to paste there. Their API permissions are
+plus `config_settings`, `zone_waf` and `dynamic_redirect`, which the reference
+leaves out but the dashboard accepts. The dashboard drops an unknown key without
+warning, so the dialog also lists each permission by name. Because the template
+has no parameter for Client IP Address Filtering, the dialog shows the server's
+detected addresses with copy buttons. Their API permissions are
 [Config Settings Write and Zone WAF Write](https://developers.cloudflare.com/ruleset-engine/rulesets-api/update/),
 and Single Redirect's is
 [Dynamic URL Redirects Write](https://developers.cloudflare.com/rules/url-forwarding/single-redirects/create-api/).
 Cloudflare refuses a missing permission with a bare "Authentication error", so
 a refused settings or rules read or write is reported with the permission it needs.
 
-`addons/dns/token.ts` is the one list of permissions: each one's dashboard
-label, template key, the API permission group names that grant it, whether it
-is checked per zone, per account or for the token's owner, and what in the
-profiles uses it. The template, the refusal messages and the page's table all
-come from it.
+`lib/cloudflare/tokens.ts` is the single list of permissions: each entry records
+its dashboard label, template key, API permission group names, scope, consumer
+(`dns`, `firewall`, or `shared`), and what uses it. The token template, refusal
+messages, and permission tables in DNS and Firewall all derive from it.
 
 ### What a token holds
 
@@ -395,21 +402,21 @@ never as missing, and left out of the template; its row reads "Not added" until
 the token holds it, or "—" when the token cannot read itself. None is optional
 yet; Firewall's login jails and panel gate add theirs when they use them.
 
-`connectionPermissions(stored, profiles)` in `addons/dns/access.ts` gives the
-Setup checklist, from a connection's entry in `status.json`, whether the token
-read itself and the required permissions it is missing (or was refused), by
-name.
+`connectionPermissions(stored, profiles, options)` in `lib/cloudflare/access.ts`
+gives the Setup checklist, from a connection's entry in
+`/var/lib/clp-addons/cloudflare/status.json`, whether the token read itself and
+which required permissions it is missing or was refused, by name.
 
 Cloudflare has no address for editing one token, so **Edit in Cloudflare**
 opens the owner's token list: `/profile/api-tokens`, or
 `/{account}/api-tokens` for an account-owned token.
 
-Other addons ask through `dnsTokenHolds(connectionId, permission, zone)` in
-`addons/dns/action.ts`, which answers from the stored read without a network
-call, checking each permission at its own scope (the zone, its account, or the
-token's owner: the user, or an account-owned token's account). It returns null
-when that is not known: no check yet, a token no longer active or that cannot
-read itself, or a policy not understood that could change the answer.
+Other addons ask through `cloudflareTokenHolds(connectionId, permission, zone)`
+in `lib/cloudflare/store.ts`, which answers from the stored read without a
+network call, checking each permission at its own scope (the zone, its account,
+or the token's owner). It returns null when that is not known: no check yet, a
+token no longer active or that cannot read itself, or a policy not understood
+that could change the answer.
 
 Zone-scoped IP Access rules (`/zones/{zone_id}/firewall/access_rules/rules`)
 need **Zone → Firewall Services → Edit**, API name Firewall Services Write
@@ -425,9 +432,9 @@ Edit on the custom domain's zone (API name SSL and Certificates Write, key
 `ssl_and_certificates`) and, on its account, Access: Apps and Policies: Edit
 (Access: Apps and Policies Write, `access`) and Access: Organizations, Identity
 Providers, and Groups: Edit (Access: Organizations, Identity Providers, and
-Groups Write, `access_acct`). They are listed as optional, never as missing,
-and stay out of the template: a token without them is fine until the gate is
-turned on, and the gate checks them itself.
+Groups Write, `access_acct`). In DNS's permission table they appear as optional
+and stay out of the DNS-only template unless the operator selects Panel gate in
+the connect dialog; Firewall's own table marks them required.
 
 A token is verified before it is saved (`/user/tokens/verify`, or the account
 route for an account-owned one, using a zone's account when account listing is
@@ -580,15 +587,16 @@ repeat every check and are already on the site's plan.
 
 ## State, secrets and removal
 
-`/var/lib/clp-addons/dns/` holds `policy.json`, `secrets.json`, the last check,
-tracked records, a pending review, automatic SSL requests, the stand-in sites
-and the change log,
-each root-owned,
-mode `0600`, replaced atomically, and refused if it is not a root-owned regular
-file of that mode. Tokens and the Mailcow key are read only by the root action
-and travel only in request headers: never in arguments, page replies or logs,
-and error text is redacted of them. A saved Mailcow key is kept only for the
-Mailcow address it was saved with.
+`/var/lib/clp-addons/cloudflare/` holds the shared Cloudflare connections
+(`connections.json`), their API tokens (`secrets.json`), and their last check
+reports (`status.json`). `/var/lib/clp-addons/dns/` holds `policy.json`,
+`secrets.json` (the Mailcow API key), the last check, tracked records, a pending
+review, automatic SSL requests, the stand-in sites, and the change log. Each
+file is root-owned, mode `0600`, replaced atomically, and refused if it is not
+a root-owned regular file of that mode. Tokens and the Mailcow key are read only
+by root actions and travel only in request headers, never in arguments, page
+replies, or logs, and error text is redacted of them. A saved Mailcow key is
+kept only for the Mailcow address it was saved with.
 
 The records a site DNS writes has as wanted are tracked by id and their full
 record values, including priority, proxy, TTL and comment. A settled enforcing

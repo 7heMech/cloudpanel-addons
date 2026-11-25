@@ -546,8 +546,14 @@ function dnsEditConnection(id) {
   const token = form.elements.namedItem('token');
   token.required = !connection;
   token.placeholder = connection ? 'Leave empty to keep the saved token' : 'Paste the token';
-  CLP_ROOT.getElementById('dns-token-permissions').textContent = dnsState.token.permissions.join(', ');
-  CLP_ROOT.getElementById('dns-token-link').href = dnsState.token.url;
+  const dialog = CLP_ROOT.getElementById('dns-connection-dialog');
+  const templates = dnsState.tokens || { dns: dnsState.token, panelGate: dnsState.token, both: dnsState.token };
+  dialog.dataset.cfTemplates = JSON.stringify(templates);
+  const dnsScope = CLP_ROOT.getElementById('dns-scope-dns');
+  const gateScope = CLP_ROOT.getElementById('dns-scope-gate');
+  if (dnsScope) dnsScope.checked = true;
+  if (gateScope) gateScope.checked = Boolean(dnsState.firewallEnabled);
+  cfSyncScope('dns');
   const ips = [dnsState.server.detected.ipv4, dnsState.server.detected.ipv6].filter(Boolean);
   // Space-separated, as Cloudflare's IP filter takes several addresses at once.
   CLP_ROOT.getElementById('dns-token-ips').textContent = ips.join(' ');

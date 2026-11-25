@@ -3,7 +3,8 @@
 // addon's steps offered with Enable, and what each administrator skipped or hid.
 import { existsSync, readFileSync, rmSync } from "node:fs";
 import { ADDONS, addonEnabled, offeredAddonNames } from "../addons/catalog";
-import { detectAddresses } from "../addons/dns/addresses";
+import { detectAddresses } from "../lib/addresses";
+import { readCloudflareStore } from "../lib/cloudflare/store";
 import { parsePolicy, parseSecrets } from "../addons/dns/model";
 import { SETUP_LEVELS, type ActionNeeded, type ActionNeededCheck, type SetupCheck, type SetupLevel, type SetupStep } from "../lib/addon-definition";
 import { writeFileAtomic } from "../lib/atomic-write";
@@ -110,20 +111,29 @@ function readSetupContext(): SetupContext {
   let overrideIpv4 = "";
   let overrideIpv6 = "";
   try {
+    const cf = readCloudflareStore();
+    if (cf.connections.length > 0 || Object.keys(cf.tokens).length > 0) {
+      dnsConnected = cf.connections.some((connection) => Boolean(cf.tokens[connection.id]));
+      dnsZones = [...new Set(cf.reports.flatMap((connection) => connection.zoneNames ?? []))].sort();
+    }
     const dir = addonStateDir("dns");
     const raw = readState<unknown>(`${dir}/policy.json`, 0, () => null);
     if (raw !== null) {
       const policy = parsePolicy(raw);
-      const secrets = parseSecrets(readState(`${dir}/secrets.json`, 0, () => ({})));
-      const status = readState<{ connections?: { zoneNames?: string[] }[] }>(`${dir}/status.json`, 0, () => ({}));
-      dnsConnected = policy.connections.some((connection) => Boolean(secrets.cloudflare[connection.id]));
+      if (!dnsConnected) {
+        const secrets = parseSecrets(readState(`${dir}/secrets.json`, 0, () => ({})));
+        dnsConnected = policy.connections.some((connection) => Boolean(secrets.cloudflare[connection.id]));
+      }
+      if (!dnsZones.length) {
+        const status = readState<{ connections?: { zoneNames?: string[] }[] }>(`${dir}/status.json`, 0, () => ({}));
+        dnsZones = [...new Set((status.connections ?? []).flatMap((connection) => connection.zoneNames ?? []))].sort();
+      }
       dnsAutomatic = policy.automatic;
       dnsPanelHost = policy.panelHost;
       overrideIpv4 = policy.server.ipv4.trim();
       overrideIpv6 = policy.server.ipv6.trim();
-      dnsZones = [...new Set((status.connections ?? []).flatMap((connection) => connection.zoneNames ?? []))].sort();
     }
-  } catch { /* DNS state unreadable or not initialized */ }
+  } catch { /* DNS or Cloudflare state unreadable or not initialized */ }
   let detected: { ipv4: string | null; ipv6: string | null } = { ipv4: null, ipv6: null };
   try { detected = detectAddresses(); } catch { /* best-effort */ }
   const serverIps = { ipv4: overrideIpv4 || detected.ipv4, ipv6: overrideIpv6 || detected.ipv6 };

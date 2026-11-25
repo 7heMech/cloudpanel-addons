@@ -105,11 +105,13 @@ test("a fleet table gives the domain its own line on a phone", () => {
     }] }),
     cloudflareDashboardView({
       autoEnableNewSites: false,
+      visitorIp: { enabled: true, applied: true, problem: "" },
       sites: [{ domain: "a-rather-long-hostname.example.test", enabled: false }],
       protocols: { available: true, enabled: true, protocols: {}, udpPorts: [] },
       hetzner: { state: "absent" },
       netcup: { state: "absent" },
       panelGate: { error: "not read" },
+      cloudflare: { connections: [], templates: { dns: { url: "", permissions: [] }, panelGate: { url: "", permissions: [] }, both: { url: "", permissions: [] } }, serverIps: [], dnsEnabled: false },
     }),
   ]) {
     expect(html).toContain('<table class="fleet-table');

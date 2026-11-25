@@ -8,25 +8,29 @@
  * could otherwise send through a tunnel. `$remote_addr` is otherwise left
  * alone, so Cloudflare-only access still sees the connecting address.
  */
-import { errorMessage } from "../../lib/errors";
+import { failAction } from "../../lib/action";
 import { readIfPresent } from "../../lib/baseline";
 import { runCommand, type CommandResult } from "../../lib/command";
+import { errorMessage } from "../../lib/errors";
+import { withFileLockSync } from "../../lib/file-lock";
 import { cloudflareRanges, nginxFileChange, trustedVhost, withNginxTransaction } from "../../lib/nginx-transaction";
-import { CLOUDFLARE_IPS_PATH, ROOT_UID } from "../../lib/paths";
+import { addonStateDir, CLOUDFLARE_IPS_PATH, LOCK_DIR, ROOT_UID } from "../../lib/paths";
+import { addonLocked, lockRefusal } from "../../lib/root-locks";
+import { readState, writeState } from "../../lib/root-state";
 import { cloudflareVisitorMaps } from "../../lib/visitor-ip";
-import { COMMAND_MS, REAL_IP_GATEWAY_TIMEOUT_MS } from "./limits";
-import { applyThenSave, tweak } from "./tweak";
-import { badge, statusLine, switchRow } from "./app/rows";
-import { esc } from "../../lib/app-http";
 
 export const VISITOR_IP = "$clp_visitor_ip";
 const MAPS_MARKER = "# clp-addons:visitor-ip";
+const COMMAND_MS = 60_000;
+const STATE_VERSION = 1;
 
 export const DEFAULT_VISITOR_IP_PATHS = {
   nginxConf: "/etc/nginx/nginx.conf",
   fastcgiParams: "/etc/nginx/fastcgi_params",
   maps: "/etc/nginx/sites-enabled/00-clp-addons-visitor-ip.conf",
   cloudflareIps: CLOUDFLARE_IPS_PATH,
+  stateFile: `${addonStateDir("firewall")}/visitor-ip.json`,
+  lockFile: `${LOCK_DIR}/firewall-visitor-ip.lock`,
   nginx: "nginx",
   systemctl: "systemctl",
   rootUid: ROOT_UID,
@@ -37,6 +41,8 @@ type Paths = typeof DEFAULT_VISITOR_IP_PATHS;
 export interface VisitorIpOptions {
   paths?: Partial<Paths>;
   run?: (command: string, args: string[]) => CommandResult;
+  /** Tests only: root's lock file, owned by them; production reads ROOT_LOCKS_FILE. */
+  locks?: { file: string; rootUid: number };
 }
 
 export const UNTRUSTED_LOOPBACK = "#clp-addons:hop ";
@@ -75,6 +81,10 @@ export interface VisitorIpStatus {
   /** Whether the map is current and nothing that could use it still uses the plain address. */
   applied: boolean;
   problem: string;
+}
+
+export interface VisitorIpState extends VisitorIpStatus {
+  enabled: boolean;
 }
 
 export function visitorIpStatus(options: VisitorIpOptions = {}): VisitorIpStatus {
@@ -133,46 +143,52 @@ export function releaseVisitorIp(file: keyof typeof EDITS, options: VisitorIpOpt
   return apply(false, options, false, [file]);
 }
 
-type VisitorIpState = VisitorIpStatus & { enabled: boolean };
-
-function visitorIpLine(state: VisitorIpState): string {
-  if (state.problem) return `${badge("Unknown", "warn")} <span>${esc(state.problem)}</span>`;
-  if (state.enabled && state.applied) return `${badge("On", "ok")} <span>Behind Cloudflare, sites see the visitor's IP.</span>`;
-  if (state.enabled) return `${badge("Not applied", "warn")} <span>Run clp-addons repair.</span>`;
-  return `${badge("Off", "plain")} <span>Behind Cloudflare, sites see Cloudflare's or the tunnel's address.</span>`;
+/** Saved preference, defaulting to true so sites behind Cloudflare see real visitor IPs out of the box. */
+export function readVisitorIpEnabled(options: VisitorIpOptions = {}): boolean {
+  const paths = { ...DEFAULT_VISITOR_IP_PATHS, ...options.paths };
+  const stored = readState<{ version?: unknown; enabled?: unknown } | null>(paths.stateFile, paths.rootUid, () => null);
+  return stored?.version === STATE_VERSION && typeof stored.enabled === "boolean" ? stored.enabled : true;
 }
 
-/** Read the visitor's IP from CF-Connecting-IP when Cloudflare or cloudflared on this server set it. */
-export const VISITOR_IP_TWEAK = tweak<{ cloudflareVisitorIp: boolean }, { visitorIp?: VisitorIpOptions }, { visitorIp: VisitorIpState }>()({
-  defaults: { cloudflareVisitorIp: true },
-  state: ({ options, settings }) => ({ visitorIp: { ...visitorIpStatus(options.visitorIp), enabled: settings.cloudflareVisitorIp } }),
-  switch: {
-    verb: "set-visitor-ip",
-    key: "cloudflareVisitorIp",
-    timeout: REAL_IP_GATEWAY_TIMEOUT_MS,
-    set: applyThenSave("cloudflareVisitorIp", (on, options: { visitorIp?: VisitorIpOptions }) => applyVisitorIp(on, options.visitorIp)),
-  },
-  repair: {
-    upkeep: {
-      label: null,
-      locked: true,
-      run: ({ options, settings }) => settings.cloudflareVisitorIp && applyVisitorIp(true, options.visitorIp) && "Cloudflare visitor IPs reapplied",
-    },
-  },
-  withdraw: { run: ({ options }) => { applyVisitorIp(false, options.visitorIp); } },
-  restore: {
-    run: ({ options, settings }) => { if (settings.cloudflareVisitorIp) applyVisitorIp(true, options.visitorIp); },
-    // Visitor addresses wait for the next repair; the guards after it must still come back.
-    warning: (error) => `Cloudflare visitor IPs only wait for the next repair: ${error}`,
-  },
-  row: ({ visitorIp }, locked) => switchRow("set-visitor-ip", {
-    key: "cloudflareVisitorIp",
-    title: "Cloudflare visitor IPs",
-    description: [
-      "Site access logs and PHP take the visitor's IP from CF-Connecting-IP when Cloudflare's proxy or a Cloudflare Tunnel on this server sent the request. Anyone else's header is ignored, and so is an X-Real-IP sent through a tunnel.",
-      "Error logs, Cloudflare-only access and CloudPanel's IP rules still see the connecting address. In a vhost's port 8080 server that is 127.0.0.1, so keep rules you add by IP in its first server.",
-    ],
-    checked: visitorIp.enabled,
-    extra: statusLine(visitorIpLine(visitorIp)),
-  }, locked),
-});
+function writeVisitorIpEnabled(enabled: boolean, paths: Paths): void {
+  writeState(paths.stateFile, { version: STATE_VERSION, enabled }, paths.rootUid);
+}
+
+export function visitorIpState(options: VisitorIpOptions = {}): VisitorIpState {
+  return { ...visitorIpStatus(options), enabled: readVisitorIpEnabled(options) };
+}
+
+export function setVisitorIpEnabled(enabled: boolean, options: VisitorIpOptions = {}): VisitorIpState {
+  const paths = { ...DEFAULT_VISITOR_IP_PATHS, ...options.paths };
+  return withFileLockSync(paths.lockFile, 30, "another Cloudflare visitor IP change is running", () => {
+    if (!enabled && addonLocked("firewall", options.locks?.file, options.locks?.rootUid)) {
+      failAction(lockRefusal("firewall"));
+    }
+    applyVisitorIp(enabled, options);
+    writeVisitorIpEnabled(enabled, paths);
+    return { ...visitorIpStatus(options), enabled };
+  });
+}
+
+/** Reapplies visitor IPs during repair and when CloudPanel rewrites `/etc/nginx/cloudflare/ips`. */
+export function keepVisitorIp(options: VisitorIpOptions = {}): string | null {
+  const paths = { ...DEFAULT_VISITOR_IP_PATHS, ...options.paths };
+  return withFileLockSync(paths.lockFile, 30, "another Cloudflare visitor IP change is running", () => {
+    if (!readVisitorIpEnabled(options)) return null;
+    return applyVisitorIp(true, options) ? "Cloudflare visitor IPs reapplied" : null;
+  });
+}
+
+export function restoreVisitorIp(options: VisitorIpOptions = {}): void {
+  const paths = { ...DEFAULT_VISITOR_IP_PATHS, ...options.paths };
+  withFileLockSync(paths.lockFile, 30, "another Cloudflare visitor IP change is running", () => {
+    if (readVisitorIpEnabled(options)) applyVisitorIp(true, options);
+  });
+}
+
+export function withdrawVisitorIp(options: VisitorIpOptions = {}): void {
+  const paths = { ...DEFAULT_VISITOR_IP_PATHS, ...options.paths };
+  withFileLockSync(paths.lockFile, 30, "another Cloudflare visitor IP change is running", () => {
+    applyVisitorIp(false, options);
+  });
+}

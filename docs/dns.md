@@ -10,13 +10,14 @@ Until Cloudflare is connected, the DNS page opens with a first-run setup card.
 Once connected, the page splits into **Sites**, **Redirects**, **Profiles**,
 **Settings**, and **Activity**.
 
-1. **Connect Cloudflare.** Open DNS and choose **Connect Cloudflare**. **Create
-   token in Cloudflare** opens Cloudflare's token form. Check the permissions
-   listed beside the link are there. Pick the accounts and zones there, limit
-   it to the server addresses shown under Client IP Address Filtering using the
-   clipboard icon, create the token, and paste it back. DNS finds the accounts
-   and zones it reaches by itself. Add more connections under **Settings** for
-   other Cloudflare logins.
+1. **Connect Cloudflare.** Open DNS and choose **Connect Cloudflare**. Choose
+   whether the token is for DNS records, Firewall's Panel gate, or both.
+   **Create token in Cloudflare** opens Cloudflare's token form with those
+   permissions selected. Check the permissions listed beside the link, pick the
+   accounts and zones, limit the token to the server addresses shown under
+   Client IP Address Filtering using the clipboard icon, create the token, and
+   paste it back. DNS and Firewall share saved Cloudflare connections. Add more
+   connections under **Settings** for other Cloudflare logins.
 2. **Mailcow, if you use it.** Open **Mailcow** under **Settings** and set
    Mailcow's hostname, such as `mail.example.com`, a read-write API key limited
    to this server's IP in Mailcow, how new domains get a DKIM key, and

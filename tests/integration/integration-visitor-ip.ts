@@ -3,7 +3,7 @@ import { strict as assert } from "node:assert";
 import { chmodSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { applyVisitorIp } from "../../addons/system-tweaks/visitor-ip";
+import { applyVisitorIp } from "../../addons/firewall/visitor-ip";
 
 // 127.0.0.2 stands in for Cloudflare, 127.0.0.1 for cloudflared on this server
 // and 127.0.0.3 for any other client. The http block is CloudPanel's, with its

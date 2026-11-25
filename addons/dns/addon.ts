@@ -12,6 +12,7 @@ export const DNS_ADDON: AddonDefinition = {
   description: "Keep each site's Cloudflare DNS to a profile of records, with Mailcow set up for its mail.",
   added: "2.0.0-rc.1",
   changed: [
+    { in: "2.3.0-rc.1", note: "Cloudflare connections are now shared with Firewall. The Connect Cloudflare dialog lets you create one token covering DNS, Firewall's Panel gate, or both." },
     { in: "2.2.0-rc.3", note: "DNS now splits into Sites, Redirects, Profiles, Settings and Activity tabs (with a first-run card before Cloudflare is connected). Automatic sync lives under Settings, Mailcow and Server addresses fold into disclosures, and saving a Panel hostname requires a Cloudflare connection." },
     { in: "2.2.0-rc.3", note: "DNS deletes a subdomain site's own A, AAAA and CNAME records once an unobstructed matching wildcard covers the site. New installs' Web preset writes an apex-only *.{domain} wildcard instead of www. Panel hostname offers a random label generator and hands off to a proxied wildcard after the certificate is issued." },
     { in: "2.2.0-rc.1", note: "Panel hostname: DNS points the name you give CloudPanel's custom domain at this server, and proxies it once CloudPanel has its certificate." },

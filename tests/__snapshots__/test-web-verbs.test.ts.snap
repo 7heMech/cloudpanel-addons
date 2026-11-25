@@ -40,6 +40,7 @@ firewall:protocols                 admin
 firewall:set                       admin
 firewall:set-protocol              admin
 firewall:set-protocols             admin
+firewall:set-visitor-ip            admin
 git:configure                      site-manager
 git:deploy                         site-manager
 git:domains                        site-manager
@@ -84,6 +85,10 @@ maintenance:set-default-template   admin
 maintenance:set-template           admin
 maintenance:sites                  admin
 maintenance:status                 admin
+manager:cloudflare-check           admin
+manager:cloudflare-list            admin
+manager:cloudflare-remove          admin
+manager:cloudflare-save            admin
 manager:disable                    admin
 manager:enable                     admin
 manager:holds                      admin
@@ -154,7 +159,6 @@ system-tweaks:set-telemetry        admin
 system-tweaks:set-updates          admin
 system-tweaks:set-upload-guard     admin
 system-tweaks:set-vhost-guard      admin
-system-tweaks:set-visitor-ip       admin
 system-tweaks:state                admin
 system-tweaks:unban                admin
 terminal:root-access               own-account

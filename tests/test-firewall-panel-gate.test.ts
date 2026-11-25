@@ -104,7 +104,7 @@ interface Box {
 function box(): Box {
   const dir = mkdtempSync(join(tmpdir(), "panel-gate-test-"));
   dirs.push(dir);
-  for (const sub of ["state", "dns", "locks", "sites", "panel"]) mkdirSync(join(dir, sub), { mode: 0o700 });
+  for (const sub of ["state", "cloudflare", "locks", "sites", "panel"]) mkdirSync(join(dir, sub), { mode: 0o700 });
   writeFileSync(join(dir, "sites", "custom-domain.conf"), CUSTOM_DOMAIN, { mode: 0o644 });
   writeFileSync(join(dir, "custom-domain"), `${HOST}\n`, { mode: 0o644 });
   writeFileSync(join(dir, "panel", "cloudpanel.conf"), PANEL, { mode: 0o640 });
@@ -125,8 +125,8 @@ function box(): Box {
   cf.token(TOKEN, { owner: "user", accounts: [account], policies: [policy(["DNS Write", "API Tokens Read", "Zone Settings Read", ...GATE_GROUPS], ALL_ZONES)] });
   const zone = cf.zone("example.com", account);
   cf.record("example.com", { type: "A", name: HOST, content: "203.0.113.10", proxied: true });
-  writeFileSync(join(dir, "dns", "secrets.json"), JSON.stringify({ cloudflare: { agency: TOKEN } }), { mode: 0o600 });
-  writeFileSync(join(dir, "dns", "policy.json"), JSON.stringify({ connections: [{ id: "agency", label: "Agency" }] }), { mode: 0o600 });
+  writeFileSync(join(dir, "cloudflare", "secrets.json"), JSON.stringify({ version: 1, tokens: { agency: TOKEN } }), { mode: 0o600 });
+  writeFileSync(join(dir, "cloudflare", "connections.json"), JSON.stringify({ version: 1, connections: [{ id: "agency", label: "Agency" }] }), { mode: 0o600 });
 
   const commands: string[][] = [];
   const failing = new Set<string>();
@@ -146,7 +146,7 @@ function box(): Box {
         lockFile: join(dir, "locks", "panel-gate.lock"),
         operationLockDir: join(dir, "locks"),
         certDir: join(dir, "certs"),
-        dnsDir: join(dir, "dns"),
+        cloudflareDir: join(dir, "cloudflare"),
         panelDb: join(dir, "panel.db"),
         customDomain: join(dir, "custom-domain"),
         customDomainVhost: join(dir, "sites", "custom-domain.conf"),
@@ -484,7 +484,8 @@ describe("review fixes", () => {
     expect(sitesVhost(b)).toBe(CUSTOM_DOMAIN);
 
     // The connection that made them was replaced by another reaching the same zone.
-    writeFileSync(join(b.dir, "dns", "secrets.json"), JSON.stringify({ cloudflare: { renamed: TOKEN } }), { mode: 0o600 });
+    writeFileSync(join(b.dir, "cloudflare", "secrets.json"), JSON.stringify({ version: 1, tokens: { renamed: TOKEN } }), { mode: 0o600 });
+    writeFileSync(join(b.dir, "cloudflare", "connections.json"), JSON.stringify({ version: 1, connections: [{ id: "renamed", label: "Agency" }] }), { mode: 0o600 });
     const { reply } = await turnOn(b);
     expect(reply).toMatchObject({ notice: expect.stringContaining("The Panel gate is on") });
     expect(b.cf.accessApps.has(old.appId)).toBe(false);

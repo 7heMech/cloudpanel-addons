@@ -10,7 +10,7 @@
  */
 import { createHash } from "node:crypto";
 import { getDomain } from "tldts";
-import type { CfRule, CfRuleset, RuleWrite } from "./cloudflare";
+import type { CfRule, CfRuleset, RuleWrite } from "../../lib/cloudflare/api";
 import { dnsName, REDIRECT_STATUSES, type Redirect, type RedirectStatus } from "./model";
 
 export const REDIRECT_PHASE = "http_request_dynamic_redirect";

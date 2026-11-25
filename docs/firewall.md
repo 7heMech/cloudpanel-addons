@@ -1,7 +1,7 @@
 # Firewall
 
-Cloudflare-only access for your sites, UDP rules on CloudPanel's own
-Firewall page, a gate in front of the panel, and Hetzner Cloud or netcup
+Cloudflare-only access and visitor IPs for your sites, UDP rules on CloudPanel's
+own Firewall page, a gate in front of the panel, and Hetzner Cloud or netcup
 firewalls that admit only Cloudflare.
 
 ## Cloudflare-only sites
@@ -10,6 +10,27 @@ The table switches CloudPanel's **Allow traffic from Cloudflare only** for each
 site, or for every selected site at once. A site that is not proxied through
 Cloudflare stops answering once it is on. **Enable on new sites** turns it on
 for each site created from then on; a site you turn off is never turned back on.
+
+## Cloudflare visitor IPs
+
+**Cloudflare visitor IPs** sits on the **Cloudflare only** tab and is on by
+default. Sites behind Cloudflare's proxy or a Cloudflare Tunnel on this server
+get the visitor's IP in their access logs and in PHP from `CF-Connecting-IP`.
+The header is trusted only from Cloudflare and from the tunnel, so nobody else
+can set it. Visitors coming through a tunnel can no longer set their IP with
+`X-Real-IP`. Point the tunnel at port 80 or 443 on this server: a tunnel to a
+site's port 8080 skips CloudPanel's front server, and its visitors can still set
+their IP.
+
+Error logs, **Allow traffic from Cloudflare only**, and CloudPanel's blocked IPs
+and basic-auth allowlist still see the connecting address: Cloudflare's, the
+tunnel's, or a direct visitor's own. In a site's `listen 8080` server block that
+address is `127.0.0.1` for every visitor, so keep any rule you add to the vhost
+by address, such as `allow`, `deny`, or a rate limit, in the first server block.
+
+Run `clp-addons lock firewall` as root to keep the web panel from switching
+Cloudflare visitor IPs off or disabling Firewall; `clp-addons unlock firewall`
+undoes it.
 
 ## Protocols
 
@@ -35,11 +56,11 @@ It is off by default, and the card lists what it still needs:
 - a custom domain for CloudPanel (**Admin → Settings**), with its record or an
   unobstructed wildcard covering it proxied through Cloudflare (the orange
   cloud), and the zone in SSL mode Full or Full (strict);
-- a DNS connection whose token reaches that zone and holds
-  **SSL and Certificates: Edit**, **Access: Apps and Policies: Edit** and
-  **Access: Organizations, Identity Providers, and Groups: Edit**, besides
-  **API Tokens: Read**. Add them to the token in Cloudflare; DNS lists them as
-  optional;
+- a Cloudflare connection saved on the **Panel gate** tab or in **DNS**, whose
+  token reaches that zone and holds **SSL and Certificates: Edit**,
+  **Access: Apps and Policies: Edit**, and **Access: Organizations, Identity
+  Providers, and Groups: Edit**, besides **API Tokens: Read**. DNS does not need
+  to be enabled to use Panel gate;
 - Cloudflare Zero Trust set up on the account (the free plan is enough).
 
 Panel users added, removed or deactivated are kept in the Access policy within

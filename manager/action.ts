@@ -20,6 +20,13 @@
 // and reconnects once the manager is back.
 
 import { errorMessage } from "../lib/errors";
+import { readJsonRequest } from "../lib/action";
+import {
+  checkCloudflareConnections, cloudflareConnectionViews, removeCloudflareConnection, saveCloudflareConnection,
+  type CloudflareStorePaths,
+} from "../lib/cloudflare/store";
+import { tokenTemplates } from "../lib/cloudflare/tokens";
+import type { ApiFetch } from "../lib/provider-http";
 import { addonStateDir, CLI_BIN, LOCK_DIR } from "../lib/paths";
 import { writeFileAtomic } from "../lib/atomic-write";
 import { existsSync, mkdirSync, readFileSync, rmSync } from "node:fs";
@@ -279,6 +286,10 @@ export interface CreateJobOptions {
   locks?: { file: string; rootUid: number };
   /** Tests only: the architecture in place of this box's. */
   arch?: string;
+  /** Tests only: JSON stdin for verbs that take a body. */
+  input?: string;
+  /** Tests only: Cloudflare store paths and fetch override. */
+  cloudflare?: { paths?: Partial<CloudflareStorePaths>; fetch?: ApiFetch };
 }
 
 /**
@@ -492,6 +503,27 @@ export async function runManagerAction(
           },
         });
         return 0;
+      }
+      case "cloudflare-list": {
+        const view = cloudflareConnectionViews([], { includeDns: false, requirePanelGate: true }, options.cloudflare?.paths);
+        return reply({ ok: true, data: { ...view, templates: tokenTemplates() } }, options.emitReply !== false);
+      }
+      case "cloudflare-save": {
+        const body = await readJsonRequest(options.input, 32 * 1024);
+        const saved = await saveCloudflareConnection(body, options.cloudflare);
+        const view = cloudflareConnectionViews([], { includeDns: false, requirePanelGate: true }, options.cloudflare?.paths);
+        return reply({ ok: true, data: { ...view, templates: tokenTemplates(), id: saved.id, notice: saved.notice } }, options.emitReply !== false);
+      }
+      case "cloudflare-remove": {
+        const body = await readJsonRequest(options.input, 4 * 1024);
+        const removed = await removeCloudflareConnection(String(body.id ?? ""), options.cloudflare);
+        const view = cloudflareConnectionViews([], { includeDns: false, requirePanelGate: true }, options.cloudflare?.paths);
+        return reply({ ok: true, data: { ...view, templates: tokenTemplates(), notice: removed.notice } }, options.emitReply !== false);
+      }
+      case "cloudflare-check": {
+        await checkCloudflareConnections(options.cloudflare);
+        const view = cloudflareConnectionViews([], { includeDns: false, requirePanelGate: true }, options.cloudflare?.paths);
+        return reply({ ok: true, data: { ...view, templates: tokenTemplates(), notice: "Checked Cloudflare connections." } }, options.emitReply !== false);
       }
       case "run": {
         if (!id) return failReply("'run' needs --job", undefined, options.emitReply !== false);

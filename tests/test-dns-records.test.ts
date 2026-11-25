@@ -1,9 +1,9 @@
 import { describe, expect, test } from "bun:test";
-import type { CfRecord } from "../addons/dns/cloudflare";
+import type { CfRecord } from "../lib/cloudflare/api";
 import { parseProfile, type Profile } from "../addons/dns/model";
 import { PRESETS, seededPolicy } from "../addons/dns/presets";
 import { diffRecords, renderProfile, renderRedirect, wildcardSource, type SiteVars } from "../addons/dns/records";
-import { tokenTemplate } from "../addons/dns/token";
+import { tokenTemplate } from "../lib/cloudflare/tokens";
 
 const vars = (domain: string, zone = "example.com", extra: Partial<SiteVars> = {}): SiteVars => ({
   domain, zone, ipv4: "203.0.113.10", ipv6: "2001:db8::10", mailcowHost: "mail.example.net",

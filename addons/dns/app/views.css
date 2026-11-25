@@ -152,6 +152,9 @@ p.dns-dialog-note { margin:20px 0 0; }
 .dns-steps > li { margin-bottom:24px; }
 .dns-steps > li:last-child { margin-bottom:0; }
 .dns-steps p { margin:6px 0 12px; }
+.cf-scope-picks { display:flex; flex-wrap:wrap; gap:8px 18px; margin:10px 0 6px; }
+.cf-scope-pick { display:inline-flex; align-items:center; gap:8px; font-size:14px; cursor:pointer; }
+.cf-scope-pick input { margin:0; }
 .dns-token-grid { margin-top:12px; }
 #dns-token-link { white-space:normal; }
 .dns-copy { display:flex; align-items:center; gap:6px; margin-bottom:12px; }

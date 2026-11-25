@@ -135,6 +135,136 @@ async function setAutomatic(input) {
   notify(state.ok ? done : done + ' The page may be out of date: ' + state.error, state.ok ? 'ok' : 'warn');
 }
 
+async function setVisitorIp(input) {
+  const enabled = input.checked;
+  const state = await change('/api/visitor-ip', { enabled: enabled }, 'Could not update Cloudflare visitor IPs: ');
+  if (!state) return;
+  const done = enabled
+    ? 'Behind Cloudflare, sites now see the visitor\'s IP.'
+    : 'Cloudflare visitor IPs switched off.';
+  notify(state.ok ? done : done + ' The page may be out of date: ' + state.error, state.ok ? 'ok' : 'warn');
+}
+
+function fwCloudflareData() {
+  const card = CLP_ROOT.getElementById('fw-cf-card');
+  if (!card) return { connections: [], serverIps: [] };
+  try { return JSON.parse(card.dataset.fwCf || '{}'); } catch (e) { return { connections: [], serverIps: [] }; }
+}
+
+function fwCopyText(elementId, label) {
+  const node = CLP_ROOT.getElementById(elementId);
+  if (!node) return;
+  const text = node.textContent || '';
+  if (!navigator.clipboard || !navigator.clipboard.writeText) return notify('Select ' + label + ' and copy it.', 'warn');
+  navigator.clipboard.writeText(text).then(
+    function () { notify(label + ' copied.', 'ok'); },
+    function () { notify('Select ' + label + ' and copy it.', 'warn'); }
+  );
+}
+
+function fwEditCloudflare(id) {
+  const data = fwCloudflareData();
+  const connection = id ? (data.connections || []).find(function (c) { return c.id === id; }) : null;
+  const dialog = CLP_ROOT.getElementById('fw-cf-connection-dialog');
+  const form = CLP_ROOT.getElementById('fw-cf-connection-form');
+  if (!dialog || !form) return;
+  form.reset();
+  form.elements.namedItem('id').value = id || '';
+  form.elements.namedItem('label').value = connection ? connection.label : '';
+  const token = form.elements.namedItem('token');
+  token.required = !connection;
+  token.placeholder = connection ? 'Leave empty to keep the saved token' : 'Paste the token';
+  const ips = data.serverIps || [];
+  const ipNode = CLP_ROOT.getElementById('fw-cf-token-ips');
+  const ipWrap = CLP_ROOT.getElementById('fw-cf-token-ips-hint');
+  if (ipNode) ipNode.textContent = ips.join(' ');
+  if (ipWrap) ipWrap.hidden = !ips.length;
+  CLP_ROOT.getElementById('fw-cf-connection-heading').textContent = connection ? 'Edit ' + connection.label : 'Connect Cloudflare';
+  form.querySelector('[type="submit"]').textContent = connection ? 'Save' : 'Connect';
+  const err = dialog.querySelector('[data-error]');
+  if (err) { err.hidden = true; err.textContent = ''; }
+  cfSyncScope('fw-cf');
+  dialog.showModal();
+}
+
+async function fwCloudflareCall(path, body) {
+  const csrf = (document.cookie.match(/(?:^|;\s*)clp_addons_csrf=([^;]+)/) || [])[1] || '';
+  const response = await fetch(path, {
+    method: 'POST',
+    credentials: 'same-origin',
+    headers: { 'Content-Type': 'application/json', 'x-clp-addons-csrf': decodeURIComponent(csrf) },
+    body: JSON.stringify(body),
+  });
+  const reply = await response.json().catch(function () { return {}; });
+  if (!response.ok || reply.ok === false) throw new Error(reply.error || ('HTTP ' + response.status));
+  return reply;
+}
+
+async function fwSaveCloudflare(event) {
+  event.preventDefault();
+  const form = event.currentTarget;
+  const dialog = CLP_ROOT.getElementById('fw-cf-connection-dialog');
+  const err = dialog && dialog.querySelector('[data-error]');
+  if (err) { err.hidden = true; err.textContent = ''; }
+  clearNotice();
+  busy(true);
+  let reply = null;
+  let failure = '';
+  try {
+    reply = await fwCloudflareCall('/addons/api/cloudflare', {
+      id: form.elements.namedItem('id').value || null,
+      label: form.elements.namedItem('label').value,
+      token: form.elements.namedItem('token').value,
+    });
+  } catch (error) {
+    failure = error.message;
+  } finally {
+    busy(false);
+  }
+  if (failure) {
+    if (dialog && dialog.open && err) {
+      err.textContent = failure;
+      err.hidden = false;
+      return;
+    }
+    notify('Could not save Cloudflare connection: ' + failure, 'error');
+    return;
+  }
+  if (dialog && dialog.open) dialog.close();
+  panelGateRead = null;
+  const state = await repaint();
+  replyNotice(Object.assign(state, { reply: reply.data }));
+}
+
+async function fwRemoveCloudflare(id) {
+  const data = fwCloudflareData();
+  const connection = (data.connections || []).find(function (c) { return c.id === id; });
+  const accepted = await confirmAction({
+    title: 'Remove ' + (connection ? connection.label : 'Cloudflare connection') + '?',
+    text: 'Its token is deleted from this server. DNS and Firewall stop using it; the token stays valid in Cloudflare until you delete it there.',
+    confirmLabel: 'Remove', danger: true,
+  });
+  if (!accepted) return;
+  clearNotice();
+  busy(true);
+  let reply = null;
+  let failure = '';
+  try {
+    reply = await fwCloudflareCall('/addons/api/cloudflare/remove', { id: id });
+  } catch (error) {
+    failure = error.message;
+  } finally {
+    busy(false);
+  }
+  if (failure) {
+    notify('Could not remove Cloudflare connection: ' + failure, 'error');
+    return;
+  }
+  panelGateRead = null;
+  const state = await repaint();
+  replyNotice(Object.assign(state, { reply: reply.data }));
+}
+
 async function setProtocols(input) {
   const enabled = input.checked;
   const state = await change('/api/protocols', { enabled: enabled }, 'Could not switch the protocols: ');

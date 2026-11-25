@@ -1,4 +1,4 @@
-import { guardMutation, jsonResponse, safeDecodePathSegment } from "../lib/app-http";
+import { guardMutation, jsonResponse, readBody, safeDecodePathSegment } from "../lib/app-http";
 import { streamGatewayAction, type ActionResult } from "../lib/gateway-client";
 import { jobEventStream, type JobWatcher } from "../lib/job-stream";
 import { ADDON_NAMES } from "../addons/catalog";
@@ -52,6 +52,33 @@ export async function handleManagerRoute(
         ...(headerOnly ? {} : { html: setupPanelHtml(view) }),
       },
     });
+  }
+
+  if (path === "/api/cloudflare" && req.method === "GET") {
+    const result = await managerAction("cloudflare-list");
+    return jsonResponse(result, result.ok ? 200 : 400);
+  }
+  if (path === "/api/cloudflare" && req.method === "POST") {
+    const denied = guardMutation(req);
+    if (denied) return denied;
+    const body = await readBody(req, 32 * 1024);
+    if (body instanceof Response) return body;
+    const result = await managerAction("cloudflare-save", [], JSON.stringify(body), 60_000);
+    return jsonResponse(result, result.ok ? 200 : 400);
+  }
+  if (path === "/api/cloudflare/remove" && req.method === "POST") {
+    const denied = guardMutation(req);
+    if (denied) return denied;
+    const body = await readBody(req, 4 * 1024);
+    if (body instanceof Response) return body;
+    const result = await managerAction("cloudflare-remove", [], JSON.stringify(body));
+    return jsonResponse(result, result.ok ? 200 : 400);
+  }
+  if (path === "/api/cloudflare/check" && req.method === "POST") {
+    const denied = guardMutation(req);
+    if (denied) return denied;
+    const result = await managerAction("cloudflare-check", [], undefined, 60_000);
+    return jsonResponse(result, result.ok ? 200 : 400);
   }
 
   if (path === "/api/update" && req.method === "GET") {

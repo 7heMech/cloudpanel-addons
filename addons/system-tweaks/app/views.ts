@@ -376,7 +376,6 @@ function hardeningAttention(state: SystemTweaksState, lock: LockState): "bad" | 
     || "error" in state.database
     || Boolean(
       state.realIp.problem
-      || state.visitorIp.problem
       || state.phpMyAdmin.problem
       || state.phpPools.problem
       || state.telemetry.problem,

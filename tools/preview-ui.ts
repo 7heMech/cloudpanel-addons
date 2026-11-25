@@ -29,11 +29,11 @@ import { dashboardView as smtpDashboardView, layout as smtpLayout } from "../add
 import type { SmtpState } from "../addons/smtp/action";
 import { dashboardView as dnsDashboardView, layout as dnsLayout } from "../addons/dns/app/views";
 import type { DnsState, Review as DnsReview } from "../addons/dns/action";
-import { accessView as dnsAccessView, readAccess as dnsReadAccess, type AccessView as DnsAccessView, type TokenAccess as DnsTokenAccess } from "../addons/dns/access";
+import { accessView as dnsAccessView, readAccess as dnsReadAccess, type AccessView as DnsAccessView, type TokenAccess as DnsTokenAccess } from "../lib/cloudflare/access";
 import type { SitePlan as DnsSitePlan } from "../addons/dns/engine";
 import type { Redirect as DnsRedirect } from "../addons/dns/model";
 import { PRESETS as DNS_PRESETS, seededPolicy as dnsSeededPolicy } from "../addons/dns/presets";
-import { tokenTemplate as dnsTokenTemplate } from "../addons/dns/token";
+import { tokenTemplate as dnsTokenTemplate, tokenTemplates as cloudflareTokenTemplates } from "../lib/cloudflare/tokens";
 import {
   dashboardView as panelTweaksDashboardView, layout as panelTweaksLayout,
 } from "../addons/panel-tweaks/app/views";
@@ -215,6 +215,8 @@ function dnsPreviewState(url: URL): DnsState {
     checkedAt: setup ? null : new Date(Date.now() - 4 * 60_000).toISOString(),
     waitUntil: 0,
     token: dnsTokenTemplate([web, mailcow]),
+    tokens: cloudflareTokenTemplates([web, mailcow]),
+    firewallEnabled: true,
     presets: DNS_PRESETS,
     log,
     panelHost,
@@ -596,19 +598,22 @@ function panelGatePreviewState(mode: string | null): PanelGateView | { error: st
   if (mode === "pending") return { ...base, on: false, pending: true };
   return {
     ...base, on: false, editUrl: "https://dash.cloudflare.com/profile/api-tokens",
-    problems: ["The token of DNS connection Agency lacks SSL and Certificates: Edit, Access: Organizations, Identity Providers, and Groups: Edit. Add them to the token in Cloudflare."],
+    problems: ["The token of Cloudflare connection Agency lacks SSL and Certificates: Edit, Access: Organizations, Identity Providers, and Groups: Edit. Add them to the token in Cloudflare."],
   };
 }
 
-/** ?sites=all|none|mixed, ?auto=off, ?many (search and filter), ?protocols=off and ?noudp cover the states the controls describe. */
+/** ?sites=all|none|mixed, ?auto=off, ?visitorip=off, ?cf=none, ?nodns, ?many (search and filter), ?protocols=off and ?noudp cover the states the controls describe. */
 function firewallPreviewState(url: URL) {
   const all = url.searchParams.get("sites");
   const sites = [...cloudflareSites, ...(url.searchParams.has("many") ? cloudflareMoreSites : [])].map((site) => all === "all"
     ? { ...site, enabled: true }
     : all === "none" ? { ...site, enabled: false } : site);
+  const noCf = url.searchParams.get("cf") === "none";
+  const dnsEnabled = !url.searchParams.has("nodns");
   return {
     autoEnableNewSites: url.searchParams.get("auto") !== "off",
     sites: url.searchParams.has("empty") ? [] : sites,
+    visitorIp: { enabled: url.searchParams.get("visitorip") !== "off", applied: url.searchParams.get("visitorip") !== "off", problem: "" },
     protocols: {
       available: true, enabled: url.searchParams.get("protocols") !== "off",
       protocols: { 9: "udp" as const, 10: "udp" as const, 11: "both" as const }, udpPorts: url.searchParams.has("noudp") ? [] : ["53", "51820"],
@@ -616,6 +621,25 @@ function firewallPreviewState(url: URL) {
     hetzner: hetznerPreviewState(url.searchParams.has("netcup") && !url.searchParams.has("hetzner") ? "absent" : url.searchParams.get("hetzner")),
     netcup: netcupPreviewState(url.searchParams.get("netcup")),
     panelGate: panelGatePreviewState(url.searchParams.get("gate")),
+    cloudflare: {
+      connections: noCf ? [] : [
+        {
+          id: "cf-1", label: "Agency", active: true, status: "active",
+          accounts: [{ id: "a".repeat(32), name: "Example Agency" }, { id: "b".repeat(32), name: "Clients" }],
+          zones: 4, error: null, hasToken: true,
+          access: dnsAccessView({ token: DNS_PREVIEW_TOKENS.agency }, [], { includeDns: false, requirePanelGate: true }),
+        },
+        {
+          id: "cf-2", label: "Church", active: true, status: "active",
+          accounts: [{ id: "c".repeat(32), name: "Church account" }],
+          zones: 1, error: null, hasToken: true,
+          access: dnsAccessView({ token: DNS_PREVIEW_TOKENS.church }, [], { includeDns: false, requirePanelGate: true }),
+        },
+      ],
+      templates: cloudflareTokenTemplates([]),
+      serverIps: ["203.0.113.10", "2001:db8::10"],
+      dnsEnabled,
+    },
   };
 }
 
@@ -780,7 +804,6 @@ function systemTweaksPreviewState(url: URL): SystemTweaksState {
     },
     panelPhp: panelPhpPreviewStatus(url),
     realIp: { blockForged: url.searchParams.get("realip") !== "off", trustsAnyAddress: url.searchParams.get("realip") === "off", problem: "" },
-    visitorIp: { enabled: url.searchParams.get("visitorip") !== "off", applied: url.searchParams.get("visitorip") !== "off", problem: "" },
     phpMyAdmin: { enabled: url.searchParams.get("pma") !== "off", active: url.searchParams.get("pma") !== "off", problem: "" },
     panelCert: panelCertPreviewStatus(url.searchParams.get("cert")),
     loginJails: {
@@ -874,8 +897,6 @@ function systemTweaksPreviewMutation(path: string, source: URL, body: Record<str
     state.motd = { enabled: body.enabled === true, script: body.enabled === true, banner: body.enabled !== true };
   } else if (path.endsWith("/real-ip")) {
     state.realIp = { blockForged: body.enabled === true, trustsAnyAddress: body.enabled !== true, problem: "" };
-  } else if (path.endsWith("/visitor-ip")) {
-    state.visitorIp = { enabled: body.enabled === true, applied: body.enabled === true, problem: "" };
   } else if (path.endsWith("/login-jails") && !("error" in state.loginJails)) {
     const jails = state.loginJails as Exclude<SystemTweaksState["loginJails"], { error: string }>;
     Object.assign(jails, body);
@@ -888,7 +909,7 @@ function systemTweaksPreviewMutation(path: string, source: URL, body: Record<str
     (state.loginJails as { missing: string[] }).missing = [];
   } else if (path.endsWith("/lock-settings")) {
     // Every Hardening and Failed logins switch on, as the verb does, and the answer is the locked page.
-    for (const setting of ["vhost-guard", "phpmyadmin", "file-manager-guard", "panel-cert", "database-loopback", "clpctl-guard", "telemetry", "real-ip", "visitor-ip", "upload-guard"]) {
+    for (const setting of ["vhost-guard", "phpmyadmin", "file-manager-guard", "panel-cert", "database-loopback", "clpctl-guard", "telemetry", "real-ip", "upload-guard"]) {
       systemTweaksPreviewMutation(`/addons/system-tweaks/api/${setting}`, source, { enabled: true });
       Object.assign(state, systemTweaksPreview);
     }
@@ -1928,7 +1949,7 @@ const setupPreviewSteps = (["domain", "secure", "sites"] as const).flatMap((leve
   [
     ["dns-connection", "Connect DNS", "dns", "done", "Cloudflare: Agency", "Automates DNS records, panel hostname DNS, and Cloudflare proxy protection for CloudPanel and its sites.", undefined],
     ["panel-hostname", "Panel hostname", "dns", "todo", "Enter k7m2p9x4.example.com under Admin → Settings → Custom Domain in CloudPanel", "Gives CloudPanel a trusted HTTPS hostname so passkeys and Cloudflare proxying work without port 8443.", undefined],
-    ["panel-gate", "Panel gate", "firewall", "blocked", "Needs Panel hostname first", "Limits direct port 8443 access once the panel answers through Cloudflare on its custom hostname.", ["dns-connection", "panel-hostname"]],
+    ["panel-gate", "Panel gate", "firewall", "blocked", "Needs Panel hostname first", "Limits direct port 8443 access once the panel answers through Cloudflare on its custom hostname.", ["panel-hostname"]],
     ["passkeys", "Passkeys for administrators", "security-keys", "blocked", "Needs Panel hostname first", "Adds hardware security keys and passkeys for administrator sign-in.", ["panel-hostname"]],
   ],
   [
@@ -2006,7 +2027,7 @@ function setupPreviewView(page: URLSearchParams): SetupView {
     if (fresh) {
       if (step.id === "dns-connection") mapped = { ...mapped, state: "todo", reason: "No Cloudflare connection is saved" };
       else if (step.id === "panel-hostname") mapped = { ...mapped, state: "todo", href: "/admin/settings", reason: "Point a hostname at this server's IP, then enter it under Admin → Settings → Custom Domain" };
-      else if (step.id === "panel-gate") mapped = { ...mapped, state: "blocked", blockedBy: [{ id: "dns-connection", title: "Connect DNS" }, { id: "panel-hostname", title: "Panel hostname" }], reason: "Needs Connect DNS and Panel hostname first" };
+      else if (step.id === "panel-gate") mapped = { ...mapped, state: "blocked", blockedBy: [{ id: "panel-hostname", title: "Panel hostname" }], reason: "Needs Panel hostname first" };
       else if (step.id === "passkeys") mapped = { ...mapped, state: "blocked", blockedBy: [{ id: "panel-hostname", title: "Panel hostname" }], reason: "Needs Panel hostname first" };
       else if (step.id === "dns-automatic") mapped = { ...mapped, state: "blocked", blockedBy: [{ id: "dns-connection", title: "Connect DNS" }], reason: "Needs Connect DNS first" };
       else if (step.id === "smtp-new-sites") mapped = { ...mapped, state: "blocked", blockedBy: [{ id: "smtp-relay", title: "Outgoing mail relay" }], reason: "Needs Outgoing mail relay first" };
@@ -2530,7 +2551,11 @@ const server = Bun.serve({
         },
       }), notice);
     } else if (path === "/addons/firewall/" || path === "/addons/firewall") {
-      html = firewallLayout("Firewall", firewallDashboardView(firewallPreviewState(url)), notice);
+      html = firewallLayout("Firewall", firewallDashboardView(firewallPreviewState(url), previewLock(url)), notice);
+      const fwDialog = url.searchParams.get("dialog");
+      if (fwDialog === "cloudflare") {
+        html = html.replace("</body>", '<script>addEventListener("DOMContentLoaded",function(){fwEditCloudflare("")})</script></body>');
+      }
     } else if (path === "/addons/instatic/") {
       html = instaticLayout("Instatic sites", empty ? dashboardView([], versions) : instaticDashboard(url), notice);
       // ?dialog=update|delete|stop opens that dialog once the page is up.

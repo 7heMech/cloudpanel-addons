@@ -762,10 +762,12 @@ describe("off Hetzner Cloud", () => {
     expect(await hetznerView(server.options)).toEqual({ state: "absent" });
     const html = dashboardView({
       sites: [], autoEnableNewSites: false,
+      visitorIp: { enabled: true, applied: true, problem: "" },
       protocols: { enabled: true, available: true, protocols: {}, udpPorts: [] },
       panelGate: { on: false, hostname: null, pending: false, problems: [], drift: [], editUrl: null, checkedAt: null, leftover: false },
       hetzner: { state: "absent" },
       netcup: { state: "absent" },
+      cloudflare: { connections: [], templates: { dns: { url: "", permissions: [] }, panelGate: { url: "", permissions: [] }, both: { url: "", permissions: [] } }, serverIps: [], dnsEnabled: false },
     });
     expect(html).not.toContain('id="hetzner-card"');
     expect(html).not.toContain("Hetzner Cloud Firewall");

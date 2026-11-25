@@ -6,10 +6,15 @@ import type { ManagerJobView } from "./action";
 import type { PanelHold } from "../lib/panel-holds";
 import type { SetupView } from "./setup";
 
-export async function managerAction<T>(verb: WebVerb<"manager">, args: string[] = []): Promise<ActionResult<T>> {
+export async function managerAction<T>(
+  verb: WebVerb<"manager">,
+  args: string[] = [],
+  input?: string,
+  timeout = 30_000,
+): Promise<ActionResult<T>> {
   // The create verbs hand the work to systemd and return; nothing here waits
   // for an enable or an update to finish.
-  return callGatewayAction("manager", verb, args, undefined, { timeout: 30_000 });
+  return callGatewayAction("manager", verb, args, input, { timeout });
 }
 
 export async function latestManagerJobView(): Promise<ManagerJobView | null> {

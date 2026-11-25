@@ -147,6 +147,12 @@ test("a locked addon's switches can still go on, never off", async () => {
   const damaged = locks([], 0o666);
   expect((await ask(damaged, "system-tweaks", "set-file-manager-guard", { enabled: true })).ran).toBe(true);
   expect((await ask(damaged, "system-tweaks", "set-file-manager-guard", { enabled: false })).ran).toBe(false);
+
+  // Firewall's visitor-IP protection follows the same root lock.
+  const fwLocked = locks(["firewall"]);
+  expect((await ask(fwLocked, "firewall", "set-visitor-ip", { enabled: true })).ran).toBe(true);
+  expect((await ask(fwLocked, "firewall", "set-visitor-ip", { enabled: false })).ran).toBe(false);
+  expect((await ask(fwLocked, "firewall", "policy")).ran).toBe(true);
 });
 
 test("a locked panel PHP choice reaches the action, which allows only a newer version", async () => {
@@ -193,6 +199,7 @@ test("a fresh install locks System Tweaks; a re-run of the installer and an upda
 
   // Update only says how: the box stays unlocked.
   expect(lockHint(true, rerun.file, uid)).toContain("clp-addons lock system-tweaks");
+  expect(lockHint(true, rerun.file, uid, "firewall")).toContain("clp-addons lock firewall");
   expect(existsSync(rerun.file)).toBe(false);
   expect(lockHint(true, fresh.file, uid)).toBeNull();
   // Nothing to suggest for an addon the box does not use.

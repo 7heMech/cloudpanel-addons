@@ -3,7 +3,7 @@ import { afterEach, describe, expect, test } from "bun:test";
 import { chmodSync, mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { connectionPermissions } from "../addons/dns/access";
+import { connectionPermissions } from "../lib/cloudflare/access";
 import { seededPolicy } from "../addons/dns/presets";
 import { dnsTokenHolds, executeDnsAction, panelSites, type DnsReply, type ProvisionReply, type SiteDnsStatus } from "../addons/dns/action";
 import { detectAddresses, type Addresses } from "../addons/dns/addresses";
@@ -180,7 +180,7 @@ describe("connecting Cloudflare", () => {
     expect(reply.accounts.map((account) => account.label)).toEqual(["Church (Church, Agency)", "Agency (Church, Agency)"]);
     expect(JSON.stringify(reply)).not.toContain(SECOND_TOKEN);
     expect(JSON.stringify(await env.act("list"))).not.toContain(SECOND_TOKEN);
-    const secrets = join(env.dir, "state", "secrets.json");
+    const secrets = join(env.dir, "state", "cloudflare", "secrets.json");
     expect(statSync(secrets).mode & 0o777).toBe(0o600);
     expect(readFileSync(secrets, "utf8")).toContain(SECOND_TOKEN);
   });
@@ -796,6 +796,7 @@ describe("zones and new sites", () => {
     const env = setup();
     const connected = await env.connect();
     const id = connected.connections[0]!.id;
+    await env.act("set-automatic", { automatic: false });
     const policyFile = join(env.dir, "state", "policy.json");
     const saved = JSON.parse(readFileSync(policyFile, "utf8"));
     delete saved.automatic;
@@ -1299,7 +1300,7 @@ test("an attempt cut short still counts toward the certificate limit", async () 
 test("state that cannot be read while redacting does not hide the failure", async () => {
   const env = setup();
   await env.connect();
-  chmodSync(join(env.dir, "state", "secrets.json"), 0o666);
+  chmodSync(join(env.dir, "state", "cloudflare", "secrets.json"), 0o666);
   await expect(env.act("set-automatic", { automatic: "sometimes" })).rejects.toThrow("Say whether DNS is Automatic");
 });
 

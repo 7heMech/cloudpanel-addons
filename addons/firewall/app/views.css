@@ -62,3 +62,49 @@ p.pg-way-back { margin: 16px 0 0; padding-top: 16px; border-top: 1px solid var(-
 }
 .nc-code { font-family: var(--mono, ui-monospace, SFMono-Regular, Menlo, monospace); font-size: 18px; letter-spacing: 1px; color: var(--heading); }
 p.nc-connect-status { margin: 16px 0 0; }
+.fw-status { display: flex; flex-wrap: wrap; align-items: baseline; gap: 6px 10px; margin: 10px 0 0; font-size: 14px; }
+#fw-cf-card > .card-header { align-items: flex-start; gap: 16px; }
+#fw-cf-card > .card-header .hint { margin: 4px 0 0; }
+#fw-cf-card > .hz-connect { border-top: 0; padding-top: 0; }
+#fw-cf-connection-dialog { max-width: 760px; }
+.dns-steps { margin: 0; padding-left: 22px; }
+.dns-steps > li { margin-bottom: 24px; }
+.dns-steps > li:last-child { margin-bottom: 0; }
+.dns-steps p { margin: 6px 0 12px; }
+.dns-token-grid { margin-top: 12px; }
+.cf-scope-picks { display: flex; flex-wrap: wrap; gap: 8px 18px; margin: 10px 0 6px; }
+.cf-scope-pick { display: inline-flex; align-items: center; gap: 8px; font-size: 14px; cursor: pointer; }
+.cf-scope-pick input { margin: 0; }
+.dns-copy { display: flex; align-items: center; gap: 6px; margin-bottom: 12px; }
+.dns-copy code { overflow-wrap: anywhere; }
+.dns-clip { display: inline-flex; flex-shrink: 0; padding: 4px; border: 0; border-radius: 4px; background: none; color: var(--muted); cursor: pointer; }
+.dns-clip:hover, .dns-clip:focus-visible { color: var(--accent); background: var(--surface); }
+.dns-setting-list { display: flex; flex-direction: column; }
+.dns-setting-row { display: flex; align-items: flex-start; justify-content: space-between; gap: 12px 24px; padding: 16px 0; border-top: 1px solid var(--row-border); }
+.dns-setting-row:first-child { border-top: 0; padding-top: 0; }
+.dns-setting-row:last-child { padding-bottom: 0; }
+.dns-setting-main { flex: 1 1 auto; min-width: 0; }
+.dns-setting-main > strong { display: block; font-weight: 600; }
+.dns-setting-main .hint { display: block; margin-top: 2px; }
+.dns-setting-row .btn-danger:not(:hover):not(:focus-visible) { color: var(--button-text); border-color: var(--button-border); }
+.dns-access-details > summary { cursor: pointer; list-style: none; }
+.dns-access-details > summary::-webkit-details-marker { display: none; }
+.dns-access-problems { display: block; margin-top: 4px; font-size: 14px; }
+.dns-access-toggle { color: var(--accent); white-space: nowrap; }
+.dns-access-toggle::after { content: " ▸"; }
+.dns-access-details[open] .dns-access-toggle::after { content: " ▾"; }
+.dns-access { margin-top: 12px; max-width: 760px; }
+.dns-access-foot { margin: 8px 0 0; }
+.dns-access-section { border-top-width: 2px; }
+.dns-access-grid { border: 1px solid var(--row-border); border-radius: 4px; font-size: 14px; }
+.dns-access-row { display: grid; grid-template-columns: 170px minmax(0, 1fr) 150px; gap: 2px 16px; padding: 8px 12px; border-top: 1px solid var(--row-border); align-items: baseline; }
+.dns-access-row:first-child { border-top: 0; }
+.dns-access-cols { font-size: 12px; font-weight: 600; color: var(--muted); padding-top: 6px; padding-bottom: 6px; }
+@media (max-width: 940px) {
+  .dns-access-row { grid-template-columns: minmax(0, 1fr) auto; }
+  .dns-access-cols:not(.dns-access-section) { display: none; }
+  .dns-access-section > :not(:first-child) { display: none; }
+}
+@media (max-width: 760px) {
+  .dns-setting-row { flex-direction: column; align-items: stretch; }
+}

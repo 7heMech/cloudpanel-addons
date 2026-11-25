@@ -5,7 +5,10 @@
  */
 import { isIP } from "node:net";
 import { ActionFailure, failAction } from "../../lib/action";
+import { cloudflareId, connectionId, dnsName, secretText } from "../../lib/dns-name";
 import { oneLine } from "../../lib/validate";
+
+export { cloudflareId, connectionId, dnsName, secretText };
 
 const RECORD_TYPES = ["A", "AAAA", "CNAME", "MX", "TXT", "SRV", "CAA"] as const;
 type RecordType = (typeof RECORD_TYPES)[number];
@@ -140,15 +143,6 @@ export const EMPTY_MAILCOW: MailcowSettings = {
 // Small parsers
 // ---------------------------------------------------------------------------
 
-const LABEL = "(?:[a-z0-9_](?:[a-z0-9_-]{0,61}[a-z0-9_])?)";
-const HOSTNAME_RE = new RegExp(`^${LABEL}(?:\\.${LABEL})+$`);
-
-/** A DNS name as records use it: underscores allowed, a leading `*.` allowed, no trailing dot. */
-export function dnsName(value: string): boolean {
-  const name = value.startsWith("*.") ? value.slice(2) : value;
-  return value.length <= 253 && HOSTNAME_RE.test(name);
-}
-
 export function hostname(value: unknown, what: string): string {
   if (typeof value !== "string") failAction(`${what} must be a hostname`);
   const name = value.trim().toLowerCase().replace(/\.$/, "");
@@ -162,16 +156,6 @@ function optionalHostname(value: unknown, what: string): string {
 
 export function profileId(value: unknown): string {
   if (typeof value !== "string" || !/^[a-z0-9][a-z0-9-]{0,63}$/.test(value)) failAction("that is not a profile identifier");
-  return value;
-}
-
-export function connectionId(value: unknown): string {
-  if (typeof value !== "string" || !/^[a-z0-9][a-z0-9-]{0,63}$/.test(value)) failAction("that is not a connection identifier");
-  return value;
-}
-
-export function cloudflareId(value: unknown, what: string): string {
-  if (typeof value !== "string" || !/^[a-f0-9]{32}$/.test(value)) failAction(`${what} is not a Cloudflare identifier`);
   return value;
 }
 
@@ -371,10 +355,12 @@ export function parsePolicy(value: unknown): Policy {
       .filter(([, id]) => ids.has(id))
       .map(([domain, id]) => [hostname(domain, "an assigned site"), id]));
     const createIn = parseAccountRef(legacy.createIn);
+    const parsedConnections = parseConnections(raw.connections ?? []);
     return {
       version: 1,
       automatic: legacy.automatic,
-      createIn: createIn && parseConnections(raw.connections ?? []).some((connection) => connection.id === createIn.connectionId) ? createIn : null,
+      // Connections live in the shared Cloudflare store, so `createIn` stays valid even when policy.json's legacy list is empty.
+      createIn: createIn && (!parsedConnections.length || parsedConnections.some((connection) => connection.id === createIn.connectionId)) ? createIn : null,
       profiles,
       defaultProfileId: raw.defaultProfileId && ids.has(raw.defaultProfileId) ? raw.defaultProfileId : null,
       assignments,
@@ -382,7 +368,7 @@ export function parsePolicy(value: unknown): Policy {
       held: [...new Set((raw.held ?? []).filter((domain) => typeof domain === "string"
         && (assignments[domain] || (raw.redirects ?? []).some((redirect) => redirect?.source === domain))))],
       knownSiteIds: [...new Set((raw.knownSiteIds ?? []).filter((id) => Number.isSafeInteger(id) && id > 0))],
-      connections: parseConnections(raw.connections ?? []),
+      connections: parsedConnections,
       zoneChoices: choices,
       server: {
         ipv4: ipAddress(raw.server?.ipv4, 4, "the server IPv4 override"),
@@ -452,12 +438,4 @@ export function parseSecrets(value: unknown): Secrets {
     if (typeof token === "string" && token) cloudflare[connectionId(id)] = token;
   }
   return { cloudflare, mailcowKey: typeof raw.mailcowKey === "string" ? raw.mailcowKey : "" };
-}
-
-/** A Cloudflare API token or Mailcow key as pasted: one printable run, no spaces. */
-export function secretText(value: unknown, what: string): string {
-  if (typeof value !== "string") failAction(`${what} must be text`);
-  const secret = value.trim();
-  if (!/^[\x21-\x7e]{20,512}$/.test(secret)) failAction(`${what} does not look like one`);
-  return secret;
 }

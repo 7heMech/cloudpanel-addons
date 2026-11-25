@@ -1,7 +1,8 @@
 import { addonStateDir, CONFIG_DIR, LOCK_DIR, STATE_DIR, SYSTEMD_DIR } from "../lib/paths";
 import { withFileLockSync } from "../lib/file-lock";
 import { migrateResourceMemory } from "../addons/resource-limits/migration";
-import { LEGACY_PROTOCOLS_FILE, migrateFirewallProtocols } from "../addons/firewall/migration";
+import { LEGACY_PROTOCOLS_FILE, migrateFirewallProtocols, migrateVisitorIp } from "../addons/firewall/migration";
+import { legacyDnsCloudflarePending, migrateCloudflareFromDns } from "../lib/cloudflare/store";
 import { ADDONS, ADDON_NAMES, addonEnabled } from "../addons/catalog";
 import { archRefusal, type AddonSpec } from "../lib/addon-definition";
 import { masterVhostHost } from "./inject";
@@ -42,10 +43,12 @@ function migrationPending(): boolean {
   if (Object.keys(RENAMED_ADDONS).some((from) =>
     existsSync(`${CONFIG_DIR}/${from}.conf`) || existsSync(`${CONFIG_DIR}/${from}.conf.new`) || existsSync(`${STATE_DIR}/${from}`))) return true;
   if (existsSync(`${addonStateDir("system-tweaks")}/memory.json`) || existsSync(LEGACY_PROTOCOLS_FILE)) return true;
+  if (legacyDnsCloudflarePending()) return true;
   const oom = `${SYSTEMD_DIR}/nginx.service.d/zz-clp-addons-oom.conf`;
   if (existsSync(oom) && readFileSync(oom, "utf8").includes("clp-addons System Tweaks:")) return true;
   try {
-    return Object.hasOwn(JSON.parse(readFileSync(`${addonStateDir("system-tweaks")}/settings.json`, "utf8")) ?? {}, "memory");
+    const parsed = JSON.parse(readFileSync(`${addonStateDir("system-tweaks")}/settings.json`, "utf8")) ?? {};
+    return Object.hasOwn(parsed, "memory") || Object.hasOwn(parsed, "cloudflareVisitorIp");
   } catch {
     return false;
   }
@@ -117,6 +120,10 @@ function migrateAddonState(quiet: boolean): AddonRename[] {
     // After the rename, which refuses a firewall state directory that already holds anything.
     const protocols = migrateFirewallProtocols(() => writeConfig(ADDONS.firewall!, true));
     if (protocols) renames.push({ from: "system-tweaks", to: "firewall", config: null, stateMoved: false, undo: protocols });
+    const visitorIp = migrateVisitorIp(() => writeConfig(ADDONS.firewall!, true));
+    if (visitorIp) renames.push({ from: "system-tweaks", to: "firewall", config: null, stateMoved: false, undo: visitorIp });
+    const cloudflare = migrateCloudflareFromDns();
+    if (cloudflare) renames.push({ from: "dns", to: "cloudflare", config: null, stateMoved: false, undo: cloudflare });
     removeLegacyLocks();
     return renames;
   } catch (error) { restoreAddonState(renames); throw error; }

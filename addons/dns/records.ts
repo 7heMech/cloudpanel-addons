@@ -9,9 +9,12 @@
  * renders are never read for changes at all.
  */
 import { isIP } from "node:net";
-import type { CfRecord, RecordWrite } from "./cloudflare";
-import { dnsName, PROXIABLE, type Profile, type RecordTemplate } from "./model";
+import type { CfRecord, RecordWrite } from "../../lib/cloudflare/api";
+import { dnsName, wildcardBlocker, wildcardSource } from "../../lib/dns-name";
+import { PROXIABLE, type Profile, type RecordTemplate } from "./model";
 import { isSpf, mergeSpf } from "./spf";
+
+export { wildcardSource };
 
 export interface SiteVars {
   domain: string;
@@ -224,78 +227,6 @@ export function sameRecord(current: Pick<CfRecord, "type" | "name" | "content" |
   // Cloudflare reports a proxied record's TTL as Auto whatever was asked for.
   if (!wanted.proxied && current.ttl !== wanted.ttl) return false;
   return (current.priority ?? null) === (wanted.priority ?? null);
-}
-
-function strictAncestors(name: string, zone: string): string[] {
-  const result: string[] = [];
-  let current = name;
-  while (current !== zone) {
-    const dot = current.indexOf(".");
-    if (dot < 0) break;
-    current = current.slice(dot + 1);
-    result.push(current);
-  }
-  return result;
-}
-
-/**
- * The RFC 4592 wildcard that synthesises answers for `name` inside `zone`,
- * given every record in the zone. Any record at or below `name`, or at or below
- * an intermediate ancestor that has no wildcard of its own, stops a broader
- * wildcard from matching.
- */
-export function wildcardSource<T extends Pick<CfRecord, "type" | "name">>(
-  name: string,
-  zone: string,
-  records: readonly T[],
-  ignore?: (record: T) => boolean,
-): { wildcard: string; records: T[] } | null {
-  if (name === zone || !name.endsWith(`.${zone}`) || name.startsWith("*.")) return null;
-  const others = ignore ? records.filter((record) => !ignore(record)) : records;
-  if (others.some((record) => record.name === name || record.name.endsWith(`.${name}`))) return null;
-  const ancestors = strictAncestors(name, zone);
-  // A delegation zone cut above `name` occludes any wildcard in this zone at or below the cut.
-  if (ancestors.some((base) => base !== zone && others.some((record) => record.type === "NS" && record.name === base))) return null;
-  for (const base of ancestors) {
-    const exists = base === zone || others.some((record) => record.name === base || record.name.endsWith(`.${base}`));
-    if (!exists) continue;
-    const wildcard = `*.${base}`;
-    const found = records.filter((record) => record.name === wildcard);
-    return found.length ? { wildcard, records: found } : null;
-  }
-  return null;
-}
-
-/**
- * When `wildcardSource` returns null because another record blocks an ancestor
- * wildcard, returns that wildcard and the blocking record so the plan can say why.
- */
-function wildcardBlocker<T extends Pick<CfRecord, "type" | "name">>(
-  name: string,
-  zone: string,
-  records: readonly T[],
-  ignore?: (record: T) => boolean,
-): { wildcard: string; records: T[]; by: T } | null {
-  if (name === zone || !name.endsWith(`.${zone}`) || name.startsWith("*.")) return null;
-  const others = ignore ? records.filter((record) => !ignore(record)) : records;
-  const ancestors = strictAncestors(name, zone);
-  if (ancestors.some((base) => base !== zone && others.some((record) => record.type === "NS" && record.name === base))) return null;
-  let blocker = others.find((record) => record.name === name || record.name.endsWith(`.${name}`));
-  for (const base of ancestors) {
-    if (!blocker && base !== zone) {
-      const ancestor = others.find((record) => record.name === base || record.name.endsWith(`.${base}`));
-      if (ancestor) {
-        const wildcard = `*.${base}`;
-        if (!records.some((record) => record.name === wildcard)) blocker = ancestor;
-        else return null;
-      }
-    }
-    if (!blocker) continue;
-    const wildcard = `*.${base}`;
-    const found = records.filter((record) => record.name === wildcard);
-    if (found.length) return { wildcard, records: found, by: blocker };
-  }
-  return null;
 }
 
 function wildcardMatchesAddresses(wildcard: string, wildcardRecords: readonly RecordWrite[], wanted: readonly RecordWrite[]): boolean {

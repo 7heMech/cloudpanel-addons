@@ -9,8 +9,8 @@
 import { errorMessage } from "../../lib/errors";
 import { getDomain } from "tldts";
 import type { Addresses } from "./addresses";
-import { readAccess, selfReadPermission, type Reached, type TokenAccess } from "./access";
-import { CloudflareApi, UnreadableToken, type CfAccount, type CfRecord, type CfRuleset, type CfZone, type RecordWrite, type Verified } from "./cloudflare";
+import { readAccess, selfReadPermission, type Reached, type TokenAccess } from "../../lib/cloudflare/access";
+import { CloudflareApi, UnreadableToken, type CfAccount, type CfRecord, type CfRuleset, type CfZone, type RecordWrite, type Verified } from "../../lib/cloudflare/api";
 import { type ApiFetch, ProviderError } from "../../lib/provider-http";
 import { aclAllows, MailcowApi, type MailcowDkim } from "./mailcow";
 import type { AccountRef, Policy, Profile, Redirect, Secrets } from "./model";

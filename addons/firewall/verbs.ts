@@ -1,8 +1,11 @@
 // Every verb `clp-addons action firewall` takes, and who may ask root for it from the web.
+// `lock` marks the protections `clp-addons lock firewall` holds: while locked, the web may
+// only switch them on, and cannot disable the addon.
 export const FIREWALL_VERBS = {
   list: { web: "admin" },
   set: { web: "admin" },
   policy: { web: "admin" },
+  "set-visitor-ip": { web: "admin", lock: "on" },
   reconcile: { web: false, why: "run by hand; the new-site watcher and repair run the same pass in-process" },
   protocols: { web: "admin" },
   "set-protocol": { web: "admin" },

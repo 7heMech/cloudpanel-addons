@@ -1,10 +1,11 @@
 import { describe, expect, test } from "bun:test";
-import { CloudflareApi, quoteTxt, UnreadableToken, unquoteTxt } from "../addons/dns/cloudflare";
+import { CloudflareApi, UnreadableToken } from "../lib/cloudflare/api";
+import { quoteTxt, unquoteTxt } from "../lib/dns-name";
 import { seededPolicy } from "../addons/dns/presets";
 import { ProviderError, ProviderHttp } from "../lib/provider-http";
 import { MailcowApi } from "../addons/dns/mailcow";
-import { accessView, connectionPermissions, grants, parseResources, readAccess } from "../addons/dns/access";
-import { PERMISSIONS, tokenTemplate } from "../addons/dns/token";
+import { accessView, connectionPermissions, grants, parseResources, readAccess } from "../lib/cloudflare/access";
+import { PERMISSIONS, tokenTemplate } from "../lib/cloudflare/tokens";
 import { FakeCloudflare, FakeMailcow, MAILCOW_KEY, policy } from "./fixtures/dns-api";
 
 const USER_TOKEN = "cf-user-token-0123456789abcdef";

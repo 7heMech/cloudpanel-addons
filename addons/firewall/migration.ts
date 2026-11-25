@@ -7,8 +7,10 @@ import { isTrustedFile } from "../../lib/trusted-file";
 import { log } from "../../lib/log";
 import { DEFAULT_CLOUDFLARE_ACTION_PATHS } from "./action";
 import { DEFAULT_FIREWALL_PATHS } from "./protocols";
+import { DEFAULT_VISITOR_IP_PATHS } from "./visitor-ip";
 
 export const LEGACY_PROTOCOLS_FILE = `${addonStateDir("system-tweaks")}/firewall.json`;
+export const LEGACY_SYSTEM_TWEAKS_SETTINGS = `${addonStateDir("system-tweaks")}/settings.json`;
 
 interface SavedFile { path: string; text: string; mode: number; uid: number; gid: number }
 function snapshot(path: string): SavedFile | null {
@@ -90,6 +92,92 @@ export function migrateFirewallProtocols(enable: () => void): (() => void) | nul
   } catch (error) {
     undo();
     log.warn(`System Tweaks' firewall protocols were not moved to Firewall: ${errorMessage(error)}`);
+    return null;
+  }
+}
+
+export interface VisitorIpMigrationPaths {
+  systemTweaksSettings: string;
+  systemTweaksConfig: string;
+  firewallConfig: string;
+  firewallPolicy: string;
+  firewallStateDir: string;
+  visitorIpState: string;
+}
+
+const DEFAULT_VISITOR_IP_MIGRATION_PATHS: VisitorIpMigrationPaths = {
+  systemTweaksSettings: LEGACY_SYSTEM_TWEAKS_SETTINGS,
+  systemTweaksConfig: addonConfigFile("system-tweaks"),
+  firewallConfig: addonConfigFile("firewall"),
+  firewallPolicy: DEFAULT_CLOUDFLARE_ACTION_PATHS.policyFile,
+  firewallStateDir: addonStateDir("firewall"),
+  visitorIpState: DEFAULT_VISITOR_IP_PATHS.stateFile,
+};
+
+/**
+ * Moves System Tweaks' `cloudflareVisitorIp` setting to Firewall. When System
+ * Tweaks was enabled with visitor IPs on and Firewall was disabled, enables
+ * Firewall with `autoEnableNewSites: false` so sites behind Cloudflare keep
+ * seeing real visitor IPs without turning on Cloudflare-only site rules.
+ * Returns an in-memory rollback closure, or null when there was nothing to move.
+ */
+export function migrateVisitorIp(
+  enable: () => void,
+  paths: Partial<VisitorIpMigrationPaths> = {},
+): (() => void) | null {
+  const p = { ...DEFAULT_VISITOR_IP_MIGRATION_PATHS, ...paths };
+  let source: SavedFile | null;
+  try {
+    source = snapshot(p.systemTweaksSettings);
+  } catch (error) {
+    log.warn(`System Tweaks' Cloudflare visitor IPs setting was not moved to Firewall: ${errorMessage(error)}`);
+    return null;
+  }
+  if (!source) return null;
+  let stored: Record<string, unknown> | null = null;
+  try { stored = JSON.parse(source.text) as Record<string, unknown>; } catch { stored = null; }
+  if (!stored || typeof stored !== "object" || Array.isArray(stored) || !Object.hasOwn(stored, "cloudflareVisitorIp")) {
+    return null;
+  }
+  const enabled = stored.cloudflareVisitorIp !== false;
+  const systemTweaksOn = existsSync(p.systemTweaksConfig);
+  const directoryExisted = existsSync(p.firewallStateDir);
+  const originals = new Map<string, SavedFile | null>();
+  const keep = (path: string) => { if (!originals.has(path)) originals.set(path, snapshot(path)); };
+  const undo = () => {
+    for (const [path, before] of [...originals].reverse()) {
+      if (before) restore(before); else rmSync(path, { force: true });
+    }
+    if (!directoryExisted && existsSync(p.firewallStateDir)) {
+      try { rmdirSync(p.firewallStateDir); } catch { /* non-empty */ }
+    }
+  };
+  try {
+    const existing = snapshot(p.visitorIpState);
+    if (!existing) {
+      keep(p.visitorIpState);
+      restore({ ...source, path: p.visitorIpState, text: `${JSON.stringify({ version: 1, enabled }, null, 2)}\n` });
+    }
+    const { cloudflareVisitorIp: _dropped, ...rest } = stored;
+    keep(source.path);
+    restore({ ...source, text: `${JSON.stringify(rest, null, 2)}\n` });
+
+    if (!existing && enabled && systemTweaksOn && !existsSync(p.firewallConfig)) {
+      const policy = snapshot(p.firewallPolicy);
+      let parsed: Record<string, unknown> | null = null;
+      try { parsed = policy ? JSON.parse(policy.text) as Record<string, unknown> : null; } catch { parsed = null; }
+      if (parsed?.autoEnableNewSites === true) {
+        keep(p.firewallPolicy);
+        restore({ ...policy!, text: `${JSON.stringify({ ...parsed, autoEnableNewSites: false }, null, 2)}\n` });
+        log.warn("Firewall's Enable on new sites was switched off: it was saved while Firewall was disabled");
+      }
+      keep(p.firewallConfig);
+      enable();
+    }
+    return undo;
+  } catch (error) {
+    undo();
+    log.warn(`System Tweaks' Cloudflare visitor IPs setting was not moved to Firewall: ${errorMessage(error)}`);
     return null;
   }
 }

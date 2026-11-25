@@ -157,10 +157,11 @@ PHP, reaches the action, which alone knows the version the panel runs and
 accepts only a newer installed one. The manager refuses to disable a locked
 addon, when the job is asked for and again when it starts, so one queued before
 a lock does not run; it lets a locked addon be enabled, since enabling only
-adds protection. System
-Tweaks declares its Hardening and Failed logins switches and the panel's PHP;
-updates, backups, unblocking and the SSH login message stay with
-administrators.
+adds protection. System Tweaks declares its Hardening and Failed logins switches and the panel's
+PHP; updates, backups, unblocking and the SSH login message stay with
+administrators. Firewall declares its Cloudflare visitor IPs switch under root's
+lock (`clp-addons lock firewall`), keeping tunnel IP forgery closed while
+leaving site and cloud-firewall rules editable by administrators.
 
 So a panel lock can only freeze protections on. While locked, the panel can
 switch a protection on, enable the addon or move the panel's PHP to a newer

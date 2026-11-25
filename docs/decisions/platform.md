@@ -123,8 +123,10 @@ Imports point one way, from what changes most to what changes least:
   addon's exported functions; never `cli/` or `manager/`.
 - `lib/` is what every side shares: paths (`lib/paths.ts`), the action reply
   protocol, command running, file locks, the panel database, Nginx and job
-  helpers, the addon definition types, and the web pieces. It imports only
-  `lib/`, plus the addons' `verbs.ts` tables, which import nothing.
+  helpers, the shared Cloudflare API client, token scopes, access parser,
+  connect dialog, and root-owned connection store (`lib/cloudflare/`), the addon
+  definition types, and the web pieces. It imports only `lib/`, plus the addons'
+  `verbs.ts` tables, which import nothing.
 
 ## The CLI
 
@@ -356,9 +358,9 @@ operator procedure is [When CloudPanel updates](../cloudpanel-updates.md).
 
 ### Package conffiles
 
-`/etc/nginx/global_settings` (Maintenance Mode), and `/etc/nginx/nginx.conf`
-and `/etc/nginx/fastcgi_params` (System Tweaks) are dpkg conffiles of
-`nginx-common`. unattended-upgrades holds
+`/etc/nginx/global_settings` (Maintenance Mode), `/etc/nginx/nginx.conf`
+(System Tweaks and Firewall), and `/etc/nginx/fastcgi_params` (Firewall) are
+dpkg conffiles of `nginx-common`. unattended-upgrades holds
 back a package whose modified conffile the upgrade would replace, because nobody
 is there to answer dpkg's prompt, so these edits could keep an Nginx security
 update out. A drop-in on `apt-daily-upgrade.service`, installed with the binary,

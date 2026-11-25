@@ -1,9 +1,10 @@
 import type { ActionNeeded, ActionNeededCheck, SetupCheck, SetupStep } from "../../lib/addon-definition";
+import { connectionPermissions, type StoredAccess } from "../../lib/cloudflare/access";
+import { readCloudflareStore } from "../../lib/cloudflare/store";
 import { panelCustomDomainCertificate } from "../../lib/panel-custom-domain";
-import { addonStateDir } from "../../lib/paths";
+import { addonStateDir, CLOUDFLARE_STATE_DIR } from "../../lib/paths";
 import { readState } from "../../lib/root-state";
 import { panelUserUid } from "../../lib/sso-auth";
-import { connectionPermissions, type StoredAccess } from "./access";
 import { tokenProfiles } from "./engine";
 import { parsePolicy, parseSecrets, type Policy } from "./model";
 import { seededPolicy } from "./presets";
@@ -17,12 +18,21 @@ interface DnsSetupState {
   reports: ({ id: string; active: boolean; error: string | null } & StoredAccess)[];
 }
 
-function dnsState(stateDir = addonStateDir("dns"), rootUid = 0): DnsSetupState {
+function dnsState(stateDir = addonStateDir("dns"), rootUid = 0, cloudflareDir = CLOUDFLARE_STATE_DIR): DnsSetupState {
   const raw = readState<unknown>(`${stateDir}/policy.json`, rootUid, () => null);
+  const policy = raw === null ? seededPolicy() : parsePolicy(raw);
+  const cf = readCloudflareStore({ stateDir: cloudflareDir, rootUid });
+  if (cf.connections.length > 0 || Object.keys(cf.tokens).length > 0) {
+    return {
+      policy: { ...policy, connections: cf.connections },
+      tokens: new Set(Object.entries(cf.tokens).filter(([, token]) => token).map(([id]) => id)),
+      reports: cf.reports,
+    };
+  }
   const secrets = parseSecrets(readState(`${stateDir}/secrets.json`, rootUid, () => ({})));
   const status = readState<{ connections?: DnsSetupState["reports"] }>(`${stateDir}/status.json`, rootUid, () => ({}));
   return {
-    policy: raw === null ? seededPolicy() : parsePolicy(raw),
+    policy,
     tokens: new Set(Object.entries(secrets.cloudflare).filter(([, token]) => token).map(([id]) => id)),
     reports: Array.isArray(status.connections) ? status.connections : [],
   };
