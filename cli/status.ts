@@ -9,7 +9,7 @@ import { inspectPhpGuard } from "../lib/php-guard";
 import { managerSocketProblem, unitPid } from "./provision";
 import { unitActive } from "../lib/systemd";
 import { installedInjections, panelHolds } from "./reconcile";
-import { CLOUDPANEL_RANGE, describeRange, panelVersion, rangeFit } from "../lib/cloudpanel-version";
+import { CLOUDPANEL_RANGE, describeRange, rangeFit, readPanelVersion, unplacedPanelVersion } from "../lib/cloudpanel-version";
 import { holdAdvice, holdSummary } from "../lib/panel-holds";
 import { CLI_VERSION } from "../lib/version";
 import { log, paint, requireRoot } from "../lib/log";
@@ -50,11 +50,12 @@ function anchorStatus(statuses: TargetStatus[]): string {
 }
 
 function panelStatus(): string {
-  const installed = panelVersion();
+  const reading = readPanelVersion();
+  const installed = reading.version;
   const fit = rangeFit(installed);
   const range = `this release supports ${describeRange(CLOUDPANEL_RANGE)}`;
   if (fit === "within") return statusValue(`${installed} (${range}) ✓`, true);
-  if (fit === "unknown") return statusValue(`version unknown or being updated (${range})`, false);
+  if (fit === "unknown") return statusValue(`${unplacedPanelVersion(reading)} (${range})`, false);
   return statusValue(`${installed}, ${fit === "below" ? "older" : "newer"} than this release supports (${describeRange(CLOUDPANEL_RANGE)})`, false);
 }
 

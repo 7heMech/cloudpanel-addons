@@ -26,7 +26,7 @@ import { run, tryRun } from "../lib/command";
 import { compareSemver, isPrerelease, VERSION_TAG_RE } from "../lib/semver";
 import { lockState } from "../lib/root-locks";
 import {
-  CLOUDPANEL_RANGE_ASSET, describeRange, panelVersion, parseRange, rangeFit,
+  CLOUDPANEL_RANGE_ASSET, describeRange, parseRange, rangeFit, readPanelVersion, unplacedPanelVersion,
 } from "../lib/cloudpanel-version";
 function finalizeUpdate(beforeManagerRestart?: () => void): AddonSpec[] {
   // A failure from here on makes the binary that started this update restore
@@ -73,8 +73,10 @@ async function checkPanelRange(
   options: UpdateOptions,
 ): Promise<FetchedArtifact[]> {
   if (!release.assets.has(CLOUDPANEL_RANGE_ASSET)) return [];
-  const installed = panelVersion();
   const fetched = await fetchVerified(release, [CLOUDPANEL_RANGE_ASSET], options.onStep, options.onProgress);
+  // Read after the fetch, which can take a while: dpkg may have finished meanwhile.
+  const reading = readPanelVersion();
+  const installed = reading.version;
   const range = parseRange(fetched[0]!.bytes.toString("utf-8"));
   if (!range) {
     log.warn(`${CLOUDPANEL_RANGE_ASSET} in release ${release.tag} is not a CloudPanel version range; updating without checking it`);
@@ -83,7 +85,7 @@ async function checkPanelRange(
   const fit = rangeFit(installed, range);
   if (fit === "below") log.warn(`clp-addons ${target} supports CloudPanel ${describeRange(range)}; this server runs ${installed}; updating CloudPanel with clp-update is recommended`);
   if (fit === "above") log.warn(`clp-addons ${target} was checked against CloudPanel ${describeRange(range)}; this server runs ${installed}, so a CloudPanel page that changed in a way the addons no longer fit stays paused until a release supports it`);
-  if (fit === "unknown") log.warn(`could not read the CloudPanel version; clp-addons ${target} supports CloudPanel ${describeRange(range)}`);
+  if (fit === "unknown") log.warn(`${unplacedPanelVersion(reading)}; clp-addons ${target} supports CloudPanel ${describeRange(range)}`);
   return fetched;
 }
 

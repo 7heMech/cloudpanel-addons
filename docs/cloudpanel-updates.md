@@ -21,8 +21,9 @@ these files. Update CloudPanel as usual; the addons never hold it back.
   Addons page shows **Paused until checked** with what to do, and so does
   `clp-addons status`, run as root.
 
-Nothing is decided while the update is still running. The first repair after
-it finishes does that, within 15 minutes; run `clp-addons repair` to do it
+Nothing is decided while dpkg does not report a finished install of
+CloudPanel, whether an update is running or one stopped part-way. The first repair after it
+finishes does that, within 15 minutes; run `clp-addons repair` to do it
 straight away.
 
 System Tweaks' fixes that replace CloudPanel code, such as the `clpctl`
@@ -40,7 +41,7 @@ stays in place.
 | the file changed, but CloudPanel was not updated, or an update kept an edit | Someone edited the file. If the edit is wanted, run `clp-addons repair --rebaseline`; otherwise put the file back. |
 | there is no record of the version it was patched under | The file was patched before this check existed. Look at the change, then run `clp-addons repair --rebaseline`. |
 | part of an addon block is left in it | Remove the leftover `clp-addons` lines from the file, then run `clp-addons repair`. |
-| CloudPanel is being updated | Nothing. |
+| dpkg did not report a finished install of CloudPanel | Nothing while an update runs; the next repair checks again. If none is running and `dpkg -l cloudpanel` does not show `ii`, an earlier one stopped part-way: run `dpkg --configure -a`, and fix what it reports. If `dpkg -l cloudpanel` still does not show `ii`, for example because the package was half-installed or files its setup needs are gone, reinstall it with `apt-get install --reinstall cloudpanel`. |
 
 `clp-addons repair --rebaseline` accepts a changed file only if every block
 still fits it. It never changes System Tweaks' pinned fixes.

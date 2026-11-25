@@ -142,8 +142,10 @@ workflow publishes beside the binaries, lists in `SHA256SUMS` and attests with i
 before downloading the binary, so it can warn about the release it is about to
 install rather than the one running. The asset is checksummed when it is read
 and its provenance is checked with the binary's before anything is installed.
-A malformed range, a CloudPanel version dpkg cannot give, mid-upgrade or
-otherwise, and a release from before the asset only skip the warning.
+A malformed range and a release from before the asset skip the warning. A
+CloudPanel version dpkg cannot give, or one the range cannot compare, gets its
+own warning naming why: dpkg has not finished installing it, does not list it,
+or did not answer.
 
 Turning `min` into a floor that `update` enforces, for a release that truly
 cannot run on an older CloudPanel, is a separate change made with that release.
