@@ -4,7 +4,12 @@
 // a failure replies with a code, which the addon turns into its own message.
 
 const CLP_MAINWP_CHILD = 'mainwp-child/mainwp-child.php';
-const CLP_MAINWP_GUARD = 'wp-content/mu-plugins/clp-addons-mainwp.php';
+const CLP_MAINWP_LOADER = 'wp-content/mu-plugins/hosting-tools.php';
+const CLP_MAINWP_MODULES = 'wp-content/mu-plugins/hosting-tools';
+const CLP_MAINWP_GUARD = 'wp-content/mu-plugins/hosting-tools/guard.php';
+const CLP_MAINWP_SIGN_IN = 'wp-content/mu-plugins/hosting-tools/sign-in.php';
+const CLP_MAINWP_LEGACY_GUARD = 'wp-content/mu-plugins/clp-addons-mainwp.php';
+const CLP_MAINWP_LEGACY_SIGN_IN = array('wp-content/mu-plugins/clp-addons-login.php', 'wp-content/mu-plugins/clp-addons');
 
 class Clp_Mainwp_Failure extends Exception {}
 
@@ -117,8 +122,18 @@ function clp_mainwp_status($admin) {
         'securityId' => (string) get_option('mainwp_child_uniqueId', ''),
         'admin' => $admin ? $admin->user_login : '',
         'fingerprint' => hash('sha256', wp_json_encode(array($snapshot['options'], $snapshot['meta'], $snapshot['active']))),
-        'guard' => is_file(ABSPATH . CLP_MAINWP_GUARD) ? (string) hash_file('sha256', ABSPATH . CLP_MAINWP_GUARD) : '',
+        'guard' => clp_mainwp_guard_digest(),
     );
+}
+
+// A digest of the guard, the loader that includes it and an earlier release's guard; empty without either guard.
+function clp_mainwp_guard_digest() {
+    if (!file_exists(ABSPATH . CLP_MAINWP_GUARD) && !file_exists(ABSPATH . CLP_MAINWP_LEGACY_GUARD)) return '';
+    $digests = array();
+    foreach (array(CLP_MAINWP_GUARD, CLP_MAINWP_LOADER, CLP_MAINWP_LEGACY_GUARD) as $file) {
+        $digests[] = is_file(ABSPATH . $file) ? (string) hash_file('sha256', ABSPATH . $file) : '';
+    }
+    return hash('sha256', implode(' ', $digests));
 }
 
 function clp_mainwp_restore_options($snapshot, $names) {
@@ -186,19 +201,56 @@ function clp_mainwp_restore_auth($input) {
     return array('ok' => true);
 }
 
-// Written and removed as the site's user; WP-CLI loads it, but nothing in it acts there.
-function clp_mainwp_guard($input) {
-    $file = ABSPATH . CLP_MAINWP_GUARD;
-    if (!empty($input['code']) && wp_normalize_path(untrailingslashit(WPMU_PLUGIN_DIR)) !== wp_normalize_path(dirname($file))) clp_mainwp_fail('guard-moved');
-    if (empty($input['code'])) {
-        if (file_exists($file) && !unlink($file)) clp_mainwp_fail('guard-failed');
-        return array('ok' => true);
+// A file, or a directory and everything in it, without following links.
+function clp_mainwp_remove($path) {
+    if (is_link($path) || is_file($path)) return unlink($path);
+    if (!is_dir($path)) return true;
+    $names = scandir($path);
+    if ($names === false) return false;
+    foreach (array_diff($names, array('.', '..')) as $name) {
+        if (!clp_mainwp_remove($path . '/' . $name)) return false;
     }
-    if (!wp_mkdir_p(dirname($file))) clp_mainwp_fail('guard-failed');
+    return rmdir($path);
+}
+
+// Unchanged content is not written again.
+function clp_mainwp_put($file, $code) {
+    if (is_file($file) && !is_link($file) && file_get_contents($file) === $code) return;
     $temp = $file . '.' . wp_generate_password(8, false) . '.tmp';
-    if (file_put_contents($temp, $input['code']) === false || !chmod($temp, 0644) || !rename($temp, $file)) {
+    if (file_put_contents($temp, $code) === false || !chmod($temp, 0644) || !rename($temp, $file)) {
         if (file_exists($temp)) unlink($temp);
         clp_mainwp_fail('guard-failed');
+    }
+}
+
+// Written and removed as the site's user; WP-CLI loads them, but nothing in them acts there.
+// The loader goes with the last module only when the folder is empty and the loader is ours;
+// writing the guard removes both earlier releases' files.
+function clp_mainwp_guard($input) {
+    if (!is_string($input['code'] ?? null) || !is_string($input['loader'] ?? null) || $input['loader'] === '') clp_mainwp_fail('invalid-input');
+    $remove = array(CLP_MAINWP_LEGACY_GUARD);
+    $loader = ABSPATH . CLP_MAINWP_LOADER;
+    if ($input['code'] === '') {
+        array_unshift($remove, CLP_MAINWP_GUARD);
+    } else {
+        if (wp_normalize_path(untrailingslashit(WPMU_PLUGIN_DIR)) !== wp_normalize_path(dirname($loader))) clp_mainwp_fail('guard-moved');
+        if ((file_exists($loader) || is_link($loader)) && (is_link($loader) || !is_file($loader) || @file_get_contents($loader) !== $input['loader'])) {
+            clp_mainwp_fail('loader-conflict');
+        }
+        if (!wp_mkdir_p(ABSPATH . CLP_MAINWP_MODULES)) clp_mainwp_fail('guard-failed');
+        clp_mainwp_put(ABSPATH . CLP_MAINWP_GUARD, $input['code']);
+        clp_mainwp_put($loader, $input['loader']);
+        $remove = array_merge($remove, CLP_MAINWP_LEGACY_SIGN_IN);
+    }
+    foreach ($remove as $file) {
+        if (!clp_mainwp_remove(ABSPATH . $file)) clp_mainwp_fail('guard-failed');
+    }
+    if ($input['code'] === '' && !file_exists(ABSPATH . CLP_MAINWP_SIGN_IN) && !is_link(ABSPATH . CLP_MAINWP_SIGN_IN)) {
+        $modules = ABSPATH . CLP_MAINWP_MODULES;
+        if (is_dir($modules) && !is_link($modules)) @rmdir($modules);
+        if (!file_exists($modules) && !is_link($modules) && !is_link($loader) && is_file($loader) && @file_get_contents($loader) === $input['loader']) {
+            if (!unlink($loader)) clp_mainwp_fail('guard-failed');
+        }
     }
     return array('ok' => true);
 }

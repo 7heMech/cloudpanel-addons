@@ -12,7 +12,9 @@ users get both for their own sites. To keep the domain opening the site, turn
 off **Sign in from the domain** under **CloudPanel's pages**; a WP Login link then sits
 beside it.
 To clean up helpers, choose **Remove** in the **Sign-in helper on N sites** line
-under the table. The next sign-in installs the helper again.
+under the table. The next sign-in installs the helper again. In WordPress the
+helper, and the MainWP guard below, are one must-use plugin, **Hosting Tools**
+(`hosting-tools.php`).
 
 ## Plugins for a new site
 
@@ -91,7 +93,7 @@ activates and connects MainWP Child on each WordPress site as its first
 administrator. No user is created and no password is changed. A Child connected
 to another Dashboard is moved to this one, and one deactivated, disconnected or
 deleted is put back; a site the Dashboard already lists keeps its record, groups
-and notes. A must-use plugin, `clp-addons-mainwp.php`, hides MainWP Child from
+and notes. The Hosting Tools must-use plugin hides MainWP Child from
 the site's Plugins list and stops its administrators deactivating or
 disconnecting it. A site the Dashboard cannot reach over HTTPS with a valid
 certificate shows **Waiting for HTTPS** and is tried again on the next pass. A
@@ -109,7 +111,7 @@ connected are left as they are. **Retry** repeats a failed connection. The
 Dashboard's own site and multisite networks are left alone.
 
 Turning automation off leaves every connection in place, and the next passes
-take the must-use plugin out. **Turn off and clean up…** removes what WordPress
+take the MainWP guard out. **Turn off and clean up…** removes what WordPress
 Tools added: the Dashboard records it created, with their keys and cookies;
 MainWP Child where it installed it, with its settings, tables, scheduled events
 and an otherwise empty uploads folder; and, on a Child you had installed, the
