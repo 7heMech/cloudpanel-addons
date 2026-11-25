@@ -20,6 +20,8 @@ import { WP_TOOLS_TARGETS } from "../addons/wp-tools/inject/targets";
 import { headerTarget, siteLayoutTarget } from "../lib/panel-nav";
 import { MAINTENANCE_TARGETS } from "../addons/maintenance/inject/targets";
 import type { AddonTarget } from "../lib/addon-target";
+import { GIT_HOOK_PREFIX } from "../addons/git/app/hook";
+import { ADDONS_BASE_PATH } from "../lib/mount";
 
 // Everything happens under temporary directories: this must not touch the
 // panel's templates, must not disturb a real installation's snapshots, and must
@@ -221,6 +223,12 @@ test("the Nginx proxy goes in through the enabled-site link, refuses drift and c
   // nginx tests regex locations before a prefix match wins. Without ^~ every
   // addon URL ending in .js or .css is served from the filesystem as a 404.
   expect(NGINX_PROXY_BLOCK).toContain("location ^~ /addons/ {");
+  // A repository cannot answer the panel's basic auth, so only the
+  // push-to-deploy prefix turns it off; the rest of /addons/ keeps it.
+  const hookLocation = `location ^~ ${ADDONS_BASE_PATH}${GIT_HOOK_PREFIX} {`;
+  expect(NGINX_PROXY_BLOCK).toContain(`${hookLocation}\n        auth_basic off;\n        proxy_pass http://unix:/run/clp-addons/manager.sock:${GIT_HOOK_PREFIX};\n`);
+  expect(NGINX_PROXY_BLOCK.match(/auth_basic/g)).toHaveLength(1);
+  expect(NGINX_PROXY_BLOCK.indexOf(hookLocation)).toBeLessThan(NGINX_PROXY_BLOCK.indexOf("location ^~ /addons/ {"));
 
   const dir = tempDir("nginx-test-");
   const source = `${dir}/cloudpanel.conf`;

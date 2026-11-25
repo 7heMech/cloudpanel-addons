@@ -290,7 +290,10 @@ about the URL says whether a site has a webhook. The token is compared with
 `timingSafeEqual` where the record can be read, which is root -- the manager
 cannot read it, so verifying the delivery and queueing its deployment are one
 gateway call. This route is necessarily outside `guardMutation`: a repository
-sends no CSRF token and its Origin is not the panel.
+sends no CSRF token and its Origin is not the panel. For the same reason it is
+the one path under `/addons/` the panel's optional basic auth does not cover:
+the proxy block gives `/addons/git/hook/` its own location with
+`auth_basic off`, and every other addon page and pre-gate route keeps it.
 
 The other is passkey sign-in, `POST /addons/security-keys/login/options` and
 `/login/verify`, called from the login page before there is a session. The
