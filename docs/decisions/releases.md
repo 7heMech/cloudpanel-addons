@@ -120,6 +120,34 @@ not frozen into the binary: a rotated key would then refuse the very update
 that carries the new one. An update removes the GitHub CLI earlier releases
 kept in `/usr/local/libexec/clp-addons/gh`.
 
+## Release mirror
+
+github.com, api.github.com and GitHub's release downloads have no IPv6, so an
+IPv6-only server can neither install nor update from GitHub. After each
+release, the tag workflow's `mirror` job downloads the published release and
+`tools/mirror-release.ts` copies it to an R2 bucket served at `clp.7he.dev`:
+`releases/<tag>/` for its files, then `releases.json`, the mirrored releases
+newest first in the shape of GitHub's release list, and for the newest stable
+release, `latest` (its tag) and `install.sh` at the root. Files go up before
+the index names them. The newest 30 releases stay, and the newest stable one
+always; older ones are deleted after the index stops naming them. The job runs
+in the `release-mirror` environment, whose R2 token is limited to that bucket,
+apart from the job that holds `id-token: write`, and is skipped while the
+environment has no secrets.
+
+`install.sh`, `resolveRelease` and the update check ask GitHub first, so its
+download counts stay whole, and read the mirror only when GitHub cannot answer:
+unreachable, as from an IPv6-only server, where the connection fails at once,
+rate limited, or failing. The mirror changes where bytes come from, not what is trusted: updates check the
+same checksums and repository-bound provenance, since `attestations.jsonl` is
+mirrored with the binaries and Sigstore's TUF repository has IPv6. An attacker
+who controls the bucket can at most hide newer releases by editing the index,
+and downgrades are refused anyway. A first install trusts whoever serves
+`install.sh`, now either GitHub or the mirror's Cloudflare account. A personal
+signing key would not close that gap, because the host could swap the key with
+the script, and kept in CI it would be weaker than provenance bound to
+`release.yml` and the tag.
+
 ## Supported CloudPanel versions
 
 A release states the CloudPanel versions it supports as `CLOUDPANEL_RANGE` in
@@ -153,7 +181,8 @@ cannot run on an older CloudPanel, is a separate change made with that release.
 ## Installer
 
 `install.sh` checks the host, downloads the binary for its architecture from
-`/releases/latest/download` or the `--version` tag, checks it against
+GitHub's `/releases/latest/download` or the `--version` tag, or from the
+[mirror](#release-mirror) when GitHub cannot serve it, checks it against
 `SHA256SUMS`, and installs it. It makes no GitHub API call. It then runs
 `clp-addons install --local=DIR` with the addons from `--addons`, if any. With
 none it installs the manager and its CloudPanel hooks with every addon off,
@@ -205,8 +234,9 @@ the binary restarts the manager.
 
 Every request the manager serves asks whether a release is available, so the
 answer is held for fifteen minutes, refreshed by one call at a time, and served
-as it stands while that refresh runs. Only the first check waits for GitHub; a
-box with no route there would otherwise pay the timeout on every request.
+as it stands while that refresh runs. Only the first check waits for
+GitHub or the mirror; a box with no route there would otherwise pay the timeout on
+every request.
 
 The native CloudPanel header asks the manager for update state; it does not
 depend on the updater process's compile-time version. That process can reconcile

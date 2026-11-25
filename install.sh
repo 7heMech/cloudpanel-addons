@@ -53,13 +53,17 @@ ok "dependencies available"
 
 IFS=',' read -r -a ADDON_LIST <<< "$SELECTED"
 
-# /releases/latest is the newest release that is not a prerelease. A
-# prerelease tag carries a hyphen, so --version refuses one too.
+# GitHub first, so its download counts stay whole; the mirror at clp.7he.dev
+# when GitHub cannot be reached, as from an IPv6-only server, since github.com
+# has no IPv6. "latest" is the newest release that is not a prerelease, on both.
+# A prerelease tag carries a hyphen, so --version refuses one too.
+MIRROR="https://clp.7he.dev"
+GITHUB="https://github.com/${REPO}/releases"
 if [[ $VERSION == "latest" ]]; then
-  BASE="https://github.com/${REPO}/releases/latest/download"
+  SOURCES=("${GITHUB}/latest/download" "${MIRROR}/releases/latest")
 else
   [[ $VERSION =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]] || die "not a stable release tag: $VERSION"
-  BASE="https://github.com/${REPO}/releases/download/${VERSION}"
+  SOURCES=("${GITHUB}/download/${VERSION}" "${MIRROR}/releases/${VERSION}")
 fi
 
 TMP=$(mktemp -d)
@@ -69,12 +73,28 @@ trap cleanup EXIT
 # The checksum catches a broken download. Provenance protects updates, which
 # the installed binary verifies; it cannot protect this one, because a
 # substituted binary would come with a substituted install.sh.
+fetch_from() {
+  local base=$1 expected
+  # A stalled source gives up after a minute below 1 KB/s, so the next one is tried.
+  local limits=(--connect-timeout 20 --speed-limit 1024 --speed-time 60)
+  curl -fsSL "${limits[@]}" -o "${TMP}/SHA256SUMS" "${base}/SHA256SUMS" || return 1
+  curl -fSL "${limits[@]}" --progress-bar -o "${TMP}/${ARTIFACT}" "${base}/${ARTIFACT}" || return 1
+  expected=$(awk -v f="$ARTIFACT" '$2 == f || $2 == "*" f { print $1 }' "${TMP}/SHA256SUMS" | head -1)
+  [[ -n $expected ]] || { warn "SHA256SUMS does not list ${ARTIFACT}"; return 1; }
+  [[ $(sha256sum "${TMP}/${ARTIFACT}" | awk '{print $1}') == "$expected" ]] || { warn "checksum mismatch for ${ARTIFACT}"; return 1; }
+}
+
 step "downloading clp-addons ${VERSION}"
-curl -fsSL -o "${TMP}/SHA256SUMS" "${BASE}/SHA256SUMS" || die "download failed: SHA256SUMS"
-curl -fSL --progress-bar -o "${TMP}/${ARTIFACT}" "${BASE}/${ARTIFACT}" || die "download failed: ${ARTIFACT}"
-expected=$(awk -v f="$ARTIFACT" '$2 == f || $2 == "*" f { print $1 }' "${TMP}/SHA256SUMS" | head -1)
-[[ -n $expected ]] || die "SHA256SUMS does not list ${ARTIFACT}"
-[[ $(sha256sum "${TMP}/${ARTIFACT}" | awk '{print $1}') == "$expected" ]] || die "checksum mismatch for ${ARTIFACT}"
+fetched=""
+for base in "${SOURCES[@]}"; do
+  if [[ $base == "${MIRROR}/releases/latest" ]]; then
+    tag=$(curl -fsS --max-time 20 "${MIRROR}/latest" 2>/dev/null || true)
+    if [[ $tag =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]]; then base="${MIRROR}/releases/${tag}"; else base=""; fi
+  fi
+  if [[ -n $base ]] && fetch_from "$base"; then fetched="$base"; break; fi
+  warn "could not download from ${base:-${MIRROR}}"
+done
+[[ -n $fetched ]] || die "download failed: ${ARTIFACT}"
 ok "checksum verified"
 
 install -o root -g root -m 0755 "${TMP}/${ARTIFACT}" "$CLI_TARGET"

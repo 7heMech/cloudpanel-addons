@@ -6,6 +6,7 @@ import { getTrustedRoot } from "@sigstore/tuf";
 import { Verifier, toSignedEntity, toTrustMaterial } from "@sigstore/verify";
 import { REPO, SIGSTORE_DIR } from "../lib/paths";
 import { VERSION_TAG_RE, newestRelease } from "../lib/semver";
+import { fetchMirrorReleases } from "../lib/release-mirror";
 import { fatal, log, type OnProgress } from "../lib/log";
 
 const API = "https://api.github.com";
@@ -47,15 +48,22 @@ async function download(url: string, onProgress?: OnProgress): Promise<Buffer> {
   return Buffer.concat(chunks);
 }
 
-async function github(path: string): Promise<unknown> {
-  const response = await fetch(`${API}${path}`, {
-    headers: {
-      Accept: "application/vnd.github+json",
-      "X-GitHub-Api-Version": "2022-11-28",
-      "User-Agent": "clp-addons",
-    },
-    signal: AbortSignal.timeout(20_000),
-  });
+/** null when GitHub cannot answer: unreachable, as from an IPv6-only server, rate limited, or failing. */
+async function github(path: string): Promise<unknown | null> {
+  let response: Response;
+  try {
+    response = await fetch(`${API}${path}`, {
+      headers: {
+        Accept: "application/vnd.github+json",
+        "X-GitHub-Api-Version": "2022-11-28",
+        "User-Agent": "clp-addons",
+      },
+      signal: AbortSignal.timeout(20_000),
+    });
+  } catch {
+    return null;
+  }
+  if (response.status === 403 || response.status === 429 || response.status >= 500) return null;
   if (!response.ok) fatal(`GitHub API ${path} returned ${response.status} ${response.statusText}`);
   return response.json();
 }
@@ -67,17 +75,37 @@ interface GithubRelease {
   assets: { name: string; browser_download_url: string }[];
 }
 
-export async function resolveRelease(requested?: string, allowPrerelease = false): Promise<ResolvedRelease> {
-  let release: GithubRelease;
-  if (requested && requested !== "latest") {
-    if (!VERSION_TAG_RE.test(requested)) fatal(`'${requested}' is not a release tag; expected something like v1.0.0`);
-    release = (await github(`/repos/${REPO}/releases/tags/${requested}`)) as GithubRelease;
-  } else if (allowPrerelease) {
-    const newest = newestRelease((await github(`/repos/${REPO}/releases?per_page=100`)) as GithubRelease[]);
-    if (!newest) fatal("GitHub lists no published release");
-    release = newest;
-  } else {
-    release = (await github(`/repos/${REPO}/releases/latest`)) as GithubRelease;
+function pickRelease(releases: GithubRelease[], requested: string | undefined, allowPrerelease: boolean): GithubRelease | undefined {
+  if (requested && requested !== "latest") return releases.find((release) => release.tag_name === requested);
+  return newestRelease(allowPrerelease ? releases : releases.filter((release) => !release.prerelease));
+}
+
+async function githubRelease(requested: string | undefined, allowPrerelease: boolean): Promise<GithubRelease | null> {
+  if (requested && requested !== "latest") return (await github(`/repos/${REPO}/releases/tags/${requested}`)) as GithubRelease | null;
+  if (!allowPrerelease) return (await github(`/repos/${REPO}/releases/latest`)) as GithubRelease | null;
+  const releases = (await github(`/repos/${REPO}/releases?per_page=100`)) as GithubRelease[] | null;
+  if (!releases) return null;
+  const newest = newestRelease(releases);
+  if (!newest) fatal("GitHub lists no published release");
+  return newest;
+}
+
+/** GitHub first, so its download counts stay whole; the mirror when GitHub cannot answer. */
+export async function resolveRelease(
+  requested?: string,
+  allowPrerelease = false,
+  mirror: () => Promise<GithubRelease[] | null> = () => fetchMirrorReleases(20_000),
+): Promise<ResolvedRelease> {
+  if (requested && requested !== "latest" && !VERSION_TAG_RE.test(requested)) {
+    fatal(`'${requested}' is not a release tag; expected something like v1.0.0`);
+  }
+  let release = await githubRelease(requested, allowPrerelease);
+  if (!release) {
+    const mirrored = await mirror();
+    if (!mirrored) fatal("neither GitHub nor the mirror at clp.7he.dev could be reached");
+    const found = pickRelease(mirrored, requested, allowPrerelease);
+    if (!found) fatal(`GitHub could not be reached, and the mirror at clp.7he.dev has no ${requested && requested !== "latest" ? requested : "release"}`);
+    release = found;
   }
   if (release.draft) fatal(`release ${release.tag_name} is a draft`);
   if (!VERSION_TAG_RE.test(release.tag_name)) fatal(`release tag ${release.tag_name} is invalid`);
