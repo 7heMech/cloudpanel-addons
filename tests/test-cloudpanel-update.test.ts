@@ -14,7 +14,7 @@ import { NGINX_MAINTENANCE_BLOCK, reconcileNginxMaintenance } from "../addons/ma
 import { applyClpctlGuard } from "../addons/system-tweaks/clpctl-guard";
 import { backupCompressionStatus, reconcileBackupCompression, DEFAULT_BACKUP_COMPRESSION } from "../addons/system-tweaks/backup-compression";
 import { baselineFiles, hasBaseline, readBaselineVersion, rebaselineVerdict } from "../lib/baseline";
-import { compareUpstream, conffileMd5, packageVersion, parseRange, rangeFit, upstreamVersion } from "../lib/cloudpanel-version";
+import { compareUpstream, conffileMd5, packageVersion, panelVersionGap, parseRange, rangeFit, upstreamVersion } from "../lib/cloudpanel-version";
 import { cmdStatus } from "../cli/status";
 import { holdAdvice, holdSummary } from "../lib/panel-holds";
 
@@ -370,6 +370,10 @@ test("versions compare without their Debian revision, and only an installed pack
   expect(packageVersion("cloudpanel", () => `${OLD}\tii `)).toBe(OLD);
   expect(packageVersion("cloudpanel", () => `${NEW}\tiU `)).toBeNull();
   expect(packageVersion("cloudpanel", () => { throw new Error("no dpkg"); })).toBeNull();
+  // A run that stopped part-way leaves the same status as one still going.
+  expect(panelVersionGap(() => "iF ")).toBe("dpkg has not finished installing it");
+  expect(panelVersionGap(() => "rc ")).toBe("dpkg does not list it as installed");
+  expect(panelVersionGap(() => { throw new Error("no dpkg"); })).toBe("dpkg does not list it as installed");
 });
 
 test("each refusal says what happened and what to do", () => {
@@ -377,7 +381,8 @@ test("each refusal says what happened and what to do", () => {
   expect(holdSummary({ ...hold, reason: "anchor-missing" })).toBe(`CloudPanel ${NEW} changed ${TEMPLATE}, and a line the addons attach to is gone.`);
   expect(holdAdvice({ ...hold, reason: "anchor-missing" })).toContain("clp-addons update");
   expect(holdAdvice({ ...hold, reason: "edited" })).toContain("clp-addons repair --rebaseline");
-  expect(holdAdvice({ ...hold, reason: "busy" })).toContain("when the update finishes");
+  expect(holdSummary({ ...hold, reason: "busy" })).toBe("dpkg has not finished installing CloudPanel.");
+  expect(holdAdvice({ ...hold, reason: "busy" })).toContain("dpkg --configure -a");
 });
 
 test("the Addons page lists what is paused, for which addons, and what to run; with nothing held it shows nothing", async () => {

@@ -11,7 +11,7 @@ import { ensureDirs, ensureRequiredUnits, ensureServiceUser } from "./provision"
 import { CLI_VERSION } from "../lib/version";
 import { loadLocal } from "./release";
 import { fatal, log, requireRoot } from "../lib/log";
-import { CLOUDPANEL_RANGE, describeRange, panelVersion, rangeFit } from "../lib/cloudpanel-version";
+import { CLOUDPANEL_RANGE, describeRange, panelVersion, panelVersionGap, rangeFit } from "../lib/cloudpanel-version";
 import { parseFlags } from "./flags";
 import { changeLock, lockFailure, type LockFiles } from "../lib/lock-addon";
 
@@ -88,7 +88,7 @@ function warnOutsidePanelRange(): void {
   const fit = rangeFit(installed);
   if (fit === "within") return;
   const range = describeRange(CLOUDPANEL_RANGE);
-  if (fit === "unknown") return log.warn(`could not read the CloudPanel version; this release supports CloudPanel ${range}`);
+  if (fit === "unknown") return log.warn(`could not read the CloudPanel version (${panelVersionGap()}); this release supports CloudPanel ${range}`);
   log.warn(fit === "below"
     ? `CloudPanel ${installed} is older than this release supports (${range}); update CloudPanel with clp-update`
     : `CloudPanel ${installed} is newer than this release was checked against (${range}); a CloudPanel page that changed stays unpatched until a release supports it, and clp-addons status lists it`);

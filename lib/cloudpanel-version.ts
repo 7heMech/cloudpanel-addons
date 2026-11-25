@@ -107,6 +107,15 @@ export function panelVersion(query?: PackageQuery): string | null {
 }
 
 /**
+ * Why `panelVersion` gave null, in a few words. dpkg reports a package it is
+ * still changing the same way as one an interrupted run left half-configured,
+ * so neither is called an update in progress.
+ */
+export function panelVersionGap(query?: PackageQuery): string {
+  return packageBusy("cloudpanel", query) ? "dpkg has not finished installing it" : "dpkg does not list it as installed";
+}
+
+/**
  * dpkg lists the package but is part-way through changing it: unpacked,
  * half-installed or half-configured, awaiting or holding triggers, or flagged
  * for reinstall. Not listed, removed or purged is not busy.
