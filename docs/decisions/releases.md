@@ -32,6 +32,15 @@ Cloudflare Access application on the tunnel's SSH hostname admits only the
 service token in `STG_ACCESS_CLIENT_ID` and `STG_ACCESS_CLIENT_SECRET`, so
 nothing else reaches the box's sshd through the tunnel.
 
+## Code scanning
+
+CodeQL runs from `.github/workflows/codeql.yml` rather than GitHub's default
+setup, because only an advanced setup can leave out paths. It scans the
+workflows and the JavaScript/TypeScript with the default query suite, skipping
+`tests/`: tests build HTML and match hostnames with plain substring checks on
+purpose, and those lines read as security alerts. The workflow and default
+setup cannot both upload, so default setup stays off.
+
 ## Toolchain
 
 Development, CI, staging, and release use the Bun version pinned by
