@@ -51,6 +51,15 @@ const term = new Terminal({
 const fitAddon = new FitAddon.FitAddon();
 term.loadAddon(fitAddon);
 term.open(termHost);
+// The GPU renderer redraws a full-screen program such as htop far faster than
+// the DOM one. Without WebGL, or once the browser drops the GPU context, the
+// DOM renderer takes over again.
+try {
+  const webgl = new WebglAddon.WebglAddon();
+  // The DOM renderer measures cells differently, so the size is worked out again.
+  webgl.onContextLoss(function () { webgl.dispose(); fitAddon.fit(); });
+  term.loadAddon(webgl);
+} catch (error) { /* the DOM renderer stays */ }
 fitAddon.fit();
 term.focus();
 

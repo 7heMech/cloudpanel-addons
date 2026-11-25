@@ -14,11 +14,13 @@ import { dashboardView, inventoryUnavailableView, layout, popupPage, XTERM_ASSET
 import XTERM_JS from "./vendor/xterm.js" with { type: "text" };
 import XTERM_CSS from "./vendor/xterm.css" with { type: "text" };
 import FIT_JS from "./vendor/addon-fit.js" with { type: "text" };
+import WEBGL_JS from "./vendor/addon-webgl.js" with { type: "text" };
 
 const ASSET_BODIES: Record<keyof typeof XTERM_ASSETS, string> = {
   "xterm-6.0.0/xterm.js": XTERM_JS,
   "xterm-6.0.0/xterm.css": XTERM_CSS,
   "addon-fit-0.11.0/addon-fit.js": FIT_JS,
+  "addon-webgl-0.19.0/addon-webgl.js": WEBGL_JS,
 };
 
 // The popup is the one page that loads scripts and a stylesheet from this

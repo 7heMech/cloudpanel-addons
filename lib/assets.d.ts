@@ -26,6 +26,11 @@ declare module "*/vendor/addon-fit.js" {
   export default source;
 }
 
+declare module "*/vendor/addon-webgl.js" {
+  const source: string;
+  export default source;
+}
+
 declare module "*.php" {
   const source: string;
   export default source;
