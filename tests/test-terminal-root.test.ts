@@ -271,6 +271,9 @@ test("the page's button opens a root shell only for an allowed administrator, an
   expect(popup).not.toContain("root-auth-boxes");
   expect(popup).not.toContain(".root-auth-code");
   expect(popup).toContain("code.onchange = normalize;");
+  // The GPU renderer, loaded after xterm and before the popup's own script uses it.
+  expect(popup).toContain('<script src="/addons/terminal/assets/addon-webgl-0.19.0/addon-webgl.js"></script>');
+  expect(popup).toContain("term.loadAddon(webgl);");
 });
 
 test("the header control is in both of CloudPanel's headers and the addons' own, for administrators, hidden until root answers", () => {

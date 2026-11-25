@@ -20,6 +20,7 @@ export const XTERM_ASSETS = {
   "xterm-6.0.0/xterm.js": "text/javascript; charset=utf-8",
   "xterm-6.0.0/xterm.css": "text/css; charset=utf-8",
   "addon-fit-0.11.0/addon-fit.js": "text/javascript; charset=utf-8",
+  "addon-webgl-0.19.0/addon-webgl.js": "text/javascript; charset=utf-8",
 } as const;
 
 export function layout(
@@ -174,6 +175,7 @@ export function popupPage(domain: string | null): string {
     head: `<link rel="stylesheet" href="${assets[1]}">
 <script src="${assets[0]}"></script>
 <script src="${assets[2]}"></script>
+<script src="${assets[3]}"></script>
 `,
   });
 }
