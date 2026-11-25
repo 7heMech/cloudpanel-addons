@@ -191,6 +191,8 @@ can start after.
 hash, and served from versioned paths with a year-long cache; the build
 minifies `xterm.css` like every other stylesheet. The popup is the
 one page whose content security policy allows `'self'` scripts and styles.
+Its xterm scripts load at the end of the body, so the window and its
+Connecting badge draw while they download; the stylesheet stays in the head.
 
 ### Verification when opening root
 
