@@ -274,6 +274,14 @@ test("the page's button opens a root shell only for an allowed administrator, an
   // The GPU renderer, loaded after xterm and before the popup's own script uses it.
   expect(popup).toContain('<script src="/addons/terminal/assets/addon-webgl-0.19.0/addon-webgl.js"></script>');
   expect(popup).toContain("term.loadAddon(webgl);");
+  // xterm loads after the page has drawn, so the window shows Connecting
+  // rather than staying blank while it downloads; its stylesheet does not wait.
+  const head = popup.slice(0, popup.indexOf("</head>"));
+  expect(head).toContain('<link rel="stylesheet" href="/addons/terminal/assets/xterm-6.0.0/xterm.css">');
+  expect(head).not.toContain("<script src=");
+  const xterm = popup.indexOf('<script src="/addons/terminal/assets/xterm-6.0.0/xterm.js"></script>');
+  expect(popup.indexOf('id="term-status" role="status">Connecting<')).toBeLessThan(xterm);
+  expect(xterm).toBeLessThan(popup.indexOf("const CLP_BASE"));
 });
 
 test("the header control is in both of CloudPanel's headers and the addons' own, for administrators, hidden until root answers", () => {

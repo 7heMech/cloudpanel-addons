@@ -172,8 +172,10 @@ export function popupPage(domain: string | null): string {
     base: BASE,
     css: POPUP_STYLE,
     script: domain === null ? `${WEBAUTHN_JS}\n${POPUP_JS}` : POPUP_JS,
-    head: `<link rel="stylesheet" href="${assets[1]}">
-<script src="${assets[0]}"></script>
+    head: `<link rel="stylesheet" href="${assets[1]}">\n`,
+    // At the end of the body, so the window and its Connecting badge draw
+    // while xterm downloads rather than staying blank.
+    scripts: `<script src="${assets[0]}"></script>
 <script src="${assets[2]}"></script>
 <script src="${assets[3]}"></script>
 `,

@@ -413,7 +413,14 @@ ${BASE_CLIENT_JS}${chrome.admin !== false ? rootShellScript(mountPath("terminal"
 export function renderToolWindow(
   title: string,
   content: string,
-  chrome: { base: string; css?: string; script: string; head?: string },
+  chrome: {
+    base: string;
+    css?: string;
+    script: string;
+    head?: string;
+    /** External script tags run just before `script`, after the page has drawn. */
+    scripts?: string;
+  },
 ): string {
   return `<!doctype html>
 <html lang="en">
@@ -426,7 +433,7 @@ ${chrome.head ?? ""}<style>${BASE_STYLE}${chrome.css ?? ""}</style>
 </head>
 <body class="clp-tool-window">
 ${content}
-<script>const CLP_BASE = "${escJs(chrome.base)}";
+${chrome.scripts ?? ""}<script>const CLP_BASE = "${escJs(chrome.base)}";
 ${BASE_CLIENT_JS}${chrome.script}</script>
 </body>
 </html>`;
