@@ -490,6 +490,23 @@ test("remove and withdrawal leave a site's own hosting-tools files and unrelated
   expect(readFileSync(target, "utf8")).toBe(HOSTING_TOOLS_LOADER_PHP);
 });
 
+test("sign-in refuses to overwrite an unrelated or symlinked hosting-tools.php", async () => {
+  const shop = join(siteDir("shop", "shop.example.com"), "wp-content", "mu-plugins");
+  mkdirSync(shop, { recursive: true });
+  writeFileSync(join(shop, "hosting-tools.php"), "<?php // site custom\n");
+  await expect(act(["sign-in", "--domain=shop.example.com"])).rejects.toThrow("already exists with different content");
+  expect(readdirSync(shop)).toEqual(["hosting-tools.php"]);
+  expect(readFileSync(join(shop, "hosting-tools.php"), "utf8")).toBe("<?php // site custom\n");
+
+  const target = join(root, "signin-loader-target.php");
+  writeFileSync(target, HOSTING_TOOLS_LOADER_PHP);
+  rmSync(join(shop, "hosting-tools.php"));
+  symlinkSync(target, join(shop, "hosting-tools.php"));
+  await expect(act(["sign-in", "--domain=shop.example.com"])).rejects.toThrow("already exists with different content");
+  expect(readdirSync(shop)).toEqual(["hosting-tools.php"]);
+  expect(lstatSync(join(shop, "hosting-tools.php")).isSymbolicLink()).toBe(true);
+});
+
 test("remove waits for the MainWP lock so it cannot delete a guard's loader", async () => {
   const paths = { ...DEFAULT_WP_TOOLS_PATHS, ...options().paths! };
   const shop = join(siteDir("shop", "shop.example.com"), "wp-content", "mu-plugins");

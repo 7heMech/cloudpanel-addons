@@ -160,6 +160,7 @@ const FAILURES: Record<string, string> = {
   "already-connected": "MainWP Child is already connected to a Dashboard; disconnect it in MainWP first",
   "guard-failed": "the MainWP guard could not be written into the site's mu-plugins folder",
   "guard-moved": "wp-config.php moves the must-use plugins folder, so the MainWP guard cannot be placed",
+  "loader-conflict": "wp-content/mu-plugins/hosting-tools.php already exists with different content, so the MainWP guard cannot be placed",
   "constant-id": "wp-config.php sets MAINWP_CHILD_UNIQUEID; connect this site from MainWP instead",
   "activation-failed": "MainWP Child could not be activated; check the site in WordPress",
   "auth-not-restored": "the temporary MainWP connection setting could not be restored; check again",
@@ -717,9 +718,13 @@ async function downloadChild(pass: Pass, site: WpSite, status: ChildStatus): Pro
 }
 
 async function setGuard(pass: Pass, site: WpSite, record: MainwpRecord, on: boolean): Promise<void> {
+  if (on) {
+    // Persist intent before the adapter writes so a partial write or dropped reply stays due for removal if paused.
+    record.guard = true;
+    saveMainwpState(pass.run.statePath, pass.state);
+  }
   await bridge(pass, site, { op: "guard", code: on ? GUARD : "", loader: HOSTING_TOOLS_LOADER_PHP });
-  if (on) record.guard = true;
-  else delete record.guard;
+  if (!on) delete record.guard;
 }
 
 /** Whether a failed attempt left the child as it was and a Dashboard on this server without a record. */

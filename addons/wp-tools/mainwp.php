@@ -229,13 +229,17 @@ function clp_mainwp_put($file, $code) {
 function clp_mainwp_guard($input) {
     if (!is_string($input['code'] ?? null) || !is_string($input['loader'] ?? null) || $input['loader'] === '') clp_mainwp_fail('invalid-input');
     $remove = array(CLP_MAINWP_LEGACY_GUARD);
+    $loader = ABSPATH . CLP_MAINWP_LOADER;
     if ($input['code'] === '') {
         array_unshift($remove, CLP_MAINWP_GUARD);
     } else {
-        if (wp_normalize_path(untrailingslashit(WPMU_PLUGIN_DIR)) !== wp_normalize_path(dirname(ABSPATH . CLP_MAINWP_LOADER))) clp_mainwp_fail('guard-moved');
+        if (wp_normalize_path(untrailingslashit(WPMU_PLUGIN_DIR)) !== wp_normalize_path(dirname($loader))) clp_mainwp_fail('guard-moved');
+        if ((file_exists($loader) || is_link($loader)) && (is_link($loader) || !is_file($loader) || @file_get_contents($loader) !== $input['loader'])) {
+            clp_mainwp_fail('loader-conflict');
+        }
         if (!wp_mkdir_p(ABSPATH . CLP_MAINWP_MODULES)) clp_mainwp_fail('guard-failed');
         clp_mainwp_put(ABSPATH . CLP_MAINWP_GUARD, $input['code']);
-        clp_mainwp_put(ABSPATH . CLP_MAINWP_LOADER, $input['loader']);
+        clp_mainwp_put($loader, $input['loader']);
         $remove = array_merge($remove, CLP_MAINWP_LEGACY_SIGN_IN);
     }
     foreach ($remove as $file) {
@@ -244,7 +248,6 @@ function clp_mainwp_guard($input) {
     if ($input['code'] === '' && !file_exists(ABSPATH . CLP_MAINWP_SIGN_IN) && !is_link(ABSPATH . CLP_MAINWP_SIGN_IN)) {
         $modules = ABSPATH . CLP_MAINWP_MODULES;
         if (is_dir($modules) && !is_link($modules)) @rmdir($modules);
-        $loader = ABSPATH . CLP_MAINWP_LOADER;
         if (!file_exists($modules) && !is_link($modules) && !is_link($loader) && is_file($loader) && @file_get_contents($loader) === $input['loader']) {
             if (!unlink($loader)) clp_mainwp_fail('guard-failed');
         }

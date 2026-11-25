@@ -684,10 +684,17 @@ add_action('init', function () {
  * sign-in module `$5` to `$4`, the secret from stdin to `$6`, and removes an
  * earlier release's files, `$7` on, in one `runuser` call. A file already
  * holding exactly its content is left alone, so its mtime holds and nothing
- * reindexes it.
+ * reindexes it; an existing loader with different content or a non-regular
+ * loader path fails before writing anything.
  */
 const INSTALL_SCRIPT = `set -eu
 umask 022
+if [ -e "$2" ] || [ -L "$2" ]; then
+  if [ ! -f "$2" ] || [ -L "$2" ] || ! printf %s "$3" | cmp -s - "$2"; then
+    printf %s 'wp-content/mu-plugins/hosting-tools.php already exists with different content' >&2
+    exit 1
+  fi
+fi
 mkdir -p -- "$1"
 trap 'rm -f "\${t:-}"' EXIT
 put() {

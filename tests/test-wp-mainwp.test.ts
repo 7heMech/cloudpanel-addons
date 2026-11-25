@@ -61,7 +61,12 @@ const options = { runWpCommand: async (command: WpCommand) => {
       }
       const mu = child!.mu;
       if (input.code) {
+        if (mu.loader !== undefined && mu.loader !== input.loader) {
+          reply = { error: "loader-conflict" };
+          break;
+        }
         mu.guard = input.code; mu.loader = input.loader; delete mu.legacySignIn;
+        if (fail === "guard-partial") throw new Error("legacy cleanup failed");
       } else {
         delete mu.guard;
         if (!mu.signIn && !mu.extra && mu.loader === input.loader) delete mu.loader;
@@ -332,6 +337,52 @@ test("invalid-input from the adapter maps to its own error message", async () =>
   await expect(syncMainwp({ ...run, domain: "new.test" }, invalid)).resolves.toMatchObject({
     failed: ["new.test: the MainWP request to WordPress was invalid"],
   });
+});
+
+test("guard installation refuses to overwrite a different hosting-tools.php", async () => {
+  await configured();
+  children["connected.test"]!.mu.loader = "<?php // site custom\n";
+  const result = await syncMainwp({ ...run, domain: "connected.test" }, options);
+  expect(result.failed).toEqual([
+    "connected.test: wp-content/mu-plugins/hosting-tools.php already exists with different content, so the MainWP guard cannot be placed",
+  ]);
+  expect(children["connected.test"]!.mu).toEqual({ loader: "<?php // site custom\n" });
+
+  // The PHP adapter checks for a conflicting loader before creating modules or writing the guard.
+  const adapter = readFileSync(join(import.meta.dir, "../addons/wp-tools/mainwp.php"), "utf8");
+  expect(adapter).toContain("clp_mainwp_fail('loader-conflict')");
+  expect(adapter.indexOf("loader-conflict")).toBeLessThan(adapter.indexOf("clp_mainwp_put(ABSPATH . CLP_MAINWP_GUARD"));
+});
+
+test("guard intent is saved before a partial write so pausing still cleans up the leaked guard", async () => {
+  await configured();
+  fail = "guard-partial";
+  const failed = await syncMainwp({ ...run, domain: "new.test" }, options);
+  expect(failed.failed).toEqual(["new.test: legacy cleanup failed"]);
+  expect(children["new.test"]!.mu.guard).toEqual(expect.any(String));
+  expect(readMainwpState(run.statePath).sites["new.test"]!.guard).toBe(true);
+
+  fail = "";
+  await configureMainwp(run, options, false);
+  expect(mainwpNeedsRepair(readMainwpState(run.statePath))).toBe(true);
+  expect(await syncMainwp({ ...run, dueOnly: true }, options)).toMatchObject({ failed: [] });
+  expect(children["new.test"]!.mu).toEqual({});
+  expect(readMainwpState(run.statePath).sites["new.test"]!.guard).toBeUndefined();
+});
+
+test("guard intent clears when a failed write left no guard and automation pauses", async () => {
+  await configured();
+  fail = "guard";
+  await syncMainwp({ ...run, domain: "new.test" }, options);
+  expect(children["new.test"]!.mu).toEqual({});
+  expect(readMainwpState(run.statePath).sites["new.test"]!.guard).toBe(true);
+
+  fail = "";
+  await configureMainwp(run, options, false);
+  commands = [];
+  expect(await syncMainwp({ ...run, dueOnly: true }, options)).toMatchObject({ failed: [] });
+  expect(commands.some((c) => c.stdin?.includes('"op":"guard"'))).toBe(false);
+  expect(readMainwpState(run.statePath).sites["new.test"]!.guard).toBeUndefined();
 });
 
 test("a new site waits for Dashboard-side HTTPS without intent or a failure, then the timer connects it", async () => {
