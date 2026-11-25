@@ -21,6 +21,8 @@ interface MenuState {
   enabled: Set<string>;
   wanted: Set<string>;
   manager: string;
+  /** Worked out once: a redraw runs on every keypress. */
+  dashboard: string;
   update: CliUpdateInfo | null;
 }
 
@@ -62,7 +64,7 @@ function frame(state: MenuState): string[] {
   const pending = state.names.filter(changed).length;
   return [
     ` ${header}`,
-    ` ${paint("2", dashboardUrl())}`,
+    ` ${paint("2", state.dashboard)}`,
     "",
     ...addonRows(state.names, state.cursor, state.wanted, changed),
     "",
@@ -105,7 +107,7 @@ export async function cmdMenu(): Promise<void> {
   const names = offeredAddonNames();
   const enabled = readEnabled(names);
   const state: MenuState = {
-    names, cursor: 0, enabled, wanted: new Set(enabled), manager: unitActive(MANAGER_UNIT), update: null,
+    names, cursor: 0, enabled, wanted: new Set(enabled), manager: unitActive(MANAGER_UNIT), dashboard: dashboardUrl(), update: null,
   };
   const input = process.stdin;
   const out = process.stdout;
