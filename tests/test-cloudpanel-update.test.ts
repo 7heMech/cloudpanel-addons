@@ -388,7 +388,7 @@ test("each refusal says what happened and what to do", () => {
   expect(holdSummary({ ...hold, reason: "anchor-missing" })).toBe(`CloudPanel ${NEW} changed ${TEMPLATE}, and a line the addons attach to is gone.`);
   expect(holdAdvice({ ...hold, reason: "anchor-missing" })).toContain("clp-addons update");
   expect(holdAdvice({ ...hold, reason: "edited" })).toContain("clp-addons repair --rebaseline");
-  expect(holdSummary({ ...hold, reason: "busy" })).toBe("dpkg has not finished installing CloudPanel.");
+  expect(holdSummary({ ...hold, reason: "busy" })).toBe("dpkg did not report a finished install of CloudPanel.");
   expect(holdAdvice({ ...hold, reason: "busy" })).toContain("dpkg --configure -a");
   expect(holdAdvice({ ...hold, reason: "busy" })).toContain("apt-get install --reinstall");
 });
