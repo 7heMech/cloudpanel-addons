@@ -73,6 +73,9 @@ const dpkgQuery: PackageQuery = (args) =>
  */
 const SETTLED_STATUS = /^\Si $/;
 
+/** Unpacked, half-installed, half-configured, awaiting or holding triggers, or flagged for reinstall. */
+const BUSY_STATUS = /^\S[HUFWt]|^\S\SR/;
+
 /**
  * The installed version of a package, or null when dpkg cannot say or is
  * part-way through changing it: during an upgrade the package's files are
@@ -106,13 +109,34 @@ export function panelVersion(query?: PackageQuery): string | null {
   return packageVersion("cloudpanel", query);
 }
 
+/** CloudPanel's version, or why there is none, from one dpkg query. */
+export type PanelReading = { version: string; gap: null } | { version: null; gap: string };
+
 /**
- * Why `panelVersion` gave null, in a few words. dpkg reports a package it is
- * still changing the same way as one an interrupted run left half-configured,
- * so neither is called an update in progress.
+ * dpkg reports a package it is still changing the same way as one an
+ * interrupted run left half-configured, so neither is called an update in
+ * progress.
  */
-export function panelVersionGap(query?: PackageQuery): string {
-  return packageBusy("cloudpanel", query) ? "dpkg has not finished installing it" : "dpkg does not list it as installed";
+export function readPanelVersion(query: PackageQuery = dpkgQuery): PanelReading {
+  let output: string;
+  try {
+    output = query(["-W", "-f=${Version}\t${db:Status-Abbrev}", "cloudpanel"]);
+  } catch (error) {
+    // dpkg-query exits 1 for a package it has no record of; anything else, a
+    // timeout included, leaves the package's state unknown.
+    const absent = (error as { status?: unknown } | null)?.status === 1;
+    return { version: null, gap: absent ? "dpkg does not list it as installed" : "dpkg-query did not answer" };
+  }
+  const [version = "", status = ""] = output.split("\t");
+  if (version.trim() && SETTLED_STATUS.test(status)) return { version: version.trim(), gap: null };
+  return { version: null, gap: BUSY_STATUS.test(status) ? "dpkg has not finished installing it" : "dpkg does not list it as installed" };
+}
+
+/** What to say when `rangeFit` cannot place the reading: no version, or one it cannot compare. */
+export function unplacedPanelVersion(reading: PanelReading): string {
+  return reading.version === null
+    ? `could not read the CloudPanel version (${reading.gap})`
+    : `could not compare CloudPanel version ${reading.version}`;
 }
 
 /**
@@ -122,7 +146,7 @@ export function panelVersionGap(query?: PackageQuery): string {
  */
 export function packageBusy(pkg: string, query: PackageQuery = dpkgQuery): boolean {
   try {
-    return /^\S[HUFWt]|^\S\SR/.test(query(["-W", "-f=${db:Status-Abbrev}", pkg]));
+    return BUSY_STATUS.test(query(["-W", "-f=${db:Status-Abbrev}", pkg]));
   } catch {
     return false;
   }

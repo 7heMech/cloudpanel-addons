@@ -39,7 +39,7 @@ export function holdSummary(hold: PanelHold): string {
 /** What to do about it, in one sentence. */
 export function holdAdvice(hold: PanelHold): string {
   switch (hold.reason) {
-    case "busy": return "The addons check it again once it has; if no apt or dpkg run is going, finish it with dpkg --configure -a.";
+    case "busy": return "The addons check it again once it has; if no apt or dpkg run is going, finish it with dpkg --configure -a, and if that fails, reinstall the package with apt-get install --reinstall.";
     case "edited":
     case "unrecorded": return "If the change is wanted, run clp-addons repair --rebaseline on the server; otherwise put the file back.";
     case "stray-marker": return "Remove the leftover clp-addons lines from it, then run clp-addons repair.";
