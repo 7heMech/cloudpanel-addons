@@ -56,7 +56,8 @@ term.open(termHost);
 // DOM renderer takes over again.
 try {
   const webgl = new WebglAddon.WebglAddon();
-  webgl.onContextLoss(function () { webgl.dispose(); });
+  // The DOM renderer measures cells differently, so the size is worked out again.
+  webgl.onContextLoss(function () { webgl.dispose(); fitAddon.fit(); });
   term.loadAddon(webgl);
 } catch (error) { /* the DOM renderer stays */ }
 fitAddon.fit();

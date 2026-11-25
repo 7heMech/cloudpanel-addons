@@ -274,6 +274,8 @@ test("the page's button opens a root shell only for an allowed administrator, an
   // The GPU renderer, loaded after xterm and before the popup's own script uses it.
   expect(popup).toContain('<script src="/addons/terminal/assets/addon-webgl-0.19.0/addon-webgl.js"></script>');
   expect(popup).toContain("term.loadAddon(webgl);");
+  // Back on the DOM renderer, cells measure differently, so the terminal is refitted.
+  expect(popup).toContain("webgl.onContextLoss(function () { webgl.dispose(); fitAddon.fit(); });");
   // xterm loads after the page has drawn, so the window shows Connecting
   // rather than staying blank while it downloads; its stylesheet does not wait.
   const head = popup.slice(0, popup.indexOf("</head>"));
