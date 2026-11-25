@@ -3,7 +3,7 @@ import { readFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { ADDONS, ADDON_NAMES, addonHandler, offeredAddonNames, templateWatchPaths } from "../addons/catalog";
 import { addonSupportsArch, archRefusal, type AddonSpec } from "../lib/addon-definition";
-import { resolveEnableable } from "../cli/addons";
+import { dashboardUrlFor, resolveEnableable } from "../cli/addons";
 import { runNewSiteWork } from "../cli/addon-hooks";
 import { CLI_ARTIFACT, cliArtifactForArch } from "../lib/paths";
 
@@ -137,4 +137,14 @@ test("new-site work starts in catalog order and a slow addon only gets a head st
   events.length = 0;
   await runNewSiteWork([spec("DNS", 1), spec("SMTP", 1)], 1000);
   expect(events).toEqual(["DNS start", "DNS end", "SMTP start", "SMTP end"]);
+});
+
+test("the dashboard URL is the custom domain, else port 8443 by hostname or public address", () => {
+  const addresses = { ipv4: "203.0.113.7", ipv6: "2001:db8::7" };
+  expect(dashboardUrlFor({ customDomain: "panel.example.com", vhostHost: "box.example.com", addresses })).toBe("https://panel.example.com/addons/");
+  expect(dashboardUrlFor({ vhostHost: "box.example.com", addresses })).toBe("https://box.example.com:8443/addons/");
+  expect(dashboardUrlFor({ vhostHost: null, addresses })).toBe("https://203.0.113.7:8443/addons/");
+  // IPv6-only, or more than one IPv4 that cannot be told apart.
+  expect(dashboardUrlFor({ vhostHost: null, addresses: { ipv4: null, ipv6: "2001:db8::7" } })).toBe("https://[2001:db8::7]:8443/addons/");
+  expect(dashboardUrlFor({ vhostHost: null, addresses: { ipv4: null, ipv6: "" } })).toBe("https://<server-ip>:8443/addons/");
 });

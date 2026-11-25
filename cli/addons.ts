@@ -5,6 +5,9 @@ import { LEGACY_PROTOCOLS_FILE, migrateFirewallProtocols } from "../addons/firew
 import { ADDONS, ADDON_NAMES, addonEnabled } from "../addons/catalog";
 import { archRefusal, type AddonSpec } from "../lib/addon-definition";
 import { masterVhostHost } from "./inject";
+import { type Addresses, detectAddresses } from "../addons/dns/addresses";
+import { panelCustomDomain } from "../lib/panel-custom-domain";
+import { panelUserUid } from "../lib/sso-auth";
 import { writeConfig } from "./provision";
 import { fatal, log } from "../lib/log";
 import { chownSync, existsSync, readFileSync, readdirSync, renameSync, rmSync, statSync, writeFileSync } from "node:fs";
@@ -142,7 +145,29 @@ function restoreAddonState(renames: AddonRename[]): void {
   }
 }
 
+export interface DashboardHost {
+  /** CloudPanel's custom domain, served on 443 by the sites' Nginx. */
+  customDomain?: string;
+  /** A hostname in the panel's own port-8443 server block. */
+  vhostHost: string | null;
+  addresses: Addresses;
+}
+
+/**
+ * Where the operator opens the Addons page: the custom domain when CloudPanel
+ * has one, else the panel's own port 8443 by hostname or public address.
+ */
+export function dashboardUrlFor(host: DashboardHost): string {
+  if (host.customDomain) return `https://${host.customDomain}/addons/`;
+  const name = host.vhostHost ?? host.addresses.ipv4 ?? (host.addresses.ipv6 ? `[${host.addresses.ipv6}]` : null);
+  return `https://${name ?? "<server-ip>"}:8443/addons/`;
+}
+
 export function dashboardUrl(): string {
-  const host = masterVhostHost() ?? "<cloudpanel-host>";
-  return `https://${host}/addons/`;
+  const panelUid = panelUserUid();
+  return dashboardUrlFor({
+    customDomain: panelCustomDomain(panelUid === null ? [0] : [0, panelUid]),
+    vhostHost: masterVhostHost(),
+    addresses: detectAddresses(),
+  });
 }
