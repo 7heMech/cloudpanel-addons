@@ -163,6 +163,13 @@ Origin is not the panel, so `guardMutation` cannot apply and the URL is the
 credential. That is why it is minted rather than chosen, why the page says to
 keep it private, and why rotating it is how a leaked one is revoked.
 
+The panel's optional basic auth would answer first, and a repository cannot
+send it, so the proxy block in `cli/inject.ts` gives `/addons/git/hook/` its own
+location with `auth_basic off`. Only that prefix is opened: the rest of
+`/addons/` keeps basic auth, including the other routes answered before the
+session gate, so basic auth stays a second factor in front of the addons a
+stolen panel password would otherwise reach.
+
 The route is decided in `handleRequest` before the session gate, and it returns
 a response *only* when the root gateway confirmed the token. Everything else --
 a stranger, a wrong token, a rotated one, a site with no webhook, a `GET` --

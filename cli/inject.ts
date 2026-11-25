@@ -387,16 +387,27 @@ export function purgeTwigCache(): void {
 // for static file extensions, and nginx tests regex locations before a prefix
 // match wins. Without it every addon URL ending in .js, .css, .svg or an image
 // extension is taken by that rule and served from the filesystem as a 404.
-export const NGINX_PROXY_BLOCK = `    # clp-addons:proxy:start
-    location ^~ /addons/ {
-        proxy_pass http://unix:/run/clp-addons/manager.sock:/;
-        proxy_http_version 1.1;
+//
+// Git's push-to-deploy route gets its own location with the panel's optional
+// basic auth off: a repository cannot answer it, and the URL's token is that
+// route's credential. Everything else under /addons/ keeps basic auth.
+const PROXY_DIRECTIVES = `        proxy_http_version 1.1;
         proxy_set_header Host $http_host;
         proxy_set_header X-Real-IP $remote_addr;
         proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
         proxy_set_header X-Forwarded-Proto $scheme;
         proxy_set_header X-Forwarded-Host $http_host;
-        proxy_buffering off;
+        proxy_buffering off;`;
+
+export const NGINX_PROXY_BLOCK = `    # clp-addons:proxy:start
+    location ^~ /addons/git/hook/ {
+        auth_basic off;
+        proxy_pass http://unix:/run/clp-addons/manager.sock:/git/hook/;
+${PROXY_DIRECTIVES}
+    }
+    location ^~ /addons/ {
+        proxy_pass http://unix:/run/clp-addons/manager.sock:/;
+${PROXY_DIRECTIVES}
         proxy_read_timeout 3600s;
     }
     # clp-addons:proxy:end`;
