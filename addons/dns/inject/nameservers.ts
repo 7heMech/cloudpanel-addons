@@ -2,6 +2,7 @@ import type { AddonTarget } from "../../../lib/addon-target";
 import { NAMESERVER_NOTICE_JS } from "../../../lib/nameserver-notice";
 import SCRIPT from "./nameservers.client.js" with { type: "text" };
 import { TEMPLATES } from "../../../lib/panel-anchors";
+import { CUSTOM_DOMAIN_TARGET } from "./custom-domain";
 
 /** Above the certificates card, where flash messages also sit, on every site's SSL/TLS tab. */
 function nameserversSnippet(addonUrl: string): string {
@@ -10,11 +11,14 @@ function nameserversSnippet(addonUrl: string): string {
         <script>${NAMESERVER_NOTICE_JS}\n${SCRIPT}</script>`;
 }
 
-export const DNS_TARGETS: AddonTarget[] = [{
-  slug: "site-nameservers",
-  template: TEMPLATES.siteCertificates,
-  anchorBefore: '<div class="card card-table">',
-  // A panel release that changes this card costs the notice, not the addon.
-  required: false,
-  snippet: nameserversSnippet,
-}];
+export const DNS_TARGETS: AddonTarget[] = [
+  {
+    slug: "site-nameservers",
+    template: TEMPLATES.siteCertificates,
+    anchorBefore: '<div class="card card-table">',
+    // A panel release that changes this card costs the notice, not the addon.
+    required: false,
+    snippet: nameserversSnippet,
+  },
+  CUSTOM_DOMAIN_TARGET,
+];

@@ -19,6 +19,7 @@ import { STAGER_TARGETS } from "../addons/stager/inject/targets";
 import { WP_TOOLS_TARGETS } from "../addons/wp-tools/inject/targets";
 import { headerTarget, siteLayoutTarget } from "../lib/panel-nav";
 import { MAINTENANCE_TARGETS } from "../addons/maintenance/inject/targets";
+import { DNS_TARGETS } from "../addons/dns/inject/nameservers";
 import type { AddonTarget } from "../lib/addon-target";
 
 // Everything happens under temporary directories: this must not touch the
@@ -484,4 +485,54 @@ test("the site tab strip takes the one-row rule and both tabs, in a stable order
   // Removing the addons removes the rule that only existed for their tabs.
   reconcile([], paths);
   expect(read()).toBe(tabOriginal);
+});
+
+test("DNS custom domain helper anchors after the Custom Domain input group and sets zero name attributes", () => {
+  const target = DNS_TARGETS.find((candidate) => candidate.slug === "custom-domain-dns")!;
+  expect(target).toBeDefined();
+  expect(target.required).toBe(false);
+  expect(target.template).toBe("Admin/Settings/index.html.twig");
+
+  const adminSettingsOriginal = `        {{ form_start(customDomainForm) }}
+        <div class="card-body card-body-no-padding">
+          <div class="card-form">
+            <div class="row">
+              <div class="col-12 {{ (form_errors(customDomainForm.domainName) ? 'has-error' : '') }}">
+                {{ form_label(customDomainForm.domainName, null, {'label_attr': {'class': 'col-form-label'}}) }}
+                <div class="input-group">
+                  <span class="input-group-text">https://</span>
+                  {{ form_widget(customDomainForm.domainName) }}
+                </div>
+                <div class="form-text">{% trans %}A DNS record pointing to this server is required to issue a Let's Encrypt Certificate.{% endtrans %}</div>
+              </div>
+            </div>
+          </div>
+        </div>
+        {{ form_end(customDomainForm) }}
+`;
+  const { paths, read } = templates(target.template, adminSettingsOriginal);
+  const injection: Injection = { addon: "dns", target, url: "/addons/dns" };
+
+  expect(inspectTemplates([injection], paths)[0]!.state).toBe("missing-anchor");
+  reconcile([injection], paths);
+  const patched = read();
+  expect(inspectTemplates([injection], paths)[0]!.state).toBe("ok");
+  expect(patched.indexOf("{{ form_widget(customDomainForm.domainName) }}")).toBeLessThan(patched.indexOf("data-clp-dns-custom-domain"));
+  expect(patched.indexOf("data-clp-dns-custom-domain")).toBeLessThan(patched.indexOf("A DNS record pointing to this server"));
+
+  // Idempotent on repeated reconcile passes and restored verbatim on removal.
+  reconcile([injection], paths);
+  expect(read()).toBe(patched);
+  expect(count(patched, /<div class="clp-dns-cd" data-clp-dns-custom-domain/g)).toBe(1);
+
+  // Zero `name` attributes on injected HTML controls or created DOM elements so Symfony never rejects extra fields.
+  const snippet = target.snippet("/addons/dns");
+  const htmlOnly = snippet.replace(/<style[\s\S]*?<\/style>/g, "").replace(/<script[\s\S]*?<\/script>/g, "");
+  expect(htmlOnly).not.toMatch(/\bname\s*=/i);
+  const clientJs = readFileSync(new URL("../addons/dns/inject/custom-domain.client.js", import.meta.url), "utf8");
+  expect(clientJs).not.toMatch(/\.name\s*=/);
+  expect(clientJs).not.toMatch(/setAttribute\(\s*['"]name['"]/);
+
+  reconcile([], paths);
+  expect(read()).toBe(adminSettingsOriginal);
 });

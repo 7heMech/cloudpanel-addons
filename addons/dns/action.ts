@@ -55,7 +55,7 @@ import { panelUserUid } from "../../lib/sso-auth";
 type DnsVerb = keyof typeof DNS_VERBS;
 
 const VERBS = Object.keys(DNS_VERBS) as DnsVerb[];
-const NO_BODY: DnsVerb[] = ["list", "check", "find-redirects", "provision", "site-status", "reconcile", "sync-sites", "sync-panel-host"];
+const NO_BODY: DnsVerb[] = ["list", "panel-host-helper", "check", "find-redirects", "provision", "site-status", "reconcile", "sync-sites", "sync-panel-host"];
 const MAX_BODY = 256 * 1024;
 const REVIEW_LIFETIME = 15 * 60_000;
 /** How many writes the change log keeps, newest first; the page is sent the first PAGE_LOG of them. */
@@ -198,6 +198,15 @@ export interface Found {
 
 export type DnsReply = DnsState & { review?: Review; notice?: string; found?: Found };
 
+/** Local-only state for CloudPanel's Admin → Settings Custom Domain helper. */
+export interface PanelHostHelper {
+  connected: boolean;
+  automatic: boolean;
+  zones: string[];
+  panelHost: string | null;
+  serverIps: { ipv4: string | null; ipv6: string | null };
+}
+
 /** What a site's own pages may show anyone who can open them: its zone, and the nameservers it waits for. */
 export interface SiteDnsStatus {
   zone: string | null;
@@ -249,6 +258,8 @@ interface Pending {
   removal?: { domain: string; ids: string[] };
   /** A redirect domain whose rule the confirmation deletes. */
   redirect?: string;
+  /** Single-host unproxied panel hostname preparation (works in Ask first too without touching other sites). */
+  panelOnly?: true;
 }
 
 const emptyStatus = (): Status => ({ checkedAt: null, connections: [], plans: {}, backoff: { cloudflare: 0, mailcow: 0, powerdns: 0 } });
@@ -496,11 +507,13 @@ class Action {
     return custom?.name === policy.panelHost && custom.issued;
   }
 
-  run(policy: Policy, secrets = this.files.secrets()): DnsRun {
+  run(policy: Policy, secrets = this.files.secrets(), overrides?: { panelProxied?: boolean; panelOnly?: boolean }): DnsRun {
     const status = this.files.status();
     const run = new DnsRun({
       policy, secrets, sites: this.sites(), addresses: this.addresses(), fetch: this.options.fetch,
-      backoff: status.backoff, standIns: this.standIns(), panelProxied: this.panelProxied(policy),
+      backoff: status.backoff, standIns: this.standIns(),
+      panelProxied: overrides?.panelProxied ?? this.panelProxied(policy),
+      panelOnly: overrides?.panelOnly,
       tokens: Object.fromEntries(status.connections.filter((report) => report?.active).map((report) => [report.id, report.token])),
     });
     this.runs.push(run);
@@ -727,6 +740,23 @@ class Action {
     return {
       name, problem, plan: !problem && plan?.panel ? plan : null, customDomain: custom,
       proxied: supportsProxy && custom?.name === name && custom.issued,
+    };
+  }
+
+  /** From local state alone, so opening Admin → Settings never reaches Cloudflare or waits for the lock. */
+  panelHostHelper(): PanelHostHelper {
+    const policy = this.files.policy();
+    const status = this.files.status();
+    const detected = this.addresses();
+    return {
+      connected: policy.connections.length > 0,
+      automatic: policy.automatic,
+      zones: [...new Set(status.connections.flatMap((connection) => connection.zoneNames ?? []))].sort(),
+      panelHost: policy.panelHost,
+      serverIps: {
+        ipv4: policy.server.ipv4 || detected.ipv4 || null,
+        ipv6: policy.server.ipv6 || detected.ipv6 || null,
+      },
     };
   }
 
@@ -1077,6 +1107,43 @@ class Action {
     });
   }
 
+  /**
+   * Plans only the panel hostname's unproxied records for single-host
+   * confirmation, in both Automatic and Ask first modes, without touching
+   * other sites.
+   */
+  async preparePanelHost(before: Policy, next: Policy, name: string, notice?: string): Promise<DnsReply> {
+    const run = this.run(next, this.files.secrets(), { panelProxied: false, panelOnly: true });
+    await run.discover();
+    await run.load([name]);
+    const plans = run.planAll([name], true).filter((plan) => plan.domain === name);
+    const plan = plans[0];
+    const blocked = !plan || plans.some((candidate) => candidate.problems.length > 0);
+    const token = blocked ? "" : randomBytes(24).toString("hex");
+    this.files.savePending(blocked ? null : {
+      token, expiresAt: this.now + REVIEW_LIFETIME, base: hash(before), digest: this.digest(plans),
+      domains: [name], policy: next, panelOnly: true,
+    });
+    const changes = plans.reduce((count, candidate) => count + candidate.changes.filter((change) => change.action !== "note").length, 0);
+    const text = blocked
+      ? "DNS cannot prepare this hostname while the problem below remains."
+      : changes === 0
+        ? `${name} already matches${plan?.wildcard ? ` (covered by ${plan.wildcard})` : ""}. Save it as the panel hostname and continue.`
+        : `${changes} change${changes === 1 ? "" : "s"} will be written for ${name} (DNS only) before CloudPanel requests the certificate.${before.automatic ? " Once CloudPanel has its certificate, DNS proxies it through Cloudflare." : " DNS stays in Ask first mode, and no other sites are changed."}`;
+    return this.reply({
+      notice,
+      review: {
+        token,
+        title: blocked ? "Resolve these first" : `Prepare DNS for ${name}`,
+        text,
+        sites: plans,
+        blocked,
+        confirmLabel: changes === 0 ? "Continue" : "Write DNS and save",
+        danger: plans.some((candidate) => candidate.changes.some((change) => change.action === "delete")),
+      },
+    });
+  }
+
   async confirm(token: unknown): Promise<DnsReply> {
     const pending = this.files.pending();
     const current = this.files.policy();
@@ -1087,20 +1154,26 @@ class Action {
     if (pending.removal) return this.confirmRemoval(pending);
     if (pending.redirect) return this.confirmRedirectDeletion(pending);
     const next = parsePolicy(pending.policy);
-    const run = this.run(next, this.secretsWith(pending.mailcowKey));
+    const panelOnly = pending.panelOnly === true;
+    const run = this.run(next, this.secretsWith(pending.mailcowKey), panelOnly ? { panelProxied: false, panelOnly: true } : undefined);
     await run.discover();
     await run.load(pending.domains);
-    const plans = run.planAll(pending.domains).filter((plan) => pending.domains.includes(plan.domain));
+    const plans = run.planAll(pending.domains, panelOnly).filter((plan) => pending.domains.includes(plan.domain));
     if (this.digest(plans) !== pending.digest) {
+      if (panelOnly) return this.preparePanelHost(current, next, pending.domains[0]!, `${providerLabelFor(next)} changed after the plan was shown. This is the plan now.`);
       return this.review(current, next, pending.domains, `${providerLabelFor(next)} or Mailcow changed after the plan was shown. This is the plan now.`, pending.mailcowKey);
     }
     this.savePolicy(next);
     if (pending.mailcowKey !== undefined) this.files.saveSecrets(this.secretsWith(pending.mailcowKey));
     this.files.savePending(null);
-    this.cause = "Confirmed review";
+    this.cause = panelOnly ? "Panel hostname" : "Confirmed review";
     await run.enforce(pending.domains);
     await this.record(run, run.planAll(pending.domains, true), pending.domains);
-    return this.reply({ notice: `Applied to ${pending.domains.length} site${pending.domains.length === 1 ? "" : "s"}.${current.automatic ? "" : " DNS is Automatic."}` });
+    return this.reply({
+      notice: panelOnly
+        ? `DNS prepared ${pending.domains[0]}.`
+        : `Applied to ${pending.domains.length} site${pending.domains.length === 1 ? "" : "s"}.${current.automatic ? "" : " DNS is Automatic."}`,
+    });
   }
 
   /** The tracked records of a site CloudPanel no longer has, that are unchanged and no current site writes. */
@@ -1738,12 +1811,15 @@ async function changeVerb(action: Action, verb: DnsVerb, body: Record<string, un
     return action.change(next, `${zone} is managed through the chosen connection.`, inZone);
   }
   if (verb === "set-panel-host") {
+    const prepareOnly = body.prepareOnly === true;
     const name = body.name == null || body.name === "" ? null : hostname(body.name, "The panel hostname");
+    if (prepareOnly && !name) failAction("Enter the panel hostname");
     if (name && !policy.connections.length && !(policy.powerdns?.length ?? 0)) failAction("Add a DNS connection first");
     if (name && action.sites().some((site) => site.domain === name)) failAction(`${name} is a CloudPanel site; choose another name for the panel`);
     if (name && policy.redirects.some((redirect) => redirect.source === name)) failAction(`${name} is a redirect domain; choose another name for the panel`);
     next.panelHost = name;
     if (!name) return action.removePanelHost(next);
+    if (prepareOnly) return action.preparePanelHost(policy, next, name);
     const notice = next.automatic
       ? `DNS points ${name} at this server.`
       : `Saved ${name}. Turn on Automatic when you are ready for DNS to write the record.`;
@@ -1787,6 +1863,7 @@ export async function executeDnsAction(argv: string[], options: DnsActionOptions
   const body = NO_BODY.includes(verb) ? {} : await bodyOf(options);
   const action = new Action(paths, options);
   if (verb === "list") return action.state();
+  if (verb === "panel-host-helper") return action.panelHostHelper();
 
   if (provision?.asUser) {
     const owns = withPanelDb(paths.panelDb, (db) => panelUserOwnsSite(db, provision.asUser!, provision.domain));

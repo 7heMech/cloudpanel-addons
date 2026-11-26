@@ -166,6 +166,8 @@ export interface RunContext {
   panelProxied?: boolean;
   /** Each connection's token as the last check read it, for a run that does not read it again. */
   tokens?: Record<string, TokenAccess | undefined>;
+  /** Plan and enforce only the panel hostname without touching other sites or their zone settings (works in Ask first too). */
+  panelOnly?: boolean;
 }
 
 export const PANEL_PROFILE_ID = "panel-hostname";
@@ -437,6 +439,7 @@ export class DnsRun {
     if (withHeld && this.profilesByZone) return this.profilesByZone;
     const byZone = new Map<string, Profile[]>();
     for (const site of this.entries) {
+      if (this.context.panelOnly && !site.panel) continue;
       const profile = this.profileOf(site.domain);
       if (!profile || (!withHeld && this.held.has(site.domain))) continue;
       if (site.redirect && this.onServer()) continue;
@@ -684,7 +687,9 @@ export class DnsRun {
     const { redirect } = site;
     const profile = this.profileOf(site.domain);
     const plan: SitePlan = {
-      domain: site.domain, profileId: profile?.id ?? null, mode: this.context.policy.automatic ? "enforce" : "report", zone: null,
+      domain: site.domain, profileId: profile?.id ?? null,
+      mode: this.context.policy.automatic || (site.panel && this.context.panelOnly) ? "enforce" : "report",
+      zone: null,
       changes: [], problems: [], zoneChoices: [], certificateNames: [], ...redirect && { redirect: true as const },
       ...site.panel && { panel: true as const },
     };
@@ -1354,7 +1359,7 @@ export class DnsRun {
     const result: Record<string, ManagedRecords> = {};
     for (const plan of plans) {
       const diff = this.diffs.get(plan.domain);
-      if (!this.context.policy.automatic || plan.redirect || !plan.zone || !diff || !diff.matched.length) continue;
+      if ((!this.context.policy.automatic && !(plan.panel && this.context.panelOnly)) || plan.redirect || !plan.zone || !diff || !diff.matched.length) continue;
       const state = this.zones.get(zoneMapKey(plan.zone.connectionId ?? "", plan.zone.id))!;
       result[plan.domain] = {
         zoneId: plan.zone.id,
