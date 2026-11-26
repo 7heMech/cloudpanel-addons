@@ -378,6 +378,37 @@ it. The state is recorded only once Cloudflare holds the plan, so a write that
 failed is tried again, and a site or redirect domain with the name keeps the
 watcher from waiting on DNS's lock. Under Ask first nothing is written.
 
+### Custom Domain helper on Admin Settings
+
+DNS also injects a `custom-domain-dns` helper (`addons/dns/inject/custom-domain.ts`,
+`required: false`) after the Custom Domain input group in
+`Admin/Settings/index.html.twig`. None of its controls carry a `name` attribute,
+so Symfony never rejects extra form fields. On page load the script warms the
+CSRF cookie via `GET /addons/dns/api/session` and reads
+`GET /addons/dns/api/panel-host-helper` (admin verb `panel-host-helper`), which
+answers from local state alone (`connected`, `automatic`, `zones`, `panelHost`,
+and `serverIps`) with no DNS lock and no Cloudflare call. When no Cloudflare
+connection exists, the script renders nothing.
+
+When a connection exists, the helper adds a `Random` button beside the Custom
+Domain field, attaches a `<datalist>` of connected zones, and adds an inline
+checkbox ("Write unproxied DNS record before saving") that auto-checks when the
+entered hostname belongs to a connected zone and unchecks with a note otherwise.
+Submitting CloudPanel's form with the checkbox ticked sends
+`POST /addons/dns/api/panel-host` with `{ name, prepareOnly: true }`, which
+plans only the panel hostname's unproxied `A`/`AAAA` records and ACME rule
+against live Cloudflare records in both Automatic and Ask first modes without
+touching other sites or other profiles' zone settings. A confirmation `<dialog>`
+shows the planned changes or problems; confirming sends
+`POST /addons/dns/api/confirm`, writes only the panel hostname while leaving
+`policy.automatic` unchanged, and returns the updated panel plan including
+`zone.status` and `zone.nameServers`. If `zone.status` is not `"active"`, the
+helper stops before submitting CloudPanel's form and renders
+`lib/nameserver-notice.ts` with per-nameserver copy buttons. When the zone is
+active (either with the written unproxied records or covered by an unobstructed
+unproxied wildcard), the helper submits CloudPanel's native form once, bypassing
+its own submit listener.
+
 ## Cloudflare connections
 
 Cloudflare connections are shared across DNS and Firewall in the root-owned

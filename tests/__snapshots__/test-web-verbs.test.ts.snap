@@ -10,6 +10,7 @@ dns:delete-redirect                admin
 dns:find-redirects                 admin
 dns:forget-records                 admin
 dns:list                           admin
+dns:panel-host-helper              admin
 dns:provision                      panel-user
 dns:remove-connection              admin
 dns:remove-mailcow                 admin

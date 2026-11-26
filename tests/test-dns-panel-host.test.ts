@@ -2,7 +2,7 @@ import { afterEach, describe, expect, test } from "bun:test";
 import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { executeDnsAction, type DnsReply } from "../addons/dns/action";
+import { executeDnsAction, type DnsReply, type PanelHostHelper } from "../addons/dns/action";
 import { DNS_ADDON } from "../addons/dns/addon";
 import { DnsRun, PANEL_PROFILE_ID, panelProfile, type PanelSite } from "../addons/dns/engine";
 import { parsePolicy } from "../addons/dns/model";
@@ -270,6 +270,127 @@ describe("the panel hostname", () => {
     expect(dnsPanelBase("a..b", "")).toBe("");
     expect(makeHelpers({ zones: ["only.example"], panelHost: null }).dnsPanelBase("", "")).toBe("only.example");
     expect(makeHelpers({ zones: ["a.example", "b.example"], panelHost: null }).dnsPanelBase("", "")).toBe("");
+  });
+
+  test("panel-host-helper answers from local state alone without calling Cloudflare", async () => {
+    const env = setup();
+    const before = await env.act<PanelHostHelper>("panel-host-helper");
+    expect(before).toEqual({
+      connected: false,
+      automatic: false,
+      zones: [],
+      panelHost: null,
+      serverIps: { ipv4: "203.0.113.10", ipv6: "2001:db8::10" },
+    });
+    expect(env.cf.calls.length).toBe(0);
+
+    await env.act("save-connection", { token: TOKEN });
+    await env.act("save-server", { ipv4: "198.51.100.7", ipv6: "" });
+    await env.act("set-panel-host", { name: "panel.example.com" });
+    const callsBeforeHelper = env.cf.calls.length;
+    const after = await env.act<PanelHostHelper>("panel-host-helper");
+    expect(after).toEqual({
+      connected: true,
+      automatic: false,
+      zones: ["example.com"],
+      panelHost: "panel.example.com",
+      serverIps: { ipv4: "198.51.100.7", ipv6: "2001:db8::10" },
+    });
+    expect(env.cf.calls.length).toBe(callsBeforeHelper);
+  });
+
+  test("prepareOnly confirms and writes only the panel hostname unproxied in Ask first mode without touching other sites", async () => {
+    const env = setup();
+    await env.act("save-connection", { token: TOKEN });
+    // Assign another site in the same zone to the Web profile (which wants ssl: strict, alwaysHttps: true, and its own A/AAAA records).
+    const initial = await env.act("list");
+    const webId = initial.profiles.find((p) => p.name === "Web")!.id;
+    await env.act("assign", { domains: ["shop.example.com"], profileId: webId });
+    expect(env.cf.writes()).toEqual([]);
+
+    const prepared = await env.act("set-panel-host", { name: "panel.example.com", prepareOnly: true });
+    expect(prepared.automatic).toBe(false);
+    expect(prepared.review).toBeDefined();
+    expect(prepared.review!.blocked).toBe(false);
+    expect(prepared.review!.sites).toHaveLength(1);
+    const plan = prepared.review!.sites[0]!;
+    expect(plan.domain).toBe("panel.example.com");
+    expect(plan.zone).toMatchObject({ name: "example.com", status: "active", nameServers: ["ada.ns.cloudflare.com", "bob.ns.cloudflare.com"] });
+    expect(plan.changes.map((c) => c.subject).sort()).toEqual(["A panel.example.com", "AAAA panel.example.com", "Cloudflare rule, whole zone"]);
+    expect(env.cf.writes()).toEqual([]);
+
+    const confirmed = await env.act("confirm", { token: prepared.review!.token });
+    expect(confirmed.automatic).toBe(false);
+    expect(confirmed.panelHost).toMatchObject({ name: "panel.example.com", problem: null, proxied: false });
+    expect(confirmed.panelHost!.plan!.zone).toMatchObject({ name: "example.com", status: "active", nameServers: ["ada.ns.cloudflare.com", "bob.ns.cloudflare.com"] });
+    expect(confirmed.panelHost!.plan!.problems).toEqual([]);
+    expect(confirmed.panelHost!.plan!.changes).toEqual([]);
+    // Only panel.example.com records (unproxied) were written; shop.example.com and whole-zone ssl/alwaysHttps were untouched.
+    expect(env.records()).toEqual(["A panel.example.com 203.0.113.10", "AAAA panel.example.com 2001:db8::10"]);
+    const zone = env.cf.zones[0]!;
+    expect(env.cf.settings.has(`${zone.id}:ssl`)).toBe(false);
+    expect(env.cf.settings.has(`${zone.id}:always_use_https`)).toBe(false);
+    expect(confirmed.sites.find((s) => s.domain === "shop.example.com")!.plan).not.toBeNull();
+  });
+
+  test("prepareOnly works in Automatic mode, forces unproxied records, and handles unobstructed unproxied wildcards", async () => {
+    const env = setup();
+    await env.automatic();
+    // Even if CloudPanel already reports an issued certificate for the same name, prepareOnly plans unproxied records.
+    env.custom.current = { name: "panel.example.com", issued: true };
+    const prepared = await env.act("set-panel-host", { name: "panel.example.com", prepareOnly: true });
+    expect(prepared.review).toBeDefined();
+    expect(prepared.review!.sites).toHaveLength(1);
+    const confirmed = await env.act("confirm", { token: prepared.review!.token });
+    expect(confirmed.automatic).toBe(true);
+    expect(env.records()).toEqual(["A panel.example.com 203.0.113.10", "AAAA panel.example.com 2001:db8::10"]);
+
+    // An unobstructed unproxied wildcard covers a new panel hostname with no A/AAAA creates.
+    env.cf.record("example.com", { type: "A", name: "*.example.com", content: "203.0.113.10", proxied: false });
+    env.cf.record("example.com", { type: "AAAA", name: "*.example.com", content: "2001:db8::10", proxied: false });
+    const wildPrepared = await env.act("set-panel-host", { name: "k7m2p9x4.example.com", prepareOnly: true });
+    expect(wildPrepared.review!.blocked).toBe(false);
+    expect(wildPrepared.review!.sites[0]!.wildcard).toBe("*.example.com");
+    expect(wildPrepared.review!.sites[0]!.changes).toEqual([]);
+    const wildConfirmed = await env.act("confirm", { token: wildPrepared.review!.token });
+    expect(wildConfirmed.panelHost!.plan!.wildcard).toBe("*.example.com");
+    expect(wildConfirmed.panelHost!.plan!.zone!.status).toBe("active");
+    expect(env.records().filter((r) => r.includes("k7m2p9x4.example.com"))).toEqual([]);
+  });
+
+  test("prepareOnly returns pending zone status and nameservers when the zone is not active", async () => {
+    const env = setup();
+    env.cf.zones[0]!.status = "pending";
+    await env.act("save-connection", { token: TOKEN });
+
+    const prepared = await env.act("set-panel-host", { name: "panel.example.com", prepareOnly: true });
+    expect(prepared.review!.sites[0]!.zone).toMatchObject({
+      name: "example.com",
+      status: "pending",
+      nameServers: ["ada.ns.cloudflare.com", "bob.ns.cloudflare.com"],
+    });
+    const confirmed = await env.act("confirm", { token: prepared.review!.token });
+    expect(confirmed.panelHost!.plan!.zone).toMatchObject({
+      name: "example.com",
+      status: "pending",
+      nameServers: ["ada.ns.cloudflare.com", "bob.ns.cloudflare.com"],
+    });
+    expect(env.records()).toEqual(["A panel.example.com 203.0.113.10", "AAAA panel.example.com 2001:db8::10"]);
+  });
+
+  test("prepareOnly refuses an empty name and re-reviews when Cloudflare changes before confirmation", async () => {
+    const env = setup();
+    await env.act("save-connection", { token: TOKEN });
+    await expect(env.act("set-panel-host", { name: "", prepareOnly: true })).rejects.toThrow("Enter the panel hostname");
+
+    const prepared = await env.act("set-panel-host", { name: "panel.example.com", prepareOnly: true });
+    // Drift in Cloudflare between preview and confirm triggers a fresh single-host review.
+    env.cf.record("example.com", { type: "A", name: "panel.example.com", content: "198.51.100.9", proxied: false });
+    const drift = await env.act("confirm", { token: prepared.review!.token });
+    expect(drift.review).toBeDefined();
+    expect(drift.notice).toContain("Cloudflare changed");
+    expect(drift.review!.sites).toHaveLength(1);
+    expect(drift.review!.sites[0]!.changes.some((c) => c.action === "update" && c.subject === "A panel.example.com")).toBe(true);
   });
 });
 

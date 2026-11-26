@@ -15,6 +15,7 @@ export const DNS_VERBS = {
   "save-mailcow": { web: "admin" },
   "remove-mailcow": { web: "admin" },
   "save-server": { web: "admin" },
+  "panel-host-helper": { web: "admin" },
   "set-panel-host": { web: "admin" },
   "remove-records": { web: "admin" },
   "forget-records": { web: "admin" },

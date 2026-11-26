@@ -62,6 +62,10 @@ export async function handle(
     const result = await dnsService.siteStatus(domain, auth.roles.includes("ROLE_ADMIN") ? undefined : auth.user);
     return jsonResponse(result, { status: result.ok ? 200 : 400 });
   }
+  if (req.method === "GET" && path === "/api/panel-host-helper") {
+    const result = await dnsService.panelHostHelper();
+    return jsonResponse(result, { status: result.ok ? 200 : 400 });
+  }
   if (req.method === "GET" && path === "/") {
     const csrf = newCsrfToken();
     const result = await dnsService.state();

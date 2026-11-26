@@ -122,19 +122,28 @@ redirect, delete it in CloudPanel first.
 ## Panel hostname
 
 To reach CloudPanel at a name that is not easy to guess, such as
-`k7m2p9x4.example.com`, connect Cloudflare or PowerDNS first and then:
+`k7m2p9x4.example.com`, connect Cloudflare or PowerDNS first. You can set it up
+directly from CloudPanel's **Admin → Settings → Custom Domain** card or from
+DNS's **Settings** tab:
 
-1. Under **Settings**, **Panel hostname**, enter a name, choose **Random** to
-   generate an eight-character label on one of your connected zones, or adopt
-   CloudPanel's existing custom domain, and save. DNS points it at this server
-   unproxied.
-2. Enter the same name in CloudPanel under **Admin → Settings → Custom Domain**.
-   CloudPanel gets its Let's Encrypt certificate straight from this server.
-3. On Cloudflare zones, seconds after the certificate is issued, DNS proxies the
-   name through Cloudflare, or deletes the temporary records if a proxied
-   wildcard in the zone already covers it. On PowerDNS zones, the hostname stays
-   unproxied and hands off immediately when an unobstructed unproxied wildcard
-   already matches.
+1. Under **Admin → Settings → Custom Domain**, enter a hostname in a connected
+   zone or choose **Random** to generate an eight-character label. Leave the DNS
+   preparation checkbox checked and save.
+2. Review the planned DNS changes in the confirmation dialog and confirm. If the
+   zone is pending or was just created, CloudPanel's form stops and shows the
+   nameservers with copy buttons so you can set them at your registrar, then
+   save the form again once the zone is active. Once active, DNS writes the
+   record (unproxied on Cloudflare until the certificate is issued, or an
+   unobstructed unproxied wildcard) and CloudPanel saves the custom domain and
+   requests its Let's Encrypt certificate.
+3. On Cloudflare zones, seconds after the certificate is issued (when Automatic
+   is on), DNS proxies the name through Cloudflare, or deletes the temporary
+   records if a proxied wildcard in the zone already covers it. On PowerDNS
+   zones, the hostname stays unproxied and hands off immediately when an
+   unobstructed unproxied wildcard already matches.
+
+You can also manage or remove the panel hostname under DNS's **Settings → Panel
+hostname**, or adopt an existing CloudPanel custom domain there.
 
 Let's Encrypt publishes issued certificate names in public Certificate
 Transparency logs, so a random name avoids casual guessing rather than hiding
