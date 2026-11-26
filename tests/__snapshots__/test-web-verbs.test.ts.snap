@@ -100,6 +100,7 @@ manager:reconcile                  admin
 manager:setup                      admin
 manager:setup-pref                 admin
 manager:update                     admin
+manager:usage-sharing              admin
 manager:watch-job                  admin stream
 panel-tweaks:branding              admin
 panel-tweaks:branding-asset        pre-gate

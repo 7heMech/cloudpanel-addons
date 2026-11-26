@@ -145,7 +145,7 @@ export async function cmdMenu(): Promise<void> {
       if (state.wanted.has(name) && !state.enabled.has(name)) await applyEnable(name);
     }
     for (const name of state.names) {
-      if (!state.wanted.has(name) && state.enabled.has(name)) applyDisable(name);
+      if (!state.wanted.has(name) && state.enabled.has(name)) await applyDisable(name);
     }
   });
 

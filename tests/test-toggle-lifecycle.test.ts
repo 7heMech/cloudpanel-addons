@@ -145,7 +145,7 @@ let error;
 try {
   for (const step of JSON.parse(process.env.CLP_TEST_STEPS)) {
     if (step.verb === "enable") await cli.applyEnable(step.addon, process.env.CLP_TEST_ARCH || undefined);
-    else if (step.verb === "disable") cli.applyDisable(step.addon);
+    else if (step.verb === "disable") await cli.applyDisable(step.addon);
     else if (step.verb === "uninstall") (await import("./cli/uninstall.ts")).cmdSelfUninstall(["--yes"]);
     // A between-steps nudge, so a test can spoil a unit file the way something
     // outside this binary would and watch the next toggle put it back.

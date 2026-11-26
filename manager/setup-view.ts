@@ -369,6 +369,31 @@ function guidesHtml(view: SetupView, stepIds: Set<string>): string {
   </section>`;
 }
 
+type UsageSharing = NonNullable<SetupView["usageSharing"]>;
+
+/** Asked once, above everything else, until root answers. */
+function usageShareAskHtml(sharing: UsageSharing | undefined): string {
+  if (!sharing || sharing.answered) return "";
+  return `<section class="card setup-share" aria-labelledby="setup-share-heading">
+    <h2 id="setup-share-heading">Help prioritize what gets maintained</h2>
+    <p>Once a week, this server can send exactly what is shown below; nothing is sent until you save.</p>
+    <pre class="setup-share-payload">${esc(JSON.stringify(sharing.payload, null, 2))}</pre>
+    <form class="setup-share-form" onsubmit="setupSaveUsageSharing(event)">
+      <label class="setup-share-check"><input type="checkbox" name="enabled" checked> Share enabled addons</label>
+      <button class="btn btn-primary" type="submit">Save</button>
+    </form>
+  </section>`;
+}
+
+function usageShareLineHtml(sharing: UsageSharing | undefined): string {
+  if (!sharing?.answered) return "";
+  return `<div class="setup-share-line">
+    <label class="switch"><input type="checkbox" aria-label="Share enabled addons"${sharing.enabled ? " checked" : ""} onchange="setupToggleUsageSharing(this)"><span></span></label>
+    <span>Share enabled addons once a week</span>
+    <details><summary>What is sent</summary><pre class="setup-share-payload">${esc(JSON.stringify(sharing.payload, null, 2))}</pre></details>
+  </div>`;
+}
+
 /**
  * Full Setup workspace rendered on /addons/setup and refreshed in place from
  * /addons/api/setup. Keeps the same exported name (`setupPanelHtml`) for tests
@@ -388,7 +413,9 @@ export function setupPanelHtml(view: SetupView): string {
 
   if (view.hidden && view.actions.length) {
     return `${script}<div class="page-heading"><div><h1>Setup</h1><p>Something needs your attention.</p></div><div class="page-actions"><button class="btn" type="button" data-setup-refresh>Check again</button><button class="btn" type="button" data-setup-show>Show suggestions</button></div></div>
-    <section class="setup-sheet" aria-label="Action needed">${actionBandHtml(view.actions)}</section>`;
+    ${usageShareAskHtml(view.usageSharing)}
+    <section class="setup-sheet" aria-label="Action needed">${actionBandHtml(view.actions)}</section>
+    ${usageShareLineHtml(view.usageSharing)}`;
   }
 
   const levelKeys = Object.keys(SETUP_LEVELS) as SetupLevel[];
@@ -492,10 +519,12 @@ export function setupPanelHtml(view: SetupView): string {
       : "";
 
   return `${script}<div class="page-heading"><div><h1>Setup</h1><p>${esc(lead)}</p>${legendHtml}</div><div class="page-actions"><button class="btn" type="button" data-setup-refresh>Check again</button>${toggleHeader}</div></div>
+${usageShareAskHtml(view.usageSharing)}
 <section class="setup-sheet" data-setup-workspace data-initial-path="${esc(initialPath)}" data-initial-step="${esc(initialStep)}" aria-label="Setup paths">
   ${actionBandHtml(view.actions)}
   ${sheetBody}
 </section>
 <p class="sr-only" role="status" aria-live="polite" id="setup-announce"></p>
-${guidesHtml(view, stepIds)}`;
+${guidesHtml(view, stepIds)}
+${usageShareLineHtml(view.usageSharing)}`;
 }

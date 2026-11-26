@@ -82,6 +82,15 @@ export async function handleManagerRoute(
     return jsonResponse(result, result.ok ? 200 : 400);
   }
 
+  if (path === "/api/usage-sharing" && req.method === "POST") {
+    const denied = guardMutation(req);
+    if (denied) return denied;
+    const body = await req.json().catch(() => null) as Record<string, unknown> | null;
+    if (typeof body?.enabled !== "boolean") return jsonResponse({ ok: false, error: "expected enabled" }, 400);
+    const result = await managerAction("usage-sharing", [`--enabled=${body.enabled}`]);
+    return jsonResponse(result, result.ok ? 200 : 400);
+  }
+
   if (path === "/api/update" && req.method === "GET") {
     return jsonResponse({ ok: true, data: update });
   }

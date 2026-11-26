@@ -516,6 +516,46 @@ async function setupRunInline(target) {
   }
 }
 
+async function setupPostUsageSharing(enabled) {
+  const response = await fetch('/addons/api/usage-sharing', {
+    method: 'POST',
+    credentials: 'same-origin',
+    headers: { Accept: 'application/json', 'Content-Type': 'application/json', 'X-CLP-Addons-CSRF': csrf() },
+    body: JSON.stringify({ enabled: enabled }),
+  });
+  let reply = null;
+  try { reply = await response.json(); } catch (error) {}
+  if (!response.ok || !reply || !reply.ok) throw new Error((reply && reply.error) || 'request failed with ' + response.status);
+}
+
+async function setupSaveUsageSharing(event) {
+  event.preventDefault();
+  const form = event.currentTarget;
+  const button = form.querySelector('button[type="submit"]');
+  const enabled = form.elements.namedItem('enabled').checked;
+  if (button) button.disabled = true;
+  try {
+    await setupPostUsageSharing(enabled);
+    notify(enabled ? 'Sharing enabled addons once a week.' : 'Nothing will be shared.', 'ok');
+    await setupRefresh(null, false);
+  } catch (error) {
+    if (button) button.disabled = false;
+    notify(error.message, 'error');
+  }
+}
+
+async function setupToggleUsageSharing(input) {
+  input.disabled = true;
+  try {
+    await setupPostUsageSharing(input.checked);
+    notify(input.checked ? 'Sharing enabled addons once a week.' : 'Usage sharing is off.', 'ok');
+  } catch (error) {
+    input.checked = !input.checked;
+    notify(error.message, 'error');
+  }
+  input.disabled = false;
+}
+
 async function setupEnableAddon(addon, target) {
   target.disabled = true;
   try {
