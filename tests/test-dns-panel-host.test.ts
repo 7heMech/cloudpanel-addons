@@ -127,9 +127,9 @@ describe("the panel hostname", () => {
     expect(env.cf.writes()).toEqual([]);
   });
 
-  test("is refused before Cloudflare is connected", async () => {
+  test("is refused before any DNS provider is connected", async () => {
     const env = setup();
-    await expect(env.act("set-panel-host", { name: "panel.example.com" })).rejects.toThrow("Add a Cloudflare connection first");
+    await expect(env.act("set-panel-host", { name: "panel.example.com" })).rejects.toThrow("Add a DNS connection first");
   });
 
   test("is refused for a name a site or redirect domain has", async () => {

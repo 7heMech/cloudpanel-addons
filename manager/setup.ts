@@ -124,14 +124,17 @@ function readSetupContext(): SetupContext {
     const raw = readState<unknown>(`${dir}/policy.json`, 0, () => null);
     if (raw !== null) {
       const policy = parsePolicy(raw);
-      if (!sharedCf && !dnsConnected) {
+      if (!dnsConnected) {
         const secrets = parseSecrets(readState(`${dir}/secrets.json`, 0, () => ({})));
-        dnsConnected = policy.connections.some((connection) => Boolean(secrets.cloudflare[connection.id]));
+        dnsConnected = (!sharedCf && policy.connections.some((connection) => Boolean(secrets.cloudflare[connection.id])))
+          || (policy.powerdns ?? []).some((connection) => Boolean(secrets.powerdns?.[connection.id]));
       }
-      if (!sharedCf && !dnsZones.length) {
-        const status = readState<{ connections?: { zoneNames?: string[] }[] }>(`${dir}/status.json`, 0, () => ({}));
-        dnsZones = [...new Set((status.connections ?? []).flatMap((connection) => connection?.zoneNames ?? []))].sort();
-      }
+      const status = readState<{ connections?: ({ id?: string; zoneNames?: string[] } | null)[] }>(`${dir}/status.json`, 0, () => ({}));
+      const pdnsIds = new Set((policy.powerdns ?? []).map((connection) => connection.id));
+      const statusZones = (status.connections ?? [])
+        .filter((connection) => Boolean(connection) && (!sharedCf || (typeof connection?.id === "string" && pdnsIds.has(connection.id))))
+        .flatMap((connection) => connection?.zoneNames ?? []);
+      if (statusZones.length) dnsZones = [...new Set([...dnsZones, ...statusZones])].sort();
       dnsAutomatic = policy.automatic;
       dnsPanelHost = policy.panelHost;
       overrideIpv4 = policy.server.ipv4.trim();
