@@ -2057,7 +2057,8 @@ const setupPreviewPrefs: {
   skipped: Set<string>;
   hidden: boolean | null;
   usageSharing: { answered: boolean; enabled: boolean } | null;
-} = { skipped: new Set<string>(["updates"]), hidden: null, usageSharing: null };
+  usageSharingParam: string | null;
+} = { skipped: new Set<string>(["updates"]), hidden: null, usageSharing: null, usageSharingParam: null };
 
 /**
  * ?setup=fresh shows an unconfigured server with prerequisites blocking later steps,
@@ -2067,21 +2068,26 @@ const setupPreviewPrefs: {
  * suggestion done, ?action=hidden with Setup hidden. ?share=ask|on|off picks the
  * usage-sharing state (unanswered by default on fresh/default, answered on done).
  */
-function setupPreviewView(page: URLSearchParams): SetupView {
+function setupPreviewView(page: URLSearchParams, trackShareParam = true): SetupView {
   const action = page.get("action");
   const scenario = action === "only" ? "done" : page.get("setup");
   const fresh = scenario === "fresh" || scenario === "tunnel";
   const enabledAddons = previewEnabled ?? ["system-tweaks", "firewall", "dns", "panel-tweaks", "resource-limits", "smtp", "wp-tools"];
   const shareParam = page.get("share");
-  const shareState = shareParam === "ask"
+  if (trackShareParam && shareParam !== setupPreviewPrefs.usageSharingParam) {
+    setupPreviewPrefs.usageSharingParam = shareParam;
+    setupPreviewPrefs.usageSharing = null;
+  }
+  const initialShare = shareParam === "ask"
     ? { answered: false, enabled: false }
     : shareParam === "on"
       ? { answered: true, enabled: true }
       : shareParam === "off"
         ? { answered: true, enabled: false }
-        : setupPreviewPrefs.usageSharing ?? (scenario === "done"
+        : scenario === "done"
           ? { answered: true, enabled: true }
-          : { answered: false, enabled: false });
+          : { answered: false, enabled: false };
+  const shareState = setupPreviewPrefs.usageSharing ?? initialShare;
   const usageSharing = {
     ...shareState,
     payload: {
@@ -2137,8 +2143,9 @@ async function setupPreview(req: Request, url: URL): Promise<Response | null> {
   if (url.pathname === "/addons/api/usage-sharing" && req.method === "POST") {
     const body = await req.json().catch(() => null) as Record<string, unknown> | null;
     if (typeof body?.enabled !== "boolean") return Response.json({ ok: false, error: "expected enabled" }, { status: 400 });
-    setupPreviewPrefs.usageSharing = { answered: true, enabled: body.enabled };
     const page = new URL(req.headers.get("referer") ?? url.href).searchParams;
+    setupPreviewPrefs.usageSharingParam = page.get("share");
+    setupPreviewPrefs.usageSharing = { answered: true, enabled: body.enabled };
     const view = setupPreviewView(page);
     return Response.json({ ok: true, data: { ...setupPreviewPrefs.usageSharing, lastSentAt: null, payload: view.usageSharing?.payload } });
   }
@@ -2150,8 +2157,8 @@ async function setupPreview(req: Request, url: URL): Promise<Response | null> {
     if (typeof body.hidden === "boolean") setupPreviewPrefs.hidden = body.hidden;
   }
   const page = new URL(req.headers.get("referer") ?? url.href).searchParams;
-  const view = setupPreviewView(page);
   const headerOnly = req.method === "GET" && url.searchParams.get("header") === "1";
+  const view = setupPreviewView(page, !headerOnly);
   return Response.json({
     ok: true,
     data: {

@@ -2,7 +2,7 @@
 // minutes and refreshed by one call at a time.
 
 import { DEV_VERSION } from "./version";
-import { compareSemver, isPrerelease, newestRelease } from "./semver";
+import { compareSemver, isPrerelease, newestRelease, VERSION_TAG_RE } from "./semver";
 
 export interface CliUpdateInfo {
   current: string;
@@ -34,6 +34,7 @@ function isWorkerRelease(value: unknown): value is WorkerRelease {
   if (!value || typeof value !== "object") return false;
   const entry = value as Record<string, unknown>;
   return typeof entry.tag_name === "string"
+    && VERSION_TAG_RE.test(entry.tag_name)
     && typeof entry.draft === "boolean"
     && typeof entry.prerelease === "boolean";
 }

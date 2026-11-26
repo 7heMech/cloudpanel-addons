@@ -4,13 +4,21 @@ import { createHash } from "node:crypto";
 import { accessSync, constants } from "node:fs";
 import { dirname } from "node:path";
 import { panelVersion, upstreamVersion } from "./cloudpanel-version";
-import { addonStateDir } from "./paths";
+import { withFileLock, withFileLockSync } from "./file-lock";
+import { addonStateDir, LOCK_DIR } from "./paths";
 import { readState, writeState } from "./root-state";
 import { CLI_VERSION } from "./version";
 
 export const USAGE_SHARING_FILE = `${addonStateDir("manager")}/usage-sharing.json`;
+export const USAGE_SHARING_LOCK = `${LOCK_DIR}/usage-sharing.lock`;
 export const USAGE_URL = "https://clp.7he.dev/usage";
 const SEND_TIMEOUT_MS = 3000;
+const LOCK_WAIT_S = 15;
+const LOCK_BUSY = "another usage-sharing update is still running";
+
+function lockFileFor(file: string, lockFile?: string): string {
+  return lockFile ?? (file === USAGE_SHARING_FILE ? USAGE_SHARING_LOCK : `${file}.lock`);
+}
 
 export interface UsageSharingState {
   answered: boolean;
@@ -48,10 +56,17 @@ export function readUsageSharing(file = USAGE_SHARING_FILE, uid = 0): UsageShari
   };
 }
 
-export function saveUsageSharing(enabled: boolean, file = USAGE_SHARING_FILE, uid = 0): UsageSharingState {
-  const state = { ...readUsageSharing(file, uid), answered: true, enabled };
-  writeState(file, state, uid);
-  return state;
+export function saveUsageSharing(
+  enabled: boolean,
+  file = USAGE_SHARING_FILE,
+  uid = 0,
+  lockFile?: string,
+): UsageSharingState {
+  return withFileLockSync(lockFileFor(file, lockFile), LOCK_WAIT_S, LOCK_BUSY, () => {
+    const state = { ...readUsageSharing(file, uid), answered: true, enabled };
+    writeState(file, state, uid);
+    return state;
+  });
 }
 
 /** `addons` are the enabled addons' names; lib/ cannot read the catalog. */
@@ -126,6 +141,7 @@ export function payloadHash(payload: UsagePayload): string {
 
 export interface ShareOptions {
   file?: string;
+  lockFile?: string;
   uid?: number;
   now?: Date;
   fetch?: typeof fetch;
@@ -153,9 +169,11 @@ export async function shareUsageIfDue(payloadOf: () => UsagePayload, options: Sh
       signal: AbortSignal.timeout(SEND_TIMEOUT_MS),
     });
     if (!res.ok) return false;
-    const latest = readUsageSharing(file, uid);
-    if (!latest.enabled) return true;
-    writeState(file, { ...latest, lastSentAt: now.toISOString(), lastSentWeek: week, lastSentHash: hash }, uid);
+    await withFileLock(lockFileFor(file, options.lockFile), LOCK_WAIT_S, LOCK_BUSY, async () => {
+      const latest = readUsageSharing(file, uid);
+      if (!latest.answered || !latest.enabled) return;
+      writeState(file, { ...latest, lastSentAt: now.toISOString(), lastSentWeek: week, lastSentHash: hash }, uid);
+    });
     return true;
   } catch {
     return false;

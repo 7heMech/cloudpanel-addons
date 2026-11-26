@@ -55,6 +55,8 @@ mock.module("./lib/paths.ts", () => ({
   SYSTEMD_DIR: root + "/systemd",
   CONFIG_DIR: root + "/etc",
   STATE_DIR: root + "/state",
+  // Spread from the real module, addonStateDir still resolves under the production STATE_DIR.
+  addonStateDir: (addon) => root + "/state/" + addon,
   LIBEXEC_DIR: root + "/libexec",
   LOCK_DIR: root + "/lock",
   SOCKET_DIR: root + "/run",

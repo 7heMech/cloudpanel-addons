@@ -201,14 +201,38 @@ describe("shareUsageIfDue", () => {
 
   test("does not re-enable sharing if root turned it off while a send was in flight", async () => {
     const file = join(dir, "usage-sharing.json");
-    saveUsageSharing(true, file, uid);
+    const lockFile = join(dir, "usage-sharing.lock");
+    saveUsageSharing(true, file, uid, lockFile);
 
     const mockFetch = (async () => {
-      saveUsageSharing(false, file, uid);
+      // Network request runs outside the lock, so a concurrent consent save does not block on fetch.
+      saveUsageSharing(false, file, uid, lockFile);
       return new Response(null, { status: 204 });
     }) as unknown as typeof fetch;
 
-    expect(await shareUsageIfDue(() => basePayload, { file, uid, fetch: mockFetch })).toBe(true);
+    expect(await shareUsageIfDue(() => basePayload, { file, lockFile, uid, fetch: mockFetch })).toBe(true);
+    expect(readUsageSharing(file, uid).enabled).toBe(false);
+    expect(readUsageSharing(file, uid).lastSentAt).toBeNull();
+  });
+
+  test("serializes completion writes with a concurrent consent change holding the lock", async () => {
+    const { acquireFileLockSync } = await import("../lib/file-lock");
+    const file = join(dir, "usage-sharing-locked.json");
+    const lockFile = join(dir, "usage-sharing-locked.lock");
+    saveUsageSharing(true, file, uid, lockFile);
+
+    let hold: ReturnType<typeof acquireFileLockSync> | null = null;
+    const mockFetch = (async () => {
+      // Hold the lock as another process would while it updates consent to false.
+      hold = acquireFileLockSync(lockFile, 5, "busy");
+      setTimeout(() => {
+        writeFileSync(file, JSON.stringify({ answered: true, enabled: false, lastSentAt: null, lastSentWeek: null, lastSentHash: null }), { mode: 0o600 });
+        hold?.release();
+      }, 40);
+      return new Response(null, { status: 204 });
+    }) as unknown as typeof fetch;
+
+    expect(await shareUsageIfDue(() => basePayload, { file, lockFile, uid, fetch: mockFetch })).toBe(true);
     expect(readUsageSharing(file, uid).enabled).toBe(false);
     expect(readUsageSharing(file, uid).lastSentAt).toBeNull();
   });

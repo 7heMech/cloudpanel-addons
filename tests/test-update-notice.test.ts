@@ -256,6 +256,7 @@ describe("which releases a box is told about", () => {
       async () => ({ status: 200, ok: true, json: () => Promise.reject(new Error("body aborted")) }) as unknown as Response,
       async () => Response.json({ not: "an array" }),
       async () => Response.json([]),
+      async () => Response.json([{ tag_name: "2.0.0", draft: false, prerelease: false }]),
     ];
 
     for (const failWorker of failures) {
