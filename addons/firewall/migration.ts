@@ -111,6 +111,8 @@ export interface VisitorIpMigrationPaths {
   locksFile: string;
   locksLock: string;
   rootUid: number;
+  /** Whether Firewall was already enabled before earlier migrations in this pass created firewall.conf. */
+  firewallWasEnabled?: boolean;
 }
 
 const DEFAULT_VISITOR_IP_MIGRATION_PATHS: VisitorIpMigrationPaths = {
@@ -142,7 +144,8 @@ function legacySettings(text: string): Record<string, unknown> | null {
  * and has no choice of its own, is that default left behind.
  */
 function appliedByDefault(p: VisitorIpMigrationPaths): boolean {
-  if (!existsSync(p.systemTweaksConfig) || existsSync(p.firewallConfig) || existsSync(p.visitorIpState)) return false;
+  const firewallAlreadyOn = p.firewallWasEnabled ?? existsSync(p.firewallConfig);
+  if (!existsSync(p.systemTweaksConfig) || firewallAlreadyOn || existsSync(p.visitorIpState)) return false;
   try {
     if (!lstatSync(p.visitorIpMaps).isFile()) return false;
     return readFileSync(p.visitorIpMaps, "utf8").startsWith(`${MAPS_MARKER}\n`);

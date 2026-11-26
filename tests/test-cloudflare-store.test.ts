@@ -309,3 +309,40 @@ test("cloudflareAccessDetailsHtml puts dns-access-cols on headers only so narrow
   const fwCss = readFileSync(join(import.meta.dir, "..", "addons", "firewall", "app", "views.css"), "utf8");
   expect(fwCss).toContain(".dns-access-cols:not(.dns-access-section) { display: none; }");
 });
+
+test("migrateCloudflareFromDns imports a legacy report only when its token wins the merge", () => {
+  const dir = mkdtempSync(join(tmpdir(), "clp-cf-mig-rep-"));
+  dirs.push(dir);
+  const dnsDir = join(dir, "dns");
+  const cfDir = join(dir, "cloudflare");
+  mkdirSync(dnsDir, { recursive: true });
+  mkdirSync(cfDir, { recursive: true });
+
+  // Shared store already has cf-a with token Y and no cached report.
+  writeFileSync(join(cfDir, "connections.json"), JSON.stringify({ version: 1, connections: [{ id: "cf-a", label: "Shared" }] }), { mode: 0o600 });
+  writeFileSync(join(cfDir, "secrets.json"), JSON.stringify({ version: 1, tokens: { "cf-a": "token-Y" } }), { mode: 0o600 });
+
+  // Legacy store has cf-a with token X (conflicts) and cf-b with token Z (new), both with cached reports.
+  writeFileSync(join(dnsDir, "policy.json"), JSON.stringify({
+    version: 1,
+    connections: [{ id: "cf-a", label: "Legacy A" }, { id: "cf-b", label: "Legacy B" }],
+  }), { mode: 0o600 });
+  writeFileSync(join(dnsDir, "secrets.json"), JSON.stringify({
+    cloudflare: { "cf-a": "token-X", "cf-b": "token-Z" },
+    mailcowKey: "",
+  }), { mode: 0o600 });
+  writeFileSync(join(dnsDir, "status.json"), JSON.stringify({
+    connections: [
+      { id: "cf-a", label: "Legacy A", active: true, status: "active", accounts: [], zones: 2, error: null },
+      { id: "cf-b", label: "Legacy B", active: true, status: "active", accounts: [], zones: 1, error: null },
+    ],
+    backoff: { cloudflare: 0, mailcow: 0 },
+  }), { mode: 0o600 });
+
+  const undo = migrateCloudflareFromDns(dnsDir, { stateDir: cfDir, rootUid: uid });
+  expect(undo).not.toBeNull();
+  const after = readCloudflareStore({ stateDir: cfDir, rootUid: uid });
+  expect(after.tokens["cf-a"]).toBe("token-Y");
+  expect(after.tokens["cf-b"]).toBe("token-Z");
+  expect(after.reports.map((r) => r.id)).toEqual(["cf-b"]);
+});

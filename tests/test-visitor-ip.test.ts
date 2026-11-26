@@ -290,6 +290,21 @@ test("migrateVisitorIp handles unsaved default-on visitor IPs, carries System Tw
   expect(existsSync(vipState)).toBe(false);
   expect(existsSync(fwConfig)).toBe(false);
   expect(lockedAddons(locksFile, uid)).toEqual(["system-tweaks"]);
+
+  // When an earlier migration in the same pass (such as protocol migration) already created firewall.conf,
+  // passing firewallWasEnabled: false still migrates the unsaved default and carries System Tweaks' root lock.
+  writeFileSync(fwConfig, "enabled=1\n", { mode: 0o644 });
+  const undoAfterProtocols = migrateVisitorIp(() => { throw new Error("firewall is already enabled"); }, {
+    ...paths,
+    firewallWasEnabled: false,
+  });
+  expect(undoAfterProtocols).not.toBeNull();
+  expect(JSON.parse(readFileSync(vipState, "utf8"))).toEqual({ version: 1, enabled: true });
+  expect(lockedAddons(locksFile, uid)).toEqual(["firewall", "system-tweaks"]);
+  undoAfterProtocols!();
+  expect(existsSync(vipState)).toBe(false);
+  expect(existsSync(fwConfig)).toBe(true);
+  expect(lockedAddons(locksFile, uid)).toEqual(["system-tweaks"]);
 });
 
 test("Firewall declares both nginx.conf and fastcgi_params conffiles for apt-hook release", () => {

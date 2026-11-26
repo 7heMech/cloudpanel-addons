@@ -590,7 +590,8 @@ export function migrateCloudflareFromDns(
     const existingReportIds = new Set(existing.reports.map((r) => r.id));
     const mergedReports: CloudflareConnectionReport[] = [
       ...existing.reports,
-      ...legacyReports.filter((r) => r && typeof r.id === "string" && seenIds.has(r.id) && !existingReportIds.has(r.id)),
+      ...legacyReports.filter((r) => r && typeof r.id === "string" && seenIds.has(r.id) && !existingReportIds.has(r.id)
+        && legacyTokens[r.id] === mergedTokens[r.id]),
     ];
     const legacyBackoff = typeof (statusJson?.backoff as { cloudflare?: unknown } | undefined)?.cloudflare === "number"
       ? (statusJson!.backoff as { cloudflare: number }).cloudflare : 0;

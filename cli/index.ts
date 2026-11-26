@@ -105,7 +105,7 @@ function cmdLock(argv: string[], lock: boolean): void {
   if (lock && !isLockable(addon)) fatal(`${addon} has nothing to lock; lockable: ${LOCKABLE_ADDONS.join(", ")}`);
   let changed: boolean;
   try {
-    changed = changeLock(addon, lock);
+    changed = withOperationLockSync(`${lock ? "lock" : "unlock"} ${addon}`, () => changeLock(addon, lock));
   } catch (error) {
     fatal(lockFailure(error));
   }

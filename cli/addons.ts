@@ -82,6 +82,8 @@ function removeLegacyLocks(): void {
 
 function migrateAddonState(quiet: boolean): AddonRename[] {
   const renames: AddonRename[] = [];
+  // Capture before the rename or protocol migration creates firewall.conf so unsaved visitor-IP defaults still migrate and carry root's lock.
+  const firewallWasEnabled = addonEnabled(ADDONS.firewall!);
   try {
     for (const [from, to] of Object.entries(RENAMED_ADDONS)) {
       const legacyConfig = `${CONFIG_DIR}/${from}.conf`;
@@ -120,7 +122,7 @@ function migrateAddonState(quiet: boolean): AddonRename[] {
     // After the rename, which refuses a firewall state directory that already holds anything.
     const protocols = migrateFirewallProtocols(() => writeConfig(ADDONS.firewall!, true));
     if (protocols) renames.push({ from: "system-tweaks", to: "firewall", config: null, stateMoved: false, undo: protocols });
-    const visitorIp = migrateVisitorIp(() => writeConfig(ADDONS.firewall!, true));
+    const visitorIp = migrateVisitorIp(() => writeConfig(ADDONS.firewall!, true), { firewallWasEnabled });
     if (visitorIp) renames.push({ from: "system-tweaks", to: "firewall", config: null, stateMoved: false, undo: visitorIp });
     const cloudflare = migrateCloudflareFromDns();
     if (cloudflare) renames.push({ from: "dns", to: "cloudflare", config: null, stateMoved: false, undo: cloudflare });
