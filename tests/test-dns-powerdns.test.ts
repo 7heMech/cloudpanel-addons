@@ -8,7 +8,7 @@ import { dashboardContent } from "../addons/dns/app/views";
 import type { PanelSite, StandIn, StandIns } from "../addons/dns/engine";
 import { seededPolicy } from "../addons/dns/presets";
 import {
-  formatPowerDnsContent, parsePowerDnsUrl, powerDnsRecordId, PowerDnsProvider, quotePowerDnsTxt,
+  formatPowerDnsContent, parsePowerDnsServerId, parsePowerDnsUrl, powerDnsRecordId, PowerDnsProvider, quotePowerDnsTxt,
 } from "../addons/dns/powerdns";
 import { connectionCheck, permissionActions } from "../addons/dns/setup";
 import { standInBody } from "../addons/dns/stand-in";
@@ -749,5 +749,121 @@ describe("PowerDNS end-to-end DNS reconciliation", () => {
     expect(afterRemove.sites.find((s) => s.domain === "remove-hold.example")?.plan?.held).toBe(true);
     expect(env.standIns.current["remove-hold.example"]).toBeDefined();
     expect(env.cf.rulesets.size).toBe(0);
+  });
+
+  test("rejects dot path-traversal server IDs and keeps disabled RRset state consistent on failed or shadowing PATCH", async () => {
+    expect(() => parsePowerDnsServerId(".")).toThrow("PowerDNS server ID");
+    expect(() => parsePowerDnsServerId("..")).toThrow("PowerDNS server ID");
+    expect(parsePowerDnsServerId("ns.1-a_b")).toBe("ns.1-a_b");
+
+    const pdns = new FakePowerDns(PDNS_KEY);
+    pdns.addZone("example.com", [
+      {
+        name: "example.com.",
+        type: "A",
+        ttl: 300,
+        records: [
+          { content: "198.51.100.1", disabled: false },
+          { content: "203.0.113.10", disabled: true },
+          { content: "203.0.113.99", disabled: true },
+        ],
+      },
+    ]);
+    let failPatch = true;
+    const provider = new PowerDnsProvider(
+      { label: "NS1", url: PDNS_URL, serverId: "localhost", defaultTtl: 600, createZones: false, nameservers: [] },
+      PDNS_KEY,
+      async (input, init) => {
+        if (failPatch && init?.method === "PATCH") return new Response("boom", { status: 500 });
+        return pdns.handle(input, init ?? {});
+      },
+    );
+    const zone = (await provider.discover()).zones[0]!;
+    const current = await provider.listRecords(zone);
+    // Failed PATCH must not mutate cached disabled TTLs.
+    await expect(provider.applyRecords(zone, [{
+      action: "create",
+      record: { type: "A", name: "example.com", content: "203.0.113.10", proxied: false, ttl: 600, priority: null },
+    }], current)).rejects.toThrow();
+
+    // Retry succeeds: enabled 203.0.113.10 shadows the disabled duplicate 203.0.113.10 while preserving 203.0.113.99.
+    failPatch = false;
+    const afterCreate = await provider.applyRecords(zone, [{
+      action: "create",
+      record: { type: "A", name: "example.com", content: "203.0.113.10", proxied: false, ttl: 600, priority: null },
+    }], current);
+    const added = afterCreate.find((r) => r.content === "203.0.113.10")!;
+    expect(pdns.rrsetsOf("example.com").find((r) => r.type === "A" && r.name === "example.com.")!.records)
+      .toEqual([
+        { content: "198.51.100.1", disabled: false },
+        { content: "203.0.113.10", disabled: false },
+        { content: "203.0.113.99", disabled: true },
+      ]);
+    // Deleting the enabled 203.0.113.10 in the same provider session must NOT re-introduce the shadowed disabled duplicate.
+    await provider.applyRecords(zone, [{ action: "delete", record: added, current: added }], afterCreate);
+    expect(pdns.rrsetsOf("example.com").find((r) => r.type === "A" && r.name === "example.com.")!.records)
+      .toEqual([
+        { content: "198.51.100.1", disabled: false },
+        { content: "203.0.113.99", disabled: true },
+      ]);
+  });
+
+  test("holds redirects on partial Cloudflare removal with PowerDNS remaining and on PowerDNS sub-zone apex stand-in shrink", async () => {
+    // 1. Mixed fleet: cf-1 (example.com), cf-2 (other.example), pdns-1 (example.com) -> removing cf-1 holds example.com.
+    const env = setupEnv();
+    env.pdns.addZone("example.com");
+    const SECOND_CF_TOKEN = "cf-second-token-0123456789abcdef";
+    const agency1 = env.cf.account("Agency One");
+    const agency2 = env.cf.account("Agency Two");
+    env.cf.zone("example.com", agency1);
+    env.cf.zone("other.example", agency2);
+    env.cf.token(CF_TOKEN, { owner: "user", accounts: [agency1] });
+    env.cf.token(SECOND_CF_TOKEN, { owner: "user", accounts: [agency2] });
+    const cf1 = (await env.act("save-connection", { provider: "cloudflare", token: CF_TOKEN, label: "CF1" }))
+      .connections.find((c) => c.label === "CF1")!;
+    await env.act("save-connection", { provider: "cloudflare", token: SECOND_CF_TOKEN, label: "CF2" });
+    await env.act("save-connection", { provider: "powerdns", label: "NS1", url: PDNS_URL, apiKey: PDNS_KEY });
+    await env.act("choose-zone", { zone: "example.com", connectionId: cf1.id, zoneId: env.cf.zones.find((z) => z.name === "example.com")!.id });
+    await env.apply("set-automatic", { automatic: true });
+    await env.apply("save-redirect", {
+      source: "example.com", target: "https://target.example/", status: 301, keepPath: true, keepQuery: true, profileId: null,
+    });
+    expect(env.standIns.current["example.com"]).toBeUndefined();
+
+    await env.act("remove-connection", { id: cf1.id });
+    const afterPartial = await env.act("check");
+    expect(afterPartial.sites.find((s) => s.domain === "example.com")?.plan?.held).toBe(true);
+    expect(env.standIns.current["example.com"]).toBeUndefined();
+
+    // 2. PowerDNS-only fleet with delegated sub-zone apex redirect: removing PowerDNS holds it rather than shrinking stand-in hosts.
+    const pdnsOnly = setupEnv();
+    pdnsOnly.pdns.addZone("shop.example.com");
+    const connected = await pdnsOnly.act("save-connection", { provider: "powerdns", label: "NS1", url: PDNS_URL, apiKey: PDNS_KEY });
+    const pdnsOnlyId = connected.connections.find((c) => c.provider === "powerdns")!.id;
+    await pdnsOnly.apply("set-automatic", { automatic: true });
+    await pdnsOnly.apply("save-redirect", {
+      source: "shop.example.com", target: "https://target.example/", status: 301, keepPath: true, keepQuery: true, profileId: null,
+    });
+    expect(pdnsOnly.standIns.current["shop.example.com"]?.hosts).toEqual(["shop.example.com", "www.shop.example.com"]);
+    await pdnsOnly.act("remove-connection", { id: pdnsOnlyId });
+    const afterPdnsRemove = await pdnsOnly.act("check");
+    expect(afterPdnsRemove.sites.find((s) => s.domain === "shop.example.com")?.plan?.held).toBe(true);
+    expect(pdnsOnly.standIns.current["shop.example.com"]?.hosts).toEqual(["shop.example.com", "www.shop.example.com"]);
+
+    // 3. PowerDNS-only user-facing notices do not claim Cloudflare.
+    const pdnsCopy = setupEnv();
+    pdnsCopy.pdns.addZone("example.com");
+    await pdnsCopy.act("save-connection", { provider: "powerdns", label: "NS1", url: PDNS_URL, apiKey: PDNS_KEY });
+    await pdnsCopy.apply("set-automatic", { automatic: true });
+    await pdnsCopy.apply("set-panel-host", { name: "panel.example.com" });
+    const removedPanel = await pdnsCopy.act("set-panel-host", { name: null });
+    expect(removedPanel.notice).toContain("PowerDNS");
+    expect(removedPanel.notice).not.toContain("Cloudflare");
+    const askFirst = await pdnsCopy.act("set-automatic", { automatic: false });
+    expect(askFirst.notice).toContain("PowerDNS");
+    expect(askFirst.notice).not.toContain("Cloudflare");
+    const forgotten = await pdnsCopy.act("forget-records", { domain: "panel.example.com" });
+    expect(forgotten.notice).toContain("PowerDNS");
+    expect(forgotten.notice).not.toContain("Cloudflare");
   });
 });
