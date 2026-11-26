@@ -2,8 +2,8 @@
 //
 // Written for CloudPanel's page: plain ES5, no shared client bundle, and zero
 // `name` attributes on any control so Symfony never rejects extra form fields.
-// Reads local DNS state on page load without calling Cloudflare; renders
-// nothing when no Cloudflare connection exists.
+// Reads local DNS state on page load without calling any DNS provider; renders
+// nothing when no DNS connection exists.
 (function () {
   var box = document.querySelector('[data-clp-dns-custom-domain]');
   if (!box) return;
@@ -115,9 +115,25 @@
   function init(data) {
     var zones = Array.isArray(data.zones) ? data.zones.slice() : [];
     var zonesDesc = zones.slice().sort(function (a, b) { return b.length - a.length; });
+    var zoneProviders = data.zoneProviders && typeof data.zoneProviders === 'object' ? data.zoneProviders : {};
+    var hasCloudflare = data.hasCloudflare !== undefined ? Boolean(data.hasCloudflare) : !data.hasPowerDns;
+    var hasPowerDns = Boolean(data.hasPowerDns);
     var ips = [];
     if (data.serverIps && data.serverIps.ipv4) ips.push(data.serverIps.ipv4);
     if (data.serverIps && data.serverIps.ipv6) ips.push(data.serverIps.ipv6);
+
+    function providerForZone(zoneName) {
+      if (zoneName && zoneProviders[zoneName]) return zoneProviders[zoneName];
+      if (hasCloudflare && !hasPowerDns) return 'cloudflare';
+      if (hasPowerDns && !hasCloudflare) return 'powerdns';
+      return null;
+    }
+
+    function connectedProviderLabel() {
+      if (hasCloudflare && !hasPowerDns) return 'Cloudflare';
+      if (hasPowerDns && !hasCloudflare) return 'PowerDNS';
+      return 'DNS';
+    }
 
     if (zones.length) {
       var datalist = el('datalist');
@@ -140,7 +156,7 @@
     var checkbox = el('input', 'form-check-input');
     checkbox.type = 'checkbox';
     checkbox.id = 'clp-dns-cd-write';
-    var checkLabel = el('label', 'form-check-label', 'Write unproxied DNS record before saving');
+    var checkLabel = el('label', 'form-check-label', hasCloudflare ? 'Write unproxied DNS record before saving' : 'Write DNS record before saving');
     checkLabel.setAttribute('for', 'clp-dns-cd-write');
     checkWrap.appendChild(checkbox);
     checkWrap.appendChild(checkLabel);
@@ -216,20 +232,25 @@
       dialogError.hidden = !message;
     }
 
-    function showNameservers(zone) {
+    function showNameservers(zone, newlyCreated) {
       feedbackEl.textContent = '';
       var alert = el('div');
       alert.setAttribute('role', 'status');
+      var isPowerDns = zone.provider === 'powerdns';
       if (zone.nameServers && zone.nameServers.length && typeof clpNameserverNotice === 'function') {
         clpNameserverNotice(
           alert,
           zone.name,
           zone.nameServers,
-          'The DNS record is written, but CloudPanel cannot issue a Let’s Encrypt certificate until Cloudflare sees them. Once it does, save Custom Domain again.'
+          isPowerDns
+            ? 'The new PowerDNS zone and DNS record were written. Point ' + zone.name + ' to these nameservers at your registrar, wait for delegation to propagate, then save Custom Domain again.'
+            : 'The DNS record is written, but CloudPanel cannot issue a Let’s Encrypt certificate until Cloudflare sees them. Once it does, save Custom Domain again.'
         );
       } else {
         alert.className = 'alert alert-warning';
-        alert.textContent = zone.name + ' is ' + zone.status + '. Activate the zone in Cloudflare, then save Custom Domain again.';
+        alert.textContent = isPowerDns && newlyCreated
+          ? 'The new PowerDNS zone ' + zone.name + ' and DNS record were written. Delegate the zone at your registrar, then save Custom Domain again.'
+          : zone.name + ' is ' + zone.status + '. Activate the zone in ' + (isPowerDns ? 'PowerDNS' : 'Cloudflare') + ', then save Custom Domain again.';
       }
       feedbackEl.appendChild(alert);
       feedbackEl.hidden = false;
@@ -253,6 +274,10 @@
       var clean = normalizeHost(input.value);
       var matched = clean ? findZone(clean, zonesDesc) : null;
       var inZone = Boolean(matched);
+      var zoneProvider = providerForZone(matched);
+      var supportsProxy = zoneProvider === 'cloudflare' || (zoneProvider === null && hasCloudflare);
+      var providerLabel = connectedProviderLabel();
+      checkLabel.textContent = supportsProxy ? 'Write unproxied DNS record before saving' : 'Write DNS record before saving';
       if (forceAuto || lastInZone === null || inZone !== lastInZone) {
         checkbox.checked = inZone;
         lastInZone = inZone;
@@ -260,19 +285,21 @@
       if (!clean) {
         noteEl.textContent = zones.length === 1
           ? 'Enter a hostname in ' + zones[0] + ' or choose Random.'
-          : 'Enter a hostname in a connected Cloudflare zone to write its DNS record automatically.';
+          : 'Enter a hostname in a connected ' + providerLabel + ' zone to write its DNS record automatically.';
       } else if (matched) {
         if (checkbox.checked) {
           var target = ips.length ? ' pointing to ' + ips.join(' and ') : '';
-          noteEl.textContent = 'Plans an unproxied record in ' + matched + target + ' and asks you to confirm before saving.' +
-            (data.automatic ? ' DNS proxies it once the certificate is issued.' : '');
+          noteEl.textContent = supportsProxy
+            ? 'Plans an unproxied record in ' + matched + target + ' and asks you to confirm before saving.' +
+              (data.automatic ? ' DNS proxies it once the certificate is issued.' : '')
+            : 'Plans a DNS record in ' + matched + target + ' and asks you to confirm before saving.';
         } else {
           noteEl.textContent = 'DNS will not be changed before saving CloudPanel’s custom domain.';
         }
       } else {
         noteEl.textContent = checkbox.checked
-          ? clean + ' is not in a connected Cloudflare zone. DNS will check whether a zone can be created when you save.'
-          : clean + ' is not in a connected Cloudflare zone. Leave unchecked to manage its DNS elsewhere.';
+          ? clean + ' is not in a connected ' + providerLabel + ' zone. DNS will check whether a zone can be created when you save.'
+          : clean + ' is not in a connected ' + providerLabel + ' zone. Leave unchecked to manage its DNS elsewhere.';
       }
     }
 
@@ -329,8 +356,12 @@
     function submitNativeForm() {
       bypass = true;
       var submitter = pendingSubmitter && pendingSubmitter.form === form ? pendingSubmitter : undefined;
-      if (form.requestSubmit) form.requestSubmit(submitter);
-      else form.submit();
+      try {
+        if (form.requestSubmit) form.requestSubmit(submitter);
+        else form.submit();
+      } finally {
+        bypass = false;
+      }
     }
 
     function closeDialog() {
@@ -371,6 +402,11 @@
       confirmGen++;
       pendingToken = '';
     });
+    dialog.addEventListener('close', function () {
+      confirmGen++;
+      pendingToken = '';
+      setDialogBusy(false);
+    });
     dialog.addEventListener('mousedown', function (event) {
       if (dialogBusy || event.target !== dialog) return;
       var rect = dialog.getBoundingClientRect();
@@ -406,13 +442,13 @@
           return;
         }
         if (!plan.zone) {
-          showDialogError('DNS could not find a Cloudflare zone for ' + confirmedName + '.');
+          showDialogError('DNS could not find a zone for ' + confirmedName + '.');
           setDialogBusy(false);
           return;
         }
-        if (plan.zone.status !== 'active') {
+        if (plan.zone.status !== 'active' || confirmData.zoneCreated) {
           closeDialog();
-          showNameservers(plan.zone);
+          showNameservers(plan.zone, Boolean(confirmData.zoneCreated));
           return;
         }
         if (plan.changes && plan.changes.some(function (change) { return change.action !== 'note'; })) {

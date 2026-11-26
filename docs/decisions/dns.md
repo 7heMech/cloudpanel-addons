@@ -386,28 +386,31 @@ DNS also injects a `custom-domain-dns` helper (`addons/dns/inject/custom-domain.
 so Symfony never rejects extra form fields. On page load the script warms the
 CSRF cookie via `GET /addons/dns/api/session` and reads
 `GET /addons/dns/api/panel-host-helper` (admin verb `panel-host-helper`), which
-answers from local state alone (`connected`, `automatic`, `zones`, `panelHost`,
-and `serverIps`) with no DNS lock and no Cloudflare call. When no Cloudflare
-connection exists, the script renders nothing.
+answers from local state alone (`connected`, `automatic`, `hasCloudflare`,
+`hasPowerDns`, `zones`, `zoneProviders`, `panelHost`, and `serverIps`) with no
+DNS lock and no provider call. When no Cloudflare or PowerDNS connection exists,
+the script renders nothing.
 
 When a connection exists, the helper adds a `Random` button beside the Custom
 Domain field, attaches a `<datalist>` of connected zones, and adds an inline
-checkbox ("Write unproxied DNS record before saving") that auto-checks when the
-entered hostname belongs to a connected zone and unchecks with a note otherwise.
-Submitting CloudPanel's form with the checkbox ticked sends
+checkbox that auto-checks when the entered hostname belongs to a connected zone
+and unchecks with a note otherwise (adjusting proxy wording to the resolved
+zone's provider). Submitting CloudPanel's form with the checkbox ticked sends
 `POST /addons/dns/api/panel-host` with `{ name, prepareOnly: true }`, which
-plans only the panel hostname's unproxied `A`/`AAAA` records and ACME rule
-against live Cloudflare records in both Automatic and Ask first modes without
-touching other sites or other profiles' zone settings. A confirmation `<dialog>`
-shows the planned changes or problems; confirming sends
-`POST /addons/dns/api/confirm`, writes only the panel hostname while leaving
-`policy.automatic` unchanged, and returns the updated panel plan including
-`zone.status` and `zone.nameServers`. If `zone.status` is not `"active"`, the
-helper stops before submitting CloudPanel's form and renders
-`lib/nameserver-notice.ts` with per-nameserver copy buttons. When the zone is
-active (either with the written unproxied records or covered by an unobstructed
-unproxied wildcard), the helper submits CloudPanel's native form once, bypassing
-its own submit listener.
+plans only the panel hostname's `A`/`AAAA` records (unproxied on Cloudflare,
+with its ACME rule) against live provider records in both Automatic and Ask
+first modes without touching other sites, Mailcow, or other profiles' zone
+settings. A confirmation `<dialog>` shows the planned changes or problems;
+confirming sends `POST /addons/dns/api/confirm`, writes only the panel hostname
+while leaving `policy.automatic` unchanged, and returns the updated panel plan
+including `zone.status`, `zone.nameServers`, and `zoneCreated` when the pass
+just created the zone. If `zone.status` is not `"active"` or `zoneCreated` is
+true (for example a newly created PowerDNS zone that reports `"active"` before
+registrar delegation), the helper stops before submitting CloudPanel's form and
+renders `lib/nameserver-notice.ts` with per-nameserver copy buttons. When an
+existing active zone is ready (either with the written records or covered by an
+unobstructed unproxied wildcard), the helper submits CloudPanel's native form
+once, bypassing its own submit listener.
 
 ## Cloudflare connections
 

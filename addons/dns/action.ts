@@ -196,13 +196,16 @@ export interface Found {
   notes: string[];
 }
 
-export type DnsReply = DnsState & { review?: Review; notice?: string; found?: Found };
+export type DnsReply = DnsState & { review?: Review; notice?: string; found?: Found; zoneCreated?: boolean };
 
 /** Local-only state for CloudPanel's Admin → Settings Custom Domain helper. */
 export interface PanelHostHelper {
   connected: boolean;
   automatic: boolean;
+  hasCloudflare: boolean;
+  hasPowerDns: boolean;
   zones: string[];
+  zoneProviders: Record<string, ProviderKind>;
   panelHost: string | null;
   serverIps: { ipv4: string | null; ipv6: string | null };
 }
@@ -743,15 +746,36 @@ class Action {
     };
   }
 
-  /** From local state alone, so opening Admin → Settings never reaches Cloudflare or waits for the lock. */
+  /** From local state alone, so opening Admin → Settings never reaches any DNS provider or waits for the lock. */
   panelHostHelper(): PanelHostHelper {
     const policy = this.files.policy();
     const status = this.files.status();
     const detected = this.addresses();
+    const hasCloudflare = policy.connections.length > 0;
+    const hasPowerDns = (policy.powerdns?.length ?? 0) > 0;
+    const zones = [...new Set(status.connections.flatMap((connection) => connection.zoneNames ?? []))].sort();
+    const providerByConnection = new Map<string, ProviderKind>([
+      ...policy.connections.map((connection): [string, ProviderKind] => [connection.id, "cloudflare"]),
+      ...(policy.powerdns ?? []).map((connection): [string, ProviderKind] => [connection.id, "powerdns"]),
+    ]);
+    const zoneProviders: Record<string, ProviderKind> = {};
+    for (const connection of status.connections) {
+      const provider = connection.provider ?? providerByConnection.get(connection.id) ?? (connection.id.startsWith("pdns-") ? "powerdns" : "cloudflare");
+      for (const zone of connection.zoneNames ?? []) {
+        if (!zoneProviders[zone]) zoneProviders[zone] = provider;
+      }
+    }
+    for (const [zone, choice] of Object.entries(policy.zoneChoices)) {
+      const chosen = providerByConnection.get(choice.connectionId);
+      if (chosen) zoneProviders[zone] = chosen;
+    }
     return {
-      connected: policy.connections.length > 0,
+      connected: hasCloudflare || hasPowerDns,
       automatic: policy.automatic,
-      zones: [...new Set(status.connections.flatMap((connection) => connection.zoneNames ?? []))].sort(),
+      hasCloudflare,
+      hasPowerDns,
+      zones,
+      zoneProviders,
       panelHost: policy.panelHost,
       serverIps: {
         ipv4: policy.server.ipv4 || detected.ipv4 || null,
@@ -760,7 +784,7 @@ class Action {
     };
   }
 
-  reply(extra: { review?: Review; notice?: string; found?: Found } = {}): DnsReply {
+  reply(extra: { review?: Review; notice?: string; found?: Found; zoneCreated?: boolean } = {}): DnsReply {
     this.writeLog();
     return { ...this.state(), ...extra };
   }
@@ -1143,11 +1167,17 @@ class Action {
       domains: [name], policy: next, panelOnly: true,
     });
     const changes = plans.reduce((count, candidate) => count + candidate.changes.filter((change) => change.action !== "note").length, 0);
+    const provider = run.resolvedProvider(name);
+    const supportsProxy = provider
+      ? provider.capabilities.proxy
+      : next.connections.length > 0 && !(next.powerdns?.length ?? 0);
     const text = blocked
       ? "DNS cannot prepare this hostname while the problem below remains."
       : changes === 0
         ? `${name} already matches${plan?.wildcard ? ` (covered by ${plan.wildcard})` : ""}. Save it as the panel hostname and continue.`
-        : `${changes} change${changes === 1 ? "" : "s"} will be written for ${name} (DNS only) before CloudPanel requests the certificate.${before.automatic ? " Once CloudPanel has its certificate, DNS proxies it through Cloudflare." : " DNS stays in Ask first mode, and no other sites are changed."}`;
+        : supportsProxy
+          ? `${changes} change${changes === 1 ? "" : "s"} will be written for ${name} (DNS only) before CloudPanel requests the certificate.${before.automatic ? " Once CloudPanel has its certificate, DNS proxies it through Cloudflare." : " DNS stays in Ask first mode, and no other sites are changed."}`
+          : `${changes} change${changes === 1 ? "" : "s"} will be written for ${name} before CloudPanel requests the certificate.${before.automatic ? "" : " DNS stays in Ask first mode, and no other sites are changed."}`;
     return this.reply({
       notice,
       review: {
@@ -1188,7 +1218,9 @@ class Action {
     this.cause = panelOnly ? "Panel hostname" : "Confirmed review";
     await run.enforce(pending.domains);
     await this.record(run, run.planAll(pending.domains, true), pending.domains);
+    const zoneCreated = panelOnly && run.zoneCreatedFor(pending.domains[0]!);
     return this.reply({
+      ...(zoneCreated ? { zoneCreated: true } : {}),
       notice: panelOnly
         ? `DNS prepared ${pending.domains[0]}.`
         : `Applied to ${pending.domains.length} site${pending.domains.length === 1 ? "" : "s"}.${current.automatic ? "" : " DNS is Automatic."}`,

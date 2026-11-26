@@ -33,17 +33,18 @@ function setup() {
   cf.zone("example.com", agency);
   const sites: PanelSite[] = [site(1, "shop.example.com")];
   const custom: { current: { name: string; issued: boolean } | undefined } = { current: undefined };
+  const mailcow = new FakeMailcow();
   const options = {
     paths: { configFile: join(dir, "dns.conf"), stateDir: join(dir, "state"), smtpConfig: join(dir, "smtp.json"), lockFile: join(dir, "dns.lock"), panelDb: join(dir, "db.sq3"), rootUid: process.getuid!(), clpctl: "/bin/false" },
     processUid: 0,
-    fetch: routed(cf, new FakeMailcow()),
+    fetch: routed(cf, mailcow),
     sites: () => sites,
     addresses: () => ({ ipv4: "203.0.113.10", ipv6: "2001:db8::10" }),
     customDomain: () => custom.current,
     now: () => START,
   };
   const env = {
-    dir, cf, sites, custom, options,
+    dir, cf, mailcow, sites, custom, options,
     act: async <T = DnsReply>(verb: string, body?: unknown): Promise<T> =>
       await executeDnsAction([verb], { ...options, input: body === undefined ? undefined : JSON.stringify(body) }) as T,
     /** Applies a change, through its review when it asks for one. */
@@ -278,7 +279,10 @@ describe("the panel hostname", () => {
     expect(before).toEqual({
       connected: false,
       automatic: false,
+      hasCloudflare: false,
+      hasPowerDns: false,
       zones: [],
+      zoneProviders: {},
       panelHost: null,
       serverIps: { ipv4: "203.0.113.10", ipv6: "2001:db8::10" },
     });
@@ -292,7 +296,10 @@ describe("the panel hostname", () => {
     expect(after).toEqual({
       connected: true,
       automatic: false,
+      hasCloudflare: true,
+      hasPowerDns: false,
       zones: ["example.com"],
+      zoneProviders: { "example.com": "cloudflare" },
       panelHost: "panel.example.com",
       serverIps: { ipv4: "198.51.100.7", ipv6: "2001:db8::10" },
     });
@@ -423,6 +430,23 @@ describe("the panel hostname", () => {
     const ok = await env.act("set-panel-host", { name: "k7m2p9x4.example.com", prepareOnly: true });
     expect(ok.review!.blocked).toBe(false);
     expect(ok.review!.token).not.toBe("");
+  });
+
+  test("prepareOnly panel-host planning never calls Mailcow for dependent wildcard sites", async () => {
+    const env = setup();
+    env.sites.splice(0, env.sites.length, site(1, "example.com"), site(2, "mail-sub.a.example.com"));
+    const zone = env.cf.zones[0]!;
+    await env.act("save-connection", { token: TOKEN });
+    await env.act("save-mailcow", { url: "https://mail.example.net", key: env.mailcow.apiKey });
+    await env.act("assign", { domains: ["example.com"], profileId: "web" });
+    await env.act("assign", { domains: ["mail-sub.a.example.com"], profileId: "web-mailcow" });
+    await env.act("check");
+    const mailCallsBefore = env.mailcow.calls.length;
+
+    const prepared = await env.act("set-panel-host", { name: "a.example.com", prepareOnly: true });
+    expect(prepared.review).toBeDefined();
+    expect(env.mailcow.calls.length).toBe(mailCallsBefore);
+    expect(zone.name).toBe("example.com");
   });
 });
 
