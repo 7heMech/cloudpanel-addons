@@ -290,5 +290,22 @@ describe("status formatting and manager route validation", () => {
     );
     expect(badBody?.status).toBe(400);
     expect(await badBody!.json()).toEqual({ ok: false, error: "expected enabled" });
+
+    const oversized = await handleManagerRoute(
+      new Request("http://localhost/api/usage-sharing", {
+        method: "POST",
+        headers: {
+          host: "localhost",
+          origin: "http://localhost",
+          cookie: csrfCookieHeader(token),
+          "x-clp-addons-csrf": token,
+          "content-type": "application/json",
+        },
+        body: JSON.stringify({ enabled: true, pad: "x".repeat(2048) }),
+      }),
+      "/api/usage-sharing",
+      {} as never,
+    );
+    expect(oversized?.status).toBe(413);
   });
 });

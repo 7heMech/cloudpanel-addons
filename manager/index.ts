@@ -1,4 +1,4 @@
-import { guardMutation, jsonResponse, readBody, safeDecodePathSegment } from "../lib/app-http";
+import { guardMutation, jsonResponse, readBody, readMutation, safeDecodePathSegment } from "../lib/app-http";
 import { streamGatewayAction, type ActionResult } from "../lib/gateway-client";
 import { jobEventStream, type JobWatcher } from "../lib/job-stream";
 import { ADDON_NAMES } from "../addons/catalog";
@@ -83,10 +83,9 @@ export async function handleManagerRoute(
   }
 
   if (path === "/api/usage-sharing" && req.method === "POST") {
-    const denied = guardMutation(req);
-    if (denied) return denied;
-    const body = await req.json().catch(() => null) as Record<string, unknown> | null;
-    if (typeof body?.enabled !== "boolean") return jsonResponse({ ok: false, error: "expected enabled" }, 400);
+    const body = await readMutation(req, 1024);
+    if (body instanceof Response) return body;
+    if (typeof body.enabled !== "boolean") return jsonResponse({ ok: false, error: "expected enabled" }, 400);
     const result = await managerAction("usage-sharing", [`--enabled=${body.enabled}`]);
     return jsonResponse(result, result.ok ? 200 : 400);
   }

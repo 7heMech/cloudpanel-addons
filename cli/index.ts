@@ -12,6 +12,7 @@ import { cmdUpdate } from "./update";
 import { CLI_VERSION } from "../lib/version";
 import { reconcile } from "./inject";
 import { fatal, Fatal, log, requireRoot } from "../lib/log";
+import { errorMessage } from "../lib/errors";
 import type { AddonSpec } from "../lib/addon-definition";
 import { LOCKABLE_ADDONS, isLockable, lockedAddons } from "../lib/root-locks";
 import { changeLock, lockFailure, lockFileProblem } from "../lib/lock-addon";
@@ -135,12 +136,20 @@ function cmdShareUsage(argv: string[]): void {
     fatal("usage: clp-addons share-usage on|off|status");
   }
   if (state === "status") {
-    log.plain(formatUsageSharingStatus(currentUsagePayload()));
+    try {
+      log.plain(formatUsageSharingStatus(currentUsagePayload()));
+    } catch (error) {
+      fatal(errorMessage(error));
+    }
     return;
   }
   requireRoot("share-usage");
   const enabled = state === "on";
-  saveUsageSharing(enabled);
+  try {
+    saveUsageSharing(enabled);
+  } catch (error) {
+    fatal(errorMessage(error));
+  }
   log.ok(enabled
     ? "Usage sharing is on: enabled addons will be shared once a week"
     : "Usage sharing is off: nothing will be shared");
