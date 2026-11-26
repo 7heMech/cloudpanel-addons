@@ -229,10 +229,22 @@ export function normalizeRenderedForProvider(
   rendered: Rendered,
   provider: { capabilities: ProviderCapabilities; defaultTtl: number },
 ): Rendered {
-  return {
-    ...rendered,
-    records: rendered.records.map((record) => normalizeRecordForProvider(record, provider)),
-  };
+  const records = rendered.records.map((record) => normalizeRecordForProvider(record, provider));
+  const problems = [...rendered.problems];
+  if (!provider.capabilities.autoTtl) {
+    const seenTtl = new Map<string, number>();
+    const reported = new Set<string>();
+    for (const record of records) {
+      const key = `${record.type}|${record.name}`;
+      const prev = seenTtl.get(key);
+      if (prev === undefined) seenTtl.set(key, record.ttl);
+      else if (prev !== record.ttl && !reported.has(key)) {
+        reported.add(key);
+        problems.push(`${record.type} ${record.name} asks for different TTLs (${prev} and ${record.ttl}); PowerDNS requires one TTL per record set`);
+      }
+    }
+  }
+  return { ...rendered, records, problems };
 }
 
 /** Whether a published record is one of the records `claims` speak for. */

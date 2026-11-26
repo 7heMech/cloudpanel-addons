@@ -851,7 +851,7 @@ class Action {
     await run.enforce([host]);
     await this.record(run, run.planAll([host], true), [host]);
     const provider = run.resolvedProvider(host);
-    if (provider && !provider.capabilities.proxy) return null;
+    if (!provider?.capabilities.proxy) return null;
     return run.panelProxied ? `${host} is proxied through Cloudflare` : `${host} is no longer proxied`;
   }
 
@@ -1271,6 +1271,20 @@ class Action {
     return this.reply({ notice: saved.notice });
   }
 
+  /** Holds redirects that could move from a removed or replaced PowerDNS server onto Cloudflare. */
+  private holdPowerDnsRedirects(next: Policy, removedId: string, clearedZones: string[], status: Status): void {
+    if (!next.connections.length) return;
+    const report = status.connections.find((connection) => connection.id === removedId);
+    const affectedZones = new Set([...clearedZones, ...(report?.zoneNames ?? [])]);
+    const affected = next.redirects
+      .map((redirect) => redirect.source)
+      .filter((source) =>
+        status.plans[source]?.zone?.connectionId === removedId
+        || [...affectedZones].some((zone) => source === zone || source.endsWith(`.${zone}`)),
+      );
+    if (affected.length) next.held = [...new Set([...next.held, ...affected])];
+  }
+
   private async savePowerDnsConnection(body: Record<string, unknown>): Promise<DnsReply> {
     const policy = this.files.policy();
     const secrets = this.files.secrets();
@@ -1280,8 +1294,12 @@ class Action {
     if (!existing && list.length >= MAX_CONNECTIONS) {
       failAction(`At most ${MAX_CONNECTIONS} PowerDNS connections can be added`);
     }
-    const id = existing?.id ?? `pdns-${randomBytes(4).toString("hex")}`;
-    const connection: PowerDnsConnection = parsePowerDnsConnection({ ...body, id });
+    const candidateId = existing?.id ?? `pdns-${randomBytes(4).toString("hex")}`;
+    const parsed: PowerDnsConnection = parsePowerDnsConnection({ ...body, id: candidateId });
+    const serverChanged = Boolean(existing && (existing.url !== parsed.url || existing.serverId !== parsed.serverId));
+    // Pointing an entry at a different PowerDNS server starts a fresh identity so orphan records from the old server never match it.
+    const id = serverChanged ? `pdns-${randomBytes(4).toString("hex")}` : candidateId;
+    const connection: PowerDnsConnection = serverChanged ? { ...parsed, id } : parsed;
     const rawKey = body.apiKey ?? body.token;
     // Keep a saved key only for the PowerDNS URL it was saved with.
     const apiKey = rawKey
@@ -1304,12 +1322,35 @@ class Action {
 
     const next = structuredClone(policy);
     next.powerdns = existing
-      ? (next.powerdns ?? []).map((entry) => entry.id === id ? connection : entry)
+      ? (next.powerdns ?? []).map((entry) => entry.id === existing.id ? connection : entry)
       : [...(next.powerdns ?? []), connection];
+    if (serverChanged && existing) {
+      const clearedZones: string[] = [];
+      for (const [zone, choice] of Object.entries(next.zoneChoices)) {
+        if (choice.connectionId === existing.id) {
+          clearedZones.push(zone);
+          delete next.zoneChoices[zone];
+        }
+      }
+      if (next.createIn?.connectionId === existing.id) next.createIn = null;
+      this.holdPowerDnsRedirects(next, existing.id, clearedZones, status);
+    }
     const standIns = Object.keys(this.standIns().current).filter((domain) => policy.redirects.some((redirect) => redirect.source === domain));
     if (!existing && standIns.length) next.held = [...new Set([...next.held, ...standIns])];
-    this.files.saveSecrets({ ...secrets, powerdns: { ...(secrets.powerdns ?? {}), [id]: apiKey } });
-    this.savePolicy(next);
+    const previousSecrets = secrets;
+    const savedSecrets: Secrets = { ...secrets, powerdns: { ...(secrets.powerdns ?? {}), [id]: apiKey } };
+    this.files.saveSecrets(savedSecrets);
+    try {
+      this.savePolicy(next);
+    } catch (error) {
+      try { this.files.saveSecrets(previousSecrets); } catch { /* best-effort rollback */ }
+      throw error;
+    }
+    if (serverChanged && existing) {
+      const cleaned = { ...(savedSecrets.powerdns ?? {}) };
+      delete cleaned[existing.id];
+      this.files.saveSecrets({ ...savedSecrets, powerdns: cleaned });
+    }
 
     const report: ConnectionReport = {
       id,
@@ -1325,7 +1366,7 @@ class Action {
     const latestStatus = this.files.status();
     this.files.saveStatus({
       ...latestStatus,
-      connections: [...latestStatus.connections.filter((entry) => entry.id !== id), report],
+      connections: [...latestStatus.connections.filter((entry) => entry.id !== id && entry.id !== existing?.id), report],
       backoff: { ...latestStatus.backoff, powerdns: Math.max(latestStatus.backoff.powerdns ?? 0, backoff.until) },
     });
 
@@ -1343,11 +1384,18 @@ class Action {
       const secrets = this.files.secrets();
       const nextPowerDnsSecrets = { ...(secrets.powerdns ?? {}) };
       delete nextPowerDnsSecrets[id];
-      this.files.saveSecrets({ ...secrets, powerdns: nextPowerDnsSecrets });
-      for (const [zone, choice] of Object.entries(next.zoneChoices)) if (choice.connectionId === id) delete next.zoneChoices[zone];
-      if (next.createIn?.connectionId === id) next.createIn = null;
-      this.savePolicy(next);
       const status = this.files.status();
+      const clearedZones: string[] = [];
+      for (const [zone, choice] of Object.entries(next.zoneChoices)) {
+        if (choice.connectionId === id) {
+          clearedZones.push(zone);
+          delete next.zoneChoices[zone];
+        }
+      }
+      if (next.createIn?.connectionId === id) next.createIn = null;
+      this.holdPowerDnsRedirects(next, id, clearedZones, status);
+      this.files.saveSecrets({ ...secrets, powerdns: nextPowerDnsSecrets });
+      this.savePolicy(next);
       this.files.saveStatus({ ...status, connections: status.connections.filter((connection) => connection.id !== id) });
       await this.tryRefresh("all");
       return this.reply({ notice: "Connection removed. Its API key stays valid in PowerDNS until you change it there." });

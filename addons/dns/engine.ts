@@ -54,13 +54,15 @@ export interface PanelSite {
 export type StandIn = Pick<Redirect, "target" | "status" | "keepPath" | "keepQuery"> & {
   /** The site exists but its vhost was never written, so it does not redirect yet. */
   incomplete?: boolean;
+  /** The hosts the stand-in vhost serves; defaults to standInHosts(source) when absent. */
+  hosts?: string[];
 };
 
-/** The CloudPanel sites that serve redirects while no Cloudflare connection is set up. */
+/** The CloudPanel sites that serve redirects while no edge redirect provider manages them. */
 export interface StandIns {
   current: Record<string, StandIn>;
-  create(redirect: Redirect): Promise<void>;
-  update(redirect: Redirect): Promise<void>;
+  create(redirect: Redirect, hosts?: string[]): Promise<void>;
+  update(redirect: Redirect, hosts?: string[]): Promise<void>;
   remove(source: string): Promise<void>;
 }
 
@@ -749,7 +751,7 @@ export class DnsRun {
             const hosts = redirectHosts(redirect.source, resolved.name);
             plan.changes.push({ action: "create", subject: "Cloudflare redirect rule", detail: `${hosts.join(" and ")}: ${describeRedirect(redirect)}` });
           } else {
-            this.planStandInChanges(redirect, plan);
+            this.planStandInChanges(redirect, plan, resolved.name);
           }
         }
         const zoneKey = `missing:${resolved.name}`;
@@ -784,7 +786,7 @@ export class DnsRun {
     }
     if (redirect) {
       if (provider.capabilities.edgeRedirects) this.redirectRuleChange(state, redirect, plan);
-      else this.planStandInChanges(redirect, plan);
+      else this.planStandInChanges(redirect, plan, resolved.ref.zone.name);
     }
 
     const zoneKey = `zone:${key}`;
@@ -830,18 +832,32 @@ export class DnsRun {
     }
   }
 
-  private planStandInChanges(redirect: Redirect, plan: SitePlan): void {
+  private standInHostsFor(source: string, zoneName?: string): string[] {
+    return zoneName ? redirectHosts(source, zoneName) : standInHosts(source);
+  }
+
+  private sameHosts(left: string[], right: string[]): boolean {
+    return left.length === right.length && left.every((host, index) => host === right[index]);
+  }
+
+  private planStandInChanges(redirect: Redirect, plan: SitePlan, zoneName?: string): void {
     const current = this.context.standIns?.current[redirect.source];
+    const hosts = this.standInHostsFor(redirect.source, zoneName);
     if (!current) {
       plan.changes.push({
         action: "create", subject: "Stand-in site",
-        detail: `A static site on this server for ${standInHosts(redirect.source).join(" and ")}: ${describeRedirect(redirect)}`,
+        detail: `A static site on this server for ${hosts.join(" and ")}: ${describeRedirect(redirect)}`,
       });
-    } else if (current.incomplete || describeRedirect(current) !== describeRedirect(redirect)) {
-      plan.changes.push({
-        action: "update", subject: "Stand-in site", detail: describeRedirect(redirect),
-        before: current.incomplete ? NOT_REDIRECTING : describeRedirect(current),
-      });
+    } else {
+      const currentHosts = current.hosts ?? standInHosts(redirect.source);
+      const hostsChanged = !this.sameHosts(currentHosts, hosts);
+      if (current.incomplete || describeRedirect(current) !== describeRedirect(redirect) || hostsChanged) {
+        plan.changes.push({
+          action: "update", subject: "Stand-in site",
+          detail: hostsChanged ? `${hosts.join(" and ")}: ${describeRedirect(redirect)}` : describeRedirect(redirect),
+          before: current.incomplete ? NOT_REDIRECTING : hostsChanged ? `${currentHosts.join(" and ")}: ${describeRedirect(current)}` : describeRedirect(current),
+        });
+      }
     }
   }
 
@@ -1179,20 +1195,24 @@ export class DnsRun {
     this.logged([redirect.source], "", "delete", "Stand-in site", "The redirect is served by Cloudflare now");
   }
 
-  /** While there is no Cloudflare connection, redirects are stand-in sites on this server. */
+  /** While there is no edge redirect provider, redirects are stand-in sites on this server. */
   private async enforceStandIns(plans: SitePlan[]): Promise<void> {
     const standIns = this.context.standIns;
     if (!standIns) return;
     for (const plan of plans) {
       const redirect = this.redirects.get(plan.domain)!;
       const current = standIns.current[plan.domain];
+      const hosts = this.standInHostsFor(redirect.source, plan.zone?.name);
+      const currentHosts = current ? current.hosts ?? standInHosts(redirect.source) : [];
+      const hostsChanged = Boolean(current) && !this.sameHosts(currentHosts, hosts);
       try {
-        if (!current) await standIns.create(redirect);
-        else if (current.incomplete || describeRedirect(current) !== describeRedirect(redirect)) await standIns.update(redirect);
+        if (!current) await standIns.create(redirect, hosts);
+        else if (current.incomplete || describeRedirect(current) !== describeRedirect(redirect) || hostsChanged) await standIns.update(redirect, hosts);
         else continue;
-        standIns.current[plan.domain] = { target: redirect.target, status: redirect.status, keepPath: redirect.keepPath, keepQuery: redirect.keepQuery };
-        const before = !current ? undefined : current.incomplete ? NOT_REDIRECTING : describeRedirect(current);
-        this.logged([plan.domain], "", current ? "update" : "create", "Stand-in site", describeRedirect(redirect), before);
+        standIns.current[plan.domain] = { target: redirect.target, status: redirect.status, keepPath: redirect.keepPath, keepQuery: redirect.keepQuery, hosts };
+        const before = !current ? undefined : current.incomplete ? NOT_REDIRECTING : hostsChanged ? `${currentHosts.join(" and ")}: ${describeRedirect(current)}` : describeRedirect(current);
+        const detail = hostsChanged ? `${hosts.join(" and ")}: ${describeRedirect(redirect)}` : describeRedirect(redirect);
+        this.logged([plan.domain], "", current ? "update" : "create", "Stand-in site", detail, before);
       } catch (error) {
         this.fail(plan.domain, error);
       }

@@ -362,8 +362,8 @@ function panelHostCard(state: DnsState): string {
         ? `CloudPanel's custom domain, pointed directly at this server${host.plan.wildcard ? ` via ${esc(host.plan.wildcard)}` : ""}.`
       : isPowerDns && custom?.name === host.name && !custom.issued
         ? "CloudPanel is getting its certificate."
-      : host.proxied && !pending.length && host.plan ? `CloudPanel's custom domain, proxied through Cloudflare${host.plan.wildcard ? ` via ${esc(host.plan.wildcard)}` : ""}. The zone's Full SSL rule keeps Let's Encrypt renewals working.`
-      : !host.proxied && custom?.name === host.name ? "CloudPanel is getting its certificate. DNS proxies it through Cloudflare once issued."
+      : !isPowerDns && host.proxied && !pending.length && host.plan ? `CloudPanel's custom domain, proxied through Cloudflare${host.plan.wildcard ? ` via ${esc(host.plan.wildcard)}` : ""}. The zone's Full SSL rule keeps Let's Encrypt renewals working.`
+      : !isPowerDns && !host.proxied && custom?.name === host.name ? "CloudPanel is getting its certificate. DNS proxies it through Cloudflare once issued."
       : pending.length || !host.plan ? (state.automatic ? (pending.length ? "The next check writes these, within 15 minutes." : "") : "DNS asks first, so the record is written once you turn on Automatic.")
       : isPowerDns
         ? `Next: enter ${esc(host.name)} under ${settings} in CloudPanel.${custom ? ` CloudPanel's custom domain is ${esc(custom.name)} now.` : ""}`

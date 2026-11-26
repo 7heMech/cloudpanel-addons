@@ -11,6 +11,7 @@ import {
   formatPowerDnsContent, parsePowerDnsUrl, powerDnsRecordId, PowerDnsProvider, quotePowerDnsTxt,
 } from "../addons/dns/powerdns";
 import { connectionCheck, permissionActions } from "../addons/dns/setup";
+import { standInBody } from "../addons/dns/stand-in";
 import { unquoteTxt } from "../lib/dns-name";
 import type { ApiFetch } from "../lib/provider-http";
 import { FakeCloudflare, FakeMailcow, routed } from "./fixtures/dns-api";
@@ -128,7 +129,7 @@ class FakePowerDns {
           if (!item.name.endsWith(".")) return jsonResponse({ error: `RRset name ${item.name} must end with a dot` }, 422);
           zone.rrsets = zone.rrsets.filter((existing) => !(existing.name === item.name && existing.type === item.type));
           if (item.changetype === "REPLACE") {
-            if (!item.ttl || item.ttl < 1) return jsonResponse({ error: "REPLACE requires positive TTL" }, 422);
+            if (item.ttl === undefined || item.ttl < 0) return jsonResponse({ error: "REPLACE requires non-negative TTL" }, 422);
             zone.rrsets.push({ name: item.name, type: item.type, ttl: item.ttl, records: item.records ?? [] });
           } else if (item.changetype !== "DELETE") {
             return jsonResponse({ error: `Unknown changetype ${item.changetype}` }, 422);
@@ -145,22 +146,27 @@ function makeSite(id: number, domain: string): PanelSite {
   return { id, domain, type: "php", createdAt: START - 86_400_000, selfSigned: false, cloudflareOnly: false };
 }
 
-function makeStandIns(): StandIns & { log: string[] } {
+function makeStandIns(): StandIns & { log: string[]; hosts: Record<string, string[] | undefined> } {
   const current: Record<string, StandIn> = {};
   const log: string[] = [];
+  const hosts: Record<string, string[] | undefined> = {};
   return {
     current,
     log,
-    async create(redirect) {
+    hosts,
+    async create(redirect, siteHosts) {
       log.push(`create:${redirect.source}`);
-      current[redirect.source] = { target: redirect.target, status: redirect.status, keepPath: redirect.keepPath, keepQuery: redirect.keepQuery };
+      hosts[redirect.source] = siteHosts;
+      current[redirect.source] = { target: redirect.target, status: redirect.status, keepPath: redirect.keepPath, keepQuery: redirect.keepQuery, ...(siteHosts ? { hosts: siteHosts } : {}) };
     },
-    async update(redirect) {
+    async update(redirect, siteHosts) {
       log.push(`update:${redirect.source}`);
-      current[redirect.source] = { target: redirect.target, status: redirect.status, keepPath: redirect.keepPath, keepQuery: redirect.keepQuery };
+      hosts[redirect.source] = siteHosts;
+      current[redirect.source] = { target: redirect.target, status: redirect.status, keepPath: redirect.keepPath, keepQuery: redirect.keepQuery, ...(siteHosts ? { hosts: siteHosts } : {}) };
     },
     async remove(source) {
       log.push(`remove:${source}`);
+      delete hosts[source];
       delete current[source];
     },
   };
@@ -549,5 +555,199 @@ describe("PowerDNS end-to-end DNS reconciliation", () => {
       autoTtl: false,
       comments: false,
     });
+  });
+
+  test("preserves disabled RRset siblings and explicit TTL 0 when removing managed TXT records", async () => {
+    const pdns = new FakePowerDns();
+    const zone = pdns.addZone("example.com", [
+      // Case 1: enabled SPF + enabled verification TXT + disabled verification TXT.
+      {
+        name: "both.example.com.",
+        type: "TXT",
+        ttl: 300,
+        records: [
+          { content: "\"v=spf1 a -all\"", disabled: false },
+          { content: "\"google-site-verification=active\"", disabled: false },
+          { content: "\"v=verify-disabled-with-active\"", disabled: true },
+        ],
+      },
+      // Case 2: enabled SPF + ONLY disabled verification TXT (no other enabled sibling) with explicit TTL 0.
+      {
+        name: "only-disabled.example.com.",
+        type: "TXT",
+        ttl: 0,
+        records: [
+          { content: "\"v=spf1 a -all\"", disabled: false },
+          { content: "\"v=verify-disabled-alone\"", disabled: true },
+        ],
+      },
+      // Case 3: enabled SPF + enabled unmanaged TXT sibling at TTL 0.
+      {
+        name: "zero-ttl.example.com.",
+        type: "TXT",
+        ttl: 0,
+        records: [
+          { content: "\"v=spf1 a -all\"", disabled: false },
+          { content: "\"unmanaged-zero-ttl\"", disabled: false },
+        ],
+      },
+    ]);
+
+    const provider = new PowerDnsProvider(
+      { label: "Primary NS", url: PDNS_URL, serverId: "localhost", defaultTtl: 300, createZones: false, nameservers: [] },
+      PDNS_KEY,
+      async (url, init) => pdns.handle(url, init),
+    );
+    const dnsZone = { id: zone.id, name: "example.com", status: "active", nameServers: [], account: { id: "localhost", name: "Primary NS" } };
+    const listed = await provider.listRecords(dnsZone);
+
+    // Disabled records are excluded from the matching view, while explicit TTL 0 is preserved on enabled records.
+    expect(listed.some((r) => r.content.includes("verify-disabled"))).toBe(false);
+    expect(listed.find((r) => r.name === "zero-ttl.example.com" && r.content === "unmanaged-zero-ttl")?.ttl).toBe(0);
+
+    const spfBoth = listed.find((r) => r.name === "both.example.com" && r.content === "v=spf1 a -all")!;
+    const spfOnlyDisabled = listed.find((r) => r.name === "only-disabled.example.com" && r.content === "v=spf1 a -all")!;
+    const spfZeroTtl = listed.find((r) => r.name === "zero-ttl.example.com" && r.content === "v=spf1 a -all")!;
+
+    await provider.applyRecords(dnsZone, [
+      { action: "delete", record: spfBoth, current: spfBoth },
+      { action: "delete", record: spfOnlyDisabled, current: spfOnlyDisabled },
+      { action: "delete", record: spfZeroTtl, current: spfZeroTtl },
+    ], listed);
+
+    const lastPatch = pdns.patches().at(-1)!.body as { rrsets: { name: string; type: string; ttl?: number; changetype: string; records?: { content: string; disabled: boolean }[] }[] };
+    const bothPatch = lastPatch.rrsets.find((r) => r.name === "both.example.com.");
+    expect(bothPatch).toEqual({
+      name: "both.example.com.",
+      type: "TXT",
+      ttl: 300,
+      changetype: "REPLACE",
+      records: [
+        { content: "\"google-site-verification=active\"", disabled: false },
+        { content: "\"v=verify-disabled-with-active\"", disabled: true },
+      ],
+    });
+
+    // No DELETE is sent when a disabled sibling remains; explicit TTL 0 is preserved too.
+    const onlyDisabledPatch = lastPatch.rrsets.find((r) => r.name === "only-disabled.example.com.");
+    expect(onlyDisabledPatch).toEqual({
+      name: "only-disabled.example.com.",
+      type: "TXT",
+      ttl: 0,
+      changetype: "REPLACE",
+      records: [
+        { content: "\"v=verify-disabled-alone\"", disabled: true },
+      ],
+    });
+
+    const zeroTtlPatch = lastPatch.rrsets.find((r) => r.name === "zero-ttl.example.com.");
+    expect(zeroTtlPatch).toEqual({
+      name: "zero-ttl.example.com.",
+      type: "TXT",
+      ttl: 0,
+      changetype: "REPLACE",
+      records: [
+        { content: "\"unmanaged-zero-ttl\"", disabled: false },
+      ],
+    });
+  });
+
+  test("rejects conflicting TTLs in one PowerDNS RRset, matches stand-in hosts to zone apex, holds redirects on removal, and isolates endpoint edits", async () => {
+    const pdns2 = new FakePowerDns("pdns-second-key-9876543210");
+    pdns2.addZone("example.com", [
+      { name: "orphan.example.com.", type: "A", ttl: 300, records: [{ content: "203.0.113.10", disabled: false }] },
+    ]);
+    const env = setupEnv({ pdns2 });
+    const agency = env.cf.account("Agency");
+    env.cf.token(CF_TOKEN, { owner: "user", accounts: [agency], zoneEdit: true });
+    env.cf.zone("shared.example", agency);
+    env.pdns.addZone("example.com");
+    env.pdns.addZone("shop.example.com");
+    env.pdns.addZone("shared.example");
+    env.sites.push(makeSite(1, "orphan.example.com"), makeSite(2, "conflict.example.com"));
+
+    const saved = await env.act("save-connection", { provider: "powerdns", label: "NS1", url: PDNS_URL, apiKey: PDNS_KEY });
+    const pdnsId = saved.connections[0]!.id;
+
+    // 1. Conflicting TTLs in one PowerDNS RRset fail planning instead of oscillating.
+    const badProfile = await env.act("save-profile", {
+      name: "Mixed TTL",
+      records: [
+        { type: "A", name: "{domain}", content: "203.0.113.10", proxied: false, ttl: 300 },
+        { type: "A", name: "{domain}", content: "203.0.113.11", proxied: false, ttl: 600 },
+      ],
+    });
+    const badId = badProfile.profiles.find((p) => p.name === "Mixed TTL")!.id;
+    await env.act("assign", { domains: ["conflict.example.com"], profileId: badId });
+    const badReview = await env.act("set-automatic", { automatic: true });
+    expect(badReview.review!.blocked).toBe(true);
+    expect(badReview.review!.sites.find((s) => s.domain === "conflict.example.com")!.problems.join("\n")).toContain("different TTLs");
+
+    // Clean up conflict site, manage orphan.example.com on NS1, then delete site so it becomes an orphan.
+    await env.act("assign", { domains: ["conflict.example.com"], profileId: null });
+    await env.act("assign", { domains: ["orphan.example.com"], profileId: "web" });
+    await env.apply("set-automatic", { automatic: true });
+
+    // 2. Stand-in site for a redirect at the apex of a sub-zone gets both source and www.source.
+    await env.apply("save-redirect", {
+      source: "shop.example.com", target: "https://dest.example/", status: 301, keepPath: true, keepQuery: true, profileId: null,
+    });
+    expect(env.standIns.hosts["shop.example.com"]).toEqual(["shop.example.com", "www.shop.example.com"]);
+    expect(standInBody("shop.example.com", env.standIns.current["shop.example.com"]!)).toContain("server_name shop.example.com www.shop.example.com;");
+
+    // 3. sync-panel-host returns null when no provider resolves for panelHost; pending PowerDNS copy avoids Cloudflare fallback.
+    await env.act("set-panel-host", { name: "panel.unmanaged.test" });
+    env.custom.current = { name: "panel.unmanaged.test", issued: true };
+    const noProviderSync = await env.act("sync-panel-host") as unknown as { line: string | null };
+    expect(noProviderSync.line).toBeNull();
+
+    // Pending PowerDNS panel host with issued custom domain stays out of Cloudflare fallback.
+    await env.apply("set-panel-host", { name: "panel.example.com" });
+    env.custom.current = { name: "panel.example.com", issued: true };
+    env.pdns.rrsetsOf("example.com").find((r) => r.name === "panel.example.com." && r.type === "A")!.records[0]!.content = "198.51.100.1";
+    const pendingPanelState = await env.act("set-automatic", { automatic: false });
+    const pendingHtml = dashboardContent(pendingPanelState);
+    expect(pendingHtml).not.toContain("proxies it through Cloudflare once issued");
+    expect(pendingHtml).toContain("DNS asks first");
+    await env.act("set-panel-host", { name: null });
+    await env.apply("set-automatic", { automatic: true });
+
+    // 4. Removing a PowerDNS connection holds redirects whose zone choice pointed to it so Cloudflare does not silently take over.
+    await env.act("save-connection", { provider: "cloudflare", token: CF_TOKEN });
+    await env.act("choose-zone", { zone: "shared.example", connectionId: pdnsId, zoneId: "shared.example." });
+    await env.apply("save-redirect", {
+      source: "shared.example", target: "https://target.example/", status: 301, keepPath: true, keepQuery: true, profileId: null,
+    });
+    expect(env.standIns.current["shared.example"]).toBeDefined();
+
+    // Remove the site orphan.example.com before editing NS1 to a different server (NS2).
+    env.sites.splice(0, 1);
+    const edited = await env.act("save-connection", {
+      id: pdnsId, provider: "powerdns", label: "NS2", url: "http://127.0.0.1:8082", apiKey: "pdns-second-key-9876543210",
+    });
+    const newPdnsId = edited.connections.find((c) => c.provider === "powerdns")!.id;
+    expect(newPdnsId).not.toBe(pdnsId);
+    // Old orphan from NS1 cannot touch NS2's identical record because the connection identity changed.
+    await expect(env.act("remove-records", { domain: "orphan.example.com" })).rejects.toThrow("connection these records were tracked through has been removed");
+    // Redirect on shared.example is held rather than silently moved to Cloudflare.
+    const afterCheck = await env.act("check");
+    const sharedSite = afterCheck.sites.find((s) => s.domain === "shared.example");
+    expect(sharedSite?.plan?.held).toBe(true);
+    expect(env.standIns.current["shared.example"]).toBeDefined();
+    expect(env.cf.rulesets.size).toBe(0);
+
+    // Explicitly removing a PowerDNS connection holding a chosen redirect also holds that redirect for review.
+    env.cf.zone("remove-hold.example", agency);
+    pdns2.addZone("remove-hold.example");
+    await env.act("check");
+    await env.act("choose-zone", { zone: "remove-hold.example", connectionId: newPdnsId, zoneId: "remove-hold.example." });
+    await env.apply("save-redirect", {
+      source: "remove-hold.example", target: "https://target.example/", status: 301, keepPath: true, keepQuery: true, profileId: null,
+    });
+    await env.act("remove-connection", { id: newPdnsId });
+    const afterRemove = await env.act("check");
+    expect(afterRemove.sites.find((s) => s.domain === "remove-hold.example")?.plan?.held).toBe(true);
+    expect(env.standIns.current["remove-hold.example"]).toBeDefined();
+    expect(env.cf.rulesets.size).toBe(0);
   });
 });
