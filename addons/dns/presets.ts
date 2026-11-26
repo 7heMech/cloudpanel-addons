@@ -91,6 +91,7 @@ export function seededPolicy(): Policy {
     knownSiteIds: [],
     held: [],
     connections: [],
+    powerdns: [],
     zoneChoices: {},
     server: { ipv4: "", ipv6: "" },
     mailcow: { ...EMPTY_MAILCOW },

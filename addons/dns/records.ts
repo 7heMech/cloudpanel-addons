@@ -9,12 +9,14 @@
  * renders are never read for changes at all.
  */
 import { isIP } from "node:net";
-import type { CfRecord, RecordWrite } from "../../lib/cloudflare/api";
 import { dnsName, wildcardBlocker, wildcardSource } from "../../lib/dns-name";
 import { PROXIABLE, type Profile, type RecordTemplate } from "./model";
+import {
+  normalizeRecordForProvider, type DnsRecord, type ProviderCapabilities, type RecordOp, type RecordWrite,
+} from "./provider";
 import { isSpf, mergeSpf } from "./spf";
 
-export { wildcardSource };
+export { wildcardSource, type RecordOp };
 
 export interface SiteVars {
   domain: string;
@@ -96,7 +98,7 @@ function contentProblem(type: string, content: string): string | null {
     }
   }
   if (type === "CAA" && !/^\d{1,3}\s+(issue|issuewild|iodef)\s+"?[^"\s]*"?$/i.test(content)) return 'must be flags, tag and value, such as 0 issue "letsencrypt.org"';
-  if (type === "TXT" && content.length > 2048) return "is longer than Cloudflare accepts";
+  if (type === "TXT" && content.length > 2048) return "is longer than 2048 characters";
   return null;
 }
 
@@ -195,22 +197,46 @@ const ADDRESS_TYPES = new Set(["A", "AAAA"]);
 /**
  * What a redirect domain wants: its profile's rows, if it has one, without the
  * web rows -- address and CNAME rows at the domain, its `www` and its `*.` --
- * and a proxied placeholder at each host the redirect answers for, which owns
- * every address and CNAME there. Mail rows and anything else render as for a site.
+ * and either a proxied edge placeholder (`placeholder` set, such as Cloudflare's
+ * `100::`) or unproxied A and AAAA records pointing to this server's addresses
+ * (`placeholder === null`, for providers without edge redirect rules where a
+ * local stand-in site answers HTTP/HTTPS).
  */
-export function renderRedirect(profile: Profile | null, hosts: string[], vars: SiteVars, placeholder: string): Rendered {
+export function renderRedirect(profile: Profile | null, hosts: string[], vars: SiteVars, placeholder: string | null): Rendered {
   const own = new Set([vars.domain, `www.${vars.domain}`, `*.${vars.domain}`]);
   const web = (name: string, type: string) => own.has(name) && WEB_TYPES.has(type);
   const rendered: Rendered = profile ? renderProfile(profile, vars, web) : { zone: vars.zone, records: [], claims: [], waitingDkim: [], problems: [] };
+  if (placeholder !== null) {
+    for (const host of hosts) {
+      rendered.records.push({ type: "AAAA", name: host, content: placeholder, proxied: true, ttl: 1, priority: null });
+      rendered.claims.push({ name: host, type: "A" }, { name: host, type: "AAAA" });
+    }
+    return rendered;
+  }
+  if (vars.ipv4 === null) rendered.problems.push("This server's IPv4 address could not be detected; set it under Server addresses");
+  if (vars.ipv6 === null) rendered.problems.push("This server's IPv6 address could not be detected; set it under Server addresses");
+  if (vars.ipv4 === "" && vars.ipv6 === "") rendered.problems.push("This server has no IPv4 or IPv6 address for this redirect; set one under Server addresses");
   for (const host of hosts) {
-    rendered.records.push({ type: "AAAA", name: host, content: placeholder, proxied: true, ttl: 1, priority: null });
     rendered.claims.push({ name: host, type: "A" }, { name: host, type: "AAAA" });
+    if (vars.ipv4) rendered.records.push({ type: "A", name: host, content: vars.ipv4, proxied: false, ttl: 1, priority: null });
+    if (vars.ipv6) rendered.records.push({ type: "AAAA", name: host, content: canonical("AAAA", vars.ipv6), proxied: false, ttl: 1, priority: null });
   }
   return rendered;
 }
 
+/** Resolves proxy flags and Auto TTL against a provider's capabilities before diffing. */
+export function normalizeRenderedForProvider(
+  rendered: Rendered,
+  provider: { capabilities: ProviderCapabilities; defaultTtl: number },
+): Rendered {
+  return {
+    ...rendered,
+    records: rendered.records.map((record) => normalizeRecordForProvider(record, provider)),
+  };
+}
+
 /** Whether a published record is one of the records `claims` speak for. */
-function claimedBy(record: Pick<CfRecord, "name" | "type" | "content">, claims: Claim[]): boolean {
+function claimedBy(record: Pick<DnsRecord, "name" | "type" | "content">, claims: Claim[]): boolean {
   return claims.some((claim) => {
     if (claim.name !== record.name) return false;
     if (claim.type === "CNAME" || record.type === "CNAME") return true;
@@ -220,7 +246,7 @@ function claimedBy(record: Pick<CfRecord, "name" | "type" | "content">, claims: 
   });
 }
 
-export function sameRecord(current: Pick<CfRecord, "type" | "name" | "content" | "proxied" | "ttl" | "priority">, wanted: RecordWrite): boolean {
+export function sameRecord(current: Pick<DnsRecord, "type" | "name" | "content" | "proxied" | "ttl" | "priority">, wanted: RecordWrite): boolean {
   if (current.type !== wanted.type || current.name !== wanted.name) return false;
   if (canonical(current.type, current.content) !== canonical(wanted.type, wanted.content)) return false;
   if (PROXIABLE.includes(wanted.type as never) && current.proxied !== wanted.proxied) return false;
@@ -241,17 +267,10 @@ function wildcardMatchesAddresses(wildcard: string, wildcardRecords: readonly Re
   return true;
 }
 
-export interface RecordOp {
-  action: "create" | "update" | "delete";
-  record: RecordWrite;
-  /** The published record an update or delete acts on. */
-  current?: CfRecord;
-}
-
 export interface Diff {
   ops: RecordOp[];
   /** Records this site already has exactly as wanted, kept for the orphan inventory. */
-  matched: CfRecord[];
+  matched: DnsRecord[];
   /** The records wanted once SPF is merged, for comparing sites and reporting. */
   wanted: RecordWrite[];
   /** Every name the profile writes at or relies on, which no orphan removal may touch. */
@@ -279,7 +298,7 @@ function syntheticTxt(name: string): RecordWrite {
 }
 
 /** What it takes to turn `published` into what `rendered` wants, without touching anything it does not claim. */
-export function diffRecords(rendered: Rendered, published: CfRecord[], options: DiffOptions = {}): Diff {
+export function diffRecords(rendered: Rendered, published: DnsRecord[], options: DiffOptions = {}): Diff {
   const diff: Diff = {
     ops: [], matched: [], wanted: [], names: [...new Set(rendered.claims.map((claim) => claim.name))],
     covered: {}, blockedWildcard: {}, problems: [...rendered.problems],
@@ -344,7 +363,7 @@ export function diffRecords(rendered: Rendered, published: CfRecord[], options: 
       diff.problems.push(`${name} is delegated to other nameservers by NS records`);
     }
   }
-  const used = new Set<CfRecord>(blocked);
+  const used = new Set<DnsRecord>(blocked);
 
   const wanted = diff.wanted.map((record) => {
     const kind = record.type === "TXT" ? txtKind(record.content) : null;
@@ -358,8 +377,8 @@ export function diffRecords(rendered: Rendered, published: CfRecord[], options: 
   // Exact matches first, then records that differ only in proxy, TTL or priority, then any other: Cloudflare refuses
   // a second record with the same content, so an update must never give one record another's content.
   const passes = [
-    (current: CfRecord, record: RecordWrite) => sameRecord(current, record),
-    (current: CfRecord, record: RecordWrite) => canonical(current.type, current.content) === canonical(record.type, record.content),
+    (current: DnsRecord, record: RecordWrite) => sameRecord(current, record),
+    (current: DnsRecord, record: RecordWrite) => canonical(current.type, current.content) === canonical(record.type, record.content),
     () => true,
   ];
   const updates: RecordOp[] = [];
@@ -384,10 +403,10 @@ export function diffRecords(rendered: Rendered, published: CfRecord[], options: 
 }
 
 /** One line for a record, as the page shows it. */
-export function describeRecord(record: RecordWrite): string {
+export function describeRecord(record: RecordWrite, options: { proxy?: boolean } = {}): string {
   const parts = [record.content];
   if (record.priority !== null && record.priority !== undefined) parts.push(`priority ${record.priority}`);
-  if (PROXIABLE.includes(record.type as never)) parts.push(record.proxied ? "proxied" : "DNS only");
+  if (options.proxy !== false && PROXIABLE.includes(record.type as never)) parts.push(record.proxied ? "proxied" : "DNS only");
   if (!record.proxied && record.ttl !== 1) parts.push(`TTL ${record.ttl}`);
   return parts.join(" · ");
 }

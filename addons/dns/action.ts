@@ -29,10 +29,12 @@ import {
 import { type ApiFetch, redact } from "../../lib/provider-http";
 import { MailcowApi } from "./mailcow";
 import {
-  connectionId, hostname, parseAccountRef, parseMailcow, parsePolicy, parseProfile, parseRedirect, parseRedirects, parseSecrets, profileEffect,
-  profileId, secretText, ipAddress, cloudflareId, EMPTY_MAILCOW, type MailcowSettings, type Policy, type Profile, type Redirect,
-  type Secrets,
+  connectionId, hostname, parseAccountRef, parseMailcow, parsePolicy, parsePowerDnsConnection, parseProfile, parseRedirect, parseRedirects,
+  parseSecrets, profileEffect, profileId, providerId, secretText, ipAddress, EMPTY_MAILCOW, MAX_CONNECTIONS, type MailcowSettings, type Policy,
+  type PowerDnsConnection, type Profile, type Redirect, type Secrets,
 } from "./model";
+import { parsePowerDnsApiKey, PowerDnsProvider } from "./powerdns";
+import { PROVIDER_LABELS, type DnsRecord, type ProviderKind } from "./provider";
 import { PRESETS, seededPolicy, type Preset } from "./presets";
 import { describeRecord, renderProfile, sameRecord } from "./records";
 import type { FoundRedirect } from "./redirects";
@@ -137,13 +139,24 @@ export interface Review {
 /** A write DNS made, and what made it. */
 type LogLine = LogEntry & { cause: string };
 
+export type DnsConnectionView = Omit<ConnectionReport, "token" | "refused" | "zoneNames"> & {
+  provider: ProviderKind;
+  hasToken: boolean;
+  access: AccessView | null;
+  url?: string;
+  serverId?: string;
+  defaultTtl?: number;
+  createZones?: boolean;
+  nameservers?: string[];
+};
+
 export interface DnsState {
   automatic: boolean;
   createIn: Policy["createIn"];
   profiles: (Profile & { sites: number })[];
   defaultProfileId: string | null;
   sites: SiteView[];
-  connections: (Omit<ConnectionReport, "token" | "refused" | "zoneNames"> & { hasToken: boolean; access: AccessView | null })[];
+  connections: DnsConnectionView[];
   accounts: { connectionId: string; accountId: string; label: string }[];
   /** Active or pending zone names the connections reach, for picking a zone on the page. */
   zones: string[];
@@ -216,7 +229,7 @@ interface Status {
   checkedAt: string | null;
   connections: ConnectionReport[];
   plans: Record<string, SitePlan>;
-  backoff: { cloudflare: number; mailcow: number };
+  backoff: { cloudflare: number; mailcow: number; powerdns?: number };
   /** Whether the panel hostname was last planned proxied, so a certificate write that changes nothing is cheap. */
   panelProxied?: boolean;
   /** Cloudflare connection ids saved when DNS last looked; absent before it first did. */
@@ -238,7 +251,7 @@ interface Pending {
   redirect?: string;
 }
 
-const emptyStatus = (): Status => ({ checkedAt: null, connections: [], plans: {}, backoff: { cloudflare: 0, mailcow: 0 } });
+const emptyStatus = (): Status => ({ checkedAt: null, connections: [], plans: {}, backoff: { cloudflare: 0, mailcow: 0, powerdns: 0 } });
 const hash = (value: unknown): string => createHash("sha256").update(JSON.stringify(value) ?? "null").digest("hex");
 
 function cloudflarePathsOf(paths: DnsPaths): CloudflareStorePaths {
@@ -265,13 +278,15 @@ class Files {
     const raw = readState<unknown>(this.path("policy"), this.paths.rootUid, () => null);
     const parsed = raw === null ? seededPolicy() : parsePolicy(raw);
     const connections = hasSharedCloudflareStore(this.cfPaths) ? readCloudflareConnections(this.cfPaths) : parsed.connections;
-    const createIn = parsed.createIn && connections.some((c) => c.id === parsed.createIn!.connectionId) ? parsed.createIn : null;
-    return { ...parsed, connections, createIn };
+    const powerdns = parsed.powerdns ?? [];
+    const allIds = new Set([...connections.map((c) => c.id), ...powerdns.map((c) => c.id)]);
+    const createIn = parsed.createIn && allIds.has(parsed.createIn.connectionId) ? parsed.createIn : null;
+    return { ...parsed, connections, powerdns, createIn };
   }
 
   savePolicy(policy: Policy): void {
     // Cloudflare connections live in the shared store; keep dns/policy.json's legacy list empty once migrated,
-    // without wiping unmigrated legacy connections while the shared store does not exist yet.
+    // without wiping unmigrated legacy connections while the shared store does not exist yet, while storing PowerDNS connections here.
     const clean = parsePolicy(policy);
     let legacy: Policy["connections"] = [];
     if (!hasSharedCloudflareStore(this.cfPaths)) {
@@ -284,29 +299,42 @@ class Files {
   secrets(): Secrets {
     const parsed = parseSecrets(readState(this.path("secrets"), this.paths.rootUid, () => ({})));
     const cloudflare = hasSharedCloudflareStore(this.cfPaths) ? readCloudflareSecrets(this.cfPaths) : parsed.cloudflare;
-    return { cloudflare, mailcowKey: parsed.mailcowKey };
+    return { cloudflare, powerdns: parsed.powerdns ?? {}, mailcowKey: parsed.mailcowKey };
   }
 
   saveSecrets(secrets: Secrets): void {
-    // Cloudflare tokens live in the shared store; keep only Mailcow's key in dns/secrets.json once migrated,
-    // without wiping unmigrated legacy tokens while the shared store does not exist yet.
+    // Cloudflare tokens live in the shared store; keep PowerDNS keys and Mailcow's key in dns/secrets.json,
+    // without wiping unmigrated legacy Cloudflare tokens while the shared store does not exist yet.
     let legacy: Record<string, string> = {};
     if (!hasSharedCloudflareStore(this.cfPaths)) {
       legacy = parseSecrets(readState(this.path("secrets"), this.paths.rootUid, () => ({}))).cloudflare;
     }
-    writeState(this.path("secrets"), { cloudflare: legacy, mailcowKey: secrets.mailcowKey }, this.paths.rootUid);
+    const powerdns = secrets.powerdns ?? {};
+    writeState(this.path("secrets"), {
+      cloudflare: legacy,
+      ...(Object.keys(powerdns).length ? { powerdns } : {}),
+      mailcowKey: secrets.mailcowKey,
+    }, this.paths.rootUid);
   }
 
   status(): Status {
     const stored = { ...emptyStatus(), ...readState<Partial<Status>>(this.path("status"), this.paths.rootUid, emptyStatus) };
     const shared = hasSharedCloudflareStore(this.cfPaths);
     const { reports, backoffUntil } = readCloudflareStatus(this.cfPaths);
+    const storedPdns = stored.connections
+      .filter((entry) => entry.provider === "powerdns" || entry.id.startsWith("pdns-"))
+      .map((entry) => ({ ...entry, provider: "powerdns" as const }));
+    const storedCf = stored.connections
+      .filter((entry) => entry.provider !== "powerdns" && !entry.id.startsWith("pdns-"))
+      .map((entry) => ({ ...entry, provider: "cloudflare" as const }));
+    const cfReports = shared ? reports.map((entry) => ({ ...entry, provider: "cloudflare" as const })) : storedCf;
     return {
       ...stored,
-      connections: shared ? reports : stored.connections,
+      connections: [...cfReports, ...storedPdns],
       backoff: {
         cloudflare: Math.max(stored.backoff.cloudflare, backoffUntil),
         mailcow: stored.backoff.mailcow,
+        powerdns: stored.backoff.powerdns ?? 0,
       },
     };
   }
@@ -484,11 +512,12 @@ class Action {
   async rememberBackoff(): Promise<void> {
     if (!this.runs.length && !this.mailcowTrial) return;
     const status = this.files.status();
-    const backoff = { ...status.backoff };
+    const backoff = { cloudflare: status.backoff.cloudflare, mailcow: status.backoff.mailcow, powerdns: status.backoff.powerdns ?? 0 };
     for (const run of this.runs) {
       const observed = run.backoff();
       backoff.cloudflare = Math.max(backoff.cloudflare, observed.cloudflare);
       backoff.mailcow = Math.max(backoff.mailcow, observed.mailcow);
+      backoff.powerdns = Math.max(backoff.powerdns, observed.powerdns);
     }
     backoff.mailcow = Math.max(backoff.mailcow, this.mailcowTrial?.http.backoff.until ?? 0);
     if (JSON.stringify(backoff) !== JSON.stringify(status.backoff)) {
@@ -556,11 +585,14 @@ class Action {
     const panelSettled = panelPlan && !panelPlan.problems.length && !panelPlan.changes.some((change) => change.action !== "note");
     const shared = hasSharedCloudflareStore(this.files.cfPaths);
     const nextConnections = run.connections.length || domains === "all" ? this.withEarlier(run, status.connections, domains) : status.connections;
+    const storedConnections = shared
+      ? nextConnections.filter((entry) => entry.provider === "powerdns" || entry.id.startsWith("pdns-"))
+      : nextConnections;
     this.files.saveStatus({
       ...status,
       ...panelSettled && { panelProxied: run.panelProxied },
       checkedAt: domains === "all" ? new Date(this.now).toISOString() : status.checkedAt,
-      connections: shared ? [] : nextConnections,
+      connections: storedConnections,
       plans: plansByDomain,
       backoff: run.backoff(),
     });
@@ -582,7 +614,8 @@ class Action {
     }
     this.files.saveManaged(managed);
     if (shared && (run.connections.length || domains === "all")) {
-      await recordCloudflareReports(run.reports(), run.backoff().cloudflare, domains === "all", run.tokens, this.files.cfPaths);
+      const cfReports = run.reports().filter((report) => (report.provider ?? "cloudflare") === "cloudflare");
+      await recordCloudflareReports(cfReports, run.backoff().cloudflare, domains === "all", run.tokens, this.files.cfPaths);
     }
   }
 
@@ -627,16 +660,39 @@ class Action {
           };
         }),
       ].sort((a, b) => a.domain.localeCompare(b.domain)),
-      connections: policy.connections.map((connection) => {
-        const stored = status.connections.find((entry) => entry.id === connection.id);
-        const { token: _token, refused: _refused, zoneNames: _zoneNames, ...report } = stored ?? { id: connection.id, active: false, status: "unchecked", accounts: [], zones: 0, error: null };
-        return {
-          ...report,
-          label: connection.label,
-          hasToken: Boolean(secrets.cloudflare[connection.id]),
-          access: stored?.active ? accessView(stored, tokenProfiles(policy)) : null,
-        };
-      }),
+      connections: [
+        ...policy.connections.map((connection): DnsConnectionView => {
+          const stored = status.connections.find((entry) => entry.id === connection.id);
+          const { token: _token, refused: _refused, zoneNames: _zoneNames, ...report } = stored ?? {
+            id: connection.id, provider: "cloudflare" as const, active: false, status: "unchecked", accounts: [], zones: 0, error: null,
+          };
+          return {
+            ...report,
+            provider: "cloudflare",
+            label: connection.label,
+            hasToken: Boolean(secrets.cloudflare[connection.id]),
+            access: stored?.active ? accessView(stored, tokenProfiles(policy)) : null,
+          };
+        }),
+        ...(policy.powerdns ?? []).map((connection): DnsConnectionView => {
+          const stored = status.connections.find((entry) => entry.id === connection.id);
+          const { token: _token, refused: _refused, zoneNames: _zoneNames, ...report } = stored ?? {
+            id: connection.id, provider: "powerdns" as const, active: false, status: "unchecked", accounts: [], zones: 0, error: null,
+          };
+          return {
+            ...report,
+            provider: "powerdns",
+            label: connection.label,
+            url: connection.url,
+            serverId: connection.serverId,
+            defaultTtl: connection.defaultTtl,
+            createZones: connection.createZones,
+            nameservers: connection.nameservers,
+            hasToken: Boolean(secrets.powerdns?.[connection.id]),
+            access: null,
+          };
+        }),
+      ],
       accounts,
       zones: [...new Set(status.connections.flatMap((connection) => connection.zoneNames ?? []))].sort(),
       mailcow: { ...policy.mailcow, hasKey: Boolean(secrets.mailcowKey) },
@@ -646,7 +702,7 @@ class Action {
         .filter(([domain]) => !domains.has(domain))
         .map(([domain, entry]) => ({ domain, zone: entry.zoneName, records: entry.records.length })),
       checkedAt: status.checkedAt,
-      waitUntil: Math.max(status.backoff.cloudflare, status.backoff.mailcow),
+      waitUntil: Math.max(status.backoff.cloudflare, status.backoff.mailcow, status.backoff.powerdns ?? 0),
       token: tokenTemplate(tokenProfiles(policy)),
       tokens: tokenTemplates(tokenProfiles(policy)),
       firewallEnabled: existsSync(addonConfigFile("firewall")),
@@ -664,9 +720,10 @@ class Action {
     const problem = sites.some((site) => site.domain === name) ? `CloudPanel has a site ${name}; remove the panel hostname or delete the site`
       : policy.redirects.some((redirect) => redirect.source === name) ? `${name} is a redirect domain; remove one of the two` : null;
     const plan = plans[name];
+    const supportsProxy = plan?.zone ? plan.zone.provider !== "powerdns" : policy.connections.length > 0;
     return {
       name, problem, plan: !problem && plan?.panel ? plan : null, customDomain: custom,
-      proxied: custom?.name === name && custom.issued,
+      proxied: supportsProxy && custom?.name === name && custom.issued,
     };
   }
 
@@ -793,6 +850,8 @@ class Action {
     await run.load([host]);
     await run.enforce([host]);
     await this.record(run, run.planAll([host], true), [host]);
+    const provider = run.resolvedProvider(host);
+    if (provider && !provider.capabilities.proxy) return null;
     return run.panelProxied ? `${host} is proxied through Cloudflare` : `${host} is no longer proxied`;
   }
 
@@ -1042,21 +1101,22 @@ class Action {
   }
 
   /** The tracked records of a site CloudPanel no longer has, that are unchanged and no current site writes. */
-  private async removable(domain: string): Promise<{ run: DnsRun; entry: ManagedRecords; ids: string[]; plans: SitePlan[]; gone?: true }> {
+  private async removable(domain: string): Promise<{ run: DnsRun; entry: ManagedRecords; ids: string[]; published: DnsRecord[]; plans: SitePlan[]; gone?: true }> {
     const entry = this.files.managed()[domain];
     if (!entry) failAction(`DNS tracks no records for ${domain}`);
     if (this.sites().some((site) => site.domain === domain)) failAction(`${domain} is still a CloudPanel site`);
     const policy = this.files.policy();
     const run = this.run(policy);
     await run.discover();
-    if (run.zoneGone(entry)) return { run, entry, ids: [], plans: [], gone: true };
+    if (run.zoneGone(entry)) return { run, entry, ids: [], published: [], plans: [], gone: true };
     await run.load(run.plannedDomains());
     const currentPlans = run.planAll(undefined, true);
-    if (run.unread(entry.zoneId)) failAction(`${entry.zoneName} could not be read for the sites in it; check again before removing records`);
+    if (run.unread(entry.zoneId, entry.connectionId)) failAction(`${entry.zoneName} could not be read for the sites in it; check again before removing records`);
     const uncertain = currentPlans.some((plan) => plan.profileId && plan.problems.length
-      && (plan.zone ? plan.zone.id === entry.zoneId : plan.domain === entry.zoneName || plan.domain.endsWith(`.${entry.zoneName}`)));
+      && (plan.zone ? plan.zone.id === entry.zoneId && (!plan.zone.connectionId || plan.zone.connectionId === entry.connectionId) : plan.domain === entry.zoneName || plan.domain.endsWith(`.${entry.zoneName}`)));
     if (uncertain) failAction(`${entry.zoneName} could not be planned for the sites in it; resolve their problems before removing records`);
-    const published = await run.readZone(entry.connectionId, entry.zoneId);
+    const published = await run.readZone(entry.connectionId, entry.zoneId, entry.zoneName);
+    const supportsProxy = !entry.connectionId.startsWith("pdns-");
     const ids = entry.records
       .filter((tracked) => published.some((record) => record.id === tracked.id && sameRecord(record, tracked)
         && record.comment === tracked.comment))
@@ -1065,10 +1125,10 @@ class Action {
     const plans: SitePlan[] = [{
       domain, profileId: null, mode: "enforce", zone: null, problems: [], zoneChoices: [], certificateNames: [],
       changes: entry.records.filter((tracked) => ids.includes(tracked.id)).map((tracked) => ({
-        action: "delete", subject: `${tracked.type} ${tracked.name}`, detail: describeRecord(tracked),
+        action: "delete", subject: `${tracked.type} ${tracked.name}`, detail: describeRecord(tracked, { proxy: supportsProxy }),
       })),
     }];
-    return { run, entry, ids, plans };
+    return { run, entry, ids, published, plans };
   }
 
   /** A deleted zone took the records with it: there is nothing left to remove. */
@@ -1078,7 +1138,8 @@ class Action {
     const managed = this.files.managed();
     delete managed[domain];
     this.files.saveManaged(managed);
-    return this.reply({ notice: `${entry.zoneName} is no longer in Cloudflare, so ${domain}'s records went with it.` });
+    const provider = entry.connectionId.startsWith("pdns-") ? PROVIDER_LABELS.powerdns : PROVIDER_LABELS.cloudflare;
+    return this.reply({ notice: `${entry.zoneName} is no longer in ${provider}, so ${domain}'s records went with it.` });
   }
 
   async reviewRemoval(domain: string): Promise<DnsReply> {
@@ -1089,11 +1150,12 @@ class Action {
     this.files.savePending({
       token, expiresAt: this.now + REVIEW_LIFETIME, base: hash(this.files.policy()), digest: this.digest(plans), domains: [], removal: { domain, ids },
     });
+    const provider = entry.connectionId.startsWith("pdns-") ? PROVIDER_LABELS.powerdns : PROVIDER_LABELS.cloudflare;
     return this.reply({
       review: {
         token,
         title: `Remove ${domain}'s records`,
-        text: `${ids.length} record${ids.length === 1 ? "" : "s"} in ${entry.zoneName} will be deleted.${skipped ? ` ${skipped} other${skipped === 1 ? " was" : "s were"} changed in Cloudflare or ${skipped === 1 ? "is" : "are"} used by another site, and ${skipped === 1 ? "stays" : "stay"}.` : ""} The zone and Mailcow are not touched.`,
+        text: `${ids.length} record${ids.length === 1 ? "" : "s"} in ${entry.zoneName} will be deleted.${skipped ? ` ${skipped} other${skipped === 1 ? " was" : "s were"} changed in ${provider} or ${skipped === 1 ? "is" : "are"} used by another site, and ${skipped === 1 ? "stays" : "stay"}.` : ""} The zone and Mailcow are not touched.`,
         sites: plans,
         blocked: ids.length === 0,
         confirmLabel: "Remove records",
@@ -1104,7 +1166,7 @@ class Action {
 
   private async confirmRemoval(pending: Pending): Promise<DnsReply> {
     const { domain } = pending.removal!;
-    const { run, entry, ids, plans, gone } = await this.removable(domain);
+    const { run, entry, ids, published, plans, gone } = await this.removable(domain);
     if (gone) {
       this.files.savePending(null);
       return this.forgetGone(run, domain, entry);
@@ -1112,7 +1174,7 @@ class Action {
     if (this.digest(plans) !== pending.digest) return this.reviewRemoval(domain);
     this.files.savePending(null);
     this.cause = "Remove records";
-    await run.deleteRecords(domain, entry, ids);
+    await run.deleteRecords(domain, entry, ids, published);
     const managed = this.files.managed();
     delete managed[domain];
     this.files.saveManaged(managed);
@@ -1185,12 +1247,16 @@ class Action {
     const latest = this.files.status();
     this.files.saveStatus({
       ...latest,
-      connections: shared ? [] : latest.connections,
+      connections: shared
+        ? latest.connections.filter((entry) => entry.provider === "powerdns" || entry.id.startsWith("pdns-"))
+        : latest.connections,
       connectionIds: currentIds,
     });
   }
 
   async saveConnection(body: Record<string, unknown>): Promise<DnsReply> {
+    const isPowerDns = body.provider === "powerdns" || (typeof body.id === "string" && body.id.startsWith("pdns-"));
+    if (isPowerDns) return this.savePowerDnsConnection(body);
     const policy = this.files.policy();
     const saved = await saveCloudflareConnection(body, { paths: this.files.cfPaths, fetch: this.options.fetch });
     // A redirect a stand-in serves moves to Cloudflare through its review, not on the next check.
@@ -1205,8 +1271,87 @@ class Action {
     return this.reply({ notice: saved.notice });
   }
 
+  private async savePowerDnsConnection(body: Record<string, unknown>): Promise<DnsReply> {
+    const policy = this.files.policy();
+    const secrets = this.files.secrets();
+    const list = policy.powerdns ?? [];
+    const existing = body.id ? list.find((connection) => connection.id === connectionId(body.id)) : undefined;
+    if (body.id && !existing) failAction("That connection no longer exists");
+    if (!existing && list.length >= MAX_CONNECTIONS) {
+      failAction(`At most ${MAX_CONNECTIONS} PowerDNS connections can be added`);
+    }
+    const id = existing?.id ?? `pdns-${randomBytes(4).toString("hex")}`;
+    const connection: PowerDnsConnection = parsePowerDnsConnection({ ...body, id });
+    const rawKey = body.apiKey ?? body.token;
+    // Keep a saved key only for the PowerDNS URL it was saved with.
+    const apiKey = rawKey
+      ? parsePowerDnsApiKey(rawKey)
+      : existing && existing.url === connection.url
+        ? secrets.powerdns?.[existing.id] ?? ""
+        : "";
+    if (!apiKey) failAction("Enter the PowerDNS API key");
+
+    const status = this.files.status();
+    const backoff = { until: status.backoff.powerdns ?? 0 };
+    const provider = new PowerDnsProvider(connection, apiKey, this.options.fetch, backoff);
+    const checked = await provider.discover();
+    if (backoff.until > (status.backoff.powerdns ?? 0)) {
+      this.files.saveStatus({ ...status, backoff: { ...status.backoff, powerdns: backoff.until } });
+    }
+    if (!checked.active) {
+      failAction(redact(`PowerDNS did not accept this connection: ${(checked.error ?? checked.status).replace(/^PowerDNS: /, "")}`, [apiKey]));
+    }
+
+    const next = structuredClone(policy);
+    next.powerdns = existing
+      ? (next.powerdns ?? []).map((entry) => entry.id === id ? connection : entry)
+      : [...(next.powerdns ?? []), connection];
+    const standIns = Object.keys(this.standIns().current).filter((domain) => policy.redirects.some((redirect) => redirect.source === domain));
+    if (!existing && standIns.length) next.held = [...new Set([...next.held, ...standIns])];
+    this.files.saveSecrets({ ...secrets, powerdns: { ...(secrets.powerdns ?? {}), [id]: apiKey } });
+    this.savePolicy(next);
+
+    const report: ConnectionReport = {
+      id,
+      label: connection.label,
+      provider: "powerdns",
+      active: true,
+      status: checked.status,
+      accounts: checked.accounts,
+      zones: checked.zones.length,
+      zoneNames: [...new Set(checked.zones.map((zone) => zone.name))].sort(),
+      error: null,
+    };
+    const latestStatus = this.files.status();
+    this.files.saveStatus({
+      ...latestStatus,
+      connections: [...latestStatus.connections.filter((entry) => entry.id !== id), report],
+      backoff: { ...latestStatus.backoff, powerdns: Math.max(latestStatus.backoff.powerdns ?? 0, backoff.until) },
+    });
+
+    await this.tryRefresh("all");
+    return this.reply({ notice: `${connection.label} reaches ${checked.zones.length} zone${checked.zones.length === 1 ? "" : "s"}.` });
+  }
+
   async removeConnection(id: string): Promise<DnsReply> {
     const policy = this.files.policy();
+    const pdnsExisting = (policy.powerdns ?? []).find((connection) => connection.id === id);
+    if (pdnsExisting || id.startsWith("pdns-")) {
+      if (!pdnsExisting) failAction("That connection no longer exists");
+      const next = structuredClone(policy);
+      next.powerdns = (next.powerdns ?? []).filter((connection) => connection.id !== id);
+      const secrets = this.files.secrets();
+      const nextPowerDnsSecrets = { ...(secrets.powerdns ?? {}) };
+      delete nextPowerDnsSecrets[id];
+      this.files.saveSecrets({ ...secrets, powerdns: nextPowerDnsSecrets });
+      for (const [zone, choice] of Object.entries(next.zoneChoices)) if (choice.connectionId === id) delete next.zoneChoices[zone];
+      if (next.createIn?.connectionId === id) next.createIn = null;
+      this.savePolicy(next);
+      const status = this.files.status();
+      this.files.saveStatus({ ...status, connections: status.connections.filter((connection) => connection.id !== id) });
+      await this.tryRefresh("all");
+      return this.reply({ notice: "Connection removed. Its API key stays valid in PowerDNS until you change it there." });
+    }
     const removed = await removeCloudflareConnection(id, { paths: this.files.cfPaths });
     const next = structuredClone(policy);
     next.connections = next.connections.filter((connection) => connection.id !== id);
@@ -1324,7 +1469,7 @@ class Action {
     if (this.digest(plans) !== pending.digest) return this.deleteRedirect(source);
     this.files.savePending(null);
     this.cause = "Redirect deleted";
-    if (found && "rule" in found) await run.deleteRedirectRule(source, found.zone.id, found.rulesetId, found.rule.id);
+    if (found && "rule" in found) await run.deleteRedirectRule(source, found.zone.id, found.rulesetId, found.rule.id, found.zone.connectionId);
     return this.dropRedirect(source, `Deleted the redirect for ${source}.`);
   }
 
@@ -1439,7 +1584,8 @@ async function changeVerb(action: Action, verb: DnsVerb, body: Record<string, un
   }
   if (verb === "zone-account") {
     const ref = parseAccountRef(body.createIn);
-    if (ref && !policy.connections.some((connection) => connection.id === ref.connectionId)) failAction("That connection no longer exists");
+    const known = new Set([...policy.connections.map((c) => c.id), ...(policy.powerdns ?? []).map((c) => c.id)]);
+    if (ref && !known.has(ref.connectionId)) failAction("That connection no longer exists");
     next.createIn = ref;
     return action.change(next, "New zones go to the chosen account.", "all");
   }
@@ -1473,13 +1619,13 @@ async function changeVerb(action: Action, verb: DnsVerb, body: Record<string, un
   }
   if (verb === "choose-zone") {
     const zone = hostname(body.zone, "the zone");
-    next.zoneChoices[zone] = { connectionId: connectionId(body.connectionId), zoneId: cloudflareId(body.zoneId, "the zone") };
+    next.zoneChoices[zone] = { connectionId: connectionId(body.connectionId), zoneId: providerId(body.zoneId, "the zone") };
     const inZone = action.sites().map((site) => site.domain).filter((domain) => domain === zone || domain.endsWith(`.${zone}`));
     return action.change(next, `${zone} is managed through the chosen connection.`, inZone);
   }
   if (verb === "set-panel-host") {
     const name = body.name == null || body.name === "" ? null : hostname(body.name, "The panel hostname");
-    if (name && !policy.connections.length) failAction("Add a Cloudflare connection first");
+    if (name && !policy.connections.length && !(policy.powerdns?.length ?? 0)) failAction("Add a DNS connection first");
     if (name && action.sites().some((site) => site.domain === name)) failAction(`${name} is a CloudPanel site; choose another name for the panel`);
     if (name && policy.redirects.some((redirect) => redirect.source === name)) failAction(`${name} is a redirect domain; choose another name for the panel`);
     next.panelHost = name;
@@ -1551,7 +1697,7 @@ export async function executeDnsAction(argv: string[], options: DnsActionOptions
       // replace the failure the operator needs to see.
       let secrets;
       try { secrets = action.files.secrets(); } catch { throw error; }
-      const message = redact(error.message, [...Object.values(secrets.cloudflare), secrets.mailcowKey]);
+      const message = redact(error.message, [...Object.values(secrets.cloudflare), ...Object.values(secrets.powerdns ?? {}), secrets.mailcowKey]);
       if (message === error.message) throw error;
       failAction(message);
     } finally {

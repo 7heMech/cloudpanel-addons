@@ -2,16 +2,83 @@
 
 ## Scope
 
-DNS keeps each CloudPanel site's Cloudflare records to a profile, so that
-creating a site is enough to publish it, and serves redirect domains. Mailcow is an optional integration of a
-profile: the site's domain, its DKIM key and a shared mailbox's permission to
-send as it. The addon is meant to replace infrastructure-as-code for these
-records rather than coexist with it: it follows the panel's site list, and once
-it is Automatic what it writes cannot drift.
+DNS keeps each CloudPanel site's records to a profile across Cloudflare or
+PowerDNS Authoritative API v1, so that creating a site is enough to publish it,
+and serves redirect domains. Mailcow is an optional integration of a profile
+that sets up the site's domain, its DKIM key, and a shared mailbox's permission
+to send as it. The addon replaces infrastructure-as-code for these records
+rather than coexisting with it. It follows the panel's site list, and once it is
+Automatic what it writes cannot drift.
 
 Nothing about one operator's setup is built in. The server's addresses are
-detected, the Mailcow host, key policy and mailbox are settings, and the
+detected, the Mailcow host, key policy, and mailbox are settings, and the
 records are rows anyone can edit.
+
+## Provider adapter and capabilities
+
+`addons/dns/provider.ts` defines the provider-neutral `DnsProvider` interface
+and `ProviderCapabilities` flags (`proxy`, `zoneSettings`, `zoneRules`,
+`edgeRedirects`, `createZone`, `autoTtl`, and `comments`). Before `diffRecords`
+runs, `normalizeRenderedForProvider` strips `proxied` when `!capabilities.proxy`
+and resolves `ttl === 1` (Auto) to `provider.defaultTtl` when
+`!capabilities.autoTtl`.
+
+- **Cloudflare (`addons/dns/cloudflare-provider.ts`).** Wraps
+  `lib/cloudflare/api.ts`, sets all seven capability flags to `true`, applies
+  per-record POST/PATCH/DELETE calls in order, and exposes zone settings,
+  rulesets, and Single Redirect rules behind `.edge`.
+- **PowerDNS (`addons/dns/powerdns.ts`).** Talks to PowerDNS Authoritative
+  Server HTTP API v1 over `ProviderHttp` (`redirect: "error"`, `X-API-Key`
+  header, 15-second deadline, 8 MiB response cap). Capabilities have `proxy`,
+  `zoneSettings`, `zoneRules`, `edgeRedirects`, `autoTtl`, and `comments` set to
+  `false`, and `createZone` driven by the connection's `createZones` switch.
+  - **Transport policy.** `parsePowerDnsUrl` accepts `https://` for any valid
+    host and allows plain `http://` only for `localhost`, IPv4 loopback
+    (`127.0.0.0/8`), RFC 1918 private ranges (`10.0.0.0/8`, `172.16.0.0/12`,
+    `192.168.0.0/16`), RFC 6598 CGNAT (`100.64.0.0/10`, used by Tailscale), and
+    IPv6 loopback (`::1`) or ULA (`fc00::/7`). Public plain `http://`, embedded
+    credentials, query strings, and fragments are rejected. Editing a
+    connection's URL without supplying a new API key is refused so a saved key
+    is never sent to a different host.
+  - **Canonical names and formatting.** Outgoing zone names, RRset names, and
+    CNAME, MX, and SRV targets append a trailing dot; incoming names strip it.
+    MX formats as `<priority> <target>.`, SRV as
+    `<priority> <weight> <port> <target>.`, CAA as `<flags> <tag> "<value>"`,
+    and TXT splits into master-file quoted strings of at most 255 UTF-8 octets
+    per chunk without breaking multi-byte Unicode code points.
+  - **Atomic RRset patching and synthetic IDs.** `applyRecords` groups touched
+    `(name, type)` pairs, merges creates, updates, and deletes against the full
+    zone inventory so unmanaged sibling records in the same RRset (such as
+    verification TXT records beside SPF) remain untouched, and sends one
+    `PATCH /api/v1/servers/{serverId}/zones/{zoneId}` using `REPLACE` with the
+    RRset TTL or `DELETE` when no records remain. Because PowerDNS records have
+    no UUIDs, each parsed record gets a deterministic synthetic ID
+    `pdns:<sha256(type|name|priority|content)>` for orphan tracking in
+    `managed.json`. Zone maps are keyed by `connectionId:zoneId` so two
+    PowerDNS servers hosting identically named zones never collide and trigger a
+    zone choice.
+  - **Zone creation.** When `createZones` is enabled with configured
+    nameservers, `createZone` sends `POST /api/v1/servers/{serverId}/zones` with
+    `kind: "Native"` and canonical nameservers to fit MySQL-replicated PowerDNS
+    deployments that do not use AXFR.
+- **Follow-on providers.** Future Hetzner Cloud DNS (`api.hetzner.cloud/v1/zones`
+  RRset API) and netcup CCP JSON-RPC DNS adapters implement `DnsProvider` with
+  the same capability model and RRset/batch merging without changing `engine.ts`
+  or `records.ts`.
+
+Cloudflare-only UI controls hide when no Cloudflare connection exists (the Proxy
+column, the Cloudflare zone disclosure, and Find redirects in Cloudflare). When
+both Cloudflare and PowerDNS connections exist, proxy and zone controls note
+that they apply to Cloudflare zones only.
+
+On zones where `capabilities.edgeRedirects` is `false`, redirect domains keep
+their local stand-in site active on this server and write unproxied `A` and
+`AAAA` records pointing to this server's addresses instead of Cloudflare's
+`AAAA 100::` placeholder, while still applying non-web profile rows such as MX,
+SPF, and DKIM. On zones where `capabilities.proxy` is `false`, the panel
+hostname stays unproxied, skips the Cloudflare ACME rule, hands off to matching
+unproxied wildcards, and makes no proxy change when CloudPanel issues its
+certificate.
 
 ## Profiles
 
@@ -589,14 +656,16 @@ repeat every check and are already on the site's plan.
 
 `/var/lib/clp-addons/cloudflare/` holds the shared Cloudflare connections
 (`connections.json`), their API tokens (`secrets.json`), and their last check
-reports (`status.json`). `/var/lib/clp-addons/dns/` holds `policy.json`,
-`secrets.json` (the Mailcow API key), the last check, tracked records, a pending
-review, automatic SSL requests, the stand-in sites, and the change log. Each
-file is root-owned, mode `0600`, replaced atomically, and refused if it is not
-a root-owned regular file of that mode. Tokens and the Mailcow key are read only
-by root actions and travel only in request headers, never in arguments, page
-replies, or logs, and error text is redacted of them. A saved Mailcow key is
-kept only for the Mailcow address it was saved with.
+reports (`status.json`). `/var/lib/clp-addons/dns/` holds `policy.json`
+(including PowerDNS connection settings), `secrets.json` (PowerDNS API keys and
+the Mailcow API key), the last check, tracked records, a pending review,
+automatic SSL requests, the stand-in sites, and the change log. Each file is
+root-owned, mode `0600`, replaced atomically, and refused if it is not a
+root-owned regular file of that mode. Tokens, PowerDNS API keys, and the
+Mailcow key are read only by root actions and travel only in request headers,
+never in arguments, page replies, or logs, and error text is redacted of them. A
+saved PowerDNS API key or Mailcow key is kept only for the URL it was saved
+with.
 
 The records a site DNS writes has as wanted are tracked by id and their full
 record values, including priority, proxy, TTL and comment. A settled enforcing

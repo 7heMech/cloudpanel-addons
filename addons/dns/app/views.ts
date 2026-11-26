@@ -10,6 +10,7 @@ import type { DnsState, SiteView } from "../action";
 import type { Profile } from "../model";
 import { CLIPBOARD } from "../../../lib/clipboard";
 import { CLOUDFLARE_SCOPE_JS } from "../../../lib/cloudflare/connect-dialog";
+import { PROVIDER_LABELS } from "../provider";
 import { SSL_LABELS } from "../zone";
 
 const BASE = mountPath("dns");
@@ -50,7 +51,8 @@ function recordSummary(profile: Profile): string {
   return profile.records.length ? `${plural(profile.records.length, "record")}<span class="hint">${esc(types)}</span>` : '<span class="hint">No records</span>';
 }
 
-function zoneSummary(profile: Profile): string {
+function zoneSummary(profile: Profile, hasCloudflare: boolean): string {
+  if (!hasCloudflare) return profile.mailcow ? "Mailcow" : '<span class="tone-muted">—</span>';
   const parts: string[] = [];
   if (profile.zone.ssl) parts.push(SSL_LABELS[profile.zone.ssl]);
   if (profile.zone.alwaysHttps !== null) parts.push(`Always HTTPS ${profile.zone.alwaysHttps ? "on" : "off"}`);
@@ -59,11 +61,11 @@ function zoneSummary(profile: Profile): string {
   return `${esc(parts.join(" · ") || "Zone settings unchanged")}${rules.length || extras.length ? `<span class="hint">${esc([rules.length ? `Rules: ${rules.join(", ")}` : "", ...extras].filter(Boolean).join(" · "))}</span>` : ""}`;
 }
 
-function profileRow(profile: DnsState["profiles"][number]): string {
+function profileRow(profile: DnsState["profiles"][number], hasCloudflare: boolean): string {
   return `<tr data-profile="${esc(profile.id)}">
     <td class="site-cell"><strong>${esc(profile.name)}</strong><span class="dns-card-sites"> · ${plural(profile.sites, "site")}</span></td>
     <td data-label="Records">${recordSummary(profile)}</td>
-    <td data-label="Zone" class="wide-cell">${zoneSummary(profile)}</td>
+    <td data-label="${hasCloudflare ? "Zone" : "Options"}" class="wide-cell">${zoneSummary(profile, hasCloudflare)}</td>
     <td data-label="Sites" class="numeric dns-sites-cell">${profile.sites}</td>
     <td data-label="Actions" class="action-cell"><div class="actions">
       <button class="btn" type="button" onclick="dnsEditProfile('${esc(profile.id)}')">Edit</button>
@@ -79,7 +81,7 @@ export function siteStatus(site: SiteView, automatic: boolean, singleConnection 
   if (!plan) return { label: "Not checked yet", tone: "muted", hint: "" };
   if (site.redirect && !plan.zone && !plan.problems.length) {
     const pending = plan.changes.some((change) => change.action !== "note");
-    if (site.redirect.standIn && !pending) return { label: "On this server", tone: "ok", hint: "Served by a stand-in site until Cloudflare is connected" };
+    if (site.redirect.standIn && !pending) return { label: "On this server", tone: "ok", hint: "Served by a stand-in site" };
     return { label: site.redirect.standIn ? "Stand-in to update" : "Stand-in to create", tone: "warn", hint: automatic ? "" : "DNS asks first" };
   }
   const suffix = plan.zone && !singleConnection ? ` · ${plan.zone.connection}` : "";
@@ -112,9 +114,11 @@ function statusCell(site: SiteView, automatic: boolean, singleConnection = false
 
 /** Who answers the redirect now, in the words the Details dialog uses at more length. */
 function servedBy(site: SiteView, state: DnsState): string {
-  if (site.plan?.zone) return "by Cloudflare";
+  if (site.plan?.zone) return site.plan.zone.provider === "powerdns" ? "by a stand-in site" : "by Cloudflare";
   if (site.redirect!.standIn) return "by a stand-in site";
-  return state.connections.length ? "by Cloudflare" : "by a stand-in site once Automatic";
+  const hasCf = state.connections.some((connection) => connection.provider === "cloudflare");
+  const hasPdns = state.connections.some((connection) => connection.provider === "powerdns");
+  return hasCf && !hasPdns ? "by Cloudflare" : "by a stand-in site once Automatic";
 }
 
 /**
@@ -214,14 +218,36 @@ function accessDetails(id: string, access: Access, status: string): string {
 }
 
 function connectionRow(connection: DnsState["connections"][number]): string {
-  const accounts = connection.accounts.map((account) => account.name || account.id).join(", ");
+  const provider = connection.provider ?? "cloudflare";
+  const badge = `<span class="badge dns-provider-badge">${esc(PROVIDER_LABELS[provider])}</span>`;
   const status = connection.active ? '<span class="tone-ok">Active</span>' : `<span class="tone-bad">${esc(connection.status === "unchecked" ? "Not checked" : "Not working")}</span>`;
+  if (provider === "powerdns") {
+    const meta = [
+      connection.url,
+      connection.serverId && connection.serverId !== "localhost" ? `server ${connection.serverId}` : "",
+      connection.defaultTtl ? `default TTL ${connection.defaultTtl}s` : "",
+      connection.createZones ? "creates zones" : "",
+    ].filter(Boolean).join(" · ");
+    const line = `${esc(plural(connection.zones, "zone"))} · ${status}${connection.error ? ` · ${esc(connection.error)}` : ""}`;
+    return `<div class="dns-setting-row dns-connection-row" data-connection="${esc(connection.id)}">
+      <div class="dns-setting-main">
+        <div class="dns-connection-title"><strong>${esc(connection.label)}</strong>${badge}</div>
+        ${meta ? `<span class="hint">${esc(meta)}</span>` : ""}
+        <span class="hint">${line}</span>
+      </div>
+      <div class="actions">
+        <button class="btn" type="button" onclick="dnsEditConnection('${esc(connection.id)}')">Edit</button>
+        <button class="btn btn-danger" type="button" onclick="dnsRemoveConnection('${esc(connection.id)}')">Remove</button>
+      </div>
+    </div>`;
+  }
+  const accounts = connection.accounts.map((account) => account.name || account.id).join(", ");
   const { access } = connection;
   const reach = access?.reach ? `${access.reach} · ${plural(connection.zones, "zone")} now` : plural(connection.zones, "zone");
   const line = `${esc(reach)} · ${status}${connection.error ? ` · ${esc(connection.error)}` : ""}`;
   return `<div class="dns-setting-row dns-connection-row" data-connection="${esc(connection.id)}">
     <div class="dns-setting-main">
-      <strong>${esc(connection.label)}</strong>${accounts ? `<span class="hint">${esc(accounts)}</span>` : ""}
+      <div class="dns-connection-title"><strong>${esc(connection.label)}</strong>${badge}</div>${accounts ? `<span class="hint">${esc(accounts)}</span>` : ""}
       ${access ? accessDetails(connection.id, access, line) : `<span class="hint">${line}</span>`}
     </div>
     <div class="actions">
@@ -248,23 +274,27 @@ function newZonesRow(state: DnsState): string {
           return `<option value="${esc(key)}"${chosen === account ? " selected" : ""}>${esc(account.label)}</option>`;
         }).join("")}</select>`;
   return `<div class="dns-setting-row"><div class="dns-setting-main"><strong>New zones</strong>
-        <span class="hint">Account where missing Cloudflare zones are created.</span></div>
+        <span class="hint">Account or server where missing zones are created.</span></div>
         <div class="dns-setting-control">${value}</div></div>`;
 }
 
 function connectionsCard(state: DnsState): string {
   const rows = state.connections.map(connectionRow).join("");
-  return `<div class="card" id="dns-connection"><div class="card-header"><div><h2>Cloudflare connections</h2>
-      <p class="hint">Shared with Firewall. Each connection is one API token; a site uses the longest matching zone.</p></div>
-      <button class="btn" type="button" onclick="dnsEditConnection('')">Add Cloudflare connection</button></div>
+  return `<div class="card" id="dns-connection"><div class="card-header"><div><h2>DNS connections</h2>
+      <p class="hint">Cloudflare connections are shared with Firewall. A site uses the longest matching zone across connected providers.</p></div>
+      <div class="actions dns-connection-actions">
+        <button class="btn" type="button" onclick="dnsEditConnection('', 'cloudflare')">Add Cloudflare</button>
+        <button class="btn" type="button" onclick="dnsEditConnection('', 'powerdns')">Add PowerDNS</button>
+      </div></div>
     <div class="dns-setting-list">${rows}${newZonesRow(state)}</div></div>`;
 }
 
 function syncModeCard(state: DnsState): string {
+  const onlyCf = state.connections.length > 0 && state.connections.every((connection) => connection.provider === "cloudflare");
   return `<div class="card split-card" id="dns-mode"><div><h2>Automatic sync</h2>
       <p class="hint">${state.automatic
-        ? "On. DNS keeps every assigned site in sync and creates missing zones."
-        : "Ask first. DNS shows differences without writing to Cloudflare or Mailcow."}</p></div>
+        ? "On. DNS keeps every assigned site in sync and creates missing zones where enabled."
+        : `Ask first. DNS shows differences without writing to ${onlyCf ? "Cloudflare" : "your DNS provider"} or Mailcow.`}</p></div>
       <button class="btn${state.automatic ? "" : " btn-primary"}" type="button" onclick="dnsSetAutomatic(${state.automatic ? "false" : "true"})">${state.automatic ? "Switch to Ask first" : "Review and turn on Automatic"}</button></div>`;
 }
 
@@ -298,15 +328,18 @@ function integrationsCard(state: DnsState): string {
 
 const PANEL_SETTINGS_URL = "/admin/settings";
 
-/** A name for CloudPanel itself, pointed here and proxied once CloudPanel has its certificate. */
+/** A name for CloudPanel itself, pointed here and proxied on Cloudflare once CloudPanel has its certificate. */
 function panelHostCard(state: DnsState): string {
   const host = state.panelHost;
+  const hasCloudflare = state.connections.some((connection) => connection.provider === "cloudflare");
+  const hasPowerDns = state.connections.some((connection) => connection.provider === "powerdns");
   const zones = state.zones.length
     ? `<datalist id="dns-zone-list">${state.zones.map((zone) => `<option value="${esc(zone)}"></option>`).join("")}</datalist>`
     : "";
+  const adoptLabel = hasCloudflare && !hasPowerDns ? "Manage in Cloudflare" : "Manage in DNS";
   const adopt = !host && state.customDomain
     ? `<div class="notice dns-adopt-bar"><span>CloudPanel already uses <strong>${esc(state.customDomain.name)}</strong>${state.customDomain.issued ? " with a valid certificate" : ""}.</span>
-        <button class="btn" type="button" onclick="dnsAdoptPanelHost('${esc(state.customDomain.name)}')">Manage in Cloudflare</button></div>`
+        <button class="btn" type="button" onclick="dnsAdoptPanelHost('${esc(state.customDomain.name)}')">${adoptLabel}</button></div>`
     : "";
   const form = `<form class="dns-panel-host-form" onsubmit="dnsSavePanelHost(event)">
       <input id="dns-panel-host-name" name="name" aria-label="Panel hostname" autocomplete="off" spellcheck="false" placeholder="k7m2p9x4.example.com"${zones ? ' list="dns-zone-list"' : ""} value="${esc(host?.name ?? "")}">${zones}
@@ -323,11 +356,18 @@ function panelHostCard(state: DnsState): string {
     const pending = host.plan?.changes.filter((change) => change.action !== "note") ?? [];
     const settings = `<a href="${PANEL_SETTINGS_URL}">Admin → Settings → Custom Domain</a>`;
     const custom = host.customDomain;
+    const isPowerDns = host.plan?.zone ? host.plan.zone.provider === "powerdns" : !hasCloudflare;
     const next = hasProblems ? ""
+      : isPowerDns && custom?.name === host.name && custom.issued && !pending.length && host.plan
+        ? `CloudPanel's custom domain, pointed directly at this server${host.plan.wildcard ? ` via ${esc(host.plan.wildcard)}` : ""}.`
+      : isPowerDns && custom?.name === host.name && !custom.issued
+        ? "CloudPanel is getting its certificate."
       : host.proxied && !pending.length && host.plan ? `CloudPanel's custom domain, proxied through Cloudflare${host.plan.wildcard ? ` via ${esc(host.plan.wildcard)}` : ""}. The zone's Full SSL rule keeps Let's Encrypt renewals working.`
       : !host.proxied && custom?.name === host.name ? "CloudPanel is getting its certificate. DNS proxies it through Cloudflare once issued."
       : pending.length || !host.plan ? (state.automatic ? (pending.length ? "The next check writes these, within 15 minutes." : "") : "DNS asks first, so the record is written once you turn on Automatic.")
-      : `Next: enter ${esc(host.name)} under ${settings} in CloudPanel. DNS proxies it through Cloudflare once CloudPanel has its certificate.${custom ? ` CloudPanel's custom domain is ${esc(custom.name)} now.` : ""}`;
+      : isPowerDns
+        ? `Next: enter ${esc(host.name)} under ${settings} in CloudPanel.${custom ? ` CloudPanel's custom domain is ${esc(custom.name)} now.` : ""}`
+        : `Next: enter ${esc(host.name)} under ${settings} in CloudPanel. DNS proxies it through Cloudflare once CloudPanel has its certificate.${custom ? ` CloudPanel's custom domain is ${esc(custom.name)} now.` : ""}`;
     // Show extra problems only past the first, which is already in the badge hint.
     const extraProblems = host.problem ? planProblems : planProblems.slice(1);
     body = `<div class="dns-panel-host-status"><span class="badge tone-${status.tone}">${esc(status.label)}</span>${status.hint ? `<span class="hint">${esc(status.hint)}</span>` : ""}</div>
@@ -338,19 +378,21 @@ function panelHostCard(state: DnsState): string {
       ${next ? `<p class="dns-panel-host-next">${next}</p>` : ""}`;
   }
   return `<div class="card" id="dns-panel-host"><div class="card-header"><div><h2>Panel hostname</h2>
-      <p class="hint">Points a hard-to-guess name at this server for CloudPanel's certificate, then proxies it or hands it off to your zone's wildcard.</p></div></div>
+      <p class="hint">${hasCloudflare
+        ? "Points a hard-to-guess name at this server for CloudPanel's certificate, then proxies it or hands it off to your zone's wildcard."
+        : "Points a hard-to-guess name at this server for CloudPanel's certificate, or hands it off to your zone's wildcard."}</p></div></div>
     <div class="dns-panel-host-body">${adopt}${form}${body}</div></div>`;
 }
 
-/** Until Cloudflare is connected: the three steps that make a new site publish itself. */
+/** Until a DNS provider is connected: the three steps that make a new site publish itself. */
 function setupCard(state: DnsState): string {
   if (state.connections.length) return "";
   const fallback = state.profiles.find((profile) => profile.id === state.defaultProfileId);
   const step = (done: boolean, title: string, hint: string, control: string): string =>
     `<li class="${done ? "done" : ""}"><div><strong>${title}</strong><span class="hint">${hint}</span></div><div class="dns-step-control">${control}</div></li>`;
   return `<div class="card dns-setup" id="dns-connection"><h2>Set up DNS</h2><ol class="dns-checklist">
-    ${step(false, "Connect Cloudflare", "Cloudflare's own form opens with the permissions filled in; paste the token back.",
-      '<button class="btn btn-primary" type="button" onclick="dnsEditConnection(\'\')">Connect Cloudflare</button>')}
+    ${step(false, "Connect a DNS provider", "Connect Cloudflare (shared with Firewall) or a PowerDNS Authoritative API v1 server.",
+      '<div class="actions dns-setup-actions"><button class="btn btn-primary" type="button" onclick="dnsEditConnection(\'\', \'cloudflare\')">Connect Cloudflare</button><button class="btn" type="button" onclick="dnsEditConnection(\'\', \'powerdns\')">Connect PowerDNS</button></div>')}
     ${step(Boolean(fallback), "Choose the profile for new sites", "A new site joins it seconds after CloudPanel creates it. Existing sites are never moved.",
       `<select id="dns-setup-default" aria-label="Profile for new sites" onchange="dnsSetDefault(this)">${profileOptions(state.profiles, state.defaultProfileId, "No profile")}</select>`)}
     ${step(state.automatic, "Turn on Automatic", "Until then DNS previews changes and writes nothing.",
@@ -364,7 +406,7 @@ function modeBar(state: DnsState): string {
   if (!state.connections.length && !state.sites.some((site) => site.redirect)) return "";
   const plans = state.sites.flatMap((site) => site.plan ? [site.plan] : []);
   const changes = plans.flatMap((plan) => plan.changes.filter((change) => change.action !== "note"));
-  const zones = new Set(changes.filter((change) => change.subject === "Cloudflare zone").map((change) => change.detail.split(" ")[0])).size;
+  const zones = new Set(changes.filter((change) => change.subject.endsWith(" zone")).map((change) => change.detail.split(" ")[0])).size;
   const busy = plans.filter((plan) => plan.changes.some((change) => change.action !== "note")).length;
   const waiting = changes.length
     ? ` ${plural(changes.length - zones, "change")}${zones ? ` and ${plural(zones, "new zone")}` : ""} across ${plural(busy, "site")} are waiting.`
@@ -390,7 +432,8 @@ function logRow(line: DnsState["log"][number]): string {
  * read as one list doing two jobs.
  */
 function redirectsCard(state: DnsState, redirects: SiteView[]): string {
-  const tools = `<div class="dns-redirect-tools">${state.connections.length ? '<button class="btn" type="button" onclick="dnsFindRedirects(this)">Find redirects in Cloudflare</button>' : ""}
+  const hasCloudflare = state.connections.some((connection) => connection.provider === "cloudflare");
+  const tools = `<div class="dns-redirect-tools">${hasCloudflare ? '<button class="btn" type="button" onclick="dnsFindRedirects(this)">Find redirects in Cloudflare</button>' : ""}
     <button class="btn${state.connections.length ? " btn-primary" : ""}" type="button" onclick="dnsEditRedirect('')">Add redirect</button></div>`;
   return `<div class="card card-table"><div class="card-header"><div><h2>Redirects</h2>
       <p class="hint">Domains with no site here forwarded to another address.</p></div>${tools}</div>
@@ -422,26 +465,29 @@ export function dashboardContent(state: DnsState, now = Date.now()): string {
   const data = JSON.stringify(state).replaceAll("<", "\\u003c");
   const plain = state.sites.filter((site) => !site.redirect);
   const redirects = state.sites.filter((site) => site.redirect);
+  const hasCloudflare = state.connections.some((connection) => connection.provider === "cloudflare");
+  const hasPowerDns = state.connections.some((connection) => connection.provider === "powerdns");
   const waiting = state.waitUntil > now
-    ? `<div class="notice">Cloudflare or Mailcow asked this server to wait until ${esc(new Date(state.waitUntil).toISOString().slice(11, 16))} UTC. Checks resume after that.</div>` : "";
+    ? `<div class="notice">A DNS provider or Mailcow asked this server to wait until ${esc(new Date(state.waitUntil).toISOString().slice(11, 16))} UTC. Checks resume after that.</div>` : "";
   const pageAction = state.connections.length || redirects.length
     ? '<div class="page-actions"><button class="btn" type="button" onclick="dnsCheck(this)">Check now</button></div>'
     : '<div class="page-actions"><button class="btn" type="button" onclick="dnsEditRedirect(\'\')">Add redirect</button></div>';
   const heading = `<script type="application/json" id="dns-state">${data}</script>
     <div class="page-heading"><div><h1>DNS</h1>
-      <p>Keep each site's Cloudflare DNS synced to its profile.</p></div>${pageAction}</div>`;
+      <p>Keep each site's DNS synced to its profile.</p></div>${pageAction}</div>`;
 
-  // Before Cloudflare is connected, replace the workspace tables and forms with the focused first-run flow.
+  // Before any DNS provider is connected, replace the workspace tables and forms with the focused first-run flow.
   if (!state.connections.length) {
     return `${heading}${waiting}${setupCard(state)}${redirects.length ? `${state.automatic ? syncModeCard(state) : modeBar(state)}${redirectsCard(state, redirects)}` : ""}`;
   }
 
   const single = state.connections.length <= 1;
-  const profiles = state.profiles.map(profileRow).join("");
+  const profiles = state.profiles.map((profile) => profileRow(profile, hasCloudflare)).join("");
   const sites = plain.map((site) => siteRow(site, state)).join("");
   const checked = `<div class="card-footer"><span class="hint">${esc(ago(state.checkedAt, now))}. Drift is checked every 15 minutes.</span></div>`;
+  const orphanProvider = hasCloudflare && !hasPowerDns ? "Cloudflare" : hasPowerDns && !hasCloudflare ? "PowerDNS" : "your DNS provider";
   const orphans = state.orphans.length ? `<div class="card card-table"><div class="card-header"><div><h2>Records of deleted sites</h2>
-      <p class="hint">These sites are gone from CloudPanel. Their records stay in Cloudflare until you remove them.</p></div></div>
+      <p class="hint">These sites are gone from CloudPanel. Their records stay in ${orphanProvider} until you remove them.</p></div></div>
       <div class="table-scroll"><table class="fleet-table dns-orphan-table"><tbody>${state.orphans.map((orphan) => `<tr>
         <td class="site-cell"><strong>${esc(orphan.domain)}</strong><span class="hint">${esc(plural(orphan.records, "record"))} in ${esc(orphan.zone)}</span></td>
         <td data-label="Actions" class="action-cell"><div class="actions">
@@ -483,7 +529,7 @@ export function dashboardContent(state: DnsState, now = Date.now()): string {
         <div class="dns-default-field"><label class="hint" for="dns-default">New sites join</label>
           <select id="dns-default" onchange="dnsSetDefault(this)">${profileOptions(state.profiles, state.defaultProfileId, "No profile")}</select></div>
         <button class="btn btn-primary" type="button" onclick="dnsEditProfile('')">New profile</button></div></div>
-      ${profiles ? `<div class="table-scroll"><table class="fleet-table dns-profile-table"><thead><tr><th>Profile</th><th>Records</th><th>Zone</th><th class="numeric">Sites</th><th class="action-cell">Actions</th></tr></thead><tbody>${profiles}</tbody></table></div>`
+      ${profiles ? `<div class="table-scroll"><table class="fleet-table dns-profile-table"><thead><tr><th>Profile</th><th>Records</th><th>${hasCloudflare ? "Zone" : "Options"}</th><th class="numeric">Sites</th><th class="action-cell">Actions</th></tr></thead><tbody>${profiles}</tbody></table></div>`
         : '<div class="empty">No profiles yet. Create one from the Web and Mailcow presets.</div>'}
     </div>`;
 
@@ -521,7 +567,7 @@ const switchField = (name: string, label: string, hint: string): string =>
   `<label class="dns-switch-row"><span class="switch"><input type="checkbox" name="${name}"><span></span></span><span><strong>${label}</strong><span class="hint">${hint}</span></span></label>`;
 
 const PLACEHOLDERS: [string, string][] = [
-  ["{domain}", "the site's domain"], ["{zone}", "its Cloudflare zone"], ["{sub}", "the part before the zone"],
+  ["{domain}", "the site's domain"], ["{zone}", "its DNS zone"], ["{sub}", "the part before the zone"],
   ["{ipv4}", "this server's IPv4"], ["{ipv6}", "this server's IPv6"], ["{mailcow.host}", "the mail hostname"],
   ["{mailcow.selector}", "Mailcow's DKIM selector"], ["{mailcow.dkim}", "Mailcow's DKIM key"],
 ];
@@ -536,15 +582,16 @@ const DIALOGS = `
       <div class="actions"><label class="dns-check"><input type="checkbox" id="dns-advanced" onchange="dnsRenderRows()"> TTL and apex only</label>
         <select id="dns-preset" aria-label="Add rows from a preset" onchange="dnsAddPreset(this)"></select>
         <button class="btn" type="button" onclick="dnsAddRow()">Add record</button></div></div>
-    <div class="dns-rows-wrap"><table class="dns-rows" id="dns-rows-table"><thead><tr><th>Type</th><th>Name</th><th>Content</th><th class="dns-adv">TTL</th><th class="dns-adv">Apex only</th><th>Proxy</th><th><span class="visually-hidden">Remove</span></th></tr></thead>
+    <div class="dns-rows-wrap"><table class="dns-rows" id="dns-rows-table"><thead><tr><th>Type</th><th>Name</th><th>Content</th><th class="dns-adv">TTL</th><th class="dns-adv">Apex only</th><th class="dns-proxy-col" id="dns-proxy-head">Proxy</th><th><span class="visually-hidden">Remove</span></th></tr></thead>
       <tbody id="dns-rows"></tbody></table></div>
     <p class="hint dns-empty-rows" id="dns-empty-rows" hidden>No records yet. Add one, or start from a preset.</p>
+    <p class="hint dns-mixed-note" id="dns-mixed-note" hidden>Proxy and Cloudflare zone settings apply to Cloudflare zones only. PowerDNS zones use unproxied records and their connection's default TTL when a row is set to Auto.</p>
     <div class="dns-placeholders"><span class="hint">Placeholders, inserted where the cursor is:</span>
       ${PLACEHOLDERS.map(([token, meaning]) => `<button class="dns-chip" type="button" title="${esc(meaning)}" onmousedown="event.preventDefault()" onclick="dnsInsert('${token}')">${token}</button>`).join("")}</div>
     <div id="dns-mailcow-section"><h3 class="dns-section">Mailcow</h3>
     ${switchField("mailcow", "Set up each site's domain in Mailcow", "Adds the domain if it is missing, gives it a DKIM key, and lets the shared mailbox send as it. A Mailcow domain is never deleted.")}</div>
-    <details class="dns-zone-details" id="dns-zone-details"><summary><h3>Cloudflare zone</h3><span class="hint" id="dns-zone-summary"></span></summary>
-    <p class="hint">These apply to the whole zone, not only to this profile's sites.</p>
+    <details class="dns-zone-details" id="dns-zone-details"><summary><h3 id="dns-zone-details-heading">Cloudflare zone</h3><span class="hint" id="dns-zone-summary"></span></summary>
+    <p class="hint">These apply to the whole Cloudflare zone, not only to this profile's sites.</p>
     <div class="form-grid">
       ${field("dns-ssl", "SSL/TLS mode", `<select id="dns-ssl" name="ssl"><option value="">Leave as it is</option>${Object.entries(SSL_LABELS).map(([value, label]) => `<option value="${value}">${label}</option>`).join("")}</select>`)}
       ${field("dns-https", "Always Use HTTPS", '<select id="dns-https" name="alwaysHttps"><option value="">Leave as it is</option><option value="on">On</option><option value="off">Off</option></select>')}
@@ -589,24 +636,46 @@ const DIALOGS = `
     <div class="actions dialog-actions"><button class="btn" type="button" onclick="this.closest('dialog').close()">Cancel</button><button class="btn btn-primary" id="dns-found-submit" type="submit">Take over selected</button></div>
   </form></dialog>
   <dialog id="dns-connection-dialog" aria-labelledby="dns-connection-heading"><form id="dns-connection-form" onsubmit="dnsSaveConnection(event)">
-    <div class="dialog-header"><h2 id="dns-connection-heading">Connect Cloudflare</h2></div>
+    <div class="dialog-header"><h2 id="dns-connection-heading">Connect DNS</h2></div>
     <input type="hidden" name="id">
-    <ol class="dns-steps">
-      <li id="dns-token-step"><strong>Create a token in Cloudflare</strong>
-        <div class="cf-scope-picks" role="group" aria-label="Token scopes">
-          <label class="cf-scope-pick"><input type="checkbox" id="dns-scope-dns" checked onchange="cfSyncScope('dns', this)"><span>DNS records and zones</span></label>
-          <label class="cf-scope-pick"><input type="checkbox" id="dns-scope-gate" onchange="cfSyncScope('dns', this)"><span>Panel gate (Cloudflare Access and origin pulls)</span></label>
+    <input type="hidden" name="provider" value="cloudflare">
+    <div class="dns-provider-tabs" id="dns-provider-tabs" role="tablist" aria-label="DNS provider">
+      <button class="dns-provider-tab" type="button" role="tab" data-provider="cloudflare" aria-selected="true" onclick="dnsSelectProvider('cloudflare')">Cloudflare</button>
+      <button class="dns-provider-tab" type="button" role="tab" data-provider="powerdns" aria-selected="false" onclick="dnsSelectProvider('powerdns')">PowerDNS</button>
+    </div>
+    <div id="dns-provider-cloudflare">
+      <ol class="dns-steps">
+        <li id="dns-token-step"><strong>Create a token in Cloudflare</strong>
+          <div class="cf-scope-picks" role="group" aria-label="Token scopes">
+            <label class="cf-scope-pick"><input type="checkbox" id="dns-scope-dns" checked onchange="cfSyncScope('dns', this)"><span>DNS records and zones</span></label>
+            <label class="cf-scope-pick"><input type="checkbox" id="dns-scope-gate" onchange="cfSyncScope('dns', this)"><span>Panel gate (Cloudflare Access and origin pulls)</span></label>
+          </div>
+          <p class="hint">Check these permissions: <span id="dns-token-permissions"></span>. Choose the accounts and zones there; All zones also covers zones you add later.</p>
+          <div id="dns-token-ips-hint"><p class="hint">Under Client IP Address Filtering, allow only this server:</p>
+            <div class="dns-copy"><code id="dns-token-ips"></code><button class="dns-clip" type="button" title="Copy" aria-label="Copy the addresses" onclick="copyText('dns-token-ips', 'Addresses')">${CLIPBOARD}</button></div></div>
+          <a class="btn" id="dns-token-link" target="_blank" rel="noopener noreferrer" referrerpolicy="no-referrer">Create token in Cloudflare ↗</a></li>
+        <li><strong>Paste it here</strong>
+          <div class="form-grid dns-token-grid">
+            ${field("dns-connection-token", "API token", '<input id="dns-connection-token" name="token" type="password" autocomplete="new-password" spellcheck="false">')}
+            ${field("dns-connection-label", "Name", '<input id="dns-connection-label" name="label" maxlength="40" autocomplete="off" placeholder="The account names">', "Optional.")}
+          </div></li>
+      </ol>
+    </div>
+    <div id="dns-provider-powerdns" hidden>
+      <div class="form-grid">
+        ${field("dns-pdns-url", "API URL", '<input id="dns-pdns-url" name="url" autocomplete="off" spellcheck="false" placeholder="https://ns1.example.com or http://127.0.0.1:8081">', "HTTPS for public hosts; plain HTTP is allowed for localhost, RFC 1918, Tailscale and IPv6 ULA.")}
+        ${field("dns-pdns-key", "API key", '<input id="dns-pdns-key" name="apiKey" type="password" autocomplete="new-password" spellcheck="false">', "The api-key configured on your PowerDNS Authoritative server.")}
+        ${field("dns-pdns-label", "Name", '<input id="dns-pdns-label" name="pdnsLabel" maxlength="40" autocomplete="off" placeholder="Primary NS">', "Optional.")}
+        ${field("dns-pdns-server", "Server ID", '<input id="dns-pdns-server" name="serverId" maxlength="64" autocomplete="off" placeholder="localhost">', "Usually localhost.")}
+        ${field("dns-pdns-ttl", "Default TTL (seconds)", '<input id="dns-pdns-ttl" name="defaultTtl" type="number" min="60" max="86400" inputmode="numeric" value="300">', "Used for profile rows whose TTL is set to Auto.")}
+      </div>
+      <div class="dns-pdns-create-wrap">
+        <label class="dns-switch-row"><span class="switch"><input type="checkbox" id="dns-pdns-create" name="createZones" onchange="dnsSyncPowerDns()"><span></span></span><span><strong>Create missing zones</strong><span class="hint">Creates missing Native zones automatically using the nameservers below.</span></span></label>
+        <div class="form-grid" id="dns-pdns-ns-field" hidden>
+          ${field("dns-pdns-ns", "Nameservers", '<textarea id="dns-pdns-ns" name="nameservers" rows="2" placeholder="ns1.example.net&#10;ns2.example.net"></textarea>', "One nameserver hostname per line.", true)}
         </div>
-        <p class="hint">Check these permissions: <span id="dns-token-permissions"></span>. Choose the accounts and zones there; All zones also covers zones you add later.</p>
-        <div id="dns-token-ips-hint"><p class="hint">Under Client IP Address Filtering, allow only this server:</p>
-          <div class="dns-copy"><code id="dns-token-ips"></code><button class="dns-clip" type="button" title="Copy" aria-label="Copy the addresses" onclick="copyText('dns-token-ips', 'Addresses')">${CLIPBOARD}</button></div></div>
-        <a class="btn" id="dns-token-link" target="_blank" rel="noopener noreferrer" referrerpolicy="no-referrer">Create token in Cloudflare ↗</a></li>
-      <li><strong>Paste it here</strong>
-        <div class="form-grid dns-token-grid">
-          ${field("dns-connection-token", "API token", '<input id="dns-connection-token" name="token" type="password" autocomplete="new-password" spellcheck="false">')}
-          ${field("dns-connection-label", "Name", '<input id="dns-connection-label" name="label" maxlength="40" autocomplete="off" placeholder="The account names">', "Optional.")}
-        </div></li>
-    </ol>
+      </div>
+    </div>
     ${actions("Connect")}
   </form></dialog>
   <dialog id="dns-mailcow-dialog" aria-labelledby="dns-mailcow-heading"><form id="dns-mailcow-form" onsubmit="dnsSaveMailcow(event)">
