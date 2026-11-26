@@ -192,6 +192,8 @@
     var lastInZone = null;
     var bypass = false;
     var busy = false;
+    var dialogBusy = false;
+    var confirmGen = 0;
     var pendingToken = '';
     var pendingName = '';
     var pendingSubmitter = null;
@@ -241,6 +243,7 @@
     }
 
     function setDialogBusy(on) {
+      dialogBusy = on;
       confirmBtn.disabled = on;
       cancelBtn.disabled = on;
       closeBtn.disabled = on;
@@ -274,6 +277,7 @@
     }
 
     function renderReview(review, notice) {
+      confirmGen++;
       pendingToken = review.token || '';
       showDialogError('');
       titleEl.textContent = review.title || 'Prepare DNS';
@@ -330,7 +334,9 @@
     }
 
     function closeDialog() {
+      confirmGen++;
       pendingToken = '';
+      setDialogBusy(false);
       if (dialog.open) dialog.close();
     }
 
@@ -357,25 +363,40 @@
 
     closeBtn.addEventListener('click', closeDialog);
     cancelBtn.addEventListener('click', closeDialog);
+    dialog.addEventListener('cancel', function (event) {
+      if (dialogBusy) {
+        event.preventDefault();
+        return;
+      }
+      confirmGen++;
+      pendingToken = '';
+    });
     dialog.addEventListener('mousedown', function (event) {
-      if (event.target !== dialog) return;
+      if (dialogBusy || event.target !== dialog) return;
       var rect = dialog.getBoundingClientRect();
       var inside = event.clientX >= rect.left && event.clientX <= rect.right && event.clientY >= rect.top && event.clientY <= rect.bottom;
       if (!inside) closeDialog();
     });
 
     confirmBtn.addEventListener('click', function () {
-      if (!pendingToken) return;
+      if (!pendingToken || dialogBusy) return;
+      var token = pendingToken;
+      var gen = confirmGen;
+      var confirmedName = pendingName;
       setDialogBusy(true);
       showDialogError('');
-      postJson('/api/confirm', { token: pendingToken }).then(function (confirmData) {
+      postJson('/api/confirm', { token: token }).then(function (confirmData) {
+        if (!dialog.open || gen !== confirmGen || token !== pendingToken) {
+          showError('DNS confirmation was dismissed. Review and save again.');
+          return;
+        }
         if (confirmData && confirmData.review) {
           renderReview(confirmData.review, confirmData.notice);
           return;
         }
         var plan = confirmData && confirmData.panelHost && confirmData.panelHost.plan;
         if (!plan) {
-          showDialogError('DNS did not return a plan for ' + pendingName + '.');
+          showDialogError('DNS did not return a plan for ' + confirmedName + '.');
           setDialogBusy(false);
           return;
         }
@@ -385,7 +406,7 @@
           return;
         }
         if (!plan.zone) {
-          showDialogError('DNS could not find a Cloudflare zone for ' + pendingName + '.');
+          showDialogError('DNS could not find a Cloudflare zone for ' + confirmedName + '.');
           setDialogBusy(false);
           return;
         }
@@ -399,9 +420,15 @@
           setDialogBusy(false);
           return;
         }
+        if (normalizeHost(input.value) !== confirmedName) {
+          closeDialog();
+          showError('Hostname changed after DNS confirmation. Review and save again.');
+          return;
+        }
         closeDialog();
         submitNativeForm();
       }, function (failure) {
+        if (!dialog.open || gen !== confirmGen || token !== pendingToken) return;
         showDialogError(failure.message || 'DNS confirmation failed.');
         setDialogBusy(false);
       });

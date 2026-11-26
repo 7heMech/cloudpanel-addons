@@ -129,13 +129,15 @@ DNS's **Settings** tab:
 1. Under **Admin → Settings → Custom Domain**, enter a hostname in a connected
    zone or choose **Random** to generate an eight-character label. Leave the DNS
    preparation checkbox checked and save.
-2. Review the planned DNS changes in the confirmation dialog and confirm. If the
-   zone is pending or was just created, CloudPanel's form stops and shows the
-   nameservers with copy buttons so you can set them at your registrar, then
-   save the form again once the zone is active. Once active, DNS writes the
-   record (unproxied on Cloudflare until the certificate is issued, or an
-   unobstructed unproxied wildcard) and CloudPanel saves the custom domain and
-   requests its Let's Encrypt certificate.
+2. Review the planned DNS changes in the confirmation dialog and confirm. When
+   the zone is already active, DNS writes the record (unproxied on Cloudflare
+   until the certificate is issued, or an unobstructed unproxied wildcard), then
+   CloudPanel saves the custom domain and requests its Let's Encrypt
+   certificate. If the zone is still pending or was just created, DNS writes the
+   record, stops CloudPanel's form, and shows the zone's nameservers with copy
+   buttons; set those nameservers at your registrar, wait for the zone to
+   delegate and become active, then save **Custom Domain** again and confirm the
+   new DNS review.
 3. On Cloudflare zones, seconds after the certificate is issued (when Automatic
    is on), DNS proxies the name through Cloudflare, or deletes the temporary
    records if a proxied wildcard in the zone already covers it. On PowerDNS
