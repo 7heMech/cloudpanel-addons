@@ -123,7 +123,9 @@ export function parsePowerDnsServerId(value: unknown): string {
   if (value === "" || value == null) return DEFAULT_POWERDNS_SERVER_ID;
   if (typeof value !== "string") failAction("The PowerDNS server ID must be text");
   const id = value.trim();
-  if (!/^[a-zA-Z0-9._-]{1,64}$/.test(id)) failAction("The PowerDNS server ID must be letters, digits, dots, dashes or underscores");
+  if (id === "." || id === ".." || !/^[a-zA-Z0-9._-]{1,64}$/.test(id)) {
+    failAction("The PowerDNS server ID must be letters, digits, dots, dashes or underscores");
+  }
   return id;
 }
 
@@ -499,20 +501,22 @@ export class PowerDnsProvider implements DnsProvider {
 
     const rrsets: PowerDnsRrsetPatch[] = [];
     const disabledMap = this.disabledByZone.get(zone.id);
+    const nextDisabledUpdates = new Map<string, { content: string; ttl: number }[]>();
     for (const { name, type, preferredTtl } of touched.values()) {
       const key = `${type}|${name}`;
       const remaining = nextRecords.filter((record) => record.name === name && record.type === type);
       const disabledSiblings = disabledMap?.get(key) ?? [];
       if (!remaining.length && !disabledSiblings.length) {
         rrsets.push({ name: ensureTrailingDot(name), type, changetype: "DELETE" });
+        nextDisabledUpdates.set(key, []);
         continue;
       }
       const ttl = preferredTtl ?? remaining[0]?.ttl ?? disabledSiblings[0]?.ttl ?? this.defaultTtl;
       // PowerDNS stores a single TTL per RRset, so every record in this RRset adopts it.
       for (const record of remaining) record.ttl = ttl;
-      for (const sibling of disabledSiblings) sibling.ttl = ttl;
       const seen = new Set<string>();
       const wireRecords: { content: string; disabled: boolean }[] = [];
+      const keptDisabled: { content: string; ttl: number }[] = [];
       for (const record of remaining) {
         const wire = formatPowerDnsContent(record);
         if (seen.has(wire)) continue;
@@ -523,7 +527,9 @@ export class PowerDnsProvider implements DnsProvider {
         if (seen.has(sibling.content)) continue;
         seen.add(sibling.content);
         wireRecords.push({ content: sibling.content, disabled: true });
+        keptDisabled.push({ content: sibling.content, ttl });
       }
+      nextDisabledUpdates.set(key, keptDisabled);
       rrsets.push({
         name: ensureTrailingDot(name),
         type,
@@ -534,6 +540,12 @@ export class PowerDnsProvider implements DnsProvider {
     }
 
     await this.call(this.serverPath(`/zones/${encodeURIComponent(zone.id)}`), "PATCH", { rrsets });
+    if (disabledMap) {
+      for (const [key, entries] of nextDisabledUpdates) {
+        if (entries.length) disabledMap.set(key, entries);
+        else disabledMap.delete(key);
+      }
+    }
     for (const op of ops) options.onApplied?.(op, nextRecords);
     return nextRecords;
   }

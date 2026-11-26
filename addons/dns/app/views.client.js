@@ -22,6 +22,14 @@ function dnsHasPowerDns() {
   return (dnsState.connections || []).some(function (connection) { return connection.provider === 'powerdns'; });
 }
 
+function dnsProviderLabel() {
+  const cf = dnsHasCloudflare();
+  const pdns = dnsHasPowerDns();
+  if (cf && !pdns) return 'Cloudflare';
+  if (pdns && !cf) return 'PowerDNS';
+  return 'your DNS provider';
+}
+
 function dnsProfile(id) {
   return dnsState.profiles.find(function (profile) { return profile.id === id; });
 }
@@ -254,7 +262,7 @@ async function dnsDeleteProfile(id) {
   const profile = dnsProfile(id);
   const accepted = await confirmAction({
     title: 'Delete ' + profile.name + '?',
-    text: 'Its sites stop being managed. Nothing in Cloudflare or Mailcow changes.',
+    text: 'Its sites stop being managed. Nothing in ' + dnsProviderLabel() + ' or Mailcow changes.',
     details: profile.sites ? [plural(profile.sites, 'site') + ' will be in no profile.'] : [],
     confirmLabel: 'Delete', danger: true,
   });
@@ -514,13 +522,16 @@ async function dnsDeleteRedirect() {
   const source = CLP_ROOT.getElementById('dns-redirect-form').elements.namedItem('source').value;
   const site = dnsState.sites.find(function (candidate) { return candidate.domain === source; });
   dialog.close();
+  const cfServed = dnsHasCloudflare() && !(site.plan && site.plan.zone && site.plan.zone.provider === 'powerdns');
   // Once Automatic, deleting a redirect Cloudflare serves is a review of the rule it deletes.
-  if (!site.redirect.standIn && dnsState.automatic && dnsState.connections.length) return dnsPost('/api/redirects/delete', { source: source });
+  if (!site.redirect.standIn && dnsState.automatic && cfServed) return dnsPost('/api/redirects/delete', { source: source });
   const accepted = await confirmAction({
     title: 'Delete the redirect for ' + source + '?',
     text: site.redirect.standIn
       ? 'Its stand-in site is deleted from this server, so ' + source + ' stops redirecting.'
-      : 'DNS stops managing it. Its rule and records stay in Cloudflare and keep redirecting.',
+      : cfServed
+        ? 'DNS stops managing it. Its rule and records stay in Cloudflare and keep redirecting.'
+        : 'DNS stops managing it. Any records already in ' + dnsProviderLabel() + ' stay as they are.',
     confirmLabel: 'Delete', danger: true,
   });
   if (accepted) dnsPost('/api/redirects/delete', { source: source });
@@ -836,9 +847,12 @@ function dnsAdoptPanelHost(name) {
 
 async function dnsRemovePanelHost() {
   const viaWildcard = Boolean(dnsState.panelHost.plan && dnsState.panelHost.plan.wildcard);
+  const panelProvider = dnsState.panelHost.plan && dnsState.panelHost.plan.zone && dnsState.panelHost.plan.zone.provider === 'powerdns'
+    ? 'PowerDNS'
+    : dnsProviderLabel();
   const accepted = await confirmAction({
     title: 'Remove the panel hostname?',
-    text: 'DNS stops managing ' + dnsState.panelHost.name + '.' + (viaWildcard ? ' ' : ' Any explicit records stay in Cloudflare, listed with the records of deleted sites, and ') + 'CloudPanel keeps its custom domain.',
+    text: 'DNS stops managing ' + dnsState.panelHost.name + '.' + (viaWildcard ? ' ' : ' Any explicit records stay in ' + panelProvider + ', listed with the records of deleted sites, and ') + 'CloudPanel keeps its custom domain.',
     confirmLabel: 'Remove', danger: true,
   });
   if (accepted) dnsPost('/api/panel-host', { name: null });
