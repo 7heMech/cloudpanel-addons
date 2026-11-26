@@ -314,6 +314,8 @@ export class PowerDnsProvider implements DnsProvider {
   readonly capabilities: ProviderCapabilities;
   readonly defaultTtl: number;
   readonly http: ProviderHttp;
+  /** Disabled RRset entries per zone from the latest listRecords read, preserved verbatim across writes. */
+  private readonly disabledByZone = new Map<string, Map<string, { content: string; ttl: number }[]>>();
 
   constructor(
     private readonly config: PowerDnsConfig,
@@ -411,6 +413,7 @@ export class PowerDnsProvider implements DnsProvider {
     const rrsets = raw.rrsets;
     if (!Array.isArray(rrsets)) throw new ProviderError("PowerDNS", "returned a zone without rrsets");
     const records: DnsRecord[] = [];
+    const disabled = new Map<string, { content: string; ttl: number }[]>();
     for (const entry of rrsets) {
       const rrset = asObject(entry);
       const rrsetName = asText(rrset.name, 255);
@@ -419,13 +422,21 @@ export class PowerDnsProvider implements DnsProvider {
       if (!Number.isInteger(ttl) || ttl < 0) {
         throw new ProviderError("PowerDNS", `returned an invalid TTL for ${stripTrailingDot(rrsetName)}`);
       }
+      const key = `${rrsetType}|${stripTrailingDot(rrsetName).toLowerCase()}`;
       const items = Array.isArray(rrset.records) ? rrset.records : [];
       for (const item of items) {
         const record = asObject(item);
-        if (record.disabled === true) continue;
-        records.push(parseRrsetRecord(rrsetName, rrsetType, ttl || this.defaultTtl, asText(record.content, 4096)));
+        const content = asText(record.content, 4096);
+        if (record.disabled === true) {
+          const list = disabled.get(key) ?? [];
+          list.push({ content, ttl });
+          disabled.set(key, list);
+          continue;
+        }
+        records.push(parseRrsetRecord(rrsetName, rrsetType, ttl, content));
       }
     }
+    this.disabledByZone.set(zone.id, disabled);
     return records;
   }
 
@@ -487,15 +498,19 @@ export class PowerDnsProvider implements DnsProvider {
     }
 
     const rrsets: PowerDnsRrsetPatch[] = [];
+    const disabledMap = this.disabledByZone.get(zone.id);
     for (const { name, type, preferredTtl } of touched.values()) {
+      const key = `${type}|${name}`;
       const remaining = nextRecords.filter((record) => record.name === name && record.type === type);
-      if (!remaining.length) {
+      const disabledSiblings = disabledMap?.get(key) ?? [];
+      if (!remaining.length && !disabledSiblings.length) {
         rrsets.push({ name: ensureTrailingDot(name), type, changetype: "DELETE" });
         continue;
       }
-      const ttl = preferredTtl ?? remaining[0]!.ttl ?? this.defaultTtl;
+      const ttl = preferredTtl ?? remaining[0]?.ttl ?? disabledSiblings[0]?.ttl ?? this.defaultTtl;
       // PowerDNS stores a single TTL per RRset, so every record in this RRset adopts it.
       for (const record of remaining) record.ttl = ttl;
+      for (const sibling of disabledSiblings) sibling.ttl = ttl;
       const seen = new Set<string>();
       const wireRecords: { content: string; disabled: boolean }[] = [];
       for (const record of remaining) {
@@ -503,6 +518,11 @@ export class PowerDnsProvider implements DnsProvider {
         if (seen.has(wire)) continue;
         seen.add(wire);
         wireRecords.push({ content: wire, disabled: false });
+      }
+      for (const sibling of disabledSiblings) {
+        if (seen.has(sibling.content)) continue;
+        seen.add(sibling.content);
+        wireRecords.push({ content: sibling.content, disabled: true });
       }
       rrsets.push({
         name: ensureTrailingDot(name),

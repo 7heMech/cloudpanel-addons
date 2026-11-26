@@ -585,8 +585,12 @@ function dnsSelectProvider(provider) {
   const isEditing = Boolean(form.elements.namedItem('id').value);
   const isPdns = provider === 'powerdns';
   form.elements.namedItem('provider').value = isPdns ? 'powerdns' : 'cloudflare';
-  CLP_ROOT.getElementById('dns-provider-cloudflare').hidden = isPdns;
-  CLP_ROOT.getElementById('dns-provider-powerdns').hidden = !isPdns;
+  const cfPanel = CLP_ROOT.getElementById('dns-provider-cloudflare');
+  const pdnsPanel = CLP_ROOT.getElementById('dns-provider-powerdns');
+  cfPanel.hidden = isPdns;
+  pdnsPanel.hidden = !isPdns;
+  cfPanel.querySelectorAll('input, select, textarea, button').forEach(function (el) { el.disabled = isPdns; });
+  pdnsPanel.querySelectorAll('input, select, textarea, button').forEach(function (el) { el.disabled = !isPdns; });
   CLP_ROOT.querySelectorAll('#dns-provider-tabs .dns-provider-tab').forEach(function (tab) {
     tab.setAttribute('aria-selected', tab.dataset.provider === (isPdns ? 'powerdns' : 'cloudflare') ? 'true' : 'false');
   });
