@@ -866,4 +866,62 @@ describe("PowerDNS end-to-end DNS reconciliation", () => {
     expect(forgotten.notice).toContain("PowerDNS");
     expect(forgotten.notice).not.toContain("Cloudflare");
   });
+
+  test("Admin Settings Custom Domain helper works on PowerDNS-only servers, flags newly created zones, and enforces wildcard guard", async () => {
+    const env = setupEnv();
+    // Wildcard covers IPv4 only; panelHost wants A + AAAA so writing AAAA at sub.example.com breaks app.sub.example.com's IPv4 wildcard coverage.
+    env.pdns.addZone("example.com", [
+      { name: "*.example.com.", type: "A", ttl: 300, records: [{ content: "203.0.113.10", disabled: false }] },
+    ]);
+    env.sites.push(
+      { id: 1, domain: "example.com", type: "php", createdAt: START, selfSigned: false, cloudflareOnly: false },
+      { id: 2, domain: "app.sub.example.com", type: "php", createdAt: START, selfSigned: false, cloudflareOnly: false },
+    );
+    await env.act("save-connection", {
+      provider: "powerdns",
+      label: "NS1",
+      url: PDNS_URL,
+      apiKey: PDNS_KEY,
+      createZones: true,
+      nameservers: ["ns1.example.net", "ns2.example.net"],
+    });
+    const helper = await env.act<{
+      connected: boolean; automatic: boolean; hasCloudflare: boolean; hasPowerDns: boolean;
+      zones: string[]; zoneProviders: Record<string, string>;
+    }>("panel-host-helper");
+    expect(helper.connected).toBe(true);
+    expect(helper.hasCloudflare).toBe(false);
+    expect(helper.hasPowerDns).toBe(true);
+    expect(helper.zones).toEqual(["example.com"]);
+    expect(helper.zoneProviders).toEqual({ "example.com": "powerdns" });
+
+    const ipv4Only = await env.act("save-profile", {
+      name: "IPv4 only",
+      records: [
+        { type: "A", name: "{domain}", content: "{ipv4}", proxied: false, ttl: 300, priority: null, apexOnly: false },
+        { type: "A", name: "*.{domain}", content: "{ipv4}", proxied: false, ttl: 300, priority: null, apexOnly: true },
+      ],
+      mailcow: false,
+      zone: { ssl: null, alwaysHttps: null, acmeFullSsl: false, webmailFullSsl: false, skipFirewallIps: [] },
+    });
+    const ipv4ProfileId = ipv4Only.profiles.find((p) => p.name === "IPv4 only")!.id;
+    await env.act("assign", { domains: ["example.com", "app.sub.example.com"], profileId: ipv4ProfileId });
+    await env.apply("set-automatic", { automatic: true });
+    // Wildcard guard blocks writing AAAA at sub.example.com because it breaks app.sub.example.com's wildcard coverage.
+    const blocked = await env.act("set-panel-host", { name: "sub.example.com", prepareOnly: true });
+    expect(blocked.review!.blocked).toBe(true);
+    expect(blocked.review!.sites[0]!.problems.join("\n")).toContain("app.sub.example.com");
+
+    // PowerDNS prepareOnly wording avoids Cloudflare proxy copy.
+    const prepared = await env.act("set-panel-host", { name: "panel.newzone.test", prepareOnly: true });
+    expect(prepared.review!.blocked).toBe(false);
+    expect(prepared.review!.text).not.toContain("Cloudflare");
+    expect(prepared.review!.text).not.toContain("DNS only");
+
+    // Confirming a brand-new PowerDNS zone sets zoneCreated: true so the helper pauses to show nameservers.
+    const confirmed = await env.act("confirm", { token: prepared.review!.token });
+    expect(confirmed.zoneCreated).toBe(true);
+    expect(confirmed.panelHost?.plan?.zone?.provider).toBe("powerdns");
+    expect(confirmed.panelHost?.plan?.zone?.name).toBe("newzone.test");
+  });
 });

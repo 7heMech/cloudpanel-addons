@@ -237,6 +237,7 @@ export class DnsRun {
   readonly log: LogEntry[] = [];
   private readonly zoneRefs: ZoneRef[] = [];
   private readonly zones = new Map<string, ZoneState>();
+  private readonly createdZoneKeys = new Set<string>();
   private readonly mail = new Map<string, MailState | { error: string }>();
   private readonly acl = new Map<string, string[] | null | { error: string }>();
   private sourceDkim: MailcowDkim | null | { error: string } | undefined;
@@ -498,7 +499,7 @@ export class DnsRun {
   }
 
   private async loadMail(domains: string[]): Promise<void> {
-    if (!this.mailcow) return;
+    if (!this.mailcow || this.context.panelOnly) return;
     const api = this.mailcow;
     const settings = this.context.policy.mailcow;
     await Promise.all([
@@ -546,7 +547,7 @@ export class DnsRun {
         refs.set(key, resolved.ref);
         if (redirect) redirectZones.add(key);
       }
-      if (profile?.mailcow) mailDomains.push(domain);
+      if (profile?.mailcow && !this.context.panelOnly) mailDomains.push(domain);
     }
     await Promise.all([
       ...[...refs.entries()].map(([key, ref]) => this.loadZone(ref, zoneWants(byZone.get(key) ?? []).wants, redirectZones.has(key))),
@@ -936,12 +937,16 @@ export class DnsRun {
     if (!dependent.length) return [];
     const panelEntry = this.entries.find((site) => site.panel && site.domain === name);
     if (!panelEntry) return [];
+    const panelResolved = this.resolve(name);
+    if (panelResolved.kind !== "zone") return [];
+    const panelRef = panelResolved.ref;
     const panelPlan = this.planSite(panelEntry);
     const panelDiff = this.diffs.get(name);
     if (!panelPlan.zone || panelPlan.problems.length || !panelDiff?.wanted.length) return [];
     if (!panelDiff.ops.some((op) => op.action === "create" || op.action === "update")) return [];
+    const panelZoneKey = zoneMapKey(panelRef.connectionId, panelRef.zone.id);
     const panelSiblings: Siblings = new Map([[name, {
-      zoneKey: `zone:${panelPlan.zone.id}`,
+      zoneKey: `zone:${panelZoneKey}`,
       records: panelDiff.wanted,
       wildcardClaims: [],
     }]]);
@@ -950,7 +955,7 @@ export class DnsRun {
       const entry = this.entries.find((site) => !site.panel && site.domain === domain);
       if (!entry) continue;
       const resolved = this.resolve(domain);
-      if (resolved.kind !== "zone" || resolved.ref.zone.id !== panelPlan.zone.id) continue;
+      if (resolved.kind !== "zone" || resolved.ref.connectionId !== panelRef.connectionId || resolved.ref.zone.id !== panelRef.zone.id) continue;
       this.planSite(entry);
       const beforeCovered = Object.keys(this.diffs.get(domain)?.covered ?? {});
       if (!beforeCovered.length) continue;
@@ -959,6 +964,12 @@ export class DnsRun {
       if (beforeCovered.some((host) => !afterCovered.has(host))) broken.push(domain);
     }
     return broken;
+  }
+
+  /** Whether this run created the zone that `domain` resolves to. */
+  zoneCreatedFor(domain: string): boolean {
+    const resolved = this.resolve(domain);
+    return resolved.kind === "zone" && this.createdZoneKeys.has(zoneMapKey(resolved.ref.connectionId, resolved.ref.zone.id));
   }
 
   /**
@@ -1145,6 +1156,7 @@ export class DnsRun {
           `In ${accountName(createIn)}${zone.nameServers.length ? `; nameservers ${zone.nameServers.join(", ")}` : ""}`);
         const ref: ZoneRef = { zone, connectionId: createIn.connectionId, provider: provider.kind };
         const key = zoneMapKey(createIn.connectionId, zone.id);
+        this.createdZoneKeys.add(key);
         this.zoneRefs.push(ref);
         this.profilesByZone = null;
         this.zones.set(key, { ref, records: null, settings: new Map(), rulesets: new Map(), error: null });

@@ -33,7 +33,10 @@ test("panel-host-helper returns local helper state over GET /api/panel-host-help
   const payload = {
     connected: true,
     automatic: false,
+    hasCloudflare: true,
+    hasPowerDns: false,
     zones: ["example.com"],
+    zoneProviders: { "example.com": "cloudflare" as const },
     panelHost: "panel.example.com",
     serverIps: { ipv4: "203.0.113.10", ipv6: "2001:db8::10" },
   };
