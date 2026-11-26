@@ -1108,6 +1108,25 @@ class Action {
   }
 
   /**
+   * Plans the panel hostname alone and blocks preparation if writing its
+   * records would remove wildcard coverage another managed site relies on.
+   */
+  private async planPanelHost(run: DnsRun, before: Policy, next: Policy, name: string): Promise<SitePlan[]> {
+    const dependent = this.wildcardAffected(before, next, [name]).filter((domain) => domain !== name);
+    await run.load([name, ...dependent]);
+    const plans = run.planAll([name], true).filter((plan) => plan.domain === name);
+    const plan = plans[0];
+    if (plan && !plan.problems.length && dependent.length) {
+      for (const domain of run.wildcardBlockedByPanel(name, dependent)) {
+        plan.problems.push(
+          `Writing records at ${name} would remove wildcard coverage for ${domain}; choose another panel hostname or apply DNS changes from the DNS page`,
+        );
+      }
+    }
+    return plans;
+  }
+
+  /**
    * Plans only the panel hostname's unproxied records for single-host
    * confirmation, in both Automatic and Ask first modes, without touching
    * other sites.
@@ -1115,8 +1134,7 @@ class Action {
   async preparePanelHost(before: Policy, next: Policy, name: string, notice?: string): Promise<DnsReply> {
     const run = this.run(next, this.files.secrets(), { panelProxied: false, panelOnly: true });
     await run.discover();
-    await run.load([name]);
-    const plans = run.planAll([name], true).filter((plan) => plan.domain === name);
+    const plans = await this.planPanelHost(run, before, next, name);
     const plan = plans[0];
     const blocked = !plan || plans.some((candidate) => candidate.problems.length > 0);
     const token = blocked ? "" : randomBytes(24).toString("hex");
@@ -1157,8 +1175,9 @@ class Action {
     const panelOnly = pending.panelOnly === true;
     const run = this.run(next, this.secretsWith(pending.mailcowKey), panelOnly ? { panelProxied: false, panelOnly: true } : undefined);
     await run.discover();
-    await run.load(pending.domains);
-    const plans = run.planAll(pending.domains, panelOnly).filter((plan) => pending.domains.includes(plan.domain));
+    const plans = panelOnly
+      ? await this.planPanelHost(run, current, next, pending.domains[0]!)
+      : (await run.load(pending.domains), run.planAll(pending.domains, false).filter((plan) => pending.domains.includes(plan.domain)));
     if (this.digest(plans) !== pending.digest) {
       if (panelOnly) return this.preparePanelHost(current, next, pending.domains[0]!, `${providerLabelFor(next)} changed after the plan was shown. This is the plan now.`);
       return this.review(current, next, pending.domains, `${providerLabelFor(next)} or Mailcow changed after the plan was shown. This is the plan now.`, pending.mailcowKey);

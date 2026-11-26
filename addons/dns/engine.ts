@@ -929,6 +929,39 @@ export class DnsRun {
   }
 
   /**
+   * Dependent sites in `dependent` whose current wildcard coverage would be
+   * removed if `name`'s planned panel-host records were written alone.
+   */
+  wildcardBlockedByPanel(name: string, dependent: string[]): string[] {
+    if (!dependent.length) return [];
+    const panelEntry = this.entries.find((site) => site.panel && site.domain === name);
+    if (!panelEntry) return [];
+    const panelPlan = this.planSite(panelEntry);
+    const panelDiff = this.diffs.get(name);
+    if (!panelPlan.zone || panelPlan.problems.length || !panelDiff?.wanted.length) return [];
+    if (!panelDiff.ops.some((op) => op.action === "create" || op.action === "update")) return [];
+    const panelSiblings: Siblings = new Map([[name, {
+      zoneKey: `zone:${panelPlan.zone.id}`,
+      records: panelDiff.wanted,
+      wildcardClaims: [],
+    }]]);
+    const broken: string[] = [];
+    for (const domain of dependent) {
+      const entry = this.entries.find((site) => !site.panel && site.domain === domain);
+      if (!entry) continue;
+      const resolved = this.resolve(domain);
+      if (resolved.kind !== "zone" || resolved.ref.zone.id !== panelPlan.zone.id) continue;
+      this.planSite(entry);
+      const beforeCovered = Object.keys(this.diffs.get(domain)?.covered ?? {});
+      if (!beforeCovered.length) continue;
+      this.planSite(entry, panelSiblings);
+      const afterCovered = new Set(Object.keys(this.diffs.get(domain)?.covered ?? {}));
+      if (beforeCovered.some((host) => !afterCovered.has(host))) broken.push(domain);
+    }
+    return broken;
+  }
+
+  /**
    * Plans every site and redirect domain, then marks those in one zone whose
    * profiles want different records at one name. With `live` true (or Ask
    * first), plans strictly against published records in Cloudflare. Otherwise

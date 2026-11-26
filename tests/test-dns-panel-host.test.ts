@@ -392,6 +392,38 @@ describe("the panel hostname", () => {
     expect(drift.review!.sites).toHaveLength(1);
     expect(drift.review!.sites[0]!.changes.some((c) => c.action === "update" && c.subject === "A panel.example.com")).toBe(true);
   });
+
+  test("prepareOnly blocks when writing the panel hostname would remove another site's wildcard coverage", async () => {
+    const env = setup();
+    env.sites.push(
+      { id: 10, domain: "shop.branch.example.com", type: "php", createdAt: START - 86_400_000, selfSigned: false, cloudflareOnly: false },
+      { id: 11, domain: "ancestor.example.com", type: "php", createdAt: START - 86_400_000, selfSigned: false, cloudflareOnly: false },
+    );
+    await env.act("save-connection", { token: TOKEN });
+    const list = await env.act("list");
+    const webId = list.profiles.find((p) => p.name === "Web")!.id;
+    // Publish a proxied wildcard that covers shop.branch.example.com and ancestor.example.com.
+    env.cf.record("example.com", { type: "A", name: "*.example.com", content: "203.0.113.10", proxied: true });
+    env.cf.record("example.com", { type: "AAAA", name: "*.example.com", content: "2001:db8::10", proxied: true });
+    await env.act("assign", { domains: ["shop.branch.example.com", "ancestor.example.com"], profileId: webId });
+
+    // 1. Ancestor blocking: preparing unproxied branch.example.com would shadow *.example.com for shop.branch.example.com.
+    const blockedDesc = await env.act("set-panel-host", { name: "branch.example.com", prepareOnly: true });
+    expect(blockedDesc.review!.blocked).toBe(true);
+    expect(blockedDesc.review!.token).toBe("");
+    expect(blockedDesc.review!.sites[0]!.problems.join("\n")).toContain("shop.branch.example.com");
+
+    // 2. ENT blocking: preparing unproxied deep.ancestor.example.com would turn ancestor.example.com into an ENT.
+    const blockedAnc = await env.act("set-panel-host", { name: "deep.ancestor.example.com", prepareOnly: true });
+    expect(blockedAnc.review!.blocked).toBe(true);
+    expect(blockedAnc.review!.token).toBe("");
+    expect(blockedAnc.review!.sites[0]!.problems.join("\n")).toContain("ancestor.example.com");
+
+    // 3. An unrelated hostname does not affect any site's wildcard coverage and succeeds.
+    const ok = await env.act("set-panel-host", { name: "k7m2p9x4.example.com", prepareOnly: true });
+    expect(ok.review!.blocked).toBe(false);
+    expect(ok.review!.token).not.toBe("");
+  });
 });
 
 describe("an issued custom-domain certificate", () => {
