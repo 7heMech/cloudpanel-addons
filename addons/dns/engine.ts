@@ -9,7 +9,8 @@
 import { errorMessage } from "../../lib/errors";
 import { getDomain } from "tldts";
 import type { Addresses } from "./addresses";
-import { readAccess, selfReadPermission, type Reached, type TokenAccess } from "../../lib/cloudflare/access";
+import { grants, readAccess, selfReadPermission, targetFor, uncertain, type Reached, type TokenAccess } from "../../lib/cloudflare/access";
+import { PERMISSIONS } from "../../lib/cloudflare/tokens";
 import { CloudflareApi, UnreadableToken, type CfAccount, type CfRecord, type CfRuleset, type CfZone, type RecordWrite, type Verified } from "../../lib/cloudflare/api";
 import { type ApiFetch, ProviderError } from "../../lib/provider-http";
 import { aclAllows, MailcowApi, type MailcowDkim } from "./mailcow";
@@ -150,6 +151,8 @@ export interface RunContext {
   standIns?: StandIns;
   /** Whether CloudPanel serves an issued certificate for the panel hostname, so Cloudflare may proxy it. */
   panelProxied?: boolean;
+  /** Each connection's token as the last check read it, for a run that does not read it again. */
+  tokens?: Record<string, TokenAccess | undefined>;
 }
 
 export const PANEL_PROFILE_ID = "panel-hostname";
@@ -258,6 +261,11 @@ export class DnsRun {
       : null;
   }
 
+  /** The token each connection was read with, so its report is not kept for a token saved since. */
+  get tokens(): Record<string, string> {
+    return { ...this.context.secrets.cloudflare };
+  }
+
   get panelProxied(): boolean {
     return this.context.panelProxied === true;
   }
@@ -347,14 +355,24 @@ export class DnsRun {
     const choice = this.context.policy.zoneChoices[name];
     const chosen = choice && candidates.find((ref) => ref.connectionId === choice.connectionId && ref.zone.id === choice.zoneId);
     if (chosen) return { kind: "zone", ref: chosen };
-    const same = choice && candidates.find((ref) => ref.zone.id === choice.zoneId);
+    const sameZone = choice ? candidates.filter((ref) => ref.zone.id === choice.zoneId) : [];
+    const same = sameZone.find((ref) => this.writesRecords(ref) !== false) ?? sameZone[0];
     if (same) return { kind: "zone", ref: same };
     // The chosen zone is out of reach, and what is left is a zone the operator did not pick.
     if (choice) return { kind: "choose", candidates, name, lost: true };
     const ids = new Set(candidates.map(({ zone }) => zone.id));
-    // Two tokens reaching the same zone can both write it; the first connection is used until another is chosen.
-    if (ids.size === 1) return { kind: "zone", ref: candidates[0]! };
+    // The first connection that can write the zone's records is used until another is chosen; one that only reads them never is.
+    if (ids.size === 1) return { kind: "zone", ref: candidates.find((ref) => this.writesRecords(ref) !== false) ?? candidates[0]! };
     return { kind: "choose", candidates, name };
+  }
+
+  /** Whether a connection's token holds DNS: Edit on the zone, from its own policies; null when not known. */
+  private writesRecords(ref: ZoneRef): boolean | null {
+    const token = this.connections.find((connection) => connection.id === ref.connectionId)?.token ?? this.context.tokens?.[ref.connectionId];
+    if (!token?.readable) return null;
+    const permission = PERMISSIONS.dns;
+    const held = grants(token.grants, permission, targetFor(permission, { id: ref.zone.id, accountId: ref.zone.account.id }, token));
+    return uncertain(token.grants, permission, held ? "yes" : "no") ? null : held;
   }
 
   /** No connection means nothing in Cloudflare is DNS's, and redirects are served from this server. */

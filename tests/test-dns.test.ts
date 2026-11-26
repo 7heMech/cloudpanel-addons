@@ -1,6 +1,6 @@
 import { Database } from "bun:sqlite";
 import { afterEach, describe, expect, test } from "bun:test";
-import { chmodSync, mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
+import { chmodSync, mkdirSync, mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { connectionPermissions } from "../lib/cloudflare/access";
@@ -1582,5 +1582,41 @@ describe("wildcard DNS", () => {
     await env3.connect(SECOND_TOKEN);
     env3.sites.splice(env3.sites.findIndex((entry) => entry.domain === "shop.example.com"), 1);
     expect((await env3.act("list")).orphans).toEqual([{ domain: "shop.example.com", zone: "example.com", records: 2 }]);
+  });
+
+  test("skips a Panel-gate-only token for DNS writes when a DNS-capable connection reaches the same zone, and preserves unmigrated legacy credentials", async () => {
+    const env = setup();
+    const gateOnlyToken = "cf-gate-only-token-0123456789abc";
+    env.cf.token(gateOnlyToken, {
+      owner: "user",
+      accounts: [env.agency],
+      policies: [policy(["DNS Read", "Zone Read", "SSL and Certificates Write", "API Tokens Read"], { "com.cloudflare.api.account.zone.*": "*" })],
+    });
+    // Connect Panel-gate-only first, DNS-capable second.
+    await env.connect(gateOnlyToken);
+    await env.connect(TOKEN);
+    await env.act("assign", { domains: ["example.com"], profileId: "web" });
+    await env.automatic();
+    expect(env.records()).toContain("A example.com 203.0.113.10 proxied");
+
+    // Mutating Mailcow on an unmigrated legacy store does not wipe legacy Cloudflare connections/tokens.
+    const legacy = setup();
+    const stateDir = join(legacy.dir, "state");
+    mkdirSync(stateDir, { recursive: true });
+    writeFileSync(join(stateDir, "policy.json"), JSON.stringify({
+      ...seededPolicy(),
+      connections: [{ id: "cf-legacy01", label: "Legacy" }],
+      mailcow: { url: "https://mail.example.net", host: "mail.example.net", sharedMailbox: "" },
+    }), { mode: 0o600 });
+    writeFileSync(join(stateDir, "secrets.json"), JSON.stringify({
+      cloudflare: { "cf-legacy01": TOKEN },
+      mailcowKey: MAILCOW_KEY,
+    }), { mode: 0o600 });
+    await legacy.act("remove-mailcow", {});
+    expect(JSON.parse(readFileSync(join(stateDir, "policy.json"), "utf8")).connections).toEqual([{ id: "cf-legacy01", label: "Legacy" }]);
+    expect(JSON.parse(readFileSync(join(stateDir, "secrets.json"), "utf8"))).toEqual({
+      cloudflare: { "cf-legacy01": TOKEN },
+      mailcowKey: "",
+    });
   });
 });

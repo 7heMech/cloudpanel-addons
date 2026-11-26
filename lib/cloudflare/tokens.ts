@@ -206,12 +206,11 @@ export function tokenTemplate(
   const dns = scopes.dns !== false;
   const panelGate = scopes.panelGate === true;
   const items: { key: string; type: "read" | "edit"; label: string }[] = [];
-  if (!dns && panelGate) {
-    items.push(...PANEL_GATE_READ_EXTRAS);
-  }
   const listed = listedPermissions(profiles, { includeDns: dns, requirePanelGate: panelGate })
     .filter(({ optional }) => !optional)
     .map(({ permission }) => ({ key: permission.key, type: permission.type, label: permission.label }));
+  // An edit DNS already asks for covers the read.
+  if (panelGate) items.push(...PANEL_GATE_READ_EXTRAS.filter((extra) => !listed.some((item) => item.key === extra.key)));
   for (const item of listed) {
     if (!items.some((existing) => existing.key === item.key && existing.type === item.type)) items.push(item);
   }

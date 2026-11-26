@@ -10,6 +10,7 @@ import { renderRedirect, type SiteVars } from "../addons/dns/records";
 import { foundRedirect, redirectRef, redirectRuleState, wholeHostHosts } from "../addons/dns/redirects";
 import { clpctlStandIns, readStandIns, standInBody, type StandInPaths } from "../addons/dns/stand-in";
 import { isStandInSite, ownsStandInSite } from "../lib/stand-ins";
+import { removeCloudflareConnection, saveCloudflareConnection } from "../lib/cloudflare/store";
 import type { CfRule } from "../lib/cloudflare/api";
 import type { Redirect } from "../addons/dns/model";
 import { FakeCloudflare, FakeMailcow, hexId, MAILCOW_KEY, routed } from "./fixtures/dns-api";
@@ -386,6 +387,30 @@ describe("stand-in sites on this server", () => {
     expect((await env.act("list")).sites[0]!.plan!.changes).toEqual([expect.objectContaining({ subject: "Stand-in site", waits: true })]);
     await env.confirmed(await env.act("assign", { domains: ["newyou.bg"], profileId: null }));
     expect(env.standIns.calls).toEqual(["create newyou.bg"]);
+  });
+
+  test("adding or removing the last shared Cloudflare connection outside DNS holds redirects for review", async () => {
+    const env = setup();
+    const cfPaths = { stateDir: join(env.dir, "state", "cloudflare"), lockFile: join(env.dir, "dns.lock.cloudflare"), rootUid: process.getuid!() };
+    await env.automatic();
+    await env.confirmed(await env.act("save-redirect", found("misiodei.com", "https://misiodei.bg")));
+    expect(env.standIns.calls).toEqual(["create misiodei.com"]);
+
+    // Adding the first connection through Firewall/Manager (shared store directly) holds the stand-in redirect on the next DNS check.
+    terraformZone(env.cf, env.account, "misiodei.com", "https://misiodei.bg");
+    const saved = await saveCloudflareConnection({ token: TOKEN }, { paths: cfPaths, fetch: env.cf.fetch });
+    await env.act("check");
+    expect(env.standIns.calls).not.toContain("remove misiodei.com");
+    expect((await env.act("list")).sites[0]!.plan!.held).toBe(true);
+
+    // Confirm moving the redirect to Cloudflare, then remove the last connection through the shared store.
+    await env.confirmed(await env.act("assign", { domains: ["misiodei.com"], profileId: null }));
+    expect(env.standIns.calls).toContain("remove misiodei.com");
+    await removeCloudflareConnection(saved.id, { paths: cfPaths });
+    const callsBefore = env.standIns.calls.length;
+    await env.act("check");
+    expect(env.standIns.calls.length).toBe(callsBefore);
+    expect((await env.act("list")).sites[0]!.plan!.held).toBe(true);
   });
 
   test("a stand-in whose vhost was never written is written on the next pass", async () => {

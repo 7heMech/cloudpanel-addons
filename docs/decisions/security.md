@@ -161,7 +161,10 @@ adds protection. System Tweaks declares its Hardening and Failed logins switches
 PHP; updates, backups, unblocking and the SSH login message stay with
 administrators. Firewall declares its Cloudflare visitor IPs switch under root's
 lock (`clp-addons lock firewall`), keeping tunnel IP forgery closed while
-leaving site and cloud-firewall rules editable by administrators.
+leaving site and cloud-firewall rules editable by administrators. Upgrading
+from an installation where System Tweaks was locked carries the lock to
+Firewall when the visitor-IP preference migrates, so `set-visitor-ip` remains
+locked without freezing Firewall's other switches.
 
 So a panel lock can only freeze protections on. While locked, the panel can
 switch a protection on, enable the addon or move the panel's PHP to a newer

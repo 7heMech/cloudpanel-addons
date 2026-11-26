@@ -116,6 +116,8 @@ function readSetupContext(): SetupContext {
       dnsConnected = cf.connections.some((connection) => Boolean(cf.tokens[connection.id]));
       dnsZones = [...new Set(cf.reports.flatMap((connection) => connection.zoneNames ?? []))].sort();
     }
+  } catch { /* shared Cloudflare state unreadable; DNS's own policy is still read */ }
+  try {
     const dir = addonStateDir("dns");
     const raw = readState<unknown>(`${dir}/policy.json`, 0, () => null);
     if (raw !== null) {
@@ -126,14 +128,14 @@ function readSetupContext(): SetupContext {
       }
       if (!dnsZones.length) {
         const status = readState<{ connections?: { zoneNames?: string[] }[] }>(`${dir}/status.json`, 0, () => ({}));
-        dnsZones = [...new Set((status.connections ?? []).flatMap((connection) => connection.zoneNames ?? []))].sort();
+        dnsZones = [...new Set((status.connections ?? []).flatMap((connection) => connection?.zoneNames ?? []))].sort();
       }
       dnsAutomatic = policy.automatic;
       dnsPanelHost = policy.panelHost;
       overrideIpv4 = policy.server.ipv4.trim();
       overrideIpv6 = policy.server.ipv6.trim();
     }
-  } catch { /* DNS or Cloudflare state unreadable or not initialized */ }
+  } catch { /* DNS state unreadable or not initialized */ }
   let detected: { ipv4: string | null; ipv6: string | null } = { ipv4: null, ipv6: null };
   try { detected = detectAddresses(); } catch { /* best-effort */ }
   const serverIps = { ipv4: overrideIpv4 || detected.ipv4, ipv6: overrideIpv6 || detected.ipv6 };

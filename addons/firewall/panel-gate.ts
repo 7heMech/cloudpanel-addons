@@ -251,22 +251,19 @@ function apiFor(connection: Connection, options: GateOptions): CloudflareApi {
 
 interface Found { connection: Connection; api: CloudflareApi; zone: CfZone }
 
-/** The longest active zone any DNS connection reaches for the hostname. */
-async function findZone(hostname: string, list: Connection[], options: GateOptions): Promise<{ found: Found | null; errors: string[] }> {
-  let found: Found | null = null;
+/** Every connection reaching the longest active zone for the hostname, in the order they were saved. */
+async function findZone(hostname: string, list: Connection[], options: GateOptions): Promise<{ candidates: Found[]; errors: string[] }> {
   const errors: string[] = [];
   const read = await Promise.all(list.map(async (connection) => {
     const api = apiFor(connection, options);
     try { return { connection, api, zones: await api.zones() }; }
     catch (error) { errors.push(`${connection.label}: ${errorMessage(error)}`); return { connection, api, zones: [] }; }
   }));
-  for (const { connection, api, zones } of read) {
-    for (const zone of zones) {
-      if (zone.status !== "active" || (hostname !== zone.name && !hostname.endsWith(`.${zone.name}`))) continue;
-      if (!found || zone.name.length > found.zone.name.length) found = { connection, api, zone };
-    }
-  }
-  return { found, errors };
+  const matches = read.flatMap(({ connection, api, zones }) => zones
+    .filter((zone) => zone.status === "active" && (hostname === zone.name || hostname.endsWith(`.${zone.name}`)))
+    .map((zone) => ({ connection, api, zone })));
+  const longest = Math.max(0, ...matches.map(({ zone }) => zone.name.length));
+  return { candidates: matches.filter(({ zone }) => zone.name.length === longest), errors };
 }
 
 /** The gate's permissions the token lacks for this zone, or why that cannot be told. */
@@ -340,18 +337,21 @@ async function check(options: GateOptions): Promise<GateCheck> {
     problems.push(`Connect a Cloudflare token below that reaches the zone of ${hostname}.`);
     return result;
   }
-  const { found, errors } = await findZone(hostname, list, options);
-  if (!found) {
+  const { candidates, errors } = await findZone(hostname, list, options);
+  if (!candidates.length) {
     problems.push(errors.length
       ? `Cloudflare could not be read: ${errors.join("; ")}`
       : `No Cloudflare connection's token reaches a Cloudflare zone for ${hostname}.`);
     return result;
   }
+  // The first connection whose token holds the gate's permissions; otherwise the first, whose lack is reported.
+  const held = await Promise.allSettled(candidates.map(({ api, zone }) => missingPermissions(api, zone)));
+  const chosen = Math.max(0, held.findIndex((entry) => entry.status === "fulfilled" && !entry.value.missing.length));
+  const found = candidates[chosen]!;
+  const permissions = held[chosen]!;
   result.found = found;
   const { api, zone, connection } = found;
-  const [records, permissions, mode] = await Promise.allSettled([
-    api.recordsAt(zone.id, hostname), missingPermissions(api, zone), api.setting(zone.id, "ssl"),
-  ]);
+  const [records, mode] = await Promise.allSettled([api.recordsAt(zone.id, hostname), api.setting(zone.id, "ssl")]);
   if (records.status === "rejected") problems.push(`${hostname}'s records could not be read: ${errorMessage(records.reason)}`);
   else {
     const proxyable = records.value.filter((record) => ["A", "AAAA", "CNAME"].includes(record.type));

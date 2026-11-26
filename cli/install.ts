@@ -1,4 +1,4 @@
-import { dashboardUrl, migrateOldAddonNames, resolveEnableable } from "./addons";
+import { dashboardUrl, migrateOldAddonNames, resolveEnableable, revertAddonRenames } from "./addons";
 import { enabledAddons } from "../addons/catalog";
 import { artifactNames, installArtifacts, installedTag } from "./artifacts";
 import { bootstrapProvision, applyEnable } from "./toggle";
@@ -33,10 +33,15 @@ export async function cmdInstall(argv: string[]): Promise<void> {
     // Read before anything is installed, so a re-run of the installer is not mistaken for a first one.
     const fresh = freshBox();
     // Re-running the installer on an older box must not leave a renamed addon behind until repair.
-    migrateOldAddonNames();
-    lockNewInstall(fresh);
-    applyLocal(specs.shift(), local);
-    for (const spec of specs) await applyEnable(spec.name);
+    const renames = migrateOldAddonNames();
+    try {
+      lockNewInstall(fresh);
+      applyLocal(specs.shift(), local);
+      for (const spec of specs) await applyEnable(spec.name);
+    } catch (error) {
+      if (renames.length) revertAddonRenames(renames);
+      throw error;
+    }
     log.plain();
     if (!enabledAddons().some((spec) => spec.name === "system-tweaks")) {
       log.plain("System Tweaks is recommended: it applies the security fixes. Enable it on the Addons page or with: clp-addons enable system-tweaks");

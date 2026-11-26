@@ -9,6 +9,7 @@ import { managerAction, setupAction } from "./service";
 import { PANEL_USER_NAME_RE } from "../lib/panel-users";
 import { setupPanelHtml, setupShows } from "./setup-view";
 import { applyRequestOrigin, proxyHostFromRequest } from "./setup";
+import { CLOUDFLARE_ACTION_MS } from "../lib/cloudflare/store";
 
 /**
  * Every route here is already behind the SSO gate and the administrator gate at
@@ -63,7 +64,7 @@ export async function handleManagerRoute(
     if (denied) return denied;
     const body = await readBody(req, 32 * 1024);
     if (body instanceof Response) return body;
-    const result = await managerAction("cloudflare-save", [], JSON.stringify(body), 60_000);
+    const result = await managerAction("cloudflare-save", [], JSON.stringify(body), CLOUDFLARE_ACTION_MS);
     return jsonResponse(result, result.ok ? 200 : 400);
   }
   if (path === "/api/cloudflare/remove" && req.method === "POST") {
@@ -77,7 +78,7 @@ export async function handleManagerRoute(
   if (path === "/api/cloudflare/check" && req.method === "POST") {
     const denied = guardMutation(req);
     if (denied) return denied;
-    const result = await managerAction("cloudflare-check", [], undefined, 60_000);
+    const result = await managerAction("cloudflare-check", [], undefined, CLOUDFLARE_ACTION_MS);
     return jsonResponse(result, result.ok ? 200 : 400);
   }
 

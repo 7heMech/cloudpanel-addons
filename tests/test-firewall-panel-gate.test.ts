@@ -673,4 +673,29 @@ describe("final review fixes", () => {
     nsCut.cf.record("example.com", { type: "A", name: "*.b.example.com", content: "203.0.113.10", proxied: true });
     expect((await panelGateView(nsCut.options)).problems).toContain(`${nestedHost} has no A, AAAA or CNAME record in Cloudflare.`);
   });
+
+  test("prefers a later Cloudflare connection that holds the gate permissions when an earlier one for the same zone does not", async () => {
+    const b = box();
+    const dnsOnlyToken = "cf-dns-only-token-0123456789abcd";
+    b.cf.token(dnsOnlyToken, {
+      owner: "user",
+      accounts: [b.account],
+      policies: [policy(["DNS Write", "API Tokens Read"], { "com.cloudflare.api.account.zone.*": "*" })],
+    });
+    // Put the DNS-only connection first and the Panel-gate-capable connection second.
+    writeFileSync(join(b.dir, "cloudflare", "connections.json"), JSON.stringify({
+      version: 1,
+      connections: [{ id: "cf-dnsonly", label: "DNS Only" }, { id: "cf-gate", label: "Gate" }],
+    }), { mode: 0o600 });
+    writeFileSync(join(b.dir, "cloudflare", "secrets.json"), JSON.stringify({
+      version: 1,
+      tokens: { "cf-dnsonly": dnsOnlyToken, "cf-gate": TOKEN },
+    }), { mode: 0o600 });
+
+    const view = await panelGateView(b.options);
+    expect(view.problems).toEqual([]);
+    const { reply } = await turnOn(b);
+    expect(reply).toMatchObject({ notice: expect.stringContaining("The Panel gate is on") });
+    expect(readGateState(b.options).connectionId).toBe("cf-gate");
+  });
 });

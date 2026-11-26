@@ -132,7 +132,7 @@ function coverageOf(list: Grant[], permission: PermissionDef, reached: Reached):
 
 const ZONE_REACH_GROUPS = ["DNS Write", "DNS Read", "Zone Read", "SSL and Certificates Write"];
 
-/** "All zones", "All zones in Agency", "3 chosen zones", from where DNS Write (or zone read for Firewall-only tokens) is allowed, less where it is denied. */
+/** "All zones", "All zones in Agency", "3 chosen zones", from where DNS Write (or a zone read for Firewall-only tokens) is allowed, less where that same permission is denied. */
 function reachOf(list: Grant[], reached: Reached): string {
   const names = new Map(reached.accounts.map((account) => [account.id, account.name || account.id]));
   const describe = (resources: Resource[], all: string): string[] => {
@@ -144,12 +144,11 @@ function reachOf(list: Grant[], reached: Reached): string {
       zones.size ? `${zones.size} ${all === "All zones" ? "chosen " : ""}zone${zones.size === 1 ? "" : "s"}` : "",
     ].filter(Boolean);
   };
-  const hasDnsWrite = list.some((grant) => grant.allow && namesPermission(grant, PERMISSIONS.dns));
-  const matchesReach = (grant: Grant) => hasDnsWrite
-    ? namesPermission(grant, PERMISSIONS.dns)
-    : grant.permissions.some((name) => ZONE_REACH_GROUPS.includes(name));
+  // One permission, the first allowed of these, so a deny of another permission does not narrow it.
+  const reach = ZONE_REACH_GROUPS.find((name) => list.some((grant) => grant.allow && grant.permissions.includes(name)));
+  if (!reach) return "No zones";
   const resources = (allow: boolean) => list
-    .filter((grant) => grant.allow === allow && matchesReach(grant))
+    .filter((grant) => grant.allow === allow && grant.permissions.includes(reach))
     .flatMap((grant) => grant.resources).filter((resource) => !resource.user);
   const allows = resources(true);
   const allowed = describe(allows, "All zones").join(" and ");

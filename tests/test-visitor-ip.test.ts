@@ -1,14 +1,15 @@
 import { afterEach, expect, test } from "bun:test";
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync, chmodSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { CommandResult } from "../lib/command";
 import { FIREWALL_ADDON } from "../addons/firewall/addon";
-import { migrateVisitorIp } from "../addons/firewall/migration";
+import { migrateVisitorIp, visitorIpMigrationPending } from "../addons/firewall/migration";
 import {
-  applyVisitorIp, keepVisitorIp, releaseVisitorIp, restoreVisitorIp, setVisitorIpEnabled,
+  applyVisitorIp, keepVisitorIp, MAPS_MARKER, releaseVisitorIp, restoreVisitorIp, setVisitorIpEnabled,
   visitorIpState, visitorIpStatus, withdrawVisitorIp, type VisitorIpOptions,
 } from "../addons/firewall/visitor-ip";
+import { lockedAddons } from "../lib/root-locks";
 
 const dirs: string[] = [];
 afterEach(() => { for (const dir of dirs.splice(0)) rmSync(dir, { recursive: true, force: true }); });
@@ -199,6 +200,10 @@ test("migrateVisitorIp moves System Tweaks' setting to Firewall, enables Firewal
     firewallPolicy: fwPolicy,
     firewallStateDir: fwStateDir,
     visitorIpState: vipState,
+    visitorIpMaps: join(dir, "maps.conf"),
+    locksFile: join(dir, "etc", "locks.json"),
+    locksLock: join(dir, "locks.lock"),
+    rootUid: process.getuid!(),
   };
   const undo = migrateVisitorIp(() => {
     enabledCount++;
@@ -229,6 +234,62 @@ test("migrateVisitorIp moves System Tweaks' setting to Firewall, enables Firewal
   expect(undoOff).not.toBeNull();
   expect(enabledCount).toBe(0);
   expect(JSON.parse(readFileSync(vipState, "utf8"))).toEqual({ version: 1, enabled: false });
+});
+
+test("migrateVisitorIp handles unsaved default-on visitor IPs, carries System Tweaks' root lock, and rolls both back", () => {
+  const dir = mkdtempSync(join(tmpdir(), "clp-vip-default-"));
+  dirs.push(dir);
+  const stSettings = join(dir, "system-tweaks", "settings.json");
+  const stConfig = join(dir, "etc", "system-tweaks.conf");
+  const fwConfig = join(dir, "etc", "firewall.conf");
+  const fwStateDir = join(dir, "firewall");
+  const fwPolicy = join(fwStateDir, "policy.json");
+  const vipState = join(fwStateDir, "visitor-ip.json");
+  const vipMaps = join(dir, "00-clp-addons-visitor-ip.conf");
+  const locksFile = join(dir, "etc", "locks.json");
+  const locksLock = join(dir, "locks.lock");
+  const uid = process.getuid!();
+  mkdirSync(join(dir, "etc"), { recursive: true });
+  chmodSync(join(dir, "etc"), 0o755);
+  writeFileSync(stConfig, "enabled=1\n", { mode: 0o644 });
+  writeFileSync(locksFile, `${JSON.stringify({ addons: ["system-tweaks"] }, null, 2)}\n`, { mode: 0o644 });
+
+  const paths = {
+    systemTweaksSettings: stSettings,
+    systemTweaksConfig: stConfig,
+    firewallConfig: fwConfig,
+    firewallPolicy: fwPolicy,
+    firewallStateDir: fwStateDir,
+    visitorIpState: vipState,
+    visitorIpMaps: vipMaps,
+    locksFile,
+    locksLock,
+    rootUid: uid,
+  };
+
+  // Without the legacy key or the applied map (e.g. a fresh install on v2.3), nothing migrates.
+  expect(visitorIpMigrationPending(paths)).toBe(false);
+  expect(migrateVisitorIp(() => { throw new Error("must not enable"); }, paths)).toBeNull();
+
+  // With the map written by System Tweaks' unsaved default (and no settings.json), migration runs and enables Firewall.
+  writeFileSync(vipMaps, `${MAPS_MARKER}\nmap $remote_addr $clp_visitor_ip { default $remote_addr; }\n`, { mode: 0o644 });
+  expect(visitorIpMigrationPending(paths)).toBe(true);
+  let enabled = 0;
+  const undo = migrateVisitorIp(() => {
+    enabled++;
+    writeFileSync(fwConfig, "enabled=1\n", { mode: 0o644 });
+  }, paths);
+  expect(undo).not.toBeNull();
+  expect(enabled).toBe(1);
+  expect(JSON.parse(readFileSync(vipState, "utf8"))).toEqual({ version: 1, enabled: true });
+  expect(lockedAddons(locksFile, uid)).toEqual(["firewall", "system-tweaks"]);
+  expect(visitorIpMigrationPending(paths)).toBe(false);
+
+  // Rollback removes visitor-ip.json, firewall.conf, and the carried firewall lock while preserving system-tweaks' lock.
+  undo!();
+  expect(existsSync(vipState)).toBe(false);
+  expect(existsSync(fwConfig)).toBe(false);
+  expect(lockedAddons(locksFile, uid)).toEqual(["system-tweaks"]);
 });
 
 test("Firewall declares both nginx.conf and fastcgi_params conffiles for apt-hook release", () => {

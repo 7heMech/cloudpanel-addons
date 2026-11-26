@@ -1,11 +1,13 @@
 import { afterEach, expect, test } from "bun:test";
-import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, statSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { readAccess } from "../lib/cloudflare/access";
+import { cloudflareAccessDetailsHtml } from "../lib/cloudflare/connect-dialog";
 import {
   checkCloudflareConnections, cloudflareConnectionViews, cloudflareTokenHolds, legacyDnsCloudflarePending,
-  listCloudflareSecrets, migrateCloudflareFromDns, readCloudflareStore, removeCloudflareConnection,
-  saveCloudflareConnection, type CloudflareStorePaths,
+  listCloudflareSecrets, MAX_CLOUDFLARE_CONNECTIONS, migrateCloudflareFromDns, readCloudflareStore,
+  recordCloudflareReports, removeCloudflareConnection, saveCloudflareConnection, type CloudflareStorePaths,
 } from "../lib/cloudflare/store";
 import { tokenTemplate, tokenTemplates } from "../lib/cloudflare/tokens";
 import { FakeCloudflare, policy } from "./fixtures/dns-api";
@@ -178,4 +180,132 @@ test("migrateCloudflareFromDns moves connections, tokens and status while keepin
   expect(readFileSync(join(dnsDir, "secrets.json"), "utf8")).toBe(secretsText);
   expect(readFileSync(join(dnsDir, "status.json"), "utf8")).toBe(statusText);
   expect(existsSync(cfDir)).toBe(false);
+});
+
+test("combined tokenTemplate includes Zone Settings: Read when no DNS profile requires zone_settings", () => {
+  const withoutSettings = tokenTemplate([{ name: "Plain", zone: { ssl: null, alwaysHttps: null, acmeFullSsl: false, webmailFullSsl: false, skipFirewallIps: [] } }], { dns: true, panelGate: true });
+  expect(withoutSettings.permissions).toContain("Zone Settings: Read");
+  expect(withoutSettings.url).toContain("zone_settings");
+
+  const withSettingsEdit = tokenTemplate([{ name: "Strict", zone: { ssl: "strict", alwaysHttps: null, acmeFullSsl: false, webmailFullSsl: false, skipFirewallIps: [] } }], { dns: true, panelGate: true });
+  expect(withSettingsEdit.permissions).toContain("Zone Settings: Edit");
+  expect(withSettingsEdit.permissions).not.toContain("Zone Settings: Read");
+});
+
+test("reachOf ignores deny grants on unrelated permissions when computing fallback reach", () => {
+  const reached = { zones: [{ id: "z1", name: "a.example", accountId: "a1" }, { id: "z2", name: "b.example", accountId: "a1" }], accounts: [{ id: "a1", name: "Agency" }] };
+  const unrelatedDeny = readAccess({ owner: "user", accountId: null }, [
+    { allow: true, permissions: ["Zone Read"], resources: [{ account: "*", zone: "*" }] },
+    { allow: false, permissions: ["SSL and Certificates Write"], resources: [{ account: "*", zone: "z1" }] },
+  ], reached);
+  expect(unrelatedDeny.readable && unrelatedDeny.reach).toBe("All zones");
+
+  const matchingDeny = readAccess({ owner: "user", accountId: null }, [
+    { allow: true, permissions: ["Zone Read"], resources: [{ account: "*", zone: "*" }] },
+    { allow: false, permissions: ["Zone Read"], resources: [{ account: "*", zone: "z1" }] },
+  ], reached);
+  expect(matchingDeny.readable && matchingDeny.reach).toBe("All zones, except 1 zone");
+});
+
+test("recordCloudflareReports drops a report checked with a superseded token and never leaks tokens", async () => {
+  const { paths, cf, agency } = makeStore();
+  const zone = cf.zones.find((z) => z.name === "example.com")!;
+  cf.token(USER_TOKEN, {
+    owner: "user",
+    accounts: [agency],
+    policies: [policy(["DNS Read", "API Tokens Read"], { "com.cloudflare.api.account.zone.*": "*" })],
+  });
+  cf.token(SECOND_TOKEN, {
+    owner: "user",
+    accounts: [agency],
+    policies: [policy(["DNS Write", "API Tokens Read"], { "com.cloudflare.api.account.zone.*": "*" })],
+  });
+  const saved = await saveCloudflareConnection({ token: USER_TOKEN, label: "Primary" }, { paths, fetch: cf.fetch });
+  const staleReport = { ...saved.report, status: "disabled", active: false, error: "Old token report" };
+  // Replace token under the same id before the stale DNS report arrives.
+  await saveCloudflareConnection({ id: saved.id, token: SECOND_TOKEN, label: "Primary" }, { paths, fetch: cf.fetch });
+  await recordCloudflareReports([staleReport], 0, true, { [saved.id]: USER_TOKEN }, paths);
+
+  expect(cloudflareTokenHolds(saved.id, "dns", { id: zone.id, accountId: agency }, paths)).toBe(true);
+  const view = cloudflareConnectionViews([], {}, paths);
+  expect(view.connections[0]!.active).toBe(true);
+  expect(JSON.stringify(view)).not.toContain(USER_TOKEN);
+  expect(JSON.stringify(view)).not.toContain(SECOND_TOKEN);
+});
+
+test("saveCloudflareConnection rolls back secrets.json if writing connections.json fails so retries work", async () => {
+  const { paths, cf } = makeStore();
+  mkdirSync(paths.stateDir, { recursive: true });
+  // Place a directory where connections.json should be so atomic rename over it fails with EISDIR.
+  mkdirSync(join(paths.stateDir, "connections.json"));
+  await expect(saveCloudflareConnection({ token: USER_TOKEN, label: "Primary" }, { paths, fetch: cf.fetch })).rejects.toThrow();
+  expect(existsSync(join(paths.stateDir, "secrets.json"))).toBe(false);
+
+  // Clean up the obstacle and confirm retrying the same token succeeds cleanly.
+  rmSync(join(paths.stateDir, "connections.json"), { recursive: true, force: true });
+  const saved = await saveCloudflareConnection({ token: USER_TOKEN, label: "Primary" }, { paths, fetch: cf.fetch });
+  expect(saved.isNew).toBe(true);
+  expect(listCloudflareSecrets(paths)).toHaveLength(1);
+});
+
+test("migrateCloudflareFromDns throws on unreadable/untrusted files and when merged connections exceed capacity", () => {
+  const dir = mkdtempSync(join(tmpdir(), "clp-cf-mig-err-"));
+  dirs.push(dir);
+  const dnsDir = join(dir, "dns");
+  const cfDir = join(dir, "cloudflare");
+  mkdirSync(dnsDir, { recursive: true });
+  const realFile = join(dir, "real.json");
+  writeFileSync(realFile, JSON.stringify({ connections: [{ id: "cf-1111aaaa", label: "Link" }] }), { mode: 0o600 });
+  symlinkSync(realFile, join(dnsDir, "policy.json"));
+  expect(() => migrateCloudflareFromDns(dnsDir, { stateDir: cfDir, rootUid: uid })).toThrow("were not moved to shared state");
+
+  // Exceeding MAX_CLOUDFLARE_CONNECTIONS fails before writing shared state or clearing legacy files.
+  const dir2 = mkdtempSync(join(tmpdir(), "clp-cf-mig-cap-"));
+  dirs.push(dir2);
+  const dnsDir2 = join(dir2, "dns");
+  const cfDir2 = join(dir2, "cloudflare");
+  mkdirSync(dnsDir2, { recursive: true });
+  mkdirSync(cfDir2, { recursive: true });
+  const fullConns = Array.from({ length: MAX_CLOUDFLARE_CONNECTIONS }, (_, i) => ({ id: `cf-${String(i).padStart(8, "0")}`, label: `C${i}` }));
+  const fullTokens = Object.fromEntries(fullConns.map((c) => [c.id, `tok-${c.id}`]));
+  writeFileSync(join(cfDir2, "connections.json"), JSON.stringify({ version: 1, connections: fullConns }), { mode: 0o600 });
+  writeFileSync(join(cfDir2, "secrets.json"), JSON.stringify({ version: 1, tokens: fullTokens }), { mode: 0o600 });
+  const legacyPolicy = JSON.stringify({ version: 1, connections: [{ id: "cf-overflow", label: "Overflow" }] });
+  const legacySecrets = JSON.stringify({ cloudflare: { "cf-overflow": "tok-overflow" }, mailcowKey: "" });
+  writeFileSync(join(dnsDir2, "policy.json"), legacyPolicy, { mode: 0o600 });
+  writeFileSync(join(dnsDir2, "secrets.json"), legacySecrets, { mode: 0o600 });
+
+  expect(() => migrateCloudflareFromDns(dnsDir2, { stateDir: cfDir2, rootUid: uid })).toThrow(`more than ${MAX_CLOUDFLARE_CONNECTIONS}`);
+  expect(readFileSync(join(dnsDir2, "policy.json"), "utf8")).toBe(legacyPolicy);
+  expect(readFileSync(join(dnsDir2, "secrets.json"), "utf8")).toBe(legacySecrets);
+  expect(readCloudflareStore({ stateDir: cfDir2, rootUid: uid }).tokens["cf-overflow"]).toBeUndefined();
+});
+
+test("saveCloudflareConnection and checkCloudflareConnections bound stalled verification within verifyMs", async () => {
+  const { paths, cf } = makeStore();
+  const hang = () => new Promise<Response>(() => {});
+  await expect(saveCloudflareConnection({ token: USER_TOKEN }, { paths, fetch: hang, verifyMs: 40 })).rejects.toThrow("did not answer in time");
+
+  const saved = await saveCloudflareConnection({ token: USER_TOKEN }, { paths, fetch: cf.fetch });
+  const reports = await checkCloudflareConnections({ paths, fetch: hang, verifyMs: 40 });
+  expect(reports).toHaveLength(1);
+  expect(reports[0]).toMatchObject({ id: saved.id, active: false, status: "error", error: "Cloudflare did not answer in time" });
+});
+
+test("cloudflareAccessDetailsHtml puts dns-access-cols on headers only so narrow CSS keeps permission rows visible", () => {
+  const html = cloudflareAccessDetailsHtml("cf-1", {
+    reach: "All zones",
+    note: null,
+    editUrl: "https://dash.cloudflare.com/profile/api-tokens",
+    rows: [
+      { label: "SSL and Certificates: Edit", usedFor: "Panel gate", held: "yes" },
+      { label: "DNS: Edit", usedFor: "Records", held: "no", optional: true },
+    ],
+  }, "Active", "fw-cf");
+  const rows = html.match(/<div class="[^"]*dns-access-row[^"]*"/g) ?? [];
+  // Header row and Optional section header have dns-access-cols; data rows do not.
+  expect(rows.filter((tag) => tag.includes("dns-access-cols"))).toHaveLength(2);
+  expect(rows.filter((tag) => !tag.includes("dns-access-cols"))).toHaveLength(2);
+  const fwCss = readFileSync(join(import.meta.dir, "..", "addons", "firewall", "app", "views.css"), "utf8");
+  expect(fwCss).toContain(".dns-access-cols:not(.dns-access-section) { display: none; }");
 });

@@ -20,7 +20,7 @@ import { readState, writeState } from "../../lib/root-state";
 import { cloudflareVisitorMaps } from "../../lib/visitor-ip";
 
 export const VISITOR_IP = "$clp_visitor_ip";
-const MAPS_MARKER = "# clp-addons:visitor-ip";
+export const MAPS_MARKER = "# clp-addons:visitor-ip";
 const COMMAND_MS = 60_000;
 const STATE_VERSION = 1;
 

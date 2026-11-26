@@ -15,6 +15,9 @@ async function readState() {
   }
 }
 
+// Monotonic sequence so an older readState() reply can never paint over a newer one.
+let repaintSeq = 0;
+
 // Reading the new state is part of the change, not something after it: the
 // controls stay disabled until it is in hand, so a second click cannot start a
 // change whose reply arrives first and paints the older state over the newer
@@ -35,12 +38,13 @@ async function change(path, body, failedAs) {
   } catch (error) {
     failure = error.message;
   }
+  const seq = ++repaintSeq;
   try {
     state = await readState();
   } finally {
     busy(false);
   }
-  if (state.ok) {
+  if (state.ok && seq === repaintSeq) {
     repaintView(CLP_ROOT.getElementById('clp-content'), state.html);
     loadPanelGate();
   }
@@ -53,8 +57,9 @@ async function change(path, body, failedAs) {
 }
 
 async function repaint() {
+  const seq = ++repaintSeq;
   const state = await readState();
-  if (state.ok) {
+  if (state.ok && seq === repaintSeq) {
     repaintView(CLP_ROOT.getElementById('clp-content'), state.html);
     loadPanelGate();
   }
@@ -65,6 +70,13 @@ async function repaint() {
 // follows the page rather than holding the site table back. A repaint within
 // a minute reuses that read; switching the gate drops it.
 let panelGateRead = null;
+// Bumped whenever the gate or its connections change, so a read started before then is dropped.
+let panelGateGeneration = 0;
+
+function forgetPanelGate() {
+  panelGateRead = null;
+  panelGateGeneration++;
+}
 
 async function loadPanelGate() {
   const card = CLP_ROOT.getElementById('panel-gate-card');
@@ -77,11 +89,14 @@ async function loadPanelGate() {
     swap(panelGateRead.html);
     return;
   }
+  const generation = panelGateGeneration;
   try {
     const reply = await call('/api/panel-gate');
+    if (generation !== panelGateGeneration) return;
     panelGateRead = { at: Date.now(), html: reply.html };
     swap(reply.html);
   } catch (error) {
+    if (generation !== panelGateGeneration) return;
     const status = card.querySelector('[role="status"]');
     if (status) status.textContent = 'The Panel gate could not be read: ' + error.message;
   }
@@ -231,7 +246,7 @@ async function fwSaveCloudflare(event) {
     return;
   }
   if (dialog && dialog.open) dialog.close();
-  panelGateRead = null;
+  forgetPanelGate();
   const state = await repaint();
   replyNotice(Object.assign(state, { reply: reply.data }));
 }
@@ -260,7 +275,7 @@ async function fwRemoveCloudflare(id) {
     notify('Could not remove Cloudflare connection: ' + failure, 'error');
     return;
   }
-  panelGateRead = null;
+  forgetPanelGate();
   const state = await repaint();
   replyNotice(Object.assign(state, { reply: reply.data }));
 }
@@ -412,9 +427,10 @@ async function startNetcupConnect() {
     if (!owns && netcupSignIn) return;
     stopNetcupConnect(run);
     if (owns && dialog.open) dialog.close();
+    const seq = ++repaintSeq;
     const state = await readState();
     if (netcupSignIn || netcupLatest !== run) return;
-    if (state.ok) {
+    if (state.ok && seq === repaintSeq) {
       repaintView(CLP_ROOT.getElementById('clp-content'), state.html);
       loadPanelGate();
     }
@@ -549,7 +565,7 @@ function setCloud(input, provider, role) {
 }
 
 function setPanelGate(input) {
-  panelGateRead = null;
+  forgetPanelGate();
   return reviewedSwitch(input, '/api/panel-gate', {}, async function (review) {
     const accepted = await confirmAction({
       title: review.title, text: review.text, details: review.details,

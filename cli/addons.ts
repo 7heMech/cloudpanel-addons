@@ -1,7 +1,7 @@
 import { addonStateDir, CONFIG_DIR, LOCK_DIR, STATE_DIR, SYSTEMD_DIR } from "../lib/paths";
 import { withFileLockSync } from "../lib/file-lock";
 import { migrateResourceMemory } from "../addons/resource-limits/migration";
-import { LEGACY_PROTOCOLS_FILE, migrateFirewallProtocols, migrateVisitorIp } from "../addons/firewall/migration";
+import { LEGACY_PROTOCOLS_FILE, migrateFirewallProtocols, migrateVisitorIp, visitorIpMigrationPending } from "../addons/firewall/migration";
 import { legacyDnsCloudflarePending, migrateCloudflareFromDns } from "../lib/cloudflare/store";
 import { ADDONS, ADDON_NAMES, addonEnabled } from "../addons/catalog";
 import { archRefusal, type AddonSpec } from "../lib/addon-definition";
@@ -29,7 +29,7 @@ const RENAMED_ADDONS: Record<string, string> = { "wp-login": "wp-tools", "php-re
 const LEGACY_LOCKS = ["cloudflare-ips.lock", "system-tweaks-firewall.lock"];
 
 /** What a rename moved, so a failed update can hand it back to the binary it restores. */
-interface AddonRename {
+export interface AddonRename {
   from: string;
   to: string;
   /** The old config, or null when the addon was disabled. */
@@ -43,12 +43,12 @@ function migrationPending(): boolean {
   if (Object.keys(RENAMED_ADDONS).some((from) =>
     existsSync(`${CONFIG_DIR}/${from}.conf`) || existsSync(`${CONFIG_DIR}/${from}.conf.new`) || existsSync(`${STATE_DIR}/${from}`))) return true;
   if (existsSync(`${addonStateDir("system-tweaks")}/memory.json`) || existsSync(LEGACY_PROTOCOLS_FILE)) return true;
-  if (legacyDnsCloudflarePending()) return true;
+  if (legacyDnsCloudflarePending() || visitorIpMigrationPending()) return true;
   const oom = `${SYSTEMD_DIR}/nginx.service.d/zz-clp-addons-oom.conf`;
   if (existsSync(oom) && readFileSync(oom, "utf8").includes("clp-addons System Tweaks:")) return true;
   try {
     const parsed = JSON.parse(readFileSync(`${addonStateDir("system-tweaks")}/settings.json`, "utf8")) ?? {};
-    return Object.hasOwn(parsed, "memory") || Object.hasOwn(parsed, "cloudflareVisitorIp");
+    return Object.hasOwn(parsed, "memory");
   } catch {
     return false;
   }

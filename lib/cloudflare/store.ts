@@ -26,6 +26,14 @@ import { PERMISSIONS, type PermissionName, type PermissionScopeOptions, type Zon
 
 export const MAX_CLOUDFLARE_CONNECTIONS = 12;
 const LABEL_MAX = 40;
+/**
+ * Saving and checking wait this long for another change, then give Cloudflare
+ * VERIFY_MS to answer, which together fit the manager's CLOUDFLARE_ACTION_MS.
+ */
+export const LOCK_WAIT_S = 30;
+export const VERIFY_MS = 75_000;
+export const CLOUDFLARE_ACTION_MS = 120_000;
+const BUSY = "another Cloudflare connection change is running";
 const INACTIVE_ZONES = new Set(["moved", "deleted", "deactivated"]);
 
 export interface CloudflareConnection {
@@ -102,6 +110,8 @@ export interface CloudflareStoreSnapshot {
 export interface CloudflareStoreOptions {
   paths?: Partial<CloudflareStorePaths>;
   fetch?: ApiFetch;
+  /** Tests only: how long Cloudflare is given to answer. */
+  verifyMs?: number;
 }
 
 function resolvePaths(paths?: Partial<CloudflareStorePaths>): CloudflareStorePaths {
@@ -162,7 +172,10 @@ export function readCloudflareSecrets(paths?: Partial<CloudflareStorePaths>): Re
 export function readCloudflareStatus(paths?: Partial<CloudflareStorePaths>): { reports: CloudflareConnectionReport[]; backoffUntil: number } {
   const resolved = resolvePaths(paths);
   const statusRaw = readState<Partial<StatusFile> | null>(filePaths(resolved).status, resolved.rootUid, () => null);
-  const reports = Array.isArray(statusRaw?.connections) ? statusRaw.connections : [];
+  const reports = Array.isArray(statusRaw?.connections)
+    ? statusRaw.connections.filter((entry): entry is CloudflareConnectionReport =>
+      Boolean(entry) && typeof entry === "object" && typeof entry.id === "string" && Array.isArray(entry.accounts))
+    : [];
   const backoffUntil = typeof statusRaw?.backoffUntil === "number" && Number.isFinite(statusRaw.backoffUntil) ? statusRaw.backoffUntil : 0;
   return { reports, backoffUntil };
 }
@@ -186,6 +199,35 @@ function writeSecrets(paths: CloudflareStorePaths, tokens: Record<string, string
 
 function writeStatus(paths: CloudflareStorePaths, reports: CloudflareConnectionReport[], backoffUntil: number): void {
   writeState(filePaths(paths).status, { version: 1, connections: reports, backoffUntil } satisfies StatusFile, paths.rootUid);
+}
+
+/** Runs writes to the store's files, putting every file back as it was when one of them fails. */
+function commit(paths: CloudflareStorePaths, write: () => void): void {
+  const files = filePaths(paths);
+  const before = [files.secrets, files.connections, files.status].map((path) => ({ path, saved: snapshotFile(path, paths.rootUid) }));
+  try {
+    write();
+  } catch (error) {
+    for (const { path, saved } of before.reverse()) {
+      try {
+        if (saved) restoreFile(saved); else rmSync(path, { force: true });
+      } catch (restoreError) {
+        log.warn(`${path} could not be put back: ${errorMessage(restoreError)}`);
+      }
+    }
+    throw error;
+  }
+}
+
+/** Cloudflare's answer, or a refusal once `ms` has passed, so a slow Cloudflare cannot outlast the request. */
+function withinDeadline<T>(work: Promise<T>, ms: number, timedOut: () => T): Promise<T> {
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  const deadline = new Promise<T>((resolve, reject) => {
+    timer = setTimeout(() => {
+      try { resolve(timedOut()); } catch (error) { reject(error); }
+    }, ms);
+  });
+  return Promise.race([work, deadline]).finally(() => clearTimeout(timer));
 }
 
 /** Server-side list of saved Cloudflare connections with their bearer tokens. Never send to the browser. */
@@ -286,20 +328,23 @@ export async function verifyCloudflareToken(
 /**
  * Merges fresh connection reports (such as from a DNS pass) into the shared
  * status.json without losing reports from connections the pass did not touch.
+ * `checked` holds the token each report was made with; a report for a
+ * connection whose token was replaced since is dropped.
  */
 export function recordCloudflareReports(
   fresh: CloudflareConnectionReport[],
   backoffUntil: number,
   fullPass: boolean,
+  checked: Record<string, string>,
   paths?: Partial<CloudflareStorePaths>,
 ): Promise<void> {
   const resolved = resolvePaths(paths);
-  return withFileLock(resolved.lockFile, 30, "another Cloudflare connection change is running", async () => {
+  return withFileLock(resolved.lockFile, LOCK_WAIT_S, BUSY, async () => {
     const store = readCloudflareStore(resolved);
     const merged = store.connections.flatMap((connection): CloudflareConnectionReport[] => {
       const before = store.reports.find((entry) => entry.id === connection.id);
       const next = fresh.find((entry) => entry.id === connection.id);
-      if (!next) return before ? [before] : [];
+      if (!next || checked[connection.id] !== store.tokens[connection.id]) return before ? [before] : [];
       const { token: freshToken, refused: seen, ...rest } = next;
       const stale = !freshToken || (!freshToken.readable && freshToken.transient);
       const token = !next.active ? undefined : stale && before?.token ? before.token : freshToken;
@@ -315,7 +360,7 @@ export async function saveCloudflareConnection(
   options: CloudflareStoreOptions = {},
 ): Promise<{ id: string; label: string; isNew: boolean; report: CloudflareConnectionReport; notice: string }> {
   const resolved = resolvePaths(options.paths);
-  return withFileLock(resolved.lockFile, 60, "another Cloudflare connection change is running", async () => {
+  return withFileLock(resolved.lockFile, LOCK_WAIT_S, BUSY, async () => {
     const store = readCloudflareStore(resolved);
     const existing = body.id ? store.connections.find((connection) => connection.id === connectionId(body.id)) : undefined;
     if (body.id && !existing) failAction("That connection no longer exists");
@@ -329,9 +374,11 @@ export async function saveCloudflareConnection(
     }
 
     const id = existing?.id ?? `cf-${randomBytes(4).toString("hex")}`;
-    const { report, backoffUntil } = await verifyCloudflareToken(id, "Checking", token, {
-      fetch: options.fetch, backoff: { until: store.backoffUntil }, readTokens: true,
-    });
+    const { report, backoffUntil } = await withinDeadline(
+      verifyCloudflareToken(id, "Checking", token, { fetch: options.fetch, backoff: { until: store.backoffUntil }, readTokens: true }),
+      options.verifyMs ?? VERIFY_MS,
+      () => failAction("Cloudflare did not answer in time; try again in a moment"),
+    );
     if (backoffUntil > store.backoffUntil) {
       writeStatus(resolved, store.reports, backoffUntil);
     }
@@ -349,9 +396,11 @@ export async function saveCloudflareConnection(
     const nextReports = nextConnections.flatMap((connection) =>
       connection.id === id ? [saved] : store.reports.filter((entry) => entry.id === connection.id));
 
-    writeSecrets(resolved, nextTokens);
-    writeConnections(resolved, nextConnections);
-    writeStatus(resolved, nextReports, Math.max(store.backoffUntil, backoffUntil));
+    commit(resolved, () => {
+      writeSecrets(resolved, nextTokens);
+      writeConnections(resolved, nextConnections);
+      writeStatus(resolved, nextReports, Math.max(store.backoffUntil, backoffUntil));
+    });
 
     const zones = `${report.zones} zone${report.zones === 1 ? "" : "s"}`;
     const notice = `${label} reaches ${report.accounts.length} account${report.accounts.length === 1 ? "" : "s"} and ${zones}.`;
@@ -365,7 +414,7 @@ export async function removeCloudflareConnection(
 ): Promise<{ id: string; label: string; remaining: number; notice: string }> {
   const validId = connectionId(id);
   const resolved = resolvePaths(options.paths);
-  return withFileLock(resolved.lockFile, 30, "another Cloudflare connection change is running", async () => {
+  return withFileLock(resolved.lockFile, LOCK_WAIT_S, BUSY, async () => {
     const store = readCloudflareStore(resolved);
     const existing = store.connections.find((connection) => connection.id === validId);
     if (!existing) failAction("That connection no longer exists");
@@ -373,9 +422,11 @@ export async function removeCloudflareConnection(
     const nextTokens = { ...store.tokens };
     delete nextTokens[validId];
     const nextReports = store.reports.filter((report) => report.id !== validId);
-    writeSecrets(resolved, nextTokens);
-    writeConnections(resolved, nextConnections);
-    writeStatus(resolved, nextReports, store.backoffUntil);
+    commit(resolved, () => {
+      writeSecrets(resolved, nextTokens);
+      writeConnections(resolved, nextConnections);
+      writeStatus(resolved, nextReports, store.backoffUntil);
+    });
     return {
       id: validId,
       label: existing.label,
@@ -387,7 +438,7 @@ export async function removeCloudflareConnection(
 
 export async function checkCloudflareConnections(options: CloudflareStoreOptions = {}): Promise<CloudflareConnectionReport[]> {
   const resolved = resolvePaths(options.paths);
-  return withFileLock(resolved.lockFile, 60, "another Cloudflare connection change is running", async () => {
+  return withFileLock(resolved.lockFile, LOCK_WAIT_S, BUSY, async () => {
     const store = readCloudflareStore(resolved);
     const backoff = { until: store.backoffUntil };
     const reports = await Promise.all(store.connections.map(async (connection): Promise<CloudflareConnectionReport> => {
@@ -395,7 +446,11 @@ export async function checkCloudflareConnections(options: CloudflareStoreOptions
       if (!token) {
         return { id: connection.id, label: connection.label, active: false, status: "missing", accounts: [], zones: 0, error: "No token is saved for this connection" };
       }
-      const { report } = await verifyCloudflareToken(connection.id, connection.label, token, { fetch: options.fetch, backoff, readTokens: true });
+      const { report } = await withinDeadline(
+        verifyCloudflareToken(connection.id, connection.label, token, { fetch: options.fetch, backoff, readTokens: true }),
+        options.verifyMs ?? VERIFY_MS,
+        () => ({ report: { id: connection.id, label: connection.label, active: false, status: "error", accounts: [], zones: 0, error: "Cloudflare did not answer in time" }, zones: [], backoffUntil: backoff.until }),
+      );
       const before = store.reports.find((entry) => entry.id === connection.id);
       const stale = !report.token || (!report.token.readable && report.token.transient);
       const tokenAccess = !report.active ? undefined : stale && before?.token ? before.token : report.token;
@@ -462,7 +517,9 @@ export function legacyDnsCloudflarePending(dnsDir = addonStateDir("dns")): boole
 /**
  * Moves Cloudflare connections, tokens and cached reports out of `dns/` into
  * the shared `/var/lib/clp-addons/cloudflare/` store. Returns an in-memory
- * rollback closure, or null when there was nothing to move.
+ * rollback closure, or null when there was nothing to move. Throws, with
+ * everything put back, when the move fails: Panel gate reads only the shared
+ * store, so an update must not finish with tokens left behind.
  */
 export function migrateCloudflareFromDns(
   dnsDir = addonStateDir("dns"),
@@ -483,8 +540,7 @@ export function migrateCloudflareFromDns(
     secretsSnap = snapshotFile(dnsSecretsPath, uid);
     statusSnap = snapshotFile(dnsStatusPath, uid);
   } catch (error) {
-    log.warn(`DNS's Cloudflare connections were not moved to shared state: ${errorMessage(error)}`);
-    return null;
+    throw new Error(`DNS's Cloudflare connections were not moved to shared state: ${errorMessage(error)}`);
   }
 
   let policyJson: Record<string, unknown> | null = null;
@@ -516,16 +572,19 @@ export function migrateCloudflareFromDns(
     const mergedConns = [...existing.connections];
     const seenIds = new Set(mergedConns.map((c) => c.id));
     for (const conn of legacyConns) {
-      if (!seenIds.has(conn.id) && mergedConns.length < MAX_CLOUDFLARE_CONNECTIONS) {
+      if (!seenIds.has(conn.id)) {
         seenIds.add(conn.id);
         mergedConns.push(conn);
       }
     }
     for (const id of Object.keys(legacyTokens)) {
-      if (!seenIds.has(id) && mergedConns.length < MAX_CLOUDFLARE_CONNECTIONS) {
+      if (!seenIds.has(id)) {
         seenIds.add(id);
         mergedConns.push({ id, label: id });
       }
+    }
+    if (mergedConns.length > MAX_CLOUDFLARE_CONNECTIONS) {
+      throw new Error(`more than ${MAX_CLOUDFLARE_CONNECTIONS} Cloudflare connections exist across shared and legacy DNS state`);
     }
     const mergedTokens: Record<string, string> = { ...legacyTokens, ...existing.tokens };
     const existingReportIds = new Set(existing.reports.map((r) => r.id));
@@ -554,7 +613,6 @@ export function migrateCloudflareFromDns(
     return undo;
   } catch (error) {
     undo();
-    log.warn(`DNS's Cloudflare connections were not moved to shared state: ${errorMessage(error)}`);
-    return null;
+    throw new Error(`DNS's Cloudflare connections were not moved to shared state: ${errorMessage(error)}`);
   }
 }

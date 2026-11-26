@@ -40,7 +40,7 @@ export function cloudflareAccessProblems(access: AccessView): string {
 /** Expandable table of what a shared Cloudflare token holds. */
 export function cloudflareAccessDetailsHtml(id: string, access: AccessView, status: string, prefix = "cf"): string {
   const rowHtml = (row: AccessView["rows"][number]) =>
-    `<div class="dns-access-row dns-access-cols" role="row"><span role="cell">${esc(row.label)}</span><span role="cell" class="hint">${esc(row.usedFor)}</span><span role="cell">${heldBadge(row)}</span></div>`;
+    `<div class="dns-access-row" role="row"><span class="dns-access-perm" role="cell">${esc(row.label)}</span><span class="dns-access-use hint" role="cell">${esc(row.usedFor)}</span><span class="dns-access-held" role="cell">${heldBadge(row)}</span></div>`;
   const optional = access.rows.filter((row) => row.optional);
   const rows = access.rows.filter((row) => !row.optional).map(rowHtml).join("") + (optional.length
     ? `<div class="dns-access-row dns-access-cols dns-access-section" role="row"><span role="columnheader">Optional</span><span role="columnheader">Enables</span><span></span></div>${optional.map(rowHtml).join("")}`

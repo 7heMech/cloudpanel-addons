@@ -298,10 +298,16 @@ CloudPanel's custom domain is a server block of the sites' Nginx,
   checked the same way. The challenge then reaches the server as any other
   request does: Cloudflare connects to 443 with the origin-pull certificate,
   which is per hostname rather than per path, and the panel serves
-  `/.well-known` itself. DNS's `clp_dns_acme` rule, Full SSL for that path,
-  keeps that connection working while the certificate is expired or not yet
-  issued; Full still presents the origin-pull certificate. Port 80 is not
-  involved: the custom domain's server only redirects there, and
+  `/.well-known` itself. While the origin certificate is still valid, normal
+  renewals succeed over Full (strict) through that Access Bypass without DNS
+  enabled. If the origin certificate is already expired or not yet issued under
+  Full (strict), Cloudflare refuses the origin handshake unless DNS's
+  `clp_dns_acme` rule (Full SSL for `/.well-known/acme-challenge/*`, installed
+  when DNS manages the zone with `acmeFullSsl` on) is present; Full still
+  presents the origin-pull certificate. Without DNS, recovering an expired
+  certificate under Full (strict) requires switching SSL mode temporarily to
+  Full or turning the gate off over SSH with `clp-addons firewall panel-gate off`.
+  Port 80 is not involved: the custom domain's server only redirects there, and
   `ssl_verify_client` applies to TLS connections alone.
 
 The Access token is not checked at the origin. A request reaches the

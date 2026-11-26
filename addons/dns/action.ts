@@ -219,6 +219,8 @@ interface Status {
   backoff: { cloudflare: number; mailcow: number };
   /** Whether the panel hostname was last planned proxied, so a certificate write that changes nothing is cheap. */
   panelProxied?: boolean;
+  /** Cloudflare connection ids saved when DNS last looked; absent before it first did. */
+  connectionIds?: string[];
 }
 
 interface Pending {
@@ -269,9 +271,15 @@ class Files {
   }
 
   savePolicy(policy: Policy): void {
-    // Cloudflare connections live in the shared store; keep dns/policy.json's legacy list empty.
+    // Cloudflare connections live in the shared store; keep dns/policy.json's legacy list empty once migrated,
+    // without wiping unmigrated legacy connections while the shared store is still empty.
     const clean = parsePolicy(policy);
-    writeState(this.path("policy"), { ...clean, connections: [] }, this.paths.rootUid);
+    let legacy: Policy["connections"] = [];
+    if (readCloudflareConnections(this.cfPaths).length === 0) {
+      const onDisk = readState<unknown>(this.path("policy"), this.paths.rootUid, () => null);
+      if (onDisk !== null) legacy = parsePolicy(onDisk).connections;
+    }
+    writeState(this.path("policy"), { ...clean, connections: legacy }, this.paths.rootUid);
   }
 
   secrets(): Secrets {
@@ -282,8 +290,13 @@ class Files {
   }
 
   saveSecrets(secrets: Secrets): void {
-    // Cloudflare tokens live in the shared store; keep only Mailcow's key in dns/secrets.json.
-    writeState(this.path("secrets"), { cloudflare: {}, mailcowKey: secrets.mailcowKey }, this.paths.rootUid);
+    // Cloudflare tokens live in the shared store; keep only Mailcow's key in dns/secrets.json once migrated,
+    // without wiping unmigrated legacy tokens while the shared store is still empty.
+    let legacy: Record<string, string> = {};
+    if (Object.keys(readCloudflareSecrets(this.cfPaths)).length === 0) {
+      legacy = parseSecrets(readState(this.path("secrets"), this.paths.rootUid, () => ({}))).cloudflare;
+    }
+    writeState(this.path("secrets"), { cloudflare: legacy, mailcowKey: secrets.mailcowKey }, this.paths.rootUid);
   }
 
   status(): Status {
@@ -456,9 +469,11 @@ class Action {
   }
 
   run(policy: Policy, secrets = this.files.secrets()): DnsRun {
+    const status = this.files.status();
     const run = new DnsRun({
       policy, secrets, sites: this.sites(), addresses: this.addresses(), fetch: this.options.fetch,
-      backoff: this.files.status().backoff, standIns: this.standIns(), panelProxied: this.panelProxied(policy),
+      backoff: status.backoff, standIns: this.standIns(), panelProxied: this.panelProxied(policy),
+      tokens: Object.fromEntries(status.connections.filter((report) => report?.active).map((report) => [report.id, report.token])),
     });
     this.runs.push(run);
     return run;
@@ -482,7 +497,7 @@ class Action {
     if (JSON.stringify(backoff) !== JSON.stringify(status.backoff)) {
       this.files.saveStatus({ ...status, backoff });
       if (backoff.cloudflare > status.backoff.cloudflare) {
-        await recordCloudflareReports([], backoff.cloudflare, false, this.files.cfPaths);
+        await recordCloudflareReports([], backoff.cloudflare, false, {}, this.files.cfPaths);
       }
     }
   }
@@ -551,9 +566,6 @@ class Action {
       plans: plansByDomain,
       backoff: run.backoff(),
     });
-    if (run.connections.length || domains === "all") {
-      await recordCloudflareReports(run.reports(), run.backoff().cloudflare, domains === "all", this.files.cfPaths);
-    }
     const managed = this.files.managed();
     const checked = plans.filter((plan) => domains === "all" || domains.includes(plan.domain));
     const tracked = run.managed(checked);
@@ -571,6 +583,9 @@ class Action {
       delete managed[domain];
     }
     this.files.saveManaged(managed);
+    if (run.connections.length || domains === "all") {
+      await recordCloudflareReports(run.reports(), run.backoff().cloudflare, domains === "all", run.tokens, this.files.cfPaths);
+    }
   }
 
   state(): DnsState {
@@ -1121,16 +1136,55 @@ class Action {
     }
   }
 
+  /** The redirect domains a stand-in site on this server serves. */
+  private standInRedirects(policy: Policy): string[] {
+    return Object.keys(this.standIns().current).filter((domain) => policy.redirects.some((redirect) => redirect.source === domain));
+  }
+
+  /**
+   * Holds redirects for review when a new Cloudflare connection arrives or the
+   * last one goes, whether DNS or Firewall made that change: moving a redirect
+   * between a stand-in site here and Cloudflare is reviewed first.
+   */
+  noticeConnections(): void {
+    const currentIds = readCloudflareConnections(this.files.cfPaths).map((connection) => connection.id);
+    const status = this.files.status();
+    const prevIds = status.connectionIds;
+    if (prevIds !== undefined && prevIds.length === currentIds.length && prevIds.every((id, index) => id === currentIds[index])) {
+      return;
+    }
+    if (prevIds !== undefined) {
+      const policy = this.files.policy();
+      const added = currentIds.some((id) => !prevIds.includes(id));
+      const emptied = prevIds.length > 0 && currentIds.length === 0;
+      const held = [
+        ...(added ? this.standInRedirects(policy) : []),
+        ...(emptied ? policy.redirects.map((redirect) => redirect.source) : []),
+      ];
+      if (held.some((domain) => !policy.held.includes(domain))) {
+        this.savePolicy({ ...policy, held: [...new Set([...policy.held, ...held])] });
+      }
+    } else if (currentIds.length > 0) {
+      const policy = this.files.policy();
+      const standIns = this.standInRedirects(policy);
+      if (standIns.some((domain) => !policy.held.includes(domain))) {
+        this.savePolicy({ ...policy, held: [...new Set([...policy.held, ...standIns])] });
+      }
+    }
+    this.files.saveStatus({ ...this.files.status(), connectionIds: currentIds });
+  }
+
   async saveConnection(body: Record<string, unknown>): Promise<DnsReply> {
     const policy = this.files.policy();
     const saved = await saveCloudflareConnection(body, { paths: this.files.cfPaths, fetch: this.options.fetch });
     // A redirect a stand-in serves moves to Cloudflare through its review, not on the next check.
-    const standIns = Object.keys(this.standIns().current).filter((domain) => policy.redirects.some((redirect) => redirect.source === domain));
+    const standIns = this.standInRedirects(policy);
     if (saved.isNew && standIns.length) {
       const next = structuredClone(policy);
       next.held = [...new Set([...next.held, ...standIns])];
       this.savePolicy(next);
     }
+    this.noticeConnections();
     await this.tryRefresh("all");
     return this.reply({ notice: saved.notice });
   }
@@ -1147,6 +1201,7 @@ class Action {
     this.savePolicy(next);
     const status = this.files.status();
     this.files.saveStatus({ ...status, connections: status.connections.filter((connection) => connection.id !== id) });
+    this.noticeConnections();
     await this.tryRefresh("all");
     return this.reply({ notice: removed.notice });
   }
@@ -1471,6 +1526,7 @@ export async function executeDnsAction(argv: string[], options: DnsActionOptions
     if ((verb === "reconcile" || verb === "sync-sites" || verb === "sync-panel-host") && !existsSync(paths.configFile)) return { checked: 0, joined: [], line: null };
     let failed = false;
     try {
+      action.noticeConnections();
       return await perform(action, verb, body, provision);
     } catch (error) {
       failed = true;
