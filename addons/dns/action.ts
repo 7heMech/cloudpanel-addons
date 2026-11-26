@@ -1151,28 +1151,41 @@ class Action {
     if (prevIds !== undefined && prevIds.length === currentIds.length && prevIds.every((id, index) => id === currentIds[index])) {
       return;
     }
+    const shared = hasSharedCloudflareStore(this.files.cfPaths);
+    const activeIds = new Set(currentIds);
+    const policy = this.files.policy();
+    const nextChoices = { ...policy.zoneChoices };
+    let choicesChanged = false;
+    if (shared) {
+      for (const [zone, choice] of Object.entries(nextChoices)) {
+        if (!activeIds.has(choice.connectionId) && !choice.connectionId.startsWith("pdns-")) {
+          delete nextChoices[zone];
+          choicesChanged = true;
+        }
+      }
+    }
+    let held: string[] = [];
     if (prevIds !== undefined) {
-      const policy = this.files.policy();
       const added = currentIds.some((id) => !prevIds.includes(id));
       const emptied = prevIds.length > 0 && currentIds.length === 0;
-      const held = [
+      held = [
         ...(added ? this.standInRedirects(policy) : []),
         ...(emptied ? policy.redirects.map((redirect) => redirect.source) : []),
       ];
-      if (held.some((domain) => !policy.held.includes(domain))) {
-        this.savePolicy({ ...policy, held: [...new Set([...policy.held, ...held])] });
-      }
     } else if (currentIds.length > 0) {
-      const policy = this.files.policy();
-      const standIns = this.standInRedirects(policy);
-      if (standIns.some((domain) => !policy.held.includes(domain))) {
-        this.savePolicy({ ...policy, held: [...new Set([...policy.held, ...standIns])] });
-      }
+      held = this.standInRedirects(policy);
+    }
+    if (choicesChanged || held.some((domain) => !policy.held.includes(domain))) {
+      this.savePolicy({
+        ...policy,
+        zoneChoices: nextChoices,
+        held: [...new Set([...policy.held, ...held])],
+      });
     }
     const latest = this.files.status();
     this.files.saveStatus({
       ...latest,
-      connections: hasSharedCloudflareStore(this.files.cfPaths) ? [] : latest.connections,
+      connections: shared ? [] : latest.connections,
       connectionIds: currentIds,
     });
   }
