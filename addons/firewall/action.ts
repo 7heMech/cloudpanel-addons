@@ -1,7 +1,7 @@
 import { LOCK_DIR, addonConfigFile, addonStateDir, PANEL_DB, DISTRO_NGINX_SITES_DIR } from "../../lib/paths";
 import { writeFileAtomic } from "../../lib/atomic-write";
 import { detectAddresses } from "../../lib/addresses";
-import { cloudflareConnectionViews, type CloudflareConnectionView, type CloudflareStoreOptions } from "../../lib/cloudflare/store";
+import { cloudflareConnectionViews, readDnsZoneProfiles, type CloudflareConnectionView, type CloudflareStoreOptions } from "../../lib/cloudflare/store";
 import { tokenTemplates, type TokenTemplates } from "../../lib/cloudflare/tokens";
 import { Database } from "bun:sqlite";
 import { existsSync, lstatSync, readFileSync, rmSync } from "node:fs";
@@ -316,7 +316,7 @@ function cloudflareForFirewall(options?: CloudflareStoreOptions): FirewallCloudf
   } catch { /* best effort */ }
   return {
     connections,
-    templates: tokenTemplates(),
+    templates: tokenTemplates(readDnsZoneProfiles()),
     serverIps,
     dnsEnabled: existsSync(addonConfigFile("dns")),
   };

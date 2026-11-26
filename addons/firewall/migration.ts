@@ -140,12 +140,12 @@ function legacySettings(text: string): Record<string, unknown> | null {
 
 /**
  * System Tweaks applied visitor IPs by default and saved the setting only once
- * an operator changed one. Its map still on disk, while Firewall is disabled
- * and has no choice of its own, is that default left behind.
+ * an operator changed one. Its map still on disk while Firewall has no choice
+ * of its own is that default left behind, whether Firewall was already enabled
+ * or not, so state and root's lock still carry over once.
  */
 function appliedByDefault(p: VisitorIpMigrationPaths): boolean {
-  const firewallAlreadyOn = p.firewallWasEnabled ?? existsSync(p.firewallConfig);
-  if (!existsSync(p.systemTweaksConfig) || firewallAlreadyOn || existsSync(p.visitorIpState)) return false;
+  if (!existsSync(p.systemTweaksConfig) || existsSync(p.visitorIpState)) return false;
   try {
     if (!lstatSync(p.visitorIpMaps).isFile()) return false;
     return readFileSync(p.visitorIpMaps, "utf8").startsWith(`${MAPS_MARKER}\n`);
@@ -226,7 +226,7 @@ export function migrateVisitorIp(
       restore({ ...source, text: `${JSON.stringify(rest, null, 2)}\n` });
     }
 
-    if (!existing && enabled && systemTweaksOn && !existsSync(p.firewallConfig)) {
+    if (!existing && enabled && systemTweaksOn && !existsSync(p.firewallConfig) && p.firewallWasEnabled !== true) {
       const policy = snapshot(p.firewallPolicy);
       let parsed: Record<string, unknown> | null = null;
       try { parsed = policy ? JSON.parse(policy.text) as Record<string, unknown> : null; } catch { parsed = null; }

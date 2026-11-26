@@ -42,7 +42,7 @@ import { clpctlIssue, NEW_SITE_WINDOW, requestSsl, retryCertificates, type Issue
 import { readState, writeState } from "../../lib/root-state";
 import { accessView, type AccessView } from "../../lib/cloudflare/access";
 import {
-  cloudflareTokenHolds, readCloudflareConnections, readCloudflareSecrets, readCloudflareStatus,
+  cloudflareTokenHolds, hasSharedCloudflareStore, readCloudflareConnections, readCloudflareSecrets, readCloudflareStatus,
   recordCloudflareReports, removeCloudflareConnection, saveCloudflareConnection,
   type CloudflareStorePaths,
 } from "../../lib/cloudflare/store";
@@ -264,18 +264,17 @@ class Files {
   policy(): Policy {
     const raw = readState<unknown>(this.path("policy"), this.paths.rootUid, () => null);
     const parsed = raw === null ? seededPolicy() : parsePolicy(raw);
-    const sharedConnections = readCloudflareConnections(this.cfPaths);
-    const connections = sharedConnections.length > 0 ? sharedConnections : parsed.connections;
+    const connections = hasSharedCloudflareStore(this.cfPaths) ? readCloudflareConnections(this.cfPaths) : parsed.connections;
     const createIn = parsed.createIn && connections.some((c) => c.id === parsed.createIn!.connectionId) ? parsed.createIn : null;
     return { ...parsed, connections, createIn };
   }
 
   savePolicy(policy: Policy): void {
     // Cloudflare connections live in the shared store; keep dns/policy.json's legacy list empty once migrated,
-    // without wiping unmigrated legacy connections while the shared store is still empty.
+    // without wiping unmigrated legacy connections while the shared store does not exist yet.
     const clean = parsePolicy(policy);
     let legacy: Policy["connections"] = [];
-    if (readCloudflareConnections(this.cfPaths).length === 0) {
+    if (!hasSharedCloudflareStore(this.cfPaths)) {
       const onDisk = readState<unknown>(this.path("policy"), this.paths.rootUid, () => null);
       if (onDisk !== null) legacy = parsePolicy(onDisk).connections;
     }
@@ -284,16 +283,15 @@ class Files {
 
   secrets(): Secrets {
     const parsed = parseSecrets(readState(this.path("secrets"), this.paths.rootUid, () => ({})));
-    const sharedTokens = readCloudflareSecrets(this.cfPaths);
-    const cloudflare = Object.keys(sharedTokens).length > 0 ? sharedTokens : parsed.cloudflare;
+    const cloudflare = hasSharedCloudflareStore(this.cfPaths) ? readCloudflareSecrets(this.cfPaths) : parsed.cloudflare;
     return { cloudflare, mailcowKey: parsed.mailcowKey };
   }
 
   saveSecrets(secrets: Secrets): void {
     // Cloudflare tokens live in the shared store; keep only Mailcow's key in dns/secrets.json once migrated,
-    // without wiping unmigrated legacy tokens while the shared store is still empty.
+    // without wiping unmigrated legacy tokens while the shared store does not exist yet.
     let legacy: Record<string, string> = {};
-    if (Object.keys(readCloudflareSecrets(this.cfPaths)).length === 0) {
+    if (!hasSharedCloudflareStore(this.cfPaths)) {
       legacy = parseSecrets(readState(this.path("secrets"), this.paths.rootUid, () => ({}))).cloudflare;
     }
     writeState(this.path("secrets"), { cloudflare: legacy, mailcowKey: secrets.mailcowKey }, this.paths.rootUid);
@@ -301,12 +299,11 @@ class Files {
 
   status(): Status {
     const stored = { ...emptyStatus(), ...readState<Partial<Status>>(this.path("status"), this.paths.rootUid, emptyStatus) };
-    const sharedConnections = readCloudflareConnections(this.cfPaths);
+    const shared = hasSharedCloudflareStore(this.cfPaths);
     const { reports, backoffUntil } = readCloudflareStatus(this.cfPaths);
-    const hasShared = sharedConnections.length > 0 || reports.length > 0 || backoffUntil > 0;
     return {
       ...stored,
-      connections: hasShared ? reports : stored.connections,
+      connections: shared ? reports : stored.connections,
       backoff: {
         cloudflare: Math.max(stored.backoff.cloudflare, backoffUntil),
         mailcow: stored.backoff.mailcow,
@@ -557,12 +554,13 @@ class Action {
     // Only once Cloudflare holds it: a write that failed or waits for a review leaves the next certificate write to try again.
     const panelPlan = panelHost && (domains === "all" || domains.includes(panelHost)) ? plans.find((plan) => plan.domain === panelHost) : undefined;
     const panelSettled = panelPlan && !panelPlan.problems.length && !panelPlan.changes.some((change) => change.action !== "note");
+    const shared = hasSharedCloudflareStore(this.files.cfPaths);
     const nextConnections = run.connections.length || domains === "all" ? this.withEarlier(run, status.connections, domains) : status.connections;
     this.files.saveStatus({
       ...status,
       ...panelSettled && { panelProxied: run.panelProxied },
       checkedAt: domains === "all" ? new Date(this.now).toISOString() : status.checkedAt,
-      connections: nextConnections,
+      connections: shared ? [] : nextConnections,
       plans: plansByDomain,
       backoff: run.backoff(),
     });
@@ -583,7 +581,7 @@ class Action {
       delete managed[domain];
     }
     this.files.saveManaged(managed);
-    if (run.connections.length || domains === "all") {
+    if (shared && (run.connections.length || domains === "all")) {
       await recordCloudflareReports(run.reports(), run.backoff().cloudflare, domains === "all", run.tokens, this.files.cfPaths);
     }
   }
@@ -1171,7 +1169,12 @@ class Action {
         this.savePolicy({ ...policy, held: [...new Set([...policy.held, ...standIns])] });
       }
     }
-    this.files.saveStatus({ ...this.files.status(), connectionIds: currentIds });
+    const latest = this.files.status();
+    this.files.saveStatus({
+      ...latest,
+      connections: hasSharedCloudflareStore(this.files.cfPaths) ? [] : latest.connections,
+      connectionIds: currentIds,
+    });
   }
 
   async saveConnection(body: Record<string, unknown>): Promise<DnsReply> {

@@ -154,6 +154,51 @@ function parseTokensMap(value: unknown): Record<string, string> {
   return tokens;
 }
 
+/** Whether the shared Cloudflare store has been initialized on disk (even if all connections were later removed). */
+export function hasSharedCloudflareStore(paths?: Partial<CloudflareStorePaths>): boolean {
+  const files = filePaths(resolvePaths(paths));
+  return existsSync(files.connections) || existsSync(files.secrets);
+}
+
+const DEFAULT_DNS_ZONE_PROFILE: ZoneProfileShape = {
+  name: "Web",
+  zone: { ssl: "strict", alwaysHttps: true, acmeFullSsl: true, webmailFullSsl: false, skipFirewallIps: [] },
+};
+
+/**
+ * Reads DNS's zone-option profile shapes for building token templates without
+ * importing `addons/dns`. Falls back to DNS's default Web profile when DNS has
+ * no saved policy yet so combined "DNS + Panel gate" tokens include Zone
+ * Settings and Config Rules edits.
+ */
+export function readDnsZoneProfiles(options: { dnsDir?: string; rootUid?: number } = {}): ZoneProfileShape[] {
+  const dnsDir = options.dnsDir ?? addonStateDir("dns");
+  const rootUid = options.rootUid ?? ROOT_UID;
+  try {
+    const raw = readState<{ profiles?: unknown } | null>(join(dnsDir, "policy.json"), rootUid, () => null);
+    if (Array.isArray(raw?.profiles)) {
+      const profiles: ZoneProfileShape[] = [];
+      for (const entry of raw.profiles) {
+        if (!entry || typeof entry !== "object" || Array.isArray(entry)) continue;
+        const item = entry as { name?: unknown; zone?: unknown };
+        const zone = item.zone && typeof item.zone === "object" && !Array.isArray(item.zone) ? item.zone as Record<string, unknown> : {};
+        profiles.push({
+          name: typeof item.name === "string" && item.name.trim() ? item.name.trim() : "Profile",
+          zone: {
+            ssl: zone.ssl ?? null,
+            alwaysHttps: zone.alwaysHttps ?? null,
+            acmeFullSsl: zone.acmeFullSsl === true,
+            webmailFullSsl: zone.webmailFullSsl === true,
+            skipFirewallIps: Array.isArray(zone.skipFirewallIps) ? zone.skipFirewallIps.filter((ip): ip is string => typeof ip === "string") : [],
+          },
+        });
+      }
+      return profiles;
+    }
+  } catch { /* fall back to default profile shape */ }
+  return [DEFAULT_DNS_ZONE_PROFILE];
+}
+
 /** Reads only saved Cloudflare connections metadata (never touches secrets.json). */
 export function readCloudflareConnections(paths?: Partial<CloudflareStorePaths>): CloudflareConnection[] {
   const resolved = resolvePaths(paths);
@@ -340,6 +385,7 @@ export function recordCloudflareReports(
 ): Promise<void> {
   const resolved = resolvePaths(paths);
   return withFileLock(resolved.lockFile, LOCK_WAIT_S, BUSY, async () => {
+    if (!hasSharedCloudflareStore(resolved)) return;
     const store = readCloudflareStore(resolved);
     const merged = store.connections.flatMap((connection): CloudflareConnectionReport[] => {
       const before = store.reports.find((entry) => entry.id === connection.id);
@@ -610,6 +656,15 @@ export function migrateCloudflareFromDns(
     if (secretsSnap && secretsJson && secretsJson.cloudflare && typeof secretsJson.cloudflare === "object" && Object.keys(secretsJson.cloudflare).length > 0) {
       keep(dnsSecretsPath);
       restoreFile({ ...secretsSnap, text: `${JSON.stringify({ ...secretsJson, cloudflare: {} }, null, 2)}\n` });
+    }
+    if (statusSnap && statusJson && Array.isArray(statusJson.connections) && statusJson.connections.length > 0) {
+      const kept = statusJson.connections.filter((entry) =>
+        Boolean(entry) && typeof entry === "object" && typeof (entry as { provider?: unknown }).provider === "string"
+        && (entry as { provider: string }).provider !== "cloudflare");
+      if (kept.length !== statusJson.connections.length) {
+        keep(dnsStatusPath);
+        restoreFile({ ...statusSnap, text: `${JSON.stringify({ ...statusJson, connections: kept }, null, 2)}\n` });
+      }
     }
     return undo;
   } catch (error) {

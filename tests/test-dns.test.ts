@@ -563,7 +563,7 @@ describe("what each token holds", () => {
     await env.connect();
     await env.act("assign", { domains: ["example.com"], profileId: "web" });
     const reply = await env.act("check");
-    const status = JSON.parse(readFileSync(join(env.dir, "state", "status.json"), "utf8"));
+    const status = JSON.parse(readFileSync(join(env.dir, "state", "cloudflare", "status.json"), "utf8"));
     expect(status.connections[0].refused).toEqual(["Zone Settings: Edit"]);
     const access = reply.connections[0]!.access!;
     expect(access.rows.find((row) => row.label === "Zone Settings: Edit")).toMatchObject({ held: "no", detail: "Refused by Cloudflare" });
@@ -600,7 +600,7 @@ describe("what each token holds", () => {
     await env.connect();
     await env.act("assign", { domains: ["example.com"], profileId: "web" });
     await env.act("check");
-    const refused = () => JSON.parse(readFileSync(join(env.dir, "state", "status.json"), "utf8")).connections[0].refused;
+    const refused = () => JSON.parse(readFileSync(join(env.dir, "state", "cloudflare", "status.json"), "utf8")).connections[0].refused;
     expect(refused()).toEqual(["Zone Settings: Edit"]);
     refuse = false;
     await env.act("assign", { domains: ["shop.example.com"], profileId: "web" });
@@ -635,7 +635,7 @@ describe("what each token holds", () => {
     const first = (await env.connect()).connections[0]!.id;
     await env.act("save-connection", { token: SECOND_TOKEN, label: "Church" });
     await env.act("save-connection", { id: first, label: "Renamed" });
-    const status = JSON.parse(readFileSync(join(env.dir, "state", "status.json"), "utf8"));
+    const status = JSON.parse(readFileSync(join(env.dir, "state", "cloudflare", "status.json"), "utf8"));
     expect(status.connections.map((connection: { label: string }) => connection.label)).toEqual(["Renamed", "Church"]);
   });
 

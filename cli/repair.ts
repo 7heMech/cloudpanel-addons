@@ -1,6 +1,6 @@
 import { errorMessage } from "../lib/errors";
 import { enabledAddons, phpGuardOptedOut } from "../addons/catalog";
-import { resolveAddon, migrateOldAddonNames, revertAddonRenames, type AddonRename } from "./addons";
+import { resolveAddon, migrateOldAddonNames } from "./addons";
 import { reconcileAnchors, reconcileNginx, reconcilePanelBlocks, runAnchorWork } from "./reconcile";
 import { reconcilePhpGuard } from "../lib/php-guard";
 import { runAddonRepairs } from "./addon-hooks";
@@ -47,20 +47,13 @@ async function applyRepair(positional: string[], flags: Record<string, string | 
     await runAnchorWork(quiet);
     return;
   }
-  let renames: AddonRename[] = [];
   try {
     // An earlier version's PHP Resources change is not waited for here; the next repair moves it.
-    renames = migrateOldAddonNames(quiet, 0);
+    migrateOldAddonNames(quiet, 0);
   } catch (error) {
     log.warn(`renamed addons were not moved yet: ${errorMessage(error)}`);
   }
-  try {
-    await repairAll(positional, flags, quiet);
-  } catch (error) {
-    // The move is tried again by the next repair.
-    if (renames.length) revertAddonRenames(renames);
-    throw error;
-  }
+  await repairAll(positional, flags, quiet);
 }
 
 async function repairAll(positional: string[], flags: Record<string, string | true>, quiet: boolean): Promise<void> {

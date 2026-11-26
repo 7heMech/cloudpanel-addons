@@ -1,6 +1,6 @@
 import type { ActionNeeded, ActionNeededCheck, SetupCheck, SetupStep } from "../../lib/addon-definition";
 import { connectionPermissions, type StoredAccess } from "../../lib/cloudflare/access";
-import { readCloudflareStore } from "../../lib/cloudflare/store";
+import { hasSharedCloudflareStore, readCloudflareStore } from "../../lib/cloudflare/store";
 import { panelCustomDomainCertificate } from "../../lib/panel-custom-domain";
 import { addonStateDir, CLOUDFLARE_STATE_DIR } from "../../lib/paths";
 import { readState } from "../../lib/root-state";
@@ -21,8 +21,9 @@ interface DnsSetupState {
 function dnsState(stateDir = addonStateDir("dns"), rootUid = 0, cloudflareDir = CLOUDFLARE_STATE_DIR): DnsSetupState {
   const raw = readState<unknown>(`${stateDir}/policy.json`, rootUid, () => null);
   const policy = raw === null ? seededPolicy() : parsePolicy(raw);
-  const cf = readCloudflareStore({ stateDir: cloudflareDir, rootUid });
-  if (cf.connections.length > 0 || Object.keys(cf.tokens).length > 0) {
+  const cfPaths = { stateDir: cloudflareDir, rootUid };
+  if (hasSharedCloudflareStore(cfPaths)) {
+    const cf = readCloudflareStore(cfPaths);
     return {
       policy: { ...policy, connections: cf.connections },
       tokens: new Set(Object.entries(cf.tokens).filter(([, token]) => token).map(([id]) => id)),

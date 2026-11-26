@@ -5,9 +5,10 @@ import { join } from "node:path";
 import { readAccess } from "../lib/cloudflare/access";
 import { cloudflareAccessDetailsHtml } from "../lib/cloudflare/connect-dialog";
 import {
-  checkCloudflareConnections, cloudflareConnectionViews, cloudflareTokenHolds, legacyDnsCloudflarePending,
-  listCloudflareSecrets, MAX_CLOUDFLARE_CONNECTIONS, migrateCloudflareFromDns, readCloudflareStore,
-  recordCloudflareReports, removeCloudflareConnection, saveCloudflareConnection, type CloudflareStorePaths,
+  checkCloudflareConnections, cloudflareConnectionViews, cloudflareTokenHolds, hasSharedCloudflareStore,
+  legacyDnsCloudflarePending, listCloudflareSecrets, MAX_CLOUDFLARE_CONNECTIONS, migrateCloudflareFromDns,
+  readCloudflareStore, readDnsZoneProfiles, recordCloudflareReports, removeCloudflareConnection,
+  saveCloudflareConnection, type CloudflareStorePaths,
 } from "../lib/cloudflare/store";
 import { tokenTemplate, tokenTemplates } from "../lib/cloudflare/tokens";
 import { FakeCloudflare, policy } from "./fixtures/dns-api";
@@ -168,9 +169,10 @@ test("migrateCloudflareFromDns moves connections, tokens and status while keepin
   expect(migrated.reports).toHaveLength(1);
   expect(migrated.backoffUntil).toBe(12345);
 
-  // DNS files keep Mailcow key and drop legacy Cloudflare copies.
+  // DNS files keep Mailcow key and drop legacy Cloudflare copies and cached reports.
   expect(JSON.parse(readFileSync(join(dnsDir, "secrets.json"), "utf8"))).toEqual({ cloudflare: {}, mailcowKey: "mc-key-123" });
   expect(JSON.parse(readFileSync(join(dnsDir, "policy.json"), "utf8")).connections).toEqual([]);
+  expect(JSON.parse(readFileSync(join(dnsDir, "status.json"), "utf8")).connections).toEqual([]);
   // Second run is a no-op.
   expect(migrateCloudflareFromDns(dnsDir, { stateDir: cfDir, rootUid: uid })).toBeNull();
 
@@ -345,4 +347,66 @@ test("migrateCloudflareFromDns imports a legacy report only when its token wins 
   expect(after.tokens["cf-a"]).toBe("token-Y");
   expect(after.tokens["cf-b"]).toBe("token-Z");
   expect(after.reports.map((r) => r.id)).toEqual(["cf-b"]);
+});
+
+test("removing the last shared Cloudflare connection keeps shared store authoritative and never resurrects dns/status.json", async () => {
+  const { executeDnsAction } = await import("../addons/dns/action");
+  const { dir, paths, cf } = makeStore();
+  const dnsDir = join(dir, "dns");
+  mkdirSync(dnsDir, { recursive: true });
+  const saved = await saveCloudflareConnection({ token: USER_TOKEN, label: "Primary" }, { paths, fetch: cf.fetch });
+  // Simulate a stale dns/status.json report left over from an earlier version.
+  writeFileSync(join(dnsDir, "status.json"), JSON.stringify({
+    checkedAt: new Date().toISOString(),
+    connections: [{
+      id: saved.id, label: "Primary", active: true, status: "active",
+      accounts: [{ id: "acc-1", name: "Agency" }], zones: 1, zoneNames: ["example.com"], error: null,
+    }],
+    plans: {},
+    backoff: { cloudflare: 0, mailcow: 0 },
+  }), { mode: 0o600 });
+
+  await removeCloudflareConnection(saved.id, { paths });
+  expect(hasSharedCloudflareStore(paths)).toBe(true);
+
+  const opts = {
+    processUid: 0,
+    paths: {
+      stateDir: dnsDir,
+      lockFile: join(dir, "dns.lock"),
+      cloudflareDir: paths.stateDir,
+      cloudflareLockFile: paths.lockFile,
+      rootUid: uid,
+    },
+    sites: () => [],
+    addresses: () => ({ ipv4: "203.0.113.10", ipv6: null }),
+    fetch: cf.fetch,
+  };
+  const listed = await executeDnsAction(["list"], opts) as { connections: unknown[]; accounts: unknown[]; zones: unknown[] };
+  expect(listed.connections).toEqual([]);
+  expect(listed.accounts).toEqual([]);
+  expect(listed.zones).toEqual([]);
+  await executeDnsAction(["check"], opts);
+  expect(JSON.parse(readFileSync(join(dnsDir, "status.json"), "utf8")).connections).toEqual([]);
+});
+
+test("readDnsZoneProfiles includes default Web permissions when policy.json is absent and honors saved profiles", () => {
+  const dir = mkdtempSync(join(tmpdir(), "clp-dns-profiles-"));
+  dirs.push(dir);
+  const fallbackTemplates = tokenTemplates(readDnsZoneProfiles({ dnsDir: dir, rootUid: uid }));
+  expect(fallbackTemplates.both.permissions).toContain("Zone Settings: Edit");
+  expect(fallbackTemplates.both.permissions).toContain("Config Rules: Edit");
+  expect(fallbackTemplates.both.permissions).not.toContain("Zone Settings: Read");
+
+  writeFileSync(join(dir, "policy.json"), JSON.stringify({
+    version: 1,
+    profiles: [{
+      id: "mainwp",
+      name: "MainWP",
+      zone: { ssl: "strict", alwaysHttps: true, acmeFullSsl: true, webmailFullSsl: false, skipFirewallIps: ["198.51.100.1"] },
+    }],
+  }), { mode: 0o600 });
+  const savedTemplates = tokenTemplates(readDnsZoneProfiles({ dnsDir: dir, rootUid: uid }));
+  expect(savedTemplates.both.permissions).toContain("Zone WAF: Edit");
+  expect(savedTemplates.panelGate.permissions).not.toContain("Zone WAF: Edit");
 });

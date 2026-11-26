@@ -8,6 +8,7 @@
  * could otherwise send through a tunnel. `$remote_addr` is otherwise left
  * alone, so Cloudflare-only access still sees the connecting address.
  */
+import { existsSync } from "node:fs";
 import { failAction } from "../../lib/action";
 import { readIfPresent } from "../../lib/baseline";
 import { runCommand, type CommandResult } from "../../lib/command";
@@ -175,14 +176,19 @@ export function keepVisitorIp(options: VisitorIpOptions = {}): string | null {
   const paths = { ...DEFAULT_VISITOR_IP_PATHS, ...options.paths };
   return withFileLockSync(paths.lockFile, 30, "another Cloudflare visitor IP change is running", () => {
     if (!readVisitorIpEnabled(options)) return null;
-    return applyVisitorIp(true, options) ? "Cloudflare visitor IPs reapplied" : null;
+    const changed = applyVisitorIp(true, options);
+    if (!existsSync(paths.stateFile)) writeVisitorIpEnabled(true, paths);
+    return changed ? "Cloudflare visitor IPs reapplied" : null;
   });
 }
 
 export function restoreVisitorIp(options: VisitorIpOptions = {}): void {
   const paths = { ...DEFAULT_VISITOR_IP_PATHS, ...options.paths };
   withFileLockSync(paths.lockFile, 30, "another Cloudflare visitor IP change is running", () => {
-    if (readVisitorIpEnabled(options)) applyVisitorIp(true, options);
+    if (readVisitorIpEnabled(options)) {
+      applyVisitorIp(true, options);
+      if (!existsSync(paths.stateFile)) writeVisitorIpEnabled(true, paths);
+    }
   });
 }
 

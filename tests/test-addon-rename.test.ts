@@ -363,3 +363,14 @@ test("a failed update hands the protocols back to System Tweaks and the sites ba
   expect(existsSync(join(root, "state/cloudflare-ips/policy.json"))).toBe(true);
   expect(existsSync(join(root, "state/firewall"))).toBe(false);
 });
+
+test("migration acquires live DNS, Cloudflare, and visitor-IP locks without deleting them", () => {
+  const root = fixture();
+  writeFileSync(join(root, "etc", "wp-login.conf"), "# clp-addons: wp-login\n");
+  mkdirSync(join(root, "state", "wp-login"));
+  writeFileSync(join(root, "state", "wp-login", "mainwp.json"), "{}");
+  expect(migrate(root).error).toBeUndefined();
+  expect(existsSync(join(root, "locks", "dns.lock"))).toBe(true);
+  expect(existsSync(join(root, "locks", "cloudflare.lock"))).toBe(true);
+  expect(existsSync(join(root, "locks", "firewall-visitor-ip.lock"))).toBe(true);
+});

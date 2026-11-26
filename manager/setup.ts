@@ -4,7 +4,7 @@
 import { existsSync, readFileSync, rmSync } from "node:fs";
 import { ADDONS, addonEnabled, offeredAddonNames } from "../addons/catalog";
 import { detectAddresses } from "../lib/addresses";
-import { readCloudflareStore } from "../lib/cloudflare/store";
+import { hasSharedCloudflareStore, readCloudflareStore } from "../lib/cloudflare/store";
 import { parsePolicy, parseSecrets } from "../addons/dns/model";
 import { SETUP_LEVELS, type ActionNeeded, type ActionNeededCheck, type SetupCheck, type SetupLevel, type SetupStep } from "../lib/addon-definition";
 import { writeFileAtomic } from "../lib/atomic-write";
@@ -110,9 +110,11 @@ function readSetupContext(): SetupContext {
   let dnsZones: string[] = [];
   let overrideIpv4 = "";
   let overrideIpv6 = "";
+  let sharedCf = false;
   try {
-    const cf = readCloudflareStore();
-    if (cf.connections.length > 0 || Object.keys(cf.tokens).length > 0) {
+    sharedCf = hasSharedCloudflareStore();
+    if (sharedCf) {
+      const cf = readCloudflareStore();
       dnsConnected = cf.connections.some((connection) => Boolean(cf.tokens[connection.id]));
       dnsZones = [...new Set(cf.reports.flatMap((connection) => connection.zoneNames ?? []))].sort();
     }
@@ -122,11 +124,11 @@ function readSetupContext(): SetupContext {
     const raw = readState<unknown>(`${dir}/policy.json`, 0, () => null);
     if (raw !== null) {
       const policy = parsePolicy(raw);
-      if (!dnsConnected) {
+      if (!sharedCf && !dnsConnected) {
         const secrets = parseSecrets(readState(`${dir}/secrets.json`, 0, () => ({})));
         dnsConnected = policy.connections.some((connection) => Boolean(secrets.cloudflare[connection.id]));
       }
-      if (!dnsZones.length) {
+      if (!sharedCf && !dnsZones.length) {
         const status = readState<{ connections?: { zoneNames?: string[] }[] }>(`${dir}/status.json`, 0, () => ({}));
         dnsZones = [...new Set((status.connections ?? []).flatMap((connection) => connection?.zoneNames ?? []))].sort();
       }

@@ -64,9 +64,17 @@ export function migrateOldAddonNames(quiet = false, legacyWaitSeconds = 300): Ad
   // be applying pools; moving its policy from under it would let it write the
   // old directory back, so the move waits for it as long as such a change runs.
   return withFileLockSync(`${LOCK_DIR}/php-resources.lock`, legacyWaitSeconds, "a PHP Resources change from the earlier version is still running", () =>
-    withFileLockSync(`${LOCK_DIR}/resource-limits-settings.lock`, 15, "a resource limits change is still running", () =>
-      withFileLockSync(`${LOCK_DIR}/system-tweaks.lock`, 15, "a system tweaks change is still running", () =>
-        withLegacyLocks(LEGACY_LOCKS, () => migrateAddonState(quiet)))));
+    withMigrationLocks(() => migrateAddonState(quiet)));
+}
+
+/** Holds every live and legacy addon lock touched by state migrations, in `dns.lock` -> `cloudflare.lock` order. */
+function withMigrationLocks<T>(body: () => T): T {
+  return withFileLockSync(`${LOCK_DIR}/resource-limits-settings.lock`, 15, "a resource limits change is still running", () =>
+    withFileLockSync(`${LOCK_DIR}/system-tweaks.lock`, 15, "a system tweaks change is still running", () =>
+      withFileLockSync(`${LOCK_DIR}/firewall-visitor-ip.lock`, 30, "another Cloudflare visitor IP change is running", () =>
+        withFileLockSync(`${LOCK_DIR}/dns.lock`, 30, "another DNS change is running", () =>
+          withFileLockSync(`${LOCK_DIR}/cloudflare.lock`, 30, "another Cloudflare connection change is running", () =>
+            withLegacyLocks(LEGACY_LOCKS, body))))));
 }
 
 function withLegacyLocks<T>(names: string[], body: () => T): T {
@@ -132,9 +140,7 @@ function migrateAddonState(quiet: boolean): AddonRename[] {
 }
 
 export function revertAddonRenames(renames: AddonRename[]): void {
-  withFileLockSync(`${LOCK_DIR}/resource-limits-settings.lock`, 15, "a resource limits change is still running", () =>
-    withFileLockSync(`${LOCK_DIR}/system-tweaks.lock`, 15, "a system tweaks change is still running", () =>
-      withLegacyLocks(LEGACY_LOCKS, () => restoreAddonState(renames))));
+  withMigrationLocks(() => restoreAddonState(renames));
 }
 
 function restoreAddonState(renames: AddonRename[]): void {
