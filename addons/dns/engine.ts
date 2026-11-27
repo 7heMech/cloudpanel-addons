@@ -43,6 +43,8 @@ export interface PanelSite {
   createdAt: number;
   /** Still on the self-signed certificate CloudPanel creates a site with. */
   selfSigned: boolean;
+  /** Certificate PEM from CloudPanel's `certificate` table when available. */
+  certificatePem?: string | null;
   cloudflareOnly: boolean;
   /** Set for a redirect domain, which is planned beside the sites but is not one. */
   redirect?: Redirect;
@@ -151,6 +153,12 @@ export interface ManagedRecords {
   zoneName: string;
   connectionId: string;
   records: DnsRecord[];
+}
+
+export interface TrackedRedirectRule {
+  connectionId: string;
+  zoneId: string;
+  zoneName: string;
 }
 
 export interface RunContext {
@@ -314,6 +322,13 @@ export class DnsRun {
     return null;
   }
 
+  /** Planned creation destination for a domain whose zone does not exist yet, after `discover()`. */
+  creationTarget(domain: string): { connectionId: string; accountId: string; zoneName: string } | null {
+    const resolved = this.resolve(domain);
+    if (resolved.kind !== "missing" || !resolved.createIn) return null;
+    return { connectionId: resolved.createIn.connectionId, accountId: resolved.createIn.accountId, zoneName: resolved.name };
+  }
+
   // -------------------------------------------------------------------------
   // What every connection reaches
   // -------------------------------------------------------------------------
@@ -364,7 +379,8 @@ export class DnsRun {
   }
 
   private connectionProvider(id: string): ProviderKind {
-    return this.connectionMeta.find((connection) => connection.id === id)?.provider ?? "cloudflare";
+    return this.connectionMeta.find((connection) => connection.id === id)?.provider
+      ?? (id.startsWith("pdns-") ? "powerdns" : "cloudflare");
   }
 
   /** The longest zone, across every connection, that the domain is in or under. */
@@ -767,6 +783,7 @@ export class DnsRun {
         const diff = diffRecords(rendered, [], { allowWildcard: !redirect, ...ctx });
         plan.problems.push(...diff.problems);
         this.noteWildcard(plan, diff, site.domain);
+        this.checkPanelAddress(site, diff, plan);
         for (const op of diff.ops) plan.changes.push(this.recordChange(op, diff, createProvider.capabilities.proxy));
         if (redirect && createProvider.capabilities.edgeRedirects) this.standInChange(redirect.source, resolved.name, false, plan);
         this.recordSibling(out, site, zoneKey, plan, rendered, diff, [], allWanted);
@@ -802,6 +819,7 @@ export class DnsRun {
     this.diffs.set(site.domain, diff);
     plan.problems.push(...diff.problems);
     this.noteWildcard(plan, diff, site.domain);
+    this.checkPanelAddress(site, diff, plan);
     for (const name of rendered.waitingDkim) {
       plan.changes.push({ action: "create", subject: `TXT ${name}`, detail: "Mailcow's DKIM key, once Mailcow holds it" });
     }
@@ -835,6 +853,16 @@ export class DnsRun {
     else if (diff.blockedWildcard[domain]) {
       const blocked = diff.blockedWildcard[domain]!;
       plan.wildcardBlocked = `${blocked.wildcard} does not match ${domain} while ${blocked.by} exists, so explicit records are needed`;
+    }
+  }
+
+  /** Blocks panel hostname preparation when neither an explicit address nor a matching wildcard remains. */
+  private checkPanelAddress(site: PanelSite, diff: Diff, plan: SitePlan): void {
+    if (!site.panel || plan.problems.length) return;
+    const hasAddress = diff.wanted.some((record) => record.name === site.domain && ADDRESS_TYPES.has(record.type))
+      || Boolean(diff.covered[site.domain]);
+    if (!hasAddress) {
+      plan.problems.push("This server has no IPv4 or IPv6 address for the panel hostname; set one under Server addresses");
     }
   }
 
@@ -1337,27 +1365,90 @@ export class DnsRun {
   // What the run leaves behind
   // -------------------------------------------------------------------------
 
+  /** Active Cloudflare zones that could hold a Single Redirect rule for `source`, deduplicated by physical zone ID. */
+  private cloudflareRedirectZones(source: string, tracked?: TrackedRedirectRule): ZoneRef[] {
+    const matching = this.zoneRefs.filter((ref) => {
+      if (INACTIVE_ZONES.has(ref.zone.status)) return false;
+      if (source !== ref.zone.name && !source.endsWith(`.${ref.zone.name}`)) return false;
+      const provider = this.providers.get(ref.connectionId);
+      return Boolean(provider?.capabilities.edgeRedirects && provider.edge);
+    });
+    if (!matching.length) return [];
+    const longest = Math.max(...matching.map((ref) => ref.zone.name.length));
+    const candidates = matching.filter((ref) => ref.zone.name.length === longest || (tracked && ref.zone.id === tracked.zoneId));
+    const byZoneId = new Map<string, ZoneRef[]>();
+    for (const ref of candidates) {
+      byZoneId.set(ref.zone.id, [...byZoneId.get(ref.zone.id) ?? [], ref]);
+    }
+    return [...byZoneId.values()].map((group) =>
+      (tracked ? group.find((ref) => ref.connectionId === tracked.connectionId) : undefined)
+      ?? group.find((ref) => this.writesRecords(ref) !== false)
+      ?? group[0]!);
+  }
+
+  /** Reads every zone needed to check whether deleting `source` must also remove a Cloudflare Single Redirect rule. */
+  async loadRedirectDeletion(source: string, tracked?: TrackedRedirectRule): Promise<void> {
+    const emptyWants = zoneWants([]).wants;
+    const refs = new Map<string, ZoneRef>();
+    const resolved = this.resolve(source);
+    if (resolved.kind === "zone") {
+      const provider = this.providers.get(resolved.ref.connectionId);
+      if (provider?.capabilities.edgeRedirects && provider.edge) {
+        refs.set(zoneMapKey(resolved.ref.connectionId, resolved.ref.zone.id), resolved.ref);
+      }
+    }
+    for (const ref of this.cloudflareRedirectZones(source, tracked)) {
+      refs.set(zoneMapKey(ref.connectionId, ref.zone.id), ref);
+    }
+    await Promise.all([...refs.values()].map((ref) => this.loadZone(ref, emptyWants, true)));
+  }
+
   /**
-   * The rule a redirect domain's deletion would delete, from what `load` read;
-   * null when the zone's provider has no edge redirects or Cloudflare has no
-   * rule. A zone a failed connection or an unmade choice hides could still hold one.
+   * The rule a redirect domain's deletion would delete, from what `load` or
+   * `loadRedirectDeletion` read; null when Cloudflare has no matching rule.
+   * Checks reachable Cloudflare zones (and any tracked Cloudflare destination)
+   * even when the redirect currently resolves to a non-edge provider like PowerDNS.
    */
-  redirectRuleOf(source: string): { zone: ZoneView; rulesetId: string; rule: CfRuleset["rules"][number] } | { problem: string } | null {
+  redirectRuleOf(source: string, tracked?: TrackedRedirectRule): { zone: ZoneView; rulesetId: string; rule: CfRuleset["rules"][number] } | { problem: string } | null {
     const redirect = this.redirects.get(source);
     if (!redirect) return null;
+    const inspect = (ref: ZoneRef): { zone: ZoneView; rulesetId: string; rule: CfRuleset["rules"][number] } | { problem: string } | null => {
+      const state = this.zones.get(zoneMapKey(ref.connectionId, ref.zone.id));
+      if (!state?.records || state.error) return { problem: state?.error ?? `${ref.zone.name} could not be read` };
+      const ruleset = state.rulesets.get(REDIRECT_PHASE);
+      const found = redirectRuleState(ruleset ?? null, redirect, redirectHosts(source, ref.zone.name));
+      if (found.state === "problem") return { problem: found.problem };
+      if (found.state === "create" || !ruleset) return null;
+      return { zone: this.zoneView(ref), rulesetId: ruleset.id, rule: found.rule };
+    };
     const resolved = this.resolve(source);
     if (resolved.kind === "unreachable") return { problem: resolved.reason };
     if (resolved.kind === "choose") return { problem: `${resolved.name} is reachable through more than one connection; choose which one manages it` };
-    if (resolved.kind !== "zone") return null;
-    const provider = this.providers.get(resolved.ref.connectionId);
-    if (!provider?.capabilities.edgeRedirects || !provider.edge) return null;
-    const state = this.zones.get(zoneMapKey(resolved.ref.connectionId, resolved.ref.zone.id));
-    if (!state?.records || state.error) return { problem: state?.error ?? `${resolved.ref.zone.name} could not be read` };
-    const ruleset = state.rulesets.get(REDIRECT_PHASE);
-    const found = redirectRuleState(ruleset ?? null, redirect, redirectHosts(source, resolved.ref.zone.name));
-    if (found.state === "problem") return { problem: found.problem };
-    if (found.state === "create" || !ruleset) return null;
-    return { zone: this.zoneView(resolved.ref), rulesetId: ruleset.id, rule: found.rule };
+    if (resolved.kind === "zone") {
+      const provider = this.providers.get(resolved.ref.connectionId);
+      if (provider?.capabilities.edgeRedirects && provider.edge) {
+        const primary = inspect(resolved.ref);
+        if (primary || !tracked || tracked.zoneId === resolved.ref.zone.id) return primary;
+      }
+    }
+    const cfRefs = this.cloudflareRedirectZones(source, tracked);
+    const failedCf = this.connections.filter((connection) => (connection.provider ?? "cloudflare") === "cloudflare" && !connection.active);
+    if (failedCf.length && (tracked
+      ? !cfRefs.some((ref) => ref.zone.id === tracked.zoneId)
+      : !cfRefs.length)) {
+      return { problem: `Cloudflare could not be read: ${failedCf.map((c) => c.error).join("; ")}` };
+    }
+    const hits: { zone: ZoneView; rulesetId: string; rule: CfRuleset["rules"][number] }[] = [];
+    for (const ref of cfRefs) {
+      const checked = inspect(ref);
+      if (!checked) continue;
+      if ("problem" in checked) return checked;
+      hits.push(checked);
+    }
+    if (hits.length > 1) {
+      return { problem: `Cloudflare redirect rules for ${source} exist in more than one zone; remove the extra rule in Cloudflare first` };
+    }
+    return hits[0] ?? null;
   }
 
   async deleteRedirectRule(source: string, zoneId: string, rulesetId: string, ruleId: string, connectionId?: string): Promise<void> {
@@ -1421,12 +1512,21 @@ export class DnsRun {
     return [...this.diffs.values()].some((diff) => diff.names.includes(record.name));
   }
 
-  /** Whether a zone some current site is in could not be read, so what its sites want is unknown. */
+  /**
+   * Whether a zone some current site is in could not be read, so what its sites
+   * want is unknown. For Cloudflare, matches the physical zone ID across all
+   * tokens; for PowerDNS, matches the specific connection and zone.
+   */
   unread(zoneId: string, connectionId?: string): boolean {
-    const state = connectionId
-      ? this.zones.get(zoneMapKey(connectionId, zoneId))
-      : [...this.zones.values()].find((candidate) => candidate.ref.zone.id === zoneId);
-    return state !== undefined && (state.records === null || state.error !== null);
+    const isPowerDns = Boolean(connectionId && this.connectionProvider(connectionId) === "powerdns");
+    if (isPowerDns) {
+      const state = this.zones.get(zoneMapKey(connectionId!, zoneId));
+      return state !== undefined && (state.records === null || state.error !== null);
+    }
+    return [...this.zones.values()].some((candidate) =>
+      candidate.ref.zone.id === zoneId
+      && (!connectionId || candidate.ref.provider === "cloudflare")
+      && (candidate.records === null || candidate.error !== null));
   }
 
   /**

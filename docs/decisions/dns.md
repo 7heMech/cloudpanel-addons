@@ -53,10 +53,16 @@ and resolves `ttl === 1` (Auto) to `provider.defaultTtl` when
     `PATCH /api/v1/servers/{serverId}/zones/{zoneId}` using `REPLACE` with the
     RRset TTL or `DELETE` when no records remain. Because PowerDNS records have
     no UUIDs, each parsed record gets a deterministic synthetic ID
-    `pdns:<sha256(type|name|priority|content)>` for orphan tracking in
-    `managed.json`. Zone maps are keyed by `connectionId:zoneId` so two
-    PowerDNS servers hosting identically named zones never collide and trigger a
-    zone choice.
+    `pdns:<sha256(type|name|priority|content)>` (disambiguated by raw wire text
+    for non-canonical TXT formatting so unmanaged siblings stay verbatim) for
+    orphan tracking in `managed.json`. PowerDNS Authoritative API v1 exposes
+    only RRset-level `REPLACE` and `DELETE` with no member-level mutation or
+    optimistic concurrency header; `clp-addons` serializes its own reads and
+    writes under `dns.lock` and preserves unmanaged enabled and disabled RRset
+    siblings read in the same pass in their original wire form, so external
+    writers should not concurrently edit RRsets that DNS manages. Zone maps are
+    keyed by `connectionId:zoneId` so two PowerDNS servers hosting identically
+    named zones never collide and trigger a zone choice.
   - **Zone creation.** When `createZones` is enabled with configured
     nameservers, `createZone` sends `POST /api/v1/servers/{serverId}/zones` with
     `kind: "Native"` and canonical nameservers to fit MySQL-replicated PowerDNS

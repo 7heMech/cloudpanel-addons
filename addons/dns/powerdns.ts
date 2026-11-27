@@ -220,8 +220,9 @@ export function formatPowerDnsContent(record: RecordWrite): string {
 }
 
 /** Deterministic synthetic ID for PowerDNS records, which have no provider UUID. */
-export function powerDnsRecordId(type: string, name: string, content: string, priority: number | null): string {
-  const key = `${type.toUpperCase()}|${name.toLowerCase()}|${priority ?? ""}|${content}`;
+export function powerDnsRecordId(type: string, name: string, content: string, priority: number | null, wire?: string): string {
+  const base = `${type.toUpperCase()}|${name.toLowerCase()}|${priority ?? ""}|${content}`;
+  const key = wire === undefined ? base : `${base}|wire:${wire}`;
   return `pdns:${createHash("sha256").update(key).digest("hex").slice(0, 32)}`;
 }
 
@@ -255,10 +256,11 @@ function parsePriority(raw: string, name: string): number {
   return value;
 }
 
-function parseRrsetRecord(rrsetName: string, rrsetType: string, ttl: number, rawContent: string): DnsRecord {
+function parseRrsetRecord(rrsetName: string, rrsetType: string, ttl: number, rawContent: string): { record: DnsRecord; wire: string } {
   const type = rrsetType.toUpperCase();
   const name = stripTrailingDot(rrsetName.toLowerCase());
-  let content = rawContent.trim();
+  const trimmedRaw = rawContent.trim();
+  let content = trimmedRaw;
   let priority: number | null = null;
 
   if (type === "A") {
@@ -287,15 +289,21 @@ function parseRrsetRecord(rrsetName: string, rrsetType: string, ttl: number, raw
     content = unquoteTxt(content);
   }
 
+  // Keep a distinct ID when a TXT record uses non-canonical quoting or chunking
+  // (such as `"a" "b"` beside `"ab"`) so both survive RRset replacement verbatim.
+  const wireKey = type === "TXT" && trimmedRaw !== quotePowerDnsTxt(content) ? trimmedRaw : undefined;
   return {
-    id: powerDnsRecordId(type, name, content, priority),
-    type,
-    name,
-    content,
-    proxied: false,
-    ttl,
-    priority,
-    comment: null,
+    record: {
+      id: powerDnsRecordId(type, name, content, priority, wireKey),
+      type,
+      name,
+      content,
+      proxied: false,
+      ttl,
+      priority,
+      comment: null,
+    },
+    wire: trimmedRaw,
   };
 }
 
@@ -318,6 +326,8 @@ export class PowerDnsProvider implements DnsProvider {
   readonly http: ProviderHttp;
   /** Disabled RRset entries per zone from the latest listRecords read, preserved verbatim across writes. */
   private readonly disabledByZone = new Map<string, Map<string, { content: string; ttl: number }[]>>();
+  /** Original wire content per record id from the latest listRecords read, so unmanaged siblings stay verbatim across writes. */
+  private readonly wireByZone = new Map<string, Map<string, string>>();
 
   constructor(
     private readonly config: PowerDnsConfig,
@@ -416,6 +426,7 @@ export class PowerDnsProvider implements DnsProvider {
     if (!Array.isArray(rrsets)) throw new ProviderError("PowerDNS", "returned a zone without rrsets");
     const records: DnsRecord[] = [];
     const disabled = new Map<string, { content: string; ttl: number }[]>();
+    const wires = new Map<string, string>();
     for (const entry of rrsets) {
       const rrset = asObject(entry);
       const rrsetName = asText(rrset.name, 255);
@@ -435,10 +446,13 @@ export class PowerDnsProvider implements DnsProvider {
           disabled.set(key, list);
           continue;
         }
-        records.push(parseRrsetRecord(rrsetName, rrsetType, ttl, content));
+        const parsed = parseRrsetRecord(rrsetName, rrsetType, ttl, content);
+        wires.set(parsed.record.id, parsed.wire);
+        records.push(parsed.record);
       }
     }
     this.disabledByZone.set(zone.id, disabled);
+    this.wireByZone.set(zone.id, wires);
     return records;
   }
 
@@ -459,10 +473,14 @@ export class PowerDnsProvider implements DnsProvider {
     };
 
     const nextRecords: DnsRecord[] = currentRecords.map((record) => ({ ...record }));
+    const mutated = new Set<DnsRecord>();
+    const removedIds = new Set<string>();
+    const writtenWires = new Map<string, string>();
     for (const op of ops) {
       if (op.action === "delete") {
         const target = op.current!;
         mark(target.name, target.type);
+        removedIds.add(target.id);
         const index = nextRecords.findIndex((record) => record.id === target.id);
         if (index >= 0) nextRecords.splice(index, 1);
       } else if (op.action === "update") {
@@ -470,6 +488,7 @@ export class PowerDnsProvider implements DnsProvider {
         const ttl = op.record.ttl === 1 ? this.defaultTtl : op.record.ttl;
         mark(target.name, target.type);
         mark(op.record.name, op.record.type, ttl);
+        removedIds.add(target.id);
         const updated: DnsRecord = {
           id: powerDnsRecordId(op.record.type, op.record.name, op.record.content, op.record.priority),
           type: op.record.type.toUpperCase(),
@@ -480,13 +499,15 @@ export class PowerDnsProvider implements DnsProvider {
           priority: op.record.priority,
           comment: null,
         };
+        mutated.add(updated);
+        writtenWires.set(updated.id, formatPowerDnsContent(updated));
         const index = nextRecords.findIndex((record) => record.id === target.id);
         if (index >= 0) nextRecords[index] = updated;
         else nextRecords.push(updated);
       } else {
         const ttl = op.record.ttl === 1 ? this.defaultTtl : op.record.ttl;
         mark(op.record.name, op.record.type, ttl);
-        nextRecords.push({
+        const created: DnsRecord = {
           id: powerDnsRecordId(op.record.type, op.record.name, op.record.content, op.record.priority),
           type: op.record.type.toUpperCase(),
           name: op.record.name.toLowerCase(),
@@ -495,12 +516,16 @@ export class PowerDnsProvider implements DnsProvider {
           ttl,
           priority: op.record.priority,
           comment: null,
-        });
+        };
+        mutated.add(created);
+        writtenWires.set(created.id, formatPowerDnsContent(created));
+        nextRecords.push(created);
       }
     }
 
     const rrsets: PowerDnsRrsetPatch[] = [];
     const disabledMap = this.disabledByZone.get(zone.id);
+    const wireMap = this.wireByZone.get(zone.id);
     const nextDisabledUpdates = new Map<string, { content: string; ttl: number }[]>();
     for (const { name, type, preferredTtl } of touched.values()) {
       const key = `${type}|${name}`;
@@ -518,7 +543,9 @@ export class PowerDnsProvider implements DnsProvider {
       const wireRecords: { content: string; disabled: boolean }[] = [];
       const keptDisabled: { content: string; ttl: number }[] = [];
       for (const record of remaining) {
-        const wire = formatPowerDnsContent(record);
+        const wire = !mutated.has(record) && wireMap?.has(record.id)
+          ? wireMap.get(record.id)!
+          : formatPowerDnsContent(record);
         if (seen.has(wire)) continue;
         seen.add(wire);
         wireRecords.push({ content: wire, disabled: false });
@@ -545,6 +572,10 @@ export class PowerDnsProvider implements DnsProvider {
         if (entries.length) disabledMap.set(key, entries);
         else disabledMap.delete(key);
       }
+    }
+    if (wireMap) {
+      for (const id of removedIds) wireMap.delete(id);
+      for (const [id, wire] of writtenWires) wireMap.set(id, wire);
     }
     for (const op of ops) options.onApplied?.(op, nextRecords);
     return nextRecords;

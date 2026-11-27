@@ -448,6 +448,25 @@ describe("the panel hostname", () => {
     expect(env.mailcow.calls.length).toBe(mailCallsBefore);
     expect(zone.name).toBe("example.com");
   });
+
+  test("blocks panel preparation when neither IPv4 nor IPv6 address will remain (existing and missing zones)", async () => {
+    const env = setup();
+    env.options.addresses = () => ({ ipv4: "", ipv6: "" });
+    env.cf.record("example.com", { type: "A", name: "panel.example.com", content: "198.51.100.4", proxied: false });
+    await env.act("save-connection", { token: TOKEN });
+
+    // Existing zone with an existing address must block instead of offering to delete it or Continue empty.
+    const existingBlocked = await env.act("set-panel-host", { name: "panel.example.com", prepareOnly: true });
+    expect(existingBlocked.review!.blocked).toBe(true);
+    expect(existingBlocked.review!.token).toBe("");
+    expect(existingBlocked.review!.sites[0]!.problems.join(" ")).toContain("no IPv4 or IPv6 address");
+
+    // Missing zone with zone creation enabled must also block when neither address is available.
+    const missingBlocked = await env.act("set-panel-host", { name: "panel.brandnew.example", prepareOnly: true });
+    expect(missingBlocked.review!.blocked).toBe(true);
+    expect(missingBlocked.review!.token).toBe("");
+    expect(missingBlocked.review!.sites[0]!.problems.join(" ")).toContain("no IPv4 or IPv6 address");
+  });
 });
 
 describe("an issued custom-domain certificate", () => {

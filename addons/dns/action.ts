@@ -7,7 +7,7 @@
  * create, update and delete they would make, and only a confirmation of that
  * same plan saves and applies them.
  */
-import { LOCK_DIR, addonConfigFile, addonStateDir, CLOUDFLARE_STATE_DIR, PANEL_DB } from "../../lib/paths";
+import { LOCK_DIR, NGINX_CERTIFICATES_DIR, addonConfigFile, addonStateDir, CLOUDFLARE_STATE_DIR, PANEL_DB } from "../../lib/paths";
 import { withPanelDb } from "../../lib/panel-db";
 import { DNS_VERBS } from "./verbs";
 import { Database } from "bun:sqlite";
@@ -24,7 +24,7 @@ import { DEFAULT_SMTP_PATHS, smtpRelayAccounts, type SmtpRelayAccount } from "..
 import { detectAddresses, type Addresses } from "../../lib/addresses";
 import {
   DnsRun, readiness, tokenProfiles, type ConnectionReport, type LogEntry, type ManagedRecords, type PanelSite, type SitePlan,
-  type StandIns,
+  type StandIns, type TrackedRedirectRule,
 } from "./engine";
 import { type ApiFetch, redact } from "../../lib/provider-http";
 import { MailcowApi } from "./mailcow";
@@ -49,7 +49,8 @@ import {
   type CloudflareStorePaths,
 } from "../../lib/cloudflare/store";
 import { tokenTemplate, tokenTemplates, type PermissionName, type TokenTemplate, type TokenTemplates } from "../../lib/cloudflare/tokens";
-import { panelCustomDomainCertificate } from "../../lib/panel-custom-domain";
+import { issuedForAll, panelCustomDomainCertificate } from "../../lib/panel-custom-domain";
+import { trustedText } from "../../lib/trusted-file";
 import { panelUserUid } from "../../lib/sso-auth";
 
 type DnsVerb = keyof typeof DNS_VERBS;
@@ -77,6 +78,7 @@ interface DnsPaths {
   clpctl: string;
   sqlite3: string;
   nginxVhostDir: string;
+  sslCertDir?: string;
   tempDir: string;
   rootUid: number;
 }
@@ -196,7 +198,7 @@ export interface Found {
   notes: string[];
 }
 
-export type DnsReply = DnsState & { review?: Review; notice?: string; found?: Found; zoneCreated?: boolean };
+export type DnsReply = DnsState & { review?: Review; notice?: string; error?: string; found?: Found; zoneCreated?: boolean };
 
 /** Local-only state for CloudPanel's Admin → Settings Custom Domain helper. */
 export interface PanelHostHelper {
@@ -246,6 +248,8 @@ interface Status {
   panelProxied?: boolean;
   /** Cloudflare connection ids saved when DNS last looked; absent before it first did. */
   connectionIds?: string[];
+  /** Last known Cloudflare zone holding a redirect domain's edge rule, kept across provider switches until deleted. */
+  redirectRules?: Record<string, TrackedRedirectRule>;
 }
 
 interface Pending {
@@ -412,12 +416,18 @@ function panelTime(value: unknown): number {
 export function panelSites(panelDb: string): PanelSite[] {
   return withPanelDb(panelDb, (db) => {
     const site = columns(db, "site");
-    const certificate = site.has("certificate_id") && columns(db, "certificate").has("type");
-    const rows = db.query<{ id: number; domain_name: string; type: string; created_at: string | null; cf: number | null; cert: string | null; user: string | null }, []>(
+    const certCols = site.has("certificate_id") ? columns(db, "certificate") : new Set<string>();
+    const certificate = certCols.has("type");
+    const certPem = certificate && certCols.has("certificate");
+    const rows = db.query<{
+      id: number; domain_name: string; type: string; created_at: string | null; cf: number | null;
+      cert: string | null; cert_pem: string | null; user: string | null;
+    }, []>(
       `SELECT s.id, s.domain_name, s.type, ${site.has("user") ? "s.user" : "NULL"} AS user,
               ${site.has("created_at") ? "s.created_at" : "NULL"} AS created_at,
               ${site.has("allow_traffic_from_cloudflare_only") ? "s.allow_traffic_from_cloudflare_only" : "0"} AS cf,
-              ${certificate ? "c.type" : "NULL"} AS cert
+              ${certificate ? "c.type" : "NULL"} AS cert,
+              ${certPem ? "c.certificate" : "NULL"} AS cert_pem
          FROM site s ${certificate ? "LEFT JOIN certificate c ON c.id = s.certificate_id" : ""}
         ORDER BY s.domain_name`,
     ).all();
@@ -431,7 +441,9 @@ export function panelSites(panelDb: string): PanelSite[] {
       }
       sites.push({
         id: Number(row.id), domain, type: String(row.type), ...(row.user ? { user: row.user } : {}), createdAt: panelTime(row.created_at),
-        selfSigned: String(row.cert) === SELF_SIGNED, cloudflareOnly: Boolean(row.cf),
+        selfSigned: String(row.cert) === SELF_SIGNED,
+        ...(row.cert_pem ? { certificatePem: row.cert_pem } : {}),
+        cloudflareOnly: Boolean(row.cf),
       });
     }
     return sites;
@@ -554,6 +566,10 @@ class Action {
    */
   private savePolicy(next: Policy): void {
     this.files.savePolicy(next);
+    this.cleanupManagedForPolicy(next);
+  }
+
+  private cleanupManagedForPolicy(next: Policy): void {
     const managed = this.files.managed();
     let forgot = false;
     for (const site of this.sites()) {
@@ -593,10 +609,18 @@ class Action {
     const status = this.files.status();
     const current = new Set(run.entries.map((site) => site.domain));
     const plansByDomain = domains === "all" ? {} : Object.fromEntries(Object.entries(status.plans).filter(([domain]) => current.has(domain)));
+    const redirectRules: Record<string, TrackedRedirectRule> = { ...(status.redirectRules ?? {}) };
+    const redirectSources = new Set(run.entries.filter((entry) => entry.redirect).map((entry) => entry.domain));
+    for (const domain of Object.keys(redirectRules)) {
+      if (!redirectSources.has(domain)) delete redirectRules[domain];
+    }
     for (const plan of plans) {
       if (domains !== "all" && !domains.includes(plan.domain)) continue;
       if (plan.profileId || plan.redirect) plansByDomain[plan.domain] = plan;
       else delete plansByDomain[plan.domain];
+      if (plan.redirect && plan.zone && (plan.zone.provider ?? "cloudflare") === "cloudflare" && plan.zone.connectionId) {
+        redirectRules[plan.domain] = { connectionId: plan.zone.connectionId, zoneId: plan.zone.id, zoneName: plan.zone.name };
+      }
     }
     const panelHost = run.entries.find((entry) => entry.panel)?.domain;
     // Only once Cloudflare holds it: a write that failed or waits for a review leaves the next certificate write to try again.
@@ -613,6 +637,7 @@ class Action {
       checkedAt: domains === "all" ? new Date(this.now).toISOString() : status.checkedAt,
       connections: storedConnections,
       plans: plansByDomain,
+      redirectRules,
       backoff: run.backoff(),
     });
     const managed = this.files.managed();
@@ -784,7 +809,7 @@ class Action {
     };
   }
 
-  reply(extra: { review?: Review; notice?: string; found?: Found; zoneCreated?: boolean } = {}): DnsReply {
+  reply(extra: { review?: Review; notice?: string; error?: string; found?: Found; zoneCreated?: boolean } = {}): DnsReply {
     this.writeLog();
     return { ...this.state(), ...extra };
   }
@@ -964,8 +989,20 @@ class Action {
   async retryStandInCertificates(): Promise<void> {
     if (this.options.standIns) return;
     const current = this.standIns().current;
-    const selfSigned = (domain: string) => (current[domain] ? this.panelSites(true).find((site) => site.domain === domain)?.selfSigned ?? null : null);
-    await retryStandInCertificates(this.standInPaths(), selfSigned, this.options.issue ?? clpctlIssue(this.paths.clpctl), Date.now());
+    const owners = [this.paths.rootUid, panelUserUid() ?? this.paths.rootUid];
+    const certDir = this.paths.sslCertDir ?? NGINX_CERTIFICATES_DIR;
+    const now = this.options.now ? this.options.now() : Date.now();
+    const covered = (domain: string, hosts: string[]): boolean | null => {
+      if (!current[domain]) return null;
+      const site = this.panelSites(true).find((candidate) => candidate.domain === domain);
+      if (!site) return null;
+      if (site.selfSigned) return false;
+      const pem = site.certificatePem
+        || owners.map((uid) => trustedText(`${certDir}/${domain}.crt`, uid)).find((text) => text !== null)
+        || null;
+      return issuedForAll(pem, hosts, now);
+    };
+    await retryStandInCertificates(this.standInPaths(), covered, this.options.issue ?? clpctlIssue(this.paths.clpctl), now);
   }
 
   async retrySsl(plans: SitePlan[]): Promise<void> {
@@ -1006,14 +1043,16 @@ class Action {
       if (!before.automatic || createIn) return true;
       if (before.held.includes(domain) && !after.held.includes(domain)) return true;
       if (redirect && JSON.stringify(redirectOf(before, domain)) !== JSON.stringify(redirect)) return true;
+      const zoneChoiceChanged = Object.keys({ ...before.zoneChoices, ...after.zoneChoices }).some((zone) =>
+        (domain === zone || domain.endsWith(`.${zone}`)) && JSON.stringify(before.zoneChoices[zone]) !== JSON.stringify(after.zoneChoices[zone]));
+      if (zoneChoiceChanged) return true;
+      if (JSON.stringify(before.server) !== JSON.stringify(after.server)) return true;
       const previous = profileOf(before, domain);
       if (!next) return false;
       if (!previous || previous.id !== next.id) return true;
       if (profileEffect(previous) !== profileEffect(next)) return true;
-      if (JSON.stringify(before.server) !== JSON.stringify(after.server)) return true;
       if (next.mailcow && mailcowBefore !== mailcowAfter) return true;
-      return Object.keys({ ...before.zoneChoices, ...after.zoneChoices }).some((zone) =>
-        (domain === zone || domain.endsWith(`.${zone}`)) && JSON.stringify(before.zoneChoices[zone]) !== JSON.stringify(after.zoneChoices[zone]));
+      return false;
     });
     return this.wildcardAffected(before, after, direct);
   }
@@ -1075,8 +1114,14 @@ class Action {
     return [...set];
   }
 
-  private digest(plans: SitePlan[]): string {
-    return hash(plans.map((plan) => [plan.domain, plan.changes, plan.problems]));
+  private digest(plans: SitePlan[], run?: DnsRun): string {
+    return hash(plans.map((plan) => [
+      plan.domain,
+      plan.zone ? [plan.zone.provider ?? "cloudflare", plan.zone.connectionId ?? "", plan.zone.id] : null,
+      plan.zone ? null : (run?.creationTarget(plan.domain) ?? null),
+      plan.changes,
+      plan.problems,
+    ]));
   }
 
   /** Saves `next`, and a new Mailcow key with it, straight away, or answers with the review it needs first. */
@@ -1109,7 +1154,7 @@ class Action {
     const blocked = plans.some((plan) => plan.problems.length > 0);
     const token = blocked ? "" : randomBytes(24).toString("hex");
     this.files.savePending(blocked ? null : {
-      token, expiresAt: this.now + REVIEW_LIFETIME, base: hash(before), digest: this.digest(plans), domains, policy: next, mailcowKey,
+      token, expiresAt: this.now + REVIEW_LIFETIME, base: hash(before), digest: this.digest(plans, run), domains, policy: next, mailcowKey,
     });
     const changes = plans.reduce((count, plan) => count + plan.changes.filter((change) => change.action !== "note").length, 0);
     const turningOn = !before.automatic;
@@ -1155,7 +1200,7 @@ class Action {
    * confirmation, in both Automatic and Ask first modes, without touching
    * other sites.
    */
-  async preparePanelHost(before: Policy, next: Policy, name: string, notice?: string): Promise<DnsReply> {
+  async preparePanelHost(before: Policy, next: Policy, name: string, notice?: string, error?: string): Promise<DnsReply> {
     const run = this.run(next, this.files.secrets(), { panelProxied: false, panelOnly: true });
     await run.discover();
     const plans = await this.planPanelHost(run, before, next, name);
@@ -1163,7 +1208,7 @@ class Action {
     const blocked = !plan || plans.some((candidate) => candidate.problems.length > 0);
     const token = blocked ? "" : randomBytes(24).toString("hex");
     this.files.savePending(blocked ? null : {
-      token, expiresAt: this.now + REVIEW_LIFETIME, base: hash(before), digest: this.digest(plans),
+      token, expiresAt: this.now + REVIEW_LIFETIME, base: hash(before), digest: this.digest(plans, run),
       domains: [name], policy: next, panelOnly: true,
     });
     const changes = plans.reduce((count, candidate) => count + candidate.changes.filter((change) => change.action !== "note").length, 0);
@@ -1180,6 +1225,7 @@ class Action {
           : `${changes} change${changes === 1 ? "" : "s"} will be written for ${name} before CloudPanel requests the certificate.${before.automatic ? "" : " DNS stays in Ask first mode, and no other sites are changed."}`;
     return this.reply({
       notice,
+      ...(error ? { error } : {}),
       review: {
         token,
         title: blocked ? "Resolve these first" : `Prepare DNS for ${name}`,
@@ -1208,7 +1254,7 @@ class Action {
     const plans = panelOnly
       ? await this.planPanelHost(run, current, next, pending.domains[0]!)
       : (await run.load(pending.domains), run.planAll(pending.domains, false).filter((plan) => pending.domains.includes(plan.domain)));
-    if (this.digest(plans) !== pending.digest) {
+    if (this.digest(plans, run) !== pending.digest) {
       if (panelOnly) return this.preparePanelHost(current, next, pending.domains[0]!, `${providerLabelFor(next)} changed after the plan was shown. This is the plan now.`);
       return this.review(current, next, pending.domains, `${providerLabelFor(next)} or Mailcow changed after the plan was shown. This is the plan now.`, pending.mailcowKey);
     }
@@ -1217,7 +1263,18 @@ class Action {
     this.files.savePending(null);
     this.cause = panelOnly ? "Panel hostname" : "Confirmed review";
     await run.enforce(pending.domains);
-    await this.record(run, run.planAll(pending.domains, true), pending.domains);
+    const afterPlans = run.planAll(pending.domains, true);
+    await this.record(run, afterPlans, pending.domains);
+    if (panelOnly) {
+      const host = pending.domains[0]!;
+      const finalPlan = afterPlans.find((candidate) => candidate.domain === host);
+      if (!finalPlan || finalPlan.problems.length || finalPlan.changes.some((change) => change.action !== "note")) {
+        const errorText = finalPlan?.problems.length
+          ? finalPlan.problems.join("; ")
+          : `Some DNS changes for ${host} could not be applied yet.`;
+        return this.preparePanelHost(next, next, host, `DNS could not prepare ${host}.`, errorText);
+      }
+    }
     const zoneCreated = panelOnly && run.zoneCreatedFor(pending.domains[0]!);
     return this.reply({
       ...(zoneCreated ? { zoneCreated: true } : {}),
@@ -1238,9 +1295,12 @@ class Action {
     if (run.zoneGone(entry)) return { run, entry, ids: [], published: [], plans: [], gone: true };
     await run.load(run.plannedDomains());
     const currentPlans = run.planAll(undefined, true);
+    const isPowerDns = entry.connectionId.startsWith("pdns-");
     if (run.unread(entry.zoneId, entry.connectionId)) failAction(`${entry.zoneName} could not be read for the sites in it; check again before removing records`);
     const uncertain = currentPlans.some((plan) => plan.profileId && plan.problems.length
-      && (plan.zone ? plan.zone.id === entry.zoneId && (!plan.zone.connectionId || plan.zone.connectionId === entry.connectionId) : plan.domain === entry.zoneName || plan.domain.endsWith(`.${entry.zoneName}`)));
+      && (plan.zone
+        ? plan.zone.id === entry.zoneId && (isPowerDns ? plan.zone.connectionId === entry.connectionId : plan.zone.provider !== "powerdns")
+        : plan.domain === entry.zoneName || plan.domain.endsWith(`.${entry.zoneName}`)));
     if (uncertain) failAction(`${entry.zoneName} could not be planned for the sites in it; resolve their problems before removing records`);
     const published = await run.readZone(entry.connectionId, entry.zoneId, entry.zoneName);
     const supportsProxy = !entry.connectionId.startsWith("pdns-");
@@ -1363,7 +1423,8 @@ class Action {
           .map((redirect) => redirect.source)
           .filter((source) => {
             const planConn = status.plans[source]?.zone?.connectionId;
-            if (planConn && removedIds.includes(planConn)) return true;
+            const trackedConn = status.redirectRules?.[source]?.connectionId;
+            if (!planConn || removedIds.includes(planConn) || (trackedConn && removedIds.includes(trackedConn))) return true;
             return Object.entries(policy.zoneChoices).some(([zone, choice]) =>
               removedIds.includes(choice.connectionId) && (source === zone || source.endsWith(`.${zone}`)));
           })
@@ -1429,9 +1490,14 @@ class Action {
     }
     const report = status.connections.find((connection) => connection.id === removedId);
     const affectedZones = new Set([...clearedZones, ...(report?.zoneNames ?? [])]);
-    const matchesRemoved = (source: string) =>
-      status.plans[source]?.zone?.connectionId === removedId
-      || [...affectedZones].some((zone) => source === zone || source.endsWith(`.${zone}`));
+    const matchesRemoved = (source: string) => {
+      const planConn = status.plans[source]?.zone?.connectionId;
+      const trackedConn = status.redirectRules?.[source]?.connectionId;
+      return !planConn
+        || planConn === removedId
+        || trackedConn === removedId
+        || [...affectedZones].some((zone) => source === zone || source.endsWith(`.${zone}`));
+    };
     let affected: string[] = [];
     if (removedProvider === "cloudflare") {
       if ((next.powerdns?.length ?? 0) > 0) {
@@ -1504,7 +1570,7 @@ class Action {
     const savedSecrets: Secrets = { ...secrets, powerdns: { ...(secrets.powerdns ?? {}), [id]: apiKey } };
     this.files.saveSecrets(savedSecrets);
     try {
-      this.savePolicy(next);
+      this.files.savePolicy(next);
     } catch (error) {
       try { this.files.saveSecrets(previousSecrets); } catch { /* best-effort rollback */ }
       throw error;
@@ -1514,6 +1580,7 @@ class Action {
       delete cleaned[existing.id];
       this.files.saveSecrets({ ...savedSecrets, powerdns: cleaned });
     }
+    this.cleanupManagedForPolicy(next);
 
     const report: ConnectionReport = {
       id,
@@ -1646,10 +1713,11 @@ class Action {
   /** The redirect rule deleting `source` would delete, read now; a plan for the review. */
   private async redirectDeletion(source: string): Promise<{ run: DnsRun; found: ReturnType<DnsRun["redirectRuleOf"]>; plans: SitePlan[] }> {
     const policy = this.files.policy();
+    const tracked = this.files.status().redirectRules?.[source];
     const run = this.run(policy);
     await run.discover();
-    await run.load([source]);
-    const found = run.redirectRuleOf(source);
+    await run.loadRedirectDeletion(source, tracked);
+    const found = run.redirectRuleOf(source, tracked);
     const plans: SitePlan[] = [{
       domain: source, profileId: null, mode: "enforce", zone: found && "zone" in found ? found.zone : null, zoneChoices: [], certificateNames: [], redirect: true,
       problems: found && "problem" in found ? [found.problem] : [],
@@ -1669,10 +1737,10 @@ class Action {
     const standIns = this.standIns();
     const standIn = standIns.current[source];
     if (policy.automatic && policy.connections.length) {
-      const { plans } = await this.redirectDeletion(source);
+      const { run, plans } = await this.redirectDeletion(source);
       if (plans[0]!.changes.length || plans[0]!.problems.length) {
         const token = plans[0]!.problems.length ? "" : randomBytes(24).toString("hex");
-        this.files.savePending(token ? { token, expiresAt: this.now + REVIEW_LIFETIME, base: hash(policy), digest: this.digest(plans), domains: [], redirect: source } : null);
+        this.files.savePending(token ? { token, expiresAt: this.now + REVIEW_LIFETIME, base: hash(policy), digest: this.digest(plans, run), domains: [], redirect: source } : null);
         return this.reply({
           review: {
             token, title: `Delete the redirect for ${source}`,
@@ -1689,7 +1757,7 @@ class Action {
   private async confirmRedirectDeletion(pending: Pending): Promise<DnsReply> {
     const source = pending.redirect!;
     const { run, found, plans } = await this.redirectDeletion(source);
-    if (this.digest(plans) !== pending.digest) return this.deleteRedirect(source);
+    if (this.digest(plans, run) !== pending.digest) return this.deleteRedirect(source);
     this.files.savePending(null);
     this.cause = "Redirect deleted";
     if (found && "rule" in found) await run.deleteRedirectRule(source, found.zone.id, found.rulesetId, found.rule.id, found.zone.connectionId);
@@ -1711,6 +1779,7 @@ class Action {
     this.savePolicy(next);
     const status = this.files.status();
     delete status.plans[source];
+    if (status.redirectRules) delete status.redirectRules[source];
     this.files.saveStatus(status);
     return this.reply({ notice });
   }
@@ -1858,7 +1927,8 @@ async function changeVerb(action: Action, verb: DnsVerb, body: Record<string, un
   if (verb === "choose-zone") {
     const zone = hostname(body.zone, "the zone");
     next.zoneChoices[zone] = { connectionId: connectionId(body.connectionId), zoneId: providerId(body.zoneId, "the zone") };
-    const inZone = action.sites().map((site) => site.domain).filter((domain) => domain === zone || domain.endsWith(`.${zone}`));
+    const inZone = [...action.sites().map((site) => site.domain), ...next.redirects.map((redirect) => redirect.source), ...(next.panelHost ? [next.panelHost] : [])]
+      .filter((domain) => domain === zone || domain.endsWith(`.${zone}`));
     return action.change(next, `${zone} is managed through the chosen connection.`, inZone);
   }
   if (verb === "set-panel-host") {

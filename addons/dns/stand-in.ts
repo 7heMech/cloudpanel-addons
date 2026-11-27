@@ -193,24 +193,31 @@ export function clpctlStandIns(
 }
 
 /**
- * Asks Let's Encrypt for each stand-in still on CloudPanel's self-signed
- * certificate, when it is due. It succeeds once the domain points here, which
- * is the operator's to do, so attempts go on daily rather than stopping.
+ * Asks Let's Encrypt for each stand-in whose certificate does not yet cover
+ * every effective host (whether still self-signed or missing a newly added
+ * alias), when it is due. It succeeds once the domain points here, which is the
+ * operator's to do, so attempts go on daily rather than stopping.
  */
 export async function retryStandInCertificates(
-  paths: StandInPaths, selfSigned: (domain: string) => boolean | null, issue: Issue, now: number,
+  paths: StandInPaths,
+  certificateCovers: (domain: string, hosts: string[]) => boolean | null,
+  issue: Issue,
+  now: number,
 ): Promise<void> {
   const records = readStandIns(paths);
   for (const [domain, record] of Object.entries(records)) {
-    const placeholder = selfSigned(domain);
-    if (placeholder === null || record.certificate.done) continue;
-    if (!placeholder) {
+    const hosts = record.hosts ?? standInHosts(domain);
+    const covered = certificateCovers(domain, hosts);
+    if (covered === null || record.certificate.done) continue;
+    if (covered) {
       record.certificate.done = true;
     } else if (now >= record.certificate.nextAt) {
       record.certificate.attempts++;
       record.certificate.nextAt = now + CERTIFICATE_DELAYS[Math.min(record.certificate.attempts, CERTIFICATE_DELAYS.length) - 1]!;
       saveStandIns(paths, records);
-      if (await issue(domain, (record.hosts ?? standInHosts(domain)).filter((host) => host !== domain)) && selfSigned(domain) === false) record.certificate.done = true;
+      if (await issue(domain, hosts.filter((host) => host !== domain)) && certificateCovers(domain, hosts) === true) {
+        record.certificate.done = true;
+      }
     }
     saveStandIns(paths, records);
   }

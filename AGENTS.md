@@ -30,6 +30,12 @@
   pages with `.section-shell` instead of stacking every tool into one scroll.
 - When changing UI, capture and inspect unconfigured, mid-setup, narrow, and
   dark views with `bun run preview:shot`.
+- Never expose global or cross-tenant controls to non-admins, even with Site
+  Write: keep API credentials, shared DNS profiles, whole-zone Cloudflare or
+  WAF settings, the panel hostname, server-wide addons (System Tweaks,
+  Firewall, Resource Limits, SMTP Relay, Terminal, Manager), and any site
+  outside CloudPanel's `panelUserSites` strictly admin-only and enforced
+  server-side.
 
 ## Seeing the UI
 

@@ -303,10 +303,10 @@
       }
     }
 
-    function renderReview(review, notice) {
+    function renderReview(review, notice, errorMessage) {
       confirmGen++;
       pendingToken = review.token || '';
-      showDialogError('');
+      showDialogError(errorMessage || '');
       titleEl.textContent = review.title || 'Prepare DNS';
       dialogText.textContent = (notice ? notice + ' ' : '') + (review.text || '');
       planBox.textContent = '';
@@ -427,7 +427,7 @@
           return;
         }
         if (confirmData && confirmData.review) {
-          renderReview(confirmData.review, confirmData.notice);
+          renderReview(confirmData.review, confirmData.notice, confirmData.error);
           return;
         }
         var plan = confirmData && confirmData.panelHost && confirmData.panelHost.plan;
