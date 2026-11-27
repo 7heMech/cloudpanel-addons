@@ -6,7 +6,7 @@ import { renderLayout } from "../lib/app-ui";
 import { CLI_VERSION } from "../lib/version";
 import { headerTarget, headerUpdateScript } from "../lib/panel-nav";
 import { isPrerelease } from "../lib/semver";
-import { checkCliUpdate, isNewerVersion, resetUpdateCache } from "../lib/update-check";
+import { checkCliUpdate, isNewerVersion, resetUpdateCache, WORKER_RELEASES_URL } from "../lib/update-check";
 
 const realFetch = globalThis.fetch;
 afterEach(() => {
@@ -225,5 +225,54 @@ describe("which releases a box is told about", () => {
     globalThis.fetch = github(asked);
     expect(await checkCliUpdate("1.5.2", "owner/repo")).toEqual({ current: "1.5.2", latest: "2.0.0", hasUpdate: true });
     expect(asked).toEqual(["https://api.github.com/repos/owner/repo/releases/latest"]);
+  });
+
+  test("the default repo asks the worker first with only User-Agent and skips GitHub when it answers", async () => {
+    const calls: { url: string; headers: Record<string, string> }[] = [];
+    globalThis.fetch = (async (url: string, init?: RequestInit) => {
+      calls.push({ url, headers: (init?.headers ?? {}) as Record<string, string> });
+      return Response.json([
+        { tag_name: "v2.0.0", draft: false, prerelease: false },
+        { tag_name: "v2.1.0-rc.2", draft: false, prerelease: true },
+        { tag_name: "v2.2.0", draft: true, prerelease: false },
+      ]);
+    }) as unknown as typeof fetch;
+
+    expect(await checkCliUpdate("1.5.2")).toEqual({ current: "1.5.2", latest: "2.0.0", hasUpdate: true });
+    expect(calls).toEqual([{ url: WORKER_RELEASES_URL, headers: { "User-Agent": "clp-addons/1.5.2" } }]);
+
+    resetUpdateCache();
+    calls.length = 0;
+    expect(await checkCliUpdate("v2.1.0-rc.1")).toEqual({ current: "2.1.0-rc.1", latest: "2.1.0-rc.2", hasUpdate: true });
+    expect(calls).toEqual([{ url: WORKER_RELEASES_URL, headers: { "User-Agent": "clp-addons/2.1.0-rc.1" } }]);
+  });
+
+  test("worker errors, non-200 replies, malformed JSON and body read errors fall back to GitHub", async () => {
+    const failures: (() => Promise<Response>)[] = [
+      async () => { throw new Error("worker unreachable"); },
+      async () => new Response("bad gateway", { status: 502 }),
+      async () => new Response(null, { status: 204 }),
+      async () => new Response("{not json", { status: 200 }),
+      async () => ({ status: 200, ok: true, json: () => Promise.reject(new Error("body aborted")) }) as unknown as Response,
+      async () => Response.json({ not: "an array" }),
+      async () => Response.json([]),
+      async () => Response.json([{ tag_name: "2.0.0", draft: false, prerelease: false }]),
+    ];
+
+    for (const failWorker of failures) {
+      resetUpdateCache();
+      const asked: string[] = [];
+      globalThis.fetch = (async (url: string) => {
+        asked.push(url);
+        if (url === WORKER_RELEASES_URL) return failWorker();
+        return Response.json({ tag_name: "v2.0.0" });
+      }) as unknown as typeof fetch;
+
+      expect(await checkCliUpdate("1.5.2")).toEqual({ current: "1.5.2", latest: "2.0.0", hasUpdate: true });
+      expect(asked).toEqual([
+        WORKER_RELEASES_URL,
+        "https://api.github.com/repos/7heMech/cloudpanel-addons/releases/latest",
+      ]);
+    }
   });
 });

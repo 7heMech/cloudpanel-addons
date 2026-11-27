@@ -660,7 +660,13 @@ describe("Setup client and route contracts", () => {
   });
 
   function loadSetupClient(stubs: Record<string, unknown>) {
-    const names = ["setupSavePanelHostName", "setupApplyPasskeyOrigin", "setupReviewLines"];
+    const names = [
+      "setupSavePanelHostName",
+      "setupApplyPasskeyOrigin",
+      "setupReviewLines",
+      "setupSaveUsageSharing",
+      "setupToggleUsageSharing",
+    ];
     const baseGlobals: Record<string, unknown> = {
       CLP_ROOT: {
         getElementById: () => null,
@@ -689,6 +695,8 @@ describe("Setup client and route contracts", () => {
     return fn(...keys.map((k) => baseGlobals[k])) as {
       setupSavePanelHostName: (name: string, source?: { disabled: boolean }) => Promise<void>;
       setupApplyPasskeyOrigin: () => void;
+      setupSaveUsageSharing: (event: unknown) => Promise<void>;
+      setupToggleUsageSharing: (input: { checked: boolean; disabled: boolean }) => Promise<void>;
     };
   }
 
@@ -911,5 +919,68 @@ describe("Setup client and route contracts", () => {
     api.initSectionShells();
     expect(active.panels[0]!.hidden).toBe(true);
     expect(active.panels[1]!.hidden).toBe(false);
+  });
+
+  test("usage sharing card renders at top while unanswered and collapses to a bottom toggle once answered", async () => {
+    const step = { id: "one", level: "secure" as const, title: "One", href: "/addons/x/", addon: null, state: "todo" as const, reason: "r" };
+    const payload = { version: "2.1.0", cloudpanel: "2.5.4", arch: "x64", addons: ["dns", "system-tweaks"] };
+
+    const unanswered = setupPanelHtml({
+      off: false, hidden: false, actions: [], steps: [step],
+      usageSharing: { answered: false, enabled: false, payload },
+    });
+    expect(unanswered).toContain("Help prioritize what gets maintained");
+    expect(unanswered.toLowerCase()).not.toContain("telemetry");
+    expect(unanswered).toContain(JSON.stringify(payload, null, 2).replaceAll('"', "&quot;"));
+    expect(unanswered).toContain('<input type="checkbox" name="enabled" checked> Share enabled addons');
+    expect(unanswered).toContain('type="submit">Save</button>');
+    expect(unanswered.indexOf("setup-share")).toBeLessThan(unanswered.indexOf("setup-sheet"));
+    expect(unanswered).not.toContain("setup-share-line");
+
+    const answeredOn = setupPanelHtml({
+      off: false, hidden: false, actions: [], steps: [step],
+      usageSharing: { answered: true, enabled: true, payload },
+    });
+    expect(answeredOn).not.toContain("Help prioritize what gets maintained");
+    expect(answeredOn).toContain("setup-share-line");
+    expect(answeredOn).toContain('aria-label="Share enabled addons" checked');
+    expect(answeredOn.indexOf("setup-share-line")).toBeGreaterThan(answeredOn.indexOf("setup-sheet"));
+
+    const answeredOff = setupPanelHtml({
+      off: false, hidden: false, actions: [], steps: [step],
+      usageSharing: { answered: true, enabled: false, payload },
+    });
+    expect(answeredOff).toContain('aria-label="Share enabled addons" onchange');
+
+    const fetches: { url: string; body: unknown; csrf: string | undefined }[] = [];
+    const notices: { msg: string; kind: string }[] = [];
+    let shouldFail = false;
+    const client = loadSetupClient({
+      notify: (msg: string, kind: string) => notices.push({ msg, kind }),
+      fetch: async (url: string, init?: { body?: string; headers?: Record<string, string> }) => {
+        fetches.push({ url, body: init?.body ? JSON.parse(init.body) : null, csrf: init?.headers?.["X-CLP-Addons-CSRF"] });
+        if (shouldFail) return new Response(JSON.stringify({ ok: false, error: "denied" }), { status: 400 });
+        if (url === "/addons/api/usage-sharing") return new Response(JSON.stringify({ ok: true, data: {} }), { status: 200 });
+        return new Response(JSON.stringify({ ok: true, data: { html: "", show: true, attention: false } }), { status: 200 });
+      },
+    });
+
+    const submitBtn = { disabled: false };
+    await client.setupSaveUsageSharing({
+      preventDefault: () => {},
+      currentTarget: {
+        querySelector: () => submitBtn,
+        elements: { namedItem: () => ({ checked: true }) },
+      },
+    });
+    expect(fetches[0]).toEqual({ url: "/addons/api/usage-sharing", body: { enabled: true }, csrf: "tok" });
+    expect(notices[0]).toEqual({ msg: "Sharing enabled addons once a week.", kind: "ok" });
+
+    shouldFail = true;
+    const toggle = { checked: false, disabled: false };
+    await client.setupToggleUsageSharing(toggle);
+    expect(toggle.checked).toBe(true);
+    expect(toggle.disabled).toBe(false);
+    expect(notices.at(-1)).toEqual({ msg: "denied", kind: "error" });
   });
 });

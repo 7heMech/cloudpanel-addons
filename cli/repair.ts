@@ -4,7 +4,7 @@ import { resolveAddon, migrateOldAddonNames } from "./addons";
 import { reconcileAnchors, reconcileNginx, reconcilePanelBlocks, runAnchorWork } from "./reconcile";
 import { reconcilePhpGuard } from "../lib/php-guard";
 import { runAddonRepairs } from "./addon-hooks";
-import { pruneManagerJobs } from "../manager/action";
+import { pruneManagerJobs, shareCurrentUsage } from "../manager/action";
 import { withOperationLock } from "../lib/operation-lock";
 import { conffilesReleased } from "./conffiles";
 import { CERTIFICATES_PATH, FIREWALL_PATH, MANAGER_UNIT, NEW_SITES_PATH, SYSTEMD_DIR } from "../lib/paths";
@@ -104,7 +104,7 @@ async function repairAll(positional: string[], flags: Record<string, string | tr
   // while the master vhost might still be broken would leave a just-restored
   // site vhost on disk but unloaded until the next 15-minute cycle.
   await runAddonRepairs(all);
-  runManagerRepair();
+  await runManagerRepair();
   if (!quiet) log.ok(`repair complete (${specs.map((spec) => spec.name).join(", ") || "no addon enabled"})`);
 }
 
@@ -113,11 +113,12 @@ async function repairAll(positional: string[], flags: Record<string, string | tr
  * killed part-way (a reboot during an update) otherwise leaves a record that
  * says "running" forever, and the index page would keep following it.
  */
-function runManagerRepair(): void {
+async function runManagerRepair(): Promise<void> {
   try {
     const { removed, stuck } = pruneManagerJobs();
     if (removed || stuck) log.ok(`manager job records: ${removed} expired, ${stuck} marked failed`);
   } catch (error) {
     log.warn(`manager (prune) failed: ${errorMessage(error)}`);
   }
+  await shareCurrentUsage();
 }

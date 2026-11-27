@@ -2053,20 +2053,50 @@ function initialPreviewEnabled(params: URLSearchParams): string[] {
   return (params.get("enabled") ?? DEFAULT_PREVIEW_ENABLED).split(",").filter(Boolean);
 }
 
-const setupPreviewPrefs: { skipped: Set<string>; hidden: boolean | null } = { skipped: new Set<string>(["updates"]), hidden: null };
+const setupPreviewPrefs: {
+  skipped: Set<string>;
+  hidden: boolean | null;
+  usageSharing: { answered: boolean; enabled: boolean } | null;
+  usageSharingParam: string | null;
+} = { skipped: new Set<string>(["updates"]), hidden: null, usageSharing: null, usageSharingParam: null };
 
 /**
  * ?setup=fresh shows an unconfigured server with prerequisites blocking later steps,
  * ?setup=done shows a server with nothing left to suggest, ?setup=fallback one
  * whose DNS token lacks a permission a newer release needs, and ?setup=off root's
  * switch off. ?action=mixed adds Action needed, ?action=only with every
- * suggestion done, ?action=hidden with Setup hidden.
+ * suggestion done, ?action=hidden with Setup hidden. ?share=ask|on|off picks the
+ * usage-sharing state (unanswered by default on fresh/default, answered on done).
  */
-function setupPreviewView(page: URLSearchParams): SetupView {
+function setupPreviewView(page: URLSearchParams, trackShareParam = true): SetupView {
   const action = page.get("action");
   const scenario = action === "only" ? "done" : page.get("setup");
   const fresh = scenario === "fresh" || scenario === "tunnel";
   const enabledAddons = previewEnabled ?? ["system-tweaks", "firewall", "dns", "panel-tweaks", "resource-limits", "smtp", "wp-tools"];
+  const shareParam = page.get("share");
+  if (trackShareParam && shareParam !== setupPreviewPrefs.usageSharingParam) {
+    setupPreviewPrefs.usageSharingParam = shareParam;
+    setupPreviewPrefs.usageSharing = null;
+  }
+  const initialShare = shareParam === "ask"
+    ? { answered: false, enabled: false }
+    : shareParam === "on"
+      ? { answered: true, enabled: true }
+      : shareParam === "off"
+        ? { answered: true, enabled: false }
+        : scenario === "done"
+          ? { answered: true, enabled: true }
+          : { answered: false, enabled: false };
+  const shareState = setupPreviewPrefs.usageSharing ?? initialShare;
+  const usageSharing = {
+    ...shareState,
+    payload: {
+      version: "2.1.0",
+      cloudpanel: "2.5.4",
+      arch: "x64",
+      addons: [...enabledAddons].sort(),
+    },
+  };
   const enabledSet = new Set(enabledAddons);
   const steps = setupPreviewSteps.map((step): SetupItem => {
     const addon = step.addon ? { ...step.addon, enabled: enabledSet.has(step.addon.name) } : null;
@@ -2096,6 +2126,7 @@ function setupPreviewView(page: URLSearchParams): SetupView {
     steps: scenario === "off" ? [] : steps,
     enabledAddons,
     skippedIds: [...setupPreviewPrefs.skipped].sort(),
+    ...(scenario === "off" ? {} : { usageSharing }),
     context: {
       customDomain: scenario === "done" || scenario === "fallback" ? { name: "panel.example.com", issued: true } : null,
       dnsConnected: !fresh,
@@ -2109,6 +2140,15 @@ function setupPreviewView(page: URLSearchParams): SetupView {
 }
 
 async function setupPreview(req: Request, url: URL): Promise<Response | null> {
+  if (url.pathname === "/addons/api/usage-sharing" && req.method === "POST") {
+    const body = await req.json().catch(() => null) as Record<string, unknown> | null;
+    if (typeof body?.enabled !== "boolean") return Response.json({ ok: false, error: "expected enabled" }, { status: 400 });
+    const page = new URL(req.headers.get("referer") ?? url.href).searchParams;
+    setupPreviewPrefs.usageSharingParam = page.get("share");
+    setupPreviewPrefs.usageSharing = { answered: true, enabled: body.enabled };
+    const view = setupPreviewView(page);
+    return Response.json({ ok: true, data: { ...setupPreviewPrefs.usageSharing, lastSentAt: null, payload: view.usageSharing?.payload } });
+  }
   if (url.pathname !== "/addons/api/setup") return null;
   if (req.method === "POST") {
     const body = await req.json().catch(() => ({})) as Record<string, unknown>;
@@ -2117,8 +2157,8 @@ async function setupPreview(req: Request, url: URL): Promise<Response | null> {
     if (typeof body.hidden === "boolean") setupPreviewPrefs.hidden = body.hidden;
   }
   const page = new URL(req.headers.get("referer") ?? url.href).searchParams;
-  const view = setupPreviewView(page);
   const headerOnly = req.method === "GET" && url.searchParams.get("header") === "1";
+  const view = setupPreviewView(page, !headerOnly);
   return Response.json({
     ok: true,
     data: {

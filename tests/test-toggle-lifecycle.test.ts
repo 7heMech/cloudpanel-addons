@@ -55,6 +55,8 @@ mock.module("./lib/paths.ts", () => ({
   SYSTEMD_DIR: root + "/systemd",
   CONFIG_DIR: root + "/etc",
   STATE_DIR: root + "/state",
+  // Spread from the real module, addonStateDir still resolves under the production STATE_DIR.
+  addonStateDir: (addon) => root + "/state/" + addon,
   LIBEXEC_DIR: root + "/libexec",
   LOCK_DIR: root + "/lock",
   SOCKET_DIR: root + "/run",
@@ -145,7 +147,7 @@ let error;
 try {
   for (const step of JSON.parse(process.env.CLP_TEST_STEPS)) {
     if (step.verb === "enable") await cli.applyEnable(step.addon, process.env.CLP_TEST_ARCH || undefined);
-    else if (step.verb === "disable") cli.applyDisable(step.addon);
+    else if (step.verb === "disable") await cli.applyDisable(step.addon);
     else if (step.verb === "uninstall") (await import("./cli/uninstall.ts")).cmdSelfUninstall(["--yes"]);
     // A between-steps nudge, so a test can spoil a unit file the way something
     // outside this binary would and watch the next toggle put it back.

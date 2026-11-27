@@ -824,6 +824,17 @@ asks fresh. Running `clp-addons setup off` as root writes
 Setup; `clp-addons setup on` removes that file. CloudPanel's own pages do not
 show the Setup link.
 
+While root has not answered the usage-sharing prompt (`answered === false`),
+`/addons/setup` shows a compact card above the Setup sheet displaying the exact
+JSON payload that would be shared, a pre-checked **Share enabled addons** box,
+and a **Save** button. Nothing is sent until an administrator saves, which posts
+to `POST /addons/api/usage-sharing` and runs the `manager usage-sharing` admin
+verb. Once answered, the card collapses to a one-line toggle at the bottom of
+`/addons/setup` with a **What is sent** disclosure. On the CLI,
+`clp-addons share-usage on|off` updates the same root-owned `0600` state file
+and `clp-addons share-usage status` prints the current state and exact payload
+(see [Opt-in addon usage sharing](releases.md#opt-in-addon-usage-sharing)).
+
 ## Browser assets are files
 
 Stylesheets and browser scripts live in `.css` and `.client.js` files beside the

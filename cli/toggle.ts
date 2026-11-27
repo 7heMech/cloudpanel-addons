@@ -10,6 +10,7 @@ import {
   platformProvisioned, reconcilePanelIdentity, removeLegacyUnits, startUnits, writeConfig,
 } from "./provision";
 import { fatal, log, requireRoot } from "../lib/log";
+import { shareCurrentUsage } from "../manager/action";
 import { rmSync } from "node:fs";
 /**
  * Accounts and directories before files, files before units, units before
@@ -36,7 +37,8 @@ export function bootstrapProvision(specs: AddonSpec[]): void {
 export async function applyEnable(name: string, arch?: string): Promise<void> {
   requireRoot("enable");
   const spec = resolveEnableable(name, arch);
-  return withOperationLock(`enable ${spec.name}`, () => enableAddon(spec));
+  await withOperationLock(`enable ${spec.name}`, () => enableAddon(spec));
+  await shareCurrentUsage();
 }
 
 async function enableAddon(spec: AddonSpec): Promise<void> {
@@ -70,13 +72,16 @@ async function enableAddon(spec: AddonSpec): Promise<void> {
   log.ok(`${spec.name} enabled`);
 }
 
-export function applyDisable(name: string): void {
+export async function applyDisable(name: string): Promise<void> {
   requireRoot("disable");
   const spec = resolveAddon(name);
+  let changed = false;
   withOperationLockSync(`disable ${spec.name}`, () => {
     if (!addonEnabled(spec)) return log.ok(`${spec.name} is already disabled`);
     disableAddon(spec);
+    changed = true;
   });
+  if (changed) await shareCurrentUsage();
 }
 
 function disableAddon(spec: AddonSpec): void {

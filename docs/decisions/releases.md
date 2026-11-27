@@ -205,8 +205,35 @@ the binary restarts the manager.
 
 Every request the manager serves asks whether a release is available, so the
 answer is held for fifteen minutes, refreshed by one call at a time, and served
-as it stands while that refresh runs. Only the first check waits for GitHub; a
-box with no route there would otherwise pay the timeout on every request.
+as it stands while that refresh runs. Only the first check waits on the network;
+a box with no outbound route would otherwise pay the timeout on every request.
+
+For the default repository (`7heMech/cloudpanel-addons`), `lib/update-check.ts`
+fetches `https://clp.7he.dev/releases.json` first with
+`User-Agent: clp-addons/<version>` and no extra headers or identifiers. That
+endpoint returns a `{ tag_name, draft, prerelease }[]` array, from which a box
+on a release picks the newest non-draft, non-prerelease tag and a box on a
+pre-release picks the newest non-draft tag. On any fetch error, non-200 status,
+body-read error, malformed JSON, or empty match, the check falls back to
+GitHub's releases API. Custom `repo` overrides query GitHub directly.
+
+## Opt-in addon usage sharing
+
+`lib/usage-share.ts` tracks whether root opted in to weekly addon usage sharing
+in `/var/lib/clp-addons/manager/usage-sharing.json`, a root-owned `0600` file
+holding `{ answered, enabled, lastSentAt, lastSentWeek, lastSentHash }`. Nothing
+is sent until root saves an answer with `enabled: true`.
+
+When enabled, `shareUsageIfDue` posts a four-field JSON object
+(`{ version, cloudpanel, arch, addons }`) to `https://clp.7he.dev/usage` with
+`User-Agent: clp-addons/<version>` and a 3-second timeout. No domains, IP
+addresses, email addresses, hostnames, or machine IDs are collected. To avoid
+repeat posts, the client stores the ISO 8601 week (`YYYY-Www`) and a local
+SHA-256 hash of the serialized payload after a 2xx reply; the hash is never
+sent. A changed addon set posts again within the same week, and a new week posts
+again even if the payload is unchanged. Network errors and non-2xx responses are
+ignored silently. Manager repair (`cli/repair.ts`) and addon enable or disable
+(`cli/toggle.ts`) trigger `shareCurrentUsage` best-effort.
 
 The native CloudPanel header asks the manager for update state; it does not
 depend on the updater process's compile-time version. That process can reconcile

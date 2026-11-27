@@ -15,6 +15,7 @@ import { withPanelDb } from "../lib/panel-db";
 import { addonStateDir, CONFIG_DIR, PANEL_DB } from "../lib/paths";
 import { readState } from "../lib/root-state";
 import { panelUserUid } from "../lib/sso-auth";
+import { usagePayload, usageSharingStatus, type UsagePayload } from "../lib/usage-share";
 
 const PREFS_FILE = `${addonStateDir("manager")}/setup.json`;
 /** The checks' last answer, before anyone's skips, so moving between pages does not run them all again. */
@@ -71,6 +72,8 @@ export interface SetupView {
   enabledAddons?: string[];
   /** Step ids this administrator skipped, so request-time unblocking still honors skips. */
   skippedIds?: string[];
+  /** Root's usage-sharing answer and the exact payload it covers. */
+  usageSharing?: { answered: boolean; enabled: boolean; payload: UsagePayload };
 }
 
 interface UserPrefs { hidden?: true; skipped?: string[] }
@@ -364,12 +367,23 @@ export async function setupView(
   const checked = source ? await compute() : await cachedChecks(compute, cache);
   const skipped = new Set(prefs.skipped ?? []);
   const steps = checked.steps.map((step) => (step.state === "todo" || step.state === "blocked") && skipped.has(step.id) ? { ...step, state: "skipped" as const } : step);
+  const usageSharing = source ? null : readUsageSharingView();
   return {
     off: false, hidden, actions: checked.actions, steps,
     ...(checked.context ? { context: checked.context } : {}),
     ...(checked.enabledAddons ? { enabledAddons: checked.enabledAddons } : {}),
     ...(skipped.size ? { skippedIds: [...skipped].sort() } : {}),
+    ...(usageSharing ? { usageSharing } : {}),
   };
+}
+
+function readUsageSharingView(): SetupView["usageSharing"] | null {
+  try {
+    const { answered, enabled, payload } = usageSharingStatus(usagePayload(Object.values(ADDONS).filter(addonEnabled).map((spec) => spec.name)));
+    return { answered, enabled, payload };
+  } catch {
+    return null;
+  }
 }
 
 const FQDN_RE = /^[a-z0-9](?:[a-z0-9-]*[a-z0-9])?(?:\.[a-z0-9](?:[a-z0-9-]*[a-z0-9])?)+$/;

@@ -195,6 +195,23 @@ html.dark #setup-page-root {
 .setup-passkey-origin { grid-column: 2 / 4; padding: 12px 0 16px; }
 .setup-passkey-origin[hidden] { display: none; }
 
+/* Usage sharing: asked once above the Setup card, then a quiet switch at the foot. */
+.setup-share { margin-bottom: 16px; padding: 18px 22px; }
+.setup-share h2 { margin: 0 0 4px; font-size: 16px; font-weight: 600; }
+.setup-share p { margin: 0 0 10px; color: var(--muted); font-size: 13.5px; }
+.setup-share-payload { margin: 0; padding: 10px 12px; font-size: 12.5px; line-height: 1.45; white-space: pre-wrap; overflow-wrap: anywhere; }
+.setup-share-form { display: flex; flex-wrap: wrap; align-items: center; gap: 10px 16px; margin-top: 12px; }
+.setup-share-check { display: inline-flex; align-items: center; gap: 8px; margin: 0; font-size: 14px; cursor: pointer; }
+.setup-share-check input { margin: 0; }
+.setup-share-line { display: flex; flex-wrap: wrap; align-items: center; gap: 6px 10px; margin-top: 28px; color: var(--muted); font-size: 13px; }
+.setup-share-line .switch { width: 36px; height: 20px; }
+.setup-share-line .switch span::after { width: 14px; height: 14px; }
+.setup-share-line .switch input:checked + span::after { transform: translateX(16px); }
+.setup-share-line details[open] { flex-basis: 100%; }
+.setup-share-line summary { display: inline; cursor: pointer; text-decoration: underline; text-underline-offset: 2px; }
+.setup-share-line summary:hover { color: var(--accent); }
+.setup-share-line details[open] .setup-share-payload { margin-top: 6px; }
+
 /* Cross-addon Guides directory below the Setup card. */
 .setup-guides { margin-top: 32px; }
 .setup-guides-head { display: flex; flex-wrap: wrap; align-items: baseline; justify-content: space-between; gap: 4px 16px; margin-bottom: 10px; }
