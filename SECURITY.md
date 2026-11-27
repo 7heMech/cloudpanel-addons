@@ -58,7 +58,7 @@ The base installation sets up only what the Addons interface needs:
 No addon runs until you enable it. Enabling [System Tweaks](docs/system-tweaks.md)
 turns on its default hardening protections: Nginx config injection blocking,
 Varnish backend checks, root-owned site Nginx log directories, PHP-FPM pool
-isolation, forged and Cloudflare visitor IP fixes, phpMyAdmin lockdown, File
+isolation, forged visitor IP fixes, phpMyAdmin lockdown, File
 Manager confinement, version-pinned `clpctl` hardening, a per-server panel
 certificate on port 8443, the panel login jail when `fail2ban` is already
 installed, `clp-agent` telemetry blocking, and the SSH login summary.
@@ -249,13 +249,15 @@ arbitrary public clients. Private proxies remain trusted; the panel also trusts
 Cloudflare.
 [Guide](docs/system-tweaks.md#forged-visitor-ips)
 
-**Visitor IPs through Cloudflare.** A Cloudflare Tunnel reaches nginx from
-`127.0.0.1`, which CloudPanel trusts for `X-Real-IP`. Cloudflare passes that
-header through from the visitor, so anyone could set their own IP through a
-tunnel. Sites now stop trusting `127.0.0.1` and take the visitor from
-`CF-Connecting-IP`, but only when Cloudflare or the tunnel set it. CloudPanel's
-`cloudflare` log format no longer records that header from other clients.
-[Guide](docs/system-tweaks.md#cloudflare-visitor-ips)
+**Visitor IPs through Cloudflare.** Managed by [Firewall](docs/firewall.md#cloudflare-visitor-ips)
+and on by default when Firewall is enabled. A Cloudflare Tunnel reaches nginx
+from `127.0.0.1`, which CloudPanel trusts for `X-Real-IP`. Cloudflare passes
+that header through from the visitor, so anyone could set their own IP through a
+tunnel. Sites stop trusting `127.0.0.1` and take the visitor from
+`CF-Connecting-IP`, only when Cloudflare or the tunnel set it. CloudPanel's
+`cloudflare` log format no longer records that header from other clients. Run
+`clp-addons lock firewall` as root to keep the browser from switching it off.
+[Guide](docs/firewall.md#cloudflare-visitor-ips)
 
 **PHP upload progress.** Every addon installation sets
 `session.upload_progress.enabled=Off` for PHP-FPM, including the panel. This

@@ -5,7 +5,6 @@ import {
 } from "./action";
 import { DEFAULT_REAL_IP_PATHS, REAL_IP_MARKER, releaseRealIp } from "./real-ip";
 import { syncVarnishBackends } from "./varnish-backend";
-import { DEFAULT_VISITOR_IP_PATHS, UNTRUSTED_LOOPBACK, VISITOR_IP, releaseVisitorIp } from "./visitor-ip";
 import { fatal, log } from "../../lib/log";
 import type { AddonDefinition } from "../../lib/addon-definition";
 import { SYSTEM_TWEAKS_SETUP } from "./setup";
@@ -17,6 +16,7 @@ export const SYSTEM_TWEAKS_ADDON: AddonDefinition = {
   description: "Server security, automatic updates, panel PHP, remote backup compression, SSH login message.",
   added: "2.0.0-rc.1",
   changed: [
+    { in: "2.3.0-rc.1", note: "Cloudflare visitor IPs moved to Firewall." },
     { in: "2.2.0-rc.3", note: "System Tweaks now splits into Hardening, Failed logins, Updates, Panel PHP and Backups & SSH tabs. Setup's port 8443 certificate step is titled Port 8443 certificate." },
     { in: "2.2.0-rc.2", note: "Automatic updates default to hourly, with a schedule choice of every hour, every 6 hours, or once a day." },
     { in: "2.2.0-rc.1", note: "Setup shows Action needed when the sites' Nginx answers hostnames it has no site for." },
@@ -75,8 +75,6 @@ export const SYSTEM_TWEAKS_ADDON: AddonDefinition = {
   },
   conffiles: [
     { path: DEFAULT_REAL_IP_PATHS.nginxConf, marker: REAL_IP_MARKER, release: () => releaseRealIp() },
-    { path: DEFAULT_VISITOR_IP_PATHS.nginxConf, marker: [VISITOR_IP, UNTRUSTED_LOOPBACK], release: () => releaseVisitorIp("nginxConf") },
-    { path: DEFAULT_VISITOR_IP_PATHS.fastcgiParams, marker: VISITOR_IP, release: () => releaseVisitorIp("fastcgiParams") },
   ],
   phpGuardOff: () => systemTweaksPhpGuardOff(),
   deactivate: () => withdrawSystemTweaks(),

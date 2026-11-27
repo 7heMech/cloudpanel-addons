@@ -18,11 +18,10 @@ import type { RepairStep, RestoreStep, TweakContext, WithdrawStep } from "./twea
 import { UPDATES_TWEAK } from "./updates";
 import { UPLOAD_GUARD_TWEAK } from "./upload-progress";
 import { VHOST_GUARD_TWEAK } from "./vhost-guard";
-import { VISITOR_IP_TWEAK } from "./visitor-ip";
 
 /** Every tweak, in the order settings.json keeps their settings. */
 export const TWEAKS = [
-  UPDATES_TWEAK, UPLOAD_GUARD_TWEAK, REAL_IP_TWEAK, VISITOR_IP_TWEAK, VHOST_GUARD_TWEAK, PHP_POOLS_TWEAK, PHPMYADMIN_TWEAK, FILE_MANAGER_GUARD_TWEAK,
+  UPDATES_TWEAK, UPLOAD_GUARD_TWEAK, REAL_IP_TWEAK, VHOST_GUARD_TWEAK, PHP_POOLS_TWEAK, PHPMYADMIN_TWEAK, FILE_MANAGER_GUARD_TWEAK,
   PANEL_CERT_TWEAK, LOGIN_JAILS_TWEAK, DATABASE_TWEAK, CLPCTL_GUARD_TWEAK, TELEMETRY_TWEAK, MOTD_TWEAK, BACKUP_COMPRESSION_TWEAK,
   PANEL_PHP_TWEAK,
 ] as const;
@@ -41,14 +40,14 @@ type Tweak = (typeof TWEAKS)[number];
 
 /** The parts of `state`, in the order it reads and names them. */
 export const STATE: readonly Tweak[] = [
-  UPDATES_TWEAK, UPLOAD_GUARD_TWEAK, REAL_IP_TWEAK, VISITOR_IP_TWEAK, PHPMYADMIN_TWEAK, PANEL_CERT_TWEAK, VHOST_GUARD_TWEAK,
+  UPDATES_TWEAK, UPLOAD_GUARD_TWEAK, REAL_IP_TWEAK, PHPMYADMIN_TWEAK, PANEL_CERT_TWEAK, VHOST_GUARD_TWEAK,
   PHP_POOLS_TWEAK, FILE_MANAGER_GUARD_TWEAK, CLPCTL_GUARD_TWEAK, PANEL_PHP_TWEAK, LOGIN_JAILS_TWEAK, DATABASE_TWEAK,
   BACKUP_COMPRESSION_TWEAK, TELEMETRY_TWEAK, MOTD_TWEAK,
 ];
 
 /** The Hardening card's rows, in the page's order; the other cards are the page's own. */
 export const HARDENING = [
-  PANEL_PHP_TWEAK, UPLOAD_GUARD_TWEAK, REAL_IP_TWEAK, VISITOR_IP_TWEAK, PHPMYADMIN_TWEAK, DATABASE_TWEAK, PANEL_CERT_TWEAK, VHOST_GUARD_TWEAK,
+  PANEL_PHP_TWEAK, UPLOAD_GUARD_TWEAK, REAL_IP_TWEAK, PHPMYADMIN_TWEAK, DATABASE_TWEAK, PANEL_CERT_TWEAK, VHOST_GUARD_TWEAK,
   PHP_POOLS_TWEAK, FILE_MANAGER_GUARD_TWEAK, CLPCTL_GUARD_TWEAK, TELEMETRY_TWEAK,
 ] as const;
 
@@ -56,7 +55,6 @@ export const HARDENING = [
 const UPKEEP_STEPS = [
   ["automatic updates", UPDATES_TWEAK.repair.upkeep],
   ["forged visitor IPs", REAL_IP_TWEAK.repair.upkeep],
-  ["Cloudflare visitor IPs", VISITOR_IP_TWEAK.repair.upkeep],
   ["login jails", LOGIN_JAILS_TWEAK.repair.upkeep],
   ["MySQL on this server only", DATABASE_TWEAK.repair.upkeep],
 ] as const;
@@ -131,7 +129,7 @@ export const WITHDRAW: {
     CLPCTL_GUARD_TWEAK,
     // Next: it refuses an edited backup command, and then the protections below stay.
     BACKUP_COMPRESSION_TWEAK,
-    UPDATES_TWEAK, REAL_IP_TWEAK, VISITOR_IP_TWEAK, PHPMYADMIN_TWEAK, LOGIN_JAILS_TWEAK, DATABASE_TWEAK,
+    UPDATES_TWEAK, REAL_IP_TWEAK, PHPMYADMIN_TWEAK, LOGIN_JAILS_TWEAK, DATABASE_TWEAK,
     FILE_MANAGER_GUARD_TWEAK, VHOST_GUARD_TWEAK, PHP_POOLS_TWEAK,
   ],
   // None of these keeps the addon on: each failure is only a warning.
@@ -150,7 +148,7 @@ export const RESTORE: {
   after: readonly (Restoring & { restore: Warning })[];
 } = {
   locked: [
-    UPDATES_TWEAK, UPLOAD_GUARD_TWEAK, REAL_IP_TWEAK, VISITOR_IP_TWEAK, PHPMYADMIN_TWEAK, LOGIN_JAILS_TWEAK,
+    UPDATES_TWEAK, UPLOAD_GUARD_TWEAK, REAL_IP_TWEAK, PHPMYADMIN_TWEAK, LOGIN_JAILS_TWEAK,
     // It inspects MySQL's units, which can be mid-restart, so a failure only warns: the guards after it must still come back.
     DATABASE_TWEAK,
     VHOST_GUARD_TWEAK, PHP_POOLS_TWEAK, FILE_MANAGER_GUARD_TWEAK, CLPCTL_GUARD_TWEAK,
@@ -169,7 +167,7 @@ type Locking = Extract<Tweak, { switch: unknown }> | Extract<Tweak, { lockOn: un
  */
 export const LOCK_SETTINGS: { first: readonly Locking[]; last: readonly Locking[] } = {
   first: [
-    UPLOAD_GUARD_TWEAK, REAL_IP_TWEAK, VISITOR_IP_TWEAK, PHPMYADMIN_TWEAK, PANEL_CERT_TWEAK, VHOST_GUARD_TWEAK, PHP_POOLS_TWEAK,
+    UPLOAD_GUARD_TWEAK, REAL_IP_TWEAK, PHPMYADMIN_TWEAK, PANEL_CERT_TWEAK, VHOST_GUARD_TWEAK, PHP_POOLS_TWEAK,
     FILE_MANAGER_GUARD_TWEAK, CLPCTL_GUARD_TWEAK, TELEMETRY_TWEAK, LOGIN_JAILS_TWEAK,
   ],
   last: [DATABASE_TWEAK],

@@ -1,5 +1,8 @@
-import { LOCK_DIR, addonStateDir, PANEL_DB, DISTRO_NGINX_SITES_DIR } from "../../lib/paths";
+import { LOCK_DIR, addonConfigFile, addonStateDir, PANEL_DB, DISTRO_NGINX_SITES_DIR } from "../../lib/paths";
 import { writeFileAtomic } from "../../lib/atomic-write";
+import { detectAddresses } from "../../lib/addresses";
+import { cloudflareConnectionViews, readDnsZoneProfiles, type CloudflareConnectionView, type CloudflareStoreOptions } from "../../lib/cloudflare/store";
+import { tokenTemplates, type TokenTemplates } from "../../lib/cloudflare/tokens";
 import { Database } from "bun:sqlite";
 import { existsSync, lstatSync, readFileSync, rmSync } from "node:fs";
 import { join } from "node:path";
@@ -21,6 +24,7 @@ import {
   connectNetcup, disconnectNetcup, netcupView, pollNetcup, setNetcupRole, type NetcupOptions, type NetcupView,
 } from "./netcup";
 import { cleanUpPanelGate, panelGateSummary, panelGateView, setPanelGate, type GateOptions, type PanelGateView } from "./panel-gate";
+import { setVisitorIpEnabled, visitorIpState, type VisitorIpOptions, type VisitorIpState } from "./visitor-ip";
 
 const POLICY_VERSION = 1;
 const MAX_SITES_PER_REQUEST = 10_000;
@@ -45,9 +49,18 @@ interface FirewallActionOptions {
   hetzner?: HetznerOptions;
   netcup?: NetcupOptions;
   gate?: GateOptions;
+  visitorIp?: VisitorIpOptions;
+  cloudflare?: CloudflareStoreOptions;
   input?: string;
   emitReply?: boolean;
   run?: (command: string, args: string[]) => CommandResult;
+}
+
+export interface FirewallCloudflareView {
+  connections: CloudflareConnectionView[];
+  templates: TokenTemplates;
+  serverIps: string[];
+  dnsEnabled: boolean;
 }
 
 export interface CloudflareSiteView {
@@ -286,14 +299,39 @@ function gateOrError(options?: GateOptions): PanelGateView | { error: string } {
   catch (error) { return { error: `The Panel gate could not be read: ${errorMessage(error)}` }; }
 }
 
+function visitorIpOrError(options?: VisitorIpOptions): VisitorIpState {
+  try { return visitorIpState(options); }
+  catch (error) { return { enabled: true, applied: false, problem: errorMessage(error) }; }
+}
+
+function cloudflareForFirewall(options?: CloudflareStoreOptions): FirewallCloudflareView {
+  let connections: CloudflareConnectionView[] = [];
+  try {
+    connections = cloudflareConnectionViews([], { includeDns: false, requirePanelGate: true }, options?.paths).connections;
+  } catch { /* unreadable store renders empty */ }
+  let serverIps: string[] = [];
+  try {
+    const detected = detectAddresses();
+    serverIps = [detected.ipv4, detected.ipv6].filter((ip): ip is string => Boolean(ip));
+  } catch { /* best effort */ }
+  return {
+    connections,
+    templates: tokenTemplates(readDnsZoneProfiles()),
+    serverIps,
+    dnsEnabled: existsSync(addonConfigFile("dns")),
+  };
+}
+
 async function listState(paths: CloudflareActionPaths, options: FirewallActionOptions): Promise<{
-  sites: CloudflareSiteView[]; autoEnableNewSites: boolean; protocols: FirewallStatus | { error: string }; hetzner: HetznerView;
-  netcup: NetcupView; panelGate: PanelGateView | { error: string };
+  sites: CloudflareSiteView[]; autoEnableNewSites: boolean; visitorIp: VisitorIpState; protocols: FirewallStatus | { error: string }; hetzner: HetznerView;
+  netcup: NetcupView; panelGate: PanelGateView | { error: string }; cloudflare: FirewallCloudflareView;
 }> {
   const { protocols, hetzner, gate } = options;
   const hetznerState = hetznerOrError(hetzner);
   const netcupState = netcupOrError(options.netcup);
   const gateState = gateOrError(gate);
+  const visitorIp = visitorIpOrError(options.visitorIp);
+  const cloudflare = cloudflareForFirewall(options.cloudflare);
   const db = openPanelDatabase(paths.panelDb);
   try {
     const policy = readPolicy(paths.policyFile, paths.stateUid);
@@ -303,10 +341,12 @@ async function listState(paths: CloudflareActionPaths, options: FirewallActionOp
         enabled: Boolean(site.allow_traffic_from_cloudflare_only),
       })),
       autoEnableNewSites: policy.autoEnableNewSites,
+      visitorIp,
       protocols: protocolsOrError(protocols),
       hetzner: await hetznerState,
       netcup: await netcupState,
       panelGate: gateState,
+      cloudflare,
     };
   } finally {
     db.close();
@@ -425,6 +465,13 @@ export async function runFirewallAction(argv: string[], options: FirewallActionO
     if (action.verb === "policy") {
       const policy = await setPolicy(paths, action.enabled!);
       return { autoEnableNewSites: policy.autoEnableNewSites };
+    }
+    if (action.verb === "set-visitor-ip") {
+      const body = readInput("set-visitor-ip", options.input);
+      if (typeof body !== "object" || body === null || typeof (body as { enabled?: unknown }).enabled !== "boolean") {
+        failAction("set-visitor-ip input must be JSON with a boolean enabled field");
+      }
+      return setVisitorIpEnabled((body as { enabled: boolean }).enabled, options.visitorIp);
     }
     if (action.verb === "set") return setSelected(paths, requestedDomains(options.input), action.enabled!, command);
     if (action.verb === "reconcile") return reconcileNewSites(paths, command);

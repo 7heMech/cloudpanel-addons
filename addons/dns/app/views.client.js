@@ -14,6 +14,22 @@ function dnsEsc(value) {
   return String(value).replace(/[&<>"']/g, function (c) { return '&#' + c.charCodeAt(0) + ';'; });
 }
 
+function dnsHasCloudflare() {
+  return (dnsState.connections || []).some(function (connection) { return (connection.provider || 'cloudflare') === 'cloudflare'; });
+}
+
+function dnsHasPowerDns() {
+  return (dnsState.connections || []).some(function (connection) { return connection.provider === 'powerdns'; });
+}
+
+function dnsProviderLabel() {
+  const cf = dnsHasCloudflare();
+  const pdns = dnsHasPowerDns();
+  if (cf && !pdns) return 'Cloudflare';
+  if (pdns && !cf) return 'PowerDNS';
+  return 'your DNS provider';
+}
+
 function dnsProfile(id) {
   return dnsState.profiles.find(function (profile) { return profile.id === id; });
 }
@@ -80,11 +96,11 @@ function dnsRowCells(row, index, advanced) {
     '<td data-label="Content" class="dns-content"><div class="dns-content-fields">' +
       (prioritised ? '<input data-field="priority" class="dns-priority" type="number" min="0" max="65535" inputmode="numeric" title="Priority" aria-label="Priority of record ' + n + '">' : '') +
       '<input data-field="content" aria-label="Content of record ' + n + '" spellcheck="false" autocomplete="off" placeholder="' + dnsEsc(DNS_EXAMPLES[row.type]) + '"></div></td>' +
-    '<td data-label="TTL" class="dns-ttl dns-adv"><select data-field="ttl" aria-label="TTL of record ' + n + '"' + (row.proxied ? ' disabled' : '') + '>' +
+    '<td data-label="TTL" class="dns-ttl dns-adv"><select data-field="ttl" aria-label="TTL of record ' + n + '"' + (row.proxied && dnsHasCloudflare() ? ' disabled' : '') + '>' +
       DNS_TTLS.map(function (ttl) { return '<option value="' + ttl[0] + '"' + (ttl[0] === row.ttl ? ' selected' : '') + '>' + ttl[1] + '</option>'; }).join('') + '</select></td>' +
     '<td data-label="Apex only" class="dns-flag dns-adv"><label class="switch"><input data-field="apexOnly" type="checkbox" aria-label="Record ' + n + ' only at the zone apex"' +
       (row.apexOnly ? ' checked' : '') + '><span></span></label></td>' +
-    '<td data-label="Proxy" class="dns-flag' + (proxiable ? '' : ' dns-unproxiable') + '"><label class="switch"><input data-field="proxied" type="checkbox" aria-label="Proxy record ' + n + '"' +
+    '<td data-label="Proxy" class="dns-flag dns-proxy-col' + (proxiable ? '' : ' dns-unproxiable') + '"><label class="switch"><input data-field="proxied" type="checkbox" aria-label="Proxy record ' + n + '"' +
       (row.proxied ? ' checked' : '') + (proxiable ? '' : ' disabled') + '><span></span></label></td>' +
     '<td class="dns-remove"><button class="btn dns-remove-btn" type="button" aria-label="Remove record ' + n + '" onclick="dnsRemoveRow(' + index + ')">×</button></td>';
 }
@@ -92,7 +108,15 @@ function dnsRowCells(row, index, advanced) {
 function dnsRenderRows() {
   const body = CLP_ROOT.getElementById('dns-rows');
   const advanced = CLP_ROOT.getElementById('dns-advanced').checked;
-  CLP_ROOT.getElementById('dns-rows-table').classList.toggle('dns-show-advanced', advanced);
+  const table = CLP_ROOT.getElementById('dns-rows-table');
+  const hasCf = dnsHasCloudflare();
+  const hasPdns = dnsHasPowerDns();
+  table.classList.toggle('dns-show-advanced', advanced);
+  table.classList.toggle('dns-no-proxy', !hasCf);
+  const proxyHead = CLP_ROOT.getElementById('dns-proxy-head');
+  if (proxyHead) proxyHead.textContent = hasCf && hasPdns ? 'Proxy (CF)' : 'Proxy';
+  const mixedNote = CLP_ROOT.getElementById('dns-mixed-note');
+  if (mixedNote) mixedNote.hidden = !(hasCf && hasPdns);
   body.textContent = '';
   dnsRowsState.forEach(function (row, index) {
     const tr = document.createElement('tr');
@@ -118,6 +142,7 @@ function dnsRowChanged(index, target, settled) {
   else if (key === 'priority') row.priority = target.value === '' ? null : Number(target.value);
   else row[key] = target.value;
   if (key === 'proxied' && row.proxied) row.ttl = 1;
+  if (key === 'ttl' && row.ttl !== 1 && !dnsHasCloudflare()) row.proxied = false;
   if (key === 'type') {
     if (['A', 'AAAA', 'CNAME'].indexOf(row.type) < 0) row.proxied = false;
     if (row.type !== 'MX' && row.type !== 'SRV') row.priority = null;
@@ -128,7 +153,7 @@ function dnsRowChanged(index, target, settled) {
 }
 
 function dnsAddRow() {
-  dnsRowsState.push({ type: 'A', name: '{domain}', content: '{ipv4}', proxied: true, ttl: 1, priority: null, apexOnly: false });
+  dnsRowsState.push({ type: 'A', name: '{domain}', content: '{ipv4}', proxied: dnsHasCloudflare(), ttl: 1, priority: null, apexOnly: false });
   dnsRenderRows();
   const rows = CLP_ROOT.querySelectorAll('#dns-rows tr');
   rows[rows.length - 1].querySelector('[data-field="name"]').focus();
@@ -193,11 +218,17 @@ function dnsEditProfile(id) {
   dnsOpen('dns-profile-dialog');
 }
 
-/** Mailcow shows once Mailcow is set up or the profile uses it; the zone's summary follows its fields. */
+/** Mailcow shows once Mailcow is set up or the profile uses it; Cloudflare zone settings hide when no Cloudflare connection exists. */
 function dnsSyncProfileSections() {
   const form = CLP_ROOT.getElementById('dns-profile-form');
   const value = function (name) { return form.elements.namedItem(name).value; };
+  const hasCf = dnsHasCloudflare();
+  const hasPdns = dnsHasPowerDns();
   CLP_ROOT.getElementById('dns-mailcow-section').hidden = !dnsState.mailcow.url && !form.elements.namedItem('mailcow').checked;
+  const zoneDetails = CLP_ROOT.getElementById('dns-zone-details');
+  zoneDetails.hidden = !hasCf;
+  const zoneHeading = CLP_ROOT.getElementById('dns-zone-details-heading');
+  if (zoneHeading) zoneHeading.textContent = hasCf && hasPdns ? 'Cloudflare zone (Cloudflare only)' : 'Cloudflare zone';
   const ssl = form.elements.namedItem('ssl');
   const parts = [];
   if (value('ssl')) parts.push(ssl.options[ssl.selectedIndex].text);
@@ -231,7 +262,7 @@ async function dnsDeleteProfile(id) {
   const profile = dnsProfile(id);
   const accepted = await confirmAction({
     title: 'Delete ' + profile.name + '?',
-    text: 'Its sites stop being managed. Nothing in Cloudflare or Mailcow changes.',
+    text: 'Its sites stop being managed. Nothing in ' + dnsProviderLabel() + ' or Mailcow changes.',
     details: profile.sites ? [plural(profile.sites, 'site') + ' will be in no profile.'] : [],
     confirmLabel: 'Delete', danger: true,
   });
@@ -349,7 +380,7 @@ function dnsShowSite(domain) {
   if (chip) heading.appendChild(chip.cloneNode(true));
 
   let html = '';
-  if (!plan) html += '<p class="hint">Not checked yet. Check now reads it from Cloudflare.</p>';
+  if (!plan) html += '<p class="hint">Not checked yet. Check now reads it from your DNS provider.</p>';
   else {
     html += dnsProblems(plan.problems);
     if (plan.zone && plan.zone.status !== 'active' && plan.zone.nameServers.length) {
@@ -383,15 +414,22 @@ function dnsShowSite(domain) {
   html += '<h3 class="dns-section">' + (site.redirect ? 'Redirect' : 'Site') + '</h3><dl class="dns-facts">';
   if (site.redirect) {
     const kept = [site.redirect.keepPath && 'path', site.redirect.keepQuery && 'query string'].filter(Boolean);
+    const zoneProvider = plan && plan.zone ? (plan.zone.provider || 'cloudflare') : null;
+    const served = zoneProvider === 'powerdns' ? 'A stand-in site on this server (DNS in PowerDNS)'
+      : zoneProvider === 'cloudflare' ? 'Cloudflare'
+      : site.redirect.standIn ? 'A stand-in site on this server'
+      : dnsHasCloudflare() && !dnsHasPowerDns() ? 'Cloudflare'
+      : 'A stand-in site on this server, once DNS is Automatic';
     html += '<dt>Redirects to</dt><dd class="dns-change-detail">' + dnsEsc(site.redirect.target) + '</dd>' +
       '<dt>Status</dt><dd>' + site.redirect.status + (kept.length ? ' · keeps the ' + kept.join(' and ') : '') + '</dd>' +
-      '<dt>Served by</dt><dd>' + (plan && plan.zone ? 'Cloudflare' : site.redirect.standIn ? 'A stand-in site on this server' : dnsState.connections.length ? 'Cloudflare' : 'A stand-in site on this server, once DNS is Automatic') + '</dd>';
+      '<dt>Served by</dt><dd>' + served + '</dd>';
   }
   html += '<dt>Profile</dt><dd>' + (profile ? dnsEsc(profile.name) + ' · ' + (dnsState.automatic ? 'Automatic' : 'Ask first')
     : site.redirect ? 'No profile · ' + (dnsState.automatic ? 'Automatic' : 'Ask first') : '—') + '</dd>';
   if (plan && plan.zone) {
+    const providerLabel = plan.zone.provider === 'powerdns' ? 'PowerDNS' : 'Cloudflare';
     html += '<dt>Zone</dt><dd>' + dnsEsc(plan.zone.name) + ' · ' + dnsEsc(plan.zone.status) + '</dd>' +
-      '<dt>Through</dt><dd>' + dnsEsc(plan.zone.connection) + ' · ' + dnsEsc(plan.zone.account) + '</dd>';
+      '<dt>Through</dt><dd>' + dnsEsc(plan.zone.connection) + ' (' + providerLabel + ') · ' + dnsEsc(plan.zone.account) + '</dd>';
   }
   if (plan && plan.wildcard) html += '<dt>Covered by</dt><dd class="mono">' + dnsEsc(plan.wildcard) + '</dd>';
   else if (plan && !plan.problems.length && !plan.changes.length && plan.wildcardBlocked) {
@@ -454,9 +492,15 @@ function dnsEditRedirect(source) {
   field('keepPath').checked = redirect ? redirect.keepPath : true;
   field('keepQuery').checked = redirect ? redirect.keepQuery : true;
   field('profileId').innerHTML = dnsProfileChoices(redirect ? redirect.profileId : null);
-  CLP_ROOT.getElementById('dns-redirect-where').textContent = dnsState.connections.length
-    ? 'Cloudflare answers it: a Single Redirect rule and a proxied placeholder record, so this server is never reached.'
-    : 'With no Cloudflare connection, a static site on this server answers it and gets a Let\'s Encrypt certificate once the domain points here.';
+  const hasCf = dnsHasCloudflare();
+  const hasPdns = dnsHasPowerDns();
+  CLP_ROOT.getElementById('dns-redirect-where').textContent = hasCf && hasPdns
+    ? 'Cloudflare zones use a Single Redirect rule and placeholder record. PowerDNS zones keep a stand-in site on this server with A and AAAA records.'
+    : hasCf
+      ? 'Cloudflare answers it: a Single Redirect rule and a proxied placeholder record, so this server is never reached.'
+      : hasPdns
+        ? 'A static site on this server answers it and gets a Let\'s Encrypt certificate, while PowerDNS points the domain here.'
+        : 'With no DNS connection, a static site on this server answers it and gets a Let\'s Encrypt certificate once the domain points here.';
   CLP_ROOT.getElementById('dns-redirect-delete').hidden = !redirect;
   CLP_ROOT.getElementById('dns-redirect-heading').textContent = redirect ? 'Edit ' + redirect.source : 'Add redirect';
   CLP_ROOT.getElementById('dns-site-dialog').close();
@@ -478,13 +522,16 @@ async function dnsDeleteRedirect() {
   const source = CLP_ROOT.getElementById('dns-redirect-form').elements.namedItem('source').value;
   const site = dnsState.sites.find(function (candidate) { return candidate.domain === source; });
   dialog.close();
+  const cfServed = dnsHasCloudflare() && !(site.plan && site.plan.zone && site.plan.zone.provider === 'powerdns');
   // Once Automatic, deleting a redirect Cloudflare serves is a review of the rule it deletes.
-  if (!site.redirect.standIn && dnsState.automatic && dnsState.connections.length) return dnsPost('/api/redirects/delete', { source: source });
+  if (!site.redirect.standIn && dnsState.automatic && cfServed) return dnsPost('/api/redirects/delete', { source: source });
   const accepted = await confirmAction({
     title: 'Delete the redirect for ' + source + '?',
     text: site.redirect.standIn
       ? 'Its stand-in site is deleted from this server, so ' + source + ' stops redirecting.'
-      : 'DNS stops managing it. Its rule and records stay in Cloudflare and keep redirecting.',
+      : cfServed
+        ? 'DNS stops managing it. Its rule and records stay in Cloudflare and keep redirecting.'
+        : 'DNS stops managing it. Any records already in ' + dnsProviderLabel() + ' stay as they are.',
     confirmLabel: 'Delete', danger: true,
   });
   if (accepted) dnsPost('/api/redirects/delete', { source: source });
@@ -537,24 +584,75 @@ function dnsTakeOver(event) {
 
 // --- connections and settings -----------------------------------------------
 
-function dnsEditConnection(id) {
+function dnsSyncPowerDns() {
+  const form = CLP_ROOT.getElementById('dns-connection-form');
+  const create = form.elements.namedItem('createZones').checked;
+  const nsField = CLP_ROOT.getElementById('dns-pdns-ns-field');
+  if (nsField) nsField.hidden = !create;
+}
+
+function dnsSelectProvider(provider) {
+  const form = CLP_ROOT.getElementById('dns-connection-form');
+  const isEditing = Boolean(form.elements.namedItem('id').value);
+  const isPdns = provider === 'powerdns';
+  form.elements.namedItem('provider').value = isPdns ? 'powerdns' : 'cloudflare';
+  const cfPanel = CLP_ROOT.getElementById('dns-provider-cloudflare');
+  const pdnsPanel = CLP_ROOT.getElementById('dns-provider-powerdns');
+  cfPanel.hidden = isPdns;
+  pdnsPanel.hidden = !isPdns;
+  cfPanel.querySelectorAll('input, select, textarea, button').forEach(function (el) { el.disabled = isPdns; });
+  pdnsPanel.querySelectorAll('input, select, textarea, button').forEach(function (el) { el.disabled = !isPdns; });
+  CLP_ROOT.querySelectorAll('#dns-provider-tabs .dns-provider-tab').forEach(function (tab) {
+    tab.setAttribute('aria-selected', tab.dataset.provider === (isPdns ? 'powerdns' : 'cloudflare') ? 'true' : 'false');
+  });
+  form.elements.namedItem('token').required = !isPdns && !isEditing;
+  form.elements.namedItem('url').required = isPdns;
+  form.elements.namedItem('apiKey').required = isPdns && !isEditing;
+  if (!isEditing) {
+    CLP_ROOT.getElementById('dns-connection-heading').textContent = isPdns ? 'Connect PowerDNS' : 'Connect Cloudflare';
+  }
+  dnsSyncPowerDns();
+}
+
+function dnsEditConnection(id, preferredProvider) {
   const connection = id ? dnsState.connections.find(function (candidate) { return candidate.id === id; }) : null;
+  const provider = connection ? (connection.provider || 'cloudflare') : (preferredProvider || 'cloudflare');
   const form = CLP_ROOT.getElementById('dns-connection-form');
   form.reset();
   form.elements.namedItem('id').value = id;
-  form.elements.namedItem('label').value = connection ? connection.label : '';
+  form.elements.namedItem('label').value = connection && provider === 'cloudflare' ? connection.label : '';
   const token = form.elements.namedItem('token');
-  token.required = !connection;
   token.placeholder = connection ? 'Leave empty to keep the saved token' : 'Paste the token';
-  CLP_ROOT.getElementById('dns-token-permissions').textContent = dnsState.token.permissions.join(', ');
-  CLP_ROOT.getElementById('dns-token-link').href = dnsState.token.url;
+
+  form.elements.namedItem('url').value = connection && connection.url ? connection.url : '';
+  form.elements.namedItem('pdnsLabel').value = connection && provider === 'powerdns' ? connection.label : '';
+  form.elements.namedItem('serverId').value = connection && connection.serverId ? connection.serverId : 'localhost';
+  form.elements.namedItem('defaultTtl').value = String(connection && connection.defaultTtl ? connection.defaultTtl : 300);
+  form.elements.namedItem('createZones').checked = Boolean(connection && connection.createZones);
+  form.elements.namedItem('nameservers').value = connection && connection.nameservers ? connection.nameservers.join('\n') : '';
+  const apiKey = form.elements.namedItem('apiKey');
+  apiKey.placeholder = connection ? 'Leave empty to keep the saved key' : 'Paste the PowerDNS API key';
+
+  const tabs = CLP_ROOT.getElementById('dns-provider-tabs');
+  if (tabs) tabs.hidden = Boolean(connection);
+
+  const dialog = CLP_ROOT.getElementById('dns-connection-dialog');
+  const templates = dnsState.tokens || { dns: dnsState.token, panelGate: dnsState.token, both: dnsState.token };
+  dialog.dataset.cfTemplates = JSON.stringify(templates);
+  const dnsScope = CLP_ROOT.getElementById('dns-scope-dns');
+  const gateScope = CLP_ROOT.getElementById('dns-scope-gate');
+  if (dnsScope) dnsScope.checked = true;
+  if (gateScope) gateScope.checked = Boolean(dnsState.firewallEnabled);
+  cfSyncScope('dns');
   const ips = [dnsState.server.detected.ipv4, dnsState.server.detected.ipv6].filter(Boolean);
   // Space-separated, as Cloudflare's IP filter takes several addresses at once.
   CLP_ROOT.getElementById('dns-token-ips').textContent = ips.join(' ');
   CLP_ROOT.getElementById('dns-token-ips-hint').hidden = !ips.length;
-  CLP_ROOT.getElementById('dns-connection-heading').textContent = connection ? 'Edit ' + connection.label : 'Connect Cloudflare';
+  dnsSelectProvider(provider);
+  if (connection) CLP_ROOT.getElementById('dns-connection-heading').textContent = 'Edit ' + connection.label;
   form.querySelector('[type="submit"]').textContent = connection ? 'Save' : 'Connect';
   dnsOpen('dns-connection-dialog');
+  form.elements.namedItem(provider === 'powerdns' ? 'url' : 'token').focus();
 }
 
 function dnsCopyText(text) {
@@ -568,8 +666,25 @@ function dnsCopyText(text) {
 function dnsSaveConnection(event) {
   event.preventDefault();
   const form = event.currentTarget;
+  const provider = form.elements.namedItem('provider').value || 'cloudflare';
+  if (provider === 'powerdns') {
+    const nameservers = form.elements.namedItem('nameservers').value.split(/[\s,]+/).filter(Boolean);
+    dnsPost('/api/connections', {
+      id: form.elements.namedItem('id').value || null,
+      provider: 'powerdns',
+      label: form.elements.namedItem('pdnsLabel').value,
+      url: form.elements.namedItem('url').value.trim(),
+      apiKey: form.elements.namedItem('apiKey').value,
+      serverId: form.elements.namedItem('serverId').value.trim() || 'localhost',
+      defaultTtl: Number(form.elements.namedItem('defaultTtl').value || 300),
+      createZones: form.elements.namedItem('createZones').checked,
+      nameservers: nameservers,
+    }, CLP_ROOT.getElementById('dns-connection-dialog'));
+    return;
+  }
   dnsPost('/api/connections', {
     id: form.elements.namedItem('id').value || null,
+    provider: 'cloudflare',
     label: form.elements.namedItem('label').value,
     token: form.elements.namedItem('token').value,
   }, CLP_ROOT.getElementById('dns-connection-dialog'));
@@ -577,9 +692,10 @@ function dnsSaveConnection(event) {
 
 async function dnsRemoveConnection(id) {
   const connection = dnsState.connections.find(function (candidate) { return candidate.id === id; });
+  const isPdns = connection && connection.provider === 'powerdns';
   const accepted = await confirmAction({
     title: 'Remove ' + connection.label + '?',
-    text: 'Its token is deleted from this server. Zones only it reaches stop being managed; their records stay as they are.',
+    text: (isPdns ? 'Its API key' : 'Its token') + ' is deleted from this server. Zones only it reaches stop being managed; their records stay as they are.',
     confirmLabel: 'Remove', danger: true,
   });
   if (accepted) dnsPost('/api/connections/remove', { id: id });
@@ -731,9 +847,12 @@ function dnsAdoptPanelHost(name) {
 
 async function dnsRemovePanelHost() {
   const viaWildcard = Boolean(dnsState.panelHost.plan && dnsState.panelHost.plan.wildcard);
+  const panelProvider = dnsState.panelHost.plan && dnsState.panelHost.plan.zone && dnsState.panelHost.plan.zone.provider === 'powerdns'
+    ? 'PowerDNS'
+    : dnsProviderLabel();
   const accepted = await confirmAction({
     title: 'Remove the panel hostname?',
-    text: 'DNS stops managing ' + dnsState.panelHost.name + '.' + (viaWildcard ? ' ' : ' Any explicit records stay in Cloudflare, listed with the records of deleted sites, and ') + 'CloudPanel keeps its custom domain.',
+    text: 'DNS stops managing ' + dnsState.panelHost.name + '.' + (viaWildcard ? ' ' : ' Any explicit records stay in ' + panelProvider + ', listed with the records of deleted sites, and ') + 'CloudPanel keeps its custom domain.',
     confirmLabel: 'Remove', danger: true,
   });
   if (accepted) dnsPost('/api/panel-host', { name: null });

@@ -8,9 +8,11 @@ import type { PanelSite, StandIn, StandIns } from "../addons/dns/engine";
 import { seededPolicy } from "../addons/dns/presets";
 import { renderRedirect, type SiteVars } from "../addons/dns/records";
 import { foundRedirect, redirectRef, redirectRuleState, wholeHostHosts } from "../addons/dns/redirects";
-import { clpctlStandIns, readStandIns, standInBody, type StandInPaths } from "../addons/dns/stand-in";
+import { clpctlStandIns, readStandIns, retryStandInCertificates, standInBody, type StandInPaths } from "../addons/dns/stand-in";
+import { issuedForAll } from "../lib/panel-custom-domain";
 import { isStandInSite, ownsStandInSite } from "../lib/stand-ins";
-import type { CfRule } from "../addons/dns/cloudflare";
+import { removeCloudflareConnection, saveCloudflareConnection } from "../lib/cloudflare/store";
+import type { CfRule } from "../lib/cloudflare/api";
 import type { Redirect } from "../addons/dns/model";
 import { FakeCloudflare, FakeMailcow, hexId, MAILCOW_KEY, routed } from "./fixtures/dns-api";
 
@@ -388,6 +390,30 @@ describe("stand-in sites on this server", () => {
     expect(env.standIns.calls).toEqual(["create newyou.bg"]);
   });
 
+  test("adding or removing the last shared Cloudflare connection outside DNS holds redirects for review", async () => {
+    const env = setup();
+    const cfPaths = { stateDir: join(env.dir, "state", "cloudflare"), lockFile: join(env.dir, "dns.lock.cloudflare"), rootUid: process.getuid!() };
+    await env.automatic();
+    await env.confirmed(await env.act("save-redirect", found("misiodei.com", "https://misiodei.bg")));
+    expect(env.standIns.calls).toEqual(["create misiodei.com"]);
+
+    // Adding the first connection through Firewall/Manager (shared store directly) holds the stand-in redirect on the next DNS check.
+    terraformZone(env.cf, env.account, "misiodei.com", "https://misiodei.bg");
+    const saved = await saveCloudflareConnection({ token: TOKEN }, { paths: cfPaths, fetch: env.cf.fetch });
+    await env.act("check");
+    expect(env.standIns.calls).not.toContain("remove misiodei.com");
+    expect((await env.act("list")).sites[0]!.plan!.held).toBe(true);
+
+    // Confirm moving the redirect to Cloudflare, then remove the last connection through the shared store.
+    await env.confirmed(await env.act("assign", { domains: ["misiodei.com"], profileId: null }));
+    expect(env.standIns.calls).toContain("remove misiodei.com");
+    await removeCloudflareConnection(saved.id, { paths: cfPaths });
+    const callsBefore = env.standIns.calls.length;
+    await env.act("check");
+    expect(env.standIns.calls.length).toBe(callsBefore);
+    expect((await env.act("list")).sites[0]!.plan!.held).toBe(true);
+  });
+
   test("a stand-in whose vhost was never written is written on the next pass", async () => {
     const env = setup();
     await env.automatic();
@@ -602,6 +628,86 @@ esac
     expect(ownsStandInSite(mark, site)).toBe(false);
     expect(ownsStandInSite({ ...mark, siteId: 7 }, site)).toBe(true);
     expect(ownsStandInSite({ ...mark, siteId: 7 }, { id: 8, user: "hazon" })).toBe(false);
+  });
+
+  test("retryStandInCertificates checks coverage for every stand-in host before marking the job done", async () => {
+    const { paths } = setup({ "shop.example.com": { id: 21, user: "shop" } });
+    const dir = mkdtempSync(join(tmpdir(), "standin-cert-"));
+    dirs.push(dir);
+    const runSsl = (args: string[]) => {
+      const result = Bun.spawnSync(["openssl", ...args], { cwd: dir });
+      if (!result.success) throw new Error(result.stderr.toString());
+    };
+    runSsl(["req", "-x509", "-newkey", "rsa:2048", "-nodes", "-keyout", "ca.key", "-out", "ca.crt", "-days", "30", "-subj", "/CN=Test CA"]);
+    const makeCert = (name: string, sans: string[]) => {
+      runSsl(["req", "-newkey", "rsa:2048", "-nodes", "-keyout", `${name}.key`, "-out", `${name}.csr`, "-subj", `/CN=${sans[0]}`]);
+      writeFileSync(join(dir, `${name}.ext`), `subjectAltName=${sans.map((h) => `DNS:${h}`).join(",")}\n`);
+      runSsl(["x509", "-req", "-in", `${name}.csr`, "-CA", "ca.crt", "-CAkey", "ca.key", "-CAcreateserial", "-out", `${name}.crt`, "-days", "30", "-extfile", `${name}.ext`]);
+      return readFileSync(join(dir, `${name}.crt`), "utf8");
+    };
+    const primaryOnlyPem = makeCert("primary", ["shop.example.com"]);
+    const bothHostsPem = makeCert("both", ["shop.example.com", "www.shop.example.com"]);
+
+    writeFileSync(paths.file, JSON.stringify({
+      "shop.example.com": {
+        target: "https://dest.example",
+        status: 301,
+        keepPath: true,
+        keepQuery: true,
+        hosts: ["shop.example.com", "www.shop.example.com"],
+        siteUser: "shop",
+        siteId: 21,
+        createdAt: 0,
+        certificate: { attempts: 0, nextAt: 0, done: false },
+      },
+    }), { mode: 0o600 });
+
+    // Primary cert already exists (not self-signed), but does not cover www.shop.example.com: must issue and re-verify.
+    let currentPem = primaryOnlyPem;
+    const issued: { domain: string; aliases: string[] }[] = [];
+    await retryStandInCertificates(
+      paths,
+      (domain, hosts) => domain === "shop.example.com" ? issuedForAll(currentPem, hosts) : null,
+      async (domain, aliases) => {
+        issued.push({ domain, aliases });
+        // First attempt fails to include the alias in the resulting cert: job stays open.
+        return true;
+      },
+      1_000,
+    );
+    expect(issued).toEqual([{ domain: "shop.example.com", aliases: ["www.shop.example.com"] }]);
+    expect(readStandIns(paths)["shop.example.com"]!.certificate.done).toBe(false);
+
+    // Next due attempt installs a cert covering both hosts: job marks done.
+    const nextAt = readStandIns(paths)["shop.example.com"]!.certificate.nextAt;
+    await retryStandInCertificates(
+      paths,
+      (domain, hosts) => domain === "shop.example.com" ? issuedForAll(currentPem, hosts) : null,
+      async (domain, aliases) => {
+        issued.push({ domain, aliases });
+        currentPem = bothHostsPem;
+        return true;
+      },
+      nextAt,
+    );
+    expect(issued).toHaveLength(2);
+    expect(readStandIns(paths)["shop.example.com"]!.certificate.done).toBe(true);
+
+    // If a certificate already covers every host when retry resets, it is kept without calling issue().
+    const reset = readStandIns(paths);
+    reset["shop.example.com"]!.certificate = { attempts: 0, nextAt: 0, done: false };
+    writeFileSync(paths.file, JSON.stringify(reset), { mode: 0o600 });
+    await retryStandInCertificates(
+      paths,
+      (domain, hosts) => domain === "shop.example.com" ? issuedForAll(currentPem, hosts) : null,
+      async (domain, aliases) => {
+        issued.push({ domain, aliases });
+        return true;
+      },
+      nextAt + 1_000,
+    );
+    expect(issued).toHaveLength(2);
+    expect(readStandIns(paths)["shop.example.com"]!.certificate.done).toBe(true);
   });
 });
 

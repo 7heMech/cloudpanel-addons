@@ -1,9 +1,9 @@
 import { Database } from "bun:sqlite";
 import { afterEach, describe, expect, test } from "bun:test";
-import { chmodSync, mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
+import { chmodSync, mkdirSync, mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { connectionPermissions } from "../addons/dns/access";
+import { connectionPermissions } from "../lib/cloudflare/access";
 import { seededPolicy } from "../addons/dns/presets";
 import { dnsTokenHolds, executeDnsAction, panelSites, type DnsReply, type ProvisionReply, type SiteDnsStatus } from "../addons/dns/action";
 import { detectAddresses, type Addresses } from "../addons/dns/addresses";
@@ -180,7 +180,7 @@ describe("connecting Cloudflare", () => {
     expect(reply.accounts.map((account) => account.label)).toEqual(["Church (Church, Agency)", "Agency (Church, Agency)"]);
     expect(JSON.stringify(reply)).not.toContain(SECOND_TOKEN);
     expect(JSON.stringify(await env.act("list"))).not.toContain(SECOND_TOKEN);
-    const secrets = join(env.dir, "state", "secrets.json");
+    const secrets = join(env.dir, "state", "cloudflare", "secrets.json");
     expect(statSync(secrets).mode & 0o777).toBe(0o600);
     expect(readFileSync(secrets, "utf8")).toContain(SECOND_TOKEN);
   });
@@ -563,7 +563,7 @@ describe("what each token holds", () => {
     await env.connect();
     await env.act("assign", { domains: ["example.com"], profileId: "web" });
     const reply = await env.act("check");
-    const status = JSON.parse(readFileSync(join(env.dir, "state", "status.json"), "utf8"));
+    const status = JSON.parse(readFileSync(join(env.dir, "state", "cloudflare", "status.json"), "utf8"));
     expect(status.connections[0].refused).toEqual(["Zone Settings: Edit"]);
     const access = reply.connections[0]!.access!;
     expect(access.rows.find((row) => row.label === "Zone Settings: Edit")).toMatchObject({ held: "no", detail: "Refused by Cloudflare" });
@@ -600,7 +600,7 @@ describe("what each token holds", () => {
     await env.connect();
     await env.act("assign", { domains: ["example.com"], profileId: "web" });
     await env.act("check");
-    const refused = () => JSON.parse(readFileSync(join(env.dir, "state", "status.json"), "utf8")).connections[0].refused;
+    const refused = () => JSON.parse(readFileSync(join(env.dir, "state", "cloudflare", "status.json"), "utf8")).connections[0].refused;
     expect(refused()).toEqual(["Zone Settings: Edit"]);
     refuse = false;
     await env.act("assign", { domains: ["shop.example.com"], profileId: "web" });
@@ -635,7 +635,7 @@ describe("what each token holds", () => {
     const first = (await env.connect()).connections[0]!.id;
     await env.act("save-connection", { token: SECOND_TOKEN, label: "Church" });
     await env.act("save-connection", { id: first, label: "Renamed" });
-    const status = JSON.parse(readFileSync(join(env.dir, "state", "status.json"), "utf8"));
+    const status = JSON.parse(readFileSync(join(env.dir, "state", "cloudflare", "status.json"), "utf8"));
     expect(status.connections.map((connection: { label: string }) => connection.label)).toEqual(["Renamed", "Church"]);
   });
 
@@ -796,6 +796,7 @@ describe("zones and new sites", () => {
     const env = setup();
     const connected = await env.connect();
     const id = connected.connections[0]!.id;
+    await env.act("set-automatic", { automatic: false });
     const policyFile = join(env.dir, "state", "policy.json");
     const saved = JSON.parse(readFileSync(policyFile, "utf8"));
     delete saved.automatic;
@@ -1299,7 +1300,7 @@ test("an attempt cut short still counts toward the certificate limit", async () 
 test("state that cannot be read while redacting does not hide the failure", async () => {
   const env = setup();
   await env.connect();
-  chmodSync(join(env.dir, "state", "secrets.json"), 0o666);
+  chmodSync(join(env.dir, "state", "cloudflare", "secrets.json"), 0o666);
   await expect(env.act("set-automatic", { automatic: "sometimes" })).rejects.toThrow("Say whether DNS is Automatic");
 });
 
@@ -1581,5 +1582,41 @@ describe("wildcard DNS", () => {
     await env3.connect(SECOND_TOKEN);
     env3.sites.splice(env3.sites.findIndex((entry) => entry.domain === "shop.example.com"), 1);
     expect((await env3.act("list")).orphans).toEqual([{ domain: "shop.example.com", zone: "example.com", records: 2 }]);
+  });
+
+  test("skips a Panel-gate-only token for DNS writes when a DNS-capable connection reaches the same zone, and preserves unmigrated legacy credentials", async () => {
+    const env = setup();
+    const gateOnlyToken = "cf-gate-only-token-0123456789abc";
+    env.cf.token(gateOnlyToken, {
+      owner: "user",
+      accounts: [env.agency],
+      policies: [policy(["DNS Read", "Zone Read", "SSL and Certificates Write", "API Tokens Read"], { "com.cloudflare.api.account.zone.*": "*" })],
+    });
+    // Connect Panel-gate-only first, DNS-capable second.
+    await env.connect(gateOnlyToken);
+    await env.connect(TOKEN);
+    await env.act("assign", { domains: ["example.com"], profileId: "web" });
+    await env.automatic();
+    expect(env.records()).toContain("A example.com 203.0.113.10 proxied");
+
+    // Mutating Mailcow on an unmigrated legacy store does not wipe legacy Cloudflare connections/tokens.
+    const legacy = setup();
+    const stateDir = join(legacy.dir, "state");
+    mkdirSync(stateDir, { recursive: true });
+    writeFileSync(join(stateDir, "policy.json"), JSON.stringify({
+      ...seededPolicy(),
+      connections: [{ id: "cf-legacy01", label: "Legacy" }],
+      mailcow: { url: "https://mail.example.net", host: "mail.example.net", sharedMailbox: "" },
+    }), { mode: 0o600 });
+    writeFileSync(join(stateDir, "secrets.json"), JSON.stringify({
+      cloudflare: { "cf-legacy01": TOKEN },
+      mailcowKey: MAILCOW_KEY,
+    }), { mode: 0o600 });
+    await legacy.act("remove-mailcow", {});
+    expect(JSON.parse(readFileSync(join(stateDir, "policy.json"), "utf8")).connections).toEqual([{ id: "cf-legacy01", label: "Legacy" }]);
+    expect(JSON.parse(readFileSync(join(stateDir, "secrets.json"), "utf8"))).toEqual({
+      cloudflare: { "cf-legacy01": TOKEN },
+      mailcowKey: "",
+    });
   });
 });

@@ -2,16 +2,89 @@
 
 ## Scope
 
-DNS keeps each CloudPanel site's Cloudflare records to a profile, so that
-creating a site is enough to publish it, and serves redirect domains. Mailcow is an optional integration of a
-profile: the site's domain, its DKIM key and a shared mailbox's permission to
-send as it. The addon is meant to replace infrastructure-as-code for these
-records rather than coexist with it: it follows the panel's site list, and once
-it is Automatic what it writes cannot drift.
+DNS keeps each CloudPanel site's records to a profile across Cloudflare or
+PowerDNS Authoritative API v1, so that creating a site is enough to publish it,
+and serves redirect domains. Mailcow is an optional integration of a profile
+that sets up the site's domain, its DKIM key, and a shared mailbox's permission
+to send as it. The addon replaces infrastructure-as-code for these records
+rather than coexisting with it. It follows the panel's site list, and once it is
+Automatic what it writes cannot drift.
 
 Nothing about one operator's setup is built in. The server's addresses are
-detected, the Mailcow host, key policy and mailbox are settings, and the
+detected, the Mailcow host, key policy, and mailbox are settings, and the
 records are rows anyone can edit.
+
+## Provider adapter and capabilities
+
+`addons/dns/provider.ts` defines the provider-neutral `DnsProvider` interface
+and `ProviderCapabilities` flags (`proxy`, `zoneSettings`, `zoneRules`,
+`edgeRedirects`, `createZone`, `autoTtl`, and `comments`). Before `diffRecords`
+runs, `normalizeRenderedForProvider` strips `proxied` when `!capabilities.proxy`
+and resolves `ttl === 1` (Auto) to `provider.defaultTtl` when
+`!capabilities.autoTtl`.
+
+- **Cloudflare (`addons/dns/cloudflare-provider.ts`).** Wraps
+  `lib/cloudflare/api.ts`, sets all seven capability flags to `true`, applies
+  per-record POST/PATCH/DELETE calls in order, and exposes zone settings,
+  rulesets, and Single Redirect rules behind `.edge`.
+- **PowerDNS (`addons/dns/powerdns.ts`).** Talks to PowerDNS Authoritative
+  Server HTTP API v1 over `ProviderHttp` (`redirect: "error"`, `X-API-Key`
+  header, 15-second deadline, 8 MiB response cap). Capabilities have `proxy`,
+  `zoneSettings`, `zoneRules`, `edgeRedirects`, `autoTtl`, and `comments` set to
+  `false`, and `createZone` driven by the connection's `createZones` switch.
+  - **Transport policy.** `parsePowerDnsUrl` accepts `https://` for any valid
+    host and allows plain `http://` only for `localhost`, IPv4 loopback
+    (`127.0.0.0/8`), RFC 1918 private ranges (`10.0.0.0/8`, `172.16.0.0/12`,
+    `192.168.0.0/16`), RFC 6598 CGNAT (`100.64.0.0/10`, used by Tailscale), and
+    IPv6 loopback (`::1`) or ULA (`fc00::/7`). Public plain `http://`, embedded
+    credentials, query strings, and fragments are rejected. Editing a
+    connection's URL without supplying a new API key is refused so a saved key
+    is never sent to a different host.
+  - **Canonical names and formatting.** Outgoing zone names, RRset names, and
+    CNAME, MX, and SRV targets append a trailing dot; incoming names strip it.
+    MX formats as `<priority> <target>.`, SRV as
+    `<priority> <weight> <port> <target>.`, CAA as `<flags> <tag> "<value>"`,
+    and TXT splits into master-file quoted strings of at most 255 UTF-8 octets
+    per chunk without breaking multi-byte Unicode code points.
+  - **Atomic RRset patching and synthetic IDs.** `applyRecords` groups touched
+    `(name, type)` pairs, merges creates, updates, and deletes against the full
+    zone inventory so unmanaged sibling records in the same RRset (such as
+    verification TXT records beside SPF) remain untouched, and sends one
+    `PATCH /api/v1/servers/{serverId}/zones/{zoneId}` using `REPLACE` with the
+    RRset TTL or `DELETE` when no records remain. Because PowerDNS records have
+    no UUIDs, each parsed record gets a deterministic synthetic ID
+    `pdns:<sha256(type|name|priority|content)>` (disambiguated by raw wire text
+    for non-canonical TXT formatting so unmanaged siblings stay verbatim) for
+    orphan tracking in `managed.json`. PowerDNS Authoritative API v1 exposes
+    only RRset-level `REPLACE` and `DELETE` with no member-level mutation or
+    optimistic concurrency header; `clp-addons` serializes its own reads and
+    writes under `dns.lock` and preserves unmanaged enabled and disabled RRset
+    siblings read in the same pass in their original wire form, so external
+    writers should not concurrently edit RRsets that DNS manages. Zone maps are
+    keyed by `connectionId:zoneId` so two PowerDNS servers hosting identically
+    named zones never collide and trigger a zone choice.
+  - **Zone creation.** When `createZones` is enabled with configured
+    nameservers, `createZone` sends `POST /api/v1/servers/{serverId}/zones` with
+    `kind: "Native"` and canonical nameservers to fit MySQL-replicated PowerDNS
+    deployments that do not use AXFR.
+- **Follow-on providers.** Future Hetzner Cloud DNS (`api.hetzner.cloud/v1/zones`
+  RRset API) and netcup CCP JSON-RPC DNS adapters implement `DnsProvider` with
+  the same capability model and RRset/batch merging without changing `engine.ts`
+  or `records.ts`.
+
+Cloudflare-only UI controls hide when no Cloudflare connection exists (the Proxy
+column, the Cloudflare zone disclosure, and Find redirects in Cloudflare). When
+both Cloudflare and PowerDNS connections exist, proxy and zone controls note
+that they apply to Cloudflare zones only.
+
+On zones where `capabilities.edgeRedirects` is `false`, redirect domains keep
+their local stand-in site active on this server and write unproxied `A` and
+`AAAA` records pointing to this server's addresses instead of Cloudflare's
+`AAAA 100::` placeholder, while still applying non-web profile rows such as MX,
+SPF, and DKIM. On zones where `capabilities.proxy` is `false`, the panel
+hostname stays unproxied, skips the Cloudflare ACME rule, hands off to matching
+unproxied wildcards, and makes no proxy change when CloudPanel issues its
+certificate.
 
 ## Profiles
 
@@ -311,38 +384,79 @@ it. The state is recorded only once Cloudflare holds the plan, so a write that
 failed is tried again, and a site or redirect domain with the name keeps the
 watcher from waiting on DNS's lock. Under Ask first nothing is written.
 
+### Custom Domain helper on Admin Settings
+
+DNS also injects a `custom-domain-dns` helper (`addons/dns/inject/custom-domain.ts`,
+`required: false`) after the Custom Domain input group in
+`Admin/Settings/index.html.twig`. None of its controls carry a `name` attribute,
+so Symfony never rejects extra form fields. On page load the script warms the
+CSRF cookie via `GET /addons/dns/api/session` and reads
+`GET /addons/dns/api/panel-host-helper` (admin verb `panel-host-helper`), which
+answers from local state alone (`connected`, `automatic`, `hasCloudflare`,
+`hasPowerDns`, `zones`, `zoneProviders`, `panelHost`, and `serverIps`) with no
+DNS lock and no provider call. When no Cloudflare or PowerDNS connection exists,
+the script renders nothing.
+
+When a connection exists, the helper adds a `Random` button beside the Custom
+Domain field, attaches a `<datalist>` of connected zones, and adds an inline
+checkbox that auto-checks when the entered hostname belongs to a connected zone
+and unchecks with a note otherwise (adjusting proxy wording to the resolved
+zone's provider). Submitting CloudPanel's form with the checkbox ticked sends
+`POST /addons/dns/api/panel-host` with `{ name, prepareOnly: true }`, which
+plans only the panel hostname's `A`/`AAAA` records (unproxied on Cloudflare,
+with its ACME rule) against live provider records in both Automatic and Ask
+first modes without touching other sites, Mailcow, or other profiles' zone
+settings. A confirmation `<dialog>` shows the planned changes or problems;
+confirming sends `POST /addons/dns/api/confirm`, writes only the panel hostname
+while leaving `policy.automatic` unchanged, and returns the updated panel plan
+including `zone.status`, `zone.nameServers`, and `zoneCreated` when the pass
+just created the zone. If `zone.status` is not `"active"` or `zoneCreated` is
+true (for example a newly created PowerDNS zone that reports `"active"` before
+registrar delegation), the helper stops before submitting CloudPanel's form and
+renders `lib/nameserver-notice.ts` with per-nameserver copy buttons. When an
+existing active zone is ready (either with the written records or covered by an
+unobstructed unproxied wildcard), the helper submits CloudPanel's native form
+once, bypassing its own submit listener.
+
 ## Cloudflare connections
 
-A connection is one API token. The page links to Cloudflare's user-owned token
+Cloudflare connections are shared across DNS and Firewall in the root-owned
+`/var/lib/clp-addons/cloudflare/` store (`lib/cloudflare/store.ts`), managed by
+the manager's `/addons/api/cloudflare` routes as well as DNS's Settings tab.
+Both addons use the same Connect Cloudflare dialog
+(`lib/cloudflare/connect-dialog.ts`), where the operator selects scopes for DNS
+records, Panel gate, or both, and the template link updates live.
+
+A connection is one API token. The dialog links to Cloudflare's user-owned token
 template (`/profile/api-tokens` with `permissionGroupKeys`, `accountId=*` and
 `zoneId=all`), so the operator chooses accounts and zones on Cloudflare's own
-screen and never types an account ID. The permissions are DNS Edit, Zone Edit, Account Settings
-Read, Single Redirect Edit and API Tokens Read, then the union of what the
-saved profiles use: Zone Settings Edit, Config Rules Edit and Zone WAF Edit for
-the features that need them. Single Redirect Edit is asked for before any
-redirect domain exists, so finding the redirects to take over works with the
-token first pasted. API Tokens Read lets the token read its own permissions
-(below); it exposes token metadata, never a secret. Zone Edit is asked for whatever the profiles use, since Automatic creates
-missing zones; Cloudflare refuses a zone
-create without it by naming an internal permission, `account.zone.create`,
-which the page reports as Zone Edit. The URL uses the keys in Cloudflare's
+screen and never types an account ID. For DNS records the permissions are DNS
+Edit, Zone Edit, Account Settings Read, Single Redirect Edit and API Tokens
+Read, then the union of what the saved profiles use: Zone Settings Edit, Config
+Rules Edit and Zone WAF Edit. Single Redirect Edit is included before any
+redirect domain exists so finding redirects to take over works with the first
+token. API Tokens Read lets the token read its own permissions; it exposes token
+metadata, never a secret. Zone Edit is included for Automatic zone creation;
+Cloudflare refuses a zone create without it by naming `account.zone.create`,
+which the page reports as Zone Edit. Selecting Panel gate adds SSL and
+Certificates Edit, Access: Apps and Policies Edit, and Access: Organizations,
+Identity Providers, and Groups Edit. The URL uses the keys in Cloudflare's
 [template reference](https://developers.cloudflare.com/fundamentals/api/how-to/account-owned-token-template/),
-plus `config_settings`, `zone_waf` and `dynamic_redirect` (Single Redirect),
-which the reference leaves out but are the dashboard's own permission names. The dashboard drops an unknown key without saying so, which is
-why the page also lists the permissions. The template has no parameter for
-Client IP Address Filtering, so the page shows the server's detected addresses
-to paste there. Their API permissions are
+plus `config_settings`, `zone_waf` and `dynamic_redirect`, which the reference
+leaves out but the dashboard accepts. The dashboard drops an unknown key without
+warning, so the dialog also lists each permission by name. Because the template
+has no parameter for Client IP Address Filtering, the dialog shows the server's
+detected addresses with copy buttons. Their API permissions are
 [Config Settings Write and Zone WAF Write](https://developers.cloudflare.com/ruleset-engine/rulesets-api/update/),
 and Single Redirect's is
 [Dynamic URL Redirects Write](https://developers.cloudflare.com/rules/url-forwarding/single-redirects/create-api/).
 Cloudflare refuses a missing permission with a bare "Authentication error", so
 a refused settings or rules read or write is reported with the permission it needs.
 
-`addons/dns/token.ts` is the one list of permissions: each one's dashboard
-label, template key, the API permission group names that grant it, whether it
-is checked per zone, per account or for the token's owner, and what in the
-profiles uses it. The template, the refusal messages and the page's table all
-come from it.
+`lib/cloudflare/tokens.ts` is the single list of permissions: each entry records
+its dashboard label, template key, API permission group names, scope, consumer
+(`dns`, `firewall`, or `shared`), and what uses it. The token template, refusal
+messages, and permission tables in DNS and Firewall all derive from it.
 
 ### What a token holds
 
@@ -395,21 +509,21 @@ never as missing, and left out of the template; its row reads "Not added" until
 the token holds it, or "—" when the token cannot read itself. None is optional
 yet; Firewall's login jails and panel gate add theirs when they use them.
 
-`connectionPermissions(stored, profiles)` in `addons/dns/access.ts` gives the
-Setup checklist, from a connection's entry in `status.json`, whether the token
-read itself and the required permissions it is missing (or was refused), by
-name.
+`connectionPermissions(stored, profiles, options)` in `lib/cloudflare/access.ts`
+gives the Setup checklist, from a connection's entry in
+`/var/lib/clp-addons/cloudflare/status.json`, whether the token read itself and
+which required permissions it is missing or was refused, by name.
 
 Cloudflare has no address for editing one token, so **Edit in Cloudflare**
 opens the owner's token list: `/profile/api-tokens`, or
 `/{account}/api-tokens` for an account-owned token.
 
-Other addons ask through `dnsTokenHolds(connectionId, permission, zone)` in
-`addons/dns/action.ts`, which answers from the stored read without a network
-call, checking each permission at its own scope (the zone, its account, or the
-token's owner: the user, or an account-owned token's account). It returns null
-when that is not known: no check yet, a token no longer active or that cannot
-read itself, or a policy not understood that could change the answer.
+Other addons ask through `cloudflareTokenHolds(connectionId, permission, zone)`
+in `lib/cloudflare/store.ts`, which answers from the stored read without a
+network call, checking each permission at its own scope (the zone, its account,
+or the token's owner). It returns null when that is not known: no check yet, a
+token no longer active or that cannot read itself, or a policy not understood
+that could change the answer.
 
 Zone-scoped IP Access rules (`/zones/{zone_id}/firewall/access_rules/rules`)
 need **Zone → Firewall Services → Edit**, API name Firewall Services Write
@@ -425,9 +539,9 @@ Edit on the custom domain's zone (API name SSL and Certificates Write, key
 `ssl_and_certificates`) and, on its account, Access: Apps and Policies: Edit
 (Access: Apps and Policies Write, `access`) and Access: Organizations, Identity
 Providers, and Groups: Edit (Access: Organizations, Identity Providers, and
-Groups Write, `access_acct`). They are listed as optional, never as missing,
-and stay out of the template: a token without them is fine until the gate is
-turned on, and the gate checks them itself.
+Groups Write, `access_acct`). In DNS's permission table they appear as optional
+and stay out of the DNS-only template unless the operator selects Panel gate in
+the connect dialog; Firewall's own table marks them required.
 
 A token is verified before it is saved (`/user/tokens/verify`, or the account
 route for an account-owned one, using a zone's account when account listing is
@@ -580,15 +694,18 @@ repeat every check and are already on the site's plan.
 
 ## State, secrets and removal
 
-`/var/lib/clp-addons/dns/` holds `policy.json`, `secrets.json`, the last check,
-tracked records, a pending review, automatic SSL requests, the stand-in sites
-and the change log,
-each root-owned,
-mode `0600`, replaced atomically, and refused if it is not a root-owned regular
-file of that mode. Tokens and the Mailcow key are read only by the root action
-and travel only in request headers: never in arguments, page replies or logs,
-and error text is redacted of them. A saved Mailcow key is kept only for the
-Mailcow address it was saved with.
+`/var/lib/clp-addons/cloudflare/` holds the shared Cloudflare connections
+(`connections.json`), their API tokens (`secrets.json`), and their last check
+reports (`status.json`). `/var/lib/clp-addons/dns/` holds `policy.json`
+(including PowerDNS connection settings), `secrets.json` (PowerDNS API keys and
+the Mailcow API key), the last check, tracked records, a pending review,
+automatic SSL requests, the stand-in sites, and the change log. Each file is
+root-owned, mode `0600`, replaced atomically, and refused if it is not a
+root-owned regular file of that mode. Tokens, PowerDNS API keys, and the
+Mailcow key are read only by root actions and travel only in request headers,
+never in arguments, page replies, or logs, and error text is redacted of them. A
+saved PowerDNS API key or Mailcow key is kept only for the URL it was saved
+with.
 
 The records a site DNS writes has as wanted are tracked by id and their full
 record values, including priority, proxy, TTL and comment. A settled enforcing

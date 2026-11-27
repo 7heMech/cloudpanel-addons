@@ -3,12 +3,16 @@ import { errorMessage } from "../../lib/errors";
 import { addonConfigFile, addonStateDir } from "../../lib/paths";
 import { existsSync, lstatSync, readFileSync, rmSync, rmdirSync } from "node:fs";
 import { writeFileAtomic } from "../../lib/atomic-write";
+import { withFileLockSync } from "../../lib/file-lock";
 import { isTrustedFile } from "../../lib/trusted-file";
 import { log } from "../../lib/log";
+import { ROOT_LOCKS_FILE, ROOT_LOCKS_LOCK, UntrustedLockFile, lockedAddons, writeLockedAddons } from "../../lib/root-locks";
 import { DEFAULT_CLOUDFLARE_ACTION_PATHS } from "./action";
 import { DEFAULT_FIREWALL_PATHS } from "./protocols";
+import { DEFAULT_VISITOR_IP_PATHS, MAPS_MARKER } from "./visitor-ip";
 
 export const LEGACY_PROTOCOLS_FILE = `${addonStateDir("system-tweaks")}/firewall.json`;
+export const LEGACY_SYSTEM_TWEAKS_SETTINGS = `${addonStateDir("system-tweaks")}/settings.json`;
 
 interface SavedFile { path: string; text: string; mode: number; uid: number; gid: number }
 function snapshot(path: string): SavedFile | null {
@@ -90,6 +94,171 @@ export function migrateFirewallProtocols(enable: () => void): (() => void) | nul
   } catch (error) {
     undo();
     log.warn(`System Tweaks' firewall protocols were not moved to Firewall: ${errorMessage(error)}`);
+    return null;
+  }
+}
+
+export interface VisitorIpMigrationPaths {
+  systemTweaksSettings: string;
+  systemTweaksConfig: string;
+  firewallConfig: string;
+  firewallPolicy: string;
+  firewallStateDir: string;
+  visitorIpState: string;
+  /** The Nginx map visitor IPs are applied with. */
+  visitorIpMaps: string;
+  /** Root's addon locks file, so a System Tweaks lock carries to Firewall. */
+  locksFile: string;
+  locksLock: string;
+  rootUid: number;
+  /** Whether Firewall was already enabled before earlier migrations in this pass created firewall.conf. */
+  firewallWasEnabled?: boolean;
+}
+
+const DEFAULT_VISITOR_IP_MIGRATION_PATHS: VisitorIpMigrationPaths = {
+  systemTweaksSettings: LEGACY_SYSTEM_TWEAKS_SETTINGS,
+  systemTweaksConfig: addonConfigFile("system-tweaks"),
+  firewallConfig: addonConfigFile("firewall"),
+  firewallPolicy: DEFAULT_CLOUDFLARE_ACTION_PATHS.policyFile,
+  firewallStateDir: addonStateDir("firewall"),
+  visitorIpState: DEFAULT_VISITOR_IP_PATHS.stateFile,
+  visitorIpMaps: DEFAULT_VISITOR_IP_PATHS.maps,
+  locksFile: ROOT_LOCKS_FILE,
+  locksLock: ROOT_LOCKS_LOCK,
+  rootUid: process.getuid?.() ?? 0,
+};
+
+/** System Tweaks' settings, when they parse as an object. */
+function legacySettings(text: string): Record<string, unknown> | null {
+  try {
+    const parsed = JSON.parse(text) as unknown;
+    return parsed && typeof parsed === "object" && !Array.isArray(parsed) ? parsed as Record<string, unknown> : null;
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * System Tweaks applied visitor IPs by default and saved the setting only once
+ * an operator changed one. Its map still on disk while Firewall has no choice
+ * of its own is that default left behind, whether Firewall was already enabled
+ * or not, so state and root's lock still carry over once.
+ */
+function appliedByDefault(p: VisitorIpMigrationPaths): boolean {
+  if (!existsSync(p.systemTweaksConfig) || existsSync(p.visitorIpState)) return false;
+  try {
+    if (!lstatSync(p.visitorIpMaps).isFile()) return false;
+    return readFileSync(p.visitorIpMaps, "utf8").startsWith(`${MAPS_MARKER}\n`);
+  } catch {
+    return false;
+  }
+}
+
+/** Whether `migrateVisitorIp` has anything to move. */
+export function visitorIpMigrationPending(paths: Partial<VisitorIpMigrationPaths> = {}): boolean {
+  const p = { ...DEFAULT_VISITOR_IP_MIGRATION_PATHS, ...paths };
+  try {
+    const stored = legacySettings(readFileSync(p.systemTweaksSettings, "utf8"));
+    if (stored && Object.hasOwn(stored, "cloudflareVisitorIp")) return true;
+  } catch { /* no saved settings */ }
+  return appliedByDefault(p);
+}
+
+/**
+ * Moves System Tweaks' `cloudflareVisitorIp` setting to Firewall, or its
+ * unsaved default where System Tweaks applied it. When System Tweaks was
+ * enabled with visitor IPs on and Firewall was disabled, enables Firewall with
+ * `autoEnableNewSites: false` so sites behind Cloudflare keep seeing real
+ * visitor IPs without turning on Cloudflare-only site rules. Returns an
+ * in-memory rollback closure, or null when there was nothing to move.
+ */
+export function migrateVisitorIp(
+  enable: () => void,
+  paths: Partial<VisitorIpMigrationPaths> = {},
+): (() => void) | null {
+  const p = { ...DEFAULT_VISITOR_IP_MIGRATION_PATHS, ...paths };
+  let source: SavedFile | null;
+  try {
+    source = snapshot(p.systemTweaksSettings);
+  } catch (error) {
+    log.warn(`System Tweaks' Cloudflare visitor IPs setting was not moved to Firewall: ${errorMessage(error)}`);
+    return null;
+  }
+  const stored = source ? legacySettings(source.text) : null;
+  const saved = stored !== null && Object.hasOwn(stored, "cloudflareVisitorIp");
+  if (!saved && !appliedByDefault(p)) return null;
+  const enabled = !saved || stored.cloudflareVisitorIp !== false;
+  const systemTweaksOn = existsSync(p.systemTweaksConfig);
+  const directoryExisted = existsSync(p.firewallStateDir);
+  const originals = new Map<string, SavedFile | null>();
+  let carriedLock = false;
+  const keep = (path: string) => { if (!originals.has(path)) originals.set(path, snapshot(path)); };
+  const undo = () => {
+    if (carriedLock) {
+      try {
+        withFileLockSync(p.locksLock, 15, "another lock or unlock is still running", () => {
+          const current = lockedAddons(p.locksFile, p.rootUid);
+          if (current.includes("firewall")) {
+            writeLockedAddons(current.filter((name) => name !== "firewall"), p.locksFile, p.rootUid);
+          }
+        });
+      } catch (lockError) {
+        log.warn(`Firewall lock could not be put back: ${errorMessage(lockError)}`);
+      }
+      carriedLock = false;
+    }
+    for (const [path, before] of [...originals].reverse()) {
+      if (before) restore(before); else rmSync(path, { force: true });
+    }
+    if (!directoryExisted && existsSync(p.firewallStateDir)) {
+      try { rmdirSync(p.firewallStateDir); } catch { /* non-empty */ }
+    }
+  };
+  try {
+    const existing = snapshot(p.visitorIpState);
+    if (!existing) {
+      keep(p.visitorIpState);
+      writeFileAtomic(p.visitorIpState, `${JSON.stringify({ version: 1, enabled }, null, 2)}\n`, { mode: 0o600, createParent: true });
+    }
+    if (saved && source) {
+      const { cloudflareVisitorIp: _dropped, ...rest } = stored;
+      keep(source.path);
+      restore({ ...source, text: `${JSON.stringify(rest, null, 2)}\n` });
+    }
+
+    if (!existing && enabled && systemTweaksOn && !existsSync(p.firewallConfig) && p.firewallWasEnabled !== true) {
+      const policy = snapshot(p.firewallPolicy);
+      let parsed: Record<string, unknown> | null = null;
+      try { parsed = policy ? JSON.parse(policy.text) as Record<string, unknown> : null; } catch { parsed = null; }
+      if (parsed?.autoEnableNewSites === true) {
+        keep(p.firewallPolicy);
+        restore({ ...policy!, text: `${JSON.stringify({ ...parsed, autoEnableNewSites: false }, null, 2)}\n` });
+        log.warn("Firewall's Enable on new sites was switched off: it was saved while Firewall was disabled");
+      }
+      keep(p.firewallConfig);
+      enable();
+    }
+    // Root's System Tweaks lock used to protect set-visitor-ip. Firewall's only
+    // lockable verb is set-visitor-ip, so carrying the lock to Firewall keeps
+    // visitor IPs protected without freezing any other Firewall switch.
+    if (existsSync(p.locksFile)) {
+      try {
+        withFileLockSync(p.locksLock, 15, "another lock or unlock is still running", () => {
+          const current = lockedAddons(p.locksFile, p.rootUid);
+          if (current.includes("system-tweaks") && !current.includes("firewall")) {
+            writeLockedAddons([...current, "firewall"], p.locksFile, p.rootUid);
+            carriedLock = true;
+          }
+        });
+      } catch (lockError) {
+        // A damaged lock file already fails closed for every lockable addon, including Firewall.
+        if (!(lockError instanceof UntrustedLockFile)) throw lockError;
+      }
+    }
+    return undo;
+  } catch (error) {
+    undo();
+    log.warn(`System Tweaks' Cloudflare visitor IPs setting was not moved to Firewall: ${errorMessage(error)}`);
     return null;
   }
 }

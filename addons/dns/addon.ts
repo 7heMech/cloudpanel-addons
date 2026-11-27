@@ -9,9 +9,12 @@ import { DNS_ACTIONS, DNS_SETUP } from "./setup";
 export const DNS_ADDON: AddonDefinition = {
   name: "dns",
   title: "DNS",
-  description: "Keep each site's Cloudflare DNS to a profile of records, with Mailcow set up for its mail.",
+  description: "Keep each site's DNS records to a profile across Cloudflare or PowerDNS, with Mailcow set up for its mail.",
   added: "2.0.0-rc.1",
   changed: [
+    { in: "2.3.0-rc.1", note: "CloudPanel's Admin → Settings Custom Domain form now offers a Random hostname button, connected-zone suggestions, and a checkbox to write the DNS record before CloudPanel requests its Let's Encrypt certificate." },
+    { in: "2.3.0-rc.1", note: "DNS now supports PowerDNS Authoritative API v1 alongside Cloudflare. Profiles are provider-neutral: Cloudflare-only proxy and zone settings hide when no Cloudflare connection is configured, and redirects on PowerDNS keep local stand-in sites with server A/AAAA records." },
+    { in: "2.3.0-rc.1", note: "Cloudflare connections are now shared with Firewall. The Connect Cloudflare dialog lets you create one token covering DNS, Firewall's Panel gate, or both." },
     { in: "2.2.0-rc.3", note: "DNS now splits into Sites, Redirects, Profiles, Settings and Activity tabs (with a first-run card before Cloudflare is connected). Automatic sync lives under Settings, Mailcow and Server addresses fold into disclosures, and saving a Panel hostname requires a Cloudflare connection." },
     { in: "2.2.0-rc.3", note: "DNS deletes a subdomain site's own A, AAAA and CNAME records once an unobstructed matching wildcard covers the site. New installs' Web preset writes an apex-only *.{domain} wildcard instead of www. Panel hostname offers a random label generator and hands off to a proxied wildcard after the certificate is issued." },
     { in: "2.2.0-rc.1", note: "Panel hostname: DNS points the name you give CloudPanel's custom domain at this server, and proxies it once CloudPanel has its certificate." },

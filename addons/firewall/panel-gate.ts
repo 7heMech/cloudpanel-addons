@@ -15,15 +15,15 @@ import { withOperationLock, withOperationLockSync } from "../../lib/operation-lo
 import { nginxFileChange, trustedVhost, withNginxTransaction, withRecoveryFailures } from "../../lib/nginx-transaction";
 import { panelCustomDomain, PANEL_CUSTOM_DOMAIN_FILE, PANEL_CUSTOM_DOMAIN_VHOST } from "../../lib/panel-custom-domain";
 import { withPanelDb } from "../../lib/panel-db";
-import { addonStateDir, LOCK_DIR, nginxLayout, PANEL_DB, ROOT_UID } from "../../lib/paths";
+import { addonStateDir, CLOUDFLARE_STATE_DIR, LOCK_DIR, nginxLayout, PANEL_DB, ROOT_UID } from "../../lib/paths";
 import { ProviderError, type ApiFetch } from "../../lib/provider-http";
 import { readState, writeState } from "../../lib/root-state";
 import { panelUserGid, panelUserUid } from "../../lib/sso-auth";
-import { grants, selfReadPermission, targetFor, tokenListUrl, type TokenOwner } from "../dns/access";
-import { CloudflareApi, type CfZone } from "../dns/cloudflare";
-import { parseSecrets } from "../dns/model";
-import { wildcardSource } from "../dns/records";
-import { PERMISSIONS, type PermissionName } from "../dns/token";
+import { grants, selfReadPermission, targetFor, tokenListUrl, type TokenOwner } from "../../lib/cloudflare/access";
+import { CloudflareApi, type CfZone } from "../../lib/cloudflare/api";
+import { listCloudflareSecrets } from "../../lib/cloudflare/store";
+import { PERMISSIONS, type PermissionName } from "../../lib/cloudflare/tokens";
+import { wildcardSource } from "../../lib/dns-name";
 import {
   hasPanelGate, hasSitesGate, panelGateMisfit, sitesGateMisfit, withoutPanelGate, withoutSitesGate, withPanelGate, withSitesGate,
 } from "./panel-gate-nginx";
@@ -44,7 +44,7 @@ interface GatePaths {
   /** Where the platform's operation lock lives, which cli/inject.ts holds while it rewrites the panel's vhost. */
   operationLockDir: string;
   certDir: string;
-  dnsDir: string;
+  cloudflareDir: string;
   panelDb: string;
   customDomain: string;
   customDomainVhost: string;
@@ -65,7 +65,7 @@ export const DEFAULT_GATE_PATHS: GatePaths = {
   lockFile: `${LOCK_DIR}/firewall-panel-gate.lock`,
   operationLockDir: LOCK_DIR,
   certDir: "/etc/clp-addons/panel-gate",
-  dnsDir: addonStateDir("dns"),
+  cloudflareDir: CLOUDFLARE_STATE_DIR,
   panelDb: PANEL_DB,
   customDomain: PANEL_CUSTOM_DOMAIN_FILE,
   customDomainVhost: PANEL_CUSTOM_DOMAIN_VHOST,
@@ -242,14 +242,7 @@ function generateCertificate(paths: GatePaths, options: GateOptions): { cert: st
 interface Connection { id: string; label: string; token: string }
 
 function connections(paths: GatePaths): Connection[] {
-  const secrets = parseSecrets(readState(`${paths.dnsDir}/secrets.json`, paths.rootUid, () => ({})));
-  const policy = readState<{ connections?: unknown } | null>(`${paths.dnsDir}/policy.json`, paths.rootUid, () => null);
-  const labels = new Map<string, string>();
-  for (const entry of Array.isArray(policy?.connections) ? policy.connections : []) {
-    const { id, label } = (entry ?? {}) as { id?: unknown; label?: unknown };
-    if (typeof id === "string") labels.set(id, typeof label === "string" ? label : id);
-  }
-  return Object.entries(secrets.cloudflare).map(([id, token]) => ({ id, label: labels.get(id) ?? id, token }));
+  return listCloudflareSecrets({ stateDir: paths.cloudflareDir, rootUid: paths.rootUid });
 }
 
 function apiFor(connection: Connection, options: GateOptions): CloudflareApi {
@@ -258,22 +251,19 @@ function apiFor(connection: Connection, options: GateOptions): CloudflareApi {
 
 interface Found { connection: Connection; api: CloudflareApi; zone: CfZone }
 
-/** The longest active zone any DNS connection reaches for the hostname. */
-async function findZone(hostname: string, list: Connection[], options: GateOptions): Promise<{ found: Found | null; errors: string[] }> {
-  let found: Found | null = null;
+/** Every connection reaching the longest active zone for the hostname, in the order they were saved. */
+async function findZone(hostname: string, list: Connection[], options: GateOptions): Promise<{ candidates: Found[]; errors: string[] }> {
   const errors: string[] = [];
   const read = await Promise.all(list.map(async (connection) => {
     const api = apiFor(connection, options);
     try { return { connection, api, zones: await api.zones() }; }
     catch (error) { errors.push(`${connection.label}: ${errorMessage(error)}`); return { connection, api, zones: [] }; }
   }));
-  for (const { connection, api, zones } of read) {
-    for (const zone of zones) {
-      if (zone.status !== "active" || (hostname !== zone.name && !hostname.endsWith(`.${zone.name}`))) continue;
-      if (!found || zone.name.length > found.zone.name.length) found = { connection, api, zone };
-    }
-  }
-  return { found, errors };
+  const matches = read.flatMap(({ connection, api, zones }) => zones
+    .filter((zone) => zone.status === "active" && (hostname === zone.name || hostname.endsWith(`.${zone.name}`)))
+    .map((zone) => ({ connection, api, zone })));
+  const longest = Math.max(0, ...matches.map(({ zone }) => zone.name.length));
+  return { candidates: matches.filter(({ zone }) => zone.name.length === longest), errors };
 }
 
 /** The gate's permissions the token lacks for this zone, or why that cannot be told. */
@@ -344,21 +334,24 @@ async function check(options: GateOptions): Promise<GateCheck> {
 
   const list = connections(paths);
   if (!list.length) {
-    problems.push(`Connect a Cloudflare token in DNS that reaches the zone of ${hostname}.`);
+    problems.push(`Connect a Cloudflare token below that reaches the zone of ${hostname}.`);
     return result;
   }
-  const { found, errors } = await findZone(hostname, list, options);
-  if (!found) {
+  const { candidates, errors } = await findZone(hostname, list, options);
+  if (!candidates.length) {
     problems.push(errors.length
       ? `Cloudflare could not be read: ${errors.join("; ")}`
-      : `No DNS connection's token reaches a Cloudflare zone for ${hostname}.`);
+      : `No Cloudflare connection's token reaches a Cloudflare zone for ${hostname}.`);
     return result;
   }
+  // The first connection whose token holds the gate's permissions; otherwise the first, whose lack is reported.
+  const held = await Promise.allSettled(candidates.map(({ api, zone }) => missingPermissions(api, zone)));
+  const chosen = Math.max(0, held.findIndex((entry) => entry.status === "fulfilled" && !entry.value.missing.length));
+  const found = candidates[chosen]!;
+  const permissions = held[chosen]!;
   result.found = found;
   const { api, zone, connection } = found;
-  const [records, permissions, mode] = await Promise.allSettled([
-    api.recordsAt(zone.id, hostname), missingPermissions(api, zone), api.setting(zone.id, "ssl"),
-  ]);
+  const [records, mode] = await Promise.allSettled([api.recordsAt(zone.id, hostname), api.setting(zone.id, "ssl")]);
   if (records.status === "rejected") problems.push(`${hostname}'s records could not be read: ${errorMessage(records.reason)}`);
   else {
     const proxyable = records.value.filter((record) => ["A", "AAAA", "CNAME"].includes(record.type));
@@ -384,7 +377,7 @@ async function check(options: GateOptions): Promise<GateCheck> {
   else {
     const { missing, owner } = permissions.value;
     if (owner) result.editUrl = tokenListUrl(owner);
-    if (missing.length) problems.push(`The token of DNS connection ${connection.label} lacks ${missing.join(", ")}. Add ${missing.length === 1 ? "it" : "them"} to the token in Cloudflare.`);
+    if (missing.length) problems.push(`The token of Cloudflare connection ${connection.label} lacks ${missing.join(", ")}. Add ${missing.length === 1 ? "it" : "them"} to the token in Cloudflare.`);
   }
   if (mode.status === "rejected") {
     notes.push(`The zone's SSL mode could not be read; it must be Full or Full (strict), or the panel stops answering at ${hostname}.`);
@@ -411,7 +404,7 @@ function reviewOf(enabled: boolean, fields: Omit<GateReview, "digest">): GateRev
 }
 
 /** Where an operator deletes what the gate made, when its token cannot. */
-const LEFTOVER_BY_HAND = (hostname: string | undefined) => `If the DNS connection's token can no longer delete them, delete the Access applications and policies named ${hostname ? `“${markerFor(hostname)}” and “${acmeMarkerFor(hostname)}”` : "after the gate"} under Zero Trust → Access, and the certificate under SSL/TLS → Origin Server → Authenticated Origin Pulls for that hostname, in Cloudflare's dashboard.`;
+const LEFTOVER_BY_HAND = (hostname: string | undefined) => `If the Cloudflare connection's token can no longer delete them, delete the Access applications and policies named ${hostname ? `“${markerFor(hostname)}” and “${acmeMarkerFor(hostname)}”` : "after the gate"} under Zero Trust → Access, and the certificate under SSL/TLS → Origin Server → Authenticated Origin Pulls for that hostname, in Cloudflare's dashboard.`;
 
 function leftoverText(state: GateState): string {
   const what = [
@@ -626,10 +619,10 @@ async function cleanUpCloudflare(paths: GatePaths, state: GateState, options: Ga
     return [];
   }
   const connection = connections(paths).find((entry) => entry.id === state.connectionId);
-  // Another DNS connection that reaches the same zone and account can delete them too.
+  // Another Cloudflare connection that reaches the same zone and account can delete them too.
   const api = connection ? apiFor(connection, options)
     : fallback && fallback.zone.id === state.zoneId && fallback.zone.account.id === state.accountId ? fallback.api : null;
-  if (!api || !state.zoneId || !state.accountId) return ["no DNS connection reaches the zone they are in"];
+  if (!api || !state.zoneId || !state.accountId) return ["no Cloudflare connection reaches the zone they are in"];
   const failures: string[] = [];
   const step = async (label: string, run: () => Promise<unknown>, done: () => void) => {
     try { await run(); done(); } catch (error) { failures.push(`${label}: ${errorMessage(error)}`); }
@@ -757,14 +750,14 @@ export function keepPanelGateNginx(options: GateOptions = {}): string | null {
 /** What Cloudflare has of a gate that is on, against what it should; syncs the policy's emails with the panel users. */
 async function cloudflareDrift(paths: GatePaths, state: GateState, options: GateOptions): Promise<{ drift: string[]; synced: boolean }> {
   const connection = connections(paths).find((entry) => entry.id === state.connectionId);
-  if (!connection) return { drift: ["The DNS connection the gate was turned on with is gone, so Cloudflare cannot be checked."], synced: false };
+  if (!connection) return { drift: ["The Cloudflare connection the gate was turned on with is gone, so Cloudflare cannot be checked."], synced: false };
   const api = apiFor(connection, options);
   const drift: string[] = [];
   let synced = false;
   const zone = { id: state.zoneId!, name: "", status: "active", nameServers: [], account: { id: state.accountId!, name: "" } };
   try {
     const { missing } = await missingPermissions(api, zone);
-    if (missing.length) drift.push(`The token of DNS connection ${connection.label} lacks ${missing.join(", ")}.`);
+    if (missing.length) drift.push(`The token of Cloudflare connection ${connection.label} lacks ${missing.join(", ")}.`);
   } catch (error) { drift.push(`The token's permissions could not be read: ${errorMessage(error)}`); }
   try {
     const auth = await api.hostnameAuth(state.zoneId!, state.hostname!);

@@ -1,9 +1,10 @@
 import type { ActionNeeded, ActionNeededCheck, SetupCheck, SetupStep } from "../../lib/addon-definition";
+import { connectionPermissions, type StoredAccess } from "../../lib/cloudflare/access";
+import { hasSharedCloudflareStore, readCloudflareStore } from "../../lib/cloudflare/store";
 import { panelCustomDomainCertificate } from "../../lib/panel-custom-domain";
-import { addonStateDir } from "../../lib/paths";
+import { addonStateDir, CLOUDFLARE_STATE_DIR } from "../../lib/paths";
 import { readState } from "../../lib/root-state";
 import { panelUserUid } from "../../lib/sso-auth";
-import { connectionPermissions, type StoredAccess } from "./access";
 import { tokenProfiles } from "./engine";
 import { parsePolicy, parseSecrets, type Policy } from "./model";
 import { seededPolicy } from "./presets";
@@ -17,24 +18,44 @@ interface DnsSetupState {
   reports: ({ id: string; active: boolean; error: string | null } & StoredAccess)[];
 }
 
-function dnsState(stateDir = addonStateDir("dns"), rootUid = 0): DnsSetupState {
+function dnsState(stateDir = addonStateDir("dns"), rootUid = 0, cloudflareDir = CLOUDFLARE_STATE_DIR): DnsSetupState {
   const raw = readState<unknown>(`${stateDir}/policy.json`, rootUid, () => null);
+  const policy = raw === null ? seededPolicy() : parsePolicy(raw);
+  const cfPaths = { stateDir: cloudflareDir, rootUid };
+  const hasSharedCf = hasSharedCloudflareStore(cfPaths);
+  const cf = hasSharedCf ? readCloudflareStore(cfPaths) : null;
   const secrets = parseSecrets(readState(`${stateDir}/secrets.json`, rootUid, () => ({})));
   const status = readState<{ connections?: DnsSetupState["reports"] }>(`${stateDir}/status.json`, rootUid, () => ({}));
+  const statusReports = Array.isArray(status.connections) ? status.connections : [];
+  const cfConnections = cf ? cf.connections : policy.connections;
+  const cfTokens = cf ? cf.tokens : secrets.cloudflare;
+  const cfReports = cf ? cf.reports : statusReports.filter((entry) => !entry.id.startsWith("pdns-"));
+  const pdnsIds = new Set((policy.powerdns ?? []).map((connection) => connection.id));
+  const pdnsReports = statusReports.filter((entry) => pdnsIds.has(entry.id));
+  const tokens = new Set([
+    ...Object.entries(cfTokens).filter(([, token]) => token).map(([id]) => id),
+    ...Object.entries(secrets.powerdns ?? {}).filter(([, key]) => key).map(([id]) => id),
+  ]);
   return {
-    policy: raw === null ? seededPolicy() : parsePolicy(raw),
-    tokens: new Set(Object.entries(secrets.cloudflare).filter(([, token]) => token).map(([id]) => id)),
-    reports: Array.isArray(status.connections) ? status.connections : [],
+    policy: { ...policy, connections: cfConnections },
+    tokens,
+    reports: [...cfReports, ...pdnsReports],
   };
 }
 
 export function connectionCheck(state: DnsSetupState): SetupCheck {
-  const saved = state.policy.connections.filter((connection) => state.tokens.has(connection.id));
-  if (!saved.length) return { state: "todo", reason: "No Cloudflare connection yet" };
+  const savedCf = state.policy.connections.filter((connection) => state.tokens.has(connection.id));
+  const savedPdns = (state.policy.powerdns ?? []).filter((connection) => state.tokens.has(connection.id));
+  const saved = [...savedCf, ...savedPdns];
+  if (!saved.length) return { state: "todo", reason: "No DNS connection yet" };
   const failing = saved.map((connection) => state.reports.find((report) => report.id === connection.id))
     .find((report) => report && !report.active && report.error);
   if (failing && saved.length === 1) return { state: "todo", reason: failing.error! };
-  return { state: "done", reason: `Cloudflare: ${saved.map((connection) => connection.label).join(", ")}` };
+  const parts = [
+    savedCf.length ? `Cloudflare: ${savedCf.map((connection) => connection.label).join(", ")}` : "",
+    savedPdns.length ? `PowerDNS: ${savedPdns.map((connection) => connection.label).join(", ")}` : "",
+  ].filter(Boolean);
+  return { state: "done", reason: parts.join("; ") };
 }
 
 export function panelHostCheck(custom: { name: string; issued: boolean } | undefined, panelHost: string | null, connected = true): SetupCheck {
@@ -58,7 +79,9 @@ export function panelHostCheck(custom: { name: string; issued: boolean } | undef
 }
 
 export function automaticCheck(state: DnsSetupState): SetupCheck {
-  if (!state.policy.connections.some((connection) => state.tokens.has(connection.id))) return { state: "todo", reason: "Connect DNS first" };
+  const hasConnection = state.policy.connections.some((connection) => state.tokens.has(connection.id))
+    || (state.policy.powerdns ?? []).some((connection) => state.tokens.has(connection.id));
+  if (!hasConnection) return { state: "todo", reason: "Connect DNS first" };
   if (!state.policy.automatic) return { state: "todo", reason: "DNS asks before it changes records" };
   const profile = state.policy.profiles.find((candidate) => candidate.id === state.policy.defaultProfileId);
   return profile
@@ -66,7 +89,7 @@ export function automaticCheck(state: DnsSetupState): SetupCheck {
     : { state: "todo", reason: "New sites get no profile" };
 }
 
-/** One item per connection whose token lacks a permission DNS requires; optional ones never count. */
+/** One item per Cloudflare connection whose token lacks a permission DNS requires; optional ones never count. */
 export function permissionActions(state: DnsSetupState): ActionNeeded[] {
   return state.policy.connections.flatMap((connection) => {
     const report = state.reports.find((entry) => entry.id === connection.id);
@@ -90,7 +113,8 @@ function panelHostContext(): { panelHost: string | null; connected: boolean } {
     const state = dnsState();
     return {
       panelHost: state.policy.panelHost,
-      connected: state.policy.connections.some((connection) => state.tokens.has(connection.id)),
+      connected: state.policy.connections.some((connection) => state.tokens.has(connection.id))
+        || (state.policy.powerdns ?? []).some((connection) => state.tokens.has(connection.id)),
     };
   } catch {
     return { panelHost: null, connected: false };
@@ -100,7 +124,7 @@ function panelHostContext(): { panelHost: string | null; connected: boolean } {
 export const DNS_SETUP: SetupStep[] = [
   {
     id: "dns-connection", level: "domain", title: "Connect DNS", href: `${PAGE}#dns-connection`,
-    why: "Connect Cloudflare once so DNS can manage site records, wildcards and the panel hostname automatically.",
+    why: "Connect Cloudflare or PowerDNS once so DNS can manage site records, wildcards and the panel hostname automatically.",
     check: () => connectionCheck(dnsState()),
   },
   {

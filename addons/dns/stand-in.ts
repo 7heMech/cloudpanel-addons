@@ -48,7 +48,7 @@ function standInReturn(redirect: StandIn): string {
   return redirect.keepPath && !redirect.keepQuery ? `if ($request_uri ~ "^([^?]*)") {\n      ${line}\n    }` : line;
 }
 
-export function standInBody(source: string, redirect: StandIn): string {
+export function standInBody(source: string, redirect: StandIn, hosts = redirect.hosts ?? standInHosts(source)): string {
   return `server {
   listen 80;
   listen [::]:80;
@@ -60,7 +60,7 @@ export function standInBody(source: string, redirect: StandIn): string {
   http3 off;
   {{ssl_certificate_key}}
   {{ssl_certificate}}
-  server_name ${standInHosts(source).join(" ")};
+  server_name ${hosts.join(" ")};
   {{root}}
 
   {{nginx_access_log}}
@@ -116,19 +116,27 @@ export function clpctlStandIns(
   const current: Record<string, StandIn> = {};
   for (const [domain, record] of Object.entries(records)) {
     if (ours(domain, record)) {
-      current[domain] = { target: record.target, status: record.status, keepPath: record.keepPath, keepQuery: record.keepQuery, ...record.incomplete && { incomplete: true } };
+      current[domain] = {
+        target: record.target, status: record.status, keepPath: record.keepPath, keepQuery: record.keepQuery,
+        ...record.incomplete && { incomplete: true },
+        ...record.hosts && { hosts: record.hosts },
+      };
     }
   }
-  const spec = (redirect: Redirect): StandIn => ({ target: redirect.target, status: redirect.status, keepPath: redirect.keepPath, keepQuery: redirect.keepQuery });
+  const spec = (redirect: Redirect, hosts?: string[]): StandIn => ({
+    target: redirect.target, status: redirect.status, keepPath: redirect.keepPath, keepQuery: redirect.keepQuery,
+    hosts: hosts ?? standInHosts(redirect.source),
+  });
   return {
     current,
-    async create(redirect) {
+    async create(redirect, hosts) {
       if (panelSite(redirect.source)) throw new Error(`CloudPanel already has a site ${redirect.source}`);
+      const effectiveHosts = hosts ?? standInHosts(redirect.source);
       const siteUser = standInUser(redirect.source);
       const saved = readStandIns(paths);
       // Incomplete until the vhost redirects: a site whose cleanup fails is kept,
       // and a later pass has to write its vhost rather than take it as done.
-      saved[redirect.source] = { ...spec(redirect), incomplete: true, siteUser, createdAt: now(), certificate: { attempts: 0, nextAt: now(), done: false } };
+      saved[redirect.source] = { ...spec(redirect, effectiveHosts), incomplete: true, siteUser, createdAt: now(), certificate: { attempts: 0, nextAt: now(), done: false } };
       saveStandIns(paths, saved);
       try {
         clpctl(paths, ["site:add:static", `--domainName=${redirect.source}`, `--siteUser=${siteUser}`,
@@ -138,7 +146,7 @@ export function clpctlStandIns(
         const created = readStandIns(paths);
         created[redirect.source] = { ...created[redirect.source]!, siteId: site.id };
         saveStandIns(paths, created);
-        replaceSiteVhost(paths.vhost, redirect.source, standInBody(redirect.source, redirect));
+        replaceSiteVhost(paths.vhost, redirect.source, standInBody(redirect.source, redirect, effectiveHosts));
         const done = readStandIns(paths);
         delete done[redirect.source]!.incomplete;
         saveStandIns(paths, done);
@@ -158,12 +166,19 @@ export function clpctlStandIns(
         throw error;
       }
     },
-    async update(redirect) {
+    async update(redirect, hosts) {
       if (!ours(redirect.source)) throw new Error(`${redirect.source} is no longer DNS's stand-in site`);
-      replaceSiteVhost(paths.vhost, redirect.source, standInBody(redirect.source, redirect));
+      const effectiveHosts = hosts ?? standInHosts(redirect.source);
+      replaceSiteVhost(paths.vhost, redirect.source, standInBody(redirect.source, redirect, effectiveHosts));
       const saved = readStandIns(paths);
       if (saved[redirect.source]) {
-        saved[redirect.source] = { ...saved[redirect.source]!, ...spec(redirect) };
+        const previousHosts = saved[redirect.source]!.hosts ?? standInHosts(redirect.source);
+        const hostsChanged = previousHosts.length !== effectiveHosts.length || previousHosts.some((host, index) => host !== effectiveHosts[index]);
+        saved[redirect.source] = {
+          ...saved[redirect.source]!,
+          ...spec(redirect, effectiveHosts),
+          ...(hostsChanged ? { certificate: { attempts: 0, nextAt: now(), done: false } } : {}),
+        };
         delete saved[redirect.source]!.incomplete;
       }
       saveStandIns(paths, saved);
@@ -178,24 +193,31 @@ export function clpctlStandIns(
 }
 
 /**
- * Asks Let's Encrypt for each stand-in still on CloudPanel's self-signed
- * certificate, when it is due. It succeeds once the domain points here, which
- * is the operator's to do, so attempts go on daily rather than stopping.
+ * Asks Let's Encrypt for each stand-in whose certificate does not yet cover
+ * every effective host (whether still self-signed or missing a newly added
+ * alias), when it is due. It succeeds once the domain points here, which is the
+ * operator's to do, so attempts go on daily rather than stopping.
  */
 export async function retryStandInCertificates(
-  paths: StandInPaths, selfSigned: (domain: string) => boolean | null, issue: Issue, now: number,
+  paths: StandInPaths,
+  certificateCovers: (domain: string, hosts: string[]) => boolean | null,
+  issue: Issue,
+  now: number,
 ): Promise<void> {
   const records = readStandIns(paths);
   for (const [domain, record] of Object.entries(records)) {
-    const placeholder = selfSigned(domain);
-    if (placeholder === null || record.certificate.done) continue;
-    if (!placeholder) {
+    const hosts = record.hosts ?? standInHosts(domain);
+    const covered = certificateCovers(domain, hosts);
+    if (covered === null || record.certificate.done) continue;
+    if (covered) {
       record.certificate.done = true;
     } else if (now >= record.certificate.nextAt) {
       record.certificate.attempts++;
       record.certificate.nextAt = now + CERTIFICATE_DELAYS[Math.min(record.certificate.attempts, CERTIFICATE_DELAYS.length) - 1]!;
       saveStandIns(paths, records);
-      if (await issue(domain, standInHosts(domain).filter((host) => host !== domain)) && selfSigned(domain) === false) record.certificate.done = true;
+      if (await issue(domain, hosts.filter((host) => host !== domain)) && certificateCovers(domain, hosts) === true) {
+        record.certificate.done = true;
+      }
     }
     saveStandIns(paths, records);
   }

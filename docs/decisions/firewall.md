@@ -1,10 +1,11 @@
 # Firewall
 
 Firewall holds who may reach the server's sites and ports: CloudPanel's
-per-site "Allow traffic from Cloudflare only" setting, across every site, a
-protocol for each rule on CloudPanel's own Firewall page, a gate in front of
-the panel, and Hetzner Cloud Firewalls or netcup firewall policies that let
-only Cloudflare reach the web ports and the panel.
+per-site "Allow traffic from Cloudflare only" setting across every site,
+Cloudflare visitor IPs for site access logs and PHP, a protocol for each rule on
+CloudPanel's own Firewall page, a Cloudflare Access gate in front of the panel,
+and Hetzner Cloud Firewalls or netcup firewall policies that let only Cloudflare
+reach the web ports and the panel.
 
 ## Cloudflare-only sites
 
@@ -42,10 +43,12 @@ selection that would change nothing is reported and not sent. Nothing is
 restored afterwards. A per-site switch acts immediately without confirmation,
 because turning one site off is the ordinary correction after a bulk change.
 The page uses the shared `.section-shell` to split Cloudflare only (the site
-table with "Enable on new sites" directly under it), Panel gate, Protocols, and
-Cloud firewall when a matching Hetzner Cloud Firewall or netcup firewall card is
-present. Provider cards appear only on that cloud host or when a credential is
-saved, and the Cloud firewall section is omitted when neither is present.
+table with "Enable on new sites" and Cloudflare visitor IPs directly under it),
+Panel gate (the gate card and the shared Cloudflare connections card),
+Protocols, and Cloud firewall when a matching Hetzner Cloud Firewall or netcup
+firewall card is present. Provider cards appear only on that cloud host or when
+a credential is saved, and the Cloud firewall section is omitted when neither is
+present.
 
 Selection checkboxes stay separate from the per-site switch, and the
 selected-scope actions are unavailable until something is selected. On desktop,
@@ -78,6 +81,70 @@ and recorded.
 Turning a site off in the addon records its hostname as an exception, and the
 check does not re-enable an exception. Turning the site on removes it. Enabling
 or disabling the policy does not change existing sites.
+
+## Cloudflare visitor IPs
+
+Behind Cloudflare's proxy a site's `$remote_addr` is the Cloudflare edge, and
+behind a Cloudflare Tunnel it is `127.0.0.1` or `::1`, where cloudflared on this
+server connects from. CloudPanel's `main` log format and PHP's `REMOTE_ADDR` use
+`$remote_addr`, and its `cloudflare` format logs `CF-Connecting-IP` from any
+client, even one the Cloudflare-only rules refuse.
+
+`$remote_addr` cannot come straight from `CF-Connecting-IP`. Nginx's real-IP
+directives apply one header to every server, and CloudPanel's templates proxy
+PHP from the front server on 80 and 443 to a backend on `127.0.0.1:8080`,
+passing every request header on. A backend that trusted loopback for
+`CF-Connecting-IP` would accept a direct visitor's forged header. Nginx also
+checks the Cloudflare-only `allow` list against the rewritten address, so every
+visitor would fail that check.
+
+**Cloudflare visitor IPs** defaults to on, stored in
+`/var/lib/clp-addons/firewall/visitor-ip.json`. It leaves `$remote_addr` alone
+and defines `$clp_visitor_ip` in
+`/etc/nginx/sites-enabled/00-clp-addons-visitor-ip.conf`, built by
+`lib/visitor-ip.ts` from CloudPanel's `/etc/nginx/cloudflare/ips`. The variable
+holds a well-formed `CF-Connecting-IP` when Cloudflare set the header, and
+`$remote_addr` otherwise. Cloudflare set it when `$realip_remote_addr` is:
+
+- one of Cloudflare's ranges;
+- loopback on port 80 or 443, where cloudflared connects;
+- loopback on another port, where CloudPanel's front server or Varnish
+  connects, with an `X-Real-IP` matching one of those addresses.
+
+On such a hop, `$clp_visitor_ip` falls back to that `X-Real-IP`. The front
+server sets it from its own `$remote_addr`, so the sites' `nginx.conf` stops
+trusting `127.0.0.1`, and the setting comments that line out with the
+`#clp-addons:hop` marker followed by a space. A tunnel visitor's `X-Real-IP` is
+ignored on 80 and 443.
+
+The map cannot distinguish CloudPanel's front server from another local client
+on the backend port, so a tunnel pointed at port 8080, or a local user
+connecting there, can still set `X-Real-IP`. The operator guide tells users to
+point a tunnel at port 80 or 443.
+
+The setting points the `main` and `cloudflare` log formats in `nginx.conf` and
+`REMOTE_ADDR` in `fastcgi_params` at `$clp_visitor_ip`. Nginx error logs,
+`allow`/`deny`, basic auth, and rate limits keep `$remote_addr`. In the backend
+that is `127.0.0.1` for every visitor. CloudPanel's vhosts apply `$remote_addr`
+only in the front server, so the operator guide advises keeping manual IP rules
+in the front server block.
+
+Both files are `nginx-common` conffiles, declared in `FIREWALL_ADDON.conffiles`
+so `apt-hook pre` releases them before an `nginx-common` upgrade, one at a time
+and without a reload. `nginx.conf` counts as edited when it contains either
+`$clp_visitor_ip` or the hop marker. Every matching line is edited, and the map
+stays while either file still references it. Activation, anchor repair, and the
+15-minute repair reapply the edits and rebuild the map when CloudPanel's IP list
+changes. Switching off restores the lines and removes the map. Switching on
+refuses a map file clp-addons did not write, and switching off leaves such a
+file alone. Root's lock covers `set-visitor-ip`, because switching it off
+reopens tunnel IP forgery (`clp-addons lock firewall`). Maintenance Mode builds
+its bypass address from the same `lib/visitor-ip.ts`.
+
+`bun tests/integration/integration-visitor-ip.ts` runs real Nginx in Docker with
+the edited files, verifying that Cloudflare and a local tunnel pass the visitor
+address while direct clients, malformed headers, and `X-Real-IP` sent through a
+tunnel keep the connecting address.
 
 ## Protocols
 
@@ -231,10 +298,16 @@ CloudPanel's custom domain is a server block of the sites' Nginx,
   checked the same way. The challenge then reaches the server as any other
   request does: Cloudflare connects to 443 with the origin-pull certificate,
   which is per hostname rather than per path, and the panel serves
-  `/.well-known` itself. DNS's `clp_dns_acme` rule, Full SSL for that path,
-  keeps that connection working while the certificate is expired or not yet
-  issued; Full still presents the origin-pull certificate. Port 80 is not
-  involved: the custom domain's server only redirects there, and
+  `/.well-known` itself. While the origin certificate is still valid, normal
+  renewals succeed over Full (strict) through that Access Bypass without DNS
+  enabled. If the origin certificate is already expired or not yet issued under
+  Full (strict), Cloudflare refuses the origin handshake unless DNS's
+  `clp_dns_acme` rule (Full SSL for `/.well-known/acme-challenge/*`, installed
+  when DNS manages the zone with `acmeFullSsl` on) is present; Full still
+  presents the origin-pull certificate. Without DNS, recovering an expired
+  certificate under Full (strict) requires switching SSL mode temporarily to
+  Full or turning the gate off over SSH with `clp-addons firewall panel-gate off`.
+  Port 80 is not involved: the custom domain's server only redirects there, and
   `ssl_verify_client` applies to TLS connections alone.
 
 The Access token is not checked at the origin. A request reaches the
@@ -249,22 +322,22 @@ about remote clients, and loopback is the way back in.
 
 Every check runs in the root action, when the switch is used and again when it
 is confirmed; the page shows the review and sends its digest back, as the
-Hetzner switches do. The review changes nothing, a clean-up of an earlier
-gate included, so cancelling it leaves everything as it was. It refuses unless CloudPanel has a custom domain, both
-vhosts have the shape the edits expect, an active panel user has an email, a
-DNS connection's token reaches an active zone for the hostname (the longest),
-the hostname has proxied A, AAAA or CNAME records of its own or is covered by an
-unobstructed proxied wildcard in the zone, and the token
-holds SSL and Certificates: Edit on the zone and both Access permissions on
-its account. Those three are in DNS's permission list (`addons/dns/token.ts`)
-as optional, so a DNS token without them is fine until the gate is wanted; the
-gate reads the token's own policies (`/user/tokens/{id}`) and checks them with
-`addons/dns/access.ts`, so a token without API Tokens: Read is asked for it. A
-zone in SSL mode Off or Flexible is refused, since Cloudflare would reach the
-server over port 80, where the custom domain only redirects; when the mode
-cannot be read (it needs Zone Settings: Read), the review says it must be Full
-or Full (strict). The review says that the panel stops answering at the IP on
-8443, how to get back in, and that Access emails a code.
+Hetzner switches do. The review changes nothing, including cleaning up an
+earlier gate, so cancelling it leaves everything as it was. It refuses unless
+CloudPanel has a custom domain, both vhosts match the expected structure, an
+active panel user has an email, a shared Cloudflare connection's token reaches
+an active zone for the hostname, the hostname has proxied A, AAAA, or CNAME
+records of its own or is covered by an unobstructed proxied wildcard in the
+zone, and the token holds SSL and Certificates: Edit on the zone and both Access
+permissions on its account. Those permissions live in `lib/cloudflare/tokens.ts`
+and are checked locally with `lib/cloudflare/access.ts` against the shared
+connection store in `/var/lib/clp-addons/cloudflare/`, so Panel gate works
+without enabling DNS. A token without API Tokens: Read is asked for it. A zone
+in SSL mode Off or Flexible is refused because Cloudflare would reach the server
+over port 80, where the custom domain only redirects. When the mode cannot be
+read, the review states that the zone must use Full or Full (strict). The review
+states that the panel stops answering at the IP on port 8443, how to get back
+in, and that Access emails a one-time code.
 
 ### Order and rollback
 
@@ -291,7 +364,7 @@ Turning off runs the other way: the panel's block, the custom domain's lines
 and the files, then the Access application, its policy and the certificate.
 Cloudflare failures leave the gate off and the objects for repair to delete.
 Turning on again deletes what an earlier gate left first, once confirmed,
-through its own DNS connection or another that reaches the same zone and
+through its own Cloudflare connection or another that reaches the same zone and
 account, and refuses while that fails, so the record of those objects is
 never dropped. A failure says what undoing it left, if anything.
 
@@ -339,9 +412,9 @@ most a minute behind through Setup's cache.
 
 The page draws a gate that is off from local files alone and then asks the
 `panel-gate` verb for what it needs, so Cloudflare's replies never hold the
-site table back. Those reads run in parallel. Setup also lists Panel gate as a
-step that requires `dns-connection` and `panel-hostname`, checking only the
-local gate state file.
+site table back. Those reads run in parallel. Setup lists Panel gate as a
+step that requires `panel-hostname`, checking only the local gate state file and
+the shared Cloudflare connection store.
 
 `bun tests/integration/integration-panel-gate.ts` runs both edits in real
 Nginx in Docker: the custom domain refuses a request without the gate's

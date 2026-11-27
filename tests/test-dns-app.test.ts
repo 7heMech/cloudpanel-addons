@@ -28,3 +28,33 @@ test("provision requires a session and the mutation guard before requesting root
   expect((await handle(unguarded, "/api/provision", undefined, undefined, { user: "bob", roles: ["ROLE_USER"] })).status).toBe(403);
   expect(provision).not.toHaveBeenCalled();
 });
+
+test("panel-host-helper returns local helper state over GET /api/panel-host-helper", async () => {
+  const payload = {
+    connected: true,
+    automatic: false,
+    hasCloudflare: true,
+    hasPowerDns: false,
+    zones: ["example.com"],
+    zoneProviders: { "example.com": "cloudflare" as const },
+    panelHost: "panel.example.com",
+    serverIps: { ipv4: "203.0.113.10", ipv6: "2001:db8::10" },
+  };
+  const helper = spyOn(dnsService, "panelHostHelper").mockResolvedValue({ ok: true, data: payload });
+  const response = await handle(new Request("http://127.0.0.1/api/panel-host-helper"), "/api/panel-host-helper");
+  expect(response.status).toBe(200);
+  expect(await response.json()).toEqual({ ok: true, data: payload });
+  expect(helper).toHaveBeenCalledTimes(1);
+});
+
+test("POST /api/panel-host forwards prepareOnly to set-panel-host with mutation guard", async () => {
+  const change = spyOn(dnsService, "change").mockResolvedValue({ ok: false, error: "Add a Cloudflare connection first" });
+  const unguarded = appRequest("/api/panel-host", "POST", { name: "panel.example.com", prepareOnly: true }, false);
+  expect((await handle(unguarded, "/api/panel-host")).status).toBe(403);
+  expect(change).not.toHaveBeenCalled();
+
+  const req = appRequest("/api/panel-host", "POST", { name: "panel.example.com", prepareOnly: true });
+  const response = await handle(req, "/api/panel-host");
+  expect(response.status).toBe(400);
+  expect(change).toHaveBeenCalledWith("set-panel-host", { name: "panel.example.com", prepareOnly: true });
+});

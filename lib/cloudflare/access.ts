@@ -3,8 +3,9 @@
  * calling Cloudflare again.
  * https://developers.cloudflare.com/fundamentals/api/how-to/create-via-api/
  */
-import type { Profile } from "./model";
-import { listedPermissions, PERMISSIONS, type PermissionDef, type PermissionName } from "./token";
+import {
+  listedPermissions, PERMISSIONS, type PermissionDef, type PermissionName, type PermissionScopeOptions, type ZoneProfileShape,
+} from "./tokens";
 
 /** `"*"` for any. A user resource has neither an account nor a zone. */
 export interface Resource {
@@ -129,7 +130,9 @@ function coverageOf(list: Grant[], permission: PermissionDef, reached: Reached):
   return { held: "some", lacking: lacking.slice(0, LACKING_SHOWN), lackingCount: lacking.length };
 }
 
-/** "All zones", "All zones in Agency", "3 chosen zones", from where DNS Write is allowed, less where it is denied. */
+const ZONE_REACH_GROUPS = ["DNS Write", "DNS Read", "Zone Read", "SSL and Certificates Write"];
+
+/** "All zones", "All zones in Agency", "3 chosen zones", from where DNS Write (or a zone read for Firewall-only tokens) is allowed, less where that same permission is denied. */
 function reachOf(list: Grant[], reached: Reached): string {
   const names = new Map(reached.accounts.map((account) => [account.id, account.name || account.id]));
   const describe = (resources: Resource[], all: string): string[] => {
@@ -141,8 +144,11 @@ function reachOf(list: Grant[], reached: Reached): string {
       zones.size ? `${zones.size} ${all === "All zones" ? "chosen " : ""}zone${zones.size === 1 ? "" : "s"}` : "",
     ].filter(Boolean);
   };
+  // One permission, the first allowed of these, so a deny of another permission does not narrow it.
+  const reach = ZONE_REACH_GROUPS.find((name) => list.some((grant) => grant.allow && grant.permissions.includes(name)));
+  if (!reach) return "No zones";
   const resources = (allow: boolean) => list
-    .filter((grant) => grant.allow === allow && namesPermission(grant, PERMISSIONS.dns))
+    .filter((grant) => grant.allow === allow && grant.permissions.includes(reach))
     .flatMap((grant) => grant.resources).filter((resource) => !resource.user);
   const allows = resources(true);
   const allowed = describe(allows, "All zones").join(" and ");
@@ -178,7 +184,7 @@ export function tokenListUrl(owner: TokenOwner): string {
     : "https://dash.cloudflare.com/profile/api-tokens";
 }
 
-/** What a connection's token holds against what DNS uses, as the page shows it. */
+/** What a connection's token holds against what the caller uses, as the page shows it. */
 export interface AccessView {
   /** The zones its permissions reach; null when the token could not read them, with why in `note`. */
   reach: string | null;
@@ -195,11 +201,15 @@ export interface StoredAccess {
 
 const REFUSED = "Refused by Cloudflare";
 
-export function accessView(stored: StoredAccess, profiles: Profile[]): AccessView | null {
+export function accessView(
+  stored: StoredAccess,
+  profiles: ZoneProfileShape[] = [],
+  options: PermissionScopeOptions = {},
+): AccessView | null {
   const { token } = stored;
   if (!token) return null;
   const refused = new Set(stored.refused ?? []);
-  const rows = listedPermissions(profiles).map(({ name, permission, usedFor, optional }): AccessView["rows"][number] => {
+  const rows = listedPermissions(profiles, options).map(({ name, permission, usedFor, optional }): AccessView["rows"][number] => {
     // An account-owned token reads itself with the account's own permission.
     const base = { label: name === "tokens" ? selfReadPermission(token.owner) : permission.label, usedFor, ...(optional ? { optional: true as const } : {}) };
     const coverage = token.readable ? token.coverage[name] : undefined;
@@ -219,8 +229,12 @@ export function accessView(stored: StoredAccess, profiles: Profile[]): AccessVie
  * and the required ones it is missing on any zone, by name. Without its own
  * read, the missing ones are those Cloudflare refused it.
  */
-export function connectionPermissions(stored: StoredAccess, profiles: Profile[]): { readable: boolean; missing: string[] } {
-  const view = accessView(stored, profiles);
+export function connectionPermissions(
+  stored: StoredAccess,
+  profiles: ZoneProfileShape[] = [],
+  options: PermissionScopeOptions = {},
+): { readable: boolean; missing: string[] } {
+  const view = accessView(stored, profiles, options);
   if (!view) return { readable: false, missing: [] };
   return {
     readable: view.reach !== null,

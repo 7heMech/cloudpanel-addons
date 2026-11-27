@@ -29,11 +29,11 @@ import { dashboardView as smtpDashboardView, layout as smtpLayout } from "../add
 import type { SmtpState } from "../addons/smtp/action";
 import { dashboardView as dnsDashboardView, layout as dnsLayout } from "../addons/dns/app/views";
 import type { DnsState, Review as DnsReview } from "../addons/dns/action";
-import { accessView as dnsAccessView, readAccess as dnsReadAccess, type AccessView as DnsAccessView, type TokenAccess as DnsTokenAccess } from "../addons/dns/access";
+import { accessView as dnsAccessView, readAccess as dnsReadAccess, type AccessView as DnsAccessView, type TokenAccess as DnsTokenAccess } from "../lib/cloudflare/access";
 import type { SitePlan as DnsSitePlan } from "../addons/dns/engine";
 import type { Redirect as DnsRedirect } from "../addons/dns/model";
 import { PRESETS as DNS_PRESETS, seededPolicy as dnsSeededPolicy } from "../addons/dns/presets";
-import { tokenTemplate as dnsTokenTemplate } from "../addons/dns/token";
+import { tokenTemplate as dnsTokenTemplate, tokenTemplates as cloudflareTokenTemplates } from "../lib/cloudflare/tokens";
 import {
   dashboardView as panelTweaksDashboardView, layout as panelTweaksLayout,
 } from "../addons/panel-tweaks/app/views";
@@ -104,17 +104,26 @@ const sites: SiteSummary[] = [
 const siteVarnish: Record<string, boolean> = { "www.example.com": true };
 const PREVIEW_PUBLIC_IP = "203.0.113.10";
 
-/** Two connections and a mixed fleet. ?setup shows a first visit with nothing connected, ?ask DNS before Automatic. */
+/** Connections and a mixed fleet. ?setup shows first visit, ?ask before Automatic, ?provider=powerdns|mixed switches DNS providers. */
 function dnsPreviewState(url: URL): DnsState {
   const setup = url.searchParams.has("setup");
   const automatic = !setup && !url.searchParams.has("ask");
+  const providerMode = url.searchParams.get("provider");
+  const powerdnsOnly = !setup && providerMode === "powerdns";
+  const mixedProviders = !setup && providerMode === "mixed";
   const mode = automatic ? "enforce" as const : "report" as const;
   const seeded = dnsSeededPolicy().profiles;
   const web = seeded[0]!;
   const mailcow = { ...seeded[1]!, zone: { ...seeded[1]!.zone, skipFirewallIps: ["203.0.113.7"] } };
-  const zone = (name: string, status = "active") => ({
-    id: "0".repeat(32), name, status, nameServers: ["ada.ns.cloudflare.com", "bob.ns.cloudflare.com"],
-    account: "Example Agency", connection: "Agency",
+  const zone = (name: string, status = "active", provider: "cloudflare" | "powerdns" = powerdnsOnly ? "powerdns" : "cloudflare") => ({
+    id: provider === "powerdns" ? `${name}.` : "0".repeat(32),
+    name,
+    status: provider === "powerdns" ? "active" : status,
+    nameServers: provider === "powerdns" ? [] : ["ada.ns.cloudflare.com", "bob.ns.cloudflare.com"],
+    account: provider === "powerdns" ? "localhost" : "Example Agency",
+    connection: provider === "powerdns" ? "Primary NS" : "Agency",
+    connectionId: provider === "powerdns" ? "pdns-1" : "cf-1",
+    provider,
   });
   const plan = (domain: string, extra: Partial<DnsSitePlan>): DnsSitePlan => ({
     domain, profileId: "web", mode, zone: zone("example.com"), changes: [], problems: [], zoneChoices: [],
@@ -127,27 +136,43 @@ function dnsPreviewState(url: URL): DnsState {
     { domain: "shop.example.com", type: "php", profileId: null, plan: null, ssl: null },
     { domain: "old-name.example.org", type: "redirect", profileId: null, ssl: null, redirect: redirect("old-name.example.org", "https://example.com", { standIn: true }),
       plan: { ...plan("old-name.example.org", { profileId: null, zone: null, certificateNames: [] }), redirect: true as const } },
-  ] : [
+  ] : powerdnsOnly ? [
+    { domain: "example.com", type: "wordpress", profileId: "web", plan: plan("example.com", { certificateNames: ["example.com", "www.example.com"] }), ssl: null },
+    { domain: "shop.example.com", type: "php", profileId: "web", plan: plan("shop.example.com", { changes: [
+      { action: "update", subject: "A shop.example.com", detail: "203.0.113.10 · TTL 300", before: "198.51.100.4 · TTL 300" },
+      { action: "create", subject: "AAAA shop.example.com", detail: "2001:db8::10 · TTL 300" },
+    ] }), ssl: null },
+    { domain: "mail.example.org", type: "php", profileId: "web-mailcow", plan: plan("mail.example.org", {
+      profileId: "web-mailcow", zone: zone("example.org", "active", "powerdns"),
+      changes: [
+        { action: "create", subject: "MX mail.example.org", detail: "mail.example.net · priority 10 · TTL 300" },
+        { action: "update", subject: "TXT mail.example.org", detail: "v=spf1 include:_spf.mlsend.com mx ~all · TTL 300", before: "v=spf1 include:_spf.mlsend.com ~all · TTL 300" },
+      ] }), ssl: null },
+    { domain: "docs.example.com", type: "static", profileId: null, plan: null, ssl: null },
+    { domain: "example-brand.net", type: "redirect", profileId: "web-mailcow", ssl: null,
+      redirect: redirect("example-brand.net", "https://example.com", { profileId: "web-mailcow", standIn: true }),
+      plan: { ...plan("example-brand.net", { profileId: "web-mailcow", zone: zone("example-brand.net", "active", "powerdns"), certificateNames: [] }), redirect: true as const } },
+  ].sort((a, b) => a.domain.localeCompare(b.domain)) : [
     { domain: "example.com", type: "wordpress", profileId: "web", plan: plan("example.com", { certificateNames: ["example.com", "www.example.com"] }), ssl: null },
     { domain: "shop.example.com", type: "php", profileId: "web", plan: plan("shop.example.com", { changes: [
       { action: "update", subject: "A shop.example.com", detail: "203.0.113.10 · proxied", before: "198.51.100.4 · DNS only" },
       { action: "create", subject: "AAAA shop.example.com", detail: "2001:db8::10 · proxied" },
       { action: "delete", subject: "CNAME shop.example.com", detail: "shops.myshopify.com · DNS only" },
     ] }), ssl: null },
-    { domain: "new-client.example.org", type: "wordpress", profileId: "web", plan: plan("new-client.example.org", { zone: zone("example.org", "pending") }),
-      ssl: "Waiting for DNS: Zone example.org is pending; set its nameservers at the registrar" },
+    { domain: "new-client.example.org", type: "wordpress", profileId: "web", plan: plan("new-client.example.org", { zone: zone("example.org", "pending", mixedProviders ? "powerdns" : "cloudflare") }),
+      ssl: mixedProviders ? null : "Waiting for DNS: Zone example.org is pending; set its nameservers at the registrar" },
     { domain: "a-rather-long-customer-hostname.staging.example.net", type: "nodejs", profileId: "web-mailcow", plan: plan("a-rather-long-customer-hostname.staging.example.net", {
       profileId: "web-mailcow", zone: null,
       problems: ["example.net is reachable through more than one connection; choose which one manages it"],
       zoneChoices: [
         { zone: "example.net", connectionId: "cf-1", zoneId: "1".repeat(32), label: "Agency · Example Agency (active)" },
-        { zone: "example.net", connectionId: "cf-2", zoneId: "1".repeat(32), label: "Church · Church account (active)" },
+        { zone: "example.net", connectionId: mixedProviders ? "pdns-1" : "cf-2", zoneId: mixedProviders ? "example.net." : "1".repeat(32), label: mixedProviders ? "Primary NS · PowerDNS (localhost)" : "Church · Church account (active)" },
       ] }), ssl: null },
     { domain: "mail.example.org", type: "php", profileId: "web-mailcow", plan: plan("mail.example.org", {
-      profileId: "web-mailcow", zone: zone("example.org"),
+      profileId: "web-mailcow", zone: zone("example.org", "active", mixedProviders ? "powerdns" : "cloudflare"),
       changes: [
         { action: "create", subject: "Mailcow domain", detail: "mail.example.org" },
-        { action: "create", subject: "MX mail.example.org", detail: "mail.example.net · priority 10" },
+        { action: "create", subject: "MX mail.example.org", detail: mixedProviders ? "mail.example.net · priority 10 · TTL 300" : "mail.example.net · priority 10" },
         { action: "update", subject: "TXT mail.example.org", detail: "v=spf1 include:_spf.mlsend.com mx ~all", before: "v=spf1 include:_spf.mlsend.com ~all" },
       ] }), ssl: null },
     { domain: "brand-new.example.co.uk", type: "wordpress", profileId: "web", plan: plan("brand-new.example.co.uk", { zone: null, changes: [
@@ -155,8 +180,9 @@ function dnsPreviewState(url: URL): DnsState {
       { action: "create", subject: "A brand-new.example.co.uk", detail: "203.0.113.10 · proxied" },
     ] }), ssl: null },
     { domain: "docs.example.com", type: "static", profileId: null, plan: null, ssl: null },
-    { domain: "example-brand.net", type: "redirect", profileId: "web-mailcow", ssl: null, redirect: redirect("example-brand.net", "https://example.com", { profileId: "web-mailcow" }),
-      plan: { ...plan("example-brand.net", { profileId: "web-mailcow", zone: zone("example-brand.net"), certificateNames: [] }), redirect: true as const } },
+    { domain: "example-brand.net", type: "redirect", profileId: "web-mailcow", ssl: null,
+      redirect: redirect("example-brand.net", "https://example.com", { profileId: "web-mailcow", standIn: mixedProviders }),
+      plan: { ...plan("example-brand.net", { profileId: "web-mailcow", zone: zone("example-brand.net", "active", mixedProviders ? "powerdns" : "cloudflare"), certificateNames: [] }), redirect: true as const } },
     { domain: "book.example.com", type: "redirect", profileId: null, ssl: null,
       redirect: redirect("book.example.com", "https://shop.example.org/products/the-example-handbook-second-edition", { keepPath: false, status: 302 }),
       plan: { ...plan("book.example.com", { profileId: null, certificateNames: [], changes: [
@@ -167,7 +193,13 @@ function dnsPreviewState(url: URL): DnsState {
       ] }), redirect: true as const } },
   ].sort((a, b) => a.domain.localeCompare(b.domain));
   const at = (minutes: number) => new Date(Date.now() - minutes * 60_000).toISOString();
-  const log: DnsState["log"] = setup ? [] : [
+  const log: DnsState["log"] = setup ? [] : powerdnsOnly ? [
+    { at: at(3), cause: "New site", sites: ["example.com"], zone: "example.com", action: "create", subject: "PowerDNS zone",
+      detail: "In Primary NS; nameservers ns1.example.net, ns2.example.net" },
+    { at: at(3), cause: "New site", sites: ["example.com"], zone: "example.com", action: "create", subject: "A example.com", detail: "203.0.113.10 · TTL 300" },
+    { at: at(64), cause: "Scheduled check", sites: ["example-brand.net"], zone: "", action: "create", subject: "Stand-in site",
+      detail: "301 to https://example.com · keeps the path and query string" },
+  ] : [
     { at: at(3), cause: "New site", sites: ["new-client.example.org"], zone: "example.org", action: "create", subject: "Cloudflare zone",
       detail: "In Example Agency; nameservers ada.ns.cloudflare.com, bob.ns.cloudflare.com" },
     { at: at(3), cause: "New site", sites: ["new-client.example.org"], zone: "example.org", action: "create", subject: "A new-client.example.org", detail: "203.0.113.10 · proxied" },
@@ -178,19 +210,28 @@ function dnsPreviewState(url: URL): DnsState {
       action: "create" as const, subject: `A site-${n}.example.com`, detail: "203.0.113.10 · proxied" })),
   ];
   const profiles = [web, mailcow].map((profile) => ({ ...profile, sites: sites.filter((site) => site.profileId === profile.id).length }));
-  const panelHost = dnsPreviewPanelHost(url, setup, plan);
+  const panelHost = dnsPreviewPanelHost(url, setup, plan, powerdnsOnly);
   const customDomain = setup ? null
     : url.searchParams.get("panelhost") === "adopt" ? { name: "panel.example.com", issued: true }
     : panelHost?.customDomain ?? null;
   const single = url.searchParams.has("single");
-  const allConnections = setup ? [] : [
-      { id: "cf-1", label: "Agency", active: true, status: "active", accounts: [{ id: "a".repeat(32), name: "Example Agency" }, { id: "b".repeat(32), name: "Clients" }], zones: 42, error: null, hasToken: true,
-        access: dnsPreviewAccess({ token: DNS_PREVIEW_TOKENS.agency }, [web, mailcow], false) },
-      { id: "cf-2", label: "Church", active: true, status: "active", accounts: [{ id: "c".repeat(32), name: "Church account" }], zones: 7, error: null, hasToken: true,
-        access: dnsPreviewAccess({ token: DNS_PREVIEW_TOKENS.church }, [web, mailcow], true) },
-      { id: "cf-3", label: "Older token", active: true, status: "active", accounts: [{ id: "d".repeat(32), name: "Partner" }], zones: 3, error: null, hasToken: true,
-        access: dnsPreviewAccess({ token: DNS_PREVIEW_TOKENS.older, refused: ["Config Rules: Edit"] }, [web, mailcow], false) },
-    ];
+  const pdnsConnection: DnsState["connections"][number] = {
+    id: "pdns-1", provider: "powerdns", label: "Primary NS", active: true, status: "active",
+    accounts: [{ id: "localhost", name: "Primary NS" }], zones: 14, error: null, hasToken: true, access: null,
+    url: "http://127.0.0.1:8081", serverId: "localhost", defaultTtl: 300, createZones: true, nameservers: ["ns1.example.net", "ns2.example.net"],
+  };
+  const cfConnections: DnsState["connections"] = [
+    { id: "cf-1", provider: "cloudflare", label: "Agency", active: true, status: "active", accounts: [{ id: "a".repeat(32), name: "Example Agency" }, { id: "b".repeat(32), name: "Clients" }], zones: 42, error: null, hasToken: true,
+      access: dnsPreviewAccess({ token: DNS_PREVIEW_TOKENS.agency }, [web, mailcow], false) },
+    { id: "cf-2", provider: "cloudflare", label: "Church", active: true, status: "active", accounts: [{ id: "c".repeat(32), name: "Church account" }], zones: 7, error: null, hasToken: true,
+      access: dnsPreviewAccess({ token: DNS_PREVIEW_TOKENS.church }, [web, mailcow], true) },
+    { id: "cf-3", provider: "cloudflare", label: "Older token", active: true, status: "active", accounts: [{ id: "d".repeat(32), name: "Partner" }], zones: 3, error: null, hasToken: true,
+      access: dnsPreviewAccess({ token: DNS_PREVIEW_TOKENS.older, refused: ["Config Rules: Edit"] }, [web, mailcow], false) },
+  ];
+  const allConnections: DnsState["connections"] = setup ? []
+    : powerdnsOnly ? [pdnsConnection]
+    : mixedProviders ? [cfConnections[0]!, pdnsConnection]
+    : cfConnections;
   return {
     automatic,
     createIn: null,
@@ -198,14 +239,20 @@ function dnsPreviewState(url: URL): DnsState {
     defaultProfileId: setup ? null : "web",
     sites,
     connections: single ? allConnections.slice(0, 1) : allConnections,
-    accounts: setup ? [] : single ? [
-      { connectionId: "cf-1", accountId: "a".repeat(32), label: "Example Agency (Agency)" },
-    ] : [
-      { connectionId: "cf-1", accountId: "a".repeat(32), label: "Example Agency (Agency)" },
-      { connectionId: "cf-1", accountId: "b".repeat(32), label: "Clients (Agency)" },
-      { connectionId: "cf-2", accountId: "c".repeat(32), label: "Church account (Church)" },
-    ],
-    zones: setup ? [] : ["church.example", "example-brand.net", "example.com", "example.net", "example.org"],
+    accounts: setup ? []
+      : powerdnsOnly ? [{ connectionId: "pdns-1", accountId: "localhost", label: "Primary NS (Primary NS)" }]
+      : mixedProviders ? [
+        { connectionId: "cf-1", accountId: "a".repeat(32), label: "Example Agency (Agency)" },
+        { connectionId: "pdns-1", accountId: "localhost", label: "Primary NS (Primary NS)" },
+      ]
+      : single ? [
+        { connectionId: "cf-1", accountId: "a".repeat(32), label: "Example Agency (Agency)" },
+      ] : [
+        { connectionId: "cf-1", accountId: "a".repeat(32), label: "Example Agency (Agency)" },
+        { connectionId: "cf-1", accountId: "b".repeat(32), label: "Clients (Agency)" },
+        { connectionId: "cf-2", accountId: "c".repeat(32), label: "Church account (Church)" },
+      ],
+    zones: setup ? [] : powerdnsOnly ? ["example-brand.net", "example.com", "example.org"] : ["church.example", "example-brand.net", "example.com", "example.net", "example.org"],
     mailcow: setup
       ? { url: "", host: "", dkimSource: "", dkimSelector: "dkim", dkimBits: 2048, sharedMailbox: "", hasKey: false }
       : { url: "https://mail.example.net", host: "mail.example.net", dkimSource: "example.net", dkimSelector: "dkim", dkimBits: 2048, sharedMailbox: "relay@example.net", hasKey: true },
@@ -215,6 +262,8 @@ function dnsPreviewState(url: URL): DnsState {
     checkedAt: setup ? null : new Date(Date.now() - 4 * 60_000).toISOString(),
     waitUntil: 0,
     token: dnsTokenTemplate([web, mailcow]),
+    tokens: cloudflareTokenTemplates([web, mailcow]),
+    firewallEnabled: true,
     presets: DNS_PRESETS,
     log,
     panelHost,
@@ -223,11 +272,11 @@ function dnsPreviewState(url: URL): DnsState {
 }
 
 /** ?panelhost=new|waiting|proxied|clash|adopt|none picks the panel hostname's state; a first visit has none. */
-function dnsPreviewPanelHost(url: URL, setup: boolean, plan: (domain: string, extra: Partial<DnsSitePlan>) => DnsSitePlan): DnsState["panelHost"] {
+function dnsPreviewPanelHost(url: URL, setup: boolean, plan: (domain: string, extra: Partial<DnsSitePlan>) => DnsSitePlan, powerdnsOnly = false): DnsState["panelHost"] {
   const stage = url.searchParams.get("panelhost") ?? (setup ? null : "new");
   if (!stage || stage === "none" || stage === "adopt") return null;
   const name = "k7m2p9x4.example.com";
-  const record = (_type: string, address: string, proxied: boolean) => `${address} · ${proxied ? "proxied" : "DNS only"}`;
+  const record = (_type: string, address: string, proxied: boolean) => powerdnsOnly ? `${address} · TTL 300` : `${address} · ${proxied ? "proxied" : "DNS only"}`;
   const changes: DnsSitePlan["changes"] = stage === "new"
     ? [{ action: "create", subject: `A ${name}`, detail: record("A", "203.0.113.10", false) }, { action: "create", subject: `AAAA ${name}`, detail: record("AAAA", "2001:db8::10", false) }]
     : stage === "proxied" ? [] : [];
@@ -236,7 +285,7 @@ function dnsPreviewPanelHost(url: URL, setup: boolean, plan: (domain: string, ex
     problem: stage === "clash" ? `CloudPanel has a site ${name}; remove the panel hostname or delete the site` : null,
     plan: stage === "clash" ? null : { ...plan(name, { profileId: "panel-hostname", certificateNames: [], ...(stage === "proxied" ? { wildcard: "*.example.com" } : {}) }), panel: true, changes },
     customDomain: stage === "waiting" ? { name, issued: false } : stage === "proxied" ? { name, issued: true } : null,
-    proxied: stage === "proxied",
+    proxied: !powerdnsOnly && stage === "proxied",
   };
 }
 
@@ -596,19 +645,22 @@ function panelGatePreviewState(mode: string | null): PanelGateView | { error: st
   if (mode === "pending") return { ...base, on: false, pending: true };
   return {
     ...base, on: false, editUrl: "https://dash.cloudflare.com/profile/api-tokens",
-    problems: ["The token of DNS connection Agency lacks SSL and Certificates: Edit, Access: Organizations, Identity Providers, and Groups: Edit. Add them to the token in Cloudflare."],
+    problems: ["The token of Cloudflare connection Agency lacks SSL and Certificates: Edit, Access: Organizations, Identity Providers, and Groups: Edit. Add them to the token in Cloudflare."],
   };
 }
 
-/** ?sites=all|none|mixed, ?auto=off, ?many (search and filter), ?protocols=off and ?noudp cover the states the controls describe. */
+/** ?sites=all|none|mixed, ?auto=off, ?visitorip=off, ?cf=none, ?nodns, ?many (search and filter), ?protocols=off and ?noudp cover the states the controls describe. */
 function firewallPreviewState(url: URL) {
   const all = url.searchParams.get("sites");
   const sites = [...cloudflareSites, ...(url.searchParams.has("many") ? cloudflareMoreSites : [])].map((site) => all === "all"
     ? { ...site, enabled: true }
     : all === "none" ? { ...site, enabled: false } : site);
+  const noCf = url.searchParams.get("cf") === "none";
+  const dnsEnabled = !url.searchParams.has("nodns");
   return {
     autoEnableNewSites: url.searchParams.get("auto") !== "off",
     sites: url.searchParams.has("empty") ? [] : sites,
+    visitorIp: { enabled: url.searchParams.get("visitorip") !== "off", applied: url.searchParams.get("visitorip") !== "off", problem: "" },
     protocols: {
       available: true, enabled: url.searchParams.get("protocols") !== "off",
       protocols: { 9: "udp" as const, 10: "udp" as const, 11: "both" as const }, udpPorts: url.searchParams.has("noudp") ? [] : ["53", "51820"],
@@ -616,6 +668,25 @@ function firewallPreviewState(url: URL) {
     hetzner: hetznerPreviewState(url.searchParams.has("netcup") && !url.searchParams.has("hetzner") ? "absent" : url.searchParams.get("hetzner")),
     netcup: netcupPreviewState(url.searchParams.get("netcup")),
     panelGate: panelGatePreviewState(url.searchParams.get("gate")),
+    cloudflare: {
+      connections: noCf ? [] : [
+        {
+          id: "cf-1", label: "Agency", active: true, status: "active",
+          accounts: [{ id: "a".repeat(32), name: "Example Agency" }, { id: "b".repeat(32), name: "Clients" }],
+          zones: 4, error: null, hasToken: true,
+          access: dnsAccessView({ token: DNS_PREVIEW_TOKENS.agency }, [], { includeDns: false, requirePanelGate: true }),
+        },
+        {
+          id: "cf-2", label: "Church", active: true, status: "active",
+          accounts: [{ id: "c".repeat(32), name: "Church account" }],
+          zones: 1, error: null, hasToken: true,
+          access: dnsAccessView({ token: DNS_PREVIEW_TOKENS.church }, [], { includeDns: false, requirePanelGate: true }),
+        },
+      ],
+      templates: cloudflareTokenTemplates([]),
+      serverIps: ["203.0.113.10", "2001:db8::10"],
+      dnsEnabled,
+    },
   };
 }
 
@@ -780,7 +851,6 @@ function systemTweaksPreviewState(url: URL): SystemTweaksState {
     },
     panelPhp: panelPhpPreviewStatus(url),
     realIp: { blockForged: url.searchParams.get("realip") !== "off", trustsAnyAddress: url.searchParams.get("realip") === "off", problem: "" },
-    visitorIp: { enabled: url.searchParams.get("visitorip") !== "off", applied: url.searchParams.get("visitorip") !== "off", problem: "" },
     phpMyAdmin: { enabled: url.searchParams.get("pma") !== "off", active: url.searchParams.get("pma") !== "off", problem: "" },
     panelCert: panelCertPreviewStatus(url.searchParams.get("cert")),
     loginJails: {
@@ -874,8 +944,6 @@ function systemTweaksPreviewMutation(path: string, source: URL, body: Record<str
     state.motd = { enabled: body.enabled === true, script: body.enabled === true, banner: body.enabled !== true };
   } else if (path.endsWith("/real-ip")) {
     state.realIp = { blockForged: body.enabled === true, trustsAnyAddress: body.enabled !== true, problem: "" };
-  } else if (path.endsWith("/visitor-ip")) {
-    state.visitorIp = { enabled: body.enabled === true, applied: body.enabled === true, problem: "" };
   } else if (path.endsWith("/login-jails") && !("error" in state.loginJails)) {
     const jails = state.loginJails as Exclude<SystemTweaksState["loginJails"], { error: string }>;
     Object.assign(jails, body);
@@ -888,7 +956,7 @@ function systemTweaksPreviewMutation(path: string, source: URL, body: Record<str
     (state.loginJails as { missing: string[] }).missing = [];
   } else if (path.endsWith("/lock-settings")) {
     // Every Hardening and Failed logins switch on, as the verb does, and the answer is the locked page.
-    for (const setting of ["vhost-guard", "phpmyadmin", "file-manager-guard", "panel-cert", "database-loopback", "clpctl-guard", "telemetry", "real-ip", "visitor-ip", "upload-guard"]) {
+    for (const setting of ["vhost-guard", "phpmyadmin", "file-manager-guard", "panel-cert", "database-loopback", "clpctl-guard", "telemetry", "real-ip", "upload-guard"]) {
       systemTweaksPreviewMutation(`/addons/system-tweaks/api/${setting}`, source, { enabled: true });
       Object.assign(state, systemTweaksPreview);
     }
@@ -1928,7 +1996,7 @@ const setupPreviewSteps = (["domain", "secure", "sites"] as const).flatMap((leve
   [
     ["dns-connection", "Connect DNS", "dns", "done", "Cloudflare: Agency", "Automates DNS records, panel hostname DNS, and Cloudflare proxy protection for CloudPanel and its sites.", undefined],
     ["panel-hostname", "Panel hostname", "dns", "todo", "Enter k7m2p9x4.example.com under Admin → Settings → Custom Domain in CloudPanel", "Gives CloudPanel a trusted HTTPS hostname so passkeys and Cloudflare proxying work without port 8443.", undefined],
-    ["panel-gate", "Panel gate", "firewall", "blocked", "Needs Panel hostname first", "Limits direct port 8443 access once the panel answers through Cloudflare on its custom hostname.", ["dns-connection", "panel-hostname"]],
+    ["panel-gate", "Panel gate", "firewall", "blocked", "Needs Panel hostname first", "Limits direct port 8443 access once the panel answers through Cloudflare on its custom hostname.", ["panel-hostname"]],
     ["passkeys", "Passkeys for administrators", "security-keys", "blocked", "Needs Panel hostname first", "Adds hardware security keys and passkeys for administrator sign-in.", ["panel-hostname"]],
   ],
   [
@@ -2006,7 +2074,7 @@ function setupPreviewView(page: URLSearchParams): SetupView {
     if (fresh) {
       if (step.id === "dns-connection") mapped = { ...mapped, state: "todo", reason: "No Cloudflare connection is saved" };
       else if (step.id === "panel-hostname") mapped = { ...mapped, state: "todo", href: "/admin/settings", reason: "Point a hostname at this server's IP, then enter it under Admin → Settings → Custom Domain" };
-      else if (step.id === "panel-gate") mapped = { ...mapped, state: "blocked", blockedBy: [{ id: "dns-connection", title: "Connect DNS" }, { id: "panel-hostname", title: "Panel hostname" }], reason: "Needs Connect DNS and Panel hostname first" };
+      else if (step.id === "panel-gate") mapped = { ...mapped, state: "blocked", blockedBy: [{ id: "panel-hostname", title: "Panel hostname" }], reason: "Needs Panel hostname first" };
       else if (step.id === "passkeys") mapped = { ...mapped, state: "blocked", blockedBy: [{ id: "panel-hostname", title: "Panel hostname" }], reason: "Needs Panel hostname first" };
       else if (step.id === "dns-automatic") mapped = { ...mapped, state: "blocked", blockedBy: [{ id: "dns-connection", title: "Connect DNS" }], reason: "Needs Connect DNS first" };
       else if (step.id === "smtp-new-sites") mapped = { ...mapped, state: "blocked", blockedBy: [{ id: "smtp-relay", title: "Outgoing mail relay" }], reason: "Needs Outgoing mail relay first" };
@@ -2501,7 +2569,8 @@ const server = Bun.serve({
         site: "dnsShowSite('shop.example.com')",
         pending: "dnsShowSite('new-client.example.org')",
         choose: "dnsShowSite('a-rather-long-customer-hostname.staging.example.net')",
-        connection: "dnsEditConnection('')",
+        connection: "dnsEditConnection('', 'cloudflare')",
+        powerdns: "dnsEditConnection('', 'powerdns')",
         mailcow: "dnsEditMailcow()",
         server: "dnsEditServer()",
         redirect: "dnsEditRedirect('example-brand.net')",
@@ -2530,7 +2599,11 @@ const server = Bun.serve({
         },
       }), notice);
     } else if (path === "/addons/firewall/" || path === "/addons/firewall") {
-      html = firewallLayout("Firewall", firewallDashboardView(firewallPreviewState(url)), notice);
+      html = firewallLayout("Firewall", firewallDashboardView(firewallPreviewState(url), previewLock(url)), notice);
+      const fwDialog = url.searchParams.get("dialog");
+      if (fwDialog === "cloudflare") {
+        html = html.replace("</body>", '<script>addEventListener("DOMContentLoaded",function(){fwEditCloudflare("")})</script></body>');
+      }
     } else if (path === "/addons/instatic/") {
       html = instaticLayout("Instatic sites", empty ? dashboardView([], versions) : instaticDashboard(url), notice);
       // ?dialog=update|delete|stop opens that dialog once the page is up.

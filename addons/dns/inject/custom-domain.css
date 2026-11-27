@@ -1,0 +1,63 @@
+/* Custom Domain DNS helper on CloudPanel's Admin -> Settings page.
+   Uses CloudPanel's own .form-check, .btn, and .alert classes where possible,
+   and styles the native <dialog> for both light and html.dark themes. */
+.clp-dns-cd[hidden] { display: none; }
+.clp-dns-cd { margin-top: 10px; }
+.clp-dns-cd-check { display: flex; align-items: center; gap: 8px; margin: 0; padding: 0; min-height: 0; }
+.clp-dns-cd-check .form-check-input { float: none; margin: 0; flex-shrink: 0; }
+.clp-dns-cd-note { margin-top: 4px; }
+.clp-dns-cd-note:empty { display: none; }
+.clp-dns-cd-feedback { margin-top: 10px; }
+.clp-dns-cd-feedback[hidden] { display: none; }
+.clp-dns-cd-feedback .alert { margin-bottom: 0; }
+.clp-dns-cd-random { white-space: nowrap; }
+
+.clp-dns-cd-dialog {
+  width: min(560px, calc(100vw - 32px));
+  max-height: calc(100vh - 32px);
+  padding: 0;
+  border: 1px solid #dee2e6;
+  border-radius: 6px;
+  background: #ffffff;
+  color: #212529;
+  box-shadow: 0 12px 32px rgba(0, 0, 0, .2);
+}
+.clp-dns-cd-dialog::backdrop { background: rgba(0, 0, 0, .45); }
+.clp-dns-cd-dialog-head {
+  display: flex; align-items: center; justify-content: space-between; gap: 12px;
+  padding: 14px 18px; border-bottom: 1px solid #dee2e6;
+}
+.clp-dns-cd-dialog-head h5 { margin: 0; font-size: 16px; font-weight: 600; }
+.clp-dns-cd-dialog-body { padding: 16px 18px; overflow-y: auto; max-height: calc(100vh - 180px); }
+.clp-dns-cd-dialog-text { margin: 0 0 12px; font-size: 14px; }
+.clp-dns-cd-dialog-error { margin: 0 0 12px; }
+.clp-dns-cd-dialog-error[hidden] { display: none; }
+.clp-dns-cd-changes { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 8px; }
+.clp-dns-cd-changes li { display: flex; align-items: flex-start; gap: 8px; font-size: 13px; line-height: 1.45; }
+.clp-dns-cd-change-body { min-width: 0; display: flex; flex-direction: column; gap: 2px; overflow-wrap: anywhere; }
+.clp-dns-cd-badge {
+  flex: 0 0 auto; display: inline-block; padding: 2px 7px; border-radius: 4px;
+  font-size: 11px; font-weight: 600; text-transform: uppercase; letter-spacing: .02em;
+}
+.clp-dns-cd-badge-create { background: rgba(25, 135, 84, .14); color: #146c43; }
+.clp-dns-cd-badge-update { background: rgba(13, 110, 253, .14); color: #0a58ca; }
+.clp-dns-cd-badge-delete { background: rgba(220, 53, 69, .14); color: #b02a37; }
+.clp-dns-cd-badge-note { background: rgba(108, 117, 125, .14); color: #495057; }
+.clp-dns-cd-muted { color: #6c757d; font-size: 12px; }
+.clp-dns-cd-dialog-foot {
+  display: flex; justify-content: flex-end; gap: 8px;
+  padding: 12px 18px; border-top: 1px solid #dee2e6;
+}
+
+html.dark .clp-dns-cd-dialog {
+  background: var(--clp-bg-color-card, #1d2229);
+  color: var(--clp-text-color, #e6edf3);
+  border-color: var(--clp-border-color, #30363d);
+}
+html.dark .clp-dns-cd-dialog-head, html.dark .clp-dns-cd-dialog-foot { border-color: var(--clp-border-color, #30363d); }
+html.dark .clp-dns-cd-dialog-head .btn-close { filter: invert(1) grayscale(100%) brightness(200%); }
+html.dark .clp-dns-cd-badge-create { background: rgba(25, 135, 84, .25); color: #75b798; }
+html.dark .clp-dns-cd-badge-update { background: rgba(13, 110, 253, .25); color: #6ea8fe; }
+html.dark .clp-dns-cd-badge-delete { background: rgba(220, 53, 69, .25); color: #ea868f; }
+html.dark .clp-dns-cd-badge-note { background: rgba(108, 117, 125, .25); color: #adb5bd; }
+html.dark .clp-dns-cd-muted { color: #9bacb6; }

@@ -105,15 +105,19 @@ export async function cmdUpdate(argv: string[], options: UpdateOptions = {}): Pr
  * New installs lock System Tweaks; an update never does, since a box's
  * switches may be off on purpose, so it only says how. Reads, never writes.
  */
-export function lockHint(enabled: boolean, file?: string, rootUid?: number): string | null {
-  return enabled && lockState("system-tweaks", file, rootUid) === "unlocked"
-    ? "Tip: so the panel can switch System Tweaks' protections on but never off, run clp-addons lock system-tweaks"
+export function lockHint(enabled: boolean, file?: string, rootUid?: number, addon: "system-tweaks" | "firewall" = "system-tweaks"): string | null {
+  const title = addon === "firewall" ? "Firewall's" : "System Tweaks'";
+  return enabled && lockState(addon, file, rootUid) === "unlocked"
+    ? `Tip: so the panel can switch ${title} protections on but never off, run clp-addons lock ${addon}`
     : null;
 }
 
 function suggestLock(): void {
-  const hint = lockHint(enabledAddons().some((spec) => spec.name === "system-tweaks"));
-  if (hint) log.plain(hint);
+  const enabled = enabledAddons().map((spec) => spec.name);
+  for (const addon of ["system-tweaks", "firewall"] as const) {
+    const hint = lockHint(enabled.includes(addon), undefined, undefined, addon);
+    if (hint) log.plain(hint);
+  }
 }
 
 /** The release Resource Limits came in, as PHP Resources renamed. */

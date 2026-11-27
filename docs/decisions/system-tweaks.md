@@ -425,7 +425,7 @@ that line in both files, and a `::/0` one if present, by prefixing
 which CloudPanel's front server uses when it proxies to a local backend such as
 WordPress or Varnish, and the private ranges, where a load balancer would sit.
 A peer in those ranges can still set the header. A Cloudflare Tunnel also
-connects from `127.0.0.1`, so [Cloudflare visitor IPs](#cloudflare-visitor-ips)
+connects from `127.0.0.1`, so [Firewall's Cloudflare visitor IPs](firewall.md#cloudflare-visitor-ips)
 takes over the backend hop and stops trusting it.
 
 The panel also trusts Cloudflare, in a marked block after the commented line
@@ -437,8 +437,8 @@ Cloudflare keeps its visitors' addresses, and a forged entry sent through
 Cloudflare sits to the left of the real one and is never reached. The sites get
 no Cloudflare trust: Cloudflare passes a client's `X-Real-IP` through unchanged,
 so trusting it would reopen the forgery for every site behind Cloudflare. Their
-`$remote_addr` stays the edge address; [Cloudflare visitor
-IPs](#cloudflare-visitor-ips) gives their logs and PHP the visitor. Only a proxy
+`$remote_addr` stays the edge address; [Firewall's Cloudflare visitor
+IPs](firewall.md#cloudflare-visitor-ips) gives their logs and PHP the visitor. Only a proxy
 on a public address other than Cloudflare loses its visitors' addresses; switch
 the setting off there.
 
@@ -466,77 +466,6 @@ whatever the upgrade installed. The panel's file is not a conffile: a
 `bun tests/integration/integration-real-ip.ts` runs real Nginx in Docker: it
 reproduces the bypass on the stock directives, then shows the edited ones reject
 it while Cloudflare peers and loopback proxies keep working.
-
-## Cloudflare visitor IPs
-
-Behind Cloudflare's proxy a site's `$remote_addr` is the edge, and behind a
-Cloudflare Tunnel it is `127.0.0.1` or `::1`, where cloudflared on this server
-connects from. CloudPanel's `main` log format and PHP's `REMOTE_ADDR` use it,
-and its `cloudflare` format logs `CF-Connecting-IP` from any client, even one
-the Cloudflare-only rules refuse.
-
-`$remote_addr` cannot simply come from `CF-Connecting-IP`. Nginx's real-IP
-settings are one header for every server, and CloudPanel's templates proxy PHP
-from the front server on 80/443 to a backend on `127.0.0.1:8080`, passing every
-request header on. A backend that trusted loopback for `CF-Connecting-IP` would
-take a direct visitor's forged one. Nginx also checks the Cloudflare-only
-`allow` list against the rewritten address, so every visitor would be refused.
-
-**Cloudflare visitor IPs**, on by default (`cloudflareVisitorIp`), leaves
-`$remote_addr` alone and defines `$clp_visitor_ip` in
-`/etc/nginx/sites-enabled/00-clp-addons-visitor-ip.conf`, built by
-`lib/visitor-ip.ts` from CloudPanel's `/etc/nginx/cloudflare/ips`. It is a
-well-formed `CF-Connecting-IP` when Cloudflare set the header, and
-`$remote_addr` otherwise. Cloudflare set it when the connection's own address
-(`$realip_remote_addr`) is:
-
-- one of Cloudflare's ranges;
-- loopback on port 80 or 443, which is cloudflared;
-- loopback on another port, which is CloudPanel's front server or Varnish, with
-  an `X-Real-IP` that is one of those addresses.
-
-On such a hop, `$clp_visitor_ip` falls back to that `X-Real-IP`. The front
-server always sets it from its own `$remote_addr`, so the sites' `nginx.conf`
-no longer needs to trust `127.0.0.1`, and the setting comments that line out
-with the `#clp-addons:hop` marker followed by a space. A tunnel visitor's
-`X-Real-IP` is ignored on 80 and 443.
-
-The map cannot tell CloudPanel's front server from any other local client on
-the backend's port, so a tunnel pointed at `:8080`, or a local user connecting
-there, can still name the visitor with `X-Real-IP`. Before this setting every
-server trusted `127.0.0.1` for that header, so this is no new exposure; the
-operator guide says to point a tunnel at 80 or 443.
-
-The setting points the `main` and `cloudflare` log formats in `nginx.conf` and
-`REMOTE_ADDR` in `fastcgi_params` at it. Nginx's error logs, `allow`/`deny`,
-basic auth and rate limits keep `$remote_addr`. In the backend, that is now
-`127.0.0.1` for every visitor. CloudPanel's vhosts use `$remote_addr` only in
-the front server: in its `proxy_set_header` lines, and in the blocked IPs,
-basic-auth allowlist and Cloudflare-only rules that fill `{{settings}}`. A rule
-an administrator adds by address to the backend server sees `127.0.0.1`, so the
-operator guide says to keep such rules in the front server.
-
-Both files are `nginx-common` conffiles, released for an upgrade the same way
-as the real-IP edit, one at a time and without a reload. `nginx.conf` counts as
-edited when it has either `$clp_visitor_ip` or the hop marker, since a file
-whose log formats did not match can have only the latter. Every matching line
-is edited, so a repeated directive is never left half done. The map stays while
-either still names it. Activation and the 15-minute repair put the edits back,
-and rebuild the map when CloudPanel's list changes. Switching off restores the
-lines and removes the map. Switching on refuses a map file clp-addons did not
-write, and the row then names that file instead of asking for a repair;
-switching off leaves such a file alone. A line the setting does not
-recognise, such as a log format wrapped onto two lines, is shown as a problem
-rather than as on. Root's lock covers the switch, and Lock settings turns it on,
-since switching it off reopens the tunnel forgery.
-Maintenance Mode builds its bypass address from the same `lib/visitor-ip.ts`.
-
-`bun tests/integration/integration-visitor-ip.ts` runs real Nginx in Docker
-with the edited files. Through the front server and the backend, it shows:
-
-- Cloudflare and a local tunnel name the visitor;
-- a direct client's header, a malformed one, and an `X-Real-IP` sent through
-  the tunnel all keep the connecting address.
 
 ## phpMyAdmin
 

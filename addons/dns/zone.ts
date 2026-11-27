@@ -8,7 +8,7 @@
  * one rule of each kind against the plan's rule quota. A rule that already does
  * the same thing -- one an earlier tool created -- counts as present.
  */
-import type { CfRuleset, RuleWrite } from "./cloudflare";
+import type { CfRuleset, RuleWrite } from "../../lib/cloudflare/api";
 import type { Profile, SslMode } from "./model";
 
 export interface ZoneWants {

@@ -53,6 +53,10 @@ async function applyRepair(positional: string[], flags: Record<string, string | 
   } catch (error) {
     log.warn(`renamed addons were not moved yet: ${errorMessage(error)}`);
   }
+  await repairAll(positional, flags, quiet);
+}
+
+async function repairAll(positional: string[], flags: Record<string, string | true>, quiet: boolean): Promise<void> {
   const specs = positional[0] ? [resolveAddon(positional[0])] : enabledAddons();
   const all = enabledAddons();
   // An installation with every addon disabled still needs its timer, its Nginx

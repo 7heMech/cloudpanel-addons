@@ -1,4 +1,5 @@
 import type { ActionNeeded, ActionNeededCheck, SetupCheck, SetupStep } from "../../lib/addon-definition";
+import { listCloudflareSecrets } from "../../lib/cloudflare/store";
 import type { CloudSetupState } from "./cloud-firewall";
 import { hetznerSetupState } from "./hetzner";
 import { netcupSetupState } from "./netcup";
@@ -57,8 +58,9 @@ export function netcupActions(state: CloudSetupState, now = Date.now()): ActionN
   }];
 }
 
-export function panelGateCheck(summary: Pick<PanelGateView, "on" | "hostname">): SetupCheck {
+export function panelGateCheck(summary: Pick<PanelGateView, "on" | "hostname">, cloudflareConnected = true): SetupCheck {
   if (summary.on) return { state: "done", reason: summary.hostname ? `Cloudflare Access sits in front of ${summary.hostname}` : "Cloudflare Access sits in front of CloudPanel" };
+  if (!cloudflareConnected) return { state: "todo", reason: "Connect Cloudflare on the Firewall page to turn on Panel gate" };
   return { state: "todo", reason: "CloudPanel's login page is directly reachable" };
 }
 
@@ -74,9 +76,13 @@ export const FIREWALL_SETUP: SetupStep[] = [
     check: () => netcupCheck(netcupSetupState()),
   },
   {
-    id: "panel-gate", level: "domain", title: "Panel gate", href: GATE_CARD, requires: ["dns-connection", "panel-hostname"],
+    id: "panel-gate", level: "domain", title: "Panel gate", href: GATE_CARD, requires: ["panel-hostname"],
     why: "Requires a Cloudflare Access email sign-in before anyone reaches CloudPanel's login screen and closes direct port 8443.",
-    check: (options) => panelGateCheck(panelGateSummary(options?.gate as GateOptions | undefined)),
+    check: (options) => {
+      const gate = options?.gate as GateOptions | undefined;
+      const connected = listCloudflareSecrets(gate?.paths?.cloudflareDir ? { stateDir: gate.paths.cloudflareDir, rootUid: gate.paths.rootUid } : undefined).length > 0;
+      return panelGateCheck(panelGateSummary(gate), connected);
+    },
   },
 ];
 

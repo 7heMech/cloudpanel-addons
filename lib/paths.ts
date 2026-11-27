@@ -103,6 +103,8 @@ export const PANEL_CACHE_POOL_DIR = `${PANEL_APP}/var/cache/prod/pools/app`;
 export const ROOT_UID = 0;
 export const CONFIG_DIR = "/etc/clp-addons";
 export const STATE_DIR = "/var/lib/clp-addons";
+/** Shared Cloudflare API connections, read by DNS, Firewall and Setup. */
+export const CLOUDFLARE_STATE_DIR = `${STATE_DIR}/cloudflare`;
 /** An addon is enabled while this file exists. */
 export const addonConfigFile = (addon: string) => `${CONFIG_DIR}/${addon}.conf`;
 /** What an addon keeps, which disabling leaves in place. */

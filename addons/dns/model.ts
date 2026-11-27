@@ -5,7 +5,21 @@
  */
 import { isIP } from "node:net";
 import { ActionFailure, failAction } from "../../lib/action";
+import { cloudflareId, connectionId, dnsName, secretText } from "../../lib/dns-name";
 import { oneLine } from "../../lib/validate";
+import {
+  parsePowerDnsDefaultTtl, parsePowerDnsNameservers, parsePowerDnsServerId, parsePowerDnsUrl,
+} from "./powerdns";
+
+export { cloudflareId, connectionId, dnsName, secretText };
+
+/** A zone or account identifier for any DNS provider (Cloudflare 32-hex, PowerDNS zone/server id, etc.). */
+export function providerId(value: unknown, what: string): string {
+  if (typeof value !== "string" || !/^[\x21-\x2e\x30-\x7e]{1,255}$/.test(value)) {
+    failAction(`${what} is not a valid provider identifier`);
+  }
+  return value;
+}
 
 const RECORD_TYPES = ["A", "AAAA", "CNAME", "MX", "TXT", "SRV", "CAA"] as const;
 type RecordType = (typeof RECORD_TYPES)[number];
@@ -84,6 +98,16 @@ export interface Connection {
   label: string;
 }
 
+export interface PowerDnsConnection {
+  id: string;
+  label: string;
+  url: string;
+  serverId: string;
+  defaultTtl: number;
+  createZones: boolean;
+  nameservers: string[];
+}
+
 export interface MailcowSettings {
   /** The API's HTTPS origin; empty until Mailcow is set up. */
   url: string;
@@ -117,6 +141,8 @@ export interface Policy {
   /** New sites whose changes beyond their own address records wait for an administrator's review. */
   held: string[];
   connections: Connection[];
+  /** PowerDNS Authoritative API v1 connections stored in dns/policy.json. */
+  powerdns?: PowerDnsConnection[];
   /** Zone name to the connection and zone that manage it, where more than one could. */
   zoneChoices: Record<string, ZoneChoice>;
   /** Overrides for `{ipv4}` and `{ipv6}`; empty uses what was detected. */
@@ -129,6 +155,7 @@ export interface Policy {
 /** Root-only, and never part of anything sent to the browser. */
 export interface Secrets {
   cloudflare: Record<string, string>;
+  powerdns?: Record<string, string>;
   mailcowKey: string;
 }
 
@@ -139,15 +166,6 @@ export const EMPTY_MAILCOW: MailcowSettings = {
 // ---------------------------------------------------------------------------
 // Small parsers
 // ---------------------------------------------------------------------------
-
-const LABEL = "(?:[a-z0-9_](?:[a-z0-9_-]{0,61}[a-z0-9_])?)";
-const HOSTNAME_RE = new RegExp(`^${LABEL}(?:\\.${LABEL})+$`);
-
-/** A DNS name as records use it: underscores allowed, a leading `*.` allowed, no trailing dot. */
-export function dnsName(value: string): boolean {
-  const name = value.startsWith("*.") ? value.slice(2) : value;
-  return value.length <= 253 && HOSTNAME_RE.test(name);
-}
 
 export function hostname(value: unknown, what: string): string {
   if (typeof value !== "string") failAction(`${what} must be a hostname`);
@@ -162,16 +180,6 @@ function optionalHostname(value: unknown, what: string): string {
 
 export function profileId(value: unknown): string {
   if (typeof value !== "string" || !/^[a-z0-9][a-z0-9-]{0,63}$/.test(value)) failAction("that is not a profile identifier");
-  return value;
-}
-
-export function connectionId(value: unknown): string {
-  if (typeof value !== "string" || !/^[a-z0-9][a-z0-9-]{0,63}$/.test(value)) failAction("that is not a connection identifier");
-  return value;
-}
-
-export function cloudflareId(value: unknown, what: string): string {
-  if (typeof value !== "string" || !/^[a-f0-9]{32}$/.test(value)) failAction(`${what} is not a Cloudflare identifier`);
   return value;
 }
 
@@ -240,7 +248,7 @@ export function parseRecord(value: unknown, position: number): RecordTemplate {
   if (!content) failAction(`${where} needs content`);
   const proxied = PROXIABLE.includes(type) ? flag(raw.proxied ?? false, `${where}'s proxy`) : false;
   const ttl = proxied ? 1 : integer(raw.ttl ?? 1, `${where}'s TTL`, 1, 86400);
-  if (!TTLS.includes(ttl)) failAction(`${where}'s TTL must be one of Cloudflare's: Auto, 1, 2, 5, 10, 15 or 30 minutes, or 1, 2, 5, 12 or 24 hours`);
+  if (!TTLS.includes(ttl)) failAction(`${where}'s TTL must be Auto, 1, 2, 5, 10, 15 or 30 minutes, or 1, 2, 5, 12 or 24 hours`);
   const priority = PRIORITISED.includes(type) ? integer(raw.priority ?? null, `${where}'s priority`, 0, 65535) : null;
   return { type, name, content, proxied, ttl, priority, apexOnly: flag(raw.apexOnly ?? false, `${where}'s apex-only setting`) };
 }
@@ -266,7 +274,7 @@ export function parseAccountRef(value: unknown): AccountRef | null {
   if (value == null || value === "") return null;
   if (typeof value !== "object" || Array.isArray(value)) failAction("the account for new zones is malformed");
   const ref = value as Record<string, unknown>;
-  return { connectionId: connectionId(ref.connectionId), accountId: cloudflareId(ref.accountId, "the account for new zones") };
+  return { connectionId: connectionId(ref.connectionId), accountId: providerId(ref.accountId, "the account for new zones") };
 }
 
 export function parseProfile(value: unknown): Profile {
@@ -338,6 +346,33 @@ function parseConnections(value: unknown): Connection[] {
   });
 }
 
+export function parsePowerDnsConnection(value: unknown, fallbackId?: string): PowerDnsConnection {
+  if (!value || typeof value !== "object" || Array.isArray(value)) failAction("the PowerDNS connection is malformed");
+  const raw = value as Record<string, unknown>;
+  const id = connectionId(raw.id ?? fallbackId);
+  const url = parsePowerDnsUrl(raw.url);
+  const serverId = parsePowerDnsServerId(raw.serverId);
+  const defaultTtl = parsePowerDnsDefaultTtl(raw.defaultTtl);
+  const createZones = flag(raw.createZones ?? false, "Create missing zones");
+  const nameservers = parsePowerDnsNameservers(raw.nameservers, createZones);
+  const named = oneLine(raw.label, "the connection name", NAME_MAX, false);
+  const label = named || new URL(url).hostname.slice(0, NAME_MAX) || "PowerDNS";
+  return { id, label, url, serverId, defaultTtl, createZones, nameservers };
+}
+
+function parsePowerDnsConnections(value: unknown): PowerDnsConnection[] {
+  if (value == null) return [];
+  if (!Array.isArray(value)) failAction("the PowerDNS connections must be a list");
+  if (value.length > MAX_CONNECTIONS) failAction(`at most ${MAX_CONNECTIONS} PowerDNS connections can be added`);
+  const seen = new Set<string>();
+  return value.map((entry) => {
+    const parsed = parsePowerDnsConnection(entry);
+    if (seen.has(parsed.id)) failAction(`PowerDNS connection ${parsed.id} is listed twice`);
+    seen.add(parsed.id);
+    return parsed;
+  });
+}
+
 /**
  * A policy saved with a mode on each profile is Automatic only when every
  * profile that has sites enforced; anything less asks first, so no site starts
@@ -365,16 +400,24 @@ export function parsePolicy(value: unknown): Policy {
     const ids = new Set(profiles.map((profile) => profile.id));
     const choices: Record<string, ZoneChoice> = {};
     for (const [zone, choice] of Object.entries(raw.zoneChoices ?? {})) {
-      choices[hostname(zone, "a zone")] = { connectionId: connectionId(choice.connectionId), zoneId: cloudflareId(choice.zoneId, "a zone") };
+      choices[hostname(zone, "a zone")] = { connectionId: connectionId(choice.connectionId), zoneId: providerId(choice.zoneId, "a zone") };
     }
     const assignments: Record<string, string> = Object.fromEntries(Object.entries(raw.assignments)
       .filter(([, id]) => ids.has(id))
       .map(([domain, id]) => [hostname(domain, "an assigned site"), id]));
     const createIn = parseAccountRef(legacy.createIn);
+    const parsedConnections = parseConnections(raw.connections ?? []);
+    const parsedPowerDns = parsePowerDnsConnections(raw.powerdns ?? []);
+    const keepCreateIn = createIn && (
+      createIn.connectionId.startsWith("pdns-")
+        ? parsedPowerDns.some((connection) => connection.id === createIn.connectionId)
+        : !parsedConnections.length || parsedConnections.some((connection) => connection.id === createIn.connectionId)
+    );
     return {
       version: 1,
       automatic: legacy.automatic,
-      createIn: createIn && parseConnections(raw.connections ?? []).some((connection) => connection.id === createIn.connectionId) ? createIn : null,
+      // Cloudflare connections live in the shared store, so a cf-* createIn stays valid even when policy.json's legacy list is empty.
+      createIn: keepCreateIn ? createIn : null,
       profiles,
       defaultProfileId: raw.defaultProfileId && ids.has(raw.defaultProfileId) ? raw.defaultProfileId : null,
       assignments,
@@ -382,7 +425,8 @@ export function parsePolicy(value: unknown): Policy {
       held: [...new Set((raw.held ?? []).filter((domain) => typeof domain === "string"
         && (assignments[domain] || (raw.redirects ?? []).some((redirect) => redirect?.source === domain))))],
       knownSiteIds: [...new Set((raw.knownSiteIds ?? []).filter((id) => Number.isSafeInteger(id) && id > 0))],
-      connections: parseConnections(raw.connections ?? []),
+      connections: parsedConnections,
+      powerdns: parsedPowerDns,
       zoneChoices: choices,
       server: {
         ipv4: ipAddress(raw.server?.ipv4, 4, "the server IPv4 override"),
@@ -451,13 +495,9 @@ export function parseSecrets(value: unknown): Secrets {
   for (const [id, token] of Object.entries(raw.cloudflare ?? {})) {
     if (typeof token === "string" && token) cloudflare[connectionId(id)] = token;
   }
-  return { cloudflare, mailcowKey: typeof raw.mailcowKey === "string" ? raw.mailcowKey : "" };
-}
-
-/** A Cloudflare API token or Mailcow key as pasted: one printable run, no spaces. */
-export function secretText(value: unknown, what: string): string {
-  if (typeof value !== "string") failAction(`${what} must be text`);
-  const secret = value.trim();
-  if (!/^[\x21-\x7e]{20,512}$/.test(secret)) failAction(`${what} does not look like one`);
-  return secret;
+  const powerdns: Record<string, string> = {};
+  for (const [id, key] of Object.entries(raw.powerdns ?? {})) {
+    if (typeof key === "string" && key) powerdns[connectionId(id)] = key;
+  }
+  return { cloudflare, powerdns, mailcowKey: typeof raw.mailcowKey === "string" ? raw.mailcowKey : "" };
 }

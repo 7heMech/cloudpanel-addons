@@ -1,7 +1,8 @@
 import { addonStateDir, CONFIG_DIR, LOCK_DIR, STATE_DIR, SYSTEMD_DIR } from "../lib/paths";
 import { withFileLockSync } from "../lib/file-lock";
 import { migrateResourceMemory } from "../addons/resource-limits/migration";
-import { LEGACY_PROTOCOLS_FILE, migrateFirewallProtocols } from "../addons/firewall/migration";
+import { LEGACY_PROTOCOLS_FILE, migrateFirewallProtocols, migrateVisitorIp, visitorIpMigrationPending } from "../addons/firewall/migration";
+import { legacyDnsCloudflarePending, migrateCloudflareFromDns } from "../lib/cloudflare/store";
 import { ADDONS, ADDON_NAMES, addonEnabled } from "../addons/catalog";
 import { archRefusal, type AddonSpec } from "../lib/addon-definition";
 import { masterVhostHost } from "./inject";
@@ -31,7 +32,7 @@ const RENAMED_ADDONS: Record<string, string> = { "wp-login": "wp-tools", "php-re
 const LEGACY_LOCKS = ["cloudflare-ips.lock", "system-tweaks-firewall.lock"];
 
 /** What a rename moved, so a failed update can hand it back to the binary it restores. */
-interface AddonRename {
+export interface AddonRename {
   from: string;
   to: string;
   /** The old config, or null when the addon was disabled. */
@@ -45,10 +46,12 @@ function migrationPending(): boolean {
   if (Object.keys(RENAMED_ADDONS).some((from) =>
     existsSync(`${CONFIG_DIR}/${from}.conf`) || existsSync(`${CONFIG_DIR}/${from}.conf.new`) || existsSync(`${STATE_DIR}/${from}`))) return true;
   if (existsSync(`${addonStateDir("system-tweaks")}/memory.json`) || existsSync(LEGACY_PROTOCOLS_FILE)) return true;
+  if (legacyDnsCloudflarePending() || visitorIpMigrationPending()) return true;
   const oom = `${SYSTEMD_DIR}/nginx.service.d/zz-clp-addons-oom.conf`;
   if (existsSync(oom) && readFileSync(oom, "utf8").includes("clp-addons System Tweaks:")) return true;
   try {
-    return Object.hasOwn(JSON.parse(readFileSync(`${addonStateDir("system-tweaks")}/settings.json`, "utf8")) ?? {}, "memory");
+    const parsed = JSON.parse(readFileSync(`${addonStateDir("system-tweaks")}/settings.json`, "utf8")) ?? {};
+    return Object.hasOwn(parsed, "memory");
   } catch {
     return false;
   }
@@ -64,9 +67,17 @@ export function migrateOldAddonNames(quiet = false, legacyWaitSeconds = 300): Ad
   // be applying pools; moving its policy from under it would let it write the
   // old directory back, so the move waits for it as long as such a change runs.
   return withFileLockSync(`${LOCK_DIR}/php-resources.lock`, legacyWaitSeconds, "a PHP Resources change from the earlier version is still running", () =>
-    withFileLockSync(`${LOCK_DIR}/resource-limits-settings.lock`, 15, "a resource limits change is still running", () =>
-      withFileLockSync(`${LOCK_DIR}/system-tweaks.lock`, 15, "a system tweaks change is still running", () =>
-        withLegacyLocks(LEGACY_LOCKS, () => migrateAddonState(quiet)))));
+    withMigrationLocks(() => migrateAddonState(quiet)));
+}
+
+/** Holds every live and legacy addon lock touched by state migrations, in `dns.lock` -> `cloudflare.lock` order. */
+function withMigrationLocks<T>(body: () => T): T {
+  return withFileLockSync(`${LOCK_DIR}/resource-limits-settings.lock`, 15, "a resource limits change is still running", () =>
+    withFileLockSync(`${LOCK_DIR}/system-tweaks.lock`, 15, "a system tweaks change is still running", () =>
+      withFileLockSync(`${LOCK_DIR}/firewall-visitor-ip.lock`, 30, "another Cloudflare visitor IP change is running", () =>
+        withFileLockSync(`${LOCK_DIR}/dns.lock`, 30, "another DNS change is running", () =>
+          withFileLockSync(`${LOCK_DIR}/cloudflare.lock`, 30, "another Cloudflare connection change is running", () =>
+            withLegacyLocks(LEGACY_LOCKS, body))))));
 }
 
 function withLegacyLocks<T>(names: string[], body: () => T): T {
@@ -82,6 +93,8 @@ function removeLegacyLocks(): void {
 
 function migrateAddonState(quiet: boolean): AddonRename[] {
   const renames: AddonRename[] = [];
+  // Capture before the rename or protocol migration creates firewall.conf so unsaved visitor-IP defaults still migrate and carry root's lock.
+  const firewallWasEnabled = addonEnabled(ADDONS.firewall!);
   try {
     for (const [from, to] of Object.entries(RENAMED_ADDONS)) {
       const legacyConfig = `${CONFIG_DIR}/${from}.conf`;
@@ -120,15 +133,17 @@ function migrateAddonState(quiet: boolean): AddonRename[] {
     // After the rename, which refuses a firewall state directory that already holds anything.
     const protocols = migrateFirewallProtocols(() => writeConfig(ADDONS.firewall!, true));
     if (protocols) renames.push({ from: "system-tweaks", to: "firewall", config: null, stateMoved: false, undo: protocols });
+    const visitorIp = migrateVisitorIp(() => writeConfig(ADDONS.firewall!, true), { firewallWasEnabled });
+    if (visitorIp) renames.push({ from: "system-tweaks", to: "firewall", config: null, stateMoved: false, undo: visitorIp });
+    const cloudflare = migrateCloudflareFromDns();
+    if (cloudflare) renames.push({ from: "dns", to: "cloudflare", config: null, stateMoved: false, undo: cloudflare });
     removeLegacyLocks();
     return renames;
   } catch (error) { restoreAddonState(renames); throw error; }
 }
 
 export function revertAddonRenames(renames: AddonRename[]): void {
-  withFileLockSync(`${LOCK_DIR}/resource-limits-settings.lock`, 15, "a resource limits change is still running", () =>
-    withFileLockSync(`${LOCK_DIR}/system-tweaks.lock`, 15, "a system tweaks change is still running", () =>
-      withLegacyLocks(LEGACY_LOCKS, () => restoreAddonState(renames))));
+  withMigrationLocks(() => restoreAddonState(renames));
 }
 
 function restoreAddonState(renames: AddonRename[]): void {
