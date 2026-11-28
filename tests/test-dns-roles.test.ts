@@ -625,6 +625,7 @@ describe("Mailcow hide-until-linked tab and removal warning flow", () => {
     expect(linkedPanel).toContain("Domains using Mailcow");
     // Redirects has no Mail role to choose; a redirect's domain gets mail as a DNS-only domain.
     expect(linkedPanel).toContain("Choose Mailcow under Mail in Sites, adding a domain there first if it has no site.");
+    expect(linkedPanel).toContain("Sites and DNS-only domains whose Mail role uses Mailcow.");
 
     // Deleting the seeded Mailcow profile and later editing Mailcow does not recreate it unexpectedly.
     await env.act("delete-profile", { id: "mailcow" });

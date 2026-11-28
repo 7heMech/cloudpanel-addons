@@ -374,7 +374,7 @@ function mailcowPanel(state: DnsState, mailcowDomains: SiteView[]): string {
     <div class="card card-table">
       <div class="card-header">
         <div><h2>Domains using Mailcow</h2>
-          <p class="hint">Sites and redirects whose Mail role uses Mailcow.</p></div>
+          <p class="hint">Sites and DNS-only domains whose Mail role uses Mailcow.</p></div>
         ${hasMailcowProfile ? "" : '<button class="btn" type="button" onclick="dnsEditProfile(\'\', \'mail\')">New Mail profile</button>'}
       </div>
       ${mailcowDomains.length
