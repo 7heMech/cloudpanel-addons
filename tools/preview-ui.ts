@@ -36,7 +36,7 @@ import type { SitePlan as DnsSitePlan } from "../addons/dns/engine";
 import { mailcowSeededProfile as dnsMailcowProfile, presetsFor as dnsPresetsFor, seededPolicy as dnsSeededPolicy } from "../addons/dns/presets";
 import { dashboardView as redirectsDashboardView, layout as redirectsLayout } from "../addons/redirects/app/views";
 import type { Found as RedirectsFound, RedirectsState, Review as RedirectsReview } from "../addons/redirects/action";
-import type { RedirectPlan } from "../addons/redirects/engine";
+import { appliedChangeCount, type RedirectPlan } from "../addons/redirects/engine";
 import { createSiteRedirectSnippet } from "../addons/redirects/inject/create-site";
 import { tokenTemplate as dnsTokenTemplate, tokenTemplates as cloudflareTokenTemplates } from "../lib/cloudflare/tokens";
 import {
@@ -479,8 +479,8 @@ function redirectsPreviewState(url: URL): RedirectsState {
         ...baseRedirects,
         ...Array.from({ length: 8 }, (_, n) => ({
           source: `campaign-${n + 1}.example.org`, target: "https://example.com/campaigns", status: 301 as const,
-          keepPath: true, keepQuery: true, mode: "auto" as const, standIn: false,
-          plan: plan(`campaign-${n + 1}.example.org`, { zone: cfZone("example.org") }),
+          keepPath: true, keepQuery: true, mode: "auto" as const, standIn: localOnly,
+          plan: plan(`campaign-${n + 1}.example.org`, { zone: localOnly ? null : cfZone("example.org") }),
         })),
       ]
     : baseRedirects;
@@ -509,10 +509,11 @@ function redirectsPreviewState(url: URL): RedirectsState {
 
 function redirectsPreviewReview(state: RedirectsState): RedirectsReview {
   const sites = state.redirects.filter((entry) => entry.plan).map((entry) => ({ ...entry.plan!, problems: [], zoneChoices: [] }));
+  const changes = appliedChangeCount(sites);
   return {
     token: "preview",
     title: "Turn on Automatic",
-    text: "3 changes will be made now. From then on Redirects keeps every redirect rule and stand-in site in place on its own. Non-web DNS records stay untouched.",
+    text: `${changes} change${changes === 1 ? "" : "s"} will be made now. From then on Redirects keeps every redirect domain in sync on its own. Non-web DNS records such as mail and verification are left alone.`,
     sites,
     blocked: false,
     confirmLabel: "Apply and turn on Automatic",
