@@ -33,7 +33,7 @@ import { panelUserUid } from "../../lib/sso-auth";
 import { isStandInSite } from "../../lib/stand-ins";
 import { trustedText } from "../../lib/trusted-file";
 import {
-  appliedChangeCount, RedirectsRun, type LogEntry, type RedirectPlan, type Removal, type TrackedRedirectRule,
+  appliedChangeCount, RedirectsRun, removalIdentity, type LogEntry, type RedirectPlan, type Removal, type TrackedRedirectRule,
 } from "./engine";
 import {
   cloudflareId, connectionId, emptyPolicy, hostname, parsePolicy, parseRedirect, parseRedirects,
@@ -648,12 +648,14 @@ class Action {
       });
   }
 
-  private digest(plans: RedirectPlan[]): string {
+  /** Binds a review to its plans, and a replacement to the very rule and records it deletes. */
+  private digest(plans: RedirectPlan[], run?: RedirectsRun): string {
     return hash(plans.map((plan) => [
       plan.domain,
       plan.zone ? [plan.zone.connectionId, plan.zone.id] : null,
       plan.changes,
       plan.problems,
+      ...plan.replacedBy && run ? [removalIdentity(run.replacementOf(plan.domain))] : [],
     ]));
   }
 
@@ -685,7 +687,7 @@ class Action {
       token,
       expiresAt: this.now + REVIEW_LIFETIME,
       base: hash(before),
-      digest: this.digest(plans),
+      digest: this.digest(plans, run),
       domains,
       policy: next,
     });
@@ -734,15 +736,7 @@ class Action {
       changes: removal.changes,
       ...replacedBy && { replacedBy },
     }];
-    const rule = removal.rule && {
-      id: removal.rule.rule.id,
-      ref: removal.rule.rule.ref,
-      expression: removal.rule.rule.expression,
-      action_parameters: removal.rule.rule.action_parameters,
-      description: removal.rule.rule.description,
-      enabled: removal.rule.rule.enabled,
-    };
-    const digest = hash([this.digest(plans), rule, removal.records.map(({ record }) => record.id)]);
+    const digest = hash([this.digest(plans), removalIdentity(removal)]);
     return { run, removal, replacedBy, plans, digest };
   }
 
@@ -868,7 +862,7 @@ class Action {
     await run.discover();
     await run.load(pending.domains);
     const plans = run.planAll(pending.domains);
-    if (this.digest(plans) !== pending.digest) {
+    if (this.digest(plans, run) !== pending.digest) {
       return this.review(current, next, pending.domains, "Cloudflare changed after the plan was shown. This is the plan now.");
     }
     this.files.savePolicy(next);

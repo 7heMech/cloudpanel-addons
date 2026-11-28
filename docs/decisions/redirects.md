@@ -179,7 +179,9 @@ logged "Replaced by the site <domain>".
 
 In Ask first mode the removal waits as pending changes on the redirect, shown as
 "Replaced by a site". Turning on Automatic reviews and applies it with
-everything else, and deleting the redirect reviews and applies it alone.
+everything else, and deleting the redirect reviews and applies it alone. Either
+review's digest covers the rule and placeholder records it deletes, so one
+recreated in between shows a fresh review.
 
 When the rule cannot be read (a connection failing discovery, an unreadable or
 unreachable tracked zone, two matching rules, rules in two zones, or another

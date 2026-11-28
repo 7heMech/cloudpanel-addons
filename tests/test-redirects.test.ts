@@ -1084,6 +1084,29 @@ describe("a CloudPanel site replaces a redirect", () => {
     expect(env.sites.map((site) => site.domain)).toEqual(["ask.example"]);
   });
 
+  test("a reviewed replacement shows a fresh review when its rule was recreated, rather than deleting the new one", async () => {
+    const env = setup();
+    seededZone(env.cf, env.account, "swap.example", "https://example.com");
+    await env.act("save-connection", { token: TOKEN });
+    await env.automatic();
+    await env.confirmed(await env.act("take-over", { redirects: [found("swap.example", "https://example.com")] }));
+    await env.act("set-automatic", { automatic: false });
+    env.sites.push({ id: 46, domain: "swap.example", user: "swap", selfSigned: false });
+
+    const review = await env.act("set-automatic", { automatic: true });
+    expect(review.review!.sites[0]!.replacedBy).toBe("swap.example");
+    const rule = env.redirectRules("swap.example")[0]!;
+    rule.id = "0123456789abcdef0123456789abcdef";
+    const again = await env.act("confirm", { token: review.review!.token });
+    expect(again.notice).toContain("Cloudflare changed after the plan was shown");
+    expect(again.review!.sites[0]!.replacedBy).toBe("swap.example");
+    expect(env.redirectRules("swap.example")).toHaveLength(1);
+    expect(env.placeholders("swap.example")).toHaveLength(2);
+
+    await env.confirmed(again);
+    expect(env.redirectRules("swap.example")).toEqual([]);
+  });
+
   test("keeps the redirect and reports a problem while its rule cannot be read or conflicts", async () => {
     const env = setup();
     seededZone(env.cf, env.account, "keep.example", "https://example.com");

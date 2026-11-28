@@ -132,6 +132,20 @@ export interface Removal {
   problems: string[];
 }
 
+/** What a confirmation must find unchanged before it deletes: the rule as Cloudflare holds it and the placeholder records' ids. */
+export function removalIdentity(removal: Removal | undefined): unknown {
+  if (!removal) return null;
+  const rule = removal.rule && {
+    id: removal.rule.rule.id,
+    ref: removal.rule.rule.ref,
+    expression: removal.rule.rule.expression,
+    action_parameters: removal.rule.rule.action_parameters,
+    description: removal.rule.rule.description,
+    enabled: removal.rule.rule.enabled,
+  };
+  return [rule, removal.records.map(({ record }) => record.id)];
+}
+
 type Resolution =
   | { kind: "zone"; ref: ZoneRef }
   | { kind: "local" }
@@ -891,6 +905,11 @@ export class RedirectsRun {
       removal.changes.push({ action: "delete", subject: "Stand-in site", detail: `Static site on this server for ${hosts.join(" and ")}` });
     }
     return removal;
+  }
+
+  /** What replacing `source` deletes, as its plan found it. */
+  replacementOf(source: string): Removal | undefined {
+    return this.removals.get(source);
   }
 
   /** Deletes what `removal` lists: the rule first, so a failure leaves the redirect whole. Never touches a site Redirects does not own. */
