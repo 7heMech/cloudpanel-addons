@@ -145,7 +145,11 @@ which plans removal against live Cloudflare and stand-in state, then opens a
 stand-in site deletions (and noting that non-web DNS records stay untouched).
 Confirming posts `POST /addons/redirects/api/confirm`, verifies the plan digest,
 removes the redirect, and replaces the warning with a green confirmation banner
-so the administrator can click Create.
+so the administrator can click Create. The helper drops a review that arrives
+after the Domain Name field moved to another redirect, and shows the banner
+only for hosts covered by the redirect the server reports as `replaced`. It
+builds every URL from the fixed `/addons/redirects` mount and does nothing when
+its `data-url` differs.
 
 ## Permissions and access control
 

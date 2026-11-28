@@ -117,7 +117,8 @@
     var dialogBusy = false;
     var pendingToken = '';
     var pendingSource = '';
-    var replacedDomain = '';
+    var requestSeq = 0;
+    var replaced = [];
 
     function showDialogError(message) {
       dialogError.textContent = message;
@@ -137,12 +138,15 @@
       if (dialog.open) dialog.close();
     }
 
-    function matchRedirect(host) {
+    function covers(entry, host) {
+      return entry.source === host || (Array.isArray(entry.hosts) && entry.hosts.indexOf(host) >= 0);
+    }
+
+    function matchRedirect(host, list) {
       if (!host) return null;
-      for (var i = 0; i < redirects.length; i++) {
-        var entry = redirects[i];
-        if (entry.source === host) return entry;
-        if (Array.isArray(entry.hosts) && entry.hosts.indexOf(host) >= 0) return entry;
+      list = list || redirects;
+      for (var i = 0; i < list.length; i++) {
+        if (covers(list[i], host)) return list[i];
       }
       return null;
     }
@@ -245,10 +249,12 @@
       replaceBtn.addEventListener('click', function () {
         replaceBtn.disabled = true;
         replaceBtn.textContent = 'Checking redirect…';
-        pendingSource = entry.source;
+        var seq = ++requestSeq;
         postJson('/api/redirects/prepare-replace', { source: entry.source }).then(function (replyData) {
           replaceBtn.disabled = false;
           replaceBtn.textContent = 'Replace redirect with this site';
+          if (seq !== requestSeq || matchRedirect(normalizeHost(input.value)) !== entry) return;
+          pendingSource = entry.source;
           if (!replyData || !replyData.review) {
             renderError('Redirects did not return a confirmation plan.');
             return;
@@ -257,6 +263,7 @@
         }, function (failure) {
           replaceBtn.disabled = false;
           replaceBtn.textContent = 'Replace redirect with this site';
+          if (seq !== requestSeq) return;
           renderError(failure.message || 'Could not inspect the redirect.');
         });
       });
@@ -274,11 +281,11 @@
 
     function sync() {
       var entered = normalizeHost(input.value);
-      if (replacedDomain && entered === replacedDomain) {
-        renderReplaced(replacedDomain);
+      var removed = matchRedirect(entered, replaced);
+      if (removed) {
+        renderReplaced(removed.source);
         return;
       }
-      replacedDomain = '';
       var matched = matchRedirect(entered);
       if (!matched) {
         box.textContent = '';
@@ -319,10 +326,16 @@
           renderReview(confirmData.review, confirmData.notice);
           return;
         }
-        redirects = redirects.filter(function (entry) { return entry.source !== source; });
-        replacedDomain = normalizeHost(input.value) || source;
+        var gone = confirmData && confirmData.replaced;
+        if (gone !== source) {
+          showDialogError('Redirects did not confirm which redirect it removed. Reload the page before creating the site.');
+          setDialogBusy(false);
+          return;
+        }
+        replaced = replaced.concat(redirects.filter(function (entry) { return entry.source === gone; }));
+        redirects = redirects.filter(function (entry) { return entry.source !== gone; });
         closeDialog();
-        renderReplaced(source);
+        sync();
       }, function (failure) {
         showDialogError(failure.message || 'Could not replace the redirect.');
         setDialogBusy(false);

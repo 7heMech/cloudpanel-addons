@@ -122,6 +122,102 @@ class FakeStandIns implements StandIns {
   }
 }
 
+class FakeNode {
+  children: FakeNode[] = [];
+  parent: FakeNode | null = null;
+  attrs: Record<string, string> = {};
+  listeners: Record<string, ((event: unknown) => void)[]> = {};
+  className = "";
+  id = "";
+  type = "";
+  hidden = false;
+  disabled = false;
+  open = false;
+  value = "";
+  text = "";
+  constructor(readonly tag: string) {}
+  get textContent(): string { return this.text + this.children.map((child) => child.textContent).join(""); }
+  set textContent(value: string) { this.text = String(value); this.children = []; }
+  get parentNode(): FakeNode | null { return this.parent; }
+  get nextSibling(): FakeNode | null { return this.parent?.children[this.parent.children.indexOf(this) + 1] ?? null; }
+  appendChild(node: FakeNode): FakeNode {
+    node.remove();
+    node.parent = this;
+    this.children.push(node);
+    return node;
+  }
+  insertBefore(node: FakeNode, before: FakeNode | null): FakeNode {
+    node.remove();
+    node.parent = this;
+    const at = before ? this.children.indexOf(before) : -1;
+    if (at < 0) this.children.push(node); else this.children.splice(at, 0, node);
+    return node;
+  }
+  remove(): void {
+    if (this.parent) this.parent.children = this.parent.children.filter((child) => child !== this);
+    this.parent = null;
+  }
+  setAttribute(name: string, value: string): void { this.attrs[name] = String(value); }
+  getAttribute(name: string): string | null { return this.attrs[name] ?? null; }
+  addEventListener(type: string, listener: (event: unknown) => void): void { (this.listeners[type] ??= []).push(listener); }
+  fire(type: string): void { for (const listener of this.listeners[type] ?? []) listener({ target: this, preventDefault() {} }); }
+  matches(selector: string): boolean {
+    return selector.split(",").map((part) => part.trim()).some((part) => {
+      if (part.startsWith(".")) return this.className.split(" ").includes(part.slice(1));
+      if (part.startsWith("[")) return part.slice(1, -1) in this.attrs;
+      return part.startsWith(this.tag) && this.tag !== "#text";
+    });
+  }
+  descendants(): FakeNode[] { return this.children.flatMap((child) => [child, ...child.descendants()]); }
+  querySelector(selector: string): FakeNode | null { return this.descendants().find((node) => node.matches(selector)) ?? null; }
+  closest(selector: string): FakeNode | null {
+    for (let node: FakeNode | null = this; node; node = node.parent) if (node.matches(selector)) return node;
+    return null;
+  }
+  showModal(): void { this.open = true; }
+  close(): void { this.open = false; this.fire("close"); }
+  getBoundingClientRect() { return { left: 0, right: 100, top: 0, bottom: 100 }; }
+}
+
+function createSitePage(redirects: Partial<CreateSiteHelper["redirects"][number]>[], dataUrl = mountPath("redirects")) {
+  const body = new FakeNode("body");
+  const form = body.appendChild(new FakeNode("form"));
+  const input = form.appendChild(new FakeNode("input"));
+  input.id = "site_domainName";
+  const box = form.appendChild(new FakeNode("div"));
+  box.setAttribute("data-clp-redirects-create-site", "");
+  box.setAttribute("data-url", dataUrl);
+  box.hidden = true;
+  const calls: { url: string; body: unknown; resolve: (data: unknown) => void }[] = [];
+  const document = {
+    body,
+    cookie: "clp_addons_csrf=csrf",
+    querySelector: (selector: string) => body.querySelector(selector),
+    createElement: (tag: string) => new FakeNode(tag),
+    createTextNode: (text: string) => Object.assign(new FakeNode("#text"), { text }),
+  };
+  const fetch = (url: string, init?: { body?: string }) => {
+    if (url.endsWith("/api/session")) return Promise.resolve({ ok: true, json: async () => ({ ok: true, data: {} }) });
+    if (url.endsWith("/api/create-site-helper")) {
+      return Promise.resolve({ ok: true, json: async () => ({ ok: true, data: { redirects, automatic: true, hasCloudflare: true } }) });
+    }
+    return new Promise((resolve) => calls.push({
+      url, body: init?.body ? JSON.parse(init.body) : undefined,
+      resolve: (data) => resolve({ ok: true, status: 200, json: async () => ({ ok: true, data }) }),
+    }));
+  };
+  const script = readFileSync(join(REPO, "addons/redirects/inject/create-site.client.js"), "utf8");
+  new Function("document", "fetch", script)(document, fetch);
+  const button = (label: string) => [box, ...body.children].flatMap((node) => [node, ...node.descendants()])
+    .find((node) => node.tag === "button" && node.textContent === label && !node.hidden);
+  const dialog = () => body.children.find((node) => node.tag === "dialog")!;
+  return {
+    box, input, calls, dialog, button,
+    settle: () => new Promise((resolve) => setTimeout(resolve, 0)),
+    type(value: string) { input.value = value; input.fire("input"); },
+  };
+}
+
 function setup() {
   const dir = mkdtempSync(join(tmpdir(), "redirects-addon-"));
   dirs.push(dir);
@@ -745,7 +841,69 @@ describe("Create Site replacement flow and silent-deletion protection", () => {
     expect(script).not.toMatch(/\.setAttribute\(['"]name['"]/);
   });
 
-  test("Create Site helper builds every URL from its fixed mount path, never from the page's markup", () => {
+  test("Create Site helper binds a replacement review and its result to the redirect that requested them", async () => {
+    const review = (source: string) => ({ review: { token: `t-${source}`, title: `Replace redirect for ${source}`, text: "", sites: [], blocked: false, confirmLabel: "Replace redirect" } });
+    const page = createSitePage([
+      { source: "a.example", target: "https://x.example", hosts: ["a.example", "www.a.example"], standIn: false, servedBy: "cloudflare", zone: "a.example" },
+      { source: "b.example", target: "https://y.example", hosts: ["b.example"], standIn: true, servedBy: "stand-in", zone: null },
+    ]);
+    await page.settle();
+    page.type("a.example");
+    page.button("Replace redirect with this site")!.fire("click");
+    await page.settle();
+    expect(page.calls[0]!.body).toEqual({ source: "a.example" });
+
+    // The field moved on to b.example before a.example's review arrived: it is dropped.
+    page.type("b.example");
+    page.calls[0]!.resolve(review("a.example"));
+    await page.settle();
+    expect(page.dialog().open).toBe(false);
+
+    page.button("Replace redirect with this site")!.fire("click");
+    await page.settle();
+    page.calls[1]!.resolve(review("b.example"));
+    await page.settle();
+    expect(page.dialog().open).toBe(true);
+    page.button("Replace redirect")!.fire("click");
+    await page.settle();
+    expect(page.calls[2]!.body).toEqual({ token: "t-b.example" });
+
+    // A reply that does not name the removed redirect shows no success.
+    page.calls[2]!.resolve({ replaced: "a.example" });
+    await page.settle();
+    expect(page.dialog().open).toBe(true);
+    expect(page.box.textContent).not.toContain("Redirect removed");
+    page.button("Replace redirect")!.fire("click");
+    await page.settle();
+    page.calls[3]!.resolve({ replaced: "b.example" });
+    await page.settle();
+    expect(page.dialog().open).toBe(false);
+    expect(page.box.textContent).toContain("The redirect for b.example was removed");
+
+    // Success follows only hosts the removed redirect covered; an alias of a removed redirect counts.
+    page.type("www.a.example");
+    expect(page.box.textContent).toContain("is covered by the redirect on a.example");
+    page.button("Replace redirect with this site")!.fire("click");
+    await page.settle();
+    page.calls[4]!.resolve(review("a.example"));
+    await page.settle();
+    page.button("Replace redirect")!.fire("click");
+    await page.settle();
+    page.calls[5]!.resolve({ replaced: "a.example" });
+    await page.settle();
+    expect(page.box.textContent).toContain("The redirect for a.example was removed");
+    page.type("a.example");
+    expect(page.box.textContent).toContain("Redirect removed");
+    page.type("c.example");
+    expect(page.box.hidden).toBe(true);
+  });
+
+  test("Create Site helper builds every URL from its fixed mount path, never from the page's markup", async () => {
+    const hostile = createSitePage([{ source: "a.example", hosts: ["a.example"] }], "javascript:alert(1)//");
+    await hostile.settle();
+    hostile.type("a.example");
+    expect(hostile.box.hidden).toBe(true);
+
     expect(createSiteRedirectSnippet(mountPath("redirects"))).toContain(`data-url="${mountPath("redirects")}"`);
     const script = readFileSync(join(REPO, "addons/redirects/inject/create-site.client.js"), "utf8");
     expect(script).toContain(`var MOUNT = '${mountPath("redirects")}';`);
