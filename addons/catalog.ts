@@ -4,6 +4,7 @@ import { addonSupportsArch, type AddonDefinition, type AddonHandler, type AddonN
 import { compareSemver } from "../lib/semver";
 import { FIREWALL_ADDON } from "./firewall/addon";
 import { DNS_ADDON } from "./dns/addon";
+import { REDIRECTS_ADDON } from "./redirects/addon";
 import { GIT_ADDON } from "./git/addon";
 import { INSTATIC_ADDON } from "./instatic/addon";
 import { MAINTENANCE_ADDON } from "./maintenance/addon";
@@ -25,6 +26,7 @@ const DEFINITIONS: AddonDefinition[] = [
   SYSTEM_TWEAKS_ADDON,
   FIREWALL_ADDON,
   DNS_ADDON,
+  REDIRECTS_ADDON,
   SECURITY_KEYS_ADDON,
   PANEL_TWEAKS_ADDON,
   RESOURCE_LIMITS_ADDON,

@@ -534,41 +534,17 @@ describe("Action needed", () => {
       reason: expect.stringContaining("example.com assigns Mailcow"),
       href: "/addons/dns/#mailcow",
     }]);
-    // Unlinked with both a site and a redirect assigned Mailcow: reports count.
+    // Unlinked with both a site and a redirect domain assigned Mailcow: reports count.
     const two = mailcowActions({
       policy: {
         ...withMailcow,
-        assignments: { "example.com": { http: "web", mail: "mailcow" } },
-        redirects: [{ source: "old.example.org", target: "https://example.com", status: 301, keepPath: true, keepQuery: true, mailProfileId: "mailcow" }],
+        assignments: { "example.com": { http: "web", mail: "mailcow" }, "old.example.org": { http: null, mail: "mailcow" } },
       },
       tokens: new Set(),
       reports: [],
       mailcowHasKey: false,
     });
     expect(two[0]!.reason).toContain("2 domains assign Mailcow");
-    // Redirect-first rule: when a redirect shares a domain with a CloudPanel site assignment,
-    // the redirect's Mail role governs rather than double-counting or using the site's Mail role.
-    expect(mailcowActions({
-      policy: {
-        ...withMailcow,
-        assignments: { "overlap.example.com": { http: "web", mail: "mailcow" } },
-        redirects: [{ source: "overlap.example.com", target: "https://example.com", status: 301, keepPath: true, keepQuery: true, mailProfileId: null }],
-      },
-      tokens: new Set(),
-      reports: [],
-      mailcowHasKey: false,
-    })).toEqual([]);
-    const overlapBoth = mailcowActions({
-      policy: {
-        ...withMailcow,
-        assignments: { "overlap.example.com": { http: "web", mail: "mailcow" } },
-        redirects: [{ source: "overlap.example.com", target: "https://example.com", status: 301, keepPath: true, keepQuery: true, mailProfileId: "mailcow" }],
-      },
-      tokens: new Set(),
-      reports: [],
-      mailcowHasKey: false,
-    });
-    expect(overlapBoth[0]!.reason).toContain("overlap.example.com assigns Mailcow");
     // Linked Mailcow clears Action needed.
     expect(mailcowActions({
       policy: { ...withMailcow, mailcow: { ...withMailcow.mailcow, url: "https://mail.example.net", host: "mail.example.net" }, assignments: { "example.com": { http: "web", mail: "mailcow" } } },

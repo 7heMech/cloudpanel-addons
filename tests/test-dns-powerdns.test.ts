@@ -1,24 +1,22 @@
 import { Database } from "bun:sqlite";
 import { afterEach, describe, expect, test } from "bun:test";
-import { mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { executeDnsAction, type DnsReply, type ProvisionReply } from "../addons/dns/action";
 import { DNS_ADDON } from "../addons/dns/addon";
 import { dashboardContent } from "../addons/dns/app/views";
-import type { PanelSite, StandIn, StandIns } from "../addons/dns/engine";
+import type { PanelSite } from "../addons/dns/engine";
 import { seededPolicy } from "../addons/dns/presets";
 import {
   formatPowerDnsContent, parsePowerDnsServerId, parsePowerDnsUrl, powerDnsRecordId, PowerDnsProvider, quotePowerDnsTxt,
 } from "../addons/dns/powerdns";
 import { connectionCheck, permissionActions } from "../addons/dns/setup";
 import { NEW_SITE_WINDOW } from "../addons/dns/ssl";
-import { standInBody } from "../addons/dns/stand-in";
 import { SCRIPT as sslCompletionScript } from "../addons/panel-tweaks/inject/ssl";
 import { unquoteTxt } from "../lib/dns-name";
 import type { ApiFetch } from "../lib/provider-http";
 import { FakeCloudflare, FakeMailcow, hexId, routed } from "./fixtures/dns-api";
-import { removeCloudflareConnection } from "../lib/cloudflare/store";
 
 const PDNS_KEY = "pdns-secret-key-0123456789";
 const PDNS_URL = "http://127.0.0.1:8081";
@@ -150,32 +148,6 @@ function makeSite(id: number, domain: string): PanelSite {
   return { id, domain, type: "php", createdAt: START - 86_400_000, selfSigned: false, cloudflareOnly: false };
 }
 
-function makeStandIns(): StandIns & { log: string[]; hosts: Record<string, string[] | undefined> } {
-  const current: Record<string, StandIn> = {};
-  const log: string[] = [];
-  const hosts: Record<string, string[] | undefined> = {};
-  return {
-    current,
-    log,
-    hosts,
-    async create(redirect, siteHosts) {
-      log.push(`create:${redirect.source}`);
-      hosts[redirect.source] = siteHosts;
-      current[redirect.source] = { target: redirect.target, status: redirect.status, keepPath: redirect.keepPath, keepQuery: redirect.keepQuery, ...(siteHosts ? { hosts: siteHosts } : {}) };
-    },
-    async update(redirect, siteHosts) {
-      log.push(`update:${redirect.source}`);
-      hosts[redirect.source] = siteHosts;
-      current[redirect.source] = { target: redirect.target, status: redirect.status, keepPath: redirect.keepPath, keepQuery: redirect.keepQuery, ...(siteHosts ? { hosts: siteHosts } : {}) };
-    },
-    async remove(source) {
-      log.push(`remove:${source}`);
-      delete hosts[source];
-      delete current[source];
-    },
-  };
-}
-
 function setupEnv(options: { pdns?: FakePowerDns; pdns2?: FakePowerDns; cf?: FakeCloudflare; ipv4?: string; ipv6?: string } = {}) {
   const dir = mkdtempSync(join(tmpdir(), "dns-powerdns-"));
   dirs.push(dir);
@@ -185,7 +157,6 @@ function setupEnv(options: { pdns?: FakePowerDns; pdns2?: FakePowerDns; cf?: Fak
   const cf = options.cf ?? new FakeCloudflare();
   const mailcow = new FakeMailcow();
   const sites: PanelSite[] = [];
-  const standIns = makeStandIns();
   const custom: { current: { name: string; issued: boolean } | undefined } = { current: undefined };
   const clock = { now: START, issue: false };
   const issued: { domain: string; alternatives: string[] }[] = [];
@@ -205,6 +176,8 @@ function setupEnv(options: { pdns?: FakePowerDns; pdns2?: FakePowerDns; cf?: Fak
       smtpConfig: join(dir, "smtp.json"),
       lockFile: join(dir, "dns.lock"),
       panelDb: join(dir, "db.sq3"),
+      redirectsPolicyFile: join(dir, "redirects", "policy.json"),
+      standInsFile: join(dir, "redirects", "standins.json"),
       rootUid: process.getuid!(),
       clpctl: "/bin/false",
     },
@@ -212,7 +185,6 @@ function setupEnv(options: { pdns?: FakePowerDns; pdns2?: FakePowerDns; cf?: Fak
     fetch: fetcher,
     sites: () => sites,
     addresses: () => ({ ipv4: options.ipv4 ?? "203.0.113.10", ipv6: options.ipv6 ?? "2001:db8::10" }),
-    standIns: () => standIns,
     customDomain: () => custom.current,
     issue: async (domain: string, alternatives: string[]) => {
       issued.push({ domain, alternatives });
@@ -229,7 +201,16 @@ function setupEnv(options: { pdns?: FakePowerDns; pdns2?: FakePowerDns; cf?: Fak
     return reply.review ? act("confirm", { token: reply.review.token }) : reply;
   };
 
-  return { dir, pdns, cf, mailcow, sites, standIns, custom, clock, issued, actionOptions, act, apply };
+  const redirectsDir = join(dir, "redirects");
+  /** Writes Redirects' saved state as the Redirects addon would. */
+  const redirects = (entries: { source: string; target: string; mode?: "auto" | "local"; standIn?: boolean }[]): void => {
+    mkdirSync(redirectsDir, { recursive: true });
+    const policy = { version: 1, automatic: true, held: [], zoneChoices: {}, redirects: entries.map(({ standIn: _standIn, ...entry }) => ({ status: 301, keepPath: true, keepQuery: true, ...entry })) };
+    writeFileSync(actionOptions.paths.redirectsPolicyFile, JSON.stringify(policy), { mode: 0o600 });
+    const standIns = Object.fromEntries(entries.filter((entry) => entry.standIn).map((entry) => [entry.source, { target: entry.target, status: 301, keepPath: true, keepQuery: true, siteUser: "stand-in-1a2b3c4d", createdAt: START, certificate: { attempts: 0, nextAt: 0, done: false } }]));
+    writeFileSync(actionOptions.paths.standInsFile, JSON.stringify(standIns), { mode: 0o600 });
+  };
+  return { dir, pdns, cf, mailcow, sites, custom, clock, issued, actionOptions, act, apply, redirects };
 }
 
 describe("PowerDNS URL validation", () => {
@@ -409,7 +390,7 @@ describe("PowerDNS end-to-end DNS reconciliation", () => {
     expect(applied.log.some((entry) => entry.subject === "PowerDNS zone" && entry.action === "create")).toBe(true);
   });
 
-  test("redirects on PowerDNS keep local stand-in sites active and publish unproxied server A/AAAA plus non-web profile rows", async () => {
+  test("a redirect domain on PowerDNS gets server A/AAAA for its stand-in plus its Mail role's non-web rows", async () => {
     const env = setupEnv();
     env.pdns.addZone("old.example");
     await env.act("save-connection", { provider: "powerdns", label: "Primary NS", url: PDNS_URL, apiKey: PDNS_KEY });
@@ -417,19 +398,17 @@ describe("PowerDNS end-to-end DNS reconciliation", () => {
       name: "Mail",
       role: "mail",
       mailcow: false,
-      zone: { ssl: null, alwaysHttps: null, acmeFullSsl: false, webmailFullSsl: false, skipFirewallIps: [] },
       records: [
         { type: "A", name: "{domain}", content: "198.51.100.9", proxied: false, ttl: 300, priority: null, apexOnly: false },
         { type: "MX", name: "{domain}", content: "mail.example.net", proxied: false, ttl: 300, priority: 10, apexOnly: false },
         { type: "TXT", name: "{domain}", content: "v=spf1 -all", proxied: false, ttl: 300, priority: null, apexOnly: false },
       ],
     });
-    await env.act("save-redirect", { source: "old.example", target: "https://new.example", status: 301, keepPath: true, keepQuery: true, mailProfileId: "mail" });
+    env.redirects([{ source: "old.example", target: "https://new.example", mode: "local", standIn: true }]);
+    await env.act("assign", { domains: ["old.example"], mailProfileId: "mail" });
     await env.apply("set-automatic", { automatic: true });
 
-    // Local stand-in stays active and PowerDNS holds server A/AAAA (never 100::) plus MX/SPF.
-    expect(env.standIns.current["old.example"]).toBeDefined();
-    expect(env.standIns.log).toEqual(["create:old.example"]);
+    // PowerDNS holds server A/AAAA (never 100::) at the stand-in's hosts plus MX/SPF; the profile's own A row stays out.
     expect(env.pdns.recordsSummary("old.example")).toEqual([
       "A old.example. 300 203.0.113.10",
       "A www.old.example. 300 203.0.113.10",
@@ -438,11 +417,8 @@ describe("PowerDNS end-to-end DNS reconciliation", () => {
       "MX old.example. 300 10 mail.example.net.",
       'TXT old.example. 300 "v=spf1 -all"',
     ]);
-
-    // Deleting the redirect removes the stand-in directly without touching Cloudflare rulesets.
-    await env.act("delete-redirect", { source: "old.example" });
-    expect(env.standIns.current["old.example"]).toBeUndefined();
-    expect(env.standIns.log).toEqual(["create:old.example", "remove:old.example"]);
+    const row = (await env.act("list")).sites.find((site) => site.domain === "old.example")!;
+    expect(row).toMatchObject({ type: "redirect", httpRole: "redirect", mailProfileId: "mail", redirect: { target: "https://new.example", standIn: true } });
   });
 
   test("panel hostname on PowerDNS stays unproxied, hands off to unproxied wildcards, and makes no proxy change on cert issuance", async () => {
@@ -661,18 +637,13 @@ describe("PowerDNS end-to-end DNS reconciliation", () => {
     });
   });
 
-  test("rejects conflicting TTLs in one PowerDNS RRset, matches stand-in hosts to zone apex, holds redirects on removal, and isolates endpoint edits", async () => {
+  test("rejects conflicting TTLs in one PowerDNS RRset, avoids Cloudflare fallback copy, and isolates endpoint edits", async () => {
     const pdns2 = new FakePowerDns("pdns-second-key-9876543210");
     pdns2.addZone("example.com", [
       { name: "orphan.example.com.", type: "A", ttl: 300, records: [{ content: "203.0.113.10", disabled: false }] },
     ]);
     const env = setupEnv({ pdns2 });
-    const agency = env.cf.account("Agency");
-    env.cf.token(CF_TOKEN, { owner: "user", accounts: [agency], zoneEdit: true });
-    env.cf.zone("shared.example", agency);
     env.pdns.addZone("example.com");
-    env.pdns.addZone("shop.example.com");
-    env.pdns.addZone("shared.example");
     env.sites.push(makeSite(1, "orphan.example.com"), makeSite(2, "conflict.example.com"));
 
     const saved = await env.act("save-connection", { provider: "powerdns", label: "NS1", url: PDNS_URL, apiKey: PDNS_KEY });
@@ -697,14 +668,7 @@ describe("PowerDNS end-to-end DNS reconciliation", () => {
     await env.act("assign", { domains: ["orphan.example.com"], profileId: "web" });
     await env.apply("set-automatic", { automatic: true });
 
-    // 2. Stand-in site for a redirect at the apex of a sub-zone gets both source and www.source.
-    await env.apply("save-redirect", {
-      source: "shop.example.com", target: "https://dest.example/", status: 301, keepPath: true, keepQuery: true, profileId: null,
-    });
-    expect(env.standIns.hosts["shop.example.com"]).toEqual(["shop.example.com", "www.shop.example.com"]);
-    expect(standInBody("shop.example.com", env.standIns.current["shop.example.com"]!)).toContain("server_name shop.example.com www.shop.example.com;");
-
-    // 3. sync-panel-host returns null when no provider resolves for panelHost; pending PowerDNS copy avoids Cloudflare fallback.
+    // 2. sync-panel-host returns null when no provider resolves for panelHost; pending PowerDNS copy avoids Cloudflare fallback.
     await env.act("set-panel-host", { name: "panel.unmanaged.test" });
     env.custom.current = { name: "panel.unmanaged.test", issued: true };
     const noProviderSync = await env.act("sync-panel-host") as unknown as { line: string | null };
@@ -721,15 +685,7 @@ describe("PowerDNS end-to-end DNS reconciliation", () => {
     await env.act("set-panel-host", { name: null });
     await env.apply("set-automatic", { automatic: true });
 
-    // 4. Removing a PowerDNS connection holds redirects whose zone choice pointed to it so Cloudflare does not silently take over.
-    await env.act("save-connection", { provider: "cloudflare", token: CF_TOKEN });
-    await env.act("choose-zone", { zone: "shared.example", connectionId: pdnsId, zoneId: "shared.example." });
-    await env.apply("save-redirect", {
-      source: "shared.example", target: "https://target.example/", status: 301, keepPath: true, keepQuery: true, profileId: null,
-    });
-    expect(env.standIns.current["shared.example"]).toBeDefined();
-
-    // Remove the site orphan.example.com before editing NS1 to a different server (NS2).
+    // 3. Remove the site orphan.example.com before editing NS1 to a different server (NS2).
     env.sites.splice(0, 1);
     const edited = await env.act("save-connection", {
       id: pdnsId, provider: "powerdns", label: "NS2", url: "http://127.0.0.1:8082", apiKey: "pdns-second-key-9876543210",
@@ -738,26 +694,6 @@ describe("PowerDNS end-to-end DNS reconciliation", () => {
     expect(newPdnsId).not.toBe(pdnsId);
     // Old orphan from NS1 cannot touch NS2's identical record because the connection identity changed.
     await expect(env.act("remove-records", { domain: "orphan.example.com" })).rejects.toThrow("connection these records were tracked through has been removed");
-    // Redirect on shared.example is held rather than silently moved to Cloudflare.
-    const afterCheck = await env.act("check");
-    const sharedSite = afterCheck.sites.find((s) => s.domain === "shared.example");
-    expect(sharedSite?.plan?.held).toBe(true);
-    expect(env.standIns.current["shared.example"]).toBeDefined();
-    expect(env.cf.rulesets.size).toBe(0);
-
-    // Explicitly removing a PowerDNS connection holding a chosen redirect also holds that redirect for review.
-    env.cf.zone("remove-hold.example", agency);
-    pdns2.addZone("remove-hold.example");
-    await env.act("check");
-    await env.act("choose-zone", { zone: "remove-hold.example", connectionId: newPdnsId, zoneId: "remove-hold.example." });
-    await env.apply("save-redirect", {
-      source: "remove-hold.example", target: "https://target.example/", status: 301, keepPath: true, keepQuery: true, profileId: null,
-    });
-    await env.act("remove-connection", { id: newPdnsId });
-    const afterRemove = await env.act("check");
-    expect(afterRemove.sites.find((s) => s.domain === "remove-hold.example")?.plan?.held).toBe(true);
-    expect(env.standIns.current["remove-hold.example"]).toBeDefined();
-    expect(env.cf.rulesets.size).toBe(0);
   });
 
   test("rejects dot path-traversal server IDs and keeps disabled RRset state consistent on failed or shadowing PATCH", async () => {
@@ -817,49 +753,7 @@ describe("PowerDNS end-to-end DNS reconciliation", () => {
       ]);
   });
 
-  test("holds redirects on partial Cloudflare removal with PowerDNS remaining and on PowerDNS sub-zone apex stand-in shrink", async () => {
-    // 1. Mixed fleet: cf-1 (example.com), cf-2 (other.example), pdns-1 (example.com) -> removing cf-1 holds example.com.
-    const env = setupEnv();
-    env.pdns.addZone("example.com");
-    const SECOND_CF_TOKEN = "cf-second-token-0123456789abcdef";
-    const agency1 = env.cf.account("Agency One");
-    const agency2 = env.cf.account("Agency Two");
-    env.cf.zone("example.com", agency1);
-    env.cf.zone("other.example", agency2);
-    env.cf.token(CF_TOKEN, { owner: "user", accounts: [agency1] });
-    env.cf.token(SECOND_CF_TOKEN, { owner: "user", accounts: [agency2] });
-    const cf1 = (await env.act("save-connection", { provider: "cloudflare", token: CF_TOKEN, label: "CF1" }))
-      .connections.find((c) => c.label === "CF1")!;
-    await env.act("save-connection", { provider: "cloudflare", token: SECOND_CF_TOKEN, label: "CF2" });
-    await env.act("save-connection", { provider: "powerdns", label: "NS1", url: PDNS_URL, apiKey: PDNS_KEY });
-    await env.act("choose-zone", { zone: "example.com", connectionId: cf1.id, zoneId: env.cf.zones.find((z) => z.name === "example.com")!.id });
-    await env.apply("set-automatic", { automatic: true });
-    await env.apply("save-redirect", {
-      source: "example.com", target: "https://target.example/", status: 301, keepPath: true, keepQuery: true, profileId: null,
-    });
-    expect(env.standIns.current["example.com"]).toBeUndefined();
-
-    await env.act("remove-connection", { id: cf1.id });
-    const afterPartial = await env.act("check");
-    expect(afterPartial.sites.find((s) => s.domain === "example.com")?.plan?.held).toBe(true);
-    expect(env.standIns.current["example.com"]).toBeUndefined();
-
-    // 2. PowerDNS-only fleet with delegated sub-zone apex redirect: removing PowerDNS holds it rather than shrinking stand-in hosts.
-    const pdnsOnly = setupEnv();
-    pdnsOnly.pdns.addZone("shop.example.com");
-    const connected = await pdnsOnly.act("save-connection", { provider: "powerdns", label: "NS1", url: PDNS_URL, apiKey: PDNS_KEY });
-    const pdnsOnlyId = connected.connections.find((c) => c.provider === "powerdns")!.id;
-    await pdnsOnly.apply("set-automatic", { automatic: true });
-    await pdnsOnly.apply("save-redirect", {
-      source: "shop.example.com", target: "https://target.example/", status: 301, keepPath: true, keepQuery: true, profileId: null,
-    });
-    expect(pdnsOnly.standIns.current["shop.example.com"]?.hosts).toEqual(["shop.example.com", "www.shop.example.com"]);
-    await pdnsOnly.act("remove-connection", { id: pdnsOnlyId });
-    const afterPdnsRemove = await pdnsOnly.act("check");
-    expect(afterPdnsRemove.sites.find((s) => s.domain === "shop.example.com")?.plan?.held).toBe(true);
-    expect(pdnsOnly.standIns.current["shop.example.com"]?.hosts).toEqual(["shop.example.com", "www.shop.example.com"]);
-
-    // 3. PowerDNS-only user-facing notices do not claim Cloudflare.
+  test("PowerDNS-only user-facing notices do not claim Cloudflare", async () => {
     const pdnsCopy = setupEnv();
     pdnsCopy.pdns.addZone("example.com");
     await pdnsCopy.act("save-connection", { provider: "powerdns", label: "NS1", url: PDNS_URL, apiKey: PDNS_KEY });
@@ -1019,7 +913,7 @@ describe("PowerDNS end-to-end DNS reconciliation", () => {
     ]);
   });
 
-  test("checks unread Cloudflare zones across tokens, preserves redirect holds after failed lookups, checks leftover Cloudflare rules on PowerDNS redirect deletion, and keeps PowerDNS keys after policy commit", async () => {
+  test("checks unread Cloudflare zones across tokens and keeps PowerDNS keys after policy commit", async () => {
     // 1. Orphan tracked via CF token A is protected when current site's read of the same physical zone fails through CF token B.
     const orphanEnv = setupEnv();
     const tokenA = "cf-token-a-0123456789abcdef01234";
@@ -1049,73 +943,7 @@ describe("PowerDNS end-to-end DNS reconciliation", () => {
     await expect(orphanEnv.act("remove-records", { domain: "old.example.com" })).rejects.toThrow("could not be read");
     expect(cfA.id).not.toBe(cfB.id);
 
-    // 2. Removing CF1 via shared store after a failed zone lookup (zone: null on last plan) still holds redirect instead of moving to PowerDNS.
-    const holdEnv = setupEnv();
-    holdEnv.pdns.addZone("pdns-only.example");
-    const cfTok1 = "cf-hold-1-0123456789abcdef01234";
-    const cfTok2 = "cf-hold-2-0123456789abcdef01234";
-    const acc1 = holdEnv.cf.account("Acc1");
-    const acc2 = holdEnv.cf.account("Acc2");
-    holdEnv.cf.zone("holdme.example", acc1);
-    holdEnv.cf.zone("other.example", acc2);
-    holdEnv.cf.token(cfTok1, { owner: "user", accounts: [acc1] });
-    holdEnv.cf.token(cfTok2, { owner: "user", accounts: [acc2] });
-    const cf1 = (await holdEnv.act("save-connection", { provider: "cloudflare", token: cfTok1, label: "CF1" })).connections[0]!;
-    await holdEnv.act("save-connection", { provider: "cloudflare", token: cfTok2, label: "CF2" });
-    await holdEnv.act("save-connection", { provider: "powerdns", label: "NS1", url: PDNS_URL, apiKey: PDNS_KEY });
-    await holdEnv.apply("set-automatic", { automatic: true });
-    await holdEnv.apply("save-redirect", {
-      source: "holdme.example", target: "https://dest.example/", status: 301, keepPath: true, keepQuery: true, profileId: null,
-    });
-    // Fail CF1 so check records zone: null on holdme.example's last plan, then add the zone in PowerDNS and remove CF1 via shared store directly.
-    holdEnv.cf.tokens.get(cfTok1)!.status = "disabled";
-    await holdEnv.act("check");
-    holdEnv.pdns.addZone("holdme.example");
-    const cfPaths = { stateDir: join(holdEnv.dir, "state", "cloudflare"), lockFile: join(holdEnv.dir, "dns.lock.cloudflare"), rootUid: process.getuid!() };
-    await removeCloudflareConnection(cf1.id, { paths: cfPaths });
-    const afterCheck = await holdEnv.act("check");
-    expect(afterCheck.sites.find((s) => s.domain === "holdme.example")?.plan?.held).toBe(true);
-    expect(holdEnv.standIns.current["holdme.example"]).toBeUndefined();
-
-    // 3. Deleting a PowerDNS-backed redirect still finds and deletes a leftover Cloudflare Single Redirect rule.
-    const ruleEnv = setupEnv();
-    ruleEnv.pdns.addZone("dual.example");
-    const dualAcc = ruleEnv.cf.account("Dual");
-    const dualCfZone = ruleEnv.cf.zone("dual.example", dualAcc);
-    ruleEnv.cf.token(CF_TOKEN, { owner: "user", accounts: [dualAcc], zoneEdit: true });
-    const cfConn = (await ruleEnv.act("save-connection", { provider: "cloudflare", token: CF_TOKEN, label: "CF" })).connections[0]!;
-    const pdnsConn = (await ruleEnv.act("save-connection", { provider: "powerdns", label: "NS1", url: PDNS_URL, apiKey: PDNS_KEY }))
-      .connections.find((c) => c.provider === "powerdns")!;
-    await ruleEnv.act("choose-zone", { zone: "dual.example", connectionId: cfConn.id, zoneId: dualCfZone.id });
-    await ruleEnv.apply("set-automatic", { automatic: true });
-    await ruleEnv.apply("save-redirect", {
-      source: "dual.example", target: "https://dest.example/", status: 301, keepPath: true, keepQuery: true, profileId: null,
-    });
-    expect(ruleEnv.cf.rulesets.get(`${dualCfZone.id}:http_request_dynamic_redirect`)?.rules).toHaveLength(1);
-    // Switch zone choice to PowerDNS so the redirect now resolves to PowerDNS while the Cloudflare rule still exists.
-    await ruleEnv.apply("choose-zone", { zone: "dual.example", connectionId: pdnsConn.id, zoneId: "dual.example." });
-    expect(ruleEnv.standIns.current["dual.example"]).toBeDefined();
-
-    // While Cloudflare is unreachable, deletion is blocked instead of orphaning the Cloudflare rule.
-    ruleEnv.cf.tokens.get(CF_TOKEN)!.status = "disabled";
-    const blockedDelete = await ruleEnv.act("delete-redirect", { source: "dual.example" });
-    expect(blockedDelete.review!.blocked).toBe(true);
-    expect(blockedDelete.review!.sites[0]!.problems.join(" ")).toContain("Cloudflare could not be read");
-    expect(ruleEnv.standIns.current["dual.example"]).toBeDefined();
-
-    // Once Cloudflare is reachable again, deletion reviews and removes BOTH the Cloudflare rule and the PowerDNS stand-in.
-    ruleEnv.cf.tokens.get(CF_TOKEN)!.status = "active";
-    const deleteReview = await ruleEnv.act("delete-redirect", { source: "dual.example" });
-    expect(deleteReview.review!.blocked).toBe(false);
-    expect(deleteReview.review!.sites[0]!.changes).toContainEqual(expect.objectContaining({
-      action: "delete", subject: "Cloudflare redirect rule",
-    }));
-    const deleted = await ruleEnv.act("confirm", { token: deleteReview.review!.token });
-    expect(ruleEnv.cf.rulesets.get(`${dualCfZone.id}:http_request_dynamic_redirect`)?.rules).toEqual([]);
-    expect(ruleEnv.standIns.current["dual.example"]).toBeUndefined();
-    expect(deleted.sites).toEqual([]);
-
-    // 4. Changing a PowerDNS server keeps the committed new key even if managed-record cleanup fails afterward.
+    // 2. Changing a PowerDNS server keeps the committed new key even if managed-record cleanup fails afterward.
     const keyPdns2 = new FakePowerDns("pdns-second-key-9876543210");
     keyPdns2.addZone("example.com");
     const keyEnv = setupEnv({ pdns2: keyPdns2 });

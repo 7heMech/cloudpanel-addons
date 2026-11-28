@@ -113,7 +113,7 @@ test("Varnish capability crosses the gateway per site", () => {
   expect(sites.find((s) => s.domain === "plain.example")?.varnishCache).toBe(false);
 });
 
-test("DNS's stand-ins are left out of the sites every addon lists", () => {
+test("Redirects' stand-ins are left out of the sites every addon lists", () => {
   const path = createDatabase(fixture("stand-ins"), (db) => {
     db.run("CREATE TABLE site (id INTEGER PRIMARY KEY, domain_name TEXT, user TEXT, type TEXT, reverse_proxy_url TEXT)");
     db.query("INSERT INTO site VALUES (?, ?, ?, ?, NULL)").run(1, "real.example", "real", "php");

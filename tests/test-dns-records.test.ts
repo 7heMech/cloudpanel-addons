@@ -188,11 +188,20 @@ describe("the Cloudflare token template", () => {
     expect(url.searchParams.get("zoneId")).toBe("all");
     expect(JSON.parse(url.searchParams.get("permissionGroupKeys")!)).toEqual([
       { key: "dns", type: "edit" }, { key: "zone", type: "edit" }, { key: "account_settings", type: "read" },
-      { key: "dynamic_redirect", type: "edit" }, { key: "api_tokens", type: "read" },
+      { key: "api_tokens", type: "read" },
     ]);
-    expect(template.permissions).toContain("Single Redirect: Edit");
+    expect(template.permissions).not.toContain("Single Redirect: Edit");
     expect(template.permissions).not.toContain("Zone Settings: Edit");
     expect(template.permissions).not.toContain("Config Rules: Edit");
+
+    const redirectsTemplate = tokenTemplate(undefined, { dns: false, redirects: true });
+    const redirectsUrl = new URL(redirectsTemplate.url);
+    expect(JSON.parse(redirectsUrl.searchParams.get("permissionGroupKeys")!)).toEqual([
+      { key: "zone", type: "read" }, { key: "dns", type: "edit" },
+      { key: "dynamic_redirect", type: "edit" }, { key: "api_tokens", type: "read" },
+    ]);
+    expect(redirectsTemplate.permissions).toContain("Single Redirect: Edit");
+    expect(redirectsTemplate.permissions).toContain("DNS: Edit");
   });
 
   test("asks for Zone Settings, Config Rules, and WAF only when Cloudflare edge scope uses them", () => {
@@ -329,7 +338,7 @@ describe("wildcard coverage (RFC 4592)", () => {
     expect(cnameWild.ops.map((op) => op.record.type)).toEqual(["A", "AAAA"]);
   });
 
-  test("planned sibling wildcard overrides stale published wildcard, and redirects skip *.{domain} and wildcard coverage", () => {
+  test("planned sibling wildcard overrides stale published wildcard, and NS cuts occlude descendant wildcards", () => {
     const rendered = renderProfile(web, vars("shop.example.com"));
     const stale = [
       published("A", "*.example.com", "198.51.100.1", { proxied: true }),
@@ -342,12 +351,6 @@ describe("wildcard coverage (RFC 4592)", () => {
     });
     expect(diff.covered).toEqual({ "shop.example.com": "*.example.com" });
     expect(diff.ops).toEqual([]);
-
-    const redirect = renderRedirect(webAndMailcow, ["example.com", "www.example.com"], vars("example.com"), "100::");
-    expect(redirect.records.some((record) => record.name === "*.example.com")).toBe(false);
-    const subRedirect = renderRedirect(web, ["shop.example.com"], vars("shop.example.com"), "100::");
-    expect(diffRecords(subRedirect, wild(), { allowWildcard: false }).ops.map((op) => `${op.action} ${op.record.type} ${op.record.name}`))
-      .toEqual(["create AAAA shop.example.com"]);
     expect(wildcardSource("example.com", "example.com", wild())).toBeNull();
 
     // An NS delegation cut at an ancestor occludes any wildcard at or below the cut.

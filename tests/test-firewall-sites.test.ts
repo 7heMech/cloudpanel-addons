@@ -1,3 +1,4 @@
+import { tokenTemplates } from "../lib/cloudflare/tokens";
 import { afterEach, beforeEach, expect, test } from "bun:test";
 import { Database } from "bun:sqlite";
 import { chmodSync, mkdirSync, mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
@@ -97,15 +98,7 @@ const panelGate = { error: "not read" };
 const cloudflareEdge = { connected: false, defaults: { ssl: "strict" as const, alwaysHttps: true, acmeFullSsl: true, webmailFullSsl: false, skipFirewallIps: [] }, approved: false, approvedAt: null, needsApproval: false, migrationNote: null, checkedAt: null, zones: [], log: [] };
 const cloudflare = {
   connections: [],
-  templates: {
-    dns: { url: "", permissions: [] },
-    edge: { url: "", permissions: [] },
-    panelGate: { url: "", permissions: [] },
-    "dns+edge": { url: "", permissions: [] },
-    "dns+panelGate": { url: "", permissions: [] },
-    "edge+panelGate": { url: "", permissions: [] },
-    "dns+edge+panelGate": { url: "", permissions: [] },
-  },
+  templates: tokenTemplates(),
   serverIps: [],
   dnsEnabled: false,
 };

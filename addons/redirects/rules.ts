@@ -6,11 +6,12 @@
  * A rule another tool wrote is taken over in place. It is found by the hosts
  * its expression names, whether or not it has a `ref`, so a domain never gets
  * a second rule; a rule that names a domain's host in a way that cannot be
- * read as "this host, whole" stops the domain instead.
+ * read as "this host, whole" stops the domain instead. Legacy `clp_dns_redirect_`
+ * refs from before Redirects was extracted out of DNS are recognised as ours.
  */
 import { createHash } from "node:crypto";
-import { getDomain } from "tldts";
 import type { CfRule, CfRuleset, RuleWrite } from "../../lib/cloudflare/api";
+import { redirectHosts, standInHosts } from "../../lib/redirect-domains";
 import { dnsName, REDIRECT_STATUSES, type Redirect, type RedirectStatus } from "./model";
 
 export const REDIRECT_PHASE = "http_request_dynamic_redirect";
@@ -20,18 +21,23 @@ export const PLACEHOLDER = "100::";
 
 const ACME_EXCLUSION = / and not starts_with\(http\.request\.uri\.path, "\/\.well-known\/acme-challenge\/"\)$/;
 
-/** The source, and its `www` when the source is its zone's apex. */
-export function redirectHosts(source: string, zone: string): string[] {
-  return source === zone ? [source, `www.${source}`] : [source];
-}
+export { redirectHosts, standInHosts };
 
-/** The hosts a stand-in site answers for, with no zone to tell the apex by: the registrable domain is one. */
-export function standInHosts(source: string): string[] {
-  return redirectHosts(source, getDomain(source, { allowPrivateDomains: false }) ?? source);
+function sourceHash(source: string): string {
+  return createHash("sha256").update(source).digest("hex").slice(0, 16);
 }
 
 export function redirectRef(source: string): string {
-  return `clp_dns_redirect_${createHash("sha256").update(source).digest("hex").slice(0, 16)}`;
+  return `clp_redirect_${sourceHash(source)}`;
+}
+
+/** Legacy rule ref written before Redirects became a standalone addon. */
+export function legacyDnsRedirectRef(source: string): string {
+  return `clp_dns_redirect_${sourceHash(source)}`;
+}
+
+export function isOurRedirectRef(ref: string, source: string): boolean {
+  return ref === redirectRef(source) || ref === legacyDnsRedirectRef(source);
 }
 
 function hostExpression(hosts: string[]): string {
@@ -45,7 +51,7 @@ export function wantedRedirectRule(redirect: Redirect, hosts: string[]): RuleWri
     action: "redirect",
     enabled: true,
     expression: hostExpression(hosts),
-    description: `CloudPanel DNS: redirect ${redirect.source}`,
+    description: `CloudPanel Redirects: redirect ${redirect.source}`,
     action_parameters: {
       from_value: {
         status_code: redirect.status,
@@ -106,7 +112,7 @@ function mentions(expression: string, host: string): boolean {
   return [...expression.toLowerCase().matchAll(/"((?:[^"\\]|\\.)*)"/g)].some((match) => pattern.test(match[1]!));
 }
 
-interface RedirectAction {
+export interface RedirectAction {
   target: string;
   status: RedirectStatus;
   keepPath: boolean;
@@ -134,7 +140,7 @@ function sameRule(current: CfRule, wanted: RuleWrite): boolean {
     && action !== null && JSON.stringify(action) === JSON.stringify(want);
 }
 
-type RedirectRuleState =
+export type RedirectRuleState =
   | { state: "present"; rule: CfRule }
   | { state: "create" }
   | { state: "update"; rule: CfRule }
@@ -147,7 +153,8 @@ function ruleLabel(rule: CfRule): string {
 /** Our rule for `redirect`, found by its `ref` or by the hosts it names, and whether it needs writing. */
 export function redirectRuleState(ruleset: CfRuleset | null, redirect: Redirect, hosts: string[]): RedirectRuleState {
   const wanted = wantedRedirectRule(redirect, hosts);
-  const related = (ruleset?.rules ?? []).filter((rule) => rule.ref === wanted.ref || hosts.some((host) => mentions(rule.expression, host)));
+  const related = (ruleset?.rules ?? []).filter((rule) =>
+    isOurRedirectRef(rule.ref, redirect.source) || hosts.some((host) => mentions(rule.expression, host)));
   if (!related.length) return { state: "create" };
   if (related.length > 1) {
     return {
@@ -156,10 +163,13 @@ export function redirectRuleState(ruleset: CfRuleset | null, redirect: Redirect,
     };
   }
   const rule = related[0]!;
-  if (rule.ref !== wanted.ref) {
+  if (!isOurRedirectRef(rule.ref, redirect.source)) {
     const ruleHosts = wholeHostHosts(rule.expression);
     if (!ruleHosts || !ruleHosts.includes(redirect.source) || ruleHosts.some((host) => !hosts.includes(host))) {
-      return { state: "problem", problem: `A rule in Cloudflare already redirects ${redirect.source} in a way DNS cannot take over (${ruleLabel(rule)}); change or delete it in Cloudflare` };
+      return {
+        state: "problem",
+        problem: `A rule in Cloudflare already redirects ${redirect.source} in a way Redirects cannot take over (${ruleLabel(rule)}); change or delete it in Cloudflare`,
+      };
     }
   }
   return sameRule(rule, wanted) ? { state: "present", rule } : { state: "update", rule };

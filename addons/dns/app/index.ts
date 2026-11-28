@@ -21,10 +21,6 @@ const CHANGES: Record<string, WebVerb<"dns">> = {
   "/api/panel-host": "set-panel-host",
   "/api/records/remove": "remove-records",
   "/api/records/forget": "forget-records",
-  "/api/redirects": "save-redirect",
-  "/api/redirects/delete": "delete-redirect",
-  "/api/redirects/find": "find-redirects",
-  "/api/redirects/take-over": "take-over",
 };
 
 /**

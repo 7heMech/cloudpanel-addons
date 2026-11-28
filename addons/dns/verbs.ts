@@ -19,10 +19,6 @@ export const DNS_VERBS = {
   "set-panel-host": { web: "admin" },
   "remove-records": { web: "admin" },
   "forget-records": { web: "admin" },
-  "save-redirect": { web: "admin" },
-  "delete-redirect": { web: "admin" },
-  "find-redirects": { web: "admin" },
-  "take-over": { web: "admin" },
   // Called from the page a new site lands on and from its SSL/TLS page, by
   // whoever can open it; a non-administrator is named with --as-user and held
   // to their own sites.

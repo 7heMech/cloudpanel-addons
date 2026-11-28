@@ -1,4 +1,5 @@
 import { afterEach, describe, expect, test } from "bun:test";
+import { tokenTemplates } from "../lib/cloudflare/tokens";
 import { Database } from "bun:sqlite";
 import { chmodSync, mkdirSync, mkdtempSync, readFileSync, rmSync, statSync, utimesSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -768,7 +769,7 @@ describe("off Hetzner Cloud", () => {
       hetzner: { state: "absent" },
       netcup: { state: "absent" },
       cloudflareEdge: { connected: false, defaults: { ssl: "strict", alwaysHttps: true, acmeFullSsl: true, webmailFullSsl: false, skipFirewallIps: [] }, approved: false, approvedAt: null, needsApproval: false, migrationNote: null, checkedAt: null, zones: [], log: [] },
-      cloudflare: { connections: [], templates: { dns: { url: "", permissions: [] }, edge: { url: "", permissions: [] }, panelGate: { url: "", permissions: [] }, "dns+edge": { url: "", permissions: [] }, "dns+panelGate": { url: "", permissions: [] }, "edge+panelGate": { url: "", permissions: [] }, "dns+edge+panelGate": { url: "", permissions: [] } }, serverIps: [], dnsEnabled: false },
+      cloudflare: { connections: [], templates: tokenTemplates(), serverIps: [], dnsEnabled: false },
     });
     expect(html).not.toContain('id="hetzner-card"');
     expect(html).not.toContain("Hetzner Cloud Firewall");

@@ -100,7 +100,6 @@ export function seededPolicy(): Policy {
     defaultHttpProfileId: null,
     defaultMailProfileId: null,
     assignments: {},
-    redirects: [],
     knownSiteIds: [],
     held: [],
     connections: [],

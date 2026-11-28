@@ -7,6 +7,7 @@
 // still answers, and only a browser console says anything. This shipped once,
 // and every button on the dashboard was dead for four releases. The Function
 // constructor compiles without executing, which is the check that was missing.
+import { tokenTemplates } from "../lib/cloudflare/tokens";
 import { expect, test } from "bun:test";
 import { existsSync, readFileSync } from "node:fs";
 import { join } from "node:path";
@@ -112,7 +113,7 @@ test("a fleet table gives the domain its own line on a phone", () => {
       netcup: { state: "absent" },
       panelGate: { error: "not read" },
       cloudflareEdge: { connected: false, defaults: { ssl: "strict", alwaysHttps: true, acmeFullSsl: true, webmailFullSsl: false, skipFirewallIps: [] }, approved: false, approvedAt: null, needsApproval: false, migrationNote: null, checkedAt: null, zones: [], log: [] },
-      cloudflare: { connections: [], templates: { dns: { url: "", permissions: [] }, edge: { url: "", permissions: [] }, panelGate: { url: "", permissions: [] }, "dns+edge": { url: "", permissions: [] }, "dns+panelGate": { url: "", permissions: [] }, "edge+panelGate": { url: "", permissions: [] }, "dns+edge+panelGate": { url: "", permissions: [] } }, serverIps: [], dnsEnabled: false },
+      cloudflare: { connections: [], templates: tokenTemplates(), serverIps: [], dnsEnabled: false },
     }),
   ]) {
     expect(html).toContain('<table class="fleet-table');

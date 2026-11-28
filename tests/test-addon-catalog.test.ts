@@ -39,7 +39,7 @@ test("every declared injection target is represented in the watch paths", () => 
 });
 
 test("every addon with privileged verbs declares them", () => {
-  for (const name of ["firewall", "instatic", "stager", "maintenance", "resource-limits", "git", "smtp", "terminal"]) {
+  for (const name of ["firewall", "dns", "redirects", "instatic", "stager", "maintenance", "resource-limits", "git", "smtp", "terminal"]) {
     expect(typeof ADDONS[name]!.action).toBe("function");
   }
   // It is markup injected into the panel's login page and has nothing to do as
@@ -54,7 +54,7 @@ test("new-site work runs DNS before SMTP Relay", () => {
 });
 
 test("server and panel addons appear before site tools in catalog order", () => {
-  const foundational = ["system-tweaks", "firewall", "dns", "security-keys", "panel-tweaks", "resource-limits", "smtp"];
+  const foundational = ["system-tweaks", "firewall", "dns", "redirects", "security-keys", "panel-tweaks", "resource-limits", "smtp"];
   const siteTools = ["wp-tools", "stager", "maintenance", "git", "instatic", "terminal"];
   expect(ADDON_NAMES.slice(0, foundational.length)).toEqual(foundational);
   expect(ADDON_NAMES.slice(foundational.length)).toEqual(siteTools);

@@ -389,8 +389,8 @@ function dnsShowSite(domain) {
   dnsSiteShown = domain;
   const heading = CLP_ROOT.getElementById('dns-site-heading');
   heading.textContent = domain;
-  const row = Array.prototype.find.call(CLP_ROOT.querySelectorAll('tr[data-domain], tr[data-redirect], tr[data-mailcow-domain]'), function (candidate) {
-    return (candidate.dataset.domain || candidate.dataset.redirect || candidate.dataset.mailcowDomain) === domain;
+  const row = Array.prototype.find.call(CLP_ROOT.querySelectorAll('tr[data-domain], tr[data-mailcow-domain]'), function (candidate) {
+    return (candidate.dataset.domain || candidate.dataset.mailcowDomain) === domain;
   });
   const chip = row && row.querySelector('.dns-status .badge');
   if (chip) heading.appendChild(chip.cloneNode(true));
@@ -432,18 +432,10 @@ function dnsShowSite(domain) {
 
   html += '<h3 class="dns-section">' + (site.redirect ? 'Redirect' : 'Site') + '</h3><dl class="dns-facts">';
   if (site.redirect) {
-    const kept = [site.redirect.keepPath && 'path', site.redirect.keepQuery && 'query string'].filter(Boolean);
-    const zoneProvider = plan && plan.zone ? (plan.zone.provider || 'cloudflare') : null;
-    const served = zoneProvider === 'powerdns' ? 'A stand-in site on this server (DNS in PowerDNS)'
-      : zoneProvider === 'cloudflare' ? 'Cloudflare'
-      : site.redirect.standIn ? 'A stand-in site on this server'
-      : dnsHasCloudflare() && !dnsHasPowerDns() ? 'Cloudflare'
-      : 'A stand-in site on this server, once DNS is Automatic';
     html += '<dt>Redirects to</dt><dd class="dns-change-detail">' + dnsEsc(site.redirect.target) + '</dd>' +
-      '<dt>Status</dt><dd>' + site.redirect.status + (kept.length ? ' · keeps the ' + kept.join(' and ') : '') + '</dd>' +
-      '<dt>Served by</dt><dd>' + served + '</dd>';
+      '<dt>Served by</dt><dd>' + (site.redirect.standIn ? 'A stand-in site on this server; DNS points its hosts here' : 'Redirects, through Cloudflare') + '</dd>';
   }
-  const httpDesc = site.redirect ? 'Redirect' : httpProfile ? 'Site · ' + dnsEsc(httpProfile.name) : 'DNS-only (no web records)';
+  const httpDesc = site.redirect ? 'Redirect, managed in Redirects' : httpProfile ? 'Site · ' + dnsEsc(httpProfile.name) : 'DNS-only (no web records)';
   const mailDesc = mailProfile ? dnsEsc(mailProfile.name) + (site.mailcowMissing ? ' <span class="badge tone-warn">Mailcow unlinked</span>' : '') : 'None';
   html += '<dt>HTTP role</dt><dd>' + httpDesc + '</dd>' +
     '<dt>Mail role</dt><dd>' + mailDesc + '</dd>' +
@@ -495,118 +487,6 @@ function dnsForget(domain) {
 
 function dnsRemoveRecords(domain) {
   dnsPost('/api/records/remove', { domain: domain });
-}
-
-// --- redirect domains -------------------------------------------------------
-
-function dnsMailProfileChoices(selected) {
-  const mailProfiles = (dnsState.profiles || []).filter(function (profile) { return profile.role === 'mail'; });
-  return '<option value="">None</option>' + mailProfiles.map(function (profile) {
-    return '<option value="' + dnsEsc(profile.id) + '"' + (profile.id === selected ? ' selected' : '') + '>' + dnsEsc(profile.name) + '</option>';
-  }).join('');
-}
-
-function dnsEditRedirect(source) {
-  const site = source ? dnsState.sites.find(function (candidate) { return candidate.domain === source; }) : null;
-  const redirect = site && site.redirect;
-  const form = CLP_ROOT.getElementById('dns-redirect-form');
-  form.reset();
-  const field = function (name) { return form.elements.namedItem(name); };
-  field('source').value = redirect ? redirect.source : '';
-  field('source').readOnly = Boolean(redirect);
-  field('target').value = redirect ? redirect.target : '';
-  field('status').value = String(redirect ? redirect.status : 301);
-  field('keepPath').checked = redirect ? redirect.keepPath : true;
-  field('keepQuery').checked = redirect ? redirect.keepQuery : true;
-  field('mailProfileId').innerHTML = dnsMailProfileChoices(redirect ? redirect.mailProfileId : null);
-  const hasCf = dnsHasCloudflare();
-  const hasPdns = dnsHasPowerDns();
-  CLP_ROOT.getElementById('dns-redirect-where').textContent = hasCf && hasPdns
-    ? 'Cloudflare zones use a Single Redirect rule and placeholder record. PowerDNS zones keep a stand-in site on this server with A and AAAA records.'
-    : hasCf
-      ? 'Cloudflare answers it: a Single Redirect rule and a proxied placeholder record, so this server is never reached.'
-      : hasPdns
-        ? 'A static site on this server answers it and gets a Let\'s Encrypt certificate, while PowerDNS points the domain here.'
-        : 'With no DNS connection, a static site on this server answers it and gets a Let\'s Encrypt certificate once the domain points here.';
-  CLP_ROOT.getElementById('dns-redirect-delete').hidden = !redirect;
-  CLP_ROOT.getElementById('dns-redirect-heading').textContent = redirect ? 'Edit ' + redirect.source : 'Add redirect';
-  CLP_ROOT.getElementById('dns-site-dialog').close();
-  dnsOpen('dns-redirect-dialog');
-}
-
-function dnsSaveRedirect(event) {
-  event.preventDefault();
-  const form = event.currentTarget;
-  const field = function (name) { return form.elements.namedItem(name); };
-  dnsPost('/api/redirects', {
-    source: field('source').value.trim(), target: field('target').value.trim(), status: Number(field('status').value),
-    keepPath: field('keepPath').checked, keepQuery: field('keepQuery').checked, mailProfileId: field('mailProfileId').value || null,
-  }, CLP_ROOT.getElementById('dns-redirect-dialog'));
-}
-
-async function dnsDeleteRedirect() {
-  const dialog = CLP_ROOT.getElementById('dns-redirect-dialog');
-  const source = CLP_ROOT.getElementById('dns-redirect-form').elements.namedItem('source').value;
-  const site = dnsState.sites.find(function (candidate) { return candidate.domain === source; });
-  dialog.close();
-  const cfServed = dnsHasCloudflare() && !(site.plan && site.plan.zone && site.plan.zone.provider === 'powerdns');
-  // Once Automatic, deleting a redirect Cloudflare serves is a review of the rule it deletes.
-  if (!site.redirect.standIn && dnsState.automatic && cfServed) return dnsPost('/api/redirects/delete', { source: source });
-  const accepted = await confirmAction({
-    title: 'Delete the redirect for ' + source + '?',
-    text: site.redirect.standIn
-      ? 'Its stand-in site is deleted from this server, so ' + source + ' stops redirecting.'
-      : cfServed
-        ? 'DNS stops managing it. Its rule and records stay in Cloudflare and keep redirecting.'
-        : 'DNS stops managing it. Any records already in ' + dnsProviderLabel() + ' stay as they are.',
-    confirmLabel: 'Delete', danger: true,
-  });
-  if (accepted) dnsPost('/api/redirects/delete', { source: source });
-}
-
-let dnsFound = [];
-
-async function dnsFindRedirects(button) {
-  const label = button.textContent;
-  button.textContent = 'Reading Cloudflare…';
-  const reply = await dnsPost('/api/redirects/find', {});
-  button.textContent = label;
-  if (reply && reply.data && reply.data.found) dnsShowFound(reply.data.found);
-}
-
-function dnsShowFound(found) {
-  dnsFound = found.redirects;
-  const notes = found.notes.length ? '<div class="alert">' + found.notes.map(dnsEsc).join('<br>') + '</div>' : '';
-  CLP_ROOT.getElementById('dns-found-body').innerHTML = notes + (dnsFound.length
-    ? '<div class="table-scroll"><table class="fleet-table dns-found-table"><thead><tr><th class="site-select"><input type="checkbox" checked aria-label="Select all" onchange="dnsSelectFound(this.checked)"></th>' +
-      '<th>Domain</th><th>Redirects to</th><th>Status</th><th>Keep path</th></tr></thead><tbody>' + dnsFound.map(function (redirect, index) {
-        return '<tr><td class="site-select"><input type="checkbox" name="take" value="' + index + '" checked aria-label="Take over ' + dnsEsc(redirect.source) + '"></td>' +
-          '<td class="site-cell"><strong>' + dnsEsc(redirect.source) + '</strong>' + (redirect.source === redirect.zone ? '<span class="hint">and www</span>' : '') + '</td>' +
-          '<td data-label="Redirects to" class="dns-change-detail">' + dnsEsc(redirect.target) + '</td>' +
-          '<td data-label="Status">' + redirect.status + '</td>' +
-          '<td data-label="Keep path"><label class="switch"><input type="checkbox" name="keepPath" data-index="' + index + '"' + (redirect.keepPath ? ' checked' : '') +
-          ' aria-label="Keep the path for ' + dnsEsc(redirect.source) + '"><span></span></label></td></tr>';
-      }).join('') + '</tbody></table></div>'
-    : '<div class="empty">No whole-domain redirect rules are waiting to be taken over.</div>');
-  CLP_ROOT.getElementById('dns-found-mail').innerHTML = dnsMailProfileChoices(null);
-  CLP_ROOT.getElementById('dns-found-submit').hidden = !dnsFound.length;
-  dnsOpen('dns-found-dialog');
-}
-
-function dnsSelectFound(on) {
-  CLP_ROOT.querySelectorAll('#dns-found-body input[name="take"]').forEach(function (box) { box.checked = on; });
-}
-
-function dnsTakeOver(event) {
-  event.preventDefault();
-  const body = CLP_ROOT.getElementById('dns-found-body');
-  const chosen = Array.from(body.querySelectorAll('input[name="take"]:checked')).map(function (box) {
-    const redirect = dnsFound[Number(box.value)];
-    const keepPath = body.querySelector('input[name="keepPath"][data-index="' + box.value + '"]').checked;
-    return { source: redirect.source, target: redirect.target, status: redirect.status, keepPath: keepPath, keepQuery: redirect.keepQuery };
-  });
-  if (!chosen.length) return dnsDialogError(CLP_ROOT.getElementById('dns-found-dialog'), 'Select at least one redirect.');
-  dnsPost('/api/redirects/take-over', { redirects: chosen, mailProfileId: CLP_ROOT.getElementById('dns-found-mail').value || null }, CLP_ROOT.getElementById('dns-found-dialog'));
 }
 
 // --- connections and settings -----------------------------------------------
@@ -667,9 +547,11 @@ function dnsEditConnection(id, preferredProvider) {
   const templates = dnsState.tokens || { dns: dnsState.token };
   dialog.dataset.cfTemplates = JSON.stringify(templates);
   const dnsScope = CLP_ROOT.getElementById('dns-scope-dns');
+  const redirectsScope = CLP_ROOT.getElementById('dns-scope-redirects');
   const edgeScope = CLP_ROOT.getElementById('dns-scope-edge');
   const gateScope = CLP_ROOT.getElementById('dns-scope-gate');
   if (dnsScope) dnsScope.checked = true;
+  if (redirectsScope) redirectsScope.checked = Boolean(dnsState.redirectsEnabled);
   if (edgeScope) edgeScope.checked = Boolean(dnsState.firewallEnabled);
   if (gateScope) gateScope.checked = false;
   cfSyncScope('dns');

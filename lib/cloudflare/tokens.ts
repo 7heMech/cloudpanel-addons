@@ -1,6 +1,6 @@
 /**
- * The Cloudflare permissions DNS and Firewall know: the dashboard's name, the
- * API's names that grant it, and what uses it. Cloudflare's token-template URL
+ * The Cloudflare permissions DNS, Redirects and Firewall know: the dashboard's
+ * name, the API's names that grant it, and what uses it. Cloudflare's token-template URL
  * takes `key`/`type`; `config_settings`, `zone_waf` and `dynamic_redirect`
  * are missing from the documented keys but are the dashboard's own. The form
  * drops a key it does not know, so the page lists every permission as well.
@@ -12,22 +12,23 @@ import { DEFAULT_EDGE_DEFAULTS, type EdgeDefaults } from "./edge";
 /** Structural subset of Firewall's Cloudflare edge defaults needed for permission checks. */
 export type EdgePermissionNeeds = Pick<EdgeDefaults, "ssl" | "alwaysHttps" | "acmeFullSsl" | "webmailFullSsl" | "skipFirewallIps">;
 
-export type PermissionConsumer = "dns" | "edge" | "panelGate" | "shared";
+export type PermissionConsumer = "dns" | "redirects" | "edge" | "panelGate" | "shared";
 
 export interface TokenTemplate {
   url: string;
   permissions: string[];
 }
 
-export type TokenTemplateKey =
-  | "dns"
-  | "edge"
-  | "panelGate"
-  | "dns+edge"
-  | "dns+panelGate"
-  | "edge+panelGate"
-  | "dns+edge+panelGate";
+/** The Connect Cloudflare dialog's checkboxes, in the order a template key joins them. */
+export const TOKEN_SCOPES = ["dns", "redirects", "edge", "panelGate"] as const;
+export type TokenScope = typeof TOKEN_SCOPES[number];
 
+type Subsets<T extends readonly string[]> = T extends readonly [infer Head extends string, ...infer Rest extends string[]]
+  ? Subsets<Rest> | Head | `${Head}+${Subsets<Rest>}`
+  : never;
+
+/** The checked scopes joined with "+" in `TOKEN_SCOPES` order, such as "dns+panelGate". */
+export type TokenTemplateKey = Subsets<typeof TOKEN_SCOPES>;
 export type TokenTemplates = Record<TokenTemplateKey, TokenTemplate>;
 
 export interface PermissionDef {
@@ -47,11 +48,11 @@ export interface PermissionDef {
 
 const always = (text: string) => () => text;
 const PANEL_GATE = "Firewall's Panel gate";
+const REDIRECTS = "Redirects";
 
 /**
- * In the order the page lists them. Zone: Edit and Single Redirect are asked
- * for before a profile creates zones or a redirect domain exists, so either
- * works later with the token already pasted.
+ * In the order the page lists them. Zone: Edit is asked for before a profile
+ * creates zones so it works later with the token already pasted.
  */
 export const PERMISSIONS = {
   dns: {
@@ -68,9 +69,9 @@ export const PERMISSIONS = {
     scope: "account", usedFor: always("Listing the accounts new zones go in"),
   },
   redirects: {
-    key: "dynamic_redirect", type: "edit", label: "Single Redirect: Edit", consumer: "dns",
+    key: "dynamic_redirect", type: "edit", label: "Single Redirect: Edit", consumer: "redirects",
     grantedBy: ["Dynamic URL Redirects Write", "Single Redirect Write"],
-    scope: "zone", usedFor: always("Redirect domains"),
+    scope: "zone", usedFor: () => null, enables: always(REDIRECTS),
   },
   // Managed by Firewall's Cloudflare edge section; optional for DNS alone.
   zoneSettings: {
@@ -97,7 +98,7 @@ export const PERMISSIONS = {
     usedFor: (edge) => edge.skipFirewallIps.length > 0 ? "Cloudflare edge: WAF skip list" : null,
     enables: always("Firewall's Cloudflare edge WAF skip list"),
   },
-  // Required by Firewall's Panel gate; optional for DNS and edge defaults alone.
+  // Required by Firewall's Panel gate; optional for DNS, Redirects and edge defaults.
   originPulls: {
     key: "ssl_and_certificates", type: "edit", label: "SSL and Certificates: Edit", consumer: "panelGate",
     grantedBy: ["SSL and Certificates Write"],
@@ -135,6 +136,8 @@ export interface PermissionScopeOptions {
   includeDns?: boolean;
   /** Include Firewall's Cloudflare edge permissions as required when active in edge defaults (default false). */
   includeEdge?: boolean;
+  /** Require Redirects permissions (DNS: Edit and Single Redirect: Edit) instead of marking them optional (default false). */
+  requireRedirects?: boolean;
   /** Require Panel gate permissions instead of marking them optional (default false). */
   requirePanelGate?: boolean;
 }
@@ -146,6 +149,8 @@ export interface PermissionScopeOptions {
  * and Panel gate permissions are optional. On the Firewall page
  * (`includeDns: false, includeEdge: true, requirePanelGate: true`) active edge
  * permissions and Panel gate permissions are required while DNS is optional.
+ * On the Redirects page (`includeDns: false, requireRedirects: true`) DNS: Edit
+ * and Single Redirect: Edit are required.
  */
 export function listedPermissions(
   edge: EdgePermissionNeeds = DEFAULT_EDGE_DEFAULTS,
@@ -154,6 +159,7 @@ export function listedPermissions(
   const includeDns = options.includeDns !== false;
   const includeEdge = options.includeEdge === true;
   const requirePanelGate = options.requirePanelGate === true;
+  const requireRedirects = options.requireRedirects === true;
   const all = Object.entries(PERMISSIONS) as [PermissionName, PermissionDef][];
   const required: ListedPermission[] = [];
   const optional: ListedPermission[] = [];
@@ -168,6 +174,11 @@ export function listedPermissions(
       const usedFor = permission.enables?.(edge) ?? PANEL_GATE;
       if (requirePanelGate) required.push({ name, permission, usedFor, optional: false });
       else optional.push({ name, permission, usedFor, optional: true });
+      continue;
+    }
+    if (permission.consumer === "redirects") {
+      if (requireRedirects) required.push({ name, permission, usedFor: "Redirect domains", optional: false });
+      else optional.push({ name, permission, usedFor: permission.enables?.(edge) ?? REDIRECTS, optional: true });
       continue;
     }
     if (permission.consumer === "edge") {
@@ -189,6 +200,8 @@ export function listedPermissions(
         const enables = permission.enables?.(edge);
         if (enables) optional.push({ name, permission, usedFor: enables, optional: true });
       }
+    } else if (name === "dns" && requireRedirects) {
+      required.push({ name, permission, usedFor: "Placeholder records for redirects", optional: false });
     } else if (name === "dns") {
       // Panel gate reads DNS records to verify the custom domain is proxied; DNS Read or Write satisfies it,
       // and DNS: Edit also unlocks DNS management later.
@@ -210,17 +223,18 @@ const PANEL_GATE_READ_EXTRAS: { key: string; type: "read" | "edit"; label: strin
 
 export function tokenTemplate(
   edge: EdgePermissionNeeds = DEFAULT_EDGE_DEFAULTS,
-  scopes: { dns?: boolean; edge?: boolean; panelGate?: boolean } = {},
+  scopes: { dns?: boolean; redirects?: boolean; edge?: boolean; panelGate?: boolean } = {},
 ): TokenTemplate {
   const dns = scopes.dns !== false;
+  const redirects = scopes.redirects === true;
   const includeEdge = scopes.edge === true;
   const panelGate = scopes.panelGate === true;
   const items: { key: string; type: "read" | "edit"; label: string }[] = [];
-  const listed = listedPermissions(edge, { includeDns: dns, includeEdge, requirePanelGate: panelGate })
+  const listed = listedPermissions(edge, { includeDns: dns, includeEdge, requireRedirects: redirects, requirePanelGate: panelGate })
     .filter(({ optional }) => !optional)
     .map(({ permission }) => ({ key: permission.key, type: permission.type, label: permission.label }));
   const extras = [
-    ...(includeEdge ? EDGE_READ_EXTRAS : []),
+    ...(includeEdge || redirects ? EDGE_READ_EXTRAS : []),
     ...(panelGate ? PANEL_GATE_READ_EXTRAS : []),
   ];
   for (const extra of extras) {
@@ -232,26 +246,27 @@ export function tokenTemplate(
     if (!items.some((existing) => existing.key === item.key && existing.type === item.type)) items.push(item);
   }
   const keys = encodeURIComponent(JSON.stringify(items.map(({ key, type }) => ({ key, type }))));
-  const title = dns && (includeEdge || panelGate)
+  const firewall = includeEdge || panelGate;
+  const title = [dns, redirects, firewall].filter(Boolean).length > 1
     ? "CloudPanel Addons"
-    : (includeEdge || panelGate)
+    : firewall
       ? "CloudPanel Firewall"
-      : "CloudPanel DNS";
+      : redirects
+        ? "CloudPanel Redirects"
+        : "CloudPanel DNS";
   return {
     url: `https://dash.cloudflare.com/profile/api-tokens?permissionGroupKeys=${keys}&accountId=%2A&zoneId=all&name=${encodeURIComponent(title)}`,
     permissions: items.map((permission) => permission.label),
   };
 }
 
-/** Templates for the Connect Cloudflare dialog's scope checkboxes. */
+/** Templates for every combination of the Connect Cloudflare dialog's scope checkboxes. */
 export function tokenTemplates(edge: EdgePermissionNeeds = DEFAULT_EDGE_DEFAULTS): TokenTemplates {
-  return {
-    dns: tokenTemplate(edge, { dns: true, edge: false, panelGate: false }),
-    edge: tokenTemplate(edge, { dns: false, edge: true, panelGate: false }),
-    panelGate: tokenTemplate(edge, { dns: false, edge: false, panelGate: true }),
-    "dns+edge": tokenTemplate(edge, { dns: true, edge: true, panelGate: false }),
-    "dns+panelGate": tokenTemplate(edge, { dns: true, edge: false, panelGate: true }),
-    "edge+panelGate": tokenTemplate(edge, { dns: false, edge: true, panelGate: true }),
-    "dns+edge+panelGate": tokenTemplate(edge, { dns: true, edge: true, panelGate: true }),
-  };
+  const templates: Partial<TokenTemplates> = {};
+  for (let mask = 1; mask < 1 << TOKEN_SCOPES.length; mask++) {
+    const chosen = TOKEN_SCOPES.filter((_, index) => mask & (1 << index));
+    const has = (scope: TokenScope) => chosen.includes(scope);
+    templates[chosen.join("+") as TokenTemplateKey] = tokenTemplate(edge, { dns: has("dns"), redirects: has("redirects"), edge: has("edge"), panelGate: has("panelGate") });
+  }
+  return templates as TokenTemplates;
 }

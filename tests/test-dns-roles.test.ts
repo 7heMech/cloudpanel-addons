@@ -43,6 +43,8 @@ function setup() {
     smtpConfig: join(dir, "smtp.json"),
     lockFile: join(dir, "dns.lock"),
     panelDb: join(dir, "db.sq3"),
+    redirectsPolicyFile: join(dir, "redirects", "policy.json"),
+    standInsFile: join(dir, "redirects", "standins.json"),
     rootUid: process.getuid!(),
     clpctl: "/bin/false",
   };
@@ -57,13 +59,27 @@ function setup() {
       now: () => START,
     }) as Promise<T>;
   const connect = () => act("save-connection", { token: TOKEN });
+  const redirectSources: { source: string; target: string }[] = [];
+  /** Adds a redirect to Redirects' saved state, as the Redirects addon would, and gives it a Mail role in DNS. */
+  const redirect = async (source: string, target: string, mailProfileId: string | null = null): Promise<void> => {
+    redirectSources.push({ source, target });
+    mkdirSync(join(dir, "redirects"), { recursive: true });
+    writeFileSync(paths.redirectsPolicyFile, JSON.stringify({ version: 1, automatic: true, held: [], zoneChoices: {},
+      redirects: redirectSources.map((entry) => ({ ...entry, status: 301, keepPath: true, keepQuery: true })) }), { mode: 0o600 });
+    if (mailProfileId) await act("assign", { domains: [source], mailProfileId });
+  };
+  const unredirect = (source: string): void => {
+    redirectSources.splice(redirectSources.findIndex((entry) => entry.source === source), 1);
+    writeFileSync(paths.redirectsPolicyFile, JSON.stringify({ version: 1, automatic: true, held: [], zoneChoices: {},
+      redirects: redirectSources.map((entry) => ({ ...entry, status: 301, keepPath: true, keepQuery: true })) }), { mode: 0o600 });
+  };
   const apply = async (verb: string, body?: unknown): Promise<DnsReply> => {
     const reply = await act(verb, body);
     return reply.review ? act("confirm", { token: reply.review.token }) : reply;
   };
   const records = (zone = "example.com") =>
     cf.recordsOf(zone).map((record) => `${record.type} ${record.name} ${record.content}${record.proxied ? " proxied" : ""}`).sort();
-  return { dir, paths, cf, mc, agency, sites, act, connect, apply, records };
+  return { dir, paths, cf, mc, agency, sites, act, connect, apply, records, redirect, unredirect };
 }
 
 function mailcowPanelHtml(html: string): string {
@@ -91,7 +107,7 @@ describe("composable HTTP and Mail roles", () => {
     // Site (Web) + Mail (DMARC)
     await env.act("assign", { domains: ["blog.example.com"], httpProfileId: "web", mailProfileId: "dmarc" });
     // Redirect + Mail (Mailcow)
-    await env.act("save-redirect", { source: "old.example.org", target: "https://example.com", status: 301, keepPath: true, keepQuery: true, mailProfileId: "mailcow" });
+    await env.redirect("old.example.org", "https://example.com", "mailcow");
 
     const applied = await env.apply("set-automatic", { automatic: true });
     const siteOf = (domain: string) => applied.sites.find((entry) => entry.domain === domain)!;
@@ -112,9 +128,9 @@ describe("composable HTTP and Mail roles", () => {
     expect(exRecords.some((r) => r.startsWith("TXT dkim._domainkey.mail.example.com "))).toBe(true);
     expect(exRecords.some((r) => /^(A|AAAA) mail\.example\.com /.test(r))).toBe(false);
     expect(env.mc.domains.has("mail.example.com")).toBe(true);
-    // old.example.org redirect gets AAAA 100:: placeholder + Mailcow mail rows
+    // old.example.org redirect gets Mailcow mail rows; its address records are the Redirects addon's to write.
     const oldRecords = env.records("old.example.org");
-    expect(oldRecords).toContain("AAAA old.example.org 100:: proxied");
+    expect(oldRecords.some((r) => /^(A|AAAA) old\.example\.org /.test(r))).toBe(false);
     expect(oldRecords).toContain("MX old.example.org mail.example.net");
     expect(env.mc.domains.has("old.example.org")).toBe(true);
 
@@ -234,7 +250,7 @@ describe("v1 to v2 policy migration", () => {
     });
     await env.act("assign", { domains: ["example.com"], httpProfileId: "web" });
     await env.act("assign", { domains: ["blog.example.com"], httpProfileId: "web", mailProfileId: "mailcow" });
-    await env.act("save-redirect", { source: "old.example.org", target: "https://example.com", status: 301, keepPath: true, keepQuery: true, mailProfileId: "mailcow" });
+    await env.redirect("old.example.org", "https://example.com", "mailcow");
     await env.apply("set-automatic", { automatic: true });
 
     // Now replace policy.json on disk with an equivalent v1 policy (including reversed profile order test separately).
@@ -266,11 +282,12 @@ describe("v1 to v2 policy migration", () => {
     expect(migrated.profiles.map((p) => `${p.id}:${p.role}`)).toEqual(["web:http", "mailcow:mail"]);
     expect(migrated.defaultHttpProfileId).toBe("web");
     expect(migrated.defaultMailProfileId).toBe("mailcow");
+    // The redirect's Mail role joins the assignments; the redirect itself moves to Redirects.
     expect(migrated.assignments).toEqual({
       "example.com": { http: "web", mail: null },
       "blog.example.com": { http: "web", mail: "mailcow" },
+      "old.example.org": { http: null, mail: "mailcow" },
     });
-    expect(migrated.redirects[0]!.mailProfileId).toBe("mailcow");
     // Strictly idempotent when parsed again.
     expect(parsePolicy(migrated)).toEqual(migrated);
 
@@ -365,7 +382,7 @@ describe("v1 to v2 policy migration", () => {
     expect(migrated.assignments["mail.example.com"]).toEqual({ http: null, mail: "google-only" });
     expect(migrated.profiles.find((p) => p.id === "google-only")!.role).toBe("mail");
     expect(migrated.profiles.find((p) => p.id === "verify-tag")!.role).toBe("mail");
-    expect(migrated.redirects[0]!.mailProfileId).toBe("verify-tag");
+    expect(migrated.assignments["old.example.org"]).toEqual({ http: null, mail: "verify-tag" });
   });
 });
 
@@ -422,7 +439,7 @@ describe("Mailcow hide-until-linked tab and removal warning flow", () => {
     await env.act("save-mailcow", { url: "mail.example.net", key: MAILCOW_KEY, dkimSource: "example.net" });
     await env.act("assign", { domains: ["example.com"], httpProfileId: "web", mailProfileId: "mailcow" });
     await env.act("assign", { domains: ["mail.example.com"], httpProfileId: null, mailProfileId: "mailcow" });
-    await env.act("save-redirect", { source: "old.example.org", target: "https://example.com", status: 301, keepPath: true, keepQuery: true, mailProfileId: "mailcow" });
+    await env.redirect("old.example.org", "https://example.com", "mailcow");
     await env.apply("set-automatic", { automatic: true });
 
     const recordsBefore = env.records("example.com");
@@ -544,20 +561,19 @@ describe("review regressions", () => {
       "A site-a.example.com",
       "TXT _verify.site-a.example.com",
     ]);
-    const redirA = migrated.redirects.find((r) => r.source === "redir-a.example.org")!;
-    expect(redirA.mailProfileId).toBe(siteA.mail);
-    const redirAMail = byId(redirA.mailProfileId)!;
+    const redirA = migrated.assignments["redir-a.example.org"]!;
+    expect(redirA.mail).toBe(siteA.mail);
+    const redirAMail = byId(redirA.mail)!;
     expect(redirAMail.records.map((r) => `${r.type} ${r.name}`)).toEqual(["TXT _verify.{domain}"]);
-    expect(renderRedirect(redirAMail, ["redir-a.example.org"], vars("redir-a.example.org", "example.org"), "100::").records.map((r) => `${r.type} ${r.name}`)).toEqual([
+    expect(renderRedirect(redirAMail, ["redir-a.example.org"], vars("redir-a.example.org", "example.org"), false).records.map((r) => `${r.type} ${r.name}`)).toEqual([
       "TXT _verify.redir-a.example.org",
-      "AAAA redir-a.example.org",
     ]);
 
     // Site B and Redirect B both preserve MX and TXT _verify.
     const siteB = migrated.assignments["site-b.example.com"]!;
-    const redirB = migrated.redirects.find((r) => r.source === "redir-b.example.org")!;
-    expect(redirB.mailProfileId).toBe(siteB.mail);
-    expect(byId(redirB.mailProfileId)!.records.map((r) => `${r.type} ${r.name}`)).toEqual([
+    const redirB = migrated.assignments["redir-b.example.org"]!;
+    expect(redirB.mail).toBe(siteB.mail);
+    expect(byId(redirB.mail)!.records.map((r) => `${r.type} ${r.name}`)).toEqual([
       "MX {domain}",
       "TXT _verify.{domain}",
     ]);
@@ -608,7 +624,7 @@ describe("review regressions", () => {
     await env.act("set-automatic", { automatic: false });
     const onDisk = JSON.parse(readFileSync(policyPath, "utf8"));
     expect(onDisk.version).toBe(2);
-    const redirectMailId = onDisk.redirects[0].mailProfileId;
+    const redirectMailId = onDisk.assignments["old.example.org"].mail;
     expect(redirectMailId).toBe("redirect-mixed-mail");
     expect(onDisk.profiles.find((p: Record<string, unknown>) => p.id === redirectMailId).zone).toEqual({
       ssl: "full", alwaysHttps: false, acmeFullSsl: false, webmailFullSsl: true, skipFirewallIps: ["203.0.113.7"],
@@ -668,7 +684,7 @@ describe("review regressions", () => {
       { id: "mailonly", name: "Mail only", mailcow: false, zone: zone("strict"), records: [mx] },
       { id: "redirect-mixed", name: "Redirect Mixed", mailcow: false, zone: zone("full"), records: [a, mx] },
     ], {});
-    expect(unused.onDisk.redirects[0].mailProfileId).toBe("mailonly");
+    expect(unused.onDisk.assignments["old.example.org"]).toEqual({ http: null, mail: "mailonly" });
     expect(unused.onDisk.profiles.find((p: Record<string, unknown>) => p.id === "mailonly").zone).toEqual(zone("full"));
     expect(unused.edge.defaults.ssl).toBe("full");
 
@@ -686,7 +702,7 @@ describe("review regressions", () => {
       { id: "web", name: "Web", mailcow: false, zone: zone("strict"), records: [a] },
       { id: "redirect-mixed", name: "Redirect web", mailcow: false, zone: zone("full"), records: [a, { ...a, name: "www.{domain}" }] },
     ], { "site.example.com": "web" });
-    expect(webOnly.onDisk.redirects[0].mailProfileId).toBeNull();
+    expect(webOnly.onDisk.assignments["old.example.org"]).toBeUndefined();
     expect(webOnly.edge.defaults.ssl).toBeNull();
     expect(webOnly.edge.migrationNote).toContain("disagreed on SSL/TLS mode");
   });
@@ -743,7 +759,7 @@ describe("review regressions", () => {
     expect(linked.notice).toContain("delete an unused profile");
   });
 
-  test("mailcowSites and profile counts follow the redirect-first rule when a site shares a redirect domain", async () => {
+  test("a redirect domain that is also a site counts its Mail role once and its HTTP role only once the redirect is gone", async () => {
     const env = setup();
     env.mc.domains.add("example.net");
     env.mc.key("example.net", "dkim");
@@ -751,34 +767,20 @@ describe("review regressions", () => {
     await env.act("save-mailcow", { url: "mail.example.net", key: MAILCOW_KEY, dkimSource: "example.net" });
     await env.act("assign", { domains: ["example.com"], httpProfileId: "web", mailProfileId: "mailcow" });
 
-    // Inject an overlapping redirect for example.com (e.g. a site recreated at an existing redirect domain).
-    const policyPath = join(env.dir, "state", "policy.json");
-    const writeOverlap = (mailProfileId: string | null) => {
-      const raw = JSON.parse(readFileSync(policyPath, "utf8"));
-      raw.redirects = [{ source: "example.com", target: "https://other.example", status: 301, keepPath: true, keepQuery: true, mailProfileId }];
-      writeFileSync(policyPath, `${JSON.stringify(raw, null, 2)}\n`, { mode: 0o600 });
-    };
+    // A redirect at a site's domain (a site recreated at an existing redirect domain) shares the domain's one assignment.
+    await env.redirect("example.com", "https://other.example");
+    const listed = await env.act("list");
+    expect(listed.profiles.find((p) => p.id === "mailcow")!.sites).toBe(1);
+    expect(listed.profiles.find((p) => p.id === "web")!.sites).toBe(0);
+    expect(listed.sites.filter((site) => site.domain === "example.com")).toEqual([expect.objectContaining({ httpRole: "redirect", mailProfileId: "mailcow" })]);
+    await expect(env.act("assign", { domains: ["example.com"], httpProfileId: "web" })).rejects.toThrow("is a redirect domain in Redirects");
+    const removed = await env.act("remove-mailcow", {});
+    expect(removed.mailcow.affectedSites).toEqual(["example.com"]);
 
-    // Case 1: redirect has Mail = None -> example.com is not counted as Mailcow-assigned even though the shadowed site assignment has Mailcow.
-    writeOverlap(null);
-    const listNone = await env.act("list");
-    expect(listNone.profiles.find((p) => p.id === "mailcow")!.sites).toBe(0);
-    const removedNone = await env.act("remove-mailcow", {});
-    expect(removedNone.mailcow.affectedSites).toEqual([]);
-    expect(removedNone.notice).not.toContain("still assign");
-
-    // Case 2: redirect has Mail = Mailcow -> example.com is counted once (no duplicate from shadowed site assignment).
-    await env.act("save-mailcow", { url: "mail.example.net", key: MAILCOW_KEY, dkimSource: "example.net" });
-    writeOverlap("mailcow");
-    const listBoth = await env.act("list");
-    expect(listBoth.profiles.find((p) => p.id === "mailcow")!.sites).toBe(1);
-    const removedBoth = await env.act("remove-mailcow", {});
-    expect(removedBoth.mailcow.affectedSites).toEqual(["example.com"]);
-    expect(removedBoth.notice).toContain("1 domain still assigns Mailcow");
-
-    // Case 3: deleting the redirect restores the shadowed site assignment cleanly.
-    const afterDelete = await env.act("delete-redirect", { source: "example.com" });
-    expect(afterDelete.mailcow.affectedSites).toEqual(["example.com"]);
-    expect(afterDelete.profiles.find((p) => p.id === "mailcow")!.sites).toBe(1);
+    // Once the redirect is gone, the stored HTTP role applies again.
+    env.unredirect("example.com");
+    const after = await env.act("list");
+    expect(after.profiles.find((p) => p.id === "web")!.sites).toBe(1);
+    expect(after.sites.find((site) => site.domain === "example.com")).toMatchObject({ httpRole: "site", httpProfileId: "web", mailProfileId: "mailcow" });
   });
 });

@@ -6,8 +6,6 @@ dns:check                          admin
 dns:choose-zone                    admin
 dns:confirm                        admin
 dns:delete-profile                 admin
-dns:delete-redirect                admin
-dns:find-redirects                 admin
 dns:forget-records                 admin
 dns:list                           admin
 dns:panel-host-helper              admin
@@ -18,13 +16,11 @@ dns:remove-records                 admin
 dns:save-connection                admin
 dns:save-mailcow                   admin
 dns:save-profile                   admin
-dns:save-redirect                  admin
 dns:save-server                    admin
 dns:set-automatic                  admin
 dns:set-default                    admin
 dns:set-panel-host                 admin
 dns:site-status                    panel-user
-dns:take-over                      admin
 dns:zone-account                   admin
 firewall:edge-check                admin
 firewall:edge-confirm              admin
@@ -116,6 +112,20 @@ panel-tweaks:set-branding          admin
 panel-tweaks:set-tweaks            admin
 panel-tweaks:state                 panel-user
 panel-tweaks:watch-job             admin stream
+redirects:check                    admin
+redirects:choose-zone              admin
+redirects:confirm                  admin
+redirects:create-site-helper       admin
+redirects:delete-redirect          admin
+redirects:find-redirects           admin
+redirects:list                     admin
+redirects:prepare-replace          admin
+redirects:remove-connection        admin
+redirects:review-redirect          admin
+redirects:save-connection          admin
+redirects:save-redirect            admin
+redirects:set-automatic            admin
+redirects:take-over                admin
 resource-limits:assign             admin
 resource-limits:delete-category    admin
 resource-limits:list               admin

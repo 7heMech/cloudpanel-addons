@@ -7,7 +7,7 @@ import type { AccessView } from "./access";
 import type { TokenTemplateKey, TokenTemplates } from "./tokens";
 
 export interface CloudflareDialogOptions {
-  /** Prefix for DOM element IDs (e.g. "dns" or "fw-cf"). */
+  /** Prefix for DOM element IDs (e.g. "dns", "redir-cf" or "fw-cf"). */
   prefix: string;
   /** Form onsubmit handler expression. */
   onSubmit: string;
@@ -15,6 +15,8 @@ export interface CloudflareDialogOptions {
   copyFn: string;
   /** Initial state of the DNS scope checkbox. */
   defaultDns: boolean;
+  /** Initial state of the Redirects scope checkbox. */
+  defaultRedirects?: boolean;
   /** Initial state of the Cloudflare edge defaults scope checkbox. */
   defaultEdge: boolean;
   /** Initial state of the Panel gate scope checkbox. */
@@ -54,9 +56,10 @@ export function cloudflareAccessDetailsHtml(id: string, access: AccessView, stat
       <p class="dns-access-foot hint"><a href="${esc(access.editUrl)}" target="_blank" rel="noopener noreferrer" referrerpolicy="no-referrer">Edit in Cloudflare ↗</a></p></div></details>`;
 }
 
-export function scopeKeyFor(scopes: { dns: boolean; edge: boolean; panelGate: boolean }): TokenTemplateKey {
+export function scopeKeyFor(scopes: { dns: boolean; redirects?: boolean; edge: boolean; panelGate: boolean }): TokenTemplateKey {
   const parts: string[] = [];
   if (scopes.dns) parts.push("dns");
+  if (scopes.redirects) parts.push("redirects");
   if (scopes.edge) parts.push("edge");
   if (scopes.panelGate) parts.push("panelGate");
   return (parts.join("+") || "dns") as TokenTemplateKey;
@@ -64,12 +67,12 @@ export function scopeKeyFor(scopes: { dns: boolean; edge: boolean; panelGate: bo
 
 /**
  * Shared Connect Cloudflare `<dialog>` with scope checkboxes so an operator
- * can mint one token covering DNS, Firewall's Cloudflare edge defaults, Panel
- * gate, or any combination of the three.
+ * can mint one token covering DNS, Redirects, Firewall's Cloudflare edge
+ * defaults, Panel gate, or any combination.
  */
 export function cloudflareConnectDialogHtml(options: CloudflareDialogOptions): string {
   const p = esc(options.prefix);
-  const initialKey = scopeKeyFor({ dns: options.defaultDns, edge: options.defaultEdge, panelGate: options.defaultPanelGate });
+  const initialKey = scopeKeyFor({ dns: options.defaultDns, redirects: options.defaultRedirects === true, edge: options.defaultEdge, panelGate: options.defaultPanelGate });
   const initial = options.templates[initialKey] ?? options.templates.dns;
   const templatesAttr = esc(JSON.stringify(options.templates));
   return `<dialog id="${p}-connection-dialog" aria-labelledby="${p}-connection-heading" data-cf-templates="${templatesAttr}"><form id="${p}-connection-form" onsubmit="${options.onSubmit}">
@@ -79,6 +82,7 @@ export function cloudflareConnectDialogHtml(options: CloudflareDialogOptions): s
       <li id="${p}-token-step"><strong>Create a token in Cloudflare</strong>
         <div class="cf-scope-picks" role="group" aria-label="Token scopes">
           <label class="cf-scope-pick"><input type="checkbox" id="${p}-scope-dns" data-cf-scope="dns" ${options.defaultDns ? "checked" : ""} onchange="cfSyncScope('${p}', this)"><span>DNS records and zones</span></label>
+          <label class="cf-scope-pick"><input type="checkbox" id="${p}-scope-redirects" data-cf-scope="redirects" ${options.defaultRedirects ? "checked" : ""} onchange="cfSyncScope('${p}', this)"><span>Redirect domains (Single Redirect rules)</span></label>
           <label class="cf-scope-pick"><input type="checkbox" id="${p}-scope-edge" data-cf-scope="edge" ${options.defaultEdge ? "checked" : ""} onchange="cfSyncScope('${p}', this)"><span>Cloudflare edge defaults (SSL/TLS, HTTPS, rules)</span></label>
           <label class="cf-scope-pick"><input type="checkbox" id="${p}-scope-gate" data-cf-scope="panelGate" ${options.defaultPanelGate ? "checked" : ""} onchange="cfSyncScope('${p}', this)"><span>Panel gate (Cloudflare Access and origin pulls)</span></label>
         </div>
@@ -106,10 +110,12 @@ function cfSyncScope(prefix, changed) {
   var dialog = CLP_ROOT.getElementById(prefix + '-connection-dialog');
   if (!dialog) return;
   var dnsBox = CLP_ROOT.getElementById(prefix + '-scope-dns');
+  var redirBox = CLP_ROOT.getElementById(prefix + '-scope-redirects');
   var edgeBox = CLP_ROOT.getElementById(prefix + '-scope-edge');
   var gateBox = CLP_ROOT.getElementById(prefix + '-scope-gate');
   var parts = [];
   if (dnsBox && dnsBox.checked) parts.push('dns');
+  if (redirBox && redirBox.checked) parts.push('redirects');
   if (edgeBox && edgeBox.checked) parts.push('edge');
   if (gateBox && gateBox.checked) parts.push('panelGate');
   if (!parts.length && changed) {

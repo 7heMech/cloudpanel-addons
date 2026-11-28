@@ -1,8 +1,8 @@
 /**
  * Shared root-owned Cloudflare API connection store under
- * `/var/lib/clp-addons/cloudflare/`. Both DNS and Firewall read and manage the
- * same connections here so Firewall's Panel gate does not require enabling DNS,
- * and one token can serve both addons without duplicate copies on disk.
+ * `/var/lib/clp-addons/cloudflare/`. DNS, Redirects and Firewall read and
+ * manage the same connections here so none requires enabling the others, and
+ * one token can serve all three without duplicate copies on disk.
  */
 import { randomBytes } from "node:crypto";
 import { existsSync, lstatSync, readFileSync, rmSync, rmdirSync } from "node:fs";

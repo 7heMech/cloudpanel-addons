@@ -299,10 +299,10 @@ describe("a token's own permissions", () => {
     expect(access.coverage.waf).toEqual({ held: "yes" });
     expect(access.coverage.configRules).toEqual({ held: "no" });
     expect(connectionPermissions({ token: access }, DEFAULT_EDGE_DEFAULTS, { includeDns: true, includeEdge: true }).missing)
-      .toEqual(["Zone: Edit", "Account Settings: Read", "Single Redirect: Edit", "Config Rules: Edit"]);
-    // For DNS alone, Config Rules: Edit is optional (belongs to Firewall's Cloudflare edge).
+      .toEqual(["Zone: Edit", "Account Settings: Read", "Config Rules: Edit"]);
+    // For DNS alone, Config Rules: Edit is optional (belongs to Firewall's Cloudflare edge), and Single Redirect to Redirects.
     expect(connectionPermissions({ token: access }, DEFAULT_EDGE_DEFAULTS, { includeDns: true, includeEdge: false }).missing)
-      .toEqual(["Zone: Edit", "Account Settings: Read", "Single Redirect: Edit"]);
+      .toEqual(["Zone: Edit", "Account Settings: Read"]);
   });
 
   test("missing and partial permissions are named, a deny wins, and reach is described", () => {
