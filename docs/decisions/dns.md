@@ -284,8 +284,9 @@ optionally, an HTTP profile. The policy's `domains` list holds them (at most
 `MAX_DOMAINS`, 500); their roles live in `assignments` as a site's do, and each
 is planned beside the sites through the same switch, reviews, log and lock.
 `add-domain` and `remove-domain` are admin-only verbs. Adding refuses a
-CloudPanel site, a domain already listed and the panel hostname; the panel
-hostname refuses a listed domain.
+CloudPanel site (a stand-in left out included), a domain already listed and the
+panel hostname; the panel hostname refuses a listed domain. Removing refuses a
+domain CloudPanel now has a site at, so the site keeps the roles it takes over.
 
 `adoptNewSites` never prunes a listed domain. A site that appears at one takes
 it over: the domain leaves the list, keeps its roles, and takes the default HTTP

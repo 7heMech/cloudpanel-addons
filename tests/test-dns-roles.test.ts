@@ -280,6 +280,8 @@ describe("DNS-only domains", () => {
     await env.addDomain("old.example.org", { mailProfileId: "google" });
 
     env.sites.push(site(40, "old.example.org", { createdAt: START }));
+    // Before DNS adopts the site, removing the domain would drop the Mail role the site inherits.
+    await expect(env.act("remove-domain", { domain: "old.example.org" })).rejects.toThrow("is a CloudPanel site now");
     const synced = await env.act<{ joined: string[] }>("sync-sites");
     expect(synced.joined).toEqual([]);
     const state = await env.act("list");
@@ -350,6 +352,9 @@ describe("Redirects' domains in DNS", () => {
     expect(state.orphans).toEqual([]);
     let policy = JSON.parse(readFileSync(join(env.dir, "state", "policy.json"), "utf8"));
     expect(policy.assignments["old.example.org"]).toEqual({ http: "web", mail: null });
+
+    // Nor can it come back as a DNS-only domain that writes over the placeholder.
+    await expect(env.act("add-domain", { domain: "old.example.org", httpProfileId: "web" })).rejects.toThrow("is a CloudPanel site");
 
     // A tracked rule alone still counts as the edge.
     env.redirectStatus([], ["old.example.org"]);

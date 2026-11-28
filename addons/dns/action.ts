@@ -1964,7 +1964,7 @@ async function changeVerb(action: Action, verb: DnsVerb, body: Record<string, un
   }
   if (verb === "add-domain") {
     const domain = hostname(body.domain, "The domain");
-    if (action.sites().some((site) => site.domain === domain)) failAction(`${domain} is a CloudPanel site; it is already listed`);
+    if (action.panelSites().some((site) => site.domain === domain)) failAction(`${domain} is a CloudPanel site; it is already listed`);
     if (policy.domains.includes(domain)) failAction(`${domain} is already listed`);
     if (domain === policy.panelHost) failAction(`${domain} is the panel hostname`);
     if (policy.domains.length >= MAX_DOMAINS) failAction(`At most ${MAX_DOMAINS} DNS-only domains can be added`);
@@ -1979,6 +1979,7 @@ async function changeVerb(action: Action, verb: DnsVerb, body: Record<string, un
   if (verb === "remove-domain") {
     const domain = hostname(body.domain, "The domain");
     if (!policy.domains.includes(domain)) failAction(`${domain} is not a DNS-only domain`);
+    if (action.panelSites(true).some((site) => site.domain === domain)) failAction(`${domain} is a CloudPanel site now and keeps its roles as one`);
     next.domains = next.domains.filter((listed) => listed !== domain);
     delete next.assignments[domain];
     next.held = next.held.filter((held) => held !== domain);
