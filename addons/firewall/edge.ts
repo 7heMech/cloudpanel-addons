@@ -770,11 +770,30 @@ async function mergeRefusedPermissions(
 // Review construction
 // ---------------------------------------------------------------------------
 
+/** What each change will write to, so a review never confirms against a rule replaced or edited since. */
+function changeTargets(evaluated: EvaluatedZone[]): unknown[] {
+  return evaluated.filter((entry) => entry.changes.length > 0).map((entry) => ({
+    zoneId: entry.discovered.zone.id,
+    changes: entry.changes.map((change) => ({
+      setting: change.setting ?? null,
+      value: change.value ?? null,
+      phase: change.phase ?? null,
+      rulesetId: change.rulesetId ?? null,
+      ruleId: change.ruleId ?? null,
+      rule: change.rule ?? null,
+      live: change.phase && change.ruleId
+        ? entry.live.rulesets[change.phase]?.rules.find((rule) => rule.id === change.ruleId) ?? null
+        : null,
+    })),
+  }));
+}
+
 function reviewDigest(
   kind: EdgePendingReview["kind"],
   approve: boolean,
   nextDefaults: EdgeDefaults,
   zones: EdgeReviewZone[],
+  targets: unknown[],
   zoneKey?: string,
 ): string {
   return createHash("sha256").update(JSON.stringify({
@@ -788,6 +807,7 @@ function reviewDigest(
       conflicts: zone.conflicts,
       error: zone.error,
     })),
+    targets,
   })).digest("hex").slice(0, 32);
 }
 
@@ -869,7 +889,7 @@ function buildReview(
     confirmLabel = danger ? "Confirm and apply" : "Apply changes";
   }
 
-  const digest = reviewDigest(kind, kind !== "zone", nextDefaults, zones, zoneKey);
+  const digest = reviewDigest(kind, kind !== "zone", nextDefaults, zones, changeTargets(evaluated), zoneKey);
   const token = randomBytes(16).toString("hex");
   return {
     digest,

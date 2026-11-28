@@ -435,6 +435,30 @@ describe("Firewall approve-once Cloudflare edge defaults", () => {
     expect(env.cf.settings.get(`${zoneAfterPause.id}:ssl`)).toBeUndefined();
   });
 
+  test("a review to delete a managed rule re-prompts when Cloudflare replaced that rule before confirmation", async () => {
+    const env = makeEnv();
+    const zone = env.cf.zone("swap.example", env.agency);
+    await env.connect();
+    const approve = await saveCloudflareEdge({ approve: true, defaults: DEFAULT_EDGE_DEFAULTS }, env.options);
+    await confirmCloudflareEdge(approve.review!.token, env.options);
+    const key = `${zone.id}:http_config_settings`;
+    const original = env.cf.rulesets.get(key)!.rules[0]!;
+
+    const review = await saveCloudflareEdge({ defaults: { ...DEFAULT_EDGE_DEFAULTS, acmeFullSsl: false } }, env.options);
+    expect(review.review!.zones[0]!.changes.some((c) => c.action === "delete")).toBe(true);
+    const replacement = { ...original, id: hexId(), description: "Replaced elsewhere" };
+    env.cf.rulesets.get(key)!.rules = [replacement];
+
+    const writesBefore = env.cf.writes().length;
+    const retried = await confirmCloudflareEdge(review.review!.token, env.options);
+    expect(retried.review).toBeDefined();
+    expect(env.cf.writes().length).toBe(writesBefore);
+    expect(env.cf.rulesets.get(key)!.rules.map((rule) => rule.id)).toEqual([replacement.id]);
+
+    await confirmCloudflareEdge(retried.review!.token, env.options);
+    expect(env.cf.rulesets.get(key)!.rules).toEqual([]);
+  });
+
   test("disambiguates duplicate zone names across two Cloudflare accounts", async () => {
     const env = makeEnv();
     const account2 = env.cf.account("Secondary");

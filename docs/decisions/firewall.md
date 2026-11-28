@@ -296,8 +296,11 @@ read only local files and make zero Cloudflare API calls.
 2. **Approve once (`edge-save` with `approve: true` -> `edge-confirm`).** Root
    reads live Cloudflare zones, builds a review with a 15-minute random token
    and SHA-256 plan digest, and stores it in `cloudflare-edge-pending.json`.
-   Confirming re-reads live Cloudflare state, verifies both config hash and
-   plan digest (showing a fresh review if Cloudflare changed in between),
+   The digest also covers the zone, ruleset and rule IDs each change targets
+   and the live state of each rule it updates or deletes. Confirming re-reads
+   live Cloudflare state, verifies both config hash and plan digest (showing a
+   fresh review if Cloudflare changed in between, including a rule replaced
+   with an identical-looking one),
    applies changes to non-blocked zones, records `approved: true` with
    `approvedDigest`, and logs each write.
 3. **Automatic inheritance for new zones.** While `approved` is true and
