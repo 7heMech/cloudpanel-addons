@@ -12,6 +12,8 @@ import { join } from "node:path";
 import {
   CHECK_URL, checkRequest, isNewerVersion, parseCheckAnswer, readSavedAnswer, runDailyCheck, savedUpdate, type UsageReport,
 } from "../lib/update-check";
+import { FORGET_URL } from "../lib/usage-share";
+import contract from "./fixtures/check-contract.json";
 
 const realFetch = globalThis.fetch;
 afterEach(() => {
@@ -319,6 +321,20 @@ describe("the daily update check", () => {
     const { calls, fetcher } = recorder(() => Response.json({}));
     expect(await runDailyCheck(opts({ version: "0.0.0-dev", fetch: fetcher }))).toBeNull();
     expect(calls).toEqual([]);
+  });
+
+  test("sends and parses the contract worker/index.ts is tested against (tests/fixtures/check-contract.json)", async () => {
+    const { usage } = contract.requestWithUsage;
+    expect(checkRequest("2.1.0", "x64")).toEqual(contract.request as never);
+    expect(checkRequest("2.1.0", "x64", usage)).toEqual(contract.requestWithUsage as never);
+    expect(parseCheckAnswer(contract.answer)).toEqual(contract.answer as never);
+    expect(parseCheckAnswer(contract.answerWithUsage)).toEqual(contract.answerWithUsage as never);
+    const { calls, fetcher } = recorder(() => Response.json(contract.answerWithUsage));
+    let settled = false;
+    await runDailyCheck(opts({ version: "2.1.0", now: day1, fetch: fetcher, usage: () => usage, onUsageSaved: () => { settled = true; } }));
+    expect(calls[0]!.body).toEqual(contract.requestWithUsage);
+    expect(settled).toBe(true);
+    expect(FORGET_URL).toBe("https://clp.7he.dev/forget");
   });
 
   test("request and answer shapes", () => {
