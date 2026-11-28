@@ -361,6 +361,7 @@ class Action {
       backoff: backoffUntil,
       standIns: this.standIns(),
       storedTokens: Object.fromEntries(reports.filter((report) => report.active).map((report) => [report.id, report.token])),
+      tracked: this.files.status().redirectRules,
     });
     this.runs.push(run);
     return run;
@@ -394,9 +395,9 @@ class Action {
     for (const plan of plans) {
       if (domains !== "all" && !domains.includes(plan.domain)) continue;
       plansByDomain[plan.domain] = plan;
-      if (plan.zone) {
-        redirectRules[plan.domain] = { connectionId: plan.zone.connectionId, zoneId: plan.zone.id, zoneName: plan.zone.name };
-      }
+      const tracked = run.trackedRule(plan.domain);
+      if (tracked) redirectRules[plan.domain] = tracked;
+      else delete redirectRules[plan.domain];
     }
     this.files.saveStatus({
       ...status,

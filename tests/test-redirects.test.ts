@@ -671,6 +671,32 @@ describe("local stand-in sites, provider transitions, and leftover rule cleanup"
     expect(gone.review!.sites[0]!.problems.join(" ")).toContain("other.example, where the Cloudflare rule for go.other.example was last seen, is not reachable");
   });
 
+  test("keeps tracking the zone that holds a redirect's rule when a read-only check selects a new child zone", async () => {
+    const env = setup();
+    env.cf.zone("example.com", env.account);
+    await env.act("save-connection", { token: TOKEN });
+    await env.automatic();
+    await env.confirmed(await env.act("save-redirect", found("go.sub.example.com", "https://example.net")));
+    await env.act("set-automatic", { automatic: false });
+    const tracked = () => JSON.parse(readFileSync(join(env.paths.stateDir, "status.json"), "utf8")).redirectRules?.["go.sub.example.com"];
+    expect(tracked()?.zoneName).toBe("example.com");
+
+    env.cf.zone("sub.example.com", env.account);
+    const checked = await env.act("check");
+    expect(checked.redirects[0]!.plan!.zone!.name).toBe("sub.example.com");
+    expect(tracked()?.zoneName).toBe("example.com");
+
+    const replace = await env.act("prepare-replace", { source: "go.sub.example.com" });
+    expect(replace.review!.blocked).toBe(false);
+    expect(replace.review!.sites[0]!.zone!.name).toBe("example.com");
+    expect(replace.review!.sites[0]!.changes).toContainEqual(expect.objectContaining({ action: "delete", subject: "Cloudflare redirect rule" }));
+
+    // Once a read shows the parent's rule is gone, tracking lets go of it.
+    env.redirectRules("example.com").pop();
+    await env.act("check");
+    expect(tracked()).toBeUndefined();
+  });
+
   test("standInBody renders all redirect combinations and custom hosts", () => {
     const body = (keepPath: boolean, keepQuery: boolean) =>
       standInBody("thepastormax.com", { target: "https://maksimasenov.com", status: 301, keepPath, keepQuery });

@@ -86,6 +86,8 @@ export interface RedirectsRunContext {
   standIns?: StandIns;
   /** Cached token access from the last check, for runs that do not re-read policies. */
   storedTokens?: Record<string, TokenAccess | undefined>;
+  /** Where each redirect's rule was last seen. */
+  tracked?: Record<string, TrackedRedirectRule>;
 }
 
 interface ZoneRef {
@@ -188,6 +190,8 @@ export class RedirectsRun {
   private readonly zones = new Map<string, ZoneState>();
   private readonly failures = new Map<string, string[]>();
   private readonly diffs = new Map<string, PlaceholderDiff>();
+  /** The selected zone, for redirects whose last plan found a rule there. */
+  private readonly seen = new Map<string, ZoneRef>();
   private readonly cloudflareBackoff: { until: number };
   private readonly held: Set<string>;
   private readonly redirects: Map<string, Redirect>;
@@ -335,9 +339,35 @@ export class RedirectsRun {
       const redirect = this.redirects.get(domain);
       if (!redirect) continue;
       const resolved = this.resolve(redirect);
-      if (resolved.kind === "zone") refs.set(zoneMapKey(resolved.ref.connectionId, resolved.ref.zone.id), resolved.ref);
+      if (resolved.kind !== "zone") continue;
+      refs.set(zoneMapKey(resolved.ref.connectionId, resolved.ref.zone.id), resolved.ref);
+      const tracked = this.context.tracked?.[domain];
+      if (!tracked || tracked.zoneId === resolved.ref.zone.id) continue;
+      const elsewhere = this.zoneRefs.filter((ref) => ref.zone.id === tracked.zoneId && !INACTIVE_ZONES.has(ref.zone.status));
+      const ref = elsewhere.find((candidate) => candidate.connectionId === tracked.connectionId) ?? this.preferred(elsewhere);
+      if (ref) refs.set(zoneMapKey(ref.connectionId, ref.zone.id), ref);
     }
     await Promise.all([...refs.values()].map((ref) => this.loadZone(ref)));
+  }
+
+  /** Whether a clean read of `zoneId` shows no rule for `redirect`. */
+  private ruleGone(redirect: Redirect, zoneId: string, zoneName: string): boolean {
+    return [...this.zones.values()].some((state) => state.ref.zone.id === zoneId && state.rulesetLoaded && !state.error
+      && redirectRuleState(state.ruleset, redirect, redirectHosts(redirect.source, zoneName)).state === "create");
+  }
+
+  /**
+   * Where to track `source`'s rule after this run: the selected zone once a plan
+   * found the rule there, but never moved off an earlier zone until a read of
+   * that zone shows its rule is gone.
+   */
+  trackedRule(source: string): TrackedRedirectRule | undefined {
+    const redirect = this.redirects.get(source);
+    const previous = this.context.tracked?.[source];
+    const seen = this.seen.get(source);
+    const at = seen && { connectionId: seen.connectionId, zoneId: seen.zone.id, zoneName: seen.zone.name };
+    if (!previous || !redirect || previous.zoneId === at?.zoneId) return at ?? previous;
+    return this.ruleGone(redirect, previous.zoneId, previous.zoneName) ? at : previous;
   }
 
   private zoneView(ref: ZoneRef): ZoneView {
@@ -394,6 +424,7 @@ export class RedirectsRun {
       zoneChoices: [],
     };
     this.diffs.delete(redirect.source);
+    this.seen.delete(redirect.source);
     if (this.held.has(redirect.source)) plan.held = true;
     if (this.context.siteDomains.has(redirect.source)) {
       plan.problems.push(`CloudPanel has a site ${redirect.source}; delete the site or this redirect`);
@@ -436,6 +467,7 @@ export class RedirectsRun {
     if (state.rulesetLoaded) {
       const found = redirectRuleState(state.ruleset, redirect, hosts);
       const detail = `${hosts.join(" and ")}: ${describeRedirect(redirect)}`;
+      if (found.state === "present" || found.state === "update") this.seen.set(redirect.source, resolved.ref);
       if (found.state === "problem") plan.problems.push(found.problem);
       else if (found.state === "create") plan.changes.push({ action: "create", subject: "Cloudflare redirect rule", detail });
       else if (found.state === "update") {

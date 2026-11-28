@@ -119,7 +119,9 @@ place on an active zone, Redirects deletes the retired stand-in site.
 Deleting a redirect or replacing it checks connected Cloudflare zones for an
 existing rule even when the redirect is currently `mode: "local"` or served by a
 stand-in. It reads the selected zone, the longest matching zones, and the zone
-where it last saw the redirect's rule (`status.redirectRules`). If any
+where it last saw the redirect's rule (`status.redirectRules`). A check moves
+that tracked zone only after it finds the rule in the newly selected zone and
+a read of the tracked zone shows no rule left there. If any
 Cloudflare connection fails discovery, no connection lists the tracked zone,
 a zone cannot be read, a zone has conflicting rules, or more than one zone holds
 a rule for the redirect, deletion blocks rather than orphaning a Cloudflare
