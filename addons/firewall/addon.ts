@@ -73,6 +73,7 @@ export const FIREWALL_ADDON: AddonDefinition = {
   name: "firewall",
   title: "Firewall",
   description: "Cloudflare-only access and real visitor IPs for every site, a Cloudflare Access gate in front of the panel, Hetzner Cloud or netcup firewalls that admit only Cloudflare, and TCP, UDP or both for each rule on CloudPanel's Firewall page.",
+  docs: "docs/firewall.md",
   changed: [
     { in: "2.3.0-rc.1", note: "Cloudflare connections are now shared with DNS and can be managed directly on the Panel gate tab without enabling DNS. Root can now lock Firewall with clp-addons lock firewall." },
     { in: "2.3.0-rc.1", note: "Cloudflare visitor IPs moved here from System Tweaks and are on by default. Enabling Firewall points Nginx's access logs and PHP's REMOTE_ADDR (FastCGI) at the visitor's IP. Where System Tweaks applied visitor IPs, the upgrade enables Firewall to keep them with Enable on new sites off, and carries a System Tweaks root lock to Firewall so visitor IPs stays locked." },

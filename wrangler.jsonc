@@ -1,0 +1,32 @@
+// The Worker on clp.7he.dev: the landing page `bun run site` writes to dist/site,
+// the install script's redirect, the daily update check, opt-in usage and its
+// deletion, and the /stats dashboard in worker/index.ts. Deployed by Workers
+// Builds from main. The KV namespace and D1 database ids are filled in once they
+// exist; see docs/decisions/releases.md.
+{
+  "name": "cloudpanel-addons-site",
+  "main": "worker/main.ts",
+  "compatibility_date": "2026-11-01",
+  "workers_dev": false,
+  "preview_urls": false,
+  "assets": {
+    "directory": "dist/site",
+    "binding": "ASSETS",
+    "run_worker_first": ["/install.sh", "/check", "/forget", "/stats"]
+  },
+  "routes": [
+    { "pattern": "clp.7he.dev", "custom_domain": true }
+  ],
+  "analytics_engine_datasets": [
+    { "binding": "USAGE", "dataset": "clp_addons_usage" }
+  ],
+  "kv_namespaces": [
+    { "binding": "SECRETS", "id": "<KV namespace id>" }
+  ],
+  "d1_databases": [
+    { "binding": "DB", "database_name": "clp-addons-usage", "database_id": "<D1 database id>" }
+  ],
+  "triggers": {
+    "crons": ["20 0 * * *"]
+  }
+}

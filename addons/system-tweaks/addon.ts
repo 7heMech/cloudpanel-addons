@@ -14,6 +14,7 @@ export const SYSTEM_TWEAKS_ADDON: AddonDefinition = {
   name: "system-tweaks",
   title: "System Tweaks",
   description: "Server security, automatic updates, panel PHP, remote backup compression, SSH login message.",
+  docs: "docs/system-tweaks.md",
   added: "2.0.0-rc.1",
   changed: [
     { in: "2.3.0-rc.1", note: "Cloudflare visitor IPs moved to Firewall." },

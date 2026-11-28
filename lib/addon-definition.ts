@@ -134,6 +134,8 @@ export interface AddonDefinition {
   name: string;
   title: string;
   description: string;
+  /** Its operator guide: a path in this repository or a URL. */
+  docs?: string;
   /** systemd units this addon cannot work without, such as `docker`. */
   requiresUnits?: string[];
   /** The only architectures it can be enabled on; every one if unset. */

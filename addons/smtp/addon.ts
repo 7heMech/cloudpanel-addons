@@ -10,6 +10,7 @@ export const SMTP_ADDON: AddonDefinition = {
   name: "smtp",
   title: "SMTP Relay",
   description: "Send each site's mail through a relay profile, with Postfix keeping every site to its own domains.",
+  docs: "docs/smtp-relay.md",
   requiresUnits: ["postfix"],
   targets: [],
   setup: SMTP_SETUP,

@@ -10,6 +10,7 @@ export const DNS_ADDON: AddonDefinition = {
   name: "dns",
   title: "DNS",
   description: "Keep each site's DNS records to a profile across Cloudflare or PowerDNS, with Mailcow set up for its mail.",
+  docs: "docs/dns.md",
   added: "2.0.0-rc.1",
   changed: [
     { in: "2.3.0-rc.1", note: "CloudPanel's Admin → Settings Custom Domain form now offers a Random hostname button, connected-zone suggestions, and a checkbox to write the DNS record before CloudPanel requests its Let's Encrypt certificate." },
