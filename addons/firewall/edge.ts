@@ -644,9 +644,17 @@ function ambiguousStatusOf(ambiguous: AmbiguousZone): EdgeZoneStatus {
   };
 }
 
+function ruleState(rule: CfRuleset["rules"][number] | undefined): string {
+  if (!rule) return "";
+  const { ref, action, expression, enabled, action_parameters: params } = rule;
+  return JSON.stringify([ref, action, expression, enabled, params ?? null]);
+}
+
 /**
  * Applies planned changes to one zone: rules first (so ACME Full SSL is in
- * place before SSL switches to Full (strict)), then zone settings.
+ * place before SSL switches to Full (strict)), then zone settings. A rule is
+ * read again before it is updated or deleted, and the zone stops when it
+ * changed since it was planned.
  */
 async function applyZoneChanges(
   evaluated: EvaluatedZone,
@@ -666,6 +674,14 @@ async function applyZoneChanges(
       if (change.kind === "rule") {
         const phase = change.phase!;
         const currentRuleset = live.rulesets[phase] ?? null;
+        if (change.action !== "create" && currentRuleset && change.ruleId) {
+          const reread = await api.entrypoint(zone.id, phase);
+          const planned = currentRuleset.rules.find((rule) => rule.id === change.ruleId);
+          if (ruleState(planned) !== ruleState(reread?.rules.find((rule) => rule.id === change.ruleId))) {
+            live.rulesets[phase] = reread;
+            throw new Error(`${change.subject} changed in Cloudflare while Firewall was applying; check again to plan from the current rule.`);
+          }
+        }
         if (change.action === "delete") {
           if (!currentRuleset || !change.ruleId) continue;
           await api.deleteRule(zone.id, phase, currentRuleset.id, change.ruleId);

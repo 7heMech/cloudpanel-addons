@@ -459,6 +459,40 @@ describe("Firewall approve-once Cloudflare edge defaults", () => {
     expect(env.cf.rulesets.get(key)!.rules).toEqual([]);
   });
 
+  test("never writes a planned WAF skip list over a rule Cloudflare changed after it was read", async () => {
+    const env = makeEnv();
+    const zoneA = env.cf.zone("alpha.example", env.agency);
+    const zoneB = env.cf.zone("beta.example", env.agency);
+    await env.connect();
+    const approve = await saveCloudflareEdge({ approve: true, defaults: { ...DEFAULT_EDGE_DEFAULTS, skipFirewallIps: ["203.0.113.7"] } }, env.options);
+    await confirmCloudflareEdge(approve.review!.token, env.options);
+
+    const skipKey = (id: string) => `${id}:http_request_firewall_custom`;
+    let firstWrite: string | null = null;
+    const wrapped: EdgeOptions = {
+      ...env.options,
+      fetch: async (address, init) => {
+        const path = new URL(String(address)).pathname;
+        const response = await env.cf.fetch(address, init);
+        if (!firstWrite && init?.method === "PATCH" && path.includes("/rules/")) {
+          firstWrite = path.includes(zoneA.id) ? zoneA.id : zoneB.id;
+          const other = env.cf.rulesets.get(skipKey(firstWrite === zoneA.id ? zoneB.id : zoneA.id))!;
+          other.rules = other.rules.map((rule) => ({ ...rule, expression: "ip.src in {203.0.113.7 198.51.100.9}" }));
+        }
+        return response;
+      },
+    };
+    const review = await saveCloudflareEdge({ defaults: { ...DEFAULT_EDGE_DEFAULTS, skipFirewallIps: ["203.0.113.7", "203.0.113.8"] } }, wrapped);
+    await confirmCloudflareEdge(review.review!.token, wrapped);
+
+    const otherId = firstWrite === zoneA.id ? zoneB.id : zoneA.id;
+    expect(env.cf.rulesets.get(skipKey(firstWrite!))!.rules[0]!.expression).toBe("ip.src in {203.0.113.7 203.0.113.8}");
+    expect(env.cf.rulesets.get(skipKey(otherId))!.rules[0]!.expression).toBe("ip.src in {203.0.113.7 198.51.100.9}");
+    const other = edgePageView(env.options).zones.find((zone) => zone.zoneId === otherId)!;
+    expect(other.status).toBe("error");
+    expect(other.error).toContain("WAF skip rule changed in Cloudflare");
+  });
+
   test("disambiguates duplicate zone names across two Cloudflare accounts", async () => {
     const env = makeEnv();
     const account2 = env.cf.account("Secondary");

@@ -270,7 +270,11 @@ before accepting either a matching managed rule or an equivalent foreign rule,
 so an overlapping rule (such as a foreign ACME rule setting Flexible SSL beside
 Full SSL) holds the zone as a conflict instead of reporting it synced. When
 applying a zone, rules are written before zone settings so the ACME Full SSL
-rule is in place before SSL switches to Full (strict). Only settings and phases
+rule is in place before SSL switches to Full (strict). Zones are planned from
+one read and applied one at a time, so each rule is read again just before it
+is updated or deleted; if its ref, action, expression, enabled state or
+parameters changed since the plan, nothing more is written to that zone and it
+shows an error until the next check plans from the current rule. Only settings and phases
 managed by the current or previous defaults, or by a tracked managed rule, are
 read, so a rule-only token without Zone Settings Edit or Zone WAF Edit does not
 hit 403 on unused endpoints. `cloudflare-edge-status.json` keeps managed-rule
