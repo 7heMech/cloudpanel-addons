@@ -1,8 +1,9 @@
+import { Database } from "bun:sqlite";
 import { afterEach, describe, expect, test } from "bun:test";
 import { mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { executeDnsAction, type DnsReply } from "../addons/dns/action";
+import { executeDnsAction, type DnsReply, type ProvisionReply } from "../addons/dns/action";
 import { DNS_ADDON } from "../addons/dns/addon";
 import { dashboardContent } from "../addons/dns/app/views";
 import type { PanelSite, StandIn, StandIns } from "../addons/dns/engine";
@@ -11,7 +12,9 @@ import {
   formatPowerDnsContent, parsePowerDnsServerId, parsePowerDnsUrl, powerDnsRecordId, PowerDnsProvider, quotePowerDnsTxt,
 } from "../addons/dns/powerdns";
 import { connectionCheck, permissionActions } from "../addons/dns/setup";
+import { NEW_SITE_WINDOW } from "../addons/dns/ssl";
 import { standInBody } from "../addons/dns/stand-in";
+import { SCRIPT as sslCompletionScript } from "../addons/panel-tweaks/inject/ssl";
 import { unquoteTxt } from "../lib/dns-name";
 import type { ApiFetch } from "../lib/provider-http";
 import { FakeCloudflare, FakeMailcow, hexId, routed } from "./fixtures/dns-api";
@@ -184,6 +187,8 @@ function setupEnv(options: { pdns?: FakePowerDns; pdns2?: FakePowerDns; cf?: Fak
   const sites: PanelSite[] = [];
   const standIns = makeStandIns();
   const custom: { current: { name: string; issued: boolean } | undefined } = { current: undefined };
+  const clock = { now: START, issue: false };
+  const issued: { domain: string; alternatives: string[] }[] = [];
 
   const cfAndMailcow = routed(cf, mailcow);
   const fetcher: ApiFetch = async (url, init) => {
@@ -209,18 +214,22 @@ function setupEnv(options: { pdns?: FakePowerDns; pdns2?: FakePowerDns; cf?: Fak
     addresses: () => ({ ipv4: options.ipv4 ?? "203.0.113.10", ipv6: options.ipv6 ?? "2001:db8::10" }),
     standIns: () => standIns,
     customDomain: () => custom.current,
-    now: () => START,
+    issue: async (domain: string, alternatives: string[]) => {
+      issued.push({ domain, alternatives });
+      return clock.issue;
+    },
+    now: () => clock.now,
   };
 
-  const act = async <T = DnsReply>(verb: string, body?: unknown): Promise<T> =>
-    await executeDnsAction([verb], { ...actionOptions, input: body === undefined ? undefined : JSON.stringify(body) }) as T;
+  const act = async <T = DnsReply>(verb: string, body?: unknown, args: string[] = []): Promise<T> =>
+    await executeDnsAction([verb, ...args], { ...actionOptions, input: body === undefined ? undefined : JSON.stringify(body) }) as T;
 
   const apply = async (verb: string, body: unknown): Promise<DnsReply> => {
     const reply = await act(verb, body);
     return reply.review ? act("confirm", { token: reply.review.token }) : reply;
   };
 
-  return { dir, pdns, cf, mailcow, sites, standIns, custom, actionOptions, act, apply };
+  return { dir, pdns, cf, mailcow, sites, standIns, custom, clock, issued, actionOptions, act, apply };
 }
 
 describe("PowerDNS URL validation", () => {
@@ -1125,5 +1134,215 @@ describe("PowerDNS end-to-end DNS reconciliation", () => {
     expect(savedSecrets.powerdns[committedId]).toBe("pdns-second-key-9876543210");
     expect(savedSecrets.powerdns[first.id]).toBeUndefined();
     expect(hexId()).toHaveLength(32);
+  });
+
+  test("provision pauses new PowerDNS zones with nameservers across sync-sites, direct creation, completion UI, retries, and non-admin scoping", async () => {
+    const env = setupEnv();
+    env.pdns.addZone("existing.example");
+    await env.act("save-connection", {
+      provider: "powerdns",
+      label: "Primary NS",
+      url: PDNS_URL,
+      apiKey: PDNS_KEY,
+      createZones: true,
+      nameservers: ["ns1.example.net", "ns2.example.net"],
+    });
+    await env.act("set-default", { profileId: "web" });
+    await env.apply("set-automatic", { automatic: true });
+
+    // 1. Existing PowerDNS zone does NOT flag zoneCreated and is ready immediately.
+    env.sites.push({ id: 1, domain: "existing.example", type: "php", createdAt: env.clock.now, selfSigned: true, cloudflareOnly: false });
+    const existingReply = await env.act<ProvisionReply>("provision", undefined, ["--domain=existing.example", "--ssl"]);
+    expect(existingReply).toEqual({
+      managed: true,
+      ready: true,
+      reason: "DNS is in place",
+      certificateNames: ["existing.example", "www.existing.example"],
+    });
+    expect(existingReply.zoneCreated).toBeUndefined();
+
+    // 2. Path A: provision() invokes syncSites() which creates a brand-new PowerDNS Native zone.
+    env.sites.push({ id: 2, domain: "brandnew-a.example", type: "php", createdAt: env.clock.now, selfSigned: true, cloudflareOnly: false });
+    const pathAReply = await env.act<ProvisionReply>("provision", undefined, ["--domain=brandnew-a.example", "--ssl"]);
+    expect(pathAReply).toEqual({
+      managed: true,
+      ready: false,
+      reason: "Zone brandnew-a.example was just created; set its nameservers at the registrar: ns1.example.net, ns2.example.net",
+      zone: "brandnew-a.example",
+      nameServers: ["ns1.example.net", "ns2.example.net"],
+      provider: "powerdns",
+      zoneCreated: true,
+      certificateNames: [],
+    });
+
+    // 3. Path B: separate sync-sites watcher creates the PowerDNS zone BEFORE provision() lands.
+    env.sites.push({ id: 3, domain: "brandnew-b.example", type: "php", createdAt: env.clock.now, selfSigned: true, cloudflareOnly: false });
+    const synced = await env.act<{ joined: string[] }>("sync-sites");
+    expect(synced.joined).toEqual(["brandnew-b.example"]);
+    const pathBReply = await env.act<ProvisionReply>("provision", undefined, ["--domain=brandnew-b.example", "--ssl"]);
+    expect(pathBReply).toMatchObject({
+      managed: true,
+      ready: false,
+      zone: "brandnew-b.example",
+      nameServers: ["ns1.example.net", "ns2.example.net"],
+      provider: "powerdns",
+      zoneCreated: true,
+      certificateNames: [],
+    });
+
+    // 3b. Path C: site already known and assigned while PowerDNS was down, then provision() creates the zone directly.
+    env.pdns.errorMessage = "Temporary outage";
+    env.sites.push({ id: 30, domain: "brandnew-c.example", type: "php", createdAt: env.clock.now, selfSigned: true, cloudflareOnly: false });
+    await env.act("sync-sites");
+    expect(env.pdns.zones.has("brandnew-c.example.")).toBe(false);
+    env.pdns.errorMessage = null;
+    const pathCReply = await env.act<ProvisionReply>("provision", undefined, ["--domain=brandnew-c.example", "--ssl"]);
+    expect(pathCReply).toEqual({
+      managed: true,
+      ready: false,
+      reason: "Zone brandnew-c.example was just created; set its nameservers at the registrar: ns1.example.net, ns2.example.net",
+      zone: "brandnew-c.example",
+      nameServers: ["ns1.example.net", "ns2.example.net"],
+      provider: "powerdns",
+      zoneCreated: true,
+      certificateNames: [],
+    });
+
+    // 4. End-to-end completion UI handshake: feed real provision() output into Panel Tweaks' completion script.
+    const runCompletion = async (domain: string, provisionReply: ProvisionReply) => {
+      interface FakeEl { tag: string; href: string; textContent: string; innerHTML: string; children: FakeEl[]; appendChild(c: FakeEl): void; insertBefore(c: FakeEl): void; setAttribute(): void; addEventListener(): void }
+      const makeEl = (tag: string): FakeEl => ({
+        tag, href: "", textContent: "", innerHTML: "", children: [],
+        appendChild(c) { this.children.push(c); },
+        insertBefore(c) { this.children.unshift(c); },
+        setAttribute() {},
+        addEventListener() {},
+      });
+      const alert = {
+        className: "alert alert-info", textContent: "", parts: [] as string[], links: [] as string[],
+        append(_: string, a: { href: string }) { this.links.push(a.href); },
+        appendChild(c: FakeEl) { this.parts.push(c.tag === "button" ? `[${c.children[0]!.textContent}]` : c.textContent); },
+      };
+      const panelCalls: string[] = [];
+      let cookie = `__Host-clp_addons_ssl=${encodeURIComponent(domain)}`;
+      const certUrl = `/site/${domain}/certificates`;
+      const issueUrl = `/site/${domain}/certificates/lets-encrypt/new`;
+      const box = {
+        querySelector: () => alert,
+        getAttribute: (name: string) => ({ "data-clp-auto-ssl": domain, "data-certificates-url": certUrl, "data-issue-url": issueUrl })[name],
+      };
+      const doc = {
+        get cookie() { return `${cookie}; clp_addons_csrf=tok`; },
+        set cookie(raw: string) { cookie = /Max-Age=0$/.test(raw) ? "" : raw.split(";")[0]!; },
+        getElementById: () => null,
+        querySelectorAll: () => [box],
+        createElement: makeEl,
+        createTextNode: (text: string) => ({ ...makeEl("#text"), textContent: text }),
+        head: makeEl("head"),
+      };
+      const mockFetch = async (url: string, init?: RequestInit) => {
+        if (url === "/addons/dns/api/session") return { ok: true, status: 200, json: async () => ({ ok: true }) };
+        if (url === "/addons/dns/api/provision") return { ok: true, status: 200, json: async () => ({ ok: true, data: provisionReply }) };
+        panelCalls.push(`${init?.method ?? "GET"} ${url}`);
+        return { url: init?.method === "POST" ? `https://panel.example:8443${certUrl}` : `https://panel.example:8443${issueUrl}`, text: async () => "ok" };
+      };
+      class FakeParser {
+        parseFromString() { return { querySelector: (sel: string) => sel.includes("_token") ? { form: "f" } : null }; }
+      }
+      class FakeFormData extends FormData {
+        constructor() { super(); this.append("site_lets_encrypt_certificate[_token]", "csrf"); }
+      }
+      new Function("document", "location", "fetch", "DOMParser", "FormData", "window", "CustomEvent", sslCompletionScript)(
+        doc, { href: "https://panel.example:8443/" }, mockFetch, FakeParser, FakeFormData,
+        { dispatchEvent() {} }, class { constructor() {} },
+      );
+      await new Promise((r) => setTimeout(r, 20));
+      return { alert, panelCalls };
+    };
+
+    const pausedUi = await runCompletion("brandnew-a.example", pathAReply);
+    expect(pausedUi.panelCalls).toEqual([]);
+    expect(pausedUi.alert.className).toBe("alert alert-warning");
+    expect(pausedUi.alert.parts.join("")).toContain("brandnew-a.example is waiting for its nameservers.");
+    expect(pausedUi.alert.parts.join("")).toContain("[ns1.example.net] and [ns2.example.net]");
+    expect(pausedUi.alert.parts.join("")).not.toContain("Cloudflare");
+
+    const immediateUi = await runCompletion("existing.example", existingReply);
+    expect(immediateUi.panelCalls).toEqual([
+      "GET https://panel.example:8443/site/existing.example/certificates/lets-encrypt/new",
+      "POST https://panel.example:8443/site/existing.example/certificates/lets-encrypt/new",
+    ]);
+    expect(immediateUi.alert.className).toBe("alert alert-success");
+
+    // 5. After FIRST_DELAY, reconcile retries Let's Encrypt automatically for the paused PowerDNS site.
+    env.sites.find((s) => s.domain === "existing.example")!.selfSigned = false;
+    env.clock.now += 3 * 60_000;
+    env.clock.issue = true;
+    // Simulate clpctl installing the certificate on brandnew-a.example when invoked.
+    const origIssue = env.actionOptions.issue;
+    env.actionOptions.issue = async (domain, alternatives) => {
+      const ok = await origIssue(domain, alternatives);
+      if (ok && domain === "brandnew-a.example") env.sites.find((s) => s.domain === domain)!.selfSigned = false;
+      return ok;
+    };
+    await env.act("reconcile");
+    expect(env.issued.some((entry) => entry.domain === "brandnew-a.example" && entry.alternatives.includes("www.brandnew-a.example"))).toBe(true);
+    const afterReconcile = await env.act("list");
+    expect(afterReconcile.sites.find((s) => s.domain === "brandnew-a.example")!.ssl).toBe("Certificate installed");
+
+    // 6. After NEW_SITE_WINDOW elapses, createdZones expires and provision() no longer flags zoneCreated.
+    env.clock.now += NEW_SITE_WINDOW + 1;
+    const afterWindow = await env.act<ProvisionReply>("provision", undefined, ["--domain=brandnew-b.example"]);
+    expect(afterWindow.ready).toBe(true);
+    expect(afterWindow.zoneCreated).toBeUndefined();
+
+    // 7. Non-admin scoping (--as-user): sees own new PowerDNS zone nameservers, cannot touch other tenants, and never leaks provider errors.
+    const db = new Database(join(env.dir, "db.sq3"), { create: true });
+    db.exec(`CREATE TABLE user (id INTEGER PRIMARY KEY, user_name TEXT, role TEXT, status INTEGER);
+      CREATE TABLE site (id INTEGER PRIMARY KEY, domain_name TEXT);
+      CREATE TABLE user_sites (user_id INTEGER, site_id INTEGER);
+      INSERT INTO user VALUES (1, 'bob', 'ROLE_USER', 1), (2, 'alice', 'ROLE_USER', 1);
+      INSERT INTO site VALUES (1, 'existing.example'), (4, 'bob-new.example'), (5, 'bob-err.example'), (6, 'alice-secret.example');
+      INSERT INTO user_sites VALUES (1, 1), (1, 4), (1, 5), (2, 6);`);
+    db.close();
+    env.sites.push(
+      { id: 4, domain: "bob-new.example", type: "php", createdAt: env.clock.now, selfSigned: true, cloudflareOnly: false },
+      { id: 5, domain: "bob-err.example", type: "php", createdAt: env.clock.now, selfSigned: true, cloudflareOnly: false },
+      { id: 6, domain: "alice-secret.example", type: "php", createdAt: env.clock.now, selfSigned: true, cloudflareOnly: false },
+    );
+    await expect(env.act("provision", undefined, ["--domain=alice-secret.example", "--as-user=bob"])).rejects.toThrow("not one of yours");
+
+    const bobNew = await env.act<ProvisionReply>("provision", undefined, ["--domain=bob-new.example", "--as-user=bob", "--ssl"]);
+    expect(bobNew).toEqual({
+      managed: true,
+      ready: false,
+      reason: "Zone bob-new.example was just created; set its nameservers at the registrar: ns1.example.net, ns2.example.net",
+      zone: "bob-new.example",
+      nameServers: ["ns1.example.net", "ns2.example.net"],
+      provider: "powerdns",
+      zoneCreated: true,
+      certificateNames: [],
+    });
+    expect(JSON.stringify(bobNew)).not.toContain("alice-secret.example");
+    expect(JSON.stringify(bobNew)).not.toContain(PDNS_KEY);
+
+    // Old site owned by bob answers from cached status without calling PowerDNS or setting zoneCreated.
+    env.sites.find((s) => s.domain === "existing.example")!.createdAt = env.clock.now - NEW_SITE_WINDOW - 60_000;
+    const callsBeforeOld = env.pdns.calls.length;
+    const bobOld = await env.act<ProvisionReply>("provision", undefined, ["--domain=existing.example", "--as-user=bob"]);
+    expect(bobOld.ready).toBe(true);
+    expect(bobOld.zoneCreated).toBeUndefined();
+    expect(env.pdns.calls.length).toBe(callsBeforeOld);
+
+    // Provider error on bob's site never leaks raw PowerDNS error text or API key to bob.
+    env.pdns.errorMessage = `Internal DB failure touching alice-secret.example with ${PDNS_KEY}`;
+    const bobErr = await env.act<ProvisionReply>("provision", undefined, ["--domain=bob-err.example", "--as-user=bob"]);
+    expect(bobErr).toEqual({
+      managed: true,
+      ready: false,
+      reason: "an administrator can see why on the DNS page",
+      certificateNames: [],
+    });
+    env.pdns.errorMessage = null;
   });
 });

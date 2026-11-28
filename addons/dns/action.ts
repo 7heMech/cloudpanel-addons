@@ -21,9 +21,10 @@ import { withFileLock } from "../../lib/file-lock";
 import { DEFAULT_SITE_VHOST_PATHS } from "../../lib/site-vhost";
 import { PANEL_USER_NAME_RE, panelUserOwnsSite } from "../../lib/panel-users";
 import { DEFAULT_SMTP_PATHS, smtpRelayAccounts, type SmtpRelayAccount } from "../smtp/action";
+import { DEFAULT_PANEL_TWEAKS_PATHS, readTweaks } from "../panel-tweaks/action";
 import { detectAddresses, type Addresses } from "../../lib/addresses";
 import {
-  DnsRun, readiness, tokenProfiles, type ConnectionReport, type LogEntry, type ManagedRecords, type PanelSite, type SitePlan,
+  DnsRun, readiness, tokenProfiles, zoneMapKey, type ConnectionReport, type LogEntry, type ManagedRecords, type PanelSite, type SitePlan,
   type StandIns, type TrackedRedirectRule,
 } from "./engine";
 import { type ApiFetch, redact } from "../../lib/provider-http";
@@ -74,6 +75,9 @@ interface DnsPaths {
   cloudflareLockFile?: string;
   /** SMTP Relay's configuration, read only for the relay accounts the Mailcow form offers. */
   smtpConfig: string;
+  /** Panel Tweaks' enable flag and switches, read only to see whether automatic SSL is enabled. */
+  panelTweaksConfig?: string;
+  panelTweaksFile?: string;
   lockFile: string;
   clpctl: string;
   sqlite3: string;
@@ -232,12 +236,21 @@ export interface ProvisionReply {
   /** Only while the site's zone waits for its nameservers, for the page to show them. */
   zone?: string;
   nameServers?: string[];
+  /** Which provider owns `zone`, when `zone` is returned. */
+  provider?: ProviderKind;
+  /** True when provisioning created a brand-new zone that still needs registrar delegation. */
+  zoneCreated?: boolean;
   certificateNames: string[];
 }
 
 // ---------------------------------------------------------------------------
 // Files
 // ---------------------------------------------------------------------------
+
+interface CreatedZoneRecord {
+  at: number;
+  nameServers: string[];
+}
 
 interface Status {
   checkedAt: string | null;
@@ -250,6 +263,8 @@ interface Status {
   connectionIds?: string[];
   /** Last known Cloudflare zone holding a redirect domain's edge rule, kept across provider switches until deleted. */
   redirectRules?: Record<string, TrackedRedirectRule>;
+  /** Zones recently created by DNS, keyed by `connectionId:zoneId`, so provision() after sync-sites knows the zone is new and its nameservers. */
+  createdZones?: Record<string, CreatedZoneRecord>;
 }
 
 interface Pending {
@@ -279,6 +294,19 @@ function cloudflarePathsOf(paths: DnsPaths): CloudflareStorePaths {
     lockFile: paths.cloudflareLockFile ?? (customState ? `${paths.lockFile}.cloudflare` : `${LOCK_DIR}/cloudflare.lock`),
     rootUid: paths.rootUid,
   };
+}
+
+/** Whether Panel Tweaks is enabled and its automatic SSL switch is on; untrusted or missing files read as off. */
+function panelTweaksAutoSsl(paths: DnsPaths): boolean {
+  const customState = paths.stateDir !== DEFAULT_DNS_PATHS.stateDir;
+  const configFile = paths.panelTweaksConfig ?? (customState ? `${paths.stateDir}/panel-tweaks.conf` : addonConfigFile("panel-tweaks"));
+  const tweaksFile = paths.panelTweaksFile ?? (customState ? `${paths.stateDir}/panel-tweaks-tweaks.json` : DEFAULT_PANEL_TWEAKS_PATHS.tweaksFile);
+  if (!existsSync(configFile)) return false;
+  try {
+    return readTweaks({ ...DEFAULT_PANEL_TWEAKS_PATHS, tweaksFile, rootUid: paths.rootUid }).autoSsl;
+  } catch {
+    return false;
+  }
 }
 
 class Files {
@@ -631,13 +659,32 @@ class Action {
     const storedConnections = shared
       ? nextConnections.filter((entry) => entry.provider === "powerdns" || entry.id.startsWith("pdns-"))
       : nextConnections;
+    const createdZones: Record<string, CreatedZoneRecord> = {};
+    for (const [key, entry] of Object.entries(status.createdZones ?? {})) {
+      if (entry && typeof entry.at === "number" && Array.isArray(entry.nameServers)
+        && this.now - entry.at <= NEW_SITE_WINDOW && entry.at <= this.now + 60_000) {
+        createdZones[key] = entry;
+      }
+    }
+    const freshCreated = run.newlyCreatedZones();
+    // A Cloudflare zone observed as active on a later run has already verified registrar delegation.
+    for (const plan of plans) {
+      if (!plan.zone || plan.zone.provider === "powerdns" || plan.zone.status !== "active") continue;
+      const key = zoneMapKey(plan.zone.connectionId ?? "", plan.zone.id);
+      if (!freshCreated.has(key)) delete createdZones[key];
+    }
+    for (const [key, nameServers] of freshCreated) {
+      createdZones[key] = { at: this.now, nameServers };
+    }
+    const { createdZones: _previousCreated, ...restStatus } = status;
     this.files.saveStatus({
-      ...status,
+      ...restStatus,
       ...panelSettled && { panelProxied: run.panelProxied },
       checkedAt: domains === "all" ? new Date(this.now).toISOString() : status.checkedAt,
       connections: storedConnections,
       plans: plansByDomain,
       redirectRules,
+      ...(Object.keys(createdZones).length ? { createdZones } : {}),
       backoff: run.backoff(),
     });
     const managed = this.files.managed();
@@ -834,6 +881,7 @@ class Action {
   async check(retrySsl: boolean): Promise<void> {
     const before = this.files.policy();
     const policy = this.adoptNewSites(before);
+    this.enqueueNewSiteSsl(before, policy);
     const run = this.run(policy);
     await run.discover(true);
     const planned = run.plannedDomains();
@@ -890,15 +938,43 @@ class Action {
     this.savePolicy(policy);
   }
 
-  async syncSites(): Promise<string[]> {
+  /**
+   * When Panel Tweaks automatic SSL is enabled and DNS is Automatic, records
+   * brand-new self-signed sites within NEW_SITE_WINDOW in ssl.json so sites
+   * created via clpctl or whose browser completion tab closed early still get
+   * automatic Let's Encrypt retries once DNS is ready.
+   */
+  private enqueueNewSiteSsl(before: Policy, after: Policy): void {
+    if (!after.automatic || !panelTweaksAutoSsl(this.paths)) return;
+    const known = new Set(before.knownSiteIds);
+    const candidates = this.sites().filter((site) => !known.has(site.id) && Boolean(after.assignments[site.domain]));
+    if (!candidates.length) return;
+    const requests = this.files.ssl();
+    let changed = false;
+    for (const site of candidates) {
+      const had = requests[site.domain]?.siteId === site.id;
+      if (requestSsl(requests, site, this.now) && !had) changed = true;
+    }
+    if (changed) this.files.saveSsl(requests);
+  }
+
+  private recentCreatedZone(key: string): CreatedZoneRecord | null {
+    const entry = this.files.status().createdZones?.[key];
+    if (!entry || typeof entry.at !== "number" || !Array.isArray(entry.nameServers)) return null;
+    if (this.now - entry.at > NEW_SITE_WINDOW || entry.at > this.now + 60_000) return null;
+    return entry;
+  }
+
+  private async syncSitesRun(): Promise<{ joined: string[]; createdZones: Set<string> }> {
     const before = this.files.policy();
     const known = new Set(before.knownSiteIds);
     const added = this.sites().filter((site) => !known.has(site.id));
     const removed = Object.keys(before.assignments).some((domain) => !this.sites().some((site) => site.domain === domain));
-    if (!added.length && !removed) return [];
+    if (!added.length && !removed) return { joined: [], createdZones: new Set() };
     const policy = this.adoptNewSites(before);
+    this.enqueueNewSiteSsl(before, policy);
     const joined = this.joined(before, policy);
-    if (!joined.length) return [];
+    if (!joined.length) return { joined: [], createdZones: new Set() };
     const joinedDomains = joined.map((site) => site.domain);
     const domains = this.wildcardAffected(policy, policy, joinedDomains);
     const run = this.run(policy);
@@ -907,7 +983,11 @@ class Action {
     this.hold(run, policy, joinedDomains);
     await run.enforce(domains);
     await this.record(run, run.planAll(domains, true), domains);
-    return joinedDomains;
+    return { joined: joinedDomains, createdZones: new Set(run.newlyCreatedZones().keys()) };
+  }
+
+  async syncSites(): Promise<string[]> {
+    return (await this.syncSitesRun()).joined;
   }
 
   /**
@@ -939,17 +1019,19 @@ class Action {
 
   /** `asUser` names a non-administrator, who is told whether DNS is ready but not why. */
   async provision(domain: string, ssl: boolean, asUser = ""): Promise<ProvisionReply> {
-    await this.syncSites();
+    const synced = await this.syncSitesRun();
     const site = this.site(domain);
     const policy = this.files.policy();
     const profile = policy.profiles.find((candidate) => candidate.id === policy.assignments[domain]);
     if (!profile || !policy.automatic) {
       return { managed: false, ready: false, reason: profile ? "DNS is set to Ask first" : "No DNS profile is assigned to this site", certificateNames: [] };
     }
-    // A site owner's call reaches Cloudflare only for a site made in the last
+    // A site owner's call reaches the DNS provider only for a site made in the last
     // few minutes, the moment it is for; for any other the last check answers.
     let plan: SitePlan | undefined;
-    if (asUser && this.now - site.createdAt > NEW_SITE_WINDOW) {
+    const createdInCall = new Set(synced.createdZones);
+    const checkedLive = !(asUser && this.now - site.createdAt > NEW_SITE_WINDOW);
+    if (!checkedLive) {
       plan = this.files.status().plans[domain];
     } else {
       if (ssl) {
@@ -961,16 +1043,51 @@ class Action {
       await run.discover();
       await run.load(domains);
       await run.enforce(domains);
+      for (const key of run.newlyCreatedZones().keys()) createdInCall.add(key);
       const plans = run.planAll(domains, true);
       await this.record(run, plans, domains);
       plan = plans.find((candidate) => candidate.domain === domain);
     }
     const ready = readiness(plan);
-    // A plan's problems can name other customers' sites and quote Cloudflare
+    // A plan's problems can name other customers' sites and quote provider
     // or Mailcow errors, which are an administrator's to read. The rest, such
     // as the nameservers a pending zone needs, are the site owner's to act on.
     if (asUser && plan?.problems.length) ready.reason = "an administrator can see why on the DNS page";
-    return { managed: true, ...ready, certificateNames: ready.ready ? plan!.certificateNames : [] };
+    const zone = plan?.zone ?? null;
+    const provider = zone?.provider;
+    let zoneCreated = false;
+    let nameServers = ready.nameServers;
+    if (zone && !plan?.problems.length && checkedLive && (ready.ready || zone.status !== "active")) {
+      const key = zoneMapKey(zone.connectionId ?? "", zone.id);
+      const recent = this.recentCreatedZone(key);
+      if (createdInCall.has(key) || (recent && (provider === "powerdns" || zone.status !== "active"))) {
+        zoneCreated = true;
+        if (!nameServers?.length) {
+          const servers = zone.nameServers.length ? zone.nameServers : (recent?.nameServers ?? []);
+          if (servers.length) nameServers = servers;
+        }
+      }
+    }
+    if (zoneCreated && ready.ready && zone) {
+      const servers = nameServers?.length ? `: ${nameServers.join(", ")}` : "";
+      return {
+        managed: true,
+        ready: false,
+        reason: `Zone ${zone.name} was just created; set its nameservers at the registrar${servers}`,
+        zone: zone.name,
+        ...(nameServers?.length ? { nameServers } : {}),
+        ...(provider ? { provider } : {}),
+        zoneCreated: true,
+        certificateNames: [],
+      };
+    }
+    return {
+      managed: true,
+      ...ready,
+      ...(ready.zone && provider ? { provider } : {}),
+      ...(zoneCreated ? { zoneCreated: true } : {}),
+      certificateNames: ready.ready ? plan!.certificateNames : [],
+    };
   }
 
   /** From the last check alone, so opening a page never reaches Cloudflare. */
