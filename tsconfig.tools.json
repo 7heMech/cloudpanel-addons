@@ -1,4 +1,5 @@
 {
   "extends": "./tsconfig.json",
-  "include": ["cli/**/*.ts", "lib/**/*.ts", "addons/**/*.ts", "manager/**/*.ts", "tools/**/*.ts", "worker/**/*.ts", "tests/**/*.ts"]
+  "include": ["cli/**/*.ts", "lib/**/*.ts", "addons/**/*.ts", "manager/**/*.ts", "tools/**/*.ts", "worker/**/*.ts", "tests/**/*.ts"],
+  "exclude": ["worker/main.ts"]
 }

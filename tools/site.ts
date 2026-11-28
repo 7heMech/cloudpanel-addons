@@ -4,6 +4,9 @@
 //
 //   bun run site [--out <dir>]    (default dist/site)
 //
+// It also writes dist/usage-allowlist.json, the addon and action names the
+// Worker accepts in a usage report.
+//
 // The screenshots are docs/screenshots/site/*.png: `bun run preview:shot` pages,
 // cropped below the panel header so CloudPanel's logo is not on the page.
 import { copyFileSync, existsSync, mkdirSync, readdirSync, writeFileSync } from "node:fs";
@@ -12,6 +15,7 @@ import { fileURLToPath } from "node:url";
 import { ADDONS, ADDON_NAMES } from "../addons/catalog";
 import { CLOUDPANEL_RANGE, describeRange } from "../lib/cloudpanel-version";
 import { REPO } from "../lib/paths";
+import { countedActions } from "../lib/usage-actions";
 
 const repo = join(dirname(fileURLToPath(import.meta.url)), "..");
 const outFlag = process.argv.indexOf("--out");
@@ -184,4 +188,6 @@ mkdirSync(join(out, "img"), { recursive: true });
 writeFileSync(join(out, "index.html"), html);
 for (const figure of figures) if (!existsSync(join(shots, figure.file))) throw new Error(`missing screenshot ${figure.file}`);
 for (const file of readdirSync(shots)) copyFileSync(join(shots, file), join(out, "img", file));
+// The names worker/main.ts bundles: a report may carry only these.
+writeFileSync(join(repo, "dist/usage-allowlist.json"), `${JSON.stringify({ addons: [...ADDON_NAMES], actions: countedActions() }, null, 2)}\n`);
 console.log(join(out, "index.html"));

@@ -1,0 +1,19 @@
+{
+  "request": { "version": "2.1.0", "channel": "stable", "arch": "x64" },
+  "requestWithUsage": {
+    "version": "2.1.0",
+    "channel": "stable",
+    "arch": "x64",
+    "usage": {
+      "id": "0123456789abcdef0123456789abcdef",
+      "cloudpanel": "2.5.4",
+      "addons": ["dns", "firewall"],
+      "activity": { "dns": { "list": 3 }, "firewall": { "set": 1 } }
+    }
+  },
+  "releases": ["v2.2.0", "v2.1.0"],
+  "answer": { "latest": "2.2.0", "update": true, "urgent": false, "usage": "none" },
+  "answerWithUsage": { "latest": "2.2.0", "update": true, "urgent": false, "usage": "saved" },
+  "forget": { "id": "0123456789abcdef0123456789abcdef" },
+  "forgetAnswer": { "deleted": 1 }
+}

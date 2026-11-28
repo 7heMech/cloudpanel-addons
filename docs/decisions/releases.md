@@ -316,16 +316,19 @@ with semver's pre-release order, so a box on `2.0.0-rc.1` is offered `2.0.0`.
 
 ## clp.7he.dev Worker
 
-`wrangler.jsonc` deploys one Worker, `worker/index.ts`, on the custom domain
-`clp.7he.dev`. Workers Builds runs `bun run site` and deploys from `main`, so
-the page and the paths below describe what `main` ships, not `dev`. The Worker
-imports nothing from the addons, because wrangler bundles it.
+`wrangler.jsonc` deploys one Worker on the custom domain `clp.7he.dev`, with
+`workers.dev` and preview URLs off. Workers Builds runs `bun run site` and
+deploys from `main`, so the paths below describe what `main` ships, not `dev`.
+`worker/index.ts` imports nothing from the addons, because wrangler bundles it;
+`worker/main.ts`, the entry, adds `dist/usage-allowlist.json`, which `bun run
+site` writes from the catalog and `countedActions()` in `lib/usage-actions.ts`.
 
 | Path | Answer |
 | --- | --- |
 | `/install.sh` | `302` to `releases/latest/download/install.sh` on GitHub. |
-| `/releases.json` | GitHub's release list cut to `{ tag_name, draft, prerelease }`, which is all `lib/update-check.ts` reads. |
-| `/usage` | `POST` only; the opt-in usage counters. |
+| `/check` | `POST`: the daily update check, with or without opt-in usage. |
+| `/forget` | `POST { id }`: deletes that install ID's rows. |
+| `/stats` | The usage dashboard, behind Cloudflare Access. |
 | anything else | The landing page `tools/site.ts` writes to `dist/site` from the addon catalog, `CLOUDPANEL_RANGE` and `REPO`. |
 
 `/install.sh` is a redirect, not a copy: GitHub stays the one place the
@@ -335,25 +338,71 @@ controls the repository can. `README.md` keeps the GitHub URL, which does not
 depend on the Worker; the landing page shows the short one. The installer still
 checks the binary it downloads against its published SHA-256 checksum.
 
-`/releases.json` asks GitHub for its latest 100 releases, the same window the
-update check picks the newest from, and treats the answer as fresh for five
-minutes. It stores the list in the colo's cache for up to 24 hours. When GitHub
-fails or rate-limits, the stored list is served while the cache still holds
-it, and a `502` once it has expired or been evicted, which the manager treats
-as a miss and falls back to GitHub. An optional `GITHUB_TOKEN` secret
-lifts GitHub's unauthenticated rate limit; it is sent only to GitHub.
+**Deciding.** `/check` reads GitHub's latest 100 releases, fresh for five
+minutes and kept in the colo's cache for a day so a GitHub outage serves the
+last list; with no list at all it answers `502` and the server falls back to
+GitHub. An optional `GITHUB_TOKEN` secret lifts GitHub's rate limit and is sent
+only to GitHub. A `stable` server is offered the newest non-draft release, a
+`prerelease` one the newest non-draft tag. The optional `RELEASE_POLICY`
+variable, JSON such as
+`{ "hold": ["2.3.0"], "stage": { "2.3.0": 25 }, "urgent": ["2.2.1"] }`, holds a
+version back from everyone, offers it to a percentage of servers by the day's
+hash (so a different share each day), or marks it urgent for servers below it.
+The Worker only decides; servers download and verify from GitHub.
 
-`/usage` takes the four fields `lib/usage-share.ts` sends and nothing else, each
-checked for shape and the body capped at 2 KiB, counted in bytes as it is read
-so a larger body is cut off rather than buffered, and answers `204`. A report
-writes one Workers Analytics Engine data point per enabled addon, with the
-addon, version, CloudPanel version and architecture, plus one under `*` for the
-server itself, which is the denominator for "how many servers run this addon".
-The Worker reads nothing about the sender, so no address, hostname or machine
-id is stored. The addon names are checked for form (`[a-z][a-z0-9-]*`, at most
-24), not against the catalog, because the Worker cannot import it; a name the
-catalog does not know is counted as sent. The dataset is queried through
-Cloudflare's SQL API with an account token that stays in Cloudflare.
+**Refusing.** The body is capped at 8 KiB, counted in bytes while read. The
+version must be a published, non-draft release, `channel` `stable` or
+`prerelease`, and `arch` `x64` or `arm64`; anything else is a `400` and is not
+counted. In `usage`, addon and action names off the allowlist are dropped rather
+than refused, since a pre-release cut from `dev` can know names `main` does not
+yet, and each count is clamped to 10,000. A malformed `usage` is answered
+`"refused"` and the check itself still counted.
+
+**Counting.** Each check writes one Analytics Engine point: index the day's
+hash, blobs version, channel, arch and `opt-in` or `basic`. The hash is
+HMAC-SHA-256 of `CF-Connecting-IP`, IPv6 cut to its /64, under a random 32-byte
+key made by the first check of each UTC day and stored in KV as `hmac:<day>`
+with a two-day expiry. Nothing derives it from a fixed secret, so once the key
+expires a hash cannot be linked to an address or to another day's. Two colos
+making the first key of a day at once can each count a server once more that
+day. The address itself is never stored, and the dashboard counts distinct
+hashes per day, which is the one-report-per-server-per-day rule.
+
+**Opt-in rows.** D1 (`worker/schema.sql`) keeps one `reports` row per install
+ID per day, upserted with counts summed: version, channel, arch, CloudPanel
+version, addons, activity, and Cloudflare's country, ASN and AS organisation.
+No hash or address is in it. `reporters` maps each day's hash to the one
+install ID allowed to report from it that day, so made-up IDs from one address
+count once; the cron empties past days, so an ID sits beside a hash for that
+day only. `/forget` deletes an ID's rows from both, with the ID as the
+credential.
+
+**Roll-up and dashboard.** A cron at 00:20 UTC writes the last seven finished
+days into `daily` (distinct servers overall and per version, channel,
+architecture and tier from Analytics Engine's SQL API; opt-in servers, addons
+enabled, addons active, countries and networks from `reports`), then deletes
+`reports` rows older than 90 days. `daily` outlives both Analytics Engine's
+90-day retention and those rows. `/stats` shows servers per day (Analytics
+Engine for 30 days, `daily` before that), the last finished day's version,
+channel and architecture split, opt-in rate, and over 30 days of opt-in rows:
+each addon's enabled share, the share of servers using it with its median
+actions, countries and networks. It answers only with a `Cf-Access-Jwt-Assertion`
+it verifies against the team's keys, the `ACCESS_AUD` audience and expiry, so a
+route left outside Access still shows nothing. The SQL API needs the
+`CF_ACCOUNT_ID` and `CF_ANALYTICS_TOKEN` secrets, a token with Account
+Analytics: Read only.
+
+**Manual steps** (dashboard or wrangler, once):
+
+1. `wrangler kv namespace create clp-addons-secrets` and `wrangler d1 create
+   clp-addons-usage`; put both ids in `wrangler.jsonc`.
+2. `wrangler d1 execute clp-addons-usage --remote --file worker/schema.sql`.
+3. Secrets: `CF_ACCOUNT_ID`, `CF_ANALYTICS_TOKEN`, `ACCESS_TEAM_DOMAIN`,
+   `ACCESS_AUD`, optionally `GITHUB_TOKEN`; optional variable `RELEASE_POLICY`.
+4. Zero Trust → Access → a self-hosted application for `clp.7he.dev/stats`
+   with an allow policy for the maintainers; copy its AUD tag to `ACCESS_AUD`.
+5. Security → WAF → a rate-limiting rule on `clp.7he.dev/check` and `/forget`,
+   such as 20 requests per 10 minutes per IP, blocking.
 
 The old route `7he.dev/cloudpanel-addons*` is gone from `wrangler.jsonc`;
 7he.dev redirects that path to `clp.7he.dev` with a dashboard Redirect Rule, so
