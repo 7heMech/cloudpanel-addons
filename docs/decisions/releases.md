@@ -314,11 +314,44 @@ tried on a real box before anyone else gets it. The release is then tagged on
 the candidate's commit, so what was tried is what ships, and versions compare
 with semver's pre-release order, so a box on `2.0.0-rc.1` is offered `2.0.0`.
 
-## Landing page
+## clp.7he.dev Worker
 
-`wrangler.jsonc` deploys `dist/site`, which `tools/site.ts` writes from the
-addon catalog, `CLOUDPANEL_RANGE` and `REPO`, as an assets-only Worker on the
-route `7he.dev/cloudpanel-addons*`. That route is more specific than anything
-7he.dev's own Worker holds, so it takes only this path. Workers Builds runs
-`bun run site` and deploys from `main`, so the page lists what `main` ships,
-not `dev`.
+`wrangler.jsonc` deploys one Worker, `worker/index.ts`, on the custom domain
+`clp.7he.dev`. Workers Builds runs `bun run site` and deploys from `main`, so
+the page and the paths below describe what `main` ships, not `dev`. The Worker
+imports nothing from the addons, because wrangler bundles it.
+
+| Path | Answer |
+| --- | --- |
+| `/install.sh` | `302` to `releases/latest/download/install.sh` on GitHub. |
+| `/releases.json` | GitHub's release list cut to `{ tag_name, draft, prerelease }`, which is all `lib/update-check.ts` reads. |
+| `/usage` | `POST` only; the opt-in usage counters. |
+| anything else | The landing page `tools/site.ts` writes to `dist/site` from the addon catalog, `CLOUDPANEL_RANGE` and `REPO`. |
+
+`/install.sh` is a redirect, not a copy: GitHub stays the one place the
+installer and binaries are published and verified, and whoever controls the
+Worker (the Cloudflare account) can point `curl | bash` elsewhere, as whoever
+controls the repository can. `README.md` keeps the GitHub URL, which does not
+depend on the Worker; the landing page shows the short one. The installer still
+checks the binary it downloads against its published SHA-256 checksum.
+
+`/releases.json` asks GitHub for thirty releases and keeps the answer for five
+minutes in the colo's cache. When GitHub fails or rate-limits, the last list is
+served however old it is, and a `502` when there is none, which the manager
+treats as a miss and falls back to GitHub. An optional `GITHUB_TOKEN` secret
+lifts GitHub's unauthenticated rate limit; it is sent only to GitHub.
+
+`/usage` takes the four fields `lib/usage-share.ts` sends and nothing else, each
+checked for shape and the body capped at 2 KiB, and answers `204`. A report
+writes one Workers Analytics Engine data point per enabled addon, with the
+addon, version, CloudPanel version and architecture, plus one under `*` for the
+server itself, which is the denominator for "how many servers run this addon".
+The Worker reads nothing about the sender, so no address, hostname or machine
+id is stored. The addon names are checked for form (`[a-z][a-z0-9-]*`, at most
+24), not against the catalog, because the Worker cannot import it; a name the
+catalog does not know is counted as sent. The dataset is queried through
+Cloudflare's SQL API with an account token that stays in Cloudflare.
+
+The old route `7he.dev/cloudpanel-addons*` is gone from `wrangler.jsonc`;
+7he.dev redirects that path to `clp.7he.dev` with a dashboard Redirect Rule, so
+the Worker on the main site is untouched.

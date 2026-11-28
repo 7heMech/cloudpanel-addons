@@ -1,12 +1,20 @@
-// The landing page at 7he.dev/cloudpanel-addons/, built by `bun run site` and
-// deployed by Workers Builds from main. See docs/decisions/releases.md.
+// The Worker on clp.7he.dev: the landing page `bun run site` writes to dist/site,
+// the install script's redirect, the release list and the usage counters in
+// worker/index.ts. Deployed by Workers Builds from main. See
+// docs/decisions/releases.md.
 {
   "name": "cloudpanel-addons-site",
+  "main": "worker/index.ts",
   "compatibility_date": "2026-11-01",
   "assets": {
-    "directory": "dist/site"
+    "directory": "dist/site",
+    "binding": "ASSETS",
+    "run_worker_first": ["/install.sh", "/releases.json", "/usage"]
   },
   "routes": [
-    { "pattern": "7he.dev/cloudpanel-addons*", "zone_name": "7he.dev" }
+    { "pattern": "clp.7he.dev", "custom_domain": true }
+  ],
+  "analytics_engine_datasets": [
+    { "binding": "USAGE", "dataset": "clp_addons_usage" }
   ]
 }

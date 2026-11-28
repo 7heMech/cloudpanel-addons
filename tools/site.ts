@@ -1,8 +1,8 @@
-// Writes the project's landing page, served at 7he.dev/cloudpanel-addons/, from
+// Writes the project's landing page, served at https://clp.7he.dev/, from
 // the addon catalog, the supported CloudPanel range and the repository name, so
 // the page lists what the code ships.
 //
-//   bun run site [--out <dir>]    (default dist/site/cloudpanel-addons)
+//   bun run site [--out <dir>]    (default dist/site)
 //
 // The screenshots are docs/screenshots/site/*.png: `bun run preview:shot` pages,
 // cropped below the panel header so CloudPanel's logo is not on the page.
@@ -15,11 +15,11 @@ import { REPO } from "../lib/paths";
 
 const repo = join(dirname(fileURLToPath(import.meta.url)), "..");
 const outFlag = process.argv.indexOf("--out");
-const out = outFlag > 0 ? process.argv[outFlag + 1]! : join(repo, "dist/site/cloudpanel-addons");
+const out = outFlag > 0 ? process.argv[outFlag + 1]! : join(repo, "dist/site");
 const shots = join(repo, "docs/screenshots/site");
 
 const GITHUB = `https://github.com/${REPO}`;
-const INSTALL = `curl -fsSL ${GITHUB}/releases/latest/download/install.sh | bash`;
+const INSTALL = "curl -fsSL https://clp.7he.dev/install.sh | bash";
 const NETCUP_CODE = "36nc17643227740";
 
 const esc = (text: string) =>
@@ -59,7 +59,7 @@ const html = `<!DOCTYPE html>
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>Addons for CloudPanel | 7he.dev</title>
 <meta name="description" content="Unofficial, open-source security fixes and extra features for CloudPanel ${esc(describeRange(CLOUDPANEL_RANGE))}, installed with one command.">
-<link rel="canonical" href="https://7he.dev/cloudpanel-addons/">
+<link rel="canonical" href="https://clp.7he.dev/">
 <meta name="color-scheme" content="dark">
 <meta name="theme-color" content="#141110">
 <link rel="preconnect" href="https://fonts.googleapis.com">
@@ -116,10 +116,10 @@ const html = `<!DOCTYPE html>
 <body>
 <div class="wrap">
   <header class="bar">
-    <a href="/" class="wordmark">7he.dev</a>
+    <a href="https://7he.dev/" class="wordmark">7he.dev</a>
     <ul>
       <li><a href="${GITHUB}" rel="noopener noreferrer">GitHub</a></li>
-      <li><a href="/blog/">Blog</a></li>
+      <li><a href="https://7he.dev/blog/">Blog</a></li>
     </ul>
   </header>
 
@@ -159,7 +159,7 @@ ${addonRows}
     <div class="links">
       <a href="${GITHUB}" rel="noopener noreferrer">Source on GitHub</a>
       <a href="${GITHUB}/releases" rel="noopener noreferrer">Releases</a>
-      <a href="/blog/">Blog</a>
+      <a href="https://7he.dev/blog/">Blog</a>
     </div>
     <p>I run these addons on a netcup server. If you sign up at netcup, code <code>${NETCUP_CODE}</code> takes €5 off, and I get a credit.</p>
     <p class="muted">Unofficial. Not affiliated with or endorsed by CloudPanel. Apache-2.0.</p>
