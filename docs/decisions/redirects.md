@@ -55,7 +55,12 @@ place when exactly one rule quotes the redirect's whole hosts (`http.host eq`,
 Cloudflare refuses a `ref` change on update, Redirects retries with the rule's
 existing `ref` and continues matching it by host expression. Two matching rules
 or a non-whole-host rule block the redirect as a plan problem instead of adding
-a duplicate rule beside it.
+a duplicate rule beside it. So does any other enabled rule whose `wildcard`,
+`matches`, `starts_with`, `ends_with`, or `contains` test on `http.host` or
+`http.request.full_uri` could match one of the redirect's hosts. A `full_uri`
+regex always counts. That problem also blocks deleting or replacing the
+redirect, since removing only its own rule would leave the host redirecting.
+Rules that test only the path or other fields are not counted.
 
 **Find in Cloudflare** scans reachable Cloudflare zones'
 `http_request_dynamic_redirect` entrypoints for whole-host redirect rules not

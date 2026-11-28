@@ -17,7 +17,7 @@ import {
 import { migrateRedirectsFromDns, redirectsMigrationPending } from "../addons/redirects/migration";
 import { parsePolicy, parseRedirect, type Redirect } from "../addons/redirects/model";
 import {
-  foundRedirect, isOurRedirectRef, legacyDnsRedirectRef, redirectRef, redirectRuleState, wholeHostHosts,
+  foundRedirect, isOurRedirectRef, legacyDnsRedirectRef, patternMatchesHost, redirectRef, redirectRuleState, wholeHostHosts,
 } from "../addons/redirects/rules";
 import { permissionActions } from "../addons/redirects/setup";
 import {
@@ -526,6 +526,32 @@ describe("Cloudflare Single Redirects and placeholder records", () => {
     const later = await env.act("save-redirect", found("www.example.com", "https://b.example"));
     expect(later.review!.blocked).toBe(true);
     expect(later.review!.sites[0]!.problems).toContain("www.example.com and example.com both answer for www.example.com; keep only one of these redirects");
+  });
+
+  test("blocks replacement while another enabled rule's pattern still matches the host", async () => {
+    expect(patternMatchesHost('http.request.full_uri wildcard "https://*.example.com/*"', "old.example.com")).toBe(true);
+    expect(patternMatchesHost('http.request.full_uri wildcard "https://*.other.com/*"', "old.example.com")).toBe(false);
+    expect(patternMatchesHost('http.host wildcard "*.example.com"', "example.com")).toBe(false);
+    expect(patternMatchesHost('http.host matches "^ol[d]\\.example"', "old.example.com")).toBe(true);
+    expect(patternMatchesHost('http.request.full_uri matches "^https://new"', "old.example.com")).toBe(true);
+    expect(patternMatchesHost('ends_with(http.host, ".example.com")', "old.example.com")).toBe(true);
+    expect(patternMatchesHost('http.request.uri.path wildcard "/old/*"', "old.example.com")).toBe(false);
+
+    const env = setup();
+    const zone = env.cf.zone("example.com", env.account);
+    await env.act("save-connection", { token: TOKEN });
+    await env.automatic();
+    await env.confirmed(await env.act("save-redirect", found("old.example.com", "https://example.net")));
+    const rules = env.cf.rulesets.get(`${zone.id}:http_request_dynamic_redirect`)!.rules;
+    const wildcard = externalRule('http.request.full_uri wildcard "https://*.example.com/*"', "https://example.org");
+    rules.push({ ...wildcard, enabled: false }, externalRule('http.request.full_uri wildcard "https://*.other.com/*"', "https://example.org"));
+    expect((await env.act("prepare-replace", { source: "old.example.com" })).review!.blocked).toBe(false);
+
+    rules.push(wildcard);
+    const blocked = await env.act("prepare-replace", { source: "old.example.com" });
+    expect(blocked.review!.blocked).toBe(true);
+    expect(blocked.review!.sites[0]!.problems.join(" ")).toContain("A rule in Cloudflare also matches old.example.com by pattern");
+    expect((await env.act("save-redirect", found("old.example.com", "https://example.com"))).review!.blocked).toBe(true);
   });
 
   test("wholeHostHosts, foundRedirect, and two-rule conflict detection", () => {

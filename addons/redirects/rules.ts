@@ -112,6 +112,62 @@ function mentions(expression: string, host: string): boolean {
   return [...expression.toLowerCase().matchAll(/"((?:[^"\\]|\\.)*)"/g)].some((match) => pattern.test(match[1]!));
 }
 
+const STRING = String.raw`(?:r(?<hash>#*)"(?<raw>[\s\S]*?)"\k<hash>|"(?<quoted>(?:[^"\\]|\\.)*)")`;
+const HOST = String.raw`(?:lower\(\s*)?(?:raw\.)?http\.host\)?`;
+const URI = String.raw`(?:lower\(\s*)?(?:raw\.)?http\.request\.full_uri\)?`;
+const PATTERN_TESTS: { pattern: RegExp; test: (value: string, host: string, field: string) => boolean }[] = [
+  { pattern: new RegExp(`(${HOST}|${URI})\\s+(?:strict\\s+)?wildcard\\s+${STRING}`, "gi"), test: (value, host, field) => /full_uri/i.test(field)
+    ? uriWildcardReaches(value, host)
+    : wildcardReaches(value, host, false) },
+  { pattern: new RegExp(`(${HOST}|${URI})\\s+(?:matches|~)\\s+${STRING}`, "gi"), test: (value, host, field) => {
+    if (/full_uri/i.test(field)) return true;
+    try { return new RegExp(value).test(host); } catch { return true; }
+  } },
+  { pattern: new RegExp(`(starts_with|ends_with)\\(\\s*${HOST}\\s*,\\s*${STRING}\\s*\\)`, "gi"), test: (value, host, fn) =>
+    fn.toLowerCase() === "starts_with" ? host.startsWith(value.toLowerCase()) : host.endsWith(value.toLowerCase()) },
+  { pattern: new RegExp(`(${HOST})\\s+contains\\s+${STRING}`, "gi"), test: (value, host) => host.includes(value.toLowerCase()) },
+];
+
+/** Whether Cloudflare's `wildcard` operator could match `text`, or with `open` some string starting with `text`; `*` spans any characters. */
+function wildcardReaches(pattern: string, text: string, open: boolean): boolean {
+  const tokens: (string | null)[] = [];
+  for (let i = 0; i < pattern.length; i++) {
+    if (pattern[i] === "\\" && i + 1 < pattern.length) tokens.push(pattern[++i]!.toLowerCase());
+    else tokens.push(pattern[i] === "*" ? null : pattern[i]!.toLowerCase());
+  }
+  const close = (states: Set<number>) => {
+    for (const state of states) if (tokens[state] === null) states.add(state + 1);
+    return states;
+  };
+  let states = close(new Set([0]));
+  for (const char of text.toLowerCase()) {
+    const next = new Set<number>();
+    for (const state of states) {
+      if (state >= tokens.length) continue;
+      if (tokens[state] === null) next.add(state);
+      else if (tokens[state] === char) next.add(state + 1);
+    }
+    states = close(next);
+    if (!states.size) return false;
+  }
+  return open ? states.size > 0 : states.has(tokens.length);
+}
+
+/** Whether a `full_uri` wildcard could match a request to `host`, reading the pattern's host as what follows `://` up to the next `/`. */
+function uriWildcardReaches(pattern: string, host: string): boolean {
+  const scheme = pattern.indexOf("://");
+  if (scheme < 0) return [`https://${host}/`, `http://${host}/`].some((uri) => wildcardReaches(pattern, uri, true));
+  const rest = pattern.slice(scheme + 3);
+  const slash = rest.indexOf("/");
+  return slash < 0 ? wildcardReaches(rest, host, true) : wildcardReaches(rest.slice(0, slash), host, false);
+}
+
+/** Whether an enabled rule's wildcard, regex, or prefix/suffix test on the host or full URI could match a request to `host`. */
+export function patternMatchesHost(expression: string, host: string): boolean {
+  return PATTERN_TESTS.some(({ pattern, test }) => [...expression.matchAll(pattern)].some((match) =>
+    test(match.groups?.raw ?? (match.groups?.quoted ?? "").replace(/\\(.)/g, "$1"), host, match[1]!)));
+}
+
 export interface RedirectAction {
   target: string;
   status: RedirectStatus;
@@ -153,8 +209,16 @@ function ruleLabel(rule: CfRule): string {
 /** Our rule for `redirect`, found by its `ref` or by the hosts it names, and whether it needs writing. */
 export function redirectRuleState(ruleset: CfRuleset | null, redirect: Redirect, hosts: string[]): RedirectRuleState {
   const wanted = wantedRedirectRule(redirect, hosts);
-  const related = (ruleset?.rules ?? []).filter((rule) =>
-    isOurRedirectRef(rule.ref, redirect.source) || hosts.some((host) => mentions(rule.expression, host)));
+  const isRelated = (rule: CfRule) => isOurRedirectRef(rule.ref, redirect.source) || hosts.some((host) => mentions(rule.expression, host));
+  const covering = (ruleset?.rules ?? []).filter((rule) =>
+    rule.enabled && !isRelated(rule) && hosts.some((host) => patternMatchesHost(rule.expression, host)));
+  if (covering.length) {
+    return {
+      state: "problem",
+      problem: `A rule in Cloudflare also matches ${hosts.join(" or ")} by pattern (${covering.map(ruleLabel).join("; ")}); change or delete it in Cloudflare`,
+    };
+  }
+  const related = (ruleset?.rules ?? []).filter(isRelated);
   if (!related.length) return { state: "create" };
   if (related.length > 1) {
     return {
