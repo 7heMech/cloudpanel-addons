@@ -361,7 +361,10 @@ profile still carrying a `zone` block or list of blocks, which DNS writes only
 from the v1 profiles in use. It sets `acmeFullSsl` when any relevant
 profile enabled it or `panelHost` was set, treats an unmanaged (`null` or
 omitted) SSL/TLS mode or Always Use HTTPS beside a set value as a disagreement
-(leaving the setting `null` with a `migrationNote` and `approved: false`), and
+(leaving the setting `null` with a `migrationNote` and `approved: false`),
+treats WAF skip lists that differ (including an empty list beside a non-empty
+one) as a disagreement too, keeping their union in the unapproved draft with a
+`migrationNote` since each legacy list applied only to its own zones, and
 refuses migration before writing or removing legacy state if the combined
 `skipFirewallIps` union exceeds `MAX_SKIP_IPS` (20). Unambiguous active options
 are marked `approved: true` only when DNS is enabled (`dns.conf` exists) and

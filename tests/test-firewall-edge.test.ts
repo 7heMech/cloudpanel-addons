@@ -893,8 +893,8 @@ describe("Upgrade migration from DNS profile zone options", () => {
       assignments: { "example.com": "web-mailcow" },
       panelHost: "panel.example.com",
       profiles: [
-        { id: "web", name: "Web", records: [], mailcow: false, zone: { ssl: "strict", alwaysHttps: true, acmeFullSsl: true, webmailFullSsl: false, skipFirewallIps: ["203.0.113.7"] } },
-        { id: "web-mailcow", name: "Web and Mailcow", records: [], mailcow: true, zone: { ssl: "strict", alwaysHttps: true, acmeFullSsl: true, webmailFullSsl: true, skipFirewallIps: ["2001:db8::1"] } },
+        { id: "web", name: "Web", records: [], mailcow: false, zone: { ssl: "strict", alwaysHttps: true, acmeFullSsl: true, webmailFullSsl: false, skipFirewallIps: ["2001:db8::1", "203.0.113.7"] } },
+        { id: "web-mailcow", name: "Web and Mailcow", records: [], mailcow: true, zone: { ssl: "strict", alwaysHttps: true, acmeFullSsl: true, webmailFullSsl: true, skipFirewallIps: ["203.0.113.7", "2001:db8::1"] } },
         { id: "unused", name: "Unused", records: [], mailcow: false, zone: { ssl: "flexible", alwaysHttps: false, acmeFullSsl: false, webmailFullSsl: false, skipFirewallIps: [] } },
       ],
     }, null, 2)}\n`;
@@ -994,7 +994,7 @@ describe("Upgrade migration from DNS profile zone options", () => {
     expect(migrated.migrationNote).toContain("Always Use HTTPS");
   });
 
-  test("refuses skipFirewallIps overflow above 20 without modifying dns/policy.json, while migrating unions of 20 normally", () => {
+  test("refuses skipFirewallIps overflow above 20 without modifying dns/policy.json, while migrating 20", () => {
     const { paths } = setupMigrationDir();
     writeFileSync(paths.dnsConfig, "enabled\n");
     writeFileSync(join(paths.cloudflareStateDir, "connections.json"), JSON.stringify({
@@ -1017,7 +1017,7 @@ describe("Upgrade migration from DNS profile zone options", () => {
     expect(readFileSync(paths.dnsPolicy, "utf8")).toBe(overflowPolicy);
     expect(existsSync(paths.edgeConfig)).toBe(false);
 
-    // Trimming to 20 distinct IPs migrates normally.
+    // Trimming to 20 distinct IPs migrates, but the combined list of two different ones waits for approval.
     const exact20Policy = JSON.stringify({
       version: 1,
       automatic: true,
@@ -1032,7 +1032,39 @@ describe("Upgrade migration from DNS profile zone options", () => {
     expect(undo).not.toBeNull();
     const migrated = readEdgeConfig({ paths: { stateDir: paths.firewallStateDir, rootUid: uid } });
     expect(migrated.defaults.skipFirewallIps).toHaveLength(20);
-    expect(migrated.approved).toBe(true);
+    expect(migrated.approved).toBe(false);
+    expect(migrated.migrationNote).toContain("different WAF skip lists");
+  });
+
+  test("does not approve a combined WAF skip list when legacy profiles listed different IPs, or none beside some", () => {
+    const migrate = (lists: string[][]) => {
+      const { paths } = setupMigrationDir();
+      writeFileSync(paths.dnsConfig, "enabled\n");
+      writeFileSync(paths.firewallConfig, "enabled\n");
+      writeFileSync(join(paths.cloudflareStateDir, "connections.json"), JSON.stringify({
+        version: 1, connections: [{ id: "cf-1111aaaa", label: "Agency" }],
+      }), { mode: 0o600 });
+      writeFileSync(paths.dnsPolicy, JSON.stringify({
+        version: 1,
+        automatic: true,
+        assignments: Object.fromEntries(lists.map((_, i) => [`s${i}.example`, `p${i}`])),
+        profiles: lists.map((skipFirewallIps, i) => ({
+          id: `p${i}`, name: `P${i}`, records: [], mailcow: false,
+          zone: { ssl: "strict", alwaysHttps: true, acmeFullSsl: true, webmailFullSsl: false, skipFirewallIps },
+        })),
+      }), { mode: 0o600 });
+      migrateCloudflareEdgeFromDns(() => {}, { ...paths, firewallWasEnabled: true });
+      return readEdgeConfig({ paths: { stateDir: paths.firewallStateDir, rootUid: uid } });
+    };
+    const different = migrate([["203.0.113.7"], ["198.51.100.9"]]);
+    expect(different.approved).toBe(false);
+    expect(different.defaults.skipFirewallIps).toEqual(["198.51.100.9", "203.0.113.7"]);
+    expect(different.migrationNote).toContain("different WAF skip lists");
+    expect(migrate([["203.0.113.7"], []]).approved).toBe(false);
+    const same = migrate([["203.0.113.7"], ["203.0.113.7"]]);
+    expect(same.approved).toBe(true);
+    expect(same.migrationNote).toBeNull();
+    expect(migrate([[], []]).approved).toBe(true);
   });
 
   test("does not approve migrated defaults when DNS was disabled even if policy.json had automatic: true", () => {
@@ -1081,7 +1113,7 @@ describe("Upgrade migration from DNS profile zone options", () => {
       profiles: [
         { id: "web", name: "Web", role: "http", records: [], mailcow: false },
         { id: "custom-http", name: "Custom HTTP", role: "http", records: [], mailcow: false, zone: { ssl: "full", alwaysHttps: true, acmeFullSsl: true, webmailFullSsl: false, skipFirewallIps: ["203.0.113.7"] } },
-        { id: "redirect-mail", name: "Redirect Mail", role: "mail", records: [], mailcow: false, zone: { ssl: "full", alwaysHttps: true, acmeFullSsl: false, webmailFullSsl: true, skipFirewallIps: [] } },
+        { id: "redirect-mail", name: "Redirect Mail", role: "mail", records: [], mailcow: false, zone: { ssl: "full", alwaysHttps: true, acmeFullSsl: false, webmailFullSsl: true, skipFirewallIps: ["203.0.113.7"] } },
         { id: "google", name: "Google Workspace", role: "mail", records: [], mailcow: false },
       ],
     }), { mode: 0o600 });

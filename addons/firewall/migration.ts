@@ -331,7 +331,8 @@ export function cloudflareEdgeMigrationPending(paths: Partial<CloudflareEdgeMigr
  *   falling back to all profiles when none are assigned.
  * - If relevant profiles disagree on SSL/TLS mode or Always Use HTTPS, leaves
  *   the disagreeing setting unset (`null`), leaves approval off, and records a
- *   migration note so live zones are never silently changed.
+ *   migration note so live zones are never silently changed. Different WAF
+ *   skip lists keep their union, unapproved, with a note.
  * - If DNS was Automatic with Cloudflare connected and unambiguous active edge
  *   options, migrates them as already approved so new zones continue without
  *   review holds; when DNS was enabled and Firewall was disabled, enables
@@ -418,11 +419,15 @@ export function migrateCloudflareEdgeFromDns(
   const panelHostSet = typeof parsed.panelHost === "string" && parsed.panelHost.trim().length > 0;
   const acmeFullSsl = zoneObjects.some((zone) => zone.acmeFullSsl === true) || panelHostSet;
   const webmailFullSsl = zoneObjects.some((zone) => zone.webmailFullSsl === true);
-  const allSkipIps = [...new Set(zoneObjects.flatMap((zone) =>
-    Array.isArray(zone.skipFirewallIps)
-      ? zone.skipFirewallIps.filter((ip): ip is string => typeof ip === "string" && isIP(ip.trim()) !== 0).map((ip) => ip.trim().toLowerCase())
-      : []))]
-    .sort();
+  const skipLists = zoneObjects.map((zone) => [...new Set(Array.isArray(zone.skipFirewallIps)
+    ? zone.skipFirewallIps.filter((ip): ip is string => typeof ip === "string" && isIP(ip.trim()) !== 0).map((ip) => ip.trim().toLowerCase())
+    : [])].sort());
+  const allSkipIps = [...new Set(skipLists.flat())].sort();
+  // Each legacy list applied only to its own zones, so a combined list would exempt IPs where they never were.
+  const distinctSkipLists = new Set(skipLists.map((list) => list.join(" ")));
+  if (allSkipIps.length > 0 && distinctSkipLists.size > 1) {
+    notes.push(`Legacy DNS profiles had different WAF skip lists, so the combined list (${allSkipIps.join(", ")}) was not approved; once approved it applies to every zone.`);
+  }
   if (allSkipIps.length > MAX_SKIP_IPS) {
     throw new Error(
       `DNS's Cloudflare edge options were not moved to Firewall: selected DNS profiles contain ${allSkipIps.length} distinct WAF skip IPs, which exceeds Firewall's limit of ${MAX_SKIP_IPS}. Reduce skipFirewallIps in ${p.dnsPolicy} to at most ${MAX_SKIP_IPS} distinct IPs and retry.`,
