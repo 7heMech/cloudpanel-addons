@@ -645,6 +645,32 @@ describe("local stand-in sites, provider transitions, and leftover rule cleanup"
     expect(replace.review!.sites[0]!.problems.join(" ")).toContain("Cloudflare could not be read");
   });
 
+  test("replacement inspects the tracked zone beside the selected one and blocks when the tracked zone is out of reach", async () => {
+    const env = setup();
+    env.cf.zone("example.com", env.account);
+    env.cf.zone("other.example", env.account);
+    await env.act("save-connection", { token: TOKEN });
+    await env.automatic();
+    await env.confirmed(await env.act("save-redirect", found("go.sub.example.com", "https://example.net")));
+    await env.confirmed(await env.act("save-redirect", found("go.other.example", "https://example.net")));
+    expect(env.redirectRules("example.com")).toHaveLength(1);
+
+    // A child zone appears holding its own rule for the host: the parent rule must not be left behind.
+    const child = env.cf.zone("sub.example.com", env.account);
+    env.cf.rulesets.set(`${child.id}:http_request_dynamic_redirect`, {
+      id: hexId(), rules: [externalRule('http.host eq "go.sub.example.com"', "https://example.net")],
+    });
+    const both = await env.act("prepare-replace", { source: "go.sub.example.com" });
+    expect(both.review!.blocked).toBe(true);
+    expect(both.review!.sites[0]!.problems.join(" ")).toContain("exist in more than one zone (sub.example.com, example.com)");
+
+    // The token stops listing the tracked zone: no match is not the same as no rule.
+    env.cf.zones = env.cf.zones.filter((zone) => zone.name !== "other.example");
+    const gone = await env.act("prepare-replace", { source: "go.other.example" });
+    expect(gone.review!.blocked).toBe(true);
+    expect(gone.review!.sites[0]!.problems.join(" ")).toContain("other.example, where the Cloudflare rule for go.other.example was last seen, is not reachable");
+  });
+
   test("standInBody renders all redirect combinations and custom hosts", () => {
     const body = (keepPath: boolean, keepQuery: boolean) =>
       standInBody("thepastormax.com", { target: "https://maksimasenov.com", status: 301, keepPath, keepQuery });

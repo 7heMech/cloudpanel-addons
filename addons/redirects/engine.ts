@@ -671,24 +671,28 @@ export class RedirectsRun {
       ?? this.preferred(group)!);
   }
 
+  /** One reference per distinct zone that could hold `source`'s rule: the selected zone, the longest matches, and the tracked zone. */
+  private deletionRefs(source: string, tracked?: TrackedRedirectRule): ZoneRef[] {
+    const refs = new Map<string, ZoneRef>();
+    const redirect = this.redirects.get(source);
+    const resolved = redirect && this.resolve(redirect);
+    if (resolved?.kind === "zone") refs.set(resolved.ref.zone.id, resolved.ref);
+    for (const ref of this.cloudflareRedirectZones(source, tracked)) {
+      if (!refs.has(ref.zone.id)) refs.set(ref.zone.id, ref);
+    }
+    return [...refs.values()];
+  }
+
   /** Reads every Cloudflare zone needed to check whether deleting or replacing `source` must also remove a Single Redirect rule. */
   async loadRedirectDeletion(source: string, tracked?: TrackedRedirectRule): Promise<void> {
-    const redirect = this.redirects.get(source);
-    const refs = new Map<string, ZoneRef>();
-    if (redirect) {
-      const resolved = this.resolve(redirect);
-      if (resolved.kind === "zone") refs.set(zoneMapKey(resolved.ref.connectionId, resolved.ref.zone.id), resolved.ref);
-    }
-    for (const ref of this.cloudflareRedirectZones(source, tracked)) {
-      refs.set(zoneMapKey(ref.connectionId, ref.zone.id), ref);
-    }
-    await Promise.all([...refs.values()].map((ref) => this.loadZone(ref)));
+    await Promise.all(this.deletionRefs(source, tracked).map((ref) => this.loadZone(ref)));
   }
 
   /**
    * The Cloudflare Single Redirect rule deleting or replacing `source` would remove;
-   * null when Cloudflare has no matching rule. Inspects reachable Cloudflare zones
-   * and any tracked destination even when `mode === "local"` or a stand-in serves it.
+   * null when every zone that could hold one was read and none does. Inspects the
+   * selected zone, the longest matching zones and any tracked zone, even when
+   * `mode === "local"` or a stand-in serves it.
    */
   redirectRuleOf(
     source: string,
@@ -698,35 +702,27 @@ export class RedirectsRun {
     if (!redirect) return null;
     const failure = this.discoveryFailure();
     if (failure) return { problem: failure };
-    const inspect = (ref: ZoneRef): { zone: ZoneView; rulesetId: string; rule: CfRuleset["rules"][number] } | { problem: string } | null => {
-      const state = this.zones.get(zoneMapKey(ref.connectionId, ref.zone.id));
-      if (!state?.rulesetLoaded || state.error) return { problem: state?.error ?? `${ref.zone.name} could not be read` };
-      const found = redirectRuleState(state.ruleset, redirect, redirectHosts(source, ref.zone.name));
-      if (found.state === "problem") return { problem: found.problem };
-      if (found.state === "create" || !state.ruleset) return null;
-      return { zone: this.zoneView(ref), rulesetId: state.ruleset.id, rule: found.rule };
-    };
-
     const resolved = this.resolve(redirect);
     if (resolved.kind === "unreachable") return { problem: resolved.reason };
     if (resolved.kind === "choose") {
       return { problem: `${resolved.name} is reachable through more than one connection; choose which one manages it` };
     }
-    if (resolved.kind === "zone") {
-      const primary = inspect(resolved.ref);
-      if (primary || !tracked || tracked.zoneId === resolved.ref.zone.id) return primary;
+    if (tracked && !this.zoneRefs.some((ref) => ref.zone.id === tracked.zoneId)) {
+      return {
+        problem: `${tracked.zoneName}, where the Cloudflare rule for ${source} was last seen, is not reachable through any Cloudflare connection; connect a token that reaches it so Redirects can check for the rule`,
+      };
     }
 
-    const cfRefs = this.cloudflareRedirectZones(source, tracked);
     const hits: { zone: ZoneView; rulesetId: string; rule: CfRuleset["rules"][number] }[] = [];
-    for (const ref of cfRefs) {
-      const checked = inspect(ref);
-      if (!checked) continue;
-      if ("problem" in checked) return checked;
-      hits.push(checked);
+    for (const ref of this.deletionRefs(source, tracked)) {
+      const state = this.zones.get(zoneMapKey(ref.connectionId, ref.zone.id));
+      if (!state?.rulesetLoaded || state.error) return { problem: state?.error ?? `${ref.zone.name} could not be read` };
+      const found = redirectRuleState(state.ruleset, redirect, redirectHosts(source, ref.zone.name));
+      if (found.state === "problem") return { problem: found.problem };
+      if (found.state !== "create" && state.ruleset) hits.push({ zone: this.zoneView(ref), rulesetId: state.ruleset.id, rule: found.rule });
     }
     if (hits.length > 1) {
-      return { problem: `Cloudflare redirect rules for ${source} exist in more than one zone; remove the extra rule in Cloudflare first` };
+      return { problem: `Cloudflare redirect rules for ${source} exist in more than one zone (${hits.map((hit) => hit.zone.name).join(", ")}); remove the extra rule in Cloudflare first` };
     }
     return hits[0] ?? null;
   }
