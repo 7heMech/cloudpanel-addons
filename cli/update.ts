@@ -9,7 +9,7 @@ import {
 import { reconcileAnchors, reconcileNginx, reconcilePanelBlocks } from "./reconcile";
 import { reconcilePhpGuard } from "../lib/php-guard";
 import { type AddonSpec } from "../lib/addon-definition";
-import { keepNewsSince, recordNewsSince } from "../manager/action";
+import { dailyCheck, keepNewsSince, recordNewsSince } from "../manager/action";
 import { operationLockEnv, withOperationLock } from "../lib/operation-lock";
 import { CLI_BIN, LEGACY_GH, MANAGER_UNIT, RECONCILE_SERVICE } from "../lib/paths";
 import {
@@ -222,6 +222,8 @@ async function applyUpdate(argv: string[], options: UpdateOptions): Promise<void
   const versionChanged = updatedFrom !== target;
   if (versionChanged) recordNewsSince(updatedFrom);
   const specs = finalizeUpdate(options.beforeManagerRestart);
+  // So the update notice clears now rather than at the next timer run.
+  await dailyCheck();
   if (specs.length === 0) {
     log.ok(versionChanged
       ? `clp-addons updated from ${updatedFrom} to ${target}; no addon service is configured`

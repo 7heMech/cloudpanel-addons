@@ -9,7 +9,7 @@ import { cmdStatus } from "./status";
 import { applyDisable, applyEnable } from "./toggle";
 import { cmdUpdate } from "./update";
 import { log, paint } from "../lib/log";
-import { checkCliUpdate, type CliUpdateInfo } from "../lib/update-check";
+import { savedUpdate, type CliUpdateInfo } from "../lib/update-check";
 
 const KEYS = "↑/↓ move · Space toggle · Enter apply · s status · r repair · u update · q quit";
 const QUIT_KEYS = ["q", "\x1b", "\x03", "\x04"];
@@ -107,7 +107,7 @@ export async function cmdMenu(): Promise<void> {
   const names = offeredAddonNames();
   const enabled = readEnabled(names);
   const state: MenuState = {
-    names, cursor: 0, enabled, wanted: new Set(enabled), manager: unitActive(MANAGER_UNIT), dashboard: dashboardUrl(), update: null,
+    names, cursor: 0, enabled, wanted: new Set(enabled), manager: unitActive(MANAGER_UNIT), dashboard: dashboardUrl(), update: savedUpdate(CLI_VERSION),
   };
   const input = process.stdin;
   const out = process.stdout;
@@ -192,9 +192,5 @@ export async function cmdMenu(): Promise<void> {
     capture();
     input.on("data", onKey);
     draw();
-    checkCliUpdate(CLI_VERSION).then((update) => {
-      state.update = update;
-      if (!busy && view.drawn) draw();
-    }, () => {});
   });
 }

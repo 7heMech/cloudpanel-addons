@@ -34,6 +34,7 @@ import {
 } from "../lib/gateway-protocol";
 import { getLivePanelInfo } from "../lib/panel-snapshot";
 import { lockDirection, lockRefusal, switchesOnOnly, verbLocked } from "../lib/root-locks";
+import { countAction } from "../lib/usage-share";
 
 export const MAX_AUTH_INPUT_BYTES = MAX_SESSION_ID_LENGTH + 1;
 const MAX_AUTH_REPLY_BYTES = 32 * 1024;
@@ -638,6 +639,8 @@ export function createAuthActionServer(options: AuthActionOptions = {}): net.Ser
             const trimmed = stdout.trim();
             if (trimmed.startsWith("{")) {
               socket.end(trimmed + "\n");
+              // After the answer, so counting can neither slow nor fail the action.
+              if (exitCode === 0) setImmediate(() => void countAction(request.addon, request.verb));
             } else {
               const err =
                 stderr.trim() ||

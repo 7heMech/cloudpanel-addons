@@ -196,44 +196,83 @@ them. Their daily recovery archive stops with Instatic's backup cron.
 `/var/lib/clp-addons` stays, since sites created before 1.1.3 keep their data
 there.
 
+## Daily update check
+
+Each server asks once per UTC day. `clp-addons repair --quiet`, which
+`clp-addons-reconcile.timer` runs as root every fifteen minutes, calls
+`runDailyCheck` in `lib/update-check.ts`; so do `install` and the updated
+binary's half of `update`, which ask at once because the saved answer is for
+another version. The answer goes to `/var/lib/clp-addons/update-check.json`,
+root-owned `0644`, which the manager (user `clp-addons`) reads through the state
+directory's group and the menu reads as root. Neither touches the network, so
+a page view never waits on it and each server makes one counted request a day.
+A check that reached nothing keeps the last answer, records `failedAt`, and the
+next try waits an hour. Development builds never ask.
+
+For the default repository the check is
+`POST https://clp.7he.dev/check` with `User-Agent: clp-addons/<version>` and:
+
+```json
+{ "version": "2.2.0", "channel": "stable", "arch": "x64" }
+```
+
+`channel` is `prerelease` for a box on a pre-release, which then follows
+pre-releases. The Worker answers `200`:
+
+```json
+{ "latest": "2.2.0", "update": true, "urgent": false, "usage": "none" }
+```
+
+`latest` is the release this server should be on, which the Worker may hold back
+or stage behind the newest one; `update` says whether to move to it; `urgent`
+marks a release between the two as urgent; `usage` is `saved`, `refused` or
+`none` for the opt-in part below. The box shows an update only when `update` is
+true and `latest` is newer than what runs. Any other status or shape, or no
+answer within five seconds, falls back to GitHub's releases API as before
+(`/releases/latest`, or the list of 100 for a pre-release). A custom `repo`
+asks GitHub only. The Worker only decides whether to update: `clp-addons
+update` still resolves, downloads and verifies the release from GitHub, so a
+held-back release is still installed by an explicit `clp-addons update`.
+
+## Opt-in addon usage sharing
+
+Nothing beyond the check is sent until root says yes, on the Setup page (the box
+is unticked) or with `clp-addons share-usage on`. Saying yes writes a random
+128-bit install ID to `/var/lib/clp-addons/manager/usage-sharing.json`
+(root-owned `0600`), and the daily check then also carries:
+
+```json
+"usage": {
+  "id": "3f9c1e7a2b6d4058a1c9e0f7b2d4a6c8",
+  "cloudpanel": "2.5.4",
+  "addons": ["dns", "firewall"],
+  "activity": { "dns": { "assign": 2 }, "firewall": { "set": 1 } }
+}
+```
+
+`activity` counts the addon actions the root gateway (`cli/auth-action.ts`) ran
+for the panel since the last send, kept in `usage-activity.json` beside the
+state file. The gateway counts after it has answered, under a two-second lock,
+and drops the count on any error, so counting cannot slow or fail an action.
+Only the names `countedActions()` in `lib/usage-actions.ts` lists are counted:
+each catalog addon's web verbs except streams and job polling (`job`, `jobs`).
+The same list is what the Worker accepts, so no domain, path, user name or error
+text can be counted or sent. A count stops at 10,000 between sends. When the
+Worker answers `usage: "saved"`, what was sent is subtracted, keeping what ran
+meanwhile; any other answer keeps the counts for the next day.
+
+Saying no, from either place, deletes the ID and the counts and sends
+`POST https://clp.7he.dev/forget` with `{ "id": "…" }`, which deletes that ID's
+rows. Until the Worker answers `200` the ID is kept as `forget` and the request
+is retried before each daily check. `clp-addons share-usage status` prints both
+parts with this server's values.
+
 ## Update behavior
 
 Updates are manual. The manager shows an available release and starts the same
 verified update path as `clp-addons update` only after an administrator selects
 **Install update**. The work runs in a transient systemd job because replacing
 the binary restarts the manager.
-
-Every request the manager serves asks whether a release is available, so the
-answer is held for fifteen minutes, refreshed by one call at a time, and served
-as it stands while that refresh runs. Only the first check waits on the network;
-a box with no outbound route would otherwise pay the timeout on every request.
-
-For the default repository (`7heMech/cloudpanel-addons`), `lib/update-check.ts`
-fetches `https://clp.7he.dev/releases.json` first with
-`User-Agent: clp-addons/<version>` and no extra headers or identifiers. That
-endpoint returns a `{ tag_name, draft, prerelease }[]` array, from which a box
-on a release picks the newest non-draft, non-prerelease tag and a box on a
-pre-release picks the newest non-draft tag. On any fetch error, non-200 status,
-body-read error, malformed JSON, or empty match, the check falls back to
-GitHub's releases API. Custom `repo` overrides query GitHub directly.
-
-## Opt-in addon usage sharing
-
-`lib/usage-share.ts` tracks whether root opted in to weekly addon usage sharing
-in `/var/lib/clp-addons/manager/usage-sharing.json`, a root-owned `0600` file
-holding `{ answered, enabled, lastSentAt, lastSentWeek, lastSentHash }`. Nothing
-is sent until root saves an answer with `enabled: true`.
-
-When enabled, `shareUsageIfDue` posts a four-field JSON object
-(`{ version, cloudpanel, arch, addons }`) to `https://clp.7he.dev/usage` with
-`User-Agent: clp-addons/<version>` and a 3-second timeout. No domains, IP
-addresses, email addresses, hostnames, or machine IDs are collected. To avoid
-repeat posts, the client stores the ISO 8601 week (`YYYY-Www`) and a local
-SHA-256 hash of the serialized payload after a 2xx reply; the hash is never
-sent. A changed addon set posts again within the same week, and a new week posts
-again even if the payload is unchanged. Network errors and non-2xx responses are
-ignored silently. Manager repair (`cli/repair.ts`) and addon enable or disable
-(`cli/toggle.ts`) trigger `shareCurrentUsage` best-effort.
 
 The native CloudPanel header asks the manager for update state; it does not
 depend on the updater process's compile-time version. That process can reconcile

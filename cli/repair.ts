@@ -4,7 +4,7 @@ import { resolveAddon, migrateOldAddonNames } from "./addons";
 import { reconcileAnchors, reconcileNginx, reconcilePanelBlocks, runAnchorWork } from "./reconcile";
 import { reconcilePhpGuard } from "../lib/php-guard";
 import { runAddonRepairs } from "./addon-hooks";
-import { pruneManagerJobs, shareCurrentUsage } from "../manager/action";
+import { dailyCheck, pruneManagerJobs } from "../manager/action";
 import { withOperationLock } from "../lib/operation-lock";
 import { conffilesReleased } from "./conffiles";
 import { CERTIFICATES_PATH, FIREWALL_PATH, MANAGER_UNIT, NEW_SITES_PATH, SYSTEMD_DIR } from "../lib/paths";
@@ -120,5 +120,5 @@ async function runManagerRepair(): Promise<void> {
   } catch (error) {
     log.warn(`manager (prune) failed: ${errorMessage(error)}`);
   }
-  await shareCurrentUsage();
+  await dailyCheck();
 }

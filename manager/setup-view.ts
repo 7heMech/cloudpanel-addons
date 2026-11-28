@@ -371,15 +371,28 @@ function guidesHtml(view: SetupView, stepIds: Set<string>): string {
 
 type UsageSharing = NonNullable<SetupView["usageSharing"]>;
 
+const USAGE_WHY = "It decides which addons get maintained. No domains, site names, user names or addresses are in it, and it is never shared with third parties. Turning it off deletes what this server sent.";
+
+/** Indented JSON with lists of names and per-addon counts on one line each. */
+export function compactJson(value: unknown): string {
+  return JSON.stringify(value, null, 2)
+    .replace(/\[\s+((?:"[^"\n]*",\s+)*"[^"\n]*")\s+\]/g, (_all, items: string) => `[${items.replace(/,\s+/g, ", ")}]`)
+    .replace(/\{\s+((?:"[^"\n]+": \d+,\s+)*"[^"\n]+": \d+)\s+\}/g, (_all, items: string) => `{ ${items.replace(/,\s+/g, ", ")} }`);
+}
+
+function usagePayloadHtml(sharing: UsageSharing): string {
+  return `<pre class="setup-share-payload">${esc(compactJson(sharing.payload))}</pre>`;
+}
+
 /** Asked once, above everything else, until root answers. */
 function usageShareAskHtml(sharing: UsageSharing | undefined): string {
   if (!sharing || sharing.answered) return "";
   return `<section class="card setup-share" aria-labelledby="setup-share-heading">
-    <h2 id="setup-share-heading">Help prioritize what gets maintained</h2>
-    <p>Once a week, this server can send exactly what is shown below; nothing is sent until you save.</p>
-    <pre class="setup-share-payload">${esc(JSON.stringify(sharing.payload, null, 2))}</pre>
+    <h2 id="setup-share-heading">Help decide which addons get maintained</h2>
+    <p>Once a day this server asks clp.7he.dev for updates with its version, release channel and architecture. If you opt in, that check also carries <code>usage</code>: a random ID, the enabled addons, the CloudPanel version and how many times each addon action ran since the last check. ${esc(USAGE_WHY)}</p>
+    ${usagePayloadHtml(sharing)}
     <form class="setup-share-form" onsubmit="setupSaveUsageSharing(event)">
-      <label class="setup-share-check"><input type="checkbox" name="enabled" checked> Share enabled addons</label>
+      <label class="setup-share-check"><input type="checkbox" name="enabled"> Share addon usage</label>
       <button class="btn btn-primary" type="submit">Save</button>
     </form>
   </section>`;
@@ -388,9 +401,9 @@ function usageShareAskHtml(sharing: UsageSharing | undefined): string {
 function usageShareLineHtml(sharing: UsageSharing | undefined): string {
   if (!sharing?.answered) return "";
   return `<div class="setup-share-line">
-    <label class="switch"><input type="checkbox" aria-label="Share enabled addons"${sharing.enabled ? " checked" : ""} onchange="setupToggleUsageSharing(this)"><span></span></label>
-    <span>Share enabled addons once a week</span>
-    <details><summary>What is sent</summary><pre class="setup-share-payload">${esc(JSON.stringify(sharing.payload, null, 2))}</pre></details>
+    <label class="switch"><input type="checkbox" aria-label="Share addon usage"${sharing.enabled ? " checked" : ""} onchange="setupToggleUsageSharing(this)"><span></span></label>
+    <span>Share addon usage with the daily update check</span>
+    <details><summary>What is sent</summary><p>${esc(USAGE_WHY)}</p>${usagePayloadHtml(sharing)}</details>
   </div>`;
 }
 

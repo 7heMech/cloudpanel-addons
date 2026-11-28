@@ -114,7 +114,8 @@ const mockPrelude = String.raw`
   // render, not to pin down what the manager is allowed to import from them.
   mock.module("./lib/app-http.ts", () => ({ ...appHttp, SECURITY_HEADERS: {}, esc: (v) => v, escJs: (v) => v }));
   mock.module("./lib/app-ui.ts", () => ({ ...appUi, renderLayout: () => "" }));
-  mock.module("./lib/update-check.ts", () => ({ checkCliUpdate: async () => null }));
+  const updateCheck = await import("./lib/update-check.ts");
+  mock.module("./lib/update-check.ts", () => ({ ...updateCheck, savedUpdate: () => null }));
 `;
 
 function makeRoot(): { root: string; jobsDir: string; jobDir: string } {

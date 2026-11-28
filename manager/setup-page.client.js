@@ -536,7 +536,7 @@ async function setupSaveUsageSharing(event) {
   if (button) button.disabled = true;
   try {
     await setupPostUsageSharing(enabled);
-    notify(enabled ? 'Sharing enabled addons once a week.' : 'Nothing will be shared.', 'ok');
+    notify(enabled ? 'The daily update check now shares addon usage.' : 'Addon usage will not be shared.', 'ok');
     await setupRefresh(null, false);
   } catch (error) {
     if (button) button.disabled = false;
@@ -548,7 +548,8 @@ async function setupToggleUsageSharing(input) {
   input.disabled = true;
   try {
     await setupPostUsageSharing(input.checked);
-    notify(input.checked ? 'Sharing enabled addons once a week.' : 'Usage sharing is off.', 'ok');
+    notify(input.checked ? 'The daily update check now shares addon usage.' : 'Usage sharing is off and what this server sent is deleted.', 'ok');
+    await setupRefresh(null, false);
   } catch (error) {
     input.checked = !input.checked;
     notify(error.message, 'error');

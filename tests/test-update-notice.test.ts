@@ -1,17 +1,23 @@
 // The update notice the addon puts on CloudPanel's own header, and the one it
 // puts on its own pages. Both read the same manager route, so what is pinned
 // here is that a stale notice is cleared as readily as a fresh one is shown.
-import { afterEach, describe, expect, test } from "bun:test";
+import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import { renderLayout } from "../lib/app-ui";
 import { CLI_VERSION } from "../lib/version";
 import { headerTarget, headerUpdateScript } from "../lib/panel-nav";
 import { isPrerelease } from "../lib/semver";
-import { checkCliUpdate, isNewerVersion, resetUpdateCache, WORKER_RELEASES_URL } from "../lib/update-check";
+import { chmodSync, mkdtempSync, rmSync, statSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import {
+  CHECK_URL, checkRequest, isNewerVersion, parseCheckAnswer, readSavedAnswer, runDailyCheck, savedUpdate, type UsageReport,
+} from "../lib/update-check";
+import { FORGET_URL } from "../lib/usage-share";
+import contract from "./fixtures/check-contract.json";
 
 const realFetch = globalThis.fetch;
 afterEach(() => {
   globalThis.fetch = realFetch;
-  resetUpdateCache();
 });
 
 test("native header follows the manager's update state and clears a restored stale notice", async () => {
@@ -200,79 +206,142 @@ describe("the snippet injected into CloudPanel's header", () => {
   });
 });
 
-describe("which releases a box is told about", () => {
-  // GitHub's "latest" is the newest release, and its list includes pre-releases.
-  const github = (asked: string[]) => (async (url: string) => {
-    asked.push(url);
-    const body = url.endsWith("/releases/latest")
-      ? { tag_name: "v2.0.0" }
-      : [{ tag_name: "v2.0.0", draft: false }, { tag_name: "v2.1.0-rc.2", draft: false }, { tag_name: "v2.1.0-rc.3", draft: true }];
-    return Response.json(body);
-  }) as unknown as typeof fetch;
-
-  test("a box running a pre-release is told about the newest one", async () => {
-    expect(isPrerelease("2.1.0-rc.1")).toBe(true);
-    const asked: string[] = [];
-    globalThis.fetch = github(asked);
-    expect(await checkCliUpdate("2.1.0-rc.1", "owner/repo")).toEqual({ current: "2.1.0-rc.1", latest: "2.1.0-rc.2", hasUpdate: true });
-    expect(asked).toEqual(["https://api.github.com/repos/owner/repo/releases?per_page=100"]);
+describe("the daily update check", () => {
+  const uid = process.getuid!();
+  let dir: string;
+  let file: string;
+  let lockFile: string;
+  beforeEach(() => {
+    dir = mkdtempSync(join(tmpdir(), "clp-update-check-"));
+    file = join(dir, "update-check.json");
+    lockFile = join(dir, "update-check.lock");
   });
+  afterEach(() => rmSync(dir, { recursive: true, force: true }));
 
-  test("a box running a release is told about releases only", async () => {
-    expect(isPrerelease("2.0.0")).toBe(false);
-    expect(isPrerelease("2.0.0+build.5")).toBe(false);
-    const asked: string[] = [];
-    globalThis.fetch = github(asked);
-    expect(await checkCliUpdate("1.5.2", "owner/repo")).toEqual({ current: "1.5.2", latest: "2.0.0", hasUpdate: true });
-    expect(asked).toEqual(["https://api.github.com/repos/owner/repo/releases/latest"]);
-  });
-
-  test("the default repo asks the worker first with only User-Agent and skips GitHub when it answers", async () => {
-    const calls: { url: string; headers: Record<string, string> }[] = [];
-    globalThis.fetch = (async (url: string, init?: RequestInit) => {
-      calls.push({ url, headers: (init?.headers ?? {}) as Record<string, string> });
-      return Response.json([
-        { tag_name: "v2.0.0", draft: false, prerelease: false },
-        { tag_name: "v2.1.0-rc.2", draft: false, prerelease: true },
-        { tag_name: "v2.2.0", draft: true, prerelease: false },
-      ]);
+  type Call = { url: string; method: string; body: unknown; headers: Record<string, string> };
+  const recorder = (answer: (url: string) => Response | Promise<Response>) => {
+    const calls: Call[] = [];
+    const fetcher = (async (url: string, init?: RequestInit) => {
+      calls.push({ url, method: init?.method ?? "GET", body: init?.body ? JSON.parse(String(init.body)) : null, headers: (init?.headers ?? {}) as Record<string, string> });
+      return answer(url);
     }) as unknown as typeof fetch;
+    return { calls, fetcher };
+  };
+  const day1 = new Date("2026-11-28T00:05:00Z");
+  const opts = (extra: Record<string, unknown> = {}) => ({ file, uid, lockFile, arch: "x64", ...extra });
 
-    expect(await checkCliUpdate("1.5.2")).toEqual({ current: "1.5.2", latest: "2.0.0", hasUpdate: true });
-    expect(calls).toEqual([{ url: WORKER_RELEASES_URL, headers: { "User-Agent": "clp-addons/1.5.2" } }]);
-
-    resetUpdateCache();
-    calls.length = 0;
-    expect(await checkCliUpdate("v2.1.0-rc.1")).toEqual({ current: "2.1.0-rc.1", latest: "2.1.0-rc.2", hasUpdate: true });
-    expect(calls).toEqual([{ url: WORKER_RELEASES_URL, headers: { "User-Agent": "clp-addons/2.1.0-rc.1" } }]);
+  test("sends only version, channel and arch, and saves the Worker's answer world-readable", async () => {
+    const { calls, fetcher } = recorder(() => Response.json({ latest: "2.2.0", update: true, urgent: false, usage: "none" }));
+    const saved = await runDailyCheck(opts({ version: "2.1.0", now: day1, fetch: fetcher }));
+    expect(calls).toEqual([{
+      url: CHECK_URL,
+      method: "POST",
+      body: { version: "2.1.0", channel: "stable", arch: "x64" },
+      headers: { "Content-Type": "application/json", "User-Agent": "clp-addons/2.1.0" },
+    }]);
+    expect(saved).toMatchObject({ day: "2026-11-28", version: "2.1.0", latest: "2.2.0", update: true, source: "worker" });
+    expect(statSync(file).mode & 0o777).toBe(0o644);
+    expect(savedUpdate("2.1.0", file, uid)).toEqual({ current: "2.1.0", latest: "2.2.0", hasUpdate: true });
   });
 
-  test("worker errors, non-200 replies, malformed JSON and body read errors fall back to GitHub", async () => {
-    const failures: (() => Promise<Response>)[] = [
-      async () => { throw new Error("worker unreachable"); },
-      async () => new Response("bad gateway", { status: 502 }),
-      async () => new Response(null, { status: 204 }),
-      async () => new Response("{not json", { status: 200 }),
-      async () => ({ status: 200, ok: true, json: () => Promise.reject(new Error("body aborted")) }) as unknown as Response,
-      async () => Response.json({ not: "an array" }),
-      async () => Response.json([]),
-      async () => Response.json([{ tag_name: "2.0.0", draft: false, prerelease: false }]),
+  test("asks once per UTC day, at once for a new version, and an hour after reaching nothing", async () => {
+    let fail = false;
+    const { calls, fetcher } = recorder(() => fail ? new Response("down", { status: 502 }) : Response.json({ latest: "2.2.0", update: true, urgent: false, usage: "none" }));
+    await runDailyCheck(opts({ version: "2.1.0", now: day1, fetch: fetcher }));
+    expect(await runDailyCheck(opts({ version: "2.1.0", now: new Date("2026-11-28T23:59:00Z"), fetch: fetcher }))).toBeNull();
+    expect(calls).toHaveLength(1);
+    await runDailyCheck(opts({ version: "2.2.0", now: new Date("2026-11-28T23:59:00Z"), fetch: fetcher }));
+    expect(calls).toHaveLength(2);
+    expect(savedUpdate("2.2.0", file, uid)?.hasUpdate).toBe(false);
+
+    fail = true;
+    const day2 = new Date("2026-11-29T00:05:00Z");
+    const failed = await runDailyCheck(opts({ version: "2.2.0", now: day2, fetch: fetcher }));
+    expect(calls.map((call) => call.url)).toEqual([CHECK_URL, CHECK_URL, CHECK_URL, "https://api.github.com/repos/7heMech/cloudpanel-addons/releases/latest"]);
+    expect(failed).toMatchObject({ day: "2026-11-28", latest: "2.2.0", failedAt: day2.toISOString() });
+    expect(await runDailyCheck(opts({ version: "2.2.0", now: new Date("2026-11-29T00:50:00Z"), fetch: fetcher }))).toBeNull();
+    fail = false;
+    expect(await runDailyCheck(opts({ version: "2.2.0", now: new Date("2026-11-29T01:06:00Z"), fetch: fetcher }))).toMatchObject({ day: "2026-11-29", failedAt: null });
+  });
+
+  test("a pre-release asks on the prerelease channel; urgent is kept while the update is pending", async () => {
+    const { calls, fetcher } = recorder(() => Response.json({ latest: "2.2.0-rc.4", update: true, urgent: true, usage: "none" }));
+    await runDailyCheck(opts({ version: "v2.2.0-rc.3", now: day1, fetch: fetcher }));
+    expect(calls[0]!.body).toEqual({ version: "2.2.0-rc.3", channel: "prerelease", arch: "x64" });
+    expect(savedUpdate("2.2.0-rc.3", file, uid)).toEqual({ current: "2.2.0-rc.3", latest: "2.2.0-rc.4", hasUpdate: true, urgent: true });
+    expect(savedUpdate("2.2.0-rc.4", file, uid)).toEqual({ current: "2.2.0-rc.4", latest: "2.2.0-rc.4", hasUpdate: false });
+  });
+
+  test("a held-back answer is honoured", async () => {
+    const { fetcher } = recorder(() => Response.json({ latest: "2.1.0", update: false, urgent: false, usage: "none" }));
+    await runDailyCheck(opts({ version: "2.1.0", now: day1, fetch: fetcher }));
+    expect(savedUpdate("2.1.0", file, uid)?.hasUpdate).toBe(false);
+  });
+
+  test("worker failures fall back to GitHub; another repo asks GitHub only and never sends usage", async () => {
+    const failures: (() => Response | Promise<Response>)[] = [
+      () => { throw new Error("unreachable"); },
+      () => new Response("bad", { status: 502 }),
+      () => new Response("{not json", { status: 200 }),
+      () => Response.json({ latest: "2.0", update: true, urgent: false }),
+      () => Response.json({ latest: "2.2.0", update: "yes", urgent: false }),
     ];
-
     for (const failWorker of failures) {
-      resetUpdateCache();
-      const asked: string[] = [];
-      globalThis.fetch = (async (url: string) => {
-        asked.push(url);
-        if (url === WORKER_RELEASES_URL) return failWorker();
-        return Response.json({ tag_name: "v2.0.0" });
-      }) as unknown as typeof fetch;
-
-      expect(await checkCliUpdate("1.5.2")).toEqual({ current: "1.5.2", latest: "2.0.0", hasUpdate: true });
-      expect(asked).toEqual([
-        WORKER_RELEASES_URL,
-        "https://api.github.com/repos/7heMech/cloudpanel-addons/releases/latest",
-      ]);
+      rmSync(file, { force: true });
+      const { calls, fetcher } = recorder((url) => url === CHECK_URL ? failWorker() : Response.json({ tag_name: "v2.2.0" }));
+      expect(await runDailyCheck(opts({ version: "2.1.0", now: day1, fetch: fetcher }))).toMatchObject({ latest: "2.2.0", update: true, source: "github" });
+      expect(calls.map((call) => call.url)).toEqual([CHECK_URL, "https://api.github.com/repos/7heMech/cloudpanel-addons/releases/latest"]);
     }
+
+    rmSync(file, { force: true });
+    let asked = false;
+    const { calls, fetcher } = recorder(() => Response.json([{ tag_name: "v2.2.0-rc.2", draft: false }, { tag_name: "v2.2.0-rc.3", draft: true }]));
+    await runDailyCheck(opts({ version: "2.2.0-rc.1", repo: "owner/repo", now: day1, fetch: fetcher, usage: () => { asked = true; return null; } }));
+    expect(calls.map((call) => call.url)).toEqual(["https://api.github.com/repos/owner/repo/releases?per_page=100"]);
+    expect(asked).toBe(false);
+    expect(readSavedAnswer(file, uid)).toMatchObject({ latest: "2.2.0-rc.2", source: "github" });
+  });
+
+  test("the opt-in part rides along, and only a saved answer settles the counts", async () => {
+    const usage: UsageReport = { id: "0123456789abcdef0123456789abcdef", cloudpanel: "2.5.4", addons: ["dns"], activity: { dns: { list: 2 } } };
+    for (const [reply, settles] of [["saved", true], ["refused", false]] as const) {
+      rmSync(file, { force: true });
+      const settled: UsageReport[] = [];
+      const { calls, fetcher } = recorder(() => Response.json({ latest: "2.1.0", update: false, urgent: false, usage: reply }));
+      await runDailyCheck(opts({ version: "2.1.0", now: day1, fetch: fetcher, usage: () => usage, onUsageSaved: (sent: UsageReport) => settled.push(sent) }));
+      expect(calls[0]!.body).toEqual({ version: "2.1.0", channel: "stable", arch: "x64", usage });
+      expect(settled).toEqual(settles ? [usage] : []);
+    }
+  });
+
+  test("the answer must be root's and not writable by others, and a dev build never asks", async () => {
+    writeFileSync(file, JSON.stringify({ day: "2026-11-28", version: "2.1.0", latest: "9.9.9", update: true }));
+    chmodSync(file, 0o666);
+    expect(savedUpdate("2.1.0", file, uid)).toBeNull();
+    const { calls, fetcher } = recorder(() => Response.json({}));
+    expect(await runDailyCheck(opts({ version: "0.0.0-dev", fetch: fetcher }))).toBeNull();
+    expect(calls).toEqual([]);
+  });
+
+  test("sends and parses the contract worker/index.ts is tested against (tests/fixtures/check-contract.json)", async () => {
+    const { usage } = contract.requestWithUsage;
+    expect(checkRequest("2.1.0", "x64")).toEqual(contract.request as never);
+    expect(checkRequest("2.1.0", "x64", usage)).toEqual(contract.requestWithUsage as never);
+    expect(parseCheckAnswer(contract.answer)).toEqual(contract.answer as never);
+    expect(parseCheckAnswer(contract.answerWithUsage)).toEqual(contract.answerWithUsage as never);
+    const { calls, fetcher } = recorder(() => Response.json(contract.answerWithUsage));
+    let settled = false;
+    await runDailyCheck(opts({ version: "2.1.0", now: day1, fetch: fetcher, usage: () => usage, onUsageSaved: () => { settled = true; } }));
+    expect(calls[0]!.body).toEqual(contract.requestWithUsage);
+    expect(settled).toBe(true);
+    expect(FORGET_URL).toBe("https://clp.7he.dev/forget");
+  });
+
+  test("request and answer shapes", () => {
+    expect(checkRequest("v2.2.0-rc.3", "arm64")).toEqual({ version: "2.2.0-rc.3", channel: "prerelease", arch: "arm64" });
+    expect(parseCheckAnswer({ latest: "2.2.0", update: true, urgent: false, usage: "saved", extra: 1 })).toEqual({ latest: "2.2.0", update: true, urgent: false, usage: "saved" });
+    expect(parseCheckAnswer({ latest: "2.2.0", update: true, urgent: false })).toEqual({ latest: "2.2.0", update: true, urgent: false, usage: "none" });
+    expect(parseCheckAnswer({ latest: "v2.2.0", update: true, urgent: false })).toBeNull();
+    expect(parseCheckAnswer([])).toBeNull();
   });
 });
