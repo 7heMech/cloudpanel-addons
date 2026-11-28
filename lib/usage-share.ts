@@ -55,6 +55,13 @@ export interface UsageSharingState {
 
 export type Activity = Record<string, Record<string, number>>;
 
+/** Counted names are allowlisted; null-prototype objects keep any other key inert anyway. */
+const counts = (): Record<string, number> => Object.create(null) as Record<string, number>;
+const isCounted = (addon: string, verb: string) => {
+  const actions = countedActions();
+  return Object.hasOwn(actions, addon) && actions[addon]!.includes(verb);
+};
+
 const str = (value: unknown) => typeof value === "string" && value ? value : null;
 const validId = (value: unknown) => typeof value === "string" && ID_RE.test(value) ? value : null;
 
@@ -111,14 +118,13 @@ export async function sendForget(options: UsagePaths & { fetch?: typeof fetch } 
 export function readActivity(options: UsagePaths = {}): Activity {
   const { activityFile, uid } = paths(options);
   const raw = readState<unknown>(activityFile, uid, () => null);
-  const allowed = countedActions();
-  const activity: Activity = {};
+  const activity: Activity = Object.create(null) as Activity;
   if (!raw || typeof raw !== "object") return activity;
   for (const [addon, verbs] of Object.entries(raw as Record<string, unknown>)) {
-    if (!Object.hasOwn(allowed, addon) || !verbs || typeof verbs !== "object") continue;
+    if (!verbs || typeof verbs !== "object") continue;
     for (const [verb, count] of Object.entries(verbs as Record<string, unknown>)) {
-      if (!allowed[addon]!.includes(verb) || typeof count !== "number" || !Number.isInteger(count) || count <= 0) continue;
-      (activity[addon] ??= {})[verb] = Math.min(count, MAX_ACTION_COUNT);
+      if (!isCounted(addon, verb) || typeof count !== "number" || !Number.isInteger(count) || count <= 0) continue;
+      (activity[addon] ??= counts())[verb] = Math.min(count, MAX_ACTION_COUNT);
     }
   }
   return activity;
@@ -130,13 +136,13 @@ export function readActivity(options: UsagePaths = {}): Activity {
  */
 export async function countAction(addon: string, verb: string, options: UsagePaths = {}): Promise<void> {
   try {
-    if (!countedActions()[addon]?.includes(verb)) return;
+    if (!isCounted(addon, verb)) return;
     const { activityFile, lockFile, uid } = paths(options);
     if (!readUsageSharing(options).enabled) return;
     await withFileLock(lockFile, 2, LOCK_BUSY, async () => {
       if (!readUsageSharing(options).enabled) return;
       const activity = readActivity(options);
-      const verbs = activity[addon] ??= {};
+      const verbs = activity[addon] ??= counts();
       verbs[verb] = Math.min((verbs[verb] ?? 0) + 1, MAX_ACTION_COUNT);
       writeState(activityFile, activity, uid);
     });
