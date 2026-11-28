@@ -627,8 +627,9 @@ non-administrators: the action is told the panel user and refuses a site
 fixed one when a non-administrator's site has a problem, since a plan's problems
 can name other sites and quote provider errors), a pending or newly created zone
 with its provider, nameservers, and `zoneCreated` flag, and the certificate
-names only: the site and `www` where the profile writes an address there, or
-covers `www` through an unobstructed wildcard. A site in no profile, or any site
+names only: the site and `www` where the HTTP profile writes an address there,
+or covers `www` through an unobstructed wildcard; a Mail profile's address row
+never counts. A site in no profile, or any site
 while DNS asks first, is not DNS's to hold up.
 A non-administrator's call checks the DNS provider only for a site created in
 the last fifteen minutes; for an older one it answers from the last check, so

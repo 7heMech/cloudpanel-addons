@@ -207,6 +207,27 @@ describe("composable HTTP and Mail roles", () => {
     expect(deleted.sites.find((s) => s.domain === "example.com")).toMatchObject({ httpRole: "site", httpProfileId: "web", mailProfileId: null });
   });
 
+  test("a Mail profile's address row does not make an empty HTTP role ready for a certificate", async () => {
+    const env = setup();
+    await env.connect();
+    const empty = await env.act("save-profile", { name: "Empty HTTP", role: "http", mailcow: false, records: [] });
+    const httpId = empty.profiles.find((p) => p.name === "Empty HTTP")!.id;
+    const withAddress = await env.act("save-profile", {
+      name: "Mail with address", role: "mail", mailcow: false,
+      records: [
+        { type: "A", name: "{domain}", content: "{ipv4}", ttl: 1 },
+        { type: "MX", name: "{domain}", content: "mx.example.net", priority: 10, ttl: 1 },
+      ],
+    });
+    const mailId = withAddress.profiles.find((p) => p.name === "Mail with address")!.id;
+    await env.act("assign", { domains: ["mail.example.com"], httpProfileId: httpId, mailProfileId: mailId });
+    await env.apply("set-automatic", { automatic: true });
+    expect(env.records()).toContain("A mail.example.com 203.0.113.10");
+
+    const reply = await env.act<ProvisionReply>("provision", undefined, ["--domain=mail.example.com", "--ssl"]);
+    expect(reply).toMatchObject({ managed: true, ready: false, reason: "The HTTP role manages no address for this site", certificateNames: [] });
+  });
+
   test("DNS-only site with a Mail role returns managed: false for SSL provisioning and applies Mail on admin provision", async () => {
     const env = setup();
     await env.connect();

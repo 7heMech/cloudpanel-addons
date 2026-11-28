@@ -691,7 +691,12 @@ export class DnsRun {
     }
     this.recordSibling(out, site, zoneKey, plan, rendered, diff, state.records, allWanted);
     if (site.panel) return plan;
-    const addresses = diff.wanted.filter((record) => ["A", "AAAA", "CNAME"].includes(record.type));
+    // Only the HTTP role's address rows make a name ready for a certificate; the zone as a whole shows they are in place.
+    const httpNames = new Set(http
+      ? renderProfile(http, this.vars(site.domain, resolved.ref.zone.name, http)).claims
+        .filter((claim) => ["A", "AAAA", "CNAME"].includes(claim.type)).map((claim) => claim.name)
+      : []);
+    const addresses = diff.wanted.filter((record) => ["A", "AAAA", "CNAME"].includes(record.type) && httpNames.has(record.name));
     const www = `www.${site.domain}`;
     const effective = [...state.records, ...diff.wanted, ...(ctx?.zoneRecords ?? [])];
     const wildcardHeld = Boolean(plan.held)
@@ -700,8 +705,8 @@ export class DnsRun {
       && addresses.some((record) => record.name === `*.${site.domain}`)
       && wildcardSource(www, resolved.ref.zone.name, effective)?.wildcard === `*.${site.domain}`;
     plan.certificateNames = [
-      ...(addresses.some((record) => record.name === site.domain) || diff.covered[site.domain] ? [site.domain] : []),
-      ...(addresses.some((record) => record.name === www) || diff.covered[www] || wwwByOwnWildcard ? [www] : []),
+      ...(addresses.some((record) => record.name === site.domain) || (httpNames.has(site.domain) && diff.covered[site.domain]) ? [site.domain] : []),
+      ...(addresses.some((record) => record.name === www) || (httpNames.has(www) && diff.covered[www]) || wwwByOwnWildcard ? [www] : []),
     ];
     return plan;
   }
