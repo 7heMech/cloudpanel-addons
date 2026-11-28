@@ -91,7 +91,7 @@ function setup() {
       plans: Object.fromEntries(redirectSources.map(({ source }) => [source, {
         domain: source, mode: "enforce", zone: edge.includes(source) ? view : null, changes: [], problems: [], zoneChoices: [],
       }])),
-      redirectRules: Object.fromEntries(tracked.map((source) => [source, { connectionId: "cf-1", zoneId: "z", zoneName: "example.org" }])),
+      redirectRules: Object.fromEntries(tracked.map((source) => [source, [{ connectionId: "cf-1", zoneId: "z", zoneName: "example.org" }]])),
     }), { mode: 0o600 });
   };
   const addDomain = (domain: string, roles: { httpProfileId?: string | null; mailProfileId?: string | null } = {}) =>

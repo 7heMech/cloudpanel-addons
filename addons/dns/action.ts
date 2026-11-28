@@ -717,7 +717,7 @@ class Action {
     for (const [key, nameServers] of freshCreated) {
       createdZones[key] = { at: this.now, nameServers };
     }
-    const { createdZones: _previousCreated, redirectRules: _legacyRules, ...restStatus } = status as Status & { redirectRules?: unknown };
+    const { createdZones: _previousCreated, ...restStatus } = status;
     this.files.saveStatus({
       ...restStatus,
       ...panelSettled && { panelProxied: run.panelProxied },

@@ -231,12 +231,7 @@ class Files {
   }
 
   status(): Status {
-    const status = { ...emptyStatus(), ...readState<Partial<Status>>(this.path("status"), this.paths.rootUid, emptyStatus) };
-    if (status.redirectRules) {
-      const stored = status.redirectRules as Record<string, TrackedRedirectRule | TrackedRedirectRule[]>;
-      status.redirectRules = Object.fromEntries(Object.entries(stored).map(([source, tracked]) => [source, [tracked].flat()]));
-    }
-    return status;
+    return { ...emptyStatus(), ...readState<Partial<Status>>(this.path("status"), this.paths.rootUid, emptyStatus) };
   }
 
   saveStatus(status: Status): void {
