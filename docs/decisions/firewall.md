@@ -309,7 +309,9 @@ read only local files and make zero Cloudflare API calls.
    live Cloudflare state, verifies both config hash and plan digest (showing a
    fresh review if Cloudflare changed in between, including a rule replaced
    with an identical-looking one; when no connection can be read, approving
-   or updating defaults is refused, at preparation and at confirmation alike),
+   or updating defaults is refused, at preparation and at confirmation alike,
+   and with no saved connection at all every confirmation is refused and the
+   review kept),
    applies changes to non-blocked zones, records `approved: true` with
    `approvedDigest`, and logs each write.
 3. **Automatic inheritance for new zones.** While `approved` is true and

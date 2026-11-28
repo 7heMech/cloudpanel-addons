@@ -5,7 +5,7 @@ import { join } from "node:path";
 import {
   DEFAULT_EDGE_DEFAULTS, EMPTY_EDGE_DEFAULTS, parseEdgeDefaults, planZoneEdge, type EdgeDefaults,
 } from "../lib/cloudflare/edge";
-import { cloudflareConnectionViews, saveCloudflareConnection, type CloudflareStorePaths } from "../lib/cloudflare/store";
+import { cloudflareConnectionViews, removeCloudflareConnection, saveCloudflareConnection, type CloudflareStorePaths } from "../lib/cloudflare/store";
 import {
   checkCloudflareEdge, chooseCloudflareEdgeZone, confirmCloudflareEdge, edgeActionNeeded, edgePageView,
   edgeSetupCheck, readEdgeConfig, reconcileCloudflareEdge, reviewCloudflareEdgeZone, saveCloudflareEdge,
@@ -551,6 +551,19 @@ describe("Firewall approve-once Cloudflare edge defaults", () => {
     const view = edgePageView(env.options).zones.find((entry) => entry.zoneId === zone.id)!;
     expect(view.status).toBe("error");
     expect(view.error).toContain("changed in Cloudflare");
+  });
+
+  test("confirming after the last Cloudflare connection is removed neither renews the review nor approves", async () => {
+    const env = makeEnv();
+    env.cf.zone("solo.example", env.agency);
+    const connected = await env.connect();
+    const review = await saveCloudflareEdge({ approve: true, defaults: DEFAULT_EDGE_DEFAULTS }, env.options);
+    expect(review.review!.zones.length).toBe(1);
+    await removeCloudflareConnection(connected.id, { paths: env.cfPaths });
+
+    await expect(confirmCloudflareEdge(review.review!.token, env.options)).rejects.toThrow("Connect Cloudflare first");
+    await expect(confirmCloudflareEdge(review.review!.token, env.options)).rejects.toThrow("Connect Cloudflare first");
+    expect(readEdgeConfig(env.options).approved).toBe(false);
   });
 
   test("confirming an approval while Cloudflare cannot be read neither renews the review nor approves", async () => {

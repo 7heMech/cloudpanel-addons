@@ -1230,6 +1230,9 @@ export async function confirmCloudflareEdge(token: string, options: EdgeOptions 
       clearPending(paths);
       failAction("Approve Cloudflare edge defaults first before applying changes to a single zone");
     }
+    if (listCloudflareSecrets(cfPathsOf(paths)).length === 0) {
+      failAction("Connect Cloudflare first before applying edge changes");
+    }
 
     const status = readEdgeStatus(paths);
     const discovery = await discoverZones(paths, config, options, pending.nextDefaults);
