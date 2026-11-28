@@ -1155,6 +1155,29 @@ describe("a CloudPanel site replaces a redirect", () => {
     expect(env.redirectRules("example.com")).toEqual([]);
   });
 
+  test("replacing a redirect deletes only the placeholders beside its rule, and a failed delete keeps the rule to retry them", async () => {
+    const env = setup();
+    env.cf.zone("own.example", env.account);
+    seededZone(env.cf, env.account, "edge.example", "https://example.com");
+    await env.act("save-connection", { token: TOKEN });
+    await env.automatic();
+    // A local redirect beside a proxied 100:: record someone else keeps, with no rule of the redirect's.
+    await env.confirmed(await env.act("save-redirect", { ...found("own.example", "https://example.com"), mode: "local" }));
+    env.cf.record("own.example", { type: "AAAA", name: "own.example", content: "100::", proxied: true, ttl: 1 });
+    env.sites.push({ id: 48, domain: "www.own.example", user: "own", selfSigned: false });
+    expect(await env.act<unknown>("sync-sites")).toEqual({ replaced: ["own.example"], waiting: [], blocked: [] });
+    expect(env.placeholders("own.example")).toEqual(["own.example"]);
+
+    await env.confirmed(await env.act("take-over", { redirects: [found("edge.example", "https://example.com")] }));
+    env.sites.push({ id: 49, domain: "edge.example", user: "edge", selfSigned: false });
+    env.cf.failOn = (method, path) => method === "DELETE" && path.includes("/dns_records/");
+    expect(await env.act<unknown>("sync-sites")).toEqual({ replaced: [], waiting: [], blocked: ["edge.example"] });
+    expect(env.redirectRules("edge.example")).toHaveLength(1);
+    await env.act("check");
+    expect(env.placeholders("edge.example")).toEqual([]);
+    expect(env.redirectRules("edge.example")).toEqual([]);
+  });
+
   test("keeps the redirect and reports a problem while its rule cannot be read or conflicts", async () => {
     const env = setup();
     seededZone(env.cf, env.account, "keep.example", "https://example.com");

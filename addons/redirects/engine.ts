@@ -890,15 +890,15 @@ export class RedirectsRun {
       const summary = fromValue?.status_code && target ? `${fromValue.status_code} to ${target}` : found.rule.description || found.rule.expression;
       removal.changes.push({ action: "delete", subject: "Cloudflare redirect rule", detail: summary });
     }
-    if (placeholders) {
-      for (const ref of this.deletionRefs(source, tracked)) {
-        const hosts = new Set(redirectHosts(source, ref.zone.name));
-        const records = this.zones.get(zoneMapKey(ref.connectionId, ref.zone.id))?.records ?? [];
-        for (const record of records) {
-          if (record.type !== "AAAA" || !hosts.has(record.name) || canonicalIpv6(record.content) !== PLACEHOLDER || !record.proxied) continue;
-          removal.records.push({ ref, record });
-          removal.changes.push({ action: "delete", subject: `${record.type} ${record.name}`, detail: describeWebRecord(record) });
-        }
+    // A placeholder is the redirect's only beside its rule, in the zone that holds it.
+    const ruleRef = found && this.deletionRefs(source, tracked).find((ref) => ref.zone.id === found.zone.id);
+    if (placeholders && ruleRef) {
+      const hosts = new Set(redirectHosts(source, ruleRef.zone.name));
+      const records = this.zones.get(zoneMapKey(ruleRef.connectionId, ruleRef.zone.id))?.records ?? [];
+      for (const record of records) {
+        if (record.type !== "AAAA" || !hosts.has(record.name) || canonicalIpv6(record.content) !== PLACEHOLDER || !record.proxied) continue;
+        removal.records.push({ ref: ruleRef, record });
+        removal.changes.push({ action: "delete", subject: `${record.type} ${record.name}`, detail: describeWebRecord(record) });
       }
     }
     if (standIn) {
@@ -913,20 +913,24 @@ export class RedirectsRun {
     return this.removals.get(source);
   }
 
-  /** Deletes what `removal` lists: the rule first, so a failure leaves the redirect whole. Never touches a site Redirects does not own. */
+  /**
+   * Deletes what `removal` lists: placeholders, then the rule that marks them
+   * the redirect's, so a failure leaves that mark for the retry; then the
+   * stand-in. Never touches a site Redirects does not own.
+   */
   async remove(source: string, removal: Removal, detail: string): Promise<void> {
+    for (const { ref, record } of removal.records) {
+      await this.apis.get(ref.connectionId)!.deleteRecord(ref.zone.id, record.id);
+      const state = this.zones.get(zoneMapKey(ref.connectionId, ref.zone.id));
+      if (state?.records) state.records = state.records.filter((entry) => entry.id !== record.id);
+      this.logged([source], ref.zone.name, "delete", `${record.type} ${record.name}`, detail);
+    }
     if (removal.rule) {
       const { zone, rulesetId, rule } = removal.rule;
       await this.apis.get(zone.connectionId)!.deleteRule(zone.id, REDIRECT_PHASE, rulesetId, rule.id);
       const state = this.zones.get(zoneMapKey(zone.connectionId, zone.id));
       if (state?.ruleset) state.ruleset = { ...state.ruleset, rules: state.ruleset.rules.filter((entry) => entry.id !== rule.id) };
       this.logged([source], zone.name, "delete", "Cloudflare redirect rule", detail);
-    }
-    for (const { ref, record } of removal.records) {
-      await this.apis.get(ref.connectionId)!.deleteRecord(ref.zone.id, record.id);
-      const state = this.zones.get(zoneMapKey(ref.connectionId, ref.zone.id));
-      if (state?.records) state.records = state.records.filter((entry) => entry.id !== record.id);
-      this.logged([source], ref.zone.name, "delete", `${record.type} ${record.name}`, detail);
     }
     const standIns = this.context.standIns;
     if (removal.standIn && standIns?.current[source]) {

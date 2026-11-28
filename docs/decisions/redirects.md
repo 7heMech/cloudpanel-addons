@@ -151,9 +151,9 @@ when a read of that zone shows no rule left. If any
 Cloudflare connection fails discovery, no connection lists a tracked zone,
 a zone cannot be read, a zone has conflicting rules, or more than one zone holds
 a rule for the redirect, deletion blocks rather than orphaning a Cloudflare
-rule. On confirmation, Redirects deletes the Cloudflare rule first, then any
-stand-in site, while leaving DNS records untouched; deleting a redirect a site
-has replaced also deletes its placeholder records.
+rule. On confirmation, Redirects deletes the Cloudflare rule, then any stand-in
+site, while leaving DNS records untouched; deleting a redirect a site has
+replaced also deletes its placeholder records, before the rule.
 
 ## Sites replace redirects
 
@@ -163,17 +163,20 @@ source, at a host it answers for, or at a host its rule covers in a zone where
 that rule is still tracked replaces the redirect. The plan for that
 redirect carries `replacedBy` and lists the removal: the Cloudflare rule (looked
 up as for deletion, in the selected, longest matching and tracked zones), the
-proxied `AAAA 100::` placeholder records at its hosts in those zones, and its
-owned stand-in site. No other record is touched, and the real site never is:
+proxied `AAAA 100::` placeholder records at its hosts in the zone holding that
+rule, and its owned stand-in site. A placeholder counts as the redirect's only
+beside its rule, so with no rule found none is deleted. No other record is touched, and the real site never is:
 `StandIns.remove` deletes a site only when `ownsStandInSite` matches.
 
 In Automatic mode the next run applies it without a review: the new-sites hook,
 a scheduled check, or Check now. Redirects declares `newSites`, which runs
 `sync-sites`; Redirects sits before DNS in catalog order so the redirect is gone
 before DNS's hook plans the new site's records. `sync-sites` first checks,
-without the lock or any Cloudflare call, whether a site uses a redirect's source,
+without the lock or any Cloudflare call (the locked run then reads stand-ins
+afresh), whether a site uses a redirect's source,
 its `www`, or a custom stand-in host, and returns at once when none does. The
-rule is deleted first, then placeholders, then the stand-in. The redirect is then
+placeholders are deleted first, then the rule, so a failed delete keeps the rule
+that marks them for the retry, then the stand-in. The redirect is then
 dropped from the policy, its plan, tracked zones and hold, and each step is
 logged "Replaced by the site <domain>".
 
