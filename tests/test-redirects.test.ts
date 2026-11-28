@@ -1136,6 +1136,25 @@ describe("a CloudPanel site replaces a redirect", () => {
     expect(env.redirectRules("swap.example")).toEqual([]);
   });
 
+  test("a site at a host only the tracked rule's zone covers still replaces the redirect, blocked until that zone is reachable", async () => {
+    const env = setup();
+    env.cf.zone("example.com", env.account);
+    env.cf.zone("sub.example.com", env.account);
+    await env.act("save-connection", { token: TOKEN });
+    await env.automatic();
+    await env.confirmed(await env.act("save-redirect", found("sub.example.com", "https://example.net")));
+    expect(env.redirectRules("sub.example.com")).toHaveLength(1);
+
+    // The token stops listing the child zone, so sub.example.com now resolves to example.com, where www is not its host.
+    env.cf.zones = env.cf.zones.filter((zone) => zone.name !== "sub.example.com");
+    env.sites.push({ id: 47, domain: "www.sub.example.com", user: "www", selfSigned: false });
+    expect(await env.act<unknown>("sync-sites")).toEqual({ replaced: [], waiting: [], blocked: ["sub.example.com"] });
+    const plan = (await env.act("list")).redirects[0]!.plan!;
+    expect(plan.replacedBy).toBe("www.sub.example.com");
+    expect(plan.problems.join(" ")).toContain("sub.example.com, where the Cloudflare rule for sub.example.com was last seen, is not reachable");
+    expect(env.redirectRules("example.com")).toEqual([]);
+  });
+
   test("keeps the redirect and reports a problem while its rule cannot be read or conflicts", async () => {
     const env = setup();
     seededZone(env.cf, env.account, "keep.example", "https://example.com");

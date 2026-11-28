@@ -159,7 +159,8 @@ has replaced also deletes its placeholder records.
 
 A real CloudPanel site (not the redirect's own stand-in, judged by
 `ownsStandInSite` and `isStandInSite` in `lib/stand-ins.ts`) at a redirect's
-source or at a host it answers for replaces the redirect. The plan for that
+source, at a host it answers for, or at a host its rule covers in a zone where
+that rule is still tracked replaces the redirect. The plan for that
 redirect carries `replacedBy` and lists the removal: the Cloudflare rule (looked
 up as for deletion, in the selected, longest matching and tracked zones), the
 proxied `AAAA 100::` placeholder records at its hosts in those zones, and its

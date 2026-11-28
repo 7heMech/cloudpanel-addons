@@ -443,9 +443,10 @@ export class RedirectsRun {
     return this.standInHostsFor(redirect);
   }
 
-  /** The real CloudPanel site at `redirect`'s source or at a host it answers for. */
+  /** The real CloudPanel site at `redirect`'s source or at a host it answers for, here or through a rule still tracked elsewhere. */
   replacingSite(redirect: Redirect): string | null {
-    return [redirect.source, ...this.effectiveHosts(redirect)].find((host) => this.context.siteDomains.has(host)) ?? null;
+    const tracked = (this.context.tracked?.[redirect.source] ?? []).flatMap((rule) => redirectHosts(redirect.source, rule.zoneName));
+    return [redirect.source, ...this.effectiveHosts(redirect), ...tracked].find((host) => this.context.siteDomains.has(host)) ?? null;
   }
 
   /** One problem per other redirect that answers for any of `redirect`'s hosts. */
