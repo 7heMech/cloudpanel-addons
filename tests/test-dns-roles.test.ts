@@ -284,6 +284,29 @@ describe("tracked records follow the roles", () => {
     expect(tracked()).toContain("MX example.com");
     expect(tracked()).toContain("TXT example.com");
   });
+
+  test("deleting the HTTP profile keeps tracking a custom TXT that the Mail profile still writes", async () => {
+    const env = setup();
+    await env.connect();
+    const row = (type: string, name: string, content: string, priority: number | null = null) =>
+      ({ type, name, content, proxied: false, ttl: 1, priority, apexOnly: false });
+    await env.act("save-profile", { name: "Verify", role: "mail", mailcow: false, records: [
+      row("MX", "{domain}", "mx.example.net", 10),
+      row("TXT", "_verify.{domain}", "token=abc"),
+    ] });
+    await env.act("assign", { domains: ["example.com"], httpProfileId: "web", mailProfileId: "verify" });
+    await env.apply("set-automatic", { automatic: true });
+    const tracked = () => {
+      const managed = JSON.parse(readFileSync(join(env.dir, "state", "managed.json"), "utf8"));
+      return (managed["example.com"]?.records ?? []).map((record: { type: string; name: string; content: string }) => `${record.type} ${record.name} ${record.content}`);
+    };
+    expect(tracked()).toContain("TXT _verify.example.com token=abc");
+
+    env.outage.cloudflare = true;
+    await env.act("delete-profile", { id: "web" });
+    expect(tracked().filter((record: string) => record.startsWith("A "))).toEqual([]);
+    expect(tracked()).toContain("TXT _verify.example.com token=abc");
+  });
 });
 
 describe("DNS-only domains", () => {
