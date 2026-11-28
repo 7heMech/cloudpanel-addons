@@ -140,11 +140,10 @@ move through `review-redirect`. Once a Cloudflare rule and placeholder are in
 place on an active zone, Redirects deletes the retired stand-in site.
 
 Deleting a redirect, whether Redirects is Automatic or asks first, always
-removes its Cloudflare rule. With a Cloudflare connection, or a zone where the
-rule was last seen, it shows a review listing the rule and any stand-in site it
-deletes, and applies it only on confirmation of that plan's digest, which covers
-the rule itself. With neither, the page confirms and the stand-in site is
-deleted at once. The check covers connected Cloudflare zones even when the
+removes its Cloudflare rule. The server always shows a review listing the rule
+and any stand-in site it deletes, even with no Cloudflare connection, and
+applies it only on confirmation of that plan's digest, which covers the rule
+itself. The check covers connected Cloudflare zones even when the
 redirect is currently `mode: "local"` or served by a stand-in. It reads the selected zone, the longest matching zones, and every zone
 where it has seen the redirect's rule (`status.redirectRules`). A check adds
 the selected zone once it finds the rule there, and drops a tracked zone only

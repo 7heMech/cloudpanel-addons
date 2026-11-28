@@ -14,7 +14,7 @@ export const REDIRECTS_ADDON: AddonDefinition = {
   changed: [
     {
       in: "2.3.0-rc.1",
-      note: "Redirect domains and local stand-in sites moved out of DNS into this standalone Redirects addon. A CloudPanel site created at a redirect's domain now replaces the redirect: Redirects removes its Cloudflare rule and stand-in site, at once when Automatic and after review in Ask first. Deleting a redirect always removes its Cloudflare rule, after a review.",
+      note: "Redirect domains and local stand-in sites moved out of DNS into this standalone Redirects addon. A CloudPanel site created at a redirect's domain now replaces the redirect: Redirects removes its Cloudflare rule and stand-in site, at once when Automatic and after review in Ask first. Deleting a redirect always removes its Cloudflare rule, after a review; deleting or replacing waits while that rule cannot be read.",
     },
   ],
   targets: CREATE_SITE_TARGETS,

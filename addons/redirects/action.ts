@@ -741,21 +741,15 @@ class Action {
   }
 
   /**
-   * With Cloudflare connected, or a rule seen before, deleting always shows a
-   * review of what it removes there, whether or not Redirects is Automatic, and
-   * blocks while the rule cannot be read.
+   * Deleting always shows a review of what it removes, whether or not
+   * Redirects is Automatic, and blocks while a Cloudflare rule cannot be read.
    */
   async deleteRedirect(source: string, notice?: string): Promise<RedirectsReply> {
     const policy = this.files.policy();
     if (!policy.redirects.some((redirect) => redirect.source === source)) failAction("That redirect no longer exists");
     const tracked = this.files.status().redirectRules?.[source] ?? [];
-    const hasCf = readCloudflareConnections(this.files.cfPaths).length > 0;
-    const { run, removal, replacedBy, plans, digest } = await this.deletionPlan(source);
-    if (!hasCf && !tracked.length) {
-      await run.remove(source, removal, replacedBy ? `Replaced by the site ${replacedBy}` : "The redirect domain was deleted");
-      this.forget([source]);
-      return this.reply({ notice: removal.standIn ? `Deleted ${source} and its stand-in site.` : `${source} is no longer managed.` });
-    }
+    const cloudflare = readCloudflareConnections(this.files.cfPaths).length > 0 || tracked.length > 0;
+    const { removal, plans, digest } = await this.deletionPlan(source);
     const blocked = removal.problems.length > 0;
     const token = blocked ? "" : randomBytes(24).toString("hex");
     this.files.savePending(blocked ? null : {
@@ -767,10 +761,10 @@ class Action {
       deleteSource: source,
     });
     const parts = [
-      removal.rule ? `Its rule is deleted from Cloudflare, so ${source} stops redirecting.` : "No Cloudflare rule was found for it.",
+      removal.rule ? `Its rule is deleted from Cloudflare, so ${source} stops redirecting.` : cloudflare ? "No Cloudflare rule was found for it." : "",
       removal.records.length ? "Its placeholder records are deleted." : "",
-      removal.standIn ? "Its stand-in site is deleted." : "",
-      "Other DNS records stay untouched.",
+      removal.standIn ? `Its stand-in site is deleted${removal.rule ? "" : `, so ${source} stops redirecting`}.` : "",
+      removal.rule || removal.records.length || removal.standIn ? "Other DNS records stay untouched." : "Redirects stops managing it.",
     ];
     return this.reply({
       notice,

@@ -1055,6 +1055,19 @@ describe("a CloudPanel site replaces a redirect", () => {
     expect(env.redirectRules("quiet.example")).toHaveLength(1);
   });
 
+  test("deleting a redirect with no Cloudflare connection is still a server review, so the page never deletes on a stale view", async () => {
+    const env = setup();
+    await env.automatic();
+    await env.confirmed(await env.act("save-redirect", { ...found("plain.example", "https://example.com"), mode: "local" }));
+    expect(env.standIns.current["plain.example"]).toBeDefined();
+    const review = await env.act("delete-redirect", { source: "plain.example" });
+    expect(review.review!.text).toBe("Its stand-in site is deleted, so plain.example stops redirecting. Other DNS records stay untouched.");
+    expect(env.standIns.calls).not.toContain("remove plain.example");
+    const deleted = await env.confirmed(review);
+    expect(env.standIns.calls).toContain("remove plain.example");
+    expect(deleted.redirects).toEqual([]);
+  });
+
   test("the new-sites hook reads stand-ins again once it holds the lock, so a stand-in retired meanwhile does not hide its site", async () => {
     const env = setup();
     await env.automatic();

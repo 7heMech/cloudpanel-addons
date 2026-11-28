@@ -146,21 +146,10 @@ function redirSave(event) {
   }, CLP_ROOT.getElementById('redir-edit-dialog'));
 }
 
-async function redirDelete() {
-  const dialog = CLP_ROOT.getElementById('redir-edit-dialog');
+function redirDelete() {
   const source = CLP_ROOT.getElementById('redir-edit-form').elements.namedItem('source').value;
-  const redirect = redirFindEntry(source);
-  dialog.close();
-  if ((redirState.connections || []).length) return redirPost('/api/redirects/delete', { source: source });
-  const accepted = await confirmAction({
-    title: 'Delete the redirect for ' + source + '?',
-    text: redirect && redirect.standIn
-      ? 'Its stand-in site is deleted from this server, so ' + source + ' stops redirecting. Non-web DNS records stay untouched.'
-      : 'Redirects stops managing it.',
-    confirmLabel: 'Delete',
-    danger: true,
-  });
-  if (accepted) redirPost('/api/redirects/delete', { source: source });
+  CLP_ROOT.getElementById('redir-edit-dialog').close();
+  redirPost('/api/redirects/delete', { source: source });
 }
 
 // --- Details dialog --------------------------------------------------------
