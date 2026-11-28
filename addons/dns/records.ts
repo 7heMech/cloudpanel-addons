@@ -194,36 +194,6 @@ export function renderProfile(profile: Profile, vars: SiteVars, skip?: (name: st
 const WEB_TYPES = new Set(["A", "AAAA", "CNAME"]);
 const ADDRESS_TYPES = new Set(["A", "AAAA"]);
 
-/**
- * What a redirect domain wants: its profile's rows, if it has one, without the
- * web rows -- address and CNAME rows at the domain, its `www` and its `*.` --
- * and either a proxied edge placeholder (`placeholder` set, such as Cloudflare's
- * `100::`) or unproxied A and AAAA records pointing to this server's addresses
- * (`placeholder === null`, for providers without edge redirect rules where a
- * local stand-in site answers HTTP/HTTPS).
- */
-export function renderRedirect(profile: Profile | null, hosts: string[], vars: SiteVars, placeholder: string | null): Rendered {
-  const own = new Set([vars.domain, `www.${vars.domain}`, `*.${vars.domain}`]);
-  const web = (name: string, type: string) => own.has(name) && WEB_TYPES.has(type);
-  const rendered: Rendered = profile ? renderProfile(profile, vars, web) : { zone: vars.zone, records: [], claims: [], waitingDkim: [], problems: [] };
-  if (placeholder !== null) {
-    for (const host of hosts) {
-      rendered.records.push({ type: "AAAA", name: host, content: placeholder, proxied: true, ttl: 1, priority: null });
-      rendered.claims.push({ name: host, type: "A" }, { name: host, type: "AAAA" });
-    }
-    return rendered;
-  }
-  if (vars.ipv4 === null) rendered.problems.push("This server's IPv4 address could not be detected; set it under Server addresses");
-  if (vars.ipv6 === null) rendered.problems.push("This server's IPv6 address could not be detected; set it under Server addresses");
-  if (vars.ipv4 === "" && vars.ipv6 === "") rendered.problems.push("This server has no IPv4 or IPv6 address for this redirect; set one under Server addresses");
-  for (const host of hosts) {
-    rendered.claims.push({ name: host, type: "A" }, { name: host, type: "AAAA" });
-    if (vars.ipv4) rendered.records.push({ type: "A", name: host, content: vars.ipv4, proxied: false, ttl: 1, priority: null });
-    if (vars.ipv6) rendered.records.push({ type: "AAAA", name: host, content: canonical("AAAA", vars.ipv6), proxied: false, ttl: 1, priority: null });
-  }
-  return rendered;
-}
-
 /** Resolves proxy flags and Auto TTL against a provider's capabilities before diffing. */
 export function normalizeRenderedForProvider(
   rendered: Rendered,

@@ -2,8 +2,8 @@ import CLIENT_BODY from "./views.client.js" with { type: "text" };
 import STYLE from "./views.css" with { type: "text" };
 import { esc } from "../../../lib/app-http";
 import {
-  ATTENTION_RANK, FLEET_FOOTER_HTML, FLEET_SELECTION_HTML, FLEET_ROW_SELECTION_JS, PHONE_CUT,
-  fleetFilterHtml, filterWord, phoneMoreHtml, renderLayout, sectionShellHtml, valueFilters, type SectionTab,
+  ATTENTION_RANK, FLEET_FOOTER_HTML, FLEET_SELECTION_HTML, FLEET_ROW_SELECTION_JS,
+  fleetFilterHtml, filterWord, renderLayout, sectionShellHtml, valueFilters, type SectionTab,
 } from "../../../lib/app-ui";
 import { mountPath } from "../../../lib/mount";
 import type { DnsState, SiteView } from "../action";
@@ -22,11 +22,7 @@ export function layout(title: string, content: string, notice?: { current: strin
 }
 
 const TYPE_LABELS: Record<string, string> = {
-  wordpress: "WordPress", php: "PHP", static: "Static", nodejs: "Node.js", python: "Python", "reverse-proxy": "Reverse proxy", redirect: "Redirect",
-};
-
-const REDIRECT_STATUS_LABELS: Record<number, string> = {
-  301: "301 Moved permanently", 302: "302 Found (temporary)", 307: "307 Temporary, same method", 308: "308 Permanent, same method",
+  wordpress: "WordPress", php: "PHP", static: "Static", nodejs: "Node.js", python: "Python", "reverse-proxy": "Reverse proxy",
 };
 
 const plural = (count: number, word: string): string => `${count} ${word}${count === 1 ? "" : "s"}`;
@@ -77,13 +73,8 @@ function profileRow(profile: DnsState["profiles"][number], hasCloudflare: boolea
 /** What one site's DNS amounts to, in a word and a line. */
 export function siteStatus(site: SiteView, automatic: boolean, singleConnection = false): { label: string; tone: string; hint: string } {
   const plan = site.plan;
-  if (!site.profileId && !site.redirect) return { label: "—", tone: "muted", hint: "" };
+  if (!site.profileId) return { label: "—", tone: "muted", hint: "" };
   if (!plan) return { label: "Not checked yet", tone: "muted", hint: "" };
-  if (site.redirect && !plan.zone && !plan.problems.length) {
-    const pending = plan.changes.some((change) => change.action !== "note");
-    if (site.redirect.standIn && !pending) return { label: "On this server", tone: "ok", hint: "Served by a stand-in site" };
-    return { label: site.redirect.standIn ? "Stand-in to update" : "Stand-in to create", tone: "warn", hint: automatic ? "" : "DNS asks first" };
-  }
   const suffix = plan.zone && !singleConnection ? ` · ${plan.zone.connection}` : "";
   const zone = plan.zone ? `${plan.zone.name}${suffix}` : "";
   if (plan.problems.length) return { label: "Needs attention", tone: "bad", hint: plan.problems[0]! };
@@ -110,40 +101,6 @@ function statusCell(site: SiteView, automatic: boolean, singleConnection = false
   const status = siteStatus(site, automatic, singleConnection);
   return `${status.label === "—" ? '<span class="tone-muted">—</span>' : `<span class="badge tone-${status.tone}">${esc(status.label)}</span>`}${hintLine(status.hint)}${
     site.ssl ? hintLine(site.ssl.startsWith("Waiting for DNS") ? "Certificate requested; waits for DNS" : `Certificate: ${site.ssl}`) : ""}`;
-}
-
-/** Who answers the redirect now, in the words the Details dialog uses at more length. */
-function servedBy(site: SiteView, state: DnsState): string {
-  if (site.plan?.zone) return site.plan.zone.provider === "powerdns" ? "by a stand-in site" : "by Cloudflare";
-  if (site.redirect!.standIn) return "by a stand-in site";
-  const hasCf = state.connections.some((connection) => connection.provider === "cloudflare");
-  const hasPdns = state.connections.some((connection) => connection.provider === "powerdns");
-  return hasCf && !hasPdns ? "by Cloudflare" : "by a stand-in site once Automatic";
-}
-
-/**
- * A redirect domain's row. It is not a site row (no `data-domain`), so the
- * Sites table's selection, filter and sort leave it alone; its profile, for
- * the mail rows, is chosen in Edit.
- */
-function redirectRow(site: SiteView, state: DnsState): string {
-  const redirect = site.redirect!;
-  const profile = state.profiles.find((candidate) => candidate.id === site.profileId);
-  const kept = [redirect.keepPath && "path", redirect.keepQuery && "query"].filter(Boolean);
-  const domain = esc(site.domain);
-  const target = esc(redirect.target.replace(/^https?:\/\//, ""));
-  // A phone card heads with "domain → target" and drops the Redirects to cell's own copy.
-  return `<tr data-redirect="${domain}">
-    <td class="site-cell"><strong>${domain}</strong><span class="dns-card-target"><span aria-hidden="true">→</span><span class="visually-hidden">redirects to</span> ${target}</span></td>
-    <td data-label="Redirects to" class="dns-redirect-cell"><span class="dns-redirect-target" title="${esc(redirect.target)}">${target}</span>
-      <span class="hint">${redirect.status}${kept.length ? ` · keeps ${kept.join(" and ")}` : ""} · ${servedBy(site, state)}</span></td>
-    <td data-label="Profile" class="dns-redirect-profile">${profile ? esc(profile.name) : '<span class="tone-muted">No profile</span>'}</td>
-    <td data-label="DNS" class="dns-status">${statusCell(site, state.automatic, state.connections.length <= 1)}</td>
-    <td class="action-cell"><div class="actions">
-      <button class="btn" type="button" onclick="dnsEditRedirect('${domain}')">Edit</button>
-      <button class="btn" type="button" onclick="dnsShowSite('${domain}')">Details</button>
-    </div></td>
-  </tr>`;
 }
 
 function siteRow(site: SiteView, state: DnsState): string {
@@ -281,7 +238,7 @@ function newZonesRow(state: DnsState): string {
 function connectionsCard(state: DnsState): string {
   const rows = state.connections.map(connectionRow).join("");
   return `<div class="card" id="dns-connection"><div class="card-header"><div><h2>DNS connections</h2>
-      <p class="hint">Cloudflare connections are shared with Firewall. A site uses the longest matching zone across connected providers.</p></div>
+      <p class="hint">Cloudflare connections are shared with Redirects and Firewall. A site uses the longest matching zone across connected providers.</p></div>
       <div class="actions dns-connection-actions">
         <button class="btn" type="button" onclick="dnsEditConnection('', 'cloudflare')">Add Cloudflare</button>
         <button class="btn" type="button" onclick="dnsEditConnection('', 'powerdns')">Add PowerDNS</button>
@@ -391,19 +348,18 @@ function setupCard(state: DnsState): string {
   const step = (done: boolean, title: string, hint: string, control: string): string =>
     `<li class="${done ? "done" : ""}"><div><strong>${title}</strong><span class="hint">${hint}</span></div><div class="dns-step-control">${control}</div></li>`;
   return `<div class="card dns-setup" id="dns-connection"><h2>Set up DNS</h2><ol class="dns-checklist">
-    ${step(false, "Connect a DNS provider", "Connect Cloudflare (shared with Firewall) or a PowerDNS Authoritative API v1 server.",
+    ${step(false, "Connect a DNS provider", "Connect Cloudflare (shared with Redirects and Firewall) or a PowerDNS Authoritative API v1 server.",
       '<div class="actions dns-setup-actions"><button class="btn btn-primary" type="button" onclick="dnsEditConnection(\'\', \'cloudflare\')">Connect Cloudflare</button><button class="btn" type="button" onclick="dnsEditConnection(\'\', \'powerdns\')">Connect PowerDNS</button></div>')}
     ${step(Boolean(fallback), "Choose the profile for new sites", "A new site joins it seconds after CloudPanel creates it. Existing sites are never moved.",
       `<select id="dns-setup-default" aria-label="Profile for new sites" onchange="dnsSetDefault(this)">${profileOptions(state.profiles, state.defaultProfileId, "No profile")}</select>`)}
     ${step(state.automatic, "Turn on Automatic", "Until then DNS previews changes and writes nothing.",
-      state.automatic ? '<span class="tone-ok">On</span>' : state.sites.some((site) => site.redirect) ? "" : '<span class="hint">After connecting</span>')}
+      state.automatic ? '<span class="tone-ok">On</span>' : '<span class="hint">After connecting</span>')}
   </ol></div>`;
 }
 
-/** Shown on the Sites tab while DNS asks first, or before connecting when stand-in redirects exist. */
+/** Shown on the Sites tab while DNS asks first. */
 function modeBar(state: DnsState): string {
-  if (state.automatic) return "";
-  if (!state.connections.length && !state.sites.some((site) => site.redirect)) return "";
+  if (state.automatic || !state.connections.length) return "";
   const plans = state.sites.flatMap((site) => site.plan ? [site.plan] : []);
   const changes = plans.flatMap((plan) => plan.changes.filter((change) => change.action !== "note"));
   const zones = new Set(changes.filter((change) => change.subject.endsWith(" zone")).map((change) => change.detail.split(" ")[0])).size;
@@ -426,25 +382,6 @@ function logRow(line: DnsState["log"][number]): string {
     <td class="wide-cell dns-change-detail">${esc(line.detail)}${line.before ? `<span class="hint">Was: ${esc(line.before)}</span>` : ""}</td></tr>`;
 }
 
-/**
- * Redirect domains get a card of their own: they are planned and checked with
- * the sites, but they are not CloudPanel sites, and a Sites table holding both
- * read as one list doing two jobs.
- */
-function redirectsCard(state: DnsState, redirects: SiteView[]): string {
-  const hasCloudflare = state.connections.some((connection) => connection.provider === "cloudflare");
-  const tools = `<div class="dns-redirect-tools">${hasCloudflare ? '<button class="btn" type="button" onclick="dnsFindRedirects(this)">Find redirects in Cloudflare</button>' : ""}
-    <button class="btn${state.connections.length ? " btn-primary" : ""}" type="button" onclick="dnsEditRedirect('')">Add redirect</button></div>`;
-  return `<div class="card card-table"><div class="card-header"><div><h2>Redirects</h2>
-      <p class="hint">Domains with no site here forwarded to another address.</p></div>${tools}</div>
-    ${redirects.length ? `<div class="table-scroll"><table class="fleet-table dns-redirect-table"><thead><tr>
-        <th>Domain</th><th>Redirects to</th><th>Profile</th><th>DNS</th><th class="action-cell"></th>
-      </tr></thead><tbody data-phone-cut="dns-redirects">${redirects.map((site) => redirectRow(site, state)).join("")}</tbody></table></div>
-      ${redirects.length > PHONE_CUT ? phoneMoreHtml("dns-redirects", `Show all ${plural(redirects.length, "redirect")}`) : ""}`
-      : '<div class="empty">No redirect domains yet.</div>'}
-  </div>`;
-}
-
 export function dashboardView(state: DnsState): string {
   return `<div id="dns-root">${dashboardContent(state)}</div>${DIALOGS}`;
 }
@@ -463,22 +400,21 @@ function connectionAttention(state: DnsState): "bad" | "warn" | undefined {
 /** Everything a change can alter, repainted in place from the action's reply. */
 export function dashboardContent(state: DnsState, now = Date.now()): string {
   const data = JSON.stringify(state).replaceAll("<", "\\u003c");
-  const plain = state.sites.filter((site) => !site.redirect);
-  const redirects = state.sites.filter((site) => site.redirect);
+  const plain = state.sites;
   const hasCloudflare = state.connections.some((connection) => connection.provider === "cloudflare");
   const hasPowerDns = state.connections.some((connection) => connection.provider === "powerdns");
   const waiting = state.waitUntil > now
     ? `<div class="notice">A DNS provider or Mailcow asked this server to wait until ${esc(new Date(state.waitUntil).toISOString().slice(11, 16))} UTC. Checks resume after that.</div>` : "";
-  const pageAction = state.connections.length || redirects.length
+  const pageAction = state.connections.length
     ? '<div class="page-actions"><button class="btn" type="button" onclick="dnsCheck(this)">Check now</button></div>'
-    : '<div class="page-actions"><button class="btn" type="button" onclick="dnsEditRedirect(\'\')">Add redirect</button></div>';
+    : "";
   const heading = `<script type="application/json" id="dns-state">${data}</script>
     <div class="page-heading"><div><h1>DNS</h1>
       <p>Keep each site's DNS synced to its profile.</p></div>${pageAction}</div>`;
 
   // Before any DNS provider is connected, replace the workspace tables and forms with the focused first-run flow.
   if (!state.connections.length) {
-    return `${heading}${waiting}${setupCard(state)}${redirects.length ? `${state.automatic ? syncModeCard(state) : modeBar(state)}${redirectsCard(state, redirects)}` : ""}`;
+    return `${heading}${waiting}${setupCard(state)}`;
   }
 
   const single = state.connections.length <= 1;
@@ -548,7 +484,6 @@ export function dashboardContent(state: DnsState, now = Date.now()): string {
   const sitesAttention: "bad" | "warn" | undefined = siteTones.includes("bad") ? "bad" : siteTones.includes("warn") || state.orphans.length ? "warn" : undefined;
   const tabs: SectionTab[] = [
     { id: "sites", label: "Sites", count: plain.length, attention: sitesAttention, content: sitesPanel },
-    { id: "redirects", label: "Redirects", count: redirects.length || undefined, content: redirectsCard(state, redirects) },
     { id: "profiles", label: "Profiles", count: state.profiles.length, content: profilesPanel },
     { id: "settings", label: "Settings", attention: connectionAttention(state), content: settingsPanel },
     { id: "activity", label: "Activity", content: logPanel },
@@ -612,29 +547,8 @@ const DIALOGS = `
   <dialog id="dns-site-dialog" aria-labelledby="dns-site-heading">
     <div class="dialog-header"><h2 id="dns-site-heading">Site</h2></div>
     <div id="dns-site-body"></div>
-    <div class="actions dialog-actions"><button class="btn dns-dialog-start" id="dns-site-edit" type="button" hidden onclick="dnsEditRedirect(dnsSiteShown)">Edit redirect</button><button class="btn" type="button" onclick="this.closest('dialog').close()">Close</button><button class="btn btn-primary" id="dns-site-apply" type="button" onclick="dnsApplySite()">Apply now</button></div>
+    <div class="actions dialog-actions"><button class="btn" type="button" onclick="this.closest('dialog').close()">Close</button><button class="btn btn-primary" id="dns-site-apply" type="button" onclick="dnsApplySite()">Apply now</button></div>
   </dialog>
-  <dialog id="dns-redirect-dialog" aria-labelledby="dns-redirect-heading"><form id="dns-redirect-form" onsubmit="dnsSaveRedirect(event)">
-    <div class="dialog-header"><h2 id="dns-redirect-heading">Add redirect</h2></div>
-    <div class="form-grid">
-      ${field("dns-redirect-source", "Domain", '<input id="dns-redirect-source" name="source" required autocomplete="off" spellcheck="false" placeholder="old-name.com">', "A zone's apex also covers its www. Any other host is redirected alone.")}
-      ${field("dns-redirect-target", "Redirect to", '<input id="dns-redirect-target" name="target" type="url" required autocomplete="off" spellcheck="false" placeholder="https://example.com">')}
-      ${field("dns-redirect-status", "Status", `<select id="dns-redirect-status" name="status">${Object.entries(REDIRECT_STATUS_LABELS).map(([code, label]) => `<option value="${code}">${label}</option>`).join("")}</select>`)}
-      ${field("dns-redirect-profile", "Profile", '<select id="dns-redirect-profile" name="profileId"></select>', "Its rows apply, such as mail, except the domain's own address records.")}
-    </div>
-    ${switchField("keepPath", "Keep path", "/about on the old domain goes to /about on the target.")}
-    ${switchField("keepQuery", "Keep query string", "Anything after ? goes along.")}
-    <p class="hint dns-dialog-note" id="dns-redirect-where"></p>
-    <div class="actions dialog-actions"><button class="btn btn-danger dns-dialog-start" id="dns-redirect-delete" type="button" onclick="dnsDeleteRedirect()">Delete</button>
-      <button class="btn" type="button" onclick="this.closest('dialog').close()">Cancel</button><button class="btn btn-primary" type="submit">Save</button></div>
-  </form></dialog>
-  <dialog id="dns-found-dialog" class="dns-wide-dialog" aria-labelledby="dns-found-heading"><form id="dns-found-form" onsubmit="dnsTakeOver(event)">
-    <div class="dialog-header"><h2 id="dns-found-heading">Redirects in Cloudflare</h2></div>
-    <p class="hint">Whole-domain redirect rules in the zones your connections reach that DNS does not manage yet. Taking one over updates its rule in place; it never adds a second.</p>
-    <div id="dns-found-body"></div>
-    <div class="form-grid">${field("dns-found-profile", "Profile", '<select id="dns-found-profile" name="profileId"></select>', "For their mail and other rows. The domains' own address records become the redirect's.")}</div>
-    <div class="actions dialog-actions"><button class="btn" type="button" onclick="this.closest('dialog').close()">Cancel</button><button class="btn btn-primary" id="dns-found-submit" type="submit">Take over selected</button></div>
-  </form></dialog>
   <dialog id="dns-connection-dialog" aria-labelledby="dns-connection-heading"><form id="dns-connection-form" onsubmit="dnsSaveConnection(event)">
     <div class="dialog-header"><h2 id="dns-connection-heading">Connect DNS</h2></div>
     <input type="hidden" name="id">
@@ -648,6 +562,7 @@ const DIALOGS = `
         <li id="dns-token-step"><strong>Create a token in Cloudflare</strong>
           <div class="cf-scope-picks" role="group" aria-label="Token scopes">
             <label class="cf-scope-pick"><input type="checkbox" id="dns-scope-dns" checked onchange="cfSyncScope('dns', this)"><span>DNS records and zones</span></label>
+            <label class="cf-scope-pick"><input type="checkbox" id="dns-scope-redirects" onchange="cfSyncScope('dns', this)"><span>Redirect domains (Single Redirect rules)</span></label>
             <label class="cf-scope-pick"><input type="checkbox" id="dns-scope-gate" onchange="cfSyncScope('dns', this)"><span>Panel gate (Cloudflare Access and origin pulls)</span></label>
           </div>
           <p class="hint">Check these permissions: <span id="dns-token-permissions"></span>. Choose the accounts and zones there; All zones also covers zones you add later.</p>

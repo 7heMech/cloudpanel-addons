@@ -1,18 +1,20 @@
 /**
- * Which CloudPanel sites are DNS's stand-ins: static sites that only serve a
- * redirect while DNS has no Cloudflare connection. They are redirects, not
- * sites, so every addon's site list leaves them out.
+ * Which CloudPanel sites are Redirects' stand-ins: static sites that only serve
+ * a redirect when no edge redirect provider manages the domain. They are
+ * redirects, not sites, so every addon's site list leaves them out.
  */
 import { Database } from "bun:sqlite";
 import { existsSync, lstatSync, readFileSync } from "node:fs";
 import { PANEL_DB, addonStateDir } from "./paths";
 
-export const STAND_INS_FILE = `${addonStateDir("dns")}/standins.json`;
+export const STAND_INS_FILE = `${addonStateDir("redirects")}/standins.json`;
+/** Legacy path from before Redirects was extracted out of DNS; checked as a fallback during upgrade. */
+export const LEGACY_DNS_STAND_INS_FILE = `${addonStateDir("dns")}/standins.json`;
 
 /** Longer than creating a stand-in takes; until it is created its record has no site id. */
 const CREATING_MS = 15 * 60_000;
 
-/** How DNS's record of a stand-in names its site: the user it chose, and CloudPanel's id once the site exists. */
+/** How Redirects' record of a stand-in names its site: the user it chose, and CloudPanel's id once the site exists. */
 interface StandInMark {
   siteUser?: string;
   siteId?: number;
@@ -20,9 +22,10 @@ interface StandInMark {
 }
 
 /**
- * Whether the panel site is the one DNS made: the id it recorded or, while it
- * is still being created, the site user it chose. A site added later at the
- * same domain, after the stand-in was deleted in CloudPanel, has another id.
+ * Whether the panel site is the one Redirects made: the id it recorded or,
+ * while it is still being created, the site user it chose. A site added later
+ * at the same domain, after the stand-in was deleted in CloudPanel, has another
+ * id.
  */
 export function isStandInSite(mark: StandInMark | undefined, site: { id: number; user?: string }, now = Date.now()): boolean {
   if (mark?.siteUser === undefined || mark.siteUser !== site.user) return false;
@@ -44,8 +47,10 @@ function readMarks(file: string, rootUid: number): Record<string, StandInMark> {
   }
 }
 
-export function standInDomains(file = STAND_INS_FILE, rootUid = 0, panelDb: string | Database = PANEL_DB): Set<string> {
-  const marks = readMarks(file, rootUid);
+export function standInDomains(file?: string, rootUid = 0, panelDb: string | Database = PANEL_DB): Set<string> {
+  const marks = file !== undefined
+    ? readMarks(file, rootUid)
+    : { ...readMarks(LEGACY_DNS_STAND_INS_FILE, rootUid), ...readMarks(STAND_INS_FILE, rootUid) };
   if (Object.keys(marks).length === 0) return new Set();
   try {
     const db = typeof panelDb === "string" ? new Database(panelDb, { readonly: true }) : panelDb;

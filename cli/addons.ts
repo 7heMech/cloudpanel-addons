@@ -3,6 +3,7 @@ import { withFileLockSync } from "../lib/file-lock";
 import { migrateResourceMemory } from "../addons/resource-limits/migration";
 import { LEGACY_PROTOCOLS_FILE, migrateFirewallProtocols, migrateVisitorIp, visitorIpMigrationPending } from "../addons/firewall/migration";
 import { legacyDnsCloudflarePending, migrateCloudflareFromDns } from "../lib/cloudflare/store";
+import { migrateRedirectsFromDns, redirectsMigrationPending } from "../addons/redirects/migration";
 import { ADDONS, ADDON_NAMES, addonEnabled } from "../addons/catalog";
 import { archRefusal, type AddonSpec } from "../lib/addon-definition";
 import { masterVhostHost } from "./inject";
@@ -46,7 +47,7 @@ function migrationPending(): boolean {
   if (Object.keys(RENAMED_ADDONS).some((from) =>
     existsSync(`${CONFIG_DIR}/${from}.conf`) || existsSync(`${CONFIG_DIR}/${from}.conf.new`) || existsSync(`${STATE_DIR}/${from}`))) return true;
   if (existsSync(`${addonStateDir("system-tweaks")}/memory.json`) || existsSync(LEGACY_PROTOCOLS_FILE)) return true;
-  if (legacyDnsCloudflarePending() || visitorIpMigrationPending()) return true;
+  if (legacyDnsCloudflarePending() || redirectsMigrationPending() || visitorIpMigrationPending()) return true;
   const oom = `${SYSTEMD_DIR}/nginx.service.d/zz-clp-addons-oom.conf`;
   if (existsSync(oom) && readFileSync(oom, "utf8").includes("clp-addons System Tweaks:")) return true;
   try {
@@ -70,14 +71,15 @@ export function migrateOldAddonNames(quiet = false, legacyWaitSeconds = 300): Ad
     withMigrationLocks(() => migrateAddonState(quiet)));
 }
 
-/** Holds every live and legacy addon lock touched by state migrations, in `dns.lock` -> `cloudflare.lock` order. */
+/** Holds every live and legacy addon lock touched by state migrations, in `dns.lock` -> `redirects.lock` -> `cloudflare.lock` order. */
 function withMigrationLocks<T>(body: () => T): T {
   return withFileLockSync(`${LOCK_DIR}/resource-limits-settings.lock`, 15, "a resource limits change is still running", () =>
     withFileLockSync(`${LOCK_DIR}/system-tweaks.lock`, 15, "a system tweaks change is still running", () =>
       withFileLockSync(`${LOCK_DIR}/firewall-visitor-ip.lock`, 30, "another Cloudflare visitor IP change is running", () =>
         withFileLockSync(`${LOCK_DIR}/dns.lock`, 30, "another DNS change is running", () =>
-          withFileLockSync(`${LOCK_DIR}/cloudflare.lock`, 30, "another Cloudflare connection change is running", () =>
-            withLegacyLocks(LEGACY_LOCKS, body))))));
+          withFileLockSync(`${LOCK_DIR}/redirects.lock`, 30, "another Redirects change is running", () =>
+            withFileLockSync(`${LOCK_DIR}/cloudflare.lock`, 30, "another Cloudflare connection change is running", () =>
+              withLegacyLocks(LEGACY_LOCKS, body)))))));
 }
 
 function withLegacyLocks<T>(names: string[], body: () => T): T {
@@ -137,6 +139,8 @@ function migrateAddonState(quiet: boolean): AddonRename[] {
     if (visitorIp) renames.push({ from: "system-tweaks", to: "firewall", config: null, stateMoved: false, undo: visitorIp });
     const cloudflare = migrateCloudflareFromDns();
     if (cloudflare) renames.push({ from: "dns", to: "cloudflare", config: null, stateMoved: false, undo: cloudflare });
+    const redirects = migrateRedirectsFromDns(() => writeConfig(ADDONS.redirects!, true));
+    if (redirects) renames.push({ from: "dns", to: "redirects", config: null, stateMoved: false, undo: redirects });
     removeLegacyLocks();
     return renames;
   } catch (error) { restoreAddonState(renames); throw error; }

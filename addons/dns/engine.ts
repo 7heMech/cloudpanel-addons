@@ -15,20 +15,16 @@ import type { CfRuleset } from "../../lib/cloudflare/api";
 import { type ApiFetch, ProviderError } from "../../lib/provider-http";
 import { CloudflareDnsProvider } from "./cloudflare-provider";
 import { aclAllows, MailcowApi, type MailcowDkim } from "./mailcow";
-import type { AccountRef, Policy, Profile, Redirect, Secrets } from "./model";
+import type { AccountRef, Policy, Profile, Secrets } from "./model";
 import { PowerDnsProvider } from "./powerdns";
 import {
   PROVIDER_LABELS, type DnsAccount, type DnsProvider, type DnsRecord, type DnsZone, type ProviderKind,
   type RecordOp, type RecordWrite,
 } from "./provider";
 import {
-  describeRecord, diffRecords, normalizeRenderedForProvider, renderProfile, renderRedirect, wildcardSource,
+  describeRecord, diffRecords, normalizeRenderedForProvider, renderProfile, wildcardSource,
   type Claim, type Diff, type Rendered, type SiteVars,
 } from "./records";
-import {
-  describeRedirect, foundRedirect, PLACEHOLDER, REDIRECT_PHASE, redirectAction, redirectHosts, redirectRef, redirectRuleState, standInHosts, wantedRedirectRule,
-  type FoundRedirect,
-} from "./redirects";
 import { ruleState, SSL_LABELS, wantedRules, wantedSettings, zoneWants, type ZoneWants } from "./zone";
 
 const RECORD_COMMENT = "Managed by CloudPanel DNS";
@@ -37,7 +33,7 @@ export interface PanelSite {
   id: number;
   domain: string;
   type: string;
-  /** Its site user; absent for a redirect domain. */
+  /** Its site user. */
   user?: string;
   /** When CloudPanel created it, in milliseconds. */
   createdAt: number;
@@ -46,26 +42,8 @@ export interface PanelSite {
   /** Certificate PEM from CloudPanel's `certificate` table when available. */
   certificatePem?: string | null;
   cloudflareOnly: boolean;
-  /** Set for a redirect domain, which is planned beside the sites but is not one. */
-  redirect?: Redirect;
   /** Set for the panel hostname, planned beside the sites too. */
   panel?: true;
-}
-
-/** What a stand-in site on this server redirects to now. */
-export type StandIn = Pick<Redirect, "target" | "status" | "keepPath" | "keepQuery"> & {
-  /** The site exists but its vhost was never written, so it does not redirect yet. */
-  incomplete?: boolean;
-  /** The hosts the stand-in vhost serves; defaults to standInHosts(source) when absent. */
-  hosts?: string[];
-};
-
-/** The CloudPanel sites that serve redirects while no edge redirect provider manages them. */
-export interface StandIns {
-  current: Record<string, StandIn>;
-  create(redirect: Redirect, hosts?: string[]): Promise<void>;
-  update(redirect: Redirect, hosts?: string[]): Promise<void>;
-  remove(source: string): Promise<void>;
 }
 
 export interface ConnectionReport {
@@ -138,8 +116,6 @@ export interface SitePlan {
   certificateNames: string[];
   /** A new site whose other changes wait for an administrator's review. */
   held?: true;
-  /** A redirect domain; `zone` is null while it is served by a stand-in site on this server. */
-  redirect?: true;
   /** The panel hostname. */
   panel?: true;
   /** The zone wildcard that covers this entry's own address records, when explicit ones are omitted. */
@@ -155,12 +131,6 @@ export interface ManagedRecords {
   records: DnsRecord[];
 }
 
-export interface TrackedRedirectRule {
-  connectionId: string;
-  zoneId: string;
-  zoneName: string;
-}
-
 export interface RunContext {
   policy: Policy;
   secrets: Secrets;
@@ -169,7 +139,6 @@ export interface RunContext {
   fetch?: ApiFetch;
   /** When each provider asked to be left alone until, carried between runs. */
   backoff: { cloudflare: number; mailcow: number; powerdns?: number };
-  standIns?: StandIns;
   /** Whether CloudPanel serves an issued certificate for the panel hostname, so Cloudflare may proxy it. */
   panelProxied?: boolean;
   /** Each connection's token as the last check read it, for a run that does not read it again. */
@@ -221,8 +190,6 @@ type Resolution =
   | { kind: "unreachable"; reason: string };
 
 const INACTIVE_ZONES = new Set(["moved", "deleted", "deactivated"]);
-/** What a stand-in whose vhost was never written serves. */
-const NOT_REDIRECTING = "A static site that does not redirect yet";
 const MAILCOW_PLACEHOLDER = /\{mailcow\./;
 
 function reason(error: unknown): string {
@@ -259,23 +226,18 @@ export class DnsRun {
   private readonly powerdnsBackoff: { until: number };
   private readonly mailcowBackoff: { until: number };
   private readonly held: Set<string>;
-  /** CloudPanel's sites, then the redirect domains. */
+  /** CloudPanel's sites, plus the panel hostname when set. */
   readonly entries: PanelSite[];
-  private readonly redirects: Map<string, Redirect>;
   private readonly siteDomains: Set<string>;
   private readonly panelHost: string | null;
 
   constructor(private readonly context: RunContext) {
-    this.redirects = new Map(context.policy.redirects.map((redirect) => [redirect.source, redirect]));
     this.siteDomains = new Set(context.sites.map((site) => site.domain));
     const host = context.policy.panelHost;
-    // A site or redirect domain of the same name is that entry's, and the panel hostname waits.
-    this.panelHost = host && !this.siteDomains.has(host) && !this.redirects.has(host) ? host : null;
+    // A site of the same name is that entry's, and the panel hostname waits.
+    this.panelHost = host && !this.siteDomains.has(host) ? host : null;
     this.entries = [
-      ...context.sites.filter((site) => !this.redirects.has(site.domain)),
-      ...context.policy.redirects.map((redirect) => ({
-        id: 0, domain: redirect.source, type: "redirect", createdAt: 0, selfSigned: false, cloudflareOnly: false, redirect,
-      })),
+      ...context.sites,
       ...this.panelHost ? [{ id: 0, domain: this.panelHost, type: "panel", createdAt: 0, selfSigned: false, cloudflareOnly: false, panel: true as const }] : [],
     ];
     this.cloudflareBackoff = { until: context.backoff.cloudflare };
@@ -435,19 +397,13 @@ export class DnsRun {
     return uncertain(token.grants, permission, held ? "yes" : "no") ? null : held;
   }
 
-  /** No connection means redirects are served from this server with no DNS writes. */
-  private onServer(): boolean {
-    return this.connectionMeta.length === 0;
-  }
-
   plannedDomains(): string[] {
-    return this.entries.filter((entry) => entry.redirect || this.profileOf(entry.domain)).map((entry) => entry.domain);
+    return this.entries.filter((entry) => this.profileOf(entry.domain)).map((entry) => entry.domain);
   }
 
   private profileOf(domain: string): Profile | null {
     if (domain === this.panelHost) return panelProfile(this.context.panelProxied === true);
-    const redirect = this.redirects.get(domain);
-    const id = redirect ? redirect.profileId : this.context.policy.assignments[domain];
+    const id = this.context.policy.assignments[domain];
     return this.context.policy.profiles.find((profile) => profile.id === id) ?? null;
   }
 
@@ -459,7 +415,6 @@ export class DnsRun {
       if (this.context.panelOnly && !site.panel) continue;
       const profile = this.profileOf(site.domain);
       if (!profile || (!withHeld && this.held.has(site.domain))) continue;
-      if (site.redirect && this.onServer()) continue;
       const resolved = this.resolve(site.domain);
       if (resolved.kind !== "zone") continue;
       const provider = this.providers.get(resolved.ref.connectionId);
@@ -477,7 +432,7 @@ export class DnsRun {
   // Reading
   // -------------------------------------------------------------------------
 
-  private async loadZone(ref: ZoneRef, wants: ZoneWants, redirects = false): Promise<void> {
+  private async loadZone(ref: ZoneRef, wants: ZoneWants): Promise<void> {
     const provider = this.providers.get(ref.connectionId)!;
     const key = zoneMapKey(ref.connectionId, ref.zone.id);
     const state: ZoneState = this.zones.get(key) ?? { ref, records: null, settings: new Map(), rulesets: new Map(), error: null };
@@ -487,11 +442,8 @@ export class DnsRun {
       const settings = provider.capabilities.zoneSettings && edge
         ? wantedSettings(wants).map((wanted) => wanted.setting).filter((setting) => !state.settings.has(setting))
         : [];
-      const phases = edge
-        ? [...new Set([
-          ...provider.capabilities.zoneRules ? wantedRules(wants).map((rule) => rule.phase) : [],
-          ...redirects && provider.capabilities.edgeRedirects ? [REDIRECT_PHASE] : [],
-        ])].filter((phase) => !state.rulesets.has(phase))
+      const phases = edge && provider.capabilities.zoneRules
+        ? [...new Set(wantedRules(wants).map((rule) => rule.phase))].filter((phase) => !state.rulesets.has(phase))
         : [];
       const [records, values, rulesets] = await Promise.all([
         state.records ?? provider.listRecords(ref.zone),
@@ -550,23 +502,18 @@ export class DnsRun {
   async load(domains: string[]): Promise<void> {
     const byZone = this.zoneProfiles();
     const refs = new Map<string, ZoneRef>();
-    const redirectZones = new Set<string>();
     const mailDomains: string[] = [];
     for (const domain of domains) {
       const profile = this.profileOf(domain);
-      const redirect = this.redirects.has(domain);
-      if (!profile && !redirect) continue;
-      if (redirect && this.onServer()) continue;
+      if (!profile) continue;
       const resolved = this.resolve(domain);
       if (resolved.kind === "zone") {
-        const key = zoneMapKey(resolved.ref.connectionId, resolved.ref.zone.id);
-        refs.set(key, resolved.ref);
-        if (redirect) redirectZones.add(key);
+        refs.set(zoneMapKey(resolved.ref.connectionId, resolved.ref.zone.id), resolved.ref);
       }
-      if (profile?.mailcow && !this.context.panelOnly) mailDomains.push(domain);
+      if (profile.mailcow && !this.context.panelOnly) mailDomains.push(domain);
     }
     await Promise.all([
-      ...[...refs.entries()].map(([key, ref]) => this.loadZone(ref, zoneWants(byZone.get(key) ?? []).wants, redirectZones.has(key))),
+      ...[...refs.entries()].map(([key, ref]) => this.loadZone(ref, zoneWants(byZone.get(key) ?? []).wants)),
       this.loadMail(mailDomains),
     ]);
   }
@@ -675,13 +622,13 @@ export class DnsRun {
     published: readonly DnsRecord[],
     allWanted: boolean,
   ): void {
-    if (!out || plan.problems.length || (site.redirect && plan.held)) return;
-    const waitsAt = (name: string) => Boolean(plan.held) && !site.redirect
+    if (!out || plan.problems.length) return;
+    const waitsAt = (name: string) => Boolean(plan.held)
       && diff.ops.some((op) => op.record.name === name && !pointsOwnName(site.domain, op, published));
     const records: RecordWrite[] = [];
     for (const record of diff.wanted) {
       if (waitsAt(record.name)) continue;
-      if (record.name.startsWith("*.") || allWanted || site.redirect || !ADDRESS_TYPES.has(record.type)) {
+      if (record.name.startsWith("*.") || allWanted || !ADDRESS_TYPES.has(record.type)) {
         records.push(record);
       }
     }
@@ -692,32 +639,23 @@ export class DnsRun {
     out.set(site.domain, { zoneKey, records, wildcardClaims });
   }
 
-  /** The plan for one site, or one redirect domain, from what has been read. */
+  /** The plan for one site, from what has been read. */
   planSite(site: PanelSite, siblings?: Siblings, out?: Siblings, allWanted = false): SitePlan {
-    const plan = this.planEntry(site, siblings, out, allWanted);
-    // A redirect domain held after a connection arrived waits for its review as a whole.
-    if (site.redirect && plan.held) plan.changes = plan.changes.map((change) => change.action === "note" ? change : { ...change, waits: true });
-    return plan;
+    return this.planEntry(site, siblings, out, allWanted);
   }
 
   private planEntry(site: PanelSite, siblings?: Siblings, out?: Siblings, allWanted = false): SitePlan {
-    const { redirect } = site;
     const profile = this.profileOf(site.domain);
     const plan: SitePlan = {
       domain: site.domain, profileId: profile?.id ?? null,
       mode: this.context.policy.automatic || (site.panel && this.context.panelOnly) ? "enforce" : "report",
       zone: null,
-      changes: [], problems: [], zoneChoices: [], certificateNames: [], ...redirect && { redirect: true as const },
+      changes: [], problems: [], zoneChoices: [], certificateNames: [],
       ...site.panel && { panel: true as const },
     };
     this.diffs.delete(site.domain);
-    if (!profile && !redirect) return plan;
+    if (!profile) return plan;
     if (this.held.has(site.domain)) plan.held = true;
-    if (redirect && this.siteDomains.has(site.domain)) {
-      plan.problems.push(`CloudPanel has a site ${site.domain}; delete the site or this redirect`);
-      return plan;
-    }
-    if (redirect && this.onServer()) return this.planStandIn(redirect, profile, plan);
 
     const resolved = this.resolve(site.domain);
     if (resolved.kind === "unreachable") {
@@ -736,23 +674,14 @@ export class DnsRun {
       }));
       return plan;
     }
-    if (profile && profile.records.some((row) => MAILCOW_PLACEHOLDER.test(row.name + row.content)) && !profile.mailcow) {
+    if (profile.records.some((row) => MAILCOW_PLACEHOLDER.test(row.name + row.content)) && !profile.mailcow) {
       plan.problems.push("Rows use {mailcow.…} placeholders, but the profile does not set up Mailcow");
       return plan;
     }
     plan.problems.push(...this.failures.get(site.domain) ?? []);
-    if (profile?.mailcow) this.mailChanges(site.domain, profile, plan);
-    const render = (zoneName: string, provider: DnsProvider): Rendered => {
-      const raw = redirect
-        ? renderRedirect(
-          profile,
-          redirectHosts(redirect.source, zoneName),
-          this.vars(site.domain, zoneName, profile),
-          provider.capabilities.edgeRedirects ? PLACEHOLDER : null,
-        )
-        : renderProfile(profile!, this.vars(site.domain, zoneName, profile));
-      return normalizeRenderedForProvider(raw, provider);
-    };
+    if (profile.mailcow) this.mailChanges(site.domain, profile, plan);
+    const render = (zoneName: string, provider: DnsProvider): Rendered =>
+      normalizeRenderedForProvider(renderProfile(profile, this.vars(site.domain, zoneName, profile)), provider);
 
     if (resolved.kind === "missing") {
       const { createIn } = resolved;
@@ -768,24 +697,15 @@ export class DnsRun {
       } else {
         const providerLabel = PROVIDER_LABELS[createProvider.kind];
         plan.changes.push({ action: "create", subject: `${providerLabel} zone`, detail: `${resolved.name} in ${account.name || account.id}; then set its nameservers at the registrar` });
-        if (redirect) {
-          if (createProvider.capabilities.edgeRedirects) {
-            const hosts = redirectHosts(redirect.source, resolved.name);
-            plan.changes.push({ action: "create", subject: "Cloudflare redirect rule", detail: `${hosts.join(" and ")}: ${describeRedirect(redirect)}` });
-          } else {
-            this.planStandInChanges(redirect, plan, resolved.name);
-          }
-        }
         const zoneKey = `missing:${resolved.name}`;
         const rendered = render(resolved.name, createProvider);
-        const ctx = redirect ? undefined : this.siblingContext(siblings, zoneKey, site.domain);
+        const ctx = this.siblingContext(siblings, zoneKey, site.domain);
         // A new zone is empty, so everything the profile wants (other than what a sibling's wildcard covers) is a record to create.
-        const diff = diffRecords(rendered, [], { allowWildcard: !redirect, ...ctx });
+        const diff = diffRecords(rendered, [], { allowWildcard: true, ...ctx });
         plan.problems.push(...diff.problems);
         this.noteWildcard(plan, diff, site.domain);
         this.checkPanelAddress(site, diff, plan);
         for (const op of diff.ops) plan.changes.push(this.recordChange(op, diff, createProvider.capabilities.proxy));
-        if (redirect && createProvider.capabilities.edgeRedirects) this.standInChange(redirect.source, resolved.name, false, plan);
         this.recordSibling(out, site, zoneKey, plan, rendered, diff, [], allWanted);
       }
       return plan;
@@ -803,19 +723,15 @@ export class DnsRun {
 
     if (provider.capabilities.zoneSettings || provider.capabilities.zoneRules) {
       // A profile that disagrees with another in its zone is stopped. What the plan shows is what this site's own profile asks.
-      const own = profile ? [profile] : [];
+      const own = [profile];
       plan.problems.push(...zoneWants([...own, ...this.zoneProfiles().get(key) ?? []]).problems);
       this.zoneChanges(state, zoneWants(own).wants, plan);
-    }
-    if (redirect) {
-      if (provider.capabilities.edgeRedirects) this.redirectRuleChange(state, redirect, plan);
-      else this.planStandInChanges(redirect, plan, resolved.ref.zone.name);
     }
 
     const zoneKey = `zone:${key}`;
     const rendered = render(resolved.ref.zone.name, provider);
-    const ctx = redirect ? undefined : this.siblingContext(siblings, zoneKey, site.domain);
-    const diff = diffRecords(rendered, state.records, { allowWildcard: !redirect, ...ctx });
+    const ctx = this.siblingContext(siblings, zoneKey, site.domain);
+    const diff = diffRecords(rendered, state.records, { allowWildcard: true, ...ctx });
     this.diffs.set(site.domain, diff);
     plan.problems.push(...diff.problems);
     this.noteWildcard(plan, diff, site.domain);
@@ -825,13 +741,9 @@ export class DnsRun {
     }
     for (const op of diff.ops) {
       const change = this.recordChange(op, diff, provider.capabilities.proxy);
-      plan.changes.push(plan.held && !redirect && !pointsOwnName(site.domain, op, state.records) ? { ...change, waits: true } : change);
+      plan.changes.push(plan.held && !pointsOwnName(site.domain, op, state.records) ? { ...change, waits: true } : change);
     }
     this.recordSibling(out, site, zoneKey, plan, rendered, diff, state.records, allWanted);
-    if (redirect) {
-      if (provider.capabilities.edgeRedirects) this.standInChange(redirect.source, resolved.ref.zone.name, resolved.ref.zone.status === "active", plan);
-      return plan;
-    }
     if (site.panel) return plan;
     const addresses = diff.wanted.filter((record) => ["A", "AAAA", "CNAME"].includes(record.type));
     const www = `www.${site.domain}`;
@@ -863,69 +775,6 @@ export class DnsRun {
       || Boolean(diff.covered[site.domain]);
     if (!hasAddress) {
       plan.problems.push("This server has no IPv4 or IPv6 address for the panel hostname; set one under Server addresses");
-    }
-  }
-
-  private standInHostsFor(source: string, zoneName?: string): string[] {
-    return zoneName ? redirectHosts(source, zoneName) : standInHosts(source);
-  }
-
-  private sameHosts(left: string[], right: string[]): boolean {
-    return left.length === right.length && left.every((host, index) => host === right[index]);
-  }
-
-  private planStandInChanges(redirect: Redirect, plan: SitePlan, zoneName?: string): void {
-    const current = this.context.standIns?.current[redirect.source];
-    const hosts = this.standInHostsFor(redirect.source, zoneName);
-    if (!current) {
-      plan.changes.push({
-        action: "create", subject: "Stand-in site",
-        detail: `A static site on this server for ${hosts.join(" and ")}: ${describeRedirect(redirect)}`,
-      });
-    } else {
-      const currentHosts = current.hosts ?? standInHosts(redirect.source);
-      const hostsChanged = !this.sameHosts(currentHosts, hosts);
-      if (current.incomplete || describeRedirect(current) !== describeRedirect(redirect) || hostsChanged) {
-        plan.changes.push({
-          action: "update", subject: "Stand-in site",
-          detail: hostsChanged ? `${hosts.join(" and ")}: ${describeRedirect(redirect)}` : describeRedirect(redirect),
-          before: current.incomplete ? NOT_REDIRECTING : hostsChanged ? `${currentHosts.join(" and ")}: ${describeRedirect(current)}` : describeRedirect(current),
-        });
-      }
-    }
-  }
-
-  /** A redirect served from this server, while DNS has no provider connection. */
-  private planStandIn(redirect: Redirect, profile: Profile | null, plan: SitePlan): SitePlan {
-    this.planStandInChanges(redirect, plan);
-    if (profile) plan.changes.push({ action: "note", subject: "Profile", detail: "Its records apply once a DNS connection reaches this domain" });
-    return plan;
-  }
-
-  private standInChange(source: string, zone: string, active: boolean, plan: SitePlan): void {
-    if (!this.context.standIns?.current[source]) return;
-    plan.changes.push({
-      action: "delete", subject: "Stand-in site",
-      detail: active ? "Deleted once the redirect is in Cloudflare" : `Deleted once the redirect is in Cloudflare and ${zone} is active`,
-    });
-  }
-
-  private redirectRuleChange(state: ZoneState, redirect: Redirect, plan: SitePlan): void {
-    if (!state.rulesets.has(REDIRECT_PHASE)) return;
-    const hosts = redirectHosts(redirect.source, state.ref.zone.name);
-    const found = redirectRuleState(state.rulesets.get(REDIRECT_PHASE) ?? null, redirect, hosts);
-    const detail = `${hosts.join(" and ")}: ${describeRedirect(redirect)}`;
-    if (found.state === "problem") plan.problems.push(found.problem);
-    else if (found.state === "create") plan.changes.push({ action: "create", subject: "Cloudflare redirect rule", detail });
-    else if (found.state === "update") {
-      const action = redirectAction(found.rule);
-      const before = [
-        action ? describeRedirect(action) : found.rule.expression,
-        / and not starts_with\(http\.request\.uri\.path, "\/\.well-known\/acme-challenge\/"\)\s*$/.test(found.rule.expression) && "except Let's Encrypt checks",
-        !found.rule.enabled && "disabled",
-        found.rule.ref !== redirectRef(redirect.source) && "another tool's rule, taken over in place",
-      ].filter(Boolean).join(" · ");
-      plan.changes.push({ action: "update", subject: "Cloudflare redirect rule", detail, before });
     }
   }
 
@@ -1018,7 +867,7 @@ export class DnsRun {
     const pass0 = this.entries.map((site) => this.planSite(site, undefined, pass0Out, false));
     this.markClashes(pass0);
     const eligible = new Set(pass0
-      .filter((plan) => !plan.problems.length && !(plan.redirect && plan.held) && (!allowed || allowed.has(plan.domain)))
+      .filter((plan) => !plan.problems.length && (!allowed || allowed.has(plan.domain)))
       .map((plan) => plan.domain));
     const pass1Siblings: Siblings = new Map([...pass0Out].filter(([domain]) => eligible.has(domain)));
 
@@ -1091,25 +940,20 @@ export class DnsRun {
     if (plan.wildcard) return 3;
     const selfNonAddress = diff.wanted.some((record) => !ADDRESS_TYPES.has(record.type)
       && (record.name === plan.domain || record.name.endsWith(`.${plan.domain}`)));
-    if (plan.redirect || selfNonAddress || (diff.wanted.length > 0 && !plan.wildcardBlocked)) return 1;
+    if (selfNonAddress || (diff.wanted.length > 0 && !plan.wildcardBlocked)) return 1;
     if (diff.wanted.length > 0) return 2;
     return 3;
   }
 
   /**
-   * Makes the given sites and redirect domains match once DNS is Automatic.
-   * Those with problems are left alone, and so is a redirect domain held for
-   * its review.
+   * Makes the given sites match once DNS is Automatic.
+   * Those with problems are left alone.
    */
   async enforce(domains: string[]): Promise<void> {
     const scope = new Set(domains);
     const ready = () => this.planAll(domains)
-      .filter((plan) => plan.mode === "enforce" && !plan.problems.length && scope.has(plan.domain) && !(plan.redirect && plan.held));
+      .filter((plan) => plan.mode === "enforce" && !plan.problems.length && scope.has(plan.domain));
 
-    if (this.onServer()) {
-      await this.enforceStandIns(ready().filter((plan) => plan.redirect));
-      return;
-    }
     await this.createZones(ready());
     const targets = ready().filter((plan) => plan.zone);
     if (!targets.length) return;
@@ -1130,8 +974,7 @@ export class DnsRun {
     const after = ready().filter((plan) => plan.zone);
     await Promise.all([...new Set(after.map(planZoneKey))].map(async (key) => {
       const state = this.zones.get(key)!;
-      const provider = this.providers.get(state.ref.connectionId)!;
-      // One zone's writes go in order: wildcard writers first, then redirects and explicit/non-address writers (deepest first),
+      // One zone's writes go in order: wildcard writers first, then explicit/non-address writers (deepest first),
       // then wildcard-blocked explicit sites, then wildcard-covered sites that delete redundant records.
       const ordered = after.filter((candidate) => planZoneKey(candidate) === key)
         .sort((a, b) => (this.writeOrder(a) - this.writeOrder(b)) || (b.domain.length - a.domain.length));
@@ -1141,20 +984,9 @@ export class DnsRun {
           const entry = this.entries.find((site) => site.domain === plan.domain)!;
           const fresh = this.planSite(entry);
           if (fresh.problems.length) continue;
-          if (entry.redirect) {
-            if (provider.capabilities.edgeRedirects) {
-              // The redirect before its placeholder, so the placeholder never answers on its own.
-              await this.enforceRedirectRule(state, entry.redirect);
-            } else {
-              // Without edge redirects, keep the local stand-in site ready before pointing DNS here.
-              await this.enforceStandIns([fresh]);
-              if (this.failures.get(plan.domain)?.length) continue;
-            }
-          }
           const diff = this.diffs.get(plan.domain)!;
           const ops = fresh.held ? diff.ops.filter((op) => pointsOwnName(plan.domain, op, state.records!)) : diff.ops;
           await this.applyRecords(state, ops, plan.domain, diff);
-          if (entry.redirect && provider.capabilities.edgeRedirects) await this.retireStandIn(state, entry.redirect);
         } catch (error) {
           this.fail(plan.domain, error);
         }
@@ -1189,7 +1021,7 @@ export class DnsRun {
         this.profilesByZone = null;
         this.zones.set(key, { ref, records: null, settings: new Map(), rulesets: new Map(), error: null });
         const profiles = domains.map((domain) => this.profileOf(domain)).filter((profile) => profile !== null);
-        await this.loadZone(ref, zoneWants(profiles).wants, domains.some((domain) => this.redirects.has(domain)));
+        await this.loadZone(ref, zoneWants(profiles).wants);
       } catch (error) {
         for (const domain of domains) this.fail(domain, error);
       }
@@ -1232,68 +1064,6 @@ export class DnsRun {
       }
     } catch (error) {
       for (const domain of domains) this.fail(domain, error);
-    }
-  }
-
-  private async enforceRedirectRule(state: ZoneState, redirect: Redirect): Promise<void> {
-    const edge = this.providers.get(state.ref.connectionId)?.edge;
-    if (!edge) return;
-    const zoneId = state.ref.zone.id;
-    const hosts = redirectHosts(redirect.source, state.ref.zone.name);
-    const ruleset = state.rulesets.get(REDIRECT_PHASE) ?? null;
-    const found = redirectRuleState(ruleset, redirect, hosts);
-    if (found.state === "present" || found.state === "problem") return;
-    const wanted = wantedRedirectRule(redirect, hosts);
-    let updated: CfRuleset;
-    if (!ruleset) updated = await edge.createEntrypoint(zoneId, REDIRECT_PHASE, [wanted]);
-    else if (found.state === "create") updated = await edge.addRule(zoneId, REDIRECT_PHASE, ruleset.id, wanted);
-    else {
-      try {
-        updated = await edge.updateRule(zoneId, REDIRECT_PHASE, ruleset.id, found.rule.id, wanted);
-      } catch (error) {
-        // Should Cloudflare keep a rule's own ref, the rule is still found by its hosts on every check.
-        if (!(error instanceof ProviderError) || error.status !== 400 || !found.rule.ref || found.rule.ref === wanted.ref) throw error;
-        updated = await edge.updateRule(zoneId, REDIRECT_PHASE, ruleset.id, found.rule.id, { ...wanted, ref: found.rule.ref });
-      }
-    }
-    state.rulesets.set(REDIRECT_PHASE, updated);
-    const action = found.state === "update" ? redirectAction(found.rule) : null;
-    this.logged([redirect.source], state.ref.zone.name, found.state, "Cloudflare redirect rule",
-      `${hosts.join(" and ")}: ${describeRedirect(redirect)}`, action ? describeRedirect(action) : undefined);
-  }
-
-  /** Deletes a redirect's stand-in site once Cloudflare answers for it: the rule and records are in, and the zone is active. */
-  private async retireStandIn(state: ZoneState, redirect: Redirect): Promise<void> {
-    const standIns = this.context.standIns;
-    if (!standIns?.current[redirect.source] || state.ref.zone.status !== "active") return;
-    const plan = this.planSite(this.entries.find((site) => site.domain === redirect.source)!);
-    if (plan.problems.length || plan.changes.some((change) => change.action !== "note" && change.subject !== "Stand-in site")) return;
-    await standIns.remove(redirect.source);
-    delete standIns.current[redirect.source];
-    this.logged([redirect.source], "", "delete", "Stand-in site", "The redirect is served by Cloudflare now");
-  }
-
-  /** While there is no edge redirect provider, redirects are stand-in sites on this server. */
-  private async enforceStandIns(plans: SitePlan[]): Promise<void> {
-    const standIns = this.context.standIns;
-    if (!standIns) return;
-    for (const plan of plans) {
-      const redirect = this.redirects.get(plan.domain)!;
-      const current = standIns.current[plan.domain];
-      const hosts = this.standInHostsFor(redirect.source, plan.zone?.name);
-      const currentHosts = current ? current.hosts ?? standInHosts(redirect.source) : [];
-      const hostsChanged = Boolean(current) && !this.sameHosts(currentHosts, hosts);
-      try {
-        if (!current) await standIns.create(redirect, hosts);
-        else if (current.incomplete || describeRedirect(current) !== describeRedirect(redirect) || hostsChanged) await standIns.update(redirect, hosts);
-        else continue;
-        standIns.current[plan.domain] = { target: redirect.target, status: redirect.status, keepPath: redirect.keepPath, keepQuery: redirect.keepQuery, hosts };
-        const before = !current ? undefined : current.incomplete ? NOT_REDIRECTING : hostsChanged ? `${currentHosts.join(" and ")}: ${describeRedirect(current)}` : describeRedirect(current);
-        const detail = hostsChanged ? `${hosts.join(" and ")}: ${describeRedirect(redirect)}` : describeRedirect(redirect);
-        this.logged([plan.domain], "", current ? "update" : "create", "Stand-in site", detail, before);
-      } catch (error) {
-        this.fail(plan.domain, error);
-      }
     }
   }
 
@@ -1365,137 +1135,12 @@ export class DnsRun {
   // What the run leaves behind
   // -------------------------------------------------------------------------
 
-  /** Active Cloudflare zones that could hold a Single Redirect rule for `source`, deduplicated by physical zone ID. */
-  private cloudflareRedirectZones(source: string, tracked?: TrackedRedirectRule): ZoneRef[] {
-    const matching = this.zoneRefs.filter((ref) => {
-      if (INACTIVE_ZONES.has(ref.zone.status)) return false;
-      if (source !== ref.zone.name && !source.endsWith(`.${ref.zone.name}`)) return false;
-      const provider = this.providers.get(ref.connectionId);
-      return Boolean(provider?.capabilities.edgeRedirects && provider.edge);
-    });
-    if (!matching.length) return [];
-    const longest = Math.max(...matching.map((ref) => ref.zone.name.length));
-    const candidates = matching.filter((ref) => ref.zone.name.length === longest || (tracked && ref.zone.id === tracked.zoneId));
-    const byZoneId = new Map<string, ZoneRef[]>();
-    for (const ref of candidates) {
-      byZoneId.set(ref.zone.id, [...byZoneId.get(ref.zone.id) ?? [], ref]);
-    }
-    return [...byZoneId.values()].map((group) =>
-      (tracked ? group.find((ref) => ref.connectionId === tracked.connectionId) : undefined)
-      ?? group.find((ref) => this.writesRecords(ref) !== false)
-      ?? group[0]!);
-  }
-
-  /** Reads every zone needed to check whether deleting `source` must also remove a Cloudflare Single Redirect rule. */
-  async loadRedirectDeletion(source: string, tracked?: TrackedRedirectRule): Promise<void> {
-    const emptyWants = zoneWants([]).wants;
-    const refs = new Map<string, ZoneRef>();
-    const resolved = this.resolve(source);
-    if (resolved.kind === "zone") {
-      const provider = this.providers.get(resolved.ref.connectionId);
-      if (provider?.capabilities.edgeRedirects && provider.edge) {
-        refs.set(zoneMapKey(resolved.ref.connectionId, resolved.ref.zone.id), resolved.ref);
-      }
-    }
-    for (const ref of this.cloudflareRedirectZones(source, tracked)) {
-      refs.set(zoneMapKey(ref.connectionId, ref.zone.id), ref);
-    }
-    await Promise.all([...refs.values()].map((ref) => this.loadZone(ref, emptyWants, true)));
-  }
-
-  /**
-   * The rule a redirect domain's deletion would delete, from what `load` or
-   * `loadRedirectDeletion` read; null when Cloudflare has no matching rule.
-   * Checks reachable Cloudflare zones (and any tracked Cloudflare destination)
-   * even when the redirect currently resolves to a non-edge provider like PowerDNS.
-   */
-  redirectRuleOf(source: string, tracked?: TrackedRedirectRule): { zone: ZoneView; rulesetId: string; rule: CfRuleset["rules"][number] } | { problem: string } | null {
-    const redirect = this.redirects.get(source);
-    if (!redirect) return null;
-    const inspect = (ref: ZoneRef): { zone: ZoneView; rulesetId: string; rule: CfRuleset["rules"][number] } | { problem: string } | null => {
-      const state = this.zones.get(zoneMapKey(ref.connectionId, ref.zone.id));
-      if (!state?.records || state.error) return { problem: state?.error ?? `${ref.zone.name} could not be read` };
-      const ruleset = state.rulesets.get(REDIRECT_PHASE);
-      const found = redirectRuleState(ruleset ?? null, redirect, redirectHosts(source, ref.zone.name));
-      if (found.state === "problem") return { problem: found.problem };
-      if (found.state === "create" || !ruleset) return null;
-      return { zone: this.zoneView(ref), rulesetId: ruleset.id, rule: found.rule };
-    };
-    const resolved = this.resolve(source);
-    if (resolved.kind === "unreachable") return { problem: resolved.reason };
-    if (resolved.kind === "choose") return { problem: `${resolved.name} is reachable through more than one connection; choose which one manages it` };
-    if (resolved.kind === "zone") {
-      const provider = this.providers.get(resolved.ref.connectionId);
-      if (provider?.capabilities.edgeRedirects && provider.edge) {
-        const primary = inspect(resolved.ref);
-        if (primary || !tracked || tracked.zoneId === resolved.ref.zone.id) return primary;
-      }
-    }
-    const cfRefs = this.cloudflareRedirectZones(source, tracked);
-    const failedCf = this.connections.filter((connection) => (connection.provider ?? "cloudflare") === "cloudflare" && !connection.active);
-    if (failedCf.length && (tracked
-      ? !cfRefs.some((ref) => ref.zone.id === tracked.zoneId)
-      : !cfRefs.length)) {
-      return { problem: `Cloudflare could not be read: ${failedCf.map((c) => c.error).join("; ")}` };
-    }
-    const hits: { zone: ZoneView; rulesetId: string; rule: CfRuleset["rules"][number] }[] = [];
-    for (const ref of cfRefs) {
-      const checked = inspect(ref);
-      if (!checked) continue;
-      if ("problem" in checked) return checked;
-      hits.push(checked);
-    }
-    if (hits.length > 1) {
-      return { problem: `Cloudflare redirect rules for ${source} exist in more than one zone; remove the extra rule in Cloudflare first` };
-    }
-    return hits[0] ?? null;
-  }
-
-  async deleteRedirectRule(source: string, zoneId: string, rulesetId: string, ruleId: string, connectionId?: string): Promise<void> {
-    const ref = this.zoneRefs.find((candidate) => candidate.zone.id === zoneId && (!connectionId || candidate.connectionId === connectionId))!;
-    await this.providers.get(ref.connectionId)!.edge!.deleteRule(zoneId, REDIRECT_PHASE, rulesetId, ruleId);
-    this.logged([source], ref.zone.name, "delete", "Cloudflare redirect rule", `${source}: the redirect domain was deleted`);
-  }
-
-  /** Whole-host redirect rules in every Cloudflare zone the connections reach, each zone read through its first connection. */
-  async findRedirects(): Promise<{ redirects: FoundRedirect[]; notes: string[] }> {
-    const zones = new Map<string, ZoneRef>();
-    for (const ref of this.zoneRefs) {
-      const provider = this.providers.get(ref.connectionId);
-      if (!provider?.capabilities.edgeRedirects || !provider.edge) continue;
-      if (!INACTIVE_ZONES.has(ref.zone.status) && !zones.has(ref.zone.id)) zones.set(ref.zone.id, ref);
-    }
-    const read = await Promise.all([...zones.values()].map(async (ref): Promise<{ ref: ZoneRef; rules: CfRuleset["rules"] } | { ref: ZoneRef; error: string }> => {
-      try {
-        return { ref, rules: (await this.providers.get(ref.connectionId)!.edge!.entrypoint(ref.zone.id, REDIRECT_PHASE))?.rules ?? [] };
-      } catch (error) {
-        return { ref, error: reason(error) };
-      }
-    }));
-    const redirects = new Map<string, FoundRedirect>();
-    const failed = new Map<string, string[]>();
-    for (const entry of read) {
-      if ("error" in entry) {
-        failed.set(entry.error, [...failed.get(entry.error) ?? [], entry.ref.zone.name]);
-        continue;
-      }
-      for (const rule of entry.rules) {
-        const found = foundRedirect(rule, entry.ref.zone.name);
-        if (found && !redirects.has(found.source)) redirects.set(found.source, found);
-      }
-    }
-    return {
-      redirects: [...redirects.values()].sort((a, b) => a.source.localeCompare(b.source)),
-      notes: [...failed].map(([error, names]) => `${names.length === 1 ? names[0] : `${names.length} zones`} could not be read: ${error}`),
-    };
-  }
-
   /** The records an enforcing site has exactly as wanted, to recognise them once the site is gone. */
   managed(plans: SitePlan[]): Record<string, ManagedRecords> {
     const result: Record<string, ManagedRecords> = {};
     for (const plan of plans) {
       const diff = this.diffs.get(plan.domain);
-      if ((!this.context.policy.automatic && !(plan.panel && this.context.panelOnly)) || plan.redirect || !plan.zone || !diff || !diff.matched.length) continue;
+      if ((!this.context.policy.automatic && !(plan.panel && this.context.panelOnly)) || !plan.zone || !diff || !diff.matched.length) continue;
       const state = this.zones.get(zoneMapKey(plan.zone.connectionId ?? "", plan.zone.id))!;
       result[plan.domain] = {
         zoneId: plan.zone.id,

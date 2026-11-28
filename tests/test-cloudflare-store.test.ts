@@ -124,8 +124,18 @@ test("tokenTemplates separates DNS-only, Panel-gate-only, and combined scopes", 
   expect(templates.both.permissions).toContain("SSL and Certificates: Edit");
   expect(templates.both.permissions).toContain("API Tokens: Read");
 
-  // Direct tokenTemplate with Panel gate required matches templates.panelGate.
+  expect(templates.redirects.permissions).toContain("DNS: Edit");
+  expect(templates.redirects.permissions).toContain("Single Redirect: Edit");
+  expect(templates.redirects.permissions).toContain("Zone: Read");
+  expect(templates.redirects.permissions).not.toContain("SSL and Certificates: Edit");
+  expect(templates.dnsRedirects.permissions).toContain("Single Redirect: Edit");
+  expect(templates.dnsRedirects.permissions).toContain("Zone: Edit");
+  expect(templates.all.permissions).toContain("Single Redirect: Edit");
+  expect(templates.all.permissions).toContain("SSL and Certificates: Edit");
+
+  // Direct tokenTemplate with Panel gate or Redirects required matches the corresponding template.
   expect(tokenTemplate([], { dns: false, panelGate: true })).toEqual(templates.panelGate);
+  expect(tokenTemplate([], { dns: false, redirects: true })).toEqual(templates.redirects);
 });
 
 test("cloudflareTokenHolds answers from the stored read without network calls", async () => {

@@ -47,13 +47,6 @@
 .card-footer .hint { margin:0; }
 .dns-site-table td select { min-width:190px; }
 .dns-status { min-width:220px; }
-.dns-redirect-tools { display:flex; flex-shrink:0; gap:8px; flex-wrap:wrap; }
-.dns-redirect-target { display:block; max-width:240px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; font:14px/1.5 var(--mono); }
-.dns-redirect-profile { white-space:nowrap; }
-.dns-card-target { display:none; }
-.dns-dialog-start { margin-right:auto; }
-.dns-found-table .dns-change-detail { overflow-wrap:anywhere; }
-#dns-found-body { margin-bottom:16px; }
 .dns-settings-table td:first-child { width:220px; }
 .dns-settings-table .mono { color:var(--muted); font-size:13px; }
 .dns-profile-table .switch-state { font-weight:400; color:var(--muted); min-width:84px; }
@@ -67,7 +60,6 @@
   :is(.dns-site-table,.dns-profile-table) :is(th,td):not(:first-child) { padding-left:12px; }
   :is(.dns-site-table,.dns-profile-table) :is(th,td):not(:last-child) { padding-right:12px; }
   .dns-site-table .type-cell { white-space:nowrap; color:var(--muted); }
-  .dns-found-table .site-cell { white-space:nowrap; }
   :is(.dns-profile-table,.dns-orphan-table,.dns-settings-table) .action-cell .actions { justify-content:flex-end; }
 }
 
@@ -193,16 +185,6 @@ p.dns-dialog-note { margin:20px 0 0; }
   .fleet-table.dns-profile-table td.wide-cell { order:2; }
   .fleet-table.dns-profile-table td.dns-sites-cell { display:none; }
   .dns-site-table td select { min-width:0; }
-  /* A redirect card, laid out like a site card: "domain → target" with its
-     note beneath, the DNS status across the width, then the profile with the
-     buttons beside it. */
-  .dns-redirect-table .dns-card-target { display:inline; font-weight:400; overflow-wrap:anywhere; }
-  .dns-redirect-table .dns-card-target > [aria-hidden] { margin-left:4px; }
-  .fleet-table.dns-redirect-table td.dns-redirect-cell { flex-basis:100%; margin-top:-10px; }
-  .fleet-table.dns-redirect-table td.dns-redirect-cell::before, .dns-redirect-table .dns-redirect-target { display:none; }
-  .fleet-table.dns-redirect-table td.dns-status { flex-basis:100%; }
-  .fleet-table.dns-redirect-table td.dns-redirect-profile { flex:1 1 0; order:1; }
-  .fleet-table.dns-redirect-table td.action-cell:has(.btn) { flex:0 0 auto; order:2; align-self:flex-end; }
   /* A log card: time and cause on the first line with the action at its end,
      then the record and the change across the width. The table's 1% width
      would otherwise squeeze the time to a letter per line. */
@@ -221,10 +203,7 @@ p.dns-dialog-note { margin:20px 0 0; }
   .dns-profile-tools { width:100%; flex-wrap:wrap; }
   .dns-default-field { flex:1 1 200px; }
   .dns-default-field select { width:100%; min-width:0; }
-  .card-header:not(.toolbar):has(> .btn, > .dns-profile-tools, > .dns-redirect-tools) { flex-direction:column; align-items:stretch; }
-  .dns-redirect-tools { flex:1 1 100%; }
-  .dns-redirect-tools .btn { flex:1 1 auto; }
-  .dns-redirect-target { max-width:none; white-space:normal; overflow-wrap:anywhere; }
+  .card-header:not(.toolbar):has(> .btn, > .dns-profile-tools) { flex-direction:column; align-items:stretch; }
   .card-footer { flex-direction:column; align-items:stretch; }
   .dns-rows-wrap { border:0; overflow:visible; }
   .dns-rows, .dns-rows tbody { display:block; }

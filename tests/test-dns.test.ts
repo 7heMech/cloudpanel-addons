@@ -146,7 +146,7 @@ describe("connecting Cloudflare", () => {
     const state = await env.act("list");
     const asking = dashboardContent(state);
     expect(asking).toContain("section-shell");
-    for (const section of ["sites", "redirects", "profiles", "settings", "activity"]) {
+    for (const section of ["sites", "profiles", "settings", "activity"]) {
       expect(asking).toContain(`data-section-panel="${section}"`);
     }
     expect(asking).toContain('onclick="dnsCheck(this)">Check now</button>');
@@ -155,20 +155,6 @@ describe("connecting Cloudflare", () => {
     expect(asking).not.toContain("dns-log-table");
     const automatic = dashboardContent({ ...state, automatic: true });
     expect(automatic).toContain('<div class="empty">No changes yet.</div>');
-  });
-
-  test("a long redirects list is cut on a phone, and each card heads with domain → target", async () => {
-    const state = await setup().act("list");
-    const redirects = (count: number) => Array.from({ length: count }, (_, i) => ({
-      domain: `old-${i}.example.net`, type: "redirect", profileId: null, ssl: null, plan: null,
-      redirect: { source: `old-${i}.example.net`, target: "https://example.com/new", status: 301, keepPath: true, keepQuery: true, profileId: null, standIn: false },
-    })) as typeof state.sites;
-    const long = dashboardContent({ ...state, sites: redirects(11) });
-    expect(long).toContain('<tbody data-phone-cut="dns-redirects">');
-    expect(long).toContain('data-phone-more="dns-redirects"');
-    expect(long).toContain("Show all 11 redirects");
-    expect(long).toContain('<span class="visually-hidden">redirects to</span> example.com/new</span>');
-    expect(dashboardContent({ ...state, sites: redirects(10) })).not.toContain("data-phone-more");
   });
 
   test("a token is verified, its accounts and zones found, and it never comes back to the page", async () => {
@@ -524,8 +510,9 @@ describe("what each token holds", () => {
     env.cf.tokens.get(TOKEN)!.policies = [policy(["DNS Write", "API Tokens Read"], ALL_ZONES)];
     const reply = await env.connect();
     const missing = reply.connections[0]!.access!.rows.filter((row) => row.held === "no" && !row.optional).map((row) => row.label);
-    expect(missing).toEqual(["Zone: Edit", "Account Settings: Read", "Single Redirect: Edit", "Zone Settings: Edit", "Config Rules: Edit"]);
-    expect(dashboardContent(reply)).toContain("Missing: Zone: Edit, Account Settings: Read, Single Redirect: Edit, Zone Settings: Edit, Config Rules: Edit");
+    expect(missing).toEqual(["Zone: Edit", "Account Settings: Read", "Zone Settings: Edit", "Config Rules: Edit"]);
+    expect(dashboardContent(reply)).toContain("Missing: Zone: Edit, Account Settings: Read, Zone Settings: Edit, Config Rules: Edit");
+    expect(reply.connections[0]!.access!.rows.find((row) => row.label === "Single Redirect: Edit")).toMatchObject({ optional: true, held: "no" });
     const access = reply.connections[0]!.access!;
     const optional = { label: "Firewall Services: Edit", usedFor: "Cloudflare bans for login jails", held: "no" as const, optional: true as const };
     const html = dashboardContent({ ...reply, connections: [{ ...reply.connections[0]!, access: { ...access, rows: [...access.rows, optional] } }] });
@@ -1422,18 +1409,25 @@ describe("wildcard DNS", () => {
     expect(plan.changes.filter((change) => /^(A|AAAA) /.test(change.subject))).toEqual([]);
   });
 
-  test("a sibling redirect or unproxied panel hostname below a covered subdomain keeps explicit records on the subdomain", async () => {
+  test("a sibling TXT record or unproxied panel hostname below a covered subdomain keeps explicit records on the subdomain", async () => {
     const env = setup();
-    env.sites.push(site(3, "b.example.com"));
+    env.sites.push(site(3, "b.example.com"), site(4, "sub.shop.example.com"));
     await env.connect();
+    const txtProfile = await env.act("save-profile", {
+      name: "Verify",
+      records: [{ type: "TXT", name: "{domain}", content: "verify=1" }],
+      mailcow: false,
+      zone: { ssl: null, alwaysHttps: null, acmeFullSsl: false, webmailFullSsl: false, skipFirewallIps: [] },
+    });
+    const verifyId = txtProfile.profiles.find((p) => p.name === "Verify")!.id;
     await env.act("assign", { domains: ["example.com", "shop.example.com", "b.example.com"], profileId: "web" });
-    await env.act("save-redirect", { source: "sub.shop.example.com", target: "https://example.com" });
+    await env.act("assign", { domains: ["sub.shop.example.com"], profileId: verifyId });
     await env.act("set-panel-host", { name: "k7m2p9x4.b.example.com" });
 
     const review = await env.act("set-automatic", { automatic: true });
     const shopReview = review.review!.sites.find((plan) => plan.domain === "shop.example.com")!;
     const bReview = review.review!.sites.find((plan) => plan.domain === "b.example.com")!;
-    expect(shopReview.wildcardBlocked).toContain("AAAA sub.shop.example.com");
+    expect(shopReview.wildcardBlocked).toContain("TXT sub.shop.example.com");
     expect(bReview.wildcardBlocked).toContain("k7m2p9x4.b.example.com");
 
     await env.act("confirm", { token: review.review!.token });
@@ -1441,7 +1435,7 @@ describe("wildcard DNS", () => {
       "A *.example.com 203.0.113.10 proxied",
       "A shop.example.com 203.0.113.10 proxied",
       "AAAA shop.example.com 2001:db8::10 proxied",
-      "AAAA sub.shop.example.com 100:: proxied",
+      "TXT sub.shop.example.com \"verify=1\"",
       "A b.example.com 203.0.113.10 proxied",
       "AAAA b.example.com 2001:db8::10 proxied",
       "A k7m2p9x4.b.example.com 203.0.113.10",
@@ -1509,21 +1503,21 @@ describe("wildcard DNS", () => {
     expect(cnameState.held).toBe(true);
   });
 
-  test("affected() pulls wildcard-covered ancestors when a descendant redirect is added, and keeps orphans when a profile drops rows", async () => {
+  test("affected() pulls wildcard-covered ancestors when a descendant panel host is added, and keeps orphans when a profile drops rows", async () => {
     const env = setup();
     await env.connect();
     await env.act("assign", { domains: ["example.com", "shop.example.com"], profileId: "web" });
     await env.automatic();
     expect(env.records().some((record) => record.includes("shop.example.com"))).toBe(false);
 
-    // Adding a redirect beneath shop.example.com brings shop.example.com into the review so it gets explicit A/AAAA at the same time.
-    const review = await env.act("save-redirect", { source: "sub.shop.example.com", target: "https://example.com" });
+    // Adding a panel hostname beneath shop.example.com brings shop.example.com into the review so it gets explicit A/AAAA at the same time.
+    const review = await env.act("set-panel-host", { name: "sub.shop.example.com" });
     expect(review.review!.sites.map((plan) => plan.domain).sort()).toEqual(["shop.example.com", "sub.shop.example.com"]);
     await env.act("confirm", { token: review.review!.token });
     expect(env.records()).toEqual(expect.arrayContaining([
       "A shop.example.com 203.0.113.10 proxied",
       "AAAA shop.example.com 2001:db8::10 proxied",
-      "AAAA sub.shop.example.com 100:: proxied",
+      "A sub.shop.example.com 203.0.113.10",
     ]));
 
     // Removing all rows from a profile stops managing them without wiping orphan tracking for already-written records.
@@ -1544,14 +1538,14 @@ describe("wildcard DNS", () => {
     await env.automatic();
     expect(env.records().some((record) => record.includes("a.sub.example.com"))).toBe(false);
 
-    // Adding a redirect at intermediate ancestor sub.example.com brings descendant a.sub.example.com into the review.
-    const review = await env.act("save-redirect", { source: "sub.example.com", target: "https://example.com" });
+    // Adding a panel hostname at intermediate ancestor sub.example.com brings descendant a.sub.example.com into the review.
+    const review = await env.act("set-panel-host", { name: "sub.example.com" });
     expect(review.review!.sites.map((plan) => plan.domain).sort()).toEqual(["a.sub.example.com", "sub.example.com"]);
     await env.act("confirm", { token: review.review!.token });
     expect(env.records()).toEqual(expect.arrayContaining([
       "A a.sub.example.com 203.0.113.10 proxied",
       "AAAA a.sub.example.com 2001:db8::10 proxied",
-      "AAAA sub.example.com 100:: proxied",
+      "A sub.example.com 203.0.113.10",
     ]));
 
     // Zone-level non-address row (CAA {zone}) on a longer blocked subdomain must not outrank a shorter blocking sibling in writeOrder.
@@ -1563,12 +1557,12 @@ describe("wildcard DNS", () => {
     const web = (await env2.act("list")).profiles.find((profile) => profile.id === "web")!;
     await env2.act("save-profile", { ...web, records: [...web.records, { type: "CAA", name: "{zone}", content: '0 issue "letsencrypt.org"', ttl: 1 }] });
     await env2.act("assign", { domains: ["longname.sub.example.com"], profileId: "web" });
-    await env2.act("save-redirect", { source: "b.sub.example.com", target: "https://example.com" });
+    await env2.act("set-panel-host", { name: "b.sub.example.com" });
     await env2.automatic();
     expect(env2.records()).toEqual(expect.arrayContaining([
       "A longname.sub.example.com 203.0.113.10 proxied",
       "AAAA longname.sub.example.com 2001:db8::10 proxied",
-      "AAAA b.sub.example.com 100:: proxied",
+      "A b.sub.example.com 203.0.113.10",
     ]));
 
     // A read-only refresh after a matching wildcard appears must not drop orphan tracking while explicit records are still pending deletion.

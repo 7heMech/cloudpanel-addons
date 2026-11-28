@@ -2,7 +2,7 @@ import { describe, expect, test } from "bun:test";
 import type { CfRecord } from "../lib/cloudflare/api";
 import { parseProfile, type Profile } from "../addons/dns/model";
 import { PRESETS, seededPolicy } from "../addons/dns/presets";
-import { diffRecords, renderProfile, renderRedirect, wildcardSource, type SiteVars } from "../addons/dns/records";
+import { diffRecords, renderProfile, wildcardSource, type SiteVars } from "../addons/dns/records";
 import { tokenTemplate } from "../lib/cloudflare/tokens";
 
 const vars = (domain: string, zone = "example.com", extra: Partial<SiteVars> = {}): SiteVars => ({
@@ -177,7 +177,7 @@ describe("profiles", () => {
 });
 
 describe("the Cloudflare token template", () => {
-  test("is a user token for any account and every zone, with the permissions the profiles and redirect domains use", () => {
+  test("is a user token for any account and every zone, with the permissions DNS profiles use", () => {
     const template = tokenTemplate(seededPolicy().profiles);
     const url = new URL(template.url);
     expect(url.origin + url.pathname).toBe("https://dash.cloudflare.com/profile/api-tokens");
@@ -185,11 +185,20 @@ describe("the Cloudflare token template", () => {
     expect(url.searchParams.get("zoneId")).toBe("all");
     expect(JSON.parse(url.searchParams.get("permissionGroupKeys")!)).toEqual([
       { key: "dns", type: "edit" }, { key: "zone", type: "edit" }, { key: "account_settings", type: "read" },
-      { key: "dynamic_redirect", type: "edit" }, { key: "zone_settings", type: "edit" }, { key: "config_settings", type: "edit" },
+      { key: "zone_settings", type: "edit" }, { key: "config_settings", type: "edit" },
       { key: "api_tokens", type: "read" },
     ]);
     expect(template.permissions).toContain("Config Rules: Edit");
-    expect(template.permissions).toContain("Single Redirect: Edit");
+    expect(template.permissions).not.toContain("Single Redirect: Edit");
+
+    const redirectsTemplate = tokenTemplate([], { dns: false, redirects: true });
+    const redirectsUrl = new URL(redirectsTemplate.url);
+    expect(JSON.parse(redirectsUrl.searchParams.get("permissionGroupKeys")!)).toEqual([
+      { key: "zone", type: "read" }, { key: "dns", type: "edit" },
+      { key: "dynamic_redirect", type: "edit" }, { key: "api_tokens", type: "read" },
+    ]);
+    expect(redirectsTemplate.permissions).toContain("Single Redirect: Edit");
+    expect(redirectsTemplate.permissions).toContain("DNS: Edit");
   });
 
   test("asks for WAF only for a firewall skip", () => {
@@ -325,7 +334,7 @@ describe("wildcard coverage (RFC 4592)", () => {
     expect(cnameWild.ops.map((op) => op.record.type)).toEqual(["A", "AAAA"]);
   });
 
-  test("planned sibling wildcard overrides stale published wildcard, and redirects skip *.{domain} and wildcard coverage", () => {
+  test("planned sibling wildcard overrides stale published wildcard, and NS cuts occlude descendant wildcards", () => {
     const rendered = renderProfile(web, vars("shop.example.com"));
     const stale = [
       published("A", "*.example.com", "198.51.100.1", { proxied: true }),
@@ -338,12 +347,6 @@ describe("wildcard coverage (RFC 4592)", () => {
     });
     expect(diff.covered).toEqual({ "shop.example.com": "*.example.com" });
     expect(diff.ops).toEqual([]);
-
-    const redirect = renderRedirect(webAndMailcow, ["example.com", "www.example.com"], vars("example.com"), "100::");
-    expect(redirect.records.some((record) => record.name === "*.example.com")).toBe(false);
-    const subRedirect = renderRedirect(web, ["shop.example.com"], vars("shop.example.com"), "100::");
-    expect(diffRecords(subRedirect, wild(), { allowWildcard: false }).ops.map((op) => `${op.action} ${op.record.type} ${op.record.name}`))
-      .toEqual(["create AAAA shop.example.com"]);
     expect(wildcardSource("example.com", "example.com", wild())).toBeNull();
 
     // An NS delegation cut at an ancestor occludes any wildcard at or below the cut.

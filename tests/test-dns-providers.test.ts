@@ -299,7 +299,7 @@ describe("a token's own permissions", () => {
     expect(access.coverage.waf).toEqual({ held: "yes" });
     expect(access.coverage.configRules).toEqual({ held: "no" });
     const [web] = seededPolicy().profiles;
-    expect(connectionPermissions({ token: access }, [web!]).missing).toEqual(["Zone: Edit", "Account Settings: Read", "Single Redirect: Edit", "Config Rules: Edit"]);
+    expect(connectionPermissions({ token: access }, [web!]).missing).toEqual(["Zone: Edit", "Account Settings: Read", "Config Rules: Edit"]);
   });
 
   test("missing and partial permissions are named, a deny wins, and reach is described", () => {

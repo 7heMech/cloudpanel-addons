@@ -1,0 +1,1095 @@
+/**
+ * Redirects' privileged verbs. Only these read the shared Cloudflare API tokens
+ * or touch CloudPanel's stand-in sites, and nothing they return to the manager
+ * contains a token.
+ *
+ * Changes that alter what Redirects writes once it is Automatic -- turning that
+ * on, editing redirects, releasing holds, deleting Cloudflare rules, and
+ * replacing a redirect from CloudPanel's Create Site form -- are reviewed first
+ * and applied only on confirmation of that exact plan digest.
+ */
+import { Database } from "bun:sqlite";
+import { createHash, randomBytes } from "node:crypto";
+import { existsSync } from "node:fs";
+import { ActionFailure, failAction, readJsonRequest, replyToAction } from "../../lib/action";
+import { detectAddresses, type Addresses } from "../../lib/addresses";
+import {
+  cloudflareConnectionViews, readCloudflareConnections, readCloudflareSecrets, readCloudflareStatus,
+  readDnsZoneProfiles, recordCloudflareReports, removeCloudflareConnection, saveCloudflareConnection,
+  type CloudflareConnectionView, type CloudflareStorePaths,
+} from "../../lib/cloudflare/store";
+import { tokenTemplates, type TokenTemplates } from "../../lib/cloudflare/tokens";
+import { withFileLock } from "../../lib/file-lock";
+import { issuedForAll } from "../../lib/panel-custom-domain";
+import { withPanelDb } from "../../lib/panel-db";
+import {
+  addonConfigFile, addonStateDir, CLOUDFLARE_STATE_DIR, LOCK_DIR, NGINX_CERTIFICATES_DIR, PANEL_DB,
+} from "../../lib/paths";
+import { type ApiFetch, redact } from "../../lib/provider-http";
+import { readState, writeState } from "../../lib/root-state";
+import { DEFAULT_SITE_VHOST_PATHS } from "../../lib/site-vhost";
+import { panelUserUid } from "../../lib/sso-auth";
+import { isStandInSite } from "../../lib/stand-ins";
+import { trustedText } from "../../lib/trusted-file";
+import {
+  RedirectsRun, type Change, type LogEntry, type RedirectPlan, type TrackedRedirectRule,
+} from "./engine";
+import {
+  cloudflareId, connectionId, emptyPolicy, hostname, parsePolicy, parseRedirect, parseRedirects,
+  type Policy, type Redirect, type RedirectStatus,
+} from "./model";
+import { redirectHosts, standInHosts, type FoundRedirect } from "./rules";
+import {
+  clpctlIssue, clpctlStandIns, readStandIns, retryStandInCertificates,
+  type CertificateIssue, type StandInPaths, type StandIns,
+} from "./stand-in";
+import { REDIRECTS_VERBS } from "./verbs";
+
+type RedirectsVerb = keyof typeof REDIRECTS_VERBS;
+
+const VERBS = Object.keys(REDIRECTS_VERBS) as RedirectsVerb[];
+const NO_BODY: RedirectsVerb[] = ["list", "check", "find-redirects", "create-site-helper", "reconcile"];
+const MAX_BODY = 256 * 1024;
+const REVIEW_LIFETIME = 15 * 60_000;
+const MAX_LOG = 1000;
+const PAGE_LOG = 200;
+const SELF_SIGNED = "1";
+
+export interface PanelSiteInfo {
+  id: number;
+  domain: string;
+  user?: string;
+  selfSigned: boolean;
+  certificatePem?: string | null;
+}
+
+export interface RedirectsPaths {
+  configFile: string;
+  panelDb: string;
+  stateDir: string;
+  cloudflareDir?: string;
+  cloudflareLockFile?: string;
+  dnsStateDir?: string;
+  lockFile: string;
+  clpctl: string;
+  sqlite3: string;
+  nginxVhostDir: string;
+  sslCertDir?: string;
+  tempDir: string;
+  rootUid: number;
+}
+
+export interface RedirectsActionOptions {
+  paths?: Partial<RedirectsPaths>;
+  input?: string;
+  emitReply?: boolean;
+  processUid?: number;
+  fetch?: ApiFetch;
+  sites?: () => PanelSiteInfo[];
+  addresses?: () => Addresses;
+  issue?: CertificateIssue;
+  now?: () => number;
+  standIns?: () => StandIns;
+}
+
+export const DEFAULT_REDIRECTS_PATHS: RedirectsPaths = {
+  configFile: addonConfigFile("redirects"),
+  panelDb: PANEL_DB,
+  stateDir: addonStateDir("redirects"),
+  lockFile: `${LOCK_DIR}/redirects.lock`,
+  clpctl: "/usr/bin/clpctl",
+  sqlite3: DEFAULT_SITE_VHOST_PATHS.sqlite3,
+  nginxVhostDir: DEFAULT_SITE_VHOST_PATHS.nginxVhostDir,
+  tempDir: DEFAULT_SITE_VHOST_PATHS.tempDir,
+  rootUid: 0,
+};
+
+// ---------------------------------------------------------------------------
+// Page state & API replies
+// ---------------------------------------------------------------------------
+
+export interface RedirectView extends Redirect {
+  standIn: boolean;
+  plan: RedirectPlan | null;
+}
+
+export interface Review {
+  token: string;
+  title: string;
+  text: string;
+  sites: RedirectPlan[];
+  blocked: boolean;
+  confirmLabel: string;
+  danger: boolean;
+}
+
+export type LogLine = LogEntry & { cause: string };
+
+export interface Found {
+  redirects: FoundRedirect[];
+  notes: string[];
+}
+
+export interface RedirectsState {
+  automatic: boolean;
+  redirects: RedirectView[];
+  connections: CloudflareConnectionView[];
+  zones: string[];
+  checkedAt: string | null;
+  waitUntil: number;
+  tokens: TokenTemplates;
+  serverIps: string[];
+  dnsEnabled: boolean;
+  firewallEnabled: boolean;
+  log: LogLine[];
+}
+
+export type RedirectsReply = RedirectsState & {
+  review?: Review;
+  notice?: string;
+  error?: string;
+  found?: Found;
+  replaced?: string;
+};
+
+export interface CreateSiteRedirectEntry {
+  source: string;
+  target: string;
+  status: RedirectStatus;
+  keepPath: boolean;
+  keepQuery: boolean;
+  standIn: boolean;
+  hosts: string[];
+  servedBy: "cloudflare" | "stand-in" | "pending";
+  zone: string | null;
+}
+
+export interface CreateSiteHelper {
+  redirects: CreateSiteRedirectEntry[];
+  automatic: boolean;
+  hasCloudflare: boolean;
+}
+
+// ---------------------------------------------------------------------------
+// Stored state
+// ---------------------------------------------------------------------------
+
+interface Status {
+  checkedAt: string | null;
+  plans: Record<string, RedirectPlan>;
+  /** Cloudflare connection ids saved when Redirects last looked; absent before its first look. */
+  connectionIds?: string[];
+  /** Last known Cloudflare zone holding a redirect's edge rule, kept across provider switches until deleted. */
+  redirectRules?: Record<string, TrackedRedirectRule>;
+}
+
+interface Pending {
+  token: string;
+  expiresAt: number;
+  base: string;
+  digest: string;
+  domains: string[];
+  policy?: Policy;
+  /** Deleting a redirect from the Redirects page. */
+  deleteSource?: string;
+  /** Replacing a redirect from CloudPanel's Create Site form. */
+  replaceSource?: string;
+}
+
+const emptyStatus = (): Status => ({ checkedAt: null, plans: {} });
+const hash = (value: unknown): string => createHash("sha256").update(JSON.stringify(value) ?? "null").digest("hex");
+
+function cloudflarePathsOf(paths: RedirectsPaths): CloudflareStorePaths {
+  const customState = paths.stateDir !== DEFAULT_REDIRECTS_PATHS.stateDir;
+  return {
+    stateDir: paths.cloudflareDir ?? (customState ? `${paths.stateDir}/cloudflare` : CLOUDFLARE_STATE_DIR),
+    lockFile: paths.cloudflareLockFile ?? (customState ? `${paths.lockFile}.cloudflare` : `${LOCK_DIR}/cloudflare.lock`),
+    rootUid: paths.rootUid,
+  };
+}
+
+class Files {
+  readonly cfPaths: CloudflareStorePaths;
+
+  constructor(private readonly paths: RedirectsPaths) {
+    this.cfPaths = cloudflarePathsOf(paths);
+  }
+
+  private path(name: string): string {
+    return `${this.paths.stateDir}/${name}.json`;
+  }
+
+  policy(): Policy {
+    const raw = readState<unknown>(this.path("policy"), this.paths.rootUid, () => null);
+    return raw === null ? emptyPolicy() : parsePolicy(raw);
+  }
+
+  savePolicy(policy: Policy): void {
+    writeState(this.path("policy"), parsePolicy(policy), this.paths.rootUid);
+  }
+
+  status(): Status {
+    return { ...emptyStatus(), ...readState<Partial<Status>>(this.path("status"), this.paths.rootUid, emptyStatus) };
+  }
+
+  saveStatus(status: Status): void {
+    writeState(this.path("status"), status, this.paths.rootUid);
+  }
+
+  pending(): Pending | null {
+    return readState<Pending | null>(this.path("pending"), this.paths.rootUid, () => null);
+  }
+
+  savePending(pending: Pending | null): void {
+    writeState(this.path("pending"), pending, this.paths.rootUid);
+  }
+
+  log(): LogLine[] {
+    return readState<LogLine[]>(this.path("log"), this.paths.rootUid, () => []);
+  }
+
+  appendLog(lines: LogLine[]): void {
+    if (!lines.length) return;
+    writeState(this.path("log"), [...lines.reverse(), ...this.log()].slice(0, MAX_LOG), this.paths.rootUid);
+  }
+}
+
+// ---------------------------------------------------------------------------
+// CloudPanel's sites
+// ---------------------------------------------------------------------------
+
+function columns(db: Database, table: string): Set<string> {
+  return new Set(db.query<{ name: string }, []>(`PRAGMA table_info(${table});`).all().map((row) => row.name));
+}
+
+export function panelSites(panelDb: string): PanelSiteInfo[] {
+  return withPanelDb(panelDb, (db) => {
+    const site = columns(db, "site");
+    const certCols = site.has("certificate_id") ? columns(db, "certificate") : new Set<string>();
+    const certificate = certCols.has("type");
+    const certPem = certificate && certCols.has("certificate");
+    const rows = db.query<{
+      id: number; domain_name: string; user: string | null; cert: string | null; cert_pem: string | null;
+    }, []>(
+      `SELECT s.id, s.domain_name, ${site.has("user") ? "s.user" : "NULL"} AS user,
+              ${certificate ? "c.type" : "NULL"} AS cert,
+              ${certPem ? "c.certificate" : "NULL"} AS cert_pem
+         FROM site s ${certificate ? "LEFT JOIN certificate c ON c.id = s.certificate_id" : ""}
+        ORDER BY s.domain_name`,
+    ).all();
+    const sites: PanelSiteInfo[] = [];
+    for (const row of rows) {
+      let domain: string;
+      try {
+        domain = hostname(row.domain_name, "a site");
+      } catch {
+        continue;
+      }
+      sites.push({
+        id: Number(row.id),
+        domain,
+        ...(row.user ? { user: row.user } : {}),
+        selfSigned: String(row.cert) === SELF_SIGNED,
+        ...(row.cert_pem ? { certificatePem: row.cert_pem } : {}),
+      });
+    }
+    return sites;
+  });
+}
+
+// ---------------------------------------------------------------------------
+// One action invocation
+// ---------------------------------------------------------------------------
+
+class Action {
+  readonly files: Files;
+  readonly now: number;
+  private cachedSites: PanelSiteInfo[] | null = null;
+  private cachedStandIns: StandIns | null = null;
+  private cachedAddresses: Addresses | null = null;
+  private readonly runs: RedirectsRun[] = [];
+  cause = "Scheduled check";
+
+  constructor(readonly paths: RedirectsPaths, readonly options: RedirectsActionOptions) {
+    this.files = new Files(paths);
+    this.now = options.now?.() ?? Date.now();
+  }
+
+  panelSites(fresh = false): PanelSiteInfo[] {
+    if (!this.cachedSites || fresh) this.cachedSites = this.options.sites?.() ?? panelSites(this.paths.panelDb);
+    return this.cachedSites;
+  }
+
+  standInPaths(): StandInPaths {
+    const { panelDb, sqlite3, nginxVhostDir, tempDir } = this.paths;
+    return {
+      file: `${this.paths.stateDir}/standins.json`,
+      clpctl: this.paths.clpctl,
+      vhost: { panelDb, sqlite3, nginxVhostDir, tempDir },
+      rootUid: this.paths.rootUid,
+    };
+  }
+
+  standIns(): StandIns {
+    this.cachedStandIns ??= this.options.standIns?.()
+      ?? clpctlStandIns(this.standInPaths(), (domain) => this.panelSites(true).find((site) => site.domain === domain), () => this.now);
+    return this.cachedStandIns;
+  }
+
+  /** Real CloudPanel sites, excluding Redirects' own stand-ins. */
+  sites(fresh = false): PanelSiteInfo[] {
+    const records = readStandIns(this.standInPaths());
+    const current = this.standIns().current;
+    return this.panelSites(fresh).filter((site) => !current[site.domain] && !isStandInSite(records[site.domain], site, this.now));
+  }
+
+  addresses(): Addresses {
+    this.cachedAddresses ??= this.options.addresses?.() ?? detectAddresses();
+    return this.cachedAddresses;
+  }
+
+  run(policy: Policy): RedirectsRun {
+    const connections = readCloudflareConnections(this.files.cfPaths);
+    const tokens = readCloudflareSecrets(this.files.cfPaths);
+    const { reports, backoffUntil } = readCloudflareStatus(this.files.cfPaths);
+    const run = new RedirectsRun({
+      policy,
+      connections,
+      tokens,
+      siteDomains: new Set(this.sites().map((site) => site.domain)),
+      fetch: this.options.fetch,
+      backoff: backoffUntil,
+      standIns: this.standIns(),
+      storedTokens: Object.fromEntries(reports.filter((report) => report.active).map((report) => [report.id, report.token])),
+    });
+    this.runs.push(run);
+    return run;
+  }
+
+  writeLog(): void {
+    this.files.appendLog(this.runs.flatMap((run) => run.log.splice(0).map((entry) => ({ ...entry, cause: this.cause }))));
+  }
+
+  async rememberBackoff(): Promise<void> {
+    if (!this.runs.length) return;
+    const { backoffUntil } = readCloudflareStatus(this.files.cfPaths);
+    let maxUntil = backoffUntil;
+    for (const run of this.runs) maxUntil = Math.max(maxUntil, run.backoff());
+    if (maxUntil > backoffUntil) {
+      await recordCloudflareReports([], maxUntil, false, {}, this.files.cfPaths);
+    }
+  }
+
+  async record(run: RedirectsRun, plans: RedirectPlan[], domains: string[] | "all"): Promise<void> {
+    const status = this.files.status();
+    const policy = this.files.policy();
+    const currentSources = new Set(policy.redirects.map((redirect) => redirect.source));
+    const plansByDomain = domains === "all"
+      ? {}
+      : Object.fromEntries(Object.entries(status.plans).filter(([domain]) => currentSources.has(domain)));
+    const redirectRules: Record<string, TrackedRedirectRule> = { ...(status.redirectRules ?? {}) };
+    for (const domain of Object.keys(redirectRules)) {
+      if (!currentSources.has(domain)) delete redirectRules[domain];
+    }
+    for (const plan of plans) {
+      if (domains !== "all" && !domains.includes(plan.domain)) continue;
+      plansByDomain[plan.domain] = plan;
+      if (plan.zone) {
+        redirectRules[plan.domain] = { connectionId: plan.zone.connectionId, zoneId: plan.zone.id, zoneName: plan.zone.name };
+      }
+    }
+    this.files.saveStatus({
+      ...status,
+      checkedAt: domains === "all" ? new Date(this.now).toISOString() : status.checkedAt,
+      plans: plansByDomain,
+      redirectRules,
+    });
+    if (run.connections.length || domains === "all") {
+      await recordCloudflareReports(run.reports(), run.backoff(), domains === "all", run.tokens, this.files.cfPaths);
+    }
+  }
+
+  state(): RedirectsState {
+    const policy = this.files.policy();
+    const status = this.files.status();
+    const standIns = this.standIns().current;
+    const cf = cloudflareConnectionViews([], { includeDns: false, requireRedirects: true }, this.files.cfPaths);
+    const detected = this.addresses();
+    const serverIps = [detected.ipv4, detected.ipv6].filter((ip): ip is string => Boolean(ip));
+    const dnsProfiles = readDnsZoneProfiles({ dnsDir: this.paths.dnsStateDir, rootUid: this.paths.rootUid });
+    return {
+      automatic: policy.automatic,
+      redirects: policy.redirects.map((redirect): RedirectView => ({
+        ...redirect,
+        standIn: Boolean(standIns[redirect.source]),
+        plan: status.plans[redirect.source] ?? null,
+      })),
+      connections: cf.connections,
+      zones: cf.zones,
+      checkedAt: status.checkedAt,
+      waitUntil: cf.backoffUntil,
+      tokens: tokenTemplates(dnsProfiles),
+      serverIps,
+      dnsEnabled: existsSync(addonConfigFile("dns")),
+      firewallEnabled: existsSync(addonConfigFile("firewall")),
+      log: this.files.log().slice(0, PAGE_LOG),
+    };
+  }
+
+  /** Local-only state for CloudPanel's Create Site form notice; never calls Cloudflare or waits for the lock. */
+  createSiteHelper(): CreateSiteHelper {
+    const policy = this.files.policy();
+    const status = this.files.status();
+    const standIns = this.standIns().current;
+    const cfConnections = readCloudflareConnections(this.files.cfPaths);
+    const hasCloudflare = cfConnections.length > 0;
+    const redirects: CreateSiteRedirectEntry[] = policy.redirects.map((redirect) => {
+      const plan = status.plans[redirect.source];
+      const standIn = standIns[redirect.source];
+      const tracked = status.redirectRules?.[redirect.source];
+      const zoneName = plan?.zone?.name ?? tracked?.zoneName ?? null;
+      const hosts = standIn?.hosts?.length
+        ? standIn.hosts
+        : redirect.hosts?.length
+          ? redirect.hosts
+          : zoneName && redirect.mode !== "local"
+            ? redirectHosts(redirect.source, zoneName)
+            : standInHosts(redirect.source);
+      const servedBy: CreateSiteRedirectEntry["servedBy"] = standIn
+        ? "stand-in"
+        : (plan?.zone || tracked) && redirect.mode !== "local"
+          ? "cloudflare"
+          : "pending";
+      return {
+        source: redirect.source,
+        target: redirect.target,
+        status: redirect.status,
+        keepPath: redirect.keepPath,
+        keepQuery: redirect.keepQuery,
+        standIn: Boolean(standIn),
+        hosts,
+        servedBy,
+        zone: zoneName,
+      };
+    });
+    return { redirects, automatic: policy.automatic, hasCloudflare };
+  }
+
+  reply(extra: { review?: Review; notice?: string; error?: string; found?: Found; replaced?: string } = {}): RedirectsReply {
+    this.writeLog();
+    return { ...this.state(), ...extra };
+  }
+
+  // -------------------------------------------------------------------------
+  // Provider transition holds
+  // -------------------------------------------------------------------------
+
+  private standInRedirects(policy: Policy, includeLocal = false): string[] {
+    const current = this.standIns().current;
+    return Object.keys(current).filter((domain) => {
+      const redirect = policy.redirects.find((candidate) => candidate.source === domain);
+      return Boolean(redirect && (includeLocal || redirect.mode !== "local"));
+    });
+  }
+
+  /**
+   * Holds redirects for review whenever a shared Cloudflare connection arrives
+   * or goes (whether Redirects, DNS, or Firewall changed it), so moving a
+   * redirect between Cloudflare and a local stand-in site is always reviewed.
+   */
+  noticeConnections(): void {
+    const currentIds = readCloudflareConnections(this.files.cfPaths).map((connection) => connection.id);
+    const status = this.files.status();
+    const prevIds = status.connectionIds;
+    if (prevIds !== undefined && prevIds.length === currentIds.length && prevIds.every((id, index) => id === currentIds[index])) {
+      return;
+    }
+    const activeIds = new Set(currentIds);
+    const policy = this.files.policy();
+    const nextChoices = { ...policy.zoneChoices };
+    const clearedZones: string[] = [];
+    for (const [zone, choice] of Object.entries(nextChoices)) {
+      if (!activeIds.has(choice.connectionId)) {
+        clearedZones.push(zone);
+        delete nextChoices[zone];
+      }
+    }
+    let held: string[] = [];
+    if (prevIds !== undefined) {
+      const added = currentIds.some((id) => !prevIds.includes(id));
+      const removedIds = prevIds.filter((id) => !currentIds.includes(id));
+      const emptied = prevIds.length > 0 && currentIds.length === 0;
+      const partialRemoved = removedIds.length > 0 && currentIds.length > 0
+        ? policy.redirects
+          .filter((redirect) => redirect.mode !== "local")
+          .map((redirect) => redirect.source)
+          .filter((source) => {
+            const planConn = status.plans[source]?.zone?.connectionId;
+            const trackedConn = status.redirectRules?.[source]?.connectionId;
+            if (!planConn || removedIds.includes(planConn) || (trackedConn && removedIds.includes(trackedConn))) return true;
+            return clearedZones.some((zone) => source === zone || source.endsWith(`.${zone}`));
+          })
+        : [];
+      held = [
+        ...(added ? this.standInRedirects(policy) : []),
+        ...(emptied ? policy.redirects.filter((redirect) => redirect.mode !== "local").map((redirect) => redirect.source) : []),
+        ...partialRemoved,
+      ];
+    } else if (currentIds.length > 0) {
+      held = this.standInRedirects(policy);
+    }
+    if (clearedZones.length || held.some((domain) => !policy.held.includes(domain))) {
+      this.files.savePolicy({
+        ...policy,
+        zoneChoices: nextChoices,
+        held: [...new Set([...policy.held, ...held])],
+      });
+    }
+    const latest = this.files.status();
+    this.files.saveStatus({ ...latest, connectionIds: currentIds });
+  }
+
+  // -------------------------------------------------------------------------
+  // Runs
+  // -------------------------------------------------------------------------
+
+  async refresh(domains: string[] | "all"): Promise<void> {
+    const policy = this.files.policy();
+    const run = this.run(policy);
+    const allSources = policy.redirects.map((redirect) => redirect.source);
+    const chosen = domains === "all" ? allSources : allSources.filter((source) => domains.includes(source));
+    if (!chosen.length && domains !== "all") return;
+    await run.discover(domains === "all");
+    await run.load(chosen);
+    await this.record(run, run.planAll(domains === "all" ? undefined : chosen), domains === "all" ? "all" : chosen);
+  }
+
+  private async tryRefresh(domains: string[] | "all"): Promise<void> {
+    try {
+      await this.refresh(domains);
+    } catch (error) {
+      if (!(error instanceof ActionFailure)) throw error;
+    }
+  }
+
+  async check(retryCerts: boolean): Promise<void> {
+    const policy = this.files.policy();
+    const previousPlans = this.files.status().plans;
+    const standIns = this.standIns().current;
+    const run = this.run(policy);
+    const allSources = policy.redirects.map((redirect) => redirect.source);
+    await run.discover(true);
+    await run.load(allSources);
+
+    // If a domain previously served by a local stand-in now matches a Cloudflare zone
+    // (for example, the zone was added to Cloudflare later), hold it for review.
+    const newlyZoned: string[] = [];
+    for (const redirect of policy.redirects) {
+      if (redirect.mode === "local" || policy.held.includes(redirect.source) || !standIns[redirect.source]) continue;
+      if (previousPlans[redirect.source]?.zone) continue;
+      const plan = run.planRedirect(redirect);
+      if (plan.zone) newlyZoned.push(redirect.source);
+    }
+    if (newlyZoned.length) {
+      run.hold(newlyZoned);
+      policy.held = [...new Set([...policy.held, ...newlyZoned])];
+      this.files.savePolicy(policy);
+    }
+
+    const released = run.releaseHeld();
+    if (released.length) {
+      policy.held = policy.held.filter((domain) => !released.includes(domain));
+      this.files.savePolicy(policy);
+    }
+    await run.enforce(allSources);
+    const plans = run.planAll();
+    await this.record(run, plans, "all");
+    if (retryCerts) await this.retryStandInCertificates();
+  }
+
+  /** Run in the periodic reconcile pass only: a certificate request can take minutes. */
+  async retryStandInCertificates(): Promise<void> {
+    if (this.options.standIns) return;
+    const current = this.standIns().current;
+    const owners = [this.paths.rootUid, panelUserUid() ?? this.paths.rootUid];
+    const certDir = this.paths.sslCertDir ?? NGINX_CERTIFICATES_DIR;
+    const now = this.options.now ? this.options.now() : Date.now();
+    const covered = (domain: string, hosts: string[]): boolean | null => {
+      if (!current[domain]) return null;
+      const site = this.panelSites(true).find((candidate) => candidate.domain === domain);
+      if (!site) return null;
+      if (site.selfSigned) return false;
+      const pem = site.certificatePem
+        || owners.map((uid) => trustedText(`${certDir}/${domain}.crt`, uid)).find((text) => text !== null)
+        || null;
+      return issuedForAll(pem, hosts, now);
+    };
+    await retryStandInCertificates(this.standInPaths(), covered, this.options.issue ?? clpctlIssue(this.paths.clpctl), now);
+  }
+
+  // -------------------------------------------------------------------------
+  // Reviews & confirmations
+  // -------------------------------------------------------------------------
+
+  private affected(before: Policy, after: Policy): string[] {
+    if (!after.automatic) return [];
+    const redirectOf = (policy: Policy, source: string) => policy.redirects.find((redirect) => redirect.source === source);
+    return after.redirects
+      .map((redirect) => redirect.source)
+      .filter((source) => {
+        if (!before.automatic) return true;
+        if (before.held.includes(source) && !after.held.includes(source)) return true;
+        if (JSON.stringify(redirectOf(before, source)) !== JSON.stringify(redirectOf(after, source))) return true;
+        return Object.keys({ ...before.zoneChoices, ...after.zoneChoices }).some((zone) =>
+          (source === zone || source.endsWith(`.${zone}`))
+          && JSON.stringify(before.zoneChoices[zone]) !== JSON.stringify(after.zoneChoices[zone]));
+      });
+  }
+
+  private digest(plans: RedirectPlan[]): string {
+    return hash(plans.map((plan) => [
+      plan.domain,
+      plan.zone ? [plan.zone.connectionId, plan.zone.id] : null,
+      plan.changes,
+      plan.problems,
+    ]));
+  }
+
+  async change(next: Policy, notice: string, refresh: string[] | "all" = []): Promise<RedirectsReply> {
+    const before = this.files.policy();
+    const domains = this.affected(before, next);
+    if (!domains.length) {
+      this.files.savePolicy(next);
+      this.files.savePending(null);
+      await this.tryRefresh(refresh);
+      return this.reply({ notice });
+    }
+    return this.review(before, next, domains);
+  }
+
+  private async review(before: Policy, next: Policy, domains: string[], notice?: string): Promise<RedirectsReply> {
+    const run = this.run(next);
+    await run.discover();
+    await run.load(domains);
+    const plans = run.planAll(domains);
+    const blocked = plans.some((plan) => plan.problems.length > 0);
+    const token = blocked ? "" : randomBytes(24).toString("hex");
+    this.files.savePending(blocked ? null : {
+      token,
+      expiresAt: this.now + REVIEW_LIFETIME,
+      base: hash(before),
+      digest: this.digest(plans),
+      domains,
+      policy: next,
+    });
+    const changes = plans.reduce((count, plan) => count + plan.changes.filter((change) => change.action !== "note").length, 0);
+    const turningOn = !before.automatic;
+    return this.reply({
+      notice,
+      review: {
+        token,
+        title: blocked
+          ? "Resolve these first"
+          : turningOn
+            ? "Turn on Automatic"
+            : `Apply to ${plans.length} redirect${plans.length === 1 ? "" : "s"}`,
+        text: blocked
+          ? "This cannot be applied while a redirect below has a problem. Fix the problem or remove the redirect first."
+          : `${changes} change${changes === 1 ? "" : "s"} will be made now${turningOn
+            ? ". From then on Redirects keeps every redirect domain in sync on its own"
+            : ", and kept from then on"}. Non-web DNS records such as mail and verification are left alone.`,
+        sites: plans,
+        blocked,
+        confirmLabel: turningOn ? "Apply and turn on Automatic" : "Apply",
+        danger: plans.some((plan) => plan.changes.some((change) => change.action === "delete")),
+      },
+    });
+  }
+
+  private deletionDigest(plans: RedirectPlan[], found: ReturnType<RedirectsRun["redirectRuleOf"]>): string {
+    const rule = found && "rule" in found ? {
+      id: found.rule.id,
+      ref: found.rule.ref,
+      expression: found.rule.expression,
+      action_parameters: found.rule.action_parameters,
+      description: found.rule.description,
+      enabled: found.rule.enabled,
+    } : null;
+    return hash([this.digest(plans), rule]);
+  }
+
+  /** Reads live Cloudflare state and owned stand-in state for deleting or replacing `source`. */
+  private async deletionPlan(
+    source: string,
+    includeStandInChange: boolean,
+  ): Promise<{ run: RedirectsRun; found: ReturnType<RedirectsRun["redirectRuleOf"]>; standIn: boolean; plans: RedirectPlan[]; digest: string }> {
+    const policy = this.files.policy();
+    const tracked = this.files.status().redirectRules?.[source];
+    const hasCf = readCloudflareConnections(this.files.cfPaths).length > 0;
+    const standIns = this.standIns();
+    const standIn = standIns.current[source];
+    const run = this.run(policy);
+    let found: ReturnType<RedirectsRun["redirectRuleOf"]> = null;
+    if (hasCf || tracked) {
+      await run.discover();
+      await run.loadRedirectDeletion(source, tracked);
+      found = run.redirectRuleOf(source, tracked);
+    }
+    const changes: Change[] = [];
+    if (found && "rule" in found) {
+      const params = found.rule.action_parameters as {
+        from_value?: { status_code?: number; target_url?: { value?: string; expression?: string } };
+      } | undefined;
+      const fromValue = params?.from_value;
+      const target = fromValue?.target_url?.value ?? fromValue?.target_url?.expression ?? "";
+      const summary = fromValue?.status_code && target
+        ? `${fromValue.status_code} to ${target}`
+        : found.rule.description || found.rule.expression;
+      changes.push({ action: "delete", subject: "Cloudflare redirect rule", detail: summary });
+    }
+    if (includeStandInChange && standIn) {
+      const hosts = standIn.hosts ?? standInHosts(source);
+      changes.push({ action: "delete", subject: "Stand-in site", detail: `Static site on this server for ${hosts.join(" and ")}` });
+    }
+    const plans: RedirectPlan[] = [{
+      domain: source,
+      mode: "enforce",
+      zone: found && "zone" in found ? found.zone : null,
+      problems: found && "problem" in found ? [found.problem] : [],
+      zoneChoices: [],
+      changes,
+    }];
+    return { run, found, standIn: Boolean(standIn), plans, digest: this.deletionDigest(plans, found) };
+  }
+
+  async deleteRedirect(source: string): Promise<RedirectsReply> {
+    const policy = this.files.policy();
+    if (!policy.redirects.some((redirect) => redirect.source === source)) failAction("That redirect no longer exists");
+    const standIn = Boolean(this.standIns().current[source]);
+    const tracked = this.files.status().redirectRules?.[source];
+    const hasCf = readCloudflareConnections(this.files.cfPaths).length > 0;
+    if (policy.automatic && (hasCf || tracked)) {
+      const { plans, digest } = await this.deletionPlan(source, false);
+      if (plans[0]!.changes.length || plans[0]!.problems.length) {
+        const token = plans[0]!.problems.length ? "" : randomBytes(24).toString("hex");
+        this.files.savePending(token ? {
+          token,
+          expiresAt: this.now + REVIEW_LIFETIME,
+          base: hash(policy),
+          digest,
+          domains: [],
+          deleteSource: source,
+        } : null);
+        return this.reply({
+          review: {
+            token,
+            title: `Delete the redirect for ${source}`,
+            text: token
+              ? `Its rule is deleted from Cloudflare, so ${source} stops redirecting. ${standIn ? "Its stand-in site is deleted too. " : ""}DNS records stay untouched so mail and verification records are preserved.`
+              : "This cannot be deleted while its rule cannot be read. Fix the problem, or delete the rule in Cloudflare.",
+            sites: plans,
+            blocked: !token,
+            confirmLabel: "Delete redirect",
+            danger: true,
+          },
+        });
+      }
+    }
+    return this.dropRedirect(source, "Redirect deleted", standIn ? `Deleted ${source} and its stand-in site.` : `${source} is no longer managed.`);
+  }
+
+  /**
+   * Prepares an explicit one-click confirmation plan for CloudPanel's Create
+   * Site form to replace an existing redirect (Cloudflare rule and/or local
+   * stand-in site) before creating a site at the same domain.
+   */
+  async prepareReplace(source: string, notice?: string): Promise<RedirectsReply> {
+    const policy = this.files.policy();
+    if (!policy.redirects.some((redirect) => redirect.source === source)) failAction(`No redirect exists for ${source}`);
+    const { found, standIn, plans, digest } = await this.deletionPlan(source, true);
+    const blocked = plans[0]!.problems.length > 0;
+    const token = blocked ? "" : randomBytes(24).toString("hex");
+    this.files.savePending(blocked ? null : {
+      token,
+      expiresAt: this.now + REVIEW_LIFETIME,
+      base: hash(policy),
+      digest,
+      domains: [],
+      replaceSource: source,
+    });
+    const hasRule = Boolean(found && "rule" in found);
+    const removedParts = [
+      hasRule && "its Cloudflare Single Redirect rule",
+      standIn && "its local stand-in site on this server",
+    ].filter(Boolean);
+    const summary = removedParts.length
+      ? `Removes ${removedParts.join(" and ")} and stops managing ${source} in Redirects.`
+      : `Removes ${source} from Redirects so you can create the site cleanly.`;
+    return this.reply({
+      notice,
+      review: {
+        token,
+        title: blocked ? "Resolve these first" : `Replace redirect for ${source}`,
+        text: blocked
+          ? "The redirect cannot be replaced while Cloudflare cannot be checked cleanly. Resolve the issue below or remove the rule in Cloudflare first."
+          : `${summary} Non-web DNS records (such as mail and verification records) are not touched.`,
+        sites: plans,
+        blocked,
+        confirmLabel: "Replace redirect",
+        danger: true,
+      },
+    });
+  }
+
+  private async dropRedirect(source: string, cause: string, notice: string, replaced?: string): Promise<RedirectsReply> {
+    const policy = this.files.policy();
+    const standIns = this.standIns();
+    const standIn = standIns.current[source];
+    if (standIn) {
+      await standIns.remove(source);
+      this.files.appendLog([{
+        at: new Date(this.now).toISOString(),
+        sites: [source],
+        zone: "",
+        action: "delete",
+        subject: "Stand-in site",
+        detail: replaced ? "Replaced by new site" : "The redirect domain was deleted",
+        cause,
+      }]);
+    }
+    const next = structuredClone(policy);
+    next.redirects = next.redirects.filter((redirect) => redirect.source !== source);
+    next.held = next.held.filter((domain) => domain !== source);
+    this.files.savePolicy(next);
+    const status = this.files.status();
+    delete status.plans[source];
+    if (status.redirectRules) delete status.redirectRules[source];
+    this.files.saveStatus(status);
+    return this.reply({ notice, ...(replaced ? { replaced } : {}) });
+  }
+
+  private async confirmDeletion(pending: Pending, replacing: boolean): Promise<RedirectsReply> {
+    const source = replacing ? pending.replaceSource! : pending.deleteSource!;
+    const { run, found, digest } = await this.deletionPlan(source, replacing);
+    if (digest !== pending.digest) {
+      return replacing
+        ? this.prepareReplace(source, "Cloudflare or local state changed after the plan was shown. Review the updated plan below.")
+        : this.deleteRedirect(source);
+    }
+    this.files.savePending(null);
+    this.cause = replacing ? "Replaced by new site" : "Redirect deleted";
+    if (found && "rule" in found) {
+      await run.deleteRedirectRule(
+        source,
+        found.zone.id,
+        found.rulesetId,
+        found.rule.id,
+        found.zone.connectionId,
+        replacing ? `${source}: replaced by new site` : `${source}: the redirect domain was deleted`,
+      );
+    }
+    return this.dropRedirect(
+      source,
+      this.cause,
+      replacing ? `Redirect for ${source} removed. You can create the site now.` : `Deleted the redirect for ${source}.`,
+      replacing ? source : undefined,
+    );
+  }
+
+  async confirm(token: unknown): Promise<RedirectsReply> {
+    const pending = this.files.pending();
+    const current = this.files.policy();
+    if (!pending || typeof token !== "string" || !token || pending.token !== token || pending.expiresAt < this.now) {
+      failAction("This review has expired; make the change again to see a fresh plan");
+    }
+    if (pending.base !== hash(current)) {
+      failAction("The settings changed after this review; make the change again to see a fresh plan");
+    }
+    if (pending.deleteSource) return this.confirmDeletion(pending, false);
+    if (pending.replaceSource) return this.confirmDeletion(pending, true);
+
+    const next = parsePolicy(pending.policy);
+    const run = this.run(next);
+    await run.discover();
+    await run.load(pending.domains);
+    const plans = run.planAll(pending.domains);
+    if (this.digest(plans) !== pending.digest) {
+      return this.review(current, next, pending.domains, "Cloudflare changed after the plan was shown. This is the plan now.");
+    }
+    this.files.savePolicy(next);
+    this.files.savePending(null);
+    this.cause = "Confirmed review";
+    await run.enforce(pending.domains);
+    const afterPlans = run.planAll(pending.domains);
+    await this.record(run, afterPlans, pending.domains);
+    return this.reply({
+      notice: `Applied to ${pending.domains.length} redirect${pending.domains.length === 1 ? "" : "s"}.${current.automatic ? "" : " Redirects is Automatic."}`,
+    });
+  }
+
+  // -------------------------------------------------------------------------
+  // Redirect management & shared Cloudflare connections
+  // -------------------------------------------------------------------------
+
+  private refuseSite(source: string): void {
+    if (this.sites().some((site) => site.domain === source)) {
+      failAction(`${source} is a CloudPanel site; delete the site first`);
+    }
+  }
+
+  async saveRedirect(body: Record<string, unknown>): Promise<RedirectsReply> {
+    const policy = this.files.policy();
+    const redirect = parseRedirect(body);
+    const existing = policy.redirects.find((candidate) => candidate.source === redirect.source);
+    this.refuseSite(redirect.source);
+    // Preserve custom stand-in hosts across edits unless explicitly provided or switching away from local.
+    if (!body.hosts && existing?.hosts && redirect.mode === "local") redirect.hosts = existing.hosts;
+    const next = structuredClone(policy);
+    next.redirects = parseRedirects([...next.redirects.filter((candidate) => candidate.source !== redirect.source), redirect]);
+    next.held = next.held.filter((domain) => domain !== redirect.source);
+    return this.change(next, existing ? `Saved ${redirect.source}.` : `Added ${redirect.source}.`, [redirect.source]);
+  }
+
+  async reviewRedirect(source: string): Promise<RedirectsReply> {
+    const policy = this.files.policy();
+    if (!policy.redirects.some((redirect) => redirect.source === source)) failAction("That redirect no longer exists");
+    const next = structuredClone(policy);
+    next.held = next.held.filter((domain) => domain !== source);
+    return this.change(next, `${source} is ready.`, [source]);
+  }
+
+  async findRedirects(): Promise<RedirectsReply> {
+    if (!readCloudflareConnections(this.files.cfPaths).length) failAction("Connect Cloudflare first");
+    const policy = this.files.policy();
+    const run = this.run(policy);
+    await run.discover();
+    const found = await run.findRedirects();
+    const taken = new Set([...policy.redirects.map((redirect) => redirect.source), ...this.sites().map((site) => site.domain)]);
+    return this.reply({
+      found: { redirects: found.redirects.filter((redirect) => !taken.has(redirect.source)), notes: found.notes },
+    });
+  }
+
+  async takeOver(body: Record<string, unknown>): Promise<RedirectsReply> {
+    const policy = this.files.policy();
+    if (!Array.isArray(body.redirects) || !body.redirects.length) failAction("Select at least one redirect");
+    const added = body.redirects.map((entry) => parseRedirect(entry));
+    for (const redirect of added) {
+      if (policy.redirects.some((candidate) => candidate.source === redirect.source)) {
+        failAction(`${redirect.source} is already a redirect domain`);
+      }
+      this.refuseSite(redirect.source);
+    }
+    const next = structuredClone(policy);
+    next.redirects = parseRedirects([...next.redirects, ...added]);
+    return this.change(next, `Added ${added.length} redirect domain${added.length === 1 ? "" : "s"}.`, added.map((redirect) => redirect.source));
+  }
+
+  async saveConnection(body: Record<string, unknown>): Promise<RedirectsReply> {
+    const saved = await saveCloudflareConnection(body, { paths: this.files.cfPaths, fetch: this.options.fetch });
+    this.noticeConnections();
+    await this.tryRefresh("all");
+    return this.reply({ notice: saved.notice });
+  }
+
+  async removeConnection(id: string): Promise<RedirectsReply> {
+    const removed = await removeCloudflareConnection(id, { paths: this.files.cfPaths });
+    this.noticeConnections();
+    await this.tryRefresh("all");
+    return this.reply({ notice: removed.notice });
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Entrypoint
+// ---------------------------------------------------------------------------
+
+async function perform(action: Action, verb: RedirectsVerb, body: Record<string, unknown>): Promise<unknown> {
+  switch (verb) {
+    case "check":
+      action.cause = "Check now";
+      await action.check(false);
+      return action.reply({ notice: "Checked every redirect." });
+    case "reconcile":
+      await action.check(true);
+      return { checked: action.files.policy().redirects.length };
+    case "set-automatic": {
+      if (typeof body.automatic !== "boolean") failAction("Say whether Redirects is Automatic");
+      const next = structuredClone(action.files.policy());
+      next.automatic = body.automatic;
+      return action.change(next, body.automatic ? "Redirects is Automatic." : "Redirects asks first. Nothing in Cloudflare or on this server was changed.");
+    }
+    case "save-redirect":
+      return action.saveRedirect(body);
+    case "delete-redirect":
+      action.cause = "Redirect deleted";
+      return action.deleteRedirect(hostname(body.source, "the redirect's domain"));
+    case "prepare-replace":
+      return action.prepareReplace(hostname(body.source, "the redirect's domain"));
+    case "review-redirect":
+      return action.reviewRedirect(hostname(body.source, "the redirect's domain"));
+    case "confirm":
+      return action.confirm(body.token);
+    case "find-redirects":
+      return action.findRedirects();
+    case "take-over":
+      return action.takeOver(body);
+    case "choose-zone": {
+      const zone = hostname(body.zone, "the zone");
+      const next = structuredClone(action.files.policy());
+      next.zoneChoices[zone] = { connectionId: connectionId(body.connectionId), zoneId: cloudflareId(body.zoneId, "the zone") };
+      const inZone = next.redirects
+        .map((redirect) => redirect.source)
+        .filter((source) => source === zone || source.endsWith(`.${zone}`));
+      return action.change(next, `${zone} is managed through the chosen connection.`, inZone);
+    }
+    case "save-connection":
+      return action.saveConnection(body);
+    case "remove-connection":
+      return action.removeConnection(connectionId(body.id));
+    default:
+      failAction(`unknown Redirects verb '${verb}'`);
+  }
+}
+
+export async function executeRedirectsAction(argv: string[], options: RedirectsActionOptions = {}): Promise<unknown> {
+  if ((options.processUid ?? process.getuid?.()) !== 0) failAction("Redirects actions must run as root");
+  const [rawVerb, ...args] = argv;
+  const verb = VERBS.find((candidate) => candidate === rawVerb);
+  if (!verb) failAction(`usage: clp-addons action redirects {${VERBS.join("|")}}`);
+  if (args.length) failAction(`'${verb}' takes no arguments`);
+  const paths = { ...DEFAULT_REDIRECTS_PATHS, ...options.paths };
+  const body = NO_BODY.includes(verb) ? {} : await readJsonRequest(options.input, MAX_BODY);
+  const action = new Action(paths, options);
+  if (verb === "list") return action.state();
+  if (verb === "create-site-helper") return action.createSiteHelper();
+
+  const wait = verb === "reconcile" ? 240 : 30;
+  return withFileLock(paths.lockFile, wait, "Redirects is busy checking Cloudflare; try again in a moment", async () => {
+    if (verb === "reconcile" && !existsSync(paths.configFile)) return { checked: 0 };
+    let failed = false;
+    try {
+      action.noticeConnections();
+      return await perform(action, verb, body);
+    } catch (error) {
+      failed = true;
+      if (!(error instanceof Error)) throw error;
+      let tokens: Record<string, string>;
+      try { tokens = readCloudflareSecrets(action.files.cfPaths); } catch { throw error; }
+      const message = redact(error.message, Object.values(tokens));
+      if (message === error.message) throw error;
+      failAction(message);
+    } finally {
+      try {
+        action.writeLog();
+        await action.rememberBackoff();
+      } catch (afterError) {
+        if (!failed) throw afterError;
+      }
+    }
+  });
+}
+
+export async function runRedirectsAction(argv: string[], options: RedirectsActionOptions = {}): Promise<number> {
+  return replyToAction("redirects", options.emitReply !== false, () => executeRedirectsAction(argv, options));
+}

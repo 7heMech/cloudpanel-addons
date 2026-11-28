@@ -610,9 +610,8 @@ strip above the active panel. Section selection persists in the URL hash, and
 deep links to inner anchor IDs activate the owning section before scrolling.
 
 Addon pages avoid showing empty configuration walls before first setup. When a
-required connection is missing, the page renders a focused first-run card and,
-when stand-in redirects already exist on DNS, the Redirects card and Automatic
-controls. Host-specific provider cards
+required connection is missing, the page renders a focused first-run card.
+Host-specific provider cards
 return nothing when the server is not on that host and has no saved credential.
 
 With a mouse, a select opens a list drawn like the filter menus: the chosen
@@ -643,8 +642,8 @@ so the settings below it stay close; a page that ends with its list, such as
 Maintenance Mode's, leaves out the button (`FLEET_NONE_HTML` in place of
 `FLEET_FOOTER_HTML`) and shows every site. Search covers every site, and Select all
 and the bulk actions reach the sites past the cut too: those rows are marked
-`data-cut` rather than deselected. A second long list on the page,
-such as DNS's redirects, gets the same cut and button through
+`data-cut` rather than deselected. A second long list on a page,
+such as Redirects' list, gets the same cut and button through
 `tbody[data-phone-cut]` and `phoneMoreHtml`. Page and form actions wrap within the
 available width. Two-column card and field grids hold until 760px, where the
 tables have already given way. Live enable, disable and update jobs

@@ -1,25 +1,25 @@
 # DNS
 
 DNS keeps each site's records to a profile across Cloudflare or PowerDNS
-Authoritative API v1, and can set the site's domain up in Mailcow. It also
-serves redirect domains. Enable **DNS** under Addons, or run
-`clp-addons enable dns`.
+Authoritative API v1, and can set the site's domain up in Mailcow. Enable
+**DNS** under Addons, or run `clp-addons enable dns`. For domain redirects, use
+the standalone **Redirects** addon.
 
 ## Set up
 
 Until a DNS provider is connected, the DNS page opens with a first-run setup
-card. Once connected, the page splits into **Sites**, **Redirects**,
-**Profiles**, **Settings**, and **Activity**.
+card. Once connected, the page splits into **Sites**, **Profiles**,
+**Settings**, and **Activity**.
 
 1. **Connect a DNS provider.** Open DNS and choose **Connect Cloudflare** or
    **Connect PowerDNS**.
-   - **Cloudflare.** Choose whether the token is for DNS records, Firewall's
-     Panel gate, or both. **Create token in Cloudflare** opens Cloudflare's
-     token form with those permissions selected. Check the permissions listed
-     beside the link, pick the accounts and zones, limit the token to the server
-     addresses shown under Client IP Address Filtering using the clipboard icon,
-     create the token, and paste it back. DNS and Firewall share saved
-     Cloudflare connections.
+   - **Cloudflare.** Choose the scopes the token should cover (DNS records,
+     Redirect domains, Panel gate, or any combination). **Create token in
+     Cloudflare** opens Cloudflare's token form with those permissions
+     selected. Check the permissions listed beside the link, pick the accounts
+     and zones, limit the token to the server addresses shown under Client IP
+     Address Filtering using the clipboard icon, create the token, and paste it
+     back. DNS, Redirects, and Firewall share saved Cloudflare connections.
    - **PowerDNS.** Enter the Authoritative Server HTTP API v1 base URL and API
      key, plus an optional label, server ID (`localhost` by default), and
      default TTL (used whenever a profile row is set to Auto). Plain `http://`
@@ -89,36 +89,6 @@ When a site is deleted from CloudPanel while DNS manages it, its records stay in
 Cloudflare until you choose **Remove records** or **Keep**; if its zone is deleted
 in Cloudflare, they leave the list on their own. A Mailcow domain is never deleted.
 
-## Redirect domains
-
-A redirect domain sends every request for a domain, and its `www`, or for one
-host such as `tv.example.com`, to another URL. Open **Redirects** and choose
-**Add redirect**. **Keep path** sends `/about` on to `/about` at the target;
-turn it off for a target that is one page.
-
-With a Cloudflare zone, Cloudflare answers the redirect and this server is never
-reached. With a PowerDNS zone, a static stand-in site on this server answers the
-redirect with a Let's Encrypt certificate while PowerDNS publishes unproxied `A`
-and `AAAA` records pointing here. Give the domain a profile to keep its mail;
-every row of the profile applies except the domain's own address records.
-Without any DNS connection, a static site on this server answers the redirect on
-its own. Connecting Cloudflare later moves it to Cloudflare after you review it
-and deletes that stand-in site.
-
-**Find redirects in Cloudflare** lists the whole-domain redirect rules your
-Cloudflare connections reach that DNS does not manage yet, such as Terraform's.
-It appears whenever at least one Cloudflare connection is configured. Tick the
-ones to take over, check **Keep path** for each, choose a profile for their
-mail, and confirm the review. Each rule is updated in place; DNS never adds a
-second one beside it.
-
-Deleting a redirect domain once DNS is Automatic deletes its Cloudflare rule
-after a review; its records stay until a site's profile replaces them. If it
-also has a stand-in site on this server, that site stays until you confirm the
-review, then is deleted too. On PowerDNS or without a Cloudflare connection,
-deleting the redirect removes its stand-in site directly. To turn a site into a
-redirect, delete it in CloudPanel first.
-
 ## Panel hostname
 
 To reach CloudPanel at a name that is not easy to guess, such as
@@ -169,7 +139,7 @@ the old tooling without letting it destroy anything:
    `tofu state rm` (or `terraform state rm`) or `removed` blocks with
    `lifecycle { destroy = false }`, and delete their declarations. Never run
    `destroy`, and check that the plan deletes nothing remotely.
-3. Assign the sites while DNS asks first, and check. Take over its redirects
-   with **Find redirects in Cloudflare**. One-off records at other names stay
-   untouched.
+3. Assign the sites while DNS asks first, and check. One-off records at other
+   names stay untouched. (To take over Cloudflare redirect rules, use the
+   **Redirects** addon.)
 4. Turn on Automatic once the plans look right.

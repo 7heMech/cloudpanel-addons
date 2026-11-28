@@ -1,24 +1,39 @@
 /**
- * Stand-in sites: while DNS has no Cloudflare connection, a redirect domain is
- * served from this server by a CloudPanel static site whose vhost returns the
- * redirect and still answers Let's Encrypt from the site's root.
+ * Stand-in sites: when no edge redirect provider manages a domain, a redirect
+ * domain is served from this server by a CloudPanel static site whose vhost
+ * returns the redirect and still answers Let's Encrypt from the site's root.
  *
  * Each is recorded before CloudPanel creates it, so the new-site work of every
- * addon already knows it is not an ordinary site.
+ * addon already knows it is not an ordinary site. Ownership checks verify both
+ * the generated site user and CloudPanel's site id before updating or deleting.
  */
-import { errorMessage } from "../../lib/errors";
 import { randomBytes } from "node:crypto";
-import { panelSiteUserFor } from "../../lib/site-user";
 import { runCommand } from "../../lib/command";
+import { errorMessage } from "../../lib/errors";
+import { readState, writeState } from "../../lib/root-state";
+import { panelSiteUserFor } from "../../lib/site-user";
 import { replaceSiteVhost, type SiteVhostPaths } from "../../lib/site-vhost";
 import { ownsStandInSite } from "../../lib/stand-ins";
-import type { StandIn, StandIns } from "./engine";
 import type { Redirect } from "./model";
-import { standInHosts } from "./redirects";
-import type { Issue } from "./ssl";
-import { readState, writeState } from "../../lib/root-state";
+import { standInHosts } from "./rules";
 
-interface StandInRecord extends StandIn {
+/** What a stand-in site on this server redirects to now. */
+export type StandIn = Pick<Redirect, "target" | "status" | "keepPath" | "keepQuery"> & {
+  /** The site exists but its vhost was never written, so it does not redirect yet. */
+  incomplete?: boolean;
+  /** The hosts the stand-in vhost serves; defaults to standInHosts(source) when absent. */
+  hosts?: string[];
+};
+
+/** The CloudPanel sites that serve redirects when no edge redirect provider manages them. */
+export interface StandIns {
+  current: Record<string, StandIn>;
+  create(redirect: Redirect, hosts?: string[]): Promise<void>;
+  update(redirect: Redirect, hosts?: string[]): Promise<void>;
+  remove(source: string): Promise<void>;
+}
+
+export interface StandInRecord extends StandIn {
   siteUser: string;
   /** CloudPanel's id for the site, once it exists. */
   siteId?: number;
@@ -32,6 +47,8 @@ export interface StandInPaths {
   vhost: SiteVhostPaths;
   rootUid: number;
 }
+
+export type CertificateIssue = (domain: string, alternativeNames: string[]) => Promise<boolean>;
 
 /** Waits after each failed certificate attempt; the last repeats, since the domain may be pointed here any time. */
 const CERTIFICATE_DELAYS = [15 * 60_000, 60 * 60_000, 6 * 60 * 60_000, 24 * 60 * 60_000];
@@ -96,7 +113,18 @@ function clpctl(paths: StandInPaths, args: string[], what: string): void {
   if (!result.ok) throw new Error(`${what}: ${(result.stderr || result.stdout).trim().split("\n").pop() ?? "clpctl failed"}`);
 }
 
-/** Stand-ins through CloudPanel's own CLI. `current` holds those whose site is still the one DNS made. */
+/** CloudPanel's own CLI, as root, with a deadline. */
+export function clpctlIssue(clpctlBin: string): CertificateIssue {
+  return async (domain, alternativeNames) => {
+    const process = Bun.spawn(
+      [clpctlBin, "lets-encrypt:install:certificate", `--domainName=${domain}`, `--subjectAlternativeName=${alternativeNames.join(",")}`],
+      { stdin: "ignore", stdout: "ignore", stderr: "ignore", timeout: 180_000, env: { PATH: "/usr/sbin:/usr/bin:/sbin:/bin" } },
+    );
+    return await process.exited === 0;
+  };
+}
+
+/** Stand-ins through CloudPanel's own CLI. `current` holds those whose site is still the one Redirects made. */
 export function clpctlStandIns(
   paths: StandInPaths, panelSite: (domain: string) => { id: number; user?: string } | undefined, now: () => number,
 ): StandIns {
@@ -125,18 +153,24 @@ export function clpctlStandIns(
   }
   const spec = (redirect: Redirect, hosts?: string[]): StandIn => ({
     target: redirect.target, status: redirect.status, keepPath: redirect.keepPath, keepQuery: redirect.keepQuery,
-    hosts: hosts ?? standInHosts(redirect.source),
+    hosts: hosts ?? redirect.hosts ?? standInHosts(redirect.source),
   });
   return {
     current,
     async create(redirect, hosts) {
       if (panelSite(redirect.source)) throw new Error(`CloudPanel already has a site ${redirect.source}`);
-      const effectiveHosts = hosts ?? standInHosts(redirect.source);
+      const effectiveHosts = hosts ?? redirect.hosts ?? standInHosts(redirect.source);
       const siteUser = standInUser(redirect.source);
       const saved = readStandIns(paths);
       // Incomplete until the vhost redirects: a site whose cleanup fails is kept,
       // and a later pass has to write its vhost rather than take it as done.
-      saved[redirect.source] = { ...spec(redirect, effectiveHosts), incomplete: true, siteUser, createdAt: now(), certificate: { attempts: 0, nextAt: now(), done: false } };
+      saved[redirect.source] = {
+        ...spec(redirect, effectiveHosts),
+        incomplete: true,
+        siteUser,
+        createdAt: now(),
+        certificate: { attempts: 0, nextAt: now(), done: false },
+      };
       saveStandIns(paths, saved);
       try {
         clpctl(paths, ["site:add:static", `--domainName=${redirect.source}`, `--siteUser=${siteUser}`,
@@ -167,8 +201,8 @@ export function clpctlStandIns(
       }
     },
     async update(redirect, hosts) {
-      if (!ours(redirect.source)) throw new Error(`${redirect.source} is no longer DNS's stand-in site`);
-      const effectiveHosts = hosts ?? standInHosts(redirect.source);
+      if (!ours(redirect.source)) throw new Error(`${redirect.source} is no longer Redirects' stand-in site`);
+      const effectiveHosts = hosts ?? redirect.hosts ?? standInHosts(redirect.source);
       replaceSiteVhost(paths.vhost, redirect.source, standInBody(redirect.source, redirect, effectiveHosts));
       const saved = readStandIns(paths);
       if (saved[redirect.source]) {
@@ -201,7 +235,7 @@ export function clpctlStandIns(
 export async function retryStandInCertificates(
   paths: StandInPaths,
   certificateCovers: (domain: string, hosts: string[]) => boolean | null,
-  issue: Issue,
+  issue: CertificateIssue,
   now: number,
 ): Promise<void> {
   const records = readStandIns(paths);
