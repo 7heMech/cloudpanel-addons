@@ -517,6 +517,42 @@ describe("Firewall approve-once Cloudflare edge defaults", () => {
     expect(other.error).toContain("WAF skip rule changed in Cloudflare");
   });
 
+  test("never writes a planned rule over one Cloudflare changed after planning, even when an earlier write returned the change", async () => {
+    const env = makeEnv();
+    const zone = env.cf.zone("gamma.example", env.agency);
+    await env.connect();
+    const both = { ...DEFAULT_EDGE_DEFAULTS, webmailFullSsl: true };
+    const approve = await saveCloudflareEdge({ approve: true, defaults: both }, env.options);
+    await confirmCloudflareEdge(approve.review!.token, env.options);
+    const key = `${zone.id}:http_config_settings`;
+    expect(env.cf.rulesets.get(key)!.rules).toHaveLength(2);
+    env.cf.rulesets.get(key)!.rules = env.cf.rulesets.get(key)!.rules.map((rule) => ({ ...rule, enabled: false }));
+
+    let firstId: string | null = null;
+    const wrapped: EdgeOptions = {
+      ...env.options,
+      fetch: async (address, init) => {
+        const path = new URL(String(address)).pathname;
+        if (!firstId && init?.method === "PATCH" && path.includes("/rules/")) {
+          firstId = path.split("/").pop()!;
+          const ruleset = env.cf.rulesets.get(key)!;
+          ruleset.rules = ruleset.rules.map((rule) => rule.id === firstId ? rule : { ...rule, description: "Edited elsewhere", expression: `${rule.expression} and true` });
+        }
+        return env.cf.fetch(address, init);
+      },
+    };
+    const review = await saveCloudflareEdge({ defaults: both }, wrapped);
+    expect(review.review!.zones[0]!.changes.filter((change) => change.action === "update")).toHaveLength(2);
+    await confirmCloudflareEdge(review.review!.token, wrapped);
+
+    const other = env.cf.rulesets.get(key)!.rules.find((rule) => rule.id !== firstId)!;
+    expect(String(other.expression)).toEndWith(" and true");
+    expect(other.enabled).toBe(false);
+    const view = edgePageView(env.options).zones.find((entry) => entry.zoneId === zone.id)!;
+    expect(view.status).toBe("error");
+    expect(view.error).toContain("changed in Cloudflare");
+  });
+
   test("confirming an approval while Cloudflare cannot be read neither renews the review nor approves", async () => {
     const env = makeEnv();
     const zone = env.cf.zone("down.example", env.agency);

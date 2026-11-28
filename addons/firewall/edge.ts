@@ -670,6 +670,8 @@ async function applyZoneChanges(
     ...changes.filter((change) => change.kind === "rule"),
     ...changes.filter((change) => change.kind === "setting"),
   ];
+  const plannedRules = new Map(Object.entries(live.rulesets)
+    .flatMap(([phase, ruleset]) => (ruleset?.rules ?? []).map((rule) => [`${phase} ${rule.id}`, ruleState(rule)] as const)));
   try {
     for (const change of ordered) {
       if (change.kind === "rule") {
@@ -677,8 +679,8 @@ async function applyZoneChanges(
         const currentRuleset = live.rulesets[phase] ?? null;
         if (change.action !== "create" && currentRuleset && change.ruleId) {
           const reread = await api.entrypoint(zone.id, phase);
-          const planned = currentRuleset.rules.find((rule) => rule.id === change.ruleId);
-          if (ruleState(planned) !== ruleState(reread?.rules.find((rule) => rule.id === change.ruleId))) {
+          const planned = plannedRules.get(`${phase} ${change.ruleId}`) ?? "";
+          if (planned !== ruleState(reread?.rules.find((rule) => rule.id === change.ruleId))) {
             live.rulesets[phase] = reread;
             throw new Error(`${change.subject} changed in Cloudflare while Firewall was applying; check again to plan from the current rule.`);
           }
