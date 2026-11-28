@@ -386,11 +386,11 @@ export function migrateCloudflareEdgeFromDns(
     ? allProfiles.filter((profile) => typeof profile.id === "string" && activeIds.has(profile.id))
     : allProfiles;
   const chosen = relevant.length > 0 ? relevant : allProfiles;
-  // On v2 policies, new profiles created after edge moved to Firewall omit `zone`;
-  // do not let an unrelated zone-less v2 profile create a false disagreement beside
-  // active profiles that still carry legacy `zone` blocks.
-  const chosenWithZone = parsed.version === 2 ? chosen.filter((profile) => Object.hasOwn(profile, "zone")) : [];
-  const effective = chosenWithZone.length > 0 ? chosenWithZone : chosen;
+  // On v2, only DNS's save over a v1 file writes `zone`, and only from the v1 profiles
+  // in use, so every profile still carrying one counts, including a redirect's HTTP
+  // half that v2 no longer references; zone-less profiles are newer and do not.
+  const withZone = parsed.version === 2 ? allProfiles.filter((profile) => Object.hasOwn(profile, "zone")) : [];
+  const effective = withZone.length > 0 ? withZone : chosen;
 
   // DNS's v1-to-v2 save stores a list where legacy profiles with different zone blocks folded into one profile.
   const asZone = (zone: unknown): Record<string, unknown> =>

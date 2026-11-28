@@ -680,6 +680,15 @@ describe("review regressions", () => {
     expect(used.onDisk.profiles.find((p: Record<string, unknown>) => p.id === "mailonly").zone).toEqual([zone("strict"), zone("full")]);
     expect(used.edge.defaults.ssl).toBeNull();
     expect(used.edge.migrationNote).toContain("disagreed on SSL/TLS mode");
+
+    // A web-only redirect has no Mail profile in v2, yet its zone options still weigh against the site's.
+    const webOnly = await migrate([
+      { id: "web", name: "Web", mailcow: false, zone: zone("strict"), records: [a] },
+      { id: "redirect-mixed", name: "Redirect web", mailcow: false, zone: zone("full"), records: [a, { ...a, name: "www.{domain}" }] },
+    ], { "site.example.com": "web" });
+    expect(webOnly.onDisk.redirects[0].mailProfileId).toBeNull();
+    expect(webOnly.edge.defaults.ssl).toBeNull();
+    expect(webOnly.edge.migrationNote).toContain("disagreed on SSL/TLS mode");
   });
 
   test("siteStatus and state stop reporting automatic SSL once a site loses its HTTP role or Automatic turns off", async () => {

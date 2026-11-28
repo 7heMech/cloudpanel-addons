@@ -162,8 +162,10 @@ deterministically without altering live DNS records:
   v1 profiles that a site, redirect or the default uses (all of them when none
   is used). Where folded profiles disagree, the v2 profile keeps the list of
   their blocks, so Firewall sees the disagreement and leaves that setting for
-  review. `migrateCloudflareEdgeFromDns` reads both v1 and v2 assignment,
-  redirect, and default profile references.
+  review. On a v2 file, `migrateCloudflareEdgeFromDns` weighs every profile that
+  still carries a `zone` block, which covers a web-only redirect whose HTTP
+  half v2 no longer references; on v1 it reads the assignment, redirect and
+  default profile references.
 
 ## What a profile owns
 
