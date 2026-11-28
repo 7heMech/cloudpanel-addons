@@ -110,8 +110,11 @@ matches the live re-plan.
 
 Provider transitions never happen silently. Adding a Cloudflare connection (from
 Redirects or through the shared store in DNS, Firewall, or Manager), removing a
-Cloudflare connection, or discovering a newly matching Cloudflare zone for an
-existing stand-in places affected redirects in `policy.held`. Held redirects
+Cloudflare connection, discovering a newly matching Cloudflare zone for an
+existing stand-in, or losing the Cloudflare zone of a redirect that has no
+stand-in yet places affected redirects in `policy.held`. Redirects compares each
+new plan with the last recorded one, so a read-only refresh that sees the change
+first holds the redirect just as a scheduled check would. Held redirects
 wait through scheduled checks until an administrator reviews and confirms the
 move through `review-redirect`. Once a Cloudflare rule and placeholder are in
 place on an active zone, Redirects deletes the retired stand-in site.

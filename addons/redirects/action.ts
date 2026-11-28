@@ -562,6 +562,7 @@ class Action {
     if (!chosen.length && domains !== "all") return;
     await run.discover(domains === "all");
     await run.load(chosen);
+    this.holdTransitions(run, policy, chosen);
     await this.record(run, run.planAll(domains === "all" ? undefined : chosen), domains === "all" ? "all" : chosen);
   }
 
@@ -575,27 +576,11 @@ class Action {
 
   async check(retryCerts: boolean): Promise<void> {
     const policy = this.files.policy();
-    const previousPlans = this.files.status().plans;
-    const standIns = this.standIns().current;
     const run = this.run(policy);
     const allSources = policy.redirects.map((redirect) => redirect.source);
     await run.discover(true);
     await run.load(allSources);
-
-    // If a domain previously served by a local stand-in now matches a Cloudflare zone
-    // (for example, the zone was added to Cloudflare later), hold it for review.
-    const newlyZoned: string[] = [];
-    for (const redirect of policy.redirects) {
-      if (redirect.mode === "local" || policy.held.includes(redirect.source) || !standIns[redirect.source]) continue;
-      if (previousPlans[redirect.source]?.zone) continue;
-      const plan = run.planRedirect(redirect);
-      if (plan.zone) newlyZoned.push(redirect.source);
-    }
-    if (newlyZoned.length) {
-      run.hold(newlyZoned);
-      policy.held = [...new Set([...policy.held, ...newlyZoned])];
-      this.files.savePolicy(policy);
-    }
+    this.holdTransitions(run, policy, allSources);
 
     const released = run.releaseHeld();
     if (released.length) {
@@ -606,6 +591,29 @@ class Action {
     const plans = run.planAll();
     await this.record(run, plans, "all");
     if (retryCerts) await this.retryStandInCertificates();
+  }
+
+  /**
+   * Holds for review a redirect whose stand-in now matches a Cloudflare zone, or
+   * whose Cloudflare destination is gone so it would fall back to a new stand-in,
+   * judged against the last recorded plan, whichever run records the change first.
+   */
+  private holdTransitions(run: RedirectsRun, policy: Policy, sources: string[]): void {
+    const status = this.files.status();
+    const standIns = this.standIns().current;
+    const moving = policy.redirects.filter((redirect) => {
+      if (!sources.includes(redirect.source) || redirect.mode === "local" || policy.held.includes(redirect.source)) return false;
+      const before = status.plans[redirect.source];
+      if (standIns[redirect.source]) return !before?.zone && Boolean(run.planRedirect(redirect).zone);
+      const wasCloudflare = before?.zone
+        ? true
+        : (!before || before.problems.length > 0) && Boolean(status.redirectRules?.[redirect.source]);
+      return wasCloudflare && run.resolvesLocally(redirect);
+    }).map((redirect) => redirect.source);
+    if (!moving.length) return;
+    run.hold(moving);
+    policy.held = [...new Set([...policy.held, ...moving])];
+    this.files.savePolicy(policy);
   }
 
   /** Run in the periodic reconcile pass only: a certificate request can take minutes. */

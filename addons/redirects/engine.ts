@@ -315,6 +315,11 @@ export class RedirectsRun {
     return { kind: "choose", candidates, name };
   }
 
+  /** Whether `redirect` would be served by a local stand-in site. */
+  resolvesLocally(redirect: Redirect): boolean {
+    return this.resolve(redirect).kind === "local";
+  }
+
   private async loadZone(ref: ZoneRef): Promise<void> {
     const api = this.apis.get(ref.connectionId)!;
     const key = zoneMapKey(ref.connectionId, ref.zone.id);

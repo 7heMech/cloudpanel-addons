@@ -697,6 +697,46 @@ describe("local stand-in sites, provider transitions, and leftover rule cleanup"
     expect(tracked()).toBeUndefined();
   });
 
+  test("holds a stand-in that gains a zone even when a refresh records the zoned plan first", async () => {
+    const env = setup();
+    env.cf.zone("other.example", env.account);
+    await env.act("save-connection", { token: TOKEN });
+    await env.automatic();
+    await env.confirmed(await env.act("save-redirect", found("later.example", "https://example.com")));
+    expect(env.standIns.current["later.example"]).toBeDefined();
+
+    env.cf.zone("later.example", env.account);
+    const resaved = await env.act("save-redirect", found("later.example", "https://example.com"));
+    expect(resaved.review).toBeUndefined();
+    expect(resaved.redirects[0]!.plan!.held).toBe(true);
+    await env.act("check");
+    expect(env.standIns.current["later.example"]).toBeDefined();
+    expect(env.redirectRules("later.example")).toEqual([]);
+    expect((await env.act("list")).redirects[0]!.plan!.held).toBe(true);
+  });
+
+  test("holds a Cloudflare redirect for review before it falls back to a new stand-in", async () => {
+    const env = setup();
+    env.cf.zone("other.example", env.account);
+    env.cf.zone("narrowed.example", env.account);
+    await env.act("save-connection", { token: TOKEN });
+    await env.automatic();
+    await env.confirmed(await env.act("save-redirect", found("narrowed.example", "https://example.com")));
+    expect(env.redirectRules("narrowed.example")).toHaveLength(1);
+
+    // The token stops listing the zone while the connection stays the same.
+    env.cf.zones = env.cf.zones.filter((zone) => zone.name !== "narrowed.example");
+    await env.act("check");
+    expect(env.standIns.calls).toEqual([]);
+    expect((await env.act("list")).redirects[0]!.plan!.held).toBe(true);
+
+    // A reviewed fallback creates the stand-in, and later checks leave it be.
+    await env.confirmed(await env.act("review-redirect", { source: "narrowed.example" }));
+    expect(env.standIns.calls).toEqual(["create narrowed.example"]);
+    await env.act("check");
+    expect((await env.act("list")).redirects[0]!.plan!.held).toBeUndefined();
+  });
+
   test("standInBody renders all redirect combinations and custom hosts", () => {
     const body = (keepPath: boolean, keepQuery: boolean) =>
       standInBody("thepastormax.com", { target: "https://maksimasenov.com", status: 301, keepPath, keepQuery });
