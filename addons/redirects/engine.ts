@@ -262,12 +262,24 @@ export class RedirectsRun {
     return this.context.connections.find((connection) => connection.id === id)?.label ?? id;
   }
 
-  private writesRecords(ref: ZoneRef): boolean | null {
+  /** Whether the connection's token can write both the zone's placeholder records and its Single Redirect rule; null when unknown. */
+  private writesRedirect(ref: ZoneRef): boolean | null {
     const token = this.connections.find((connection) => connection.id === ref.connectionId)?.token ?? this.context.storedTokens?.[ref.connectionId];
     if (!token?.readable) return null;
-    const permission = PERMISSIONS.dns;
-    const held = grants(token.grants, permission, targetFor(permission, { id: ref.zone.id, accountId: ref.zone.account.id }, token));
-    return uncertain(token.grants, permission, held ? "yes" : "no") ? null : held;
+    let known = true;
+    for (const permission of [PERMISSIONS.dns, PERMISSIONS.redirects]) {
+      const held = grants(token.grants, permission, targetFor(permission, { id: ref.zone.id, accountId: ref.zone.account.id }, token));
+      if (uncertain(token.grants, permission, held ? "yes" : "no")) known = false;
+      else if (!held) return false;
+    }
+    return known ? true : null;
+  }
+
+  /** The connection to a zone known to write both, else one not known to lack either, else the first. */
+  private preferred(group: ZoneRef[]): ZoneRef | undefined {
+    return group.find((ref) => this.writesRedirect(ref) === true)
+      ?? group.find((ref) => this.writesRedirect(ref) === null)
+      ?? group[0];
   }
 
   /** Resolves a redirect domain to a Cloudflare zone, a local stand-in site, a disambiguation choice, or a read error. */
@@ -289,11 +301,11 @@ export class RedirectsRun {
     const chosen = choice && candidates.find((ref) => ref.connectionId === choice.connectionId && ref.zone.id === choice.zoneId);
     if (chosen) return { kind: "zone", ref: chosen };
     const sameZone = choice ? candidates.filter((ref) => ref.zone.id === choice.zoneId) : [];
-    const same = sameZone.find((ref) => this.writesRecords(ref) !== false) ?? sameZone[0];
+    const same = this.preferred(sameZone);
     if (same) return { kind: "zone", ref: same };
     if (choice) return { kind: "choose", candidates, name, lost: true };
     const ids = new Set(candidates.map((ref) => ref.zone.id));
-    if (ids.size === 1) return { kind: "zone", ref: candidates.find((ref) => this.writesRecords(ref) !== false) ?? candidates[0]! };
+    if (ids.size === 1) return { kind: "zone", ref: this.preferred(candidates)! };
     return { kind: "choose", candidates, name };
   }
 
@@ -654,8 +666,7 @@ export class RedirectsRun {
     }
     return [...byZoneId.values()].map((group) =>
       (tracked ? group.find((ref) => ref.connectionId === tracked.connectionId) : undefined)
-      ?? group.find((ref) => this.writesRecords(ref) !== false)
-      ?? group[0]!);
+      ?? this.preferred(group)!);
   }
 
   /** Reads every Cloudflare zone needed to check whether deleting or replacing `source` must also remove a Single Redirect rule. */

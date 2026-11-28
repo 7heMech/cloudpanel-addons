@@ -29,7 +29,7 @@ import { removeCloudflareConnection, saveCloudflareConnection } from "../lib/clo
 import { mountPath } from "../lib/mount";
 import { issuedForAll } from "../lib/panel-custom-domain";
 import { isStandInSite, ownsStandInSite, standInDomains } from "../lib/stand-ins";
-import { FakeCloudflare, hexId } from "./fixtures/dns-api";
+import { FakeCloudflare, hexId, policy } from "./fixtures/dns-api";
 
 const REPO = join(import.meta.dir, "..");
 const TOKEN = "cf-redirects-token-0123456789abcdef";
@@ -472,6 +472,25 @@ describe("Cloudflare Single Redirects and placeholder records", () => {
     const writes = env.cf.writes().length;
     await env.act("check");
     expect(env.cf.writes().length).toBe(writes);
+  });
+
+  test("picks the connection that can write both the rule and its placeholders when two reach the same zone", async () => {
+    const env = setup();
+    const allZones = { "com.cloudflare.api.account.zone.*": "*" };
+    env.cf.token(TOKEN, {
+      owner: "user", accounts: [env.account], zoneEdit: true, id: hexId(),
+      policies: [policy(["DNS Write", "API Tokens Read"], allZones)],
+    });
+    env.cf.token(TOKEN_TWO, {
+      owner: "user", accounts: [env.account], zoneEdit: true, id: hexId(),
+      policies: [policy(["DNS Write", "Single Redirect Write", "API Tokens Read"], allZones)],
+    });
+    env.cf.zone("both.example", env.account);
+    await env.act("save-connection", { token: TOKEN, label: "DNS only" });
+    const full = (await env.act("save-connection", { token: TOKEN_TWO, label: "Redirects" })).connections.find((c) => c.label === "Redirects")!;
+    await env.automatic();
+    const review = await env.act("save-redirect", found("both.example", "https://example.com"));
+    expect(review.review!.sites[0]!.zone!.connectionId).toBe(full.id);
   });
 
   test("wholeHostHosts, foundRedirect, and two-rule conflict detection", () => {

@@ -38,6 +38,10 @@ host blocks placeholder writes rather than overwriting delegated names.
 Redirects writes or updates the Single Redirect rule before writing placeholder
 records so a placeholder never answers without its rule.
 
+When more than one connection reaches the same zone and no zone choice names
+one, Redirects uses a connection whose token is known to grant both `DNS: Edit`
+and `Single Redirect: Edit` there, then one not known to lack either.
+
 External rules (such as rules left by Terraform or OpenTofu) are taken over in
 place when exactly one rule quotes the redirect's whole hosts (`http.host eq`,
 `==`, or `in`, optionally excluding `/.well-known/acme-challenge/`). If
