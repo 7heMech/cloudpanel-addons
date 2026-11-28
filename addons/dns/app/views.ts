@@ -381,7 +381,7 @@ function mailcowPanel(state: DnsState, mailcowDomains: SiteView[]): string {
         ? `<div class="table-scroll"><table class="fleet-table dns-mailcow-table"><thead><tr>
             <th>Domain</th><th>HTTP role</th><th>Mail profile</th><th>DNS</th><th class="action-cell"></th>
           </tr></thead><tbody>${rows}</tbody></table></div>`
-        : '<div class="empty">No domains use Mailcow yet. Choose Mailcow under Mail in Sites or Redirects.</div>'}
+        : '<div class="empty">No domains use Mailcow yet. Choose Mailcow under Mail in Sites, adding a domain there first if it has no site.</div>'}
     </div>`;
 }
 
