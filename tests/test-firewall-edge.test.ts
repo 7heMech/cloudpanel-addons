@@ -268,6 +268,30 @@ describe("Cloudflare edge planner (lib/cloudflare/edge.ts)", () => {
     expect(equivalentAlone.changes).toEqual([]);
     expect(equivalentAlone.conflicts).toEqual([]);
   });
+
+  test("treats a later hostname-only rule that sets another SSL mode as competing with the ACME rule", () => {
+    const acme = (ref: string) => ({
+      id: hexId(), ref, action: "set_config", enabled: true,
+      expression: 'starts_with(http.request.uri.path, "/.well-known/acme-challenge/")',
+      description: "ACME", action_parameters: { ssl: "full" },
+    });
+    const host = (ssl: string) => ({
+      id: hexId(), ref: "blog_ssl", action: "set_config", enabled: true,
+      expression: 'http.host eq "blog.example.com"', description: "Blog SSL", action_parameters: { ssl },
+    });
+    const plan = (rules: Record<string, unknown>[]) => planZoneEdge(DEFAULT_EDGE_DEFAULTS, {
+      settings: { ssl: "strict", always_use_https: "on" },
+      rulesets: { http_config_settings: { id: hexId(), rules: rules as never } },
+    });
+    for (const ref of ["clp_fw_acme", "tf_acme"]) {
+      const after = plan([acme(ref), host("strict")]);
+      expect(after.changes).toEqual([]);
+      expect(after.conflicts).toHaveLength(1);
+      expect(after.conflicts[0]).toContain("Blog SSL");
+      expect(plan([host("strict"), acme(ref)]).conflicts).toEqual([]);
+      expect(plan([acme(ref), host("full")]).conflicts).toEqual([]);
+    }
+  });
 });
 
 describe("Firewall approve-once Cloudflare edge defaults", () => {

@@ -334,6 +334,19 @@ function touchesRuleTarget(rule: CfRuleset["rules"][number], key: EdgeRuleKey): 
   return false;
 }
 
+/**
+ * Enabled rules after the ACME rule that set another SSL mode. Every host
+ * serves the challenge path, so even a rule for one hostname can match it, and
+ * Cloudflare applies the last setting.
+ */
+function laterSslRules(rules: CfRuleset["rules"], target: CfRuleset["rules"][number], key: EdgeRuleKey): CfRuleset["rules"] {
+  if (key !== "acme") return [];
+  return rules.slice(rules.indexOf(target) + 1).filter((rule) => {
+    const ssl = paramsObject(rule.action_parameters).ssl;
+    return rule.enabled && rule.action === "set_config" && typeof ssl === "string" && ssl !== "full";
+  });
+}
+
 function exactForeignTarget(rule: CfRuleset["rules"][number], key: EdgeRuleKey): boolean {
   const expr = normalizeExpression(rule.expression);
   if (key === "acme") return expr === ACME_EXPRESSION;
@@ -493,7 +506,8 @@ export function planZoneEdge(defaults: EdgeDefaults, live: LiveZoneEdgeState): Z
 
     if (ours.length === 1) {
       const existing = ours[0]!;
-      const competitors = rules.filter((rule) => rule.id !== existing.id && touchesRuleTarget(rule, key));
+      const competitors = rules.filter((rule) => rule.id !== existing.id
+        && (touchesRuleTarget(rule, key) || laterSslRules(rules, existing, key).includes(rule)));
       if (competitors.length > 0) {
         const names = competitors.map((rule) => `“${ruleName(rule)}”`).join(", ");
         conflicts.push(
@@ -548,7 +562,8 @@ export function planZoneEdge(defaults: EdgeDefaults, live: LiveZoneEdgeState): Z
     const foreign = rules.filter((rule) => touchesRuleTarget(rule, key));
     const equivalent = rules.filter((rule) => sameEdgeRule(rule, spec.rule, key));
     if (equivalent.length > 0) {
-      const competitors = foreign.filter((rule) => rule.id !== equivalent[0]!.id);
+      const later = laterSslRules(rules, equivalent[0]!, key);
+      const competitors = rules.filter((rule) => rule.id !== equivalent[0]!.id && (foreign.includes(rule) || later.includes(rule)));
       if (competitors.length === 0) continue;
       const names = competitors.map((rule) => `“${ruleName(rule)}”`).join(", ");
       conflicts.push(

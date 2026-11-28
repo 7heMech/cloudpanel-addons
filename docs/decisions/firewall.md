@@ -268,7 +268,10 @@ as Terraform so upgrades and existing zones never duplicate rules when no
 competing rule overlaps the same target. Competing foreign rules are checked
 before accepting either a matching managed rule or an equivalent foreign rule,
 so an overlapping rule (such as a foreign ACME rule setting Flexible SSL beside
-Full SSL) holds the zone as a conflict instead of reporting it synced. When
+Full SSL) holds the zone as a conflict instead of reporting it synced. Since
+every host serves the ACME path, any enabled rule after the ACME rule that sets
+another SSL mode, even one matching a single hostname, also competes with it;
+a new ACME rule is appended last, so earlier rules never compete. When
 applying a zone, rules are written before zone settings so the ACME Full SSL
 rule is in place before SSL switches to Full (strict). Zones are planned from
 one read and applied one at a time, so each rule is read again just before it
