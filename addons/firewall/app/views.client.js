@@ -161,9 +161,9 @@ async function setVisitorIp(input) {
 }
 
 function fwCloudflareData() {
-  const card = CLP_ROOT.getElementById('fw-cf-card');
-  if (!card) return { connections: [], serverIps: [] };
-  try { return JSON.parse(card.dataset.fwCf || '{}'); } catch (e) { return { connections: [], serverIps: [] }; }
+  const node = CLP_ROOT.getElementById('fw-cf-connection-dialog') || CLP_ROOT.getElementById('fw-cf-card');
+  if (!node) return { connections: [], serverIps: [] };
+  try { return JSON.parse(node.dataset.fwCf || '{}'); } catch (e) { return { connections: [], serverIps: [] }; }
 }
 
 function fwCopyText(elementId, label) {
@@ -573,6 +573,222 @@ function setPanelGate(input) {
     });
     return accepted ? {} : null;
   });
+}
+
+// --- Cloudflare edge defaults ----------------------------------------------
+
+let fwEdgeReviewToken = '';
+
+function fwReadEdgeForm() {
+  const form = CLP_ROOT.getElementById('fw-edge-form');
+  if (!form) return null;
+  const val = function (name) {
+    const el = form.elements.namedItem(name);
+    return el ? el.value : '';
+  };
+  const checked = function (name) {
+    const el = form.elements.namedItem(name);
+    return Boolean(el && el.checked);
+  };
+  return {
+    ssl: val('ssl') || null,
+    alwaysHttps: val('alwaysHttps') === '' ? null : val('alwaysHttps') === 'on',
+    acmeFullSsl: checked('acmeFullSsl'),
+    webmailFullSsl: checked('webmailFullSsl'),
+    skipFirewallIps: val('skipFirewallIps').split(/[\s,]+/).filter(Boolean),
+  };
+}
+
+function fwShowEdgeReview(review) {
+  const byId = function (id) { return CLP_ROOT.getElementById(id); };
+  const dialog = byId('fw-edge-review-dialog');
+  if (!dialog) return;
+  fwEdgeReviewToken = review.token || '';
+  byId('fw-edge-review-title').textContent = review.title || 'Review Cloudflare edge changes';
+  byId('fw-edge-review-text').textContent = review.text || '';
+
+  const warnBox = byId('fw-edge-review-warnings');
+  warnBox.textContent = '';
+  (review.warnings || []).forEach(function (line) {
+    const p = document.createElement('p');
+    p.textContent = line;
+    warnBox.appendChild(p);
+  });
+  warnBox.hidden = !(review.warnings && review.warnings.length);
+
+  const zonesEl = byId('fw-edge-review-zones');
+  zonesEl.textContent = '';
+  (review.zones || []).forEach(function (zone) {
+    const block = document.createElement('div');
+    block.className = 'fw-edge-review-zone';
+    const head = document.createElement('div');
+    head.className = 'fw-edge-review-zone-head';
+    const title = document.createElement('strong');
+    title.textContent = zone.zoneName;
+    head.appendChild(title);
+    if (zone.connectionLabel || zone.accountName) {
+      const meta = document.createElement('span');
+      meta.className = 'hint';
+      meta.textContent = [zone.connectionLabel, zone.accountName].filter(Boolean).join(' · ');
+      head.appendChild(meta);
+    }
+    block.appendChild(head);
+
+    if (zone.error) {
+      const err = document.createElement('p');
+      err.className = 'hint tone-bad';
+      err.textContent = zone.error;
+      block.appendChild(err);
+    }
+    (zone.conflicts || []).forEach(function (conflict) {
+      const line = document.createElement('p');
+      line.className = 'hint tone-bad';
+      line.textContent = conflict;
+      block.appendChild(line);
+    });
+    if (zone.changes && zone.changes.length) {
+      const list = document.createElement('ul');
+      list.className = 'fw-edge-review-list';
+      zone.changes.forEach(function (item) {
+        const li = document.createElement('li');
+        const row = document.createElement('div');
+        row.className = 'fw-edge-review-item';
+        const badge = document.createElement('span');
+        badge.className = 'badge ' + (item.destructive || item.conflict ? 'tone-bad' : item.action === 'create' ? 'tone-ok' : 'tone-warn');
+        badge.textContent = item.destructive ? 'Destructive' : item.conflict ? 'Conflict' : item.action === 'create' ? 'Add' : item.action === 'delete' ? 'Remove' : 'Change';
+        row.appendChild(badge);
+        const text = document.createElement('span');
+        text.className = 'fw-edge-review-detail';
+        const subj = document.createElement('strong');
+        subj.textContent = item.subject + ': ';
+        text.appendChild(subj);
+        text.appendChild(document.createTextNode(item.before ? item.before + ' → ' + item.detail : item.detail));
+        row.appendChild(text);
+        li.appendChild(row);
+        if (item.reason) {
+          const note = document.createElement('div');
+          note.className = 'hint tone-warn fw-edge-review-reason';
+          note.textContent = item.reason;
+          li.appendChild(note);
+        }
+        list.appendChild(li);
+      });
+      block.appendChild(list);
+    }
+    zonesEl.appendChild(block);
+  });
+
+  const confirmBtn = byId('fw-edge-review-confirm');
+  confirmBtn.textContent = review.confirmLabel || 'Confirm';
+  confirmBtn.className = review.danger ? 'btn btn-danger' : 'btn btn-primary';
+  confirmBtn.disabled = Boolean(review.blocked);
+  if (!dialog.open) dialog.showModal();
+}
+
+async function fwEdgePost(path, body, failedAs) {
+  clearNotice();
+  busy(true);
+  let reply = null;
+  let failure = '';
+  try {
+    reply = await call(path, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(body),
+    });
+  } catch (error) {
+    failure = error.message;
+  } finally {
+    busy(false);
+  }
+  if (failure) {
+    notify(failedAs + failure, 'error');
+    return;
+  }
+  const data = reply && reply.data;
+  if (data && data.review) {
+    fwShowEdgeReview(data.review);
+    return;
+  }
+  const dialog = CLP_ROOT.getElementById('fw-edge-review-dialog');
+  if (dialog && dialog.open) dialog.close();
+  const state = await repaint();
+  replyNotice(Object.assign(state, { reply: data }));
+}
+
+function fwCheckEdge() {
+  return fwEdgePost('/api/edge/check', {}, 'Could not check Cloudflare edge defaults: ');
+}
+
+function fwSaveEdgeForm(event) {
+  event.preventDefault();
+  return fwSaveEdge(true);
+}
+
+function fwSaveEdge(approve) {
+  const defaults = fwReadEdgeForm();
+  if (!defaults) return;
+  return fwEdgePost('/api/edge/defaults', { defaults: defaults, approve: Boolean(approve) }, 'Could not save Cloudflare edge defaults: ');
+}
+
+async function fwPauseEdge() {
+  const accepted = await confirmAction({
+    title: 'Pause automatic Cloudflare edge defaults?',
+    text: 'Existing zones stay as they are. New zones will not receive edge defaults automatically until you approve them again.',
+    confirmLabel: 'Pause',
+    danger: false,
+  });
+  if (!accepted) return;
+  return fwEdgePost('/api/edge/defaults', { pause: true }, 'Could not pause Cloudflare edge defaults: ');
+}
+
+function fwReviewEdgeZone(zoneKey) {
+  return fwEdgePost('/api/edge/review-zone', { zoneKey: zoneKey }, 'Could not review zone edge changes: ');
+}
+
+function fwChooseEdgeZone(zone, select) {
+  const value = select.value;
+  select.value = '';
+  if (!value) return;
+  const parts = value.split('/');
+  if (parts.length !== 2) return;
+  return fwEdgePost('/api/edge/zone-choice', { zone: zone, connectionId: parts[0], zoneId: parts[1] }, 'Could not select Cloudflare zone: ');
+}
+
+async function fwConfirmEdge() {
+  if (!fwEdgeReviewToken) return;
+  const token = fwEdgeReviewToken;
+  const dialog = CLP_ROOT.getElementById('fw-edge-review-dialog');
+  clearNotice();
+  busy(true);
+  let reply = null;
+  let failure = '';
+  try {
+    reply = await call('/api/edge/confirm', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ token: token }),
+    });
+  } catch (error) {
+    failure = error.message;
+  } finally {
+    busy(false);
+  }
+  if (failure) {
+    if (dialog && dialog.open) dialog.close();
+    notify('Could not apply Cloudflare edge changes: ' + failure, 'error');
+    return;
+  }
+  const data = reply && reply.data;
+  if (data && data.review) {
+    fwShowEdgeReview(data.review);
+    notify('Cloudflare changed since this review was prepared; review the updated plan before confirming.', 'warn');
+    return;
+  }
+  if (dialog && dialog.open) dialog.close();
+  fwEdgeReviewToken = '';
+  const state = await repaint();
+  replyNotice(Object.assign(state, { reply: data }));
 }
 
 function firewallReady() {

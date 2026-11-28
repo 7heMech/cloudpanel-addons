@@ -171,11 +171,6 @@ function dnsAddPreset(select) {
   preset.records.forEach(function (record) { dnsRowsState.push(Object.assign({}, record)); });
   const form = CLP_ROOT.getElementById('dns-profile-form');
   if (preset.mailcow) form.elements.namedItem('mailcow').checked = true;
-  const zone = preset.zone || {};
-  if (zone.ssl && !form.elements.namedItem('ssl').value) form.elements.namedItem('ssl').value = zone.ssl;
-  if (zone.alwaysHttps !== undefined && !form.elements.namedItem('alwaysHttps').value) form.elements.namedItem('alwaysHttps').value = zone.alwaysHttps ? 'on' : 'off';
-  if (zone.acmeFullSsl) form.elements.namedItem('acmeFullSsl').checked = true;
-  if (zone.webmailFullSsl) form.elements.namedItem('webmailFullSsl').checked = true;
   dnsSyncProfileSections();
   dnsRenderRows();
   notify('Added the ' + preset.label + ' rows. Edit them as you need.', 'ok');
@@ -198,45 +193,23 @@ function dnsEditProfile(id) {
   form.reset();
   form.elements.namedItem('id').value = profile ? profile.id : '';
   form.elements.namedItem('name').value = profile ? profile.name : '';
-  const zone = profile ? profile.zone : { ssl: null, alwaysHttps: null, acmeFullSsl: false, webmailFullSsl: false, skipFirewallIps: [] };
   form.elements.namedItem('mailcow').checked = Boolean(profile && profile.mailcow);
-  form.elements.namedItem('ssl').value = zone.ssl || '';
-  form.elements.namedItem('alwaysHttps').value = zone.alwaysHttps === null ? '' : zone.alwaysHttps ? 'on' : 'off';
-  form.elements.namedItem('acmeFullSsl').checked = zone.acmeFullSsl;
-  form.elements.namedItem('webmailFullSsl').checked = zone.webmailFullSsl;
-  form.elements.namedItem('skipFirewallIps').value = zone.skipFirewallIps.join('\n');
   CLP_ROOT.getElementById('dns-preset').innerHTML = '<option value="">Add a preset…</option>' + dnsState.presets.map(function (preset) {
     return '<option value="' + dnsEsc(preset.id) + '">' + dnsEsc(preset.label) + '</option>';
   }).join('');
   dnsRowsState = profile ? profile.records.map(function (record) { return Object.assign({}, record); }) : [];
   dnsLastField = null;
   CLP_ROOT.getElementById('dns-advanced').checked = false;
-  CLP_ROOT.getElementById('dns-zone-details').open = false;
   dnsSyncProfileSections();
   dnsRenderRows();
   CLP_ROOT.getElementById('dns-profile-heading').textContent = profile ? 'Edit ' + profile.name : 'New profile';
   dnsOpen('dns-profile-dialog');
 }
 
-/** Mailcow shows once Mailcow is set up or the profile uses it; Cloudflare zone settings hide when no Cloudflare connection exists. */
+/** Mailcow shows once Mailcow is set up or the profile uses it. */
 function dnsSyncProfileSections() {
   const form = CLP_ROOT.getElementById('dns-profile-form');
-  const value = function (name) { return form.elements.namedItem(name).value; };
-  const hasCf = dnsHasCloudflare();
-  const hasPdns = dnsHasPowerDns();
   CLP_ROOT.getElementById('dns-mailcow-section').hidden = !dnsState.mailcow.url && !form.elements.namedItem('mailcow').checked;
-  const zoneDetails = CLP_ROOT.getElementById('dns-zone-details');
-  zoneDetails.hidden = !hasCf;
-  const zoneHeading = CLP_ROOT.getElementById('dns-zone-details-heading');
-  if (zoneHeading) zoneHeading.textContent = hasCf && hasPdns ? 'Cloudflare zone (Cloudflare only)' : 'Cloudflare zone';
-  const ssl = form.elements.namedItem('ssl');
-  const parts = [];
-  if (value('ssl')) parts.push(ssl.options[ssl.selectedIndex].text);
-  if (value('alwaysHttps')) parts.push('Always HTTPS ' + value('alwaysHttps'));
-  const rules = [form.elements.namedItem('acmeFullSsl').checked && "Let's Encrypt", form.elements.namedItem('webmailFullSsl').checked && 'webmail',
-    value('skipFirewallIps').trim() && 'firewall skip'].filter(Boolean);
-  if (rules.length) parts.push('Rules: ' + rules.join(', '));
-  CLP_ROOT.getElementById('dns-zone-summary').textContent = parts.join(' · ') || 'Left as it is';
 }
 
 function dnsSaveProfile(event) {
@@ -248,13 +221,6 @@ function dnsSaveProfile(event) {
     name: value('name'),
     records: dnsRowsState,
     mailcow: form.elements.namedItem('mailcow').checked,
-    zone: {
-      ssl: value('ssl') || null,
-      alwaysHttps: value('alwaysHttps') === '' ? null : value('alwaysHttps') === 'on',
-      acmeFullSsl: form.elements.namedItem('acmeFullSsl').checked,
-      webmailFullSsl: form.elements.namedItem('webmailFullSsl').checked,
-      skipFirewallIps: value('skipFirewallIps').split(/[\s,]+/).filter(Boolean),
-    },
   }, CLP_ROOT.getElementById('dns-profile-dialog'));
 }
 
@@ -637,12 +603,14 @@ function dnsEditConnection(id, preferredProvider) {
   if (tabs) tabs.hidden = Boolean(connection);
 
   const dialog = CLP_ROOT.getElementById('dns-connection-dialog');
-  const templates = dnsState.tokens || { dns: dnsState.token, panelGate: dnsState.token, both: dnsState.token };
+  const templates = dnsState.tokens || { dns: dnsState.token };
   dialog.dataset.cfTemplates = JSON.stringify(templates);
   const dnsScope = CLP_ROOT.getElementById('dns-scope-dns');
+  const edgeScope = CLP_ROOT.getElementById('dns-scope-edge');
   const gateScope = CLP_ROOT.getElementById('dns-scope-gate');
   if (dnsScope) dnsScope.checked = true;
-  if (gateScope) gateScope.checked = Boolean(dnsState.firewallEnabled);
+  if (edgeScope) edgeScope.checked = Boolean(dnsState.firewallEnabled);
+  if (gateScope) gateScope.checked = false;
   cfSyncScope('dns');
   const ips = [dnsState.server.detected.ipv4, dnsState.server.detected.ipv6].filter(Boolean);
   // Space-separated, as Cloudflare's IP filter takes several addresses at once.

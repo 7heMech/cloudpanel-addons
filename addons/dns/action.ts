@@ -24,7 +24,7 @@ import { DEFAULT_SMTP_PATHS, smtpRelayAccounts, type SmtpRelayAccount } from "..
 import { DEFAULT_PANEL_TWEAKS_PATHS, readTweaks } from "../panel-tweaks/action";
 import { detectAddresses, type Addresses } from "../../lib/addresses";
 import {
-  DnsRun, readiness, tokenProfiles, zoneMapKey, type ConnectionReport, type LogEntry, type ManagedRecords, type PanelSite, type SitePlan,
+  DnsRun, readiness, zoneMapKey, type ConnectionReport, type LogEntry, type ManagedRecords, type PanelSite, type SitePlan,
   type StandIns, type TrackedRedirectRule,
 } from "./engine";
 import { type ApiFetch, redact } from "../../lib/provider-http";
@@ -46,7 +46,7 @@ import { readState, writeState } from "../../lib/root-state";
 import { accessView, type AccessView } from "../../lib/cloudflare/access";
 import {
   cloudflareTokenHolds, hasSharedCloudflareStore, readCloudflareConnections, readCloudflareSecrets, readCloudflareStatus,
-  recordCloudflareReports, removeCloudflareConnection, saveCloudflareConnection,
+  readFirewallEdgeDefaults, recordCloudflareReports, removeCloudflareConnection, saveCloudflareConnection,
   type CloudflareStorePaths,
 } from "../../lib/cloudflare/store";
 import { tokenTemplate, tokenTemplates, type PermissionName, type TokenTemplate, type TokenTemplates } from "../../lib/cloudflare/tokens";
@@ -331,15 +331,30 @@ class Files {
   }
 
   savePolicy(policy: Policy): void {
-    // Cloudflare connections live in the shared store; keep dns/policy.json's legacy list empty once migrated,
-    // without wiping unmigrated legacy connections while the shared store does not exist yet, while storing PowerDNS connections here.
+    // Cloudflare connections live in the shared store and zone-wide edge defaults
+    // live in Firewall; keep dns/policy.json's legacy connections and per-profile
+    // `zone` blocks intact until their migrations finish and strip them.
     const clean = parsePolicy(policy);
+    const onDisk = readState<unknown>(this.path("policy"), this.paths.rootUid, () => null);
     let legacy: Policy["connections"] = [];
-    if (!hasSharedCloudflareStore(this.cfPaths)) {
-      const onDisk = readState<unknown>(this.path("policy"), this.paths.rootUid, () => null);
-      if (onDisk !== null) legacy = parsePolicy(onDisk).connections;
+    if (!hasSharedCloudflareStore(this.cfPaths) && onDisk !== null) {
+      legacy = parsePolicy(onDisk).connections;
     }
-    writeState(this.path("policy"), { ...clean, connections: legacy }, this.paths.rootUid);
+    const legacyZones = new Map<string, unknown>();
+    if (onDisk && typeof onDisk === "object" && !Array.isArray(onDisk)) {
+      const rawProfiles = (onDisk as { profiles?: unknown }).profiles;
+      if (Array.isArray(rawProfiles)) {
+        for (const entry of rawProfiles) {
+          if (entry && typeof entry === "object" && !Array.isArray(entry) && typeof (entry as { id?: unknown }).id === "string" && Object.hasOwn(entry, "zone")) {
+            legacyZones.set((entry as { id: string }).id, (entry as { zone: unknown }).zone);
+          }
+        }
+      }
+    }
+    const profiles = legacyZones.size > 0
+      ? clean.profiles.map((profile) => legacyZones.has(profile.id) ? { ...profile, zone: legacyZones.get(profile.id) } : profile)
+      : clean.profiles;
+    writeState(this.path("policy"), { ...clean, profiles, connections: legacy }, this.paths.rootUid);
   }
 
   secrets(): Secrets {
@@ -762,7 +777,7 @@ class Action {
             provider: "cloudflare",
             label: connection.label,
             hasToken: Boolean(secrets.cloudflare[connection.id]),
-            access: stored?.active ? accessView(stored, tokenProfiles(policy)) : null,
+            access: stored?.active ? accessView(stored, readFirewallEdgeDefaults({ rootUid: this.paths.rootUid }), { includeDns: true, includeEdge: false, requirePanelGate: false }) : null,
           };
         }),
         ...(policy.powerdns ?? []).map((connection): DnsConnectionView => {
@@ -794,8 +809,8 @@ class Action {
         .map(([domain, entry]) => ({ domain, zone: entry.zoneName, records: entry.records.length })),
       checkedAt: status.checkedAt,
       waitUntil: Math.max(status.backoff.cloudflare, status.backoff.mailcow, status.backoff.powerdns ?? 0),
-      token: tokenTemplate(tokenProfiles(policy)),
-      tokens: tokenTemplates(tokenProfiles(policy)),
+      token: tokenTemplate(readFirewallEdgeDefaults({ rootUid: this.paths.rootUid }), { dns: true }),
+      tokens: tokenTemplates(readFirewallEdgeDefaults({ rootUid: this.paths.rootUid })),
       firewallEnabled: existsSync(addonConfigFile("firewall")),
       presets: PRESETS,
       log: this.files.log().slice(0, PAGE_LOG),

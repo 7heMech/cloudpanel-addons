@@ -22,7 +22,8 @@ import {
   accessView, grants, readAccess, selfReadPermission, targetFor, uncertain, type AccessView, type Reached, type TokenAccess,
 } from "./access";
 import { CloudflareApi, UnreadableToken, type CfAccount, type CfZone, type Verified } from "./api";
-import { PERMISSIONS, type PermissionName, type PermissionScopeOptions, type ZoneProfileShape } from "./tokens";
+import { DEFAULT_EDGE_DEFAULTS, parseEdgeDefaults, type EdgeDefaults } from "./edge";
+import { PERMISSIONS, type EdgePermissionNeeds, type PermissionName, type PermissionScopeOptions } from "./tokens";
 
 export const MAX_CLOUDFLARE_CONNECTIONS = 12;
 const LABEL_MAX = 40;
@@ -160,43 +161,22 @@ export function hasSharedCloudflareStore(paths?: Partial<CloudflareStorePaths>):
   return existsSync(files.connections) || existsSync(files.secrets);
 }
 
-const DEFAULT_DNS_ZONE_PROFILE: ZoneProfileShape = {
-  name: "Web",
-  zone: { ssl: "strict", alwaysHttps: true, acmeFullSsl: true, webmailFullSsl: false, skipFirewallIps: [] },
-};
-
 /**
- * Reads DNS's zone-option profile shapes for building token templates without
- * importing `addons/dns`. Falls back to DNS's default Web profile when DNS has
- * no saved policy yet so combined "DNS + Panel gate" tokens include Zone
- * Settings and Config Rules edits.
+ * Reads Firewall's saved Cloudflare edge defaults for building token templates
+ * and permission tables without importing `addons/firewall`. Falls back to
+ * `DEFAULT_EDGE_DEFAULTS` when no edge config exists yet so newly created
+ * tokens include Zone Settings and Config Rules edits by default.
  */
-export function readDnsZoneProfiles(options: { dnsDir?: string; rootUid?: number } = {}): ZoneProfileShape[] {
-  const dnsDir = options.dnsDir ?? addonStateDir("dns");
+export function readFirewallEdgeDefaults(options: { firewallDir?: string; rootUid?: number } = {}): EdgeDefaults {
+  const firewallDir = options.firewallDir ?? addonStateDir("firewall");
   const rootUid = options.rootUid ?? ROOT_UID;
   try {
-    const raw = readState<{ profiles?: unknown } | null>(join(dnsDir, "policy.json"), rootUid, () => null);
-    if (Array.isArray(raw?.profiles)) {
-      const profiles: ZoneProfileShape[] = [];
-      for (const entry of raw.profiles) {
-        if (!entry || typeof entry !== "object" || Array.isArray(entry)) continue;
-        const item = entry as { name?: unknown; zone?: unknown };
-        const zone = item.zone && typeof item.zone === "object" && !Array.isArray(item.zone) ? item.zone as Record<string, unknown> : {};
-        profiles.push({
-          name: typeof item.name === "string" && item.name.trim() ? item.name.trim() : "Profile",
-          zone: {
-            ssl: zone.ssl ?? null,
-            alwaysHttps: zone.alwaysHttps ?? null,
-            acmeFullSsl: zone.acmeFullSsl === true,
-            webmailFullSsl: zone.webmailFullSsl === true,
-            skipFirewallIps: Array.isArray(zone.skipFirewallIps) ? zone.skipFirewallIps.filter((ip): ip is string => typeof ip === "string") : [],
-          },
-        });
-      }
-      return profiles;
+    const raw = readState<{ defaults?: unknown } | null>(join(firewallDir, "cloudflare-edge.json"), rootUid, () => null);
+    if (raw && typeof raw === "object" && raw.defaults && typeof raw.defaults === "object") {
+      return parseEdgeDefaults(raw.defaults);
     }
-  } catch { /* fall back to default profile shape */ }
-  return [DEFAULT_DNS_ZONE_PROFILE];
+  } catch { /* fall back to recommended defaults */ }
+  return { ...DEFAULT_EDGE_DEFAULTS, skipFirewallIps: [...DEFAULT_EDGE_DEFAULTS.skipFirewallIps] };
 }
 
 /** Reads only saved Cloudflare connections metadata (never touches secrets.json). */
@@ -293,7 +273,7 @@ export function listCloudflareSecrets(paths?: Partial<CloudflareStorePaths>): Cl
 
 /** Browser-safe view of saved Cloudflare connections, with permission evaluation for the calling addon. */
 export function cloudflareConnectionViews(
-  profiles: ZoneProfileShape[] = [],
+  edge: EdgePermissionNeeds = DEFAULT_EDGE_DEFAULTS,
   scopeOptions: PermissionScopeOptions = {},
   paths?: Partial<CloudflareStorePaths>,
 ): {
@@ -312,7 +292,7 @@ export function cloudflareConnectionViews(
       ...report,
       label: connection.label,
       hasToken: Boolean(store.tokens[connection.id]),
-      access: stored?.active ? accessView(stored, profiles, scopeOptions) : null,
+      access: stored?.active ? accessView(stored, edge, scopeOptions) : null,
     };
   });
   const accounts = store.reports.flatMap((connection) => connection.accounts.map((account) => ({

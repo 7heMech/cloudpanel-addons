@@ -4,7 +4,7 @@
  */
 import { esc } from "../app-http";
 import type { AccessView } from "./access";
-import type { TokenTemplates } from "./tokens";
+import type { TokenTemplateKey, TokenTemplates } from "./tokens";
 
 export interface CloudflareDialogOptions {
   /** Prefix for DOM element IDs (e.g. "dns" or "fw-cf"). */
@@ -15,9 +15,11 @@ export interface CloudflareDialogOptions {
   copyFn: string;
   /** Initial state of the DNS scope checkbox. */
   defaultDns: boolean;
+  /** Initial state of the Cloudflare edge defaults scope checkbox. */
+  defaultEdge: boolean;
   /** Initial state of the Panel gate scope checkbox. */
   defaultPanelGate: boolean;
-  /** Prefilled templates for dns-only, panelGate-only, and both scopes. */
+  /** Prefilled templates keyed by active scope combinations. */
   templates: TokenTemplates;
   /** Clipboard SVG markup. */
   clipboardIcon: string;
@@ -52,17 +54,23 @@ export function cloudflareAccessDetailsHtml(id: string, access: AccessView, stat
       <p class="dns-access-foot hint"><a href="${esc(access.editUrl)}" target="_blank" rel="noopener noreferrer" referrerpolicy="no-referrer">Edit in Cloudflare ↗</a></p></div></details>`;
 }
 
+export function scopeKeyFor(scopes: { dns: boolean; edge: boolean; panelGate: boolean }): TokenTemplateKey {
+  const parts: string[] = [];
+  if (scopes.dns) parts.push("dns");
+  if (scopes.edge) parts.push("edge");
+  if (scopes.panelGate) parts.push("panelGate");
+  return (parts.join("+") || "dns") as TokenTemplateKey;
+}
+
 /**
  * Shared Connect Cloudflare `<dialog>` with scope checkboxes so an operator
- * can mint one token covering DNS, Firewall's Panel gate, or both.
+ * can mint one token covering DNS, Firewall's Cloudflare edge defaults, Panel
+ * gate, or any combination of the three.
  */
 export function cloudflareConnectDialogHtml(options: CloudflareDialogOptions): string {
   const p = esc(options.prefix);
-  const initial = options.defaultDns && options.defaultPanelGate
-    ? options.templates.both
-    : options.defaultPanelGate
-      ? options.templates.panelGate
-      : options.templates.dns;
+  const initialKey = scopeKeyFor({ dns: options.defaultDns, edge: options.defaultEdge, panelGate: options.defaultPanelGate });
+  const initial = options.templates[initialKey] ?? options.templates.dns;
   const templatesAttr = esc(JSON.stringify(options.templates));
   return `<dialog id="${p}-connection-dialog" aria-labelledby="${p}-connection-heading" data-cf-templates="${templatesAttr}"><form id="${p}-connection-form" onsubmit="${options.onSubmit}">
     <div class="dialog-header"><h2 id="${p}-connection-heading">Connect Cloudflare</h2></div>
@@ -71,6 +79,7 @@ export function cloudflareConnectDialogHtml(options: CloudflareDialogOptions): s
       <li id="${p}-token-step"><strong>Create a token in Cloudflare</strong>
         <div class="cf-scope-picks" role="group" aria-label="Token scopes">
           <label class="cf-scope-pick"><input type="checkbox" id="${p}-scope-dns" data-cf-scope="dns" ${options.defaultDns ? "checked" : ""} onchange="cfSyncScope('${p}', this)"><span>DNS records and zones</span></label>
+          <label class="cf-scope-pick"><input type="checkbox" id="${p}-scope-edge" data-cf-scope="edge" ${options.defaultEdge ? "checked" : ""} onchange="cfSyncScope('${p}', this)"><span>Cloudflare edge defaults (SSL/TLS, HTTPS, rules)</span></label>
           <label class="cf-scope-pick"><input type="checkbox" id="${p}-scope-gate" data-cf-scope="panelGate" ${options.defaultPanelGate ? "checked" : ""} onchange="cfSyncScope('${p}', this)"><span>Panel gate (Cloudflare Access and origin pulls)</span></label>
         </div>
         <p class="hint">Check these permissions: <span id="${p}-token-permissions">${esc(initial.permissions.join(", "))}</span>. Choose the accounts and zones there; All zones also covers zones you add later.</p>
@@ -97,13 +106,20 @@ function cfSyncScope(prefix, changed) {
   var dialog = CLP_ROOT.getElementById(prefix + '-connection-dialog');
   if (!dialog) return;
   var dnsBox = CLP_ROOT.getElementById(prefix + '-scope-dns');
+  var edgeBox = CLP_ROOT.getElementById(prefix + '-scope-edge');
   var gateBox = CLP_ROOT.getElementById(prefix + '-scope-gate');
-  if (!dnsBox || !gateBox) return;
-  if (!dnsBox.checked && !gateBox.checked && changed) changed.checked = true;
+  var parts = [];
+  if (dnsBox && dnsBox.checked) parts.push('dns');
+  if (edgeBox && edgeBox.checked) parts.push('edge');
+  if (gateBox && gateBox.checked) parts.push('panelGate');
+  if (!parts.length && changed) {
+    changed.checked = true;
+    if (changed.dataset && changed.dataset.cfScope) parts.push(changed.dataset.cfScope);
+  }
   var templates;
   try { templates = JSON.parse(dialog.dataset.cfTemplates || '{}'); } catch (e) { return; }
-  var key = dnsBox.checked && gateBox.checked ? 'both' : gateBox.checked ? 'panelGate' : 'dns';
-  var chosen = templates[key] || templates.dns;
+  var key = parts.join('+');
+  var chosen = templates[key] || templates.dns || templates.edge || templates.panelGate;
   if (!chosen) return;
   var perms = CLP_ROOT.getElementById(prefix + '-token-permissions');
   var link = CLP_ROOT.getElementById(prefix + '-token-link');

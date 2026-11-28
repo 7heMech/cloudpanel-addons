@@ -14,12 +14,12 @@ card. Once connected, the page splits into **Sites**, **Redirects**,
 1. **Connect a DNS provider.** Open DNS and choose **Connect Cloudflare** or
    **Connect PowerDNS**.
    - **Cloudflare.** Choose whether the token is for DNS records, Firewall's
-     Panel gate, or both. **Create token in Cloudflare** opens Cloudflare's
-     token form with those permissions selected. Check the permissions listed
-     beside the link, pick the accounts and zones, limit the token to the server
-     addresses shown under Client IP Address Filtering using the clipboard icon,
-     create the token, and paste it back. DNS and Firewall share saved
-     Cloudflare connections.
+     Cloudflare edge defaults, Panel gate, or any combination. **Create token in
+     Cloudflare** opens Cloudflare's token form with those permissions selected.
+     Check the permissions listed beside the link, pick the accounts and zones,
+     limit the token to the server addresses shown under Client IP Address
+     Filtering using the clipboard icon, create the token, and paste it back.
+     DNS and Firewall share saved Cloudflare connections.
    - **PowerDNS.** Enter the Authoritative Server HTTP API v1 base URL and API
      key, plus an optional label, server ID (`localhost` by default), and
      default TTL (used whenever a profile row is set to Auto). Plain `http://`
@@ -40,14 +40,15 @@ card. Once connected, the page splits into **Sites**, **Redirects**,
 3. **Profiles.** Open **Profiles** to edit **Web** or **Web and Mailcow**, or
    create your own from the presets. Each row is a record every site in the
    profile gets; **TTL and apex only** shows the less common columns. When no
-   Cloudflare connection is configured, the Proxy column and **Cloudflare zone**
-   settings stay hidden; when both Cloudflare and PowerDNS are connected, those
-   controls apply only to Cloudflare zones. By default **Web** writes
-   `*.{domain}` on apex domains, so subdomain sites in the same zone inherit
-   the wildcard and need no `A` or `AAAA` records of their own unless another
-   record at or below the subdomain blocks the wildcard. To keep a subdomain
-   free of mail records, assign it to **Web** and send its transactional mail
-   as the apex domain in SMTP Relay.
+   Cloudflare connection is configured, the Proxy column stays hidden; when both
+   Cloudflare and PowerDNS are connected, proxy settings apply only to
+   Cloudflare zones. Zone-wide Cloudflare SSL/TLS, Always Use HTTPS, Full SSL
+   rules, and WAF skip IPs live under **Firewall → Cloudflare edge**. By default
+   **Web** writes `*.{domain}` on apex domains, so subdomain sites in the same
+   zone inherit the wildcard and need no `A` or `AAAA` records of their own
+   unless another record at or below the subdomain blocks the wildcard. To keep
+   a subdomain free of mail records, assign it to **Web** and send its
+   transactional mail as the apex domain in SMTP Relay.
 4. **Assign sites** under **Sites**, in bulk if you like. DNS starts in **Ask
    first**. **Check now** shows what differs and changes nothing.
 5. **Turn on Automatic.** Choose **Review and turn on Automatic**, read the
@@ -154,10 +155,11 @@ have not passed Cloudflare Access on Cloudflare-proxied panels.
 
 On Cloudflare, the proxy waits for the certificate because CloudPanel asks Let's
 Encrypt the moment you save, and a check sent through Cloudflare can fail on the
-zone's SSL settings. The zone also gets the Full SSL rule for Let's Encrypt
-checks, so CloudPanel's renewals still reach this server once the name is
-proxied. Removing the panel hostname leaves any explicit records it still has in
-your DNS provider, listed with the records of deleted sites.
+zone's SSL settings. Enable **Full SSL for Let's Encrypt checks** under
+**Firewall → Cloudflare edge** so CloudPanel's renewals still reach this server
+once the name is proxied. Removing the panel hostname leaves any explicit
+records it still has in your DNS provider, listed with the records of deleted
+sites.
 
 ## Leaving Terraform
 

@@ -17,10 +17,6 @@ export const PROVIDER_LABELS: Record<ProviderKind, string> = {
 export interface ProviderCapabilities {
   /** Whether records can be proxied through the provider's edge. */
   proxy: boolean;
-  /** Whether the provider exposes zone-wide SSL/TLS and HTTPS settings. */
-  zoneSettings: boolean;
-  /** Whether the provider exposes zone-wide HTTP config and firewall rulesets. */
-  zoneRules: boolean;
   /** Whether redirect domains can run as edge redirect rules without a local stand-in site. */
   edgeRedirects: boolean;
   /** Whether this connection can create missing zones automatically. */
@@ -76,8 +72,6 @@ export interface ProviderCheckResult {
 }
 
 export interface CloudflareEdgeClient {
-  setting(zoneId: string, setting: string): Promise<string>;
-  setSetting(zoneId: string, setting: string, value: string): Promise<void>;
   entrypoint(zoneId: string, phase: string): Promise<CfRuleset | null>;
   createEntrypoint(zoneId: string, phase: string, rules: RuleWrite[]): Promise<CfRuleset>;
   addRule(zoneId: string, phase: string, rulesetId: string, rule: RuleWrite): Promise<CfRuleset>;

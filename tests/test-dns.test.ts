@@ -8,6 +8,10 @@ import { seededPolicy } from "../addons/dns/presets";
 import { dnsTokenHolds, executeDnsAction, panelSites, type DnsReply, type ProvisionReply, type SiteDnsStatus } from "../addons/dns/action";
 import { detectAddresses, type Addresses } from "../addons/dns/addresses";
 import { DNS_ADDON } from "../addons/dns/addon";
+import { cloudflareEdgeMigrationPending, migrateCloudflareEdgeFromDns } from "../addons/firewall/migration";
+import { readEdgeConfig } from "../addons/firewall/edge";
+import { ADDONS } from "../addons/catalog";
+import { repairTargets } from "../cli/repair";
 import type { PanelSite, SitePlan } from "../addons/dns/engine";
 import { MAX_ATTEMPTS, NEW_SITE_WINDOW, retryCertificates, type SslRequest } from "../addons/dns/ssl";
 import { dashboardContent } from "../addons/dns/app/views";
@@ -231,18 +235,15 @@ describe("Ask first and Automatic", () => {
     const confirmed = await env.act("confirm", { token: review.review!.token });
     expect(confirmed.automatic).toBe(true);
     expect(confirmed.log.map((line) => `${line.cause}: ${line.action} ${line.subject}`)).toContain("Confirmed review: create A example.com");
-    expect(confirmed.log.find((line) => line.subject === "Zone setting, whole zone")).toMatchObject({ sites: [], zone: "example.com" });
     expect(env.records()).toEqual([
       "A *.example.com 203.0.113.10 proxied", "A example.com 203.0.113.10 proxied",
       "AAAA *.example.com 2001:db8::10 proxied", "AAAA example.com 2001:db8::10 proxied",
     ]);
+    // Whole-zone SSL/Always-HTTPS/rulesets belong to Firewall's Cloudflare edge section, not DNS profiles.
     const zone = env.cf.zones[0]!;
-    expect(env.cf.settings.get(`${zone.id}:ssl`)).toBe("strict");
-    expect(env.cf.settings.get(`${zone.id}:always_use_https`)).toBe("on");
-    expect(env.cf.rulesets.get(`${zone.id}:http_config_settings`)!.rules.map((rule) => rule.ref)).toEqual(["clp_dns_acme"]);
-    // The rule comes before the proxied records that need it.
-    const order = env.cf.writes().map((call) => call.path);
-    expect(order.findIndex((path) => path.endsWith("/rulesets"))).toBeLessThan(order.findIndex((path) => path.endsWith("/dns_records")));
+    expect(env.cf.settings.get(`${zone.id}:ssl`)).toBeUndefined();
+    expect(env.cf.settings.get(`${zone.id}:always_use_https`)).toBeUndefined();
+    expect(env.cf.rulesets.get(`${zone.id}:http_config_settings`)).toBeUndefined();
 
     const writes = env.cf.writes().length;
     const state = await env.act("check");
@@ -276,41 +277,65 @@ describe("Ask first and Automatic", () => {
     ]);
   });
 
-  test("a rule that already does the same thing is used rather than duplicated, and other rules stay", async () => {
+  test("legacy zone property on a profile payload is ignored without error", async () => {
     const env = setup();
-    const zone = env.cf.zones[0]!;
-    env.cf.rulesets.set(`${zone.id}:http_config_settings`, { id: "f".repeat(32), rules: [
-      { id: "e".repeat(32), ref: "tf", action: "set_config", enabled: true, description: "Allow Let's Encrypt HTTP-01 challenge requests (Full SSL)",
-        expression: 'starts_with(http.request.uri.path, "/.well-known/acme-challenge/")', action_parameters: { ssl: "full" } },
-      { id: "d".repeat(32), ref: "other", action: "set_config", enabled: true, expression: 'http.host eq "x.example.com"', action_parameters: { ssl: "flexible" } },
-    ] });
     await env.connect();
     const state = await env.act("list");
     const web = state.profiles.find((profile) => profile.id === "web")!;
-    await env.act("save-profile", { ...web, zone: { ...web.zone, skipFirewallIps: ["203.0.113.7", "2001:db8::7"] } });
-    await env.act("assign", { domains: ["example.com"], profileId: "web" });
-    await env.automatic();
-    expect(env.cf.rulesets.get(`${zone.id}:http_config_settings`)!.rules.map((rule) => rule.ref)).toEqual(["tf", "other"]);
-    expect(env.cf.rulesets.get(`${zone.id}:http_request_firewall_custom`)!.rules).toEqual([expect.objectContaining({
-      ref: "clp_dns_skip", action: "skip", expression: "ip.src in {2001:db8::7 203.0.113.7}",
-      action_parameters: { phases: ["http_request_sbfm", "http_request_firewall_managed"] },
-    })]);
+    const saved = await env.act("save-profile", { ...web, zone: { ssl: "strict", alwaysHttps: true, acmeFullSsl: true, webmailFullSsl: false, skipFirewallIps: ["203.0.113.7"] } });
+    expect(saved.profiles.find((profile) => profile.id === "web")).not.toHaveProperty("zone");
   });
 
-  test("profiles in one zone that want different SSL modes stop each other", async () => {
+  test("preserves unmigrated legacy zone blocks across DNS saves and gates DNS repair until migration succeeds", async () => {
     const env = setup();
     await env.connect();
-    const state = await env.act("list");
-    const mailcow = state.profiles.find((profile) => profile.id === "web-mailcow")!;
-    await env.act("save-profile", { ...mailcow, mailcow: false, records: mailcow.records.filter((row) => !/mailcow/.test(row.name + row.content)), zone: { ...mailcow.zone, ssl: "full" } });
-    await env.act("assign", { domains: ["shop.example.com"], profileId: "web-mailcow" });
-    await env.automatic();
-    // Putting a site that wants Full (strict) in the same zone is refused at its review.
-    const blocked = await env.act("assign", { domains: ["example.com"], profileId: "web" });
-    expect(blocked.review!.blocked).toBe(true);
-    expect(blocked.review!.sites.find((plan) => plan.domain === "example.com")!.problems).toContain("The profiles in this zone ask for different SSL/TLS modes");
-    // The zone stays at the Full it already had: Full (strict) is never written.
-    expect(env.cf.settings.get(`${env.cf.zones[0]!.id}:ssl`)).toBeUndefined();
+    await env.act("set-default", { profileId: "web" });
+
+    // Inject a legacy `zone` block into dns/policy.json as if upgrade migration failed on dns.lock.
+    const policyPath = join(env.dir, "state", "policy.json");
+    const rawPolicy = JSON.parse(readFileSync(policyPath, "utf8"));
+    rawPolicy.profiles = rawPolicy.profiles.map((profile: Record<string, unknown>) =>
+      profile.id === "web"
+        ? { ...profile, zone: { ssl: "strict", alwaysHttps: true, acmeFullSsl: true, webmailFullSsl: false, skipFirewallIps: ["203.0.113.7"] } }
+        : profile);
+    writeFileSync(policyPath, `${JSON.stringify(rawPolicy, null, 2)}\n`, { mode: 0o600 });
+
+    // repairTargets excludes DNS when startup migration failed while edge migration is still pending.
+    const pending = () => cloudflareEdgeMigrationPending({ dnsPolicy: policyPath });
+    expect(pending()).toBe(true);
+    const enabled = [ADDONS.dns!, ADDONS.firewall!];
+    expect(repairTargets(enabled, true, pending).map((s) => s.name)).toEqual(["firewall"]);
+    expect(repairTargets(enabled, false, pending).map((s) => s.name)).toEqual(["dns", "firewall"]);
+
+    // Even if a DNS check runs before migration (adopting a new site and calling savePolicy),
+    // the legacy `zone` block stays intact on disk until migrateCloudflareEdgeFromDns runs.
+    env.sites.push(site(99, "new-before-mig.example.com", { createdAt: START }));
+    await env.act("check");
+    const afterCheck = JSON.parse(readFileSync(policyPath, "utf8"));
+    expect(afterCheck.assignments["new-before-mig.example.com"]).toBe("web");
+    expect(afterCheck.profiles.find((p: Record<string, unknown>) => p.id === "web").zone).toEqual({
+      ssl: "strict", alwaysHttps: true, acmeFullSsl: true, webmailFullSsl: false, skipFirewallIps: ["203.0.113.7"],
+    });
+
+    // Migration still finds and moves the legacy zone defaults into Firewall, then clears `zone`.
+    const fwStateDir = join(env.dir, "firewall-state");
+    const uid = process.getuid!();
+    const undo = migrateCloudflareEdgeFromDns(() => {}, {
+      dnsPolicy: policyPath,
+      dnsConfig: join(env.dir, "dns.conf"),
+      cloudflareStateDir: join(env.dir, "state", "cloudflare"),
+      firewallConfig: join(env.dir, "firewall.conf"),
+      firewallPolicy: join(fwStateDir, "policy.json"),
+      firewallStateDir: fwStateDir,
+      edgeConfig: join(fwStateDir, "cloudflare-edge.json"),
+      visitorIpState: join(fwStateDir, "visitor-ip.json"),
+      firewallWasEnabled: true,
+      rootUid: uid,
+    });
+    expect(undo).not.toBeNull();
+    expect(readEdgeConfig({ paths: { stateDir: fwStateDir, rootUid: uid } }).defaults.skipFirewallIps).toEqual(["203.0.113.7"]);
+    expect(pending()).toBe(false);
+    expect(repairTargets(enabled, true, pending).map((s) => s.name)).toEqual(["dns", "firewall"]);
   });
 
   test("records another current site writes at are never removed with a deleted site's", async () => {
@@ -505,22 +530,24 @@ describe("what each token holds", () => {
   const ALL_ZONES = { "com.cloudflare.api.account.zone.*": "*" };
   const paths = (env: ReturnType<typeof setup>) => ({ stateDir: join(env.dir, "state"), rootUid: process.getuid!() });
 
-  test("is read when a connection is saved and shown against what the profiles use, without a call on page load", async () => {
+  test("is read when a connection is saved and shown against what DNS uses, without a call on page load", async () => {
     const env = setup();
     env.cf.zone("example.org", env.church);
     env.cf.tokens.get(SECOND_TOKEN)!.policies = [
-      policy(["DNS Write", "Zone Write", "Account Settings Read", "Dynamic URL Redirects Write", "Config Settings Write", "API Tokens Read"], ALL_ZONES),
-      policy(["Zone Settings Write"], { [`com.cloudflare.api.account.${env.agency}`]: ALL_ZONES }),
+      policy(["DNS Write", "Zone Write", "Account Settings Read", "API Tokens Read"], ALL_ZONES),
+      policy(["Dynamic URL Redirects Write"], { [`com.cloudflare.api.account.${env.agency}`]: ALL_ZONES }),
     ];
     const reply = await env.connect(SECOND_TOKEN);
     const access = reply.connections[0]!.access!;
     expect(access.reach).toBe("All zones");
     expect(access.editUrl).toBe("https://dash.cloudflare.com/profile/api-tokens");
     const held = Object.fromEntries(access.rows.map((row) => [row.label, row.detail ?? row.held]));
-    expect(held).toMatchObject({ "DNS: Edit": "yes", "Zone: Edit": "yes", "Zone Settings: Edit": "Not on example.org", "Config Rules: Edit": "yes", "API Tokens: Read": "yes" });
-    expect(access.rows.find((row) => row.label === "Zone Settings: Edit")!.usedFor).toContain("“Web”");
-    // Nothing DNS does needs these yet, so they are not listed.
-    expect(held["Zone WAF: Edit"]).toBeUndefined();
+    expect(held).toMatchObject({ "DNS: Edit": "yes", "Zone: Edit": "yes", "Single Redirect: Edit": "Not on example.org", "API Tokens: Read": "yes" });
+    expect(access.rows.find((row) => row.label === "Single Redirect: Edit")!.usedFor).toBe("Redirect domains");
+    // Firewall edge and Panel gate permissions are optional on the DNS page.
+    expect(access.rows.find((row) => row.label === "Zone Settings: Edit")?.optional).toBe(true);
+    expect(access.rows.find((row) => row.label === "Config Rules: Edit")?.optional).toBe(true);
+    expect(access.rows.find((row) => row.label === "Zone WAF: Edit")?.optional).toBe(true);
     expect(held["Firewall Services: Edit"]).toBeUndefined();
     expect(JSON.stringify(reply)).not.toContain("grants");
 
@@ -528,22 +555,22 @@ describe("what each token holds", () => {
     const page = await env.act("list");
     expect(env.cf.calls.length).toBe(calls);
     expect(page.connections[0]!.access).toEqual(access);
-    expect(dashboardContent(page)).toContain("Not on every zone: Zone Settings: Edit (Not on example.org)");
+    expect(dashboardContent(page)).toContain("Not on every zone: Single Redirect: Edit (Not on example.org)");
   });
 
-  test("names a missing permission once a profile uses it", async () => {
+  test("lists missing DNS permissions and keeps edge and Panel gate permissions optional", async () => {
     const env = setup();
     env.cf.tokens.get(TOKEN)!.policies = [policy(["DNS Write", "API Tokens Read"], ALL_ZONES)];
     const reply = await env.connect();
     const missing = reply.connections[0]!.access!.rows.filter((row) => row.held === "no" && !row.optional).map((row) => row.label);
-    expect(missing).toEqual(["Zone: Edit", "Account Settings: Read", "Single Redirect: Edit", "Zone Settings: Edit", "Config Rules: Edit"]);
-    expect(dashboardContent(reply)).toContain("Missing: Zone: Edit, Account Settings: Read, Single Redirect: Edit, Zone Settings: Edit, Config Rules: Edit");
-    const access = reply.connections[0]!.access!;
-    const optional = { label: "Firewall Services: Edit", usedFor: "Cloudflare bans for login jails", held: "no" as const, optional: true as const };
-    const html = dashboardContent({ ...reply, connections: [{ ...reply.connections[0]!, access: { ...access, rows: [...access.rows, optional] } }] });
+    expect(missing).toEqual(["Zone: Edit", "Account Settings: Read", "Single Redirect: Edit"]);
+    const html = dashboardContent(reply);
+    expect(html).toContain("Missing: Zone: Edit, Account Settings: Read, Single Redirect: Edit");
     expect(html).toContain('<span role="columnheader">Optional</span><span role="columnheader">Enables</span>');
     expect(html).toContain("Not added");
-    expect(html).not.toMatch(/Missing:[^<]*Firewall Services/);
+    expect(html).not.toMatch(/Missing:[^<]*Zone Settings/);
+    expect(html).not.toMatch(/Missing:[^<]*Config Rules/);
+    expect(html).not.toMatch(/Missing:[^<]*Zone WAF/);
   });
 
   test("a token made before API Tokens: Read is asked for it, and the check still works", async () => {
@@ -566,21 +593,20 @@ describe("what each token holds", () => {
 
   test("a token that cannot read itself keeps showing what Cloudflare refused it, and the Setup reader names it", async () => {
     const env = setup();
-    env.cf.settings.clear();
     const fetch = env.cf.fetch;
-    // Zone settings refused, as a token without Zone Settings: Edit is.
-    env.cf.fetch = async (address, init) => new URL(address).pathname.includes("/settings/")
+    // Redirect ruleset refused, as a token without Single Redirect: Edit is.
+    env.cf.fetch = async (address, init) => new URL(address).pathname.includes("/rulesets/phases/http_request_dynamic_redirect/")
       ? new Response(JSON.stringify({ success: false, errors: [{ code: 10000, message: "Authentication error" }] }), { status: 403 })
       : fetch(address, init);
     await env.connect();
-    await env.act("assign", { domains: ["example.com"], profileId: "web" });
+    await env.act("save-redirect", { source: "old.example.com", target: "https://example.com", status: 301, keepPath: true, keepQuery: true });
     const reply = await env.act("check");
     const status = JSON.parse(readFileSync(join(env.dir, "state", "cloudflare", "status.json"), "utf8"));
-    expect(status.connections[0].refused).toEqual(["Zone Settings: Edit"]);
+    expect(status.connections[0].refused).toEqual(["Single Redirect: Edit"]);
     const access = reply.connections[0]!.access!;
-    expect(access.rows.find((row) => row.label === "Zone Settings: Edit")).toMatchObject({ held: "no", detail: "Refused by Cloudflare" });
-    expect(dashboardContent(reply)).toContain("Refused by Cloudflare: Zone Settings: Edit");
-    expect(connectionPermissions(status.connections[0], seededPolicy().profiles)).toEqual({ readable: false, missing: ["Zone Settings: Edit"] });
+    expect(access.rows.find((row) => row.label === "Single Redirect: Edit")).toMatchObject({ held: "no", detail: "Refused by Cloudflare" });
+    expect(dashboardContent(reply)).toContain("Refused by Cloudflare: Single Redirect: Edit");
+    expect(connectionPermissions(status.connections[0])).toEqual({ readable: false, missing: ["Single Redirect: Edit"] });
   });
 
   test("a token is read on a check of every site, and its read stands through checks of some sites and a read Cloudflare cannot answer", async () => {
@@ -606,17 +632,17 @@ describe("what each token holds", () => {
     const env = setup();
     const fetch = env.cf.fetch;
     let refuse = true;
-    env.cf.fetch = async (address, init) => refuse && new URL(address).pathname.includes("/settings/")
+    env.cf.fetch = async (address, init) => refuse && new URL(address).pathname.includes("/rulesets/phases/http_request_dynamic_redirect/")
       ? new Response(JSON.stringify({ success: false, errors: [{ code: 10000, message: "Authentication error" }] }), { status: 403 })
       : fetch(address, init);
     await env.connect();
-    await env.act("assign", { domains: ["example.com"], profileId: "web" });
+    await env.act("save-redirect", { source: "old.example.com", target: "https://example.com", status: 301, keepPath: true, keepQuery: true });
     await env.act("check");
     const refused = () => JSON.parse(readFileSync(join(env.dir, "state", "cloudflare", "status.json"), "utf8")).connections[0].refused;
-    expect(refused()).toEqual(["Zone Settings: Edit"]);
+    expect(refused()).toEqual(["Single Redirect: Edit"]);
     refuse = false;
     await env.act("assign", { domains: ["shop.example.com"], profileId: "web" });
-    expect(refused()).toEqual(["Zone Settings: Edit"]);
+    expect(refused()).toEqual(["Single Redirect: Edit"]);
     await env.act("check");
     expect(refused()).toBeUndefined();
   });
@@ -853,48 +879,50 @@ describe("zones and new sites", () => {
 
   test("a new site points its own names here at once; the rest of its profile waits for an administrator", async () => {
     const env = setup();
-    const zone = env.cf.zone("client.org", env.agency);
-    env.cf.record("client.org", { type: "CNAME", name: "mail.client.org", content: "mx.mailhost.example" });
+    env.cf.zone("client.org", env.agency);
+    env.cf.record("client.org", { type: "CNAME", name: "client.org", content: "old-site.example" });
+    env.cf.record("client.org", { type: "A", name: "*.client.org", content: "198.51.100.9" });
     await env.connect();
     await env.act("set-default", { profileId: "web" });
     await env.automatic();
-    env.sites.push(site(8, "mail.client.org", { createdAt: START }));
+    env.sites.push(site(8, "client.org", { createdAt: START }));
     await env.act("sync-sites");
-    expect(env.records("client.org")).toContain("A mail.client.org 203.0.113.10 proxied");
-    expect(env.records("client.org").some((record) => record.startsWith("CNAME mail.client.org"))).toBe(false);
-    // Strict SSL and Always Use HTTPS would change every name in the zone.
-    expect(env.cf.settings.get(`${zone.id}:ssl`)).toBeUndefined();
-    let plan = (await env.act("list")).sites.find((entry) => entry.domain === "mail.client.org")!.plan!;
+    expect(env.records("client.org")).toContain("A client.org 203.0.113.10 proxied");
+    expect(env.records("client.org").some((record) => record.startsWith("CNAME client.org"))).toBe(false);
+    // Changing an existing *.client.org wildcard affects other subdomains, so it waits for review.
+    expect(env.records("client.org")).toContain("A *.client.org 198.51.100.9");
+    let plan = (await env.act("list")).sites.find((entry) => entry.domain === "client.org")!.plan!;
     expect(plan.held).toBe(true);
-    expect(plan.changes.filter((change) => change.waits).map((change) => change.subject)).toEqual(["Zone setting, whole zone", "Zone setting, whole zone"]);
-    expect((await env.act<ProvisionReply>("provision", undefined, ["--domain=mail.client.org"])).ready).toBe(true);
+    expect(plan.changes.filter((change) => change.waits).map((change) => change.subject)).toEqual(["A *.client.org", "AAAA *.client.org"]);
+    expect((await env.act<ProvisionReply>("provision", undefined, ["--domain=client.org"])).ready).toBe(true);
     // The repair pass keeps holding it.
     await env.act("reconcile");
-    expect(env.cf.settings.get(`${zone.id}:ssl`)).toBeUndefined();
+    expect(env.records("client.org")).toContain("A *.client.org 198.51.100.9");
 
-    const review = await env.act("assign", { domains: ["mail.client.org"], profileId: "web" });
+    const review = await env.act("assign", { domains: ["client.org"], profileId: "web" });
     expect(review.review!.blocked).toBe(false);
     await env.act("confirm", { token: review.review!.token });
-    expect(env.cf.settings.get(`${zone.id}:ssl`)).toBe("strict");
-    plan = (await env.act("list")).sites.find((entry) => entry.domain === "mail.client.org")!.plan!;
+    expect(env.records("client.org")).toContain("A *.client.org 203.0.113.10 proxied");
+    plan = (await env.act("list")).sites.find((entry) => entry.domain === "client.org")!.plan!;
     expect(plan.held).toBeUndefined();
   });
 
   test("a new site whose zone cannot be read yet stays held until a check can plan it", async () => {
     const env = setup();
-    const zone = env.cf.zone("client.org", env.agency);
+    env.cf.zone("client.org", env.agency);
+    env.cf.record("client.org", { type: "A", name: "*.client.org", content: "198.51.100.9" });
     await env.connect();
     await env.act("set-default", { profileId: "web" });
     await env.automatic();
     const token = env.cf.tokens.get(TOKEN)!;
     env.cf.tokens.delete(TOKEN);
-    env.sites.push(site(8, "mail.client.org", { createdAt: START }));
+    env.sites.push(site(8, "client.org", { createdAt: START }));
     await env.act("sync-sites");
     env.cf.tokens.set(TOKEN, token);
     await env.act("reconcile");
-    expect(env.records("client.org")).toContain("A mail.client.org 203.0.113.10 proxied");
-    expect(env.cf.settings.get(`${zone.id}:ssl`)).toBeUndefined();
-    expect((await env.act("list")).sites.find((entry) => entry.domain === "mail.client.org")!.plan!.held).toBe(true);
+    expect(env.records("client.org")).toContain("A client.org 203.0.113.10 proxied");
+    expect(env.records("client.org")).toContain("A *.client.org 198.51.100.9");
+    expect((await env.act("list")).sites.find((entry) => entry.domain === "client.org")!.plan!.held).toBe(true);
   });
 
   test("a new site that only adds records and points its own names is not held", async () => {

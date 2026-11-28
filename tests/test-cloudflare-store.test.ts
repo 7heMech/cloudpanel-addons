@@ -7,9 +7,10 @@ import { cloudflareAccessDetailsHtml } from "../lib/cloudflare/connect-dialog";
 import {
   checkCloudflareConnections, cloudflareConnectionViews, cloudflareTokenHolds, hasSharedCloudflareStore,
   legacyDnsCloudflarePending, listCloudflareSecrets, MAX_CLOUDFLARE_CONNECTIONS, migrateCloudflareFromDns,
-  readCloudflareStore, readDnsZoneProfiles, recordCloudflareReports, removeCloudflareConnection,
+  readCloudflareStore, readFirewallEdgeDefaults, recordCloudflareReports, removeCloudflareConnection,
   saveCloudflareConnection, type CloudflareStorePaths,
 } from "../lib/cloudflare/store";
+import { DEFAULT_EDGE_DEFAULTS, EMPTY_EDGE_DEFAULTS } from "../lib/cloudflare/edge";
 import { tokenTemplate, tokenTemplates } from "../lib/cloudflare/tokens";
 import { FakeCloudflare, policy } from "./fixtures/dns-api";
 
@@ -64,7 +65,7 @@ test("shared Cloudflare store saves, verifies, lists without leaking tokens, ren
   expect(statSync(secretsFile).mode & 0o777).toBe(0o600);
   expect(listCloudflareSecrets(paths)).toEqual([{ id: saved.id, label: "Primary", token: USER_TOKEN }]);
 
-  const view = cloudflareConnectionViews([], { includeDns: false, requirePanelGate: true }, paths);
+  const view = cloudflareConnectionViews(DEFAULT_EDGE_DEFAULTS, { includeDns: false, includeEdge: true, requirePanelGate: true }, paths);
   expect(view.connections).toHaveLength(1);
   expect(view.connections[0]).toMatchObject({ id: saved.id, label: "Primary", active: true, hasToken: true, zones: 1 });
   expect(JSON.stringify(view)).not.toContain(USER_TOKEN);
@@ -88,7 +89,7 @@ test("shared Cloudflare store saves, verifies, lists without leaking tokens, ren
   const removed = await removeCloudflareConnection(saved.id, { paths });
   expect(removed.remaining).toBe(0);
   expect(listCloudflareSecrets(paths)).toEqual([]);
-  expect(cloudflareConnectionViews([], {}, paths).connections).toEqual([]);
+  expect(cloudflareConnectionViews(DEFAULT_EDGE_DEFAULTS, {}, paths).connections).toEqual([]);
 });
 
 test("rejected and rate-limited token saves redact the token and persist Cloudflare backoff", async () => {
@@ -106,11 +107,19 @@ test("rejected and rate-limited token saves redact the token and persist Cloudfl
   expect(readCloudflareStore(paths).backoffUntil).toBeGreaterThan(Date.now());
 });
 
-test("tokenTemplates separates DNS-only, Panel-gate-only, and combined scopes", () => {
-  const templates = tokenTemplates([]);
+test("tokenTemplates separates DNS, Cloudflare edge, Panel gate, and combined scopes", () => {
+  const templates = tokenTemplates(DEFAULT_EDGE_DEFAULTS);
   expect(templates.dns.permissions).toContain("DNS: Edit");
+  expect(templates.dns.permissions).not.toContain("Zone Settings: Edit");
   expect(templates.dns.permissions).not.toContain("SSL and Certificates: Edit");
   expect(templates.dns.url).not.toContain("ssl_and_certificates");
+
+  expect(templates.edge.permissions).toContain("Zone: Read");
+  expect(templates.edge.permissions).toContain("Zone Settings: Edit");
+  expect(templates.edge.permissions).toContain("Config Rules: Edit");
+  expect(templates.edge.permissions).toContain("API Tokens: Read");
+  expect(templates.edge.permissions).not.toContain("DNS: Edit");
+  expect(templates.edge.permissions).not.toContain("SSL and Certificates: Edit");
 
   expect(templates.panelGate.permissions).toContain("SSL and Certificates: Edit");
   expect(templates.panelGate.permissions).toContain("Access: Apps and Policies: Edit");
@@ -120,12 +129,13 @@ test("tokenTemplates separates DNS-only, Panel-gate-only, and combined scopes", 
   expect(templates.panelGate.url).toContain("ssl_and_certificates");
   expect(templates.panelGate.url).not.toContain("dns_records");
 
-  expect(templates.both.permissions).toContain("DNS: Edit");
-  expect(templates.both.permissions).toContain("SSL and Certificates: Edit");
-  expect(templates.both.permissions).toContain("API Tokens: Read");
+  expect(templates["dns+edge+panelGate"].permissions).toContain("DNS: Edit");
+  expect(templates["dns+edge+panelGate"].permissions).toContain("Zone Settings: Edit");
+  expect(templates["dns+edge+panelGate"].permissions).toContain("SSL and Certificates: Edit");
+  expect(templates["dns+edge+panelGate"].permissions).toContain("API Tokens: Read");
 
   // Direct tokenTemplate with Panel gate required matches templates.panelGate.
-  expect(tokenTemplate([], { dns: false, panelGate: true })).toEqual(templates.panelGate);
+  expect(tokenTemplate(DEFAULT_EDGE_DEFAULTS, { dns: false, edge: false, panelGate: true })).toEqual(templates.panelGate);
 });
 
 test("cloudflareTokenHolds answers from the stored read without network calls", async () => {
@@ -184,12 +194,12 @@ test("migrateCloudflareFromDns moves connections, tokens and status while keepin
   expect(existsSync(cfDir)).toBe(false);
 });
 
-test("combined tokenTemplate includes Zone Settings: Read when no DNS profile requires zone_settings", () => {
-  const withoutSettings = tokenTemplate([{ name: "Plain", zone: { ssl: null, alwaysHttps: null, acmeFullSsl: false, webmailFullSsl: false, skipFirewallIps: [] } }], { dns: true, panelGate: true });
+test("combined tokenTemplate includes Zone Settings: Read when edge settings do not need zone_settings edit", () => {
+  const withoutSettings = tokenTemplate(EMPTY_EDGE_DEFAULTS, { dns: true, edge: true, panelGate: true });
   expect(withoutSettings.permissions).toContain("Zone Settings: Read");
   expect(withoutSettings.url).toContain("zone_settings");
 
-  const withSettingsEdit = tokenTemplate([{ name: "Strict", zone: { ssl: "strict", alwaysHttps: null, acmeFullSsl: false, webmailFullSsl: false, skipFirewallIps: [] } }], { dns: true, panelGate: true });
+  const withSettingsEdit = tokenTemplate({ ...EMPTY_EDGE_DEFAULTS, ssl: "strict" }, { dns: true, edge: true, panelGate: true });
   expect(withSettingsEdit.permissions).toContain("Zone Settings: Edit");
   expect(withSettingsEdit.permissions).not.toContain("Zone Settings: Read");
 });
@@ -229,7 +239,7 @@ test("recordCloudflareReports drops a report checked with a superseded token and
   await recordCloudflareReports([staleReport], 0, true, { [saved.id]: USER_TOKEN }, paths);
 
   expect(cloudflareTokenHolds(saved.id, "dns", { id: zone.id, accountId: agency }, paths)).toBe(true);
-  const view = cloudflareConnectionViews([], {}, paths);
+  const view = cloudflareConnectionViews(DEFAULT_EDGE_DEFAULTS, {}, paths);
   expect(view.connections[0]!.active).toBe(true);
   expect(JSON.stringify(view)).not.toContain(USER_TOKEN);
   expect(JSON.stringify(view)).not.toContain(SECOND_TOKEN);
@@ -390,23 +400,28 @@ test("removing the last shared Cloudflare connection keeps shared store authorit
   expect(JSON.parse(readFileSync(join(dnsDir, "status.json"), "utf8")).connections).toEqual([]);
 });
 
-test("readDnsZoneProfiles includes default Web permissions when policy.json is absent and honors saved profiles", () => {
-  const dir = mkdtempSync(join(tmpdir(), "clp-dns-profiles-"));
+test("readFirewallEdgeDefaults includes default edge permissions when cloudflare-edge.json is absent and honors saved defaults", () => {
+  const dir = mkdtempSync(join(tmpdir(), "clp-fw-edge-defaults-"));
   dirs.push(dir);
-  const fallbackTemplates = tokenTemplates(readDnsZoneProfiles({ dnsDir: dir, rootUid: uid }));
-  expect(fallbackTemplates.both.permissions).toContain("Zone Settings: Edit");
-  expect(fallbackTemplates.both.permissions).toContain("Config Rules: Edit");
-  expect(fallbackTemplates.both.permissions).not.toContain("Zone Settings: Read");
+  const fallbackTemplates = tokenTemplates(readFirewallEdgeDefaults({ firewallDir: dir, rootUid: uid }));
+  expect(fallbackTemplates["dns+edge+panelGate"].permissions).toContain("Zone Settings: Edit");
+  expect(fallbackTemplates["dns+edge+panelGate"].permissions).toContain("Config Rules: Edit");
+  expect(fallbackTemplates["dns+edge+panelGate"].permissions).not.toContain("Zone Settings: Read");
+  expect(fallbackTemplates.dns.permissions).not.toContain("Zone Settings: Edit");
 
-  writeFileSync(join(dir, "policy.json"), JSON.stringify({
+  writeFileSync(join(dir, "cloudflare-edge.json"), JSON.stringify({
     version: 1,
-    profiles: [{
-      id: "mainwp",
-      name: "MainWP",
-      zone: { ssl: "strict", alwaysHttps: true, acmeFullSsl: true, webmailFullSsl: false, skipFirewallIps: ["198.51.100.1"] },
-    }],
+    defaults: { ssl: "strict", alwaysHttps: true, acmeFullSsl: true, webmailFullSsl: false, skipFirewallIps: ["198.51.100.1"] },
+    approved: true,
+    approvedAt: new Date().toISOString(),
+    approvedDigest: "abc",
+    knownZones: [],
+    zoneChoices: {},
+    migrationNote: null,
   }), { mode: 0o600 });
-  const savedTemplates = tokenTemplates(readDnsZoneProfiles({ dnsDir: dir, rootUid: uid }));
-  expect(savedTemplates.both.permissions).toContain("Zone WAF: Edit");
+  const savedTemplates = tokenTemplates(readFirewallEdgeDefaults({ firewallDir: dir, rootUid: uid }));
+  expect(savedTemplates.edge.permissions).toContain("Zone WAF: Edit");
+  expect(savedTemplates["dns+edge+panelGate"].permissions).toContain("Zone WAF: Edit");
   expect(savedTemplates.panelGate.permissions).not.toContain("Zone WAF: Edit");
+  expect(savedTemplates.dns.permissions).not.toContain("Zone WAF: Edit");
 });

@@ -11,7 +11,6 @@ import type { Profile } from "../model";
 import { CLIPBOARD } from "../../../lib/clipboard";
 import { CLOUDFLARE_SCOPE_JS } from "../../../lib/cloudflare/connect-dialog";
 import { PROVIDER_LABELS } from "../provider";
-import { SSL_LABELS } from "../zone";
 
 const BASE = mountPath("dns");
 const CLIENT = `${FLEET_ROW_SELECTION_JS}\n${CLOUDFLARE_SCOPE_JS}\nconst DNS_CLIPBOARD = ${JSON.stringify(CLIPBOARD)};\n${CLIENT_BODY}`;
@@ -51,21 +50,15 @@ function recordSummary(profile: Profile): string {
   return profile.records.length ? `${plural(profile.records.length, "record")}<span class="hint">${esc(types)}</span>` : '<span class="hint">No records</span>';
 }
 
-function zoneSummary(profile: Profile, hasCloudflare: boolean): string {
-  if (!hasCloudflare) return profile.mailcow ? "Mailcow" : '<span class="tone-muted">—</span>';
-  const parts: string[] = [];
-  if (profile.zone.ssl) parts.push(SSL_LABELS[profile.zone.ssl]);
-  if (profile.zone.alwaysHttps !== null) parts.push(`Always HTTPS ${profile.zone.alwaysHttps ? "on" : "off"}`);
-  const rules = [profile.zone.acmeFullSsl && "Let's Encrypt", profile.zone.webmailFullSsl && "webmail", profile.zone.skipFirewallIps.length && "firewall skip"].filter(Boolean);
-  const extras = [profile.mailcow && "Mailcow"].filter(Boolean);
-  return `${esc(parts.join(" · ") || "Zone settings unchanged")}${rules.length || extras.length ? `<span class="hint">${esc([rules.length ? `Rules: ${rules.join(", ")}` : "", ...extras].filter(Boolean).join(" · "))}</span>` : ""}`;
+function optionsSummary(profile: Profile): string {
+  return profile.mailcow ? "Mailcow" : '<span class="tone-muted">—</span>';
 }
 
-function profileRow(profile: DnsState["profiles"][number], hasCloudflare: boolean): string {
+function profileRow(profile: DnsState["profiles"][number]): string {
   return `<tr data-profile="${esc(profile.id)}">
     <td class="site-cell"><strong>${esc(profile.name)}</strong><span class="dns-card-sites"> · ${plural(profile.sites, "site")}</span></td>
     <td data-label="Records">${recordSummary(profile)}</td>
-    <td data-label="${hasCloudflare ? "Zone" : "Options"}" class="wide-cell">${zoneSummary(profile, hasCloudflare)}</td>
+    <td data-label="Options" class="wide-cell">${optionsSummary(profile)}</td>
     <td data-label="Sites" class="numeric dns-sites-cell">${profile.sites}</td>
     <td data-label="Actions" class="action-cell"><div class="actions">
       <button class="btn" type="button" onclick="dnsEditProfile('${esc(profile.id)}')">Edit</button>
@@ -482,7 +475,7 @@ export function dashboardContent(state: DnsState, now = Date.now()): string {
   }
 
   const single = state.connections.length <= 1;
-  const profiles = state.profiles.map((profile) => profileRow(profile, hasCloudflare)).join("");
+  const profiles = state.profiles.map((profile) => profileRow(profile)).join("");
   const sites = plain.map((site) => siteRow(site, state)).join("");
   const checked = `<div class="card-footer"><span class="hint">${esc(ago(state.checkedAt, now))}. Drift is checked every 15 minutes.</span></div>`;
   const orphanProvider = hasCloudflare && !hasPowerDns ? "Cloudflare" : hasPowerDns && !hasCloudflare ? "PowerDNS" : "your DNS provider";
@@ -523,13 +516,18 @@ export function dashboardContent(state: DnsState, now = Date.now()): string {
       : `<div class="card-header"><h2>Sites</h2></div><div class="empty">CloudPanel has no sites yet.</div>${checked}`}
     </div>`;
 
+  const edgeHint = hasCloudflare
+    ? state.firewallEnabled
+      ? ` Zone-wide Cloudflare SSL/TLS, Always HTTPS, and WAF rules live in <a href="${mountPath("firewall")}/#fw-edge-card">Firewall's Cloudflare edge tab</a>.`
+      : " Zone-wide Cloudflare SSL/TLS, Always HTTPS, and WAF rules live in the Firewall addon."
+    : "";
   const profilesPanel = `<div class="card card-table"><div class="card-header"><div><h2>Profiles</h2>
-      <p class="hint">Record templates kept in sync for assigned sites.</p></div>
+      <p class="hint">Record templates kept in sync for assigned sites.${edgeHint}</p></div>
       <div class="dns-profile-tools">
         <div class="dns-default-field"><label class="hint" for="dns-default">New sites join</label>
           <select id="dns-default" onchange="dnsSetDefault(this)">${profileOptions(state.profiles, state.defaultProfileId, "No profile")}</select></div>
         <button class="btn btn-primary" type="button" onclick="dnsEditProfile('')">New profile</button></div></div>
-      ${profiles ? `<div class="table-scroll"><table class="fleet-table dns-profile-table"><thead><tr><th>Profile</th><th>Records</th><th>${hasCloudflare ? "Zone" : "Options"}</th><th class="numeric">Sites</th><th class="action-cell">Actions</th></tr></thead><tbody>${profiles}</tbody></table></div>`
+      ${profiles ? `<div class="table-scroll"><table class="fleet-table dns-profile-table"><thead><tr><th>Profile</th><th>Records</th><th>Options</th><th class="numeric">Sites</th><th class="action-cell">Actions</th></tr></thead><tbody>${profiles}</tbody></table></div>`
         : '<div class="empty">No profiles yet. Create one from the Web and Mailcow presets.</div>'}
     </div>`;
 
@@ -585,22 +583,11 @@ const DIALOGS = `
     <div class="dns-rows-wrap"><table class="dns-rows" id="dns-rows-table"><thead><tr><th>Type</th><th>Name</th><th>Content</th><th class="dns-adv">TTL</th><th class="dns-adv">Apex only</th><th class="dns-proxy-col" id="dns-proxy-head">Proxy</th><th><span class="visually-hidden">Remove</span></th></tr></thead>
       <tbody id="dns-rows"></tbody></table></div>
     <p class="hint dns-empty-rows" id="dns-empty-rows" hidden>No records yet. Add one, or start from a preset.</p>
-    <p class="hint dns-mixed-note" id="dns-mixed-note" hidden>Proxy and Cloudflare zone settings apply to Cloudflare zones only. PowerDNS zones use unproxied records and their connection's default TTL when a row is set to Auto.</p>
+    <p class="hint dns-mixed-note" id="dns-mixed-note" hidden>Proxy applies to Cloudflare zones only. PowerDNS zones use unproxied records and their connection's default TTL when a row is set to Auto.</p>
     <div class="dns-placeholders"><span class="hint">Placeholders, inserted where the cursor is:</span>
       ${PLACEHOLDERS.map(([token, meaning]) => `<button class="dns-chip" type="button" title="${esc(meaning)}" onmousedown="event.preventDefault()" onclick="dnsInsert('${token}')">${token}</button>`).join("")}</div>
     <div id="dns-mailcow-section"><h3 class="dns-section">Mailcow</h3>
     ${switchField("mailcow", "Set up each site's domain in Mailcow", "Adds the domain if it is missing, gives it a DKIM key, and lets the shared mailbox send as it. A Mailcow domain is never deleted.")}</div>
-    <details class="dns-zone-details" id="dns-zone-details"><summary><h3 id="dns-zone-details-heading">Cloudflare zone</h3><span class="hint" id="dns-zone-summary"></span></summary>
-    <p class="hint">These apply to the whole Cloudflare zone, not only to this profile's sites.</p>
-    <div class="form-grid">
-      ${field("dns-ssl", "SSL/TLS mode", `<select id="dns-ssl" name="ssl"><option value="">Leave as it is</option>${Object.entries(SSL_LABELS).map(([value, label]) => `<option value="${value}">${label}</option>`).join("")}</select>`)}
-      ${field("dns-https", "Always Use HTTPS", '<select id="dns-https" name="alwaysHttps"><option value="">Leave as it is</option><option value="on">On</option><option value="off">Off</option></select>')}
-    </div>
-    ${switchField("acmeFullSsl", "Full SSL for Let's Encrypt checks", "Lets a proxied site get its first certificate while Full (strict) is on, and with Cloudflare-only access.")}
-    ${switchField("webmailFullSsl", "Full SSL for webmail hosts", "For proxied webmail records, whose origin is the mail server.")}
-    <div class="form-grid dns-zone-grid">
-      ${field("dns-skip", "Skip the firewall for", '<textarea id="dns-skip" name="skipFirewallIps" rows="2" placeholder="203.0.113.7"></textarea>', "Optional. One IP per line, such as a MainWP Dashboard's. Skips Super Bot Fight Mode and managed rules; Cloudflare cannot skip the free Bot Fight Mode.")}
-    </div></details>
     ${actions("Save profile")}
   </form></dialog>
   <dialog id="dns-review-dialog" class="dns-wide-dialog" aria-labelledby="dns-review-heading">
@@ -647,8 +634,9 @@ const DIALOGS = `
       <ol class="dns-steps">
         <li id="dns-token-step"><strong>Create a token in Cloudflare</strong>
           <div class="cf-scope-picks" role="group" aria-label="Token scopes">
-            <label class="cf-scope-pick"><input type="checkbox" id="dns-scope-dns" checked onchange="cfSyncScope('dns', this)"><span>DNS records and zones</span></label>
-            <label class="cf-scope-pick"><input type="checkbox" id="dns-scope-gate" onchange="cfSyncScope('dns', this)"><span>Panel gate (Cloudflare Access and origin pulls)</span></label>
+            <label class="cf-scope-pick"><input type="checkbox" id="dns-scope-dns" data-cf-scope="dns" checked onchange="cfSyncScope('dns', this)"><span>DNS records and zones</span></label>
+            <label class="cf-scope-pick"><input type="checkbox" id="dns-scope-edge" data-cf-scope="edge" onchange="cfSyncScope('dns', this)"><span>Cloudflare edge defaults (SSL/TLS, HTTPS, rules)</span></label>
+            <label class="cf-scope-pick"><input type="checkbox" id="dns-scope-gate" data-cf-scope="panelGate" onchange="cfSyncScope('dns', this)"><span>Panel gate (Cloudflare Access and origin pulls)</span></label>
           </div>
           <p class="hint">Check these permissions: <span id="dns-token-permissions"></span>. Choose the accounts and zones there; All zones also covers zones you add later.</p>
           <div id="dns-token-ips-hint"><p class="hint">Under Client IP Address Filtering, allow only this server:</p>

@@ -7,6 +7,8 @@ import {
 import type { HetznerView } from "../addons/firewall/hetzner";
 import type { NetcupView } from "../addons/firewall/netcup";
 import type { PanelGateView } from "../addons/firewall/panel-gate";
+import type { EdgePageView } from "../addons/firewall/edge";
+import { DEFAULT_EDGE_DEFAULTS } from "../lib/cloudflare/edge";
 import {
   dashboardView, layout as instaticLayout, newInstanceView, jobView as instaticJobView,
 } from "../addons/instatic/app/views";
@@ -114,7 +116,7 @@ function dnsPreviewState(url: URL): DnsState {
   const mode = automatic ? "enforce" as const : "report" as const;
   const seeded = dnsSeededPolicy().profiles;
   const web = seeded[0]!;
-  const mailcow = { ...seeded[1]!, zone: { ...seeded[1]!.zone, skipFirewallIps: ["203.0.113.7"] } };
+  const mailcow = seeded[1]!;
   const zone = (name: string, status = "active", provider: "cloudflare" | "powerdns" = powerdnsOnly ? "powerdns" : "cloudflare") => ({
     id: provider === "powerdns" ? `${name}.` : "0".repeat(32),
     name,
@@ -205,7 +207,6 @@ function dnsPreviewState(url: URL): DnsState {
     { at: at(3), cause: "New site", sites: ["new-client.example.org"], zone: "example.org", action: "create", subject: "A new-client.example.org", detail: "203.0.113.10 · proxied" },
     { at: at(64), cause: "Scheduled check", sites: ["example.com"], zone: "example.com", action: "update", subject: "A www.example.com",
       detail: "203.0.113.10 · proxied", before: "198.51.100.4 · DNS only" },
-    { at: at(64), cause: "Scheduled check", sites: [], zone: "example.com", action: "update", subject: "Zone setting, whole zone", detail: "SSL/TLS Full (strict)", before: "Flexible" },
     ...Array.from({ length: 12 }, (_, n) => ({ at: at(1440 + n), cause: "Confirmed review", sites: [`site-${n}.example.com`], zone: "example.com",
       action: "create" as const, subject: `A site-${n}.example.com`, detail: "203.0.113.10 · proxied" })),
   ];
@@ -220,13 +221,14 @@ function dnsPreviewState(url: URL): DnsState {
     accounts: [{ id: "localhost", name: "Primary NS" }], zones: 14, error: null, hasToken: true, access: null,
     url: "http://127.0.0.1:8081", serverId: "localhost", defaultTtl: 300, createZones: true, nameservers: ["ns1.example.net", "ns2.example.net"],
   };
+  const previewEdgeDefaults = { ...DEFAULT_EDGE_DEFAULTS, skipFirewallIps: ["203.0.113.7"] };
   const cfConnections: DnsState["connections"] = [
     { id: "cf-1", provider: "cloudflare", label: "Agency", active: true, status: "active", accounts: [{ id: "a".repeat(32), name: "Example Agency" }, { id: "b".repeat(32), name: "Clients" }], zones: 42, error: null, hasToken: true,
-      access: dnsPreviewAccess({ token: DNS_PREVIEW_TOKENS.agency }, [web, mailcow], false) },
+      access: dnsPreviewAccess({ token: DNS_PREVIEW_TOKENS.agency }, previewEdgeDefaults, false) },
     { id: "cf-2", provider: "cloudflare", label: "Church", active: true, status: "active", accounts: [{ id: "c".repeat(32), name: "Church account" }], zones: 7, error: null, hasToken: true,
-      access: dnsPreviewAccess({ token: DNS_PREVIEW_TOKENS.church }, [web, mailcow], true) },
+      access: dnsPreviewAccess({ token: DNS_PREVIEW_TOKENS.church }, previewEdgeDefaults, true) },
     { id: "cf-3", provider: "cloudflare", label: "Older token", active: true, status: "active", accounts: [{ id: "d".repeat(32), name: "Partner" }], zones: 3, error: null, hasToken: true,
-      access: dnsPreviewAccess({ token: DNS_PREVIEW_TOKENS.older, refused: ["Config Rules: Edit"] }, [web, mailcow], false) },
+      access: dnsPreviewAccess({ token: DNS_PREVIEW_TOKENS.older, refused: ["Single Redirect: Edit"] }, previewEdgeDefaults, false) },
   ];
   const allConnections: DnsState["connections"] = setup ? []
     : powerdnsOnly ? [pdnsConnection]
@@ -261,8 +263,8 @@ function dnsPreviewState(url: URL): DnsState {
     orphans: setup ? [] : [{ domain: "retired.example.com", zone: "example.com", records: 4 }],
     checkedAt: setup ? null : new Date(Date.now() - 4 * 60_000).toISOString(),
     waitUntil: 0,
-    token: dnsTokenTemplate([web, mailcow]),
-    tokens: cloudflareTokenTemplates([web, mailcow]),
+    token: dnsTokenTemplate(previewEdgeDefaults, { dns: true }),
+    tokens: cloudflareTokenTemplates(previewEdgeDefaults),
     firewallEnabled: true,
     presets: DNS_PRESETS,
     log,
@@ -649,7 +651,100 @@ function panelGatePreviewState(mode: string | null): PanelGateView | { error: st
   };
 }
 
-/** ?sites=all|none|mixed, ?auto=off, ?visitorip=off, ?cf=none, ?nodns, ?many (search and filter), ?protocols=off and ?noudp cover the states the controls describe. */
+/** ?edge=unapproved|migration|error: Firewall's Cloudflare edge defaults states. */
+function cloudflareEdgePreviewState(url: URL, connected: boolean): EdgePageView | { error: string } {
+  const mode = url.searchParams.get("edge");
+  if (mode === "error") return { error: "Cloudflare edge defaults could not be read: file is malformed" };
+  const defaults = { ...DEFAULT_EDGE_DEFAULTS, skipFirewallIps: ["203.0.113.7"] };
+  if (!connected) {
+    return {
+      connected: false,
+      defaults,
+      approved: false,
+      approvedAt: null,
+      needsApproval: false,
+      migrationNote: null,
+      checkedAt: null,
+      zones: [],
+      log: [],
+    };
+  }
+  const unapproved = mode === "unapproved" || mode === "migration";
+  const migrationNote = mode === "migration"
+    ? "Legacy DNS profiles disagreed on SSL/TLS mode (Full vs Full (strict)), so SSL/TLS was left unchanged. Review and approve your Cloudflare edge defaults here."
+    : null;
+  const checkedAt = new Date(Date.now() - 4 * 60_000).toISOString();
+  const approvedAt = unapproved ? null : new Date(Date.now() - 3 * 86_400_000).toISOString();
+  return {
+    connected: true,
+    defaults: mode === "migration" ? { ...defaults, ssl: null } : defaults,
+    approved: !unapproved,
+    approvedAt,
+    needsApproval: unapproved,
+    migrationNote,
+    checkedAt,
+    zones: unapproved ? [
+      {
+        zoneKey: "cf-1:11111111111111111111111111111111", zoneId: "1".repeat(32), zoneName: "example.com", zoneStatus: "active",
+        connectionId: "cf-1", connectionLabel: "Agency", accountName: "Example Agency",
+        current: { ssl: "Full", alwaysHttps: "Off", acmeRule: false },
+        changes: [
+          { action: "update", subject: "SSL/TLS mode", detail: "Full (strict)", before: "Full" },
+          { action: "update", subject: "Always Use HTTPS", detail: "On", before: "Off" },
+          { action: "create", subject: "Full SSL for Let's Encrypt", detail: "Full SSL for /.well-known/acme-challenge/" },
+        ],
+        conflicts: [], error: null, status: "pending", managedRules: [],
+      },
+      {
+        zoneKey: "cf-2:22222222222222222222222222222222", zoneId: "2".repeat(32), zoneName: "church.example", zoneStatus: "active",
+        connectionId: "cf-2", connectionLabel: "Church", accountName: "Church account",
+        current: { ssl: "Full (strict)", alwaysHttps: "On", acmeRule: true, skipIps: ["203.0.113.7"] },
+        changes: [], conflicts: [], error: null, status: "synced", managedRules: ["acme", "skip"],
+      },
+    ] : [
+      {
+        zoneKey: "cf-1:11111111111111111111111111111111", zoneId: "1".repeat(32), zoneName: "example.com", zoneStatus: "active",
+        connectionId: "cf-1", connectionLabel: "Agency", accountName: "Example Agency",
+        current: { ssl: "Full (strict)", alwaysHttps: "On", acmeRule: true, skipIps: ["203.0.113.7"] },
+        changes: [], conflicts: [], error: null, status: "synced", managedRules: ["acme", "skip"],
+      },
+      {
+        zoneKey: "cf-1:22222222222222222222222222222222", zoneId: "2".repeat(32), zoneName: "shop.example.org", zoneStatus: "active",
+        connectionId: "cf-1", connectionLabel: "Agency", accountName: "Clients",
+        current: { ssl: "Full (strict)", alwaysHttps: "On", acmeRule: false, skipIps: ["198.51.100.4", "203.0.113.7"] },
+        changes: [
+          {
+            action: "update", subject: "WAF skip rule", detail: "Skip Super Bot Fight Mode and managed rules for 203.0.113.7",
+            before: "Skip for 198.51.100.4, 203.0.113.7", destructive: true,
+            reason: "Removes 198.51.100.4 from the WAF skip rule",
+          },
+        ],
+        conflicts: [], error: null, status: "needs_review", managedRules: ["skip"],
+      },
+      {
+        zoneKey: "cf-2:33333333333333333333333333333333", zoneId: "3".repeat(32), zoneName: "legacy.example.net", zoneStatus: "active",
+        connectionId: "cf-2", connectionLabel: "Church", accountName: "Church account",
+        current: { ssl: "Full (strict)", alwaysHttps: "On", acmeRule: false },
+        changes: [],
+        conflicts: ["Conflicting Cloudflare rule (“Custom ACME override”) overlaps with Full SSL for Let's Encrypt; resolve it in Cloudflare first."],
+        error: null, status: "conflict", managedRules: [],
+      },
+      {
+        zoneKey: "cf-1:44444444444444444444444444444444", zoneId: "4".repeat(32), zoneName: "fresh-client.example", zoneStatus: "pending",
+        connectionId: "cf-1", connectionLabel: "Agency", accountName: "Example Agency",
+        current: { ssl: "Full (strict)", alwaysHttps: "On", acmeRule: true, skipIps: ["203.0.113.7"] },
+        changes: [], conflicts: [], error: null, status: "synced", managedRules: ["acme", "skip"],
+      },
+    ],
+    log: unapproved ? [] : [
+      { at: new Date(Date.now() - 12 * 60_000).toISOString(), cause: "New zone", zone: "fresh-client.example", action: "update", subject: "SSL/TLS mode", detail: "Full (strict)", before: "Full" },
+      { at: new Date(Date.now() - 12 * 60_000).toISOString(), cause: "New zone", zone: "fresh-client.example", action: "create", subject: "Full SSL for Let's Encrypt", detail: "Full SSL for /.well-known/acme-challenge/" },
+      { at: new Date(Date.now() - 3 * 86_400_000).toISOString(), cause: "Approved defaults", zone: "example.com", action: "update", subject: "Always Use HTTPS", detail: "On", before: "Off" },
+    ],
+  };
+}
+
+/** ?sites=all|none|mixed, ?auto=off, ?visitorip=off, ?cf=none, ?edge=unapproved|migration|error, ?nodns, ?many (search and filter), ?protocols=off and ?noudp cover the states the controls describe. */
 function firewallPreviewState(url: URL) {
   const all = url.searchParams.get("sites");
   const sites = [...cloudflareSites, ...(url.searchParams.has("many") ? cloudflareMoreSites : [])].map((site) => all === "all"
@@ -657,6 +752,7 @@ function firewallPreviewState(url: URL) {
     : all === "none" ? { ...site, enabled: false } : site);
   const noCf = url.searchParams.get("cf") === "none";
   const dnsEnabled = !url.searchParams.has("nodns");
+  const previewEdge = { ...DEFAULT_EDGE_DEFAULTS, skipFirewallIps: ["203.0.113.7"] };
   return {
     autoEnableNewSites: url.searchParams.get("auto") !== "off",
     sites: url.searchParams.has("empty") ? [] : sites,
@@ -668,22 +764,23 @@ function firewallPreviewState(url: URL) {
     hetzner: hetznerPreviewState(url.searchParams.has("netcup") && !url.searchParams.has("hetzner") ? "absent" : url.searchParams.get("hetzner")),
     netcup: netcupPreviewState(url.searchParams.get("netcup")),
     panelGate: panelGatePreviewState(url.searchParams.get("gate")),
+    cloudflareEdge: cloudflareEdgePreviewState(url, !noCf),
     cloudflare: {
       connections: noCf ? [] : [
         {
           id: "cf-1", label: "Agency", active: true, status: "active",
           accounts: [{ id: "a".repeat(32), name: "Example Agency" }, { id: "b".repeat(32), name: "Clients" }],
           zones: 4, error: null, hasToken: true,
-          access: dnsAccessView({ token: DNS_PREVIEW_TOKENS.agency }, [], { includeDns: false, requirePanelGate: true }),
+          access: dnsAccessView({ token: DNS_PREVIEW_TOKENS.agency }, previewEdge, { includeDns: false, includeEdge: true, requirePanelGate: true }),
         },
         {
           id: "cf-2", label: "Church", active: true, status: "active",
           accounts: [{ id: "c".repeat(32), name: "Church account" }],
           zones: 1, error: null, hasToken: true,
-          access: dnsAccessView({ token: DNS_PREVIEW_TOKENS.church }, [], { includeDns: false, requirePanelGate: true }),
+          access: dnsAccessView({ token: DNS_PREVIEW_TOKENS.church }, previewEdge, { includeDns: false, includeEdge: true, requirePanelGate: true }),
         },
       ],
-      templates: cloudflareTokenTemplates([]),
+      templates: cloudflareTokenTemplates(previewEdge),
       serverIps: ["203.0.113.10", "2001:db8::10"],
       dnsEnabled,
     },
@@ -2254,6 +2351,39 @@ const server = Bun.serve({
     // ?gate=pending draws the card first and then reads it here, as the real page does.
     if (path === "/addons/firewall/api/panel-gate" && req.method === "GET") {
       return Response.json({ ok: true, html: firewallPanelGateCard(panelGatePreviewState(null)) });
+    }
+    if (path === "/addons/firewall/api/edge/review-zone" && req.method === "POST") {
+      return Response.json({
+        ok: true,
+        data: {
+          review: {
+            token: "0".repeat(32),
+            kind: "zone",
+            title: "Confirm changes for shop.example.org",
+            text: "Apply 1 change to shop.example.org.",
+            confirmLabel: "Confirm and apply",
+            danger: true,
+            blocked: false,
+            warnings: ["1 destructive change (such as an SSL downgrade, turning Always Use HTTPS off, or removing a rule or skip IP) requires your confirmation."],
+            zones: [{
+              zoneKey: "cf-1:22222222222222222222222222222222",
+              zoneName: "shop.example.org",
+              connectionLabel: "Agency",
+              accountName: "Clients",
+              changes: [{
+                action: "update",
+                subject: "WAF skip rule",
+                detail: "Skip Super Bot Fight Mode and managed rules for 203.0.113.7",
+                before: "Skip for 198.51.100.4, 203.0.113.7",
+                destructive: true,
+                reason: "Removes 198.51.100.4 from the WAF skip rule",
+              }],
+              conflicts: [],
+              error: null,
+            }],
+          },
+        },
+      });
     }
     const wpToolsApi = await wpToolsPreviewApi(req, path);
     if (wpToolsApi) return wpToolsApi;

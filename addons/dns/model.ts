@@ -27,16 +27,12 @@ type RecordType = (typeof RECORD_TYPES)[number];
 /** Cloudflare's own TTL choices; 1 is Auto, and the only one a proxied record takes. */
 const TTLS = [1, 60, 120, 300, 600, 900, 1800, 3600, 7200, 18000, 43200, 86400];
 
-const SSL_MODES = ["off", "flexible", "full", "strict"] as const;
-export type SslMode = (typeof SSL_MODES)[number];
-
 export const PROXIABLE: readonly RecordType[] = ["A", "AAAA", "CNAME"];
 const PRIORITISED: readonly RecordType[] = ["MX", "SRV"];
 
 const MAX_PROFILES = 24;
 const MAX_RECORDS = 60;
 export const MAX_CONNECTIONS = 12;
-const MAX_SKIP_IPS = 20;
 const MAX_REDIRECTS = 500;
 const NAME_MAX = 40;
 
@@ -57,25 +53,12 @@ export interface AccountRef {
   accountId: string;
 }
 
-export interface ZoneOptions {
-  /** Null leaves the zone's own setting alone. */
-  ssl: SslMode | null;
-  alwaysHttps: boolean | null;
-  /** Full SSL for Let's Encrypt's HTTP-01 path, so a proxied site can get its first certificate. */
-  acmeFullSsl: boolean;
-  /** Full SSL for `webmail.` hosts, whose origin is the mail server. */
-  webmailFullSsl: boolean;
-  /** Addresses that skip Super Bot Fight Mode and managed WAF rules, such as a MainWP Dashboard. */
-  skipFirewallIps: string[];
-}
-
 export interface Profile {
   id: string;
   name: string;
   records: RecordTemplate[];
   /** Add each site's domain to Mailcow, with DKIM and the shared mailbox's sender permission. */
   mailcow: boolean;
-  zone: ZoneOptions;
 }
 
 /** A host whose requests Cloudflare, or a stand-in site on this server, sends elsewhere. */
@@ -202,11 +185,6 @@ export function ipAddress(value: unknown, family: 4 | 6, what: string): string {
   return value.trim().toLowerCase();
 }
 
-function anyIp(value: unknown): string {
-  if (typeof value !== "string" || !isIP(value.trim())) failAction(`${String(value)} is not an IP address`);
-  return value.trim().toLowerCase();
-}
-
 export function mailbox(value: unknown, what: string): string {
   if (value === "" || value == null) return "";
   if (typeof value !== "string") failAction(`${what} must be an email address`);
@@ -253,23 +231,6 @@ export function parseRecord(value: unknown, position: number): RecordTemplate {
   return { type, name, content, proxied, ttl, priority, apexOnly: flag(raw.apexOnly ?? false, `${where}'s apex-only setting`) };
 }
 
-function parseZoneOptions(value: unknown): ZoneOptions {
-  const raw = (value && typeof value === "object" && !Array.isArray(value) ? value : {}) as Record<string, unknown>;
-  const ssl = raw.ssl == null || raw.ssl === "" ? null : SSL_MODES.find((mode) => mode === raw.ssl);
-  if (ssl === undefined) failAction("the SSL/TLS mode must be Off, Flexible, Full or Full (strict)");
-  const alwaysHttps = raw.alwaysHttps == null || raw.alwaysHttps === "" ? null : flag(raw.alwaysHttps, "Always Use HTTPS");
-  if (raw.skipFirewallIps != null && !Array.isArray(raw.skipFirewallIps)) failAction("the firewall skip list must be a list");
-  const ips = [...new Set(((raw.skipFirewallIps ?? []) as unknown[]).map(anyIp))];
-  if (ips.length > MAX_SKIP_IPS) failAction(`at most ${MAX_SKIP_IPS} addresses can skip the firewall`);
-  return {
-    ssl,
-    alwaysHttps,
-    acmeFullSsl: flag(raw.acmeFullSsl ?? false, "the Let's Encrypt rule"),
-    webmailFullSsl: flag(raw.webmailFullSsl ?? false, "the webmail rule"),
-    skipFirewallIps: ips,
-  };
-}
-
 export function parseAccountRef(value: unknown): AccountRef | null {
   if (value == null || value === "") return null;
   if (typeof value !== "object" || Array.isArray(value)) failAction("the account for new zones is malformed");
@@ -287,13 +248,12 @@ export function parseProfile(value: unknown): Profile {
     name: oneLine(raw.name, "the profile name", NAME_MAX, true),
     records: raw.records.map((record, index) => parseRecord(record, index + 1)),
     mailcow: flag(raw.mailcow ?? false, "Mailcow setup"),
-    zone: parseZoneOptions(raw.zone),
   };
 }
 
 /** What changes a site's DNS or Mailcow, as opposed to the name. */
 export function profileEffect(profile: Profile): string {
-  return JSON.stringify([profile.records, profile.mailcow, profile.zone]);
+  return JSON.stringify([profile.records, profile.mailcow]);
 }
 
 // ---------------------------------------------------------------------------

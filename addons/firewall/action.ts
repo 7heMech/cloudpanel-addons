@@ -1,7 +1,7 @@
 import { LOCK_DIR, addonConfigFile, addonStateDir, PANEL_DB, DISTRO_NGINX_SITES_DIR } from "../../lib/paths";
 import { writeFileAtomic } from "../../lib/atomic-write";
 import { detectAddresses } from "../../lib/addresses";
-import { cloudflareConnectionViews, readDnsZoneProfiles, type CloudflareConnectionView, type CloudflareStoreOptions } from "../../lib/cloudflare/store";
+import { cloudflareConnectionViews, readFirewallEdgeDefaults, type CloudflareConnectionView, type CloudflareStoreOptions } from "../../lib/cloudflare/store";
 import { tokenTemplates, type TokenTemplates } from "../../lib/cloudflare/tokens";
 import { Database } from "bun:sqlite";
 import { existsSync, lstatSync, readFileSync, rmSync } from "node:fs";
@@ -24,6 +24,10 @@ import {
   connectNetcup, disconnectNetcup, netcupView, pollNetcup, setNetcupRole, type NetcupOptions, type NetcupView,
 } from "./netcup";
 import { cleanUpPanelGate, panelGateSummary, panelGateView, setPanelGate, type GateOptions, type PanelGateView } from "./panel-gate";
+import {
+  checkCloudflareEdge, chooseCloudflareEdgeZone, confirmCloudflareEdge, edgePageView, reviewCloudflareEdgeZone,
+  saveCloudflareEdge, type EdgeOptions, type EdgePageView,
+} from "./edge";
 import { setVisitorIpEnabled, visitorIpState, type VisitorIpOptions, type VisitorIpState } from "./visitor-ip";
 
 const POLICY_VERSION = 1;
@@ -49,6 +53,7 @@ interface FirewallActionOptions {
   hetzner?: HetznerOptions;
   netcup?: NetcupOptions;
   gate?: GateOptions;
+  edge?: EdgeOptions;
   visitorIp?: VisitorIpOptions;
   cloudflare?: CloudflareStoreOptions;
   input?: string;
@@ -304,10 +309,19 @@ function visitorIpOrError(options?: VisitorIpOptions): VisitorIpState {
   catch (error) { return { enabled: true, applied: false, problem: errorMessage(error) }; }
 }
 
-function cloudflareForFirewall(options?: CloudflareStoreOptions): FirewallCloudflareView {
+function edgeOrError(options?: EdgeOptions): EdgePageView | { error: string } {
+  try { return edgePageView(options); }
+  catch (error) { return { error: `Cloudflare edge defaults could not be read: ${errorMessage(error)}` }; }
+}
+
+function cloudflareForFirewall(options?: CloudflareStoreOptions, edgeOptions?: EdgeOptions): FirewallCloudflareView {
+  const edgeDefaults = readFirewallEdgeDefaults({
+    firewallDir: edgeOptions?.paths?.stateDir,
+    rootUid: edgeOptions?.paths?.rootUid ?? options?.paths?.rootUid,
+  });
   let connections: CloudflareConnectionView[] = [];
   try {
-    connections = cloudflareConnectionViews([], { includeDns: false, requirePanelGate: true }, options?.paths).connections;
+    connections = cloudflareConnectionViews(edgeDefaults, { includeDns: false, includeEdge: true, requirePanelGate: true }, options?.paths).connections;
   } catch { /* unreadable store renders empty */ }
   let serverIps: string[] = [];
   try {
@@ -316,7 +330,7 @@ function cloudflareForFirewall(options?: CloudflareStoreOptions): FirewallCloudf
   } catch { /* best effort */ }
   return {
     connections,
-    templates: tokenTemplates(readDnsZoneProfiles()),
+    templates: tokenTemplates(edgeDefaults),
     serverIps,
     dnsEnabled: existsSync(addonConfigFile("dns")),
   };
@@ -324,14 +338,15 @@ function cloudflareForFirewall(options?: CloudflareStoreOptions): FirewallCloudf
 
 async function listState(paths: CloudflareActionPaths, options: FirewallActionOptions): Promise<{
   sites: CloudflareSiteView[]; autoEnableNewSites: boolean; visitorIp: VisitorIpState; protocols: FirewallStatus | { error: string }; hetzner: HetznerView;
-  netcup: NetcupView; panelGate: PanelGateView | { error: string }; cloudflare: FirewallCloudflareView;
+  netcup: NetcupView; panelGate: PanelGateView | { error: string }; cloudflareEdge: EdgePageView | { error: string }; cloudflare: FirewallCloudflareView;
 }> {
   const { protocols, hetzner, gate } = options;
   const hetznerState = hetznerOrError(hetzner);
   const netcupState = netcupOrError(options.netcup);
   const gateState = gateOrError(gate);
+  const edgeState = edgeOrError(options.edge);
   const visitorIp = visitorIpOrError(options.visitorIp);
-  const cloudflare = cloudflareForFirewall(options.cloudflare);
+  const cloudflare = cloudflareForFirewall(options.cloudflare, options.edge);
   const db = openPanelDatabase(paths.panelDb);
   try {
     const policy = readPolicy(paths.policyFile, paths.stateUid);
@@ -346,6 +361,7 @@ async function listState(paths: CloudflareActionPaths, options: FirewallActionOp
       hetzner: await hetznerState,
       netcup: await netcupState,
       panelGate: gateState,
+      cloudflareEdge: edgeState,
       cloudflare,
     };
   } finally {
@@ -511,6 +527,29 @@ export async function runFirewallAction(argv: string[], options: FirewallActionO
       const body = readInput("panel-gate-switch", options.input);
       const confirm = typeof body === "object" && body !== null ? (body as { confirm?: unknown }).confirm : undefined;
       return setPanelGate(action.enabled!, confirm, options.gate);
+    }
+    if (action.verb === "edge-check") return checkCloudflareEdge(options.edge);
+    if (action.verb === "edge-save") {
+      const body = readInput("edge-save", options.input);
+      if (typeof body !== "object" || body === null) failAction("edge-save input must be a JSON object");
+      return saveCloudflareEdge(body as Record<string, unknown>, options.edge);
+    }
+    if (action.verb === "edge-confirm") {
+      const body = readInput("edge-confirm", options.input);
+      const token = typeof body === "object" && body !== null ? (body as { token?: unknown }).token : undefined;
+      if (typeof token !== "string") failAction("edge-confirm requires a review token");
+      return confirmCloudflareEdge(token, options.edge);
+    }
+    if (action.verb === "edge-review-zone") {
+      const body = readInput("edge-review-zone", options.input);
+      const zoneKey = typeof body === "object" && body !== null ? (body as { zoneKey?: unknown }).zoneKey : undefined;
+      if (typeof zoneKey !== "string") failAction("edge-review-zone requires a zoneKey");
+      return reviewCloudflareEdgeZone(zoneKey, options.edge);
+    }
+    if (action.verb === "edge-zone-choice") {
+      const body = readInput("edge-zone-choice", options.input);
+      if (typeof body !== "object" || body === null) failAction("edge-zone-choice input must be a JSON object");
+      return chooseCloudflareEdgeZone(body as Record<string, unknown>, options.edge);
     }
     action.verb satisfies never;
     failAction(`unknown Firewall action '${action.verb}'`);

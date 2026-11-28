@@ -5,6 +5,7 @@ import type { FirewallCloudflareView } from "../action";
 import type { HetznerReview, HetznerRole, HetznerView } from "../hetzner";
 import type { NetcupSignIn, NetcupView } from "../netcup";
 import type { GateReply, PanelGateView } from "../panel-gate";
+import type { EdgePageView, EdgeReply } from "../edge";
 import type { VisitorIpState } from "../visitor-ip";
 
 export interface CloudflareSiteView {
@@ -20,6 +21,7 @@ export interface FirewallPageState {
   hetzner: HetznerView;
   netcup: NetcupView;
   panelGate: PanelGateView | { error: string };
+  cloudflareEdge: EdgePageView | { error: string };
   cloudflare: FirewallCloudflareView;
 }
 
@@ -27,9 +29,10 @@ export type HetznerReply = { review: HetznerReview } | { notice: string };
 export type NetcupPoll = { pending: true; interval: number } | { notice: string };
 
 // Hetzner's and netcup's changes wait for their tasks to finish and for each site's DNS lookup.
-// The gate waits for Cloudflare to deploy its certificate.
+// The gate waits for Cloudflare to deploy its certificate; edge checks read across every zone.
 const SLOW = new Set<WebVerb<"firewall">>([
-  "hetzner-connect", "hetzner-disconnect", "hetzner-switch", "netcup-poll", "netcup-disconnect", "netcup-switch", "panel-gate", "panel-gate-switch",
+  "hetzner-connect", "hetzner-disconnect", "hetzner-switch", "netcup-poll", "netcup-disconnect", "netcup-switch",
+  "panel-gate", "panel-gate-switch", "edge-check", "edge-save", "edge-confirm", "edge-review-zone", "edge-zone-choice",
 ]);
 
 async function call<T>(verb: WebVerb<"firewall">, args: string[] = [], input?: string): Promise<ActionResult<T>> {
@@ -104,5 +107,25 @@ export const firewallService = {
 
   setHetzner(role: HetznerRole, enabled: boolean, confirm?: string, typed?: string): Promise<ActionResult<HetznerReply>> {
     return call<HetznerReply>("hetzner-switch", ["--role", role, "--enabled", enabled ? "yes" : "no"], JSON.stringify({ confirm, typed }));
+  },
+
+  checkEdge(): Promise<ActionResult<{ notice: string; applied: number; held: number; conflicts: number; errors: number }>> {
+    return call("edge-check");
+  },
+
+  saveEdge(body: Record<string, unknown>): Promise<ActionResult<EdgeReply>> {
+    return call<EdgeReply>("edge-save", [], JSON.stringify(body));
+  },
+
+  confirmEdge(token: string): Promise<ActionResult<EdgeReply>> {
+    return call<EdgeReply>("edge-confirm", [], JSON.stringify({ token }));
+  },
+
+  reviewEdgeZone(zoneKey: string): Promise<ActionResult<EdgeReply>> {
+    return call<EdgeReply>("edge-review-zone", [], JSON.stringify({ zoneKey }));
+  },
+
+  chooseEdgeZone(body: Record<string, unknown>): Promise<ActionResult<EdgeReply>> {
+    return call<EdgeReply>("edge-zone-choice", [], JSON.stringify(body));
   },
 };

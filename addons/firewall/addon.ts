@@ -7,6 +7,7 @@ import { syncFirewall } from "./protocols";
 import { syncHetzner } from "./hetzner";
 import { keepNetcupTimeSync, syncNetcup } from "./netcup";
 import { FIREWALL_ACTIONS, FIREWALL_SETUP } from "./setup";
+import { reconcileCloudflareEdge } from "./edge";
 import { keepPanelGateNginx, panelGateOffLocally, repairPanelGate, withdrawPanelGate } from "./panel-gate";
 import {
   DEFAULT_VISITOR_IP_PATHS, UNTRUSTED_LOOPBACK, VISITOR_IP, keepVisitorIp, releaseVisitorIp, restoreVisitorIp, withdrawVisitorIp,
@@ -21,7 +22,15 @@ async function protectNewSites(options?: Record<string, unknown>): Promise<strin
   const paths = { ...DEFAULT_CLOUDFLARE_ACTION_PATHS, ...(options?.paths as Partial<CloudflareActionPaths> | undefined) };
   const result = await reconcileNewSites(paths);
   for (const failure of result.failed) log.warn(`Firewall: ${failure.error}`);
-  return result.enabled ? `${result.enabled} new site${result.enabled === 1 ? "" : "s"} allow Cloudflare only` : null;
+  const lines: string[] = [];
+  if (result.enabled) lines.push(`${result.enabled} new site${result.enabled === 1 ? "" : "s"} allow Cloudflare only`);
+  try {
+    const edgeLine = await reconcileCloudflareEdge(undefined, "New zone");
+    if (edgeLine) lines.push(edgeLine);
+  } catch (error) {
+    log.warn(`Firewall Cloudflare edge: ${errorMessage(error)}`);
+  }
+  return lines.join("; ") || null;
 }
 
 /**
@@ -59,6 +68,10 @@ async function repair(options?: Record<string, unknown>): Promise<string | null>
     const changed = await repairPanelGate();
     if (changed) lines.push(changed);
   } catch (error) { failures.push(errorMessage(error)); }
+  try {
+    const changed = await reconcileCloudflareEdge();
+    if (changed) lines.push(changed);
+  } catch (error) { failures.push(`Cloudflare edge: ${errorMessage(error)}`); }
   for (const sync of [syncHetzner, syncNetcup]) {
     try {
       const changed = await sync("repair");
@@ -72,9 +85,10 @@ async function repair(options?: Record<string, unknown>): Promise<string | null>
 export const FIREWALL_ADDON: AddonDefinition = {
   name: "firewall",
   title: "Firewall",
-  description: "Cloudflare-only access and real visitor IPs for every site, a Cloudflare Access gate in front of the panel, Hetzner Cloud or netcup firewalls that admit only Cloudflare, and TCP, UDP or both for each rule on CloudPanel's Firewall page.",
+  description: "Cloudflare-only access, visitor IPs, and zone-wide edge defaults for every site, a Cloudflare Access gate in front of the panel, Hetzner Cloud or netcup firewalls that admit only Cloudflare, and TCP, UDP or both for each rule on CloudPanel's Firewall page.",
   changed: [
-    { in: "2.3.0-rc.1", note: "Cloudflare connections are now shared with DNS and can be managed directly on the Panel gate tab without enabling DNS. Root can now lock Firewall with clp-addons lock firewall." },
+    { in: "2.3.0-rc.1", note: "Cloudflare zone-wide edge defaults (SSL/TLS mode, Always Use HTTPS, Let's Encrypt and webmail Full SSL rules, and WAF skip IPs) moved here from DNS profiles under the Cloudflare edge tab. Approve your defaults once so new Cloudflare zones inherit them automatically without per-site review holds; destructive changes and rule conflicts still require explicit confirmation. Existing DNS profile zone options migrate automatically." },
+    { in: "2.3.0-rc.1", note: "Cloudflare connections are now shared with DNS and can be managed directly on Firewall without enabling DNS. Root can now lock Firewall with clp-addons lock firewall." },
     { in: "2.3.0-rc.1", note: "Cloudflare visitor IPs moved here from System Tweaks and are on by default. Enabling Firewall points Nginx's access logs and PHP's REMOTE_ADDR (FastCGI) at the visitor's IP. Where System Tweaks applied visitor IPs, the upgrade enables Firewall to keep them with Enable on new sites off, and carries a System Tweaks root lock to Firewall so visitor IPs stays locked." },
     { in: "2.2.0-rc.3", note: "Firewall now splits into Cloudflare only, Panel gate, Protocols and Cloud firewall tabs. Cloud provider cards are hidden when the server is not on that host and has no saved token." },
     { in: "2.2.0-rc.1", note: "Cloudflare IP Access is now Firewall, which also sets each firewall rule's protocol: TCP, UDP or both." },

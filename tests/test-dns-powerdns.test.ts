@@ -558,8 +558,6 @@ describe("PowerDNS end-to-end DNS reconciliation", () => {
     const provider = new PowerDnsProvider(policy.powerdns[0]!, PDNS_KEY);
     expect(provider.capabilities).toEqual({
       proxy: false,
-      zoneSettings: false,
-      zoneRules: false,
       edgeRedirects: false,
       createZone: false,
       autoTtl: false,

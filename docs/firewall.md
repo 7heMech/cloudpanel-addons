@@ -1,8 +1,8 @@
 # Firewall
 
-Cloudflare-only access and visitor IPs for your sites, UDP rules on CloudPanel's
-own Firewall page, a gate in front of the panel, and Hetzner Cloud or netcup
-firewalls that admit only Cloudflare.
+Cloudflare-only access, visitor IPs, and zone-wide edge defaults for your sites,
+UDP rules on CloudPanel's own Firewall page, a gate in front of the panel, and
+Hetzner Cloud or netcup firewalls that admit only Cloudflare.
 
 ## Cloudflare-only sites
 
@@ -32,6 +32,39 @@ Run `clp-addons lock firewall` as root to keep the web panel from switching
 Cloudflare visitor IPs off or disabling Firewall; `clp-addons unlock firewall`
 undoes it.
 
+## Cloudflare edge defaults
+
+The **Cloudflare edge** tab manages zone-wide Cloudflare defaults shared across
+all reachable Cloudflare zones, using the shared Cloudflare connection store:
+
+- **SSL/TLS mode** (defaults to Full (strict))
+- **Always Use HTTPS** (defaults to On)
+- **Full SSL for Let's Encrypt checks** (allows HTTP-01 certificate issuance and
+  renewal under Full (strict) and Cloudflare-only access)
+- **Full SSL for webmail hosts** (uses Full SSL for proxied `webmail.*` records)
+- **Skip the firewall for** (lists IPs such as a MainWP Dashboard that skip
+  Super Bot Fight Mode and managed WAF rules; Cloudflare cannot skip the free
+  Bot Fight Mode)
+
+Connect Cloudflare first, configure the defaults you want, and choose **Review
+and approve defaults**. Firewall previews every change across your reachable
+zones and writes nothing until you confirm. Once approved, new or newly
+discovered Cloudflare zones inherit those defaults automatically without
+per-site review holds.
+
+Destructive changes and conflicts always stop for explicit confirmation instead
+of applying automatically:
+
+- lowering a zone's SSL/TLS mode (for example, Full (strict) to Full or Flexible);
+- switching Always Use HTTPS from On to Off;
+- removing a previously managed rule or removing IPs from the WAF skip list;
+- overwriting a managed rule that was disabled or edited in Cloudflare, or a
+  conflicting custom rule on the same path or host.
+
+Zones held for confirmation appear under **Cloudflare zones** with a **Review**
+button and raise an **Action needed** item in Setup. Choose **Pause automatic**
+at any time to stop automatic enforcement without modifying existing zones.
+
 ## Protocols
 
 With **Protocols** on, CloudPanel's own **Admin → Security → Firewall** gets a
@@ -56,7 +89,7 @@ It is off by default, and the card lists what it still needs:
 - a custom domain for CloudPanel (**Admin → Settings**), with its record or an
   unobstructed wildcard covering it proxied through Cloudflare (the orange
   cloud), and the zone in SSL mode Full or Full (strict);
-- a Cloudflare connection saved on the **Panel gate** tab or in **DNS**, whose
+- a Cloudflare connection saved on the **Cloudflare edge** tab or in **DNS**, whose
   token reaches that zone and holds **SSL and Certificates: Edit**,
   **Access: Apps and Policies: Edit**, and **Access: Organizations, Identity
   Providers, and Groups: Edit**, besides **API Tokens: Read**. DNS does not need

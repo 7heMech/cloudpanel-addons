@@ -3,8 +3,9 @@
  * calling Cloudflare again.
  * https://developers.cloudflare.com/fundamentals/api/how-to/create-via-api/
  */
+import { DEFAULT_EDGE_DEFAULTS } from "./edge";
 import {
-  listedPermissions, PERMISSIONS, type PermissionDef, type PermissionName, type PermissionScopeOptions, type ZoneProfileShape,
+  listedPermissions, PERMISSIONS, type EdgePermissionNeeds, type PermissionDef, type PermissionName, type PermissionScopeOptions,
 } from "./tokens";
 
 /** `"*"` for any. A user resource has neither an account nor a zone. */
@@ -130,7 +131,7 @@ function coverageOf(list: Grant[], permission: PermissionDef, reached: Reached):
   return { held: "some", lacking: lacking.slice(0, LACKING_SHOWN), lackingCount: lacking.length };
 }
 
-const ZONE_REACH_GROUPS = ["DNS Write", "DNS Read", "Zone Read", "SSL and Certificates Write"];
+const ZONE_REACH_GROUPS = ["DNS Write", "DNS Read", "Zone Read", "Zone Settings Write", "Zone Settings Read", "SSL and Certificates Write"];
 
 /** "All zones", "All zones in Agency", "3 chosen zones", from where DNS Write (or a zone read for Firewall-only tokens) is allowed, less where that same permission is denied. */
 function reachOf(list: Grant[], reached: Reached): string {
@@ -203,13 +204,13 @@ const REFUSED = "Refused by Cloudflare";
 
 export function accessView(
   stored: StoredAccess,
-  profiles: ZoneProfileShape[] = [],
+  edge: EdgePermissionNeeds = DEFAULT_EDGE_DEFAULTS,
   options: PermissionScopeOptions = {},
 ): AccessView | null {
   const { token } = stored;
   if (!token) return null;
   const refused = new Set(stored.refused ?? []);
-  const rows = listedPermissions(profiles, options).map(({ name, permission, usedFor, optional }): AccessView["rows"][number] => {
+  const rows = listedPermissions(edge, options).map(({ name, permission, usedFor, optional }): AccessView["rows"][number] => {
     // An account-owned token reads itself with the account's own permission.
     const base = { label: name === "tokens" ? selfReadPermission(token.owner) : permission.label, usedFor, ...(optional ? { optional: true as const } : {}) };
     const coverage = token.readable ? token.coverage[name] : undefined;
@@ -231,10 +232,10 @@ export function accessView(
  */
 export function connectionPermissions(
   stored: StoredAccess,
-  profiles: ZoneProfileShape[] = [],
+  edge: EdgePermissionNeeds = DEFAULT_EDGE_DEFAULTS,
   options: PermissionScopeOptions = {},
 ): { readable: boolean; missing: string[] } {
-  const view = accessView(stored, profiles, options);
+  const view = accessView(stored, edge, options);
   if (!view) return { readable: false, missing: [] };
   return {
     readable: view.reach !== null,
