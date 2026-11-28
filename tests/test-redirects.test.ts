@@ -531,10 +531,22 @@ describe("Cloudflare Single Redirects and placeholder records", () => {
 
   test("blocks deletion while another enabled rule's pattern still matches the host", async () => {
     expect(patternMatchesHost('http.request.full_uri wildcard "https://*.example.com/*"', "old.example.com")).toBe(true);
-    expect(patternMatchesHost('http.request.full_uri wildcard "https://*.other.com/*"', "old.example.com")).toBe(false);
+    expect(patternMatchesHost('http.request.full_uri wildcard "https://*.other.com/*"', "old.example.com")).toBe(true);
+    expect(patternMatchesHost('http.request.full_uri wildcard "*/https://*.other.com/*"', "old.example.com")).toBe(true);
+    expect(patternMatchesHost('http.request.full_uri wildcard "https://old.example.com:8443/*"', "old.example.com")).toBe(true);
+    expect(patternMatchesHost('http.request.full_uri wildcard "https://shop.other.com/*"', "old.example.com")).toBe(false);
+    expect(patternMatchesHost('http.request.full_uri wildcard "https://old.example.com.other.com/*"', "old.example.com")).toBe(false);
     expect(patternMatchesHost('http.host wildcard "*.example.com"', "example.com")).toBe(false);
     expect(patternMatchesHost('http.host matches "^ol[d]\\.example"', "old.example.com")).toBe(true);
-    expect(patternMatchesHost('http.request.full_uri matches "^https://new"', "old.example.com")).toBe(true);
+    expect(patternMatchesHost('http.request.full_uri matches "^https://new"', "old.example.com")).toBe(false);
+    expect(patternMatchesHost('http.request.full_uri matches r"^https://shop[.]example[.]com/"', "old.example.com")).toBe(false);
+    expect(patternMatchesHost('http.request.full_uri matches r"^https?://old\\.example\\.com/"', "old.example.com")).toBe(true);
+    expect(patternMatchesHost('http.request.full_uri matches r"^https://old\\.example\\.com\\.other/"', "old.example.com")).toBe(false);
+    expect(patternMatchesHost('http.request.full_uri matches r"^https://ol"', "old.example.com")).toBe(true);
+    expect(patternMatchesHost('http.request.full_uri matches r"^https://oldx?"', "old.example.com")).toBe(true);
+    expect(patternMatchesHost('http.request.full_uri matches r"^https://(www\\.)?old"', "old.example.com")).toBe(true);
+    expect(patternMatchesHost('http.request.full_uri matches r"^https://new/|old"', "old.example.com")).toBe(true);
+    expect(patternMatchesHost('http.request.full_uri matches r"/old"', "old.example.com")).toBe(true);
     expect(patternMatchesHost('ends_with(http.host, ".example.com")', "old.example.com")).toBe(true);
     expect(patternMatchesHost('http.request.uri.path wildcard "/old/*"', "old.example.com")).toBe(false);
 
@@ -545,7 +557,11 @@ describe("Cloudflare Single Redirects and placeholder records", () => {
     await env.confirmed(await env.act("save-redirect", found("old.example.com", "https://example.net")));
     const rules = env.cf.rulesets.get(`${zone.id}:http_request_dynamic_redirect`)!.rules;
     const wildcard = externalRule('http.request.full_uri wildcard "https://*.example.com/*"', "https://example.org");
-    rules.push({ ...wildcard, enabled: false }, externalRule('http.request.full_uri wildcard "https://*.other.com/*"', "https://example.org"));
+    rules.push(
+      { ...wildcard, enabled: false },
+      externalRule('http.request.full_uri wildcard "https://shop.other.com/*"', "https://example.org"),
+      externalRule('http.request.full_uri matches r"^https://shop[.]example[.]com/"', "https://example.org"),
+    );
     expect((await env.act("delete-redirect", { source: "old.example.com" })).review!.blocked).toBe(false);
 
     rules.push(wildcard);

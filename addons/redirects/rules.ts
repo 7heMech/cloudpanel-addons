@@ -120,7 +120,7 @@ const PATTERN_TESTS: { pattern: RegExp; test: (value: string, host: string, fiel
     ? uriWildcardReaches(value, host)
     : wildcardReaches(value, host, false) },
   { pattern: new RegExp(`(${HOST}|${URI})\\s+(?:matches|~)\\s+${STRING}`, "gi"), test: (value, host, field) => {
-    if (/full_uri/i.test(field)) return true;
+    if (/full_uri/i.test(field)) return uriRegexReaches(value, host);
     try { return new RegExp(value).test(host); } catch { return true; }
   } },
   { pattern: new RegExp(`(starts_with|ends_with)\\(\\s*${HOST}\\s*,\\s*${STRING}\\s*\\)`, "gi"), test: (value, host, fn) =>
@@ -153,13 +153,39 @@ function wildcardReaches(pattern: string, text: string, open: boolean): boolean 
   return open ? states.size > 0 : states.has(tokens.length);
 }
 
-/** Whether a `full_uri` wildcard could match a request to `host`, reading the pattern's host as what follows `://` up to the next `/`. */
+/** The URI prefixes a request to `host` starts with: either scheme, then the end of the host or a port. */
+function uriPrefixes(host: string): string[] {
+  return ["https", "http"].flatMap((scheme) => [`${scheme}://${host}/`, `${scheme}://${host}:`]);
+}
+
+/** Whether a `full_uri` wildcard could match a request to `host`; `*` spans slashes, so the whole pattern is tested. */
 function uriWildcardReaches(pattern: string, host: string): boolean {
-  const scheme = pattern.indexOf("://");
-  if (scheme < 0) return [`https://${host}/`, `http://${host}/`].some((uri) => wildcardReaches(pattern, uri, true));
-  const rest = pattern.slice(scheme + 3);
-  const slash = rest.indexOf("/");
-  return slash < 0 ? wildcardReaches(rest, host, true) : wildcardReaches(rest.slice(0, slash), host, false);
+  return uriPrefixes(host).some((prefix) => wildcardReaches(pattern, prefix, true));
+}
+
+const URI_REGEX_SCHEME = /^\^(?:https\??|http|\(\?:https\?\)|\(https\?\)):(?:\/|\\\/){2}/;
+
+/**
+ * Whether a `full_uri` regex could match a request to `host`. False only when
+ * the regex is anchored to a scheme and a literal host start that rules it out.
+ */
+function uriRegexReaches(regex: string, host: string): boolean {
+  const scheme = URI_REGEX_SCHEME.exec(regex);
+  if (!scheme) return true;
+  const rest = regex.slice(scheme[0].length);
+  if (rest.includes("|")) return true;
+  const units: string[] = [];
+  let i = 0;
+  for (;;) {
+    const unit = /^(?:[a-z0-9-]|\\[.-]|\[[.-]\])/i.exec(rest.slice(i))?.[0];
+    if (!unit) break;
+    units.push(unit.length === 1 ? unit : unit[1]!);
+    i += unit.length;
+  }
+  const next = rest.slice(i);
+  if (/^[?*+{]/.test(next)) units.pop();
+  const literal = units.join("").toLowerCase();
+  return /^(?:\/|\\\/|:|\$)/.test(next) ? host === literal : host.startsWith(literal);
 }
 
 /** Whether an enabled rule's wildcard, regex, or prefix/suffix test on the host or full URI could match a request to `host`. */
