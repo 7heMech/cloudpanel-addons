@@ -45,8 +45,23 @@
 .dns-profile-tools .btn { white-space:nowrap; }
 .card-footer { display:flex; justify-content:space-between; align-items:center; gap:16px; padding:16px 32px; border-top:1px solid var(--row-border); }
 .card-footer .hint { margin:0; }
-.dns-site-table td select { min-width:190px; }
-.dns-status { min-width:220px; }
+.dns-site-table td select { min-width:118px; padding:7px 30px 7px 11px; background-position:right 9px center; font-size:14px; }
+.dns-site-table td.dns-mail-cell select { min-width:162px; }
+.dns-site-card .bulk-assign { flex-wrap:wrap; }
+.dns-site-card .bulk-assign > select { min-width:140px; padding:7px 30px 7px 11px; background-position:right 9px center; font-size:14px; }
+.dns-role-select.dns-role-default { color:var(--muted); }
+.dns-mailcow-warn { display:inline-block; margin-top:6px; }
+.dns-redirect-profile .dns-mailcow-warn { display:block; width:fit-content; }
+.dns-status { min-width:168px; }
+.dns-mailcow-connect h2 { margin:0 0 8px; }
+.dns-mailcow-connect p.hint { margin:0 0 20px; max-width:68ch; }
+.dns-mailcow-warn-card { border-color:var(--warn); }
+.dns-mailcow-head { display:flex; align-items:center; flex-wrap:wrap; gap:10px; margin:0 0 6px; }
+.dns-mailcow-head h2 { margin:0; }
+.dns-mailcow-alert { margin:12px 0 16px; color:var(--text); border-color:var(--warn); }
+.dns-mailcow-value { text-align:right; }
+.dns-mailcow-value strong { display:block; font-weight:600; }
+.dns-mailcow-value .hint { display:block; margin-top:2px; }
 .dns-redirect-tools { display:flex; flex-shrink:0; gap:8px; flex-wrap:wrap; }
 .dns-redirect-target { display:block; max-width:240px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; font:14px/1.5 var(--mono); }
 .dns-redirect-profile { white-space:nowrap; }
@@ -58,7 +73,8 @@
 .dns-settings-table .mono { color:var(--muted); font-size:13px; }
 .dns-profile-table .switch-state { font-weight:400; color:var(--muted); min-width:84px; }
 @media (max-width:1200px) {
-  .dns-site-table td select { min-width:150px; }
+  .dns-site-table td select { min-width:108px; }
+  .dns-site-table td.dns-mail-cell select { min-width:142px; }
   .dns-status { min-width:0; }
 }
 /* Tables, not cards: a hostname breaks only when it cannot fit its column. */
@@ -106,13 +122,6 @@ h3.dns-section { margin:30px 0 12px; }
 .dns-rows .dns-unproxiable .switch { visibility:hidden; }
 .dns-check { display:flex; align-items:center; gap:6px; margin:0 6px 0 0; font-size:14px; color:var(--muted); cursor:pointer; white-space:nowrap; }
 .dns-check input { margin:0; }
-.dns-zone-details { margin-top:30px; }
-.dns-zone-details > summary { display:flex; align-items:baseline; flex-wrap:wrap; gap:4px 12px; cursor:pointer; list-style:none; }
-.dns-zone-details > summary::-webkit-details-marker { display:none; }
-.dns-zone-details > summary::before { content:"▸"; color:var(--muted); width:10px; }
-.dns-zone-details[open] > summary::before { content:"▾"; }
-.dns-zone-details > summary h3 { margin:0; }
-.dns-zone-details > p.hint { margin:8px 0 16px; }
 .dns-rows input:disabled, .dns-rows select:disabled { opacity:.45; }
 .dns-rows .switch { width:44px; height:24px; vertical-align:middle; }
 .dns-rows .switch span::after { width:18px; height:18px; }
@@ -128,7 +137,6 @@ h3.dns-section { margin:30px 0 12px; }
 .dns-switch-row .switch { margin-top:2px; }
 .dns-switch-row strong { display:block; font-weight:500; }
 .dns-switch-row .hint { margin-top:2px; }
-.dns-zone-grid { margin-top:4px; }
 .dns-inline { display:flex; gap:10px; }
 .dns-inline select { width:auto; flex-shrink:0; }
 .dns-inline .btn { white-space:nowrap; }
@@ -180,9 +188,10 @@ p.dns-dialog-note { margin:20px 0 0; }
 .dns-card-sites { display:none; }
 @media (max-width:940px) {
   /* A site card: the status and its hints get the full width, then the
-     profile picker with Details beside it. */
+     HTTP and Mail role pickers with Details beside them. */
   .fleet-table.dns-site-table td.dns-status { flex-basis:100%; }
-  .fleet-table.dns-site-table td.dns-profile-cell { flex:1 1 0; order:1; }
+  .fleet-table.dns-site-table td.dns-http-cell,
+  .fleet-table.dns-site-table td.dns-mail-cell { flex:1 1 130px; order:1; }
   .fleet-table.dns-site-table td.action-cell:has(.btn) { flex:0 0 auto; order:2; align-self:flex-end; }
   /* A profile card: name, site count and its buttons on the first line;
      records, then the zone settings. */
@@ -192,7 +201,13 @@ p.dns-dialog-note { margin:20px 0 0; }
   .fleet-table.dns-profile-table td.action-cell::before { display:none; }
   .fleet-table.dns-profile-table td.wide-cell { order:2; }
   .fleet-table.dns-profile-table td.dns-sites-cell { display:none; }
-  .dns-site-table td select { min-width:0; }
+  .dns-site-table td select, .dns-site-table td.dns-mail-cell select { min-width:0; width:100%; }
+  .dns-site-card .card-header.toolbar > .fleet-selection ~ .bulk-assign { flex-wrap:wrap; }
+  .dns-site-card .card-header.toolbar > .fleet-selection ~ .bulk-assign > select { flex:1 1 calc(50% - 6px); min-width:130px; padding-left:10px; padding-right:28px; background-position:right 8px center; }
+  .dns-site-card .card-header.toolbar > .fleet-selection ~ .bulk-assign > .btn { flex:1 1 100%; }
+  .fleet-table.dns-mailcow-table td.site-cell,
+  .fleet-table.dns-mailcow-table td.dns-status { flex-basis:100%; }
+  .dns-mailcow-value { text-align:left; }
   /* A redirect card, laid out like a site card: "domain → target" with its
      note beneath, the DNS status across the width, then the profile with the
      buttons beside it. */
@@ -216,7 +231,8 @@ p.dns-dialog-note { margin:20px 0 0; }
   .dns-checklist > li { display:grid; grid-template-columns:28px minmax(0,1fr); gap:10px 14px; align-items:start; }
   .dns-step-control { grid-column:2; text-align:left; }
   .dns-setup-actions { justify-content:flex-start; }
-  .card-header:not(.toolbar):has(> .dns-connection-actions) { flex-direction:column; align-items:stretch; }
+  .card-header:not(.toolbar):has(> .dns-connection-actions),
+  #dns-mailcow > .card-header { flex-direction:column; align-items:stretch; }
   .dns-mode-bar { flex-direction:column; align-items:stretch; }
   .dns-profile-tools { width:100%; flex-wrap:wrap; }
   .dns-default-field { flex:1 1 200px; }
@@ -298,6 +314,7 @@ p.dns-dialog-note { margin:20px 0 0; }
 .dns-setting-control { flex:0 0 auto; }
 .dns-disclosure-row { padding:0; border-top:0; align-items:center; }
 .dns-setting-row .btn-danger:not(:hover):not(:focus-visible),
+#dns-mailcow .btn-danger:not(:hover):not(:focus-visible),
 .dns-panel-host-form .btn-danger:not(:hover):not(:focus-visible) { color:var(--button-text); border-color:var(--button-border); }
 .dns-setting-row > .actions { flex-shrink:0; flex-wrap:nowrap; }
 .dns-setting-row > .actions .btn { white-space:nowrap; }

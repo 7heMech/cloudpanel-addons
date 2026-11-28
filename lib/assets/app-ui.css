@@ -412,6 +412,7 @@ pre { background: var(--bg); border: 1px solid var(--border); border-radius: 4px
 .section-link:hover { color: var(--text); text-decoration: none; }
 .section-link.is-active { color: var(--text); font-weight: 600; border-bottom-color: var(--accent); }
 .section-count { font-size: 12px; font-weight: 500; color: var(--muted); font-variant-numeric: tabular-nums; }
+.section-badge { font-size: 11px; padding: 1px 7px; line-height: 1.45; }
 .section-dot { width: 7px; height: 7px; border-radius: 50%; flex: 0 0 7px; background: currentColor; }
 .section-panels { min-width: 0; }
 .section-panel[hidden] { display: none !important; }
@@ -422,7 +423,7 @@ pre { background: var(--bg); border: 1px solid var(--border); border-radius: 4px
   .section-link { width: 100%; padding: 10px 14px; border-bottom: 0; border-left: 3px solid transparent; border-radius: 4px; }
   .section-link:hover { background: rgb(127 143 153 / 8%); }
   .section-link.is-active { background: rgb(38 125 221 / 8%); border-left-color: var(--accent); }
-  .section-count { margin-left: auto; }
+  .section-count, .section-badge { margin-left: auto; }
 }
 .fleet-filter { display: flex; flex-wrap: wrap; align-items: center; gap: 10px 12px; padding: 0 32px 18px; }
 .fleet-filter > input { flex: 1 1 220px; max-width: 320px; }

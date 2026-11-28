@@ -5,7 +5,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { executeDnsAction, type DnsReply } from "../addons/dns/action";
 import type { PanelSite, StandIn, StandIns } from "../addons/dns/engine";
-import { seededPolicy } from "../addons/dns/presets";
+import { mailcowSeededProfile, seededPolicy } from "../addons/dns/presets";
 import { renderRedirect, type SiteVars } from "../addons/dns/records";
 import { foundRedirect, redirectRef, redirectRuleState, wholeHostHosts } from "../addons/dns/redirects";
 import { clpctlStandIns, readStandIns, retryStandInCertificates, standInBody, type StandInPaths } from "../addons/dns/stand-in";
@@ -13,7 +13,7 @@ import { issuedForAll } from "../lib/panel-custom-domain";
 import { isStandInSite, ownsStandInSite } from "../lib/stand-ins";
 import { removeCloudflareConnection, saveCloudflareConnection } from "../lib/cloudflare/store";
 import type { CfRule } from "../lib/cloudflare/api";
-import type { Redirect } from "../addons/dns/model";
+import { composeProfiles, type Redirect } from "../addons/dns/model";
 import { FakeCloudflare, FakeMailcow, hexId, MAILCOW_KEY, routed } from "./fixtures/dns-api";
 
 const TOKEN = "cf-church-token-0123456789abcdef";
@@ -226,7 +226,7 @@ describe("taking over the redirects Terraform left", () => {
   });
 
   test("two rules for one domain are reported, and neither is changed", () => {
-    const redirect: Redirect = { source: "windnfire.uk", target: "https://windandfireconf.com", status: 301, keepPath: true, keepQuery: true, profileId: null };
+    const redirect: Redirect = { source: "windnfire.uk", target: "https://windandfireconf.com", status: 301, keepPath: true, keepQuery: true, mailProfileId: null };
     const rules = [terraformRule(apexHosts("windnfire.uk"), redirect.target), terraformRule('http.host eq "www.windnfire.uk"', redirect.target)] as unknown as CfRule[];
     const state = redirectRuleState({ id: hexId(), rules }, redirect, ["windnfire.uk", "www.windnfire.uk"]);
     expect(state).toEqual({ state: "problem", problem: expect.stringContaining("2 redirect rules in Cloudflare already match windnfire.uk or www.windnfire.uk") });
@@ -298,7 +298,7 @@ describe("a redirect domain's profile", () => {
   });
 
   test("keeps every row but the web rows, which the placeholder replaces at the apex and www", () => {
-    const profile = seededPolicy().profiles.find((candidate) => candidate.id === "web-mailcow")!;
+    const profile = composeProfiles(seededPolicy().profiles.find((candidate) => candidate.id === "web")!, mailcowSeededProfile())!;
     const rendered = renderRedirect(profile, ["purezoraya.com", "www.purezoraya.com"], vars("purezoraya.com"), "100::");
     expect(rendered.problems).toEqual([]);
     expect(rendered.records.map((record) => `${record.type} ${record.name} ${record.content}`).sort()).toEqual([
@@ -329,12 +329,12 @@ describe("a redirect domain's profile", () => {
     await env.act("save-connection", { token: TOKEN });
     await env.act("save-mailcow", { url: "mail.hzn.bg", key: MAILCOW_KEY });
     await env.automatic();
-    await env.confirmed(await env.act("take-over", { redirects: [found("zorayawater.com", "https://zoraya.gold")], profileId: "web-mailcow" }));
+    await env.confirmed(await env.act("take-over", { redirects: [found("zorayawater.com", "https://zoraya.gold")], mailProfileId: "mailcow" }));
     const state = await env.act("list");
     const row = state.sites.find((site) => site.domain === "zorayawater.com")!;
-    expect(row).toMatchObject({ type: "redirect", profileId: "web-mailcow", redirect: { standIn: false } });
+    expect(row).toMatchObject({ type: "redirect", httpRole: "redirect", httpProfileId: null, mailProfileId: "mailcow", redirect: { standIn: false } });
     expect(row.plan!.changes).toEqual([]);
-    expect(state.profiles.find((profile) => profile.id === "web-mailcow")!.sites).toBe(1);
+    expect(state.profiles.find((profile) => profile.id === "mailcow")!.sites).toBe(1);
 
     env.mc.key("zorayawater.com", "dkim", "MIIBRotatedKey");
     await env.act("check");
@@ -529,7 +529,7 @@ describe("stand-in sites in CloudPanel", () => {
     const calls = () => { try { return readFileSync(join(dir, "calls"), "utf8"); } catch { return ""; } };
     return { paths, standIns, calls };
   }
-  const redirect = (source: string): Redirect => ({ source, target: "https://hazon.bg", status: 301, keepPath: true, keepQuery: true, profileId: null });
+  const redirect = (source: string): Redirect => ({ source, target: "https://hazon.bg", status: 301, keepPath: true, keepQuery: true, mailProfileId: null });
 
   test("a site later added at a stand-in's domain is not the stand-in, and is never deleted or overwritten", async () => {
     const { paths, standIns, calls } = setup({ "hazon.uk": { id: 7, user: "hazon" }, "old.example": { id: 12, user: "old" } });

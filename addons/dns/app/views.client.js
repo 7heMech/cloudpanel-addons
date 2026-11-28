@@ -153,7 +153,13 @@ function dnsRowChanged(index, target, settled) {
 }
 
 function dnsAddRow() {
-  dnsRowsState.push({ type: 'A', name: '{domain}', content: '{ipv4}', proxied: dnsHasCloudflare(), ttl: 1, priority: null, apexOnly: false });
+  const form = CLP_ROOT.getElementById('dns-profile-form');
+  const role = form ? form.elements.namedItem('role').value : 'http';
+  if (role === 'mail') {
+    dnsRowsState.push({ type: 'TXT', name: '{domain}', content: '', proxied: false, ttl: 1, priority: null, apexOnly: false });
+  } else {
+    dnsRowsState.push({ type: 'A', name: '{domain}', content: '{ipv4}', proxied: dnsHasCloudflare(), ttl: 1, priority: null, apexOnly: false });
+  }
   dnsRenderRows();
   const rows = CLP_ROOT.querySelectorAll('#dns-rows tr');
   rows[rows.length - 1].querySelector('[data-field="name"]').focus();
@@ -187,49 +193,66 @@ function dnsInsert(token) {
   field.dispatchEvent(new Event('input', { bubbles: true }));
 }
 
-function dnsEditProfile(id) {
+function dnsEditProfile(id, role) {
   const profile = id ? dnsProfile(id) : null;
+  const profileRole = profile ? profile.role : (role === 'mail' ? 'mail' : 'http');
   const form = CLP_ROOT.getElementById('dns-profile-form');
   form.reset();
   form.elements.namedItem('id').value = profile ? profile.id : '';
-  form.elements.namedItem('name').value = profile ? profile.name : '';
+  form.elements.namedItem('role').value = profileRole;
+  const nameField = form.elements.namedItem('name');
+  nameField.value = profile ? profile.name : '';
+  nameField.placeholder = profileRole === 'mail' ? (dnsState.mailcow.linked ? 'Mailcow' : 'Google Workspace') : 'Web';
   form.elements.namedItem('mailcow').checked = Boolean(profile && profile.mailcow);
-  CLP_ROOT.getElementById('dns-preset').innerHTML = '<option value="">Add a preset…</option>' + dnsState.presets.map(function (preset) {
+  const matchingPresets = (dnsState.presets || []).filter(function (preset) { return preset.role === profileRole; });
+  const presetSelect = CLP_ROOT.getElementById('dns-preset');
+  presetSelect.innerHTML = '<option value="">Add a preset…</option>' + matchingPresets.map(function (preset) {
     return '<option value="' + dnsEsc(preset.id) + '">' + dnsEsc(preset.label) + '</option>';
   }).join('');
+  presetSelect.hidden = matchingPresets.length === 0;
   dnsRowsState = profile ? profile.records.map(function (record) { return Object.assign({}, record); }) : [];
   dnsLastField = null;
   CLP_ROOT.getElementById('dns-advanced').checked = false;
   dnsSyncProfileSections();
   dnsRenderRows();
-  CLP_ROOT.getElementById('dns-profile-heading').textContent = profile ? 'Edit ' + profile.name : 'New profile';
+  CLP_ROOT.getElementById('dns-profile-heading').textContent = profile
+    ? 'Edit ' + profile.name
+    : (profileRole === 'mail' ? 'New Mail profile' : 'New HTTP profile');
   dnsOpen('dns-profile-dialog');
 }
 
-/** Mailcow shows once Mailcow is set up or the profile uses it. */
+/** Mailcow shows only on Mail profiles once Mailcow is linked (or already used). */
 function dnsSyncProfileSections() {
   const form = CLP_ROOT.getElementById('dns-profile-form');
-  CLP_ROOT.getElementById('dns-mailcow-section').hidden = !dnsState.mailcow.url && !form.elements.namedItem('mailcow').checked;
+  const role = form.elements.namedItem('role').value || 'http';
+  const isMail = role === 'mail';
+  const mailcowChecked = form.elements.namedItem('mailcow').checked;
+  const showMailcow = isMail && (dnsState.mailcow.linked || mailcowChecked);
+  CLP_ROOT.getElementById('dns-mailcow-section').hidden = !showMailcow;
+  form.querySelectorAll('[data-mailcow-chip]').forEach(function (chip) { chip.hidden = !showMailcow; });
 }
 
 function dnsSaveProfile(event) {
   event.preventDefault();
   const form = event.currentTarget;
   const value = function (name) { return form.elements.namedItem(name).value; };
+  const role = value('role') || 'http';
   dnsPost('/api/profiles', {
     id: value('id') || null,
+    role: role,
     name: value('name'),
     records: dnsRowsState,
-    mailcow: form.elements.namedItem('mailcow').checked,
+    mailcow: role === 'mail' && form.elements.namedItem('mailcow').checked,
   }, CLP_ROOT.getElementById('dns-profile-dialog'));
 }
 
 async function dnsDeleteProfile(id) {
   const profile = dnsProfile(id);
+  const noun = profile.role === 'mail' ? 'domain' : 'site';
   const accepted = await confirmAction({
     title: 'Delete ' + profile.name + '?',
-    text: 'Its sites stop being managed. Nothing in ' + dnsProviderLabel() + ' or Mailcow changes.',
-    details: profile.sites ? [plural(profile.sites, 'site') + ' will be in no profile.'] : [],
+    text: 'Assigned domains stop syncing this ' + (profile.role === 'mail' ? 'Mail' : 'HTTP') + ' profile. Nothing in ' + dnsProviderLabel() + ' or Mailcow changes.',
+    details: profile.sites ? [plural(profile.sites, noun) + ' will lose this ' + (profile.role === 'mail' ? 'Mail' : 'HTTP') + ' role.'] : [],
     confirmLabel: 'Delete', danger: true,
   });
   if (accepted) dnsPost('/api/profiles/delete', { id: id });
@@ -249,37 +272,63 @@ async function dnsSetZoneAccount(select) {
 
 // --- sites ------------------------------------------------------------------
 
-async function dnsAssignRow(select) {
+async function dnsAssignHttp(select) {
   const row = select.closest('tr[data-domain]');
   const id = select.value;
-  select.value = row.dataset.profileId;
-  await dnsPost('/api/assign', { domains: [row.dataset.domain], profileId: id || null });
+  select.value = row.dataset.httpProfileId;
+  await dnsPost('/api/assign', { domains: [row.dataset.domain], httpProfileId: id || null });
+}
+
+async function dnsAssignMail(select) {
+  const row = select.closest('tr[data-domain]');
+  const id = select.value;
+  select.value = row.dataset.mailProfileId;
+  await dnsPost('/api/assign', { domains: [row.dataset.domain], mailProfileId: id || null });
 }
 
 async function dnsAssignSelected() {
   const rows = selectedRows();
-  const picker = CLP_ROOT.getElementById('bulk-profile');
-  if (!picker.value) return notify('Choose a profile to put them in first.', 'warn');
-  const id = picker.value === '-' ? null : picker.value;
-  // A held site placed in its own profile again is reviewed.
-  const moving = rows.filter(function (row) { return (row.dataset.profileId || '') !== (id || '') || (id && row.dataset.held); });
-  if (!moving.length) return notify('Those sites are already there; nothing to change.', 'ok');
-  const profile = id ? dnsProfile(id) : null;
-  if (!profile || !dnsState.automatic) {
+  const httpPicker = CLP_ROOT.getElementById('bulk-http');
+  const mailPicker = CLP_ROOT.getElementById('bulk-mail');
+  const changeHttp = Boolean(httpPicker && httpPicker.value);
+  const changeMail = Boolean(mailPicker && mailPicker.value);
+  if (!changeHttp && !changeMail) return notify('Choose an HTTP or Mail role to assign first.', 'warn');
+  const httpId = changeHttp ? (httpPicker.value === '-' ? null : httpPicker.value) : undefined;
+  const mailId = changeMail ? (mailPicker.value === '-' ? null : mailPicker.value) : undefined;
+  const moving = rows.filter(function (row) {
+    const httpDiff = changeHttp && (row.dataset.httpProfileId || '') !== (httpId || '');
+    const mailDiff = changeMail && (row.dataset.mailProfileId || '') !== (mailId || '');
+    const heldReview = Boolean(row.dataset.held) && (Boolean(httpId) || Boolean(mailId));
+    return httpDiff || mailDiff || heldReview;
+  });
+  if (!moving.length) return notify('Those sites already have those roles; nothing to change.', 'ok');
+  const body = { domains: moving.map(function (row) { return row.dataset.domain; }) };
+  if (changeHttp) body.httpProfileId = httpId;
+  if (changeMail) body.mailProfileId = mailId;
+  const clearingOnly = (!changeHttp || httpId === null) && (!changeMail || mailId === null);
+  if (clearingOnly || !dnsState.automatic) {
+    const parts = [];
+    if (changeHttp) parts.push('HTTP: ' + (httpId ? dnsProfile(httpId).name : 'DNS-only'));
+    if (changeMail) parts.push('Mail: ' + (mailId ? dnsProfile(mailId).name : 'None'));
     const accepted = await confirmAction({
-      title: profile ? 'Put ' + plural(moving.length, 'site') + ' in ' + profile.name + '?' : 'Stop managing ' + plural(moving.length, 'site') + '?',
-      text: profile ? 'DNS asks first: their DNS is checked against it and nothing is changed.' : 'Their DNS is left as it is.',
-      confirmLabel: profile ? 'Assign' : 'Stop managing',
+      title: 'Update ' + plural(moving.length, 'site') + ' (' + parts.join(', ') + ')?',
+      text: clearingOnly ? 'Existing DNS records are left as they are.' : 'DNS asks first: their DNS is checked against these roles and nothing is changed.',
+      confirmLabel: 'Assign',
     });
     if (!accepted) return;
   }
-  dnsPost('/api/assign', { domains: moving.map(function (row) { return row.dataset.domain; }), profileId: id });
+  dnsPost('/api/assign', body);
 }
 
-async function dnsSetDefault(select) {
+async function dnsSetDefault(role, select) {
   const id = select.value;
-  select.value = dnsState.defaultProfileId || '';
-  await dnsPost('/api/default', { profileId: id || null });
+  if (role === 'mail') {
+    select.value = dnsState.defaultMailProfileId || '';
+    await dnsPost('/api/default', { mailProfileId: id || null });
+  } else {
+    select.value = dnsState.defaultHttpProfileId || '';
+    await dnsPost('/api/default', { httpProfileId: id || null });
+  }
 }
 
 async function dnsCheck(button) {
@@ -334,18 +383,22 @@ function dnsConfirm() {
 // facts that only describe it.
 function dnsShowSite(domain) {
   const site = dnsState.sites.find(function (candidate) { return candidate.domain === domain; });
-  const profile = dnsProfile(site.profileId);
+  const httpProfile = site.httpProfileId ? dnsProfile(site.httpProfileId) : null;
+  const mailProfile = site.mailProfileId ? dnsProfile(site.mailProfileId) : null;
   const plan = site.plan;
   dnsSiteShown = domain;
   const heading = CLP_ROOT.getElementById('dns-site-heading');
   heading.textContent = domain;
-  const row = Array.prototype.find.call(CLP_ROOT.querySelectorAll('tr[data-domain], tr[data-redirect]'), function (candidate) {
-    return (candidate.dataset.domain || candidate.dataset.redirect) === domain;
+  const row = Array.prototype.find.call(CLP_ROOT.querySelectorAll('tr[data-domain], tr[data-redirect], tr[data-mailcow-domain]'), function (candidate) {
+    return (candidate.dataset.domain || candidate.dataset.redirect || candidate.dataset.mailcowDomain) === domain;
   });
   const chip = row && row.querySelector('.dns-status .badge');
   if (chip) heading.appendChild(chip.cloneNode(true));
 
   let html = '';
+  if (site.mailcowMissing && (!plan || !plan.problems.length)) {
+    html += '<div class="alert">Mailcow is not connected. Reconnect Mailcow on the Mailcow tab or change this domain\'s Mail role.</div>';
+  }
   if (!plan) html += '<p class="hint">Not checked yet. Check now reads it from your DNS provider.</p>';
   else {
     html += dnsProblems(plan.problems);
@@ -390,8 +443,11 @@ function dnsShowSite(domain) {
       '<dt>Status</dt><dd>' + site.redirect.status + (kept.length ? ' · keeps the ' + kept.join(' and ') : '') + '</dd>' +
       '<dt>Served by</dt><dd>' + served + '</dd>';
   }
-  html += '<dt>Profile</dt><dd>' + (profile ? dnsEsc(profile.name) + ' · ' + (dnsState.automatic ? 'Automatic' : 'Ask first')
-    : site.redirect ? 'No profile · ' + (dnsState.automatic ? 'Automatic' : 'Ask first') : '—') + '</dd>';
+  const httpDesc = site.redirect ? 'Redirect' : httpProfile ? 'Site · ' + dnsEsc(httpProfile.name) : 'DNS-only (no web records)';
+  const mailDesc = mailProfile ? dnsEsc(mailProfile.name) + (site.mailcowMissing ? ' <span class="badge tone-warn">Mailcow unlinked</span>' : '') : 'None';
+  html += '<dt>HTTP role</dt><dd>' + httpDesc + '</dd>' +
+    '<dt>Mail role</dt><dd>' + mailDesc + '</dd>' +
+    '<dt>Sync mode</dt><dd>' + (dnsState.automatic ? 'Automatic' : 'Ask first') + '</dd>';
   if (plan && plan.zone) {
     const providerLabel = plan.zone.provider === 'powerdns' ? 'PowerDNS' : 'Cloudflare';
     html += '<dt>Zone</dt><dd>' + dnsEsc(plan.zone.name) + ' · ' + dnsEsc(plan.zone.status) + '</dd>' +
@@ -408,7 +464,7 @@ function dnsShowSite(domain) {
   const pending = plan && !plan.problems.length && plan.changes.some(function (change) { return change.action !== 'note'; });
   const apply = CLP_ROOT.getElementById('dns-site-apply');
   // A redirect is applied by the next check, or through its review when it is held.
-  apply.hidden = !(dnsState.automatic && pending && (site.redirect ? plan.held : profile));
+  apply.hidden = !(dnsState.automatic && pending && (site.redirect ? plan.held : (httpProfile || mailProfile)));
   apply.textContent = plan && plan.held ? 'Review changes' : 'Apply now';
   dnsOpen('dns-site-dialog');
 }
@@ -416,7 +472,11 @@ function dnsShowSite(domain) {
 async function dnsApplySite() {
   const dialog = CLP_ROOT.getElementById('dns-site-dialog');
   const site = dnsState.sites.find(function (candidate) { return candidate.domain === dnsSiteShown; });
-  if (site.plan && site.plan.held) return dnsPost('/api/assign', { domains: [site.domain], profileId: site.profileId }, dialog);
+  if (site.plan && site.plan.held) {
+    return dnsPost('/api/assign', site.redirect
+      ? { domains: [site.domain], mailProfileId: site.mailProfileId }
+      : { domains: [site.domain], httpProfileId: site.httpProfileId, mailProfileId: site.mailProfileId }, dialog);
+  }
   const reply = await dnsPost('/api/provision', { domain: dnsSiteShown });
   if (!reply) return;
   if (reply.provision) notify(reply.provision.ready ? dnsSiteShown + ': DNS is in place.' : dnsSiteShown + ': ' + reply.provision.reason, reply.provision.ready ? 'ok' : 'warn');
@@ -439,8 +499,9 @@ function dnsRemoveRecords(domain) {
 
 // --- redirect domains -------------------------------------------------------
 
-function dnsProfileChoices(selected) {
-  return '<option value="">No profile</option>' + dnsState.profiles.map(function (profile) {
+function dnsMailProfileChoices(selected) {
+  const mailProfiles = (dnsState.profiles || []).filter(function (profile) { return profile.role === 'mail'; });
+  return '<option value="">None</option>' + mailProfiles.map(function (profile) {
     return '<option value="' + dnsEsc(profile.id) + '"' + (profile.id === selected ? ' selected' : '') + '>' + dnsEsc(profile.name) + '</option>';
   }).join('');
 }
@@ -457,7 +518,7 @@ function dnsEditRedirect(source) {
   field('status').value = String(redirect ? redirect.status : 301);
   field('keepPath').checked = redirect ? redirect.keepPath : true;
   field('keepQuery').checked = redirect ? redirect.keepQuery : true;
-  field('profileId').innerHTML = dnsProfileChoices(redirect ? redirect.profileId : null);
+  field('mailProfileId').innerHTML = dnsMailProfileChoices(redirect ? redirect.mailProfileId : null);
   const hasCf = dnsHasCloudflare();
   const hasPdns = dnsHasPowerDns();
   CLP_ROOT.getElementById('dns-redirect-where').textContent = hasCf && hasPdns
@@ -479,7 +540,7 @@ function dnsSaveRedirect(event) {
   const field = function (name) { return form.elements.namedItem(name); };
   dnsPost('/api/redirects', {
     source: field('source').value.trim(), target: field('target').value.trim(), status: Number(field('status').value),
-    keepPath: field('keepPath').checked, keepQuery: field('keepQuery').checked, profileId: field('profileId').value || null,
+    keepPath: field('keepPath').checked, keepQuery: field('keepQuery').checked, mailProfileId: field('mailProfileId').value || null,
   }, CLP_ROOT.getElementById('dns-redirect-dialog'));
 }
 
@@ -527,7 +588,7 @@ function dnsShowFound(found) {
           ' aria-label="Keep the path for ' + dnsEsc(redirect.source) + '"><span></span></label></td></tr>';
       }).join('') + '</tbody></table></div>'
     : '<div class="empty">No whole-domain redirect rules are waiting to be taken over.</div>');
-  CLP_ROOT.getElementById('dns-found-profile').innerHTML = dnsProfileChoices(null);
+  CLP_ROOT.getElementById('dns-found-mail').innerHTML = dnsMailProfileChoices(null);
   CLP_ROOT.getElementById('dns-found-submit').hidden = !dnsFound.length;
   dnsOpen('dns-found-dialog');
 }
@@ -545,7 +606,7 @@ function dnsTakeOver(event) {
     return { source: redirect.source, target: redirect.target, status: redirect.status, keepPath: keepPath, keepQuery: redirect.keepQuery };
   });
   if (!chosen.length) return dnsDialogError(CLP_ROOT.getElementById('dns-found-dialog'), 'Select at least one redirect.');
-  dnsPost('/api/redirects/take-over', { redirects: chosen, profileId: CLP_ROOT.getElementById('dns-found-profile').value || null }, CLP_ROOT.getElementById('dns-found-dialog'));
+  dnsPost('/api/redirects/take-over', { redirects: chosen, mailProfileId: CLP_ROOT.getElementById('dns-found-mail').value || null }, CLP_ROOT.getElementById('dns-found-dialog'));
 }
 
 // --- connections and settings -----------------------------------------------
@@ -699,6 +760,8 @@ function dnsEditMailcow() {
     relay.value = '0';
     dnsFillFromRelay();
   }
+  CLP_ROOT.getElementById('dns-mailcow-heading').textContent = settings.linked ? 'Edit Mailcow' : 'Connect Mailcow';
+  form.querySelector('[type="submit"]').textContent = settings.linked ? 'Save' : 'Connect';
   dnsSyncDkim();
   dnsOpen('dns-mailcow-dialog');
 }
@@ -712,9 +775,12 @@ function dnsFillFromRelay() {
 }
 
 async function dnsRemoveMailcow() {
+  const mailcowIds = new Set((dnsState.profiles || []).filter(function (profile) { return profile.role === 'mail' && profile.mailcow; }).map(function (profile) { return profile.id; }));
+  const assigned = (dnsState.sites || []).filter(function (site) { return site.mailProfileId && mailcowIds.has(site.mailProfileId); }).length;
   const accepted = await confirmAction({
     title: 'Remove Mailcow?',
-    text: 'Its API key is deleted from this server. Sites whose profile sets up Mailcow stop being applied until Mailcow is set up again; their records and Mailcow domains stay as they are.',
+    text: 'Its API key is deleted from this server. Domains that assign Mailcow as their Mail role will show a warning and stay paused until Mailcow is reconnected or their Mail role changes; existing DNS records and Mailcow domains stay as they are.',
+    details: assigned ? [plural(assigned, 'domain') + ' currently ' + (assigned === 1 ? 'uses' : 'use') + ' Mailcow as ' + (assigned === 1 ? 'its' : 'their') + ' Mail role.'] : [],
     confirmLabel: 'Remove', danger: true,
   });
   if (accepted) dnsPost('/api/mailcow/remove', {});
@@ -825,9 +891,6 @@ async function dnsRemovePanelHost() {
   });
   if (accepted) dnsPost('/api/panel-host', { name: null });
 }
-
-CLP_ROOT.getElementById('dns-zone-details').addEventListener('change', dnsSyncProfileSections);
-CLP_ROOT.getElementById('dns-zone-details').addEventListener('input', dnsSyncProfileSections);
 
 /** A press on the backdrop closes a dialog; a drag that started in a field and ended outside does not. */
 CLP_ROOT.querySelectorAll('dialog').forEach(function (dialog) {

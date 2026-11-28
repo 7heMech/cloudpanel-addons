@@ -954,6 +954,45 @@ describe("Upgrade migration from DNS profile zone options", () => {
     expect(migrated.defaults.skipFirewallIps).toEqual(["203.0.113.7"]);
   });
 
+  test("migrates active v2 assignments, redirects, and split v1->v2 redirect zone options without false disagreement", () => {
+    const { paths } = setupMigrationDir();
+    writeFileSync(paths.dnsConfig, "enabled\n");
+    writeFileSync(paths.firewallConfig, "enabled\n");
+    writeFileSync(join(paths.cloudflareStateDir, "connections.json"), JSON.stringify({
+      version: 1, connections: [{ id: "cf-1111aaaa", label: "Agency" }],
+    }), { mode: 0o600 });
+
+    // v2 policy where an active site combines a legacy-zone HTTP profile with a new zone-less Mail profile,
+    // and an active redirect references a split Mail profile carrying legacy `ssl: "full"`; unused `web` has `ssl: "strict"`.
+    writeFileSync(paths.dnsPolicy, JSON.stringify({
+      version: 2,
+      automatic: true,
+      defaultHttpProfileId: null,
+      defaultMailProfileId: null,
+      assignments: { "site.example.com": { http: "custom-http", mail: "google" } },
+      redirects: [{ source: "old.example.org", target: "https://site.example.com", status: 301, keepPath: true, keepQuery: true, mailProfileId: "redirect-mail" }],
+      profiles: [
+        { id: "web", name: "Web", role: "http", records: [], mailcow: false, zone: { ssl: "strict", alwaysHttps: true, acmeFullSsl: true, webmailFullSsl: false, skipFirewallIps: [] } },
+        { id: "custom-http", name: "Custom HTTP", role: "http", records: [], mailcow: false, zone: { ssl: "full", alwaysHttps: true, acmeFullSsl: true, webmailFullSsl: false, skipFirewallIps: ["203.0.113.7"] } },
+        { id: "redirect-mail", name: "Redirect Mail", role: "mail", records: [], mailcow: false, zone: { ssl: "full", alwaysHttps: true, acmeFullSsl: false, webmailFullSsl: true, skipFirewallIps: [] } },
+        { id: "google", name: "Google Workspace", role: "mail", records: [], mailcow: false },
+      ],
+    }), { mode: 0o600 });
+
+    const undo = migrateCloudflareEdgeFromDns(() => {}, { ...paths, firewallWasEnabled: true });
+    expect(undo).not.toBeNull();
+    const migrated = readEdgeConfig({ paths: { stateDir: paths.firewallStateDir, rootUid: uid } });
+    expect(migrated.approved).toBe(true);
+    expect(migrated.migrationNote).toBeNull();
+    expect(migrated.defaults).toEqual({
+      ssl: "full",
+      alwaysHttps: true,
+      acmeFullSsl: true,
+      webmailFullSsl: true,
+      skipFirewallIps: ["203.0.113.7"],
+    });
+  });
+
   test("refuses untrusted symlinked dns/policy.json without touching Firewall state", () => {
     const { dir, paths } = setupMigrationDir();
     const target = join(dir, "real.json");

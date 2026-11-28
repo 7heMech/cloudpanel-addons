@@ -7,9 +7,9 @@ import { chmodSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync 
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { ADDONS } from "../addons/catalog";
-import { automaticCheck, connectionCheck, panelHostCheck, permissionActions } from "../addons/dns/setup";
+import { automaticCheck, connectionCheck, mailcowActions, panelHostCheck, permissionActions } from "../addons/dns/setup";
 import { defaultServerCheck, defaultServerProblems } from "../addons/system-tweaks/default-server";
-import { seededPolicy } from "../addons/dns/presets";
+import { mailcowSeededProfile, seededPolicy } from "../addons/dns/presets";
 import { autoSslCheck } from "../addons/panel-tweaks/setup";
 import { hetznerSetupState } from "../addons/firewall/hetzner";
 import { HETZNER_QUIET_MS, hetznerActions, hetznerCheck, panelGateCheck } from "../addons/firewall/setup";
@@ -120,7 +120,7 @@ describe("each step's verdict", () => {
     expect(panelHostCheck({ name: "cp.example.org", issued: true }, null)).toEqual({ state: "done", reason: "CloudPanel answers at cp.example.org" });
     expect(automaticCheck(state({ policy: seededPolicy(), tokens: new Set() })).reason).toBe("Connect DNS first");
     expect(automaticCheck(state()).reason).toBe("DNS asks before it changes records");
-    expect(automaticCheck(state({ policy: { ...policy, automatic: true, defaultProfileId: "web" } })).state).toBe("done");
+    expect(automaticCheck(state({ policy: { ...policy, automatic: true, defaultHttpProfileId: "web" } })).state).toBe("done");
   });
 });
 
@@ -515,6 +515,67 @@ describe("Action needed", () => {
     expect(action).toMatchObject({ title: "Cloudflare token needs a permission", href: "/addons/dns/#dns-connection" });
     expect(action!.reason).toStartWith("Agency's token lacks API Tokens: Read");
     expect(permissionActions({ ...state(["API Tokens: Read"]), reports: [{ id: "cf-1", active: false, error: "x", token: unreadable, refused: ["API Tokens: Read"] }] })).toEqual([]);
+  });
+
+  test("DNS Mailcow raises Action needed when unlinked with domains still assigned to Mailcow", () => {
+    const base = seededPolicy();
+    const withMailcow = { ...base, profiles: [...base.profiles, mailcowSeededProfile()] };
+    // Unlinked with zero Mailcow-assigned domains: quiet.
+    expect(mailcowActions({ policy: withMailcow, tokens: new Set(), reports: [], mailcowHasKey: false })).toEqual([]);
+    // Unlinked with 1 site assigned Mailcow: names the site and points to #mailcow.
+    const one = mailcowActions({
+      policy: { ...withMailcow, assignments: { "example.com": { http: "web", mail: "mailcow" } } },
+      tokens: new Set(),
+      reports: [],
+      mailcowHasKey: false,
+    });
+    expect(one).toEqual([{
+      title: "Mailcow is not connected",
+      reason: expect.stringContaining("example.com assigns Mailcow"),
+      href: "/addons/dns/#mailcow",
+    }]);
+    // Unlinked with both a site and a redirect assigned Mailcow: reports count.
+    const two = mailcowActions({
+      policy: {
+        ...withMailcow,
+        assignments: { "example.com": { http: "web", mail: "mailcow" } },
+        redirects: [{ source: "old.example.org", target: "https://example.com", status: 301, keepPath: true, keepQuery: true, mailProfileId: "mailcow" }],
+      },
+      tokens: new Set(),
+      reports: [],
+      mailcowHasKey: false,
+    });
+    expect(two[0]!.reason).toContain("2 domains assign Mailcow");
+    // Redirect-first rule: when a redirect shares a domain with a CloudPanel site assignment,
+    // the redirect's Mail role governs rather than double-counting or using the site's Mail role.
+    expect(mailcowActions({
+      policy: {
+        ...withMailcow,
+        assignments: { "overlap.example.com": { http: "web", mail: "mailcow" } },
+        redirects: [{ source: "overlap.example.com", target: "https://example.com", status: 301, keepPath: true, keepQuery: true, mailProfileId: null }],
+      },
+      tokens: new Set(),
+      reports: [],
+      mailcowHasKey: false,
+    })).toEqual([]);
+    const overlapBoth = mailcowActions({
+      policy: {
+        ...withMailcow,
+        assignments: { "overlap.example.com": { http: "web", mail: "mailcow" } },
+        redirects: [{ source: "overlap.example.com", target: "https://example.com", status: 301, keepPath: true, keepQuery: true, mailProfileId: "mailcow" }],
+      },
+      tokens: new Set(),
+      reports: [],
+      mailcowHasKey: false,
+    });
+    expect(overlapBoth[0]!.reason).toContain("overlap.example.com assigns Mailcow");
+    // Linked Mailcow clears Action needed.
+    expect(mailcowActions({
+      policy: { ...withMailcow, mailcow: { ...withMailcow.mailcow, url: "https://mail.example.net", host: "mail.example.net" }, assignments: { "example.com": { http: "web", mail: "mailcow" } } },
+      tokens: new Set(),
+      reports: [],
+      mailcowHasKey: true,
+    })).toEqual([]);
   });
 });
 

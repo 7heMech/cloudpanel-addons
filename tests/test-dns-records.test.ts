@@ -1,7 +1,7 @@
 import { describe, expect, test } from "bun:test";
 import type { CfRecord } from "../lib/cloudflare/api";
-import { parseProfile, type Profile } from "../addons/dns/model";
-import { PRESETS, seededPolicy } from "../addons/dns/presets";
+import { composeProfiles, parseProfile, type Profile } from "../addons/dns/model";
+import { mailcowSeededProfile, PRESETS, seededPolicy } from "../addons/dns/presets";
 import { diffRecords, renderProfile, renderRedirect, wildcardSource, type SiteVars } from "../addons/dns/records";
 import { tokenTemplate } from "../lib/cloudflare/tokens";
 
@@ -19,7 +19,10 @@ function published(type: string, name: string, content: string, extra: Partial<C
   return { id: (++n).toString(16).padStart(32, "0"), type, name, content, proxied: false, ttl: 1, priority: null, comment: null, ...extra };
 }
 
-const webAndMailcow = seededPolicy().profiles.find((candidate) => candidate.id === "web-mailcow")!;
+const webAndMailcow = composeProfiles(
+  seededPolicy().profiles.find((candidate) => candidate.id === "web")!,
+  mailcowSeededProfile(),
+)!;
 
 describe("rendering a profile for a site", () => {
   test("the Web and Mailcow preset gives an apex site every record, wildcard and webmail included", () => {
