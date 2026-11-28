@@ -8,5 +8,9 @@ export function autoSslCheck(autoSsl: boolean): SetupCheck {
 }
 
 export const PANEL_TWEAKS_SETUP: SetupStep[] = [
-  { id: "auto-ssl", level: "provision", title: "Certificate at site creation", href: "/addons/panel-tweaks/#pt-sites", check: () => autoSslCheck(readTweaks(DEFAULT_PANEL_TWEAKS_PATHS).autoSsl) },
+  {
+    id: "auto-ssl", level: "sites", title: "Certificate at site creation", href: "/addons/panel-tweaks/#pt-sites",
+    why: "Requests a Let's Encrypt certificate automatically right after CloudPanel creates a new site.",
+    check: () => autoSslCheck(readTweaks(DEFAULT_PANEL_TWEAKS_PATHS).autoSsl),
+  },
 ];

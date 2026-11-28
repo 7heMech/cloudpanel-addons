@@ -21,10 +21,8 @@ const CHANGES: Record<string, WebVerb<"dns">> = {
   "/api/panel-host": "set-panel-host",
   "/api/records/remove": "remove-records",
   "/api/records/forget": "forget-records",
-  "/api/redirects": "save-redirect",
-  "/api/redirects/delete": "delete-redirect",
-  "/api/redirects/find": "find-redirects",
-  "/api/redirects/take-over": "take-over",
+  "/api/domains": "add-domain",
+  "/api/domains/remove": "remove-domain",
 };
 
 /**
@@ -60,6 +58,10 @@ export async function handle(
     if (!domain) return jsonResponse({ ok: false, error: "invalid domain" }, { status: 400 });
     if (!auth?.user) return jsonResponse({ ok: false, error: "not found" }, { status: 404 });
     const result = await dnsService.siteStatus(domain, auth.roles.includes("ROLE_ADMIN") ? undefined : auth.user);
+    return jsonResponse(result, { status: result.ok ? 200 : 400 });
+  }
+  if (req.method === "GET" && path === "/api/panel-host-helper") {
+    const result = await dnsService.panelHostHelper();
     return jsonResponse(result, { status: result.ok ? 200 : 400 });
   }
   if (req.method === "GET" && path === "/") {

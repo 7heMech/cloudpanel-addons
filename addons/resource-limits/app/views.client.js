@@ -116,7 +116,7 @@ async function saveCategory() {
     profile: profile,
   }, id
     ? 'Saved. Every site in this category now runs these limits.'
-    : 'Category created. Assign sites to it below.');
+    : 'Category created. Assign sites to it in PHP sites.');
 }
 
 async function deleteCategory(button) {

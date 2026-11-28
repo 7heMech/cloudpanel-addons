@@ -4,7 +4,7 @@ import type { Server } from "bun";
 import { chmodSync, chownSync, existsSync, readFileSync, unlinkSync } from "node:fs";
 import { execFileSync } from "node:child_process";
 import { userInfo } from "node:os";
-import { ADDONS, ADDON_NAMES, addonHandler, addonEnabled } from "../addons/catalog";
+import { ADDONS, ADDON_NAMES, addonHandler, addonEnabled, offeredAddonNames } from "../addons/catalog";
 import { MANAGER_UNIT, PANEL_GROUP, SERVICE_USER, SOCKET_PATH } from "../lib/paths";
 import { CLI_VERSION } from "../lib/version";
 import { fatal, log } from "../lib/log";
@@ -15,8 +15,10 @@ import { adminGate, authenticateRequest } from "../lib/sso-auth";
 import { refreshPanelLogos } from "../lib/panel-logos";
 import { checkCliUpdate } from "../lib/update-check";
 import { handleManagerRoute } from "./index";
-import { latestManagerJobView, panelHolds, seenNews } from "./service";
-import { indexPage, updatePage } from "./views";
+import { latestManagerJobView, panelHolds, seenNews, setupAction } from "./service";
+import { applyRequestOrigin, proxyHostFromRequest } from "./setup";
+import { indexPage, setupErrorPage, setupPage, updatePage } from "./views";
+import { PANEL_USER_NAME_RE } from "../lib/panel-users";
 
 function internalPath(path: string): string {
   if (path === "/addons" || path === "/addons/") return "/";
@@ -97,11 +99,25 @@ export async function handleRequest(req: Request, server: Server<unknown>): Prom
   if (path === "/update" && req.method === "GET") {
     return updatePage(update, CLI_VERSION, { job: await latestManagerJobView(), csrf: newCsrfToken() });
   }
+  if ((path === "/setup" || path === "/setup/") && req.method === "GET") {
+    const user = gate.auth?.user ?? "";
+    const csrf = newCsrfToken();
+    const job = await latestManagerJobView();
+    if (!PANEL_USER_NAME_RE.test(user)) {
+      return setupErrorPage("No panel user for this session.", notice, { status: 400, job, csrf });
+    }
+    const result = await setupAction(user, [], true);
+    if (!result.ok || !result.data) {
+      return setupErrorPage(result.ok ? "Setup checks returned no answer." : result.error, notice, { status: 502, job, csrf });
+    }
+    const view = applyRequestOrigin(result.data, proxyHostFromRequest(req));
+    return setupPage(view, notice, { job, csrf });
+  }
   if (path === "/") {
     const enabled = ADDON_NAMES.filter((name) => addonEnabled(ADDONS[name]!));
     const [job, news, holds] = await Promise.all([latestManagerJobView(), seenNews(), panelHolds()]);
     return indexPage(enabled, notice, {
-      available: ADDON_NAMES.filter((name) => !enabled.includes(name)),
+      available: offeredAddonNames().filter((name) => !enabled.includes(name)),
       job,
       holds,
       ...news,

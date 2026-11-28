@@ -1,4 +1,4 @@
-import { dashboardUrl, migrateOldAddonNames, resolveAddon } from "./addons";
+import { dashboardUrl, migrateOldAddonNames, resolveEnableable, revertAddonRenames } from "./addons";
 import { enabledAddons } from "../addons/catalog";
 import { artifactNames, installArtifacts, installedTag } from "./artifacts";
 import { bootstrapProvision, applyEnable } from "./toggle";
@@ -11,7 +11,7 @@ import { ensureDirs, ensureRequiredUnits, ensureServiceUser } from "./provision"
 import { CLI_VERSION } from "../lib/version";
 import { loadLocal } from "./release";
 import { fatal, log, requireRoot } from "../lib/log";
-import { CLOUDPANEL_RANGE, describeRange, panelVersion, rangeFit } from "../lib/cloudpanel-version";
+import { CLOUDPANEL_RANGE, describeRange, rangeFit, readPanelVersion, unplacedPanelVersion } from "../lib/cloudpanel-version";
 import { parseFlags } from "./flags";
 import { changeLock, lockFailure, type LockFiles } from "../lib/lock-addon";
 
@@ -27,16 +27,23 @@ export async function cmdInstall(argv: string[]): Promise<void> {
   if (unknown) fatal(`install does not take --${unknown}${unknown === "version" ? "; change version with clp-addons update --version" : ""}`);
   const local = flags.local;
   if (typeof local !== "string") fatal("install is what install.sh runs; turn addons on with clp-addons enable <addon>");
-  const specs = [...new Set(positional)].map(resolveAddon);
+  const specs = [...new Set(positional)].map((name) => resolveEnableable(name));
   return withOperationLock(`install ${positional.join(", ") || "clp-addons"}`, async () => {
     warnOutsidePanelRange();
     // Read before anything is installed, so a re-run of the installer is not mistaken for a first one.
     const fresh = freshBox();
+    let artifactsInstalled = false;
     // Re-running the installer on an older box must not leave a renamed addon behind until repair.
-    migrateOldAddonNames();
-    lockNewInstall(fresh);
-    applyLocal(specs.shift(), local);
-    for (const spec of specs) await applyEnable(spec.name);
+    const renames = migrateOldAddonNames();
+    try {
+      lockNewInstall(fresh);
+      applyLocal(specs.shift(), local, () => { artifactsInstalled = true; });
+      for (const spec of specs) await applyEnable(spec.name);
+    } catch (error) {
+      // Once installArtifacts replaces the CLI binary, rolling back state migrations would leave the new CLI with legacy-only settings.
+      if (renames.length && !artifactsInstalled) revertAddonRenames(renames);
+      throw error;
+    }
     log.plain();
     if (!enabledAddons().some((spec) => spec.name === "system-tweaks")) {
       log.plain("System Tweaks is recommended: it applies the security fixes. Enable it on the Addons page or with: clp-addons enable system-tweaks");
@@ -84,17 +91,18 @@ export function lockNewInstall(fresh: boolean, files?: LockFiles): boolean {
  * most on exactly the box that is behind or ahead.
  */
 function warnOutsidePanelRange(): void {
-  const installed = panelVersion();
+  const reading = readPanelVersion();
+  const installed = reading.version;
   const fit = rangeFit(installed);
   if (fit === "within") return;
   const range = describeRange(CLOUDPANEL_RANGE);
-  if (fit === "unknown") return log.warn(`could not read the CloudPanel version; this release supports CloudPanel ${range}`);
+  if (fit === "unknown") return log.warn(`${unplacedPanelVersion(reading)}; this release supports CloudPanel ${range}`);
   log.warn(fit === "below"
     ? `CloudPanel ${installed} is older than this release supports (${range}); update CloudPanel with clp-update`
     : `CloudPanel ${installed} is newer than this release was checked against (${range}); a CloudPanel page that changed stays unpatched until a release supports it, and clp-addons status lists it`);
 }
 
-function applyLocal(spec: AddonSpec | undefined, dir: string): void {
+function applyLocal(spec: AddonSpec | undefined, dir: string, onInstalled?: () => void): void {
   if (spec) ensureRequiredUnits(spec);
   const installed = enabledAddons();
   const wasEnabled = installed.some((item) => item.name === spec?.name);
@@ -104,6 +112,7 @@ function applyLocal(spec: AddonSpec | undefined, dir: string): void {
   ensureDirs(specs, true);
   recordNewsSince(installedTag());
   installArtifacts(artifacts, CLI_VERSION.replace(/^v/, ""));
+  onInstalled?.();
   bootstrapProvision(specs);
   if (!spec) return log.ok("clp-addons installed");
   spec.activate?.(wasEnabled);

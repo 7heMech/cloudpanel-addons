@@ -81,11 +81,26 @@ function submitToken(target, data) {
   form.submit();
 }
 
+// Each dashboard refresh gets a ticket so an older response cannot replace a newer one.
+let dashboardAsked = 0;
+// Authoritative defaults from the last successful save until a dashboard repaint catches up.
+let savedDefaults = null;
+
+function repaintDashboard(html, ticket) {
+  if (!html || ticket !== dashboardAsked) return false;
+  repaintView(CLP_ROOT.getElementById('wp-dashboard'), html);
+  savedDefaults = null;
+  if (defaultFound.length) paintDefaultResults();
+  return true;
+}
+
 // Make a change, then repaint everything below the heading from the server's
 // answer, so a row that failed or that the change did not reach shows as it is.
 async function change(path, body, describe) {
   clearNotice();
   busy(true);
+  // Any dashboard refresh already in flight predates this change.
+  ++dashboardAsked;
   let reply;
   let failure = '';
   let html = '';
@@ -95,13 +110,17 @@ async function change(path, body, describe) {
   } catch (error) {
     failure = error.message;
   }
+  if (!failure && reply && reply.data && reply.data.pluginDefaults) {
+    savedDefaults = reply.data.pluginDefaults;
+  }
+  const ticket = ++dashboardAsked;
   try {
     html = (await call('/api/dashboard')).data.html;
   } catch (error) {
-    stale = error.message;
+    if (ticket === dashboardAsked) stale = error.message;
   }
   busy(false);
-  if (html) repaintView(CLP_ROOT.getElementById('wp-dashboard'), html);
+  repaintDashboard(html, ticket);
   followJobs();
   if (failure) {
     notify(failure, 'error');
@@ -137,6 +156,161 @@ async function setNewSiteManagers(input) {
       ? 'Site managers now see the Plugins row on CloudPanel\'s New WordPress Site form, without uploads.'
       : 'Only administrators see the Plugins row on CloudPanel\'s New WordPress Site form now.' };
   })) input.checked = !siteManagers;
+}
+
+// --- the server's default plugins for new sites ------------------------------
+
+const MAX_DEFAULTS = 20;
+let defaultFound = [];
+let defaultTimer = null;
+let defaultAsked = 0;
+// Each save sends the whole list, so a second one waits for the first to repaint it.
+let defaultSaving = false;
+
+// As the page was last drawn, or from the last save until a dashboard repaint catches up.
+function defaultAutomatic() {
+  if (savedDefaults) return (savedDefaults.automatic || []).slice();
+  const holder = CLP_ROOT.getElementById('wp-default-list');
+  return holder ? (holder.dataset.automatic || '').split(' ').filter(Boolean) : [];
+}
+
+function defaultPlugins() {
+  if (savedDefaults) {
+    const automatic = savedDefaults.automatic || [];
+    return (savedDefaults.server || []).map(function (plugin) {
+      return {
+        slug: plugin.slug,
+        name: plugin.name,
+        activate: Boolean(plugin.activate),
+        automatic: automatic.indexOf(plugin.slug) !== -1,
+      };
+    });
+  }
+  return Array.prototype.map.call(CLP_ROOT.querySelectorAll('#wp-default-list > li[data-slug]'), function (row) {
+    return { slug: row.dataset.slug, name: row.dataset.name, activate: row.hasAttribute('data-activate'), automatic: row.hasAttribute('data-automatic') };
+  });
+}
+
+// A plugin automation now installs on every new site cannot be a default, so it goes with the next save.
+async function saveDefaults(plugins, text) {
+  const kept = plugins.filter(function (plugin) { return !plugin.automatic; }).map(function (plugin) {
+    return { slug: plugin.slug, name: plugin.name, activate: plugin.activate };
+  });
+  defaultSaving = true;
+  paintDefaultResults();
+  let done = false;
+  try {
+    done = await change('/api/new-site-defaults', { plugins: kept }, function () { return { text: text }; });
+  } finally {
+    defaultSaving = false;
+  }
+  paintDefaultResults();
+  return done;
+}
+
+async function setDefaultActivate(input) {
+  const row = input.closest('li');
+  if (defaultSaving) {
+    input.checked = !input.checked;
+    return;
+  }
+  const saved = await saveDefaults(defaultPlugins().map(function (plugin) {
+    return plugin.slug === row.dataset.slug ? Object.assign({}, plugin, { activate: input.checked }) : plugin;
+  }), input.checked ? row.dataset.name + ' is activated on new sites.' : row.dataset.name + ' is installed inactive on new sites.');
+  // A repaint draws it from what was saved; without one, it goes back to what it was.
+  if (!saved && input.isConnected) input.checked = !input.checked;
+}
+
+function removeDefault(button) {
+  if (defaultSaving) return;
+  const row = button.closest('li');
+  saveDefaults(defaultPlugins().filter(function (plugin) { return plugin.slug !== row.dataset.slug; }),
+    row.dataset.name + ' is no longer a default plugin.');
+}
+
+function addDefault(plugin) {
+  if (defaultSaving) return;
+  const plugins = defaultPlugins();
+  if (plugins.filter(function (entry) { return !entry.automatic; }).length >= MAX_DEFAULTS) {
+    notify('A new site takes at most ' + MAX_DEFAULTS + ' plugins.', 'error');
+    return;
+  }
+  saveDefaults(plugins.concat([{ slug: plugin.slug, name: plugin.name, activate: true }]), plugin.name + ' is a default plugin now.');
+}
+
+function paintDefaultResults() {
+  const results = CLP_ROOT.getElementById('wp-default-results');
+  const search = CLP_ROOT.getElementById('wp-default-search');
+  if (!results || !search) return;
+  const chosen = defaultPlugins().map(function (plugin) { return plugin.slug; });
+  const automaticSlugs = defaultAutomatic();
+  results.textContent = '';
+  defaultFound.forEach(function (plugin) {
+    const row = document.createElement('li');
+    row.setAttribute('role', 'presentation');
+    const pick = document.createElement('button');
+    pick.type = 'button';
+    pick.className = 'wp-default-result';
+    pick.setAttribute('role', 'option');
+    const name = document.createElement('span');
+    name.className = 'wp-plugin-name';
+    name.textContent = plugin.name;
+    const meta = document.createElement('span');
+    meta.className = 'wp-note';
+    meta.textContent = plugin.author ? 'by ' + plugin.author : '';
+    const automatic = automaticSlugs.indexOf(plugin.slug) !== -1;
+    const added = chosen.indexOf(plugin.slug) !== -1;
+    const state = document.createElement('span');
+    state.className = 'wp-default-add';
+    state.textContent = automatic ? 'Automatic' : added ? 'Added' : 'Add';
+    if (automatic) state.title = "Installed on every new site by WordPress Tools' automation";
+    pick.append(name, meta, state);
+    pick.disabled = automatic || added || defaultSaving;
+    pick.addEventListener('click', function () { addDefault(plugin); });
+    row.appendChild(pick);
+    results.appendChild(row);
+  });
+  results.hidden = defaultFound.length === 0;
+  search.setAttribute('aria-expanded', defaultFound.length ? 'true' : 'false');
+}
+
+function findDefaultSoon() {
+  clearTimeout(defaultTimer);
+  defaultTimer = setTimeout(findDefault, 350);
+}
+
+async function findDefault() {
+  const search = CLP_ROOT.getElementById('wp-default-search');
+  const term = search ? search.value.trim() : '';
+  const ticket = ++defaultAsked;
+  if (term.length < 2) {
+    defaultFound = [];
+    paintDefaultResults();
+    return;
+  }
+  try {
+    const reply = await call('/api/plugin-search?q=' + encodeURIComponent(term));
+    if (ticket !== defaultAsked) return;
+    defaultFound = reply.data.plugins;
+    if (!defaultFound.length) notify('WordPress.org has no plugin matching “' + term + '”.', 'warn');
+  } catch (error) {
+    if (ticket === defaultAsked) notify(error.message, 'error');
+    return;
+  }
+  paintDefaultResults();
+}
+
+function defaultSearchKey(event) {
+  if (event.key === 'Enter') {
+    event.preventDefault();
+    clearTimeout(defaultTimer);
+    findDefault();
+  }
+  if (event.key === 'Escape' && defaultFound.length) {
+    event.preventDefault();
+    defaultFound = [];
+    paintDefaultResults();
+  }
 }
 
 function syncSummary(data) {
@@ -191,11 +365,12 @@ const JOB_SUMMARIES = {
 };
 
 async function jobFinished(job) {
+  const ticket = ++dashboardAsked;
   let stale = '';
   try {
-    repaintView(CLP_ROOT.getElementById('wp-dashboard'), (await call('/api/dashboard')).data.html);
+    repaintDashboard((await call('/api/dashboard')).data.html, ticket);
   } catch (error) {
-    stale = error.message;
+    if (ticket === dashboardAsked) stale = error.message;
   }
   followJobs();
   if (job.state !== 'done') {
@@ -229,7 +404,7 @@ async function installPlugin(button) {
 async function removeHelpers() {
   const agreed = await confirmAction({
     title: 'Remove the sign-in helper?',
-    text: 'The must-use plugin is deleted from every site it is in. The next sign-in puts it back.',
+    text: 'The sign-in is deleted from every site it is in. The next sign-in puts it back.',
     confirmLabel: 'Remove',
   });
   if (!agreed) return;

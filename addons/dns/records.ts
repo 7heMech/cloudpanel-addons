@@ -9,9 +9,14 @@
  * renders are never read for changes at all.
  */
 import { isIP } from "node:net";
-import type { CfRecord, RecordWrite } from "./cloudflare";
-import { dnsName, PROXIABLE, type Profile, type RecordTemplate } from "./model";
+import { dnsName, wildcardBlocker, wildcardSource } from "../../lib/dns-name";
+import { PROXIABLE, type Profile, type RecordTemplate } from "./model";
+import {
+  normalizeRecordForProvider, type DnsRecord, type ProviderCapabilities, type RecordOp, type RecordWrite,
+} from "./provider";
 import { isSpf, mergeSpf } from "./spf";
+
+export { wildcardSource, type RecordOp };
 
 export interface SiteVars {
   domain: string;
@@ -28,7 +33,7 @@ export interface SiteVars {
 
 type TxtKind = "spf" | "dkim" | "dmarc" | "other";
 
-interface Claim {
+export interface Claim {
   name: string;
   type: string;
   /** For TXT: which values the row speaks for. */
@@ -93,7 +98,7 @@ function contentProblem(type: string, content: string): string | null {
     }
   }
   if (type === "CAA" && !/^\d{1,3}\s+(issue|issuewild|iodef)\s+"?[^"\s]*"?$/i.test(content)) return 'must be flags, tag and value, such as 0 issue "letsencrypt.org"';
-  if (type === "TXT" && content.length > 2048) return "is longer than Cloudflare accepts";
+  if (type === "TXT" && content.length > 2048) return "is longer than 2048 characters";
   return null;
 }
 
@@ -116,7 +121,7 @@ function rowClaims(type: string, name: string, content: string): Claim {
  * The records `profile` wants for one site. SPF rows are returned as written
  * here and merged with what is published once the zone has been read.
  */
-export function renderProfile(profile: Profile, vars: SiteVars, skip?: (name: string, type: string) => boolean): Rendered {
+export function renderProfile(profile: Profile, vars: SiteVars): Rendered {
   const rendered: Rendered = { zone: vars.zone, records: [], claims: [], waitingDkim: [], problems: [] };
   profile.records.forEach((row: RecordTemplate, index) => {
     const where = `Record ${index + 1} (${row.type} ${row.name})`;
@@ -130,7 +135,6 @@ export function renderProfile(profile: Profile, vars: SiteVars, skip?: (name: st
       rendered.problems.push(`${where}: ${name || "its name"} is not a name in the ${vars.zone} zone`);
       return;
     }
-    if (skip?.(name, row.type)) return;
     const unknown = (["ipv4", "ipv6"] as const).find((family) => vars[family] === null && row.content.includes(`{${family}}`));
     if (unknown) {
       rendered.problems.push(`${where}: this server's ${unknown === "ipv4" ? "IPv4" : "IPv6"} address could not be detected; set it under Server addresses`);
@@ -187,26 +191,33 @@ export function renderProfile(profile: Profile, vars: SiteVars, skip?: (name: st
 }
 
 const WEB_TYPES = new Set(["A", "AAAA", "CNAME"]);
+const ADDRESS_TYPES = new Set(["A", "AAAA"]);
 
-/**
- * What a redirect domain wants: its profile's rows, if it has one, without the
- * web rows -- address and CNAME rows at the domain and its `www` -- and a
- * proxied placeholder at each host the redirect answers for, which owns every
- * address and CNAME there. Mail rows and anything else render as for a site.
- */
-export function renderRedirect(profile: Profile | null, hosts: string[], vars: SiteVars, placeholder: string): Rendered {
-  const own = new Set([vars.domain, `www.${vars.domain}`]);
-  const web = (name: string, type: string) => own.has(name) && WEB_TYPES.has(type);
-  const rendered: Rendered = profile ? renderProfile(profile, vars, web) : { zone: vars.zone, records: [], claims: [], waitingDkim: [], problems: [] };
-  for (const host of hosts) {
-    rendered.records.push({ type: "AAAA", name: host, content: placeholder, proxied: true, ttl: 1, priority: null });
-    rendered.claims.push({ name: host, type: "A" }, { name: host, type: "AAAA" });
+/** Resolves proxy flags and Auto TTL against a provider's capabilities before diffing. */
+export function normalizeRenderedForProvider(
+  rendered: Rendered,
+  provider: { capabilities: ProviderCapabilities; defaultTtl: number },
+): Rendered {
+  const records = rendered.records.map((record) => normalizeRecordForProvider(record, provider));
+  const problems = [...rendered.problems];
+  if (!provider.capabilities.autoTtl) {
+    const seenTtl = new Map<string, number>();
+    const reported = new Set<string>();
+    for (const record of records) {
+      const key = `${record.type}|${record.name}`;
+      const prev = seenTtl.get(key);
+      if (prev === undefined) seenTtl.set(key, record.ttl);
+      else if (prev !== record.ttl && !reported.has(key)) {
+        reported.add(key);
+        problems.push(`${record.type} ${record.name} asks for different TTLs (${prev} and ${record.ttl}); PowerDNS requires one TTL per record set`);
+      }
+    }
   }
-  return rendered;
+  return { ...rendered, records, problems };
 }
 
 /** Whether a published record is one of the records `claims` speak for. */
-function claimedBy(record: CfRecord, claims: Claim[]): boolean {
+function claimedBy(record: Pick<DnsRecord, "name" | "type" | "content">, claims: Claim[]): boolean {
   return claims.some((claim) => {
     if (claim.name !== record.name) return false;
     if (claim.type === "CNAME" || record.type === "CNAME") return true;
@@ -216,7 +227,7 @@ function claimedBy(record: CfRecord, claims: Claim[]): boolean {
   });
 }
 
-export function sameRecord(current: CfRecord, wanted: RecordWrite): boolean {
+export function sameRecord(current: Pick<DnsRecord, "type" | "name" | "content" | "proxied" | "ttl" | "priority">, wanted: RecordWrite): boolean {
   if (current.type !== wanted.type || current.name !== wanted.name) return false;
   if (canonical(current.type, current.content) !== canonical(wanted.type, wanted.content)) return false;
   if (PROXIABLE.includes(wanted.type as never) && current.proxied !== wanted.proxied) return false;
@@ -225,29 +236,54 @@ export function sameRecord(current: CfRecord, wanted: RecordWrite): boolean {
   return (current.priority ?? null) === (wanted.priority ?? null);
 }
 
-export interface RecordOp {
-  action: "create" | "update" | "delete";
-  record: RecordWrite;
-  /** The published record an update or delete acts on. */
-  current?: CfRecord;
+function wildcardMatchesAddresses(wildcard: string, wildcardRecords: readonly RecordWrite[], wanted: readonly RecordWrite[]): boolean {
+  const candidates = wildcardRecords.filter((record) => WEB_TYPES.has(record.type));
+  if (!candidates.length || candidates.length !== wanted.length) return false;
+  const matched = new Set<number>();
+  for (const record of wanted) {
+    const index = candidates.findIndex((candidate, i) => !matched.has(i) && sameRecord(candidate, { ...record, name: wildcard }));
+    if (index < 0) return false;
+    matched.add(index);
+  }
+  return true;
 }
 
 export interface Diff {
   ops: RecordOp[];
   /** Records this site already has exactly as wanted, kept for the orphan inventory. */
-  matched: CfRecord[];
+  matched: DnsRecord[];
   /** The records wanted once SPF is merged, for comparing sites and reporting. */
   wanted: RecordWrite[];
-  /** Every name the profile writes at, wanted or not, which no orphan removal may touch. */
+  /** Every name the profile writes at or relies on, which no orphan removal may touch. */
   names: string[];
+  /** Subdomains whose address records are satisfied by an unobstructed wildcard, mapped to that wildcard. */
+  covered: Record<string, string>;
+  /** Subdomains where a matching wildcard exists in the zone but another record blocks it under RFC 4592. */
+  blockedWildcard: Record<string, { wildcard: string; by: string }>;
   problems: string[];
+}
+
+export interface DiffOptions {
+  /** Whether an unobstructed matching wildcard in the zone satisfies subdomain A/AAAA rows. Defaults to true. */
+  allowWildcard?: boolean;
+  /** Records other sites in the same zone are planning to hold in this run. */
+  zoneRecords?: RecordWrite[];
+  /** Claims of other sites in the same zone, so planned wildcard updates supersede stale published wildcards. */
+  zoneClaims?: Claim[];
 }
 
 const PROTECTED = new Set(["NS", "SOA"]);
 
+function syntheticTxt(name: string): RecordWrite {
+  return { type: "TXT", name, content: "", proxied: false, ttl: 1, priority: null };
+}
+
 /** What it takes to turn `published` into what `rendered` wants, without touching anything it does not claim. */
-export function diffRecords(rendered: Rendered, published: CfRecord[]): Diff {
-  const diff: Diff = { ops: [], matched: [], wanted: [], names: [...new Set(rendered.claims.map((claim) => claim.name))], problems: [...rendered.problems] };
+export function diffRecords(rendered: Rendered, published: DnsRecord[], options: DiffOptions = {}): Diff {
+  const diff: Diff = {
+    ops: [], matched: [], wanted: [], names: [...new Set(rendered.claims.map((claim) => claim.name))],
+    covered: {}, blockedWildcard: {}, problems: [...rendered.problems],
+  };
   for (const record of rendered.records) {
     if (record.type !== "TXT" || !isSpf(record.content)) {
       diff.wanted.push(record);
@@ -263,6 +299,41 @@ export function diffRecords(rendered: Rendered, published: CfRecord[]): Diff {
     diff.wanted.push({ ...record, content: merged.changed ? merged.value : existing[0]!.content });
   }
 
+  if (options.allowWildcard !== false && !diff.problems.length) {
+    const plannedRecords = [...diff.wanted, ...(options.zoneRecords ?? [])];
+    const wildcardClaims = [...rendered.claims, ...(options.zoneClaims ?? [])].filter((claim) => claim.name.startsWith("*."));
+    // For wildcard names claimed in this plan, use the planned wildcard records in place of stale published ones.
+    const effectiveZone: RecordWrite[] = [
+      ...published.filter((record) => !(record.name.startsWith("*.") && claimedBy(record, wildcardClaims))),
+      ...plannedRecords,
+      ...rendered.waitingDkim.map(syntheticTxt),
+    ];
+    const claimedNames = [...new Set(rendered.claims.map((claim) => claim.name))];
+    const coveredNames = new Set<string>();
+    for (const name of claimedNames) {
+      if (name === rendered.zone || !name.endsWith(`.${rendered.zone}`) || name.startsWith("*.")) continue;
+      const claimsAtName = rendered.claims.filter((claim) => claim.name === name);
+      const addressClaims = claimsAtName.filter((claim) => ADDRESS_TYPES.has(claim.type));
+      if (!addressClaims.length) continue;
+      const wantedAddresses = diff.wanted.filter((record) => record.name === name && ADDRESS_TYPES.has(record.type));
+      if (!wantedAddresses.length) continue;
+      const ignore = (record: RecordWrite) => record.name === name && claimedBy(record, addressClaims);
+      const onlyAddresses = claimsAtName.length === addressClaims.length;
+      const source = onlyAddresses ? wildcardSource(name, rendered.zone, effectiveZone, ignore) : null;
+      if (source && wildcardMatchesAddresses(source.wildcard, source.records, wantedAddresses)) {
+        diff.covered[name] = source.wildcard;
+        if (!diff.names.includes(source.wildcard)) diff.names.push(source.wildcard);
+        coveredNames.add(name);
+      } else if (!source) {
+        const blocked = wildcardBlocker(name, rendered.zone, effectiveZone, ignore);
+        if (blocked && wildcardMatchesAddresses(blocked.wildcard, blocked.records, wantedAddresses)) {
+          diff.blockedWildcard[name] = { wildcard: blocked.wildcard, by: `${blocked.by.type} ${blocked.by.name}` };
+        }
+      }
+    }
+    if (coveredNames.size) diff.wanted = diff.wanted.filter((record) => !(coveredNames.has(record.name) && ADDRESS_TYPES.has(record.type)));
+  }
+
   const pool = published.filter((current) => claimedBy(current, rendered.claims) && !rendered.waitingDkim.includes(current.name));
   const blocked = pool.filter((current) => PROTECTED.has(current.type));
   for (const current of blocked) diff.problems.push(`${current.name} has ${current.type} records, which this addon does not replace`);
@@ -273,7 +344,7 @@ export function diffRecords(rendered: Rendered, published: CfRecord[]): Diff {
       diff.problems.push(`${name} is delegated to other nameservers by NS records`);
     }
   }
-  const used = new Set<CfRecord>(blocked);
+  const used = new Set<DnsRecord>(blocked);
 
   const wanted = diff.wanted.map((record) => {
     const kind = record.type === "TXT" ? txtKind(record.content) : null;
@@ -287,8 +358,8 @@ export function diffRecords(rendered: Rendered, published: CfRecord[]): Diff {
   // Exact matches first, then records that differ only in proxy, TTL or priority, then any other: Cloudflare refuses
   // a second record with the same content, so an update must never give one record another's content.
   const passes = [
-    (current: CfRecord, record: RecordWrite) => sameRecord(current, record),
-    (current: CfRecord, record: RecordWrite) => canonical(current.type, current.content) === canonical(record.type, record.content),
+    (current: DnsRecord, record: RecordWrite) => sameRecord(current, record),
+    (current: DnsRecord, record: RecordWrite) => canonical(current.type, current.content) === canonical(record.type, record.content),
     () => true,
   ];
   const updates: RecordOp[] = [];
@@ -304,17 +375,19 @@ export function diffRecords(rendered: Rendered, published: CfRecord[]): Diff {
     });
   }
   const creates: RecordOp[] = unmatched.map(({ record }) => ({ action: "create", record }));
-  const deletes: RecordOp[] = pool.filter((current) => !used.has(current)).map((current) => ({ action: "delete", record: current, current }));
-  // In place first, so a merged SPF is saved before its duplicates go; then what blocks a create.
-  diff.ops = [...updates, ...deletes, ...creates];
+  const allDeletes: RecordOp[] = pool.filter((current) => !used.has(current)).map((current) => ({ action: "delete", record: current, current }));
+  const conflictDeletes = allDeletes.filter((op) => !diff.covered[op.record.name]);
+  const coveredDeletes = allDeletes.filter((op) => Boolean(diff.covered[op.record.name]));
+  // In place first, so a merged SPF is saved before its duplicates go; then conflicts blocking creates, then creates, then wildcard-handoff deletes.
+  diff.ops = [...updates, ...conflictDeletes, ...creates, ...coveredDeletes];
   return diff;
 }
 
 /** One line for a record, as the page shows it. */
-export function describeRecord(record: RecordWrite): string {
+export function describeRecord(record: RecordWrite, options: { proxy?: boolean } = {}): string {
   const parts = [record.content];
   if (record.priority !== null && record.priority !== undefined) parts.push(`priority ${record.priority}`);
-  if (PROXIABLE.includes(record.type as never)) parts.push(record.proxied ? "proxied" : "DNS only");
+  if (options.proxy !== false && PROXIABLE.includes(record.type as never)) parts.push(record.proxied ? "proxied" : "DNS only");
   if (!record.proxied && record.ttl !== 1) parts.push(`TTL ${record.ttl}`);
   return parts.join(" · ");
 }

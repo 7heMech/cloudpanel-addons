@@ -1,10 +1,11 @@
 import { describe, expect, test } from "bun:test";
-import { CloudflareApi, quoteTxt, UnreadableToken, unquoteTxt } from "../addons/dns/cloudflare";
-import { seededPolicy } from "../addons/dns/presets";
+import { CloudflareApi, UnreadableToken } from "../lib/cloudflare/api";
+import { quoteTxt, unquoteTxt } from "../lib/dns-name";
+import { DEFAULT_EDGE_DEFAULTS, EMPTY_EDGE_DEFAULTS } from "../lib/cloudflare/edge";
 import { ProviderError, ProviderHttp } from "../lib/provider-http";
 import { MailcowApi } from "../addons/dns/mailcow";
-import { accessView, connectionPermissions, grants, parseResources, readAccess } from "../addons/dns/access";
-import { PERMISSIONS, tokenTemplate } from "../addons/dns/token";
+import { accessView, connectionPermissions, grants, parseResources, readAccess } from "../lib/cloudflare/access";
+import { PERMISSIONS, tokenTemplate } from "../lib/cloudflare/tokens";
 import { FakeCloudflare, FakeMailcow, MAILCOW_KEY, policy } from "./fixtures/dns-api";
 
 const USER_TOKEN = "cf-user-token-0123456789abcdef";
@@ -297,8 +298,11 @@ describe("a token's own permissions", () => {
     expect(access.coverage.zoneSettings).toBeUndefined();
     expect(access.coverage.waf).toEqual({ held: "yes" });
     expect(access.coverage.configRules).toEqual({ held: "no" });
-    const [web] = seededPolicy().profiles;
-    expect(connectionPermissions({ token: access }, [web!]).missing).toEqual(["Zone: Edit", "Account Settings: Read", "Single Redirect: Edit", "Config Rules: Edit"]);
+    expect(connectionPermissions({ token: access }, DEFAULT_EDGE_DEFAULTS, { includeDns: true, includeEdge: true }).missing)
+      .toEqual(["Zone: Edit", "Account Settings: Read", "Config Rules: Edit"]);
+    // For DNS alone, Config Rules: Edit is optional (belongs to Firewall's Cloudflare edge), and Single Redirect to Redirects.
+    expect(connectionPermissions({ token: access }, DEFAULT_EDGE_DEFAULTS, { includeDns: true, includeEdge: false }).missing)
+      .toEqual(["Zone: Edit", "Account Settings: Read"]);
   });
 
   test("missing and partial permissions are named, a deny wins, and reach is described", () => {
@@ -386,11 +390,11 @@ describe("a token's own permissions", () => {
     };
     try {
       const token = readAccess({ owner: "user", accountId: null }, [{ allow: true, permissions: ["DNS Write"], resources: [{ account: "*", zone: "*" }] }], { zones: [], accounts: [] });
-      const view = accessView({ token }, [])!;
+      const view = accessView({ token }, EMPTY_EDGE_DEFAULTS)!;
       expect(view.rows.find((row) => row.label === "Firewall Services: Edit")).toEqual({ label: "Firewall Services: Edit", usedFor: "Cloudflare bans for login jails", held: "no", optional: true });
-      expect(connectionPermissions({ token }, []).missing).not.toContain("Firewall Services: Edit");
-      expect(tokenTemplate([]).permissions).not.toContain("Firewall Services: Edit");
-      const unreadable = accessView({ token: { owner: "user", accountId: null, readable: false, reason: "no" } }, [])!;
+      expect(connectionPermissions({ token }, EMPTY_EDGE_DEFAULTS).missing).not.toContain("Firewall Services: Edit");
+      expect(tokenTemplate(EMPTY_EDGE_DEFAULTS).permissions).not.toContain("Firewall Services: Edit");
+      const unreadable = accessView({ token: { owner: "user", accountId: null, readable: false, reason: "no" } }, EMPTY_EDGE_DEFAULTS)!;
       expect(unreadable.rows.at(-1)).toMatchObject({ optional: true, held: "unknown" });
     } finally {
       delete permissions.jails;
@@ -399,22 +403,24 @@ describe("a token's own permissions", () => {
 
   test("a refusal wins over a permission the policies say is held", () => {
     const token = readAccess({ owner: "user", accountId: null }, [{ allow: true, permissions: ["DNS Write", "Zone Settings Write"], resources: [{ account: "*", zone: "*" }] }], { zones: [], accounts: [] });
-    const [web] = seededPolicy().profiles;
-    const view = accessView({ token, refused: ["Zone Settings: Edit"] }, [web!])!;
+    const view = accessView({ token, refused: ["Zone Settings: Edit"] }, DEFAULT_EDGE_DEFAULTS, { includeDns: false, includeEdge: true })!;
     expect(view.rows.find((row) => row.label === "Zone Settings: Edit")).toMatchObject({ held: "no", detail: "Refused by Cloudflare" });
-    expect(connectionPermissions({ token, refused: ["Zone Settings: Edit"] }, [web!]).missing).toContain("Zone Settings: Edit");
+    expect(connectionPermissions({ token, refused: ["Zone Settings: Edit"] }, DEFAULT_EDGE_DEFAULTS, { includeDns: false, includeEdge: true }).missing).toContain("Zone Settings: Edit");
   });
 
-  test("the Panel gate's permissions are optional for DNS", () => {
+  test("Firewall's Panel gate and Cloudflare edge permissions are optional for DNS", () => {
     const token = readAccess({ owner: "user", accountId: null }, [{ allow: true, permissions: ["DNS Write"], resources: [{ account: "*", zone: "*" }] }], { zones: [], accounts: [] });
-    const gate = accessView({ token }, [])!.rows.filter((row) => row.usedFor === "Firewall's Panel gate");
+    const rows = accessView({ token }, DEFAULT_EDGE_DEFAULTS)!.rows;
+    const gate = rows.filter((row) => row.usedFor === "Firewall's Panel gate");
     expect(gate.map((row) => [row.label, row.optional])).toEqual([
       ["SSL and Certificates: Edit", true], ["Access: Apps and Policies: Edit", true], ["Access: Organizations, Identity Providers, and Groups: Edit", true],
     ]);
-    const missing = connectionPermissions({ token }, []).missing;
-    for (const [label] of gate.map((row) => [row.label])) {
-      expect(missing).not.toContain(label!);
-      expect(tokenTemplate([]).permissions).not.toContain(label!);
+    const edgeRows = rows.filter((row) => ["Zone Settings: Edit", "Config Rules: Edit", "Zone WAF: Edit"].includes(row.label));
+    expect(edgeRows.every((row) => row.optional === true)).toBe(true);
+    const missing = connectionPermissions({ token }, DEFAULT_EDGE_DEFAULTS).missing;
+    for (const label of [...gate, ...edgeRows].map((row) => row.label)) {
+      expect(missing).not.toContain(label);
+      expect(tokenTemplate(DEFAULT_EDGE_DEFAULTS).permissions).not.toContain(label);
     }
   });
 });

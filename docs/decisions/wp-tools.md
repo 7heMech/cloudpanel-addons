@@ -109,17 +109,20 @@ time and bounded error text. Pending sites are handled on subsequent passes.
 Every Varnish route remains administrator-only; the sign-in route's role
 exception does not grant plugin-management access.
 
-The page opens with one sites table -- Site, CLP Varnish Cache, MainWP Child,
-Sign in -- since sign-in is the most-used action and the one the addon started
-with; each status has its Install, Activate, Connect or Retry beside it, on one
-line on a wide screen, so the table spreads across the page instead of stacking
-each cell. A site that has not been checked shows Not checked and no button:
-until a check says the plugin is missing or inactive, Install is a guess, and
-the same holds for MainWP's Connect. With a Dashboard on this server the table
-also gets a selection column and **Connect selected to MainWP** and **Connect
-all unconnected** above it, for sites checked or not; see Background jobs. On a
-phone the two batch buttons share a line under shorter labels. The two automation policies are set once, so they share one card
-below the table. A row has no automation switch of its own: Varnish automation
+The page uses the shared `.section-shell` to split Sites, New sites, and
+Settings, with active Varnish and MainWP job progress cards shown above the
+tabs so background work stays visible from any section. Sites opens with one
+sites table -- Site, CLP Varnish Cache, MainWP Child, Sign in -- since sign-in
+is the most-used action and the one the addon started with; each status has its
+Install, Activate, Connect or Retry beside it, on one line on a wide screen, so
+the table spreads across the page instead of stacking each cell. A site that has
+not been checked shows Not checked and no button: until a check says the plugin
+is missing or inactive, Install is a guess, and the same holds for MainWP's
+Connect. With a Dashboard on this server the table also gets a selection column
+and **Connect selected to MainWP** and **Connect all unconnected** above it, for
+sites checked or not; see Background jobs. On a phone the two batch buttons
+share a line under shorter labels. The two automation policies and CloudPanel's
+pages switches live under Settings. A row has no automation switch of its own: Varnish automation
 acts only on a site it has never seen, so a listed site has normally been
 handled by a pass already, and MainWP automation acts on every site. The
 page draws only controls that do something: the MainWP column and switch
@@ -139,26 +142,44 @@ first load and the page never reloads.
 
 ## What is in the site
 
-A must-use plugin and a one-time secret, both written and removed as the site's
-own user through `runuser`, never by root, which would follow any symlink the
-site's user put in the path.
+One must-use plugin, listed as Hosting Tools, "Automated management and
+security for WordPress.": the loader `mu-plugins/hosting-tools.php` and, in
+`mu-plugins/hosting-tools`, its modules `sign-in.php` and, while MainWP is
+enforced, `guard.php`, with the sign-in's one-time secret `token.php`. The name
+says what it is for, not which tool wrote it. Everything is written and removed
+as the site's own user, through `runuser` or the MainWP adapter, never by root,
+which would follow any symlink the site's user put in the path.
+
+WordPress lists and auto-loads only the PHP files directly inside `mu-plugins`,
+so the loader is the one entry. It includes `sign-in.php` and `guard.php` by
+name when present, never anything else in the folder. The loader and both
+modules exit when requested over HTTP rather than loaded by WordPress, and
+`token.php` prints nothing. The loader is written whenever a module is, left
+alone when unchanged, and removed with the last module only when `hosting-tools`
+is empty and `hosting-tools.php` is still our regular loader file, so Remove
+leaves it while the guard is there and leaves any unrelated site files
+untouched. Writing the sign-in removes the earlier sign-in
+(`clp-addons-login.php` and its `clp-addons` folder), writing the guard removes
+both earlier plugins (including `clp-addons-mainwp.php`), and removing a module
+removes its own earlier counterpart, so withdrawing the addon removes all three
+from every site. The page counts either sign-in as a helper, so Remove cleans
+both.
 
 Must-use rather than a normal plugin because it has to be there when the request
 arrives, must not be something a site owner can deactivate by accident, and
 because WordPress loads it before the plugins that would otherwise redirect an
 anonymous request away.
 
-The plugin is inert on every request but one: with no secret file on disk it
+The sign-in is inert on every request but one: with no secret file on disk it
 returns immediately. The secret exists only between the operator pressing the
-button and the browser arriving -- at most a minute -- and the plugin removes it
+button and the browser arriving -- at most a minute -- and the module removes it
 before it compares it, so a failed attempt spends it too. It holds a SHA-256 of
 the token, never the token.
 
-It lives in a subdirectory of `mu-plugins`, because WordPress auto-loads every
-PHP file directly inside that directory and a data file that is also a plugin
-would run on every request. It is a `.php` file rather than plain data so that a
-request for it over HTTP executes it and prints nothing, instead of serving its
-contents to whoever asked.
+The secret is in the modules' folder because a data file that is also a plugin
+would run on every request, and the loader never includes it. It is a `.php`
+file rather than plain data so that a request for it over HTTP executes it and
+prints nothing, instead of serving its contents to whoever asked.
 
 The token reaches the site in a POST body to `/wp-login.php`, not a query string
 or the root URL: a single-use secret in a URL is still a secret in the site's
@@ -177,9 +198,9 @@ set no policy, so their links open a blank window. Either way the window's
 `opener` is cut before the form is submitted, so a page on the site cannot send
 the panel's tab elsewhere.
 
-The site user creates `mu-plugins/clp-addons` itself, so every directory it adds
-is that user's. A missing `wp-includes` or `wp-content` is a refusal rather than
-something to invent.
+The site user creates `mu-plugins/hosting-tools` itself, so every directory it
+adds is that user's. A missing `wp-includes` or `wp-content` is a refusal rather
+than something to invent.
 
 The sign-in is for the site's first administrator by user id. Which
 administrator an operator becomes is not a choice this offers, because the
@@ -430,20 +451,25 @@ the next pass or Retry resumes it, undoing first its own registration the
 Dashboard never recorded. With automation off, a phase left by a crash is
 reported as interrupted, after its setting is restored.
 
-A connected site gets a guard, `clp-addons-mainwp.php` in `mu-plugins`, written
-and removed as the site's user through the adapter. It hides MainWP Child from
-the Plugins list, refuses `deactivate_plugin` for it, removes the Child's
-settings page and drops its Disconnect post, so a site administrator cannot
-undo the connection between passes. A site whose `wp-config.php` moves the
-must-use folder reports that instead, since the guard would not load. WP-CLI and the Dashboard's own requests are
-unaffected, so checks see the site as it is. The guard is beside the Child, not
-the Child itself as a must-use plugin: the Child sets itself up in an activation
-hook and finds its own path in the plugins directory, and WordPress does not
-update must-use plugins, so the Dashboard could no longer update it. Deletion
-over SSH or SFTP is not something WordPress can stop; the next pass puts the
-Child back. Once nothing enforces the connection -- automation paused, cleanup,
-a Dashboard elsewhere or none usable -- the next passes remove each guard. Withdrawing the
-addon removes them without WordPress, as it removes the sign-in helper.
+A connected site gets the guard, the Hosting Tools module `guard.php` (see What
+is in the site), written and removed as the site's user through the adapter. It
+hides MainWP Child from the Plugins list, refuses `deactivate_plugin` for it,
+removes the Child's settings page and drops its Disconnect post, so a site
+administrator cannot undo the connection between passes. A site whose
+`wp-config.php` moves the must-use folder reports that instead, since the guard
+would not load. WP-CLI and the Dashboard's own requests are unaffected, so
+checks see the site as it is. The guard is beside the Child, not the Child
+itself as a must-use plugin: the Child sets itself up in an activation hook and
+finds its own path in the plugins directory, and WordPress does not update
+must-use plugins, so the Dashboard could no longer update it. Deletion over SSH
+or SFTP is not something WordPress can stop; the next pass puts the Child back.
+The adapter's status digests the guard, the loader and an earlier release's
+guard, so while enforcing a pass rewrites a guard whose loader went and
+replaces an earlier release's guard before contacting the Dashboard, even while
+the Dashboard is unavailable or the site is not connected. Once nothing enforces the connection --
+automation paused, cleanup, a Dashboard elsewhere or none usable -- the next
+passes remove each guard. Withdrawing the addon removes them without WordPress,
+as it removes the sign-in helper.
 
 A connection the addon takes over is never in its snapshot, so cleanup leaves
 that Child disconnected rather than handing it back to the other Dashboard. A
@@ -489,7 +515,9 @@ since. Moving to a Dashboard elsewhere requires cleaning up the connections the
 addon made; moving back does not, since an installed Child belongs to no
 Dashboard.
 
-MainWP has its own lock, separate from Varnish and sign-in. While enforcing,
+MainWP has its own lock, separate from Varnish and sign-in; Remove and disable
+take it before the sign-in lock so helper removal cannot race with a guard
+write. While enforcing,
 the queued pass looks at every site, least recently checked first; otherwise
 only at unseen sites, unfinished phases, guards to remove, pending cleanup and
 retired records. It starts sites for 25 seconds; Check now, connections and cleanup
@@ -557,16 +585,18 @@ WordPress Tools' rather than Panel Tweaks' or DNS's because it puts code into a
 customer's site, which is what this addon exists to keep separate, and it is
 built from this addon's parts: the site discovery and account refusals, the
 WP-CLI runner and the job store. It is a choice per site, made where the site
-is made; a set every new site gets would be a policy on this page instead.
+is made. Defaults only fill the row in (see Defaults): a site created without
+the form, such as with `clpctl`, gets nothing from them.
 
 CLP Varnish Cache and MainWP Child are not offered while their automation is
-on: search lists them as installed automatically, and root refuses a choice that
+on: search marks them **Automatic**, and root refuses a choice that
 names either, by slug, when it is recorded. Each then has one owner, so the
 form's job and the policy's check never install it at once, MainWP's cleanup
 still finds the Child its own, and a Varnish plugin chosen inactive is not left
 so by a policy that only installs. MainWP counts as on outside cleanup. Turned
 on after a choice is recorded, a policy finds its plugin already there and
-treats it as it would one installed by hand.
+treats it as it would one installed by hand. Defaults are held to the same
+rule.
 
 ### Recorded before the site exists
 
@@ -669,9 +699,10 @@ that form from its header, and shows every running job with the shared progress 
 failures included, for the seven days a job record is kept.
 
 At most twenty plugins a site. The gateway allows `plugin-upload`,
-`plugin-discard`, `new-site`, `new-site-status`, `new-site-access` and
-`new-site-settings`; `start` does not accept the `new-site-plugins` task, so a
-job can only be recorded with the plan `new-site` validated.
+`plugin-discard`, `new-site`, `new-site-status`, `new-site-access`,
+`new-site-settings` and the three defaults verbs; `start` does not accept the
+`new-site-plugins` task, so a job can only be recorded with the plan
+`new-site` validated.
 
 ### Who may choose
 
@@ -714,8 +745,8 @@ not tell an entry from just before the choice from one just after it. An adminis
 this. The search asks root
 `new-site-access` before it runs, since only root can read the switch and the
 automation policies; an administrator's search asks too, for the policies.
-Uploading, discarding an upload, the switch and every other WP Tools route stay
-behind the gate.
+Uploading, discarding an upload, the switch and every other WP Tools route but
+an account's own defaults (see Defaults) stay behind the gate.
 
 The landing page follows its job through `new-site-status`, which tells a site
 manager only about a job that account recorded, which is the site it just
@@ -729,6 +760,43 @@ account cannot create a site in CloudPanel at all, so for that role plugins woul
 mean installing on an existing site of its own, a different feature with its
 own refusals: root checking `user_sites` as sign-in does, and never this
 form's "a site that does not exist yet".
+
+### Defaults
+
+The row starts from default plugins. The server's default is set in **Default
+plugins** on the **New sites** tab of WordPress Tools. An administrator, or a
+site manager while the switch allows them the row, saves their own from the
+form with **Save as my default**; **Reset to server default** removes it and
+fills the row from the server's. An account's own default is used in place of
+the server's, even an empty one. Both hold WordPress.org plugins only, as slug,
+name and activation, at most twenty: a zip is code chosen for one site, and its
+upload expires in hours. A default changes nothing that is recorded: the form
+still sends a per-site choice, checked as above.
+
+The row's choice is left in the tab's session storage as the form is
+submitted and read back once, so a form CloudPanel sent back keeps what was on
+it, even nothing; any other form starts from the default. A submit made before
+the defaults have answered waits for them, so a form is never sent without
+them.
+
+Both live in root-only `/var/lib/clp-addons/wp-tools/plugin-defaults.json`
+(`0600`, written atomically under its own lock). Accounts are a list of
+CloudPanel user names, since a name may be `__proto__`. The administrator's
+`new-site-defaults` saves the server's, and replaces a file that cannot be
+read, losing the accounts' own. `my-new-site-defaults` and
+`save-my-new-site-defaults`, behind `GET` and `POST /api/my-new-site-defaults`
+in `selfScopedRoutes`, are `own-account`: the gateway names the account from
+the panel session itself, never from the manager or the browser, and root
+requires an active administrator, or an active site manager while the switch
+is on, in CloudPanel's own database. Repair's upkeep drops the default of an account
+CloudPanel no longer has, so a new account of that name starts from the
+server's; a panel that lists no account is taken for a bad read.
+
+A default may not name CLP Varnish Cache or MainWP Child while its automation
+is on. One saved before automation was turned on stays saved: the form shows it
+as **Automatic**, as automation stood when the form loaded, and
+leaves it out of the choice it records and of a default it saves; the WordPress
+Tools page drops it with its next save.
 
 ## New sites
 
@@ -806,6 +874,6 @@ them from running alongside a 15-minute pass.
 
 ## Direction
 
-A later change may let the operator choose plugins every new site gets, with
-setup options for predefined ones such as CLP Varnish Cache and MainWP Child,
-or per-plugin setup.
+A later change may install default plugins on sites created without the form,
+with setup options for predefined ones such as CLP Varnish Cache and MainWP
+Child, or per-plugin setup.

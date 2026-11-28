@@ -56,8 +56,8 @@ export async function retryCertificates(
   for (const [domain, request] of Object.entries(requests)) {
     const site = sites().find((candidate) => candidate.domain === domain);
     const plan = plans.find((candidate) => candidate.domain === domain);
-    // A site that is gone, or that DNS no longer enforces, is no longer DNS's to finish.
-    if (!site || site.id !== request.siteId || plan?.mode !== "enforce" || (request.done && now - request.requestedAt > KEEP_FINISHED)) {
+    // A site that is gone, or whose HTTP role DNS no longer enforces, is no longer DNS's to finish.
+    if (!site || site.id !== request.siteId || plan?.mode !== "enforce" || !plan.httpProfileId || (request.done && now - request.requestedAt > KEEP_FINISHED)) {
       delete requests[domain];
       continue;
     }

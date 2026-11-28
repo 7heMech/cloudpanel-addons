@@ -1,13 +1,13 @@
 import { callGatewayAction, type ActionResult } from "../../../lib/gateway-client";
 import type { WebVerb } from "../../../lib/gateway-protocol";
-import type { DnsReply, ProvisionReply, SiteDnsStatus } from "../action";
+import type { DnsReply, PanelHostHelper, ProvisionReply, SiteDnsStatus } from "../action";
 
 /** Verbs that read Cloudflare and Mailcow wait for them; everything else is a file write. */
-const SLOW = new Set<WebVerb<"dns">>(["check", "confirm", "save-connection", "remove-connection", "save-mailcow", "remove-mailcow", "save-server", "remove-records",
-  "save-redirect", "delete-redirect", "find-redirects", "take-over"]);
+const SLOW = new Set<WebVerb<"dns">>(["check", "confirm", "save-connection", "remove-connection", "save-mailcow", "remove-mailcow", "save-server", "remove-records"]);
 
 export const dnsService = {
   state: (): Promise<ActionResult<DnsReply>> => callGatewayAction("dns", "list"),
+  panelHostHelper: (): Promise<ActionResult<PanelHostHelper>> => callGatewayAction("dns", "panel-host-helper"),
   change: (verb: WebVerb<"dns">, body: unknown): Promise<ActionResult<DnsReply>> =>
     callGatewayAction("dns", verb, [], JSON.stringify(body), { timeout: SLOW.has(verb) ? 300_000 : 120_000 }),
   siteStatus: (domain: string, asUser?: string): Promise<ActionResult<SiteDnsStatus>> =>

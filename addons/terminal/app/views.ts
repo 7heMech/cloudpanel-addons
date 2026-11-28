@@ -20,6 +20,7 @@ export const XTERM_ASSETS = {
   "xterm-6.0.0/xterm.js": "text/javascript; charset=utf-8",
   "xterm-6.0.0/xterm.css": "text/css; charset=utf-8",
   "addon-fit-0.11.0/addon-fit.js": "text/javascript; charset=utf-8",
+  "addon-webgl-0.19.0/addon-webgl.js": "text/javascript; charset=utf-8",
 } as const;
 
 export function layout(
@@ -139,13 +140,10 @@ export function popupPage(domain: string | null): string {
 </div>
 <div class="term-main" id="term-main">
   ${domain === null ? `<div class="term-ended" id="root-auth" hidden>
-    <form class="card" id="root-auth-form" aria-labelledby="root-auth-title">
+    <form class="card" id="root-auth-form" aria-labelledby="root-auth-title" novalidate>
       <h2 id="root-auth-title">Verify to open root terminal</h2>
-      <p>Enter the 6-digit code from your authenticator app.</p>
-      <div class="root-auth-boxes">
-        <input id="root-auth-code" inputmode="numeric" autocomplete="one-time-code" pattern="[0-9]{6}" required aria-label="Authenticator code">
-        <span aria-hidden="true"></span><span aria-hidden="true"></span><span aria-hidden="true"></span><span aria-hidden="true"></span><span aria-hidden="true"></span><span aria-hidden="true"></span>
-      </div>
+      <label class="root-auth-prompt" for="root-auth-code">Enter the 6-digit code from your authenticator app.</label>
+      <input type="text" id="root-auth-code" name="totp" inputmode="numeric" autocomplete="one-time-code" pattern="[0-9]{6}" required placeholder="000000" spellcheck="false" autocapitalize="off" autocorrect="off">
       <p id="root-auth-error" role="alert"></p>
       <button class="btn btn-primary" type="submit">Continue</button>
       <div id="root-auth-passkey" hidden>
@@ -174,9 +172,12 @@ export function popupPage(domain: string | null): string {
     base: BASE,
     css: POPUP_STYLE,
     script: domain === null ? `${WEBAUTHN_JS}\n${POPUP_JS}` : POPUP_JS,
-    head: `<link rel="stylesheet" href="${assets[1]}">
-<script src="${assets[0]}"></script>
+    head: `<link rel="stylesheet" href="${assets[1]}">\n`,
+    // At the end of the body, so the window and its Connecting badge draw
+    // while xterm downloads rather than staying blank.
+    scripts: `<script src="${assets[0]}"></script>
 <script src="${assets[2]}"></script>
+<script src="${assets[3]}"></script>
 `,
   });
 }

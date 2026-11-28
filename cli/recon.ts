@@ -65,7 +65,7 @@ export async function runRecon(): Promise<void> {
     "\n--- cpu flags of interest\n",
     "lscpu 2>/dev/null | tr ',' '\\n' | tr ' ' '\\n' | grep -ixE 'avx|avx2|avx512f|sse4_2' | sort -u",
   ));
-  out(note("no avx2 in that list means you need the baseline bun target"));
+  out(note("on x86_64, no avx2 in that list means you need the baseline bun target"));
   out(await q("nproc"));
   out(await q("free -m"));
   out(await block("\n--- $ df -h / /home /var/lib/docker\n", "df -h / /home /var/lib/docker 2>&1"));

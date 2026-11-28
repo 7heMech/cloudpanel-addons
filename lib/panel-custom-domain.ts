@@ -34,14 +34,23 @@ export function panelCustomDomain(
 export const PANEL_CUSTOM_DOMAIN_CERT = "/etc/nginx/ssl-certificates/custom-domain.crt";
 
 /**
+ * Whether `pem` is a certificate a CA issued for every hostname in `names` and
+ * still valid, as opposed to the self-signed one CloudPanel serves while it
+ * asks Let's Encrypt.
+ */
+export function issuedForAll(pem: string | null, names: string[], now = Date.now()): boolean {
+  if (!pem || !names.length) return false;
+  let cert: X509Certificate;
+  try { cert = new X509Certificate(pem); } catch { return false; }
+  return !cert.checkIssued(cert) && Date.parse(cert.validTo) > now && names.every((name) => cert.checkHost(name) !== undefined);
+}
+
+/**
  * Whether `pem` is a certificate a CA issued for `name` and still valid, as
  * opposed to the self-signed one CloudPanel serves while it asks Let's Encrypt.
  */
 export function issuedFor(pem: string | null, name: string, now = Date.now()): boolean {
-  if (!pem) return false;
-  let cert: X509Certificate;
-  try { cert = new X509Certificate(pem); } catch { return false; }
-  return !cert.checkIssued(cert) && cert.checkHost(name) !== undefined && Date.parse(cert.validTo) > now;
+  return issuedForAll(pem, [name], now);
 }
 
 /** CloudPanel's custom domain, and whether it serves a certificate issued for it. */

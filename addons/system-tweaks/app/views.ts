@@ -1,5 +1,5 @@
 import { esc } from "../../../lib/app-http";
-import { TWEAK_ROW_JS, renderLayout } from "../../../lib/app-ui";
+import { TWEAK_ROW_JS, renderLayout, sectionShellHtml, type SectionTab } from "../../../lib/app-ui";
 import { mountPath } from "../../../lib/mount";
 import type { LockState } from "../../../lib/root-locks";
 import { HARDENING, type SystemTweaksState } from "../registry";
@@ -354,8 +354,66 @@ function lockControl(lock: LockState): string {
   return `<span class="badge st-locked" title="${esc(title)}">Locked by root</span>`;
 }
 
+function updatesAttention(status: UpdatesStatus, now: number): "bad" | "warn" | undefined {
+  if (!status.installed) return "bad";
+  const php = status.coverage.find((row) => row.name === "CloudPanel PHP");
+  const overdue = status.rebootRequired && !status.reboot && now - Date.parse(status.rebootRequired.since) > REBOOT_OVERDUE_DAYS * DAY_MS;
+  if (
+    overdue
+    || status.lastRun?.outcome === "failed"
+    || (status.enabled && !status.listsUpdated)
+    || (status.enabled && status.managed && php && php.covered !== "all")
+    || (!status.enabled && status.managed)
+  ) return "warn";
+  return undefined;
+}
+
+function hardeningAttention(state: SystemTweaksState, lock: LockState): "bad" | "warn" | undefined {
+  if (lock === "damaged") return "bad";
+  if (
+    "error" in state.panelPhp
+    || "error" in state.clpctlGuard
+    || "error" in state.database
+    || Boolean(
+      state.realIp.problem
+      || state.phpMyAdmin.problem
+      || state.phpPools.problem
+      || state.telemetry.problem,
+    )
+  ) return "warn";
+  return undefined;
+}
+
+function jailsAttention(jails: LoginJails): "bad" | "warn" | undefined {
+  if ("error" in jails) return "bad";
+  if (!jails.panel && !jails.ssh) return undefined;
+  if (
+    jails.missing.length
+    || jails.service === "masked"
+    || (jails.panel && (jails.panelLog === null || Boolean(jails.problem) || !jails.running.includes(PANEL_JAIL)))
+    || (jails.ssh && !jails.running.includes("sshd"))
+  ) return "warn";
+  return undefined;
+}
+
 export function dashboardView(state: SystemTweaksState, now = Date.now(), lock: LockState = "unlocked"): string {
   const locked = lock !== "unlocked";
+  const updatesPanel = `
+    <div class="card" id="st-updates">
+      <div class="card-header"><h2>Automatic updates</h2></div>
+      <div class="tweak-list">${updateRows(state.updates, state.settings)}
+      </div>${statusList(state.updates, now)}${coverageDetails(state.updates)}
+    </div>`;
+  const bans = "error" in state.loginJails ? 0 : state.loginJails.bans.length;
+  const backupAttention = state.backupCompression.problem || (state.backupCompression.enabled && !state.backupCompression.active)
+    ? "warn" : undefined;
+  const tabs: SectionTab[] = [
+    { id: "updates", label: "Updates", attention: updatesAttention(state.updates, now), content: updatesPanel },
+    { id: "hardening", label: "Hardening", attention: hardeningAttention(state, lock), content: hardeningCard(state, lock) },
+    { id: "failed-logins", label: "Failed logins", count: bans || undefined, attention: jailsAttention(state.loginJails), content: loginJailsCard(state.loginJails, locked) },
+    { id: "backups", label: "Remote backups", attention: backupAttention, content: backupCompressionCard(state.backupCompression) },
+    { id: "ssh-login", label: "SSH login", content: motdCard(state, locked) },
+  ];
   return `
     <div class="page-heading">
       <div>
@@ -364,9 +422,5 @@ export function dashboardView(state: SystemTweaksState, now = Date.now(), lock: 
         <p class="hint">Every 15 minutes it also clears PHP and ImageMagick temp files that timed-out requests left in /tmp. PHP worker limits and memory sizing are in <a href="/addons/resource-limits/">Resource Limits</a>.</p>
       </div>
     </div>
-    <div class="card" id="st-updates">
-      <div class="card-header"><h2>Automatic updates</h2></div>
-      <div class="tweak-list">${updateRows(state.updates, state.settings)}
-      </div>${statusList(state.updates, now)}${coverageDetails(state.updates)}
-    </div>${backupCompressionCard(state.backupCompression)}${hardeningCard(state, lock)}${loginJailsCard(state.loginJails, locked)}${motdCard(state, locked)}`;
+    ${sectionShellHtml("system-tweaks", "System Tweaks sections", tabs, "updates")}`;
 }

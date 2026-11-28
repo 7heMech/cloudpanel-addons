@@ -25,10 +25,12 @@ panel's own certificate form. An operator who wants a filterable site list
 should not have to install the code that can do that, and a switch is a weaker
 withdrawal than not having it on the box.
 
-The page puts the Sites switches first, since they are the ones an operator
-returns to, with the preview of the Sites page directly under them. The two
-switches that change the whole panel -- its mobile layout and the device theme
-on first visit -- follow as a short group of their own.
+The page uses the shared `.section-shell` to split Sites, Whole panel, and
+Theme & Branding. Sites opens first with its switches and the live preview of
+the Sites page directly under them. Whole panel holds the two switches that
+change the whole panel -- its mobile layout and the device theme on first visit
+-- and Theme & Branding holds its master switch above the logos, CSS, and footer
+editors.
 Measured sizes is nested under the Sites table enhancement
 because the size column is its only visible result. A short branch and smaller
 heading show that relationship, with no divider between the child and parent.
@@ -58,7 +60,10 @@ The toolbar is in that markup rather than created when the reply lands, and it
 is visible from the start whenever the sites-table switch is on. Revealed later
 it pushed the whole table down, which was the largest layout shift on the page.
 The script hides it again on a page whose table it does not recognise and when
-the reply never arrives.
+the reply never arrives. The same stylesheet drops the duplicate horizontal
+padding from CloudPanel's nested `.container-limited-width` on Sites and clears
+`.sites-container`'s top padding so the Sites page matches Dashboard and Addons
+in content width and heading position.
 
 The reply lands after the page is first painted, so the table was drawn as the
 panel's four columns and redrawn with the added ones a frame later. The tab
@@ -230,21 +235,29 @@ Twig draws a status line there, in the shape of CloudPanel's flash messages, and
 the script forgets the domain before any request, so a refresh or Back never
 issues twice. When the DNS addon is installed, the script first asks it to
 write the new site's records (see [DNS](dns.md)). DNS answers with the names its
-records cover -- `www` only where it writes one -- or with why DNS is not ready
-yet, in which case no certificate is requested here and DNS retries as root
-later. The page says so with no link, as there is nothing to do on the SSL/TLS
-tab; a zone waiting for its nameservers gets DNS's own notice, the nameservers
-copyable. Without DNS, or for a site DNS does not manage, the certificate is for
-the created domain alone; the form's default `www` name needs DNS the operator
-may not have. DNS counts as absent only when its session route answers 404 or
-403; when it does not answer, or cannot write the records, nothing is requested
-and the domain is remembered again, so a refresh starts over. The script then
-fetches the native form and posts it for those names. CloudPanel redirects to
-the site's certificate list only on success; anything else shows the panel's
-own error with a link to the site's SSL/TLS tab. The page must stay open until
-it finishes. On Sites, the enhanced table then refetches its data and repaints
-that row's SSL cell. Panel Tweaks itself never retries and never scans existing
-sites.
+records cover (`www` only where it writes one), or with `ready: false` or
+`zoneCreated: true` when DNS is not ready yet or a brand-new zone was just
+created, including a PowerDNS Native zone whose API reports `active` before
+registrar delegation propagates. In either case no certificate is requested from
+the browser and DNS retries as root later. The page says so with no link, as
+there is nothing to do on the SSL/TLS tab; a pending or newly created zone gets
+DNS's own notice (`lib/nameserver-notice.ts`) with copyable nameservers and
+provider-appropriate wording, matching the Admin Settings Custom Domain helper,
+or a delegation warning if no nameservers were returned. Without DNS, or for a
+site DNS does not manage, the certificate is for the created domain alone; the
+form's default `www` name needs DNS the operator may not have. DNS counts as
+absent only when its session route answers 404 or 403; when it does not answer,
+or cannot write the records, nothing is requested and the domain is remembered
+again, so a refresh starts over. The script then fetches the native form and
+posts it for those names. CloudPanel redirects to the site's certificate list
+only on success; anything else shows the panel's own error with a link to the
+site's SSL/TLS tab. The page must stay open until browser issuance finishes. On
+Sites, the enhanced table then refetches its data and repaints that row's SSL
+cell. Panel Tweaks itself never retries and never scans existing sites; when DNS
+is also installed and Automatic, DNS's `sync-sites` pass picks up brand-new
+self-signed sites within fifteen minutes whenever `autoSsl` is enabled so sites
+created through `clpctl` or whose completion tab closed early still get
+automatic retries as root.
 
 ## Nothing moves once it is on the screen
 

@@ -1,46 +1,8 @@
 import { STOCK_PROFILE, type PoolSiteState } from "../action";
 import { esc } from "../../../lib/app-http";
+import { badgeHtml as badge, settingRowHtml as settingRow } from "../../../lib/app-ui";
 import { CONNECTION_MB, type MemoryProfile } from "../memory";
 import type { ResourceMemoryState } from "../memory-settings";
-
-interface Row {
-  key: string;
-  title: string;
-  description: string | string[];
-  /** The switch's state; a row with `control` instead has none. */
-  checked?: boolean;
-  disabled?: boolean;
-  onchange?: string;
-  /** What sits where the switch would, such as a select. */
-  control?: string;
-  extra?: string;
-}
-
-function settingRow(row: Row): string {
-  const note = `tweak-note-${row.key}`;
-  const control = row.control ?? `
-            <label class="switch" title="${esc(row.title)}">
-              <input type="checkbox" data-setting="${esc(row.key)}" onchange="${row.onchange}"${row.checked ? " checked" : ""}
-                ${row.disabled ? "disabled " : ""}aria-label="${esc(row.title)}">
-              <span></span>
-            </label>`;
-  return `
-      <div class="tweak-row">
-        <div class="tweak-body">
-          <div class="tweak-heading">
-            <h3>${esc(row.title)}<button class="tweak-more" type="button" aria-expanded="false"
-              aria-controls="${note}" aria-label="What ${esc(row.title.toLowerCase())} does"
-              onclick="toggleNote(this)"></button></h3>${control}
-          </div>
-          <div class="tweak-note" id="${note}">${[row.description].flat().map((line) => `<p>${esc(line)}</p>`).join("")}</div>${row.extra ?? ""}
-        </div>
-      </div>`;
-}
-
-function badge(text: string, tone: "ok" | "warn" | "bad" | "plain"): string {
-  const state = { ok: " tone-ok", warn: " tone-warn", bad: " tone-bad", plain: "" }[tone];
-  return `<span class="badge${state}">${esc(text)}</span>`;
-}
 
 type Memory = Exclude<ResourceMemoryState, { error: string }>;
 
@@ -80,7 +42,7 @@ function memoryBudget(state: Memory, sites: PoolSiteState[]): string {
   const stock = counted.filter((site) => site.categoryId === null || site.drifted);
   const loose = stock.filter((site) => site.categoryId === null).length;
   const stockMb = stock.reduce((sum, site) => sum + worst(site), 0);
-  const fix = loose === stock.length ? "put them in a category" : loose ? "put them in a category, or back in theirs below" : "put them back below";
+  const fix = loose === stock.length ? "put them in a category" : loose ? "put them in a category, or back in theirs in PHP sites" : "put them back in PHP sites";
   const biggest = [...Map.groupBy(counted.filter((site) => !stock.includes(site)), (site) => site.categoryName ?? "")]
     .map(([name, list]) => [name, list.reduce((sum, site) => sum + worst(site), 0)] as const).sort((a, b) => b[1] - a[1])[0];
   const why = servicesMb >= plan.ramMb

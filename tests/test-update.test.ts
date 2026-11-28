@@ -186,7 +186,11 @@ mock.module("node:fs", () => ({
 
 mock.module("../lib/version", () => ({ CLI_VERSION: "1.2.3", DEV_VERSION: "0.0.0-dev" }));
 const __cloudpanelVersion = await import("../lib/cloudpanel-version");
-mock.module("../lib/cloudpanel-version", () => ({ ...__cloudpanelVersion, panelVersion: () => installedPanel }));
+mock.module("../lib/cloudpanel-version", () => ({
+  ...__cloudpanelVersion,
+  panelVersion: () => installedPanel,
+  readPanelVersion: () => (installedPanel === null ? { version: null, gap: "dpkg has not finished installing it" } : { version: installedPanel, gap: null }),
+}));
 mock.module("../cli/release", () => ({
   resolveRelease: async () => {
     calls.push("resolveRelease");

@@ -11,6 +11,7 @@ import { mountPath } from "../../../lib/mount";
 
 const BASE = mountPath("instatic");
 import type { InstanceView, InstaticJobView } from "./service";
+import { MAIL_HOST, MAIL_PORT } from "../mail-bridge";
 import { isNewerThan, type AvailableTags } from "./tags";
 
 import STYLE from "./views.css" with { type: "text" };
@@ -59,6 +60,14 @@ export function pendingCreations(jobs: InstaticJobView[], instances: InstanceVie
 }
 
 const STATE_LABELS: Record<string, string> = { running: "Running", exited: "Stopped", created: "Created", paused: "Paused" };
+
+/** How a site's Instatic sends mail through this server's Postfix, and so through SMTP Relay. */
+function mailHint(instances: InstanceView[]): string {
+  const behind = instances.filter((i) => i.mail === false).map((i) => i.domain);
+  return `<p class="hint mail-hint">Email goes through this server's Postfix and SMTP Relay. Instatic gets the connector once, when a site
+  is first created, updated or recreated with email and has no email setup; a connector removed later stays removed. By hand: host
+  <span class="mono">${MAIL_HOST}</span>, port <span class="mono">${MAIL_PORT}</span>, no login.${behind.length ? ` Update or recreate ${behind.length === 1 ? "this site" : "these sites"} first: ${behind.map(esc).join(", ")}.` : ""}</p>`;
+}
 
 export function dashboardView(
   instances: InstanceView[],
@@ -119,6 +128,7 @@ export function dashboardView(
           ? `<button class="btn" onclick="askStop('${d}')">Stop</button>`
           : `<button class="btn" onclick="act('${d}','start')">Start</button>`}
     <button class="btn" onclick="takeSnapshot('${d}')">Snapshot</button>
+    ${i.mail === false ? `<button class="btn" onclick="act('${d}','recreate')" title="Rebuild the recorded version on the mail network">Recreate</button>` : ""}
     <button class="btn" onclick="showLogs('${d}', '${escJs(String(i.port ?? ""))}')">Logs</button>
     <button class="btn btn-danger" onclick="askDelete('${d}')">Delete</button>`;
       const state = missing
@@ -188,6 +198,7 @@ export function dashboardView(
   ${FLEET_FOOTER_HTML}`
   }
 </div>
+${instances.length === 0 ? "" : mailHint(instances)}
 
 <dialog id="logs-dialog" aria-labelledby="logs-title">
   <div class="dialog-header"><h2 id="logs-title"></h2></div>

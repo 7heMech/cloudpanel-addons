@@ -77,10 +77,16 @@
             throw new Error((reply && reply.error ? reply.error : 'DNS could not be prepared').replace(/\.?$/, '.') + ' Refresh this page to try again');
           }
           if (!reply.data.managed) return [domain];
-          if (reply.data.ready) return reply.data.certificateNames;
+          if (reply.data.ready && !reply.data.zoneCreated) return reply.data.certificateNames;
           if (reply.data.nameServers && reply.data.nameServers.length) {
-            clpNameserverNotice(alert, reply.data.zone, reply.data.nameServers,
-              'The Let\u2019s Encrypt certificate is requested automatically once Cloudflare sees them.');
+            var next = reply.data.provider === 'powerdns'
+              ? 'The Let\u2019s Encrypt certificate is requested automatically once delegation propagates.'
+              : 'The Let\u2019s Encrypt certificate is requested automatically once Cloudflare sees them.';
+            clpNameserverNotice(alert, reply.data.zone, reply.data.nameServers, next);
+          } else if (reply.data.zoneCreated) {
+            var zoneName = reply.data.zone || domain;
+            var providerLabel = reply.data.provider === 'powerdns' ? 'PowerDNS' : 'DNS';
+            show('warning', 'The new ' + providerLabel + ' zone ' + zoneName + ' was created. Delegate it at the domain\u2019s registrar; the Let\u2019s Encrypt certificate will be requested automatically once delegation propagates.');
           } else {
             show('warning', 'DNS for ' + domain + ' is not ready: ' + reply.data.reason.replace(/\.?$/, '.') +
               ' The certificate will be requested automatically once it is.');

@@ -9,7 +9,10 @@ export const PANEL_TWEAKS_ADDON: AddonDefinition = {
   name: "panel-tweaks",
   title: "Panel Tweaks",
   description: "Site search, columns and CSV download, automatic SSL for native sites, mobile layouts, theme improvements and branding.",
-  changed: [{ in: "2.0.0-rc.1", note: "The PHP version CloudPanel itself runs on moved to System Tweaks." }],
+  changed: [
+    { in: "2.2.0-rc.3", note: "Panel Tweaks now splits into Sites, Appearance and Branding tabs, and aligns CloudPanel's Sites page margins with the rest of the panel." },
+    { in: "2.0.0-rc.1", note: "The PHP version CloudPanel itself runs on moved to System Tweaks." },
+  ],
   targets: PANEL_TWEAKS_TARGETS,
   setup: PANEL_TWEAKS_SETUP,
   handler: handle,

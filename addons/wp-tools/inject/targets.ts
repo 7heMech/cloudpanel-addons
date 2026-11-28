@@ -86,14 +86,22 @@ function choosers(siteManagers: boolean): string {
 /**
  * The Plugins row, before the form's Back and Create buttons. The inputs have
  * no names, since Symfony refuses a field its form does not declare. The upload
- * control is drawn for administrators only.
+ * control is drawn for administrators only. It starts from the account's own
+ * default plugins, or the server's, which its script asks WordPress Tools for.
  */
 export function newSiteFormSnippet(url: string, siteManagers: boolean): string {
   return `
             ${choosers(siteManagers)}
             <div class="row clp-wp-plugins" id="clp-wp-plugins" data-url="${url}">
               <div class="col-12">
-                <label class="col-form-label" for="clp-wp-plugin-search">Plugins</label>
+                <div class="clp-wp-plugins-head">
+                  <label class="col-form-label" for="clp-wp-plugin-search">Plugins</label>
+                  <div class="clp-wp-plugins-defaults" id="clp-wp-plugins-defaults" hidden>
+                    <span class="clp-wp-plugins-origin" id="clp-wp-plugins-origin" role="status"></span>
+                    <button type="button" class="clp-wp-plugins-link" id="clp-wp-plugins-save"{% if is_granted('ROLE_ADMIN') %} title="WordPress.org plugins only: an uploaded zip is for this site alone"{% endif %} hidden>Save as my default</button>
+                    <button type="button" class="clp-wp-plugins-link" id="clp-wp-plugins-reset" hidden>Reset to server default</button>
+                  </div>
+                </div>
                 <div class="clp-wp-plugins-bar">
                   <input type="search" class="form-control" id="clp-wp-plugin-search" placeholder="Search WordPress.org plugins" autocomplete="off"
                     role="combobox" aria-expanded="false" aria-controls="clp-wp-plugin-results" aria-describedby="clp-wp-plugins-note">

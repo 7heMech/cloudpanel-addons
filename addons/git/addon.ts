@@ -8,6 +8,9 @@ export const GIT_ADDON: AddonDefinition = {
   name: "git",
   title: "Git Deploy",
   description: "Deploy a site from a Git remote and run a command afterwards.",
+  changed: [
+    { in: "2.2.0-rc.3", note: "The push-to-deploy URL now works when the panel has basic auth: basic auth no longer applies to that one route, whose token is its credential. The rest of the addon pages keep basic auth." },
+  ],
   targets: GIT_TARGETS,
   handler: handle,
   action: runGitAction,

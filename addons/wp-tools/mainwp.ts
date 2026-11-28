@@ -10,11 +10,12 @@ import { leastRecentlyChecked, pruneFleet } from "./fleet";
 import { runWp, wpReply, type WpOptions, type WpSite } from "./wp-cli";
 import PHP from "./mainwp.php" with { type: "text" };
 import GUARD from "./mainwp-guard.php" with { type: "text" };
+import { HOSTING_TOOLS_LOADER_PHP } from "./hosting-tools";
 
 export const MAINWP_CHILD_PLUGIN = "mainwp-child";
-/** Where the guard lives in a site, which withdrawing the addon removes without WordPress. */
-export const MAINWP_GUARD_FILE = "wp-content/mu-plugins/clp-addons-mainwp.php";
-const GUARD_HASH = createHash("sha256").update(GUARD).digest("hex");
+const sha256 = (text: string) => createHash("sha256").update(text).digest("hex");
+/** The status digest of a current guard: this guard, this loader, and no guard from an earlier release. */
+const GUARD_HASH = sha256([sha256(GUARD), sha256(HOSTING_TOOLS_LOADER_PHP), ""].join(" "));
 
 export type MainwpStatus = "missing" | "inactive" | "waiting-https" | "not-connected" | "connected" | "unsupported" | "error";
 const STATUSES: MainwpStatus[] = ["missing", "inactive", "waiting-https", "not-connected", "connected", "unsupported", "error"];
@@ -123,7 +124,7 @@ interface ChildStatus {
   admin: string;
   /** A digest of every MainWP setting, to tell whether a failed attempt changed any. */
   fingerprint: string;
-  /** A digest of the guard file, or empty without one. */
+  /** A digest of the guard's files, or empty without a guard. */
   guard: string;
 }
 
@@ -154,10 +155,12 @@ const ADAPTER = PHP.replace(/^<\?php\s*/, "");
 // The adapter answers with one of these codes. A site's own code can print a
 // reply too, so its text is never repeated: an unknown code gets a fixed message.
 const FAILURES: Record<string, string> = {
+  "invalid-input": "the MainWP request to WordPress was invalid",
   "admin-changed": "the site's first administrator changed during the connection; check again",
   "already-connected": "MainWP Child is already connected to a Dashboard; disconnect it in MainWP first",
   "guard-failed": "the MainWP guard could not be written into the site's mu-plugins folder",
   "guard-moved": "wp-config.php moves the must-use plugins folder, so the MainWP guard cannot be placed",
+  "loader-conflict": "wp-content/mu-plugins/hosting-tools.php already exists with different content, so the MainWP guard cannot be placed",
   "constant-id": "wp-config.php sets MAINWP_CHILD_UNIQUEID; connect this site from MainWP instead",
   "activation-failed": "MainWP Child could not be activated; check the site in WordPress",
   "auth-not-restored": "the temporary MainWP connection setting could not be restored; check again",
@@ -500,6 +503,9 @@ async function visit(pass: Pass, site: WpSite): Promise<void> {
       // Withdrawing the addon removes guards without WordPress, so one may be gone already.
       if (status.guard) await setGuard(pass, site, record, false);
       else delete record.guard;
+    } else if (status.guard && status.guard !== GUARD_HASH) {
+      // A guard already there is kept current, an earlier release's too, even while the Dashboard is unavailable or the site is not connected.
+      await setGuard(pass, site, record, true);
     }
     // Cleanup restores the child without the Dashboard; only its record there waits.
     if (pass.dashboardError && !pass.state.cleanup) throw new Error(pass.dashboardError);
@@ -507,7 +513,9 @@ async function visit(pass: Pass, site: WpSite): Promise<void> {
     else if (status.multisite) record.status = "unsupported";
     else if (pass.state.remote) await checkChildOnly(pass, site, record, status);
     else await checkSite(pass, site, record, status);
-    if (enforcing(pass.state) && record.status === "connected" && status.guard !== GUARD_HASH) await setGuard(pass, site, record, true);
+    if (enforcing(pass.state) && record.status === "connected" && !status.guard) {
+      await setGuard(pass, site, record, true);
+    }
   } catch (error) {
     record.status = "error";
     record.error = message(error);
@@ -710,9 +718,13 @@ async function downloadChild(pass: Pass, site: WpSite, status: ChildStatus): Pro
 }
 
 async function setGuard(pass: Pass, site: WpSite, record: MainwpRecord, on: boolean): Promise<void> {
-  await bridge(pass, site, { op: "guard", code: on ? GUARD : "" });
-  if (on) record.guard = true;
-  else delete record.guard;
+  if (on) {
+    // Persist intent before the adapter writes so a partial write or dropped reply stays due for removal if paused.
+    record.guard = true;
+    saveMainwpState(pass.run.statePath, pass.state);
+  }
+  await bridge(pass, site, { op: "guard", code: on ? GUARD : "", loader: HOSTING_TOOLS_LOADER_PHP });
+  if (!on) delete record.guard;
 }
 
 /** Whether a failed attempt left the child as it was and a Dashboard on this server without a record. */

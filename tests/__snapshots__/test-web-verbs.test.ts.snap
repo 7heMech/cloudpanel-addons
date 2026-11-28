@@ -1,34 +1,42 @@
 // Bun Snapshot v1, https://bun.sh/docs/test/snapshots
 
 exports[`the web-reachable verbs and who may call them 1`] = `
-"dns:assign                         admin
+"dns:add-domain                     admin
+dns:assign                         admin
 dns:check                          admin
 dns:choose-zone                    admin
 dns:confirm                        admin
 dns:delete-profile                 admin
-dns:delete-redirect                admin
-dns:find-redirects                 admin
 dns:forget-records                 admin
 dns:list                           admin
+dns:panel-host-helper              admin
 dns:provision                      panel-user
 dns:remove-connection              admin
+dns:remove-domain                  admin
 dns:remove-mailcow                 admin
 dns:remove-records                 admin
 dns:save-connection                admin
 dns:save-mailcow                   admin
 dns:save-profile                   admin
-dns:save-redirect                  admin
 dns:save-server                    admin
 dns:set-automatic                  admin
 dns:set-default                    admin
 dns:set-panel-host                 admin
 dns:site-status                    panel-user
-dns:take-over                      admin
 dns:zone-account                   admin
+firewall:edge-check                admin
+firewall:edge-confirm              admin
+firewall:edge-review-zone          admin
+firewall:edge-save                 admin
+firewall:edge-zone-choice          admin
 firewall:hetzner-connect           admin
 firewall:hetzner-disconnect        admin
 firewall:hetzner-switch            admin
 firewall:list                      admin
+firewall:netcup-connect            admin
+firewall:netcup-disconnect         admin
+firewall:netcup-poll               admin
+firewall:netcup-switch             admin
 firewall:panel-gate                admin
 firewall:panel-gate-switch         admin
 firewall:policy                    admin
@@ -36,6 +44,7 @@ firewall:protocols                 admin
 firewall:set                       admin
 firewall:set-protocol              admin
 firewall:set-protocols             admin
+firewall:set-visitor-ip            admin
 git:configure                      site-manager
 git:deploy                         site-manager
 git:domains                        site-manager
@@ -80,6 +89,10 @@ maintenance:set-default-template   admin
 maintenance:set-template           admin
 maintenance:sites                  admin
 maintenance:status                 admin
+manager:cloudflare-check           admin
+manager:cloudflare-list            admin
+manager:cloudflare-remove          admin
+manager:cloudflare-save            admin
 manager:disable                    admin
 manager:enable                     admin
 manager:holds                      admin
@@ -90,6 +103,7 @@ manager:reconcile                  admin
 manager:setup                      admin
 manager:setup-pref                 admin
 manager:update                     admin
+manager:usage-sharing              admin
 manager:watch-job                  admin stream
 panel-tweaks:branding              admin
 panel-tweaks:branding-asset        pre-gate
@@ -100,6 +114,19 @@ panel-tweaks:set-branding          admin
 panel-tweaks:set-tweaks            admin
 panel-tweaks:state                 panel-user
 panel-tweaks:watch-job             admin stream
+redirects:check                    admin
+redirects:choose-zone              admin
+redirects:confirm                  admin
+redirects:create-site-helper       admin
+redirects:delete-redirect          admin
+redirects:find-redirects           admin
+redirects:list                     admin
+redirects:remove-connection        admin
+redirects:review-redirect          admin
+redirects:save-connection          admin
+redirects:save-redirect            admin
+redirects:set-automatic            admin
+redirects:take-over                admin
 resource-limits:assign             admin
 resource-limits:delete-category    admin
 resource-limits:list               admin
@@ -150,7 +177,6 @@ system-tweaks:set-telemetry        admin
 system-tweaks:set-updates          admin
 system-tweaks:set-upload-guard     admin
 system-tweaks:set-vhost-guard      admin
-system-tweaks:set-visitor-ip       admin
 system-tweaks:state                admin
 system-tweaks:unban                admin
 terminal:root-access               own-account
@@ -160,13 +186,16 @@ terminal:session                   admin duplex
 wp-tools:domain-link-settings      admin
 wp-tools:job                       admin
 wp-tools:mainwp-settings           admin
+wp-tools:my-new-site-defaults      own-account
 wp-tools:new-site                  site-manager
 wp-tools:new-site-access           site-manager
+wp-tools:new-site-defaults         admin
 wp-tools:new-site-settings         admin
 wp-tools:new-site-status           site-manager
 wp-tools:plugin-discard            admin
 wp-tools:plugin-upload             admin
 wp-tools:remove                    admin
+wp-tools:save-my-new-site-defaults own-account
 wp-tools:sign-in                   panel-user
 wp-tools:site-kind                 panel-user
 wp-tools:sites                     admin
@@ -185,6 +214,7 @@ any panel user: GET /dns/api/session
 any panel user: GET /dns/api/site
 any panel user: GET /panel-tweaks/api/panel
 any panel user: GET /security-keys/api/keys
+any panel user: GET /wp-tools/api/my-new-site-defaults
 any panel user: GET /wp-tools/api/new-site-status
 any panel user: GET /wp-tools/api/plugin-search
 any panel user: GET /wp-tools/api/session
@@ -193,6 +223,7 @@ any panel user: POST /dns/api/provision
 any panel user: POST /security-keys/api/register
 any panel user: POST /security-keys/api/register-options
 any panel user: POST /security-keys/api/remove
+any panel user: POST /wp-tools/api/my-new-site-defaults
 any panel user: POST /wp-tools/api/new-site
 any panel user: POST /wp-tools/api/sign-in"
 `;

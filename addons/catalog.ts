@@ -1,9 +1,10 @@
 import { existsSync } from "node:fs";
 import { TEMPLATES_DIR, addonConfigFile, addonStateDir } from "../lib/paths";
-import type { AddonDefinition, AddonHandler, AddonNews, AddonSpec } from "../lib/addon-definition";
+import { addonSupportsArch, type AddonDefinition, type AddonHandler, type AddonNews, type AddonSpec } from "../lib/addon-definition";
 import { compareSemver } from "../lib/semver";
 import { FIREWALL_ADDON } from "./firewall/addon";
 import { DNS_ADDON } from "./dns/addon";
+import { REDIRECTS_ADDON } from "./redirects/addon";
 import { GIT_ADDON } from "./git/addon";
 import { INSTATIC_ADDON } from "./instatic/addon";
 import { MAINTENANCE_ADDON } from "./maintenance/addon";
@@ -18,22 +19,25 @@ import { SECURITY_KEYS_ADDON } from "./security-keys/addon";
 
 /**
  * Order is the order addons are listed and installed, and the order their
- * new-site work runs in: DNS before SMTP Relay. Keep it deliberate.
+ * new-site work runs in: core server and security addons first, with Redirects
+ * before DNS, so a site that replaces a redirect gets its DNS at once, and DNS
+ * before SMTP Relay. Keep it deliberate.
  */
 const DEFINITIONS: AddonDefinition[] = [
+  SYSTEM_TWEAKS_ADDON,
   FIREWALL_ADDON,
+  REDIRECTS_ADDON,
   DNS_ADDON,
-  INSTATIC_ADDON,
+  SECURITY_KEYS_ADDON,
+  PANEL_TWEAKS_ADDON,
+  RESOURCE_LIMITS_ADDON,
+  SMTP_ADDON,
+  WP_TOOLS_ADDON,
   STAGER_ADDON,
   MAINTENANCE_ADDON,
-  RESOURCE_LIMITS_ADDON,
   GIT_ADDON,
-  PANEL_TWEAKS_ADDON,
-  SYSTEM_TWEAKS_ADDON,
-  WP_TOOLS_ADDON,
-  SMTP_ADDON,
+  INSTATIC_ADDON,
   TERMINAL_ADDON,
-  SECURITY_KEYS_ADDON,
 ];
 
 function specOf(definition: AddonDefinition): AddonSpec {
@@ -52,6 +56,11 @@ export const ADDON_NAMES: string[] = DEFINITIONS.map((definition) => definition.
 
 export function addonEnabled(spec: AddonSpec): boolean {
   return existsSync(spec.configFile);
+}
+
+/** What can be offered on `arch`: those it supports, and any already enabled, which can still be disabled. */
+export function offeredAddonNames(arch: string = process.arch, specs: AddonSpec[] = ADDON_NAMES.map((name) => ADDONS[name]!)): string[] {
+  return specs.filter((spec) => addonSupportsArch(spec, arch) || addonEnabled(spec)).map((spec) => spec.name);
 }
 
 export function enabledAddons(): AddonSpec[] {

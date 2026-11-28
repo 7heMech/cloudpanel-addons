@@ -52,9 +52,10 @@ replace their limits silently.
 
 ## Panel surfaces
 
-Everything is decided at `/addons/resource-limits/`. The page opens with Memory and its combined budget, then a drift
-notice when there is drift, the PHP sites, and the categories with the
-choice of category for new sites in their header. The site table carries
+Everything is decided at `/addons/resource-limits/`, split with the shared
+`.section-shell` into Memory (with its combined budget), PHP sites (with a drift
+notice when there is drift), and Categories (with the choice of category for new
+sites in its header). The site table carries
 selection and a bulk assignment, because moving forty sites is the ordinary
 operation; from six sites it has a search and filters for drifted, PHP
 version and category, and its headings sort. Each site shows

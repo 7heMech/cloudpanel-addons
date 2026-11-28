@@ -24,6 +24,18 @@
 - Type-check with `bun run typecheck` (`bun check`), not `tsc`: it is what CI
   runs, and it covers `tools/` and `tests/`, which `tsc` on `tsconfig.json`
   leaves out.
+- Follow the layout patterns in `docs/decisions/platform.md` under Shared
+  interface and Setup checklist: replace unconfigured multi-card pages with a
+  focused first-run card, omit absent vendor cards, and split multi-concern
+  pages with `.section-shell` instead of stacking every tool into one scroll.
+- When changing UI, capture and inspect unconfigured, mid-setup, narrow, and
+  dark views with `bun run preview:shot`.
+- Never expose global or cross-tenant controls to non-admins, even with Site
+  Write: keep API credentials, shared DNS profiles, whole-zone Cloudflare or
+  WAF settings, the panel hostname, server-wide addons (System Tweaks,
+  Firewall, Resource Limits, SMTP Relay, Terminal, Manager), and any site
+  outside CloudPanel's `panelUserSites` strictly admin-only and enforced
+  server-side.
 
 ## Seeing the UI
 
@@ -33,6 +45,12 @@
   `/tmp/clp-addons-ui` (starts the preview and bootstraps a headless Chromium
   itself); read the files to review a change visually.
 - `bun run deploy:stg` builds and installs the binary on the staging CloudPanel
-  box, whose panel is at `https://46.225.93.37:8443/addons` (SSH as `root` with
-  `~/.ssh/cloudpanel-addons-dev-0bad61aa9144`). Use it for anything the preview
+  box, whose panel is at `https://clp-stg.7he.dev/addons` through a Cloudflare
+  Tunnel. The box is IPv6-only: SSH as `root` to
+  `2a03:4000:2:95a:147b:36ff:fea4:2563` with
+  `~/.ssh/cloudpanel-addons-dev-0bad61aa9144`. Use it for anything the preview
   cannot show, such as real panel data or injection into CloudPanel's own pages.
+  The deploy never accepts an unknown host key. On a new workstation, check that
+  `ssh-keyscan -t ed25519 <address> | ssh-keygen -lf -` prints
+  `SHA256:PRegxgLbD/9CxtJAmUpY1Og7Yd1mm9hylA2qjW5V59o`, then append the
+  `ssh-keyscan` line to `~/.ssh/known_hosts`.

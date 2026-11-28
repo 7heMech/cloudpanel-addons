@@ -1,4 +1,5 @@
 import { afterEach, describe, expect, test } from "bun:test";
+import { tokenTemplates } from "../lib/cloudflare/tokens";
 import { Database } from "bun:sqlite";
 import { chmodSync, mkdirSync, mkdtempSync, readFileSync, rmSync, statSync, utimesSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -7,6 +8,7 @@ import {
   connectHetzner, desiredRules, disconnectHetzner, hetznerSetupState, hetznerView, openRules, OWNER_SELECTOR, parseCloudflareRanges,
   readCloudflareRanges, rulesSignature, setHetznerRole, sshPorts, syncHetzner, type HetznerOptions, type HetznerRole,
 } from "../addons/firewall/hetzner";
+import { dashboardView } from "../addons/firewall/app/views";
 import { HetznerApi, hetznerServerId } from "../addons/firewall/hetzner-api";
 import type { HetznerRule } from "../addons/firewall/hetzner-api";
 import { FakeHetzner } from "./fixtures/hetzner-api";
@@ -755,10 +757,22 @@ describe("the metadata service", () => {
 });
 
 describe("off Hetzner Cloud", () => {
-  test("the card says so, and nothing can be connected or switched", async () => {
+  test("the card is omitted, and nothing can be connected or switched", async () => {
     const fake = new FakeHetzner(TOKEN, null);
     const server = box(fake, null);
     expect(await hetznerView(server.options)).toEqual({ state: "absent" });
+    const html = dashboardView({
+      sites: [], autoEnableNewSites: false,
+      visitorIp: { enabled: true, applied: true, problem: "" },
+      protocols: { enabled: true, available: true, protocols: {}, udpPorts: [] },
+      panelGate: { on: false, hostname: null, pending: false, problems: [], drift: [], editUrl: null, checkedAt: null, leftover: false },
+      hetzner: { state: "absent" },
+      netcup: { state: "absent" },
+      cloudflareEdge: { connected: false, defaults: { ssl: "strict", alwaysHttps: true, acmeFullSsl: true, webmailFullSsl: false, skipFirewallIps: [] }, approved: false, approvedAt: null, needsApproval: false, migrationNote: null, checkedAt: null, zones: [], log: [] },
+      cloudflare: { connections: [], templates: tokenTemplates(), serverIps: [], dnsEnabled: false },
+    });
+    expect(html).not.toContain('id="hetzner-card"');
+    expect(html).not.toContain("Hetzner Cloud Firewall");
     expect(await refusal(connectHetzner({ token: TOKEN }, server.options))).toContain("not a Hetzner Cloud server");
     expect(await refusal(setHetznerRole("web", true, undefined, server.options))).toContain("not a Hetzner Cloud server");
     expect(await syncHetzner("repair", server.options)).toBeNull();

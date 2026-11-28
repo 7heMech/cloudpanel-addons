@@ -20,3 +20,4 @@
 .job-step:empty { display: none; }
 .job-alert { margin: 0 0 12px; }
 .job-links { margin-top: 20px; }
+.mail-hint .mono { white-space: nowrap; }

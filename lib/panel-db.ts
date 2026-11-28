@@ -29,7 +29,7 @@ export function hasSite(db: Database, domain: string): boolean {
   return db.query("SELECT 1 FROM site WHERE domain_name = ? LIMIT 1;").get(domain) != null;
 }
 
-/** Site rows less DNS's stand-ins, which hold a domain for a site that is not there yet. */
+/** Site rows less Redirects' stand-ins, which hold a domain for a site that is not there yet. */
 export function withoutStandIns<T extends { domain_name?: unknown }>(rows: T[], standIns = standInDomains()): T[] {
   return rows.filter((row) => !standIns.has(String(row.domain_name)));
 }

@@ -1,4 +1,4 @@
-import { dashboardUrl, resolveAddon } from "./addons";
+import { dashboardUrl, resolveAddon, resolveEnableable } from "./addons";
 import { enabledAddons, ADDONS, ADDON_NAMES, addonEnabled } from "../addons/catalog";
 import { panelHolds, reconcileAnchors } from "./reconcile";
 import { cmdMenu } from "./menu";
@@ -12,6 +12,7 @@ import { cmdUpdate } from "./update";
 import { CLI_VERSION } from "../lib/version";
 import { reconcile } from "./inject";
 import { fatal, Fatal, log, requireRoot } from "../lib/log";
+import { errorMessage } from "../lib/errors";
 import type { AddonSpec } from "../lib/addon-definition";
 import { LOCKABLE_ADDONS, isLockable, lockedAddons } from "../lib/root-locks";
 import { changeLock, lockFailure, lockFileProblem } from "../lib/lock-addon";
@@ -19,8 +20,9 @@ import { withOperationLockSync } from "../lib/operation-lock";
 import { runRecon } from "./recon";
 import { cmdServe } from "../manager/server";
 import { runAuthActionStdin } from "./auth-action";
-import { runManagerAction, type ManagerOps } from "../manager/action";
+import { currentUsagePayload, runManagerAction, type ManagerOps } from "../manager/action";
 import { switchSetup } from "../manager/setup";
+import { formatUsageSharingStatus, saveUsageSharing } from "../lib/usage-share";
 import { runCertificateWork, runFirewallWork } from "./addon-hooks";
 import { runSyncSites } from "./new-sites";
 
@@ -64,6 +66,7 @@ function usage(): void {
   clp-addons repair [<addon>] [--quiet] [--anchors-only] [--rebaseline]
   clp-addons status
   clp-addons setup on|off
+  clp-addons share-usage on|off|status
 ${addonUsage()}
   clp-addons lock [<addon>]
   clp-addons unlock <addon>
@@ -105,7 +108,7 @@ function cmdLock(argv: string[], lock: boolean): void {
   if (lock && !isLockable(addon)) fatal(`${addon} has nothing to lock; lockable: ${LOCKABLE_ADDONS.join(", ")}`);
   let changed: boolean;
   try {
-    changed = changeLock(addon, lock);
+    changed = withOperationLockSync(`${lock ? "lock" : "unlock"} ${addon}`, () => changeLock(addon, lock));
   } catch (error) {
     fatal(lockFailure(error));
   }
@@ -127,6 +130,31 @@ function cmdSetup(argv: string[]): void {
   else log.ok(on ? "Setup is on: administrators see its suggestions and Action needed again" : "Setup is off: nothing is checked and no page shows it");
 }
 
+function cmdShareUsage(argv: string[]): void {
+  const [state, ...extra] = argv;
+  if (extra.length || (state !== "on" && state !== "off" && state !== "status")) {
+    fatal("usage: clp-addons share-usage on|off|status");
+  }
+  if (state === "status") {
+    try {
+      log.plain(formatUsageSharingStatus(currentUsagePayload()));
+    } catch (error) {
+      fatal(errorMessage(error));
+    }
+    return;
+  }
+  requireRoot("share-usage");
+  const enabled = state === "on";
+  try {
+    saveUsageSharing(enabled);
+  } catch (error) {
+    fatal(errorMessage(error));
+  }
+  log.ok(enabled
+    ? "Usage sharing is on: enabled addons will be shared once a week"
+    : "Usage sharing is off: nothing will be shared");
+}
+
 async function cmdOverview(): Promise<void> {
   log.plain(`CloudPanel Addons v${CLI_VERSION.replace(/^v/, "")}`);
   log.plain(`Dashboard: ${dashboardUrl()}`);
@@ -137,7 +165,7 @@ async function cmdOverview(): Promise<void> {
 
 function addonArgs(verb: string, argv: string[]) {
   if (argv.length === 0 || argv.some((arg) => arg.startsWith("-"))) fatal(`usage: clp-addons ${verb} <addon>...`);
-  return [...new Set(argv)].map(resolveAddon);
+  return [...new Set(argv)].map((name) => verb === "enable" ? resolveEnableable(name) : resolveAddon(name));
 }
 
 async function main(): Promise<number> {
@@ -160,7 +188,7 @@ async function main(): Promise<number> {
       }
       return 0;
     case "disable":
-      for (const spec of addonArgs("disable", rest)) applyDisable(spec.name);
+      for (const spec of addonArgs("disable", rest)) await applyDisable(spec.name);
       return 0;
     case "update": await cmdUpdate(rest); return 0;
     case "recon": await runRecon(); return 0;
@@ -183,6 +211,7 @@ async function main(): Promise<number> {
       return 0;
     case "status": await cmdStatus(); return 0;
     case "setup": cmdSetup(rest); return 0;
+    case "share-usage": cmdShareUsage(rest); return 0;
     case "self-uninstall": cmdSelfUninstall(rest); return 0;
     case "lock": cmdLock(rest, true); return 0;
     case "unlock": cmdLock(rest, false); return 0;

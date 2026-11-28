@@ -69,7 +69,7 @@ function editor(id: string, name: "css" | "footerHtml", label: string, value: st
 export function brandingCard(branding: Branding, on: boolean): string {
   return `
     <div class="card branding-card" id="branding-card"${on ? "" : " hidden"}>
-      <div class="card-header"><h2>Theme &amp; Branding</h2></div>
+      <div class="card-header"><h2>Logos, CSS &amp; footer</h2></div>
       <div class="tweak-list">
       <div class="tweak-row${branding.customLogo ? " is-enabled" : ""}">
         <div class="tweak-body">${brandingSwitch("customLogo", "Custom logo", branding)}

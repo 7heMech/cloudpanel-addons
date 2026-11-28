@@ -1,12 +1,14 @@
 /**
- * The Cloudflare API calls DNS makes, each reply checked against the shape the
- * API documents before anything is decided from it.
+ * The Cloudflare API calls DNS and Firewall make, each reply checked against
+ * the shape the API documents before anything is decided from it.
  */
 import { isIP } from "node:net";
-import { type ApiFetch, ProviderError, ProviderHttp } from "../../lib/provider-http";
+import { dnsName, quoteTxt, unquoteTxt } from "../dns-name";
+import { type ApiFetch, ProviderError, ProviderHttp } from "../provider-http";
 import { type Grant, parseResources, type TokenOwner } from "./access";
-import { dnsName } from "./model";
-import { PERMISSIONS } from "./token";
+import { PERMISSIONS } from "./tokens";
+
+export { quoteTxt, unquoteTxt };
 
 const API = "https://api.cloudflare.com/client/v4";
 const MAX_INVENTORY = 100_000;
@@ -75,21 +77,6 @@ function id(value: unknown): string {
 function text(value: unknown, max = 4096): string {
   if (typeof value !== "string" || value.length > max) throw new ProviderError("Cloudflare", "returned a value this addon does not understand");
   return value;
-}
-
-/** `"chunk" "chunk"` as one string, which is how a long TXT value travels. */
-export function unquoteTxt(value: string): string {
-  const trimmed = value.trim();
-  if (!trimmed.startsWith('"')) return trimmed;
-  const chunks = [...trimmed.matchAll(/"((?:[^"\\]|\\.)*)"\s*/g)];
-  if (chunks.map((chunk) => chunk[0]).join("").trim() !== trimmed) return trimmed;
-  return chunks.map((chunk) => chunk[1]!.replace(/\\(["\\])/g, "$1")).join("");
-}
-
-/** Every TXT value quoted, in strings of at most 255 characters, as DNS carries them. */
-export function quoteTxt(value: string): string {
-  const chunks = value.match(/[\s\S]{1,255}/g) ?? [""];
-  return chunks.map((chunk) => `"${chunk.replace(/(["\\])/g, "\\$1")}"`).join(" ");
 }
 
 function parseZone(value: unknown): CfZone {
@@ -467,8 +454,8 @@ export class CloudflareApi {
     }
   }
 
-  async createEntrypoint(zoneId: string, phase: string, rules: RuleWrite[]): Promise<CfRuleset> {
-    const { result } = await this.needs(rulesPermission(phase), () => this.call(`/zones/${id(zoneId)}/rulesets`, "POST", { name: "CloudPanel DNS", kind: "zone", phase, rules }));
+  async createEntrypoint(zoneId: string, phase: string, rules: RuleWrite[], name = "CloudPanel DNS"): Promise<CfRuleset> {
+    const { result } = await this.needs(rulesPermission(phase), () => this.call(`/zones/${id(zoneId)}/rulesets`, "POST", { name, kind: "zone", phase, rules }));
     return parseRuleset(result);
   }
 

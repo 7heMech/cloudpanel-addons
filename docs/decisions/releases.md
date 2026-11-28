@@ -26,6 +26,20 @@ that fails puts it back, including on a box deploying for the first time.
 It reads the box from `STG_HOST` and its credentials from `STG_SSH_KEY` and
 `STG_SSH_KNOWN_HOSTS`; the host key is pinned rather than learned on connection,
 because the deploy authenticates as root and then runs a command sequence.
+Staging is IPv6-only and hosted runners have no IPv6, so the workflow reaches
+it through the box's Cloudflare Tunnel with `cloudflared access ssh`. A
+Cloudflare Access application on the tunnel's SSH hostname admits only the
+service token in `STG_ACCESS_CLIENT_ID` and `STG_ACCESS_CLIENT_SECRET`, so
+nothing else reaches the box's sshd through the tunnel.
+
+## Code scanning
+
+CodeQL runs from `.github/workflows/codeql.yml` rather than GitHub's default
+setup, because only an advanced setup can leave out paths. It scans the
+workflows and the JavaScript/TypeScript with the default query suite, skipping
+`tests/`: tests build HTML and match hostnames with plain substring checks on
+purpose, and those lines read as security alerts. The workflow and default
+setup cannot both upload, so default setup stays off.
 
 ## Toolchain
 
@@ -36,8 +50,9 @@ and the pin moves to Bun 1.5.0 when it ships.
 Until then `bun-types` comes from the same canary through `overrides`. GitHub
 keeps only the newest canary, under a tag that moves, so the workflows install
 Bun with `.github/actions/install-bun` instead of `setup-bun`: it downloads
-`@oven/bun-linux-x64` at the pinned version from npm, where a version cannot be
-republished, checks the tarball against the sha512 recorded in the action, and
+`@oven/bun-linux-x64` or `@oven/bun-linux-aarch64`, whichever matches the
+runner, at the pinned version from npm, where a version cannot be republished,
+checks the tarball against the sha512 the action records for that package, and
 fails if `packageManager` names a different version. Installs use the frozen
 `bun.lock`.
 
@@ -46,10 +61,12 @@ Builds compile minified ESM from `tools/build.ts`, ahead of time to machine code
 embedding no function source (`functionSource: false`). The gateway starts a
 fresh `clp-addons action` process for every request, and the compiled binary
 starts in under half the time of a bytecode build at about half its size. An
-`aot` build only targets the platform it runs on, so releases build on x64
-Linux. With no function source, `fn.toString()` returns `[native code]`; script
-a page runs is shipped as its own `.client.js` text rather than read back from a
-server function.
+`aot` build only targets the platform it runs on, so `tools/build.ts` builds for
+the host, and CI and releases build, typecheck and test on an x64 and an arm64
+Linux runner (`ubuntu-24.04` and `ubuntu-24.04-arm`). `tools/deploy-stg.ts`
+refuses to install a build whose architecture is not the box's. With no function
+source, `fn.toString()` returns `[native code]`; script a page runs is shipped
+as its own `.client.js` text rather than read back from a server function.
 
 `bun run typecheck` runs `bun check --project tsconfig.tools.json`, covering
 the CLI, shared libraries, addons, manager, tools, and tests with the existing
@@ -79,9 +96,16 @@ a failure returns a nonzero exit code to CI.
 
 ## Verified artifacts
 
-The tag workflow builds one Linux x86-64 binary and publishes it with the
-installer, SHA-256 sums, and GitHub build provenance. Updates verify the
-checksum and repository-bound attestation before replacing the binary.
+The tag workflow builds a Linux binary for each architecture,
+`clp-addons-linux-x64` and `clp-addons-linux-arm64`, and publishes both with the
+installer, SHA-256 sums, and GitHub build provenance. Each build job checksums
+what it built; the release job checks each build against its own sums, refuses
+the release if the two builds differ on `install.sh` or `cloudpanel.json`, and
+merges them into one `SHA256SUMS` that the attestation covers with every file.
+The installer and the binary each pick the asset for the architecture they run
+on; releases from before arm64 builds have no arm64 asset, so an arm64 box
+cannot install them. Updates verify the checksum and repository-bound
+attestation before replacing the binary.
 `--skip-attestation` is an explicit operator override.
 
 The binary checks provenance itself with Sigstore's `@sigstore/verify`, the
@@ -113,20 +137,22 @@ page that changed
 ([After a CloudPanel upgrade](platform.md#after-a-cloudpanel-upgrade)).
 
 `tools/build.ts` writes the same range to `dist/cloudpanel.json`, which the tag
-workflow publishes beside the binary, lists in `SHA256SUMS` and attests with it.
+workflow publishes beside the binaries, lists in `SHA256SUMS` and attests with it.
 `install` reads the range from the binary itself; `update` reads the asset
 before downloading the binary, so it can warn about the release it is about to
 install rather than the one running. The asset is checksummed when it is read
 and its provenance is checked with the binary's before anything is installed.
-A malformed range, a CloudPanel version dpkg cannot give, mid-upgrade or
-otherwise, and a release from before the asset only skip the warning.
+A malformed range and a release from before the asset skip the warning. A
+CloudPanel version dpkg cannot give, or one the range cannot compare, gets its
+own warning naming why: dpkg has not finished installing it, does not list it,
+or did not answer.
 
 Turning `min` into a floor that `update` enforces, for a release that truly
 cannot run on an older CloudPanel, is a separate change made with that release.
 
 ## Installer
 
-`install.sh` checks the host, downloads the binary from
+`install.sh` checks the host, downloads the binary for its architecture from
 `/releases/latest/download` or the `--version` tag, checks it against
 `SHA256SUMS`, and installs it. It makes no GitHub API call. It then runs
 `clp-addons install --local=DIR` with the addons from `--addons`, if any. With
@@ -179,8 +205,35 @@ the binary restarts the manager.
 
 Every request the manager serves asks whether a release is available, so the
 answer is held for fifteen minutes, refreshed by one call at a time, and served
-as it stands while that refresh runs. Only the first check waits for GitHub; a
-box with no route there would otherwise pay the timeout on every request.
+as it stands while that refresh runs. Only the first check waits on the network;
+a box with no outbound route would otherwise pay the timeout on every request.
+
+For the default repository (`7heMech/cloudpanel-addons`), `lib/update-check.ts`
+fetches `https://clp.7he.dev/releases.json` first with
+`User-Agent: clp-addons/<version>` and no extra headers or identifiers. That
+endpoint returns a `{ tag_name, draft, prerelease }[]` array, from which a box
+on a release picks the newest non-draft, non-prerelease tag and a box on a
+pre-release picks the newest non-draft tag. On any fetch error, non-200 status,
+body-read error, malformed JSON, or empty match, the check falls back to
+GitHub's releases API. Custom `repo` overrides query GitHub directly.
+
+## Opt-in addon usage sharing
+
+`lib/usage-share.ts` tracks whether root opted in to weekly addon usage sharing
+in `/var/lib/clp-addons/manager/usage-sharing.json`, a root-owned `0600` file
+holding `{ answered, enabled, lastSentAt, lastSentWeek, lastSentHash }`. Nothing
+is sent until root saves an answer with `enabled: true`.
+
+When enabled, `shareUsageIfDue` posts a four-field JSON object
+(`{ version, cloudpanel, arch, addons }`) to `https://clp.7he.dev/usage` with
+`User-Agent: clp-addons/<version>` and a 3-second timeout. No domains, IP
+addresses, email addresses, hostnames, or machine IDs are collected. To avoid
+repeat posts, the client stores the ISO 8601 week (`YYYY-Www`) and a local
+SHA-256 hash of the serialized payload after a 2xx reply; the hash is never
+sent. A changed addon set posts again within the same week, and a new week posts
+again even if the payload is unchanged. Network errors and non-2xx responses are
+ignored silently. Manager repair (`cli/repair.ts`) and addon enable or disable
+(`cli/toggle.ts`) trigger `shareCurrentUsage` best-effort.
 
 The native CloudPanel header asks the manager for update state; it does not
 depend on the updater process's compile-time version. That process can reconcile

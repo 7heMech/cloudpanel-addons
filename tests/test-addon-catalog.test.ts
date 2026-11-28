@@ -1,10 +1,11 @@
 import { expect, test } from "bun:test";
 import { readFileSync } from "node:fs";
 import { dirname, join } from "node:path";
-import { ADDONS, ADDON_NAMES, addonHandler, templateWatchPaths } from "../addons/catalog";
-import { type AddonSpec } from "../lib/addon-definition";
+import { ADDONS, ADDON_NAMES, addonHandler, offeredAddonNames, templateWatchPaths } from "../addons/catalog";
+import { addonSupportsArch, archRefusal, type AddonSpec } from "../lib/addon-definition";
+import { dashboardUrlFor, resolveEnableable } from "../cli/addons";
 import { runNewSiteWork } from "../cli/addon-hooks";
-import { CLI_ARTIFACT } from "../lib/paths";
+import { CLI_ARTIFACT, cliArtifactForArch } from "../lib/paths";
 
 const REPO = join(import.meta.dir, "..");
 
@@ -38,18 +39,27 @@ test("every declared injection target is represented in the watch paths", () => 
 });
 
 test("every addon with privileged verbs declares them", () => {
-  for (const name of ["firewall", "instatic", "stager", "maintenance", "resource-limits", "git", "smtp", "terminal"]) {
+  for (const name of ["firewall", "dns", "redirects", "instatic", "stager", "maintenance", "resource-limits", "git", "smtp", "terminal"]) {
     expect(typeof ADDONS[name]!.action).toBe("function");
   }
   // It is markup injected into the panel's login page and has nothing to do as
   // root; the absence is the declaration.
 });
 
-test("new-site work runs DNS before SMTP Relay", () => {
+test("new-site work runs Redirects before DNS, and DNS before SMTP Relay", () => {
   const order = ADDON_NAMES.filter((name) => ADDONS[name]!.newSites);
+  expect(order).toContain("redirects");
   expect(order).toContain("dns");
   expect(order).toContain("smtp");
+  expect(order.indexOf("redirects")).toBeLessThan(order.indexOf("dns"));
   expect(order.indexOf("dns")).toBeLessThan(order.indexOf("smtp"));
+});
+
+test("server and panel addons appear before site tools in catalog order", () => {
+  const foundational = ["system-tweaks", "firewall", "redirects", "dns", "security-keys", "panel-tweaks", "resource-limits", "smtp"];
+  const siteTools = ["wp-tools", "stager", "maintenance", "git", "instatic", "terminal"];
+  expect(ADDON_NAMES.slice(0, foundational.length)).toEqual(foundational);
+  expect(ADDON_NAMES.slice(foundational.length)).toEqual(siteTools);
 });
 
 test("imports point from what changes most to what changes least", () => {
@@ -89,8 +99,33 @@ test("the manager and the auth gateway are not addons", () => {
   expect(manager).toContain(root ? "unknown manager verb" : "'manager' modifies system state");
 });
 
-test("the installer downloads the artifact the updater does", () => {
-  expect(readFileSync(join(REPO, "install.sh"), "utf8")).toContain(`ARTIFACT="${CLI_ARTIFACT}"`);
+test("each release architecture has its own artifact, and the installer downloads the one the updater does", () => {
+  expect(cliArtifactForArch("x64")).toBe("clp-addons-linux-x64");
+  expect(cliArtifactForArch("arm64")).toBe("clp-addons-linux-arm64");
+  expect(() => cliArtifactForArch("ia32")).toThrow("no clp-addons release is built for ia32");
+  expect(CLI_ARTIFACT).toBe(cliArtifactForArch(process.arch));
+  const installer = readFileSync(join(REPO, "install.sh"), "utf8");
+  for (const arch of ["x64", "arm64"]) expect(installer).toContain(`ARTIFACT="${cliArtifactForArch(arch)}"`);
+});
+
+test("Instatic, whose image is amd64 only, is refused and left out on arm64 unless already enabled", () => {
+  const instatic = ADDONS.instatic!;
+  expect(addonSupportsArch(instatic, "x64")).toBe(true);
+  expect(addonSupportsArch(instatic, "arm64")).toBe(false);
+  expect(archRefusal(instatic, "x64")).toBeNull();
+  expect(archRefusal(instatic, "arm64")).toBe("instatic is not available on arm64 servers; it runs on x64 only");
+  expect(ADDON_NAMES.filter((name) => !addonSupportsArch(ADDONS[name]!, "arm64"))).toEqual(["instatic"]);
+
+  expect(resolveEnableable("instatic", "x64").name).toBe("instatic");
+  expect(() => resolveEnableable("instatic", "arm64")).toThrow("instatic is not available on arm64 servers");
+  expect(resolveEnableable("stager", "arm64").name).toBe("stager");
+
+  const off = { ...instatic, configFile: join(REPO, "no-such-config") };
+  const on = { ...instatic, configFile: join(REPO, "package.json") };
+  const stager = { ...ADDONS.stager!, configFile: join(REPO, "no-such-config") };
+  expect(offeredAddonNames("x64", [off, stager])).toEqual(["instatic", "stager"]);
+  expect(offeredAddonNames("arm64", [off, stager])).toEqual(["stager"]);
+  expect(offeredAddonNames("arm64", [on, stager])).toEqual(["instatic", "stager"]);
 });
 
 test("new-site work starts in catalog order and a slow addon only gets a head start", async () => {
@@ -104,4 +139,14 @@ test("new-site work starts in catalog order and a slow addon only gets a head st
   events.length = 0;
   await runNewSiteWork([spec("DNS", 1), spec("SMTP", 1)], 1000);
   expect(events).toEqual(["DNS start", "DNS end", "SMTP start", "SMTP end"]);
+});
+
+test("the dashboard URL is the custom domain, else port 8443 by hostname or public address", () => {
+  const addresses = { ipv4: "203.0.113.7", ipv6: "2001:db8::7" };
+  expect(dashboardUrlFor({ customDomain: "panel.example.com", vhostHost: "box.example.com", addresses })).toBe("https://panel.example.com/addons/");
+  expect(dashboardUrlFor({ vhostHost: "box.example.com", addresses })).toBe("https://box.example.com:8443/addons/");
+  expect(dashboardUrlFor({ vhostHost: null, addresses })).toBe("https://203.0.113.7:8443/addons/");
+  // IPv6-only, or more than one IPv4 that cannot be told apart.
+  expect(dashboardUrlFor({ vhostHost: null, addresses: { ipv4: null, ipv6: "2001:db8::7" } })).toBe("https://[2001:db8::7]:8443/addons/");
+  expect(dashboardUrlFor({ vhostHost: null, addresses: { ipv4: null, ipv6: "" } })).toBe("https://<server-ip>:8443/addons/");
 });

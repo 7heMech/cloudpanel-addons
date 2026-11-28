@@ -2,6 +2,7 @@ import {
   errorBlock, htmlResponse, jsonResponse, newCsrfToken, readMutation,
 } from "../../../lib/app-http";
 import type { ActionResult } from "../../../lib/gateway-client";
+import { lockState } from "../../../lib/root-locks";
 import { FIREWALL_PROTOCOLS, ruleKey, type FirewallProtocol, type FirewallStatus } from "../protocols";
 import { firewallService } from "./service";
 import { dashboardView, layout, panelGateCard } from "./views";
@@ -27,7 +28,7 @@ export async function handle(
     try {
       const result = await firewallService.state();
       if (!result.ok || !result.data) throw new Error(result.error ?? "the firewall state is unavailable");
-      return htmlResponse(layout("Firewall", dashboardView(result.data), updateNotice), { csrf });
+      return htmlResponse(layout("Firewall", dashboardView(result.data, lockState("firewall")), updateNotice), { csrf });
     } catch (error) {
       return htmlResponse(layout("Firewall", errorBlock(error), updateNotice), { status: 500, csrf });
     }
@@ -39,7 +40,7 @@ export async function handle(
 
   if (req.method === "GET" && path === "/api/sites") {
     const result = await firewallService.state();
-    return jsonResponse(result.ok && result.data ? { ...result, html: dashboardView(result.data) } : result, result.ok ? 200 : 500);
+    return jsonResponse(result.ok && result.data ? { ...result, html: dashboardView(result.data, lockState("firewall")) } : result, result.ok ? 200 : 500);
   }
 
   if (req.method === "POST" && path === "/api/sites") {
@@ -59,6 +60,14 @@ export async function handle(
     if (body instanceof Response) return body;
     if (!validMutationBody(body)) return jsonResponse({ ok: false, error: "enabled must be boolean" }, 400);
     const result = await firewallService.setAutomatic(body.enabled);
+    return jsonResponse(result, result.ok ? 200 : 400);
+  }
+
+  if (req.method === "POST" && path === "/api/visitor-ip") {
+    const body = await readMutation(req);
+    if (body instanceof Response) return body;
+    if (!validMutationBody(body)) return jsonResponse({ ok: false, error: "enabled must be boolean" }, 400);
+    const result = await firewallService.setVisitorIp(body.enabled);
     return jsonResponse(result, result.ok ? 200 : 400);
   }
 
@@ -98,7 +107,8 @@ export async function handle(
     return jsonResponse(result, result.ok ? 200 : 400);
   }
 
-  if (req.method === "POST" && path === "/api/hetzner/switch") {
+  const switched = /^\/api\/(hetzner|netcup)\/switch$/.exec(path);
+  if (req.method === "POST" && switched) {
     const body = await readMutation(req, 1024);
     if (body instanceof Response) return body;
     const { role, enabled, confirm, typed } = body;
@@ -106,7 +116,17 @@ export async function handle(
       || (typed !== undefined && typeof typed !== "string")) {
       return jsonResponse({ ok: false, error: "role must be web or panel, and enabled boolean" }, 400);
     }
-    const result = await firewallService.setHetzner(role, enabled, confirm as string | undefined, typed as string | undefined);
+    const set = switched[1] === "netcup" ? firewallService.setNetcup : firewallService.setHetzner;
+    const result = await set(role, enabled, confirm as string | undefined, typed as string | undefined);
+    return jsonResponse(result, result.ok ? 200 : 400);
+  }
+
+  if (req.method === "POST" && (path === "/api/netcup/connect" || path === "/api/netcup/poll" || path === "/api/netcup/remove")) {
+    const body = await readMutation(req);
+    if (body instanceof Response) return body;
+    const result = path === "/api/netcup/connect" ? await firewallService.connectNetcup()
+      : path === "/api/netcup/poll" ? await firewallService.pollNetcup()
+        : await firewallService.disconnectNetcup();
     return jsonResponse(result, result.ok ? 200 : 400);
   }
 
@@ -124,6 +144,43 @@ export async function handle(
       return jsonResponse({ ok: false, error: "enabled must be boolean" }, 400);
     }
     const result = await firewallService.setPanelGate(enabled, confirm as string | undefined);
+    return jsonResponse(result, result.ok ? 200 : 400);
+  }
+
+  if (req.method === "POST" && path === "/api/edge/check") {
+    const body = await readMutation(req);
+    if (body instanceof Response) return body;
+    const result = await firewallService.checkEdge();
+    return jsonResponse(result, result.ok ? 200 : 400);
+  }
+
+  if (req.method === "POST" && path === "/api/edge/defaults") {
+    const body = await readMutation(req, 8192);
+    if (body instanceof Response) return body;
+    const result = await firewallService.saveEdge(body);
+    return jsonResponse(result, result.ok ? 200 : 400);
+  }
+
+  if (req.method === "POST" && path === "/api/edge/confirm") {
+    const body = await readMutation(req, 1024);
+    if (body instanceof Response) return body;
+    if (typeof body.token !== "string" || !body.token) return jsonResponse({ ok: false, error: "review token is required" }, 400);
+    const result = await firewallService.confirmEdge(body.token);
+    return jsonResponse(result, result.ok ? 200 : 400);
+  }
+
+  if (req.method === "POST" && path === "/api/edge/review-zone") {
+    const body = await readMutation(req, 1024);
+    if (body instanceof Response) return body;
+    if (typeof body.zoneKey !== "string" || !body.zoneKey) return jsonResponse({ ok: false, error: "zoneKey is required" }, 400);
+    const result = await firewallService.reviewEdgeZone(body.zoneKey);
+    return jsonResponse(result, result.ok ? 200 : 400);
+  }
+
+  if (req.method === "POST" && path === "/api/edge/zone-choice") {
+    const body = await readMutation(req, 1024);
+    if (body instanceof Response) return body;
+    const result = await firewallService.chooseEdgeZone(body);
     return jsonResponse(result, result.ok ? 200 : 400);
   }
 

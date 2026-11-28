@@ -1,9 +1,9 @@
 import { describe, expect, test } from "bun:test";
-import type { CfRecord } from "../addons/dns/cloudflare";
-import { parseProfile, type Profile } from "../addons/dns/model";
-import { PRESETS, seededPolicy } from "../addons/dns/presets";
-import { diffRecords, renderProfile, type SiteVars } from "../addons/dns/records";
-import { tokenTemplate } from "../addons/dns/token";
+import type { CfRecord } from "../lib/cloudflare/api";
+import { composeProfiles, parseProfile, type Profile } from "../addons/dns/model";
+import { mailcowSeededProfile, PRESETS, seededPolicy } from "../addons/dns/presets";
+import { diffRecords, renderProfile, wildcardSource, type SiteVars } from "../addons/dns/records";
+import { tokenTemplate } from "../lib/cloudflare/tokens";
 
 const vars = (domain: string, zone = "example.com", extra: Partial<SiteVars> = {}): SiteVars => ({
   domain, zone, ipv4: "203.0.113.10", ipv6: "2001:db8::10", mailcowHost: "mail.example.net",
@@ -19,14 +19,17 @@ function published(type: string, name: string, content: string, extra: Partial<C
   return { id: (++n).toString(16).padStart(32, "0"), type, name, content, proxied: false, ttl: 1, priority: null, comment: null, ...extra };
 }
 
-const webAndMailcow = seededPolicy().profiles.find((candidate) => candidate.id === "web-mailcow")!;
+const webAndMailcow = composeProfiles(
+  seededPolicy().profiles.find((candidate) => candidate.id === "web")!,
+  mailcowSeededProfile(),
+)!;
 
 describe("rendering a profile for a site", () => {
-  test("the Web and Mailcow preset gives an apex site every record, www and webmail included", () => {
+  test("the Web and Mailcow preset gives an apex site every record, wildcard and webmail included", () => {
     const rendered = renderProfile(webAndMailcow, vars("example.com"));
     expect(rendered.problems).toEqual([]);
     expect(rendered.records.map((record) => `${record.type} ${record.name}`)).toEqual([
-      "A example.com", "AAAA example.com", "A www.example.com", "AAAA www.example.com",
+      "A example.com", "AAAA example.com", "A *.example.com", "AAAA *.example.com",
       "MX example.com", "TXT example.com", "TXT dkim._domainkey.example.com", "CNAME autoconfig.example.com",
       "CNAME autodiscover.example.com", "SRV _autodiscover._tcp.example.com", "CNAME webmail.example.com",
     ]);
@@ -36,10 +39,16 @@ describe("rendering a profile for a site", () => {
   test("a subdomain site gets its own names and no apex-only rows", () => {
     const rendered = renderProfile(webAndMailcow, vars("join.example.com"));
     const names = rendered.records.map((record) => record.name);
-    expect(names).toContain("autoconfig.join.example.com");
+    expect(names).toContain("join.example.com");
     expect(names).toContain("dkim._domainkey.join.example.com");
-    expect(names).not.toContain("www.join.example.com");
+    expect(names).not.toContain("*.join.example.com");
+    expect(names).not.toContain("autoconfig.join.example.com");
+    expect(names).not.toContain("autodiscover.join.example.com");
+    expect(names).not.toContain("_autodiscover._tcp.join.example.com");
     expect(names).not.toContain("webmail.join.example.com");
+    const dmarc = profile(PRESETS.find((preset) => preset.id === "dmarc")!.records);
+    expect(renderProfile(dmarc, vars("example.com")).records.map((record) => record.name)).toEqual(["_dmarc.example.com"]);
+    expect(renderProfile(dmarc, vars("join.example.com")).records).toEqual([]);
   });
 
   test("{zone} and {sub} reach the bare domain of a www site, and an empty {sub} leaves no stray dot", () => {
@@ -69,7 +78,7 @@ describe("rendering a profile for a site", () => {
     const rendered = renderProfile(web, vars("example.com", "example.com", { ipv4: null }));
     expect(rendered.problems).toEqual([
       "Record 1 (A {domain}): this server's IPv4 address could not be detected; set it under Server addresses",
-      "Record 3 (A www.{domain}): this server's IPv4 address could not be detected; set it under Server addresses",
+      "Record 3 (A *.{domain}): this server's IPv4 address could not be detected; set it under Server addresses",
     ]);
     expect(diffRecords(rendered, [published("A", "example.com", "203.0.113.10")]).ops.filter((op) => op.action === "delete")).toEqual([]);
   });
@@ -95,7 +104,7 @@ describe("what has to change", () => {
     const diff = diffRecords(rendered, [published("A", "example.com", "203.0.113.10", { proxied: true })]);
     expect(diff.matched.map((record) => record.type)).toEqual(["A"]);
     expect(diff.ops.map((op) => `${op.action} ${op.record.type} ${op.record.name}`)).toEqual([
-      "create AAAA example.com", "create A www.example.com", "create AAAA www.example.com",
+      "create AAAA example.com", "create A *.example.com", "create AAAA *.example.com",
     ]);
   });
 
@@ -103,13 +112,13 @@ describe("what has to change", () => {
     const rendered = renderProfile(web, vars("example.com"));
     const diff = diffRecords(rendered, [
       published("A", "example.com", "198.51.100.4"),
-      published("CNAME", "www.example.com", "example.com"),
+      published("CNAME", "*.example.com", "example.com"),
       published("A", "shop.example.com", "198.51.100.4"),
       published("TXT", "example.com", "google-site-verification=abc"),
     ]);
     expect(diff.ops.map((op) => `${op.action} ${op.record.type} ${op.record.name}`)).toEqual([
-      "update A example.com", "delete CNAME www.example.com",
-      "create AAAA example.com", "create A www.example.com", "create AAAA www.example.com",
+      "update A example.com", "delete CNAME *.example.com",
+      "create AAAA example.com", "create A *.example.com", "create AAAA *.example.com",
     ]);
   });
 
@@ -171,27 +180,37 @@ describe("profiles", () => {
 });
 
 describe("the Cloudflare token template", () => {
-  test("is a user token for any account and every zone, with the permissions the profiles and redirect domains use", () => {
-    const template = tokenTemplate(seededPolicy().profiles);
+  test("is a user token for any account and every zone, with DNS permissions when DNS scope is chosen", () => {
+    const template = tokenTemplate(undefined, { dns: true });
     const url = new URL(template.url);
     expect(url.origin + url.pathname).toBe("https://dash.cloudflare.com/profile/api-tokens");
     expect(url.searchParams.get("accountId")).toBe("*");
     expect(url.searchParams.get("zoneId")).toBe("all");
     expect(JSON.parse(url.searchParams.get("permissionGroupKeys")!)).toEqual([
       { key: "dns", type: "edit" }, { key: "zone", type: "edit" }, { key: "account_settings", type: "read" },
-      { key: "dynamic_redirect", type: "edit" }, { key: "zone_settings", type: "edit" }, { key: "config_settings", type: "edit" },
       { key: "api_tokens", type: "read" },
     ]);
-    expect(template.permissions).toContain("Config Rules: Edit");
-    expect(template.permissions).toContain("Single Redirect: Edit");
+    expect(template.permissions).not.toContain("Single Redirect: Edit");
+    expect(template.permissions).not.toContain("Zone Settings: Edit");
+    expect(template.permissions).not.toContain("Config Rules: Edit");
+
+    const redirectsTemplate = tokenTemplate(undefined, { dns: false, redirects: true });
+    const redirectsUrl = new URL(redirectsTemplate.url);
+    expect(JSON.parse(redirectsUrl.searchParams.get("permissionGroupKeys")!)).toEqual([
+      { key: "zone", type: "read" }, { key: "dns", type: "edit" },
+      { key: "dynamic_redirect", type: "edit" }, { key: "api_tokens", type: "read" },
+    ]);
+    expect(redirectsTemplate.permissions).toContain("Single Redirect: Edit");
+    expect(redirectsTemplate.permissions).toContain("DNS: Edit");
   });
 
-  test("asks for WAF only for a firewall skip", () => {
-    const [web] = seededPolicy().profiles;
-    const creating = { ...web!, zone: { ...web!.zone, createIn: { connectionId: "cf-1", accountId: "a".repeat(32) }, skipFirewallIps: ["203.0.113.7"] } };
-    const template = tokenTemplate([creating]);
+  test("asks for Zone Settings, Config Rules, and WAF only when Cloudflare edge scope uses them", () => {
+    const withSkip = { ssl: "strict" as const, alwaysHttps: true, acmeFullSsl: true, webmailFullSsl: false, skipFirewallIps: ["203.0.113.7"] };
+    const template = tokenTemplate(withSkip, { dns: true, edge: true });
     const keys = JSON.parse(new URL(template.url).searchParams.get("permissionGroupKeys")!);
     expect(keys).toContainEqual({ key: "zone", type: "edit" });
+    expect(keys).toContainEqual({ key: "zone_settings", type: "edit" });
+    expect(keys).toContainEqual({ key: "config_settings", type: "edit" });
     expect(keys).toContainEqual({ key: "zone_waf", type: "edit" });
     expect(template.permissions).toContain("Zone WAF: Edit");
     expect(keys).not.toContainEqual({ key: "firewall_services", type: "edit" });
@@ -209,4 +228,149 @@ test("duplicate records and multiple CNAME targets are refused before they reach
     { type: "CNAME", name: "www.{domain}", content: "two.example.net" },
   ]);
   expect(renderProfile(aliases, vars("example.com")).problems).toContain("www.example.com: only one CNAME row may write to a name");
+});
+
+describe("wildcard coverage (RFC 4592)", () => {
+  const web = profile(PRESETS.find((preset) => preset.id === "web")!.records, { mailcow: false });
+  const wild = () => [
+    published("A", "*.example.com", "203.0.113.10", { proxied: true }),
+    published("AAAA", "*.example.com", "2001:db8::10", { proxied: true }),
+  ];
+
+  test("an unobstructed matching wildcard satisfies a subdomain and deletes redundant explicit records", () => {
+    const rendered = renderProfile(web, vars("shop.example.com"));
+    const clean = diffRecords(rendered, wild());
+    expect(clean.ops).toEqual([]);
+    expect(clean.covered).toEqual({ "shop.example.com": "*.example.com" });
+    expect(clean.blockedWildcard).toEqual({});
+    expect(clean.names).toContain("*.example.com");
+
+    const withExplicit = diffRecords(rendered, [
+      ...wild(),
+      published("A", "shop.example.com", "203.0.113.10", { proxied: true }),
+      published("AAAA", "shop.example.com", "2001:db8::10", { proxied: true }),
+    ]);
+    expect(withExplicit.covered).toEqual({ "shop.example.com": "*.example.com" });
+    expect(withExplicit.ops.map((op) => `${op.action} ${op.record.type} ${op.record.name}`)).toEqual([
+      "delete A shop.example.com", "delete AAAA shop.example.com",
+    ]);
+
+    const withCname = diffRecords(rendered, [...wild(), published("CNAME", "shop.example.com", "old.example.net")]);
+    expect(withCname.covered).toEqual({ "shop.example.com": "*.example.com" });
+    expect(withCname.ops.map((op) => `${op.action} ${op.record.type} ${op.record.name}`)).toEqual(["delete CNAME shop.example.com"]);
+  });
+
+  test("a closer wildcard wins over a broader one", () => {
+    const rendered = renderProfile(web, vars("a.b.example.com"));
+    const diff = diffRecords(rendered, [
+      published("A", "*.example.com", "198.51.100.1", { proxied: true }),
+      published("A", "*.b.example.com", "203.0.113.10", { proxied: true }),
+      published("AAAA", "*.b.example.com", "2001:db8::10", { proxied: true }),
+    ]);
+    expect(diff.covered).toEqual({ "a.b.example.com": "*.b.example.com" });
+    expect(diff.ops).toEqual([]);
+  });
+
+  test("records at, below, or on an intermediate ancestor block the wildcard and fall back to explicit records", () => {
+    const rendered = renderProfile(web, vars("shop.example.com"));
+    const byTxt = diffRecords(rendered, [...wild(), published("TXT", "shop.example.com", "verify=1")]);
+    expect(byTxt.covered).toEqual({});
+    expect(byTxt.blockedWildcard).toEqual({ "shop.example.com": { wildcard: "*.example.com", by: "TXT shop.example.com" } });
+    expect(byTxt.ops.map((op) => `${op.action} ${op.record.type} ${op.record.name}`)).toEqual([
+      "create A shop.example.com", "create AAAA shop.example.com",
+    ]);
+
+    // Empty non-terminal: a record beneath the subdomain blocks the wildcard.
+    const byEnt = diffRecords(rendered, [...wild(), published("TXT", "dkim._domainkey.shop.example.com", "v=DKIM1;p=abc")]);
+    expect(byEnt.covered).toEqual({});
+    expect(byEnt.blockedWildcard["shop.example.com"]).toEqual({ wildcard: "*.example.com", by: "TXT dkim._domainkey.shop.example.com" });
+
+    // A nested wildcard below the subdomain also creates an ENT at the subdomain itself.
+    const bySubWild = diffRecords(rendered, [...wild(), published("A", "*.shop.example.com", "203.0.113.10", { proxied: true })]);
+    expect(bySubWild.covered).toEqual({});
+    expect(bySubWild.blockedWildcard["shop.example.com"]).toEqual({ wildcard: "*.example.com", by: "A *.shop.example.com" });
+
+    // Intermediate ancestor: other.b.example.com makes b.example.com exist without *.b.example.com.
+    const nested = renderProfile(web, vars("a.b.example.com"));
+    const byAncestor = diffRecords(nested, [...wild(), published("TXT", "other.b.example.com", "x")]);
+    expect(byAncestor.covered).toEqual({});
+    expect(byAncestor.blockedWildcard["a.b.example.com"]).toEqual({ wildcard: "*.example.com", by: "TXT other.b.example.com" });
+
+    // A profile that itself writes MX/TXT (such as Web and Mailcow) also reports why the wildcard cannot cover it.
+    const mailRendered = renderProfile(webAndMailcow, vars("mainwp.example.com"));
+    const byOwnMail = diffRecords(mailRendered, wild());
+    expect(byOwnMail.covered).toEqual({});
+    expect(byOwnMail.blockedWildcard["mainwp.example.com"]).toEqual({ wildcard: "*.example.com", by: "MX mainwp.example.com" });
+    expect(byOwnMail.ops.map((op) => `${op.action} ${op.record.type} ${op.record.name}`)).toContain("create A mainwp.example.com");
+  });
+
+  test("mismatched IP, proxy, address family or CNAME wildcard is never used", () => {
+    const rendered = renderProfile(web, vars("shop.example.com"));
+    const wrongIp = diffRecords(rendered, [
+      published("A", "*.example.com", "198.51.100.9", { proxied: true }),
+      published("AAAA", "*.example.com", "2001:db8::10", { proxied: true }),
+    ]);
+    expect(wrongIp.covered).toEqual({});
+    expect(wrongIp.blockedWildcard).toEqual({});
+    expect(wrongIp.ops.map((op) => op.record.type)).toEqual(["A", "AAAA"]);
+
+    const wrongProxy = diffRecords(rendered, [
+      published("A", "*.example.com", "203.0.113.10", { proxied: false }),
+      published("AAAA", "*.example.com", "2001:db8::10", { proxied: false }),
+    ]);
+    expect(wrongProxy.covered).toEqual({});
+    expect(wrongProxy.ops.map((op) => op.record.type)).toEqual(["A", "AAAA"]);
+
+    // Missing AAAA on wildcard: must write BOTH A and AAAA, never AAAA alone.
+    const missingV6 = diffRecords(rendered, [published("A", "*.example.com", "203.0.113.10", { proxied: true })]);
+    expect(missingV6.covered).toEqual({});
+    expect(missingV6.ops.map((op) => op.record.type)).toEqual(["A", "AAAA"]);
+
+    // Server has no IPv6, but wildcard still carries a stale AAAA: must write explicit A.
+    const ipv4Only = renderProfile(web, vars("shop.example.com", "example.com", { ipv6: "" }));
+    const extraV6 = diffRecords(ipv4Only, wild());
+    expect(extraV6.covered).toEqual({});
+    expect(extraV6.ops.map((op) => `${op.action} ${op.record.type}`)).toEqual(["create A"]);
+
+    // CNAME wildcard does not match wanted A/AAAA.
+    const cnameWild = diffRecords(rendered, [published("CNAME", "*.example.com", "target.example.net", { proxied: true })]);
+    expect(cnameWild.covered).toEqual({});
+    expect(cnameWild.ops.map((op) => op.record.type)).toEqual(["A", "AAAA"]);
+  });
+
+  test("planned sibling wildcard overrides stale published wildcard, and NS cuts occlude descendant wildcards", () => {
+    const rendered = renderProfile(web, vars("shop.example.com"));
+    const stale = [
+      published("A", "*.example.com", "198.51.100.1", { proxied: true }),
+      published("AAAA", "*.example.com", "2001:db8::99", { proxied: true }),
+    ];
+    const apex = renderProfile(web, vars("example.com"));
+    const diff = diffRecords(rendered, stale, {
+      zoneRecords: apex.records.filter((record) => record.name.startsWith("*.")),
+      zoneClaims: apex.claims.filter((claim) => claim.name.startsWith("*.")),
+    });
+    expect(diff.covered).toEqual({ "shop.example.com": "*.example.com" });
+    expect(diff.ops).toEqual([]);
+    expect(wildcardSource("example.com", "example.com", wild())).toBeNull();
+
+    // An NS delegation cut at an ancestor occludes any wildcard at or below the cut.
+    expect(wildcardSource("a.b.example.com", "example.com", [
+      published("NS", "b.example.com", "ns1.elsewhere.example"),
+      published("A", "*.b.example.com", "203.0.113.10", { proxied: true }),
+    ])).toBeNull();
+
+    // A single profile with both *.{domain} and www.{domain} creates the wildcard before deleting redundant www records.
+    const both = profile([
+      { type: "A", name: "{domain}", content: "{ipv4}", proxied: true },
+      { type: "A", name: "www.{domain}", content: "{ipv4}", proxied: true },
+      { type: "A", name: "*.{domain}", content: "{ipv4}", proxied: true },
+    ], { mailcow: false });
+    const handoff = diffRecords(renderProfile(both, vars("example.com")), [
+      published("A", "example.com", "203.0.113.10", { proxied: true }),
+      published("A", "www.example.com", "203.0.113.10", { proxied: true }),
+    ]);
+    expect(handoff.ops.map((op) => `${op.action} ${op.record.type} ${op.record.name}`)).toEqual([
+      "create A *.example.com", "delete A www.example.com",
+    ]);
+  });
 });

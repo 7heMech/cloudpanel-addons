@@ -21,6 +21,7 @@ function fixture(legacy = false) {
     ...DEFAULT_INSTATIC_ACTION_PATHS,
     homeDir: join(root, "home"), dataBaseDir: join(root, "state"), backupDir: join(root, "deleted"),
     panelDb: join(root, "panel.db"), lockDir: join(root, "locks"), jobsDir: join(root, "jobs"),
+    systemdDir: join(root, "systemd"),
   };
   const state = join(paths.dataBaseDir, domain);
   mkdirSync(state, { recursive: true });
@@ -151,7 +152,8 @@ appendFileSync(process.env.TEST_CALLS, JSON.stringify([command, ...args]) + '\\n
 if (command === 'id') { console.log('1500'); process.exit(0); }
 if (command === 'chown') process.exit(0);
 if (command === 'curl') { console.log('200'); process.exit(0); }
-if (command === 'ss') process.exit(0);
+if (command === 'ss' || command === 'systemctl' || command === 'ufw') process.exit(0);
+if (command === 'docker' && args[0] === 'network') { console.log(args.at(-1).includes('bridge.name') ? 'clp-instatic' : '172.30.0.1'); process.exit(0); }
 if (command === 'docker') {
   const file = process.env.TEST_CONTAINERS;
   const state = JSON.parse(readFileSync(file, 'utf8'));
@@ -184,7 +186,7 @@ if (command === 'docker') {
   writeFileSync(file, JSON.stringify(state));
 }
 `;
-  for (const command of ["docker", "id", "chown", "curl", "ss"]) writeFileSync(join(bin, command), script, { mode: 0o755 });
+  for (const command of ["docker", "id", "chown", "curl", "ss", "systemctl", "ufw"]) writeFileSync(join(bin, command), script, { mode: 0o755 });
   return { bin, calls, containers };
 }
 

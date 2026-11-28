@@ -3,7 +3,19 @@ import { existsSync } from "node:fs";
 export const PANEL_IDENTITY_PATH = "/etc/clp-addons/panel-identity.conf";
 
 export const REPO = "7heMech/cloudpanel-addons";
-export const CLI_ARTIFACT = "clp-addons-linux-x64";
+const CLI_ARTIFACTS: Partial<Record<NodeJS.Architecture, string>> = {
+  x64: "clp-addons-linux-x64",
+  arm64: "clp-addons-linux-arm64",
+};
+
+/** The release asset built for `arch`; releases ship x64 and arm64 only. */
+export function cliArtifactForArch(arch: string = process.arch): string {
+  const artifact = CLI_ARTIFACTS[arch as NodeJS.Architecture];
+  if (!artifact) throw new Error(`no clp-addons release is built for ${arch}; releases cover x64 and arm64`);
+  return artifact;
+}
+
+export const CLI_ARTIFACT = cliArtifactForArch();
 export const CLI_BIN = "/usr/local/bin/clp-addons";
 export const LIBEXEC_DIR = "/usr/local/libexec/clp-addons";
 /** Sigstore's trusted keys, cached where only root can write. */
@@ -91,6 +103,8 @@ export const PANEL_CACHE_POOL_DIR = `${PANEL_APP}/var/cache/prod/pools/app`;
 export const ROOT_UID = 0;
 export const CONFIG_DIR = "/etc/clp-addons";
 export const STATE_DIR = "/var/lib/clp-addons";
+/** Shared Cloudflare API connections, read by DNS, Firewall and Setup. */
+export const CLOUDFLARE_STATE_DIR = `${STATE_DIR}/cloudflare`;
 /** An addon is enabled while this file exists. */
 export const addonConfigFile = (addon: string) => `${CONFIG_DIR}/${addon}.conf`;
 /** What an addon keeps, which disabling leaves in place. */

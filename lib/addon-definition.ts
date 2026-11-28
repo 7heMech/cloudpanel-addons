@@ -61,12 +61,11 @@ interface PanelBlock {
   inspect: () => { ok: boolean; text: string; hold?: PanelHold };
 }
 
-/** The Setup checklist's groups, in the order it shows them. */
+/** The Setup checklist's goal-oriented paths, in the order its tabs show them. */
 export const SETUP_LEVELS = {
-  domain: "Connect your domain",
-  secure: "Secure the server",
-  sites: "Run sites",
-  provision: "Provision automatically",
+  domain: "Panel domain & sign-in",
+  secure: "Secure this server",
+  sites: "Automate & run sites",
 } as const;
 export type SetupLevel = keyof typeof SETUP_LEVELS;
 
@@ -74,6 +73,8 @@ export interface SetupCheck {
   state: "done" | "todo" | "na";
   /** One line: what was found, or what is missing. */
   reason: string;
+  /** Optional destination override when the check routes elsewhere, such as /admin/settings without Cloudflare. */
+  href?: string;
 }
 
 /** A step the Setup checklist suggests; an administrator may skip any. */
@@ -84,6 +85,12 @@ export interface SetupStep {
   title: string;
   /** The page, and card, that sets it up. */
   href: string;
+  /** One short sentence explaining why this step matters, shown on the Setup page. */
+  why?: string;
+  /** Step ids that must be done before this step can run; unmet ones lock it inline behind its prerequisite. */
+  requires?: string[];
+  /** Omit from Setup when the check answers `na`, for host-specific cloud vendors such as Hetzner or netcup. */
+  hostSpecific?: true;
   /**
    * Run as root on every addon page an administrator opens, so it reads local
    * state only. To do means the step lacks something it needs, such as a
@@ -119,6 +126,9 @@ export interface ActionNeededCheck {
   check: (options?: Record<string, unknown>) => (ActionNeeded | string)[] | Promise<(ActionNeeded | string)[]>;
 }
 
+/** The architectures a release is built for, as `process.arch` names them. */
+export type AddonArch = "x64" | "arm64";
+
 /** Paths are derived from `name`, not declared. */
 export interface AddonDefinition {
   name: string;
@@ -126,6 +136,8 @@ export interface AddonDefinition {
   description: string;
   /** systemd units this addon cannot work without, such as `docker`. */
   requiresUnits?: string[];
+  /** The only architectures it can be enabled on; every one if unset. */
+  supportedArches?: readonly AddonArch[];
   /** The release it first shipped in, such as `2.0.0-rc.1`; the Addons page marks it New for boxes updated past it. */
   added?: string;
   /** Changes an operator must know about, such as moved settings or new effects on sites, each shown as Changed on the same terms as `added`; not for layout or speed. */
@@ -188,6 +200,16 @@ export interface AddonDefinition {
    * waiting on them starts again in a site the addon has just left.
    */
   withdraw?: (removeConfig: () => void) => void;
+}
+
+export function addonSupportsArch(definition: Pick<AddonDefinition, "supportedArches">, arch: string = process.arch): boolean {
+  return !definition.supportedArches || (definition.supportedArches as readonly string[]).includes(arch);
+}
+
+/** Why it cannot be enabled on `arch`, or null when it can. */
+export function archRefusal(definition: Pick<AddonDefinition, "name" | "supportedArches">, arch: string = process.arch): string | null {
+  if (addonSupportsArch(definition, arch)) return null;
+  return `${definition.name} is not available on ${arch} servers; it runs on ${definition.supportedArches!.join(", ")} only`;
 }
 
 export interface AddonSpec extends AddonDefinition {

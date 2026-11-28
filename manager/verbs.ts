@@ -18,5 +18,12 @@ export const MANAGER_VERBS = {
   // The Setup checklist for the administrator --user names, and their skips and Hide.
   setup: { web: "admin" },
   "setup-pref": { web: "admin" },
+  // Shared Cloudflare API connections, used by DNS and Firewall's Panel gate.
+  "cloudflare-list": { web: "admin" },
+  "cloudflare-save": { web: "admin" },
+  "cloudflare-remove": { web: "admin" },
+  "cloudflare-check": { web: "admin" },
+  // Root's opt-in to weekly addon usage sharing; no flag reads it.
+  "usage-sharing": { web: "admin" },
   run: { web: false, why: "the job runner, started only by the transient unit enable, disable and update launch" },
 } as const;

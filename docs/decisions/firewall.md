@@ -1,9 +1,12 @@
 # Firewall
 
 Firewall holds who may reach the server's sites and ports: CloudPanel's
-per-site "Allow traffic from Cloudflare only" setting, across every site, a
-protocol for each rule on CloudPanel's own Firewall page, a gate in front of
-the panel, and Hetzner Cloud Firewalls that let only Cloudflare reach the web
+per-site "Allow traffic from Cloudflare only" setting across every site,
+Cloudflare visitor IPs for site access logs and PHP, Cloudflare zone-wide edge
+defaults (SSL/TLS mode, Always Use HTTPS, Let's Encrypt and webmail Full SSL
+rules, and WAF skip IPs), a protocol for each rule on CloudPanel's own Firewall
+page, a Cloudflare Access gate in front of the panel, and Hetzner Cloud
+Firewalls or netcup firewall policies that let only Cloudflare reach the web
 ports and the panel.
 
 ## Cloudflare-only sites
@@ -41,8 +44,15 @@ enable says that a site not proxied through Cloudflare stops answering; a
 selection that would change nothing is reported and not sent. Nothing is
 restored afterwards. A per-site switch acts immediately without confirmation,
 because turning one site off is the ordinary correction after a bulk change.
-"Enable on new sites" is a switch below the table, then the Protocols card,
-and the Hetzner Cloud Firewall card comes last.
+The page uses the shared `.section-shell` to split Cloudflare only (the site
+table with "Enable on new sites" and Cloudflare visitor IPs directly under it),
+Cloudflare edge (zone-wide edge defaults, reachable zones, recent edge changes,
+and the shared Cloudflare connections card, replaced by a focused first-run
+connect card while no Cloudflare connection is saved), Panel gate (the gate card
+and a link or connect card for shared Cloudflare connections), Protocols, and
+Cloud firewall when a matching Hetzner Cloud Firewall or netcup firewall card is
+present. Provider cards appear only on that cloud host or when a credential is
+saved, and the Cloud firewall section is omitted when neither is present.
 
 Selection checkboxes stay separate from the per-site switch, and the
 selected-scope actions are unavailable until something is selected. On desktop,
@@ -75,6 +85,70 @@ and recorded.
 Turning a site off in the addon records its hostname as an exception, and the
 check does not re-enable an exception. Turning the site on removes it. Enabling
 or disabling the policy does not change existing sites.
+
+## Cloudflare visitor IPs
+
+Behind Cloudflare's proxy a site's `$remote_addr` is the Cloudflare edge, and
+behind a Cloudflare Tunnel it is `127.0.0.1` or `::1`, where cloudflared on this
+server connects from. CloudPanel's `main` log format and PHP's `REMOTE_ADDR` use
+`$remote_addr`, and its `cloudflare` format logs `CF-Connecting-IP` from any
+client, even one the Cloudflare-only rules refuse.
+
+`$remote_addr` cannot come straight from `CF-Connecting-IP`. Nginx's real-IP
+directives apply one header to every server, and CloudPanel's templates proxy
+PHP from the front server on 80 and 443 to a backend on `127.0.0.1:8080`,
+passing every request header on. A backend that trusted loopback for
+`CF-Connecting-IP` would accept a direct visitor's forged header. Nginx also
+checks the Cloudflare-only `allow` list against the rewritten address, so every
+visitor would fail that check.
+
+**Cloudflare visitor IPs** defaults to on, stored in
+`/var/lib/clp-addons/firewall/visitor-ip.json`. It leaves `$remote_addr` alone
+and defines `$clp_visitor_ip` in
+`/etc/nginx/sites-enabled/00-clp-addons-visitor-ip.conf`, built by
+`lib/visitor-ip.ts` from CloudPanel's `/etc/nginx/cloudflare/ips`. The variable
+holds a well-formed `CF-Connecting-IP` when Cloudflare set the header, and
+`$remote_addr` otherwise. Cloudflare set it when `$realip_remote_addr` is:
+
+- one of Cloudflare's ranges;
+- loopback on port 80 or 443, where cloudflared connects;
+- loopback on another port, where CloudPanel's front server or Varnish
+  connects, with an `X-Real-IP` matching one of those addresses.
+
+On such a hop, `$clp_visitor_ip` falls back to that `X-Real-IP`. The front
+server sets it from its own `$remote_addr`, so the sites' `nginx.conf` stops
+trusting `127.0.0.1`, and the setting comments that line out with the
+`#clp-addons:hop` marker followed by a space. A tunnel visitor's `X-Real-IP` is
+ignored on 80 and 443.
+
+The map cannot distinguish CloudPanel's front server from another local client
+on the backend port, so a tunnel pointed at port 8080, or a local user
+connecting there, can still set `X-Real-IP`. The operator guide tells users to
+point a tunnel at port 80 or 443.
+
+The setting points the `main` and `cloudflare` log formats in `nginx.conf` and
+`REMOTE_ADDR` in `fastcgi_params` at `$clp_visitor_ip`. Nginx error logs,
+`allow`/`deny`, basic auth, and rate limits keep `$remote_addr`. In the backend
+that is `127.0.0.1` for every visitor. CloudPanel's vhosts apply `$remote_addr`
+only in the front server, so the operator guide advises keeping manual IP rules
+in the front server block.
+
+Both files are `nginx-common` conffiles, declared in `FIREWALL_ADDON.conffiles`
+so `apt-hook pre` releases them before an `nginx-common` upgrade, one at a time
+and without a reload. `nginx.conf` counts as edited when it contains either
+`$clp_visitor_ip` or the hop marker. Every matching line is edited, and the map
+stays while either file still references it. Activation, anchor repair, and the
+15-minute repair reapply the edits and rebuild the map when CloudPanel's IP list
+changes. Switching off restores the lines and removes the map. Switching on
+refuses a map file clp-addons did not write, and switching off leaves such a
+file alone. Root's lock covers `set-visitor-ip`, because switching it off
+reopens tunnel IP forgery (`clp-addons lock firewall`). Maintenance Mode builds
+its bypass address from the same `lib/visitor-ip.ts`.
+
+`bun tests/integration/integration-visitor-ip.ts` runs real Nginx in Docker with
+the edited files, verifying that Cloudflare and a local tunnel pass the visitor
+address while direct clients, malformed headers, and `X-Real-IP` sent through a
+tunnel keep the connecting address.
 
 ## Protocols
 
@@ -158,6 +232,133 @@ CloudPanel v3: CloudPanel's own migration carries the rules, and keying by
 port range and source is what lets the choices follow them. Without the addon,
 a UDP rule comes back as TCP.
 
+## Cloudflare edge defaults
+
+Zone-wide Cloudflare edge settings and rules belong to Firewall, not to DNS
+profiles: every site in a zone shares them, and Firewall stays decoupled from
+`addons/dns` with zero imports from `addons/dns` (enforced by
+`tests/test-cloudflare-store.test.ts`). Pure defaults parsing, rule specs, and
+change/conflict planning live in `lib/cloudflare/edge.ts` so `lib/cloudflare/tokens.ts`
+and `lib/cloudflare/store.ts` compute required token permissions without
+importing either addon. Firewall's runtime controller lives in
+`addons/firewall/edge.ts`.
+
+### Settings and rules
+
+`EdgeDefaults` manages five zone-wide controls:
+
+- **SSL/TLS mode** (`off`, `flexible`, `full`, `strict`, or `null` to leave alone),
+  defaulting to `strict` (Full (strict)).
+- **Always Use HTTPS** (`true`, `false`, or `null` to leave alone), defaulting
+  to `true`.
+- **Full SSL for Let's Encrypt checks** (`acmeFullSsl`, default `true`): a
+  zone-wide `http_config_settings` rule setting `ssl: "full"` on
+  `starts_with(http.request.uri.path, "/.well-known/acme-challenge/")`.
+- **Full SSL for webmail hosts** (`webmailFullSsl`, default `false`): a
+  zone-wide `http_config_settings` rule setting `ssl: "full"` on
+  `starts_with(http.host, "webmail.")`.
+- **WAF skip IPs** (`skipFirewallIps`, default empty, up to 20 IPv4/IPv6
+  addresses): a zone-wide `http_request_firewall_custom` rule skipping
+  `http_request_sbfm` and `http_request_firewall_managed` for `ip.src in {...}`.
+
+Managed rules use refs `clp_fw_acme`, `clp_fw_webmail`, and `clp_fw_skip`, and
+also recognize legacy DNS refs `clp_dns_acme`, `clp_dns_webmail`, and
+`clp_dns_skip` as well as equivalent enabled rules written by another tool such
+as Terraform so upgrades and existing zones never duplicate rules when no
+competing rule overlaps the same target. Competing foreign rules are checked
+before accepting either a matching managed rule or an equivalent foreign rule,
+so an overlapping rule (such as a foreign ACME rule setting Flexible SSL beside
+Full SSL) holds the zone as a conflict instead of reporting it synced. When
+applying a zone, rules are written before zone settings so the ACME Full SSL
+rule is in place before SSL switches to Full (strict). Only settings and phases
+managed by the current or previous defaults, or by a tracked managed rule, are
+read, so a rule-only token without Zone Settings Edit or Zone WAF Edit does not
+hit 403 on unused endpoints. `cloudflare-edge-status.json` keeps managed-rule
+cleanup tracking (`trackedManagedRules`) keyed by Cloudflare zone ID separately
+from the reachable `zones` list and clears a rule key only after a successful
+ruleset read proves that managed rule is gone, so a temporarily unreachable
+connection never drops cleanup for an active WAF skip or config rule.
+
+### Approve-once flow and destructive/conflict guards
+
+State lives in root-owned `0600` files under `/var/lib/clp-addons/firewall/`
+(`cloudflare-edge.json`, `cloudflare-edge-status.json`, and
+`cloudflare-edge-pending.json`), serialized under
+`/run/clp-addons/firewall-edge.lock` taken before `cloudflare.lock`. Page loads
+read only local files and make zero Cloudflare API calls.
+
+1. **Before approval (`approved: false`).** Firewall reads reachable Cloudflare
+   zones (active and pending, ignoring moved, deleted, and deactivated zones)
+   and previews changes without writing. Saving a draft updates
+   `cloudflare-edge.json` without touching Cloudflare. Per-zone review and
+   confirmation (`edge-review-zone` and single-zone `edge-confirm`) are
+   refused on the server and hidden in the UI until defaults are approved.
+2. **Approve once (`edge-save` with `approve: true` -> `edge-confirm`).** Root
+   reads live Cloudflare zones, builds a review with a 15-minute random token
+   and SHA-256 plan digest, and stores it in `cloudflare-edge-pending.json`.
+   Confirming re-reads live Cloudflare state, verifies both config hash and
+   plan digest (showing a fresh review if Cloudflare changed in between),
+   applies changes to non-blocked zones, records `approved: true` with
+   `approvedDigest`, and logs each write.
+3. **Automatic inheritance for new zones.** While `approved` is true and
+   `approvedDigest` matches the saved defaults, `edge-check`, the 15-minute
+   repair pass, and Firewall's `newSites` hook automatically apply safe
+   (non-destructive, non-conflicting) defaults to new or newly discovered zones
+   with no per-site review hold.
+4. **Explicit confirmation for destructive changes and conflicts.** Even after
+   approval, automatic reconciliation never overwrites a zone that has:
+   - an **SSL downgrade** (lowering rank among `off < flexible < full < strict`,
+     or changing an unknown mode);
+   - **Always Use HTTPS switched off** (`on` to `off`);
+   - **removing a managed rule or removing IPs from a managed WAF skip rule**;
+   - **a managed rule disabled or edited in Cloudflare**;
+   - **a conflicting foreign rule** targeting the ACME path, `webmail.` host, or
+     overlapping IP WAF skip (a single exact-expression foreign rule holds for
+     confirmation via `edge-review-zone`; multiple or compound foreign rules, or
+     a foreign rule competing beside a managed or equivalent rule, block until
+     resolved in Cloudflare);
+   - **zone name ambiguity or an unavailable saved zone choice**: saved
+     `zoneChoices` resolve before single-candidate fallback so a temporary
+     inventory outage on the chosen account holds the zone name as a conflict
+     instead of switching to another account.
+
+   Guarded zones stay untouched with status `needs_review` or `conflict`, raise
+   an Action needed item in Setup, and apply only after the operator confirms
+   the per-zone review (`edge-review-zone` -> `edge-confirm`, available once
+   defaults are approved). Editing approved defaults always plans and reviews
+   across zones before saving; pausing (`pause: true`) turns off automatic
+   enforcement immediately with no writes.
+
+### Token permissions and upgrade migration
+
+`Zone Settings: Edit`, `Config Rules: Edit`, and `Zone WAF: Edit` live in
+`lib/cloudflare/tokens.ts` as `edge` permissions: required on Firewall when the
+corresponding default is enabled and optional on DNS. The shared Connect
+Cloudflare dialog offers independent checkboxes for DNS records, Cloudflare edge
+defaults, and Panel gate so operators can mint minimal or combined tokens.
+
+`migrateCloudflareEdgeFromDns` in `addons/firewall/migration.ts` (run from
+`cli/addons.ts` under `dns.lock` -> `firewall-edge.lock` -> `cloudflare.lock`,
+with full rollback on failure) moves legacy `zone` blocks out of
+`dns/policy.json` profiles into `firewall/cloudflare-edge.json` without
+importing `addons/dns`. On a v1 file it aggregates active assigned/default
+profiles (falling back to all profiles when unassigned); on a v2 file, every
+profile still carrying a `zone` block or list of blocks, which DNS writes only
+from the v1 profiles in use. It sets `acmeFullSsl` when any relevant
+profile enabled it or `panelHost` was set, treats an unmanaged (`null` or
+omitted) SSL/TLS mode or Always Use HTTPS beside a set value as a disagreement
+(leaving the setting `null` with a `migrationNote` and `approved: false`), and
+refuses migration before writing or removing legacy state if the combined
+`skipFirewallIps` union exceeds `MAX_SKIP_IPS` (20). Unambiguous active options
+are marked `approved: true` only when DNS is enabled (`dns.conf` exists) and
+Automatic with Cloudflare connected. When DNS is enabled with approved options
+and Firewall was disabled, the migration enables Firewall with
+`autoEnableNewSites: false` and `visitor-ip.json` set to `enabled: false` (when
+absent) so live Nginx configs stay untouched. If migration fails during
+`cli/repair.ts` while legacy DNS state is still pending, repair skips DNS's
+repair hook, and DNS's `savePolicy` preserves unmigrated per-profile `zone`
+blocks on disk until `migrateCloudflareEdgeFromDns` finishes and strips them.
+
 ## Panel gate
 
 ### The threat
@@ -228,10 +429,17 @@ CloudPanel's custom domain is a server block of the sites' Nginx,
   checked the same way. The challenge then reaches the server as any other
   request does: Cloudflare connects to 443 with the origin-pull certificate,
   which is per hostname rather than per path, and the panel serves
-  `/.well-known` itself. DNS's `clp_dns_acme` rule, Full SSL for that path,
-  keeps that connection working while the certificate is expired or not yet
-  issued; Full still presents the origin-pull certificate. Port 80 is not
-  involved: the custom domain's server only redirects there, and
+  `/.well-known` itself. While the origin certificate is still valid, normal
+  renewals succeed over Full (strict) through that Access Bypass without DNS
+  enabled. If the origin certificate is already expired or not yet issued under
+  Full (strict), Cloudflare refuses the origin handshake unless Firewall's
+  `clp_fw_acme` (or legacy `clp_dns_acme`) rule for
+  `/.well-known/acme-challenge/*` is present under Cloudflare edge defaults;
+  Full still presents the origin-pull certificate. Without that rule, recovering
+  an expired certificate under Full (strict) requires switching SSL mode
+  temporarily to Full or turning the gate off over SSH with
+  `clp-addons firewall panel-gate off`.
+  Port 80 is not involved: the custom domain's server only redirects there, and
   `ssl_verify_client` applies to TLS connections alone.
 
 The Access token is not checked at the origin. A request reaches the
@@ -246,21 +454,22 @@ about remote clients, and loopback is the way back in.
 
 Every check runs in the root action, when the switch is used and again when it
 is confirmed; the page shows the review and sends its digest back, as the
-Hetzner switches do. The review changes nothing, a clean-up of an earlier
-gate included, so cancelling it leaves everything as it was. It refuses unless CloudPanel has a custom domain, both
-vhosts have the shape the edits expect, an active panel user has an email, a
-DNS connection's token reaches an active zone for the hostname (the longest),
-the hostname has A, AAAA or CNAME records and all are proxied, and the token
-holds SSL and Certificates: Edit on the zone and both Access permissions on
-its account. Those three are in DNS's permission list (`addons/dns/token.ts`)
-as optional, so a DNS token without them is fine until the gate is wanted; the
-gate reads the token's own policies (`/user/tokens/{id}`) and checks them with
-`addons/dns/access.ts`, so a token without API Tokens: Read is asked for it. A
-zone in SSL mode Off or Flexible is refused, since Cloudflare would reach the
-server over port 80, where the custom domain only redirects; when the mode
-cannot be read (it needs Zone Settings: Read), the review says it must be Full
-or Full (strict). The review says that the panel stops answering at the IP on
-8443, how to get back in, and that Access emails a code.
+Hetzner switches do. The review changes nothing, including cleaning up an
+earlier gate, so cancelling it leaves everything as it was. It refuses unless
+CloudPanel has a custom domain, both vhosts match the expected structure, an
+active panel user has an email, a shared Cloudflare connection's token reaches
+an active zone for the hostname, the hostname has proxied A, AAAA, or CNAME
+records of its own or is covered by an unobstructed proxied wildcard in the
+zone, and the token holds SSL and Certificates: Edit on the zone and both Access
+permissions on its account. Those permissions live in `lib/cloudflare/tokens.ts`
+and are checked locally with `lib/cloudflare/access.ts` against the shared
+connection store in `/var/lib/clp-addons/cloudflare/`, so Panel gate works
+without enabling DNS. A token without API Tokens: Read is asked for it. A zone
+in SSL mode Off or Flexible is refused because Cloudflare would reach the server
+over port 80, where the custom domain only redirects. When the mode cannot be
+read, the review states that the zone must use Full or Full (strict). The review
+states that the panel stops answering at the IP on port 8443, how to get back
+in, and that Access emails a one-time code.
 
 ### Order and rollback
 
@@ -287,7 +496,7 @@ Turning off runs the other way: the panel's block, the custom domain's lines
 and the files, then the Access application, its policy and the certificate.
 Cloudflare failures leave the gate off and the objects for repair to delete.
 Turning on again deletes what an earlier gate left first, once confirmed,
-through its own DNS connection or another that reaches the same zone and
+through its own Cloudflare connection or another that reaches the same zone and
 account, and refuses while that fails, so the record of those objects is
 never dropped. A failure says what undoing it left, if anything.
 
@@ -335,7 +544,9 @@ most a minute behind through Setup's cache.
 
 The page draws a gate that is off from local files alone and then asks the
 `panel-gate` verb for what it needs, so Cloudflare's replies never hold the
-site table back. Those reads run in parallel.
+site table back. Those reads run in parallel. Setup lists Panel gate as a
+step that requires `panel-hostname`, checking only the local gate state file and
+the shared Cloudflare connection store.
 
 `bun tests/integration/integration-panel-gate.ts` runs both edits in real
 Nginx in Docker: the custom domain refuses a request without the gate's
@@ -354,7 +565,7 @@ servers have a different firewall API and are not covered.
 The server's id comes from the metadata service,
 `http://169.254.169.254/hetzner/v1/metadata/instance-id`, with a 1.5-second
 deadline; anything but a number there means this is not a Hetzner Cloud
-server, and the card says so and offers nothing. Before a token, the card
+server, and the page omits the card while no token is saved. Before a token, the card
 names the server from `…/metadata/hostname`, its name when it was created, so
 the operator can find its project. Changes ask twice. Once a token is
 connected the id is kept in `hetzner.json`, so a moment's silence
@@ -483,16 +694,18 @@ close, the way back, and, when ports close, the server's name to type.
   8443, so every Cloudflare range must also reach 443 through the firewalls
   the change leaves on this server. The review then says the panel answers
   only at that domain, and that an SSH tunnel to `127.0.0.1:8443` is the way
-  back, or Hetzner's web console when SSH closes too.
+  back, or Hetzner's web console when SSH is closed or closes too.
 - Sites: the review lists every hostname the sites answer to, each site's
   domain and the other names in its vhost's `server_name`, and the custom
   domain, whose A or AAAA records include an address outside the list: those
   stop answering. A name that does not resolve answers no one already and is
-  left out.
+  left out of the list, and the review does not claim every site resolves to
+  Cloudflare while any hostname did not resolve.
 - No effect: a source another attached firewall allows to the same ports that
   is not inside the list leaves the addon's firewall without effect. The review,
   the result and the card name the port, the firewall and the sources
-  ("443 is still open to anyone through firewall X") instead of success.
+  ("443 is still open to anyone through firewall X") instead of success; a
+  source an earlier drop partly takes is named as "some of" it.
 - Off: the review says which firewall takes the Cloudflare one's place, or
   that nothing of the addon's stays. Turning sites off is refused while the
   panel switch is on and the firewalls left would not let Cloudflare reach
@@ -528,12 +741,201 @@ cannot bring the file back. A page read skips the write while a change holds
 the lock, and when something recorded after the read began. `hetznerSetupState`
 returns that, whether a token is saved, and whether this is Hetzner Cloud
 (`/sys/class/dmi/id/sys_vendor` is `Hetzner`, or a token is saved), without
-asking Hetzner, so the checklist costs no request when a page loads. Setup
-suggests the switches from it, and raises Action needed once a saved token's
-`seenAt` is an hour old: repair reads Hetzner every 15 minutes and records only
-when that works, so four misses in a row are a token Hetzner refuses or a
-Hetzner that does not answer. A null `seenAt` has not been read yet and raises
-nothing.
+asking Hetzner, so the checklist costs no request when a page loads. Setup suggests the switches from it, marks both `hetzner-firewall` and
+`netcup-firewall` as `hostSpecific` so non-matching hosts omit them, and raises
+Action needed once a saved token's `seenAt` is an hour old: repair reads
+Hetzner every 15 minutes and records only when that works, so four misses in a
+row are a token Hetzner refuses or a Hetzner that does not answer. A null
+`seenAt` has not been read yet and raises nothing.
+
+## Provider firewalls
+
+Hetzner and netcup share `addons/firewall/cloud-firewall.ts`: reading and
+checking Cloudflare's list, the two roles and their ports, the plan of which
+open firewalls a change needs, the review and its safeguards, the card's view,
+and the Setup state. Each provider maps its firewalls to a `Guard`, its inbound
+rules in the order the provider applies them, and says whether it lets in what
+no rule decides, now and after a change. A rule list is read first match wins
+across port subranges, source-port ranges, and address intervals; Hetzner rules
+only allow, so this is the union described above. Whether clients connect is
+asked over their source ports, 1024–65535: a port closes with a change when
+some source port reached it before and does not after, and the way back counts
+only when every source port reaches it. What else lets
+anyone past Cloudflare is asked over every source port. A port of `0` covers no
+connection, so `0-65535` covers all. A port that cannot be read is taken the way
+that errs safe: an unreadable accept matches when asking what is open, and an
+unreadable drop when asking what still connects. Each provider keeps its own
+API client, how it finds this server, its credential, and how it carries out a
+plan.
+
+## netcup firewall
+
+netcup filters a server's interface by policies: lists of rules, shared by the
+account's servers, assigned per interface through the SCP REST API
+(`https://www.servercontrolpanel.de/scp-core/api/v1`, described by its OpenAPI
+document at `…/openapi`). A server with no policy with an inbound rule lets
+everything in; once one has an inbound rule, netcup drops what no rule
+accepts. Its tracking of connections covers TCP only.
+
+### Signing in
+
+The API takes a bearer token from netcup's Keycloak realm `scp`. The addon
+uses the device authorization grant with the public client `scp`, which the
+realm's discovery document lists and netcup's own tools use, and the scopes
+`openid offline_access`: the root action asks for a code, keeps the device
+code in `netcup-device.json`, and returns only the user code and netcup's link
+(checked to be on `www.servercontrolpanel.de`). The page shows them and asks
+the root action, at the interval netcup gives, whether access was granted;
+`slow_down` widens the interval; `access_denied`, `expired_token`,
+`invalid_grant`, `invalid_client`, `unauthorized_client` or `invalid_request`
+ends the attempt, and any other failure leaves the code for the page to ask
+again until it expires. After the grant, `netcup-token.json` and `netcup.json`
+are written together under the token lock; if writing `netcup.json` fails, the
+previous token is restored (or the new one removed) and the new refresh token
+is revoked. If restoring fails too, both files are removed before the token
+lock is released, so no refresh spends the new token before it is revoked. Any failure before both are saved revokes the new token; replacing
+a saved sign-in with an account that does not hold this server keeps the old
+sign-in and state, revokes the new token, and fails. Only the refresh token is
+kept, in `netcup-token.json` through `lib/root-state.ts`. Each read or change
+exchanges it for an access token under its own lock, and saves the token
+Keycloak returns before using the access token, since Keycloak may rotate it
+on each use and two processes must never spend the same one. `invalid_grant`,
+or a 401 from the API, is a sign-in netcup no longer accepts, and the card asks
+to connect again. Disconnecting revokes the refresh token at the realm's
+revocation endpoint and removes both `netcup-token.json` and `netcup.json`
+under the token's lock, so a refresh running then cannot write a rotated token
+back. It is refused while netcup's firewall is on and a Cloudflare policy is on
+this server, as with Hetzner's token, and while netcup cannot be read for any
+reason but refusing the sign-in, since a policy left on the server would stop
+following Cloudflare's list unseen. When netcup's firewall is off,
+disconnecting goes ahead and warns that any Cloudflare policy left on the
+server will no longer follow the list. Messages are redacted of token and code
+values.
+
+The policy endpoints are under `/users/<id>`, the SCP user id, which is not the
+customer number (the SCP username, userinfo's `preferred_username`). It is
+userinfo's `id` claim when present and confirmed by `GET /users/<id>`; the
+discovery document does not list one, so otherwise it is a user that
+`GET /tasks` or this server's `GET /servers/<id>/logs` names under that
+username and `GET /users/<id>` answers for. It is kept in `netcup.json`.
+
+### This server
+
+netcup has no metadata service. The card shows when
+`/sys/class/dmi/id/sys_vendor` names netcup, or a sign-in is saved. The server
+is found by what its interfaces carry (netcup routes addresses to the server
+without NAT): its MACs, its public IPv4 addresses and its global IPv6 ones.
+Matching runs in two passes: MAC across all candidates first, falling back to
+addresses only when no MAC matches anywhere. Address matching ignores routed or
+failover entries (`type: "ROUTED_IP"` or `destinationIp`) and accepts IPv6
+prefix containment (`networkPrefix`/`cidr`) only for `/64` or longer prefixes.
+`GET /servers?ip=<address>` is tried first, for each address; the spec does not
+say it takes IPv6, so with no match every server's interfaces are checked,
+paging through `GET /servers`. Disabled servers and 4xx replies (other than
+401) from a single server's `/interfaces` are skipped. An IPv6-only server is
+found that way. Its id, MAC and name are kept in `netcup.json`, written under
+the netcup lock (a read that finds it busy leaves it to the change holding it,
+and an unlocked read writes only when `netcup.json` still holds the same SCP
+`userId` that started it, never when it could not be read);
+a `netcup.json` that cannot be read counts as empty for a sign-in, a change,
+repair and disconnecting, and their writes replace it;
+a no-match result is cached for 15 minutes so page loads do not rescan, and a
+page read is bounded to 25 seconds so a scan degrades the card rather than
+failing the Firewall page. When netcup answers 404 for the kept interface, the
+server is looked up again once. No match, or a server whose firewall is not set
+up in SCP (404), is shown on the card, recorded as non-fatal in repair, and
+still updates `seenAt` with the switches off so Setup does not report the
+sign-in as unanswered. A firewall that is off makes the switches refuse, since
+turning it on would also start netcup's default policies.
+
+### Policies
+
+The four policies carry the Hetzner firewalls' names and rules: one inbound
+TCP accept rule per port and address family, sources in canonical form, a
+fixed description. Each also accepts inbound ICMP (for path MTU discovery) and
+ICMPv6 from anyone: any of them makes netcup drop by default, and without
+neighbour discovery, router advertisements and Packet Too Big a server with
+only IPv6 would be cut off.
+
+netcup tracks only TCP, so replies to the server's own UDP queries are new
+inbound traffic. Each policy accepts UDP from source port 123, to any local
+port since ntpd queries from 123, only from the addresses of
+`time.cloudflare.com` (162.159.200.1, 162.159.200.123, 2606:4700:f1::1,
+2606:4700:f1::123) and `ptbtime1.ptb.de` (192.53.103.108,
+2001:638:610:be01::108; PTB does not smear leap seconds, and no smearing server
+is mixed in), one rule per address family. No rule accepts UDP from anyone:
+anyone can send from source port 53 or 123, and DNS and NTP reflection floods
+do. There is no DNS rule; netcup always lets its own resolvers through. The
+addresses are constants, not resolved when the policy is written: policies are
+shared across the account's servers, so every server must write the same
+rules, and the timesyncd drop-in names the same literal addresses, so the rule
+and the servers timesyncd asks cannot drift apart when DNS changes. If either
+operator renumbers, a release updates both.
+
+While any of the addon's policies, Cloudflare or open, was last seen on the
+server (an open one makes netcup drop by default too), the addon writes
+`/etc/systemd/timesyncd.conf.d/zz-clp-addons-netcup.conf`, which clears `NTP=`
+and `FallbackNTP=` and sets `NTP=` to those six addresses, so timesyncd never
+falls back to the pool, whose replies would be dropped; it restarts timesyncd
+when the file changes, and puts the earlier file back when the restart fails,
+so the next repair tries again; a timesyncd the failed restart left `failed`
+still counts as the server's NTP client, and repair starts it again. It is removed only once netcup shows none of the
+addon's policies on the server, or on disconnecting when none is attached.
+Disabling Firewall, or disconnecting with an open policy left behind or a sign-in
+netcup refuses (which shows nothing), keeps it; so does unreadable state:
+nothing then says when those policies go, and the pinned servers keep time
+either way. Repair and enabling Firewall put it back from what was last seen,
+so a repair that cannot reach netcup still keeps it. Only an
+active `systemd-timesyncd` gets the file; chrony and ntpd are left alone, and
+the review then says to point them at the two servers.
+
+netcup has no labels, so a policy is the addon's when it
+has one of the names and its description starts with `Managed by clp-addons`;
+a policy with the name and not that refuses the switch. The writer's list time
+is the end of the description (`; Cloudflare's list of <time>`), read like
+Hetzner's label. A policy claiming a newer list is left alone only while it
+still lets only Cloudflare in: TCP accepts on exactly the role's ports, the same
+sources on each, both address families, every source inside this server's list,
+ICMP and ICMPv6 from anyone, and UDP only as NTP replies from all of the pinned
+addresses and no others. Otherwise a switch or repair rewrites it to this server's list. A
+newer list that adds a range therefore loses it until this server's list
+catches up; only Cloudflare is let in throughout. The listing may leave out rules, so each owned policy is read
+on its own before it is compared. Listings are paged until a page is empty or
+brings no new id.
+
+A change plans like Hetzner's, with netcup's default: it falls open while no
+policy of the operator's or the addon's has an inbound rule, unless netcup
+drops by default already without one, which the change keeps. Copied policies
+(netcup's defaults) are read before the operator's; netcup does not document
+that order. A change then makes at most one policy write per missing or stale
+policy and one write of the interface's whole assignment: the operator's
+policies in their order, then the addon's, the copied policies unchanged.
+That write replaces the assignment at once, so nothing opens or closes in
+between and a refused write (4xx) changes nothing; a policy created for it
+stays unused. Writes answer with a task, which the addon waits for, retrying
+transient task-poll errors up to a minute each (with each poll bounded by the
+remaining task wait) and three minutes across a switch, with at most a minute
+for the lock, so the page has its answer within the gateway's 240 seconds.
+netcup took a change it answered with HTTP 202 or a task. A policy write
+answers with no task when no server has the policy; it counts as done when the
+policy netcup answers with has the rules and description written. Otherwise a
+202 with no usable task id or a task still running when the wait ends is reported as taken with
+unknown completion, and one that ends in `ERROR`, `ROLLBACK` or `CANCELED` as
+failed, with SCP named for what the server has. Any other failure of the
+assignment write says netcup may have taken it. Policies are never deleted: the
+spec does not say what deleting one in use does to the servers that have it.
+Repair rewrites drifted policies, takes an open policy off beside its role's
+Cloudflare one, and records the switches. Turning a switch on when both the
+Cloudflare and open policies are attached goes through the normal review and
+confirmation before removing the open policy, and brings the Cloudflare policy
+current first, as the review assumes. The 500-rule limit per interface
+is netcup's to refuse. netcup counts each source as a separate effective rule:
+at most two of the addon's policies sit on a server at once, where each
+Cloudflare policy holds one effective rule per source and port plus eight for
+ICMP, ICMPv6 and the six NTP sources (82 effective rules with both switches on
+and a 22-range list; three more for each added range), and each open policy
+holds one wildcard TCP rule per port plus those eight (10 for web, 9 for
+panel).
 
 ## Taking over from earlier releases
 

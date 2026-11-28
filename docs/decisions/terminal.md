@@ -186,17 +186,30 @@ can start after.
 
 ## xterm.js
 
-`@xterm/xterm` and `@xterm/addon-fit` are vendored unmodified under
-`addons/terminal/app/vendor/` with their licence and the tarball's integrity
-hash, and served from versioned paths with a year-long cache; the build
-minifies `xterm.css` like every other stylesheet. The popup is the
-one page whose content security policy allows `'self'` scripts and styles.
+`@xterm/xterm`, `@xterm/addon-fit` and `@xterm/addon-webgl` are vendored
+unmodified under `addons/terminal/app/vendor/` with their licence and the
+tarball's integrity hash, and served from versioned paths with a year-long
+cache; the build minifies `xterm.css` like every other stylesheet. The popup is
+the one page whose content security policy allows `'self'` scripts and styles.
+Its xterm scripts load at the end of the body, so the window and its
+Connecting badge draw while they download; the stylesheet stays in the head.
+
+The popup draws with the WebGL renderer, since xterm's default DOM renderer
+cannot keep up with a full-screen program such as `htop` redrawing every cell.
+Where WebGL is unavailable, or the browser drops the GPU context, it falls back
+to the DOM renderer. The touch selection layer reads the buffer API and
+`.xterm-screen`, which both renderers provide.
 
 ### Verification when opening root
 
 Each new root shell requires a fresh six-digit authenticator code or a passkey
 pinned in the root grant. Reconnecting to an existing shell does not prompt.
-The popup offers both methods before creating the shell; site shells are unchanged.
+The popup offers both methods before creating the shell; site shells are
+unchanged. The code prompt renders a single visible text input with a label and
+`autocomplete="one-time-code"` before the options request returns, binds its
+submit and cancel handlers before revealing the prompt, strips non-digits on
+`input`, `change` and submit, and guards against cancellation while requests are
+in flight so password managers can detect and autofill the code safely.
 Root issues a random five-minute challenge bound to the gateway-verified session
 hash. Verification consumes the challenge, checks the current grant, and returns
 a one-use ticket valid for sixty seconds, bound to that session and grant.

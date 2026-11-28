@@ -175,6 +175,11 @@ test("the sites block serves every panel user and degrades rather than blocking 
   // the rows CloudPanel drew for whoever asked.
   expect(snippet).not.toContain("is_granted");
   expect(snippet).toContain("/addons/panel-tweaks/api/panel");
+  // Drop CloudPanel's duplicate nested container padding and extra top gap so
+  // Sites lines up with Dashboard and Addons even when every table tweak is off.
+  const minimal = sites({ sitesTable: false, sitesMobile: false, actionMenu: false });
+  expect(minimal).toContain(".container-limited-width");
+  expect(minimal).toContain(".sites-container");
 });
 
 // The old block waited for its data before rearranging the table, so a phone

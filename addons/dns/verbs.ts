@@ -15,13 +15,12 @@ export const DNS_VERBS = {
   "save-mailcow": { web: "admin" },
   "remove-mailcow": { web: "admin" },
   "save-server": { web: "admin" },
+  "panel-host-helper": { web: "admin" },
   "set-panel-host": { web: "admin" },
   "remove-records": { web: "admin" },
   "forget-records": { web: "admin" },
-  "save-redirect": { web: "admin" },
-  "delete-redirect": { web: "admin" },
-  "find-redirects": { web: "admin" },
-  "take-over": { web: "admin" },
+  "add-domain": { web: "admin" },
+  "remove-domain": { web: "admin" },
   // Called from the page a new site lands on and from its SSL/TLS page, by
   // whoever can open it; a non-administrator is named with --as-user and held
   // to their own sites.

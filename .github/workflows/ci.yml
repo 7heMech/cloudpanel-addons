@@ -28,7 +28,17 @@ permissions: {}
 
 jobs:
   check:
-    runs-on: ubuntu-24.04
+    # Releases ship an x64 and an arm64 binary, each built and tested on its
+    # own architecture, so both are checked here too.
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - arch: x64
+            runner: ubuntu-24.04
+          - arch: arm64
+            runner: ubuntu-24.04-arm
+    runs-on: ${{ matrix.runner }}
     permissions:
       contents: read
     steps:
@@ -53,6 +63,7 @@ jobs:
           wait "$typecheck"
 
       - name: Lint shell scripts
+        if: matrix.arch == 'x64'
         # install.sh is the only shell script left in the repo, and a finding
         # here is a release blocker, not a style note: it is the bootstrap a
         # customer runs via `curl ... | bash` before any binary exists on the
@@ -60,6 +71,7 @@ jobs:
         # in it and that customer's shell.
         # ubuntu-24.04 already includes ShellCheck. Refreshing the entire apt
         # index to reinstall it was consistently the slowest setup operation.
+        # The script is the same on both architectures, so it is linted once.
         run: bun run lint:install
 
       - name: Build

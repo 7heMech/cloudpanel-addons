@@ -26,9 +26,10 @@ root side of its verbs, as an addon's `action.ts` is; `cli/index.ts` hands it
 the enable, disable, update and reconcile commands it runs.
 
 The Addons page is two lists, Enabled and Available, one row per addon with its
-one-line description and its buttons, so the whole catalog fits on a screen. A
-search above them keeps only the rows whose name and description contain every
-one of its words, and hides a list it empties.
+one-line description and its buttons, so the whole catalog fits on a screen.
+Both lists follow catalog order, which places server and panel addons before
+site tools. A search above them keeps only the rows whose name and description
+contain every one of its words, and hides a list it empties.
 
 An addon's `added` version (`2.0.0-rc.1`, for example) marks it New on a box
 that started tracking notices before that release and has installed it. Each
@@ -82,6 +83,11 @@ command, reconciler or toggle names an addon:
 - `conffiles`: dpkg conffile edits `apt-hook pre` hands back.
 - `withdraw`: disabling under the addon's own locks.
 - `stateDirMode`: a state directory something outside the addon must reach.
+- `supportedArches`: the only architectures it can be enabled on, as
+  `process.arch` names them. On any other, `clp-addons enable`, `install` and a
+  manager enable job refuse it (`archRefusal`), and the menu, the Addons
+  page's Available list and Setup leave it out (`offeredAddonNames`). One
+  already enabled stays listed, so it can still be disabled.
 
 Repair upkeep runs inside repair's operation lock, so it stays short. Work that
 waits on the network or on a site's own code is queued with `queueAddonPass`
@@ -117,8 +123,10 @@ Imports point one way, from what changes most to what changes least:
   addon's exported functions; never `cli/` or `manager/`.
 - `lib/` is what every side shares: paths (`lib/paths.ts`), the action reply
   protocol, command running, file locks, the panel database, Nginx and job
-  helpers, the addon definition types, and the web pieces. It imports only
-  `lib/`, plus the addons' `verbs.ts` tables, which import nothing.
+  helpers, the shared Cloudflare API client, token scopes, access parser,
+  connect dialog, and root-owned connection store (`lib/cloudflare/`), the addon
+  definition types, and the web pieces. It imports only `lib/`, plus the addons'
+  `verbs.ts` tables, which import nothing.
 
 ## The CLI
 
@@ -350,9 +358,9 @@ operator procedure is [When CloudPanel updates](../cloudpanel-updates.md).
 
 ### Package conffiles
 
-`/etc/nginx/global_settings` (Maintenance Mode), and `/etc/nginx/nginx.conf`
-and `/etc/nginx/fastcgi_params` (System Tweaks) are dpkg conffiles of
-`nginx-common`. unattended-upgrades holds
+`/etc/nginx/global_settings` (Maintenance Mode), `/etc/nginx/nginx.conf`
+(System Tweaks and Firewall), and `/etc/nginx/fastcgi_params` (Firewall) are
+dpkg conffiles of `nginx-common`. unattended-upgrades holds
 back a package whose modified conffile the upgrade would replace, because nobody
 is there to answer dpkg's prompt, so these edits could keep an Nginx security
 update out. A drop-in on `apt-daily-upgrade.service`, installed with the binary,
@@ -380,7 +388,8 @@ An addon that has work for a site the moment it exists declares `newSites` in
 its catalog definition. `clp-addons-new-sites.path` watches
 `/etc/nginx/sites-enabled`, where CloudPanel writes every new site's vhost, and
 its service runs `clp-addons sync-sites`: each installed addon's `newSites`, in
-catalog order, so DNS normally writes a site's records before SMTP Relay binds
+catalog order, so Redirects removes a redirect the new site replaces before DNS
+plans the site, and DNS normally writes a site's records before SMTP Relay binds
 its user. Each gets a 15-second head start rather than waiting for the one
 before it to finish: DNS can wait minutes for its lock behind a fleet check, and
 until SMTP Relay binds the site its mail login is refused. One addon failing
@@ -542,7 +551,7 @@ of the words, which the stylesheet sets for each theme. Theme & Branding's
 uploaded logos are still images.
 
 Every addon renders into one shell in `lib/app-ui.ts`: palette, cards, tables,
-badges, switches, toolbars, one confirmation dialog and one notice holder per
+badges (`badgeHtml`), switches, setting rows (`settingRowHtml`), toolbars, one confirmation dialog and one notice holder per
 page. The holder stacks up to three messages, the newest nearest its edge, and
 replaces one already showing rather than repeating it. It is a popover, so it is
 drawn in the top layer over any dialog or menu. It starts top right on a desktop
@@ -589,7 +598,22 @@ all label so the toggle moves nothing, then the bulk actions across the width.
 A bulk choice, such as the profile for Assign selected, shares its row with the
 button that applies it. The count beside Select all is short there, "2 selected", and
 hidden until a site is ticked; a screen reader still reads the full count. On a wide screen the count sits at the right, beside
-the bulk actions it counts for, rather than under the title.
+the bulk actions it counts for, rather than under the title, and DNS hides
+desktop bulk controls until a row is ticked (via
+`.dns-site-card:not(:has(tr[aria-selected="true"]))`).
+
+Multi-concern pages split their content with `sectionShellHtml` in
+`lib/app-ui.ts` instead of stacking every card into one long column. At 1400px
+and wider, `main:has(.section-shell)` widens to 1424px so a sticky 200px left
+section rail sits outside the 1200px content area without squeezing fleet
+tables. Below 1400px, the same navigation becomes a horizontal underline tab
+strip above the active panel. Section selection persists in the URL hash, and
+deep links to inner anchor IDs activate the owning section before scrolling.
+
+Addon pages avoid showing empty configuration walls before first setup. When a
+required connection is missing, the page renders a focused first-run card.
+Host-specific provider cards
+return nothing when the server is not on that host and has no saved credential.
 
 With a mouse, a select opens a list drawn like the filter menus: the chosen
 option tinted and checked at the end of its row. This uses the browser's
@@ -619,8 +643,8 @@ so the settings below it stay close; a page that ends with its list, such as
 Maintenance Mode's, leaves out the button (`FLEET_NONE_HTML` in place of
 `FLEET_FOOTER_HTML`) and shows every site. Search covers every site, and Select all
 and the bulk actions reach the sites past the cut too: those rows are marked
-`data-cut` rather than deselected. A second long list on the page,
-such as DNS's redirects, gets the same cut and button through
+`data-cut` rather than deselected. A second long list on a page,
+such as Redirects' list, gets the same cut and button through
 `tbody[data-phone-cut]` and `phoneMoreHtml`. Page and form actions wrap within the
 available width. Two-column card and field grids hold until 760px, where the
 tables have already given way. Live enable, disable and update jobs
@@ -702,62 +726,114 @@ installed addon patches that partial.
 
 ## Setup checklist
 
-An administrator's addon pages carry a Setup helper: Setup in the header's tools
-on a desktop, and on a phone, whose header row has no room beside the logo, at
-the end of the navigation row in place of the root shell, which comes back once
-Setup is hidden or has nothing left to suggest. It opens suggestions in four levels -- Connect your domain, Secure
-the server, Run sites, Provision automatically -- each ticked from the server's
-state, never from a click. It shows no counts: a step may not fit a server, so
-any step can be skipped, and the helper hides itself once nothing is left to
-suggest. Skips and Hide are kept per administrator; the Addons page's Setup
-button brings it back.
+An administrator's addon pages carry a Setup link in the header tools on a
+desktop, and on a phone at the end of the navigation row in place of the root
+shell, which comes back once Setup is hidden or has nothing left to suggest.
+The link opens `/addons/setup`, a dedicated manager page with one card holding
+underline tabs for each goal-oriented path, per-step status segments inside
+each tab, a state legend under the page heading, and a connected vertical step
+list where the active step expands inline. Below the card sits a hairline
+Guides directory (`manager/setup-guides.ts`) for multi-addon workflows, marking
+addons that are currently disabled. The Addons page hides its own Setup button
+whenever the header link is shown so the page never displays two Setup controls
+at once.
 
-Above the suggestions, Setup shows **Action needed**: what an enabled addon
-needs fixed now, such as a Cloudflare token without a permission DNS requires,
-or the sites' Nginx answering hostnames it has no site for. An addon declares
-these on `AddonDefinition.actionNeeded`, each check returning the items it
-finds, empty while nothing is wrong. An item cannot be skipped and clears once
-fixed; while there is one, the chip carries an amber badge instead of the dot,
-and Setup shows even to an administrator who hid it, with only those items.
-A check that fails or runs out of time raises nothing: Action needed is for
-what is known to be wrong. A suggestion that fell back stays a suggestion.
+Steps sit in three paths, Panel domain & sign-in, Secure this server, and
+Automate & run sites, each checked from server state rather than clicks. Setup
+shows no fraction counts (`4/12` or `4 of 12`); tabs show per-step segments and
+open counts, and the legend shows state totals. Any pending step can be
+skipped, and the header link hides itself once nothing is left to suggest.
+Skips and Hide are kept per administrator, and the Addons page Setup link
+brings Setup back while hidden.
 
-A step is checked afresh each time, so a done step can fall back to to do, as
-Connect DNS does when its token stops being accepted. It then reads like any
-suggestion, its reason saying what is missing and Open going to the fix, and
-the helper shows again with its dot even when everything else is done. A skip
-still stands, and Hide is not undone. What a newer release requires, such as a
-token permission, is Action needed instead, so an existing install hears of it
-whatever the administrator skipped or hid. A permission or setting that is only
-optional is neither; it belongs on the addon's page.
+A step can declare `requires` with prerequisite step IDs. Within a path,
+`orderPathSteps` places dependent steps directly below their last same-path
+prerequisite so ordering stays stable before and after unlocking. While any
+prerequisite is not done and the step itself is not done, Setup marks the step
+`blocked` and renders it inline with a dashed lock marker instead of hiding it
+in a separate drawer: same-path dependents hang off their prerequisite via an
+indented dashed tree trunk and branch arm, while cross-path dependents stay on
+the main rail with an out-arrow. Clicking a locked row never opens an empty
+panel; it jumps straight to the prerequisite step, focuses its primary control,
+and traces the branch connector. A step marked `hostSpecific` is omitted from
+Setup when its check returns `na`, so irrelevant cloud-provider firewalls do
+not clutter the list on other hosts.
 
-Each addon declares its steps on `AddonDefinition.setup`: an id, a level, a
-title, the page and card that set it up, and a `check` answering done, to do or
-not applicable with a one-line reason. Remote backups, which is CloudPanel's
-own, is the manager's (`manager/setup.ts`). A disabled addon's steps are listed
-with Enable rather than checked, except a step marked `whileOff`, which can be
-done without its addon: a custom domain set up by hand is a panel hostname.
+At the top of the Setup card, above the path tabs, Setup shows **Action
+needed** for problems an enabled addon needs fixed now, such as a Cloudflare
+token missing a required permission or the sites Nginx answering unknown
+hostnames. An addon declares these on `AddonDefinition.actionNeeded`, each
+check returning the items it finds or an empty array when nothing is wrong. An
+Action needed item cannot be skipped and clears once fixed. While any Action
+needed item exists, the Setup link shows an amber badge instead of the dot, and
+Setup stays visible even to an administrator who hid suggestions, showing only
+the Action needed band plus a control to show suggestions again. A check that
+fails or runs out of time raises nothing, and a suggestion that fell back stays
+a suggestion.
 
-`manager setup` runs every check as root and answers with the list for the
-administrator `--user` names; `setup-pref` records a skip, an undo or Hide. Both
-are admin verbs, and the manager names the user from its session gate, the only
-place that knows it. The manager renders the list and the page fetches it after
-it paints, keeping in the tab whether the helper showed, so the header does not
-move when the answer comes. The checks run on every page an administrator
-opens, so they read local files, the panel database and local services only,
-never Cloudflare, Hetzner or a DNS lookup. Each check has 10 seconds; one that
-takes longer reads as not checked and the others answer without it. `nginx -T`
-is spawned so the limit can leave it behind; System Tweaks' status readers run
-their commands synchronously, so Setup gives each 5 seconds. The answer, before
-anyone's skips, is kept for a minute in the manager's state, so moving between
-pages does not run every check again; opening Setup asks fresh.
-`clp-addons setup off` (root) writes `/etc/clp-addons/setup-off`, after which
-the verb checks nothing and no page shows Setup; `setup on` removes it. What only an API knows, such as a
-token's permissions, is what the addon recorded when it last asked. A check
-that fails reads as a suggestion with its error.
+A step is checked afresh on each run, so a done step can fall back to `todo`,
+as Connect DNS does when its token stops being accepted. Its reason states what
+is missing, its action goes to the fix, and the header link shows again even
+when everything else is done. A skip still stands, and Hide is not undone. What
+a newer release requires, such as a token permission, belongs in Action needed
+so an existing install sees it regardless of skips or Hide. Optional features
+and permissions stay on the addon's page.
 
-CloudPanel's own pages do not show the helper; it would need a block of its own
-in the panel's header, beside the Addons link and the update notice.
+Each addon declares its steps on `AddonDefinition.setup` with an id, a level, a
+title, an optional `why` sentence, an optional `requires` list, an optional
+`hostSpecific` flag, a default `href`, and a `check` returning `done`, `todo`,
+or `na` with a one-line reason and an optional dynamic `href` override. Remote
+backups belongs to the manager in `manager/setup.ts`. A disabled addon's steps
+offer an inline Enable button that runs the enable job inside `/addons/setup`
+with the shared job watcher, except a step marked `whileOff` that can finish
+without its addon, such as a custom domain configured by hand.
+
+`/addons/setup` exposes inline actions for steps that fit in one card: enabling
+a disabled addon, toggling one-click settings such as the port 8443
+certificate, forged visitor IP protection, phpMyAdmin rules, and automatic SSL
+at site creation, saving or generating a random panel hostname with Cloudflare
+or following the non-Cloudflare direct link to `/admin/settings` with the
+server's detected IPs, and origin-aware passkey checks. The passkeys detail
+card checks `window.location` in the browser, warns when the panel is open on an
+IP address or port 8443, links directly to the custom domain when one exists,
+and unlocks passkey enrollment automatically when the browser is already on a
+valid HTTPS hostname on standard port 443. When an administrator reaches
+`/addons/setup` or `/addons/api/setup` through an external HTTPS reverse proxy
+or tunnel such as Cloudflare Tunnel without CloudPanel's built-in custom domain
+configured, `applyRequestOrigin` in `manager/setup.ts` detects the forwarded
+standard-port HTTPS hostname, marks Panel hostname done for that session,
+unblocks Passkeys out of Waiting while keeping its own reason and honoring
+skips, and keeps Panel gate open with a reminder to confirm direct port 8443 is
+blocked or protected at the proxy or tunnel.
+Returning focus to the Setup tab refreshes the checklist after a short throttle
+so external steps completed in another tab update automatically.
+
+`manager setup` runs every check as root and returns the view for the
+administrator named by `--user`, together with local `SetupContext` facts for
+the inline flows. `setup-pref` records a skip, an undo, or Hide. Both are admin
+verbs, and the manager supplies the user from its session gate. Every addon
+page fetches `/addons/api/setup?header=1` after paint to toggle the header link
+without rendering the full Setup markup, caching
+whether it showed in `sessionStorage` so the header does not jump on load.
+Checks read local files, the panel database, and local services only, never
+external APIs or DNS lookups. Each check has a 10-second limit. The manager
+caches check results before per-user skips for one minute so page navigation
+does not repeat every check, while opening `/addons/setup` or refreshing it
+asks fresh. Running `clp-addons setup off` as root writes
+`/etc/clp-addons/setup-off`, after which nothing is checked and no page shows
+Setup; `clp-addons setup on` removes that file. CloudPanel's own pages do not
+show the Setup link.
+
+While root has not answered the usage-sharing prompt (`answered === false`),
+`/addons/setup` shows a compact card above the Setup sheet displaying the exact
+JSON payload that would be shared, a pre-checked **Share enabled addons** box,
+and a **Save** button. Nothing is sent until an administrator saves, which posts
+to `POST /addons/api/usage-sharing` and runs the `manager usage-sharing` admin
+verb. Once answered, the card collapses to a one-line toggle at the bottom of
+`/addons/setup` with a **What is sent** disclosure. On the CLI,
+`clp-addons share-usage on|off` updates the same root-owned `0600` state file
+and `clp-addons share-usage status` prints the current state and exact payload
+(see [Opt-in addon usage sharing](releases.md#opt-in-addon-usage-sharing)).
 
 ## Browser assets are files
 

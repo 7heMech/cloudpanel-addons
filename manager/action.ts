@@ -20,6 +20,13 @@
 // and reconnects once the manager is back.
 
 import { errorMessage } from "../lib/errors";
+import { readJsonRequest } from "../lib/action";
+import {
+  checkCloudflareConnections, cloudflareConnectionViews, readFirewallEdgeDefaults, removeCloudflareConnection,
+  saveCloudflareConnection, type CloudflareStorePaths,
+} from "../lib/cloudflare/store";
+import { tokenTemplates } from "../lib/cloudflare/tokens";
+import type { ApiFetch } from "../lib/provider-http";
 import { addonStateDir, CLI_BIN, LOCK_DIR } from "../lib/paths";
 import { writeFileAtomic } from "../lib/atomic-write";
 import { existsSync, mkdirSync, readFileSync, rmSync } from "node:fs";
@@ -32,12 +39,14 @@ import {
   markJobRunning, pruneJobs, readJobLog, recordQueuedJob, startJobUnit, watchJobRecord,
   type PruneJobsResult,
 } from "../lib/job-store";
+import { archRefusal } from "../lib/addon-definition";
 import { ADDONS, ADDON_NAMES, addonNews, addonNoticeKeys, addonEnabled } from "../addons/catalog";
 import { CLI_VERSION } from "../lib/version";
 import { type OnProgress, Fatal, log, requireRoot } from "../lib/log";
 import type { PanelHold } from "../lib/panel-holds";
 import { changeSetupPrefs, setupStepIds, setupView, type SetupChange } from "./setup";
 import { PANEL_USER_NAME_RE } from "../lib/panel-users";
+import { saveUsageSharing, shareUsageIfDue, usagePayload, usageSharingStatus, type UsagePayload } from "../lib/usage-share";
 
 const MANAGER_STATE_DIR = addonStateDir("manager");
 const MANAGER_JOBS_DIR = `${MANAGER_STATE_DIR}/jobs`;
@@ -187,6 +196,15 @@ export function markNewsSeen(addons: string[] = ADDON_NAMES, file = NEWS_SEEN_FI
   });
 }
 
+export function currentUsagePayload(): UsagePayload {
+  return usagePayload(ADDON_NAMES.filter(enabled));
+}
+
+/** Best-effort, after a repair or a toggle; sends only when root opted in. */
+export async function shareCurrentUsage(): Promise<void> {
+  await shareUsageIfDue(currentUsagePayload);
+}
+
 function withManagerLock<T>(lockDir: string, onTimeout: string, body: () => Promise<T>): Promise<T> {
   mkdirSync(lockDir, { recursive: true, mode: 0o700 });
   return withFileLock(join(lockDir, "manager.lock"), 30, onTimeout, body);
@@ -240,16 +258,17 @@ function enabled(name: string): boolean {
  * by `installedInjections` for the same reason. Taking the installation away
  * altogether is `clp-addons self-uninstall`.
  */
-function rejectImpossible(kind: ManagerJobKind, addon: string, locks?: CreateJobOptions["locks"]): string | null {
+function rejectImpossible(kind: ManagerJobKind, addon: string, options: Pick<CreateJobOptions, "locks" | "arch">): string | null {
   if (kind === "update") return null;
   if (!ADDON_NAMES.includes(addon)) return `unknown addon '${addon}'`;
   if (kind === "disable") {
-    const locked = disableLocked(addon, locks);
+    const locked = disableLocked(addon, options.locks);
     if (locked) return locked;
   }
   const isEnabled = enabled(addon);
   if (kind === "enable" && isEnabled) return `${addon} is already enabled`;
   if (kind === "disable" && !isEnabled) return `${addon} is already disabled`;
+  if (kind === "enable") return archRefusal(ADDONS[addon]!, options.arch);
   return null;
 }
 
@@ -275,6 +294,12 @@ export interface CreateJobOptions {
   onReply?: (res: any) => void;
   /** Tests only: a lock file of their own, owned by them. */
   locks?: { file: string; rootUid: number };
+  /** Tests only: the architecture in place of this box's. */
+  arch?: string;
+  /** Tests only: JSON stdin for verbs that take a body. */
+  input?: string;
+  /** Tests only: Cloudflare store paths and fetch override. */
+  cloudflare?: { paths?: Partial<CloudflareStorePaths>; fetch?: ApiFetch };
 }
 
 /**
@@ -302,7 +327,7 @@ export async function createJob(
     return failReply(error, data, emit);
   };
 
-  const refusal = rejectImpossible(kind, addon, options.locks);
+  const refusal = rejectImpossible(kind, addon, options);
   if (refusal) return emitFail(refusal);
 
   const running = activeManagerJob(jobsDir);
@@ -473,6 +498,13 @@ export async function runManagerAction(
         }
         return reply({ ok: true, data: await setupView(user, options.setupFile, undefined, undefined, undefined, { fresh: flags.fresh === "1" }) }, options.emitReply !== false);
       }
+      case "usage-sharing": {
+        if (flags.enabled !== undefined) {
+          if (flags.enabled !== "true" && flags.enabled !== "false") return failReply("'usage-sharing' takes --enabled=true|false", undefined, options.emitReply !== false);
+          saveUsageSharing(flags.enabled === "true");
+        }
+        return reply({ ok: true, data: usageSharingStatus(currentUsagePayload()) }, options.emitReply !== false);
+      }
       case "watch-job": {
         const jobsDir = options.jobsDir ?? MANAGER_JOBS_DIR;
         const wanted = id || latestManagerJob(jobsDir);
@@ -488,6 +520,31 @@ export async function runManagerAction(
           },
         });
         return 0;
+      }
+      case "cloudflare-list": {
+        const edge = readFirewallEdgeDefaults();
+        const view = cloudflareConnectionViews(edge, { includeDns: false, includeEdge: true, requirePanelGate: true }, options.cloudflare?.paths);
+        return reply({ ok: true, data: { ...view, templates: tokenTemplates(edge) } }, options.emitReply !== false);
+      }
+      case "cloudflare-save": {
+        const body = await readJsonRequest(options.input, 32 * 1024);
+        const saved = await saveCloudflareConnection(body, options.cloudflare);
+        const edge = readFirewallEdgeDefaults();
+        const view = cloudflareConnectionViews(edge, { includeDns: false, includeEdge: true, requirePanelGate: true }, options.cloudflare?.paths);
+        return reply({ ok: true, data: { ...view, templates: tokenTemplates(edge), id: saved.id, notice: saved.notice } }, options.emitReply !== false);
+      }
+      case "cloudflare-remove": {
+        const body = await readJsonRequest(options.input, 4 * 1024);
+        const removed = await removeCloudflareConnection(String(body.id ?? ""), options.cloudflare);
+        const edge = readFirewallEdgeDefaults();
+        const view = cloudflareConnectionViews(edge, { includeDns: false, includeEdge: true, requirePanelGate: true }, options.cloudflare?.paths);
+        return reply({ ok: true, data: { ...view, templates: tokenTemplates(edge), notice: removed.notice } }, options.emitReply !== false);
+      }
+      case "cloudflare-check": {
+        await checkCloudflareConnections(options.cloudflare);
+        const edge = readFirewallEdgeDefaults();
+        const view = cloudflareConnectionViews(edge, { includeDns: false, includeEdge: true, requirePanelGate: true }, options.cloudflare?.paths);
+        return reply({ ok: true, data: { ...view, templates: tokenTemplates(edge), notice: "Checked Cloudflare connections." } }, options.emitReply !== false);
       }
       case "run": {
         if (!id) return failReply("'run' needs --job", undefined, options.emitReply !== false);

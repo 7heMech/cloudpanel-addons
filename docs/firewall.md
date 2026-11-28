@@ -1,8 +1,8 @@
 # Firewall
 
-Cloudflare-only access for your sites, UDP rules on CloudPanel's own
-Firewall page, a gate in front of the panel, and Hetzner Cloud Firewalls that
-admit only Cloudflare.
+Cloudflare-only access, visitor IPs, and zone-wide edge defaults for your sites,
+UDP rules on CloudPanel's own Firewall page, a gate in front of the panel, and
+Hetzner Cloud or netcup firewalls that admit only Cloudflare.
 
 ## Cloudflare-only sites
 
@@ -10,6 +10,60 @@ The table switches CloudPanel's **Allow traffic from Cloudflare only** for each
 site, or for every selected site at once. A site that is not proxied through
 Cloudflare stops answering once it is on. **Enable on new sites** turns it on
 for each site created from then on; a site you turn off is never turned back on.
+
+## Cloudflare visitor IPs
+
+**Cloudflare visitor IPs** sits on the **Cloudflare only** tab and is on by
+default. Sites behind Cloudflare's proxy or a Cloudflare Tunnel on this server
+get the visitor's IP in their access logs and in PHP from `CF-Connecting-IP`.
+The header is trusted only from Cloudflare and from the tunnel, so nobody else
+can set it. Visitors coming through a tunnel can no longer set their IP with
+`X-Real-IP`. Point the tunnel at port 80 or 443 on this server: a tunnel to a
+site's port 8080 skips CloudPanel's front server, and its visitors can still set
+their IP.
+
+Error logs, **Allow traffic from Cloudflare only**, and CloudPanel's blocked IPs
+and basic-auth allowlist still see the connecting address: Cloudflare's, the
+tunnel's, or a direct visitor's own. In a site's `listen 8080` server block that
+address is `127.0.0.1` for every visitor, so keep any rule you add to the vhost
+by address, such as `allow`, `deny`, or a rate limit, in the first server block.
+
+Run `clp-addons lock firewall` as root to keep the web panel from switching
+Cloudflare visitor IPs off or disabling Firewall; `clp-addons unlock firewall`
+undoes it.
+
+## Cloudflare edge defaults
+
+The **Cloudflare edge** tab manages zone-wide Cloudflare defaults shared across
+all reachable Cloudflare zones, using the shared Cloudflare connection store:
+
+- **SSL/TLS mode** (defaults to Full (strict))
+- **Always Use HTTPS** (defaults to On)
+- **Full SSL for Let's Encrypt checks** (allows HTTP-01 certificate issuance and
+  renewal under Full (strict) and Cloudflare-only access)
+- **Full SSL for webmail hosts** (uses Full SSL for proxied `webmail.*` records)
+- **Skip the firewall for** (lists IPs such as a MainWP Dashboard that skip
+  Super Bot Fight Mode and managed WAF rules; Cloudflare cannot skip the free
+  Bot Fight Mode)
+
+Connect Cloudflare first, configure the defaults you want, and choose **Review
+and approve defaults**. Firewall previews every change across your reachable
+zones and writes nothing until you confirm. Once approved, new or newly
+discovered Cloudflare zones inherit those defaults automatically without
+per-site review holds.
+
+Destructive changes and conflicts always stop for explicit confirmation instead
+of applying automatically:
+
+- lowering a zone's SSL/TLS mode (for example, Full (strict) to Full or Flexible);
+- switching Always Use HTTPS from On to Off;
+- removing a previously managed rule or removing IPs from the WAF skip list;
+- overwriting a managed rule that was disabled or edited in Cloudflare, or a
+  conflicting custom rule on the same path or host.
+
+Zones held for confirmation appear under **Cloudflare zones** with a **Review**
+button and raise an **Action needed** item in Setup. Choose **Pause automatic**
+at any time to stop automatic enforcement without modifying existing zones.
 
 ## Protocols
 
@@ -32,14 +86,14 @@ through Cloudflare, after a Cloudflare Access sign-in: Access emails a one-time
 code to a panel user's address. `https://<server IP>:8443` stops answering.
 It is off by default, and the card lists what it still needs:
 
-- a custom domain for CloudPanel (**Admin → Settings**), with its record
-  proxied through Cloudflare (the orange cloud) and the zone in SSL mode Full
-  or Full (strict);
-- a DNS connection whose token reaches that zone and holds
-  **SSL and Certificates: Edit**, **Access: Apps and Policies: Edit** and
-  **Access: Organizations, Identity Providers, and Groups: Edit**, besides
-  **API Tokens: Read**. Add them to the token in Cloudflare; DNS lists them as
-  optional;
+- a custom domain for CloudPanel (**Admin → Settings**), with its record or an
+  unobstructed wildcard covering it proxied through Cloudflare (the orange
+  cloud), and the zone in SSL mode Full or Full (strict);
+- a Cloudflare connection saved on the **Cloudflare edge** tab or in **DNS**, whose
+  token reaches that zone and holds **SSL and Certificates: Edit**,
+  **Access: Apps and Policies: Edit**, and **Access: Organizations, Identity
+  Providers, and Groups: Edit**, besides **API Tokens: Read**. DNS does not need
+  to be enabled to use Panel gate;
 - Cloudflare Zero Trust set up on the account (the free plan is enough).
 
 Panel users added, removed or deactivated are kept in the Access policy within
@@ -125,3 +179,43 @@ console in Hetzner's console, or remove the firewalls from the server under
 
 Setup suggests turning the switches on, and shows **Action needed** when
 Firewall has not been able to read Hetzner with the saved token for an hour.
+
+## netcup firewall
+
+On a netcup server (vServer or root server), Firewall can do the same with
+netcup's firewall policies. The card shows only on a netcup server; on one,
+the Hetzner card is hidden.
+
+Choose **Connect netcup**. The dialog shows a code and a link to netcup's
+sign-in: sign in with the customer number of the account that holds this
+server, check that netcup shows the same code, and grant access. The card
+finds this server in the account by its network card or public addresses (IPv4
+or IPv6), and says so when no server there has it. **Connect again** and
+**Disconnect** are on the card; Disconnect also asks netcup to revoke the
+sign-in.
+
+The firewall must be set up and on for the server in SCP (**Firewall →
+Configure**). The switches work as on Hetzner, with policies named
+`clp-addons-cloudflare-web`, `clp-addons-cloudflare-panel`,
+`clp-addons-open-web` and `clp-addons-open-panel`; they go after your own
+policies on the server. Once any policy has an inbound rule, netcup drops what
+no policy allows, and the review lists what closes. The addon's policies
+accept ICMP and ICMPv6 from anyone, for path MTU discovery and IPv6. With SSH
+closed, SCP's console still gives a root shell.
+
+netcup tracks only TCP, so replies to UDP the server sends are dropped unless a
+policy allows them. The addon's policies let in NTP replies only from
+`time.cloudflare.com` and `ptbtime1.ptb.de`, not from anyone, since that is how
+NTP reflection floods arrive. While any of the addon's policies is on the
+server, open ones included, the addon points systemd-timesyncd at those two
+servers (`/etc/systemd/timesyncd.conf.d/zz-clp-addons-netcup.conf`) and turns
+off its fallback to the pool. It removes that file once it sees none of its
+policies on the server; disconnecting or disabling Firewall keeps it while
+they may still be there. If the server keeps time with chrony or ntpd
+instead, point it at those two servers yourself. DNS to netcup's resolvers is
+always allowed; another resolver needs DNS over TLS or a rule of your own, as
+does any other UDP the server starts.
+
+Policies are shared by the servers of one account and are never deleted.
+Setup shows **Action needed** when Firewall has not been able to read netcup
+for an hour; netcup ends a sign-in that goes unused, so connect again then.

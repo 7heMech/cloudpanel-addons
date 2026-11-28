@@ -33,11 +33,21 @@
 .clp-wp-plugin-activate { display: inline-flex; align-items: center; gap: 6px; min-height: 0; margin: 0 0 0 auto; padding: 0; font-size: 14px; }
 .clp-wp-plugin-activate .form-check-input { float: none; margin: 0; }
 .clp-wp-plugin-remove { flex: 0 0 auto; }
+.clp-wp-plugin-automatic { margin-left: auto; color: #9bacb6; font-size: 14px; }
+/* Where the list came from, and Save and Reset, on the heading's line. */
+.clp-wp-plugins-head { display: flex; flex-wrap: wrap; align-items: baseline; column-gap: 18px; }
+.clp-wp-plugins-head > .col-form-label { margin-right: auto; }
+.clp-wp-plugins-defaults { display: flex; flex-wrap: wrap; align-items: baseline; gap: 4px 18px; font-size: 14px; }
+.clp-wp-plugins-defaults[hidden], .clp-wp-plugins-link[hidden] { display: none; }
+.clp-wp-plugins-origin { color: #9bacb6; }
+.clp-wp-plugins-origin:empty { display: none; }
+.clp-wp-plugins-link { padding: 0; border: 0; background: none; color: #0078d4; font: inherit; font-weight: 600; cursor: pointer; }
+.clp-wp-plugins-link:disabled { opacity: .6; cursor: default; }
 .clp-wp-plugins-error { margin: 12px 0 0; }
 .clp-wp-plugins-error[hidden] { display: none; }
 html.dark .clp-wp-plugin-results { border-color: var(--clp-border-color); }
 html.dark .clp-wp-plugin-results li + li, html.dark .clp-wp-plugin-item + .clp-wp-plugin-item { border-top-color: var(--clp-border-color); }
-html.dark .clp-wp-plugin-add { color: #4aa3f0; }
+html.dark .clp-wp-plugin-add, html.dark .clp-wp-plugins-link { color: #4aa3f0; }
 html.dark .clp-wp-plugin-remove { filter: invert(1) grayscale(100%) brightness(200%); }
 @media (max-width: 576px) {
   .clp-wp-plugins-bar { flex-wrap: wrap; }

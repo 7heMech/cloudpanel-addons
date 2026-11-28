@@ -23,6 +23,7 @@ export const TEMPLATES = {
   firewall: "Admin/Security/Firewall/index.html.twig",
   firewallAddRule: "Admin/Security/Firewall/add-rule.html.twig",
   firewallEditRule: "Admin/Security/Firewall/edit-rule.html.twig",
+  adminSettings: "Admin/Settings/index.html.twig",
 } as const;
 
 export const ANCHORS = {

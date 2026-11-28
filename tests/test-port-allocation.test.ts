@@ -169,7 +169,7 @@ describe("a port an instance recorded", () => {
       return portHolder(asked, self, {
         lockDir: `${dir}/lock`, dataBaseDir: dir, backupDir: `${dir}/backups`, jobsDir: `${dir}/jobs`,
         actionBinary: `${dir}/clp-addons`, panelDb: `${dir}/panel.db`,
-        clpctl: `${dir}/clpctl`, panelIdentityFile: `${dir}/identity`, homeDir: `${dir}/home`,
+        clpctl: `${dir}/clpctl`, panelIdentityFile: `${dir}/identity`, homeDir: `${dir}/home`, systemdDir: `${dir}/systemd`,
       }) ?? "FREE";
     } finally {
       rmSync(dir, { recursive: true, force: true });

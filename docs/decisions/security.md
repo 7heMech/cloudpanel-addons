@@ -11,8 +11,8 @@ containment boundary for a compromised manager.
 Most gateway actions rely on the manager's authentication and caller context.
 The root action validates the supplied arguments and any named user's site
 access, but the gateway does not independently require that user's session for
-every action. Terminal and the own-account Security Keys verbs do require a
-session, which the gateway checks itself. The executable check identifies an
+every action. Terminal and the own-account Security Keys and WordPress Tools
+verbs do require a session, which the gateway checks itself. The executable check identifies an
 allowed program; it cannot establish that the process has not been compromised.
 
 The addons do not change the Unix identity of CloudPanel's site nginx workers
@@ -61,12 +61,14 @@ site user's process never inherits the gateway's stderr. See
 [Terminal](terminal.md).
 
 The one-shot actions declared `own-account` -- Security Keys' `keys`,
-`register-options`, `register` and `remove` -- are checked the same way for any
-active account rather than an administrator: the request carries the session
+`register-options`, `register` and `remove`, and WordPress Tools'
+`my-new-site-defaults` and `save-my-new-site-defaults` -- are checked the same
+way for any active account rather than an administrator: the request carries the session
 id, the gateway appends the `--panel-user` it found, a manager that names one is
 refused, and every other action refuses a session id instead of ignoring it.
 These verbs have no direct-spawn fallback in the client. See
-[Security Keys](security-keys.md).
+[Security Keys](security-keys.md) and
+[WordPress Tools](wp-tools.md#defaults).
 
 Maintenance actions also require the normalized domain to exist in
 CloudPanel's site database. The public maintenance directories allow traversal
@@ -155,10 +157,14 @@ PHP, reaches the action, which alone knows the version the panel runs and
 accepts only a newer installed one. The manager refuses to disable a locked
 addon, when the job is asked for and again when it starts, so one queued before
 a lock does not run; it lets a locked addon be enabled, since enabling only
-adds protection. System
-Tweaks declares its Hardening and Failed logins switches and the panel's PHP;
-updates, backups, unblocking and the SSH login message stay with
-administrators.
+adds protection. System Tweaks declares its Hardening and Failed logins switches and the panel's
+PHP; updates, backups, unblocking and the SSH login message stay with
+administrators. Firewall declares its Cloudflare visitor IPs switch under root's
+lock (`clp-addons lock firewall`), keeping tunnel IP forgery closed while
+leaving site and cloud-firewall rules editable by administrators. Upgrading
+from an installation where System Tweaks was locked carries the lock to
+Firewall when the visitor-IP preference migrates, so `set-visitor-ip` remains
+locked without freezing Firewall's other switches.
 
 So a panel lock can only freeze protections on. While locked, the panel can
 switch a protection on, enable the addon or move the panel's PHP to a newer
@@ -221,10 +227,10 @@ login page, and authentication failures do not fall back to anonymous access.
 The gate is where a request goes by default, after the URL is taken apart and
 before the route is chosen. The liveness probe the update page polls is inside
 it, and nothing reads it without a session: the page that polls it has one. The
-exceptions are below: fourteen named routes, two routes settled ahead of the
+exceptions are below: sixteen named routes, two routes settled ahead of the
 gate by a credential of their own, and one public route for branding images.
 
-Fourteen routes are named as exceptions. Six are WordPress Tools':
+Sixteen routes are named as exceptions. Eight are WordPress Tools':
 `POST /wp-tools/api/sign-in`, the `GET /wp-tools/api/session` that hands out
 the CSRF pair, and `GET /wp-tools/api/site-kind`, which says only whether one of
 the caller's own sites is a WordPress. The links that use them are injected into
@@ -236,8 +242,12 @@ The handler turns away anyone but an administrator or a site manager; root
 holds a site manager to the administrator's switch, to WordPress.org plugins,
 to a domain CloudPanel does not have yet, to a site CloudPanel's event log
 says that account created, and to the status of the job they recorded
-themselves. Uploading and the switch stay behind the gate.
-The seventh is Panel Tweaks' read-only `GET /panel-tweaks/api/panel`, which
+themselves. `GET` and `POST /wp-tools/api/my-new-site-defaults` read and save
+the caller's own default plugins for that form; they are `own-account`, so the
+gateway reads whose they are from the session, and root holds a site manager to
+the same switch. Uploading, the switch and the server's default stay behind
+the gate.
+The ninth is Panel Tweaks' read-only `GET /panel-tweaks/api/panel`, which
 answers the script injected into that same page with the sites CloudPanel would
 list for the caller. Three are DNS's: `POST /dns/api/provision` and its
 `GET /dns/api/session`, which Panel Tweaks' script calls on the page a new site
@@ -284,7 +294,10 @@ about the URL says whether a site has a webhook. The token is compared with
 `timingSafeEqual` where the record can be read, which is root -- the manager
 cannot read it, so verifying the delivery and queueing its deployment are one
 gateway call. This route is necessarily outside `guardMutation`: a repository
-sends no CSRF token and its Origin is not the panel.
+sends no CSRF token and its Origin is not the panel. For the same reason it is
+the one path under `/addons/` the panel's optional basic auth does not cover:
+the proxy block gives `/addons/git/hook/` its own location with
+`auth_basic off`, and every other addon page and pre-gate route keeps it.
 
 The other is passkey sign-in, `POST /addons/security-keys/login/options` and
 `/login/verify`, called from the login page before there is a session. The

@@ -104,7 +104,7 @@ interface Box {
 function box(): Box {
   const dir = mkdtempSync(join(tmpdir(), "panel-gate-test-"));
   dirs.push(dir);
-  for (const sub of ["state", "dns", "locks", "sites", "panel"]) mkdirSync(join(dir, sub), { mode: 0o700 });
+  for (const sub of ["state", "cloudflare", "locks", "sites", "panel"]) mkdirSync(join(dir, sub), { mode: 0o700 });
   writeFileSync(join(dir, "sites", "custom-domain.conf"), CUSTOM_DOMAIN, { mode: 0o644 });
   writeFileSync(join(dir, "custom-domain"), `${HOST}\n`, { mode: 0o644 });
   writeFileSync(join(dir, "panel", "cloudpanel.conf"), PANEL, { mode: 0o640 });
@@ -125,8 +125,8 @@ function box(): Box {
   cf.token(TOKEN, { owner: "user", accounts: [account], policies: [policy(["DNS Write", "API Tokens Read", "Zone Settings Read", ...GATE_GROUPS], ALL_ZONES)] });
   const zone = cf.zone("example.com", account);
   cf.record("example.com", { type: "A", name: HOST, content: "203.0.113.10", proxied: true });
-  writeFileSync(join(dir, "dns", "secrets.json"), JSON.stringify({ cloudflare: { agency: TOKEN } }), { mode: 0o600 });
-  writeFileSync(join(dir, "dns", "policy.json"), JSON.stringify({ connections: [{ id: "agency", label: "Agency" }] }), { mode: 0o600 });
+  writeFileSync(join(dir, "cloudflare", "secrets.json"), JSON.stringify({ version: 1, tokens: { agency: TOKEN } }), { mode: 0o600 });
+  writeFileSync(join(dir, "cloudflare", "connections.json"), JSON.stringify({ version: 1, connections: [{ id: "agency", label: "Agency" }] }), { mode: 0o600 });
 
   const commands: string[][] = [];
   const failing = new Set<string>();
@@ -146,7 +146,7 @@ function box(): Box {
         lockFile: join(dir, "locks", "panel-gate.lock"),
         operationLockDir: join(dir, "locks"),
         certDir: join(dir, "certs"),
-        dnsDir: join(dir, "dns"),
+        cloudflareDir: join(dir, "cloudflare"),
         panelDb: join(dir, "panel.db"),
         customDomain: join(dir, "custom-domain"),
         customDomainVhost: join(dir, "sites", "custom-domain.conf"),
@@ -484,7 +484,8 @@ describe("review fixes", () => {
     expect(sitesVhost(b)).toBe(CUSTOM_DOMAIN);
 
     // The connection that made them was replaced by another reaching the same zone.
-    writeFileSync(join(b.dir, "dns", "secrets.json"), JSON.stringify({ cloudflare: { renamed: TOKEN } }), { mode: 0o600 });
+    writeFileSync(join(b.dir, "cloudflare", "secrets.json"), JSON.stringify({ version: 1, tokens: { renamed: TOKEN } }), { mode: 0o600 });
+    writeFileSync(join(b.dir, "cloudflare", "connections.json"), JSON.stringify({ version: 1, connections: [{ id: "renamed", label: "Agency" }] }), { mode: 0o600 });
     const { reply } = await turnOn(b);
     expect(reply).toMatchObject({ notice: expect.stringContaining("The Panel gate is on") });
     expect(b.cf.accessApps.has(old.appId)).toBe(false);
@@ -620,5 +621,81 @@ describe("final review fixes", () => {
     held.release();
     await pending;
     expect(readGateState(b.options).on).toBe(true);
+  });
+
+  test("accepts an unobstructed proxied wildcard and refuses an unproxied or RFC 4592 blocked wildcard", async () => {
+    const b = box();
+    b.cf.records.set(b.zoneId, []);
+    b.cf.record("example.com", { type: "A", name: "*.example.com", content: "203.0.113.10", proxied: true });
+    expect((await panelGateView(b.options)).problems).toEqual([]);
+    expect((await turnOn(b)).reply).toMatchObject({ notice: expect.stringContaining("The Panel gate is on") });
+
+    const unproxied = box();
+    unproxied.cf.records.set(unproxied.zoneId, []);
+    unproxied.cf.record("example.com", { type: "A", name: "*.example.com", content: "203.0.113.10", proxied: false });
+    expect((await panelGateView(unproxied.options)).problems.join(" "))
+      .toContain(`${HOST} is covered by *.example.com, which is not proxied through Cloudflare`);
+
+    const blockedByTxt = box();
+    blockedByTxt.cf.records.set(blockedByTxt.zoneId, []);
+    blockedByTxt.cf.record("example.com", { type: "A", name: "*.example.com", content: "203.0.113.10", proxied: true });
+    blockedByTxt.cf.record("example.com", { type: "TXT", name: HOST, content: "verify=1" });
+    expect((await panelGateView(blockedByTxt.options)).problems).toContain(`${HOST} has no A, AAAA or CNAME record in Cloudflare.`);
+
+    const blockedByEnt = box();
+    blockedByEnt.cf.records.set(blockedByEnt.zoneId, []);
+    blockedByEnt.cf.record("example.com", { type: "A", name: "*.example.com", content: "203.0.113.10", proxied: true });
+    blockedByEnt.cf.record("example.com", { type: "TXT", name: `dkim._domainkey.${HOST}`, content: "v=DKIM1;p=abc" });
+    expect((await panelGateView(blockedByEnt.options)).problems).toContain(`${HOST} has no A, AAAA or CNAME record in Cloudflare.`);
+
+    const mixedProxy = box();
+    mixedProxy.cf.records.set(mixedProxy.zoneId, []);
+    mixedProxy.cf.record("example.com", { type: "A", name: "*.example.com", content: "203.0.113.10", proxied: true });
+    mixedProxy.cf.record("example.com", { type: "AAAA", name: "*.example.com", content: "2001:db8::10", proxied: false });
+    expect((await panelGateView(mixedProxy.options)).problems.join(" "))
+      .toContain(`${HOST} is covered by *.example.com, which is not proxied through Cloudflare`);
+
+    // Intermediate-ancestor ENT and NS zone cut both block wildcard matching for a nested custom domain.
+    const nestedHost = "a.b.example.com";
+    const blockedAncestor = box();
+    writeFileSync(join(blockedAncestor.dir, "custom-domain"), `${nestedHost}\n`);
+    writeFileSync(join(blockedAncestor.dir, "sites", "custom-domain.conf"), CUSTOM_DOMAIN.replaceAll(HOST, nestedHost));
+    blockedAncestor.cf.records.set(blockedAncestor.zoneId, []);
+    blockedAncestor.cf.record("example.com", { type: "A", name: "*.example.com", content: "203.0.113.10", proxied: true });
+    blockedAncestor.cf.record("example.com", { type: "TXT", name: "other.b.example.com", content: "x" });
+    expect((await panelGateView(blockedAncestor.options)).problems).toContain(`${nestedHost} has no A, AAAA or CNAME record in Cloudflare.`);
+
+    const nsCut = box();
+    writeFileSync(join(nsCut.dir, "custom-domain"), `${nestedHost}\n`);
+    writeFileSync(join(nsCut.dir, "sites", "custom-domain.conf"), CUSTOM_DOMAIN.replaceAll(HOST, nestedHost));
+    nsCut.cf.records.set(nsCut.zoneId, []);
+    nsCut.cf.record("example.com", { type: "NS", name: "b.example.com", content: "ns1.elsewhere.example" });
+    nsCut.cf.record("example.com", { type: "A", name: "*.b.example.com", content: "203.0.113.10", proxied: true });
+    expect((await panelGateView(nsCut.options)).problems).toContain(`${nestedHost} has no A, AAAA or CNAME record in Cloudflare.`);
+  });
+
+  test("prefers a later Cloudflare connection that holds the gate permissions when an earlier one for the same zone does not", async () => {
+    const b = box();
+    const dnsOnlyToken = "cf-dns-only-token-0123456789abcd";
+    b.cf.token(dnsOnlyToken, {
+      owner: "user",
+      accounts: [b.account],
+      policies: [policy(["DNS Write", "API Tokens Read"], { "com.cloudflare.api.account.zone.*": "*" })],
+    });
+    // Put the DNS-only connection first and the Panel-gate-capable connection second.
+    writeFileSync(join(b.dir, "cloudflare", "connections.json"), JSON.stringify({
+      version: 1,
+      connections: [{ id: "cf-dnsonly", label: "DNS Only" }, { id: "cf-gate", label: "Gate" }],
+    }), { mode: 0o600 });
+    writeFileSync(join(b.dir, "cloudflare", "secrets.json"), JSON.stringify({
+      version: 1,
+      tokens: { "cf-dnsonly": dnsOnlyToken, "cf-gate": TOKEN },
+    }), { mode: 0o600 });
+
+    const view = await panelGateView(b.options);
+    expect(view.problems).toEqual([]);
+    const { reply } = await turnOn(b);
+    expect(reply).toMatchObject({ notice: expect.stringContaining("The Panel gate is on") });
+    expect(readGateState(b.options).connectionId).toBe("cf-gate");
   });
 });

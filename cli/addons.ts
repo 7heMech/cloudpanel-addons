@@ -1,10 +1,19 @@
 import { addonStateDir, CONFIG_DIR, LOCK_DIR, STATE_DIR, SYSTEMD_DIR } from "../lib/paths";
 import { withFileLockSync } from "../lib/file-lock";
 import { migrateResourceMemory } from "../addons/resource-limits/migration";
-import { LEGACY_PROTOCOLS_FILE, migrateFirewallProtocols } from "../addons/firewall/migration";
+import {
+  cloudflareEdgeMigrationPending, LEGACY_PROTOCOLS_FILE, migrateCloudflareEdgeFromDns, migrateFirewallProtocols,
+  migrateVisitorIp, visitorIpMigrationPending,
+} from "../addons/firewall/migration";
+import { legacyDnsCloudflarePending, migrateCloudflareFromDns } from "../lib/cloudflare/store";
+import { migrateRedirectsFromDns, redirectsMigrationPending } from "../addons/redirects/migration";
+import { upgradeSavedPolicy } from "../addons/dns/model";
 import { ADDONS, ADDON_NAMES, addonEnabled } from "../addons/catalog";
-import { type AddonSpec } from "../lib/addon-definition";
+import { archRefusal, type AddonSpec } from "../lib/addon-definition";
 import { masterVhostHost } from "./inject";
+import { type Addresses, detectAddresses } from "../addons/dns/addresses";
+import { panelCustomDomain } from "../lib/panel-custom-domain";
+import { panelUserUid } from "../lib/sso-auth";
 import { writeConfig } from "./provision";
 import { fatal, log } from "../lib/log";
 import { chownSync, existsSync, readFileSync, readdirSync, renameSync, rmSync, statSync, writeFileSync } from "node:fs";
@@ -15,12 +24,20 @@ export function resolveAddon(name: string | undefined): AddonSpec {
   return spec;
 }
 
+/** An addon to enable: refused on an architecture it does not support. */
+export function resolveEnableable(name: string | undefined, arch: string = process.arch): AddonSpec {
+  const spec = resolveAddon(name);
+  const refusal = archRefusal(spec, arch);
+  if (refusal) fatal(refusal);
+  return spec;
+}
+
 const RENAMED_ADDONS: Record<string, string> = { "wp-login": "wp-tools", "php-resources": "resource-limits", "cloudflare-ips": "firewall" };
 /** What the earlier version locked the moved state with, held while it moves. */
 const LEGACY_LOCKS = ["cloudflare-ips.lock", "system-tweaks-firewall.lock"];
 
 /** What a rename moved, so a failed update can hand it back to the binary it restores. */
-interface AddonRename {
+export interface AddonRename {
   from: string;
   to: string;
   /** The old config, or null when the addon was disabled. */
@@ -34,10 +51,12 @@ function migrationPending(): boolean {
   if (Object.keys(RENAMED_ADDONS).some((from) =>
     existsSync(`${CONFIG_DIR}/${from}.conf`) || existsSync(`${CONFIG_DIR}/${from}.conf.new`) || existsSync(`${STATE_DIR}/${from}`))) return true;
   if (existsSync(`${addonStateDir("system-tweaks")}/memory.json`) || existsSync(LEGACY_PROTOCOLS_FILE)) return true;
+  if (legacyDnsCloudflarePending() || visitorIpMigrationPending() || cloudflareEdgeMigrationPending() || redirectsMigrationPending()) return true;
   const oom = `${SYSTEMD_DIR}/nginx.service.d/zz-clp-addons-oom.conf`;
   if (existsSync(oom) && readFileSync(oom, "utf8").includes("clp-addons System Tweaks:")) return true;
   try {
-    return Object.hasOwn(JSON.parse(readFileSync(`${addonStateDir("system-tweaks")}/settings.json`, "utf8")) ?? {}, "memory");
+    const parsed = JSON.parse(readFileSync(`${addonStateDir("system-tweaks")}/settings.json`, "utf8")) ?? {};
+    return Object.hasOwn(parsed, "memory");
   } catch {
     return false;
   }
@@ -53,9 +72,19 @@ export function migrateOldAddonNames(quiet = false, legacyWaitSeconds = 300): Ad
   // be applying pools; moving its policy from under it would let it write the
   // old directory back, so the move waits for it as long as such a change runs.
   return withFileLockSync(`${LOCK_DIR}/php-resources.lock`, legacyWaitSeconds, "a PHP Resources change from the earlier version is still running", () =>
-    withFileLockSync(`${LOCK_DIR}/resource-limits-settings.lock`, 15, "a resource limits change is still running", () =>
-      withFileLockSync(`${LOCK_DIR}/system-tweaks.lock`, 15, "a system tweaks change is still running", () =>
-        withLegacyLocks(LEGACY_LOCKS, () => migrateAddonState(quiet)))));
+    withMigrationLocks(() => migrateAddonState(quiet)));
+}
+
+/** Holds every live and legacy addon lock touched by state migrations, in `dns.lock` -> `firewall-edge.lock` -> `redirects.lock` -> `cloudflare.lock` order. */
+function withMigrationLocks<T>(body: () => T): T {
+  return withFileLockSync(`${LOCK_DIR}/resource-limits-settings.lock`, 15, "a resource limits change is still running", () =>
+    withFileLockSync(`${LOCK_DIR}/system-tweaks.lock`, 15, "a system tweaks change is still running", () =>
+      withFileLockSync(`${LOCK_DIR}/firewall-visitor-ip.lock`, 30, "another Cloudflare visitor IP change is running", () =>
+        withFileLockSync(`${LOCK_DIR}/dns.lock`, 30, "another DNS change is running", () =>
+          withFileLockSync(`${LOCK_DIR}/firewall-edge.lock`, 30, "another Cloudflare edge change is running", () =>
+            withFileLockSync(`${LOCK_DIR}/redirects.lock`, 30, "another Redirects change is running", () =>
+            withFileLockSync(`${LOCK_DIR}/cloudflare.lock`, 30, "another Cloudflare connection change is running", () =>
+              withLegacyLocks(LEGACY_LOCKS, body))))))));
 }
 
 function withLegacyLocks<T>(names: string[], body: () => T): T {
@@ -71,6 +100,8 @@ function removeLegacyLocks(): void {
 
 function migrateAddonState(quiet: boolean): AddonRename[] {
   const renames: AddonRename[] = [];
+  // Capture before the rename or protocol migration creates firewall.conf so unsaved visitor-IP defaults still migrate and carry root's lock.
+  const firewallWasEnabled = addonEnabled(ADDONS.firewall!);
   try {
     for (const [from, to] of Object.entries(RENAMED_ADDONS)) {
       const legacyConfig = `${CONFIG_DIR}/${from}.conf`;
@@ -109,15 +140,21 @@ function migrateAddonState(quiet: boolean): AddonRename[] {
     // After the rename, which refuses a firewall state directory that already holds anything.
     const protocols = migrateFirewallProtocols(() => writeConfig(ADDONS.firewall!, true));
     if (protocols) renames.push({ from: "system-tweaks", to: "firewall", config: null, stateMoved: false, undo: protocols });
+    const visitorIp = migrateVisitorIp(() => writeConfig(ADDONS.firewall!, true), { firewallWasEnabled });
+    if (visitorIp) renames.push({ from: "system-tweaks", to: "firewall", config: null, stateMoved: false, undo: visitorIp });
+    const cloudflare = migrateCloudflareFromDns();
+    if (cloudflare) renames.push({ from: "dns", to: "cloudflare", config: null, stateMoved: false, undo: cloudflare });
+    const cloudflareEdge = migrateCloudflareEdgeFromDns(() => writeConfig(ADDONS.firewall!, true), { firewallWasEnabled });
+    if (cloudflareEdge) renames.push({ from: "dns", to: "firewall", config: null, stateMoved: false, undo: cloudflareEdge });
+    const redirects = migrateRedirectsFromDns(() => writeConfig(ADDONS.redirects!, true), { upgradeDnsPolicy: upgradeSavedPolicy });
+    if (redirects) renames.push({ from: "dns", to: "redirects", config: null, stateMoved: false, undo: redirects });
     removeLegacyLocks();
     return renames;
   } catch (error) { restoreAddonState(renames); throw error; }
 }
 
 export function revertAddonRenames(renames: AddonRename[]): void {
-  withFileLockSync(`${LOCK_DIR}/resource-limits-settings.lock`, 15, "a resource limits change is still running", () =>
-    withFileLockSync(`${LOCK_DIR}/system-tweaks.lock`, 15, "a system tweaks change is still running", () =>
-      withLegacyLocks(LEGACY_LOCKS, () => restoreAddonState(renames))));
+  withMigrationLocks(() => restoreAddonState(renames));
 }
 
 function restoreAddonState(renames: AddonRename[]): void {
@@ -134,7 +171,29 @@ function restoreAddonState(renames: AddonRename[]): void {
   }
 }
 
+export interface DashboardHost {
+  /** CloudPanel's custom domain, served on 443 by the sites' Nginx. */
+  customDomain?: string;
+  /** A hostname in the panel's own port-8443 server block. */
+  vhostHost: string | null;
+  addresses: Addresses;
+}
+
+/**
+ * Where the operator opens the Addons page: the custom domain when CloudPanel
+ * has one, else the panel's own port 8443 by hostname or public address.
+ */
+export function dashboardUrlFor(host: DashboardHost): string {
+  if (host.customDomain) return `https://${host.customDomain}/addons/`;
+  const name = host.vhostHost ?? host.addresses.ipv4 ?? (host.addresses.ipv6 ? `[${host.addresses.ipv6}]` : null);
+  return `https://${name ?? "<server-ip>"}:8443/addons/`;
+}
+
 export function dashboardUrl(): string {
-  const host = masterVhostHost() ?? "<cloudpanel-host>";
-  return `https://${host}/addons/`;
+  const panelUid = panelUserUid();
+  return dashboardUrlFor({
+    customDomain: panelCustomDomain(panelUid === null ? [0] : [0, panelUid]),
+    vhostHost: masterVhostHost(),
+    addresses: detectAddresses(),
+  });
 }

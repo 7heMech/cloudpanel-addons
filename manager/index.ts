@@ -1,4 +1,4 @@
-import { guardMutation, jsonResponse, safeDecodePathSegment } from "../lib/app-http";
+import { guardMutation, jsonResponse, readBody, readMutation, safeDecodePathSegment } from "../lib/app-http";
 import { streamGatewayAction, type ActionResult } from "../lib/gateway-client";
 import { jobEventStream, type JobWatcher } from "../lib/job-stream";
 import { ADDON_NAMES } from "../addons/catalog";
@@ -8,6 +8,8 @@ import type { CliUpdateInfo } from "../lib/update-check";
 import { managerAction, setupAction } from "./service";
 import { PANEL_USER_NAME_RE } from "../lib/panel-users";
 import { setupPanelHtml, setupShows } from "./setup-view";
+import { applyRequestOrigin, proxyHostFromRequest } from "./setup";
+import { CLOUDFLARE_ACTION_MS } from "../lib/cloudflare/store";
 
 /**
  * Every route here is already behind the SSO gate and the administrator gate at
@@ -38,10 +40,54 @@ export async function handleManagerRoute(
         : [];
       if (!change.length) return jsonResponse({ ok: false, error: "expected skip, unskip or hidden" }, 400);
     }
-    const result = await setupAction(user, change, req.method === "GET" && new URL(req.url).searchParams.get("fresh") === "1");
+    const url = new URL(req.url);
+    const headerOnly = req.method === "GET" && url.searchParams.get("header") === "1";
+    const result = await setupAction(user, change, req.method === "GET" && url.searchParams.get("fresh") === "1");
     if (!result.ok || !result.data) return jsonResponse({ ok: false, error: result.ok ? "no answer" : result.error }, 502);
-    const view = result.data;
-    return jsonResponse({ ok: true, data: { show: setupShows(view), attention: view.actions.length > 0, html: setupPanelHtml(view) } });
+    const view = applyRequestOrigin(result.data, proxyHostFromRequest(req));
+    return jsonResponse({
+      ok: true,
+      data: {
+        show: setupShows(view),
+        attention: view.actions.length > 0,
+        ...(headerOnly ? {} : { html: setupPanelHtml(view) }),
+      },
+    });
+  }
+
+  if (path === "/api/cloudflare" && req.method === "GET") {
+    const result = await managerAction("cloudflare-list");
+    return jsonResponse(result, result.ok ? 200 : 400);
+  }
+  if (path === "/api/cloudflare" && req.method === "POST") {
+    const denied = guardMutation(req);
+    if (denied) return denied;
+    const body = await readBody(req, 32 * 1024);
+    if (body instanceof Response) return body;
+    const result = await managerAction("cloudflare-save", [], JSON.stringify(body), CLOUDFLARE_ACTION_MS);
+    return jsonResponse(result, result.ok ? 200 : 400);
+  }
+  if (path === "/api/cloudflare/remove" && req.method === "POST") {
+    const denied = guardMutation(req);
+    if (denied) return denied;
+    const body = await readBody(req, 4 * 1024);
+    if (body instanceof Response) return body;
+    const result = await managerAction("cloudflare-remove", [], JSON.stringify(body));
+    return jsonResponse(result, result.ok ? 200 : 400);
+  }
+  if (path === "/api/cloudflare/check" && req.method === "POST") {
+    const denied = guardMutation(req);
+    if (denied) return denied;
+    const result = await managerAction("cloudflare-check", [], undefined, CLOUDFLARE_ACTION_MS);
+    return jsonResponse(result, result.ok ? 200 : 400);
+  }
+
+  if (path === "/api/usage-sharing" && req.method === "POST") {
+    const body = await readMutation(req, 1024);
+    if (body instanceof Response) return body;
+    if (typeof body.enabled !== "boolean") return jsonResponse({ ok: false, error: "expected enabled" }, 400);
+    const result = await managerAction("usage-sharing", [`--enabled=${body.enabled}`]);
+    return jsonResponse(result, result.ok ? 200 : 400);
   }
 
   if (path === "/api/update" && req.method === "GET") {

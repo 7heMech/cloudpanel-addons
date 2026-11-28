@@ -248,6 +248,7 @@ function options(extra: Partial<WpToolsActionOptions> = {}): WpToolsActionOption
       mainwpState: join(root, "mainwp.json"), mainwpLockFile: join(root, "wp-mainwp.lock"),
       jobsDir: join(root, "jobs"), jobsLockFile: join(root, "wp-jobs.lock"), actionBinary: "/usr/local/bin/clp-addons",
       uploadsDir: uploads(), pluginsLockFile: join(root, "wp-plugins.lock"), newSiteAccessState: join(root, "new-site-access.json"),
+      pluginDefaultsState: join(root, "plugin-defaults.json"), pluginDefaultsLockFile: join(root, "wp-plugin-defaults.lock"),
     },
     startJob: (unit) => { started.push(unit); return { ok: true, stdout: "", stderr: "" }; },
     domainValidator: (domain) => domain.toLowerCase(),
@@ -825,7 +826,7 @@ test("the new-site blocks are for administrators, and site managers only while a
   }
   // What the form's script calls is what the handler answers.
   const form = newSiteFormSnippet("/addons/wp-tools", true);
-  for (const route of ["/api/plugin-search", "/api/plugin-upload", "/api/plugin-discard", "/api/new-site", "/api/session"]) {
+  for (const route of ["/api/plugin-search", "/api/plugin-upload", "/api/plugin-discard", "/api/new-site", "/api/session", "/api/my-new-site-defaults"]) {
     expect(form).toContain(`'${route}`);
   }
   expect(newSiteDoneSnippet("/addons/wp-tools", true)).toContain("'/api/new-site-status?job='");
