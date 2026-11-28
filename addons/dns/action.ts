@@ -29,14 +29,14 @@ import {
 import { type ApiFetch, redact } from "../../lib/provider-http";
 import { MailcowApi } from "./mailcow";
 import {
-  connectionId, hostname, isMailcowLinked, legacyProfileZones, parseAccountRef, parseMailcow, parsePolicy, parsePowerDnsConnection, parseProfile,
+  composeProfiles, connectionId, hostname, isMailcowLinked, legacyProfileZones, parseAccountRef, parseMailcow, parsePolicy, parsePowerDnsConnection, parseProfile,
   parseSecrets, profileEffect, profileId, providerId, secretText, ipAddress, EMPTY_MAILCOW, MAX_CONNECTIONS,
   MAX_DOMAINS, MAX_PROFILES, type HttpRole, type MailcowSettings, type Policy, type PowerDnsConnection, type Profile, type ProfileRole, type Secrets,
 } from "./model";
 import { parsePowerDnsApiKey, PowerDnsProvider } from "./powerdns";
 import { PROVIDER_LABELS, type DnsRecord, type ProviderKind } from "./provider";
 import { mailcowSeededProfile, presetsFor, seededPolicy, type Preset } from "./presets";
-import { describeRecord, renderProfile, sameRecord } from "./records";
+import { describeRecord, recordsOwnedBy, renderProfile, sameRecord } from "./records";
 import { coveredHosts, readEdgeSources, readRedirectDomains, type RedirectDomain } from "../../lib/redirect-domains";
 import { isStandInSite, readStandInMarks } from "../../lib/stand-ins";
 import { clpctlIssue, NEW_SITE_WINDOW, requestSsl, retryCertificates, type Issue, type SslRequest } from "./ssl";
@@ -629,22 +629,44 @@ class Action {
    * Saves `next`, and forgets what was written for a current site it no longer
    * enforces: those records are the site's own again, as taking it out of a
    * profile promises, so they are never offered for removal once it is deleted.
+   * A site taken out of one role, or moved to another profile in it, keeps only
+   * the records its profiles now write at.
    */
   private savePolicy(next: Policy): void {
+    let before: Policy | undefined;
+    try { before = this.files.policy(); } catch { /* nothing to compare with */ }
     this.files.savePolicy(next);
-    this.cleanupManagedForPolicy(next);
+    this.cleanupManagedForPolicy(next, before);
   }
 
-  private cleanupManagedForPolicy(next: Policy): void {
+  private cleanupManagedForPolicy(next: Policy, before?: Policy): void {
     const managed = this.files.managed();
-    let forgot = false;
+    const composed = (policy: Policy, domain: string) => {
+      const assigned = policy.assignments[domain];
+      const find = (id: string | null | undefined) => policy.profiles.find((profile) => profile.id === id) ?? null;
+      return composeProfiles(find(assigned?.http), find(assigned?.mail));
+    };
+    let changed = false;
     for (const domain of this.domainsOf(next)) {
+      const entry = managed[domain];
+      if (!entry) continue;
       const assigned = next.assignments[domain];
-      if (!managed[domain] || (next.automatic && (assigned?.http || assigned?.mail))) continue;
-      delete managed[domain];
-      forgot = true;
+      if (!next.automatic || !(assigned?.http || assigned?.mail)) {
+        delete managed[domain];
+        changed = true;
+        continue;
+      }
+      const was = before?.assignments[domain];
+      if (!was || (was.http === assigned.http && was.mail === assigned.mail)) continue;
+      const profile = composed(next, domain);
+      if (!profile) continue;
+      const records = recordsOwnedBy(profile, domain, entry.zoneName, entry.records);
+      if (records.length === entry.records.length) continue;
+      if (records.length) managed[domain] = { ...entry, records };
+      else delete managed[domain];
+      changed = true;
     }
-    if (forgot) this.files.saveManaged(managed);
+    if (changed) this.files.saveManaged(managed);
   }
 
   /**

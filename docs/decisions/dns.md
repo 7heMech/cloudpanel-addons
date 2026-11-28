@@ -731,7 +731,10 @@ record values, including priority, proxy, TTL and comment. A settled enforcing
 entry handed off to a wildcard with no pending changes and no matched records of
 its own clears its tracked entry so it leaves no orphans. A site taken out of
 its profile, or every site when DNS goes back to Ask first, is forgotten there
-and then: its records are its own again. When CloudPanel no longer has such a
+and then: its records are its own again. A site that loses one role or moves
+to another profile in it keeps tracking only the records its profiles still
+write at (`recordsOwnedBy`), even when the provider cannot be read to refresh
+them. Editing a profile's rows keeps tracking what it wrote. When CloudPanel no longer has such a
 site, the page
 lists them; Remove plans the deletion of those
 still unchanged and at no name a current site writes or relies on, and deletes

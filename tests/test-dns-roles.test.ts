@@ -50,12 +50,16 @@ function setup() {
     rootUid: process.getuid!(),
     clpctl: "/bin/false",
   };
+  const outage = { cloudflare: false };
+  const fetch = routed(cf, mc);
   const act = <T = DnsReply>(verb: string, body?: unknown, extra: string[] = []): Promise<T> =>
     executeDnsAction([verb, ...extra], {
       paths,
       processUid: 0,
       input: body === undefined ? undefined : JSON.stringify(body),
-      fetch: routed(cf, mc),
+      fetch: (address, init) => outage.cloudflare && String(address).includes("cloudflare")
+        ? Promise.resolve(new Response(JSON.stringify({ success: false, errors: [{ code: 500, message: "Upstream outage" }] }), { status: 503 }))
+        : fetch(address, init),
       sites: () => sites,
       addresses: () => ({ ...addresses }),
       now: () => START,
@@ -98,7 +102,7 @@ function setup() {
   };
   const records = (zone = "example.com") =>
     cf.recordsOf(zone).map((record) => `${record.type} ${record.name} ${record.content}${record.proxied ? " proxied" : ""}`).sort();
-  return { dir, paths, cf, mc, agency, sites, act, connect, apply, records, redirect, redirectStatus, addDomain };
+  return { dir, paths, cf, mc, agency, sites, act, connect, apply, records, redirect, redirectStatus, addDomain, outage };
 }
 
 function mailcowPanelHtml(html: string): string {
@@ -237,6 +241,27 @@ describe("composable HTTP and Mail roles", () => {
     expect(state.sites.find((s) => s.domain === "fresh.example.com")).toMatchObject({ httpRole: "site", httpProfileId: "web", mailProfileId: "dmarc" });
     expect(state.sites.find((s) => s.domain === "example.com")).toMatchObject({ httpRole: "dns-only", httpProfileId: null, mailProfileId: null });
     expect(env.records("example.com")).toContain("A fresh.example.com 203.0.113.10 proxied");
+  });
+});
+
+describe("tracked records follow the roles", () => {
+  test("deleting the HTTP profile while Cloudflare is down stops tracking its records but keeps Mail's", async () => {
+    const env = setup();
+    await env.connect();
+    await env.act("assign", { domains: ["example.com"], httpProfileId: "web", mailProfileId: "google" });
+    await env.apply("set-automatic", { automatic: true });
+    const tracked = () => {
+      const managed = JSON.parse(readFileSync(join(env.dir, "state", "managed.json"), "utf8"));
+      return (managed["example.com"]?.records ?? []).map((record: { type: string; name: string }) => `${record.type} ${record.name}`).sort();
+    };
+    expect(tracked()).toContain("A example.com");
+    expect(tracked()).toContain("MX example.com");
+
+    env.outage.cloudflare = true;
+    await env.act("delete-profile", { id: "web" });
+    expect(tracked().filter((record: string) => /^(A|AAAA|CNAME) /.test(record))).toEqual([]);
+    expect(tracked()).toContain("MX example.com");
+    expect(tracked()).toContain("TXT example.com");
   });
 });
 

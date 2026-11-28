@@ -216,6 +216,20 @@ export function normalizeRenderedForProvider(
   return { ...rendered, records, problems };
 }
 
+/**
+ * Which of `records` a row of `profile` writes at for `domain`, whatever the
+ * server's addresses and Mailcow's key. A DKIM row counts for any selector,
+ * since Mailcow may name a domain's own.
+ */
+export function recordsOwnedBy(profile: Profile, domain: string, zone: string, records: DnsRecord[]): DnsRecord[] {
+  const rendered = renderProfile(profile, {
+    domain, zone, ipv4: "", ipv6: "", mailcowHost: "mailcow.invalid", mailcowSelector: null, mailcowDkim: null,
+  });
+  const anySelector = profile.records.some((row) => row.name.includes("{mailcow.selector}"));
+  return records.filter((record) => claimedBy(record, rendered.claims)
+    || (anySelector && record.type === "TXT" && record.name.endsWith(`._domainkey.${domain}`) && txtKind(record.content) === "dkim"));
+}
+
 /** Whether a published record is one of the records `claims` speak for. */
 function claimedBy(record: Pick<DnsRecord, "name" | "type" | "content">, claims: Claim[]): boolean {
   return claims.some((claim) => {
